@@ -18,7 +18,7 @@ import io.github.maxlyth.hapaneld.control.ScreenController
 import io.github.maxlyth.hapaneld.control.SystemController
 import io.github.maxlyth.hapaneld.control.VolumeController
 import io.github.maxlyth.hapaneld.hardware.LedController
-import io.github.maxlyth.hapaneld.hardware.Rk3576LedController
+import io.github.maxlyth.hapaneld.hardware.LedFactory
 import io.github.maxlyth.hapaneld.http.PaneldServer
 import io.github.maxlyth.hapaneld.sensors.SensorReporter
 import kotlinx.coroutines.CoroutineScope
@@ -53,7 +53,7 @@ class PaneldService : Service() {
 
         val brightness = BrightnessController(this)
         val screen = ScreenController(this)
-        val led: LedController = Rk3576LedController()
+        val led: LedController = LedFactory.detect()
         val navigate = NavigateController(this)
         val volume = VolumeController(this)
         val system = SystemController(this)

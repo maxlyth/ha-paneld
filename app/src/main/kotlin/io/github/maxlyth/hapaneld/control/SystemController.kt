@@ -14,7 +14,7 @@ class SystemController(private val context: Context) {
 
     /** Reload the dashboard by force-stopping the Companion (its WebView host) and relaunching it. */
     fun reloadDashboard(companionPkg: String = DEFAULT_COMPANION) {
-        if (!su("am force-stop $companionPkg")) {
+        if (!Su.run("am force-stop $companionPkg")) {
             Log.w(TAG, "reload: su unavailable — cannot force-stop $companionPkg")
             return
         }
@@ -29,16 +29,7 @@ class SystemController(private val context: Context) {
 
     fun reboot() {
         Log.i(TAG, "reboot requested")
-        // Fire-and-forget: the device goes down, so don't wait on the process.
-        su("reboot", wait = false)
-    }
-
-    private fun su(cmd: String, wait: Boolean = true): Boolean = try {
-        val p = Runtime.getRuntime().exec(arrayOf("su", "-c", cmd))
-        if (wait) p.waitFor() == 0 else true
-    } catch (e: Exception) {
-        Log.w(TAG, "su failed: $cmd", e)
-        false
+        Su.fireAndForget("reboot")
     }
 
     companion object {

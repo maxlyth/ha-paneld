@@ -100,7 +100,7 @@ class MqttBridge(
 
             publishDiscovery(c)
             publish(c, availabilityTopic, "online", retain = true)
-            publish(c, stateVolume, volume.getPercent().toString())
+            publish(c, stateVolume, volume.getPercent().toString(), retain = true)
             ButtonBus.listener = { event -> publishButton(event) }
             Log.i(TAG, "connected to $host:$port — discovery published for $panel")
         } catch (e: Exception) {
@@ -186,73 +186,75 @@ class MqttBridge(
     }
 
     fun publishLight(lux: Int) {
-        client?.let { publish(it, stateIlluminance, lux.toString()) }
+        client?.let { publish(it, stateIlluminance, lux.toString(), retain = true) }
     }
 
     fun publishProximity(near: Boolean) {
-        client?.let { publish(it, stateProximity, if (near) "ON" else "OFF") }
+        client?.let { publish(it, stateProximity, if (near) "ON" else "OFF", retain = true) }
     }
 
     // ---- discovery ----
 
     private fun publishDiscovery(c: Mqtt5AsyncClient) {
+        // device.name = panel_id; entity names are the capability ONLY, so HA composes a clean
+        // `<domain>.<panel>_<cap>` entity_id instead of doubling the panel id into both.
         val device = """"device":{"identifiers":["ha-paneld-$panel"],"name":"$panel","manufacturer":"ha-paneld","model":"panel agent","sw_version":"${Config.VERSION}"}"""
         val avail = """"availability_topic":"$availabilityTopic","payload_available":"online","payload_not_available":"offline""""
 
         publishConfig(
             c, "light", "${panel}_screen",
-            """{"name":"$panel screen","unique_id":"${panel}_screen","schema":"json","brightness":true,"supported_color_modes":["brightness"],"command_topic":"$cmdScreen","state_topic":"$stateScreen",$avail,$device}""",
+            """{"name":"Screen","unique_id":"${panel}_screen","schema":"json","brightness":true,"supported_color_modes":["brightness"],"command_topic":"$cmdScreen","state_topic":"$stateScreen",$avail,$device}""",
         )
 
         if (led.available()) {
+            val modes = if (led.colorCapable()) """["rgb"]""" else """["brightness"]"""
             publishConfig(
                 c, "light", "${panel}_led",
-                """{"name":"$panel LED","unique_id":"${panel}_led","schema":"json","brightness":true,"supported_color_modes":["rgb"],"command_topic":"$cmdLed","state_topic":"$stateLed",$avail,$device}""",
+                """{"name":"LED","unique_id":"${panel}_led","schema":"json","brightness":true,"supported_color_modes":$modes,"command_topic":"$cmdLed","state_topic":"$stateLed",$avail,$device}""",
             )
         }
 
         publishConfig(
             c, "text", "${panel}_navigate",
-            """{"name":"$panel navigate","unique_id":"${panel}_navigate","command_topic":"$cmdNavigate","state_topic":"$stateNavigate","mode":"text",$avail,$device}""",
+            """{"name":"Navigate","unique_id":"${panel}_navigate","command_topic":"$cmdNavigate","state_topic":"$stateNavigate","mode":"text",$avail,$device}""",
         )
 
         if (buttonsEnabled) {
             publishConfig(
                 c, "event", "${panel}_button",
-                """{"name":"$panel button","unique_id":"${panel}_button","state_topic":"$eventButton","event_types":["KEYCODE_BACK","KEYCODE_HOME","KEYCODE_DPAD_CENTER","KEYCODE_VOLUME_UP","KEYCODE_VOLUME_DOWN"],$avail,$device}""",
+                """{"name":"Button","unique_id":"${panel}_button","state_topic":"$eventButton","event_types":["KEYCODE_MUTE","KEYCODE_F","KEYCODE_BACK","KEYCODE_HOME","KEYCODE_DPAD_CENTER","KEYCODE_VOLUME_UP","KEYCODE_VOLUME_DOWN"],$avail,$device}""",
             )
         }
 
         // TTS/announce playback volume (STREAM_MUSIC). HA has no MQTT media_player platform, so
-        // volume is a number entity rather than a media_player slider. Playback itself is the
-        // HTTP /play contract; this controls how loud it is.
+        // volume is a number entity rather than a media_player slider.
         publishConfig(
             c, "number", "${panel}_volume",
-            """{"name":"$panel volume","unique_id":"${panel}_volume","command_topic":"$cmdVolume","state_topic":"$stateVolume","min":0,"max":100,"step":1,"mode":"slider","unit_of_measurement":"%","icon":"mdi:volume-high",$avail,$device}""",
+            """{"name":"Volume","unique_id":"${panel}_volume","command_topic":"$cmdVolume","state_topic":"$stateVolume","min":0,"max":100,"step":1,"mode":"slider","unit_of_measurement":"%","icon":"mdi:volume-high",$avail,$device}""",
         )
 
         // Panel sensors — exposed as data only; room sensors stay the occupancy/lux authority.
         if (hasLight) {
             publishConfig(
                 c, "sensor", "${panel}_illuminance",
-                """{"name":"$panel illuminance","unique_id":"${panel}_illuminance","state_topic":"$stateIlluminance","device_class":"illuminance","unit_of_measurement":"lx","state_class":"measurement",$avail,$device}""",
+                """{"name":"Illuminance","unique_id":"${panel}_illuminance","state_topic":"$stateIlluminance","device_class":"illuminance","unit_of_measurement":"lx","state_class":"measurement",$avail,$device}""",
             )
         }
         if (hasProximity) {
             publishConfig(
                 c, "binary_sensor", "${panel}_proximity",
-                """{"name":"$panel proximity","unique_id":"${panel}_proximity","state_topic":"$stateProximity","device_class":"occupancy","payload_on":"ON","payload_off":"OFF",$avail,$device}""",
+                """{"name":"Proximity","unique_id":"${panel}_proximity","state_topic":"$stateProximity","device_class":"occupancy","payload_on":"ON","payload_off":"OFF",$avail,$device}""",
             )
         }
 
         // Panel actions (root via su; graceful no-op without it).
         publishConfig(
             c, "button", "${panel}_reload",
-            """{"name":"$panel reload dashboard","unique_id":"${panel}_reload","command_topic":"$cmdReload","icon":"mdi:web-refresh",$avail,$device}""",
+            """{"name":"Reload dashboard","unique_id":"${panel}_reload","command_topic":"$cmdReload","icon":"mdi:web-refresh",$avail,$device}""",
         )
         publishConfig(
             c, "button", "${panel}_reboot",
-            """{"name":"$panel reboot","unique_id":"${panel}_reboot","command_topic":"$cmdReboot","device_class":"restart","icon":"mdi:restart",$avail,$device}""",
+            """{"name":"Reboot","unique_id":"${panel}_reboot","command_topic":"$cmdReboot","device_class":"restart","icon":"mdi:restart",$avail,$device}""",
         )
     }
 

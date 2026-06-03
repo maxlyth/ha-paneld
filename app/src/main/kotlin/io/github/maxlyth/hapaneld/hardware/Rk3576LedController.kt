@@ -22,6 +22,8 @@ class Rk3576LedController : LedController {
 
     override fun available(): Boolean = loaded
 
+    override fun colorCapable(): Boolean = true
+
     override fun setRgb(r: Int, g: Int, b: Int) {
         if (!loaded) return
         try {
