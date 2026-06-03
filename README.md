@@ -48,7 +48,7 @@ no YAML:
 | `light.<panel>_led` | RGB | published only when a LED backend is present |
 | `text.<panel>_navigate` | push a URL to the panel | depends on Companion intent handling |
 | `event.<panel>_button` | hardware button presses | published only when the a11y key-filter is enabled |
-| `media_player.<panel>_paneld` | TTS / announce | playback via the HTTP `/play` contract below |
+| `number.<panel>_volume` | TTS/announce volume | 0–100% → `STREAM_MUSIC`; playback is the HTTP `/play` contract below |
 
 ## HTTP contract (v0.1.0)
 

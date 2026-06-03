@@ -8,6 +8,7 @@ import com.hivemq.client.mqtt.mqtt5.message.publish.Mqtt5Publish
 import io.github.maxlyth.hapaneld.control.BrightnessController
 import io.github.maxlyth.hapaneld.control.NavigateController
 import io.github.maxlyth.hapaneld.control.ScreenController
+import io.github.maxlyth.hapaneld.control.VolumeController
 import io.github.maxlyth.hapaneld.hardware.LedController
 import io.github.maxlyth.hapaneld.input.ButtonBus
 import org.json.JSONObject
@@ -33,6 +34,7 @@ class MqttBridge(
     private val screen: ScreenController,
     private val led: LedController,
     private val navigate: NavigateController,
+    private val volume: VolumeController,
     private val buttonsEnabled: Boolean,
 ) {
     private var client: Mqtt5AsyncClient? = null
@@ -42,9 +44,11 @@ class MqttBridge(
     private val cmdScreen = "ha-paneld/$panel/screen/set"
     private val cmdLed = "ha-paneld/$panel/led/set"
     private val cmdNavigate = "ha-paneld/$panel/navigate/set"
+    private val cmdVolume = "ha-paneld/$panel/volume/set"
     private val stateScreen = "ha-paneld/$panel/screen/state"
     private val stateLed = "ha-paneld/$panel/led/state"
     private val stateNavigate = "ha-paneld/$panel/navigate/state"
+    private val stateVolume = "ha-paneld/$panel/volume/state"
     private val eventButton = "ha-paneld/$panel/button/event"
 
     fun start() {
@@ -88,6 +92,7 @@ class MqttBridge(
 
             publishDiscovery(c)
             publish(c, availabilityTopic, "online", retain = true)
+            publish(c, stateVolume, volume.getPercent().toString())
             ButtonBus.listener = { event -> publishButton(event) }
             Log.i(TAG, "connected to $host:$port — discovery published for $panel")
         } catch (e: Exception) {
@@ -105,6 +110,7 @@ class MqttBridge(
                 cmdScreen -> handleScreen(payload)
                 cmdLed -> handleLed(payload)
                 cmdNavigate -> handleNavigate(payload)
+                cmdVolume -> handleVolume(payload)
                 else -> Log.d(TAG, "unhandled command topic $topic")
             }
         } catch (e: Exception) {
@@ -158,6 +164,13 @@ class MqttBridge(
         }
     }
 
+    private fun handleVolume(payload: String) {
+        // number entity sends a plain numeric string (0..100).
+        val pct = payload.trim().trim('"').toDoubleOrNull()?.toInt() ?: return
+        volume.setPercent(pct)
+        publish(client!!, stateVolume, volume.getPercent().toString())
+    }
+
     private fun publishButton(event: String) {
         client?.let { publish(it, eventButton, """{"event_type":"$event"}""") }
     }
@@ -192,10 +205,12 @@ class MqttBridge(
             )
         }
 
-        // TTS/announce (HTTP /play does the playback; this just registers the entity).
+        // TTS/announce playback volume (STREAM_MUSIC). HA has no MQTT media_player platform, so
+        // volume is a number entity rather than a media_player slider. Playback itself is the
+        // HTTP /play contract; this controls how loud it is.
         publishConfig(
-            c, "media_player", panel,
-            """{"name":"$panel paneld","unique_id":"${panel}_paneld_media",$avail,$device}""",
+            c, "number", "${panel}_volume",
+            """{"name":"$panel volume","unique_id":"${panel}_volume","command_topic":"$cmdVolume","state_topic":"$stateVolume","min":0,"max":100,"step":1,"mode":"slider","unit_of_measurement":"%","icon":"mdi:volume-high",$avail,$device}""",
         )
     }
 

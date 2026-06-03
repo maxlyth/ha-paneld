@@ -15,6 +15,7 @@ import androidx.core.app.NotificationCompat
 import io.github.maxlyth.hapaneld.control.BrightnessController
 import io.github.maxlyth.hapaneld.control.NavigateController
 import io.github.maxlyth.hapaneld.control.ScreenController
+import io.github.maxlyth.hapaneld.control.VolumeController
 import io.github.maxlyth.hapaneld.hardware.LedController
 import io.github.maxlyth.hapaneld.hardware.Rk3576LedController
 import io.github.maxlyth.hapaneld.http.PaneldServer
@@ -50,7 +51,8 @@ class PaneldService : Service() {
         val screen = ScreenController(this)
         val led: LedController = Rk3576LedController()
         val navigate = NavigateController(this)
-        mqtt = MqttBridge(config, brightness, screen, led, navigate, accessibilityEnabled())
+        val volume = VolumeController(this)
+        mqtt = MqttBridge(config, brightness, screen, led, navigate, volume, accessibilityEnabled())
     }
 
     /** Advertise the button-event entity only if our a11y service is actually enabled. */
