@@ -42,5 +42,11 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun startAgent() = PaneldService.start(this)
+    private fun startAgent() {
+        PaneldService.start(this)
+        // ha-paneld is headless — the Activity exists only to start the service / grant perms on
+        // first run. Finish immediately so the HA Companion WebView (the dashboard) stays the
+        // frontmost app; the foreground service keeps running without any UI.
+        finish()
+    }
 }

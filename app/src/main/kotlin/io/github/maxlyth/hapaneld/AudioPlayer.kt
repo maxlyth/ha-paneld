@@ -4,8 +4,10 @@ import android.media.AudioAttributes
 import android.media.MediaPlayer
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import java.io.File
+import kotlin.coroutines.resume
 import java.net.HttpURLConnection
 import java.net.URL
 import javax.net.ssl.HttpsURLConnection
@@ -28,7 +30,7 @@ object AudioPlayer {
         val tmp = File.createTempFile("audio", ".media", cacheDir)
         try {
             download(url, tmp)
-            playFile(tmp)
+            playAndAwait(tmp)
         } catch (e: Exception) {
             Log.w(TAG, "play failed for $url", e)
             tmp.delete()
@@ -49,7 +51,13 @@ object AudioPlayer {
         conn.inputStream.use { input -> dest.outputStream().use { input.copyTo(it) } }
     }
 
-    private fun playFile(file: File) {
+    /**
+     * Plays [file] and suspends until playback completes (or errors). Suspending is what keeps a
+     * strong reference to the MediaPlayer for the whole playback — an earlier version let the
+     * player fall out of scope after start(), so GC finalised it mid-playback and cut longer clips
+     * short (confirmed on BMP, 2026-06-03: a 7s TTS render was truncated to ~2.4s).
+     */
+    private suspend fun playAndAwait(file: File) = suspendCancellableCoroutine<Unit> { cont ->
         val player = MediaPlayer().apply {
             // USAGE_MEDIA -> STREAM_MUSIC, matching the bash reference (`sox play`). The earlier
             // USAGE_ASSISTANCE_ACCESSIBILITY routed to the accessibility stream, which is separate
@@ -62,20 +70,24 @@ object AudioPlayer {
                     .build(),
             )
             setVolume(1f, 1f)
-            setDataSource(file.absolutePath)
             setOnCompletionListener {
                 it.release()
                 file.delete()
+                if (cont.isActive) cont.resume(Unit)
             }
-            setOnErrorListener { mp, _, _ ->
+            setOnErrorListener { mp, what, extra ->
+                Log.w(TAG, "MediaPlayer error what=$what extra=$extra")
                 mp.release()
                 file.delete()
+                if (cont.isActive) cont.resume(Unit)
                 true
             }
+            setDataSource(file.absolutePath)
             prepare()
             start()
         }
         Log.d(TAG, "playing ${file.name} (${file.length()} bytes)")
+        cont.invokeOnCancellation { runCatching { player.release() } }
     }
 
     private fun trustAllFactory() = SSLContext.getInstance("TLS").apply {
