@@ -17,6 +17,19 @@ android {
         versionName = "0.2.0-dev"
     }
 
+    signingConfigs {
+        // Committed debug keystore so every CI build is signed identically — lets `install -r`
+        // update a panel in place without uninstalling (which a device-admin install otherwise
+        // blocks). A debug keystore is not a secret; password is the conventional "android".
+        getByName("debug") {
+            storeFile = rootProject.file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+            storeType = "PKCS12"
+        }
+    }
+
     buildFeatures {
         buildConfig = true
     }
