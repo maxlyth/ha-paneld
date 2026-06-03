@@ -2,7 +2,7 @@
 <!-- Config for PanelAccessibilityService — used ONLY to filter hardware key events into HA button
      events. Requests no content inspection; the key-filter flag is the only capability needed. -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
-    android:accessibilityEventTypes="typeKeyEvents"
+    android:accessibilityEventTypes="typeWindowStateChanged"
     android:accessibilityFeedbackType="feedbackGeneric"
     android:accessibilityFlags="flagRequestFilterKeyEvents"
     android:canRequestFilterKeyEvents="true"
