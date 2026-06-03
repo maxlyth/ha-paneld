@@ -50,6 +50,8 @@ no YAML:
 | `number.<panel>_volume` | TTS/announce volume | 0–100% → `STREAM_MUSIC`; playback is the HTTP `/play` contract below |
 | `sensor.<panel>_illuminance` | ambient lux | standard `SensorManager` `TYPE_LIGHT`; published only if present |
 | `binary_sensor.<panel>_proximity` | proximity (occupancy) | standard `SensorManager` `TYPE_PROXIMITY`; published only if present |
+| `button.<panel>_reload` | reload dashboard | force-stop + relaunch the Companion WebView (root) |
+| `button.<panel>_reboot` | reboot panel | `su -c reboot` (root) |
 
 ## HTTP contract (v0.1.0)
 

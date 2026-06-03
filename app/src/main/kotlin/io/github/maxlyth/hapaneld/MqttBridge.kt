@@ -8,6 +8,7 @@ import com.hivemq.client.mqtt.mqtt5.message.publish.Mqtt5Publish
 import io.github.maxlyth.hapaneld.control.BrightnessController
 import io.github.maxlyth.hapaneld.control.NavigateController
 import io.github.maxlyth.hapaneld.control.ScreenController
+import io.github.maxlyth.hapaneld.control.SystemController
 import io.github.maxlyth.hapaneld.control.VolumeController
 import io.github.maxlyth.hapaneld.hardware.LedController
 import io.github.maxlyth.hapaneld.input.ButtonBus
@@ -35,6 +36,7 @@ class MqttBridge(
     private val led: LedController,
     private val navigate: NavigateController,
     private val volume: VolumeController,
+    private val system: SystemController,
     private val buttonsEnabled: Boolean,
     private val hasLight: Boolean,
     private val hasProximity: Boolean,
@@ -47,6 +49,8 @@ class MqttBridge(
     private val cmdLed = "ha-paneld/$panel/led/set"
     private val cmdNavigate = "ha-paneld/$panel/navigate/set"
     private val cmdVolume = "ha-paneld/$panel/volume/set"
+    private val cmdReload = "ha-paneld/$panel/reload/set"
+    private val cmdReboot = "ha-paneld/$panel/reboot/set"
     private val stateScreen = "ha-paneld/$panel/screen/state"
     private val stateLed = "ha-paneld/$panel/led/state"
     private val stateNavigate = "ha-paneld/$panel/navigate/state"
@@ -115,6 +119,8 @@ class MqttBridge(
                 cmdLed -> handleLed(payload)
                 cmdNavigate -> handleNavigate(payload)
                 cmdVolume -> handleVolume(payload)
+                cmdReload -> system.reloadDashboard()
+                cmdReboot -> system.reboot()
                 else -> Log.d(TAG, "unhandled command topic $topic")
             }
         } catch (e: Exception) {
@@ -238,6 +244,16 @@ class MqttBridge(
                 """{"name":"$panel proximity","unique_id":"${panel}_proximity","state_topic":"$stateProximity","device_class":"occupancy","payload_on":"ON","payload_off":"OFF",$avail,$device}""",
             )
         }
+
+        // Panel actions (root via su; graceful no-op without it).
+        publishConfig(
+            c, "button", "${panel}_reload",
+            """{"name":"$panel reload dashboard","unique_id":"${panel}_reload","command_topic":"$cmdReload","icon":"mdi:web-refresh",$avail,$device}""",
+        )
+        publishConfig(
+            c, "button", "${panel}_reboot",
+            """{"name":"$panel reboot","unique_id":"${panel}_reboot","command_topic":"$cmdReboot","device_class":"restart","icon":"mdi:restart",$avail,$device}""",
+        )
     }
 
     private fun publishConfig(c: Mqtt5AsyncClient, component: String, objectId: String, payload: String) {

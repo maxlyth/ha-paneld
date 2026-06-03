@@ -15,6 +15,7 @@ import androidx.core.app.NotificationCompat
 import io.github.maxlyth.hapaneld.control.BrightnessController
 import io.github.maxlyth.hapaneld.control.NavigateController
 import io.github.maxlyth.hapaneld.control.ScreenController
+import io.github.maxlyth.hapaneld.control.SystemController
 import io.github.maxlyth.hapaneld.control.VolumeController
 import io.github.maxlyth.hapaneld.hardware.LedController
 import io.github.maxlyth.hapaneld.hardware.Rk3576LedController
@@ -55,8 +56,9 @@ class PaneldService : Service() {
         val led: LedController = Rk3576LedController()
         val navigate = NavigateController(this)
         val volume = VolumeController(this)
+        val system = SystemController(this)
         mqtt = MqttBridge(
-            config, brightness, screen, led, navigate, volume,
+            config, brightness, screen, led, navigate, volume, system,
             accessibilityEnabled(), sensors.hasLight(), sensors.hasProximity(),
         )
     }
