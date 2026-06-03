@@ -99,12 +99,21 @@ Non-root panels: use the in-app setup screen, which fires the standard system pe
 Device-admin uses **active-admin**, not device-owner (device-owner needs an account-free device and
 would conflict with the logged-in Companion).
 
-## RGB LED — vendor `.so`, load-if-present
+## RGB LED — clean-room NDK, no vendor library
 
-LED control on some panels (e.g. rk3576 / Electron WF1589T) needs a vendor native library
-(`libjnielc.so`, `/dev/ledjni`). That library is third-party and **not bundled** — ha-paneld loads
-it at runtime only if the operator has installed it on the panel; the LED entity is simply absent
-otherwise. ha-paneld ships only its own clean-room JNI binding, no vendor bytes.
+On the rk3576 panel (Electron WF1589T) the front RGB LED is reached via the char device
+`/dev/ledjni`, which is world-rwx and labelled app-accessible (SELinux `device` domain), so a
+normal app drives it **without root or a helper**. ha-paneld ships its **own** ~70-line NDK driver
+([`app/src/main/cpp/led_jni.c`](app/src/main/cpp/led_jni.c)) doing the ioctls directly. The
+protocol (request numbers, value range, open flags) was reverse-engineered clean-room from a
+hardware sample — an interop fact, not vendor code — so **no vendor library is bundled or required**
+(`libjnielc.so` is no longer used). The LED entity is published only on panels where `/dev/ledjni`
+is openable; it is simply absent elsewhere.
+
+Other panels (e.g. Tuya TPA10) expose their LED only through root-only `/sys/class/leds/*`. A
+sandboxed app cannot reach those (SELinux `untrusted_app` cannot exec `su` nor write `sysfs_leds`),
+so those panels need a small **root helper daemon** that ha-paneld talks to over a localhost socket
+— planned, not yet shipped.
 
 ## Supported hardware
 
@@ -115,7 +124,7 @@ navigate, TTS) work on any panel; LED/buttons depend on a per-panel HAL.
 |-------------|-----|---------|-----|-------|
 | Sonoff NSPanelPro / Pro120 | Rockchip PX30 | 8.1 (API 27) | arm64-v8a | toolbox `su` |
 | Tuya TPA10 | Rockchip rk3566 | 11 (API 30) | armeabi-v7a | 32-bit userspace |
-| Electron WF1589T | Rockchip rk3576 | userdebug (`adb root`) | arm64-v8a | RGB LED via vendor `.so` |
+| Electron WF1589T | Rockchip rk3576 | userdebug (`adb root`) | arm64-v8a | RGB LED via clean-room NDK ioctl on `/dev/ledjni` (no vendor lib) |
 
 Other Android panels are welcome — contribute a HAL adapter for your hardware.
 
@@ -123,12 +132,29 @@ Other Android panels are welcome — contribute a HAL adapter for your hardware.
 
 ## Build
 
+### Option A — Docker (no toolchain, no CI access needed)
+
+Only Docker is required. The script builds a version-pinned image (JDK 17 + Android SDK 35 + NDK +
+CMake, matching CI) and runs Gradle inside it; the APK lands in your working tree.
+
+```sh
+./tools/build/build.sh                       # debug APK -> app/build/outputs/apk/debug/
+./tools/build/build.sh :app:assembleRelease  # any Gradle task(s) instead
+```
+
+The image is built once and cached; Gradle caches persist in a named Docker volume, so repeat
+builds are fast. See [`tools/build/`](tools/build/) (and the `HOST_WORKDIR` note in `build.sh` if
+you run from inside a container talking to an outer Docker daemon).
+
+### Option B — local toolchain
+
 ```sh
 ./gradlew :app:assembleDebug      # debug APK -> app/build/outputs/apk/debug/
 ./gradlew :app:assembleRelease    # release APK (unsigned in CI unless signing is configured)
 ```
 
-Requires JDK 17. The Gradle wrapper pins the Gradle version; nothing else needs installing.
+Requires **JDK 17** and an Android SDK with **NDK 27.0.12077973 + CMake 3.22.1** (for the native
+`/dev/ledjni` LED driver). The Gradle wrapper pins the Gradle version; nothing else needs installing.
 
 ### Toolchain note
 
