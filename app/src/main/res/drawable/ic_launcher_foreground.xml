@@ -1,0 +1,13 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Stylised wall panel with a speaker grille — ha-paneld. -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M34,30 h40 a4,4 0 0 1 4,4 v40 a4,4 0 0 1 -4,4 h-40 a4,4 0 0 1 -4,-4 v-40 a4,4 0 0 1 4,-4 z M34,36 v36 h40 v-36 z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M44,46 h20 v4 h-20 z M44,54 h20 v4 h-20 z M44,62 h20 v4 h-20 z" />
+</vector>

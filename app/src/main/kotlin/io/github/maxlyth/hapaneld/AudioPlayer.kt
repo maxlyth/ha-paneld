@@ -1,0 +1,83 @@
+package io.github.maxlyth.hapaneld
+
+import android.media.AudioAttributes
+import android.media.MediaPlayer
+import android.util.Log
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
+import javax.net.ssl.HttpsURLConnection
+import javax.net.ssl.SSLContext
+import javax.net.ssl.TrustManager
+import javax.net.ssl.X509TrustManager
+
+/**
+ * Downloads an audio URL and plays it through the panel speaker. Mirrors the bash reference
+ * implementation (`curl -sLk … | sox play`): the `-k` insecure flag is reproduced here because
+ * the HA internal_url often serves a self-signed cert and the panels live on a trusted LAN.
+ */
+object AudioPlayer {
+    private const val TAG = "ha-paneld/audio"
+    private const val CONNECT_TIMEOUT_MS = 15_000
+    private const val READ_TIMEOUT_MS = 15_000
+
+    /** Download [url] to a temp file then play it. Blocking download on IO dispatcher. */
+    suspend fun play(cacheDir: File, url: String) = withContext(Dispatchers.IO) {
+        val tmp = File.createTempFile("audio", ".media", cacheDir)
+        try {
+            download(url, tmp)
+            playFile(tmp)
+        } catch (e: Exception) {
+            Log.w(TAG, "play failed for $url", e)
+            tmp.delete()
+        }
+    }
+
+    private fun download(url: String, dest: File) {
+        val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+            connectTimeout = CONNECT_TIMEOUT_MS
+            readTimeout = READ_TIMEOUT_MS
+            instanceFollowRedirects = true
+        }
+        if (conn is HttpsURLConnection) {
+            // LAN-trust: accept self-signed certs, matching the `curl -k` reference contract.
+            conn.sslSocketFactory = trustAllFactory()
+            conn.hostnameVerifier = javax.net.ssl.HostnameVerifier { _, _ -> true }
+        }
+        conn.inputStream.use { input -> dest.outputStream().use { input.copyTo(it) } }
+    }
+
+    private fun playFile(file: File) {
+        val player = MediaPlayer().apply {
+            setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build(),
+            )
+            setDataSource(file.absolutePath)
+            setOnCompletionListener {
+                it.release()
+                file.delete()
+            }
+            setOnErrorListener { mp, _, _ ->
+                mp.release()
+                file.delete()
+                true
+            }
+            prepare()
+            start()
+        }
+        Log.d(TAG, "playing ${file.name} (${file.length()} bytes)")
+    }
+
+    private fun trustAllFactory() = SSLContext.getInstance("TLS").apply {
+        init(null, arrayOf<TrustManager>(object : X509TrustManager {
+            override fun checkClientTrusted(c: Array<java.security.cert.X509Certificate>?, a: String?) {}
+            override fun checkServerTrusted(c: Array<java.security.cert.X509Certificate>?, a: String?) {}
+            override fun getAcceptedIssuers() = arrayOf<java.security.cert.X509Certificate>()
+        }), java.security.SecureRandom())
+    }.socketFactory
+}
