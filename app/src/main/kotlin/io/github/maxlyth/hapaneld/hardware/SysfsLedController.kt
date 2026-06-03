@@ -4,7 +4,7 @@ import android.util.Log
 import io.github.maxlyth.hapaneld.control.Su
 
 /**
- * LED adapter for panels whose LEDs are standard Linux `/sys/class/leds/*` nodes driven via root
+ * LED adapter for panels whose LEDs are standard Linux `/sys/class/leds/<name>` nodes driven via root
  * (e.g. Tuya TPA10: `button-backlight` + `avs-pwm-led`). Writes only the **safe** `brightness`
  * nodes — NOT the `avsux_*` firmware/animation interface, which reliably reboots the TPA10 (verified
  * 2026-06-03). So this is on/off + dim, not arbitrary RGB ([colorCapable] = false); HA sends a
