@@ -21,12 +21,34 @@ back to HA, and turnkey mDNS pairing. ha-paneld covers those; Companion keeps do
 
 | Cap | Status | Surface |
 |-----|--------|---------|
-| TTS / announce audio | v0.1.0 | `POST /play` + MQTT `media_player` discovery |
-| Screen brightness | planned v0.2.0 | MQTT `light.<panel>_screen` |
-| Button-backlight / RGB LEDs | planned v0.2.0 | per-panel HAL |
-| Hardware-button events | planned v0.3.0 | MQTT events |
-| Proximity sensor | planned v0.3.0 | MQTT sensor |
-| `reload-webview` / `soft-restart` | planned v0.3.0 | HTTP command |
+| TTS / announce audio | v0.1.0 | `POST /play` + MQTT `media_player` |
+| Screen brightness + on/off (sleep) | v0.2.0-dev | MQTT `light.<panel>_screen` |
+| RGB LED | v0.2.0-dev | MQTT `light.<panel>_led` (per-panel HAL) |
+| URL navigate | v0.2.0-dev | MQTT `text.<panel>_navigate` |
+| Hardware-button events | v0.2.0-dev (needs device validation) | MQTT `event.<panel>_button` |
+| `reload-webview` / `soft-restart` | planned v0.3.0 | MQTT command |
+
+> [!NOTE]
+> ha-paneld is an **actuator + button-input** agent, not a sensor platform. Proximity/luminance
+> are deliberately out of scope — panel sensor hardware is inconsistent and room-level HA sensors
+> (motion, lux, occupancy) are a better, already-calibrated signal. Brightness is therefore
+> **HA-driven**: ha-paneld exposes the brightness actuator; the policy (from room sensors) lives in
+> Home Assistant. Zigbee gateway and app-watchdog are also out of scope (coexist with a dedicated
+> tool if you need them).
+
+## The control API — uniform MQTT entities
+
+Every panel publishes the **same** Home Assistant MQTT-discovery entities, regardless of underlying
+hardware (the per-panel HAL is hidden behind them). Configure an MQTT broker and they appear with
+no YAML:
+
+| Entity | Capability | Notes |
+|--------|------------|-------|
+| `light.<panel>_screen` | brightness + on/off | on = wake, off = sleep; JSON schema, brightness 0–255 |
+| `light.<panel>_led` | RGB | published only when a LED backend is present |
+| `text.<panel>_navigate` | push a URL to the panel | depends on Companion intent handling |
+| `event.<panel>_button` | hardware button presses | published only when the a11y key-filter is enabled |
+| `media_player.<panel>_paneld` | TTS / announce | playback via the HTTP `/play` contract below |
 
 ## HTTP contract (v0.1.0)
 
@@ -47,15 +69,50 @@ The agent advertises `_ha-paneld._tcp.local.` with TXT records (`ver`, `caps`, `
 broker is configured it publishes Home Assistant MQTT-discovery configs so panel entities appear
 without YAML. With no broker configured, the HTTP surface still works standalone.
 
+## Provisioning (no device UI on rooted/userdebug panels)
+
+All permissions are granted over adb — there is no per-device tap-through. Run the same script on
+every panel (config-as-code):
+
+```bash
+scripts/provision.sh <panel-ip:5555> [path-to.apk]
+```
+
+It installs the APK and grants: `POST_NOTIFICATIONS`, `WRITE_SETTINGS` (brightness, via `appops`),
+device-admin force-lock (`dpm set-active-admin`, for sleep), and optionally the accessibility
+key-filter (buttons). None of these need a UI on a panel with `su`/adb-root.
+
+Non-root panels: use the in-app setup screen, which fires the standard system permission intents.
+
+**Permission → why:**
+
+| Permission | For | Grant |
+|------------|-----|-------|
+| `POST_NOTIFICATIONS` | foreground-service notification | runtime / `pm grant` |
+| `WRITE_SETTINGS` | screen brightness | `appops set <pkg> WRITE_SETTINGS allow` |
+| Device admin (force-lock) | screen sleep (`lockNow`) | `dpm set-active-admin <pkg>/.control.PanelAdminReceiver` |
+| Accessibility (key filter) | button events (optional) | `settings put secure enabled_accessibility_services …` |
+
+Device-admin uses **active-admin**, not device-owner (device-owner needs an account-free device and
+would conflict with the logged-in Companion).
+
+## RGB LED — vendor `.so`, load-if-present
+
+LED control on some panels (e.g. rk3576 / Electron WF1589T) needs a vendor native library
+(`libjnielc.so`, `/dev/ledjni`). That library is third-party and **not bundled** — ha-paneld loads
+it at runtime only if the operator has installed it on the panel; the LED entity is simply absent
+otherwise. ha-paneld ships only its own clean-room JNI binding, no vendor bytes.
+
 ## Supported hardware
 
-ha-paneld shells out to `su -c` for privileged hardware writes (Phase ≥2) and otherwise needs no
-system-signed install. Confirmed targets:
+ha-paneld needs no system-signed install. Standard-Android capabilities (brightness, sleep,
+navigate, TTS) work on any panel; LED/buttons depend on a per-panel HAL.
 
 | Panel class | SoC | Android | ABI | Notes |
 |-------------|-----|---------|-----|-------|
 | Sonoff NSPanelPro / Pro120 | Rockchip PX30 | 8.1 (API 27) | arm64-v8a | toolbox `su` |
 | Tuya TPA10 | Rockchip rk3566 | 11 (API 30) | armeabi-v7a | 32-bit userspace |
+| Electron WF1589T | Rockchip rk3576 | userdebug (`adb root`) | arm64-v8a | RGB LED via vendor `.so` |
 
 Other Android panels are welcome — contribute a HAL adapter for your hardware.
 

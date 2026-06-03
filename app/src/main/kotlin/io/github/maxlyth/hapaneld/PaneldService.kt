@@ -9,8 +9,14 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.provider.Settings
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import io.github.maxlyth.hapaneld.control.BrightnessController
+import io.github.maxlyth.hapaneld.control.NavigateController
+import io.github.maxlyth.hapaneld.control.ScreenController
+import io.github.maxlyth.hapaneld.hardware.LedController
+import io.github.maxlyth.hapaneld.hardware.Rk3576LedController
 import io.github.maxlyth.hapaneld.http.PaneldServer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -19,9 +25,10 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 
 /**
- * Persistent foreground service. Hosts the Ktor HTTP listener, the JmDNS advertiser and the
- * MQTT publisher for the panel's lifetime. Declared `foregroundServiceType=specialUse` because
- * a wall-panel on-LAN command listener has no analogue among the predefined FGS types.
+ * Persistent foreground service. Hosts the Ktor HTTP listener, the JmDNS advertiser, the MQTT
+ * control bridge and the hardware controllers for the panel's lifetime. Declared
+ * `foregroundServiceType=specialUse` because a wall-panel on-LAN agent has no analogue among the
+ * predefined FGS types.
  *
  * Critically: this service draws no UI and never takes HOME foreground — the HA Companion app's
  * WebView stays the visible launcher throughout, matching the bash reference behaviour.
@@ -31,14 +38,28 @@ class PaneldService : Service() {
     private lateinit var config: Config
     private lateinit var server: PaneldServer
     private lateinit var mdns: MdnsAdvertiser
-    private lateinit var mqtt: MqttPublisher
+    private lateinit var mqtt: MqttBridge
 
     override fun onCreate() {
         super.onCreate()
         config = Config(this)
         server = PaneldServer(config, cacheDir, scope)
         mdns = MdnsAdvertiser(this, config)
-        mqtt = MqttPublisher(config)
+
+        val brightness = BrightnessController(this)
+        val screen = ScreenController(this)
+        val led: LedController = Rk3576LedController()
+        val navigate = NavigateController(this)
+        mqtt = MqttBridge(config, brightness, screen, led, navigate, accessibilityEnabled())
+    }
+
+    /** Advertise the button-event entity only if our a11y service is actually enabled. */
+    private fun accessibilityEnabled(): Boolean {
+        val enabled = Settings.Secure.getString(
+            contentResolver,
+            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
+        )
+        return enabled?.contains(packageName) == true
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
