@@ -51,12 +51,17 @@ object AudioPlayer {
 
     private fun playFile(file: File) {
         val player = MediaPlayer().apply {
+            // USAGE_MEDIA -> STREAM_MUSIC, matching the bash reference (`sox play`). The earlier
+            // USAGE_ASSISTANCE_ACCESSIBILITY routed to the accessibility stream, which is separate
+            // from — and far quieter than — the music volume the panels actually have turned up
+            // (confirmed near-inaudible on BMP, 2026-06-03 on-device test).
             setAudioAttributes(
                 AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY)
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
                     .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                     .build(),
             )
+            setVolume(1f, 1f)
             setDataSource(file.absolutePath)
             setOnCompletionListener {
                 it.release()
