@@ -36,6 +36,8 @@ class MqttBridge(
     private val navigate: NavigateController,
     private val volume: VolumeController,
     private val buttonsEnabled: Boolean,
+    private val hasLight: Boolean,
+    private val hasProximity: Boolean,
 ) {
     private var client: Mqtt5AsyncClient? = null
 
@@ -50,6 +52,8 @@ class MqttBridge(
     private val stateNavigate = "ha-paneld/$panel/navigate/state"
     private val stateVolume = "ha-paneld/$panel/volume/state"
     private val eventButton = "ha-paneld/$panel/button/event"
+    private val stateIlluminance = "ha-paneld/$panel/illuminance/state"
+    private val stateProximity = "ha-paneld/$panel/proximity/state"
 
     fun start() {
         val broker = config.mqttBroker.trim()
@@ -175,6 +179,14 @@ class MqttBridge(
         client?.let { publish(it, eventButton, """{"event_type":"$event"}""") }
     }
 
+    fun publishLight(lux: Int) {
+        client?.let { publish(it, stateIlluminance, lux.toString()) }
+    }
+
+    fun publishProximity(near: Boolean) {
+        client?.let { publish(it, stateProximity, if (near) "ON" else "OFF") }
+    }
+
     // ---- discovery ----
 
     private fun publishDiscovery(c: Mqtt5AsyncClient) {
@@ -212,6 +224,20 @@ class MqttBridge(
             c, "number", "${panel}_volume",
             """{"name":"$panel volume","unique_id":"${panel}_volume","command_topic":"$cmdVolume","state_topic":"$stateVolume","min":0,"max":100,"step":1,"mode":"slider","unit_of_measurement":"%","icon":"mdi:volume-high",$avail,$device}""",
         )
+
+        // Panel sensors — exposed as data only; room sensors stay the occupancy/lux authority.
+        if (hasLight) {
+            publishConfig(
+                c, "sensor", "${panel}_illuminance",
+                """{"name":"$panel illuminance","unique_id":"${panel}_illuminance","state_topic":"$stateIlluminance","device_class":"illuminance","unit_of_measurement":"lx","state_class":"measurement",$avail,$device}""",
+            )
+        }
+        if (hasProximity) {
+            publishConfig(
+                c, "binary_sensor", "${panel}_proximity",
+                """{"name":"$panel proximity","unique_id":"${panel}_proximity","state_topic":"$stateProximity","device_class":"occupancy","payload_on":"ON","payload_off":"OFF",$avail,$device}""",
+            )
+        }
     }
 
     private fun publishConfig(c: Mqtt5AsyncClient, component: String, objectId: String, payload: String) {

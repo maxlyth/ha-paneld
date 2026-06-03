@@ -29,12 +29,11 @@ back to HA, and turnkey mDNS pairing. ha-paneld covers those; Companion keeps do
 | `reload-webview` / `soft-restart` | planned v0.3.0 | MQTT command |
 
 > [!NOTE]
-> ha-paneld is an **actuator + button-input** agent, not a sensor platform. Proximity/luminance
-> are deliberately out of scope — panel sensor hardware is inconsistent and room-level HA sensors
-> (motion, lux, occupancy) are a better, already-calibrated signal. Brightness is therefore
-> **HA-driven**: ha-paneld exposes the brightness actuator; the policy (from room sensors) lives in
-> Home Assistant. Zigbee gateway and app-watchdog are also out of scope (coexist with a dedicated
-> tool if you need them).
+> ha-paneld exposes the panel's light + proximity sensors as data (standard `SensorManager`), but
+> they are **not** the occupancy/lux authority — room-level HA sensors (motion, lux, occupancy) are,
+> being better placed and already calibrated. Brightness is therefore **HA-driven**: ha-paneld
+> exposes the brightness actuator; the policy (from room sensors) lives in Home Assistant. Zigbee
+> gateway and app-watchdog are out of scope (coexist with a dedicated tool if you need them).
 
 ## The control API — uniform MQTT entities
 
@@ -49,6 +48,8 @@ no YAML:
 | `text.<panel>_navigate` | push a URL to the panel | depends on Companion intent handling |
 | `event.<panel>_button` | hardware button presses | published only when the a11y key-filter is enabled |
 | `number.<panel>_volume` | TTS/announce volume | 0–100% → `STREAM_MUSIC`; playback is the HTTP `/play` contract below |
+| `sensor.<panel>_illuminance` | ambient lux | standard `SensorManager` `TYPE_LIGHT`; published only if present |
+| `binary_sensor.<panel>_proximity` | proximity (occupancy) | standard `SensorManager` `TYPE_PROXIMITY`; published only if present |
 
 ## HTTP contract (v0.1.0)
 

@@ -19,6 +19,7 @@ import io.github.maxlyth.hapaneld.control.VolumeController
 import io.github.maxlyth.hapaneld.hardware.LedController
 import io.github.maxlyth.hapaneld.hardware.Rk3576LedController
 import io.github.maxlyth.hapaneld.http.PaneldServer
+import io.github.maxlyth.hapaneld.sensors.SensorReporter
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -40,19 +41,24 @@ class PaneldService : Service() {
     private lateinit var server: PaneldServer
     private lateinit var mdns: MdnsAdvertiser
     private lateinit var mqtt: MqttBridge
+    private lateinit var sensors: SensorReporter
 
     override fun onCreate() {
         super.onCreate()
         config = Config(this)
         server = PaneldServer(config, cacheDir, scope)
         mdns = MdnsAdvertiser(this, config)
+        sensors = SensorReporter(this)
 
         val brightness = BrightnessController(this)
         val screen = ScreenController(this)
         val led: LedController = Rk3576LedController()
         val navigate = NavigateController(this)
         val volume = VolumeController(this)
-        mqtt = MqttBridge(config, brightness, screen, led, navigate, volume, accessibilityEnabled())
+        mqtt = MqttBridge(
+            config, brightness, screen, led, navigate, volume,
+            accessibilityEnabled(), sensors.hasLight(), sensors.hasProximity(),
+        )
     }
 
     /** Advertise the button-event entity only if our a11y service is actually enabled. */
@@ -70,6 +76,10 @@ class PaneldService : Service() {
             server.start()
             mdns.start()
             mqtt.start()
+            sensors.start(
+                onLux = { lux -> mqtt.publishLight(lux) },
+                onProximity = { near -> mqtt.publishProximity(near) },
+            )
         }
         return START_STICKY
     }
@@ -100,6 +110,7 @@ class PaneldService : Service() {
     }
 
     override fun onDestroy() {
+        runCatching { sensors.stop() }
         runCatching { server.stop() }
         runCatching { mdns.stop() }
         runCatching { mqtt.stop() }
