@@ -7,14 +7,31 @@ android {
     namespace = "io.github.maxlyth.hapaneld"
     compileSdk = 35
 
+    // Pinned so CI builds the native LED driver deterministically (matches the sdkmanager install
+    // step in .github/workflows/*.yml). 27.0.12077973 is AGP 8.7's default NDK.
+    ndkVersion = "27.0.12077973"
+
     defaultConfig {
         applicationId = "io.github.maxlyth.hapaneld"
         // minSdk 26: clears the HiveMQ "<26 cannot connect over IoT" bug (#598) and covers
         // the whole panel fleet (NSPanelPro Android 8.1 = API 27, Hall TPA10 Android 11 = API 30).
         minSdk = 26
         targetSdk = 35
-        versionCode = 4
-        versionName = "0.3.1-dev"
+        versionCode = 5
+        versionName = "0.4.0-dev"
+
+        // Only the fleet's ARM ABIs — bounds the native LED lib (libhapaneld_led.so) + APK size.
+        ndk {
+            abiFilters += setOf("arm64-v8a", "armeabi-v7a")
+        }
+    }
+
+    // Clean-room rk3576 /dev/ledjni ioctl driver (app/src/main/cpp/led_jni.c → libhapaneld_led.so).
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
     }
 
     signingConfigs {
