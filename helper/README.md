@@ -29,6 +29,8 @@ Newline-terminated ASCII on `127.0.0.1:8889`. One or more commands per connectio
 | `OFF` | LED off | `OK` / `ERR` |
 | `BTN <0..255>` | button-backlight brightness | `OK` / `ERR` |
 | `SCREEN ON` / `SCREEN OFF` | screen backlight power (`bl_power` 0/4) | `OK` / `ERR` |
+| `RELOAD <pkg>` | force-stop + relaunch an app (dashboard reload) | `OK` / `ERR` |
+| `REBOOT` | reboot the panel | `OK` (then down) |
 | `PING` | liveness probe | `OK` |
 | anything else | — | `ERR` |
 

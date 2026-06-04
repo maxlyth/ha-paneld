@@ -36,7 +36,8 @@ class PaneldServer(
     private val config: Config,
     private val cacheDir: File,
     private val scope: CoroutineScope,
-    private val onConfig: (panelId: String, broker: String, user: String, password: String?) -> Unit,
+    // Called after this server has written new settings to [config]; the service rebuilds MQTT/mDNS.
+    private val onReconfigure: () -> Unit,
     private val info: () -> Map<String, String>,
 ) {
     private val urlRegex = Regex("""https?://[^\s"']+""")
@@ -58,11 +59,17 @@ class PaneldServer(
                         call.respondText("invalid panel_id\n", status = HttpStatusCode.BadRequest)
                         return@post
                     }
-                    val broker = p["mqtt_broker"].orEmpty().trim()
-                    val user = p["mqtt_user"].orEmpty().trim()
-                    // Blank password field => keep the stored one (the form never echoes it).
-                    val password = p["mqtt_password"].orEmpty().ifEmpty { null }
-                    onConfig(slug, broker, user, password)
+                    // Persist directly (this server holds Config); the service then reconfigures.
+                    config.setPanelId(slug)
+                    config.setFriendlyName(p["friendly_name"].orEmpty().trim())
+                    config.setMqtt(
+                        p["mqtt_broker"].orEmpty().trim(),
+                        p["mqtt_user"].orEmpty().trim(),
+                        // Blank password field => keep the stored one (the form never echoes it).
+                        p["mqtt_password"].orEmpty().ifEmpty { null },
+                    )
+                    config.setDashboardPackage(p["dashboard_package"].orEmpty().trim())
+                    onReconfigure()
                     call.respondText(
                         "<!doctype html><meta charset=utf-8>" +
                             "<meta http-equiv=refresh content='2;url=/'>" +
@@ -100,7 +107,13 @@ class PaneldServer(
     private fun infoHtml(): String {
         val pid = esc(config.panelId)
         val rows = info().entries.joinToString("\n") { (k, v) ->
-            "<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>"
+            // Link the ha-paneld version to its GitHub releases page.
+            val cell = if (k == "ha-paneld") {
+                """<a href="$RELEASES_URL" target="_blank" rel="noopener">${esc(v)}</a>"""
+            } else {
+                esc(v)
+            }
+            "<tr><th>${esc(k)}</th><td>$cell</td></tr>"
         }
         return """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -126,14 +139,18 @@ $rows
 </table>
 <h2>Configuration</h2>
 <form method="post" action="/config">
- <label>Panel id
+ <label>Panel id <small>(entity_ids / MQTT topics)</small>
   <input name="panel_id" value="$pid" pattern="[a-z0-9_]+" title="lowercase letters, digits, underscore" required></label>
+ <label>Friendly name <small>(HA device name)</small>
+  <input name="friendly_name" value="${esc(config.friendlyName)}" placeholder="Office Dash"></label>
  <label>MQTT broker
   <input name="mqtt_broker" value="${esc(config.mqttBroker)}" placeholder="tcp://192.168.1.10:1883"></label>
  <label>MQTT username
   <input name="mqtt_user" value="${esc(config.mqttUser)}" placeholder="(optional)" autocomplete="off"></label>
  <label>MQTT password
   <input name="mqtt_password" type="password" value="" placeholder="(unchanged)" autocomplete="new-password"></label>
+ <label>Dashboard package <small>(for the Reload button; blank = disabled)</small>
+  <input name="dashboard_package" value="${esc(config.dashboardPackage)}" placeholder="io.homeassistant.companion.android"></label>
  <button type="submit">Save</button>
 </form>
 <p class="note">Leave the broker blank to run HTTP/TTS-only (MQTT disabled). The password field is
@@ -148,5 +165,6 @@ Served over plain HTTP on the LAN.</p>
 
     companion object {
         private const val TAG = "ha-paneld/http"
+        private const val RELEASES_URL = "https://github.com/maxlyth/ha-paneld/releases"
     }
 }

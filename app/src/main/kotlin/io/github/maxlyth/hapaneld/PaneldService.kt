@@ -81,24 +81,19 @@ class PaneldService : Service() {
     )
 
     /**
-     * Apply config from the HTTP page: persist panel id + MQTT settings, clear the old discovery if
-     * the panel id changed, and restart MQTT + mDNS under the new settings. A null password keeps
-     * the stored one.
+     * Apply config the HTTP page has already written to [config]: clear the OLD discovery (the live
+     * MQTT bridge still holds the old panel id), then rebuild MQTT + mDNS from the new config.
      */
-    private fun reconfigure(newPanel: String, broker: String, user: String, password: String?) {
-        if (newPanel.isEmpty()) return
+    private fun reconfigure() {
         scope.launch {
-            val oldPanel = config.panelId
-            if (newPanel != oldPanel) runCatching { mqtt.clearDiscovery() }
+            runCatching { mqtt.clearDiscovery() } // bridge was built with the previous panel id
             runCatching { mqtt.stop() }
-            config.setPanelId(newPanel)
-            config.setMqtt(broker, user, password)
             runCatching { mdns.stop() }
             mqtt = buildMqtt()
             mdns = MdnsAdvertiser(this@PaneldService, config)
             mdns.start()
             mqtt.start()
-            Log.i(TAG, "reconfigured: panel=$newPanel broker=${broker.ifEmpty { "(disabled)" }}")
+            Log.i(TAG, "reconfigured: panel=${config.panelId} broker=${config.mqttBroker.ifEmpty { "(disabled)" }}")
         }
     }
 
@@ -110,6 +105,7 @@ class PaneldService : Service() {
             if (mqtt.isConnected()) "connected" else "disconnected"
         val extras = linkedMapOf(
             "panel_id" to config.panelId,
+            "Friendly name" to config.friendlyName,
             "HTTP port" to config.httpPort.toString(),
             "Local IP" to (localIpv4() ?: "?"),
             "MQTT" to mqttStatus,

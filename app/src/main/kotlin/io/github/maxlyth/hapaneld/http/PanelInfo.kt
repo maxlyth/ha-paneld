@@ -1,11 +1,13 @@
 package io.github.maxlyth.hapaneld.http
 
+import android.app.ActivityManager
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.Environment
+import android.os.StatFs
 import android.webkit.WebView
 import io.github.maxlyth.hapaneld.BuildConfig
-import io.github.maxlyth.hapaneld.Config
 
 /**
  * Gathers the panel facts shown on the info page (`GET /`). Static device/version facts live here;
@@ -18,12 +20,40 @@ object PanelInfo {
         m["ha-paneld"] = "${BuildConfig.VERSION_NAME} (build ${BuildConfig.VERSION_CODE})"
         m["Android"] = "${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})"
         m["Device"] = "${Build.MANUFACTURER} ${Build.MODEL} (${Build.DEVICE})"
-        m["ABI"] = Build.SUPPORTED_ABIS.firstOrNull() ?: "?"
+        m["CPU"] = cpu()
+        m["RAM"] = ram(context)
+        m["Storage"] = storage()
         m["System WebView"] = webView()
         m["HA Companion"] = companion(context)
         m.putAll(extras)
         return m
     }
+
+    private fun cpu(): String {
+        val abi = Build.SUPPORTED_ABIS.firstOrNull() ?: "?"
+        val cores = Runtime.getRuntime().availableProcessors()
+        val hw = Build.HARDWARE
+        return "$cores cores · $abi · $hw"
+    }
+
+    private fun ram(context: Context): String = try {
+        val am = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        val mi = ActivityManager.MemoryInfo().also { am.getMemoryInfo(it) }
+        "${gib(mi.totalMem)} total · ${gib(mi.availMem)} free"
+    } catch (e: Throwable) {
+        "?"
+    }
+
+    private fun storage(): String = try {
+        val fs = StatFs(Environment.getDataDirectory().path)
+        val total = fs.blockCountLong * fs.blockSizeLong
+        val free = fs.availableBlocksLong * fs.blockSizeLong
+        "${gib(total)} total · ${gib(free)} free (data)"
+    } catch (e: Throwable) {
+        "?"
+    }
+
+    private fun gib(bytes: Long): String = "%.1f GiB".format(bytes / 1024.0 / 1024.0 / 1024.0)
 
     private fun webView(): String = try {
         WebView.getCurrentWebViewPackage()?.let { "${it.packageName} ${it.versionName}" } ?: "unknown"

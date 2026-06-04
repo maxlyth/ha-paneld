@@ -115,8 +115,30 @@ class MqttBridge(
             .send()
         publishDiscovery(c)
         publish(c, availabilityTopic, "online", retain = true)
-        publish(c, stateVolume, volume.getPercent().toString(), retain = true)
+        restoreAndPublishStates(c)
         Log.i(TAG, "MQTT connected — (re)subscribed + discovery for $panel")
+    }
+
+    /**
+     * Sync HA to the panel's actual state on (re)connect, so the UI isn't stale after a reboot
+     * (hardware resets, but HA holds the last retained state). Re-applies the last LED colour and
+     * publishes the current screen/volume/navigate states.
+     */
+    private fun restoreAndPublishStates(c: Mqtt5AsyncClient) {
+        publish(c, stateVolume, volume.getPercent().toString(), retain = true)
+        // Screen: panels come up on; report ON + the current brightness.
+        publish(c, stateScreen, """{"state":"ON","brightness":${brightness.getBrightness().coerceAtLeast(1)}}""", retain = true)
+        // Navigate: last pushed URL (skip when empty — empty retained payload just clears the topic).
+        if (config.lastNavigate.isNotEmpty()) publish(c, stateNavigate, config.lastNavigate, retain = true)
+        // LED: re-apply the last colour to the hardware (reset on reboot) and publish it.
+        val led = config.lastLed.split(",").mapNotNull { it.toIntOrNull() }
+        if (led.size == 5 && led[0] == 1) {
+            val (_, br, r, g, b) = led
+            this.led.setRgb(r * br / 255, g * br / 255, b * br / 255)
+            publish(c, stateLed, ledStateJson(br, r, g, b), retain = true)
+        } else {
+            publish(c, stateLed, """{"state":"OFF"}""", retain = true)
+        }
     }
 
     // ---- command dispatch ----
@@ -130,7 +152,7 @@ class MqttBridge(
                 cmdLed -> handleLed(payload)
                 cmdNavigate -> handleNavigate(payload)
                 cmdVolume -> handleVolume(payload)
-                cmdReload -> system.reloadDashboard()
+                cmdReload -> system.reloadDashboard(config.dashboardPackage)
                 cmdReboot -> system.reboot()
                 else -> Log.d(TAG, "unhandled command topic $topic")
             }
@@ -144,7 +166,7 @@ class MqttBridge(
         val on = json.optString("state", "ON").equals("ON", ignoreCase = true)
         if (!on) {
             screen.sleep()
-            publish(client!!, stateScreen, """{"state":"OFF"}""")
+            publish(client!!, stateScreen, """{"state":"OFF"}""", retain = true)
             return
         }
         screen.wake() // power the backlight on (daemon bl_power) or restore brightness (fallback)
@@ -154,7 +176,7 @@ class MqttBridge(
             brightness.getBrightness().coerceAtLeast(1)
         }
         screen.noteLevel(level)
-        publish(client!!, stateScreen, """{"state":"ON","brightness":$level}""")
+        publish(client!!, stateScreen, """{"state":"ON","brightness":$level}""", retain = true)
     }
 
     private fun handleLed(payload: String) {
@@ -162,7 +184,8 @@ class MqttBridge(
         val on = json.optString("state", "ON").equals("ON", ignoreCase = true)
         if (!on) {
             led.off()
-            publish(client!!, stateLed, """{"state":"OFF"}""")
+            config.lastLed = "0,0,0,0,0"
+            publish(client!!, stateLed, """{"state":"OFF"}""", retain = true)
             return
         }
         val br = if (json.has("brightness")) json.getInt("brightness") else 255
@@ -170,22 +193,25 @@ class MqttBridge(
         var r = color?.optInt("r", 255) ?: 255
         var g = color?.optInt("g", 255) ?: 255
         var b = color?.optInt("b", 255) ?: 255
+        val cr = color?.optInt("r", 255) ?: 255
+        val cg = color?.optInt("g", 255) ?: 255
+        val cb = color?.optInt("b", 255) ?: 255
         // Apply HA brightness as a scalar over the colour (json light sends them separately).
-        r = r * br / 255; g = g * br / 255; b = b * br / 255
-        led.setRgb(r, g, b)
-        publish(
-            client!!,
-            stateLed,
-            """{"state":"ON","color_mode":"rgb","brightness":$br,"color":{"r":${color?.optInt("r", 255) ?: 255},"g":${color?.optInt("g", 255) ?: 255},"b":${color?.optInt("b", 255) ?: 255}}}""",
-        )
+        led.setRgb(cr * br / 255, cg * br / 255, cb * br / 255)
+        config.lastLed = "1,$br,$cr,$cg,$cb" // remember for restore on reboot
+        publish(client!!, stateLed, ledStateJson(br, cr, cg, cb), retain = true)
     }
+
+    private fun ledStateJson(br: Int, r: Int, g: Int, b: Int) =
+        """{"state":"ON","color_mode":"rgb","brightness":$br,"color":{"r":$r,"g":$g,"b":$b}}"""
 
     private fun handleNavigate(payload: String) {
         // text entity sends the raw URL string.
         val url = payload.trim().trim('"')
         if (url.isNotEmpty()) {
             navigate.navigate(url)
-            publish(client!!, stateNavigate, url)
+            config.lastNavigate = url
+            publish(client!!, stateNavigate, url, retain = true)
         }
     }
 
@@ -193,7 +219,7 @@ class MqttBridge(
         // number entity sends a plain numeric string (0..100).
         val pct = payload.trim().trim('"').toDoubleOrNull()?.toInt() ?: return
         volume.setPercent(pct)
-        publish(client!!, stateVolume, volume.getPercent().toString())
+        publish(client!!, stateVolume, volume.getPercent().toString(), retain = true)
     }
 
     private fun publishButton(event: String) {
@@ -211,11 +237,12 @@ class MqttBridge(
     // ---- discovery ----
 
     private fun publishDiscovery(c: Mqtt5AsyncClient) {
-        // device.name = panel_id; entity names are the capability ONLY, so HA composes a clean
-        // `<domain>.<panel>_<cap>` entity_id instead of doubling the panel id into both.
+        // device.name = the configurable friendly name; entity names are the capability ONLY, so HA
+        // composes a clean `<domain>.<panel>_<cap>` entity_id without doubling the panel id.
         // configuration_url -> HA renders a "Visit" link on the device page (the panel's info UI).
         val cu = if (!configUrl.isNullOrBlank()) ""","configuration_url":"$configUrl"""" else ""
-        val device = """"device":{"identifiers":["ha-paneld-$panel"],"name":"$panel","manufacturer":"ha-paneld","model":"panel agent","sw_version":"${Config.VERSION}"$cu}"""
+        val name = jsonEsc(config.friendlyName)
+        val device = """"device":{"identifiers":["ha-paneld-$panel"],"name":"$name","manufacturer":"ha-paneld","model":"panel agent","sw_version":"${Config.VERSION}"$cu}"""
         val avail = """"availability_topic":"$availabilityTopic","payload_available":"online","payload_not_available":"offline""""
 
         publishConfig(
@@ -274,6 +301,9 @@ class MqttBridge(
             """{"name":"Reboot","unique_id":"${panel}_reboot","command_topic":"$cmdReboot","device_class":"restart","icon":"mdi:restart",$avail,$device}""",
         )
     }
+
+    private fun jsonEsc(s: String): String =
+        s.replace("\\", "\\\\").replace("\"", "\\\"")
 
     private fun publishConfig(c: Mqtt5AsyncClient, component: String, objectId: String, payload: String) {
         publish(c, "homeassistant/$component/$objectId/config", payload, retain = true)

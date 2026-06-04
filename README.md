@@ -14,19 +14,23 @@ headless foreground service alongside it and never takes the foreground.
 ## Why not just the Companion app?
 
 The Companion app targets personal phones. Wall panels need different primitives: arbitrary-URL
-audio announcements, screen/LED/button control via privileged `su` writes, hardware-button events
-back to HA, and turnkey mDNS pairing. ha-paneld covers those; Companion keeps doing what it does.
+audio announcements, screen/LED/button control (via the bundled NDK or a small root helper),
+hardware-button events back to HA, and turnkey mDNS pairing. ha-paneld covers those; Companion keeps
+doing what it does (and remains the dashboard host).
 
 ## Capabilities
 
-| Cap | Status | Surface |
-|-----|--------|---------|
-| TTS / announce audio | v0.1.0 | `POST /play` + MQTT `media_player` |
-| Screen brightness + on/off (sleep) | v0.2.0-dev | MQTT `light.<panel>_screen` |
-| RGB LED | v0.2.0-dev | MQTT `light.<panel>_led` (per-panel HAL) |
-| URL navigate | v0.2.0-dev | MQTT `text.<panel>_navigate` |
-| Hardware-button events | v0.2.0-dev (needs device validation) | MQTT `event.<panel>_button` |
-| `reload-webview` / `soft-restart` | planned v0.3.0 | MQTT command |
+| Cap | Surface |
+|-----|---------|
+| TTS / announce audio | `POST /play` + `number.<panel>_volume` (HA has no MQTT media_player platform) |
+| Screen brightness | `light.<panel>_screen` brightness |
+| Screen on/off (true backlight off, no lock/PIN) | `light.<panel>_screen` on/off |
+| RGB LED | `light.<panel>_led` (per-panel HAL: rk3576 NDK `/dev/ledjni`, or sysfs via the root helper) |
+| URL navigate | `text.<panel>_navigate` |
+| Hardware-button events | `event.<panel>_button` (a11y key capture) |
+| Ambient light / proximity (data only) | `sensor.<panel>_illuminance`, `binary_sensor.<panel>_proximity` |
+| Reload dashboard / reboot | `button.<panel>_reload`, `button.<panel>_reboot` |
+| Panel info + config web page | `GET /` (the device "Visit" link) |
 
 > [!NOTE]
 > ha-paneld exposes the panel's light + proximity sensors as data (standard `SensorManager`), but
@@ -43,24 +47,35 @@ no YAML:
 
 | Entity | Capability | Notes |
 |--------|------------|-------|
-| `light.<panel>_screen` | brightness + on/off | on = wake, off = sleep; JSON schema, brightness 0–255 |
-| `light.<panel>_led` | RGB | published only when a LED backend is present |
-| `text.<panel>_navigate` | push a URL to the panel | depends on Companion intent handling |
+| `light.<panel>_screen` | brightness + on/off | on = backlight on, off = true backlight-off (no keyguard/PIN); JSON schema, brightness 0–255 |
+| `light.<panel>_led` | RGB | published only when a LED backend is present (NDK `/dev/ledjni` or the root helper) |
+| `text.<panel>_navigate` | push a URL to the panel | depends on Companion intent handling; last URL restored on reconnect |
 | `event.<panel>_button` | hardware button presses | published only when the a11y key-filter is enabled |
 | `number.<panel>_volume` | TTS/announce volume | 0–100% → `STREAM_MUSIC`; playback is the HTTP `/play` contract below |
 | `sensor.<panel>_illuminance` | ambient lux | standard `SensorManager` `TYPE_LIGHT`; published only if present |
 | `binary_sensor.<panel>_proximity` | proximity (occupancy) | standard `SensorManager` `TYPE_PROXIMITY`; published only if present |
-| `button.<panel>_reload` | reload dashboard | force-stop + relaunch the Companion WebView (root) |
-| `button.<panel>_reboot` | reboot panel | `su -c reboot` (root) |
+| `button.<panel>_reload` | reload dashboard | force-stop + relaunch the configured dashboard package (root helper, else `su`) |
+| `button.<panel>_reboot` | reboot panel | root helper, else `su` |
 
-## HTTP contract (v0.1.0)
+The device's display name (`configuration_url` "Visit" link, friendly name) and the LED/screen
+states are re-published on every (re)connect, and the MQTT client auto-reconnects, so HA stays in
+sync after a panel reboot or broker blip.
 
-```
+## HTTP contract
+
+```text
+GET  /              panel info + config page (versions, hardware, status; panel_id,
+                    friendly name, MQTT broker/creds, dashboard package). This is the
+                    device's configuration_url, so HA shows a "Visit" link.
+POST /config        form-encoded settings from the page; persists + live-reconfigures
+GET  /health        -> 200 "ha-paneld <version> panel=<id>"
 POST /play          body contains an audio URL (raw or {"url":"…"})
                     -> 200 "playing"  (download + play happen in the background)
                     -> 400 "no-url"   (no URL found in body)
-GET  /health        -> 200 "ha-paneld <version> panel=<id>"
 ```
+
+The web page at `/` is how a user sets the **MQTT broker** without adb — find the panel's IP (mDNS
+`_ha-paneld._tcp`, or the router), open `http://<ip>:8888/`, fill in the broker + credentials, Save.
 
 The agent listens on **:8888**. Self-signed HTTPS sources are accepted (panels live on a trusted
 LAN). This is the same contract as the reference shell receiver it replaces, so HA-side automation

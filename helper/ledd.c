@@ -22,6 +22,8 @@
 //   OFF               LED off                          -> "OK\n"
 //   BTN <0..255>      button-backlight brightness      -> "OK\n"
 //   SCREEN ON|OFF     backlight power (bl_power 0|4)    -> "OK\n"
+//   RELOAD <pkg>      force-stop + relaunch an app      -> "OK\n"
+//   REBOOT            reboot the panel                  -> "OK\n" (then goes down)
 //   PING              liveness probe                   -> "OK\n"
 //   <anything else>                                    -> "ERR\n"
 
@@ -95,6 +97,27 @@ static int set_screen(int on) {
     return write_node(bl_power_path, on ? "0\n" : "4\n");
 }
 
+// Android package name chars only — defends the system() calls below against injection.
+static int valid_pkg(const char *s) {
+    if (!*s) return 0;
+    for (const char *p = s; *p; p++)
+        if (!((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
+              (*p >= '0' && *p <= '9') || *p == '.' || *p == '_'))
+            return 0;
+    return 1;
+}
+
+// Force-stop + relaunch a dashboard app (root via this daemon's su domain).
+static int reload_pkg(const char *pkg) {
+    if (!valid_pkg(pkg)) return -1;
+    char cmd[256];
+    snprintf(cmd, sizeof cmd, "am force-stop %s", pkg);
+    system(cmd);
+    snprintf(cmd, sizeof cmd, "monkey -p %s -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1", pkg);
+    system(cmd);
+    return 0;
+}
+
 static void reply(int fd, const char *s) { (void)!write(fd, s, strlen(s)); }
 
 // Handle one command line. Returns nothing; writes a reply.
@@ -111,6 +134,13 @@ static void handle(int fd, char *line) {
         sscanf(line, "SCREEN %7s", w);
         int on = strcasecmp(w, "OFF") != 0;  // anything but OFF -> on
         reply(fd, set_screen(on) == 0 ? "OK\n" : "ERR\n");
+    } else if (strncmp(line, "RELOAD", 6) == 0) {
+        char pkg[128] = "";
+        sscanf(line, "RELOAD %127s", pkg);
+        reply(fd, reload_pkg(pkg) == 0 ? "OK\n" : "ERR\n");
+    } else if (strncmp(line, "REBOOT", 6) == 0) {
+        reply(fd, "OK\n");   // reply before we go down
+        system("svc power reboot 2>/dev/null || reboot");
     } else if (strncmp(line, "PING", 4) == 0) {
         reply(fd, "OK\n");
     } else {
