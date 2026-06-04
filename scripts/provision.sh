@@ -25,12 +25,13 @@ step() { echo "${CYN}${B}$1${X} $2"; }
 
 trap 'echo "${RED}${B}✗ provisioning incomplete${X} — re-run the SAME command to finish (it is idempotent)." >&2' ERR
 
-TARGET="${1:?usage: provision.sh <panel-ip:5555> [APK] [--id ID] [--mqtt tcp://host:1883] [--mqtt-user U] [--mqtt-pass P] [--verify]}"
+TARGET="${1:?usage: provision.sh <panel-ip:5555> [APK] [--id ID] [--mqtt tcp://host:1883] [--mqtt-user U] [--mqtt-pass P] [--latest] [--force] [--verify]}"
 shift
-APK="app/build/outputs/apk/debug/app-debug.apk"
+REPO="maxlyth/ha-paneld"
+LOCAL_APK="app/build/outputs/apk/debug/app-debug.apk"
 PKG="io.github.maxlyth.hapaneld"
 A11Y="$PKG/.input.PanelAccessibilityService"
-PANEL_ID=""; MQTT=""; MQTT_USER=""; MQTT_PASS=""; VERIFY_ONLY=0
+APK=""; PANEL_ID=""; MQTT=""; MQTT_USER=""; MQTT_PASS=""; VERIFY_ONLY=0; LATEST=0; FORCE=0; TOINSTALL_VER=""
 
 if [ "${1:-}" ] && [ "${1#--}" = "${1:-}" ]; then APK="$1"; shift; fi
 while [ "${1:-}" ]; do
@@ -40,6 +41,8 @@ while [ "${1:-}" ]; do
     --mqtt) MQTT="$2"; shift 2 ;;
     --mqtt-user) MQTT_USER="$2"; shift 2 ;;
     --mqtt-pass) MQTT_PASS="$2"; shift 2 ;;
+    --latest) LATEST=1; shift ;;     # ignore any local build, fetch the newest GitHub release
+    --force) FORCE=1; shift ;;       # skip the same/older-version prompt
     --verify) VERIFY_ONLY=1; shift ;;
     *) echo "${RED}unknown arg: $1${X}" >&2; exit 2 ;;
   esac
@@ -66,14 +69,68 @@ verify() {
   return $rc
 }
 
+# Fetch the newest signed release APK from GitHub (gh if present, else the API via curl). Sets APK + TOINSTALL_VER.
+download_latest() {
+  local dir tag url json
+  dir="$(mktemp -d)"
+  if command -v gh >/dev/null 2>&1; then
+    tag="$(gh release view --repo "$REPO" --json tagName -q .tagName 2>/dev/null || true)"
+    gh release download --repo "$REPO" --pattern '*.apk' --dir "$dir" >/dev/null 2>&1 || true
+  fi
+  if ! ls "$dir"/*.apk >/dev/null 2>&1; then
+    json="$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null || true)"
+    tag="$(printf '%s' "$json" | grep -o '"tag_name": *"[^"]*"' | head -1 | cut -d'"' -f4)"
+    url="$(printf '%s' "$json" | grep -o '"browser_download_url": *"[^"]*\.apk"' | head -1 | cut -d'"' -f4)"
+    [ -n "$url" ] && curl -fsSL "$url" -o "$dir/ha-paneld-latest.apk"
+  fi
+  APK="$(ls "$dir"/*.apk 2>/dev/null | head -1 || true)"
+  [ -n "$APK" ] || { echo "${RED}could not fetch the latest release APK (need gh, or internet for the GitHub API)${X}" >&2; exit 1; }
+  TOINSTALL_VER="${tag#v}"
+  step "⬇️  downloaded" "${D}$(basename "$APK")${X} ${B}${tag:-latest}${X}"
+}
+
+# Pick the APK: explicit --apk wins; else the local build (unless --latest); else download the latest release.
+resolve_apk() {
+  if [ -n "$APK" ]; then :
+  elif [ "$LATEST" = 1 ]; then download_latest
+  elif [ -f "$LOCAL_APK" ]; then APK="$LOCAL_APK"; step "📂 using local build" "${D}$APK${X}"
+  else download_latest; fi
+  [ -f "$APK" ] || { echo "${RED}APK not found: $APK${X}" >&2; exit 1; }
+  if [ -z "$TOINSTALL_VER" ]; then  # local/--apk: read the version via aapt if available (else the guard is skipped)
+    for t in aapt aapt2; do command -v "$t" >/dev/null 2>&1 && { TOINSTALL_VER="$("$t" dump badging "$APK" 2>/dev/null | grep -o "versionName='[^']*'" | head -1 | cut -d"'" -f2)"; break; }; done
+  fi
+}
+
+# Warn (and prompt on a TTY) before reinstalling the same or an older version; --force skips it.
+version_guard() {
+  [ "$FORCE" = 1 ] && return 0
+  [ -n "$TOINSTALL_VER" ] || return 0
+  local installed newest
+  installed="$(adb -s "$TARGET" shell dumpsys package "$PKG" 2>/dev/null | grep -m1 versionName | sed 's/.*versionName=//' | tr -d '\r ' || true)"
+  [ -n "$installed" ] || return 0
+  newest="$(printf '%s\n%s\n' "$installed" "$TOINSTALL_VER" | sort -V | tail -1)"
+  if [ "$installed" = "$TOINSTALL_VER" ]; then
+    echo "${YEL}ℹ panel already on $installed — reinstalling.${X}"
+  elif [ "$newest" = "$installed" ]; then
+    echo "${YEL}⚠ panel has $installed; about to install OLDER $TOINSTALL_VER (downgrade).${X}"
+    if [ -t 0 ]; then printf "   continue? [y/N] "; read -r a; case "$a" in [yY]*) ;; *) echo "aborted."; exit 0 ;; esac; fi
+  else
+    echo "${GRN}↑ updating $installed → $TOINSTALL_VER${X}"
+  fi
+}
+
 echo "${MAG}${B}🛠  ha-paneld provisioning${X} ${D}→ $TARGET${X}"
 
 if [ "$VERIFY_ONLY" = 1 ]; then
   verify; exit $?
 fi
 
+resolve_apk
+
 step "🔌 connecting" "$TARGET"
 adb connect "$TARGET" >/dev/null
+
+version_guard
 
 step "📦 installing" "${D}$APK${X}"
 adb -s "$TARGET" install -r -g "$APK" >/dev/null 2>&1 || adb -s "$TARGET" install -r "$APK"
