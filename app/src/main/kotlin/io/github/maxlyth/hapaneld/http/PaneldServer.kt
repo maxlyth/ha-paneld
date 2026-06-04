@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import io.github.maxlyth.hapaneld.AudioPlayer
 import io.github.maxlyth.hapaneld.Config
+import io.github.maxlyth.hapaneld.control.CdpRelay
 import io.github.maxlyth.hapaneld.sensors.SensorReporter
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
@@ -160,6 +161,18 @@ class PaneldServer(
                 get("/health") {
                     call.respondText("ha-paneld ${Config.VERSION} panel=${config.panelId}\n")
                 }
+                // 1-click WebView DevTools: expose the dashboard's CDP socket to the LAN (root relay)
+                // so the user can chrome://inspect with no adb. See CdpRelay.
+                get("/inspect") {
+                    call.respondText(inspectJson(if (CdpRelay.running) "started" else "off"), ContentType.Application.Json)
+                }
+                post("/inspect/start") {
+                    call.respondText(inspectJson(CdpRelay.start(appContext)), ContentType.Application.Json)
+                }
+                post("/inspect/stop") {
+                    CdpRelay.stop()
+                    call.respondText(inspectJson("off"), ContentType.Application.Json)
+                }
                 post("/play") {
                     val body = call.receiveText()
                     val url = urlRegex.find(body)?.value
@@ -249,6 +262,11 @@ the maintainer can help with your hardware/firmware combination without owning i
   onchange="proxThSet(this.value)"></label>
 <p id="proxhint" class="note"></p>
 </div>
+<h2>WebView debugging <small id="insthdr" style="color:#8a8;font-weight:400"></small></h2>
+<div style="display:flex;gap:8px;margin-bottom:4px">
+ <button type="button" class="pbtn" onclick="inspStart()">Enable</button>
+ <button type="button" class="pbtn" onclick="inspStop()">Stop</button></div>
+<p class="note" id="insthint"></p>
 <h2>Configuration</h2>
 <form method="post" action="/config">
  <label>Panel id <small>(entity_ids / MQTT topics)</small>
@@ -285,6 +303,9 @@ Served over plain HTTP on the LAN.</p>
     /** Read a bundled static asset (info.js / info.css) as text. */
     private fun asset(name: String): String =
         appContext.assets.open(name).bufferedReader().use { it.readText() }
+
+    private fun inspectJson(status: String): String =
+        """{"running":${CdpRelay.running},"port":${CdpRelay.PORT},"status":"$status"}"""
 
     /** Full config as JSON for fleet management. The MQTT password is never emitted — only a boolean
      *  saying whether one is set. `http_port` is read-only (changing it needs a restart). */

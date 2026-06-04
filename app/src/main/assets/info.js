@@ -108,3 +108,16 @@ function proxReset(){proxPost('/proximity/reset','');}
 function proxThSet(v){proxDrag=false;proxPost('/proximity/threshold','v='+v);}
 (function(){var s=document.getElementById('proxslider');s.addEventListener('mousedown',function(){proxDrag=true;});s.addEventListener('touchstart',function(){proxDrag=true;});})();
 prox();setInterval(prox,400);
+function inspApply(d){
+ var hdr=document.getElementById('insthdr'),hint=document.getElementById('insthint');
+ hdr.textContent=d.running?'· on':'· off';
+ if(d.status==='no-socket')hint.innerHTML='Enable it on the dashboard first: Companion → Settings → Troubleshooting → "WebView remote debugging", then relaunch the dashboard and press Enable again.';
+ else if(d.status==='needs-root')hint.textContent='Needs root (su) on this panel.';
+ else if(d.status==='failed'||d.status==='no-binary')hint.textContent='Could not start the relay.';
+ else if(d.running)hint.innerHTML='On your computer: open <b>chrome://inspect</b> → <b>Configure…</b> → add <b>'+location.hostname+':'+d.port+'</b>, then the dashboard appears under Remote Target — click <b>inspect</b>. Exposes DevTools to the LAN while on; press Stop when done.';
+ else hint.innerHTML='Opens this panel’s dashboard DevTools in your browser — no adb. Needs WebView debugging enabled on the dashboard app, plus root.';
+}
+async function insp(){try{var d=await (await fetch('/inspect')).json();inspApply(d);}catch(e){}}
+function inspStart(){fetch('/inspect/start',{method:'POST'}).then(function(r){return r.json();}).then(inspApply).catch(function(){});}
+function inspStop(){fetch('/inspect/stop',{method:'POST'}).then(function(r){return r.json();}).then(inspApply).catch(function(){});}
+insp();
