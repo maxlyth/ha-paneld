@@ -13,10 +13,12 @@ SRC = os.path.join(HERE, "scripts/assets/ha-logo-source.svg")
 FG = os.path.join(HERE, "app/src/main/res/drawable/ic_launcher_foreground.xml")
 PREVIEW = os.path.join(HERE, "docs/icon-preview.png")
 
-PANEL = (14, 24, 80, 60, 4); PANEL_FILL = "#37474F"
-SCREEN = (18, 28, 72, 52, 2); SCREEN_FILL = "#0E1620"
+# 4:3 wall panel, centred in the 108 viewport with generous margin so the adaptive launcher mask
+# leaves clear padding on every side (the old 14..94 device touched the horizontal edges).
+PANEL = (24, 32, 60, 45, 4); PANEL_FILL = "#37474F"
+SCREEN = (27, 35, 54, 39, 2); SCREEN_FILL = "#0E1620"
 MARK_W = 240.0          # the HA mark occupies ~0..240 of the source viewBox
-MARK_PX = 30.0          # rendered size on the screen (smaller = less "HA app")
+MARK_PX = 24.0          # rendered size on the screen (smaller = less "HA app")
 
 
 def rr(x, y, w, h, r):
