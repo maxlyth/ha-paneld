@@ -41,8 +41,15 @@ class MqttBridge(
     private val hasLight: Boolean,
     private val hasProximity: Boolean,
     private val configUrl: String? = null,
+    // Resolves HA's LAN IP via mDNS to default the broker when none is configured (injected by the
+    // service, wired to MdnsAdvertiser). Returns null if HA isn't found / mDNS unavailable.
+    private val discoverHaIp: () -> String? = { null },
 ) {
     private var client: Mqtt5AsyncClient? = null
+
+    /** Broker actually in use — configured, or auto-discovered as `tcp://<ha-ip>:1883`; "" if none. */
+    var activeBroker: String = ""
+        private set
 
     fun isConnected(): Boolean = client != null
 
@@ -65,11 +72,20 @@ class MqttBridge(
     private val stateProximity = "ha-paneld/$panel/proximity/state"
 
     fun start() {
-        val broker = config.mqttBroker.trim()
+        var broker = config.mqttBroker.trim()
         if (broker.isEmpty()) {
-            Log.i(TAG, "no broker configured — MQTT disabled")
+            // No explicit broker — try to find HA on the LAN (mDNS) and default to its :1883.
+            discoverHaIp()?.let {
+                broker = "tcp://$it:1883"
+                Log.i(TAG, "MQTT broker auto-discovered via mDNS (HA at $it): $broker")
+            }
+        }
+        if (broker.isEmpty()) {
+            Log.i(TAG, "no broker configured and none discovered — MQTT disabled")
+            activeBroker = ""
             return
         }
+        activeBroker = broker
         try {
             val uri = URI(if (broker.contains("://")) broker else "tcp://$broker")
             val host = uri.host ?: return

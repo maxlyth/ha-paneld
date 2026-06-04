@@ -78,6 +78,8 @@ class PaneldService : Service() {
     private fun buildMqtt(): MqttBridge = MqttBridge(
         config, brightness, screen, led, navigate, volume, system,
         accessibilityEnabled(), sensors.hasLight(), sensors.hasProximity(), configUrl,
+        // When no broker is configured, find HA on the LAN via mDNS and default to its :1883.
+        discoverHaIp = { mdns.discoverHaIp() },
     )
 
     /**
@@ -100,10 +102,12 @@ class PaneldService : Service() {
 
     /** Ordered facts for the info page (`GET /`). */
     private fun panelInfo(): Map<String, String> {
-        val broker = config.mqttBroker
+        // activeBroker reflects auto-discovery (tcp://<ha-ip>:1883) when no broker is configured.
+        val broker = mqtt.activeBroker.ifBlank { config.mqttBroker }
+        val auto = config.mqttBroker.isBlank() && mqtt.activeBroker.isNotBlank()
         val mqttStatus = if (broker.isBlank()) "disabled"
         else "${broker.substringAfter("://").substringBefore(":")} · " +
-            if (mqtt.isConnected()) "connected" else "disconnected"
+            (if (mqtt.isConnected()) "connected" else "disconnected") + (if (auto) " (auto)" else "")
         val extras = linkedMapOf(
             "panel_id" to config.panelId,
             "Friendly name" to config.friendlyName,
