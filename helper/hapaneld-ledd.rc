@@ -1,0 +1,11 @@
+# ha-paneld root helper — boot-persistent daemon (LED + screen backlight).
+#
+# Installed to /system/etc/init/hapaneld-ledd.rc (auto-imported by init at boot). Runs in the `su`
+# domain so it can write the root-only sysfs nodes (sysfs_lights, backlight bl_power) on a
+# userdebug panel — the same domain a manual `su 0` shell uses. `class main` auto-starts it during
+# boot; init restarts it if it exits. See helper/install-daemon.sh and helper/README.md.
+service hapaneld_ledd /system/bin/hapaneld-ledd
+    class main
+    user root
+    group root
+    seclabel u:r:su:s0

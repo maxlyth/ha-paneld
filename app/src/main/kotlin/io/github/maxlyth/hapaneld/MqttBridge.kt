@@ -14,7 +14,6 @@ import io.github.maxlyth.hapaneld.hardware.LedController
 import io.github.maxlyth.hapaneld.input.ButtonBus
 import org.json.JSONObject
 import java.net.URI
-import java.util.concurrent.TimeUnit
 
 /**
  * MQTT bridge — the single uniform control API across the fleet. Publishes Home Assistant
@@ -40,8 +39,11 @@ class MqttBridge(
     private val buttonsEnabled: Boolean,
     private val hasLight: Boolean,
     private val hasProximity: Boolean,
+    private val configUrl: String? = null,
 ) {
     private var client: Mqtt5AsyncClient? = null
+
+    fun isConnected(): Boolean = client != null
 
     private val panel = config.panelId
     private val availabilityTopic = "ha-paneld/$panel/availability"
@@ -75,7 +77,14 @@ class MqttBridge(
                 .identifier("ha-paneld-$panel")
                 .serverHost(host)
                 .serverPort(port)
+                // Auto-reconnect so a network blip / broker restart never permanently orphans the
+                // panel. Re-subscribe + re-publish discovery happen in onConnected on every connect.
+                .automaticReconnectWithDefaultConfig()
+                .addConnectedListener { onConnected() }
+                .addDisconnectedListener { Log.w(TAG, "MQTT disconnected — auto-reconnecting") }
                 .buildAsync()
+            client = c
+            ButtonBus.listener = { event -> publishButton(event) }
 
             val connect = c.connectWith().willPublish()
                 .topic(availabilityTopic)
@@ -89,23 +98,25 @@ class MqttBridge(
                     .password(config.mqttPassword.toByteArray())
                     .applySimpleAuth()
             }
-            connect.send().get(10, TimeUnit.SECONDS)
-            client = c
-
-            c.subscribeWith()
-                .topicFilter("ha-paneld/$panel/+/set")
-                .qos(MqttQos.AT_LEAST_ONCE)
-                .callback { publish -> onCommand(publish) }
-                .send()
-
-            publishDiscovery(c)
-            publish(c, availabilityTopic, "online", retain = true)
-            publish(c, stateVolume, volume.getPercent().toString(), retain = true)
-            ButtonBus.listener = { event -> publishButton(event) }
-            Log.i(TAG, "connected to $host:$port — discovery published for $panel")
+            connect.send() // async; onConnected() does subscribe + discovery on success
+            Log.i(TAG, "MQTT connecting to $host:$port for $panel")
         } catch (e: Exception) {
             Log.w(TAG, "MQTT connect failed", e)
         }
+    }
+
+    /** Runs on every (re)connect: (re)subscribe to commands and (re)publish discovery + online. */
+    private fun onConnected() {
+        val c = client ?: return
+        c.subscribeWith()
+            .topicFilter("ha-paneld/$panel/+/set")
+            .qos(MqttQos.AT_LEAST_ONCE)
+            .callback { publish -> onCommand(publish) }
+            .send()
+        publishDiscovery(c)
+        publish(c, availabilityTopic, "online", retain = true)
+        publish(c, stateVolume, volume.getPercent().toString(), retain = true)
+        Log.i(TAG, "MQTT connected — (re)subscribed + discovery for $panel")
     }
 
     // ---- command dispatch ----
@@ -136,9 +147,13 @@ class MqttBridge(
             publish(client!!, stateScreen, """{"state":"OFF"}""")
             return
         }
-        screen.wake()
-        val level = if (json.has("brightness")) json.getInt("brightness") else brightness.getBrightness().coerceAtLeast(1)
-        brightness.setBrightness(level)
+        screen.wake() // power the backlight on (daemon bl_power) or restore brightness (fallback)
+        val level = if (json.has("brightness")) {
+            json.getInt("brightness").also { brightness.setBrightness(it) }
+        } else {
+            brightness.getBrightness().coerceAtLeast(1)
+        }
+        screen.noteLevel(level)
         publish(client!!, stateScreen, """{"state":"ON","brightness":$level}""")
     }
 
@@ -198,7 +213,9 @@ class MqttBridge(
     private fun publishDiscovery(c: Mqtt5AsyncClient) {
         // device.name = panel_id; entity names are the capability ONLY, so HA composes a clean
         // `<domain>.<panel>_<cap>` entity_id instead of doubling the panel id into both.
-        val device = """"device":{"identifiers":["ha-paneld-$panel"],"name":"$panel","manufacturer":"ha-paneld","model":"panel agent","sw_version":"${Config.VERSION}"}"""
+        // configuration_url -> HA renders a "Visit" link on the device page (the panel's info UI).
+        val cu = if (!configUrl.isNullOrBlank()) ""","configuration_url":"$configUrl"""" else ""
+        val device = """"device":{"identifiers":["ha-paneld-$panel"],"name":"$panel","manufacturer":"ha-paneld","model":"panel agent","sw_version":"${Config.VERSION}"$cu}"""
         val avail = """"availability_topic":"$availabilityTopic","payload_available":"online","payload_not_available":"offline""""
 
         publishConfig(
@@ -260,6 +277,22 @@ class MqttBridge(
 
     private fun publishConfig(c: Mqtt5AsyncClient, component: String, objectId: String, payload: String) {
         publish(c, "homeassistant/$component/$objectId/config", payload, retain = true)
+    }
+
+    /**
+     * Clear this panel's retained discovery (empty payload per topic) so a panel_id change doesn't
+     * leave an orphan device in HA. Covers every entity we may have published for the current id.
+     */
+    fun clearDiscovery() {
+        val c = client ?: return
+        val entities = listOf(
+            "light" to "${panel}_screen", "light" to "${panel}_led",
+            "text" to "${panel}_navigate", "event" to "${panel}_button",
+            "number" to "${panel}_volume", "sensor" to "${panel}_illuminance",
+            "binary_sensor" to "${panel}_proximity",
+            "button" to "${panel}_reload", "button" to "${panel}_reboot",
+        )
+        entities.forEach { (comp, obj) -> publish(c, "homeassistant/$comp/$obj/config", "", retain = true) }
     }
 
     private fun publish(c: Mqtt5AsyncClient, topic: String, payload: String, retain: Boolean = false) {

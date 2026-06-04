@@ -3,6 +3,7 @@ package io.github.maxlyth.hapaneld
 import android.content.Context
 import android.net.wifi.WifiManager
 import android.util.Log
+import io.github.maxlyth.hapaneld.util.localIpv4
 import java.net.InetAddress
 import javax.jmdns.JmDNS
 import javax.jmdns.ServiceInfo
@@ -57,24 +58,10 @@ class MdnsAdvertiser(private val context: Context, private val config: Config) {
         lock = null
     }
 
-    private fun localAddress(): InetAddress {
-        val wifi = context.applicationContext
-            .getSystemService(Context.WIFI_SERVICE) as WifiManager
-        @Suppress("DEPRECATION")
-        val ip = wifi.connectionInfo.ipAddress
-        return if (ip != 0) {
-            InetAddress.getByAddress(
-                byteArrayOf(
-                    (ip and 0xff).toByte(),
-                    (ip shr 8 and 0xff).toByte(),
-                    (ip shr 16 and 0xff).toByte(),
-                    (ip shr 24 and 0xff).toByte(),
-                ),
-            )
-        } else {
-            InetAddress.getLocalHost()
-        }
-    }
+    // Bind JmDNS to the panel's real LAN address. The old WifiManager.connectionInfo path returns
+    // 0 on Ethernet panels (→ 127.0.0.1, which HA zeroconf can't reach), so enumerate interfaces.
+    private fun localAddress(): InetAddress =
+        localIpv4()?.let { InetAddress.getByName(it) } ?: InetAddress.getLocalHost()
 
     companion object {
         private const val TAG = "ha-paneld/mdns"

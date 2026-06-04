@@ -12,7 +12,6 @@ set -euo pipefail
 TARGET="${1:?usage: provision.sh <panel-ip:5555> [apk]}"
 APK="${2:-app/build/outputs/apk/debug/app-debug.apk}"
 PKG="io.github.maxlyth.hapaneld"
-ADMIN="$PKG/.control.PanelAdminReceiver"
 A11Y="$PKG/.input.PanelAccessibilityService"
 
 echo "==> connecting $TARGET"
@@ -24,12 +23,10 @@ adb -s "$TARGET" install -r -g "$APK" || adb -s "$TARGET" install -r "$APK"
 echo "==> notifications"
 adb -s "$TARGET" shell pm grant "$PKG" android.permission.POST_NOTIFICATIONS || true
 
-echo "==> brightness (WRITE_SETTINGS)"
+echo "==> brightness + screen on/off (WRITE_SETTINGS)"
+# Screen off is backlight-off (brightness 0), NOT a device lock — so no device-admin and no PIN
+# prompt on wake. WRITE_SETTINGS covers both brightness and on/off.
 adb -s "$TARGET" shell appops set "$PKG" WRITE_SETTINGS allow
-
-echo "==> sleep (device-admin force-lock)"
-adb -s "$TARGET" shell dpm set-active-admin "$ADMIN" || \
-  echo "   (set-active-admin failed — may need: adb shell su -c 'dpm set-active-admin $ADMIN')"
 
 echo "==> buttons (accessibility key capture) — optional, comment out if unused"
 EXISTING="$(adb -s "$TARGET" shell settings get secure enabled_accessibility_services | tr -d '\r')"
@@ -46,5 +43,7 @@ adb -s "$TARGET" shell settings put secure accessibility_enabled 1
 echo "==> starting service"
 adb -s "$TARGET" shell am start -n "$PKG/.MainActivity"
 
-echo "==> done. Configure the MQTT broker in the app prefs (or push panel.json) to enable discovery."
-echo "    LED on rk3576 panels additionally needs the vendor libjnielc.so installed (load-if-present)."
+echo "==> done. Configure the MQTT broker on the panel's web page (http://<panel-ip>:8888/) to"
+echo "    enable discovery — or pre-seed it in SharedPreferences."
+echo "    LED: rk3576 panels work app-direct (bundled NDK, /dev/ledjni). sysfs-LED panels (e.g."
+echo "    TPA10) additionally need the root helper daemon — see helper/README.md."

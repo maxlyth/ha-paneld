@@ -23,6 +23,21 @@ class Config(context: Context) {
     val panelId: String
         get() = prefs.getString("panel_id", null) ?: defaultPanelId()
 
+    /** Persist a new panel id (used by the HTTP config page). */
+    fun setPanelId(id: String) {
+        prefs.edit().putString("panel_id", id).apply()
+    }
+
+    /** Persist MQTT settings (used by the HTTP config page). A null password leaves it unchanged. */
+    fun setMqtt(broker: String, user: String, password: String?) {
+        prefs.edit().apply {
+            putString("mqtt_broker", broker)
+            putString("mqtt_user", user)
+            if (password != null) putString("mqtt_password", password)
+            apply()
+        }
+    }
+
     private fun defaultPanelId(): String =
         "${Build.MODEL}-${Build.DEVICE}"
             .lowercase(Locale.ROOT)

@@ -26,20 +26,20 @@ class NoOpLedController : LedController {
 }
 
 /**
- * Picks the LED backend for this panel: rk3576 NDK ioctl on `/dev/ledjni` (probed by opening the
- * node), else the sysfs adapter. A panel with no node + no usable backend just yields
- * `available()=false` → the bridge skips the LED entity.
+ * Picks the LED backend for this panel:
+ * - rk3576: NDK ioctl on the app-accessible `/dev/ledjni` (probed by opening the node) — app-direct.
+ * - sysfs-LED panels (e.g. TPA10): the [SocketLedController], which talks to the root helper daemon
+ *   (`helper/hapaneld-ledd`) over loopback. A sandboxed app cannot write `sysfs_lights` nor exec
+ *   `su` (SELinux `untrusted_app`; confirmed on TPA10), so the privilege lives in the daemon.
  *
- * NOTE: [SysfsLedController] currently shells out via `su`, which a sandboxed app CANNOT do
- * (SELinux `untrusted_app`; confirmed on TPA10, `su: error=13`). It therefore always reports
- * `available()=false` from inside the app and is effectively a NoOp. The real TPA10/sysfs path is
- * a root helper daemon (ha-paneld connects over a localhost socket) — not yet built. Until then,
- * only rk3576 has a working app-direct LED.
+ * `detect()` returns the socket controller without probing; the bridge later calls `available()`
+ * (off the main thread), which returns false when the daemon isn't running → the LED entity is
+ * skipped. A panel with neither a node nor the daemon yields no LED entity.
  */
 object LedFactory {
     fun detect(): LedController {
         val rk = Rk3576LedController()
         if (rk.available()) return rk
-        return SysfsLedController()
+        return SocketLedController()
     }
 }

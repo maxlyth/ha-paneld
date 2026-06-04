@@ -19,8 +19,12 @@ import io.github.maxlyth.hapaneld.control.SystemController
 import io.github.maxlyth.hapaneld.control.VolumeController
 import io.github.maxlyth.hapaneld.hardware.LedController
 import io.github.maxlyth.hapaneld.hardware.LedFactory
+import io.github.maxlyth.hapaneld.hardware.Rk3576LedController
+import io.github.maxlyth.hapaneld.hardware.SocketLedController
 import io.github.maxlyth.hapaneld.http.PaneldServer
+import io.github.maxlyth.hapaneld.http.PanelInfo
 import io.github.maxlyth.hapaneld.sensors.SensorReporter
+import io.github.maxlyth.hapaneld.util.localIpv4
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -44,24 +48,89 @@ class PaneldService : Service() {
     private lateinit var mqtt: MqttBridge
     private lateinit var sensors: SensorReporter
 
+    // Controllers are fields so the MQTT bridge can be rebuilt on a panel_id change.
+    private lateinit var brightness: BrightnessController
+    private lateinit var screen: ScreenController
+    private lateinit var led: LedController
+    private lateinit var navigate: NavigateController
+    private lateinit var volume: VolumeController
+    private lateinit var system: SystemController
+    private var configUrl: String? = null
+
     override fun onCreate() {
         super.onCreate()
         config = Config(this)
-        server = PaneldServer(config, cacheDir, scope)
-        mdns = MdnsAdvertiser(this, config)
         sensors = SensorReporter(this)
 
-        val brightness = BrightnessController(this)
-        val screen = ScreenController(this)
-        val led: LedController = LedFactory.detect()
-        val navigate = NavigateController(this)
-        val volume = VolumeController(this)
-        val system = SystemController(this)
-        mqtt = MqttBridge(
-            config, brightness, screen, led, navigate, volume, system,
-            accessibilityEnabled(), sensors.hasLight(), sensors.hasProximity(),
-        )
+        brightness = BrightnessController(this)
+        screen = ScreenController(this, brightness)
+        led = LedFactory.detect()
+        navigate = NavigateController(this)
+        volume = VolumeController(this)
+        system = SystemController(this)
+        configUrl = localIpv4()?.let { "http://$it:${config.httpPort}/" }
+
+        mqtt = buildMqtt()
+        mdns = MdnsAdvertiser(this, config)
+        server = PaneldServer(config, cacheDir, scope, ::reconfigure, ::panelInfo)
     }
+
+    private fun buildMqtt(): MqttBridge = MqttBridge(
+        config, brightness, screen, led, navigate, volume, system,
+        accessibilityEnabled(), sensors.hasLight(), sensors.hasProximity(), configUrl,
+    )
+
+    /**
+     * Apply config from the HTTP page: persist panel id + MQTT settings, clear the old discovery if
+     * the panel id changed, and restart MQTT + mDNS under the new settings. A null password keeps
+     * the stored one.
+     */
+    private fun reconfigure(newPanel: String, broker: String, user: String, password: String?) {
+        if (newPanel.isEmpty()) return
+        scope.launch {
+            val oldPanel = config.panelId
+            if (newPanel != oldPanel) runCatching { mqtt.clearDiscovery() }
+            runCatching { mqtt.stop() }
+            config.setPanelId(newPanel)
+            config.setMqtt(broker, user, password)
+            runCatching { mdns.stop() }
+            mqtt = buildMqtt()
+            mdns = MdnsAdvertiser(this@PaneldService, config)
+            mdns.start()
+            mqtt.start()
+            Log.i(TAG, "reconfigured: panel=$newPanel broker=${broker.ifEmpty { "(disabled)" }}")
+        }
+    }
+
+    /** Ordered facts for the info page (`GET /`). */
+    private fun panelInfo(): Map<String, String> {
+        val broker = config.mqttBroker
+        val mqttStatus = if (broker.isBlank()) "disabled"
+        else "${broker.substringAfter("://").substringBefore(":")} · " +
+            if (mqtt.isConnected()) "connected" else "disconnected"
+        val extras = linkedMapOf(
+            "panel_id" to config.panelId,
+            "HTTP port" to config.httpPort.toString(),
+            "Local IP" to (localIpv4() ?: "?"),
+            "MQTT" to mqttStatus,
+            "mDNS" to "${config.panelId} ${Config.MDNS_SERVICE_TYPE}",
+            "LED" to ledLabel(),
+            "Light sensor" to yesNo(sensors.hasLight()),
+            "Proximity" to yesNo(sensors.hasProximity()),
+            "Buttons (a11y)" to yesNo(accessibilityEnabled()),
+        )
+        return PanelInfo.collect(this, extras)
+    }
+
+    private fun ledLabel(): String = when {
+        !led.available() -> "none"
+        led is Rk3576LedController -> "rk3576 /dev/ledjni (RGB)"
+        led is SocketLedController -> "sysfs helper daemon (RGB)"
+        led.colorCapable() -> "RGB"
+        else -> "brightness"
+    }
+
+    private fun yesNo(b: Boolean) = if (b) "yes" else "no"
 
     /** Advertise the button-event entity only if our a11y service is actually enabled. */
     private fun accessibilityEnabled(): Boolean {
