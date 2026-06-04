@@ -12,11 +12,18 @@
 #   - install -r / appops allow / pm grant / accessibility_enabled / am start  : no-ops on re-run
 #   - enabled_accessibility_services : appends our service only if absent (guarded)
 #   - POST /config                   : partial-merge — only sets the keys you pass
-# `set -e` aborts cleanly on any failure (no half-written grant corrupts); the ERR trap tells you to
-# re-run, and every run ends with a self-verify checklist so you can SEE the state is complete. The
-# `--verify` mode is the standing control: run it any time to confirm a panel is fully provisioned.
+# `set -e` aborts cleanly on any failure; the ERR trap tells you to re-run, and every run ends with a
+# self-verify checklist. `--verify` is the standing control: run any time to confirm a panel is set up.
 set -euo pipefail
-trap 'echo "✗ provisioning incomplete — re-run the SAME command to finish (it is idempotent)." >&2' ERR
+
+# Colours/emoji — only when writing to a terminal, so piped/redirected output stays clean.
+if [ -t 1 ]; then
+  B=$'\033[1m'; D=$'\033[2m'; X=$'\033[0m'
+  RED=$'\033[31m'; GRN=$'\033[32m'; YEL=$'\033[33m'; CYN=$'\033[36m'; MAG=$'\033[35m'
+else B=; D=; X=; RED=; GRN=; YEL=; CYN=; MAG=; fi
+step() { echo "${CYN}${B}$1${X} $2"; }
+
+trap 'echo "${RED}${B}✗ provisioning incomplete${X} — re-run the SAME command to finish (it is idempotent)." >&2' ERR
 
 TARGET="${1:?usage: provision.sh <panel-ip:5555> [APK] [--id ID] [--mqtt tcp://host:1883] [--mqtt-user U] [--mqtt-pass P] [--verify]}"
 shift
@@ -34,46 +41,44 @@ while [ "${1:-}" ]; do
     --mqtt-user) MQTT_USER="$2"; shift 2 ;;
     --mqtt-pass) MQTT_PASS="$2"; shift 2 ;;
     --verify) VERIFY_ONLY=1; shift ;;
-    *) echo "unknown arg: $1" >&2; exit 2 ;;
+    *) echo "${RED}unknown arg: $1${X}" >&2; exit 2 ;;
   esac
 done
 IP="${TARGET%%:*}"
 URL="http://$IP:8888"
 
-# Self-verify the end state. Returns non-zero if any required grant is missing, so it doubles as a
-# scriptable health-check (run with --verify, or after every provision). Re-running provision then
-# converges; this is the control that keeps provisioning idempotent + complete.
 verify() {
-  echo "==> verifying ($URL)"
+  step "🔎 verifying" "${D}$URL${X}"
   local diag cfg rc=0
   diag="$(curl -fsS --max-time 4 "$URL/diag" 2>/dev/null || true)"
   cfg="$(curl -fsS --max-time 3 "$URL/config" 2>/dev/null || true)"
-  chk() { if printf '%s' "$2" | grep -q "$3"; then echo "  ✓ $1"; else echo "  ✗ $1"; rc=1; fi; }
+  chk() { if printf '%s' "$2" | grep -q "$3"; then echo "   ${GRN}✓${X} $1"; else echo "   ${RED}✗ $1${X}"; rc=1; fi; }
   chk "HTTP server reachable"  "$diag" "ha-paneld diagnostics"
   chk "WRITE_SETTINGS granted" "$diag" "write_settings=true"
   chk "accessibility enabled"  "$diag" "a11y.enabled=true"
-  # panel_id + MQTT (informational — install-only is valid, so these don't fail the check).
-  # Parsed with grep/cut (no python) so the script runs on macOS + Windows Git Bash unchanged.
+  # panel_id + MQTT (informational — install-only is valid). grep/cut so no python (Git Bash-friendly).
   local broker pid
   broker="$(printf '%s' "$cfg" | grep -o '"mqtt_broker":"[^"]*"' | head -1 | cut -d'"' -f4)"
   pid="$(printf '%s' "$cfg" | grep -o '"panel_id":"[^"]*"' | head -1 | cut -d'"' -f4)"
-  if [ -n "$broker" ]; then echo "  ✓ MQTT broker: $broker"
-  else echo "  ℹ MQTT broker: not set (set on the page to enable HA discovery)"; fi
-  echo "  ℹ panel_id: ${pid:-?}"
+  if [ -n "$broker" ]; then echo "   ${GRN}✓${X} MQTT broker: ${B}$broker${X}"
+  else echo "   ${YEL}ℹ${X} MQTT broker: ${YEL}not set${X} ${D}(set it on the page to enable HA discovery)${X}"; fi
+  echo "   ${YEL}ℹ${X} panel_id: ${B}${pid:-?}${X}"
   return $rc
 }
+
+echo "${MAG}${B}🛠  ha-paneld provisioning${X} ${D}→ $TARGET${X}"
 
 if [ "$VERIFY_ONLY" = 1 ]; then
   verify; exit $?
 fi
 
-echo "==> connecting $TARGET"
+step "🔌 connecting" "$TARGET"
 adb connect "$TARGET" >/dev/null
 
-echo "==> installing $APK"
+step "📦 installing" "${D}$APK${X}"
 adb -s "$TARGET" install -r -g "$APK" >/dev/null 2>&1 || adb -s "$TARGET" install -r "$APK"
 
-echo "==> permissions (notifications, WRITE_SETTINGS for brightness/screen, a11y for buttons)"
+step "🔑 permissions" "${D}notifications · WRITE_SETTINGS (brightness/screen) · a11y (buttons)${X}"
 adb -s "$TARGET" shell pm grant "$PKG" android.permission.POST_NOTIFICATIONS >/dev/null 2>&1 || true
 adb -s "$TARGET" shell appops set "$PKG" WRITE_SETTINGS allow
 EXISTING="$(adb -s "$TARGET" shell settings get secure enabled_accessibility_services | tr -d '\r')"
@@ -87,10 +92,10 @@ else
 fi
 adb -s "$TARGET" shell settings put secure accessibility_enabled 1
 
-echo "==> starting service"
+step "▶️  starting" "the panel agent"
 adb -s "$TARGET" shell am start -n "$PKG/.MainActivity" >/dev/null
 
-echo "==> waiting for the panel web server…"
+step "⏳ waiting" "for the web server…"
 for _ in $(seq 1 20); do curl -fsS --max-time 2 "$URL/health" >/dev/null 2>&1 && break; sleep 1; done
 
 ARGS=()
@@ -99,10 +104,10 @@ ARGS=()
 [ -n "$MQTT_USER" ]  && ARGS+=(--data-urlencode "mqtt_user=$MQTT_USER")
 [ -n "$MQTT_PASS" ]  && ARGS+=(--data-urlencode "mqtt_password=$MQTT_PASS")
 if [ ${#ARGS[@]} -gt 0 ]; then
-  echo "==> applying config"
-  curl -fsS -H 'Accept: application/json' -X POST "${ARGS[@]}" "$URL/config" >/dev/null && echo "    applied"
+  step "⚙️  configuring" "${D}panel_id / MQTT${X}"
+  curl -fsS -H 'Accept: application/json' -X POST "${ARGS[@]}" "$URL/config" >/dev/null && echo "   ${GRN}✓${X} applied"
 fi
 
 echo
-verify || echo "  → re-run the same command to finish (idempotent)."
-echo "  Config page: $URL/   ·   LED: rk3576 app-direct; sysfs (TPA10) needs the root daemon."
+verify && echo "${GRN}${B}✅ provisioned${X} — ${B}$URL/${X}" || echo "${YEL}↻ re-run the same command to finish (idempotent).${X}"
+echo "${D}   LED: rk3576 app-direct; sysfs panels (TPA10) also need the root daemon (helper/README.md).${X}"
