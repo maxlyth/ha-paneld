@@ -93,7 +93,7 @@ class PaneldService : Service() {
             mdns = MdnsAdvertiser(this@PaneldService, config)
             mdns.start()
             mqtt.start()
-            io.github.maxlyth.hapaneld.http.PerfReader.dashboardPkg = config.dashboardPackage
+            io.github.maxlyth.hapaneld.http.PerfReader.dashboardPkg = dashboardTarget()
             Log.i(TAG, "reconfigured: panel=${config.panelId} broker=${config.mqttBroker.ifEmpty { "(disabled)" }}")
         }
     }
@@ -129,6 +129,16 @@ class PaneldService : Service() {
 
     private fun yesNo(b: Boolean) = if (b) "yes" else "no"
 
+    /** Smoothness-metrics target: the configured override, else the installed HA Companion app
+     *  (this is an HA project — the dashboard is the Companion app, so no config needed normally). */
+    private fun dashboardTarget(): String {
+        config.dashboardPackage.takeIf { it.isNotBlank() }?.let { return it }
+        for (p in listOf("io.homeassistant.companion.android.minimal", "io.homeassistant.companion.android")) {
+            if (runCatching { packageManager.getPackageInfo(p, 0) }.isSuccess) return p
+        }
+        return ""
+    }
+
     /** Advertise the button-event entity only if our a11y service is actually enabled. */
     private fun accessibilityEnabled(): Boolean {
         val enabled = Settings.Secure.getString(
@@ -141,7 +151,7 @@ class PaneldService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForegroundCompat()
         scope.launch {
-            io.github.maxlyth.hapaneld.http.PerfReader.dashboardPkg = config.dashboardPackage
+            io.github.maxlyth.hapaneld.http.PerfReader.dashboardPkg = dashboardTarget()
             io.github.maxlyth.hapaneld.http.PerfReader.start(scope)
             server.start()
             mdns.start()

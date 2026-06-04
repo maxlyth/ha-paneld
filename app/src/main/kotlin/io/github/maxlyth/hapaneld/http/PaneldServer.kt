@@ -224,6 +224,12 @@ $capRows
 <p class="note"><a href="/diag" target="_blank" style="color:#9cf">⭳ Diagnostics dump</a> — a copy-paste
 report of this panel's hardware, firmware, SELinux, su and node probes. Paste it into a bug report so
 the maintainer can help with your hardware/firmware combination without owning it.</p>
+<h2>Responsiveness <small id="smhdr" style="color:#8a8;font-weight:400"></small></h2>
+<canvas id="smchart" width="600" height="60"
+ style="width:100%;max-width:600px;background:#181818;border-radius:8px;display:block;margin-bottom:6px"></canvas>
+<div style="font-size:.72rem;color:#8a8;margin-bottom:6px">% of slow screen updates, over time ·
+ <span style="color:#48c774">▬</span> snappy under 5% · <span style="color:#d9a528">▬</span> laggy over 15%</div>
+<table id="smtbl"><tr><td style="color:#888">measuring…</td></tr></table>
 <h2>Performance <small id="perfage" style="color:#8a8;font-weight:400"></small></h2>
 <canvas id="perfchart" width="600" height="96"
  style="width:100%;max-width:600px;background:#181818;border-radius:8px;display:block;margin-bottom:8px"></canvas>
@@ -231,7 +237,6 @@ the maintainer can help with your hardware/firmware combination without owning i
  <span style="color:#4a9eff">■</span> CPU&nbsp;&nbsp;<span style="color:#48c774">■</span> RAM&nbsp;&nbsp;<span style="color:#f5a623">■</span> GPU (% used) · ~4&nbsp;min</div>
 <table id="perf"><tr><td style="color:#888">sampling…</td></tr></table>
 <table id="topproc" style="margin-top:12px"><tr><td style="color:#888">top processes…</td></tr></table>
-<table id="render" style="margin-top:12px"><tr><td style="color:#888">rendering…</td></tr></table>
 <h2>Proximity tuning <small id="proxstate" style="color:#8a8;font-weight:400"></small></h2>
 <div id="proxbox" style="display:none">
 <canvas id="proxgauge" width="600" height="46" class="gradedonly"
@@ -296,6 +301,15 @@ function draw(){
  }
  line(gpuH,'#f5a623');line(ramH,'#48c774');line(cpuH,'#4a9eff');
 }
+function drawSm(hist){
+ var c=document.getElementById('smchart'),x=c.getContext('2d'),W=c.width,H=c.height;
+ x.clearRect(0,0,W,H);
+ [[5,'#2a4a32'],[15,'#4a3f1a']].forEach(function(t){var y=H-(t[0]/100)*H;x.strokeStyle=t[1];x.beginPath();x.moveTo(0,y);x.lineTo(W,y);x.stroke();});
+ if(!hist||hist.length<2)return;
+ var n=hist.length,sx=W/(MAX-1);x.lineWidth=2;x.beginPath();
+ for(var i=0;i<n;i++){var px=W-(n-1-i)*sx,py=H-(Math.min(100,hist[i])/100)*H;i?x.lineTo(px,py):x.moveTo(px,py);}
+ var last=hist[n-1];x.strokeStyle=last<5?'#48c774':(last<15?'#d9a528':'#d04a3b');x.stroke();
+}
 async function perf(){
  try{
   var d=await (await fetch('/perf')).json();
@@ -315,17 +329,19 @@ async function perf(){
    d.top.forEach(function(p){t+='<tr><td style="color:#ccc;font-weight:400">'+p.name+'</td><td>'+p.cpu+'%</td></tr>';});
    tp.innerHTML=t;
   }else tp.innerHTML='<tr><th>Top processes</th><td style="color:#888">needs root (su)</td></tr>';
-  var rb=document.getElementById('render'),r=d.render;
-  if(r==null)rb.innerHTML=row('Rendering','<span style="color:#888">needs root</span>');
-  else if(r==='noconfig')rb.innerHTML=row('Rendering','<span style="color:#888">set a Dashboard package (below) to enable jank metrics</span>');
-  else if(r.idle)rb.innerHTML=row('Rendering','<span style="color:#888">dashboard idle — no frames rendered</span>');
+  var r=d.render,smh=document.getElementById('smhdr'),smt=document.getElementById('smtbl');
+  if(r==null){smh.textContent='· needs root';smt.innerHTML=row('Responsiveness','<span style="color:#888">needs root to measure</span>');drawSm([]);}
+  else if(r==='noconfig'){smh.textContent='';smt.innerHTML=row('Responsiveness','<span style="color:#888">no Home Assistant app found on this panel</span>');drawSm([]);}
+  else if(r.idle){smh.textContent='· idle';smt.innerHTML=row('Responsiveness','<span style="color:#888">dashboard is idle — nothing is being drawn right now</span>');drawSm([]);}
   else{
-   var rc=r.verdict==='smooth'?'#48c774':(r.verdict==='occasional'?'#d9a528':'#d04a3b');
-   var rv=r.verdict==='smooth'?'Smooth':(r.verdict==='occasional'?'Occasional jank':'Janky');
-   rb.innerHTML=row('Rendering <span style="font-weight:400;color:#888">'+r.pkg.split('.').pop()+'</span>','<span style="color:'+rc+'">●</span> '+rv)
-    +row('Jank',r.jankPct+'% <span style="color:#888">of '+r.frames+' frames</span>')
-    +row('Frame time','95th '+r.p95+'ms · 99th '+r.p99+'ms <span style="color:#888">(16.7ms = 60fps)</span>')
-    +row('Stalls','<span style="color:#888">missed vsync</span> '+r.missedVsync+' · <span style="color:#888">slow UI</span> '+r.slowUi);
+   drawSm(r.hist);
+   var col=r.verdict==='smooth'?'#48c774':(r.verdict==='occasional'?'#d9a528':'#d04a3b');
+   var v=r.verdict==='smooth'?'Snappy':(r.verdict==='occasional'?'Sluggish':'Laggy');
+   smh.textContent='· '+r.pkg.split('.').pop();
+   smt.innerHTML=row('How it feels','<span style="color:'+col+'">●</span> <b>'+v+'</b>')
+    +row('Slow screen updates',r.jankPct+'% <span style="color:#888">of the last '+r.frames+' frames</span>')
+    +row('Worst response',r.p99+' ms <span style="color:#888">(under ~100 ms feels instant)</span>')
+    +row('App too busy to respond',r.slowUi+'× <span style="color:#888">in that window</span>');
   }
   document.getElementById('perfage').textContent='· live';
  }catch(e){document.getElementById('perfage').textContent='· unavailable';}

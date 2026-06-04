@@ -36,6 +36,7 @@ object PerfReader {
     // the deeper "why" is the 1-click DevTools relay. Target reuses the dashboard_package config.
     @Volatile var dashboardPkg: String = ""
     @Volatile private var renderJson = "null"
+    private val stutterHist = ArrayDeque<Int>()   // % of frames that stuttered, per render window
     private var rootOk = false
     private var tickCount = 0
     private var prevTopTotal = 0L                 // /proc/stat aggregate jiffies at last top sample
@@ -75,10 +76,12 @@ object PerfReader {
         val jankPct = Math.round(janky * 1000.0 / total) / 10.0
         val verdict = if (jankPct < 5) "smooth" else if (jankPct < 15) "occasional" else "janky"
         synchronized(lock) {
+            push(stutterHist, Math.round(jankPct).toInt())
             renderJson = "{\"pkg\":\"$pkg\",\"frames\":$total,\"jankPct\":$jankPct,\"verdict\":\"$verdict\"," +
                 "\"p50\":${pct(50)},\"p95\":${pct(95)},\"p99\":${pct(99)}," +
                 "\"missedVsync\":${lng("""Number Missed Vsync:\s*(\d+)""") ?: 0}," +
-                "\"slowUi\":${lng("""Number Slow UI thread:\s*(\d+)""") ?: 0}}"
+                "\"slowUi\":${lng("""Number Slow UI thread:\s*(\d+)""") ?: 0}," +
+                "\"hist\":${stutterHist.toList()}}"
         }
     }
 
