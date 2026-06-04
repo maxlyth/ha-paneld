@@ -73,6 +73,8 @@ GET  /              panel info + config page (versions, hardware, status; panel_
 POST /config        form-encoded settings from the page; persists + live-reconfigures
 GET  /perf          live performance JSON (CPU % overall + per core, load avg,
                     per-core MHz, temperature, memory) — polled by the info page
+GET  /diag          copy-paste diagnostics dump (build, SELinux, su probe, /dev +
+                    /sys node listings, packages, capability assessment)
 GET  /health        -> 200 "ha-paneld <version> panel=<id>"
 POST /play          body contains an audio URL (raw or {"url":"…"})
                     -> 200 "playing"  (download + play happen in the background)
@@ -200,6 +202,9 @@ Shipped in 0.4.x:
   broker/creds, manufacturer/model, dashboard + launcher packages).
 - HA device card — manufacturer/model, firmware (`hw_version`), serial; `configuration_url` "Visit"
   link. MQTT auto-reconnect + retained-state restore on (re)connect.
+- Self-diagnostics — a **Capabilities** matrix (what works on this firmware + how to fix shortfalls)
+  and a `/diag` dump for bug reports. See **[docs/performance.md](docs/performance.md)** for tuning
+  panels (the WebSocket-event-volume problem and how to fix it).
 
 Planned 0.5.0:
 
