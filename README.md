@@ -182,6 +182,35 @@ The build is pinned to a conservative AGP 8.7 / Kotlin 2.0 / Gradle 8.10 combo f
 first-run CI. Newer AGP/Kotlin is fine to adopt during the v0.x line — versions live in
 [`gradle/libs.versions.toml`](gradle/libs.versions.toml).
 
+## Status & roadmap
+
+**v0.4.1 (preview)** — validated across the panel fleet: Sonoff NSPanel Pro (PX30, Android 8.1),
+Tuya TPA10 (rk3566, Android 11), Electron WF1589T (rk3576, Android 14).
+
+Shipped in 0.4.x:
+
+- Uniform MQTT control — screen (brightness + **true** backlight-off), RGB LED, navigate, volume,
+  TTS, hardware buttons, reload, reboot, **launcher**, **home (HA)**.
+- Per-hardware LED HAL — rk3576 clean-room NDK `/dev/ledjni` (app-direct); sysfs panels via a root
+  helper daemon with a boot-persistent `init` service.
+- Lock-free screen-off — daemon `bl_power`, or `su bl_power` on PX30, else a brightness fallback;
+  never a keyguard/PIN.
+- Panel web UI (`GET /`) — versions + hardware (CPU/RAM/storage/firmware/Device ID), a **live
+  CPU/GPU/RAM history chart** (server-side FIFO), and a config form (panel id, friendly name, MQTT
+  broker/creds, manufacturer/model, dashboard + launcher packages).
+- HA device card — manufacturer/model, firmware (`hw_version`), serial; `configuration_url` "Visit"
+  link. MQTT auto-reconnect + retained-state restore on (re)connect.
+
+Planned 0.5.0:
+
+- **DevTools/CDP relay** — an on-device bridge from the dashboard WebView's debug socket
+  (`webview_devtools_remote_<pid>`) to a TCP port, plus an info-page link, for browser-based
+  rendering/latency analysis **without adb** (requires WebView debugging enabled on the dashboard
+  app). Exposes render latency (frame times, main-thread long tasks), data latency (WebSocket
+  timing) and input latency via CDP; `dumpsys gfxinfo` jank as a coarse no-CDP fallback.
+- Daemon boot-persistence on su-only (PX30) panels, if true-off is wanted without relying on `su`
+  at runtime.
+
 ## Stack
 
 - **HTTP** — Ktor CIO engine (coroutine I/O, no thread-per-connection).
