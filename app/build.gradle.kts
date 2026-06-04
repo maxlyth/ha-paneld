@@ -102,3 +102,23 @@ dependencies {
     // Ktor/HiveMQ log via SLF4J; route it to Logcat.
     implementation(libs.slf4j.android)
 }
+
+// Compile the CDP relay (helper/cdprelay.c) into assets at build time for the fleet ABIs, using the
+// pinned NDK that's already present in the Docker toolchain image and CI — so the repo ships source,
+// not prebuilt binaries. Extracted + launched at runtime by control/CdpRelay.kt.
+val compileCdpRelay by tasks.registering {
+    val ndkDir = android.ndkDirectory
+    val src = rootProject.file("helper/cdprelay.c")
+    val out64 = file("src/main/assets/cdprelay-arm64")
+    val out32 = file("src/main/assets/cdprelay-arm")
+    inputs.file(src)
+    inputs.property("ndk", ndkDir.toString())
+    outputs.files(out64, out32)
+    doLast {
+        val bin = "$ndkDir/toolchains/llvm/prebuilt/linux-x86_64/bin"
+        out64.parentFile.mkdirs()
+        exec { commandLine("$bin/aarch64-linux-android26-clang", "-O2", "-s", "-o", out64.path, src.path) }
+        exec { commandLine("$bin/armv7a-linux-androideabi26-clang", "-O2", "-s", "-o", out32.path, src.path) }
+    }
+}
+tasks.named("preBuild") { dependsOn(compileCdpRelay) }

@@ -23,3 +23,7 @@ keystore.properties
 # Python bytecode (gen-icon.py imports)
 __pycache__/
 *.pyc
+
+# cdprelay binaries are built by gradle (compileCdpRelay) from helper/cdprelay.c
+/app/src/main/assets/cdprelay-arm64
+/app/src/main/assets/cdprelay-arm
