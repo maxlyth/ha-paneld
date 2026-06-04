@@ -85,6 +85,14 @@ class PaneldServer(
                 get("/icon.svg") {
                     call.respondText(asset("icon.svg"), ContentType.Image.SVG)
                 }
+                // Self-contained REST API explorer (no Swagger-UI CDN bundle) + the OpenAPI spec it
+                // renders — the spec also imports into Swagger/Postman for fleet tooling.
+                get("/api") {
+                    call.respondText(asset("api.html"), ContentType.Text.Html)
+                }
+                get("/openapi.json") {
+                    call.respondText(asset("openapi.json"), ContentType.Application.Json)
+                }
                 // Live proximity state for the tuning UI (raw never goes to HA; it lives here).
                 get("/proximity") {
                     call.respondText(sensors.proximityJson(), ContentType.Application.Json)
@@ -326,6 +334,8 @@ report of this panel's hardware, firmware, SELinux, su and node probes for bug r
 <p class="note">Blank broker = HTTP/TTS-only (MQTT disabled). Password never shown — blank keeps the current one.
 Changing the panel id may leave the old device in HA to remove manually.</p></div>
 </div>
+<p class="note" style="text-align:center;margin-top:18px"><a href="/api" style="color:#9cf">REST API explorer</a>
+ · <a href="/diag" target="_blank" style="color:#9cf">diagnostics</a></p>
 <script src="/info.js"></script>
 </div></body></html>"""
     }

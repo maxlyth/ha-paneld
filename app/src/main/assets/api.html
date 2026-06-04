@@ -1,0 +1,87 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ha-paneld · REST API</title>
+<link rel="icon" href="/icon.svg">
+<style>
+ body{font-family:system-ui,-apple-system,sans-serif;margin:0;background:#111;color:#eee}
+ .wrap{max-width:900px;margin:0 auto;padding:20px}
+ .hdr{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:6px}
+ h1{font-size:1.3rem;margin:0} h1 small{color:#9af;font-weight:400}
+ a{color:#9cf}
+ h2{font-size:.8rem;text-transform:uppercase;letter-spacing:.05em;color:#7c8a99;margin:22px 0 8px;border-bottom:1px solid #242424;padding-bottom:4px}
+ .ep{background:#181818;border:1px solid #242424;border-radius:10px;margin:0 0 10px;overflow:hidden}
+ summary{display:flex;align-items:center;gap:10px;padding:11px 14px;cursor:pointer;list-style:none}
+ summary::-webkit-details-marker{display:none}
+ .m{font-weight:700;font-size:.72rem;padding:3px 8px;border-radius:6px;min-width:46px;text-align:center}
+ .get{background:#173d2a;color:#5ad18a} .post{background:#1b3a5c;color:#6db3ff}
+ .path{font-family:ui-monospace,monospace;font-size:.92rem;color:#eee} .sum{color:#8a8;font-size:.85rem;margin-left:auto;text-align:right}
+ .body{padding:0 14px 14px;border-top:1px solid #242424}
+ label{display:block;font-size:.78rem;color:#9af;margin:10px 0 4px}
+ input,select,textarea,button{font:inherit;font-size:.9rem;padding:7px 10px;border-radius:7px;border:1px solid #444;background:#1c1c1c;color:#eee;box-sizing:border-box;width:100%}
+ textarea{min-height:54px;font-family:ui-monospace,monospace}
+ button{background:#2557a7;border-color:#2557a7;cursor:pointer;width:auto;margin-top:12px}
+ pre{background:#0d0d0d;border:1px solid #242424;border-radius:7px;padding:10px;margin-top:10px;white-space:pre-wrap;word-break:break-word;font-size:.82rem;color:#cdd;max-height:300px;overflow:auto}
+ .st{font-size:.78rem;margin-top:8px}
+ .desc{color:#8a8;font-size:.82rem;margin:2px 0 0}
+</style></head><body><div class="wrap">
+<div class="hdr"><h1>ha-paneld <small>· REST API</small></h1><a href="/">← back to panel</a></div>
+<p class="desc">Live, on-panel API explorer. <a href="/openapi.json" target="_blank">openapi.json</a> — import into Swagger/Postman for fleet tooling. No auth; LAN only.</p>
+<div id="root"></div>
+<script>
+fetch('/openapi.json').then(function(r){return r.json();}).then(render).catch(function(e){
+ document.getElementById('root').innerHTML='<p class="desc">Could not load /openapi.json: '+e+'</p>';});
+
+function el(t,c,h){var e=document.createElement(t);if(c)e.className=c;if(h!=null)e.innerHTML=h;return e;}
+function formProps(op){var b=op.requestBody&&op.requestBody.content;if(!b)return null;
+ var f=b['application/x-www-form-urlencoded'];return f&&f.schema?f.schema:null;}
+function isText(op){var b=op.requestBody&&op.requestBody.content;return !!(b&&b['text/plain']);}
+
+function render(spec){
+ var paths=spec.paths,groups={};
+ Object.keys(paths).forEach(function(p){Object.keys(paths[p]).forEach(function(m){
+  var op=paths[p][m],tag=(op.tags&&op.tags[0])||'other';(groups[tag]=groups[tag]||[]).push({p:p,m:m,op:op});});});
+ var root=document.getElementById('root');
+ Object.keys(groups).forEach(function(tag){
+  root.appendChild(el('h2',null,tag));
+  groups[tag].forEach(function(e){root.appendChild(endpoint(e.p,e.m,e.op));});
+ });
+}
+
+function endpoint(path,method,op){
+ var d=el('details','ep');
+ var s=el('summary',null,'<span class="m '+method+'">'+method.toUpperCase()+'</span>'+
+   '<span class="path">'+path+'</span><span class="sum">'+(op.summary||'')+'</span>');
+ d.appendChild(s);
+ var body=el('div','body');
+ var fields={},sch=formProps(op),text=isText(op);
+ if(sch&&sch.properties){Object.keys(sch.properties).forEach(function(k){
+  var pr=sch.properties[k],req=(sch.required||[]).indexOf(k)>=0;
+  body.appendChild(el('label',null,k+(req?' *':'')+(pr.description?' <span style="color:#667;font-weight:400">— '+pr.description+'</span>':'')));
+  var inp;
+  if(pr.enum){inp=el('select');pr.enum.forEach(function(v){var o=el('option',null,v);o.value=v;inp.appendChild(o);});}
+  else{inp=el('input');inp.type=(pr.type==='number'?'number':'text');inp.step='any';}
+  fields[k]=inp;body.appendChild(inp);});}
+ if(text){body.appendChild(el('label',null,'request body — a raw URL'));var ta=el('textarea');fields.__text=ta;body.appendChild(ta);}
+ var btn=el('button',null,'Send '+method.toUpperCase());
+ var st=el('div','st'),out=el('pre');out.style.display='none';
+ body.appendChild(btn);body.appendChild(st);body.appendChild(out);
+ btn.onclick=function(){send(path,method,fields,text,st,out,btn);};
+ d.appendChild(body);return d;
+}
+
+function send(path,method,fields,text,st,out,btn){
+ btn.disabled=true;st.textContent='…';out.style.display='none';
+ var opts={method:method.toUpperCase()};
+ if(text){opts.body=fields.__text.value;opts.headers={'Content-Type':'text/plain'};}
+ else if(Object.keys(fields).length){
+  var params=[];Object.keys(fields).forEach(function(k){var v=fields[k].value;if(v!=='')params.push(encodeURIComponent(k)+'='+encodeURIComponent(v));});
+  if(params.length){opts.body=params.join('&');opts.headers={'Content-Type':'application/x-www-form-urlencoded'};}}
+ var t0=Date.now();
+ fetch(path,opts).then(function(r){return r.text().then(function(tx){
+  st.innerHTML='<b style="color:'+(r.ok?'#5ad18a':'#d9534f')+'">'+r.status+'</b> '+(r.headers.get('content-type')||'')+' · '+(Date.now()-t0)+' ms';
+  var body=tx;try{body=JSON.stringify(JSON.parse(tx),null,2);}catch(e){}
+  out.textContent=body;out.style.display='';btn.disabled=false;});})
+ .catch(function(e){st.innerHTML='<b style="color:#d9534f">error</b> '+e;btn.disabled=false;});
+}
+</script>
+</div></body></html>

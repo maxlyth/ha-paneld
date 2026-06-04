@@ -1,0 +1,60 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "ha-paneld",
+    "version": "0.5.0",
+    "description": "Local HTTP control API for a Home Assistant wall-panel agent. Plain HTTP on the LAN, no auth. Config endpoints enable fleet management."
+  },
+  "servers": [{ "url": "/" }],
+  "paths": {
+    "/health": { "get": { "summary": "Liveness probe + version + panel id", "tags": ["status"], "responses": { "200": { "description": "OK" } } } },
+    "/config": {
+      "get": { "summary": "Read full config (MQTT password redacted to a boolean)", "tags": ["config"], "responses": { "200": { "description": "config JSON" } } },
+      "post": {
+        "summary": "Update config — partial-merge: only the keys you send change", "tags": ["config"],
+        "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "properties": {
+          "panel_id": { "type": "string", "description": "lowercase/digits/underscore; used in entity_ids + MQTT topics" },
+          "friendly_name": { "type": "string" }, "manufacturer": { "type": "string" }, "model": { "type": "string" },
+          "mqtt_broker": { "type": "string", "description": "tcp://host:1883; blank = MQTT disabled" },
+          "mqtt_user": { "type": "string" }, "mqtt_password": { "type": "string", "description": "blank = unchanged" },
+          "dashboard_package": { "type": "string" }, "launcher_package": { "type": "string" }
+        } } } } },
+        "responses": { "200": { "description": "updated" }, "400": { "description": "invalid panel_id" } }
+      }
+    },
+    "/perf": { "get": { "summary": "Live CPU/GPU/RAM, CPU clock, temperature, top processes, responsiveness + history", "tags": ["performance"], "responses": { "200": { "description": "perf JSON" } } } },
+    "/instrumentation": {
+      "post": {
+        "summary": "Enable/disable the performance sampler (persisted)", "tags": ["performance"],
+        "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "required": ["enabled"], "properties": { "enabled": { "type": "boolean" } } } } } },
+        "responses": { "200": { "description": "{\"enabled\":bool}" }, "400": { "description": "bad-value" } }
+      }
+    },
+    "/diag": { "get": { "summary": "Plain-text diagnostics dump (hardware, firmware, SELinux, su/node probes)", "tags": ["status"], "responses": { "200": { "description": "text/plain report" } } } },
+    "/proximity": { "get": { "summary": "Live proximity raw + calibration (raw stays local; only the derived binary goes to HA)", "tags": ["proximity"], "responses": { "200": { "description": "proximity JSON" } } } },
+    "/proximity/capture": {
+      "post": { "summary": "Snapshot the current raw value into the near/far calibration slot", "tags": ["proximity"],
+        "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "required": ["step"], "properties": { "step": { "type": "string", "enum": ["near", "far"] } } } } } },
+        "responses": { "200": { "description": "proximity JSON" }, "400": { "description": "bad-step / no-reading" } } }
+    },
+    "/proximity/threshold": {
+      "post": { "summary": "Manual threshold fine-tune (overrides the captured midpoint)", "tags": ["proximity"],
+        "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "required": ["v"], "properties": { "v": { "type": "number" } } } } } },
+        "responses": { "200": { "description": "proximity JSON" }, "400": { "description": "bad-value" } } }
+    },
+    "/proximity/sensitivity": {
+      "post": { "summary": "Hysteresis band width (flap resistance)", "tags": ["proximity"],
+        "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "required": ["s"], "properties": { "s": { "type": "string", "enum": ["HIGH", "MEDIUM", "LOW"] } } } } } },
+        "responses": { "200": { "description": "proximity JSON" } } }
+    },
+    "/proximity/reset": { "post": { "summary": "Clear proximity calibration", "tags": ["proximity"], "responses": { "200": { "description": "proximity JSON" } } } },
+    "/inspect": { "get": { "summary": "CDP/DevTools relay status", "tags": ["debug"], "responses": { "200": { "description": "inspect JSON" } } } },
+    "/inspect/start": { "post": { "summary": "Start the WebView DevTools relay on :9222 (needs root + WebView debugging)", "tags": ["debug"], "responses": { "200": { "description": "inspect JSON" } } } },
+    "/inspect/stop": { "post": { "summary": "Stop the DevTools relay", "tags": ["debug"], "responses": { "200": { "description": "inspect JSON" } } } },
+    "/play": {
+      "post": { "summary": "Play audio / TTS from a URL", "tags": ["media"],
+        "requestBody": { "content": { "text/plain": { "schema": { "type": "string", "description": "a raw URL, or {\"url\":\"https://…\"}" } } } },
+        "responses": { "200": { "description": "playing" }, "400": { "description": "no-url" } } }
+    }
+  }
+}
