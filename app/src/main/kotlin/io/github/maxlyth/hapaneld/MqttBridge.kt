@@ -51,7 +51,12 @@ class MqttBridge(
     var activeBroker: String = ""
         private set
 
-    fun isConnected(): Boolean = client != null
+    /** Live connection state for the UI, so an auth failure reads differently from "unreachable":
+     *  connected | auth-failed | unreachable | connecting | disabled. */
+    @Volatile var state: String = "disabled"
+        private set
+
+    fun isConnected(): Boolean = state == "connected"
 
     private val panel = config.panelId
     private val availabilityTopic = "ha-paneld/$panel/availability"
@@ -83,9 +88,11 @@ class MqttBridge(
         if (broker.isEmpty()) {
             Log.i(TAG, "no broker configured and none discovered — MQTT disabled")
             activeBroker = ""
+            state = "disabled"
             return
         }
         activeBroker = broker
+        state = "connecting"
         try {
             val uri = URI(if (broker.contains("://")) broker else "tcp://$broker")
             val host = uri.host ?: return
@@ -100,7 +107,16 @@ class MqttBridge(
                 // panel. Re-subscribe + re-publish discovery happen in onConnected on every connect.
                 .automaticReconnectWithDefaultConfig()
                 .addConnectedListener { onConnected() }
-                .addDisconnectedListener { Log.w(TAG, "MQTT disconnected — auto-reconnecting") }
+                .addDisconnectedListener {
+                    // Classify so the UI can say "auth rejected" vs "unreachable" rather than just "down".
+                    val m = (it.cause?.message ?: it.cause?.toString() ?: "").uppercase()
+                    state = when {
+                        Regex("NOT_AUTHORIZED|BAD_USER_NAME|PASSWORD|AUTHENTICAT|BANNED").containsMatchIn(m) -> "auth-failed"
+                        Regex("REFUSED|TIMEOUT|UNREACHABLE|UNRESOLVED|RESET|NO ROUTE|CONNECTION|FAILED").containsMatchIn(m) -> "unreachable"
+                        else -> "disconnected"
+                    }
+                    Log.w(TAG, "MQTT disconnected ($state) — auto-reconnecting: ${it.cause?.message}")
+                }
                 .buildAsync()
             client = c
             ButtonBus.listener = { event -> publishButton(event) }
@@ -127,6 +143,7 @@ class MqttBridge(
     /** Runs on every (re)connect: (re)subscribe to commands and (re)publish discovery + online. */
     private fun onConnected() {
         val c = client ?: return
+        state = "connected"
         c.subscribeWith()
             .topicFilter("ha-paneld/$panel/+/set")
             .qos(MqttQos.AT_LEAST_ONCE)

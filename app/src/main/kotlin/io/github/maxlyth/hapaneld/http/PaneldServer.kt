@@ -228,15 +228,22 @@ class PaneldServer(
 
     private fun infoHtml(): String {
         val pid = esc(config.panelId)
-        val setupBanner = if (config.mqttBroker.isBlank() || config.panelIdIsDefault) {
-            val what = when {
-                config.mqttBroker.isBlank() && config.panelIdIsDefault -> "a panel id and the MQTT broker"
-                config.mqttBroker.isBlank() -> "the MQTT broker"
-                else -> "a panel id (still the auto-generated default)"
-            }
-            """<div class="setup">⚠ This panel isn't set up yet — <a href="#config">set $what</a> below.</div>"""
-        } else ""
-        val rows = info().entries.joinToString("\n") { (k, v) ->
+        // Banner reflects the LIVE MQTT state (from the info map), not just whether a broker string is
+        // set — so auto-discovery + a real connection clears it, and an auth rejection says so.
+        val facts = info()
+        val mqtt = facts["MQTT"] ?: "disabled"
+        val needs = mutableListOf<String>()
+        if (config.panelIdIsDefault) needs.add("a panel id")
+        when {
+            mqtt.contains("connected") || mqtt.contains("connecting") -> {} // connected / transient — fine
+            mqtt.contains("auth rejected") -> needs.add("valid MQTT credentials (the broker rejected them)")
+            mqtt.contains("unreachable") -> needs.add("a reachable MQTT broker")
+            else -> needs.add("the MQTT broker")
+        }
+        val setupBanner = if (needs.isNotEmpty())
+            """<div class="setup">⚠ This panel needs <a href="#config">${needs.joinToString(" and ")}</a> — set below.</div>"""
+        else ""
+        val rows = facts.entries.joinToString("\n") { (k, v) ->
             // Version: plain text + a small "open releases" icon (a hyperlinked version reads ugly).
             val cell = if (k == "ha-paneld") {
                 """${esc(v)} <a class="ext" href="$RELEASES_URL" target="_blank" rel="noopener" """ +

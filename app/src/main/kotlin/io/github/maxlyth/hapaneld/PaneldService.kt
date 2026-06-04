@@ -104,10 +104,15 @@ class PaneldService : Service() {
     private fun panelInfo(): Map<String, String> {
         // activeBroker reflects auto-discovery (tcp://<ha-ip>:1883) when no broker is configured.
         val broker = mqtt.activeBroker.ifBlank { config.mqttBroker }
+        val host = broker.substringAfter("://").substringBefore(":").ifBlank { "?" }
         val auto = config.mqttBroker.isBlank() && mqtt.activeBroker.isNotBlank()
-        val mqttStatus = if (broker.isBlank()) "disabled"
-        else "${broker.substringAfter("://").substringBefore(":")} · " +
-            (if (mqtt.isConnected()) "connected" else "disconnected") + (if (auto) " (auto)" else "")
+        val mqttStatus = when (mqtt.state) {
+            "connected" -> "$host · connected" + (if (auto) " (auto)" else "")
+            "auth-failed" -> "$host · reachable, auth rejected — check username/password"
+            "unreachable" -> "$host · unreachable"
+            "connecting" -> "$host · connecting…"
+            else -> "disabled"
+        }
         val extras = linkedMapOf(
             "panel_id" to config.panelId,
             "Friendly name" to config.friendlyName,
