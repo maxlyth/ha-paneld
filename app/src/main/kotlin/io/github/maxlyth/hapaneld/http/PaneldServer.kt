@@ -1,5 +1,6 @@
 package io.github.maxlyth.hapaneld.http
 
+import android.content.Context
 import android.util.Log
 import io.github.maxlyth.hapaneld.AudioPlayer
 import io.github.maxlyth.hapaneld.Config
@@ -36,6 +37,7 @@ class PaneldServer(
     private val config: Config,
     private val cacheDir: File,
     private val scope: CoroutineScope,
+    private val appContext: Context,
     // Called after this server has written new settings to [config]; the service rebuilds MQTT/mDNS.
     private val onReconfigure: () -> Unit,
     private val info: () -> Map<String, String>,
@@ -53,6 +55,9 @@ class PaneldServer(
                 }
                 get("/perf") {
                     call.respondText(PerfReader.json(), ContentType.Application.Json)
+                }
+                get("/diag") {
+                    call.respondText(DiagReader.dump(appContext), ContentType.Text.Plain)
                 }
                 post("/config") {
                     val p = call.receiveParameters()
@@ -123,6 +128,11 @@ class PaneldServer(
             }
             "<tr><th>${esc(k)}</th><td>$cell</td></tr>"
         }
+        val capColor = mapOf("ok" to "#48c774", "degraded" to "#d9a528", "none" to "#d04a3b")
+        val capRows = DiagReader.capabilities(appContext).joinToString("\n") { c ->
+            val col = capColor[c.status] ?: "#888"
+            """<tr><th>${esc(c.name)}</th><td><span style="color:$col">●</span> ${esc(c.note)}</td></tr>"""
+        }
         return """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>ha-paneld · $pid</title>
@@ -145,6 +155,13 @@ class PaneldServer(
 <table>
 $rows
 </table>
+<h2>Capabilities</h2>
+<table>
+$capRows
+</table>
+<p class="note"><a href="/diag" target="_blank" style="color:#9cf">⭳ Diagnostics dump</a> — a copy-paste
+report of this panel's hardware, firmware, SELinux, su and node probes. Paste it into a bug report so
+the maintainer can help with your hardware/firmware combination without owning it.</p>
 <h2>Performance <small id="perfage" style="color:#8a8;font-weight:400"></small></h2>
 <canvas id="perfchart" width="600" height="96"
  style="width:100%;max-width:600px;background:#181818;border-radius:8px;display:block;margin-bottom:8px"></canvas>

@@ -72,7 +72,7 @@ class PaneldService : Service() {
 
         mqtt = buildMqtt()
         mdns = MdnsAdvertiser(this, config)
-        server = PaneldServer(config, cacheDir, scope, ::reconfigure, ::panelInfo)
+        server = PaneldServer(config, cacheDir, scope, this, ::reconfigure, ::panelInfo)
     }
 
     private fun buildMqtt(): MqttBridge = MqttBridge(
