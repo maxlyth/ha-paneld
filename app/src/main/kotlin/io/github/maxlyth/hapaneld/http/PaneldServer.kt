@@ -163,7 +163,11 @@ class PaneldServer(
                     )
                     val broker = p["mqtt_broker"]?.trim()
                     val user = p["mqtt_user"]?.trim()
-                    val pw = p["mqtt_password"]?.takeIf { it.isNotEmpty() } // blank/absent => unchanged
+                    // Blank password normally means "keep the current one" (so you don't re-type it).
+                    // EXCEPTION: clearing the username clears the password too — otherwise there's no
+                    // way to drop auth, and an empty user with a stale password gets rejected.
+                    val pw = if (user != null && user.isEmpty()) "" // clear both → anonymous
+                    else p["mqtt_password"]?.takeIf { it.isNotEmpty() } // blank/absent => unchanged
                     if (broker != null || user != null || pw != null) config.setMqtt(
                         broker ?: config.mqttBroker, user ?: config.mqttUser, pw,
                     )
@@ -331,7 +335,7 @@ report of this panel's hardware, firmware, SELinux, su and node probes for bug r
  <label>MQTT username
   <input name="mqtt_user" autocapitalize="none" autocorrect="off" spellcheck="false" value="${esc(config.mqttUser)}" placeholder="blank if the broker needs no login" autocomplete="off"></label>
  <label>MQTT password
-  <input name="mqtt_password" type="password" value="" placeholder="(unchanged)" autocomplete="new-password"></label>
+  <input name="mqtt_password" type="password" value="" placeholder="blank keeps it; clear the username to remove auth" autocomplete="new-password"></label>
  <label>Dashboard package <small>(Reload button; blank = auto-detect Companion)</small>
   <input name="dashboard_package" autocapitalize="none" autocorrect="off" spellcheck="false" value="${esc(config.dashboardPackage)}" placeholder="io.homeassistant.companion.android"></label>
  <label>Launcher package <small>(blank = auto-detect)</small>
