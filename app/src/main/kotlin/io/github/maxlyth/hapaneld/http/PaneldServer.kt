@@ -208,6 +208,7 @@ class PaneldServer(
  input,button{font-size:1rem;padding:9px 12px;border-radius:8px;border:1px solid #444;background:#1c1c1c;color:#eee}
  button{background:#2557a7;border-color:#2557a7;cursor:pointer;align-self:flex-start;padding:9px 22px}
  .note{color:#8a8;margin-top:10px;font-size:.85rem}
+ .binary .gradedonly{display:none}
  .pbtn{font-size:.8rem;padding:6px 12px;background:#1c1c1c;border-color:#444;cursor:pointer}
  .pbtn.on{background:#2557a7;border-color:#2557a7}
 </style></head><body><div class="wrap">
@@ -232,20 +233,20 @@ the maintainer can help with your hardware/firmware combination without owning i
 <table id="topproc" style="margin-top:12px"><tr><td style="color:#888">top processes…</td></tr></table>
 <h2>Proximity tuning <small id="proxstate" style="color:#8a8;font-weight:400"></small></h2>
 <div id="proxbox" style="display:none">
-<canvas id="proxgauge" width="600" height="46"
+<canvas id="proxgauge" width="600" height="46" class="gradedonly"
  style="width:100%;max-width:600px;background:#181818;border-radius:8px;display:block;margin-bottom:6px"></canvas>
 <div style="font-size:.85rem;margin-bottom:8px">raw <b id="proxraw" style="color:#4a9eff">–</b>
- · threshold <b id="proxth">–</b> · state <b id="proxnear">–</b></div>
+ <span id="proxthwrap" class="gradedonly">· threshold <b id="proxth">–</b></span> · state <b id="proxnear">–</b></div>
 <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;font-size:.85rem;margin-bottom:8px">
  <span style="color:#9af">Capture:</span>
  <button type="button" class="pbtn" onclick="proxCap('near')">Near</button>
  <button type="button" class="pbtn" onclick="proxCap('far')">Far</button>
- <span style="color:#9af;margin-left:10px">Sensitivity:</span>
- <button type="button" class="pbtn psen" data-s="HIGH" onclick="proxSen('HIGH')">High</button>
- <button type="button" class="pbtn psen" data-s="MEDIUM" onclick="proxSen('MEDIUM')">Med</button>
- <button type="button" class="pbtn psen" data-s="LOW" onclick="proxSen('LOW')">Low</button>
+ <span class="gradedonly" style="color:#9af;margin-left:10px">Sensitivity:</span>
+ <button type="button" class="pbtn psen gradedonly" data-s="HIGH" onclick="proxSen('HIGH')">High</button>
+ <button type="button" class="pbtn psen gradedonly" data-s="MEDIUM" onclick="proxSen('MEDIUM')">Med</button>
+ <button type="button" class="pbtn psen gradedonly" data-s="LOW" onclick="proxSen('LOW')">Low</button>
  <button type="button" class="pbtn" style="margin-left:10px" onclick="proxReset()">Reset</button></div>
-<label style="font-size:.8rem;color:#9af">Threshold fine-tune
+<label class="gradedonly" style="font-size:.8rem;color:#9af">Threshold fine-tune
  <input type="range" id="proxslider" min="0" max="100" step="0.1" style="width:100%"
   oninput="document.getElementById('proxth').textContent=(+this.value).toFixed(1)"
   onchange="proxThSet(this.value)"></label>
@@ -333,11 +334,15 @@ function proxDraw(d){
  if(d.raw!=null){var rx=px(d.raw);x.fillStyle=d.near?'#48c774':'#888';x.beginPath();x.arc(rx,H/2,7,0,7);x.fill();}
 }
 function proxApply(d){
+ document.getElementById('proxbox').className=d.graded?'':'binary'; // hide gauge/slider/sensitivity on binary sensors
  proxDraw(d);
  document.getElementById('proxth').textContent=d.threshold==null?'–':d.threshold.toFixed(1);
- document.getElementById('proxstate').textContent=d.calibrated?'· calibrated':'· uncalibrated (sensor default)';
- document.querySelectorAll('.psen').forEach(function(b){b.className='pbtn psen'+(b.dataset.s===d.sensitivity?' on':'');});
- document.getElementById('proxhint').textContent=d.indistinct?'⚠ near and far captures are too close — recapture with a clearer gap.':(d.calibrated?'':'Hold your hand at the panel and press Near, then move away and press Far.');
+ document.getElementById('proxstate').textContent=(d.graded?'· graded sensor':'· binary sensor')+(d.calibrated?' · calibrated':'');
+ document.querySelectorAll('.psen').forEach(function(b){b.className='pbtn psen gradedonly'+(b.dataset.s===d.sensitivity?' on':'');});
+ var hint=document.getElementById('proxhint');
+ if(d.indistinct)hint.textContent='⚠ near and far captures are too close — recapture with a clearer gap.';
+ else if(!d.graded)hint.textContent='Binary near/far sensor — nothing to tune. Press Capture near with your hand at the panel, then Capture far, to set which reading means "near".';
+ else hint.textContent=d.calibrated?'':'Hold your hand at the panel and press Capture near, then move away and press Capture far.';
 }
 async function prox(){
  try{

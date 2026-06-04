@@ -36,6 +36,7 @@ class SensorReporter(context: Context, private val config: Config) {
     private var lastNear: Boolean? = null
     private var listener: SensorEventListener? = null
     private var onProximity: ((Boolean) -> Unit)? = null
+    private val seenRaw = java.util.TreeSet<Float>() // distinct raw values observed → graded vs binary
 
     /** Latest raw proximity reading (device-native units), updated ungated on every event. */
     @Volatile
@@ -65,6 +66,9 @@ class SensorReporter(context: Context, private val config: Config) {
                     }
                     Sensor.TYPE_PROXIMITY -> {
                         lastRaw = e.values[0]
+                        synchronized(seenRaw) {
+                            if (seenRaw.size < 32) seenRaw.add(Math.round(e.values[0] * 10) / 10f)
+                        }
                         evaluateProximity()
                     }
                 }
@@ -115,12 +119,17 @@ class SensorReporter(context: Context, private val config: Config) {
         val fr = config.proximityFarRaw
         val th = config.proximityThreshold
         val indistinct = config.proximityCalibrated && abs(nr - fr) < 1f
+        val vals = synchronized(seenRaw) { seenRaw.toList() }
+        // Graded (worth a threshold/gauge) vs binary (0/1 — only polarity matters). Until the user
+        // triggers near+far we've seen too few values to tell, so default to binary (the common case).
+        val graded = vals.size > 2 && (vals.last() - vals.first()) >= 2f
         fun f(v: Float) = if (v.isNaN()) "null" else v.toString()
         return "{\"present\":${hasProximity()},\"raw\":${f(raw)},\"near\":${lastNear ?: false}," +
             "\"max\":${maxRange()},\"calibrated\":${config.proximityCalibrated}," +
             "\"threshold\":${f(th)},\"nearRaw\":${f(nr)},\"farRaw\":${f(fr)}," +
             "\"nearBelow\":${config.proximityNearBelow},\"margin\":${config.proximityMargin}," +
-            "\"sensitivity\":\"${config.proximitySensitivity.name}\",\"indistinct\":$indistinct}"
+            "\"sensitivity\":\"${config.proximitySensitivity.name}\",\"indistinct\":$indistinct," +
+            "\"graded\":$graded,\"distinct\":${vals.size}}"
     }
 
     fun stop() {
