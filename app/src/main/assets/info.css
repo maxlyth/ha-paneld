@@ -13,3 +13,5 @@ button{background:#2557a7;border-color:#2557a7;cursor:pointer;align-self:flex-st
 .binary .gradedonly{display:none}
 .pbtn{font-size:.8rem;padding:6px 12px;background:#1c1c1c;border-color:#444;cursor:pointer}
 .pbtn.on{background:#2557a7;border-color:#2557a7}
+.setup{background:#3a2f10;border:1px solid #7a5a2a;border-radius:8px;padding:12px 14px;margin:14px 0;color:#f5c451;font-size:.92rem}
+.setup a{color:#ffd97a;font-weight:600}

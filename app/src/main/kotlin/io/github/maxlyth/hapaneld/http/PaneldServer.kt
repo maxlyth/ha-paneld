@@ -204,6 +204,14 @@ class PaneldServer(
 
     private fun infoHtml(): String {
         val pid = esc(config.panelId)
+        val setupBanner = if (config.mqttBroker.isBlank() || config.panelIdIsDefault) {
+            val what = when {
+                config.mqttBroker.isBlank() && config.panelIdIsDefault -> "a panel id and the MQTT broker"
+                config.mqttBroker.isBlank() -> "the MQTT broker"
+                else -> "a panel id (still the auto-generated default)"
+            }
+            """<div class="setup">⚠ This panel isn't set up yet — <a href="#config">set $what</a> below.</div>"""
+        } else ""
         val rows = info().entries.joinToString("\n") { (k, v) ->
             // Link the ha-paneld version to its GitHub releases page.
             val cell = if (k == "ha-paneld") {
@@ -223,6 +231,7 @@ class PaneldServer(
 <title>ha-paneld · $pid</title>
 <link rel="stylesheet" href="/info.css"></head><body><div class="wrap">
 <h1>ha-paneld <small>· $pid</small></h1>
+$setupBanner
 <h2>Panel information</h2>
 <table>
 $rows
@@ -273,7 +282,7 @@ the maintainer can help with your hardware/firmware combination without owning i
  <button type="button" class="pbtn" onclick="inspStart()">Enable</button>
  <button type="button" class="pbtn" onclick="inspStop()">Stop</button></div>
 <p class="note" id="insthint"></p>
-<h2>Configuration</h2>
+<h2 id="config">Configuration</h2>
 <form method="post" action="/config">
  <label>Panel id <small>(entity_ids / MQTT topics)</small>
   <input name="panel_id" value="$pid" pattern="[a-z0-9_]+" title="lowercase letters, digits, underscore" required></label>

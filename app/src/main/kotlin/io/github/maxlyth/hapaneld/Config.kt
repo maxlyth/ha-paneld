@@ -21,9 +21,21 @@ class Config(context: Context) {
     val mqttUser: String get() = prefs.getString("mqtt_user", "")!!
     val mqttPassword: String get() = prefs.getString("mqtt_password", "")!!
 
-    /** Stable per-panel id used in entity_ids / MQTT topics. Defaults to a slug of the device name. */
+    /** Stable per-panel id used in entity_ids / MQTT topics. Defaults to a slug of the device name,
+     *  but the SoC model is identical across a fleet (e.g. `px30_evb`), so when no real device name
+     *  is set we append a short stable per-device suffix to avoid collisions out of the box. */
     val panelId: String
-        get() = prefs.getString("panel_id", null) ?: slug(deviceName())
+        get() = prefs.getString("panel_id", null) ?: defaultPanelId()
+
+    /** True when [panelId] is the auto-derived default (no explicit panel_id set yet). */
+    val panelIdIsDefault: Boolean get() = prefs.getString("panel_id", null).isNullOrBlank()
+
+    private fun defaultPanelId(): String {
+        val name = Settings.Global.getString(appCtx.contentResolver, Settings.Global.DEVICE_NAME)
+        // A meaningful, non-generic device name → use it; else model + a short ANDROID_ID suffix.
+        return if (!name.isNullOrBlank() && !name.equals(Build.MODEL, ignoreCase = true)) slug(name)
+        else slug(Build.MODEL) + "_" + androidId.takeLast(4).ifBlank { "panel" }
+    }
 
     /** Persist a new panel id (used by the HTTP config page). */
     fun setPanelId(id: String) {
