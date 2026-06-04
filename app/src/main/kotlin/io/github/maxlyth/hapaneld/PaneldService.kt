@@ -140,6 +140,7 @@ class PaneldService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForegroundCompat()
         scope.launch {
+            io.github.maxlyth.hapaneld.http.PerfReader.start(scope)
             server.start()
             mdns.start()
             mqtt.start()

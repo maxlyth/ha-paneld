@@ -71,6 +71,8 @@ GET  /              panel info + config page (versions, hardware, status; panel_
                     friendly name, MQTT broker/creds, dashboard package). This is the
                     device's configuration_url, so HA shows a "Visit" link.
 POST /config        form-encoded settings from the page; persists + live-reconfigures
+GET  /perf          live performance JSON (CPU % overall + per core, load avg,
+                    per-core MHz, temperature, memory) — polled by the info page
 GET  /health        -> 200 "ha-paneld <version> panel=<id>"
 POST /play          body contains an audio URL (raw or {"url":"…"})
                     -> 200 "playing"  (download + play happen in the background)

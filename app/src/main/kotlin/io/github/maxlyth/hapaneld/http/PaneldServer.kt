@@ -51,6 +51,9 @@ class PaneldServer(
                 get("/") {
                     call.respondText(infoHtml(), ContentType.Text.Html)
                 }
+                get("/perf") {
+                    call.respondText(PerfReader.json(), ContentType.Application.Json)
+                }
                 post("/config") {
                     val p = call.receiveParameters()
                     val slug = p["panel_id"].orEmpty().lowercase()
@@ -142,6 +145,12 @@ class PaneldServer(
 <table>
 $rows
 </table>
+<h2>Performance <small id="perfage" style="color:#8a8;font-weight:400"></small></h2>
+<canvas id="perfchart" width="600" height="96"
+ style="width:100%;max-width:600px;background:#181818;border-radius:8px;display:block;margin-bottom:8px"></canvas>
+<div style="font-size:.75rem;color:#8a8;margin-bottom:6px">
+ <span style="color:#4a9eff">■</span> CPU&nbsp;&nbsp;<span style="color:#48c774">■</span> RAM&nbsp;&nbsp;<span style="color:#f5a623">■</span> GPU (% used) · ~4&nbsp;min</div>
+<table id="perf"><tr><td style="color:#888">sampling…</td></tr></table>
 <h2>Configuration</h2>
 <form method="post" action="/config">
  <label>Panel id <small>(entity_ids / MQTT topics)</small>
@@ -168,6 +177,41 @@ $rows
 never shown — leave it blank to keep the current one. Saving reconnects MQTT and re-publishes Home
 Assistant discovery; changing the panel id may leave the old device in HA to remove manually.
 Served over plain HTTP on the LAN.</p>
+<script>
+var cpuH=[],ramH=[],gpuH=[],MAX=120;  // ~4 min at 2s
+function row(k,v){return '<tr><th>'+k+'</th><td>'+v+'</td></tr>';}
+function draw(){
+ var c=document.getElementById('perfchart'),x=c.getContext('2d'),W=c.width,H=c.height;
+ x.clearRect(0,0,W,H);
+ x.strokeStyle='#2a2a2a';x.lineWidth=1;
+ [0.25,0.5,0.75].forEach(function(f){var y=H-f*H;x.beginPath();x.moveTo(0,y);x.lineTo(W,y);x.stroke();});
+ function line(a,col){
+  if(a.length<2)return;
+  x.strokeStyle=col;x.lineWidth=2;x.beginPath();
+  var n=a.length,sx=W/(MAX-1);
+  for(var i=0;i<n;i++){var px=W-(n-1-i)*sx,py=H-(a[i]/100)*H;i?x.lineTo(px,py):x.moveTo(px,py);}
+  x.stroke();
+ }
+ line(gpuH,'#f5a623');line(ramH,'#48c774');line(cpuH,'#4a9eff');
+}
+async function perf(){
+ try{
+  var d=await (await fetch('/perf')).json();
+  if(d.hist){cpuH=d.hist.cpu||[];ramH=d.hist.ram||[];gpuH=d.hist.gpu||[];}  // server FIFO
+  draw();
+  var ramPct=d.memTotalMb?Math.round(d.memUsedMb*100/d.memTotalMb):0;
+  var peak=(d.cores&&d.cores.length)?Math.max.apply(null,d.cores):d.cpu;
+  var h=row('CPU',d.cpu+'%  <span style="color:#8a8">peak core '+peak+'%</span>');
+  if(d.gpu!=null)h+=row('GPU',d.gpu+'%'+(d.gpuMhz?'  <span style="color:#8a8">'+d.gpuMhz+' MHz</span>':''));
+  h+=row('RAM',d.memUsedMb+' / '+d.memTotalMb+' MB ('+ramPct+'%)');
+  if(d.load&&d.load.length)h+=row('Load avg',d.load.join('  '));
+  if(d.tempC!=null)h+=row('Temperature',d.tempC.toFixed(1)+' °C');
+  document.getElementById('perf').innerHTML=h;
+  document.getElementById('perfage').textContent='· live';
+ }catch(e){document.getElementById('perfage').textContent='· unavailable';}
+}
+perf();setInterval(perf,2000);
+</script>
 </div></body></html>"""
     }
 
