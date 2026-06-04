@@ -93,6 +93,7 @@ class PaneldService : Service() {
             mdns = MdnsAdvertiser(this@PaneldService, config)
             mdns.start()
             mqtt.start()
+            io.github.maxlyth.hapaneld.http.PerfReader.dashboardPkg = config.dashboardPackage
             Log.i(TAG, "reconfigured: panel=${config.panelId} broker=${config.mqttBroker.ifEmpty { "(disabled)" }}")
         }
     }
@@ -140,6 +141,7 @@ class PaneldService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForegroundCompat()
         scope.launch {
+            io.github.maxlyth.hapaneld.http.PerfReader.dashboardPkg = config.dashboardPackage
             io.github.maxlyth.hapaneld.http.PerfReader.start(scope)
             server.start()
             mdns.start()

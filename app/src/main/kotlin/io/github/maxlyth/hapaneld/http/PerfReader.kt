@@ -32,6 +32,10 @@ object PerfReader {
     // slower cadence than the 2s chart. Lets a user confirm the dashboard app dominates and spot
     // parasite processes (e.g. a leftover vendor gateway). "null" when no root / unavailable.
     @Volatile private var topJson = "null"
+    // Dashboard rendering jank from `dumpsys gfxinfo <pkg>` (root). Quick "is there a problem" signal;
+    // the deeper "why" is the 1-click DevTools relay. Target reuses the dashboard_package config.
+    @Volatile var dashboardPkg: String = ""
+    @Volatile private var renderJson = "null"
     private var rootOk = false
     private var tickCount = 0
     private var prevTopTotal = 0L                 // /proc/stat aggregate jiffies at last top sample
@@ -48,9 +52,34 @@ object PerfReader {
         }
     }
 
-    /** Latest sample + history FIFO + top-5 procs, as JSON, for `GET /perf`. */
+    /** Latest sample + history FIFO + top-5 procs + render jank, as JSON, for `GET /perf`. */
     fun json(): String = synchronized(lock) {
-        """{$latestFields,"top":$topJson,"hist":{"cpu":${cpuHist.toList()},"ram":${ramHist.toList()},"gpu":${gpuHist.toList()}}}"""
+        """{$latestFields,"top":$topJson,"render":$renderJson,"hist":{"cpu":${cpuHist.toList()},"ram":${ramHist.toList()},"gpu":${gpuHist.toList()}}}"""
+    }
+
+    /**
+     * Dashboard rendering jank via `dumpsys gfxinfo <pkg>` (root) — proven to return real per-window
+     * data (jank %, frame-time percentiles, stall counts). We read then `reset` so each sample is the
+     * jank over the ~interval, not lifetime. Coarse (host-app frame delivery, not the web page's
+     * internal long-tasks) — the 1-click DevTools relay is the deep tool. "noconfig"/"null"/idle handled.
+     */
+    private fun sampleRender() {
+        val pkg = dashboardPkg
+        if (pkg.isBlank()) { synchronized(lock) { renderJson = "\"noconfig\"" }; return }
+        val out = Su.runOutput("dumpsys gfxinfo $pkg; dumpsys gfxinfo $pkg reset >/dev/null 2>&1; true") ?: return
+        fun lng(re: String) = Regex(re).find(out)?.groupValues?.get(1)?.toLongOrNull()
+        fun pct(p: Int) = Regex("$p" + """th percentile:\s*(\d+)ms""").find(out)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+        val total = lng("""Total frames rendered:\s*(\d+)""") ?: return
+        if (total <= 0) { synchronized(lock) { renderJson = "{\"pkg\":\"$pkg\",\"idle\":true}" }; return }
+        val janky = lng("""Janky frames:\s*(\d+)""") ?: 0
+        val jankPct = Math.round(janky * 1000.0 / total) / 10.0
+        val verdict = if (jankPct < 5) "smooth" else if (jankPct < 15) "occasional" else "janky"
+        synchronized(lock) {
+            renderJson = "{\"pkg\":\"$pkg\",\"frames\":$total,\"jankPct\":$jankPct,\"verdict\":\"$verdict\"," +
+                "\"p50\":${pct(50)},\"p95\":${pct(95)},\"p99\":${pct(99)}," +
+                "\"missedVsync\":${lng("""Number Missed Vsync:\s*(\d+)""") ?: 0}," +
+                "\"slowUi\":${lng("""Number Slow UI thread:\s*(\d+)""") ?: 0}}"
+        }
     }
 
     /**
@@ -127,7 +156,11 @@ object PerfReader {
             .map { line -> line.trim().split(Regex("\\s+")).drop(1).map { it.toLongOrNull() ?: 0L }.toLongArray() }
 
     private fun tick() {
-        if (rootOk && tickCount++ % 3 == 0) runCatching { sampleTop() } // ~every 6s (= the CPU window)
+        if (rootOk) when (tickCount % 3) {     // spread the su calls across ticks (~6s each)
+            0 -> runCatching { sampleTop() }
+            1 -> runCatching { sampleRender() }
+        }
+        tickCount++
         val stat = runCatching { readStat() }.getOrNull()
         val pct = ArrayList<Int>()
         val prev = prevStat

@@ -231,6 +231,7 @@ the maintainer can help with your hardware/firmware combination without owning i
  <span style="color:#4a9eff">■</span> CPU&nbsp;&nbsp;<span style="color:#48c774">■</span> RAM&nbsp;&nbsp;<span style="color:#f5a623">■</span> GPU (% used) · ~4&nbsp;min</div>
 <table id="perf"><tr><td style="color:#888">sampling…</td></tr></table>
 <table id="topproc" style="margin-top:12px"><tr><td style="color:#888">top processes…</td></tr></table>
+<table id="render" style="margin-top:12px"><tr><td style="color:#888">rendering…</td></tr></table>
 <h2>Proximity tuning <small id="proxstate" style="color:#8a8;font-weight:400"></small></h2>
 <div id="proxbox" style="display:none">
 <canvas id="proxgauge" width="600" height="46" class="gradedonly"
@@ -314,6 +315,18 @@ async function perf(){
    d.top.forEach(function(p){t+='<tr><td style="color:#ccc;font-weight:400">'+p.name+'</td><td>'+p.cpu+'%</td></tr>';});
    tp.innerHTML=t;
   }else tp.innerHTML='<tr><th>Top processes</th><td style="color:#888">needs root (su)</td></tr>';
+  var rb=document.getElementById('render'),r=d.render;
+  if(r==null)rb.innerHTML=row('Rendering','<span style="color:#888">needs root</span>');
+  else if(r==='noconfig')rb.innerHTML=row('Rendering','<span style="color:#888">set a Dashboard package (below) to enable jank metrics</span>');
+  else if(r.idle)rb.innerHTML=row('Rendering','<span style="color:#888">dashboard idle — no frames rendered</span>');
+  else{
+   var rc=r.verdict==='smooth'?'#48c774':(r.verdict==='occasional'?'#d9a528':'#d04a3b');
+   var rv=r.verdict==='smooth'?'Smooth':(r.verdict==='occasional'?'Occasional jank':'Janky');
+   rb.innerHTML=row('Rendering <span style="font-weight:400;color:#888">'+r.pkg.split('.').pop()+'</span>','<span style="color:'+rc+'">●</span> '+rv)
+    +row('Jank',r.jankPct+'% <span style="color:#888">of '+r.frames+' frames</span>')
+    +row('Frame time','95th '+r.p95+'ms · 99th '+r.p99+'ms <span style="color:#888">(16.7ms = 60fps)</span>')
+    +row('Stalls','<span style="color:#888">missed vsync</span> '+r.missedVsync+' · <span style="color:#888">slow UI</span> '+r.slowUi);
+  }
   document.getElementById('perfage').textContent='· live';
  }catch(e){document.getElementById('perfage').textContent='· unavailable';}
 }
