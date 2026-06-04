@@ -26,7 +26,7 @@ object PerfReader {
     private val cpuHist = ArrayDeque<Int>()
     private val ramHist = ArrayDeque<Int>()
     private val gpuHist = ArrayDeque<Int>()
-    @Volatile private var latestFields = """"cpu":0,"cores":[],"load":[],"freqMhz":[],"gpu":null,"gpuMhz":0,"tempC":null,"memUsedMb":0,"memTotalMb":0"""
+    @Volatile private var latestFields = """"cpu":0,"cores":[],"load":[],"freqMhz":[],"freqMaxMhz":0,"gpu":null,"gpuMhz":0,"tempC":null,"memUsedMb":0,"memTotalMb":0"""
 
     // Top-5 processes by CPU (from `dumpsys cpuinfo`) — needs root, so probed once and sampled on a
     // slower cadence than the 2s chart. Lets a user confirm the dashboard app dominates and spot
@@ -228,6 +228,12 @@ object PerfReader {
                 ?.map { if (it.exists()) (it.readText().trim().toLongOrNull() ?: 0L) / 1000 else 0L }
                 ?: emptyList()
         }.getOrNull() ?: emptyList()
+        // Hardware max clock (static) — current vs this shows DVFS headroom / thermal throttling.
+        val freqMaxMhz = runCatching {
+            File("/sys/devices/system/cpu").listFiles { f -> f.name.matches(Regex("cpu[0-9]+")) }
+                ?.mapNotNull { File(it, "cpufreq/cpuinfo_max_freq").takeIf { x -> x.exists() }?.readText()?.trim()?.toLongOrNull() }
+                ?.maxOrNull()?.div(1000) ?: 0L
+        }.getOrNull() ?: 0L
 
         var gpuPct = -1; var gpuMhz = 0L
         runCatching {
@@ -260,7 +266,7 @@ object PerfReader {
         val loadJson = load.joinToString(",") { "\"$it\"" }
         synchronized(lock) {
             push(cpuHist, overall); push(ramHist, ramPct); push(gpuHist, gpuPct.coerceAtLeast(0))
-            latestFields = """"cpu":$overall,"cores":$cores,"load":[$loadJson],"freqMhz":$freqMhz,""" +
+            latestFields = """"cpu":$overall,"cores":$cores,"load":[$loadJson],"freqMhz":$freqMhz,"freqMaxMhz":$freqMaxMhz,""" +
                 """"gpu":${if (gpuPct >= 0) gpuPct else "null"},"gpuMhz":$gpuMhz,""" +
                 """"tempC":${tempC ?: "null"},"memUsedMb":${mem.first},"memTotalMb":${mem.second}"""
         }

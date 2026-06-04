@@ -34,6 +34,8 @@ async function perf(){
   var ramPct=d.memTotalMb?Math.round(d.memUsedMb*100/d.memTotalMb):0;
   var peak=(d.cores&&d.cores.length)?Math.max.apply(null,d.cores):d.cpu;
   var h=row('CPU',d.cpu+'%  <span style="color:#8a8">peak core '+peak+'%</span>');
+  if(d.freqMhz&&d.freqMhz.length){var cur=Math.max.apply(null,d.freqMhz),mx=d.freqMaxMhz||0;
+   h+=row('CPU clock',(cur/1000).toFixed(2)+' GHz'+(mx?'  <span style="color:#8a8">/ '+(mx/1000).toFixed(2)+' GHz max</span>':''));}
   if(d.gpu!=null)h+=row('GPU',d.gpu+'%'+(d.gpuMhz?'  <span style="color:#8a8">'+d.gpuMhz+' MHz</span>':''));
   h+=row('RAM',d.memUsedMb+' / '+d.memTotalMb+' MB ('+ramPct+'%)');
   if(d.load&&d.load.length)h+=row('Load avg',d.load.join('  '));
