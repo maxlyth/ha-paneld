@@ -26,7 +26,17 @@ adb -s "$TARGET" shell 'su 0 sh -c "mount -o rw,remount / 2>/dev/null; mount -o 
 
 echo "==> installing binary -> /system/bin/hapaneld-ledd ($ABI)"
 adb -s "$TARGET" push "$BIN" /data/local/tmp/hapaneld-ledd >/dev/null
-adb -s "$TARGET" shell 'su 0 sh -c "cp /data/local/tmp/hapaneld-ledd /system/bin/hapaneld-ledd; chmod 755 /system/bin/hapaneld-ledd; chcon u:object_r:system_file:s0 /system/bin/hapaneld-ledd"'
+# Replace cleanly even when a copy is already running: stop it, then mv (atomic rename) onto the
+# target. `cp` directly onto a running binary fails with "Text file busy" — and the init service can
+# auto-restart it between stop and copy. rename() swaps the directory entry without touching the busy
+# inode, so it succeeds regardless; the running process keeps the old inode until the restart below.
+adb -s "$TARGET" shell 'su 0 sh -c "
+  stop hapaneld-ledd 2>/dev/null; pkill -f hapaneld-ledd 2>/dev/null; sleep 1
+  cp /data/local/tmp/hapaneld-ledd /system/bin/hapaneld-ledd.new
+  chmod 755 /system/bin/hapaneld-ledd.new
+  chcon u:object_r:system_file:s0 /system/bin/hapaneld-ledd.new 2>/dev/null
+  mv -f /system/bin/hapaneld-ledd.new /system/bin/hapaneld-ledd
+"'
 
 echo "==> installing init service -> /system/etc/init/hapaneld-ledd.rc"
 adb -s "$TARGET" push "$HERE/hapaneld-ledd.rc" /data/local/tmp/hapaneld-ledd.rc >/dev/null
