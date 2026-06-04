@@ -69,9 +69,23 @@ def composite_svg():
             f'<g transform="translate({tx:.2f},{ty:.2f}) scale({sc:.4f})">\n{marks}\n</g>\n</svg>\n')
 
 
+def transparent_svg():
+    """No-background SVG for web / HTTP-UI use — Android composites its own background; the web page
+    supplies its own, so this version omits the white fill (the device itself is opaque)."""
+    sc, tx, ty = placement()
+    marks = "\n".join(mark_paths())
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" width="108" height="108" viewBox="0 0 108 108">\n'
+            f'<path d="{rr(*PANEL)}" fill="{PANEL_FILL}"/>\n'
+            f'<path d="{rr(*SCREEN)}" fill="{SCREEN_FILL}"/>\n'
+            f'<g transform="translate({tx:.2f},{ty:.2f}) scale({sc:.4f})">\n{marks}\n</g>\n</svg>\n')
+
+
 if __name__ == "__main__":
-    open(FG, "w").write(vector_xml())
+    open(FG, "w").write(vector_xml())                                  # Android adaptive foreground (alpha)
     print("wrote", FG)
+    for p in (os.path.join(HERE, "app/src/main/assets/icon.svg"), os.path.join(HERE, "docs/icon.svg")):
+        open(p, "w").write(transparent_svg())                          # transparent SVG for web/HTTP UI
+        print("wrote", p)
     try:
         import cairosvg
         cairosvg.svg2png(bytestring=composite_svg().encode(), write_to=PREVIEW, output_width=512, output_height=512)
