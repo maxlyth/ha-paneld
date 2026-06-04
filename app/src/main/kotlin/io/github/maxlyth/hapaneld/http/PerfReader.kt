@@ -71,7 +71,12 @@ object PerfReader {
         fun lng(re: String) = Regex(re).find(out)?.groupValues?.get(1)?.toLongOrNull()
         fun pct(p: Int) = Regex("$p" + """th percentile:\s*(\d+)ms""").find(out)?.groupValues?.get(1)?.toIntOrNull() ?: 0
         val total = lng("""Total frames rendered:\s*(\d+)""") ?: return
-        if (total <= 0) { synchronized(lock) { renderJson = "{\"pkg\":\"$pkg\",\"idle\":true}" }; return }
+        // Idle window (no frames drawn — HA dashboards are static most of the time). Keep the history
+        // so the chart persists; just flag idle. Don't push a sample (no data point for this window).
+        if (total <= 0) {
+            synchronized(lock) { renderJson = "{\"pkg\":\"$pkg\",\"idle\":true,\"hist\":${stutterHist.toList()}}" }
+            return
+        }
         val janky = lng("""Janky frames:\s*(\d+)""") ?: 0
         val jankPct = Math.round(janky * 1000.0 / total) / 10.0
         val verdict = if (jankPct < 5) "smooth" else if (jankPct < 15) "occasional" else "janky"

@@ -225,8 +225,8 @@ $capRows
 report of this panel's hardware, firmware, SELinux, su and node probes. Paste it into a bug report so
 the maintainer can help with your hardware/firmware combination without owning it.</p>
 <h2>Responsiveness <small id="smhdr" style="color:#8a8;font-weight:400"></small></h2>
-<canvas id="smchart" width="600" height="60"
- style="width:100%;max-width:600px;background:#181818;border-radius:8px;display:block;margin-bottom:6px"></canvas>
+<canvas id="smchart" width="600" height="130"
+ style="width:100%;max-width:600px;height:130px;background:#181818;border-radius:8px;display:block;margin-bottom:6px"></canvas>
 <div style="font-size:.72rem;color:#8a8;margin-bottom:6px">% of slow screen updates, over time ·
  <span style="color:#48c774">▬</span> snappy under 5% · <span style="color:#d9a528">▬</span> laggy over 15%</div>
 <table id="smtbl"><tr><td style="color:#888">measuring…</td></tr></table>
@@ -332,7 +332,7 @@ async function perf(){
   var r=d.render,smh=document.getElementById('smhdr'),smt=document.getElementById('smtbl');
   if(r==null){smh.textContent='· needs root';smt.innerHTML=row('Responsiveness','<span style="color:#888">needs root to measure</span>');drawSm([]);}
   else if(r==='noconfig'){smh.textContent='';smt.innerHTML=row('Responsiveness','<span style="color:#888">no Home Assistant app found on this panel</span>');drawSm([]);}
-  else if(r.idle){smh.textContent='· idle';smt.innerHTML=row('Responsiveness','<span style="color:#888">dashboard is idle — nothing is being drawn right now</span>');drawSm([]);}
+  else if(r.idle){smh.textContent='· idle';drawSm(r.hist);smt.innerHTML=row('Responsiveness','<span style="color:#888">idle — dashboard isn't redrawing right now (history kept)</span>');}
   else{
    drawSm(r.hist);
    var col=r.verdict==='smooth'?'#48c774':(r.verdict==='occasional'?'#d9a528':'#d04a3b');
