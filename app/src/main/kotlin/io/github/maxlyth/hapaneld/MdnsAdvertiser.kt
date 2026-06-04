@@ -60,16 +60,27 @@ class MdnsAdvertiser(private val context: Context, private val config: Config) {
 
     /**
      * Browse for Home Assistant's own zeroconf advertisement (`_home-assistant._tcp.local.`) and
-     * return its IPv4 — used to default the MQTT broker to `tcp://<ha-ip>:1883` when none is set.
-     * Blocking up to [timeoutMs]; call off the main thread. Reuses the running JmDNS + multicast lock.
+     * return the IPv4 of one that actually has the MQTT port (1883) open — so on a LAN with more than
+     * one HA instance we pick the one running a broker, and skip an HA whose broker lives elsewhere.
+     * Falls back to the first HA host if none probe open. Used to default the MQTT broker to
+     * `tcp://<ha-ip>:1883` when none is set. Blocking up to [timeoutMs]; call off the main thread.
      */
     fun discoverHaIp(timeoutMs: Long = 4000): String? {
         val dns = jmdns ?: return null
-        return runCatching {
+        val ips = runCatching {
             dns.list("_home-assistant._tcp.local.", timeoutMs)
-                ?.firstNotNullOfOrNull { it.inet4Addresses?.firstOrNull()?.hostAddress }
-        }.getOrNull().also { Log.i(TAG, "HA mDNS discovery -> ${it ?: "none found"}") }
+                ?.mapNotNull { it.inet4Addresses?.firstOrNull()?.hostAddress }?.distinct() ?: emptyList()
+        }.getOrDefault(emptyList())
+        val chosen = ips.firstOrNull { mqttPortOpen(it) } ?: ips.firstOrNull()
+        Log.i(TAG, "HA mDNS discovery: hosts=$ips -> ${chosen ?: "none found"}")
+        return chosen
     }
+
+    /** True if TCP 1883 accepts a connection on [ip] within [timeoutMs] (the MQTT broker is there). */
+    private fun mqttPortOpen(ip: String, port: Int = 1883, timeoutMs: Int = 600): Boolean =
+        runCatching {
+            java.net.Socket().use { it.connect(java.net.InetSocketAddress(ip, port), timeoutMs) }; true
+        }.getOrDefault(false)
 
     // Bind JmDNS to the panel's real LAN address. The old WifiManager.connectionInfo path returns
     // 0 on Ethernet panels (→ 127.0.0.1, which HA zeroconf can't reach), so enumerate interfaces.
