@@ -184,6 +184,37 @@ The build is pinned to a conservative AGP 8.7 / Kotlin 2.0 / Gradle 8.10 combo f
 first-run CI. Newer AGP/Kotlin is fine to adopt during the v0.x line — versions live in
 [`gradle/libs.versions.toml`](gradle/libs.versions.toml).
 
+### Signing — what forkers need to know
+
+You don't need to configure signing to build and run ha-paneld. Two cases:
+
+- **Dev / fork builds** are signed with the **committed `debug.keystore`** (password `android`). It's
+  in the repo on purpose — not a secret — so every build (yours, mine, CI's) shares one signature.
+  That's what lets `install -r` update a panel in place without uninstalling. Just build and install.
+- **Official releases** are signed with a private key held in GitHub Actions secrets
+  (`ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`).
+  A fork won't have those, so a tagged release in your fork falls back to a **debug-signed** APK —
+  fine for personal use.
+
+> [!IMPORTANT]
+> Android refuses to update an installed app with an APK signed by a **different** key. So you cannot
+> install your own debug-signed build over an installed *official* (release-signed) build, or vice
+> versa — `adb`/the installer rejects it with a signature mismatch. Uninstall first
+> (`adb uninstall io.github.maxlyth.hapaneld`), then install the other build. Uninstalling clears the
+> panel's saved config, so re-run provisioning afterwards. This is the one thing that trips people up.
+
+**Signing your own fork's releases (optional):**
+
+```sh
+keytool -genkeypair -storetype PKCS12 -keystore release.jks -alias ha-paneld \
+  -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=ha-paneld"
+base64 -w0 release.jks      # paste the output into the ANDROID_KEYSTORE_BASE64 repo secret
+```
+
+Use one password for both `ANDROID_KEYSTORE_PASSWORD` and `ANDROID_KEY_PASSWORD`, and `ha-paneld`
+(your alias) for `ANDROID_KEY_ALIAS`. Back up `release.jks` and the password safely — losing them
+means you can never publish an in-place update again. Never commit the keystore (`*.jks` is gitignored).
+
 ## Status & roadmap
 
 **v0.4.1 (preview)** — validated across the panel fleet: Sonoff NSPanel Pro (PX30, Android 8.1),
