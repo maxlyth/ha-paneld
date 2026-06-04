@@ -69,6 +69,9 @@ class PaneldServer(
                 get("/info.css") {
                     call.respondText(asset("info.css"), ContentType.Text.CSS)
                 }
+                get("/icon.svg") {
+                    call.respondText(asset("icon.svg"), ContentType.Image.SVG)
+                }
                 // Live proximity state for the tuning UI (raw never goes to HA; it lives here).
                 get("/proximity") {
                     call.respondText(sensors.proximityJson(), ContentType.Application.Json)
@@ -213,9 +216,10 @@ class PaneldServer(
             """<div class="setup">⚠ This panel isn't set up yet — <a href="#config">set $what</a> below.</div>"""
         } else ""
         val rows = info().entries.joinToString("\n") { (k, v) ->
-            // Link the ha-paneld version to its GitHub releases page.
+            // Version: plain text + a small "open releases" icon (a hyperlinked version reads ugly).
             val cell = if (k == "ha-paneld") {
-                """<a href="$RELEASES_URL" target="_blank" rel="noopener">${esc(v)}</a>"""
+                """${esc(v)} <a class="ext" href="$RELEASES_URL" target="_blank" rel="noopener" """ +
+                    """title="Releases" aria-label="Releases"><svg viewBox="0 0 24 24"><path d="$EXT_ICON"/></svg></a>"""
             } else {
                 esc(v)
             }
@@ -229,37 +233,34 @@ class PaneldServer(
         return """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>ha-paneld · $pid</title>
+<link rel="icon" href="/icon.svg">
 <link rel="stylesheet" href="/info.css"></head><body><div class="wrap">
-<h1>ha-paneld <small>· $pid</small></h1>
+<div class="hdr"><h1>ha-paneld <small>· $pid</small></h1>
+ <a class="gh" href="$REPO_URL" target="_blank" rel="noopener" title="ha-paneld on GitHub" aria-label="GitHub"><svg viewBox="0 0 24 24"><path d="$GH_ICON"/></svg></a></div>
 $setupBanner
-<h2>Panel information</h2>
-<table>
+<div class="cards">
+<div class="card"><h2>Panel information</h2><table>
 $rows
-</table>
-<h2>Capabilities</h2>
-<table>
+</table></div>
+<div class="card"><h2>Capabilities</h2><table>
 $capRows
 </table>
 <p class="note"><a href="/diag" target="_blank" style="color:#9cf">⭳ Diagnostics dump</a> — a copy-paste
-report of this panel's hardware, firmware, SELinux, su and node probes. Paste it into a bug report so
-the maintainer can help with your hardware/firmware combination without owning it.</p>
-<h2>Responsiveness <small id="smhdr" style="color:#8a8;font-weight:400"></small></h2>
-<canvas id="smchart" width="600" height="130"
- style="width:100%;max-width:600px;height:130px;background:#181818;border-radius:8px;display:block;margin-bottom:6px"></canvas>
-<div style="font-size:.72rem;color:#8a8;margin-bottom:6px">dashboard main-thread CPU (% of one core), over time ·
- <span style="color:#48c774">▬</span> snappy under 50% · <span style="color:#d9a528">▬</span> maxed over 85%</div>
-<table id="smtbl"><tr><td style="color:#888">measuring…</td></tr></table>
-<h2>Performance <small id="perfage" style="color:#8a8;font-weight:400"></small></h2>
-<canvas id="perfchart" width="600" height="96"
- style="width:100%;max-width:600px;background:#181818;border-radius:8px;display:block;margin-bottom:8px"></canvas>
-<div style="font-size:.75rem;color:#8a8;margin-bottom:6px">
- <span style="color:#4a9eff">■</span> CPU&nbsp;&nbsp;<span style="color:#48c774">■</span> RAM&nbsp;&nbsp;<span style="color:#f5a623">■</span> GPU (% used) · ~4&nbsp;min</div>
-<table id="perf"><tr><td style="color:#888">sampling…</td></tr></table>
-<table id="topproc" style="margin-top:12px"><tr><td style="color:#888">top processes…</td></tr></table>
-<h2>Proximity tuning <small id="proxstate" style="color:#8a8;font-weight:400"></small></h2>
+report of this panel's hardware, firmware, SELinux, su and node probes for bug reports.</p></div>
+<div class="card"><h2>Responsiveness <small id="smhdr"></small></h2>
+<canvas id="smchart" width="600" height="130" style="height:130px"></canvas>
+<div class="leg">dashboard main-thread CPU (% of one core) ·
+ <span style="color:#48c774">▬</span> snappy &lt;50% · <span style="color:#d9a528">▬</span> maxed &gt;85%</div>
+<table id="smtbl"><tr><td style="color:#888">measuring…</td></tr></table></div>
+<div class="card"><h2>Performance <small id="perfage"></small></h2>
+<canvas id="perfchart" width="600" height="96" style="height:96px"></canvas>
+<div class="leg"><span style="color:#4a9eff">■</span> CPU&nbsp;&nbsp;<span style="color:#48c774">■</span> RAM&nbsp;&nbsp;<span style="color:#f5a623">■</span> GPU (% used) · ~4&nbsp;min</div>
+<table id="perf"><tr><td style="color:#888">sampling…</td></tr></table></div>
+<div class="card"><h2>Top processes <small>· by CPU</small></h2>
+<table class="dt" id="topproc"><tr><td style="color:#888">top processes…</td></tr></table></div>
+<div class="card"><h2>Proximity tuning <small id="proxstate"></small></h2>
 <div id="proxbox" style="display:none">
-<canvas id="proxgauge" width="600" height="46" class="gradedonly"
- style="width:100%;max-width:600px;background:#181818;border-radius:8px;display:block;margin-bottom:6px"></canvas>
+<canvas id="proxgauge" width="600" height="46" class="gradedonly" style="height:46px"></canvas>
 <div style="font-size:.85rem;margin-bottom:8px">raw <b id="proxraw" style="color:#4a9eff">–</b>
  <span id="proxthwrap" class="gradedonly">· threshold <b id="proxth">–</b></span> · state <b id="proxnear">–</b></div>
 <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;font-size:.85rem;margin-bottom:8px">
@@ -276,13 +277,13 @@ the maintainer can help with your hardware/firmware combination without owning i
   oninput="document.getElementById('proxth').textContent=(+this.value).toFixed(1)"
   onchange="proxThSet(this.value)"></label>
 <p id="proxhint" class="note"></p>
-</div>
-<h2>WebView debugging <small id="insthdr" style="color:#8a8;font-weight:400"></small></h2>
+</div></div>
+<div class="card"><h2>WebView debugging <small id="insthdr"></small></h2>
 <div style="display:flex;gap:8px;margin-bottom:4px">
  <button type="button" class="pbtn" onclick="inspStart()">Enable</button>
  <button type="button" class="pbtn" onclick="inspStop()">Stop</button></div>
-<p class="note" id="insthint"></p>
-<h2 id="config">Configuration</h2>
+<p class="note" id="insthint"></p></div>
+<div class="card"><h2 id="config">Configuration</h2>
 <form method="post" action="/config">
  <label>Panel id <small>(entity_ids / MQTT topics)</small>
   <input name="panel_id" value="$pid" pattern="[a-z0-9_]+" title="lowercase letters, digits, underscore" required></label>
@@ -298,16 +299,15 @@ the maintainer can help with your hardware/firmware combination without owning i
   <input name="mqtt_user" value="${esc(config.mqttUser)}" placeholder="(optional)" autocomplete="off"></label>
  <label>MQTT password
   <input name="mqtt_password" type="password" value="" placeholder="(unchanged)" autocomplete="new-password"></label>
- <label>Dashboard package <small>(for the Reload button; blank = disabled)</small>
+ <label>Dashboard package <small>(Reload button; blank = auto-detect Companion)</small>
   <input name="dashboard_package" value="${esc(config.dashboardPackage)}" placeholder="io.homeassistant.companion.android"></label>
- <label>Launcher package <small>(for the Launcher button; blank = auto-detect)</small>
+ <label>Launcher package <small>(blank = auto-detect)</small>
   <input name="launcher_package" value="${esc(config.launcherPackage)}" placeholder="auto"></label>
  <button type="submit">Save</button>
 </form>
-<p class="note">Leave the broker blank to run HTTP/TTS-only (MQTT disabled). The password field is
-never shown — leave it blank to keep the current one. Saving reconnects MQTT and re-publishes Home
-Assistant discovery; changing the panel id may leave the old device in HA to remove manually.
-Served over plain HTTP on the LAN.</p>
+<p class="note">Blank broker = HTTP/TTS-only (MQTT disabled). Password never shown — blank keeps the current one.
+Changing the panel id may leave the old device in HA to remove manually.</p></div>
+</div>
 <script src="/info.js"></script>
 </div></body></html>"""
     }
@@ -345,5 +345,9 @@ Served over plain HTTP on the LAN.</p>
     companion object {
         private const val TAG = "ha-paneld/http"
         private const val RELEASES_URL = "https://github.com/maxlyth/ha-paneld/releases"
+        private const val REPO_URL = "https://github.com/maxlyth/ha-paneld"
+        // GitHub mark (official, CC0 simple-icons) + Material "open in new" glyph — icon links in the UI.
+        private const val GH_ICON = "M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"
+        private const val EXT_ICON = "M14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3m-2 16H5V5h7V3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2v-7h-2v7z"
     }
 }

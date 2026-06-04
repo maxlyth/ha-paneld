@@ -1,17 +1,35 @@
 body{font-family:system-ui,-apple-system,sans-serif;margin:0;background:#111;color:#eee}
-.wrap{max-width:680px;margin:0 auto;padding:20px}
+.wrap{max-width:1400px;margin:0 auto;padding:20px}              /* cap + centre: ~3 cols max on 4K */
+.hdr{display:flex;align-items:center;justify-content:space-between;gap:12px}
 h1{font-size:1.3rem;margin:0 0 .2rem} h1 small{color:#9af;font-weight:400}
-h2{font-size:.95rem;margin:1.6rem 0 .4rem;color:#9cf;text-transform:uppercase;letter-spacing:.04em}
+h2{font-size:.95rem;margin:0 0 .5rem;color:#9cf;text-transform:uppercase;letter-spacing:.04em}
+h2 small{text-transform:none;letter-spacing:0;color:#8a8;font-weight:400}
+.gh svg{width:24px;height:24px;fill:#7c8a99}
+.gh:hover svg{fill:#eee}
+.ext svg{width:14px;height:14px;fill:#9cf;vertical-align:-2px;margin-left:3px}
+.ext:hover svg{fill:#fff}
+/* JS masonry: cards distributed shortest-column-first into flex columns (info.js) — gap-free. */
+.cards{display:flex;gap:18px;align-items:flex-start}
+.col{display:flex;flex-direction:column;gap:18px;flex:1 1 0;min-width:0}
+.card{background:#181818;border:1px solid #242424;border-radius:12px;padding:14px 16px}
 table{border-collapse:collapse;width:100%}
-th,td{text-align:left;padding:7px 8px;border-bottom:1px solid #2a2a2a;vertical-align:top}
-th{color:#9af;width:42%;font-weight:600}
-form{margin-top:10px;display:flex;flex-direction:column;gap:12px;max-width:380px}
-label{display:flex;flex-direction:column;gap:4px;font-size:.8rem;color:#9af}
-input,button{font-size:1rem;padding:9px 12px;border-radius:8px;border:1px solid #444;background:#1c1c1c;color:#eee}
-button{background:#2557a7;border-color:#2557a7;cursor:pointer;align-self:flex-start;padding:9px 22px}
-.note{color:#8a8;margin-top:10px;font-size:.85rem}
+th,td{text-align:left;padding:6px 8px;border-bottom:1px solid #2a2a2a;vertical-align:top;font-size:.9rem}
+th{color:#9af;width:46%;font-weight:600}
+canvas{width:100%;display:block;background:#181818;border-radius:8px;margin-bottom:6px}
+.leg{font-size:.72rem;color:#8a8;margin-bottom:6px}
+/* sub-heading + data table (column headers) so an in-card table reads as its own thing */
+.sub{margin:14px 0 2px;padding-top:10px;border-top:1px solid #2a2a2a;font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;color:#9cf}
+.dt th{font-size:.68rem;text-transform:uppercase;letter-spacing:.03em;color:#7c8a99;font-weight:600;width:auto;border-bottom:2px solid #333}
+.dt td{color:#ccc;font-weight:400}
+.dt .num{text-align:right;width:32%}
+form{display:flex;flex-direction:column;gap:10px}
+label{display:flex;flex-direction:column;gap:4px;font-size:.78rem;color:#9af}
+label small{color:#6a7a8a}
+input,button{font-size:.95rem;padding:8px 11px;border-radius:8px;border:1px solid #444;background:#1c1c1c;color:#eee}
+button{background:#2557a7;border-color:#2557a7;cursor:pointer;align-self:flex-start}
+.note{color:#8a8;margin-top:8px;font-size:.82rem}
 .binary .gradedonly{display:none}
 .pbtn{font-size:.8rem;padding:6px 12px;background:#1c1c1c;border-color:#444;cursor:pointer}
 .pbtn.on{background:#2557a7;border-color:#2557a7}
-.setup{background:#3a2f10;border:1px solid #7a5a2a;border-radius:8px;padding:12px 14px;margin:14px 0;color:#f5c451;font-size:.92rem}
+.setup{background:#3a2f10;border:1px solid #7a5a2a;border-radius:8px;padding:12px 14px;margin:10px 0 0;color:#f5c451;font-size:.92rem}
 .setup a{color:#ffd97a;font-weight:600}

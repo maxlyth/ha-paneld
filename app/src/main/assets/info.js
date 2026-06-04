@@ -41,10 +41,10 @@ async function perf(){
   document.getElementById('perf').innerHTML=h;
   var tp=document.getElementById('topproc');
   if(d.top&&d.top.length){
-   var t='<tr><th>Top process</th><th>% total CPU</th></tr>';
-   d.top.forEach(function(p){t+='<tr><td style="color:#ccc;font-weight:400">'+p.name+'</td><td>'+p.cpu+'%</td></tr>';});
+   var t='<tr><th>Process</th><th class="num">% CPU</th></tr>';
+   d.top.forEach(function(p){t+='<tr><td>'+p.name+'</td><td class="num">'+p.cpu+'%</td></tr>';});
    tp.innerHTML=t;
-  }else tp.innerHTML='<tr><th>Top processes</th><td style="color:#888">needs root (su)</td></tr>';
+  }else tp.innerHTML='<tr><td style="color:#888">needs root (su)</td></tr>';
   var r=d.render,smh=document.getElementById('smhdr'),smt=document.getElementById('smtbl');
   if(r==null){smh.textContent='· needs root';smt.innerHTML=row('Responsiveness','<span style="color:#888">needs root to measure</span>');drawSm([]);}
   else if(r.status==='no-renderer'){smh.textContent='· waiting';drawSm(r.hist||[]);smt.innerHTML=row('Responsiveness','<span style="color:#888">no dashboard WebView detected yet</span>');}
@@ -121,3 +121,19 @@ async function insp(){try{var d=await (await fetch('/inspect')).json();inspApply
 function inspStart(){fetch('/inspect/start',{method:'POST'}).then(function(r){return r.json();}).then(inspApply).catch(function(){});}
 function inspStop(){fetch('/inspect/stop',{method:'POST'}).then(function(r){return r.json();}).then(inspApply).catch(function(){});}
 insp();
+// Masonry: distribute .card elements into N flex columns (N = width / ~418), shortest-column-first.
+// Re-distributes only when the column COUNT changes (between breakpoints the flex columns just widen).
+var _mN=-1;
+function masonry(){
+ var c=document.querySelector('.cards'); if(!c)return;
+ var n=Math.max(1,Math.floor((c.clientWidth+18)/(400+18)));
+ if(n===_mN)return; _mN=n;
+ var cards=[].slice.call(c.querySelectorAll('.card'));
+ cards.forEach(function(k){k.parentNode.removeChild(k);});
+ [].slice.call(c.querySelectorAll('.col')).forEach(function(x){c.removeChild(x);});
+ var cols=[];
+ for(var i=0;i<n;i++){var d=document.createElement('div');d.className='col';c.appendChild(d);cols.push(d);}
+ cards.forEach(function(k){var m=0;for(var i=1;i<n;i++){if(cols[i].offsetHeight<cols[m].offsetHeight)m=i;}cols[m].appendChild(k);});
+}
+window.addEventListener('resize',function(){clearTimeout(window._mt);window._mt=setTimeout(masonry,120);});
+masonry();
