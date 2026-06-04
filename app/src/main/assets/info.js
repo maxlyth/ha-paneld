@@ -149,7 +149,13 @@ function masonry(){
  [].slice.call(c.querySelectorAll('.col')).forEach(function(x){c.removeChild(x);});
  var cols=[];
  for(var i=0;i<n;i++){var d=document.createElement('div');d.className='col';c.appendChild(d);cols.push(d);}
- cards.forEach(function(k){var m=0;for(var i=1;i<n;i++){if(cols[i].offsetHeight<cols[m].offsetHeight)m=i;}cols[m].appendChild(k);});
+ // The Configuration card is much taller than the rest; give it its own (rightmost) column when there
+ // is more than one, so the other cards balance among the remaining columns instead of one towering.
+ var cfg=null,rest=[];
+ cards.forEach(function(k){if(k.querySelector('#config'))cfg=k;else rest.push(k);});
+ var pack=(n>=2&&cfg)?cols.slice(0,n-1):cols;
+ rest.forEach(function(k){var m=0;for(var i=1;i<pack.length;i++){if(pack[i].offsetHeight<pack[m].offsetHeight)m=i;}pack[m].appendChild(k);});
+ if(cfg)(n>=2?cols[n-1]:pack[0]).appendChild(cfg);
 }
 window.addEventListener('resize',function(){clearTimeout(window._mt);window._mt=setTimeout(masonry,120);});
 masonry();
