@@ -71,7 +71,7 @@ class MainActivity : AppCompatActivity() {
             "This device is a Home Assistant wall panel. ha-paneld runs in the background so Home " +
                 "Assistant can control the screen, LED, buttons and speaker and read its sensors — all " +
                 "over your local network. The dashboard itself runs in the Home Assistant app.",
-            14f, "#c8ccd2", padBottom = 22, maxWidth = 380,
+            14f, "#c8ccd2", padBottom = 22,
         ))
         // The full URL — tappable here, and readable so it can be typed on another device.
         root.addView(TextView(this).apply {
@@ -86,13 +86,17 @@ class MainActivity : AppCompatActivity() {
         // Only offer the HA app button when the Home Assistant Companion app is actually installed.
         companionPackage()?.let { root.addView(button("Open Home Assistant app") { openDashboard() }) }
 
+        // Cap the content column so the paragraph wraps instead of stretching across a wide panel
+        // (TextView.maxWidth proved unreliable on these devices), and centre it.
+        val colW = minOf(resources.displayMetrics.widthPixels - dp(48), dp(512))
         return ScrollView(this).apply {
             setBackgroundColor(Color.parseColor("#111111"))
             isFillViewport = true
             addView(
                 root,
-                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-                    .apply { gravity = Gravity.CENTER },
+                android.widget.FrameLayout.LayoutParams(
+                    colW, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER_HORIZONTAL,
+                ),
             )
         }
     }
