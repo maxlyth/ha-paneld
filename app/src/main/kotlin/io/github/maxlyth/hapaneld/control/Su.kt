@@ -36,6 +36,23 @@ object Su {
         return false
     }
 
+    /** Run [cmd] as root and return its stdout, or null if no su form works / it exits non-zero. */
+    @Synchronized
+    fun runOutput(cmd: String): String? {
+        val forms = if (form in 0..1) intArrayOf(form) else intArrayOf(0, 1)
+        for (f in forms) {
+            try {
+                val p = Runtime.getRuntime().exec(argv(f, cmd))
+                val out = p.inputStream.bufferedReader().readText() // read before waitFor (avoid deadlock)
+                if (p.waitFor() == 0) { form = f; return out }
+            } catch (e: Exception) {
+                Log.d(TAG, "su out form $f failed for: $cmd", e)
+            }
+        }
+        if (form == -1) form = 2
+        return null
+    }
+
     /** Fire [cmd] as root without waiting (for commands like `reboot` that kill the process). */
     fun fireAndForget(cmd: String) {
         val forms = if (form in 0..1) intArrayOf(form) else intArrayOf(0, 1)

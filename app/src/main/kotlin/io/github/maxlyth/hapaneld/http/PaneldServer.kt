@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import io.github.maxlyth.hapaneld.AudioPlayer
 import io.github.maxlyth.hapaneld.Config
+import io.github.maxlyth.hapaneld.sensors.SensorReporter
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.call
@@ -38,6 +39,7 @@ class PaneldServer(
     private val cacheDir: File,
     private val scope: CoroutineScope,
     private val appContext: Context,
+    private val sensors: SensorReporter,
     // Called after this server has written new settings to [config]; the service rebuilds MQTT/mDNS.
     private val onReconfigure: () -> Unit,
     private val info: () -> Map<String, String>,
@@ -59,37 +61,94 @@ class PaneldServer(
                 get("/diag") {
                     call.respondText(DiagReader.dump(appContext), ContentType.Text.Plain)
                 }
+                // Live proximity state for the tuning UI (raw never goes to HA; it lives here).
+                get("/proximity") {
+                    call.respondText(sensors.proximityJson(), ContentType.Application.Json)
+                }
+                // step=near|far -> snapshot the current raw into that calibration slot.
+                post("/proximity/capture") {
+                    val step = call.receiveParameters()["step"]
+                    val raw = sensors.lastRaw
+                    when {
+                        step != "near" && step != "far" ->
+                            call.respondText("bad-step\n", status = HttpStatusCode.BadRequest)
+                        raw.isNaN() ->
+                            call.respondText("no-reading\n", status = HttpStatusCode.BadRequest)
+                        else -> {
+                            config.captureProximity(step, raw)
+                            sensors.reevaluate()
+                            call.respondText(sensors.proximityJson(), ContentType.Application.Json)
+                        }
+                    }
+                }
+                // v=<float> -> manual threshold fine-tune (overrides the captured midpoint).
+                post("/proximity/threshold") {
+                    val v = call.receiveParameters()["v"]?.toFloatOrNull()
+                    if (v == null) {
+                        call.respondText("bad-value\n", status = HttpStatusCode.BadRequest)
+                    } else {
+                        config.setProximityThreshold(v)
+                        sensors.reevaluate()
+                        call.respondText(sensors.proximityJson(), ContentType.Application.Json)
+                    }
+                }
+                // s=HIGH|MEDIUM|LOW -> hysteresis band width (flap resistance).
+                post("/proximity/sensitivity") {
+                    config.setProximitySensitivity(call.receiveParameters()["s"].orEmpty())
+                    sensors.reevaluate()
+                    call.respondText(sensors.proximityJson(), ContentType.Application.Json)
+                }
+                post("/proximity/reset") {
+                    config.resetProximityCalibration()
+                    sensors.reevaluate()
+                    call.respondText(sensors.proximityJson(), ContentType.Application.Json)
+                }
+                // Machine-readable config for fleet management (password redacted to a boolean).
+                get("/config") {
+                    call.respondText(configJson(), ContentType.Application.Json)
+                }
                 post("/config") {
                     val p = call.receiveParameters()
-                    val slug = p["panel_id"].orEmpty().lowercase()
-                        .replace(Regex("[^a-z0-9]+"), "_").trim('_')
-                    if (slug.isEmpty()) {
-                        call.respondText("invalid panel_id\n", status = HttpStatusCode.BadRequest)
-                        return@post
+                    // Partial-merge: apply ONLY keys present in the request, so a fleet tool can set a
+                    // single field without clobbering the rest. The UI form sends every key (blank =
+                    // clear), so its full-replace behaviour is preserved.
+                    p["panel_id"]?.let {
+                        val slug = it.lowercase().replace(Regex("[^a-z0-9]+"), "_").trim('_')
+                        if (slug.isEmpty()) {
+                            call.respondText("invalid panel_id\n", status = HttpStatusCode.BadRequest)
+                            return@post
+                        }
+                        config.setPanelId(slug)
                     }
-                    // Persist directly (this server holds Config); the service then reconfigures.
-                    config.setPanelId(slug)
-                    config.setFriendlyName(p["friendly_name"].orEmpty().trim())
-                    config.setMqtt(
-                        p["mqtt_broker"].orEmpty().trim(),
-                        p["mqtt_user"].orEmpty().trim(),
-                        // Blank password field => keep the stored one (the form never echoes it).
-                        p["mqtt_password"].orEmpty().ifEmpty { null },
+                    p["friendly_name"]?.let { config.setFriendlyName(it.trim()) }
+                    p["dashboard_package"]?.let { config.setDashboardPackage(it.trim()) }
+                    p["launcher_package"]?.let { config.setLauncherPackage(it.trim()) }
+                    val mfr = p["manufacturer"]?.trim()
+                    val mdl = p["model"]?.trim()
+                    if (mfr != null || mdl != null) config.setHardware(
+                        (mfr ?: config.manufacturer).ifEmpty { "ha-paneld" },
+                        (mdl ?: config.model).ifEmpty { "panel agent" },
                     )
-                    config.setDashboardPackage(p["dashboard_package"].orEmpty().trim())
-                    config.setLauncherPackage(p["launcher_package"].orEmpty().trim())
-                    config.setHardware(
-                        p["manufacturer"].orEmpty().trim().ifEmpty { "ha-paneld" },
-                        p["model"].orEmpty().trim().ifEmpty { "panel agent" },
+                    val broker = p["mqtt_broker"]?.trim()
+                    val user = p["mqtt_user"]?.trim()
+                    val pw = p["mqtt_password"]?.takeIf { it.isNotEmpty() } // blank/absent => unchanged
+                    if (broker != null || user != null || pw != null) config.setMqtt(
+                        broker ?: config.mqttBroker, user ?: config.mqttUser, pw,
                     )
                     onReconfigure()
-                    call.respondText(
-                        "<!doctype html><meta charset=utf-8>" +
-                            "<meta http-equiv=refresh content='2;url=/'>" +
-                            "<body style='font-family:system-ui;background:#111;color:#eee;padding:20px'>" +
-                            "settings saved — reconnecting…</body>",
-                        ContentType.Text.Html,
-                    )
+                    // Fleet tools (Accept: application/json) get the new config back; the browser form
+                    // gets an HTML redirect to the info page.
+                    if (call.request.headers["Accept"]?.contains("application/json") == true) {
+                        call.respondText(configJson(), ContentType.Application.Json)
+                    } else {
+                        call.respondText(
+                            "<!doctype html><meta charset=utf-8>" +
+                                "<meta http-equiv=refresh content='2;url=/'>" +
+                                "<body style='font-family:system-ui;background:#111;color:#eee;padding:20px'>" +
+                                "settings saved — reconnecting…</body>",
+                            ContentType.Text.Html,
+                        )
+                    }
                 }
                 get("/health") {
                     call.respondText("ha-paneld ${Config.VERSION} panel=${config.panelId}\n")
@@ -149,6 +208,8 @@ class PaneldServer(
  input,button{font-size:1rem;padding:9px 12px;border-radius:8px;border:1px solid #444;background:#1c1c1c;color:#eee}
  button{background:#2557a7;border-color:#2557a7;cursor:pointer;align-self:flex-start;padding:9px 22px}
  .note{color:#8a8;margin-top:10px;font-size:.85rem}
+ .pbtn{font-size:.8rem;padding:6px 12px;background:#1c1c1c;border-color:#444;cursor:pointer}
+ .pbtn.on{background:#2557a7;border-color:#2557a7}
 </style></head><body><div class="wrap">
 <h1>ha-paneld <small>· $pid</small></h1>
 <h2>Panel information</h2>
@@ -168,6 +229,27 @@ the maintainer can help with your hardware/firmware combination without owning i
 <div style="font-size:.75rem;color:#8a8;margin-bottom:6px">
  <span style="color:#4a9eff">■</span> CPU&nbsp;&nbsp;<span style="color:#48c774">■</span> RAM&nbsp;&nbsp;<span style="color:#f5a623">■</span> GPU (% used) · ~4&nbsp;min</div>
 <table id="perf"><tr><td style="color:#888">sampling…</td></tr></table>
+<h2>Proximity tuning <small id="proxstate" style="color:#8a8;font-weight:400"></small></h2>
+<div id="proxbox" style="display:none">
+<canvas id="proxgauge" width="600" height="46"
+ style="width:100%;max-width:600px;background:#181818;border-radius:8px;display:block;margin-bottom:6px"></canvas>
+<div style="font-size:.85rem;margin-bottom:8px">raw <b id="proxraw" style="color:#4a9eff">–</b>
+ · threshold <b id="proxth">–</b> · state <b id="proxnear">–</b></div>
+<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;font-size:.85rem;margin-bottom:8px">
+ <span style="color:#9af">Capture:</span>
+ <button type="button" class="pbtn" onclick="proxCap('near')">Near</button>
+ <button type="button" class="pbtn" onclick="proxCap('far')">Far</button>
+ <span style="color:#9af;margin-left:10px">Sensitivity:</span>
+ <button type="button" class="pbtn psen" data-s="HIGH" onclick="proxSen('HIGH')">High</button>
+ <button type="button" class="pbtn psen" data-s="MEDIUM" onclick="proxSen('MEDIUM')">Med</button>
+ <button type="button" class="pbtn psen" data-s="LOW" onclick="proxSen('LOW')">Low</button>
+ <button type="button" class="pbtn" style="margin-left:10px" onclick="proxReset()">Reset</button></div>
+<label style="font-size:.8rem;color:#9af">Threshold fine-tune
+ <input type="range" id="proxslider" min="0" max="100" step="0.1" style="width:100%"
+  oninput="document.getElementById('proxth').textContent=(+this.value).toFixed(1)"
+  onchange="proxThSet(this.value)"></label>
+<p id="proxhint" class="note"></p>
+</div>
 <h2>Configuration</h2>
 <form method="post" action="/config">
  <label>Panel id <small>(entity_ids / MQTT topics)</small>
@@ -223,17 +305,82 @@ async function perf(){
   h+=row('RAM',d.memUsedMb+' / '+d.memTotalMb+' MB ('+ramPct+'%)');
   if(d.load&&d.load.length)h+=row('Load avg',d.load.join('  '));
   if(d.tempC!=null)h+=row('Temperature',d.tempC.toFixed(1)+' °C');
+  if(d.top){
+   h+=row('<span style="color:#9af">Top processes</span>','<span style="color:#888">%CPU</span>');
+   d.top.forEach(function(p){h+=row('<span style="font-weight:400;color:#ccc">'+p.name+'</span>',p.cpu+'%');});
+  }else h+=row('Top processes','<span style="color:#888">needs root</span>');
   document.getElementById('perf').innerHTML=h;
   document.getElementById('perfage').textContent='· live';
  }catch(e){document.getElementById('perfage').textContent='· unavailable';}
 }
 perf();setInterval(perf,2000);
+var proxMax=100,proxDrag=false;
+function proxDraw(d){
+ var c=document.getElementById('proxgauge'),x=c.getContext('2d'),W=c.width,H=c.height;
+ x.clearRect(0,0,W,H);
+ var gm=Math.max(d.max||0,d.nearRaw||0,d.farRaw||0,d.raw||0,1)*1.1;proxMax=gm;
+ function px(v){return Math.max(0,Math.min(W,(v/gm)*W));}
+ if(d.calibrated&&d.threshold!=null){
+  var tx=px(d.threshold);
+  x.fillStyle='rgba(74,158,255,0.13)';
+  if(d.nearBelow)x.fillRect(0,0,tx,H);else x.fillRect(tx,0,W-tx,H);
+  if(d.margin){x.fillStyle='rgba(245,166,35,0.20)';x.fillRect(px(d.threshold-d.margin),0,px(d.threshold+d.margin)-px(d.threshold-d.margin),H);}
+  x.strokeStyle='#f5a623';x.lineWidth=2;x.beginPath();x.moveTo(tx,0);x.lineTo(tx,H);x.stroke();
+ }
+ if(d.raw!=null){var rx=px(d.raw);x.fillStyle=d.near?'#48c774':'#888';x.beginPath();x.arc(rx,H/2,7,0,7);x.fill();}
+}
+function proxApply(d){
+ proxDraw(d);
+ document.getElementById('proxth').textContent=d.threshold==null?'–':d.threshold.toFixed(1);
+ document.getElementById('proxstate').textContent=d.calibrated?'· calibrated':'· uncalibrated (sensor default)';
+ document.querySelectorAll('.psen').forEach(function(b){b.className='pbtn psen'+(b.dataset.s===d.sensitivity?' on':'');});
+ document.getElementById('proxhint').textContent=d.indistinct?'⚠ near and far captures are too close — recapture with a clearer gap.':(d.calibrated?'':'Hold your hand at the panel and press Near, then move away and press Far.');
+}
+async function prox(){
+ try{
+  var d=await (await fetch('/proximity')).json();
+  var box=document.getElementById('proxbox'),st=document.getElementById('proxstate');
+  if(!d.present){box.style.display='none';st.textContent='· not present';return;}
+  box.style.display='block';
+  document.getElementById('proxraw').textContent=d.raw==null?'–':d.raw.toFixed(1);
+  var nb=document.getElementById('proxnear');nb.textContent=d.near?'NEAR':'FAR';nb.style.color=d.near?'#48c774':'#888';
+  if(!proxDrag){var s=document.getElementById('proxslider');s.max=proxMax.toFixed(1);if(d.threshold!=null)s.value=d.threshold;}
+  proxApply(d);
+ }catch(e){}
+}
+function proxPost(u,b){fetch(u,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:b}).then(function(r){return r.json();}).then(proxApply).catch(function(){});}
+function proxCap(s){proxPost('/proximity/capture','step='+s);}
+function proxSen(s){proxPost('/proximity/sensitivity','s='+s);}
+function proxReset(){proxPost('/proximity/reset','');}
+function proxThSet(v){proxDrag=false;proxPost('/proximity/threshold','v='+v);}
+(function(){var s=document.getElementById('proxslider');s.addEventListener('mousedown',function(){proxDrag=true;});s.addEventListener('touchstart',function(){proxDrag=true;});})();
+prox();setInterval(prox,400);
 </script>
 </div></body></html>"""
     }
 
     private fun esc(s: String): String = s
         .replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
+
+    /** Full config as JSON for fleet management. The MQTT password is never emitted — only a boolean
+     *  saying whether one is set. `http_port` is read-only (changing it needs a restart). */
+    private fun configJson(): String {
+        fun s(v: String) = "\"" + v.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+        return "{" +
+            "\"panel_id\":${s(config.panelId)}," +
+            "\"friendly_name\":${s(config.friendlyName)}," +
+            "\"manufacturer\":${s(config.manufacturer)}," +
+            "\"model\":${s(config.model)}," +
+            "\"http_port\":${config.httpPort}," +
+            "\"mqtt_broker\":${s(config.mqttBroker)}," +
+            "\"mqtt_user\":${s(config.mqttUser)}," +
+            "\"mqtt_password_set\":${config.mqttPassword.isNotEmpty()}," +
+            "\"dashboard_package\":${s(config.dashboardPackage)}," +
+            "\"launcher_package\":${s(config.launcherPackage)}," +
+            "\"version\":${s(Config.VERSION)}," +
+            "\"proximity\":${sensors.proximityJson()}" +
+            "}"
+    }
 
     companion object {
         private const val TAG = "ha-paneld/http"

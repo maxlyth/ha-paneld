@@ -85,6 +85,48 @@ class Config(context: Context) {
         prefs.edit().putString("manufacturer", manufacturer).putString("model", model).apply()
     }
 
+    // --- proximity calibration (raw values stay on-device & in the HTTP UI; only the derived
+    // binary is published to HA, so a graded ToF can't flood the recorder). The near/far captures
+    // absorb the cross-device scale + polarity inversion; the published binary is a Schmitt trigger
+    // whose dead-zone width comes from the sensitivity preset. ---
+
+    /** Hysteresis band width as a fraction of the near/far capture span (flap resistance). */
+    enum class ProxSensitivity(val fraction: Float) { HIGH(0.08f), MEDIUM(0.15f), LOW(0.30f) }
+
+    val proximityNearRaw: Float get() = prefs.getFloat("prox_near_raw", Float.NaN)
+    val proximityFarRaw: Float get() = prefs.getFloat("prox_far_raw", Float.NaN)
+    val proximityThreshold: Float get() = prefs.getFloat("prox_threshold", Float.NaN)
+    val proximityNearBelow: Boolean get() = prefs.getBoolean("prox_near_below", true)
+    val proximityCalibrated: Boolean
+        get() = !proximityNearRaw.isNaN() && !proximityFarRaw.isNaN() && !proximityThreshold.isNaN()
+    val proximitySensitivity: ProxSensitivity
+        get() = runCatching { ProxSensitivity.valueOf(prefs.getString("prox_sensitivity", "MEDIUM")!!) }
+            .getOrDefault(ProxSensitivity.MEDIUM)
+
+    /** Schmitt half-band in raw units = sensitivity × |near − far|. 0 when uncalibrated. */
+    val proximityMargin: Float
+        get() = if (proximityCalibrated)
+            proximitySensitivity.fraction * kotlin.math.abs(proximityNearRaw - proximityFarRaw) else 0f
+
+    /** Store one capture; when both exist, derive threshold (midpoint) + polarity (near = below?). */
+    fun captureProximity(step: String, raw: Float) {
+        prefs.edit().putFloat(if (step == "near") "prox_near_raw" else "prox_far_raw", raw).apply()
+        val n = proximityNearRaw; val f = proximityFarRaw
+        if (!n.isNaN() && !f.isNaN()) {
+            prefs.edit().putFloat("prox_threshold", (n + f) / 2f).putBoolean("prox_near_below", n < f).apply()
+        }
+    }
+
+    fun setProximityThreshold(v: Float) { prefs.edit().putFloat("prox_threshold", v).apply() }
+    fun setProximitySensitivity(s: String) {
+        runCatching { ProxSensitivity.valueOf(s) }.onSuccess {
+            prefs.edit().putString("prox_sensitivity", it.name).apply()
+        }
+    }
+    fun resetProximityCalibration() {
+        prefs.edit().remove("prox_near_raw").remove("prox_far_raw").remove("prox_threshold").apply()
+    }
+
     // --- last-known actuator state, re-applied/published on (re)connect so HA reflects reality ---
 
     /** Last navigated URL (published as the navigate state on connect; empty if never set). */

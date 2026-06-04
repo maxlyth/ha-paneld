@@ -1,5 +1,6 @@
 package io.github.maxlyth.hapaneld.http
 
+import io.github.maxlyth.hapaneld.control.Su
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -27,9 +28,17 @@ object PerfReader {
     private val gpuHist = ArrayDeque<Int>()
     @Volatile private var latestFields = """"cpu":0,"cores":[],"load":[],"freqMhz":[],"gpu":null,"gpuMhz":0,"tempC":null,"memUsedMb":0,"memTotalMb":0"""
 
+    // Top-5 processes by CPU (from `dumpsys cpuinfo`) — needs root, so probed once and sampled on a
+    // slower cadence than the 2s chart. Lets a user confirm the dashboard app dominates and spot
+    // parasite processes (e.g. a leftover vendor gateway). "null" when no root / unavailable.
+    @Volatile private var topJson = "null"
+    private var rootOk = false
+    private var tickCount = 0
+
     /** Start the sampling loop on [scope] (idempotent enough for a single service lifetime). */
     fun start(scope: CoroutineScope) {
         scope.launch {
+            rootOk = runCatching { Su.available() }.getOrDefault(false)
             while (isActive) {
                 runCatching { tick() }
                 delay(INTERVAL_MS)
@@ -37,9 +46,23 @@ object PerfReader {
         }
     }
 
-    /** Latest sample + history FIFO, as JSON, for `GET /perf`. */
+    /** Latest sample + history FIFO + top-5 procs, as JSON, for `GET /perf`. */
     fun json(): String = synchronized(lock) {
-        """{$latestFields,"hist":{"cpu":${cpuHist.toList()},"ram":${ramHist.toList()},"gpu":${gpuHist.toList()}}}"""
+        """{$latestFields,"top":$topJson,"hist":{"cpu":${cpuHist.toList()},"ram":${ramHist.toList()},"gpu":${gpuHist.toList()}}}"""
+    }
+
+    /** Top-5 processes by CPU via `dumpsys cpuinfo` (root). dumpsys pre-sorts descending. */
+    private fun sampleTop() {
+        val out = Su.runOutput("dumpsys cpuinfo") ?: return
+        val re = Regex("""^\s*([\d.]+)%\s+\d+/(\S+):""") // "<cpu>% <pid>/<name>:"
+        val procs = out.lineSequence().mapNotNull { re.find(it) }
+            .map { it.groupValues[2] to it.groupValues[1] } // name, cpu
+            .take(5).toList()
+        val json = if (procs.isEmpty()) "null"
+        else procs.joinToString(",", "[", "]") { (n, c) ->
+            """{"name":"${n.replace("\\", "").replace("\"", "")}","cpu":$c}"""
+        }
+        synchronized(lock) { topJson = json }
     }
 
     private fun push(q: ArrayDeque<Int>, v: Int) {
@@ -53,6 +76,7 @@ object PerfReader {
             .map { line -> line.trim().split(Regex("\\s+")).drop(1).map { it.toLongOrNull() ?: 0L }.toLongArray() }
 
     private fun tick() {
+        if (rootOk && tickCount++ % 5 == 0) runCatching { sampleTop() } // ~every 10s
         val stat = runCatching { readStat() }.getOrNull()
         val pct = ArrayList<Int>()
         val prev = prevStat
