@@ -30,6 +30,7 @@ doing what it does (and remains the dashboard host).
 | Hardware-button events | `event.<panel>_button` (a11y key capture) |
 | Ambient light / proximity (data only) | `sensor.<panel>_illuminance`, `binary_sensor.<panel>_proximity` |
 | Reload dashboard / reboot | `button.<panel>_reload`, `button.<panel>_reboot` |
+| Launcher / Home Assistant (bring a launcher or the HA dashboard forward) | `button.<panel>_launcher`, `button.<panel>_home` |
 | Panel info + config web page | `GET /` (the device "Visit" link) |
 
 > [!NOTE]
@@ -56,6 +57,8 @@ no YAML:
 | `binary_sensor.<panel>_proximity` | proximity (occupancy) | standard `SensorManager` `TYPE_PROXIMITY`; published only if present |
 | `button.<panel>_reload` | reload dashboard | force-stop + relaunch the configured dashboard package (root helper, else `su`) |
 | `button.<panel>_reboot` | reboot panel | root helper, else `su` |
+| `button.<panel>_launcher` | bring a launcher to the foreground | fires `CATEGORY_HOME` at a non-default launcher (or configured `launcher_package`), leaving the boot/default home app unchanged |
+| `button.<panel>_home` | bring the HA dashboard to the foreground | launches `dashboard_package` if set, else the default home app (the HA Companion) — the complement of the Launcher button |
 
 The device's display name (`configuration_url` "Visit" link, friendly name) and the LED/screen
 states are re-published on every (re)connect, and the MQTT client auto-reconnects, so HA stays in

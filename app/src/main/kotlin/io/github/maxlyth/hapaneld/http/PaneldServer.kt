@@ -69,6 +69,11 @@ class PaneldServer(
                         p["mqtt_password"].orEmpty().ifEmpty { null },
                     )
                     config.setDashboardPackage(p["dashboard_package"].orEmpty().trim())
+                    config.setLauncherPackage(p["launcher_package"].orEmpty().trim())
+                    config.setHardware(
+                        p["manufacturer"].orEmpty().trim().ifEmpty { "ha-paneld" },
+                        p["model"].orEmpty().trim().ifEmpty { "panel agent" },
+                    )
                     onReconfigure()
                     call.respondText(
                         "<!doctype html><meta charset=utf-8>" +
@@ -143,6 +148,10 @@ $rows
   <input name="panel_id" value="$pid" pattern="[a-z0-9_]+" title="lowercase letters, digits, underscore" required></label>
  <label>Friendly name <small>(HA device name)</small>
   <input name="friendly_name" value="${esc(config.friendlyName)}" placeholder="Office Dash"></label>
+ <label>Manufacturer <small>(HA device card)</small>
+  <input name="manufacturer" value="${esc(config.manufacturer)}" placeholder="Sonoff"></label>
+ <label>Model <small>(HA device card)</small>
+  <input name="model" value="${esc(config.model)}" placeholder="NSPanel Pro 120"></label>
  <label>MQTT broker
   <input name="mqtt_broker" value="${esc(config.mqttBroker)}" placeholder="tcp://192.168.1.10:1883"></label>
  <label>MQTT username
@@ -151,6 +160,8 @@ $rows
   <input name="mqtt_password" type="password" value="" placeholder="(unchanged)" autocomplete="new-password"></label>
  <label>Dashboard package <small>(for the Reload button; blank = disabled)</small>
   <input name="dashboard_package" value="${esc(config.dashboardPackage)}" placeholder="io.homeassistant.companion.android"></label>
+ <label>Launcher package <small>(for the Launcher button; blank = auto-detect)</small>
+  <input name="launcher_package" value="${esc(config.launcherPackage)}" placeholder="auto"></label>
  <button type="submit">Save</button>
 </form>
 <p class="note">Leave the broker blank to run HTTP/TTS-only (MQTT disabled). The password field is

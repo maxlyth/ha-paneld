@@ -8,10 +8,11 @@ import io.github.maxlyth.hapaneld.util.HelperClient
 /**
  * Screen on/off — vendor-free and **lock-free**.
  *
- * Preferred path: the root helper daemon powers the backlight via `bl_power` (a true hardware
- * off/on that leaves the device Awake, so there is NO keyguard and waking never asks for a PIN).
- * Fallback when no daemon is present: set Settings brightness to 0 / restore it — note this is only
- * a dim on panels that clamp a minimum backlight, not a true off.
+ * Tiers (first that works wins), all leaving the device Awake — no keyguard, no PIN on wake:
+ *  1. Root helper daemon — powers the backlight via `bl_power` (sysfs-LED panels, e.g. TPA10).
+ *  2. Direct `su` `bl_power` — for su-capable panels with no daemon (Sonoff PX30): a true
+ *     hardware backlight-off. (brightness 0 on these only dims — the backlight stays powered.)
+ *  3. Brightness 0 — last-resort dim for panels with neither daemon nor su.
  *
  * This deliberately avoids `DevicePolicyManager.lockNow()`, which turns the screen off via the
  * keyguard and therefore demands the device PIN on wake.
@@ -34,10 +35,14 @@ class ScreenController(
 
     fun sleep() {
         if (HelperClient.send("SCREEN OFF") == "OK") {
-            Log.d(TAG, "screen -> off (bl_power)")
+            Log.d(TAG, "screen -> off (daemon bl_power)")
             return
         }
-        // Fallback: no daemon — dim to 0 (best effort).
+        if (Su.run(blPower(false))) {
+            Log.d(TAG, "screen -> off (su bl_power)")
+            return
+        }
+        // Last resort: no daemon, no su — dim to 0 (only a dim on panels that clamp a minimum).
         val cur = brightness.getBrightness()
         if (cur > 0) savedLevel = cur
         brightness.setBrightness(0)
@@ -47,13 +52,25 @@ class ScreenController(
     fun wake() {
         if (HelperClient.send("SCREEN ON") == "OK") {
             pulseWake()
-            Log.d(TAG, "screen -> on (bl_power)")
+            Log.d(TAG, "screen -> on (daemon bl_power)")
             return
         }
-        // Fallback: restore brightness.
+        if (Su.run(blPower(true))) {
+            pulseWake()
+            Log.d(TAG, "screen -> on (su bl_power)")
+            return
+        }
         brightness.setBrightness(savedLevel.coerceAtLeast(MIN_ON))
         pulseWake()
         Log.d(TAG, "screen -> on (brightness fallback; $savedLevel)")
+    }
+
+    // Write FB_BLANK to the first backlight device's bl_power (0=on, 4=off). Fails (exit!=0, so the
+    // caller falls through) if there's no backlight node — never silently "succeeds" doing nothing.
+    private fun blPower(on: Boolean): String {
+        val v = if (on) 0 else 4
+        return "d=\$(ls -d /sys/class/backlight/*/ 2>/dev/null|head -1);" +
+            "[ -n \"\$d\" ]&&echo $v >\${d}bl_power"
     }
 
     @Suppress("DEPRECATION")

@@ -42,6 +42,10 @@ class Config(context: Context) {
         prefs.edit().putString("friendly_name", name).apply()
     }
 
+    /** Stable per-device id (Settings.Secure.ANDROID_ID); used as the HA device serial_number. */
+    val androidId: String
+        get() = Settings.Secure.getString(appCtx.contentResolver, Settings.Secure.ANDROID_ID) ?: ""
+
     /** The device's configured name (Companion's default-name source), else the model. */
     private fun deviceName(): String =
         (Settings.Global.getString(appCtx.contentResolver, Settings.Global.DEVICE_NAME)
@@ -61,6 +65,24 @@ class Config(context: Context) {
     val dashboardPackage: String get() = prefs.getString("dashboard_package", "")!!
     fun setDashboardPackage(pkg: String) {
         prefs.edit().putString("dashboard_package", pkg).apply()
+    }
+
+    /** Launcher package the Launcher button brings forward. Empty => auto-pick a non-default home. */
+    val launcherPackage: String get() = prefs.getString("launcher_package", "")!!
+    fun setLauncherPackage(pkg: String) {
+        prefs.edit().putString("launcher_package", pkg).apply()
+    }
+
+    /**
+     * HA device card manufacturer/model. The OS Build props are the generic SoC platform
+     * (e.g. `rockchip`/`px30_evb`), not the product, so these are configurable — set e.g.
+     * "Sonoff" / "NSPanel Pro 120". Default to the generic agent identity; ha-paneld's own version
+     * is reported separately as the device `sw_version`.
+     */
+    val manufacturer: String get() = prefs.getString("manufacturer", "ha-paneld")!!
+    val model: String get() = prefs.getString("model", "panel agent")!!
+    fun setHardware(manufacturer: String, model: String) {
+        prefs.edit().putString("manufacturer", manufacturer).putString("model", model).apply()
     }
 
     // --- last-known actuator state, re-applied/published on (re)connect so HA reflects reality ---

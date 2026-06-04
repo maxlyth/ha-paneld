@@ -1,5 +1,6 @@
 package io.github.maxlyth.hapaneld
 
+import android.os.Build
 import android.util.Log
 import com.hivemq.client.mqtt.MqttClient
 import com.hivemq.client.mqtt.datatypes.MqttQos
@@ -53,6 +54,8 @@ class MqttBridge(
     private val cmdVolume = "ha-paneld/$panel/volume/set"
     private val cmdReload = "ha-paneld/$panel/reload/set"
     private val cmdReboot = "ha-paneld/$panel/reboot/set"
+    private val cmdLauncher = "ha-paneld/$panel/launcher/set"
+    private val cmdHome = "ha-paneld/$panel/home/set"
     private val stateScreen = "ha-paneld/$panel/screen/state"
     private val stateLed = "ha-paneld/$panel/led/state"
     private val stateNavigate = "ha-paneld/$panel/navigate/state"
@@ -154,6 +157,8 @@ class MqttBridge(
                 cmdVolume -> handleVolume(payload)
                 cmdReload -> system.reloadDashboard(config.dashboardPackage)
                 cmdReboot -> system.reboot()
+                cmdLauncher -> system.launchLauncher(config.launcherPackage)
+                cmdHome -> system.launchHome(config.dashboardPackage)
                 else -> Log.d(TAG, "unhandled command topic $topic")
             }
         } catch (e: Exception) {
@@ -242,7 +247,12 @@ class MqttBridge(
         // configuration_url -> HA renders a "Visit" link on the device page (the panel's info UI).
         val cu = if (!configUrl.isNullOrBlank()) ""","configuration_url":"$configUrl"""" else ""
         val name = jsonEsc(config.friendlyName)
-        val device = """"device":{"identifiers":["ha-paneld-$panel"],"name":"$name","manufacturer":"ha-paneld","model":"panel agent","sw_version":"${Config.VERSION}"$cu}"""
+        val mfr = jsonEsc(config.manufacturer)
+        val mdl = jsonEsc(config.model)
+        // hw_version = panel firmware/build; surfaces in HA's device-info section (sw_version is
+        // ha-paneld's own version). serial_number = stable Android id.
+        val hw = jsonEsc("Android ${Build.VERSION.RELEASE} · ${Build.DISPLAY}")
+        val device = """"device":{"identifiers":["ha-paneld-$panel"],"name":"$name","manufacturer":"$mfr","model":"$mdl","sw_version":"${Config.VERSION}","hw_version":"$hw","serial_number":"${config.androidId}"$cu}"""
         val avail = """"availability_topic":"$availabilityTopic","payload_available":"online","payload_not_available":"offline""""
 
         publishConfig(
@@ -300,6 +310,14 @@ class MqttBridge(
             c, "button", "${panel}_reboot",
             """{"name":"Reboot","unique_id":"${panel}_reboot","command_topic":"$cmdReboot","device_class":"restart","icon":"mdi:restart",$avail,$device}""",
         )
+        publishConfig(
+            c, "button", "${panel}_launcher",
+            """{"name":"Launcher","unique_id":"${panel}_launcher","command_topic":"$cmdLauncher","icon":"mdi:apps",$avail,$device}""",
+        )
+        publishConfig(
+            c, "button", "${panel}_home",
+            """{"name":"Home Assistant","unique_id":"${panel}_home","command_topic":"$cmdHome","icon":"mdi:home-assistant",$avail,$device}""",
+        )
     }
 
     private fun jsonEsc(s: String): String =
@@ -321,6 +339,7 @@ class MqttBridge(
             "number" to "${panel}_volume", "sensor" to "${panel}_illuminance",
             "binary_sensor" to "${panel}_proximity",
             "button" to "${panel}_reload", "button" to "${panel}_reboot",
+            "button" to "${panel}_launcher", "button" to "${panel}_home",
         )
         entities.forEach { (comp, obj) -> publish(c, "homeassistant/$comp/$obj/config", "", retain = true) }
     }

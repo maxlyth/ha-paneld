@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Environment
 import android.os.StatFs
+import android.provider.Settings
 import android.webkit.WebView
 import io.github.maxlyth.hapaneld.BuildConfig
 
@@ -19,7 +20,13 @@ object PanelInfo {
         val m = LinkedHashMap<String, String>()
         m["ha-paneld"] = "${BuildConfig.VERSION_NAME} (build ${BuildConfig.VERSION_CODE})"
         m["Android"] = "${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})"
+        m["Firmware"] = Build.DISPLAY
         m["Device"] = "${Build.MANUFACTURER} ${Build.MODEL} (${Build.DEVICE})"
+        m["Device ID"] = try {
+            Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID) ?: "?"
+        } catch (e: Throwable) {
+            "?"
+        }
         m["CPU"] = cpu()
         m["RAM"] = ram(context)
         m["Storage"] = storage()
