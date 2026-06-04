@@ -186,9 +186,15 @@ class PaneldServer(
                 }
             }
         }
-        server.start(wait = false)
-        stopServer = { server.stop(500, 1500) }
-        Log.i(TAG, "HTTP listening on :${config.httpPort}")
+        // Guard the bind: a double am-start can race two instances onto :httpPort; a BindException
+        // here must not crash the foreground service (START_STICKY would just relaunch into the same).
+        try {
+            server.start(wait = false)
+            stopServer = { server.stop(500, 1500) }
+            Log.i(TAG, "HTTP listening on :${config.httpPort}")
+        } catch (e: Exception) {
+            Log.e(TAG, "HTTP bind on :${config.httpPort} failed (already running?) — continuing", e)
+        }
     }
 
     fun stop() {

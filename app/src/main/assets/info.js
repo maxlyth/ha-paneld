@@ -109,12 +109,13 @@ function proxThSet(v){proxDrag=false;proxPost('/proximity/threshold','v='+v);}
 prox();setInterval(prox,400);
 function inspApply(d){
  var hdr=document.getElementById('insthdr'),hint=document.getElementById('insthint');
+ var hp='<b>'+location.hostname+':'+d.port+'</b>';
  hdr.textContent=d.running?'· on':'· off';
  if(d.status==='no-socket')hint.innerHTML='Enable it on the dashboard first: Companion → Settings → Troubleshooting → "WebView remote debugging", then relaunch the dashboard and press Enable again.';
  else if(d.status==='needs-root')hint.textContent='Needs root (su) on this panel.';
  else if(d.status==='failed'||d.status==='no-binary')hint.textContent='Could not start the relay.';
- else if(d.running)hint.innerHTML='On your computer: open <b>chrome://inspect</b> → <b>Configure…</b> → add <b>'+location.hostname+':'+d.port+'</b>, then the dashboard appears under Remote Target — click <b>inspect</b>. Exposes DevTools to the LAN while on; press Stop when done.';
- else hint.innerHTML='Opens this panel’s dashboard DevTools in your browser — no adb. Needs WebView debugging enabled on the dashboard app, plus root.';
+ else if(d.running)hint.innerHTML='Relay on. In <b>chrome://inspect</b> the dashboard now appears under Remote Target — click <b>inspect</b>. If it does not show, the host must be added <i>before</i> enabling — add '+hp+' in Configure…, then refresh chrome://inspect. Exposes DevTools to the LAN while on; press Stop when done.';
+ else hint.innerHTML='Opens this panel’s dashboard DevTools in your browser — no adb. <b>Step 1:</b> on your computer open <b>chrome://inspect</b> → <b>Configure…</b> and add '+hp+' (chrome only polls hosts already in its list). <b>Step 2:</b> press <b>Enable</b>. Needs WebView debugging enabled + root.';
 }
 async function insp(){try{var d=await (await fetch('/inspect')).json();inspApply(d);}catch(e){}}
 function inspStart(){fetch('/inspect/start',{method:'POST'}).then(function(r){return r.json();}).then(inspApply).catch(function(){});}
