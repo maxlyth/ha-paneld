@@ -1,0 +1,97 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ha-paneld — Rendering metrics (prototype)</title>
+<style>
+ body{font-family:system-ui,-apple-system,sans-serif;margin:0;background:#111;color:#eee}
+ .wrap{max-width:680px;margin:0 auto;padding:20px}
+ h1{font-size:1.3rem;margin:0 0 .2rem} h1 small{color:#9af;font-weight:400}
+ h2{font-size:.95rem;margin:1.4rem 0 .4rem;color:#9cf;text-transform:uppercase;letter-spacing:.04em}
+ .badge{display:inline-block;font-size:.7rem;background:#3a2f10;color:#f5c451;border:1px solid #7a5;border-radius:5px;padding:2px 7px;margin-left:8px;vertical-align:middle}
+ .toggle{display:flex;gap:8px;margin:10px 0}
+ .toggle button{font-size:.9rem;padding:8px 14px;border-radius:8px;border:1px solid #444;background:#1c1c1c;color:#eee;cursor:pointer}
+ .toggle button.on{background:#2557a7;border-color:#2557a7}
+ .card{background:#181818;border:1px solid #2a2a2a;border-radius:12px;padding:16px}
+ .top{display:flex;align-items:center;justify-content:space-between;gap:12px}
+ .verdict{display:flex;align-items:center;gap:10px;font-size:1.25rem;font-weight:700}
+ .dot{width:14px;height:14px;border-radius:50%}
+ .fps{font-size:2.2rem;font-weight:700;line-height:1}
+ .fps small{font-size:.9rem;font-weight:400;color:#8a8}
+ canvas{width:100%;height:70px;background:#141414;border-radius:8px;margin:12px 0;display:block}
+ table{border-collapse:collapse;width:100%}
+ th,td{text-align:left;padding:7px 8px;border-bottom:1px solid #242424;vertical-align:top}
+ th{color:#9af;font-weight:600;width:34%} td .ex{display:block;color:#777;font-size:.78rem}
+ .note{color:#8a8;font-size:.82rem;margin-top:14px;line-height:1.45}
+ code{background:#222;padding:1px 5px;border-radius:4px;color:#cde}
+ .green{background:#2ea043;color:#2ea043} .amber{background:#d9a528;color:#d9a528} .red{background:#d04a3b;color:#d04a3b}
+</style></head><body><div class="wrap">
+
+<h1>ha-paneld <small>· Rendering</small><span class="badge">PROTOTYPE · simulated data</span></h1>
+<p class="note" style="margin-top:4px">How dashboard rendering metrics would appear in the panel's web UI — no DevTools knowledge needed. Toggle a scenario:</p>
+<div class="toggle">
+ <button id="bS" class="on" onclick="setState('smooth')">Smooth dashboard</button>
+ <button id="bJ" onclick="setState('janky')">Janky dashboard</button>
+</div>
+
+<div class="card">
+ <div class="top">
+  <div class="verdict"><span id="dot" class="dot green"></span><span id="vtxt">Smooth</span></div>
+  <div class="fps"><span id="fps">60</span><small> fps</small></div>
+ </div>
+ <canvas id="spark" width="640" height="70"></canvas>
+ <table>
+  <tr><th>Jank</th><td><span id="jank">2%</span> <span id="jankf" style="color:#8a8"></span>
+    <span class="ex">share of frames that missed the refresh deadline → visible stutter</span></td></tr>
+  <tr><th>Worst frame</th><td><span id="worst">21 ms</span>
+    <span class="ex">slowest single frame (p99). 60 fps budget ≈ 16.7 ms</span></td></tr>
+  <tr><th>Long tasks</th><td><span id="lt">0</span> <span id="ltms" style="color:#8a8"></span>
+    <span class="ex">main-thread blocks &gt;50 ms — the app can't respond to touch during these</span></td></tr>
+  <tr><th>Source</th><td>dashboard WebView · <span id="src">io.homeassistant.companion.android.minimal</span>
+    <span class="ex">via the on-device DevTools relay (CDP)</span></td></tr>
+ </table>
+</div>
+
+<h2>How it works</h2>
+<p class="note">
+The root helper daemon bridges the dashboard WebView's debug socket
+(<code>webview_devtools_remote_&lt;pid&gt;</code>) to a loopback port. ha-paneld connects over <b>CDP</b>
+and runs a tiny probe (<code>requestAnimationFrame</code> for FPS/jank + a <code>PerformanceObserver</code>
+for long tasks) via <code>Runtime.evaluate</code>, then publishes the numbers here and (optionally) as HA
+sensors. The raw DevTools inspector link stays available for power users, but this card is the
+everyday view. Verdict thresholds: <b>Smooth</b> &lt;5% jank · <b>Occasional</b> 5–15% · <b>Janky</b> &gt;15%.
+Needs WebView debugging enabled on the dashboard app (a one-time per-panel toggle).
+</p>
+
+<script>
+var STATE='smooth', hist=[], MAX=120, t=0;
+var cfg={smooth:{base:59,dip:0.04,jank:2,worst:21,lt:0,ltms:0,v:'Smooth',c:'green'},
+         janky:{base:38,dip:0.45,jank:23,worst:96,lt:7,ltms:512,v:'Janky',c:'red'}};
+function setState(s){STATE=s;hist=[];bS.className=s=='smooth'?'on':'';bJ.className=s=='janky'?'on':'';}
+function tick(){
+ var k=cfg[STATE], f;
+ // simulate a per-frame fps sample: mostly near base, occasional dips when janky
+ if(Math.random()<k.dip) f=k.base-(10+Math.random()*22); else f=k.base-Math.random()*4;
+ f=Math.max(8,Math.min(61,Math.round(f)));
+ hist.push(f); if(hist.length>MAX)hist.shift();
+ draw();
+ document.getElementById('fps').textContent=Math.round(hist.reduce((a,b)=>a+b,0)/hist.length);
+ var dot=document.getElementById('dot');
+ document.getElementById('vtxt').textContent=k.v; dot.className='dot '+k.c;
+ document.getElementById('jank').textContent=k.jank+'%';
+ document.getElementById('jankf').textContent='('+Math.round(k.jank*2)+' / 200 frames)';
+ document.getElementById('worst').textContent=k.worst+' ms';
+ document.getElementById('lt').textContent=k.lt;
+ document.getElementById('ltms').textContent=k.ltms?'('+k.ltms+' ms blocked)':'';
+}
+function draw(){
+ var c=document.getElementById('spark'),x=c.getContext('2d'),W=c.width,H=c.height;
+ x.clearRect(0,0,W,H);
+ // 60fps reference line + 30fps line
+ [60,30].forEach(function(fp){var y=H-(fp/61)*H;x.strokeStyle=fp==60?'#244':'#332';x.beginPath();x.moveTo(0,y);x.lineTo(W,y);x.stroke();});
+ if(hist.length<2)return;
+ x.lineWidth=2;x.beginPath();var sx=W/(MAX-1);
+ for(var i=0;i<hist.length;i++){var px=W-(hist.length-1-i)*sx,py=H-(hist[i]/61)*H;i?x.lineTo(px,py):x.moveTo(px,py);}
+ x.strokeStyle=cfg[STATE].c=='red'?'#d04a3b':(cfg[STATE].c=='amber'?'#d9a528':'#48c774');x.stroke();
+}
+setInterval(tick,250);
+</script>
+</div></body></html>
