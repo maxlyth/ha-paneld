@@ -140,6 +140,9 @@ class MqttBridge(
             this.led.setRgb(r * br / 255, g * br / 255, b * br / 255)
             publish(c, stateLed, ledStateJson(br, r, g, b), retain = true)
         } else {
+            // Force the hardware off too — the LED can power up to a default on reboot, so publishing
+            // OFF without driving it leaves HA and the physical LED disagreeing (office-dash rk3576).
+            this.led.off()
             publish(c, stateLed, """{"state":"OFF"}""", retain = true)
         }
     }

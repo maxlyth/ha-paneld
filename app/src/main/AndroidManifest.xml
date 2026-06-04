@@ -15,6 +15,10 @@
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
     <!-- Auto-start the listener after a panel reboot. -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- Android 11+ package visibility: ha-paneld must see/resolve the dashboard app (Companion) and
+         other launchers to reload them and offer launcher/home navigation. Sideloaded panel agent,
+         not a Play app, so the broad query permission is appropriate. -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" tools:ignore="QueryAllPackagesPermission" />
     <!-- Screen brightness via Settings.System (granted at provisioning: appops set WRITE_SETTINGS). -->
     <uses-permission android:name="android.permission.WRITE_SETTINGS" tools:ignore="ProtectedPermissions" />
 

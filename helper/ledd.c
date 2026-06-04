@@ -118,6 +118,20 @@ static int reload_pkg(const char *pkg) {
     return 0;
 }
 
+// Launch an activity by component (pkg/cls) via `am start` — root, so it's not subject to the
+// Android 10+ background-activity-launch limits that block an app's own startActivity from a service.
+static int start_component(const char *comp) {
+    if (!*comp) return -1;
+    for (const char *p = comp; *p; p++)
+        if (!((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
+              (*p >= '0' && *p <= '9') || *p == '.' || *p == '_' || *p == '/'))
+            return -1;
+    char cmd[256];
+    snprintf(cmd, sizeof cmd, "am start -n %s >/dev/null 2>&1", comp);
+    system(cmd);
+    return 0;
+}
+
 static void reply(int fd, const char *s) { (void)!write(fd, s, strlen(s)); }
 
 // Handle one command line. Returns nothing; writes a reply.
@@ -138,6 +152,10 @@ static void handle(int fd, char *line) {
         char pkg[128] = "";
         sscanf(line, "RELOAD %127s", pkg);
         reply(fd, reload_pkg(pkg) == 0 ? "OK\n" : "ERR\n");
+    } else if (strncmp(line, "START", 5) == 0) {
+        char comp[160] = "";
+        sscanf(line, "START %159s", comp);
+        reply(fd, start_component(comp) == 0 ? "OK\n" : "ERR\n");
     } else if (strncmp(line, "REBOOT", 6) == 0) {
         reply(fd, "OK\n");   // reply before we go down
         system("svc power reboot 2>/dev/null || reboot");

@@ -6,88 +6,97 @@ import android.util.Log
 import io.github.maxlyth.hapaneld.util.HelperClient
 
 /**
- * Panel-level actions: reload the dashboard and reboot. Both are privileged (force-stop / reboot)
- * and a sandboxed app can't do them directly. Preferred path is the root helper daemon (works on
- * panels where the app can't exec `su`, e.g. TPA10); falls back to `su` where it's available.
+ * Panel-level actions: reload the dashboard, bring a launcher / the dashboard to the foreground,
+ * reboot.
+ *
+ * **Why these go through root, not `context.startActivity`:** ha-paneld is a foreground *service*,
+ * and Android 10+ (API 29) blocks background activity starts from a service — so a direct
+ * `startActivity` silently no-ops on every panel except the API 27 NSPanelPro. Launching via the
+ * root helper daemon or `su` (`am start` / `monkey`) runs from a shell/root domain that BAL doesn't
+ * restrict. We resolve the target *component* in-app (just a PackageManager query, always allowed)
+ * and hand it to the privileged launcher. Pre-BAL panels fall back to a direct start.
  */
 class SystemController(private val context: Context) {
 
-    /**
-     * Reload the dashboard by force-stopping [dashboardPkg] and relaunching it. The package is
-     * configured per panel (HTTP config page); blank disables the action, since the dashboard host
-     * differs across panels (HA Companion, a browser, a custom WebView).
-     */
+    /** Launch an activity [component] ("pkg/cls") via the privileged path (daemon START, else su). */
+    private fun privilegedStart(component: String): Boolean {
+        if (component.isBlank()) return false
+        // Prefer the daemon, but only trust an explicit OK — an older daemon without the START verb
+        // replies ERR, so fall back to su (covers su-capable panels with a stale daemon).
+        if (HelperClient.available() && HelperClient.send("START $component") == "OK") return true
+        return Su.run("am start -n $component")
+    }
+
+    /** Direct fallback for pre-BAL (API < 29) panels where the service can start activities. */
+    private fun directStart(intent: Intent) {
+        runCatching { context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+    }
+
+    /** Configured dashboard pkg, else the installed HA Companion (this is an HA project). */
+    private fun resolveDashboard(pkg: String): String {
+        if (pkg.isNotBlank()) return pkg
+        for (p in listOf("io.homeassistant.companion.android.minimal", "io.homeassistant.companion.android")) {
+            if (runCatching { context.packageManager.getPackageInfo(p, 0) }.isSuccess) return p
+        }
+        return ""
+    }
+
+    /** Force-stop the dashboard and relaunch it. */
     fun reloadDashboard(dashboardPkg: String) {
-        if (dashboardPkg.isBlank()) {
-            Log.w(TAG, "reload: no dashboard_package configured — skipping")
+        val pkg = resolveDashboard(dashboardPkg)
+        if (pkg.isBlank()) { Log.w(TAG, "reload: no dashboard pkg (set dashboard_package)"); return }
+        if (HelperClient.available()) { // daemon force-stops + monkey-relaunches as root (no BAL)
+            HelperClient.send("RELOAD $pkg")
+            Log.i(TAG, "reload via daemon ($pkg)")
             return
         }
-        if (HelperClient.available()) {
-            HelperClient.send("RELOAD $dashboardPkg")
-            Log.i(TAG, "dashboard reloaded via daemon ($dashboardPkg)")
-            return
-        }
-        // Fallback for su-capable panels: su force-stops, the app relaunches.
-        if (Su.run("am force-stop $dashboardPkg")) {
-            context.packageManager.getLaunchIntentForPackage(dashboardPkg)?.let {
-                it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                runCatching { context.startActivity(it) }
-            }
-            Log.i(TAG, "dashboard reloaded via su ($dashboardPkg)")
+        if (Su.run("am force-stop $pkg")) {
+            val comp = context.packageManager.getLaunchIntentForPackage(pkg)?.component?.flattenToShortString()
+            if (comp == null || !privilegedStart(comp)) Su.run("monkey -p $pkg 1")
+            Log.i(TAG, "reload via su ($pkg)")
         } else {
             Log.w(TAG, "reload: neither daemon nor su available")
         }
     }
 
     /**
-     * Bring a launcher (home screen / app drawer) to the foreground — for panels with no physical
-     * home/back buttons. Fires a `CATEGORY_HOME` intent at a launcher with `setPackage`, so it
-     * launches THAT launcher rather than the default home app (which is usually the HA Companion on
-     * these panels). [configuredPkg] forces a specific package; blank => auto-pick the first
-     * registered HOME launcher that isn't the current default, ourselves, or the settings fallback.
+     * Bring a launcher (home screen) to the foreground — for panels with no physical home button.
+     * [configuredPkg] forces a package; blank => first registered HOME launcher that isn't the
+     * current default, ourselves, or settings.
      */
     fun launchLauncher(configuredPkg: String) {
         val pm = context.packageManager
         val home = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
-        val target = configuredPkg.ifBlank {
-            val default = pm.resolveActivity(home, 0)?.activityInfo?.packageName
-            pm.queryIntentActivities(home, 0)
-                .map { it.activityInfo.packageName }
-                .firstOrNull { it != default && it != context.packageName && it != "com.android.settings" }
-                .orEmpty()
+        val default = pm.resolveActivity(home, 0)?.activityInfo?.packageName
+        val ri = pm.queryIntentActivities(home, 0).firstOrNull {
+            val p = it.activityInfo.packageName
+            if (configuredPkg.isNotBlank()) p == configuredPkg
+            else p != default && p != context.packageName && p != "com.android.settings"
         }
-        if (target.isBlank()) {
+        if (ri == null) {
             Log.w(TAG, "launcher: no alternate launcher found (set launcher_package?)")
             return
         }
-        try {
-            context.startActivity(home.setPackage(target).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-            Log.i(TAG, "launcher -> $target")
-        } catch (e: Exception) {
-            Log.w(TAG, "launcher launch failed for $target", e)
-        }
+        val comp = "${ri.activityInfo.packageName}/${ri.activityInfo.name}"
+        if (!privilegedStart(comp)) directStart(home.setPackage(ri.activityInfo.packageName))
+        Log.i(TAG, "launcher -> $comp")
     }
 
-    /**
-     * Bring the HA dashboard to the foreground (the complement of [launchLauncher], to get back
-     * after using a launcher). Launches [dashboardPkg] if set, else the device's DEFAULT home app
-     * (the HA Companion on these panels). Does not force-stop — just fronts the app.
-     */
+    /** Bring the dashboard (or the default home app) to the foreground. */
     fun launchHome(dashboardPkg: String) {
         val pm = context.packageManager
-        val home = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
-        val intent = if (dashboardPkg.isNotBlank()) {
-            pm.getLaunchIntentForPackage(dashboardPkg) ?: Intent(home).setPackage(dashboardPkg)
+        val pkg = resolveDashboard(dashboardPkg)
+        val comp = if (pkg.isNotBlank()) {
+            pm.getLaunchIntentForPackage(pkg)?.component?.flattenToShortString()
         } else {
-            home // default resolver = the boot/default home app (HA Companion)
+            val home = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+            pm.resolveActivity(home, 0)?.activityInfo?.let { "${it.packageName}/${it.name}" }
         }
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        try {
-            context.startActivity(intent)
-            Log.i(TAG, "home -> ${dashboardPkg.ifBlank { "default" }}")
-        } catch (e: Exception) {
-            Log.w(TAG, "home launch failed", e)
+        if (comp == null) { Log.w(TAG, "home: no target resolved"); return }
+        if (!privilegedStart(comp)) {
+            directStart(pm.getLaunchIntentForPackage(pkg) ?: Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME))
         }
+        Log.i(TAG, "home -> $comp")
     }
 
     fun reboot() {
