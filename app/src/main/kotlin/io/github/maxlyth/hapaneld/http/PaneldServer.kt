@@ -332,9 +332,9 @@ report of this panel's hardware, firmware, SELinux, su and node probes for bug r
  <button type="submit">Save</button>
 </form>
 <p class="note">Leave the broker blank to auto-discover Home Assistant on the LAN (via mDNS) and use its
-MQTT broker on :1883; set it explicitly if your broker is elsewhere, or to a non-HA host. Password never
-shown — blank keeps the current one. Changing the panel id may leave the old device in HA to remove
-manually.</p></div>
+MQTT broker on :1883; set it explicitly if your broker is elsewhere, on a non-HA host, or if your
+network has more than one Home Assistant instance. Password never shown — blank keeps the current one.
+Changing the panel id may leave the old device in HA to remove manually.</p></div>
 </div>
 <p class="note" style="text-align:center;margin-top:18px"><a href="/api" style="color:#9cf">REST API explorer</a>
  · <a href="/diag" target="_blank" style="color:#9cf">diagnostics</a></p>
