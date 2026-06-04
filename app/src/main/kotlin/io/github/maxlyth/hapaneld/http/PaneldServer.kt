@@ -231,8 +231,8 @@ the maintainer can help with your hardware/firmware combination without owning i
 <h2>Responsiveness <small id="smhdr" style="color:#8a8;font-weight:400"></small></h2>
 <canvas id="smchart" width="600" height="130"
  style="width:100%;max-width:600px;height:130px;background:#181818;border-radius:8px;display:block;margin-bottom:6px"></canvas>
-<div style="font-size:.72rem;color:#8a8;margin-bottom:6px">% of slow screen updates, over time ·
- <span style="color:#48c774">▬</span> snappy under 5% · <span style="color:#d9a528">▬</span> laggy over 15%</div>
+<div style="font-size:.72rem;color:#8a8;margin-bottom:6px">dashboard main-thread CPU (% of one core), over time ·
+ <span style="color:#48c774">▬</span> snappy under 50% · <span style="color:#d9a528">▬</span> maxed over 85%</div>
 <table id="smtbl"><tr><td style="color:#888">measuring…</td></tr></table>
 <h2>Performance <small id="perfage" style="color:#8a8;font-weight:400"></small></h2>
 <canvas id="perfchart" width="600" height="96"

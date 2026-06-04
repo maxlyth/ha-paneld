@@ -36,7 +36,9 @@ object PerfReader {
     // the deeper "why" is the 1-click DevTools relay. Target reuses the dashboard_package config.
     @Volatile var dashboardPkg: String = ""
     @Volatile private var renderJson = "null"
-    private val stutterHist = ArrayDeque<Int>()   // % of frames that stuttered, per render window
+    private val stutterHist = ArrayDeque<Int>()   // CrRendererMain %-of-one-core per render window
+    private var prevRenderJiffies = HashMap<Int, Long>() // renderer pid -> CrRendererMain utime+stime
+    private var prevRenderAt = 0L
     private var rootOk = false
     private var tickCount = 0
     private var prevTopTotal = 0L                 // /proc/stat aggregate jiffies at last top sample
@@ -59,34 +61,65 @@ object PerfReader {
     }
 
     /**
-     * Dashboard rendering jank via `dumpsys gfxinfo <pkg>` (root) — proven to return real per-window
-     * data (jank %, frame-time percentiles, stall counts). We read then `reset` so each sample is the
-     * jank over the ~interval, not lifetime. Coarse (host-app frame delivery, not the web page's
-     * internal long-tasks) — the 1-click DevTools relay is the deep tool. "noconfig"/"null"/idle handled.
+     * Dashboard responsiveness. PRIMARY = the WebView renderer's main-thread CPU (`CrRendererMain`,
+     * via /proc/<renderer>/task/<tid>/stat) as %-of-one-core: this is the thread the HA frontend
+     * processes the WebSocket state firehose on, so it saturates (~100%) when event handling falls
+     * behind *even with zero rendering* — the common no-video overload that `dumpsys gfxinfo` jank
+     * misses entirely. gfxinfo jank is kept as a SECONDARY "rendering load" field (only meaningful with
+     * video/animation, e.g. a camera card). Needs root. HZ assumed 100 (Android default).
      */
     private fun sampleRender() {
-        val pkg = dashboardPkg
-        if (pkg.isBlank()) { synchronized(lock) { renderJson = "\"noconfig\"" }; return }
-        val out = Su.runOutput("dumpsys gfxinfo $pkg; dumpsys gfxinfo $pkg reset >/dev/null 2>&1; true") ?: return
-        fun lng(re: String) = Regex(re).find(out)?.groupValues?.get(1)?.toLongOrNull()
-        fun pct(p: Int) = Regex("$p" + """th percentile:\s*(\d+)ms""").find(out)?.groupValues?.get(1)?.toIntOrNull() ?: 0
-        val total = lng("""Total frames rendered:\s*(\d+)""") ?: return
-        // Idle window (no frames drawn — HA dashboards are static most of the time). Keep the history
-        // so the chart persists; just flag idle. Don't push a sample (no data point for this window).
-        if (total <= 0) {
-            synchronized(lock) { renderJson = "{\"pkg\":\"$pkg\",\"idle\":true,\"hist\":${stutterHist.toList()}}" }
+        // Primary: busiest CrRendererMain %-of-one-core across WebView renderer processes (covers a
+        // Companion *or* a browser dashboard). One su call emits "<pid> <stat>" per renderer main thread.
+        val cmd = "ps -A -o PID,NAME 2>/dev/null | grep -i sandboxe | while read pid name; do " +
+            "for t in /proc/\$pid/task/*; do c=\$(cat \$t/comm 2>/dev/null); " +
+            "[ \"\$c\" = CrRendererMain ] && echo \"\$pid \$(cat \$t/stat 2>/dev/null)\"; done; done; true"
+        val out = Su.runOutput(cmd)
+        val now = System.currentTimeMillis()
+        val cur = HashMap<Int, Long>()
+        var mainPct = -1.0
+        if (out != null) for (line in out.lineSequence()) {
+            val sp = line.indexOf(' ')
+            if (sp <= 0) continue
+            val pid = line.substring(0, sp).trim().toIntOrNull() ?: continue
+            val rest = line.substring(sp + 1).substringAfter(") ", "").split(' ') // after comm: state(0)..utime(11),stime(12)
+            val ut = rest.getOrNull(11)?.toLongOrNull() ?: continue
+            val st = rest.getOrNull(12)?.toLongOrNull() ?: 0
+            val j = ut + st
+            cur[pid] = j
+            val prev = prevRenderJiffies[pid]
+            if (prev != null && prevRenderAt > 0L) {
+                val dt = (now - prevRenderAt) / 1000.0
+                if (dt > 0) { val p = (j - prev) / dt; if (p > mainPct) mainPct = p } // HZ=100 -> jiffies/s == %-of-core
+            }
+        }
+        prevRenderJiffies = cur
+        prevRenderAt = now
+        if (mainPct < 0) { // first sample, or no Chromium renderer running
+            synchronized(lock) { renderJson = "{\"status\":\"no-renderer\",\"hist\":${stutterHist.toList()}}" }
             return
         }
-        val janky = lng("""Janky frames:\s*(\d+)""") ?: 0
-        val jankPct = Math.round(janky * 1000.0 / total) / 10.0
-        val verdict = if (jankPct < 5) "smooth" else if (jankPct < 15) "occasional" else "janky"
+        val pct1 = Math.round(mainPct.coerceIn(0.0, 100.0) * 10) / 10.0
+        val verdict = if (pct1 < 50) "smooth" else if (pct1 < 85) "occasional" else "janky"
+
+        // Secondary: gfxinfo jank (rendering load — only meaningful with video/animation). Optional.
+        var jankFields = ""
+        val pkg = dashboardPkg
+        if (pkg.isNotBlank()) {
+            val g = Su.runOutput("dumpsys gfxinfo $pkg; dumpsys gfxinfo $pkg reset >/dev/null 2>&1; true")
+            if (g != null) {
+                val tot = Regex("""Total frames rendered:\s*(\d+)""").find(g)?.groupValues?.get(1)?.toLongOrNull() ?: 0
+                if (tot > 0) {
+                    val janky = Regex("""Janky frames:\s*(\d+)""").find(g)?.groupValues?.get(1)?.toLongOrNull() ?: 0
+                    val p99 = Regex("""99th percentile:\s*(\d+)ms""").find(g)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+                    jankFields = ",\"jankPct\":${Math.round(janky * 1000.0 / tot) / 10.0},\"p99\":$p99"
+                }
+            }
+        }
         synchronized(lock) {
-            push(stutterHist, Math.round(jankPct).toInt())
-            renderJson = "{\"pkg\":\"$pkg\",\"frames\":$total,\"jankPct\":$jankPct,\"verdict\":\"$verdict\"," +
-                "\"p50\":${pct(50)},\"p95\":${pct(95)},\"p99\":${pct(99)}," +
-                "\"missedVsync\":${lng("""Number Missed Vsync:\s*(\d+)""") ?: 0}," +
-                "\"slowUi\":${lng("""Number Slow UI thread:\s*(\d+)""") ?: 0}," +
-                "\"hist\":${stutterHist.toList()}}"
+            push(stutterHist, Math.round(pct1).toInt())
+            renderJson = "{\"pkg\":\"${pkg.ifBlank { "dashboard" }}\",\"mainPct\":$pct1,\"verdict\":\"$verdict\"" +
+                jankFields + ",\"hist\":${stutterHist.toList()}}"
         }
     }
 
