@@ -332,7 +332,7 @@ async function perf(){
   var r=d.render,smh=document.getElementById('smhdr'),smt=document.getElementById('smtbl');
   if(r==null){smh.textContent='· needs root';smt.innerHTML=row('Responsiveness','<span style="color:#888">needs root to measure</span>');drawSm([]);}
   else if(r==='noconfig'){smh.textContent='';smt.innerHTML=row('Responsiveness','<span style="color:#888">no Home Assistant app found on this panel</span>');drawSm([]);}
-  else if(r.idle){smh.textContent='· idle';drawSm(r.hist);smt.innerHTML=row('Responsiveness','<span style="color:#888">idle — dashboard isn't redrawing right now (history kept)</span>');}
+  else if(r.idle){smh.textContent='· idle';drawSm(r.hist);smt.innerHTML=row('Responsiveness','<span style="color:#888">idle — dashboard not redrawing right now (history kept)</span>');}
   else{
    drawSm(r.hist);
    var col=r.verdict==='smooth'?'#48c774':(r.verdict==='occasional'?'#d9a528':'#d04a3b');
