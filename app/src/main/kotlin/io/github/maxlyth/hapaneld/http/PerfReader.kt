@@ -34,6 +34,8 @@ object PerfReader {
     @Volatile private var topJson = "null"
     private var rootOk = false
     private var tickCount = 0
+    private var prevTopTotal = 0L                 // /proc/stat aggregate jiffies at last top sample
+    private var prevProc = HashMap<Int, Long>()   // pid -> utime+stime jiffies at last top sample
 
     /** Start the sampling loop on [scope] (idempotent enough for a single service lifetime). */
     fun start(scope: CoroutineScope) {
@@ -51,18 +53,67 @@ object PerfReader {
         """{$latestFields,"top":$topJson,"hist":{"cpu":${cpuHist.toList()},"ram":${ramHist.toList()},"gpu":${gpuHist.toList()}}}"""
     }
 
-    /** Top-5 processes by CPU via `dumpsys cpuinfo` (root). dumpsys pre-sorts descending. */
+    /**
+     * Top-5 processes by CPU, computed from `/proc/[pid]/stat` deltas over the sample interval (what
+     * `top` does) — `dumpsys cpuinfo` was tried first but returns a cached snapshot that only the
+     * system refreshes (minutes apart), so it never advances. Needs root to read other pids' stat
+     * (`/proc` is `hidepid`). CPU is expressed as % of total capacity (sums to <=100 across procs,
+     * consistent with the overall CPU figure). Full names come from `/proc/<pid>/cmdline`.
+     */
     private fun sampleTop() {
-        val out = Su.runOutput("dumpsys cpuinfo") ?: return
-        val re = Regex("""^\s*([\d.]+)%\s+\d+/(\S+):""") // "<cpu>% <pid>/<name>:"
-        val procs = out.lineSequence().mapNotNull { re.find(it) }
-            .map { it.groupValues[2] to it.groupValues[1] } // name, cpu
-            .take(5).toList()
-        val json = if (procs.isEmpty()) "null"
-        else procs.joinToString(",", "[", "]") { (n, c) ->
-            """{"name":"${n.replace("\\", "").replace("\"", "")}","cpu":$c}"""
+        // `; true` so a vanished-pid `cat` (non-zero) doesn't null the whole capture.
+        val out = Su.runOutput("cat /proc/stat; echo @@; cat /proc/[0-9]*/stat 2>/dev/null; true") ?: return
+        val parts = out.split("@@")
+        if (parts.size < 2) return
+        val cpuLine = parts[0].lineSequence().firstOrNull { it.startsWith("cpu ") } ?: return
+        val total = cpuLine.trim().split(Regex("\\s+")).drop(1).mapNotNull { it.toLongOrNull() }.sum()
+
+        val cur = HashMap<Int, Long>()
+        val comm = HashMap<Int, String>()
+        for (line in parts[1].lineSequence()) {
+            val lp = line.indexOf('('); val rp = line.lastIndexOf(')')
+            if (lp <= 0 || rp < lp) continue
+            val pid = line.substring(0, lp).trim().toIntOrNull() ?: continue
+            val rest = line.substring(rp + 2).split(' ') // rest[0]=state(field3); utime=field14=rest[11], stime=rest[12]
+            val utime = rest.getOrNull(11)?.toLongOrNull() ?: continue
+            val stime = rest.getOrNull(12)?.toLongOrNull() ?: continue
+            cur[pid] = utime + stime
+            comm[pid] = line.substring(lp + 1, rp)
         }
-        synchronized(lock) { topJson = json }
+
+        val dTotal = total - prevTopTotal
+        val ranked = if (prevTopTotal != 0L && dTotal > 0) {
+            cur.entries.mapNotNull { (pid, j) -> prevProc[pid]?.let { pid to (j - it) } }
+                .filter { it.second > 0 }.sortedByDescending { it.second }.take(5)
+        } else emptyList()
+        prevTopTotal = total
+        prevProc = cur
+
+        if (ranked.isNotEmpty()) {
+            val names = fullNames(ranked.map { it.first })
+            val json = ranked.joinToString(",", "[", "]") { (pid, dj) ->
+                val pct = Math.round(dj * 1000.0 / dTotal) / 10.0 // % of total capacity, 1dp, dot-decimal
+                val nm = (names[pid] ?: comm[pid] ?: pid.toString()).replace("\\", "").replace("\"", "")
+                """{"name":"$nm","cpu":$pct}"""
+            }
+            synchronized(lock) { topJson = json }
+        }
+    }
+
+    /** Full process names from `/proc/<pid>/cmdline` (comm is truncated to 16 chars) for the top pids. */
+    private fun fullNames(pids: List<Int>): Map<Int, String> {
+        if (pids.isEmpty()) return emptyMap()
+        val cmd = "for p in ${pids.joinToString(" ")}; do printf '%s\\t' \"\$p\"; " +
+            "cat /proc/\$p/cmdline 2>/dev/null; printf '\\n'; done; true"
+        val out = Su.runOutput(cmd) ?: return emptyMap()
+        val map = HashMap<Int, String>()
+        for (line in out.lineSequence()) {
+            val tab = line.indexOf('\t'); if (tab <= 0) continue
+            val pid = line.substring(0, tab).trim().toIntOrNull() ?: continue
+            val name = line.substring(tab + 1).replace('\u0000', ' ').trim().substringBefore(' ')
+            if (name.isNotEmpty()) map[pid] = name
+        }
+        return map
     }
 
     private fun push(q: ArrayDeque<Int>, v: Int) {
@@ -76,7 +127,7 @@ object PerfReader {
             .map { line -> line.trim().split(Regex("\\s+")).drop(1).map { it.toLongOrNull() ?: 0L }.toLongArray() }
 
     private fun tick() {
-        if (rootOk && tickCount++ % 5 == 0) runCatching { sampleTop() } // ~every 10s
+        if (rootOk && tickCount++ % 3 == 0) runCatching { sampleTop() } // ~every 6s (= the CPU window)
         val stat = runCatching { readStat() }.getOrNull()
         val pct = ArrayList<Int>()
         val prev = prevStat

@@ -229,6 +229,7 @@ the maintainer can help with your hardware/firmware combination without owning i
 <div style="font-size:.75rem;color:#8a8;margin-bottom:6px">
  <span style="color:#4a9eff">■</span> CPU&nbsp;&nbsp;<span style="color:#48c774">■</span> RAM&nbsp;&nbsp;<span style="color:#f5a623">■</span> GPU (% used) · ~4&nbsp;min</div>
 <table id="perf"><tr><td style="color:#888">sampling…</td></tr></table>
+<table id="topproc" style="margin-top:12px"><tr><td style="color:#888">top processes…</td></tr></table>
 <h2>Proximity tuning <small id="proxstate" style="color:#8a8;font-weight:400"></small></h2>
 <div id="proxbox" style="display:none">
 <canvas id="proxgauge" width="600" height="46"
@@ -305,11 +306,13 @@ async function perf(){
   h+=row('RAM',d.memUsedMb+' / '+d.memTotalMb+' MB ('+ramPct+'%)');
   if(d.load&&d.load.length)h+=row('Load avg',d.load.join('  '));
   if(d.tempC!=null)h+=row('Temperature',d.tempC.toFixed(1)+' °C');
-  if(d.top){
-   h+=row('<span style="color:#9af">Top processes</span>','<span style="color:#888">%CPU</span>');
-   d.top.forEach(function(p){h+=row('<span style="font-weight:400;color:#ccc">'+p.name+'</span>',p.cpu+'%');});
-  }else h+=row('Top processes','<span style="color:#888">needs root</span>');
   document.getElementById('perf').innerHTML=h;
+  var tp=document.getElementById('topproc');
+  if(d.top&&d.top.length){
+   var t='<tr><th>Top process</th><th>% total CPU</th></tr>';
+   d.top.forEach(function(p){t+='<tr><td style="color:#ccc;font-weight:400">'+p.name+'</td><td>'+p.cpu+'%</td></tr>';});
+   tp.innerHTML=t;
+  }else tp.innerHTML='<tr><th>Top processes</th><td style="color:#888">needs root (su)</td></tr>';
   document.getElementById('perfage').textContent='· live';
  }catch(e){document.getElementById('perfage').textContent='· unavailable';}
 }
