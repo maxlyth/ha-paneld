@@ -87,3 +87,5 @@ jobs:
           files: dist/*.apk
           body_path: release-body.md
           generate_release_notes: true
+          # Tags with a suffix (e.g. v0.5.0-rc1) publish as pre-releases.
+          prerelease: ${{ contains(github.ref_name, '-') }}

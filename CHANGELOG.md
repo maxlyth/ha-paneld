@@ -3,20 +3,50 @@
 Human-readable summaries of each release. The auto-generated commit list is appended below these
 notes on each [GitHub release](https://github.com/maxlyth/ha-paneld/releases).
 
-## Unreleased
+## v0.5.0 - 2026-06-04
 
-Targeting **v0.5.0** — the first release aimed at general use (Tuya TPA10 owners especially).
+The first release aimed at general use — a redesigned web UI, an in-app config screen, deeper
+performance insight, and proper release signing. Especially for Tuya TPA10 owners.
 
-- **Proximity tuning** — calibrate the near/far cutoff from the panel's web page. A guided "capture
-  near / capture far" flow handles the wildly different sensor scales and inverted polarity across
-  panels automatically; an adjustable sensitivity (High/Med/Low) controls flap resistance. The raw
-  sensor value stays on the panel (shown live in the UI) — only a clean on/off is sent to Home
-  Assistant, so a graded sensor can't flood the recorder. Fixes proximity being effectively dead on
-  panels whose raw value exceeds the reported sensor range.
-- **Top processes** in the performance view — live top-5 by CPU, so you can confirm the dashboard app
-  is getting the CPU and spot any stray/parasite process. Needs root.
-- **Fleet config API** — read and update any setting over HTTP (`GET /config` returns JSON;
-  `POST /config` applies just the keys you send) for scripted fleet management.
+**Web UI**
+
+- Redesigned as a responsive **masonry dashboard** — single column on a phone, multiple columns on a
+  wide screen, with full-width charts and labelled gridlines you can actually read.
+- A **new app icon** — a wall panel showing the Home Assistant mark.
+- **REST API explorer** at `/api` (try any endpoint from the browser) plus an OpenAPI spec at
+  `/openapi.json` you can import into Swagger or Postman for fleet tooling.
+
+**On the panel**
+
+- Tapping the launcher icon now opens a proper **info screen** (status, the config URL, and buttons to
+  open configuration or the Home Assistant app) instead of dropping back to the launcher.
+- **Configure on the panel itself** — the config page opens in an in-app browser, so kiosk panels with
+  no browser installed still work.
+
+**Performance**
+
+- **CPU clock** (current vs hardware max) so thermal throttling is visible, plus a **responsiveness**
+  metric that reflects how the dashboard actually feels.
+- **Top processes** — live top-5 by CPU, to confirm the dashboard is getting the CPU. Needs root.
+- **1-click WebView DevTools** relay for deep dashboard debugging — no `adb` cable needed.
+- Instrumentation now **only samples while you're viewing the page** and can be **switched off**, so
+  the performance tool isn't itself a constant background cost.
+
+**Proximity**
+
+- Calibrate the near/far cutoff from the web page. A guided "capture near / capture far" flow handles
+  the wildly different sensor scales and inverted polarity across panels; sensitivity (High/Med/Low)
+  controls flap resistance. The raw value stays on the panel (shown live); only a clean on/off goes to
+  Home Assistant, so a graded sensor can't flood the recorder. Fixes proximity being effectively dead
+  on panels whose raw value exceeds the reported sensor range.
+
+**Fleet & releases**
+
+- **Config API** — read/update any setting over HTTP (`GET /config`; partial-merge `POST /config`).
+- **One-command provisioning** (`scripts/provision.sh`) — install, grant permissions, set id/MQTT;
+  idempotent, with a `--verify` check; runs on Linux, macOS, and Windows (Git Bash/WSL).
+- Releases are now **signed with a dedicated release key**; the README documents the signing model and
+  the build/fork steps.
 
 ## v0.4.2 - 2026-06-04
 
