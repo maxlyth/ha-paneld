@@ -6,7 +6,6 @@ import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
-import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.view.Gravity
@@ -59,9 +58,11 @@ class MainActivity : AppCompatActivity() {
             gravity = Gravity.CENTER_HORIZONTAL
             setPadding(dp(32), dp(36), dp(32), dp(36))
         }
+        // The transparent foreground (device + blue mark), NOT the adaptive mipmap — the mipmap paints
+        // its white background square (uneven mask padding) which clashes with the dark screen.
         root.addView(ImageView(this).apply {
-            setImageResource(R.mipmap.ic_launcher)
-            layoutParams = LinearLayout.LayoutParams(dp(88), dp(88)).apply { bottomMargin = dp(16) }
+            setImageResource(R.drawable.ic_launcher_foreground)
+            layoutParams = LinearLayout.LayoutParams(dp(116), dp(116)).apply { bottomMargin = dp(8) }
         })
         root.addView(text("ha-paneld", 22f, "#FFFFFF", bold = true))
         root.addView(text("v${BuildConfig.VERSION_NAME} · running in the background", 13f, "#8a8f99", padBottom = 18))
@@ -78,10 +79,10 @@ class MainActivity : AppCompatActivity() {
             textSize = 18f
             setTextColor(Color.parseColor("#4a9eff"))
             text = url
-            setOnClickListener { open(url) }
+            setOnClickListener { openConfig() }
         })
         root.addView(text("Open this address in a browser to configure the panel", 12f, "#8a8f99", padTop = 4, padBottom = 24))
-        root.addView(button("Open configuration") { open(url) })
+        root.addView(button("Open configuration") { openConfig() })
         // Only offer the HA app button when the Home Assistant Companion app is actually installed.
         companionPackage()?.let { root.addView(button("Open Home Assistant app") { openDashboard() }) }
 
@@ -128,10 +129,10 @@ class MainActivity : AppCompatActivity() {
         setOnClickListener { onClick() }
     }
 
-    private fun open(u: String) {
-        runCatching {
-            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(u)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-        }
+    // Open the config page in-app — kiosk panels usually have no browser, so an ACTION_VIEW intent
+    // would find no handler and do nothing.
+    private fun openConfig() {
+        runCatching { startActivity(Intent(this, ConfigActivity::class.java)) }
     }
 
     private fun openDashboard() {

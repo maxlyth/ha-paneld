@@ -39,6 +39,11 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".ConfigActivity"
+            android:exported="false"
+            android:label="ha-paneld configuration" />
+
         <service
             android:name=".PaneldService"
             android:exported="false"
