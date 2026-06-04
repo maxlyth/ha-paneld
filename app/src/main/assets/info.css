@@ -1,0 +1,15 @@
+body{font-family:system-ui,-apple-system,sans-serif;margin:0;background:#111;color:#eee}
+.wrap{max-width:680px;margin:0 auto;padding:20px}
+h1{font-size:1.3rem;margin:0 0 .2rem} h1 small{color:#9af;font-weight:400}
+h2{font-size:.95rem;margin:1.6rem 0 .4rem;color:#9cf;text-transform:uppercase;letter-spacing:.04em}
+table{border-collapse:collapse;width:100%}
+th,td{text-align:left;padding:7px 8px;border-bottom:1px solid #2a2a2a;vertical-align:top}
+th{color:#9af;width:42%;font-weight:600}
+form{margin-top:10px;display:flex;flex-direction:column;gap:12px;max-width:380px}
+label{display:flex;flex-direction:column;gap:4px;font-size:.8rem;color:#9af}
+input,button{font-size:1rem;padding:9px 12px;border-radius:8px;border:1px solid #444;background:#1c1c1c;color:#eee}
+button{background:#2557a7;border-color:#2557a7;cursor:pointer;align-self:flex-start;padding:9px 22px}
+.note{color:#8a8;margin-top:10px;font-size:.85rem}
+.binary .gradedonly{display:none}
+.pbtn{font-size:.8rem;padding:6px 12px;background:#1c1c1c;border-color:#444;cursor:pointer}
+.pbtn.on{background:#2557a7;border-color:#2557a7}

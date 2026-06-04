@@ -61,6 +61,13 @@ class PaneldServer(
                 get("/diag") {
                     call.respondText(DiagReader.dump(appContext), ContentType.Text.Plain)
                 }
+                // Static front-end assets (externalised from the Kotlin string so CI can lint them).
+                get("/info.js") {
+                    call.respondText(asset("info.js"), ContentType.Application.JavaScript)
+                }
+                get("/info.css") {
+                    call.respondText(asset("info.css"), ContentType.Text.CSS)
+                }
                 // Live proximity state for the tuning UI (raw never goes to HA; it lives here).
                 get("/proximity") {
                     call.respondText(sensors.proximityJson(), ContentType.Application.Json)
@@ -195,23 +202,7 @@ class PaneldServer(
         return """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>ha-paneld · $pid</title>
-<style>
- body{font-family:system-ui,-apple-system,sans-serif;margin:0;background:#111;color:#eee}
- .wrap{max-width:680px;margin:0 auto;padding:20px}
- h1{font-size:1.3rem;margin:0 0 .2rem} h1 small{color:#9af;font-weight:400}
- h2{font-size:.95rem;margin:1.6rem 0 .4rem;color:#9cf;text-transform:uppercase;letter-spacing:.04em}
- table{border-collapse:collapse;width:100%}
- th,td{text-align:left;padding:7px 8px;border-bottom:1px solid #2a2a2a;vertical-align:top}
- th{color:#9af;width:42%;font-weight:600}
- form{margin-top:10px;display:flex;flex-direction:column;gap:12px;max-width:380px}
- label{display:flex;flex-direction:column;gap:4px;font-size:.8rem;color:#9af}
- input,button{font-size:1rem;padding:9px 12px;border-radius:8px;border:1px solid #444;background:#1c1c1c;color:#eee}
- button{background:#2557a7;border-color:#2557a7;cursor:pointer;align-self:flex-start;padding:9px 22px}
- .note{color:#8a8;margin-top:10px;font-size:.85rem}
- .binary .gradedonly{display:none}
- .pbtn{font-size:.8rem;padding:6px 12px;background:#1c1c1c;border-color:#444;cursor:pointer}
- .pbtn.on{background:#2557a7;border-color:#2557a7}
-</style></head><body><div class="wrap">
+<link rel="stylesheet" href="/info.css"></head><body><div class="wrap">
 <h1>ha-paneld <small>· $pid</small></h1>
 <h2>Panel information</h2>
 <table>
@@ -284,120 +275,16 @@ the maintainer can help with your hardware/firmware combination without owning i
 never shown — leave it blank to keep the current one. Saving reconnects MQTT and re-publishes Home
 Assistant discovery; changing the panel id may leave the old device in HA to remove manually.
 Served over plain HTTP on the LAN.</p>
-<script>
-var cpuH=[],ramH=[],gpuH=[],MAX=120;  // ~4 min at 2s
-function row(k,v){return '<tr><th>'+k+'</th><td>'+v+'</td></tr>';}
-function draw(){
- var c=document.getElementById('perfchart'),x=c.getContext('2d'),W=c.width,H=c.height;
- x.clearRect(0,0,W,H);
- x.strokeStyle='#2a2a2a';x.lineWidth=1;
- [0.25,0.5,0.75].forEach(function(f){var y=H-f*H;x.beginPath();x.moveTo(0,y);x.lineTo(W,y);x.stroke();});
- function line(a,col){
-  if(a.length<2)return;
-  x.strokeStyle=col;x.lineWidth=2;x.beginPath();
-  var n=a.length,sx=W/(MAX-1);
-  for(var i=0;i<n;i++){var px=W-(n-1-i)*sx,py=H-(a[i]/100)*H;i?x.lineTo(px,py):x.moveTo(px,py);}
-  x.stroke();
- }
- line(gpuH,'#f5a623');line(ramH,'#48c774');line(cpuH,'#4a9eff');
-}
-function drawSm(hist){
- var c=document.getElementById('smchart'),x=c.getContext('2d'),W=c.width,H=c.height;
- x.clearRect(0,0,W,H);
- [[5,'#2a4a32'],[15,'#4a3f1a']].forEach(function(t){var y=H-(t[0]/100)*H;x.strokeStyle=t[1];x.beginPath();x.moveTo(0,y);x.lineTo(W,y);x.stroke();});
- if(!hist||hist.length<2)return;
- var n=hist.length,sx=W/(MAX-1);x.lineWidth=2;x.beginPath();
- for(var i=0;i<n;i++){var px=W-(n-1-i)*sx,py=H-(Math.min(100,hist[i])/100)*H;i?x.lineTo(px,py):x.moveTo(px,py);}
- var last=hist[n-1];x.strokeStyle=last<5?'#48c774':(last<15?'#d9a528':'#d04a3b');x.stroke();
-}
-async function perf(){
- try{
-  var d=await (await fetch('/perf')).json();
-  if(d.hist){cpuH=d.hist.cpu||[];ramH=d.hist.ram||[];gpuH=d.hist.gpu||[];}  // server FIFO
-  draw();
-  var ramPct=d.memTotalMb?Math.round(d.memUsedMb*100/d.memTotalMb):0;
-  var peak=(d.cores&&d.cores.length)?Math.max.apply(null,d.cores):d.cpu;
-  var h=row('CPU',d.cpu+'%  <span style="color:#8a8">peak core '+peak+'%</span>');
-  if(d.gpu!=null)h+=row('GPU',d.gpu+'%'+(d.gpuMhz?'  <span style="color:#8a8">'+d.gpuMhz+' MHz</span>':''));
-  h+=row('RAM',d.memUsedMb+' / '+d.memTotalMb+' MB ('+ramPct+'%)');
-  if(d.load&&d.load.length)h+=row('Load avg',d.load.join('  '));
-  if(d.tempC!=null)h+=row('Temperature',d.tempC.toFixed(1)+' °C');
-  document.getElementById('perf').innerHTML=h;
-  var tp=document.getElementById('topproc');
-  if(d.top&&d.top.length){
-   var t='<tr><th>Top process</th><th>% total CPU</th></tr>';
-   d.top.forEach(function(p){t+='<tr><td style="color:#ccc;font-weight:400">'+p.name+'</td><td>'+p.cpu+'%</td></tr>';});
-   tp.innerHTML=t;
-  }else tp.innerHTML='<tr><th>Top processes</th><td style="color:#888">needs root (su)</td></tr>';
-  var r=d.render,smh=document.getElementById('smhdr'),smt=document.getElementById('smtbl');
-  if(r==null){smh.textContent='· needs root';smt.innerHTML=row('Responsiveness','<span style="color:#888">needs root to measure</span>');drawSm([]);}
-  else if(r==='noconfig'){smh.textContent='';smt.innerHTML=row('Responsiveness','<span style="color:#888">no Home Assistant app found on this panel</span>');drawSm([]);}
-  else if(r.idle){smh.textContent='· idle';drawSm(r.hist);smt.innerHTML=row('Responsiveness','<span style="color:#888">idle — dashboard not redrawing right now (history kept)</span>');}
-  else{
-   drawSm(r.hist);
-   var col=r.verdict==='smooth'?'#48c774':(r.verdict==='occasional'?'#d9a528':'#d04a3b');
-   var v=r.verdict==='smooth'?'Snappy':(r.verdict==='occasional'?'Sluggish':'Laggy');
-   smh.textContent='· '+r.pkg.split('.').pop();
-   smt.innerHTML=row('How it feels','<span style="color:'+col+'">●</span> <b>'+v+'</b>')
-    +row('Slow screen updates',r.jankPct+'% <span style="color:#888">of the last '+r.frames+' frames</span>')
-    +row('Worst response',r.p99+' ms <span style="color:#888">(under ~100 ms feels instant)</span>')
-    +row('App too busy to respond',r.slowUi+'× <span style="color:#888">in that window</span>');
-  }
-  document.getElementById('perfage').textContent='· live';
- }catch(e){document.getElementById('perfage').textContent='· unavailable';}
-}
-perf();setInterval(perf,2000);
-var proxMax=100,proxDrag=false;
-function proxDraw(d){
- var c=document.getElementById('proxgauge'),x=c.getContext('2d'),W=c.width,H=c.height;
- x.clearRect(0,0,W,H);
- var gm=Math.max(d.max||0,d.nearRaw||0,d.farRaw||0,d.raw||0,1)*1.1;proxMax=gm;
- function px(v){return Math.max(0,Math.min(W,(v/gm)*W));}
- if(d.calibrated&&d.threshold!=null){
-  var tx=px(d.threshold);
-  x.fillStyle='rgba(74,158,255,0.13)';
-  if(d.nearBelow)x.fillRect(0,0,tx,H);else x.fillRect(tx,0,W-tx,H);
-  if(d.margin){x.fillStyle='rgba(245,166,35,0.20)';x.fillRect(px(d.threshold-d.margin),0,px(d.threshold+d.margin)-px(d.threshold-d.margin),H);}
-  x.strokeStyle='#f5a623';x.lineWidth=2;x.beginPath();x.moveTo(tx,0);x.lineTo(tx,H);x.stroke();
- }
- if(d.raw!=null){var rx=px(d.raw);x.fillStyle=d.near?'#48c774':'#888';x.beginPath();x.arc(rx,H/2,7,0,7);x.fill();}
-}
-function proxApply(d){
- document.getElementById('proxbox').className=d.graded?'':'binary'; // hide gauge/slider/sensitivity on binary sensors
- proxDraw(d);
- document.getElementById('proxth').textContent=d.threshold==null?'–':d.threshold.toFixed(1);
- document.getElementById('proxstate').textContent=(d.graded?'· graded sensor':'· binary sensor')+(d.calibrated?' · calibrated':'');
- document.querySelectorAll('.psen').forEach(function(b){b.className='pbtn psen gradedonly'+(b.dataset.s===d.sensitivity?' on':'');});
- var hint=document.getElementById('proxhint');
- if(d.indistinct)hint.textContent='⚠ near and far captures are too close — recapture with a clearer gap.';
- else if(!d.graded)hint.textContent='Binary near/far sensor — nothing to tune. Press Capture near with your hand at the panel, then Capture far, to set which reading means "near".';
- else hint.textContent=d.calibrated?'':'Hold your hand at the panel and press Capture near, then move away and press Capture far.';
-}
-async function prox(){
- try{
-  var d=await (await fetch('/proximity')).json();
-  var box=document.getElementById('proxbox'),st=document.getElementById('proxstate');
-  if(!d.present){box.style.display='none';st.textContent='· not present';return;}
-  box.style.display='block';
-  document.getElementById('proxraw').textContent=d.raw==null?'–':d.raw.toFixed(1);
-  var nb=document.getElementById('proxnear');nb.textContent=d.near?'NEAR':'FAR';nb.style.color=d.near?'#48c774':'#888';
-  if(!proxDrag){var s=document.getElementById('proxslider');s.max=proxMax.toFixed(1);if(d.threshold!=null)s.value=d.threshold;}
-  proxApply(d);
- }catch(e){}
-}
-function proxPost(u,b){fetch(u,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:b}).then(function(r){return r.json();}).then(proxApply).catch(function(){});}
-function proxCap(s){proxPost('/proximity/capture','step='+s);}
-function proxSen(s){proxPost('/proximity/sensitivity','s='+s);}
-function proxReset(){proxPost('/proximity/reset','');}
-function proxThSet(v){proxDrag=false;proxPost('/proximity/threshold','v='+v);}
-(function(){var s=document.getElementById('proxslider');s.addEventListener('mousedown',function(){proxDrag=true;});s.addEventListener('touchstart',function(){proxDrag=true;});})();
-prox();setInterval(prox,400);
-</script>
+<script src="/info.js"></script>
 </div></body></html>"""
     }
 
     private fun esc(s: String): String = s
         .replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
+
+    /** Read a bundled static asset (info.js / info.css) as text. */
+    private fun asset(name: String): String =
+        appContext.assets.open(name).bufferedReader().use { it.readText() }
 
     /** Full config as JSON for fleet management. The MQTT password is never emitted — only a boolean
      *  saying whether one is set. `http_port` is read-only (changing it needs a restart). */

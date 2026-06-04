@@ -13,6 +13,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The info-page front-end is a static asset (not embedded in a Kotlin string), so its syntax
+      # is checkable. `node --check` catches JS syntax errors (e.g. an apostrophe in a single-quoted
+      # string) that the Kotlin build would otherwise pass straight through. Fails fast, before Gradle.
+      - name: Lint front-end JS
+        run: node --check app/src/main/assets/info.js
+
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
