@@ -20,6 +20,7 @@ import java.io.File
 object PerfReader {
     private const val MAX = 120          // ~4 min at 2s
     private const val INTERVAL_MS = 2000L
+    private const val ACTIVE_MS = 30_000L // sample only within this window of the last page view
 
     private val lock = Any()
     private var prevStat: List<LongArray>? = null
@@ -44,20 +45,39 @@ object PerfReader {
     private var prevTopTotal = 0L                 // /proc/stat aggregate jiffies at last top sample
     private var prevProc = HashMap<Int, Long>()   // pid -> utime+stime jiffies at last top sample
 
+    // Master switch (from config) + page-view gate. Instrumentation is the tool, not a tax: it must
+    // not be the panel's biggest CPU consumer 24/7. So sampling runs only when [enabled] AND the info
+    // page has been fetched within [ACTIVE_MS]; otherwise the loop just compares a timestamp and sleeps.
+    @Volatile var enabled = true
+    @Volatile private var lastAccessAt = 0L
+
+    /** Mark the perf page as being viewed; sampling stays live for [ACTIVE_MS] after the last call. */
+    fun touch() { lastAccessAt = System.currentTimeMillis() }
+
     /** Start the sampling loop on [scope] (idempotent enough for a single service lifetime). */
     fun start(scope: CoroutineScope) {
         scope.launch {
             rootOk = runCatching { Su.available() }.getOrDefault(false)
             while (isActive) {
-                runCatching { tick() }
+                if (enabled && System.currentTimeMillis() - lastAccessAt < ACTIVE_MS) {
+                    runCatching { tick() }
+                } else {
+                    resetBaselines() // re-baseline so the first sample after waking isn't a bogus delta
+                }
                 delay(INTERVAL_MS)
             }
         }
     }
 
+    /** Clear delta baselines while idle so the next active tick measures a fresh interval, not a huge gap. */
+    private fun resetBaselines() {
+        prevStat = null; prevTopTotal = 0L
+        prevProc = HashMap(); prevRenderJiffies = HashMap(); prevRenderAt = 0L
+    }
+
     /** Latest sample + history FIFO + top-5 procs + render jank, as JSON, for `GET /perf`. */
     fun json(): String = synchronized(lock) {
-        """{$latestFields,"top":$topJson,"render":$renderJson,"hist":{"cpu":${cpuHist.toList()},"ram":${ramHist.toList()},"gpu":${gpuHist.toList()}}}"""
+        """{"enabled":$enabled,$latestFields,"top":$topJson,"render":$renderJson,"hist":{"cpu":${cpuHist.toList()},"ram":${ramHist.toList()},"gpu":${gpuHist.toList()}}}"""
     }
 
     /**

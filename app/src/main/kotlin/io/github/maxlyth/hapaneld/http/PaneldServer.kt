@@ -57,7 +57,20 @@ class PaneldServer(
                     call.respondText(infoHtml(), ContentType.Text.Html)
                 }
                 get("/perf") {
+                    PerfReader.touch() // mark the page as being viewed so the sampler runs (idle otherwise)
                     call.respondText(PerfReader.json(), ContentType.Application.Json)
+                }
+                // Master switch for the instrumentation sampler (enabled=true|false) — persisted + live.
+                post("/instrumentation") {
+                    val on = call.receiveParameters()["enabled"]?.toBooleanStrictOrNull()
+                    if (on == null) {
+                        call.respondText("bad-value\n", status = HttpStatusCode.BadRequest)
+                    } else {
+                        config.setInstrumentation(on)
+                        PerfReader.enabled = on
+                        if (on) PerfReader.touch()
+                        call.respondText("""{"enabled":$on}""", ContentType.Application.Json)
+                    }
                 }
                 get("/diag") {
                     call.respondText(DiagReader.dump(appContext), ContentType.Text.Plain)
@@ -253,6 +266,11 @@ report of this panel's hardware, firmware, SELinux, su and node probes for bug r
  <span style="color:#48c774">▬</span> snappy &lt;50% · <span style="color:#d9a528">▬</span> maxed &gt;85%</div>
 <table id="smtbl"><tr><td style="color:#888">measuring…</td></tr></table></div>
 <div class="card"><h2>Performance <small id="perfage"></small></h2>
+<div style="display:flex;gap:6px;align-items:center;font-size:.78rem;margin-bottom:8px">
+ <span style="color:#8a8">Instrumentation</span>
+ <button type="button" class="pbtn" id="instron" onclick="instr(true)">On</button>
+ <button type="button" class="pbtn" id="instroff" onclick="instr(false)">Off</button>
+ <span style="color:#666">· samples only while this page is open; Off stops it entirely</span></div>
 <canvas id="perfchart" width="600" height="96" style="height:96px"></canvas>
 <div class="leg"><span style="color:#4a9eff">■</span> CPU&nbsp;&nbsp;<span style="color:#48c774">■</span> RAM&nbsp;&nbsp;<span style="color:#f5a623">■</span> GPU (% used) · ~4&nbsp;min</div>
 <table id="perf"><tr><td style="color:#888">sampling…</td></tr></table></div>

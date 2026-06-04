@@ -85,6 +85,13 @@ class Config(context: Context) {
         prefs.edit().putString("launcher_package", pkg).apply()
     }
 
+    /** Master switch for the (instrumentation-only) performance sampler. Default on, but page-view
+     *  gated so it idles near-zero; a user who's finished tuning can hard-disable it here. */
+    val instrumentationEnabled: Boolean get() = prefs.getBoolean("instrumentation", true)
+    fun setInstrumentation(on: Boolean) {
+        prefs.edit().putBoolean("instrumentation", on).apply()
+    }
+
     /**
      * HA device card manufacturer/model. The OS Build props are the generic SoC platform
      * (e.g. `rockchip`/`px30_evb`), not the product, so these are configurable — set e.g.

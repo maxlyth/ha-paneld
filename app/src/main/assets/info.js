@@ -6,8 +6,10 @@ function row(k,v){return '<tr><th>'+k+'</th><td>'+v+'</td></tr>';}
 function draw(){
  var c=document.getElementById('perfchart'),x=c.getContext('2d'),W=c.width,H=c.height;
  x.clearRect(0,0,W,H);
- x.strokeStyle='#2a2a2a';x.lineWidth=1;
- [0.25,0.5,0.75].forEach(function(f){var y=H-f*H;x.beginPath();x.moveTo(0,y);x.lineTo(W,y);x.stroke();});
+ x.lineWidth=1;x.font='11px system-ui,sans-serif';x.textBaseline='middle';
+ [25,50,75].forEach(function(p){var y=H-p/100*H;
+  x.strokeStyle='#383838';x.beginPath();x.moveTo(0,y);x.lineTo(W,y);x.stroke();
+  x.fillStyle='#181818';x.fillRect(0,y-7,26,14);x.fillStyle='#888';x.fillText(p+'%',2,y);});
  function line(a,col){
   if(a.length<2)return;
   x.strokeStyle=col;x.lineWidth=2;x.beginPath();
@@ -20,15 +22,24 @@ function draw(){
 function drawSm(hist){
  var c=document.getElementById('smchart'),x=c.getContext('2d'),W=c.width,H=c.height;
  x.clearRect(0,0,W,H);
- [[50,'#2a4a32'],[85,'#4a3f1a']].forEach(function(t){var y=H-(t[0]/100)*H;x.strokeStyle=t[1];x.beginPath();x.moveTo(0,y);x.lineTo(W,y);x.stroke();});
+ x.font='11px system-ui,sans-serif';x.textBaseline='middle';x.lineWidth=1;
+ [[50,'#3a5a42'],[85,'#6a5526']].forEach(function(t){var y=H-(t[0]/100)*H;x.strokeStyle=t[1];x.beginPath();x.moveTo(0,y);x.lineTo(W,y);x.stroke();x.fillStyle='#181818';x.fillRect(0,y-7,26,14);x.fillStyle='#888';x.fillText(t[0]+'%',2,y);});
  if(!hist||hist.length<2)return;
- var n=hist.length,sx=W/(MAX-1);x.lineWidth=2;x.beginPath();
- for(var i=0;i<n;i++){var px=W-(n-1-i)*sx,py=H-(Math.min(100,hist[i])/100)*H;i?x.lineTo(px,py):x.moveTo(px,py);}
- var last=hist[n-1];x.strokeStyle=last<5?'#48c774':(last<15?'#d9a528':'#d04a3b');x.stroke();
+ var n=hist.length,sx=W/(MAX-1),last=hist[n-1];
+ var col=last<5?'#48c774':(last<15?'#d9a528':'#d04a3b');
+ function PX(i){return W-(n-1-i)*sx;}function PY(i){return H-(Math.min(100,hist[i])/100)*H;}
+ x.beginPath();x.moveTo(PX(0),H);for(var i=0;i<n;i++)x.lineTo(PX(i),PY(i));x.lineTo(PX(n-1),H);x.closePath();x.fillStyle=col+'22';x.fill();
+ x.beginPath();for(var i=0;i<n;i++){i?x.lineTo(PX(i),PY(i)):x.moveTo(PX(i),PY(i));}x.lineWidth=2;x.strokeStyle=col;x.stroke();
 }
 async function perf(){
+ if(document.hidden)return;   // a hidden/background tab must not keep the sampler (or panel) busy
  try{
   var d=await (await fetch('/perf')).json();
+  setInstr(d.enabled!==false);
+  if(d.enabled===false){var off='<tr><td style="color:#888">instrumentation off — turn it on to measure</td></tr>';
+   document.getElementById('perf').innerHTML=off;document.getElementById('topproc').innerHTML=off;
+   var smt0=document.getElementById('smtbl');if(smt0)smt0.innerHTML=off;
+   document.getElementById('perfage').textContent='· off';return;}
   if(d.hist){cpuH=d.hist.cpu||[];ramH=d.hist.ram||[];gpuH=d.hist.gpu||[];}  // server FIFO
   draw();
   var ramPct=d.memTotalMb?Math.round(d.memUsedMb*100/d.memTotalMb):0;
@@ -64,6 +75,8 @@ async function perf(){
  }catch(e){document.getElementById('perfage').textContent='· unavailable';}
 }
 perf();setInterval(perf,2000);
+function setInstr(on){var a=document.getElementById('instron'),b=document.getElementById('instroff');if(a)a.className='pbtn'+(on?' on':'');if(b)b.className='pbtn'+(on?'':' on');}
+function instr(on){fetch('/instrumentation',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'enabled='+on}).then(function(r){return r.json();}).then(function(){perf();}).catch(function(){});}
 var proxMax=100,proxDrag=false;
 function proxDraw(d){
  var c=document.getElementById('proxgauge'),x=c.getContext('2d'),W=c.width,H=c.height;
@@ -91,6 +104,7 @@ function proxApply(d){
  else hint.textContent=d.calibrated?'':'Hold your hand at the panel and press Capture near, then move away and press Capture far.';
 }
 async function prox(){
+ if(document.hidden)return;   // pause 400ms polling when the tab isn't visible
  try{
   var d=await (await fetch('/proximity')).json();
   var box=document.getElementById('proxbox'),st=document.getElementById('proxstate');

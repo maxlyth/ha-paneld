@@ -152,6 +152,7 @@ class PaneldService : Service() {
         startForegroundCompat()
         scope.launch {
             io.github.maxlyth.hapaneld.http.PerfReader.dashboardPkg = dashboardTarget()
+            io.github.maxlyth.hapaneld.http.PerfReader.enabled = config.instrumentationEnabled
             io.github.maxlyth.hapaneld.http.PerfReader.start(scope)
             server.start()
             mdns.start()
