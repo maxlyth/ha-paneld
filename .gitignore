@@ -19,3 +19,7 @@ keystore.properties
 /app/release/
 # Compiled helper binaries (built on demand via helper/build.sh).
 /helper/dist/
+
+# Python bytecode (gen-icon.py imports)
+__pycache__/
+*.pyc
