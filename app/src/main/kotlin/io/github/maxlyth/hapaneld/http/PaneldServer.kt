@@ -312,7 +312,7 @@ report of this panel's hardware, firmware, SELinux, su and node probes for bug r
 <div class="card"><h2 id="config">Configuration</h2>
 <form method="post" action="/config">
  <label>Panel id <small>(entity_ids / MQTT topics)</small>
-  <input name="panel_id" value="$pid" pattern="[a-z0-9_]+" title="lowercase letters, digits, underscore" required></label>
+  <input name="panel_id" autocapitalize="none" autocorrect="off" spellcheck="false" value="$pid" pattern="[a-z0-9_]+" title="lowercase letters, digits, underscore" required></label>
  <label>Friendly name <small>(HA device name)</small>
   <input name="friendly_name" value="${esc(config.friendlyName)}" placeholder="Office Dash"></label>
  <label>Manufacturer <small>(HA device card)</small>
@@ -320,19 +320,21 @@ report of this panel's hardware, firmware, SELinux, su and node probes for bug r
  <label>Model <small>(HA device card)</small>
   <input name="model" value="${esc(config.model)}" placeholder="NSPanel Pro 120"></label>
  <label>MQTT broker
-  <input name="mqtt_broker" value="${esc(config.mqttBroker)}" placeholder="tcp://192.168.1.10:1883"></label>
+  <input name="mqtt_broker" autocapitalize="none" autocorrect="off" spellcheck="false" value="${esc(config.mqttBroker)}" placeholder="blank = auto-discover Home Assistant on the LAN"></label>
  <label>MQTT username
-  <input name="mqtt_user" value="${esc(config.mqttUser)}" placeholder="(optional)" autocomplete="off"></label>
+  <input name="mqtt_user" autocapitalize="none" autocorrect="off" spellcheck="false" value="${esc(config.mqttUser)}" placeholder="(optional)" autocomplete="off"></label>
  <label>MQTT password
   <input name="mqtt_password" type="password" value="" placeholder="(unchanged)" autocomplete="new-password"></label>
  <label>Dashboard package <small>(Reload button; blank = auto-detect Companion)</small>
-  <input name="dashboard_package" value="${esc(config.dashboardPackage)}" placeholder="io.homeassistant.companion.android"></label>
+  <input name="dashboard_package" autocapitalize="none" autocorrect="off" spellcheck="false" value="${esc(config.dashboardPackage)}" placeholder="io.homeassistant.companion.android"></label>
  <label>Launcher package <small>(blank = auto-detect)</small>
-  <input name="launcher_package" value="${esc(config.launcherPackage)}" placeholder="auto"></label>
+  <input name="launcher_package" autocapitalize="none" autocorrect="off" spellcheck="false" value="${esc(config.launcherPackage)}" placeholder="auto"></label>
  <button type="submit">Save</button>
 </form>
-<p class="note">Blank broker = HTTP/TTS-only (MQTT disabled). Password never shown — blank keeps the current one.
-Changing the panel id may leave the old device in HA to remove manually.</p></div>
+<p class="note">Leave the broker blank to auto-discover Home Assistant on the LAN (via mDNS) and use its
+MQTT broker on :1883; set it explicitly if your broker is elsewhere, or to a non-HA host. Password never
+shown — blank keeps the current one. Changing the panel id may leave the old device in HA to remove
+manually.</p></div>
 </div>
 <p class="note" style="text-align:center;margin-top:18px"><a href="/api" style="color:#9cf">REST API explorer</a>
  · <a href="/diag" target="_blank" style="color:#9cf">diagnostics</a></p>
