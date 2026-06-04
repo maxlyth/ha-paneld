@@ -329,7 +329,7 @@ report of this panel's hardware, firmware, SELinux, su and node probes for bug r
  <label>MQTT broker
   <input name="mqtt_broker" autocapitalize="none" autocorrect="off" spellcheck="false" value="${esc(config.mqttBroker)}" placeholder="blank = auto-discover Home Assistant on the LAN"></label>
  <label>MQTT username
-  <input name="mqtt_user" autocapitalize="none" autocorrect="off" spellcheck="false" value="${esc(config.mqttUser)}" placeholder="(optional)" autocomplete="off"></label>
+  <input name="mqtt_user" autocapitalize="none" autocorrect="off" spellcheck="false" value="${esc(config.mqttUser)}" placeholder="blank if the broker needs no login" autocomplete="off"></label>
  <label>MQTT password
   <input name="mqtt_password" type="password" value="" placeholder="(unchanged)" autocomplete="new-password"></label>
  <label>Dashboard package <small>(Reload button; blank = auto-detect Companion)</small>
@@ -340,8 +340,10 @@ report of this panel's hardware, firmware, SELinux, su and node probes for bug r
 </form>
 <p class="note">Leave the broker blank to auto-discover Home Assistant on the LAN (via mDNS) and use its
 MQTT broker on :1883; set it explicitly if your broker is elsewhere, on a non-HA host, or if your
-network has more than one Home Assistant instance. Password never shown — blank keeps the current one.
-Changing the panel id may leave the old device in HA to remove manually.</p></div>
+network has more than one Home Assistant instance. Leave username/password blank if the broker allows
+anonymous connections; if it needs a login (e.g. the HA Mosquitto add-on), enter your MQTT credentials —
+the MQTT line above shows <b>auth rejected</b> until they're correct. Password never shown — blank keeps
+the current one. Changing the panel id may leave the old device in HA to remove manually.</p></div>
 </div>
 <p class="note" style="text-align:center;margin-top:18px"><a href="/api" style="color:#9cf">REST API explorer</a>
  · <a href="/diag" target="_blank" style="color:#9cf">diagnostics</a></p>
