@@ -202,6 +202,15 @@ You don't need to configure signing to build and run ha-paneld. Two cases:
 > versa — `adb`/the installer rejects it with a signature mismatch. Uninstall first
 > (`adb uninstall io.github.maxlyth.hapaneld`), then install the other build. Uninstalling clears the
 > panel's saved config, so re-run provisioning afterwards. This is the one thing that trips people up.
+>
+> If you enabled ha-paneld's optional device-admin (used for screen-off via `lockNow()`), the
+> uninstall fails with `DELETE_FAILED_DEVICE_POLICY_MANAGER` — an active device admin can't be
+> removed. Disable it first, then uninstall:
+>
+> ```sh
+> adb shell dpm remove-active-admin io.github.maxlyth.hapaneld/.control.PanelAdminReceiver
+> adb uninstall io.github.maxlyth.hapaneld
+> ```
 
 **Signing your own fork's releases (optional):**
 
