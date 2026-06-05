@@ -27,3 +27,6 @@ __pycache__/
 # cdprelay binaries are built by gradle (compileCdpRelay) from helper/cdprelay.c
 /app/src/main/assets/cdprelay-arm64
 /app/src/main/assets/cdprelay-arm
+
+# gen-icon.py preview output (dev artifact, not shipped)
+docs/icon-preview.png

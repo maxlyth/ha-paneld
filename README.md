@@ -356,7 +356,6 @@ Planned:
 - **Visible nav-bar show/hide** — a real on-device nav-bar toggle (remote Back/Recents already shipped).
 - Daemon boot-persistence on su-only (PX30) panels, if true-off is wanted without relying on `su`
   at runtime.
-- A monochrome (themed-icon) variant and a published documentation site.
 
 ## Documentation
 
