@@ -6,10 +6,12 @@ the security decisions taken; it's the reference for hardening work.
 
 ## Trust model
 
-The panel and Home Assistant sit on a **trusted LAN**. The primary adversary is a **LAN-local actor
-without credentials**; a root/file-level attacker on the panel itself is out of scope (they already own
-the device). The design goal is to keep the **turnkey, no-token pairing UX** while removing the
-remote-takeover paths a LAN actor could use.
+The panel and Home Assistant sit on a **trusted LAN**, and the app is built around a **turnkey,
+no-token pairing UX**. A root/file-level attacker on the panel itself is out of scope (they already own
+the device). The notable **accepted residual risk** is that a LAN-local actor without credentials can
+reach the unauthenticated `:8888` API (e.g. `POST /config` to repoint MQTT). Under the LAN-trust model
+this is accepted; restricting reach is delegated to network segmentation (#2), with HA-auth (#3) as the
+upgrade path if/when ha-paneld is deployed on a less-trusted network.
 
 ## Attack surface (2026-06-05 review)
 
@@ -32,11 +34,12 @@ remote-takeover paths a LAN actor could use.
 ## Decisions
 
 1. **No bespoke API token.** A per-panel secret is throwaway and breaks the easy UX. (Rejected.)
-2. **Near-term control: client subnet/IP allowlist** for the HTTP API (and the CDP relay). Default
-   permissive (turnkey preserved); the operator can restrict access to e.g. the HA server IP or the
-   LAN subnet. One network-layer control that uniformly gates `/config`, `/play`, `/inspect`/CDP and
-   `/diag` — preferred over per-endpoint hacks (which would, e.g., break the no-adb DevTools feature or
-   gut `/diag`'s support value).
+2. **No in-app network allowlist.** Restricting *who* can reach `:8888` is delegated to the
+   network/infrastructure layer (router / VLAN / firewall segmentation) rather than reinvented in the
+   app — consistent with leaning on existing platform/infra capabilities. Note HA's own IP allowlist /
+   `ip_ban` secures HA's HTTP server, **not** the panel's separate `:8888`, so it doesn't apply
+   directly; network segmentation is the "use what exists" control here. The in-app upgrade path, when
+   warranted, is the HA-auth model (#3).
 3. **Future auth: integrate with HA's auth model**, not a custom scheme. When real auth is warranted,
    require `Authorization: Bearer <token>` on state-changing endpoints and **validate the token against
    the configured HA instance** (cached `GET /api/`). This reuses HA's token lifecycle (issue/revoke in
@@ -46,8 +49,8 @@ remote-takeover paths a LAN actor could use.
 4. **Credential-at-rest encryption descoped.** MQTT creds live in app SharedPreferences; encrypting
    them only defends against a root/file attacker who already owns the device, at the cost of a
    deprecated `security-crypto` dependency and a live-fleet cred migration. Low value for the cost.
-5. **TLS-disabled `/play`** stays (LAN self-signed convenience) but is covered by the subnet allowlist
-   (only trusted clients can trigger fetches); revisit if auth (3) lands.
+5. **TLS-disabled `/play`** stays (LAN self-signed convenience) under the LAN-trust model; revisit if
+   HA-auth (3) lands.
 
 ## Done
 
