@@ -16,6 +16,16 @@ import android.view.accessibility.AccessibilityEvent
  */
 class PanelAccessibilityService : AccessibilityService() {
 
+    override fun onServiceConnected() {
+        super.onServiceConnected()
+        instance = this
+    }
+
+    override fun onDestroy() {
+        if (instance === this) instance = null
+        super.onDestroy()
+    }
+
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
 
     override fun onInterrupt() {}
@@ -32,5 +42,14 @@ class PanelAccessibilityService : AccessibilityService() {
 
     companion object {
         private const val TAG = "ha-paneld/buttons"
+
+        // Set while the a11y service is connected; lets the MQTT command path perform global nav
+        // actions (back/recents/home) with no root — performGlobalAction is an a11y capability.
+        @Volatile
+        private var instance: PanelAccessibilityService? = null
+
+        fun navBack(): Boolean = instance?.performGlobalAction(GLOBAL_ACTION_BACK) ?: false
+        fun navRecents(): Boolean = instance?.performGlobalAction(GLOBAL_ACTION_RECENTS) ?: false
+        fun navHome(): Boolean = instance?.performGlobalAction(GLOBAL_ACTION_HOME) ?: false
     }
 }

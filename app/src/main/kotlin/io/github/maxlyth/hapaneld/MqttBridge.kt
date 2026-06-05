@@ -13,6 +13,7 @@ import io.github.maxlyth.hapaneld.control.SystemController
 import io.github.maxlyth.hapaneld.control.VolumeController
 import io.github.maxlyth.hapaneld.hardware.LedController
 import io.github.maxlyth.hapaneld.input.ButtonBus
+import io.github.maxlyth.hapaneld.input.PanelAccessibilityService
 import io.github.maxlyth.hapaneld.util.HelperClient
 import org.json.JSONObject
 import java.net.URI
@@ -74,6 +75,8 @@ class MqttBridge(
     private val cmdHome = "ha-paneld/$panel/home/set"
     private val cmdButtons = "ha-paneld/$panel/buttons/set"
     private val stateButtons = "ha-paneld/$panel/buttons/state"
+    private val cmdBack = "ha-paneld/$panel/back/set"
+    private val cmdRecents = "ha-paneld/$panel/recents/set"
     private val stateScreen = "ha-paneld/$panel/screen/state"
     private val stateLed = "ha-paneld/$panel/led/state"
     private val stateNavigate = "ha-paneld/$panel/navigate/state"
@@ -204,6 +207,8 @@ class MqttBridge(
                 cmdLauncher -> system.launchLauncher(config.launcherPackage)
                 cmdHome -> system.launchHome(config.dashboardPackage)
                 cmdButtons -> handleButtons(payload)
+                cmdBack -> PanelAccessibilityService.navBack()
+                cmdRecents -> PanelAccessibilityService.navRecents()
                 else -> Log.d(TAG, "unhandled command topic $topic")
             }
         } catch (e: Exception) {
@@ -346,6 +351,15 @@ class MqttBridge(
                 c, "event", "${panel}_button",
                 """{"name":"Button","unique_id":"${panel}_button","state_topic":"$eventButton","event_types":["KEYCODE_MUTE","KEYCODE_F","KEYCODE_BACK","KEYCODE_HOME","KEYCODE_DPAD_CENTER","KEYCODE_VOLUME_UP","KEYCODE_VOLUME_DOWN"],$avail,$device}""",
             )
+            // Nav actions via the a11y service (performGlobalAction) — uniform on every panel, no root.
+            publishConfig(
+                c, "button", "${panel}_back",
+                """{"name":"Back","unique_id":"${panel}_back","command_topic":"$cmdBack","icon":"mdi:arrow-left",$avail,$device}""",
+            )
+            publishConfig(
+                c, "button", "${panel}_recents",
+                """{"name":"Recents","unique_id":"${panel}_recents","command_topic":"$cmdRecents","icon":"mdi:view-agenda",$avail,$device}""",
+            )
         }
 
         // TTS/announce playback volume (STREAM_MUSIC). HA has no MQTT media_player platform, so
@@ -422,6 +436,7 @@ class MqttBridge(
         val entities = listOf(
             "light" to "${panel}_screen", "light" to "${panel}_led",
             "text" to "${panel}_navigate", "event" to "${panel}_button",
+            "button" to "${panel}_back", "button" to "${panel}_recents",
             "number" to "${panel}_volume", "sensor" to "${panel}_illuminance",
             "binary_sensor" to "${panel}_proximity",
             "sensor" to "${panel}_temperature", "sensor" to "${panel}_humidity",
