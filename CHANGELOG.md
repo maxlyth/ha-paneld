@@ -4,6 +4,24 @@ Human-readable summaries of each release. The auto-generated commit list is appe
 notes on each [GitHub release](https://github.com/maxlyth/ha-paneld/releases). Cutting a release? Follow
 the pre-tag checklist in [docs/RELEASING.md](docs/RELEASING.md) (it starts with "check the README").
 
+## v0.7.0-rc1 - 2026-06-06
+
+Architecture-focused release (no new entities). **Release candidate** — please soak before v0.7.0.
+
+- **Device-profile architecture** — each supported panel now has a single canonical silo
+  (`device/<panel>.kt`) declaring its quirks/paths; the LED, Zigbee and relay controllers read the
+  active profile (detected once at startup) instead of hardcoding device specifics, while still
+  runtime-probing to confirm. An unrecognised panel falls back to a Generic profile and works for
+  whatever it physically has. The detected platform is shown on the info page. No change to the HA
+  entities. Design: [docs/architecture/device-profiles.md](docs/architecture/device-profiles.md).
+- **Security hardening** — the Zigbee role-switch is allowlisted before any shell interpolation; the
+  security posture (LAN-trust, network-layer access control, HA-auth as the future path) is documented
+  in [docs/architecture/security.md](docs/architecture/security.md).
+- **App UI** — the product description now shows on 480×480 square panels, and the UI is vertically
+  centred (no empty band at the bottom).
+- **Docs** — a "Why not Fully Kiosk?" section; releases are now cut as contenders (tagged only on
+  approval), per [docs/RELEASING.md](docs/RELEASING.md).
+
 ## v0.6.3 - 2026-06-05
 
 Small fixes and polish; documents the 0.7.0 roadmap.

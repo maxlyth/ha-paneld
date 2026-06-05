@@ -341,8 +341,23 @@ means you can never publish an in-place update again. Never commit the keystore 
 
 ## Status & roadmap
 
-**v0.6.x** — validated across the panel fleet: Sonoff NSPanel Pro (PX30, Android 8.1),
-Tuya TPA10 (rk3566, Android 11), Electron WF1589T (rk3576, Android 14).
+Validated across the panel fleet: Sonoff NSPanel Pro (PX30, Android 8.1), Tuya TPA10 (rk3566,
+Android 11), Electron WF1589T (rk3576, Android 14).
+
+New in 0.7.0 (architecture-focused — no new entities):
+
+- **Device-profile architecture** — each supported panel has a single canonical silo
+  ([`device/<panel>.kt`](app/src/main/kotlin/io/github/maxlyth/hapaneld/device/)) declaring its
+  quirks/paths; the LED, Zigbee and relay controllers read the active profile (detected once at
+  startup) instead of hardcoding device specifics, while still runtime-probing to confirm. An
+  unrecognised panel falls back to a Generic profile and works for whatever it physically has. The
+  detected platform is shown on the info page. Design:
+  [docs/architecture/device-profiles.md](docs/architecture/device-profiles.md).
+- **Security** — the Zigbee role-switch is allowlisted before any shell interpolation; the security
+  posture (LAN-trust, network-layer access control, HA-auth as the future path) is documented in
+  [docs/architecture/security.md](docs/architecture/security.md).
+- **App UI** — the product description now shows on 480×480 square panels, and the UI is vertically
+  centred (no empty band at the bottom).
 
 New in 0.6.2:
 
@@ -404,10 +419,6 @@ Carried from 0.4.x:
 
 Planned:
 
-- **0.7.0 — Device-profile architecture refactor (architecture only, no new features).** A single
-  canonical silo per platform (`device/<panel>.kt`) declaring its quirks/paths, with generic modules
-  reading the active profile and still runtime-probing to confirm — so a new panel either works
-  generically or needs one small profile file. Design: [docs/architecture/device-profiles.md](docs/architecture/device-profiles.md).
 - **More performance tooling** — deeper on-device instrumentation to measure, diagnose and tune
   dashboard performance on weak panels.
 - **Built-in relay control beyond the S9E** — the same `switch.<panel>_relay*` model on other panels

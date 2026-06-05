@@ -1,6 +1,8 @@
-# Device-profile architecture (planned, 0.7.0)
+# Device-profile architecture
 
-> Status: **design, targeted at 0.7.0** — an architecture-only release, no new user features.
+> Status: **implemented in 0.7.0** — an architecture-focused release, no new user features. The LED,
+> Zigbee and relay controllers read the active profile; `Su` and `ScreenController` deliberately stay on
+> their runtime autodetect/tiering (already device-agnostic), with their profile fields declarative.
 
 ## Problem
 
