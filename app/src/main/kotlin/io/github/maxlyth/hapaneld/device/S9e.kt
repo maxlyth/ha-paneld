@@ -16,6 +16,9 @@ object S9e : DeviceProfile {
     override val appCanSu = true            // vendor uses execRootCmd; unconfirmed for a normal app
     override val ledMechanism = LedMechanism.NONE
     override val screenOff = ScreenOff.BRIGHTNESS_ZERO
+    // The S9E hardware HAS Zigbee, but it's a Tuya/Smatek gateway — NOT Sonoff's siliconlabs_host
+    // stack that ZigbeeController drives. Its path + control protocol are unknown and can't be guessed;
+    // stays null until reverse-engineered on a real unit (then either set this, or add a Tuya path).
     override val zigbeeGatewayDir: String? = null
     override val relayBase = "/sys/class/st_relay"
     override val buttonLedGpioBase = 147
