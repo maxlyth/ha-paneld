@@ -5,10 +5,21 @@ to Home Assistant over HTTP + MQTT auto-discovery + mDNS, so a panel pairs itsel
 sideload the APK — no per-device YAML.
 
 It is built for panel-class Android (Sonoff NSPanelPro, Tuya TPA10, and similar), **not** personal
-phones. The official HA Companion app remains the HOME launcher and dashboard; ha-paneld runs as a
-headless foreground service alongside it and never takes the foreground.
+phones. The official [HA Companion app](https://github.com/home-assistant/android) (panels need the
+[current **minimal** release APK](https://github.com/home-assistant/android/releases/latest/download/app-minimal-release.apk),
+the no-Google-Play build) remains the HOME launcher and dashboard; ha-paneld runs as a headless
+foreground service alongside it and never takes the foreground.
 
 ![ha-paneld's on-panel configuration page — responsive cards for panel info, capabilities, live performance and configuration](docs/img/config-ui.png)
+
+**Performance is a first-class concern.** Panel-class hardware is cheap and frequently underpowered,
+so a Home Assistant dashboard that flies on a phone can crawl on a wall panel — and there's usually
+no visibility into *why*. A large part of ha-paneld is therefore about **measuring and tuning**: it
+reports on-device CPU / GPU / clock and thermal throttling, a dashboard responsiveness metric, the
+top CPU consumers, and a 1-click WebView DevTools relay — so you can find what's actually costing
+frames and tune the dashboard to the panel instead of guessing. See the
+[performance comparison](docs/hardware/README.md#performance-comparison--practical-deployment) and
+[docs/performance.md](docs/performance.md).
 
 > **Status: v0.x preview.** Entity names and the API may still change before v1.0.0. It's an ordinary
 > app install — no root-partition or firmware changes — so it uninstalls cleanly if you change your mind.
@@ -36,7 +47,7 @@ directly (see [Provisioning](#provisioning-no-device-ui-on-rooteduserdebug-panel
 
 ## Why not just the Companion app?
 
-The Companion app targets personal phones. Wall panels need different primitives: arbitrary-URL
+The [Companion app](https://github.com/home-assistant/android) targets personal phones. Wall panels need different primitives: arbitrary-URL
 audio announcements, screen/LED/button control (via the bundled NDK or a small root helper),
 hardware-button events back to HA, and turnkey mDNS pairing. ha-paneld covers those; Companion keeps
 doing what it does (and remains the dashboard host).
@@ -298,6 +309,13 @@ Carried from 0.4.x:
 
 Planned:
 
+- **More performance tooling** — deeper on-device instrumentation to measure, diagnose and tune
+  dashboard performance on weak panels (the project's headline direction).
+- **Wake on wave** — wake the screen on approach via the proximity / ToF sensor.
+- **Navigation-bar control** — show/hide the Android nav bar for kiosk use.
+- **Temperature + humidity sensors** — expose onboard climate sensors (e.g. the TPA10's CHT8305) to HA.
+- **Zigbee gateway control** — on panels with a built-in radio (e.g. the NSPanel Pro's Silicon Labs
+  EFR32 on a UART) — free it from the vendor stack for use with Zigbee2MQTT / ZHA.
 - Daemon boot-persistence on su-only (PX30) panels, if true-off is wanted without relying on `su`
   at runtime.
 - A monochrome (themed-icon) variant and a published documentation site.
@@ -330,10 +348,12 @@ Planned:
 
 ## Acknowledgements
 
-Thanks to **Seaky** for **NSPanelTools**, which showed what good panel-side Home Assistant tooling can
-do — genuinely excellent work. NSPanelTools targets Smatek / NSPanel-class hardware and is closed-source;
-ha-paneld exists to be an **open, multi-vendor** alternative that any Android panel can adopt and extend.
-The two solve overlapping problems for different audiences.
+Thanks to **Seaky** for [**NSPanel Pro Tools**](https://github.com/seaky/nspanel_pro_tools_apk)
+([releases](https://github.com/seaky/nspanel_pro_tools_apk/releases)), which showed what good
+panel-side Home Assistant tooling can do — genuinely excellent work. It targets the Sonoff
+NSPanel-Pro class and is distributed as a closed-source APK; ha-paneld exists to be an **open,
+multi-vendor** alternative that any Android panel can adopt and extend. The two solve overlapping
+problems for different audiences.
 
 ## Licence
 

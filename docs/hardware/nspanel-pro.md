@@ -14,7 +14,7 @@ panel on the market. Reverse-engineered on a live unit (Android 8.1, rooted, too
 | Storage | eMMC; `/data` ≈ 3.5 GB |
 | Android | 8.1 (API 27) |
 | ABI | arm64-v8a |
-| Radios | Wi-Fi, Bluetooth. **No NFC, zigbee, IR, ethernet, cellular.** |
+| Radios | **Zigbee 3.0** (Silicon Labs EFR32 coordinator on UART `ttyS5` — see below), Wi-Fi, Bluetooth. No NFC, IR, ethernet, cellular. |
 
 > [!NOTE]
 > The Cortex-A35 is an efficiency core with markedly lower per-clock throughput than the A55 (TPA10)
@@ -49,6 +49,18 @@ proximity here directly. No temperature/humidity sensor is fitted.
 No `/sys/class/leds` RGB node and no `/dev/ledjni` were found on this unit, so there is **no
 app/​sysfs-controllable RGB LED characterised** on the NSPanel Pro (contrast the TPA10's `avsux` node
 and the WF1589T's `/dev/ledjni`). Screen brightness/backlight use the standard Android paths.
+
+## Zigbee gateway
+
+The NSPanel Pro has a built-in **Silicon Labs EFR32 Zigbee 3.0 radio** on UART `/dev/ttyS5`. Out of
+the box it is owned by the vendor daemon `/vendor/bin/siliconlabs_host/zgateway` and driven by the
+eWeLink apps (`com.eWeLinkNSPro.dev`, `com.eWeLinkControlPanel`) — i.e. the panel ships as an eWeLink
+Zigbee hub.
+
+To use the radio with Home Assistant (Zigbee2MQTT / ZHA) you must free it from the vendor stack (stop
+`zgateway`) and speak EZSP to `ttyS5`. The community project
+[seaky/nspanel_pro_zigbee](https://github.com/seaky/nspanel_pro_zigbee) packages exactly this.
+ha-paneld does not manage Zigbee today — it's on the [roadmap](../../README.md#status--roadmap).
 
 ## Access model summary
 

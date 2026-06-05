@@ -8,7 +8,7 @@ drive it — gathered from live units (rooted / userdebug `adb root`) on 2026-06
 |---|---|---|---|---|---|---|
 | Tuya TPA10 | rk3566 | `avsux` sysfs (root daemon) | ToF VI5300, CHT8305 temp+humidity, CG5256 light | no | no | [tpa10.md](tpa10.md) |
 | Electron WF1589T | rk3576 | `/dev/ledjni` (app-direct) | 6-axis IMU (KXTJ9 + BMA2xx) | yes — NXP, but Android-NFC disabled | no | [wf1589t.md](wf1589t.md) |
-| Sonoff NSPanel Pro | rk3326 / PX30 | none (no RGB node) | STK3A5x light + proximity (app-direct) | no | no | [nspanel-pro.md](nspanel-pro.md) |
+| Sonoff NSPanel Pro | rk3326 / PX30 | none (no RGB node) | STK3A5x light + proximity (app-direct) | no | **Zigbee** (Silabs EFR32, UART); no IR | [nspanel-pro.md](nspanel-pro.md) |
 
 ## Method
 
