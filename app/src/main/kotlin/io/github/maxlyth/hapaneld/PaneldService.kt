@@ -18,6 +18,7 @@ import io.github.maxlyth.hapaneld.control.ScreenController
 import io.github.maxlyth.hapaneld.control.SystemController
 import io.github.maxlyth.hapaneld.control.TouchSoundController
 import io.github.maxlyth.hapaneld.control.VolumeController
+import io.github.maxlyth.hapaneld.control.ZigbeeController
 import io.github.maxlyth.hapaneld.hardware.LedController
 import io.github.maxlyth.hapaneld.hardware.LedFactory
 import io.github.maxlyth.hapaneld.hardware.Rk3576LedController
@@ -57,6 +58,7 @@ class PaneldService : Service() {
     private lateinit var volume: VolumeController
     private lateinit var system: SystemController
     private lateinit var touchSound: TouchSoundController
+    private lateinit var zigbee: ZigbeeController
     private var configUrl: String? = null
 
     override fun onCreate() {
@@ -71,6 +73,7 @@ class PaneldService : Service() {
         volume = VolumeController(this)
         system = SystemController(this)
         touchSound = TouchSoundController(this)
+        zigbee = ZigbeeController()
         configUrl = localIpv4()?.let { "http://$it:${config.httpPort}/" }
 
         mqtt = buildMqtt()
@@ -79,7 +82,7 @@ class PaneldService : Service() {
     }
 
     private fun buildMqtt(): MqttBridge = MqttBridge(
-        config, brightness, screen, led, navigate, volume, system, touchSound,
+        config, brightness, screen, led, navigate, volume, system, touchSound, zigbee,
         accessibilityEnabled(), sensors.hasLight(), sensors.hasProximity(),
         sensors.hasTemperature(), sensors.hasHumidity(),
         // Button backlight lives on the sysfs/daemon LED panels (TPA10), reached via the daemon's BTN.
@@ -130,6 +133,9 @@ class PaneldService : Service() {
             "Light sensor" to yesNo(sensors.hasLight()),
             "Proximity" to yesNo(sensors.hasProximity()),
             "Buttons (a11y)" to yesNo(accessibilityEnabled()),
+            // Zigbee driver presence + state (NSPanel Pro only; "none" elsewhere). status() shells
+            // out via su — fine here because the info page is served off the main thread.
+            "Zigbee" to zigbee.status(),
         )
         return PanelInfo.collect(this, extras)
     }

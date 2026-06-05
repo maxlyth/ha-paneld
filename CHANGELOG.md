@@ -3,6 +3,19 @@
 Human-readable summaries of each release. The auto-generated commit list is appended below these
 notes on each [GitHub release](https://github.com/maxlyth/ha-paneld/releases).
 
+## v0.6.1 - 2026-06-05
+
+Zigbee router control for the Sonoff NSPanel Pro (the only panel with a Zigbee radio).
+
+- **`switch.<panel>_zigbee_router`** — turn the panel's built-in Silicon Labs EFR32 into a Zigbee
+  router/repeater (extends an existing mesh) and back off. ON starts the Sonoff `zgateway` host stack
+  (kept alive by its own supervisor) and ensures router mode; OFF stops it and frees the radio.
+- **Info-page Zigbee row** — shows the installed gateway driver and version (e.g. `sonoff 3.7.1`),
+  whether it's running, and the current network role.
+- Implementation is local and credential-free: ha-paneld talks to the panel's on-device mosquitto
+  broker (`zigbee/system/network-role/…`); no firmware reflash, no `/dev/ttyS5` handling. The router
+  appears as a normal device in your ZHA/Zigbee2MQTT coordinator, with its own signal/last-seen there.
+
 ## v0.6.0 - 2026-06-05
 
 New entities and on-panel UX — all app-side (no daemon or root changes).

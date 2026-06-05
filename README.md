@@ -303,8 +303,16 @@ means you can never publish an in-place update again. Never commit the keystore 
 
 ## Status & roadmap
 
-**v0.6.0 (preview)** — validated across the panel fleet: Sonoff NSPanel Pro (PX30, Android 8.1),
+**v0.6.x** — validated across the panel fleet: Sonoff NSPanel Pro (PX30, Android 8.1),
 Tuya TPA10 (rk3566, Android 11), Electron WF1589T (rk3576, Android 14).
+
+New in 0.6.1:
+
+- **Zigbee router** (`switch.<panel>_zigbee_router`, Sonoff NSPanel Pro only) — turn the panel's
+  built-in EFR32 radio into a Zigbee router/repeater to extend an existing mesh, and back off again.
+  No reflash; ha-paneld drives the on-device Sonoff gateway over its local broker. The router then
+  shows up as a normal device in your ZHA / Zigbee2MQTT coordinator. The info page reports the
+  installed gateway driver/version, running state and current role.
 
 New in 0.6.0 (all app-side):
 
@@ -349,8 +357,9 @@ Planned:
 - **CPU governor control** — set the scaling governor from HA (powersave ↔ performance) to trade panel
   heat/power against dashboard responsiveness; automatable (e.g. powersave when the room is empty).
 - **Persistent network adb** — keep `adb tcpip` enabled across reboots, for panels that drop it.
-- **Zigbee gateway control** (0.6.1) — on panels with a built-in radio (e.g. the NSPanel Pro's Silicon
-  Labs EFR32 on a UART) — free it from the vendor stack for use with Zigbee2MQTT / ZHA.
+- **Built-in relay control** — expose a panel's onboard load-switching relay(s), where fitted, as
+  `switch.<panel>_relay*` so the panel can drive the light/appliance it's wired to. Hardware-dependent;
+  needs the per-panel relay control path (GPIO / vendor node) identified first.
 - **DLNA renderer** — advertise as a UPnP/DLNA media renderer so HA auto-discovers a `media_player`
   (`tts.speak` then targets the panel directly, no script).
 - **Visible nav-bar show/hide** — a real on-device nav-bar toggle (remote Back/Recents already shipped).

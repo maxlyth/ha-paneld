@@ -12,6 +12,7 @@ import io.github.maxlyth.hapaneld.control.ScreenController
 import io.github.maxlyth.hapaneld.control.SystemController
 import io.github.maxlyth.hapaneld.control.TouchSoundController
 import io.github.maxlyth.hapaneld.control.VolumeController
+import io.github.maxlyth.hapaneld.control.ZigbeeController
 import io.github.maxlyth.hapaneld.hardware.LedController
 import io.github.maxlyth.hapaneld.input.ButtonBus
 import io.github.maxlyth.hapaneld.input.PanelAccessibilityService
@@ -41,6 +42,9 @@ class MqttBridge(
     private val volume: VolumeController,
     private val system: SystemController,
     private val touchSound: TouchSoundController,
+    // Zigbee gateway control (Sonoff NSPanel Pro only). Presence is detected lazily on the MQTT
+    // thread in publishDiscovery — it costs a su exec, so it must not run on the main thread.
+    private val zigbee: ZigbeeController,
     private val buttonsEnabled: Boolean,
     private val hasLight: Boolean,
     private val hasProximity: Boolean,
@@ -83,6 +87,8 @@ class MqttBridge(
     private val stateWakeOnWave = "ha-paneld/$panel/wake_on_wave/state"
     private val cmdTouchSound = "ha-paneld/$panel/touch_sound/set"
     private val stateTouchSound = "ha-paneld/$panel/touch_sound/state"
+    private val cmdZigbee = "ha-paneld/$panel/zigbee_router/set"
+    private val stateZigbee = "ha-paneld/$panel/zigbee_router/state"
     private val stateScreen = "ha-paneld/$panel/screen/state"
     private val stateLed = "ha-paneld/$panel/led/state"
     private val stateNavigate = "ha-paneld/$panel/navigate/state"
@@ -219,6 +225,7 @@ class MqttBridge(
                 cmdRecents -> PanelAccessibilityService.navRecents()
                 cmdWakeOnWave -> handleWakeOnWave(payload)
                 cmdTouchSound -> handleTouchSound(payload)
+                cmdZigbee -> handleZigbee(payload)
                 else -> Log.d(TAG, "unhandled command topic $topic")
             }
         } catch (e: Exception) {
@@ -294,6 +301,16 @@ class MqttBridge(
             if (on) """{"state":"ON","brightness":$level}""" else """{"state":"OFF"}""",
             retain = true,
         )
+    }
+
+    // Zigbee router toggle (Sonoff NSPanel Pro). ON starts the guard supervisor (→ mosquitto +
+    // zgateway, ensures Repeater role); OFF stops the guard + zstack, freeing the radio. State is
+    // published optimistically — the gateway takes ~30s to spawn, and the guard makes it stable
+    // afterwards; the next (re)connect reconciles to the real running state via publishDiscovery.
+    private fun handleZigbee(payload: String) {
+        val on = payload.trim().equals("ON", ignoreCase = true)
+        if (on) zigbee.enable() else zigbee.disable()
+        client?.let { publish(it, stateZigbee, if (on) "ON" else "OFF", retain = true) }
     }
 
     private fun handleNavigate(payload: String) {
@@ -435,6 +452,16 @@ class MqttBridge(
         )
         publish(c, stateTouchSound, if (touchSound.isEnabled()) "ON" else "OFF", retain = true)
 
+        // Zigbee router — only on panels with the Sonoff gateway package (NSPanel Pro). present()
+        // costs a su exec; safe here because onConnected runs off the main thread.
+        if (zigbee.present()) {
+            publishConfig(
+                c, "switch", "${panel}_zigbee_router",
+                """{"name":"Zigbee router","unique_id":"${panel}_zigbee_router","command_topic":"$cmdZigbee","state_topic":"$stateZigbee","icon":"mdi:zigbee","entity_category":"config",$avail,$device}""",
+            )
+            publish(c, stateZigbee, if (zigbee.running()) "ON" else "OFF", retain = true)
+        }
+
         // Panel actions (root via su; graceful no-op without it).
         publishConfig(
             c, "button", "${panel}_reload",
@@ -475,7 +502,7 @@ class MqttBridge(
             "binary_sensor" to "${panel}_proximity",
             "sensor" to "${panel}_temperature", "sensor" to "${panel}_humidity",
             "light" to "${panel}_buttons", "switch" to "${panel}_wake_on_wave",
-            "switch" to "${panel}_touch_sound",
+            "switch" to "${panel}_touch_sound", "switch" to "${panel}_zigbee_router",
             "button" to "${panel}_reload", "button" to "${panel}_reboot",
             "button" to "${panel}_launcher", "button" to "${panel}_home",
         )
