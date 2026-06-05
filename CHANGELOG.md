@@ -4,6 +4,20 @@ Human-readable summaries of each release. The auto-generated commit list is appe
 notes on each [GitHub release](https://github.com/maxlyth/ha-paneld/releases). Cutting a release? Follow
 the pre-tag checklist in [docs/RELEASING.md](docs/RELEASING.md) (it starts with "check the README").
 
+## v0.6.3 - 2026-06-05
+
+Small fixes and polish; documents the 0.7.0 roadmap.
+
+- **App icon shown** on the info page and in the README; the on-panel App-UI icon is enlarged (it was
+  small on 480×480 panels with space to spare — now fits without scroll overflow).
+- **Better entity icons** — `mdi:adb` for Network ADB and `mdi:monitor-dashboard` for Navigate
+  (the previous `mdi:android-debug-bridge` isn't a valid MDI name and rendered blank).
+- **Fleet update fix** — `scripts/update-fleet.sh` no longer reads panels from a non-tty stdin when they
+  were given as args (a pipeline/CI stdin had clobbered the panel list).
+- **Roadmap** — documents the **0.7.0 device-profile architecture refactor** (architecture only, no new
+  features): [docs/architecture/device-profiles.md](docs/architecture/device-profiles.md). DLNA renderer
+  reframed as under-consideration (it would be a separate HA device; the TTS recipe already covers announce).
+
 ## v0.6.2 - 2026-06-05
 
 New controls (root/su panels):

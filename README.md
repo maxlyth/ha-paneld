@@ -379,15 +379,21 @@ Carried from 0.4.x:
 
 Planned:
 
-- **DLNA renderer** — advertise as a UPnP/DLNA media renderer so HA auto-discovers a `media_player`
-  (`tts.speak` then targets the panel directly, no script).
+- **0.7.0 — Device-profile architecture refactor (architecture only, no new features).** A single
+  canonical silo per platform (`device/<panel>.kt`) declaring its quirks/paths, with generic modules
+  reading the active profile and still runtime-probing to confirm — so a new panel either works
+  generically or needs one small profile file. Design: [docs/architecture/device-profiles.md](docs/architecture/device-profiles.md).
 - **More performance tooling** — deeper on-device instrumentation to measure, diagnose and tune
-  dashboard performance on weak panels (the project's headline direction).
+  dashboard performance on weak panels.
 - **Built-in relay control beyond the S9E** — the same `switch.<panel>_relay*` model on other panels
   with onboard relays, once each one's control path (GPIO / vendor node) is known.
 - **Visible nav-bar show/hide** — a real on-device nav-bar toggle (remote Back/Recents already shipped).
 - Daemon boot-persistence on su-only (PX30) panels, if true-off is wanted without relying on `su`
   at runtime.
+- **DLNA renderer** *(under consideration — gauging interest)* — advertise as a UPnP/DLNA media renderer
+  so HA auto-discovers a `media_player`. Caveat: it would appear as a **separate** HA device, not part of
+  the MQTT-discovery device that holds the panel's controls/sensors (MQTT discovery has no media_player
+  platform); the shipped [TTS recipe](docs/tts.md) already covers the main announce use case.
 
 ## Documentation
 
