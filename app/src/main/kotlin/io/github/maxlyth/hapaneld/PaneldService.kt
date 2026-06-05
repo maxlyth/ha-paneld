@@ -13,6 +13,7 @@ import android.provider.Settings
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import io.github.maxlyth.hapaneld.control.AdbController
+import io.github.maxlyth.hapaneld.device.DeviceProfile
 import io.github.maxlyth.hapaneld.control.BrightnessController
 import io.github.maxlyth.hapaneld.control.CpuController
 import io.github.maxlyth.hapaneld.control.NavigateController
@@ -66,22 +67,26 @@ class PaneldService : Service() {
     private lateinit var relay: RelayController
     private lateinit var cpu: CpuController
     private lateinit var adb: AdbController
+    private lateinit var profile: DeviceProfile
     private var configUrl: String? = null
 
     override fun onCreate() {
         super.onCreate()
         config = Config(this)
         sensors = SensorReporter(this, config)
+        // Detect the device profile once and hand it to the hardware-specific controllers (instead of
+        // each re-detecting). The canonical per-platform silo for paths/quirks; see device/.
+        profile = DeviceProfile.detect()
 
         brightness = BrightnessController(this)
         screen = ScreenController(this, brightness)
-        led = LedFactory.detect()
+        led = LedFactory.detect(profile)
         navigate = NavigateController(this)
         volume = VolumeController(this)
         system = SystemController(this)
         touchSound = TouchSoundController(this)
-        zigbee = ZigbeeController()
-        relay = RelayController()
+        zigbee = ZigbeeController(profile)
+        relay = RelayController(profile)
         cpu = CpuController()
         adb = AdbController()
         configUrl = localIpv4()?.let { "http://$it:${config.httpPort}/" }
@@ -140,6 +145,7 @@ class PaneldService : Service() {
             "Local IPv6" to (localIpv6() ?: "—"),
             "MQTT" to mqttStatus,
             "mDNS" to "${config.panelId} ${Config.MDNS_SERVICE_TYPE}",
+            "Platform" to "${profile.displayName} · ${profile.socClass}",
             "LED" to ledLabel(),
             "Light sensor" to yesNo(sensors.hasLight()),
             "Proximity" to yesNo(sensors.hasProximity()),
