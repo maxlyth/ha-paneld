@@ -97,8 +97,14 @@ resolve_apk() {
   else download_latest; fi
   [ -f "$APK" ] || { echo "${RED}APK not found: $APK${X}" >&2; exit 1; }
   if [ -z "$TOINSTALL_VER" ]; then  # local/--apk: read the version via aapt if available (else the guard is skipped)
-    for t in aapt aapt2; do command -v "$t" >/dev/null 2>&1 && { TOINSTALL_VER="$("$t" dump badging "$APK" 2>/dev/null | grep -o "versionName='[^']*'" | head -1 | cut -d"'" -f2)"; break; }; done
+    for t in aapt aapt2; do
+      if command -v "$t" >/dev/null 2>&1; then
+        TOINSTALL_VER="$("$t" dump badging "$APK" 2>/dev/null | grep -o "versionName='[^']*'" | head -1 | cut -d"'" -f2 || true)"
+        break
+      fi
+    done
   fi
+  return 0  # never let the (possibly non-zero) probe above abort the script under set -e
 }
 
 # Warn (and prompt on a TTY) before reinstalling the same or an older version; --force skips it.
@@ -117,6 +123,7 @@ version_guard() {
   else
     echo "${GRN}↑ updating $installed → $TOINSTALL_VER${X}"
   fi
+  return 0
 }
 
 echo "${MAG}${B}🛠  ha-paneld provisioning${X} ${D}→ $TARGET${X}"
