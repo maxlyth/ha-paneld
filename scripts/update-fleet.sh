@@ -32,8 +32,11 @@ for a in "$@"; do
   if [ "$seen_dd" = 0 ] && [ "$a" = "--" ]; then seen_dd=1; continue; fi
   if [ "$seen_dd" = 1 ]; then PANELS+=("$a"); else PARGS+=("$a"); fi
 done
-# Panels may also arrive on stdin (one per line) — e.g. piped from a host list.
-if [ ! -t 0 ]; then while IFS= read -r line; do line="${line%%#*}"; line="$(echo "$line" | tr -d '[:space:]')"; [ -n "$line" ] && PANELS+=("$line"); done; fi
+# Panels may also arrive on stdin (one per line) — but ONLY when none were given as args, so a
+# non-tty stdin (pipelines, CI) can't clobber an explicit `-- <ip> …` list.
+if [ "${#PANELS[@]}" -eq 0 ] && [ ! -t 0 ]; then
+  while IFS= read -r line; do line="${line%%#*}"; line="$(echo "$line" | tr -d '[:space:]')"; [ -n "$line" ] && PANELS+=("$line"); done
+fi
 [ "${#PANELS[@]}" -gt 0 ] || { echo "${RED}no panels given${X} (after -- or on stdin)" >&2; exit 2; }
 
 # Resolve a single APK for the whole fleet. If --apk was passed through, reuse it; otherwise download
