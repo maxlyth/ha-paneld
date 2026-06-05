@@ -13,6 +13,49 @@ what is on the board and how to drive it.
 | Radios | Wi-Fi, Bluetooth + BLE, plus a vendor `com.smartos.xinch.platform.ethernet` feature (wired/PoE). **No zigbee, no NFC, no IR, no cellular.** |
 | Root | `su` available; the LED/sysfs sensors are `system:system`, so a **root helper daemon is required** (see below). |
 
+## Gaining adb + root access
+
+The TPA10 ships with adb **password-protected** and network adb off. The reliable route to first
+access is the USB diagnostics-app backdoor (no password maths). `su` is already present, so once adb
+is in you have root. Distilled from [seaky/nspanel_pro_tools_apk#123](https://github.com/seaky/nspanel_pro_tools_apk/issues/123).
+
+**1. Enable Developer options** — Settings → *About* → tap the build/version number 7×.
+
+**2. First access — USB diagnostics-app backdoor (recommended).** Developer options exposes a Tuya
+engineering **diagnostics app** (Chinese-only UI). While that app is open, adb over the **USB** port
+is allowed *without* the password, and it is already rooted. Connect USB and:
+
+```bash
+adb devices          # the panel appears
+adb shell su 0 id    # uid=0 → root confirmed
+```
+
+The TPA10's adb-root is more dependable over the USB port than over the network.
+
+**3. Persist network adb** so you never need USB or the password again:
+
+```bash
+adb root
+adb shell su 0 setprop persist.adb.tcp.port 5555
+adb shell su 0 settings put global adb_enabled 1
+adb tcpip 5555
+# thereafter from any host: adb connect <panel-ip>:5555
+```
+
+**Alternative — the adb password (network, no USB).** The "Enable ADB" toggle in Developer options
+asks for a password derived from `ro.tuya.uuid` and the device ID on the *About* page, by the
+`checkDevPassword` logic inside `com.smartos.xinch.setting`. The community recipe in #123 (last 3
+characters of each, base64, last 6 characters — e.g. uuid…`11a` + device…`xia` → `FheGlh`) does **not**
+reproduce cleanly on every unit, so if it is rejected, recover the exact value by decompiling that app
+or by grepping `logcat` for `checkDevPassword` while entering a guess. The USB backdoor above avoids
+this step entirely.
+
+> [!CAUTION]
+> Disable the vendor `com.smartos.xinch.*` packages only as the **very last step**, after confirming
+> adb is solid *and* you have a replacement for the hardware buttons. Disabling the hardware/setting
+> apps before adb is reliable can lock you out. ha-paneld's remote nav actions (Back/Recents) and the
+> button-backlight/LED entities replace the vendor app's functions.
+
 ## WebView — update this first
 
 The stock WebView on the TPA10 is far too old for a current Home Assistant frontend, so the HA

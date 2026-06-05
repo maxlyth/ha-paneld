@@ -21,6 +21,18 @@ drive it — gathered from live units (rooted / userdebug `adb root`) on 2026-06
 
 Corrections and additions for other panels are welcome.
 
+## Gaining adb + root access
+
+Each panel reaches adb/root differently; the per-panel pages have the full, firmware-specific steps:
+
+- **Sonoff NSPanel Pro** — `userdebug`/test-keys, **no adb password**; the only hurdle is reaching
+  developer mode (varies by eWeLink firmware). `adb root` + remount + a SuperSU `su`.
+  → [nspanel-pro.md](nspanel-pro.md#gaining-adb--root-access).
+- **Tuya TPA10** — adb is **password-protected**; the reliable route is the USB diagnostics-app
+  backdoor (`su` already present). → [tpa10.md](tpa10.md#gaining-adb--root-access).
+- **Electron WF1589T** — `userdebug` with Google Play; `adb root` works directly (LED is app-direct,
+  so root is rarely needed). → [wf1589t.md](wf1589t.md).
+
 ## Performance comparison & practical deployment
 
 Performance is the whole reason this project exists, so it's worth stating plainly: the three panel

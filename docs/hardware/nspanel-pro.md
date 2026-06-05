@@ -21,6 +21,52 @@ panel on the market. Reverse-engineered on a live unit (Android 8.1, rooted, too
 > or A72 (WF1589T). Combined with 2 GB RAM, the NSPanel Pro is the **entry-level performer** of the
 > three panels documented here — see the [performance comparison](README.md#performance-comparison--practical-deployment).
 
+## Gaining adb + root access
+
+Unlike the TPA10, the NSPanel Pro has **no adb password** — it ships as a `userdebug` / test-keys
+build (`ro.debuggable=1`), so `adb root` works and `/system` is remountable. The hard part is only
+*reaching* developer options, which the eWeLink firmware hides differently per version. Distilled from
+blakadder's guides ([sideload](https://blakadder.com/nspanel-pro-sideload/),
+[secrets](https://blakadder.com/nspanel-pro-secrets/)).
+
+**1. Enable adb** — the route depends on firmware:
+
+- **Older firmware** — open the case (back screws, disconnect the touch connector) to expose the OTG
+  USB port and connect a host; adb works directly over USB.
+- **Firmware v1.3.2+** — in the **eWeLink app** → the panel's *Device Settings*, tap the **Device ID
+  8×** to enable developer mode, which restores adb.
+- **Firmware v1.4+** (developer mode removed) — power-cycle the panel **5×** during the Sonoff boot
+  animation to force a recovery boot, and in that window `adb install ultra-small-launcher.apk`; after
+  reboot set that launcher as default, then *Settings → System → About tablet → Build number* ×7 to
+  re-enable developer options and turn on USB debugging.
+
+**2. Go to network adb** (so you don't need the case open):
+
+```bash
+adb tcpip 5555
+adb shell ip -o a            # find the panel IP
+adb connect <panel-ip>:5555
+adb shell su 0 setprop persist.adb.tcp.port 5555   # survive reboot (service prop resets)
+```
+
+**3. Root.** Because the build is `userdebug`, `adb root` gives a root adbd shell immediately. ha-paneld
+calls `su` from the app sandbox, so install a persistent `su` into `/system` (this fleet's panels carry
+**SuperSU `su` 2.76** at `/system/xbin/su`):
+
+```bash
+adb root
+adb disable-verity          # only if remount is refused; this reboots the panel
+adb remount                 # or: adb shell mount -o remount,rw /system
+adb push su /system/xbin/su
+adb shell chmod 06755 /system/xbin/su
+```
+
+> [!CAUTION]
+> Disable the eWeLink apps (`com.eWeLinkNSPro.dev`, `com.eWeLinkControlPanel`) only **after** adb +
+> `su` are solid and you have a home/back alternative — ha-paneld's nav actions cover the latter.
+> Note the eWeLink **Zigbee gateway** stack is independent of these apps and keeps running; manage it
+> with ha-paneld's [Zigbee router switch](#zigbee-gateway) rather than removing it.
+
 ## WebView — update this first
 
 The NSPanel Pro ships with a WebView/Chromium far too old to render a current Home Assistant dashboard
@@ -57,17 +103,33 @@ the box it is owned by the vendor daemon `/vendor/bin/siliconlabs_host/zgateway`
 eWeLink apps (`com.eWeLinkNSPro.dev`, `com.eWeLinkControlPanel`) — i.e. the panel ships as an eWeLink
 Zigbee hub.
 
-To use the radio with Home Assistant (Zigbee2MQTT / ZHA) you must free it from the vendor stack (stop
-`zgateway`) and speak EZSP to `ttyS5`. The community project
-[seaky/nspanel_pro_zigbee](https://github.com/seaky/nspanel_pro_zigbee) packages exactly this.
-ha-paneld does not manage Zigbee today — it's on the [roadmap](../../README.md#status--roadmap).
+The radio runs **EZSP NCP firmware** (EFR32MG21, EZSP v8); `zgateway` is an EZSP *host* binary in
+`/vendor/bin/siliconlabs_host/`, kept alive by its own `guard_process.sh` supervisor (a 5-second loop,
+boot-started) and controlled over a **local mosquitto broker** on `127.0.0.1:1883` (anonymous — the
+`password_file` line is commented out in `mosquitto.conf`):
+
+- role status: `zigbee/system/network-role/information` → `{"role":"Repeater"|"Coordinator"}`
+- role switch: `zigbee/system/network-role/switch` ← `{"role":"Repeater"}`
+
+"Repeater" is router mode (extends an existing mesh — the supported sweet spot); the role persists in
+the NCP's NVM. Switching role is **not a reflash** — there is no `.gbl`/bootloader step anywhere; it
+just sets the EZSP node type. The vendor `zgateway` survives removal of the eWeLink *apps* (it lives in
+`/vendor`, not in an APK).
+
+ha-paneld manages this directly (v0.6.1+): `switch.<panel>_zigbee_router` turns the panel into a Zigbee
+router/repeater (starts the guard + ensures Repeater role) and back off (stops the guard + zstack,
+freeing the radio) — over the local broker, credential-free, no `ttyS5` handling. The router then
+appears as a normal device in your ZHA / Zigbee2MQTT coordinator. For a full standalone Zigbee2MQTT/ZHA
+coordinator *on the panel* instead, see [seaky/nspanel_pro_zigbee](https://github.com/seaky/nspanel_pro_zigbee),
+which swaps the host stack (heavier; not what ha-paneld does).
 
 ## Access model summary
 
 - **Light / proximity / accelerometer**: app-direct (`SensorManager`).
 - **Screen brightness / sleep / navigate / TTS**: standard Android paths (`su` for true backlight-off).
 - **LED**: none characterised.
-- **Radios**: Wi-Fi/BT only.
+- **Zigbee**: EFR32 radio managed via the on-device gateway's local broker (`switch.<panel>_zigbee_router`).
+- **Radios**: Zigbee 3.0 + Wi-Fi/BT.
 
 ## Performance expectations
 
