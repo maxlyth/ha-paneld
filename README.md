@@ -10,8 +10,22 @@ headless foreground service alongside it and never takes the foreground.
 
 ![ha-paneld's on-panel configuration page — responsive cards for panel info, capabilities, live performance and configuration](docs/img/config-ui.png)
 
-> **Status: v0.x preview.** The API is not yet stable and breaking changes are expected until
-> v1.0.0. Use it on a panel you're comfortable re-flashing.
+> **Status: v0.x preview.** Entity names and the API may still change before v1.0.0. It's an ordinary
+> app install — no root-partition or firmware changes — so it uninstalls cleanly if you change your mind.
+
+## Install
+
+First enable network ADB on the panel (Developer options → "ADB debugging"). Then, from any machine
+with `adb` on the same LAN, paste:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/maxlyth/ha-paneld/main/scripts/install.sh | bash
+```
+
+No checkout, no parameters: it checks your tools (with fix-it hints if `adb`/`curl` are missing),
+prompts for the panel IP (and optional id / MQTT broker), downloads the **latest signed release**, and
+provisions the panel. For scripted/fleet installs use [`scripts/provision.sh`](scripts/provision.sh)
+directly (see [Provisioning](#provisioning-no-device-ui-on-rooteduserdebug-panels)).
 
 ## Why not just the Companion app?
 
