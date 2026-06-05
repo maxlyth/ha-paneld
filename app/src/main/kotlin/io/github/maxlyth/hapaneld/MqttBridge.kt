@@ -13,6 +13,7 @@ import io.github.maxlyth.hapaneld.control.SystemController
 import io.github.maxlyth.hapaneld.control.VolumeController
 import io.github.maxlyth.hapaneld.hardware.LedController
 import io.github.maxlyth.hapaneld.input.ButtonBus
+import io.github.maxlyth.hapaneld.util.HelperClient
 import org.json.JSONObject
 import java.net.URI
 
@@ -42,6 +43,7 @@ class MqttBridge(
     private val hasProximity: Boolean,
     private val hasTemperature: Boolean,
     private val hasHumidity: Boolean,
+    private val hasButtonBacklight: Boolean,
     private val configUrl: String? = null,
     // Resolves HA's LAN IP via mDNS to default the broker when none is configured (injected by the
     // service, wired to MdnsAdvertiser). Returns null if HA isn't found / mDNS unavailable.
@@ -70,6 +72,8 @@ class MqttBridge(
     private val cmdReboot = "ha-paneld/$panel/reboot/set"
     private val cmdLauncher = "ha-paneld/$panel/launcher/set"
     private val cmdHome = "ha-paneld/$panel/home/set"
+    private val cmdButtons = "ha-paneld/$panel/buttons/set"
+    private val stateButtons = "ha-paneld/$panel/buttons/state"
     private val stateScreen = "ha-paneld/$panel/screen/state"
     private val stateLed = "ha-paneld/$panel/led/state"
     private val stateNavigate = "ha-paneld/$panel/navigate/state"
@@ -199,6 +203,7 @@ class MqttBridge(
                 cmdReboot -> system.reboot()
                 cmdLauncher -> system.launchLauncher(config.launcherPackage)
                 cmdHome -> system.launchHome(config.dashboardPackage)
+                cmdButtons -> handleButtons(payload)
                 else -> Log.d(TAG, "unhandled command topic $topic")
             }
         } catch (e: Exception) {
@@ -249,6 +254,20 @@ class MqttBridge(
 
     private fun ledStateJson(br: Int, r: Int, g: Int, b: Int) =
         """{"state":"ON","color_mode":"rgb","brightness":$br,"color":{"r":$r,"g":$g,"b":$b}}"""
+
+    // Button backlight (e.g. TPA10): a brightness-only light, driven via the root daemon's BTN command
+    // (same daemon that owns the sysfs LED). Daemon calls are short blocking I/O — fine on this thread.
+    private fun handleButtons(payload: String) {
+        val json = JSONObject(payload)
+        val on = json.optString("state", "ON").equals("ON", ignoreCase = true)
+        val level = if (!on) 0 else if (json.has("brightness")) json.getInt("brightness") else 255
+        HelperClient.send("BTN $level")
+        publish(
+            client!!, stateButtons,
+            if (on) """{"state":"ON","brightness":$level}""" else """{"state":"OFF"}""",
+            retain = true,
+        )
+    }
 
     private fun handleNavigate(payload: String) {
         // text entity sends the raw URL string.
@@ -361,6 +380,12 @@ class MqttBridge(
                 """{"name":"Humidity","unique_id":"${panel}_humidity","state_topic":"$stateHumidity","device_class":"humidity","unit_of_measurement":"%","state_class":"measurement",$avail,$device}""",
             )
         }
+        if (hasButtonBacklight) {
+            publishConfig(
+                c, "light", "${panel}_buttons",
+                """{"name":"Button backlight","unique_id":"${panel}_buttons","schema":"json","brightness":true,"supported_color_modes":["brightness"],"command_topic":"$cmdButtons","state_topic":"$stateButtons","icon":"mdi:gesture-tap-button",$avail,$device}""",
+            )
+        }
 
         // Panel actions (root via su; graceful no-op without it).
         publishConfig(
@@ -400,6 +425,7 @@ class MqttBridge(
             "number" to "${panel}_volume", "sensor" to "${panel}_illuminance",
             "binary_sensor" to "${panel}_proximity",
             "sensor" to "${panel}_temperature", "sensor" to "${panel}_humidity",
+            "light" to "${panel}_buttons",
             "button" to "${panel}_reload", "button" to "${panel}_reboot",
             "button" to "${panel}_launcher", "button" to "${panel}_home",
         )

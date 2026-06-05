@@ -78,7 +78,9 @@ class PaneldService : Service() {
     private fun buildMqtt(): MqttBridge = MqttBridge(
         config, brightness, screen, led, navigate, volume, system,
         accessibilityEnabled(), sensors.hasLight(), sensors.hasProximity(),
-        sensors.hasTemperature(), sensors.hasHumidity(), configUrl,
+        sensors.hasTemperature(), sensors.hasHumidity(),
+        // Button backlight lives on the sysfs/daemon LED panels (TPA10), reached via the daemon's BTN.
+        led is SocketLedController, configUrl,
         // When no broker is configured, find HA on the LAN via mDNS and default to its :1883.
         discoverHaIp = { mdns.discoverHaIp() },
     )
