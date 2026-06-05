@@ -356,8 +356,6 @@ New in 0.7.0 (architecture-focused — no new entities):
 - **Security** — the Zigbee role-switch is allowlisted before any shell interpolation; the security
   posture (LAN-trust, network-layer access control, HA-auth as the future path) is documented in
   [docs/architecture/security.md](docs/architecture/security.md).
-- **App UI** — the product description now shows on 480×480 square panels, and the UI is vertically
-  centred (no empty band at the bottom).
 
 New in 0.6.2:
 

@@ -17,8 +17,6 @@ Architecture-focused release (no new entities). **Release candidate** — please
 - **Security hardening** — the Zigbee role-switch is allowlisted before any shell interpolation; the
   security posture (LAN-trust, network-layer access control, HA-auth as the future path) is documented
   in [docs/architecture/security.md](docs/architecture/security.md).
-- **App UI** — the product description now shows on 480×480 square panels, and the UI is vertically
-  centred (no empty band at the bottom).
 - **Docs** — a "Why not Fully Kiosk?" section; releases are now cut as contenders (tagged only on
   approval), per [docs/RELEASING.md](docs/RELEASING.md).
 
