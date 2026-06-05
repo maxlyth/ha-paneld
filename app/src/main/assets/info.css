@@ -1,7 +1,8 @@
 body{font-family:system-ui,-apple-system,sans-serif;margin:0;background:#111;color:#eee}
 .wrap{max-width:1400px;margin:0 auto;padding:20px}              /* cap + centre: ~3 cols max on 4K */
 .hdr{display:flex;align-items:center;justify-content:space-between;gap:12px}
-h1{font-size:1.3rem;margin:0 0 .2rem} h1 small{color:#9af;font-weight:400}
+h1{font-size:1.3rem;margin:0 0 .2rem;display:flex;align-items:center} h1 small{color:#9af;font-weight:400}
+.logo{width:1.7em;height:1.7em;margin-right:.45em;border-radius:6px;flex:none}
 h2{font-size:.95rem;margin:0 0 .5rem;color:#9cf;text-transform:uppercase;letter-spacing:.04em}
 h2 small{text-transform:none;letter-spacing:0;color:#8a8;font-weight:400}
 .gh svg{width:24px;height:24px;fill:#7c8a99}

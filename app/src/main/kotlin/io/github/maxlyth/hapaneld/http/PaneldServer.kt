@@ -269,7 +269,7 @@ class PaneldServer(
 <title>ha-paneld · $pid</title>
 <link rel="icon" href="/icon.svg">
 <link rel="stylesheet" href="/info.css"></head><body><div class="wrap">
-<div class="hdr"><h1>ha-paneld <small>· $pid</small></h1>
+<div class="hdr"><h1><img src="/icon.svg" class="logo" alt="">ha-paneld <small>· $pid</small></h1>
  <a class="gh" href="$REPO_URL" target="_blank" rel="noopener" title="ha-paneld on GitHub" aria-label="GitHub"><svg viewBox="0 0 24 24"><path d="$GH_ICON"/></svg></a></div>
 $setupBanner
 <div class="cards">

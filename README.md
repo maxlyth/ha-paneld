@@ -1,5 +1,7 @@
 # ha-paneld
 
+<img src="docs/img/icon.png" align="right" width="104" alt="ha-paneld icon">
+
 A small Android agent for **wall-mounted Home Assistant panels**. It exposes panel-side hardware
 to Home Assistant over HTTP + MQTT auto-discovery + mDNS, so a panel pairs itself with HA when you
 sideload the APK — no per-device YAML.
