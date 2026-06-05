@@ -166,11 +166,10 @@ Non-root panels: use the in-app setup screen, which fires the standard system pe
 | `WRITE_SETTINGS` | screen brightness | `appops set <pkg> WRITE_SETTINGS allow` |
 | Accessibility (key filter) | hardware-button events | `settings put secure enabled_accessibility_services …` |
 
-Screen-off via `lockNow()` additionally needs the **optional device admin** (enable once in Settings,
-or `dpm set-active-admin <pkg>/.control.PanelAdminReceiver`); the daemon/`su` `bl_power` path is
-preferred and needs no admin. Device-admin uses active-admin, not device-owner (device-owner needs an
-account-free device and would conflict with the logged-in Companion). To uninstall later, remove the
-admin first — see the signing note below.
+Screen-off needs **no device admin** — ha-paneld powers the backlight off via the root helper daemon
+or `su` (`bl_power`), falling back to brightness-0, so it never raises a keyguard/PIN and never blocks
+its own uninstall. (Builds ≤ 0.5.0 shipped an optional device admin; 0.5.1 removed it — see the
+signing note below if you're upgrading from one where you'd activated it.)
 
 ## RGB LED — clean-room NDK, no vendor library
 
@@ -256,14 +255,11 @@ You don't need to configure signing to build and run ha-paneld. Two cases:
 > (`adb uninstall io.github.maxlyth.hapaneld`), then install the other build. Uninstalling clears the
 > panel's saved config, so re-run provisioning afterwards. This is the one thing that trips people up.
 >
-> If you enabled ha-paneld's optional device-admin (used for screen-off via `lockNow()`), the
-> uninstall fails with `DELETE_FAILED_DEVICE_POLICY_MANAGER` — an active device admin can't be
-> removed. Disable it first, then uninstall:
->
-> ```sh
-> adb shell dpm remove-active-admin io.github.maxlyth.hapaneld/.control.PanelAdminReceiver
-> adb uninstall io.github.maxlyth.hapaneld
-> ```
+> **Legacy device-admin (builds ≤ 0.5.0 only):** 0.5.1 removed the device admin entirely, so fresh
+> installs never hit this. But if you'd activated it on an older build, uninstall fails with
+> `DELETE_FAILED_DEVICE_POLICY_MANAGER` until you deactivate it — **Settings → Security → Device admin
+> apps → turn off "ha-paneld"**, then `adb uninstall io.github.maxlyth.hapaneld`. (`dpm
+> remove-active-admin` does *not* work — Android refuses to remove a non-test admin via the CLI.)
 
 **Signing your own fork's releases (optional):**
 

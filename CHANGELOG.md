@@ -3,6 +3,15 @@
 Human-readable summaries of each release. The auto-generated commit list is appended below these
 notes on each [GitHub release](https://github.com/maxlyth/ha-paneld/releases).
 
+## v0.5.1 - 2026-06-05
+
+- **Removed the device admin.** It was effectively unused — screen-off already powers the backlight
+  via the root helper daemon / `su` (`bl_power`), never `lockNow()` — but once activated on an older
+  build it **blocked the app's own uninstall** (`DELETE_FAILED_DEVICE_POLICY_MANAGER`), and Android
+  won't remove a non-test admin via `dpm`. Dropping it removes that trap entirely; fresh installs are
+  never affected. Upgrading from a build where you'd activated it: deactivate it under **Settings →
+  Security → Device admin apps** before uninstalling.
+
 ## v0.5.0 - 2026-06-05
 
 The first release aimed at general use — a redesigned web UI, an in-app config screen, deeper

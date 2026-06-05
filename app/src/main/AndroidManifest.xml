@@ -64,20 +64,6 @@
             </intent-filter>
         </receiver>
 
-        <!-- Device admin: holds the force-lock policy so the screen can be slept via lockNow().
-             Activated at provisioning: dpm set-active-admin <pkg>/.control.PanelAdminReceiver -->
-        <receiver
-            android:name=".control.PanelAdminReceiver"
-            android:permission="android.permission.BIND_DEVICE_ADMIN"
-            android:exported="true">
-            <meta-data
-                android:name="android.app.device_admin"
-                android:resource="@xml/device_admin" />
-            <intent-filter>
-                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
-            </intent-filter>
-        </receiver>
-
         <!-- Optional hardware-button capture. Enabled at provisioning:
              settings put secure enabled_accessibility_services <pkg>/.input.PanelAccessibilityService -->
         <service
