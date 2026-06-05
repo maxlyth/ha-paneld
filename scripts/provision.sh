@@ -25,13 +25,13 @@ step() { echo "${CYN}${B}$1${X} $2"; }
 
 trap 'echo "${RED}${B}✗ provisioning incomplete${X} — re-run the SAME command to finish (it is idempotent)." >&2' ERR
 
-TARGET="${1:?usage: provision.sh <panel-ip:5555> [APK] [--id ID] [--mqtt tcp://host:1883] [--mqtt-user U] [--mqtt-pass P] [--latest] [--force] [--verify]}"
+TARGET="${1:?usage: provision.sh <panel-ip:5555> [APK] [--id ID] [--mqtt tcp://host:1883] [--mqtt-user U] [--mqtt-pass P] [--latest] [--force] [--persist-adb] [--verify]}"
 shift
 REPO="maxlyth/ha-paneld"
 LOCAL_APK="app/build/outputs/apk/debug/app-debug.apk"
 PKG="io.github.maxlyth.hapaneld"
 A11Y="$PKG/.input.PanelAccessibilityService"
-APK=""; PANEL_ID=""; MQTT=""; MQTT_USER=""; MQTT_PASS=""; VERIFY_ONLY=0; LATEST=0; FORCE=0; TOINSTALL_VER=""
+APK=""; PANEL_ID=""; MQTT=""; MQTT_USER=""; MQTT_PASS=""; VERIFY_ONLY=0; LATEST=0; FORCE=0; PERSIST_ADB=0; TOINSTALL_VER=""
 
 if [ "${1:-}" ] && [ "${1#--}" = "${1:-}" ]; then APK="$1"; shift; fi
 while [ "${1:-}" ]; do
@@ -43,6 +43,7 @@ while [ "${1:-}" ]; do
     --mqtt-pass) MQTT_PASS="$2"; shift 2 ;;
     --latest) LATEST=1; shift ;;     # ignore any local build, fetch the newest GitHub release
     --force) FORCE=1; shift ;;       # skip the same/older-version prompt
+    --persist-adb) PERSIST_ADB=1; shift ;;  # keep network adb (tcp 5555) across reboots (opt-in; standing LAN port)
     --verify) VERIFY_ONLY=1; shift ;;
     *) echo "${RED}unknown arg: $1${X}" >&2; exit 2 ;;
   esac
@@ -155,6 +156,14 @@ else
   esac
 fi
 adb -s "$TARGET" shell settings put secure accessibility_enabled 1
+
+# Opt-in: persist network adb across reboots. Sets the prop only (no adbd restart — that would drop
+# this very connection mid-provision); it's already on tcp, so the prop just makes it survive a reboot.
+if [ "$PERSIST_ADB" = 1 ]; then
+  step "🔌 network adb" "${D}persisting tcp 5555 across reboot${X}"
+  adb -s "$TARGET" shell su 0 setprop persist.adb.tcp.port 5555 >/dev/null 2>&1 \
+    || adb -s "$TARGET" shell su -c 'setprop persist.adb.tcp.port 5555' >/dev/null 2>&1 || true
+fi
 
 # MUST launch after install: `adb install -r` leaves the app in Android's "stopped" state, which does
 # NOT auto-start — not even via START_STICKY — until something launches it (or the device reboots). A

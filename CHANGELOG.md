@@ -5,8 +5,25 @@ notes on each [GitHub release](https://github.com/maxlyth/ha-paneld/releases).
 
 ## v0.6.2 - 2026-06-05
 
-- **Navigate entity defaults to the panel's local URL** instead of showing `unknown` before anything
-  has been navigated (`text.<panel>_navigate`).
+New controls (root/su panels):
+
+- **CPU governor** (`select.<panel>_cpu_governor`) — set the scaling governor across all cores
+  (powersave ↔ performance) to trade panel heat/noise against dashboard responsiveness; options come
+  from the kernel's `scaling_available_governors`. Automatable from HA (e.g. powersave when empty).
+- **Persistent network adb** (`switch.<panel>_network_adb`, opt-in) — keep `adb tcpip 5555` across
+  reboots via `persist.adb.tcp.port`, plus a `provision.sh --persist-adb` flag. Leaves a standing LAN
+  adb port, so it's off by default.
+- **Smatek S9E button LEDs** (`light.<panel>_button_led1..4`) — the four button LEDs (gpio147–150).
+  Experimental/untested like the rest of S9E.
+
+Other changes:
+
+- **IPv6** — the HTTP server now binds dual-stack (`::`), so the panel UI/API answer on IPv6 as well as
+  IPv4, and the info page shows the panel's IPv6 address.
+- **Navigate is local-only** (`text.<panel>_navigate`) — any scheme + host is stripped from the posted
+  value and navigation is driven via the in-app `homeassistant://navigate/<path>` deep link. This stops
+  the HA Companion opening a disorienting WebView for external URLs; the entity now holds a local path
+  (defaults to `/` instead of `unknown`).
 - **More robust Zigbee gateway detection** — the router switch is now gated on the guard script ha-paneld
   actually invokes, not just the `package_version` marker. This still shows on a configured panel that
   lost only the marker, and correctly hides on panels left with an empty `siliconlabs_host` dir + an

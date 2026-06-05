@@ -6,7 +6,9 @@ import com.hivemq.client.mqtt.MqttClient
 import com.hivemq.client.mqtt.datatypes.MqttQos
 import com.hivemq.client.mqtt.mqtt5.Mqtt5AsyncClient
 import com.hivemq.client.mqtt.mqtt5.message.publish.Mqtt5Publish
+import io.github.maxlyth.hapaneld.control.AdbController
 import io.github.maxlyth.hapaneld.control.BrightnessController
+import io.github.maxlyth.hapaneld.control.CpuController
 import io.github.maxlyth.hapaneld.control.NavigateController
 import io.github.maxlyth.hapaneld.control.RelayController
 import io.github.maxlyth.hapaneld.control.ScreenController
@@ -46,8 +48,11 @@ class MqttBridge(
     // Zigbee gateway control (Sonoff NSPanel Pro only). Presence is detected lazily on the MQTT
     // thread in publishDiscovery — it costs a su exec, so it must not run on the main thread.
     private val zigbee: ZigbeeController,
-    // On-board relays (Smatek S9E `st_relay` class). Count is probed lazily on the MQTT thread.
+    // On-board relays + button LEDs (Smatek S9E). Probed lazily on the MQTT thread.
     private val relay: RelayController,
+    // CPU governor + persistent network adb (root/su panels). Probed lazily on the MQTT thread.
+    private val cpu: CpuController,
+    private val adb: AdbController,
     private val buttonsEnabled: Boolean,
     private val hasLight: Boolean,
     private val hasProximity: Boolean,
@@ -92,6 +97,10 @@ class MqttBridge(
     private val stateTouchSound = "ha-paneld/$panel/touch_sound/state"
     private val cmdZigbee = "ha-paneld/$panel/zigbee_router/set"
     private val stateZigbee = "ha-paneld/$panel/zigbee_router/state"
+    private val cmdCpuGov = "ha-paneld/$panel/cpu_governor/set"
+    private val stateCpuGov = "ha-paneld/$panel/cpu_governor/state"
+    private val cmdNetAdb = "ha-paneld/$panel/network_adb/set"
+    private val stateNetAdb = "ha-paneld/$panel/network_adb/state"
     private val stateScreen = "ha-paneld/$panel/screen/state"
     private val stateLed = "ha-paneld/$panel/led/state"
     private val stateNavigate = "ha-paneld/$panel/navigate/state"
@@ -192,10 +201,10 @@ class MqttBridge(
         publish(c, stateVolume, volume.getPercent().toString(), retain = true)
         // Screen: panels come up on; report ON + the current brightness.
         publish(c, stateScreen, """{"state":"ON","brightness":${brightness.getBrightness().coerceAtLeast(1)}}""", retain = true)
-        // Navigate: last pushed URL, else default to the panel's own local URL so the entity shows a
-        // sensible value instead of "unknown" before anything has been navigated.
-        val navInit = config.lastNavigate.ifEmpty { configUrl ?: "" }
-        if (navInit.isNotEmpty()) publish(c, stateNavigate, navInit, retain = true)
+        // Navigate: last pushed path, else default to the dashboard root "/" so the entity shows a
+        // sensible local path instead of "unknown" before anything has been navigated.
+        val navInit = config.lastNavigate.ifEmpty { "/" }
+        publish(c, stateNavigate, navInit, retain = true)
         // LED: re-apply the last colour to the hardware (reset on reboot) and publish it.
         val led = config.lastLed.split(",").mapNotNull { it.toIntOrNull() }
         if (led.size == 5 && led[0] == 1) {
@@ -216,11 +225,16 @@ class MqttBridge(
         val topic = publish.topic.toString()
         val payload = String(publish.payloadAsBytes)
         try {
-            // Relay topics are dynamic (relay1/relay2/…), handled by pattern before the fixed set.
+            // Relay + button-LED topics are dynamic (relay1/…, button_led1/…) — match before the fixed set.
             if (topic.startsWith("ha-paneld/$panel/relay") && topic.endsWith("/set")) {
                 handleRelay(topic, payload); return
             }
+            if (topic.startsWith("ha-paneld/$panel/button_led") && topic.endsWith("/set")) {
+                handleButtonLed(topic, payload); return
+            }
             when (topic) {
+                cmdCpuGov -> handleCpuGov(payload)
+                cmdNetAdb -> handleNetAdb(payload)
                 cmdScreen -> handleScreen(payload)
                 cmdLed -> handleLed(payload)
                 cmdNavigate -> handleNavigate(payload)
@@ -348,14 +362,53 @@ class MqttBridge(
         client?.let { publish(it, "ha-paneld/$panel/relay$n/state", if (relay.get(n)) "ON" else "OFF", retain = true) }
     }
 
+    // S9E button LED. topic = ha-paneld/<panel>/button_led<N>/set (N 1-based); payload ON/OFF.
+    private fun handleButtonLed(topic: String, payload: String) {
+        val n = topic.substringAfter("/button_led").substringBefore("/set").toIntOrNull() ?: return
+        val on = payload.trim().let { it.equals("ON", ignoreCase = true) || it == "1" }
+        relay.ledSet(n - 1, on)
+        client?.let { publish(it, "ha-paneld/$panel/button_led$n/state", if (relay.ledGet(n - 1)) "ON" else "OFF", retain = true) }
+    }
+
+    // CPU scaling governor (select). Quick su write; publishes the read-back governor.
+    private fun handleCpuGov(payload: String) {
+        val gov = payload.trim().trim('"')
+        if (cpu.set(gov)) client?.let { publish(it, stateCpuGov, cpu.get() ?: gov, retain = true) }
+    }
+
+    // Persistent network adb (switch). Restarts adbd to apply; that only affects adb, not MQTT.
+    private fun handleNetAdb(payload: String) {
+        val on = payload.trim().equals("ON", ignoreCase = true)
+        adb.set(on)
+        client?.let { publish(it, stateNetAdb, if (adb.isPersisted()) "ON" else "OFF", retain = true) }
+    }
+
     private fun handleNavigate(payload: String) {
-        // text entity sends the raw URL string.
-        val url = payload.trim().trim('"')
-        if (url.isNotEmpty()) {
-            navigate.navigate(url)
-            config.lastNavigate = url
-            publish(client!!, stateNavigate, url, retain = true)
+        // Local navigation only: strip any scheme + host so an external URL can't be pushed (the HA
+        // Companion opens a disorienting in-app WebView for those). We keep just the path and drive the
+        // dashboard via the homeassistant:// deep link, which navigates in-app with no WebView.
+        val path = toLocalPath(payload)
+        if (path.isNotEmpty()) {
+            navigate.navigate("homeassistant://navigate$path")
+            config.lastNavigate = path
+            publish(client!!, stateNavigate, path, retain = true)
         }
+    }
+
+    /** Reduce any posted value to a leading-slash local path: drop `scheme://` and the `host:port`
+     *  authority, keep the path (+ query/fragment). `http://ha.local:8123/lovelace/0` → `/lovelace/0`;
+     *  `lovelace/0` → `/lovelace/0`; `/lovelace/0` unchanged. */
+    private fun toLocalPath(raw: String): String {
+        var s = raw.trim().trim('"')
+        if (s.isEmpty()) return ""
+        val scheme = s.indexOf("://")
+        if (scheme >= 0) {
+            s = s.substring(scheme + 3)            // strip scheme://
+            val slash = s.indexOf('/')             // drop the host[:port] authority
+            s = if (slash >= 0) s.substring(slash) else "/"
+        }
+        if (!s.startsWith("/")) s = "/$s"
+        return s
     }
 
     private fun handleVolume(payload: String) {
@@ -507,6 +560,36 @@ class MqttBridge(
             publish(c, "ha-paneld/$panel/relay$n/state", if (relay.get(n)) "ON" else "OFF", retain = true)
         }
 
+        // S9E button LEDs (gpio147-150) — on/off lights, gated on the gpio nodes being present.
+        val leds = relay.ledCount()
+        for (n in 1..leds) {
+            publishConfig(
+                c, "light", "${panel}_button_led$n",
+                """{"name":"Button LED $n","unique_id":"${panel}_button_led$n","command_topic":"ha-paneld/$panel/button_led$n/set","state_topic":"ha-paneld/$panel/button_led$n/state","icon":"mdi:led-on",$avail,$device}""",
+            )
+            publish(c, "ha-paneld/$panel/button_led$n/state", if (relay.ledGet(n - 1)) "ON" else "OFF", retain = true)
+        }
+
+        // CPU governor (select) — su panels with cpufreq. Options are the kernel's available governors.
+        val govs = cpu.governors()
+        if (govs.isNotEmpty()) {
+            val opts = govs.joinToString(",") { "\"${jsonEsc(it)}\"" }
+            publishConfig(
+                c, "select", "${panel}_cpu_governor",
+                """{"name":"CPU governor","unique_id":"${panel}_cpu_governor","command_topic":"$cmdCpuGov","state_topic":"$stateCpuGov","options":[$opts],"icon":"mdi:speedometer","entity_category":"config",$avail,$device}""",
+            )
+            cpu.get()?.let { publish(c, stateCpuGov, it, retain = true) }
+        }
+
+        // Persistent network adb (switch) — opt-in; root panels only. Standing LAN adb port when ON.
+        if (adb.available()) {
+            publishConfig(
+                c, "switch", "${panel}_network_adb",
+                """{"name":"Network ADB","unique_id":"${panel}_network_adb","command_topic":"$cmdNetAdb","state_topic":"$stateNetAdb","icon":"mdi:android-debug-bridge","entity_category":"config",$avail,$device}""",
+            )
+            publish(c, stateNetAdb, if (adb.isPersisted()) "ON" else "OFF", retain = true)
+        }
+
         // Panel actions (root via su; graceful no-op without it).
         publishConfig(
             c, "button", "${panel}_reload",
@@ -549,6 +632,9 @@ class MqttBridge(
             "light" to "${panel}_buttons", "switch" to "${panel}_wake_on_wave",
             "switch" to "${panel}_touch_sound", "switch" to "${panel}_zigbee_router",
             "switch" to "${panel}_relay1", "switch" to "${panel}_relay2",
+            "light" to "${panel}_button_led1", "light" to "${panel}_button_led2",
+            "light" to "${panel}_button_led3", "light" to "${panel}_button_led4",
+            "select" to "${panel}_cpu_governor", "switch" to "${panel}_network_adb",
             "button" to "${panel}_reload", "button" to "${panel}_reboot",
             "button" to "${panel}_launcher", "button" to "${panel}_home",
         )

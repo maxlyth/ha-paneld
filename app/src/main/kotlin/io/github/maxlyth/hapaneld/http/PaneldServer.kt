@@ -51,7 +51,9 @@ class PaneldServer(
     private var stopServer: (() -> Unit)? = null
 
     fun start() {
-        val server = embeddedServer(CIO, port = config.httpPort) {
+        // Bind the IPv6 wildcard "::" — on Android this is dual-stack (net.ipv6.bindv6only=0), so the
+        // server answers on both IPv6 and IPv4, instead of the IPv4-only default 0.0.0.0.
+        val server = embeddedServer(CIO, port = config.httpPort, host = "::") {
             routing {
                 get("/") {
                     call.respondText(infoHtml(), ContentType.Text.Html)

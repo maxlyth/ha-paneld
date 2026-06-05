@@ -1,10 +1,10 @@
 package io.github.maxlyth.hapaneld.control
 
 /**
- * On-board relay control for panels that expose a `st_relay` sysfs class — currently the **Smatek
- * S9E**, which has two mains relays at `/sys/class/st_relay/relay1` and `relay2` (`echo 1`/`echo 0`).
- * The presence of the `st_relay` class is the device fingerprint, so the relay entities appear only
- * on a panel that actually has them.
+ * On-board relay + button-LED control for panels that expose them — currently the **Smatek S9E**,
+ * which has two mains relays at `/sys/class/st_relay/relay1`/`relay2` and four button LEDs at
+ * `/sys/class/gpio/gpio147`–`gpio150` (= 16 + the F1–F4 keycodes), all driven by `echo 1`/`echo 0`.
+ * Each node's presence is the fingerprint, so the entities appear only on a panel that has them.
  *
  * The nodes are root-owned, so writes go through [Su]. On a panel without `su` reachable from the app
  * sandbox the capability simply doesn't activate (graceful — like the other root-gated controllers).
@@ -29,6 +29,20 @@ class RelayController {
 
     /** Current state of relay [n], or false if unreadable. */
     fun get(n: Int): Boolean = Su.runOutput("cat $BASE/relay$n 2>/dev/null")?.trim() == "1"
+
+    // --- S9E button LEDs: gpio 147-150 (16 + F1..F4 keycode), on/off via su ---
+
+    /** Number of button LEDs present (0–4); 0 on panels without the gpio nodes. */
+    fun ledCount(): Int = (0 until 4).count { exists(ledNode(it)) }
+
+    /** Set button LED [i] (0-based, F1..F4) on/off. */
+    fun ledSet(i: Int, on: Boolean): Boolean = Su.run("echo ${if (on) 1 else 0} > ${ledNode(i)}")
+
+    /** Current state of button LED [i], or false if unreadable. */
+    fun ledGet(i: Int): Boolean = Su.runOutput("cat ${ledNode(i)} 2>/dev/null")?.trim() == "1"
+
+    private fun ledNode(i: Int) = "/sys/class/gpio/gpio${147 + i}/value"
+    private fun exists(p: String) = Su.runOutput("ls $p 2>/dev/null")?.trim()?.isNotEmpty() == true
 
     companion object {
         private const val BASE = "/sys/class/st_relay"

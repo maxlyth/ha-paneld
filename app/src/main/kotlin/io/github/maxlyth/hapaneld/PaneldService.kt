@@ -12,7 +12,9 @@ import android.os.IBinder
 import android.provider.Settings
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import io.github.maxlyth.hapaneld.control.AdbController
 import io.github.maxlyth.hapaneld.control.BrightnessController
+import io.github.maxlyth.hapaneld.control.CpuController
 import io.github.maxlyth.hapaneld.control.NavigateController
 import io.github.maxlyth.hapaneld.control.RelayController
 import io.github.maxlyth.hapaneld.control.ScreenController
@@ -28,6 +30,7 @@ import io.github.maxlyth.hapaneld.http.PaneldServer
 import io.github.maxlyth.hapaneld.http.PanelInfo
 import io.github.maxlyth.hapaneld.sensors.SensorReporter
 import io.github.maxlyth.hapaneld.util.localIpv4
+import io.github.maxlyth.hapaneld.util.localIpv6
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -61,6 +64,8 @@ class PaneldService : Service() {
     private lateinit var touchSound: TouchSoundController
     private lateinit var zigbee: ZigbeeController
     private lateinit var relay: RelayController
+    private lateinit var cpu: CpuController
+    private lateinit var adb: AdbController
     private var configUrl: String? = null
 
     override fun onCreate() {
@@ -77,6 +82,8 @@ class PaneldService : Service() {
         touchSound = TouchSoundController(this)
         zigbee = ZigbeeController()
         relay = RelayController()
+        cpu = CpuController()
+        adb = AdbController()
         configUrl = localIpv4()?.let { "http://$it:${config.httpPort}/" }
 
         mqtt = buildMqtt()
@@ -85,7 +92,7 @@ class PaneldService : Service() {
     }
 
     private fun buildMqtt(): MqttBridge = MqttBridge(
-        config, brightness, screen, led, navigate, volume, system, touchSound, zigbee, relay,
+        config, brightness, screen, led, navigate, volume, system, touchSound, zigbee, relay, cpu, adb,
         accessibilityEnabled(), sensors.hasLight(), sensors.hasProximity(),
         sensors.hasTemperature(), sensors.hasHumidity(),
         // Button backlight lives on the sysfs/daemon LED panels (TPA10), reached via the daemon's BTN.
@@ -130,6 +137,7 @@ class PaneldService : Service() {
             "Friendly name" to config.friendlyName,
             "HTTP port" to config.httpPort.toString(),
             "Local IP" to (localIpv4() ?: "?"),
+            "Local IPv6" to (localIpv6() ?: "—"),
             "MQTT" to mqttStatus,
             "mDNS" to "${config.panelId} ${Config.MDNS_SERVICE_TYPE}",
             "LED" to ledLabel(),
@@ -140,6 +148,8 @@ class PaneldService : Service() {
             // out via su — fine here because the info page is served off the main thread.
             "Zigbee" to zigbee.status(),
             "Relays" to relay.count().let { if (it > 0) it.toString() else "none" },
+            "CPU governor" to (cpu.get() ?: "n/a"),
+            "Network ADB" to if (adb.isPersisted()) "persistent (5555)" else "not persistent",
         )
         return PanelInfo.collect(this, extras)
     }
