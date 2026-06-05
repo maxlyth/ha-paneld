@@ -95,8 +95,8 @@ class MainActivity : AppCompatActivity() {
         // Scale to the vertical budget so it fits WITHOUT scrolling on a 480x480 panel, yet the icon
         // and QR grow prominent on roomy displays. Tiers: tight (≈480²) / medium / large.
         val compact = hDp < 560
-        val iconDp = when { hDp < 560 -> 96; hDp < 900 -> 120; else -> 160 }
-        val qrDp = when { hDp < 560 -> 132; hDp < 900 -> 184; else -> 224 }
+        val iconDp = when { hDp < 560 -> 96; hDp < 900 -> 132; else -> 200 }
+        val qrDp = when { hDp < 560 -> 132; hDp < 900 -> 192; else -> 240 }
         val pad = if (compact) dp(16) else dp(36)
 
         val root = LinearLayout(this).apply {
