@@ -4,6 +4,13 @@ A release is cut by pushing a `vX.Y.Z` tag; the [Release workflow](../.github/wo
 then builds, signs and publishes the APK, taking the human-readable notes from the matching
 `CHANGELOG.md` section. Run this checklist **before** tagging.
 
+> [!IMPORTANT]
+> **Releases are contenders until approved.** Pushing a tag publishes a GitHub release (and a CI run)
+> that persists publicly — so prepare and verify a release *before* tagging, and **tag only on explicit
+> approval**. Pushing dev commits to `main` is fine; the **tag push is the gate**. Don't eager-tag and
+> then force-move the tag to absorb late fixes — fold late changes into the still-untagged contender
+> instead. (Force-moving a published tag rewrites a release others may have pulled.)
+
 ## Pre-tag checklist
 
 1. **README — always check it.** Open `README.md` → *Status & roadmap* and reconcile it with what
