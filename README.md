@@ -81,6 +81,31 @@ audio announcements, screen/LED/button control (via the bundled NDK or a small r
 hardware-button events back to HA, and turnkey mDNS pairing. ha-paneld covers those; Companion keeps
 doing what it does (and remains the dashboard host).
 
+## Why not Fully Kiosk?
+
+[Fully Kiosk Browser](https://www.fully-kiosk.com/) is the usual answer for HA wall panels, and it's
+genuinely capable. But it sits awkwardly against Home Assistant's own values, and on a small mixed
+fleet its wins are narrow for the friction it adds:
+
+- **Not free, not open source.** Fully Kiosk is closed-source commercial software. The free tier is
+  limited and nags; the parts people actually want for a panel — the remote-admin REST/MQTT API,
+  motion/screensaver controls, no watermark — need the paid **Plus** licence, **per device**. That
+  cuts against HA's free, open, local-first ethos; ha-paneld is Apache-2.0 and the dashboard runs in
+  the official, open Companion app.
+- **The Companion app already serves dashboards better.** For day-to-day dashboard rendering, the
+  Companion app is purpose-built for HA — native auth and sessions, push notifications, deep links,
+  and it tracks the frontend. A general-purpose kiosk browser is a second rendering path to keep
+  working; ha-paneld deliberately leaves dashboard hosting to Companion and only adds the panel
+  hardware HA can't otherwise reach.
+- **Per-device config doesn't scale on a non-homogeneous fleet.** Fully Kiosk is configured per
+  device (its settings UI / per-device cloud), so a mixed fleet of different panels drifts and each
+  unit is a bespoke setup. ha-paneld is config-as-code: MQTT auto-discovery, uniform entities across
+  every panel, and one `update-fleet.sh` to roll them together.
+
+If Fully Kiosk's specific extras (e.g. its kiosk lockdown or its particular screensaver) are
+load-bearing for you, keep using it — ha-paneld doesn't try to replace a browser. It replaces the
+*panel-hardware* gap, openly, without a per-device licence.
+
 ## Capabilities
 
 | Cap | Surface |
