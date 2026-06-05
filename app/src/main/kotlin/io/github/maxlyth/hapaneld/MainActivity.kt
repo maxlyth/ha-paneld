@@ -115,15 +115,14 @@ class MainActivity : AppCompatActivity() {
                 .apply { bottomMargin = dp(if (compact) 8 else 18) }
         })
         root.addView(text("v${BuildConfig.VERSION_NAME} · running in the background", 12f, "#8a8f99", padBottom = if (compact) 8 else 18))
-        // Description: full on roomy screens; omitted on the tightest so the UI fits without scrolling.
-        if (!compact) {
-            root.addView(text(
-                "This device is a Home Assistant wall panel. ha-paneld runs in the background so Home " +
-                    "Assistant can control the screen, LED, buttons and speaker and read its sensors — all " +
-                    "over your local network. The dashboard itself runs in the Home Assistant app.",
-                14f, "#c8ccd2", padBottom = 22,
-            ))
-        }
+        // Description — shown on all panels (the shorter wordmark frees the vertical space on 480x480);
+        // slightly smaller + tighter on compact so it still fits without scrolling.
+        root.addView(text(
+            "This device is a Home Assistant wall panel. ha-paneld runs in the background so Home " +
+                "Assistant can control the screen, LED, buttons and speaker and read its sensors — all " +
+                "over your local network. The dashboard itself runs in the Home Assistant app.",
+            if (compact) 12.5f else 14f, "#c8ccd2", padBottom = if (compact) 10 else 22,
+        ))
         // The full URL — tappable here, and readable so it can be typed on another device.
         root.addView(TextView(this).apply {
             gravity = Gravity.CENTER
