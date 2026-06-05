@@ -3,14 +3,24 @@
 Human-readable summaries of each release. The auto-generated commit list is appended below these
 notes on each [GitHub release](https://github.com/maxlyth/ha-paneld/releases).
 
-## Unreleased
+## v0.6.2 - 2026-06-05
 
-- **Fleet updates that don't leave panels dead** — `adb install -r` puts the app in Android's
-  *stopped* state, which never auto-starts (not even via `START_STICKY`) until something launches it,
-  so a bare install loop leaves panels installed-but-dead (entities `unavailable` in HA).
-  `scripts/provision.sh` now retries the launch and explains why it's mandatory, and a new
-  `scripts/update-fleet.sh` wraps provision.sh across many panels (downloading the release once) so
-  every panel is installed **and launched and verified**.
+- **Navigate entity defaults to the panel's local URL** instead of showing `unknown` before anything
+  has been navigated (`text.<panel>_navigate`).
+- **More robust Zigbee gateway detection** — the router switch is now gated on the guard script ha-paneld
+  actually invokes, not just the `package_version` marker. This still shows on a configured panel that
+  lost only the marker, and correctly hides on panels left with an empty `siliconlabs_host` dir + an
+  orphaned `zgateway` (where ON could not restart it and it wouldn't survive a reboot).
+- **Zigbee toggle no longer blocks MQTT** — the slow vendor lifecycle (OFF ~8 s; ON's gateway spawns on
+  a ~30 s timer) now runs off the MQTT callback thread, publishing optimistically then reconciling to
+  the real running state (polling for the slow start).
+- **Fleet updates that don't leave panels dead** — `adb install -r` puts the app in Android's *stopped*
+  state, which never auto-starts (not even via `START_STICKY`) until something launches it, so a bare
+  install loop leaves panels installed-but-dead (entities `unavailable` in HA). `scripts/provision.sh`
+  now retries the launch and explains why it's mandatory, and a new `scripts/update-fleet.sh` wraps
+  provision.sh across many panels (downloading the release once) so every panel is installed **and
+  launched and verified**.
+- Docs: refreshed the on-panel launcher screenshot to the v0.6.x responsive UI (480×480).
 
 ## v0.6.1 - 2026-06-05
 

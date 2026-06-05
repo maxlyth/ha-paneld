@@ -25,21 +25,33 @@ import org.json.JSONObject
  */
 class ZigbeeController {
 
-    /** True when the Sonoff gateway package is installed — i.e. this panel has the EFR32 radio. */
-    fun present(): Boolean = driver() != null
+    /**
+     * True when this panel has a Zigbee gateway we can actually drive. Gated on the **guard script we
+     * invoke** ([GUARD]) existing — not just the `package_version` marker, since a configured panel may
+     * have lost only the marker file. This also correctly EXCLUDES panels left with an empty
+     * `siliconlabs_host` dir and an orphaned `zgateway` process (as some vendor-app teardowns leave
+     * behind): there, ON could not restart the gateway and it wouldn't survive a reboot.
+     */
+    fun present(): Boolean = fileExists(GUARD)
 
     /**
-     * Driver label, e.g. `"sonoff 3.7.1"`, or null when no gateway package is installed. Parsed from
-     * the package marker `package_version` (format `<type>-v<artifact>:<type>-<zstack>`, e.g.
-     * `sonoff-v3.7.1.0:sonoff-3.7.1`). World-readable, but read via su since the rest of the API is.
+     * Driver label, e.g. `"sonoff 3.7.1"`, from the package marker `package_version`
+     * (format `<type>-v<artifact>:<type>-<zstack>`). Falls back to a generic label when the gateway is
+     * drivable ([present]) but the marker is missing; null when there is no gateway at all.
      */
     fun driver(): String? {
-        val raw = Su.runOutput("cat $DIR/package_version")?.trim()?.takeIf { it.isNotEmpty() } ?: return null
-        val tail = raw.substringAfter(':', raw) // "sonoff-3.7.1"
-        val type = tail.substringBefore('-', tail)
-        val ver = tail.substringAfter('-', "")
-        return if (ver.isEmpty()) type else "$type $ver"
+        val raw = Su.runOutput("cat $DIR/package_version 2>/dev/null")?.trim()
+        if (!raw.isNullOrEmpty()) {
+            val tail = raw.substringAfter(':', raw) // "sonoff-3.7.1"
+            val type = tail.substringBefore('-', tail)
+            val ver = tail.substringAfter('-', "")
+            return if (ver.isEmpty()) type else "$type $ver"
+        }
+        return if (present()) "gateway present (version unknown)" else null
     }
+
+    private fun fileExists(path: String): Boolean =
+        Su.runOutput("ls $path 2>/dev/null")?.trim()?.isNotEmpty() == true
 
     /** True when the zgateway host process is running (the radio is in use). */
     fun running(): Boolean = Su.runOutput("pidof zgateway")?.trim()?.isNotEmpty() == true

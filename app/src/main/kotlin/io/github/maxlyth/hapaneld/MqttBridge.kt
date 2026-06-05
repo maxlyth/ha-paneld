@@ -192,8 +192,10 @@ class MqttBridge(
         publish(c, stateVolume, volume.getPercent().toString(), retain = true)
         // Screen: panels come up on; report ON + the current brightness.
         publish(c, stateScreen, """{"state":"ON","brightness":${brightness.getBrightness().coerceAtLeast(1)}}""", retain = true)
-        // Navigate: last pushed URL (skip when empty — empty retained payload just clears the topic).
-        if (config.lastNavigate.isNotEmpty()) publish(c, stateNavigate, config.lastNavigate, retain = true)
+        // Navigate: last pushed URL, else default to the panel's own local URL so the entity shows a
+        // sensible value instead of "unknown" before anything has been navigated.
+        val navInit = config.lastNavigate.ifEmpty { configUrl ?: "" }
+        if (navInit.isNotEmpty()) publish(c, stateNavigate, navInit, retain = true)
         // LED: re-apply the last colour to the hardware (reset on reboot) and publish it.
         val led = config.lastLed.split(",").mapNotNull { it.toIntOrNull() }
         if (led.size == 5 && led[0] == 1) {
@@ -311,13 +313,31 @@ class MqttBridge(
     }
 
     // Zigbee router toggle (Sonoff NSPanel Pro). ON starts the guard supervisor (→ mosquitto +
-    // zgateway, ensures Repeater role); OFF stops the guard + zstack, freeing the radio. State is
-    // published optimistically — the gateway takes ~30s to spawn, and the guard makes it stable
-    // afterwards; the next (re)connect reconciles to the real running state via publishDiscovery.
+    // zgateway, ensures Repeater role); OFF stops the guard + zstack, freeing the radio.
+    //
+    // The vendor lifecycle is slow — OFF blocks ~8s in the stop script, and ON's gateway spawns on the
+    // guard's ~30s timer (tens of seconds before it answers) — so it must NOT run on the MQTT callback
+    // thread. We publish the commanded state optimistically, then reconcile to the real running state
+    // on a background thread (polling for the slow ON) so HA ends up correct without stalling MQTT.
     private fun handleZigbee(payload: String) {
         val on = payload.trim().equals("ON", ignoreCase = true)
-        if (on) zigbee.enable() else zigbee.disable()
         client?.let { publish(it, stateZigbee, if (on) "ON" else "OFF", retain = true) }
+        Thread {
+            try {
+                val settled = if (on) {
+                    zigbee.enable()
+                    var up = false
+                    for (i in 0 until 18) { if (zigbee.running()) { up = true; break }; Thread.sleep(5_000) }
+                    up
+                } else {
+                    zigbee.disable() // blocks until the stack is down
+                    zigbee.running()
+                }
+                client?.let { publish(it, stateZigbee, if (settled) "ON" else "OFF", retain = true) }
+            } catch (e: Exception) {
+                Log.w(TAG, "zigbee toggle failed", e)
+            }
+        }.start()
     }
 
     // On-board relay (Smatek S9E). topic = ha-paneld/<panel>/relay<N>/set; payload ON/OFF.
