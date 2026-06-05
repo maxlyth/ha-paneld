@@ -1,0 +1,4 @@
+# gen-icon.py is a maintainer-only icon generator — its outputs (the VectorDrawable + icon.svg) are
+# committed, and nothing in the build/CI/install path runs it. It is NOT a language the project relies
+# on, so keep it out of GitHub's repository language statistics.
+scripts/gen-icon.py linguist-detectable=false
