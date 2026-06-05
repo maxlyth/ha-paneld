@@ -1,5 +1,8 @@
 name: Release
 
+# Before tagging, run the pre-tag checklist in docs/RELEASING.md — in particular, reconcile the
+# README "Status & roadmap" (move shipped items out of Planned + add a "New in X.Y.Z" block).
+
 on:
   push:
     tags:

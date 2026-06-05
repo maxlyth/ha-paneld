@@ -1,7 +1,8 @@
 # Changelog
 
 Human-readable summaries of each release. The auto-generated commit list is appended below these
-notes on each [GitHub release](https://github.com/maxlyth/ha-paneld/releases).
+notes on each [GitHub release](https://github.com/maxlyth/ha-paneld/releases). Cutting a release? Follow
+the pre-tag checklist in [docs/RELEASING.md](docs/RELEASING.md) (it starts with "check the README").
 
 ## v0.6.2 - 2026-06-05
 

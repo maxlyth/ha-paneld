@@ -317,6 +317,20 @@ means you can never publish an in-place update again. Never commit the keystore 
 **v0.6.x** — validated across the panel fleet: Sonoff NSPanel Pro (PX30, Android 8.1),
 Tuya TPA10 (rk3566, Android 11), Electron WF1589T (rk3576, Android 14).
 
+New in 0.6.2:
+
+- **CPU governor** (`select.<panel>_cpu_governor`, root/su panels) — set the scaling governor across all
+  cores (powersave ↔ performance) to trade panel heat/noise against responsiveness; automatable from HA.
+- **Persistent network adb** (`switch.<panel>_network_adb`, opt-in) — keep `adb tcpip 5555` across reboots.
+- **IPv6** — the HTTP server binds dual-stack, so the panel UI/API answer on IPv6 as well as IPv4; the
+  info page shows the IPv6 address.
+- **Local-only navigation** — `text.<panel>_navigate` strips any scheme/host and navigates in-app via the
+  `homeassistant://` deep link, so an external URL can't trigger the Companion's disorienting WebView.
+- **Smatek S9E (experimental)** — onboard relays (`switch.<panel>_relay1/2`) and button LEDs
+  (`light.<panel>_button_led1..4`); see [docs/hardware/s9e.md](docs/hardware/s9e.md).
+- Hardening: more robust Zigbee detection + non-blocking toggle; fleet updates that always (re)launch
+  ([`scripts/update-fleet.sh`](scripts/update-fleet.sh)); structured GitHub issue forms.
+
 New in 0.6.1:
 
 - **Zigbee router** (`switch.<panel>_zigbee_router`, Sonoff NSPanel Pro only) — turn the panel's
@@ -363,16 +377,12 @@ Carried from 0.4.x:
 
 Planned:
 
-- **More performance tooling** — deeper on-device instrumentation to measure, diagnose and tune
-  dashboard performance on weak panels (the project's headline direction).
-- **CPU governor control** — set the scaling governor from HA (powersave ↔ performance) to trade panel
-  heat/power against dashboard responsiveness; automatable (e.g. powersave when the room is empty).
-- **Persistent network adb** — keep `adb tcpip` enabled across reboots, for panels that drop it.
-- **Built-in relay control** — expose a panel's onboard load-switching relay(s), where fitted, as
-  `switch.<panel>_relay*` so the panel can drive the light/appliance it's wired to. Hardware-dependent;
-  needs the per-panel relay control path (GPIO / vendor node) identified first.
 - **DLNA renderer** — advertise as a UPnP/DLNA media renderer so HA auto-discovers a `media_player`
   (`tts.speak` then targets the panel directly, no script).
+- **More performance tooling** — deeper on-device instrumentation to measure, diagnose and tune
+  dashboard performance on weak panels (the project's headline direction).
+- **Built-in relay control beyond the S9E** — the same `switch.<panel>_relay*` model on other panels
+  with onboard relays, once each one's control path (GPIO / vendor node) is known.
 - **Visible nav-bar show/hide** — a real on-device nav-bar toggle (remote Back/Recents already shipped).
 - Daemon boot-persistence on su-only (PX30) panels, if true-off is wanted without relying on `su`
   at runtime.
