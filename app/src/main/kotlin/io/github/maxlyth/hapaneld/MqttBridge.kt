@@ -40,6 +40,8 @@ class MqttBridge(
     private val buttonsEnabled: Boolean,
     private val hasLight: Boolean,
     private val hasProximity: Boolean,
+    private val hasTemperature: Boolean,
+    private val hasHumidity: Boolean,
     private val configUrl: String? = null,
     // Resolves HA's LAN IP via mDNS to default the broker when none is configured (injected by the
     // service, wired to MdnsAdvertiser). Returns null if HA isn't found / mDNS unavailable.
@@ -75,6 +77,8 @@ class MqttBridge(
     private val eventButton = "ha-paneld/$panel/button/event"
     private val stateIlluminance = "ha-paneld/$panel/illuminance/state"
     private val stateProximity = "ha-paneld/$panel/proximity/state"
+    private val stateTemperature = "ha-paneld/$panel/temperature/state"
+    private val stateHumidity = "ha-paneld/$panel/humidity/state"
 
     fun start() {
         var broker = config.mqttBroker.trim()
@@ -275,6 +279,15 @@ class MqttBridge(
         client?.let { publish(it, stateProximity, if (near) "ON" else "OFF", retain = true) }
     }
 
+    // Rounded at publish (1dp temp, integer humidity) so precision wobble can't create recorder rows.
+    fun publishTemperature(celsius: Float) {
+        client?.let { publish(it, stateTemperature, String.format(java.util.Locale.US, "%.1f", celsius), retain = true) }
+    }
+
+    fun publishHumidity(percent: Float) {
+        client?.let { publish(it, stateHumidity, Math.round(percent).toString(), retain = true) }
+    }
+
     // ---- discovery ----
 
     private fun publishDiscovery(c: Mqtt5AsyncClient) {
@@ -336,6 +349,18 @@ class MqttBridge(
                 """{"name":"Proximity","unique_id":"${panel}_proximity","state_topic":"$stateProximity","device_class":"occupancy","payload_on":"ON","payload_off":"OFF",$avail,$device}""",
             )
         }
+        if (hasTemperature) {
+            publishConfig(
+                c, "sensor", "${panel}_temperature",
+                """{"name":"Temperature","unique_id":"${panel}_temperature","state_topic":"$stateTemperature","device_class":"temperature","unit_of_measurement":"°C","state_class":"measurement",$avail,$device}""",
+            )
+        }
+        if (hasHumidity) {
+            publishConfig(
+                c, "sensor", "${panel}_humidity",
+                """{"name":"Humidity","unique_id":"${panel}_humidity","state_topic":"$stateHumidity","device_class":"humidity","unit_of_measurement":"%","state_class":"measurement",$avail,$device}""",
+            )
+        }
 
         // Panel actions (root via su; graceful no-op without it).
         publishConfig(
@@ -374,6 +399,7 @@ class MqttBridge(
             "text" to "${panel}_navigate", "event" to "${panel}_button",
             "number" to "${panel}_volume", "sensor" to "${panel}_illuminance",
             "binary_sensor" to "${panel}_proximity",
+            "sensor" to "${panel}_temperature", "sensor" to "${panel}_humidity",
             "button" to "${panel}_reload", "button" to "${panel}_reboot",
             "button" to "${panel}_launcher", "button" to "${panel}_home",
         )

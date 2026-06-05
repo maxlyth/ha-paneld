@@ -30,12 +30,21 @@ class SensorReporter(context: Context, private val config: Config) {
     private val sm = context.applicationContext.getSystemService(Context.SENSOR_SERVICE) as SensorManager
     private val lightSensor: Sensor? = sm.getDefaultSensor(Sensor.TYPE_LIGHT)
     private val proximitySensor: Sensor? = sm.getDefaultSensor(Sensor.TYPE_PROXIMITY)
+    // Onboard climate (e.g. TPA10 CHT8305) — standard HAL sensors, no root/vendor lib.
+    private val tempSensor: Sensor? = sm.getDefaultSensor(Sensor.TYPE_AMBIENT_TEMPERATURE)
+    private val humiditySensor: Sensor? = sm.getDefaultSensor(Sensor.TYPE_RELATIVE_HUMIDITY)
 
     private var lastLux = -1f
     private var lastLuxAt = 0L
     private var lastNear: Boolean? = null
+    private var lastTemp = Float.NaN
+    private var lastTempAt = 0L
+    private var lastHumid = Float.NaN
+    private var lastHumidAt = 0L
     private var listener: SensorEventListener? = null
     private var onProximity: ((Boolean) -> Unit)? = null
+    private var onTemp: ((Float) -> Unit)? = null
+    private var onHumid: ((Float) -> Unit)? = null
     private val seenRaw = java.util.TreeSet<Float>() // distinct raw values observed → graded vs binary
 
     /** Latest raw proximity reading (device-native units), updated ungated on every event. */
@@ -45,11 +54,20 @@ class SensorReporter(context: Context, private val config: Config) {
 
     fun hasLight() = lightSensor != null
     fun hasProximity() = proximitySensor != null
+    fun hasTemperature() = tempSensor != null
+    fun hasHumidity() = humiditySensor != null
     fun maxRange(): Float = proximitySensor?.maximumRange ?: 0f
 
-    fun start(onLux: (Int) -> Unit, onProximity: (Boolean) -> Unit) {
-        if (lightSensor == null && proximitySensor == null) return
+    fun start(
+        onLux: (Int) -> Unit,
+        onProximity: (Boolean) -> Unit,
+        onTemperature: (Float) -> Unit = {},
+        onHumidity: (Float) -> Unit = {},
+    ) {
+        if (lightSensor == null && proximitySensor == null && tempSensor == null && humiditySensor == null) return
         this.onProximity = onProximity
+        this.onTemp = onTemperature
+        this.onHumid = onHumidity
         listener = object : SensorEventListener {
             override fun onAccuracyChanged(s: Sensor?, accuracy: Int) {}
             override fun onSensorChanged(e: SensorEvent) {
@@ -58,7 +76,7 @@ class SensorReporter(context: Context, private val config: Config) {
                         val lux = e.values[0]
                         val now = System.currentTimeMillis()
                         val changed = lastLux < 0 || abs(lux - lastLux) >= max(1f, lastLux * 0.2f)
-                        if (changed && now - lastLuxAt >= 2000) {
+                        if (changed && now - lastLuxAt >= 15000) {
                             lastLux = lux
                             lastLuxAt = now
                             onLux(lux.toInt())
@@ -71,6 +89,22 @@ class SensorReporter(context: Context, private val config: Config) {
                         }
                         evaluateProximity()
                     }
+                    // Climate is slow + informational — keep recorder load tiny: report only on a
+                    // meaningful delta (>=0.2C / >=1%), min 60s apart, first reading always. Stable
+                    // climate produces NO updates at all (no forced periodic). Values are rounded
+                    // (1dp temp, integer humidity) at publish so precision wobble can't make rows.
+                    Sensor.TYPE_AMBIENT_TEMPERATURE -> {
+                        val t = e.values[0]; val now = System.currentTimeMillis()
+                        if ((lastTemp.isNaN() || abs(t - lastTemp) >= 0.2f) && now - lastTempAt >= 60000) {
+                            lastTemp = t; lastTempAt = now; onTemp?.invoke(t)
+                        }
+                    }
+                    Sensor.TYPE_RELATIVE_HUMIDITY -> {
+                        val h = e.values[0]; val now = System.currentTimeMillis()
+                        if ((lastHumid.isNaN() || abs(h - lastHumid) >= 1.0f) && now - lastHumidAt >= 60000) {
+                            lastHumid = h; lastHumidAt = now; onHumid?.invoke(h)
+                        }
+                    }
                 }
             }
         }
@@ -78,7 +112,9 @@ class SensorReporter(context: Context, private val config: Config) {
         // UI delay (not NORMAL): proximity is on-change + low-power, so a faster max-rate just makes
         // both wake-on-approach and live UI tuning responsive without meaningful battery cost.
         proximitySensor?.let { sm.registerListener(listener, it, SensorManager.SENSOR_DELAY_UI) }
-        Log.i(TAG, "sensors started (light=${hasLight()} proximity=${hasProximity()})")
+        tempSensor?.let { sm.registerListener(listener, it, SensorManager.SENSOR_DELAY_NORMAL) }
+        humiditySensor?.let { sm.registerListener(listener, it, SensorManager.SENSOR_DELAY_NORMAL) }
+        Log.i(TAG, "sensors started (light=${hasLight()} proximity=${hasProximity()} temp=${hasTemperature()} humidity=${hasHumidity()})")
     }
 
     /** Recompute the binary from the cached raw + current calibration, publishing on a change.
@@ -136,6 +172,8 @@ class SensorReporter(context: Context, private val config: Config) {
         listener?.let { sm.unregisterListener(it) }
         listener = null
         onProximity = null
+        onTemp = null
+        onHumid = null
     }
 
     companion object {

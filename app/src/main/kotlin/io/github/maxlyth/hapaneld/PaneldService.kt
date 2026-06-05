@@ -77,7 +77,8 @@ class PaneldService : Service() {
 
     private fun buildMqtt(): MqttBridge = MqttBridge(
         config, brightness, screen, led, navigate, volume, system,
-        accessibilityEnabled(), sensors.hasLight(), sensors.hasProximity(), configUrl,
+        accessibilityEnabled(), sensors.hasLight(), sensors.hasProximity(),
+        sensors.hasTemperature(), sensors.hasHumidity(), configUrl,
         // When no broker is configured, find HA on the LAN via mDNS and default to its :1883.
         discoverHaIp = { mdns.discoverHaIp() },
     )
@@ -169,6 +170,8 @@ class PaneldService : Service() {
             sensors.start(
                 onLux = { lux -> mqtt.publishLight(lux) },
                 onProximity = { near -> mqtt.publishProximity(near) },
+                onTemperature = { c -> mqtt.publishTemperature(c) },
+                onHumidity = { h -> mqtt.publishHumidity(h) },
             )
         }
         return START_STICKY
