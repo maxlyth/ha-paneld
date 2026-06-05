@@ -585,7 +585,7 @@ class MqttBridge(
         if (adb.available()) {
             publishConfig(
                 c, "switch", "${panel}_network_adb",
-                """{"name":"Network ADB","unique_id":"${panel}_network_adb","command_topic":"$cmdNetAdb","state_topic":"$stateNetAdb","icon":"mdi:android-debug-bridge","entity_category":"config",$avail,$device}""",
+                """{"name":"Network ADB","unique_id":"${panel}_network_adb","command_topic":"$cmdNetAdb","state_topic":"$stateNetAdb","icon":"mdi:adb","entity_category":"config",$avail,$device}""",
             )
             publish(c, stateNetAdb, if (adb.isPersisted()) "ON" else "OFF", retain = true)
         }
