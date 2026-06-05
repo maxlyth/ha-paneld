@@ -9,7 +9,10 @@ import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
@@ -38,6 +41,10 @@ class MainActivity : AppCompatActivity() {
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
     private val url: String get() = "http://${localIpv4() ?: "127.0.0.1"}:${Config.DEFAULT_PORT}/"
 
+    private val config by lazy { Config(this) }
+    private val handler = Handler(Looper.getMainLooper())
+    private var autoReturn: Runnable? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         supportActionBar?.hide()
@@ -51,6 +58,35 @@ class MainActivity : AppCompatActivity() {
         } else {
             PaneldService.start(this)
         }
+        maybeArmAutoReturn()
+    }
+
+    // After an app update the launcher lands on this UI; if the panel is configured (MQTT connected)
+    // and the Companion is installed, bounce back to the dashboard so it doesn't linger. One-shot per
+    // launch, cancelled by any touch (so someone who opened it on purpose isn't yanked away). Gated on
+    // a recent app update, so a deliberate open long afterwards just stays put.
+    private fun maybeArmAutoReturn() {
+        if (!config.autoReturnDashboard || companionPackage() == null) return
+        val updated = runCatching { packageManager.getPackageInfo(packageName, 0).lastUpdateTime }.getOrDefault(0L)
+        if (System.currentTimeMillis() - updated > 5 * 60 * 1000L) return // not a post-update launch
+        val r = Runnable { if (PanelStatus.mqttConnected) openDashboard() }
+        autoReturn = r
+        handler.postDelayed(r, 8_000)
+    }
+
+    private fun cancelAutoReturn() {
+        autoReturn?.let { handler.removeCallbacks(it) }
+        autoReturn = null
+    }
+
+    override fun dispatchTouchEvent(ev: MotionEvent?): Boolean {
+        if (ev?.action == MotionEvent.ACTION_DOWN) cancelAutoReturn() // user is here on purpose
+        return super.dispatchTouchEvent(ev)
+    }
+
+    override fun onDestroy() {
+        cancelAutoReturn()
+        super.onDestroy()
     }
 
     private fun buildUi(): View {

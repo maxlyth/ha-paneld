@@ -99,6 +99,13 @@ class Config(context: Context) {
         prefs.edit().putBoolean("wake_on_wave", on).apply()
     }
 
+    // After an app update the launcher shows the App UI; when configured + MQTT-connected, bounce back
+    // to the dashboard so it doesn't linger. Default on.
+    val autoReturnDashboard: Boolean get() = prefs.getBoolean("auto_return_dashboard", true)
+    fun setAutoReturnDashboard(on: Boolean) {
+        prefs.edit().putBoolean("auto_return_dashboard", on).apply()
+    }
+
     /**
      * HA device card manufacturer/model. The OS Build props are the generic SoC platform
      * (e.g. `rockchip`/`px30_evb`), not the product, so these are configurable — set e.g.

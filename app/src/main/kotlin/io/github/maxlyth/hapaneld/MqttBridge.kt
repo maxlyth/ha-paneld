@@ -128,6 +128,7 @@ class MqttBridge(
                         Regex("REFUSED|TIMEOUT|UNREACHABLE|UNRESOLVED|RESET|NO ROUTE|CONNECTION|FAILED").containsMatchIn(m) -> "unreachable"
                         else -> "disconnected"
                     }
+                    PanelStatus.mqttConnected = false
                     Log.w(TAG, "MQTT disconnected ($state) — auto-reconnecting: ${it.cause?.message}")
                 }
                 .buildAsync()
@@ -157,6 +158,7 @@ class MqttBridge(
     private fun onConnected() {
         val c = client ?: return
         state = "connected"
+        PanelStatus.mqttConnected = true
         c.subscribeWith()
             .topicFilter("ha-paneld/$panel/+/set")
             .qos(MqttQos.AT_LEAST_ONCE)
@@ -474,6 +476,7 @@ class MqttBridge(
 
     fun stop() {
         ButtonBus.listener = null
+        PanelStatus.mqttConnected = false
         runCatching {
             client?.let {
                 publish(it, availabilityTopic, "offline", retain = true)
