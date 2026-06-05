@@ -10,6 +10,7 @@ import io.github.maxlyth.hapaneld.control.BrightnessController
 import io.github.maxlyth.hapaneld.control.NavigateController
 import io.github.maxlyth.hapaneld.control.ScreenController
 import io.github.maxlyth.hapaneld.control.SystemController
+import io.github.maxlyth.hapaneld.control.TouchSoundController
 import io.github.maxlyth.hapaneld.control.VolumeController
 import io.github.maxlyth.hapaneld.hardware.LedController
 import io.github.maxlyth.hapaneld.input.ButtonBus
@@ -39,6 +40,7 @@ class MqttBridge(
     private val navigate: NavigateController,
     private val volume: VolumeController,
     private val system: SystemController,
+    private val touchSound: TouchSoundController,
     private val buttonsEnabled: Boolean,
     private val hasLight: Boolean,
     private val hasProximity: Boolean,
@@ -79,6 +81,8 @@ class MqttBridge(
     private val cmdRecents = "ha-paneld/$panel/recents/set"
     private val cmdWakeOnWave = "ha-paneld/$panel/wake_on_wave/set"
     private val stateWakeOnWave = "ha-paneld/$panel/wake_on_wave/state"
+    private val cmdTouchSound = "ha-paneld/$panel/touch_sound/set"
+    private val stateTouchSound = "ha-paneld/$panel/touch_sound/state"
     private val stateScreen = "ha-paneld/$panel/screen/state"
     private val stateLed = "ha-paneld/$panel/led/state"
     private val stateNavigate = "ha-paneld/$panel/navigate/state"
@@ -214,6 +218,7 @@ class MqttBridge(
                 cmdBack -> PanelAccessibilityService.navBack()
                 cmdRecents -> PanelAccessibilityService.navRecents()
                 cmdWakeOnWave -> handleWakeOnWave(payload)
+                cmdTouchSound -> handleTouchSound(payload)
                 else -> Log.d(TAG, "unhandled command topic $topic")
             }
         } catch (e: Exception) {
@@ -269,6 +274,12 @@ class MqttBridge(
         val on = payload.trim().equals("ON", ignoreCase = true)
         config.setWakeOnWave(on)
         client?.let { publish(it, stateWakeOnWave, if (on) "ON" else "OFF", retain = true) }
+    }
+
+    private fun handleTouchSound(payload: String) {
+        val on = payload.trim().equals("ON", ignoreCase = true)
+        touchSound.set(on)
+        client?.let { publish(it, stateTouchSound, if (touchSound.isEnabled()) "ON" else "OFF", retain = true) }
     }
 
     // Button backlight (e.g. TPA10): a brightness-only light, driven via the root daemon's BTN command
@@ -418,6 +429,11 @@ class MqttBridge(
             )
             publish(c, stateWakeOnWave, if (config.wakeOnWave) "ON" else "OFF", retain = true)
         }
+        publishConfig(
+            c, "switch", "${panel}_touch_sound",
+            """{"name":"Touch sound","unique_id":"${panel}_touch_sound","command_topic":"$cmdTouchSound","state_topic":"$stateTouchSound","icon":"mdi:volume-high","entity_category":"config",$avail,$device}""",
+        )
+        publish(c, stateTouchSound, if (touchSound.isEnabled()) "ON" else "OFF", retain = true)
 
         // Panel actions (root via su; graceful no-op without it).
         publishConfig(
@@ -459,6 +475,7 @@ class MqttBridge(
             "binary_sensor" to "${panel}_proximity",
             "sensor" to "${panel}_temperature", "sensor" to "${panel}_humidity",
             "light" to "${panel}_buttons", "switch" to "${panel}_wake_on_wave",
+            "switch" to "${panel}_touch_sound",
             "button" to "${panel}_reload", "button" to "${panel}_reboot",
             "button" to "${panel}_launcher", "button" to "${panel}_home",
         )

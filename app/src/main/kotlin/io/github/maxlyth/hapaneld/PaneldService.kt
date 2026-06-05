@@ -16,6 +16,7 @@ import io.github.maxlyth.hapaneld.control.BrightnessController
 import io.github.maxlyth.hapaneld.control.NavigateController
 import io.github.maxlyth.hapaneld.control.ScreenController
 import io.github.maxlyth.hapaneld.control.SystemController
+import io.github.maxlyth.hapaneld.control.TouchSoundController
 import io.github.maxlyth.hapaneld.control.VolumeController
 import io.github.maxlyth.hapaneld.hardware.LedController
 import io.github.maxlyth.hapaneld.hardware.LedFactory
@@ -55,6 +56,7 @@ class PaneldService : Service() {
     private lateinit var navigate: NavigateController
     private lateinit var volume: VolumeController
     private lateinit var system: SystemController
+    private lateinit var touchSound: TouchSoundController
     private var configUrl: String? = null
 
     override fun onCreate() {
@@ -68,6 +70,7 @@ class PaneldService : Service() {
         navigate = NavigateController(this)
         volume = VolumeController(this)
         system = SystemController(this)
+        touchSound = TouchSoundController(this)
         configUrl = localIpv4()?.let { "http://$it:${config.httpPort}/" }
 
         mqtt = buildMqtt()
@@ -76,7 +79,7 @@ class PaneldService : Service() {
     }
 
     private fun buildMqtt(): MqttBridge = MqttBridge(
-        config, brightness, screen, led, navigate, volume, system,
+        config, brightness, screen, led, navigate, volume, system, touchSound,
         accessibilityEnabled(), sensors.hasLight(), sensors.hasProximity(),
         sensors.hasTemperature(), sensors.hasHumidity(),
         // Button backlight lives on the sysfs/daemon LED panels (TPA10), reached via the daemon's BTN.
