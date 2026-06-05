@@ -38,6 +38,33 @@ prompts for the panel IP (and optional id / MQTT broker), downloads the **latest
 provisions the panel. For scripted/fleet installs use [`scripts/provision.sh`](scripts/provision.sh)
 directly (see [Provisioning](#provisioning-no-device-ui-on-rooteduserdebug-panels)).
 
+### Other ways to install
+
+The one-liner uses **network adb**. If a panel doesn't expose adb over the network:
+
+- **Bootstrap via USB (Tuya TPA10 / Smatek panels).** adb — and `adb root` — is often only available,
+  or only rooted, on the **USB port**. Plug in, enable network adb, then install as normal:
+
+  ```sh
+  adb devices                   # accept the on-screen RSA prompt if shown
+  adb root                      # if supported (needed for the sysfs-LED helper daemon)
+  adb tcpip 5555                # expose adb on the network (resets on reboot)
+  adb connect <panel-ip>:5555
+  ```
+
+  then run the one-liner (or `scripts/provision.sh <panel-ip:5555>`).
+- **No adb at all.** With a browser or file manager on the panel, download the
+  [release APK](https://github.com/maxlyth/ha-paneld/releases/latest), enable "install unknown apps"
+  and tap to install — then **grant permissions by hand** (Settings → Apps → ha-paneld → *Modify
+  system settings*; Accessibility → enable the service), which the app's setup screen guides. Not
+  possible on locked-down panels with no browser/file manager.
+
+> [!NOTE]
+> ha-paneld is sideloaded on **every** panel — it isn't on the Play Store (its accessibility use for
+> buttons/nav doesn't fit Play policy), so even Play-capable panels (the WF1589T) sideload it; Play
+> there only auto-updates WebView. No local adb? A Docker image can run the *network*-adb install, but
+> USB adb can't be passed into Docker on macOS/Windows — use native adb for the USB path.
+
 > [!IMPORTANT]
 > **First-run gotcha — update the panel's system WebView.** Most of these panels ship with a
 > WebView/Chromium far too old to render a current Home Assistant dashboard, so the HA Companion app
