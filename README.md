@@ -184,6 +184,17 @@ starts the agent, optionally sets the panel id / MQTT, and ends with a self-veri
 reinstalling the same or an older version (`--force` skips that). `scripts/provision.sh <ip> --verify`
 re-checks a panel without changing anything.
 
+**Updating a whole fleet:** use [`scripts/update-fleet.sh`](scripts/update-fleet.sh) rather than a raw
+`adb install -r` loop — `adb install -r` leaves the app in Android's *stopped* state, so a plain
+install loop leaves panels installed-but-dead (their entities go `unavailable` in HA) until each is
+launched. The fleet script downloads the release once and runs `provision.sh` per panel, so every one
+is installed **and launched and verified**:
+
+```bash
+scripts/update-fleet.sh --latest -- 192.168.1.10 192.168.1.11:5555
+# or pipe a host list:  printf '%s\n' 192.168.1.10 192.168.1.11 | scripts/update-fleet.sh --latest
+```
+
 Non-root panels: use the in-app setup screen, which fires the standard system permission intents.
 
 **Permission → why:**

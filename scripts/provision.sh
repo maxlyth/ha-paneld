@@ -156,11 +156,21 @@ else
 fi
 adb -s "$TARGET" shell settings put secure accessibility_enabled 1
 
+# MUST launch after install: `adb install -r` leaves the app in Android's "stopped" state, which does
+# NOT auto-start — not even via START_STICKY — until something launches it (or the device reboots). A
+# fleet update that installs without this step leaves panels installed-but-dead (their entities go
+# `unavailable` in HA). launch_and_wait polls the panel's web server (host-side curl, so it works even
+# on panels that ship no `curl` themselves) and is retried once to cover a stopped-state / slow-boot race.
+launch_and_wait() {
+  adb -s "$TARGET" shell am start -n "$PKG/.MainActivity" >/dev/null 2>&1 || true
+  for _ in $(seq 1 15); do curl -fsS --max-time 2 "$URL/health" >/dev/null 2>&1 && return 0; sleep 1; done
+  return 1
+}
 step "▶️  starting" "the panel agent"
-adb -s "$TARGET" shell am start -n "$PKG/.MainActivity" >/dev/null
-
-step "⏳ waiting" "for the web server…"
-for _ in $(seq 1 20); do curl -fsS --max-time 2 "$URL/health" >/dev/null 2>&1 && break; sleep 1; done
+if ! launch_and_wait; then
+  step "▶️  re-starting" "${D}agent didn't answer — retrying${X}"
+  launch_and_wait || echo "   ${YEL}⚠ web server still not answering on $URL — check the panel.${X}"
+fi
 
 ARGS=()
 [ -n "$PANEL_ID" ]   && ARGS+=(--data-urlencode "panel_id=$PANEL_ID")

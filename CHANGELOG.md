@@ -3,6 +3,15 @@
 Human-readable summaries of each release. The auto-generated commit list is appended below these
 notes on each [GitHub release](https://github.com/maxlyth/ha-paneld/releases).
 
+## Unreleased
+
+- **Fleet updates that don't leave panels dead** — `adb install -r` puts the app in Android's
+  *stopped* state, which never auto-starts (not even via `START_STICKY`) until something launches it,
+  so a bare install loop leaves panels installed-but-dead (entities `unavailable` in HA).
+  `scripts/provision.sh` now retries the launch and explains why it's mandatory, and a new
+  `scripts/update-fleet.sh` wraps provision.sh across many panels (downloading the release once) so
+  every panel is installed **and launched and verified**.
+
 ## v0.6.1 - 2026-06-05
 
 Zigbee router control for the Sonoff NSPanel Pro (the only panel with a Zigbee radio).
