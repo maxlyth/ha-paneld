@@ -182,7 +182,8 @@ navigate, TTS) work on any panel; LED/buttons depend on a per-panel HAL.
 | Tuya TPA10 | Rockchip rk3566 | 11 (API 30) | armeabi-v7a | 32-bit userspace |
 | Electron WF1589T | Rockchip rk3576 | userdebug (`adb root`) | arm64-v8a | RGB LED via clean-room NDK ioctl on `/dev/ledjni` (no vendor lib) |
 
-Other Android panels are welcome — contribute a HAL adapter for your hardware.
+Other Android panels are welcome — contribute a HAL adapter for your hardware. Deep per-panel
+hardware references (SoC, sensors, LED path, radios) are in [docs/hardware/](docs/hardware/).
 
 **minSdk is 26.** API < 26 is unsupported (the MQTT client cannot connect below API 26).
 
@@ -296,6 +297,9 @@ Planned:
 
 ## Documentation
 
+- **[docs/hardware/](docs/hardware/)** — reverse-engineered hardware references for the supported
+  panels (SoC, LED control path, sensors, radios), since these devices are otherwise undocumented:
+  [TPA10](docs/hardware/tpa10.md) (rk3566), [WF1589T](docs/hardware/wf1589t.md) (rk3576).
 - **[docs/performance.md](docs/performance.md)** — panel performance tuning: why dashboards lag on
   weak panels and how to fix it (the WebSocket-event-volume problem; the split-instance approach).
 - **[helper/README.md](helper/README.md)** — the root LED/control helper daemon for sysfs-LED panels
