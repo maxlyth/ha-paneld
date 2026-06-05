@@ -3,6 +3,7 @@ package io.github.maxlyth.hapaneld
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -53,42 +54,72 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun buildUi(): View {
+        val dm = resources.displayMetrics
+        val hDp = (dm.heightPixels / dm.density).toInt()
+        // Scale to the vertical budget so it fits WITHOUT scrolling on a 480x480 panel, yet the icon
+        // and QR grow prominent on roomy displays. Tiers: tight (≈480²) / medium / large.
+        val compact = hDp < 560
+        val iconDp = when { hDp < 560 -> 56; hDp < 900 -> 104; else -> 144 }
+        val qrDp = when { hDp < 560 -> 132; hDp < 900 -> 184; else -> 224 }
+        val pad = if (compact) dp(16) else dp(36)
+
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
-            setPadding(dp(32), dp(36), dp(32), dp(36))
+            setPadding(dp(24), pad, dp(24), pad)
         }
-        // The transparent foreground (device + blue mark), NOT the adaptive mipmap — the mipmap paints
-        // its white background square (uneven mask padding) which clashes with the dark screen.
+        // The transparent foreground (device + blue mark), NOT the adaptive mipmap (white-bg square).
         root.addView(ImageView(this).apply {
             setImageResource(R.drawable.ic_launcher_foreground)
-            layoutParams = LinearLayout.LayoutParams(dp(116), dp(116)).apply { bottomMargin = dp(8) }
+            layoutParams = LinearLayout.LayoutParams(dp(iconDp), dp(iconDp)).apply { bottomMargin = dp(if (compact) 2 else 8) }
         })
-        root.addView(text("ha-paneld", 22f, "#FFFFFF", bold = true))
-        root.addView(text("v${BuildConfig.VERSION_NAME} · running in the background", 13f, "#8a8f99", padBottom = 18))
-        // Friendly explanation of what the app is.
-        root.addView(text(
-            "This device is a Home Assistant wall panel. ha-paneld runs in the background so Home " +
-                "Assistant can control the screen, LED, buttons and speaker and read its sensors — all " +
-                "over your local network. The dashboard itself runs in the Home Assistant app.",
-            14f, "#c8ccd2", padBottom = 22,
-        ))
+        root.addView(text("ha-paneld", if (compact) 18f else 22f, "#FFFFFF", bold = true))
+        root.addView(text("v${BuildConfig.VERSION_NAME} · running in the background", 12f, "#8a8f99", padBottom = if (compact) 8 else 18))
+        // Description: full on roomy screens; omitted on the tightest so the UI fits without scrolling.
+        if (!compact) {
+            root.addView(text(
+                "This device is a Home Assistant wall panel. ha-paneld runs in the background so Home " +
+                    "Assistant can control the screen, LED, buttons and speaker and read its sensors — all " +
+                    "over your local network. The dashboard itself runs in the Home Assistant app.",
+                14f, "#c8ccd2", padBottom = 22,
+            ))
+        }
         // The full URL — tappable here, and readable so it can be typed on another device.
         root.addView(TextView(this).apply {
             gravity = Gravity.CENTER
-            textSize = 18f
+            textSize = if (compact) 15f else 18f
             setTextColor(Color.parseColor("#4a9eff"))
             text = url
             setOnClickListener { openConfig() }
+            setPadding(0, 0, 0, dp(if (compact) 6 else 0))
         })
-        root.addView(text("Open this address in a browser to configure the panel", 12f, "#8a8f99", padTop = 4, padBottom = 24))
-        root.addView(button("Open configuration") { openConfig() })
-        // Only offer the HA app button when the Home Assistant Companion app is actually installed.
-        companionPackage()?.let { root.addView(button("Open Home Assistant app") { openDashboard() }) }
+        if (!compact) root.addView(text("Open this address in a browser to configure the panel", 12f, "#8a8f99", padTop = 4, padBottom = 16))
+        // QR of the config URL — scan with a phone instead of typing it.
+        qrBitmap(url, dp(qrDp))?.let { qr ->
+            root.addView(ImageView(this).apply {
+                setImageBitmap(qr)
+                layoutParams = LinearLayout.LayoutParams(dp(qrDp), dp(qrDp)).apply { topMargin = dp(6); bottomMargin = dp(4) }
+            })
+            if (!compact) root.addView(text("Scan to open the config page on your phone", 12f, "#8a8f99", padBottom = 24))
+        }
+        // Buttons: side-by-side when vertical space is tight (shorter labels), stacked otherwise.
+        val cfgBtn = button(if (compact) "Configure" else "Open configuration") { openConfig() }
+        val haBtn = companionPackage()?.let { button(if (compact) "Dashboard" else "Open Home Assistant app") { openDashboard() } }
+        if (compact && haBtn != null) {
+            root.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                fun weighted(b: Button) { b.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { topMargin = dp(10); marginStart = dp(4); marginEnd = dp(4) } }
+                weighted(cfgBtn); weighted(haBtn)
+                addView(cfgBtn); addView(haBtn)
+            })
+        } else {
+            root.addView(cfgBtn)
+            haBtn?.let { root.addView(it) }
+        }
 
-        // Cap the content column so the paragraph wraps instead of stretching across a wide panel
-        // (TextView.maxWidth proved unreliable on these devices), and centre it.
-        val colW = minOf(resources.displayMetrics.widthPixels - dp(48), dp(512))
+        // Cap the content column so the paragraph wraps instead of stretching across a wide panel,
+        // and centre it. A ScrollView remains as a safety net if a panel is unexpectedly short.
+        val colW = minOf(dm.widthPixels - dp(48), dp(512))
         return ScrollView(this).apply {
             setBackgroundColor(Color.parseColor("#111111"))
             isFillViewport = true
@@ -112,6 +143,18 @@ class MainActivity : AppCompatActivity() {
         if (maxWidth > 0) this.maxWidth = dp(maxWidth)
         setPadding(0, dp(padTop), 0, dp(padBottom))
         text = s
+    }
+
+    // QR of the config URL via ZXing (pure-Java). Null on failure — the UI just omits the QR then.
+    private fun qrBitmap(text: String, size: Int): Bitmap? = try {
+        val bits = com.google.zxing.qrcode.QRCodeWriter()
+            .encode(text, com.google.zxing.BarcodeFormat.QR_CODE, size, size)
+        Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888).also { bmp ->
+            for (x in 0 until size) for (y in 0 until size)
+                bmp.setPixel(x, y, if (bits.get(x, y)) Color.BLACK else Color.WHITE)
+        }
+    } catch (e: Exception) {
+        null
     }
 
     private fun companionPackage(): String? =

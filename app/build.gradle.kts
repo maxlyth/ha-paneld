@@ -101,6 +101,9 @@ dependencies {
 
     // Ktor/HiveMQ log via SLF4J; route it to Logcat.
     implementation(libs.slf4j.android)
+
+    // QR code for the on-device config URL (pure-Java encoder; no Android transitive deps).
+    implementation("com.google.zxing:core:3.5.3")
 }
 
 // Compile the CDP relay (helper/cdprelay.c) into assets at build time for the fleet ABIs, using the
