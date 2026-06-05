@@ -8,6 +8,7 @@ import com.hivemq.client.mqtt.mqtt5.Mqtt5AsyncClient
 import com.hivemq.client.mqtt.mqtt5.message.publish.Mqtt5Publish
 import io.github.maxlyth.hapaneld.control.BrightnessController
 import io.github.maxlyth.hapaneld.control.NavigateController
+import io.github.maxlyth.hapaneld.control.RelayController
 import io.github.maxlyth.hapaneld.control.ScreenController
 import io.github.maxlyth.hapaneld.control.SystemController
 import io.github.maxlyth.hapaneld.control.TouchSoundController
@@ -45,6 +46,8 @@ class MqttBridge(
     // Zigbee gateway control (Sonoff NSPanel Pro only). Presence is detected lazily on the MQTT
     // thread in publishDiscovery — it costs a su exec, so it must not run on the main thread.
     private val zigbee: ZigbeeController,
+    // On-board relays (Smatek S9E `st_relay` class). Count is probed lazily on the MQTT thread.
+    private val relay: RelayController,
     private val buttonsEnabled: Boolean,
     private val hasLight: Boolean,
     private val hasProximity: Boolean,
@@ -211,6 +214,10 @@ class MqttBridge(
         val topic = publish.topic.toString()
         val payload = String(publish.payloadAsBytes)
         try {
+            // Relay topics are dynamic (relay1/relay2/…), handled by pattern before the fixed set.
+            if (topic.startsWith("ha-paneld/$panel/relay") && topic.endsWith("/set")) {
+                handleRelay(topic, payload); return
+            }
             when (topic) {
                 cmdScreen -> handleScreen(payload)
                 cmdLed -> handleLed(payload)
@@ -313,6 +320,14 @@ class MqttBridge(
         client?.let { publish(it, stateZigbee, if (on) "ON" else "OFF", retain = true) }
     }
 
+    // On-board relay (Smatek S9E). topic = ha-paneld/<panel>/relay<N>/set; payload ON/OFF.
+    private fun handleRelay(topic: String, payload: String) {
+        val n = topic.substringAfter("/relay").substringBefore("/set").toIntOrNull() ?: return
+        val on = payload.trim().let { it.equals("ON", ignoreCase = true) || it == "1" }
+        relay.set(n, on)
+        client?.let { publish(it, "ha-paneld/$panel/relay$n/state", if (relay.get(n)) "ON" else "OFF", retain = true) }
+    }
+
     private fun handleNavigate(payload: String) {
         // text entity sends the raw URL string.
         val url = payload.trim().trim('"')
@@ -388,7 +403,7 @@ class MqttBridge(
         if (buttonsEnabled) {
             publishConfig(
                 c, "event", "${panel}_button",
-                """{"name":"Button","unique_id":"${panel}_button","state_topic":"$eventButton","event_types":["KEYCODE_MUTE","KEYCODE_F","KEYCODE_BACK","KEYCODE_HOME","KEYCODE_DPAD_CENTER","KEYCODE_VOLUME_UP","KEYCODE_VOLUME_DOWN"],$avail,$device}""",
+                """{"name":"Button","unique_id":"${panel}_button","state_topic":"$eventButton","event_types":["KEYCODE_MUTE","KEYCODE_F","KEYCODE_F1","KEYCODE_F2","KEYCODE_F3","KEYCODE_F4","KEYCODE_BACK","KEYCODE_HOME","KEYCODE_DPAD_CENTER","KEYCODE_VOLUME_UP","KEYCODE_VOLUME_DOWN"],$avail,$device}""",
             )
             // Nav actions via the a11y service (performGlobalAction) — uniform on every panel, no root.
             publishConfig(
@@ -462,6 +477,16 @@ class MqttBridge(
             publish(c, stateZigbee, if (zigbee.running()) "ON" else "OFF", retain = true)
         }
 
+        // On-board relays (Smatek S9E `st_relay`). count() probes sysfs via su — off-main-thread here.
+        val relays = relay.count()
+        for (n in 1..relays) {
+            publishConfig(
+                c, "switch", "${panel}_relay$n",
+                """{"name":"Relay $n","unique_id":"${panel}_relay$n","command_topic":"ha-paneld/$panel/relay$n/set","state_topic":"ha-paneld/$panel/relay$n/state","icon":"mdi:electric-switch",$avail,$device}""",
+            )
+            publish(c, "ha-paneld/$panel/relay$n/state", if (relay.get(n)) "ON" else "OFF", retain = true)
+        }
+
         // Panel actions (root via su; graceful no-op without it).
         publishConfig(
             c, "button", "${panel}_reload",
@@ -503,6 +528,7 @@ class MqttBridge(
             "sensor" to "${panel}_temperature", "sensor" to "${panel}_humidity",
             "light" to "${panel}_buttons", "switch" to "${panel}_wake_on_wave",
             "switch" to "${panel}_touch_sound", "switch" to "${panel}_zigbee_router",
+            "switch" to "${panel}_relay1", "switch" to "${panel}_relay2",
             "button" to "${panel}_reload", "button" to "${panel}_reboot",
             "button" to "${panel}_launcher", "button" to "${panel}_home",
         )

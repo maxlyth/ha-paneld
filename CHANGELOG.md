@@ -15,6 +15,11 @@ Zigbee router control for the Sonoff NSPanel Pro (the only panel with a Zigbee r
 - Implementation is local and credential-free: ha-paneld talks to the panel's on-device mosquitto
   broker (`zigbee/system/network-role/…`); no firmware reflash, no `/dev/ttyS5` handling. The router
   appears as a normal device in your ZHA/Zigbee2MQTT coordinator, with its own signal/last-seen there.
+- **Smatek S9E (barebones, experimental/untested)** — on-board **relays** as `switch.<panel>_relay1/2`
+  (`/sys/class/st_relay`, gated on presence), and the four buttons reported as `event.<panel>_button`
+  (`KEYCODE_F1`–`F4`). Derived from vendor paths in seaky#98; no S9E was available to validate, and the
+  relays switch mains loads — treat as experimental. Button LEDs + proximity radar documented, not yet
+  wired. See [docs/hardware/s9e.md](docs/hardware/s9e.md).
 
 ## v0.6.0 - 2026-06-05
 
