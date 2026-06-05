@@ -316,6 +316,13 @@ Planned:
 - **MQTT** — HiveMQ MQTT 5 client (NIO transport; ABI-agnostic).
 - **mDNS** — JmDNS (chosen over `NsdManager` for reliable TXT records across API levels).
 
+## Acknowledgements
+
+Thanks to **Seaky** for **NSPanelTools**, which showed what good panel-side Home Assistant tooling can
+do — genuinely excellent work. NSPanelTools targets Smatek / NSPanel-class hardware and is closed-source;
+ha-paneld exists to be an **open, multi-vendor** alternative that any Android panel can adopt and extend.
+The two solve overlapping problems for different audiences.
+
 ## Licence
 
 Apache-2.0. See [LICENSE](LICENSE).
