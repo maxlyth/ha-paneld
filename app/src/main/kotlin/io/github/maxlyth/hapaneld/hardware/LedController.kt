@@ -1,5 +1,8 @@
 package io.github.maxlyth.hapaneld.hardware
 
+import io.github.maxlyth.hapaneld.device.DeviceProfile
+import io.github.maxlyth.hapaneld.device.LedMechanism
+
 /**
  * Per-panel RGB LED HAL. The uniform interface lets the MQTT `light.<panel>_led` entity look
  * identical fleet-wide; the adapter underneath differs by hardware (clean-room NDK ioctl on the
@@ -26,20 +29,23 @@ class NoOpLedController : LedController {
 }
 
 /**
- * Picks the LED backend for this panel:
- * - rk3576: NDK ioctl on the app-accessible `/dev/ledjni` (probed by opening the node) — app-direct.
- * - sysfs-LED panels (e.g. TPA10): the [SocketLedController], which talks to the root helper daemon
- *   (`helper/hapaneld-ledd`) over loopback. A sandboxed app cannot write `sysfs_lights` nor exec
- *   `su` (SELinux `untrusted_app`; confirmed on TPA10), so the privilege lives in the daemon.
+ * Picks the LED backend from the active [DeviceProfile]'s [DeviceProfile.ledMechanism]:
+ * - `RK3576_IOCTL` (e.g. WF1589T): NDK ioctl on the app-accessible `/dev/ledjni` — app-direct. Falls
+ *   back to the daemon if the node isn't actually present (graceful for a mis-profiled panel).
+ * - `SYSFS_DAEMON` (e.g. TPA10): the [SocketLedController], talking to the root helper daemon
+ *   (`helper/hapaneld-ledd`) over loopback (a sandboxed app can't write sysfs nor exec `su`).
+ * - `NONE` (e.g. NSPanel Pro): no LED — skip probing entirely.
+ * - `AUTODETECT` (unknown panel): probe rk3576 ioctl, then the daemon (the previous behaviour).
  *
- * `detect()` returns the socket controller without probing; the bridge later calls `available()`
- * (off the main thread), which returns false when the daemon isn't running → the LED entity is
- * skipped. A panel with neither a node nor the daemon yields no LED entity.
+ * For the socket path, `detect()` returns the controller without probing; the bridge later calls
+ * `available()` (off the main thread), which is false when the daemon isn't running → the LED entity is
+ * skipped. So a panel with neither a node nor the daemon yields no LED entity.
  */
 object LedFactory {
-    fun detect(): LedController {
-        val rk = Rk3576LedController()
-        if (rk.available()) return rk
-        return SocketLedController()
+    fun detect(profile: DeviceProfile = DeviceProfile.detect()): LedController = when (profile.ledMechanism) {
+        LedMechanism.NONE -> NoOpLedController()
+        LedMechanism.SYSFS_DAEMON -> SocketLedController()
+        LedMechanism.RK3576_IOCTL -> Rk3576LedController().takeIf { it.available() } ?: SocketLedController()
+        LedMechanism.AUTODETECT -> Rk3576LedController().takeIf { it.available() } ?: SocketLedController()
     }
 }

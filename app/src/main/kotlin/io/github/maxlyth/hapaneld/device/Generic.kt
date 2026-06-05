@@ -12,7 +12,7 @@ object Generic : DeviceProfile {
     override val socClass = "?"
     override val suForm = SuForm.ANDROID    // try the common Android form; Su autodetects either way
     override val appCanSu = true            // optimistic; Su.available() confirms at runtime
-    override val ledMechanism = LedMechanism.NONE
+    override val ledMechanism = LedMechanism.AUTODETECT   // probe everything; unknown panel may have a LED
     override val screenOff = ScreenOff.BRIGHTNESS_ZERO
     override val zigbeeGatewayDir: String? = null
     override val relayBase: String? = null

@@ -71,8 +71,9 @@ interface DeviceProfile {
  *  userdebug); NONE = su is not reachable from the app sandbox (use the helper daemon instead). */
 enum class SuForm { TOOLBOX, ANDROID, NONE }
 
-/** RGB-LED control mechanism. */
-enum class LedMechanism { RK3576_IOCTL, SYSFS_DAEMON, NONE }
+/** RGB-LED control mechanism. AUTODETECT = probe rk3576 ioctl then the sysfs daemon (the [Generic]
+ *  fallback for an unknown panel); NONE = the panel has no LED, skip probing. */
+enum class LedMechanism { RK3576_IOCTL, SYSFS_DAEMON, AUTODETECT, NONE }
 
 /** True-screen-off path. */
 enum class ScreenOff { SU_BLPOWER, DAEMON_BLPOWER, BRIGHTNESS_ZERO }
