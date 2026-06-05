@@ -9,6 +9,7 @@ panel on the market. Reverse-engineered on a live unit (Android 8.1, rooted, too
 | SoC | Rockchip **PX30 / rk3326** |
 | CPU | 4× **Cortex-A35** @ up to **1.512 GHz** (idles at 408 MHz) |
 | GPU | **Mali-G31** (device-confirmed) |
+| Display | **480×480 square** (1:1), ~4", 160 dpi (mdpi, well-matched to ~170 physical ppi), 60 Hz → a **480×480 dp** canvas |
 | RAM | **2 GB** (≈1960 MB usable) |
 | Storage | eMMC; `/data` ≈ 3.5 GB |
 | Android | 8.1 (API 27) |

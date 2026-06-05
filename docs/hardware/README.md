@@ -31,6 +31,9 @@ classes form a clear ladder. Figures below are from ha-paneld's own `/perf` endp
 | CPU | 4× Cortex-A35 @1.5 GHz | 4× Cortex-A55 @1.8 GHz | 4× A72 @2.1 GHz + 4× A53 @1.9 GHz |
 | RAM | 2 GB | 2 GB | 4 GB |
 | GPU | Mali-G31 | Mali-G52 (2EE) | Mali-G52 (MC3) |
+| Display | 480×480 **square**, ~4" | 1920×1200 16:10, ~10" | 1920×1200 16:10, ~5.5"/~400 ppi |
+| Refresh | 60 Hz | 56 Hz | 60 Hz |
+| Layout (dp) | 160 dpi → 480×480 dp | 240 dpi (ovr 200) → ~1280×800 dp | 160 dpi (ovr 186) → 1920×1200 dp — UI tiny, [raise density](wf1589t.md#display-density--raise-it) |
 | Class | entry-level | mid | high |
 
 Live `/perf` snapshot (each panel under its own real workload — illustrative, not a controlled
@@ -48,6 +51,11 @@ benchmark):
 
 **What this means for a real dashboard deployment:**
 
+- **Screen geometry is the first design constraint.** The NSPanel Pro's 480×480 **square** (480 dp)
+  only fits a single narrow column; the TPA10's 10" 1920×1200 (≈1280×800 dp) is genuinely roomy for
+  multi-column dashboards; the WF1589T is sharp (~400 ppi) but ships at a low logical density so the UI
+  is tiny until raised. Design the dashboard to the panel's **dp canvas + aspect ratio**, not its raw
+  pixel count.
 - **2 GB panels (PX30, TPA10): RAM is the binding constraint.** The dashboard WebView, the HA
   Companion app and Android itself share ~2 GB; heavy dashboards (many cards, large images, long
   history graphs, heavy custom cards) trigger WebView reloads and jank. The WF1589T's 4 GB largely

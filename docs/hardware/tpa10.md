@@ -7,6 +7,7 @@ what is on the board and how to drive it.
 | | |
 |---|---|
 | SoC | Rockchip **rk3566** |
+| Display | **1920×1200** (16:10 landscape), ~10", 240 dpi (override 200; well-matched to ~226 physical ppi), 56 Hz → ≈**1280×800 dp** canvas |
 | Android | 11 (API 30) |
 | ABI | armeabi-v7a (32-bit userspace) |
 | Radios | Wi-Fi, Bluetooth + BLE, plus a vendor `com.smartos.xinch.platform.ethernet` feature (wired/PoE). **No zigbee, no NFC, no IR, no cellular.** |
