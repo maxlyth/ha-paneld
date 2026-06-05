@@ -95,7 +95,6 @@ class MainActivity : AppCompatActivity() {
         // Scale to the vertical budget so it fits WITHOUT scrolling on a 480x480 panel, yet the icon
         // and QR grow prominent on roomy displays. Tiers: tight (≈480²) / medium / large.
         val compact = hDp < 560
-        val iconDp = when { hDp < 560 -> 96; hDp < 900 -> 132; else -> 200 }
         val qrDp = when { hDp < 560 -> 132; hDp < 900 -> 192; else -> 240 }
         val pad = if (compact) dp(16) else dp(36)
 
@@ -104,12 +103,20 @@ class MainActivity : AppCompatActivity() {
             gravity = Gravity.CENTER_HORIZONTAL
             setPadding(dp(24), pad, dp(24), pad)
         }
-        // The transparent foreground (device + blue mark), NOT the adaptive mipmap (white-bg square).
+        // Horizontal wordmark (glyph + "ha-paneld" in Atkinson Hyperlegible — legible lowercase l),
+        // sized to a fraction of the screen WIDTH. Its ~7:1 aspect keeps the height small, so it stays
+        // prominent on wide panels without the vertical overflow a large square icon caused. The
+        // wordmark carries the name, so no separate title text.
+        // Size by HEIGHT (width follows the ~7:1 aspect via adjustViewBounds), so the horizontal
+        // wordmark scales up on roomy panels but can never overflow the screen width.
+        val logoH = when { hDp < 560 -> 52; hDp < 900 -> 72; else -> 96 }
         root.addView(ImageView(this).apply {
-            setImageResource(R.drawable.ic_launcher_foreground)
-            layoutParams = LinearLayout.LayoutParams(dp(iconDp), dp(iconDp)).apply { bottomMargin = dp(if (compact) 2 else 8) }
+            setImageResource(R.drawable.wordmark)
+            adjustViewBounds = true
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(logoH))
+                .apply { bottomMargin = dp(if (compact) 8 else 18) }
         })
-        root.addView(text("ha-paneld", if (compact) 18f else 22f, "#FFFFFF", bold = true))
         root.addView(text("v${BuildConfig.VERSION_NAME} · running in the background", 12f, "#8a8f99", padBottom = if (compact) 8 else 18))
         // Description: full on roomy screens; omitted on the tightest so the UI fits without scrolling.
         if (!compact) {
