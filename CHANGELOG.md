@@ -8,8 +8,9 @@ the pre-tag checklist in [docs/RELEASING.md](docs/RELEASING.md) (it starts with 
 
 Small fixes and polish; documents the 0.7.0 roadmap.
 
-- **App icon shown** on the info page and in the README; the on-panel App-UI icon is enlarged (it was
-  small on 480×480 panels with space to spare — now fits without scroll overflow).
+- **Branding** — the info page and README show the app icon; the App UI now uses a horizontal
+  **ha-paneld wordmark** (Source Sans 3) sized to stay prominent without overflowing on any panel. The
+  README hero image was re-encoded to a clean PNG that renders reliably on GitHub.
 - **Better entity icons** — `mdi:adb` for Network ADB and `mdi:monitor-dashboard` for Navigate
   (the previous `mdi:android-debug-bridge` isn't a valid MDI name and rendered blank).
 - **Fleet update fix** — `scripts/update-fleet.sh` no longer reads panels from a non-tty stdin when they
