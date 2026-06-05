@@ -56,7 +56,7 @@ doing what it does (and remains the dashboard host).
 
 | Cap | Surface |
 |-----|---------|
-| TTS / announce audio | `POST /play` + `number.<panel>_volume` (HA has no MQTT media_player platform) |
+| TTS / announce audio | `POST /play` + `number.<panel>_volume` (HA has no MQTT media_player platform) — server-side TTS recipe in [docs/tts.md](docs/tts.md) |
 | Screen brightness | `light.<panel>_screen` brightness |
 | Screen on/off (true backlight off, no lock/PIN) | `light.<panel>_screen` on/off |
 | RGB LED | `light.<panel>_led` (per-panel HAL: rk3576 NDK `/dev/ledjni`, or sysfs via the root helper) |
@@ -322,6 +322,8 @@ Planned:
   panels (SoC, LED control path, sensors, radios), since these devices are otherwise undocumented:
   [NSPanel Pro](docs/hardware/nspanel-pro.md) (PX30), [TPA10](docs/hardware/tpa10.md) (rk3566),
   [WF1589T](docs/hardware/wf1589t.md) (rk3576) — plus a [performance comparison](docs/hardware/README.md#performance-comparison--practical-deployment).
+- **[docs/tts.md](docs/tts.md)** — server-side TTS recipe: render a phrase with any HA engine (Piper,
+  Cloud) and send it to a panel via a small script (no add-on, no on-device TTS).
 - **[docs/performance.md](docs/performance.md)** — panel performance tuning: why dashboards lag on
   weak panels and how to fix it (the WebSocket-event-volume problem; the split-instance approach).
 - **[helper/README.md](helper/README.md)** — the root LED/control helper daemon for sysfs-LED panels
