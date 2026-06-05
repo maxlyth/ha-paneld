@@ -470,7 +470,7 @@ class MqttBridge(
 
         publishConfig(
             c, "text", "${panel}_navigate",
-            """{"name":"Navigate","unique_id":"${panel}_navigate","command_topic":"$cmdNavigate","state_topic":"$stateNavigate","mode":"text",$avail,$device}""",
+            """{"name":"Navigate","unique_id":"${panel}_navigate","command_topic":"$cmdNavigate","state_topic":"$stateNavigate","mode":"text","icon":"mdi:monitor-dashboard",$avail,$device}""",
         )
 
         if (buttonsEnabled) {
