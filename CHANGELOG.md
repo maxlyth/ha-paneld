@@ -3,6 +3,26 @@
 Human-readable summaries of each release. The auto-generated commit list is appended below these
 notes on each [GitHub release](https://github.com/maxlyth/ha-paneld/releases).
 
+## v0.6.0 - 2026-06-05
+
+New entities and on-panel UX — all app-side (no daemon or root changes).
+
+- **Temperature + humidity sensors** — `sensor.<panel>_{temperature,humidity}` where the panel has
+  them (e.g. the TPA10's CHT8305), read via `SensorManager`. Recorder-friendly (on-change only, sane
+  deltas + min interval, rounded values); the illuminance gate was also relaxed (2 s → 15 s).
+- **Button-backlight light** — `light.<panel>_buttons` (brightness) on sysfs-LED panels, via the
+  helper daemon.
+- **Remote nav actions** — `button.<panel>_{back,recents}` via the accessibility service
+  (`performGlobalAction`); uniform from HA dashboards/scripts, no root.
+- **Wake-on-wave** — local, instant screen wake on proximity-near (`switch.<panel>_wake_on_wave`,
+  default on where a proximity sensor exists). Sleep stays HA's job.
+- **Auto-return to dashboard** — after an app update the launcher UI bounces back to the Home
+  Assistant app once connected (touch cancels; configurable).
+- **Config QR code** — scan the panel's config URL instead of typing it; the App UI is now responsive
+  (fits 480×480 without scrolling, larger on roomy panels).
+- **Touch-sound switch** — `switch.<panel>_touch_sound` for consistent UI click sound across the fleet.
+- **TTS recipe** — `docs/tts.md`: render with any HA engine (Piper/Cloud) → panel `/play`.
+
 ## v0.5.1 - 2026-06-05
 
 - **Removed the device admin.** It was effectively unused — screen-off already powers the backlight

@@ -41,8 +41,10 @@ on many panels) and `lockNow()` would force the keyguard.
 
 ## Safety
 
-- Binds **`127.0.0.1` only**; fixed, tiny command set; no shell exec.
-- Writes **only** `avs-pwm-led/avsux_animation` and `button-backlight/brightness`.
+- Binds **`127.0.0.1` only**; fixed, tiny command set.
+- The commands that shell out (`RELOAD`, `START`, `REBOOT` via `am`/`svc`) sanitise their argument
+  against a strict char-whitelist; the LED/backlight writes touch **only** the whitelisted nodes
+  (`avs-pwm-led/avsux_animation`, `button-backlight/brightness`).
 
 > [!CAUTION]
 > The daemon never writes `avs-pwm-led/avsux_select` or `custom_animation`. Those are

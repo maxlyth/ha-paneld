@@ -276,8 +276,19 @@ means you can never publish an in-place update again. Never commit the keystore 
 
 ## Status & roadmap
 
-**v0.5.0 (preview)** — validated across the panel fleet: Sonoff NSPanel Pro (PX30, Android 8.1),
+**v0.6.0 (preview)** — validated across the panel fleet: Sonoff NSPanel Pro (PX30, Android 8.1),
 Tuya TPA10 (rk3566, Android 11), Electron WF1589T (rk3576, Android 14).
+
+New in 0.6.0 (all app-side):
+
+- **Temperature + humidity** sensors (`sensor.<panel>_{temperature,humidity}`, where fitted — e.g. the
+  TPA10's CHT8305) via SensorManager; recorder-friendly gating.
+- **Button-backlight** light + **remote nav** buttons (Back/Recents via the accessibility service).
+- **Wake-on-wave** — instant local screen wake on proximity (`switch.<panel>_wake_on_wave`).
+- **Auto-return to dashboard** after an update, a **config QR** code, and a responsive App UI (fits
+  480×480 without scrolling, larger on roomy panels).
+- **Touch-sound switch** for a consistent UI click across the fleet.
+- **Server-side TTS recipe** ([docs/tts.md](docs/tts.md)).
 
 New in 0.5.0:
 
@@ -308,11 +319,11 @@ Planned:
 
 - **More performance tooling** — deeper on-device instrumentation to measure, diagnose and tune
   dashboard performance on weak panels (the project's headline direction).
-- **Wake on wave** — wake the screen on approach via the proximity / ToF sensor.
-- **Navigation-bar control** — show/hide the Android nav bar for kiosk use.
-- **Temperature + humidity sensors** — expose onboard climate sensors (e.g. the TPA10's CHT8305) to HA.
-- **Zigbee gateway control** — on panels with a built-in radio (e.g. the NSPanel Pro's Silicon Labs
-  EFR32 on a UART) — free it from the vendor stack for use with Zigbee2MQTT / ZHA.
+- **Zigbee gateway control** (0.6.1) — on panels with a built-in radio (e.g. the NSPanel Pro's Silicon
+  Labs EFR32 on a UART) — free it from the vendor stack for use with Zigbee2MQTT / ZHA.
+- **DLNA renderer** — advertise as a UPnP/DLNA media renderer so HA auto-discovers a `media_player`
+  (`tts.speak` then targets the panel directly, no script).
+- **Visible nav-bar show/hide** — a real on-device nav-bar toggle (remote Back/Recents already shipped).
 - Daemon boot-persistence on su-only (PX30) panels, if true-off is wanted without relying on `su`
   at runtime.
 - A monochrome (themed-icon) variant and a published documentation site.
