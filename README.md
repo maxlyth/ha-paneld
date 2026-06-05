@@ -8,6 +8,8 @@ It is built for panel-class Android (Sonoff NSPanelPro, Tuya TPA10, and similar)
 phones. The official HA Companion app remains the HOME launcher and dashboard; ha-paneld runs as a
 headless foreground service alongside it and never takes the foreground.
 
+![ha-paneld's on-panel configuration page — responsive cards for panel info, capabilities, live performance and configuration](docs/img/config-ui.png)
+
 > **Status: v0.x preview.** The API is not yet stable and breaking changes are expected until
 > v1.0.0. Use it on a panel you're comfortable re-flashing.
 
@@ -70,9 +72,16 @@ sync after a panel reboot or broker blip.
 GET  /              panel info + config page (versions, hardware, status; panel_id,
                     friendly name, MQTT broker/creds, dashboard package). This is the
                     device's configuration_url, so HA shows a "Visit" link.
+GET  /api           interactive REST API explorer (renders the OpenAPI spec)
+GET  /openapi.json  OpenAPI 3 spec of this API (import into Swagger / Postman)
 POST /config        form-encoded settings from the page; persists + live-reconfigures
-GET  /perf          live performance JSON (CPU % overall + per core, load avg,
-                    per-core MHz, temperature, memory) — polled by the info page
+GET  /config        full config as JSON (MQTT password redacted) for fleet tooling
+GET  /perf          live performance JSON (CPU %/clock, GPU, RAM, temp, top procs,
+                    responsiveness) — polled by the page; sampled only while viewed
+POST /instrumentation   enabled=true|false — turn the perf sampler on/off
+GET  /proximity     live proximity raw + calibration (raw stays on the panel)
+POST /proximity/{capture,threshold,sensitivity,reset}   tune the cutoff
+GET  /inspect · POST /inspect/{start,stop}              WebView DevTools relay (:9222)
 GET  /diag          copy-paste diagnostics dump (build, SELinux, su probe, /dev +
                     /sys node listings, packages, capability assessment)
 GET  /health        -> 200 "ha-paneld <version> panel=<id>"
@@ -92,20 +101,28 @@ needs no change when a panel migrates from the shell receiver to ha-paneld.
 
 The agent advertises `_ha-paneld._tcp.local.` with TXT records (`ver`, `caps`, `path`). If an MQTT
 broker is configured it publishes Home Assistant MQTT-discovery configs so panel entities appear
-without YAML. With no broker configured, the HTTP surface still works standalone.
+without YAML.
+
+**Zero-config:** with no broker set, ha-paneld browses for Home Assistant's own `_home-assistant._tcp`
+advert on the LAN and uses its MQTT broker on :1883 — so a fresh install pairs itself. If the broker
+needs a login (e.g. the HA Mosquitto add-on), set the username/password on the config page; the MQTT
+status reads *auth rejected* until they're right. Set the broker explicitly if it's elsewhere or your
+LAN has more than one Home Assistant. With nothing found, the HTTP surface still works standalone.
 
 ## Provisioning (no device UI on rooted/userdebug panels)
 
-All permissions are granted over adb — there is no per-device tap-through. Run the same script on
-every panel (config-as-code):
+All permissions are granted over adb — no per-device tap-through. Run the same script on every panel:
 
 ```bash
-scripts/provision.sh <panel-ip:5555> [path-to.apk]
+scripts/provision.sh <panel-ip:5555> [--id NAME] [--mqtt tcp://host:1883] [--latest] [--force]
 ```
 
-It installs the APK and grants: `POST_NOTIFICATIONS`, `WRITE_SETTINGS` (brightness, via `appops`),
-device-admin force-lock (`dpm set-active-admin`, for sleep), and optionally the accessibility
-key-filter (buttons). None of these need a UI on a panel with `su`/adb-root.
+With no `--apk` and no local build it downloads the **latest signed release** from GitHub (`--latest`
+forces that even when a local build exists). It connects, installs, grants the permissions below,
+starts the agent, optionally sets the panel id / MQTT, and ends with a self-verify checklist. It is
+**idempotent** — re-run the same command to finish after any interruption — and warns before
+reinstalling the same or an older version (`--force` skips that). `scripts/provision.sh <ip> --verify`
+re-checks a panel without changing anything.
 
 Non-root panels: use the in-app setup screen, which fires the standard system permission intents.
 
@@ -115,11 +132,13 @@ Non-root panels: use the in-app setup screen, which fires the standard system pe
 |------------|-----|-------|
 | `POST_NOTIFICATIONS` | foreground-service notification | runtime / `pm grant` |
 | `WRITE_SETTINGS` | screen brightness | `appops set <pkg> WRITE_SETTINGS allow` |
-| Device admin (force-lock) | screen sleep (`lockNow`) | `dpm set-active-admin <pkg>/.control.PanelAdminReceiver` |
-| Accessibility (key filter) | button events (optional) | `settings put secure enabled_accessibility_services …` |
+| Accessibility (key filter) | hardware-button events | `settings put secure enabled_accessibility_services …` |
 
-Device-admin uses **active-admin**, not device-owner (device-owner needs an account-free device and
-would conflict with the logged-in Companion).
+Screen-off via `lockNow()` additionally needs the **optional device admin** (enable once in Settings,
+or `dpm set-active-admin <pkg>/.control.PanelAdminReceiver`); the daemon/`su` `bl_power` path is
+preferred and needs no admin. Device-admin uses active-admin, not device-owner (device-owner needs an
+account-free device and would conflict with the logged-in Companion). To uninstall later, remove the
+admin first — see the signing note below.
 
 ## RGB LED — clean-room NDK, no vendor library
 
@@ -134,8 +153,9 @@ is openable; it is simply absent elsewhere.
 
 Other panels (e.g. Tuya TPA10) expose their LED only through root-only `/sys/class/leds/*`. A
 sandboxed app cannot reach those (SELinux `untrusted_app` cannot exec `su` nor write `sysfs_leds`),
-so those panels need a small **root helper daemon** that ha-paneld talks to over a localhost socket
-— planned, not yet shipped.
+so those panels need a small **root helper daemon** that ha-paneld talks to over a localhost socket.
+The daemon and its boot-persistent installer live in [`helper/`](helper/) — build and install it with
+[`helper/README.md`](helper/README.md).
 
 ## Supported hardware
 
@@ -226,35 +246,55 @@ means you can never publish an in-place update again. Never commit the keystore 
 
 ## Status & roadmap
 
-**v0.4.1 (preview)** — validated across the panel fleet: Sonoff NSPanel Pro (PX30, Android 8.1),
+**v0.5.0 (preview)** — validated across the panel fleet: Sonoff NSPanel Pro (PX30, Android 8.1),
 Tuya TPA10 (rk3566, Android 11), Electron WF1589T (rk3576, Android 14).
 
-Shipped in 0.4.x:
+New in 0.5.0:
+
+- **Zero-config MQTT** — with no broker set, ha-paneld finds Home Assistant on the LAN over mDNS and
+  uses its broker automatically. The config page shows the live connection state and distinguishes
+  *connected*, *reachable but auth rejected* (set credentials) and *unreachable*.
+- **Redesigned web UI** — a responsive masonry config page, an in-app config browser (so kiosk panels
+  with no browser still configure on-device), and a proper launcher info screen.
+- **REST API explorer** at `/api`, plus an OpenAPI spec at `/openapi.json` (import into Swagger/Postman
+  for fleet tooling).
+- **Deeper performance insight** — CPU clock vs hardware max (thermal throttling), a dashboard
+  responsiveness metric, top-5 processes, and a 1-click WebView DevTools relay (no adb). The sampler
+  is page-view gated and can be switched off, so the perf tool isn't itself a constant cost.
+- **Tunable proximity** — calibrate the near/far cutoff from the page; the raw value stays on-device.
+- **Signed releases** and one-command provisioning that fetches the latest release when you have no APK.
+
+Carried from 0.4.x:
 
 - Uniform MQTT control — screen (brightness + **true** backlight-off), RGB LED, navigate, volume,
-  TTS, hardware buttons, reload, reboot, **launcher**, **home (HA)**.
-- Per-hardware LED HAL — rk3576 clean-room NDK `/dev/ledjni` (app-direct); sysfs panels via a root
-  helper daemon with a boot-persistent `init` service.
-- Lock-free screen-off — daemon `bl_power`, or `su bl_power` on PX30, else a brightness fallback;
-  never a keyguard/PIN.
-- Panel web UI (`GET /`) — versions + hardware (CPU/RAM/storage/firmware/Device ID), a **live
-  CPU/GPU/RAM history chart** (server-side FIFO), and a config form (panel id, friendly name, MQTT
-  broker/creds, manufacturer/model, dashboard + launcher packages).
-- HA device card — manufacturer/model, firmware (`hw_version`), serial; `configuration_url` "Visit"
-  link. MQTT auto-reconnect + retained-state restore on (re)connect.
-- Self-diagnostics — a **Capabilities** matrix (what works on this firmware + how to fix shortfalls)
-  and a `/diag` dump for bug reports. See **[docs/performance.md](docs/performance.md)** for tuning
-  panels (the WebSocket-event-volume problem and how to fix it).
+  TTS, hardware buttons, reload, reboot, launcher, home (HA).
+- Per-hardware LED HAL — rk3576 clean-room NDK `/dev/ledjni` (app-direct); sysfs panels via the root
+  helper daemon with a boot-persistent `init` service ([`helper/`](helper/)).
+- HA device card, MQTT auto-reconnect + retained-state restore, a `/diag` dump and a **Capabilities**
+  matrix for bug reports. See **[docs/performance.md](docs/performance.md)** for panel performance
+  tuning (the WebSocket-event-volume problem and how to fix it).
 
-Planned 0.5.0:
+Planned:
 
-- **DevTools/CDP relay** — an on-device bridge from the dashboard WebView's debug socket
-  (`webview_devtools_remote_<pid>`) to a TCP port, plus an info-page link, for browser-based
-  rendering/latency analysis **without adb** (requires WebView debugging enabled on the dashboard
-  app). Exposes render latency (frame times, main-thread long tasks), data latency (WebSocket
-  timing) and input latency via CDP; `dumpsys gfxinfo` jank as a coarse no-CDP fallback.
 - Daemon boot-persistence on su-only (PX30) panels, if true-off is wanted without relying on `su`
   at runtime.
+- A monochrome (themed-icon) variant and a published documentation site.
+
+## Documentation
+
+- **[docs/performance.md](docs/performance.md)** — panel performance tuning: why dashboards lag on
+  weak panels and how to fix it (the WebSocket-event-volume problem; the split-instance approach).
+- **[helper/README.md](helper/README.md)** — the root LED/control helper daemon for sysfs-LED panels
+  (build + boot-persistent install).
+- **REST API** — browse and try every endpoint at `http://<panel>:8888/api`; the machine-readable
+  spec is at `/openapi.json`.
+- **`GET /diag`** on a panel — a copy-paste hardware/firmware/capability dump for bug reports.
+
+## Screenshots
+
+| On-panel launcher screen | REST API explorer |
+|---|---|
+| ![ha-paneld launcher screen](docs/img/launcher.png) | ![REST API explorer](docs/img/api-explorer.png) |
 
 ## Stack
 

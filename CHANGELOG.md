@@ -3,7 +3,7 @@
 Human-readable summaries of each release. The auto-generated commit list is appended below these
 notes on each [GitHub release](https://github.com/maxlyth/ha-paneld/releases).
 
-## v0.5.0 - 2026-06-04
+## v0.5.0 - 2026-06-05
 
 The first release aimed at general use — a redesigned web UI, an in-app config screen, deeper
 performance insight, and proper release signing. Especially for Tuya TPA10 owners.
