@@ -1,38 +1,42 @@
 package io.github.maxlyth.hapaneld.control
 
+import io.github.maxlyth.hapaneld.device.DeviceProfile
 import org.json.JSONObject
 
 /**
- * Zigbee gateway control for the Sonoff NSPanel Pro — the only fleet panel with a Zigbee radio
- * (a Silicon Labs EFR32 running EZSP NCP firmware on `/dev/ttyS5`).
+ * Zigbee gateway control for panels that ship a Sonoff-style gateway (currently the NSPanel Pro — a
+ * Silicon Labs EFR32 EZSP NCP on `/dev/ttyS5`). The gateway's directory is **not hardcoded here**: it
+ * comes from the active [DeviceProfile] ([DeviceProfile.zigbeeGatewayDir]); a profile with no gateway
+ * dir (every non-NSPanel-Pro panel) makes this controller inert.
  *
- * The radio is driven by Sonoff's `zgateway` host binary in `/vendor/bin/siliconlabs_host/`, kept
- * alive by `guard_process.sh` (a 5-second supervisor loop, boot-started). zgateway is controlled
- * over a LOCAL mosquitto broker on `127.0.0.1:1883`, which is anonymous (the `password_file` line is
- * commented out in `mosquitto.conf`), so no credentials are needed:
+ * The radio is driven by Sonoff's `zgateway` host binary in that dir, kept alive by `guard_process.sh`
+ * (a 5-second supervisor loop, boot-started). zgateway is controlled over a LOCAL mosquitto broker on
+ * `127.0.0.1:1883`, which is anonymous (the `password_file` line is commented out in `mosquitto.conf`),
+ * so no credentials are needed:
  *
  *   - role status:  `zigbee/system/network-role/information`  →  `{"role":"Repeater"|"Coordinator"}`
  *   - role switch:  `zigbee/system/network-role/switch`        ←  `{"role":"Repeater"}`
  *
- * "Repeater" is router mode (extends an existing mesh — the supported sweet spot); "Coordinator"
- * forms its own network. The role persists in the NCP's NVM across restarts.
- *
- * Everything here needs root: the bundled `mosquitto_pub`/`mosquitto_sub` need `LD_LIBRARY_PATH`
- * pointing at their private libs, and the lifecycle scripts touch `/vendor`. NSPanel Pro's toolbox
- * `su` is reachable from the app sandbox (unlike the TPA10), so [Su] covers it; on a panel without
- * the package or without su, every method degrades to "absent" and the capability simply doesn't
- * appear in HA.
+ * "Repeater" is router mode (extends an existing mesh — the supported sweet spot); "Coordinator" forms
+ * its own network. The role persists in the NCP's NVM across restarts. Everything here needs root via
+ * [Su] (the bundled mosquitto client needs `LD_LIBRARY_PATH`; the lifecycle scripts touch `/vendor`).
  */
-class ZigbeeController {
+class ZigbeeController(profile: DeviceProfile = DeviceProfile.detect()) {
+
+    /** Gateway dir from the device profile, or null on panels without a managed Zigbee gateway. */
+    private val dir: String? = profile.zigbeeGatewayDir
 
     /**
      * True when this panel has a Zigbee gateway we can actually drive. Gated on the **guard script we
-     * invoke** ([GUARD]) existing — not just the `package_version` marker, since a configured panel may
-     * have lost only the marker file. This also correctly EXCLUDES panels left with an empty
-     * `siliconlabs_host` dir and an orphaned `zgateway` process (as some vendor-app teardowns leave
-     * behind): there, ON could not restart the gateway and it wouldn't survive a reboot.
+     * invoke** existing — not just the `package_version` marker, since a configured panel may have lost
+     * only the marker file. This also correctly EXCLUDES panels left with an empty gateway dir and an
+     * orphaned `zgateway` process: there, ON could not restart the gateway and it wouldn't survive a
+     * reboot.
      */
-    fun present(): Boolean = fileExists(GUARD)
+    fun present(): Boolean {
+        val dir = dir ?: return false
+        return fileExists("$dir/run_guard_process.sh")
+    }
 
     /**
      * Driver label, e.g. `"sonoff 3.7.1"`, from the package marker `package_version`
@@ -40,7 +44,8 @@ class ZigbeeController {
      * drivable ([present]) but the marker is missing; null when there is no gateway at all.
      */
     fun driver(): String? {
-        val raw = Su.runOutput("cat $DIR/package_version 2>/dev/null")?.trim()
+        val dir = dir ?: return null
+        val raw = Su.runOutput("cat $dir/package_version 2>/dev/null")?.trim()
         if (!raw.isNullOrEmpty()) {
             val tail = raw.substringAfter(':', raw) // "sonoff-3.7.1"
             val type = tail.substringBefore('-', tail)
@@ -58,8 +63,9 @@ class ZigbeeController {
 
     /** Current network role from the local broker, or null if unreadable (gateway/broker down). */
     fun role(): String? {
+        val dir = dir ?: return null
         val out = Su.runOutput(
-            "$ENV $DIR/mosquitto_sub -h 127.0.0.1 -p 1883 -i hapaneld_zr " +
+            "export LD_LIBRARY_PATH=$dir; $dir/mosquitto_sub -h 127.0.0.1 -p 1883 -i hapaneld_zr " +
                 "-t zigbee/system/network-role/information -C 1 -W 3",
         )?.trim() ?: return null
         return runCatching { JSONObject(out).optString("role").ifEmpty { null } }.getOrNull()
@@ -68,11 +74,12 @@ class ZigbeeController {
     /**
      * Enable the router: start the guard supervisor (which brings up mosquitto + zgateway), then
      * best-effort nudge the role to Repeater — but only if the broker is already up AND the role
-     * differs, to avoid a needless network leave/rejoin. The role persists in NVM, so a panel that
-     * was previously a router comes back as a router on start regardless.
+     * differs, to avoid a needless network leave/rejoin. The role persists in NVM, so a panel that was
+     * previously a router comes back as a router on start regardless.
      */
     fun enable(): Boolean {
-        val ok = Su.run("sh $GUARD")
+        val dir = dir ?: return false
+        val ok = Su.run("sh $dir/run_guard_process.sh")
         runCatching {
             val r = role()
             if (r != null && !r.equals(ROLE_REPEATER, ignoreCase = true)) setRole(ROLE_REPEATER)
@@ -81,18 +88,22 @@ class ZigbeeController {
     }
 
     /** Disable the router: stop the guard supervisor and the whole zstack, freeing the radio. */
-    fun disable(): Boolean = Su.run("sh $GUARD stop")
+    fun disable(): Boolean {
+        val dir = dir ?: return false
+        return Su.run("sh $dir/run_guard_process.sh stop")
+    }
 
     /** Publish a role switch to the local broker. Allowlist the role so an arbitrary string can never
      *  be interpolated into the shell command (defensive — callers only pass constants today). */
     private fun setRole(role: String) {
+        val dir = dir ?: return
         val r = when (role.lowercase()) {
             "coordinator" -> "Coordinator"
             "repeater" -> "Repeater"
             else -> return
         }
         Su.run(
-            "$ENV $DIR/mosquitto_pub -h 127.0.0.1 -p 1883 -i hapaneld_zp " +
+            "export LD_LIBRARY_PATH=$dir; $dir/mosquitto_pub -h 127.0.0.1 -p 1883 -i hapaneld_zp " +
                 "-t zigbee/system/network-role/switch -m '{\"role\":\"$r\"}'",
         )
     }
@@ -106,11 +117,6 @@ class ZigbeeController {
     }
 
     companion object {
-        private const val DIR = "/vendor/bin/siliconlabs_host"
-        private const val GUARD = "$DIR/run_guard_process.sh"
-
-        // The bundled mosquitto client links its own libssl/libcrypto/libmosquitto in DIR.
-        private const val ENV = "export LD_LIBRARY_PATH=$DIR;"
         private const val ROLE_REPEATER = "Repeater"
     }
 }
