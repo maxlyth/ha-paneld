@@ -83,11 +83,17 @@ class ZigbeeController {
     /** Disable the router: stop the guard supervisor and the whole zstack, freeing the radio. */
     fun disable(): Boolean = Su.run("sh $GUARD stop")
 
-    /** Publish a role switch to the local broker. */
+    /** Publish a role switch to the local broker. Allowlist the role so an arbitrary string can never
+     *  be interpolated into the shell command (defensive — callers only pass constants today). */
     private fun setRole(role: String) {
+        val r = when (role.lowercase()) {
+            "coordinator" -> "Coordinator"
+            "repeater" -> "Repeater"
+            else -> return
+        }
         Su.run(
             "$ENV $DIR/mosquitto_pub -h 127.0.0.1 -p 1883 -i hapaneld_zp " +
-                "-t zigbee/system/network-role/switch -m '{\"role\":\"$role\"}'",
+                "-t zigbee/system/network-role/switch -m '{\"role\":\"$r\"}'",
         )
     }
 
