@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
-"""Generate the ha-paneld horizontal wordmark: the app-icon glyph + "ha-paneld" set in
-Source Sans 3 Bold (a clean humanist sans; OFL), light-coloured for the dark App UI. Outputs a
-transparent PNG used by the launcher screen.
+"""Generate the ha-paneld horizontal wordmark: the app-icon glyph + "ha-paneld" set in a clean,
+legible sans-serif, light-coloured for the dark App UI. Outputs a transparent PNG used by the
+launcher screen.
 
 The glyph is cropped to its visible content and the text height is set as a fraction of the glyph
 height, so the icon leads and the balance is independent of the icon's internal padding / font metrics.
 
-Deps: cairosvg, Pillow, and the Source Sans 3 Bold TTF (OFL —
-https://github.com/adobe-fonts/source-sans). Usage:
-    python3 scripts/gen-wordmark.py [path-to-SourceSans3-Bold.ttf]
+Deps: cairosvg, Pillow, and a bold sans-serif TTF passed as the first argument. Usage:
+    python3 scripts/gen-wordmark.py <path-to-font.ttf>
 """
 import subprocess
 import sys
@@ -16,7 +15,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 ICON = "app/src/main/assets/icon.svg"
 OUT = "app/src/main/res/drawable-nodpi/wordmark.png"
-FONT = sys.argv[1] if len(sys.argv) > 1 else "/tmp/atkinson.ttf"
+FONT = sys.argv[1] if len(sys.argv) > 1 else "wordmark-font.ttf"
 TEXT = "ha-paneld"
 LIGHT = (232, 236, 243, 255)  # #E8ECF3 — reads on the dark UI
 H = 200                       # visible glyph height (px) after cropping its padding

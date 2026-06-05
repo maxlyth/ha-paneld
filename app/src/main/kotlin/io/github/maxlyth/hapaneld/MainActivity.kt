@@ -103,12 +103,9 @@ class MainActivity : AppCompatActivity() {
             gravity = Gravity.CENTER_HORIZONTAL
             setPadding(dp(24), pad, dp(24), pad)
         }
-        // Horizontal wordmark (glyph + "ha-paneld" in Atkinson Hyperlegible — legible lowercase l),
-        // sized to a fraction of the screen WIDTH. Its ~7:1 aspect keeps the height small, so it stays
-        // prominent on wide panels without the vertical overflow a large square icon caused. The
-        // wordmark carries the name, so no separate title text.
-        // Size by HEIGHT (width follows the ~7:1 aspect via adjustViewBounds), so the horizontal
-        // wordmark scales up on roomy panels but can never overflow the screen width.
+        // Horizontal wordmark (glyph + "ha-paneld") carries the name, so there's no separate title text.
+        // Size it by HEIGHT (width follows its aspect via adjustViewBounds), so it scales up on roomy
+        // panels but can never overflow the screen width.
         val logoH = when { hDp < 560 -> 52; hDp < 900 -> 72; else -> 96 }
         root.addView(ImageView(this).apply {
             setImageResource(R.drawable.wordmark)
