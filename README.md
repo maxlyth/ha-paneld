@@ -146,7 +146,8 @@ LAN has more than one Home Assistant. With nothing found, the HTTP surface still
 All permissions are granted over adb — no per-device tap-through. Run the same script on every panel:
 
 ```bash
-scripts/provision.sh <panel-ip:5555> [--id NAME] [--mqtt tcp://host:1883] [--latest] [--force]
+scripts/provision.sh <panel-ip:5555> \
+    [--id NAME] [--mqtt tcp://host:1883] [--latest] [--force]
 ```
 
 With no `--apk` and no local build it downloads the **latest signed release** from GitHub (`--latest`
@@ -224,7 +225,7 @@ you run from inside a container talking to an outer Docker daemon).
 
 ```sh
 ./gradlew :app:assembleDebug      # debug APK -> app/build/outputs/apk/debug/
-./gradlew :app:assembleRelease    # release APK (unsigned in CI unless signing is configured)
+./gradlew :app:assembleRelease    # release APK (unsigned unless signing configured)
 ```
 
 Requires **JDK 17** and an Android SDK with **NDK 27.0.12077973 + CMake 3.22.1** (for the native
@@ -266,7 +267,7 @@ You don't need to configure signing to build and run ha-paneld. Two cases:
 ```sh
 keytool -genkeypair -storetype PKCS12 -keystore release.jks -alias ha-paneld \
   -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=ha-paneld"
-base64 -w0 release.jks      # paste the output into the ANDROID_KEYSTORE_BASE64 repo secret
+base64 -w0 release.jks   # -> the ANDROID_KEYSTORE_BASE64 repo secret
 ```
 
 Use one password for both `ANDROID_KEYSTORE_PASSWORD` and `ANDROID_KEY_PASSWORD`, and `ha-paneld`
