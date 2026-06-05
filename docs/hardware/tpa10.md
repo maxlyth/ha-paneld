@@ -16,9 +16,10 @@ what is on the board and how to drive it.
 ## WebView — update this first
 
 The stock WebView on the TPA10 is far too old for a current Home Assistant frontend, so the HA
-Companion app shows a blank/broken dashboard until you update it. This unit runs Chromium **147** after
-a clean adb sideload of `com.android.webview` — no root, no F-Droid. See
-[Updating the system WebView](README.md#updating-the-system-webview) for the method.
+Companion app shows a blank/broken dashboard until you update it. The verified-working build is
+**Cromite SystemWebView 147.0.7727.56** (`com.android.webview`, armeabi-v7a — cert `CN=CromiteOrg`),
+installed by a clean adb sideload — no root, no F-Droid. Download + method:
+[Updating the system WebView](README.md#updating-the-system-webview).
 
 The vendor's on-device apps were *not* a useful RE source: `com.tuya.devicetest` is odex'd (no dex in
 the APK), and `com.smartos.xinch.hardware` bundles the Tuya **AVS (Alexa) SDK** (`libLibSampleApp.so`,

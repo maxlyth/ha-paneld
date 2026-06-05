@@ -72,18 +72,22 @@ benchmark):
 
 **Read this before anything else** — it's the single most common first-run failure on these panels.
 
-The HA Companion app renders the Lovelace dashboard in Android's **system WebView**. Every panel here
-ships with a WebView/Chromium far too old to run a current Home Assistant frontend, so out of the box
-you get a **blank or broken dashboard, missing cards, or "browser not supported"**. You must update
-the system WebView.
+The HA Companion app renders the Lovelace dashboard in Android's **system WebView**, and most of these
+panels ship with one far too old to run a current Home Assistant frontend — so out of the box you get
+a **blank or broken dashboard, missing cards, or "browser not supported"**. Panels **without** Google
+Play (NSPanel Pro, TPA10) can't auto-update it, so you must **sideload** a current WebView (below). The
+**WF1589T has Google Play**, so just update *Android System WebView* from the Play Store (or the Play
+WebView dev channel) — no sideload needed.
 
 The clean way — **no F-Droid, no third-party app store** (the workarounds the NSPanel-Pro community
 threads resort to) — is a direct adb sideload of the standard Android System WebView:
 
-1. Download a current **Android System WebView** APK (package **`com.android.webview`**) from a
-   trusted mirror (e.g. APKMirror). `com.android.webview` is the panel's *default* WebView provider,
-   so matching that package name means it's selected automatically — no provider-allowlist editing,
-   no extra app needed.
+1. Download a current **Android System WebView** APK — package **`com.android.webview`**. The build that
+   works depends on the panel's Android version (see the table): the **LineageOS** Android System
+   WebView covers old Android (e.g. 8.1), **Cromite's SystemWebView** build covers newer Android — both
+   deliberately use the `com.android.webview` package, so they're picked as the provider automatically
+   (no allowlist editing, no extra app), and both are open / freely redistributable. Match your panel's
+   ABI; per-panel downloads are below.
 2. Sideload it (no root):
 
    ```sh
@@ -106,10 +110,27 @@ adb shell cmd webviewupdate set-webview-implementation com.android.webview
 or via Developer options → *WebView implementation*.
 
 > [!TIP]
-> Match the package name `com.android.webview`. Installing an *arbitrary* Chromium fork (Cromite,
-> Bromite, …) does **not** auto-register as a WebView provider — it must be in the system's WebView
-> allowlist or selected manually, which is exactly the friction that sends people to F-Droid. Sticking
-> to `com.android.webview` sidesteps all of it.
+> The package name must be `com.android.webview` for the system to select it automatically. Mind the
+> distinction: the **SystemWebView** builds from Cromite and LineageOS use `com.android.webview` and
+> *do* register as the provider — but the regular **Cromite / Bromite *browser*** app uses a different
+> package and does **not**. Use the SystemWebView build, not the browser APK.
 
-Verified on the fleet (2026-06-05): TPA10 runs Chromium **147**, NSPanel Pro **138**, WF1589T **150**
-after this update — all sideloaded to `/data/app`, no root.
+### Per-panel downloads — known-working builds
+
+Versions **verified working on real panels** (2026-06-05). The redistributable ones are mirrored as
+ha-paneld Release assets for durable links; sideload with `adb install -r <file>`.
+
+| Panel | ABI | WebView (`com.android.webview`) | Download |
+|---|---|---|---|
+| NSPanel Pro (PX30) | arm64-v8a | **LineageOS** 138.0.7204.63 — last build for its Android **8.1** | [release asset](https://github.com/maxlyth/ha-paneld/releases/download/webview-mirror/lineageos-webview-138.0.7204.63.apk) · [APKMirror](https://www.apkmirror.com/apk/lineageos/android-system-webview-2/android-system-webview-138-0-7204-63-2-release/android-system-webview-138-0-7204-63-8-android-apk-download/download) |
+| TPA10 (rk3566) | armeabi-v7a | **Cromite** SystemWebView 147.0.7727.56 | [release asset](https://github.com/maxlyth/ha-paneld/releases/download/webview-mirror/cromite-webview-147.0.7727.56.apk) · [Cromite releases](https://github.com/uazo/cromite/releases) |
+| WF1589T (rk3576) | arm64-v8a | Google WebView (Play) | **has Google Play** — update via Play, no sideload |
+
+All mirrored builds live in the [**Panel WebView mirror** release](https://github.com/maxlyth/ha-paneld/releases/tag/webview-mirror) — intended as a living, community list of known-working versions. Got one working on another panel or version? Contributions welcome.
+
+> [!NOTE]
+> - **Pick the newest WebView your panel's Android version supports.** The NSPanel Pro's Android 8.1
+>   caps at 138; newer builds won't install. Newer Android (the TPA10's 11) runs current Cromite.
+> - **APKMirror's *direct* download links are short-lived presigned URLs that expire within the hour** —
+>   use the page, or the ha-paneld Release assets above (durable). The mirror exists precisely because
+>   panels lack Play and ship years-old firmware, and a working build can otherwise take days to find.
