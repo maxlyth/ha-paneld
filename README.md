@@ -27,6 +27,13 @@ prompts for the panel IP (and optional id / MQTT broker), downloads the **latest
 provisions the panel. For scripted/fleet installs use [`scripts/provision.sh`](scripts/provision.sh)
 directly (see [Provisioning](#provisioning-no-device-ui-on-rooteduserdebug-panels)).
 
+> [!IMPORTANT]
+> **First-run gotcha — update the panel's system WebView.** Most of these panels ship with a
+> WebView/Chromium far too old to render a current Home Assistant dashboard, so the HA Companion app
+> shows a blank or broken UI. Fix it cleanly over adb — **no F-Droid or third-party app store needed**:
+> see [Updating the system WebView](docs/hardware/README.md#updating-the-system-webview). This trips up
+> almost everyone; do it before judging anything else.
+
 ## Why not just the Companion app?
 
 The Companion app targets personal phones. Wall panels need different primitives: arbitrary-URL
@@ -299,7 +306,8 @@ Planned:
 
 - **[docs/hardware/](docs/hardware/)** — reverse-engineered hardware references for the supported
   panels (SoC, LED control path, sensors, radios), since these devices are otherwise undocumented:
-  [TPA10](docs/hardware/tpa10.md) (rk3566), [WF1589T](docs/hardware/wf1589t.md) (rk3576).
+  [NSPanel Pro](docs/hardware/nspanel-pro.md) (PX30), [TPA10](docs/hardware/tpa10.md) (rk3566),
+  [WF1589T](docs/hardware/wf1589t.md) (rk3576) — plus a [performance comparison](docs/hardware/README.md#performance-comparison--practical-deployment).
 - **[docs/performance.md](docs/performance.md)** — panel performance tuning: why dashboards lag on
   weak panels and how to fix it (the WebSocket-event-volume problem; the split-instance approach).
 - **[helper/README.md](helper/README.md)** — the root LED/control helper daemon for sysfs-LED panels
