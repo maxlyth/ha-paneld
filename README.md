@@ -346,6 +346,9 @@ Planned:
 
 - **More performance tooling** — deeper on-device instrumentation to measure, diagnose and tune
   dashboard performance on weak panels (the project's headline direction).
+- **CPU governor control** — set the scaling governor from HA (powersave ↔ performance) to trade panel
+  heat/power against dashboard responsiveness; automatable (e.g. powersave when the room is empty).
+- **Persistent network adb** — keep `adb tcpip` enabled across reboots, for panels that drop it.
 - **Zigbee gateway control** (0.6.1) — on panels with a built-in radio (e.g. the NSPanel Pro's Silicon
   Labs EFR32 on a UART) — free it from the vendor stack for use with Zigbee2MQTT / ZHA.
 - **DLNA renderer** — advertise as a UPnP/DLNA media renderer so HA auto-discovers a `media_player`
