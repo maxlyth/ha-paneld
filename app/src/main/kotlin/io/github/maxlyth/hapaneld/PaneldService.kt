@@ -171,7 +171,12 @@ class PaneldService : Service() {
             mqtt.start()
             sensors.start(
                 onLux = { lux -> mqtt.publishLight(lux) },
-                onProximity = { near -> mqtt.publishProximity(near) },
+                onProximity = { near ->
+                    mqtt.publishProximity(near)
+                    // Wake-on-wave: local, instant, wake-only. onProximity fires only on far->near
+                    // transitions (natural debounce); sleep stays HA's job.
+                    if (near && config.wakeOnWave) screen.wake()
+                },
                 onTemperature = { c -> mqtt.publishTemperature(c) },
                 onHumidity = { h -> mqtt.publishHumidity(h) },
             )

@@ -77,6 +77,8 @@ class MqttBridge(
     private val stateButtons = "ha-paneld/$panel/buttons/state"
     private val cmdBack = "ha-paneld/$panel/back/set"
     private val cmdRecents = "ha-paneld/$panel/recents/set"
+    private val cmdWakeOnWave = "ha-paneld/$panel/wake_on_wave/set"
+    private val stateWakeOnWave = "ha-paneld/$panel/wake_on_wave/state"
     private val stateScreen = "ha-paneld/$panel/screen/state"
     private val stateLed = "ha-paneld/$panel/led/state"
     private val stateNavigate = "ha-paneld/$panel/navigate/state"
@@ -209,6 +211,7 @@ class MqttBridge(
                 cmdButtons -> handleButtons(payload)
                 cmdBack -> PanelAccessibilityService.navBack()
                 cmdRecents -> PanelAccessibilityService.navRecents()
+                cmdWakeOnWave -> handleWakeOnWave(payload)
                 else -> Log.d(TAG, "unhandled command topic $topic")
             }
         } catch (e: Exception) {
@@ -259,6 +262,12 @@ class MqttBridge(
 
     private fun ledStateJson(br: Int, r: Int, g: Int, b: Int) =
         """{"state":"ON","color_mode":"rgb","brightness":$br,"color":{"r":$r,"g":$g,"b":$b}}"""
+
+    private fun handleWakeOnWave(payload: String) {
+        val on = payload.trim().equals("ON", ignoreCase = true)
+        config.setWakeOnWave(on)
+        client?.let { publish(it, stateWakeOnWave, if (on) "ON" else "OFF", retain = true) }
+    }
 
     // Button backlight (e.g. TPA10): a brightness-only light, driven via the root daemon's BTN command
     // (same daemon that owns the sysfs LED). Daemon calls are short blocking I/O — fine on this thread.
@@ -400,6 +409,13 @@ class MqttBridge(
                 """{"name":"Button backlight","unique_id":"${panel}_buttons","schema":"json","brightness":true,"supported_color_modes":["brightness"],"command_topic":"$cmdButtons","state_topic":"$stateButtons","icon":"mdi:gesture-tap-button",$avail,$device}""",
             )
         }
+        if (hasProximity) {
+            publishConfig(
+                c, "switch", "${panel}_wake_on_wave",
+                """{"name":"Wake on wave","unique_id":"${panel}_wake_on_wave","command_topic":"$cmdWakeOnWave","state_topic":"$stateWakeOnWave","icon":"mdi:gesture-tap","entity_category":"config",$avail,$device}""",
+            )
+            publish(c, stateWakeOnWave, if (config.wakeOnWave) "ON" else "OFF", retain = true)
+        }
 
         // Panel actions (root via su; graceful no-op without it).
         publishConfig(
@@ -440,7 +456,7 @@ class MqttBridge(
             "number" to "${panel}_volume", "sensor" to "${panel}_illuminance",
             "binary_sensor" to "${panel}_proximity",
             "sensor" to "${panel}_temperature", "sensor" to "${panel}_humidity",
-            "light" to "${panel}_buttons",
+            "light" to "${panel}_buttons", "switch" to "${panel}_wake_on_wave",
             "button" to "${panel}_reload", "button" to "${panel}_reboot",
             "button" to "${panel}_launcher", "button" to "${panel}_home",
         )

@@ -92,6 +92,13 @@ class Config(context: Context) {
         prefs.edit().putBoolean("instrumentation", on).apply()
     }
 
+    // Wake the screen locally the instant proximity reads near (low latency, network-independent).
+    // Default on where a proximity sensor exists; the HA switch can disable it (e.g. a hallway panel).
+    val wakeOnWave: Boolean get() = prefs.getBoolean("wake_on_wave", true)
+    fun setWakeOnWave(on: Boolean) {
+        prefs.edit().putBoolean("wake_on_wave", on).apply()
+    }
+
     /**
      * HA device card manufacturer/model. The OS Build props are the generic SoC platform
      * (e.g. `rockchip`/`px30_evb`), not the product, so these are configurable — set e.g.
