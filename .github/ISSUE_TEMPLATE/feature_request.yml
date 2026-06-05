@@ -1,0 +1,36 @@
+name: Feature request
+description: Suggest a capability or improvement
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: The use case, not just the solution — what are you trying to do on the panel?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: Proposed solution
+      description: What you'd like ha-paneld to do (e.g. a new entity, a control, a config option).
+  - type: dropdown
+    id: panel
+    attributes:
+      label: Panel hardware (if hardware-specific)
+      options:
+        - Not hardware-specific
+        - Sonoff NSPanel Pro (PX30 / rk3326)
+        - Tuya TPA10 (rk3566)
+        - Electron WF1589T (rk3576)
+        - Smatek S9E
+        - Other
+  - type: textarea
+    id: hardware
+    attributes:
+      label: Hardware control path (for hardware features)
+      description: |
+        If this is a new hardware capability, the sysfs node / GPIO / API that drives it is the single
+        most useful thing — it's usually what unblocks an implementation. Include the relevant
+        `/diag` section if it helps.
+      render: text

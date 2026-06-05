@@ -1,0 +1,73 @@
+name: Bug report
+description: Report a problem with ha-paneld
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. The **diagnostic dump** below is the most useful thing you can include —
+        it captures the panel hardware, the capability matrix (what works / is degraded on *this*
+        firmware) and the running config, and saves a lot of back-and-forth.
+  - type: input
+    id: version
+    attributes:
+      label: ha-paneld version
+      description: Shown on the panel info page `http://<panel-ip>:8888/` and in `/health`.
+      placeholder: e.g. 0.6.2
+    validations:
+      required: true
+  - type: dropdown
+    id: panel
+    attributes:
+      label: Panel hardware
+      description: See the [hardware references](https://github.com/maxlyth/ha-paneld/tree/main/docs/hardware) if unsure.
+      options:
+        - Sonoff NSPanel Pro (PX30 / rk3326)
+        - Tuya TPA10 (rk3566)
+        - Electron WF1589T (rk3576)
+        - Smatek S9E
+        - Other (state in description)
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What went wrong, and what you expected to happen instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. …
+        2. …
+        3. …
+  - type: textarea
+    id: diag
+    attributes:
+      label: Diagnostic dump (`/diag`)
+      description: |
+        Paste the panel's diagnostic dump. From any machine on the same LAN:
+
+        ```
+        curl http://<panel-ip>:8888/diag
+        ```
+
+        (Or open `http://<panel-ip>:8888/` and copy the **diagnostics / capabilities** section.)
+        It contains no secrets — MQTT credentials are not included.
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: ha
+    attributes:
+      label: Home Assistant version
+      placeholder: e.g. 2026.6.0
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: "`adb logcat` lines tagged `ha-paneld/*`, or Home Assistant log entries, if any."
+      render: shell
