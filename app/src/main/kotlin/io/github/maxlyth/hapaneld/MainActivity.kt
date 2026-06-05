@@ -100,7 +100,10 @@ class MainActivity : AppCompatActivity() {
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
+            // CENTER (not just CENTER_HORIZONTAL): with the ScrollView's fillViewport=true the column is
+            // stretched to the viewport height, so this vertically centres the content in any spare
+            // space; when content exceeds the screen it keeps its natural height and the ScrollView scrolls.
+            gravity = Gravity.CENTER
             setPadding(dp(24), pad, dp(24), pad)
         }
         // Horizontal wordmark (glyph + "ha-paneld") carries the name, so there's no separate title text.
