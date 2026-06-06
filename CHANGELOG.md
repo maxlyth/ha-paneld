@@ -4,9 +4,9 @@ Human-readable summaries of each release. The auto-generated commit list is appe
 notes on each [GitHub release](https://github.com/maxlyth/ha-paneld/releases). Cutting a release? Follow
 the pre-tag checklist in [docs/RELEASING.md](docs/RELEASING.md) (it starts with "check the README").
 
-## v0.7.0-rc1 - 2026-06-06
+## v0.7.0 - 2026-06-06
 
-Architecture-focused release (no new entities). **Release candidate** — please soak before v0.7.0.
+Architecture-focused release (no new entities).
 
 - **Device-profile architecture** — each supported panel now has a single canonical silo
   (`device/<panel>.kt`) declaring its quirks/paths; the LED, Zigbee and relay controllers read the
