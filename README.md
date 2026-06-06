@@ -1,6 +1,4 @@
-# ha-paneld
-
-<img src="docs/img/icon.png" align="right" width="104" alt="ha-paneld icon">
+# <img src="app/src/main/res/drawable-nodpi/wordmark.png" align="center" width="400" alt="ha-paneld">
 
 A small Android agent for **wall-mounted Home Assistant panels**. It exposes panel-side hardware
 to Home Assistant over HTTP + MQTT auto-discovery + mDNS, so a panel pairs itself with HA when you
@@ -62,22 +60,20 @@ The one-liner uses **network adb**. If a panel doesn't expose adb over the netwo
   possible on locked-down panels with no browser/file manager.
 
 > [!NOTE]
-> ha-paneld is sideloaded on **every** panel — it isn't on the Play Store (its accessibility use for
-> buttons/nav doesn't fit Play policy), so even Play-capable panels (the WF1589T) sideload it; Play
-> there only auto-updates WebView. No local adb? A Docker image can run the *network*-adb install, but
-> USB adb can't be passed into Docker on macOS/Windows — use native adb for the USB path.
+> ha-paneld can only be sideloaded on a panel — it isn't on the Play Store (its accessibility use for
+> buttons/nav doesn't fit Play policy), so even Play-capable panels (eg 2026 Android 14 models) should sideload it.
 
 > [!IMPORTANT]
-> **First-run gotcha — update the panel's system WebView.** Most of these panels ship with a
+> **First-run gotcha — update the panel's system WebView.** Even modern panels ship with a
 > WebView/Chromium far too old to render a current Home Assistant dashboard, so the HA Companion app
-> shows a blank or broken UI. Fix it cleanly over adb — **no F-Droid or third-party app store needed**:
+> might show a blank or broken UI. Fix it cleanly over adb — **no F-Droid or third-party app store needed**:
 > see [Updating the system WebView](docs/hardware/README.md#updating-the-system-webview). This trips up
 > almost everyone; do it before judging anything else.
 
-## Why not just the Companion app?
+## Why not just the Home Assistant Companion app?
 
-The [Companion app](https://github.com/home-assistant/android) targets personal phones. Wall panels need different primitives: arbitrary-URL
-audio announcements, screen/LED/button control (via the bundled NDK or a small root helper),
+The [HA Companion app](https://github.com/home-assistant/android) targets personal phones and tablets. Wall panels need different primitives: arbitrary-URL
+audio announcements, screen/LED/button control,
 hardware-button events back to HA, and turnkey mDNS pairing. ha-paneld covers those; Companion keeps
 doing what it does (and remains the dashboard host).
 
@@ -95,7 +91,7 @@ fleet its wins are narrow for the friction it adds:
 - **The Companion app already serves dashboards better.** For day-to-day dashboard rendering, the
   Companion app is purpose-built for HA — native auth and sessions, push notifications, deep links,
   and it tracks the frontend. A general-purpose kiosk browser is a second rendering path to keep
-  working; ha-paneld deliberately leaves dashboard hosting to Companion and only adds the panel
+  working; ha-paneld deliberately leaves dashboard hosting to HA Companion and only adds the panel
   hardware HA can't otherwise reach.
 - **Per-device config doesn't scale on a non-homogeneous fleet.** Fully Kiosk is configured per
   device (its settings UI / per-device cloud), so a mixed fleet of different panels drifts and each
@@ -116,17 +112,10 @@ load-bearing for you, keep using it — ha-paneld doesn't try to replace a brows
 | RGB LED | `light.<panel>_led` (per-panel HAL: rk3576 NDK `/dev/ledjni`, or sysfs via the root helper) |
 | URL navigate | `text.<panel>_navigate` |
 | Hardware-button events | `event.<panel>_button` (a11y key capture) |
-| Ambient light / proximity (data only) | `sensor.<panel>_illuminance`, `binary_sensor.<panel>_proximity` |
+| Ambient light / proximity | `sensor.<panel>_illuminance`, `binary_sensor.<panel>_proximity` |
 | Reload dashboard / reboot | `button.<panel>_reload`, `button.<panel>_reboot` |
 | Launcher / Home Assistant (bring a launcher or the HA dashboard forward) | `button.<panel>_launcher`, `button.<panel>_home` |
 | Panel info + config web page | `GET /` (the device "Visit" link) |
-
-> [!NOTE]
-> ha-paneld exposes the panel's light + proximity sensors as data (standard `SensorManager`), but
-> they are **not** the occupancy/lux authority — room-level HA sensors (motion, lux, occupancy) are,
-> being better placed and already calibrated. Brightness is therefore **HA-driven**: ha-paneld
-> exposes the brightness actuator; the policy (from room sensors) lives in Home Assistant. Zigbee
-> gateway and app-watchdog are out of scope (coexist with a dedicated tool if you need them).
 
 ## The control API — uniform MQTT entities
 
@@ -211,10 +200,7 @@ starts the agent, optionally sets the panel id / MQTT, and ends with a self-veri
 reinstalling the same or an older version (`--force` skips that). `scripts/provision.sh <ip> --verify`
 re-checks a panel without changing anything.
 
-**Updating a whole fleet:** use [`scripts/update-fleet.sh`](scripts/update-fleet.sh) rather than a raw
-`adb install -r` loop — `adb install -r` leaves the app in Android's *stopped* state, so a plain
-install loop leaves panels installed-but-dead (their entities go `unavailable` in HA) until each is
-launched. The fleet script downloads the release once and runs `provision.sh` per panel, so every one
+**Updating a whole fleet:** use [`scripts/update-fleet.sh`](scripts/update-fleet.sh). The fleet script downloads the release once and runs `provision.sh` per panel, so every one
 is installed **and launched and verified**:
 
 ```bash
@@ -244,9 +230,8 @@ On the rk3576 panel (Electron WF1589T) the front RGB LED is reached via the char
 normal app drives it **without root or a helper**. ha-paneld ships its **own** ~70-line NDK driver
 ([`app/src/main/cpp/led_jni.c`](app/src/main/cpp/led_jni.c)) doing the ioctls directly. The
 protocol (request numbers, value range, open flags) was reverse-engineered clean-room from a
-hardware sample — an interop fact, not vendor code — so **no vendor library is bundled or required**
-(`libjnielc.so` is no longer used). The LED entity is published only on panels where `/dev/ledjni`
-is openable; it is simply absent elsewhere.
+hardware sample so **no vendor library is bundled or required**. The LED entity is published only on panels where `/dev/ledjni`
+is openable.
 
 Other panels (e.g. Tuya TPA10) expose their LED only through root-only `/sys/class/leds/*`. A
 sandboxed app cannot reach those (SELinux `untrusted_app` cannot exec `su` nor write `sysfs_leds`),
