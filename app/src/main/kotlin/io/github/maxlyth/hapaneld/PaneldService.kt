@@ -72,6 +72,8 @@ class PaneldService : Service() {
     private lateinit var cpu: CpuController
     private lateinit var adb: AdbController
     private lateinit var esphome: EspHomeServer   // spike: ESPHome native-API server (dual-stack w/ MQTT)
+    @Volatile private var lastLux = 0f            // spike: cached for the ESPHome illuminance sensor
+    @Volatile private var lastNear = false        // spike: cached for the ESPHome proximity binary_sensor
     private lateinit var profile: DeviceProfile
     private var configUrl: String? = null
 
@@ -103,6 +105,10 @@ class PaneldService : Service() {
             friendlyName = config.friendlyName, model = config.model, manufacturer = config.manufacturer,
             getBrightness = { brightness.getBrightness() }, setBrightness = { brightness.setBrightness(it) },
             wake = { screen.wake() }, sleep = { screen.sleep() },
+            getWakeOnWave = { config.wakeOnWave }, setWakeOnWave = { config.setWakeOnWave(it) },
+            getVolume = { volume.getPercent() }, setVolume = { volume.setPercent(it) },
+            getIlluminance = { lastLux }, getProximityNear = { lastNear },
+            onReload = { system.reloadDashboard(config.dashboardPackage) },
         )
         configUrl = localIpv4()?.let { "http://$it:${config.httpPort}/" }
 
@@ -227,10 +233,11 @@ class PaneldService : Service() {
             mqtt.start()
             esphome.start()   // spike: ESPHome native-API server on :6053 (plaintext)
             sensors.start(
-                onLux = { lux -> mqtt.publishLight(lux) },
+                onLux = { lux -> mqtt.publishLight(lux); lastLux = lux.toFloat(); esphome.publishStates() },
                 onLuxRaw = { lux -> autoBright.submitLux(lux) },
                 onProximity = { near ->
                     mqtt.publishProximity(near)
+                    lastNear = near; esphome.publishStates()
                     // Wake-on-wave: local, instant, wake-only. onProximity fires only on far->near
                     // transitions (natural debounce); sleep stays HA's job.
                     if (near && config.wakeOnWave) screen.wake()
