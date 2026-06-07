@@ -28,10 +28,19 @@ needs no buttons at all**, and **Maskrom is an un-brickable hardware fallback** 
 
 ## The confidence path (do these in order)
 
-1. **Make a live backup today** (Method A) — zero brick risk, no mode change, no buttons.
+1. **Make a live backup today** (Method A) — zero brick risk, no mode change, no buttons, **and no USB
+   or physical access**: it runs over the network (`adb` over TCP) from your HA server or any LAN
+   machine. This is the most important step and you can do it remotely, right now.
 2. **Back up the bootloader/loader specifically** — this is what makes a *maskrom* restore possible.
 3. **Disable OTA** so the vendor can't silently overwrite your rooted/modified setup.
 4. Only then consider firmware changes, knowing restore is possible.
+
+> [!IMPORTANT]
+> **Backup is remote; restore is local.** Everything that *reads* (Method A's `adb`+`dd`, and entering
+> Loader mode) happens over the network — no cable. Only the `rkdeveloptool` stages (Methods B/C) need a
+> **physical USB link**, which means a **laptop carried to the panel** (you may have to unmount the panel
+> to reach its USB port). `rkdeveloptool` has no network mode — rockusb is USB-only. So: back up from
+> anywhere; keep a laptop for the rare restore/un-brick.
 
 ## The two Rockchip USB modes
 
@@ -70,6 +79,40 @@ requirement, not a POSIX one:
 > These panels do **`adb` over TCP** (network, port 5555), so the `adb reboot loader` step needs **no
 > USB at all**. USB is required only for the `rkdeveloptool` rockusb/maskrom stage — so on WSL2 you only
 > need `usbipd` to forward the rockusb device, sidestepping the known USB-adb passthrough quirks.
+
+### Running rkdeveloptool in Docker (avoids building it)
+
+If you don't want to build the tool, run it from a container. The catch is **USB passthrough**:
+
+- **Linux host (incl. a Linux laptop): works well.** The container gets raw USB access:
+
+    ```dockerfile
+    # Dockerfile
+    FROM debian:stable-slim
+    RUN apt-get update && apt-get install -y --no-install-recommends \
+          build-essential autoconf automake pkg-config libusb-1.0-0-dev git ca-certificates \
+     && git clone https://github.com/rockchip-linux/rkdeveloptool /src \
+     && cd /src && autoreconf -i && ./configure && make && cp rkdeveloptool /usr/local/bin/ \
+     && apt-get purge -y build-essential git && apt-get autoremove -y \
+     && rm -rf /var/lib/apt/lists/* /src
+    ENTRYPOINT ["rkdeveloptool"]
+    ```
+
+    ```bash
+    docker build -t rkdeveloptool .
+    # --privileged + mounting the whole usb bus survives the device re-enumerating when it
+    # switches into Loader/Maskrom mode (its /dev path changes):
+    docker run --rm -it --privileged -v /dev/bus/usb:/dev/bus/usb rkdeveloptool ld
+    ```
+
+- **macOS / Windows host: a container does NOT solve USB.** Docker Desktop runs the engine inside a
+  Linux VM, which has no path to the host's USB bus — so `--privileged -v /dev/bus/usb` has nothing to
+  forward. Use the native routes from the host table instead: **macOS** → build with Homebrew `libusb`;
+  **Windows** → WSL2 + `usbipd-win` (and you can run the Docker image *inside* that WSL2 distro once the
+  device is `usbipd attach`ed to it).
+
+Net: the easiest portable setup is a **Linux laptop** (native or the container above) carried to the
+panel. On a Mac/Windows laptop, go native / WSL2 — containers won't bridge USB for you.
 
 Verified command set (from the tool's own `--help`; run `rkdeveloptool -h` to confirm your build):
 
