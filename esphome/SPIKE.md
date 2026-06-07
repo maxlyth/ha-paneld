@@ -105,3 +105,26 @@ MQTT-only / ESPHome / both. 3 = staged per-panel migration w/ entity_id rename +
 (confirm the Kotlin bindings generate) → implement the framing + handshake → register one entity of
 **each type** (matrix above), starting with light then adding text/number/select/switch/button/
 binary_sensor/sensor/event → add the device in HA → confirm **each type** round-trips.
+
+## Spike RESULTS — VALIDATED end-to-end (2026-06-08, overnight autonomous run)
+
+**The ESPHome native API works as a v1.0 transport for ha-paneld — proven on real HA 2026.6.**
+
+- **Feasibility (Phase 1):** `:esphome:build` green — protoc compiles the official MIT `.proto` into Java
+  bindings in this Android/Gradle project. One fix: protoc-java can't emit a class named `void` (Java
+  keyword) → renamed the empty `message void` (RPC void-return, wire-irrelevant) to `VoidMessage`.
+- **Server (Phase 2/3):** `app/.../esphome/EspHomeServer.kt` — plaintext framing
+  (`[0x00][varint len][varint id][payload]`) + handshake (Hello/Auth-ack/DeviceInfo/Ping/Disconnect) +
+  ListEntities + SubscribeStates + LightCommand. Dual-stack with MQTT in `PaneldService` (zero MQTT risk).
+- **Deployed (Phase 4):** release-signed build on **office** (172.31.12.20); `:6053` listening.
+- **HA round-trip (Phase 5):** HA ESPHome config-flow (host 172.31.12.20:6053, no encryption) →
+  `create_entry` "Office HA Panel". Entities appeared. **Command:** HA `light.turn_on` 76 → panel
+  `screen_brightness` = **76**; 255 → **255**. **State:** HA reads back brightness 76, color_mode
+  brightness. Full bidirectional control confirmed.
+
+**Conclusion:** the Kotlin/ESPHome gap is fully resolved (protoc on ESPHome's MIT .proto + a ~150-line
+plaintext server; no Ava code). The protocol covers ha-paneld's needs and is a viable v1.0 transport.
+
+**Remaining for full coverage (same pattern as light — next):** switch/number/select/text/button/
+binary_sensor/sensor/event entity flows (read each `ListEntities*/State*/Command*`, wire to the existing
+controller). Then the A/B + migration plan above.
