@@ -1,4 +1,9 @@
-# <img src="app/src/main/res/drawable-nodpi/wordmark.png" align="center" width="400" alt="ha-paneld">
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="app/src/main/res/drawable-night-nodpi/wordmark.png">
+    <img src="app/src/main/res/drawable-nodpi/wordmark.png" width="400" alt="ha-paneld">
+  </picture>
+</p>
 
 A small Android agent for **wall-mounted Home Assistant panels**. It exposes panel-side hardware
 to Home Assistant over HTTP + MQTT auto-discovery + mDNS, so a panel pairs itself with HA when you

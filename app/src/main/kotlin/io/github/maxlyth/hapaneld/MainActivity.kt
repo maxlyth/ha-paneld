@@ -3,6 +3,7 @@ package io.github.maxlyth.hapaneld
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.Typeface
@@ -44,6 +45,19 @@ class MainActivity : AppCompatActivity() {
     private val config by lazy { Config(this) }
     private val handler = Handler(Looper.getMainLooper())
     private var autoReturn: Runnable? = null
+
+    /** Colours for the standing screen, chosen to read on the panel's current light/dark setting. The
+     *  wordmark itself switches via res/drawable(-night)-nodpi/wordmark.png; this covers everything else. */
+    private data class Palette(
+        val bg: String, val body: String, val subtle: String, val accent: String,
+        val btnBg: String, val btnText: Int,
+    )
+    private val pal: Palette by lazy {
+        val dark = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
+            Configuration.UI_MODE_NIGHT_YES
+        if (dark) Palette("#111111", "#c8ccd2", "#8a8f99", "#4a9eff", "#2557a7", Color.WHITE)
+        else Palette("#ffffff", "#2a2e34", "#5a6068", "#1669d6", "#2557a7", Color.WHITE)
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -117,32 +131,32 @@ class MainActivity : AppCompatActivity() {
             layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(logoH))
                 .apply { bottomMargin = dp(if (compact) 8 else 18) }
         })
-        root.addView(text("v${BuildConfig.VERSION_NAME} · running in the background", 12f, "#8a8f99", padBottom = if (compact) 8 else 18))
+        root.addView(text("v${BuildConfig.VERSION_NAME} · running in the background", 12f, pal.subtle, padBottom = if (compact) 8 else 18))
         // Description — shown on all panels (the shorter wordmark frees the vertical space on 480x480);
         // slightly smaller + tighter on compact so it still fits without scrolling.
         root.addView(text(
             "This device is a Home Assistant wall panel. ha-paneld runs in the background so Home " +
                 "Assistant can control the screen, LED, buttons and speaker and read its sensors — all " +
                 "over your local network. The dashboard itself runs in the Home Assistant app.",
-            if (compact) 12.5f else 14f, "#c8ccd2", padBottom = if (compact) 10 else 22,
+            if (compact) 12.5f else 14f, pal.body, padBottom = if (compact) 10 else 22,
         ))
         // The full URL — tappable here, and readable so it can be typed on another device.
         root.addView(TextView(this).apply {
             gravity = Gravity.CENTER
             textSize = if (compact) 15f else 18f
-            setTextColor(Color.parseColor("#4a9eff"))
+            setTextColor(Color.parseColor(pal.accent))
             text = url
             setOnClickListener { openConfig() }
             setPadding(0, 0, 0, dp(if (compact) 6 else 0))
         })
-        if (!compact) root.addView(text("Open this address in a browser to configure the panel", 12f, "#8a8f99", padTop = 4, padBottom = 16))
+        if (!compact) root.addView(text("Open this address in a browser to configure the panel", 12f, pal.subtle, padTop = 4, padBottom = 16))
         // QR of the config URL — scan with a phone instead of typing it.
         qrBitmap(url, dp(qrDp))?.let { qr ->
             root.addView(ImageView(this).apply {
                 setImageBitmap(qr)
                 layoutParams = LinearLayout.LayoutParams(dp(qrDp), dp(qrDp)).apply { topMargin = dp(6); bottomMargin = dp(4) }
             })
-            if (!compact) root.addView(text("Scan to open the config page on your phone", 12f, "#8a8f99", padBottom = 24))
+            if (!compact) root.addView(text("Scan to open the config page on your phone", 12f, pal.subtle, padBottom = 24))
         }
         // Buttons: side-by-side when vertical space is tight (shorter labels), stacked otherwise.
         val cfgBtn = button(if (compact) "Configure" else "Open configuration") { openConfig() }
@@ -163,7 +177,7 @@ class MainActivity : AppCompatActivity() {
         // and centre it. A ScrollView remains as a safety net if a panel is unexpectedly short.
         val colW = minOf(dm.widthPixels - dp(48), dp(512))
         return ScrollView(this).apply {
-            setBackgroundColor(Color.parseColor("#111111"))
+            setBackgroundColor(Color.parseColor(pal.bg))
             isFillViewport = true
             addView(
                 root,
@@ -207,10 +221,10 @@ class MainActivity : AppCompatActivity() {
         text = label
         isAllCaps = false
         textSize = 16f
-        setTextColor(Color.WHITE)
+        setTextColor(pal.btnText)
         background = GradientDrawable().apply {
             cornerRadius = dp(10).toFloat()
-            setColor(Color.parseColor("#2557A7"))
+            setColor(Color.parseColor(pal.btnBg))
         }
         setPadding(dp(24), dp(14), dp(24), dp(14))
         layoutParams = LinearLayout.LayoutParams(dp(260), ViewGroup.LayoutParams.WRAP_CONTENT)
