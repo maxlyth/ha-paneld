@@ -21,3 +21,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "ha-paneld"
 include(":app")
+include(":esphome")  // ESPHome native-API protobuf bindings (spike/esphome-api)

@@ -10,7 +10,7 @@ enum APISourceType {
     SOURCE_CLIENT = 2;
 }
 
-message void {}
+message VoidMessage {}
 
 extend google.protobuf.MethodOptions {
     optional bool needs_setup_connection = 1038 [default=true];
