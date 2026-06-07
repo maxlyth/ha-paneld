@@ -20,7 +20,8 @@ then builds, signs and publishes the APK, taking the human-readable notes from t
    - Fix any entity names / behaviour the release changed elsewhere in the README.
    - Refresh screenshots in `docs/img/` if the UI changed (the on-panel launcher shot is **480×480**).
 2. **CHANGELOG.md** — there is a `## vX.Y.Z - <date>` section for the tag (the workflow extracts it
-   verbatim; no section → empty notes).
+   verbatim; no section → empty notes). Group entries under **Added / Changed / Fixed / Docs** (only the
+   groups with content) — see the format note at the top of `CHANGELOG.md`.
 3. **Version bump** — `app/build.gradle.kts` `versionName` matches the tag and `versionCode` is
    incremented. (A higher `versionCode` lets panels `install -r` in place.) Also bump the **static
    release badge** in `README.md` (`img.shields.io/badge/release-vX.Y.Z-blue`) — it's static on purpose

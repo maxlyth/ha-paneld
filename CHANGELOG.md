@@ -4,13 +4,30 @@ Human-readable summaries of each release. The auto-generated commit list is appe
 notes on each [GitHub release](https://github.com/maxlyth/ha-paneld/releases). Cutting a release? Follow
 the pre-tag checklist in [docs/RELEASING.md](docs/RELEASING.md) (it starts with "check the README").
 
+From **v0.8.0**, entries are grouped under **Added** (new features/entities), **Changed** (behaviour
+changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
+content appear. Earlier releases predate this convention and keep their flat lists.
+
 ## v0.8.0 - Unreleased
+
+### Added
 
 - **Auto-brightness (opt-in)** — `switch.<panel>_auto_brightness` drives the screen backlight from a lux
   stream: the panel's own ambient-light sensor where present, or HA-fed `number.<panel>_ambient_lux` on
   sensor-less panels (e.g. the WF1589T). **Asymmetric response** — snappy on a sudden lights-on step,
   heavily smoothed on slow daylight drift and sensor noise — with a Dimmer↔Brighter
   `number.<panel>_brightness_bias`. Off by default (ha-paneld stays a pure actuator otherwise).
+
+### Fixed
+
+- **Zigbee router boot-restore** — ha-paneld now persists the desired `switch.<panel>_zigbee_router`
+  state and, on connect, starts the gateway when it's left ON and **nothing else has started it**
+  (idempotent `!running()` guard — never double-starts or fights another launcher). So the router comes
+  back after a reboot even on a panel with no other gateway launcher (e.g. NSPanelTools fully removed),
+  hardening the "ha-paneld takes over the gateway" migration.
+
+### Docs
+
 - **Firmware backup & restore guide for button-less panels** — wall panels have no volume/power
   buttons, so the usual "hold a button combo for fastboot/recovery" advice is a non-starter. These are
   all Rockchip devices, so new [docs/firmware-backup-restore.md](docs/firmware-backup-restore.md)

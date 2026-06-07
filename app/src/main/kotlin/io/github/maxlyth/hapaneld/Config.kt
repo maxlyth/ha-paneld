@@ -107,6 +107,13 @@ class Config(context: Context) {
         prefs.edit().putBoolean("auto_return_dashboard", on).apply()
     }
 
+    // Desired Zigbee-router state, persisted so the gateway can be auto-started on boot when nothing
+    // else launches it (the NSPanel Pro gateway is not init-started — verified 2026-06-08). Default off.
+    val zigbeeRouterEnabled: Boolean get() = prefs.getBoolean("zigbee_router_enabled", false)
+    fun setZigbeeRouterEnabled(on: Boolean) {
+        prefs.edit().putBoolean("zigbee_router_enabled", on).apply()
+    }
+
     // Optional on-panel auto-brightness engine (see control/AutoBrightnessController). Default OFF →
     // ha-paneld stays a pure brightness actuator; HA drives the screen. When ON, the engine maps a lux
     // stream (panel ALS where present, else HA-fed) to the backlight.

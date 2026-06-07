@@ -9,8 +9,14 @@ import org.json.JSONObject
  * comes from the active [DeviceProfile] ([DeviceProfile.zigbeeGatewayDir]); a profile with no gateway
  * dir (every non-NSPanel-Pro panel) makes this controller inert.
  *
- * The radio is driven by Sonoff's `zgateway` host binary in that dir, kept alive by `guard_process.sh`
- * (a 5-second supervisor loop, boot-started). zgateway is controlled over a LOCAL mosquitto broker on
+ * The radio is driven by the **manufacturer's** `zgateway` host binary in that dir — the package is
+ * eWeLink/Sonoff's own, versioned per firmware (e.g. `sonoff-v3.5.4`) and **side-loaded by NSPanelTools
+ * onto firmware that didn't ship it**, not seaky's code. It's kept alive by `guard_process.sh`
+ * (a 5-second supervisor loop). NOTE: on an NSPanelTools-provisioned panel a persistent hook
+ * boot-starts `guard_process.sh` — it survives the APK removal and reparents to init, but isn't a
+ * standard `/system`|`/vendor/etc/init` service (verified 2026-06-08). [enable] also starts it on
+ * demand via `run_guard_process.sh`; MqttBridge's boot-restore starts it on connect only when nothing
+ * else has. zgateway is controlled over a LOCAL mosquitto broker on
  * `127.0.0.1:1883`, which is anonymous (the `password_file` line is commented out in `mosquitto.conf`),
  * so no credentials are needed:
  *

@@ -202,6 +202,7 @@ class MqttBridge(
         publishDiscovery(c)
         publish(c, availabilityTopic, "online", retain = true)
         restoreAndPublishStates(c)
+        reconcileZigbeeOnConnect(c) // boot-restore: start the gateway if left ON and nothing else has
         Log.i(TAG, "MQTT connected — (re)subscribed + discovery for $panel")
     }
 
@@ -370,6 +371,7 @@ class MqttBridge(
     // on a background thread (polling for the slow ON) so HA ends up correct without stalling MQTT.
     private fun handleZigbee(payload: String) {
         val on = payload.trim().equals("ON", ignoreCase = true)
+        config.setZigbeeRouterEnabled(on) // persist desired state so it survives a reboot (boot-restore)
         client?.let { publish(it, stateZigbee, if (on) "ON" else "OFF", retain = true) }
         Thread {
             try {
@@ -385,6 +387,27 @@ class MqttBridge(
                 client?.let { publish(it, stateZigbee, if (settled) "ON" else "OFF", retain = true) }
             } catch (e: Exception) {
                 Log.w(TAG, "zigbee toggle failed", e)
+            }
+        }.start()
+    }
+
+    // Boot/connect restore for the Zigbee router. The NSPanel Pro gateway is NOT init-launched (verified
+    // 2026-06-08 — no init service references it), so after a reboot nothing starts it. If the user left
+    // the router ON, start it here. Idempotent via the !running() guard: skips when the gateway is
+    // already up, so it neither double-starts across reconnects nor fights another launcher (NSPanelTools
+    // / firmware) that got there first. Slow vendor lifecycle runs off the MQTT thread, like handleZigbee.
+    private fun reconcileZigbeeOnConnect(c: Mqtt5AsyncClient) {
+        if (!zigbee.present() || !config.zigbeeRouterEnabled || zigbee.running()) return
+        publish(c, stateZigbee, "ON", retain = true) // optimistic; reconciled once it settles
+        Thread {
+            try {
+                zigbee.enable()
+                var up = false
+                for (i in 0 until 18) { if (zigbee.running()) { up = true; break }; Thread.sleep(5_000) }
+                client?.let { publish(it, stateZigbee, if (up) "ON" else "OFF", retain = true) }
+                Log.i(TAG, "zigbee boot-restore: gateway ${if (up) "started" else "did not start"}")
+            } catch (e: Exception) {
+                Log.w(TAG, "zigbee boot-restore failed", e)
             }
         }.start()
     }
