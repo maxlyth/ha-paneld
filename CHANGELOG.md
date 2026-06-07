@@ -4,10 +4,9 @@ Human-readable summaries of each release. The auto-generated commit list is appe
 notes on each [GitHub release](https://github.com/maxlyth/ha-paneld/releases). Cutting a release? Follow
 the pre-tag checklist in [docs/RELEASING.md](docs/RELEASING.md) (it starts with "check the README").
 
-## v0.7.1-rc2 - 2026-06-07
+## v0.7.1 - 2026-06-07
 
-Release candidate — hardware buttons, CPU/display controls, per-panel identity. Please soak before
-v0.7.1. (rc1 predated these features.)
+Hardware buttons, CPU/display controls, and per-panel identity.
 
 - **Hardware buttons instrumented via the daemon's evdev reader** — keys Android doesn't deliver to
   apps now reach HA:
