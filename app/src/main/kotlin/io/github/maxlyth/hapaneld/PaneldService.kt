@@ -167,7 +167,11 @@ class PaneldService : Service() {
             "Zigbee" to zigbee.status(),
             "Relays" to relay.count().let { if (it > 0) it.toString() else "none" },
             "CPU profile" to (cpu.currentTier() ?: "n/a"),
-            "Network ADB" to if (adb.isPersisted()) "persistent (5555)" else "not persistent",
+            "Network ADB" to when {
+                adb.isPersisted() -> "persistent (5555) · survives reboot"
+                adb.isActive() -> "active (5555) · not persistent (off after reboot)"
+                else -> "off"
+            },
         )
         return PanelInfo.collect(this, extras)
     }

@@ -13,9 +13,15 @@ class AdbController {
     /** Root present — required to set the props and restart adbd. */
     fun available(): Boolean = Su.available()
 
-    /** True when network adb is set to persist across reboot. */
+    /** True when network adb is set to persist across reboot (the OS `persist.` prop brings adbd up on
+     *  the port at boot — ha-paneld does NOT re-apply it on boot, so this is genuine OS persistence). */
     fun isPersisted(): Boolean =
         Su.runOutput("getprop persist.adb.tcp.port 2>/dev/null")?.trim() == PORT
+
+    /** True when network adb is live right now (runtime `service.` port) — reachable over the LAN now,
+     *  but this alone does NOT survive a reboot; only [isPersisted] does. */
+    fun isActive(): Boolean =
+        Su.runOutput("getprop service.adb.tcp.port 2>/dev/null")?.trim() == PORT
 
     /** Enable/disable persistent network adb (and apply it now by restarting adbd). */
     fun set(on: Boolean): Boolean = if (on) {

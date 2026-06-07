@@ -8,7 +8,7 @@ From **v0.8.0**, entries are grouped under **Added** (new features/entities), **
 changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
 content appear. Earlier releases predate this convention and keep their flat lists.
 
-## v0.8.0 - Unreleased
+## v0.8.0-rc1 - 2026-06-07
 
 ### Added
 
@@ -21,6 +21,7 @@ content appear. Earlier releases predate this convention and keep their flat lis
   proximity samples and the auto-brightness internals (smoothed/target/applied) for fit-testing the
   filters; CSV (default) or `?format=json`. Decimated to span hours, instrumentation-gated, never
   persisted; not an HA/MQTT surface.
+- **Display readout** — the info page's Panel-information card now shows screen resolution + current dpi.
 
 ### Fixed
 
@@ -29,6 +30,23 @@ content appear. Earlier releases predate this convention and keep their flat lis
   (idempotent `!running()` guard — never double-starts or fights another launcher). So the router comes
   back after a reboot even on a panel with no other gateway launcher (e.g. NSPanelTools fully removed),
   hardening the "ha-paneld takes over the gateway" migration.
+- **Info page no longer jumps on a single-column layout** — the live cards (Performance, Top processes,
+  Responsiveness) rebuilt their tables via `innerHTML` each poll, changing row heights and shoving the
+  cards below (notably Configuration) — even while scrolled off-screen. Tables now update **in place**
+  (`textContent` on persistent nodes), live values **truncate** instead of wrapping, and off-screen
+  cards use `content-visibility` so they can't reflow the viewport.
+- **Proximity gauge no longer rescales every poll** — the gauge scale is now grow-only (settles to the
+  sensor's real range, then holds), so the threshold line, zones, dot and slider stop jittering on
+  panels whose raw reading exceeds the reported sensor range.
+
+### Changed
+
+- **Display-sizing form** rebuilt as clean label-left/value-right rows (was a ragged wrap that stacked
+  with mixed justification on a single column).
+- **Network ADB readout** now distinguishes *active now* (the runtime port — reachable over the LAN this
+  session) from *persistent* (the OS `persist.` prop — survives a reboot). A panel reachable over wifi
+  ADB but not set to persist no longer just reads "not persistent". ha-paneld does not re-apply network
+  ADB at boot, so "persistent" means genuine OS-level reboot survival.
 
 ### Docs
 

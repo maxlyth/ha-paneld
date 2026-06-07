@@ -354,21 +354,28 @@ means you can never publish an in-place update again. Never commit the keystore 
 Validated across the panel fleet: Sonoff NSPanel Pro (PX30, Android 8.1), Tuya TPA10 (rk3566,
 Android 11), Electron WF1589T (rk3576, Android 14).
 
-**Latest release — 0.7.1:**
+**Latest release — 0.8.0-rc1 (release candidate):**
 
-- **Hardware buttons via the daemon's evdev reader** — the **WF1589T power button** no longer locks
-  the panel; it publishes an `event.<panel>_button` event for an automation to act on (PMIC long-press
-  hardware off unchanged). The **TPA10 5th (orange) button** — an `SW_MUTE_DEVICE` switch stock
-  firmware never surfaced — is now published as a `KEYCODE_MUTE` event.
-- **CPU profile tiers** — `select.<panel>_cpu_governor` is now **Performance / Efficiency / Auto**
-  (Auto = the SoC's dynamic governor) instead of raw kernel governor names.
-- **Display sizing** *(experimental / R&D)* — set display density + text size to match a dashboard to a
-  desktop browser; root panels only. See [docs/display-sizing.md](docs/display-sizing.md).
-- **Per-panel HA device identity** — manufacturer/model defaults with a " (ha-paneld)" suffix so the
-  device is distinguishable from a co-installed integration; theme-aware on-panel App UI.
+- **Auto-brightness** *(opt-in)* — `switch.<panel>_auto_brightness` maps a lux stream (the panel's own
+  ambient-light sensor, or HA-fed `number.<panel>_ambient_lux`) to the backlight, with an **asymmetric
+  response** (snappy on lights-on, heavily smoothed on slow daylight drift) and a Dimmer↔Brighter bias.
+  Off by default.
+- **Zigbee router boot-restore** — the router survives a reboot / NSPanelTools removal: ha-paneld
+  restarts the on-device gateway when it's left on and nothing else has.
+- **Info-page polish** — the page no longer jumps on a single column (in-place table updates, off-screen
+  `content-visibility`), the proximity gauge no longer jitters, and the Panel-information card shows
+  screen resolution + dpi.
+- **Debug sensor trace** (`/sensortrace`) for objective auto-brightness / proximity filter tuning.
 
 <details>
 <summary>Earlier releases (0.7.0 → 0.4.x) — full history in <a href="CHANGELOG.md">CHANGELOG.md</a></summary>
+
+New in 0.7.1:
+
+- **Hardware buttons via the daemon's evdev reader** (WF1589T power key no longer locks the panel; the
+  TPA10 5th/orange `SW_MUTE_DEVICE` button surfaced as `KEYCODE_MUTE`), **CPU profile tiers**
+  (Performance / Efficiency / Auto), experimental **display sizing**, **per-panel HA device identity**,
+  theme-aware App UI.
 
 New in 0.7.0 (architecture-focused — no new entities):
 
@@ -445,13 +452,8 @@ Carried from 0.4.x:
 
 ### Planned
 
-- **Auto-brightness (0.8.0)** — optional screen auto-dimming when the panel has a light sensor: a
-  self-calibrating on-panel curve by default, or HA-fed room lux (better data, since HA can fuse
-  several sensors) — one `switch.<panel>_auto_brightness` plus a Dimmer↔Brighter bias, with the
-  perceptual curve, smoothing and hysteresis baked in (no fiddly tuning).
-- **Proximity-calibration UX (0.8.0)** — the wake-on-wave calibration card reworked alongside
-  auto-brightness (shared sensor auto-ranging): an auto-scaled gauge, clearer capture steps, and a
-  per-device raw range — so the usable band fills the bar instead of bunching at one end.
+- **Proximity-calibration capture UX** — clearer near/far capture steps to finish the calibration-card
+  rework (the gauge auto-ranging shipped in 0.8.0-rc1).
 - **More performance tooling** — deeper on-device instrumentation to measure, diagnose and tune
   dashboard performance on weak panels.
 - **Built-in relay control beyond the S9E** — the same `switch.<panel>_relay*` model on other panels
