@@ -497,6 +497,25 @@ Carried from 0.4.x:
 - **MQTT** — HiveMQ MQTT 5 client (NIO transport; ABI-agnostic).
 - **mDNS** — JmDNS (chosen over `NsdManager` for reliable TXT records across API levels).
 
+## Want your panel supported?
+
+ha-paneld has no donate button. It's free, and the "payment" that actually moves it forward is **more
+panels supported** — which takes hardware to study. Every panel here was added by hands-on adb analysis:
+probing the device and watching how it responds to real button, LED and sensor interaction.
+
+So if you'd like to help:
+
+- **Open an issue with your panel's diagnostics.** Visit `http://<panel-ip>:8888/diag` (or the diag link
+  on the panel's config page) and paste the dump into a new issue — build, SELinux, `/dev` + `/sys`
+  listings, capability probe. That's enough to start; from there we'll work out a short interactive
+  workflow to map the buttons/LEDs/sensors that need a person at the panel.
+- **Or send me the panel.** I'm **UK-based** and happy to do the reverse-engineering directly — the
+  fastest route to a fully-supported new model. You'll get it back (I have way too many already);
+  open an issue first so we can sort the details.
+
+The result is always open: your panel becomes a profile everyone can use — a bit less per-vendor
+fragmentation for the next person. That's the donation.
+
 ## Acknowledgements
 
 Thanks to **Seaky** for [**NSPanel Pro Tools**](https://github.com/seaky/nspanel_pro_tools_apk)
