@@ -20,4 +20,6 @@ object NSPanelPro : DeviceProfile {
     override val manufacturer = "Sonoff"
     override val model = "NSPanel Pro"
     override val evdevButtons = emptyList<EvdevButton>()
+    // PX30 offers no schedutil; its load-following governor is interactive.
+    override val cpuGovernors = mapOf("Performance" to "performance", "Efficiency" to "powersave", "Auto" to "interactive")
 }

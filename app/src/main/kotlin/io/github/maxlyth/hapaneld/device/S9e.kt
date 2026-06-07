@@ -25,4 +25,5 @@ object S9e : DeviceProfile {
     override val manufacturer = "Smatek"
     override val model = "S9E"
     override val evdevButtons = emptyList<EvdevButton>()
+    override val cpuGovernors = mapOf("Performance" to "performance", "Efficiency" to "powersave", "Auto" to "schedutil")
 }

@@ -24,4 +24,5 @@ object Tpa10 : DeviceProfile {
     override val evdevButtons = listOf(
         EvdevButton("/dev/input/event6", 248, grab = false, eventType = "KEYCODE_MUTE"),
     )
+    override val cpuGovernors = mapOf("Performance" to "performance", "Efficiency" to "powersave", "Auto" to "schedutil")
 }

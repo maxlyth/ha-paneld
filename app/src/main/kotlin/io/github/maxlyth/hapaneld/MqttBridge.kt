@@ -375,8 +375,8 @@ class MqttBridge(
 
     // CPU scaling governor (select). Quick su write; publishes the read-back governor.
     private fun handleCpuGov(payload: String) {
-        val gov = payload.trim().trim('"')
-        if (cpu.set(gov)) client?.let { publish(it, stateCpuGov, cpu.get() ?: gov, retain = true) }
+        val tier = payload.trim().trim('"')   // "Performance" | "Efficiency" | "Auto"
+        if (cpu.setTier(tier)) client?.let { publish(it, stateCpuGov, cpu.currentTier() ?: tier, retain = true) }
     }
 
     // Persistent network adb (switch). Restarts adbd to apply; that only affects adb, not MQTT.
@@ -577,15 +577,16 @@ class MqttBridge(
             publish(c, "ha-paneld/$panel/button_led$n/state", if (relay.ledGet(n - 1)) "ON" else "OFF", retain = true)
         }
 
-        // CPU governor (select) — su panels with cpufreq. Options are the kernel's available governors.
-        val govs = cpu.governors()
-        if (govs.isNotEmpty()) {
-            val opts = govs.joinToString(",") { "\"${jsonEsc(it)}\"" }
+        // CPU governor (select) — su panels with cpufreq. Three intent-based tiers (Performance /
+        // Efficiency / Auto) rather than raw kernel governor names; CpuController maps each to this
+        // SoC's governor (Auto = its dynamic governor — ramps up on interaction, idles low).
+        if (cpu.available()) {
+            val opts = CpuController.TIERS.joinToString(",") { "\"${jsonEsc(it)}\"" }
             publishConfig(
                 c, "select", "${panel}_cpu_governor",
-                """{"name":"CPU governor","unique_id":"${panel}_cpu_governor","command_topic":"$cmdCpuGov","state_topic":"$stateCpuGov","options":[$opts],"icon":"mdi:speedometer","entity_category":"config",$avail,$device}""",
+                """{"name":"CPU profile","unique_id":"${panel}_cpu_governor","command_topic":"$cmdCpuGov","state_topic":"$stateCpuGov","options":[$opts],"icon":"mdi:speedometer","entity_category":"config",$avail,$device}""",
             )
-            cpu.get()?.let { publish(c, stateCpuGov, it, retain = true) }
+            cpu.currentTier()?.let { publish(c, stateCpuGov, it, retain = true) }
         }
 
         // Persistent network adb (switch) — opt-in; root panels only. Standing LAN adb port when ON.

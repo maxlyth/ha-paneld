@@ -89,7 +89,7 @@ class PaneldService : Service() {
         touchSound = TouchSoundController(this)
         zigbee = ZigbeeController(profile)
         relay = RelayController(profile)
-        cpu = CpuController()
+        cpu = CpuController(profile)
         adb = AdbController()
         configUrl = localIpv4()?.let { "http://$it:${config.httpPort}/" }
 
@@ -160,7 +160,7 @@ class PaneldService : Service() {
             // out via su — fine here because the info page is served off the main thread.
             "Zigbee" to zigbee.status(),
             "Relays" to relay.count().let { if (it > 0) it.toString() else "none" },
-            "CPU governor" to (cpu.get() ?: "n/a"),
+            "CPU profile" to (cpu.currentTier() ?: "n/a"),
             "Network ADB" to if (adb.isPersisted()) "persistent (5555)" else "not persistent",
         )
         return PanelInfo.collect(this, extras)

@@ -20,4 +20,5 @@ object Generic : DeviceProfile {
     override val manufacturer: String? = null   // infer from Build.MANUFACTURER
     override val model: String? = null           // infer from Build.MODEL
     override val evdevButtons = emptyList<EvdevButton>()   // unknown panel: a11y key capture only
+    override val cpuGovernors: Map<String, String>? = null  // resolve from runtime-available governors
 }

@@ -60,6 +60,11 @@ interface DeviceProfile {
      *  via the root helper daemon's evdev WATCH/grab instead. Empty when none. See [EvdevButton]. */
     val evdevButtons: List<EvdevButton>
 
+    /** Maps the HA-facing CPU tiers ("Performance"/"Efficiency"/"Auto") to this SoC's kernel governors.
+     *  Mainly to pin "Auto" to the right dynamic governor (schedutil on rk3566/rk3576, interactive on
+     *  PX30). Null, or any unmapped/unavailable tier, falls back to runtime resolution in CpuController. */
+    val cpuGovernors: Map<String, String>?
+
     companion object {
         /**
          * Pick the profile for the running device from [Build] fingerprints; [Generic] when none match.
