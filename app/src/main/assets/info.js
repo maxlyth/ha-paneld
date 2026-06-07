@@ -3,6 +3,10 @@
 // string, so syntax errors (e.g. an apostrophe in a single-quoted string) are caught at build.
 var cpuH=[],ramH=[],gpuH=[],MAX=120;  // ~4 min at 2s
 function row(k,v){return '<tr><th>'+k+'</th><td>'+v+'</td></tr>';}
+// Optional row that LATCHES: once a metric has ever been seen, its row is always emitted (showing a
+// "–" placeholder when momentarily absent) so the table height stays fixed and cards below never jump.
+var pseen={};
+function orow(k,label,ok,val){if(ok)pseen[k]=true;if(!pseen[k])return '';return row(label,ok?val:'<span style="color:#888">–</span>');}
 function draw(){
  var c=document.getElementById('perfchart'),x=c.getContext('2d'),W=c.width,H=c.height;
  x.clearRect(0,0,W,H);
@@ -45,12 +49,12 @@ async function perf(){
   var ramPct=d.memTotalMb?Math.round(d.memUsedMb*100/d.memTotalMb):0;
   var peak=(d.cores&&d.cores.length)?Math.max.apply(null,d.cores):d.cpu;
   var h=row('CPU',d.cpu+'%  <span style="color:#8a8">peak core '+peak+'%</span>');
-  if(d.freqMhz&&d.freqMhz.length){var cur=Math.max.apply(null,d.freqMhz),mx=d.freqMaxMhz||0;
-   h+=row('CPU clock',(cur/1000).toFixed(2)+' GHz'+(mx?'  <span style="color:#8a8">/ '+(mx/1000).toFixed(2)+' GHz max</span>':''));}
-  if(d.gpu!=null)h+=row('GPU',d.gpu+'%'+(d.gpuMhz?'  <span style="color:#8a8">'+d.gpuMhz+' MHz</span>':''));
+  var fok=!!(d.freqMhz&&d.freqMhz.length),cur=fok?Math.max.apply(null,d.freqMhz):0,mx=d.freqMaxMhz||0;
+  h+=orow('clk','CPU clock',fok,(cur/1000).toFixed(2)+' GHz'+(mx?'  <span style="color:#8a8">/ '+(mx/1000).toFixed(2)+' GHz max</span>':''));
+  h+=orow('gpu','GPU',d.gpu!=null,d.gpu+'%'+(d.gpuMhz?'  <span style="color:#8a8">'+d.gpuMhz+' MHz</span>':''));
   h+=row('RAM',d.memUsedMb+' / '+d.memTotalMb+' MB ('+ramPct+'%)');
-  if(d.load&&d.load.length)h+=row('Load avg',d.load.join('  '));
-  if(d.tempC!=null)h+=row('Temperature',d.tempC.toFixed(1)+' °C');
+  h+=orow('load','Load avg',!!(d.load&&d.load.length),d.load?d.load.join('  '):'');
+  h+=orow('temp','Temperature',d.tempC!=null,d.tempC!=null?d.tempC.toFixed(1)+' °C':'');
   document.getElementById('perf').innerHTML=h;
   var tp=document.getElementById('topproc');
   if(d.top&&d.top.length){
@@ -68,7 +72,7 @@ async function perf(){
    smh.textContent='· '+r.pkg.split('.').pop();
    var h=row('How it feels','<span style="color:'+col+'">●</span> <b>'+v+'</b>')
     +row('Dashboard main-thread','<b>'+r.mainPct+'%</b> of one core <span style="color:#888">(100% = event processing maxed out)</span>');
-   if(r.jankPct!=null)h+=row('Rendering load',r.jankPct+'% janky <span style="color:#888">· only counts when actively drawing (e.g. video) — worst frame '+r.p99+' ms</span>');
+   h+=orow('jank','Rendering load',r.jankPct!=null,r.jankPct!=null?r.jankPct+'% janky <span style="color:#888">· only counts when actively drawing (e.g. video) — worst frame '+r.p99+' ms</span>':'<span style="color:#888">idle — not drawing</span>');
    smt.innerHTML=h;
   }
   document.getElementById('perfage').textContent='· live';
