@@ -1,7 +1,7 @@
 # Firmware backup & restore (button-less Rockchip panels)
 
 Wall panels are **button-less** — no volume or power keys — so the ~99% of Android recovery guides on
-the internet that start with "hold Volume-Down + Power to enter fastboot/recovery" are **non-starters**.
+the internet that start with "hold Volume-Down + Power to enter [fastboot](https://en.wikipedia.org/wiki/Fastboot)/recovery" are **non-starters**.
 This page documents how to take a *usable* backup and restore it on these panels, using open-source,
 Linux-native tooling — no Windows, no vendor portal.
 
@@ -14,17 +14,21 @@ Linux-native tooling — no Windows, no vendor portal.
 
 ## Why this is different
 
-Every supported panel is a **Rockchip** SoC (px30 / rk3566 / rk3576) booting from **eMMC**. Two
-consequences:
+Every supported panel is a **[Rockchip](https://en.wikipedia.org/wiki/Rockchip)** SoC (px30 / rk3566 /
+rk3576) booting from **[eMMC](https://en.wikipedia.org/wiki/MultiMediaCard#eMMC)** (the soldered-on flash
+storage). Two consequences:
 
 - **Rockchip does not use fastboot.** Its USB recovery protocol is *rockusb*, entered via **Loader** or
-  **Maskrom** mode. `adb reboot bootloader` does **not** give you a fastboot prompt here.
+  **Maskrom** mode (Rockchip's two [USB flashing modes](https://wiki.radxa.com/Rock5/install/rockchip-flash-tools)).
+  `adb reboot bootloader` does **not** give you a fastboot prompt here.
 - **The official tooling is awkward** — old, largely Windows-only (`RKDevTool`/`AndroidTool`), and
   thinly documented. The open-source **`rkdeveloptool`** replaces all of it and runs on Linux (including
-  inside the Home Assistant SSH add-on, where `adb` already lives).
+  inside the Home Assistant SSH add-on, where [`adb`](https://developer.android.com/tools/adb) — the
+  Android Debug Bridge — already lives).
 
 The unlock for button-less panels: **Loader mode has a software entry — `adb reboot loader` — that
-needs no buttons at all**, and **Maskrom is an un-brickable hardware fallback** baked into the SoC ROM.
+needs no buttons at all**, and **Maskrom** (a recovery mode in the SoC's mask ROM that runs when no
+valid bootloader is present) **is an un-brickable hardware fallback**.
 
 ## The confidence path (do these in order)
 
@@ -32,7 +36,7 @@ needs no buttons at all**, and **Maskrom is an un-brickable hardware fallback** 
    or physical access**: it runs over the network (`adb` over TCP) from your HA server or any LAN
    machine. This is the most important step and you can do it remotely, right now.
 2. **Back up the bootloader/loader specifically** — this is what makes a *maskrom* restore possible.
-3. **Disable OTA** so the vendor can't silently overwrite your rooted/modified setup.
+3. **Disable [OTA](https://en.wikipedia.org/wiki/Over-the-air_update) updates** so the vendor can't silently overwrite your rooted/modified setup.
 4. Only then consider firmware changes, knowing restore is possible.
 
 > [!IMPORTANT]
@@ -64,15 +68,16 @@ sudo cp rkdeveloptool /usr/local/bin/
 sudo cp 99-rk-rockusb.rules /etc/udev/rules.d/ && sudo udevadm control --reload   # Linux only
 ```
 
-**Host requirements — not Linux-specific.** `rkdeveloptool` talks to the panel through **libusb**, so
-any host where libusb can claim the Rockchip USB device (VID `0x2207`) works — it's a USB-access
-requirement, not a POSIX one:
+**Host requirements — not Linux-specific.** `rkdeveloptool` talks to the panel through
+**[libusb](https://libusb.info)** (a cross-platform USB library), so any host where libusb can claim the
+Rockchip USB device (VID `0x2207`) works — it's a USB-access requirement, not a
+[POSIX](https://en.wikipedia.org/wiki/POSIX) one:
 
 | Host | Works? | How |
 | --- | --- | --- |
 | **Linux** | ✅ native | the `99-rk-rockusb.rules` udev rule (above) grants device access |
 | **macOS** | ✅ | `brew install automake autoconf libusb`, then the same `autoreconf/configure/make`; libusb claims the device directly |
-| **Windows / WSL2** | ✅ via `usbipd-win` | `usbipd bind` → `usbipd attach --wsl` forwards the USB device into WSL2, then run `rkdeveloptool` in the WSL Linux |
+| **Windows / [WSL2](https://learn.microsoft.com/windows/wsl/about)** (Windows Subsystem for Linux) | ✅ via [`usbipd-win`](https://github.com/dorssel/usbipd-win) | `usbipd bind` → `usbipd attach --wsl` forwards the USB device into WSL2, then run `rkdeveloptool` in the WSL Linux |
 | **Windows native** | ⚠️ legacy | `RKDevTool.exe` + Rockchip WinUSB driver (Zadig/DriverAssistant) — the old Windows-only path; WSL2 is the cleaner route |
 
 > [!TIP]
@@ -120,13 +125,13 @@ Verified command set (from the tool's own `--help`; run `rkdeveloptool -h` to co
 | --- | --- |
 | `ld` | list connected rockusb devices (and whether each is `Loader` or `Maskrom`) |
 | `rfi` / `rid` / `rcb` | read flash info / flash ID / capability (sector count) |
-| `ppt` | print the partition table (names + start LBA + size) |
+| `ppt` | print the partition table (names + start [LBA](https://en.wikipedia.org/wiki/Logical_block_addressing) + size) |
 | `rl <BeginSec> <SectorLen> <File>` | **read** an LBA range to a file (backup) |
 | `wl <BeginSec> <File>` | write a file at a raw LBA (advanced) |
 | `wlx <PartitionName> <File>` | **write** a file to a *named* partition (restore — safer) |
 | `db <Loader>` | download a loader to a **Maskrom** device (inits DRAM/eMMC) |
 | `ul <Loader>` | upgrade the on-flash loader |
-| `gpt <table>` | write a GPT partition table |
+| `gpt <table>` | write a [GPT](https://en.wikipedia.org/wiki/GUID_Partition_Table) partition table |
 | `ef` | erase flash |
 | `rd [subcode]` | reset the device (reboot) |
 
