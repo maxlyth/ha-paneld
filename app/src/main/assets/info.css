@@ -1,5 +1,5 @@
 body{font-family:system-ui,-apple-system,sans-serif;margin:0;background:#111;color:#eee}
-.wrap{max-width:1400px;margin:0 auto;padding:20px}              /* cap + centre: ~3 cols max on 4K */
+.wrap{max-width:1860px;margin:0 auto;padding:20px}             /* cap + centre: up to 4 masonry cols on a 1920/2560 panel */
 .hdr{display:flex;align-items:center;justify-content:space-between;gap:12px}
 h1{font-size:1.3rem;margin:0 0 .2rem;display:flex;align-items:center} h1 small{color:#9af;font-weight:400}
 .logo{width:1.7em;height:1.7em;margin-right:.45em;border-radius:6px;flex:none}
