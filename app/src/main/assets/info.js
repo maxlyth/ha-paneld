@@ -110,11 +110,13 @@ async function perf(){
 perf();setInterval(perf,2000);
 function setInstr(on){var a=document.getElementById('instron'),b=document.getElementById('instroff');if(a)a.className='pbtn'+(on?' on':'');if(b)b.className='pbtn'+(on?'':' on');}
 function instr(on){fetch('/instrumentation',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'enabled='+on}).then(function(r){return r.json();}).then(function(){perf();}).catch(function(){});}
-var proxMax=100,proxDrag=false;
+var proxMax=0,proxDrag=false;  // gauge scale — GROW-ONLY (sticky) so it settles then stays put, not rescaled per poll
 function proxDraw(d){
  var c=document.getElementById('proxgauge'),x=c.getContext('2d'),W=c.width,H=c.height;
  x.clearRect(0,0,W,H);
- var gm=Math.max(d.max||0,d.nearRaw||0,d.farRaw||0,d.raw||0,1)*1.1;proxMax=gm;
+ var want=Math.max(d.max||0,d.nearRaw||0,d.farRaw||0,d.raw||0,1)*1.1;
+ if(want>proxMax)proxMax=want;            // grow-only: settle to the real range, then hold (no per-poll jiggle)
+ var gm=proxMax;
  function px(v){return Math.max(0,Math.min(W,(v/gm)*W));}
  if(d.calibrated&&d.threshold!=null){
   var tx=px(d.threshold);
@@ -145,8 +147,8 @@ async function prox(){
   box.style.display='block';
   document.getElementById('proxraw').textContent=d.raw==null?'–':d.raw.toFixed(1);
   var nb=document.getElementById('proxnear');nb.textContent=d.near?'NEAR':'FAR';nb.style.color=d.near?'#48c774':'#888';
-  if(!proxDrag){var s=document.getElementById('proxslider');s.max=proxMax.toFixed(1);if(d.threshold!=null)s.value=d.threshold;}
-  proxApply(d);
+  proxApply(d);   // draw first so proxMax (grow-only scale) is settled before we read it for the slider
+  if(!proxDrag){var s=document.getElementById('proxslider');var sm=proxMax.toFixed(1);if(s.max!==sm)s.max=sm;if(d.threshold!=null)s.value=d.threshold;}
  }catch(e){}
 }
 function proxPost(u,b){fetch(u,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:b}).then(function(r){return r.json();}).then(proxApply).catch(function(){});}
