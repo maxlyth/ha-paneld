@@ -22,7 +22,10 @@ then builds, signs and publishes the APK, taking the human-readable notes from t
 2. **CHANGELOG.md** — there is a `## vX.Y.Z - <date>` section for the tag (the workflow extracts it
    verbatim; no section → empty notes).
 3. **Version bump** — `app/build.gradle.kts` `versionName` matches the tag and `versionCode` is
-   incremented. (A higher `versionCode` lets panels `install -r` in place.)
+   incremented. (A higher `versionCode` lets panels `install -r` in place.) Also bump the **static
+   release badge** in `README.md` (`img.shields.io/badge/release-vX.Y.Z-blue`) — it's static on purpose
+   (the dynamic shields GitHub badge flaked constantly with "invalid"/token-pool errors), so it won't
+   update itself.
 4. **Docs** — any new capability has a matching `docs/` entry (hardware page, recipe, etc.).
 5. **Build + sanity-test** on at least one real panel (`scripts/update-fleet.sh --apk <built.apk> -- <ip>`).
 6. **No-attribution / no-secrets gate** — the published history must contain no AI/Claude attribution

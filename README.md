@@ -3,10 +3,9 @@
   <img src="app/src/main/res/drawable-nodpi/wordmark.png" width="360" alt="ha-paneld">
 </picture>
 
-[![CI](https://img.shields.io/github/actions/workflow/status/maxlyth/ha-paneld/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/maxlyth/ha-paneld/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/maxlyth/ha-paneld?style=flat-square)](https://github.com/maxlyth/ha-paneld/releases/latest)
-[![License](https://img.shields.io/github/license/maxlyth/ha-paneld?style=flat-square)](LICENSE)
-[![Last commit](https://img.shields.io/github/last-commit/maxlyth/ha-paneld?style=flat-square)](https://github.com/maxlyth/ha-paneld/commits/main)
+[![CI](https://github.com/maxlyth/ha-paneld/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/maxlyth/ha-paneld/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/badge/release-v0.7.1-blue?style=flat-square)](https://github.com/maxlyth/ha-paneld/releases/latest)
+[![License](https://img.shields.io/badge/license-Apache_2.0-blue?style=flat-square)](LICENSE)
 
 **ha-paneld is free, open-source, and exists to fix what's wrong with Home Assistant wall panels** —
 the per-vendor fragmentation, the sluggish dashboards, and the clunky manufacturer software you're
