@@ -411,6 +411,9 @@ Planned:
   self-calibrating on-panel curve by default, or HA-fed room lux (better data, since HA can fuse
   several sensors) — one `switch.<panel>_auto_brightness` plus a Dimmer↔Brighter bias, with the
   perceptual curve, smoothing and hysteresis baked in (no fiddly tuning).
+- **Proximity-calibration UX (0.8.0)** — the wake-on-wave calibration card reworked alongside
+  auto-brightness (shared sensor auto-ranging): an auto-scaled gauge, clearer capture steps, and a
+  per-device raw range — so the usable band fills the bar instead of bunching at one end.
 - **More performance tooling** — deeper on-device instrumentation to measure, diagnose and tune
   dashboard performance on weak panels.
 - **Built-in relay control beyond the S9E** — the same `switch.<panel>_relay*` model on other panels

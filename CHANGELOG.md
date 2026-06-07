@@ -4,6 +4,23 @@ Human-readable summaries of each release. The auto-generated commit list is appe
 notes on each [GitHub release](https://github.com/maxlyth/ha-paneld/releases). Cutting a release? Follow
 the pre-tag checklist in [docs/RELEASING.md](docs/RELEASING.md) (it starts with "check the README").
 
+## v0.7.1-rc1 - 2026-06-07
+
+Release candidate — UI/UX polish + per-panel device identity. Please review.
+
+- **Theme-aware App UI** — the on-panel standing screen now follows the panel's light/dark setting
+  (it was always dark); the wordmark switches via day/night drawables.
+- **README hero renders on both GitHub themes** — light/dark `<picture>` wordmark (the single
+  light-text image was near-invisible on GitHub's light theme).
+- **Stable HTTP performance table** — optional rows (CPU clock, GPU, load, temperature, rendering
+  load) latch with a `–` placeholder instead of vanishing, so the page no longer jumps as metrics
+  come and go.
+- **Per-panel HA device identity** — manufacturer/model defaults per panel (Sonoff / NSPanel Pro,
+  Tuya / TPA10, Electron / WF1589T, Smatek / S9E; inferred from `Build.*` on unknown panels). The
+  default model carries a " (ha-paneld)" suffix so the device is distinguishable from a co-installed
+  integration managing the same hardware; the Configure form's value overrides it verbatim.
+- **Security policy** — `SECURITY.md` + GitHub Private Vulnerability Reporting enabled.
+
 ## v0.7.0 - 2026-06-06
 
 Architecture-focused release (no new entities).
