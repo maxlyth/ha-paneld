@@ -17,4 +17,6 @@ object Tpa10 : DeviceProfile {
     override val zigbeeGatewayDir: String? = null
     override val relayBase: String? = null
     override val buttonLedGpioBase: Int? = null
+    override val manufacturer = "Tuya"
+    override val model = "TPA10"
 }

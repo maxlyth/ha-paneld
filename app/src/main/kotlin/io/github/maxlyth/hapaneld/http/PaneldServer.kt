@@ -328,10 +328,10 @@ report of this panel's hardware, firmware, SELinux, su and node probes for bug r
   <input name="panel_id" autocapitalize="none" autocorrect="off" spellcheck="false" value="$pid" pattern="[a-z0-9_]+" title="lowercase letters, digits, underscore" required></label>
  <label>Friendly name <small>(HA device name)</small>
   <input name="friendly_name" value="${esc(config.friendlyName)}" placeholder="Office Dash"></label>
- <label>Manufacturer <small>(HA device card)</small>
-  <input name="manufacturer" value="${esc(config.manufacturer)}" placeholder="Sonoff"></label>
- <label>Model <small>(HA device card)</small>
-  <input name="model" value="${esc(config.model)}" placeholder="NSPanel Pro 120"></label>
+ <label>Manufacturer <small>(HA device card; blank = ${esc(config.manufacturer)})</small>
+  <input name="manufacturer" value="${esc(config.manufacturerRaw)}" placeholder="${esc(config.manufacturer)}"></label>
+ <label>Model <small>(HA device card; blank = ${esc(config.model)})</small>
+  <input name="model" value="${esc(config.modelRaw)}" placeholder="${esc(config.model)}"></label>
  <label>MQTT broker
   <input name="mqtt_broker" autocapitalize="none" autocorrect="off" spellcheck="false" value="${esc(config.mqttBroker)}" placeholder="blank = auto-discover Home Assistant on the LAN"></label>
  <label>MQTT username

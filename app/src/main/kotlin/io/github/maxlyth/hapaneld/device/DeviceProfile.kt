@@ -47,6 +47,15 @@ interface DeviceProfile {
     /** First GPIO number of the button-LED block (e.g. 147 on the S9E), or null if none. */
     val buttonLedGpioBase: Int?
 
+    /** Default HA device-card manufacturer for this panel (e.g. "Sonoff"), or null to infer from
+     *  [Build.MANUFACTURER]. The user's Configure-form value always overrides. */
+    val manufacturer: String?
+
+    /** Default HA device-card model/product name (e.g. "NSPanel Pro"), or null to infer from
+     *  [Build.MODEL]. Published with a " (ha-paneld)" suffix so the device is distinguishable from a
+     *  co-installed integration managing the same hardware; the user's form value overrides verbatim. */
+    val model: String?
+
     companion object {
         /**
          * Pick the profile for the running device from [Build] fingerprints; [Generic] when none match.

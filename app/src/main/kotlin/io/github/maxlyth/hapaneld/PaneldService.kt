@@ -77,6 +77,7 @@ class PaneldService : Service() {
         // Detect the device profile once and hand it to the hardware-specific controllers (instead of
         // each re-detecting). The canonical per-platform silo for paths/quirks; see device/.
         profile = DeviceProfile.detect()
+        config.attachProfile(profile)   // supplies per-panel manufacturer/model defaults
 
         brightness = BrightnessController(this)
         screen = ScreenController(this, brightness)

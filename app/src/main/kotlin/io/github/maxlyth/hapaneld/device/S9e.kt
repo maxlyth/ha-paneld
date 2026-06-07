@@ -22,4 +22,6 @@ object S9e : DeviceProfile {
     override val zigbeeGatewayDir: String? = null
     override val relayBase = "/sys/class/st_relay"
     override val buttonLedGpioBase = 147
+    override val manufacturer = "Smatek"
+    override val model = "S9E"
 }

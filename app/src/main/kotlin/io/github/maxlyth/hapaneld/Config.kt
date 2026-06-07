@@ -3,6 +3,7 @@ package io.github.maxlyth.hapaneld
 import android.content.Context
 import android.os.Build
 import android.provider.Settings
+import io.github.maxlyth.hapaneld.device.DeviceProfile
 import java.util.Locale
 
 /**
@@ -112,8 +113,31 @@ class Config(context: Context) {
      * "Sonoff" / "NSPanel Pro 120". Default to the generic agent identity; ha-paneld's own version
      * is reported separately as the device `sw_version`.
      */
-    val manufacturer: String get() = prefs.getString("manufacturer", "ha-paneld")!!
-    val model: String get() = prefs.getString("model", "panel agent")!!
+    // The active device profile, attached once at service startup; supplies per-panel manufacturer/
+    // model defaults when the user hasn't set them. Null before attach (resolution falls back to Build).
+    @Volatile private var profile: DeviceProfile? = null
+    fun attachProfile(p: DeviceProfile) { profile = p }
+
+    /** Raw user-set values (empty if unset) — for the Configure form's input value. */
+    val manufacturerRaw: String get() = prefs.getString("manufacturer", "")!!
+    val modelRaw: String get() = prefs.getString("model", "")!!
+
+    /** Resolved HA device-card manufacturer: user value → profile default → inferred from Build. */
+    val manufacturer: String
+        get() = manufacturerRaw.ifBlank { null }
+            ?: profile?.manufacturer
+            ?: Build.MANUFACTURER.replaceFirstChar { it.titlecase(Locale.ROOT) }.ifBlank { "Unknown" }
+
+    /** Resolved HA device-card model. User value is used verbatim; otherwise the profile/inferred name
+     *  gets a " (ha-paneld)" suffix so this device is distinguishable from a co-installed integration
+     *  managing the same hardware (HA shows the model in the device list). */
+    val model: String
+        get() = modelRaw.ifBlank { null }
+            ?: ((profile?.model ?: inferredModel()) + " (ha-paneld)")
+
+    private fun inferredModel(): String =
+        listOf(Build.MODEL, Build.DEVICE, Build.PRODUCT).firstOrNull { !it.isNullOrBlank() } ?: "panel"
+
     fun setHardware(manufacturer: String, model: String) {
         prefs.edit().putString("manufacturer", manufacturer).putString("model", model).apply()
     }

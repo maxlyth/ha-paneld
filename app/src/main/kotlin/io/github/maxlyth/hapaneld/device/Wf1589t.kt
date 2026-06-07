@@ -17,4 +17,6 @@ object Wf1589t : DeviceProfile {
     override val zigbeeGatewayDir: String? = null
     override val relayBase: String? = null
     override val buttonLedGpioBase: Int? = null
+    override val manufacturer = "Electron"
+    override val model = "WF1589T"
 }

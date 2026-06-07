@@ -17,4 +17,6 @@ object Generic : DeviceProfile {
     override val zigbeeGatewayDir: String? = null
     override val relayBase: String? = null
     override val buttonLedGpioBase: Int? = null
+    override val manufacturer: String? = null   // infer from Build.MANUFACTURER
+    override val model: String? = null           // infer from Build.MODEL
 }

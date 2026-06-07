@@ -17,4 +17,6 @@ object NSPanelPro : DeviceProfile {
     override val zigbeeGatewayDir = "/vendor/bin/siliconlabs_host"
     override val relayBase: String? = null
     override val buttonLedGpioBase: Int? = null
+    override val manufacturer = "Sonoff"
+    override val model = "NSPanel Pro"
 }
