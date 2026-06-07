@@ -1,0 +1,30 @@
+# Non-blocking layout-stability (CLS) report. NEVER gates a build/merge — it posts a job summary that
+# flags regressions vs test/baseline.json and lists high-CLS cells as backlog. See test/README.md.
+name: UI layout (CLS) · report-only
+
+on:
+  push:
+    branches: [main]
+    paths: ['app/src/main/assets/**', 'test/**', '.github/workflows/ui-layout.yml']
+  pull_request:
+    paths: ['app/src/main/assets/**', 'test/**']
+  workflow_dispatch:
+
+jobs:
+  cls:
+    runs-on: ubuntu-latest
+    continue-on-error: true   # report-only — must never block development
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install chromium + playwright-core
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y chromium-browser || sudo apt-get install -y chromium
+          cd test && npm i
+      - name: Run CLS matrix (report-only)
+        run: |
+          CHROME="$(command -v chromium-browser || command -v chromium)" \
+            node test/layout-matrix.mjs | tee -a "$GITHUB_STEP_SUMMARY"

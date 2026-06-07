@@ -1,0 +1,67 @@
+<!doctype html>
+<!-- Layout-test fixture: the info page's card scaffold, loading the REAL info.css + info.js (no
+     duplication). The harness (test/layout-matrix.mjs) serves this from the repo root and mocks the
+     /perf, /proximity, /inspect REST endpoints with worst-case cycling data, then measures CLS. -->
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="stylesheet" href="/app/src/main/assets/info.css">
+</head><body><div class="wrap">
+<div class="hdr"><h1>ha-paneld <small>· fixture</small></h1></div>
+<div class="cards">
+
+<div class="card"><h2>Panel information</h2><table>
+<tr><th>ha-paneld</th><td>fixture</td></tr>
+<tr><th>Display</th><td>1920×1200 · 320 dpi</td></tr>
+<tr><th>Network ADB</th><td>active (5555) · not persistent (off after reboot)</td></tr>
+</table></div>
+
+<div class="card"><h2>Responsiveness <small id="smhdr"></small></h2>
+<canvas id="smchart" width="600" height="130" style="height:130px"></canvas>
+<div class="leg">main-thread CPU</div>
+<table id="smtbl"><tr><td style="color:#888">measuring…</td></tr></table></div>
+
+<div class="card"><h2>Performance <small id="perfage"></small></h2>
+<div style="display:flex;gap:6px;align-items:center;font-size:.78rem;margin-bottom:8px">
+ <span>Instrumentation</span>
+ <button type="button" class="pbtn" id="instron" onclick="instr(true)">On</button>
+ <button type="button" class="pbtn" id="instroff" onclick="instr(false)">Off</button></div>
+<canvas id="perfchart" width="600" height="96" style="height:96px"></canvas>
+<div class="leg">CPU/RAM/GPU</div>
+<table id="perf"><tr><td style="color:#888">sampling…</td></tr></table></div>
+
+<div class="card"><h2>Top processes <small>· by CPU</small></h2>
+<table class="dt" id="topproc"><tr><td style="color:#888">top processes…</td></tr></table></div>
+
+<div class="card"><h2>Proximity tuning <small id="proxstate"></small></h2>
+<div id="proxbox" style="display:none">
+<canvas id="proxgauge" width="600" height="46" style="height:46px"></canvas>
+<table><tr><th>Raw</th><td><span id="proxraw">–</span> · <span id="proxnear">FAR</span></td></tr>
+<tr><th>Threshold</th><td><span id="proxth">–</span></td></tr></table>
+<input id="proxslider" type="range" min="0" max="100" step="0.1" style="width:100%">
+<div class="gradedonly" style="display:flex;gap:6px;margin-top:6px">
+ <button class="pbtn psen gradedonly" data-s="HIGH" onclick="proxSen('HIGH')">High</button>
+ <button class="pbtn psen gradedonly" data-s="MEDIUM" onclick="proxSen('MEDIUM')">Med</button>
+ <button class="pbtn psen gradedonly" data-s="LOW" onclick="proxSen('LOW')">Low</button></div>
+<div style="display:flex;gap:6px;margin-top:6px">
+ <button class="pbtn" onclick="proxCap('near')">Capture near</button>
+ <button class="pbtn" onclick="proxCap('far')">Capture far</button>
+ <button class="pbtn" onclick="proxReset()">Reset</button></div>
+<p class="note" id="proxhint"></p></div></div>
+
+<div class="card"><h2>WebView DevTools <small id="insthdr"></small></h2>
+<p class="note" id="insthint"></p></div>
+
+<div class="card"><h2>Configuration</h2><form id="config">
+<label>Panel ID<input value="fixture"></label>
+<label>Friendly name<input value="Fixture Panel"></label>
+<label>MQTT broker<input value="tcp://192.0.2.1:1883"></label>
+<label>MQTT user<input value="integration"></label>
+<label>Dashboard package<input value="io.homeassistant.companion.android"></label>
+<button type="button">Save</button></form>
+<p class="note">A tall card so the page scrolls and the live cards above can be pushed off-screen.</p>
+<p class="note">Filler to ensure the Configuration card is well below the fold on a single column, so an
+off-screen live card reflow is what the CLS probe attributes to a viewport shift.</p></div>
+
+</div></div>
+<script src="/app/src/main/assets/info.js"></script>
+</body></html>
