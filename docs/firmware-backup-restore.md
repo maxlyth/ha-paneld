@@ -1,20 +1,23 @@
 # Firmware backup & restore (wall panels)
 
-**Start here — and don't worry.** You can make a *complete* backup of any panel **right now, over your
-network, with zero risk**: no cable, no buttons, no special hardware, nothing that can go wrong. That's
-[Back up now](#back-up-now) below, and it's the only part most people ever need.
+Wall panels have **no buttons** — no volume or power keys — so the standard Android recovery guides, which
+all start with "hold Volume-Down + Power to enter [fastboot](https://en.wikipedia.org/wiki/Fastboot)/recovery",
+simply can't work here. If you've already failed a few times following them, that's why: there's no
+button to hold. These are [Rockchip](https://en.wikipedia.org/wiki/Rockchip) panels, which use a
+different route — and this guide covers it.
 
-Restoring only matters if you later change firmware and something breaks — and even then these panels are
-**practically impossible to permanently brick**, because a recovery mode ([Maskrom](#why-these-panels-need-special-steps))
-lives in the chip itself. So: back up today with confidence, change firmware only if you want to, and
-know the safety net is there if you ever need it.
+A complete backup is easy and low-risk: it runs over the network, no cable, no mode changes
+([Back up now](#back-up-now)). Restoring is more involved — it needs a USB cable and a laptop — but these
+panels are practically impossible to permanently brick, because a recovery mode
+([Maskrom](#why-these-panels-need-special-steps)) lives in the chip itself. Back up first; change
+firmware only if you want to.
 
-This is the canonical how-to, using open-source, cross-platform tooling — no Windows-only vendor apps.[^tools]
+Canonical, open-source, cross-platform — no Windows-only vendor tools.[^tools]
 
 > [!NOTE]
-> **Backups are safe and routine; restores are the "in case of emergency" part.** The restore steps
-> haven't been brick-tested here yet, and a couple of per-panel details (the maskrom button, the loader
-> file) are still being confirmed — none of which affects taking a backup today, so do that first.
+> Backups are safe and routine. The restore steps are the recovery path and haven't been brick-tested
+> here yet — two per-panel details (the maskrom entry, the loader file) are still being confirmed.
+> Neither affects taking a backup today.
 
 ## Back up now
 
