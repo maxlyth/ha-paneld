@@ -1,19 +1,27 @@
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="app/src/main/res/drawable-night-nodpi/wordmark.png">
-    <img src="app/src/main/res/drawable-nodpi/wordmark.png" width="400" alt="ha-paneld">
-  </picture>
-</p>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="app/src/main/res/drawable-night-nodpi/wordmark.png">
+  <img src="app/src/main/res/drawable-nodpi/wordmark.png" width="360" alt="ha-paneld">
+</picture>
 
-A small Android agent for **wall-mounted Home Assistant panels**. It exposes panel-side hardware
-to Home Assistant over HTTP + MQTT auto-discovery + mDNS, so a panel pairs itself with HA when you
-sideload the APK — no per-device YAML.
+[![CI](https://img.shields.io/github/actions/workflow/status/maxlyth/ha-paneld/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/maxlyth/ha-paneld/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/maxlyth/ha-paneld?style=flat-square)](https://github.com/maxlyth/ha-paneld/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/maxlyth/ha-paneld/total?style=flat-square)](https://github.com/maxlyth/ha-paneld/releases)
+[![License](https://img.shields.io/github/license/maxlyth/ha-paneld?style=flat-square)](LICENSE)
+[![Last commit](https://img.shields.io/github/last-commit/maxlyth/ha-paneld?style=flat-square)](https://github.com/maxlyth/ha-paneld/commits/main)
+
+**ha-paneld is free, open-source, and exists to fix what's wrong with Home Assistant wall panels** —
+the per-vendor fragmentation, the sluggish dashboards, and the clunky manufacturer software you're
+otherwise stuck with. It gives one consistent, Home-Assistant-first integration for the
+LEDs, buttons, sensors, screen and TTS across panels from *different* makers, plus the tooling to make a
+dashboard actually feel fast on cheap hardware.
+
+It's a small Android agent that exposes panel-side hardware to Home Assistant over HTTP + MQTT
+auto-discovery + mDNS, so a panel pairs itself with HA when you sideload the APK — no per-device YAML.
 
 It is built for panel-class Android (Sonoff NSPanelPro, Tuya TPA10, and similar), **not** personal
-phones. The official [HA Companion app](https://github.com/home-assistant/android) (panels need the
-[current **minimal** release APK](https://github.com/home-assistant/android/releases/latest/download/app-minimal-release.apk),
-the no-Google-Play build) remains the HOME launcher and dashboard; ha-paneld runs as a headless
-foreground service alongside it and never takes the foreground.
+phones. The official [HA Companion app](https://github.com/home-assistant/android) remains the HOME
+launcher and dashboard; ha-paneld runs as a headless foreground service alongside it and never takes
+the foreground.
 
 ![ha-paneld's on-panel configuration page — responsive cards for panel info, capabilities, live performance and configuration](docs/img/config-ui.png)
 
@@ -26,8 +34,9 @@ frames and tune the dashboard to the panel instead of guessing. See the
 [performance comparison](docs/hardware/README.md#performance-comparison--practical-deployment) and
 [docs/performance.md](docs/performance.md).
 
-> **Status: v0.x preview.** Entity names and the API may still change before v1.0.0. It's an ordinary
-> app install — no root-partition or firmware changes — so it uninstalls cleanly if you change your mind.
+> [!NOTE]
+> **v0.x preview** — entity names and the API may still change before v1.0.0. It's an ordinary app
+> install (no root-partition or firmware changes), so it uninstalls cleanly if you change your mind.
 
 ## Install
 
@@ -42,6 +51,12 @@ No checkout, no parameters: it checks your tools (with fix-it hints if `adb`/`cu
 prompts for the panel IP (and optional id / MQTT broker), downloads the **latest signed release**, and
 provisions the panel. For scripted/fleet installs use [`scripts/provision.sh`](scripts/provision.sh)
 directly (see [Provisioning](#provisioning-no-device-ui-on-rooteduserdebug-panels)).
+
+> [!NOTE]
+> ha-paneld is the headless agent — your dashboard launcher is the
+> [HA Companion app](https://github.com/home-assistant/android). On panels without Google Play, install
+> its [**minimal** release APK](https://github.com/home-assistant/android/releases/latest/download/app-minimal-release.apk)
+> (the no-Google-Play build).
 
 ### Other ways to install
 
@@ -294,7 +309,12 @@ first-run CI. Newer AGP/Kotlin is fine to adopt during the v0.x line — version
 
 ### Signing — what forkers need to know
 
-You don't need to configure signing to build and run ha-paneld. Two cases:
+You don't need to configure signing to build and run ha-paneld.
+
+<details>
+<summary>Signing details — dev vs official builds, the key-mismatch gotcha, legacy device-admin, signing your own fork</summary>
+
+Two cases:
 
 - **Dev / fork builds** are signed with the **committed `debug.keystore`** (password `android`). It's
   in the repo on purpose — not a secret — so every build (yours, mine, CI's) shares one signature.
@@ -329,12 +349,14 @@ Use one password for both `ANDROID_KEYSTORE_PASSWORD` and `ANDROID_KEY_PASSWORD`
 (your alias) for `ANDROID_KEY_ALIAS`. Back up `release.jks` and the password safely — losing them
 means you can never publish an in-place update again. Never commit the keystore (`*.jks` is gitignored).
 
+</details>
+
 ## Status & roadmap
 
 Validated across the panel fleet: Sonoff NSPanel Pro (PX30, Android 8.1), Tuya TPA10 (rk3566,
 Android 11), Electron WF1589T (rk3576, Android 14).
 
-New in 0.7.1:
+**Latest release — 0.7.1:**
 
 - **Hardware buttons via the daemon's evdev reader** — the **WF1589T power button** no longer locks
   the panel; it publishes an `event.<panel>_button` event for an automation to act on (PMIC long-press
@@ -346,6 +368,9 @@ New in 0.7.1:
   desktop browser; root panels only. See [docs/display-sizing.md](docs/display-sizing.md).
 - **Per-panel HA device identity** — manufacturer/model defaults with a " (ha-paneld)" suffix so the
   device is distinguishable from a co-installed integration; theme-aware on-panel App UI.
+
+<details>
+<summary>Earlier releases (0.7.0 → 0.4.x) — full history in <a href="CHANGELOG.md">CHANGELOG.md</a></summary>
 
 New in 0.7.0 (architecture-focused — no new entities):
 
@@ -418,7 +443,9 @@ Carried from 0.4.x:
   matrix for bug reports. See **[docs/performance.md](docs/performance.md)** for panel performance
   tuning (the WebSocket-event-volume problem and how to fix it).
 
-Planned:
+</details>
+
+### Planned
 
 - **Auto-brightness (0.8.0)** — optional screen auto-dimming when the panel has a light sensor: a
   self-calibrating on-panel curve by default, or HA-fed room lux (better data, since HA can fuse
