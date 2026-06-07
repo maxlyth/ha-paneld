@@ -48,12 +48,28 @@ eMMC. **That means a maskrom rescue requires the matching loader binary — so b
 ## Tooling
 
 ```bash
-# rkdeveloptool — open-source, Linux. Build from source:
+# rkdeveloptool — open-source, built on libusb. Build from source:
 git clone https://github.com/rockchip-linux/rkdeveloptool && cd rkdeveloptool
 autoreconf -i && ./configure && make
 sudo cp rkdeveloptool /usr/local/bin/
-sudo cp 99-rk-rockusb.rules /etc/udev/rules.d/ && sudo udevadm control --reload
+sudo cp 99-rk-rockusb.rules /etc/udev/rules.d/ && sudo udevadm control --reload   # Linux only
 ```
+
+**Host requirements — not Linux-specific.** `rkdeveloptool` talks to the panel through **libusb**, so
+any host where libusb can claim the Rockchip USB device (VID `0x2207`) works — it's a USB-access
+requirement, not a POSIX one:
+
+| Host | Works? | How |
+| --- | --- | --- |
+| **Linux** | ✅ native | the `99-rk-rockusb.rules` udev rule (above) grants device access |
+| **macOS** | ✅ | `brew install automake autoconf libusb`, then the same `autoreconf/configure/make`; libusb claims the device directly |
+| **Windows / WSL2** | ✅ via `usbipd-win` | `usbipd bind` → `usbipd attach --wsl` forwards the USB device into WSL2, then run `rkdeveloptool` in the WSL Linux |
+| **Windows native** | ⚠️ legacy | `RKDevTool.exe` + Rockchip WinUSB driver (Zadig/DriverAssistant) — the old Windows-only path; WSL2 is the cleaner route |
+
+> [!TIP]
+> These panels do **`adb` over TCP** (network, port 5555), so the `adb reboot loader` step needs **no
+> USB at all**. USB is required only for the `rkdeveloptool` rockusb/maskrom stage — so on WSL2 you only
+> need `usbipd` to forward the rockusb device, sidestepping the known USB-adb passthrough quirks.
 
 Verified command set (from the tool's own `--help`; run `rkdeveloptool -h` to confirm your build):
 
@@ -71,8 +87,8 @@ Verified command set (from the tool's own `--help`; run `rkdeveloptool -h` to co
 | `ef` | erase flash |
 | `rd [subcode]` | reset the device (reboot) |
 
-You also need a physical **USB connection** from a Linux host to the panel — locate the port before you
-start (see [Per-panel reference](#per-panel-reference)).
+You also need a physical **USB connection** from your host (Linux / macOS / WSL2 — see table above) to
+the panel — locate the port before you start (see [Per-panel reference](#per-panel-reference)).
 
 ## Method A — Live backup over adb (recommended first; no mode change)
 
