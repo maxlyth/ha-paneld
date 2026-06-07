@@ -1,14 +1,9 @@
 # Panel hardware references
 
-Reverse-engineered hardware notes for the wall panels ha-paneld targets. These devices ship with
-almost no public documentation, so these notes record what is physically on each board and how to
-drive it — gathered from live units (rooted / userdebug `adb root`) on 2026-06-05.
-
-> [!TIP]
-> Before modifying firmware on a **button-less** panel, read
-> [Firmware backup & restore](../firmware-backup-restore.md) — these are all Rockchip devices, so the
-> usual button-combo fastboot/recovery advice does not apply; backup/restore goes via `adb reboot
-> loader` + `rkdeveloptool` (open-source, Linux), with maskrom as the un-brickable fallback.
+Reverse-engineered hardware fact sheets for the wall panels ha-paneld targets — SoC, LED control,
+sensors, buttons, NFC, Zigbee/IR, relays, adb/root access. These devices ship with almost no public
+documentation, so these notes record what is physically on each board and how to drive it, gathered
+from live units (rooted / userdebug `adb root`) on 2026-06-05.
 
 | Panel | SoC | LED control | Notable sensors | NFC | Zigbee/IR | Reference |
 |---|---|---|---|---|---|---|
@@ -18,6 +13,12 @@ drive it — gathered from live units (rooted / userdebug `adb root`) on 2026-06
 | Smatek S9E † | rk3566 | per-button GPIO LEDs (root) | radar proximity, light, temp+humidity; **2 mains relays** (`st_relay`); RS485 + Ethernet | no | **Zigbee** | [s9e.md](s9e.md) |
 
 † S9E specs are from Smatek's listing; control paths are from [#98](https://github.com/seaky/nspanel_pro_tools_apk/issues/98) + the HA community thread, **not** validated on a unit here — relay/button support is implemented but untested.
+
+> [!TIP]
+> Before modifying firmware on a **button-less** panel, read
+> [Firmware backup & restore](../firmware-backup-restore.md) — these are all Rockchip devices, so the
+> usual button-combo fastboot/recovery advice does not apply; backup/restore goes via `adb reboot
+> loader` + `rkdeveloptool` (open-source, Linux), with maskrom as the un-brickable fallback.
 
 ## Method
 
@@ -44,8 +45,12 @@ Each panel reaches adb/root differently; the per-panel pages have the full, firm
 
 ## Performance comparison & practical deployment
 
-Performance is the whole reason this project exists, so it's worth stating plainly: the three panel
-classes form a clear ladder. Figures below are from ha-paneld's own `/perf` endpoint + device specs.
+The three panel classes form a clear ladder: **NSPanel Pro (PX30)** entry-level, **TPA10 (rk3566)**
+mid, **WF1589T (rk3576)** high. Screen geometry is the first design constraint; on the 2 GB panels RAM
+is the binding one. Figures are from ha-paneld's own `/perf` endpoint + device specs.
+
+<details>
+<summary>Spec ladder (CPU / RAM / GPU / display)</summary>
 
 | | NSPanel Pro (PX30) | TPA10 (rk3566) | WF1589T (rk3576) |
 |---|---|---|---|
@@ -57,8 +62,12 @@ classes form a clear ladder. Figures below are from ha-paneld's own `/perf` endp
 | Layout (dp) | 160 dpi → 480×480 dp | 240 dpi (ovr 200) → ~1280×800 dp | 160 dpi (ovr 186) → 1920×1200 dp — UI tiny, [raise density](wf1589t.md#display-density--raise-it) |
 | Class | entry-level | mid | high |
 
-Live `/perf` snapshot (each panel under its own real workload — illustrative, not a controlled
-benchmark):
+</details>
+
+<details>
+<summary>Live `/perf` snapshot (illustrative, not a controlled benchmark)</summary>
+
+Each panel under its own real workload:
 
 | | PX30 (mostly idle) | WF1589T (active dashboard) |
 |---|---|---|
@@ -69,6 +78,8 @@ benchmark):
 | Responsiveness | smooth, main-thread 3.6 % | smooth, main-thread 25.9 % |
 
 (TPA10 sits between the two on CPU; its sampler was off during capture.)
+
+</details>
 
 **What this means for a real dashboard deployment:**
 
@@ -101,34 +112,9 @@ Play (NSPanel Pro, TPA10) can't auto-update it, so you must **sideload** a curre
 WebView dev channel) — no sideload needed.
 
 The clean way — **no F-Droid, no third-party app store** (the workarounds the NSPanel-Pro community
-threads resort to) — is a direct adb sideload of the standard Android System WebView:
-
-1. Download a current **Android System WebView** APK — package **`com.android.webview`**. The build that
-   works depends on the panel's Android version (see the table): the **LineageOS** Android System
-   WebView covers old Android (e.g. 8.1), **Cromite's SystemWebView** build covers newer Android — both
-   deliberately use the `com.android.webview` package, so they're picked as the provider automatically
-   (no allowlist editing, no extra app), and both are open / freely redistributable. Match your panel's
-   ABI; per-panel downloads are below.
-2. Sideload it (no root):
-
-   ```sh
-   adb install -r android-system-webview.apk
-   ```
-
-   It installs to `/data/app` and supersedes the stale stock WebView.
-3. Verify the active provider + version:
-
-   ```sh
-   adb shell dumpsys webviewupdate | grep "Current WebView package"
-   ```
-
-If the panel lists more than one provider, select it explicitly:
-
-```sh
-adb shell cmd webviewupdate set-webview-implementation com.android.webview
-```
-
-or via Developer options → *WebView implementation*.
+threads resort to) — is a direct adb sideload of the standard Android System WebView (package
+**`com.android.webview`**), matched to the panel's Android version and ABI. Per-panel known-working
+builds and the full sideload/verify steps are below.
 
 > [!TIP]
 > The package name must be `com.android.webview` for the system to select it automatically. Mind the
@@ -155,3 +141,40 @@ All mirrored builds live in the [**Panel WebView mirror** release](https://githu
 > - **APKMirror's *direct* download links are short-lived presigned URLs that expire within the hour** —
 >   use the page, or the ha-paneld Release assets above (durable). The mirror exists precisely because
 >   panels lack Play and ship years-old firmware, and a working build can otherwise take days to find.
+
+<details>
+<summary>Sideload + verify steps</summary>
+
+1. Download a current **Android System WebView** APK — package **`com.android.webview`**. The build that
+   works depends on the panel's Android version (see the table): the **LineageOS** Android System
+   WebView covers old Android (e.g. 8.1), **Cromite's SystemWebView** build covers newer Android — both
+   deliberately use the `com.android.webview` package, so they're picked as the provider automatically
+   (no allowlist editing, no extra app), and both are open / freely redistributable. Match your panel's
+   ABI; per-panel downloads are above.
+2. Sideload it (no root):
+
+   ```sh
+   adb install -r android-system-webview.apk
+   ```
+
+   It installs to `/data/app` and supersedes the stale stock WebView.
+3. Verify the active provider + version:
+
+   ```sh
+   adb shell dumpsys webviewupdate | grep "Current WebView package"
+   ```
+
+If the panel lists more than one provider, select it explicitly:
+
+```sh
+adb shell cmd webviewupdate set-webview-implementation com.android.webview
+```
+
+or via Developer options → *WebView implementation*.
+
+</details>
+
+---
+
+Per-panel fact sheets: [NSPanel Pro](nspanel-pro.md) · [TPA10](tpa10.md) · [WF1589T](wf1589t.md) ·
+[S9E](s9e.md).

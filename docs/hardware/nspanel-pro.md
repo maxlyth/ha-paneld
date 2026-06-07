@@ -1,8 +1,14 @@
 # Sonoff NSPanel Pro (Rockchip PX30 / rk3326)
 
-Hardware reference for the **Sonoff NSPanel Pro** (and Pro120) — the most common Home-Assistant wall
-panel on the market. Reverse-engineered on a live unit (Android 8.1, rooted, toolbox `su`) on
-2026-06-05.
+The most common Home-Assistant wall panel on the market: a small **480×480 square** PX30 panel with a
+built-in **Zigbee 3.0 coordinator**, no NFC/IR, and the lowest-power CPU of the panels documented here.
+Reverse-engineered on a live unit (Android 8.1, rooted, toolbox `su`) on 2026-06-05.
+
+> [!TIP]
+> Most-needed facts: ships **`userdebug` with no adb password** (`adb root` just works); **LED is not
+> characterised** (no controllable RGB node found); light + proximity are **app-direct**; the on-board
+> **EFR32 Zigbee radio** is managed over a local broker, not by reflashing. Update the **WebView first**
+> — see [WebView — update this first](#webview--update-this-first).
 
 | | |
 |---|---|
@@ -20,6 +26,11 @@ panel on the market. Reverse-engineered on a live unit (Android 8.1, rooted, too
 > The Cortex-A35 is an efficiency core with markedly lower per-clock throughput than the A55 (TPA10)
 > or A72 (WF1589T). Combined with 2 GB RAM, the NSPanel Pro is the **entry-level performer** of the
 > three panels documented here — see the [performance comparison](README.md#performance-comparison--practical-deployment).
+
+> [!TIP]
+> Changing firmware on a button-less panel? Read [Firmware backup & restore](../firmware-backup-restore.md)
+> first — the NSPanel Pro (PX30) uses [seaky's roottool/tools](../firmware-backup-restore.md#per-panel-notes)
+> rather than `rkdeveloptool`.
 
 ## Gaining adb + root access
 
@@ -73,7 +84,21 @@ The NSPanel Pro ships with a WebView/Chromium far too old to render a current Ho
 (blank/broken UI in the HA Companion app). Update it cleanly over adb — no root, no F-Droid; this unit
 runs Chromium **138** afterwards. See [Updating the system WebView](README.md#updating-the-system-webview).
 
-## Bound i2c devices (real hardware)
+## LED
+
+No `/sys/class/leds` RGB node and no `/dev/ledjni` were found on this unit, so there is **no
+app/​sysfs-controllable RGB LED characterised** on the NSPanel Pro (contrast the TPA10's `avsux` node
+and the WF1589T's `/dev/ledjni`). Screen brightness/backlight use the standard Android paths.
+
+## Sensors — light + proximity are app-direct
+
+Unlike the TPA10 (where light/temp are root-only), the NSPanel Pro exposes its Sensortek combo through
+standard `SensorManager`: `android.sensor.light`, `android.sensor.proximity`, and
+`android.sensor.accelerometer` — all readable by a normal app, no root. ha-paneld reads light +
+proximity here directly. No temperature/humidity sensor is fitted.
+
+<details>
+<summary>Bound i2c devices (real hardware)</summary>
 
 | i2c addr | driver / name | What it is |
 |---|---|---|
@@ -83,18 +108,7 @@ runs Chromium **138** afterwards. See [Updating the system WebView](README.md#up
 | `2-0046` | `ls_stk3a5x` + `ps_stk3a5x` | Sensortek **STK3A5x** ambient-light + proximity combo |
 | `2-0047` | `ls_stk3x3x` + `ps_stk3x3x` | Sensortek **STK3x3x** light + proximity (alt variant) |
 
-## Sensors — light + proximity are app-direct
-
-Unlike the TPA10 (where light/temp are root-only), the NSPanel Pro exposes its Sensortek combo through
-standard `SensorManager`: `android.sensor.light`, `android.sensor.proximity`, and
-`android.sensor.accelerometer` — all readable by a normal app, no root. ha-paneld reads light +
-proximity here directly. No temperature/humidity sensor is fitted.
-
-## LED
-
-No `/sys/class/leds` RGB node and no `/dev/ledjni` were found on this unit, so there is **no
-app/​sysfs-controllable RGB LED characterised** on the NSPanel Pro (contrast the TPA10's `avsux` node
-and the WF1589T's `/dev/ledjni`). Screen brightness/backlight use the standard Android paths.
+</details>
 
 ## Zigbee gateway
 
@@ -102,6 +116,19 @@ The NSPanel Pro has a built-in **Silicon Labs EFR32 Zigbee 3.0 radio** on UART `
 the box it is owned by the vendor daemon `/vendor/bin/siliconlabs_host/zgateway` and driven by the
 eWeLink apps (`com.eWeLinkNSPro.dev`, `com.eWeLinkControlPanel`) — i.e. the panel ships as an eWeLink
 Zigbee hub.
+
+ha-paneld manages this directly (v0.6.1+): `switch.<panel>_zigbee_router` turns the panel into a Zigbee
+router/repeater (starts the guard + ensures Repeater role) and back off (stops the guard + zstack,
+freeing the radio) — over the local broker, credential-free, no `ttyS5` handling. The router then
+appears as a normal device in your ZHA / Zigbee2MQTT coordinator.
+
+> [!NOTE]
+> Switching role is **not a reflash** — there is no `.gbl`/bootloader step anywhere; it just sets the
+> EZSP node type. For partition-level firmware work see
+> [Firmware backup & restore](../firmware-backup-restore.md).
+
+<details>
+<summary>EZSP host stack internals (broker topics, supervisor, role persistence)</summary>
 
 The radio runs **EZSP NCP firmware** (EFR32MG21, EZSP v8); `zgateway` is an EZSP *host* binary in
 `/vendor/bin/siliconlabs_host/`, kept alive by its own `guard_process.sh` supervisor (a 5-second loop,
@@ -112,16 +139,14 @@ boot-started) and controlled over a **local mosquitto broker** on `127.0.0.1:188
 - role switch: `zigbee/system/network-role/switch` ← `{"role":"Repeater"}`
 
 "Repeater" is router mode (extends an existing mesh — the supported sweet spot); the role persists in
-the NCP's NVM. Switching role is **not a reflash** — there is no `.gbl`/bootloader step anywhere; it
-just sets the EZSP node type. The vendor `zgateway` survives removal of the eWeLink *apps* (it lives in
-`/vendor`, not in an APK).
+the NCP's NVM. The vendor `zgateway` survives removal of the eWeLink *apps* (it lives in `/vendor`, not
+in an APK).
 
-ha-paneld manages this directly (v0.6.1+): `switch.<panel>_zigbee_router` turns the panel into a Zigbee
-router/repeater (starts the guard + ensures Repeater role) and back off (stops the guard + zstack,
-freeing the radio) — over the local broker, credential-free, no `ttyS5` handling. The router then
-appears as a normal device in your ZHA / Zigbee2MQTT coordinator. For a full standalone Zigbee2MQTT/ZHA
-coordinator *on the panel* instead, see [seaky/nspanel_pro_zigbee](https://github.com/seaky/nspanel_pro_zigbee),
-which swaps the host stack (heavier; not what ha-paneld does).
+For a full standalone Zigbee2MQTT/ZHA coordinator *on the panel* instead, see
+[seaky/nspanel_pro_zigbee](https://github.com/seaky/nspanel_pro_zigbee), which swaps the host stack
+(heavier; not what ha-paneld does).
+
+</details>
 
 ## Access model summary
 
@@ -145,3 +170,8 @@ Mitigations (all covered by ha-paneld + [docs/performance.md](../performance.md)
 lean, prefer the split-instance (HADS) approach to cut WebSocket event volume, and use ha-paneld's
 instrumentation (CPU clock/throttling, responsiveness, top-5 processes, 1-click WebView DevTools
 relay) to find what's actually costing frames on *this* hardware.
+
+---
+
+See the [panel hardware index](README.md) for the cross-panel comparison and method, and the
+[TPA10](tpa10.md) / [WF1589T](wf1589t.md) / [S9E](s9e.md) references for the other panels.

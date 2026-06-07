@@ -1,8 +1,14 @@
 # Tuya TPA10 (Rockchip rk3566)
 
-Hardware reference for the **TPA10** wall panel, reverse-engineered on a live unit (Android 11,
-rooted, `su` present) on 2026-06-05. These panels are essentially undocumented publicly; this records
-what is on the board and how to drive it.
+A roomy **10" 1920×1200** rk3566 panel with a single front RGB LED, a monochrome button backlight, a
+rich sensor stack (ToF proximity, temperature + humidity, ambient light) and five physical buttons — no
+Zigbee, NFC or IR. Reverse-engineered on a live unit (Android 11, rooted, `su` present) on 2026-06-05.
+
+> [!TIP]
+> Most-needed facts: adb is **password-protected** — use the USB diagnostics-app backdoor; LED and the
+> root-only sensors need the **`hapaneld-ledd` root helper daemon**; the front LED's
+> `custom_animation` write can **reboot the panel** (see caution below). Update the **WebView first** —
+> see [WebView — update this first](#webview--update-this-first).
 
 | | |
 |---|---|
@@ -12,6 +18,11 @@ what is on the board and how to drive it.
 | ABI | armeabi-v7a (32-bit userspace) |
 | Radios | Wi-Fi, Bluetooth + BLE, plus a vendor `com.smartos.xinch.platform.ethernet` feature (wired/PoE). **No zigbee, no NFC, no IR, no cellular.** |
 | Root | `su` available; the LED/sysfs sensors are `system:system`, so a **root helper daemon is required** (see below). |
+
+> [!TIP]
+> Changing firmware on a button-less panel? Read [Firmware backup & restore](../firmware-backup-restore.md)
+> first — the TPA10 (rk3566, Android 11, 7.28 GB eMMC `mmcblk2`) uses `adb reboot loader` +
+> `rkdeveloptool`, with the recessed [pin-hole button](#buttons) as the maskrom/recovery route.
 
 ## Gaining adb + root access
 
@@ -42,19 +53,29 @@ adb tcpip 5555
 # thereafter from any host: adb connect <panel-ip>:5555
 ```
 
-**Alternative — the adb password (network, no USB).** The "Enable ADB" toggle in Developer options
-asks for a password derived from `ro.tuya.uuid` and the device ID on the *About* page, by the
-`checkDevPassword` logic inside `com.smartos.xinch.setting`. The community recipe in #123 (last 3
-characters of each, base64, last 6 characters — e.g. uuid…`11a` + device…`xia` → `FheGlh`) does **not**
-reproduce cleanly on every unit, so if it is rejected, recover the exact value by decompiling that app
-or by grepping `logcat` for `checkDevPassword` while entering a guess. The USB backdoor above avoids
-this step entirely.
-
 > [!CAUTION]
 > Disable the vendor `com.smartos.xinch.*` packages only as the **very last step**, after confirming
 > adb is solid *and* you have a replacement for the hardware buttons. Disabling the hardware/setting
 > apps before adb is reliable can lock you out. ha-paneld's remote nav actions (Back/Recents) and the
 > button-backlight/LED entities replace the vendor app's functions.
+
+<details>
+<summary>Alternative — the adb password (network, no USB)</summary>
+
+The "Enable ADB" toggle in Developer options asks for a password derived from `ro.tuya.uuid` and the
+device ID on the *About* page, by the `checkDevPassword` logic inside `com.smartos.xinch.setting`. The
+community recipe in #123 (last 3 characters of each, base64, last 6 characters — e.g. uuid…`11a` +
+device…`xia` → `FheGlh`) does **not** reproduce cleanly on every unit, so if it is rejected, recover
+the exact value by decompiling that app or by grepping `logcat` for `checkDevPassword` while entering a
+guess. The USB backdoor above avoids this step entirely.
+
+</details>
+
+> [!NOTE]
+> The vendor's on-device apps were *not* a useful RE source: `com.tuya.devicetest` is odex'd (no dex in
+> the APK), and `com.smartos.xinch.hardware` bundles the Tuya **AVS (Alexa) SDK** (`libLibSampleApp.so`,
+> 17 MB) plus a key-reader (`libjnimain.so`). The authoritative source is the device's own
+> self-documenting sysfs nodes.
 
 ## WebView — update this first
 
@@ -64,23 +85,12 @@ Companion app shows a blank/broken dashboard until you update it. The verified-w
 installed by a clean adb sideload — no root, no F-Droid. Download + method:
 [Updating the system WebView](README.md#updating-the-system-webview).
 
-The vendor's on-device apps were *not* a useful RE source: `com.tuya.devicetest` is odex'd (no dex in
-the APK), and `com.smartos.xinch.hardware` bundles the Tuya **AVS (Alexa) SDK** (`libLibSampleApp.so`,
-17 MB) plus a key-reader (`libjnimain.so`). The authoritative source is the device's own
-self-documenting sysfs nodes.
+## LED
 
-## RGB LED — `avsux` driver (root helper daemon)
+### RGB LED — `avsux` driver (root helper daemon)
 
 The front RGB LED is a **single** LED (`avsux_info` → `led type:[single] nums:[1]`) on the
-`leds_pwm_avs` platform driver (device `avsux`), exposed at `/sys/class/leds/avs-pwm-led/`:
-
-| Attribute | Perm | Use |
-|---|---|---|
-| `brightness` | `system:system` rw | overall level 0–255 |
-| `avsux_animation` | `system:system` rw | safe colour/animation write |
-| `avsux_select` | `system:system` rw | `custom_animation[][0][0]:<dur_ms>:<RRGGBB>[,…≤12 slots]` |
-| `avsux_firmware` | r | lists named animations (`bootanime`, `idle`) |
-| `avsux_info` | r | metadata (LED count/type) |
+`leds_pwm_avs` platform driver (device `avsux`), exposed at `/sys/class/leds/avs-pwm-led/`.
 
 > [!CAUTION]
 > Writing `custom_animation` to `avsux_select` has been observed to **reboot the panel**. Use
@@ -92,14 +102,60 @@ ha-paneld therefore ships a small **root helper daemon** (`/system/bin/hapaneld-
 socket) that the app talks to; `SocketLedController` is the client. See
 [`helper/README.md`](../../helper/README.md).
 
-## Button backlight
+<details>
+<summary>`avs-pwm-led` sysfs attributes</summary>
+
+| Attribute | Perm | Use |
+|---|---|---|
+| `brightness` | `system:system` rw | overall level 0–255 |
+| `avsux_animation` | `system:system` rw | safe colour/animation write |
+| `avsux_select` | `system:system` rw | `custom_animation[][0][0]:<dur_ms>:<RRGGBB>[,…≤12 slots]` |
+| `avsux_firmware` | r | lists named animations (`bootanime`, `idle`) |
+| `avsux_info` | r | metadata (LED count/type) |
+
+</details>
+
+### Button backlight
 
 `/sys/class/leds/button-backlight/brightness` — **monochrome** PWM, 0–255 (standard `leds_pwm`
 driver, device `pwmleds`). `system:system` 0664, so driven through the same `hapaneld-ledd` daemon.
 
+## Sensors
+
+Proximity is app-direct via `SensorManager`; temperature, humidity and ambient light are root-only
+(input subsystem / i2c) and need the helper daemon.
+
+> [!TIP]
+> The CHT8305 makes this panel a viable **room temperature/humidity sensor** for Home Assistant —
+> read it via the root helper daemon and publish over MQTT. Not yet implemented.
+
+The TPA10 ToF means proximity is genuinely distance-based, but the Android HAL quantises it; ha-paneld
+calibrates the reported value (near/far capture) rather than trusting a fixed cutoff.
+
+<details>
+<summary>Sensor chips + access paths</summary>
+
+| Sensor | Chip | Access |
+|---|---|---|
+| Proximity (ToF) | Vishay **VI5300** (i2c-3 `0x6c`, `proximity_vi5300`, 30 ms poll) | Android `SensorManager` `TYPE_PROXIMITY` (no root). Raw mm distance on the driver's i2c node (`…/i2c-3/3-006c`) needs root. |
+| Temperature + humidity | **CHT8305** (`temperature_cht8305` @3-0040, `humidity_cht8305` @3-0040-1) | **Not** in `SensorManager`; reports via the **input subsystem** on i2c — root only. |
+| Ambient light | **CG5256** (`light_cg5256`) | Not in `SensorManager` (root). |
+
+</details>
+
 ## Buttons
 
 The TPA10 has **three classes** of physical button, confirmed on-device with `getevent` (2026-06):
+
+- **The four side buttons** — `adc-keys`, standard KeyEvents mapped to `F1`–`F4`, captured by
+  ha-paneld's accessibility key-filter (no special path).
+- **The 5th (orange) button** — an `EV_SW` *switch*, not a key; instrumented through the root helper
+  daemon's evdev reader and emitted as an HA event.
+- **The pin-hole button** (recessed, beside the USB-C port) — recovery / reflash only, **not**
+  HA-instrumentable.
+
+<details>
+<summary>Per-button detail (scancodes, evdev, recovery role)</summary>
 
 **1. The four side buttons — `adc-keys`, standard KeyEvents.**
 On the rk3566 **SARADC** (`fe720000.saradc`), device `adc-keys1` (`/dev/input/event7`), scancodes
@@ -120,24 +176,12 @@ Not wired to the Linux input subsystem (absent from `getevent`, `gpio-keys`, and
 **not HA-instrumentable**. By placement and platform (Rockchip rk3566) it serves the usual recessed-pin
 roles: a **factory-reset / default** trigger (paperclip or SIM tool, hold ~5–10 s) and the Rockchip
 **MASKROM/loader** pin — grounding it forces the SoC into USB flashing mode for low-level recovery with
-`rkdeveloptool`. Use it for un-bricking / reflashing, not for automation.
+`rkdeveloptool` (see [Firmware backup & restore](../firmware-backup-restore.md)). Use it for
+un-bricking / reflashing, not for automation.
 
-## Sensors
+</details>
 
-| Sensor | Chip | Access |
-|---|---|---|
-| Proximity (ToF) | Vishay **VI5300** (i2c-3 `0x6c`, `proximity_vi5300`, 30 ms poll) | Android `SensorManager` `TYPE_PROXIMITY` (no root). Raw mm distance on the driver's i2c node (`…/i2c-3/3-006c`) needs root. |
-| Temperature + humidity | **CHT8305** (`temperature_cht8305` @3-0040, `humidity_cht8305` @3-0040-1) | **Not** in `SensorManager`; reports via the **input subsystem** on i2c — root only. |
-| Ambient light | **CG5256** (`light_cg5256`) | Not in `SensorManager` (root). |
-
-> [!TIP]
-> The CHT8305 makes this panel a viable **room temperature/humidity sensor** for Home Assistant —
-> read it via the root helper daemon and publish over MQTT. Not yet implemented.
-
-The TPA10 ToF means proximity is genuinely distance-based, but the Android HAL quantises it; ha-paneld
-calibrates the reported value (near/far capture) rather than trusting a fixed cutoff.
-
-## Other
+## Other silicon
 
 Camera GalaxyCore **GC05A2 / GC5035**; audio codec **ES7202**; Goodix touch; `rk808`/`rk860` PMIC.
 
@@ -148,3 +192,8 @@ Camera GalaxyCore **GC05A2 / GC5035**; audio codec **ES7202**; Goodix touch; `rk
 - **Temp / humidity / light**: root only (input subsystem / i2c) → would need the daemon.
 - **Buttons**: 4 side buttons app-direct (KeyEvents via a11y); 5th orange button is an `EV_SW` switch
   → via `hapaneld-ledd` evdev watch; pin-hole button is recovery/maskrom (not input).
+
+---
+
+See the [panel hardware index](README.md) for the cross-panel comparison and method, and the
+[NSPanel Pro](nspanel-pro.md) / [WF1589T](wf1589t.md) / [S9E](s9e.md) references for the other panels.
