@@ -18,7 +18,7 @@ android {
         minSdk = 26
         targetSdk = 35
         versionCode = 18
-        versionName = "0.7.1"
+        versionName = "0.7.1-rc2"
 
         // Only the fleet's ARM ABIs — bounds the native LED lib (libhapaneld_led.so) + APK size.
         ndk {
