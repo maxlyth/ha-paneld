@@ -30,9 +30,17 @@ Newline-terminated ASCII on `127.0.0.1:8889`. One or more commands per connectio
 | `BTN <0..255>` | button-backlight brightness | `OK` / `ERR` |
 | `SCREEN ON` / `SCREEN OFF` | screen backlight power (`bl_power` 0/4) | `OK` / `ERR` |
 | `RELOAD <pkg>` | force-stop + relaunch an app (dashboard reload) | `OK` / `ERR` |
+| `START <pkg/cls>` | launch an activity by component (root, bypasses BAL limits) | `OK` / `ERR` |
+| `WATCH <evdev> <0\|1>` | read an input node; `1` = `EVIOCGRAB` it (suppress the default Android action). Idempotent per node | `OK` / `ERR` |
+| `SUBSCRIBE` | this connection then receives async `KEY <code> <value>` / `SW <code> <value>` lines for every event from `WATCH`ed nodes, until it disconnects | `OK` |
 | `REBOOT` | reboot the panel | `OK` (then down) |
 | `PING` | liveness probe | `OK` |
 | anything else | — | `ERR` |
+
+`WATCH`/`SUBSCRIBE` instrument physical buttons the Android input pipeline doesn't deliver to a
+sandboxed app — e.g. the WF1589T power key (grabbed so it no longer sleeps the panel) and the TPA10
+orange button (an `EV_SW` switch, not a key). The **app** chooses which node to watch and whether to
+grab it, from its `DeviceProfile`; the daemon streams raw events and the app decides what each means.
 
 `SCREEN OFF` powers the display backlight down at the hardware level (true off) while leaving the
 device Awake — no keyguard, so it wakes without a PIN. This is why a panel with a device PIN needs
@@ -52,6 +60,66 @@ on many panels) and `lockNow()` would force the keyguard.
 
 A set colour **holds** until the next command (no auto-revert); `OFF` writes black. Handing the LED
 back to the vendor's idle animation currently requires a reboot.
+
+## Extending the helper (contributor guide)
+
+ha-paneld's per-panel knowledge lives in **`DeviceProfile`** silos on the app side — one file per
+panel (`device/Tpa10.kt`, `device/Wf1589t.kt`, …). The intent is that adding a panel means writing
+**one profile file** and nothing else. The daemon is designed to honour that same separation: it
+should be **panel-blind**, exposing *generic, parameterised primitives* while the profile decides
+which to use and with what targets.
+
+How well each capability meets that today:
+
+| Capability | Where panel specifics live | New-panel change |
+| --- | --- | --- |
+| **Buttons** (`WATCH`/`SUBSCRIBE`) | the app passes the evdev node + grab flag from its profile; daemon streams raw events | **profile only** — no daemon change |
+| **Screen** (`SCREEN`) | daemon auto-discovers `/sys/class/backlight` | **none** (optionally accept an app-supplied path for multi-backlight panels) |
+| **Reboot / reload / start** | generic `am`/`svc` | **none** |
+| **LED** (`RGB`/`OFF`/`BTN`) | **hardcoded** to the TPA10 sysfs node + its `avsux` write format | **core change** — see below |
+
+> [!NOTE]
+> **Buttons are the reference pattern.** `WATCH` takes the target *as a parameter from the profile*,
+> constrained to a `/dev/input/` prefix. A new panel with an unusual physical button needs **zero**
+> daemon edits — just an `evdevButtons` entry in its `DeviceProfile`. New capabilities should copy
+> this shape.
+
+### The one current seam: LED
+
+`RGB`/`OFF`/`BTN` hardcode the TPA10 node paths (`avs-pwm-led/avsux_animation`,
+`button-backlight/brightness`) and that panel's `HOLD_MS:RRGGBB` write format. A panel with a
+root-only LED at a *different* path or format can't be added without editing the shared
+`set_rgb`/`write_node` core. The intended fix — not yet needed, as the TPA10 is the only daemon-LED
+panel (rk3576/px30 drive LEDs app-direct) — is to **parameterise it like `WATCH`**:
+
+```text
+LED <node> <payload>        # app supplies the target + payload from its DeviceProfile
+```
+
+constrained to a `/sys/class/leds/` prefix with bounded values. That moves per-panel LED specifics
+into the profile and returns the daemon to panel-blind. Until then, **LED-via-daemon is the one path
+that requires a core PR** — a contributor adding it should expect to touch shared C and have it
+reviewed for the safety model below.
+
+### Adding a new device class (i2c, IR, haptics, …)
+
+The daemon is the right home for any capability that needs **root or system privilege a sandboxed
+app can't reach** — e.g. an i2c sensor whose sysfs is `system`-owned, an IR blaster `/dev` node, a
+PWM/haptic. The extension recipe:
+
+1. Add a verb to the `handle()` dispatcher in `ledd.c` with a small, self-contained handler.
+2. **Take the target as a parameter** from the app (don't hardcode a panel's path), and **whitelist
+   it by class prefix** — the way `WATCH` restricts to `/dev/input/` and a future `LED` would
+   restrict to `/sys/class/leds/`. For a reader (i2c/sensor), stream values to `SUBSCRIBE`rs using
+   the existing async-line mechanism.
+3. Keep the safety model intact: bind `127.0.0.1` only, bound every buffer, validate/clamp inputs,
+   sanitise anything passed to `am`/`svc`, never write firmware-backed nodes (see the CAUTION above).
+4. Publish the matching HA entity from the app per `DeviceProfile` capability — the daemon stays the
+   privileged mechanism, the profile stays the policy.
+
+A genuinely new *primitive* is the one acceptable reason to change the core daemon; per-panel
+*selection* of existing primitives must stay in the `DeviceProfile`. That boundary keeps a unique
+panel's contribution to a single profile file wherever the underlying primitive already exists.
 
 ## Build
 
