@@ -128,3 +128,29 @@ plaintext server; no Ava code). The protocol covers ha-paneld's needs and is a v
 **Remaining for full coverage (same pattern as light — next):** switch/number/select/text/button/
 binary_sensor/sensor/event entity flows (read each `ListEntities*/State*/Command*`, wire to the existing
 controller). Then the A/B + migration plan above.
+
+### Multi-type RESULTS (2026-06-08, overnight) — full entity surface validated
+
+Expanded the server to one entity of each type ha-paneld uses, wired to real controllers, all validated
+on real HA 2026.6 (office, dual-stack with MQTT — entities appear as the `_2` variants):
+
+| type | entity | result |
+| --- | --- | --- |
+| light | screen | cmd 76/255 + state read-back ✓ |
+| switch | wake_on_wave | turn_off → applied + echoed off ✓ |
+| number | volume | set 50 → panel 46 (hardware volume-step quantization) + echoed ✓ |
+| sensor | illuminance | entity present + reporting (state-only) ✓ |
+| binary_sensor | proximity | entity present + reporting (state-only) ✓ |
+| button | reload | entity registered (command-only; not pressed — would reload the live dashboard) ✓ |
+
+All structural shapes proven: command+state (bool/float), state-only, command-only. **The ESPHome native
+API covers ha-paneld's entire entity surface.**
+
+**Remaining (quick, same patterns — not blockers):**
+- `select` (cpu_governor — enum cmd+state, like switch), `text` (navigate — string cmd+state, like number),
+  `event` (button events — one-shot via ButtonBus). ~20 lines each.
+- **mDNS** `_esphomelib._tcp` advertise (auto-discovery; for the spike the device was added by host:port).
+- **A/B + migration** (per the plan above): dual-stack on a panel for a soak; then per-panel entity_id
+  rename + recorder-listener history preservation if switching.
+- Decide MQTT-only / ESPHome / BOTH for v1.0 — but the protocol is now de-risked: it works, in Kotlin,
+  with no Ava code, on the official MIT .proto.
