@@ -407,6 +407,10 @@ Carried from 0.4.x:
 
 Planned:
 
+- **Auto-brightness (0.8.0)** — optional screen auto-dimming when the panel has a light sensor: a
+  self-calibrating on-panel curve by default, or HA-fed room lux (better data, since HA can fuse
+  several sensors) — one `switch.<panel>_auto_brightness` plus a Dimmer↔Brighter bias, with the
+  perceptual curve, smoothing and hysteresis baked in (no fiddly tuning).
 - **More performance tooling** — deeper on-device instrumentation to measure, diagnose and tune
   dashboard performance on weak panels.
 - **Built-in relay control beyond the S9E** — the same `switch.<panel>_relay*` model on other panels
