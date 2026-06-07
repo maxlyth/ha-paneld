@@ -16,6 +16,7 @@ import io.github.maxlyth.hapaneld.control.AdbController
 import io.github.maxlyth.hapaneld.device.DeviceProfile
 import io.github.maxlyth.hapaneld.input.EvdevButtonClient
 import io.github.maxlyth.hapaneld.control.AutoBrightnessController
+import io.github.maxlyth.hapaneld.esphome.EspHomeServer
 import io.github.maxlyth.hapaneld.control.BrightnessController
 import io.github.maxlyth.hapaneld.control.CpuController
 import io.github.maxlyth.hapaneld.control.NavigateController
@@ -70,6 +71,7 @@ class PaneldService : Service() {
     private lateinit var relay: RelayController
     private lateinit var cpu: CpuController
     private lateinit var adb: AdbController
+    private lateinit var esphome: EspHomeServer   // spike: ESPHome native-API server (dual-stack w/ MQTT)
     private lateinit var profile: DeviceProfile
     private var configUrl: String? = null
 
@@ -94,6 +96,14 @@ class PaneldService : Service() {
         relay = RelayController(profile)
         cpu = CpuController(profile)
         adb = AdbController()
+        // SPIKE: ESPHome native-API server, dual-stack alongside MQTT. mac = androidId's first 12 hex.
+        val mac = config.androidId.padEnd(12, '0').take(12).chunked(2).joinToString(":").uppercase()
+        esphome = EspHomeServer(
+            deviceName = config.panelId, macAddress = mac, version = Config.VERSION,
+            friendlyName = config.friendlyName, model = config.model, manufacturer = config.manufacturer,
+            getBrightness = { brightness.getBrightness() }, setBrightness = { brightness.setBrightness(it) },
+            wake = { screen.wake() }, sleep = { screen.sleep() },
+        )
         configUrl = localIpv4()?.let { "http://$it:${config.httpPort}/" }
 
         mqtt = buildMqtt()
@@ -215,6 +225,7 @@ class PaneldService : Service() {
             server.start()
             mdns.start()
             mqtt.start()
+            esphome.start()   // spike: ESPHome native-API server on :6053 (plaintext)
             sensors.start(
                 onLux = { lux -> mqtt.publishLight(lux) },
                 onLuxRaw = { lux -> autoBright.submitLux(lux) },
@@ -261,6 +272,7 @@ class PaneldService : Service() {
         runCatching { server.stop() }
         runCatching { mdns.stop() }
         runCatching { mqtt.stop() }
+        runCatching { esphome.stop() }
         scope.cancel()
         super.onDestroy()
     }

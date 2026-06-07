@@ -104,6 +104,9 @@ dependencies {
 
     // QR code for the on-device config URL (pure-Java encoder; no Android transitive deps).
     implementation("com.google.zxing:core:3.5.3")
+
+    // ESPHome native-API spike — protobuf bindings module (spike/esphome-api).
+    implementation(project(":esphome"))
 }
 
 // Compile the CDP relay (helper/cdprelay.c) into assets at build time for the fleet ABIs, using the
