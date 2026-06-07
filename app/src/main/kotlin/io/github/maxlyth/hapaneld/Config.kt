@@ -107,6 +107,20 @@ class Config(context: Context) {
         prefs.edit().putBoolean("auto_return_dashboard", on).apply()
     }
 
+    // Optional on-panel auto-brightness engine (see control/AutoBrightnessController). Default OFF →
+    // ha-paneld stays a pure brightness actuator; HA drives the screen. When ON, the engine maps a lux
+    // stream (panel ALS where present, else HA-fed) to the backlight.
+    val autoBrightness: Boolean get() = prefs.getBoolean("auto_brightness", false)
+    fun setAutoBrightness(on: Boolean) {
+        prefs.edit().putBoolean("auto_brightness", on).apply()
+    }
+
+    /** Dimmer(−) ↔ Brighter(+) bias added to the auto-brightness curve, in 0–255 brightness units. */
+    val brightnessBias: Int get() = prefs.getInt("brightness_bias", 0)
+    fun setBrightnessBias(v: Int) {
+        prefs.edit().putInt("brightness_bias", v.coerceIn(-100, 100)).apply()
+    }
+
     /**
      * HA device card manufacturer/model. The OS Build props are the generic SoC platform
      * (e.g. `rockchip`/`px30_evb`), not the product, so these are configurable — set e.g.

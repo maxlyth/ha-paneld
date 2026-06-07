@@ -15,6 +15,7 @@ import androidx.core.app.NotificationCompat
 import io.github.maxlyth.hapaneld.control.AdbController
 import io.github.maxlyth.hapaneld.device.DeviceProfile
 import io.github.maxlyth.hapaneld.input.EvdevButtonClient
+import io.github.maxlyth.hapaneld.control.AutoBrightnessController
 import io.github.maxlyth.hapaneld.control.BrightnessController
 import io.github.maxlyth.hapaneld.control.CpuController
 import io.github.maxlyth.hapaneld.control.NavigateController
@@ -58,6 +59,7 @@ class PaneldService : Service() {
 
     // Controllers are fields so the MQTT bridge can be rebuilt on a panel_id change.
     private lateinit var brightness: BrightnessController
+    private lateinit var autoBright: AutoBrightnessController
     private lateinit var screen: ScreenController
     private lateinit var led: LedController
     private lateinit var navigate: NavigateController
@@ -81,6 +83,7 @@ class PaneldService : Service() {
         config.attachProfile(profile)   // supplies per-panel manufacturer/model defaults
 
         brightness = BrightnessController(this)
+        autoBright = AutoBrightnessController(brightness, config)
         screen = ScreenController(this, brightness)
         led = LedFactory.detect(profile)
         navigate = NavigateController(this)
@@ -110,7 +113,7 @@ class PaneldService : Service() {
         sensors.hasLight(), sensors.hasProximity(),
         sensors.hasTemperature(), sensors.hasHumidity(),
         // Button backlight lives on the sysfs/daemon LED panels (TPA10), reached via the daemon's BTN.
-        led is SocketLedController, configUrl,
+        led is SocketLedController, autoBright, configUrl,
         // When no broker is configured, find HA on the LAN via mDNS and default to its :1883.
         discoverHaIp = { mdns.discoverHaIp() },
     )
@@ -209,6 +212,7 @@ class PaneldService : Service() {
             mqtt.start()
             sensors.start(
                 onLux = { lux -> mqtt.publishLight(lux) },
+                onLuxRaw = { lux -> autoBright.submitLux(lux) },
                 onProximity = { near ->
                     mqtt.publishProximity(near)
                     // Wake-on-wave: local, instant, wake-only. onProximity fires only on far->near

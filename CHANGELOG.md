@@ -6,6 +6,11 @@ the pre-tag checklist in [docs/RELEASING.md](docs/RELEASING.md) (it starts with 
 
 ## v0.8.0 - Unreleased
 
+- **Auto-brightness (opt-in)** — `switch.<panel>_auto_brightness` drives the screen backlight from a lux
+  stream: the panel's own ambient-light sensor where present, or HA-fed `number.<panel>_ambient_lux` on
+  sensor-less panels (e.g. the WF1589T). **Asymmetric response** — snappy on a sudden lights-on step,
+  heavily smoothed on slow daylight drift and sensor noise — with a Dimmer↔Brighter
+  `number.<panel>_brightness_bias`. Off by default (ha-paneld stays a pure actuator otherwise).
 - **Firmware backup & restore guide for button-less panels** — wall panels have no volume/power
   buttons, so the usual "hold a button combo for fastboot/recovery" advice is a non-starter. These are
   all Rockchip devices, so new [docs/firmware-backup-restore.md](docs/firmware-backup-restore.md)

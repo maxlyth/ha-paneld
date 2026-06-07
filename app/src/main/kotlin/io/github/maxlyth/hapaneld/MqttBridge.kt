@@ -7,6 +7,7 @@ import com.hivemq.client.mqtt.datatypes.MqttQos
 import com.hivemq.client.mqtt.mqtt5.Mqtt5AsyncClient
 import com.hivemq.client.mqtt.mqtt5.message.publish.Mqtt5Publish
 import io.github.maxlyth.hapaneld.control.AdbController
+import io.github.maxlyth.hapaneld.control.AutoBrightnessController
 import io.github.maxlyth.hapaneld.control.BrightnessController
 import io.github.maxlyth.hapaneld.control.CpuController
 import io.github.maxlyth.hapaneld.control.NavigateController
@@ -20,6 +21,7 @@ import io.github.maxlyth.hapaneld.hardware.LedController
 import io.github.maxlyth.hapaneld.input.ButtonBus
 import io.github.maxlyth.hapaneld.input.PanelAccessibilityService
 import io.github.maxlyth.hapaneld.util.HelperClient
+import kotlin.math.roundToInt
 import org.json.JSONObject
 import java.net.URI
 
@@ -62,6 +64,8 @@ class MqttBridge(
     private val hasTemperature: Boolean,
     private val hasHumidity: Boolean,
     private val hasButtonBacklight: Boolean,
+    // Optional on-panel auto-brightness engine; HA-fed lux is routed to it, switch/bias persist in Config.
+    private val autoBright: AutoBrightnessController,
     private val configUrl: String? = null,
     // Resolves HA's LAN IP via mDNS to default the broker when none is configured (injected by the
     // service, wired to MdnsAdvertiser). Returns null if HA isn't found / mDNS unavailable.
@@ -113,6 +117,12 @@ class MqttBridge(
     private val stateProximity = "ha-paneld/$panel/proximity/state"
     private val stateTemperature = "ha-paneld/$panel/temperature/state"
     private val stateHumidity = "ha-paneld/$panel/humidity/state"
+    private val cmdAutoBright = "ha-paneld/$panel/auto_brightness/set"
+    private val stateAutoBright = "ha-paneld/$panel/auto_brightness/state"
+    private val cmdBrightnessBias = "ha-paneld/$panel/brightness_bias/set"
+    private val stateBrightnessBias = "ha-paneld/$panel/brightness_bias/state"
+    private val cmdAmbientLux = "ha-paneld/$panel/ambient_lux/set"
+    private val stateAmbientLux = "ha-paneld/$panel/ambient_lux/state"
 
     fun start() {
         var broker = config.mqttBroker.trim()
@@ -252,6 +262,9 @@ class MqttBridge(
                 cmdWakeOnWave -> handleWakeOnWave(payload)
                 cmdTouchSound -> handleTouchSound(payload)
                 cmdZigbee -> handleZigbee(payload)
+                cmdAutoBright -> handleAutoBright(payload)
+                cmdBrightnessBias -> handleBrightnessBias(payload)
+                cmdAmbientLux -> handleAmbientLux(payload)
                 else -> Log.d(TAG, "unhandled command topic $topic")
             }
         } catch (e: Exception) {
@@ -313,6 +326,25 @@ class MqttBridge(
         val on = payload.trim().equals("ON", ignoreCase = true)
         touchSound.set(on)
         client?.let { publish(it, stateTouchSound, if (touchSound.isEnabled()) "ON" else "OFF", retain = true) }
+    }
+
+    private fun handleAutoBright(payload: String) {
+        val on = payload.trim().equals("ON", ignoreCase = true)
+        config.setAutoBrightness(on)
+        client?.let { publish(it, stateAutoBright, if (on) "ON" else "OFF", retain = true) }
+    }
+
+    private fun handleBrightnessBias(payload: String) {
+        val v = payload.trim().trim('"').toDoubleOrNull()?.roundToInt() ?: return
+        config.setBrightnessBias(v)
+        client?.let { publish(it, stateBrightnessBias, config.brightnessBias.toString(), retain = true) }
+    }
+
+    // HA writes room lux here (the only auto-brightness source on sensor-less panels); feed engine + echo.
+    private fun handleAmbientLux(payload: String) {
+        val lux = payload.trim().trim('"').toFloatOrNull() ?: return
+        autoBright.submitLux(lux)
+        client?.let { publish(it, stateAmbientLux, lux.roundToInt().toString(), retain = true) }
     }
 
     // Button backlight (e.g. TPA10): a brightness-only light, driven via the root daemon's BTN command
@@ -547,6 +579,25 @@ class MqttBridge(
         )
         publish(c, stateTouchSound, if (touchSound.isEnabled()) "ON" else "OFF", retain = true)
 
+        // Auto-brightness — optional on-panel engine (off by default). When on, drives the screen
+        // backlight from the panel's own light sensor where present, or the HA-fed ambient-lux number.
+        publishConfig(
+            c, "switch", "${panel}_auto_brightness",
+            """{"name":"Auto-brightness","unique_id":"${panel}_auto_brightness","command_topic":"$cmdAutoBright","state_topic":"$stateAutoBright","icon":"mdi:brightness-auto","entity_category":"config",$avail,$device}""",
+        )
+        publish(c, stateAutoBright, if (config.autoBrightness) "ON" else "OFF", retain = true)
+        publishConfig(
+            c, "number", "${panel}_brightness_bias",
+            """{"name":"Brightness bias","unique_id":"${panel}_brightness_bias","command_topic":"$cmdBrightnessBias","state_topic":"$stateBrightnessBias","min":-100,"max":100,"step":5,"mode":"slider","icon":"mdi:brightness-6","entity_category":"config",$avail,$device}""",
+        )
+        publish(c, stateBrightnessBias, config.brightnessBias.toString(), retain = true)
+        // HA-fed room lux → auto-brightness input. The only source on sensor-less panels (e.g. WF1589T);
+        // an HA automation pushes room lux here and the engine applies the curve.
+        publishConfig(
+            c, "number", "${panel}_ambient_lux",
+            """{"name":"Ambient lux (HA-fed)","unique_id":"${panel}_ambient_lux","command_topic":"$cmdAmbientLux","state_topic":"$stateAmbientLux","min":0,"max":100000,"step":1,"mode":"box","unit_of_measurement":"lx","icon":"mdi:brightness-5","entity_category":"config",$avail,$device}""",
+        )
+
         // Zigbee router — only on panels with the Sonoff gateway package (NSPanel Pro). present()
         // costs a su exec; safe here because onConnected runs off the main thread.
         if (zigbee.present()) {
@@ -639,6 +690,8 @@ class MqttBridge(
             "sensor" to "${panel}_temperature", "sensor" to "${panel}_humidity",
             "light" to "${panel}_buttons", "switch" to "${panel}_wake_on_wave",
             "switch" to "${panel}_touch_sound", "switch" to "${panel}_zigbee_router",
+            "switch" to "${panel}_auto_brightness", "number" to "${panel}_brightness_bias",
+            "number" to "${panel}_ambient_lux",
             "switch" to "${panel}_relay1", "switch" to "${panel}_relay2",
             "light" to "${panel}_button_led1", "light" to "${panel}_button_led2",
             "light" to "${panel}_button_led3", "light" to "${panel}_button_led4",

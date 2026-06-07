@@ -63,6 +63,9 @@ class SensorReporter(context: Context, private val config: Config) {
         onProximity: (Boolean) -> Unit,
         onTemperature: (Float) -> Unit = {},
         onHumidity: (Float) -> Unit = {},
+        // Un-throttled, every-event lux feed for the on-panel auto-brightness engine. The MQTT-report
+        // path (onLux) stays change-gated; auto-brightness needs raw samples for a fast lights-on react.
+        onLuxRaw: (Float) -> Unit = {},
     ) {
         if (lightSensor == null && proximitySensor == null && tempSensor == null && humiditySensor == null) return
         this.onProximity = onProximity
@@ -74,6 +77,7 @@ class SensorReporter(context: Context, private val config: Config) {
                 when (e.sensor.type) {
                     Sensor.TYPE_LIGHT -> {
                         val lux = e.values[0]
+                        onLuxRaw(lux)   // un-throttled → auto-brightness engine
                         val now = System.currentTimeMillis()
                         val changed = lastLux < 0 || abs(lux - lastLux) >= max(1f, lastLux * 0.2f)
                         if (changed && now - lastLuxAt >= 15000) {

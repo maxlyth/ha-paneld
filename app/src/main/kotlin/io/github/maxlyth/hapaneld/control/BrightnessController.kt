@@ -9,9 +9,10 @@ import android.util.Log
  * `WRITE_SETTINGS` app-op (granted at provisioning via `appops set <pkg> WRITE_SETTINGS allow`,
  * or via the setup Activity on non-root installs).
  *
- * HA-driven by design: ha-paneld exposes only the brightness *actuator*. Brightness *policy*
- * (from room lux / occupancy) is computed HA-side and pushed here — the panel never runs an
- * on-device light-sensor loop (panel light sensors are inconsistent across the fleet).
+ * Actuator-first by design: brightness *policy* (from room lux / occupancy) is normally computed
+ * HA-side and pushed here. The one opt-in exception is [AutoBrightnessController]
+ * (`switch.<panel>_auto_brightness`, default off), which runs an on-device curve off the panel's light
+ * sensor (or HA-fed lux) — see its docs for why that's worth a local loop.
  *
  * HA brightness is 0–255; Android `SCREEN_BRIGHTNESS` is also 0–255, so it maps 1:1.
  */
