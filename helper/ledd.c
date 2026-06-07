@@ -17,12 +17,22 @@
 // DevicePolicyManager.lockNow() engages the keyguard (PIN on wake). Writing bl_power leaves the
 // device Awake (no keyguard), so the screen goes truly dark and wakes without a PIN.
 //
+// It also instruments hardware buttons the Android input pipeline doesn't deliver to the app: a
+// reader thread opens an evdev node and (optionally) EVIOCGRABs it — exclusive grab stops Android
+// from acting on the key (e.g. the WF1589T power button no longer sleeps the panel) — then streams
+// each key event to SUBSCRIBEd clients. The app decides the node/grab from its DeviceProfile.
+//
 // Protocol (newline-terminated ASCII; one or more commands per connection):
 //   RGB <r> <g> <b>   set colour, each 0..255         -> "OK\n"
 //   OFF               LED off                          -> "OK\n"
 //   BTN <0..255>      button-backlight brightness      -> "OK\n"
 //   SCREEN ON|OFF     backlight power (bl_power 0|4)    -> "OK\n"
 //   RELOAD <pkg>      force-stop + relaunch an app      -> "OK\n"
+//   START <pkg/cls>   launch an activity by component   -> "OK\n"
+//   WATCH <evdev> <0|1>  read an input node (1 = EVIOCGRAB it exclusively, suppressing the default
+//                        Android action); idempotent per node    -> "OK\n"
+//   SUBSCRIBE         this connection then receives async  "KEY <code> <value>\n"  lines for every
+//                     key event from WATCHed nodes (held open until the client disconnects) -> "OK\n"
 //   REBOOT            reboot the panel                  -> "OK\n" (then goes down)
 //   PING              liveness probe                   -> "OK\n"
 //   <anything else>                                    -> "ERR\n"
@@ -35,9 +45,13 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <dirent.h>
+#include <signal.h>
+#include <pthread.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
+#include <sys/ioctl.h>
+#include <linux/input.h>
 
 #define PORT       8889
 #define NODE_ANIM  "/sys/class/leds/avs-pwm-led/avsux_animation"
@@ -134,7 +148,86 @@ static int start_component(const char *comp) {
 
 static void reply(int fd, const char *s) { (void)!write(fd, s, strlen(s)); }
 
-// Handle one command line. Returns nothing; writes a reply.
+// --- button instrumentation: subscriber registry + evdev reader threads ---------------------------
+// SUBSCRIBEd client fds receive async "KEY <code> <value>\n" lines. A small fixed registry under a
+// mutex; writes that fail (client gone) just drop — the conn thread removes the fd on disconnect.
+#define MAX_SUBS 8
+static int subs[MAX_SUBS];
+static pthread_mutex_t subs_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static void sub_add(int fd) {
+    pthread_mutex_lock(&subs_lock);
+    for (int i = 0; i < MAX_SUBS; i++) if (subs[i] == fd) { pthread_mutex_unlock(&subs_lock); return; }
+    for (int i = 0; i < MAX_SUBS; i++) if (subs[i] < 0) { subs[i] = fd; break; }
+    pthread_mutex_unlock(&subs_lock);
+}
+static void sub_del(int fd) {
+    pthread_mutex_lock(&subs_lock);
+    for (int i = 0; i < MAX_SUBS; i++) if (subs[i] == fd) subs[i] = -1;
+    pthread_mutex_unlock(&subs_lock);
+}
+static void sub_broadcast(const char *line) {
+    pthread_mutex_lock(&subs_lock);
+    for (int i = 0; i < MAX_SUBS; i++)
+        if (subs[i] >= 0 && write(subs[i], line, strlen(line)) < 0) subs[i] = -1;  // drop dead fd
+    pthread_mutex_unlock(&subs_lock);
+}
+
+// WATCHed nodes, deduped so a reconnecting app doesn't double-open (the second EVIOCGRAB would fail).
+#define MAX_WATCH 8
+static char watched[MAX_WATCH][128];
+static int  watch_n = 0;
+static pthread_mutex_t watch_lock = PTHREAD_MUTEX_INITIALIZER;
+
+struct watch_arg { char path[128]; int grab; };
+
+// Open an evdev node, optionally grab it exclusively, stream EV_KEY events to subscribers. Re-opens
+// on error (node not ready at boot / device unplug) so it self-heals.
+static void *evdev_thread(void *arg) {
+    struct watch_arg *w = arg;
+    for (;;) {
+        int fd = open(w->path, O_RDONLY);
+        if (fd < 0) { sleep(2); continue; }
+        // EVIOCGRAB MUST succeed for grab-to-suppress to work: if another process already holds the
+        // grab it fails with EBUSY and we'd read non-exclusively (events reach us AND Android — the
+        // key still acts). Surface that instead of silently degrading.
+        if (w->grab && ioctl(fd, EVIOCGRAB, (void *)1) < 0)
+            fprintf(stderr, "hapaneld-ledd: EVIOCGRAB %s failed (%s) — NOT exclusive\n",
+                    w->path, strerror(errno));
+        struct input_event ev;
+        char line[48];
+        while (read(fd, &ev, sizeof ev) == (ssize_t)sizeof ev) {
+            if (ev.type == EV_KEY) {
+                snprintf(line, sizeof line, "KEY %d %d\n", ev.code, ev.value);
+                sub_broadcast(line);
+            }
+        }
+        close(fd);   // device went away — reopen (grab is released by the close)
+        sleep(1);
+    }
+    return NULL;
+}
+
+// Start watching a node once. grab=1 takes exclusive ownership (suppresses the default Android action).
+static int watch_node(const char *path, int grab) {
+    if (!*path) return -1;
+    pthread_mutex_lock(&watch_lock);
+    for (int i = 0; i < watch_n; i++)
+        if (strcmp(watched[i], path) == 0) { pthread_mutex_unlock(&watch_lock); return 0; }  // already
+    if (watch_n >= MAX_WATCH) { pthread_mutex_unlock(&watch_lock); return -1; }
+    snprintf(watched[watch_n++], 128, "%s", path);
+    pthread_mutex_unlock(&watch_lock);
+    struct watch_arg *a = calloc(1, sizeof *a);
+    snprintf(a->path, sizeof a->path, "%s", path);
+    a->grab = grab;
+    pthread_t t;
+    if (pthread_create(&t, NULL, evdev_thread, a) != 0) { perror("pthread_create"); free(a); return -1; }
+    pthread_detach(t);
+    fprintf(stderr, "hapaneld-ledd: %s %s\n", grab ? "grab" : "watch", path);
+    return 0;
+}
+
+// Handle one command line on connection [fd]. Returns nothing; writes a reply.
 static void handle(int fd, char *line) {
     int r, g, b;
     if (sscanf(line, "RGB %d %d %d", &r, &g, &b) == 3) {
@@ -156,6 +249,15 @@ static void handle(int fd, char *line) {
         char comp[160] = "";
         sscanf(line, "START %159s", comp);
         reply(fd, start_component(comp) == 0 ? "OK\n" : "ERR\n");
+    } else if (strncmp(line, "WATCH", 5) == 0) {
+        char path[128] = ""; int grab = 0;
+        sscanf(line, "WATCH %127s %d", path, &grab);
+        // only absolute /dev/input/ paths — defends against opening arbitrary files
+        int ok = strncmp(path, "/dev/input/", 11) == 0 && watch_node(path, grab ? 1 : 0) == 0;
+        reply(fd, ok ? "OK\n" : "ERR\n");
+    } else if (strncmp(line, "SUBSCRIBE", 9) == 0) {
+        sub_add(fd);
+        reply(fd, "OK\n");   // KEY lines now stream on this connection until it closes
     } else if (strncmp(line, "REBOOT", 6) == 0) {
         reply(fd, "OK\n");   // reply before we go down
         system("svc power reboot 2>/dev/null || reboot");
@@ -180,8 +282,29 @@ static void serve(int cfd) {
     }
 }
 
-int main(void) {
+// One thread per connection, so a long-lived SUBSCRIBE stream doesn't block LED/screen commands on
+// other connections. Removes the fd from the subscriber registry on disconnect.
+static void *conn_thread(void *arg) {
+    int cfd = *(int *)arg;
+    free(arg);
+    serve(cfd);
+    sub_del(cfd);
+    close(cfd);
+    return NULL;
+}
+
+int main(int argc, char **argv) {
+    signal(SIGPIPE, SIG_IGN);   // a dead subscriber's socket must not kill the daemon
+    for (int i = 0; i < MAX_SUBS; i++) subs[i] = -1;
     find_backlight();
+
+    // Optional startup watches from args (per-device .rc may pass them): --grab/--watch <node>. The
+    // app also sets these via the WATCH command, so args are not required.
+    for (int i = 1; i < argc - 1; i++) {
+        if (strcmp(argv[i], "--grab") == 0) watch_node(argv[++i], 1);
+        else if (strcmp(argv[i], "--watch") == 0) watch_node(argv[++i], 0);
+    }
+
     int sfd = socket(AF_INET, SOCK_STREAM, 0);
     if (sfd < 0) { perror("socket"); return 1; }
     int one = 1;
@@ -200,8 +323,11 @@ int main(void) {
     for (;;) {
         int cfd = accept(sfd, NULL, NULL);
         if (cfd < 0) { if (errno == EINTR) continue; perror("accept"); break; }
-        serve(cfd);
-        close(cfd);
+        int *p = malloc(sizeof(int));
+        *p = cfd;
+        pthread_t t;
+        if (pthread_create(&t, NULL, conn_thread, p) != 0) { free(p); close(cfd); continue; }
+        pthread_detach(t);
     }
     close(sfd);
     return 0;

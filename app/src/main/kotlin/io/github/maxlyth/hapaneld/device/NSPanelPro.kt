@@ -19,4 +19,5 @@ object NSPanelPro : DeviceProfile {
     override val buttonLedGpioBase: Int? = null
     override val manufacturer = "Sonoff"
     override val model = "NSPanel Pro"
+    override val evdevButtons = emptyList<EvdevButton>()
 }

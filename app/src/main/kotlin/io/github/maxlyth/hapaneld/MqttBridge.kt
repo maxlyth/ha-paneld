@@ -54,6 +54,9 @@ class MqttBridge(
     private val cpu: CpuController,
     private val adb: AdbController,
     private val buttonsEnabled: Boolean,
+    // Panel has hardware buttons instrumented via the daemon (evdev) — publish the event entity even
+    // when the accessibility key capture is off (e.g. the WF1589T power button).
+    private val hasEvdevButtons: Boolean,
     private val hasLight: Boolean,
     private val hasProximity: Boolean,
     private val hasTemperature: Boolean,
@@ -473,11 +476,15 @@ class MqttBridge(
             """{"name":"Navigate","unique_id":"${panel}_navigate","command_topic":"$cmdNavigate","state_topic":"$stateNavigate","mode":"text","icon":"mdi:monitor-dashboard",$avail,$device}""",
         )
 
-        if (buttonsEnabled) {
+        // The button event entity surfaces a11y key capture AND daemon-instrumented evdev buttons
+        // (e.g. the WF1589T power key), so publish it whenever either source exists.
+        if (buttonsEnabled || hasEvdevButtons) {
             publishConfig(
                 c, "event", "${panel}_button",
-                """{"name":"Button","unique_id":"${panel}_button","state_topic":"$eventButton","event_types":["KEYCODE_MUTE","KEYCODE_F","KEYCODE_F1","KEYCODE_F2","KEYCODE_F3","KEYCODE_F4","KEYCODE_BACK","KEYCODE_HOME","KEYCODE_DPAD_CENTER","KEYCODE_VOLUME_UP","KEYCODE_VOLUME_DOWN"],$avail,$device}""",
+                """{"name":"Button","unique_id":"${panel}_button","state_topic":"$eventButton","event_types":["KEYCODE_POWER","KEYCODE_MUTE","KEYCODE_F","KEYCODE_F1","KEYCODE_F2","KEYCODE_F3","KEYCODE_F4","KEYCODE_BACK","KEYCODE_HOME","KEYCODE_DPAD_CENTER","KEYCODE_VOLUME_UP","KEYCODE_VOLUME_DOWN"],$avail,$device}""",
             )
+        }
+        if (buttonsEnabled) {
             // Nav actions via the a11y service (performGlobalAction) — uniform on every panel, no root.
             publishConfig(
                 c, "button", "${panel}_back",

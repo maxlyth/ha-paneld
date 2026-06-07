@@ -56,6 +56,10 @@ interface DeviceProfile {
      *  co-installed integration managing the same hardware; the user's form value overrides verbatim. */
     val model: String?
 
+    /** Hardware buttons the Android input pipeline doesn't usefully deliver to the app, instrumented
+     *  via the root helper daemon's evdev WATCH/grab instead. Empty when none. See [EvdevButton]. */
+    val evdevButtons: List<EvdevButton>
+
     companion object {
         /**
          * Pick the profile for the running device from [Build] fingerprints; [Generic] when none match.
@@ -86,3 +90,15 @@ enum class LedMechanism { RK3576_IOCTL, SYSFS_DAEMON, AUTODETECT, NONE }
 
 /** True-screen-off path. */
 enum class ScreenOff { SU_BLPOWER, DAEMON_BLPOWER, BRIGHTNESS_ZERO }
+
+/**
+ * A hardware button instrumented through the root helper daemon's evdev reader (for keys Android
+ * doesn't deliver to the app — e.g. a `KEY_MICMUTE` adc-key, or the power key).
+ *
+ * @param node    the evdev node, e.g. "/dev/input/event1"
+ * @param code    the Linux input keycode it emits (e.g. 116 = KEY_POWER, 248 = KEY_MICMUTE)
+ * @param grab    EVIOCGRAB the node exclusively, suppressing the default Android action (e.g. the
+ *                power key's screen-lock) so the press becomes an HA event only — gated by automation.
+ * @param eventType  the HA `event_type` published on press; must be in the event entity's declared list.
+ */
+data class EvdevButton(val node: String, val code: Int, val grab: Boolean, val eventType: String)

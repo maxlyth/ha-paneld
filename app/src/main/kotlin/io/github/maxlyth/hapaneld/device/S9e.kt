@@ -24,4 +24,5 @@ object S9e : DeviceProfile {
     override val buttonLedGpioBase = 147
     override val manufacturer = "Smatek"
     override val model = "S9E"
+    override val evdevButtons = emptyList<EvdevButton>()
 }

@@ -19,4 +19,5 @@ object Generic : DeviceProfile {
     override val buttonLedGpioBase: Int? = null
     override val manufacturer: String? = null   // infer from Build.MANUFACTURER
     override val model: String? = null           // infer from Build.MODEL
+    override val evdevButtons = emptyList<EvdevButton>()   // unknown panel: a11y key capture only
 }

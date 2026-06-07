@@ -19,4 +19,10 @@ object Wf1589t : DeviceProfile {
     override val buttonLedGpioBase: Int? = null
     override val manufacturer = "Electron"
     override val model = "WF1589T"
+    // The single physical button is the PMIC power key (rk805 pwrkey, event1 = KEY_POWER). GRAB it so
+    // it no longer sleeps the panel; the press becomes an HA event for an automation to act on. The
+    // PMIC's long-press hardware power-off is independent and unaffected.
+    override val evdevButtons = listOf(
+        EvdevButton("/dev/input/event1", 116, grab = true, eventType = "KEYCODE_POWER"),
+    )
 }

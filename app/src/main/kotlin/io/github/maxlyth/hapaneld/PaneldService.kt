@@ -14,6 +14,7 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import io.github.maxlyth.hapaneld.control.AdbController
 import io.github.maxlyth.hapaneld.device.DeviceProfile
+import io.github.maxlyth.hapaneld.input.EvdevButtonClient
 import io.github.maxlyth.hapaneld.control.BrightnessController
 import io.github.maxlyth.hapaneld.control.CpuController
 import io.github.maxlyth.hapaneld.control.NavigateController
@@ -95,11 +96,15 @@ class PaneldService : Service() {
         mqtt = buildMqtt()
         mdns = MdnsAdvertiser(this, config)
         server = PaneldServer(config, cacheDir, scope, this, sensors, ::reconfigure, ::panelInfo)
+        // Stream daemon-instrumented hardware buttons (e.g. WF1589T power key) into the same event
+        // entity as the a11y key capture. No-op on panels with no evdev buttons.
+        EvdevButtonClient.start(profile.evdevButtons)
     }
 
     private fun buildMqtt(): MqttBridge = MqttBridge(
         config, brightness, screen, led, navigate, volume, system, touchSound, zigbee, relay, cpu, adb,
-        accessibilityEnabled(), sensors.hasLight(), sensors.hasProximity(),
+        accessibilityEnabled(), profile.evdevButtons.isNotEmpty(),
+        sensors.hasLight(), sensors.hasProximity(),
         sensors.hasTemperature(), sensors.hasHumidity(),
         // Button backlight lives on the sysfs/daemon LED panels (TPA10), reached via the daemon's BTN.
         led is SocketLedController, configUrl,

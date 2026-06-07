@@ -19,4 +19,9 @@ object Tpa10 : DeviceProfile {
     override val buttonLedGpioBase: Int? = null
     override val manufacturer = "Tuya"
     override val model = "TPA10"
+    // The 5th (orange) button is a standalone adc-key (event6 = KEY_MICMUTE) Android doesn't deliver
+    // usefully to the app. WATCH it (no grab needed) and surface presses as an HA event.
+    override val evdevButtons = listOf(
+        EvdevButton("/dev/input/event6", 248, grab = false, eventType = "KEYCODE_MUTE"),
+    )
 }
