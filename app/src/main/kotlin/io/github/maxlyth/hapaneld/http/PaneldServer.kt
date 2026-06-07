@@ -76,12 +76,23 @@ class PaneldServer(
                     } else {
                         config.setInstrumentation(on)
                         PerfReader.enabled = on
+                        io.github.maxlyth.hapaneld.sensors.SensorTrace.enabled = on
                         if (on) PerfReader.touch()
                         call.respondText("""{"enabled":$on}""", ContentType.Application.Json)
                     }
                 }
                 get("/diag") {
                     call.respondText(DiagReader.dump(appContext), ContentType.Text.Plain)
+                }
+                // Debug-only sensor trace (RAM ring buffer, instrumentation-gated) for fit-testing the
+                // auto-brightness + proximity filters. CSV by default (drop into a plot); ?format=json
+                // for programmatic use / a future on-panel chart. Not an HA/MQTT surface.
+                get("/sensortrace") {
+                    if (call.request.queryParameters["format"] == "json") {
+                        call.respondText(io.github.maxlyth.hapaneld.sensors.SensorTrace.toJson(), ContentType.Application.Json)
+                    } else {
+                        call.respondText(io.github.maxlyth.hapaneld.sensors.SensorTrace.toCsv(), ContentType("text", "csv"))
+                    }
                 }
                 // Static front-end assets (externalised from the Kotlin string so CI can lint them).
                 get("/info.js") {

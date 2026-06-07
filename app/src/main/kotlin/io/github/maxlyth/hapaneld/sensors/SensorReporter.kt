@@ -87,10 +87,12 @@ class SensorReporter(context: Context, private val config: Config) {
                         }
                     }
                     Sensor.TYPE_PROXIMITY -> {
-                        lastRaw = e.values[0]
+                        val raw = e.values[0]
+                        lastRaw = raw
                         synchronized(seenRaw) {
-                            if (seenRaw.size < 32) seenRaw.add(Math.round(e.values[0] * 10) / 10f)
+                            if (seenRaw.size < 32) seenRaw.add(Math.round(raw * 10) / 10f)
                         }
+                        SensorTrace.recordProx(raw, computeNear(raw)) // raw trace (debug fit-testing)
                         evaluateProximity()
                     }
                     // Climate is slow + informational — keep recorder load tiny: report only on a

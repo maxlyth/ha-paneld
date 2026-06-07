@@ -17,6 +17,10 @@ content appear. Earlier releases predate this convention and keep their flat lis
   sensor-less panels (e.g. the WF1589T). **Asymmetric response** — snappy on a sudden lights-on step,
   heavily smoothed on slow daylight drift and sensor noise — with a Dimmer↔Brighter
   `number.<panel>_brightness_bias`. Off by default (ha-paneld stays a pure actuator otherwise).
+- **Debug sensor trace** *(instrumentation)* — `GET /sensortrace` exposes a RAM ring buffer of raw lux +
+  proximity samples and the auto-brightness internals (smoothed/target/applied) for fit-testing the
+  filters; CSV (default) or `?format=json`. Decimated to span hours, instrumentation-gated, never
+  persisted; not an HA/MQTT surface.
 
 ### Fixed
 

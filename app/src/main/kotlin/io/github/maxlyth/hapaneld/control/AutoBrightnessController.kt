@@ -2,6 +2,7 @@ package io.github.maxlyth.hapaneld.control
 
 import android.util.Log
 import io.github.maxlyth.hapaneld.Config
+import io.github.maxlyth.hapaneld.sensors.SensorTrace
 import kotlin.math.abs
 import kotlin.math.ln
 import kotlin.math.max
@@ -35,33 +36,39 @@ class AutoBrightnessController(
     private var smoothed = -1f   // EMA of lux; <0 = uninitialised (snap on first sample)
     private var applied = -1     // last brightness we set (deadband reference)
 
-    /** Feed one lux sample (ALS or HA-fed). No-op unless auto-brightness is enabled and writable. */
+    /** Feed one lux sample (ALS or HA-fed). Drives the backlight only when enabled + writable; always
+     *  records to [SensorTrace] (raw lux always; smoothed/target/applied when the engine is active). */
     fun submitLux(lux: Float) {
         if (lux.isNaN() || lux < 0f) return
+        var sm: Float? = null   // engine internals for the trace; null when the engine is idle
+        var tgt: Int? = null
+        var app: Int? = null
         if (!config.autoBrightness) {
             synchronized(lock) { smoothed = -1f; applied = -1 }  // reset so re-enable snaps cleanly
-            return
-        }
-        if (!brightness.canWrite()) return
-
-        val target: Int
-        synchronized(lock) {
-            if (smoothed < 0f) {
-                smoothed = lux                       // first sample after enable → snap, don't ramp
-            } else {
-                // Ratio of change (perception is logarithmic): a big ratio = a real step (lights on)
-                // → fast attack; a small ratio = drift/noise → heavy smoothing.
-                val hi = max(lux, smoothed)
-                val lo = max(min(lux, smoothed), 1f)
-                val alpha = if (hi / lo >= FAST_RATIO) FAST_ALPHA else SLOW_ALPHA
-                smoothed += alpha * (lux - smoothed)
+        } else if (brightness.canWrite()) {
+            var toSet = -1
+            synchronized(lock) {
+                if (smoothed < 0f) {
+                    smoothed = lux                   // first sample after enable → snap, don't ramp
+                } else {
+                    // Ratio of change (perception is logarithmic): a big ratio = a real step (lights on)
+                    // → fast attack; a small ratio = drift/noise → heavy smoothing.
+                    val hi = max(lux, smoothed)
+                    val lo = max(min(lux, smoothed), 1f)
+                    val alpha = if (hi / lo >= FAST_RATIO) FAST_ALPHA else SLOW_ALPHA
+                    smoothed += alpha * (lux - smoothed)
+                }
+                val t = curve(smoothed)
+                sm = smoothed; tgt = t
+                if (applied < 0 || abs(t - applied) >= DEADBAND) { applied = t; toSet = t } // deadband
+                app = applied
             }
-            target = curve(smoothed)
-            if (applied >= 0 && abs(target - applied) < DEADBAND) return  // sub-deadband → no flicker
-            applied = target
+            if (toSet >= 0) {
+                brightness.setBrightness(toSet)
+                Log.d(TAG, "lux≈${sm?.roundToInt()} -> brightness $toSet (bias ${config.brightnessBias})")
+            }
         }
-        brightness.setBrightness(target)
-        Log.d(TAG, "lux≈${smoothed.roundToInt()} -> brightness $target (bias ${config.brightnessBias})")
+        SensorTrace.recordLux(lux, sm, tgt, app)
     }
 
     /** Perceptual lux→brightness: log curve from [MIN_BRIGHT]..255 over 0..[REF_LUX], shifted by bias. */
