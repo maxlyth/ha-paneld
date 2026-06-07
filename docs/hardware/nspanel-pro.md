@@ -112,20 +112,52 @@ proximity here directly. No temperature/humidity sensor is fitted.
 
 ## Zigbee gateway
 
-The NSPanel Pro has a built-in **Silicon Labs EFR32 Zigbee 3.0 radio** on UART `/dev/ttyS5`. Out of
-the box it is owned by the vendor daemon `/vendor/bin/siliconlabs_host/zgateway` and driven by the
-eWeLink apps (`com.eWeLinkNSPro.dev`, `com.eWeLinkControlPanel`) — i.e. the panel ships as an eWeLink
-Zigbee hub.
+The NSPanel Pro has a built-in **Silicon Labs EFR32 Zigbee 3.0 radio** on UART `/dev/ttyS5`, driven by
+a manufacturer host stack (`/vendor/bin/siliconlabs_host/zgateway`) over a local MQTT broker — the same
+stack the eWeLink apps use, so the panel ships as an eWeLink Zigbee hub.
 
-ha-paneld manages this directly (v0.6.1+): `switch.<panel>_zigbee_router` turns the panel into a Zigbee
-router/repeater (starts the guard + ensures Repeater role) and back off (stops the guard + zstack,
-freeing the radio) — over the local broker, credential-free, no `ttyS5` handling. The router then
-appears as a normal device in your ZHA / Zigbee2MQTT coordinator.
+ha-paneld manages it directly (v0.6.1+): `switch.<panel>_zigbee_router` turns the panel into a Zigbee
+**router/repeater** that extends your existing mesh (starts the gateway, ensures Repeater role) and back
+off (stops it, freeing the radio) — over the local broker, credential-free, no `ttyS5` handling. The
+panel then appears as a normal router in your ZHA / Zigbee2MQTT coordinator.
 
 > [!NOTE]
-> Switching role is **not a reflash** — there is no `.gbl`/bootloader step anywhere; it just sets the
-> EZSP node type. For partition-level firmware work see
-> [Firmware backup & restore](../firmware-backup-restore.md).
+> Switching role is **not a reflash** — there is no `.gbl`/bootloader step; it just sets the EZSP node
+> type. For partition-level firmware work see [Firmware backup & restore](../firmware-backup-restore.md).
+
+### Requirements — firmware ≥ v2.2.0
+
+The host stack is the **manufacturer's own** (eWeLink/Sonoff) gateway, versioned to match the panel
+firmware (e.g. `sonoff-v3.5.4`). Zigbee **router mode** was added in **NSPanel Pro firmware v2.2.0**
+(2023 — eWeLink app → *Device Settings → Pilot Features → Zigbee Mode*); local host-stack repeater
+support landed in gateway package v1.1.9. In practice:
+
+- **Gateway present** (firmware ≥ v2.2.0, or side-loaded) → ha-paneld detects it and publishes
+  `switch.<panel>_zigbee_router`. Toggle ON and the panel joins your coordinator as a router.
+- **No gateway** (very old firmware, never provisioned) → the switch **doesn't appear** — it's gated on
+  the gateway's launch script existing. Update firmware (≥ v2.2.0), or see migration below.
+
+ha-paneld **drives** the gateway; it doesn't ship or install it (it's eWeLink's binary). Recent firmware
+(4.x) adds a Matter bridge + a direct HA Zigbee integration — alternatives to the router role.
+
+### Migrating from NSPanelTools
+
+[NSPanelTools (NSPPT)](https://github.com/seaky/nspanel_pro_tools_apk) side-loads the official Sonoff
+gateway package onto firmware that didn't ship it; many users run it today. ha-paneld coexists and can
+take over the gateway:
+
+- **Side-by-side is fine.** ha-paneld's router control is idempotent — it **defers** to whatever already
+  runs the gateway (won't double-start or fight NSPPT); auto-brightness is opt-in/off. Nothing conflicts
+  by default.
+- **Handing the gateway to ha-paneld:** the host stack lives in `/vendor` and **survives uninstalling
+  the NSPPT app** (verified 2026-06-08 — a persistent hook even keeps boot-starting it). Remove the NSPPT
+  APK and ha-paneld keeps driving the gateway; if the boot hook is also stripped, ha-paneld's
+  boot-restore starts it when the switch was left ON.
+
+> [!NOTE]
+> Both tools touch the screen/sensors. Coexistence is benign today, but enabling overlapping features
+> (e.g. wake-on-wave alongside an NSPPT equivalent) can cause redundant actions — remove NSPPT once
+> ha-paneld covers your needs.
 
 <details>
 <summary>EZSP host stack internals (broker topics, supervisor, role persistence)</summary>
