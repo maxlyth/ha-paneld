@@ -4,6 +4,19 @@ Human-readable summaries of each release. The auto-generated commit list is appe
 notes on each [GitHub release](https://github.com/maxlyth/ha-paneld/releases). Cutting a release? Follow
 the pre-tag checklist in [docs/RELEASING.md](docs/RELEASING.md) (it starts with "check the README").
 
+## v0.8.0 - Unreleased
+
+- **Firmware backup & restore guide for button-less panels** — wall panels have no volume/power
+  buttons, so the usual "hold a button combo for fastboot/recovery" advice is a non-starter. These are
+  all Rockchip devices, so new [docs/firmware-backup-restore.md](docs/firmware-backup-restore.md)
+  documents the real path: software loader entry (`adb reboot loader`, no buttons) + `rkdeveloptool`
+  (open-source, Linux — not the old Windows-only vendor tools) for backup/restore, **maskrom** as the
+  un-brickable fallback, a low-risk live `adb`+`dd` backup to take first, OTA opt-out, and per-panel
+  partition tables.
+- **Helper extension/contributor guide** — [helper/README.md](helper/README.md) now documents the root
+  daemon's panel-compartmentalisation contract (it stays panel-blind; per-panel specifics live in the
+  app's `DeviceProfile`) and how to extend it to new privileged device classes (i2c, IR, haptics).
+
 ## v0.7.1 - 2026-06-07
 
 Hardware buttons, CPU/display controls, and per-panel identity.
