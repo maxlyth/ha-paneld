@@ -4,6 +4,12 @@ Reverse-engineered hardware notes for the wall panels ha-paneld targets. These d
 almost no public documentation, so these notes record what is physically on each board and how to
 drive it — gathered from live units (rooted / userdebug `adb root`) on 2026-06-05.
 
+> [!TIP]
+> Before modifying firmware on a **button-less** panel, read
+> [Firmware backup & restore](../firmware-backup-restore.md) — these are all Rockchip devices, so the
+> usual button-combo fastboot/recovery advice does not apply; backup/restore goes via `adb reboot
+> loader` + `rkdeveloptool` (open-source, Linux), with maskrom as the un-brickable fallback.
+
 | Panel | SoC | LED control | Notable sensors | NFC | Zigbee/IR | Reference |
 |---|---|---|---|---|---|---|
 | Tuya TPA10 | rk3566 | `avsux` sysfs (root daemon) | ToF VI5300, CHT8305 temp+humidity, CG5256 light | no | no | [tpa10.md](tpa10.md) |
