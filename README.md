@@ -334,6 +334,19 @@ means you can never publish an in-place update again. Never commit the keystore 
 Validated across the panel fleet: Sonoff NSPanel Pro (PX30, Android 8.1), Tuya TPA10 (rk3566,
 Android 11), Electron WF1589T (rk3576, Android 14).
 
+New in 0.7.1:
+
+- **Hardware buttons via the daemon's evdev reader** — the **WF1589T power button** no longer locks
+  the panel; it publishes an `event.<panel>_button` event for an automation to act on (PMIC long-press
+  hardware off unchanged). The **TPA10 5th (orange) button** — an `SW_MUTE_DEVICE` switch stock
+  firmware never surfaced — is now published as a `KEYCODE_MUTE` event.
+- **CPU profile tiers** — `select.<panel>_cpu_governor` is now **Performance / Efficiency / Auto**
+  (Auto = the SoC's dynamic governor) instead of raw kernel governor names.
+- **Display sizing** *(experimental / R&D)* — set display density + text size to match a dashboard to a
+  desktop browser; root panels only. See [docs/display-sizing.md](docs/display-sizing.md).
+- **Per-panel HA device identity** — manufacturer/model defaults with a " (ha-paneld)" suffix so the
+  device is distinguishable from a co-installed integration; theme-aware on-panel App UI.
+
 New in 0.7.0 (architecture-focused — no new entities):
 
 - **Device-profile architecture** — each supported panel has a single canonical silo

@@ -4,22 +4,36 @@ Human-readable summaries of each release. The auto-generated commit list is appe
 notes on each [GitHub release](https://github.com/maxlyth/ha-paneld/releases). Cutting a release? Follow
 the pre-tag checklist in [docs/RELEASING.md](docs/RELEASING.md) (it starts with "check the README").
 
-## v0.7.1-rc1 - 2026-06-07
+## v0.7.1 - 2026-06-07
 
-Release candidate — UI/UX polish + per-panel device identity. Please review.
+Hardware buttons, CPU/display controls, and per-panel identity.
 
-- **Theme-aware App UI** — the on-panel standing screen now follows the panel's light/dark setting
-  (it was always dark); the wordmark switches via day/night drawables.
-- **README hero renders on both GitHub themes** — light/dark `<picture>` wordmark (the single
-  light-text image was near-invisible on GitHub's light theme).
-- **Stable HTTP performance table** — optional rows (CPU clock, GPU, load, temperature, rendering
-  load) latch with a `–` placeholder instead of vanishing, so the page no longer jumps as metrics
-  come and go.
+- **Hardware buttons instrumented via the daemon's evdev reader** — keys Android doesn't deliver to
+  apps now reach HA:
+    - **WF1589T power button** — ha-paneld **suppresses the button's built-in screen-lock** and
+      instead publishes each press as an `event.<panel>_button` event, so its action is **decided by
+      Home Assistant** (an automation), not hard-wired to lock the panel. (The PMIC's long-press
+      hardware power-off is unchanged.)
+    - **TPA10 5th (orange) button** — reports `SW_MUTE_DEVICE` (a switch, not a key), which is why
+      stock firmware never surfaced it; now published as a `KEYCODE_MUTE` event.
+- **CPU profile tiers** — the CPU governor select is now three intent-based options — **Performance /
+  Efficiency / Auto** — instead of raw kernel governor names. Auto maps to the SoC's dynamic governor
+  (ramps up on interaction, idles low — best for a mains, 24/7 panel).
+- **Display sizing** *(experimental / R&D)* — set display **density** and **text size** to match an HA
+  dashboard to a desktop browser (Android panels often ship these mismatched to the physical screen).
+  Root panels only; the right per-panel values aren't dialled in yet — see
+  [docs/display-sizing.md](docs/display-sizing.md).
 - **Per-panel HA device identity** — manufacturer/model defaults per panel (Sonoff / NSPanel Pro,
   Tuya / TPA10, Electron / WF1589T, Smatek / S9E; inferred from `Build.*` on unknown panels). The
   default model carries a " (ha-paneld)" suffix so the device is distinguishable from a co-installed
   integration managing the same hardware; the Configure form's value overrides it verbatim.
+- **Theme-aware App UI** — the on-panel standing screen follows the panel's light/dark setting.
+- **Stable HTTP performance table** — optional rows latch with a `–` placeholder instead of vanishing,
+  so the page no longer jumps as metrics come and go.
+- **README hero renders on both GitHub themes** (light/dark `<picture>` wordmark).
 - **Security policy** — `SECURITY.md` + GitHub Private Vulnerability Reporting enabled.
+- **Docs** — TPA10 hardware doc now covers all three button classes, incl. the recessed pin-hole
+  (Rockchip factory-reset / MASKROM-loader, not a Linux input).
 
 ## v0.7.0 - 2026-06-06
 
