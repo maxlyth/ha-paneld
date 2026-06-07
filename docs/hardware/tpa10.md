@@ -43,14 +43,45 @@ adb shell su 0 id    # uid=0 → root confirmed
 
 The TPA10's adb-root is more dependable over the USB port than over the network.
 
-**3. Persist network adb** so you never need USB or the password again:
+**3. Persist adb — the vendor "Enable ADB" password (the reliable, reboot-proof route).** Unlocking
+Developer options' **"Enable ADB"** toggle flips the vendor's *own* persistent flag, so network adb
+survives reboots without relying on a property hack. The toggle asks for a password, and — contrary to
+earlier community lore — it is **deterministically derived**, not per-unit-random. The
+`checkDevPassword` logic in `com.smartos.xinch.setting` computes it as:
+
+```text
+password = base64( last3(ro.tuya.uuid) + last3(<device-id>) )      then take the last 6 characters
+```
+
+Verified against the community example from
+[#123](https://github.com/seaky/nspanel_pro_tools_apk/issues/123): uuid…`11a` + device…`xia` →
+`base64("11axia")` = `MTFheGlh` → last 6 = **`FheGlh`** ✓. Compute it for your unit over the
+(USB-backdoor) adb connection:
+
+```bash
+adb shell 'getprop ro.tuya.uuid; getprop ro.serialno' \
+  | { read u; read d; printf '%s%s' "${u: -3}" "${d: -3}" | base64 -w0 | cut -c3-8; }
+```
+
+Enter the result in **Developer options → Enable ADB**. Network adb then persists across reboots; you
+can disconnect USB and work over Wi-Fi (`adb connect <panel-ip>:5555`).
+
+> [!NOTE]
+> **One unconfirmed detail:** which value the *About* page labels "device ID" — it's one of
+> `ro.serialno` or `settings get secure android_id`, both deterministic. The one-liner above assumes
+> `ro.serialno`; if the password is **rejected**, recompute with `android_id` (swap the `getprop
+> ro.serialno` for `settings get secure android_id`). A wrong password is **harmless** — it's simply
+> rejected, nothing is written or bricked. To pin the field for certain on a fresh unit,
+> `logcat | grep -i checkDevPassword` while entering a guess prints the expected value. *(Author has a
+> single unit and hasn't risked confirming which field; the algorithm itself is verified.)*
+
+**Quicker alternative — property hack (reboot-persistence not confirmed on this firmware):**
 
 ```bash
 adb root
 adb shell su 0 setprop persist.adb.tcp.port 5555
 adb shell su 0 settings put global adb_enabled 1
-adb tcpip 5555
-# thereafter from any host: adb connect <panel-ip>:5555
+adb tcpip 5555     # thereafter: adb connect <panel-ip>:5555
 ```
 
 > [!CAUTION]
@@ -58,18 +89,6 @@ adb tcpip 5555
 > adb is solid *and* you have a replacement for the hardware buttons. Disabling the hardware/setting
 > apps before adb is reliable can lock you out. ha-paneld's remote nav actions (Back/Recents) and the
 > button-backlight/LED entities replace the vendor app's functions.
-
-<details>
-<summary>Alternative — the adb password (network, no USB)</summary>
-
-The "Enable ADB" toggle in Developer options asks for a password derived from `ro.tuya.uuid` and the
-device ID on the *About* page, by the `checkDevPassword` logic inside `com.smartos.xinch.setting`. The
-community recipe in #123 (last 3 characters of each, base64, last 6 characters — e.g. uuid…`11a` +
-device…`xia` → `FheGlh`) does **not** reproduce cleanly on every unit, so if it is rejected, recover
-the exact value by decompiling that app or by grepping `logcat` for `checkDevPassword` while entering a
-guess. The USB backdoor above avoids this step entirely.
-
-</details>
 
 > [!NOTE]
 > The vendor's on-device apps were *not* a useful RE source: `com.tuya.devicetest` is odex'd (no dex in
