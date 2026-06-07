@@ -26,8 +26,7 @@ object EvdevButtonClient {
     @Synchronized
     fun start(buttons: List<EvdevButton>) {
         if (thread != null || buttons.isEmpty()) return
-        val byCode = buttons.associateBy { it.code }
-        thread = Thread({ run(buttons, byCode) }, "evdev-buttons").apply { isDaemon = true; start() }
+        thread = Thread({ run(buttons) }, "evdev-buttons").apply { isDaemon = true; start() }
     }
 
     @Synchronized
@@ -36,7 +35,7 @@ object EvdevButtonClient {
         thread = null
     }
 
-    private fun run(buttons: List<EvdevButton>, byCode: Map<Int, EvdevButton>) {
+    private fun run(buttons: List<EvdevButton>) {
         while (!Thread.currentThread().isInterrupted) {
             try {
                 Socket().use { s ->
@@ -49,10 +48,16 @@ object EvdevButtonClient {
                     out.flush()
                     var line = br.readLine()
                     while (line != null && !Thread.currentThread().isInterrupted) {
+                        // "KEY <code> <value>" (momentary) or "SW <code> <value>" (latching switch).
                         val p = line.trim().split(" ")
-                        // "KEY <code> <value>" — emit on DOWN (value 1) only, like a key-press.
-                        if (p.size == 3 && p[0] == "KEY" && p[2] == "1") {
-                            byCode[p[1].toIntOrNull()]?.let { ButtonBus.emit(it.eventType) }
+                        if (p.size == 3 && (p[0] == "KEY" || p[0] == "SW")) {
+                            val isSw = p[0] == "SW"
+                            val code = p[1].toIntOrNull()
+                            val down = p[2] == "1"
+                            buttons.firstOrNull { it.code == code && it.sw == isSw }?.let { b ->
+                                // KEY: emit on DOWN; SW: emit on every toggle (each press flips it).
+                                if (isSw || down) ButtonBus.emit(b.eventType)
+                            }
                         }
                         line = br.readLine()
                     }

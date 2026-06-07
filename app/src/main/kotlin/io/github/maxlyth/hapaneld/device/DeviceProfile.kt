@@ -101,9 +101,18 @@ enum class ScreenOff { SU_BLPOWER, DAEMON_BLPOWER, BRIGHTNESS_ZERO }
  * doesn't deliver to the app — e.g. a `KEY_MICMUTE` adc-key, or the power key).
  *
  * @param node    the evdev node, e.g. "/dev/input/event1"
- * @param code    the Linux input keycode it emits (e.g. 116 = KEY_POWER, 248 = KEY_MICMUTE)
+ * @param code    the Linux input code it emits (e.g. KEY_POWER 116, or with [sw] the switch code,
+ *                e.g. SW_MUTE_DEVICE 14 on the TPA10 orange button)
  * @param grab    EVIOCGRAB the node exclusively, suppressing the default Android action (e.g. the
  *                power key's screen-lock) so the press becomes an HA event only — gated by automation.
  * @param eventType  the HA `event_type` published on press; must be in the event entity's declared list.
+ * @param sw      false = an EV_KEY momentary key (emit on press/DOWN); true = an EV_SW latching switch
+ *                (e.g. SW_MUTE_DEVICE) — emit on every toggle, since each physical press flips it.
  */
-data class EvdevButton(val node: String, val code: Int, val grab: Boolean, val eventType: String)
+data class EvdevButton(
+    val node: String,
+    val code: Int,
+    val grab: Boolean,
+    val eventType: String,
+    val sw: Boolean = false,
+)

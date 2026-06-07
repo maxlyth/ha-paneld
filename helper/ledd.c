@@ -197,8 +197,11 @@ static void *evdev_thread(void *arg) {
         struct input_event ev;
         char line[48];
         while (read(fd, &ev, sizeof ev) == (ssize_t)sizeof ev) {
-            if (ev.type == EV_KEY) {
-                snprintf(line, sizeof line, "KEY %d %d\n", ev.code, ev.value);
+            // EV_KEY = momentary keys; EV_SW = latching switches (e.g. the TPA10 orange button reports
+            // SW_MUTE_DEVICE on gpio-keys, not a key). Stream both; the app decides what each means.
+            if (ev.type == EV_KEY || ev.type == EV_SW) {
+                snprintf(line, sizeof line, "%s %d %d\n",
+                         ev.type == EV_SW ? "SW" : "KEY", ev.code, ev.value);
                 sub_broadcast(line);
             }
         }

@@ -99,9 +99,28 @@ driver, device `pwmleds`). `system:system` 0664, so driven through the same `hap
 
 ## Buttons
 
-Hardware buttons are `adc-keys` on the rk3566 **SARADC** (`fe720000.saradc`), delivering standard
-Android KeyEvents (`KEY_MICMUTE`, `KEY_F`). ha-paneld captures these via its accessibility key-filter
-— no special path.
+The TPA10 has **three classes** of physical button, confirmed on-device with `getevent` (2026-06):
+
+**1. The four side buttons — `adc-keys`, standard KeyEvents.**
+On the rk3566 **SARADC** (`fe720000.saradc`), device `adc-keys1` (`/dev/input/event7`), scancodes
+`59`–`62`. Stock `Generic.kl` maps these to **`F1`–`F4`** → Android `KEYCODE_F1`–`F4`, which ha-paneld
+captures via its accessibility key-filter (no special path). They can be remapped by editing
+`/system/usr/keylayout/Generic.kl` (e.g. to `BRIGHTNESS_*` / `VOLUME_*`) on an su-capable unit.
+
+**2. The 5th (orange) button — a *switch*, not a key.**
+On `gpio-keys` (`/dev/input/event8`) it reports **`EV_SW` `SW_MUTE_DEVICE`** (switch code `14`), a
+*latching* event — **not** an `EV_KEY`. This is why no keylayout entry exists for it and Android/a11y
+never surface it (so the stock firmware leaves it dead). ha-paneld instruments it through the root
+helper daemon's evdev reader (`WATCH /dev/input/event8`, `sw=true`) and emits an HA event
+(`KEYCODE_MUTE`) on each toggle — validated end-to-end 2026-06. This is **stock** behaviour
+(undocumented elsewhere as of this writing).
+
+**3. The pin-hole button (recessed, beside the USB-C port) — recovery / reflash, not input.**
+Not wired to the Linux input subsystem (absent from `getevent`, `gpio-keys`, and `dmesg`), so it is
+**not HA-instrumentable**. By placement and platform (Rockchip rk3566) it serves the usual recessed-pin
+roles: a **factory-reset / default** trigger (paperclip or SIM tool, hold ~5–10 s) and the Rockchip
+**MASKROM/loader** pin — grounding it forces the SoC into USB flashing mode for low-level recovery with
+`rkdeveloptool`. Use it for un-bricking / reflashing, not for automation.
 
 ## Sensors
 
@@ -127,4 +146,5 @@ Camera GalaxyCore **GC05A2 / GC5035**; audio codec **ES7202**; Goodix touch; `rk
 - **LED + button backlight**: root only (`system:system` sysfs) → via `hapaneld-ledd`.
 - **Proximity**: app-direct (`SensorManager`).
 - **Temp / humidity / light**: root only (input subsystem / i2c) → would need the daemon.
-- **Buttons**: app-direct (KeyEvents via a11y).
+- **Buttons**: 4 side buttons app-direct (KeyEvents via a11y); 5th orange button is an `EV_SW` switch
+  → via `hapaneld-ledd` evdev watch; pin-hole button is recovery/maskrom (not input).
