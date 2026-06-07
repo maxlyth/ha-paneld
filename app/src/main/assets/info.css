@@ -12,7 +12,10 @@ h2 small{text-transform:none;letter-spacing:0;color:#8a8;font-weight:400}
 /* JS masonry: cards distributed shortest-column-first into flex columns (info.js) — gap-free. */
 .cards{display:flex;gap:18px;align-items:flex-start}
 .col{display:flex;flex-direction:column;gap:18px;flex:1 1 0;min-width:0}
-.card{background:#181818;border:1px solid #242424;border-radius:12px;padding:14px 16px}
+/* content-visibility: an OFF-SCREEN card renders as a fixed placeholder (its last-remembered height via
+   contain-intrinsic-size:auto), so a live card changing height while scrolled out of view cannot reflow
+   the document and shove the viewport — the single-column "jumps when the culprit isn't even visible". */
+.card{background:#181818;border:1px solid #242424;border-radius:12px;padding:14px 16px;content-visibility:auto;contain-intrinsic-size:auto 300px}
 table{border-collapse:collapse;width:100%;table-layout:fixed}
 th,td{text-align:left;padding:6px 8px;border-bottom:1px solid #2a2a2a;vertical-align:top;font-size:.9rem;overflow-wrap:anywhere;word-break:break-word}
 th{color:#9af;width:46%;font-weight:600}
@@ -23,6 +26,9 @@ canvas{width:100%;display:block;background:#181818;border-radius:8px;margin-bott
 .dt th{font-size:.68rem;text-transform:uppercase;letter-spacing:.03em;color:#7c8a99;font-weight:600;width:auto;border-bottom:2px solid #333}
 .dt td{color:#ccc;font-weight:400}
 .dt .num{text-align:right;width:32%}
+/* Live-polled tables (updated every 2s): truncate values instead of wrapping, so row heights stay
+   constant and the cards below never jump on a single-column layout. Full value on hover via title=. */
+#perf td,#topproc td,#smtbl td{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 form{display:flex;flex-direction:column;gap:10px}
 label{display:flex;flex-direction:column;gap:4px;font-size:.78rem;color:#9af}
 label small{color:#6a7a8a}

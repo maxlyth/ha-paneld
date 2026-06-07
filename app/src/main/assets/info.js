@@ -2,11 +2,45 @@
 // Served as a static asset (linted by CI: `node --check`) rather than embedded in a Kotlin
 // string, so syntax errors (e.g. an apostrophe in a single-quoted string) are caught at build.
 var cpuH=[],ramH=[],gpuH=[],MAX=120;  // ~4 min at 2s
-function row(k,v){return '<tr><th>'+k+'</th><td>'+v+'</td></tr>';}
-// Optional row that LATCHES: once a metric has ever been seen, its row is always emitted (showing a
-// "–" placeholder when momentarily absent) so the table height stays fixed and cards below never jump.
+// Reconcile a key/value table IN PLACE — stable DOM + textContent, never innerHTML. Rebuilding innerHTML
+// each poll destroyed the scroll-anchor nodes (the page jumped) and thrashed layout; updating text on
+// persistent nodes lets the browser hold scroll position and skips reflow. rows=[{label,val,suf,col,bold}].
+function paint(id,rows){
+ var t=document.getElementById(id); if(!t)return;
+ if(!t._p){t.textContent='';t._p=true;}            // drop the server-rendered placeholder once, then reuse
+ for(var i=0;i<rows.length;i++){var r=rows[i],tr=t.children[i];
+  if(!tr){tr=document.createElement('tr');tr.appendChild(document.createElement('th'));
+   var td=document.createElement('td');td.appendChild(document.createElement('span'));
+   td.appendChild(document.createTextNode(' '));var s=document.createElement('span');s.style.color='#888';
+   td.appendChild(s);tr.appendChild(td);t.appendChild(tr);}
+  var th=tr.children[0],v=tr.children[1].children[0],sf=tr.children[1].children[1];
+  if(th.textContent!==r.label)th.textContent=r.label;
+  if(v.textContent!==r.val)v.textContent=r.val;
+  v.style.color=r.col||'';v.style.fontWeight=r.bold?'600':'';
+  var suf=r.suf||'';if(sf.textContent!==suf)sf.textContent=suf;
+  tr.children[1].title=r.val+(suf?' '+suf:'');}            // full value on hover (cells truncate)
+ while(t.children.length>rows.length)t.removeChild(t.lastChild);
+}
+// Top-processes: persistent header + reconciled data rows (or a single muted message row).
+function paintTop(top,msg){
+ var t=document.getElementById('topproc');
+ if(!t._h){var hr=document.createElement('tr'),a=document.createElement('th');a.textContent='Process';
+  var b=document.createElement('th');b.className='num';b.textContent='% CPU';hr.appendChild(a);hr.appendChild(b);
+  t.textContent='';t.appendChild(hr);t._h=true;}
+ var empty=!top||!top.length,data=empty?[{name:msg||'needs root (su)'}]:top;
+ t.children[0].style.display=empty?'none':'';
+ for(var i=0;i<data.length;i++){var p=data[i],tr=t.children[i+1];
+  if(!tr){tr=document.createElement('tr');tr.appendChild(document.createElement('td'));
+   var c=document.createElement('td');c.className='num';tr.appendChild(c);t.appendChild(tr);}
+  var nm=tr.children[0],cp=tr.children[1];
+  if(nm.textContent!==p.name)nm.textContent=p.name;nm.style.color=empty?'#888':'';nm.title=empty?'':p.name;
+  var cv=p.cpu==null?'':p.cpu+'%';if(cp.textContent!==cv)cp.textContent=cv;}
+ while(t.children.length>data.length+1)t.removeChild(t.lastChild);
+}
+// Optional metric latch: once seen, the row stays (showing '–' when momentarily absent) for stable height.
 var pseen={};
-function orow(k,label,ok,val){if(ok)pseen[k]=true;if(!pseen[k])return '';return row(label,ok?val:'<span style="color:#888">–</span>');}
+function opt(k,label,ok,val,suf){if(ok)pseen[k]=true;if(!pseen[k])return null;
+ return {label:label,val:ok?val:'–',suf:ok?(suf||''):'',col:ok?'':'#888'};}
 function draw(){
  var c=document.getElementById('perfchart'),x=c.getContext('2d'),W=c.width,H=c.height;
  x.clearRect(0,0,W,H);
@@ -40,40 +74,35 @@ async function perf(){
  try{
   var d=await (await fetch('/perf')).json();
   setInstr(d.enabled!==false);
-  if(d.enabled===false){var off='<tr><td style="color:#888">instrumentation off — turn it on to measure</td></tr>';
-   document.getElementById('perf').innerHTML=off;document.getElementById('topproc').innerHTML=off;
-   var smt0=document.getElementById('smtbl');if(smt0)smt0.innerHTML=off;
+  if(d.enabled===false){paint('perf',[{label:'',val:'instrumentation off — turn it on to measure',col:'#888'}]);
+   paintTop(null,'instrumentation off');paint('smtbl',[{label:'',val:'instrumentation off',col:'#888'}]);
    document.getElementById('perfage').textContent='· off';return;}
   if(d.hist){cpuH=d.hist.cpu||[];ramH=d.hist.ram||[];gpuH=d.hist.gpu||[];}  // server FIFO
   draw();
   var ramPct=d.memTotalMb?Math.round(d.memUsedMb*100/d.memTotalMb):0;
   var peak=(d.cores&&d.cores.length)?Math.max.apply(null,d.cores):d.cpu;
-  var h=row('CPU',d.cpu+'%  <span style="color:#8a8">peak core '+peak+'%</span>');
   var fok=!!(d.freqMhz&&d.freqMhz.length),cur=fok?Math.max.apply(null,d.freqMhz):0,mx=d.freqMaxMhz||0;
-  h+=orow('clk','CPU clock',fok,(cur/1000).toFixed(2)+' GHz'+(mx?'  <span style="color:#8a8">/ '+(mx/1000).toFixed(2)+' GHz max</span>':''));
-  h+=orow('gpu','GPU',d.gpu!=null,d.gpu+'%'+(d.gpuMhz?'  <span style="color:#8a8">'+d.gpuMhz+' MHz</span>':''));
-  h+=row('RAM',d.memUsedMb+' / '+d.memTotalMb+' MB ('+ramPct+'%)');
-  h+=orow('load','Load avg',!!(d.load&&d.load.length),d.load?d.load.join('  '):'');
-  h+=orow('temp','Temperature',d.tempC!=null,d.tempC!=null?d.tempC.toFixed(1)+' °C':'');
-  document.getElementById('perf').innerHTML=h;
-  var tp=document.getElementById('topproc');
-  if(d.top&&d.top.length){
-   var t='<tr><th>Process</th><th class="num">% CPU</th></tr>';
-   d.top.forEach(function(p){t+='<tr><td>'+p.name+'</td><td class="num">'+p.cpu+'%</td></tr>';});
-   tp.innerHTML=t;
-  }else tp.innerHTML='<tr><td style="color:#888">needs root (su)</td></tr>';
-  var r=d.render,smh=document.getElementById('smhdr'),smt=document.getElementById('smtbl');
-  if(r==null){smh.textContent='· needs root';smt.innerHTML=row('Responsiveness','<span style="color:#888">needs root to measure</span>');drawSm([]);}
-  else if(r.status==='no-renderer'){smh.textContent='· waiting';drawSm(r.hist||[]);smt.innerHTML=row('Responsiveness','<span style="color:#888">no dashboard WebView detected yet</span>');}
+  var rows=[{label:'CPU',val:d.cpu+'%',suf:'peak core '+peak+'%'},
+   opt('clk','CPU clock',fok,(cur/1000).toFixed(2)+' GHz',mx?'/ '+(mx/1000).toFixed(2)+' GHz max':''),
+   opt('gpu','GPU',d.gpu!=null,d.gpu+'%',d.gpuMhz?d.gpuMhz+' MHz':''),
+   {label:'RAM',val:d.memUsedMb+' / '+d.memTotalMb+' MB ('+ramPct+'%)'},
+   opt('load','Load avg',!!(d.load&&d.load.length),d.load?d.load.join('  '):''),
+   opt('temp','Temperature',d.tempC!=null,d.tempC!=null?d.tempC.toFixed(1)+' °C':'')];
+  paint('perf',rows.filter(Boolean));
+  paintTop(d.top);
+  var r=d.render,smh=document.getElementById('smhdr');
+  if(r==null){smh.textContent='· needs root';paint('smtbl',[{label:'Responsiveness',val:'needs root to measure',col:'#888'}]);drawSm([]);}
+  else if(r.status==='no-renderer'){smh.textContent='· waiting';drawSm(r.hist||[]);paint('smtbl',[{label:'Responsiveness',val:'no dashboard WebView detected yet',col:'#888'}]);}
   else{
    drawSm(r.hist);
    var col=r.verdict==='smooth'?'#48c774':(r.verdict==='occasional'?'#d9a528':'#d04a3b');
-   var v=r.verdict==='smooth'?'Snappy':(r.verdict==='occasional'?'Sluggish':'Laggy');
+   var vv=r.verdict==='smooth'?'Snappy':(r.verdict==='occasional'?'Sluggish':'Laggy');
    smh.textContent='· '+r.pkg.split('.').pop();
-   var h=row('How it feels','<span style="color:'+col+'">●</span> <b>'+v+'</b>')
-    +row('Dashboard main-thread','<b>'+r.mainPct+'%</b> of one core <span style="color:#888">(100% = event processing maxed out)</span>');
-   h+=orow('jank','Rendering load',r.jankPct!=null,r.jankPct!=null?r.jankPct+'% janky <span style="color:#888">· only counts when actively drawing (e.g. video) — worst frame '+r.p99+' ms</span>':'<span style="color:#888">idle — not drawing</span>');
-   smt.innerHTML=h;
+   var sm=[{label:'How it feels',val:'● '+vv,col:col,bold:true},
+    {label:'Dashboard main-thread',val:r.mainPct+'% of one core',suf:'(100% = event processing maxed out)',bold:true}];
+   if(r.jankPct!=null){pseen.jank=true;sm.push({label:'Rendering load',val:r.jankPct+'% janky',suf:'· only counts when actively drawing (e.g. video) — worst frame '+r.p99+' ms'});}
+   else if(pseen.jank)sm.push({label:'Rendering load',val:'idle — not drawing',col:'#888'});
+   paint('smtbl',sm);
   }
   document.getElementById('perfage').textContent='· live';
  }catch(e){document.getElementById('perfage').textContent='· unavailable';}

@@ -96,9 +96,11 @@ class PaneldServer(
                 }
                 // Static front-end assets (externalised from the Kotlin string so CI can lint them).
                 get("/info.js") {
+                    call.response.headers.append("Cache-Control", "no-cache")  // assets iterate; always serve fresh
                     call.respondText(asset("info.js"), ContentType.Application.JavaScript)
                 }
                 get("/info.css") {
+                    call.response.headers.append("Cache-Control", "no-cache")
                     call.respondText(asset("info.css"), ContentType.Text.CSS)
                 }
                 get("/icon.svg") {
@@ -411,13 +413,20 @@ the current one. Changing the panel id may leave the old device in HA to remove 
 pace.</b> Match an HA dashboard's size to a desktop browser. <b>Density</b> scales the whole layout
 (lower dpi = more fits); <b>text size</b> scales WebView text. Panel firmware often ships these
 mismatched to the physical screen. Applies live, persists across reboot; root only.</p>
-<form method="post" action="/density" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
- <label>Density (dpi)<br><input name="density" type="number" min="${DensityController.MIN_DPI}" max="${DensityController.MAX_DPI}" value="$cur" style="width:88px"></label>
- <label>Text size<br><input name="font" type="number" step="0.05" min="${DensityController.MIN_FONT}" max="${DensityController.MAX_FONT}" value="$fs" style="width:88px"></label>
- <button type="submit">Apply</button>$rec
- <button type="submit" name="action" value="reset" formnovalidate>Reset</button>
-</form>
-<p class="note">Native density ${nat ?: "?"} · default text 1.0.</p></div>"""
+<form method="post" action="/density" style="display:flex;flex-direction:column;gap:10px">
+ <label style="display:flex;flex-direction:row;justify-content:space-between;align-items:center;gap:12px">
+  <span>Density (dpi) <small style="color:#888">· native ${nat ?: "?"}</small></span>
+  <input name="density" type="number" min="${DensityController.MIN_DPI}" max="${DensityController.MAX_DPI}" value="$cur" style="width:96px">
+ </label>
+ <label style="display:flex;flex-direction:row;justify-content:space-between;align-items:center;gap:12px">
+  <span>Text size <small style="color:#888">· default 1.0</small></span>
+  <input name="font" type="number" step="0.05" min="${DensityController.MIN_FONT}" max="${DensityController.MAX_FONT}" value="$fs" style="width:96px">
+ </label>
+ <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:2px">
+  <button type="submit">Apply</button>$rec
+  <button type="submit" name="action" value="reset" formnovalidate>Reset</button>
+ </div>
+</form></div>"""
     }
 
     /** Read a bundled static asset (info.js / info.css) as text. */

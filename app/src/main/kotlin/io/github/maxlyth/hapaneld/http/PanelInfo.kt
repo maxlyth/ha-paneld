@@ -30,6 +30,7 @@ object PanelInfo {
         m["CPU"] = cpu()
         m["RAM"] = ram(context)
         m["Storage"] = storage()
+        m["Display"] = display(context)
         m["System WebView"] = webView()
         m["HA Companion"] = companion(context)
         m.putAll(extras)
@@ -61,6 +62,17 @@ object PanelInfo {
     }
 
     private fun gib(bytes: Long): String = "%.1f GiB".format(bytes / 1024.0 / 1024.0 / 1024.0)
+
+    /** Physical resolution + current density (the dpi reflects any `wm density` override). */
+    private fun display(context: Context): String = try {
+        val wm = context.getSystemService(Context.WINDOW_SERVICE) as android.view.WindowManager
+        val dm = android.util.DisplayMetrics()
+        @Suppress("DEPRECATION")
+        wm.defaultDisplay.getRealMetrics(dm)
+        "${dm.widthPixels}×${dm.heightPixels} · ${dm.densityDpi} dpi"
+    } catch (e: Throwable) {
+        "?"
+    }
 
     private fun webView(): String = try {
         WebView.getCurrentWebViewPackage()?.let { "${it.packageName} ${it.versionName}" } ?: "unknown"
