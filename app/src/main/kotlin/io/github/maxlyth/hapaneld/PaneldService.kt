@@ -95,7 +95,10 @@ class PaneldService : Service() {
 
         mqtt = buildMqtt()
         mdns = MdnsAdvertiser(this, config)
-        server = PaneldServer(config, cacheDir, scope, this, sensors, ::reconfigure, ::panelInfo)
+        server = PaneldServer(
+            config, cacheDir, scope, this, sensors, ::reconfigure, ::panelInfo,
+            profile.recommendedDensity, profile.recommendedFontScale,
+        )
         // Stream daemon-instrumented hardware buttons (e.g. WF1589T power key) into the same event
         // entity as the a11y key capture. No-op on panels with no evdev buttons.
         EvdevButtonClient.start(profile.evdevButtons)

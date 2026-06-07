@@ -26,4 +26,6 @@ object S9e : DeviceProfile {
     override val model = "S9E"
     override val evdevButtons = emptyList<EvdevButton>()
     override val cpuGovernors = mapOf("Performance" to "performance", "Efficiency" to "powersave", "Auto" to "schedutil")
+    override val recommendedDensity: Int? = null
+    override val recommendedFontScale: Float? = null
 }

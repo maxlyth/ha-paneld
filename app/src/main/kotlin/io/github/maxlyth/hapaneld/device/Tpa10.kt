@@ -27,4 +27,6 @@ object Tpa10 : DeviceProfile {
         EvdevButton("/dev/input/event8", 14, grab = false, eventType = "KEYCODE_MUTE", sw = true),
     )
     override val cpuGovernors = mapOf("Performance" to "performance", "Efficiency" to "powersave", "Auto" to "schedutil")
+    override val recommendedDensity: Int? = null
+    override val recommendedFontScale: Float? = null
 }

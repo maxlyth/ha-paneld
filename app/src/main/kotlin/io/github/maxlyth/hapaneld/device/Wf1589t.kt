@@ -26,4 +26,6 @@ object Wf1589t : DeviceProfile {
         EvdevButton("/dev/input/event1", 116, grab = true, eventType = "KEYCODE_POWER"),
     )
     override val cpuGovernors = mapOf("Performance" to "performance", "Efficiency" to "powersave", "Auto" to "schedutil")
+    override val recommendedDensity: Int? = null
+    override val recommendedFontScale: Float? = null
 }

@@ -5,6 +5,7 @@ import android.util.Log
 import io.github.maxlyth.hapaneld.AudioPlayer
 import io.github.maxlyth.hapaneld.Config
 import io.github.maxlyth.hapaneld.control.CdpRelay
+import io.github.maxlyth.hapaneld.control.DensityController
 import io.github.maxlyth.hapaneld.sensors.SensorReporter
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
@@ -44,7 +45,12 @@ class PaneldServer(
     // Called after this server has written new settings to [config]; the service rebuilds MQTT/mDNS.
     private val onReconfigure: () -> Unit,
     private val info: () -> Map<String, String>,
+    // Per-panel "HA-optimised" density + text-scale suggestions (DeviceProfile), or null.
+    private val recommendedDensity: Int? = null,
+    private val recommendedFontScale: Float? = null,
 ) {
+    // Display sizing (density + text scale) via `wm density` / `font_scale` — su panels only.
+    private val density = DensityController()
     private val urlRegex = Regex("""https?://[^\s"']+""")
     // Stored as a stop lambda over a type-inferred server local, so we never have to name Ktor's
     // EmbeddedServer<TEngine, TConfiguration> generic type (which shifts between Ktor versions).
@@ -188,6 +194,27 @@ class PaneldServer(
                         )
                     }
                 }
+                post("/density") {
+                    val p = call.receiveParameters()
+                    val action = p["action"]                          // "reset" | "rec" (buttons)
+                    val d = p["density"]?.trim()?.toIntOrNull()       // custom density (Apply)
+                    val f = p["font"]?.trim()?.toFloatOrNull()        // custom font scale (Apply)
+                    val ok = when (action) {
+                        "reset" -> density.reset() or density.resetFontScale()
+                        "rec" -> (recommendedDensity?.let { density.set(it) } ?: false) or
+                            (recommendedFontScale?.let { density.setFontScale(it) } ?: false)
+                        else -> {  // Apply: set whichever fields were provided
+                            (d?.let { density.set(it) } ?: false) or
+                                (f?.let { density.setFontScale(it) } ?: false)
+                        }
+                    }
+                    call.respondText(
+                        "<!doctype html><meta charset=utf-8><meta http-equiv=refresh content='1;url=/'>" +
+                            "<body style='font-family:system-ui;background:#111;color:#eee;padding:20px'>" +
+                            (if (ok) "display density applied" else "density unchanged") + "…</body>",
+                        ContentType.Text.Html,
+                    )
+                }
                 get("/health") {
                     call.respondText("ha-paneld ${Config.VERSION} panel=${config.panelId}\n")
                 }
@@ -322,6 +349,7 @@ report of this panel's hardware, firmware, SELinux, su and node probes for bug r
  <button type="button" class="pbtn" onclick="inspStart()">Enable</button>
  <button type="button" class="pbtn" onclick="inspStop()">Stop</button></div>
 <p class="note" id="insthint"></p></div>
+${displayCardHtml()}
 <div class="card"><h2 id="config">Configuration</h2>
 <form method="post" action="/config">
  <label>Panel id <small>(entity_ids / MQTT topics)</small>
@@ -359,6 +387,27 @@ the current one. Changing the panel id may leave the old device in HA to remove 
 
     private fun esc(s: String): String = s
         .replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
+
+    /** Display-sizing card (density + text scale). Empty when su isn't reachable (no control). */
+    private fun displayCardHtml(): String {
+        val cur = density.current() ?: return ""
+        val nat = density.native()
+        val fs = density.fontScale()
+        val rec = if (recommendedDensity != null || recommendedFontScale != null)
+            """ <button type="submit" name="action" value="rec" formnovalidate>HA-optimised</button>""" else ""
+        return """<div class="card"><h2>Display sizing <small style="color:#d9a528">· experimental (R&amp;D)</small></h2>
+<p class="note"><b>Pre-release / R&amp;D — the right values aren't dialled in yet; experiment at your own
+pace.</b> Match an HA dashboard's size to a desktop browser. <b>Density</b> scales the whole layout
+(lower dpi = more fits); <b>text size</b> scales WebView text. Panel firmware often ships these
+mismatched to the physical screen. Applies live, persists across reboot; root only.</p>
+<form method="post" action="/density" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+ <label>Density (dpi)<br><input name="density" type="number" min="${DensityController.MIN_DPI}" max="${DensityController.MAX_DPI}" value="$cur" style="width:88px"></label>
+ <label>Text size<br><input name="font" type="number" step="0.05" min="${DensityController.MIN_FONT}" max="${DensityController.MAX_FONT}" value="$fs" style="width:88px"></label>
+ <button type="submit">Apply</button>$rec
+ <button type="submit" name="action" value="reset" formnovalidate>Reset</button>
+</form>
+<p class="note">Native density ${nat ?: "?"} · default text 1.0.</p></div>"""
+    }
 
     /** Read a bundled static asset (info.js / info.css) as text. */
     private fun asset(name: String): String =

@@ -436,6 +436,9 @@ Planned:
   Cloud) and send it to a panel via a small script (no add-on, no on-device TTS).
 - **[docs/performance.md](docs/performance.md)** — panel performance tuning: why dashboards lag on
   weak panels and how to fix it (the WebSocket-event-volume problem; the split-instance approach).
+- **[docs/display-sizing.md](docs/display-sizing.md)** *(experimental / R&D)* — matching dashboard size
+  to a desktop browser via display density + system font scale (Android panels often ship these
+  mismatched to the physical screen).
 - **[helper/README.md](helper/README.md)** — the root LED/control helper daemon for sysfs-LED panels
   (build + boot-persistent install).
 - **REST API** — browse and try every endpoint at `http://<panel>:8888/api`; the machine-readable
