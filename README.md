@@ -5,7 +5,6 @@
 
 [![CI](https://img.shields.io/github/actions/workflow/status/maxlyth/ha-paneld/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/maxlyth/ha-paneld/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/maxlyth/ha-paneld?style=flat-square)](https://github.com/maxlyth/ha-paneld/releases/latest)
-[![Downloads](https://img.shields.io/github/downloads/maxlyth/ha-paneld/total?style=flat-square)](https://github.com/maxlyth/ha-paneld/releases)
 [![License](https://img.shields.io/github/license/maxlyth/ha-paneld?style=flat-square)](LICENSE)
 [![Last commit](https://img.shields.io/github/last-commit/maxlyth/ha-paneld?style=flat-square)](https://github.com/maxlyth/ha-paneld/commits/main)
 
