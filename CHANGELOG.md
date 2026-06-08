@@ -8,202 +8,33 @@ From **v0.8.0**, entries are grouped under **Added** (new features/entities), **
 changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
 content appear. Earlier releases predate this convention and keep their flat lists.
 
-## v0.8.0-rc9 - 2026-06-08
+## v0.8.0 - 2026-06-08
 
-Supersedes rc8.
-
-### Changed
-
-- **Proximity graded/binary is now authoritative from the firmware version** where the profile knows the
-  rule (NSPanel Pro kernel-driver cutover — binary at fw ≥ 3.0.0 on the 86P / ≥ 3.5.0 on the 120P, graded
-  below), instead of waiting to *observe* varying distances. A graded panel no longer momentarily reads
-  "Binary" at idle. Panels without a known rule (e.g. TPA10) still fall back to runtime observation.
-- **`/diag` trimmed** — `panel_id`, `Friendly name`, `HTTP port`, `mDNS` and `Device ID` removed: they're
-  non-diagnostic instance config / an identifier, with no place in a public bug report.
-- **Controls buttons disable when their capability is missing** instead of silently no-op'ing — Back/Recents
-  grey out without the accessibility service, Launcher/Reboot without root, each with a hover reason. Volume
-  always works (no root needed).
-
-## v0.8.0-rc8 - 2026-06-08
-
-Supersedes rc7.
-
-### Changed
-
-- **Diagnostics report (`/diag`) rewritten** to reflect everything ha-paneld now detects. The `[panel]`
-  block reuses the exact info-page fact set (model + firmware, profile, Zigbee provenance, relays, sensor
-  technology / value-type / range, storage, …) so it **auto-tracks future fields** with no separate
-  maintenance. Format is **terse, human-readable, and machine-ingestible** (INI-style: `[panel]` is one
-  `Key=Value` per line, so a captured report drops straight into a regression-test harness); every other
-  section is collapsed to a single line. **Network addresses (IP / IPv6 / MQTT) are omitted** so it's safe
-  to paste into a public issue, and it stays version + build stamped (the report's version control).
-
-## v0.8.0-rc7 - 2026-06-08
-
-Supersedes rc6.
-
-### Changed
-
-- **Panel information split into separate cards** so it renders across the masonry columns instead of one
-  ever-growing card: **Panel information** (device/OS facts + id / friendly name), **Networking**
-  (IP / IPv6 / HTTP port / MQTT / mDNS / Network ADB), and **ha-paneld profile** — the rows *declared by
-  the device profile* (Platform, LED, Light/Proximity tech, Zigbee, Relays, CPU profile), with a link to
-  the profile source so a contributor seeing wrong data knows exactly where to fix it. The Capabilities
-  card is unchanged.
-
-## v0.8.0-rc6 - 2026-06-08
-
-Supersedes rc5.
-
-### Changed
-
-- **Light sensor / Proximity** in Panel information now state the sensor **technology** (declared per
-  profile — NSPanel Pro: Infrared / Ambient light; TPA10: Time-of-Flight), the **value type** (Binary /
-  Integer / Float) and the **range** — e.g. `yes · Infrared · Float · 0–106 cm` — instead of just yes/no.
-  Value type + range are read at runtime (`Sensor.maximumRange`/`resolution` + observed graded/binary);
-  the **chipset isn't shown** because the HAL reports only generic AOSP sensor names (no part number is
-  queryable). A graded proximity sensor reads "Binary" until it has reported varying distances.
-
-## v0.8.0-rc5 - 2026-06-08
-
-Supersedes rc4.
-
-### Fixed
-
-- **Zigbee CPU spin (NSPanel Pro vendor-native).** `enable()` is now **idempotent** — it never starts a
-  second guard when the radio/guard is already running. Duplicate guards fought over the gateway's fixed
-  MQTT client-id (`rkguardsh_zigbee`), thrashing the connection into a CPU spin (the 120P hog). `disable()`
-  no longer self-matches its own shell (it was killing itself before stopping the gateway) — it kills the
-  guard by exact cmdline. (The radio runs in the init domain and the stock Sonoff `su` can't signal it; use
-  eWeLink to fully stop the radio — it's harmless while running.)
-- **Phantom relays.** Gen1 NSPanel Pro (86P/120P) has **no relays**, but the PX30 kernel exposes 4 phantom
-  `st_relay` nodes — rc4 reported these as "4 relays". Reverted: Gen1 correctly shows none. (Gen2's 2 real
-  relays will be a declared count, not a sysfs probe.)
-
-### Changed
-
-- **Storage** now reports the **total eMMC** (matches the advertised 8/16/32 GB spec) plus usable `/data`
-  free, instead of only the `/data` partition (~3.5 GB, which matched no spec).
-- **Model + Platform** promoted to lines 4-5 of Panel information (panel identity up top).
+On-panel auto-brightness, a major hardening of NSPanel Pro hardware support, and an overhauled info / diagnostics page.
 
 ### Added
 
-- **Controls card** (software nav bar) on the info page — Back / Recents / **Launcher** (the system
-  launcher, to reach Settings / config apps — the HA Companion is already the home screen), plus Vol−/Vol+
-  and a confirmed Reboot. For panels with no physical nav bar.
-- **Auto-reload on update** — the info page carries a per-install build token; when the app is updated under
-  an already-open tab it **reloads automatically** to pull fresh HTML/CSS/JS (shows a reload banner instead
-  if you're mid-edit in a field, so typed input isn't lost).
-
-## v0.8.0-rc4 - 2026-06-08
-
-Supersedes rc3. NSPanel Pro hardware-detection fixes — a stock (vendor-native) 120P previously showed *no
-Zigbee*, a *dead* Zigbee switch, and *no relays*; a newcomer with that panel would hit all three on day one.
-
-### Fixed
-
-- **Zigbee on vendor-native firmware** — `ZigbeeController` now recognises BOTH gateway layouts: the
-  NSPanelTools-managed one (`run_guard_process.sh` + `package_version`) and the stock **vendor-native** one
-  (`guard_process.sh` only, no marker). Stock-firmware panels now correctly report the gateway as
-  present/running, the `zigbee_router` switch works (start via the right launcher; stop via `…stop`, or by
-  killing the guard+`zgateway` on vendor-native — which also frees the CPU-spinning vendor guard seen on
-  120P/3.7.1), and an explicit **off** persists across reboot (boot-reconcile, gated on the switch having
-  been configured so stock Zigbee is never disabled by default).
-- **Relay detection** — NSPanel Pro now probes `/sys/class/st_relay`, so relay-bearing variants expose their
-  relays (120P = 4, Gen2 = 2); the relay-less 86P correctly shows none.
+- **Auto-brightness** *(opt-in)* — `switch.<panel>_auto_brightness` drives the backlight from a lux stream (the panel's own ambient-light sensor, or HA-fed `number.<panel>_ambient_lux` on sensor-less panels), with an asymmetric response (snappy on lights-on, smoothed on daylight drift) and a Dimmer↔Brighter bias. Off by default.
+- **Controls card** (software nav bar) — Back / Recents / Launcher (reach Settings & other apps), plus Vol−/Vol+ and a confirmed Reboot, for panels with no physical nav bar. Each button **disables itself when its capability is absent** (Back/Recents need the accessibility service; Launcher/Reboot need root).
+- **Auto-reload on update** — an open info-page tab reloads itself when the app is updated (reload-banner fallback while you're mid-edit in a field).
+- **Debug sensor trace** *(instrumentation)* — `GET /sensortrace` exposes a RAM ring-buffer of raw lux / proximity samples + the auto-brightness internals (CSV or JSON) for filter fit-testing.
 
 ### Changed
 
-- **Panel info** — added a **Model · firmware** row (from `ro.product.version`: distinguishes 86P / 120P /
-  86P-Gen2); the Zigbee row shows provenance (`sonoff <ver>` vs `vendor-native`); relabelled
-  "Buttons (a11y)" → **"Accessibility nav"** (it reports the software back/recents service, not physical
-  buttons).
-- `DeviceProfile.detect()` also matches `rk3326` (NSPanel Pro **Gen2**, best-effort — capabilities are
-  runtime-probed regardless).
-
-## v0.8.0-rc3 - 2026-06-08
-
-Supersedes rc2 (carried forward in full). Info-page (panel web UI) polish only — no entity/behaviour changes.
+- **Panel info reorganised** into separate cards — **Panel information**, **Networking**, **ha-paneld profile** (the device-profile-declared rows, linked to the profile source), alongside **Capabilities** — so it scales across columns instead of one ever-growing card.
+- **Richer hardware readout** — a **Model · firmware** row (distinguishes 86P / 120P / 86P-Gen2), Zigbee provenance, **total eMMC** storage (matches the box spec), and Light / Proximity rows showing **technology · value-type · range** (e.g. `Infrared · Integer · 0–9 cm`). Proximity graded-vs-binary is decided authoritatively from the firmware version where the profile knows the rule.
+- **Info-page layout** rebuilt on native CSS multi-column masonry — balanced columns with near-zero layout-shift (CLS) from phone to 15″ panels; live tables wrap full values (touch can't hover a tooltip); dark-mode polish throughout.
+- **Diagnostics (`/diag`) rewritten** — terse, version-stamped, reflects every field ha-paneld detects, **safe to paste into a public issue** (network addresses + instance identifiers omitted), and structured for ingest into a regression-test harness.
+- **Network ADB readout** distinguishes *active now* from *persistent* (survives a reboot).
 
 ### Fixed
 
-- **Live tables no longer truncate or jump** — Responsiveness + Top-processes values **wrap** to show full
-  content (touch panels can't hover the `title=` tooltip), and those two cards hold a **per-card
-  high-water-mark** min-height so the Rendering-load verdict + process-name wrap stop the cards jumping
-  between 2s polls (fixed a `box-sizing` ratchet that grew them every frame).
-
-### Changed
-
-- **Dark-mode polish** — native number spinners theme dark (`color-scheme`); charts + the proximity gauge
-  get a bordered, darker plot area so the line/track reads against the card; the proximity gauge gains
-  `mdi:tablet-dashboard` (panel) and `mdi:walk` (object) end-markers; table row dividers appear only between
-  rows; the Responsiveness header reads **"HA Companion App UI"** (was the cryptic package tail).
-
-## v0.8.0-rc2 - 2026-06-08
-
-Supersedes rc1, which it carries forward in full; the only change is the info-page layout fix below.
-
-### Fixed
-
-- **Info-page multi-column balance + layout shift** — replaced the hand-rolled JS column packer (which
-  measured `content-visibility` placeholder heights and left columns visibly unbalanced) with native CSS
-  multi-column (`column-fill:balance`). Columns now balance correctly, and measured layout-shift (CLS)
-  drops to near-zero across phone→15″ panel widths and large text sizes (worst cell 0.90 → 0.05).
-  `content-visibility` is now scoped to the single-column regime so it can't feed placeholder heights into
-  the multi-column balancer.
-
-## v0.8.0-rc1 - 2026-06-07
-
-### Added
-
-- **Auto-brightness (opt-in)** — `switch.<panel>_auto_brightness` drives the screen backlight from a lux
-  stream: the panel's own ambient-light sensor where present, or HA-fed `number.<panel>_ambient_lux` on
-  sensor-less panels (e.g. the WF1589T). **Asymmetric response** — snappy on a sudden lights-on step,
-  heavily smoothed on slow daylight drift and sensor noise — with a Dimmer↔Brighter
-  `number.<panel>_brightness_bias`. Off by default (ha-paneld stays a pure actuator otherwise).
-- **Debug sensor trace** *(instrumentation)* — `GET /sensortrace` exposes a RAM ring buffer of raw lux +
-  proximity samples and the auto-brightness internals (smoothed/target/applied) for fit-testing the
-  filters; CSV (default) or `?format=json`. Decimated to span hours, instrumentation-gated, never
-  persisted; not an HA/MQTT surface.
-- **Display readout** — the info page's Panel-information card now shows screen resolution + current dpi.
-
-### Fixed
-
-- **Zigbee router boot-restore** — ha-paneld now persists the desired `switch.<panel>_zigbee_router`
-  state and, on connect, starts the gateway when it's left ON and **nothing else has started it**
-  (idempotent `!running()` guard — never double-starts or fights another launcher). So the router comes
-  back after a reboot even on a panel with no other gateway launcher (e.g. NSPanelTools fully removed),
-  hardening the "ha-paneld takes over the gateway" migration.
-- **Info page no longer jumps on a single-column layout** — the live cards (Performance, Top processes,
-  Responsiveness) rebuilt their tables via `innerHTML` each poll, changing row heights and shoving the
-  cards below (notably Configuration) — even while scrolled off-screen. Tables now update **in place**
-  (`textContent` on persistent nodes), live values **truncate** instead of wrapping, and off-screen
-  cards use `content-visibility` so they can't reflow the viewport.
-- **Proximity gauge no longer rescales every poll** — the gauge scale is now grow-only (settles to the
-  sensor's real range, then holds), so the threshold line, zones, dot and slider stop jittering on
-  panels whose raw reading exceeds the reported sensor range.
-
-### Changed
-
-- **Display-sizing form** rebuilt as clean label-left/value-right rows (was a ragged wrap that stacked
-  with mixed justification on a single column).
-- **Network ADB readout** now distinguishes *active now* (the runtime port — reachable over the LAN this
-  session) from *persistent* (the OS `persist.` prop — survives a reboot). A panel reachable over wifi
-  ADB but not set to persist no longer just reads "not persistent". ha-paneld does not re-apply network
-  ADB at boot, so "persistent" means genuine OS-level reboot survival.
+- **NSPanel Pro Zigbee** — detects both the stock **vendor-native** gateway and the NSPanelTools-managed one; the `switch.<panel>_zigbee_router` works on both, an explicit *off* persists across reboot, and the **120P vendor-guard CPU-spin** is resolved (ha-paneld no longer starts a duplicate guard).
+- **Accurate relay reporting** — Gen1 NSPanel Pro (86P / 120P) correctly shows **no relays**; the PX30 kernel's phantom `st_relay` nodes are no longer mistaken for hardware.
 
 ### Docs
 
-- **Firmware backup & restore guide for button-less panels** — wall panels have no volume/power
-  buttons, so the usual "hold a button combo for fastboot/recovery" advice is a non-starter. These are
-  all Rockchip devices, so new [docs/firmware-backup-restore.md](docs/firmware-backup-restore.md)
-  documents the real path: software loader entry (`adb reboot loader`, no buttons) + `rkdeveloptool`
-  (open-source, Linux — not the old Windows-only vendor tools) for backup/restore, **maskrom** as the
-  un-brickable fallback, a low-risk live `adb`+`dd` backup to take first, OTA opt-out, and per-panel
-  partition tables.
-- **Helper extension/contributor guide** — [helper/README.md](helper/README.md) now documents the root
-  daemon's panel-compartmentalisation contract (it stays panel-blind; per-panel specifics live in the
-  app's `DeviceProfile`) and how to extend it to new privileged device classes (i2c, IR, haptics).
+- **Firmware backup & restore guide** for button-less (Rockchip) panels.
 
 ## v0.7.1 - 2026-06-07
 

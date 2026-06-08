@@ -4,7 +4,7 @@
 </picture>
 
 [![CI](https://github.com/maxlyth/ha-paneld/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/maxlyth/ha-paneld/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/badge/release-v0.7.1-blue?style=flat-square)](https://github.com/maxlyth/ha-paneld/releases/latest)
+[![Release](https://img.shields.io/badge/release-v0.8.0-blue?style=flat-square)](https://github.com/maxlyth/ha-paneld/releases/latest)
 [![License](https://img.shields.io/badge/license-Apache_2.0-blue?style=flat-square)](LICENSE)
 
 **ha-paneld is free, open-source, and exists to fix what's wrong with Home Assistant wall panels** —
@@ -354,21 +354,24 @@ means you can never publish an in-place update again. Never commit the keystore 
 Validated across the panel fleet: Sonoff NSPanel Pro (PX30, Android 8.1), Tuya TPA10 (rk3566,
 Android 11), Electron WF1589T (rk3576, Android 14).
 
-**Latest release — 0.8.0-rc9 (release candidate):**
+**New in 0.8.0:**
 
 - **Auto-brightness** *(opt-in)* — `switch.<panel>_auto_brightness` maps a lux stream (the panel's own
   ambient-light sensor, or HA-fed `number.<panel>_ambient_lux`) to the backlight, with an **asymmetric
   response** (snappy on lights-on, heavily smoothed on slow daylight drift) and a Dimmer↔Brighter bias.
   Off by default.
-- **Zigbee + relays across NSPanel Pro variants** — detects the gateway in both the NSPanelTools-managed
-  and stock **vendor-native** layouts (so a stock 120P shows Zigbee + a working `zigbee_router` switch, not
-  "none"); the switch's state persists across reboot. Relays are probed from `st_relay` (120P = 4, Gen2 = 2;
-  86P = none). Panel-info shows the **model + firmware** and Zigbee provenance.
-- **Info-page (panel web UI)** — multi-column cards balance natively (CSS multi-column; objective CLS
-  near-zero from phone to 15″ panel); live tables wrap full values (touch panels can't hover a tooltip) and
-  no longer jump (per-card high-water-mark); dark-mode polish — themed number spinners, bordered chart +
-  proximity-gauge plot areas with `mdi:tablet-dashboard` / `mdi:walk` gauge end-markers, tidy row dividers;
-  Panel-information card shows screen resolution + dpi.
+- **Controls card** — an on-page software nav bar (Back / Recents / Launcher + Vol± / Reboot) for panels
+  with no physical nav bar; each button disables itself when its capability (accessibility / root) is absent.
+- **NSPanel Pro Zigbee, hardened** — detects both the stock **vendor-native** and NSPanelTools-managed
+  gateways (a stock 120P now shows Zigbee + a working `zigbee_router` switch); the state persists across
+  reboot, and the 120P vendor-guard CPU-spin is resolved. Relays are reported accurately — Gen1 has **none**
+  (the kernel's phantom `st_relay` nodes are not mistaken for hardware).
+- **Richer info page** — split into **Panel information / Networking / ha-paneld profile** cards; shows
+  model + firmware, total eMMC storage, and Light/Proximity **technology · value-type · range**; the page
+  **auto-reloads** when the app is updated. Native CSS multi-column layout (near-zero layout-shift,
+  phone→15″) with dark-mode polish.
+- **Diagnostics (`/diag`) rewritten** — terse, public-safe (no addresses/identifiers), reflects every
+  detected field, and structured for a regression-test harness.
 - **Debug sensor trace** (`/sensortrace`) for objective auto-brightness / proximity filter tuning.
 
 <details>
@@ -457,7 +460,7 @@ Carried from 0.4.x:
 ### Planned
 
 - **Proximity-calibration capture UX** — clearer near/far capture steps to finish the calibration-card
-  rework (the gauge auto-ranging shipped in 0.8.0-rc1).
+  rework (the gauge auto-ranging shipped in 0.8.0).
 - **More performance tooling** — deeper on-device instrumentation to measure, diagnose and tune
   dashboard performance on weak panels.
 - **Built-in relay control beyond the S9E** — the same `switch.<panel>_relay*` model on other panels
