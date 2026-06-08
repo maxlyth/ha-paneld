@@ -104,10 +104,18 @@ async function perf(){
    else if(pseen.jank)sm.push({label:'Rendering load',val:'idle — not drawing',col:'#888'});
    paint('smtbl',sm);
   }
+  hwm('smtbl');hwm('topproc');
   document.getElementById('perfage').textContent='· live';
  }catch(e){document.getElementById('perfage').textContent='· unavailable';}
 }
 perf();setInterval(perf,2000);
+// High-water-mark: the two live cards whose heights swing most — Responsiveness (the Rendering-load row
+// flips between a long "X% janky…" line and a short "idle") and Top processes (process names wrap to 1–2
+// lines) — never shrink below the tallest they've been (latched min-height on the card). They stop jumping
+// between 2s polls; grow occasionally, then settle. Reset on resize (column width changes re-wrap content,
+// voiding the old max). Other cards keep wrapping freely — only these two opted in.
+function hwm(id){var t=document.getElementById(id);if(!t)return;var c=t.parentNode,h=c.offsetHeight;if(h>(c._hwm||0)){c._hwm=h;c.style.minHeight=h+'px';}}
+window.addEventListener('resize',function(){['smtbl','topproc'].forEach(function(id){var t=document.getElementById(id),c=t&&t.parentNode;if(c){c._hwm=0;c.style.minHeight='';}});});
 function setInstr(on){var a=document.getElementById('instron'),b=document.getElementById('instroff');if(a)a.className='pbtn'+(on?' on':'');if(b)b.className='pbtn'+(on?'':' on');}
 function instr(on){fetch('/instrumentation',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'enabled='+on}).then(function(r){return r.json();}).then(function(){perf();}).catch(function(){});}
 var proxMax=0,proxDrag=false;  // gauge scale — GROW-ONLY (sticky) so it settles then stays put, not rescaled per poll
