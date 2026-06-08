@@ -274,18 +274,11 @@ class PaneldServer(
 
     private fun infoHtml(): String {
         val pid = esc(config.panelId)
-        // Banner reflects the LIVE MQTT state (from the info map), not just whether a broker string is
-        // set — so auto-discovery + a real connection clears it, and an auth rejection says so.
+        // ESPHome native API needs no broker — the only required setup is a non-default panel id (the
+        // device identity HA's ESPHome integration connects to + names entities from).
         val facts = info()
-        val mqtt = facts["MQTT"] ?: "disabled"
         val needs = mutableListOf<String>()
         if (config.panelIdIsDefault) needs.add("a panel id")
-        when {
-            mqtt.contains("connected") || mqtt.contains("connecting") -> {} // connected / transient — fine
-            mqtt.contains("auth rejected") -> needs.add("valid MQTT credentials (the broker rejected them)")
-            mqtt.contains("unreachable") -> needs.add("a reachable MQTT broker")
-            else -> needs.add("the MQTT broker")
-        }
         val setupBanner = if (needs.isNotEmpty())
             """<div class="setup">⚠ This panel needs <a href="#config">${needs.joinToString(" and ")}</a> — set below.</div>"""
         else ""

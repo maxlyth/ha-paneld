@@ -16,7 +16,12 @@ import io.github.maxlyth.hapaneld.control.AdbController
 import io.github.maxlyth.hapaneld.device.DeviceProfile
 import io.github.maxlyth.hapaneld.input.EvdevButtonClient
 import io.github.maxlyth.hapaneld.control.AutoBrightnessController
+import io.github.maxlyth.hapaneld.esphome.Esp
+import io.github.maxlyth.hapaneld.esphome.EspEntity
 import io.github.maxlyth.hapaneld.esphome.EspHomeServer
+import io.github.maxlyth.hapaneld.input.ButtonBus
+import io.github.maxlyth.hapaneld.input.PanelAccessibilityService
+import io.github.maxlyth.hapaneld.util.HelperClient
 import io.github.maxlyth.hapaneld.control.BrightnessController
 import io.github.maxlyth.hapaneld.control.CpuController
 import io.github.maxlyth.hapaneld.control.NavigateController
@@ -55,7 +60,6 @@ class PaneldService : Service() {
     private lateinit var config: Config
     private lateinit var server: PaneldServer
     private lateinit var mdns: MdnsAdvertiser
-    private lateinit var mqtt: MqttBridge
     private lateinit var sensors: SensorReporter
 
     // Controllers are fields so the MQTT bridge can be rebuilt on a panel_id change.
@@ -71,9 +75,15 @@ class PaneldService : Service() {
     private lateinit var relay: RelayController
     private lateinit var cpu: CpuController
     private lateinit var adb: AdbController
-    private lateinit var esphome: EspHomeServer   // spike: ESPHome native-API server (dual-stack w/ MQTT)
-    @Volatile private var lastLux = 0f            // spike: cached for the ESPHome illuminance sensor
-    @Volatile private var lastNear = false        // spike: cached for the ESPHome proximity binary_sensor
+    private lateinit var esphome: EspHomeServer   // ESPHome native-API server (sole transport on this branch)
+    // Cached state for the ESPHome read-only / push entities (sensors fed from SensorReporter callbacks).
+    @Volatile private var lastLux = 0f
+    @Volatile private var lastNear = false
+    @Volatile private var lastTemp = 0f
+    @Volatile private var lastHumid = 0f
+    @Volatile private var lastAmbientLux = 0f     // HA-fed ambient lux number (echo)
+    @Volatile private var lastButtonsBri = 0      // button-backlight light (write-only HAL → cache last set)
+    @Volatile private var lastNavigate = "/"      // navigate text (write-only → cache last set)
     private lateinit var profile: DeviceProfile
     private var configUrl: String? = null
 
@@ -98,21 +108,8 @@ class PaneldService : Service() {
         relay = RelayController(profile)
         cpu = CpuController(profile)
         adb = AdbController()
-        // SPIKE: ESPHome native-API server, dual-stack alongside MQTT. mac = androidId's first 12 hex.
-        val mac = config.androidId.padEnd(12, '0').take(12).chunked(2).joinToString(":").uppercase()
-        esphome = EspHomeServer(
-            deviceName = config.panelId, macAddress = mac, version = Config.VERSION,
-            friendlyName = config.friendlyName, model = config.model, manufacturer = config.manufacturer,
-            getBrightness = { brightness.getBrightness() }, setBrightness = { brightness.setBrightness(it) },
-            wake = { screen.wake() }, sleep = { screen.sleep() },
-            getWakeOnWave = { config.wakeOnWave }, setWakeOnWave = { config.setWakeOnWave(it) },
-            getVolume = { volume.getPercent() }, setVolume = { volume.setPercent(it) },
-            getIlluminance = { lastLux }, getProximityNear = { lastNear },
-            onReload = { system.reloadDashboard(config.dashboardPackage) },
-        )
         configUrl = localIpv4()?.let { "http://$it:${config.httpPort}/" }
-
-        mqtt = buildMqtt()
+        esphome = buildEsphome()
         mdns = MdnsAdvertiser(this, config)
         server = PaneldServer(
             config, cacheDir, scope, this, sensors, ::reconfigure, ::panelInfo,
@@ -123,16 +120,101 @@ class PaneldService : Service() {
         EvdevButtonClient.start(profile.evdevButtons)
     }
 
-    private fun buildMqtt(): MqttBridge = MqttBridge(
-        config, brightness, screen, led, navigate, volume, system, touchSound, zigbee, relay, cpu, adb,
-        accessibilityEnabled(), profile.evdevButtons.isNotEmpty(),
-        sensors.hasLight(), sensors.hasProximity(),
-        sensors.hasTemperature(), sensors.hasHumidity(),
-        // Button backlight lives on the sysfs/daemon LED panels (TPA10), reached via the daemon's BTN.
-        led is SocketLedController, autoBright, configUrl,
-        // When no broker is configured, find HA on the LAN via mDNS and default to its :1883.
-        discoverHaIp = { mdns.discoverHaIp() },
-    )
+    private fun buildEsphome(): EspHomeServer {
+        val mac = config.androidId.padEnd(12, '0').take(12).chunked(2).joinToString(":").uppercase()
+        return EspHomeServer(
+            deviceName = config.panelId, macAddress = mac, version = Config.VERSION,
+            friendlyName = config.friendlyName, model = config.model, manufacturer = config.manufacturer,
+            webserverPort = config.httpPort,          // -> HA "Visit" link to the info UI
+            entitiesProvider = { buildEsphomeEntities() },
+        )
+    }
+
+    /**
+     * The full HA entity surface for ESPHome, mirroring the (now-removed) MQTT discovery gating exactly.
+     * Built lazily on an ESPHome connection thread — the capability probes (led/zigbee/cpu/adb/relay) shell
+     * out via su, so this must never run on the main thread (EspHomeServer caches the result).
+     */
+    private fun buildEsphomeEntities(): List<EspEntity> {
+        val e = mutableListOf<EspEntity>()
+        var k = 0
+        fun key() = ++k
+
+        e += Esp.brightnessLight(key(), "screen", "Screen",
+            getOn = { brightness.getBrightness() > 0 }, getBri = { brightness.getBrightness() },
+            set = { on, bri -> if (!on) screen.sleep() else { screen.wake(); bri?.let { brightness.setBrightness(it); screen.noteLevel(it) } } })
+
+        if (led.available()) {
+            if (led.colorCapable()) e += Esp.rgbLight(key(), "led", "LED",
+                getState = {
+                    val p = config.lastLed.split(",")
+                    Triple(p.getOrNull(0) == "1", p.getOrNull(1)?.toIntOrNull() ?: 255,
+                        intArrayOf(p.getOrNull(2)?.toIntOrNull() ?: 255, p.getOrNull(3)?.toIntOrNull() ?: 255, p.getOrNull(4)?.toIntOrNull() ?: 255))
+                },
+                set = { on, bri, r, g, b ->
+                    if (!on) { led.off(); config.lastLed = "0,0,0,0,0" }
+                    else { led.setRgb(r * bri / 255, g * bri / 255, b * bri / 255); config.lastLed = "1,$bri,$r,$g,$b" }
+                })
+            else e += Esp.brightnessLight(key(), "led", "LED",
+                getOn = { config.lastLed.startsWith("1") }, getBri = { config.lastLed.split(",").getOrNull(1)?.toIntOrNull() ?: 255 },
+                set = { on, bri -> if (!on) { led.off(); config.lastLed = "0,0,0,0,0" } else { val v = bri ?: 255; led.setRgb(v, v, v); config.lastLed = "1,$v,$v,$v,$v" } })
+        }
+
+        e += Esp.text(key(), "navigate", "Navigate", icon = "mdi:monitor-dashboard",
+            get = { lastNavigate }, set = { lastNavigate = it; navigate.navigate(it) })
+
+        val eventTypes = listOf(
+            "KEYCODE_POWER", "KEYCODE_MUTE", "KEYCODE_F", "KEYCODE_F1", "KEYCODE_F2", "KEYCODE_F3",
+            "KEYCODE_F4", "KEYCODE_BACK", "KEYCODE_HOME", "KEYCODE_DPAD_CENTER", "KEYCODE_VOLUME_UP", "KEYCODE_VOLUME_DOWN")
+        if (accessibilityEnabled() || profile.evdevButtons.isNotEmpty())
+            e += Esp.event(key(), "button", "Button", eventTypes)
+        if (accessibilityEnabled()) {
+            e += Esp.button(key(), "back", "Back", icon = "mdi:arrow-left") { PanelAccessibilityService.navBack() }
+            e += Esp.button(key(), "recents", "Recents", icon = "mdi:view-agenda") { PanelAccessibilityService.navRecents() }
+        }
+
+        e += Esp.number(key(), "volume", "Volume", 0f, 100f, 1f, unit = "%", icon = "mdi:volume-high",
+            get = { volume.getPercent().toFloat() }, set = { volume.setPercent(it.toInt()) })
+
+        if (sensors.hasLight()) e += Esp.sensor(key(), "illuminance", "Illuminance", "lx", "illuminance") { lastLux }
+        if (sensors.hasProximity()) e += Esp.binarySensor(key(), "proximity", "Proximity", "occupancy") { lastNear }
+        if (sensors.hasTemperature()) e += Esp.sensor(key(), "temperature", "Temperature", "°C", "temperature", decimals = 1) { lastTemp }
+        if (sensors.hasHumidity()) e += Esp.sensor(key(), "humidity", "Humidity", "%", "humidity") { lastHumid }
+
+        if (led is SocketLedController) e += Esp.brightnessLight(key(), "buttons", "Button backlight", icon = "mdi:gesture-tap-button",
+            getOn = { lastButtonsBri > 0 }, getBri = { lastButtonsBri },
+            set = { on, bri -> val lvl = if (!on) 0 else bri ?: 255; HelperClient.send("BTN $lvl"); lastButtonsBri = lvl })
+
+        if (sensors.hasProximity()) e += Esp.switchE(key(), "wake_on_wave", "Wake on wave", icon = "mdi:gesture-tap",
+            get = { config.wakeOnWave }, set = { config.setWakeOnWave(it) })
+        e += Esp.switchE(key(), "touch_sound", "Touch sound", icon = "mdi:volume-high",
+            get = { touchSound.isEnabled() }, set = { touchSound.set(it) })
+        e += Esp.switchE(key(), "auto_brightness", "Auto-brightness", icon = "mdi:brightness-auto",
+            get = { config.autoBrightness }, set = { config.setAutoBrightness(it) })
+        e += Esp.number(key(), "brightness_bias", "Brightness bias", -100f, 100f, 5f, config = true, icon = "mdi:brightness-6",
+            get = { config.brightnessBias.toFloat() }, set = { config.setBrightnessBias(it.toInt()) })
+        e += Esp.number(key(), "ambient_lux", "Ambient lux (HA-fed)", 0f, 100000f, 1f, unit = "lx", slider = false, config = true, icon = "mdi:brightness-5",
+            get = { lastAmbientLux }, set = { lastAmbientLux = it; autoBright.submitLux(it) })
+
+        if (zigbee.present()) e += Esp.switchE(key(), "zigbee_router", "Zigbee router", icon = "mdi:zigbee",
+            get = { zigbee.running() }, set = { config.setZigbeeRouterEnabled(it); if (it) zigbee.enable() else zigbee.disable() })
+
+        for (n in 1..relay.count()) { val nn = n; e += Esp.switchE(key(), "relay$nn", "Relay $nn", config = false, icon = "mdi:electric-switch",
+            get = { relay.get(nn) }, set = { relay.set(nn, it) }) }
+        for (n in 1..relay.ledCount()) { val nn = n; e += Esp.onOffLight(key(), "button_led$nn", "Button LED $nn", icon = "mdi:led-on",
+            get = { relay.ledGet(nn - 1) }, set = { relay.ledSet(nn - 1, it) }) }
+
+        if (cpu.available()) e += Esp.select(key(), "cpu_governor", "CPU profile", CpuController.TIERS, icon = "mdi:speedometer",
+            get = { cpu.currentTier() ?: "Auto" }, set = { cpu.setTier(it) })
+        if (adb.available()) e += Esp.switchE(key(), "network_adb", "Network ADB", icon = "mdi:adb",
+            get = { adb.isPersisted() }, set = { adb.set(it) })
+
+        e += Esp.button(key(), "reload", "Reload dashboard", icon = "mdi:web-refresh") { system.reloadDashboard(config.dashboardPackage) }
+        e += Esp.button(key(), "reboot", "Reboot", deviceClass = "restart", icon = "mdi:restart") { system.reboot() }
+        e += Esp.button(key(), "launcher", "Launcher", icon = "mdi:apps") { system.launchLauncher(config.launcherPackage) }
+        e += Esp.button(key(), "home", "Home Assistant", icon = "mdi:home-assistant") { system.launchHome(config.dashboardPackage) }
+        return e
+    }
 
     /**
      * Apply config the HTTP page has already written to [config]: clear the OLD discovery (the live
@@ -140,38 +222,27 @@ class PaneldService : Service() {
      */
     private fun reconfigure() {
         scope.launch {
-            runCatching { mqtt.clearDiscovery() } // bridge was built with the previous panel id
-            runCatching { mqtt.stop() }
+            runCatching { esphome.stop() }    // rebuild on a panel_id / friendly-name change
             runCatching { mdns.stop() }
-            mqtt = buildMqtt()
+            esphome = buildEsphome()
             mdns = MdnsAdvertiser(this@PaneldService, config)
             mdns.start()
-            mqtt.start()
+            esphome.start()
+            ButtonBus.listener = { event -> esphome.publishEvent("button", event) }
             io.github.maxlyth.hapaneld.http.PerfReader.dashboardPkg = dashboardTarget()
-            Log.i(TAG, "reconfigured: panel=${config.panelId} broker=${config.mqttBroker.ifEmpty { "(disabled)" }}")
+            Log.i(TAG, "reconfigured: panel=${config.panelId} (ESPHome :${EspHomeServer.PORT})")
         }
     }
 
     /** Ordered facts for the info page (`GET /`). */
     private fun panelInfo(): Map<String, String> {
-        // activeBroker reflects auto-discovery (tcp://<ha-ip>:1883) when no broker is configured.
-        val broker = mqtt.activeBroker.ifBlank { config.mqttBroker }
-        val host = broker.substringAfter("://").substringBefore(":").ifBlank { "?" }
-        val auto = config.mqttBroker.isBlank() && mqtt.activeBroker.isNotBlank()
-        val mqttStatus = when (mqtt.state) {
-            "connected" -> "$host · connected" + (if (auto) " (auto)" else "")
-            "auth-failed" -> "$host · reachable, auth rejected — check username/password"
-            "unreachable" -> "$host · unreachable"
-            "connecting" -> "$host · connecting…"
-            else -> "disabled"
-        }
         val extras = linkedMapOf(
             "panel_id" to config.panelId,
             "Friendly name" to config.friendlyName,
             "HTTP port" to config.httpPort.toString(),
             "Local IP" to (localIpv4() ?: "?"),
             "Local IPv6" to (localIpv6() ?: "—"),
-            "MQTT" to mqttStatus,
+            "ESPHome API" to ":${EspHomeServer.PORT} · plaintext (native API)",
             "mDNS" to "${config.panelId} ${Config.MDNS_SERVICE_TYPE}",
             "Platform" to "${profile.displayName} · ${profile.socClass}",
             "LED" to ledLabel(),
@@ -230,21 +301,23 @@ class PaneldService : Service() {
             io.github.maxlyth.hapaneld.http.PerfReader.start(scope)
             server.start()
             mdns.start()
-            mqtt.start()
-            esphome.start()   // spike: ESPHome native-API server on :6053 (plaintext)
+            esphome.start()   // ESPHome native-API server on :6053 (plaintext) — sole transport
+            ButtonBus.listener = { event -> esphome.publishEvent("button", event) }
             sensors.start(
-                onLux = { lux -> mqtt.publishLight(lux); lastLux = lux.toFloat(); esphome.publishStates() },
+                onLux = { lux -> lastLux = lux.toFloat(); esphome.publishStates() },
                 onLuxRaw = { lux -> autoBright.submitLux(lux) },
                 onProximity = { near ->
-                    mqtt.publishProximity(near)
                     lastNear = near; esphome.publishStates()
                     // Wake-on-wave: local, instant, wake-only. onProximity fires only on far->near
                     // transitions (natural debounce); sleep stays HA's job.
                     if (near && config.wakeOnWave) screen.wake()
                 },
-                onTemperature = { c -> mqtt.publishTemperature(c) },
-                onHumidity = { h -> mqtt.publishHumidity(h) },
+                onTemperature = { c -> lastTemp = c.toFloat(); esphome.publishStates() },
+                onHumidity = { h -> lastHumid = h.toFloat(); esphome.publishStates() },
             )
+            // Zigbee router boot-restore (previously done on MQTT connect): bring the gateway up if it's
+            // the desired persisted state and nothing else started it. su + slow (~30s) — fine on IO.
+            runCatching { if (zigbee.present() && config.zigbeeRouterEnabled && !zigbee.running()) zigbee.enable() }
         }
         return START_STICKY
     }
@@ -278,7 +351,7 @@ class PaneldService : Service() {
         runCatching { sensors.stop() }
         runCatching { server.stop() }
         runCatching { mdns.stop() }
-        runCatching { mqtt.stop() }
+        runCatching { ButtonBus.listener = null }
         runCatching { esphome.stop() }
         scope.cancel()
         super.onDestroy()
