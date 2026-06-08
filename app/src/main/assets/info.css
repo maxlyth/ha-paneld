@@ -13,7 +13,7 @@ h2 small{text-transform:none;letter-spacing:0;color:#8a8;font-weight:400}
    (column-fill:balance, the default) — ~400px wide, so 1 column on a phone up to 4 on a 1920/2560 panel.
    No JS: this replaces a hand-rolled greedy that mis-balanced because it measured placeholder heights. */
 .cards{columns:400px;column-gap:18px}
-.card{background:#181818;border:1px solid #242424;border-radius:12px;padding:14px 16px;margin:0 0 18px;break-inside:avoid;-webkit-column-break-inside:avoid}
+.card{background:#181818;border:1px solid #242424;border-radius:12px;padding:14px 16px;margin:0 0 18px;break-inside:avoid;-webkit-column-break-inside:avoid;box-sizing:border-box}
 /* content-visibility skips rendering an OFF-SCREEN card (placeholder height via contain-intrinsic-size) so
    a live card changing height while scrolled out of view can't reflow the page and shove the viewport.
    SCOPED to the single-column regime only (<858px = one ~400px column): in multi-column it would feed
