@@ -59,38 +59,33 @@ object DiagReader {
         )
     }
 
-    fun dump(ctx: Context): String = buildString {
+    /**
+     * Terse, version-stamped copy-paste report for GitHub issues. The `[panel]` block reuses the EXACT
+     * facts shown on the info page ([facts], passed by the caller) so it auto-tracks every field we add —
+     * no separate maintenance — and **network addresses are omitted** ([OMIT]) so it's safe to paste in a
+     * public thread. Every other section is one line. The version+build header is the version control: a
+     * pasted report is always attributable to the build that produced it.
+     */
+    fun dump(ctx: Context, facts: Map<String, String> = emptyMap()): String = buildString {
         appendLine("ha-paneld diagnostics — ${BuildConfig.VERSION_NAME} (build ${BuildConfig.VERSION_CODE})")
-        appendLine()
-        appendLine("[device]")
-        appendLine("manufacturer=${Build.MANUFACTURER} brand=${Build.BRAND} model=${Build.MODEL} device=${Build.DEVICE}")
-        appendLine("product=${Build.PRODUCT} board=${Build.BOARD} hardware=${Build.HARDWARE}")
-        appendLine("android=${Build.VERSION.RELEASE} sdk=${Build.VERSION.SDK_INT} display=${Build.DISPLAY}")
-        appendLine("abis=${Build.SUPPORTED_ABIS.joinToString(",")}")
-        appendLine("fingerprint=${Build.FINGERPRINT}")
-        appendLine()
-        appendLine("[environment]")
-        appendLine("selinux.enforce=${readFile("/sys/fs/selinux/enforce")?.trim() ?: "?"}")
-        appendLine("su.available=${Su.available()}")
-        appendLine("write_settings=${Settings.System.canWrite(ctx)}")
-        appendLine("a11y.enabled=${a11yEnabled(ctx)}")
-        appendLine("helper_daemon.reachable=${HelperClient.available()}")
-        appendLine("dev.ledjni.exists=${File("/dev/ledjni").exists()} openable=${NativeLed.available()}")
-        appendLine()
-        appendLine("[/sys/class/leds] ${listDir("/sys/class/leds")}")
-        appendLine("[/sys/class/backlight] ${listDir("/sys/class/backlight")}")
-        appendLine("[/sys/class/devfreq] ${listDir("/sys/class/devfreq")}")
-        appendLine()
-        appendLine("[ls -Z (SELinux labels)]")
-        appendLine(exec("ls -Zd /sys/class/leds/*/ /sys/class/backlight/*/ /dev/ledjni 2>&1"))
-        appendLine("[packages]")
-        for (id in listOf("io.homeassistant.companion.android", "io.homeassistant.companion.android.minimal")) {
-            appendLine("  $id=${pkgVer(ctx, id)}")
+        if (facts.isNotEmpty()) {
+            appendLine()
+            appendLine("[panel]")
+            for ((k, v) in facts) if (k !in OMIT) appendLine("$k=$v")
         }
         appendLine()
-        appendLine("[capabilities]")
-        for (c in capabilities(ctx)) appendLine("  ${c.name}: ${c.status} — ${c.note}")
+        appendLine("[build] fingerprint=${Build.FINGERPRINT}")
+        appendLine("board=${Build.BOARD} product=${Build.PRODUCT} hardware=${Build.HARDWARE} abis=${Build.SUPPORTED_ABIS.joinToString(",")}")
+        appendLine("[env] selinux=${readFile("/sys/fs/selinux/enforce")?.trim() ?: "?"} su=${Su.available()} write_settings=${Settings.System.canWrite(ctx)} a11y=${a11yEnabled(ctx)} daemon=${HelperClient.available()} ledjni=${NativeLed.available()}")
+        appendLine("[sysfs] leds=${listDir("/sys/class/leds")} backlight=${listDir("/sys/class/backlight")} devfreq=${listDir("/sys/class/devfreq")}")
+        appendLine("[labels] ${exec("ls -Zd /sys/class/leds/*/ /sys/class/backlight/*/ /dev/ledjni 2>&1").replace("\n", " ")}")
+        appendLine("[packages] " + listOf("io.homeassistant.companion.android", "io.homeassistant.companion.android.minimal")
+            .joinToString(" ") { "${it.substringAfterLast('.')}=${pkgVer(ctx, it)}" })
+        appendLine("[capabilities] " + capabilities(ctx).joinToString(" | ") { "${it.name}=${it.status}" })
     }
+
+    // Network addresses kept OUT of the report — it's meant for public GitHub issues.
+    private val OMIT = setOf("Local IP", "Local IPv6", "MQTT")
 
     private fun a11yEnabled(ctx: Context): Boolean =
         (Settings.Secure.getString(ctx.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: "")

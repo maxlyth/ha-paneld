@@ -8,6 +8,20 @@ From **v0.8.0**, entries are grouped under **Added** (new features/entities), **
 changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
 content appear. Earlier releases predate this convention and keep their flat lists.
 
+## v0.8.0-rc8 - 2026-06-08
+
+Supersedes rc7.
+
+### Changed
+
+- **Diagnostics report (`/diag`) rewritten** to reflect everything ha-paneld now detects. The `[panel]`
+  block reuses the exact info-page fact set (model + firmware, profile, Zigbee provenance, relays, sensor
+  technology / value-type / range, storage, …) so it **auto-tracks future fields** with no separate
+  maintenance. Format is **terse, human-readable, and machine-ingestible** (INI-style: `[panel]` is one
+  `Key=Value` per line, so a captured report drops straight into a regression-test harness); every other
+  section is collapsed to a single line. **Network addresses (IP / IPv6 / MQTT) are omitted** so it's safe
+  to paste into a public issue, and it stays version + build stamped (the report's version control).
+
 ## v0.8.0-rc7 - 2026-06-08
 
 Supersedes rc6.

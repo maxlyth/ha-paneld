@@ -110,7 +110,7 @@ class PaneldServer(
                     if (ok) call.respondText("ok\n") else call.respondText("bad-action\n", status = HttpStatusCode.BadRequest)
                 }
                 get("/diag") {
-                    call.respondText(DiagReader.dump(appContext), ContentType.Text.Plain)
+                    call.respondText(DiagReader.dump(appContext, info()), ContentType.Text.Plain)
                 }
                 // Debug-only sensor trace (RAM ring buffer, instrumentation-gated) for fit-testing the
                 // auto-brightness + proximity filters. CSV by default (drop into a plot); ?format=json
