@@ -8,6 +8,24 @@ From **v0.8.0**, entries are grouped under **Added** (new features/entities), **
 changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
 content appear. Earlier releases predate this convention and keep their flat lists.
 
+## v0.8.0-rc3 - 2026-06-08
+
+Supersedes rc2 (carried forward in full). Info-page (panel web UI) polish only — no entity/behaviour changes.
+
+### Fixed
+
+- **Live tables no longer truncate or jump** — Responsiveness + Top-processes values **wrap** to show full
+  content (touch panels can't hover the `title=` tooltip), and those two cards hold a **per-card
+  high-water-mark** min-height so the Rendering-load verdict + process-name wrap stop the cards jumping
+  between 2s polls (fixed a `box-sizing` ratchet that grew them every frame).
+
+### Changed
+
+- **Dark-mode polish** — native number spinners theme dark (`color-scheme`); charts + the proximity gauge
+  get a bordered, darker plot area so the line/track reads against the card; the proximity gauge gains
+  `mdi:tablet-dashboard` (panel) and `mdi:walk` (object) end-markers; table row dividers appear only between
+  rows; the Responsiveness header reads **"HA Companion App UI"** (was the cryptic package tail).
+
 ## v0.8.0-rc2 - 2026-06-08
 
 Supersedes rc1, which it carries forward in full; the only change is the info-page layout fix below.

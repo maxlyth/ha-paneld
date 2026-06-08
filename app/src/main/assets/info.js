@@ -97,7 +97,7 @@ async function perf(){
    drawSm(r.hist);
    var col=r.verdict==='smooth'?'#48c774':(r.verdict==='occasional'?'#d9a528':'#d04a3b');
    var vv=r.verdict==='smooth'?'Snappy':(r.verdict==='occasional'?'Sluggish':'Laggy');
-   smh.textContent='· '+(/homeassistant|companion/i.test(r.pkg)?'HA Companion':r.pkg.split('.').pop());smh.title='measuring '+r.pkg;
+   smh.textContent='· '+(/homeassistant|companion/i.test(r.pkg)?'HA Companion App UI':r.pkg.split('.').pop());smh.title='measuring '+r.pkg;
    var sm=[{label:'How it feels',val:'● '+vv,col:col,bold:true},
     {label:'Dashboard main-thread',val:r.mainPct+'% of one core',suf:'(100% = event processing maxed out)',bold:true}];
    if(r.jankPct!=null){pseen.jank=true;sm.push({label:'Rendering load',val:r.jankPct+'% janky',suf:'· only counts when actively drawing (e.g. video) — worst frame '+r.p99+' ms'});}
@@ -133,16 +133,16 @@ function proxDraw(d){
   if(d.margin){x.fillStyle='rgba(245,166,35,0.20)';x.fillRect(px(d.threshold-d.margin),0,px(d.threshold+d.margin)-px(d.threshold-d.margin),H);}
   x.strokeStyle='#f5a623';x.lineWidth=2;x.beginPath();x.moveTo(tx,0);x.lineTo(tx,H);x.stroke();
  }
- // End anchors so the track reads as panel→object, not a dot adrift: a monitor (panel) icon at the NEAR
- // end and a person icon at the FAR end. Orientation follows nearBelow (which raw direction means "near").
- // Drawn as canvas paths (not emoji) so they render everywhere with no font dependency. Faint, so the
- // live dot reads clearly over them.
- var nearLeft=d.nearBelow!==false,cy=H/2;
- x.save();x.globalAlpha=0.6;x.strokeStyle='#aab6c2';x.fillStyle='#aab6c2';x.lineWidth=1.3;x.lineJoin='round';x.lineCap='round';
- function panelIcon(cx){x.strokeRect(cx-6,cy-7,12,9);x.beginPath();x.moveTo(cx,cy+2);x.lineTo(cx,cy+5);x.moveTo(cx-3,cy+6);x.lineTo(cx+3,cy+6);x.stroke();}
- function personIcon(cx){x.beginPath();x.arc(cx,cy-6,2.3,0,7);x.fill();x.beginPath();x.moveTo(cx,cy-3.5);x.lineTo(cx,cy+3);x.moveTo(cx-3.2,cy-1);x.lineTo(cx+3.2,cy-1);x.moveTo(cx,cy+3);x.lineTo(cx-2.6,cy+7);x.moveTo(cx,cy+3);x.lineTo(cx+2.6,cy+7);x.stroke();}
- (nearLeft?panelIcon:personIcon)(13);
- (nearLeft?personIcon:panelIcon)(W-13);
+ // End anchors so the track reads as panel→object: mdi:tablet-dashboard (the panel) at the NEAR end,
+ // mdi:walk (a person) at the FAR end. Orientation follows nearBelow (which raw direction means "near").
+ // MDI glyph paths (24x24 viewBox) rendered via Path2D — render everywhere, no font dependency. Faint,
+ // so the live dot reads clearly over them.
+ var nearLeft=d.nearBelow!==false,cy=H/2,S=20;
+ var TAB='M19,18H5V6H19M21,4H3C1.89,4 1,4.89 1,6V18A2,2 0 0,0 3,20H21A2,2 0 0,0 23,18V6C23,4.89 22.1,4 21,4M7,8H13V13H7V8M14,8H17V10H14V8M17,11V16H14V11H17M7,14H13V16H7V14Z';
+ var WALK='M14.12,10H19V8.2H15.38L13.38,4.87C13.08,4.37 12.54,4.03 11.92,4.03C11.74,4.03 11.58,4.06 11.42,4.11L6,5.8V11H7.8V7.33L9.91,6.67L6,22H7.8L10.67,13.89L13,17V22H14.8V15.59L12.31,11.05L13.04,8.18M14,3.8C15,3.8 15.8,3 15.8,2C15.8,1 15,0.2 14,0.2C13,0.2 12.2,1 12.2,2C12.2,3 13,3.8 14,3.8Z';
+ function mdi(dd,cx){x.save();x.translate(cx-S/2,cy-S/2);x.scale(S/24,S/24);x.fill(new Path2D(dd));x.restore();}
+ x.save();x.globalAlpha=0.6;x.fillStyle='#aab6c2';
+ mdi(nearLeft?TAB:WALK,14);mdi(nearLeft?WALK:TAB,W-14);
  x.restore();
  if(d.raw!=null){var rx=px(d.raw);x.fillStyle=d.near?'#48c774':'#888';x.beginPath();x.arc(rx,H/2,7,0,7);x.fill();}
 }
