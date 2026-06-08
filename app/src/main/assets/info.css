@@ -29,9 +29,10 @@ canvas{width:100%;display:block;background:#181818;border-radius:8px;margin-bott
 .dt th{font-size:.68rem;text-transform:uppercase;letter-spacing:.03em;color:#7c8a99;font-weight:600;width:auto;border-bottom:2px solid #333}
 .dt td{color:#ccc;font-weight:400}
 .dt .num{text-align:right;width:32%}
-/* Live-polled tables (updated every 2s): truncate values instead of wrapping, so row heights stay
-   constant and the cards below never jump on a single-column layout. Full value on hover via title=. */
-#perf td,#topproc td,#smtbl td{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* Live-polled tables (updated every 2s): values WRAP to show full content — touch panels can't hover for
+   the title= tooltip, so truncation hid data on the exact devices this runs on. Stability now comes from
+   content-visibility (off-screen cards) + CSS columns; the only residual motion is the card you're
+   actively viewing growing, which is acceptable. Validated on the CLS harness (worst-case name cycling). */
 form{display:flex;flex-direction:column;gap:10px}
 label{display:flex;flex-direction:column;gap:4px;font-size:.78rem;color:#9af}
 label small{color:#6a7a8a}
