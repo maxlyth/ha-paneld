@@ -354,7 +354,7 @@ means you can never publish an in-place update again. Never commit the keystore 
 Validated across the panel fleet: Sonoff NSPanel Pro (PX30, Android 8.1), Tuya TPA10 (rk3566,
 Android 11), Electron WF1589T (rk3576, Android 14).
 
-**Latest release — 0.8.0-rc1 (release candidate):**
+**Latest release — 0.8.0-rc2 (release candidate):**
 
 - **Auto-brightness** *(opt-in)* — `switch.<panel>_auto_brightness` maps a lux stream (the panel's own
   ambient-light sensor, or HA-fed `number.<panel>_ambient_lux`) to the backlight, with an **asymmetric
@@ -362,8 +362,9 @@ Android 11), Electron WF1589T (rk3576, Android 14).
   Off by default.
 - **Zigbee router boot-restore** — the router survives a reboot / NSPanelTools removal: ha-paneld
   restarts the on-device gateway when it's left on and nothing else has.
-- **Info-page polish** — the page no longer jumps on a single column (in-place table updates, off-screen
-  `content-visibility`), the proximity gauge no longer jitters, and the Panel-information card shows
+- **Info-page layout** — multi-column cards now balance correctly via native CSS multi-column (replacing a
+  hand-rolled packer that mis-balanced), and the page no longer jumps — objective layout-shift (CLS) is
+  near-zero from phone to 15″ panel widths. Proximity gauge no longer jitters; Panel-information card shows
   screen resolution + dpi.
 - **Debug sensor trace** (`/sensortrace`) for objective auto-brightness / proximity filter tuning.
 

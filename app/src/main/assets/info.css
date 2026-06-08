@@ -9,13 +9,16 @@ h2 small{text-transform:none;letter-spacing:0;color:#8a8;font-weight:400}
 .gh:hover svg{fill:#eee}
 .ext svg{width:14px;height:14px;fill:#9cf;vertical-align:-2px;margin-left:3px}
 .ext:hover svg{fill:#fff}
-/* JS masonry: cards distributed shortest-column-first into flex columns (info.js) — gap-free. */
-.cards{display:flex;gap:18px;align-items:flex-start}
-.col{display:flex;flex-direction:column;gap:18px;flex:1 1 0;min-width:0}
-/* content-visibility: an OFF-SCREEN card renders as a fixed placeholder (its last-remembered height via
-   contain-intrinsic-size:auto), so a live card changing height while scrolled out of view cannot reflow
-   the document and shove the viewport — the single-column "jumps when the culprit isn't even visible". */
-.card{background:#181818;border:1px solid #242424;border-radius:12px;padding:14px 16px;content-visibility:auto;contain-intrinsic-size:auto 300px}
+/* CSS multi-column masonry: the browser packs .card elements into height-balanced columns
+   (column-fill:balance, the default) — ~400px wide, so 1 column on a phone up to 4 on a 1920/2560 panel.
+   No JS: this replaces a hand-rolled greedy that mis-balanced because it measured placeholder heights. */
+.cards{columns:400px;column-gap:18px}
+.card{background:#181818;border:1px solid #242424;border-radius:12px;padding:14px 16px;margin:0 0 18px;break-inside:avoid;-webkit-column-break-inside:avoid}
+/* content-visibility skips rendering an OFF-SCREEN card (placeholder height via contain-intrinsic-size) so
+   a live card changing height while scrolled out of view can't reflow the page and shove the viewport.
+   SCOPED to the single-column regime only (<858px = one ~400px column): in multi-column it would feed
+   placeholder heights to the browser's column balancer and unbalance the layout — the bug this replaces. */
+@media (max-width:857px){.card{content-visibility:auto;contain-intrinsic-size:auto 300px}}
 table{border-collapse:collapse;width:100%;table-layout:fixed}
 th,td{text-align:left;padding:6px 8px;border-bottom:1px solid #2a2a2a;vertical-align:top;font-size:.9rem;overflow-wrap:anywhere;word-break:break-word}
 th{color:#9af;width:46%;font-weight:600}

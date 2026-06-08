@@ -172,25 +172,5 @@ async function insp(){try{var d=await (await fetch('/inspect')).json();inspApply
 function inspStart(){fetch('/inspect/start',{method:'POST'}).then(function(r){return r.json();}).then(inspApply).catch(function(){});}
 function inspStop(){fetch('/inspect/stop',{method:'POST'}).then(function(r){return r.json();}).then(inspApply).catch(function(){});}
 insp();
-// Masonry: distribute .card elements into N flex columns (N = width / ~418), shortest-column-first.
-// Re-distributes only when the column COUNT changes (between breakpoints the flex columns just widen).
-var _mN=-1;
-function masonry(){
- var c=document.querySelector('.cards'); if(!c)return;
- var n=Math.max(1,Math.floor((c.clientWidth+18)/(400+18)));
- if(n===_mN)return; _mN=n;
- var cards=[].slice.call(c.querySelectorAll('.card'));
- cards.forEach(function(k){k.parentNode.removeChild(k);});
- [].slice.call(c.querySelectorAll('.col')).forEach(function(x){c.removeChild(x);});
- var cols=[];
- for(var i=0;i<n;i++){var d=document.createElement('div');d.className='col';c.appendChild(d);cols.push(d);}
- // The Configuration card is much taller than the rest; give it its own (rightmost) column when there
- // is more than one, so the other cards balance among the remaining columns instead of one towering.
- var cfg=null,rest=[];
- cards.forEach(function(k){if(k.querySelector('#config'))cfg=k;else rest.push(k);});
- var pack=(n>=2&&cfg)?cols.slice(0,n-1):cols;
- rest.forEach(function(k){var m=0;for(var i=1;i<pack.length;i++){if(pack[i].offsetHeight<pack[m].offsetHeight)m=i;}pack[m].appendChild(k);});
- if(cfg)(n>=2?cols[n-1]:pack[0]).appendChild(cfg);
-}
-window.addEventListener('resize',function(){clearTimeout(window._mt);window._mt=setTimeout(masonry,120);});
-masonry();
+// Layout is pure CSS multi-column masonry now (.cards{columns:400px} in info.css) — the browser packs and
+// height-balances the cards. No JS column packing (the old greedy mis-balanced on placeholder heights).

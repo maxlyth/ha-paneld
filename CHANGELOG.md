@@ -8,6 +8,19 @@ From **v0.8.0**, entries are grouped under **Added** (new features/entities), **
 changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
 content appear. Earlier releases predate this convention and keep their flat lists.
 
+## v0.8.0-rc2 - 2026-06-08
+
+Supersedes rc1, which it carries forward in full; the only change is the info-page layout fix below.
+
+### Fixed
+
+- **Info-page multi-column balance + layout shift** — replaced the hand-rolled JS column packer (which
+  measured `content-visibility` placeholder heights and left columns visibly unbalanced) with native CSS
+  multi-column (`column-fill:balance`). Columns now balance correctly, and measured layout-shift (CLS)
+  drops to near-zero across phone→15″ panel widths and large text sizes (worst cell 0.90 → 0.05).
+  `content-visibility` is now scoped to the single-column regime so it can't feed placeholder heights into
+  the multi-column balancer.
+
 ## v0.8.0-rc1 - 2026-06-07
 
 ### Added
