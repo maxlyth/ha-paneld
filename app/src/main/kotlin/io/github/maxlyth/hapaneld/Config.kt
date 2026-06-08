@@ -110,8 +110,12 @@ class Config(context: Context) {
     // Desired Zigbee-router state, persisted so the gateway can be auto-started on boot when nothing
     // else launches it (the NSPanel Pro gateway is not init-started — verified 2026-06-08). Default off.
     val zigbeeRouterEnabled: Boolean get() = prefs.getBoolean("zigbee_router_enabled", false)
+    // True once the user has EXPLICITLY toggled the zigbee switch. Gates boot-reconcile: we only enforce
+    // an off-state (killing a vendor-started gateway) when the user actually asked for off — never by our
+    // default — so panels relying on stock vendor Zigbee are left untouched until configured.
+    val zigbeeRouterConfigured: Boolean get() = prefs.getBoolean("zigbee_router_configured", false)
     fun setZigbeeRouterEnabled(on: Boolean) {
-        prefs.edit().putBoolean("zigbee_router_enabled", on).apply()
+        prefs.edit().putBoolean("zigbee_router_enabled", on).putBoolean("zigbee_router_configured", true).apply()
     }
 
     // Optional on-panel auto-brightness engine (see control/AutoBrightnessController). Default OFF →

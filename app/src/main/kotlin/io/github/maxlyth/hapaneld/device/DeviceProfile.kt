@@ -82,7 +82,9 @@ interface DeviceProfile {
             val model = Build.MODEL.lowercase()
             val device = Build.DEVICE.lowercase()
             return when {
-                "px30" in model || "px30" in device -> NSPanelPro
+                // px30 = Gen1 86P/120P; rk3326(-s) = Gen2 (best-effort — capabilities are runtime-probed,
+                // so an unverified Gen2 still detects relays/zigbee/sensors correctly).
+                "px30" in model || "px30" in device || "rk3326" in model || "rk3326" in device -> NSPanelPro
                 model == "tpa10" || device == "tpa10" -> Tpa10
                 "wf1589" in device || model == "rk3576_u" -> Wf1589t
                 "s9e" in model || "s9e" in device -> S9e

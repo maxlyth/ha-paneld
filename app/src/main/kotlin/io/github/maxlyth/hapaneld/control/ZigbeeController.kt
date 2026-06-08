@@ -5,60 +5,50 @@ import org.json.JSONObject
 
 /**
  * Zigbee gateway control for panels that ship a Sonoff-style gateway (currently the NSPanel Pro — a
- * Silicon Labs EFR32 EZSP NCP on `/dev/ttyS5`). The gateway's directory is **not hardcoded here**: it
- * comes from the active [DeviceProfile] ([DeviceProfile.zigbeeGatewayDir]); a profile with no gateway
- * dir (every non-NSPanel-Pro panel) makes this controller inert.
+ * Silicon Labs EFR32 EZSP NCP on `/dev/ttyS5`). The gateway dir comes from [DeviceProfile.zigbeeGatewayDir]
+ * (`/vendor/bin/siliconlabs_host` on NSPanel Pro); a profile with no dir makes this controller inert.
  *
- * The radio is driven by the **manufacturer's** `zgateway` host binary in that dir — the package is
- * eWeLink/Sonoff's own, versioned per firmware (e.g. `sonoff-v3.5.4`) and **side-loaded by NSPanelTools
- * onto firmware that didn't ship it**, not seaky's code. It's kept alive by `guard_process.sh`
- * (a 5-second supervisor loop). NOTE: on an NSPanelTools-provisioned panel a persistent hook
- * boot-starts `guard_process.sh` — it survives the APK removal and reparents to init, but isn't a
- * standard `/system`|`/vendor/etc/init` service (verified 2026-06-08). [enable] also starts it on
- * demand via `run_guard_process.sh`; MqttBridge's boot-restore starts it on connect only when nothing
- * else has. zgateway is controlled over a LOCAL mosquitto broker on
- * `127.0.0.1:1883`, which is anonymous (the `password_file` line is commented out in `mosquitto.conf`),
- * so no credentials are needed:
+ * Two gateway LAYOUTS exist in the wild and we handle both (verified 2026-06-08 on an 86P and a 120P):
+ *   - **NSPanelTools-managed** — NSPPT side-loaded a Sonoff package: `run_guard_process.sh` launchers +
+ *     a `package_version` marker (e.g. `sonoff-v3.5.4:sonoff-3.5.0`). The footprint PERSISTS after NSPPT
+ *     is uninstalled. Start/stop via `run_guard_process.sh [stop]`.
+ *   - **vendor-native** — stock firmware ships only `guard_process.sh` (a while-true supervisor), no
+ *     `run_` launchers, no `package_version`. Boot-started by a vendor hook (reparented to init). It has
+ *     **no stop argument**, so disable = kill the guard (so it can't respawn) then `zgateway`.
+ *     (Note: on 120P/3.7.1 the vendor guard has a CPU-spin defect — disabling it is a real win.)
  *
+ * zgateway is controlled over a LOCAL anonymous mosquitto broker on `127.0.0.1:1883`:
  *   - role status:  `zigbee/system/network-role/information`  →  `{"role":"Repeater"|"Coordinator"}`
  *   - role switch:  `zigbee/system/network-role/switch`        ←  `{"role":"Repeater"}`
- *
- * "Repeater" is router mode (extends an existing mesh — the supported sweet spot); "Coordinator" forms
- * its own network. The role persists in the NCP's NVM across restarts. Everything here needs root via
- * [Su] (the bundled mosquitto client needs `LD_LIBRARY_PATH`; the lifecycle scripts touch `/vendor`).
+ * Everything here needs root via [Su].
  */
 class ZigbeeController(profile: DeviceProfile = DeviceProfile.detect()) {
 
-    /** Gateway dir from the device profile, or null on panels without a managed Zigbee gateway. */
     private val dir: String? = profile.zigbeeGatewayDir
 
-    /**
-     * True when this panel has a Zigbee gateway we can actually drive. Gated on the **guard script we
-     * invoke** existing — not just the `package_version` marker, since a configured panel may have lost
-     * only the marker file. This also correctly EXCLUDES panels left with an empty gateway dir and an
-     * orphaned `zgateway` process: there, ON could not restart the gateway and it wouldn't survive a
-     * reboot.
-     */
+    /** NSPanelTools-managed install (has the run_ launchers) vs vendor-native (guard_process.sh only). */
+    private fun managed(): Boolean = dir != null && fileExists("$dir/run_guard_process.sh")
+
+    /** True when this panel has a drivable Zigbee gateway in EITHER layout, or one already running. */
     fun present(): Boolean {
         val dir = dir ?: return false
-        return fileExists("$dir/run_guard_process.sh")
+        return managed() || fileExists("$dir/guard_process.sh") || running()
     }
 
     /**
-     * Driver label, e.g. `"sonoff 3.7.1"`, from the package marker `package_version`
-     * (format `<type>-v<artifact>:<type>-<zstack>`). Falls back to a generic label when the gateway is
-     * drivable ([present]) but the marker is missing; null when there is no gateway at all.
+     * Driver label: `"sonoff 3.5.0"` from the NSPPT `package_version` marker, or `"vendor-native"` when
+     * there's a gateway but no marker (stock firmware); null when there is no gateway at all.
      */
     fun driver(): String? {
         val dir = dir ?: return null
         val raw = Su.runOutput("cat $dir/package_version 2>/dev/null")?.trim()
         if (!raw.isNullOrEmpty()) {
-            val tail = raw.substringAfter(':', raw) // "sonoff-3.7.1"
+            val tail = raw.substringAfter(':', raw)
             val type = tail.substringBefore('-', tail)
             val ver = tail.substringAfter('-', "")
             return if (ver.isEmpty()) type else "$type $ver"
         }
-        return if (present()) "gateway present (version unknown)" else null
+        return if (present()) "vendor-native" else null
     }
 
     private fun fileExists(path: String): Boolean =
@@ -78,14 +68,14 @@ class ZigbeeController(profile: DeviceProfile = DeviceProfile.detect()) {
     }
 
     /**
-     * Enable the router: start the guard supervisor (which brings up mosquitto + zgateway), then
-     * best-effort nudge the role to Repeater — but only if the broker is already up AND the role
-     * differs, to avoid a needless network leave/rejoin. The role persists in NVM, so a panel that was
-     * previously a router comes back as a router on start regardless.
+     * Start the gateway. NSPPT-managed: `run_guard_process.sh`. Vendor-native: launch `guard_process.sh`
+     * DETACHED (it's a while-true watchdog — it must not block the su call). Then best-effort nudge the
+     * role to Repeater only if the broker is up and the role differs (avoids a needless leave/rejoin).
      */
     fun enable(): Boolean {
         val dir = dir ?: return false
-        val ok = Su.run("sh $dir/run_guard_process.sh")
+        val ok = if (managed()) Su.run("sh $dir/run_guard_process.sh")
+        else Su.run("nohup sh $dir/guard_process.sh >/dev/null 2>&1 &")
         runCatching {
             val r = role()
             if (r != null && !r.equals(ROLE_REPEATER, ignoreCase = true)) setRole(ROLE_REPEATER)
@@ -93,14 +83,35 @@ class ZigbeeController(profile: DeviceProfile = DeviceProfile.detect()) {
         return ok
     }
 
-    /** Disable the router: stop the guard supervisor and the whole zstack, freeing the radio. */
+    /**
+     * Stop the gateway, freeing the radio (and, on the buggy vendor guard, the CPU). NSPPT-managed:
+     * `run_guard_process.sh stop`. Vendor-native has no stop arg → kill the guard first (so it can't
+     * respawn zgateway) then zgateway itself.
+     */
     fun disable(): Boolean {
         val dir = dir ?: return false
-        return Su.run("sh $dir/run_guard_process.sh stop")
+        return if (managed()) Su.run("sh $dir/run_guard_process.sh stop")
+        else Su.run("pkill -f guard_process.sh; sleep 1; killall zgateway 2>/dev/null; true")
+    }
+
+    /**
+     * Drive the gateway to [desiredOn], whoever started it. Vendor firmware boot-starts the gateway
+     * independently, so persisting an explicit "off" means actively stopping it; "on" starts it if down.
+     * Caller gates this on the user having EXPLICITLY configured the switch — we must never disable a
+     * vendor-started gateway a user relies on just because our default is off.
+     */
+    fun reconcile(desiredOn: Boolean): Boolean {
+        if (dir == null || !present()) return false
+        val run = running()
+        return when {
+            desiredOn && !run -> enable()
+            !desiredOn && run -> disable()
+            else -> true
+        }
     }
 
     /** Publish a role switch to the local broker. Allowlist the role so an arbitrary string can never
-     *  be interpolated into the shell command (defensive — callers only pass constants today). */
+     *  be interpolated into the shell command. */
     private fun setRole(role: String) {
         val dir = dir ?: return
         val r = when (role.lowercase()) {
@@ -114,9 +125,11 @@ class ZigbeeController(profile: DeviceProfile = DeviceProfile.detect()) {
         )
     }
 
-    /** One-line status for the info page: "sonoff 3.7.1 · running · Repeater", or "none". */
+    /** One-line status for the info page: "sonoff 3.5.0 · running · Repeater" / "vendor-native · running"
+     *  / "none". */
     fun status(): String {
-        val d = driver() ?: return "none"
+        if (!present()) return "none"
+        val d = driver() ?: "gateway"
         val run = if (running()) "running" else "stopped"
         val r = role()?.let { " · $it" } ?: ""
         return "$d · $run$r"

@@ -354,14 +354,16 @@ means you can never publish an in-place update again. Never commit the keystore 
 Validated across the panel fleet: Sonoff NSPanel Pro (PX30, Android 8.1), Tuya TPA10 (rk3566,
 Android 11), Electron WF1589T (rk3576, Android 14).
 
-**Latest release — 0.8.0-rc3 (release candidate):**
+**Latest release — 0.8.0-rc4 (release candidate):**
 
 - **Auto-brightness** *(opt-in)* — `switch.<panel>_auto_brightness` maps a lux stream (the panel's own
   ambient-light sensor, or HA-fed `number.<panel>_ambient_lux`) to the backlight, with an **asymmetric
   response** (snappy on lights-on, heavily smoothed on slow daylight drift) and a Dimmer↔Brighter bias.
   Off by default.
-- **Zigbee router boot-restore** — the router survives a reboot / NSPanelTools removal: ha-paneld
-  restarts the on-device gateway when it's left on and nothing else has.
+- **Zigbee + relays across NSPanel Pro variants** — detects the gateway in both the NSPanelTools-managed
+  and stock **vendor-native** layouts (so a stock 120P shows Zigbee + a working `zigbee_router` switch, not
+  "none"); the switch's state persists across reboot. Relays are probed from `st_relay` (120P = 4, Gen2 = 2;
+  86P = none). Panel-info shows the **model + firmware** and Zigbee provenance.
 - **Info-page (panel web UI)** — multi-column cards balance natively (CSS multi-column; objective CLS
   near-zero from phone to 15″ panel); live tables wrap full values (touch panels can't hover a tooltip) and
   no longer jump (per-card high-water-mark); dark-mode polish — themed number spinners, bordered chart +

@@ -15,7 +15,9 @@ object NSPanelPro : DeviceProfile {
     override val ledMechanism = LedMechanism.NONE
     override val screenOff = ScreenOff.SU_BLPOWER
     override val zigbeeGatewayDir = "/vendor/bin/siliconlabs_host"
-    override val relayBase: String? = null
+    // st_relay exists only on relay-bearing variants (120P = 4 relays, Gen2 = 2; 86P = none) —
+    // RelayController probes this base at runtime, so one value self-detects 0/2/4 across the line.
+    override val relayBase: String? = "/sys/class/st_relay"
     override val buttonLedGpioBase: Int? = null
     override val manufacturer = "Sonoff"
     override val model = "NSPanel Pro"

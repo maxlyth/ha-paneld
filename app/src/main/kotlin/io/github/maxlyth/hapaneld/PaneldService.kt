@@ -149,6 +149,15 @@ class PaneldService : Service() {
             "connecting" -> "$host · connecting…"
             else -> "disabled"
         }
+        // Variant + firmware from ro.product.version (e.g. "NSPanel120P_3.7.1" -> "NSPanel 120P · fw 3.7.1").
+        // This is the authoritative model/generation key — distinguishes 86P / 120P / 86P-Gen2 and the
+        // firmware that drives the proximity-reporting + zigbee-layout quirks.
+        val pv = sysProp("ro.product.version")
+        val modelRow = if (pv.isNotEmpty()) {
+            val m = pv.substringBefore('_').replace("NSPanel", "NSPanel ").trim()
+            val fw = pv.substringAfter('_', "")
+            m + (if (fw.isNotEmpty()) " · fw $fw" else "")
+        } else "${profile.displayName}"
         val extras = linkedMapOf(
             "panel_id" to config.panelId,
             "Friendly name" to config.friendlyName,
@@ -158,10 +167,12 @@ class PaneldService : Service() {
             "MQTT" to mqttStatus,
             "mDNS" to "${config.panelId} ${Config.MDNS_SERVICE_TYPE}",
             "Platform" to "${profile.displayName} · ${profile.socClass}",
+            "Model" to modelRow,
             "LED" to ledLabel(),
             "Light sensor" to yesNo(sensors.hasLight()),
             "Proximity" to yesNo(sensors.hasProximity()),
-            "Buttons (a11y)" to yesNo(accessibilityEnabled()),
+            // a11y service = software back/recents nav, NOT physical buttons (NSPanel Pro has none).
+            "Accessibility nav" to yesNo(accessibilityEnabled()),
             // Zigbee driver presence + state (NSPanel Pro only; "none" elsewhere). status() shells
             // out via su — fine here because the info page is served off the main thread.
             "Zigbee" to zigbee.status(),
@@ -175,6 +186,13 @@ class PaneldService : Service() {
         )
         return PanelInfo.collect(this, extras)
     }
+
+    /** Read an Android system property (e.g. ro.product.version) via SystemProperties reflection. */
+    private fun sysProp(key: String): String = runCatching {
+        @Suppress("PrivateApi")
+        val m = Class.forName("android.os.SystemProperties").getMethod("get", String::class.java)
+        (m.invoke(null, key) as? String).orEmpty()
+    }.getOrDefault("")
 
     private fun ledLabel(): String = when {
         !led.available() -> "none"

@@ -391,23 +391,24 @@ class MqttBridge(
         }.start()
     }
 
-    // Boot/connect restore for the Zigbee router. The NSPanel Pro gateway is NOT init-launched (verified
-    // 2026-06-08 — no init service references it), so after a reboot nothing starts it. If the user left
-    // the router ON, start it here. Idempotent via the !running() guard: skips when the gateway is
-    // already up, so it neither double-starts across reconnects nor fights another launcher (NSPanelTools
-    // / firmware) that got there first. Slow vendor lifecycle runs off the MQTT thread, like handleZigbee.
+    // Boot/connect RECONCILE for the Zigbee router. Vendor firmware boot-starts the NSPanel Pro gateway
+    // independently of us (and on 120P/3.7.1 the vendor guard CPU-spins), so we drive it to the user's
+    // explicit choice on every connect: start it if they left it ON and nothing has; STOP it if they
+    // turned it OFF (otherwise the vendor-started gateway returns each reboot). Gated on the switch having
+    // been CONFIGURED — we never disable a stock vendor gateway by our default. Slow lifecycle off-thread.
     private fun reconcileZigbeeOnConnect(c: Mqtt5AsyncClient) {
-        if (!zigbee.present() || !config.zigbeeRouterEnabled || zigbee.running()) return
-        publish(c, stateZigbee, "ON", retain = true) // optimistic; reconciled once it settles
+        if (!zigbee.present() || !config.zigbeeRouterConfigured) return
+        val want = config.zigbeeRouterEnabled
+        if (want == zigbee.running()) return // already in the desired state
+        publish(c, stateZigbee, if (want) "ON" else "OFF", retain = true) // optimistic; reconciled once settled
         Thread {
             try {
-                zigbee.enable()
-                var up = false
-                for (i in 0 until 18) { if (zigbee.running()) { up = true; break }; Thread.sleep(5_000) }
-                client?.let { publish(it, stateZigbee, if (up) "ON" else "OFF", retain = true) }
-                Log.i(TAG, "zigbee boot-restore: gateway ${if (up) "started" else "did not start"}")
+                zigbee.reconcile(want)
+                if (want) for (i in 0 until 18) { if (zigbee.running()) break; Thread.sleep(5_000) }
+                client?.let { publish(it, stateZigbee, if (zigbee.running()) "ON" else "OFF", retain = true) }
+                Log.i(TAG, "zigbee reconcile -> ${if (want) "on" else "off"}; running=${zigbee.running()}")
             } catch (e: Exception) {
-                Log.w(TAG, "zigbee boot-restore failed", e)
+                Log.w(TAG, "zigbee reconcile failed", e)
             }
         }.start()
     }

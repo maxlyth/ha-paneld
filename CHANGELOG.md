@@ -8,6 +8,32 @@ From **v0.8.0**, entries are grouped under **Added** (new features/entities), **
 changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
 content appear. Earlier releases predate this convention and keep their flat lists.
 
+## v0.8.0-rc4 - 2026-06-08
+
+Supersedes rc3. NSPanel Pro hardware-detection fixes — a stock (vendor-native) 120P previously showed *no
+Zigbee*, a *dead* Zigbee switch, and *no relays*; a newcomer with that panel would hit all three on day one.
+
+### Fixed
+
+- **Zigbee on vendor-native firmware** — `ZigbeeController` now recognises BOTH gateway layouts: the
+  NSPanelTools-managed one (`run_guard_process.sh` + `package_version`) and the stock **vendor-native** one
+  (`guard_process.sh` only, no marker). Stock-firmware panels now correctly report the gateway as
+  present/running, the `zigbee_router` switch works (start via the right launcher; stop via `…stop`, or by
+  killing the guard+`zgateway` on vendor-native — which also frees the CPU-spinning vendor guard seen on
+  120P/3.7.1), and an explicit **off** persists across reboot (boot-reconcile, gated on the switch having
+  been configured so stock Zigbee is never disabled by default).
+- **Relay detection** — NSPanel Pro now probes `/sys/class/st_relay`, so relay-bearing variants expose their
+  relays (120P = 4, Gen2 = 2); the relay-less 86P correctly shows none.
+
+### Changed
+
+- **Panel info** — added a **Model · firmware** row (from `ro.product.version`: distinguishes 86P / 120P /
+  86P-Gen2); the Zigbee row shows provenance (`sonoff <ver>` vs `vendor-native`); relabelled
+  "Buttons (a11y)" → **"Accessibility nav"** (it reports the software back/recents service, not physical
+  buttons).
+- `DeviceProfile.detect()` also matches `rk3326` (NSPanel Pro **Gen2**, best-effort — capabilities are
+  runtime-probed regardless).
+
 ## v0.8.0-rc3 - 2026-06-08
 
 Supersedes rc2 (carried forward in full). Info-page (panel web UI) polish only — no entity/behaviour changes.
