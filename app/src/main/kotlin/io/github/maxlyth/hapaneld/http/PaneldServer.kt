@@ -317,15 +317,32 @@ class PaneldServer(
         val setupBanner = if (needs.isNotEmpty())
             """<div class="setup">⚠ This panel needs <a href="#config">${needs.joinToString(" and ")}</a> — set below.</div>"""
         else ""
-        val rows = facts.entries.joinToString("\n") { (k, v) ->
-            // Version: plain text + a small "open releases" icon (a hyperlinked version reads ugly).
-            val cell = if (k == "ha-paneld") {
-                """${esc(v)} <a class="ext" href="$RELEASES_URL" target="_blank" rel="noopener" """ +
-                    """title="Releases" aria-label="Releases"><svg viewBox="0 0 24 24"><path d="$EXT_ICON"/></svg></a>"""
-            } else {
-                esc(v)
+        // Split the flat fact map into separate cards so it renders ACROSS masonry columns instead of one
+        // ever-growing tall card. Networking + ha-paneld-profile are carved out; everything else (device /
+        // OS facts, plus any future key) falls through to "Panel information".
+        val netKeys = listOf("Local IP", "Local IPv6", "HTTP port", "MQTT", "mDNS", "Network ADB")
+        // Rows whose values are DECLARED by the DeviceProfile, so wrong data points a contributor straight
+        // at the fix: Platform=displayName/socClass, LED=ledMechanism, sensor tech=proximityTech/lightTech,
+        // Zigbee=zigbeeGatewayDir, Relays=relayBase, CPU profile=cpuGovernors. (panel_id / Friendly name are
+        // user config and Accessibility nav is runtime state — they fall through to Panel information.)
+        val profKeys = listOf("Platform", "LED", "Light sensor", "Proximity", "Zigbee", "Relays", "CPU profile")
+        val grouped = (netKeys + profKeys).toSet()
+        val infoKeys = facts.keys.filter { it !in grouped }
+        fun factRows(keys: List<String>): String =
+            keys.filter { facts.containsKey(it) }.joinToString("\n") { k ->
+                val v = facts.getValue(k)
+                // Version: plain text + a small "open releases" icon (a hyperlinked version reads ugly).
+                val cell = if (k == "ha-paneld") {
+                    """${esc(v)} <a class="ext" href="$RELEASES_URL" target="_blank" rel="noopener" """ +
+                        """title="Releases" aria-label="Releases"><svg viewBox="0 0 24 24"><path d="$EXT_ICON"/></svg></a>"""
+                } else {
+                    esc(v)
+                }
+                "<tr><th>${esc(k)}</th><td>$cell</td></tr>"
             }
-            "<tr><th>${esc(k)}</th><td>$cell</td></tr>"
+        fun factCard(title: String, keys: List<String>, note: String = ""): String {
+            val r = factRows(keys)
+            return if (r.isBlank()) "" else """<div class="card"><h2>${esc(title)}</h2><table>$r</table>$note</div>"""
         }
         val capColor = mapOf("ok" to "#48c774", "degraded" to "#d9a528", "none" to "#d04a3b")
         val capRows = DiagReader.capabilities(appContext).joinToString("\n") { c ->
@@ -353,10 +370,10 @@ $setupBanner
  <button class="pbtn" onclick="act('volup')">Vol +</button>
  <button class="pbtn" onclick="act('reboot')" style="margin-left:auto;border-color:#7a3a2a;color:#f5a08a">⟳ Reboot</button>
 </div>
-<p class="note">For panels with no physical nav bar. Back/Recents/Home use the accessibility service; Home/Reboot need root.</p></div>
-<div class="card"><h2>Panel information</h2><table>
-$rows
-</table></div>
+<p class="note">For panels with no physical nav bar. Back/Recents use the accessibility service; Launcher/Reboot need root.</p></div>
+${factCard("Panel information", infoKeys)}
+${factCard("Networking", netKeys)}
+${factCard("ha-paneld profile", profKeys, """<p class="note">Values declared by this panel's <a href="$REPO_URL/blob/main/docs/architecture/device-profiles.md" target="_blank" rel="noopener" style="color:#9cf">device profile</a> — if one looks wrong, that's where to correct it.</p>""")}
 <div class="card"><h2>Capabilities</h2><table>
 $capRows
 </table>

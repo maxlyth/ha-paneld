@@ -8,6 +8,19 @@ From **v0.8.0**, entries are grouped under **Added** (new features/entities), **
 changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
 content appear. Earlier releases predate this convention and keep their flat lists.
 
+## v0.8.0-rc7 - 2026-06-08
+
+Supersedes rc6.
+
+### Changed
+
+- **Panel information split into separate cards** so it renders across the masonry columns instead of one
+  ever-growing card: **Panel information** (device/OS facts + id / friendly name), **Networking**
+  (IP / IPv6 / HTTP port / MQTT / mDNS / Network ADB), and **ha-paneld profile** — the rows *declared by
+  the device profile* (Platform, LED, Light/Proximity tech, Zigbee, Relays, CPU profile), with a link to
+  the profile source so a contributor seeing wrong data knows exactly where to fix it. The Capabilities
+  card is unchanged.
+
 ## v0.8.0-rc6 - 2026-06-08
 
 Supersedes rc5.
