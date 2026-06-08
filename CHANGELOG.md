@@ -8,6 +8,35 @@ From **v0.8.0**, entries are grouped under **Added** (new features/entities), **
 changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
 content appear. Earlier releases predate this convention and keep their flat lists.
 
+## v0.8.0-esphome-poc - 2026-06-08 — ESPHome native-API proof of concept (EXPERIMENTAL, non-primary)
+
+**This is a proof-of-concept pre-release, not the supported release line.** The supported path is MQTT
+(`v0.8.0-rc1`). This build replaces MQTT with a from-scratch **ESPHome native-API** server, so the project
+has a complete, tested reference demonstrating that the transport *could* be switched if it ever chose to.
+
+### What it is
+
+- A full Kotlin implementation of the ESPHome native API (plaintext), built on the official ESPHome
+  protocol (`.proto` vendored from `aioesphomeapi`, MIT) — no third-party server code.
+- **Full entity parity** with the MQTT build: one entity of every type ha-paneld exposes — light, switch,
+  number, select, text, sensor, binary_sensor, button, event — gated per panel exactly as MQTT discovery is.
+- Validated end-to-end on Home Assistant 2026.6: HA's ESPHome integration discovers → connects → controls;
+  ~20 entities on an NSPanel Pro; command + state round-trips confirmed across entity types; the device
+  page links back to the panel's web UI (`webserver_port`).
+- Add via Home Assistant → Settings → Devices → **ESPHome** → host `:6053`, no encryption.
+
+### Why it stays experimental (and MQTT remains primary)
+
+- The ESPHome native API is co-developed between ESPHome and Home Assistant and evolves in lockstep; it is
+  not a contracted, general-purpose device protocol, so a non-ESPHome implementation tracks those changes
+  without a compatibility guarantee.
+- For an Android wall panel there is no measurable latency or resource gain over MQTT — the protocol's
+  efficiency advantages target microcontrollers streaming sensor data, not a handful of human-driven controls.
+- MQTT (via Home Assistant discovery) remains the supported, battle-tested transport. ESPHome's genuine
+  future unlock is a native `media_player`/voice surface — the natural reason to revisit this path.
+
+Provided for evaluation and reference only.
+
 ## v0.8.0-rc1 - 2026-06-07
 
 ### Added
