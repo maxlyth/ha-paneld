@@ -154,3 +154,25 @@ API covers ha-paneld's entire entity surface.**
   rename + recorder-listener history preservation if switching.
 - Decide MQTT-only / ESPHome / BOTH for v1.0 — but the protocol is now de-risked: it works, in Kotlin,
   with no Ava code, on the official MIT .proto.
+
+## ESPHome-ONLY (2026-06-08) — MQTT removed, full parity
+
+Per the A/B-masking concern (dual-stack hides regressions — both transports drive the same hardware, so a
+broken ESPHome path stays masked behind a working MQTT one), this branch is now **ESPHome-only**. Clean
+A/B = ESPHome-only panel (this branch) vs MQTT-only panel (main).
+
+- **MQTT deleted** (MqttBridge.kt + every PaneldService wiring point). ESPHome native API is the sole transport.
+- **Full entity surface** via a transport-agnostic registry (`EspEntity` + `buildEsphomeEntities()` mirroring
+  the old MQTT discovery gating exactly — led/zigbee/cpu/adb/relay/sensor probes, off-main on a connection
+  thread). Verified on office: **20 entities** (was 6) = parity with the MQTT surface.
+- **HTTP-UI link restored**: `DeviceInfoResponse.webserver_port` → HA `configuration_url` =
+  `http://<panel>:8888` (the "Visit" link). Confirmed on office.
+- select `cpu_profile` round-trip verified; all command types (light/switch/number/select + text/button)
+  wired to their controllers; zigbee boot-restore + ButtonBus→event moved off the deleted MQTT onConnect.
+
+**Cleanup left (part of the A/B migration, not blockers):**
+- office still shows ~21 *unavailable* stale MQTT entities — their retained discovery persists in the broker
+  (the app no longer clears it). Remove by clearing retained `homeassistant/+/<panelId>_*/config`, or delete
+  the MQTT device in HA. Until then the ESPHome entities keep a `_2` slug-collision suffix.
+- Clean entity_ids + LTS-history-preserving rename = the per-panel migration step (`ha-entity-rename` skill).
+- mDNS `_esphomelib._tcp` advertise still TODO (device added by host:port for now).
