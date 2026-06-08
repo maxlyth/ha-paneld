@@ -47,7 +47,7 @@ function draw(){
  x.lineWidth=1;x.font='11px system-ui,sans-serif';x.textBaseline='middle';
  [25,50,75].forEach(function(p){var y=H-p/100*H;
   x.strokeStyle='#383838';x.beginPath();x.moveTo(0,y);x.lineTo(W,y);x.stroke();
-  x.fillStyle='#181818';x.fillRect(0,y-7,26,14);x.fillStyle='#888';x.fillText(p+'%',2,y);});
+  x.fillStyle='#0d0d0d';x.fillRect(0,y-7,26,14);x.fillStyle='#888';x.fillText(p+'%',2,y);});
  function line(a,col){
   if(a.length<2)return;
   x.strokeStyle=col;x.lineWidth=2;x.beginPath();
@@ -61,7 +61,7 @@ function drawSm(hist){
  var c=document.getElementById('smchart'),x=c.getContext('2d'),W=c.width,H=c.height;
  x.clearRect(0,0,W,H);
  x.font='11px system-ui,sans-serif';x.textBaseline='middle';x.lineWidth=1;
- [[50,'#3a5a42'],[85,'#6a5526']].forEach(function(t){var y=H-(t[0]/100)*H;x.strokeStyle=t[1];x.beginPath();x.moveTo(0,y);x.lineTo(W,y);x.stroke();x.fillStyle='#181818';x.fillRect(0,y-7,26,14);x.fillStyle='#888';x.fillText(t[0]+'%',2,y);});
+ [[50,'#3a5a42'],[85,'#6a5526']].forEach(function(t){var y=H-(t[0]/100)*H;x.strokeStyle=t[1];x.beginPath();x.moveTo(0,y);x.lineTo(W,y);x.stroke();x.fillStyle='#0d0d0d';x.fillRect(0,y-7,26,14);x.fillStyle='#888';x.fillText(t[0]+'%',2,y);});
  if(!hist||hist.length<2)return;
  var n=hist.length,sx=W/(MAX-1),last=hist[n-1];
  var col=last<5?'#48c774':(last<15?'#d9a528':'#d04a3b');
@@ -97,7 +97,7 @@ async function perf(){
    drawSm(r.hist);
    var col=r.verdict==='smooth'?'#48c774':(r.verdict==='occasional'?'#d9a528':'#d04a3b');
    var vv=r.verdict==='smooth'?'Snappy':(r.verdict==='occasional'?'Sluggish':'Laggy');
-   smh.textContent='· '+r.pkg.split('.').pop();
+   smh.textContent='· '+(/homeassistant|companion/i.test(r.pkg)?'HA Companion':r.pkg.split('.').pop());smh.title='measuring '+r.pkg;
    var sm=[{label:'How it feels',val:'● '+vv,col:col,bold:true},
     {label:'Dashboard main-thread',val:r.mainPct+'% of one core',suf:'(100% = event processing maxed out)',bold:true}];
    if(r.jankPct!=null){pseen.jank=true;sm.push({label:'Rendering load',val:r.jankPct+'% janky',suf:'· only counts when actively drawing (e.g. video) — worst frame '+r.p99+' ms'});}
@@ -133,6 +133,17 @@ function proxDraw(d){
   if(d.margin){x.fillStyle='rgba(245,166,35,0.20)';x.fillRect(px(d.threshold-d.margin),0,px(d.threshold+d.margin)-px(d.threshold-d.margin),H);}
   x.strokeStyle='#f5a623';x.lineWidth=2;x.beginPath();x.moveTo(tx,0);x.lineTo(tx,H);x.stroke();
  }
+ // End anchors so the track reads as panel→object, not a dot adrift: a monitor (panel) icon at the NEAR
+ // end and a person icon at the FAR end. Orientation follows nearBelow (which raw direction means "near").
+ // Drawn as canvas paths (not emoji) so they render everywhere with no font dependency. Faint, so the
+ // live dot reads clearly over them.
+ var nearLeft=d.nearBelow!==false,cy=H/2;
+ x.save();x.globalAlpha=0.6;x.strokeStyle='#aab6c2';x.fillStyle='#aab6c2';x.lineWidth=1.3;x.lineJoin='round';x.lineCap='round';
+ function panelIcon(cx){x.strokeRect(cx-6,cy-7,12,9);x.beginPath();x.moveTo(cx,cy+2);x.lineTo(cx,cy+5);x.moveTo(cx-3,cy+6);x.lineTo(cx+3,cy+6);x.stroke();}
+ function personIcon(cx){x.beginPath();x.arc(cx,cy-6,2.3,0,7);x.fill();x.beginPath();x.moveTo(cx,cy-3.5);x.lineTo(cx,cy+3);x.moveTo(cx-3.2,cy-1);x.lineTo(cx+3.2,cy-1);x.moveTo(cx,cy+3);x.lineTo(cx-2.6,cy+7);x.moveTo(cx,cy+3);x.lineTo(cx+2.6,cy+7);x.stroke();}
+ (nearLeft?panelIcon:personIcon)(13);
+ (nearLeft?personIcon:panelIcon)(W-13);
+ x.restore();
  if(d.raw!=null){var rx=px(d.raw);x.fillStyle=d.near?'#48c774':'#888';x.beginPath();x.arc(rx,H/2,7,0,7);x.fill();}
 }
 function proxApply(d){

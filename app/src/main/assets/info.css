@@ -1,4 +1,4 @@
-body{font-family:system-ui,-apple-system,sans-serif;margin:0;background:#111;color:#eee}
+body{font-family:system-ui,-apple-system,sans-serif;margin:0;background:#111;color:#eee;color-scheme:dark}
 .wrap{max-width:1860px;margin:0 auto;padding:20px}             /* cap + centre: up to 4 masonry cols on a 1920/2560 panel */
 .hdr{display:flex;align-items:center;justify-content:space-between;gap:12px}
 h1{font-size:1.3rem;margin:0 0 .2rem;display:flex;align-items:center} h1 small{color:#9af;font-weight:400}
@@ -21,8 +21,10 @@ h2 small{text-transform:none;letter-spacing:0;color:#8a8;font-weight:400}
 @media (max-width:857px){.card{content-visibility:auto;contain-intrinsic-size:auto 300px}}
 table{border-collapse:collapse;width:100%;table-layout:fixed}
 th,td{text-align:left;padding:6px 8px;border-bottom:1px solid #2a2a2a;vertical-align:top;font-size:.9rem;overflow-wrap:anywhere;word-break:break-word}
+tr:last-child td,tr:last-child th{border-bottom:0}   /* dividers only BETWEEN rows, never after the last */
 th{color:#9af;width:46%;font-weight:600}
-canvas{width:100%;display:block;background:#181818;border-radius:8px;margin-bottom:6px}
+/* charts: darker than the card (#181818) + a border, so the line's extent reads against the plot area */
+canvas{width:100%;display:block;background:#0d0d0d;border:1px solid #2a2a2a;border-radius:8px;margin-bottom:6px}
 .leg{font-size:.72rem;color:#8a8;margin-bottom:6px}
 /* sub-heading + data table (column headers) so an in-card table reads as its own thing */
 .sub{margin:14px 0 2px;padding-top:10px;border-top:1px solid #2a2a2a;font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;color:#9cf}
