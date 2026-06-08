@@ -15,9 +15,12 @@ object NSPanelPro : DeviceProfile {
     override val ledMechanism = LedMechanism.NONE
     override val screenOff = ScreenOff.SU_BLPOWER
     override val zigbeeGatewayDir = "/vendor/bin/siliconlabs_host"
-    // st_relay exists only on relay-bearing variants (120P = 4 relays, Gen2 = 2; 86P = none) —
-    // RelayController probes this base at runtime, so one value self-detects 0/2/4 across the line.
-    override val relayBase: String? = "/sys/class/st_relay"
+    // No relays on Gen1 NSPanel Pro (86P/120P). The PX30 kernel exposes /sys/class/st_relay with FOUR
+    // PHANTOM nodes (relay1-4 + mode) on every variant regardless of physical population — verified on a
+    // 120P that has zero physical relays (2026-06-08), and there's no per-node "present" attribute to
+    // filter on, so a sysfs probe over-reports. Left null. Gen2 ADDS 2 real relays (a new feature); when
+    // adding Gen2 support, declare a fixed relay count for it — do NOT sysfs-probe this class.
+    override val relayBase: String? = null
     override val buttonLedGpioBase: Int? = null
     override val manufacturer = "Sonoff"
     override val model = "NSPanel Pro"

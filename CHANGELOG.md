@@ -8,6 +8,37 @@ From **v0.8.0**, entries are grouped under **Added** (new features/entities), **
 changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
 content appear. Earlier releases predate this convention and keep their flat lists.
 
+## v0.8.0-rc5 - 2026-06-08
+
+Supersedes rc4.
+
+### Fixed
+
+- **Zigbee CPU spin (NSPanel Pro vendor-native).** `enable()` is now **idempotent** — it never starts a
+  second guard when the radio/guard is already running. Duplicate guards fought over the gateway's fixed
+  MQTT client-id (`rkguardsh_zigbee`), thrashing the connection into a CPU spin (the 120P hog). `disable()`
+  no longer self-matches its own shell (it was killing itself before stopping the gateway) — it kills the
+  guard by exact cmdline. (The radio runs in the init domain and the stock Sonoff `su` can't signal it; use
+  eWeLink to fully stop the radio — it's harmless while running.)
+- **Phantom relays.** Gen1 NSPanel Pro (86P/120P) has **no relays**, but the PX30 kernel exposes 4 phantom
+  `st_relay` nodes — rc4 reported these as "4 relays". Reverted: Gen1 correctly shows none. (Gen2's 2 real
+  relays will be a declared count, not a sysfs probe.)
+
+### Changed
+
+- **Storage** now reports the **total eMMC** (matches the advertised 8/16/32 GB spec) plus usable `/data`
+  free, instead of only the `/data` partition (~3.5 GB, which matched no spec).
+- **Model + Platform** promoted to lines 4-5 of Panel information (panel identity up top).
+
+### Added
+
+- **Controls card** (software nav bar) on the info page — Back / Recents / **Launcher** (the system
+  launcher, to reach Settings / config apps — the HA Companion is already the home screen), plus Vol−/Vol+
+  and a confirmed Reboot. For panels with no physical nav bar.
+- **Auto-reload on update** — the info page carries a per-install build token; when the app is updated under
+  an already-open tab it **reloads automatically** to pull fresh HTML/CSS/JS (shows a reload banner instead
+  if you're mid-edit in a field, so typed input isn't lost).
+
 ## v0.8.0-rc4 - 2026-06-08
 
 Supersedes rc3. NSPanel Pro hardware-detection fixes — a stock (vendor-native) 120P previously showed *no

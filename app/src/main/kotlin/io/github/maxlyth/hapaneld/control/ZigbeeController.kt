@@ -67,13 +67,21 @@ class ZigbeeController(profile: DeviceProfile = DeviceProfile.detect()) {
         return runCatching { JSONObject(out).optString("role").ifEmpty { null } }.getOrNull()
     }
 
+    /** A guard supervisor is already running (matched by exact cmdline, excluding our own shells). */
+    private fun guardRunning(): Boolean =
+        Su.runOutput("ps -A -o ARGS= 2>/dev/null | grep guard_process.sh | grep -v ' -c ' | grep -v grep")
+            ?.trim()?.isNotEmpty() == true
+
     /**
-     * Start the gateway. NSPPT-managed: `run_guard_process.sh`. Vendor-native: launch `guard_process.sh`
-     * DETACHED (it's a while-true watchdog — it must not block the su call). Then best-effort nudge the
-     * role to Repeater only if the broker is up and the role differs (avoids a needless leave/rejoin).
+     * Start the gateway. **Idempotent** — if the radio or a guard is ALREADY running (e.g. the vendor
+     * boot-started it), do nothing: starting a second guard makes both fight over the gateway's fixed MQTT
+     * client-id (`rkguardsh_zigbee`), thrashing the connection into a CPU spin (root cause of the 120P hog).
+     * NSPPT-managed: `run_guard_process.sh`. Vendor-native: launch `guard_process.sh` DETACHED (it's a
+     * while-true watchdog — must not block the su call). Then best-effort nudge the role to Repeater.
      */
     fun enable(): Boolean {
         val dir = dir ?: return false
+        if (running() || guardRunning()) return true // already up — never spawn a duplicate guard
         val ok = if (managed()) Su.run("sh $dir/run_guard_process.sh")
         else Su.run("nohup sh $dir/guard_process.sh >/dev/null 2>&1 &")
         runCatching {
@@ -90,8 +98,18 @@ class ZigbeeController(profile: DeviceProfile = DeviceProfile.detect()) {
      */
     fun disable(): Boolean {
         val dir = dir ?: return false
+        // NSPPT-managed: the clean stop script. Vendor-native (no stop arg): kill the guard — it's the
+        // supervisor + CPU hog + respawner, and it's killable (shell domain). Match it by full cmdline via
+        // ps, EXCLUDING our own su/sh shells (`-c`) and grep, so we don't kill the shell running this (the
+        // bug pkill -f had: its cmdline contains "guard_process.sh"). Then best-effort SIGKILL the radio —
+        // but on stock firmware zgateway runs in the init domain and the vendor `su` returns EPERM, so this
+        // is a no-op there and the radio persists until reboot (a firmware limit, surfaced in status()).
         return if (managed()) Su.run("sh $dir/run_guard_process.sh stop")
-        else Su.run("pkill -f guard_process.sh; sleep 1; killall zgateway 2>/dev/null; true")
+        else Su.run(
+            "for p in \$(ps -A -o PID=,ARGS= 2>/dev/null | grep guard_process.sh | grep -v ' -c ' | " +
+                "grep -v grep | awk '{print \$1}'); do kill -9 \$p 2>/dev/null; done; " +
+                "killall -9 zgateway 2>/dev/null; true",
+        )
     }
 
     /**

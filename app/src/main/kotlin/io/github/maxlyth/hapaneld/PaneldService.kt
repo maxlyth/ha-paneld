@@ -99,7 +99,7 @@ class PaneldService : Service() {
         mqtt = buildMqtt()
         mdns = MdnsAdvertiser(this, config)
         server = PaneldServer(
-            config, cacheDir, scope, this, sensors, ::reconfigure, ::panelInfo,
+            config, cacheDir, scope, this, sensors, system, volume, ::reconfigure, ::panelInfo,
             profile.recommendedDensity, profile.recommendedFontScale,
         )
         // Stream daemon-instrumented hardware buttons (e.g. WF1589T power key) into the same event

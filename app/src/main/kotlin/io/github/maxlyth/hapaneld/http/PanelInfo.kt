@@ -9,6 +9,7 @@ import android.os.StatFs
 import android.provider.Settings
 import android.webkit.WebView
 import io.github.maxlyth.hapaneld.BuildConfig
+import java.io.File
 
 /**
  * Gathers the panel facts shown on the info page (`GET /`). Static device/version facts live here;
@@ -21,6 +22,10 @@ object PanelInfo {
         m["ha-paneld"] = "${BuildConfig.VERSION_NAME} (build ${BuildConfig.VERSION_CODE})"
         m["Android"] = "${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})"
         m["Firmware"] = Build.DISPLAY
+        // Model + Platform promoted to lines 4-5 (panel identity up top). putAll below updates the values
+        // in place without moving them (LinkedHashMap keeps first-insertion order).
+        extras["Model"]?.let { m["Model"] = it }
+        extras["Platform"]?.let { m["Platform"] = it }
         m["Device"] = "${Build.MANUFACTURER} ${Build.MODEL} (${Build.DEVICE})"
         m["Device ID"] = try {
             Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID) ?: "?"
@@ -54,14 +59,34 @@ object PanelInfo {
 
     private fun storage(): String = try {
         val fs = StatFs(Environment.getDataDirectory().path)
-        val total = fs.blockCountLong * fs.blockSizeLong
         val free = fs.availableBlocksLong * fs.blockSizeLong
-        "${gib(total)} total · ${gib(free)} free (data)"
+        // Advertised spec = the whole internal eMMC, so a user can tell e.g. an 8 GB panel from a 32 GB
+        // one; /data is just one partition (~3.5 GB) and reads nothing like the box spec. Report eMMC
+        // total + usable /data free; fall back to the /data total if the eMMC size can't be read.
+        val emmc = emmcTotalBytes()
+        if (emmc != null) "${gb(emmc)} eMMC · ${gb(free)} free (data)"
+        else "${gb(fs.blockCountLong * fs.blockSizeLong)} (data) · ${gb(free)} free"
     } catch (e: Throwable) {
         "?"
     }
 
+    /** Total internal storage = the largest WHOLE block device in `/sys/block` (its `size` in 512-byte
+     *  sectors). Scanning beats deriving from /data's mount, which is a by-name symlink (e.g.
+     *  `/dev/block/by-name/userdata`) an app can't traverse. Matches whole eMMC/SD devices only — the
+     *  full-string regex excludes partitions and eMMC boot/rpmb areas (`mmcblk1boot0`, `mmcblk1p20`). */
+    private fun emmcTotalBytes(): Long? = try {
+        File("/sys/block").listFiles { f -> f.name.matches(Regex("mmcblk\\d+|sd[a-z]")) }
+            ?.mapNotNull { runCatching { File(it, "size").readText().trim().toLong() }.getOrNull() }
+            ?.maxOrNull()
+            ?.let { it * 512L }
+    } catch (e: Throwable) {
+        null
+    }
+
     private fun gib(bytes: Long): String = "%.1f GiB".format(bytes / 1024.0 / 1024.0 / 1024.0)
+
+    /** Marketing GB (÷10⁹) so the number reads close to the advertised spec (8 GB / 32 GB …). */
+    private fun gb(bytes: Long): String = "%.1f GB".format(bytes / 1e9)
 
     /** Physical resolution + current density (the dpi reflects any `wm density` override). */
     private fun display(context: Context): String = try {

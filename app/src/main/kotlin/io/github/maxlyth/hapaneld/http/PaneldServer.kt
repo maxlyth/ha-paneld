@@ -6,6 +6,9 @@ import io.github.maxlyth.hapaneld.AudioPlayer
 import io.github.maxlyth.hapaneld.Config
 import io.github.maxlyth.hapaneld.control.CdpRelay
 import io.github.maxlyth.hapaneld.control.DensityController
+import io.github.maxlyth.hapaneld.control.SystemController
+import io.github.maxlyth.hapaneld.control.VolumeController
+import io.github.maxlyth.hapaneld.input.PanelAccessibilityService
 import io.github.maxlyth.hapaneld.sensors.SensorReporter
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
@@ -42,6 +45,9 @@ class PaneldServer(
     private val scope: CoroutineScope,
     private val appContext: Context,
     private val sensors: SensorReporter,
+    // For the on-screen Controls card (software navbar) on panels with no physical nav bar.
+    private val system: SystemController,
+    private val volume: VolumeController,
     // Called after this server has written new settings to [config]; the service rebuilds MQTT/mDNS.
     private val onReconfigure: () -> Unit,
     private val info: () -> Map<String, String>,
@@ -49,6 +55,12 @@ class PaneldServer(
     private val recommendedDensity: Int? = null,
     private val recommendedFontScale: Float? = null,
 ) {
+    // Per-INSTALL build token (changes on every (re)install, not just a version bump) so an open info
+    // page can auto-reload after the app is updated — even a same-version dev re-spin. /health carries it.
+    private fun buildToken(): String =
+        runCatching { appContext.packageManager.getPackageInfo(appContext.packageName, 0).lastUpdateTime.toString() }
+            .getOrDefault(Config.VERSION)
+
     // Display sizing (density + text scale) via `wm density` / `font_scale` — su panels only.
     private val density = DensityController()
     private val urlRegex = Regex("""https?://[^\s"']+""")
@@ -80,6 +92,22 @@ class PaneldServer(
                         if (on) PerfReader.touch()
                         call.respondText("""{"enabled":$on}""", ContentType.Application.Json)
                     }
+                }
+                // On-screen Controls card (software navbar) for panels with no physical nav bar.
+                post("/action") {
+                    val a = call.receiveParameters()["a"]
+                    val ok = when (a) {
+                        "back" -> { PanelAccessibilityService.navBack(); true }
+                        "recents" -> { PanelAccessibilityService.navRecents(); true }
+                        // Launcher, not Home: the HA Companion IS the home/launcher on these panels, so the
+                        // hard, useful action is escaping TO the system launcher to reach Settings/config apps.
+                        "launcher" -> { system.launchLauncher(config.launcherPackage); true }
+                        "reboot" -> { scope.launch { system.reboot() }; true }
+                        "volup" -> { volume.setPercent((volume.getPercent() + 10).coerceAtMost(100)); true }
+                        "voldn" -> { volume.setPercent((volume.getPercent() - 10).coerceAtLeast(0)); true }
+                        else -> false
+                    }
+                    if (ok) call.respondText("ok\n") else call.respondText("bad-action\n", status = HttpStatusCode.BadRequest)
                 }
                 get("/diag") {
                     call.respondText(DiagReader.dump(appContext), ContentType.Text.Plain)
@@ -229,7 +257,7 @@ class PaneldServer(
                     )
                 }
                 get("/health") {
-                    call.respondText("ha-paneld ${Config.VERSION} panel=${config.panelId}\n")
+                    call.respondText("ha-paneld ${Config.VERSION} panel=${config.panelId} build=${buildToken()}\n")
                 }
                 // 1-click WebView DevTools: expose the dashboard's CDP socket to the LAN (root relay)
                 // so the user can chrome://inspect with no adb. See CdpRelay.
@@ -308,11 +336,24 @@ class PaneldServer(
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>ha-paneld · $pid</title>
 <link rel="icon" href="/icon.svg">
-<link rel="stylesheet" href="/info.css"></head><body><div class="wrap">
+<link rel="stylesheet" href="/info.css"></head><body data-ver="${Config.VERSION}" data-build="${buildToken()}"><div class="wrap">
 <div class="hdr"><h1><img src="/icon.svg" class="logo" alt="">ha-paneld <small>· $pid</small></h1>
  <a class="gh" href="$REPO_URL" target="_blank" rel="noopener" title="ha-paneld on GitHub" aria-label="GitHub"><svg viewBox="0 0 24 24"><path d="$GH_ICON"/></svg></a></div>
+<div id="verbar" class="setup" style="display:none">⟳ A newer ha-paneld is installed — <a href="#" onclick="location.reload();return false">reload</a> to refresh this page.</div>
 $setupBanner
 <div class="cards">
+<div class="card"><h2>Controls <small>· software nav bar</small></h2>
+<div style="display:flex;gap:8px;flex-wrap:wrap">
+ <button class="pbtn" onclick="act('back')">← Back</button>
+ <button class="pbtn" onclick="act('recents')">▢ Recents</button>
+ <button class="pbtn" onclick="act('launcher')">⊞ Launcher</button>
+</div>
+<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+ <button class="pbtn" onclick="act('voldn')">Vol −</button>
+ <button class="pbtn" onclick="act('volup')">Vol +</button>
+ <button class="pbtn" onclick="act('reboot')" style="margin-left:auto;border-color:#7a3a2a;color:#f5a08a">⟳ Reboot</button>
+</div>
+<p class="note">For panels with no physical nav bar. Back/Recents/Home use the accessibility service; Home/Reboot need root.</p></div>
 <div class="card"><h2>Panel information</h2><table>
 $rows
 </table></div>
