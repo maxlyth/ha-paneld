@@ -8,6 +8,19 @@ From **v0.8.0**, entries are grouped under **Added** (new features/entities), **
 changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
 content appear. Earlier releases predate this convention and keep their flat lists.
 
+## v0.8.0-rc6 - 2026-06-08
+
+Supersedes rc5.
+
+### Changed
+
+- **Light sensor / Proximity** in Panel information now state the sensor **technology** (declared per
+  profile — NSPanel Pro: Infrared / Ambient light; TPA10: Time-of-Flight), the **value type** (Binary /
+  Integer / Float) and the **range** — e.g. `yes · Infrared · Float · 0–106 cm` — instead of just yes/no.
+  Value type + range are read at runtime (`Sensor.maximumRange`/`resolution` + observed graded/binary);
+  the **chipset isn't shown** because the HAL reports only generic AOSP sensor names (no part number is
+  queryable). A graded proximity sensor reads "Binary" until it has reported varying distances.
+
 ## v0.8.0-rc5 - 2026-06-08
 
 Supersedes rc4.

@@ -17,6 +17,8 @@ object Tpa10 : DeviceProfile {
     override val zigbeeGatewayDir: String? = null
     override val relayBase: String? = null
     override val buttonLedGpioBase: Int? = null
+    override val proximityTech: String? = "Time-of-Flight"
+    override val lightTech: String? = "Ambient light"
     override val manufacturer = "Tuya"
     override val model = "TPA10"
     // The 5th (orange) button is a gpio-key that reports SW_MUTE_DEVICE (switch code 14) on event8 —

@@ -58,6 +58,25 @@ class SensorReporter(context: Context, private val config: Config) {
     fun hasHumidity() = humiditySensor != null
     fun maxRange(): Float = proximitySensor?.maximumRange ?: 0f
 
+    /** Light value-type + range for the info page (lux is a continuous float), or null if absent. */
+    fun lightDesc(): String? = lightSensor?.let { "Float · 0–${fmtV(it.maximumRange)} lx" }
+
+    /** Proximity value-type + range for the info page, or null if absent. Binary when the sensor only
+     *  reports near/far (observed distinct values ≤ 2); graded → Integer/Float by its resolution. Reflects
+     *  what's been observed, so a graded sensor reads "Binary" until it has reported varying distances. */
+    fun proximityDesc(): String? {
+        val s = proximitySensor ?: return null
+        val graded = seenRaw.size > 2 && (seenRaw.last() - seenRaw.first()) >= 2f
+        return when {
+            !graded -> "Binary · near/far (0 / ${fmtV(s.maximumRange)} cm)"
+            s.resolution >= 1f -> "Integer · 0–${fmtV(s.maximumRange)} cm"
+            else -> "Float · 0–${fmtV(s.maximumRange)} cm"
+        }
+    }
+
+    private fun fmtV(f: Float): String =
+        if (f == f.toLong().toFloat()) f.toLong().toString() else "%.1f".format(f)
+
     fun start(
         onLux: (Int) -> Unit,
         onProximity: (Boolean) -> Unit,

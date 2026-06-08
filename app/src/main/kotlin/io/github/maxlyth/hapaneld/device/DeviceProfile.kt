@@ -47,6 +47,15 @@ interface DeviceProfile {
     /** First GPIO number of the button-LED block (e.g. 147 on the S9E), or null if none. */
     val buttonLedGpioBase: Int?
 
+    /** Declared proximity-sensor technology (e.g. "Time-of-Flight", "Infrared", "Radar"), or null if
+     *  unknown. Android's Sensor API has no technology field and the HAL reports generic AOSP names
+     *  (verified: "Proximity sensor" / vendor "The Android Open Source Project"), so this can't be probed
+     *  — declare per profile where known. Optionally append a known chipset, e.g. "Infrared (STK3338)". */
+    val proximityTech: String? get() = null
+
+    /** Declared ambient-light-sensor technology (e.g. "Ambient light (ALS)"), or null if unknown. */
+    val lightTech: String? get() = null
+
     /** Default HA device-card manufacturer for this panel (e.g. "Sonoff"), or null to infer from
      *  [Build.MANUFACTURER]. The user's Configure-form value always overrides. */
     val manufacturer: String?

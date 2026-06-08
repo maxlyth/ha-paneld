@@ -22,6 +22,11 @@ object NSPanelPro : DeviceProfile {
     // adding Gen2 support, declare a fixed relay count for it — do NOT sysfs-probe this class.
     override val relayBase: String? = null
     override val buttonLedGpioBase: Int? = null
+    // IR reflective proximity + ambient-light (the standard combo ALS/proximity IC class). Inferred from
+    // the graded-reflectance behaviour + the firmware "proximity distance" quirk, not a teardown — the HAL
+    // exposes no chipset. Correct here if a teardown identifies the part (e.g. "Infrared (STK3338)").
+    override val proximityTech: String? = "Infrared"
+    override val lightTech: String? = "Ambient light"
     override val manufacturer = "Sonoff"
     override val model = "NSPanel Pro"
     override val evdevButtons = emptyList<EvdevButton>()

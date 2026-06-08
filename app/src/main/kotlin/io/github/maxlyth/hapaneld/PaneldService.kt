@@ -169,8 +169,8 @@ class PaneldService : Service() {
             "Platform" to "${profile.displayName} · ${profile.socClass}",
             "Model" to modelRow,
             "LED" to ledLabel(),
-            "Light sensor" to yesNo(sensors.hasLight()),
-            "Proximity" to yesNo(sensors.hasProximity()),
+            "Light sensor" to sensorRow(sensors.hasLight(), profile.lightTech, sensors.lightDesc()),
+            "Proximity" to sensorRow(sensors.hasProximity(), profile.proximityTech, sensors.proximityDesc()),
             // a11y service = software back/recents nav, NOT physical buttons (NSPanel Pro has none).
             "Accessibility nav" to yesNo(accessibilityEnabled()),
             // Zigbee driver presence + state (NSPanel Pro only; "none" elsewhere). status() shells
@@ -203,6 +203,11 @@ class PaneldService : Service() {
     }
 
     private fun yesNo(b: Boolean) = if (b) "yes" else "no"
+
+    /** "no", or "yes" with any declared technology + runtime value-type/range appended ("yes · Infrared ·
+     *  Binary · near/far (0 / 5 cm)"). */
+    private fun sensorRow(present: Boolean, tech: String?, desc: String?): String =
+        if (!present) "no" else "yes" + listOfNotNull(tech, desc).joinToString("") { " · $it" }
 
     /** Smoothness-metrics target: the configured override, else the installed HA Companion app
      *  (this is an HA project — the dashboard is the Companion app, so no config needed normally). */
