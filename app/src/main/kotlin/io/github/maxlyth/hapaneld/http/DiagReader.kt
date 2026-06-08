@@ -84,8 +84,12 @@ object DiagReader {
         appendLine("[capabilities] " + capabilities(ctx).joinToString(" | ") { "${it.name}=${it.status}" })
     }
 
-    // Network addresses kept OUT of the report — it's meant for public GitHub issues.
-    private val OMIT = setOf("Local IP", "Local IPv6", "MQTT")
+    // Omitted from the report (it's for public GitHub issues): network addresses; non-diagnostic instance
+    // config (panel_id / Friendly name / HTTP port / mDNS — no hardware/capability signal); and Device ID
+    // (an ANDROID_ID identifier whose only value is correlating reports — not worth a public identifier).
+    private val OMIT = setOf(
+        "Local IP", "Local IPv6", "MQTT", "panel_id", "Friendly name", "HTTP port", "mDNS", "Device ID",
+    )
 
     private fun a11yEnabled(ctx: Context): Boolean =
         (Settings.Secure.getString(ctx.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: "")

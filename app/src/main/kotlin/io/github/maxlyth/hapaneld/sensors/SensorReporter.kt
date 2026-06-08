@@ -7,6 +7,7 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.util.Log
 import io.github.maxlyth.hapaneld.Config
+import io.github.maxlyth.hapaneld.device.DeviceProfile
 import kotlin.math.abs
 import kotlin.math.max
 
@@ -47,6 +48,23 @@ class SensorReporter(context: Context, private val config: Config) {
     private var onHumid: ((Float) -> Unit)? = null
     private val seenRaw = java.util.TreeSet<Float>() // distinct raw values observed → graded vs binary
 
+    // Authoritative graded/binary from the firmware version where the profile knows the rule (NSPanel Pro
+    // kernel-driver cutover), so a graded sensor never reads "Binary" at idle. Null → observe (TPA10 etc.).
+    private val fwGraded: Boolean? =
+        runCatching { DeviceProfile.detect().proximityGradedForFirmware(sysProp("ro.product.version")) }.getOrNull()
+
+    private fun sysProp(key: String): String = runCatching {
+        @Suppress("PrivateApi")
+        val m = Class.forName("android.os.SystemProperties").getMethod("get", String::class.java)
+        (m.invoke(null, key) as? String).orEmpty()
+    }.getOrDefault("")
+
+    private fun gradedObserved(): Boolean =
+        synchronized(seenRaw) { seenRaw.size > 2 && (seenRaw.last() - seenRaw.first()) >= 2f }
+
+    /** Proximity graded(true) vs binary(false): firmware rule where the profile knows it, else observation. */
+    private fun proximityGraded(): Boolean = fwGraded ?: gradedObserved()
+
     /** Latest raw proximity reading (device-native units), updated ungated on every event. */
     @Volatile
     var lastRaw: Float = Float.NaN
@@ -61,12 +79,12 @@ class SensorReporter(context: Context, private val config: Config) {
     /** Light value-type + range for the info page (lux is a continuous float), or null if absent. */
     fun lightDesc(): String? = lightSensor?.let { "Float · 0–${fmtV(it.maximumRange)} lx" }
 
-    /** Proximity value-type + range for the info page, or null if absent. Binary when the sensor only
-     *  reports near/far (observed distinct values ≤ 2); graded → Integer/Float by its resolution. Reflects
-     *  what's been observed, so a graded sensor reads "Binary" until it has reported varying distances. */
+    /** Proximity value-type + range for the info page, or null if absent. Graded vs binary via
+     *  [proximityGraded] (firmware rule where known, else observation); graded → Integer/Float by the
+     *  sensor's resolution, binary → near/far. Range from the sensor's maximumRange. */
     fun proximityDesc(): String? {
         val s = proximitySensor ?: return null
-        val graded = seenRaw.size > 2 && (seenRaw.last() - seenRaw.first()) >= 2f
+        val graded = proximityGraded()
         return when {
             !graded -> "Binary · near/far (0 / ${fmtV(s.maximumRange)} cm)"
             s.resolution >= 1f -> "Integer · 0–${fmtV(s.maximumRange)} cm"
@@ -183,7 +201,7 @@ class SensorReporter(context: Context, private val config: Config) {
         val vals = synchronized(seenRaw) { seenRaw.toList() }
         // Graded (worth a threshold/gauge) vs binary (0/1 — only polarity matters). Until the user
         // triggers near+far we've seen too few values to tell, so default to binary (the common case).
-        val graded = vals.size > 2 && (vals.last() - vals.first()) >= 2f
+        val graded = proximityGraded()
         fun f(v: Float) = if (v.isNaN()) "null" else v.toString()
         return "{\"present\":${hasProximity()},\"raw\":${f(raw)},\"near\":${lastNear ?: false}," +
             "\"max\":${maxRange()},\"calibrated\":${config.proximityCalibrated}," +

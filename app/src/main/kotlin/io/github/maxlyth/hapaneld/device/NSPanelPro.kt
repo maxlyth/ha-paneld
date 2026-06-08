@@ -27,6 +27,16 @@ object NSPanelPro : DeviceProfile {
     // exposes no chipset. Correct here if a teardown identifies the part (e.g. "Infrared (STK3338)").
     override val proximityTech: String? = "Infrared"
     override val lightTech: String? = "Ambient light"
+
+    // Seaky firmware quirk (github.com/seaky/nspanel_pro_roottool_apk): a new kernel proximity driver lands
+    // at fw >= 3.0.0 (86P) / >= 3.5.0 (120P) and drops graded distance → BINARY; below that it's GRADED.
+    // ro.product.version e.g. "NSPanel120P_3.7.1" / "NSPanel86P_1.2.6".
+    override fun proximityGradedForFirmware(productVersion: String): Boolean? {
+        val fw = productVersion.substringAfter('_', "").ifBlank { return null }
+        val threshold = if ("120" in productVersion.substringBefore('_')) "3.5.0" else "3.0.0"
+        return verLt(fw, threshold)
+    }
+
     override val manufacturer = "Sonoff"
     override val model = "NSPanel Pro"
     override val evdevButtons = emptyList<EvdevButton>()
@@ -34,4 +44,15 @@ object NSPanelPro : DeviceProfile {
     override val cpuGovernors = mapOf("Performance" to "performance", "Efficiency" to "powersave", "Auto" to "interactive")
     override val recommendedDensity: Int? = null
     override val recommendedFontScale: Float? = null
+}
+
+/** True if dotted-numeric version [a] < [b] (e.g. "1.2.6" < "3.0.0"). Non-numeric/missing parts → 0. */
+private fun verLt(a: String, b: String): Boolean {
+    val pa = a.split('.'); val pb = b.split('.')
+    for (i in 0 until maxOf(pa.size, pb.size)) {
+        val x = pa.getOrNull(i)?.takeWhile { it.isDigit() }?.toIntOrNull() ?: 0
+        val y = pb.getOrNull(i)?.takeWhile { it.isDigit() }?.toIntOrNull() ?: 0
+        if (x != y) return x < y
+    }
+    return false
 }

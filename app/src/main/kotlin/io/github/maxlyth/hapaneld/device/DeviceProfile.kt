@@ -56,6 +56,12 @@ interface DeviceProfile {
     /** Declared ambient-light-sensor technology (e.g. "Ambient light (ALS)"), or null if unknown. */
     val lightTech: String? get() = null
 
+    /** Authoritative proximity graded(true) / binary(false) decided from the firmware version, where the
+     *  profile knows the rule (e.g. NSPanel Pro's kernel-driver cutover) — overrides runtime observation,
+     *  so a graded sensor never momentarily reads "Binary" at idle. Null → fall back to observation.
+     *  @param productVersion `ro.product.version`, e.g. "NSPanel120P_3.7.1". */
+    fun proximityGradedForFirmware(productVersion: String): Boolean? = null
+
     /** Default HA device-card manufacturer for this panel (e.g. "Sonoff"), or null to infer from
      *  [Build.MANUFACTURER]. The user's Configure-form value always overrides. */
     val manufacturer: String?

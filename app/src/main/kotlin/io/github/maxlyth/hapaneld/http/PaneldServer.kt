@@ -6,10 +6,12 @@ import io.github.maxlyth.hapaneld.AudioPlayer
 import io.github.maxlyth.hapaneld.Config
 import io.github.maxlyth.hapaneld.control.CdpRelay
 import io.github.maxlyth.hapaneld.control.DensityController
+import io.github.maxlyth.hapaneld.control.Su
 import io.github.maxlyth.hapaneld.control.SystemController
 import io.github.maxlyth.hapaneld.control.VolumeController
 import io.github.maxlyth.hapaneld.input.PanelAccessibilityService
 import io.github.maxlyth.hapaneld.sensors.SensorReporter
+import io.github.maxlyth.hapaneld.util.HelperClient
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.call
@@ -344,6 +346,14 @@ class PaneldServer(
             val r = factRows(keys)
             return if (r.isBlank()) "" else """<div class="card"><h2>${esc(title)}</h2><table>$r</table>$note</div>"""
         }
+        // Controls buttons: render but DISABLE (not hide, not silently-broken) when the action's capability
+        // is missing — back/recents need the a11y service, launcher/reboot need root; volume always works.
+        val a11yOk = facts["Accessibility nav"] == "yes"
+        val rootOk = Su.available() || HelperClient.available()
+        fun pbtn(action: String, label: String, ok: Boolean, needs: String, style: String = ""): String {
+            val dis = if (ok) "" else """ disabled title="needs $needs""""
+            return """<button class="pbtn"$style onclick="act('$action')"$dis>$label</button>"""
+        }
         val capColor = mapOf("ok" to "#48c774", "degraded" to "#d9a528", "none" to "#d04a3b")
         val capRows = DiagReader.capabilities(appContext).joinToString("\n") { c ->
             val col = capColor[c.status] ?: "#888"
@@ -361,16 +371,16 @@ $setupBanner
 <div class="cards">
 <div class="card"><h2>Controls <small>· software nav bar</small></h2>
 <div style="display:flex;gap:8px;flex-wrap:wrap">
- <button class="pbtn" onclick="act('back')">← Back</button>
- <button class="pbtn" onclick="act('recents')">▢ Recents</button>
- <button class="pbtn" onclick="act('launcher')">⊞ Launcher</button>
+ ${pbtn("back", "← Back", a11yOk, "the accessibility service")}
+ ${pbtn("recents", "▢ Recents", a11yOk, "the accessibility service")}
+ ${pbtn("launcher", "⊞ Launcher", rootOk, "root (su or the helper daemon)")}
 </div>
 <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
- <button class="pbtn" onclick="act('voldn')">Vol −</button>
- <button class="pbtn" onclick="act('volup')">Vol +</button>
- <button class="pbtn" onclick="act('reboot')" style="margin-left:auto;border-color:#7a3a2a;color:#f5a08a">⟳ Reboot</button>
+ ${pbtn("voldn", "Vol −", true, "")}
+ ${pbtn("volup", "Vol +", true, "")}
+ ${pbtn("reboot", "⟳ Reboot", rootOk, "root (su or the helper daemon)", """ style="margin-left:auto;border-color:#7a3a2a;color:#f5a08a"""")}
 </div>
-<p class="note">For panels with no physical nav bar. Back/Recents use the accessibility service; Launcher/Reboot need root.</p></div>
+<p class="note">For panels with no physical nav bar. Back/Recents use the accessibility service; Launcher/Reboot need root — actions whose capability is missing are disabled (hover for why).</p></div>
 ${factCard("Panel information", infoKeys)}
 ${factCard("Networking", netKeys)}
 ${factCard("ha-paneld profile", profKeys, """<p class="note">Values declared by this panel's <a href="$REPO_URL/blob/main/docs/architecture/device-profiles.md" target="_blank" rel="noopener" style="color:#9cf">device profile</a> — if one looks wrong, that's where to correct it.</p>""")}

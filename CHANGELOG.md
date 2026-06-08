@@ -8,6 +8,22 @@ From **v0.8.0**, entries are grouped under **Added** (new features/entities), **
 changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
 content appear. Earlier releases predate this convention and keep their flat lists.
 
+## v0.8.0-rc9 - 2026-06-08
+
+Supersedes rc8.
+
+### Changed
+
+- **Proximity graded/binary is now authoritative from the firmware version** where the profile knows the
+  rule (NSPanel Pro kernel-driver cutover — binary at fw ≥ 3.0.0 on the 86P / ≥ 3.5.0 on the 120P, graded
+  below), instead of waiting to *observe* varying distances. A graded panel no longer momentarily reads
+  "Binary" at idle. Panels without a known rule (e.g. TPA10) still fall back to runtime observation.
+- **`/diag` trimmed** — `panel_id`, `Friendly name`, `HTTP port`, `mDNS` and `Device ID` removed: they're
+  non-diagnostic instance config / an identifier, with no place in a public bug report.
+- **Controls buttons disable when their capability is missing** instead of silently no-op'ing — Back/Recents
+  grey out without the accessibility service, Launcher/Reboot without root, each with a hover reason. Volume
+  always works (no root needed).
+
 ## v0.8.0-rc8 - 2026-06-08
 
 Supersedes rc7.
