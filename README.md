@@ -354,7 +354,22 @@ means you can never publish an in-place update again. Never commit the keystore 
 Validated across the panel fleet: Sonoff NSPanel Pro (PX30, Android 8.1), Tuya TPA10 (rk3566,
 Android 11), Electron WF1589T (rk3576, Android 14).
 
-**New in 0.8.0:**
+**New in 0.8.1:**
+
+- **LAN-only control surface** — the HTTP API/UI (`:8888`) refuses non-local sources (loopback / RFC1918 /
+  link-local / IPv6 ULA), so a dual-stack panel isn't reachable from the internet over a routable IPv6 even
+  if the router doesn't firewall inbound v6.
+- **Screenshot-safe info page** — Device ID, MQTT broker and globally-routable IP/IPv6 are blurred by
+  default; click a value or the **Reveal** toggle to show them. LAN (RFC1918 / ULA) addresses stay visible.
+- **"Open in Home Assistant"** — when the MQTT credentials are an HA user, the info page links straight to
+  the panel's own HA device page (works for non-admin users and across reverse-proxy / tunnel setups).
+- **Screen diagonal** on the info page (from resolution + dpi); click to toggle inches ↔ cm.
+- **Recommended display density per model** — the "rec" button suggests 160 dpi (86P) / 250 dpi (120P).
+
+<details>
+<summary>Earlier releases (0.8.0 → 0.4.x) — full history in <a href="CHANGELOG.md">CHANGELOG.md</a></summary>
+
+New in 0.8.0:
 
 - **Auto-brightness** *(opt-in)* — `switch.<panel>_auto_brightness` maps a lux stream (the panel's own
   ambient-light sensor, or HA-fed `number.<panel>_ambient_lux`) to the backlight, with an **asymmetric
@@ -373,9 +388,6 @@ Android 11), Electron WF1589T (rk3576, Android 14).
 - **Diagnostics (`/diag`) rewritten** — terse, public-safe (no addresses/identifiers), reflects every
   detected field, and structured for a regression-test harness.
 - **Debug sensor trace** (`/sensortrace`) for objective auto-brightness / proximity filter tuning.
-
-<details>
-<summary>Earlier releases (0.7.0 → 0.4.x) — full history in <a href="CHANGELOG.md">CHANGELOG.md</a></summary>
 
 New in 0.7.1:
 
