@@ -18,6 +18,7 @@ import io.github.maxlyth.hapaneld.input.EvdevButtonClient
 import io.github.maxlyth.hapaneld.control.AutoBrightnessController
 import io.github.maxlyth.hapaneld.control.BrightnessController
 import io.github.maxlyth.hapaneld.control.CpuController
+import io.github.maxlyth.hapaneld.control.NavbarController
 import io.github.maxlyth.hapaneld.control.NavigateController
 import io.github.maxlyth.hapaneld.control.RelayController
 import io.github.maxlyth.hapaneld.control.ScreenController
@@ -37,6 +38,7 @@ import io.github.maxlyth.hapaneld.util.localIpv6
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import io.github.maxlyth.hapaneld.util.Serializer
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 
@@ -51,6 +53,11 @@ import kotlinx.coroutines.launch
  */
 class PaneldService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    // Serializes reconfigure() — it stops + rebuilds + restarts the MQTT/mDNS stack, and two overlapping
+    // runs (e.g. a quick resubmit of the config form) would interleave stop/build/start and leave the
+    // bridge stopped or half-built. Each reconfigure runs atomically; queued ones re-apply the (now
+    // identical) latest config harmlessly. No-interleave property is regression-tested in SerializerTest.
+    private val reconfigurer = Serializer(scope)
     private lateinit var config: Config
     private lateinit var server: PaneldServer
     private lateinit var mdns: MdnsAdvertiser
@@ -69,6 +76,7 @@ class PaneldService : Service() {
     private lateinit var zigbee: ZigbeeController
     private lateinit var relay: RelayController
     private lateinit var cpu: CpuController
+    private lateinit var navbar: NavbarController
     private lateinit var adb: AdbController
     private lateinit var profile: DeviceProfile
     private var configUrl: String? = null
@@ -93,6 +101,7 @@ class PaneldService : Service() {
         zigbee = ZigbeeController(profile)
         relay = RelayController(profile)
         cpu = CpuController(profile)
+        navbar = NavbarController()
         adb = AdbController()
         configUrl = localIpv4()?.let { "http://$it:${config.httpPort}/" }
 
@@ -108,7 +117,7 @@ class PaneldService : Service() {
     }
 
     private fun buildMqtt(): MqttBridge = MqttBridge(
-        config, brightness, screen, led, navigate, volume, system, touchSound, zigbee, relay, cpu, adb,
+        config, brightness, screen, led, navigate, volume, system, touchSound, zigbee, relay, cpu, navbar, adb,
         accessibilityEnabled(), profile.evdevButtons.isNotEmpty(),
         sensors.hasLight(), sensors.hasProximity(),
         sensors.hasTemperature(), sensors.hasHumidity(),
@@ -116,6 +125,8 @@ class PaneldService : Service() {
         led is SocketLedController, autoBright, configUrl,
         // When no broker is configured, find HA on the LAN via mDNS and default to its :1883.
         discoverHaIp = { mdns.discoverHaIp() },
+        // HA's advertised base URL (from zeroconf) for the "Open in HA" device link.
+        discoverHaUrl = { mdns.discoverHaBaseUrl() },
     )
 
     /**
@@ -123,7 +134,8 @@ class PaneldService : Service() {
      * MQTT bridge still holds the old panel id), then rebuild MQTT + mDNS from the new config.
      */
     private fun reconfigure() {
-        scope.launch {
+        // Atomic: never let a second reconfigure interleave with this one's stop/build/start (see Serializer).
+        reconfigurer.launch {
             runCatching { mqtt.clearDiscovery() } // bridge was built with the previous panel id
             runCatching { mqtt.stop() }
             runCatching { mdns.stop() }

@@ -17,8 +17,8 @@ android {
         // the whole panel fleet (NSPanelPro Android 8.1 = API 27, Hall TPA10 Android 11 = API 30).
         minSdk = 26
         targetSdk = 35
-        versionCode = 29
-        versionName = "0.8.0"
+        versionCode = 30
+        versionName = "0.8.1-dev"
 
         // Only the fleet's ARM ABIs — bounds the native LED lib (libhapaneld_led.so) + APK size.
         ndk {
@@ -93,6 +93,12 @@ dependencies {
     implementation(libs.ktor.server.core)
     implementation(libs.ktor.server.cio)
 
+    // Ktor WS client — used by HaLink to read HA's non-admin `config/entity_registry/list_for_display`
+    // (which carries each entity's device id) to resolve this panel's device-settings URL.
+    implementation(libs.ktor.client.core)
+    implementation(libs.ktor.client.cio)
+    implementation(libs.ktor.client.websockets)
+
     // MQTT 5 auto-discovery + state publishing.
     implementation(libs.hivemq.mqtt.client)
 
@@ -104,6 +110,10 @@ dependencies {
 
     // QR code for the on-device config URL (pure-Java encoder; no Android transitive deps).
     implementation("com.google.zxing:core:3.5.3")
+
+    // JVM unit tests (no Android/emulator deps): pure-logic + coroutine serialization regression tests.
+    testImplementation(libs.junit)
+    testImplementation(libs.kotlinx.coroutines.test)
 }
 
 // Compile the CDP relay (helper/cdprelay.c) into assets at build time for the fleet ABIs, using the

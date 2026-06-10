@@ -14,9 +14,11 @@ import io.github.maxlyth.hapaneld.sensors.SensorReporter
 import io.github.maxlyth.hapaneld.util.HelperClient
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
+import io.ktor.server.application.ApplicationCallPipeline
 import io.ktor.server.application.call
 import io.ktor.server.cio.CIO
 import io.ktor.server.engine.embeddedServer
+import io.ktor.server.plugins.origin
 import io.ktor.server.request.receiveParameters
 import io.ktor.server.request.receiveText
 import io.ktor.server.response.respondText
@@ -63,6 +65,45 @@ class PaneldServer(
         runCatching { appContext.packageManager.getPackageInfo(appContext.packageName, 0).lastUpdateTime.toString() }
             .getOrDefault(Config.VERSION)
 
+    /** True if [host] (the request's source IP) is a LAN-local address: loopback, RFC1918, link-local, or
+     *  IPv6 ULA. Global/public sources return false → 403. Parses with InetAddress, which unmaps an
+     *  IPv4-mapped IPv6 source (`::ffff:a.b.c.d`) to its IPv4 form, so the dual-stack bind can't smuggle a
+     *  public IPv4 past the RFC1918 check. Strips any `%zone` and leading `/`. */
+    private fun isLocalSource(host: String): Boolean = runCatching {
+        val a = java.net.InetAddress.getByName(host.substringBefore('%').removePrefix("/"))
+        a.isLoopbackAddress || a.isLinkLocalAddress || a.isSiteLocalAddress || a.isAnyLocalAddress ||
+            (a is java.net.Inet6Address && (a.address[0].toInt() and 0xfe) == 0xfc) // fc00::/7 ULA
+    }.getOrDefault(false)
+
+    // Panel-info rows blurred by default (screenshot hygiene) — identity + network values a casual share
+    // shouldn't leak. "Reveal" un-blurs them. Not access control: the values are still in the page source.
+    private val SECRET_FIELDS = setOf("Device ID", "MQTT")
+    // Address rows blur ONLY when the value is globally ROUTABLE — an unroutable RFC1918 / ULA / link-local
+    // address (e.g. the LAN IPv4, or a ULA v6) has no external use, so it stays visible.
+    private val ADDRESS_FIELDS = setOf("Local IP", "Local IPv6")
+
+    /** True only for a parseable, globally-routable address (not loopback / RFC1918 / ULA / link-local).
+     *  Unparseable values (e.g. "—") return false → not blurred. */
+    private fun isRoutable(host: String): Boolean = runCatching {
+        val a = java.net.InetAddress.getByName(host.substringBefore('%').removePrefix("/"))
+        !(a.isLoopbackAddress || a.isLinkLocalAddress || a.isSiteLocalAddress || a.isAnyLocalAddress ||
+            (a is java.net.Inet6Address && (a.address[0].toInt() and 0xfe) == 0xfc))
+    }.getOrDefault(false)
+
+    /** Appends a calculated diagonal to the Display row ("…dpi · 6.4″"), assuming square pixels
+     *  (diag_in = hypot(w,h)/dpi). The diagonal is clickable to toggle ″↔cm, with W×H in the hover title. */
+    private fun displayCell(v: String): String {
+        val n = Regex("\\d+").findAll(v).mapNotNull { it.value.toIntOrNull() }.toList()
+        if (n.size < 3 || n[2] == 0) return esc(v)
+        val (w, h, dpi) = Triple(n[0], n[1], n[2])
+        val inch = Math.hypot(w.toDouble(), h.toDouble()) / dpi
+        val inchS = "%.1f".format(inch)
+        val cmS = "%.1f".format(inch * 2.54)
+        val title = "W %.1f × H %.1f cm".format(w * 2.54 / dpi, h * 2.54 / dpi)
+        return """${esc(v)} · <span class="diag" data-in="$inchS″" data-cm="$cmS cm" """ +
+            """title="${esc(title)}" onclick="diagToggle(this)">$inchS″</span>"""
+    }
+
     // Display sizing (density + text scale) via `wm density` / `font_scale` — su panels only.
     private val density = DensityController()
     private val urlRegex = Regex("""https?://[^\s"']+""")
@@ -74,6 +115,21 @@ class PaneldServer(
         // Bind the IPv6 wildcard "::" — on Android this is dual-stack (net.ipv6.bindv6only=0), so the
         // server answers on both IPv6 and IPv4, instead of the IPv4-only default 0.0.0.0.
         val server = embeddedServer(CIO, port = config.httpPort, host = "::") {
+            // 0.8.1 security: refuse any request whose SOURCE is not LAN-local. The unauthenticated control
+            // surface answers on the panel's globally-routable IPv6 (dual-stack "::"), so without this it can
+            // be reached from the internet whenever the home router doesn't firewall inbound IPv6 — and we
+            // must not depend on that. Allow loopback / RFC1918 / link-local / ULA; global/public source 403s.
+            // (Known limitation to iterate on: a LAN peer reaching the panel via its *global* v6 uses a global
+            // source and is also rejected — use IPv4 on-LAN; a same-/64-prefix exception is the next refinement.)
+            intercept(ApplicationCallPipeline.Plugins) {
+                // Use origin.remoteAddress (the RAW peer IP), NOT remoteHost — remoteHost reverse-resolves to
+                // a hostname, and forward-resolving that picks a (possibly global) address that fails the
+                // RFC1918 check, 403-ing legitimate LAN clients. Verified: remoteAddress returns 172.31.x etc.
+                if (!isLocalSource(call.request.origin.remoteAddress)) {
+                    call.respondText("forbidden\n", status = HttpStatusCode.Forbidden)
+                    return@intercept finish()
+                }
+            }
             routing {
                 get("/") {
                     call.respondText(infoHtml(), ContentType.Text.Html)
@@ -308,14 +364,9 @@ class PaneldServer(
         // set — so auto-discovery + a real connection clears it, and an auth rejection says so.
         val facts = info()
         val mqtt = facts["MQTT"] ?: "disabled"
-        val needs = mutableListOf<String>()
-        if (config.panelIdIsDefault) needs.add("a panel id")
-        when {
-            mqtt.contains("connected") || mqtt.contains("connecting") -> {} // connected / transient — fine
-            mqtt.contains("auth rejected") -> needs.add("valid MQTT credentials (the broker rejected them)")
-            mqtt.contains("unreachable") -> needs.add("a reachable MQTT broker")
-            else -> needs.add("the MQTT broker")
-        }
+        // Pure decision (unit-tested in SetupBannerTest) — note a CONFIGURED broker that's merely
+        // mid-(re)connect must not be reported as missing.
+        val needs = SetupBanner.needs(mqtt, config.mqttBroker.isNotBlank(), config.panelIdIsDefault)
         val setupBanner = if (needs.isNotEmpty())
             """<div class="setup">⚠ This panel needs <a href="#config">${needs.joinToString(" and ")}</a> — set below.</div>"""
         else ""
@@ -337,6 +388,12 @@ class PaneldServer(
                 val cell = if (k == "ha-paneld") {
                     """${esc(v)} <a class="ext" href="$RELEASES_URL" target="_blank" rel="noopener" """ +
                         """title="Releases" aria-label="Releases"><svg viewBox="0 0 24 24"><path d="$EXT_ICON"/></svg></a>"""
+                } else if (k == "Display") {
+                    displayCell(v)
+                } else if (k in SECRET_FIELDS || (k in ADDRESS_FIELDS && isRoutable(v))) {
+                    // Blurred by default so a casual screenshot doesn't leak it; "Reveal" un-blurs (screenshot
+                    // hygiene, not access control — the value is still in the page source).
+                    """<span class="secret">${esc(v)}</span>"""
                 } else {
                     esc(v)
                 }
@@ -365,7 +422,8 @@ class PaneldServer(
 <link rel="icon" href="/icon.svg">
 <link rel="stylesheet" href="/info.css"></head><body data-ver="${Config.VERSION}" data-build="${buildToken()}"><div class="wrap">
 <div class="hdr"><h1><img src="/icon.svg" class="logo" alt="">ha-paneld <small>· $pid</small></h1>
- <a class="gh" href="$REPO_URL" target="_blank" rel="noopener" title="ha-paneld on GitHub" aria-label="GitHub"><svg viewBox="0 0 24 24"><path d="$GH_ICON"/></svg></a></div>
+ <span style="display:flex;gap:10px;align-items:center">${if (config.haDeviceUrl.isNotBlank()) """<a class="pbtn" href="${esc(config.haDeviceUrl)}" target="_blank" rel="noopener" title="Open this panel's device page in Home Assistant">Open in HA</a>""" else ""}<button id="revbtn" class="pbtn" onclick="toggleReveal()" title="Show/hide blurred values for editing — they're blurred by default so screenshots don't leak them">Reveal</button>
+ <a class="gh" href="$REPO_URL" target="_blank" rel="noopener" title="ha-paneld on GitHub" aria-label="GitHub"><svg viewBox="0 0 24 24"><path d="$GH_ICON"/></svg></a></span></div>
 <div id="verbar" class="setup" style="display:none">⟳ A newer ha-paneld is installed — <a href="#" onclick="location.reload();return false">reload</a> to refresh this page.</div>
 $setupBanner
 <div class="cards">
@@ -442,9 +500,9 @@ ${displayCardHtml()}
  <label>Model <small>(HA device card; blank = ${esc(config.model)})</small>
   <input name="model" value="${esc(config.modelRaw)}" placeholder="${esc(config.model)}"></label>
  <label>MQTT broker
-  <input name="mqtt_broker" autocapitalize="none" autocorrect="off" spellcheck="false" value="${esc(config.mqttBroker)}" placeholder="blank = auto-discover Home Assistant on the LAN"></label>
+  <input class="secret" name="mqtt_broker" autocapitalize="none" autocorrect="off" spellcheck="false" value="${esc(config.mqttBroker)}" placeholder="blank = auto-discover Home Assistant on the LAN"></label>
  <label>MQTT username
-  <input name="mqtt_user" autocapitalize="none" autocorrect="off" spellcheck="false" value="${esc(config.mqttUser)}" placeholder="blank if the broker needs no login" autocomplete="off"></label>
+  <input class="secret" name="mqtt_user" autocapitalize="none" autocorrect="off" spellcheck="false" value="${esc(config.mqttUser)}" placeholder="blank if the broker needs no login" autocomplete="off"></label>
  <label>MQTT password
   <input name="mqtt_password" type="password" value="" placeholder="blank keeps it; clear the username to remove auth" autocomplete="new-password"></label>
  <label>Dashboard package <small>(Reload button; blank = auto-detect Companion)</small>

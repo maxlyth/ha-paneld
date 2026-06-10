@@ -40,8 +40,18 @@ class Config(context: Context) {
 
     /** Persist a new panel id (used by the HTTP config page). */
     fun setPanelId(id: String) {
+        // The panel_id is the HA device identifier, so only an ACTUAL change invalidates the cached device
+        // link. The config form resubmits panel_id on every save (unchanged), so clearing unconditionally
+        // would drop the link on every save.
+        val changed = id != prefs.getString("panel_id", null)
         prefs.edit().putString("panel_id", id).apply()
+        if (changed) prefs.edit().remove("ha_device_url").apply()
     }
+
+    /** Cached HA device-settings URL (resolved once via HaLink when the MQTT creds are a valid HA user);
+     *  blank until/unless resolved. Shown as an "Open in Home Assistant" link on the info page. */
+    val haDeviceUrl: String get() = prefs.getString("ha_device_url", "")!!
+    fun setHaDeviceUrl(url: String) { prefs.edit().putString("ha_device_url", url).apply() }
 
     /**
      * HA device display name (`device.name` in discovery). Defaults to the device's own name —

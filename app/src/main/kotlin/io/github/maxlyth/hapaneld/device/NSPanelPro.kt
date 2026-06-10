@@ -42,8 +42,21 @@ object NSPanelPro : DeviceProfile {
     override val evdevButtons = emptyList<EvdevButton>()
     // PX30 offers no schedutil; its load-following governor is interactive.
     override val cpuGovernors = mapOf("Performance" to "performance", "Efficiency" to "powersave", "Auto" to "interactive")
-    override val recommendedDensity: Int? = null
-    override val recommendedFontScale: Float? = null
+    // Recommended display density + text scale per variant — the "rec" button on the info page applies
+    // these. 86P (480×480) reads best at 160 dpi; the larger 120P at 250. The Gen2 86P reports an 86P
+    // product string, so the "120" check covers it (→ 160). Text scale 1.0 across the board. Read lazily so
+    // ro.product.version is available (post-boot).
+    override val recommendedDensity: Int? by lazy {
+        if ("120" in sysProp("ro.product.version").substringBefore('_')) 250 else 160
+    }
+    override val recommendedFontScale: Float? = 1.0f
+
+    /** Read an Android system property via SystemProperties reflection (e.g. ro.product.version). */
+    private fun sysProp(key: String): String = runCatching {
+        @Suppress("PrivateApi")
+        val m = Class.forName("android.os.SystemProperties").getMethod("get", String::class.java)
+        (m.invoke(null, key) as? String).orEmpty()
+    }.getOrDefault("")
 }
 
 /** True if dotted-numeric version [a] < [b] (e.g. "1.2.6" < "3.0.0"). Non-numeric/missing parts → 0. */

@@ -10,6 +10,8 @@ import io.github.maxlyth.hapaneld.control.AdbController
 import io.github.maxlyth.hapaneld.control.AutoBrightnessController
 import io.github.maxlyth.hapaneld.control.BrightnessController
 import io.github.maxlyth.hapaneld.control.CpuController
+import io.github.maxlyth.hapaneld.control.NavbarController
+import io.github.maxlyth.hapaneld.util.HaLink
 import io.github.maxlyth.hapaneld.control.NavigateController
 import io.github.maxlyth.hapaneld.control.RelayController
 import io.github.maxlyth.hapaneld.control.ScreenController
@@ -54,6 +56,8 @@ class MqttBridge(
     private val relay: RelayController,
     // CPU governor + persistent network adb (root/su panels). Probed lazily on the MQTT thread.
     private val cpu: CpuController,
+    // System navigation-bar show/hide (policy_control immersive; su, Android <= 10). Probed on the MQTT thread.
+    private val navbar: NavbarController,
     private val adb: AdbController,
     private val buttonsEnabled: Boolean,
     // Panel has hardware buttons instrumented via the daemon (evdev) — publish the event entity even
@@ -70,6 +74,9 @@ class MqttBridge(
     // Resolves HA's LAN IP via mDNS to default the broker when none is configured (injected by the
     // service, wired to MdnsAdvertiser). Returns null if HA isn't found / mDNS unavailable.
     private val discoverHaIp: () -> String? = { null },
+    // HA's advertised base URL (scheme+host+port) from zeroconf TXT — for the "Open in HA" device link,
+    // so we never guess a port/scheme. Null if HA isn't found / advertises no URL.
+    private val discoverHaUrl: () -> String? = { null },
 ) {
     private var client: Mqtt5AsyncClient? = null
 
@@ -106,6 +113,8 @@ class MqttBridge(
     private val stateZigbee = "ha-paneld/$panel/zigbee_router/state"
     private val cmdCpuGov = "ha-paneld/$panel/cpu_governor/set"
     private val stateCpuGov = "ha-paneld/$panel/cpu_governor/state"
+    private val cmdNavbar = "ha-paneld/$panel/navbar/set"
+    private val stateNavbar = "ha-paneld/$panel/navbar/state"
     private val cmdNetAdb = "ha-paneld/$panel/network_adb/set"
     private val stateNetAdb = "ha-paneld/$panel/network_adb/state"
     private val stateScreen = "ha-paneld/$panel/screen/state"
@@ -203,7 +212,35 @@ class MqttBridge(
         publish(c, availabilityTopic, "online", retain = true)
         restoreAndPublishStates(c)
         reconcileZigbeeOnConnect(c) // boot-restore: start the gateway if left ON and nothing else has
+        maybeResolveHaLink() // best-effort "Open in HA" link via the MQTT creds; off-thread, silent on failure
         Log.i(TAG, "MQTT connected — (re)subscribed + discovery for $panel")
+    }
+
+    /**
+     * Resolve this panel's HA device-settings URL using the MQTT username/password (when those are also a
+     * valid HA user — typical with the built-in Mosquitto add-on) and cache it for the info page's
+     * "Open in Home Assistant" link. Off the MQTT thread; anonymous brokers and any failure no-op silently.
+     * Resolved once (the device id is stable); cache is cleared on a panel_id change.
+     */
+    private fun maybeResolveHaLink() {
+        if (config.haDeviceUrl.isNotBlank()) return
+        if (config.mqttUser.isBlank() || config.mqttPassword.isBlank()) return
+        Thread {
+            // Prefer mDNS (broker-matched). Else derive HA from the broker HOST: a working broker is very
+            // likely the HA server too, and reaching it by hostname works even across a tunnel where mDNS
+            // can't (e.g. a remote panel). HaLink then reads /api/config for the canonical link URL.
+            val base = discoverHaUrl() ?: brokerHttpsUrl() ?: return@Thread
+            HaLink.resolve(base, config.mqttUser, config.mqttPassword, config.friendlyName)
+                ?.let { config.setHaDeviceUrl(it) }
+        }.start()
+    }
+
+    /** `https://<broker-host>` when the broker is a hostname (wildcard/SAN certs make HTTPS verifiable);
+     *  null for a raw IP broker (cert would mismatch) or no broker. */
+    private fun brokerHttpsUrl(): String? {
+        val host = config.mqttBroker.substringAfter("://").substringBefore(":").substringBefore("/").trim()
+        if (host.isBlank() || host.contains(":") || host.matches(Regex("[0-9.]+"))) return null
+        return "https://$host"
     }
 
     /**
@@ -248,6 +285,7 @@ class MqttBridge(
             }
             when (topic) {
                 cmdCpuGov -> handleCpuGov(payload)
+                cmdNavbar -> handleNavbar(payload)
                 cmdNetAdb -> handleNetAdb(payload)
                 cmdScreen -> handleScreen(payload)
                 cmdLed -> handleLed(payload)
@@ -433,6 +471,12 @@ class MqttBridge(
     private fun handleCpuGov(payload: String) {
         val tier = payload.trim().trim('"')   // "Performance" | "Efficiency" | "Auto"
         if (cpu.setTier(tier)) client?.let { publish(it, stateCpuGov, cpu.currentTier() ?: tier, retain = true) }
+    }
+
+    // System navigation-bar show/hide (select). Sets policy_control; publishes the read-back mode.
+    private fun handleNavbar(payload: String) {
+        val mode = payload.trim().trim('"')
+        if (navbar.set(mode)) client?.let { publish(it, stateNavbar, navbar.current(), retain = true) }
     }
 
     // Persistent network adb (switch). Restarts adbd to apply; that only affects adb, not MQTT.
@@ -664,6 +708,17 @@ class MqttBridge(
             cpu.currentTier()?.let { publish(c, stateCpuGov, it, retain = true) }
         }
 
+        // System navigation bar (select) — Android <= 10 + su. Hidden modes get the OS's native
+        // swipe-from-edge transient reveal; the policy_control setting persists across reboot.
+        if (navbar.available()) {
+            val opts = NavbarController.MODES.joinToString(",") { "\"${jsonEsc(it)}\"" }
+            publishConfig(
+                c, "select", "${panel}_navbar",
+                """{"name":"Navigation bar","unique_id":"${panel}_navbar","command_topic":"$cmdNavbar","state_topic":"$stateNavbar","options":[$opts],"icon":"mdi:dock-bottom","entity_category":"config",$avail,$device}""",
+            )
+            publish(c, stateNavbar, navbar.current(), retain = true)
+        }
+
         // Persistent network adb (switch) — opt-in; root panels only. Standing LAN adb port when ON.
         if (adb.available()) {
             publishConfig(
@@ -719,7 +774,8 @@ class MqttBridge(
             "switch" to "${panel}_relay1", "switch" to "${panel}_relay2",
             "light" to "${panel}_button_led1", "light" to "${panel}_button_led2",
             "light" to "${panel}_button_led3", "light" to "${panel}_button_led4",
-            "select" to "${panel}_cpu_governor", "switch" to "${panel}_network_adb",
+            "select" to "${panel}_cpu_governor", "select" to "${panel}_navbar",
+            "switch" to "${panel}_network_adb",
             "button" to "${panel}_reload", "button" to "${panel}_reboot",
             "button" to "${panel}_launcher", "button" to "${panel}_home",
         )

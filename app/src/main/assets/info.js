@@ -205,3 +205,16 @@ insp();
 // Controls card actions: POST /action a=<back|recents|home|reboot|volup|voldn>. Reboot confirms first.
 function act(a){if(a==='reboot'&&!confirm('Reboot this panel now?'))return;
  fetch('/action',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'a='+a}).catch(function(){});}
+
+// Reveal toggle for .secret fields (blurred by default). Auto-re-blurs after 20s so it can't be left
+// revealed for a screenshot. Focusing a blurred input also un-blurs it (see info.css) so config stays editable.
+function toggleReveal(){var on=document.body.classList.toggle('revealed');var b=document.getElementById('revbtn');
+ if(b)b.textContent=on?'Hide':'Reveal';clearTimeout(window.__rev);
+ if(on)window.__rev=setTimeout(function(){document.body.classList.remove('revealed');if(b)b.textContent='Reveal';},20000);}
+// Click a single blurred value to reveal just it (toggle). Inputs reveal on focus already (info.css), so
+// only handle non-input .secret spans here.
+document.addEventListener('click',function(e){var s=e.target.closest&&e.target.closest('.secret');
+ if(s&&s.tagName!=='INPUT')s.classList.toggle('shown');});
+
+// Display-card diagonal: click to toggle inches <-> cm (W×H is in the title tooltip).
+function diagToggle(el){el.textContent=(el.textContent.indexOf('cm')<0)?el.dataset.cm:el.dataset['in'];}
