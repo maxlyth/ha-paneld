@@ -18,7 +18,6 @@ import io.github.maxlyth.hapaneld.input.EvdevButtonClient
 import io.github.maxlyth.hapaneld.control.AutoBrightnessController
 import io.github.maxlyth.hapaneld.control.BrightnessController
 import io.github.maxlyth.hapaneld.control.CpuController
-import io.github.maxlyth.hapaneld.control.NavbarController
 import io.github.maxlyth.hapaneld.control.NavigateController
 import io.github.maxlyth.hapaneld.control.RelayController
 import io.github.maxlyth.hapaneld.control.ScreenController
@@ -76,7 +75,6 @@ class PaneldService : Service() {
     private lateinit var zigbee: ZigbeeController
     private lateinit var relay: RelayController
     private lateinit var cpu: CpuController
-    private lateinit var navbar: NavbarController
     private lateinit var adb: AdbController
     private lateinit var profile: DeviceProfile
     private var configUrl: String? = null
@@ -101,7 +99,6 @@ class PaneldService : Service() {
         zigbee = ZigbeeController(profile)
         relay = RelayController(profile)
         cpu = CpuController(profile)
-        navbar = NavbarController()
         adb = AdbController()
         configUrl = localIpv4()?.let { "http://$it:${config.httpPort}/" }
 
@@ -117,7 +114,7 @@ class PaneldService : Service() {
     }
 
     private fun buildMqtt(): MqttBridge = MqttBridge(
-        config, brightness, screen, led, navigate, volume, system, touchSound, zigbee, relay, cpu, navbar, adb,
+        config, brightness, screen, led, navigate, volume, system, touchSound, zigbee, relay, cpu, adb,
         accessibilityEnabled(), profile.evdevButtons.isNotEmpty(),
         sensors.hasLight(), sensors.hasProximity(),
         sensors.hasTemperature(), sensors.hasHumidity(),
