@@ -74,12 +74,15 @@ jobs:
       # list is appended below them by generate_release_notes. Keep CHANGELOG.md updated per release.
       - name: Extract release notes from CHANGELOG
         run: |
-          awk -v tag="$GITHUB_REF_NAME" '
-            /^## /{ if(found) exit; if(index($0, tag)){ found=1; next } }
+          # Strip any prerelease suffix (e.g. v0.8.1-rc1 -> v0.8.1) so an rc pulls the base version's
+          # section — the CHANGELOG carries one entry per version, not per rc.
+          base="${GITHUB_REF_NAME%%-*}"
+          awk -v tag="$base" '
+            /^## /{ if(found) exit; if($2==tag){ found=1; next } }
             found
           ' CHANGELOG.md > release-body.md
           if [ ! -s release-body.md ]; then
-            echo "::warning::No CHANGELOG.md section for $GITHUB_REF_NAME — add one for human-readable notes."
+            echo "::warning::No CHANGELOG.md section for $base (tag $GITHUB_REF_NAME) — add one for human-readable notes."
             echo "_No changelog entry for $GITHUB_REF_NAME._" > release-body.md
           fi
           echo "----- release body -----"; cat release-body.md
