@@ -4,7 +4,7 @@
 </picture>
 
 [![CI](https://github.com/maxlyth/ha-paneld/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/maxlyth/ha-paneld/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/badge/release-v0.8.0-blue?style=flat-square)](https://github.com/maxlyth/ha-paneld/releases/latest)
+[![Release](https://img.shields.io/badge/release-v0.8.1-blue?style=flat-square)](https://github.com/maxlyth/ha-paneld/releases/latest)
 [![License](https://img.shields.io/badge/license-Apache_2.0-blue?style=flat-square)](LICENSE)
 
 **ha-paneld is free, open-source, and exists to fix what's wrong with Home Assistant wall panels** —
