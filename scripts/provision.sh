@@ -143,9 +143,12 @@ version_guard
 step "📦 installing" "${D}$APK${X}"
 adb -s "$TARGET" install -r -g "$APK" >/dev/null 2>&1 || adb -s "$TARGET" install -r "$APK"
 
-step "🔑 permissions" "${D}notifications · WRITE_SETTINGS (brightness/screen) · a11y (buttons)${X}"
+step "🔑 permissions" "${D}notifications · WRITE_SETTINGS (brightness/screen) · SYSTEM_ALERT_WINDOW (navbar) · a11y (buttons)${X}"
 adb -s "$TARGET" shell pm grant "$PKG" android.permission.POST_NOTIFICATIONS >/dev/null 2>&1 || true
 adb -s "$TARGET" shell appops set "$PKG" WRITE_SETTINGS allow
+# Soft-navbar overlay. SuperSU panels self-grant this at runtime via in-app su, but sandbox-walled
+# panels (Tuya TPA10, SELinux-blocked from exec'ing su) can't — so grant it here for every panel.
+adb -s "$TARGET" shell appops set "$PKG" SYSTEM_ALERT_WINDOW allow
 EXISTING="$(adb -s "$TARGET" shell settings get secure enabled_accessibility_services | tr -d '\r')"
 if [ "$EXISTING" = "null" ] || [ -z "$EXISTING" ]; then
   adb -s "$TARGET" shell settings put secure enabled_accessibility_services "$A11Y"

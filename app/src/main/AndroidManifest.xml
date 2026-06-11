@@ -21,6 +21,9 @@
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" tools:ignore="QueryAllPackagesPermission" />
     <!-- Screen brightness via Settings.System (granted at provisioning: appops set WRITE_SETTINGS). -->
     <uses-permission android:name="android.permission.WRITE_SETTINGS" tools:ignore="ProtectedPermissions" />
+    <!-- Soft navigation-bar overlay (TYPE_APPLICATION_OVERLAY) for panels whose firmware hides the
+         native navbar. Not granted by default on the panels; NavbarController grants it via root appops. -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
     <application
         android:allowBackup="true"

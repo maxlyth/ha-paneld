@@ -32,6 +32,11 @@ interface DeviceProfile {
      *  need the root helper daemon for privileged writes). */
     val appCanSu: Boolean
 
+    /** Whether the firmware provides a working Recents/Overview screen. Single-purpose panel images often
+     *  ship none (verified 2026-06-10: KEYCODE_APP_SWITCH is a no-op on the Tuya TPA10), so the navbar's
+     *  Recents button is omitted where false rather than presenting a dead control. Default true. */
+    val hasRecents: Boolean get() = true
+
     /** How the RGB LED is driven, if any. */
     val ledMechanism: LedMechanism
 

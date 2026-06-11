@@ -18,6 +18,7 @@ import io.github.maxlyth.hapaneld.input.EvdevButtonClient
 import io.github.maxlyth.hapaneld.control.AutoBrightnessController
 import io.github.maxlyth.hapaneld.control.BrightnessController
 import io.github.maxlyth.hapaneld.control.CpuController
+import io.github.maxlyth.hapaneld.control.NavbarController
 import io.github.maxlyth.hapaneld.control.NavigateController
 import io.github.maxlyth.hapaneld.control.RelayController
 import io.github.maxlyth.hapaneld.control.ScreenController
@@ -71,6 +72,7 @@ class PaneldService : Service() {
     private lateinit var navigate: NavigateController
     private lateinit var volume: VolumeController
     private lateinit var system: SystemController
+    private lateinit var navbar: NavbarController
     private lateinit var touchSound: TouchSoundController
     private lateinit var zigbee: ZigbeeController
     private lateinit var relay: RelayController
@@ -95,6 +97,10 @@ class PaneldService : Service() {
         navigate = NavigateController(this)
         volume = VolumeController(this)
         system = SystemController(this)
+        navbar = NavbarController(
+            this, system, volume, brightness, { config.launcherPackage },
+            profile.appCanSu, profile.hasRecents,
+        )
         touchSound = TouchSoundController(this)
         zigbee = ZigbeeController(profile)
         relay = RelayController(profile)
@@ -114,12 +120,14 @@ class PaneldService : Service() {
     }
 
     private fun buildMqtt(): MqttBridge = MqttBridge(
-        config, brightness, screen, led, navigate, volume, system, touchSound, zigbee, relay, cpu, adb,
+        config, brightness, screen, led, navigate, volume, system, navbar, touchSound, zigbee, relay, cpu, adb,
         accessibilityEnabled(), profile.evdevButtons.isNotEmpty(),
         sensors.hasLight(), sensors.hasProximity(),
         sensors.hasTemperature(), sensors.hasHumidity(),
         // Button backlight lives on the sysfs/daemon LED panels (TPA10), reached via the daemon's BTN.
-        led is SocketLedController, autoBright, configUrl,
+        led is SocketLedController,
+        profile.appCanSu, profile.hasRecents,
+        autoBright, configUrl,
         // When no broker is configured, find HA on the LAN via mDNS and default to its :1883.
         discoverHaIp = { mdns.discoverHaIp() },
         // HA's advertised base URL (from zeroconf) for the "Open in HA" device link.
@@ -182,6 +190,8 @@ class PaneldService : Service() {
             "Proximity" to sensorRow(sensors.hasProximity(), profile.proximityTech, sensors.proximityDesc()),
             // a11y service = software back/recents nav, NOT physical buttons (NSPanel Pro has none).
             "Accessibility nav" to yesNo(accessibilityEnabled()),
+            // Soft navbar overlay mode + whether the overlay can actually be drawn (SYSTEM_ALERT_WINDOW).
+            "Navbar" to (config.navbarMode + if (config.navbarMode != "Off" && !canDrawOverlays()) " · no overlay permission" else ""),
             // Zigbee driver presence + state (NSPanel Pro only; "none" elsewhere). status() shells
             // out via su — fine here because the info page is served off the main thread.
             "Zigbee" to zigbee.status(),
@@ -237,6 +247,9 @@ class PaneldService : Service() {
         return enabled?.contains(packageName) == true
     }
 
+    /** Whether SYSTEM_ALERT_WINDOW is held — required to draw the soft-navbar overlay. */
+    private fun canDrawOverlays(): Boolean = Settings.canDrawOverlays(this)
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForegroundCompat()
         scope.launch {
@@ -247,6 +260,8 @@ class PaneldService : Service() {
             server.start()
             mdns.start()
             mqtt.start()
+            // Restore the soft navbar to its persisted mode (no-op when Off / no overlay permission).
+            navbar.apply(config.navbarMode)
             sensors.start(
                 onLux = { lux -> mqtt.publishLight(lux) },
                 onLuxRaw = { lux -> autoBright.submitLux(lux) },

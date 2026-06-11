@@ -11,6 +11,8 @@ import io.github.maxlyth.hapaneld.control.AutoBrightnessController
 import io.github.maxlyth.hapaneld.control.BrightnessController
 import io.github.maxlyth.hapaneld.control.CpuController
 import io.github.maxlyth.hapaneld.util.HaLink
+import io.github.maxlyth.hapaneld.control.NavbarController
+import io.github.maxlyth.hapaneld.control.NavActions
 import io.github.maxlyth.hapaneld.control.NavigateController
 import io.github.maxlyth.hapaneld.control.RelayController
 import io.github.maxlyth.hapaneld.control.ScreenController
@@ -20,7 +22,6 @@ import io.github.maxlyth.hapaneld.control.VolumeController
 import io.github.maxlyth.hapaneld.control.ZigbeeController
 import io.github.maxlyth.hapaneld.hardware.LedController
 import io.github.maxlyth.hapaneld.input.ButtonBus
-import io.github.maxlyth.hapaneld.input.PanelAccessibilityService
 import io.github.maxlyth.hapaneld.util.HelperClient
 import kotlin.math.roundToInt
 import org.json.JSONObject
@@ -47,6 +48,8 @@ class MqttBridge(
     private val navigate: NavigateController,
     private val volume: VolumeController,
     private val system: SystemController,
+    // Soft on-screen navbar overlay (select: Off / Always on / Swipe reveal).
+    private val navbar: NavbarController,
     private val touchSound: TouchSoundController,
     // Zigbee gateway control (Sonoff NSPanel Pro only). Presence is detected lazily on the MQTT
     // thread in publishDiscovery — it costs a su exec, so it must not run on the main thread.
@@ -65,6 +68,9 @@ class MqttBridge(
     private val hasTemperature: Boolean,
     private val hasHumidity: Boolean,
     private val hasButtonBacklight: Boolean,
+    // Back/Recents route (root keyevent vs accessibility) + whether the firmware has an overview screen.
+    private val appCanSu: Boolean,
+    private val hasRecents: Boolean,
     // Optional on-panel auto-brightness engine; HA-fed lux is routed to it, switch/bias persist in Config.
     private val autoBright: AutoBrightnessController,
     private val configUrl: String? = null,
@@ -102,6 +108,8 @@ class MqttBridge(
     private val stateButtons = "ha-paneld/$panel/buttons/state"
     private val cmdBack = "ha-paneld/$panel/back/set"
     private val cmdRecents = "ha-paneld/$panel/recents/set"
+    private val cmdNavbar = "ha-paneld/$panel/navbar/set"
+    private val stateNavbar = "ha-paneld/$panel/navbar/state"
     private val cmdWakeOnWave = "ha-paneld/$panel/wake_on_wave/set"
     private val stateWakeOnWave = "ha-paneld/$panel/wake_on_wave/state"
     private val cmdTouchSound = "ha-paneld/$panel/touch_sound/set"
@@ -290,8 +298,9 @@ class MqttBridge(
                 cmdLauncher -> system.launchLauncher(config.launcherPackage)
                 cmdHome -> system.launchHome(config.dashboardPackage)
                 cmdButtons -> handleButtons(payload)
-                cmdBack -> PanelAccessibilityService.navBack()
-                cmdRecents -> PanelAccessibilityService.navRecents()
+                cmdBack -> NavActions.back(appCanSu)        // root keyevent or a11y; on the MQTT thread (ok to block)
+                cmdRecents -> NavActions.recents(appCanSu)
+                cmdNavbar -> handleNavbar(payload)
                 cmdWakeOnWave -> handleWakeOnWave(payload)
                 cmdTouchSound -> handleTouchSound(payload)
                 cmdZigbee -> handleZigbee(payload)
@@ -474,6 +483,13 @@ class MqttBridge(
         client?.let { publish(it, stateNetAdb, if (adb.isPersisted()) "ON" else "OFF", retain = true) }
     }
 
+    // Soft navbar mode (select). Persist + apply the overlay; publish the normalised mode back.
+    private fun handleNavbar(payload: String) {
+        navbar.apply(payload)
+        config.setNavbarMode(navbar.mode)
+        client?.let { publish(it, stateNavbar, navbar.mode, retain = true) }
+    }
+
     private fun handleNavigate(payload: String) {
         // Local navigation only: strip any scheme + host so an external URL can't be pushed (the HA
         // Companion opens a disorienting in-app WebView for those). We keep just the path and drive the
@@ -572,16 +588,19 @@ class MqttBridge(
                 """{"name":"Button","unique_id":"${panel}_button","state_topic":"$eventButton","event_types":["KEYCODE_POWER","KEYCODE_MUTE","KEYCODE_F","KEYCODE_F1","KEYCODE_F2","KEYCODE_F3","KEYCODE_F4","KEYCODE_BACK","KEYCODE_HOME","KEYCODE_DPAD_CENTER","KEYCODE_VOLUME_UP","KEYCODE_VOLUME_DOWN"],$avail,$device}""",
             )
         }
-        if (buttonsEnabled) {
-            // Nav actions via the a11y service (performGlobalAction) — uniform on every panel, no root.
+        // Nav actions work via root `input keyevent` (appCanSu) OR an enabled a11y service. Recents is
+        // additionally gated on the firmware actually having an overview screen.
+        if (appCanSu || buttonsEnabled) {
             publishConfig(
                 c, "button", "${panel}_back",
                 """{"name":"Back","unique_id":"${panel}_back","command_topic":"$cmdBack","icon":"mdi:arrow-left",$avail,$device}""",
             )
-            publishConfig(
-                c, "button", "${panel}_recents",
-                """{"name":"Recents","unique_id":"${panel}_recents","command_topic":"$cmdRecents","icon":"mdi:view-agenda",$avail,$device}""",
-            )
+            if (hasRecents) {
+                publishConfig(
+                    c, "button", "${panel}_recents",
+                    """{"name":"Recents","unique_id":"${panel}_recents","command_topic":"$cmdRecents","icon":"mdi:view-agenda",$avail,$device}""",
+                )
+            }
         }
 
         // TTS/announce playback volume (STREAM_MUSIC). HA has no MQTT media_player platform, so
@@ -696,6 +715,18 @@ class MqttBridge(
             cpu.currentTier()?.let { publish(c, stateCpuGov, it, retain = true) }
         }
 
+        // Soft navbar (select) — overlay Back/Home/Recents bar for panels whose firmware hides the
+        // native navbar. Published on all panels; Off by default, the user opts a panel in. Drawing
+        // needs SYSTEM_ALERT_WINDOW (root-granted by NavbarController); a no-op select otherwise.
+        run {
+            val opts = NavbarController.MODES.joinToString(",") { "\"${jsonEsc(it)}\"" }
+            publishConfig(
+                c, "select", "${panel}_navbar",
+                """{"name":"Navbar","unique_id":"${panel}_navbar","command_topic":"$cmdNavbar","state_topic":"$stateNavbar","options":[$opts],"icon":"mdi:gesture-tap-button","entity_category":"config",$avail,$device}""",
+            )
+            publish(c, stateNavbar, config.navbarMode, retain = true)
+        }
+
         // Persistent network adb (switch) — opt-in; root panels only. Standing LAN adb port when ON.
         if (adb.available()) {
             publishConfig(
@@ -751,7 +782,8 @@ class MqttBridge(
             "switch" to "${panel}_relay1", "switch" to "${panel}_relay2",
             "light" to "${panel}_button_led1", "light" to "${panel}_button_led2",
             "light" to "${panel}_button_led3", "light" to "${panel}_button_led4",
-            "select" to "${panel}_cpu_governor", "switch" to "${panel}_network_adb",
+            "select" to "${panel}_cpu_governor", "select" to "${panel}_navbar",
+            "switch" to "${panel}_network_adb",
             "button" to "${panel}_reload", "button" to "${panel}_reboot",
             "button" to "${panel}_launcher", "button" to "${panel}_home",
         )

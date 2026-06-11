@@ -19,11 +19,13 @@ class VolumeController(context: Context) {
         return (am.getStreamVolume(stream) * 100) / max
     }
 
-    fun setPercent(pct: Int) {
+    /** @param showUi when true, flash the system volume slider for visual feedback (navbar taps;
+     *  HA-driven changes leave it false so they don't pop the dialog on every adjustment). */
+    fun setPercent(pct: Int, showUi: Boolean = false) {
         val max = am.getStreamMaxVolume(stream)
         val v = (pct.coerceIn(0, 100) * max) / 100
         try {
-            am.setStreamVolume(stream, v, 0)
+            am.setStreamVolume(stream, v, if (showUi) AudioManager.FLAG_SHOW_UI else 0)
             Log.d(TAG, "volume -> $pct% (raw $v/$max)")
         } catch (e: SecurityException) {
             Log.w(TAG, "cannot set volume (needs MODIFY_AUDIO_SETTINGS / not DND-restricted)", e)

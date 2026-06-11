@@ -8,6 +8,19 @@ From **v0.8.0**, entries are grouped under **Added** (new features/entities), **
 changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
 content appear. Earlier releases predate this convention and keep their flat lists.
 
+## v0.8.2 - unreleased
+
+Adds a soft on-screen navigation bar for panels whose firmware hides the native one.
+
+### Added
+
+- **Soft navigation bar** — an on-screen overlay bar (`select.<panel>_navbar`: **Off / Always on / Swipe reveal**) for panels whose firmware suppresses the native Android navbar (e.g. NSPanel Pro). Buttons: **Back**, **Launcher** (the device launcher/app-drawer), **Recents**, and — since these panels have no physical keys — **Brightness ±** and **Volume ±** (tap to step, press-and-hold to ramp; volume shows the system slider). On wide panels (e.g. the landscape TPA10) the live brightness/volume **percentage** shows between each ± pair. *Swipe reveal* hides the bar behind a bottom-edge strip that slides it up on touch and auto-hides.
+- Drawing the overlay needs `SYSTEM_ALERT_WINDOW`; it's self-granted via in-app `su` on SuperSU panels, and `provision.sh` now grants it for sandbox-walled panels (Tuya TPA10) that can't.
+
+### Changed
+
+- **Back/Recents are now reliable without accessibility** — they fire via root `input keyevent` where the app can `su` (NSPanel Pro), falling back to the accessibility service only where su is sandbox-blocked (TPA10). This sidesteps the fragile accessibility-enable/bind step. The **Recents** button (and HA entity) is **omitted on panels whose firmware has no overview screen** (TPA10) rather than presenting a dead control.
+
 ## v0.8.1 - 2026-06-10
 
 Locks the HTTP control surface to the local network, makes the info page screenshot-safe, and adds a one-click jump to the panel's Home Assistant device page.

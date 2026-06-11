@@ -354,7 +354,20 @@ means you can never publish an in-place update again. Never commit the keystore 
 Validated across the panel fleet: Sonoff NSPanel Pro (PX30, Android 8.1), Tuya TPA10 (rk3566,
 Android 11), Electron WF1589T (rk3576, Android 14).
 
-**New in 0.8.1:**
+**New in 0.8.2:**
+
+- **Soft navigation bar** *(system overlay)* — an on-screen Back · Launcher · Recents bar that, since these
+  panels have no physical keys, also carries **Brightness ±** and **Volume ±** (tap to step, hold to ramp).
+  For panels whose firmware hides the native navbar (e.g. NSPanel Pro). Modes **Off / Always on / Swipe
+  reveal** (`select.<panel>_navbar`, *Swipe reveal* slides up from a bottom-edge strip and auto-hides); wide
+  panels show the live brightness/volume **percentage** between each ± pair. Back/Recents use root key
+  injection where available (no accessibility service needed), and **Recents is omitted on panels whose
+  firmware has no overview screen** rather than showing a dead button.
+
+<details>
+<summary>Earlier releases (0.8.1 → 0.4.x) — full history in <a href="CHANGELOG.md">CHANGELOG.md</a></summary>
+
+New in 0.8.1:
 
 - **LAN-only control surface** — the HTTP API/UI (`:8888`) refuses non-local sources (loopback / RFC1918 /
   link-local / IPv6 ULA), so a dual-stack panel isn't reachable from the internet over a routable IPv6 even
@@ -365,9 +378,6 @@ Android 11), Electron WF1589T (rk3576, Android 14).
   the panel's own HA device page (works for non-admin users and across reverse-proxy / tunnel setups).
 - **Screen diagonal** on the info page (from resolution + dpi); click to toggle inches ↔ cm.
 - **Recommended display density per model** — the "rec" button suggests 160 dpi (86P) / 250 dpi (120P).
-
-<details>
-<summary>Earlier releases (0.8.0 → 0.4.x) — full history in <a href="CHANGELOG.md">CHANGELOG.md</a></summary>
 
 New in 0.8.0:
 
@@ -477,7 +487,6 @@ Carried from 0.4.x:
   dashboard performance on weak panels.
 - **Built-in relay control beyond the S9E** — the same `switch.<panel>_relay*` model on other panels
   with onboard relays, once each one's control path (GPIO / vendor node) is known.
-- **Visible nav-bar show/hide** — a real on-device nav-bar toggle (remote Back/Recents already shipped).
 - Daemon boot-persistence on su-only (PX30) panels, if true-off is wanted without relying on `su`
   at runtime.
 - **DLNA renderer** *(under consideration — gauging interest)* — advertise as a UPnP/DLNA media renderer

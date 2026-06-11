@@ -110,6 +110,14 @@ class Config(context: Context) {
         prefs.edit().putBoolean("wake_on_wave", on).apply()
     }
 
+    // Soft on-screen navigation bar mode: "Off" | "Always on" | "Swipe reveal" (NavbarController.MODES).
+    // Default Off — panels with a working native navbar (or no need for one) are untouched; the user
+    // opts a panel in via the HA select. Persisted so the bar is restored on boot.
+    val navbarMode: String get() = prefs.getString("navbar_mode", "Off")!!
+    fun setNavbarMode(mode: String) {
+        prefs.edit().putString("navbar_mode", mode).apply()
+    }
+
     // After an app update the launcher shows the App UI; when configured + MQTT-connected, bounce back
     // to the dashboard so it doesn't linger. Default on.
     val autoReturnDashboard: Boolean get() = prefs.getBoolean("auto_return_dashboard", true)

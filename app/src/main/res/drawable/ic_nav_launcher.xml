@@ -1,0 +1,24 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="#FFFFFFFF">
+    <!-- Full Android robot (Bugdroid): head dome + eyes, body, two arms, two legs. -->
+    <!-- Antennae -->
+    <path android:fillColor="#FFFFFFFF" android:pathData="M7.4,2.1L8.1,1.7L9.5,4.0L8.8,4.4Z" />
+    <path android:fillColor="#FFFFFFFF" android:pathData="M16.6,2.1L15.9,1.7L14.5,4.0L15.2,4.4Z" />
+    <!-- Head (circle) with eye holes; body rect overlaps the lower half to form the dome -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="M12,2.7A4.3,4.3 0 1,1 11.99,2.7ZM9.45,6A0.55,0.55 0 1,0 10.55,6A0.55,0.55 0 1,0 9.45,6ZM13.45,6A0.55,0.55 0 1,0 14.55,6A0.55,0.55 0 1,0 13.45,6Z" />
+    <!-- Body -->
+    <path android:fillColor="#FFFFFFFF" android:pathData="M7.7,8H16.3V17H7.7Z" />
+    <!-- Arms -->
+    <path android:fillColor="#FFFFFFFF" android:pathData="M4.8,9H6.5V14.8H4.8Z" />
+    <path android:fillColor="#FFFFFFFF" android:pathData="M17.5,9H19.2V14.8H17.5Z" />
+    <!-- Legs -->
+    <path android:fillColor="#FFFFFFFF" android:pathData="M9,17H10.8V21.5H9Z" />
+    <path android:fillColor="#FFFFFFFF" android:pathData="M13.2,17H15V21.5H13.2Z" />
+</vector>
