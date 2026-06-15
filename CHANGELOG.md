@@ -21,6 +21,10 @@ Adds a soft on-screen navigation bar for panels whose firmware hides the native 
 
 - **Back/Recents are now reliable without accessibility** — they fire via root `input keyevent` where the app can `su` (NSPanel Pro), falling back to the accessibility service only where su is sandbox-blocked (TPA10). This sidesteps the fragile accessibility-enable/bind step. The **Recents** button (and HA entity) is **omitted on panels whose firmware has no overview screen** (TPA10) rather than presenting a dead control.
 
+### Fixed
+
+- **Smatek S9E now detected** — it was falling back to the generic profile (reported via its generic `rk3566_r` Build fields), which hid its two mains relays and four button LEDs. Detection now also matches the vendor model code in `ro.product.version` (`S9…`), so the S9E picks up its profile (relays, button LEDs at gpio 147–150, Smatek/S9E labels).
+
 ## v0.8.1 - 2026-06-10
 
 Locks the HTTP control surface to the local network, makes the info page screenshot-safe, and adds a one-click jump to the panel's Home Assistant device page.

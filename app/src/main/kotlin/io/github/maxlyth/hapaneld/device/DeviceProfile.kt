@@ -101,16 +101,30 @@ interface DeviceProfile {
         fun detect(): DeviceProfile {
             val model = Build.MODEL.lowercase()
             val device = Build.DEVICE.lowercase()
+            // The Smatek S9E reports generic Build fields (MODEL "S9" / DEVICE "rk3566_r") but carries
+            // its vendor model code in ro.product.version ("S9_Android_1.1.0") — confirmed from a
+            // reporter's /diag (GitHub #3, 2026-06-15). Match that so it doesn't fall back to Generic
+            // (which hides its relays + button LEDs). rk3566 is shared with the TPA10, but the TPA10 is
+            // matched first by device == "tpa10".
+            val productVersion = sysProp("ro.product.version").lowercase()
             return when {
                 // px30 = Gen1 86P/120P; rk3326(-s) = Gen2 (best-effort — capabilities are runtime-probed,
                 // so an unverified Gen2 still detects relays/zigbee/sensors correctly).
                 "px30" in model || "px30" in device || "rk3326" in model || "rk3326" in device -> NSPanelPro
                 model == "tpa10" || device == "tpa10" -> Tpa10
                 "wf1589" in device || model == "rk3576_u" -> Wf1589t
-                "s9e" in model || "s9e" in device -> S9e
+                "s9e" in model || "s9e" in device || model == "s9" || productVersion.startsWith("s9") -> S9e
                 else -> Generic
             }
         }
+
+        /** Read an Android system property (e.g. ro.product.version) via SystemProperties reflection —
+         *  no Context needed, so it's usable from this Build-only detector. */
+        private fun sysProp(key: String): String = runCatching {
+            @Suppress("PrivateApi")
+            val m = Class.forName("android.os.SystemProperties").getMethod("get", String::class.java)
+            (m.invoke(null, key) as? String).orEmpty()
+        }.getOrDefault("")
     }
 }
 
