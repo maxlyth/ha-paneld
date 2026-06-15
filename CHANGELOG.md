@@ -20,6 +20,7 @@ Adds a soft on-screen navigation bar for panels whose firmware hides the native 
 ### Changed
 
 - **Back/Recents are now reliable without accessibility** — they fire via root `input keyevent` where the app can `su` (NSPanel Pro), falling back to the accessibility service only where su is sandbox-blocked (TPA10). This sidesteps the fragile accessibility-enable/bind step. The **Recents** button (and HA entity) is **omitted on panels whose firmware has no overview screen** (TPA10) rather than presenting a dead control.
+- **Navbar tap feedback + easier swipe-reveal** — buttons show a press highlight that's **held until the action completes** (root `input keyevent` for Back/Recents takes ~250ms, so the tap no longer looks ignored during the lag), and the *Swipe reveal* bottom-edge strip is taller for a reliable single swipe-up.
 
 ### Fixed
 

@@ -3,9 +3,13 @@ package io.github.maxlyth.hapaneld.control
 import android.content.Context
 import android.graphics.Color
 import android.graphics.PixelFormat
+import android.graphics.drawable.ColorDrawable
+import android.graphics.drawable.Drawable
+import android.graphics.drawable.StateListDrawable
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
 import android.view.Gravity
@@ -108,7 +112,6 @@ class NavbarController(
         // its members at weight TIGHTEN (35% tighter), with the reclaimed weight as spacers either side
         // so the group still occupies its default slot and nav spacing is untouched. A triple of k
         // members reclaims k·(1−TIGHTEN), split evenly to the two side spacers.
-        fun nav(icon: Int, act: () -> Unit) = button(icon) { act(); if (autoHide) scheduleHide() }
         val k = if (showValues) 3 else 2
         val side = k * (1f - TIGHTEN) / 2f
         // The triple→separator gap is (side + half a triple cell). Match every group boundary to it —
@@ -116,11 +119,12 @@ class NavbarController(
         // triple cells (½ = TIGHTEN/2). Keeps recents↔separator equal to the other three separator gaps.
         val edge = (side + TIGHTEN / 2f - 0.5f).coerceAtLeast(0f)
         row.addView(spacer(edge))
-        // Back/Recents are global actions — offload (su/binder round-trip) off the UI thread.
-        row.addView(nav(R.drawable.ic_nav_back) { offload { NavActions.back(appCanSu) } })
-        row.addView(nav(R.drawable.ic_nav_launcher) { system.launchLauncher(launcherPkg()) })
+        // Back/Recents/Launcher run a slow su / activity call — navButton offloads it AND holds the press
+        // highlight lit from touch-down until it completes, so the tap isn't mistaken for a no-op.
+        row.addView(navButton(R.drawable.ic_nav_back, autoHide) { NavActions.back(appCanSu) })
+        row.addView(navButton(R.drawable.ic_nav_launcher, autoHide) { system.launchLauncher(launcherPkg()) })
         // Recents only where the firmware actually has an overview screen.
-        if (hasRecents) row.addView(nav(R.drawable.ic_nav_recents) { offload { NavActions.recents(appCanSu) } })
+        if (hasRecents) row.addView(navButton(R.drawable.ic_nav_recents, autoHide) { NavActions.recents(appCanSu) })
         row.addView(spacer(edge))
         // Brightness — tap steps once, press-and-hold ramps; label (if shown) updates live.
         row.addView(separator())
@@ -212,9 +216,6 @@ class NavbarController(
         main.postDelayed(hideRunnable, AUTO_HIDE_MS)
     }
 
-    /** Run a (blocking) action off the UI thread — nav buttons fire su/binder calls. */
-    private fun offload(block: () -> Unit) = Thread(block).start()
-
     private fun removeBar() {
         bar?.let { runCatching { it.animate().cancel(); wm.removeView(it) } }
         bar = null
@@ -262,8 +263,18 @@ class NavbarController(
         }
         return FrameLayout(context).apply {
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, weight)
+            // Instant press highlight on touch-down — the action itself (esp. Back/Recents via su) can
+            // lag ~200-300ms, so without this a tap reads as "nothing happened". Shows on touch-down for
+            // clickable nav buttons automatically; repeatButton sets isPressed for the ±-buttons.
+            foreground = pressHighlight()
             addView(iv)
         }
+    }
+
+    /** Transparent normally, a translucent flash while pressed. No theme needed (overlay isn't themed). */
+    private fun pressHighlight(): Drawable = StateListDrawable().apply {
+        addState(intArrayOf(android.R.attr.state_pressed), ColorDrawable(PRESS_TINT))
+        addState(intArrayOf(), ColorDrawable(Color.TRANSPARENT))
     }
 
     /** Weighted flexible gap — the reclaimed width either side of a tightened triple keeps the group
@@ -272,10 +283,28 @@ class NavbarController(
         layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, weight)
     }
 
-    /** Single-tap nav button — weight 1.0, spread evenly across the bar (unchanged baseline). */
-    private fun button(icon: Int, onTap: () -> Unit): View = iconCell(icon, 1f).apply {
-        isClickable = true
-        setOnClickListener { onTap() }
+    /** Single-tap nav button — weight 1.0, spread evenly across the bar (unchanged baseline). The press
+     *  highlight is held from touch-down until [action] (a slow su / activity call, run off the UI
+     *  thread) completes, with a [FEEDBACK_MIN_MS] floor, so the tap stays acknowledged during the lag. */
+    private fun navButton(icon: Int, autoHide: Boolean, action: () -> Unit): View {
+        val iv = iconCell(icon, 1f)
+        iv.setOnTouchListener { _, e ->
+            when (e.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    iv.isPressed = true
+                    if (autoHide) scheduleHide()
+                    val t0 = SystemClock.uptimeMillis()
+                    Thread {
+                        runCatching { action() }
+                        val hold = (FEEDBACK_MIN_MS - (SystemClock.uptimeMillis() - t0)).coerceAtLeast(0L)
+                        main.postDelayed({ iv.isPressed = false }, hold)
+                    }.start()
+                    true
+                }
+                else -> true // consume UP/MOVE/CANCEL — the action's completion clears the highlight
+            }
+        }
+        return iv
     }
 
     /** Press-and-hold triple button (weight [TIGHTEN]): [step] fires on touch-down, then repeats while
@@ -288,12 +317,14 @@ class NavbarController(
         iv.setOnTouchListener { _, e ->
             when (e.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
+                    iv.isPressed = true   // show the press highlight (we consume the event below)
                     if (autoHide) main.removeCallbacks(hideRunnable) // don't hide mid-hold
                     step()
                     main.postDelayed(repeater, REPEAT_DELAY_MS)
                     true
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    iv.isPressed = false
                     main.removeCallbacks(repeater)
                     if (autoHide) scheduleHide()
                     true
@@ -355,10 +386,12 @@ class NavbarController(
         val MODES = listOf(MODE_OFF, MODE_ALWAYS, MODE_SWIPE)
 
         private const val BAR_HEIGHT_DP = 56   // taller so the icons read at a glance
-        private const val STRIP_HEIGHT_DP = 12
+        private const val STRIP_HEIGHT_DP = 28   // swipe-reveal touch target — 12dp was too thin to hit
+        private const val FEEDBACK_MIN_MS = 350L  // min press-highlight visible time (bridges su latency)
         private const val ICON_SIZE_DP = 30    // fixed icon size, centred in its cell (uniform across all buttons)
         private const val TIGHTEN = 0.65f      // triple-member cell weight vs nav's 1.0 → ~35% tighter spacing
         private val BAR_BG = 0xC2282C34.toInt() // charcoal @ ~76% — translucent but still reads solid
+        private val PRESS_TINT = 0x55FFFFFF.toInt() // press-feedback flash (~33% white)
         private const val AUTO_HIDE_MS = 4000L
         private const val ANIM_MS = 220L       // swipe-reveal slide in/out duration
         private const val VALUE_WIDTH_THRESHOLD_DP = 600 // wide panels (TPA10) get the % readout; square NSPanels don't
