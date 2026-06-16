@@ -1,6 +1,7 @@
 # Non-blocking layout-stability (CLS) report. NEVER gates a build/merge — it posts a job summary that
 # flags regressions vs test/baseline.json and lists high-CLS cells as backlog. See test/README.md.
 name: UI layout (CLS) · report-only
+run-name: UI layout · ${{ github.head_ref || github.ref_name }}
 
 on:
   push:

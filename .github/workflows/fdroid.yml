@@ -1,4 +1,5 @@
 name: F-Droid repo
+run-name: F-Droid repo · ${{ github.event.workflow_run.head_branch || github.event_name }}
 
 # Republishes the release-signed APKs from GitHub Releases as a self-hosted F-Droid repository on
 # GitHub Pages. STATELESS: every run rebuilds the repo from the current set of *full* GitHub Releases,

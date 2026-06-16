@@ -39,7 +39,7 @@ android {
         // update a panel in place without uninstalling (which a device-admin install otherwise
         // blocks). A debug keystore is not a secret; password is the conventional "android".
         getByName("debug") {
-            storeFile = rootProject.file("debug.keystore")
+            storeFile = rootProject.file("gradle/debug.keystore")
             storePassword = "android"
             keyAlias = "androiddebugkey"
             keyPassword = "android"
