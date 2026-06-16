@@ -2,7 +2,9 @@
 
 The most common Home-Assistant wall panel on the market: a small **480×480 square** PX30 panel with a
 built-in **Zigbee 3.0 coordinator**, no NFC/IR, and the lowest-power CPU of the panels documented here.
-Reverse-engineered on a live unit (Android 8.1, rooted, toolbox `su`) on 2026-06-05.
+It ships in two physically different sizes — the **86P** (the unit specced below) and the larger **120P**,
+which is a *different panel* (RK3326-S, 750×1334 portrait) — see [Variants](#variants--86p-vs-120p).
+Reverse-engineered on a live **86P** (Android 8.1, rooted, toolbox `su`) on 2026-06-05.
 
 > [!TIP]
 > Most-needed facts: ships **`userdebug` with no adb password** (`adb root` just works); **LED is not
@@ -31,6 +33,30 @@ Reverse-engineered on a live unit (Android 8.1, rooted, toolbox `su`) on 2026-06
 > Changing firmware on a button-less panel? Read [Firmware backup & restore](../firmware-backup-restore.md)
 > first — the NSPanel Pro (PX30) uses [seaky's roottool/tools](../firmware-backup-restore.md#per-panel-notes)
 > rather than `rkdeveloptool`.
+
+## Variants — 86P vs 120P
+
+"NSPanel Pro" ships in two physically different panels, named for the EU **86 mm** vs **120 mm** wall box.
+The spec table above and most of this page were captured on an **86P**; the **120P** is a different board:
+
+| | NSPanel Pro **86P** | NSPanel Pro **120P** |
+|---|---|---|
+| SoC | Rockchip **PX30** | Rockchip **RK3326-S** (same PX30/RK3326 family; `ro.board.platform=rk3326`, device-tree `rockchip,px30`) |
+| Display | **480×480** square, ~160 dpi, portrait-only | **750×1334** portrait, **240 dpi** (override 250); landscape available; ~1 cm narrower + longer than the 86P |
+| Build ids | both report `ro.product.model/device/name = px30_evb` (shared Rockchip board name — *not* a reliable variant discriminator) | as 86P |
+| `ro.product.version` | `s6_android_x.y.z`-class | `NSPanelXXXP_x.y.z` (OTA channel `nspanel-pro-ver120`, full ROM `SN_3326S_750X1334_…`) |
+| OTA latest (2026-06) | **4.0.12** | **4.0.7 → 4.2.0** |
+| Proximity firmware | **4.0.12 restored graded** proximity | stayed **binary** at 4.x (per-model kernel divergence — see [Sensors](#sensors--light--proximity-are-app-direct)) |
+
+Both share the EFR32 Zigbee radio, Android 8.1 (AOSP), arm64-v8a, and the root/recovery story below.
+Live-verified on a 120P (BMP, fw `NSPanel120P_3.7.1`): `wm size`=750×1334, density 240, `ro.board.platform=rk3326`.
+Sibling Tuya-family boards — **S6E/T6E** (relay variants; S6E = T6E + 2 relays), [**S9E**](s9e.md) (Smatek),
+[**TPA10**](tpa10.md) (rk3326-class, A53, Android 11) — are separate targets, not NSPanel Pro firmware.
+
+> [!CAUTION]
+> Detection can't rely on `ro.product.model` (both are `px30_evb`). Use `ro.product.version` / display
+> metrics / `ro.board.platform` to tell 86P from 120P. The **proximity graded-vs-binary rule is per-model
+> AND per-firmware** — a single global cutover is wrong (see Sensors).
 
 ## Gaining adb + root access
 
@@ -123,6 +149,15 @@ standard `SensorManager`: `android.sensor.light`, `android.sensor.proximity`, an
 `android.sensor.accelerometer` — all readable by a normal app, no root. ha-paneld reads light +
 proximity here directly. No temperature/humidity sensor is fitted.
 
+> [!NOTE]
+> **Proximity is firmware- AND model-dependent** (Sensortek STK3A5x ToF in a top-PCB cutout behind the
+> cover glass; per-unit rest baseline varies widely — one unit ~1000, another ~4000 — only the *relative*
+> change matters, so a high idle baseline is normal, not a fault). Up to ~fw **3.3** it reports a
+> **graded** raw distance (~50 ms cadence); from ~**3.3–3.4** the kernel driver switched it to **binary
+> 0/1** (the distance/threshold control is greyed out, not overridable). **4.0.12 restored graded on the
+> 86P only** — the **120P stayed binary**. So a graded-vs-binary decision must be **per-model and
+> per-firmware**, not a single global cutover. (Sources: seaky tools #142/#144/#171/#262.)
+
 <details>
 <summary>Bound i2c devices (real hardware)</summary>
 
@@ -150,6 +185,17 @@ panel then appears as a normal router in your ZHA / Zigbee2MQTT coordinator.
 > [!NOTE]
 > Switching role is **not a reflash** — there is no `.gbl`/bootloader step; it just sets the EZSP node
 > type. For partition-level firmware work see [Firmware backup & restore](../firmware-backup-restore.md).
+
+> [!NOTE]
+> **Zigbee-only — no Thread.** The EFR32 (EZSP v8, stack 6.10.1) is a Zigbee radio; RK3326 (2018) has no
+> 802.15.4 Thread radio, so despite 4.x firmware's "Matter Bridge" marketing there is **no native Thread
+> border router** on these panels.
+>
+> **4.x reworked the Zigbee stack** — Sonoff shipped a forked Zigbee2MQTT (herdsman 23.53 vs upstream
+> ~25.x), decommissioned the old NCP client, changed the on-device MQTT password, and altered the boot
+> sequence. ha-paneld's `zigbee_router` was built against ≤3.x and **may need adapting on 4.x** — and
+> Sonoff disabled coordinator↔router switching on stock 4.x firmware. Tracked for a future release.
+> (Sources: seaky tools #244/#241/#255, roottool#3.)
 
 ### Requirements — firmware ≥ v2.2.0
 

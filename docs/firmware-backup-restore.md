@@ -197,9 +197,26 @@ Partitions: `security uboot trust misc dtbo vbmeta boot recovery backup cache me
 maskrom test-point not yet located.
 Partitions: `security uboot trust misc dtbo vbmeta boot recovery backup cache metadata frp baseparameter updatekey super userdata`.
 
-**NSPanel Pro / Pro120** (px30) — use seaky's proven tooling rather than rkdeveloptool:
+**NSPanel Pro 86P** (px30) / **120P** (rk3326-S) — use seaky's proven tooling rather than rkdeveloptool:
 [roottool](https://github.com/seaky/nspanel_pro_roottool_apk) ·
-[tools incl. firmware restore](https://github.com/seaky/nspanel_pro_tools_apk).
+[tools incl. firmware restore](https://github.com/seaky/nspanel_pro_tools_apk). Key facts distilled from
+seaky's issue threads (second-hand — not live-read here):
+
+- **Never touch Rockchip vendor storage** (`/dev/vendor_storage`): slot **7** holds the licence string
+  (items 4–5 are the two MACs), slot **8** the product id (`SN-RKPX30-NSP-01`). Wiping it boots the panel
+  to a Chinese factory/QR screen. (roottool#1)
+- **QR-screen unbrick *without* reflash:** sideload a launcher over adb → join Wi-Fi → reopen the eWeLink
+  panel app → tap **Activate** a few times → the licence re-provisions online and the panel recovers. (roottool#9)
+- **5× power-cycle** (power off at the Sonoff boot logo, repeated ×5) factory-resets to the *recovery
+  partition's* firmware — often the **shipped version** (e.g. reverts a 2.3 unit to 1.7; OTA upgrades are
+  not written to recovery). (roottool#1/#8)
+- **No downgrade** (Android OTA restriction); **dev-mode/root is permanent** and survives factory reset
+  (eWeLink-registered rooted devices also lose some cloud features permanently). (roottool#1)
+- **Dead-eMMC signs:** backlight-on-then-off boot loop with recovery unresponsive, or a verify-fail when
+  flashing a known-good file = eMMC fault (or a deleted system cert) — usually unrecoverable. (roottool#8/#12)
+- Raw reflash = **RKDumper + Rockchip AndroidTool** over USB (maskrom; px30 needs a USB-driver tweak).
+  Recovery-mode adb identity = `product/model/device = px30_evb`, shown as `rockchipplatform … recovery`. (roottool#2, tools#87)
+- ⚠️ Cross-flashing **Sonoff OTA onto a Tuya T6E/S6E clone bricks it** (no `stop` binary, recovery-stuck). (tools#87)
 
 ### Safety notes
 
