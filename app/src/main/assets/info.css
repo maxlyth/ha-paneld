@@ -14,6 +14,9 @@ h2 small{text-transform:none;letter-spacing:0;color:#8a8;font-weight:400}
    No JS: this replaces a hand-rolled greedy that mis-balanced because it measured placeholder heights. */
 .cards{columns:400px;column-gap:18px}
 .card{background:#181818;border:1px solid #242424;border-radius:12px;padding:14px 16px;margin:0 0 18px;break-inside:avoid;-webkit-column-break-inside:avoid;box-sizing:border-box}
+/* Card title-bar: a subtly demarcated full-width header (slight tint + divider) separating the title
+   from content. Also the intended drag handle for card reordering + home for a collapse triangle. */
+.card h2{margin:-14px -16px 12px;padding:9px 16px;background:#1e1e1e;border-bottom:1px solid #2a2a2a;border-radius:12px 12px 0 0}
 /* content-visibility skips rendering an OFF-SCREEN card (placeholder height via contain-intrinsic-size) so
    a live card changing height while scrolled out of view can't reflow the page and shove the viewport.
    SCOPED to the single-column regime only (<858px = one ~400px column): in multi-column it would feed
