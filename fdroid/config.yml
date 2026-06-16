@@ -1,0 +1,18 @@
+# fdroidserver config for the ha-paneld self-hosted F-Droid repository.
+#
+# PUBLIC FIELDS ONLY — the signing keystore + passwords and the SDK path are injected at runtime by
+# .github/workflows/fdroid.yml (reusing the same ANDROID_KEYSTORE_* secrets that sign the release APKs,
+# so the repo index and the APKs share one identity). NEVER commit keystore material here.
+
+repo_url: "https://maxlyth.github.io/ha-paneld/fdroid/repo"
+repo_name: "ha-paneld"
+repo_description: >-
+  Self-hosted F-Droid repository for ha-paneld — the open-source Home Assistant agent for Android wall
+  panels. Add this repo in the F-Droid client to install and auto-update ha-paneld directly on a panel.
+
+# Keep every published version available in the main repo (no archive split) — the repo is small.
+archive_older: 0
+
+# We publish prebuilt, already-signed release APKs (pulled from GitHub Releases); don't create the
+# extra "current version" symlink, and don't try to source-build.
+make_current_version_link: false

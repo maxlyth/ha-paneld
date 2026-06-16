@@ -1,0 +1,123 @@
+name: F-Droid repo
+
+# Republishes the release-signed APKs from GitHub Releases as a self-hosted F-Droid repository on
+# GitHub Pages. STATELESS: every run rebuilds the repo from the current set of *full* GitHub Releases,
+# so the served APK is byte-identical to the release asset (same signing key) and the F-Droid client can
+# update panels in place. Pre-releases (…-rcN) are intentionally excluded.
+#
+# ONE-TIME SETUP (maintainer):
+#   1. Settings -> Pages -> Source = "GitHub Actions".
+#   2. The ANDROID_KEYSTORE_* secrets that sign the release APKs (see release.yml) are reused here to
+#      sign the repo index, so the repo's identity == the app signing certificate. No new secrets.
+#   3. After the first successful run, grab the repo fingerprint from the run log / landing page and
+#      share the add-repo URL:  https://maxlyth.github.io/ha-paneld/fdroid/repo?fingerprint=<FP>
+
+on:
+  release:
+    types: [released]        # full (non-prerelease) releases only
+  workflow_dispatch: {}      # manual rebuild
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: fdroid-pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Guard — signing secrets present
+        run: |
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "::error::ANDROID_KEYSTORE_* secrets are required to sign the F-Droid index."
+            exit 1
+          fi
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install build-tools + fdroidserver
+        run: |
+          sdkmanager "build-tools;34.0.0"
+          pip install --upgrade pip
+          pip install fdroidserver
+
+      - name: Download released (non-prerelease) APKs
+        run: |
+          mkdir -p fdroid/repo
+          mapfile -t tags < <(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 \
+            --json tagName,isPrerelease,isDraft \
+            --jq '.[] | select(.isPrerelease==false and .isDraft==false) | .tagName')
+          echo "Full releases: ${tags[*]:-<none>}"
+          for tag in "${tags[@]}"; do
+            gh release download "$tag" --repo "$GITHUB_REPOSITORY" \
+              --pattern '*.apk' --dir fdroid/repo --skip-existing || true
+          done
+          ls -la fdroid/repo
+          if [ -z "$(ls -A fdroid/repo/*.apk 2>/dev/null)" ]; then
+            echo "::error::No full-release APKs found to publish."
+            exit 1
+          fi
+
+      - name: Inject signing + SDK config (runtime only — never committed)
+        working-directory: fdroid
+        run: |
+          echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/ks.jks"
+          {
+            echo "sdk_path: $ANDROID_HOME"
+            echo "keystore: $RUNNER_TEMP/ks.jks"
+            echo "repo_keyalias: $KEY_ALIAS"
+            echo "keystorepass: $KEYSTORE_PASSWORD"
+            echo "keypass: $KEY_PASSWORD"
+          } >> config.yml
+
+      - name: Build + sign the repo index
+        working-directory: fdroid
+        run: fdroid update --create-metadata --pretty --verbose
+
+      - name: Assemble Pages site (+ inject repo fingerprint into landing page)
+        working-directory: fdroid
+        run: |
+          FP=$(python3 -c "import json; print(json.load(open('repo/index-v2.json'))['repo']['fingerprint'])")
+          echo "Repo fingerprint: $FP"
+          echo "Add-repo URL: https://maxlyth.github.io/ha-paneld/fdroid/repo?fingerprint=$FP"
+          mkdir -p ../_site/fdroid
+          cp -r repo ../_site/fdroid/repo
+          sed "s|@FINGERPRINT@|$FP|g" site-index.html > ../_site/index.html
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4

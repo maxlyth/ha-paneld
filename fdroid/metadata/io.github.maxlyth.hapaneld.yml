@@ -1,0 +1,38 @@
+Categories:
+  - Connectivity
+  - System
+License: Apache-2.0
+AuthorName: maxlyth
+WebSite: https://github.com/maxlyth/ha-paneld
+SourceCode: https://github.com/maxlyth/ha-paneld
+IssueTracker: https://github.com/maxlyth/ha-paneld/issues
+Changelog: https://github.com/maxlyth/ha-paneld/blob/main/CHANGELOG.md
+
+Name: ha-paneld
+Summary: Home Assistant agent for Android wall panels
+
+Description: |-
+    ha-paneld turns an Android in-wall touch panel (Sonoff NSPanel Pro, Tuya TPA10,
+    Electron WF1589T, Smatek S9E and generic RK-class panels) into a first-class
+    Home Assistant device over MQTT auto-discovery.
+
+    It exposes panel hardware and behaviour the Home Assistant Companion app can't:
+
+    * Screen control — brightness, true backlight-off, and wake-on-wave (proximity).
+    * An on-screen soft navigation bar (Back / Launcher / Recents plus brightness
+      and volume) for panels whose firmware hides the native Android navbar.
+    * On-board relays and button LEDs as Home Assistant switch / light entities,
+      where the panel has them.
+    * Sensors (ambient light, proximity, temperature / humidity) as entities.
+    * Zigbee gateway control on panels with an on-board radio.
+    * A local-only HTTP control / info surface and a per-panel Home Assistant
+      device identity.
+
+    Some capabilities (relays, button LEDs, true screen-off, Zigbee, the overlay
+    navbar) require root / su on the panel; the MQTT, sensor and HTTP features do
+    not. See the project README for per-panel capabilities and setup.
+
+    Free, open-source (Apache-2.0) and fully local — no cloud and no account.
+
+# We push prebuilt, release-signed APKs into the repo; fdroid does not source-build or version-check.
+UpdateCheckMode: None

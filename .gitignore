@@ -38,3 +38,10 @@ test/node_modules/
 # No trailing slash so it also ignores the symlink form (the blobs live in /media to stay out of HA
 # backups; this path is symlinked there).
 vendor-firmwares
+
+# F-Droid repo build outputs — generated in CI from GitHub Releases, never committed.
+fdroid/repo/
+fdroid/archive/
+fdroid/tmp/
+fdroid/.apkcache
+_site/
