@@ -46,8 +46,13 @@ interface DeviceProfile {
     /** Sonoff Zigbee gateway dir, or null if the panel has no managed Zigbee gateway. */
     val zigbeeGatewayDir: String?
 
-    /** Base of the `st_relay` sysfs class for on-board relays, or null if none. */
+    /** Base of the relay sysfs class for on-board relays, or null if none. */
     val relayBase: String?
+
+    /** Additional relay-class sysfs bases to probe when [relayBase] isn't present. The S9E renamed
+     *  `/sys/class/st_relay` → `/sys/class/strelay` between firmware 1.0.2 and 1.1.0, so both must be
+     *  tried — the controller uses the first whose dir actually holds `relayN` nodes. Default empty. */
+    val relayBaseFallbacks: List<String> get() = emptyList()
 
     /** First GPIO number of the button-LED block (e.g. 147 on the S9E), or null if none. */
     val buttonLedGpioBase: Int?

@@ -2,10 +2,12 @@ package io.github.maxlyth.hapaneld.device
 
 /**
  * Smatek S9E (Rockchip rk3566, Android 11). ⚠️ UNVERIFIED on hardware — values from the vendor docs
- * (seaky#98 + the Smatek listing). Has two mains relays at `/sys/class/st_relay` and four button LEDs
- * at gpio 147–150; no RGB LED node. Fingerprint guess (model/device contains "s9e") — but its relays
- * surface via runtime probe even if it falls back to [Generic], so getting the fingerprint exact is not
- * critical until a unit is available.
+ * (seaky#98 + the Smatek listing) and two stock firmware images (see docs/hardware/s9e.md). Has two
+ * mains relays whose sysfs class was renamed across firmware — `/sys/class/strelay` on 1.1.0+,
+ * `/sys/class/st_relay` on the initial 1.0.2 — and four button LEDs at gpio 147–150 (not exported at
+ * boot; RelayController exports them). The firmware also carries an RGB led_r/g/b + a vibrator, both
+ * currently unexposed. Detection keys on `ro.product.version` starting "S9"; relays/LEDs also surface
+ * via runtime probe even if it falls back to [Generic].
  * Hardware reference: docs/hardware/s9e.md
  */
 object S9e : DeviceProfile {
@@ -20,7 +22,10 @@ object S9e : DeviceProfile {
     // stack that ZigbeeController drives. Its path + control protocol are unknown and can't be guessed;
     // stays null until reverse-engineered on a real unit (then either set this, or add a Tuya path).
     override val zigbeeGatewayDir: String? = null
-    override val relayBase = "/sys/class/st_relay"
+    // Firmware 1.1.0+ uses /sys/class/strelay; the initial 1.0.2 image used /sys/class/st_relay. Probe
+    // strelay first (most panels in the field), fall back to st_relay. See docs/hardware/s9e.md.
+    override val relayBase = "/sys/class/strelay"
+    override val relayBaseFallbacks = listOf("/sys/class/st_relay")
     override val buttonLedGpioBase = 147
     override val manufacturer = "Smatek"
     override val model = "S9E"

@@ -363,6 +363,12 @@ Android 11), Electron WF1589T (rk3576, Android 14).
   panels show the live brightness/volume **percentage** between each ± pair. Back/Recents use root key
   injection where available (no accessibility service needed), and **Recents is omitted on panels whose
   firmware has no overview screen** rather than showing a dead button.
+- **Smatek S9E detection fixed** — the S9E (RK3566) was falling back to the generic profile, hiding its
+  relays and button LEDs; it's now detected from `ro.product.version`. The relay sysfs class (renamed
+  `st_relay` → `strelay` between firmware 1.0.2 and 1.1.0) is probed both ways, and the button-LED GPIOs
+  (not exported at boot) are exported on demand, so the `switch.<panel>_relay1/2` and
+  `light.<panel>_button_led1..4` entities surface across firmware versions. Still experimental / untested
+  on hardware — [docs/hardware/s9e.md](docs/hardware/s9e.md).
 
 <details>
 <summary>Earlier releases (0.8.1 → 0.4.x) — full history in <a href="CHANGELOG.md">CHANGELOG.md</a></summary>
