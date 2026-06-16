@@ -513,6 +513,14 @@ Carried from 0.4.x:
   the vendor tools' scheduled screen-on / reboot.
 - **App watchdog** — optionally relaunch the dashboard app (HA Companion / browser) if it dies or goes
   blank, so a panel self-heals without intervention.
+- **Customisable info-page layout** — drag-and-drop card re-ordering plus a per-card collapse
+  (disclosure triangle) so users can hide cards they don't care about, with the card order + collapsed
+  state **persisted per panel**. (Card title bars were demarcated as the groundwork for this.)
+- **Tame a runaway vendor Zigbee guard** — the panel's stock `guard_process.sh` can pin a CPU core
+  endlessly restarting a `zgateway` that won't stay up (the *120P vendor-guard spin*), even when
+  ha-paneld isn't managing Zigbee. Detect it (zgateway crash-loop / high CPU) and offer to stop or take
+  over the gateway; also make ha-paneld's existing vendor-native stop `awk`-free (awk is absent on some
+  panels, so the current stop can silently fail).
 - **DLNA renderer** *(under consideration — gauging interest)* — advertise as a UPnP/DLNA media renderer
   so HA auto-discovers a `media_player`. Caveat: it would appear as a **separate** HA device, not part of
   the MQTT-discovery device that holds the panel's controls/sensors (MQTT discovery has no media_player
