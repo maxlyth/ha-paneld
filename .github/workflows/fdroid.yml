@@ -108,7 +108,9 @@ jobs:
       - name: Assemble Pages site (+ inject repo fingerprint into landing page)
         working-directory: fdroid
         run: |
-          FP=$(python3 -c "import json; print(json.load(open('repo/index-v2.json'))['repo']['fingerprint'])")
+          # The F-Droid repo fingerprint is the SHA-256 of the signing certificate (DER), lowercase hex.
+          FP=$(keytool -exportcert -keystore "$RUNNER_TEMP/ks.jks" -alias "$KEY_ALIAS" \
+                -storepass "$KEYSTORE_PASSWORD" 2>/dev/null | openssl dgst -sha256 | awk '{print $NF}')
           echo "Repo fingerprint: $FP"
           echo "Add-repo URL: https://maxlyth.github.io/ha-paneld/fdroid/repo?fingerprint=$FP"
           mkdir -p ../_site/fdroid
