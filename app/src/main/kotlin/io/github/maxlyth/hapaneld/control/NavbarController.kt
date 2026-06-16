@@ -136,9 +136,9 @@ class NavbarController(
         // Volume — tap/hold; showUi flashes the system volume slider for feedback.
         row.addView(separator())
         row.addView(spacer(side))
-        row.addView(repeatButton(R.drawable.ic_nav_vol_down, autoHide) { volume.setPercent(volume.getPercent() - VOL_STEP, showUi = true); updateVolLabel() })
+        row.addView(repeatButton(R.drawable.ic_nav_vol_down, autoHide) { volume.step(up = false); updateVolLabel() })
         if (showValues) valueLabel().also { volLabel = it; row.addView(it) }
-        row.addView(repeatButton(R.drawable.ic_nav_vol_up, autoHide) { volume.setPercent(volume.getPercent() + VOL_STEP, showUi = true); updateVolLabel() })
+        row.addView(repeatButton(R.drawable.ic_nav_vol_up, autoHide) { volume.step(up = true); updateVolLabel() })
         row.addView(spacer(side))
         if (showValues) { updateBrightLabel(); updateVolLabel() }
         val lp = WindowManager.LayoutParams(
@@ -167,7 +167,21 @@ class NavbarController(
     private fun animateBarOut() {
         val b = bar ?: return
         b.animate().translationY(dp(BAR_HEIGHT_DP).toFloat()).setDuration(ANIM_MS)
-            .withEndAction { removeBar() }.start()
+            // Detach via detachBar (NOT removeBar) — calling animate().cancel() from inside the animator's
+            // own end action re-applies the transform and flashes the bar back at its resting position for
+            // a frame. detachBar hides-then-removes without cancelling, killing that flash.
+            .withEndAction { detachBar(b) }.start()
+    }
+
+    /** Detach the bar view without touching its animator. Make it INVISIBLE before `removeView` so the
+     *  window manager's final layout pass on removal can't draw it at its resting position for a frame. */
+    private fun detachBar(b: View) {
+        runCatching { b.visibility = View.INVISIBLE; wm.removeView(b) }
+        if (bar === b) {
+            bar = null
+            brightLabel = null
+            volLabel = null
+        }
     }
 
     private fun addStrip() {
@@ -216,11 +230,10 @@ class NavbarController(
         main.postDelayed(hideRunnable, AUTO_HIDE_MS)
     }
 
+    /** Tear down the bar immediately (mode change). Cancels any in-flight slide first — safe here since
+     *  it's an external call, not the animator's own end action — then detaches. */
     private fun removeBar() {
-        bar?.let { runCatching { it.animate().cancel(); wm.removeView(it) } }
-        bar = null
-        brightLabel = null
-        volLabel = null
+        bar?.let { b -> runCatching { b.animate().cancel() }; detachBar(b) }
     }
 
     /** Live "NN%" readout placed between a ±-pair on wide panels. */
@@ -392,11 +405,10 @@ class NavbarController(
         private const val TIGHTEN = 0.65f      // triple-member cell weight vs nav's 1.0 → ~35% tighter spacing
         private val BAR_BG = 0xC2282C34.toInt() // charcoal @ ~76% — translucent but still reads solid
         private val PRESS_TINT = 0x55FFFFFF.toInt() // press-feedback flash (~33% white)
-        private const val AUTO_HIDE_MS = 4000L
+        private const val AUTO_HIDE_MS = 5000L  // +25% over 4000 — 4s felt too brief in use
         private const val ANIM_MS = 220L       // swipe-reveal slide in/out duration
         private const val VALUE_WIDTH_THRESHOLD_DP = 600 // wide panels (TPA10) get the % readout; square NSPanels don't
         private const val VALUE_LABEL_MIN_W_DP = 42
-        private const val VOL_STEP = 10        // volume % per tap
         private const val BRIGHT_STEP = 32     // brightness (0–255) per tap ≈ 12.5%
         private const val REPEAT_DELAY_MS = 400L     // hold this long before ramping starts
         private const val REPEAT_INTERVAL_MS = 120L  // then step every this often while held

@@ -32,6 +32,23 @@ class VolumeController(context: Context) {
         }
     }
 
+    /**
+     * Step the music volume one notch (for the navbar ± buttons), flashing the system slider.
+     *
+     * Uses [AudioManager.adjustStreamVolume] rather than a percent round-trip through [setPercent]: on a
+     * panel whose stream reports a small max (e.g. 7 steps), converting current→percent→raw truncated
+     * back to the *same* raw index, so the call was a no-op — the volume didn't move and the slider
+     * never appeared. `adjustStreamVolume` always moves one real step **and** always shows the UI.
+     */
+    fun step(up: Boolean, showUi: Boolean = true) {
+        val dir = if (up) AudioManager.ADJUST_RAISE else AudioManager.ADJUST_LOWER
+        try {
+            am.adjustStreamVolume(stream, dir, if (showUi) AudioManager.FLAG_SHOW_UI else 0)
+        } catch (e: SecurityException) {
+            Log.w(TAG, "cannot adjust volume (needs MODIFY_AUDIO_SETTINGS / not DND-restricted)", e)
+        }
+    }
+
     companion object {
         private const val TAG = "ha-paneld/volume"
     }
