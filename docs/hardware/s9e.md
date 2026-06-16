@@ -40,16 +40,54 @@ until validated on hardware.
 > first — the S9E is an RK3566 Rockchip device, so the usual button-combo fastboot/recovery advice does
 > not apply (partition table not yet captured on a unit here).
 
-## Relays — `st_relay` class (root)
+## Firmware versions
+
+Two stock images have been analysed (block-OTA `.zip`, AOSP dynamic-partition format — `brotli -d`
+the `.new.dat.br`, `lpunpack` the super image, `strings`-grep `build.prop` + init `.rc`). Both report
+`Build.MODEL` **`S9`** / `Build.DEVICE` **`rk3566_r`**, Android 11; the vendor build code lives in
+**`ro.product.version`**:
+
+| Image | `ro.product.version` | Build | Relay class |
+|---|---|---|---|
+| `S9_1920x1200_20240712_Android_US` | `S9_Android_1.0.2` | `eng.*.20240712` | `/sys/class/st_relay` |
+| `S9_1920x1200_20251202_Android_US` | `S9_Android_1.1.0` | `eng.xiaolp.20251202.160404` | `/sys/class/strelay` |
+
+> [!IMPORTANT]
+> **The relay sysfs class was renamed between firmware versions.** Only the **initial** image (1.0.2)
+> uses `/sys/class/st_relay`; **all newer** images (1.1.0+) use `/sys/class/strelay` — reporter-confirmed
+> in [#3](https://github.com/maxlyth/ha-paneld/issues/3) and matched by the firmware diff. ha-paneld
+> ≤ 0.8.2 probes only `st_relay`, so relays are invisible on any panel running 1.1.0 or later. The fix
+> (probe both class names) is tracked for **0.8.3** — see the relay section below.
+
+Downloads (Smatek, as shared by the reporter in [#3](https://github.com/maxlyth/ha-paneld/issues/3) — the
+URLs carry Smatek's shared download password):
+
+- [`S9_1920x1200_20240712_Android_US` — 1.0.2](http://docs.smatek.store:10001/s/48vAcr?password=icwm34)
+- [`S9_1920x1200_20251202_Android_US` — 1.1.0](http://docs.smatek.store:10001/s/QEYPSL?password=wyh1gh)
+
+Diffing the two images: **only `ro.product.version` and the relay class differ.** Every other control
+path documented below (button keycodes, button-LED GPIOs, proximity GPIO, sensor wiring) is identical
+across both — so detection keyed on `ro.product.version` starting `S9` covers the whole line.
+
+## Relays — `strelay` / `st_relay` class (root)
 
 ha-paneld exposes the two mains relays as `switch.<panel>_relay1` / `switch.<panel>_relay2`, gated on
-the presence of the `st_relay` class (so the entities appear only on a panel that has it). This is the
+the presence of the relay sysfs class (so the entities appear only on a panel that has it). This is the
 first concrete panel for the [built-in relay roadmap item](../../README.md#status--roadmap).
 
+> [!CAUTION]
+> **The class name is firmware-dependent** (see [Firmware versions](#firmware-versions)): `st_relay` on
+> the initial 1.0.2 image, `strelay` on 1.1.0 and later. ha-paneld ≤ 0.8.2 probes only `st_relay`, so a
+> panel on 1.1.0+ shows no relay entities. Probing both names is tracked for **0.8.3**.
+
 ```bash
-echo 1 > /sys/class/st_relay/relay1   # on
-echo 0 > /sys/class/st_relay/relay1   # off
-echo 1 > /sys/class/st_relay/relay2
+# firmware 1.1.0+ (most panels in the field)
+echo 1 > /sys/class/strelay/relay1    # on
+echo 0 > /sys/class/strelay/relay1    # off
+echo 1 > /sys/class/strelay/relay2
+
+# firmware 1.0.2 (initial release)
+echo 1 > /sys/class/st_relay/relay1
 ```
 
 ## Buttons — `F1`–`F4` KeyEvents (app-direct)
@@ -64,12 +102,24 @@ Each button has an LED at `/sys/class/gpio/gpio<16+keycode>/value` — i.e. gpio
 F1–F4. Per-button on/off, monochrome. ha-paneld exposes these as `light.<panel>_button_led1..4`
 (on/off via `su`), counted from the `buttonLedGpioBase` profile value. This was inert on the S9E until
 **0.8.2-rc3** fixed device detection (GitHub #3/#4 — the panel was falling back to the generic profile);
-the write path matches the reporter's vendor code exactly. Still **untested on hardware** — if the LEDs
-don't appear, the GPIO pins may need exporting (`echo 147 > /sys/class/gpio/export`, …) first.
+the write path matches the reporter's vendor code exactly.
+
+> [!NOTE]
+> **Firmware analysis (2026-06-16):** the init scripts in both images export **only `gpio113`** — the
+> button-LED pins **gpio147–150 are not exported at boot**, so the `/sys/class/gpio/gpioNNN/value` nodes
+> won't exist until exported. ha-paneld ≤ 0.8.2 writes the node directly with no export step, which is the
+> likely reason the LEDs are still unconfirmed on hardware. An idempotent `echo NNN > /sys/class/gpio/export`
+> before the first write is tracked for **0.8.3**.
 
 ```bash
+echo 147 > /sys/class/gpio/export        # one-time, if the node is absent
 echo 1 > /sys/class/gpio/gpio147/value   # button F1 LED on
 ```
+
+> [!TIP]
+> The firmware also carries an **RGB status LED** (`led_r` / `led_g` / `led_b`), a **vibrator/haptic**
+> motor and **Ethernet-activity LEDs** — none currently exposed by ha-paneld. The RGB LED is the most
+> useful future addition (a panel-wide status colour); the rest are low value. Not yet wired.
 
 ## Sensors — proximity (SensorManager; gpio18 is the raw path)
 
@@ -97,7 +147,7 @@ temperature + humidity likely also surface via `SensorManager` (as on the TPA10'
 
 ## Access model summary
 
-- **Relays**: `switch.<panel>_relay1/2` via `/sys/class/st_relay` (root). Implemented, **untested**.
+- **Relays**: `switch.<panel>_relay1/2` via the relay sysfs class (root). Implemented for `st_relay` (firmware 1.0.2); **probe-both fix for `strelay` on 1.1.0+ pending 0.8.3**. **Untested on hardware.**
 - **Buttons**: `event.<panel>_button` (`KEYCODE_F1`–`F4`), app-direct via a11y. Implemented.
 - **Button LEDs**: `light.<panel>_button_led1..4` via `su` (gpio 147–150). Implemented; live since the 0.8.2-rc3 detection fix, **untested**.
 - **Proximity**: `binary_sensor.<panel>_proximity` + wake-on-wave via `SensorManager` — works (per the reporter's `/diag`). Raw `gpio18` documented as a fallback only, not wired.
@@ -107,6 +157,8 @@ temperature + humidity likely also surface via `SensorManager` (as on the TPA10'
 <details>
 <summary>Source links + provenance</summary>
 
+- [ha-paneld#3 — "Smatek S9E"](https://github.com/maxlyth/ha-paneld/issues/3) — the reporter's `/diag` (detection strings, `SensorManager` proximity), the relay-class rename (`st_relay` → `strelay`), and the two firmware download links below.
+- Smatek S9E stock firmware (shared by the reporter in #3): [1.0.2 / 20240712](http://docs.smatek.store:10001/s/48vAcr?password=icwm34), [1.1.0 / 20251202](http://docs.smatek.store:10001/s/QEYPSL?password=wyh1gh) — the two images analysed (2026-06-16) for the relay-class rename, the gpio147–150 export gap, the RGB LED / vibrator, and detection-string stability.
 - [seaky/nspanel_pro_tools_apk#98 — "Add Smatek S9E Support"](https://github.com/seaky/nspanel_pro_tools_apk/issues/98) — the relay (`st_relay`), button (keycodes 131–134), button-LED (gpio 147–150) and proximity (gpio18) control paths.
 - [Home Assistant community: "Smatek S9E Touch Panel"](https://community.home-assistant.io/t/smatek-s9e-touch-panel/828244) — WebView update, GPIO18 proximity scripts, integration notes.
 - [Smatek S9E product page](https://smatek.com/product/10-1-inch-smart-control-panel-s9e/) and [S9PE-NZ PoE variant](https://smatek.com/product/10-1-inch-android-panel-s9e-nz/) — SoC, RAM/storage, display, sensors, connectivity.
