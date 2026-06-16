@@ -13,9 +13,13 @@ name: F-Droid repo
 #      share the add-repo URL:  https://maxlyth.github.io/ha-paneld/fdroid/repo?fingerprint=<FP>
 
 on:
-  release:
-    types: [released]        # full (non-prerelease) releases only
-  workflow_dispatch: {}      # manual rebuild
+  # Chain after the Release workflow. We can't use `on: release` — a release created by another
+  # workflow's GITHUB_TOKEN does not emit triggering events, so that would never fire. `workflow_run`
+  # fires regardless of how the upstream run was triggered.
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
+  workflow_dispatch: {}      # manual rebuild / first population
 
 permissions:
   contents: read
@@ -29,6 +33,12 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # Run after a successful Release for a FULL version tag (skip rc Release runs, e.g. v0.8.2-rc5);
+    # always allow a manual dispatch. head_branch on a tag-push run is the tag name.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       !contains(github.event.workflow_run.head_branch, '-'))
     env:
       KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
       KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}

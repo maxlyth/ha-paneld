@@ -9,8 +9,10 @@ note](../docs/hardware/nspanel-pro.md#firmware-v400--official-f-droid-app-instal
 
 [`.github/workflows/fdroid.yml`](../.github/workflows/fdroid.yml) is **stateless**:
 
-1. On every **full** GitHub Release (and `workflow_dispatch`), it downloads the release-signed
-   `*.apk` asset from every non-prerelease release into `repo/`.
+1. After the **Release** workflow succeeds for a full-version tag (via `workflow_run` — `on: release`
+   can't be used because releases created by another workflow's `GITHUB_TOKEN` don't emit triggering
+   events), or on a manual `workflow_dispatch`, it downloads the release-signed `*.apk` asset from
+   every non-prerelease release into `repo/`.
 2. `fdroid update` builds + signs the repo index.
 3. The result is published to GitHub Pages at `https://maxlyth.github.io/ha-paneld/fdroid/repo`.
 
