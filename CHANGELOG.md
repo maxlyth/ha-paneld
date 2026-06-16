@@ -27,6 +27,10 @@ content appear. Earlier releases predate this convention and keep their flat lis
 - **No navbar flash on auto-hide** — after the bar slid off the bottom edge it could flash back into view for a single frame before disappearing; it now hides cleanly.
 - **Swipe-reveal no longer scrolls the dashboard** — a swipe-up to reveal the navbar could also scroll/displace the dashboard behind it (blank space at the bottom, top cropped). The reveal strip now consumes the whole gesture (it was letting un-consumed move events fall through), and its capture zone is taller so a fast off-screen swipe lands on it reliably.
 
+### Docs
+
+- **F-Droid install guide** — [docs/fdroid.md](docs/fdroid.md): add the ha-paneld F-Droid repository and install / auto-update straight on the panel, no PC.
+
 ## v0.8.2 - 2026-06-16
 
 Adds a soft on-screen navigation bar for panels whose firmware hides the native one, and completes Smatek S9E hardware support.

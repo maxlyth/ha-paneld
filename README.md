@@ -58,6 +58,11 @@ directly (see [Provisioning](#provisioning-no-device-ui-on-rooteduserdebug-panel
 
 ### Other ways to install
 
+- **F-Droid (on-device, no PC).** Add ha-paneld's F-Droid repository and install + auto-update straight
+  from the panel — see [Installing via F-Droid](docs/fdroid.md). Easiest where the panel can run F-Droid
+  (Sonoff NSPanel Pro firmware ≥ 4.0.0 bundles it). Delivers the app only — the root-gated features still
+  need provisioning (below).
+
 The one-liner uses **network adb**. If a panel doesn't expose adb over the network:
 
 - **Bootstrap via USB (Tuya TPA10 / Smatek panels).** adb — and `adb root` — is often only available,
