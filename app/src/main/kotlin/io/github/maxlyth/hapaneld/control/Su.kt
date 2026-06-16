@@ -84,6 +84,26 @@ object Su {
         }
     }
 
+    /** Run [cmd] as root and return its raw stdout **bytes** (one-shot — the persistent shell's sentinel
+     *  protocol is text-only, so binary output like `screencap -p` needs a dedicated exec). Not
+     *  synchronized: it doesn't touch the shared shell, so a screenshot won't stall navbar root actions.
+     *  Null on failure / no su. */
+    fun runBytes(cmd: String): ByteArray? {
+        if (form == 2) return null
+        val forms = if (form in 0..1) intArrayOf(form) else intArrayOf(0, 1)
+        for (f in forms) {
+            try {
+                val p = Runtime.getRuntime().exec(argvOneShot(f, cmd))
+                val bytes = p.inputStream.readBytes() // binary-safe; read before waitFor (avoid deadlock)
+                if (p.waitFor() == 0) { form = f; return bytes }
+            } catch (e: Exception) {
+                Log.d(TAG, "su bytes form $f failed for: $cmd", e)
+            }
+        }
+        if (form == -1) form = 2
+        return null
+    }
+
     fun available(): Boolean = run("true")
 
     // --- persistent shell ---

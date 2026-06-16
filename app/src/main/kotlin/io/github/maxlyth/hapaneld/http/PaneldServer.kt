@@ -21,6 +21,7 @@ import io.ktor.server.engine.embeddedServer
 import io.ktor.server.plugins.origin
 import io.ktor.server.request.receiveParameters
 import io.ktor.server.request.receiveText
+import io.ktor.server.response.respondBytes
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
@@ -191,6 +192,17 @@ class PaneldServer(
                 }
                 get("/icon.svg") {
                     call.respondText(asset("icon.svg"), ContentType.Image.SVG)
+                }
+                // Live panel screenshot via root `screencap` (LAN-only like the rest of this surface).
+                // Embedded scaled in the info page + linkable full-size; also usable as an HA camera
+                // still_image_url. Captured on demand — no background polling.
+                get("/screenshot.png") {
+                    val png = Su.runBytes("screencap -p")
+                    if (png != null && png.isNotEmpty()) {
+                        call.respondBytes(png, ContentType.Image.PNG)
+                    } else {
+                        call.respondText("screenshot-unavailable\n", status = HttpStatusCode.ServiceUnavailable)
+                    }
                 }
                 // Self-contained REST API explorer (no Swagger-UI CDN bundle) + the OpenAPI spec it
                 // renders — the spec also imports into Swagger/Postman for fleet tooling.
@@ -439,6 +451,9 @@ $setupBanner
  ${pbtn("reboot", "⟳ Reboot", rootOk, "root (su or the helper daemon)", """ style="margin-left:auto;border-color:#7a3a2a;color:#f5a08a"""")}
 </div>
 <p class="note">For panels with no physical nav bar. Back/Recents use the accessibility service; Launcher/Reboot need root — actions whose capability is missing are disabled (hover for why).</p></div>
+${if (rootOk) """<div class="card"><h2>Screenshot <small>· live panel</small></h2>
+<a href="/screenshot.png" target="_blank" rel="noopener" title="Open full size in a new window"><img src="/screenshot.png" alt="panel screenshot" style="width:100%;height:auto;display:block;border-radius:6px;background:#111" onerror="this.closest('.card').style.display='none'"></a>
+<p class="note"><a href="#" onclick="this.closest('.card').querySelector('img').src='/screenshot.png?t='+Date.now();return false" style="color:#9cf">↻ Refresh</a> · click the image to open it full size. Captured on demand via root (`screencap`); local-network only.</p></div>""" else ""}
 ${factCard("Panel information", infoKeys)}
 ${factCard("Networking", netKeys)}
 ${factCard("ha-paneld profile", profKeys, """<p class="note">Values declared by this panel's <a href="$REPO_URL/blob/main/docs/architecture/device-profiles.md" target="_blank" rel="noopener" style="color:#9cf">device profile</a> — if one looks wrong, that's where to correct it.</p>""")}
