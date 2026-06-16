@@ -191,8 +191,14 @@ class NavbarController(
             return
         }
         val edge = View(context).apply {
+            // Reveal on touch-down, and consume the WHOLE gesture (return true for MOVE/UP too). The strip
+            // window is FLAG_NOT_TOUCH_MODAL, so any event we DON'T consume falls through to the dashboard
+            // WebView behind — returning false on MOVE let an off-screen-origin swipe-up scroll the
+            // dashboard while revealing the bar. Swallowing the gesture keeps the dashboard still. Touches
+            // above the strip still pass through normally (they're outside this window's bounds).
             setOnTouchListener { _, e ->
-                if (e.action == MotionEvent.ACTION_DOWN) { reveal(); true } else false
+                if (e.actionMasked == MotionEvent.ACTION_DOWN) reveal()
+                true
             }
         }
         val lp = WindowManager.LayoutParams(
@@ -399,7 +405,8 @@ class NavbarController(
         val MODES = listOf(MODE_OFF, MODE_ALWAYS, MODE_SWIPE)
 
         private const val BAR_HEIGHT_DP = 56   // taller so the icons read at a glance
-        private const val STRIP_HEIGHT_DP = 28   // swipe-reveal touch target — 12dp was too thin to hit
+        private const val STRIP_HEIGHT_DP = 48   // swipe-reveal capture zone — 12→28→48: a fast off-screen
+        // swipe-up's DOWN sometimes landed above a thinner strip, so the dashboard caught it and scrolled
         private const val FEEDBACK_MIN_MS = 350L  // min press-highlight visible time (bridges su latency)
         private const val ICON_SIZE_DP = 30    // fixed icon size, centred in its cell (uniform across all buttons)
         private const val TIGHTEN = 0.65f      // triple-member cell weight vs nav's 1.0 → ~35% tighter spacing
