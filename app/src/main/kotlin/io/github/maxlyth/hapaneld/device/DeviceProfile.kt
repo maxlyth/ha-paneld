@@ -63,6 +63,12 @@ interface DeviceProfile {
      *  — declare per profile where known. Optionally append a known chipset, e.g. "Infrared (STK3338)". */
     val proximityTech: String? get() = null
 
+    /** GPIO number of a raw binary proximity line to poll over root (1 = near, 0 = far), for panels whose
+     *  Android `SensorManager` proximity is absent or registers but never delivers events — e.g. the
+     *  Smatek S9E (gpio18, reporter-confirmed GitHub #5: reads 0 far / 1 near, no export needed). Null →
+     *  use the `SensorManager` proximity sensor. */
+    val proximityGpio: Int? get() = null
+
     /** Declared ambient-light-sensor technology (e.g. "Ambient light (ALS)"), or null if unknown. */
     val lightTech: String? get() = null
 

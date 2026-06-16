@@ -136,21 +136,21 @@ The real signal is a **root GPIO read at GPIO 18** (the kernel registers a phant
 never fires, so the value has to be read from sysfs):
 
 ```bash
-cat /sys/class/gpio/gpio18/value   # 1 = near, 0 = clear  (may need `echo 18 > /sys/class/gpio/export` first)
+cat /sys/class/gpio/gpio18/value   # 1 = near, 0 = far  (no export needed — reporter-confirmed, #5)
 ```
 
-So S9E proximity needs ha-paneld to read `gpio18` over root directly (a short poll loop) instead of
-relying on `SensorManager` — cheap now that root runs through the persistent `su` shell. **Tracked for
-0.8.3**, pending the reporter confirming `gpio18` toggles 0↔1 on a hand-wave (and whether it needs
-exporting first, as the button-LED GPIOs did). Ambient light + temperature/humidity do surface via
-`SensorManager` as expected.
+So S9E proximity reads `gpio18` over root directly instead of relying on `SensorManager`. **Implemented
+in 0.8.3**: `DeviceProfile.proximityGpio` = 18, so `SensorReporter` polls the node ~2×/s through the
+persistent `su` shell and feeds the same `binary_sensor.<panel>_proximity` + wake-on-wave path (the dead
+SensorManager proximity isn't registered on the S9E). Reporter-confirmed: gpio18 reads **0 far / 1
+near**, no export needed. Ambient light + temperature/humidity surface via `SensorManager` as expected.
 
 ## Access model summary
 
 - **Relays**: `switch.<panel>_relay1/2` via the relay sysfs class (root); probes both `strelay`/`st_relay`. **Confirmed working (0.8.2).**
 - **Buttons**: `event.<panel>_button` (`KEYCODE_F1`–`F4`), app-direct via a11y. Implemented.
 - **Button LEDs**: `light.<panel>_button_led1..4` via `su` (gpio 147–150, exported on demand). **Confirmed working (0.8.2).**
-- **Proximity**: `binary_sensor.<panel>_proximity` via `SensorManager` is **registered but non-functional** on the S9E (reads Unknown). A root `gpio18` poller is needed — **not yet implemented (0.8.3)**. Wake-on-wave consequently does not work on the S9E.
+- **Proximity**: `binary_sensor.<panel>_proximity` via a **root `gpio18` poll** (0.8.3) — the SensorManager proximity registers but never fires, so it's bypassed. 0 far / 1 near; wake-on-wave works via the poller.
 - **Light**: `sensor.<panel>_illuminance` via `SensorManager` — **works**.
 
 ## Sources

@@ -27,6 +27,9 @@ object S9e : DeviceProfile {
     override val relayBase = "/sys/class/strelay"
     override val relayBaseFallbacks = listOf("/sys/class/st_relay")
     override val buttonLedGpioBase = 147
+    // SensorManager registers a proximity sensor but it never delivers events on the S9E; the raw line is
+    // gpio18 (1=near, 0=far), polled over root. Reporter-confirmed (GitHub #5). See docs/hardware/s9e.md.
+    override val proximityGpio = 18
     override val manufacturer = "Smatek"
     override val model = "S9E"
     override val evdevButtons = emptyList<EvdevButton>()

@@ -7,6 +7,7 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.util.Log
 import io.github.maxlyth.hapaneld.Config
+import io.github.maxlyth.hapaneld.control.Su
 import io.github.maxlyth.hapaneld.device.DeviceProfile
 import kotlin.math.abs
 import kotlin.math.max
@@ -34,6 +35,11 @@ class SensorReporter(context: Context, private val config: Config) {
     // Onboard climate (e.g. TPA10 CHT8305) — standard HAL sensors, no root/vendor lib.
     private val tempSensor: Sensor? = sm.getDefaultSensor(Sensor.TYPE_AMBIENT_TEMPERATURE)
     private val humiditySensor: Sensor? = sm.getDefaultSensor(Sensor.TYPE_RELATIVE_HUMIDITY)
+    // Root binary proximity GPIO (1=near, 0=far) for panels whose SensorManager proximity never fires
+    // (Smatek S9E gpio18). Null → use [proximitySensor] above. Polled instead of registered when set.
+    private val proximityGpio: Int? = runCatching { DeviceProfile.detect().proximityGpio }.getOrNull()
+    @Volatile private var proxPolling = false
+    private var proxPoller: Thread? = null
 
     private var lastLux = -1f
     private var lastLuxAt = 0L
@@ -71,10 +77,10 @@ class SensorReporter(context: Context, private val config: Config) {
         private set
 
     fun hasLight() = lightSensor != null
-    fun hasProximity() = proximitySensor != null
+    fun hasProximity() = proximitySensor != null || proximityGpio != null
     fun hasTemperature() = tempSensor != null
     fun hasHumidity() = humiditySensor != null
-    fun maxRange(): Float = proximitySensor?.maximumRange ?: 0f
+    fun maxRange(): Float = if (proximityGpio != null) 1f else proximitySensor?.maximumRange ?: 0f
 
     /** Light value-type + range for the info page (lux is a continuous float), or null if absent. */
     fun lightDesc(): String? = lightSensor?.let { "Float · 0–${fmtV(it.maximumRange)} lx" }
@@ -83,6 +89,7 @@ class SensorReporter(context: Context, private val config: Config) {
      *  [proximityGraded] (firmware rule where known, else observation); graded → Integer/Float by the
      *  sensor's resolution, binary → near/far. Range from the sensor's maximumRange. */
     fun proximityDesc(): String? {
+        if (proximityGpio != null) return "Binary · near/far (root GPIO $proximityGpio)"
         val s = proximitySensor ?: return null
         val graded = proximityGraded()
         return when {
@@ -104,7 +111,7 @@ class SensorReporter(context: Context, private val config: Config) {
         // path (onLux) stays change-gated; auto-brightness needs raw samples for a fast lights-on react.
         onLuxRaw: (Float) -> Unit = {},
     ) {
-        if (lightSensor == null && proximitySensor == null && tempSensor == null && humiditySensor == null) return
+        if (lightSensor == null && proximitySensor == null && tempSensor == null && humiditySensor == null && proximityGpio == null) return
         this.onProximity = onProximity
         this.onTemp = onTemperature
         this.onHumid = onHumidity
@@ -152,12 +159,40 @@ class SensorReporter(context: Context, private val config: Config) {
             }
         }
         lightSensor?.let { sm.registerListener(listener, it, SensorManager.SENSOR_DELAY_NORMAL) }
-        // UI delay (not NORMAL): proximity is on-change + low-power, so a faster max-rate just makes
-        // both wake-on-approach and live UI tuning responsive without meaningful battery cost.
-        proximitySensor?.let { sm.registerListener(listener, it, SensorManager.SENSOR_DELAY_UI) }
+        // Proximity: poll the raw GPIO over root where the SensorManager sensor never fires (S9E);
+        // otherwise register the real SensorManager sensor. UI delay (not NORMAL) keeps wake-on-approach
+        // and live UI tuning responsive without meaningful battery cost.
+        if (proximityGpio != null) startProximityPoll(proximityGpio)
+        else proximitySensor?.let { sm.registerListener(listener, it, SensorManager.SENSOR_DELAY_UI) }
         tempSensor?.let { sm.registerListener(listener, it, SensorManager.SENSOR_DELAY_NORMAL) }
         humiditySensor?.let { sm.registerListener(listener, it, SensorManager.SENSOR_DELAY_NORMAL) }
         Log.i(TAG, "sensors started (light=${hasLight()} proximity=${hasProximity()} temp=${hasTemperature()} humidity=${hasHumidity()})")
+    }
+
+    /** Poll the raw binary proximity GPIO over root (S9E gpio18; its SensorManager proximity registers
+     *  but never delivers). 1 = near, 0 = far (reporter-confirmed). Feeds the same evaluate/publish path
+     *  as the SensorManager proximity, so calibration UI, change-gating and wake-on-wave work unchanged.
+     *  Reads go through the persistent `su` shell (~13 ms), so the steady poll is cheap. */
+    private fun startProximityPoll(gpio: Int) {
+        proxPolling = true
+        val node = "/sys/class/gpio/gpio$gpio/value"
+        proxPoller = Thread {
+            while (proxPolling) {
+                val raw = when (Su.runOutput("cat $node 2>/dev/null")?.trim()) {
+                    "1" -> 1f
+                    "0" -> 0f
+                    else -> Float.NaN
+                }
+                if (!raw.isNaN()) {
+                    lastRaw = raw
+                    synchronized(seenRaw) { if (seenRaw.size < 32) seenRaw.add(raw) }
+                    SensorTrace.recordProx(raw, computeNear(raw))
+                    evaluateProximity()
+                }
+                try { Thread.sleep(PROX_POLL_MS) } catch (e: InterruptedException) { break }
+            }
+        }.apply { isDaemon = true; name = "ha-paneld-prox"; start() }
+        Log.i(TAG, "proximity via root gpio$gpio poll (${PROX_POLL_MS}ms)")
     }
 
     /** Recompute the binary from the cached raw + current calibration, publishing on a change.
@@ -176,6 +211,7 @@ class SensorReporter(context: Context, private val config: Config) {
 
     /** Schmitt trigger off the calibration; pre-calibration fallback = legacy `raw < maximumRange`. */
     private fun computeNear(raw: Float): Boolean {
+        if (proximityGpio != null) return raw >= 0.5f   // clean binary GPIO: 1 = near, 0 = far (no calibration)
         val t = config.proximityThreshold
         if (!config.proximityCalibrated || t.isNaN()) {
             return raw < (proximitySensor?.maximumRange ?: Float.MAX_VALUE)
@@ -212,6 +248,9 @@ class SensorReporter(context: Context, private val config: Config) {
     }
 
     fun stop() {
+        proxPolling = false
+        proxPoller?.interrupt()
+        proxPoller = null
         listener?.let { sm.unregisterListener(it) }
         listener = null
         onProximity = null
@@ -221,5 +260,6 @@ class SensorReporter(context: Context, private val config: Config) {
 
     companion object {
         private const val TAG = "ha-paneld/sensors"
+        private const val PROX_POLL_MS = 500L // root-GPIO proximity poll cadence (wake-on-wave latency)
     }
 }
