@@ -33,3 +33,6 @@ docs/icon-preview.png
 
 # UI layout-test deps (playwright-core)
 test/node_modules/
+
+# Vendor firmware images for private hardware research — NEVER commit (large binaries; public repo)
+vendor-firmwares/
