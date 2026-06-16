@@ -75,10 +75,10 @@ ha-paneld exposes the two mains relays as `switch.<panel>_relay1` / `switch.<pan
 the presence of the relay sysfs class (so the entities appear only on a panel that has it). This is the
 first concrete panel for the [built-in relay roadmap item](../../README.md#status--roadmap).
 
-> [!CAUTION]
+> [!NOTE]
 > **The class name is firmware-dependent** (see [Firmware versions](#firmware-versions)): `st_relay` on
-> the initial 1.0.2 image, `strelay` on 1.1.0 and later. ha-paneld ≤ 0.8.2 probes only `st_relay`, so a
-> panel on 1.1.0+ shows no relay entities. Probing both names is tracked for **0.8.3**.
+> the initial 1.0.2 image, `strelay` on 1.1.0 and later. ha-paneld probes **both** names since **0.8.2**
+> and uses whichever the panel exposes. **Confirmed working on hardware** (reporter, 0.8.2, GitHub #3).
 
 ```bash
 # firmware 1.1.0+ (most panels in the field)
@@ -96,20 +96,21 @@ The four buttons emit standard Android key codes **131–134** = `KEYCODE_F1`–
 accessibility-service capture already reports these to `event.<panel>_button` (event types
 `KEYCODE_F1`…`KEYCODE_F4`); bind dashboard actions to them in HA. No root needed for the events.
 
-## LED — per-button GPIO backlight (implemented; live since 0.8.2-rc3)
+## LED — per-button GPIO backlight (confirmed working, 0.8.2)
 
 Each button has an LED at `/sys/class/gpio/gpio<16+keycode>/value` — i.e. gpio **147–150** for buttons
 F1–F4. Per-button on/off, monochrome. ha-paneld exposes these as `light.<panel>_button_led1..4`
 (on/off via `su`), counted from the `buttonLedGpioBase` profile value. This was inert on the S9E until
 **0.8.2-rc3** fixed device detection (GitHub #3/#4 — the panel was falling back to the generic profile);
-the write path matches the reporter's vendor code exactly.
+the write path matches the reporter's vendor code exactly. **Confirmed working on hardware** (reporter,
+0.8.2, GitHub #3/#4). Note the LEDs are **not** under `/sys/class/leds` (that class holds only the
+`mmc2::` SD-card LED on the S9E) — they are raw GPIOs.
 
 > [!NOTE]
-> **Firmware analysis (2026-06-16):** the init scripts in both images export **only `gpio113`** — the
-> button-LED pins **gpio147–150 are not exported at boot**, so the `/sys/class/gpio/gpioNNN/value` nodes
-> won't exist until exported. ha-paneld ≤ 0.8.2 writes the node directly with no export step, which is the
-> likely reason the LEDs are still unconfirmed on hardware. An idempotent `echo NNN > /sys/class/gpio/export`
-> before the first write is tracked for **0.8.3**.
+> **Firmware analysis (2026-06-16):** the init scripts export **only `gpio113`** — the button-LED pins
+> **gpio147–150 are not exported at boot**, so the `/sys/class/gpio/gpioNNN/value` nodes don't exist
+> until exported. **0.8.2** exports (and sets to output) each pin on demand before the first write, which
+> is why the LEDs now work despite not being init-exported.
 
 ```bash
 echo 147 > /sys/class/gpio/export        # one-time, if the node is absent
@@ -121,36 +122,36 @@ echo 1 > /sys/class/gpio/gpio147/value   # button F1 LED on
 > motor and **Ethernet-activity LEDs** — none currently exposed by ha-paneld. The RGB LED is the most
 > useful future addition (a panel-wide status colour); the rest are low value. Not yet wired.
 
-## Sensors — proximity (SensorManager; gpio18 is the raw path)
+## Sensors — proximity (SensorManager registers but does NOT deliver; gpio18 is the real path)
 
-> [!NOTE]
-> **Updated 2026-06-15** from a reporter's `/diag` (GitHub #5). The earlier note here — that the S9E
-> proximity is "not an Android `SensorManager` sensor" and the existing entities "won't pick this up" —
-> was **wrong**.
+> [!IMPORTANT]
+> **Corrected 2026-06-16** from the reporter's live readings (GitHub #5). A proximity sensor is
+> *registered* in `SensorManager` (an earlier `/diag` showed `Proximity=yes · Binary · 0/1 cm`), but on
+> the S9E it **never delivers events**: `binary_sensor.<panel>_proximity` reads **Unknown** in HA, the
+> tuning card shows **`raw —` · FAR**, and waving a hand changes nothing. The light sensor on the same
+> panel works (≈46 lx), so this is proximity-specific. The earlier claim that SensorManager proximity
+> "already works" on the S9E was **wrong** — and so the local **wake-on-wave** does not work on the S9E.
 
-The S9E proximity **does** surface through Android `SensorManager`: the reporter's `/diag` shows
-`Proximity=yes · Binary · near/far (0 / 1 cm)`. So ha-paneld's existing `binary_sensor.<panel>_proximity`
-and the **wake-on-wave** local screen-wake already work on the S9E — no S9E-specific code needed.
-
-The raw hardware path is a **root GPIO read at GPIO 18**. The kernel driver also registers it as the
-Android sensor, so `gpio18` and `SensorManager` are the **same signal via two routes**:
+The real signal is a **root GPIO read at GPIO 18** (the kernel registers a phantom Android sensor that
+never fires, so the value has to be read from sysfs):
 
 ```bash
-cat /sys/class/gpio/gpio18/value   # 1 = present, 0 = clear
+cat /sys/class/gpio/gpio18/value   # 1 = near, 0 = clear  (may need `echo 18 > /sys/class/gpio/export` first)
 ```
 
-Reading `gpio18` directly **likely won't provide any better functionality right now**: it's a binary
-`0/1` — the same near/far `SensorManager` already reports — and the Android path is event-driven and
-needs no root or polling loop. Keep `gpio18` on file only as a **fallback** if a future S9E firmware
-stops exposing the Android sensor (cf. Sonoff fw > 3 changing proximity reporting). Ambient light and
-temperature + humidity likely also surface via `SensorManager` (as on the TPA10's CHT8305).
+So S9E proximity needs ha-paneld to read `gpio18` over root directly (a short poll loop) instead of
+relying on `SensorManager` — cheap now that root runs through the persistent `su` shell. **Tracked for
+0.8.3**, pending the reporter confirming `gpio18` toggles 0↔1 on a hand-wave (and whether it needs
+exporting first, as the button-LED GPIOs did). Ambient light + temperature/humidity do surface via
+`SensorManager` as expected.
 
 ## Access model summary
 
-- **Relays**: `switch.<panel>_relay1/2` via the relay sysfs class (root). Implemented for `st_relay` (firmware 1.0.2); **probe-both fix for `strelay` on 1.1.0+ pending 0.8.3**. **Untested on hardware.**
+- **Relays**: `switch.<panel>_relay1/2` via the relay sysfs class (root); probes both `strelay`/`st_relay`. **Confirmed working (0.8.2).**
 - **Buttons**: `event.<panel>_button` (`KEYCODE_F1`–`F4`), app-direct via a11y. Implemented.
-- **Button LEDs**: `light.<panel>_button_led1..4` via `su` (gpio 147–150). Implemented; live since the 0.8.2-rc3 detection fix, **untested**.
-- **Proximity**: `binary_sensor.<panel>_proximity` + wake-on-wave via `SensorManager` — works (per the reporter's `/diag`). Raw `gpio18` documented as a fallback only, not wired.
+- **Button LEDs**: `light.<panel>_button_led1..4` via `su` (gpio 147–150, exported on demand). **Confirmed working (0.8.2).**
+- **Proximity**: `binary_sensor.<panel>_proximity` via `SensorManager` is **registered but non-functional** on the S9E (reads Unknown). A root `gpio18` poller is needed — **not yet implemented (0.8.3)**. Wake-on-wave consequently does not work on the S9E.
+- **Light**: `sensor.<panel>_illuminance` via `SensorManager` — **works**.
 
 ## Sources
 
