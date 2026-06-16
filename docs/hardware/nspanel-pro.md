@@ -78,6 +78,32 @@ adb shell chmod 06755 /system/xbin/su
 > Note the eWeLink **Zigbee gateway** stack is independent of these apps and keeps running; manage it
 > with ha-paneld's [Zigbee router switch](#zigbee-gateway) rather than removing it.
 
+## Firmware v4.0.0 — official F-Droid app install
+
+From **v4.0.0** (phased roll-out from 19 September 2025) the stock eWeLink firmware **officially bundles
+[F-Droid](https://f-droid.org/)** and promotes installing FOSS apps on the panel — Home Assistant's own
+Companion app is the headline example. Update via the panel (top drop-down → *Settings → About → Software
+update*) or the eWeLink app, then confirm both **APP Version** and **OS Version** read ≥ 4.0.0. Sonoff
+states F-Droid apps "will not affect NSPanel Pro's original features" (existing setups/automations stay
+intact) and that an app's F-Droid build "may differ slightly from the latest release"; the update also
+markedly speeds up screen-swipe/UI responsiveness. Source:
+[Sonoff — NSPanel Pro V4.0.0 update](https://sonoff.tech/en-us/blogs/news/nspanel-pro-v4-0-0-update-now-supports-f-droid-and-home-assistant-app-install).
+
+> [!NOTE]
+> **Why this matters for ha-paneld.** F-Droid is a sanctioned, **on-device** install channel, so an APK
+> can reach a panel with **no PC/adb** and F-Droid handles update notifications. ha-paneld could be
+> distributed either through the **f-droid.org main repo** or — more practically — our **own F-Droid
+> repo** (signed with our release key, so it updates the GitHub-release builds in place). **But F-Droid
+> solves distribution, not privilege:** the headline features (overlay navbar, screen on/off, relays,
+> button LEDs, Zigbee control) still need `su`, so the adb/root setup above stays a prerequisite for full
+> function — only the non-privileged surface (MQTT discovery, sensors, brightness, HTTP UI) works on a
+> stock unrooted panel.
+>
+> **To confirm on a 4.0.0 unit:** whether the bundled F-Droid client allows **adding a custom repo URL**
+> (needed for our own repo) or is locked to the official repo; whether 4.0.0 also relaxes arbitrary-APK
+> "unknown sources" sideloading; and which models/SoC the 4.x line covers (86P / 120P — not stated in the
+> post).
+
 ## WebView — update this first
 
 The NSPanel Pro ships with a WebView/Chromium far too old to render a current Home Assistant dashboard
