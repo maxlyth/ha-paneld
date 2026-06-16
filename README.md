@@ -507,6 +507,12 @@ Carried from 0.4.x:
   with onboard relays, once each one's control path (GPIO / vendor node) is known.
 - Daemon boot-persistence on su-only (PX30) panels, if true-off is wanted without relying on `su`
   at runtime.
+- **On-device scheduler** — run panel actions (screen on/off, sleep/wake, reboot, reload/navigate URL)
+  at **fixed times or repeating intervals**, configured from the HTTP UI or REST API. Runs on-device, so
+  schedules keep working through Home Assistant or network outages (unlike an HA automation). Parity with
+  the vendor tools' scheduled screen-on / reboot.
+- **App watchdog** — optionally relaunch the dashboard app (HA Companion / browser) if it dies or goes
+  blank, so a panel self-heals without intervention.
 - **DLNA renderer** *(under consideration — gauging interest)* — advertise as a UPnP/DLNA media renderer
   so HA auto-discovers a `media_player`. Caveat: it would appear as a **separate** HA device, not part of
   the MQTT-discovery device that holds the panel's controls/sensors (MQTT discovery has no media_player
