@@ -354,7 +354,22 @@ means you can never publish an in-place update again. Never commit the keystore 
 Validated across the panel fleet: Sonoff NSPanel Pro (PX30, Android 8.1), Tuya TPA10 (rk3566,
 Android 11), Electron WF1589T (rk3576, Android 14).
 
-**New in 0.8.2:**
+**New in 0.8.3:**
+
+- **Snappier panel controls** — root-backed actions (navbar Back / Launcher / Recents, screen on/off,
+  relays, LEDs) now run through a single long-lived `su` shell instead of forking `su` per call, cutting
+  ~200–300 ms of latency off each. Back/Recents feel instant.
+- **Navbar fixes** — the *Swipe reveal* bar no longer flashes back for a frame after sliding away and
+  lingers a little longer before hiding; **Volume ±** now steps reliably and always shows the system
+  slider on every panel (a rounding bug could silently no-op on panels with few volume steps).
+- **Smatek S9E proximity** — `binary_sensor.<panel>_proximity` and wake-on-wave now work on the S9E,
+  read from the raw proximity GPIO over root (its Android `SensorManager` proximity registers but never
+  reports). See [docs/hardware/s9e.md](docs/hardware/s9e.md).
+
+<details>
+<summary>Earlier releases (0.8.2 → 0.4.x) — full history in <a href="CHANGELOG.md">CHANGELOG.md</a></summary>
+
+New in 0.8.2:
 
 - **Soft navigation bar** *(system overlay)* — an on-screen Back · Launcher · Recents bar that, since these
   panels have no physical keys, also carries **Brightness ±** and **Volume ±** (tap to step, hold to ramp).
@@ -367,11 +382,8 @@ Android 11), Electron WF1589T (rk3576, Android 14).
   relays and button LEDs; it's now detected from `ro.product.version`. The relay sysfs class (renamed
   `st_relay` → `strelay` between firmware 1.0.2 and 1.1.0) is probed both ways, and the button-LED GPIOs
   (not exported at boot) are exported on demand, so the `switch.<panel>_relay1/2` and
-  `light.<panel>_button_led1..4` entities surface across firmware versions. Still experimental / untested
-  on hardware — [docs/hardware/s9e.md](docs/hardware/s9e.md).
-
-<details>
-<summary>Earlier releases (0.8.1 → 0.4.x) — full history in <a href="CHANGELOG.md">CHANGELOG.md</a></summary>
+  `light.<panel>_button_led1..4` entities surface. Confirmed working on hardware —
+  [docs/hardware/s9e.md](docs/hardware/s9e.md).
 
 New in 0.8.1:
 
