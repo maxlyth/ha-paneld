@@ -529,6 +529,10 @@ Carried from 0.4.x:
   the vendor tools' scheduled screen-on / reboot.
 - **App watchdog** — optionally relaunch the dashboard app (HA Companion / browser) if it dies or goes
   blank, so a panel self-heals without intervention.
+- **HTTP UI redesign (information architecture)** — the single-page info/control surface is getting
+  cluttered as cards accumulate. Refactor it into clear **logical sections** with navigation (e.g.
+  Controls · Sensors · Performance & diagnostics · Configuration · About) instead of one long scroll. The
+  current all-cards view is kept as a user-customisable **"dashboard"** section (the layout item below).
 - **Customisable info-page layout** — drag-and-drop card re-ordering plus a per-card collapse
   (disclosure triangle) so users can hide cards they don't care about, with the card order + collapsed
   state **persisted per panel**. (Card title bars were demarcated as the groundwork for this.)
