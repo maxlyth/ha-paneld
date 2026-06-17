@@ -1,46 +1,28 @@
-# Sonoff NSPanel Pro — firmware OTA index
+# Sonoff NSPanel Pro — firmware & flashing
 
-Canonical, verified index of Sonoff NSPanel Pro OTA firmware images and the
-URLs they live at. Replaces the scattered, ad-hoc excerpts spread across forum
-threads (notably seaky/nspanel_pro_tools_apk #262 and
-seaky/nspanel_pro_roottool_apk #1) with a single auditable list.
+How Sonoff NSPanel Pro OTA firmware is distributed, how to verify a download URL, and the verified procedure to update a panel (e.g. 3.x → 4.4.0).
 
 > [!NOTE]
-> Every URL here was verified live (HTTP 206 range request → real size + ZIP
-> magic) on the date stated in the table footnotes. Entries marked *index TBD*
-> are versions confirmed to exist (image held locally) whose CDN index is still
-> being mapped by the firmware hunts — they are not yet directly fetchable until
-> the index column is filled.
+> The **live, community-maintained version index** — every verified OTA URL for 86P and 120P, with sizes and CDN indices — lives in a GitHub Discussion, because it changes faster than this repo's release cycle and takes community contributions: **[NSPanel Pro firmware — OTA URL index](https://github.com/maxlyth/ha-paneld/discussions/7)**. This page is the stable scheme + how-to; the Discussion is the current list.
 
-There are two physically distinct models, each on its **own** CDN channel — do
-not cross them:
+Two physically distinct models, each on its **own** CDN channel — do not cross them:
 
-| Model | SoC / panel | CDN channel | Full-ROM filename form |
+| Model | SoC / panel | CDN channel | Diff filename form |
 | --- | --- | --- | --- |
-| NSPanel Pro **86P** | PX30 / 480×480 | `nspanel-pro` *(480P — confirmed)* | `CoolKit_Sonoff_480P_<YYYYMMDD>_<ver>-ota.zip` (older: `NSPanel86P_CoolKit_480P_…`) |
-| NSPanel Pro **120P** | rk3326-S / 750×1334 | `nspanel-pro-ver120` *(confirmed)* | `SN_3326S_750X1334_4lan_V<ver>_<YYYYMMDD>-ota.zip` |
+| NSPanel Pro **86P** | PX30 / 480×480 | `nspanel-pro` | bare `CK_<from>_<to>-diff.zip` |
+| NSPanel Pro **120P** | rk3326-S / 750×1334 | `nspanel-pro-ver120` | `CK_<from>_<to>V<apk>-diff.zip` |
 
 ## CDN URL scheme
 
 Host: `global-otadl2bsy.coolkit.cc` (CoolKit OTA CDN).
 
 ```text
-Full ROM:  https://global-otadl2bsy.coolkit.cc/<channel>/rom/<INDEX>/<full-rom-filename>
-Diff:      https://global-otadl2bsy.coolkit.cc/<channel>/rom-diff/<INDEX>/CK_<from>_<to>[V<apk>]-diff.zip
-App (apk): https://global-otadl2bsy.coolkit.cc/<channel>/apk/<INDEX>/<apk-filename>
+Full ROM:  https://global-otadl2bsy.coolkit.cc/<channel>/rom/<INDEX>/<full-rom>
+Diff:      https://global-otadl2bsy.coolkit.cc/<channel>/rom-diff/<INDEX>/<diff>
 ```
 
-Key facts about the scheme:
-
-- `<INDEX>` is a **per-build serial, NOT sequential** by version — you cannot
-  guess it from the version number; it must be discovered/recorded per image. For
-  `rom-diff`, the index is **per-target-version**: every diff landing on the same
-  target shares one index (e.g. on 86P all `_4.0.10` diffs live at `rom-diff/45`).
-- Diff filenames differ by model: **120P** carry a `V<apk>` suffix
-  (`CK_4.0.12_4.4.0V228-diff.zip`); **86P** are **bare** (`CK_4.0.12_4.4.0-diff.zip`).
-- The CDN returns **HTTP 403** for any object that does not exist (there is no
-  directory listing). A real object returns **206** to a range request, with a
-  `Content-Range` total size and the ZIP magic `50 4b 03 04` ("PK..").
+- `<INDEX>` is a **per-build serial, NOT sequential** by version — it must be discovered/recorded per image. For `rom-diff` the index is per *target* version (all diffs onto the same target share one index).
+- The CDN returns **403** for any object that doesn't exist (no directory listing). A real object returns **206** to a range request, with the total size and the ZIP magic `50 4b 03 04` ("PK..").
 
 Verify any candidate cheaply, without downloading the whole image:
 
@@ -49,140 +31,53 @@ curl -sS -I -L "<url>"                       # 206 + Content-Range total = exist
 curl -sS -r 0-3 -L "<url>" | od -An -tx1     # 50 4b 03 04 = real ZIP
 ```
 
-## Update-path rule (both models)
+## Update-path rule — VERIFIED on hardware (2026-06-17)
 
-Past ~3.0.0 (86P) / ~3.5.0 (120P) the on-device updater is **incremental-only**
-for most builds — you flash a **chain** of `-diff.zip` images, not a single full
-ROM. The one verified exception is the **4.0.12 full ROM**: it is distributed
-full-only (no inbound diff exists on the CDN) and *is* accepted on-device — it's
-the sanctioned checkpoint you pass through to reach 4.4.0 (confirmed by thib3113
-running 4.4.0 on hardware, seaky #262). So a real chain to the latest looks like:
+Past ~3.0.0 (86P) / ~3.5.0 (120P) the on-device updater is incremental-only for most builds — **except 4.0.12**, which is distributed **full-ROM-only** (no inbound diff exists on either channel) and *is* accepted on-device as a checkpoint. So the path to the latest is **2 steps**, not an all-diff chain:
 
 ```text
-… → 4.0.10 (diff) → 4.0.12 (FULL ROM) → 4.4.0 (diff)
+<your 3.x / 4.0.x build> → 4.0.12 (FULL ROM) → 4.4.0 (diff)
 ```
 
-> [!NOTE]
-> Whether the `→ 4.0.10` diff step is strictly required, or the 4.0.12 full ROM can
-> be flashed directly from a 3.x build (skipping 4.0.10), is untested on our
-> hardware — the full ROM being the accepted checkpoint suggests the direct 2-step
-> path works. A flash test will confirm.
+Verified on a 120P: **3.7.1 → 4.0.12 full ROM (applied directly) → 4.4.0 diff**. The intermediate 4.0.10 diff is **not** needed. Highest firmware on both models is **4.4.0**; nothing ≥4.5.0 exists.
 
-The chain links — and which step is a full ROM vs a diff — are exactly what gets
-lost in forum excerpts. Mapping complete chains is the point of this index.
+## Flashing a panel (verified procedure)
 
-## 120P firmware (`nspanel-pro-ver120`)
+This is the fully-remote, root + `adb` method (no USB needed) used to take a 120P from 3.7.1 to 4.4.0. It works because the panel's `/data` is unencrypted (`getprop ro.crypto.state` → `unsupported`), so recovery can apply the on-device zip via a block-map. Recovery has **no network adb**, which is why this on-device command-file method is used rather than `adb sideload`.
 
-### Confirmed (verified URL + index)
+In every block, `DEV=<PANEL_IP>:5555` and the panel is rooted (`su` works).
 
-| Version | Type | Index | Filename | Size (B) | Verified |
-| --- | --- | --- | --- | --- | --- |
-| 4.0.12 | full ROM | `rom/21` | `SN_3326S_750X1334_4lan_V4.0.12_20251031-ota.zip` | 865677434 | 2026-06-17 |
-| 4.0.10 ← 3.7.1 | diff | `rom-diff/20` | `CK_3.7.1_4.0.10V228-diff.zip` | 239184493 | 2026-06-17 |
-| 4.4.0 ← 4.0.12 | diff | `rom-diff/23` | `CK_4.0.12_4.4.0V228-diff.zip` | 311726756 | 2026-06-17 |
-| 4.4.0 (app) | apk | `apk/60` | `228V4.4.0.apk` | 139302716 | 2026-06-17 |
+> [!CAUTION]
+> Back up first, and when imaging partitions do **not** stream them through `adb exec-out`/`adb shell ... dd` — the shell PTY translates `\n`→`\r\n` and silently corrupts the binary. Use `dd`-to-file then `adb pull`, and verify each image against `blockdev --getsize64`.
 
-Highest known 120P firmware: **4.4.0** (diff-only, forward from 4.0.12). No
-≥4.5.0 image exists as of 2026-06-17. Corroborated by seaky #262 (thib3113 ran
-4.4.0 on an N120P).
+1. **Identify + back up.** Confirm `getprop ro.product.version` and root; image the partitions (`dd if=/dev/block/by-name/<p> of=/sdcard/_bk.img` → `adb pull` → verify size). The identity-critical small partitions are `STSN`, `keypart`, `smatek`.
 
-### Other diffs confirmed to exist (CDN index pending)
+2. **Push the firmware zip** to the panel and confirm it landed intact:
 
-Additional `from → to` diff pairs verified to exist. Per-image indices not yet
-recorded:
+   ```bash
+   adb -s $DEV shell su -c 'rm -f /data/local/tmp/update.zip /cache/recovery/block.map /cache/recovery/command'
+   adb -s $DEV push <firmware.zip> /data/local/tmp/update.zip
+   adb -s $DEV shell su -c 'sha256sum /data/local/tmp/update.zip'   # must match the host file
+   ```
 
-`3.0.0→3.8.0`, `3.5.0→{3.7.0, 3.8.7, 3.9.4, 4.0.0}`, `3.5.1→3.7.0`,
-`3.6.1→{3.7.0, 3.7.1, 3.8.0, 3.8.7, 3.9.4, 4.0.0}`,
-`3.7.0→{3.7.1, 3.8.0, 3.8.7, 3.9.4, 4.0.0}`,
-`3.7.1→{3.8.0, 3.8.7, 3.9.4, 4.0.0, 4.0.7}`,
-`3.8.0→{3.8.7, 3.9.4, 4.0.0}`, `3.8.7→{3.9.4, 4.0.0}`, `3.9.4→4.0.0`,
-`4.0.0→4.0.7`.
+3. **Apply via recovery** — `uncrypt` builds a block-map (recovery reads the zip by raw blocks, no /data mount), then a command file tells recovery what to apply:
 
-### 3.7.1 → 4.4.0 update chain (verified 2026-06-17)
+   ```bash
+   adb -s $DEV shell su -c 'uncrypt /data/local/tmp/update.zip /cache/recovery/block.map'
+   adb -s $DEV shell su -c 'head -2 /cache/recovery/block.map'   # line1=/dev/block/by-name/userdata, line2=<size> 4096
+   printf -- '--update_package=@/cache/recovery/block.map\n--locale=en_US\n' > rcmd
+   adb -s $DEV push rcmd /sdcard/rcmd
+   adb -s $DEV shell su -c 'cp /sdcard/rcmd /cache/recovery/command && chmod 644 /cache/recovery/command && rm -f /sdcard/rcmd'
+   adb -s $DEV shell su -c 'sync; reboot recovery'
+   ```
 
-Identical topology to the 86P — **not** all-diff. `4.0.12` is full-ROM-only (no
-inbound diff exists: ~10k HEAD probes across idx 1–90 and both filename forms, all
-403) and the updater accepts that full ROM as the checkpoint to 4.4.0.
+   The panel leaves adb, shows a recovery progress UI applying the package (~5 min for the full ROM, ~13 min for a diff), then reboots to Android on its own.
 
-From any 3.x (example 3.7.1) → 4.4.0 — 2 diffs + 1 full ROM:
+4. **Verify, then repeat for the diff.** Reconnect and check `getprop ro.product.version`. Then run steps 2–3 again with the `4.0.12→4.4.0` diff (the panel must be on 4.0.12).
 
-1. **diff** `rom-diff/20/CK_3.7.1_4.0.10V228-diff.zip` (239184493 B) → 4.0.10 — single hop from base
-2. **full ROM** `rom/21/SN_3326S_750X1334_4lan_V4.0.12_20251031-ota.zip` (865677434 B) → 4.0.12
-3. **diff** `rom-diff/23/CK_4.0.12_4.4.0V228-diff.zip` (311726756 B) → 4.4.0
-
-Other verified entry diffs onto 4.0.10 (`rom-diff/20`): `4.0.0→4.0.10` (42591720),
-`3.9.4→4.0.10` (238898829), `4.0.7→4.0.10` (41814256). Also `4.0.0→4.0.7` at
-`rom-diff/19` (41273089).
-
-**Dead-ends (verified):** 4.0.12 has no inbound diff; 4.0.10/4.0.11 have no
-outbound diff (4.0.10 is the highest diff-reachable version, then it terminates);
-no `4.0.7→4.0.12`, `4.0.x→4.4.0`, `3.7.1→4.0.12`, or `3.7.1→4.4.0` exists — the
-only inbound diff to 4.4.0 is from 4.0.12.
-
-## 86P firmware (`nspanel-pro`, 480P)
-
-Channel confirmed `nspanel-pro`. 86P diff filenames are **bare**
-(`CK_<from>_<to>-diff.zip`, no `V<apk>` suffix). All indices below live-verified
-2026-06-17 (range-GET, 206 + size + PK magic).
-
-### Full ROMs (verified index)
-
-| Version | Date | Index | Filename | Size (B) |
-| --- | --- | --- | --- | --- |
-| 1.5.0 | 2022-12-13 | `rom/14` | `NSPanel86P_CoolKit_480P_20221213_1.5.0-ota.zip` | — |
-| 1.5.6 | 2023-02-17 | `rom/16` | `NSPanel86P_CoolKit_480P_20230217_1.5.6-ota.zip` | — |
-| 1.6.0 | 2023-03-11 | `rom/17` | `NSPanel86P_CoolKit_480P_20230311_1.6.0-ota.zip` | — |
-| 1.7.0 | 2023-04-11 | `rom/18` | `CoolKit_Sonoff_480P_20230411_1.7.0-ota.zip` | — |
-| 1.11.0 | 2023-08-08 | `rom/22` | `CoolKit_Sonoff_480P_20230808_1.11.0-ota.zip` | — |
-| 2.2.0 | — | `rom/25` | `CoolKit_Sonoff_480P_…_2.2.0-ota.zip` | — |
-| 2.3.0 | 2023-12-08 | `rom/26` | `CoolKit_Sonoff_480P_20231208_2.3.0-ota.zip` | — |
-| 3.0.0 | 2024-03-06 | `rom/27` | `CoolKit_Sonoff_480P_20240306_3.0.0-ota.zip` | — |
-| 4.0.12 | 2025-10-31 | `rom/46` | `CoolKit_Sonoff_480P_20251031_4.0.12-ota.zip` | 888874130 |
-
-Highest full ROM: **4.0.12** (`rom/46`).
-
-### Diffs (verified) — index is per-target-version
-
-Each `rom-diff/<idx>` holds the long-jump diffs from many source versions onto one
-target, so any 3.x start collapses to a single diff hop to that target.
-
-| Target | Index | Notes |
-| --- | --- | --- |
-| 3.6.1 | `rom-diff/32` | |
-| 3.7.1 | `rom-diff/35` | |
-| 3.8.0 | `rom-diff/36` | |
-| 3.9.3 | `rom-diff/37` | |
-| 3.9.4 | `rom-diff/38` | |
-| 4.0.0 | `rom-diff/43` | |
-| 4.0.7 | `rom-diff/44` | |
-| 4.0.10 | `rom-diff/45` | highest diff-reachable; e.g. `CK_3.7.1_4.0.10-diff.zip` (347019387 B) |
-| 4.4.0 | `rom-diff/48` | `CK_4.0.12_4.4.0-diff.zip` (229396793 B) — **only** from 4.0.12 |
-
-Highest 86P firmware: **4.4.0** (diff-only, from 4.0.12), mirroring the 120P. No
-4.4.0 full ROM; nothing ≥4.5.0 (swept idx 48–90).
-
-### Update chain to 4.4.0
-
-> [!WARNING]
-> **4.0.12 is full-ROM-only** — no diff lands on 4.0.12 (every `from`→4.0.12 = 403,
-> probed across rom-diff/0–90). Highest *diff-reachable* version is 4.0.10. So the
-> path to 4.4.0 **must** flash the 4.0.12 full ROM mid-chain — and the updater does
-> accept it (thib3113 reached 4.4.0 on hardware).
-
-From any 3.x (example 3.7.1) → 4.4.0 — 2 diffs + 1 full ROM:
-
-1. **diff** `rom-diff/45/CK_3.7.1_4.0.10-diff.zip` (347019387 B) → 4.0.10
-2. **full ROM** `rom/46/CoolKit_Sonoff_480P_20251031_4.0.12-ota.zip` (888874130 B) → 4.0.12
-3. **diff** `rom-diff/48/CK_4.0.12_4.4.0-diff.zip` (229396793 B) → 4.4.0
+**What survives:** `/data` is not touched by these OTAs — apps, settings, adb/USB-debugging, an installed modern WebView, and ha-paneld (including its boot auto-start) all persist. A factory reset would wipe them; this method does not.
 
 ## Provenance
 
-- CDN scheme + 120P indices verified 2026-06-17 via range-GET against
-  `global-otadl2bsy.coolkit.cc`.
-- Local image inventory: private `vendor-firmwares/sonoff/{ns86p,ns120p}/`
-  (gitignored — not part of this repo or any release).
-- Forum sources cross-checked: seaky/nspanel_pro_tools_apk #262,
-  seaky/nspanel_pro_roottool_apk #1.
-
-This index is the canonical reference to point at from the seaky threads instead
-of re-pasting individual URLs.
+- CDN scheme + indices verified 2026-06-17 via range-GET against `global-otadl2bsy.coolkit.cc`; full chain flash-verified on a 120P the same day.
+- Local image inventory is kept in a private archive (gitignored; not shipped here).

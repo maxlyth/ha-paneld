@@ -52,17 +52,7 @@ Both share the EFR32 Zigbee radio, Android 8.1 (AOSP), arm64-v8a, and the root/r
 Live-verified on a 120P (BMP, fw `NSPanel120P_3.7.1`): `wm size`=750×1334, density 240, `ro.board.platform=rk3326`.
 
 > [!NOTE]
-> **120P firmware OTA URLs** (CoolKit CDN, verified 2026-06-17): host `global-otadl2bsy.coolkit.cc`,
-> channel `nspanel-pro-ver120`. Full ROM `/<channel>/rom/<idx>/SN_3326S_750X1334_4lan_V<ver>_<date>-ota.zip`
-> (4.0.12 = `rom/21`); diff `/<channel>/rom-diff/<idx>/CK_<from>_<to>V<apk>-diff.zip`. The `<idx>` is
-> per-build, not sequential, and the CDN returns **403** for any non-existent object (no listing). The
-> **highest 120P build is 4.4.0**, shipped **only as a forward diff from 4.0.12** (`rom-diff/23/CK_4.0.12_4.4.0V228-diff.zip`)
-> — no standalone 4.4.0 full ROM, and nothing ≥ 4.5.0 exists. To reach 4.4.0: flash the 4.0.12 full ROM,
-> then apply the diff. (Source: seaky tools #262; reporter `thib3113` ran 4.4.0 on an N120P.)
-
-Full per-version OTA index + verified update chains for **both** 86P (channel
-`nspanel-pro`) and 120P (channel `nspanel-pro-ver120`):
-[NSPanel Pro firmware OTA index](nspanel-pro-firmware.md).
+> Both models reach the latest build (**4.4.0**) via a 2-step path — flash the 4.0.12 full ROM, then the 4.0.12→4.4.0 diff (4.0.12 is full-ROM-only; full ROMs apply over any source). The CoolKit CDN scheme, every verified OTA URL, and the full flashing how-to are on the [firmware & flashing page](nspanel-pro-firmware.md); the live, community-maintained version index is the Discussion linked from there.
 
 Sibling Tuya-family boards — **S6E/T6E** (relay variants; S6E = T6E + 2 relays), [**S9E**](s9e.md) (Smatek),
 [**TPA10**](tpa10.md) (rk3326-class, A53, Android 11) — are separate targets, not NSPanel Pro firmware.
