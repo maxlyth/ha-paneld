@@ -80,6 +80,8 @@ class PaneldService : Service() {
     private lateinit var adb: AdbController
     private lateinit var profile: DeviceProfile
     private var configUrl: String? = null
+    // One-time-start guard for onStartCommand (see there for why). Reset in onDestroy.
+    @Volatile private var started = false
 
     override fun onCreate() {
         super.onCreate()
@@ -252,6 +254,12 @@ class PaneldService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForegroundCompat()
+        // Start subsystems once. Android re-delivers onStartCommand on every startForegroundService()
+        // re-issue and on START_STICKY re-create; re-running this block would call server.start() again,
+        // binding a second Ktor server on :8888 -> BindException crashes the process (and would also
+        // double-start mqtt/mdns/sensors). started is reset in onDestroy so a genuine restart re-inits.
+        if (started) return START_STICKY
+        started = true
         scope.launch {
             io.github.maxlyth.hapaneld.http.PerfReader.dashboardPkg = dashboardTarget()
             io.github.maxlyth.hapaneld.http.PerfReader.enabled = config.instrumentationEnabled
@@ -304,6 +312,7 @@ class PaneldService : Service() {
     }
 
     override fun onDestroy() {
+        started = false
         runCatching { sensors.stop() }
         runCatching { server.stop() }
         runCatching { mdns.stop() }
