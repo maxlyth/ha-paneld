@@ -364,12 +364,17 @@ Android 11), Electron WF1589T (rk3576, Android 14).
 - **Snappier panel controls** — root-backed actions (navbar Back / Launcher / Recents, screen on/off,
   relays, LEDs) now run through a single long-lived `su` shell instead of forking `su` per call, cutting
   ~200–300 ms of latency off each. Back/Recents feel instant.
-- **Navbar fixes** — the *Swipe reveal* bar no longer flashes back for a frame after sliding away and
-  lingers a little longer before hiding; **Volume ±** now steps reliably and always shows the system
-  slider on every panel (a rounding bug could silently no-op on panels with few volume steps).
+- **Navbar fixes** — *Swipe reveal*: the bar no longer flashes back after sliding away, lingers a little
+  longer before hiding, and a swipe-up to reveal it no longer scrolls the dashboard behind it. **Volume ±**
+  now steps reliably and always shows the system slider on every panel (a rounding bug could silently
+  no-op on panels with few volume steps).
+- **Live screenshot** — the info page shows a live panel screenshot (click to open full size), and the
+  `/screenshot.png` endpoint drops straight into a Home Assistant camera / Picture card. Root, LAN-only.
 - **Smatek S9E proximity** — `binary_sensor.<panel>_proximity` and wake-on-wave now work on the S9E,
   read from the raw proximity GPIO over root (its Android `SensorManager` proximity registers but never
   reports). See [docs/hardware/s9e.md](docs/hardware/s9e.md).
+- Info-page **card headers are demarcated** (groundwork for drag-reorder + collapsible cards), and there's
+  now an **[F-Droid install path](docs/fdroid.md)** for on-device install + auto-update.
 
 <details>
 <summary>Earlier releases (0.8.2 → 0.4.x) — full history in <a href="CHANGELOG.md">CHANGELOG.md</a></summary>
