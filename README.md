@@ -531,6 +531,15 @@ Carried from 0.4.x:
   ha-paneld isn't managing Zigbee. Detect it (zgateway crash-loop / high CPU) and offer to stop or take
   over the gateway; also make ha-paneld's existing vendor-native stop `awk`-free (awk is absent on some
   panels, so the current stop can silently fail).
+- **A mains panel must never become unresponsive** — only the backlight/screen should power down for
+  efficiency; the SoC, network and touch must stay live at all times. ha-paneld should hold a
+  **partial wakelock** (CPU + network up, screen free to sleep) so a panel can never suspend into the
+  unreachable "zombie" state — energy-efficient *and* always reachable. It should also **detect and warn**
+  about settings that can make a panel unresponsive — native screen-off → SoC-suspend,
+  `stay_on_while_plugged_in=0`, aggressive Doze, a mis-reported power source — surfacing them with a
+  one-tap fix in the **HTTP info page, the on-panel config UI, and the installer**. Panels ha-paneld lands
+  on have usually run other software first, so their power/settings state **can't be assumed — check it,
+  don't trust it**.
 - **DLNA renderer** *(under consideration — gauging interest)* — advertise as a UPnP/DLNA media renderer
   so HA auto-discovers a `media_player`. Caveat: it would appear as a **separate** HA device, not part of
   the MQTT-discovery device that holds the panel's controls/sensors (MQTT discovery has no media_player
