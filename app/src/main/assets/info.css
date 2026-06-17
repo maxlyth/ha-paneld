@@ -21,7 +21,7 @@ h2 small{text-transform:none;letter-spacing:0;color:#8a8;font-weight:400}
    a live card changing height while scrolled out of view can't reflow the page and shove the viewport.
    SCOPED to the single-column regime only (<858px = one ~400px column): in multi-column it would feed
    placeholder heights to the browser's column balancer and unbalance the layout — the bug this replaces. */
-@media (max-width:857px){.card{content-visibility:auto;contain-intrinsic-size:auto 300px}}
+@media (max-width:857px){.wrap{padding:8px}.card{margin-bottom:10px;content-visibility:auto;contain-intrinsic-size:auto 300px}}
 table{border-collapse:collapse;width:100%;table-layout:fixed}
 th,td{text-align:left;padding:6px 8px;border-bottom:1px solid #2a2a2a;vertical-align:top;font-size:.9rem;overflow-wrap:anywhere;word-break:break-word}
 tr:last-child td,tr:last-child th{border-bottom:0}   /* dividers only BETWEEN rows, never after the last */
@@ -62,3 +62,14 @@ body.revealed .secret,.secret:focus,.secret.shown{filter:none;cursor:auto}
 input.secret{filter:none;color:transparent;text-shadow:0 0 6px #eee}
 body.revealed input.secret,input.secret:focus,input.secret.shown{color:#eee;text-shadow:none}
 .diag{cursor:pointer;border-bottom:1px dotted #9af;color:#9cf}   /* click to toggle inches <-> cm */
+/* Screenshot card: reserve the panel's aspect ratio (set inline from its resolution) so the image arriving
+   doesn't reflow the page. A shimmer animates while loading; it stops + shows a glyph if the capture fails. */
+.shot{position:relative;display:block;width:100%;border-radius:6px;overflow:hidden;background:#111}
+.shot img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;display:block;opacity:0;transition:opacity .2s}
+.shot.loaded img{opacity:1}
+.shot::after{content:"";position:absolute;inset:0;background:linear-gradient(110deg,#141414 30%,#1f1f1f 50%,#141414 70%);background-size:220% 100%;animation:shot-sheen 1.2s linear infinite}
+.shot.loaded::after{display:none}                          /* image arrived — drop the shimmer */
+.shot.failed::after{animation:none;background:#141414}      /* capture failed — stop animating */
+.shot.failed::before{content:"⚠ screenshot unavailable";position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#a88;font-size:.85rem}
+@keyframes shot-sheen{0%{background-position:120% 0}100%{background-position:-120% 0}}
+@media (prefers-reduced-motion:reduce){.shot::after{animation:none}}

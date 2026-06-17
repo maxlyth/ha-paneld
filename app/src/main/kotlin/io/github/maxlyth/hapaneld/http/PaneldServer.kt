@@ -370,6 +370,15 @@ class PaneldServer(
         stopServer = null
     }
 
+    // The panel's physical resolution as a CSS aspect-ratio (e.g. "750/1334") so the Screenshot card can
+    // reserve the exact box and not reflow when the image arrives. Sane portrait fallback if unavailable.
+    private fun screenAspectRatio(): String = try {
+        val wm = appContext.getSystemService(Context.WINDOW_SERVICE) as android.view.WindowManager
+        val dm = android.util.DisplayMetrics()
+        @Suppress("DEPRECATION") wm.defaultDisplay.getRealMetrics(dm)
+        if (dm.widthPixels > 0 && dm.heightPixels > 0) "${dm.widthPixels}/${dm.heightPixels}" else "3/4"
+    } catch (e: Throwable) { "3/4" }
+
     private fun infoHtml(): String {
         val pid = esc(config.panelId)
         // Banner reflects the LIVE MQTT state (from the info map), not just whether a broker string is
@@ -452,8 +461,8 @@ $setupBanner
 </div>
 <p class="note">For panels with no physical nav bar. Back/Recents use the accessibility service; Launcher/Reboot need root — actions whose capability is missing are disabled (hover for why).</p></div>
 ${if (rootOk) """<div class="card"><h2>Screenshot <small>· live panel</small></h2>
-<a href="/screenshot.png" target="_blank" rel="noopener" title="Open full size in a new window"><img src="/screenshot.png" alt="panel screenshot" style="width:100%;height:auto;display:block;border-radius:6px;background:#111" onerror="this.closest('.card').style.display='none'"></a>
-<p class="note"><a href="#" onclick="this.closest('.card').querySelector('img').src='/screenshot.png?t='+Date.now();return false" style="color:#9cf">↻ Refresh</a> · click the image to open it full size. Captured on demand via root (`screencap`); local-network only.</p></div>""" else ""}
+<a class="shot" href="/screenshot.png" target="_blank" rel="noopener" title="Open full size in a new window" style="aspect-ratio:${screenAspectRatio()}"><img src="/screenshot.png" alt="panel screenshot" onload="this.parentElement.classList.add('loaded')" onerror="this.parentElement.classList.add('failed')"></a>
+<p class="note"><a href="#" onclick="var s=this.closest('.card').querySelector('.shot');s.classList.remove('loaded','failed');s.querySelector('img').src='/screenshot.png?t='+Date.now();return false" style="color:#9cf">↻ Refresh</a> · click the image to open it full size. Captured on demand via root (`screencap`); local-network only.</p></div>""" else ""}
 ${factCard("Panel information", infoKeys)}
 ${factCard("Networking", netKeys)}
 ${factCard("ha-paneld profile", profKeys, """<p class="note">Values declared by this panel's <a href="$REPO_URL/blob/main/docs/architecture/device-profiles.md" target="_blank" rel="noopener" style="color:#9cf">device profile</a> — if one looks wrong, that's where to correct it.</p>""")}
@@ -483,7 +492,7 @@ report of this panel's hardware, firmware, SELinux, su and node probes for bug r
 <canvas id="proxgauge" width="600" height="46" class="gradedonly" style="height:46px"></canvas>
 <div style="font-size:.85rem;margin-bottom:8px">raw <b id="proxraw" style="color:#4a9eff">–</b>
  <span id="proxthwrap" class="gradedonly">· threshold <b id="proxth">–</b></span> · state <b id="proxnear">–</b></div>
-<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;font-size:.85rem;margin-bottom:8px">
+<div class="gradedonly" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;font-size:.85rem;margin-bottom:8px">
  <span style="color:#9af">Capture:</span>
  <button type="button" class="pbtn" onclick="proxCap('near')">Near</button>
  <button type="button" class="pbtn" onclick="proxCap('far')">Far</button>

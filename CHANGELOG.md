@@ -27,6 +27,14 @@ content appear. Earlier releases predate this convention and keep their flat lis
 - **No navbar flash on auto-hide** — after the bar slid off the bottom edge it could flash back into view for a single frame before disappearing; it now hides cleanly.
 - **Swipe-reveal no longer scrolls the dashboard** — a swipe-up to reveal the navbar could also scroll/displace the dashboard behind it (blank space at the bottom, top cropped). The reveal strip now consumes the whole gesture (it was letting un-consumed move events fall through), and its capture zone is taller so a fast off-screen swipe lands on it reliably.
 - **Opening the config UI no longer crashes the daemon** — the foreground service re-ran its full startup on every `onStartCommand`, so anything that re-issued `startForegroundService` (e.g. opening the app) started a *second* HTTP server, which threw `BindException: Address already in use` on `:8888` and killed the whole process (taking down MQTT, sensors and the navbar with it). Subsystem startup is now one-time per service instance.
+- **Screenshot card no longer reflows the info page** — the live screenshot reserves the panel's aspect-ratio box up front (a loading shimmer fills it, and stops with a glyph if the capture fails), so the image arriving no longer shoves the rest of the page down.
+- **Proximity no longer stuck "near" on binary sensors** — the uncalibrated binary reading assumed the far value equals the sensor's max range, but some panels report far=1 with max=9 so it read NEAR forever; near is now `raw < 0.5` (0 = near).
+- **Binary proximity card hides its no-op controls** — on a binary sensor there is nothing to calibrate, so the Capture / Sensitivity / Reset row is hidden and the card just shows the live near/far state and a one-line note.
+- **Screen brightness reflects (and drives) the real backlight** — ha-paneld now reads and writes the hardware backlight node directly, not just the Android `SCREEN_BRIGHTNESS` setting, so HA shows the actual backlight level and the slider moves it on panels whose firmware idle-dims the backlight behind the OS.
+- **Launcher button opens an actual launcher** — it no longer lands on the Home Assistant app (which registers as a home screen); it prefers the device's real default launcher and skips dashboard/kiosk home apps.
+- **Wake-on-wave updates the screen entity in Home Assistant** — a proximity wake now publishes the ON state, so `light.<panel>_screen` no longer stays OFF after the screen wakes (reported in GitHub #6).
+- **Zigbee no longer reported as "none" on 4.x firmware** — the gateway is detected by its `zgateway` binary, covering the 4.x `/vendor/bin/siliconlabs_host/run.sh` layout the old marker-file check missed.
+- **Narrower gutters in a single-column layout** — on a one-column display the info page uses small page + inter-card margins instead of the desktop spacing, reclaiming width.
 
 ### Docs
 

@@ -214,6 +214,10 @@ class SensorReporter(context: Context, private val config: Config) {
         if (proximityGpio != null) return raw >= 0.5f   // clean binary GPIO: 1 = near, 0 = far (no calibration)
         val t = config.proximityThreshold
         if (!config.proximityCalibrated || t.isNaN()) {
+            // Binary sensor (Android convention: 0 = near, any positive = far): the "far" reading is NOT
+            // necessarily maximumRange — e.g. NSPanel 4.x reports far=1 with maximumRange=9, so the old
+            // `raw < maximumRange` was always-near (0<9 AND 1<9). Treat ~0 as near instead.
+            if (!proximityGraded()) return raw < 0.5f
             return raw < (proximitySensor?.maximumRange ?: Float.MAX_VALUE)
         }
         val m = config.proximityMargin

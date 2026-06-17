@@ -314,6 +314,13 @@ class MqttBridge(
         }
     }
 
+    /** Publish screen=ON to HA after a LOCAL wake (e.g. wake-on-wave), so `light.<panel>_screen` tracks
+     *  reality instead of staying OFF. No-op if the broker isn't connected yet. */
+    fun publishScreenOn() {
+        val c = client ?: return
+        publish(c, stateScreen, """{"state":"ON","brightness":${brightness.getBrightness().coerceAtLeast(1)}}""", retain = true)
+    }
+
     private fun handleScreen(payload: String) {
         val json = JSONObject(payload)
         val on = json.optString("state", "ON").equals("ON", ignoreCase = true)

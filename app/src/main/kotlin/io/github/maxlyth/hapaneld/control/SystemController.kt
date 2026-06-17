@@ -67,14 +67,25 @@ class SystemController(private val context: Context) {
     fun launchLauncher(configuredPkg: String) {
         val pm = context.packageManager
         val home = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+        val all = pm.queryIntentActivities(home, 0)
         val default = pm.resolveActivity(home, 0)?.activityInfo?.packageName
-        val ri = pm.queryIntentActivities(home, 0).firstOrNull {
-            val p = it.activityInfo.packageName
-            if (configuredPkg.isNotBlank()) p == configuredPkg
-            else p != default && p != context.packageName && p != "com.android.settings"
+        // Apps that register CATEGORY_HOME but are NOT an app-drawer launcher we'd want to land on:
+        // ourselves, Settings, and the HA Companion (a kiosk dashboard, which registers as HOME).
+        val notALauncher = { p: String ->
+            p == context.packageName || p == "com.android.settings" ||
+                p == "io.homeassistant.companion.android" || p == "io.homeassistant.companion.android.minimal"
+        }
+        val ri = when {
+            configuredPkg.isNotBlank() -> all.firstOrNull { it.activityInfo.packageName == configuredPkg }
+            // Prefer the actual default home when it's a real launcher (e.g. the vendor launcher) — the old
+            // code always skipped the default and grabbed the first alternate, which on kiosk panels is the
+            // HA Companion (registers as HOME) → opened the dashboard instead of a launcher (the bug).
+            default != null && !notALauncher(default) -> all.firstOrNull { it.activityInfo.packageName == default }
+            // Default IS a kiosk/dashboard (or us): fall back to any other real launcher.
+            else -> all.firstOrNull { !notALauncher(it.activityInfo.packageName) && it.activityInfo.packageName != default }
         }
         if (ri == null) {
-            Log.w(TAG, "launcher: no alternate launcher found (set launcher_package?)")
+            Log.w(TAG, "launcher: no suitable launcher found (set launcher_package?)")
             return
         }
         val comp = "${ri.activityInfo.packageName}/${ri.activityInfo.name}"

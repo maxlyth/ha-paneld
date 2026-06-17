@@ -154,7 +154,7 @@ function proxApply(d){
  document.querySelectorAll('.psen').forEach(function(b){b.className='pbtn psen gradedonly'+(b.dataset.s===d.sensitivity?' on':'');});
  var hint=document.getElementById('proxhint');
  if(d.indistinct)hint.textContent='⚠ near and far captures are too close — recapture with a clearer gap.';
- else if(!d.graded)hint.textContent='Binary near/far sensor — nothing to tune. Press Capture near with your hand at the panel, then Capture far, to set which reading means "near".';
+ else if(!d.graded)hint.textContent='Binary sensor — near/far is reported directly; no tuning needed.';
  else hint.textContent=d.calibrated?'':'Hold your hand at the panel and press Capture near, then move away and press Capture far.';
 }
 async function prox(){

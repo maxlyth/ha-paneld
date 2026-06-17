@@ -276,8 +276,9 @@ class PaneldService : Service() {
                 onProximity = { near ->
                     mqtt.publishProximity(near)
                     // Wake-on-wave: local, instant, wake-only. onProximity fires only on far->near
-                    // transitions (natural debounce); sleep stays HA's job.
-                    if (near && config.wakeOnWave) screen.wake()
+                    // transitions (natural debounce); sleep stays HA's job. Publish the ON state so the
+                    // HA screen entity tracks the local wake (GitHub #6 — was staying OFF in HA).
+                    if (near && config.wakeOnWave) { screen.wake(); mqtt.publishScreenOn() }
                 },
                 onTemperature = { c -> mqtt.publishTemperature(c) },
                 onHumidity = { h -> mqtt.publishHumidity(h) },

@@ -32,7 +32,11 @@ class ZigbeeController(profile: DeviceProfile = DeviceProfile.detect()) {
     /** True when this panel has a drivable Zigbee gateway in EITHER layout, or one already running. */
     fun present(): Boolean {
         val dir = dir ?: return false
-        return managed() || fileExists("$dir/guard_process.sh") || running()
+        // The `zgateway` binary is the layout-agnostic presence marker. NSPPT installs add
+        // run_guard_process.sh (managed); old vendor firmware has guard_process.sh; 4.x firmware ships
+        // /vendor/bin/siliconlabs_host with run.sh + the zgateway binary (none of the guard markers) —
+        // so check the binary itself, else 4.x panels report "none" despite having a working gateway.
+        return managed() || fileExists("$dir/guard_process.sh") || fileExists("$dir/zgateway") || running()
     }
 
     /**
