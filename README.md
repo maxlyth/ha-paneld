@@ -509,8 +509,14 @@ Carried from 0.4.x:
 
 ### Planned
 
-- **Proximity-calibration capture UX** — clearer near/far capture steps to finish the calibration-card
-  rework (the gauge auto-ranging shipped in 0.8.0).
+- **Proximity-calibration capture UX** — the capture flow is still unintuitive and **fails quietly**.
+  Make it a clear guided near→far flow with a live raw readout and an explicit **calibrated ✓ /
+  incomplete ⚠** state. Two concrete traps to fix: capturing only *near* leaves it `calibrated:false`
+  with no visible cue (the user thinks they've set it but haven't); and **wake-on-wave silently does
+  nothing until calibration is complete** — the uncalibrated fallback (`raw < maxRange`) doesn't fit the
+  NSPanel Pro's graded sensor (raw ~50–100, range 9 cm), so a wave never registers as "near". Surface
+  "not calibrated → wake-on-wave inactive" prominently, and/or give the uncalibrated fallback a sensible
+  default for graded sensors. (Gauge auto-ranging shipped in 0.8.0.)
 - **More performance tooling** — deeper on-device instrumentation to measure, diagnose and tune
   dashboard performance on weak panels.
 - **Built-in relay control beyond the S9E** — the same `switch.<panel>_relay*` model on other panels
