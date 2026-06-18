@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -55,7 +57,7 @@ android {
             storeType = "PKCS12"
         }
         if (hasReleaseSigning) {
-            val props = java.util.Properties().apply { keystoreProps.inputStream().use { load(it) } }
+            val props = Properties().apply { keystoreProps.inputStream().use { load(it) } }
             create("release") {
                 storeFile = rootProject.file(props.getProperty("storeFile"))
                 storePassword = props.getProperty("storePassword")
