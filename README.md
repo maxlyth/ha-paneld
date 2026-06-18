@@ -535,6 +535,7 @@ Carried from 0.4.x:
   at **fixed times or repeating intervals**, configured from the HTTP UI or REST API. Runs on-device, so
   schedules keep working through Home Assistant or network outages (unlike an HA automation). Parity with
   the vendor tools' scheduled screen-on / reboot.
+- **Consistent boot/startup-chime silencing** — the loud chime a panel plays on boot (the Android boot-animation sound, plus the HA Companion app's startup notification) makes **scheduled reboots unusable in quiet rooms** (bedrooms, nurseries). Silence it the same way on **every** device via one toggle, applying the right per-platform lever from the device profile. On Android 8 / PX30 the working lever is `settings put system volume_ring_speaker 0` — it persists across reboots and silences both the boot-animation chime **and** the Companion `DisabledLocationWarning` notification (STREAM_NOTIFICATION + STREAM_RING share that key); Android 11/14 panels (TPA10, rk3576) use a different audio key map and need their own lever — precisely the inconsistency a profile-driven feature should hide. ha-paneld already has `WRITE_SETTINGS`/root and the per-device profile to do this reliably. Pairs with the on-device scheduler so a nightly reboot is genuinely silent.
 - **App watchdog** — optionally relaunch the dashboard app (HA Companion / browser) if it dies or goes
   blank, so a panel self-heals without intervention.
 - **HTTP UI redesign (information architecture)** — the single-page info/control surface is getting
