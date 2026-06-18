@@ -34,6 +34,15 @@ android {
         }
     }
 
+    // Optional local release signing — drop a gitignored `keystore.properties` (storeFile, storePassword,
+    // keyAlias, keyPassword) in the repo root to sign release builds with your real key on a laptop /
+    // devcontainer, so `assembleRelease` installs in place over the public releases (no uninstall dance).
+    // CI has no such file: it builds an unsigned release APK and post-signs with apksigner from Actions
+    // secrets, so this is a no-op there. NEVER commit keystore.properties or the .jks (both gitignored).
+    // See docs/local-builds.md.
+    val keystoreProps = rootProject.file("keystore.properties")
+    val hasReleaseSigning = keystoreProps.exists()
+
     signingConfigs {
         // Committed debug keystore so every CI build is signed identically — lets `install -r`
         // update a panel in place without uninstalling (which a device-admin install otherwise
@@ -45,6 +54,15 @@ android {
             keyPassword = "android"
             storeType = "PKCS12"
         }
+        if (hasReleaseSigning) {
+            val props = java.util.Properties().apply { keystoreProps.inputStream().use { load(it) } }
+            create("release") {
+                storeFile = rootProject.file(props.getProperty("storeFile"))
+                storePassword = props.getProperty("storePassword")
+                keyAlias = props.getProperty("keyAlias")
+                keyPassword = props.getProperty("keyPassword")
+            }
+        }
     }
 
     buildFeatures {
@@ -53,6 +71,7 @@ android {
 
     buildTypes {
         release {
+            if (hasReleaseSigning) signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),

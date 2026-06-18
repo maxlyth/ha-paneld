@@ -1,0 +1,20 @@
+{
+  "name": "ha-paneld Android build",
+  "build": { "dockerfile": "Dockerfile" },
+  "remoteEnv": {
+    "ANDROID_HOME": "/opt/android-sdk",
+    "ANDROID_SDK_ROOT": "/opt/android-sdk"
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "vscjava.vscode-java-pack",
+        "fwcd.kotlin",
+        "vscjava.vscode-gradle"
+      ]
+    }
+  },
+  // Warms the Gradle wrapper so the first build is faster; harmless offline.
+  // adb is on PATH — `adb connect <panel-ip>:5555 && adb install -r <apk>` reaches panels over the network.
+  "postCreateCommand": "./gradlew --version || true"
+}
