@@ -563,6 +563,15 @@ Carried from 0.4.x:
   the MQTT-discovery device that holds the panel's controls/sensors (MQTT discovery has no media_player
   platform); the shipped [TTS recipe](docs/tts.md) already covers the main announce use case.
 
+### Stretch goals
+
+Larger directions that aren't on the v1.0 path but fit a panel agent well — and overlap with what some other products do. Listed to gauge interest and to shape the architecture early. All four lean on the same "panel as a first-class local device" primitives (mic/speaker/camera, root `input`, the HTTP surface) ha-paneld is already building.
+
+1. **Camera + microphone stream (RTSP / WebRTC), importable as an HA camera** — expose the panel's front camera and mic as an RTSP or WebRTC stream that Home Assistant ingests via its generic-camera / go2rtc / WebRTC stack, turning a wall panel into a room camera or video intercom. Needs `CAMERA` + `RECORD_AUDIO` — opt-in, privacy-gated, with an on-panel recording indicator. Overlaps with Fully Kiosk's camera/motion feature and dedicated room cameras.
+2. **Micro wake word → HA conversation agents** — on-device wake-word detection (microWakeWord / openWakeWord) so the panel acts as a voice satellite: detect the wake word locally, then stream audio to a Home Assistant Assist pipeline / conversation agent. Overlaps with HA Voice PE, ESPHome voice satellites and Atom Echo — but on hardware already mounted on the wall.
+3. **Push-to-talk (PTT) intercom** — press-and-hold on one panel to talk live on another room's panel over the LAN: low-latency, direct panel-to-panel, no cloud. Reuses the mic-capture + speaker-playback primitives. Overlaps with Alexa/Sonos drop-in, but local-only and across mixed hardware.
+4. **Remote control via the web UI** — drive a panel from the `:8888` UI (or HA) without physical access. The live screenshot already exists; add remote tap / swipe / navigation injection (root `input`) for true remote operation and support. Overlaps with Fully Kiosk remote admin and scrcpy/VNC, but integrated and permissionless where root is available.
+
 ## Documentation
 
 - **[docs/hardware/](docs/hardware/)** — reverse-engineered hardware references for the supported
