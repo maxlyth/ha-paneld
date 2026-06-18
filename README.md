@@ -521,6 +521,7 @@ Carried from 0.4.x:
   default for graded sensors. (Gauge auto-ranging shipped in 0.8.0.)
 - **More performance tooling** — deeper on-device instrumentation to measure, diagnose and tune
   dashboard performance on weak panels.
+- **Central log shipping** — optionally forward panel logs to a central logging server for fleet-wide debugging: the Android system log (`logcat` / ha-paneld's own service log) **and** the dashboard **browser console** (WebView JS console + errors, captured over the existing CDP path). Avoids per-panel `adb logcat` to chase a remote issue. Configurable sink (syslog / HTTP / Loki-style) and **opt-in** — logs can carry tokens and URLs, so redaction + LAN-only by default.
 - **Built-in relay control beyond the S9E** — the same `switch.<panel>_relay*` model on other panels
   with onboard relays, once each one's control path (GPIO / vendor node) is known.
 - Daemon boot-persistence on su-only (PX30) panels, if true-off is wanted without relying on `su`
