@@ -3,6 +3,7 @@ package io.github.maxlyth.hapaneld.control
 import android.content.Context
 import android.provider.Settings
 import android.util.Log
+import io.github.maxlyth.hapaneld.Config
 
 /**
  * Screen brightness via the standard `Settings.System` API — no vendor lib. Requires the
@@ -70,7 +71,34 @@ class BrightnessController(private val context: Context) {
         }
     }
 
+    /**
+     * Prevent the vendor firmware's idle backlight dim. Some panel firmwares dim the hardware backlight at
+     * the `SCREEN_OFF_TIMEOUT` mark even while the OS keeps the screen on (stay-on-while-plugged), so the
+     * panel goes very dim after the timeout despite `SCREEN_BRIGHTNESS` at max. Raising the timeout defers
+     * that indefinitely. No root needed — `WRITE_SETTINGS` only.
+     *
+     * On (default, for mains-powered panels): the prior timeout is saved once, then set to "never". Off:
+     * the saved firmware default is restored (60 s if none was captured).
+     */
+    fun applyPreventIdleDim(on: Boolean, config: Config) {
+        try {
+            val cur = Settings.System.getInt(context.contentResolver, Settings.System.SCREEN_OFF_TIMEOUT, -1)
+            if (on) {
+                if (cur in 1 until NEVER) config.savedScreenOffTimeout = cur
+                Settings.System.putInt(context.contentResolver, Settings.System.SCREEN_OFF_TIMEOUT, NEVER)
+                Log.d(TAG, "prevent idle dim ON: screen_off_timeout $cur -> never")
+            } else {
+                val restore = config.savedScreenOffTimeout.takeIf { it > 0 } ?: 60000
+                Settings.System.putInt(context.contentResolver, Settings.System.SCREEN_OFF_TIMEOUT, restore)
+                Log.d(TAG, "prevent idle dim OFF: screen_off_timeout -> $restore")
+            }
+        } catch (e: SecurityException) {
+            Log.w(TAG, "WRITE_SETTINGS not granted — cannot set screen_off_timeout", e)
+        }
+    }
+
     companion object {
         private const val TAG = "ha-paneld/brightness"
+        private const val NEVER = Int.MAX_VALUE // ~24.8 days; the conventional "never auto-off" sentinel
     }
 }

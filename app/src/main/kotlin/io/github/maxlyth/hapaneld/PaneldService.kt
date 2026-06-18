@@ -93,6 +93,7 @@ class PaneldService : Service() {
         config.attachProfile(profile)   // supplies per-panel manufacturer/model defaults
 
         brightness = BrightnessController(this)
+        brightness.applyPreventIdleDim(config.preventIdleDim, config)
         autoBright = AutoBrightnessController(brightness, config)
         screen = ScreenController(this, brightness)
         led = LedFactory.detect(profile)

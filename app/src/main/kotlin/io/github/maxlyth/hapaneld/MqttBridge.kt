@@ -114,6 +114,8 @@ class MqttBridge(
     private val stateWakeOnWave = "ha-paneld/$panel/wake_on_wave/state"
     private val cmdTouchSound = "ha-paneld/$panel/touch_sound/set"
     private val stateTouchSound = "ha-paneld/$panel/touch_sound/state"
+    private val cmdPreventIdleDim = "ha-paneld/$panel/prevent_idle_dim/set"
+    private val statePreventIdleDim = "ha-paneld/$panel/prevent_idle_dim/state"
     private val cmdZigbee = "ha-paneld/$panel/zigbee_router/set"
     private val stateZigbee = "ha-paneld/$panel/zigbee_router/state"
     private val cmdCpuGov = "ha-paneld/$panel/cpu_governor/set"
@@ -303,6 +305,7 @@ class MqttBridge(
                 cmdNavbar -> handleNavbar(payload)
                 cmdWakeOnWave -> handleWakeOnWave(payload)
                 cmdTouchSound -> handleTouchSound(payload)
+                cmdPreventIdleDim -> handlePreventIdleDim(payload)
                 cmdZigbee -> handleZigbee(payload)
                 cmdAutoBright -> handleAutoBright(payload)
                 cmdBrightnessBias -> handleBrightnessBias(payload)
@@ -369,6 +372,13 @@ class MqttBridge(
         val on = payload.trim().equals("ON", ignoreCase = true)
         config.setWakeOnWave(on)
         client?.let { publish(it, stateWakeOnWave, if (on) "ON" else "OFF", retain = true) }
+    }
+
+    private fun handlePreventIdleDim(payload: String) {
+        val on = payload.trim().equals("ON", ignoreCase = true)
+        config.setPreventIdleDim(on)
+        brightness.applyPreventIdleDim(on, config)
+        client?.let { publish(it, statePreventIdleDim, if (on) "ON" else "OFF", retain = true) }
     }
 
     private fun handleTouchSound(payload: String) {
@@ -661,6 +671,12 @@ class MqttBridge(
         )
         publish(c, stateTouchSound, if (touchSound.isEnabled()) "ON" else "OFF", retain = true)
 
+        publishConfig(
+            c, "switch", "${panel}_prevent_idle_dim",
+            """{"name":"Prevent idle dim","unique_id":"${panel}_prevent_idle_dim","command_topic":"$cmdPreventIdleDim","state_topic":"$statePreventIdleDim","icon":"mdi:brightness-7","entity_category":"config",$avail,$device}""",
+        )
+        publish(c, statePreventIdleDim, if (config.preventIdleDim) "ON" else "OFF", retain = true)
+
         // Auto-brightness — optional on-panel engine (off by default). When on, drives the screen
         // backlight from the panel's own light sensor where present, or the HA-fed ambient-lux number.
         publishConfig(
@@ -783,7 +799,8 @@ class MqttBridge(
             "binary_sensor" to "${panel}_proximity",
             "sensor" to "${panel}_temperature", "sensor" to "${panel}_humidity",
             "light" to "${panel}_buttons", "switch" to "${panel}_wake_on_wave",
-            "switch" to "${panel}_touch_sound", "switch" to "${panel}_zigbee_router",
+            "switch" to "${panel}_touch_sound", "switch" to "${panel}_prevent_idle_dim",
+            "switch" to "${panel}_zigbee_router",
             "switch" to "${panel}_auto_brightness", "number" to "${panel}_brightness_bias",
             "number" to "${panel}_ambient_lux",
             "switch" to "${panel}_relay1", "switch" to "${panel}_relay2",

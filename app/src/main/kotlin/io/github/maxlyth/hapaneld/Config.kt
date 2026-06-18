@@ -110,6 +110,22 @@ class Config(context: Context) {
         prefs.edit().putBoolean("wake_on_wave", on).apply()
     }
 
+    // Prevent the vendor firmware idle-dimming the backlight at the screen-off timeout (it drops the
+    // hardware backlight to ~1% after the timeout even while the OS keeps the screen on). On by default —
+    // these are mains-powered wall panels; turn it off to restore the firmware's own dimming behaviour.
+    val preventIdleDim: Boolean get() = prefs.getBoolean("prevent_idle_dim", true)
+    fun setPreventIdleDim(on: Boolean) {
+        prefs.edit().putBoolean("prevent_idle_dim", on).apply()
+    }
+
+    // The screen-off timeout (ms) seen before we first raised it, so disabling preventIdleDim can restore
+    // the firmware default. -1 = not yet captured.
+    var savedScreenOffTimeout: Int
+        get() = prefs.getInt("saved_screen_off_timeout", -1)
+        set(v) {
+            prefs.edit().putInt("saved_screen_off_timeout", v).apply()
+        }
+
     // Soft on-screen navigation bar mode: "Off" | "Always on" | "Swipe reveal" (NavbarController.MODES).
     // Default Off — panels with a working native navbar (or no need for one) are untouched; the user
     // opts a panel in via the HA select. Persisted so the bar is restored on boot.
