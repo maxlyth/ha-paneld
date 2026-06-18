@@ -57,6 +57,10 @@ class NavbarController(
     private val appCanSu: Boolean,
     // Omit the Recents button on panels whose firmware has no overview screen (e.g. Tuya TPA10).
     private val hasRecents: Boolean,
+    // Notify HA after a LOCAL navbar change so light.<panel>_screen / number.<panel>_volume don't go
+    // stale (the bar steps brightness/volume directly, bypassing the MQTT command path).
+    private val onBrightnessChanged: () -> Unit = {},
+    private val onVolumeChanged: () -> Unit = {},
 ) {
     private val wm = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
     private val main = Handler(Looper.getMainLooper())
@@ -136,9 +140,9 @@ class NavbarController(
         // Volume — tap/hold; showUi flashes the system volume slider for feedback.
         row.addView(separator())
         row.addView(spacer(side))
-        row.addView(repeatButton(R.drawable.ic_nav_vol_down, autoHide) { volume.step(up = false); updateVolLabel() })
+        row.addView(repeatButton(R.drawable.ic_nav_vol_down, autoHide) { volume.step(up = false); updateVolLabel(); onVolumeChanged() })
         if (showValues) valueLabel().also { volLabel = it; row.addView(it) }
-        row.addView(repeatButton(R.drawable.ic_nav_vol_up, autoHide) { volume.step(up = true); updateVolLabel() })
+        row.addView(repeatButton(R.drawable.ic_nav_vol_up, autoHide) { volume.step(up = true); updateVolLabel(); onVolumeChanged() })
         row.addView(spacer(side))
         if (showValues) { updateBrightLabel(); updateVolLabel() }
         val lp = WindowManager.LayoutParams(
@@ -368,6 +372,7 @@ class NavbarController(
     private fun stepBrightness(delta: Int) {
         val cur = brightness.getBrightness().let { if (it < 0) 128 else it }
         brightness.setBrightness((cur + delta).coerceIn(10, 255))
+        onBrightnessChanged()
     }
 
     // --- permission ---

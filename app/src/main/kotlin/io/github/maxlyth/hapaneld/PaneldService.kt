@@ -103,6 +103,8 @@ class PaneldService : Service() {
         navbar = NavbarController(
             this, system, volume, brightness, { config.launcherPackage },
             profile.appCanSu, profile.hasRecents,
+            onBrightnessChanged = { mqtt.publishScreenOn() },
+            onVolumeChanged = { mqtt.publishVolume() },
         )
         touchSound = TouchSoundController(this)
         zigbee = ZigbeeController(profile)

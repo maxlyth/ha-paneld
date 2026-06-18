@@ -324,6 +324,13 @@ class MqttBridge(
         publish(c, stateScreen, """{"state":"ON","brightness":${brightness.getBrightness().coerceAtLeast(1)}}""", retain = true)
     }
 
+    /** Publish the current volume to HA after a LOCAL change (e.g. navbar Volume ±), so
+     *  `number.<panel>_volume` tracks reality. No-op if the broker isn't connected yet. */
+    fun publishVolume() {
+        val c = client ?: return
+        publish(c, stateVolume, volume.getPercent().toString(), retain = true)
+    }
+
     private fun handleScreen(payload: String) {
         val json = JSONObject(payload)
         val on = json.optString("state", "ON").equals("ON", ignoreCase = true)
