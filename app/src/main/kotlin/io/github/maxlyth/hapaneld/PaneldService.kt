@@ -107,6 +107,9 @@ class PaneldService : Service() {
             onVolumeChanged = { mqtt.publishVolume() },
         )
         touchSound = TouchSoundController(this)
+        // Re-apply at boot: the switch raises the system-stream volume only when toggled, so a panel that
+        // booted with touch-sound already on would otherwise stay silent (volume left at 0).
+        if (touchSound.isEnabled()) touchSound.set(true)
         zigbee = ZigbeeController(profile)
         relay = RelayController(profile)
         cpu = CpuController(profile)
