@@ -1,16 +1,20 @@
-# Firmware index + URL availability monitor
+# Firmware index, availability monitor, and Wayback archiver
 
 Source of truth for the **NSPanel Pro firmware OTA download index** published in
 [Discussion #7](https://github.com/maxlyth/ha-paneld/discussions/7), plus the
 2-hourly checker that annotates every download link with a 24-hour availability
-sparkline.
+sparkline, and a weekly job that preserves every firmware file in the Internet
+Archive.
 
 ## Files
 
 - `fw-120p.dat`, `fw-86p.dat` — the verified link data (one device per file).
 - `firmware_index.py` — generator (`render`) and prober (`probe`).
-- The workflow [`.github/workflows/firmware-url-monitor.yml`](../../.github/workflows/firmware-url-monitor.yml)
+- `wayback_archive.py` — submits the index page + every firmware URL to the Wayback Machine.
+- [`.github/workflows/firmware-url-monitor.yml`](../../.github/workflows/firmware-url-monitor.yml)
   runs `probe` then `render` every 2 hours and rewrites the Discussion body.
+- [`.github/workflows/firmware-wayback.yml`](../../.github/workflows/firmware-wayback.yml)
+  archives to the Internet Archive weekly and on any `fw-*.dat` change.
 
 ## Data format
 
@@ -47,6 +51,29 @@ python tools/firmware-index/firmware_index.py render --history history.json --ou
 
 Stdlib only — no dependencies. Sparkline: 🟩 reachable · 🟥 unreachable · ⬜ no
 data yet (12 points = 24h at the 2-hourly cadence, newest on the right).
+
+## Wayback archiving
+
+`wayback_archive.py` preserves the index against the CoolKit CDN going away. It
+saves the Discussion page (with `capture_outlinks=1`) and submits every firmware
+URL to Save Page Now *explicitly* — `capture_outlinks` caps at 100 links, far
+short of the ~196 files, so the page crawler alone is not relied on. Firmware
+URLs are immutable, so each is archived once and recorded in the state file;
+later runs only submit new ones.
+
+Save Page Now rejects anonymous API calls, so a secret is required:
+
+1. Create a free [archive.org account](https://archive.org/account/signup).
+2. Generate S3 keys at [archive.org/account/s3.php](https://archive.org/account/s3.php).
+3. Add them as the repo Actions secret **`WAYBACK_S3`** in the form `accesskey:secret`.
+
+Without the secret the workflow skips cleanly (stays green). State lives on the
+append-only `wayback-state` branch. Local run:
+
+```bash
+WAYBACK_S3="accesskey:secret" python tools/firmware-index/wayback_archive.py \
+  --state wayback.json --page-url "https://github.com/maxlyth/ha-paneld/discussions/7" --max 5
+```
 
 ## Adding or correcting a link
 
