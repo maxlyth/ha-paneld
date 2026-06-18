@@ -35,6 +35,8 @@ concurrency:
 jobs:
   pick:
     uses: ./.github/workflows/_pick-runner.yml
+    with:
+      labels: homelab-x64
     secrets: inherit
 
   build:

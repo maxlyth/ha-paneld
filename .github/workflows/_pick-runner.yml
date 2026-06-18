@@ -21,6 +21,12 @@ name: Pick runner (reusable)
 
 on:
   workflow_call:
+    inputs:
+      labels:
+        description: "Comma-separated self-hosted runner labels in priority order. Default skips Mac (arm64) because Android NDK host toolchain is x86_64-only."
+        required: false
+        default: "homelab-x64"
+        type: string
     secrets:
       RUNNER_ADMIN_TOKEN:
         description: "Fine-grained PAT with Administration:Read on the repo. If omitted, the built-in github.token is used (which will 403 — pick-runner falls through to ubuntu-latest)."
@@ -50,16 +56,22 @@ jobs:
           GH_TOKEN: ${{ secrets.RUNNER_ADMIN_TOKEN || github.token }}
         run: |
           set -uo pipefail   # NOT -e — we want to fall through if the API probe is denied
-          PRIORITY=(
-            "Mac (Tier 1):mac-arm64:[\"self-hosted\",\"linux\",\"arm64\",\"mac-arm64\"]"
-            "MS01 (Tier 2):homelab-x64:[\"self-hosted\",\"linux\",\"x64\",\"homelab-x64\"]"
-          )
+          declare -A LABEL_TIER LABEL_JSON
+          LABEL_TIER[mac-arm64]="Mac (Tier 1)"
+          LABEL_TIER[homelab-x64]="MS01 (Tier 2)"
+          LABEL_JSON[mac-arm64]='["self-hosted","linux","arm64","mac-arm64"]'
+          LABEL_JSON[homelab-x64]='["self-hosted","linux","x64","homelab-x64"]'
+
           chosen=""
-          for entry in "${PRIORITY[@]}"; do
-            tier_name="${entry%%:*}"
-            rest="${entry#*:}"
-            label="${rest%%:*}"
-            runs_on_json="${rest#*:}"
+          IFS=',' read -ra labels_arr <<< "${{ inputs.labels }}"
+          for label in "${labels_arr[@]}"; do
+            label="${label// /}"
+            tier_name="${LABEL_TIER[$label]:-$label}"
+            runs_on_json="${LABEL_JSON[$label]:-}"
+            if [[ -z "$runs_on_json" ]]; then
+              echo "::warning::unknown label '"'"'$label'"'"' — skipping"
+              continue
+            fi
             if ! count=$(gh api "repos/${{ github.repository }}/actions/runners" \
                 --jq "[.runners[] | select(.status==\"online\" and (.labels[].name == \"$label\"))] | length" 2>/dev/null); then
               echo "::warning::gh api denied (RUNNER_ADMIN_TOKEN secret may be unset) — treating $label as offline"
