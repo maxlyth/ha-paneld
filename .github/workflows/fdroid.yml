@@ -35,6 +35,7 @@ concurrency:
 jobs:
   pick:
     uses: ./.github/workflows/_pick-runner.yml
+    secrets: inherit
 
   build:
     name: Build (${{ needs.pick.outputs.tier }})

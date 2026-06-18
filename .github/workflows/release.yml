@@ -16,6 +16,7 @@ permissions:
 jobs:
   pick:
     uses: ./.github/workflows/_pick-runner.yml
+    secrets: inherit
 
   release:
     name: Release (${{ needs.pick.outputs.tier }})

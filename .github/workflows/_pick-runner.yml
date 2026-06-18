@@ -21,6 +21,10 @@ name: Pick runner (reusable)
 
 on:
   workflow_call:
+    secrets:
+      RUNNER_ADMIN_TOKEN:
+        description: "Fine-grained PAT with Administration:Read on the repo. If omitted, the built-in github.token is used (which will 403 — pick-runner falls through to ubuntu-latest)."
+        required: false
     outputs:
       labels:
         description: "JSON `runs-on` value; use with fromJson(...)"
@@ -43,7 +47,7 @@ jobs:
     steps:
       - id: choose
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.RUNNER_ADMIN_TOKEN || github.token }}
         run: |
           set -euo pipefail
           PRIORITY=(
