@@ -375,6 +375,7 @@ Android 11), Electron WF1589T (rk3576, Android 14).
   reports). See [docs/hardware/s9e.md](docs/hardware/s9e.md).
 - Info-page **card headers are demarcated** (groundwork for drag-reorder + collapsible cards), and there's
   now an **[F-Droid install path](docs/fdroid.md)** for on-device install + auto-update.
+- **Reliability fixes** — wake-on-wave now updates `light.<panel>_screen` in HA (it could stay OFF after the screen woke — [#6](https://github.com/maxlyth/ha-paneld/issues/6)); the brightness slider reads and drives the real hardware backlight, not just the Android setting, on firmwares that idle-dim; the **Launcher** button opens an actual launcher instead of landing on the HA app; Zigbee is now detected on **4.x** NSPanel Pro firmware; and opening the config UI no longer crashes the service.
 
 <details>
 <summary>Earlier releases (0.8.2 → 0.4.x) — full history in <a href="CHANGELOG.md">CHANGELOG.md</a></summary>
