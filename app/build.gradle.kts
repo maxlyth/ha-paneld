@@ -19,7 +19,7 @@ android {
         // the whole panel fleet (NSPanelPro Android 8.1 = API 27, Hall TPA10 Android 11 = API 30).
         minSdk = 26
         targetSdk = 35
-        versionCode = 46
+        versionCode = 47
         versionName = "0.8.3-rc6"
 
         // Only the fleet's ARM ABIs — bounds the native LED lib (libhapaneld_led.so) + APK size.
