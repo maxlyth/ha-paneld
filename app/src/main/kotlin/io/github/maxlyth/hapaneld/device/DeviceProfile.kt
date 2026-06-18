@@ -5,7 +5,8 @@ import android.os.Build
 /**
  * Per-platform canonical silo. Everything device/platform-specific that the generic functional modules
  * need — su form, LED mechanism, screen-off path, and the sysfs/vendor locations of optional hardware —
- * is declared here, one `object` per platform (see `NSPanelPro`, `Tpa10`, `Wf1589t`, `S9e`, `Generic`).
+ * is declared here, one `object` per platform (see `NSPanelPro`, `Tpa10`, `Wf1589t`, `Smt1019`, `S9e`,
+ * `Generic`).
  *
  * Design rule (see docs/architecture/device-profiles.md): a profile declares **candidates + quirks**;
  * the functional modules still **runtime-probe to confirm** (profile says *where to look*, the probe
@@ -123,6 +124,10 @@ interface DeviceProfile {
                 // so an unverified Gen2 still detects relays/zigbee/sensors correctly).
                 "px30" in model || "px30" in device || "rk3326" in model || "rk3326" in device -> NSPanelPro
                 model == "tpa10" || device == "tpa10" -> Tpa10
+                // The ZHICAI SMT1019 (device WF2489T) shares the rk3576 "rk3576_u" model code with the
+                // WF1589T, but is a locked-down, no-root unit with no app-direct LED — match it first so
+                // the rk3576_u clause below doesn't hand it the WF1589T's app-LED profile (GitHub #8).
+                "wf2489" in device -> Smt1019
                 "wf1589" in device || model == "rk3576_u" -> Wf1589t
                 "s9e" in model || "s9e" in device || model == "s9" || productVersion.startsWith("s9") -> S9e
                 else -> Generic
