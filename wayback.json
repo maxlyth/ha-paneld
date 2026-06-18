@@ -12,9 +12,21 @@
    "ts": 1781777217,
    "wb": "20260618100158"
   },
+  "https://global-otadl2bsy.coolkit.cc/nspanel-pro-ver120/rom-diff/11/CK_3.6.1_3.7.0V228-diff.zip": {
+   "ts": 1781779429,
+   "wb": "20260618100158"
+  },
   "https://global-otadl2bsy.coolkit.cc/nspanel-pro-ver120/rom-diff/12/CK_3.5.0_3.7.1V228-diff.zip": {
    "ts": 1781777076,
    "wb": "20260618095738"
+  },
+  "https://global-otadl2bsy.coolkit.cc/nspanel-pro-ver120/rom-diff/12/CK_3.6.1_3.7.1V228-diff.zip": {
+   "ts": 1781779429,
+   "wb": "20260618095738"
+  },
+  "https://global-otadl2bsy.coolkit.cc/nspanel-pro-ver120/rom-diff/12/CK_3.7.0_3.7.1V228-diff.zip": {
+   "ts": 1781779434,
+   "wb": "20260618100158"
   },
   "https://global-otadl2bsy.coolkit.cc/nspanel-pro-ver120/rom-diff/13/CK_3.5.0_3.8.0V228-diff.zip": {
    "ts": 1781777077,
@@ -88,6 +100,6 @@
  "page": {
   "job": "spn2-8cd254f2322be3b3631531d76097c1dde396b6e6",
   "ok": true,
-  "ts": 1781777076
+  "ts": 1781779428
  }
 }
