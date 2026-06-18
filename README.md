@@ -272,6 +272,7 @@ navigate, TTS) work on any panel; LED/buttons depend on a per-panel HAL.
 | Sonoff NSPanelPro / Pro120 | Rockchip PX30 | 8.1 (API 27) | arm64-v8a | toolbox `su` |
 | Tuya TPA10 | Rockchip rk3566 | 11 (API 30) | armeabi-v7a | 32-bit userspace |
 | Electron WF1589T | Rockchip rk3576 | userdebug (`adb root`) | arm64-v8a | RGB LED via clean-room NDK ioctl on `/dev/ledjni` (no vendor lib) |
+| ZHICAI SMT1019 | Rockchip rk3576 | 14 (API 34) | arm64-v8a | no root; RGB LED firmware-locked (ioctl denied) — community-reported ([#8](https://github.com/maxlyth/ha-paneld/issues/8)) |
 
 Other Android panels are welcome — contribute a HAL adapter for your hardware. Deep per-panel
 hardware references (SoC, sensors, LED path, radios) are in [docs/hardware/](docs/hardware/).
@@ -565,7 +566,7 @@ Carried from 0.4.x:
 - **[docs/hardware/](docs/hardware/)** — reverse-engineered hardware references for the supported
   panels (SoC, LED control path, sensors, radios), since these devices are otherwise undocumented:
   [NSPanel Pro](docs/hardware/nspanel-pro.md) (PX30), [TPA10](docs/hardware/tpa10.md) (rk3566),
-  [WF1589T](docs/hardware/wf1589t.md) (rk3576) — plus a [performance comparison](docs/hardware/README.md#performance-comparison--practical-deployment).
+  [WF1589T](docs/hardware/wf1589t.md) (rk3576), [SMT1019](docs/hardware/smt1019.md) (rk3576, community) — plus a [performance comparison](docs/hardware/README.md#performance-comparison--practical-deployment).
 - **[docs/tts.md](docs/tts.md)** — server-side TTS recipe: render a phrase with any HA engine (Piper,
   Cloud) and send it to a panel via a small script (no add-on, no on-device TTS).
 - **[docs/performance.md](docs/performance.md)** — panel performance tuning: why dashboards lag on
