@@ -522,6 +522,7 @@ Carried from 0.4.x:
 - **More performance tooling** — deeper on-device instrumentation to measure, diagnose and tune
   dashboard performance on weak panels.
 - **Central log shipping** — optionally forward panel logs to a central logging server for fleet-wide debugging: the Android system log (`logcat` / ha-paneld's own service log) **and** the dashboard **browser console** (WebView JS console + errors, captured over the existing CDP path). Avoids per-panel `adb logcat` to chase a remote issue. Configurable sink (syslog / HTTP / Loki-style) and **opt-in** — logs can carry tokens and URLs, so redaction + LAN-only by default.
+- **Auto-brightness self-calibration** — an opt-in mode that records the panel's ambient-light sensor and any manual brightness corrections over a **24-hour cycle**, then fits the lux→backlight curve to the room's real day/night light profile instead of today's hand-tuned default + bias. Turns the fixed curve into a learned, per-panel one; re-runnable when the panel moves or the room's lighting changes.
 - **Built-in relay control beyond the S9E** — the same `switch.<panel>_relay*` model on other panels
   with onboard relays, once each one's control path (GPIO / vendor node) is known.
 - Daemon boot-persistence on su-only (PX30) panels, if true-off is wanted without relying on `su`
