@@ -1,0 +1,129 @@
+name: Runner benchmark · assembleRelease
+run-name: Runner benchmark · ${{ github.event.inputs.scenario || 'warm-cache' }}
+
+# Side-by-side latency comparison between the MS01 self-hosted runner and
+# ubuntu-latest, building the same `assembleRelease` task. Triggered manually.
+#
+# "warm-cache": runs as-is. Self-hosted has Gradle + Android caches from
+# previous runs; ubuntu-latest gets a fresh VM. Represents real-world steady
+# state. This is the latency a tag push actually sees.
+#
+# "cold-cache": wipes Gradle caches on self-hosted before the build. Removes
+# the home-field advantage. Useful for measuring pure CPU + IO speed.
+
+on:
+  workflow_dispatch:
+    inputs:
+      scenario:
+        description: "warm-cache (real-world) or cold-cache (pure CPU)"
+        type: choice
+        options: [warm-cache, cold-cache]
+        default: warm-cache
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.tier }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - tier: "MS01 (homelab-x64)"
+            runs-on: ['self-hosted', 'linux', 'x64', 'homelab-x64']
+          - tier: "ubuntu-latest"
+            runs-on: 'ubuntu-latest'
+    runs-on: ${{ matrix.runs-on }}
+
+    steps:
+      - id: t0
+        run: echo "t0=$(date -u +%s)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+
+      - name: (cold-cache) wipe Gradle caches
+        if: github.event.inputs.scenario == 'cold-cache'
+        run: |
+          rm -rf ~/.gradle/caches ~/.gradle/wrapper ~/.gradle/notifications ~/.gradle/.tmp 2>/dev/null || true
+          rm -rf app/build .gradle 2>/dev/null || true
+          df -h ~ | tail -1
+
+      - name: Lint front-end JS
+        run: node --check app/src/main/assets/info.js
+
+      - id: t_setup_jdk_start
+        run: echo "t=$(date -u +%s)" >> "$GITHUB_OUTPUT"
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - id: t_setup_jdk_end
+        run: echo "t=$(date -u +%s)" >> "$GITHUB_OUTPUT"
+
+      - id: t_setup_android_start
+        run: echo "t=$(date -u +%s)" >> "$GITHUB_OUTPUT"
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+      - id: t_setup_android_end
+        run: echo "t=$(date -u +%s)" >> "$GITHUB_OUTPUT"
+
+      - id: t_ndk_start
+        run: echo "t=$(date -u +%s)" >> "$GITHUB_OUTPUT"
+      - name: Install NDK + CMake
+        run: sdkmanager "ndk;27.0.12077973" "cmake;3.22.1"
+      - id: t_ndk_end
+        run: echo "t=$(date -u +%s)" >> "$GITHUB_OUTPUT"
+
+      - id: t_gradle_setup_start
+        run: echo "t=$(date -u +%s)" >> "$GITHUB_OUTPUT"
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+      - id: t_gradle_setup_end
+        run: echo "t=$(date -u +%s)" >> "$GITHUB_OUTPUT"
+
+      - id: t_build_start
+        run: echo "t=$(date -u +%s)" >> "$GITHUB_OUTPUT"
+      - name: Build release APK (assembleRelease)
+        run: ./gradlew :app:assembleRelease --stacktrace
+      - id: t_build_end
+        run: echo "t=$(date -u +%s)" >> "$GITHUB_OUTPUT"
+
+      - name: Step timings
+        if: always()
+        env:
+          T0: ${{ steps.t0.outputs.t0 }}
+          T_JDK_S: ${{ steps.t_setup_jdk_start.outputs.t }}
+          T_JDK_E: ${{ steps.t_setup_jdk_end.outputs.t }}
+          T_AND_S: ${{ steps.t_setup_android_start.outputs.t }}
+          T_AND_E: ${{ steps.t_setup_android_end.outputs.t }}
+          T_NDK_S: ${{ steps.t_ndk_start.outputs.t }}
+          T_NDK_E: ${{ steps.t_ndk_end.outputs.t }}
+          T_GR_S:  ${{ steps.t_gradle_setup_start.outputs.t }}
+          T_GR_E:  ${{ steps.t_gradle_setup_end.outputs.t }}
+          T_BLD_S: ${{ steps.t_build_start.outputs.t }}
+          T_BLD_E: ${{ steps.t_build_end.outputs.t }}
+        run: |
+          fmt() {
+            secs=$(( $2 - $1 ))
+            printf "  %-30s %3ds\n" "$3" "$secs"
+          }
+          NOW=$(date -u +%s)
+          {
+            echo "## Runner benchmark — ${{ matrix.tier }}"
+            echo
+            echo "Scenario: \`${{ github.event.inputs.scenario || 'warm-cache' }}\`"
+            echo
+            echo "\`\`\`"
+            fmt "$T0"     "$T_JDK_S"  "preamble + checkout + lint"
+            fmt "$T_JDK_S" "$T_JDK_E" "setup-java"
+            fmt "$T_AND_S" "$T_AND_E" "setup-android (platform-tools)"
+            fmt "$T_NDK_S" "$T_NDK_E" "Install NDK + CMake"
+            fmt "$T_GR_S"  "$T_GR_E"  "setup-gradle"
+            fmt "$T_BLD_S" "$T_BLD_E" "assembleRelease (the build)"
+            fmt "$T0"      "$NOW"     "TOTAL (excl. post-cleanup)"
+            echo "\`\`\`"
+          } >> "$GITHUB_STEP_SUMMARY"
