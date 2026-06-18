@@ -9,8 +9,13 @@ on:
   workflow_dispatch:
 
 jobs:
+  pick:
+    uses: ./.github/workflows/_pick-runner.yml
+
   build:
-    runs-on: ubuntu-latest
+    name: Build (${{ needs.pick.outputs.tier }})
+    needs: pick
+    runs-on: ${{ fromJson(needs.pick.outputs.labels) }}
     steps:
       - uses: actions/checkout@v4
 

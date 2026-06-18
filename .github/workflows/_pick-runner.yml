@@ -1,0 +1,74 @@
+name: Pick runner (reusable)
+# Reusable workflow — emits a `runs-on` value that picks the best available
+# tier from the homelab failback chain:
+#
+#   Tier 1: Mac via Orbstack    (label: mac-arm64)    — fastest, present when developing
+#   Tier 2: MS01 LXC (CT 125)   (label: homelab-x64)  — always-on
+#   Tier 3: ubuntu-latest                              — ultimate fallback (free, slow)
+#
+# Self-hosted runner trust is gated upstream by the repo setting
+# "Require approval for all outside collaborators". See lxc-gha-runner README.
+#
+# Usage in a calling workflow:
+#
+#   jobs:
+#     pick:
+#       uses: ./.github/workflows/_pick-runner.yml
+#     build:
+#       needs: pick
+#       runs-on: ${{ fromJson(needs.pick.outputs.labels) }}
+#       steps: [...]
+
+on:
+  workflow_call:
+    outputs:
+      labels:
+        description: "JSON `runs-on` value; use with fromJson(...)"
+        value: ${{ jobs.pick.outputs.labels }}
+      tier:
+        description: "Human-readable tier name for run-name / job-name"
+        value: ${{ jobs.pick.outputs.tier }}
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  pick:
+    name: Pick runner
+    runs-on: ubuntu-latest
+    outputs:
+      labels: ${{ steps.choose.outputs.labels }}
+      tier: ${{ steps.choose.outputs.tier }}
+    steps:
+      - id: choose
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          PRIORITY=(
+            "Mac (Tier 1):mac-arm64:[\"self-hosted\",\"linux\",\"arm64\",\"mac-arm64\"]"
+            "MS01 (Tier 2):homelab-x64:[\"self-hosted\",\"linux\",\"x64\",\"homelab-x64\"]"
+          )
+          chosen=""
+          for entry in "${PRIORITY[@]}"; do
+            tier_name="${entry%%:*}"
+            rest="${entry#*:}"
+            label="${rest%%:*}"
+            runs_on_json="${rest#*:}"
+            count=$(gh api "repos/${{ github.repository }}/actions/runners" \
+              --jq "[.runners[] | select(.status==\"online\" and (.labels[].name == \"$label\"))] | length")
+            echo "::notice::probing $tier_name (label=$label) → $count online runner(s)"
+            if [[ "$count" -gt 0 ]]; then
+              chosen="$tier_name"
+              echo "labels=$runs_on_json" >> "$GITHUB_OUTPUT"
+              echo "tier=$tier_name" >> "$GITHUB_OUTPUT"
+              break
+            fi
+          done
+          if [[ -z "$chosen" ]]; then
+            echo "::notice::No self-hosted runner online — falling back to ubuntu-latest"
+            echo 'labels="ubuntu-latest"' >> "$GITHUB_OUTPUT"
+            echo "tier=ubuntu-latest (Tier 3)" >> "$GITHUB_OUTPUT"
+          fi
+          echo "::notice::selected: $(grep ^tier= "$GITHUB_OUTPUT" | cut -d= -f2-)"

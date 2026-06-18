@@ -32,8 +32,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  pick:
+    uses: ./.github/workflows/_pick-runner.yml
+
   build:
-    runs-on: ubuntu-latest
+    name: Build (${{ needs.pick.outputs.tier }})
+    needs: pick
+    runs-on: ${{ fromJson(needs.pick.outputs.labels) }}
     # Run after a successful Release for a FULL version tag (skip rc Release runs, e.g. v0.8.2-rc5);
     # always allow a manual dispatch. head_branch on a tag-push run is the tag name.
     if: >-
@@ -122,6 +127,9 @@ jobs:
         with:
           path: _site
 
+  # Deploy stays on ubuntu-latest — GitHub's deploy-pages action authenticates to the Pages
+  # environment via OIDC and the integration with the github-pages environment is most reliable
+  # on the hosted runner. Step is short (~20s) so there's no meaningful perf win in moving it.
   deploy:
     needs: build
     runs-on: ubuntu-latest
