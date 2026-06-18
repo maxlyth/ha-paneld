@@ -4,14 +4,20 @@
 The CoolKit OTA CDN can disappear or be refactored at any time, taking the
 firmware with it. This preserves a copy in the Internet Archive:
 
-  1. The index page (GitHub Discussion #7) is saved, with capture_outlinks=1
-     when authenticated — a bonus snapshot of the release-note / repo links.
+  1. The index page (GitHub Discussion #7) is saved with capture_outlinks=1 — a
+     bonus snapshot of the release-note / repo links.
   2. Every firmware URL is submitted to Save Page Now *explicitly*. This is the
      reliable path: capture_outlinks caps at 100 links per request, far short of
      the ~196 firmware files, so we don't rely on the page crawler to find them.
 
-Firmware URLs are immutable (a build's bytes never change), so each is archived
-once and recorded in a state file; later runs only submit new ones.
+Save Page Now captures large files asynchronously — the job status endpoint
+often still says "pending" (or times out) well after the file has actually been
+stored. So this tool treats the **availability API** as the source of truth:
+a URL is "archived" once https://archive.org/wayback/available reports a
+snapshot. Each run confirms what's already archived, fires captures for the
+rest, then re-confirms. Firmware URLs are immutable, so each is archived once and
+recorded in the state file; later runs only chase the stragglers. Coverage
+converges over a run or two.
 
 Auth is required: Save Page Now rejects anonymous API calls. Set the WAYBACK_S3
 env var to "accesskey:secret" (free archive.org account, then S3 keys at
@@ -35,9 +41,10 @@ from concurrent.futures import ThreadPoolExecutor
 from firmware_index import all_urls, load_devices
 
 SAVE = "https://web.archive.org/save"
-POLL_INTERVAL = 5
-POLL_TRIES = 18                 # ~90s, within SPN's 2-minute capture ceiling
-FILE_FRESHNESS = "365d"         # server-side skip if archived within the last year
+AVAIL = "https://archive.org/wayback/available"
+FILE_FRESHNESS = "365d"      # server-side: skip re-capture if archived within a year
+CONFIRM_WAIT = 120           # seconds to let this run's captures settle before re-confirming
+CONFIRM_WORKERS = 16
 _lock = threading.Lock()
 
 
@@ -46,35 +53,12 @@ def auth_header():
     return ({"Authorization": f"LOW {key}"}, True) if key else ({}, False)
 
 
-def _post(url, fields):
-    hdr, _ = auth_header()
-    hdr.update({
-        "Accept": "application/json",
-        "Content-Type": "application/x-www-form-urlencoded",
-        "User-Agent": "ha-paneld-firmware-archiver",
-    })
-    body = urllib.parse.urlencode(fields).encode()
-    req = urllib.request.Request(SAVE, data=body, headers=hdr, method="POST")
-    return _read(req)
-
-
-def _get_status(job_id):
-    hdr, _ = auth_header()
-    hdr.update({"Accept": "application/json", "User-Agent": "ha-paneld-firmware-archiver"})
-    req = urllib.request.Request(f"{SAVE}/status/{job_id}", headers=hdr)
-    return _read(req)
-
-
 def _read(req):
     try:
         with urllib.request.urlopen(req, timeout=60) as r:
             raw = r.read().decode("utf-8", "replace")
     except urllib.error.HTTPError as e:
         raw = e.read().decode("utf-8", "replace") if e.fp else ""
-        try:
-            return json.loads(raw)
-        except json.JSONDecodeError:
-            return {"status": "error", "http": e.code, "raw": raw[:200]}
     except Exception as e:  # noqa: BLE001 — network flake; caller retries next run
         return {"status": "error", "exc": str(e)}
     try:
@@ -83,31 +67,35 @@ def _read(req):
         return {"status": "error", "raw": raw[:200]}
 
 
-def archive(url, outlinks, poll):
-    """Submit url to SPN; optionally poll to completion. Returns (ok, info)."""
+def submit(url, outlinks=False):
+    """Fire a Save Page Now capture. Returns (job_id_or_None, raw_response)."""
+    hdr, _ = auth_header()
+    hdr.update({
+        "Accept": "application/json",
+        "Content-Type": "application/x-www-form-urlencoded",
+        "User-Agent": "ha-paneld-firmware-archiver",
+    })
     fields = {"url": url, "skip_first_archive": "1"}
-    if not outlinks:
-        fields["if_not_archived_within"] = FILE_FRESHNESS
-    else:
+    if outlinks:
         fields["capture_outlinks"] = "1"
         fields["capture_all"] = "1"
+    else:
+        fields["if_not_archived_within"] = FILE_FRESHNESS
+    body = urllib.parse.urlencode(fields).encode()
+    resp = _read(urllib.request.Request(SAVE, data=body, headers=hdr, method="POST"))
+    return resp.get("job_id"), resp
 
-    resp = _post(url, fields)
-    job = resp.get("job_id")
-    if not job:
-        return False, resp                         # rate-limited / blocked / error
-    if not poll:
-        return True, {"job_id": job, "status": "submitted"}
 
-    for _ in range(POLL_TRIES):
-        time.sleep(POLL_INTERVAL)
-        st = _get_status(job)
-        s = st.get("status")
-        if s == "success":
-            return True, st
-        if s == "error":
-            return False, st
-    return False, {"job_id": job, "status": "pending"}   # timed out — retry next run
+def available(url):
+    """Return the snapshot timestamp if the URL is in the Wayback Machine, else None."""
+    q = f"{AVAIL}?url=" + urllib.parse.quote(url, safe="")
+    try:
+        with urllib.request.urlopen(q, timeout=30) as r:
+            d = json.load(r)
+    except Exception:  # noqa: BLE001
+        return None
+    snap = d.get("archived_snapshots", {}).get("closest")
+    return snap.get("timestamp") if snap else None
 
 
 def load_state(path):
@@ -121,16 +109,36 @@ def load_state(path):
 
 
 def save_state(path, s):
-    with open(path, "w") as fh:
-        json.dump(s, fh, indent=1, sort_keys=True)
+    with _lock:
+        with open(path, "w") as fh:
+            json.dump(s, fh, indent=1, sort_keys=True)
+
+
+def confirm_batch(state, path, urls):
+    """Mark every URL that the availability API reports as archived. Returns count."""
+    files = state["files"]
+    hits = 0
+
+    def check(u):
+        return u, available(u)
+
+    with ThreadPoolExecutor(max_workers=CONFIRM_WORKERS) as ex:
+        for u, ts in ex.map(check, urls):
+            if ts:
+                files[u] = {"ts": int(time.time()), "wb": ts}
+                hits += 1
+    if hits:
+        save_state(path, state)
+    return hits
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--state", required=True)
-    ap.add_argument("--page-url", help="index page to save (with outlinks if authenticated)")
-    ap.add_argument("--max", type=int, default=0, help="cap new firmware URLs per run (0 = all)")
-    ap.add_argument("--workers", type=int, default=0, help="concurrent captures (0 = auto)")
+    ap.add_argument("--page-url", help="index page to save (with outlinks)")
+    ap.add_argument("--max", type=int, default=0, help="cap captures submitted per run (0 = all)")
+    ap.add_argument("--workers", type=int, default=6, help="concurrent capture submissions (SPN session cap is low)")
+    ap.add_argument("--confirm-wait", type=int, default=CONFIRM_WAIT)
     args = ap.parse_args()
 
     _, authed = auth_header()
@@ -140,40 +148,50 @@ def main():
         print("https://archive.org/account/s3.php, and add them as the WAYBACK_S3 Actions")
         print("secret in the form  accesskey:secret  to enable archiving.")
         return 0
-    workers = args.workers or 8                       # SPN authenticated concurrency cap is 12
-    print(f"Wayback archiver — authenticated, {workers} workers")
 
     state = load_state(args.state)
     files = state["files"]
-
-    if args.page_url:
-        ok, info = archive(args.page_url, outlinks=True, poll=True)
-        state["page"] = {"ts": int(time.time()), "ok": ok, "wb": info.get("timestamp")}
-        save_state(args.state, state)
-        print(f"page: {'archived (+outlinks)' if ok else 'pending/failed'} — {info.get('status')}")
-
     urls = all_urls(load_devices())
+
+    # The index page: fire a capture with outlinks (bonus archive of the linked pages).
+    if args.page_url:
+        jid, info = submit(args.page_url, outlinks=True)
+        state["page"] = {"ts": int(time.time()), "job": jid, "ok": bool(jid)}
+        save_state(args.state, state)
+        print(f"page: {'submitted (+outlinks)' if jid else 'submit failed'} — {info.get('status', 'ok')}")
+
+    # Pass A — confirm anything already archived (catches prior runs' async completions).
+    pending = [u for u in urls if u not in files]
+    got = confirm_batch(state, args.state, pending)
+    print(f"confirmed {got} already-archived; {len(files)}/{len(urls)} done")
+
+    # Pass B — fire captures for the rest.
     todo = [u for u in urls if u not in files]
     if args.max > 0:
         todo = todo[:args.max]
-    print(f"firmware: {len(files)} archived, {len(urls) - len(files)} remaining, submitting {len(todo)} now")
 
-    def work(u):
-        ok, info = archive(u, outlinks=False, poll=True)
-        if ok:
-            with _lock:
-                files[u] = {"ts": int(time.time()), "wb": info.get("timestamp")}
-                save_state(args.state, state)
-        else:
-            print(f"  retry-next-run: {u} ({info.get('status')}/{info.get('status_ext', info.get('http', ''))})",
-                  file=sys.stderr)
-        return ok
+    def fire(u):
+        jid, info = submit(u)
+        if not jid:
+            print(f"  submit issue: {u} ({info.get('status_ext') or info.get('status')})", file=sys.stderr)
+        return u, bool(jid)
 
-    done = 0
+    submitted = []
     if todo:
-        with ThreadPoolExecutor(max_workers=workers) as ex:
-            done = sum(1 for ok in ex.map(work, todo) if ok)
-    print(f"archived {done}/{len(todo)} this run; {len(urls) - len(files)} firmware URLs still remaining")
+        with ThreadPoolExecutor(max_workers=args.workers) as ex:
+            submitted = [u for u, ok in ex.map(fire, todo) if ok]
+    print(f"submitted {len(submitted)}/{len(todo)} captures")
+
+    # Pass C — let them settle, then confirm this run's submissions.
+    if submitted:
+        time.sleep(args.confirm_wait)
+        got = confirm_batch(state, args.state, submitted)
+        print(f"confirmed {got}/{len(submitted)} of this run's submissions")
+
+    save_state(args.state, state)
+    remaining = len(urls) - len(files)
+    print(f"TOTAL: {len(files)}/{len(urls)} firmware URLs archived"
+          + (f"; {remaining} still pending (will confirm next run)" if remaining else " — complete"))
     return 0
 
 
