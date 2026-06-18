@@ -6,25 +6,26 @@ firmware with it. This preserves a copy in the Internet Archive:
 
   1. The index page (GitHub Discussion #7) is saved with capture_outlinks=1 — a
      bonus snapshot of the release-note / repo links.
-  2. Every firmware URL is submitted to Save Page Now *explicitly*. This is the
-     reliable path: capture_outlinks caps at 100 links per request, far short of
-     the ~196 firmware files, so we don't rely on the page crawler to find them.
+  2. Every firmware URL is submitted to Save Page Now *explicitly*, newest-first,
+     so the current builds (4.5.1, 4.4.0, 4.0.12, recent APKs) are preserved
+     before the long tail. capture_outlinks caps at 100 links per request — far
+     short of the ~196 files — so we don't rely on the page crawler to find them.
 
-Save Page Now captures large files asynchronously — the job status endpoint
-often still says "pending" (or times out) well after the file has actually been
-stored. So this tool treats the **availability API** as the source of truth:
-a URL is "archived" once https://archive.org/wayback/available reports a
-snapshot. Each run confirms what's already archived, fires captures for the
-rest, then re-confirms. Firmware URLs are immutable, so each is archived once and
-recorded in the state file; later runs only chase the stragglers. Coverage
-converges over a run or two.
+Save Page Now throttles to ~12 active captures per account and runs them
+asynchronously, so submissions are **paced into waves** (submit a batch, wait for
+it to drain, submit the next) rather than fired all at once and bounced. Status
+is confirmed via the **availability API** (the job-status endpoint reports
+pending/gateway-timeout long after the file is actually stored). Firmware URLs are
+immutable, so each is archived once and recorded in the state file; later runs
+only chase stragglers.
 
 Auth is required: Save Page Now rejects anonymous API calls. Set the WAYBACK_S3
 env var to "accesskey:secret" (free archive.org account, then S3 keys at
 https://archive.org/account/s3.php). Without it the script skips cleanly.
 
 Usage:
-  python wayback_archive.py --state wayback.json [--page-url URL] [--max N] [--workers N]
+  python wayback_archive.py --state wayback.json [--page-url URL] [--max N]
+                            [--wave-size N] [--drain-wait S] [--workers N]
 """
 
 import argparse
@@ -38,12 +39,14 @@ import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
-from firmware_index import all_urls, load_devices
+from firmware_index import apk_url, diff_url, full_url, load_devices, vkey
 
 SAVE = "https://web.archive.org/save"
 AVAIL = "https://archive.org/wayback/available"
 FILE_FRESHNESS = "365d"      # server-side: skip re-capture if archived within a year
-CONFIRM_WAIT = 120           # seconds to let this run's captures settle before re-confirming
+WAVE_SIZE = 8                # submissions per wave (SPN active-capture cap ~12)
+DRAIN_WAIT = 75              # seconds between waves, to let captures finish + free slots
+CONFIRM_WAIT = 120           # seconds before confirming this run's submissions
 CONFIRM_WORKERS = 16
 _lock = threading.Lock()
 
@@ -115,7 +118,7 @@ def save_state(path, s):
 
 
 def confirm_batch(state, path, urls):
-    """Mark every URL that the availability API reports as archived. Returns count."""
+    """Mark every URL the availability API reports as archived. Returns count."""
     files = state["files"]
     hits = 0
 
@@ -132,12 +135,32 @@ def confirm_batch(state, path, urls):
     return hits
 
 
+def priority_urls(devices):
+    """Newest / highest-value first, so current builds are preserved before the long tail."""
+    out = []
+    for d in devices:
+        for ver, idx, fn, _sz in sorted(d["fulls"], key=lambda x: vkey(x[0]), reverse=True):
+            out.append(full_url(d, idx, fn))
+        for to, frm, idx, _sz in sorted(d["diffs"], key=lambda x: (vkey(x[0]), vkey(x[1])), reverse=True):
+            out.append(diff_url(d, idx, frm, to))
+        for ver, idx, _sz in sorted(d["apks"], key=lambda x: vkey(x[0]), reverse=True):
+            out.append(apk_url(d, idx, ver))
+    seen, res = set(), []
+    for u in out:
+        if u not in seen:
+            seen.add(u)
+            res.append(u)
+    return res
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--state", required=True)
     ap.add_argument("--page-url", help="index page to save (with outlinks)")
     ap.add_argument("--max", type=int, default=0, help="cap captures submitted per run (0 = all)")
-    ap.add_argument("--workers", type=int, default=6, help="concurrent capture submissions (SPN session cap is low)")
+    ap.add_argument("--workers", type=int, default=6, help="concurrent submissions within a wave")
+    ap.add_argument("--wave-size", type=int, default=WAVE_SIZE)
+    ap.add_argument("--drain-wait", type=int, default=DRAIN_WAIT)
     ap.add_argument("--confirm-wait", type=int, default=CONFIRM_WAIT)
     args = ap.parse_args()
 
@@ -151,7 +174,7 @@ def main():
 
     state = load_state(args.state)
     files = state["files"]
-    urls = all_urls(load_devices())
+    urls = priority_urls(load_devices())
 
     # The index page: fire a capture with outlinks (bonus archive of the linked pages).
     if args.page_url:
@@ -161,11 +184,10 @@ def main():
         print(f"page: {'submitted (+outlinks)' if jid else 'submit failed'} — {info.get('status', 'ok')}")
 
     # Pass A — confirm anything already archived (catches prior runs' async completions).
-    pending = [u for u in urls if u not in files]
-    got = confirm_batch(state, args.state, pending)
+    got = confirm_batch(state, args.state, [u for u in urls if u not in files])
     print(f"confirmed {got} already-archived; {len(files)}/{len(urls)} done")
 
-    # Pass B — fire captures for the rest.
+    # Pass B — fire captures newest-first, paced into waves to respect SPN's active cap.
     todo = [u for u in urls if u not in files]
     if args.max > 0:
         todo = todo[:args.max]
@@ -173,14 +195,22 @@ def main():
     def fire(u):
         jid, info = submit(u)
         if not jid:
-            print(f"  submit issue: {u} ({info.get('status_ext') or info.get('status')})", file=sys.stderr)
+            print(f"  defer (retry next run): {u} ({info.get('status_ext') or info.get('status')})", file=sys.stderr)
         return u, bool(jid)
 
     submitted = []
-    if todo:
+    waves = [todo[i:i + args.wave_size] for i in range(0, len(todo), args.wave_size)]
+    for wi, wave in enumerate(waves, 1):
+        accepted = 0
         with ThreadPoolExecutor(max_workers=args.workers) as ex:
-            submitted = [u for u, ok in ex.map(fire, todo) if ok]
-    print(f"submitted {len(submitted)}/{len(todo)} captures")
+            for u, ok in ex.map(fire, wave):
+                if ok:
+                    submitted.append(u)
+                    accepted += 1
+        print(f"  wave {wi}/{len(waves)}: {accepted}/{len(wave)} accepted")
+        if wi < len(waves):
+            time.sleep(args.drain_wait)
+    print(f"submitted {len(submitted)}/{len(todo)} captures across {len(waves)} wave(s)")
 
     # Pass C — let them settle, then confirm this run's submissions.
     if submitted:
