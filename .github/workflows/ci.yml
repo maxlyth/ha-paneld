@@ -8,21 +8,9 @@ on:
     branches: [main]
   workflow_dispatch:
 
-permissions:
-  contents: read
-  actions: read
-
 jobs:
-  pick:
-    uses: ./.github/workflows/_pick-runner.yml
-    with:
-      labels: homelab-x64
-    secrets: inherit
-
   build:
-    name: Build (${{ needs.pick.outputs.tier }})
-    needs: pick
-    runs-on: ${{ fromJson(needs.pick.outputs.labels) }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -40,8 +28,6 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
-        with:
-          packages: platform-tools
 
       - name: Install NDK + CMake
         run: sdkmanager "ndk;27.0.12077973" "cmake;3.22.1"

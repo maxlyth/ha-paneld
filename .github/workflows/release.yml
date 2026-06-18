@@ -11,19 +11,10 @@ on:
 
 permissions:
   contents: write
-  actions: read
 
 jobs:
-  pick:
-    uses: ./.github/workflows/_pick-runner.yml
-    with:
-      labels: homelab-x64
-    secrets: inherit
-
   release:
-    name: Release (${{ needs.pick.outputs.tier }})
-    needs: pick
-    runs-on: ${{ fromJson(needs.pick.outputs.labels) }}
+    runs-on: ubuntu-latest
     env:
       # Set these repo secrets to publish a properly-signed release APK. Absent them, the
       # workflow falls back to the debug-signed APK so a tag still produces an installable asset.
@@ -42,8 +33,6 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
-        with:
-          packages: platform-tools
 
       - name: Install NDK + CMake
         run: sdkmanager "ndk;27.0.12077973" "cmake;3.22.1"
