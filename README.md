@@ -4,7 +4,7 @@
 </picture>
 
 [![CI](https://github.com/maxlyth/ha-paneld/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/maxlyth/ha-paneld/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/badge/release-v0.8.2-blue?style=flat-square)](https://github.com/maxlyth/ha-paneld/releases/latest)
+[![Release](https://img.shields.io/badge/release-v0.8.3-blue?style=flat-square)](https://github.com/maxlyth/ha-paneld/releases/latest)
 [![License](https://img.shields.io/badge/license-Apache_2.0-blue?style=flat-square)](LICENSE)
 
 **ha-paneld is free, open-source, and exists to fix what's wrong with Home Assistant wall panels** —
@@ -377,6 +377,7 @@ Android 11), Electron WF1589T (rk3576, Android 14).
   now an **[F-Droid install path](docs/fdroid.md)** for on-device install + auto-update.
 - **Reliability fixes** — wake-on-wave now updates `light.<panel>_screen` in HA (it could stay OFF after the screen woke — [#6](https://github.com/maxlyth/ha-paneld/issues/6)); the brightness slider reads and drives the real hardware backlight, not just the Android setting, on firmwares that idle-dim; the **Launcher** button opens an actual launcher instead of landing on the HA app; Zigbee is now detected on **4.x** NSPanel Pro firmware; and opening the config UI no longer crashes the service.
 - **Backlight no longer idle-dims** — some panel firmwares dim the hardware backlight to ~1% at the screen-off timeout even while the screen is kept on, so the panel went very dim a minute after the last touch. ha-paneld now holds the timeout high to stop that — **on by default** (`switch.<panel>_prevent_idle_dim`); turn it off to restore the firmware's dimming. No root needed.
+- **Touch click** — an opt-in click on every screen tap (rides `switch.<panel>_touch_sound`), played by ha-paneld itself so it fires even on the WebView dashboard where Android's own touch sounds don't.
 
 <details>
 <summary>Earlier releases (0.8.2 → 0.4.x) — full history in <a href="CHANGELOG.md">CHANGELOG.md</a></summary>

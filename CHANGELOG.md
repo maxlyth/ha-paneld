@@ -8,7 +8,7 @@ From **v0.8.0**, entries are grouped under **Added** (new features/entities), **
 changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
 content appear. Earlier releases predate this convention and keep their flat lists.
 
-## v0.8.3 - unreleased
+## v0.8.3 - 2026-06-19
 
 ### Changed
 
@@ -21,10 +21,11 @@ content appear. Earlier releases predate this convention and keep their flat lis
 - **Backlight no longer idle-dims** — several panel firmwares dim the hardware backlight at the screen-off timeout even while the OS keeps the screen on, so the panel went very dim ~60 s after the last touch despite full brightness. ha-paneld now holds the screen-off timeout high to defer that, **on by default** (`switch.<panel>_prevent_idle_dim`) — these are mains-powered wall panels; turn it off to restore the firmware's own dimming. No root needed (`WRITE_SETTINGS`).
 - **Live screenshot in the info page + `/screenshot.png`** — the HTTP UI now shows a live panel screenshot (root `screencap`), scaled to a single column and **click-to-open full size** in a new tab. The `/screenshot.png` endpoint is also usable directly as a Home Assistant camera `still_image_url` / Picture-card image. LAN-only (like the rest of the surface), captured on demand — no background polling. Root required.
 - **Smatek S9E proximity** — the S9E's `SensorManager` proximity registers but never delivers events, so `binary_sensor.<panel>_proximity` (and wake-on-wave) didn't work. ha-paneld now reads the raw proximity GPIO (gpio18: 1 = near, 0 = far) over root instead, on panels whose profile declares one. Reporter-confirmed (GitHub #5).
+- **Touch-click feedback** — an opt-in click on every screen tap, produced by ha-paneld itself: a 1 px system-overlay touch watcher catches each tap (without consuming it) and plays the OS key-click via SoundPool, so it works even on the WebView dashboard where Android's own touch sounds never fire. Rides the existing `switch.<panel>_touch_sound`.
 
 ### Fixed
 
-- **Touch sounds work after a reboot** — the touch-sound switch raised the system-stream volume only when toggled, so a panel that booted with it already enabled stayed silent (volume left at 0); it's now re-applied at startup. Sound only — these panels have no vibration motor, and dashboard taps are inside the WebView (which doesn't play Android touch sounds).
+- **Touch sound re-applied at startup** — the touch-sound switch raised the system-stream volume only when toggled, so a panel that booted with it already enabled stayed silent (volume left at 0); it's now re-applied on boot.
 - **Navbar brightness/volume now sync to Home Assistant** — stepping brightness or volume from the soft navbar changed the panel but never published the new state, so `light.<panel>_screen` and `number.<panel>_volume` went stale in HA. Both now publish on change.
 - **Navbar volume ± reliable on all panels** — on a panel whose audio stream reports a small max number of steps, the old percent round-trip could round back to the *same* raw level, so a tap changed nothing and the system volume slider never appeared. The buttons now step the raw stream level directly, so every tap moves the volume **and** flashes the slider.
 - **No navbar flash on auto-hide** — after the bar slid off the bottom edge it could flash back into view for a single frame before disappearing; it now hides cleanly.
