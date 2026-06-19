@@ -430,6 +430,9 @@ class PaneldServer(
         // Controls buttons: render but DISABLE (not hide, not silently-broken) when the action's capability
         // is missing — back/recents need the a11y service, launcher/reboot need root; volume always works.
         val a11yOk = facts["Accessibility nav"] == "yes"
+        // Recents is only real where the firmware has an overview screen — KEYCODE_APP_SWITCH no-ops on
+        // single-purpose panels (TPA10), so gate the button on the profile rather than show a dead one.
+        val hasRecents = io.github.maxlyth.hapaneld.device.DeviceProfile.detect().hasRecents
         val rootOk = Su.available() || HelperClient.available()
         fun pbtn(action: String, label: String, ok: Boolean, needs: String, style: String = ""): String {
             val dis = if (ok) "" else """ disabled title="needs $needs""""
@@ -454,7 +457,7 @@ $setupBanner
 <div class="card"><h2>Controls <small>· software nav bar</small></h2>
 <div style="display:flex;gap:8px;flex-wrap:wrap">
  ${pbtn("back", "← Back", a11yOk, "the accessibility service")}
- ${pbtn("recents", "▢ Recents", a11yOk, "the accessibility service")}
+ ${pbtn("recents", "▢ Recents", a11yOk && hasRecents, if (hasRecents) "the accessibility service" else "a Recents/overview screen (absent on this panel)")}
  ${pbtn("launcher", "⊞ Launcher", rootOk, "root (su or the helper daemon)")}
 </div>
 <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
