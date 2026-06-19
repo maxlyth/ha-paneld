@@ -25,13 +25,13 @@ step() { echo "${CYN}${B}$1${X} $2"; }
 
 trap 'echo "${RED}${B}✗ provisioning incomplete${X} — re-run the SAME command to finish (it is idempotent)." >&2' ERR
 
-TARGET="${1:?usage: provision.sh <panel-ip:5555> [APK] [--id ID] [--mqtt tcp://host:1883] [--mqtt-user U] [--mqtt-pass P] [--latest] [--force] [--persist-adb] [--verify]}"
+TARGET="${1:?usage: provision.sh <panel-ip:5555> [APK] [--id ID] [--mqtt tcp://host:1883] [--mqtt-user U] [--mqtt-pass P] [--latest] [--force] [--persist-adb] [--strip-vendor] [--verify]}"
 shift
 REPO="maxlyth/ha-paneld"
 LOCAL_APK="app/build/outputs/apk/debug/app-debug.apk"
 PKG="io.github.maxlyth.hapaneld"
 A11Y="$PKG/.input.PanelAccessibilityService"
-APK=""; PANEL_ID=""; MQTT=""; MQTT_USER=""; MQTT_PASS=""; VERIFY_ONLY=0; LATEST=0; FORCE=0; PERSIST_ADB=0; TOINSTALL_VER=""
+APK=""; PANEL_ID=""; MQTT=""; MQTT_USER=""; MQTT_PASS=""; VERIFY_ONLY=0; LATEST=0; FORCE=0; PERSIST_ADB=0; STRIP_VENDOR=0; TOINSTALL_VER=""
 
 if [ "${1:-}" ] && [ "${1#--}" = "${1:-}" ]; then APK="$1"; shift; fi
 while [ "${1:-}" ]; do
@@ -44,6 +44,7 @@ while [ "${1:-}" ]; do
     --latest) LATEST=1; shift ;;     # ignore any local build, fetch the newest GitHub release
     --force) FORCE=1; shift ;;       # skip the same/older-version prompt
     --persist-adb) PERSIST_ADB=1; shift ;;  # keep network adb (tcp 5555) across reboots (opt-in; standing LAN port)
+    --strip-vendor) STRIP_VENDOR=1; shift ;; # disable the Tuya vendor apps (TPA10) non-interactively (skips the prompt)
     --verify) VERIFY_ONLY=1; shift ;;
     *) echo "${RED}unknown arg: $1${X}" >&2; exit 2 ;;
   esac
@@ -68,6 +69,61 @@ verify() {
   else echo "   ${YEL}ℹ${X} MQTT broker: ${YEL}not set${X} ${D}(set it on the page to enable HA discovery)${X}"; fi
   echo "   ${YEL}ℹ${X} panel_id: ${B}${pid:-?}${X}"
   return $rc
+}
+
+# Tuya panels (TPA10) ship a closed vendor stack (launcher, system UI, Tuya IoT, hardware, diagnostics)
+# that does nothing for an HA panel and uses CPU/RAM. Offer to disable it — but ONLY once the panel can
+# run without it. Reversible: re-enable any package with `adb shell pm enable <pkg>`.
+offer_strip_vendor() {
+  local brand model
+  brand="$(adb -s "$TARGET" shell getprop ro.product.brand 2>/dev/null | tr -d '\r')"
+  model="$(adb -s "$TARGET" shell getprop ro.product.model 2>/dev/null | tr -d '\r')"
+  case "$brand $model" in *[Tt]uya*|*TPA10*) ;; *) return 0 ;; esac   # Tuya/TPA10 only
+
+  # Guard 1 — root (vendor apps are system apps; pm disable-user needs su on the userdebug build).
+  if ! adb -s "$TARGET" shell 'su 0 id 2>/dev/null' | grep -q 'uid=0'; then
+    if [ "$STRIP_VENDOR" = 1 ]; then echo "   ${YEL}⚠ --strip-vendor ignored: no root (need userdebug su).${X}"; fi
+    return 0
+  fi
+  # Guard 2 — persistent adb, else disabling the diagnostics-app adb backdoor can lock you out.
+  local adben tcp
+  adben="$(adb -s "$TARGET" shell settings get global adb_enabled 2>/dev/null | tr -d '\r')"
+  tcp="$(adb -s "$TARGET" shell getprop persist.adb.tcp.port 2>/dev/null | tr -d '\r')"
+  if [ "$adben" != "1" ] || [ -z "$tcp" ]; then
+    echo "   ${YEL}⚠ vendor-strip skipped: re-run with --persist-adb first (persistent adb is required so disabling the Tuya diagnostics backdoor can't lock you out).${X}"
+    return 0
+  fi
+  # Guard 3 — a non-vendor home launcher must exist before we disable the vendor launcher.
+  local home=""
+  for L in l.l io.homeassistant.companion.android.minimal io.homeassistant.companion.android; do
+    if adb -s "$TARGET" shell pm path "$L" >/dev/null 2>&1; then home="$L"; break; fi
+  done
+  if [ -z "$home" ]; then
+    echo "   ${YEL}⚠ vendor-strip skipped: install a replacement launcher first (the l.l slim launcher or HA Companion).${X}"
+    return 0
+  fi
+
+  # --strip-vendor forces it; otherwise prompt on a TTY (default No).
+  if [ "$STRIP_VENDOR" != 1 ]; then
+    [ -t 0 ] || return 0
+    echo "${MAG}${B}Tuya panel detected.${X} ${D}Its vendor apps (launcher, system UI, Tuya IoT, hardware, diagnostics) are a closed stack with nothing for HA and use CPU/RAM.${X}"
+    printf "   Disable them for a faster, minimal panel? Reversible with ${B}pm enable${X}. [y/N] "
+    read -r a; case "$a" in [yY]*) ;; *) echo "   keeping the vendor apps."; return 0 ;; esac
+  fi
+
+  step "🧹 minimising" "${D}home → $home; disabling Tuya vendor apps${X}"
+  adb -s "$TARGET" shell cmd package set-home-activity "$home" >/dev/null 2>&1 || true
+  for P in com.smartos.xinch.launcher com.smartos.xinch.systemui com.smartos.xinch.smartiot \
+           com.smartos.xinch.hardware com.smartos.xinch.monitor com.smartos.xinch.setting \
+           com.smartos.xinch.communicate com.tuya.devicetest; do
+    adb -s "$TARGET" shell pm path "$P" >/dev/null 2>&1 || continue
+    if adb -s "$TARGET" shell pm disable-user --user 0 "$P" >/dev/null 2>&1; then
+      echo "   ${GRN}✓${X} disabled $P"
+    else
+      echo "   ${YEL}–${X} could not disable $P"
+    fi
+  done
+  echo "   ${D}undo any with: adb -s $TARGET shell pm enable <pkg>${X}"
 }
 
 # Fetch the newest signed release APK from GitHub (gh if present, else the API via curl). Sets APK + TOINSTALL_VER.
@@ -197,3 +253,7 @@ fi
 echo
 verify && echo "${GRN}${B}✅ provisioned${X} — ${B}$URL/${X}" || echo "${YEL}↻ re-run the same command to finish (idempotent).${X}"
 echo "${D}   LED: rk3576 app-direct; sysfs panels (TPA10) also need the root daemon (helper/README.md).${X}"
+
+# Tuya/TPA10 only: offer to disable the closed vendor app stack for a faster, minimal HA panel (guarded
+# on root + persistent adb + a replacement launcher; prompts unless --strip-vendor was passed).
+offer_strip_vendor
