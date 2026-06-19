@@ -126,6 +126,22 @@ offer_strip_vendor() {
   echo "   ${D}undo any with: adb -s $TARGET shell pm enable <pkg>${X}"
 }
 
+# Warn when the system WebView is too old for a current HA frontend (the dashboard renders blank/broken).
+# Informational only — points at the update instructions; does not change anything.
+WEBVIEW_DOC="https://github.com/$REPO/blob/main/docs/hardware/tpa10.md#webview--update-this-first"
+check_webview() {
+  local wv major
+  wv="$(adb -s "$TARGET" shell dumpsys webviewupdate 2>/dev/null | grep -m1 'Current WebView package' | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+  [ -n "$wv" ] || return 0
+  major="${wv%%.*}"
+  case "$major" in ''|*[!0-9]*) return 0 ;; esac
+  if [ "$major" -lt 110 ]; then
+    echo "${YEL}${B}⚠ system WebView is very old ($wv)${X}${YEL} — too old for a current Home Assistant frontend; the dashboard may render blank or broken.${X}"
+    echo "   ${CYN}update it: $WEBVIEW_DOC${X}"
+    echo "   ${D}(Already swapped in Cromite SystemWebView? It stamps the OEM version, so it still reports $wv here — ignore this.)${X}"
+  fi
+}
+
 # Fetch the newest signed release APK from GitHub (gh if present, else the API via curl). Sets APK + TOINSTALL_VER.
 download_latest() {
   local dir tag url json
@@ -253,6 +269,9 @@ fi
 echo
 verify && echo "${GRN}${B}✅ provisioned${X} — ${B}$URL/${X}" || echo "${YEL}↻ re-run the same command to finish (idempotent).${X}"
 echo "${D}   LED: rk3576 app-direct; sysfs panels (TPA10) also need the root daemon (helper/README.md).${X}"
+
+# Flag a too-old system WebView (informational; the dashboard won't render on ancient Chrome).
+check_webview
 
 # Tuya/TPA10 only: offer to disable the closed vendor app stack for a faster, minimal HA panel (guarded
 # on root + persistent adb + a replacement launcher; prompts unless --strip-vendor was passed).
