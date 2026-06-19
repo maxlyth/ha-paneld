@@ -148,6 +148,66 @@ static int start_component(const char *comp) {
 
 static void reply(int fd, const char *s) { (void)!write(fd, s, strlen(s)); }
 
+// Numeric (display-density arg) — defends the system() call below against injection.
+static int valid_num(const char *s) {
+    if (!*s) return 0;
+    for (const char *p = s; *p; p++) if (!(*p >= '0' && *p <= '9')) return 0;
+    return 1;
+}
+// Lowercase-alnum CPU governor names (schedutil/performance/powersave/interactive/ondemand…).
+static int valid_gov(const char *s) {
+    if (!*s) return 0;
+    for (const char *p = s; *p; p++)
+        if (!((*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9') || *p == '_')) return 0;
+    return 1;
+}
+
+// Forced display density (dpi) via `wm density`; arg = a number, or "reset" for the physical default.
+static int set_density(const char *arg) {
+    if (strcmp(arg, "reset") == 0) { system("wm density reset"); return 0; }
+    if (!valid_num(arg)) return -1;
+    char cmd[64];
+    snprintf(cmd, sizeof cmd, "wm density %s", arg);
+    system(cmd);
+    return 0;
+}
+
+// Reply the current density as "PHYS=<n> OVER=<n|->" parsed from `wm density` (one line).
+static void get_density(int fd) {
+    FILE *p = popen("wm density 2>/dev/null", "r");
+    char phys[16] = "?", over[16] = "-", buf[160], out[48];
+    if (p) {
+        while (fgets(buf, sizeof buf, p)) {
+            char *c;
+            if ((c = strstr(buf, "Physical density:"))) sscanf(c + 17, "%15s", phys);
+            else if ((c = strstr(buf, "Override density:"))) sscanf(c + 17, "%15s", over);
+        }
+        pclose(p);
+    }
+    snprintf(out, sizeof out, "PHYS=%s OVER=%s\n", phys, over);
+    reply(fd, out);
+}
+
+// CPU scaling governor on all cores (cpufreq sysfs is root-writable; the app can read it itself).
+static int set_governor(const char *gov) {
+    if (!valid_gov(gov)) return -1;
+    char cmd[256];
+    snprintf(cmd, sizeof cmd,
+      "for f in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do echo %s > \"$f\" 2>/dev/null; done",
+      gov);
+    system(cmd);
+    return 0;
+}
+
+// Capture the screen as PNG and stream the raw bytes to [fd]. Client half-closes then reads to EOF.
+static void screencap_to(int fd) {
+    FILE *p = popen("screencap -p", "r");
+    if (!p) return;
+    char buf[8192]; size_t n;
+    while ((n = fread(buf, 1, sizeof buf, p)) > 0) (void)!write(fd, buf, n);
+    pclose(p);
+}
+
 // --- button instrumentation: subscriber registry + evdev reader threads ---------------------------
 // SUBSCRIBEd client fds receive async "KEY <code> <value>\n" lines. A small fixed registry under a
 // mutex; writes that fail (client gone) just drop — the conn thread removes the fd on disconnect.
@@ -239,6 +299,8 @@ static void handle(int fd, char *line) {
         reply(fd, set_off() == 0 ? "OK\n" : "ERR\n");
     } else if (sscanf(line, "BTN %d", &r) == 1) {
         reply(fd, set_btn(r) == 0 ? "OK\n" : "ERR\n");
+    } else if (strncmp(line, "SCREENCAP", 9) == 0) {
+        screencap_to(fd);   // raw PNG bytes; serve() closes on the client half-close → client gets EOF
     } else if (strncmp(line, "SCREEN", 6) == 0) {
         char w[8] = "";
         sscanf(line, "SCREEN %7s", w);
@@ -264,6 +326,13 @@ static void handle(int fd, char *line) {
     } else if (strncmp(line, "REBOOT", 6) == 0) {
         reply(fd, "OK\n");   // reply before we go down
         system("svc power reboot 2>/dev/null || reboot");
+    } else if (strncmp(line, "DENSITY", 7) == 0) {
+        char arg[16] = ""; sscanf(line, "DENSITY %15s", arg);
+        if (arg[0] == '\0') get_density(fd);                                 // get -> "PHYS=.. OVER=.."
+        else reply(fd, set_density(arg) == 0 ? "OK\n" : "ERR\n");            // set <n>|reset
+    } else if (strncmp(line, "GOV", 3) == 0) {
+        char gov[32] = ""; sscanf(line, "GOV %31s", gov);
+        reply(fd, set_governor(gov) == 0 ? "OK\n" : "ERR\n");
     } else if (strncmp(line, "PING", 4) == 0) {
         reply(fd, "OK\n");
     } else {
