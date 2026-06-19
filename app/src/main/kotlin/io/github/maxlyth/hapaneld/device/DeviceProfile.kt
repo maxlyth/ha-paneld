@@ -64,6 +64,22 @@ interface DeviceProfile {
      *  — declare per profile where known. Optionally append a known chipset, e.g. "Infrared (STK3338)". */
     val proximityTech: String? get() = null
 
+    /** Pre-calibration polarity for the tuning-UI gauge: true when "near" is the *smaller* raw value
+     *  (distance ToF, e.g. TPA10), false when near is the *larger* value (reflective IR). The gauge icons
+     *  (panel = near / person = far) assert a direction, so this grounds them before the user calibrates;
+     *  the two-point capture then refines it empirically and stores the authoritative value. Null =
+     *  unknown (legacy default: assume near-below). Does NOT affect the near/far decision, only the UI. */
+    val proximityNearBelow: Boolean? get() = null
+
+    /** Reference raw values for a *profiled* sensor: a typical reading with an object near the panel
+     *  ([proximityNearRaw]) and at rest / far ([proximityFarRaw]). When both are set the panel is calibrated
+     *  straight from the profile — threshold = midpoint, polarity = near<far (unless [proximityNearBelow]
+     *  overrides), hysteresis from the sensitivity preset — so the manual two-point capture is only a
+     *  fallback for unprofiled sensors (and a user override). A written profile is authoritative knowledge;
+     *  don't make the user re-discover it. Null = unknown → manual calibration. */
+    val proximityNearRaw: Float? get() = null
+    val proximityFarRaw: Float? get() = null
+
     /** GPIO number of a raw binary proximity line to poll over root (1 = near, 0 = far), for panels whose
      *  Android `SensorManager` proximity is absent or registers but never delivers events — e.g. the
      *  Smatek S9E (gpio18, reporter-confirmed GitHub #5: reads 0 far / 1 near, no export needed). Null →

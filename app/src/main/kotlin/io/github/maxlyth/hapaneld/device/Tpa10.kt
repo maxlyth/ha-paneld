@@ -19,6 +19,7 @@ object Tpa10 : DeviceProfile {
     override val relayBase: String? = null
     override val buttonLedGpioBase: Int? = null
     override val proximityTech: String? = "Time-of-Flight"
+    override val proximityNearBelow: Boolean? = true   // ToF: a nearer object reads a *smaller* distance
     override val lightTech: String? = "Ambient light"
     override val manufacturer = "Tuya"
     override val model = "TPA10"

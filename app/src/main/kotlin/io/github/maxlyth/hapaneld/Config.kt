@@ -209,10 +209,31 @@ class Config(context: Context) {
     /** Hysteresis band width as a fraction of the near/far capture span (flap resistance). */
     enum class ProxSensitivity(val fraction: Float) { HIGH(0.08f), MEDIUM(0.15f), LOW(0.30f) }
 
-    val proximityNearRaw: Float get() = prefs.getFloat("prox_near_raw", Float.NaN)
-    val proximityFarRaw: Float get() = prefs.getFloat("prox_far_raw", Float.NaN)
-    val proximityThreshold: Float get() = prefs.getFloat("prox_threshold", Float.NaN)
-    val proximityNearBelow: Boolean get() = prefs.getBoolean("prox_near_below", true)
+    // A user capture wins; otherwise fall back to the profile. A written profile is authoritative
+    // knowledge — if it supplies near/far the panel is calibrated out of the box (no manual dance); the
+    // two-point capture is the fallback for unprofiled sensors (and a user override).
+    private val userCalibrated: Boolean get() = !prefs.getFloat("prox_threshold", Float.NaN).isNaN()
+    val proximityNearRaw: Float get() {
+        val v = prefs.getFloat("prox_near_raw", Float.NaN)
+        return if (!v.isNaN()) v else profile?.proximityNearRaw ?: Float.NaN
+    }
+    val proximityFarRaw: Float get() {
+        val v = prefs.getFloat("prox_far_raw", Float.NaN)
+        return if (!v.isNaN()) v else profile?.proximityFarRaw ?: Float.NaN
+    }
+    val proximityThreshold: Float get() {
+        val v = prefs.getFloat("prox_threshold", Float.NaN)
+        if (!v.isNaN()) return v
+        val n = profile?.proximityNearRaw; val f = profile?.proximityFarRaw
+        return if (n != null && f != null) (n + f) / 2f else Float.NaN
+    }
+    val proximityNearBelow: Boolean get() {
+        if (userCalibrated) return prefs.getBoolean("prox_near_below", true)        // user capture wins
+        profile?.proximityNearBelow?.let { return it }                             // explicit profile polarity
+        val n = profile?.proximityNearRaw; val f = profile?.proximityFarRaw
+        if (n != null && f != null) return n < f                                   // derived from profile near/far
+        return prefs.getBoolean("prox_near_below", true)                           // legacy default
+    }
     val proximityCalibrated: Boolean
         get() = !proximityNearRaw.isNaN() && !proximityFarRaw.isNaN() && !proximityThreshold.isNaN()
     val proximitySensitivity: ProxSensitivity
