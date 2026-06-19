@@ -197,7 +197,10 @@ class PaneldServer(
                 // Embedded scaled in the info page + linkable full-size; also usable as an HA camera
                 // still_image_url. Captured on demand — no background polling.
                 get("/screenshot.png") {
-                    val png = Su.runBytes("screencap -p")
+                    // su-direct on su panels; via the root daemon's SCREENCAP on sandbox panels (TPA10).
+                    val png = if (io.github.maxlyth.hapaneld.device.DeviceProfile.detect().appCanSu)
+                        Su.runBytes("screencap -p")
+                    else io.github.maxlyth.hapaneld.util.HelperClient.sendBytes("SCREENCAP")
                     if (png != null && png.isNotEmpty()) {
                         call.respondBytes(png, ContentType.Image.PNG)
                     } else {

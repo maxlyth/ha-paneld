@@ -32,4 +32,20 @@ object HelperClient {
         Log.d(TAG, "daemon not reachable (${e.message})")
         null
     }
+
+    /** Send one command and read the full **binary** reply (e.g. `SCREENCAP` PNG bytes). Half-closes the
+     *  write side so the daemon's serve loop sees EOF, processes the command, and closes — giving us EOF
+     *  after all the bytes. Longer timeout (screencap takes ~1-2s). Null if unreachable/empty. */
+    fun sendBytes(cmd: String): ByteArray? = try {
+        Socket().use { s ->
+            s.connect(InetSocketAddress("127.0.0.1", PORT), TIMEOUT_MS)
+            s.soTimeout = 5000
+            s.getOutputStream().apply { write((cmd + "\n").toByteArray()); flush() }
+            s.shutdownOutput()                       // daemon read -> 0 after handling -> closes -> EOF here
+            s.getInputStream().readBytes().takeIf { it.isNotEmpty() }
+        }
+    } catch (e: Exception) {
+        Log.d(TAG, "daemon bytes failed (${e.message})")
+        null
+    }
 }
