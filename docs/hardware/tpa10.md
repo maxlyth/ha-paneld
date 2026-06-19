@@ -72,17 +72,38 @@ can disconnect USB and work over Wi-Fi (`adb connect <panel-ip>:5555`).
 > `ro.serialno`; if the password is **rejected**, recompute with `android_id` (swap the `getprop
 > ro.serialno` for `settings get secure android_id`). A wrong password is **harmless** — it's simply
 > rejected, nothing is written or bricked. To pin the field for certain on a fresh unit,
-> `logcat | grep -i checkDevPassword` while entering a guess prints the expected value. *(Author has a
-> single unit and hasn't risked confirming which field; the algorithm itself is verified.)*
+> `logcat | grep -i checkDevPassword` while entering a guess prints the expected value. **Confirmed 2026-06-19 on a live unit: the serial-based password is rejected → the field is `android_id`** (use `settings get secure android_id`). In any case the root persistence method below makes the password unnecessary.
 
-**Quicker alternative — property hack (reboot-persistence not confirmed on this firmware):**
+**Recommended — persist adb password-free via root (CONFIRMED reboot-proof, 2026-06-19).** With a
+root shell from the diagnostics-app backdoor you don't need the vendor password at all. This survives
+both the diagnostics app closing **and** a full reboot — verified on a live unit: after reboot,
+network adb came back on its own at `:5555` with the diagnostics app *not* foreground and no on-screen
+"Allow". Push + run as root:
 
 ```bash
-adb root
-adb shell su 0 setprop persist.adb.tcp.port 5555
-adb shell su 0 settings put global adb_enabled 1
-adb tcpip 5555     # thereafter: adb connect <panel-ip>:5555
+# persist-adb.sh — run via the diagnostics-app backdoor:
+#   adb push persist-adb.sh /data/local/tmp/ && adb shell su 0 sh /data/local/tmp/persist-adb.sh
+settings put global adb_enabled 1                   # USB debugging, persisted in /data
+settings put global development_settings_enabled 1  # keep Developer options visible
+setprop persist.adb.tcp.port 5555                   # network adb on :5555 — persist.* survives reboot
+
+# Pre-authorise each controlling machine so NO on-screen "Allow USB debugging" is needed after reboot.
+# Append the contents of every workstation's ~/.android/adbkey.pub (one key per line):
+mkdir -p /data/misc/adb
+cat >> /data/misc/adb/adb_keys <<'KEYS'
+PASTE-EACH-adbkey.pub-LINE-HERE
+KEYS
+chmod 640 /data/misc/adb/adb_keys
+chown system:shell /data/misc/adb/adb_keys 2>/dev/null
+restorecon /data/misc/adb/adb_keys 2>/dev/null
+
+setprop ctl.restart adbd                            # apply now (and it auto-starts every boot)
+echo "adb persisted: adb_enabled=$(settings get global adb_enabled) tcp=$(getprop persist.adb.tcp.port)"
 ```
+
+Thereafter `adb connect <panel-ip>:5555` works from any pre-authorised machine, across reboots, with
+the vendor apps closed — **this supersedes the vendor-password route above** on userdebug units. (Note:
+a `/data` wipe clears `adb_keys` + `adb_enabled`, so re-run this after any factory reset.)
 
 > [!CAUTION]
 > Disable the vendor `com.smartos.xinch.*` packages only as the **very last step**, after confirming
