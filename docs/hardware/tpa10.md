@@ -43,42 +43,12 @@ adb shell su 0 id    # uid=0 → root confirmed
 
 The TPA10's adb-root is more dependable over the USB port than over the network.
 
-**3. Persist adb — the vendor "Enable ADB" password (the reliable, reboot-proof route).** Unlocking
-Developer options' **"Enable ADB"** toggle flips the vendor's *own* persistent flag, so network adb
-survives reboots without relying on a property hack. The toggle asks for a password, and — contrary to
-earlier community lore — it is **deterministically derived**, not per-unit-random. The
-`checkDevPassword` logic in `com.smartos.xinch.setting` computes it as:
-
-```text
-password = base64( last3(ro.tuya.uuid) + last3(<device-id>) )      then take the last 6 characters
-```
-
-Verified against the community example from
-[#123](https://github.com/seaky/nspanel_pro_tools_apk/issues/123): uuid…`11a` + device…`xia` →
-`base64("11axia")` = `MTFheGlh` → last 6 = **`FheGlh`** ✓. Compute it for your unit over the
-(USB-backdoor) adb connection:
-
-```bash
-adb shell 'getprop ro.tuya.uuid; getprop ro.serialno' \
-  | { read u; read d; printf '%s%s' "${u: -3}" "${d: -3}" | base64 -w0 | cut -c3-8; }
-```
-
-Enter the result in **Developer options → Enable ADB**. Network adb then persists across reboots; you
-can disconnect USB and work over Wi-Fi (`adb connect <panel-ip>:5555`).
-
-> [!NOTE]
-> **One unconfirmed detail:** which value the *About* page labels "device ID" — it's one of
-> `ro.serialno` or `settings get secure android_id`, both deterministic. The one-liner above assumes
-> `ro.serialno`; if the password is **rejected**, recompute with `android_id` (swap the `getprop
-> ro.serialno` for `settings get secure android_id`). A wrong password is **harmless** — it's simply
-> rejected, nothing is written or bricked. To pin the field for certain on a fresh unit,
-> `logcat | grep -i checkDevPassword` while entering a guess prints the expected value. **Confirmed 2026-06-19 on a live unit: the serial-based password is rejected → the field is `android_id`** (use `settings get secure android_id`). In any case the root persistence method below makes the password unnecessary.
-
-**Recommended — persist adb password-free via root (CONFIRMED reboot-proof, 2026-06-19).** With a
-root shell from the diagnostics-app backdoor you don't need the vendor password at all. This survives
-both the diagnostics app closing **and** a full reboot — verified on a live unit: after reboot,
-network adb came back on its own at `:5555` with the diagnostics app *not* foreground and no on-screen
-"Allow". Push + run as root:
+**3. Make adb persist (root, password-free — the reliable route).** With the diagnostics app
+foreground you have a rooted adb session (`su` is present; `adb root` also works — it's a `userdebug`
+build). Use it to persist adb so you never need the test app or a password again. This survives the
+diagnostics app closing **and** a full reboot — verified on a live unit (2026-06-19: network adb
+returned on its own at `:5555` after a reboot, test app closed, no on-screen "Allow"). Push + run as
+root:
 
 ```bash
 # persist-adb.sh — run via the diagnostics-app backdoor:
@@ -101,9 +71,20 @@ setprop ctl.restart adbd                            # apply now (and it auto-sta
 echo "adb persisted: adb_enabled=$(settings get global adb_enabled) tcp=$(getprop persist.adb.tcp.port)"
 ```
 
-Thereafter `adb connect <panel-ip>:5555` works from any pre-authorised machine, across reboots, with
-the vendor apps closed — **this supersedes the vendor-password route above** on userdebug units. (Note:
-a `/data` wipe clears `adb_keys` + `adb_enabled`, so re-run this after any factory reset.)
+The panel must be on Wi-Fi for the network route; thereafter `adb connect <panel-ip>:5555` works from
+any pre-authorised machine, across reboots, with the vendor apps closed. A `/data` wipe / factory reset
+clears `adb_keys` + `adb_enabled`, so re-run this after one.
+
+> [!WARNING]
+> **The Developer-options "Enable ADB" *password* is not a usable path — do not try to compute it.**
+> Contrary to the [#123](https://github.com/seaky/nspanel_pro_tools_apk/issues/123) community recipe, it
+> does not reproduce. Decompiling `checkDevPassword` in `com.smartos.xinch.setting` confirms the *shape*
+> — `base64(takeLast(ro.tuya.uuid,3) + takeLast(deviceId,3))` then `takeLast(6)`, case-insensitive (or
+> `takeLast(ro.tuya.uuid,6)` when `deviceId` is empty) — but the `deviceId` field it uses could not be
+> matched to any readable identifier (`ro.serialno`, `android_id`, `ro.tuya.key` were all rejected on a
+> live unit, 2026-06-19), and the app's logger is **not** logcat, so the expected value can't be read
+> on-device either. The #123 worked example also has a typo (`11a`+`xia` written as `11xia`; it must be
+> `11axia`). Use the root method above — it makes the password irrelevant.
 
 > [!CAUTION]
 > Disable the vendor `com.smartos.xinch.*` packages only as the **very last step**, after confirming
