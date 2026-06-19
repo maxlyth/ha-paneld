@@ -162,8 +162,11 @@ class PaneldServer(
                         // hard, useful action is escaping TO the system launcher to reach Settings/config apps.
                         "launcher" -> { system.launchLauncher(config.launcherPackage); true }
                         "reboot" -> { scope.launch { system.reboot() }; true }
-                        "volup" -> { volume.setPercent((volume.getPercent() + 10).coerceAtMost(100)); true }
-                        "voldn" -> { volume.setPercent((volume.getPercent() - 10).coerceAtLeast(0)); true }
+                        // step() (adjustStreamVolume) not setPercent: on a coarse stream (e.g. the TPA10's
+                        // 7-step STREAM_MUSIC) the current→percent→raw round-trip truncates back to the same
+                        // index, so +10% was a no-op. step() always moves one real notch and flashes the slider.
+                        "volup" -> { volume.step(up = true); true }
+                        "voldn" -> { volume.step(up = false); true }
                         else -> false
                     }
                     if (ok) call.respondText("ok\n") else call.respondText("bad-action\n", status = HttpStatusCode.BadRequest)
