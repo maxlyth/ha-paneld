@@ -34,6 +34,7 @@
 //   SUBSCRIBE         this connection then receives async  "KEY <code> <value>\n"  lines for every
 //                     key event from WATCHed nodes (held open until the client disconnects) -> "OK\n"
 //   REBOOT            reboot the panel                  -> "OK\n" (then goes down)
+//   PERFDUMP          CPU/load/temp/gpu/proc snapshot for sandboxed apps -> marker-delimited stream
 //   PING              liveness probe                   -> "OK\n"
 //   <anything else>                                    -> "ERR\n"
 
@@ -208,6 +209,151 @@ static void screencap_to(int fd) {
     pclose(p);
 }
 
+// --- perf snapshot (PERFDUMP) ---------------------------------------------------------------------
+// A sandboxed app (untrusted_app) is SELinux-denied /proc/stat, /proc/loadavg, thermal, and other pids'
+// stat, so it can't compute CPU/load/temp/top itself. Root here can. PERFDUMP streams one marker-
+// delimited snapshot (client half-closes then reads to EOF, like SCREENCAP); PerfReader parses it.
+// Pure file reads — no shell, no globbing exec.
+
+// utime(field14)+stime(field15) from a /proc/<pid>[/task/<tid>]/stat buffer; comm (in the parens) via [comm].
+static long stat_jiffies(const char *buf, char *comm, size_t commsz) {
+    const char *lp = strchr(buf, '(');
+    const char *rp = strrchr(buf, ')');
+    if (!lp || !rp || rp < lp) return -1;
+    if (comm && commsz) {
+        size_t L = (size_t)(rp - lp - 1);
+        if (L >= commsz) L = commsz - 1;
+        memcpy(comm, lp + 1, L); comm[L] = '\0';
+    }
+    // Fields after ')': idx0 = state (a char), ... utime = idx11, stime = idx12. Walk tokens as strings
+    // (state isn't numeric) and convert only 11 + 12.
+    const char *p = rp + 1;
+    long utime = -1, stime = -1;
+    int idx = 0;
+    while (*p) {
+        while (*p == ' ') p++;
+        if (!*p) break;
+        if (idx == 11) utime = strtol(p, NULL, 10);
+        else if (idx == 12) { stime = strtol(p, NULL, 10); break; }
+        while (*p && *p != ' ') p++;
+        idx++;
+    }
+    return (utime >= 0 && stime >= 0) ? utime + stime : -1;
+}
+
+static void cat_to(int out, const char *path) {
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return;
+    char b[4096]; ssize_t n;
+    while ((n = read(fd, b, sizeof b)) > 0) (void)!write(out, b, n);
+    close(fd);
+}
+
+// First line of [path] into [dst] (NUL-terminated, newline stripped). dst[0]='\0' on failure.
+static void first_line(const char *path, char *dst, size_t dstsz) {
+    dst[0] = '\0';
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return;
+    ssize_t n = read(fd, dst, dstsz - 1);
+    close(fd);
+    if (n <= 0) { dst[0] = '\0'; return; }
+    dst[n] = '\0';
+    char *nl = strchr(dst, '\n'); if (nl) *nl = '\0';
+}
+
+static void perfdump_to(int fd) {
+    char out[320];
+    reply(fd, "@STAT\n");
+    cat_to(fd, "/proc/stat");
+
+    char load[256]; first_line("/proc/loadavg", load, sizeof load);
+    snprintf(out, sizeof out, "@LOAD %s\n", load[0] ? load : "-"); reply(fd, out);
+
+    long maxt = -1;                              // max thermal_zone*/temp (millidegrees)
+    DIR *dt = opendir("/sys/class/thermal");
+    if (dt) {
+        struct dirent *e; char path[256], b[32];
+        while ((e = readdir(dt))) {
+            if (strncmp(e->d_name, "thermal_zone", 12) != 0) continue;
+            snprintf(path, sizeof path, "/sys/class/thermal/%s/temp", e->d_name);
+            first_line(path, b, sizeof b);
+            if (b[0]) { long t = strtol(b, NULL, 10); if (t > maxt) maxt = t; }
+        }
+        closedir(dt);
+    }
+    snprintf(out, sizeof out, "@TEMP %ld\n", maxt); reply(fd, out);
+
+    char gpu[64] = "-";                          // first devfreq *gpu*/load ("<load>@<freq>Hz")
+    DIR *dg = opendir("/sys/class/devfreq");
+    if (dg) {
+        struct dirent *e; char path[256];
+        while ((e = readdir(dg))) {
+            if (e->d_name[0] == '.' || !strstr(e->d_name, "gpu")) continue;
+            snprintf(path, sizeof path, "/sys/class/devfreq/%s/load", e->d_name);
+            first_line(path, gpu, sizeof gpu);
+            if (gpu[0]) break; else snprintf(gpu, sizeof gpu, "-");
+        }
+        closedir(dg);
+    }
+    snprintf(out, sizeof out, "@GPU %s\n", gpu); reply(fd, out);
+
+    reply(fd, "@PROC\n");                        // pid \t utime+stime \t comm; collect renderer pids
+    int rend[32]; int rn = 0;
+    DIR *dp = opendir("/proc");
+    if (dp) {
+        struct dirent *e;
+        while ((e = readdir(dp))) {
+            if (!valid_num(e->d_name)) continue;
+            char path[64], b[1024], comm[64];
+            snprintf(path, sizeof path, "/proc/%s/stat", e->d_name);
+            int f = open(path, O_RDONLY); if (f < 0) continue;
+            ssize_t n = read(f, b, sizeof b - 1); close(f);
+            if (n <= 0) continue; b[n] = '\0';
+            long j = stat_jiffies(b, comm, sizeof comm); if (j < 0) continue;
+            // Full name from cmdline argv0 (comm is truncated to 15 chars, losing the head — "axlyth.hapaneld"
+            // not "io.github.maxlyth.hapaneld"); comm is the fallback for kernel threads (empty cmdline) and
+            // isolated renderers (cmdline unreadable in the su domain).
+            char cl[160], name[160];
+            snprintf(path, sizeof path, "/proc/%s/cmdline", e->d_name);
+            int cf = open(path, O_RDONLY);
+            ssize_t cn = (cf >= 0) ? read(cf, cl, sizeof cl - 1) : -1;
+            if (cf >= 0) close(cf);
+            if (cn > 0) { cl[cn] = '\0'; snprintf(name, sizeof name, "%s", cl); }  // "%s" stops at argv0's NUL
+            else snprintf(name, sizeof name, "%s", comm);
+            for (char *t = name; *t; t++) if (*t == '\t') *t = ' ';                // tabs would break parsing
+            snprintf(out, sizeof out, "%s\t%ld\t%s\n", e->d_name, j, name); reply(fd, out);
+            // Chromium renderer: main-thread comm is the truncated tail of "…SandboxedProcessService0:N"
+            // (e.g. "ocessService0:1") — match "cessService". (cmdline has the full name but the su domain
+            // can't read an isolated process's cmdline; comm from stat is readable.)
+            if (rn < 32 && strstr(comm, "cessService")) rend[rn++] = atoi(e->d_name);
+        }
+        closedir(dp);
+    }
+
+    reply(fd, "@REND\n");                        // CrRendererMain thread jiffies per renderer (pid \t jiffies)
+    for (int i = 0; i < rn; i++) {
+        char tdir[64]; snprintf(tdir, sizeof tdir, "/proc/%d/task", rend[i]);
+        DIR *td = opendir(tdir); if (!td) continue;
+        struct dirent *te;
+        while ((te = readdir(td))) {
+            if (!valid_num(te->d_name)) continue;
+            char path[128], cb[32];
+            snprintf(path, sizeof path, "/proc/%d/task/%s/comm", rend[i], te->d_name);
+            first_line(path, cb, sizeof cb);
+            if (strcmp(cb, "CrRendererMain") != 0) continue;
+            snprintf(path, sizeof path, "/proc/%d/task/%s/stat", rend[i], te->d_name);
+            char sb[1024]; int sf = open(path, O_RDONLY); if (sf < 0) continue;
+            ssize_t sn = read(sf, sb, sizeof sb - 1); close(sf);
+            if (sn <= 0) continue; sb[sn] = '\0';
+            long j = stat_jiffies(sb, NULL, 0); if (j < 0) continue;
+            snprintf(out, sizeof out, "%d\t%ld\n", rend[i], j); reply(fd, out);
+            break;
+        }
+        closedir(td);
+    }
+    reply(fd, "@END\n");
+}
+
 // --- button instrumentation: subscriber registry + evdev reader threads ---------------------------
 // SUBSCRIBEd client fds receive async "KEY <code> <value>\n" lines. A small fixed registry under a
 // mutex; writes that fail (client gone) just drop — the conn thread removes the fd on disconnect.
@@ -333,6 +479,8 @@ static void handle(int fd, char *line) {
     } else if (strncmp(line, "GOV", 3) == 0) {
         char gov[32] = ""; sscanf(line, "GOV %31s", gov);
         reply(fd, set_governor(gov) == 0 ? "OK\n" : "ERR\n");
+    } else if (strncmp(line, "PERFDUMP", 8) == 0) {
+        perfdump_to(fd);    // marker-delimited snapshot; serve() closes on client half-close → EOF
     } else if (strncmp(line, "PING", 4) == 0) {
         reply(fd, "OK\n");
     } else {

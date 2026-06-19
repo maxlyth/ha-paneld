@@ -1,6 +1,8 @@
 package io.github.maxlyth.hapaneld.http
 
 import io.github.maxlyth.hapaneld.control.Su
+import io.github.maxlyth.hapaneld.device.DeviceProfile
+import io.github.maxlyth.hapaneld.util.HelperClient
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -41,6 +43,9 @@ object PerfReader {
     private var prevRenderJiffies = HashMap<Int, Long>() // renderer pid -> CrRendererMain utime+stime
     private var prevRenderAt = 0L
     private var rootOk = false
+    // Sandbox panels (appCanSu=false) are SELinux-denied proc_stat/proc_loadavg/thermal/other-pid stat,
+    // so the whole sampler reads come from the root daemon's PERFDUMP instead of direct /proc.
+    private var daemonMode = false
     private var tickCount = 0
     private var prevTopTotal = 0L                 // /proc/stat aggregate jiffies at last top sample
     private var prevProc = HashMap<Int, Long>()   // pid -> utime+stime jiffies at last top sample
@@ -58,6 +63,7 @@ object PerfReader {
     fun start(scope: CoroutineScope) {
         scope.launch {
             rootOk = runCatching { Su.available() }.getOrDefault(false)
+            daemonMode = runCatching { !DeviceProfile.detect().appCanSu }.getOrDefault(false)
             while (isActive) {
                 if (enabled && System.currentTimeMillis() - lastAccessAt < ACTIVE_MS) {
                     runCatching { tick() }
@@ -211,18 +217,122 @@ object PerfReader {
         while (q.size > MAX) q.removeFirst()
     }
 
+    // --- daemon-sourced sampling (sandbox panels) -------------------------------------------------
+    private class Dump(
+        val stat: List<LongArray>,
+        val load: List<String>,
+        val tempMilli: Long,
+        val gpuRaw: String?,
+        val proc: List<Triple<Int, Long, String>>,  // pid, utime+stime jiffies, comm
+        val rend: Map<Int, Long>                     // renderer pid -> CrRendererMain jiffies
+    )
+
+    /** Fetch + parse one PERFDUMP from the root daemon. Null if the daemon is unreachable. */
+    private fun fetchDump(): Dump? {
+        val raw = HelperClient.sendBytes("PERFDUMP")?.toString(Charsets.UTF_8) ?: return null
+        val stat = ArrayList<LongArray>()
+        val proc = ArrayList<Triple<Int, Long, String>>()
+        val rend = HashMap<Int, Long>()
+        var load: List<String> = emptyList()
+        var tempMilli = -1L
+        var gpuRaw: String? = null
+        var section = ""
+        for (line in raw.lineSequence()) {
+            when {
+                line == "@STAT" -> { section = "stat"; continue }
+                line == "@PROC" -> { section = "proc"; continue }
+                line == "@REND" -> { section = "rend"; continue }
+                line == "@END" -> break
+                line.startsWith("@LOAD ") -> { load = line.removePrefix("@LOAD ").trim().split(" ").take(3); continue }
+                line.startsWith("@TEMP ") -> { tempMilli = line.removePrefix("@TEMP ").trim().toLongOrNull() ?: -1L; continue }
+                line.startsWith("@GPU ") -> { gpuRaw = line.removePrefix("@GPU ").trim().takeIf { it != "-" }; continue }
+            }
+            when (section) {
+                "stat" -> if (line.startsWith("cpu"))
+                    stat.add(line.trim().split(Regex("\\s+")).drop(1).map { it.toLongOrNull() ?: 0L }.toLongArray())
+                "proc" -> line.split('\t').let { t ->
+                    val pid = t.getOrNull(0)?.toIntOrNull(); val j = t.getOrNull(1)?.toLongOrNull()
+                    if (pid != null && j != null) proc.add(Triple(pid, j, t.getOrElse(2) { "" }))
+                }
+                "rend" -> line.split('\t').let { t ->
+                    val pid = t.getOrNull(0)?.toIntOrNull(); val j = t.getOrNull(1)?.toLongOrNull()
+                    if (pid != null && j != null) rend[pid] = j
+                }
+            }
+        }
+        return Dump(stat, load, tempMilli, gpuRaw, proc, rend)
+    }
+
+    /** Top-5 by CPU from the daemon's process table (comm only — truncated to 16 chars, no cmdline). */
+    private fun sampleTopDump(dump: Dump) {
+        val total = dump.stat.firstOrNull()?.sum() ?: return       // "cpu" aggregate line
+        val cur = HashMap<Int, Long>()
+        val comm = HashMap<Int, String>()
+        for ((pid, j, c) in dump.proc) { cur[pid] = j; comm[pid] = c }
+        val dTotal = total - prevTopTotal
+        val ranked = if (prevTopTotal != 0L && dTotal > 0) {
+            cur.entries.mapNotNull { (pid, j) -> prevProc[pid]?.let { pid to (j - it) } }
+                .filter { it.second > 0 }.sortedByDescending { it.second }.take(5)
+        } else emptyList()
+        prevTopTotal = total
+        prevProc = cur
+        if (ranked.isNotEmpty()) {
+            val json = ranked.joinToString(",", "[", "]") { (pid, dj) ->
+                val pctv = Math.round(dj * 1000.0 / dTotal) / 10.0
+                val nm = (comm[pid] ?: pid.toString()).replace("\\", "").replace("\"", "")
+                """{"name":"$nm","cpu":$pctv}"""
+            }
+            synchronized(lock) { topJson = json }
+        }
+    }
+
+    /** Dashboard responsiveness from the daemon's CrRendererMain thread jiffies (primary metric; the
+     *  gfxinfo secondary needs dumpsys/su, so it's omitted on sandbox panels). */
+    private fun sampleRenderDump(dump: Dump) {
+        val now = System.currentTimeMillis()
+        var mainPct = -1.0
+        for ((pid, j) in dump.rend) {
+            val prev = prevRenderJiffies[pid]
+            if (prev != null && prevRenderAt > 0L) {
+                val dt = (now - prevRenderAt) / 1000.0
+                if (dt > 0) { val p = (j - prev) / dt; if (p > mainPct) mainPct = p } // HZ=100 -> jiffies/s == %-of-core
+            }
+        }
+        prevRenderJiffies = HashMap(dump.rend)
+        prevRenderAt = now
+        if (mainPct < 0) {
+            synchronized(lock) { renderJson = "{\"status\":\"no-renderer\",\"hist\":${stutterHist.toList()}}" }
+            return
+        }
+        val pct1 = Math.round(mainPct.coerceIn(0.0, 100.0) * 10) / 10.0
+        val verdict = if (pct1 < 50) "smooth" else if (pct1 < 85) "occasional" else "janky"
+        synchronized(lock) {
+            push(stutterHist, Math.round(pct1).toInt())
+            renderJson = "{\"pkg\":\"dashboard\",\"mainPct\":$pct1,\"verdict\":\"$verdict\",\"hist\":${stutterHist.toList()}}"
+        }
+    }
+
     private fun readStat(): List<LongArray> =
         File("/proc/stat").readLines()
             .filter { it.startsWith("cpu") }
             .map { line -> line.trim().split(Regex("\\s+")).drop(1).map { it.toLongOrNull() ?: 0L }.toLongArray() }
 
     private fun tick() {
-        if (rootOk) when (tickCount % 3) {     // spread the su calls across ticks (~6s each)
-            0 -> runCatching { sampleTop() }
-            1 -> runCatching { sampleRender() }
+        // Sandbox panels: one PERFDUMP from the root daemon supplies everything the app can't read.
+        val dump = if (daemonMode) runCatching { fetchDump() }.getOrNull() else null
+        if (daemonMode && dump == null) { resetBaselines(); return } // daemon unreachable — no bogus deltas
+        when {
+            daemonMode -> when (tickCount % 3) {   // dump is non-null here
+                0 -> runCatching { sampleTopDump(dump!!) }
+                1 -> runCatching { sampleRenderDump(dump!!) }
+            }
+            rootOk -> when (tickCount % 3) {        // spread the su calls across ticks (~6s each)
+                0 -> runCatching { sampleTop() }
+                1 -> runCatching { sampleRender() }
+            }
         }
         tickCount++
-        val stat = runCatching { readStat() }.getOrNull()
+        val stat = if (daemonMode) dump!!.stat else runCatching { readStat() }.getOrNull()
         val pct = ArrayList<Int>()
         val prev = prevStat
         if (stat != null && prev != null && stat.size == prev.size) {
@@ -240,7 +350,8 @@ object PerfReader {
         val overall = pct.first()
         val cores = if (pct.size > 1) pct.drop(1) else emptyList()
 
-        val load = runCatching { File("/proc/loadavg").readText().trim().split(" ").take(3) }.getOrNull() ?: emptyList()
+        val load = if (daemonMode) dump!!.load
+            else runCatching { File("/proc/loadavg").readText().trim().split(" ").take(3) }.getOrNull() ?: emptyList()
         val freqMhz = runCatching {
             File("/sys/devices/system/cpu").listFiles { f -> f.name.matches(Regex("cpu[0-9]+")) }
                 ?.sortedBy { it.name }
@@ -255,22 +366,24 @@ object PerfReader {
                 ?.maxOrNull()?.div(1000) ?: 0L
         }.getOrNull() ?: 0L
 
+        val gpuRaw = if (daemonMode) dump!!.gpuRaw
+            else runCatching {
+                File("/sys/class/devfreq").listFiles { f -> f.name.contains("gpu") }
+                    ?.firstNotNullOfOrNull { d -> File(d, "load").takeIf { it.exists() }?.readText()?.trim() }
+            }.getOrNull()
         var gpuPct = -1; var gpuMhz = 0L
-        runCatching {
-            File("/sys/class/devfreq").listFiles { f -> f.name.contains("gpu") }
-                ?.firstNotNullOfOrNull { d -> File(d, "load").takeIf { it.exists() }?.readText()?.trim() }
-                ?.let { raw ->
-                    val at = raw.indexOf('@')
-                    gpuPct = (if (at >= 0) raw.substring(0, at) else raw).trim().toIntOrNull() ?: -1
-                    if (at >= 0) gpuMhz = raw.substring(at + 1).removeSuffix("Hz").trim().toLongOrNull()?.div(1_000_000) ?: 0L
-                }
+        gpuRaw?.let { raw ->
+            val at = raw.indexOf('@')
+            gpuPct = (if (at >= 0) raw.substring(0, at) else raw).trim().toIntOrNull() ?: -1
+            if (at >= 0) gpuMhz = raw.substring(at + 1).removeSuffix("Hz").trim().toLongOrNull()?.div(1_000_000) ?: 0L
         }
 
-        val tempC = runCatching {
-            File("/sys/class/thermal").listFiles { f -> f.name.startsWith("thermal_zone") }
-                ?.mapNotNull { File(it, "temp").takeIf { t -> t.exists() }?.readText()?.trim()?.toLongOrNull() }
-                ?.maxOrNull()?.let { if (it > 1000) it / 1000.0 else it.toDouble() }
-        }.getOrNull()
+        val tempC = if (daemonMode) dump!!.tempMilli.takeIf { it >= 0 }?.let { if (it > 1000) it / 1000.0 else it.toDouble() }
+            else runCatching {
+                File("/sys/class/thermal").listFiles { f -> f.name.startsWith("thermal_zone") }
+                    ?.mapNotNull { File(it, "temp").takeIf { t -> t.exists() }?.readText()?.trim()?.toLongOrNull() }
+                    ?.maxOrNull()?.let { if (it > 1000) it / 1000.0 else it.toDouble() }
+            }.getOrNull()
 
         val mem = runCatching {
             val m = File("/proc/meminfo").readLines().associate {
