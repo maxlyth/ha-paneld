@@ -1,5 +1,8 @@
 package io.github.maxlyth.hapaneld.control
 
+import io.github.maxlyth.hapaneld.device.DeviceProfile
+import io.github.maxlyth.hapaneld.util.HelperClient
+
 /**
  * Display-sizing control: **density (DPI)** via `wm density` + **text size (font scale)** via
  * `settings system font_scale`. Together these decide whether a Home-Assistant dashboard designed in a
@@ -9,29 +12,33 @@ package io.github.maxlyth.hapaneld.control
  * so HA cards come out too big/small or text mis-sized vs desktop; iOS keeps these aligned, Android
  * panels frequently don't.
  *
- * Both persist across reboot (secure/system settings), so a one-shot set sticks. Root path (Su) →
- * available on su-reachable panels (NSPanel Pro PX30, WF1589T); absent where the app can't reach su
- * (TPA10).
+ * Both persist across reboot (secure/system settings), so a one-shot set sticks. Density is privileged
+ * (`wm density`): su-direct on su-reachable panels (NSPanel Pro PX30, WF1589T); on sandbox-walled panels
+ * (TPA10, `appCanSu=false`) it routes through the root daemon's `DENSITY` command, so the control is
+ * available there too. (Font scale is still su-only — pending a daemon route.)
  */
-class DensityController {
+class DensityController(private val canSu: Boolean = DeviceProfile.detect().appCanSu) {
 
     /** Native (physical) density, or null if unreadable. */
-    fun native(): Int? = parse("Physical density:")
+    fun native(): Int? = if (canSu) parseSu("Physical density:") else daemonField("PHYS")
 
     /** Current effective density — the override if one is set, else the physical density. */
-    fun current(): Int? = parse("Override density:") ?: native()
+    fun current(): Int? =
+        if (canSu) (parseSu("Override density:") ?: native())
+        else (daemonField("OVER") ?: native())
 
-    /** True when `wm density` is readable via su — i.e. we can also set it. */
+    /** True when density is readable — i.e. we can also set it. */
     fun available(): Boolean = native() != null
 
     /** Set the override density (dpi). Bounded to keep the UI usable/bootable. Returns true if applied. */
     fun set(dpi: Int): Boolean {
         if (dpi < MIN_DPI || dpi > MAX_DPI) return false
-        return Su.run("wm density $dpi")
+        return if (canSu) Su.run("wm density $dpi") else HelperClient.send("DENSITY $dpi") == "OK"
     }
 
     /** Restore the native density. */
-    fun reset(): Boolean = Su.run("wm density reset")
+    fun reset(): Boolean =
+        if (canSu) Su.run("wm density reset") else HelperClient.send("DENSITY reset") == "OK"
 
     /** Current system font scale (1.0 when unset). WebView text follows this (textZoom = scale × 100). */
     fun fontScale(): Float =
@@ -46,10 +53,15 @@ class DensityController {
     /** Restore the default font scale (1.0). */
     fun resetFontScale(): Boolean = Su.run("settings delete system font_scale")
 
-    private fun parse(key: String): Int? =
+    // su path: parse the `wm density` output ("Physical density: N" / "Override density: N").
+    private fun parseSu(key: String): Int? =
         (Su.runOutput("wm density 2>/dev/null") ?: "")
             .lineSequence().firstOrNull { it.contains(key) }
             ?.substringAfter(key)?.trim()?.toIntOrNull()
+
+    // daemon path: parse the daemon's "PHYS=<n> OVER=<n|->" reply (OVER absent/"-" => no override).
+    private fun daemonField(key: String): Int? =
+        HelperClient.send("DENSITY")?.let { Regex("$key=(\\d+)").find(it)?.groupValues?.get(1)?.toIntOrNull() }
 
     companion object {
         const val MIN_DPI = 80

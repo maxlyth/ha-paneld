@@ -30,6 +30,6 @@ object Tpa10 : DeviceProfile {
         EvdevButton("/dev/input/event8", 14, grab = false, eventType = "KEYCODE_MUTE", sw = true),
     )
     override val cpuGovernors = mapOf("Performance" to "performance", "Efficiency" to "powersave", "Auto" to "schedutil")
-    override val recommendedDensity: Int? = null
-    override val recommendedFontScale: Float? = null
+    override val recommendedDensity: Int? = 226     // 10" 1920×1200 ≈ 226 ppi — natural 1:1 layout scale
+    override val recommendedFontScale: Float? = 1.0f
 }

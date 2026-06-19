@@ -1,6 +1,8 @@
 package io.github.maxlyth.hapaneld.control
 
 import io.github.maxlyth.hapaneld.device.DeviceProfile
+import io.github.maxlyth.hapaneld.util.HelperClient
+import java.io.File
 
 /**
  * CPU scaling-governor control, exposed to HA as three intent-based tiers rather than raw kernel
@@ -14,28 +16,35 @@ import io.github.maxlyth.hapaneld.device.DeviceProfile
  *
  * Each tier maps to a kernel governor via [DeviceProfile.cpuGovernors] — Auto differs by SoC (schedutil
  * on rk3566/rk3576, interactive on PX30) — and falls back to resolving from the runtime-available list
- * when the profile has no mapping (or the mapped governor isn't offered). Writes need root, so this is a
- * [Su] path: present on su-reachable panels (NSPanel Pro PX30, WF1589T), absent on sandbox-walled
- * panels (TPA10) where the select simply doesn't appear.
+ * when the profile has no mapping. The cpufreq sysfs is world-readable, so governors are read
+ * **directly** (works on every panel, su or not); the *write* needs root — su-direct on su-reachable
+ * panels (NSPanel Pro, WF1589T), via the root daemon's `GOV` command on sandbox-walled panels (TPA10,
+ * `appCanSu=false`). Previously su-only, so the control (and the "Responsiveness" card) was absent there.
  */
 class CpuController(private val profile: DeviceProfile = DeviceProfile.detect()) {
 
     /** Governors the kernel offers (e.g. [powersave, performance, schedutil]); empty if unreadable. */
     fun governors(): List<String> =
-        Su.runOutput("cat $AVAIL 2>/dev/null")?.trim()
-            ?.split(Regex("\\s+"))?.filter { it.isNotEmpty() } ?: emptyList()
+        readNode(AVAIL)?.trim()?.split(Regex("\\s+"))?.filter { it.isNotEmpty() } ?: emptyList()
 
-    /** True when governors are readable via su — i.e. we can also set them. */
+    /** True when governors are readable — i.e. we can also set them. */
     fun available(): Boolean = governors().isNotEmpty()
 
     /** Current raw governor (cpu0), or null if unreadable. */
-    private fun gov(): String? = Su.runOutput("cat $GOV0 2>/dev/null")?.trim()?.takeIf { it.isNotEmpty() }
+    private fun gov(): String? = readNode(GOV0)?.trim()?.takeIf { it.isNotEmpty() }
+
+    /** Read a cpufreq sysfs node. World-readable, so read directly off-su; su panels keep the su read. */
+    private fun readNode(path: String): String? =
+        if (profile.appCanSu) Su.runOutput("cat $path 2>/dev/null")
+        else runCatching { File(path).readText() }.getOrNull()
 
     /** Apply [g] to every core. Returns true if the write ran. */
     private fun set(g: String): Boolean {
         // Governor names are lowercase letters (+ digits in a few BSPs) — sanitise to keep the write safe.
         if (!g.matches(Regex("[a-z0-9_]+"))) return false
-        return Su.run("for f in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do echo $g > \$f; done")
+        return if (profile.appCanSu)
+            Su.run("for f in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do echo $g > \$f; done")
+        else HelperClient.send("GOV $g") == "OK"
     }
 
     /** Resolve a friendly [tier] to a kernel governor: profile default if the SoC offers it, else from
