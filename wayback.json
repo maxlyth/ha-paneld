@@ -1,12 +1,40 @@
 {
  "files": {
+  "https://global-otadl2bsy.coolkit.cc/nspanel-pro-ver120/apk/14/228V3.7.0.apk": {
+   "ts": 1782025124,
+   "wb": "20260621062440"
+  },
   "https://global-otadl2bsy.coolkit.cc/nspanel-pro-ver120/apk/15/228V3.7.1.apk": {
    "ts": 1781777078,
    "wb": "20260618093051"
   },
+  "https://global-otadl2bsy.coolkit.cc/nspanel-pro-ver120/apk/21/228V3.8.7.apk": {
+   "ts": 1782025124,
+   "wb": "20260621062430"
+  },
+  "https://global-otadl2bsy.coolkit.cc/nspanel-pro-ver120/apk/26/228V3.9.4.apk": {
+   "ts": 1782022711,
+   "wb": "20260618120352"
+  },
   "https://global-otadl2bsy.coolkit.cc/nspanel-pro-ver120/apk/41/228V4.0.7.apk": {
    "ts": 1781784188,
    "wb": "20260618104434"
+  },
+  "https://global-otadl2bsy.coolkit.cc/nspanel-pro-ver120/apk/60/228V4.4.0.apk": {
+   "ts": 1782025124,
+   "wb": "20260621062430"
+  },
+  "https://global-otadl2bsy.coolkit.cc/nspanel-pro-ver120/apk/61/228V4.4.1.apk": {
+   "ts": 1782025124,
+   "wb": "20260621062502"
+  },
+  "https://global-otadl2bsy.coolkit.cc/nspanel-pro-ver120/apk/66/228V4.5.0.apk": {
+   "ts": 1782025124,
+   "wb": "20260621062322"
+  },
+  "https://global-otadl2bsy.coolkit.cc/nspanel-pro-ver120/apk/67/228V4.5.1.apk": {
+   "ts": 1782025124,
+   "wb": "20260621062215"
   },
   "https://global-otadl2bsy.coolkit.cc/nspanel-pro-ver120/rom-diff/11/CK_3.5.0_3.7.0V228-diff.zip": {
    "ts": 1781777076,
@@ -92,13 +120,53 @@
    "ts": 1781784186,
    "wb": "20260618104408"
   },
+  "https://global-otadl2bsy.coolkit.cc/nspanel-pro-ver120/rom-diff/18/CK_3.5.0_4.0.0V228-diff.zip": {
+   "ts": 1782025124,
+   "wb": "20260621062213"
+  },
+  "https://global-otadl2bsy.coolkit.cc/nspanel-pro-ver120/rom-diff/18/CK_3.7.0_4.0.0V228-diff.zip": {
+   "ts": 1782025124,
+   "wb": "20260621062213"
+  },
+  "https://global-otadl2bsy.coolkit.cc/nspanel-pro-ver120/rom-diff/18/CK_3.7.1_4.0.0V228-diff.zip": {
+   "ts": 1782025124,
+   "wb": "20260621062213"
+  },
+  "https://global-otadl2bsy.coolkit.cc/nspanel-pro-ver120/rom-diff/18/CK_3.9.4_4.0.0V228-diff.zip": {
+   "ts": 1782025124,
+   "wb": "20260621062057"
+  },
+  "https://global-otadl2bsy.coolkit.cc/nspanel-pro-ver120/rom-diff/19/CK_3.6.1_4.0.7V228-diff.zip": {
+   "ts": 1782025124,
+   "wb": "20260621062103"
+  },
+  "https://global-otadl2bsy.coolkit.cc/nspanel-pro-ver120/rom-diff/19/CK_3.8.0_4.0.7V228-diff.zip": {
+   "ts": 1782025124,
+   "wb": "20260621062057"
+  },
+  "https://global-otadl2bsy.coolkit.cc/nspanel-pro-ver120/rom-diff/19/CK_4.0.0_4.0.7V228-diff.zip": {
+   "ts": 1782025124,
+   "wb": "20260621061842"
+  },
+  "https://global-otadl2bsy.coolkit.cc/nspanel-pro-ver120/rom-diff/20/CK_3.6.1_4.0.10V228-diff.zip": {
+   "ts": 1782022711,
+   "wb": "20260618120412"
+  },
   "https://global-otadl2bsy.coolkit.cc/nspanel-pro-ver120/rom-diff/20/CK_3.7.0_4.0.10V228-diff.zip": {
    "ts": 1781777077,
    "wb": "20260618093053"
   },
+  "https://global-otadl2bsy.coolkit.cc/nspanel-pro-ver120/rom-diff/20/CK_3.7.1_4.0.10V228-diff.zip": {
+   "ts": 1782025124,
+   "wb": "20260621061843"
+  },
   "https://global-otadl2bsy.coolkit.cc/nspanel-pro-ver120/rom-diff/20/CK_3.9.4_4.0.10V228-diff.zip": {
    "ts": 1781786507,
    "wb": "20260618120330"
+  },
+  "https://global-otadl2bsy.coolkit.cc/nspanel-pro-ver120/rom-diff/20/CK_4.0.0_4.0.10V228-diff.zip": {
+   "ts": 1782025119,
+   "wb": "20260621061842"
   },
   "https://global-otadl2bsy.coolkit.cc/nspanel-pro-ver120/rom-diff/20/CK_4.0.7_4.0.10V228-diff.zip": {
    "ts": 1781786507,
@@ -140,9 +208,21 @@
    "ts": 1781777088,
    "wb": "20260618093045"
   },
+  "https://global-otadl2bsy.coolkit.cc/nspanel-pro/rom-diff/42/CK_3.5.0_3.12.0-diff.zip": {
+   "ts": 1782022716,
+   "wb": "20260618104430"
+  },
   "https://global-otadl2bsy.coolkit.cc/nspanel-pro/rom-diff/42/CK_3.6.1_3.12.0-diff.zip": {
    "ts": 1781777089,
    "wb": "20260618093102"
+  },
+  "https://global-otadl2bsy.coolkit.cc/nspanel-pro/rom-diff/44/CK_3.1.0_4.0.7-diff.zip": {
+   "ts": 1782022716,
+   "wb": "20260618120419"
+  },
+  "https://global-otadl2bsy.coolkit.cc/nspanel-pro/rom-diff/44/CK_3.12.0_4.0.7-diff.zip": {
+   "ts": 1782022716,
+   "wb": "20260618120341"
   },
   "https://global-otadl2bsy.coolkit.cc/nspanel-pro/rom-diff/44/CK_3.3.0_4.0.7-diff.zip": {
    "ts": 1781777090,
@@ -152,14 +232,38 @@
    "ts": 1781784192,
    "wb": "20260618104426"
   },
+  "https://global-otadl2bsy.coolkit.cc/nspanel-pro/rom-diff/45/CK_3.7.0_4.0.10-diff.zip": {
+   "ts": 1782022716,
+   "wb": "20260618104431"
+  },
   "https://global-otadl2bsy.coolkit.cc/nspanel-pro/rom/16/NSPanel86P_CoolKit_480P_20230217_1.5.6-ota.zip": {
    "ts": 1781777078,
    "wb": "20260618093051"
+  },
+  "https://global-otadl2bsy.coolkit.cc/nspanel-pro/rom/24/CoolKit_Sonoff_480P_20230926_2.1.0-ota.zip": {
+   "ts": 1782025124,
+   "wb": "20260621062644"
+  },
+  "https://global-otadl2bsy.coolkit.cc/nspanel-pro/rom/25/CoolKit_Sonoff_480P_20231109_2.2.0-ota.zip": {
+   "ts": 1782025124,
+   "wb": "20260621062643"
+  },
+  "https://global-otadl2bsy.coolkit.cc/nspanel-pro/rom/26/CoolKit_Sonoff_480P_20231208_2.3.0-ota.zip": {
+   "ts": 1782025124,
+   "wb": "20260621062644"
+  },
+  "https://global-otadl2bsy.coolkit.cc/nspanel-pro/rom/27/CoolKit_Sonoff_480P_20240306_3.0.0-ota.zip": {
+   "ts": 1782025124,
+   "wb": "20260621062643"
+  },
+  "https://global-otadl2bsy.coolkit.cc/nspanel-pro/rom/46/CoolKit_Sonoff_480P_20251031_4.0.12-ota.zip": {
+   "ts": 1782025124,
+   "wb": "20260621062644"
   }
  },
  "page": {
   "job": "spn2-8cd254f2322be3b3631531d76097c1dde396b6e6",
   "ok": true,
-  "ts": 1781784179
+  "ts": 1782022706
  }
 }
