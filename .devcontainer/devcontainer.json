@@ -16,5 +16,10 @@
   },
   // Warms the Gradle wrapper so the first build is faster; harmless offline.
   // adb is on PATH — `adb connect <panel-ip>:5555 && adb install -r <apk>` reaches panels over the network.
-  "postCreateCommand": "./gradlew --version || true"
+  // Then runs a local, gitignored per-host setup hook if present (no-op for normal checkouts).
+  "postCreateCommand": "./gradlew --version || true; [ -f .sidecar/setup-container.sh ] && bash .sidecar/setup-container.sh || true",
+  // Don't connect the window/terminals/extensions until postCreateCommand finishes — otherwise the
+  // env (PATH, CLIs, ~ links) loads half-built and needs manual window reloads. Default is
+  // updateContentCommand, which runs before postCreate.
+  "waitFor": "postCreateCommand"
 }
