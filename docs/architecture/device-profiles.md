@@ -15,7 +15,7 @@ interface DeviceProfile {
   val socClass: String           // PX30 | rk3566 | rk3576
   val suForm: SuForm             // TOOLBOX | ANDROID | NONE (app-sandbox-walled → daemon)
   val appCanSu: Boolean
-  val ledMechanism: LedMechanism // RK3576_IOCTL | SYSFS_DAEMON | NONE
+  val ledMechanism: LedMechanism // RK3576_IOCTL | RK3576_IOCTL_DAEMON | SYSFS_DAEMON | AUTODETECT | NONE
   val screenOff: ScreenOff       // SU_BLPOWER | BRIGHTNESS_ZERO
   val zigbeeGatewayDir: String?  // /vendor/bin/siliconlabs_host | null
   val relayBase: String?         // /sys/class/st_relay | null

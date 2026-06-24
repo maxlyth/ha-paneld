@@ -4,18 +4,27 @@ import android.util.Log
 import io.github.maxlyth.hapaneld.util.HelperClient
 
 /**
- * LED adapter for panels whose LED is root-only sysfs (e.g. Tuya TPA10). A sandboxed app
- * (`untrusted_app`) cannot write the `sysfs_lights` node nor exec `su`, so the root helper daemon
- * ([helper/hapaneld-ledd](../../../../../../../helper/README.md)) does the write; this controller
- * talks to it via [HelperClient] over loopback. Full RGB.
+ * LED adapter for panels whose LED the app can't drive directly — either a root-only sysfs node
+ * (e.g. Tuya TPA10) or a `/dev/ledjni` ioctl the app is SELinux-denied (e.g. ZHICAI SMT1019). A
+ * sandboxed app (`untrusted_app`) can't write the sysfs node nor issue that ioctl nor exec `su`, so
+ * the root helper daemon ([helper/hapaneld-ledd](../../../../../../../helper/README.md)) does it; this
+ * controller talks to it via [HelperClient]. The daemon auto-detects which backend the panel has, so
+ * the `RGB`/`OFF` commands are identical either way. Full RGB.
  *
- * [available] returns true only when the daemon answers `PING`, so the LED entity is published only
- * on panels provisioned with the helper. Calls are blocking socket I/O — the bridge invokes them
- * off the main thread.
+ * [available] asks the daemon which backend it found (`LEDPROBE`) so the LED entity is published only
+ * when a *reachable* LED node exists — not merely because a daemon is running. Calls are blocking
+ * socket I/O — the bridge invokes them off the main thread.
  */
 class SocketLedController : LedController {
 
-    override fun available(): Boolean = HelperClient.available()
+    // Gate on a reachable LED node, not just "daemon up". An OLD daemon doesn't know LEDPROBE and
+    // replies "ERR" → fall back to PING so already-deployed panels keep their LED (backward-compatible);
+    // a new daemon that reports "none" (installed for control only, no LED) correctly yields no entity.
+    override fun available(): Boolean = when (HelperClient.send("LEDPROBE")) {
+        "ledjni", "sysfs" -> true
+        "none" -> false
+        else -> HelperClient.available()
+    }
 
     override fun colorCapable(): Boolean = true
 

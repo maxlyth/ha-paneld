@@ -29,6 +29,15 @@ object DiagReader {
         val su = Su.available()
         val daemon = HelperClient.available()
         val rkLed = NativeLed.available()
+        // Which LED node the daemon can actually reach — so "RGB LED" reflects a reachable node, not
+        // just "a daemon is running". An old daemon predates LEDPROBE and replies "ERR" → fall back to
+        // the daemon-up signal (prior behaviour); "none" = daemon present but no LED node.
+        val ledProbe = HelperClient.send("LEDPROBE")
+        val daemonLed = when (ledProbe) {
+            "ledjni", "sysfs" -> true
+            "none" -> false
+            else -> daemon
+        }
         val canWrite = Settings.System.canWrite(ctx)
         val a11y = a11yEnabled(ctx)
         val rootish = su || daemon
@@ -45,11 +54,12 @@ object DiagReader {
                     su -> "true backlight-off via su bl_power"
                     else -> "DIM ONLY — the backlight stays powered; needs su or the helper daemon for a real off"
                 }),
-            Cap("RGB LED", if (rkLed || daemon) "ok" else "none",
+            Cap("RGB LED", if (rkLed || daemonLed) "ok" else "none",
                 when {
                     rkLed -> "rk3576 /dev/ledjni (app-direct, no root)"
-                    daemon -> "sysfs LED via the helper daemon"
-                    else -> "no app-accessible LED node; sysfs LEDs need the root helper daemon (install needs su once)"
+                    ledProbe == "ledjni" -> "rk3576 /dev/ledjni ioctl via the helper daemon (root)"
+                    ledProbe == "sysfs" || daemonLed -> "sysfs LED via the helper daemon"
+                    else -> "no reachable LED node; needs the root helper daemon (install needs su once)"
                 }),
             Cap("Hardware buttons", if (a11y) "ok" else "none",
                 if (a11y) "accessibility key capture enabled" else

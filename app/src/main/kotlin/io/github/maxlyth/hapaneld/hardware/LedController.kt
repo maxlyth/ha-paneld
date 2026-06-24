@@ -32,19 +32,23 @@ class NoOpLedController : LedController {
  * Picks the LED backend from the active [DeviceProfile]'s [DeviceProfile.ledMechanism]:
  * - `RK3576_IOCTL` (e.g. WF1589T): NDK ioctl on the app-accessible `/dev/ledjni` — app-direct. Falls
  *   back to the daemon if the node isn't actually present (graceful for a mis-profiled panel).
+ * - `RK3576_IOCTL_DAEMON` (e.g. SMT1019): the `/dev/ledjni` ioctl is the same, but the app is
+ *   SELinux-denied it, so the [SocketLedController] asks the root daemon to issue it (the daemon runs
+ *   as root and auto-detects ledjni-vs-sysfs). No app-direct attempt — it would only ever EACCES.
  * - `SYSFS_DAEMON` (e.g. TPA10): the [SocketLedController], talking to the root helper daemon
- *   (`helper/hapaneld-ledd`) over loopback (a sandboxed app can't write sysfs nor exec `su`).
+ *   (`helper/hapaneld-ledd`) over the abstract UNIX socket (a sandboxed app can't write sysfs nor exec `su`).
  * - `NONE` (e.g. NSPanel Pro): no LED — skip probing entirely.
  * - `AUTODETECT` (unknown panel): probe rk3576 ioctl, then the daemon (the previous behaviour).
  *
  * For the socket path, `detect()` returns the controller without probing; the bridge later calls
- * `available()` (off the main thread), which is false when the daemon isn't running → the LED entity is
- * skipped. So a panel with neither a node nor the daemon yields no LED entity.
+ * `available()` (off the main thread), which is false when the daemon has no reachable LED node → the
+ * LED entity is skipped. So a panel with neither a node nor the daemon yields no LED entity.
  */
 object LedFactory {
     fun detect(profile: DeviceProfile = DeviceProfile.detect()): LedController = when (profile.ledMechanism) {
         LedMechanism.NONE -> NoOpLedController()
         LedMechanism.SYSFS_DAEMON -> SocketLedController()
+        LedMechanism.RK3576_IOCTL_DAEMON -> SocketLedController()
         LedMechanism.RK3576_IOCTL -> Rk3576LedController().takeIf { it.available() } ?: SocketLedController()
         LedMechanism.AUTODETECT -> Rk3576LedController().takeIf { it.available() } ?: SocketLedController()
     }

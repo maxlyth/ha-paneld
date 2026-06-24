@@ -164,9 +164,13 @@ interface DeviceProfile {
  *  userdebug); NONE = su is not reachable from the app sandbox (use the helper daemon instead). */
 enum class SuForm { TOOLBOX, ANDROID, NONE }
 
-/** RGB-LED control mechanism. AUTODETECT = probe rk3576 ioctl then the sysfs daemon (the [Generic]
- *  fallback for an unknown panel); NONE = the panel has no LED, skip probing. */
-enum class LedMechanism { RK3576_IOCTL, SYSFS_DAEMON, AUTODETECT, NONE }
+/** RGB-LED control mechanism. RK3576_IOCTL = app-direct ioctl on `/dev/ledjni` (e.g. WF1589T);
+ *  RK3576_IOCTL_DAEMON = the *same* ioctl but routed through the root helper daemon, for panels where
+ *  the app is SELinux-denied the ioctl (e.g. SMT1019 — the node is `system:system`, generic `device`
+ *  label); SYSFS_DAEMON = root-only sysfs LED via the daemon (e.g. TPA10); AUTODETECT = probe rk3576
+ *  ioctl then the daemon (the [Generic] fallback for an unknown panel); NONE = no LED, skip probing.
+ *  The daemon auto-detects sysfs-vs-ledjni itself, so both daemon mechanisms use the same client. */
+enum class LedMechanism { RK3576_IOCTL, RK3576_IOCTL_DAEMON, SYSFS_DAEMON, AUTODETECT, NONE }
 
 /** True-screen-off path. */
 enum class ScreenOff { SU_BLPOWER, DAEMON_BLPOWER, BRIGHTNESS_ZERO }

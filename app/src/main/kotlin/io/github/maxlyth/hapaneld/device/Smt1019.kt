@@ -3,11 +3,14 @@ package io.github.maxlyth.hapaneld.device
 /**
  * ZHICAI SMT1019 (Rockchip rk3576, Android 14). Marketed "Generic SMT1019 / RK3576_64GB"; fingerprint
  * `ro.product.device` = `WF2489T`. Shares the rk3576 `rk3576_u` model code with the [Wf1589t], but is a
- * different, locked-down unit: it reports **no root** (`su` absent — `su -c id` exits 127) and its RGB
- * LED ioctl on `/dev/ledjni` is denied to sandboxed apps (`EACCES`/`rc=-13` on the ioctl; the node opens
- * O_RDONLY but the kernel rejects the ioctl — SELinux/uid-gated to privileged domains, where the
- * vendor's own system-privileged MQTT app works). So unlike the WF1589T there is no app-direct LED path
- * and no su to drive it: the LED is declared [LedMechanism.NONE] rather than mis-probed as present.
+ * different, locked-down unit: stock firmware reports **no root** (`su` absent — `su -c id` exits 127)
+ * and its RGB LED ioctl on `/dev/ledjni` is denied to sandboxed apps (`EACCES`/`rc=-13`). Firmware
+ * teardown (GitHub #8) confirmed why: the node is `system:system 0664` with the SELinux-generic
+ * `device` label, and the vendor's own LED path (`libjnielc.so` / `com.example.elcapi.jnielc`) uses the
+ * **identical** clean-room ioctls ha-paneld already knows — `0xa1/0xa2/0xa3` RGB, `0x99` off, 0..15. So
+ * the LED works once something privileged issues the ioctl: not app-direct, but via the root helper
+ * daemon ([LedMechanism.RK3576_IOCTL_DAEMON]). On a stock (un-rooted, daemon-less) unit the daemon
+ * isn't reachable, so the LED entity is simply not published — no false capability.
  * Reporter /diag: GitHub #8. Hardware reference: docs/hardware/smt1019.md
  */
 object Smt1019 : DeviceProfile {
@@ -16,9 +19,10 @@ object Smt1019 : DeviceProfile {
     override val socClass = "rk3576"
     override val suForm = SuForm.NONE
     override val appCanSu = false
-    override val ledMechanism = LedMechanism.NONE
-    // No root and no helper daemon, so the bl_power screen-off paths are unreachable; fall to the
-    // app-level brightness-zero path.
+    override val ledMechanism = LedMechanism.RK3576_IOCTL_DAEMON
+    // Stock unit has no su, so the bl_power screen-off paths aren't the default; fall to the app-level
+    // brightness-zero path. (A rooted unit also runs the helper daemon, which the LED uses; screen-off
+    // is left on the no-root-safe path here.)
     override val screenOff = ScreenOff.BRIGHTNESS_ZERO
     override val zigbeeGatewayDir: String? = null
     override val relayBase: String? = null
