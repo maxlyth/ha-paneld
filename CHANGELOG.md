@@ -10,9 +10,18 @@ content appear. Earlier releases predate this convention and keep their flat lis
 
 ## v0.8.4 - 2026-06-24
 
+### Security
+
+- **Privileged root helper hardened** — the helper that performs the root actions a sandboxed app can't (LED, true screen-off, hardware buttons, display density, CPU governor, screenshots, perf snapshots) **no longer listens on an unauthenticated loopback TCP port**. It previously bound `127.0.0.1:8889`, which **any** local app holding `INTERNET` could connect to and use to `REBOOT` the panel, change the CPU governor / display density, or `SCREENCAP` the screen — a real privacy + denial-of-service surface. It now uses an **abstract-namespace UNIX socket authenticated by peer UID** (`SO_PEERCRED`): only ha-paneld itself is accepted (plus root/shell for adb), and every other local app is rejected before it can issue a single command. Hardened further with airtight bounded parsing (exact-match commands, width-bounded arguments, overlong lines dropped not mis-split), all command execution funnelled through **one audited seam** with whitelisted arguments, connection caps + idle timeouts, and a **command-parser fuzzing + unit-test suite that now runs in CI** against hostile local input.
+
+### Added
+
+- **Full control surface on sandbox-walled (no-root-shell) panels** — panels that can't `su` (e.g. the Tuya TPA10) now get, routed through the privileged helper, the controls that were previously root-shell-only and so came up blank or absent there: **display density**, **CPU governor**, **on-demand screenshot** (info page + `/screenshot.png` / HA camera image), and the **Performance / Top-processes / Responsiveness** cards.
+- **ZHICAI SMT1019 RGB LED** — its LED is driven through a `/dev/ledjni` ioctl that Android denies to sandboxed apps; the helper now drives it as root, so the LED works (it was reported unavailable in 0.8.3).
+
 ### Changed
 
-- **Root helper daemon renamed `hapaneld-ledd` → `hapaneld-helper`** — the helper long outgrew LED control (it also drives hardware screen-off, physical-button instrumentation, display density, CPU governor, screenshots and perf snapshots), so the binary, its UNIX socket (`@hapaneld-helper`) and init service (`hapaneld_helper`) were renamed to match. Its source was split by capability with **all command execution isolated behind one audited seam**, and it gained a host unit-test + command-parser fuzzing suite that now runs in CI. No behaviour change — but panels running the daemon must be redeployed: `install-daemon.sh` removes the old `hapaneld-ledd` install automatically, then reboot.
+- **Root helper renamed `hapaneld-ledd` → `hapaneld-helper`** and restructured — it long outgrew LED control, so the binary, its UNIX socket (`@hapaneld-helper`) and init service (`hapaneld_helper`) were renamed to match, and the source was split by capability with all command execution behind the one audited seam above. **No behaviour change** — but panels running the helper must be redeployed: `install-daemon.sh` removes the old `hapaneld-ledd` install automatically.
 
 ## v0.8.3 - 2026-06-19
 
