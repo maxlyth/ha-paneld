@@ -23,38 +23,36 @@ ABI="${2:-$(adb -s "$TARGET" shell getprop ro.product.cpu.abi | tr -d '\r')}"
 BIN="$HERE/dist/$ABI/hapaneld-helper"
 [ -f "$BIN" ] || { echo "missing $BIN — run ./helper/build.sh first"; exit 1; }
 
-echo "==> remounting /system rw"
-adb -s "$TARGET" shell 'su 0 sh -c "mount -o rw,remount / 2>/dev/null; mount -o rw,remount /system 2>/dev/null; true"'
-
-# Migration: tear down a legacy `hapaneld-ledd` install (the daemon's former name). Without this the
-# old init service (`hapaneld_ledd`) keeps booting the old `/system/bin/hapaneld-ledd` binary on the
-# old `@hapaneld-ledd` socket, racing the new one. Stop the old service, kill the old process, and
-# remove the old binary + .rc. (No-op on a clean panel.)
-echo "==> removing any legacy hapaneld-ledd install"
-adb -s "$TARGET" shell 'su 0 sh -c "
-  stop hapaneld_ledd 2>/dev/null; pkill -f /system/bin/hapaneld-ledd 2>/dev/null
-  rm -f /system/etc/init/hapaneld-ledd.rc /system/bin/hapaneld-ledd
-"'
-
-echo "==> installing binary -> /system/bin/hapaneld-helper ($ABI)"
+echo "==> installing daemon -> /system/bin/hapaneld-helper ($ABI)"
 adb -s "$TARGET" push "$BIN" /data/local/tmp/hapaneld-helper >/dev/null
-# Replace cleanly even when a copy is already running: stop the init service (by its .rc name, which
-# is `hapaneld_helper` with an underscore — NOT the binary name), kill any copy, then mv (atomic
-# rename) onto the target. `cp` directly onto a running binary fails with "Text file busy" — and the
-# init service can auto-restart it between stop and copy. rename() swaps the directory entry without
-# touching the busy inode, so it succeeds regardless; the running process keeps the old inode until
-# the restart below.
-adb -s "$TARGET" shell 'su 0 sh -c "
-  stop hapaneld_helper 2>/dev/null; pkill -f /system/bin/hapaneld-helper 2>/dev/null; sleep 1
-  cp /data/local/tmp/hapaneld-helper /system/bin/hapaneld-helper.new
+adb -s "$TARGET" push "$HERE/hapaneld-helper.rc" /data/local/tmp/hapaneld-helper.rc >/dev/null
+
+# Do EVERY /system operation in ONE `su` session. Magisk gives each `su` invocation its own mount
+# namespace, so a remount done in a separate `su` call would NOT be visible here — the remount and the
+# writes that depend on it must share a single session (splitting them was a real bug: the writes hit a
+# read-only /system). Legacy teardown is best-effort; the cp/mv of the new binary is what must succeed.
+#   * Migration: remove any legacy `hapaneld-ledd` binary + .rc so its old init service can't keep
+#     booting the old binary on the old socket, racing the new one. (No-op on a clean panel.)
+#   * Atomic replace: cp -> `.new` then `mv -f` — `cp` directly onto a running binary fails "text file
+#     busy"; rename() swaps the directory entry without touching the busy inode.
+# `stop` takes the SERVICE name (`hapaneld_helper`, underscore), not the binary name.
+out="$(adb -s "$TARGET" shell 'su 0 sh -c "
+  mount -o rw,remount / 2>/dev/null; mount -o rw,remount /system 2>/dev/null
+  stop hapaneld_ledd 2>/dev/null; stop hapaneld_helper 2>/dev/null
+  pkill -x hapaneld-ledd 2>/dev/null; pkill -x hapaneld-helper 2>/dev/null
+  sleep 1
+  rm -f /system/etc/init/hapaneld-ledd.rc /system/bin/hapaneld-ledd
+  cp /data/local/tmp/hapaneld-helper /system/bin/hapaneld-helper.new || { echo CP_FAIL; exit 1; }
   chmod 755 /system/bin/hapaneld-helper.new
   chcon u:object_r:system_file:s0 /system/bin/hapaneld-helper.new 2>/dev/null
-  mv -f /system/bin/hapaneld-helper.new /system/bin/hapaneld-helper
-"'
-
-echo "==> installing init service -> /system/etc/init/hapaneld-helper.rc"
-adb -s "$TARGET" push "$HERE/hapaneld-helper.rc" /data/local/tmp/hapaneld-helper.rc >/dev/null
-adb -s "$TARGET" shell 'su 0 sh -c "cp /data/local/tmp/hapaneld-helper.rc /system/etc/init/hapaneld-helper.rc; chmod 644 /system/etc/init/hapaneld-helper.rc; chcon u:object_r:system_file:s0 /system/etc/init/hapaneld-helper.rc"'
+  mv -f /system/bin/hapaneld-helper.new /system/bin/hapaneld-helper || { echo MV_FAIL; exit 1; }
+  cp /data/local/tmp/hapaneld-helper.rc /system/etc/init/hapaneld-helper.rc || { echo RC_FAIL; exit 1; }
+  chmod 644 /system/etc/init/hapaneld-helper.rc
+  chcon u:object_r:system_file:s0 /system/etc/init/hapaneld-helper.rc 2>/dev/null
+  echo INSTALL_OK
+"' 2>&1)" || true
+echo "$out" | sed 's/^/   /'
+echo "$out" | grep -q INSTALL_OK || { echo "   ✗ /system install failed (is /system writable? is su present?)"; exit 1; }
 
 echo "==> starting now (init registers the service on next boot)"
 # Prefer the init service (`start hapaneld_helper`) so the running copy is the supervised one; on a
@@ -62,7 +60,7 @@ echo "==> starting now (init registers the service on next boot)"
 # fall back to a direct su-domain start for this session. Either way the init service takes over
 # after a reboot.
 adb -s "$TARGET" shell 'su 0 sh -c "
-  pkill -f /system/bin/hapaneld-helper 2>/dev/null
+  pkill -x hapaneld-helper 2>/dev/null
   start hapaneld_helper 2>/dev/null || ( /system/bin/hapaneld-helper >/dev/null 2>&1 & )
 "'
 sleep 1
