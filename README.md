@@ -360,7 +360,14 @@ means you can never publish an in-place update again. Never commit the keystore 
 Validated across the panel fleet: Sonoff NSPanel Pro (PX30, Android 8.1), Tuya TPA10 (rk3566,
 Android 11), Electron WF1589T (rk3576, Android 14).
 
-**New in 0.8.3:**
+**New in 0.8.4:**
+
+- **Root helper hardening + cleanup** — the root helper daemon was renamed `hapaneld-ledd` → **`hapaneld-helper`** (it does far more than LEDs now — screen-off, hardware buttons, display density, CPU governor, screenshots) and restructured into modular, individually-testable source with all command execution behind one audited seam, plus a command-parser **fuzzing + unit-test suite now gating it in CI**. No user-facing change; panels running the daemon are upgraded automatically on redeploy.
+
+<details>
+<summary>Earlier releases (0.8.3 → 0.4.x) — full history in <a href="CHANGELOG.md">CHANGELOG.md</a></summary>
+
+New in 0.8.3:
 
 - **Snappier panel controls** — root-backed actions (navbar Back / Launcher / Recents, screen on/off,
   relays, LEDs) now run through a single long-lived `su` shell instead of forking `su` per call, cutting
@@ -379,9 +386,6 @@ Android 11), Electron WF1589T (rk3576, Android 14).
 - **Reliability fixes** — wake-on-wave now updates `light.<panel>_screen` in HA (it could stay OFF after the screen woke — [#6](https://github.com/maxlyth/ha-paneld/issues/6)); the brightness slider reads and drives the real hardware backlight, not just the Android setting, on firmwares that idle-dim; the **Launcher** button opens an actual launcher instead of landing on the HA app; Zigbee is now detected on **4.x** NSPanel Pro firmware; and opening the config UI no longer crashes the service.
 - **Backlight no longer idle-dims** — some panel firmwares dim the hardware backlight to ~1% at the screen-off timeout even while the screen is kept on, so the panel went very dim a minute after the last touch. ha-paneld now holds the timeout high to stop that — **on by default** (`switch.<panel>_prevent_idle_dim`); turn it off to restore the firmware's dimming. No root needed.
 - **Touch click** — an opt-in click on every screen tap (rides `switch.<panel>_touch_sound`), played by ha-paneld itself so it fires even on the WebView dashboard where Android's own touch sounds don't.
-
-<details>
-<summary>Earlier releases (0.8.2 → 0.4.x) — full history in <a href="CHANGELOG.md">CHANGELOG.md</a></summary>
 
 New in 0.8.2:
 

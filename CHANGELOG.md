@@ -8,6 +8,12 @@ From **v0.8.0**, entries are grouped under **Added** (new features/entities), **
 changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
 content appear. Earlier releases predate this convention and keep their flat lists.
 
+## v0.8.4 - 2026-06-24
+
+### Changed
+
+- **Root helper daemon renamed `hapaneld-ledd` → `hapaneld-helper`** — the helper long outgrew LED control (it also drives hardware screen-off, physical-button instrumentation, display density, CPU governor, screenshots and perf snapshots), so the binary, its UNIX socket (`@hapaneld-helper`) and init service (`hapaneld_helper`) were renamed to match. Its source was split by capability with **all command execution isolated behind one audited seam**, and it gained a host unit-test + command-parser fuzzing suite that now runs in CI. No behaviour change — but panels running the daemon must be redeployed: `install-daemon.sh` removes the old `hapaneld-ledd` install automatically, then reboot.
+
 ## v0.8.3 - 2026-06-19
 
 ### Changed
