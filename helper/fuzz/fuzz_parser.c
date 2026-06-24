@@ -1,21 +1,20 @@
-// Fuzz harness for the hapaneld-ledd command parser (serve() / handle()).
+// Fuzz harness for the hapaneld-helper command parser (server_serve() / dispatch()).
 //
-// It compiles the REAL ../ledd.c (so it tracks the daemon, not a copy) and neutralises only the
-// calls with host side effects, leaving every byte of the parsing path live under the sanitizers:
-//   system / popen          -> no-op  (a valid REBOOT/RELOAD/START/GOV/DENSITY can't exec on the host)
-//   pthread_create / detach  -> no-op  (a valid WATCH /dev/input/... can't spawn looping threads)
+// It links the REAL capability + transport modules (helper/src/*.c, the same set the daemon ships —
+// see the Makefile's CORE_SRCS) together with test/sysexec_stub.c, so every byte of the parsing path
+// runs under the sanitizers while the only host-effecting calls (system/popen/thread-spawn/reboot,
+// all funnelled through sysexec) are neutralised at the LINK layer — no per-call macro stubbing.
 //
-// What gets exercised for real: the bounded line accumulator in serve(), the prefix dispatch in
-// handle(), every argument sscanf, the snprintf shell-command builders, and the valid_pkg / valid_num
-// / valid_gov validators. The goal is memory safety against hostile/malformed input from an ALLOWED
-// peer (the SO_PEERCRED uid gate is a separate, kernel-enforced control — not what this fuzzes).
+// What gets exercised for real: the bounded line accumulator in server_serve(), the verb split +
+// exact-match dispatch in dispatch(), every argument sscanf in the handlers, the snprintf shell-
+// command builders, and the valid_pkg / valid_num / valid_gov / valid_component validators. The goal
+// is memory safety against hostile/malformed input from an ALLOWED peer (the SO_PEERCRED uid gate is
+// a separate, kernel-enforced control — not what this fuzzes).
 //
 // Build + run:  ./helper/fuzz/run.sh [iterations]
-// A clean run exits 0 with no ASan/UBSan report. See README.md for the one expected LSan note.
+// A clean run prints "FUZZ OK" and exits 0 with no ASan/UBSan/LSan report.
 
 #define _GNU_SOURCE
-// Real libc declarations first (with their include guards), so the macro overrides below rewrite
-// only ledd.c's *calls*, never the headers' declarations.
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -23,59 +22,51 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <signal.h>
-#include <pthread.h>
 #include <sys/socket.h>
-#include <time.h>
 
-#define main            ledd_main_disabled
-#define system(x)       (0)
-#define popen(a, b)     ((FILE *)0)
-#define pthread_create(a, b, c, d) (0)
-#define pthread_detach(t)          (0)
-
-#include "ledd.c"
-
-#undef main
-#undef system
-#undef popen
-#undef pthread_create
-#undef pthread_detach
+#include "cmd.h"
+#include "dispatch.h"
+#include "server.h"
+#include "input.h"
 
 static int devnull;
 
-// handle()/SUBSCRIBE can register an fd, and WATCH records a path — reset the globals between runs.
-static void reset_state(void) { for (int i = 0; i < MAX_SUBS; i++) subs[i] = -1; watch_n = 0; }
+// SUBSCRIBE registers an fd in the subscriber registry; reset it between runs (input_init also makes
+// the dropped/reused host fds safe across iterations).
+static void reset_state(void) { input_init(); }
 
-// Drive serve() exactly as a real connection would: write the bytes, then half-close so it sees EOF.
+// Drive server_serve() exactly as a real connection would: write the bytes, then half-close so it
+// sees EOF.
 static void run_serve(const uint8_t *data, size_t n) {
     int sv[2];
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) return;
     if (n) { ssize_t w = write(sv[1], data, n); (void)w; }
     shutdown(sv[1], SHUT_WR);
     reset_state();
-    serve(sv[0]);
+    server_serve(sv[0]);
     close(sv[0]); close(sv[1]);
 }
 
-// Drive handle() directly with one NUL-terminated line (the fast path — millions of iterations).
+// Drive dispatch() directly with one NUL-terminated line (the fast path — millions of iterations).
 static void run_handle(const uint8_t *data, size_t n) {
     static char line[8192];
     if (n > sizeof line - 1) n = sizeof line - 1;
     memcpy(line, data, n); line[n] = '\0';
-    int sub = 0;
+    conn_ctx ctx = { .fd = devnull, .subscribed = 0 };
     reset_state();
-    handle(devnull, line, &sub);
+    dispatch(&ctx, line);
 }
 
 int main(int argc, char **argv) {
     long iters = (argc > 1) ? strtol(argv[1], NULL, 10) : 1000000;
     signal(SIGPIPE, SIG_IGN);
     devnull = open("/dev/null", O_WRONLY);
+    reset_state();
 
-    // 1) hand-crafted adversarial corpus (each fed to BOTH serve() and handle()).
+    // 1) hand-crafted adversarial corpus (each fed to BOTH server_serve() and dispatch()).
     const char *corpus[] = {
         "", "\n", "\r", "\r\n", "\n\n\n\n", " ", "   \n   \n",
-        "PING\n", "PING", "ping\n",
+        "PING\n", "PING", "ping\n", "  PING  \n",
         "RGB 1 2 3\n", "RGB\n", "RGB   \n", "RGB 0 0 0\n",
         "RGB -1 -2 -3\n", "RGB 256 999 1000\n",
         "RGB 99999999999999999999 -99999999999999999999 2147483648\n",

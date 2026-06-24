@@ -1,28 +1,32 @@
-# hapaneld-ledd parser fuzzing
+# hapaneld-helper parser fuzzing
 
-A small harness that fuzzes the daemon's command parser (`serve()` / `handle()` in `../ledd.c`) for
-memory safety against hostile or malformed input on the socket.
+A small harness that fuzzes the daemon's command parser (`server_serve()` / `dispatch()` in
+`../src/`) for memory safety against hostile or malformed input on the socket.
 
 ## Run
 
 ```bash
 ./helper/fuzz/run.sh            # 1,000,000 random iters + corpus + length-boundary cases
 ./helper/fuzz/run.sh 5000000    # longer run
+make -C helper fuzz             # same thing, via the Makefile
 ```
 
 Only `gcc` is needed (host toolchain; no clang/NDK). A clean run ends with `FUZZ OK` and exit 0;
-any overflow / out-of-bounds / undefined behaviour aborts with an ASan/UBSan report.
+any overflow / out-of-bounds / undefined behaviour / leak aborts with an ASan/UBSan/LSan report.
 
 ## What it does
 
-`fuzz_ledd.c` compiles the **real `ledd.c`** (so it can't drift from the daemon) and macro-stubs only
-the calls with host side effects — `system`/`popen` and `pthread_create`/`pthread_detach` — so a valid
-`REBOOT`/`RELOAD`/`WATCH` can't exec a command or spawn a looping thread on the build host. Everything
-that matters for memory safety runs for real under ASan+UBSan:
+`fuzz_parser.c` **links the real daemon modules** — `helper/src/*.c`, the exact set the binary ships
+(the Makefile's `CORE_SRCS`, so the fuzzer can't drift from the daemon) — together with
+`test/sysexec_stub.c`. That stub is the trick: every host-effecting call (`system`/`popen`/thread-
+spawn/`reboot`) is funnelled through `sysexec.c` in the daemon, so swapping one object neutralises all
+of them **at the link layer** — no per-call macro stubbing. A valid `REBOOT`/`RELOAD`/`WATCH` runs
+through the real handler and does nothing on the host. Everything that matters for memory safety runs
+for real under ASan+UBSan+LSan:
 
-- the bounded line accumulator in `serve()` (split reads, overlong-line drop, `MAX_LINE` boundary),
-- the prefix dispatch and every argument `sscanf` in `handle()`,
-- the `snprintf` shell-command builders and the `valid_pkg`/`valid_num`/`valid_gov` validators.
+- the bounded line accumulator in `server_serve()` (split reads, overlong-line drop, `MAX_LINE` boundary),
+- the verb split + exact-match dispatch in `dispatch()` and every argument `sscanf` in the handlers,
+- the `snprintf` shell-command builders and the `valid_pkg`/`valid_num`/`valid_gov`/`valid_component` validators.
 
 Inputs: a hand-written adversarial corpus (oversized args, embedded NULs, partial lines, CRLF mixes,
 `%d` integer-overflow values, shell metacharacters), lines sized at `MAX_LINE ± 1` / 64 KB for every
@@ -34,12 +38,10 @@ The RNG seed is fixed, so runs are reproducible.
 This fuzzes the **socket attack surface** — bytes an attacker controls. It does **not** test:
 
 - **Peer authentication** (`SO_PEERCRED` uid gate) — a separate, kernel-enforced control.
-- The `/proc` parsers in `PERFDUMP`, which read *trusted* kernel files, not attacker input.
+- The `/proc` parsers in `PERFDUMP`, which read *trusted* kernel files, not attacker input. (The
+  `stat_jiffies` parser does have dedicated unit tests — `make -C helper test`.)
 - Concurrency / the `MAX_CONN` cap under parallel load.
 
-## The one expected note
-
-`run.sh` disables LeakSanitizer. Because the harness stubs `pthread_create`, `watch_node()`'s
-per-node `calloc` — which the real daemon hands to a lifetime evdev thread (deduped, capped at
-`MAX_WATCH`) — has no thread to own it here and would report as a leak. It is a harness artifact, not
-a daemon leak.
+LeakSanitizer is **on**: the stub's `sysexec_spawn` returns failure, so `input_watch()` frees its
+per-node allocation itself instead of handing it to a (never-spawned) thread — no harness leak. You
+will see a few `sysexec_spawn: …` lines on stderr from that expected stub failure; they're benign.

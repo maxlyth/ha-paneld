@@ -44,3 +44,19 @@ jobs:
           name: ha-paneld-debug
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
+
+  # The root helper (helper/src/) is C, never touched by the Gradle build. This job is the only place
+  # it's compiler-checked, unit-tested, and fuzzed — host-native (gcc), so it's fast and needs no NDK.
+  helper:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compile check (-Werror)
+        run: make -C helper
+
+      - name: Unit tests
+        run: make -C helper test
+
+      - name: Parser fuzz (ASan+UBSan+LSan, bounded)
+        run: ./helper/fuzz/run.sh 200000
