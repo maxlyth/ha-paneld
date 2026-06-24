@@ -7,7 +7,7 @@ import io.github.maxlyth.hapaneld.util.HelperClient
  * LED adapter for panels whose LED the app can't drive directly — either a root-only sysfs node
  * (e.g. Tuya TPA10) or a `/dev/ledjni` ioctl the app is SELinux-denied (e.g. ZHICAI SMT1019). A
  * sandboxed app (`untrusted_app`) can't write the sysfs node nor issue that ioctl nor exec `su`, so
- * the root helper daemon ([helper/hapaneld-ledd](../../../../../../../helper/README.md)) does it; this
+ * the root helper daemon ([helper/hapaneld-helper](../../../../../../../helper/README.md)) does it; this
  * controller talks to it via [HelperClient]. The daemon auto-detects which backend the panel has, so
  * the `RGB`/`OFF` commands are identical either way. Full RGB.
  *

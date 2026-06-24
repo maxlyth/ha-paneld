@@ -6,7 +6,7 @@ Zigbee, NFC or IR. Reverse-engineered on a live unit (Android 11, rooted, `su` p
 
 > [!TIP]
 > Most-needed facts: adb is **password-protected** — use the USB diagnostics-app backdoor; LED and the
-> root-only sensors need the **`hapaneld-ledd` root helper daemon**; the front LED's
+> root-only sensors need the **`hapaneld-helper` root helper daemon**; the front LED's
 > `custom_animation` write can **reboot the panel** (see caution below). Update the **WebView first** —
 > see [WebView — update this first](#webview--update-this-first).
 
@@ -158,7 +158,7 @@ The front RGB LED is a **single** LED (`avsux_info` → `led type:[single] nums:
 
 There is **no app-accessible `/dev` node** for the LED (contrast the [WF1589T](wf1589t.md)'s
 `/dev/ledjni`), and the sysfs attributes are `system:system` — an `untrusted_app` cannot write them.
-ha-paneld therefore ships a small **root helper daemon** (`/system/bin/hapaneld-ledd`, root, unix
+ha-paneld therefore ships a small **root helper daemon** (`/system/bin/hapaneld-helper`, root, unix
 socket) that the app talks to; `SocketLedController` is the client. See
 [`helper/README.md`](../../helper/README.md).
 
@@ -178,7 +178,7 @@ socket) that the app talks to; `SocketLedController` is the client. See
 ### Button backlight
 
 `/sys/class/leds/button-backlight/brightness` — **monochrome** PWM, 0–255 (standard `leds_pwm`
-driver, device `pwmleds`). `system:system` 0664, so driven through the same `hapaneld-ledd` daemon.
+driver, device `pwmleds`). `system:system` 0664, so driven through the same `hapaneld-helper` daemon.
 
 ## Sensors
 
@@ -247,11 +247,11 @@ Camera GalaxyCore **GC05A2 / GC5035**; audio codec **ES7202**; Goodix touch; `rk
 
 ## Access model summary
 
-- **LED + button backlight**: root only (`system:system` sysfs) → via `hapaneld-ledd`.
+- **LED + button backlight**: root only (`system:system` sysfs) → via `hapaneld-helper`.
 - **Proximity**: app-direct (`SensorManager`).
 - **Temp / humidity / light**: root only (input subsystem / i2c) → would need the daemon.
 - **Buttons**: 4 side buttons app-direct (KeyEvents via a11y); 5th orange button is an `EV_SW` switch
-  → via `hapaneld-ledd` evdev watch; pin-hole button is recovery/maskrom (not input).
+  → via `hapaneld-helper` evdev watch; pin-hole button is recovery/maskrom (not input).
 
 ---
 

@@ -8,8 +8,8 @@ import java.io.BufferedReader
 import java.io.InputStreamReader
 
 /**
- * Streams hardware-button events from the root helper daemon (`hapaneld-ledd`, abstract UNIX socket
- * `@hapaneld-ledd`) for
+ * Streams hardware-button events from the root helper daemon (`hapaneld-helper`, abstract UNIX socket
+ * `@hapaneld-helper`) for
  * keys the Android input pipeline doesn't usefully deliver to the app (e.g. a `KEY_MICMUTE` adc-key,
  * or the power key). On a background thread it connects, sends `WATCH <node> <grab>` for each
  * [EvdevButton] — grabbing where asked, so e.g. the WF1589T power key no longer sleeps the panel —
@@ -18,7 +18,7 @@ import java.io.InputStreamReader
  * if the daemon isn't up yet or restarts, so the grab is re-established automatically.
  */
 object EvdevButtonClient {
-    private const val SOCK = "hapaneld-ledd"   // abstract socket name; matches SOCK_NAME in ledd.c
+    private const val SOCK = "hapaneld-helper"   // abstract socket name; matches SOCK_NAME in main.c
     private const val TAG = "ha-paneld/evdev"
 
     @Volatile private var thread: Thread? = null

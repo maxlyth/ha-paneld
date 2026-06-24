@@ -36,7 +36,7 @@ class NoOpLedController : LedController {
  *   SELinux-denied it, so the [SocketLedController] asks the root daemon to issue it (the daemon runs
  *   as root and auto-detects ledjni-vs-sysfs). No app-direct attempt — it would only ever EACCES.
  * - `SYSFS_DAEMON` (e.g. TPA10): the [SocketLedController], talking to the root helper daemon
- *   (`helper/hapaneld-ledd`) over the abstract UNIX socket (a sandboxed app can't write sysfs nor exec `su`).
+ *   (`helper/hapaneld-helper`) over the abstract UNIX socket (a sandboxed app can't write sysfs nor exec `su`).
  * - `NONE` (e.g. NSPanel Pro): no LED — skip probing entirely.
  * - `AUTODETECT` (unknown panel): probe rk3576 ioctl, then the daemon (the previous behaviour).
  *

@@ -7,15 +7,15 @@ import java.io.BufferedReader
 import java.io.InputStreamReader
 
 /**
- * Client for the root helper daemon (`helper/hapaneld-ledd`) over an **abstract-namespace UNIX
- * socket** (`@hapaneld-ledd`). The app (`untrusted_app`) cannot write the root-only sysfs nodes the
+ * Client for the root helper daemon (`helper/hapaneld-helper`) over an **abstract-namespace UNIX
+ * socket** (`@hapaneld-helper`). The app (`untrusted_app`) cannot write the root-only sysfs nodes the
  * daemon owns (LED + backlight power), so it asks the daemon. The daemon authenticates us by uid
  * (`SO_PEERCRED`) and rejects any other app — which is why this is a UNIX socket, not the old
  * unauthenticated `127.0.0.1:8889` TCP. Used by the sysfs LED + screen controllers (and others).
  * All calls are short blocking socket I/O — invoke off the main thread.
  */
 object HelperClient {
-    private const val SOCK = "hapaneld-ledd"   // abstract socket name; matches SOCK_NAME in ledd.c
+    private const val SOCK = "hapaneld-helper"   // abstract socket name; matches SOCK_NAME in main.c
     private const val TIMEOUT_MS = 500
     private const val TAG = "ha-paneld/helper"
 
