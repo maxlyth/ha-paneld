@@ -1,7 +1,12 @@
-# hapaneld-ledd — root LED helper for sysfs-LED panels
+# hapaneld-helper — root helper daemon for sandbox-walled panels
 
-A tiny root daemon that drives a panel's RGB LED on behalf of ha-paneld, for panels where the LED
-is **not** reachable from an app sandbox.
+A tiny root daemon that gives ha-paneld a whitelisted, authenticated control surface for the things a
+sandboxed Android app can't reach itself: the RGB LED, screen-backlight power, hardware-button
+instrumentation, display density / CPU governor / screencap / perf snapshots, and app reload/start/
+reboot. It began as an LED-only helper (the former `hapaneld-ledd`) and was **renamed `hapaneld-helper`**
+to match its broader role; the code is split by capability under [`src/`](#source-layout). Upgrading
+from an old `hapaneld-ledd` install is handled by `install-daemon.sh` (it removes the old binary +
+init service so both don't run) — see [Boot persistence](#boot-persistence-init-service).
 
 ## Why it exists
 
@@ -14,15 +19,15 @@ Panels expose their RGB LED one of two ways:
   this node, and **cannot** exec `su` to escalate. On these panels the RGB capability lives behind
   the Android lights HAL / vendor system service and is reachable only by system/root code.
 
-For the second class, `hapaneld-ledd` runs **outside the app sandbox** in a root domain that *can*
+For the second class, `hapaneld-helper` runs **outside the app sandbox** in a root domain that *can*
 write the node, and exposes a minimal command surface on an **abstract-namespace UNIX socket**
-(`@hapaneld-ledd`). ha-paneld connects to it and asks for colours. The app stays a single uniform
+(`@hapaneld-helper`). ha-paneld connects to it and asks for colours. The app stays a single uniform
 API; the privilege is isolated here. The socket is authenticated by peer uid (see [Safety](#safety)),
 so — unlike the earlier loopback-TCP listener — no other app on the panel can reach it.
 
 ## Protocol
 
-Newline-terminated ASCII on the abstract UNIX socket `@hapaneld-ledd`. One or more commands per
+Newline-terminated ASCII on the abstract UNIX socket `@hapaneld-helper`. One or more commands per
 connection.
 
 | Command | Effect | Reply |
@@ -120,14 +125,18 @@ The daemon is the right home for any capability that needs **root or system priv
 app can't reach** — e.g. an i2c sensor whose sysfs is `system`-owned, an IR blaster `/dev` node, a
 PWM/haptic. The extension recipe:
 
-1. Add a verb to the `handle()` dispatcher in `ledd.c` with a small, self-contained handler.
+1. Add a small, self-contained handler in the module that owns the capability (a new `src/<name>.c`
+   for a new device class), then **register the verb** with one row in the `COMMANDS` table in
+   `src/dispatch.c`. That's the whole wiring — `dispatch()` matches the verb *exactly* and hands your
+   handler the argument string.
 2. **Take the target as a parameter** from the app (don't hardcode a panel's path), and **whitelist
    it by class prefix** — the way `WATCH` restricts to `/dev/input/` and a future `LED` would
    restrict to `/sys/class/leds/`. For a reader (i2c/sensor), stream values to `SUBSCRIBE`rs using
-   the existing async-line mechanism.
+   the existing async-line mechanism in `src/input.c`.
 3. Keep the safety model intact: the peer-uid auth gates the whole socket, but still bound every
-   buffer, validate/clamp inputs, width-bound every `sscanf`, sanitise anything passed to `am`/`svc`,
-   and never write firmware-backed nodes (see the CAUTION above).
+   buffer, validate/clamp inputs (the `src/util.c` validators), width-bound every `sscanf`, route any
+   shell-out through `sysexec_run()` (the one exec seam) with a validated argument, and never write
+   firmware-backed nodes (see the CAUTION above).
 4. Publish the matching HA entity from the app per `DeviceProfile` capability — the daemon stays the
    privileged mechanism, the profile stays the policy.
 
@@ -135,24 +144,47 @@ A genuinely new *primitive* is the one acceptable reason to change the core daem
 *selection* of existing primitives must stay in the `DeviceProfile`. That boundary keeps a unique
 panel's contribution to a single profile file wherever the underlying primitive already exists.
 
-## Build
+## Source layout
+
+The daemon is split by capability under `helper/src/` (the binary, `@hapaneld-helper` socket, and init
+service keep their historical names — only the source is modular):
+
+| File | Responsibility |
+| --- | --- |
+| `main.c` | accept loop, abstract-socket bind, `SO_PEERCRED` peer-auth, connection cap |
+| `server.c` | the bounded line accumulator (`server_serve`) + idle timeout |
+| `dispatch.c` | the verb→handler **table** + exact-match `dispatch()` |
+| `led.c` / `screen.c` / `input.c` | LED (sysfs + ledjni), backlight power, evdev buttons |
+| `sysctl.c` | density / governor / reload / start / reboot / screencap (the shell-out verbs) |
+| `perf.c` | `PERFDUMP` `/proc` snapshot |
+| `util.c` | clamp, node IO, the argument validators |
+| `sysexec.c` | **the only file that execs / pipes / spawns / reboots** — every shell-out funnels here |
+
+Isolating `sysexec` keeps the entire privilege/injection surface in one auditable file, and lets the
+fuzz + unit-test builds swap it for a stub so the real parser runs on the host with no side effects.
+
+## Build, test, fuzz
 
 ```bash
-./helper/build.sh        # -> helper/dist/<abi>/hapaneld-ledd  (Docker only; reuses tools/build)
+./helper/build.sh        # cross-compile both ABIs -> helper/dist/<abi>/hapaneld-helper (Docker; reuses tools/build)
+
+make -C helper           # host -Werror compile check (the same src/*.c set)
+make -C helper test      # host-native unit tests (validators, clamp, /proc parser, dispatch, accumulator)
+make -C helper fuzz      # ASan+UBSan parser fuzz — see fuzz/README.md
 ```
 
-Or compile `ledd.c` with any Android NDK (`*-clang -O2 -s -o hapaneld-ledd ledd.c`).
+Or compile by hand with any Android NDK: `*-clang -O2 -s -Ihelper/src -o hapaneld-helper helper/src/*.c`.
 
 ## Provision (per panel, root/adb)
 
 ```bash
 ABI=$(adb shell getprop ro.product.cpu.abi | tr -d '\r')      # e.g. armeabi-v7a
-adb push helper/dist/$ABI/hapaneld-ledd /data/local/tmp/
-adb shell su 0 'chmod 755 /data/local/tmp/hapaneld-ledd'
-adb shell su 0 '/data/local/tmp/hapaneld-ledd &'             # run in the su domain (can write sysfs_lights)
+adb push helper/dist/$ABI/hapaneld-helper /data/local/tmp/
+adb shell su 0 'chmod 755 /data/local/tmp/hapaneld-helper'
+adb shell su 0 '/data/local/tmp/hapaneld-helper &'             # run in the su domain (can write sysfs_lights)
 ```
 
-ha-paneld auto-detects the daemon (a `PING` on the abstract socket `@hapaneld-ledd`) and publishes
+ha-paneld auto-detects the daemon (a `PING` on the abstract socket `@hapaneld-helper`) and publishes
 the LED entity when it answers.
 
 ## Boot persistence (init service)
@@ -160,7 +192,7 @@ the LED entity when it answers.
 The daemon must (re)start in a root domain after every reboot, and the app can't start it (no `su`
 from `untrusted_app`). On a userdebug panel this is an `init` service with `seclabel u:r:su:s0` so
 it runs in the `su` domain (the only one that can write the root-only nodes). `helper/install-daemon.sh`
-installs the binary to `/system/bin` and `helper/hapaneld-ledd.rc` to `/system/etc/init/`.
+installs the binary to `/system/bin` and `helper/hapaneld-helper.rc` to `/system/etc/init/`.
 
 `/system` is read-only (dm-verity), so make it writable once first:
 
