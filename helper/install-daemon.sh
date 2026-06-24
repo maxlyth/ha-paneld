@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 #
 # Install the hapaneld-helper root helper as a boot-persistent init service on a userdebug panel.
-# Places the binary in /system/bin and the init .rc in /system/etc/init (both persist across
-# reboot; the service runs in the `su` domain so it can write the root-only LED / backlight nodes).
+# Run it on EVERY sandbox-walled panel (a DeviceProfile with appCanSu=false) — there the daemon is the
+# privileged control path (screen-off, density, CPU governor, screenshot, perf, buttons, LED), not just
+# on LED panels. Places the binary in /system/bin and the init .rc in /system/etc/init (both persist
+# across reboot; the service runs in the `su` domain so it can write the root-only nodes).
 #
 #   ./helper/install-daemon.sh <panel-ip:5555> [abi]
 #

@@ -33,6 +33,14 @@ interface DeviceProfile {
      *  need the root helper daemon for privileged writes). */
     val appCanSu: Boolean
 
+    /** Whether this panel relies on the root helper daemon (`helper/hapaneld-helper`) as its privileged
+     *  control path — true for every sandbox-walled panel ([appCanSu] = false). There the app can't exec
+     *  `su`, so the daemon is what drives the root-only controls: screen-off (`bl_power`), display
+     *  density, CPU governor, screenshot, perf sampling, hardware buttons AND the LED. So the daemon must
+     *  be installed on these panels regardless of [ledMechanism] — a sandbox panel with no LED still needs
+     *  it, else those controls silently stay empty. Daemon-need is its own concept, NOT the LED mechanism. */
+    val usesDaemon: Boolean get() = !appCanSu
+
     /** Whether the firmware provides a working Recents/Overview screen. Single-purpose panel images often
      *  ship none (verified 2026-06-10: KEYCODE_APP_SWITCH is a no-op on the Tuya TPA10), so the navbar's
      *  Recents button is omitted where false rather than presenting a dead control. Default true. */

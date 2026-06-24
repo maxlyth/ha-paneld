@@ -177,6 +177,8 @@ Or compile by hand with any Android NDK: `*-clang -O2 -s -Ihelper/src -o hapanel
 
 ## Provision (per panel, root/adb)
 
+Install the daemon on **every sandbox-walled panel** — any profile with `appCanSu = false` (e.g. TPA10, SMT1019) — not just ones whose LED is daemon-driven. On those panels the app can't exec `su`, so the daemon is the privileged path for screen-off, display density, CPU governor, screenshot, perf sampling, hardware buttons *and* the LED; without it those controls are present but silently empty (and `/diag` flags "Helper daemon = NEEDED but not running"). Panels that can `su` directly don't need it.
+
 ```bash
 ABI=$(adb shell getprop ro.product.cpu.abi | tr -d '\r')      # e.g. armeabi-v7a
 adb push helper/dist/$ABI/hapaneld-helper /data/local/tmp/
@@ -184,8 +186,7 @@ adb shell su 0 'chmod 755 /data/local/tmp/hapaneld-helper'
 adb shell su 0 '/data/local/tmp/hapaneld-helper &'             # run in the su domain (can write sysfs_lights)
 ```
 
-ha-paneld auto-detects the daemon (a `PING` on the abstract socket `@hapaneld-helper`) and publishes
-the LED entity when it answers.
+ha-paneld auto-detects the daemon (a `PING` on the abstract socket `@hapaneld-helper`) and routes its root-only controls through it — screen-off, display density, CPU governor, screenshot, perf sampling, hardware buttons, and (where present) the LED entity — enabling each as the daemon answers.
 
 ## Boot persistence (init service)
 

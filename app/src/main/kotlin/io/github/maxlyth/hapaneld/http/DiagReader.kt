@@ -5,6 +5,7 @@ import android.os.Build
 import android.provider.Settings
 import io.github.maxlyth.hapaneld.BuildConfig
 import io.github.maxlyth.hapaneld.control.Su
+import io.github.maxlyth.hapaneld.device.DeviceProfile
 import io.github.maxlyth.hapaneld.hardware.NativeLed
 import io.github.maxlyth.hapaneld.util.HelperClient
 import java.io.File
@@ -41,10 +42,18 @@ object DiagReader {
         val canWrite = Settings.System.canWrite(ctx)
         val a11y = a11yEnabled(ctx)
         val rootish = su || daemon
-        return listOf(
+        // Sandbox-walled panel (can't exec su) → the daemon is its ONLY privileged control path, needed
+        // regardless of the LED mechanism. Surfaced below so a missing-but-needed daemon isn't a silent
+        // dead end (controls present but empty); omitted on su panels where it isn't required.
+        val usesDaemon = DeviceProfile.detect().usesDaemon
+        return listOfNotNull(
             Cap("Root (su)", if (su) "ok" else "none",
                 if (su) "available" else
                     "no su on this firmware — sysfs-LED, reboot/reload and true screen-off are unavailable; everything else still works"),
+            if (usesDaemon) Cap("Helper daemon", if (daemon) "ok" else "none",
+                if (daemon) "running — the privileged control path on this sandbox-walled panel (the app can't exec su)"
+                else "NEEDED but not running — this panel can't su, so screen-off, density, CPU, screenshot and the LED stay unavailable until it's installed (helper/install-daemon.sh)")
+            else null,
             Cap("Brightness", if (canWrite) "ok" else "none",
                 if (canWrite) "WRITE_SETTINGS granted" else
                     "grant it (no root needed): adb shell appops set $pkg WRITE_SETTINGS allow"),
