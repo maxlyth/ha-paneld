@@ -571,7 +571,7 @@ the current one. Changing the panel id may leave the old device in HA to remove 
 <p class="note"><b>Pre-release / R&amp;D — the right values aren't dialled in yet; experiment at your own
 pace.</b> Match an HA dashboard's size to a desktop browser. <b>Density</b> scales the whole layout
 (lower dpi = more fits); <b>text size</b> scales WebView text. Panel firmware often ships these
-mismatched to the physical screen. Applies live, persists across reboot; root only.</p>
+mismatched to the physical screen. Applies live, persists across reboot; needs root or the helper daemon.</p>
 <form method="post" action="/density" style="display:flex;flex-direction:column;gap:10px">
  <label style="display:flex;flex-direction:row;justify-content:space-between;align-items:center;gap:12px">
   <span>Density (dpi) <small style="color:#888">· native ${nat ?: "?"}</small></span>

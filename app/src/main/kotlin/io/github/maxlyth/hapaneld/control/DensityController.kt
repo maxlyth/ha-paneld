@@ -12,10 +12,11 @@ import io.github.maxlyth.hapaneld.util.HelperClient
  * so HA cards come out too big/small or text mis-sized vs desktop; iOS keeps these aligned, Android
  * panels frequently don't.
  *
- * Both persist across reboot (secure/system settings), so a one-shot set sticks. Density is privileged
- * (`wm density`): su-direct on su-reachable panels (NSPanel Pro PX30, WF1589T); on sandbox-walled panels
- * (TPA10, `appCanSu=false`) it routes through the root daemon's `DENSITY` command, so the control is
- * available there too. (Font scale is still su-only — pending a daemon route.)
+ * Both persist across reboot (secure/system settings), so a one-shot set sticks. Both are privileged
+ * (`wm density` / `settings put system font_scale`): su-direct on su-reachable panels (NSPanel Pro
+ * PX30, WF1589T); on sandbox-walled panels (TPA10, `appCanSu=false`) density routes through the root
+ * daemon's `DENSITY` command and font scale through its `FONTSCALE` command, so both controls are
+ * available there too.
  */
 class DensityController(private val canSu: Boolean = DeviceProfile.detect().appCanSu) {
 
@@ -42,16 +43,20 @@ class DensityController(private val canSu: Boolean = DeviceProfile.detect().appC
 
     /** Current system font scale (1.0 when unset). WebView text follows this (textZoom = scale × 100). */
     fun fontScale(): Float =
-        (Su.runOutput("settings get system font_scale 2>/dev/null") ?: "").trim().toFloatOrNull() ?: 1.0f
+        if (canSu) (Su.runOutput("settings get system font_scale 2>/dev/null") ?: "").trim().toFloatOrNull() ?: 1.0f
+        else daemonScale() ?: 1.0f
 
     /** Set the system font scale (text size). Bounded to keep text legible. Returns true if applied. */
     fun setFontScale(scale: Float): Boolean {
         if (scale < MIN_FONT || scale > MAX_FONT) return false
-        return Su.run("settings put system font_scale $scale")
+        return if (canSu) Su.run("settings put system font_scale $scale")
+        else HelperClient.send("FONTSCALE $scale") == "OK"
     }
 
     /** Restore the default font scale (1.0). */
-    fun resetFontScale(): Boolean = Su.run("settings delete system font_scale")
+    fun resetFontScale(): Boolean =
+        if (canSu) Su.run("settings delete system font_scale")
+        else HelperClient.send("FONTSCALE reset") == "OK"
 
     // su path: parse the `wm density` output ("Physical density: N" / "Override density: N").
     private fun parseSu(key: String): Int? =
@@ -62,6 +67,10 @@ class DensityController(private val canSu: Boolean = DeviceProfile.detect().appC
     // daemon path: parse the daemon's "PHYS=<n> OVER=<n|->" reply (OVER absent/"-" => no override).
     private fun daemonField(key: String): Int? =
         HelperClient.send("DENSITY")?.let { Regex("$key=(\\d+)").find(it)?.groupValues?.get(1)?.toIntOrNull() }
+
+    // daemon path: parse the daemon's "SCALE=<v>" reply ("null" when unset => no override, read as 1.0).
+    private fun daemonScale(): Float? =
+        HelperClient.send("FONTSCALE")?.let { Regex("SCALE=([0-9.]+)").find(it)?.groupValues?.get(1)?.toFloatOrNull() }
 
     companion object {
         const val MIN_DPI = 80

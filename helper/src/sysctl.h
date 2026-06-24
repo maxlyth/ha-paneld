@@ -11,6 +11,7 @@ void cmd_reload(conn_ctx *ctx, const char *args);     // RELOAD <pkg>      force
 void cmd_start(conn_ctx *ctx, const char *args);      // START <pkg/cls>   launch an activity
 void cmd_reboot(conn_ctx *ctx, const char *args);     // REBOOT
 void cmd_density(conn_ctx *ctx, const char *args);    // DENSITY [<n>|reset]   get/set display density
+void cmd_fontscale(conn_ctx *ctx, const char *args);  // FONTSCALE [<s>|reset] get/set system font scale
 void cmd_gov(conn_ctx *ctx, const char *args);        // GOV <governor>    CPU scaling governor
 void cmd_screencap(conn_ctx *ctx, const char *args);  // SCREENCAP         raw PNG stream
 

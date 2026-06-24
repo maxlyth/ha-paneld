@@ -85,6 +85,8 @@ int main(int argc, char **argv) {
         "REBOOT\n", "REBOOTNOW\n",
         "DENSITY\n", "DENSITY 240\n", "DENSITY reset\n", "DENSITY 99999999999999\n",
         "DENSITY ../../x\n", "DENSITY -1\n",
+        "FONTSCALE\n", "FONTSCALE 1.15\n", "FONTSCALE reset\n", "FONTSCALE 1.2.3\n",
+        "FONTSCALE -1\n", "FONTSCALE 1.0;reboot\n", "FONTSCALE .........\n",
         "GOV schedutil\n", "GOV \n", "GOV PERF;reboot\n", "GOV performance\n",
         "PERFDUMP\n", "LEDPROBE\n",
         "RGB 1 2 3\r\nOFF\r\nBTN 9\r\n",
@@ -102,7 +104,7 @@ int main(int argc, char **argv) {
     // 2) length-boundary lines around MAX_LINE for every verb.
     size_t lens[] = { MAX_LINE - 1, MAX_LINE, MAX_LINE + 1, 4096, 65536 };
     const char *verbs[] = { "RGB ", "BTN ", "RELOAD ", "START ", "WATCH /dev/input/",
-                            "DENSITY ", "GOV ", "SCREEN ", "" };
+                            "DENSITY ", "FONTSCALE ", "GOV ", "SCREEN ", "" };
     for (size_t li = 0; li < sizeof lens / sizeof lens[0]; li++)
         for (size_t vi = 0; vi < sizeof verbs / sizeof verbs[0]; vi++) {
             size_t L = lens[li], vp = strlen(verbs[vi]);
@@ -119,7 +121,7 @@ int main(int argc, char **argv) {
     srand(0xC0FFEE);
     uint8_t buf[3000];
     const char *kw[] = { "RGB", "OFF", "BTN", "SCREEN", "SCREENCAP", "RELOAD", "START", "WATCH",
-                         "SUBSCRIBE", "REBOOT", "DENSITY", "GOV", "PERFDUMP", "LEDPROBE", "PING" };
+                         "SUBSCRIBE", "REBOOT", "DENSITY", "FONTSCALE", "GOV", "PERFDUMP", "LEDPROBE", "PING" };
     for (long it = 0; it < iters; it++) {
         size_t n = rand() % sizeof buf;
         for (size_t k = 0; k < n; k++) {

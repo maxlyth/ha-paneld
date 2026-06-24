@@ -62,6 +62,19 @@ int valid_num(const char *s) {
     return 1;
 }
 
+// Decimal number (e.g. font-scale arg "0.85"/"1.15") — digits with at most one dot, at least one
+// digit. No sign/exponent/whitespace, so it's safe to interpolate into a sysexec_run() shell string.
+int valid_decimal(const char *s) {
+    if (!*s) return 0;
+    int dot = 0, digit = 0;
+    for (const char *p = s; *p; p++) {
+        if (*p == '.') { if (dot++) return 0; }
+        else if (*p >= '0' && *p <= '9') digit = 1;
+        else return 0;
+    }
+    return digit;
+}
+
 // Lowercase-alnum CPU governor names (schedutil/performance/powersave/interactive/ondemand…).
 int valid_gov(const char *s) {
     if (!*s) return 0;

@@ -10,7 +10,7 @@ A Home Assistant dashboard designed in a desktop browser often renders at the wr
 ha-paneld exposes both levers on the on-device config page (the **Display sizing** card) — set a custom density and text size, apply (live), or reset to native. Both persist across reboot (they're secure/system settings).
 
 > [!NOTE]
-> **Root only.** The card appears on su-reachable panels (NSPanel Pro PX30, WF1589T) and is absent where the app can't reach `su` (TPA10).
+> **Needs root or the helper daemon.** The card appears on su-reachable panels (NSPanel Pro PX30, WF1589T) and on sandbox-walled panels running the [root helper daemon](../helper/README.md) (TPA10) — there both density and text size route through the daemon. It's absent only where neither is available.
 
 To tune: open the same dashboard on your desktop browser for reference, then lower the density until the layout matches (more cards fit), and nudge the text size until text matches. Good values are a **per-install** preference (panel resolution, viewing distance, how the dashboard is designed), not a fixed per-model constant — which is why no canonical defaults ship yet.
 

@@ -26,6 +26,7 @@ static const struct { const char *verb; cmd_fn fn; } COMMANDS[] = {
     { "SUBSCRIBE", cmd_subscribe },
     { "REBOOT",    cmd_reboot },
     { "DENSITY",   cmd_density },
+    { "FONTSCALE", cmd_fontscale },
     { "GOV",       cmd_gov },
     { "PERFDUMP",  cmd_perfdump },
     { "PING",      cmd_ping },

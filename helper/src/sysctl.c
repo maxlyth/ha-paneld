@@ -53,6 +53,32 @@ static void get_density(int fd) {
     reply(fd, out);
 }
 
+// System font scale (text size) via `settings system font_scale`; arg = a decimal, or "reset" to
+// clear the override. Root-only on sandbox-walled panels (the app can't put a system setting there),
+// so it's routed here — the daemon counterpart of the su-direct `settings put system font_scale`.
+static int set_fontscale(const char *arg) {
+    if (strcmp(arg, "reset") == 0) { sysexec_run("settings delete system font_scale"); return 0; }
+    if (!valid_decimal(arg)) return -1;
+    char cmd[64];
+    snprintf(cmd, sizeof cmd, "settings put system font_scale %s", arg);
+    sysexec_run(cmd);
+    return 0;
+}
+
+// Reply the current font scale as "SCALE=<v>" parsed from `settings get system font_scale`
+// (v="null" when unset → the app reads that as the 1.0 default).
+static void get_fontscale(int fd) {
+    FILE *p = sysexec_popen_r("settings get system font_scale 2>/dev/null");
+    char val[32] = "null", out[48];
+    if (p) {
+        if (fgets(val, sizeof val, p)) { char *nl = strchr(val, '\n'); if (nl) *nl = '\0'; }
+        if (val[0] == '\0') strcpy(val, "null");
+        sysexec_pclose(p);
+    }
+    snprintf(out, sizeof out, "SCALE=%s\n", val);
+    reply(fd, out);
+}
+
 // CPU scaling governor on all cores (cpufreq sysfs is root-writable; the app can read it itself).
 static int set_governor(const char *gov) {
     if (!valid_gov(gov)) return -1;
@@ -96,6 +122,13 @@ void cmd_density(conn_ctx *ctx, const char *args) {
     sscanf(args, "%15s", arg);
     if (arg[0] == '\0') get_density(ctx->fd);                                 // get -> "PHYS=.. OVER=.."
     else reply(ctx->fd, set_density(arg) == 0 ? "OK\n" : "ERR\n");            // set <n>|reset
+}
+
+void cmd_fontscale(conn_ctx *ctx, const char *args) {
+    char arg[16] = "";
+    sscanf(args, "%15s", arg);
+    if (arg[0] == '\0') get_fontscale(ctx->fd);                                // get -> "SCALE=.."
+    else reply(ctx->fd, set_fontscale(arg) == 0 ? "OK\n" : "ERR\n");           // set <scale>|reset
 }
 
 void cmd_gov(conn_ctx *ctx, const char *args) {

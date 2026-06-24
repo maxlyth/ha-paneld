@@ -74,6 +74,16 @@ static void test_validators(void) {
     CHECK(!valid_num("-1"), "valid_num rejects sign\n");
     CHECK(!valid_num("12x"), "valid_num rejects trailing junk\n");
 
+    // valid_decimal: digits with at most one dot (font-scale arg).
+    CHECK(valid_decimal("1.15"), "valid_decimal accepts 1.15\n");
+    CHECK(valid_decimal("1"), "valid_decimal accepts a bare integer\n");
+    CHECK(valid_decimal(".5"), "valid_decimal accepts a leading dot\n");
+    CHECK(!valid_decimal(""), "valid_decimal rejects empty\n");
+    CHECK(!valid_decimal("."), "valid_decimal rejects a lone dot\n");
+    CHECK(!valid_decimal("1.2.3"), "valid_decimal rejects two dots\n");
+    CHECK(!valid_decimal("-1.0"), "valid_decimal rejects sign\n");
+    CHECK(!valid_decimal("1.0;reboot"), "valid_decimal rejects trailing junk\n");
+
     // valid_gov: lowercase-alnum + underscore.
     CHECK(valid_gov("schedutil"), "valid_gov accepts schedutil\n");
     CHECK(valid_gov("performance"), "valid_gov accepts performance\n");
