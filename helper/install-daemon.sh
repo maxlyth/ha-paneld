@@ -47,6 +47,9 @@ echo "==> starting now (init registers the service on next boot)"
 # session; the init service takes over after a reboot.
 adb -s "$TARGET" shell 'su 0 sh -c "pkill -f hapaneld-ledd 2>/dev/null; ( /system/bin/hapaneld-ledd >/dev/null 2>&1 & )"'
 sleep 1
-adb -s "$TARGET" shell 'echo PING | toybox nc -w 2 127.0.0.1 8889' || echo "   (PING failed)"
+# Health check: the daemon now listens on an abstract UNIX socket (not loopback TCP), and shell `nc`
+# can't reliably speak the abstract namespace — so confirm liveness by process instead. (ha-paneld
+# itself PINGs the socket and only it/root/shell are accepted; see helper/README.md Safety.)
+adb -s "$TARGET" shell 'su 0 sh -c "pidof hapaneld-ledd >/dev/null && echo \"   daemon running (pid \$(pidof hapaneld-ledd))\" || echo \"   (daemon not running)\""'
 
 echo "==> done. Reboot the panel to confirm the daemon auto-starts (init service)."

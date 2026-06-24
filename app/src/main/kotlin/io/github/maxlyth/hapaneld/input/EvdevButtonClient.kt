@@ -1,14 +1,15 @@
 package io.github.maxlyth.hapaneld.input
 
+import android.net.LocalSocket
+import android.net.LocalSocketAddress
 import android.util.Log
 import io.github.maxlyth.hapaneld.device.EvdevButton
 import java.io.BufferedReader
 import java.io.InputStreamReader
-import java.net.InetSocketAddress
-import java.net.Socket
 
 /**
- * Streams hardware-button events from the root helper daemon (`hapaneld-ledd`, 127.0.0.1:8889) for
+ * Streams hardware-button events from the root helper daemon (`hapaneld-ledd`, abstract UNIX socket
+ * `@hapaneld-ledd`) for
  * keys the Android input pipeline doesn't usefully deliver to the app (e.g. a `KEY_MICMUTE` adc-key,
  * or the power key). On a background thread it connects, sends `WATCH <node> <grab>` for each
  * [EvdevButton] — grabbing where asked, so e.g. the WF1589T power key no longer sleeps the panel —
@@ -17,7 +18,7 @@ import java.net.Socket
  * if the daemon isn't up yet or restarts, so the grab is re-established automatically.
  */
 object EvdevButtonClient {
-    private const val PORT = 8889
+    private const val SOCK = "hapaneld-ledd"   // abstract socket name; matches SOCK_NAME in ledd.c
     private const val TAG = "ha-paneld/evdev"
 
     @Volatile private var thread: Thread? = null
@@ -38,10 +39,10 @@ object EvdevButtonClient {
     private fun run(buttons: List<EvdevButton>) {
         while (!Thread.currentThread().isInterrupted) {
             try {
-                Socket().use { s ->
-                    s.connect(InetSocketAddress("127.0.0.1", PORT), 1000)
-                    val out = s.getOutputStream()
-                    val br = BufferedReader(InputStreamReader(s.getInputStream()))
+                LocalSocket().use { s ->
+                    s.connect(LocalSocketAddress(SOCK, LocalSocketAddress.Namespace.ABSTRACT))
+                    val out = s.outputStream
+                    val br = BufferedReader(InputStreamReader(s.inputStream))
                     // Establish the watches (idempotent in the daemon) then subscribe to the stream.
                     buttons.forEach { out.write("WATCH ${it.node} ${if (it.grab) 1 else 0}\n".toByteArray()) }
                     out.write("SUBSCRIBE\n".toByteArray())

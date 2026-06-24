@@ -18,7 +18,7 @@ Review dated 2026-06-05.
 | **HTTP API `:8888`** | unauthenticated; binds dual-stack (`::`) | state-changing routes are the risk — see below |
 | **CDP / WebView DevTools relay `:9222`** | opt-in (started via `/inspect/start`), binds `0.0.0.0`, unauthenticated | full dashboard-session access if started |
 | **MQTT** | governed by the broker | the intended control plane; inherent to MQTT discovery |
-| **Root helper daemon `:8889`** | loopback-only, command-whitelisted, char-sanitised | Sound |
+| **Root helper daemon** (abstract UNIX socket `@hapaneld-ledd`) | peer-uid authenticated (`SO_PEERCRED`: ha-paneld/root/shell only), command-whitelisted, char-sanitised, bounded parsing, conn caps | Sound — was unauthenticated loopback TCP `:8889`; now no other local app can reach it |
 | **Network ADB** | opt-in switch; opens `5555` to the LAN when enabled | documented, off by default |
 | **Accessibility service** | key-capture only (no window-content retrieval) | Sound |
 | **su call-sites** | CPU governor regex-sanitised; relay/adb/cdp use constants; Zigbee role now allowlisted | the Zigbee role was the one un-validated interpolation; no remaining injection paths |

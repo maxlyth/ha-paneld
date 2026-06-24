@@ -1,16 +1,26 @@
-// hapaneld-ledd — tiny root helper that drives a sysfs-LED panel's RGB on behalf of ha-paneld.
+// hapaneld-ledd — tiny root helper that drives a panel's RGB LED (root-only sysfs node OR an
+// app-denied /dev/ledjni ioctl, auto-detected at startup) on behalf of ha-paneld.
 //
 // Why this exists: on some panels (e.g. Tuya TPA10) the RGB LED is a sysfs node labelled
 // `sysfs_lights` (SELinux), writable only by the lights HAL / system / root. A normal Android app
 // (`untrusted_app` domain) cannot write it — and cannot exec `su` to escalate. So this small
 // daemon runs OUTSIDE the app sandbox, in a root domain that *can* write the node, and exposes a
-// minimal whitelisted command surface on loopback TCP. ha-paneld (which has INTERNET) connects to
-// 127.0.0.1 and asks it to set colours. The app stays a single uniform API; the privilege lives
-// here.
+// minimal whitelisted command surface on a UNIX-domain socket. ha-paneld connects to it and asks it
+// to set colours. The app stays a single uniform API; the privilege lives here.
 //
-// Security: binds 127.0.0.1 only; a fixed, tiny command set; writes ONLY the two safe nodes below.
-// It NEVER writes avs-pwm-led/avsux_select or custom_animation — those are firmware-backed and
-// reliably reboot the TPA10.
+// Security:
+//   * Transport is an ABSTRACT-namespace UNIX socket (SOCK_NAME), NOT loopback TCP — so peer
+//     credentials are available via SO_PEERCRED. Every connection is authenticated: we accept ONLY
+//     ha-paneld's own uid (resolved at runtime from /data/data/<pkg>, which changes per (re)install),
+//     plus root and shell for adb debugging. Any other local app is rejected and closed. (The old
+//     127.0.0.1:8889 TCP listener had NO auth: any app with INTERNET could REBOOT/SCREENCAP it.)
+//   * A fixed, tiny command set; touches ONLY the safe LED/button sysfs nodes below plus the rk3576
+//     /dev/ledjni LED ioctl. It NEVER writes avs-pwm-led/avsux_select or custom_animation — those are
+//     firmware-backed and reliably reboot the TPA10.
+//   * Airtight line parsing: a bounded per-connection line buffer, overlong lines are dropped, and
+//     every command argument is width-bounded. Unknown verbs -> "ERR\n".
+//   * Resource limits: a cap on concurrent connections and a per-connection idle timeout (which
+//     exempts long-lived SUBSCRIBE streams), so a flood can't exhaust the thread-per-conn model.
 //
 // It also powers the panel backlight on/off (bl_power) for a true, lock-free screen-off: a
 // sandboxed app can set Settings brightness but cannot fully power the backlight down, and
@@ -23,8 +33,9 @@
 // each key event to SUBSCRIBEd clients. The app decides the node/grab from its DeviceProfile.
 //
 // Protocol (newline-terminated ASCII; one or more commands per connection):
-//   RGB <r> <g> <b>   set colour, each 0..255         -> "OK\n"
+//   RGB <r> <g> <b>   set colour, each 0..255 (sysfs node OR /dev/ledjni ioctl, auto-detected) -> "OK\n"
 //   OFF               LED off                          -> "OK\n"
+//   LEDPROBE          which LED backend exists         -> "ledjni\n" | "sysfs\n" | "none\n"
 //   BTN <0..255>      button-backlight brightness      -> "OK\n"
 //   SCREEN ON|OFF     backlight power (bl_power 0|4)    -> "OK\n"
 //   RELOAD <pkg>      force-stop + relaunch an app      -> "OK\n"
@@ -38,28 +49,53 @@
 //   PING              liveness probe                   -> "OK\n"
 //   <anything else>                                    -> "ERR\n"
 
+#define _GNU_SOURCE             // struct ucred / SO_PEERCRED
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <stddef.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
 #include <dirent.h>
 #include <signal.h>
 #include <pthread.h>
-#include <arpa/inet.h>
-#include <netinet/in.h>
 #include <sys/socket.h>
+#include <sys/un.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 #include <sys/ioctl.h>
 #include <linux/input.h>
 
-#define PORT       8889
+// Abstract-namespace UNIX socket name (leading NUL added at bind time). Must match the app's
+// LocalSocketAddress("hapaneld-ledd", ABSTRACT) in HelperClient/EvdevButtonClient.
+#define SOCK_NAME  "hapaneld-ledd"
+// ha-paneld's data dir — we stat() it to learn the app's uid (it changes on every reinstall).
+#define APP_DATA   "/data/data/io.github.maxlyth.hapaneld"
+#define MAX_CONN   16            // concurrent connections cap (thread-per-conn backstop)
+#define IDLE_SEC   30            // drop a non-SUBSCRIBE connection that sends nothing for this long
+#define MAX_LINE   512           // longest accepted command line; longer lines are dropped
 #define NODE_ANIM  "/sys/class/leds/avs-pwm-led/avsux_animation"
 #define NODE_BTN   "/sys/class/leds/button-backlight/brightness"
 // avsux reverts to the idle animation after <duration_ms>; use ~24h so a set colour holds until
 // the next command re-issues it.
 #define HOLD_MS    86400000L
+
+// Some rk3576 panels (e.g. ZHICAI SMT1019) drive the RGB LED through an ioctl char-device, NOT sysfs.
+// The node is system:system 0664 with the SELinux-generic `device` label, so an `untrusted_app` is
+// denied the ioctl (EACCES/rc=-13) — but this daemon runs as root and can. Clean-room protocol, the
+// same one the app's led_jni.c uses app-direct on panels that allow it: per-channel ioctl, value
+// 0..15; off = ioctl(fd, 0x99, 0).
+#define DEV_LEDJNI  "/dev/ledjni"
+#define LEDJNI_R    0xa1
+#define LEDJNI_G    0xa2
+#define LEDJNI_B    0xa3
+#define LEDJNI_OFF  0x99
+
+// Resolved once at startup by find_led_backend(): which RGB-LED node this panel actually has.
+enum { LED_NONE, LED_SYSFS, LED_LEDJNI };
+static int led_backend = LED_NONE;
 
 static int clamp(int v) { return v < 0 ? 0 : (v > 255 ? 255 : v); }
 
@@ -72,16 +108,57 @@ static int write_node(const char *path, const char *val) {
     return n < 0 ? -1 : 0;
 }
 
-static int set_rgb(int r, int g, int b) {
+// --- sysfs LED backend (e.g. Tuya TPA10): write "<hold_ms>:RRGGBB" to the avsux animation node ----
+static int set_rgb_sysfs(int r, int g, int b) {
     char buf[48];
     snprintf(buf, sizeof buf, "%ld:%02X%02X%02X\n", HOLD_MS, clamp(r), clamp(g), clamp(b));
     return write_node(NODE_ANIM, buf);
 }
 
-static int set_off(void) {
+static int set_off_sysfs(void) {
     char buf[48];
     snprintf(buf, sizeof buf, "%ld:000000\n", HOLD_MS);
     return write_node(NODE_ANIM, buf);
+}
+
+// --- ioctl LED backend (e.g. ZHICAI SMT1019): per-channel ioctl on /dev/ledjni, value 0..15 --------
+// 0..255 (HA range) -> 0..15 (the rk3576 ledjni per-channel range), matching led_jni.c's scaler.
+static int led15(int v) { return (clamp(v) * 15) / 255; }
+
+static int set_rgb_ledjni(int r, int g, int b) {
+    int fd = open(DEV_LEDJNI, O_RDONLY | O_NOCTTY);   // the vendor's open flags; the driver acts on the ioctl
+    if (fd < 0) return -1;
+    int rc = 0;
+    if (ioctl(fd, LEDJNI_R, led15(r)) < 0 && rc == 0) rc = -1;
+    if (ioctl(fd, LEDJNI_G, led15(g)) < 0 && rc == 0) rc = -1;
+    if (ioctl(fd, LEDJNI_B, led15(b)) < 0 && rc == 0) rc = -1;
+    close(fd);
+    return rc;
+}
+
+static int set_off_ledjni(void) {
+    int fd = open(DEV_LEDJNI, O_RDONLY | O_NOCTTY);
+    if (fd < 0) return -1;
+    int rc = ioctl(fd, LEDJNI_OFF, 0) < 0 ? -1 : 0;
+    close(fd);
+    return rc;
+}
+
+// Pick the RGB-LED backend once at startup: the rk3576 ioctl char-dev if present (app-denied, so it
+// needs us), else the sysfs animation node, else none. The two node types don't coexist on a panel.
+static void find_led_backend(void) {
+    int fd = open(DEV_LEDJNI, O_RDONLY | O_NOCTTY);
+    if (fd >= 0) { close(fd); led_backend = LED_LEDJNI; return; }
+    if (access(NODE_ANIM, F_OK) == 0) { led_backend = LED_SYSFS; return; }
+    led_backend = LED_NONE;
+}
+
+static int set_rgb(int r, int g, int b) {
+    return led_backend == LED_LEDJNI ? set_rgb_ledjni(r, g, b) : set_rgb_sysfs(r, g, b);
+}
+
+static int set_off(void) {
+    return led_backend == LED_LEDJNI ? set_off_ledjni() : set_off_sysfs();
 }
 
 static int set_btn(int level) {
@@ -436,8 +513,10 @@ static int watch_node(const char *path, int grab) {
     return 0;
 }
 
-// Handle one command line on connection [fd]. Returns nothing; writes a reply.
-static void handle(int fd, char *line) {
+// Handle one command line on connection [fd]. Writes a reply. Sets *subscribed when the connection
+// joins the async KEY stream, so serve() can exempt it from the idle timeout (subscribers are meant
+// to sit idle, only reading).
+static void handle(int fd, char *line, int *subscribed) {
     int r, g, b;
     if (sscanf(line, "RGB %d %d %d", &r, &g, &b) == 3) {
         reply(fd, set_rgb(r, g, b) == 0 ? "OK\n" : "ERR\n");
@@ -468,6 +547,7 @@ static void handle(int fd, char *line) {
         reply(fd, ok ? "OK\n" : "ERR\n");
     } else if (strncmp(line, "SUBSCRIBE", 9) == 0) {
         sub_add(fd);
+        if (subscribed) *subscribed = 1;   // exempt from the idle timeout from here on
         reply(fd, "OK\n");   // KEY lines now stream on this connection until it closes
     } else if (strncmp(line, "REBOOT", 6) == 0) {
         reply(fd, "OK\n");   // reply before we go down
@@ -481,6 +561,11 @@ static void handle(int fd, char *line) {
         reply(fd, set_governor(gov) == 0 ? "OK\n" : "ERR\n");
     } else if (strncmp(line, "PERFDUMP", 8) == 0) {
         perfdump_to(fd);    // marker-delimited snapshot; serve() closes on client half-close → EOF
+    } else if (strncmp(line, "LEDPROBE", 8) == 0) {
+        // Which RGB-LED backend this panel actually has — lets the app gate the LED entity on a
+        // *reachable* node, not merely "a daemon is up" (an old daemon doesn't know this verb and
+        // replies "ERR", which the app reads as "assume present", preserving its prior behaviour).
+        reply(fd, led_backend == LED_LEDJNI ? "ledjni\n" : led_backend == LED_SYSFS ? "sysfs\n" : "none\n");
     } else if (strncmp(line, "PING", 4) == 0) {
         reply(fd, "OK\n");
     } else {
@@ -489,18 +574,58 @@ static void handle(int fd, char *line) {
 }
 
 static void serve(int cfd) {
+    // Idle timeout: a connection that sends nothing for IDLE_SEC is dropped — unless it SUBSCRIBEs,
+    // where sitting idle (only reading the KEY stream) is the whole point. SO_RCVTIMEO affects reads
+    // only; the evdev thread's writes to a subscriber keep flowing regardless.
+    struct timeval tv = { .tv_sec = IDLE_SEC, .tv_usec = 0 };
+    setsockopt(cfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+
+    char line[MAX_LINE + 1];
+    size_t len = 0;
+    int overlong = 0;        // current line exceeded MAX_LINE — drop bytes through to the next newline
+    int subscribed = 0;
     char buf[256];
-    ssize_t n;
-    while ((n = read(cfd, buf, sizeof buf - 1)) > 0) {
-        buf[n] = '\0';
-        // Split on newlines; handle each non-empty line.
-        char *save = NULL, *tok = strtok_r(buf, "\r\n", &save);
-        while (tok) {
-            handle(cfd, tok);
-            tok = strtok_r(NULL, "\r\n", &save);
+    for (;;) {
+        ssize_t n = read(cfd, buf, sizeof buf);
+        if (n == 0) break;                                    // client (half-)closed — done
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {    // idle timeout fired
+                if (subscribed) continue;                     // subscribers are meant to idle — keep
+                break;                                        // drop an idle non-subscriber
+            }
+            break;                                            // other read error
+        }
+        // Accumulate into a bounded line buffer so a command split across reads still parses, and an
+        // overlong (malicious) line is dropped instead of overflowing or being mis-split.
+        for (ssize_t i = 0; i < n; i++) {
+            char c = buf[i];
+            if (c == '\n' || c == '\r') {
+                if (!overlong && len > 0) { line[len] = '\0'; handle(cfd, line, &subscribed); }
+                len = 0; overlong = 0;
+            } else if (len < MAX_LINE) {
+                line[len++] = c;
+            } else {
+                overlong = 1;
+            }
         }
     }
 }
+
+// --- peer authentication --------------------------------------------------------------------------
+// ha-paneld's uid changes on every (re)install, so resolve it live by stat'ing its data dir rather
+// than hardcoding it. Accept that uid, plus root (0) and shell (2000) so adb debugging still works.
+// Any other local app is rejected — this is the whole point of the UNIX-socket switch.
+static uid_t app_uid = (uid_t)-1;   // last resolved ha-paneld uid (cached across stat failures)
+
+static int uid_allowed(uid_t uid) {
+    if (uid == 0 || uid == 2000) return 1;                 // root, shell
+    struct stat st;
+    if (stat(APP_DATA, &st) == 0) app_uid = st.st_uid;     // refresh (data dir may be absent pre-install)
+    return app_uid != (uid_t)-1 && uid == app_uid;
+}
+
+static volatile int conn_count = 0;   // live connection count, capped at MAX_CONN
 
 // One thread per connection, so a long-lived SUBSCRIBE stream doesn't block LED/screen commands on
 // other connections. Removes the fd from the subscriber registry on disconnect.
@@ -510,6 +635,7 @@ static void *conn_thread(void *arg) {
     serve(cfd);
     sub_del(cfd);
     close(cfd);
+    __atomic_sub_fetch(&conn_count, 1, __ATOMIC_SEQ_CST);
     return NULL;
 }
 
@@ -517,6 +643,7 @@ int main(int argc, char **argv) {
     signal(SIGPIPE, SIG_IGN);   // a dead subscriber's socket must not kill the daemon
     for (int i = 0; i < MAX_SUBS; i++) subs[i] = -1;
     find_backlight();
+    find_led_backend();
 
     // Optional startup watches from args (per-device .rc may pass them): --grab/--watch <node>. The
     // app also sets these via the WATCH command, so args are not required.
@@ -525,28 +652,47 @@ int main(int argc, char **argv) {
         else if (strcmp(argv[i], "--watch") == 0) watch_node(argv[++i], 0);
     }
 
-    int sfd = socket(AF_INET, SOCK_STREAM, 0);
+    int sfd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (sfd < 0) { perror("socket"); return 1; }
-    int one = 1;
-    setsockopt(sfd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
 
-    struct sockaddr_in addr;
+    // Abstract-namespace UNIX socket: leading NUL in sun_path, name follows. No filesystem entry to
+    // create, label (SELinux), permission, or clean up — and it's released automatically on close.
+    struct sockaddr_un addr;
     memset(&addr, 0, sizeof addr);
-    addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);  // 127.0.0.1 only
-    addr.sin_port = htons(PORT);
+    addr.sun_family = AF_UNIX;
+    addr.sun_path[0] = '\0';
+    memcpy(addr.sun_path + 1, SOCK_NAME, sizeof SOCK_NAME - 1);
+    socklen_t alen = offsetof(struct sockaddr_un, sun_path) + 1 + (sizeof SOCK_NAME - 1);
 
-    if (bind(sfd, (struct sockaddr *)&addr, sizeof addr) < 0) { perror("bind"); return 1; }
-    if (listen(sfd, 4) < 0) { perror("listen"); return 1; }
-    fprintf(stderr, "hapaneld-ledd listening on 127.0.0.1:%d\n", PORT);
+    if (bind(sfd, (struct sockaddr *)&addr, alen) < 0) { perror("bind"); return 1; }
+    if (listen(sfd, MAX_CONN) < 0) { perror("listen"); return 1; }
+    fprintf(stderr, "hapaneld-ledd listening on abstract unix socket @%s\n", SOCK_NAME);
 
     for (;;) {
         int cfd = accept(sfd, NULL, NULL);
         if (cfd < 0) { if (errno == EINTR) continue; perror("accept"); break; }
+
+        // Authenticate the peer by uid — only possible because this is a UNIX socket. Reject (and
+        // close) anything that isn't ha-paneld / root / shell before it can issue a single command.
+        struct ucred cred; socklen_t cl = sizeof cred;
+        if (getsockopt(cfd, SOL_SOCKET, SO_PEERCRED, &cred, &cl) < 0 || !uid_allowed(cred.uid)) {
+            close(cfd); continue;
+        }
+
+        // Cap concurrent connections so a connection flood can't exhaust the thread-per-conn model.
+        if (__atomic_add_fetch(&conn_count, 1, __ATOMIC_SEQ_CST) > MAX_CONN) {
+            __atomic_sub_fetch(&conn_count, 1, __ATOMIC_SEQ_CST);
+            close(cfd); continue;
+        }
+
         int *p = malloc(sizeof(int));
         *p = cfd;
         pthread_t t;
-        if (pthread_create(&t, NULL, conn_thread, p) != 0) { free(p); close(cfd); continue; }
+        if (pthread_create(&t, NULL, conn_thread, p) != 0) {
+            free(p); close(cfd);
+            __atomic_sub_fetch(&conn_count, 1, __ATOMIC_SEQ_CST);
+            continue;
+        }
         pthread_detach(t);
     }
     close(sfd);

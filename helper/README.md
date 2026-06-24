@@ -15,13 +15,15 @@ Panels expose their RGB LED one of two ways:
   the Android lights HAL / vendor system service and is reachable only by system/root code.
 
 For the second class, `hapaneld-ledd` runs **outside the app sandbox** in a root domain that *can*
-write the node, and exposes a minimal command surface on loopback TCP. ha-paneld (which has the
-INTERNET permission) connects to `127.0.0.1:8889` and asks for colours. The app stays a single
-uniform API; the privilege is isolated here.
+write the node, and exposes a minimal command surface on an **abstract-namespace UNIX socket**
+(`@hapaneld-ledd`). ha-paneld connects to it and asks for colours. The app stays a single uniform
+API; the privilege is isolated here. The socket is authenticated by peer uid (see [Safety](#safety)),
+so — unlike the earlier loopback-TCP listener — no other app on the panel can reach it.
 
 ## Protocol
 
-Newline-terminated ASCII on `127.0.0.1:8889`. One or more commands per connection.
+Newline-terminated ASCII on the abstract UNIX socket `@hapaneld-ledd`. One or more commands per
+connection.
 
 | Command | Effect | Reply |
 | --- | --- | --- |
@@ -49,7 +51,18 @@ on many panels) and `lockNow()` would force the keyguard.
 
 ## Safety
 
-- Binds **`127.0.0.1` only**; fixed, tiny command set.
+- **Peer-uid authentication.** The transport is an abstract-namespace UNIX socket, so the daemon
+  reads the connecting process's credentials (`SO_PEERCRED`) and accepts **only** ha-paneld's own uid
+  (resolved live by `stat`-ing `/data/data/io.github.maxlyth.hapaneld`, since it changes on every
+  reinstall), plus root and shell (for adb debugging). Every other local app is rejected and the
+  connection closed before a single command runs. (The earlier `127.0.0.1:8889` TCP listener had no
+  auth — any app with `INTERNET` could `REBOOT`/`SCREENCAP` it.)
+- **Airtight parsing.** A bounded per-connection line buffer (commands split across reads still
+  parse; overlong lines are dropped, not mis-split or overflowed); every argument `sscanf` is
+  width-bounded; unknown verbs return `ERR`.
+- **Resource limits.** Concurrent connections are capped, and an idle connection is dropped after a
+  timeout — except long-lived `SUBSCRIBE` streams, which are meant to sit idle reading events. So a
+  connection flood can't exhaust the thread-per-connection model.
 - The commands that shell out (`RELOAD`, `START`, `REBOOT` via `am`/`svc`) sanitise their argument
   against a strict char-whitelist; the LED/backlight writes touch **only** the whitelisted nodes
   (`avs-pwm-led/avsux_animation`, `button-backlight/brightness`).
@@ -112,8 +125,9 @@ PWM/haptic. The extension recipe:
    it by class prefix** — the way `WATCH` restricts to `/dev/input/` and a future `LED` would
    restrict to `/sys/class/leds/`. For a reader (i2c/sensor), stream values to `SUBSCRIBE`rs using
    the existing async-line mechanism.
-3. Keep the safety model intact: bind `127.0.0.1` only, bound every buffer, validate/clamp inputs,
-   sanitise anything passed to `am`/`svc`, never write firmware-backed nodes (see the CAUTION above).
+3. Keep the safety model intact: the peer-uid auth gates the whole socket, but still bound every
+   buffer, validate/clamp inputs, width-bound every `sscanf`, sanitise anything passed to `am`/`svc`,
+   and never write firmware-backed nodes (see the CAUTION above).
 4. Publish the matching HA entity from the app per `DeviceProfile` capability — the daemon stays the
    privileged mechanism, the profile stays the policy.
 
@@ -138,8 +152,8 @@ adb shell su 0 'chmod 755 /data/local/tmp/hapaneld-ledd'
 adb shell su 0 '/data/local/tmp/hapaneld-ledd &'             # run in the su domain (can write sysfs_lights)
 ```
 
-ha-paneld auto-detects the daemon (a `PING` on `127.0.0.1:8889`) and publishes the LED entity when
-it answers.
+ha-paneld auto-detects the daemon (a `PING` on the abstract socket `@hapaneld-ledd`) and publishes
+the LED entity when it answers.
 
 ## Boot persistence (init service)
 
