@@ -7,6 +7,7 @@
 // A clean run prints "UNIT OK" and exits 0; any failed assertion prints the case and exits 1.
 #define _GNU_SOURCE
 #include <fcntl.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -16,12 +17,25 @@
 #include "dispatch.h"
 #include "server.h"
 #include "input.h"
+#include "led.h"
 #include "perf.h"
 #include "util.h"
 
 static int failures = 0;
 #define CHECK(cond, ...) do { if (!(cond)) { \
     printf("FAIL: " __VA_ARGS__); printf("  (%s:%d)\n", __FILE__, __LINE__); failures++; } } while (0)
+
+// --- ioctl interception (linked with -Wl,--wrap=ioctl) -------------------------------------------
+// Captures the ledjni per-channel ioctls so we can assert the command numbers + scaled values without
+// a real /dev/ledjni (the SMT1019 isn't hardware we own). Returns 0 = success so the handler proceeds.
+static unsigned long cap_cmd[8];
+static int cap_val[8], cap_n;
+int __wrap_ioctl(int fd, unsigned long req, ...) {
+    (void)fd;
+    va_list ap; va_start(ap, req); int arg = va_arg(ap, int); va_end(ap);
+    if (cap_n < 8) { cap_cmd[cap_n] = req; cap_val[cap_n] = arg; cap_n++; }
+    return 0;
+}
 
 // --- helpers: capture what a handler / the server writes back ------------------------------------
 // Run one line through dispatch() and return its reply bytes (NUL-terminated, into `out`).
@@ -170,12 +184,40 @@ static void test_line_accumulator(void) {
     CHECK(strcmp(out, "OK\n") == 0, "overlong line dropped, next line parses (got '%s')\n", out);
 }
 
+// The SMT1019 LED path: per-channel ioctl on /dev/ledjni. Untestable on owned hardware, so pin the
+// wire protocol here — the exact command numbers and the 0..255 -> 0..15 scaling. The expected values
+// are HARDCODED (not pulled from led.c's #defines) so an accidental change to either fails this test.
+static void test_ledjni_ioctl(void) {
+    CHECK(led15(0) == 0,    "led15(0)==0\n");
+    CHECK(led15(255) == 15, "led15(255)==15\n");
+    CHECK(led15(128) == 7,  "led15(128)==7 (got %d)\n", led15(128));
+    CHECK(led15(17) == 1,   "led15(17)==1 (got %d)\n", led15(17));
+    CHECK(led15(-9) == 0,   "led15 clamps negative to 0\n");
+    CHECK(led15(999) == 15, "led15 clamps over-range to 15\n");
+
+    int fd = open("/dev/null", O_WRONLY);   // any fd; ioctl is wrapped, never reaches it
+
+    cap_n = 0;
+    CHECK(led_ledjni_rgb(fd, 255, 128, 0) == 0, "led_ledjni_rgb returns ok\n");
+    CHECK(cap_n == 3, "rgb emits exactly 3 ioctls (got %d)\n", cap_n);
+    CHECK(cap_cmd[0] == 0xa1 && cap_val[0] == 15, "R: cmd 0xa1, 255->15 (got 0x%lx/%d)\n", cap_cmd[0], cap_val[0]);
+    CHECK(cap_cmd[1] == 0xa2 && cap_val[1] == 7,  "G: cmd 0xa2, 128->7 (got 0x%lx/%d)\n", cap_cmd[1], cap_val[1]);
+    CHECK(cap_cmd[2] == 0xa3 && cap_val[2] == 0,  "B: cmd 0xa3, 0->0 (got 0x%lx/%d)\n", cap_cmd[2], cap_val[2]);
+
+    cap_n = 0;
+    CHECK(led_ledjni_off(fd) == 0, "led_ledjni_off returns ok\n");
+    CHECK(cap_n == 1 && cap_cmd[0] == 0x99 && cap_val[0] == 0, "off: cmd 0x99, val 0 (got 0x%lx/%d)\n", cap_cmd[0], cap_val[0]);
+
+    if (fd >= 0) close(fd);
+}
+
 int main(void) {
     test_validators();
     test_clamp();
     test_stat_jiffies();
     test_dispatch_exact_match();
     test_line_accumulator();
+    test_ledjni_ioctl();
 
     if (failures) { printf("UNIT FAILED: %d assertion(s)\n", failures); return 1; }
     printf("UNIT OK\n");

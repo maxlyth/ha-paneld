@@ -39,8 +39,10 @@ $(BUILD)/hapaneld-helper: $(DAEMON_SRCS) | $(BUILD)
 # Unit tests: CORE modules + the sysexec stub (no real exec) + the test driver.
 test: $(BUILD)/unit
 	$(BUILD)/unit
+# --wrap=ioctl lets the tests capture the ledjni per-channel ioctls (the SMT1019 LED path) without a
+# real /dev/ledjni; only test code emits ioctls in this build, so the wrap is unambiguous.
 $(BUILD)/unit: $(CORE_SRCS) $(STUB) test/unit.c | $(BUILD)
-	$(CC) $(CFLAGS) -I$(SRC_DIR) $(CORE_SRCS) $(STUB) test/unit.c $(LDLIBS) -o $@
+	$(CC) $(CFLAGS) -I$(SRC_DIR) $(CORE_SRCS) $(STUB) test/unit.c $(LDLIBS) -Wl,--wrap=ioctl -o $@
 
 # Fuzz: ASan+UBSan over the same CORE_SRCS (the script asks this Makefile for the list).
 fuzz:

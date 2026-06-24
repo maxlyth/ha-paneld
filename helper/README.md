@@ -35,11 +35,16 @@ connection.
 | `RGB <r> <g> <b>` | set LED colour (each 0..255) | `OK` / `ERR` |
 | `OFF` | LED off | `OK` / `ERR` |
 | `BTN <0..255>` | button-backlight brightness | `OK` / `ERR` |
+| `LEDPROBE` | which RGB-LED backend this panel has (so the app gates the LED entity on a reachable node) | `ledjni` / `sysfs` / `none` |
 | `SCREEN ON` / `SCREEN OFF` | screen backlight power (`bl_power` 0/4) | `OK` / `ERR` |
+| `SCREENCAP` | capture the screen as PNG | raw PNG bytes, then EOF |
 | `RELOAD <pkg>` | force-stop + relaunch an app (dashboard reload) | `OK` / `ERR` |
 | `START <pkg/cls>` | launch an activity by component (root, bypasses BAL limits) | `OK` / `ERR` |
 | `WATCH <evdev> <0\|1>` | read an input node; `1` = `EVIOCGRAB` it (suppress the default Android action). Idempotent per node | `OK` / `ERR` |
 | `SUBSCRIBE` | this connection then receives async `KEY <code> <value>` / `SW <code> <value>` lines for every event from `WATCH`ed nodes, until it disconnects | `OK` |
+| `DENSITY` / `DENSITY <n>\|reset` | get display density / set it (`wm density`) | `PHYS=<n> OVER=<n\|->` (get) · `OK` / `ERR` (set) |
+| `GOV <name>` | set the CPU scaling governor on all cores | `OK` / `ERR` |
+| `PERFDUMP` | CPU/load/temp/gpu/process snapshot (for sandbox-walled apps) | marker-delimited stream, then EOF |
 | `REBOOT` | reboot the panel | `OK` (then down) |
 | `PING` | liveness probe | `OK` |
 | anything else | — | `ERR` |

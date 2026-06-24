@@ -43,15 +43,26 @@ static int set_off_sysfs(void) {
 }
 
 // 0..255 (HA range) -> 0..15 (the rk3576 ledjni per-channel range), matching led_jni.c's scaler.
-static int led15(int v) { return (clamp(v) * 15) / 255; }
+int led15(int v) { return (clamp(v) * 15) / 255; }
 
-static int set_rgb_ledjni(int r, int g, int b) {
-    int fd = open(DEV_LEDJNI, O_RDONLY | O_NOCTTY);   // vendor's open flags; the driver acts on the ioctl
-    if (fd < 0) return -1;
+// Emit the per-channel ioctls on an already-open fd. Split from the open() so unit tests can drive it
+// with their own fd (and a wrapped ioctl) — the SMT1019 hardware isn't available to test against.
+int led_ledjni_rgb(int fd, int r, int g, int b) {
     int rc = 0;
     if (ioctl(fd, LEDJNI_R, led15(r)) < 0 && rc == 0) rc = -1;
     if (ioctl(fd, LEDJNI_G, led15(g)) < 0 && rc == 0) rc = -1;
     if (ioctl(fd, LEDJNI_B, led15(b)) < 0 && rc == 0) rc = -1;
+    return rc;
+}
+
+int led_ledjni_off(int fd) {
+    return ioctl(fd, LEDJNI_OFF, 0) < 0 ? -1 : 0;
+}
+
+static int set_rgb_ledjni(int r, int g, int b) {
+    int fd = open(DEV_LEDJNI, O_RDONLY | O_NOCTTY);   // vendor's open flags; the driver acts on the ioctl
+    if (fd < 0) return -1;
+    int rc = led_ledjni_rgb(fd, r, g, b);
     close(fd);
     return rc;
 }
@@ -59,7 +70,7 @@ static int set_rgb_ledjni(int r, int g, int b) {
 static int set_off_ledjni(void) {
     int fd = open(DEV_LEDJNI, O_RDONLY | O_NOCTTY);
     if (fd < 0) return -1;
-    int rc = ioctl(fd, LEDJNI_OFF, 0) < 0 ? -1 : 0;
+    int rc = led_ledjni_off(fd);
     close(fd);
     return rc;
 }
