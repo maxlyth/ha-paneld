@@ -85,6 +85,9 @@ jobs:
               set -euo pipefail
 
               echo '>>> Generating project from: ${NCP_SLCP}'
+              # --output-type vscode: required to generate cmake templates (NabuCasa discovery).
+              # --toolchain toolchain_gcc: selects the ARM GCC toolchain bundled in the image.
+              # Without both flags slc exits with FileNotFoundException on cmake generation.
               slc generate \
                 --with='${{ env.CHIP }}' \
                 --project-file='${NCP_SLCP}' \
@@ -92,7 +95,9 @@ jobs:
                 --copy-proj-sources \
                 --copy-sdk-sources \
                 --new-project \
-                --force
+                --force \
+                --output-type vscode \
+                --toolchain toolchain_gcc
 
               echo '>>> Generated files in /build/ot-ncp:'
               ls /build/ot-ncp/
@@ -130,13 +135,12 @@ jobs:
 
               cd /build/ot-ncp
 
-              # Build
-              MAKEFILE=\$(ls *.Makefile 2>/dev/null | head -1)
-              if [ -n \"\$MAKEFILE\" ]; then
-                make -f \"\$MAKEFILE\" release -j\$(nproc)
-              else
-                cmake -DCMAKE_BUILD_TYPE=Release . && cmake --build . -- -j\$(nproc)
-              fi
+              # Build with cmake + Ninja (matches --output-type vscode generation).
+              cmake -DCMAKE_BUILD_TYPE=Release \
+                    -DCMAKE_TOOLCHAIN_FILE=toolchain.cmake \
+                    -G Ninja . 2>/dev/null \
+                || cmake -DCMAKE_BUILD_TYPE=Release -G Ninja .
+              cmake --build . -- -j\$(nproc)
 
               # Find ELF output
               ELF=\$(find . -name '*.out' -o -name '*.elf' 2>/dev/null \
