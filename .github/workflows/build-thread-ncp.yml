@@ -152,29 +152,31 @@ jobs:
           mkdir -p "$(dirname "${{ env.ASSET_PATH }}")"
           cp build/efr32mg21-thread-ncp.gbl "${{ env.ASSET_PATH }}"
           git add "${{ env.ASSET_PATH }}"
-          git commit -m "feat(thread): add OpenThread NCP GBL for ${{ env.CHIP }}
 
-Built from Gecko SDK ${{ inputs.sdk_version }}, ${{ env.BAUD }} baud, no hardware flow control.
-Firmware asset for the Thread Mesh Router feature on NSPanel Pro panels."
+          # Avoid heredocs (zero-indent content breaks YAML literal blocks).
+          COMMIT_MSG="feat(thread): add OpenThread NCP GBL for ${{ env.CHIP }}"$'\n\n'"Built from Gecko SDK ${{ inputs.sdk_version }}, ${{ env.BAUD }} baud, no hardware flow control."$'\n'"Firmware asset for the Thread Mesh Router feature on NSPanel Pro panels."
+          git commit -m "$COMMIT_MSG"
 
           git push origin "$BRANCH"
+
+          # Build PR body as a file — avoids nested quote/heredoc issues in YAML.
+          PR_BODY=/tmp/pr-body.md
+          echo "## Thread NCP firmware asset" > "$PR_BODY"
+          echo "" >> "$PR_BODY"
+          echo "Adds the OpenThread NCP GBL built by the \`build-thread-ncp\` workflow." >> "$PR_BODY"
+          echo "" >> "$PR_BODY"
+          echo "**Target chip:** \`${{ env.CHIP }}\` (NSPanel Pro 86P/120P EFR32 — same as ZBDongle-E family)" >> "$PR_BODY"
+          echo "**SDK version:** ${{ inputs.sdk_version }}" >> "$PR_BODY"
+          echo "**Baud rate:** ${{ env.BAUD }}" >> "$PR_BODY"
+          echo "**Flow control:** none (matches \`spinel.c\`)" >> "$PR_BODY"
+          echo "" >> "$PR_BODY"
+          echo "**Verify before merging:**" >> "$PR_BODY"
+          echo "- [ ] GBL size 150-280 KB (expected for NCP; if ~105 KB it built as RCP instead)" >> "$PR_BODY"
+          echo "- [ ] Strings in GBL contain \`ot-ncp\` not \`ot-rcp\`" >> "$PR_BODY"
+          echo "- [ ] Flash tested on a spare NSPanel Pro and Spinel commissioning verified" >> "$PR_BODY"
+
           gh pr create \
             --title "feat(thread): OpenThread NCP firmware for ${{ env.CHIP }}" \
-            --body "$(cat <<'EOF'
-## Thread NCP firmware asset
-
-Adds the OpenThread NCP GBL built by the \`build-thread-ncp\` workflow.
-
-**Target chip:** \`${{ env.CHIP }}\` (NSPanel Pro 86P/120P EFR32 — same as ZBDongle-E family)
-**SDK version:** ${{ inputs.sdk_version }}
-**Baud rate:** ${{ env.BAUD }}
-**Flow control:** none (matches \`spinel.c\`)
-
-**Verify before merging:**
-- [ ] GBL size 150–280 KB (expected for NCP; if ~105 KB it built as RCP instead)
-- [ ] Strings in GBL contain \`ot-ncp\` not \`ot-rcp\` — run \`strings efr32mg21-thread-ncp.gbl | grep -iE 'ncp|rcp'\`
-- [ ] Flash tested on a spare NSPanel Pro and Spinel commissioning verified
-EOF
-)" \
+            --body-file "$PR_BODY" \
             --head "$BRANCH" \
             --base "${{ github.event.repository.default_branch }}"
