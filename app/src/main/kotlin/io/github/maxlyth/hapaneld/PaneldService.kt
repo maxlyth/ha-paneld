@@ -336,6 +336,7 @@ class PaneldService : Service() {
 
     override fun onDestroy() {
         started = false
+        runCatching { navbar.cleanup() }
         runCatching { sensors.stop() }
         runCatching { server.stop() }
         runCatching { mdns.stop() }

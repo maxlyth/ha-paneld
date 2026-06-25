@@ -84,15 +84,27 @@ class NavbarController(
         val m = normalise(newMode)
         mode = m
         if (m != MODE_OFF) ensureOverlayPermission()
-        main.post {
-            main.removeCallbacks(hideRunnable)
-            removeBar()
-            removeStrip()
-            when (m) {
-                MODE_ALWAYS -> addBar(autoHide = false)
-                MODE_SWIPE -> addStrip()
-                else -> {} // Off — nothing drawn
+        if (appCanSu && m == MODE_ALWAYS) {
+            // Always-on: apply the display overscan (blocking) before posting the bar so the content
+            // visibly shifts up before the bar appears, not after. Su contention is acceptable here
+            // since the user just toggled a setting.
+            applyOverscan(BAR_HEIGHT_DP)
+            main.post {
+                main.removeCallbacks(hideRunnable)
+                removeBar(); removeStrip()
+                addBar(autoHide = false)
             }
+        } else {
+            // Swipe-reveal / Off: post the view work immediately so the strip appears without waiting
+            // on the su call. Clear any leftover overscan in the background — it shouldn't block the
+            // strip from being available (overscan clear contends with startup tame su calls and can
+            // take 5–10 s on a cold start, which previously delayed the strip by that long).
+            main.post {
+                main.removeCallbacks(hideRunnable)
+                removeBar(); removeStrip()
+                if (m == MODE_SWIPE) addStrip()
+            }
+            if (appCanSu) Thread { runCatching { applyOverscan(0) } }.start()
         }
     }
 
@@ -194,17 +206,9 @@ class NavbarController(
             Log.w(TAG, "SYSTEM_ALERT_WINDOW not held (no root to grant it); navbar suppressed")
             return
         }
-        val edge = View(context).apply {
-            // Reveal on touch-down, and consume the WHOLE gesture (return true for MOVE/UP too). The strip
-            // window is FLAG_NOT_TOUCH_MODAL, so any event we DON'T consume falls through to the dashboard
-            // WebView behind — returning false on MOVE let an off-screen-origin swipe-up scroll the
-            // dashboard while revealing the bar. Swallowing the gesture keeps the dashboard still. Touches
-            // above the strip still pass through normally (they're outside this window's bounds).
-            setOnTouchListener { _, e ->
-                if (e.actionMasked == MotionEvent.ACTION_DOWN) reveal()
-                true
-            }
-        }
+        val edge = View(context)
+        // lp is declared before the touch listener so the listener can capture it for the
+        // FLAG_NOT_TOUCHABLE trick used to re-inject taps (see ACTION_UP handling below).
         val lp = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             dp(STRIP_HEIGHT_DP),
@@ -214,6 +218,45 @@ class NavbarController(
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT,
         ).apply { gravity = Gravity.BOTTOM }
+        // Consume the whole gesture (return true for all events) so the dashboard WebView doesn't
+        // receive partial swipes — returning false on MOVE previously let an off-screen-origin swipe-up
+        // scroll the dashboard while also revealing the bar. Touches above the strip still pass through
+        // normally (they're outside this window's bounds).
+        // Reveal is gated on a genuine upward swipe (≥ SWIPE_MIN_DP travel) so taps don't accidentally
+        // pop the bar up. On root panels, taps consumed by the strip are re-injected: the strip is
+        // briefly flagged FLAG_NOT_TOUCHABLE so `input tap` routes to the underlying app rather than
+        // looping back to the strip itself.
+        var downX = 0f; var downY = 0f; var swiped = false
+        edge.setOnTouchListener { _, e ->
+            when (e.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    downX = e.rawX; downY = e.rawY; swiped = false
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    if (!swiped && downY - e.rawY >= dp(SWIPE_MIN_DP)) { swiped = true; reveal() }
+                    true
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    if (!swiped && appCanSu) {
+                        val x = downX.toInt(); val y = downY.toInt()
+                        // Pause strip touchability so the re-injected tap routes to the window behind
+                        // instead of back to the strip. Restored after `input tap` returns (~300 ms).
+                        lp.flags = lp.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                        runCatching { wm.updateViewLayout(edge, lp) }
+                        Thread {
+                            runCatching { Su.run("input tap $x $y") }
+                            main.post {
+                                lp.flags = lp.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+                                runCatching { wm.updateViewLayout(edge, lp) }
+                            }
+                        }.start()
+                    }
+                    true
+                }
+                else -> true
+            }
+        }
         try {
             wm.addView(edge, lp)
             strip = edge
@@ -387,6 +430,18 @@ class NavbarController(
         return canDraw()
     }
 
+    private fun applyOverscan(heightDp: Int) {
+        Su.run("wm overscan 0,0,0,${dp(heightDp)}")
+    }
+
+    /** Reset any display overscan set by this controller. Call from the service's onDestroy so the
+     *  reserved bottom margin doesn't persist after ha-paneld stops. */
+    fun cleanup() {
+        if (appCanSu && mode == MODE_ALWAYS) {
+            Thread { runCatching { Su.run("wm overscan 0,0,0,0") } }.start()
+        }
+    }
+
     private fun overlayType(): Int =
         // minSdk 26 == O, so always the unprivileged overlay type; guard kept for clarity.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -412,6 +467,7 @@ class NavbarController(
         private const val BAR_HEIGHT_DP = 56   // taller so the icons read at a glance
         private const val STRIP_HEIGHT_DP = 48   // swipe-reveal capture zone — 12→28→48: a fast off-screen
         // swipe-up's DOWN sometimes landed above a thinner strip, so the dashboard caught it and scrolled
+        private const val SWIPE_MIN_DP = 20     // upward travel (dp) before a strip touch counts as a swipe
         private const val FEEDBACK_MIN_MS = 350L  // min press-highlight visible time (bridges su latency)
         private const val ICON_SIZE_DP = 30    // fixed icon size, centred in its cell (uniform across all buttons)
         private const val TIGHTEN = 0.65f      // triple-member cell weight vs nav's 1.0 → ~35% tighter spacing
