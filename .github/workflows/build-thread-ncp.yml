@@ -67,6 +67,7 @@ jobs:
       - name: Build GBL
         run: |
           mkdir -p build
+          chmod 777 build   # allow the builder user inside Docker to write the GBL here
 
           NCP_SLCP="${{ steps.discover.outputs.ncp_slcp }}"
           if [ -z "$NCP_SLCP" ]; then
