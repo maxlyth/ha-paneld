@@ -85,11 +85,12 @@ jobs:
               mkdir -p /home/builder/build
 
               echo '>>> Generating project from: ${NCP_SLCP}'
-              # No --output-type: default generates a Makefile (darkxst image has make/arm-gcc
-              # but not cmake). The write-permission fix (generating in builder home) was the
-              # key insight — cmake FileNotFoundException was a write-failure masquerade.
+              # brd4180b: EFR32MG21 Reference Board — included in the Gecko SDK.
+              # Providing a board ID is required for slc to emit a complete UARTDRV config
+              # with SL_UARTDRV_USART_VCOM_PERIPHERAL defined. Chip-only targets produce
+              # a skeletal config that only emits a #warning and doesn't declare PERIPHERAL.
               slc generate \
-                --with='${{ env.CHIP }}' \
+                --with='${{ env.CHIP }},brd4180b' \
                 --project-file='${NCP_SLCP}' \
                 --export-destination=/home/builder/build/ot-ncp \
                 --copy-proj-sources \
@@ -100,33 +101,36 @@ jobs:
               echo '>>> Generated files in /home/builder/build/ot-ncp:'
               ls /home/builder/build/ot-ncp/
 
-              echo '>>> Config files (for UART pin/baud patching):'
-              find /home/builder/build/ot-ncp/config -name '*.h' 2>/dev/null | sort
-
-              CFG_IOSTREAM=/home/builder/build/ot-ncp/config/sl_iostream_usart_vcom_config.h
               CFG_UARTDRV=/home/builder/build/ot-ncp/config/sl_uartdrv_usart_vcom_config.h
+              CFG_IOSTREAM=/home/builder/build/ot-ncp/config/sl_iostream_usart_vcom_config.h
 
+              # Print config before patching so the log shows what brd4180b generated.
+              [ -f \"\$CFG_UARTDRV\" ] && { echo '>>> UARTDRV config (pre-patch):'; cat \"\$CFG_UARTDRV\"; }
+              [ -f \"\$CFG_IOSTREAM\" ] && { echo '>>> IOSTREAM config (pre-patch):'; cat \"\$CFG_IOSTREAM\"; }
+
+              # Patch each UART config: use .* to consume the full RHS so we don't
+              # accidentally double-append when the current value is already 115200.
               patch_uart() {
                 local f=\$1
                 [ -f \"\$f\" ] || return 0
-                echo \">>> Patching UART config: \$f\"
-                # TX → Port B pin 1
-                sed -i 's/define SL_.*_TX_PORT.*gpioPort.*/define SL_IOSTREAM_USART_VCOM_TX_PORT gpioPortB/' \"\$f\" 2>/dev/null || true
-                sed -i 's/define SL_.*_TX_PORT.*gpioPort.*/define SL_UARTDRV_USART_VCOM_TX_PORT gpioPortB/' \"\$f\" 2>/dev/null || true
-                sed -i 's/define SL_.*_TX_PIN.*/define SL_IOSTREAM_USART_VCOM_TX_PIN 1/' \"\$f\" 2>/dev/null || true
-                sed -i 's/define SL_.*_TX_PIN.*/define SL_UARTDRV_USART_VCOM_TX_PIN 1/' \"\$f\" 2>/dev/null || true
-                # RX → Port B pin 0
-                sed -i 's/define SL_.*_RX_PORT.*gpioPort.*/define SL_IOSTREAM_USART_VCOM_RX_PORT gpioPortB/' \"\$f\" 2>/dev/null || true
-                sed -i 's/define SL_.*_RX_PORT.*gpioPort.*/define SL_UARTDRV_USART_VCOM_RX_PORT gpioPortB/' \"\$f\" 2>/dev/null || true
-                sed -i 's/define SL_.*_RX_PIN.*/define SL_IOSTREAM_USART_VCOM_RX_PIN 0/' \"\$f\" 2>/dev/null || true
-                sed -i 's/define SL_.*_RX_PIN.*/define SL_UARTDRV_USART_VCOM_RX_PIN 0/' \"\$f\" 2>/dev/null || true
-                # Baud rate → 115200; disable hardware flow control
-                sed -i 's/\(define SL_IOSTREAM_USART_VCOM_BAUDRATE\) [0-9]*/\1 ${{ env.BAUD }}/' \"\$f\" 2>/dev/null || true
-                sed -i 's/\(define SL_UARTDRV_USART_VCOM_BAUDRATE\) [0-9]*/\1 ${{ env.BAUD }}/' \"\$f\" 2>/dev/null || true
-                sed -i 's/\(define SL_.*FLOW_CONTROL_TYPE\).*/\1 usartHwFlowControlNone/' \"\$f\" 2>/dev/null || true
+                echo \">>> Patching: \$f\"
+                # TX → Port B pin 1, RX → Port B pin 0 (ZBDongle-E / NSPanel Pro EFR32MG21)
+                sed -i 's/\(#define SL_UARTDRV_USART_VCOM_TX_PORT\).*/\1 gpioPortB/' \"\$f\"
+                sed -i 's/\(#define SL_UARTDRV_USART_VCOM_TX_PIN\).*/\1 1/' \"\$f\"
+                sed -i 's/\(#define SL_UARTDRV_USART_VCOM_RX_PORT\).*/\1 gpioPortB/' \"\$f\"
+                sed -i 's/\(#define SL_UARTDRV_USART_VCOM_RX_PIN\).*/\1 0/' \"\$f\"
+                sed -i 's/\(#define SL_IOSTREAM_USART_VCOM_TX_PORT\).*/\1 gpioPortB/' \"\$f\"
+                sed -i 's/\(#define SL_IOSTREAM_USART_VCOM_TX_PIN\).*/\1 1/' \"\$f\"
+                sed -i 's/\(#define SL_IOSTREAM_USART_VCOM_RX_PORT\).*/\1 gpioPortB/' \"\$f\"
+                sed -i 's/\(#define SL_IOSTREAM_USART_VCOM_RX_PIN\).*/\1 0/' \"\$f\"
+                # Baud: .* consumes all whitespace + original value (avoids doubling)
+                sed -i 's/\(#define SL_UARTDRV_USART_VCOM_BAUDRATE\).*/\1 ${{ env.BAUD }}/' \"\$f\"
+                sed -i 's/\(#define SL_IOSTREAM_USART_VCOM_BAUDRATE\).*/\1 ${{ env.BAUD }}/' \"\$f\"
+                sed -i 's/\(#define SL_UARTDRV_USART_VCOM_FLOW_CONTROL_TYPE\).*/\1 ${{ env.FLOW }}/' \"\$f\"
+                sed -i 's/\(#define SL_IOSTREAM_USART_VCOM_FLOW_CONTROL_TYPE\).*/\1 ${{ env.FLOW }}/' \"\$f\"
               }
-              patch_uart \"\$CFG_IOSTREAM\"
               patch_uart \"\$CFG_UARTDRV\"
+              patch_uart \"\$CFG_IOSTREAM\"
 
               cd /home/builder/build/ot-ncp
 
