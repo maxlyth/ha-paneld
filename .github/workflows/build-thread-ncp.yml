@@ -85,6 +85,9 @@ jobs:
               mkdir -p /home/builder/build
 
               echo '>>> Generating project from: ${NCP_SLCP}'
+              # No --output-type: default generates a Makefile (darkxst image has make/arm-gcc
+              # but not cmake). The write-permission fix (generating in builder home) was the
+              # key insight — cmake FileNotFoundException was a write-failure masquerade.
               slc generate \
                 --with='${{ env.CHIP }}' \
                 --project-file='${NCP_SLCP}' \
@@ -92,9 +95,7 @@ jobs:
                 --copy-proj-sources \
                 --copy-sdk-sources \
                 --new-project \
-                --force \
-                --output-type vscode \
-                --toolchain toolchain_gcc
+                --force
 
               echo '>>> Generated files in /home/builder/build/ot-ncp:'
               ls /home/builder/build/ot-ncp/
@@ -129,12 +130,9 @@ jobs:
 
               cd /home/builder/build/ot-ncp
 
-              # Build with cmake + Ninja (matches --output-type vscode generation).
-              cmake -DCMAKE_BUILD_TYPE=Release \
-                    -DCMAKE_TOOLCHAIN_FILE=toolchain.cmake \
-                    -G Ninja . 2>/dev/null \
-                || cmake -DCMAKE_BUILD_TYPE=Release -G Ninja .
-              cmake --build . -- -j\$(nproc)
+              MAKEFILE=\$(ls *.Makefile 2>/dev/null | head -1)
+              echo \">>> Building with: \$MAKEFILE\"
+              make -f \"\$MAKEFILE\" release -j\$(nproc)
 
               # Find ELF output
               ELF=\$(find . -name '*.out' -o -name '*.elf' 2>/dev/null \
