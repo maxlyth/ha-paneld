@@ -51,13 +51,13 @@ object NSPanelPro : DeviceProfile {
         TameCandidate("android.rk.RockVideoPlayer", listOf("chipset", "demo"),
             "Rockchip demo video player bundled with the SoC image. Safe to disable unless you actually use it."),
         TameCandidate("com.cghs.stresstest", listOf("vendor", "test", "clutter"),
-            ""),
-        TameCandidate("com.smatek.test", listOf("chipset", "test", "clutter"),
-            ""),
+            "Factory hardware stress-test (\"burn-in\") tool (app label \"Stresstest for 8.1\"). Used on the production line to soak the panel; not needed in normal operation."),
+        TameCandidate("com.smatek.test", listOf("vendor", "test", "clutter"),
+            "CoolKit (eWeLink/Sonoff) factory test tool (label \"测试工具\" = \"Test Tool\"), bundled in /oem so it survives a factory reset. Diagnostic only — not used in normal operation."),
         TameCandidate("com.rockchip.devicetest", listOf("chipset", "test", "clutter"),
-            ""),
+            "Rockchip (PX30 SoC) factory device-test suite. Diagnostic only; not used by the panel in normal operation."),
         TameCandidate("com.DeviceTest", listOf("vendor", "test", "clutter"),
-            ""),
+            "Factory device-test app (privileged system, label \"DeviceTest(android8.0)\") left in the firmware image. Diagnostic only — not used in normal operation."),
     )
     override val evdevButtons = emptyList<EvdevButton>()
     // PX30 offers no schedutil; its load-following governor is interactive.
