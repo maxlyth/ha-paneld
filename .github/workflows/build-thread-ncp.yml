@@ -42,29 +42,27 @@ jobs:
       - name: Pull builder image
         run: docker pull ghcr.io/darkxst/silabs-firmware-builder:${{ inputs.sdk_version }}
 
-      # Discovery: find all OpenThread SLCP files in the SDK so we know the right path.
-      # On the first run, check this output to confirm the NCP SLCP exists.
-      - name: Discover NCP SLCP path
+      # The ot-ncp-ftd.slcp is confirmed present in Gecko SDK 4.4.6 (and likely all 4.x).
+      # ot-ncp-ftd = Full Thread Device NCP: full Thread stack on the EFR32, host talks Spinel.
+      # This is what spinel.c expects. ot-rcp.slcp / rcp-uart-802154.slcp are NOT suitable.
+      - name: Resolve NCP SLCP path
         id: discover
         run: |
-          echo "=== All OpenThread sample SLCP files in SDK ==="
-          docker run --rm \
+          # Prefer the SDK root that exists in this image version.
+          NCP_SLCP=$(docker run --rm \
             ghcr.io/darkxst/silabs-firmware-builder:${{ inputs.sdk_version }} \
             bash -c "
-              find /gecko_sdk /simplicity_sdk \
-                   -path '*/openthread/sample-apps/*.slcp' \
-                   -o -path '*/ot-ncp/*.slcp' \
-                   2>/dev/null | sort
-            " | tee discover.txt
-
-          # Prefer an NCP UART project over a CLI one
-          NCP_SLCP=$(grep -Ei '(ot-ncp|ot_ncp).*uart' discover.txt | head -1)
+              for sdk in /gecko_sdk /simplicity_sdk; do
+                f=\"\$sdk/protocol/openthread/sample-apps/ot-ncp/ot-ncp-ftd.slcp\"
+                [ -f \"\$f\" ] && echo \"\$f\" && break
+              done
+            ")
           if [ -z "$NCP_SLCP" ]; then
-            # Fallback: any ot-ncp project
-            NCP_SLCP=$(grep -Ei '(ot-ncp|ot_ncp)' discover.txt | head -1)
+            echo "::error::ot-ncp-ftd.slcp not found in SDK ${{ inputs.sdk_version }}. Try a different sdk_version."
+            exit 1
           fi
           echo "ncp_slcp=${NCP_SLCP}" >> "$GITHUB_OUTPUT"
-          echo "Selected NCP SLCP: ${NCP_SLCP}"
+          echo "Using NCP SLCP: ${NCP_SLCP}"
 
       - name: Build GBL
         run: |
