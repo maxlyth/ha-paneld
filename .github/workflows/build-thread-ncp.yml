@@ -74,24 +74,21 @@ jobs:
             exit 1
           fi
 
-          # Run as 'builder' user (slc refuses to run as root in this image).
-          # --copy-sdk-sources is required: without it slc can't write the cmake
-          # CMakeLists.txt template and exits with FileNotFoundException.
+          # The /build volume is owned by the runner (root); builder can't write to it.
+          # Generate inside the container's home dir, then copy the GBL out at the end.
           docker run --rm \
             --user builder \
-            -v "$(pwd)/build:/build" \
+            -v "$(pwd)/build:/out" \
             ghcr.io/darkxst/silabs-firmware-builder:${{ inputs.sdk_version }} \
             bash -c "
               set -euo pipefail
+              mkdir -p /home/builder/build
 
               echo '>>> Generating project from: ${NCP_SLCP}'
-              # --output-type vscode: required to generate cmake templates (NabuCasa discovery).
-              # --toolchain toolchain_gcc: selects the ARM GCC toolchain bundled in the image.
-              # Without both flags slc exits with FileNotFoundException on cmake generation.
               slc generate \
                 --with='${{ env.CHIP }}' \
                 --project-file='${NCP_SLCP}' \
-                --export-destination=/build/ot-ncp \
+                --export-destination=/home/builder/build/ot-ncp \
                 --copy-proj-sources \
                 --copy-sdk-sources \
                 --new-project \
@@ -99,17 +96,14 @@ jobs:
                 --output-type vscode \
                 --toolchain toolchain_gcc
 
-              echo '>>> Generated files in /build/ot-ncp:'
-              ls /build/ot-ncp/
+              echo '>>> Generated files in /home/builder/build/ot-ncp:'
+              ls /home/builder/build/ot-ncp/
 
               echo '>>> Config files (for UART pin/baud patching):'
-              find /build/ot-ncp/config -name '*.h' 2>/dev/null | sort
+              find /home/builder/build/ot-ncp/config -name '*.h' 2>/dev/null | sort
 
-              # Patch UART GPIO pins: EFR32MG21 on NSPanel Pro / ZBDongle-E uses
-              # USART0 with TX=Port B pin 1, RX=Port B pin 0 (same as darkxst ZBDongleE patch).
-              # ot-ncp-ftd uses iostream over uartdrv, so the config header differs from ot-rcp.
-              CFG_IOSTREAM=/build/ot-ncp/config/sl_iostream_usart_vcom_config.h
-              CFG_UARTDRV=/build/ot-ncp/config/sl_uartdrv_usart_vcom_config.h
+              CFG_IOSTREAM=/home/builder/build/ot-ncp/config/sl_iostream_usart_vcom_config.h
+              CFG_UARTDRV=/home/builder/build/ot-ncp/config/sl_uartdrv_usart_vcom_config.h
 
               patch_uart() {
                 local f=\$1
@@ -133,7 +127,7 @@ jobs:
               patch_uart \"\$CFG_IOSTREAM\"
               patch_uart \"\$CFG_UARTDRV\"
 
-              cd /build/ot-ncp
+              cd /home/builder/build/ot-ncp
 
               # Build with cmake + Ninja (matches --output-type vscode generation).
               cmake -DCMAKE_BUILD_TYPE=Release \
@@ -144,14 +138,17 @@ jobs:
 
               # Find ELF output
               ELF=\$(find . -name '*.out' -o -name '*.elf' 2>/dev/null \
-                    | grep -i release | grep -v bootloader | head -1)
+                    | grep -v bootloader | head -1)
               echo \">>> ELF: \$ELF  size: \$(ls -lh \"\$ELF\" | awk '{print \$5}')\"
 
-              commander gbl create /build/efr32mg21-thread-ncp.gbl \
+              commander gbl create /home/builder/build/efr32mg21-thread-ncp.gbl \
                 --app \"\$ELF\" \
                 --device '${{ env.CHIP }}'
 
-              ls -lh /build/efr32mg21-thread-ncp.gbl
+              ls -lh /home/builder/build/efr32mg21-thread-ncp.gbl
+
+              # Copy GBL to the mounted output volume
+              cp /home/builder/build/efr32mg21-thread-ncp.gbl /out/efr32mg21-thread-ncp.gbl
             "
 
           # Sanity check: NCP firmware should be 150-320 KB (RCP is ~100 KB, Zigbee NCP is ~240 KB).
