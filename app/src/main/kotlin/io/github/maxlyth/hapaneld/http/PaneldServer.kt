@@ -280,6 +280,7 @@ class PaneldServer(
                     p["friendly_name"]?.let { config.setFriendlyName(it.trim()) }
                     p["dashboard_package"]?.let { config.setDashboardPackage(it.trim()) }
                     p["launcher_package"]?.let { config.setLauncherPackage(it.trim()) }
+                    p["tame_vendor_packages"]?.let { config.setTameVendorPackages(it) }
                     val mfr = p["manufacturer"]?.trim()
                     val mdl = p["model"]?.trim()
                     if (mfr != null || mdl != null) config.setHardware(
@@ -542,6 +543,8 @@ ${displayCardHtml()}
   <input name="dashboard_package" autocapitalize="none" autocorrect="off" spellcheck="false" value="${esc(config.dashboardPackage)}" placeholder="io.homeassistant.companion.android"></label>
  <label>Launcher package <small>(blank = auto-detect)</small>
   <input name="launcher_package" autocapitalize="none" autocorrect="off" spellcheck="false" value="${esc(config.launcherPackage)}" placeholder="auto"></label>
+ <label>Tame vendor packages <small>(opt-in; blank = off — force-stops, disables boot-relaunch &amp; blocks overlays; needs root or the helper daemon)</small>
+  <textarea name="tame_vendor_packages" autocapitalize="none" autocorrect="off" spellcheck="false" rows="2" placeholder="e.g. com.eWeLinkControlPanel (one per line or space/comma-separated)">${esc(config.tameVendorPackagesRaw)}</textarea></label>
  <button type="submit">Save</button>
 </form>
 <p class="note">Leave the broker blank to auto-discover Home Assistant on the LAN (via mDNS) and use its
@@ -610,6 +613,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             "\"mqtt_password_set\":${config.mqttPassword.isNotEmpty()}," +
             "\"dashboard_package\":${s(config.dashboardPackage)}," +
             "\"launcher_package\":${s(config.launcherPackage)}," +
+            "\"tame_vendor_packages\":${s(config.tameVendorPackagesRaw)}," +
             "\"version\":${s(Config.VERSION)}," +
             "\"proximity\":${sensors.proximityJson()}" +
             "}"

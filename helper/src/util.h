@@ -27,5 +27,6 @@ int  valid_component(const char *s);  // pkg/class component: package chars plus
 int  valid_num(const char *s);        // non-empty decimal digits only
 int  valid_decimal(const char *s);    // decimal with at most one dot, >=1 digit (e.g. "1.15")
 int  valid_gov(const char *s);        // CPU governor name: [a-z0-9_]+
+int  is_critical_pkg(const char *s);  // never-stop/disable backstop (systemui/settings/us/…)
 
 #endif

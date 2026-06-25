@@ -14,5 +14,9 @@ void cmd_density(conn_ctx *ctx, const char *args);    // DENSITY [<n>|reset]   g
 void cmd_fontscale(conn_ctx *ctx, const char *args);  // FONTSCALE [<s>|reset] get/set system font scale
 void cmd_gov(conn_ctx *ctx, const char *args);        // GOV <governor>    CPU scaling governor
 void cmd_screencap(conn_ctx *ctx, const char *args);  // SCREENCAP         raw PNG stream
+void cmd_stop(conn_ctx *ctx, const char *args);       // STOP <pkg>        force-stop (no relaunch)
+void cmd_disable(conn_ctx *ctx, const char *args);    // DISABLE <pkg>     pm disable-user (boot block)
+void cmd_enable(conn_ctx *ctx, const char *args);     // ENABLE <pkg>      pm enable (reverse DISABLE)
+void cmd_overlay(conn_ctx *ctx, const char *args);    // OVERLAY <pkg> deny|allow  SYSTEM_ALERT_WINDOW
 
 #endif

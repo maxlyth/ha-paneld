@@ -7,7 +7,8 @@
 //
 // What gets exercised for real: the bounded line accumulator in server_serve(), the verb split +
 // exact-match dispatch in dispatch(), every argument sscanf in the handlers, the snprintf shell-
-// command builders, and the valid_pkg / valid_num / valid_gov / valid_component validators. The goal
+// command builders, and the valid_pkg / valid_num / valid_decimal / valid_gov / valid_component /
+// is_critical_pkg validators. The goal
 // is memory safety against hostile/malformed input from an ALLOWED peer (the SO_PEERCRED uid gate is
 // a separate, kernel-enforced control — not what this fuzzes).
 //
@@ -88,6 +89,11 @@ int main(int argc, char **argv) {
         "FONTSCALE\n", "FONTSCALE 1.15\n", "FONTSCALE reset\n", "FONTSCALE 1.2.3\n",
         "FONTSCALE -1\n", "FONTSCALE 1.0;reboot\n", "FONTSCALE .........\n",
         "GOV schedutil\n", "GOV \n", "GOV PERF;reboot\n", "GOV performance\n",
+        "STOP com.eWeLinkControlPanel\n", "STOP com.android.systemui\n", "STOP\n", "STOP ../../x\n",
+        "DISABLE com.eWeLinkControlPanel\n", "DISABLE android\n", "DISABLE\n",
+        "ENABLE com.eWeLinkControlPanel\n", "ENABLE com.android.settings\n",
+        "OVERLAY com.eWeLinkControlPanel deny\n", "OVERLAY com.android.systemui deny\n",
+        "OVERLAY com.foo allow\n", "OVERLAY com.foo wipe\n", "OVERLAY\n", "OVERLAY com.foo\n",
         "PERFDUMP\n", "LEDPROBE\n",
         "RGB 1 2 3\r\nOFF\r\nBTN 9\r\n",
         "RGB 1 2 3\0OFF\n",                  // embedded NUL (fed with explicit length below)
@@ -104,7 +110,8 @@ int main(int argc, char **argv) {
     // 2) length-boundary lines around MAX_LINE for every verb.
     size_t lens[] = { MAX_LINE - 1, MAX_LINE, MAX_LINE + 1, 4096, 65536 };
     const char *verbs[] = { "RGB ", "BTN ", "RELOAD ", "START ", "WATCH /dev/input/",
-                            "DENSITY ", "FONTSCALE ", "GOV ", "SCREEN ", "" };
+                            "DENSITY ", "FONTSCALE ", "GOV ", "SCREEN ",
+                            "STOP ", "DISABLE ", "ENABLE ", "OVERLAY ", "" };
     for (size_t li = 0; li < sizeof lens / sizeof lens[0]; li++)
         for (size_t vi = 0; vi < sizeof verbs / sizeof verbs[0]; vi++) {
             size_t L = lens[li], vp = strlen(verbs[vi]);
@@ -121,7 +128,8 @@ int main(int argc, char **argv) {
     srand(0xC0FFEE);
     uint8_t buf[3000];
     const char *kw[] = { "RGB", "OFF", "BTN", "SCREEN", "SCREENCAP", "RELOAD", "START", "WATCH",
-                         "SUBSCRIBE", "REBOOT", "DENSITY", "FONTSCALE", "GOV", "PERFDUMP", "LEDPROBE", "PING" };
+                         "SUBSCRIBE", "REBOOT", "DENSITY", "FONTSCALE", "GOV", "PERFDUMP", "LEDPROBE", "PING",
+                         "STOP", "DISABLE", "ENABLE", "OVERLAY" };
     for (long it = 0; it < iters; it++) {
         size_t n = rand() % sizeof buf;
         for (size_t k = 0; k < n; k++) {

@@ -23,6 +23,7 @@ import io.github.maxlyth.hapaneld.control.NavigateController
 import io.github.maxlyth.hapaneld.control.RelayController
 import io.github.maxlyth.hapaneld.control.ScreenController
 import io.github.maxlyth.hapaneld.control.SystemController
+import io.github.maxlyth.hapaneld.control.TameController
 import io.github.maxlyth.hapaneld.control.TouchSoundController
 import io.github.maxlyth.hapaneld.control.VolumeController
 import io.github.maxlyth.hapaneld.control.ZigbeeController
@@ -72,6 +73,7 @@ class PaneldService : Service() {
     private lateinit var navigate: NavigateController
     private lateinit var volume: VolumeController
     private lateinit var system: SystemController
+    private lateinit var tame: TameController
     private lateinit var navbar: NavbarController
     private lateinit var touchSound: TouchSoundController
     private lateinit var zigbee: ZigbeeController
@@ -100,6 +102,14 @@ class PaneldService : Service() {
         navigate = NavigateController(this)
         volume = VolumeController(this)
         system = SystemController(this)
+        tame = TameController(this)
+        // Tame opt-in: neutralise the vendor packages the user listed (force-stop + disable boot-relaunch
+        // + strip the overlay permission). No-op when the blocklist is empty (the default — a stock panel
+        // is never touched); run off-main since pm/am are slow and this is a boot-time one-shot. Critical
+        // packages are refused by TameController and the daemon backstop.
+        config.tameVendorPackages.takeIf { it.isNotEmpty() }?.let { pkgs ->
+            scope.launch { tame.applyBlocklist(pkgs) }
+        }
         navbar = NavbarController(
             this, system, volume, brightness, { config.launcherPackage },
             profile.appCanSu, profile.hasRecents,

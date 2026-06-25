@@ -96,6 +96,23 @@ class Config(context: Context) {
         prefs.edit().putString("launcher_package", pkg).apply()
     }
 
+    /**
+     * Opt-in blocklist of intrusive vendor packages to **tame** on boot (force-stop + disable the
+     * boot-relaunch + strip the floating-overlay permission). The non-empty list IS the opt-in — nothing
+     * is ever touched unless the user deliberately adds a package here; the default is empty, so a stock
+     * panel is never modified. A confirmed example HA users add is `com.eWeLinkControlPanel` (the
+     * eWeLink/Sonoff control-panel app that relaunches on boot and draws a widget over the dashboard).
+     * Critical system packages are refused regardless (see [control.TameController] + the daemon backstop).
+     */
+    val tameVendorPackages: List<String>
+        get() = prefs.getString("tame_vendor_packages", "")!!
+            .split(Regex("[\\s,]+")).map { it.trim() }.filter { it.isNotEmpty() }
+    /** Raw user-set value (whitespace/comma-separated) — for the Configure form's input value. */
+    val tameVendorPackagesRaw: String get() = prefs.getString("tame_vendor_packages", "")!!
+    fun setTameVendorPackages(raw: String) {
+        prefs.edit().putString("tame_vendor_packages", raw.trim()).apply()
+    }
+
     /** Master switch for the (instrumentation-only) performance sampler. Default on, but page-view
      *  gated so it idles near-zero; a user who's finished tuning can hard-disable it here. */
     val instrumentationEnabled: Boolean get() = prefs.getBoolean("instrumentation", true)

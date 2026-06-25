@@ -98,6 +98,14 @@ static void test_validators(void) {
     CHECK(!valid_decimal("-1.0"), "valid_decimal rejects sign\n");
     CHECK(!valid_decimal("1.0;reboot"), "valid_decimal rejects trailing junk\n");
 
+    // is_critical_pkg: the never-stop/disable backstop.
+    CHECK(is_critical_pkg("android"), "is_critical_pkg flags the framework\n");
+    CHECK(is_critical_pkg("com.android.systemui"), "is_critical_pkg flags systemui\n");
+    CHECK(is_critical_pkg("io.github.maxlyth.hapaneld"), "is_critical_pkg flags ourselves\n");
+    CHECK(!is_critical_pkg("com.eWeLinkControlPanel"), "is_critical_pkg allows a vendor app\n");
+    CHECK(!is_critical_pkg("com.android.systemui.x"), "is_critical_pkg is exact, not prefix\n");
+    CHECK(!is_critical_pkg(""), "is_critical_pkg allows empty (valid_pkg rejects it first)\n");
+
     // valid_gov: lowercase-alnum + underscore.
     CHECK(valid_gov("schedutil"), "valid_gov accepts schedutil\n");
     CHECK(valid_gov("performance"), "valid_gov accepts performance\n");

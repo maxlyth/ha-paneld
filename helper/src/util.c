@@ -75,6 +75,24 @@ int valid_decimal(const char *s) {
     return digit;
 }
 
+// Packages this daemon will NEVER stop / disable / overlay-deny, even when asked — the privileged
+// backstop against a buggy or hostile caller bricking the panel by tearing down the system UI,
+// Settings, telephony, the framework, or ha-paneld's own controller. The app enforces its own block
+// list too; this is defense-in-depth at the one place that actually holds root. (Re-enabling — ENABLE
+// / overlay allow — is always permitted, so a panel can never get stuck disabled.)
+int is_critical_pkg(const char *s) {
+    static const char *const CRIT[] = {
+        "android",
+        "com.android.systemui",
+        "com.android.settings",
+        "com.android.phone",
+        "io.github.maxlyth.hapaneld",
+    };
+    for (size_t i = 0; i < sizeof CRIT / sizeof CRIT[0]; i++)
+        if (strcmp(s, CRIT[i]) == 0) return 1;
+    return 0;
+}
+
 // Lowercase-alnum CPU governor names (schedutil/performance/powersave/interactive/ondemand…).
 int valid_gov(const char *s) {
     if (!*s) return 0;

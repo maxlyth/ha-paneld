@@ -90,6 +90,43 @@ static int set_governor(const char *gov) {
     return 0;
 }
 
+// Force-stop a package WITHOUT relaunching it — the "tame" kill (RELOAD's force-stop+monkey is the
+// dashboard reload). Refused for critical system packages.
+static int stop_pkg(const char *pkg) {
+    if (!valid_pkg(pkg) || is_critical_pkg(pkg)) return -1;
+    char cmd[256];
+    snprintf(cmd, sizeof cmd, "am force-stop %s", pkg);
+    sysexec_run(cmd);
+    return 0;
+}
+
+// Enable/disable a package for the primary user. Disable (`pm disable-user --user 0`) stops a vendor
+// app relaunching on boot and is reversible via ENABLE (`pm enable`); disabling a critical package
+// would brick the panel, so that's refused while enabling is always allowed.
+static int set_pkg_enabled(const char *pkg, int enabled) {
+    if (!valid_pkg(pkg)) return -1;
+    if (!enabled && is_critical_pkg(pkg)) return -1;
+    char cmd[256];
+    snprintf(cmd, sizeof cmd, "pm %s --user 0 %s >/dev/null 2>&1",
+             enabled ? "enable" : "disable-user", pkg);
+    sysexec_run(cmd);
+    return 0;
+}
+
+// Grant/deny a package the SYSTEM_ALERT_WINDOW (floating-overlay) app-op. `deny` strips a vendor
+// app's ability to draw a widget over the dashboard; `allow` restores it. Deny refused for critical
+// packages; any mode other than deny/allow is rejected.
+static int set_overlay(const char *pkg, const char *mode) {
+    if (!valid_pkg(pkg)) return -1;
+    int deny = strcmp(mode, "deny") == 0;
+    if (!deny && strcmp(mode, "allow") != 0) return -1;
+    if (deny && is_critical_pkg(pkg)) return -1;
+    char cmd[256];
+    snprintf(cmd, sizeof cmd, "appops set %s SYSTEM_ALERT_WINDOW %s >/dev/null 2>&1", pkg, mode);
+    sysexec_run(cmd);
+    return 0;
+}
+
 // Capture the screen as PNG and stream the raw bytes to [fd]. Client half-closes then reads to EOF.
 static void screencap_to(int fd) {
     FILE *p = sysexec_popen_r("screencap -p");
@@ -140,4 +177,28 @@ void cmd_gov(conn_ctx *ctx, const char *args) {
 void cmd_screencap(conn_ctx *ctx, const char *args) {
     (void)args;
     screencap_to(ctx->fd);   // raw PNG bytes; server closes on the client half-close → client gets EOF
+}
+
+void cmd_stop(conn_ctx *ctx, const char *args) {
+    char pkg[128] = "";
+    sscanf(args, "%127s", pkg);
+    reply(ctx->fd, stop_pkg(pkg) == 0 ? "OK\n" : "ERR\n");
+}
+
+void cmd_disable(conn_ctx *ctx, const char *args) {
+    char pkg[128] = "";
+    sscanf(args, "%127s", pkg);
+    reply(ctx->fd, set_pkg_enabled(pkg, 0) == 0 ? "OK\n" : "ERR\n");
+}
+
+void cmd_enable(conn_ctx *ctx, const char *args) {
+    char pkg[128] = "";
+    sscanf(args, "%127s", pkg);
+    reply(ctx->fd, set_pkg_enabled(pkg, 1) == 0 ? "OK\n" : "ERR\n");
+}
+
+void cmd_overlay(conn_ctx *ctx, const char *args) {
+    char pkg[128] = "", mode[8] = "";
+    sscanf(args, "%127s %7s", pkg, mode);
+    reply(ctx->fd, set_overlay(pkg, mode) == 0 ? "OK\n" : "ERR\n");
 }

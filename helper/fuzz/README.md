@@ -26,7 +26,7 @@ for real under ASan+UBSan+LSan:
 
 - the bounded line accumulator in `server_serve()` (split reads, overlong-line drop, `MAX_LINE` boundary),
 - the verb split + exact-match dispatch in `dispatch()` and every argument `sscanf` in the handlers,
-- the `snprintf` shell-command builders and the `valid_pkg`/`valid_num`/`valid_gov`/`valid_component` validators.
+- the `snprintf` shell-command builders and the `valid_pkg`/`valid_num`/`valid_decimal`/`valid_gov`/`valid_component`/`is_critical_pkg` validators.
 
 Inputs: a hand-written adversarial corpus (oversized args, embedded NULs, partial lines, CRLF mixes,
 `%d` integer-overflow values, shell metacharacters), lines sized at `MAX_LINE ± 1` / 64 KB for every
