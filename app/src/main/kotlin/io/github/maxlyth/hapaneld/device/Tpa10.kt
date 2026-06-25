@@ -23,6 +23,23 @@ object Tpa10 : DeviceProfile {
     override val lightTech: String? = "Ambient light"
     override val manufacturer = "Tuya"
     override val model = "TPA10"
+    // Curated tame suggestions (live-enumerated). "vendor" = the Tuya/Xinch "SmartOS" app suite; "chipset"
+    // = Rockchip SoC apps. Deliberately EXCLUDES com.smartos.xinch.{systemui,launcher,provision,setting,
+    // hardware} — those are the panel's actual SystemUI / home / setup / Settings / HAL bridge, and taming
+    // one would brick the panel (note: the is_critical_pkg guard only knows com.android.systemui, not this
+    // vendor-renamed one). Suggestions only — nothing is auto-disabled, every action is reversible.
+    override val tameVendorCandidates = listOf(
+        TameCandidate("com.smartos.xinch.smarthome", listOf("vendor", "smarthome"),
+            "Xinch (SmartOS/Tuya) smart-home control app. Redundant on a Home Assistant panel; safe to disable."),
+        TameCandidate("com.smartos.xinch.smartiot", listOf("vendor", "smarthome"),
+            "Xinch (SmartOS/Tuya) IoT control app. Redundant alongside Home Assistant; safe to disable."),
+        TameCandidate("com.smartos.xinch.communicate", listOf("vendor", "test"),
+            "Xinch \"central-control interconnect\" app (label \"TEST-中控互联\"). Vendor demo/test; not used in normal operation."),
+        TameCandidate("com.smartos.xinch.monitor", listOf("vendor", "test", "clutter"),
+            "Xinch \"PerformanceMonitor\" diagnostic app. Not needed in normal operation."),
+        TameCandidate("com.tuya.devicetest", listOf("chipset", "test", "clutter"),
+            "Tuya factory device-test app (in /odm, persists across factory reset). Diagnostic only."),
+    )
     // The 5th (orange) button is a gpio-key that reports SW_MUTE_DEVICE (switch code 14) on event8 —
     // an EV_SW latching toggle, NOT a key, which is why Android/keylayouts never surface it. Confirmed
     // by getevent on-device (2026-06). WATCH it as a switch (sw=true): each physical press flips the

@@ -19,6 +19,20 @@ object Wf1589t : DeviceProfile {
     override val buttonLedGpioBase: Int? = null
     override val manufacturer = "Electron"
     override val model = "WF1589T"
+    // Curated tame suggestions (live-enumerated). ELC firmware + Rockchip rk3576 SoC — several entries are
+    // the common Rockchip/ELC factory apps it shares with the SMT1019. Suggestions only; reversible.
+    override val tameVendorCandidates = listOf(
+        TameCandidate("com.cghs.stresstest", listOf("vendor", "test", "clutter"),
+            "Factory hardware stress-test (\"burn-in\") tool (label \"Stresstest\", priv-app). Production-line QA; not used in normal operation."),
+        TameCandidate("com.DeviceTest", listOf("chipset", "test", "clutter"),
+            "Generic factory device-test app left in the firmware image. Diagnostic only."),
+        TameCandidate("com.rockchip.devicetest", listOf("chipset", "test", "clutter"),
+            "Rockchip (rk3576 SoC) factory device-test suite. Diagnostic only; not used in normal operation."),
+        TameCandidate("com.gulukai.pwmlightdemo", listOf("vendor", "demo", "clutter"),
+            "Vendor PWM-backlight/LED demo app (label \"PwmLightDemo\"). A demo, not the LED driver; safe to disable."),
+        TameCandidate("com.elclcd.otaupdater", listOf("vendor", "ota"),
+            "ELC \"Firmware Upgrade\" vendor OTA updater. Disable to stop the panel auto-applying vendor firmware updates that can re-add bloat."),
+    )
     // The single physical button is the PMIC power key (rk805 pwrkey, event1 = KEY_POWER). GRAB it so
     // it no longer sleeps the panel; the press becomes an HA event for an automation to act on. The
     // PMIC's long-press hardware power-off is independent and unaffected.

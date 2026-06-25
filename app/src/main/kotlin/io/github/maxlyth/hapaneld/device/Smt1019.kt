@@ -29,6 +29,23 @@ object Smt1019 : DeviceProfile {
     override val buttonLedGpioBase: Int? = null
     override val manufacturer = "ZHICAI"
     override val model = "SMT1019"
+    // Curated tame suggestions, derived from the firmware image (ELC/Iiyama + Rockchip rk3576). "vendor" =
+    // ELC's own apps; "chipset" = Rockchip. Suggestions only; reversible. `com.broadcastinterface` (a
+    // headless, unlabelled vendor IPC bridge) is deliberately left out pending verification.
+    override val tameVendorCandidates = listOf(
+        TameCandidate("com.elc.smt_test", listOf("vendor", "test", "clutter"),
+            "ELC \"smt-test\" factory app (in /odm persist, survives factory reset). Vendor QA/test tool; not used in normal operation."),
+        TameCandidate("com.DeviceTest", listOf("chipset", "test", "clutter"),
+            "Generic factory device-test app (in /odm persist). Diagnostic only."),
+        TameCandidate("com.iiyama.webview.demo", listOf("vendor", "demo", "clutter"),
+            "Iiyama WebView demo bundled in the firmware. Not used in normal operation."),
+        TameCandidate("com.elclcd.commonkeepalive", listOf("vendor", "service"),
+            "ELC \"CommonKeepAlive\" background service that keeps vendor apps resident. Safe to disable on a Home Assistant panel."),
+        TameCandidate("com.elclcd.otaupdater", listOf("vendor", "ota"),
+            "ELC \"Firmware Upgrade\" — the vendor OTA updater. Disable to stop the panel auto-applying vendor firmware updates that can re-add bloat."),
+        TameCandidate("com.android.rockchip.camera2", listOf("chipset"),
+            "Rockchip Camera2 / HDMI-in app (label \"HdmiIn\"). Safe to disable unless you use the camera or HDMI input."),
+    )
     // No root to grab evdev nodes, and no panel button the Android pipeline misses.
     override val evdevButtons = emptyList<EvdevButton>()
     // CPU governors are root-gated; this unit has no su, so leave tier mapping to runtime resolution.
