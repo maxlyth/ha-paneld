@@ -15,6 +15,7 @@ object NSPanelPro : DeviceProfile {
     override val ledMechanism = LedMechanism.NONE
     override val screenOff = ScreenOff.SU_BLPOWER
     override val zigbeeGatewayDir = "/vendor/bin/siliconlabs_host"
+    override val efr32UartPath    = "/dev/ttyS5"
     // No relays on Gen1 NSPanel Pro (86P/120P). The PX30 kernel exposes /sys/class/st_relay with FOUR
     // PHANTOM nodes (relay1-4 + mode) on every variant regardless of physical population — verified on a
     // 120P that has zero physical relays (2026-06-08), and there's no per-node "present" attribute to

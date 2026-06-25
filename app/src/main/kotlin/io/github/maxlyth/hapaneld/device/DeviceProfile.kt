@@ -62,6 +62,11 @@ interface DeviceProfile {
     /** Sonoff Zigbee gateway dir, or null if the panel has no managed Zigbee gateway. */
     val zigbeeGatewayDir: String?
 
+    /** UART device node for the Silicon Labs EFR32 radio coprocessor, or null if absent. On NSPanel
+     *  Pro this is `/dev/ttyS5` at 115200 baud (hardcoded in the vendor zgateway binary). Used by
+     *  ThreadController to locate the chip and by the helper's THREAD_FLASH/THREAD_STATUS verbs. */
+    val efr32UartPath: String? get() = null
+
     /** Base of the relay sysfs class for on-board relays, or null if none. */
     val relayBase: String?
 

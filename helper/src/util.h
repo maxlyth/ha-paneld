@@ -28,5 +28,6 @@ int  valid_num(const char *s);        // non-empty decimal digits only
 int  valid_decimal(const char *s);    // decimal with at most one dot, >=1 digit (e.g. "1.15")
 int  valid_gov(const char *s);        // CPU governor name: [a-z0-9_]+
 int  is_critical_pkg(const char *s);  // never-stop/disable backstop (systemui/settings/us/…)
+int  valid_gbl_path(const char *s);   // absolute path, no '..', no "'", ends with ".gbl"
 
 #endif

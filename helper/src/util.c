@@ -100,3 +100,14 @@ int valid_gov(const char *s) {
         if (!((*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9') || *p == '_')) return 0;
     return 1;
 }
+
+// Absolute path to a GBL firmware image: must start with '/', contain no ".." component, contain no
+// single-quote (the path is interpolated inside a single-quoted cp argument), and end with ".gbl".
+int valid_gbl_path(const char *s) {
+    if (!s || s[0] != '/') return 0;
+    if (strstr(s, "..")) return 0;
+    size_t n = strlen(s);
+    if (n < 5 || strcmp(s + n - 4, ".gbl") != 0) return 0;
+    for (size_t i = 0; i < n; i++) if (s[i] == '\'') return 0;
+    return 1;
+}

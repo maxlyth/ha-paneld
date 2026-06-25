@@ -95,6 +95,12 @@ int main(int argc, char **argv) {
         "OVERLAY com.eWeLinkControlPanel deny\n", "OVERLAY com.android.systemui deny\n",
         "OVERLAY com.foo allow\n", "OVERLAY com.foo wipe\n", "OVERLAY\n", "OVERLAY com.foo\n",
         "PERFDUMP\n", "LEDPROBE\n",
+        "THREAD_STATUS\n",
+        "THREAD_FLASH /data/local/tmp/efr32.gbl\n",
+        "THREAD_FLASH /data/../etc/passwd.gbl\n",
+        "THREAD_FLASH /data/local/tmp/evil;reboot.gbl\n",
+        "THREAD_FLASH /data/local/tmp/it'squoted.gbl\n",
+        "THREAD_FLASH \n", "THREAD_FLASH\n",
         "RGB 1 2 3\r\nOFF\r\nBTN 9\r\n",
         "RGB 1 2 3\0OFF\n",                  // embedded NUL (fed with explicit length below)
         "no newline at all just bytes",
@@ -111,7 +117,8 @@ int main(int argc, char **argv) {
     size_t lens[] = { MAX_LINE - 1, MAX_LINE, MAX_LINE + 1, 4096, 65536 };
     const char *verbs[] = { "RGB ", "BTN ", "RELOAD ", "START ", "WATCH /dev/input/",
                             "DENSITY ", "FONTSCALE ", "GOV ", "SCREEN ",
-                            "STOP ", "DISABLE ", "ENABLE ", "OVERLAY ", "" };
+                            "STOP ", "DISABLE ", "ENABLE ", "OVERLAY ",
+                            "THREAD_FLASH /data/local/tmp/", "" };
     for (size_t li = 0; li < sizeof lens / sizeof lens[0]; li++)
         for (size_t vi = 0; vi < sizeof verbs / sizeof verbs[0]; vi++) {
             size_t L = lens[li], vp = strlen(verbs[vi]);
@@ -129,7 +136,7 @@ int main(int argc, char **argv) {
     uint8_t buf[3000];
     const char *kw[] = { "RGB", "OFF", "BTN", "SCREEN", "SCREENCAP", "RELOAD", "START", "WATCH",
                          "SUBSCRIBE", "REBOOT", "DENSITY", "FONTSCALE", "GOV", "PERFDUMP", "LEDPROBE", "PING",
-                         "STOP", "DISABLE", "ENABLE", "OVERLAY" };
+                         "STOP", "DISABLE", "ENABLE", "OVERLAY", "THREAD_FLASH", "THREAD_STATUS" };
     for (long it = 0; it < iters; it++) {
         size_t n = rand() % sizeof buf;
         for (size_t k = 0; k < n; k++) {
