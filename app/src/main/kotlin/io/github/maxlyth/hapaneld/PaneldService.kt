@@ -113,7 +113,7 @@ class PaneldService : Service() {
             scope.launch { tame.applyBlocklist(pkgs) }
         }
         navbar = NavbarController(
-            this, system, volume, brightness, { config.launcherPackage },
+            this, system, volume, brightness, { config.launcherPackage }, { config.dashboardPackage },
             profile.appCanSu, profile.hasRecents,
             onBrightnessChanged = { mqtt.publishScreenOn() },
             onVolumeChanged = { mqtt.publishVolume() },

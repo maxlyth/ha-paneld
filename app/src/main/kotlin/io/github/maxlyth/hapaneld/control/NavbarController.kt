@@ -1,7 +1,9 @@
 package io.github.maxlyth.hapaneld.control
 
 import android.content.Context
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Paint
 import android.graphics.PixelFormat
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.Drawable
@@ -53,6 +55,9 @@ class NavbarController(
     private val volume: VolumeController,
     private val brightness: BrightnessController,
     private val launcherPkg: () -> String,
+    // Dashboard package whose force-stop+relaunch is the Reload button's action (blank => auto-detect the
+    // HA Companion; see [SystemController.reloadDashboard]).
+    private val dashboardPkg: () -> String,
     // Back/Recents route: root `input keyevent` where the app can su, else accessibility (see NavActions).
     private val appCanSu: Boolean,
     // Omit the Recents button on panels whose firmware has no overview screen (e.g. Tuya TPA10).
@@ -70,6 +75,14 @@ class NavbarController(
     private var brightLabel: TextView? = null  // live brightness % (wide panels only)
     private var volLabel: TextView? = null     // live volume % (wide panels only)
     private val hideRunnable = Runnable { animateBarOut() }
+
+    // Narrow-panel pop-up slider (brightness/volume): a small separate overlay above the bar. Only one open
+    // at a time; [sliderKind] tracks which control owns it so re-tapping the same icon toggles it shut.
+    private var sliderView: View? = null
+    private var sliderKind: Slider? = null
+    private val sliderHide = Runnable { dismissSlider() }
+
+    private enum class Slider { BRIGHTNESS, VOLUME }
 
     @Volatile
     var mode: String = MODE_OFF
@@ -121,42 +134,11 @@ class NavbarController(
             setBackgroundColor(BAR_BG)
             gravity = Gravity.CENTER_VERTICAL
         }
-        // Only wide panels (e.g. landscape TPA10) get the live value readout between the ±-pairs;
-        // square NSPanels are too narrow, so there it's icons-only.
-        val showValues = widthDp() >= VALUE_WIDTH_THRESHOLD_DP
-        // Nav buttons are weight 1.0 (the even baseline spacing — unchanged). Each ±/value triple has
-        // its members at weight TIGHTEN (35% tighter), with the reclaimed weight as spacers either side
-        // so the group still occupies its default slot and nav spacing is untouched. A triple of k
-        // members reclaims k·(1−TIGHTEN), split evenly to the two side spacers.
-        val k = if (showValues) 3 else 2
-        val side = k * (1f - TIGHTEN) / 2f
-        // The triple→separator gap is (side + half a triple cell). Match every group boundary to it —
-        // both bar ends and the nav→separator gap — accounting for nav cells (½ = 0.5) being wider than
-        // triple cells (½ = TIGHTEN/2). Keeps recents↔separator equal to the other three separator gaps.
-        val edge = (side + TIGHTEN / 2f - 0.5f).coerceAtLeast(0f)
-        row.addView(spacer(edge))
-        // Back/Recents/Launcher run a slow su / activity call — navButton offloads it AND holds the press
-        // highlight lit from touch-down until it completes, so the tap isn't mistaken for a no-op.
-        row.addView(navButton(R.drawable.ic_nav_back, autoHide) { NavActions.back(appCanSu) })
-        row.addView(navButton(R.drawable.ic_nav_launcher, autoHide) { system.launchLauncher(launcherPkg()) })
-        // Recents only where the firmware actually has an overview screen.
-        if (hasRecents) row.addView(navButton(R.drawable.ic_nav_recents, autoHide) { NavActions.recents(appCanSu) })
-        row.addView(spacer(edge))
-        // Brightness — tap steps once, press-and-hold ramps; label (if shown) updates live.
-        row.addView(separator())
-        row.addView(spacer(side))
-        row.addView(repeatButton(R.drawable.ic_nav_bright_down, autoHide) { stepBrightness(-BRIGHT_STEP); updateBrightLabel() })
-        if (showValues) valueLabel().also { brightLabel = it; row.addView(it) }
-        row.addView(repeatButton(R.drawable.ic_nav_bright_up, autoHide) { stepBrightness(+BRIGHT_STEP); updateBrightLabel() })
-        row.addView(spacer(side))
-        // Volume — tap/hold; showUi flashes the system volume slider for feedback.
-        row.addView(separator())
-        row.addView(spacer(side))
-        row.addView(repeatButton(R.drawable.ic_nav_vol_down, autoHide) { volume.step(up = false); updateVolLabel(); onVolumeChanged() })
-        if (showValues) valueLabel().also { volLabel = it; row.addView(it) }
-        row.addView(repeatButton(R.drawable.ic_nav_vol_up, autoHide) { volume.step(up = true); updateVolLabel(); onVolumeChanged() })
-        row.addView(spacer(side))
-        if (showValues) { updateBrightLabel(); updateVolLabel() }
+        // Wide panels (e.g. landscape TPA10) keep the ±-pairs with the live % readout; narrow panels (a
+        // portrait NSPanel 120P) have no room for that, so they collapse each control to a single icon that
+        // opens a vertical pop-up slider — which also frees the space for the Reload button.
+        if (widthDp() >= VALUE_WIDTH_THRESHOLD_DP) buildWideRow(row, autoHide)
+        else buildNarrowRow(row, autoHide)
         val lp = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             dp(BAR_HEIGHT_DP),
@@ -179,6 +161,153 @@ class NavbarController(
         }
     }
 
+    /** Wide layout: nav group (Back · Launcher · [Recents] · Reload) + the ±-pairs with the live % readout.
+     *  Each ±/value triple's members are weight [TIGHTEN] (35% tighter), with the reclaimed weight as
+     *  spacers either side so the group keeps its default slot and nav spacing is untouched. */
+    private fun buildWideRow(row: LinearLayout, autoHide: Boolean) {
+        val side = 3 * (1f - TIGHTEN) / 2f
+        // Match every group boundary to the triple→separator gap (bar ends + nav→separator), accounting for
+        // nav cells (½ = 0.5) being wider than triple cells (½ = TIGHTEN/2).
+        val edge = (side + TIGHTEN / 2f - 0.5f).coerceAtLeast(0f)
+        row.addView(spacer(edge))
+        addNavGroup(row, autoHide)
+        row.addView(spacer(edge))
+        row.addView(separator())
+        row.addView(spacer(side))
+        row.addView(repeatButton(R.drawable.ic_nav_bright_down, autoHide) { stepBrightness(-BRIGHT_STEP); updateBrightLabel() })
+        valueLabel().also { brightLabel = it; row.addView(it) }
+        row.addView(repeatButton(R.drawable.ic_nav_bright_up, autoHide) { stepBrightness(+BRIGHT_STEP); updateBrightLabel() })
+        row.addView(spacer(side))
+        row.addView(separator())
+        row.addView(spacer(side))
+        row.addView(repeatButton(R.drawable.ic_nav_vol_down, autoHide) { volume.step(up = false); updateVolLabel(); onVolumeChanged() })
+        valueLabel().also { volLabel = it; row.addView(it) }
+        row.addView(repeatButton(R.drawable.ic_nav_vol_up, autoHide) { volume.step(up = true); updateVolLabel(); onVolumeChanged() })
+        row.addView(spacer(side))
+        updateBrightLabel(); updateVolLabel()
+    }
+
+    /** Narrow layout (portrait NSPanel 120P): everything is a single weight-1.0 icon, evenly spread —
+     *  Back · Launcher · [Recents] · Reload | Brightness | Volume. Brightness/Volume each open a vertical
+     *  pop-up slider above the icon (there's no room for ±-pairs or a % label). */
+    private fun buildNarrowRow(row: LinearLayout, autoHide: Boolean) {
+        addNavGroup(row, autoHide)
+        row.addView(separator())
+        row.addView(sliderButton(R.drawable.ic_nav_bright_up, Slider.BRIGHTNESS, autoHide))
+        row.addView(separator())
+        row.addView(sliderButton(R.drawable.ic_nav_vol_up, Slider.VOLUME, autoHide))
+    }
+
+    /** Back · Launcher · [Recents] · Reload — the navigation cluster shared by both layouts. Back/Recents/
+     *  Launcher run a slow su / activity call, so navButton offloads it and holds the press highlight until
+     *  it completes. Reload force-stops + relaunches the dashboard app. */
+    private fun addNavGroup(row: LinearLayout, autoHide: Boolean) {
+        row.addView(navButton(R.drawable.ic_nav_back, autoHide) { NavActions.back(appCanSu) })
+        row.addView(navButton(R.drawable.ic_nav_launcher, autoHide) { system.launchLauncher(launcherPkg()) })
+        if (hasRecents) row.addView(navButton(R.drawable.ic_nav_recents, autoHide) { NavActions.recents(appCanSu) })
+        row.addView(navButton(R.drawable.ic_nav_reload, autoHide) { system.reloadDashboard(dashboardPkg()) })
+    }
+
+    /** Narrow-panel control button: a single weight-1.0 icon that toggles a vertical pop-up slider for
+     *  [kind] above it. Tap to open (re-tap to close); the slider drives brightness/volume live. */
+    private fun sliderButton(icon: Int, kind: Slider, autoHide: Boolean): View {
+        val cell = iconCell(icon, 1f)
+        cell.isClickable = true
+        cell.setOnClickListener {
+            if (autoHide) main.removeCallbacks(hideRunnable)   // keep the bar up while adjusting
+            if (sliderKind == kind) dismissSlider() else showSlider(kind, cell)
+        }
+        return cell
+    }
+
+    /** Show a vertical drag-slider for [kind] in its own overlay, centred above [anchor]. Outside-tap or a
+     *  short idle timeout closes it. Only one is ever open (re-shows replace the previous). */
+    private fun showSlider(kind: Slider, anchor: View) {
+        dismissSlider()
+        if (!canDraw()) return
+        val level0 = when (kind) {
+            Slider.BRIGHTNESS -> brightness.getBrightness().coerceIn(0, 255) / 255f
+            Slider.VOLUME -> volume.getPercent() / 100f
+        }
+        val slider = VerticalSlider(level0) { lv ->
+            when (kind) {
+                Slider.BRIGHTNESS -> { brightness.setBrightness((lv * 255).toInt().coerceIn(10, 255)); onBrightnessChanged() }
+                Slider.VOLUME -> { volume.setPercent((lv * 100).toInt()); onVolumeChanged() }
+            }
+            resetSliderTimeout()
+        }
+        val pad = dp(SLIDER_PAD_DP)
+        val container = FrameLayout(context).apply {
+            setPadding(pad, pad, pad, pad)
+            background = roundedBg()
+            addView(slider, FrameLayout.LayoutParams(dp(SLIDER_TRACK_W_DP) + 2 * pad, ViewGroup.LayoutParams.MATCH_PARENT, Gravity.CENTER))
+            // Outside touch (FLAG_WATCH_OUTSIDE_TOUCH) closes; inside touches fall through to the slider.
+            setOnTouchListener { _, e -> if (e.actionMasked == MotionEvent.ACTION_OUTSIDE) { dismissSlider(); true } else false }
+        }
+        val loc = IntArray(2); anchor.getLocationOnScreen(loc)
+        val w = dp(SLIDER_TRACK_W_DP) + 4 * pad
+        val lp = WindowManager.LayoutParams(
+            w, dp(SLIDER_HEIGHT_DP), overlayType(),
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT,
+        ).apply {
+            gravity = Gravity.BOTTOM or Gravity.START
+            x = (loc[0] + anchor.width / 2 - w / 2).coerceAtLeast(0)
+            y = dp(BAR_HEIGHT_DP) + dp(SLIDER_GAP_DP)
+        }
+        try {
+            wm.addView(container, lp); sliderView = container; sliderKind = kind; resetSliderTimeout()
+        } catch (e: Exception) {
+            Log.w(TAG, "addView(slider) failed", e)
+        }
+    }
+
+    private fun dismissSlider() {
+        main.removeCallbacks(sliderHide)
+        sliderView?.let { runCatching { wm.removeView(it) } }
+        sliderView = null; sliderKind = null
+    }
+
+    private fun resetSliderTimeout() {
+        main.removeCallbacks(sliderHide)
+        main.postDelayed(sliderHide, SLIDER_IDLE_MS)
+    }
+
+    /** Vertical fill-slider: a rounded track filled from the bottom to the current 0..1 [level]; drag
+     *  anywhere on it to set the level, which calls [onLevel] live. */
+    private inner class VerticalSlider(level0: Float, val onLevel: (Float) -> Unit) : View(context) {
+        private var level = level0.coerceIn(0f, 1f)
+        private val trackPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = SLIDER_TRACK_COLOR }
+        private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
+
+        override fun onDraw(c: Canvas) {
+            val w = width.toFloat(); val h = height.toFloat()
+            val r = w / 2f
+            c.drawRoundRect(0f, 0f, w, h, r, r, trackPaint)
+            val top = (h * (1f - level)).coerceIn(0f, h)
+            c.drawRoundRect(0f, top, w, h, r, r, fillPaint)
+        }
+
+        override fun onTouchEvent(e: MotionEvent): Boolean {
+            when (e.actionMasked) {
+                MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE -> {
+                    level = (1f - e.y / height).coerceIn(0f, 1f)
+                    onLevel(level); invalidate()
+                }
+                MotionEvent.ACTION_UP -> resetSliderTimeout()
+            }
+            return true
+        }
+    }
+
+    /** Rounded charcoal background for the slider pop-up (same charcoal as the bar). */
+    private fun roundedBg(): Drawable = android.graphics.drawable.GradientDrawable().apply {
+        setColor(BAR_BG); cornerRadius = dp(SLIDER_RADIUS_DP).toFloat()
+    }
+
     /** Slide the bar down off the bottom edge, then remove it (swipe-reveal auto-hide). */
     private fun animateBarOut() {
         val b = bar ?: return
@@ -192,6 +321,7 @@ class NavbarController(
     /** Detach the bar view without touching its animator. Make it INVISIBLE before `removeView` so the
      *  window manager's final layout pass on removal can't draw it at its resting position for a frame. */
     private fun detachBar(b: View) {
+        dismissSlider()   // a pop-up slider must never outlive its bar
         runCatching { b.visibility = View.INVISIBLE; wm.removeView(b) }
         if (bar === b) {
             bar = null
@@ -437,6 +567,7 @@ class NavbarController(
     /** Reset any display overscan set by this controller. Call from the service's onDestroy so the
      *  reserved bottom margin doesn't persist after ha-paneld stops. */
     fun cleanup() {
+        main.post { dismissSlider() }
         if (appCanSu && mode == MODE_ALWAYS) {
             Thread { runCatching { Su.run("wm overscan 0,0,0,0") } }.start()
         }
@@ -484,5 +615,14 @@ class NavbarController(
         private const val SEP_WIDTH_DP = 2
         private const val SEP_HEIGHT_DP = 30
         private const val SEP_MARGIN_DP = 7          // gap each side of the group divider
+
+        // Narrow-panel pop-up slider (brightness/volume).
+        private const val SLIDER_HEIGHT_DP = 170     // total pop-up height above the bar
+        private const val SLIDER_TRACK_W_DP = 14     // the draggable track width
+        private const val SLIDER_PAD_DP = 10         // padding inside the rounded pop-up
+        private const val SLIDER_GAP_DP = 6          // gap between the pop-up and the bar's top edge
+        private const val SLIDER_RADIUS_DP = 14
+        private const val SLIDER_IDLE_MS = 3000L     // auto-close after this long with no interaction
+        private val SLIDER_TRACK_COLOR = 0x55FFFFFF.toInt() // unfilled track (~33% white)
     }
 }
