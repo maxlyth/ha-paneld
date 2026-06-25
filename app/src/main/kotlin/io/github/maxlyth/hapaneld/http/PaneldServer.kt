@@ -60,11 +60,10 @@ class PaneldServer(
     // Per-panel "HA-optimised" density + text-scale suggestions (DeviceProfile), or null.
     private val recommendedDensity: Int? = null,
     private val recommendedFontScale: Float? = null,
-    // Vendor-taming: the controller (applies on Save), the profile's curated candidate suggestions, and
-    // whether to enumerate live (Generic panel) vs show the curated list (a profiled panel).
+    // Vendor-taming: the controller (applies the action) and the profile's curated recommendations (the
+    // picker's "Recommended" group).
     private val tame: TameController,
     private val tameProfileCandidates: List<String> = emptyList(),
-    private val tameEnumerate: Boolean = false,
 ) {
     // Per-INSTALL build token (changes on every (re)install, not just a version bump) so an open info
     // page can auto-reload after the app is updated — even a same-version dev re-spin. /health carries it.
@@ -347,15 +346,23 @@ class PaneldServer(
                         ContentType.Text.Html,
                     )
                 }
-                // The "Find a package…" picker pop-up content: an on-demand enumeration of likely
-                // controllable apps (so users who don't know package names can pick from a list). Lazy —
-                // only enumerated when the dialog is opened — and excludes packages already in the card.
+                // The "Find a package…" picker pop-up content: an on-demand, grouped list of packages a
+                // non-expert might want to control — Recommended (profile) / Other apps / Using the most
+                // CPU. Lazy (only built when the dialog opens) and excludes what's already tamed (the card).
                 get("/tame/suggest") {
-                    val shown = (tameProfileCandidates + config.tameVendorPackages).toSet()
-                    val sugg = runCatching { tame.suggestions(shown) }.getOrDefault(emptyList())
-                    val frag = if (sugg.isEmpty())
-                        """<p class="note">No other packages found.</p>"""
-                    else sugg.joinToString("\n") { tameRowHtml(it) }
+                    PerfReader.touch()   // keep the CPU sampler warm so the "most CPU" group can populate
+                    val groups = runCatching {
+                        tame.suggestionGroups(tameProfileCandidates, config.tameVendorPackages.toSet(), PerfReader.topNames())
+                    }.getOrDefault(emptyList())
+                    val frag = if (groups.isEmpty())
+                        """<p class="note">No other packages found — you can still tame one by name.</p>"""
+                    else groups.joinToString("\n") { g ->
+                        val items = if (g.items.isEmpty())
+                            """<p class="note" style="margin:0 0 4px;color:#666">— none —</p>"""
+                        else g.items.joinToString("\n") { tameRowHtml(it) }
+                        """<h4 style="margin:14px 0 1px">${esc(g.title)}</h4>""" +
+                            """<p class="note" style="margin:0 0 4px">${esc(g.hint)}</p>$items"""
+                    }
                     call.respondText(frag, ContentType.Text.Html)
                 }
                 post("/density") {
@@ -647,19 +654,17 @@ the current one. Changing the panel id may leave the old device in HA to remove 
 
     private fun tameCardHtml(): String {
         if (!Su.available() && !HelperClient.available()) return ""   // no root/daemon → taming can't act
+        // The card shows what's currently TAMED (the blocklist); discovery lives in the Find-a-package
+        // picker. So a tamed package always has a visible Re-enable here.
         val cands = runCatching {
-            tame.candidates(tameProfileCandidates, config.tameVendorPackages, tameEnumerate)
+            tame.candidates(emptyList(), config.tameVendorPackages, false)
         }.getOrDefault(emptyList())
         val rows = cands.joinToString("\n") { tameRowHtml(it) }
-        val hint = if (tameEnumerate)
-            "Apps on this panel that look like vendor add-ons (they have a launcher icon or can draw over the dashboard)."
-        else
-            "Known intrusive packages for this panel."
         val body = rows.ifBlank {
-            """<p class="note">No vendor packages flagged${if (tameEnumerate) "" else " for this panel"}. Use <b>Find a package…</b> below, or add one by name.</p>"""
+            """<p class="note">Nothing tamed yet. Press <b>Find a package…</b> to see what's on this panel.</p>"""
         }
         return """<div class="card"><h2>Vendor packages <small style="color:#d9a528">· experimental</small></h2>
-<p class="note">$hint <b>Tame</b> force-stops the app, stops it relaunching on boot, and blocks it drawing over the dashboard — applied immediately and on every boot. <b>Re-enable</b> undoes it. Critical system apps are never listed; nothing changes until you press a button.</p>
+<p class="note"><b>Tame</b> force-stops an app, stops it relaunching on boot, and blocks it drawing over the dashboard — applied immediately and on every boot. <b>Re-enable</b> undoes it. Critical system apps are never offered; nothing changes until you press a button.</p>
 $body
 <div style="display:flex;gap:8px;margin-top:12px">
  <button type="button" onclick="pkgPick()">Find a package…</button>

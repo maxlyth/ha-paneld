@@ -131,9 +131,8 @@ class PaneldService : Service() {
         server = PaneldServer(
             config, cacheDir, scope, this, sensors, system, volume, ::reconfigure, ::panelInfo,
             profile.recommendedDensity, profile.recommendedFontScale,
-            // Vendor taming: the controller, this panel's curated candidate suggestions, and whether to
-            // enumerate live (only the Generic catch-all profile) vs show the profile's known list.
-            tame, profile.tameVendorCandidates, profile.id == "generic",
+            // Vendor taming: the controller and this panel's curated recommendations (picker group 1).
+            tame, profile.tameVendorCandidates,
         )
         // Stream daemon-instrumented hardware buttons (e.g. WF1589T power key) into the same event
         // entity as the a11y key capture. No-op on panels with no evdev buttons.

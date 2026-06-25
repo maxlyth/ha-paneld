@@ -61,19 +61,50 @@ class TameController(private val context: Context) {
             .toList()
     }
 
+    /** A labelled section of the picker pop-up. */
+    data class Group(val title: String, val hint: String, val items: List<Candidate>)
+
     /**
-     * Enumerated "likely to want to control" packages for the picker pop-up — runs the heuristic on ANY
-     * panel (profiled or not), so a user who doesn't know package names can pick from a list instead of
-     * typing one. [exclude] drops packages already shown in the card (its curated/blocked rows), and the
-     * untouchables are never enumerated. Installed first, then by label.
+     * The picker pop-up content, grouped for a non-expert: **(1) Recommended** — the panel profile's
+     * known-bad [profileCandidates]; **(2) Other apps** — third-party apps that aren't core Android (the
+     * launcher/overlay heuristic); **(3) Using the most CPU** — the current top processes ([resourceNames],
+     * full cmdlines) mapped to packages. A package appears in only the first group it qualifies for.
+     * [exclude] (the already-tamed blocklist shown in the card), the launcher, the IME, and the untouchables
+     * (critical / HA / ourselves) are never offered. Empty groups are dropped.
      */
-    fun suggestions(exclude: Set<String>): List<Candidate> =
-        enumerate().asSequence()
-            .filter { it !in exclude }
-            .distinct()
-            .map { toCandidate(it, exclude) }
-            .sortedWith(compareByDescending<Candidate> { it.installed }.thenBy { it.label.lowercase() })
-            .toList()
+    fun suggestionGroups(profileCandidates: List<String>, exclude: Set<String>, resourceNames: List<String>): List<Group> {
+        val pm = context.packageManager
+        // EVERY home-registered launcher (not just the current default), so a secondary launcher like the
+        // panel's "l.l" is never offered — you navigate with it. Plus the active IME.
+        val homes = runCatching {
+            pm.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME),
+                PackageManager.MATCH_DISABLED_COMPONENTS).map { it.activityInfo.packageName }.toSet()
+        }.getOrDefault(emptySet())
+        val ime = runCatching {
+            Settings.Secure.getString(context.contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD)?.substringBefore('/')
+        }.getOrNull()
+        val nav = homes + setOfNotNull(ime)            // launchers (l.l) + IME — never offer to disable
+        val seen = exclude.toMutableSet()
+        fun take(src: List<String>, extra: (String) -> Boolean = { true }): List<Candidate> {
+            val picks = src.asSequence().map { it.trim() }
+                .filter { it.isNotEmpty() && it !in seen && it !in nav && !isUntouchable(it) && extra(it) }
+                .distinct().toList()
+            seen += picks
+            return picks.map { toCandidate(it, exclude) }
+                .sortedWith(compareByDescending<Candidate> { it.installed }.thenBy { it.label.lowercase() })
+        }
+        val recommended = take(profileCandidates)
+        val others = take(enumerate())
+        val resourcePkgs = resourceNames.map { it.substringBefore(':').trim() }.filter { it.contains('.') }
+        val heavy = take(resourcePkgs) { !isCoreAosp(it) && isInstalled(it) }
+        // All three sections are returned (even when empty) so the picker always shows its structure —
+        // the empty-state is informative ("no recommendations / nothing heavy right now").
+        return listOf(
+            Group("Recommended for this panel", "Known intrusive firmware apps for your hardware — safe first picks.", recommended),
+            Group("Other apps", "Apps on this panel that aren't part of core Android.", others),
+            Group("Using the most CPU", "Processes currently using the most CPU — only tame one you recognise.", heavy),
+        )
+    }
 
     private fun toCandidate(pkg: String, blocked: Set<String>): Candidate {
         val pm = context.packageManager

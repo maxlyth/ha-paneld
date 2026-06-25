@@ -25,7 +25,13 @@ Open the config page (`http://<panel-ip>:8888/`) and find the **Vendor packages*
 
 Press **Tame** on a row to neutralise that package — it acts immediately (no separate Save) and is re-applied on every boot. A tamed (or already-disabled) package shows **Re-enable** instead, which reverses it. Each row shows its state: `active`, `disabled`, or `not installed`.
 
-If you don't know a package's name, press **Find a package…** — a pop-up lists the apps on the panel that look like vendor add-ons, each with the same Tame/Re-enable button, so you can pick from a list rather than type an id. (Or type the id directly into the box if you know it.)
+If you don't know a package's name, press **Find a package…** — a pop-up lists the apps on the panel you might want to control, grouped to make the choice easier:
+
+- **Recommended for this panel** — the intrusive firmware apps known for your hardware (the safe first picks).
+- **Other apps** — apps on the panel that aren't part of core Android.
+- **Using the most CPU** — whatever's consuming the most CPU right now (only tame one you recognise).
+
+Each entry has the same Tame/Re-enable button. (Or type an id directly into the box if you know it.) The card itself only lists what you've already tamed.
 
 The feature is **off by default**: nothing is tamed until you press a Tame button. The card only appears on panels with root or the helper daemon (taming needs a privileged path).
 

@@ -86,6 +86,12 @@ object PerfReader {
         """{"enabled":$enabled,$latestFields,"top":$topJson,"render":$renderJson,"hist":{"cpu":${cpuHist.toList()},"ram":${ramHist.toList()},"gpu":${gpuHist.toList()}}}"""
     }
 
+    /** Process names (full cmdlines) of the latest top-by-CPU sample, most-active first — for the tame
+     *  picker's "using the most CPU" group. Empty until the sampler has produced a ranking. */
+    fun topNames(): List<String> = synchronized(lock) {
+        Regex(""""name":"(.*?)"""").findAll(topJson).map { it.groupValues[1] }.toList()
+    }
+
     /**
      * Dashboard responsiveness. PRIMARY = the WebView renderer's main-thread CPU (`CrRendererMain`,
      * via /proc/<renderer>/task/<tid>/stat) as %-of-one-core: this is the thread the HA frontend
