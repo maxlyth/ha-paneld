@@ -2,6 +2,7 @@ package io.github.maxlyth.hapaneld.control
 
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.provider.Settings
 import android.util.Log
@@ -49,6 +50,7 @@ class TameController(private val context: Context) {
      */
     fun candidates(profileCandidates: List<String>, blocked: List<String>, enumerate: Boolean): List<Candidate> {
         val blockedSet = blocked.toSet()
+        val apps = installedApps()
         val pkgs = LinkedHashSet<String>()
         pkgs += if (enumerate) enumerate() else profileCandidates
         pkgs += blocked
@@ -56,7 +58,7 @@ class TameController(private val context: Context) {
             .map { it.trim() }
             .filter { it.isNotEmpty() && !isUntouchable(it) }
             .distinct()
-            .map { toCandidate(it, blockedSet) }
+            .map { toCandidate(it, apps[it], blockedSet) }
             .sortedWith(compareByDescending<Candidate> { it.installed }.thenBy { it.label.lowercase() })
             .toList()
     }
@@ -84,19 +86,22 @@ class TameController(private val context: Context) {
             Settings.Secure.getString(context.contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD)?.substringBefore('/')
         }.getOrNull()
         val nav = homes + setOfNotNull(ime)            // launchers (l.l) + IME — never offer to disable
+        val apps = installedApps()
         val seen = exclude.toMutableSet()
         fun take(src: List<String>, extra: (String) -> Boolean = { true }): List<Candidate> {
             val picks = src.asSequence().map { it.trim() }
-                .filter { it.isNotEmpty() && it !in seen && it !in nav && !isUntouchable(it) && extra(it) }
+                // installed-only: a non-engineer should only ever see apps actually on THIS firmware, so a
+                // profile recommendation absent from this build is silently dropped (no "not installed" rows).
+                .filter { it.isNotEmpty() && it !in seen && it !in nav && !isUntouchable(it) && it in apps && extra(it) }
                 .distinct().toList()
             seen += picks
-            return picks.map { toCandidate(it, exclude) }
+            return picks.map { toCandidate(it, apps[it], exclude) }
                 .sortedWith(compareByDescending<Candidate> { it.installed }.thenBy { it.label.lowercase() })
         }
         val recommended = take(profileCandidates)
         val others = take(enumerate())
         val resourcePkgs = resourceNames.map { it.substringBefore(':').trim() }.filter { it.contains('.') }
-        val heavy = take(resourcePkgs) { !isCoreAosp(it) && isInstalled(it) }
+        val heavy = take(resourcePkgs) { !isCoreAosp(it) }
         // All three sections are returned (even when empty) so the picker always shows its structure —
         // the empty-state is informative ("no recommendations / nothing heavy right now").
         return listOf(
@@ -106,9 +111,17 @@ class TameController(private val context: Context) {
         )
     }
 
-    private fun toCandidate(pkg: String, blocked: Set<String>): Candidate {
+    // All installed apps (enabled, disabled, disabled-until-used) keyed by package — the RELIABLE presence
+    // source. Per-package getApplicationInfo() is not: it returns null for a disabled PRIVILEGED system app
+    // (e.g. a tamed `com.smatek.*`) even though the app is installed, which would wrongly hide it. A single
+    // getInstalledApplications() snapshot lists them all, so resolve presence/label from this map instead.
+    private fun installedApps(): Map<String, ApplicationInfo> = runCatching {
+        val flags = PackageManager.MATCH_DISABLED_COMPONENTS or PackageManager.MATCH_DISABLED_UNTIL_USED_COMPONENTS
+        context.packageManager.getInstalledApplications(flags).associateBy { it.packageName }
+    }.getOrDefault(emptyMap())
+
+    private fun toCandidate(pkg: String, ai: ApplicationInfo?, blocked: Set<String>): Candidate {
         val pm = context.packageManager
-        val ai = runCatching { pm.getApplicationInfo(pkg, 0) }.getOrNull()
         val label = ai?.let { runCatching { pm.getApplicationLabel(it).toString() }.getOrNull() }
             ?.takeIf { it != pkg } ?: pkg
         val disabled = ai != null && runCatching { pm.getApplicationEnabledSetting(pkg) }.getOrNull()
@@ -198,8 +211,7 @@ class TameController(private val context: Context) {
         return true
     }
 
-    private fun isInstalled(pkg: String): Boolean =
-        runCatching { context.packageManager.getPackageInfo(pkg, 0) }.isSuccess
+    private fun isInstalled(pkg: String): Boolean = installedApps().containsKey(pkg)
 
     companion object {
         private const val TAG = "ha-paneld/tame"
