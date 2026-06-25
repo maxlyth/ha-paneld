@@ -286,30 +286,13 @@ class PaneldServer(
                     p["friendly_name"]?.let { config.setFriendlyName(it.trim()) }
                     p["dashboard_package"]?.let { config.setDashboardPackage(it.trim()) }
                     p["launcher_package"]?.let { config.setLauncherPackage(it.trim()) }
-                    // Vendor taming. The browser form sends `tame_form=1` plus the ticked `tame_pkg`
-                    // checkboxes and the free-text `tame_add`; fleet/JSON tools can still send a raw
-                    // `tame_vendor_packages` list. Either way, build the new blocklist, persist it, and
-                    // apply the delta now (tame newly-added, re-enable newly-removed) off the request
-                    // thread — so Save actually changes the panel, not just the next boot.
-                    run {
-                        val old = config.tameVendorPackages.toSet()
-                        val next: Set<String>? = when {
-                            p["tame_form"] != null -> (p.getAll("tame_pkg").orEmpty() +
-                                (p["tame_add"] ?: "").split(Regex("[\\s,]+")))
-                                .map { it.trim() }.filter { it.isNotEmpty() && !TameController.isCritical(it) }.toSet()
-                            p["tame_vendor_packages"] != null -> p["tame_vendor_packages"]!!
-                                .split(Regex("[\\s,]+")).map { it.trim() }
-                                .filter { it.isNotEmpty() && !TameController.isCritical(it) }.toSet()
-                            else -> null
-                        }
-                        if (next != null && next != old) {
-                            config.setTameVendorPackages(next.joinToString(" "))
-                            val add = next - old; val remove = old - next
-                            scope.launch {
-                                add.forEach { tame.tame(it) }
-                                remove.forEach { tame.untame(it) }
-                            }
-                        }
+                    // Vendor taming via the config page is per-package on its own card (POST /tame); the
+                    // browser form no longer carries it. A fleet/JSON tool may still set the whole blocklist
+                    // by raw `tame_vendor_packages`, applying the delta off-thread (tame added / re-enable
+                    // removed).
+                    p["tame_vendor_packages"]?.let { raw ->
+                        applyTameBlocklist(raw.split(Regex("[\\s,]+")).map { it.trim() }
+                            .filter { it.isNotEmpty() && !TameController.isCritical(it) }.toSet())
                     }
                     val mfr = p["manufacturer"]?.trim()
                     val mdl = p["model"]?.trim()
@@ -341,6 +324,28 @@ class PaneldServer(
                             ContentType.Text.Html,
                         )
                     }
+                }
+                // Per-package vendor taming from the Vendor packages card. action=tame adds the package to
+                // the blocklist and tames it now; action=untame removes it and re-enables it. The work is
+                // privileged + slow, so it runs off-thread and the browser gets a short auto-reload back to
+                // the info page (the row's new state shows on reload).
+                post("/tame") {
+                    val p = call.receiveParameters()
+                    val pkg = p["pkg"]?.trim().orEmpty()
+                    val untame = p["action"]?.trim() == "untame"
+                    if (pkg.isNotEmpty() && !TameController.isCritical(pkg)) {
+                        val next = config.tameVendorPackages.toMutableSet()
+                        if (untame) next.remove(pkg) else next.add(pkg)
+                        config.setTameVendorPackages(next.joinToString(" "))
+                        scope.launch { if (untame) tame.untame(pkg) else tame.tame(pkg) }
+                    }
+                    val verb = if (untame) "re-enabling" else "taming"
+                    call.respondText(
+                        "<!doctype html><meta charset=utf-8><meta http-equiv=refresh content='2;url=/'>" +
+                            "<body style='font-family:system-ui;background:#111;color:#eee;padding:20px'>" +
+                            "$verb ${esc(pkg)}…</body>",
+                        ContentType.Text.Html,
+                    )
                 }
                 post("/density") {
                     val p = call.receiveParameters()
@@ -553,6 +558,7 @@ report of this panel's hardware, firmware, SELinux, su and node probes for bug r
  <button type="button" class="pbtn" onclick="inspStop()">Stop</button></div>
 <p class="note" id="insthint"></p></div>
 ${displayCardHtml()}
+${tameCardHtml()}
 <div class="card"><h2 id="config">Configuration</h2>
 <form method="post" action="/config">
  <label>Panel id <small>(entity_ids / MQTT topics)</small>
@@ -573,7 +579,6 @@ ${displayCardHtml()}
   <input name="dashboard_package" autocapitalize="none" autocorrect="off" spellcheck="false" value="${esc(config.dashboardPackage)}" placeholder="io.homeassistant.companion.android"></label>
  <label>Launcher package <small>(blank = auto-detect)</small>
   <input name="launcher_package" autocapitalize="none" autocorrect="off" spellcheck="false" value="${esc(config.launcherPackage)}" placeholder="auto"></label>
-${tameSectionHtml()}
  <button type="submit">Save</button>
 </form>
 <p class="note">Leave the broker blank to auto-discover Home Assistant on the LAN (via mDNS) and use its
@@ -592,44 +597,60 @@ the current one. Changing the panel id may leave the old device in HA to remove 
     private fun esc(s: String): String = s
         .replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
 
+    /** Persist a new tame blocklist and apply the delta off-thread (tame additions, re-enable removals).
+     *  Used by the fleet/JSON `tame_vendor_packages` path; the browser card uses per-package POST /tame. */
+    private fun applyTameBlocklist(next: Set<String>) {
+        val old = config.tameVendorPackages.toSet()
+        if (next == old) return
+        config.setTameVendorPackages(next.joinToString(" "))
+        val add = next - old; val remove = old - next
+        scope.launch { add.forEach { tame.tame(it) }; remove.forEach { tame.untame(it) } }
+    }
+
     /**
-     * The "Tame vendor packages" section of the Configure form: a tick list of candidate packages (the
-     * panel profile's known-bad suggestions, or a live enumeration on a Generic panel) each showing its
-     * current state, plus a free-text field to add any package by name. Ticked = on the blocklist; on Save
-     * the [post /config] handler tames newly-ticked packages and re-enables newly-unticked ones. The hidden
-     * `tame_form` marker tells that handler this section was submitted (so clearing every tick is honoured,
-     * not read as "field absent → leave unchanged"). Critical/HA/own packages are never listed.
+     * Standalone "Vendor packages" card. Taming intrusive firmware apps is a distinct, deploy-time concept
+     * — not part of basic configuration — so it gets its own card with **per-package action buttons**, not
+     * a checkbox list behind a shared Save (which made "did it apply?" and "how do I remove one?" unclear).
+     * Each row acts immediately via `POST /tame`: an active app offers **Tame**, a tamed/disabled one offers
+     * **Re-enable**. A free-text box tames any package by name. Hidden where no privileged path exists (taming
+     * needs root or the helper daemon). Critical / HA / own packages are never listed.
      */
-    private fun tameSectionHtml(): String {
+    private fun tameCardHtml(): String {
+        if (!Su.available() && !HelperClient.available()) return ""   // no root/daemon → taming can't act
         val cands = runCatching {
             tame.candidates(tameProfileCandidates, config.tameVendorPackages, tameEnumerate)
         }.getOrDefault(emptyList())
         val rows = cands.joinToString("\n") { c ->
-            val badge = when {
-                !c.installed -> " <small style=\"color:#888\">· not installed</small>"
-                c.disabled -> " <small style=\"color:#d9a528\">· disabled</small>"
-                else -> ""
+            val tamed = c.blocked || c.disabled
+            val state = when {
+                !c.installed -> """<span style="color:#888">not installed</span>"""
+                c.disabled -> """<span style="color:#d9a528">disabled</span>"""
+                else -> """<span style="color:#3fb950">active</span>"""
             }
-            val checked = if (c.blocked) " checked" else ""
-            """  <label style="display:flex;gap:8px;align-items:center;font-weight:normal;margin:0">""" +
-                """<input type="checkbox" name="tame_pkg" value="${esc(c.pkg)}"$checked>""" +
-                """<span>${esc(c.label)} <small style="color:#888">${esc(c.pkg)}</small>$badge</span></label>"""
+            val action = if (tamed) "untame" else "tame"
+            val label = if (tamed) "Re-enable" else "Tame"
+            val btn = if (tamed) "" else "background:#7a2e2e;border-color:#7a2e2e"
+            """  <div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid #222">
+   <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis">${esc(c.label)}<br><small style="color:#888">${esc(c.pkg)}</small></span>
+   <span style="width:80px;text-align:right;font-size:.85em">$state</span>
+   <form method="post" action="/tame" style="margin:0"><input type="hidden" name="pkg" value="${esc(c.pkg)}"><input type="hidden" name="action" value="$action"><button type="submit" style="$btn">$label</button></form>
+  </div>"""
         }
-        val list = if (rows.isEmpty())
-            """  <p class="note" style="margin:4px 0">No suggestions — add a package below.</p>"""
-        else
-            """  <div style="display:flex;flex-direction:column;gap:6px;max-height:220px;overflow:auto;""" +
-                """border:1px solid #333;border-radius:8px;padding:8px">$rows</div>"""
         val hint = if (tameEnumerate)
-            "Apps detected on this panel (a launcher entry, an overlay permission, or vendor-signed)."
+            "Apps on this panel that look like vendor add-ons (a launcher entry, an overlay permission, or a non-platform signature)."
         else
-            "Known intrusive packages for this panel. Add any others below."
-        return """ <label>Tame vendor packages <small>(opt-in; needs root or the helper daemon)</small></label>
- <input type="hidden" name="tame_form" value="1">
-$list
- <label>Add a package <small>(by name; space/comma-separated for several)</small>
-  <input name="tame_add" autocapitalize="none" autocorrect="off" spellcheck="false" value="" placeholder="com.eWeLinkControlPanel"></label>
- <p class="note" style="margin:2px 0">$hint Ticked packages are force-stopped, blocked from relaunching on boot, and denied screen overlays — applied on Save and every boot. Untick to re-enable. Critical system packages are never offered, and nothing is touched until you tick it.</p>"""
+            "Known intrusive packages for this panel."
+        val body = rows.ifBlank {
+            """<p class="note">No vendor packages flagged${if (tameEnumerate) "" else " for this panel"}. Add one below if you know its package name.</p>"""
+        }
+        return """<div class="card"><h2>Vendor packages <small style="color:#d9a528">· experimental</small></h2>
+<p class="note">$hint <b>Tame</b> force-stops the app, stops it relaunching on boot, and blocks it drawing over the dashboard — applied immediately and on every boot. <b>Re-enable</b> undoes it. Critical system apps are never listed; nothing changes until you press a button.</p>
+$body
+<form method="post" action="/tame" style="display:flex;gap:8px;margin-top:12px">
+ <input name="pkg" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="com.vendor.app — tame any package by name" style="flex:1">
+ <input type="hidden" name="action" value="tame">
+ <button type="submit">Tame</button>
+</form></div>"""
     }
 
     /** Display-sizing card (density + text scale). Empty when su isn't reachable (no control). */

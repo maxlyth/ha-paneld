@@ -18,14 +18,14 @@ All three are privileged, so the feature needs **root or the [helper daemon](../
 
 This is configured **on the panel itself**, in the HTTP config page — not from Home Assistant. It's a deploy-time / post-firmware-update action, not something you toggle day to day, so it doesn't belong on a dashboard.
 
-Open the config page (`http://<panel-ip>:8888/`) and find **Tame vendor packages** in the Configure card. You get a tick list of candidate packages:
+Open the config page (`http://<panel-ip>:8888/`) and find the **Vendor packages** card (its own card, separate from Configuration). It lists candidate packages, each with its current state and a single action button:
 
-- On a **panel with a known profile** (e.g. the NSPanel Pro), the list is the curated set of intrusive packages known for that hardware — `com.eWeLinkControlPanel` is pre-listed there, unticked.
+- On a **panel with a known profile** (e.g. the NSPanel Pro), the list is the curated set of intrusive packages known for that hardware — `com.eWeLinkControlPanel` is listed there.
 - On a **generic panel**, ha-paneld enumerates the apps on the device that look like vendor add-ons (anything with a launcher entry, an overlay permission, or a non-platform signature), so you can spot the culprit without knowing its package name.
 
-Tick whatever you want gone, optionally type any other package name into **Add a package**, and Save. Ticked packages are tamed immediately and on every boot; **untick one to re-enable it**. Each row shows its current state (`disabled` if it's already off, `not installed` if absent).
+Press **Tame** on a row to neutralise that package — it acts immediately (no separate Save) and is re-applied on every boot. A tamed (or already-disabled) package shows **Re-enable** instead, which reverses it. The box at the bottom tames any package by name. Each row shows its state: `active`, `disabled`, or `not installed`.
 
-The feature is **off by default**: nothing is ticked, and ha-paneld touches nothing until you deliberately tick or add a package.
+The feature is **off by default**: nothing is tamed until you press a Tame button. The card only appears on panels with root or the helper daemon (taming needs a privileged path).
 
 ## Safety
 
