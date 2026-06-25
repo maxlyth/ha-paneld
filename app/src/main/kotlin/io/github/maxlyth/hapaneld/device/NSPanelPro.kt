@@ -39,10 +39,18 @@ object NSPanelPro : DeviceProfile {
 
     override val manufacturer = "Sonoff"
     override val model = "NSPanel Pro"
-    // The eWeLink/Sonoff control-panel app ships in the firmware and, after some Sonoff updates, launches
-    // on boot and draws a floating widget over the dashboard. Offered as a tick-to-tame suggestion (never
-    // auto-disabled — only the user's selection acts). Reversible via the same UI / `pm enable`.
-    override val tameVendorCandidates = listOf("com.eWeLinkControlPanel")
+    // Curated, annotated tame suggestions. "vendor" = Sonoff/eWeLink's own apps; "chipset" = Rockchip
+    // (the PX30 SoC vendor) factory/demo apps that small-production panels routinely ship — they look
+    // alarming but are safe to disable. All are suggestions only; nothing is auto-disabled, and every
+    // action is reversible. Listed even if a given firmware lacks one (absent packages drop out silently).
+    override val tameVendorCandidates = listOf(
+        TameCandidate("com.eWeLinkControlPanel", listOf("vendor", "overlay", "boot"),
+            "eWeLink/Sonoff control-panel app. After some Sonoff firmware updates it starts on boot and draws a floating widget over the dashboard."),
+        TameCandidate("com.android.rk", listOf("chipset", "test"),
+            "Rockchip (PX30 SoC) factory/test app left in the firmware image. Not used by the panel in normal operation."),
+        TameCandidate("android.rk.RockVideoPlayer", listOf("chipset", "demo"),
+            "Rockchip demo video player bundled with the SoC image. Safe to disable unless you actually use it."),
+    )
     override val evdevButtons = emptyList<EvdevButton>()
     // PX30 offers no schedutil; its load-following governor is interactive.
     override val cpuGovernors = mapOf("Performance" to "performance", "Efficiency" to "powersave", "Auto" to "interactive")

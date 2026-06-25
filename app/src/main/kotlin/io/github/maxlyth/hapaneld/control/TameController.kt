@@ -6,6 +6,7 @@ import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.provider.Settings
 import android.util.Log
+import io.github.maxlyth.hapaneld.device.TameCandidate
 import io.github.maxlyth.hapaneld.util.HelperClient
 
 /**
@@ -31,34 +32,32 @@ class TameController(private val context: Context) {
     fun applyBlocklist(packages: List<String>): List<String> =
         packages.filter { tame(it) }
 
-    /** One row in the config page's tame list: a package, its label + current state, and whether it's
-     *  currently on the blocklist (ticked). */
+    /** One row in the Vendor-packages UI: a package, its label + current state, whether it's tamed, and
+     *  (for profile-curated packages) the author's [tags] and [note] explaining what it is. */
     data class Candidate(
         val pkg: String,
         val label: String,
         val installed: Boolean,
         val disabled: Boolean,
         val blocked: Boolean,
+        val tags: List<String> = emptyList(),
+        val note: String = "",
     )
 
     /**
-     * The tame candidate list for the config UI. [enumerate]=false (a profiled panel) shows the panel's
-     * curated [profileCandidates]; [enumerate]=true (the Generic profile) discovers candidates live with a
-     * has-launcher / holds-overlay / non-platform-signed heuristic. Currently-[blocked] packages are always
-     * included (so an arbitrary one the user added still shows, with its tick), and untouchables (critical
-     * system packages, HA, ourselves) are never offered. Installed packages sort first, then by label.
+     * The Vendor-packages CARD list: the currently-tamed [blocked] packages, each annotated with its
+     * profile [profileMeta] (tags + note) when one exists, so a tamed entry still explains what it is.
+     * Installed (incl. disabled) first, then by label.
      */
-    fun candidates(profileCandidates: List<String>, blocked: List<String>, enumerate: Boolean): List<Candidate> {
+    fun cardCandidates(blocked: List<String>, profileMeta: List<TameCandidate>): List<Candidate> {
         val blockedSet = blocked.toSet()
         val apps = installedApps()
-        val pkgs = LinkedHashSet<String>()
-        pkgs += if (enumerate) enumerate() else profileCandidates
-        pkgs += blocked
-        return pkgs.asSequence()
+        val meta = profileMeta.associateBy { it.pkg }
+        return blocked.asSequence()
             .map { it.trim() }
-            .filter { it.isNotEmpty() && !isUntouchable(it) }
+            .filter { it.isNotEmpty() }
             .distinct()
-            .map { toCandidate(it, apps[it], blockedSet) }
+            .map { toCandidate(it, apps[it], blockedSet, meta[it]) }
             .sortedWith(compareByDescending<Candidate> { it.installed }.thenBy { it.label.lowercase() })
             .toList()
     }
@@ -74,8 +73,9 @@ class TameController(private val context: Context) {
      * [exclude] (the already-tamed blocklist shown in the card), the launcher, the IME, and the untouchables
      * (critical / HA / ourselves) are never offered. Empty groups are dropped.
      */
-    fun suggestionGroups(profileCandidates: List<String>, exclude: Set<String>, resourceNames: List<String>): List<Group> {
+    fun suggestionGroups(profileCandidates: List<TameCandidate>, exclude: Set<String>, resourceNames: List<String>): List<Group> {
         val pm = context.packageManager
+        val meta = profileCandidates.associateBy { it.pkg }
         // EVERY home-registered launcher (not just the current default), so a secondary launcher like the
         // panel's "l.l" is never offered — you navigate with it. Plus the active IME.
         val homes = runCatching {
@@ -95,10 +95,10 @@ class TameController(private val context: Context) {
                 .filter { it.isNotEmpty() && it !in seen && it !in nav && !isUntouchable(it) && it in apps && extra(it) }
                 .distinct().toList()
             seen += picks
-            return picks.map { toCandidate(it, apps[it], exclude) }
+            return picks.map { toCandidate(it, apps[it], exclude, meta[it]) }
                 .sortedWith(compareByDescending<Candidate> { it.installed }.thenBy { it.label.lowercase() })
         }
-        val recommended = take(profileCandidates)
+        val recommended = take(profileCandidates.map { it.pkg })
         val others = take(enumerate())
         val resourcePkgs = resourceNames.map { it.substringBefore(':').trim() }.filter { it.contains('.') }
         val heavy = take(resourcePkgs) { !isCoreAosp(it) }
@@ -120,14 +120,15 @@ class TameController(private val context: Context) {
         context.packageManager.getInstalledApplications(flags).associateBy { it.packageName }
     }.getOrDefault(emptyMap())
 
-    private fun toCandidate(pkg: String, ai: ApplicationInfo?, blocked: Set<String>): Candidate {
+    private fun toCandidate(pkg: String, ai: ApplicationInfo?, blocked: Set<String>, meta: TameCandidate? = null): Candidate {
         val pm = context.packageManager
         val label = ai?.let { runCatching { pm.getApplicationLabel(it).toString() }.getOrNull() }
             ?.takeIf { it != pkg } ?: pkg
         val disabled = ai != null && runCatching { pm.getApplicationEnabledSetting(pkg) }.getOrNull()
             ?.let { it == PackageManager.COMPONENT_ENABLED_STATE_DISABLED ||
                     it == PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER } ?: false
-        return Candidate(pkg, label, installed = ai != null, disabled = disabled, blocked = pkg in blocked)
+        return Candidate(pkg, label, installed = ai != null, disabled = disabled, blocked = pkg in blocked,
+            tags = meta?.tags ?: emptyList(), note = meta?.note ?: "")
     }
 
     // Discovery: a package is a candidate if it (a) has a launcher activity or holds the overlay

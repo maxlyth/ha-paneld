@@ -27,7 +27,7 @@ Press **Tame** on a row to neutralise that package — it acts immediately (no s
 
 If you don't know a package's name, press **Find a package…** — a pop-up lists the apps on the panel you might want to control, grouped to make the choice easier:
 
-- **Recommended for this panel** — the intrusive firmware apps known for your hardware (the safe first picks).
+- **Recommended for this panel** — the intrusive firmware apps known for your hardware (the safe first picks). Each carries **tags** (e.g. `vendor` for the panel maker's apps, `chipset` for the SoC vendor's factory/test apps, `overlay`, `boot`) and a short **note** from the profile author explaining what it is and why it's flagged — so you can tell, say, a Sonoff overlay app apart from a harmless Rockchip test app left in the image.
 - **Other apps** — apps on the panel that aren't part of core Android.
 - **Using the most CPU** — whatever's consuming the most CPU right now (only tame one you recognise).
 

@@ -41,12 +41,12 @@ interface DeviceProfile {
      *  it, else those controls silently stay empty. Daemon-need is its own concept, NOT the LED mechanism. */
     val usesDaemon: Boolean get() = !appCanSu
 
-    /** Known intrusive vendor packages for THIS panel — shown as ready-to-tick suggestions in the config
-     *  page's "Tame vendor packages" list (e.g. `com.eWeLinkControlPanel` on the NSPanel Pro after a Sonoff
-     *  firmware update). These are *suggestions only*, never auto-acted: the panel is modified solely by
-     *  what the user actually ticks. Profiled panels show this curated list (plus a free-text add); the
-     *  [Generic] profile leaves it empty and the UI enumerates candidates live instead. Default empty. */
-    val tameVendorCandidates: List<String> get() = emptyList()
+    /** Curated, annotated packages for THIS panel's "Recommended" list in the Vendor-packages card — each a
+     *  [TameCandidate] carrying its tags (e.g. "vendor"/"chipset"/"test"/"overlay") and a one-line note from
+     *  the profile author explaining what it is and why it's flagged, so a non-engineer gets real context.
+     *  *Suggestions only*, never auto-acted. Packages absent from this firmware are dropped silently, so list
+     *  the union across firmware versions — no per-release sets needed. Default empty. */
+    val tameVendorCandidates: List<TameCandidate> get() = emptyList()
 
     /** Whether the firmware provides a working Recents/Overview screen. Single-purpose panel images often
      *  ship none (verified 2026-06-10: KEYCODE_APP_SWITCH is a no-op on the Tuya TPA10), so the navbar's
@@ -209,4 +209,22 @@ data class EvdevButton(
     val grab: Boolean,
     val eventType: String,
     val sw: Boolean = false,
+)
+
+/**
+ * A profile-curated package the user might want to tame, with author metadata so the Vendor-packages UI
+ * can explain *what it is* and *why it's listed* — important on small-production panels where, say, the
+ * SoC vendor's factory-test apps are routinely left installed and look alarming without context.
+ *
+ * @param pkg   the Android package name (e.g. "com.eWeLinkControlPanel").
+ * @param tags  short classifier labels shown as chips — e.g. "vendor" (the panel maker's app),
+ *              "chipset" (the SoC vendor's app), "test"/"demo" (factory/diagnostic), "overlay" (draws
+ *              over the screen), "boot" (auto-starts). Free-form; the UI just renders them.
+ * @param note  a one-line rationale from the profile author, shown under the row so the user understands
+ *              why it's flagged and whether they want it gone. Empty = no note.
+ */
+data class TameCandidate(
+    val pkg: String,
+    val tags: List<String> = emptyList(),
+    val note: String = "",
 )

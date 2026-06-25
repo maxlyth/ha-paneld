@@ -10,6 +10,7 @@ import io.github.maxlyth.hapaneld.control.Su
 import io.github.maxlyth.hapaneld.control.SystemController
 import io.github.maxlyth.hapaneld.control.TameController
 import io.github.maxlyth.hapaneld.control.VolumeController
+import io.github.maxlyth.hapaneld.device.TameCandidate
 import io.github.maxlyth.hapaneld.input.PanelAccessibilityService
 import io.github.maxlyth.hapaneld.sensors.SensorReporter
 import io.github.maxlyth.hapaneld.util.HelperClient
@@ -63,7 +64,7 @@ class PaneldServer(
     // Vendor-taming: the controller (applies the action) and the profile's curated recommendations (the
     // picker's "Recommended" group).
     private val tame: TameController,
-    private val tameProfileCandidates: List<String> = emptyList(),
+    private val tameProfileCandidates: List<TameCandidate> = emptyList(),
 ) {
     // Per-INSTALL build token (changes on every (re)install, not just a version bump) so an open info
     // page can auto-reload after the app is updated — even a same-version dev re-spin. /health carries it.
@@ -645,8 +646,15 @@ the current one. Changing the panel id may leave the old device in HA to remove 
         val action = if (tamed) "untame" else "tame"
         val label = if (tamed) "Re-enable" else "Tame"
         val btn = if (tamed) "" else "background:#7a2e2e;border-color:#7a2e2e"
+        // Profile-authored context: tag chips (vendor/chipset/test/…) after the label, and the note below
+        // the package id, so a non-engineer knows what the app is and why it's flagged.
+        val tags = c.tags.joinToString("") {
+            """<span style="display:inline-block;background:#2a3340;color:#9cc;border-radius:4px;padding:0 6px;margin-left:5px;font-size:.7em;vertical-align:1px">${esc(it)}</span>"""
+        }
+        val note = if (c.note.isNotBlank())
+            """<br><small style="color:#9aa">${esc(c.note)}</small>""" else ""
         return """  <div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid #222">
-   <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis">${esc(c.label)}<br><small style="color:#888">${esc(c.pkg)}</small></span>
+   <span style="flex:1;min-width:0;overflow:hidden">${esc(c.label)}$tags<br><small style="color:#888">${esc(c.pkg)}</small>$note</span>
    <span style="width:80px;text-align:right;font-size:.85em">$state</span>
    <form method="post" action="/tame" style="margin:0"><input type="hidden" name="pkg" value="${esc(c.pkg)}"><input type="hidden" name="action" value="$action"><button type="submit" style="$btn">$label</button></form>
   </div>"""
@@ -657,7 +665,7 @@ the current one. Changing the panel id may leave the old device in HA to remove 
         // The card shows what's currently TAMED (the blocklist); discovery lives in the Find-a-package
         // picker. So a tamed package always has a visible Re-enable here.
         val cands = runCatching {
-            tame.candidates(emptyList(), config.tameVendorPackages, false)
+            tame.cardCandidates(config.tameVendorPackages, tameProfileCandidates)
         }.getOrDefault(emptyList())
         val rows = cands.joinToString("\n") { tameRowHtml(it) }
         val body = rows.ifBlank {
