@@ -35,8 +35,9 @@ static const struct { const char *verb; cmd_fn fn; } COMMANDS[] = {
     { "GOV",       cmd_gov },
     { "PERFDUMP",      cmd_perfdump },
     { "PING",          cmd_ping },
-    { "THREAD_FLASH",  cmd_thread_flash },
-    { "THREAD_STATUS", cmd_thread_status },
+    { "THREAD_FLASH",      cmd_thread_flash },
+    { "THREAD_STATUS",     cmd_thread_status },
+    { "THREAD_COMMISSION", cmd_thread_commission },
 };
 
 void dispatch(conn_ctx *ctx, char *line) {
@@ -44,7 +45,7 @@ void dispatch(conn_ctx *ctx, char *line) {
 
     // Verb = the first whitespace-delimited token, copied out bounded (an overlong token matches
     // nothing → ERR, so it can't overflow or be mis-parsed).
-    char verb[16];
+    char verb[24];
     size_t v = 0;
     while (line[v] && line[v] != ' ' && line[v] != '\t') {
         if (v < sizeof verb - 1) verb[v] = line[v];

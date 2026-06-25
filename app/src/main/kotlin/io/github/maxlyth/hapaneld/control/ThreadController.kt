@@ -6,7 +6,10 @@ import io.github.maxlyth.hapaneld.util.HelperClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
 
 /**
  * Thread Mesh Router provisioning for panels that carry a Silicon Labs EFR32 radio coprocessor.
@@ -20,8 +23,13 @@ import java.io.File
  * + XMODEM, then removes the file on success. This is the vendor's own NCP firmware-update path
  * (triggered here by dropping an OpenThread NCP `.gbl` image at that path and starting zgateway).
  *
- * **Routing**: panels with `appCanSu = true` (NSPanel Pro) drive the flash via [Su] directly;
- * daemon-only panels use the helper's `THREAD_FLASH` verb via [HelperClient.sendLong].
+ * **Commission mechanism**: after flash, the helper's `THREAD_COMMISSION` verb is called with the
+ * Active Operational Dataset fetched from the HA OTBR REST API (`/node/dataset/active`). The helper
+ * writes the dataset to the NCP via Spinel/HDLC-Lite over `/dev/ttyS5` and starts the Thread stack.
+ * The radio then joins the Thread mesh as a router autonomously.
+ *
+ * **Routing**: panels with `appCanSu = true` (NSPanel Pro) drive the XMODEM flash via [Su] directly;
+ * all Spinel operations go through the helper daemon regardless of su availability.
  *
  * **Firmware**: the `.gbl` image must be placed at `assets/firmware/efr32mg21-thread-ncp.gbl`
  * in the APK. Obtain the correct image from Silicon Labs for the EFR32MG21 variant (read the
@@ -33,11 +41,12 @@ class ThreadController(private val profile: DeviceProfile = DeviceProfile.detect
     private val canSu: Boolean   get() = profile.appCanSu
     private val dir: String?     get() = profile.zigbeeGatewayDir
 
-    private val OTA_FILE     = "/data/vendor/siliconlabs_host/ota-files/device_ota.zigbee"
-    private val STATE_MARKER = "/data/vendor/siliconlabs_host/.thread-provisioned"
-    private val ASSET_PATH   = "firmware/efr32mg21-thread-ncp.gbl"
+    private val OTA_FILE      = "/data/vendor/siliconlabs_host/ota-files/device_ota.zigbee"
+    private val STATE_MARKER  = "/data/vendor/siliconlabs_host/.thread-provisioned"
+    private val JOINED_MARKER = "/data/vendor/siliconlabs_host/.thread-joined"
+    private val ASSET_PATH    = "firmware/efr32mg21-thread-ncp.gbl"
 
-    enum class EfrState { ZIGBEE_NCP, THREAD_NCP, NONE }
+    enum class EfrState { ZIGBEE_NCP, THREAD_NCP, THREAD_NCP_JOINED, NONE }
 
     /** True when this panel has an EFR32 radio (and therefore the Thread flash path is meaningful). */
     fun present(): Boolean = dir != null
@@ -47,11 +56,12 @@ class ThreadController(private val profile: DeviceProfile = DeviceProfile.detect
     fun firmwareAvailable(context: Context): Boolean =
         runCatching { context.assets.open(ASSET_PATH).use { true } }.getOrDefault(false)
 
-    /** One-line status for the info page: "Thread NCP · provisioned" / "EZSP · Zigbee NCP (factory)" / "none". */
+    /** One-line status for the info page. */
     fun statusText(): String = when (status()) {
-        EfrState.THREAD_NCP -> "Thread NCP · provisioned"
-        EfrState.ZIGBEE_NCP -> "EZSP · Zigbee NCP (factory)"
-        EfrState.NONE       -> "none"
+        EfrState.THREAD_NCP_JOINED -> "Thread NCP · mesh member"
+        EfrState.THREAD_NCP        -> "Thread NCP · not yet commissioned"
+        EfrState.ZIGBEE_NCP        -> "EZSP · Zigbee NCP (factory)"
+        EfrState.NONE              -> "none"
     }
 
     /** Current EFR32 state. On `appCanSu` panels this probes via root shell; on daemon panels via
@@ -62,38 +72,43 @@ class ThreadController(private val profile: DeviceProfile = DeviceProfile.detect
     }
 
     private fun statusViaSu(): EfrState {
-        val provisioned = Su.runOutput("test -f '$STATE_MARKER' && echo yes")?.trim() == "yes"
-        if (provisioned) return EfrState.THREAD_NCP
+        if (Su.runOutput("test -f '$JOINED_MARKER' && echo yes")?.trim() == "yes") return EfrState.THREAD_NCP_JOINED
+        if (Su.runOutput("test -f '$STATE_MARKER' && echo yes")?.trim() == "yes")  return EfrState.THREAD_NCP
         val gatewayPresent = Su.runOutput("test -f '$dir/zgateway' && echo yes")?.trim() == "yes"
         return if (gatewayPresent) EfrState.ZIGBEE_NCP else EfrState.NONE
     }
 
     private fun statusViaDaemon(): EfrState = when (HelperClient.send("THREAD_STATUS")?.trim()) {
+        "JOINED" -> EfrState.THREAD_NCP_JOINED
         "THREAD" -> EfrState.THREAD_NCP
         "EZSP"   -> EfrState.ZIGBEE_NCP
         else     -> EfrState.NONE
     }
 
     /**
-     * Flash the EFR32 with the bundled OpenThread NCP firmware, replacing the factory Zigbee NCP.
+     * Flash the EFR32 with the bundled OpenThread NCP firmware, then commission it onto the Thread
+     * network via the OTBR REST API at [otbrUrl]. Both steps are zero-config: the flash uses the
+     * vendor zgateway trigger mechanism and the commission fetches the Active Operational Dataset
+     * from HA's OTBR add-on automatically.
      *
-     * This takes 60–90 seconds (XMODEM at 115200 baud). [onProgress] receives human-readable status
-     * strings during the operation. Must be called from a coroutine (suspends during the XMODEM poll
-     * loop without blocking the calling thread).
+     * The XMODEM flash takes 60–90 seconds; Spinel commission takes ~10 s. [onProgress] receives
+     * human-readable status strings throughout. Must be called from a coroutine.
      *
-     * Returns [Result.success] when the EFR32 is running Thread NCP firmware; [Result.failure] with
-     * a descriptive message on any error. The panel's Zigbee stack is left stopped either way — the
-     * two roles are mutually exclusive on the same radio.
+     * Returns [Result.success] when the EFR32 is commissioned as a Thread mesh router; [Result.failure]
+     * with a descriptive message on any error. If [otbrUrl] is blank, commission is skipped (the radio
+     * ends up in [EfrState.THREAD_NCP] — flashed but not yet on the mesh).
      */
-    suspend fun flash(context: Context, onProgress: (String) -> Unit = {}): Result<Unit> =
+    suspend fun flash(context: Context, otbrUrl: String = "", onProgress: (String) -> Unit = {}): Result<Unit> =
         withContext(Dispatchers.IO) {
             if (dir == null) return@withContext Result.failure(Exception("no EFR32 on this panel"))
             val gbl = runCatching { extractFirmware(context) }.getOrElse {
                 return@withContext Result.failure(Exception("firmware asset not found: $ASSET_PATH"))
             }
             try {
-                if (canSu) flashViaSu(gbl, onProgress)
-                else flashViaDaemon(gbl, onProgress)
+                val flashResult = if (canSu) flashViaSu(gbl, onProgress) else flashViaDaemon(gbl, onProgress)
+                if (flashResult.isFailure) return@withContext flashResult
+                if (otbrUrl.isNotBlank()) commission(otbrUrl, onProgress)
+                else flashResult
             } finally {
                 gbl.delete()
             }
@@ -124,7 +139,7 @@ class ThreadController(private val profile: DeviceProfile = DeviceProfile.detect
             if (fileGone) {
                 Su.run("killall zgateway 2>/dev/null; killall mosquitto 2>/dev/null")
                 Su.run("touch '$STATE_MARKER'")
-                onProgress("Done — EFR32 is now running Thread NCP firmware.")
+                onProgress("Flash complete — EFR32 running Thread NCP firmware.")
                 return Result.success(Unit)
             }
             val elapsed = (90_000L - (deadline - System.currentTimeMillis())) / 1000
@@ -137,15 +152,48 @@ class ThreadController(private val profile: DeviceProfile = DeviceProfile.detect
     }
 
     private fun flashViaDaemon(gbl: File, onProgress: (String) -> Unit): Result<Unit> {
-        // Copy firmware to a path the helper can read (app's own cache dir is accessible to root)
         onProgress("Starting flash via helper daemon (60–90 s)…")
         val reply = HelperClient.sendLong("THREAD_FLASH ${gbl.absolutePath}", timeoutMs = 120_000)
         return when (reply) {
-            "OK"         -> { onProgress("Done."); Result.success(Unit) }
+            "OK"         -> { onProgress("Flash complete — EFR32 running Thread NCP firmware."); Result.success(Unit) }
             "ERR:path"   -> Result.failure(Exception("helper rejected firmware path"))
             "ERR:flash"  -> Result.failure(Exception("flash timed out on device"))
             null         -> Result.failure(Exception("helper daemon not reachable"))
             else         -> Result.failure(Exception("unexpected reply: $reply"))
         }
+    }
+
+    /** Fetch the Active Operational Dataset from the OTBR REST API and commission the NCP. */
+    private fun commission(otbrUrl: String, onProgress: (String) -> Unit): Result<Unit> {
+        onProgress("Fetching Thread network credentials from OTBR…")
+        val hex = runCatching { fetchDatasetHex(otbrUrl) }.getOrElse { e ->
+            return Result.failure(Exception("could not fetch OTBR dataset: ${e.message}"))
+        }
+
+        onProgress("Commissioning Thread radio (${hex.length / 2} B dataset)…")
+        val reply = HelperClient.sendLong("THREAD_COMMISSION $hex", timeoutMs = 30_000)
+        return when (reply) {
+            "OK"           -> { onProgress("Thread radio joined the mesh."); Result.success(Unit) }
+            "ERR:hex"      -> Result.failure(Exception("OTBR returned an invalid dataset"))
+            "ERR:spinel"   -> Result.failure(Exception("Spinel communication failed — is Thread firmware running?"))
+            null           -> Result.failure(Exception("helper daemon not reachable"))
+            else           -> Result.failure(Exception("unexpected reply: $reply"))
+        }
+    }
+
+    /** GET <otbrUrl>/node/dataset/active → JSON {"ActiveDataset": "<hex>"} → hex string. */
+    private fun fetchDatasetHex(otbrUrl: String): String {
+        val url = URL("${otbrUrl.trimEnd('/')}/node/dataset/active")
+        val conn = url.openConnection() as HttpURLConnection
+        conn.connectTimeout = 5_000
+        conn.readTimeout    = 5_000
+        val body = try {
+            conn.inputStream.bufferedReader().readText()
+        } finally {
+            conn.disconnect()
+        }
+        val hex = JSONObject(body).getString("ActiveDataset").trim()
+        if (hex.isBlank()) throw IllegalStateException("OTBR returned an empty dataset")
+        return hex
     }
 }

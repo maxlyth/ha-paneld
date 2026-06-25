@@ -158,6 +158,17 @@ class Config(context: Context) {
         prefs.edit().putBoolean("auto_return_dashboard", on).apply()
     }
 
+    /** OTBR REST API base URL for Thread commissioning (unauthenticated, port 8080 by convention).
+     *  Defaults to http://<broker-host>:8080, since the OTBR add-on typically runs on the same HA
+     *  server as the MQTT broker. Override if your OTBR lives elsewhere. */
+    val otbrUrl: String
+        get() = prefs.getString("otbr_url", null)?.takeIf { it.isNotBlank() } ?: derivedOtbrUrl()
+    fun setOtbrUrl(url: String) { prefs.edit().putString("otbr_url", url).apply() }
+    private fun derivedOtbrUrl(): String {
+        val host = mqttBroker.substringAfter("://").substringBefore(":").substringBefore("/").trim()
+        return if (host.isNotBlank()) "http://$host:8080" else ""
+    }
+
     // Desired Zigbee-router state, persisted so the gateway can be auto-started on boot when nothing
     // else launches it (the NSPanel Pro gateway is not init-started — verified 2026-06-08). Default off.
     val zigbeeRouterEnabled: Boolean get() = prefs.getBoolean("zigbee_router_enabled", false)

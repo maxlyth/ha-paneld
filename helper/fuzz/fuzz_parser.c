@@ -101,6 +101,11 @@ int main(int argc, char **argv) {
         "THREAD_FLASH /data/local/tmp/evil;reboot.gbl\n",
         "THREAD_FLASH /data/local/tmp/it'squoted.gbl\n",
         "THREAD_FLASH \n", "THREAD_FLASH\n",
+        "THREAD_COMMISSION 0e080000000000010000\n",
+        "THREAD_COMMISSION \n", "THREAD_COMMISSION\n",
+        "THREAD_COMMISSION abc\n",               /* odd length */
+        "THREAD_COMMISSION gg00ff\n",            /* non-hex chars */
+        "THREAD_COMMISSION 0e080000;reboot\n",   /* injection attempt in hex body */
         "RGB 1 2 3\r\nOFF\r\nBTN 9\r\n",
         "RGB 1 2 3\0OFF\n",                  // embedded NUL (fed with explicit length below)
         "no newline at all just bytes",
@@ -118,7 +123,8 @@ int main(int argc, char **argv) {
     const char *verbs[] = { "RGB ", "BTN ", "RELOAD ", "START ", "WATCH /dev/input/",
                             "DENSITY ", "FONTSCALE ", "GOV ", "SCREEN ",
                             "STOP ", "DISABLE ", "ENABLE ", "OVERLAY ",
-                            "THREAD_FLASH /data/local/tmp/", "" };
+                            "THREAD_FLASH /data/local/tmp/",
+                            "THREAD_COMMISSION ", "" };
     for (size_t li = 0; li < sizeof lens / sizeof lens[0]; li++)
         for (size_t vi = 0; vi < sizeof verbs / sizeof verbs[0]; vi++) {
             size_t L = lens[li], vp = strlen(verbs[vi]);
@@ -136,7 +142,8 @@ int main(int argc, char **argv) {
     uint8_t buf[3000];
     const char *kw[] = { "RGB", "OFF", "BTN", "SCREEN", "SCREENCAP", "RELOAD", "START", "WATCH",
                          "SUBSCRIBE", "REBOOT", "DENSITY", "FONTSCALE", "GOV", "PERFDUMP", "LEDPROBE", "PING",
-                         "STOP", "DISABLE", "ENABLE", "OVERLAY", "THREAD_FLASH", "THREAD_STATUS" };
+                         "STOP", "DISABLE", "ENABLE", "OVERLAY",
+                         "THREAD_FLASH", "THREAD_STATUS", "THREAD_COMMISSION" };
     for (long it = 0; it < iters; it++) {
         size_t n = rand() % sizeof buf;
         for (size_t k = 0; k < n; k++) {

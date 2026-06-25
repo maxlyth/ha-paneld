@@ -101,6 +101,20 @@ int valid_gov(const char *s) {
     return 1;
 }
 
+// Even-length hex string of at most 508 characters (= 254 raw dataset bytes, the Thread operational
+// dataset max). Only [0-9a-fA-F] are accepted — safe to pass as-is to cmd_thread_commission.
+int valid_hex_dataset(const char *s) {
+    if (!s || !*s) return 0;
+    size_t n = strlen(s);
+    if (n % 2 != 0 || n > 508) return 0;
+    for (size_t i = 0; i < n; i++) {
+        char c = s[i];
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')))
+            return 0;
+    }
+    return 1;
+}
+
 // Absolute path to a GBL firmware image: must start with '/', contain no ".." component, contain no
 // single-quote (the path is interpolated inside a single-quoted cp argument), and end with ".gbl".
 int valid_gbl_path(const char *s) {

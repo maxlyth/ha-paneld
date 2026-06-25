@@ -1,7 +1,9 @@
 #include "thread.h"
+#include "spinel.h"
 #include "sysexec.h"
 #include "util.h"
 
+#include <stdint.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -12,6 +14,10 @@
 #define EFR32_OTA_FILE  "/data/vendor/siliconlabs_host/ota-files/device_ota.zigbee"
 // Written after a successful THREAD_FLASH so THREAD_STATUS can answer without live UART probing.
 #define THREAD_STATE    "/data/vendor/siliconlabs_host/.thread-provisioned"
+// Written after a successful THREAD_COMMISSION — indicates the NCP is an active Thread mesh member.
+#define THREAD_JOINED   "/data/vendor/siliconlabs_host/.thread-joined"
+// UART device for the EFR32MG21 on NSPanel Pro (115200 baud, hardcoded in the vendor zgateway).
+#define EFR32_UART      "/dev/ttyS5"
 
 static int do_thread_flash(const char *src) {
     char cmd[512];
@@ -60,7 +66,37 @@ void cmd_thread_flash(conn_ctx *ctx, const char *args) {
 
 void cmd_thread_status(conn_ctx *ctx, const char *args) {
     (void)args;
-    if (access(THREAD_STATE, F_OK) == 0)              { reply(ctx->fd, "THREAD\n"); return; }
+    if (access(THREAD_JOINED, F_OK) == 0)              { reply(ctx->fd, "JOINED\n"); return; }
+    if (access(THREAD_STATE, F_OK) == 0)               { reply(ctx->fd, "THREAD\n"); return; }
     if (access(EFR32_GW_DIR "/zgateway", F_OK) != 0)  { reply(ctx->fd, "NONE\n");   return; }
     reply(ctx->fd, "EZSP\n");
+}
+
+/* Decode [len] bytes from the hex string [src] into [dst]. Caller ensures src is valid and dst fits. */
+static void hex_decode(const char *src, uint8_t *dst, size_t len) {
+    for (size_t i = 0; i < len; i++) {
+        char hi = src[2 * i], lo = src[2 * i + 1];
+        uint8_t h = (hi >= 'a') ? (uint8_t)(hi - 'a' + 10) : (hi >= 'A') ? (uint8_t)(hi - 'A' + 10) : (uint8_t)(hi - '0');
+        uint8_t l = (lo >= 'a') ? (uint8_t)(lo - 'a' + 10) : (lo >= 'A') ? (uint8_t)(lo - 'A' + 10) : (uint8_t)(lo - '0');
+        dst[i] = (uint8_t)((h << 4) | l);
+    }
+}
+
+void cmd_thread_commission(conn_ctx *ctx, const char *args) {
+    char hex[509] = "";
+    sscanf(args, "%508s", hex);
+    if (!valid_hex_dataset(hex)) { reply(ctx->fd, "ERR:hex\n"); return; }
+
+    size_t dlen = strlen(hex) / 2;
+    uint8_t dataset[254];
+    hex_decode(hex, dataset, dlen);
+
+    int fd = spinel_open(EFR32_UART);
+    if (fd < 0) { reply(ctx->fd, "ERR:spinel\n"); return; }
+
+    int r = spinel_commission(fd, dataset, dlen);
+    spinel_close(fd);
+
+    if (r == 0) sysexec_run("touch " THREAD_JOINED);
+    reply(ctx->fd, r == 0 ? "OK\n" : "ERR:spinel\n");
 }

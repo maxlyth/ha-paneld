@@ -29,5 +29,6 @@ int  valid_decimal(const char *s);    // decimal with at most one dot, >=1 digit
 int  valid_gov(const char *s);        // CPU governor name: [a-z0-9_]+
 int  is_critical_pkg(const char *s);  // never-stop/disable backstop (systemui/settings/us/…)
 int  valid_gbl_path(const char *s);   // absolute path, no '..', no "'", ends with ".gbl"
+int  valid_hex_dataset(const char *s); // even-length hex string, max 508 chars (254 dataset bytes)
 
 #endif

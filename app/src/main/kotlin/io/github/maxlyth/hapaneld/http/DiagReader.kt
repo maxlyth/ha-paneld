@@ -80,11 +80,12 @@ object DiagReader {
             Cap("Reboot / reload / launcher", if (rootish) "ok" else "none",
                 if (rootish) "available" else "needs su or the helper daemon"),
             if (threadState != null) Cap("Thread radio",
-                if (threadState == ThreadController.EfrState.THREAD_NCP) "ok" else "none",
+                if (threadState == ThreadController.EfrState.THREAD_NCP_JOINED) "ok" else "none",
                 when (threadState) {
-                    ThreadController.EfrState.THREAD_NCP -> "Thread NCP firmware — EFR32MG21 acting as mesh router"
-                    ThreadController.EfrState.ZIGBEE_NCP -> "EFR32MG21 present · factory Zigbee NCP; provision Thread via the config page"
-                    ThreadController.EfrState.NONE        -> "no EFR32 gateway binary found"
+                    ThreadController.EfrState.THREAD_NCP_JOINED -> "Thread NCP — EFR32MG21 is an active mesh router"
+                    ThreadController.EfrState.THREAD_NCP        -> "Thread NCP flashed · not yet commissioned onto a network"
+                    ThreadController.EfrState.ZIGBEE_NCP        -> "EFR32MG21 present · factory Zigbee NCP; provision Thread via the config page"
+                    ThreadController.EfrState.NONE              -> "no EFR32 gateway binary found"
                 }) else null,
         )
     }

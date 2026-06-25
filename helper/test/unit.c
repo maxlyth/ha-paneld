@@ -112,6 +112,17 @@ static void test_validators(void) {
     CHECK(!valid_gov("PERF;reboot"), "valid_gov rejects uppercase + ';'\n");
     CHECK(!valid_gov(""), "valid_gov rejects empty\n");
 
+    // valid_hex_dataset: even-length hex, max 508 chars (254 bytes), hex digits only.
+    CHECK(valid_hex_dataset("0e080000000000010000"), "valid_hex_dataset accepts even hex\n");
+    CHECK(valid_hex_dataset("aAbBcCdDeEfF0123456789"), "valid_hex_dataset accepts mixed case\n");
+    CHECK(!valid_hex_dataset(""), "valid_hex_dataset rejects empty\n");
+    CHECK(!valid_hex_dataset("abc"), "valid_hex_dataset rejects odd length\n");
+    CHECK(!valid_hex_dataset("gg"), "valid_hex_dataset rejects non-hex char\n");
+    CHECK(!valid_hex_dataset("0e 0f"), "valid_hex_dataset rejects whitespace\n");
+    // 510-char string (255 bytes) exceeds the 508-char limit
+    { char big[511]; memset(big, '0', 510); big[510] = '\0';
+      CHECK(!valid_hex_dataset(big), "valid_hex_dataset rejects >508 chars\n"); }
+
     // valid_gbl_path: absolute, no '..', no single-quote, ends in ".gbl".
     CHECK(valid_gbl_path("/data/local/tmp/efr32.gbl"), "valid_gbl_path accepts a normal path\n");
     CHECK(valid_gbl_path("/data/user/0/io.github.maxlyth.hapaneld/cache/efr32.gbl"), "valid_gbl_path accepts app cache path\n");
@@ -186,6 +197,17 @@ static void test_dispatch_exact_match(void) {
     CHECK(strcmp(out, "ERR:path\n") == 0, "THREAD_FLASH traversal -> ERR:path (got '%s')\n", out);
     dispatch_reply("THREAD_FLASH /data/local/tmp/efr32.bin", out, sizeof out);
     CHECK(strcmp(out, "ERR:path\n") == 0, "THREAD_FLASH wrong ext -> ERR:path (got '%s')\n", out);
+
+    // THREAD_COMMISSION: invalid hex rejected before UART open (ERR:hex).
+    dispatch_reply("THREAD_COMMISSION abc", out, sizeof out);   /* odd length */
+    CHECK(strcmp(out, "ERR:hex\n") == 0, "THREAD_COMMISSION odd hex -> ERR:hex (got '%s')\n", out);
+    dispatch_reply("THREAD_COMMISSION gg00", out, sizeof out);  /* non-hex chars */
+    CHECK(strcmp(out, "ERR:hex\n") == 0, "THREAD_COMMISSION non-hex -> ERR:hex (got '%s')\n", out);
+    dispatch_reply("THREAD_COMMISSION", out, sizeof out);       /* no arg */
+    CHECK(strcmp(out, "ERR:hex\n") == 0, "THREAD_COMMISSION no arg -> ERR:hex (got '%s')\n", out);
+    // Valid hex -> UART open fails on build host -> ERR:spinel (validator passed, hardware absent).
+    dispatch_reply("THREAD_COMMISSION 0e080000", out, sizeof out);
+    CHECK(strcmp(out, "ERR:spinel\n") == 0, "THREAD_COMMISSION valid hex -> ERR:spinel on host (got '%s')\n", out);
 
     // A handler with a failing target replies ERR (no LED/backlight node on the host).
     dispatch_reply("RGB 1 2 3", out, sizeof out);
