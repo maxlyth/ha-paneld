@@ -11,6 +11,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -46,9 +47,13 @@ jobs:
           if-no-files-found: error
 
   # The root helper (helper/src/) is C, never touched by the Gradle build. This job is the only place
-  # it's compiler-checked, unit-tested, and fuzzed — host-native (gcc), so it's fast and needs no NDK.
+  # it's compiler-checked and unit-tested — host-native (gcc), so it's fast and needs no NDK. The parser
+  # fuzzer (helper/fuzz/run.sh) is deliberately NOT run here: it's slow under sanitizers and is run
+  # LOCALLY on demand when the parser/dispatch/validators change (it also does real device I/O in the
+  # THREAD handlers, which can block on a CI host where the UART exists).
   helper:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -57,6 +62,3 @@ jobs:
 
       - name: Unit tests
         run: make -C helper test
-
-      - name: Parser fuzz (ASan+UBSan+LSan, bounded)
-        run: ./helper/fuzz/run.sh 200000
