@@ -655,9 +655,9 @@ the current one. Changing the panel id may leave the old device in HA to remove 
         // A non-removable package (core Android / dashboard / ourselves) is shown for context with a muted
         // "protected" label where the action button would be — no way to disable it.
         val control = if (!c.removable)
-            """<span style="width:84px;text-align:right;font-size:.8em;color:#777">protected</span>"""
+            """<span style="font-size:.8em;color:#777;white-space:nowrap">protected</span>"""
         else
-            """<form method="post" action="/tame" style="margin:0;width:84px;text-align:right"><input type="hidden" name="pkg" value="${esc(c.pkg)}"><input type="hidden" name="action" value="$action"><button type="submit" style="$btn">$label</button></form>"""
+            """<form method="post" action="/tame" style="margin:0"><input type="hidden" name="pkg" value="${esc(c.pkg)}"><input type="hidden" name="action" value="$action"><button type="submit" style="$btn;white-space:nowrap">$label</button></form>"""
         return """  <div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid #222">
    <span style="flex:1;min-width:0;overflow:hidden">${esc(c.label)}$tags<br><small style="color:#888">${esc(c.pkg)}</small>$note</span>
    <span style="width:80px;text-align:right;font-size:.85em">$state</span>
