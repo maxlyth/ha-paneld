@@ -646,17 +646,22 @@ the current one. Changing the panel id may leave the old device in HA to remove 
         val action = if (tamed) "untame" else "tame"
         val label = if (tamed) "Re-enable" else "Tame"
         val btn = if (tamed) "" else "background:#7a2e2e;border-color:#7a2e2e"
-        // Profile-authored context: tag chips (vendor/chipset/test/…) after the label, and the note below
-        // the package id, so a non-engineer knows what the app is and why it's flagged.
+        // Tags (authored or heuristic: core/vendor/user/overlay) after the label; note below the package id.
         val tags = c.tags.joinToString("") {
             """<span style="display:inline-block;background:#2a3340;color:#9cc;border-radius:4px;padding:0 6px;margin-left:5px;font-size:.7em;vertical-align:1px">${esc(it)}</span>"""
         }
         val note = if (c.note.isNotBlank())
             """<br><small style="color:#9aa">${esc(c.note)}</small>""" else ""
+        // A non-removable package (core Android / dashboard / ourselves) is shown for context with a muted
+        // "protected" label where the action button would be — no way to disable it.
+        val control = if (!c.removable)
+            """<span style="width:84px;text-align:right;font-size:.8em;color:#777">protected</span>"""
+        else
+            """<form method="post" action="/tame" style="margin:0;width:84px;text-align:right"><input type="hidden" name="pkg" value="${esc(c.pkg)}"><input type="hidden" name="action" value="$action"><button type="submit" style="$btn">$label</button></form>"""
         return """  <div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid #222">
    <span style="flex:1;min-width:0;overflow:hidden">${esc(c.label)}$tags<br><small style="color:#888">${esc(c.pkg)}</small>$note</span>
    <span style="width:80px;text-align:right;font-size:.85em">$state</span>
-   <form method="post" action="/tame" style="margin:0"><input type="hidden" name="pkg" value="${esc(c.pkg)}"><input type="hidden" name="action" value="$action"><button type="submit" style="$btn">$label</button></form>
+   $control
   </div>"""
     }
 

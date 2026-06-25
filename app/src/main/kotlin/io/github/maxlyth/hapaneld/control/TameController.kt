@@ -42,7 +42,23 @@ class TameController(private val context: Context) {
         val blocked: Boolean,
         val tags: List<String> = emptyList(),
         val note: String = "",
+        // false for packages that must not be disabled (core Android, the dashboard, ourselves) — shown for
+        // context (e.g. a heavy core process) but with no Tame button.
+        val removable: Boolean = true,
     )
+
+    // Heuristic tags for a DISCOVERED package (one with no profile-authored metadata), so a non-engineer
+    // can tell core Android apart from firmware/vendor apps and user installs at a glance.
+    private fun autoTags(pkg: String, ai: ApplicationInfo?): List<String> {
+        val t = mutableListOf<String>()
+        when {
+            isCoreAosp(pkg) -> t += "core"
+            ai != null && (ai.flags and ApplicationInfo.FLAG_SYSTEM) != 0 -> t += "vendor"   // firmware-baked
+            else -> t += "user"
+        }
+        if (hasOverlay(pkg)) t += "overlay"
+        return t
+    }
 
     /**
      * The Vendor-packages CARD list: the currently-tamed [blocked] packages, each annotated with its
@@ -107,14 +123,24 @@ class TameController(private val context: Context) {
         }
         val recommended = take(profileCandidates.map { it.pkg })
         val others = take(enumerate())
+        // "Using the most CPU" keeps the protected heavy hitters (the dashboard WebView, HA, core Android)
+        // visible — marked non-removable — so the user sees WHERE the CPU goes, not a misleading "nothing
+        // here". CPU order is preserved (most-active first); only a tameable vendor process gets a button.
         val resourcePkgs = resourceNames.map { it.substringBefore(':').trim() }.filter { it.contains('.') }
-        val heavy = take(resourcePkgs) { !isCoreAosp(it) }
+        val heavy = resourcePkgs.asSequence()
+            .filter { it.isNotEmpty() && it !in seen && it !in nav && it in apps }
+            .distinct().toList()
+            .map { pkg ->
+                val protectedPkg = isUntouchable(pkg) || isCoreAosp(pkg)
+                toCandidate(pkg, apps[pkg], exclude, meta[pkg]).copy(removable = !protectedPkg)
+            }
+        seen += heavy.map { it.pkg }
         // All three sections are returned (even when empty) so the picker always shows its structure —
         // the empty-state is informative ("no recommendations / nothing heavy right now").
         return listOf(
             Group("Recommended for this panel", "Known intrusive firmware apps for your hardware — safe first picks.", recommended),
             Group("Other apps", "Apps on this panel that aren't part of core Android.", others),
-            Group("Using the most CPU", "Processes currently using the most CPU — only tame one you recognise.", heavy),
+            Group("Using the most CPU", "Top CPU users right now. Core/system ones are shown for context but can't be disabled; only tame a vendor app you recognise.", heavy),
         )
     }
 
@@ -134,8 +160,10 @@ class TameController(private val context: Context) {
         val disabled = ai != null && runCatching { pm.getApplicationEnabledSetting(pkg) }.getOrNull()
             ?.let { it == PackageManager.COMPONENT_ENABLED_STATE_DISABLED ||
                     it == PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER } ?: false
+        // Profile-authored tags win; otherwise derive them from heuristics so discovered packages still
+        // carry "core / vendor / user / overlay" context.
         return Candidate(pkg, label, installed = ai != null, disabled = disabled, blocked = pkg in blocked,
-            tags = meta?.tags ?: emptyList(), note = meta?.note ?: "")
+            tags = meta?.tags ?: autoTags(pkg, ai), note = meta?.note ?: "")
     }
 
     // Discovery: a package is a candidate if it (a) has a launcher activity or holds the overlay

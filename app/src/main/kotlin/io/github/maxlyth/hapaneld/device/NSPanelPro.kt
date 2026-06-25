@@ -50,6 +50,14 @@ object NSPanelPro : DeviceProfile {
             "Rockchip (PX30 SoC) factory/test app left in the firmware image. Not used by the panel in normal operation."),
         TameCandidate("android.rk.RockVideoPlayer", listOf("chipset", "demo"),
             "Rockchip demo video player bundled with the SoC image. Safe to disable unless you actually use it."),
+        TameCandidate("com.cghs.stresstest", listOf("vendor", "test", "clutter"),
+            ""),
+        TameCandidate("com.smatek.test", listOf("chipset", "test", "clutter"),
+            ""),
+        TameCandidate("com.rockchip.devicetest", listOf("chipset", "test", "clutter"),
+            ""),
+        TameCandidate("com.DeviceTest", listOf("vendor", "test", "clutter"),
+            ""),
     )
     override val evdevButtons = emptyList<EvdevButton>()
     // PX30 offers no schedutil; its load-following governor is interactive.
