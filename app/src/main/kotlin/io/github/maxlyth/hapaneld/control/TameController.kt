@@ -61,6 +61,20 @@ class TameController(private val context: Context) {
             .toList()
     }
 
+    /**
+     * Enumerated "likely to want to control" packages for the picker pop-up — runs the heuristic on ANY
+     * panel (profiled or not), so a user who doesn't know package names can pick from a list instead of
+     * typing one. [exclude] drops packages already shown in the card (its curated/blocked rows), and the
+     * untouchables are never enumerated. Installed first, then by label.
+     */
+    fun suggestions(exclude: Set<String>): List<Candidate> =
+        enumerate().asSequence()
+            .filter { it !in exclude }
+            .distinct()
+            .map { toCandidate(it, exclude) }
+            .sortedWith(compareByDescending<Candidate> { it.installed }.thenBy { it.label.lowercase() })
+            .toList()
+
     private fun toCandidate(pkg: String, blocked: Set<String>): Candidate {
         val pm = context.packageManager
         val ai = runCatching { pm.getApplicationInfo(pkg, 0) }.getOrNull()
@@ -72,14 +86,22 @@ class TameController(private val context: Context) {
         return Candidate(pkg, label, installed = ai != null, disabled = disabled, blocked = pkg in blocked)
     }
 
-    // Generic-panel discovery: a package is a candidate if it has a launcher activity, holds the overlay
-    // permission, or isn't platform-signed — the union catches both visible vendor apps and the firmware
-    // bloat that's platform-signed but draws a widget. The current home launcher and IME are excluded so
-    // the UI can't suggest disabling the very things the user navigates with.
+    // Discovery: a package is a candidate if it (a) has a launcher activity or holds the overlay
+    // permission — an app "with a face" or one that can draw over the dashboard — AND (b) is not in the
+    // core-AOSP namespace. The namespace gate is the load-bearing filter: vendor bloat lives in vendor
+    // namespaces (com.eWeLink*, com.rockchip*, com.smatek*, org.fdroid, …), never com.android.* — whereas
+    // many core platform packages (telecom, the settings/telephony providers, …) DO hold the overlay
+    // permission, and taming one of those would brick the panel. So com.android.* / com.google.android.*
+    // are excluded outright; a headless vendor service won't appear either, but the free-text box covers
+    // both rare cases. The current home launcher and IME are excluded so the picker can't suggest
+    // disabling the very things the user navigates with.
     private fun enumerate(): List<String> {
         val pm = context.packageManager
         val launchers = runCatching {
-            pm.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0)
+            // MATCH_DISABLED_COMPONENTS so an already-disabled vendor app's launcher still resolves —
+            // otherwise the picker can't surface it for re-enabling (its activity is hidden by default).
+            pm.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER),
+                PackageManager.MATCH_DISABLED_COMPONENTS)
                 .map { it.activityInfo.packageName }.toSet()
         }.getOrDefault(emptySet())
         val home = runCatching {
@@ -92,19 +114,18 @@ class TameController(private val context: Context) {
         return runCatching { pm.getInstalledApplications(0) }.getOrDefault(emptyList())
             .map { it.packageName }
             .filter { pkg ->
-                !isUntouchable(pkg) && pkg !in skip &&
-                    (pkg in launchers || hasOverlay(pkg) || !isPlatformSigned(pkg))
+                !isUntouchable(pkg) && !isCoreAosp(pkg) && pkg !in skip &&
+                    (pkg in launchers || hasOverlay(pkg))
             }
     }
+
+    // Core AOSP / GMS namespaces — excluded from discovery (see [enumerate]). Vendor bloat is never here.
+    private fun isCoreAosp(pkg: String): Boolean =
+        pkg.startsWith("com.android.") || pkg.startsWith("com.google.android.")
 
     private fun hasOverlay(pkg: String): Boolean = runCatching {
         context.packageManager.checkPermission("android.permission.SYSTEM_ALERT_WINDOW", pkg) ==
             PackageManager.PERMISSION_GRANTED
-    }.getOrDefault(false)
-
-    @Suppress("DEPRECATION")
-    private fun isPlatformSigned(pkg: String): Boolean = runCatching {
-        context.packageManager.checkSignatures("android", pkg) == PackageManager.SIGNATURE_MATCH
     }.getOrDefault(false)
 
     private fun isUntouchable(pkg: String): Boolean =

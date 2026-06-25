@@ -23,7 +23,9 @@ Open the config page (`http://<panel-ip>:8888/`) and find the **Vendor packages*
 - On a **panel with a known profile** (e.g. the NSPanel Pro), the list is the curated set of intrusive packages known for that hardware — `com.eWeLinkControlPanel` is listed there.
 - On a **generic panel**, ha-paneld enumerates the apps on the device that look like vendor add-ons (anything with a launcher entry, an overlay permission, or a non-platform signature), so you can spot the culprit without knowing its package name.
 
-Press **Tame** on a row to neutralise that package — it acts immediately (no separate Save) and is re-applied on every boot. A tamed (or already-disabled) package shows **Re-enable** instead, which reverses it. The box at the bottom tames any package by name. Each row shows its state: `active`, `disabled`, or `not installed`.
+Press **Tame** on a row to neutralise that package — it acts immediately (no separate Save) and is re-applied on every boot. A tamed (or already-disabled) package shows **Re-enable** instead, which reverses it. Each row shows its state: `active`, `disabled`, or `not installed`.
+
+If you don't know a package's name, press **Find a package…** — a pop-up lists the apps on the panel that look like vendor add-ons, each with the same Tame/Re-enable button, so you can pick from a list rather than type an id. (Or type the id directly into the box if you know it.)
 
 The feature is **off by default**: nothing is tamed until you press a Tame button. The card only appears on panels with root or the helper daemon (taming needs a privileged path).
 

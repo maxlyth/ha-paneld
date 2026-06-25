@@ -347,6 +347,17 @@ class PaneldServer(
                         ContentType.Text.Html,
                     )
                 }
+                // The "Find a package…" picker pop-up content: an on-demand enumeration of likely
+                // controllable apps (so users who don't know package names can pick from a list). Lazy —
+                // only enumerated when the dialog is opened — and excludes packages already in the card.
+                get("/tame/suggest") {
+                    val shown = (tameProfileCandidates + config.tameVendorPackages).toSet()
+                    val sugg = runCatching { tame.suggestions(shown) }.getOrDefault(emptyList())
+                    val frag = if (sugg.isEmpty())
+                        """<p class="note">No other packages found.</p>"""
+                    else sugg.joinToString("\n") { tameRowHtml(it) }
+                    call.respondText(frag, ContentType.Text.Html)
+                }
                 post("/density") {
                     val p = call.receiveParameters()
                     val action = p["action"]                          // "reset" | "rec" (buttons)
@@ -615,42 +626,58 @@ the current one. Changing the panel id may leave the old device in HA to remove 
      * **Re-enable**. A free-text box tames any package by name. Hidden where no privileged path exists (taming
      * needs root or the helper daemon). Critical / HA / own packages are never listed.
      */
+    /** One Vendor-packages row: label + package id, a state badge, and the single action button. Shared by
+     *  the card and the picker pop-up so they stay visually identical. */
+    private fun tameRowHtml(c: TameController.Candidate): String {
+        val tamed = c.blocked || c.disabled
+        val state = when {
+            !c.installed -> """<span style="color:#888">not installed</span>"""
+            c.disabled -> """<span style="color:#d9a528">disabled</span>"""
+            else -> """<span style="color:#3fb950">active</span>"""
+        }
+        val action = if (tamed) "untame" else "tame"
+        val label = if (tamed) "Re-enable" else "Tame"
+        val btn = if (tamed) "" else "background:#7a2e2e;border-color:#7a2e2e"
+        return """  <div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid #222">
+   <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis">${esc(c.label)}<br><small style="color:#888">${esc(c.pkg)}</small></span>
+   <span style="width:80px;text-align:right;font-size:.85em">$state</span>
+   <form method="post" action="/tame" style="margin:0"><input type="hidden" name="pkg" value="${esc(c.pkg)}"><input type="hidden" name="action" value="$action"><button type="submit" style="$btn">$label</button></form>
+  </div>"""
+    }
+
     private fun tameCardHtml(): String {
         if (!Su.available() && !HelperClient.available()) return ""   // no root/daemon → taming can't act
         val cands = runCatching {
             tame.candidates(tameProfileCandidates, config.tameVendorPackages, tameEnumerate)
         }.getOrDefault(emptyList())
-        val rows = cands.joinToString("\n") { c ->
-            val tamed = c.blocked || c.disabled
-            val state = when {
-                !c.installed -> """<span style="color:#888">not installed</span>"""
-                c.disabled -> """<span style="color:#d9a528">disabled</span>"""
-                else -> """<span style="color:#3fb950">active</span>"""
-            }
-            val action = if (tamed) "untame" else "tame"
-            val label = if (tamed) "Re-enable" else "Tame"
-            val btn = if (tamed) "" else "background:#7a2e2e;border-color:#7a2e2e"
-            """  <div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid #222">
-   <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis">${esc(c.label)}<br><small style="color:#888">${esc(c.pkg)}</small></span>
-   <span style="width:80px;text-align:right;font-size:.85em">$state</span>
-   <form method="post" action="/tame" style="margin:0"><input type="hidden" name="pkg" value="${esc(c.pkg)}"><input type="hidden" name="action" value="$action"><button type="submit" style="$btn">$label</button></form>
-  </div>"""
-        }
+        val rows = cands.joinToString("\n") { tameRowHtml(it) }
         val hint = if (tameEnumerate)
-            "Apps on this panel that look like vendor add-ons (a launcher entry, an overlay permission, or a non-platform signature)."
+            "Apps on this panel that look like vendor add-ons (they have a launcher icon or can draw over the dashboard)."
         else
             "Known intrusive packages for this panel."
         val body = rows.ifBlank {
-            """<p class="note">No vendor packages flagged${if (tameEnumerate) "" else " for this panel"}. Add one below if you know its package name.</p>"""
+            """<p class="note">No vendor packages flagged${if (tameEnumerate) "" else " for this panel"}. Use <b>Find a package…</b> below, or add one by name.</p>"""
         }
         return """<div class="card"><h2>Vendor packages <small style="color:#d9a528">· experimental</small></h2>
 <p class="note">$hint <b>Tame</b> force-stops the app, stops it relaunching on boot, and blocks it drawing over the dashboard — applied immediately and on every boot. <b>Re-enable</b> undoes it. Critical system apps are never listed; nothing changes until you press a button.</p>
 $body
-<form method="post" action="/tame" style="display:flex;gap:8px;margin-top:12px">
- <input name="pkg" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="com.vendor.app — tame any package by name" style="flex:1">
- <input type="hidden" name="action" value="tame">
- <button type="submit">Tame</button>
-</form></div>"""
+<div style="display:flex;gap:8px;margin-top:12px">
+ <button type="button" onclick="pkgPick()">Find a package…</button>
+ <form method="post" action="/tame" style="display:flex;gap:8px;flex:1;margin:0">
+  <input name="pkg" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="…or tame a package by name" style="flex:1">
+  <input type="hidden" name="action" value="tame">
+  <button type="submit">Tame</button>
+ </form>
+</div>
+<dialog id="pkgdlg" style="background:#1a1a1a;color:#eee;border:1px solid #333;border-radius:12px;max-width:520px;width:92%;padding:16px">
+ <h3 style="margin:0 0 4px">Find a package to control</h3>
+ <p class="note" style="margin:0 0 8px">Apps on this panel you might want to tame — pick one to act on it. Not every entry is unwanted; only tame things you recognise.</p>
+ <div id="pkgdlgbody" style="max-height:55vh;overflow:auto">Loading…</div>
+ <form method="dialog" style="margin-top:12px;text-align:right"><button>Close</button></form>
+</dialog>
+<script>function pkgPick(){var d=document.getElementById('pkgdlg');d.showModal();
+document.getElementById('pkgdlgbody').innerHTML='Loading…';
+fetch('/tame/suggest').then(function(r){return r.text()}).then(function(t){document.getElementById('pkgdlgbody').innerHTML=t}).catch(function(){document.getElementById('pkgdlgbody').textContent='Could not list packages.'});}</script></div>"""
     }
 
     /** Display-sizing card (density + text scale). Empty when su isn't reachable (no control). */
