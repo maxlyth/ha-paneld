@@ -458,9 +458,10 @@ class PaneldServer(
         val netKeys = listOf("Local IP", "Local IPv6", "HTTP port", "MQTT", "mDNS", "Network ADB")
         // Rows whose values are DECLARED by the DeviceProfile, so wrong data points a contributor straight
         // at the fix: Platform=displayName/socClass, LED=ledMechanism, sensor tech=proximityTech/lightTech,
-        // Zigbee=zigbeeGatewayDir, Relays=relayBase, CPU profile=cpuGovernors. (panel_id / Friendly name are
-        // user config and Accessibility nav is runtime state — they fall through to Panel information.)
-        val profKeys = listOf("Platform", "LED", "Light sensor", "Proximity", "Zigbee", "Relays", "CPU profile")
+        // Zigbee+Thread=zigbeeGatewayDir/efr32UartPath, Relays=relayBase, CPU profile=cpuGovernors.
+        // (panel_id / Friendly name are user config and Accessibility nav is runtime state — they fall
+        // through to Panel information.)
+        val profKeys = listOf("Platform", "LED", "Light sensor", "Proximity", "Zigbee", "Thread", "Relays", "CPU profile")
         val grouped = (netKeys + profKeys).toSet()
         val infoKeys = facts.keys.filter { it !in grouped }
         fun factRows(keys: List<String>): String =

@@ -6,6 +6,7 @@ import android.provider.Settings
 import io.github.maxlyth.hapaneld.BuildConfig
 import io.github.maxlyth.hapaneld.control.Su
 import io.github.maxlyth.hapaneld.control.TameController
+import io.github.maxlyth.hapaneld.control.ThreadController
 import io.github.maxlyth.hapaneld.device.DeviceProfile
 import io.github.maxlyth.hapaneld.hardware.NativeLed
 import io.github.maxlyth.hapaneld.util.HelperClient
@@ -47,6 +48,8 @@ object DiagReader {
         // regardless of the LED mechanism. Surfaced below so a missing-but-needed daemon isn't a silent
         // dead end (controls present but empty); omitted on su panels where it isn't required.
         val usesDaemon = DeviceProfile.detect().usesDaemon
+        val profile = DeviceProfile.detect()
+        val threadState = if (profile.efr32UartPath != null) ThreadController(profile).status() else null
         return listOfNotNull(
             Cap("Root (su)", if (su) "ok" else "none",
                 if (su) "available" else
@@ -76,6 +79,13 @@ object DiagReader {
                     "enable (no root): adb shell settings put secure enabled_accessibility_services $pkg/.input.PanelAccessibilityService && adb shell settings put secure accessibility_enabled 1"),
             Cap("Reboot / reload / launcher", if (rootish) "ok" else "none",
                 if (rootish) "available" else "needs su or the helper daemon"),
+            if (threadState != null) Cap("Thread radio",
+                if (threadState == ThreadController.EfrState.THREAD_NCP) "ok" else "none",
+                when (threadState) {
+                    ThreadController.EfrState.THREAD_NCP -> "Thread NCP firmware — EFR32MG21 acting as mesh router"
+                    ThreadController.EfrState.ZIGBEE_NCP -> "EFR32MG21 present · factory Zigbee NCP; provision Thread via the config page"
+                    ThreadController.EfrState.NONE        -> "no EFR32 gateway binary found"
+                }) else null,
         )
     }
 

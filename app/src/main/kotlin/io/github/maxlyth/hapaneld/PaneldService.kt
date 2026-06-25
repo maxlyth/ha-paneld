@@ -26,6 +26,7 @@ import io.github.maxlyth.hapaneld.control.SystemController
 import io.github.maxlyth.hapaneld.control.TameController
 import io.github.maxlyth.hapaneld.control.TouchSoundController
 import io.github.maxlyth.hapaneld.control.VolumeController
+import io.github.maxlyth.hapaneld.control.ThreadController
 import io.github.maxlyth.hapaneld.control.ZigbeeController
 import io.github.maxlyth.hapaneld.hardware.LedController
 import io.github.maxlyth.hapaneld.hardware.LedFactory
@@ -77,6 +78,7 @@ class PaneldService : Service() {
     private lateinit var navbar: NavbarController
     private lateinit var touchSound: TouchSoundController
     private lateinit var zigbee: ZigbeeController
+    private lateinit var thread: ThreadController
     private lateinit var relay: RelayController
     private lateinit var cpu: CpuController
     private lateinit var adb: AdbController
@@ -121,6 +123,7 @@ class PaneldService : Service() {
         // booted with touch-sound already on would otherwise stay silent (volume left at 0).
         if (touchSound.isEnabled()) touchSound.set(true)
         zigbee = ZigbeeController(profile)
+        thread = ThreadController(profile)
         relay = RelayController(profile)
         cpu = CpuController(profile)
         adb = AdbController()
@@ -212,9 +215,10 @@ class PaneldService : Service() {
             "Accessibility nav" to yesNo(accessibilityEnabled()),
             // Soft navbar overlay mode + whether the overlay can actually be drawn (SYSTEM_ALERT_WINDOW).
             "Navbar" to (config.navbarMode + if (config.navbarMode != "Off" && !canDrawOverlays()) " · no overlay permission" else ""),
-            // Zigbee driver presence + state (NSPanel Pro only; "none" elsewhere). status() shells
-            // out via su — fine here because the info page is served off the main thread.
+            // Zigbee + Thread EFR32 state (NSPanel Pro only; "none" elsewhere). Both call su — fine
+            // here because the info page is served off the main thread.
             "Zigbee" to zigbee.status(),
+            "Thread" to thread.statusText(),
             "Relays" to relay.count().let { if (it > 0) it.toString() else "none" },
             "CPU profile" to (cpu.currentTier() ?: "n/a"),
             "Network ADB" to when {

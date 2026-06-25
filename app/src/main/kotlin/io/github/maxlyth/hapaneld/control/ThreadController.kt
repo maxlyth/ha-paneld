@@ -47,6 +47,13 @@ class ThreadController(private val profile: DeviceProfile = DeviceProfile.detect
     fun firmwareAvailable(context: Context): Boolean =
         runCatching { context.assets.open(ASSET_PATH).use { true } }.getOrDefault(false)
 
+    /** One-line status for the info page: "Thread NCP · provisioned" / "EZSP · Zigbee NCP (factory)" / "none". */
+    fun statusText(): String = when (status()) {
+        EfrState.THREAD_NCP -> "Thread NCP · provisioned"
+        EfrState.ZIGBEE_NCP -> "EZSP · Zigbee NCP (factory)"
+        EfrState.NONE       -> "none"
+    }
+
     /** Current EFR32 state. On `appCanSu` panels this probes via root shell; on daemon panels via
      *  the helper's `THREAD_STATUS` verb. Returns [EfrState.NONE] when no EFR32 is present. */
     fun status(): EfrState {
