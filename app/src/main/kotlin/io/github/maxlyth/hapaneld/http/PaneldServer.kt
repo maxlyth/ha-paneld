@@ -333,7 +333,10 @@ class PaneldServer(
                     val p = call.receiveParameters()
                     val pkg = p["pkg"]?.trim().orEmpty()
                     val untame = p["action"]?.trim() == "untame"
-                    if (pkg.isNotEmpty() && !TameController.isCritical(pkg)) {
+                    // Re-enable is always allowed; taming is refused for protected packages (the brick-guard
+                    // — critical AOSP names, vendor-renamed persistent system services, launchers, the IME)
+                    // so a hand-typed package name can't disable something the panel needs.
+                    if (pkg.isNotEmpty() && (untame || !tame.isProtected(pkg))) {
                         val next = config.tameVendorPackages.toMutableSet()
                         if (untame) next.remove(pkg) else next.add(pkg)
                         config.setTameVendorPackages(next.joinToString(" "))

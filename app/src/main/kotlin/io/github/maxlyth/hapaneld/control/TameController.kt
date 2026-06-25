@@ -115,7 +115,8 @@ class TameController(private val context: Context) {
             val picks = src.asSequence().map { it.trim() }
                 // installed-only: a non-engineer should only ever see apps actually on THIS firmware, so a
                 // profile recommendation absent from this build is silently dropped (no "not installed" rows).
-                .filter { it.isNotEmpty() && it !in seen && it !in nav && !isUntouchable(it) && it in apps && extra(it) }
+                .filter { it.isNotEmpty() && it !in seen && it !in nav && !isUntouchable(it) && it in apps &&
+                    (apps[it]?.let { ai -> (ai.flags and ApplicationInfo.FLAG_PERSISTENT) == 0 } ?: true) && extra(it) }
                 .distinct().toList()
             seen += picks
             return picks.map { toCandidate(it, apps[it], exclude, meta[it]) }
@@ -131,7 +132,8 @@ class TameController(private val context: Context) {
             .filter { it.isNotEmpty() && it !in seen && it !in nav && it in apps }
             .distinct().toList()
             .map { pkg ->
-                val protectedPkg = isUntouchable(pkg) || isCoreAosp(pkg)
+                val persistent = apps[pkg]?.let { (it.flags and ApplicationInfo.FLAG_PERSISTENT) != 0 } ?: false
+                val protectedPkg = isUntouchable(pkg) || isCoreAosp(pkg) || persistent
                 toCandidate(pkg, apps[pkg], exclude, meta[pkg]).copy(removable = !protectedPkg)
             }
         seen += heavy.map { it.pkg }
@@ -211,6 +213,29 @@ class TameController(private val context: Context) {
     private fun isUntouchable(pkg: String): Boolean =
         isCritical(pkg) || pkg == context.packageName || pkg in HA_PACKAGES
 
+    /**
+     * The brick-guard: packages that must NEVER be disabled. Beyond the hardcoded AOSP-name set
+     * ([isUntouchable]), this catches vendor-RENAMED criticals by ROLE so a user can't brick the panel by
+     * typing one into the free-text box: any FLAG_PERSISTENT system service (e.g. a vendor SystemUI such as
+     * `com.smartos.xinch.systemui` on the TPA10 — the name-based guard wouldn't catch it), every registered
+     * home launcher, and the current IME. Enforced in [actOn] (so every tame path is covered) and POST /tame.
+     */
+    fun isProtected(pkg: String): Boolean {
+        if (pkg.isBlank() || isUntouchable(pkg)) return true
+        val ai = installedApps()[pkg]
+        if (ai != null && (ai.flags and ApplicationInfo.FLAG_PERSISTENT) != 0) return true
+        val pm = context.packageManager
+        val isHome = runCatching {
+            pm.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME),
+                PackageManager.MATCH_DISABLED_COMPONENTS).any { it.activityInfo.packageName == pkg }
+        }.getOrDefault(false)
+        if (isHome) return true
+        val ime = runCatching {
+            Settings.Secure.getString(context.contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD)?.substringBefore('/')
+        }.getOrNull()
+        return pkg == ime
+    }
+
     /** force-stop + disable boot-relaunch + deny the overlay permission for [pkg]. */
     fun tame(pkg: String): Boolean {
         if (!actOn(pkg)) return false
@@ -239,8 +264,8 @@ class TameController(private val context: Context) {
 
     /** Guard: act only on an installed, non-critical package. Mirrors the daemon's own backstop. */
     private fun actOn(pkg: String): Boolean {
-        if (pkg.isBlank() || isCritical(pkg)) {
-            if (isCritical(pkg)) Log.w(TAG, "refusing to tame critical package $pkg")
+        if (isProtected(pkg)) {
+            Log.w(TAG, "refusing to tame protected package $pkg")
             return false
         }
         if (!isInstalled(pkg)) { Log.i(TAG, "skip $pkg: not installed"); return false }
