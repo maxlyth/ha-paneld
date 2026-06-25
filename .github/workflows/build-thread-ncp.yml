@@ -1,0 +1,180 @@
+name: Build Thread NCP firmware
+
+# Builds an OpenThread NCP .gbl for the EFR32MG21A020F768IM32 (NSPanel Pro / ZBDongle-E family).
+# Run manually: Actions → "Build Thread NCP firmware" → Run workflow.
+#
+# On first run, leave 'commit' false and check the artifact + "Discover" step logs
+# to confirm the SLCP path and verify the built GBL size looks right (~200-280 KB for NCP).
+# Then re-run with 'commit' true to land it in assets/.
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: 'Open PR to commit GBL into assets/ after build?'
+        required: false
+        default: 'false'
+        type: boolean
+      sdk_version:
+        description: 'Gecko SDK version tag in Docker image (e.g. 4.4.6)'
+        required: false
+        default: '4.4.6'
+        type: string
+
+env:
+  CHIP: EFR32MG21A020F768IM32
+  BAUD: '115200'
+  # UART flow control component config key.
+  # usartHwFlowControlNone = no RTS/CTS (matches our spinel.c which clears CRTSCTS).
+  FLOW: usartHwFlowControlNone
+  ASSET_PATH: app/src/main/assets/firmware/efr32mg21-thread-ncp.gbl
+
+jobs:
+  build:
+    name: Build OpenThread NCP GBL
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # The silabs-firmware-builder image bundles the full Gecko SDK, slc-cli,
+      # ARM GCC, and Simplicity Commander.  No licence required for public builds.
+      - name: Pull builder image
+        run: docker pull ghcr.io/darkxst/silabs-firmware-builder:${{ inputs.sdk_version }}
+
+      # Discovery: find all OpenThread SLCP files in the SDK so we know the right path.
+      # On the first run, check this output to confirm the NCP SLCP exists.
+      - name: Discover NCP SLCP path
+        id: discover
+        run: |
+          echo "=== All OpenThread sample SLCP files in SDK ==="
+          docker run --rm \
+            ghcr.io/darkxst/silabs-firmware-builder:${{ inputs.sdk_version }} \
+            bash -c "
+              find /gecko_sdk /simplicity_sdk \
+                   -path '*/openthread/sample-apps/*.slcp' \
+                   -o -path '*/ot-ncp/*.slcp' \
+                   2>/dev/null | sort
+            " | tee discover.txt
+
+          # Prefer an NCP UART project over a CLI one
+          NCP_SLCP=$(grep -Ei '(ot-ncp|ot_ncp).*uart' discover.txt | head -1)
+          if [ -z "$NCP_SLCP" ]; then
+            # Fallback: any ot-ncp project
+            NCP_SLCP=$(grep -Ei '(ot-ncp|ot_ncp)' discover.txt | head -1)
+          fi
+          echo "ncp_slcp=${NCP_SLCP}" >> "$GITHUB_OUTPUT"
+          echo "Selected NCP SLCP: ${NCP_SLCP}"
+
+      - name: Build GBL
+        run: |
+          mkdir -p build
+
+          NCP_SLCP="${{ steps.discover.outputs.ncp_slcp }}"
+          if [ -z "$NCP_SLCP" ]; then
+            echo "::error::No NCP SLCP found in SDK ${{ inputs.sdk_version }}. Check the discover step."
+            exit 1
+          fi
+
+          docker run --rm \
+            -v "$(pwd)/build:/build" \
+            ghcr.io/darkxst/silabs-firmware-builder:${{ inputs.sdk_version }} \
+            bash -c "
+              set -euo pipefail
+
+              echo '>>> Generating project from: ${NCP_SLCP}'
+
+              # --configuration sets SLC component config values at generation time.
+              # Keys are UART driver component config names used by Silicon Labs SDK;
+              # exact names vary by SDK version — adjust if slc warns 'unknown config key'.
+              slc generate \
+                --with='${{ env.CHIP }}' \
+                --project-file='${NCP_SLCP}' \
+                --export-destination=/build/ot-ncp \
+                --copy-proj-sources \
+                --new-project \
+                --force \
+                --configuration='SL_IOSTREAM_USART_VCOM_BAUDRATE:${{ env.BAUD }},SL_IOSTREAM_USART_VCOM_FLOW_CONTROL_TYPE:${{ env.FLOW }}'
+
+              echo '>>> Generated files:'
+              ls /build/ot-ncp/
+
+              cd /build/ot-ncp
+
+              # Build
+              MAKEFILE=\$(ls *.Makefile 2>/dev/null | head -1)
+              if [ -n \"\$MAKEFILE\" ]; then
+                make -f \"\$MAKEFILE\" release -j\$(nproc)
+              else
+                cmake -DCMAKE_BUILD_TYPE=Release . && cmake --build . -- -j\$(nproc)
+              fi
+
+              # Find ELF output
+              ELF=\$(find . -name '*.out' -o -name '*.elf' 2>/dev/null \
+                    | grep -i release | grep -v bootloader | head -1)
+              echo \">>> ELF: \$ELF\"
+              ls -lh \"\$ELF\"
+
+              # Package as GBL
+              commander gbl create /build/efr32mg21-thread-ncp.gbl \
+                --app \"\$ELF\" \
+                --device '${{ env.CHIP }}'
+
+              echo '>>> GBL built:'
+              ls -lh /build/efr32mg21-thread-ncp.gbl
+            "
+
+          # Sanity check: NCP firmware should be 150-320 KB (RCP is ~100 KB, Zigbee NCP is ~240 KB).
+          SIZE=$(stat -c%s build/efr32mg21-thread-ncp.gbl)
+          echo "GBL size: ${SIZE} bytes"
+          if [ "$SIZE" -lt 131072 ] || [ "$SIZE" -gt 393216 ]; then
+            echo "::warning::GBL size ${SIZE} is outside expected 128-384 KB range for NCP firmware."
+          fi
+
+      - name: Upload GBL artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: efr32mg21-thread-ncp-sdk${{ inputs.sdk_version }}
+          path: build/efr32mg21-thread-ncp.gbl
+          if-no-files-found: error
+
+      # Open a PR so the maintainer can review the binary before it lands in the repo.
+      - name: Open PR with firmware asset
+        if: ${{ inputs.commit == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BRANCH="feat/thread-ncp-firmware-sdk${{ inputs.sdk_version }}-$(date +%Y%m%d%H%M)"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+
+          mkdir -p "$(dirname "${{ env.ASSET_PATH }}")"
+          cp build/efr32mg21-thread-ncp.gbl "${{ env.ASSET_PATH }}"
+          git add "${{ env.ASSET_PATH }}"
+          git commit -m "feat(thread): add OpenThread NCP GBL for ${{ env.CHIP }}
+
+Built from Gecko SDK ${{ inputs.sdk_version }}, ${{ env.BAUD }} baud, no hardware flow control.
+Firmware asset for the Thread Mesh Router feature on NSPanel Pro panels."
+
+          git push origin "$BRANCH"
+          gh pr create \
+            --title "feat(thread): OpenThread NCP firmware for ${{ env.CHIP }}" \
+            --body "$(cat <<'EOF'
+## Thread NCP firmware asset
+
+Adds the OpenThread NCP GBL built by the \`build-thread-ncp\` workflow.
+
+**Target chip:** \`${{ env.CHIP }}\` (NSPanel Pro 86P/120P EFR32 — same as ZBDongle-E family)
+**SDK version:** ${{ inputs.sdk_version }}
+**Baud rate:** ${{ env.BAUD }}
+**Flow control:** none (matches \`spinel.c\`)
+
+**Verify before merging:**
+- [ ] GBL size 150–280 KB (expected for NCP; if ~105 KB it built as RCP instead)
+- [ ] Strings in GBL contain \`ot-ncp\` not \`ot-rcp\` — run \`strings efr32mg21-thread-ncp.gbl | grep -iE 'ncp|rcp'\`
+- [ ] Flash tested on a spare NSPanel Pro and Spinel commissioning verified
+EOF
+)" \
+            --head "$BRANCH" \
+            --base "${{ github.event.repository.default_branch }}"
