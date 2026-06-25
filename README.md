@@ -363,7 +363,7 @@ Android 11), Electron WF1589T (rk3576, Android 14).
 **New in 0.8.4:**
 
 - **Privileged helper hardened (security)** — the root helper that drives LED / true screen-off / buttons / density / CPU governor / screenshots for sandbox-walled panels **no longer listens on an unauthenticated loopback TCP port** (where any local app could `REBOOT` or `SCREENCAP` it). It's now an **abstract UNIX socket authenticated by peer UID** — only ha-paneld is accepted — with airtight bounded parsing, all root execution behind one audited seam, and a command-parser **fuzzing + unit-test suite now gating it in CI**.
-- **Sandbox-walled panels get the full control surface** — display density, CPU governor, on-demand screenshot, and the Performance / Top-processes cards now work on no-`su` panels (e.g. Tuya TPA10) via the helper, and the ZHICAI SMT1019's `/dev/ledjni` RGB LED now works too — all previously blank/unavailable there.
+- **Sandbox-walled panels get the full control surface** — display density + font scale, CPU governor, on-demand screenshot, and the Performance / Top-processes cards now work on no-`su` panels (e.g. Tuya TPA10) via the helper, and the ZHICAI SMT1019's `/dev/ledjni` RGB LED now works too — all previously blank/unavailable there. The helper is now installed on *every* sandbox panel (not just LED ones), with `/diag` flagging it if it's needed but missing.
 - **Helper renamed + restructured** — `hapaneld-ledd` → **`hapaneld-helper`** (it does far more than LEDs now); panels running it are upgraded automatically on redeploy.
 
 <details>

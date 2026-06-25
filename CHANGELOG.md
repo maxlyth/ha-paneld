@@ -16,7 +16,8 @@ content appear. Earlier releases predate this convention and keep their flat lis
 
 ### Added
 
-- **Full control surface on sandbox-walled (no-root-shell) panels** — panels that can't `su` (e.g. the Tuya TPA10) now get, routed through the privileged helper, the controls that were previously root-shell-only and so came up blank or absent there: **display density**, **CPU governor**, **on-demand screenshot** (info page + `/screenshot.png` / HA camera image), and the **Performance / Top-processes / Responsiveness** cards.
+- **Full control surface on sandbox-walled (no-root-shell) panels** — panels that can't `su` (e.g. the Tuya TPA10) now get, routed through the privileged helper, the controls that were previously root-shell-only and so came up blank or absent there: **display density** and **font scale**, **CPU governor**, **on-demand screenshot** (info page + `/screenshot.png` / HA camera image), and the **Performance / Top-processes / Responsiveness** cards.
+- **The helper is now the control path for *every* sandbox-walled panel, not just LED ones** — a panel's profile declares whether it needs the daemon (`usesDaemon`, derived from `appCanSu=false`), so it's installed on any no-`su` panel rather than only LED panels. `/diag` gains a **Helper daemon** capability that flags *needed-but-missing*, so a sandbox panel without the daemon installed surfaces clearly instead of silently dropping those controls.
 - **ZHICAI SMT1019 RGB LED** — its LED is driven through a `/dev/ledjni` ioctl that Android denies to sandboxed apps; the helper now drives it as root, so the LED works (it was reported unavailable in 0.8.3).
 
 ### Changed
