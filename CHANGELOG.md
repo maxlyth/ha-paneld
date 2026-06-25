@@ -8,6 +8,17 @@ From **v0.8.0**, entries are grouped under **Added** (new features/entities), **
 changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
 content appear. Earlier releases predate this convention and keep their flat lists.
 
+## v0.8.4-rc2 - 2026-06-25
+
+### Added
+
+- **Opt-in vendor-package taming** — a new Configure card surfaces an interactive per-package tick list of vendor apps that can be **force-stopped, boot-disabled, and stripped of the floating-overlay permission** so they can't draw above the dashboard. Profiled panels (NSPanel Pro) show the profile's curated candidates (e.g. `com.eWeLinkControlPanel`, unticked by default); generic panels enumerate live by overlay/launcher heuristic. Ticking and un-ticking applies immediately on Save (no reboot). Reversible: unticking re-enables. Critical system packages (`android`, `com.android.systemui`, etc.) are refused at both the app and daemon layer regardless of input. Default is empty — nothing is ever touched until the user opts in. Motivated by the Sonoff/CoolKit control-panel app drawing a floating widget over the dashboard after a firmware update.
+- **Thread Mesh Router provisioning** (hardware-ready, firmware asset not yet bundled) — panels carrying an EFR32MG21 802.15.4 radio (NSPanel Pro family) gain a `Thread` row in the info page showing the radio's current firmware state (Zigbee NCP factory / Thread NCP not yet commissioned / active mesh router). A config-page action will flash OpenThread NCP firmware via the confirmed zgateway XMODEM OTA path, then automatically commission the chip onto the Thread network by fetching the Active Operational Dataset from the OTBR REST API (`GET <otbr_url>/node/dataset/active`) and writing it via Spinel/HDLC-Lite — no QR code, no joiner protocol needed. `Config.otbrUrl` defaults to the MQTT broker host on port 8080. The helper gained three new verbs: `THREAD_FLASH`, `THREAD_STATUS`, and `THREAD_COMMISSION` (full Spinel reset + `PROP_THREAD_ACTIVE_DATASET` + bring-up sequence implemented in `helper/src/spinel.c`). Unit and fuzz coverage updated. Flash requires the `.gbl` firmware asset (`assets/firmware/efr32mg21-thread-ncp.gbl`) which is not yet bundled — the radio-state display and commissioning pipeline are ready; the asset and config-page UI arrive in a later rc.
+
+### Fixed
+
+- **Font scale on sandbox-walled panels** — display-sizing font-scale changes now route through the helper daemon when `su` is unavailable (TPA10), matching the existing density path. The stale "root only" note in the display-sizing card and `docs/display-sizing.md` is corrected.
+
 ## v0.8.4 - 2026-06-24
 
 ### Security
