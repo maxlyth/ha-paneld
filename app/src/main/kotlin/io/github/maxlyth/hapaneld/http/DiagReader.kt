@@ -5,6 +5,7 @@ import android.os.Build
 import android.provider.Settings
 import io.github.maxlyth.hapaneld.BuildConfig
 import io.github.maxlyth.hapaneld.control.Su
+import io.github.maxlyth.hapaneld.control.TameController
 import io.github.maxlyth.hapaneld.device.DeviceProfile
 import io.github.maxlyth.hapaneld.hardware.NativeLed
 import io.github.maxlyth.hapaneld.util.HelperClient
@@ -100,6 +101,15 @@ object DiagReader {
         appendLine("[labels] ${exec("ls -Zd /sys/class/leds/*/ /sys/class/backlight/*/ /dev/ledjni 2>&1").replace("\n", " ")}")
         appendLine("[packages] " + listOf("io.homeassistant.companion.android", "io.homeassistant.companion.android.minimal")
             .joinToString(" ") { "${it.substringAfterLast('.')}=${pkgVer(ctx, it)}" })
+        // Vendor packages this panel's profile knows about, with live state — so a maintainer can see the
+        // tame candidates and what's present/disabled on this firmware. Only when the profile defines them.
+        val tameCandidates = DeviceProfile.detect().tameVendorCandidates
+        if (tameCandidates.isNotEmpty()) {
+            appendLine("[vendor-tame] " + TameController(ctx).profileReport(tameCandidates).joinToString(" | ") { c ->
+                val state = if (!c.installed) "absent" else if (c.disabled) "disabled" else "active"
+                c.pkg + "=" + state + if (c.tags.isNotEmpty()) "(${c.tags.joinToString(",")})" else ""
+            })
+        }
         appendLine("[capabilities] " + capabilities(ctx).joinToString(" | ") { "${it.name}=${it.status}" })
     }
 

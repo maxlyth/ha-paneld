@@ -62,6 +62,13 @@ class TameController(private val context: Context) {
             .toList()
     }
 
+    /** Every profile candidate with its current state (installed/disabled/tags), for the /diag report —
+     *  includes not-installed entries (a maintainer wants to see the full known set vs what's present). */
+    fun profileReport(profileCandidates: List<TameCandidate>): List<Candidate> {
+        val apps = installedApps()
+        return profileCandidates.map { toCandidate(it.pkg, apps[it.pkg], emptySet(), it) }
+    }
+
     /** A labelled section of the picker pop-up. */
     data class Group(val title: String, val hint: String, val items: List<Candidate>)
 
