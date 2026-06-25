@@ -41,6 +41,13 @@ interface DeviceProfile {
      *  it, else those controls silently stay empty. Daemon-need is its own concept, NOT the LED mechanism. */
     val usesDaemon: Boolean get() = !appCanSu
 
+    /** Known intrusive vendor packages for THIS panel — shown as ready-to-tick suggestions in the config
+     *  page's "Tame vendor packages" list (e.g. `com.eWeLinkControlPanel` on the NSPanel Pro after a Sonoff
+     *  firmware update). These are *suggestions only*, never auto-acted: the panel is modified solely by
+     *  what the user actually ticks. Profiled panels show this curated list (plus a free-text add); the
+     *  [Generic] profile leaves it empty and the UI enumerates candidates live instead. Default empty. */
+    val tameVendorCandidates: List<String> get() = emptyList()
+
     /** Whether the firmware provides a working Recents/Overview screen. Single-purpose panel images often
      *  ship none (verified 2026-06-10: KEYCODE_APP_SWITCH is a no-op on the Tuya TPA10), so the navbar's
      *  Recents button is omitted where false rather than presenting a dead control. Default true. */

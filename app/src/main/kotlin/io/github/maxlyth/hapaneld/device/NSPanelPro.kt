@@ -39,6 +39,10 @@ object NSPanelPro : DeviceProfile {
 
     override val manufacturer = "Sonoff"
     override val model = "NSPanel Pro"
+    // The eWeLink/Sonoff control-panel app ships in the firmware and, after some Sonoff updates, launches
+    // on boot and draws a floating widget over the dashboard. Offered as a tick-to-tame suggestion (never
+    // auto-disabled — only the user's selection acts). Reversible via the same UI / `pm enable`.
+    override val tameVendorCandidates = listOf("com.eWeLinkControlPanel")
     override val evdevButtons = emptyList<EvdevButton>()
     // PX30 offers no schedutil; its load-following governor is interactive.
     override val cpuGovernors = mapOf("Performance" to "performance", "Efficiency" to "powersave", "Auto" to "interactive")

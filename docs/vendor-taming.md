@@ -16,9 +16,16 @@ All three are privileged, so the feature needs **root or the [helper daemon](../
 
 ## Using it
 
-Open the on-panel config page (`http://<panel-ip>:8888/`), find **Tame vendor packages** in the Configure card, and list the package names you want gone — one per line, or space/comma-separated. Save, and they're tamed on the next service start (and every boot after).
+This is configured **on the panel itself**, in the HTTP config page — not from Home Assistant. It's a deploy-time / post-firmware-update action, not something you toggle day to day, so it doesn't belong on a dashboard.
 
-The feature is **off by default**: the blocklist ships empty, and ha-paneld touches nothing until you deliberately add a package. To find a package name, the panel's own app list or `pm list packages` over adb will show it; the eWeLink control panel is `com.eWeLinkControlPanel`.
+Open the config page (`http://<panel-ip>:8888/`) and find **Tame vendor packages** in the Configure card. You get a tick list of candidate packages:
+
+- On a **panel with a known profile** (e.g. the NSPanel Pro), the list is the curated set of intrusive packages known for that hardware — `com.eWeLinkControlPanel` is pre-listed there, unticked.
+- On a **generic panel**, ha-paneld enumerates the apps on the device that look like vendor add-ons (anything with a launcher entry, an overlay permission, or a non-platform signature), so you can spot the culprit without knowing its package name.
+
+Tick whatever you want gone, optionally type any other package name into **Add a package**, and Save. Ticked packages are tamed immediately and on every boot; **untick one to re-enable it**. Each row shows its current state (`disabled` if it's already off, `not installed` if absent).
+
+The feature is **off by default**: nothing is ticked, and ha-paneld touches nothing until you deliberately tick or add a package.
 
 ## Safety
 

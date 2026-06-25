@@ -8,6 +8,7 @@ import io.github.maxlyth.hapaneld.control.CdpRelay
 import io.github.maxlyth.hapaneld.control.DensityController
 import io.github.maxlyth.hapaneld.control.Su
 import io.github.maxlyth.hapaneld.control.SystemController
+import io.github.maxlyth.hapaneld.control.TameController
 import io.github.maxlyth.hapaneld.control.VolumeController
 import io.github.maxlyth.hapaneld.input.PanelAccessibilityService
 import io.github.maxlyth.hapaneld.sensors.SensorReporter
@@ -59,6 +60,11 @@ class PaneldServer(
     // Per-panel "HA-optimised" density + text-scale suggestions (DeviceProfile), or null.
     private val recommendedDensity: Int? = null,
     private val recommendedFontScale: Float? = null,
+    // Vendor-taming: the controller (applies on Save), the profile's curated candidate suggestions, and
+    // whether to enumerate live (Generic panel) vs show the curated list (a profiled panel).
+    private val tame: TameController,
+    private val tameProfileCandidates: List<String> = emptyList(),
+    private val tameEnumerate: Boolean = false,
 ) {
     // Per-INSTALL build token (changes on every (re)install, not just a version bump) so an open info
     // page can auto-reload after the app is updated — even a same-version dev re-spin. /health carries it.
@@ -280,7 +286,31 @@ class PaneldServer(
                     p["friendly_name"]?.let { config.setFriendlyName(it.trim()) }
                     p["dashboard_package"]?.let { config.setDashboardPackage(it.trim()) }
                     p["launcher_package"]?.let { config.setLauncherPackage(it.trim()) }
-                    p["tame_vendor_packages"]?.let { config.setTameVendorPackages(it) }
+                    // Vendor taming. The browser form sends `tame_form=1` plus the ticked `tame_pkg`
+                    // checkboxes and the free-text `tame_add`; fleet/JSON tools can still send a raw
+                    // `tame_vendor_packages` list. Either way, build the new blocklist, persist it, and
+                    // apply the delta now (tame newly-added, re-enable newly-removed) off the request
+                    // thread — so Save actually changes the panel, not just the next boot.
+                    run {
+                        val old = config.tameVendorPackages.toSet()
+                        val next: Set<String>? = when {
+                            p["tame_form"] != null -> (p.getAll("tame_pkg").orEmpty() +
+                                (p["tame_add"] ?: "").split(Regex("[\\s,]+")))
+                                .map { it.trim() }.filter { it.isNotEmpty() && !TameController.isCritical(it) }.toSet()
+                            p["tame_vendor_packages"] != null -> p["tame_vendor_packages"]!!
+                                .split(Regex("[\\s,]+")).map { it.trim() }
+                                .filter { it.isNotEmpty() && !TameController.isCritical(it) }.toSet()
+                            else -> null
+                        }
+                        if (next != null && next != old) {
+                            config.setTameVendorPackages(next.joinToString(" "))
+                            val add = next - old; val remove = old - next
+                            scope.launch {
+                                add.forEach { tame.tame(it) }
+                                remove.forEach { tame.untame(it) }
+                            }
+                        }
+                    }
                     val mfr = p["manufacturer"]?.trim()
                     val mdl = p["model"]?.trim()
                     if (mfr != null || mdl != null) config.setHardware(
@@ -543,8 +573,7 @@ ${displayCardHtml()}
   <input name="dashboard_package" autocapitalize="none" autocorrect="off" spellcheck="false" value="${esc(config.dashboardPackage)}" placeholder="io.homeassistant.companion.android"></label>
  <label>Launcher package <small>(blank = auto-detect)</small>
   <input name="launcher_package" autocapitalize="none" autocorrect="off" spellcheck="false" value="${esc(config.launcherPackage)}" placeholder="auto"></label>
- <label>Tame vendor packages <small>(opt-in; blank = off — force-stops, disables boot-relaunch &amp; blocks overlays; needs root or the helper daemon)</small>
-  <textarea name="tame_vendor_packages" autocapitalize="none" autocorrect="off" spellcheck="false" rows="2" placeholder="e.g. com.eWeLinkControlPanel (one per line or space/comma-separated)">${esc(config.tameVendorPackagesRaw)}</textarea></label>
+${tameSectionHtml()}
  <button type="submit">Save</button>
 </form>
 <p class="note">Leave the broker blank to auto-discover Home Assistant on the LAN (via mDNS) and use its
@@ -562,6 +591,46 @@ the current one. Changing the panel id may leave the old device in HA to remove 
 
     private fun esc(s: String): String = s
         .replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
+
+    /**
+     * The "Tame vendor packages" section of the Configure form: a tick list of candidate packages (the
+     * panel profile's known-bad suggestions, or a live enumeration on a Generic panel) each showing its
+     * current state, plus a free-text field to add any package by name. Ticked = on the blocklist; on Save
+     * the [post /config] handler tames newly-ticked packages and re-enables newly-unticked ones. The hidden
+     * `tame_form` marker tells that handler this section was submitted (so clearing every tick is honoured,
+     * not read as "field absent → leave unchanged"). Critical/HA/own packages are never listed.
+     */
+    private fun tameSectionHtml(): String {
+        val cands = runCatching {
+            tame.candidates(tameProfileCandidates, config.tameVendorPackages, tameEnumerate)
+        }.getOrDefault(emptyList())
+        val rows = cands.joinToString("\n") { c ->
+            val badge = when {
+                !c.installed -> " <small style=\"color:#888\">· not installed</small>"
+                c.disabled -> " <small style=\"color:#d9a528\">· disabled</small>"
+                else -> ""
+            }
+            val checked = if (c.blocked) " checked" else ""
+            """  <label style="display:flex;gap:8px;align-items:center;font-weight:normal;margin:0">""" +
+                """<input type="checkbox" name="tame_pkg" value="${esc(c.pkg)}"$checked>""" +
+                """<span>${esc(c.label)} <small style="color:#888">${esc(c.pkg)}</small>$badge</span></label>"""
+        }
+        val list = if (rows.isEmpty())
+            """  <p class="note" style="margin:4px 0">No suggestions — add a package below.</p>"""
+        else
+            """  <div style="display:flex;flex-direction:column;gap:6px;max-height:220px;overflow:auto;""" +
+                """border:1px solid #333;border-radius:8px;padding:8px">$rows</div>"""
+        val hint = if (tameEnumerate)
+            "Apps detected on this panel (a launcher entry, an overlay permission, or vendor-signed)."
+        else
+            "Known intrusive packages for this panel. Add any others below."
+        return """ <label>Tame vendor packages <small>(opt-in; needs root or the helper daemon)</small></label>
+ <input type="hidden" name="tame_form" value="1">
+$list
+ <label>Add a package <small>(by name; space/comma-separated for several)</small>
+  <input name="tame_add" autocapitalize="none" autocorrect="off" spellcheck="false" value="" placeholder="com.eWeLinkControlPanel"></label>
+ <p class="note" style="margin:2px 0">$hint Ticked packages are force-stopped, blocked from relaunching on boot, and denied screen overlays — applied on Save and every boot. Untick to re-enable. Critical system packages are never offered, and nothing is touched until you tick it.</p>"""
+    }
 
     /** Display-sizing card (density + text scale). Empty when su isn't reachable (no control). */
     private fun displayCardHtml(): String {

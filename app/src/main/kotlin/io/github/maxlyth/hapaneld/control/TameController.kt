@@ -1,6 +1,9 @@
 package io.github.maxlyth.hapaneld.control
 
 import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.provider.Settings
 import android.util.Log
 import io.github.maxlyth.hapaneld.util.HelperClient
 
@@ -26,6 +29,86 @@ class TameController(private val context: Context) {
     /** Tame every blocklisted package that's installed and safe. Returns the packages actually tamed. */
     fun applyBlocklist(packages: List<String>): List<String> =
         packages.filter { tame(it) }
+
+    /** One row in the config page's tame list: a package, its label + current state, and whether it's
+     *  currently on the blocklist (ticked). */
+    data class Candidate(
+        val pkg: String,
+        val label: String,
+        val installed: Boolean,
+        val disabled: Boolean,
+        val blocked: Boolean,
+    )
+
+    /**
+     * The tame candidate list for the config UI. [enumerate]=false (a profiled panel) shows the panel's
+     * curated [profileCandidates]; [enumerate]=true (the Generic profile) discovers candidates live with a
+     * has-launcher / holds-overlay / non-platform-signed heuristic. Currently-[blocked] packages are always
+     * included (so an arbitrary one the user added still shows, with its tick), and untouchables (critical
+     * system packages, HA, ourselves) are never offered. Installed packages sort first, then by label.
+     */
+    fun candidates(profileCandidates: List<String>, blocked: List<String>, enumerate: Boolean): List<Candidate> {
+        val blockedSet = blocked.toSet()
+        val pkgs = LinkedHashSet<String>()
+        pkgs += if (enumerate) enumerate() else profileCandidates
+        pkgs += blocked
+        return pkgs.asSequence()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() && !isUntouchable(it) }
+            .distinct()
+            .map { toCandidate(it, blockedSet) }
+            .sortedWith(compareByDescending<Candidate> { it.installed }.thenBy { it.label.lowercase() })
+            .toList()
+    }
+
+    private fun toCandidate(pkg: String, blocked: Set<String>): Candidate {
+        val pm = context.packageManager
+        val ai = runCatching { pm.getApplicationInfo(pkg, 0) }.getOrNull()
+        val label = ai?.let { runCatching { pm.getApplicationLabel(it).toString() }.getOrNull() }
+            ?.takeIf { it != pkg } ?: pkg
+        val disabled = ai != null && runCatching { pm.getApplicationEnabledSetting(pkg) }.getOrNull()
+            ?.let { it == PackageManager.COMPONENT_ENABLED_STATE_DISABLED ||
+                    it == PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER } ?: false
+        return Candidate(pkg, label, installed = ai != null, disabled = disabled, blocked = pkg in blocked)
+    }
+
+    // Generic-panel discovery: a package is a candidate if it has a launcher activity, holds the overlay
+    // permission, or isn't platform-signed — the union catches both visible vendor apps and the firmware
+    // bloat that's platform-signed but draws a widget. The current home launcher and IME are excluded so
+    // the UI can't suggest disabling the very things the user navigates with.
+    private fun enumerate(): List<String> {
+        val pm = context.packageManager
+        val launchers = runCatching {
+            pm.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0)
+                .map { it.activityInfo.packageName }.toSet()
+        }.getOrDefault(emptySet())
+        val home = runCatching {
+            pm.resolveActivity(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME), 0)?.activityInfo?.packageName
+        }.getOrNull()
+        val ime = runCatching {
+            Settings.Secure.getString(context.contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD)?.substringBefore('/')
+        }.getOrNull()
+        val skip = setOfNotNull(home, ime)
+        return runCatching { pm.getInstalledApplications(0) }.getOrDefault(emptyList())
+            .map { it.packageName }
+            .filter { pkg ->
+                !isUntouchable(pkg) && pkg !in skip &&
+                    (pkg in launchers || hasOverlay(pkg) || !isPlatformSigned(pkg))
+            }
+    }
+
+    private fun hasOverlay(pkg: String): Boolean = runCatching {
+        context.packageManager.checkPermission("android.permission.SYSTEM_ALERT_WINDOW", pkg) ==
+            PackageManager.PERMISSION_GRANTED
+    }.getOrDefault(false)
+
+    @Suppress("DEPRECATION")
+    private fun isPlatformSigned(pkg: String): Boolean = runCatching {
+        context.packageManager.checkSignatures("android", pkg) == PackageManager.SIGNATURE_MATCH
+    }.getOrDefault(false)
+
+    private fun isUntouchable(pkg: String): Boolean =
+        isCritical(pkg) || pkg == context.packageName || pkg in HA_PACKAGES
 
     /** force-stop + disable boot-relaunch + deny the overlay permission for [pkg]. */
     fun tame(pkg: String): Boolean {
@@ -68,6 +151,13 @@ class TameController(private val context: Context) {
 
     companion object {
         private const val TAG = "ha-paneld/tame"
+
+        // The HA Companion dashboard apps — never offered as tame candidates (this is an HA project; the
+        // dashboard is the whole point). Excluded from enumeration/suggestions, not the brick-guard.
+        private val HA_PACKAGES = setOf(
+            "io.homeassistant.companion.android",
+            "io.homeassistant.companion.android.minimal",
+        )
 
         // Never stop/disable these, even if a user lists one — tearing them down bricks the panel. The
         // daemon enforces the same set as a privileged backstop; this is the app-side first line.
