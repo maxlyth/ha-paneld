@@ -634,14 +634,15 @@ the current one. Changing the panel id may leave the old device in HA to remove 
      * **Re-enable**. A free-text box tames any package by name. Hidden where no privileged path exists (taming
      * needs root or the helper daemon). Critical / HA / own packages are never listed.
      */
-    /** One Vendor-packages row: label + package id, a state badge, and the single action button. Shared by
-     *  the card and the picker pop-up so they stay visually identical. */
-    private fun tameRowHtml(c: TameController.Candidate): String {
+    /** One Vendor-packages row: label + package id, an optional state badge, and the single action button.
+     *  Shared by the card and the picker. [showState] is false on the card — every row there is already
+     *  tamed (disabled), so the column is redundant and just crowds the layout. */
+    private fun tameRowHtml(c: TameController.Candidate, showState: Boolean = true): String {
         val tamed = c.blocked || c.disabled
-        val state = when {
-            !c.installed -> """<span style="color:#888">not installed</span>"""
-            c.disabled -> """<span style="color:#d9a528">disabled</span>"""
-            else -> """<span style="color:#3fb950">active</span>"""
+        val state = if (!showState) "" else when {
+            !c.installed -> """<span style="width:80px;text-align:right;font-size:.85em;color:#888">not installed</span>"""
+            c.disabled -> """<span style="width:80px;text-align:right;font-size:.85em;color:#d9a528">disabled</span>"""
+            else -> """<span style="width:80px;text-align:right;font-size:.85em;color:#3fb950">active</span>"""
         }
         val action = if (tamed) "untame" else "tame"
         val label = if (tamed) "Re-enable" else "Tame"
@@ -660,7 +661,7 @@ the current one. Changing the panel id may leave the old device in HA to remove 
             """<form method="post" action="/tame" style="margin:0"><input type="hidden" name="pkg" value="${esc(c.pkg)}"><input type="hidden" name="action" value="$action"><button type="submit" style="$btn;white-space:nowrap">$label</button></form>"""
         return """  <div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid #222">
    <span style="flex:1;min-width:0;overflow:hidden">${esc(c.label)}$tags<br><small style="color:#888">${esc(c.pkg)}</small>$note</span>
-   <span style="width:80px;text-align:right;font-size:.85em">$state</span>
+   $state
    $control
   </div>"""
     }
@@ -672,7 +673,7 @@ the current one. Changing the panel id may leave the old device in HA to remove 
         val cands = runCatching {
             tame.cardCandidates(config.tameVendorPackages, tameProfileCandidates)
         }.getOrDefault(emptyList())
-        val rows = cands.joinToString("\n") { tameRowHtml(it) }
+        val rows = cands.joinToString("\n") { tameRowHtml(it, showState = false) }
         val body = rows.ifBlank {
             """<p class="note">Nothing tamed yet. Press <b>Find a package…</b> to see what's on this panel.</p>"""
         }
