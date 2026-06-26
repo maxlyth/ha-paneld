@@ -34,7 +34,7 @@ concurrency:
 
 env:
   DAT: tools/firmware-index/fw-shelly-walldisplay.dat
-  SHELLY_DISCUSSION_NUMBER: ""   # set this after creating the Discussion (e.g. "9")
+  SHELLY_DISCUSSION_NUMBER: "14"
 
 jobs:
   monitor:

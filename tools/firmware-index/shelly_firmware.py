@@ -301,16 +301,35 @@ def cmd_archive(args):
 # --------------------------------------------------------------------------- #
 
 _INTRO = """\
-# Shelly Wall Display — firmware archive
+# Shelly Wall Display firmware — OTA download archive & upgrade guide
 
-Direct download links for Shelly Wall Display firmware, with Wayback Machine backups.
+Direct download links for every recorded Shelly Wall Display firmware version, with Wayback Machine backups for versions that have since been replaced on the CDN.
 
-Shelly's CDN (`fwcdn.shelly.cloud`) holds **only the current build per product** and replaces it in-place when a new version ships — the previous firmware URL becomes unreachable immediately. Each version here is submitted to the Internet Archive on discovery so the download survives future releases.
+Covers both generations:
+- **Legacy (armeabi-v7a):** Stargate (4"), Atlantis, Pegasus (X2 6.9") — `WallDisplay` OTA track
+- **Modern (arm64-v8a):** Blake (XL 10.1"), Jenna (X2i), Cally (X1i/XLi), Maverick (U1), Dayna (D1) — `WallDisplayV2` OTA track
+
+> [!NOTE]
+> **Why this archive exists:** Shelly's CDN (`fwcdn.shelly.cloud`) keeps only the *current* build per product and replaces it in-place when a new version ships — the previous firmware URL goes 404 immediately. This archive captures each version on discovery so older builds remain accessible even after a Shelly update.
 
 > [!TIP]
-> **Use the Wayback Machine link for any version that is not the current one.** The CDN link is valid while that version is live; once Shelly pushes a newer build the CDN URL returns 404 and the Wayback copy is the only surviving download.
+> **Use the Wayback Machine link for any version that is not the latest.** The CDN link is valid while that version is live; once Shelly pushes a newer build the Wayback copy is the only surviving download.
 
-Installation requires ADB (all models) or the Shelly AppStore (modern devices, firmware 2.6.0+). See [docs/hardware/shelly-wall-display.md](https://github.com/maxlyth/ha-paneld/blob/main/docs/hardware/shelly-wall-display.md) for the access model and sideloading steps.
+## How to update your Shelly Wall Display firmware
+
+The normal path (no PC needed):
+
+1. Open the **Shelly app** → tap your Wall Display → **Settings → Device Information → Firmware**. If an update is available, tap **Update**.
+2. Alternatively, open the local WebUI at `http://<device-ip>` → **Settings → Firmware** → **Update**.
+
+Shelly rolls firmware out to the fleet gradually over several days, so your device may not see a new version immediately after release. If you need to apply a specific version manually, download the ZIP from the table below and flash it via the WebUI's **Firmware → Custom firmware** field (`http://<device-ip>/#/settings/firmware` on modern devices).
+
+> [!IMPORTANT]
+> Modern devices (arm64-v8a: Blake/XL, Jenna, Cally, Maverick, Dayna) and legacy devices (MT6580: Stargate, Pegasus) use **separate OTA tracks** and **incompatible firmware ZIPs** — do not flash WallDisplay firmware onto a WallDisplayV2 device or vice versa.
+
+## Which version should I run?
+
+The latest stable build is always the recommended choice — Shelly does not remove features between releases and has a good track record of fixing regressions quickly. Check the [official changelog](https://github.com/ShellyGroup/Wall-Display-Changelog) for what changed between versions.
 """
 
 _FOOTER = """\
