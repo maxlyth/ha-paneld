@@ -10,6 +10,7 @@ import io.github.maxlyth.hapaneld.control.ThreadController
 import io.github.maxlyth.hapaneld.device.DeviceProfile
 import io.github.maxlyth.hapaneld.hardware.NativeLed
 import io.github.maxlyth.hapaneld.util.HelperClient
+import io.github.maxlyth.hapaneld.util.UpdateChecker
 import java.io.File
 
 /**
@@ -122,6 +123,10 @@ object DiagReader {
             })
         }
         appendLine("[capabilities] " + capabilities(ctx).joinToString(" | ") { "${it.name}=${it.status}" })
+        val updates = UpdateChecker.available
+        if (updates.isNotEmpty()) {
+            appendLine("[updates] " + updates.joinToString(" | ") { "${it.label}: ${it.currentVersion} → ${it.latestVersion}" })
+        }
     }
 
     // Omitted from the report (it's for public GitHub issues): network addresses; non-diagnostic instance

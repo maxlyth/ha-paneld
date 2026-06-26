@@ -14,6 +14,7 @@ import io.github.maxlyth.hapaneld.device.TameCandidate
 import io.github.maxlyth.hapaneld.input.PanelAccessibilityService
 import io.github.maxlyth.hapaneld.sensors.SensorReporter
 import io.github.maxlyth.hapaneld.util.HelperClient
+import io.github.maxlyth.hapaneld.util.UpdateChecker
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCallPipeline
@@ -455,6 +456,11 @@ class PaneldServer(
         val setupBanner = if (needs.isNotEmpty())
             """<div class="setup">⚠ This panel needs <a href="#config">${needs.joinToString(" and ")}</a> — set below.</div>"""
         else ""
+        val updateBanner = UpdateChecker.available.joinToString("") { u ->
+            """<div class="setup">⬆ <b>${esc(u.label)}</b> ${esc(u.latestVersion)} is available""" +
+                """ (installed: ${esc(u.currentVersion)}) — """ +
+                """<a href="${esc(u.releaseUrl)}" target="_blank" rel="noopener">download</a></div>"""
+        }
         // Split the flat fact map into separate cards so it renders ACROSS masonry columns instead of one
         // ever-growing tall card. Networking + ha-paneld-profile are carved out; everything else (device /
         // OS facts, plus any future key) falls through to "Panel information".
@@ -514,7 +520,7 @@ class PaneldServer(
  <span style="display:flex;gap:10px;align-items:center">${if (config.haDeviceUrl.isNotBlank()) """<a class="pbtn" href="${esc(config.haDeviceUrl)}" target="_blank" rel="noopener" title="Open this panel's device page in Home Assistant">Open in HA</a>""" else ""}<button id="revbtn" class="pbtn" onclick="toggleReveal()" title="Show/hide blurred values for editing — they're blurred by default so screenshots don't leak them">Reveal</button>
  <a class="gh" href="$REPO_URL" target="_blank" rel="noopener" title="ha-paneld on GitHub" aria-label="GitHub"><svg viewBox="0 0 24 24"><path d="$GH_ICON"/></svg></a></span></div>
 <div id="verbar" class="setup" style="display:none">⟳ A newer ha-paneld is installed — <a href="#" onclick="location.reload();return false">reload</a> to refresh this page.</div>
-$setupBanner
+$updateBanner$setupBanner
 <div class="cards">
 <div class="card"><h2>Controls <small>· software nav bar</small></h2>
 <div style="display:flex;gap:8px;flex-wrap:wrap">

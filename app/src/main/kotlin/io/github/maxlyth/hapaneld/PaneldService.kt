@@ -42,7 +42,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import io.github.maxlyth.hapaneld.util.Serializer
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import io.github.maxlyth.hapaneld.util.UpdateChecker
 
 /**
  * Persistent foreground service. Hosts the Ktor HTTP listener, the JmDNS advertiser, the MQTT
@@ -305,6 +308,13 @@ class PaneldService : Service() {
                 onTemperature = { c -> mqtt.publishTemperature(c) },
                 onHumidity = { h -> mqtt.publishHumidity(h) },
             )
+            launch {
+                delay(30_000L)  // let startup settle before hitting the network
+                while (isActive) {
+                    runCatching { UpdateChecker.check(this@PaneldService) }
+                    delay(24 * 3_600 * 1_000L)
+                }
+            }
         }
         return START_STICKY
     }
