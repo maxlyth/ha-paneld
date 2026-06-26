@@ -8,6 +8,44 @@ From **v0.8.0**, entries are grouped under **Added** (new features/entities), **
 changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
 content appear. Earlier releases predate this convention and keep their flat lists.
 
+## v0.8.4-rc4 - 2026-06-26
+
+### Added
+
+- **Thread Mesh Router — firmware bundled** — the OpenThread NCP `.gbl` built from Gecko SDK 5 for the EFR32MG21A020F768IM32 (the chip in every NSPanel Pro) is now bundled in the APK (`assets/firmware/efr32mg21-thread-ncp.gbl`) and a CI workflow builds it reproducibly. `ThreadController` drives the full flash→commission sequence from the Android side without adb.
+- **Boot chime silencing** — an opt-in toggle (`switch.<panel>_silence_boot_chime`) suppresses the Sonoff start-up sound via `Settings.System`, surfaced as an MQTT entity and HTTP Controls-card switch.
+- **Dashboard watchdog** — if the dashboard WebView crashes or is moved to the background, ha-paneld relaunches it automatically. Configurable delay; no root needed.
+- **Admin launcher** — a minimal on-demand launcher (long-press the ha-paneld notification, or `POST /admin`) pops up for installing apps and changing settings while keeping the dashboard as the default home. Dismisses itself when done.
+- **In-app update checker** — polls the GitHub releases API 30 s after service start and every 24 h; shows a banner in the web UI and a `/diag` line when a newer stable version is available for ha-paneld or the installed HA Companion build.
+
+### Changed
+
+- **Navigate reload** — navigating to the URL already displayed now reloads the page (previously a no-op), and the navbar gains a dedicated reload button for panels without a gesture bar.
+- **Navbar volume % always in sync** — volume percentage now updates immediately when any external source (HTTP Controls card, HA-driven media player) changes the volume, not only on navbar ± presses.
+- **Navbar brightness/volume sliders** — narrow-mode layout adds compact slider controls alongside the ± buttons.
+
+### Fixed
+
+- **Wake ANR eliminated** — proximity-triggered wake was calling `Su.run()` on the main thread; moved to a background coroutine.
+- **Top-process name truncated** — long WebView renderer cmdlines (e.g. `com.android.webview:sandboxed_process0:org.chromium…`) are now trimmed to the package prefix.
+- **install-daemon.sh root detection** — systemless root (Magisk overlay) is now detected correctly on panels whose `/system` is a bind-mount.
+
+## v0.8.4-rc3 - 2026-06-25
+
+### Added
+
+- **Thread NCP GBL CI build** — a GitHub Actions workflow builds the OpenThread NCP firmware from Gecko SDK 5 via the `silabs-firmware-builder` Docker image, targeting the EFR32MG21A020F768IM32 at 115200 baud with no flow control (same UART layout as the ZBDongle-E).
+- **Tame candidates for TPA10, SMT1019, WF1589T** — device profiles now seed curated tame candidates for panels beyond the NSPanel Pro so the vendor-taming picker has profile-informed suggestions on those panels.
+
+### Fixed
+
+- **Navbar swipe, overscan, tap pass-through** — directional swipe detection corrected (was triggering on vertical flings); always-on bar respects display overscan insets; taps on the bar no longer pass through to the content layer behind it.
+- **Vendor-renamed critical packages protected** — packages that pass the is-critical check by their declared name but ship under a vendor-renamed package ID could previously be tamed; an additional name-normalisation guard closes that gap.
+
+### Changed
+
+- **Parser fuzzer moved off CI** — the helper command-parser fuzzer runs locally on demand (`make fuzz`) rather than as a CI step; UART I/O could hang the CI runner indefinitely with no timeout.
+
 ## v0.8.4-rc2 - 2026-06-25
 
 ### Added
@@ -19,21 +57,28 @@ content appear. Earlier releases predate this convention and keep their flat lis
 
 - **Font scale on sandbox-walled panels** — display-sizing font-scale changes now route through the helper daemon when `su` is unavailable (TPA10), matching the existing density path. The stale "root only" note in the display-sizing card and `docs/display-sizing.md` is corrected.
 
-## v0.8.4 - 2026-06-24
+## v0.8.4-rc1 - 2026-06-24
 
 ### Security
 
-- **Privileged root helper hardened** — the helper that performs the root actions a sandboxed app can't (LED, true screen-off, hardware buttons, display density, CPU governor, screenshots, perf snapshots) **no longer listens on an unauthenticated loopback TCP port**. It previously bound `127.0.0.1:8889`, which **any** local app holding `INTERNET` could connect to and use to `REBOOT` the panel, change the CPU governor / display density, or `SCREENCAP` the screen — a real privacy + denial-of-service surface. It now uses an **abstract-namespace UNIX socket authenticated by peer UID** (`SO_PEERCRED`): only ha-paneld itself is accepted (plus root/shell for adb), and every other local app is rejected before it can issue a single command. Hardened further with airtight bounded parsing (exact-match commands, width-bounded arguments, overlong lines dropped not mis-split), all command execution funnelled through **one audited seam** with whitelisted arguments, connection caps + idle timeouts, and a **command-parser fuzzing + unit-test suite that now runs in CI** against hostile local input.
+- **Privileged root helper hardened** — the helper that performs the root actions a sandboxed app can't (LED, true screen-off, hardware buttons, display density, CPU governor, screenshots, perf snapshots) **no longer listens on an unauthenticated loopback TCP port**. It previously bound `127.0.0.1:8889`, which **any** local app holding `INTERNET` could connect to and use to `REBOOT` the panel, change the CPU governor / display density, or `SCREENCAP` the screen — a real privacy + denial-of-service surface. It now uses an **abstract-namespace UNIX socket authenticated by peer UID** (`SO_PEERCRED`): only ha-paneld itself is accepted (plus root/shell for adb), and every other local app is rejected before it can issue a single command. Hardened further with airtight bounded parsing (exact-match commands, width-bounded arguments, overlong lines dropped not mis-split), all command execution funnelled through **one audited seam** with whitelisted arguments, connection caps + idle timeouts, and a **command-parser fuzzing + unit-test suite** against hostile local input.
 
 ### Added
 
-- **Full control surface on sandbox-walled (no-root-shell) panels** — panels that can't `su` (e.g. the Tuya TPA10) now get, routed through the privileged helper, the controls that were previously root-shell-only and so came up blank or absent there: **display density** and **font scale**, **CPU governor**, **on-demand screenshot** (info page + `/screenshot.png` / HA camera image), and the **Performance / Top-processes / Responsiveness** cards.
-- **The helper is now the control path for *every* sandbox-walled panel, not just LED ones** — a panel's profile declares whether it needs the daemon (`usesDaemon`, derived from `appCanSu=false`), so it's installed on any no-`su` panel rather than only LED panels. `/diag` gains a **Helper daemon** capability that flags *needed-but-missing*, so a sandbox panel without the daemon installed surfaces clearly instead of silently dropping those controls.
-- **ZHICAI SMT1019 RGB LED** — its LED is driven through a `/dev/ledjni` ioctl that Android denies to sandboxed apps; the helper now drives it as root, so the LED works (it was reported unavailable in 0.8.3).
+- **Full control surface on sandbox-walled (no-root-shell) panels** — panels that can't `su` (e.g. the Tuya TPA10) now get, routed through the privileged helper, the controls that were previously root-shell-only: **display density** and **font scale**, **CPU governor**, **on-demand screenshot** (info page + `/screenshot.png` / HA camera image), and the **Performance / Top-processes / Responsiveness** cards.
+- **Helper is now the control path for every sandbox panel, not just LED ones** — a panel's profile declares `usesDaemon` independently of its LED mechanism, so the daemon is installed on any no-`su` panel. `/diag` flags *needed-but-missing* so a sandbox panel without the daemon surfaces clearly.
+- **ZHICAI SMT1019 RGB LED** — the LED ioctl (`/dev/ledjni`) is root-only; the helper now drives it so the LED works on the SMT1019 (it was reported unavailable in 0.8.3).
+- **Proximity calibration** — device profiles can declare a default polarity; user-captured near/far calibration is stored per panel.
+- **TPA10 vendor-app disable offer** — provisioning detects the Tuya vendor stack and offers a one-tap disable.
+- **WebView age warning** — provisioning warns when the system WebView is too old to render the HA frontend, with a link to the sideload instructions.
 
 ### Changed
 
-- **Root helper renamed `hapaneld-ledd` → `hapaneld-helper`** and restructured — it long outgrew LED control, so the binary, its UNIX socket (`@hapaneld-helper`) and init service (`hapaneld_helper`) were renamed to match, and the source was split by capability with all command execution behind the one audited seam above. **No behaviour change** — but panels running the helper must be redeployed: `install-daemon.sh` removes the old `hapaneld-ledd` install automatically.
+- **Root helper renamed `hapaneld-ledd` → `hapaneld-helper`** and restructured — the binary, its UNIX socket (`@hapaneld-helper`), and init service (`hapaneld_helper`) were renamed to reflect its broader role. Source split by capability; all command execution behind one audited seam. **No behaviour change — but panels running the helper must be redeployed**: `install-daemon.sh` removes the old `hapaneld-ledd` install automatically.
+
+## v0.8.4 - TBD
+
+*Cumulative stable release notes — to be written when 0.8.4 is promoted from RC.*
 
 ## v0.8.3 - 2026-06-19
 
