@@ -1,6 +1,9 @@
 package io.github.maxlyth.hapaneld.control
 
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.drawable.ColorDrawable
@@ -69,6 +72,7 @@ class NavbarController(
     private var strip: View? = null    // the swipe-reveal edge trigger (Swipe-reveal mode only)
     private var brightLabel: TextView? = null  // live brightness % (wide panels only)
     private var volLabel: TextView? = null     // live volume % (wide panels only)
+    private var volReceiver: BroadcastReceiver? = null  // refreshes volLabel on external volume changes
     private val hideRunnable = Runnable { animateBarOut() }
 
     @Volatile
@@ -83,7 +87,27 @@ class NavbarController(
     fun apply(newMode: String) {
         val m = normalise(newMode)
         mode = m
-        if (m != MODE_OFF) ensureOverlayPermission()
+        if (m != MODE_OFF) {
+            ensureOverlayPermission()
+            if (volReceiver == null) {
+                val r = object : BroadcastReceiver() {
+                    override fun onReceive(ctx: Context, intent: Intent) {
+                        main.post { updateVolLabel() }
+                    }
+                }
+                // "android.media.VOLUME_CHANGED_ACTION" is an @hide constant — use the string literal.
+                // RECEIVER_EXPORTED is required from API 33 for receiving system broadcasts.
+                @Suppress("UnspecifiedRegisterReceiverFlag")
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    context.registerReceiver(r, IntentFilter(VOLUME_CHANGED_ACTION), Context.RECEIVER_EXPORTED)
+                } else {
+                    context.registerReceiver(r, IntentFilter(VOLUME_CHANGED_ACTION))
+                }
+                volReceiver = r
+            }
+        } else {
+            volReceiver?.let { runCatching { context.unregisterReceiver(it) }; volReceiver = null }
+        }
         if (appCanSu && m == MODE_ALWAYS) {
             // Always-on: apply the display overscan (blocking) before posting the bar so the content
             // visibly shifts up before the bar appears, not after. Su contention is acceptable here
@@ -437,6 +461,7 @@ class NavbarController(
     /** Reset any display overscan set by this controller. Call from the service's onDestroy so the
      *  reserved bottom margin doesn't persist after ha-paneld stops. */
     fun cleanup() {
+        volReceiver?.let { runCatching { context.unregisterReceiver(it) }; volReceiver = null }
         if (appCanSu && mode == MODE_ALWAYS) {
             Thread { runCatching { Su.run("wm overscan 0,0,0,0") } }.start()
         }
@@ -458,6 +483,8 @@ class NavbarController(
 
     companion object {
         private const val TAG = "ha-paneld/navbar"
+        // AudioManager.VOLUME_CHANGED_ACTION is @hide — use the string literal directly.
+        private const val VOLUME_CHANGED_ACTION = "android.media.VOLUME_CHANGED_ACTION"
 
         const val MODE_OFF = "Off"
         const val MODE_ALWAYS = "Always on"

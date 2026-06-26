@@ -195,7 +195,7 @@ object PerfReader {
             val names = fullNames(ranked.map { it.first })
             val json = ranked.joinToString(",", "[", "]") { (pid, dj) ->
                 val pct = Math.round(dj * 1000.0 / dTotal) / 10.0 // % of total capacity, 1dp, dot-decimal
-                val nm = (names[pid] ?: comm[pid] ?: pid.toString()).replace("\\", "").replace("\"", "")
+                val nm = trimProcName((names[pid] ?: comm[pid] ?: pid.toString()).replace("\\", "").replace("\"", ""))
                 """{"name":"$nm","cpu":$pct}"""
             }
             synchronized(lock) { topJson = json }
@@ -217,6 +217,11 @@ object PerfReader {
         }
         return map
     }
+
+    /** Shorten Android "package:process:classname" cmdlines to just the package component — the extra
+     *  segments (Chromium sandbox class names, sub-process suffixes) add noise without aiding diagnosis. */
+    private fun trimProcName(raw: String): String =
+        if (raw.count { it == ':' } >= 2) raw.substringBefore(':') else raw
 
     private fun push(q: ArrayDeque<Int>, v: Int) {
         q.addLast(v)
@@ -285,7 +290,7 @@ object PerfReader {
         if (ranked.isNotEmpty()) {
             val json = ranked.joinToString(",", "[", "]") { (pid, dj) ->
                 val pctv = Math.round(dj * 1000.0 / dTotal) / 10.0
-                val nm = (comm[pid] ?: pid.toString()).replace("\\", "").replace("\"", "")
+                val nm = trimProcName((comm[pid] ?: pid.toString()).replace("\\", "").replace("\"", ""))
                 """{"name":"$nm","cpu":$pctv}"""
             }
             synchronized(lock) { topJson = json }

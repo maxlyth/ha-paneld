@@ -268,7 +268,7 @@ fi
 
 echo
 verify && echo "${GRN}${B}✅ provisioned${X} — ${B}$URL/${X}" || echo "${YEL}↻ re-run the same command to finish (idempotent).${X}"
-echo "${D}   LED: rk3576 app-direct; sysfs panels (TPA10) also need the root daemon (helper/README.md).${X}"
+echo "${D}   Root daemon (helper/install-daemon.sh): required on EVERY sandbox-walled panel (appCanSu=false — TPA10, SMT1019, …), not just LED panels. It's the privileged path for screen-off, density, governor, screenshot, perf and buttons even when ledMechanism=NONE. rk3576/PX30 panels can exec su directly and don't need it.${X}"
 
 # Flag a too-old system WebView (informational; the dashboard won't render on ancient Chrome).
 check_webview
