@@ -18,23 +18,26 @@ across two hardware generations:
 
 ### Legacy (Android 7, armeabi-v7a)
 
-| SKU | Codename | Market name | Screen |
-|---|---|---|---|
-| SAWD-0A1XX10EU1 | Stargate | Wall Display | 3.97" / 4" LCD colour touch |
-| SAWD-2A1XX10EU1 | Pegasus | Wall Display X2 | 6.9" |
+| SKU | Codename | Market name | Screen | Relays | Proximity |
+|---|---|---|---|---|---|
+| SAWD-0A1XX10EU1 | Stargate | Wall Display | 3.97" / 4" LCD colour touch | 1 | none |
+| SAWD-2A1XX10EU1 | Pegasus | Wall Display X2 | 6.9" | 2 | IR (gpio-keys) |
+
+> [!NOTE]
+> A third legacy variant, **"Atlantis"** (SAWD-1A1XX10EU1), is reported by the community project [ShellyElevate](https://github.com/RapierXbox/ShellyElevate) with 1 relay and IR proximity. It does not appear in Shelly's official SKU table or changelog and has not been independently confirmed; treat it as an undocumented variant rather than an official product.
 
 Legacy devices do not have AppStore support and will eventually stop receiving firmware updates.
 Firmware downgrading is **not supported** on modern devices.
 
 ### Modern (Android 11+, arm64-v8a)
 
-| SKU | Codename | Market name | Screen |
-|---|---|---|---|
-| SAWD-3A1XE10EU2 | Blake | Wall Display XL | 10.1" |
-| SAWD-5A1XX10EU0 | Jenna | Wall Display X2i | mid-size |
-| SAWD-6A1XX10EU0 | Cally | Wall Display X1i | compact |
-| SAWD-4A1XE10US0 | Maverick | Wall Display U1 | US SKU |
-| SAWD-6A0XX0EU0 | Dayna | Wall Display D1 | |
+| SKU | Codename | Market name | Screen | Relays | Proximity |
+|---|---|---|---|---|---|
+| SAWD-3A1XE10EU2 | Blake | Wall Display XL | 10.1" | 2 | **LD2410 mmWave radar** |
+| SAWD-5A1XX10EU0 | Jenna | Wall Display X2i | mid-size | 2 | IR (gpio-keys) |
+| SAWD-6A1XX10EU0 | Cally | Wall Display X1i | compact | 2 | IR |
+| SAWD-4A1XE10US0 | Maverick | Wall Display U1 | US SKU | 1 | IR |
+| SAWD-6A0XX0EU0 | Dayna | Wall Display D1 | display-only | 0 | IR |
 
 ---
 
@@ -53,8 +56,7 @@ switches. It runs a custom Android launcher app called "Stargate".
 | Wi-Fi | — | Wi-Fi 6 (XL) |
 | BT | BLE | BLE |
 
-Built-in sensors (vary by model): temperature, humidity, ambient light, proximity/radar (XL has a
-radar component for Motion), and on-board relay(s) for load switching.
+Built-in sensors (vary by model): temperature, humidity, ambient light, proximity (Blake/XL uses an **LD2410 mmWave radar** chip; other models use IR; Stargate has none), and on-board relay(s) for load switching. Modern devices all have a physical power button; Cally and Blake have 4 additional side buttons.
 
 ---
 
@@ -120,7 +122,7 @@ Sensor and relay details vary by model. From firmware and product pages:
 |---|---|
 | Temperature + humidity | Present on Stargate (4"), X2, and reportedly others |
 | Ambient light | Confirmed on XL (Blake); XL has auto-brightness |
-| Proximity / radar | Wall Display XL uses a radar chip for `Motion` (occupancy) component (added 2.6.0) |
+| Proximity / radar | Blake/XL uses an **LD2410 mmWave radar** chip for `Motion` (occupancy) added 2.6.0. Other modern models use IR proximity via gpio-keys. Neither is exposed via `android.hardware.sensor.proximity` — both require root to read directly. |
 | Relay | 1 × on-board relay on most models; XL has a relay + input connector |
 
 These are managed entirely by the Stargate launcher via Shelly's own RPC API — they surface to HA
@@ -299,7 +301,7 @@ can and cannot declare from research alone, pending hardware confirmation.
 | `efr32UartPath` | `null` | confirmed |
 | `buttonLedGpioBase` | `null` | not detected |
 | `hasRecents` | TBC — likely present on Android 11 modern devices | needs hardware confirm |
-| `proximityTech` | `"Radar"` (XL only, 2.6.0+) | firmware changelog |
+| `proximityTech` | `"Radar"` (Blake/XL: **LD2410 mmWave**); `"Infrared"` (Jenna/Cally/Maverick/Dayna); none (Stargate) | firmware analysis, ShellyElevate source |
 | `tameVendorCandidates` | TBC — Stargate APK (`com.shelly.stargate`?) + any preinstalled vendor apps | needs package enumeration on hardware |
 
 ### Unknown — requires a live unit

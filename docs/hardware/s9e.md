@@ -59,11 +59,10 @@ the `.new.dat.br`, `lpunpack` the super image, `strings`-grep `build.prop` + ini
 > ≤ 0.8.2 probes only `st_relay`, so relays are invisible on any panel running 1.1.0 or later. The fix
 > (probe both class names) is tracked for **0.8.3** — see the relay section below.
 
-Downloads (Smatek, as shared by the reporter in [#3](https://github.com/maxlyth/ha-paneld/issues/3) — the
-URLs carry Smatek's shared download password):
+Downloads (Smatek, as shared by the reporter in [#3](https://github.com/maxlyth/ha-paneld/issues/3)):
 
-- [`S9_1920x1200_20240712_Android_US` — 1.0.2](http://docs.smatek.store:10001/s/48vAcr?password=icwm34)
-- [`S9_1920x1200_20251202_Android_US` — 1.1.0](http://docs.smatek.store:10001/s/QEYPSL?password=wyh1gh)
+- `S9_1920x1200_20240712_Android_US` — **1.0.2** *(original Smatek link `docs.smatek.store:10001` — unreachable as of 2026-06-26; contact Smatek or the reporter in #3 for a copy)*
+- `S9_1920x1200_20251202_Android_US` — **1.1.0** *(same — link dead)*
 
 Diffing the two images: **only `ro.product.version` and the relay class differ.** Every other control
 path documented below (button keycodes, button-LED GPIOs, proximity GPIO, sensor wiring) is identical
@@ -159,7 +158,7 @@ near**, no export needed. Ambient light + temperature/humidity surface via `Sens
 <summary>Source links + provenance</summary>
 
 - [ha-paneld#3 — "Smatek S9E"](https://github.com/maxlyth/ha-paneld/issues/3) — the reporter's `/diag` (detection strings, `SensorManager` proximity), the relay-class rename (`st_relay` → `strelay`), and the two firmware download links below.
-- Smatek S9E stock firmware (shared by the reporter in #3): [1.0.2 / 20240712](http://docs.smatek.store:10001/s/48vAcr?password=icwm34), [1.1.0 / 20251202](http://docs.smatek.store:10001/s/QEYPSL?password=wyh1gh) — the two images analysed (2026-06-16) for the relay-class rename, the gpio147–150 export gap, the RGB LED / vibrator, and detection-string stability.
+- Smatek S9E stock firmware (shared by the reporter in #3): 1.0.2 / 20240712 and 1.1.0 / 20251202 — the two images analysed (2026-06-16). **Original Smatek download links (`docs.smatek.store:10001`) are no longer reachable** (2026-06-26); contact Smatek support or the issue reporter for a current download link.
 - [seaky/nspanel_pro_tools_apk#98 — "Add Smatek S9E Support"](https://github.com/seaky/nspanel_pro_tools_apk/issues/98) — the relay (`st_relay`), button (keycodes 131–134), button-LED (gpio 147–150) and proximity (gpio18) control paths.
 - [Home Assistant community: "Smatek S9E Touch Panel"](https://community.home-assistant.io/t/smatek-s9e-touch-panel/828244) — WebView update, GPIO18 proximity scripts, integration notes.
 - [Smatek S9E product page](https://smatek.com/product/10-1-inch-smart-control-panel-s9e/) and [S9PE-NZ PoE variant](https://smatek.com/product/10-1-inch-android-panel-s9e-nz/) — SoC, RAM/storage, display, sensors, connectivity.

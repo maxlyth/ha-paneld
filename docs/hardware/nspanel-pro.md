@@ -45,14 +45,16 @@ The spec table above and most of this page were captured on an **86P**; the **12
 | Display | **480×480** square, ~160 dpi, portrait-only | **750×1334** portrait, **240 dpi** (override 250); landscape available; ~1 cm narrower + longer than the 86P |
 | Build ids | both report `ro.product.model/device/name = px30_evb` (shared Rockchip board name — *not* a reliable variant discriminator) | as 86P |
 | `ro.product.version` | `s6_android_x.y.z`-class | `NSPanelXXXP_x.y.z` (OTA channel `nspanel-pro-ver120`, full ROM `SN_3326S_750X1334_…`) |
-| OTA latest (2026-06) | **4.0.12** (full) → **4.4.0** (diff) | **4.0.12** (full) → **4.4.0** (diff-only) |
+| OTA latest | **4.0.12** (full) → **4.5.1** (diff) → **4.5.2** (APK-only) | **4.0.12** (full) → **4.5.1** (diff) → **4.5.2** (APK-only) |
 | Proximity firmware | **4.0.12 restored graded** proximity | stayed **binary** at 4.x (per-model kernel divergence — see [Sensors](#sensors--light--proximity-are-app-direct)) |
 
 Both share the EFR32 Zigbee radio, Android 8.1 (AOSP), arm64-v8a, and the root/recovery story below.
 Live-verified on a 120P (BMP, fw `NSPanel120P_3.7.1`): `wm size`=750×1334, density 240, `ro.board.platform=rk3326`.
 
 > [!NOTE]
-> Both models reach the latest build (**4.4.0**) via a 2-step path — flash the 4.0.12 full ROM, then the 4.0.12→4.4.0 diff (4.0.12 is full-ROM-only; full ROMs apply over any source). The CoolKit CDN scheme, every verified OTA URL, and the full flashing how-to are on the [firmware & flashing page](nspanel-pro-firmware.md); the live, community-maintained version index is the Discussion linked from there.
+> Both models reach the current ROM (**4.5.1**) via a 2-step path: 4.0.12 full ROM → 4.5.1 diff. **4.5.2** is an APK-only layer on top of 4.5.1. The CoolKit CDN scheme, every verified OTA URL, and the full flashing how-to are on the [firmware & flashing page](nspanel-pro-firmware.md); the live, community-maintained version index is the Discussion linked from there.
+>
+> **⚠ 4.5.1 and 4.5.2 have widespread reboot-loop reports** (~10–60 min intervals on both models). For HA-only panels, the community recommendation is to pin at **4.0.12** for stability. Check the firmware Discussion for the current consensus before applying 4.5.x.
 
 Sibling Tuya-family boards — **S6E/T6E** (relay variants; S6E = T6E + 2 relays), [**S9E**](s9e.md) (Smatek),
 [**TPA10**](tpa10.md) (rk3326-class, A53, Android 11) — are separate targets, not NSPanel Pro firmware.
