@@ -20,12 +20,15 @@ body:
     id: panel
     attributes:
       label: Panel hardware
-      description: See the [hardware references](https://github.com/maxlyth/ha-paneld/tree/main/docs/hardware) if unsure.
+      description: See the [hardware references](https://github.com/maxlyth/ha-paneld/tree/main/docs/hardware) if unsure. The `/diag` output below includes the detected profile, which can help confirm the model.
       options:
-        - Sonoff NSPanel Pro (PX30 / rk3326)
+        - Sonoff NSPanel Pro (86P / 120P, PX30 / rk3326)
         - Tuya TPA10 (rk3566)
-        - Electron WF1589T (rk3576)
+        - Electron / ELCLCD WF1589T (rk3576)
+        - ZHICAI SMT1019 / WF2489T
         - Smatek S9E
+        - Shelly Wall Display — legacy (Stargate 4", Pegasus X2, Atlantis, MT6580)
+        - Shelly Wall Display — modern (Blake XL, Jenna X2i, Cally, Maverick U1, Dayna D1, arm64)
         - Other (state in description)
     validations:
       required: true
