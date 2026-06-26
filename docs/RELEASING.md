@@ -19,9 +19,20 @@ then builds, signs and publishes the APK, taking the human-readable notes from t
    - Add a `New in X.Y.Z` block summarising the release.
    - Fix any entity names / behaviour the release changed elsewhere in the README.
    - Refresh screenshots in `docs/img/` if the UI changed (the on-panel launcher shot is **480×480**).
-2. **CHANGELOG.md** — there is a `## vX.Y.Z - <date>` section for the tag (the workflow extracts it
-   verbatim; no section → empty notes). Group entries under **Added / Changed / Fixed / Docs** (only the
-   groups with content) — see the format note at the top of `CHANGELOG.md`.
+2. **CHANGELOG.md** — the release workflow looks for a section whose header matches the **exact tag**
+   (`## v0.8.4-rc3`, not `## v0.8.4`). For a missing RC section the workflow **errors** (not just warns)
+   so the CI job fails before a release is published with wrong notes.
+
+   - **RC tags** (`-rc1`, `-rc2`, …): add a `## vX.Y.Z-rcN - <date>` section describing **only what
+     changed since the previous RC** — not a repeat of prior RC content. The workflow appends the
+     auto-generated commit list below it, so you don't need to list every commit; one bullet per
+     user-visible change is enough.
+   - **Stable tags**: add `## vX.Y.Z - <date>` with cumulative notes for the whole version. The workflow
+     falls back to the base-version section only for stable tags, so the stable section is the one place
+     to summarise the full release for users upgrading directly from the previous stable.
+
+   Group entries under **Added / Changed / Fixed / Docs** (only the groups with content) — see the
+   format note at the top of `CHANGELOG.md`.
 3. **Version bump** — `app/build.gradle.kts` `versionName` matches the tag and `versionCode` is
    incremented. (A higher `versionCode` lets panels `install -r` in place.) Also bump the **static
    release badge** in `README.md` (`img.shields.io/badge/release-vX.Y.Z-blue`) — it's static on purpose
