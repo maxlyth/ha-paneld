@@ -535,9 +535,14 @@ class MqttBridge(
         // dashboard via the homeassistant:// deep link, which navigates in-app with no WebView.
         val path = toLocalPath(payload)
         if (path.isNotEmpty()) {
-            navigate.navigate("homeassistant://navigate$path")
-            config.lastNavigate = path
-            publish(client!!, stateNavigate, path, retain = true)
+            if (path == config.lastNavigate) {
+                // Already on this path — the deeplink is a no-op, so reload the dashboard instead.
+                system.reloadDashboard(config.dashboardPackage)
+            } else {
+                navigate.navigate("homeassistant://navigate$path")
+                config.lastNavigate = path
+                publish(client!!, stateNavigate, path, retain = true)
+            }
         }
     }
 

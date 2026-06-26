@@ -124,7 +124,7 @@ class PaneldService : Service() {
         // No-op unless home was cleared (or is us); off-main as it may call su. See ensureDashboardHome.
         scope.launch { system.ensureDashboardHome(config.dashboardPackage) }
         navbar = NavbarController(
-            this, system, volume, brightness, { config.launcherPackage },
+            this, system, volume, brightness, { config.launcherPackage }, { dashboardTarget() },
             profile.appCanSu, profile.hasRecents,
             onBrightnessChanged = { mqtt.publishScreenOn() },
             onVolumeChanged = { mqtt.publishVolume() },
@@ -223,7 +223,7 @@ class PaneldService : Service() {
             "Light sensor" to sensorRow(sensors.hasLight(), profile.lightTech, sensors.lightDesc()),
             "Proximity" to sensorRow(sensors.hasProximity(), profile.proximityTech, sensors.proximityDesc()),
             // a11y service = software back/recents nav, NOT physical buttons (NSPanel Pro has none).
-            "Accessibility nav" to yesNo(accessibilityEnabled()),
+            "Nav actions (a11y)" to yesNo(accessibilityEnabled()),
             // Soft navbar overlay mode + whether the overlay can actually be drawn (SYSTEM_ALERT_WINDOW).
             "Navbar" to (config.navbarMode + if (config.navbarMode != "Off" && !canDrawOverlays()) " · no overlay permission" else ""),
             // Zigbee + Thread EFR32 state (NSPanel Pro only; "none" elsewhere). Both call su — fine
@@ -313,7 +313,9 @@ class PaneldService : Service() {
                     // Wake-on-wave: local, instant, wake-only. onProximity fires only on far->near
                     // transitions (natural debounce); sleep stays HA's job. Publish the ON state so the
                     // HA screen entity tracks the local wake (GitHub #6 — was staying OFF in HA).
-                    if (near && config.wakeOnWave) { screen.wake(); mqtt.publishScreenOn() }
+                    // screen.wake() calls Su.run() — must NOT run on the main thread (ANR risk when
+                    // su is under load during the proximity callback, which delivers on the main looper).
+                    if (near && config.wakeOnWave) Thread { screen.wake(); mqtt.publishScreenOn() }.start()
                 },
                 onTemperature = { c -> mqtt.publishTemperature(c) },
                 onHumidity = { h -> mqtt.publishHumidity(h) },

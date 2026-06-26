@@ -56,6 +56,7 @@ class NavbarController(
     private val volume: VolumeController,
     private val brightness: BrightnessController,
     private val launcherPkg: () -> String,
+    private val dashboardPkg: () -> String,
     // Back/Recents route: root `input keyevent` where the app can su, else accessibility (see NavActions).
     private val appCanSu: Boolean,
     // Omit the Recents button on panels whose firmware has no overview screen (e.g. Tuya TPA10).
@@ -170,6 +171,7 @@ class NavbarController(
             val pkg = launcherPkg()
             if (system.isLaunchable(pkg)) system.launchLauncher(pkg) else system.launchAdminLauncher()
         })
+        row.addView(navButton(R.drawable.ic_nav_reload, autoHide) { system.reloadDashboard(dashboardPkg()) })
         // Recents only where the firmware actually has an overview screen.
         if (hasRecents) row.addView(navButton(R.drawable.ic_nav_recents, autoHide) { NavActions.recents(appCanSu) })
         row.addView(spacer(edge))

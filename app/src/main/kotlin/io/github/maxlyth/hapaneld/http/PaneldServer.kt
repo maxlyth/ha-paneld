@@ -503,7 +503,7 @@ class PaneldServer(
         }
         // Controls buttons: render but DISABLE (not hide, not silently-broken) when the action's capability
         // is missing — back/recents need the a11y service, launcher/reboot need root; volume always works.
-        val a11yOk = facts["Accessibility nav"] == "yes"
+        val a11yOk = facts["Nav actions (a11y)"] == "yes"
         // Recents is only real where the firmware has an overview screen — KEYCODE_APP_SWITCH no-ops on
         // single-purpose panels (TPA10), so gate the button on the profile rather than show a dead one.
         val hasRecents = io.github.maxlyth.hapaneld.device.DeviceProfile.detect().hasRecents
