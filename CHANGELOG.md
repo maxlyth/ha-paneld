@@ -8,6 +8,17 @@ From **v0.8.0**, entries are grouped under **Added** (new features/entities), **
 changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
 content appear. Earlier releases predate this convention and keep their flat lists.
 
+## v0.8.4-rc5 - 2026-06-26
+
+### Added
+
+- **Shelly Wall Display device profiles (preliminary)** — two new profiles cover the full Shelly Wall Display family: `ShellyWallDisplay` (legacy MT6580, covers Stargate/4" + Atlantis + Pegasus/X2-6.9") and `ShellyWallDisplayV2` (arm64, covers Blake/XL + Jenna/X2i + Cally/XLi + Maverick/U1 + Dayna/D1). Both are wired into `detect()`. Deployment requires ADB (all models) or the Shelly AppStore (modern/v2.6.0+). Hardware verification still in progress — relay control routes through the HA Shelly integration (not sysfs), no root on any model.
+- **Shelly Wall Display firmware monitor** — daily availability monitor and weekly Wayback Machine archival for the Shelly Wall Display OTA endpoints, surfaced in Discussion #14.
+
+### Changed
+
+- **Firmware URL monitor cadence** — switched to daily polling (was hourly) with a 1-hour retry if any URLs are unreachable.
+
 ## v0.8.4-rc4 - 2026-06-26
 
 ### Added
