@@ -9,11 +9,9 @@ run-name: Shelly firmware monitor · ${{ github.event_name }}
 # firmware URL to Save Page Now, confirms the capture, and commits the updated
 # .dat back to main. The Discussion is updated whenever .dat changes.
 #
-# Hourly cadence is intentional: unlike Sonoff (CDN retains all versions), Shelly
-# replaces firmware in-place — if we miss the poll window between two releases
-# the old firmware URL is gone. A firmware release once a month makes the hourly
-# poll essentially free, and it ensures we catch every version even if Shelly
-# does a rapid patch cycle.
+# Daily cadence is sufficient: Shelly rolls firmware out to the fleet over days
+# rather than pushing a rapid patch cycle, so a daily poll gives ample time to
+# archive each version before the next one replaces it on the CDN.
 #
 # Secrets required:
 #   WAYBACK_S3          "accesskey:secret" from archive.org/account/s3.php
@@ -23,7 +21,7 @@ run-name: Shelly firmware monitor · ${{ github.event_name }}
 
 on:
   schedule:
-    - cron: "47 * * * *"   # hourly, 13 min off the hour to dodge scheduler congestion
+    - cron: "47 9 * * *"   # daily at 09:47 UTC (after the NSPanel Pro monitor at 08:23)
   workflow_dispatch:
 
 permissions:
