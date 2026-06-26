@@ -128,16 +128,19 @@ builds and the full sideload/verify steps are below.
 > *do* register as the provider — but the regular **Cromite / Bromite *browser*** app uses a different
 > package and does **not**. Use the SystemWebView build, not the browser APK.
 
-### Per-panel downloads — known-working builds
+### Per-panel stock versions and known-working replacements
 
-Versions **verified working on real panels** (2026-06-05). The redistributable ones are mirrored as
-ha-paneld Release assets for durable links; sideload with `adb install -r <file>`.
+"Stock" = what the vendor firmware ships from factory, verified from firmware OTA inspection or live device. "Replacement" = what is confirmed working after sideload. Redistributable builds are mirrored as ha-paneld Release assets; sideload with `adb install -r <file>`.
 
-| Panel | ABI | WebView (`com.android.webview`) | Download |
-|---|---|---|---|
-| NSPanel Pro (PX30) | arm64-v8a | **LineageOS** 138.0.7204.63 — last build for its Android **8.1** | [release asset](https://github.com/maxlyth/ha-paneld/releases/download/webview-mirror/lineageos-webview-138.0.7204.63.apk) · [APKMirror](https://www.apkmirror.com/apk/lineageos/android-system-webview-2/android-system-webview-138-0-7204-63-2-release/android-system-webview-138-0-7204-63-8-android-apk-download/download) |
-| TPA10 (rk3566) | armeabi-v7a | **Cromite** SystemWebView 147.0.7727.56 | [release asset](https://github.com/maxlyth/ha-paneld/releases/download/webview-mirror/cromite-webview-147.0.7727.56.apk) · [Cromite releases](https://github.com/uazo/cromite/releases) |
-| WF1589T (rk3576) | arm64-v8a | Google WebView (Play) | **has Google Play** — update via Play, no sideload |
+| Panel | ABI | Stock (vendor firmware) | Replacement (`com.android.webview`) | Download |
+|---|---|---|---|---|
+| NSPanel Pro (PX30) | arm64-v8a | **unknown** — Android 8.1 AOSP base; confirmed too old for current HA frontend | **LineageOS** 138.0.7204.63 — last build for Android **8.1** | [release asset](https://github.com/maxlyth/ha-paneld/releases/download/webview-mirror/lineageos-webview-138.0.7204.63.apk) · [APKMirror](https://www.apkmirror.com/apk/lineageos/android-system-webview-2/android-system-webview-138-0-7204-63-2-release/android-system-webview-138-0-7204-63-8-android-apk-download/download) |
+| TPA10 (rk3566) | armeabi-v7a | **Chrome 83** (`com.android.webview`) — too old for current HA frontend | **Cromite** SystemWebView 147.0.7727.56 | [release asset](https://github.com/maxlyth/ha-paneld/releases/download/webview-mirror/cromite-webview-147.0.7727.56.apk) · [Cromite releases](https://github.com/uazo/cromite/releases) |
+| WF1589T (rk3576) | arm64-v8a | Google Play WebView (auto-updates) | update via Play Store — no sideload needed | — |
+| S9E (rk3566) | arm64-v8a | **Chromium 83** (`com.android.webview`) — too old for current HA frontend | arm64 SystemWebView build — community contributions welcome | [WebView mirror](https://github.com/maxlyth/ha-paneld/releases/tag/webview-mirror) |
+| SMT1019 (rk3576) | arm64-v8a | **unknown** — Android 14, no GMS; likely needs sideload | arm64 SystemWebView build — community contributions welcome | [WebView mirror](https://github.com/maxlyth/ha-paneld/releases/tag/webview-mirror) |
+| Shelly WD legacy (MT6580) | armeabi-v7a | **unknown** (Android 7 base ROM) | Atlantis only: `com.google.android.webview` **119.0.6045.194** via [official Shelly ZIP](https://repo.shelly.cloud/firmware/SAWD-0A1XX10EU1/stable/SAWD-0A1XX10EU1-WebViewUpdate.zip) — see [shelly-wall-display.md](shelly-wall-display.md#webview) | — |
+| Shelly WD V2 (arm64) | arm64-v8a | **unknown** (Android 13 base ROM; not present in Shelly OTA) | not established — check `adb shell dumpsys webviewupdate` | — |
 
 All mirrored builds live in the [**Panel WebView mirror** release](https://github.com/maxlyth/ha-paneld/releases/tag/webview-mirror) — intended as a living, community list of known-working versions. Got one working on another panel or version? Contributions welcome.
 

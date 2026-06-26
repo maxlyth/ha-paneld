@@ -91,6 +91,12 @@ The built-in browser WebView on the Wall Display XL had rendering/layout problem
 `home-assistant/core#162665`). The HA Companion app on the same device rendered correctly,
 confirming the issue was WebView-specific rather than device hardware.
 
+### WebView
+
+**Legacy (MT6580, Android 7 — Stargate, Pegasus, Atlantis):** The stock system WebView is not included in the standard Shelly OTA packages — it comes from the base factory ROM and its exact version has not been established from available firmware. For the **Atlantis** model (`SAWD-0A1XX10EU1`), Shelly publishes a separate WebView update package on the static CDN (`SAWD-0A1XX10EU1-stable-WebViewUpdate.zip`, 107 MB) that installs `com.google.android.webview` **119.0.6045.194** (Chrome 119, ~Oct 2023, armeabi-v7a, minSDK 24/Android 7.0). Inspection of this ZIP (2026-06-26): package installs to `system/app/GoogleWebView/GoogleWebView.apk`. There is no equivalent WebView update ZIP for Stargate or Pegasus — users on those models are limited to whatever the factory ROM ships.
+
+**Modern V2 (arm64, Android 13 — Blake, Jenna, Cally, Maverick, Dayna):** The standard Shelly OTA does not include a WebView package (the 2.7.1 OTA contains only app updates — Stargate.apk, Camera2.apk, ShellyPlaceholder.apk). The stock WebView version from the Android 13 base image has not been extracted; it is presumed to be reasonably current given the newer OS baseline.
+
 ---
 
 ## Access model — adb, root, sideloading
