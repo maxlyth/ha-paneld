@@ -12,10 +12,13 @@ from live units (rooted / userdebug `adb root`) on 2026-06-05.
 | Sonoff NSPanel Pro | rk3326 / PX30 | none (no RGB node) | STK3A5x light + proximity (app-direct) | no | **Zigbee** (Silabs EFR32, UART); no IR | [nspanel-pro.md](nspanel-pro.md) |
 | Smatek S9E † | rk3566 | per-button GPIO LEDs (root) | radar proximity, light, temp+humidity; **2 mains relays** (`st_relay`); RS485 + Ethernet | no | **Zigbee** | [s9e.md](s9e.md) |
 | ZHICAI SMT1019 ‡ | rk3576 | none (LED ioctl root-locked, no su) | none Android-exposed reported | no | no | [smt1019.md](smt1019.md) |
+| Shelly Wall Display § | MT6580 (legacy) / arm64 (modern) | none (no root path) | temp+humidity, ambient light, radar (XL) | no | no | [shelly-wall-display.md](shelly-wall-display.md) |
 
 † S9E specs are from Smatek's listing; control paths are from [#98](https://github.com/seaky/nspanel_pro_tools_apk/issues/98) + the HA community thread, **not** validated on a unit here — relay/button support is implemented but untested.
 
 ‡ SMT1019 facts are from a reporter's `/diag` + the retail listing ([#8](https://github.com/maxlyth/ha-paneld/issues/8)), **not** validated on a unit here.
+
+§ Shelly Wall Display facts are from firmware OTA analysis, the official changelog, and community/KB sources — **not** validated on a unit here; no root or adb access available. DeviceProfile in development.
 
 > [!TIP]
 > Before modifying firmware on a **button-less** panel, read
