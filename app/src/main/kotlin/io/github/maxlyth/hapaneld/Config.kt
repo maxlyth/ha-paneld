@@ -135,6 +135,13 @@ class Config(context: Context) {
         prefs.edit().putBoolean("prevent_idle_dim", on).apply()
     }
 
+    // App watchdog: poll the dashboard app and self-heal it — relaunch if its process dies, and return
+    // to it if it's been backgrounded too long. Opt-in (off by default): a stock panel never auto-acts.
+    val watchdogEnabled: Boolean get() = prefs.getBoolean("watchdog_enabled", false)
+    fun setWatchdogEnabled(on: Boolean) {
+        prefs.edit().putBoolean("watchdog_enabled", on).apply()
+    }
+
     // The screen-off timeout (ms) seen before we first raised it, so disabling preventIdleDim can restore
     // the firmware default. -1 = not yet captured.
     var savedScreenOffTimeout: Int

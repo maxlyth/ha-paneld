@@ -218,6 +218,15 @@ static void test_dispatch_exact_match(void) {
     dispatch_reply("SETHOME", out, sizeof out);
     CHECK(strcmp(out, "ERR\n") == 0, "SETHOME no arg -> ERR (got '%s')\n", out);
 
+    // APPSTATE: validated pkg, then pidof + focus probe. The sysexec stub returns NULL popen, so the
+    // liveness check sees no process -> "DEAD"; a bad pkg is rejected before any shell-out.
+    dispatch_reply("APPSTATE io.homeassistant.companion.android", out, sizeof out);
+    CHECK(strcmp(out, "DEAD\n") == 0, "APPSTATE valid pkg, no proc (stub) -> DEAD (got '%s')\n", out);
+    dispatch_reply("APPSTATE ;rm", out, sizeof out);
+    CHECK(strcmp(out, "ERR\n") == 0, "APPSTATE metachar pkg -> ERR (got '%s')\n", out);
+    dispatch_reply("APPSTATE", out, sizeof out);
+    CHECK(strcmp(out, "ERR\n") == 0, "APPSTATE no arg -> ERR (got '%s')\n", out);
+
     // A handler with a failing target replies ERR (no LED/backlight node on the host).
     dispatch_reply("RGB 1 2 3", out, sizeof out);
     CHECK(strcmp(out, "ERR\n") == 0, "RGB with no LED node -> ERR (got '%s')\n", out);

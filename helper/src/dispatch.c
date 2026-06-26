@@ -24,6 +24,7 @@ static const struct { const char *verb; cmd_fn fn; } COMMANDS[] = {
     { "RELOAD",    cmd_reload },
     { "START",     cmd_start },
     { "SETHOME",   cmd_sethome },
+    { "APPSTATE",  cmd_appstate },
     { "STOP",      cmd_stop },
     { "DISABLE",   cmd_disable },
     { "ENABLE",    cmd_enable },

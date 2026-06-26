@@ -138,6 +138,36 @@ static int set_home(const char *comp) {
     return 0;
 }
 
+// Report a package's state for the app watchdog: "DEAD" (no live process), "FG" (alive and the
+// focused window), or "BG" (alive but not focused). Read-only: `pidof` for liveness, then a scan of
+// `dumpsys window` for the "<pkg>/" component on the mCurrentFocus line. The pkg is validated.
+static int app_state(const char *pkg, char *out, size_t outsz) {
+    if (!valid_pkg(pkg)) return -1;
+    char cmd[160];
+    snprintf(cmd, sizeof cmd, "pidof %s 2>/dev/null", pkg);
+    FILE *p = sysexec_popen_r(cmd);
+    int alive = 0;
+    if (p) {
+        char b[64];
+        if (fgets(b, sizeof b, p) && b[0] && b[0] != '\n') alive = 1;
+        sysexec_pclose(p);
+    }
+    if (!alive) { snprintf(out, outsz, "DEAD"); return 0; }
+    int fg = 0;
+    p = sysexec_popen_r("dumpsys window 2>/dev/null");
+    if (p) {
+        char needle[160];
+        snprintf(needle, sizeof needle, "%s/", pkg);
+        char line[512];
+        while (fgets(line, sizeof line, p)) {
+            if (strstr(line, "mCurrentFocus") && strstr(line, needle)) { fg = 1; break; }
+        }
+        sysexec_pclose(p);
+    }
+    snprintf(out, outsz, "%s", fg ? "FG" : "BG");
+    return 0;
+}
+
 // Capture the screen as PNG and stream the raw bytes to [fd]. Client half-closes then reads to EOF.
 static void screencap_to(int fd) {
     FILE *p = sysexec_popen_r("screencap -p");
@@ -169,6 +199,16 @@ void cmd_reboot(conn_ctx *ctx, const char *args) {
     (void)args;
     reply(ctx->fd, "OK\n");   // reply before we go down
     sysexec_reboot();
+}
+
+void cmd_appstate(conn_ctx *ctx, const char *args) {
+    char pkg[128] = "";
+    sscanf(args, "%127s", pkg);
+    char st[16];
+    if (app_state(pkg, st, sizeof st) != 0) { reply(ctx->fd, "ERR\n"); return; }
+    char line[24];
+    snprintf(line, sizeof line, "%s\n", st);
+    reply(ctx->fd, line);
 }
 
 void cmd_density(conn_ctx *ctx, const char *args) {

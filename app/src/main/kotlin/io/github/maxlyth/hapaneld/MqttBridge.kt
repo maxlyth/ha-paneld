@@ -17,6 +17,7 @@ import io.github.maxlyth.hapaneld.control.NavigateController
 import io.github.maxlyth.hapaneld.control.RelayController
 import io.github.maxlyth.hapaneld.control.ScreenController
 import io.github.maxlyth.hapaneld.control.SystemController
+import io.github.maxlyth.hapaneld.control.WatchdogController
 import io.github.maxlyth.hapaneld.control.TouchSoundController
 import io.github.maxlyth.hapaneld.control.VolumeController
 import io.github.maxlyth.hapaneld.control.ZigbeeController
@@ -50,6 +51,8 @@ class MqttBridge(
     private val system: SystemController,
     // Soft on-screen navbar overlay (select: Off / Always on / Swipe reveal).
     private val navbar: NavbarController,
+    // App watchdog (switch): self-heals a dead/abandoned dashboard. Toggling restarts its poll loop.
+    private val watchdog: WatchdogController,
     private val touchSound: TouchSoundController,
     // Zigbee gateway control (Sonoff NSPanel Pro only). Presence is detected lazily on the MQTT
     // thread in publishDiscovery — it costs a su exec, so it must not run on the main thread.
@@ -115,6 +118,8 @@ class MqttBridge(
     private val stateWakeOnWave = "ha-paneld/$panel/wake_on_wave/state"
     private val cmdTouchSound = "ha-paneld/$panel/touch_sound/set"
     private val stateTouchSound = "ha-paneld/$panel/touch_sound/state"
+    private val cmdWatchdog = "ha-paneld/$panel/watchdog/set"
+    private val stateWatchdog = "ha-paneld/$panel/watchdog/state"
     private val cmdPreventIdleDim = "ha-paneld/$panel/prevent_idle_dim/set"
     private val statePreventIdleDim = "ha-paneld/$panel/prevent_idle_dim/state"
     private val cmdZigbee = "ha-paneld/$panel/zigbee_router/set"
@@ -307,6 +312,7 @@ class MqttBridge(
                 cmdNavbar -> handleNavbar(payload)
                 cmdWakeOnWave -> handleWakeOnWave(payload)
                 cmdTouchSound -> handleTouchSound(payload)
+                cmdWatchdog -> handleWatchdog(payload)
                 cmdPreventIdleDim -> handlePreventIdleDim(payload)
                 cmdZigbee -> handleZigbee(payload)
                 cmdAutoBright -> handleAutoBright(payload)
@@ -394,6 +400,13 @@ class MqttBridge(
         val on = payload.trim().equals("ON", ignoreCase = true)
         touchSound.set(on)
         client?.let { publish(it, stateTouchSound, if (touchSound.isEnabled()) "ON" else "OFF", retain = true) }
+    }
+
+    private fun handleWatchdog(payload: String) {
+        val on = payload.trim().equals("ON", ignoreCase = true)
+        config.setWatchdogEnabled(on)
+        watchdog.apply(on)
+        client?.let { publish(it, stateWatchdog, if (on) "ON" else "OFF", retain = true) }
     }
 
     private fun handleAutoBright(payload: String) {
@@ -679,6 +692,11 @@ class MqttBridge(
             """{"name":"Touch sound","unique_id":"${panel}_touch_sound","command_topic":"$cmdTouchSound","state_topic":"$stateTouchSound","icon":"mdi:volume-high","entity_category":"config",$avail,$device}""",
         )
         publish(c, stateTouchSound, if (touchSound.isEnabled()) "ON" else "OFF", retain = true)
+        publishConfig(
+            c, "switch", "${panel}_watchdog",
+            """{"name":"App watchdog","unique_id":"${panel}_watchdog","command_topic":"$cmdWatchdog","state_topic":"$stateWatchdog","icon":"mdi:restart-alert","entity_category":"config",$avail,$device}""",
+        )
+        publish(c, stateWatchdog, if (config.watchdogEnabled) "ON" else "OFF", retain = true)
 
         publishConfig(
             c, "switch", "${panel}_prevent_idle_dim",
@@ -813,6 +831,7 @@ class MqttBridge(
             "sensor" to "${panel}_temperature", "sensor" to "${panel}_humidity",
             "light" to "${panel}_buttons", "switch" to "${panel}_wake_on_wave",
             "switch" to "${panel}_touch_sound", "switch" to "${panel}_prevent_idle_dim",
+            "switch" to "${panel}_watchdog",
             "switch" to "${panel}_zigbee_router",
             "switch" to "${panel}_auto_brightness", "number" to "${panel}_brightness_bias",
             "number" to "${panel}_ambient_lux",

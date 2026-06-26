@@ -5,6 +5,9 @@ import android.content.Intent
 import android.util.Log
 import io.github.maxlyth.hapaneld.util.HelperClient
 
+/** Foreground/liveness state of the dashboard app, as seen by the app watchdog. */
+enum class AppState { FG, BG, DEAD, UNKNOWN }
+
 /**
  * Panel-level actions: reload the dashboard, bring a launcher / the dashboard to the foreground,
  * reboot.
@@ -160,6 +163,30 @@ class SystemController(private val context: Context) {
             directStart(pm.getLaunchIntentForPackage(pkg) ?: Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME))
         }
         Log.i(TAG, "home -> $comp")
+    }
+
+    /**
+     * Report the dashboard app's state for the watchdog: [AppState.FG] (alive + focused), [AppState.BG]
+     * (alive but not focused), [AppState.DEAD] (no process), or [AppState.UNKNOWN] (can't tell — no
+     * root and no daemon, or no dashboard installed). Prefers the daemon's `APPSTATE` verb; falls back
+     * to `su` (`pidof` for liveness, `dumpsys window` focus for foreground). `pidof … ; true` keeps the
+     * shell exit 0 so a *blank* reply means "dead" while a *null* reply means su itself was unavailable.
+     */
+    fun dashboardState(dashboardPkg: String): AppState {
+        val pkg = resolveDashboard(dashboardPkg)
+        if (pkg.isBlank()) return AppState.UNKNOWN
+        if (HelperClient.available()) {
+            return when (HelperClient.send("APPSTATE $pkg")) {
+                "FG" -> AppState.FG
+                "BG" -> AppState.BG
+                "DEAD" -> AppState.DEAD
+                else -> AppState.UNKNOWN
+            }
+        }
+        val pid = Su.runOutput("pidof $pkg 2>/dev/null; true") ?: return AppState.UNKNOWN
+        if (pid.isBlank()) return AppState.DEAD
+        val focus = Su.runOutput("dumpsys window 2>/dev/null | grep mCurrentFocus") ?: ""
+        return if (focus.contains("$pkg/")) AppState.FG else AppState.BG
     }
 
     fun reboot() {

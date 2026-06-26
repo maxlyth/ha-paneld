@@ -24,6 +24,7 @@ import io.github.maxlyth.hapaneld.control.RelayController
 import io.github.maxlyth.hapaneld.control.ScreenController
 import io.github.maxlyth.hapaneld.control.SystemController
 import io.github.maxlyth.hapaneld.control.TameController
+import io.github.maxlyth.hapaneld.control.WatchdogController
 import io.github.maxlyth.hapaneld.control.TouchSoundController
 import io.github.maxlyth.hapaneld.control.VolumeController
 import io.github.maxlyth.hapaneld.control.ThreadController
@@ -79,6 +80,7 @@ class PaneldService : Service() {
     private lateinit var system: SystemController
     private lateinit var tame: TameController
     private lateinit var navbar: NavbarController
+    private lateinit var watchdog: WatchdogController
     private lateinit var touchSound: TouchSoundController
     private lateinit var zigbee: ZigbeeController
     private lateinit var thread: ThreadController
@@ -107,6 +109,7 @@ class PaneldService : Service() {
         navigate = NavigateController(this)
         volume = VolumeController(this)
         system = SystemController(this)
+        watchdog = WatchdogController(system, config)
         tame = TameController(this)
         // Tame opt-in: neutralise the vendor packages the user listed (force-stop + disable boot-relaunch
         // + strip the overlay permission). No-op when the blocklist is empty (the default — a stock panel
@@ -151,7 +154,7 @@ class PaneldService : Service() {
     }
 
     private fun buildMqtt(): MqttBridge = MqttBridge(
-        config, brightness, screen, led, navigate, volume, system, navbar, touchSound, zigbee, relay, cpu, adb,
+        config, brightness, screen, led, navigate, volume, system, navbar, watchdog, touchSound, zigbee, relay, cpu, adb,
         accessibilityEnabled(), profile.evdevButtons.isNotEmpty(),
         sensors.hasLight(), sensors.hasProximity(),
         sensors.hasTemperature(), sensors.hasHumidity(),
@@ -300,6 +303,8 @@ class PaneldService : Service() {
             mqtt.start()
             // Restore the soft navbar to its persisted mode (no-op when Off / no overlay permission).
             navbar.apply(config.navbarMode)
+            // Start the app watchdog if enabled (off by default; self-heals a dead/abandoned dashboard).
+            watchdog.apply(config.watchdogEnabled)
             sensors.start(
                 onLux = { lux -> mqtt.publishLight(lux) },
                 onLuxRaw = { lux -> autoBright.submitLux(lux) },
@@ -352,6 +357,7 @@ class PaneldService : Service() {
     override fun onDestroy() {
         started = false
         runCatching { navbar.cleanup() }
+        runCatching { watchdog.stop() }
         runCatching { sensors.stop() }
         runCatching { server.stop() }
         runCatching { mdns.stop() }
