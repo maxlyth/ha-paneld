@@ -1,15 +1,22 @@
 package io.github.maxlyth.hapaneld.control
 
 import android.content.Context
+import android.net.nsd.NsdManager
+import android.net.nsd.NsdServiceInfo
+import android.os.Build
+import android.util.Log
 import io.github.maxlyth.hapaneld.device.DeviceProfile
 import io.github.maxlyth.hapaneld.util.HelperClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import kotlin.coroutines.resume
 
 /**
  * Thread Mesh Router provisioning for panels that carry a Silicon Labs EFR32 radio coprocessor.
@@ -98,21 +105,118 @@ class ThreadController(private val profile: DeviceProfile = DeviceProfile.detect
      * with a descriptive message on any error. If [otbrUrl] is blank, commission is skipped (the radio
      * ends up in [EfrState.THREAD_NCP] — flashed but not yet on the mesh).
      */
+    /**
+     * Commission an already-flashed Thread NCP radio onto the mesh. Skips the GBL flash step.
+     * Use when the EFR32 is already in [EfrState.THREAD_NCP] but not yet joined.
+     */
+    suspend fun commissionOnly(context: Context, onProgress: (String) -> Unit = {}): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            if (dir == null) return@withContext Result.failure(Exception("no EFR32 on this panel"))
+            if (status() == EfrState.ZIGBEE_NCP)
+                return@withContext Result.failure(Exception("EFR32 still running Zigbee NCP — flash first"))
+            onProgress("Discovering Thread border router on the LAN…")
+            val otbrUrl = discoverOtbrUrl(context)
+            if (otbrUrl == null) {
+                onProgress("No border router found via mDNS.")
+                return@withContext Result.failure(Exception("no OTBR discovered on the LAN"))
+            }
+            onProgress("Found OTBR at $otbrUrl")
+            commission(otbrUrl, onProgress)
+        }
+
     suspend fun flash(context: Context, otbrUrl: String = "", onProgress: (String) -> Unit = {}): Result<Unit> =
         withContext(Dispatchers.IO) {
             if (dir == null) return@withContext Result.failure(Exception("no EFR32 on this panel"))
+            // Skip re-flashing if the GBL is already installed; go straight to commissioning.
+            if (status() != EfrState.ZIGBEE_NCP) {
+                onProgress("EFR32 already running Thread NCP — skipping flash, commissioning only.")
+                return@withContext commissionOnly(context, onProgress)
+            }
             val gbl = runCatching { extractFirmware(context) }.getOrElse {
                 return@withContext Result.failure(Exception("firmware asset not found: $ASSET_PATH"))
             }
             try {
                 val flashResult = if (canSu) flashViaSu(gbl, onProgress) else flashViaDaemon(gbl, onProgress)
                 if (flashResult.isFailure) return@withContext flashResult
-                if (otbrUrl.isNotBlank()) commission(otbrUrl, onProgress)
-                else flashResult
+                // Resolve OTBR URL: prefer explicit arg, then mDNS discovery, then skip commission.
+                val resolved = when {
+                    otbrUrl.isNotBlank() -> otbrUrl
+                    else -> {
+                        onProgress("Discovering Thread border router on the LAN…")
+                        discoverOtbrUrl(context).also { found ->
+                            if (found != null) onProgress("Found OTBR at $found")
+                            else onProgress("No border router found — skipping commissioning (flash still succeeded).")
+                        }
+                    }
+                }
+                if (resolved != null) commission(resolved, onProgress) else flashResult
             } finally {
                 gbl.delete()
             }
         }
+
+    /**
+     * Discover all `_meshcop._udp` / `_meshcop._tcp` hosts on the LAN within [timeoutMs].
+     * Returns base URLs like `http://<ip>:8080` for every resolved service. Note: Apple TVs and
+     * other HomeKit devices also advertise `_meshcop._udp` but have no OpenThread REST API —
+     * callers must probe each candidate with [fetchDatasetHex] and use the first that responds.
+     */
+    private suspend fun discoverOtbrCandidates(context: Context, timeoutMs: Long = 8_000L): List<String> {
+        val nsd = context.getSystemService(Context.NSD_SERVICE) as? NsdManager ?: return emptyList()
+        val found = mutableListOf<String>()
+        val listeners = mutableListOf<NsdManager.DiscoveryListener>()
+
+        fun addCandidate(addr: String) {
+            val url = "http://$addr:8080"
+            synchronized(found) { if (url !in found) found += url }
+        }
+
+        fun makeListener(): NsdManager.DiscoveryListener = object : NsdManager.DiscoveryListener {
+            override fun onStartDiscoveryFailed(st: String, err: Int) {}
+            override fun onStopDiscoveryFailed(st: String, err: Int) {}
+            override fun onDiscoveryStarted(st: String) {}
+            override fun onDiscoveryStopped(st: String) {}
+            override fun onServiceLost(info: NsdServiceInfo) {}
+            override fun onServiceFound(info: NsdServiceInfo) {
+                val resolveListener = object : NsdManager.ResolveListener {
+                    override fun onResolveFailed(i: NsdServiceInfo, err: Int) {}
+                    override fun onServiceResolved(i: NsdServiceInfo) {
+                        val addr = if (Build.VERSION.SDK_INT >= 34)
+                            i.hostAddresses.firstOrNull()?.hostAddress
+                        else
+                            @Suppress("DEPRECATION") i.host?.hostAddress
+                        if (addr != null) addCandidate(addr)
+                    }
+                }
+                @Suppress("DEPRECATION")
+                if (Build.VERSION.SDK_INT >= 34)
+                    nsd.resolveService(info, context.mainExecutor, resolveListener)
+                else
+                    nsd.resolveService(info, resolveListener)
+            }
+        }
+
+        listOf("_meshcop._udp", "_meshcop._tcp").forEach { svcType ->
+            val l = makeListener()
+            listeners += l
+            runCatching { nsd.discoverServices(svcType, NsdManager.PROTOCOL_DNS_SD, l) }
+        }
+        delay(timeoutMs)
+        listeners.forEach { runCatching { nsd.stopServiceDiscovery(it) } }
+        return synchronized(found) { found.toList() }
+    }
+
+    /**
+     * Find the first mDNS-discovered host that actually serves a valid Thread dataset.
+     * Filters out Apple TVs and other non-OTBR devices that advertise `_meshcop` but have no API.
+     */
+    private suspend fun discoverOtbrUrl(context: Context): String? {
+        val candidates = discoverOtbrCandidates(context)
+        Log.d("ThreadController", "mDNS candidates: $candidates")
+        return candidates.firstOrNull { url ->
+            runCatching { fetchDatasetHex(url) }.isSuccess
+        }
+    }
 
     private fun extractFirmware(context: Context): File {
         val dest = File(context.cacheDir, "efr32-thread-ncp.gbl")
@@ -181,18 +285,45 @@ class ThreadController(private val profile: DeviceProfile = DeviceProfile.detect
         }
     }
 
-    /** GET <otbrUrl>/node/dataset/active → JSON {"ActiveDataset": "<hex>"} → hex string. */
+    /**
+     * GET <otbrUrl>/node/dataset/active → JSON {"ActiveDataset":"<hex>"} → hex string.
+     * Probes the alternate port (8081↔8080) on failure — the HA OTBR add-on v3+ uses 8081
+     * for the REST API while older installs / alternative stacks use 8080.
+     */
     private fun fetchDatasetHex(otbrUrl: String): String {
-        val url = URL("${otbrUrl.trimEnd('/')}/node/dataset/active")
-        val conn = url.openConnection() as HttpURLConnection
+        return runCatching { fetchDatasetHexAt(otbrUrl) }.recover { first ->
+            val alt = when {
+                otbrUrl.endsWith(":8081") -> otbrUrl.dropLast(4) + "8080"
+                otbrUrl.endsWith(":8080") -> otbrUrl.dropLast(4) + "8081"
+                else -> throw first
+            }
+            fetchDatasetHexAt(alt)
+        }.getOrThrow()
+    }
+
+    private fun fetchDatasetHexAt(otbrUrl: String): String {
+        val conn = URL("${otbrUrl.trimEnd('/')}/node/dataset/active").openConnection() as HttpURLConnection
         conn.connectTimeout = 5_000
         conn.readTimeout    = 5_000
+        // text/plain → SLZB-Ultima3 and vanilla OpenThread REST return raw hex TLV.
+        // HA OTBR add-on returns {"ActiveDataset":"<hex>"} JSON regardless of Accept,
+        // so we check both formats in the response parser below.
+        // Do NOT include application/json: the SLZB prefers it over text/plain and
+        // returns the expanded decoded object (no ActiveDataset field) instead of the TLV.
+        conn.setRequestProperty("Accept", "text/plain")
         val body = try {
-            conn.inputStream.bufferedReader().readText()
+            conn.inputStream.bufferedReader().readText().trim()
         } finally {
             conn.disconnect()
         }
-        val hex = JSONObject(body).getString("ActiveDataset").trim()
+        val hex = when {
+            body.matches(Regex("[0-9a-fA-F]+")) -> body          // raw hex (SLZB-Ultima3 / vanilla OTBR)
+            body.startsWith("{") -> JSONObject(body)              // JSON wrapper (HA add-on)
+                .optString("ActiveDataset").trim()
+                .takeIf { it.isNotBlank() }
+                ?: throw IllegalStateException("OTBR JSON has no ActiveDataset field")
+            else -> throw IllegalStateException("unrecognised OTBR response: ${body.take(80)}")
+        }
         if (hex.isBlank()) throw IllegalStateException("OTBR returned an empty dataset")
         return hex
     }

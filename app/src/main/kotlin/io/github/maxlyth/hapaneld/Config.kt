@@ -170,15 +170,16 @@ class Config(context: Context) {
     val silenceBootChime: Boolean get() = prefs.getBoolean("silence_boot_chime", false)
     fun setSilenceBootChime(on: Boolean) { prefs.edit().putBoolean("silence_boot_chime", on).apply() }
 
-    /** OTBR REST API base URL for Thread commissioning (unauthenticated, port 8080 by convention).
-     *  Defaults to http://<broker-host>:8080, since the OTBR add-on typically runs on the same HA
-     *  server as the MQTT broker. Override if your OTBR lives elsewhere. */
+    /** OTBR REST API base URL for Thread commissioning (unauthenticated).
+     *  Defaults to http://<broker-host>:8081, derived from the MQTT broker hostname (the OTBR
+     *  add-on typically runs on the same HA instance). HA OTBR add-on v3+ serves the REST API on
+     *  8081; ThreadController probes 8080 automatically if 8081 fails. Override if needed. */
     val otbrUrl: String
         get() = prefs.getString("otbr_url", null)?.takeIf { it.isNotBlank() } ?: derivedOtbrUrl()
     fun setOtbrUrl(url: String) { prefs.edit().putString("otbr_url", url).apply() }
     private fun derivedOtbrUrl(): String {
         val host = mqttBroker.substringAfter("://").substringBefore(":").substringBefore("/").trim()
-        return if (host.isNotBlank()) "http://$host:8080" else ""
+        return if (host.isNotBlank()) "http://$host:8081" else ""
     }
 
     // Desired Zigbee-router state, persisted so the gateway can be auto-started on boot when nothing
