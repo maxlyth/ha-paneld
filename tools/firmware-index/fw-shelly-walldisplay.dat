@@ -1,0 +1,13 @@
+# Shelly Wall Display firmware archive — managed by shelly-firmware-monitor workflow
+# Source of truth: track|version|build_id|bytes|discovered|cdn_url|wayback_ts
+#
+# Tracks:
+#   WallDisplay    — legacy armeabi-v7a (Stargate 4", Atlantis, Pegasus X2)
+#   WallDisplayV2  — modern arm64-v8a  (Blake/XL, Jenna/X2i, Cally/X1i, Maverick/U1, Dayna/D1)
+#
+# cdn_url:   the opaque hash-addressed CDN URL from the manifest at time of discovery.
+#            Valid only while this version is current; Shelly replaces in-place on each release.
+# wayback_ts: Wayback Machine capture timestamp (yyyymmddHHMMSS), filled by the archive step.
+#             Empty = archival pending. Use the Wayback URL for durable access to old versions.
+WallDisplay|2.7.1|20260609-205046/2.7.1-857d7175|0|2026-06-26|https://fwcdn.shelly.cloud/gen2-ntest/WallDisplay/410d0ce826f110f6fd0f4da3798c8fc75dc508a466b5a4866d4fbd0477ed61a1|
+WallDisplayV2|2.7.1|20260609-205046/2.7.1-857d7175|0|2026-06-26|https://fwcdn.shelly.cloud/gen2-ntest/WallDisplayV2/1f0c8a3df416f4a9d4ab361d5b4b914001d12da0beda37e2b0228c4092421701|

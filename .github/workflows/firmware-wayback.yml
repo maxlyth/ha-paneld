@@ -16,7 +16,8 @@ on:
   push:
     branches: [main]
     paths:
-      - tools/firmware-index/fw-*.dat
+      - tools/firmware-index/fw-120p.dat
+      - tools/firmware-index/fw-86p.dat
   workflow_dispatch:
 
 permissions:
