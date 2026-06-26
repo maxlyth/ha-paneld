@@ -6,7 +6,7 @@ import android.os.Build
  * Per-platform canonical silo. Everything device/platform-specific that the generic functional modules
  * need — su form, LED mechanism, screen-off path, and the sysfs/vendor locations of optional hardware —
  * is declared here, one `object` per platform (see `NSPanelPro`, `Tpa10`, `Wf1589t`, `Smt1019`, `S9e`,
- * `Generic`).
+ * `ShellyWallDisplay`, `ShellyWallDisplayV2`, `Generic`).
  *
  * Design rule (see docs/architecture/device-profiles.md): a profile declares **candidates + quirks**;
  * the functional modules still **runtime-probe to confirm** (profile says *where to look*, the probe
@@ -160,6 +160,16 @@ interface DeviceProfile {
                 // so an unverified Gen2 still detects relays/zigbee/sensors correctly).
                 "px30" in model || "px30" in device || "rk3326" in model || "rk3326" in device -> NSPanelPro
                 model == "tpa10" || device == "tpa10" -> Tpa10
+                // Shelly Wall Display V2 — modern arm64: Blake/XL, Jenna/X2i, Cally/XLi, Maverick/U1, Dayna/D1.
+                // Build.MODEL is either the device codename or the full SKU (SAWD-3A1XE10EU2 etc.).
+                model in setOf("blake", "jenna", "cally", "maverick", "dayna") ||
+                    Regex("^sawd-[3456]").containsMatchIn(model) ||
+                    Regex("^sawd-[3456]").containsMatchIn(device) -> ShellyWallDisplayV2
+                // Shelly Wall Display legacy — MT6580/armeabi-v7a: Stargate/4", Atlantis, Pegasus/X2.
+                model in setOf("stargate", "pegasus", "atlantis") ||
+                    Regex("^sawd-[012]").containsMatchIn(model) ||
+                    Regex("^sawd-[012]").containsMatchIn(device) ||
+                    "k400_mt6580" in device || "e500_7731e" in device -> ShellyWallDisplay
                 // The ZHICAI SMT1019 (device WF2489T) shares the rk3576 "rk3576_u" model code with the
                 // WF1589T, but is a locked-down, no-root unit with no app-direct LED — match it first so
                 // the rk3576_u clause below doesn't hand it the WF1589T's app-LED profile (GitHub #8).
