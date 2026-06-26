@@ -127,6 +127,17 @@ static int set_overlay(const char *pkg, const char *mode) {
     return 0;
 }
 
+// Set the default HOME (launcher) to [comp] (pkg/cls). ha-paneld re-asserts the dashboard app as the
+// default home after a package change clears the association (declaring a new HOME activity resets it).
+// Bounded to a valid component; the target package's own manifest still governs whether it can be home.
+static int set_home(const char *comp) {
+    if (!valid_component(comp)) return -1;
+    char cmd[256];
+    snprintf(cmd, sizeof cmd, "cmd package set-home-activity %s >/dev/null 2>&1", comp);
+    sysexec_run(cmd);
+    return 0;
+}
+
 // Capture the screen as PNG and stream the raw bytes to [fd]. Client half-closes then reads to EOF.
 static void screencap_to(int fd) {
     FILE *p = sysexec_popen_r("screencap -p");
@@ -146,6 +157,12 @@ void cmd_start(conn_ctx *ctx, const char *args) {
     char comp[160] = "";
     sscanf(args, "%159s", comp);
     reply(ctx->fd, start_component(comp) == 0 ? "OK\n" : "ERR\n");
+}
+
+void cmd_sethome(conn_ctx *ctx, const char *args) {
+    char comp[160] = "";
+    sscanf(args, "%159s", comp);
+    reply(ctx->fd, set_home(comp) == 0 ? "OK\n" : "ERR\n");
 }
 
 void cmd_reboot(conn_ctx *ctx, const char *args) {

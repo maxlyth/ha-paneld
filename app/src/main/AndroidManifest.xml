@@ -47,6 +47,28 @@
             android:exported="false"
             android:label="ha-paneld configuration" />
 
+        <!-- Admin app drawer. Reachable three ways: the navbar Launcher button (privileged am start),
+             as a selectable/last-resort HOME app (Settings -> Home), and the HA/:8888 trigger. It does
+             NOT carry CATEGORY_LAUNCHER on purpose — a second MAIN/LAUNCHER activity makes the package's
+             front-door launch ambiguous (Android resolves it to the system chooser instead of
+             MainActivity, hiding the QR standing screen). MainActivity stays the sole launcher icon.
+             It does NOT become the default home either — Companion stays default and keeps booting to
+             the dashboard; this is only a selectable/fallback home. exported so the privileged am start
+             path can open it. -->
+        <activity
+            android:name=".AdminLauncherActivity"
+            android:exported="true"
+            android:label="Panel admin"
+            android:excludeFromRecents="true"
+            android:theme="@style/Theme.AppCompat.DayNight">
+            <!-- Selectable / last-resort HOME. Companion remains the default home app. -->
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.HOME" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
         <service
             android:name=".PaneldService"
             android:exported="false"

@@ -162,7 +162,14 @@ class NavbarController(
         // Back/Recents/Launcher run a slow su / activity call — navButton offloads it AND holds the press
         // highlight lit from touch-down until it completes, so the tap isn't mistaken for a no-op.
         row.addView(navButton(R.drawable.ic_nav_back, autoHide) { NavActions.back(appCanSu) })
-        row.addView(navButton(R.drawable.ic_nav_launcher, autoHide) { system.launchLauncher(launcherPkg()) })
+        // Default: ha-paneld's own admin app drawer (AdminLauncherActivity). A configured launcher_package
+        // still overrides — but only while that package is actually installed; otherwise (e.g. the user
+        // uninstalled a third-party launcher whose name is still in the pref) fall back to the admin
+        // launcher so the button never dead-ends.
+        row.addView(navButton(R.drawable.ic_nav_launcher, autoHide) {
+            val pkg = launcherPkg()
+            if (system.isLaunchable(pkg)) system.launchLauncher(pkg) else system.launchAdminLauncher()
+        })
         // Recents only where the firmware actually has an overview screen.
         if (hasRecents) row.addView(navButton(R.drawable.ic_nav_recents, autoHide) { NavActions.recents(appCanSu) })
         row.addView(spacer(edge))

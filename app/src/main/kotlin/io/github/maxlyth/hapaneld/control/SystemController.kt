@@ -93,6 +93,58 @@ class SystemController(private val context: Context) {
         Log.i(TAG, "launcher -> $comp")
     }
 
+    /** True if [pkg] is installed with a launchable activity — guards a stale configured launcher. */
+    fun isLaunchable(pkg: String): Boolean =
+        pkg.isNotBlank() && runCatching { context.packageManager.getLaunchIntentForPackage(pkg) != null }.getOrDefault(false)
+
+    /**
+     * Open ha-paneld's own on-demand admin launcher (an app drawer for panel admin). The default for
+     * the navbar Launcher button — replaces landing on the vendor pseudo-launcher. Reached by explicit
+     * component, so it works even when no other launcher is installed.
+     */
+    fun launchAdminLauncher() {
+        val comp = "${context.packageName}/.AdminLauncherActivity"
+        if (!privilegedStart(comp)) {
+            directStart(Intent().setClassName(context.packageName, "${context.packageName}.AdminLauncherActivity"))
+        }
+        Log.i(TAG, "admin launcher -> $comp")
+    }
+
+    /** Set the default HOME (launcher) to [component] ("pkg/cls"). Daemon SETHOME, else su. */
+    private fun setHomeActivity(component: String): Boolean {
+        if (component.isBlank()) return false
+        if (HelperClient.available() && HelperClient.send("SETHOME $component") == "OK") return true
+        return Su.run("cmd package set-home-activity $component")
+    }
+
+    /**
+     * Keep the dashboard app (HA Companion) as the default home.
+     *
+     * Our [AdminLauncherActivity] declares `CATEGORY_HOME` so it's a selectable / last-resort launcher.
+     * The side effect: Android **clears the default-home association** whenever a package adds or changes
+     * a HOME activity (i.e. every ha-paneld install/update) — after which pressing Home pops a chooser
+     * instead of booting straight to the dashboard. So on boot we re-assert the dashboard app as the
+     * default home, but only when home is unowned (the system resolver) or owned by *us* — a deliberate
+     * third-party launcher set as home is left alone. If the dashboard app isn't installed we do nothing,
+     * leaving our admin launcher as the genuine last-resort home.
+     */
+    fun ensureDashboardHome(dashboardPkg: String) {
+        val target = resolveDashboard(dashboardPkg)
+        if (target.isBlank()) { Log.i(TAG, "ensureHome: no dashboard app installed; leaving home as-is"); return }
+        val pm = context.packageManager
+        val home = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+        val current = pm.resolveActivity(home, 0)?.activityInfo?.packageName
+        if (current == target) return                                   // already correct
+        // Respect a real third-party launcher the user chose; only reclaim from "no default" or ourselves.
+        if (current != null && current != "android" && current != context.packageName) return
+        val comp = pm.queryIntentActivities(home, 0)
+            .firstOrNull { it.activityInfo.packageName == target }
+            ?.let { "${it.activityInfo.packageName}/${it.activityInfo.name}" }
+        if (comp == null) { Log.w(TAG, "ensureHome: $target has no HOME activity"); return }
+        Log.i(TAG, "ensureHome: default home was '$current' -> $comp")
+        setHomeActivity(comp)
+    }
+
     /** Bring the dashboard (or the default home app) to the foreground. */
     fun launchHome(dashboardPkg: String) {
         val pm = context.packageManager

@@ -104,6 +104,7 @@ class MqttBridge(
     private val cmdReboot = "ha-paneld/$panel/reboot/set"
     private val cmdLauncher = "ha-paneld/$panel/launcher/set"
     private val cmdHome = "ha-paneld/$panel/home/set"
+    private val cmdAdminLauncher = "ha-paneld/$panel/admin_launcher/set"
     private val cmdButtons = "ha-paneld/$panel/buttons/set"
     private val stateButtons = "ha-paneld/$panel/buttons/state"
     private val cmdBack = "ha-paneld/$panel/back/set"
@@ -299,6 +300,7 @@ class MqttBridge(
                 cmdReboot -> system.reboot()
                 cmdLauncher -> system.launchLauncher(config.launcherPackage)
                 cmdHome -> system.launchHome(config.dashboardPackage)
+                cmdAdminLauncher -> system.launchAdminLauncher()
                 cmdButtons -> handleButtons(payload)
                 cmdBack -> NavActions.back(appCanSu)        // root keyevent or a11y; on the MQTT thread (ok to block)
                 cmdRecents -> NavActions.recents(appCanSu)
@@ -783,6 +785,10 @@ class MqttBridge(
             c, "button", "${panel}_home",
             """{"name":"Home Assistant","unique_id":"${panel}_home","command_topic":"$cmdHome","icon":"mdi:home-assistant",$avail,$device}""",
         )
+        publishConfig(
+            c, "button", "${panel}_admin_launcher",
+            """{"name":"Admin launcher","unique_id":"${panel}_admin_launcher","command_topic":"$cmdAdminLauncher","icon":"mdi:cog-box",$avail,$device}""",
+        )
     }
 
     private fun jsonEsc(s: String): String =
@@ -817,6 +823,7 @@ class MqttBridge(
             "switch" to "${panel}_network_adb",
             "button" to "${panel}_reload", "button" to "${panel}_reboot",
             "button" to "${panel}_launcher", "button" to "${panel}_home",
+            "button" to "${panel}_admin_launcher",
         )
         entities.forEach { (comp, obj) -> publish(c, "homeassistant/$comp/$obj/config", "", retain = true) }
     }

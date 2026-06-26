@@ -166,8 +166,14 @@ class PaneldServer(
                         "back" -> { PanelAccessibilityService.navBack(); true }
                         "recents" -> { PanelAccessibilityService.navRecents(); true }
                         // Launcher, not Home: the HA Companion IS the home/launcher on these panels, so the
-                        // hard, useful action is escaping TO the system launcher to reach Settings/config apps.
-                        "launcher" -> { system.launchLauncher(config.launcherPackage); true }
+                        // hard, useful action is escaping TO a launcher to reach Settings/config apps. Honour a
+                        // configured launcher only while it's installed, else open our own admin launcher.
+                        "launcher" -> {
+                            if (system.isLaunchable(config.launcherPackage)) system.launchLauncher(config.launcherPackage)
+                            else system.launchAdminLauncher()
+                            true
+                        }
+                        "admin_launcher" -> { system.launchAdminLauncher(); true }
                         "reboot" -> { scope.launch { system.reboot() }; true }
                         // step() (adjustStreamVolume) not setPercent: on a coarse stream (e.g. the TPA10's
                         // 7-step STREAM_MUSIC) the current→percent→raw round-trip truncates back to the same
@@ -527,6 +533,7 @@ $updateBanner$setupBanner
  ${pbtn("back", "← Back", a11yOk, "the accessibility service")}
  ${pbtn("recents", "▢ Recents", a11yOk && hasRecents, if (hasRecents) "the accessibility service" else "a Recents/overview screen (absent on this panel)")}
  ${pbtn("launcher", "⊞ Launcher", rootOk, "root (su or the helper daemon)")}
+ ${pbtn("admin_launcher", "⚙ Admin launcher", rootOk, "root (su or the helper daemon)")}
 </div>
 <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
  ${pbtn("voldn", "Vol −", true, "")}

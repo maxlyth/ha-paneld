@@ -209,6 +209,15 @@ static void test_dispatch_exact_match(void) {
     dispatch_reply("THREAD_COMMISSION 0e080000", out, sizeof out);
     CHECK(strcmp(out, "ERR:spinel\n") == 0, "THREAD_COMMISSION valid hex -> ERR:spinel on host (got '%s')\n", out);
 
+    // SETHOME routes to set-home-activity, bounded to a valid component (reuses valid_component);
+    // the sysexec stub makes a well-formed component succeed, a metachar/empty arg is rejected.
+    dispatch_reply("SETHOME io.homeassistant.companion.android/.Home", out, sizeof out);
+    CHECK(strcmp(out, "OK\n") == 0, "SETHOME valid component -> OK (got '%s')\n", out);
+    dispatch_reply("SETHOME ;reboot", out, sizeof out);
+    CHECK(strcmp(out, "ERR\n") == 0, "SETHOME metachar arg -> ERR (got '%s')\n", out);
+    dispatch_reply("SETHOME", out, sizeof out);
+    CHECK(strcmp(out, "ERR\n") == 0, "SETHOME no arg -> ERR (got '%s')\n", out);
+
     // A handler with a failing target replies ERR (no LED/backlight node on the host).
     dispatch_reply("RGB 1 2 3", out, sizeof out);
     CHECK(strcmp(out, "ERR\n") == 0, "RGB with no LED node -> ERR (got '%s')\n", out);

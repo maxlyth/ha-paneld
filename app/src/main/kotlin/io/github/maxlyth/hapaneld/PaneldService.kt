@@ -115,6 +115,11 @@ class PaneldService : Service() {
         config.tameVendorPackages.takeIf { it.isNotEmpty() }?.let { pkgs ->
             scope.launch { tame.applyBlocklist(pkgs) }
         }
+        // Re-assert the dashboard (HA Companion) as the default home. Our admin launcher declares
+        // CATEGORY_HOME, and Android clears the default-home association on each install/update of a
+        // HOME app — so without this, Home would pop a chooser instead of booting to the dashboard.
+        // No-op unless home was cleared (or is us); off-main as it may call su. See ensureDashboardHome.
+        scope.launch { system.ensureDashboardHome(config.dashboardPackage) }
         navbar = NavbarController(
             this, system, volume, brightness, { config.launcherPackage },
             profile.appCanSu, profile.hasRecents,

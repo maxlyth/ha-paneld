@@ -23,6 +23,7 @@ static const struct { const char *verb; cmd_fn fn; } COMMANDS[] = {
     { "SCREENCAP", cmd_screencap },
     { "RELOAD",    cmd_reload },
     { "START",     cmd_start },
+    { "SETHOME",   cmd_sethome },
     { "STOP",      cmd_stop },
     { "DISABLE",   cmd_disable },
     { "ENABLE",    cmd_enable },
