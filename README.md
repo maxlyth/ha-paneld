@@ -16,8 +16,9 @@ dashboard actually feel fast on cheap hardware.
 It's a small Android agent that exposes panel-side hardware to Home Assistant over HTTP + MQTT
 auto-discovery + mDNS, so a panel pairs itself with HA when you sideload the APK — no per-device YAML.
 
-It is built for panel-class Android (Sonoff NSPanelPro, Tuya TPA10, and similar), **not** personal
-phones. The official [HA Companion app](https://github.com/home-assistant/android) remains the HOME
+It is built for panel-class Android — with explicit device profiles for Sonoff NSPanel Pro, Tuya
+TPA10, Electron WF1589T, ZHICAI SMT1019, Smatek S9E, and (preliminary) the Shelly Wall Display
+family — **not** personal phones. The official [HA Companion app](https://github.com/home-assistant/android) remains the HOME
 launcher and dashboard; ha-paneld runs as a headless foreground service alongside it and never takes
 the foreground.
 
@@ -273,6 +274,9 @@ navigate, TTS) work on any panel; LED/buttons depend on a per-panel HAL.
 | Tuya TPA10 | Rockchip rk3566 | 11 (API 30) | armeabi-v7a | 32-bit userspace |
 | Electron WF1589T | Rockchip rk3576 | userdebug (`adb root`) | arm64-v8a | RGB LED via clean-room NDK ioctl on `/dev/ledjni` (no vendor lib) |
 | ZHICAI SMT1019 | Rockchip rk3576 | 14 (API 34) | arm64-v8a | no root; RGB LED firmware-locked (ioctl denied) — community-reported ([#8](https://github.com/maxlyth/ha-paneld/issues/8)) |
+| Smatek S9E | Rockchip rk3566 | — | arm64-v8a | onboard relays + button LEDs; proximity via root GPIO (not SensorManager) |
+| Shelly Wall Display — Stargate / Atlantis / Pegasus | MediaTek MT6580 | — | armeabi-v7a | **preliminary** — hardware verification in progress; no root; relay via HA Shelly integration (not sysfs); deploy via ADB |
+| Shelly Wall Display — Blake XL / Jenna / Cally / Maverick / Dayna | Arm64 (SoC TBC) | — | arm64-v8a | **preliminary** — hardware verification in progress; no root; deploy via ADB or Shelly AppStore (≥ v2.6.0) |
 
 Other Android panels are welcome — contribute a HAL adapter for your hardware. Deep per-panel
 hardware references (SoC, sensors, LED path, radios) are in [docs/hardware/](docs/hardware/).
@@ -375,6 +379,7 @@ Android 11), Electron WF1589T (rk3576, Android 14).
 - **In-app update checker** — ha-paneld and the HA Companion (if installed) are polled against GitHub releases every 24 h. A banner appears in the HTTP info page and `/diag` flags any newer version — for panels with no Play Store.
 - **Navbar volume % syncs on external changes** — the navbar volume percentage now updates immediately when another app (or an HA automation) changes the volume, not only on the navbar's own ± presses.
 - **Thread NCP controller (preview, NSPanel Pro)** — `ThreadController` implements the Android-side EFR32MG21 commissioning pipeline for NSPanel Pro: VUART GBL flash + Spinel commissioning against the HA OTBR REST API. Hardware flash testing on a real unit is the remaining gate; this ships as an RC preview.
+- **Shelly Wall Display device profiles (preliminary)** — two new profiles cover the full Shelly Wall Display family: `ShellyWallDisplay` (legacy MT6580, covers Stargate/4" + Atlantis + Pegasus/X2-6.9") and `ShellyWallDisplayV2` (arm64, covers Blake XL + Jenna/X2i + Cally/XLi + Maverick/U1 + Dayna/D1). Wired into `detect()`; relay control routes through the HA Shelly integration (not sysfs), no root on any model. Deploy via ADB on all models, or the Shelly AppStore on firmware ≥ v2.6.0. Hardware verification still in progress — see [docs/hardware/shelly-wall-display.md](docs/hardware/shelly-wall-display.md).
 
 <details>
 <summary>Earlier releases (0.8.3 → 0.4.x) — full history in <a href="CHANGELOG.md">CHANGELOG.md</a></summary>
@@ -592,7 +597,8 @@ Larger directions that aren't on the v1.0 path but fit a panel agent well — an
 - **[docs/hardware/](docs/hardware/)** — reverse-engineered hardware references for the supported
   panels (SoC, LED control path, sensors, radios), since these devices are otherwise undocumented:
   [NSPanel Pro](docs/hardware/nspanel-pro.md) (PX30), [TPA10](docs/hardware/tpa10.md) (rk3566),
-  [WF1589T](docs/hardware/wf1589t.md) (rk3576), [SMT1019](docs/hardware/smt1019.md) (rk3576, community) — plus a [performance comparison](docs/hardware/README.md#performance-comparison--practical-deployment).
+  [WF1589T](docs/hardware/wf1589t.md) (rk3576), [SMT1019](docs/hardware/smt1019.md) (rk3576, community),
+  [Smatek S9E](docs/hardware/s9e.md) (rk3566), [Shelly Wall Display](docs/hardware/shelly-wall-display.md) (preliminary) — plus a [performance comparison](docs/hardware/README.md#performance-comparison--practical-deployment).
 - **[docs/tts.md](docs/tts.md)** — server-side TTS recipe: render a phrase with any HA engine (Piper,
   Cloud) and send it to a panel via a small script (no add-on, no on-device TTS).
 - **[docs/performance.md](docs/performance.md)** — panel performance tuning: why dashboards lag on
