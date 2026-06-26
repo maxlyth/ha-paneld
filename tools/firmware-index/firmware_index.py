@@ -42,8 +42,8 @@ DEVICES = [
     ("86P", "480×480, PX30", "fw-86p.dat"),
 ]
 
-WINDOW_HOURS = 24
-MAX_POINTS = 12          # 24h at the 2-hourly check cadence
+WINDOW_HOURS = 24 * 7    # 7-day rolling window
+MAX_POINTS = 7           # one dot per day
 PROBE_TIMEOUT = 20
 PROBE_WORKERS = 16
 GITHUB_BODY_LIMIT = 65536
@@ -193,9 +193,10 @@ def cmd_probe(args):
     save_history(args.history, h)
 
     up = sum(results.values())
+    down = len(urls) - up
     print(f"probed {len(urls)} URLs at {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(now))}: "
-          f"{up} up, {len(urls) - up} down ({len(h['samples'])} samples retained)")
-    return 0
+          f"{up} up, {down} down ({len(h['samples'])} samples retained)")
+    return 1 if down > 0 else 0
 
 
 # --------------------------------------------------------------------------- #
@@ -287,21 +288,21 @@ Channels and conventions differ by model:
 
 FOOTER = """---
 
-*This page is generated and refreshed automatically — do not hand-edit the body. The link list lives in [`tools/firmware-index/`](https://github.com/maxlyth/ha-paneld/tree/main/tools/firmware-index) and the 24h availability squares are updated every 2 hours by [a GitHub Action](https://github.com/maxlyth/ha-paneld/blob/main/.github/workflows/firmware-url-monitor.yml). To add or correct a link, edit the data files (or reply below) — don't edit this post.*
+*This page is generated and refreshed automatically — do not hand-edit the body. The link list lives in [`tools/firmware-index/`](https://github.com/maxlyth/ha-paneld/tree/main/tools/firmware-index) and the 7-day availability squares are updated daily by [a GitHub Action](https://github.com/maxlyth/ha-paneld/blob/main/.github/workflows/firmware-url-monitor.yml). To add or correct a link, edit the data files (or reply below) — don't edit this post.*
 """
 
 
 def availability_banner(h):
     samples = h.get("samples", [])
     if not samples:
-        return ("> [!NOTE]\n> **Live availability:** the 2-hourly checker hasn't run yet — the **24h** "
-                "column fills in over the next 24 hours.\n")
+        return ("> [!NOTE]\n> **Live availability:** the daily checker hasn't run yet — the **7-day** "
+                "column fills in over the next week.\n")
     last = samples[-1]
     total = len(last.get("r", {}))
     up = sum(1 for v in last["r"].values() if v == 1)
     ts = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(last["t"]))
-    return (f"> [!NOTE]\n> **Live availability** — each download row carries a 24h sparkline, "
-            f"newest on the right, checked every 2 hours: {UP} reachable · {DOWN} unreachable · {NODATA} no data yet. "
+    return (f"> [!NOTE]\n> **Live availability** — each download row carries a 7-day sparkline, "
+            f"newest on the right, checked daily: {UP} reachable · {DOWN} unreachable · {NODATA} no data yet. "
             f"Last check **{ts}**: **{up}/{total}** URLs reachable.\n")
 
 
