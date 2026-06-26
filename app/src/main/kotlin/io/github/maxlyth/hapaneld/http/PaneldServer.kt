@@ -301,6 +301,7 @@ class PaneldServer(
                         applyTameBlocklist(raw.split(Regex("[\\s,]+")).map { it.trim() }
                             .filter { it.isNotEmpty() && !TameController.isCritical(it) }.toSet())
                     }
+                    p["silence_boot_chime"]?.let { config.setSilenceBootChime(it.trim().equals("true", ignoreCase = true) || it.trim() == "1") }
                     val mfr = p["manufacturer"]?.trim()
                     val mdl = p["model"]?.trim()
                     if (mfr != null || mdl != null) config.setHardware(
@@ -767,6 +768,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             "\"dashboard_package\":${s(config.dashboardPackage)}," +
             "\"launcher_package\":${s(config.launcherPackage)}," +
             "\"tame_vendor_packages\":${s(config.tameVendorPackagesRaw)}," +
+            "\"silence_boot_chime\":${config.silenceBootChime}," +
             "\"version\":${s(Config.VERSION)}," +
             "\"proximity\":${sensors.proximityJson()}" +
             "}"

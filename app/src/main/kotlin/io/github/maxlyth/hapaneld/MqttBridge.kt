@@ -8,6 +8,7 @@ import com.hivemq.client.mqtt.mqtt5.Mqtt5AsyncClient
 import com.hivemq.client.mqtt.mqtt5.message.publish.Mqtt5Publish
 import io.github.maxlyth.hapaneld.control.AdbController
 import io.github.maxlyth.hapaneld.control.AutoBrightnessController
+import io.github.maxlyth.hapaneld.control.BootChimeController
 import io.github.maxlyth.hapaneld.control.BrightnessController
 import io.github.maxlyth.hapaneld.control.CpuController
 import io.github.maxlyth.hapaneld.util.HaLink
@@ -54,6 +55,7 @@ class MqttBridge(
     // App watchdog (switch): self-heals a dead/abandoned dashboard. Toggling restarts its poll loop.
     private val watchdog: WatchdogController,
     private val touchSound: TouchSoundController,
+    private val bootChime: BootChimeController,
     // Zigbee gateway control (Sonoff NSPanel Pro only). Presence is detected lazily on the MQTT
     // thread in publishDiscovery — it costs a su exec, so it must not run on the main thread.
     private val zigbee: ZigbeeController,
@@ -120,6 +122,8 @@ class MqttBridge(
     private val stateTouchSound = "ha-paneld/$panel/touch_sound/state"
     private val cmdWatchdog = "ha-paneld/$panel/watchdog/set"
     private val stateWatchdog = "ha-paneld/$panel/watchdog/state"
+    private val cmdSilenceBootChime = "ha-paneld/$panel/silence_boot_chime/set"
+    private val stateSilenceBootChime = "ha-paneld/$panel/silence_boot_chime/state"
     private val cmdPreventIdleDim = "ha-paneld/$panel/prevent_idle_dim/set"
     private val statePreventIdleDim = "ha-paneld/$panel/prevent_idle_dim/state"
     private val cmdZigbee = "ha-paneld/$panel/zigbee_router/set"
@@ -313,6 +317,7 @@ class MqttBridge(
                 cmdWakeOnWave -> handleWakeOnWave(payload)
                 cmdTouchSound -> handleTouchSound(payload)
                 cmdWatchdog -> handleWatchdog(payload)
+                cmdSilenceBootChime -> handleSilenceBootChime(payload)
                 cmdPreventIdleDim -> handlePreventIdleDim(payload)
                 cmdZigbee -> handleZigbee(payload)
                 cmdAutoBright -> handleAutoBright(payload)
@@ -407,6 +412,12 @@ class MqttBridge(
         config.setWatchdogEnabled(on)
         watchdog.apply(on)
         client?.let { publish(it, stateWatchdog, if (on) "ON" else "OFF", retain = true) }
+    }
+
+    private fun handleSilenceBootChime(payload: String) {
+        val on = payload.trim().equals("ON", ignoreCase = true)
+        bootChime.set(on)
+        client?.let { publish(it, stateSilenceBootChime, if (on) "ON" else "OFF", retain = true) }
     }
 
     private fun handleAutoBright(payload: String) {
@@ -702,6 +713,11 @@ class MqttBridge(
             """{"name":"App watchdog","unique_id":"${panel}_watchdog","command_topic":"$cmdWatchdog","state_topic":"$stateWatchdog","icon":"mdi:restart-alert","entity_category":"config",$avail,$device}""",
         )
         publish(c, stateWatchdog, if (config.watchdogEnabled) "ON" else "OFF", retain = true)
+        publishConfig(
+            c, "switch", "${panel}_silence_boot_chime",
+            """{"name":"Silence boot chime","unique_id":"${panel}_silence_boot_chime","command_topic":"$cmdSilenceBootChime","state_topic":"$stateSilenceBootChime","icon":"mdi:volume-off","entity_category":"config",$avail,$device}""",
+        )
+        publish(c, stateSilenceBootChime, if (bootChime.isEnabled()) "ON" else "OFF", retain = true)
 
         publishConfig(
             c, "switch", "${panel}_prevent_idle_dim",
@@ -835,8 +851,8 @@ class MqttBridge(
             "binary_sensor" to "${panel}_proximity",
             "sensor" to "${panel}_temperature", "sensor" to "${panel}_humidity",
             "light" to "${panel}_buttons", "switch" to "${panel}_wake_on_wave",
-            "switch" to "${panel}_touch_sound", "switch" to "${panel}_prevent_idle_dim",
-            "switch" to "${panel}_watchdog",
+            "switch" to "${panel}_touch_sound", "switch" to "${panel}_watchdog",
+            "switch" to "${panel}_silence_boot_chime", "switch" to "${panel}_prevent_idle_dim",
             "switch" to "${panel}_zigbee_router",
             "switch" to "${panel}_auto_brightness", "number" to "${panel}_brightness_bias",
             "number" to "${panel}_ambient_lux",

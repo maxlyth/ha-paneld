@@ -165,6 +165,11 @@ class Config(context: Context) {
         prefs.edit().putBoolean("auto_return_dashboard", on).apply()
     }
 
+    // Silence the firmware startup chime by zeroing the ring/notification volume via Settings.System.
+    // Default off — existing panels already have their own volume state; only opt in deliberately.
+    val silenceBootChime: Boolean get() = prefs.getBoolean("silence_boot_chime", false)
+    fun setSilenceBootChime(on: Boolean) { prefs.edit().putBoolean("silence_boot_chime", on).apply() }
+
     /** OTBR REST API base URL for Thread commissioning (unauthenticated, port 8080 by convention).
      *  Defaults to http://<broker-host>:8080, since the OTBR add-on typically runs on the same HA
      *  server as the MQTT broker. Override if your OTBR lives elsewhere. */

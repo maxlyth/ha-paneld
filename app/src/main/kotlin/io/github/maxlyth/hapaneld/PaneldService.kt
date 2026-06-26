@@ -16,6 +16,7 @@ import io.github.maxlyth.hapaneld.control.AdbController
 import io.github.maxlyth.hapaneld.device.DeviceProfile
 import io.github.maxlyth.hapaneld.input.EvdevButtonClient
 import io.github.maxlyth.hapaneld.control.AutoBrightnessController
+import io.github.maxlyth.hapaneld.control.BootChimeController
 import io.github.maxlyth.hapaneld.control.BrightnessController
 import io.github.maxlyth.hapaneld.control.CpuController
 import io.github.maxlyth.hapaneld.control.NavbarController
@@ -82,6 +83,7 @@ class PaneldService : Service() {
     private lateinit var navbar: NavbarController
     private lateinit var watchdog: WatchdogController
     private lateinit var touchSound: TouchSoundController
+    private lateinit var bootChime: BootChimeController
     private lateinit var zigbee: ZigbeeController
     private lateinit var thread: ThreadController
     private lateinit var relay: RelayController
@@ -133,6 +135,8 @@ class PaneldService : Service() {
         // Re-apply at boot: the switch raises the system-stream volume only when toggled, so a panel that
         // booted with touch-sound already on would otherwise stay silent (volume left at 0).
         if (touchSound.isEnabled()) touchSound.set(true)
+        bootChime = BootChimeController(this, config)
+        bootChime.applyPersisted()
         zigbee = ZigbeeController(profile)
         thread = ThreadController(profile)
         relay = RelayController(profile)
@@ -154,7 +158,7 @@ class PaneldService : Service() {
     }
 
     private fun buildMqtt(): MqttBridge = MqttBridge(
-        config, brightness, screen, led, navigate, volume, system, navbar, watchdog, touchSound, zigbee, relay, cpu, adb,
+        config, brightness, screen, led, navigate, volume, system, navbar, watchdog, touchSound, bootChime, zigbee, relay, cpu, adb,
         accessibilityEnabled(), profile.evdevButtons.isNotEmpty(),
         sensors.hasLight(), sensors.hasProximity(),
         sensors.hasTemperature(), sensors.hasHumidity(),
