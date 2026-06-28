@@ -36,6 +36,7 @@ import io.github.maxlyth.hapaneld.hardware.Rk3576LedController
 import io.github.maxlyth.hapaneld.hardware.SocketLedController
 import io.github.maxlyth.hapaneld.http.PaneldServer
 import io.github.maxlyth.hapaneld.http.PanelInfo
+import io.github.maxlyth.hapaneld.logship.LogShipper
 import io.github.maxlyth.hapaneld.sensors.SensorReporter
 import io.github.maxlyth.hapaneld.util.localIpv4
 import io.github.maxlyth.hapaneld.util.localIpv6
@@ -70,6 +71,7 @@ class PaneldService : Service() {
     private lateinit var mdns: MdnsAdvertiser
     private lateinit var mqtt: MqttBridge
     private lateinit var sensors: SensorReporter
+    private lateinit var logShipper: LogShipper
 
     // Controllers are fields so the MQTT bridge can be rebuilt on a panel_id change.
     private lateinit var brightness: BrightnessController
@@ -102,6 +104,9 @@ class PaneldService : Service() {
         // each re-detecting). The canonical per-platform silo for paths/quirks; see device/.
         profile = DeviceProfile.detect()
         config.attachProfile(profile)   // supplies per-panel manufacturer/model defaults
+        // Optional remote log shipping (off + inert unless a sink host is configured). Started in
+        // onStartCommand alongside the other network subsystems; restarted on a /config change.
+        logShipper = LogShipper(config, scope)
 
         brightness = BrightnessController(this)
         brightness.applyPreventIdleDim(config.preventIdleDim, config)
@@ -186,6 +191,8 @@ class PaneldService : Service() {
             mdns = MdnsAdvertiser(this@PaneldService, config)
             mdns.start()
             mqtt.start()
+            // Re-read the log sink (host/port/protocol/enabled); restarts only if it changed.
+            runCatching { logShipper.reconfigure() }
             io.github.maxlyth.hapaneld.http.PerfReader.dashboardPkg = dashboardTarget()
             Log.i(TAG, "reconfigured: panel=${config.panelId} broker=${config.mqttBroker.ifEmpty { "(disabled)" }}")
         }
@@ -241,6 +248,7 @@ class PaneldService : Service() {
                 adb.isActive() -> "active (5555) · not persistent (off after reboot)"
                 else -> "off"
             },
+            "Log shipping" to logShipper.statusText(),
         )
         return PanelInfo.collect(this, extras)
     }
@@ -305,6 +313,8 @@ class PaneldService : Service() {
             server.start()
             mdns.start()
             mqtt.start()
+            // Forward our own logcat to the configured aggregator (no-op unless a sink host is set).
+            logShipper.start()
             // Restore the soft navbar to its persisted mode (no-op when Off / no overlay permission).
             navbar.apply(config.navbarMode)
             // Start the app watchdog if enabled (off by default; self-heals a dead/abandoned dashboard).
@@ -365,6 +375,7 @@ class PaneldService : Service() {
         runCatching { navbar.cleanup() }
         runCatching { watchdog.stop() }
         runCatching { sensors.stop() }
+        runCatching { logShipper.stop() }
         runCatching { server.stop() }
         runCatching { mdns.stop() }
         runCatching { mqtt.stop() }
