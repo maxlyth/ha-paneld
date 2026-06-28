@@ -1,5 +1,9 @@
 {
  "files": {
+  "https://global-otadl2bsy.coolkit.cc/nspanel-pro-ver120/apk/11/228V3.6.1.apk": {
+   "ts": 1782628759,
+   "wb": "20260628060416"
+  },
   "https://global-otadl2bsy.coolkit.cc/nspanel-pro-ver120/apk/14/228V3.7.0.apk": {
    "ts": 1782025124,
    "wb": "20260621062440"
@@ -20,6 +24,10 @@
    "ts": 1781784188,
    "wb": "20260618104434"
   },
+  "https://global-otadl2bsy.coolkit.cc/nspanel-pro-ver120/apk/44/228V4.0.10.apk": {
+   "ts": 1782628759,
+   "wb": "20260628060359"
+  },
   "https://global-otadl2bsy.coolkit.cc/nspanel-pro-ver120/apk/60/228V4.4.0.apk": {
    "ts": 1782025124,
    "wb": "20260621062430"
@@ -35,6 +43,10 @@
   "https://global-otadl2bsy.coolkit.cc/nspanel-pro-ver120/apk/67/228V4.5.1.apk": {
    "ts": 1782025124,
    "wb": "20260621062215"
+  },
+  "https://global-otadl2bsy.coolkit.cc/nspanel-pro-ver120/apk/68/228V4.5.2.apk": {
+   "ts": 1782628759,
+   "wb": "20260628060401"
   },
   "https://global-otadl2bsy.coolkit.cc/nspanel-pro-ver120/rom-diff/11/CK_3.5.0_3.7.0V228-diff.zip": {
    "ts": 1781777076,
@@ -136,6 +148,10 @@
    "ts": 1782025124,
    "wb": "20260621062057"
   },
+  "https://global-otadl2bsy.coolkit.cc/nspanel-pro-ver120/rom-diff/19/CK_3.5.0_4.0.7V228-diff.zip": {
+   "ts": 1782626555,
+   "wb": "20260621062057"
+  },
   "https://global-otadl2bsy.coolkit.cc/nspanel-pro-ver120/rom-diff/19/CK_3.6.1_4.0.7V228-diff.zip": {
    "ts": 1782025124,
    "wb": "20260621062103"
@@ -144,8 +160,16 @@
    "ts": 1782025124,
    "wb": "20260621062057"
   },
+  "https://global-otadl2bsy.coolkit.cc/nspanel-pro-ver120/rom-diff/19/CK_3.8.7_4.0.7V228-diff.zip": {
+   "ts": 1782628759,
+   "wb": "20260628060244"
+  },
   "https://global-otadl2bsy.coolkit.cc/nspanel-pro-ver120/rom-diff/19/CK_4.0.0_4.0.7V228-diff.zip": {
    "ts": 1782025124,
+   "wb": "20260621061842"
+  },
+  "https://global-otadl2bsy.coolkit.cc/nspanel-pro-ver120/rom-diff/20/CK_3.5.0_4.0.10V228-diff.zip": {
+   "ts": 1782626555,
    "wb": "20260621061842"
   },
   "https://global-otadl2bsy.coolkit.cc/nspanel-pro-ver120/rom-diff/20/CK_3.6.1_4.0.10V228-diff.zip": {
@@ -159,6 +183,14 @@
   "https://global-otadl2bsy.coolkit.cc/nspanel-pro-ver120/rom-diff/20/CK_3.7.1_4.0.10V228-diff.zip": {
    "ts": 1782025124,
    "wb": "20260621061843"
+  },
+  "https://global-otadl2bsy.coolkit.cc/nspanel-pro-ver120/rom-diff/20/CK_3.8.0_4.0.10V228-diff.zip": {
+   "ts": 1782626552,
+   "wb": "20260621061842"
+  },
+  "https://global-otadl2bsy.coolkit.cc/nspanel-pro-ver120/rom-diff/20/CK_3.8.7_4.0.10V228-diff.zip": {
+   "ts": 1782628754,
+   "wb": "20260628060310"
   },
   "https://global-otadl2bsy.coolkit.cc/nspanel-pro-ver120/rom-diff/20/CK_3.9.4_4.0.10V228-diff.zip": {
    "ts": 1781786507,
@@ -196,6 +228,14 @@
    "ts": 1781777080,
    "wb": "20260618093047"
   },
+  "https://global-otadl2bsy.coolkit.cc/nspanel-pro/rom-diff/35/CK_3.4.0_3.7.1-diff.zip": {
+   "ts": 1782626561,
+   "wb": "20260618104427"
+  },
+  "https://global-otadl2bsy.coolkit.cc/nspanel-pro/rom-diff/35/CK_3.7.0_3.7.1-diff.zip": {
+   "ts": 1782626561,
+   "wb": "20260618120349"
+  },
   "https://global-otadl2bsy.coolkit.cc/nspanel-pro/rom-diff/36/CK_3.7.0_3.8.0-diff.zip": {
    "ts": 1781777082,
    "wb": "20260618093104"
@@ -204,9 +244,17 @@
    "ts": 1781777083,
    "wb": "20260618093046"
   },
+  "https://global-otadl2bsy.coolkit.cc/nspanel-pro/rom-diff/38/CK_3.3.0_3.9.4-diff.zip": {
+   "ts": 1782626558,
+   "wb": "20260621061849"
+  },
   "https://global-otadl2bsy.coolkit.cc/nspanel-pro/rom-diff/38/CK_3.7.1_3.9.4-diff.zip": {
    "ts": 1781777088,
    "wb": "20260618093045"
+  },
+  "https://global-otadl2bsy.coolkit.cc/nspanel-pro/rom-diff/42/CK_3.4.0_3.12.0-diff.zip": {
+   "ts": 1782628760,
+   "wb": "20260628061813"
   },
   "https://global-otadl2bsy.coolkit.cc/nspanel-pro/rom-diff/42/CK_3.5.0_3.12.0-diff.zip": {
    "ts": 1782022716,
@@ -215,6 +263,26 @@
   "https://global-otadl2bsy.coolkit.cc/nspanel-pro/rom-diff/42/CK_3.6.1_3.12.0-diff.zip": {
    "ts": 1781777089,
    "wb": "20260618093102"
+  },
+  "https://global-otadl2bsy.coolkit.cc/nspanel-pro/rom-diff/42/CK_3.7.0_3.12.0-diff.zip": {
+   "ts": 1782628760,
+   "wb": "20260628061814"
+  },
+  "https://global-otadl2bsy.coolkit.cc/nspanel-pro/rom-diff/43/CK_3.3.0_4.0.0-diff.zip": {
+   "ts": 1782626558,
+   "wb": "20260621061854"
+  },
+  "https://global-otadl2bsy.coolkit.cc/nspanel-pro/rom-diff/43/CK_3.7.1_4.0.0-diff.zip": {
+   "ts": 1782628759,
+   "wb": "20260628061333"
+  },
+  "https://global-otadl2bsy.coolkit.cc/nspanel-pro/rom-diff/43/CK_3.8.0_4.0.0-diff.zip": {
+   "ts": 1782628759,
+   "wb": "20260628061345"
+  },
+  "https://global-otadl2bsy.coolkit.cc/nspanel-pro/rom-diff/44/CK_3.0.0_4.0.7-diff.zip": {
+   "ts": 1782626558,
+   "wb": "20260621061846"
   },
   "https://global-otadl2bsy.coolkit.cc/nspanel-pro/rom-diff/44/CK_3.1.0_4.0.7-diff.zip": {
    "ts": 1782022716,
@@ -228,6 +296,14 @@
    "ts": 1781777090,
    "wb": "20260618093059"
   },
+  "https://global-otadl2bsy.coolkit.cc/nspanel-pro/rom-diff/44/CK_3.4.0_4.0.7-diff.zip": {
+   "ts": 1782628759,
+   "wb": "20260628061333"
+  },
+  "https://global-otadl2bsy.coolkit.cc/nspanel-pro/rom-diff/44/CK_3.6.1_4.0.7-diff.zip": {
+   "ts": 1782628759,
+   "wb": "20260628061115"
+  },
   "https://global-otadl2bsy.coolkit.cc/nspanel-pro/rom-diff/44/CK_3.9.4_4.0.7-diff.zip": {
    "ts": 1781784192,
    "wb": "20260618104426"
@@ -235,6 +311,14 @@
   "https://global-otadl2bsy.coolkit.cc/nspanel-pro/rom-diff/45/CK_3.7.0_4.0.10-diff.zip": {
    "ts": 1782022716,
    "wb": "20260618104431"
+  },
+  "https://global-otadl2bsy.coolkit.cc/nspanel-pro/rom-diff/45/CK_3.9.3_4.0.10-diff.zip": {
+   "ts": 1782628759,
+   "wb": "20260628060849"
+  },
+  "https://global-otadl2bsy.coolkit.cc/nspanel-pro/rom-diff/49/CK_4.0.12_4.5.1-diff.zip": {
+   "ts": 1782628759,
+   "wb": "20260628060614"
   },
   "https://global-otadl2bsy.coolkit.cc/nspanel-pro/rom/16/NSPanel86P_CoolKit_480P_20230217_1.5.6-ota.zip": {
    "ts": 1781777078,
@@ -264,6 +348,6 @@
  "page": {
   "job": "spn2-8cd254f2322be3b3631531d76097c1dde396b6e6",
   "ok": true,
-  "ts": 1782022706
+  "ts": 1782626552
  }
 }
