@@ -12,13 +12,13 @@ from live units (rooted / userdebug `adb root`) on 2026-06-05.
 | Sonoff NSPanel Pro | rk3326 / PX30 | none (no RGB node) | STK3A5x light + proximity (app-direct) | no | **Zigbee** (Silabs EFR32, UART); no IR | [nspanel-pro.md](nspanel-pro.md) |
 | Smatek S9E † | rk3566 | per-button GPIO LEDs (root) | radar proximity, light, temp+humidity; **2 mains relays** (`st_relay`); RS485 + Ethernet | no | **Zigbee** | [s9e.md](s9e.md) |
 | ZHICAI SMT1019 ‡ | rk3576 | none (LED ioctl root-locked, no su) | none Android-exposed reported | no | no | [smt1019.md](smt1019.md) |
-| Shelly Wall Display § | MT6580 (legacy) / arm64 (modern) | none (no root path) | temp+humidity, ambient light, LD2410 mmWave radar (Blake/XL) or IR proximity (others); on-board relays (1–2 per model) | no | no | [shelly-wall-display.md](shelly-wall-display.md) |
+| Shelly Wall Display § | MT6580 (legacy) / **PX30** (modern, Jenna — Smatek-built, like the S9E) | none (no RGB node) | STK3A5x light + proximity (Jenna, like NSPanel Pro); reported LD2410 radar (Blake/XL, app-only); on-board GPIO relays (1–2/model, via Stargate RPC) | no | no | [shelly-wall-display.md](shelly-wall-display.md) |
 
 † S9E specs are from Smatek's listing; control paths are from [#98](https://github.com/seaky/nspanel_pro_tools_apk/issues/98) + the HA community thread, **not** validated on a unit here — relay/button support is implemented but untested.
 
 ‡ SMT1019 facts are from a reporter's `/diag` + the retail listing ([#8](https://github.com/maxlyth/ha-paneld/issues/8)), **not** validated on a unit here.
 
-§ Shelly Wall Display facts are from firmware OTA analysis, the official changelog, and community/KB sources — **not** validated on a unit here; no root or adb access available. DeviceProfile in development.
+§ Shelly Wall Display facts are from firmware OTA analysis (incl. a device-tree parse of the modern partition image), the official changelog, and community/KB sources — **not** validated on a unit here. Both firmware tracks are *userdebug* builds, so `adb root` may be reachable if an adb foothold exists. `ShellyWallDisplay` + `ShellyWallDisplayV2` profiles are implemented but speculative.
 
 > [!TIP]
 > Before modifying firmware on a **button-less** panel, read
@@ -140,7 +140,7 @@ builds and the full sideload/verify steps are below.
 | S9E (rk3566) | arm64-v8a | **Chromium 83** (`com.android.webview`) — too old for current HA frontend | arm64 SystemWebView build — community contributions welcome | [WebView mirror](https://github.com/maxlyth/ha-paneld/releases/tag/webview-mirror) |
 | SMT1019 (rk3576) | arm64-v8a | **unknown** — Android 14, no GMS; likely needs sideload | arm64 SystemWebView build — community contributions welcome | [WebView mirror](https://github.com/maxlyth/ha-paneld/releases/tag/webview-mirror) |
 | Shelly WD legacy (MT6580) | armeabi-v7a | **unknown** (Android 7 base ROM) | Atlantis only: `com.google.android.webview` **119.0.6045.194** via [official Shelly ZIP](https://repo.shelly.cloud/firmware/SAWD-0A1XX10EU1/stable/SAWD-0A1XX10EU1-WebViewUpdate.zip) — see [shelly-wall-display.md](shelly-wall-display.md#webview) | — |
-| Shelly WD V2 (arm64) | arm64-v8a | **unknown** (Android 13 base ROM; not present in Shelly OTA) | not established — check `adb shell dumpsys webviewupdate` | — |
+| Shelly WD V2 (arm64 / PX30) | arm64-v8a | **unknown** (Android 11 base ROM; not present in Shelly OTA) | not established — check `adb shell dumpsys webviewupdate` | — |
 
 All mirrored builds live in the [**Panel WebView mirror** release](https://github.com/maxlyth/ha-paneld/releases/tag/webview-mirror) — intended as a living, community list of known-working versions. Got one working on another panel or version? Contributions welcome.
 
