@@ -22,12 +22,19 @@ Commands:
 import argparse
 import json
 import os
+import ssl
 import sys
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
+
+try:
+    import certifi
+    _SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
+except ImportError:
+    _SSL_CONTEXT = ssl.create_default_context()
 
 MANIFESTS = {
     "WallDisplay": "https://updates.shelly.cloud/update/WallDisplay",
@@ -121,7 +128,7 @@ def gha_output(name, value):
 
 def fetch_manifest(url):
     req = urllib.request.Request(url, headers={"User-Agent": "ha-paneld-shelly-monitor"})
-    with urllib.request.urlopen(req, timeout=PROBE_TIMEOUT) as r:
+    with urllib.request.urlopen(req, timeout=PROBE_TIMEOUT, context=_SSL_CONTEXT) as r:
         return json.load(r)
 
 
@@ -129,7 +136,7 @@ def head_size(url):
     req = urllib.request.Request(
         url, method="HEAD", headers={"User-Agent": "ha-paneld-shelly-monitor"})
     try:
-        with urllib.request.urlopen(req, timeout=PROBE_TIMEOUT) as r:
+        with urllib.request.urlopen(req, timeout=PROBE_TIMEOUT, context=_SSL_CONTEXT) as r:
             return int(r.headers.get("Content-Length") or 0)
     except Exception:
         return 0

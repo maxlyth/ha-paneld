@@ -80,13 +80,14 @@ jobs:
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
 
-      # Render the Discussion body and update it when .dat changed.
+      # Render the Discussion body whenever .dat changed OR on manual dispatch (to
+      # allow re-rendering without a firmware update, e.g. after filling wayback_ts).
       - name: Render Discussion body
-        if: steps.diff.outputs.changed == 'true'
+        if: steps.diff.outputs.changed == 'true' || github.event_name == 'workflow_dispatch'
         run: python tools/firmware-index/shelly_firmware.py render --dat "$DAT" --out body.md
 
       - name: Update Discussion
-        if: steps.diff.outputs.changed == 'true' && env.SHELLY_DISCUSSION_NUMBER != ''
+        if: (steps.diff.outputs.changed == 'true' || github.event_name == 'workflow_dispatch') && env.SHELLY_DISCUSSION_NUMBER != ''
         env:
           GH_TOKEN: ${{ secrets.DISCUSSIONS_TOKEN }}
         run: |
