@@ -8,6 +8,45 @@ From **v0.8.0**, entries are grouped under **Added** (new features/entities), **
 changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
 content appear. Earlier releases predate this convention and keep their flat lists.
 
+## v0.8.4 - 2026-06-29
+
+Highlights since 0.8.3: a hardened privileged helper, the full control surface on sandbox-walled (no-`su`) panels, opt-in vendor-app taming, a dashboard watchdog, an admin launcher, panel-health warnings, and preliminary Shelly Wall Display profiles. (The per-RC sections below detail the path to this release.)
+
+### Added
+
+- **Privileged helper hardened (security)** — the root helper (LED / true screen-off / buttons / density / CPU governor / screenshot for sandbox-walled panels) no longer listens on an unauthenticated loopback TCP port; it's now an **abstract UNIX socket authenticated by peer UID** (only ha-paneld accepted), with bounded parsing and a command-parser fuzz + unit suite gating it in CI.
+- **Full control surface on sandbox-walled panels** — density, font scale, CPU governor, on-demand screenshot and the Performance / Top-processes cards now work on no-`su` panels (e.g. Tuya TPA10) via the helper, plus the ZHICAI SMT1019 `/dev/ledjni` LED. The helper installs on **every** sandbox panel now, with `/diag` flagging it if it's needed but missing.
+- **Opt-in vendor-app taming** — an interactive per-package blocklist (the *Vendor taming* card) force-stops, boot-disables and strips the floating-overlay permission from intrusive vendor apps; profile-seeded candidates for NSPanel Pro, TPA10, SMT1019 and WF1589T; critical packages refused at both the app and daemon layer; default empty, fully reversible.
+- **Boot-chime silencing** — `switch.<panel>_silence_boot_chime` mutes the firmware boot sound and the Companion startup notification (per-platform audio key, profile-selected).
+- **Dashboard watchdog** — `switch.<panel>_watchdog` relaunches the dashboard app if it crashes or stays backgrounded.
+- **Admin launcher + default-home assertion** — a built-in admin app drawer reachable from the navbar **Launcher** button; on root panels `ensureDashboardHome()` keeps the dashboard as the boot home.
+- **In-app update checker** — polls GitHub releases for ha-paneld and the installed HA Companion; banners in the `:8888` UI and a `/diag` line (for no-Play panels).
+- **Panel-health warnings** — the info page flags a **system WebView too old** to render the HA dashboard (banner + highlighted version + update link) and **no dashboard app detected** (soft, renderer-aware — only when none of the HA Companion, Fully Kiosk or a configured `dashboard_package` is present; ha-paneld runs fine without one).
+- **Shelly Wall Display device profiles (preliminary)** — `ShellyWallDisplay` (legacy MT6580) and `ShellyWallDisplayV2` (arm64) cover the full family, wired into `detect()`, plus a daily availability + weekly Wayback monitor for the Shelly OTA endpoints. Hardware verification ongoing.
+
+### Changed
+
+- **Helper renamed** `hapaneld-ledd` → **`hapaneld-helper`** (it does far more than LEDs now); panels upgrade automatically on redeploy.
+- **Navbar** — every mode gains a **Reload** key; narrow-mode adds pop-up brightness/volume sliders; the volume % now syncs on any external volume change; navigate-to-the-current-URL reloads instead of no-opping.
+- **Font scale via the helper** on sandbox panels (previously density-only).
+- **Parser fuzzer moved off CI** — runs locally on demand (`make fuzz`); UART I/O could hang the CI runner.
+- **Firmware URL monitor cadence** — daily polling with a 1-hour retry if any URLs are unreachable.
+
+### Fixed
+
+- **Wake ANR** — proximity-triggered wake no longer calls `Su.run()` on the main thread.
+- **Navbar swipe / overscan / tap pass-through** corrected.
+- **Vendor-renamed critical packages** can no longer be tamed (name-normalisation guard).
+- **install-daemon.sh** detects systemless (Magisk bind-mount) root correctly; long WebView renderer process names are trimmed.
+
+### Removed
+
+- **Thread Mesh Router (preview) deferred** — the experimental Thread NCP flash/commission preview from the rc2–rc4 prereleases is pulled from 0.8.4 pending on-hardware UART validation; the **Zigbee-router** switch is unaffected; Thread returns in a later release (0.8.6+).
+
+### Docs
+
+- Recorded the NSPanel Pro stock WebView version (`107.0.5304.105`, Chromium 107), confirmed on a unit freshly flashed to firmware 3.5.1.
+
 ## v0.8.4-rc6 - 2026-06-29
 
 ### Added
@@ -93,10 +132,6 @@ content appear. Earlier releases predate this convention and keep their flat lis
 ### Changed
 
 - **Root helper renamed `hapaneld-ledd` → `hapaneld-helper`** and restructured — the binary, its UNIX socket (`@hapaneld-helper`), and init service (`hapaneld_helper`) were renamed to reflect its broader role. Source split by capability; all command execution behind one audited seam. **No behaviour change — but panels running the helper must be redeployed**: `install-daemon.sh` removes the old `hapaneld-ledd` install automatically.
-
-## v0.8.4 - TBD
-
-*Cumulative stable release notes — to be written when 0.8.4 is promoted from RC.*
 
 ## v0.8.3 - 2026-06-19
 

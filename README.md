@@ -4,7 +4,7 @@
 </picture>
 
 [![CI](https://github.com/maxlyth/ha-paneld/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/maxlyth/ha-paneld/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/badge/release-v0.8.3-blue?style=flat-square)](https://github.com/maxlyth/ha-paneld/releases/latest)
+[![Release](https://img.shields.io/badge/release-v0.8.4-blue?style=flat-square)](https://github.com/maxlyth/ha-paneld/releases/latest)
 [![License](https://img.shields.io/badge/license-Apache_2.0-blue?style=flat-square)](LICENSE)
 
 **ha-paneld is free, open-source, and exists to fix what's wrong with Home Assistant wall panels** —
@@ -379,6 +379,7 @@ Android 11), Electron WF1589T (rk3576, Android 14).
 - **In-app update checker** — ha-paneld and the HA Companion (if installed) are polled against GitHub releases every 24 h. A banner appears in the HTTP info page and `/diag` flags any newer version — for panels with no Play Store.
 - **Navbar volume % syncs on external changes** — the navbar volume percentage now updates immediately when another app (or an HA automation) changes the volume, not only on the navbar's own ± presses.
 - **Shelly Wall Display device profiles (preliminary)** — two new profiles cover the full Shelly Wall Display family: `ShellyWallDisplay` (legacy MT6580, covers Stargate/4" + Atlantis + Pegasus/X2-6.9") and `ShellyWallDisplayV2` (arm64, covers Blake XL + Jenna/X2i + Cally/XLi + Maverick/U1 + Dayna/D1). Wired into `detect()`; relay control routes through the HA Shelly integration (not sysfs), no root on any model. Deploy via ADB on all models, or the Shelly AppStore on firmware ≥ v2.6.0. Hardware verification still in progress — see [docs/hardware/shelly-wall-display.md](docs/hardware/shelly-wall-display.md).
+- **Panel-health warnings** — the `:8888` info page now flags a **system WebView too old** to render the HA dashboard (the version is highlighted with a link to the update steps) and, softly, when **no dashboard app** (HA Companion, Fully Kiosk, or a configured `dashboard_package`) is detected — ha-paneld itself runs fine without one.
 
 <details>
 <summary>Earlier releases (0.8.3 → 0.4.x) — full history in <a href="CHANGELOG.md">CHANGELOG.md</a></summary>
