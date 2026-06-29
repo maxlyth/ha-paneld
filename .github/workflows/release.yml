@@ -1,8 +1,10 @@
 name: Release
 run-name: Release ${{ github.ref_name }}
 
-# Before tagging, run the pre-tag checklist in docs/RELEASING.md — in particular, reconcile the
-# README "Status & roadmap" (move shipped items out of Planned + add a "New in X.Y.Z" block).
+# Before tagging, run the pre-tag checklist in docs/RELEASING.md. Editorial release docs are manual:
+# write the CHANGELOG.md section, refresh the README "Latest release" line, and move shipped items out
+# of "Planned" in docs/roadmap.md. The static README release badge is bumped automatically by the
+# "Bump README release badge" step below (stable tags only).
 
 on:
   push:
@@ -110,3 +112,27 @@ jobs:
           generate_release_notes: true
           # Tags with a suffix (e.g. v0.5.0-rc1) publish as pre-releases.
           prerelease: ${{ contains(github.ref_name, '-') }}
+
+      # Stable releases only: bump the static README release badge to the tagged version and commit it
+      # back to main. The badge is static-on-purpose (the dynamic shields GitHub badge flaked with
+      # "invalid"/token-pool errors), so this keeps it current without a manual edit. RC tags are
+      # skipped. Best-effort (continue-on-error) so a protected-branch push never fails the release.
+      # Editorial bits — the README "Latest release" summary, roadmap curation, CHANGELOG notes — stay
+      # human; auto-bumping only the version number in a prose line would leave a stale description.
+      - name: Bump README release badge on main
+        if: ${{ !contains(github.ref_name, '-') }}
+        continue-on-error: true
+        run: |
+          ver="${GITHUB_REF_NAME#v}"      # v0.8.5 → 0.8.5
+          git fetch origin main
+          git checkout -B main origin/main
+          sed -i -E "s#release-v[0-9]+\.[0-9]+\.[0-9]+-blue#release-v${ver}-blue#" README.md
+          if git diff --quiet README.md; then
+            echo "Badge already at v${ver}; nothing to commit."
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          git commit -m "docs: bump README release badge to ${GITHUB_REF_NAME}"
+          git push origin main
