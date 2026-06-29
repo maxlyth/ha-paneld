@@ -138,7 +138,7 @@ markedly speeds up screen-swipe/UI responsiveness. Source:
 
 ## WebView — update this first
 
-The NSPanel Pro ships with a WebView/Chromium far too old to render a current Home Assistant dashboard (blank/broken UI in the HA Companion app). The exact stock version has not been extracted from firmware (the OTA diff packages on Drive do not include a WebView APK and no full base ROM was available for inspection); if you have an unmodified unit, `adb shell dumpsys webviewupdate | grep "Current WebView"` will report it. Update it cleanly over adb — no root, no F-Droid; this unit runs Chromium **138** afterwards. See [Updating the system WebView](README.md#updating-the-system-webview).
+The NSPanel Pro ships with a WebView/Chromium far too old to render a current Home Assistant dashboard (blank/broken UI in the HA Companion app). **Stock version (confirmed on a unit freshly flashed to firmware `3.5.1`, build `164637`): `com.android.webview` `107.0.5304.105`** (Chromium 107) — observed directly via `adb shell dumpsys webviewupdate | grep "Current WebView"` after a factory firmware install, since the OTA diff packages on Drive don't include a WebView APK. This is old enough that the HA frontend renders blank, so update it first. Update it cleanly over adb — no root, no F-Droid; this unit runs Chromium **138** afterwards. See [Updating the system WebView](README.md#updating-the-system-webview).
 
 ## LED
 
