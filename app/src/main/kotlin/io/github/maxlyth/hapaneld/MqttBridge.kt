@@ -22,6 +22,8 @@ import io.github.maxlyth.hapaneld.control.WatchdogController
 import io.github.maxlyth.hapaneld.control.TouchSoundController
 import io.github.maxlyth.hapaneld.control.VolumeController
 import io.github.maxlyth.hapaneld.control.ZigbeeController
+import io.github.maxlyth.hapaneld.config.SettingValue
+import io.github.maxlyth.hapaneld.config.SettingsRegistry
 import io.github.maxlyth.hapaneld.hardware.LedController
 import io.github.maxlyth.hapaneld.input.ButtonBus
 import io.github.maxlyth.hapaneld.util.HelperClient
@@ -601,7 +603,57 @@ class MqttBridge(
         client?.let { publish(it, stateHumidity, Math.round(percent).toString(), retain = true) }
     }
 
+    /**
+     * Apply a setting from a NON-MQTT source (the HTTP `/api/v1/config` API) through the SAME
+     * side-effect + state-publish path an MQTT command takes, so a value set over HTTP behaves
+     * identically to one set from Home Assistant (persist → drive hardware → publish retained state).
+     * [value] is the registry-normalized string ("true"/"false", a number, or an enum label).
+     * Returns true if [key] is a recognised live setting (so the HTTP layer knows it was handled here
+     * rather than via the static config setters + reconfigure()).
+     */
+    fun applySetting(key: String, value: String): Boolean {
+        val onOff = if (SettingValue.parseBool(value) == true) "ON" else "OFF"
+        when (key) {
+            "wake_on_wave" -> handleWakeOnWave(onOff)
+            "prevent_idle_dim" -> handlePreventIdleDim(onOff)
+            "watchdog_enabled" -> handleWatchdog(onOff)
+            "silence_boot_chime" -> handleSilenceBootChime(onOff)
+            "auto_brightness" -> handleAutoBright(onOff)
+            "touch_sound" -> handleTouchSound(onOff)
+            "network_adb" -> handleNetAdb(onOff)
+            "zigbee_router" -> handleZigbee(onOff)
+            "brightness_bias" -> handleBrightnessBias(value)
+            "ambient_lux" -> handleAmbientLux(value)
+            "cpu_governor" -> handleCpuGov(value)
+            "navbar_mode" -> handleNavbar(value)
+            else -> return false
+        }
+        return true
+    }
+
     // ---- discovery ----
+
+    /**
+     * Publish — or, when the user has hidden it via the per-panel "expose to HA" toggle, CLEAR — one
+     * discovery entity. Hiding publishes a retained empty payload to the config topic, which removes
+     * the entity from HA entirely (zero recorder / state-machine cost). [publishState] runs only when
+     * the entity is exposed. This is what makes the HA footprint configurable per panel.
+     */
+    private fun exposable(
+        c: Mqtt5AsyncClient,
+        key: String,
+        component: String,
+        objectId: String,
+        payload: () -> String,
+        publishState: () -> Unit,
+    ) {
+        if (config.haExposed(key)) {
+            publishConfig(c, component, objectId, payload())
+            publishState()
+        } else {
+            publishConfig(c, component, objectId, "")
+        }
+    }
 
     private fun publishDiscovery(c: Mqtt5AsyncClient) {
         // device.name = the configurable friendly name; entity names are the capability ONLY, so HA
@@ -696,62 +748,51 @@ class MqttBridge(
                 """{"name":"Button backlight","unique_id":"${panel}_buttons","schema":"json","brightness":true,"supported_color_modes":["brightness"],"command_topic":"$cmdButtons","state_topic":"$stateButtons","icon":"mdi:gesture-tap-button",$avail,$device}""",
             )
         }
+        // Config switches/numbers — each honours its per-panel "expose to HA" toggle (hidden → the
+        // retained discovery payload is cleared, so the entity leaves HA with zero recorder cost).
+        // The six registry-backed entities are built from SettingsRegistry (the single source of
+        // truth, golden-tested for byte-parity with these payloads); touch_sound + ambient_lux keep
+        // literal payloads pending their move into the registry.
+        fun reg(key: String) = SettingsRegistry.spec(key)!!.ha!!.buildDiscoveryJson(panel, avail, device)
+
         if (hasProximity) {
-            publishConfig(
-                c, "switch", "${panel}_wake_on_wave",
-                """{"name":"Wake on wave","unique_id":"${panel}_wake_on_wave","command_topic":"$cmdWakeOnWave","state_topic":"$stateWakeOnWave","icon":"mdi:gesture-tap","entity_category":"config",$avail,$device}""",
-            )
-            publish(c, stateWakeOnWave, if (config.wakeOnWave) "ON" else "OFF", retain = true)
+            exposable(c, "wake_on_wave", "switch", "${panel}_wake_on_wave", { reg("wake_on_wave") }) {
+                publish(c, stateWakeOnWave, if (config.wakeOnWave) "ON" else "OFF", retain = true)
+            }
         }
-        publishConfig(
-            c, "switch", "${panel}_touch_sound",
-            """{"name":"Touch sound","unique_id":"${panel}_touch_sound","command_topic":"$cmdTouchSound","state_topic":"$stateTouchSound","icon":"mdi:volume-high","entity_category":"config",$avail,$device}""",
-        )
-        publish(c, stateTouchSound, if (touchSound.isEnabled()) "ON" else "OFF", retain = true)
-        publishConfig(
-            c, "switch", "${panel}_watchdog",
-            """{"name":"App watchdog","unique_id":"${panel}_watchdog","command_topic":"$cmdWatchdog","state_topic":"$stateWatchdog","icon":"mdi:restart-alert","entity_category":"config",$avail,$device}""",
-        )
-        publish(c, stateWatchdog, if (config.watchdogEnabled) "ON" else "OFF", retain = true)
-        publishConfig(
-            c, "switch", "${panel}_silence_boot_chime",
-            """{"name":"Silence boot chime","unique_id":"${panel}_silence_boot_chime","command_topic":"$cmdSilenceBootChime","state_topic":"$stateSilenceBootChime","icon":"mdi:volume-off","entity_category":"config",$avail,$device}""",
-        )
-        publish(c, stateSilenceBootChime, if (bootChime.isEnabled()) "ON" else "OFF", retain = true)
+        exposable(c, "touch_sound", "switch", "${panel}_touch_sound", {
+            """{"name":"Touch sound","unique_id":"${panel}_touch_sound","command_topic":"$cmdTouchSound","state_topic":"$stateTouchSound","icon":"mdi:volume-high","entity_category":"config",$avail,$device}"""
+        }) { publish(c, stateTouchSound, if (touchSound.isEnabled()) "ON" else "OFF", retain = true) }
 
-        publishConfig(
-            c, "switch", "${panel}_prevent_idle_dim",
-            """{"name":"Prevent idle dim","unique_id":"${panel}_prevent_idle_dim","command_topic":"$cmdPreventIdleDim","state_topic":"$statePreventIdleDim","icon":"mdi:brightness-7","entity_category":"config",$avail,$device}""",
-        )
-        publish(c, statePreventIdleDim, if (config.preventIdleDim) "ON" else "OFF", retain = true)
-
+        exposable(c, "watchdog_enabled", "switch", "${panel}_watchdog", { reg("watchdog_enabled") }) {
+            publish(c, stateWatchdog, if (config.watchdogEnabled) "ON" else "OFF", retain = true)
+        }
+        exposable(c, "silence_boot_chime", "switch", "${panel}_silence_boot_chime", { reg("silence_boot_chime") }) {
+            publish(c, stateSilenceBootChime, if (bootChime.isEnabled()) "ON" else "OFF", retain = true)
+        }
+        exposable(c, "prevent_idle_dim", "switch", "${panel}_prevent_idle_dim", { reg("prevent_idle_dim") }) {
+            publish(c, statePreventIdleDim, if (config.preventIdleDim) "ON" else "OFF", retain = true)
+        }
         // Auto-brightness — optional on-panel engine (off by default). When on, drives the screen
         // backlight from the panel's own light sensor where present, or the HA-fed ambient-lux number.
-        publishConfig(
-            c, "switch", "${panel}_auto_brightness",
-            """{"name":"Auto-brightness","unique_id":"${panel}_auto_brightness","command_topic":"$cmdAutoBright","state_topic":"$stateAutoBright","icon":"mdi:brightness-auto","entity_category":"config",$avail,$device}""",
-        )
-        publish(c, stateAutoBright, if (config.autoBrightness) "ON" else "OFF", retain = true)
-        publishConfig(
-            c, "number", "${panel}_brightness_bias",
-            """{"name":"Brightness bias","unique_id":"${panel}_brightness_bias","command_topic":"$cmdBrightnessBias","state_topic":"$stateBrightnessBias","min":-100,"max":100,"step":5,"mode":"slider","icon":"mdi:brightness-6","entity_category":"config",$avail,$device}""",
-        )
-        publish(c, stateBrightnessBias, config.brightnessBias.toString(), retain = true)
+        exposable(c, "auto_brightness", "switch", "${panel}_auto_brightness", { reg("auto_brightness") }) {
+            publish(c, stateAutoBright, if (config.autoBrightness) "ON" else "OFF", retain = true)
+        }
+        exposable(c, "brightness_bias", "number", "${panel}_brightness_bias", { reg("brightness_bias") }) {
+            publish(c, stateBrightnessBias, config.brightnessBias.toString(), retain = true)
+        }
         // HA-fed room lux → auto-brightness input. The only source on sensor-less panels (e.g. WF1589T);
-        // an HA automation pushes room lux here and the engine applies the curve.
-        publishConfig(
-            c, "number", "${panel}_ambient_lux",
-            """{"name":"Ambient lux (HA-fed)","unique_id":"${panel}_ambient_lux","command_topic":"$cmdAmbientLux","state_topic":"$stateAmbientLux","min":0,"max":100000,"step":1,"mode":"box","unit_of_measurement":"lx","icon":"mdi:brightness-5","entity_category":"config",$avail,$device}""",
-        )
+        // an HA automation pushes room lux here and the engine applies the curve. No state on connect.
+        exposable(c, "ambient_lux", "number", "${panel}_ambient_lux", {
+            """{"name":"Ambient lux (HA-fed)","unique_id":"${panel}_ambient_lux","command_topic":"$cmdAmbientLux","state_topic":"$stateAmbientLux","min":0,"max":100000,"step":1,"mode":"box","unit_of_measurement":"lx","icon":"mdi:brightness-5","entity_category":"config",$avail,$device}"""
+        }) { }
 
         // Zigbee router — only on panels with the Sonoff gateway package (NSPanel Pro). present()
         // costs a su exec; safe here because onConnected runs off the main thread.
         if (zigbee.present()) {
-            publishConfig(
-                c, "switch", "${panel}_zigbee_router",
-                """{"name":"Zigbee router","unique_id":"${panel}_zigbee_router","command_topic":"$cmdZigbee","state_topic":"$stateZigbee","icon":"mdi:zigbee","entity_category":"config",$avail,$device}""",
-            )
-            publish(c, stateZigbee, if (zigbee.running()) "ON" else "OFF", retain = true)
+            exposable(c, "zigbee_router", "switch", "${panel}_zigbee_router", {
+                """{"name":"Zigbee router","unique_id":"${panel}_zigbee_router","command_topic":"$cmdZigbee","state_topic":"$stateZigbee","icon":"mdi:zigbee","entity_category":"config",$avail,$device}"""
+            }) { publish(c, stateZigbee, if (zigbee.running()) "ON" else "OFF", retain = true) }
         }
 
         // On-board relays (Smatek S9E `st_relay`). count() probes sysfs via su — off-main-thread here.
@@ -779,11 +820,9 @@ class MqttBridge(
         // SoC's governor (Auto = its dynamic governor — ramps up on interaction, idles low).
         if (cpu.available()) {
             val opts = CpuController.TIERS.joinToString(",") { "\"${jsonEsc(it)}\"" }
-            publishConfig(
-                c, "select", "${panel}_cpu_governor",
-                """{"name":"CPU profile","unique_id":"${panel}_cpu_governor","command_topic":"$cmdCpuGov","state_topic":"$stateCpuGov","options":[$opts],"icon":"mdi:speedometer","entity_category":"config",$avail,$device}""",
-            )
-            cpu.currentTier()?.let { publish(c, stateCpuGov, it, retain = true) }
+            exposable(c, "cpu_governor", "select", "${panel}_cpu_governor", {
+                """{"name":"CPU profile","unique_id":"${panel}_cpu_governor","command_topic":"$cmdCpuGov","state_topic":"$stateCpuGov","options":[$opts],"icon":"mdi:speedometer","entity_category":"config",$avail,$device}"""
+            }) { cpu.currentTier()?.let { publish(c, stateCpuGov, it, retain = true) } }
         }
 
         // Soft navbar (select) — overlay Back/Home/Recents bar for panels whose firmware hides the
@@ -791,20 +830,16 @@ class MqttBridge(
         // needs SYSTEM_ALERT_WINDOW (root-granted by NavbarController); a no-op select otherwise.
         run {
             val opts = NavbarController.MODES.joinToString(",") { "\"${jsonEsc(it)}\"" }
-            publishConfig(
-                c, "select", "${panel}_navbar",
-                """{"name":"Navbar","unique_id":"${panel}_navbar","command_topic":"$cmdNavbar","state_topic":"$stateNavbar","options":[$opts],"icon":"mdi:gesture-tap-button","entity_category":"config",$avail,$device}""",
-            )
-            publish(c, stateNavbar, config.navbarMode, retain = true)
+            exposable(c, "navbar_mode", "select", "${panel}_navbar", {
+                """{"name":"Navbar","unique_id":"${panel}_navbar","command_topic":"$cmdNavbar","state_topic":"$stateNavbar","options":[$opts],"icon":"mdi:gesture-tap-button","entity_category":"config",$avail,$device}"""
+            }) { publish(c, stateNavbar, config.navbarMode, retain = true) }
         }
 
         // Persistent network adb (switch) — opt-in; root panels only. Standing LAN adb port when ON.
         if (adb.available()) {
-            publishConfig(
-                c, "switch", "${panel}_network_adb",
-                """{"name":"Network ADB","unique_id":"${panel}_network_adb","command_topic":"$cmdNetAdb","state_topic":"$stateNetAdb","icon":"mdi:adb","entity_category":"config",$avail,$device}""",
-            )
-            publish(c, stateNetAdb, if (adb.isPersisted()) "ON" else "OFF", retain = true)
+            exposable(c, "network_adb", "switch", "${panel}_network_adb", {
+                """{"name":"Network ADB","unique_id":"${panel}_network_adb","command_topic":"$cmdNetAdb","state_topic":"$stateNetAdb","icon":"mdi:adb","entity_category":"config",$avail,$device}"""
+            }) { publish(c, stateNetAdb, if (adb.isPersisted()) "ON" else "OFF", retain = true) }
         }
 
         // Panel actions (root via su; graceful no-op without it).
