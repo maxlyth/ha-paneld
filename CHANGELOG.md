@@ -8,6 +8,19 @@ From **v0.8.0**, entries are grouped under **Added** (new features/entities), **
 changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
 content appear. Earlier releases predate this convention and keep their flat lists.
 
+## Unreleased
+
+HTTP UI redesign — a declarative settings registry, configurable Home Assistant exposure, a canonical config API, config bundles with on-panel history, and a tabbed multi-page web UI. (On the `http-ui-redesign` branch; not yet released.)
+
+### Added
+
+- **Declarative settings registry** — a single source of truth (`config/SettingsRegistry`) describing each setting's type, group, Basic/Advanced tier, portability scope, validation, and Home Assistant entity. Drives the config API, the generated form, and MQTT discovery so the three can't drift. Pure/unit-tested, with golden tests asserting byte-identical discovery payloads.
+- **Configurable HA exposure** — every config entity gains a per-panel "expose to Home Assistant" toggle. Hiding one clears its retained discovery (the entity leaves HA entirely — zero recorder / state-machine cost). Set from the new Configure page or `POST /api/v1/config` (`ha_expose_<key>`).
+- **Canonical config over HTTP** — the formerly MQTT-only settings (`wake_on_wave`, `prevent_idle_dim`, `watchdog`, `auto_brightness`, `brightness_bias`, `navbar`, `touch_sound`, `cpu_governor`, `network_adb`, `zigbee_router`, `ambient_lux`) are now settable via the config API, applied through the same path an HA command uses.
+- **`/api/v1` namespace** — `config`, `config/schema`, `perf`, `proximity`, `diag`, `health`, and `input` (tap injection). Existing flat routes remain for back-compat.
+- **Config bundles + revision history** — `GET /api/v1/config/export` (versioned, secrets excluded by default) and a transactional `POST /api/v1/config/import` (migrate → scope/secret filter → validate-all-or-reject → snapshot → apply; `?dry_run=1` previews the diff, `?mode=fleet` applies only portable keys). On-panel revision ring buffer with `GET /api/v1/config/revisions` + restore.
+- **Tabbed web UI** — Dashboard / Configure / Test / Install / Fleet / API. **Configure** is a schema-driven Basic/Advanced form with inline expose pips and bundle backup/restore; **Test** adds an interactive screenshot (View/Control — tap the image to touch the panel) plus on-screen nav actions and a TTS test; **Install** surfaces panel-health warnings + the capabilities matrix. Self-contained, offline, no build step.
+
 ## v0.8.4 - 2026-06-29
 
 Highlights since 0.8.3: a hardened privileged helper, the full control surface on sandbox-walled (no-`su`) panels, opt-in vendor-app taming, a dashboard watchdog, an admin launcher, panel-health warnings, and preliminary Shelly Wall Display profiles. (The per-RC sections below detail the path to this release.)
