@@ -28,7 +28,6 @@ import io.github.maxlyth.hapaneld.control.TameController
 import io.github.maxlyth.hapaneld.control.WatchdogController
 import io.github.maxlyth.hapaneld.control.TouchSoundController
 import io.github.maxlyth.hapaneld.control.VolumeController
-import io.github.maxlyth.hapaneld.control.ThreadController
 import io.github.maxlyth.hapaneld.control.ZigbeeController
 import io.github.maxlyth.hapaneld.hardware.LedController
 import io.github.maxlyth.hapaneld.hardware.LedFactory
@@ -85,7 +84,6 @@ class PaneldService : Service() {
     private lateinit var touchSound: TouchSoundController
     private lateinit var bootChime: BootChimeController
     private lateinit var zigbee: ZigbeeController
-    private lateinit var thread: ThreadController
     private lateinit var relay: RelayController
     private lateinit var cpu: CpuController
     private lateinit var adb: AdbController
@@ -138,7 +136,6 @@ class PaneldService : Service() {
         bootChime = BootChimeController(this, config)
         bootChime.applyPersisted()
         zigbee = ZigbeeController(profile)
-        thread = ThreadController(profile)
         relay = RelayController(profile)
         cpu = CpuController(profile)
         adb = AdbController()
@@ -230,10 +227,9 @@ class PaneldService : Service() {
             "Nav actions (a11y)" to yesNo(accessibilityEnabled()),
             // Soft navbar overlay mode + whether the overlay can actually be drawn (SYSTEM_ALERT_WINDOW).
             "Navbar" to (config.navbarMode + if (config.navbarMode != "Off" && !canDrawOverlays()) " · no overlay permission" else ""),
-            // Zigbee + Thread EFR32 state (NSPanel Pro only; "none" elsewhere). Both call su — fine
-            // here because the info page is served off the main thread.
+            // Zigbee EFR32 state (NSPanel Pro only; "none" elsewhere). Calls su — fine here because
+            // the info page is served off the main thread.
             "Zigbee" to zigbee.status(),
-            "Thread" to thread.statusText(),
             "Relays" to relay.count().let { if (it > 0) it.toString() else "none" },
             "CPU profile" to (cpu.currentTier() ?: "n/a"),
             "Network ADB" to when {

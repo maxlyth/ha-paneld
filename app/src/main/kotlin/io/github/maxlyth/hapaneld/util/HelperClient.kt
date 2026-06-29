@@ -40,20 +40,6 @@ object HelperClient {
         null
     }
 
-    /** Send one command that takes longer than the default 500 ms to respond (e.g. `THREAD_FLASH` which
-     *  blocks for up to 90 s while the XMODEM transfer runs). [timeoutMs] is applied to the socket's
-     *  SO_TIMEOUT; pass enough headroom beyond the expected operation duration. */
-    fun sendLong(cmd: String, timeoutMs: Int = 120_000): String? = try {
-        open().use { s ->
-            s.soTimeout = timeoutMs
-            s.outputStream.apply { write((cmd + "\n").toByteArray()); flush() }
-            BufferedReader(InputStreamReader(s.inputStream)).readLine()?.trim()
-        }
-    } catch (e: Exception) {
-        Log.d(TAG, "daemon long command failed (${e.message})")
-        null
-    }
-
     /** Send one command and read the full **binary** reply (e.g. `SCREENCAP` PNG bytes). Half-closes the
      *  write side so the daemon's serve loop sees EOF, processes the command, and closes — giving us EOF
      *  after all the bytes. Longer timeout (screencap takes ~1-2s). Null if unreachable/empty. */

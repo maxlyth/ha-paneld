@@ -9,7 +9,6 @@ import io.github.maxlyth.hapaneld.control.DensityController
 import io.github.maxlyth.hapaneld.control.Su
 import io.github.maxlyth.hapaneld.control.SystemController
 import io.github.maxlyth.hapaneld.control.TameController
-import io.github.maxlyth.hapaneld.control.ThreadController
 import io.github.maxlyth.hapaneld.control.VolumeController
 import io.github.maxlyth.hapaneld.device.TameCandidate
 import io.github.maxlyth.hapaneld.input.PanelAccessibilityService
@@ -399,48 +398,6 @@ class PaneldServer(
                         ContentType.Text.Html,
                     )
                 }
-                // Thread Mesh Router: commission an already-flashed EFR32 NCP onto the Thread mesh
-                // without re-flashing. Use when the GBL flash succeeded but commissioning failed.
-                post("/thread/commission") {
-                    val tc = ThreadController()
-                    val log = StringBuilder()
-                    val result = tc.commissionOnly(appContext) { progress ->
-                        log.appendLine(progress)
-                        Log.i("PaneldServer", "thread-commission: $progress")
-                    }
-                    val statusLine = if (result.isSuccess) "Commission complete." else "Error: ${result.exceptionOrNull()?.message}"
-                    call.respondText(
-                        "<!doctype html><meta charset=utf-8>" +
-                            "<body style='font-family:system-ui;background:#111;color:#eee;padding:20px'>" +
-                            "<h2>Thread Commission</h2>" +
-                            "<pre style='background:#1a1a1a;padding:12px;border-radius:6px;overflow:auto;font-size:.85rem'>${esc(log.toString())}</pre>" +
-                            "<p><b>${esc(statusLine)}</b></p>" +
-                            "<p><a href='/' style='color:#9cf'>← Back to config</a></p></body>",
-                        ContentType.Text.Html,
-                    )
-                }
-                // Thread Mesh Router: flash the EFR32 radio with OpenThread NCP firmware and commission it
-                // onto the Thread network. The operation takes 60–90 s; the handler suspends until done,
-                // then returns a result page. Only present on panels where the EFR32 is detected.
-                // If already flashed (Thread NCP state), skips the GBL and goes straight to commissioning.
-                post("/thread/flash") {
-                    val tc = ThreadController()
-                    val log = StringBuilder()
-                    val result = tc.flash(appContext) { progress ->
-                        log.appendLine(progress)
-                        Log.i("PaneldServer", "thread-flash: $progress")
-                    }
-                    val statusLine = if (result.isSuccess) "Flash complete." else "Error: ${result.exceptionOrNull()?.message}"
-                    call.respondText(
-                        "<!doctype html><meta charset=utf-8>" +
-                            "<body style='font-family:system-ui;background:#111;color:#eee;padding:20px'>" +
-                            "<h2>Thread Flash</h2>" +
-                            "<pre style='background:#1a1a1a;padding:12px;border-radius:6px;overflow:auto;font-size:.85rem'>${esc(log.toString())}</pre>" +
-                            "<p><b>${esc(statusLine)}</b></p>" +
-                            "<p><a href='/' style='color:#9cf'>← Back to config</a></p></body>",
-                        ContentType.Text.Html,
-                    )
-                }
                 get("/health") {
                     call.respondText("ha-paneld ${Config.VERSION} panel=${config.panelId} build=${buildToken()}\n")
                 }
@@ -517,10 +474,10 @@ class PaneldServer(
         val netKeys = listOf("Local IP", "Local IPv6", "HTTP port", "MQTT", "mDNS", "Network ADB")
         // Rows whose values are DECLARED by the DeviceProfile, so wrong data points a contributor straight
         // at the fix: Platform=displayName/socClass, LED=ledMechanism, sensor tech=proximityTech/lightTech,
-        // Zigbee+Thread=zigbeeGatewayDir/efr32UartPath, Relays=relayBase, CPU profile=cpuGovernors.
+        // Zigbee=zigbeeGatewayDir, Relays=relayBase, CPU profile=cpuGovernors.
         // (panel_id / Friendly name are user config and Accessibility nav is runtime state — they fall
         // through to Panel information.)
-        val profKeys = listOf("Platform", "LED", "Light sensor", "Proximity", "Zigbee", "Thread", "Relays", "CPU profile")
+        val profKeys = listOf("Platform", "LED", "Light sensor", "Proximity", "Zigbee", "Relays", "CPU profile")
         val grouped = (netKeys + profKeys).toSet()
         val infoKeys = facts.keys.filter { it !in grouped }
         fun factRows(keys: List<String>): String =
@@ -639,7 +596,6 @@ report of this panel's hardware, firmware, SELinux, su and node probes for bug r
 <p class="note" id="insthint"></p></div>
 ${displayCardHtml()}
 ${tameCardHtml()}
-${threadCardHtml()}
 <div class="card"><h2 id="config">Configuration</h2>
 <form method="post" action="/config">
  <label>Panel id <small>(entity_ids / MQTT topics)</small>
@@ -759,22 +715,6 @@ $body
 <script>function pkgPick(){var d=document.getElementById('pkgdlg');d.showModal();
 document.getElementById('pkgdlgbody').innerHTML='Loading…';
 fetch('/tame/suggest').then(function(r){return r.text()}).then(function(t){document.getElementById('pkgdlgbody').innerHTML=t}).catch(function(){document.getElementById('pkgdlgbody').textContent='Could not list packages.'});}</script></div>"""
-    }
-
-    /** Thread Mesh Router flash card. Empty on panels without an EFR32 radio. */
-    private fun threadCardHtml(): String {
-        val tc = ThreadController()
-        if (!tc.present()) return ""
-        val state = tc.statusText()
-        val hasGbl = tc.firmwareAvailable(appContext)
-        val gblNote = if (hasGbl) "" else """<p class="note" style="color:#d9a528">⚠ Firmware asset not bundled in this build — rebuild the APK to include it.</p>"""
-        return """<div class="card"><h2>Thread Mesh Router <small style="color:#9af">· EFR32MG21</small></h2>
-<p class="note">Current radio state: <b>${esc(state)}</b></p>
-$gblNote
-<p class="note">Flashing replaces the factory Zigbee firmware with OpenThread NCP, then commissions the radio onto your Thread network. The border router is discovered automatically via mDNS (<code>_meshcop._udp</code>). The process takes 60–90 seconds. <b>The panel's Zigbee gateway will stop working permanently.</b></p>
-<form method="post" action="/thread/flash">
- <button type="submit"${if (!hasGbl) " disabled title=\"firmware not bundled\"" else ""}>Flash OpenThread NCP firmware…</button>
-</form></div>"""
     }
 
     /** Display-sizing card (density + text scale). Empty when su isn't reachable (no control). */

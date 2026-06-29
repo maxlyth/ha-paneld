@@ -7,7 +7,6 @@
 #include "input.h"
 #include "sysctl.h"
 #include "perf.h"
-#include "thread.h"
 #include "util.h"
 
 static void cmd_ping(conn_ctx *ctx, const char *args) { (void)args; reply(ctx->fd, "OK\n"); }
@@ -37,9 +36,6 @@ static const struct { const char *verb; cmd_fn fn; } COMMANDS[] = {
     { "GOV",       cmd_gov },
     { "PERFDUMP",      cmd_perfdump },
     { "PING",          cmd_ping },
-    { "THREAD_FLASH",      cmd_thread_flash },
-    { "THREAD_STATUS",     cmd_thread_status },
-    { "THREAD_COMMISSION", cmd_thread_commission },
 };
 
 void dispatch(conn_ctx *ctx, char *line) {

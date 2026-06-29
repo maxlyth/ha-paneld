@@ -101,8 +101,8 @@ int valid_gov(const char *s) {
     return 1;
 }
 
-// Even-length hex string of at most 508 characters (= 254 raw dataset bytes, the Thread operational
-// dataset max). Only [0-9a-fA-F] are accepted — safe to pass as-is to cmd_thread_commission.
+// Even-length hex string of at most 508 characters (= 254 raw dataset bytes). Only [0-9a-fA-F] are
+// accepted — safe to pass as-is to a shell command.
 int valid_hex_dataset(const char *s) {
     if (!s || !*s) return 0;
     size_t n = strlen(s);

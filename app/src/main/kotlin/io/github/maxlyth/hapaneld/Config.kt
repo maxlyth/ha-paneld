@@ -170,18 +170,6 @@ class Config(context: Context) {
     val silenceBootChime: Boolean get() = prefs.getBoolean("silence_boot_chime", false)
     fun setSilenceBootChime(on: Boolean) { prefs.edit().putBoolean("silence_boot_chime", on).apply() }
 
-    /** OTBR REST API base URL for Thread commissioning (unauthenticated).
-     *  Defaults to http://<broker-host>:8081, derived from the MQTT broker hostname (the OTBR
-     *  add-on typically runs on the same HA instance). HA OTBR add-on v3+ serves the REST API on
-     *  8081; ThreadController probes 8080 automatically if 8081 fails. Override if needed. */
-    val otbrUrl: String
-        get() = prefs.getString("otbr_url", null)?.takeIf { it.isNotBlank() } ?: derivedOtbrUrl()
-    fun setOtbrUrl(url: String) { prefs.edit().putString("otbr_url", url).apply() }
-    private fun derivedOtbrUrl(): String {
-        val host = mqttBroker.substringAfter("://").substringBefore(":").substringBefore("/").trim()
-        return if (host.isNotBlank()) "http://$host:8081" else ""
-    }
-
     // Desired Zigbee-router state, persisted so the gateway can be auto-started on boot when nothing
     // else launches it (the NSPanel Pro gateway is not init-started — verified 2026-06-08). Default off.
     val zigbeeRouterEnabled: Boolean get() = prefs.getBoolean("zigbee_router_enabled", false)

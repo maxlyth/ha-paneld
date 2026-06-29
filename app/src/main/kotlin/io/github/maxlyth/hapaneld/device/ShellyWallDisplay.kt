@@ -42,7 +42,6 @@ object ShellyWallDisplay : DeviceProfile {
     override val ledMechanism = LedMechanism.NONE
     override val screenOff = ScreenOff.BRIGHTNESS_ZERO
     override val zigbeeGatewayDir: String? = null
-    override val efr32UartPath: String? = null
     override val relayBase: String? = null
     override val buttonLedGpioBase: Int? = null
     override val proximityTech: String? = null       // Stargate: none; Pegasus/Atlantis: IR via gpio-keys, not accessible without root

@@ -53,7 +53,6 @@ object ShellyWallDisplayV2 : DeviceProfile {
     override val ledMechanism = LedMechanism.NONE   // DTB: pwm-backlight only, no RGB LED node
     override val screenOff = ScreenOff.BRIGHTNESS_ZERO
     override val zigbeeGatewayDir: String? = null
-    override val efr32UartPath: String? = null
     override val relayBase: String? = null
     override val buttonLedGpioBase: Int? = null
     override val proximityTech: String? = "Infrared"     // Jenna: STK3A5x reflective-IR combo (like NSPanel Pro); likely SensorManager-readable

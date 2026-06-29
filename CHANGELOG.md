@@ -8,6 +8,12 @@ From **v0.8.0**, entries are grouped under **Added** (new features/entities), **
 changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
 content appear. Earlier releases predate this convention and keep their flat lists.
 
+## v0.8.4-rc6 - 2026-06-29
+
+### Removed
+
+- **Thread Mesh Router (preview) deferred** — the experimental Thread NCP flash + commission support previewed in the `0.8.4-rc2`–`rc4` prereleases has been pulled from 0.8.4. Driving the EFR32MG21 radio to a working OpenThread NCP needs more on-hardware validation (finalising the firmware's Spinel UART pin configuration), so it's parked rather than shipped half-done. The **Zigbee-router** switch is unaffected. Thread support is planned to return in a later release (0.8.6+).
+
 ## v0.8.4-rc5 - 2026-06-26
 
 ### Added
@@ -23,7 +29,6 @@ content appear. Earlier releases predate this convention and keep their flat lis
 
 ### Added
 
-- **Thread Mesh Router — firmware bundled** — the OpenThread NCP `.gbl` built from Gecko SDK 5 for the EFR32MG21A020F768IM32 (the chip in every NSPanel Pro) is now bundled in the APK (`assets/firmware/efr32mg21-thread-ncp.gbl`) and a CI workflow builds it reproducibly. `ThreadController` drives the full flash→commission sequence from the Android side without adb.
 - **Boot chime silencing** — an opt-in toggle (`switch.<panel>_silence_boot_chime`) suppresses the Sonoff start-up sound via `Settings.System`, surfaced as an MQTT entity and HTTP Controls-card switch.
 - **Dashboard watchdog** — if the dashboard WebView crashes or is moved to the background, ha-paneld relaunches it automatically. Configurable delay; no root needed.
 - **Admin launcher** — a minimal on-demand launcher (long-press the ha-paneld notification, or `POST /admin`) pops up for installing apps and changing settings while keeping the dashboard as the default home. Dismisses itself when done.
@@ -45,7 +50,6 @@ content appear. Earlier releases predate this convention and keep their flat lis
 
 ### Added
 
-- **Thread NCP GBL CI build** — a GitHub Actions workflow builds the OpenThread NCP firmware from Gecko SDK 5 via the `silabs-firmware-builder` Docker image, targeting the EFR32MG21A020F768IM32 at 115200 baud with no flow control (same UART layout as the ZBDongle-E).
 - **Tame candidates for TPA10, SMT1019, WF1589T** — device profiles now seed curated tame candidates for panels beyond the NSPanel Pro so the vendor-taming picker has profile-informed suggestions on those panels.
 
 ### Fixed
@@ -62,7 +66,6 @@ content appear. Earlier releases predate this convention and keep their flat lis
 ### Added
 
 - **Opt-in vendor-package taming** — a new Configure card surfaces an interactive per-package tick list of vendor apps that can be **force-stopped, boot-disabled, and stripped of the floating-overlay permission** so they can't draw above the dashboard. Profiled panels (NSPanel Pro) show the profile's curated candidates (e.g. `com.eWeLinkControlPanel`, unticked by default); generic panels enumerate live by overlay/launcher heuristic. Ticking and un-ticking applies immediately on Save (no reboot). Reversible: unticking re-enables. Critical system packages (`android`, `com.android.systemui`, etc.) are refused at both the app and daemon layer regardless of input. Default is empty — nothing is ever touched until the user opts in. Motivated by the Sonoff/CoolKit control-panel app drawing a floating widget over the dashboard after a firmware update.
-- **Thread Mesh Router provisioning** (hardware-ready, firmware asset not yet bundled) — panels carrying an EFR32MG21 802.15.4 radio (NSPanel Pro family) gain a `Thread` row in the info page showing the radio's current firmware state (Zigbee NCP factory / Thread NCP not yet commissioned / active mesh router). A config-page action will flash OpenThread NCP firmware via the confirmed zgateway XMODEM OTA path, then automatically commission the chip onto the Thread network by fetching the Active Operational Dataset from the OTBR REST API (`GET <otbr_url>/node/dataset/active`) and writing it via Spinel/HDLC-Lite — no QR code, no joiner protocol needed. `Config.otbrUrl` defaults to the MQTT broker host on port 8080. The helper gained three new verbs: `THREAD_FLASH`, `THREAD_STATUS`, and `THREAD_COMMISSION` (full Spinel reset + `PROP_THREAD_ACTIVE_DATASET` + bring-up sequence implemented in `helper/src/spinel.c`). Unit and fuzz coverage updated. Flash requires the `.gbl` firmware asset (`assets/firmware/efr32mg21-thread-ncp.gbl`) which is not yet bundled — the radio-state display and commissioning pipeline are ready; the asset and config-page UI arrive in a later rc.
 
 ### Fixed
 
