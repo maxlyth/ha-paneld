@@ -100,6 +100,22 @@ object DiagReader {
         appendLine("[env] selinux=${readFile("/sys/fs/selinux/enforce")?.trim() ?: "?"} su=${Su.available()} write_settings=${Settings.System.canWrite(ctx)} a11y=${a11yEnabled(ctx)} daemon=${HelperClient.available()} ledjni=${NativeLed.available()}")
         appendLine("[sysfs] leds=${listDir("/sys/class/leds")} backlight=${listDir("/sys/class/backlight")} devfreq=${listDir("/sys/class/devfreq")}")
         appendLine("[labels] ${exec("ls -Zd /sys/class/leds/*/ /sys/class/backlight/*/ /dev/ledjni 2>&1").replace("\n", " ")}")
+        // GPIO export diagnostic — only for panels with sysfs button-LED pins (the S9E, gpio147–150).
+        // RelayController.ledCount() exports those pins on demand; if a reporter still sees 0 LEDs the
+        // usual cause is a gpiochip-base shift (the kernel numbered the pins differently), which these
+        // lines expose: check that led_base falls inside some chip's [base, base+ngpio) range, and which
+        // pin dirs / value nodes actually came up. Read-only.
+        DeviceProfile.detect().buttonLedGpioBase?.let { base ->
+            val pinPaths = (0 until 4).map { "/sys/class/gpio/gpio${base + it}" }
+            val chips = probe("grep -H '' /sys/class/gpio/gpiochip*/base /sys/class/gpio/gpiochip*/ngpio /sys/class/gpio/gpiochip*/label 2>/dev/null")
+                .replace("/sys/class/gpio/", "").replace("\n", " ")
+            val pinDirs = probe("ls -d ${pinPaths.joinToString(" ")} 2>/dev/null").replace("\n", " ")
+            val valueNodes = probe("ls ${pinPaths.joinToString(" ") { "$it/value" }} 2>/dev/null").replace("\n", " ")
+            appendLine("[gpio] led_base=$base (button-LED pins must fall inside a chip's [base,base+ngpio))")
+            appendLine("  chips: ${chips.ifBlank { "(none readable)" }}")
+            appendLine("  pin_dirs: ${pinDirs.ifBlank { "(none exported)" }}")
+            appendLine("  value_nodes: ${valueNodes.ifBlank { "(none)" }}")
+        }
         appendLine("[packages] " + listOf("io.homeassistant.companion.android", "io.homeassistant.companion.android.minimal")
             .joinToString(" ") { "${it.substringAfterLast('.')}=${pkgVer(ctx, it)}" })
         // Vendor packages this panel's profile knows about, with live state — so a maintainer can see the
@@ -141,4 +157,9 @@ object DiagReader {
         val p = Runtime.getRuntime().exec(arrayOf("sh", "-c", cmd))
         (p.inputStream.bufferedReader().readText() + p.errorStream.bufferedReader().readText()).trim()
     }.getOrElse { "(exec failed)" }
+
+    /** Read-only probe preferring su (the S9E is appCanSu, and /sys/class/gpio may be SELinux-guarded
+     *  for the app uid), falling back to an app-uid shell. */
+    private fun probe(cmd: String): String =
+        Su.runOutput(cmd)?.takeIf { it.isNotBlank() } ?: exec(cmd)
 }
