@@ -5,6 +5,10 @@ import android.util.Log
 import io.github.maxlyth.hapaneld.AudioPlayer
 import io.github.maxlyth.hapaneld.Config
 import io.github.maxlyth.hapaneld.config.Capabilities
+import io.github.maxlyth.hapaneld.config.ConfigBundle
+import io.github.maxlyth.hapaneld.config.ConfigDiff
+import io.github.maxlyth.hapaneld.config.Migrations
+import io.github.maxlyth.hapaneld.config.Scope
 import io.github.maxlyth.hapaneld.config.SettingType
 import io.github.maxlyth.hapaneld.config.SettingValue
 import io.github.maxlyth.hapaneld.config.SettingsRegistry
@@ -125,6 +129,8 @@ class PaneldServer(
 
     // Display sizing (density + text scale) via `wm density` / `font_scale` — su panels only.
     private val density = DensityController()
+    // On-panel config revision history (ring buffer) — written on every successful apply.
+    private val revisions = RevisionStore(appContext.filesDir)
     private val urlRegex = Regex("""https?://[^\s"']+""")
     // Stored as a stop lambda over a type-inferred server local, so we never have to name Ktor's
     // EmbeddedServer<TEngine, TConfiguration> generic type (which shifts between Ktor versions).
@@ -392,6 +398,16 @@ class PaneldServer(
                     get("/config") { call.respondText(configJson(), ContentType.Application.Json) }
                     post("/config") { handleConfigPost(call) }
                     get("/config/schema") { call.respondText(configSchemaJson(), ContentType.Application.Json) }
+                    // Versioned config bundle: backup (export) and transactional restore/deploy (import).
+                    get("/config/export") { handleConfigExport(call) }
+                    post("/config/import") { handleConfigImport(call) }
+                    // On-panel revision history + rollback.
+                    get("/config/revisions") { call.respondText(revisionsJson(), ContentType.Application.Json) }
+                    post("/config/revisions/{id}/restore") {
+                        val id = call.parameters["id"]?.toLongOrNull()
+                        if (id == null) call.respondText("bad-id\n", status = HttpStatusCode.BadRequest)
+                        else handleRevisionRestore(call, id)
+                    }
                     get("/perf") {
                         PerfReader.touch()
                         call.respondText(PerfReader.json(), ContentType.Application.Json)
@@ -927,6 +943,135 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
         val yi = y.toInt()
         return io.github.maxlyth.hapaneld.device.DeviceProfile.detect().appCanSu &&
             Su.run("input tap $xi $yi")
+    }
+
+    // ---- config bundles (export / transactional import) + on-panel revision history ----
+
+    /** Current registry values as a flat map (skips transient inputs). The basis for export, the
+     *  pre-change snapshot, and the dry-run diff. */
+    private fun currentValues(): Map<String, String> {
+        val m = LinkedHashMap<String, String>()
+        for (spec in SettingsRegistry.settable()) if (!spec.transient) m[spec.key] = config.getRaw(spec)
+        return m
+    }
+
+    /** Export a versioned config bundle. Secrets are excluded unless `?include_secrets=1`. */
+    private suspend fun handleConfigExport(call: ApplicationCall) {
+        val includeSecrets = call.request.queryParameters["include_secrets"] == "1"
+        val values = LinkedHashMap<String, String>()
+        for (spec in SettingsRegistry.settable()) {
+            if (spec.transient) continue
+            if (spec.secret && !includeSecrets) continue
+            values[spec.key] = config.getRaw(spec)
+        }
+        val bundle = ConfigBundle.fromValues(
+            values, exportedAt = System.currentTimeMillis().toString(), exportedBy = config.panelId,
+        )
+        call.response.headers.append("Content-Disposition", "attachment; filename=\"${config.panelId}-config.json\"")
+        call.respondText(bundle.serialize(), ContentType.Application.Json)
+    }
+
+    /**
+     * Transactional bundle import. Parse → migrate to the current schema → scope/secret filter
+     * (`?mode=fleet` applies only PORTABLE, non-secret keys; default `restore` applies everything) →
+     * validate ALL against the registry (any failure rejects the whole bundle, nothing written) →
+     * snapshot a revision → commit the batch → apply live keys + reconfigure. `?dry_run=1` returns the
+     * diff without writing. Newer-than-current bundles and unknown keys are tolerated with a warning.
+     */
+    private suspend fun handleConfigImport(call: ApplicationCall) {
+        val bundle = ConfigBundle.parse(call.receiveText())
+        if (bundle == null) {
+            call.respondText("""{"status":"bad-bundle"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+            return
+        }
+        val (migrated, warnings) = Migrations.migrate(bundle.schema, bundle.values)
+        val fleet = call.request.queryParameters["mode"] == "fleet"
+        val dryRun = call.request.queryParameters["dry_run"] == "1"
+        val accepted = LinkedHashMap<String, String>()
+        val skipped = ArrayList<String>()
+        val errors = ArrayList<String>()
+        val warn = warnings.toMutableList()
+        for ((key, raw) in migrated) {
+            val spec = SettingsRegistry.spec(key)
+            if (spec == null) { warn.add("unknown key skipped: $key"); continue }
+            if (spec.readOnly || spec.transient) { skipped.add(key); continue }
+            if (fleet && (spec.scope != Scope.PORTABLE || spec.secret)) { skipped.add(key); continue }
+            when (val v = SettingValue.validate(spec, raw)) {
+                is Validation.Ok -> accepted[key] = v.normalized
+                is Validation.Bad -> errors.add(v.reason)
+            }
+        }
+        if (errors.isNotEmpty()) {
+            call.respondText(importJson("rejected", emptyList(), skipped, warn, errors), ContentType.Application.Json, HttpStatusCode.UnprocessableEntity)
+            return
+        }
+        if (dryRun) {
+            call.respondText(dryRunJson(ConfigDiff.diff(currentValues(), accepted), skipped, warn), ContentType.Application.Json)
+            return
+        }
+        applyAccepted(accepted)
+        call.respondText(importJson("applied", accepted.keys.toList(), skipped, warn, errors), ContentType.Application.Json)
+    }
+
+    /** Apply a validated value set transactionally: snapshot current → commit batch → run live-key
+     *  side-effects → reconfigure. panel_id goes through its setter (cache invalidation). */
+    private fun applyAccepted(accepted: Map<String, String>) {
+        revisions.snapshot(
+            ConfigBundle.fromValues(
+                currentValues(), kind = ConfigBundle.KIND_REVISION,
+                exportedAt = System.currentTimeMillis().toString(), exportedBy = config.panelId,
+            ),
+        )
+        val editor = config.editor()
+        val live = ArrayList<Pair<String, String>>()
+        for ((key, value) in accepted) {
+            when {
+                key == "panel_id" -> config.setPanelId(value)
+                key in HTTP_LIVE_KEYS -> live.add(key to value)
+                else -> SettingsRegistry.spec(key)?.let { config.stage(editor, it, value) }
+            }
+        }
+        editor.commit()
+        for ((k, v) in live) applySetting(k, v)
+        onReconfigure()
+    }
+
+    /** List on-panel revisions (newest first) as `[{id, exported_at, keys}]`. */
+    private fun revisionsJson(): String =
+        "[" + revisions.list().joinToString(",") { (id, b) ->
+            "{\"id\":$id,\"exported_at\":\"${b.exportedAt}\",\"keys\":${b.values.size}}"
+        } + "]"
+
+    /** Roll back to a stored revision (itself recorded as a new revision, so restores are undoable). */
+    private suspend fun handleRevisionRestore(call: ApplicationCall, id: Long) {
+        val bundle = revisions.get(id)
+        if (bundle == null) {
+            call.respondText("""{"status":"not-found"}""", ContentType.Application.Json, HttpStatusCode.NotFound)
+            return
+        }
+        val (migrated, _) = Migrations.migrate(bundle.schema, bundle.values)
+        val accepted = LinkedHashMap<String, String>()
+        for ((key, raw) in migrated) {
+            val spec = SettingsRegistry.spec(key) ?: continue
+            if (spec.readOnly || spec.transient) continue
+            (SettingValue.validate(spec, raw) as? Validation.Ok)?.let { accepted[key] = it.normalized }
+        }
+        applyAccepted(accepted)
+        call.respondText(importJson("restored", accepted.keys.toList(), emptyList(), emptyList(), emptyList()), ContentType.Application.Json)
+    }
+
+    private fun jarr(items: List<String>): String =
+        "[" + items.joinToString(",") { "\"" + it.replace("\\", "\\\\").replace("\"", "\\\"") + "\"" } + "]"
+
+    private fun importJson(status: String, applied: List<String>, skipped: List<String>, warnings: List<String>, errors: List<String>): String =
+        "{\"status\":\"$status\",\"applied\":${jarr(applied)},\"skipped\":${jarr(skipped)},\"warnings\":${jarr(warnings)},\"errors\":${jarr(errors)}}"
+
+    private fun dryRunJson(diff: List<ConfigDiff.Change>, skipped: List<String>, warnings: List<String>): String {
+        fun q(v: String) = "\"" + v.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+        val changes = diff.joinToString(",") { c ->
+            "{\"key\":${q(c.key)},\"from\":${c.from?.let { q(it) } ?: "null"},\"to\":${q(c.to)}}"
+        }
+        return "{\"status\":\"dry_run\",\"changes\":[$changes],\"skipped\":${jarr(skipped)},\"warnings\":${jarr(warnings)}}"
     }
 
     /** Full config as JSON for fleet management. The MQTT password is never emitted — only a boolean
