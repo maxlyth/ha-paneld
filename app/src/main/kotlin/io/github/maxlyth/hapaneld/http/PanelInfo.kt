@@ -121,4 +121,24 @@ object PanelInfo {
         "io.homeassistant.companion.android",
         "io.homeassistant.companion.android.minimal",
     )
+
+    /** Package id of Fully Kiosk Browser — a dashboard renderer some users prefer over the Companion. */
+    const val FULLY_KIOSK = "de.ozerov.fully"
+
+    /** Dashboard renderers actually installed on this panel: HA Companion (either variant), Fully Kiosk,
+     *  and any explicitly configured dashboard package. Empty ⇒ nothing will draw a dashboard (ha-paneld
+     *  itself still runs fine). Drives the soft "no dashboard app detected" health notice. */
+    fun dashboardRenderers(context: Context, dashboardPackage: String): List<String> {
+        val out = mutableListOf<String>()
+        if (COMPANION_IDS.any { installed(context, it) }) out += "HA Companion"
+        if (installed(context, FULLY_KIOSK)) out += "Fully Kiosk"
+        if (dashboardPackage.isNotBlank() && installed(context, dashboardPackage)) out += dashboardPackage
+        return out
+    }
+
+    private fun installed(context: Context, id: String): Boolean = try {
+        context.packageManager.getPackageInfo(id, 0); true
+    } catch (e: PackageManager.NameNotFoundException) {
+        false
+    }
 }

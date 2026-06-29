@@ -10,6 +10,10 @@ content appear. Earlier releases predate this convention and keep their flat lis
 
 ## v0.8.4-rc6 - 2026-06-29
 
+### Added
+
+- **Panel-health warnings** — the `:8888` info page now surfaces the states that silently stop a panel from showing the dashboard. **System WebView too old**: if the WebView's Chromium major is below the HA-frontend threshold (matches `provision.sh`'s `check_webview`), a banner explains why the dashboard renders blank/broken and links the update steps, and the version is highlighted in the panel-information table (a Cromite-swap caveat is noted, since that reports the stale OEM version). **No dashboard app detected**: a soft, renderer-aware notice that fires only when none of the HA Companion, Fully Kiosk (`de.ozerov.fully`), or a configured `dashboard_package` is installed — ha-paneld itself runs fine without one. Available-update notices already banner here. Decision logic is pure and unit-tested (`PanelHealthTest`).
+
 ### Removed
 
 - **Thread Mesh Router (preview) deferred** — the experimental Thread NCP flash + commission support previewed in the `0.8.4-rc2`–`rc4` prereleases has been pulled from 0.8.4. Driving the EFR32MG21 radio to a working OpenThread NCP needs more on-hardware validation (finalising the firmware's Spinel UART pin configuration), so it's parked rather than shipped half-done. The **Zigbee-router** switch is unaffected. Thread support is planned to return in a later release (0.8.6+).
