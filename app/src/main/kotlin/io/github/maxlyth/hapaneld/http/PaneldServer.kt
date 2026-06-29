@@ -226,6 +226,30 @@ class PaneldServer(
                 get("/icon.svg") {
                     call.respondText(asset("icon.svg"), ContentType.Image.SVG)
                 }
+                // Generic bundled-asset server for the redesigned UI (page scripts + vendored libs).
+                get("/assets/{f...}") {
+                    val rel = call.parameters.getAll("f")?.joinToString("/").orEmpty()
+                    val body = if (rel.isEmpty() || rel.contains("..")) null else runCatching { asset(rel) }.getOrNull()
+                    if (body == null) {
+                        call.respondText("not found\n", status = HttpStatusCode.NotFound)
+                    } else {
+                        val ct = when {
+                            rel.endsWith(".js") -> ContentType.Application.JavaScript
+                            rel.endsWith(".css") -> ContentType.Text.CSS
+                            rel.endsWith(".svg") -> ContentType.Image.SVG
+                            rel.endsWith(".json") -> ContentType.Application.Json
+                            else -> ContentType.Text.Plain
+                        }
+                        call.response.headers.append("Cache-Control", "no-cache")
+                        call.respondText(body, ct)
+                    }
+                }
+                // Tabbed multi-page shell. `/` stays the existing dashboard (now with a tab bar); the
+                // other tabs are dedicated pages that consume /api/v1.
+                get("/configure") { call.respondText(page("configure", "Configure", configureBody()), ContentType.Text.Html) }
+                get("/test") { call.respondText(page("test", "Test", testBody()), ContentType.Text.Html) }
+                get("/install") { call.respondText(page("install", "Install", installBody()), ContentType.Text.Html) }
+                get("/fleet") { call.respondText(page("fleet", "Fleet", fleetBody()), ContentType.Text.Html) }
                 // Live panel screenshot via root `screencap` (LAN-only like the rest of this surface).
                 // Embedded scaled in the info page + linkable full-size; also usable as an HA camera
                 // still_image_url. Captured on demand — no background polling.
@@ -456,6 +480,143 @@ class PaneldServer(
         if (dm.widthPixels > 0 && dm.heightPixels > 0) "${dm.widthPixels}/${dm.heightPixels}" else "3/4"
     } catch (e: Throwable) { "3/4" }
 
+    // ---- tabbed multi-page shell ----
+
+    /** The shared tab bar; [active] highlights the current page. */
+    private fun navBar(active: String): String {
+        fun tab(id: String, href: String, label: String): String =
+            """<a href="$href"${if (id == active) " class=\"active\"" else ""}>$label</a>"""
+        return "<div class=\"nav\">" +
+            tab("dashboard", "/", "Dashboard") +
+            tab("configure", "/configure", "Configure") +
+            tab("test", "/test", "Test") +
+            tab("install", "/install", "Install") +
+            tab("fleet", "/fleet", "Fleet") +
+            """<a href="/api">API</a></div>"""
+    }
+
+    /** Shared page shell (header + tab bar + body) for the non-dashboard tabs. */
+    private fun page(active: String, title: String, body: String): String {
+        val haLink = if (config.haDeviceUrl.isNotBlank())
+            """<a class="pbtn" href="${esc(config.haDeviceUrl)}" target="_blank" rel="noopener">Open in HA</a>""" else ""
+        return """<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ha-paneld · ${esc(title)} · ${esc(config.panelId)}</title>
+<link rel="icon" href="/icon.svg">
+<link rel="stylesheet" href="/info.css"></head><body><div class="wrap">
+<div class="hdr"><h1><img src="/icon.svg" class="logo" alt="">ha-paneld <small>· ${esc(config.panelId)}</small></h1>
+ <span style="display:flex;gap:10px;align-items:center">$haLink</span></div>
+${navBar(active)}
+$body
+</div></body></html>"""
+    }
+
+    /** Configure tab — schema-driven form (Basic/Advanced + inline expose pips) + bundle backup/restore. */
+    private fun configureBody(): String = """
+<div class="cfg-tabs"><button id="tab-basic" class="on" onclick="cfgTab(false)">Basic</button><button id="tab-adv" onclick="cfgTab(true)">Advanced</button></div>
+<div id="cfg-status" class="muted" style="margin-bottom:10px">Loading settings…</div>
+<div id="cfg-groups" class="cards"></div>
+<div class="savebar"><button id="savebtn" disabled onclick="cfgSave()">Save changes</button><span id="cfg-msg" class="muted"></span></div>
+<div class="cards"><div class="card"><h2>Backup &amp; restore</h2>
+<p class="note">Download this panel's configuration as a versioned bundle, or apply one — validated, all-or-nothing, with a change preview before it writes.</p>
+<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+ <a class="pbtn" href="/api/v1/config/export">⭳ Export bundle</a>
+ <a class="pbtn" href="/api/v1/config/export?include_secrets=1">⭳ Export incl. secrets</a>
+ <label class="pbtn" style="cursor:pointer">⭱ Import…<input type="file" id="impfile" accept="application/json" style="display:none" onchange="cfgImport(this)"></label>
+</div>
+<pre id="imp-result" class="muted" style="white-space:pre-wrap;margin-top:10px"></pre></div></div>
+<script src="/assets/configure.js"></script>"""
+
+    /** Test tab — interactive screenshot (View/Control), on-screen nav actions, TTS test. */
+    private fun testBody(): String {
+        val rootOk = Su.available() || HelperClient.available()
+        val cap = if (rootOk) "Captured on demand via root / the helper daemon."
+        else "Screenshot + tap control need root or the helper daemon — unavailable on this panel."
+        return """
+<div class="cards">
+<div class="card"><h2>Panel screen <small>· live</small></h2>
+<div class="modebar">
+ <span class="seg"><button id="m-view" class="on" onclick="tstMode('view')">👁 View</button><button id="m-ctl" onclick="tstMode('control')">✋ Control</button></span>
+ <button class="pbtn" onclick="tstRefresh()">↻ Refresh</button>
+</div>
+<div id="shotwrap" class="screen-wrap"><img id="shot" alt="panel screen" style="aspect-ratio:${screenAspectRatio()}"></div>
+<p class="note" id="ctl-hint" style="display:none">Control mode: click/tap the image to send a real touch to the panel. ~0.5–1.5s round trip — good for waking, navigating, dismissing dialogs; not smooth dragging.</p>
+<p class="note">$cap</p></div>
+
+<div class="card"><h2>On-screen actions</h2>
+<div style="display:flex;gap:8px;flex-wrap:wrap">
+ <button class="pbtn" onclick="tstAction('back')">← Back</button>
+ <button class="pbtn" onclick="tstAction('recents')">▢ Recents</button>
+ <button class="pbtn" onclick="tstAction('launcher')">⊞ Launcher</button>
+ <button class="pbtn" onclick="tstAction('admin_launcher')">⚙ Admin</button>
+ <button class="pbtn" onclick="tstAction('voldn')">Vol −</button>
+ <button class="pbtn" onclick="tstAction('volup')">Vol +</button>
+</div>
+<p class="note">Drive the panel without touching it — handy while watching the screenshot above.</p></div>
+
+<div class="card"><h2>TTS / audio test</h2>
+<div style="display:flex;gap:8px;flex-wrap:wrap">
+ <input id="tts-url" placeholder="https://…/clip.mp3" style="flex:1;min-width:200px">
+ <button class="pbtn" onclick="tstPlay()">▶ Play</button>
+</div>
+<p class="note">Posts a URL to the announce contract (<code>/play</code>). <span id="tts-msg" class="muted"></span></p></div>
+
+<div class="card"><h2>More</h2>
+<p class="note">Proximity calibration is on the <a href="/" style="color:#9cf">Dashboard</a>. Full REST: <a href="/api" style="color:#9cf">API explorer</a>.</p></div>
+</div>
+<script src="/assets/test.js"></script>"""
+    }
+
+    /** Install tab — setup health warnings, capabilities, and config backup. */
+    private fun installBody(): String {
+        val facts = info()
+        val webViewVal = facts["System WebView"] ?: ""
+        val tooOld = PanelHealth.webViewTooOld(webViewVal)
+        val renderers = PanelInfo.dashboardRenderers(appContext, config.dashboardPackage)
+        val capColor = mapOf("ok" to "#48c774", "degraded" to "#d9a528", "none" to "#d04a3b")
+        val caps = DiagReader.capabilities(appContext).joinToString("\n") { c ->
+            val col = capColor[c.status] ?: "#888"
+            """<tr><th>${esc(c.name)}</th><td><span style="color:$col">●</span> ${esc(c.note)}</td></tr>"""
+        }
+        val warnings = buildString {
+            if (tooOld) append(
+                """<div class="setup">⚠ <b>System WebView is too old</b> (${esc(webViewVal)}) — the Home Assistant """ +
+                    """dashboard may render blank or broken. <a href="$WEBVIEW_DOC" target="_blank" rel="noopener">""" +
+                    """How &amp; why to update</a> (target: Chromium ${PanelHealth.MIN_CHROMIUM}+).</div>""",
+            )
+            if (renderers.isEmpty()) append(
+                """<div class="setup">ℹ <b>No dashboard app detected</b> — install the HA Companion app, """ +
+                    """<a href="https://www.fully-kiosk.com/" target="_blank" rel="noopener">Fully Kiosk</a>, or set a """ +
+                    """dashboard package on <a href="/configure">Configure</a>.</div>""",
+            )
+            UpdateChecker.available.forEach { u ->
+                append(
+                    """<div class="setup">⬆ <b>${esc(u.label)}</b> ${esc(u.latestVersion)} is available """ +
+                        """(installed: ${esc(u.currentVersion)}) — <a href="${esc(u.releaseUrl)}" target="_blank" rel="noopener">download</a></div>""",
+                )
+            }
+        }
+        val allGood = if (warnings.isEmpty()) """<div class="card"><p class="note">✓ No setup problems detected — this panel looks ready.</p></div>""" else ""
+        return """$warnings
+<div class="cards">
+<div class="card"><h2>Capabilities</h2><table>
+$caps
+</table>
+<p class="note"><a href="/diag" target="_blank" style="color:#9cf">⭳ Diagnostics dump</a> — full hardware/firmware/SELinux/su report for bug reports.</p></div>
+<div class="card"><h2>Backup this panel</h2>
+<p class="note">Export the full configuration bundle for safe-keeping, or to clone settings to another panel (Configure → Import).</p>
+<a class="pbtn" href="/api/v1/config/export">⭳ Export config bundle</a></div>
+$allGood</div>"""
+    }
+
+    /** Fleet tab — placeholder (discovery hooks exist; the roster lands later). */
+    private fun fleetBody(): String = """
+<div class="cards"><div class="card"><h2>Fleet overview <small>· coming soon</small></h2>
+<p class="note">A multi-panel roster — name · IP · health, with a link to each panel's UI — will live here.
+Every ha-paneld already advertises itself over mDNS (<code>${esc(Config.MDNS_SERVICE_TYPE)}</code>) and
+publishes MQTT availability, so the discovery hooks are in place.</p>
+<p class="note">For now, open another panel directly at <code>http://&lt;its-ip&gt;:${config.httpPort}/</code>.</p></div></div>"""
+
     private fun infoHtml(): String {
         val pid = esc(config.panelId)
         // Banner reflects the LIVE MQTT state (from the info map), not just whether a broker string is
@@ -552,6 +713,7 @@ class PaneldServer(
 <div class="hdr"><h1><img src="/icon.svg" class="logo" alt="">ha-paneld <small>· $pid</small></h1>
  <span style="display:flex;gap:10px;align-items:center">${if (config.haDeviceUrl.isNotBlank()) """<a class="pbtn" href="${esc(config.haDeviceUrl)}" target="_blank" rel="noopener" title="Open this panel's device page in Home Assistant">Open in HA</a>""" else ""}<button id="revbtn" class="pbtn" onclick="toggleReveal()" title="Show/hide blurred values for editing — they're blurred by default so screenshots don't leak them">Reveal</button>
  <a class="gh" href="$REPO_URL" target="_blank" rel="noopener" title="ha-paneld on GitHub" aria-label="GitHub"><svg viewBox="0 0 24 24"><path d="$GH_ICON"/></svg></a></span></div>
+${navBar("dashboard")}
 <div id="verbar" class="setup" style="display:none">⟳ A newer ha-paneld is installed — <a href="#" onclick="location.reload();return false">reload</a> to refresh this page.</div>
 $updateBanner$healthBanner$setupBanner
 <div class="cards">
@@ -915,7 +1077,13 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
     private fun settingsValuesJson(): String {
         fun s(v: String) = "\"" + v.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
         val parts = SettingsRegistry.settable().joinToString(",") { spec ->
-            val raw = config.getRaw(spec)
+            // Identity fields show their EFFECTIVE value (panel_id is auto-derived when unset) so the
+            // form is never blank — an empty panel_id would be rejected on save.
+            val raw = when (spec.key) {
+                "panel_id" -> config.panelId
+                "friendly_name" -> config.friendlyName
+                else -> config.getRaw(spec)
+            }
             val v = when {
                 spec.secret -> "\"\""
                 spec.type == SettingType.BOOL -> if (raw.toBoolean()) "true" else "false"
