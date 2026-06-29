@@ -5,7 +5,8 @@
 #
 # Usage:
 #   scripts/provision.sh <panel-ip:5555> [APK] \
-#       [--id PANEL_ID] [--mqtt tcp://host:1883] [--mqtt-user U] [--mqtt-pass P] [--apk PATH]
+#       [--id PANEL_ID] [--mqtt tcp://host:1883] [--mqtt-user U] [--mqtt-pass P] [--apk PATH] \
+#       [--log-host HOST] [--log-port N] [--log-proto syslog|http]   # forward logcat to an aggregator
 #   scripts/provision.sh <panel-ip:5555> --verify        # check end-state only, make no changes
 #
 # IDEMPOTENCY (safe to re-run after a cancel/failure — re-running converges to the full state):
@@ -25,13 +26,14 @@ step() { echo "${CYN}${B}$1${X} $2"; }
 
 trap 'echo "${RED}${B}✗ provisioning incomplete${X} — re-run the SAME command to finish (it is idempotent)." >&2' ERR
 
-TARGET="${1:?usage: provision.sh <panel-ip:5555> [APK] [--id ID] [--mqtt tcp://host:1883] [--mqtt-user U] [--mqtt-pass P] [--latest] [--force] [--persist-adb] [--strip-vendor] [--verify]}"
+TARGET="${1:?usage: provision.sh <panel-ip:5555> [APK] [--id ID] [--mqtt tcp://host:1883] [--mqtt-user U] [--mqtt-pass P] [--log-host HOST] [--log-port N] [--log-proto syslog|http] [--log-off] [--latest] [--force] [--persist-adb] [--strip-vendor] [--verify]}"
 shift
 REPO="maxlyth/ha-paneld"
 LOCAL_APK="app/build/outputs/apk/debug/app-debug.apk"
 PKG="io.github.maxlyth.hapaneld"
 A11Y="$PKG/.input.PanelAccessibilityService"
 APK=""; PANEL_ID=""; MQTT=""; MQTT_USER=""; MQTT_PASS=""; VERIFY_ONLY=0; LATEST=0; FORCE=0; PERSIST_ADB=0; STRIP_VENDOR=0; TOINSTALL_VER=""
+LOG_HOST=""; LOG_PORT=""; LOG_PROTO=""; LOG_ENABLE=""
 
 if [ "${1:-}" ] && [ "${1#--}" = "${1:-}" ]; then APK="$1"; shift; fi
 while [ "${1:-}" ]; do
@@ -45,6 +47,10 @@ while [ "${1:-}" ]; do
     --force) FORCE=1; shift ;;       # skip the same/older-version prompt
     --persist-adb) PERSIST_ADB=1; shift ;;  # keep network adb (tcp 5555) across reboots (opt-in; standing LAN port)
     --strip-vendor) STRIP_VENDOR=1; shift ;; # disable the Tuya vendor apps (TPA10) non-interactively (skips the prompt)
+    --log-host) LOG_HOST="$2"; LOG_ENABLE=true; shift 2 ;;  # ship logcat to this aggregator (host enables shipping)
+    --log-port) LOG_PORT="$2"; shift 2 ;;     # log sink port (default 514 for syslog)
+    --log-proto) LOG_PROTO="$2"; shift 2 ;;   # syslog (default) | http
+    --log-off) LOG_ENABLE=false; shift ;;     # disable log shipping
     --verify) VERIFY_ONLY=1; shift ;;
     *) echo "${RED}unknown arg: $1${X}" >&2; exit 2 ;;
   esac
@@ -261,8 +267,12 @@ ARGS=()
 [ -n "$MQTT" ]       && ARGS+=(--data-urlencode "mqtt_broker=$MQTT")
 [ -n "$MQTT_USER" ]  && ARGS+=(--data-urlencode "mqtt_user=$MQTT_USER")
 [ -n "$MQTT_PASS" ]  && ARGS+=(--data-urlencode "mqtt_password=$MQTT_PASS")
+[ -n "$LOG_ENABLE" ] && ARGS+=(--data-urlencode "log_ship_enabled=$LOG_ENABLE")
+[ -n "$LOG_HOST" ]   && ARGS+=(--data-urlencode "log_ship_host=$LOG_HOST")
+[ -n "$LOG_PORT" ]   && ARGS+=(--data-urlencode "log_ship_port=$LOG_PORT")
+[ -n "$LOG_PROTO" ]  && ARGS+=(--data-urlencode "log_ship_protocol=$LOG_PROTO")
 if [ ${#ARGS[@]} -gt 0 ]; then
-  step "⚙️  configuring" "${D}panel_id / MQTT${X}"
+  step "⚙️  configuring" "${D}panel_id / MQTT / log shipping${X}"
   curl -fsS -H 'Accept: application/json' -X POST "${ARGS[@]}" "$URL/config" >/dev/null && echo "   ${GRN}✓${X} applied"
 fi
 

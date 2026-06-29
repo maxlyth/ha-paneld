@@ -302,6 +302,21 @@ class PaneldServer(
                             .filter { it.isNotEmpty() && !TameController.isCritical(it) }.toSet())
                     }
                     p["silence_boot_chime"]?.let { config.setSilenceBootChime(it.trim().equals("true", ignoreCase = true) || it.trim() == "1") }
+                    // Remote log shipping (fleet log → Vector/syslog or HTTP sink). Partial-merge like
+                    // the rest: absent keys keep their current value. No browser-form fields (no on-panel
+                    // UI by design) — this is the fleet/provision JSON path only.
+                    val logEnabled = p["log_ship_enabled"]?.let { it.trim().equals("true", ignoreCase = true) || it.trim() == "1" }
+                    val logHost = p["log_ship_host"]?.trim()
+                    val logPort = p["log_ship_port"]?.trim()?.toIntOrNull()
+                    val logProto = p["log_ship_protocol"]?.trim()
+                    if (logEnabled != null || logHost != null || logPort != null || logProto != null) {
+                        config.setLogShipping(
+                            logEnabled ?: config.logShipEnabled,
+                            logHost ?: config.logShipHost,
+                            logPort ?: config.logShipPort,
+                            logProto ?: config.logShipProtocol,
+                        )
+                    }
                     val mfr = p["manufacturer"]?.trim()
                     val mdl = p["model"]?.trim()
                     if (mfr != null || mdl != null) config.setHardware(
@@ -790,6 +805,10 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             "\"launcher_package\":${s(config.launcherPackage)}," +
             "\"tame_vendor_packages\":${s(config.tameVendorPackagesRaw)}," +
             "\"silence_boot_chime\":${config.silenceBootChime}," +
+            "\"log_ship_enabled\":${config.logShipEnabled}," +
+            "\"log_ship_host\":${s(config.logShipHost)}," +
+            "\"log_ship_port\":${config.logShipPort}," +
+            "\"log_ship_protocol\":${s(config.logShipProtocol)}," +
             "\"version\":${s(Config.VERSION)}," +
             "\"proximity\":${sensors.proximityJson()}" +
             "}"

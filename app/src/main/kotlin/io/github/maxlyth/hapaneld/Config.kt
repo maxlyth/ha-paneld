@@ -170,6 +170,30 @@ class Config(context: Context) {
     val silenceBootChime: Boolean get() = prefs.getBoolean("silence_boot_chime", false)
     fun setSilenceBootChime(on: Boolean) { prefs.edit().putBoolean("silence_boot_chime", on).apply() }
 
+    // --- remote log shipping (opt-in) --------------------------------------------------------------
+    // Forward ha-paneld's OWN process logcat (its Log.* output + the Ktor/HiveMQ SLF4J library logs,
+    // all emitted by this app's uid → readable with no READ_LOGS and no root) to a central aggregator
+    // (e.g. a Vector collector) for fleet-wide debugging without per-panel `adb logcat`. OFF by default
+    // with an EMPTY host — a stock panel ships nothing until deliberately configured. LAN-only by intent;
+    // lines are redacted (tokens/passwords/URL secrets) before they leave the device. No on-panel UI:
+    // set via the HTTP /config endpoint (provision.sh --log-* flags). See logship/LogShipper.
+    val logShipEnabled: Boolean get() = prefs.getBoolean("log_ship_enabled", false)
+    /** Sink host (e.g. a Vector collector). Empty => shipping stays inert regardless of the flag. */
+    val logShipHost: String get() = prefs.getString("log_ship_host", "")!!
+    val logShipPort: Int get() = prefs.getInt("log_ship_port", 514)
+    /** Transport: "syslog" (TCP, RFC5424) or "http" (NDJSON POST). */
+    val logShipProtocol: String get() = prefs.getString("log_ship_protocol", "syslog")!!
+    /** True only when shipping is enabled AND a sink host is configured. */
+    val logShipActive: Boolean get() = logShipEnabled && logShipHost.isNotBlank()
+    fun setLogShipping(enabled: Boolean, host: String, port: Int, protocol: String) {
+        prefs.edit().apply {
+            putBoolean("log_ship_enabled", enabled)
+            putString("log_ship_host", host.trim())
+            putInt("log_ship_port", port)
+            putString("log_ship_protocol", protocol.trim().lowercase(Locale.ROOT).ifBlank { "syslog" })
+            apply()
+        }
+    }
     // Desired Zigbee-router state, persisted so the gateway can be auto-started on boot when nothing
     // else launches it (the NSPanel Pro gateway is not init-started — verified 2026-06-08). Default off.
     val zigbeeRouterEnabled: Boolean get() = prefs.getBoolean("zigbee_router_enabled", false)
