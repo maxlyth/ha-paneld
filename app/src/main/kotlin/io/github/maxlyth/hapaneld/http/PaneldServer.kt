@@ -4,6 +4,11 @@ import android.content.Context
 import android.util.Log
 import io.github.maxlyth.hapaneld.AudioPlayer
 import io.github.maxlyth.hapaneld.Config
+import io.github.maxlyth.hapaneld.config.Capabilities
+import io.github.maxlyth.hapaneld.config.SettingType
+import io.github.maxlyth.hapaneld.config.SettingValue
+import io.github.maxlyth.hapaneld.config.SettingsRegistry
+import io.github.maxlyth.hapaneld.config.Validation
 import io.github.maxlyth.hapaneld.control.CdpRelay
 import io.github.maxlyth.hapaneld.control.DensityController
 import io.github.maxlyth.hapaneld.control.Su
@@ -17,6 +22,7 @@ import io.github.maxlyth.hapaneld.util.HelperClient
 import io.github.maxlyth.hapaneld.util.UpdateChecker
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
+import io.ktor.server.application.ApplicationCall
 import io.ktor.server.application.ApplicationCallPipeline
 import io.ktor.server.application.call
 import io.ktor.server.cio.CIO
@@ -28,6 +34,7 @@ import io.ktor.server.response.respondBytes
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
+import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -58,6 +65,10 @@ class PaneldServer(
     private val volume: VolumeController,
     // Called after this server has written new settings to [config]; the service rebuilds MQTT/mDNS.
     private val onReconfigure: () -> Unit,
+    // Applies a single behaviour setting through the MQTT bridge's command path (persist → drive
+    // hardware → publish HA state). Lets the config API set the formerly MQTT-only keys identically
+    // to an HA command. Returns true if the key was a recognised live setting.
+    private val applySetting: (String, String) -> Boolean,
     private val info: () -> Map<String, String>,
     // Per-panel "HA-optimised" density + text-scale suggestions (DeviceProfile), or null.
     private val recommendedDensity: Int? = null,
@@ -277,77 +288,7 @@ class PaneldServer(
                 get("/config") {
                     call.respondText(configJson(), ContentType.Application.Json)
                 }
-                post("/config") {
-                    val p = call.receiveParameters()
-                    // Partial-merge: apply ONLY keys present in the request, so a fleet tool can set a
-                    // single field without clobbering the rest. The UI form sends every key (blank =
-                    // clear), so its full-replace behaviour is preserved.
-                    p["panel_id"]?.let {
-                        val slug = it.lowercase().replace(Regex("[^a-z0-9]+"), "_").trim('_')
-                        if (slug.isEmpty()) {
-                            call.respondText("invalid panel_id\n", status = HttpStatusCode.BadRequest)
-                            return@post
-                        }
-                        config.setPanelId(slug)
-                    }
-                    p["friendly_name"]?.let { config.setFriendlyName(it.trim()) }
-                    p["dashboard_package"]?.let { config.setDashboardPackage(it.trim()) }
-                    p["launcher_package"]?.let { config.setLauncherPackage(it.trim()) }
-                    // Vendor taming via the config page is per-package on its own card (POST /tame); the
-                    // browser form no longer carries it. A fleet/JSON tool may still set the whole blocklist
-                    // by raw `tame_vendor_packages`, applying the delta off-thread (tame added / re-enable
-                    // removed).
-                    p["tame_vendor_packages"]?.let { raw ->
-                        applyTameBlocklist(raw.split(Regex("[\\s,]+")).map { it.trim() }
-                            .filter { it.isNotEmpty() && !TameController.isCritical(it) }.toSet())
-                    }
-                    p["silence_boot_chime"]?.let { config.setSilenceBootChime(it.trim().equals("true", ignoreCase = true) || it.trim() == "1") }
-                    // Remote log shipping (fleet log → Vector/syslog or HTTP sink). Partial-merge like
-                    // the rest: absent keys keep their current value. No browser-form fields (no on-panel
-                    // UI by design) — this is the fleet/provision JSON path only.
-                    val logEnabled = p["log_ship_enabled"]?.let { it.trim().equals("true", ignoreCase = true) || it.trim() == "1" }
-                    val logHost = p["log_ship_host"]?.trim()
-                    val logPort = p["log_ship_port"]?.trim()?.toIntOrNull()
-                    val logProto = p["log_ship_protocol"]?.trim()
-                    if (logEnabled != null || logHost != null || logPort != null || logProto != null) {
-                        config.setLogShipping(
-                            logEnabled ?: config.logShipEnabled,
-                            logHost ?: config.logShipHost,
-                            logPort ?: config.logShipPort,
-                            logProto ?: config.logShipProtocol,
-                        )
-                    }
-                    val mfr = p["manufacturer"]?.trim()
-                    val mdl = p["model"]?.trim()
-                    if (mfr != null || mdl != null) config.setHardware(
-                        (mfr ?: config.manufacturer).ifEmpty { "ha-paneld" },
-                        (mdl ?: config.model).ifEmpty { "panel agent" },
-                    )
-                    val broker = p["mqtt_broker"]?.trim()
-                    val user = p["mqtt_user"]?.trim()
-                    // Blank password normally means "keep the current one" (so you don't re-type it).
-                    // EXCEPTION: clearing the username clears the password too — otherwise there's no
-                    // way to drop auth, and an empty user with a stale password gets rejected.
-                    val pw = if (user != null && user.isEmpty()) "" // clear both → anonymous
-                    else p["mqtt_password"]?.takeIf { it.isNotEmpty() } // blank/absent => unchanged
-                    if (broker != null || user != null || pw != null) config.setMqtt(
-                        broker ?: config.mqttBroker, user ?: config.mqttUser, pw,
-                    )
-                    onReconfigure()
-                    // Fleet tools (Accept: application/json) get the new config back; the browser form
-                    // gets an HTML redirect to the info page.
-                    if (call.request.headers["Accept"]?.contains("application/json") == true) {
-                        call.respondText(configJson(), ContentType.Application.Json)
-                    } else {
-                        call.respondText(
-                            "<!doctype html><meta charset=utf-8>" +
-                                "<meta http-equiv=refresh content='2;url=/'>" +
-                                "<body style='font-family:system-ui;background:#111;color:#eee;padding:20px'>" +
-                                "settings saved — reconnecting…</body>",
-                            ContentType.Text.Html,
-                        )
-                    }
-                }
+                post("/config") { handleConfigPost(call) }
                 // Per-package vendor taming from the Vendor packages card. action=tame adds the package to
                 // the blocklist and tames it now; action=untame removes it and re-enables it. The work is
                 // privileged + slow, so it runs off-thread and the browser gets a short auto-reload back to
@@ -438,6 +379,39 @@ class PaneldServer(
                     // Respond immediately; playback runs detached (mirrors socat + setsid nohup).
                     call.respondText("playing\n")
                     scope.launch { AudioPlayer.play(cacheDir, url) }
+                }
+
+                // ---- /api/v1 — namespace for the redesigned multi-page UI. The existing flat routes
+                // above remain for back-compat (the current info page + provision.sh still use them);
+                // moving them under /api/v1 with 308 redirects is a later cleanup. New endpoints
+                // (config/schema, the registry-driven config POST, input) live here from the start. ----
+                route("/api/v1") {
+                    get("/health") {
+                        call.respondText("ha-paneld ${Config.VERSION} panel=${config.panelId} build=${buildToken()}\n")
+                    }
+                    get("/config") { call.respondText(configJson(), ContentType.Application.Json) }
+                    post("/config") { handleConfigPost(call) }
+                    get("/config/schema") { call.respondText(configSchemaJson(), ContentType.Application.Json) }
+                    get("/perf") {
+                        PerfReader.touch()
+                        call.respondText(PerfReader.json(), ContentType.Application.Json)
+                    }
+                    get("/proximity") { call.respondText(sensors.proximityJson(), ContentType.Application.Json) }
+                    get("/diag") { call.respondText(DiagReader.dump(appContext, info()), ContentType.Text.Plain) }
+                    // Inject a tap at device pixel (x,y) for the interactive screenshot (Test tab). Tiered:
+                    // accessibility gesture (no root) → su `input tap`. Nav keys reuse POST /action.
+                    post("/input") {
+                        val q = call.receiveParameters()
+                        val x = q["x"]?.trim()?.toFloatOrNull()
+                        val y = q["y"]?.trim()?.toFloatOrNull()
+                        if (x == null || y == null) {
+                            call.respondText("bad-coords\n", status = HttpStatusCode.BadRequest)
+                        } else {
+                            val ok = injectTap(x, y)
+                            if (ok) call.respondText("ok\n")
+                            else call.respondText("no-input-capability\n", status = HttpStatusCode.ServiceUnavailable)
+                        }
+                    }
                 }
             }
         }
@@ -788,6 +762,173 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
     private fun inspectJson(status: String): String =
         """{"running":${CdpRelay.running},"port":${CdpRelay.PORT},"status":"$status"}"""
 
+    /**
+     * Apply a POSTed config form/JSON (partial-merge), then live-reconfigure. Shared by the legacy
+     * `/config` route and `/api/v1/config`. Fleet/JSON clients (Accept: application/json) get the new
+     * config back; a browser form gets an HTML redirect to the info page. The bespoke handling of
+     * identity/MQTT/logging/tame keys is preserved; the formerly MQTT-only behaviour keys are applied
+     * through [applySetting] (same path as an HA command), and per-row HA-exposure toggles are stored.
+     */
+    private suspend fun handleConfigPost(call: ApplicationCall) {
+        val p = call.receiveParameters()
+        // Partial-merge: apply ONLY keys present, so a fleet tool can set one field without clobbering
+        // the rest. The UI form sends every key (blank = clear), preserving its full-replace behaviour.
+        p["panel_id"]?.let {
+            val slug = it.lowercase().replace(Regex("[^a-z0-9]+"), "_").trim('_')
+            if (slug.isEmpty()) {
+                call.respondText("invalid panel_id\n", status = HttpStatusCode.BadRequest)
+                return
+            }
+            config.setPanelId(slug)
+        }
+        p["friendly_name"]?.let { config.setFriendlyName(it.trim()) }
+        p["dashboard_package"]?.let { config.setDashboardPackage(it.trim()) }
+        p["launcher_package"]?.let { config.setLauncherPackage(it.trim()) }
+        p["tame_vendor_packages"]?.let { raw ->
+            applyTameBlocklist(raw.split(Regex("[\\s,]+")).map { it.trim() }
+                .filter { it.isNotEmpty() && !TameController.isCritical(it) }.toSet())
+        }
+        p["silence_boot_chime"]?.let { config.setSilenceBootChime(it.trim().equals("true", ignoreCase = true) || it.trim() == "1") }
+        val logEnabled = p["log_ship_enabled"]?.let { it.trim().equals("true", ignoreCase = true) || it.trim() == "1" }
+        val logHost = p["log_ship_host"]?.trim()
+        val logPort = p["log_ship_port"]?.trim()?.toIntOrNull()
+        val logProto = p["log_ship_protocol"]?.trim()
+        if (logEnabled != null || logHost != null || logPort != null || logProto != null) {
+            config.setLogShipping(
+                logEnabled ?: config.logShipEnabled,
+                logHost ?: config.logShipHost,
+                logPort ?: config.logShipPort,
+                logProto ?: config.logShipProtocol,
+            )
+        }
+        val mfr = p["manufacturer"]?.trim()
+        val mdl = p["model"]?.trim()
+        if (mfr != null || mdl != null) config.setHardware(
+            (mfr ?: config.manufacturer).ifEmpty { "ha-paneld" },
+            (mdl ?: config.model).ifEmpty { "panel agent" },
+        )
+        val broker = p["mqtt_broker"]?.trim()
+        val user = p["mqtt_user"]?.trim()
+        // Blank password keeps the current one; clearing the username clears the password too.
+        val pw = if (user != null && user.isEmpty()) "" else p["mqtt_password"]?.takeIf { it.isNotEmpty() }
+        if (broker != null || user != null || pw != null) config.setMqtt(
+            broker ?: config.mqttBroker, user ?: config.mqttUser, pw,
+        )
+        // Formerly MQTT-only behaviour settings — applied through the bridge's command path so HTTP
+        // and HA behave identically. Registry-validated where the key is registered; invalid skipped.
+        for (key in HTTP_LIVE_KEYS) {
+            val raw = p[key] ?: continue
+            val spec = SettingsRegistry.spec(key)
+            val value = if (spec != null) {
+                when (val v = SettingValue.validate(spec, raw)) {
+                    is Validation.Ok -> v.normalized
+                    is Validation.Bad -> continue
+                }
+            } else {
+                raw.trim()
+            }
+            applySetting(key, value)
+        }
+        // Per-row "expose to HA" toggles (ha_expose_<key>=true|false) — take effect on the reconfigure.
+        for (name in p.names()) {
+            if (name.startsWith("ha_expose_")) {
+                SettingValue.parseBool(p[name].orEmpty())?.let {
+                    config.setHaExposed(name.removePrefix("ha_expose_"), it)
+                }
+            }
+        }
+        onReconfigure()
+        if (call.request.headers["Accept"]?.contains("application/json") == true) {
+            call.respondText(configJson(), ContentType.Application.Json)
+        } else {
+            call.respondText(
+                "<!doctype html><meta charset=utf-8>" +
+                    "<meta http-equiv=refresh content='2;url=/'>" +
+                    "<body style='font-family:system-ui;background:#111;color:#eee;padding:20px'>" +
+                    "settings saved — reconnecting…</body>",
+                ContentType.Text.Html,
+            )
+        }
+    }
+
+    /** Behaviour keys settable over HTTP (routed through [applySetting] / the MQTT command path). */
+    private val HTTP_LIVE_KEYS = listOf(
+        "wake_on_wave", "prevent_idle_dim", "watchdog_enabled", "auto_brightness",
+        "brightness_bias", "navbar_mode", "touch_sound", "cpu_governor",
+        "network_adb", "zigbee_router", "ambient_lux",
+    )
+
+    /**
+     * Registry metadata for generating the Configure form (type/group/tier/scope/options/range +
+     * whether the setting is an HA entity and currently exposed), capability-gated to this panel.
+     * Values themselves come from GET /config; this endpoint is metadata only.
+     */
+    private fun configSchemaJson(): String {
+        fun s(v: String) = "\"" + v.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+        val caps = Capabilities(
+            hasProximity = sensors.hasProximity(),
+            hasLight = sensors.hasLight(),
+            hasTemperature = sensors.hasTemperature(),
+            hasHumidity = sensors.hasHumidity(),
+        )
+        val items = SettingsRegistry.settable().joinToString(",") { spec ->
+            val opts = spec.options.joinToString(",") { s(it) }
+            val isHa = spec.ha != null
+            "{" +
+                "\"key\":${s(spec.key)}," +
+                "\"type\":${s(spec.type.name)}," +
+                "\"group\":${s(spec.group)}," +
+                "\"label\":${s(spec.label)}," +
+                "\"help\":${s(spec.help)}," +
+                "\"tier\":${s(spec.tier.name)}," +
+                "\"scope\":${s(spec.scope.name)}," +
+                "\"secret\":${spec.secret}," +
+                "\"available\":${spec.availableWhen(caps)}," +
+                "\"options\":[$opts]," +
+                "\"min\":${spec.min?.toString() ?: "null"}," +
+                "\"max\":${spec.max?.toString() ?: "null"}," +
+                "\"step\":${spec.step?.toString() ?: "null"}," +
+                "\"ha\":$isHa," +
+                "\"exposed\":${if (isHa) config.haExposed(spec.key, spec.haExposedByDefault) else false}" +
+                "}"
+        }
+        return "[$items]"
+    }
+
+    /** Registry-driven current values (typed JSON; secrets blanked) for the Configure form. */
+    private fun settingsValuesJson(): String {
+        fun s(v: String) = "\"" + v.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+        val parts = SettingsRegistry.settable().joinToString(",") { spec ->
+            val raw = config.getRaw(spec)
+            val v = when {
+                spec.secret -> "\"\""
+                spec.type == SettingType.BOOL -> if (raw.toBoolean()) "true" else "false"
+                spec.type == SettingType.INT -> raw.toLongOrNull()?.toString() ?: s(raw)
+                spec.type == SettingType.FLOAT -> raw.toDoubleOrNull()?.toString() ?: s(raw)
+                else -> s(raw)
+            }
+            "${s(spec.key)}:$v"
+        }
+        return "{$parts}"
+    }
+
+    /** Per-key HA-exposure flags for every HA-capable setting (for the inline expose pips). */
+    private fun haExposeJson(): String {
+        val parts = SettingsRegistry.SPECS.filter { it.ha != null }.joinToString(",") { spec ->
+            "\"${spec.key}\":${config.haExposed(spec.key, spec.haExposedByDefault)}"
+        }
+        return "{$parts}"
+    }
+
+    /** Inject a tap at device pixel (x,y) for the interactive screenshot. su `input tap` where
+     *  available; an accessibility-gesture fallback lands with the Test tab. */
+    private fun injectTap(x: Float, y: Float): Boolean {
+        val xi = x.toInt()
+        val yi = y.toInt()
+        return io.github.maxlyth.hapaneld.device.DeviceProfile.detect().appCanSu &&
+            Su.run("input tap $xi $yi")
+    }
+
     /** Full config as JSON for fleet management. The MQTT password is never emitted — only a boolean
      *  saying whether one is set. `http_port` is read-only (changing it needs a restart). */
     private fun configJson(): String {
@@ -810,7 +951,10 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             "\"log_ship_port\":${config.logShipPort}," +
             "\"log_ship_protocol\":${s(config.logShipProtocol)}," +
             "\"version\":${s(Config.VERSION)}," +
-            "\"proximity\":${sensors.proximityJson()}" +
+            "\"proximity\":${sensors.proximityJson()}," +
+            // Registry-driven current values + per-key HA-exposure flags for the Configure form.
+            "\"settings\":${settingsValuesJson()}," +
+            "\"ha_expose\":${haExposeJson()}" +
             "}"
     }
 

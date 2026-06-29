@@ -149,7 +149,10 @@ class PaneldService : Service() {
         mqtt = buildMqtt()
         mdns = MdnsAdvertiser(this, config)
         server = PaneldServer(
-            config, cacheDir, scope, this, sensors, system, volume, ::reconfigure, ::panelInfo,
+            config, cacheDir, scope, this, sensors, system, volume, ::reconfigure,
+            // Capture the field (not the current instance) so it always targets the live bridge,
+            // which reconfigure() rebuilds on a panel_id / MQTT change.
+            { k, v -> mqtt.applySetting(k, v) }, ::panelInfo,
             profile.recommendedDensity, profile.recommendedFontScale,
             // Vendor taming: the controller and this panel's curated recommendations (picker group 1).
             tame, profile.tameVendorCandidates,
