@@ -5,11 +5,17 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Environment
+import android.os.Handler
+import android.os.Looper
 import android.os.StatFs
 import android.provider.Settings
+import android.webkit.WebSettings
 import android.webkit.WebView
 import io.github.maxlyth.hapaneld.BuildConfig
 import java.io.File
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Gathers the panel facts shown on the info page (`GET /`). Static device/version facts live here;
@@ -36,7 +42,7 @@ object PanelInfo {
         m["RAM"] = ram(context)
         m["Storage"] = storage()
         m["Display"] = display(context)
-        m["System WebView"] = webView()
+        m["System WebView"] = webViewStatus(context).display
         m["HA Companion"] = companion(context)
         m.putAll(extras)
         return m
@@ -99,10 +105,69 @@ object PanelInfo {
         "?"
     }
 
-    private fun webView(): String = try {
+    /** Package + real-engine WebView status for the info row and the health banner. */
+    class WebViewStatus(val display: String, val tooOld: Boolean)
+
+    /**
+     * WebView status, disambiguating the Cromite/LineageOS version spoof. The package versionName
+     * (`getCurrentWebViewPackage`) is what those SystemWebView builds STAMP to the OEM stock value to
+     * pass a signature-locked provider gate — so it lies (e.g. reports 83 while the engine is Chromium
+     * 147). We escalate to the real engine version (the WebView UA, which isn't spoofed) ONLY when the
+     * package version looks too old, so a modern-package panel never pays the provider-load cost and a
+     * Cromite-updated panel is no longer falsely warned.
+     */
+    fun webViewStatus(context: Context): WebViewStatus {
+        val pkg = webViewPackage()
+        val pkgMajor = PanelHealth.chromiumMajor(pkg)
+        // Fast path: unknown or already ≥ threshold — trust it, don't load the WebView provider.
+        if (pkgMajor == null || pkgMajor >= PanelHealth.MIN_CHROMIUM) return WebViewStatus(pkg, false)
+        // Package looks old: could be genuinely old, or a Cromite/LineageOS swap stamping the OEM
+        // version. The UA carries the true engine version — use it.
+        val engine = engineVersion(context)
+        val engineMajor = engine?.substringBefore('.')?.toIntOrNull()
+        val display = if (engineMajor != null && engineMajor != pkgMajor) "$pkg · engine Chromium $engine" else pkg
+        return WebViewStatus(display, PanelHealth.webViewTooOld(pkg, engineMajor))
+    }
+
+    private fun webViewPackage(): String = try {
         WebView.getCurrentWebViewPackage()?.let { "${it.packageName} ${it.versionName}" } ?: "unknown"
     } catch (e: Throwable) {
         "unknown"
+    }
+
+    // Real engine version from the WebView default UA, computed once and cached: the fetch loads the
+    // WebView provider into this process and must run on a Looper thread (see [defaultUserAgent]), and
+    // it's only reached via the escalation gate above, so modern-package panels never trigger it.
+    @Volatile private var uaComputed = false
+    @Volatile private var uaEngineVersion: String? = null
+
+    private fun engineVersion(context: Context): String? {
+        if (uaComputed) return uaEngineVersion
+        synchronized(this) {
+            if (uaComputed) return uaEngineVersion
+            uaEngineVersion = defaultUserAgent(context)?.let { PanelHealth.engineVersionFromUa(it) }
+            uaComputed = true
+            return uaEngineVersion
+        }
+    }
+
+    /** [WebSettings.getDefaultUserAgent] initialises the WebView provider, which is only safe on a
+     *  Looper thread; the info page renders on a Ktor worker, so hop to the main thread (one-shot). */
+    private fun defaultUserAgent(context: Context): String? = try {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            WebSettings.getDefaultUserAgent(context)
+        } else {
+            val ref = AtomicReference<String?>()
+            val latch = CountDownLatch(1)
+            Handler(Looper.getMainLooper()).post {
+                ref.set(runCatching { WebSettings.getDefaultUserAgent(context) }.getOrNull())
+                latch.countDown()
+            }
+            latch.await(3, TimeUnit.SECONDS)
+            ref.get()
+        }
+    } catch (e: Throwable) {
+        null
     }
 
     private fun companion(context: Context): String {

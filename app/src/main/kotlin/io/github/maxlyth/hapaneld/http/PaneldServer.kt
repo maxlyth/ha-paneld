@@ -486,14 +486,17 @@ class PaneldServer(
         // Panel-health warnings: states that stop the panel rendering the dashboard as expected but that the
         // info map otherwise reports neutrally. Soft + best-effort — ha-paneld itself runs fine regardless.
         val webViewVal = facts["System WebView"] ?: ""
-        val webViewTooOld = PanelHealth.webViewTooOld(webViewVal)
+        // Verdict from the REAL engine version (WebView UA), not the stamped package version — the
+        // engine fetch is cached, so this re-call after collect() is cheap. See PanelInfo.webViewStatus.
+        val webViewTooOld = PanelInfo.webViewStatus(appContext).tooOld
         val renderers = PanelInfo.dashboardRenderers(appContext, config.dashboardPackage)
         val healthBanner = buildString {
             if (webViewTooOld) append(
                 """<div class="setup">⚠ <b>System WebView is too old</b> (${esc(webViewVal)}) — the Home Assistant """ +
                     """dashboard may render blank or broken. <a href="$WEBVIEW_DOC" target="_blank" rel="noopener">""" +
                     """How &amp; why to update</a> (target: Chromium ${PanelHealth.MIN_CHROMIUM}+). """ +
-                    """<small>Swapped in Cromite SystemWebView? It reports the stale OEM version — ignore this.</small></div>"""
+                    """<small>Checked against the real engine version (from the WebView UA), not just the """ +
+                    """stamped package version — so a Cromite/LineageOS SystemWebView won't trip this.</small></div>"""
             )
             if (renderers.isEmpty()) append(
                 """<div class="setup">ℹ <b>No dashboard app detected</b> — install the HA Companion app, """ +
