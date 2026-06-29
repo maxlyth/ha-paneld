@@ -91,7 +91,7 @@ jobs:
               # with SL_UARTDRV_USART_VCOM_PERIPHERAL defined. Chip-only targets produce
               # a skeletal config that only emits a #warning and doesn't declare PERIPHERAL.
               slc generate \
-                --with='${{ env.CHIP }},brd4180b,sl_btl_interface' \
+                --with='${{ env.CHIP }},brd4180b' \
                 --project-file='${NCP_SLCP}' \
                 --export-destination=/home/builder/build/ot-ncp \
                 --copy-proj-sources \
