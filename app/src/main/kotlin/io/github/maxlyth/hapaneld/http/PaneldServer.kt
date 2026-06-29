@@ -250,6 +250,11 @@ class PaneldServer(
                 get("/test") { call.respondText(page("test", "Test", testBody()), ContentType.Text.Html) }
                 get("/install") { call.respondText(page("install", "Install", installBody()), ContentType.Text.Html) }
                 get("/fleet") { call.respondText(page("fleet", "Fleet", fleetBody()), ContentType.Text.Html) }
+                // Alternative UI variants for side-by-side consideration — all on the same /api/v1.
+                get("/ui") { call.respondText(uiIndex(), ContentType.Text.Html) }
+                get("/ui/canvas") { call.respondText(canvasPage(), ContentType.Text.Html) }
+                get("/ui/console") { call.respondText(consolePage(), ContentType.Text.Html) }
+                get("/ui/kiosk") { call.respondText(kioskPage(), ContentType.Text.Html) }
                 // Live panel screenshot via root `screencap` (LAN-only like the rest of this surface).
                 // Embedded scaled in the info page + linkable full-size; also usable as an HA camera
                 // still_image_url. Captured on demand — no background polling.
@@ -438,6 +443,14 @@ class PaneldServer(
                     }
                     get("/proximity") { call.respondText(sensors.proximityJson(), ContentType.Application.Json) }
                     get("/diag") { call.respondText(DiagReader.dump(appContext, info()), ContentType.Text.Plain) }
+                    // Per-panel Canvas dashboard layout (opaque Gridstack JSON, stored in Config).
+                    get("/ui/layout") {
+                        call.respondText("""{"layout":${jsonStr(config.uiDashboardLayout)}}""", ContentType.Application.Json)
+                    }
+                    post("/ui/layout") {
+                        config.uiDashboardLayout = call.receiveParameters()["layout"].orEmpty()
+                        call.respondText("""{"ok":true}""", ContentType.Application.Json)
+                    }
                     // Inject a tap at device pixel (x,y) for the interactive screenshot (Test tab). Tiered:
                     // accessibility gesture (no root) → su `input tap`. Nav keys reuse POST /action.
                     post("/input") {
@@ -492,7 +505,7 @@ class PaneldServer(
             tab("test", "/test", "Test") +
             tab("install", "/install", "Install") +
             tab("fleet", "/fleet", "Fleet") +
-            """<a href="/api">API</a></div>"""
+            """<a href="/api">API</a><a href="/ui" title="Preview alternative UI designs">⊞ Variants</a></div>"""
     }
 
     /** Shared page shell (header + tab bar + body) for the non-dashboard tabs. */
@@ -616,6 +629,89 @@ $allGood</div>"""
 Every ha-paneld already advertises itself over mDNS (<code>${esc(Config.MDNS_SERVICE_TYPE)}</code>) and
 publishes MQTT availability, so the discovery hooks are in place.</p>
 <p class="note">For now, open another panel directly at <code>http://&lt;its-ip&gt;:${config.httpPort}/</code>.</p></div></div>"""
+
+    // ---- alternative UI variants (one build, switchable by URL) ----
+
+    private fun variantSwitcher(active: String): String {
+        fun a(id: String, href: String, label: String) =
+            """<a href="$href"${if (id == active) " class=\"active\"" else ""}>$label</a>"""
+        return """<div class="uiswitch"><span class="brand"><img src="/icon.svg" alt="">ha-paneld</span>""" +
+            a("tabbed", "/", "Tabbed") + a("canvas", "/ui/canvas", "Canvas") +
+            a("console", "/ui/console", "Console") + a("kiosk", "/ui/kiosk", "Kiosk") +
+            """<span class="sp"></span><span class="pid">${esc(config.panelId)}</span></div>"""
+    }
+
+    private fun uiIndex(): String {
+        fun card(href: String, title: String, desc: String) =
+            """<a href="$href" class="card" style="display:block;text-decoration:none;color:inherit"><h3>$title</h3><p class="muted">$desc</p></a>"""
+        return """<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>ha-paneld · UI variants</title>
+<link rel="icon" href="/icon.svg"><link rel="stylesheet" href="/assets/variants.css"></head>
+<body class="ui-console" style="display:block">
+${variantSwitcher("")}
+<div style="max-width:820px;margin:0 auto;padding:28px">
+<h1 style="font-size:1.4rem">Choose a UI to preview</h1>
+<p class="muted">Four interchangeable front-ends over the same <code>/api/v1</code> backend. Switch any time from the bar above. They share live data, config, and the per-row Home&nbsp;Assistant exposure model — only the layout differs.</p>
+<div class="cards" style="margin-top:18px">
+${card("/", "Tabbed", "The shipped direction: a tab bar (Dashboard / Configure / Test / Install / Fleet) with a Basic/Advanced settings form. Familiar and dense.")}
+${card("/ui/canvas", "Canvas", "Everything is a draggable, resizable card on a Gridstack grid. Arrange mode lets you build the exact panel you want; layout saves per panel.")}
+${card("/ui/console", "Console", "A left rail (Monitor / Settings / Tools / Fleet) with a VS Code-style searchable, filterable settings list and a \"modified only\" view. Scales to lots of config.")}
+${card("/ui/kiosk", "Kiosk", "Touch-first: big tiles and segmented sections (Status / Controls / Settings), tap-to-toggle. Designed for the panel's own screen.")}
+</div></div></body></html>"""
+    }
+
+    private fun canvasPage(): String = """<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>ha-paneld · Canvas</title>
+<link rel="icon" href="/icon.svg">
+<link rel="stylesheet" href="/assets/vendor/gridstack.min.css">
+<link rel="stylesheet" href="/assets/variants.css"></head>
+<body class="ui-canvas">
+${variantSwitcher("canvas")}
+<div class="canvas-bar">
+ <button id="cv-view" class="btn on" onclick="cvEdit(false)">👁 View</button>
+ <button id="cv-edit" class="btn" onclick="cvEdit(true)">✎ Arrange</button>
+ <button class="btn" onclick="cvReset()">Reset layout</button>
+ <span class="muted">Arrange: drag a card's header, resize from its edges — the layout saves per panel.</span>
+</div>
+<div id="canvas" style="padding:0 12px 28px"></div>
+<script src="/assets/vendor/gridstack-all.min.js"></script>
+<script src="/assets/ui-common.js"></script>
+<script src="/assets/canvas.js"></script>
+</body></html>"""
+
+    private fun consolePage(): String = """<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>ha-paneld · Console</title>
+<link rel="icon" href="/icon.svg"><link rel="stylesheet" href="/assets/variants.css"></head>
+<body class="ui-console">
+<div class="side">
+ <div class="brand"><img src="/icon.svg" alt="" style="width:22px;height:22px">ha-paneld</div>
+ <a data-s="monitor" class="active" onclick="cnSection('monitor')">Monitor</a>
+ <a data-s="settings" onclick="cnSection('settings')">Settings</a>
+ <a data-s="tools" onclick="cnSection('tools')">Tools</a>
+ <a data-s="fleet" onclick="cnSection('fleet')">Fleet</a>
+ <a href="/ui" style="margin-top:24px;color:#666">↔ Switch UI</a>
+</div>
+<div class="main"><div id="console-main">Loading…</div></div>
+<script src="/assets/ui-common.js"></script>
+<script src="/assets/console.js"></script>
+</body></html>"""
+
+    private fun kioskPage(): String = """<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>ha-paneld · Kiosk</title>
+<link rel="icon" href="/icon.svg"><link rel="stylesheet" href="/assets/variants.css"></head>
+<body class="ui-kiosk">
+${variantSwitcher("kiosk")}
+<div style="padding:14px">
+<div class="seg">
+ <button data-s="status" class="on" onclick="kSection('status')">Status</button>
+ <button data-s="controls" onclick="kSection('controls')">Controls</button>
+ <button data-s="settings" onclick="kSection('settings')">Settings</button>
+</div>
+<div id="kiosk-main">Loading…</div>
+</div>
+<script src="/assets/ui-common.js"></script>
+<script src="/assets/kiosk.js"></script>
+</body></html>"""
 
     private fun infoHtml(): String {
         val pid = esc(config.panelId)
@@ -821,6 +917,9 @@ the current one. Changing the panel id may leave the old device in HA to remove 
 
     private fun esc(s: String): String = s
         .replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
+
+    /** JSON-quote a string value (escapes backslash + double-quote). */
+    private fun jsonStr(s: String): String = "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 
     /** Persist a new tame blocklist and apply the delta off-thread (tame additions, re-enable removals).
      *  Used by the fleet/JSON `tame_vendor_packages` path; the browser card uses per-package POST /tame. */
@@ -1058,6 +1157,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
                 "\"group\":${s(spec.group)}," +
                 "\"label\":${s(spec.label)}," +
                 "\"help\":${s(spec.help)}," +
+                "\"default\":${s(spec.default)}," +
                 "\"tier\":${s(spec.tier.name)}," +
                 "\"scope\":${s(spec.scope.name)}," +
                 "\"secret\":${spec.secret}," +
