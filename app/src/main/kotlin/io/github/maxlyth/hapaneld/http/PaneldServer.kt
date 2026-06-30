@@ -443,6 +443,9 @@ class PaneldServer(
                     }
                     get("/proximity") { call.respondText(sensors.proximityJson(), ContentType.Application.Json) }
                     get("/diag") { call.respondText(DiagReader.dump(appContext, info()), ContentType.Text.Plain) }
+                    // Health + capabilities as JSON (warnings as ready-to-render HTML) — feeds every
+                    // variant's Install/health section client-side.
+                    get("/status") { call.respondText(statusJson(), ContentType.Application.Json) }
                     // Per-panel Canvas dashboard layout (opaque Gridstack JSON, stored in Config).
                     get("/ui/layout") {
                         call.respondText("""{"layout":${jsonStr(config.uiDashboardLayout)}}""", ContentType.Application.Json)
@@ -630,6 +633,29 @@ Every ha-paneld already advertises itself over mDNS (<code>${esc(Config.MDNS_SER
 publishes MQTT availability, so the discovery hooks are in place.</p>
 <p class="note">For now, open another panel directly at <code>http://&lt;its-ip&gt;:${config.httpPort}/</code>.</p></div></div>"""
 
+    /** Health + capabilities as JSON for the variant UIs. Warnings are ready-to-render HTML fragments. */
+    private fun statusJson(): String {
+        val facts = info()
+        val webViewVal = facts["System WebView"] ?: ""
+        val warns = mutableListOf<String>()
+        if (PanelHealth.webViewTooOld(webViewVal)) warns.add(
+            "⚠ <b>System WebView is too old</b> (${esc(webViewVal)}) — the Home Assistant dashboard may render blank. " +
+                "<a href=\"$WEBVIEW_DOC\" target=\"_blank\" rel=\"noopener\">How &amp; why to update</a> (target Chromium ${PanelHealth.MIN_CHROMIUM}+).",
+        )
+        if (PanelInfo.dashboardRenderers(appContext, config.dashboardPackage).isEmpty()) warns.add(
+            "ℹ <b>No dashboard app detected</b> — install the HA Companion, Fully Kiosk, or set a dashboard package.",
+        )
+        UpdateChecker.available.forEach { u ->
+            warns.add("⬆ <b>${esc(u.label)}</b> ${esc(u.latestVersion)} is available (installed ${esc(u.currentVersion)}) — " +
+                "<a href=\"${esc(u.releaseUrl)}\" target=\"_blank\" rel=\"noopener\">download</a>")
+        }
+        val capColor = mapOf("ok" to "#48c774", "degraded" to "#d9a528", "none" to "#d04a3b")
+        val caps = DiagReader.capabilities(appContext).joinToString(",") { c ->
+            "{\"name\":${jsonStr(c.name)},\"note\":${jsonStr(c.note)},\"color\":${jsonStr(capColor[c.status] ?: "#888")}}"
+        }
+        return "{\"warnings\":[${warns.joinToString(",") { jsonStr(it) }}],\"capabilities\":[$caps]}"
+    }
+
     // ---- alternative UI variants (one build, switchable by URL) ----
 
     private fun variantSwitcher(active: String): String {
@@ -688,6 +714,7 @@ ${variantSwitcher("canvas")}
  <a data-s="monitor" class="active" onclick="cnSection('monitor')">Monitor</a>
  <a data-s="settings" onclick="cnSection('settings')">Settings</a>
  <a data-s="tools" onclick="cnSection('tools')">Tools</a>
+ <a data-s="install" onclick="cnSection('install')">Install</a>
  <a data-s="fleet" onclick="cnSection('fleet')">Fleet</a>
  <a href="/ui" style="margin-top:24px;color:#666">↔ Switch UI</a>
 </div>

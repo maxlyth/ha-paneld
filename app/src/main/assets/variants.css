@@ -87,3 +87,19 @@ select, input[type=text], input[type=password], input[type=number] { background:
 .ui-kiosk h2 { font-size: 1rem; color: #aab; margin: 18px 0 6px; }
 
 .btn.on { background: #2557a7; border-color: #2557a7; color: #fff; }
+
+/* ---- shared (generic) styles for settings forms + health, used by all variants ---- */
+.searchbar { display: flex; gap: 12px; align-items: center; margin: 10px 0; }
+.searchbar input[type=search] { flex: 1; padding: 10px 14px; font-size: 1rem; }
+.modwrap { display: flex; gap: 6px; align-items: center; white-space: nowrap; color: #b9b9c0; }
+.grp { margin: 18px 0 4px; color: #9aa; font-size: .74rem; text-transform: uppercase; letter-spacing: .06em; }
+.setrow { display: flex; align-items: center; gap: 14px; padding: 11px 0; border-top: 1px solid #1c1c20; }
+.setrow .meta { flex: 1; min-width: 0; }
+.setrow .meta small { display: block; color: #80808a; margin-top: 2px; }
+.setrow .ctl { display: flex; align-items: center; gap: 12px; }
+.savebar { display: flex; gap: 12px; align-items: center; margin-top: 14px; padding-top: 12px; border-top: 1px solid #232327; }
+.warn { background: #3a2f10; color: #f5c451; border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; font-size: .9rem; }
+.warn a { color: #ffd970; }
+.captbl { width: 100%; border-collapse: collapse; margin-top: 6px; }
+.captbl th { text-align: left; font-weight: 500; color: #bbb; padding: 6px 10px 6px 0; white-space: nowrap; vertical-align: top; }
+.captbl td { padding: 6px 0; color: #cfcfd6; }
