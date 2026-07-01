@@ -76,6 +76,8 @@ class PaneldService : Service() {
     private lateinit var mqtt: MqttBridge
     // Default-network callback that nudges an MQTT reconnect when the network returns (see registerNetworkCallback).
     private var netCallback: ConnectivityManager.NetworkCallback? = null
+    // MQTT watchdog runs on a DEDICATED thread (not Dispatchers.IO), so slow/contended su can't starve it.
+    @Volatile private var mqttWatchdogAlive = false
     private lateinit var sensors: SensorReporter
     private lateinit var logShipper: LogShipper
 
@@ -382,40 +384,7 @@ class PaneldService : Service() {
                     delay(24 * 3_600 * 1_000L)
                 }
             }
-            // MQTT reconnect watchdog. Two independent stall modes, both self-healed by a full rebuild:
-            //   (1) STATE-stuck — HiveMQ's auto-reconnect stalls after a transient auth rejection during an
-            //       HA/broker restart, or its reconnect thread is power-management-deferred, so state sits
-            //       non-connected. Rebuild after 2 consecutive non-connected checks (~2 min).
-            //   (2) LIVENESS-stale (the 2026-07-01 fleet stall) — the broker dropped the link but HiveMQ
-            //       never noticed the half-open (CLOSE-WAIT) socket, so it still reports "connected" while
-            //       publishing into the void. isConnected() lies, so key on TRUE liveness instead: each tick
-            //       send a heartbeat (a QoS-1 publish the broker must ACK); if nothing has been ACKed for
-            //       MQTT_STALE_MS, force a rebuild regardless of what state claims.
-            launch {
-                var staleTicks = 0
-                while (isActive) {
-                    delay(MQTT_WATCHDOG_MS)
-                    runCatching { mqtt.heartbeat() }   // exercise the socket so liveness is measurable
-                    val livenessStale = mqtt.state != "disabled" && mqtt.lastOkMs != 0L &&
-                        mqtt.msSinceLastOk() > MQTT_STALE_MS
-                    when {
-                        livenessStale -> {
-                            Log.w(TAG, "MQTT liveness stale (${mqtt.msSinceLastOk()}ms, state=${mqtt.state}) — forcing reconnect")
-                            runCatching { mqtt.reconnect() }
-                            staleTicks = 0
-                        }
-                        mqtt.state == "connected" || mqtt.state == "disabled" -> staleTicks = 0
-                        else -> {
-                            staleTicks++
-                            if (staleTicks >= 2) {
-                                Log.w(TAG, "MQTT stuck (${mqtt.state}) — forcing reconnect")
-                                runCatching { mqtt.reconnect() }
-                                staleTicks = 0
-                            }
-                        }
-                    }
-                }
-            }
+            startMqttWatchdog()
             // Never-blank-screen watchdog. A screen-off kills the backlight but leaves the device
             // interactive, and nothing re-lights it — so a stray/stale screen-off (e.g. the retained-command
             // strand) or a firmware idle-dim can leave the panel dark and apparently bricked. If the screen
@@ -437,6 +406,53 @@ class PaneldService : Service() {
         }
         registerNetworkCallback()
         return START_STICKY
+    }
+
+    /**
+     * MQTT reconnect watchdog on a DEDICATED thread — deliberately NOT a coroutine on Dispatchers.IO.
+     * On a panel with slow/contended `su` (toolbox su under load), blocking su calls exhaust the IO
+     * thread pool, so a coroutine watchdog's post-delay continuation never gets scheduled and it silently
+     * stops ticking (observed on kitchen 2026-07-01: MQTT connected but zero watchdog ticks, so a
+     * half-open connection never self-healed). A plain thread ticks regardless of dispatcher pressure.
+     *
+     * Two stall modes, both healed by a full client rebuild:
+     *   (1) STATE-stuck — HiveMQ's auto-reconnect stalls (transient auth reject on an HA/broker restart,
+     *       or its reconnect thread is power-management-deferred); rebuild after 2 non-connected checks.
+     *   (2) LIVENESS-stale — the broker dropped the link but HiveMQ never noticed the half-open
+     *       (CLOSE-WAIT) socket, so it still reports "connected" while publishing into the void.
+     *       isConnected() lies, so key on TRUE liveness: each tick send a heartbeat (a QoS-1 publish the
+     *       broker must ACK) and, if nothing has been ACKed for MQTT_STALE_MS, force a rebuild.
+     */
+    private fun startMqttWatchdog() {
+        if (mqttWatchdogAlive) return
+        mqttWatchdogAlive = true
+        Thread {
+            var staleTicks = 0
+            while (mqttWatchdogAlive) {
+                try { Thread.sleep(MQTT_WATCHDOG_MS) } catch (e: InterruptedException) { break }
+                if (!mqttWatchdogAlive) break
+                runCatching { mqtt.heartbeat() }   // exercise the socket so liveness is measurable
+                val sinceOk = mqtt.msSinceLastOk()
+                Log.i(TAG, "mqtt watchdog tick: state=${mqtt.state} sinceOk=${sinceOk}ms")
+                val livenessStale = mqtt.state != "disabled" && mqtt.lastOkMs != 0L && sinceOk > MQTT_STALE_MS
+                when {
+                    livenessStale -> {
+                        Log.w(TAG, "MQTT liveness stale (${sinceOk}ms, state=${mqtt.state}) — forcing reconnect")
+                        runCatching { mqtt.reconnect() }
+                        staleTicks = 0
+                    }
+                    mqtt.state == "connected" || mqtt.state == "disabled" -> staleTicks = 0
+                    else -> {
+                        staleTicks++
+                        if (staleTicks >= 2) {
+                            Log.w(TAG, "MQTT stuck (${mqtt.state}) — forcing reconnect")
+                            runCatching { mqtt.reconnect() }
+                            staleTicks = 0
+                        }
+                    }
+                }
+            }
+        }.apply { isDaemon = true; name = "mqtt-watchdog" }.start()
     }
 
     /**
@@ -488,6 +504,7 @@ class PaneldService : Service() {
             runCatching { (getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager)?.unregisterNetworkCallback(cb) }
             netCallback = null
         }
+        mqttWatchdogAlive = false            // stop the dedicated watchdog thread
         runCatching { power.apply(false) }   // release the wakelock so we don't leak it on teardown
         runCatching { navbar.cleanup() }
         runCatching { watchdog.stop() }

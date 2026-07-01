@@ -8,6 +8,12 @@ From **v0.8.0**, entries are grouped under **Added** (new features/entities), **
 changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
 content appear. Earlier releases predate this convention and keep their flat lists.
 
+## v0.8.5-rc7 - 2026-07-01
+
+### Fixed
+
+- **MQTT reconnect watchdog now runs on a dedicated thread** — on panels with slow/contended root (`su`), blocking calls could exhaust the shared background thread pool and silently stall the watchdog, so a dropped MQTT connection never self-healed. The watchdog is now its own thread, immune to that starvation, so a stuck/half-open connection is always detected and rebuilt.
+
 ## v0.8.5-rc6 - 2026-07-01
 
 ### Changed
