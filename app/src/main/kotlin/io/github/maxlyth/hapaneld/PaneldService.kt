@@ -51,6 +51,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import io.github.maxlyth.hapaneld.util.UpdateChecker
 import io.github.maxlyth.hapaneld.util.CompanionInstaller
+import io.github.maxlyth.hapaneld.util.SelfUpdater
 
 /**
  * Persistent foreground service. Hosts the Ktor HTTP listener, the JmDNS advertiser, the MQTT
@@ -182,6 +183,13 @@ class PaneldService : Service() {
             scope.launch {
                 val r = CompanionInstaller.installOrUpdate(this@PaneldService, force = true)
                 Log.i(TAG, "HACA manual update: $r")
+            }
+        },
+        // ha-paneld self-update button → force an update to the channel's newest build (off-thread).
+        onUpdatePaneld = {
+            scope.launch {
+                val r = SelfUpdater.checkAndUpdate(this@PaneldService, config.updateChannel, force = true)
+                Log.i(TAG, "self-update (manual): $r")
             }
         },
     )
@@ -345,12 +353,19 @@ class PaneldService : Service() {
             launch {
                 delay(30_000L)  // let startup settle before hitting the network
                 while (isActive) {
-                    runCatching { UpdateChecker.check(this@PaneldService) }
+                    runCatching { UpdateChecker.check(this@PaneldService, config.updateChannel) }
                     // HACA self-heal: when enabled, install a missing Companion / update an out-of-date one.
                     if (config.companionAutoUpdate) {
                         runCatching {
                             val r = CompanionInstaller.installOrUpdate(this@PaneldService)
                             Log.i(TAG, "HACA auto: $r")
+                        }
+                    }
+                    // ha-paneld self-update LAST — a successful install restarts this process (and this loop).
+                    if (config.selfUpdate) {
+                        runCatching {
+                            val r = SelfUpdater.checkAndUpdate(this@PaneldService, config.updateChannel)
+                            Log.i(TAG, "self-update auto: $r")
                         }
                     }
                     delay(24 * 3_600 * 1_000L)
