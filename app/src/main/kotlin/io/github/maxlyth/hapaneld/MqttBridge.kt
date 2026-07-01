@@ -12,6 +12,7 @@ import io.github.maxlyth.hapaneld.control.AutoBrightnessController
 import io.github.maxlyth.hapaneld.control.BootChimeController
 import io.github.maxlyth.hapaneld.control.BrightnessController
 import io.github.maxlyth.hapaneld.control.CpuController
+import io.github.maxlyth.hapaneld.util.BrokerEndpoint
 import io.github.maxlyth.hapaneld.util.HaLink
 import io.github.maxlyth.hapaneld.control.NavbarController
 import io.github.maxlyth.hapaneld.control.NavActions
@@ -28,7 +29,6 @@ import io.github.maxlyth.hapaneld.input.ButtonBus
 import io.github.maxlyth.hapaneld.util.HelperClient
 import kotlin.math.roundToInt
 import org.json.JSONObject
-import java.net.URI
 
 /**
  * MQTT bridge — the single uniform control API across the fleet. Publishes Home Assistant
@@ -114,6 +114,11 @@ class MqttBridge(
     @Volatile var lastOkMs: Long = 0L
         private set
 
+    /** Happy-eyeballs family preference for the NEXT connect. Starts IPv6-first (first-class); the
+     *  liveness watchdog flips it via [reconnect] when a family won't hold, so the bridge lands on
+     *  whichever family actually works and stays there. */
+    @Volatile private var preferIpv4: Boolean = false
+
     private fun markOk() { lastOkMs = SystemClock.elapsedRealtime() }
 
     /** Milliseconds since the last broker-ACKed activity, or 0 if never connected (so a not-yet-started
@@ -198,14 +203,20 @@ class MqttBridge(
         activeBroker = broker
         state = "connecting"
         try {
-            val uri = URI(if (broker.contains("://")) broker else "tcp://$broker")
-            val host = uri.host ?: return
-            val port = if (uri.port > 0) uri.port else 1883
+            val (host, port) = BrokerEndpoint.parse(broker) ?: return
+            // Happy-eyeballs: resolve the host and connect to a chosen address family, so a flaky family
+            // (e.g. the PX30 panels' idle-IPv6 stall) is survived by flipping [preferIpv4] on the next
+            // reconnect and landing on the family that holds. Falls back to the raw host when it's a
+            // literal, resolution fails, or nothing is returned (HiveMQ then resolves it itself).
+            val connectHost = runCatching {
+                BrokerEndpoint.select(java.net.InetAddress.getAllByName(host).toList(), preferIpv4)
+                    ?.let { BrokerEndpoint.hostString(it) }
+            }.getOrNull() ?: host
 
             val c = MqttClient.builder()
                 .useMqttVersion5()
                 .identifier("ha-paneld-$panel")
-                .serverHost(host)
+                .serverHost(connectHost)
                 .serverPort(port)
                 // Auto-reconnect so a network blip / broker restart never permanently orphans the
                 // panel. Re-subscribe + re-publish discovery happen in onConnected on every connect.
@@ -245,7 +256,7 @@ class MqttBridge(
                     .applySimpleAuth()
             }
             connect.send() // async; onConnected() does subscribe + discovery on success
-            Log.i(TAG, "MQTT connecting to $host:$port for $panel")
+            Log.i(TAG, "MQTT connecting to $connectHost:$port (host=$host, prefer=${if (preferIpv4) "IPv4" else "IPv6"}) for $panel")
         } catch (e: Exception) {
             Log.w(TAG, "MQTT connect failed", e)
         }
@@ -260,8 +271,11 @@ class MqttBridge(
      * drop and we're trying to come back, so we must not flap HA to offline on every retry.
      */
     @Synchronized
-    fun reconnect() {
+    fun reconnect(flipFamily: Boolean = false) {
         if (state == "disabled") return // no broker configured/discovered — nothing to reconnect to
+        // A liveness-triggered reconnect flips the address family — if the current family (e.g. IPv6 on
+        // the PX panels) won't hold, the next connect tries the other and lands on whatever works.
+        if (flipFamily) preferIpv4 = !preferIpv4
         runCatching { client?.disconnect() } // tears down the old client + its auto-reconnect + socket
         client = null
         start()
