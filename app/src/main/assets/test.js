@@ -6,7 +6,7 @@
   var img = document.getElementById("shot");
   if (!wrap || !img) return;
 
-  function refresh() { img.src = "/screenshot.png?t=" + Date.now(); }
+  function refresh() { img.src = "/api/v1/screenshot.png?t=" + Date.now(); }
   function schedule() { clearInterval(timer); timer = setInterval(refresh, mode === "control" ? 1500 : 4000); }
 
   window.tstMode = function (m) {
@@ -42,7 +42,7 @@
 
   window.tstAction = function (a) {
     var b = new URLSearchParams(); b.set("a", a);
-    fetch("/action", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: b.toString() })
+    fetch("/api/v1/action", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: b.toString() })
       .then(function () { setTimeout(refresh, 500); });
   };
 
@@ -50,7 +50,7 @@
     var url = document.getElementById("tts-url").value.trim();
     if (!url) return;
     var msg = document.getElementById("tts-msg"); msg.textContent = "playing…";
-    fetch("/play", { method: "POST", body: url })
+    fetch("/api/v1/play", { method: "POST", body: url })
       .then(function (r) { return r.text(); })
       .then(function (t) { msg.textContent = t.trim(); })
       .catch(function () { msg.textContent = "failed"; });

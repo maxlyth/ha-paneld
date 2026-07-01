@@ -43,7 +43,7 @@ function proxApply(d){
 async function prox(){
  if(document.hidden)return;   // pause 400ms polling when the tab isn't visible
  try{
-  var d=await (await fetch('/proximity')).json();
+  var d=await (await fetch('/api/v1/proximity')).json();
   var box=document.getElementById('proxbox'),st=document.getElementById('proxstate');
   if(!d.present){box.style.display='none';st.textContent='· not present';return;}
   box.style.display='block';
@@ -54,10 +54,10 @@ async function prox(){
  }catch(e){}
 }
 function proxPost(u,b){fetch(u,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:b}).then(function(r){return r.json();}).then(proxApply).catch(function(){});}
-function proxCap(s){proxPost('/proximity/capture','step='+s);}
-function proxSen(s){proxPost('/proximity/sensitivity','s='+s);}
-function proxReset(){proxPost('/proximity/reset','');}
-function proxThSet(v){proxDrag=false;proxPost('/proximity/threshold','v='+v);}
+function proxCap(s){proxPost('/api/v1/proximity/capture','step='+s);}
+function proxSen(s){proxPost('/api/v1/proximity/sensitivity','s='+s);}
+function proxReset(){proxPost('/api/v1/proximity/reset','');}
+function proxThSet(v){proxDrag=false;proxPost('/api/v1/proximity/threshold','v='+v);}
 (function(){var s=document.getElementById('proxslider');s.addEventListener('mousedown',function(){proxDrag=true;});s.addEventListener('touchstart',function(){proxDrag=true;});})();
 prox();setInterval(prox,400);
 }

@@ -25,11 +25,11 @@
  .desc{color:#8a8;font-size:.82rem;margin:2px 0 0}
 </style></head><body><div class="wrap">
 <div class="hdr"><h1>ha-paneld <small>· REST API</small></h1><a href="/">← back to panel</a></div>
-<p class="desc">Live, on-panel API explorer. <a href="/openapi.json" target="_blank">openapi.json</a> — import into Swagger/Postman for fleet tooling. No auth; LAN only.</p>
+<p class="desc">Live, on-panel API explorer. <a href="/api/v1/openapi.json" target="_blank">openapi.json</a> — import into Swagger/Postman for fleet tooling. No auth; LAN only.</p>
 <div id="root"></div>
 <script>
-fetch('/openapi.json').then(function(r){return r.json();}).then(render).catch(function(e){
- document.getElementById('root').innerHTML='<p class="desc">Could not load /openapi.json: '+e+'</p>';});
+fetch('/api/v1/openapi.json').then(function(r){return r.json();}).then(render).catch(function(e){
+ document.getElementById('root').innerHTML='<p class="desc">Could not load /api/v1/openapi.json: '+e+'</p>';});
 
 function el(t,c,h){var e=document.createElement(t);if(c)e.className=c;if(h!=null)e.innerHTML=h;return e;}
 function formProps(op){var b=op.requestBody&&op.requestBody.content;if(!b)return null;

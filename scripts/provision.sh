@@ -12,7 +12,7 @@
 # IDEMPOTENCY (safe to re-run after a cancel/failure — re-running converges to the full state):
 #   - install -r / appops allow / pm grant / accessibility_enabled / am start  : no-ops on re-run
 #   - enabled_accessibility_services : appends our service only if absent (guarded)
-#   - POST /config                   : partial-merge — only sets the keys you pass
+#   - POST /api/v1/config            : partial-merge — only sets the keys you pass
 # `set -e` aborts cleanly on any failure; the ERR trap tells you to re-run, and every run ends with a
 # self-verify checklist. `--verify` is the standing control: run any time to confirm a panel is set up.
 set -euo pipefail
@@ -61,8 +61,8 @@ URL="http://$IP:8888"
 verify() {
   step "🔎 verifying" "${D}$URL${X}"
   local diag cfg rc=0
-  diag="$(curl -fsS --max-time 4 "$URL/diag" 2>/dev/null || true)"
-  cfg="$(curl -fsS --max-time 3 "$URL/config" 2>/dev/null || true)"
+  diag="$(curl -fsS --max-time 4 "$URL/api/v1/diag" 2>/dev/null || true)"
+  cfg="$(curl -fsS --max-time 3 "$URL/api/v1/config" 2>/dev/null || true)"
   chk() { if printf '%s' "$2" | grep -q "$3"; then echo "   ${GRN}✓${X} $1"; else echo "   ${RED}✗ $1${X}"; rc=1; fi; }
   chk "HTTP server reachable"  "$diag" "ha-paneld diagnostics"
   chk "WRITE_SETTINGS granted" "$diag" "write_settings=true"
@@ -273,7 +273,7 @@ ARGS=()
 [ -n "$LOG_PROTO" ]  && ARGS+=(--data-urlencode "log_ship_protocol=$LOG_PROTO")
 if [ ${#ARGS[@]} -gt 0 ]; then
   step "⚙️  configuring" "${D}panel_id / MQTT / log shipping${X}"
-  curl -fsS -H 'Accept: application/json' -X POST "${ARGS[@]}" "$URL/config" >/dev/null && echo "   ${GRN}✓${X} applied"
+  curl -fsS -H 'Accept: application/json' -X POST "${ARGS[@]}" "$URL/api/v1/config" >/dev/null && echo "   ${GRN}✓${X} applied"
 fi
 
 echo

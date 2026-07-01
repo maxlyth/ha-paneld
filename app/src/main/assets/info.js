@@ -72,7 +72,7 @@ function drawSm(hist){
 async function perf(){
  if(document.hidden)return;   // a hidden/background tab must not keep the sampler (or panel) busy
  try{
-  var d=await (await fetch('/perf')).json();
+  var d=await (await fetch('/api/v1/perf')).json();
   setInstr(d.enabled!==false);
   if(d.enabled===false){paint('perf',[{label:'',val:'instrumentation off — turn it on to measure',col:'#888'}]);
    paintTop(null,'instrumentation off');paint('smtbl',[{label:'',val:'instrumentation off',col:'#888'}]);
@@ -117,7 +117,7 @@ perf();setInterval(perf,2000);
 function hwm(id){var t=document.getElementById(id);if(!t)return;var c=t.parentNode,h=c.offsetHeight;if(h>(c._hwm||0)){c._hwm=h;c.style.minHeight=h+'px';}}
 window.addEventListener('resize',function(){['smtbl','topproc'].forEach(function(id){var t=document.getElementById(id),c=t&&t.parentNode;if(c){c._hwm=0;c.style.minHeight='';}});});
 function setInstr(on){var a=document.getElementById('instron'),b=document.getElementById('instroff');if(a)a.className='pbtn'+(on?' on':'');if(b)b.className='pbtn'+(on?'':' on');}
-function instr(on){fetch('/instrumentation',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'enabled='+on}).then(function(r){return r.json();}).then(function(){perf();}).catch(function(){});}
+function instr(on){fetch('/api/v1/instrumentation',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'enabled='+on}).then(function(r){return r.json();}).then(function(){perf();}).catch(function(){});}
 function inspApply(d){
  var hdr=document.getElementById('insthdr'),hint=document.getElementById('insthint');
  var hp='<b>'+location.hostname+':'+d.port+'</b>';
@@ -128,9 +128,9 @@ function inspApply(d){
  else if(d.running)hint.innerHTML='Relay on. In <b>chrome://inspect</b> the dashboard now appears under Remote Target — click <b>inspect</b>. If it does not show, the host must be added <i>before</i> enabling — add '+hp+' in Configure…, then refresh chrome://inspect. Exposes DevTools to the LAN while on; press Stop when done.';
  else hint.innerHTML='Opens this panel’s dashboard DevTools in your browser — no adb. <b>Step 1:</b> on your computer open <b>chrome://inspect</b> → <b>Configure…</b> and add '+hp+' (chrome only polls hosts already in its list). <b>Step 2:</b> press <b>Enable</b>. Needs WebView debugging enabled + root.';
 }
-async function insp(){try{var d=await (await fetch('/inspect')).json();inspApply(d);}catch(e){}}
-function inspStart(){fetch('/inspect/start',{method:'POST'}).then(function(r){return r.json();}).then(inspApply).catch(function(){});}
-function inspStop(){fetch('/inspect/stop',{method:'POST'}).then(function(r){return r.json();}).then(inspApply).catch(function(){});}
+async function insp(){try{var d=await (await fetch('/api/v1/inspect')).json();inspApply(d);}catch(e){}}
+function inspStart(){fetch('/api/v1/inspect/start',{method:'POST'}).then(function(r){return r.json();}).then(inspApply).catch(function(){});}
+function inspStop(){fetch('/api/v1/inspect/stop',{method:'POST'}).then(function(r){return r.json();}).then(inspApply).catch(function(){});}
 insp();
 // Layout is pure CSS multi-column masonry now (.cards{columns:400px} in info.css) — the browser packs and
 // height-balances the cards. No JS column packing (the old greedy mis-balanced on placeholder heights).
@@ -145,7 +145,7 @@ insp();
 
 // Controls card actions: POST /action a=<back|recents|home|reboot|volup|voldn>. Reboot confirms first.
 function act(a){if(a==='reboot'&&!confirm('Reboot this panel now?'))return;
- fetch('/action',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'a='+a}).catch(function(){});}
+ fetch('/api/v1/action',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'a='+a}).catch(function(){});}
 
 // Reveal toggle for .secret fields (blurred by default). Auto-re-blurs after 20s so it can't be left
 // revealed for a screenshot. Focusing a blurred input also un-blurs it (see info.css) so config stays editable.

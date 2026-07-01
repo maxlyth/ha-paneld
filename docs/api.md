@@ -59,8 +59,12 @@ needs no change when a panel migrates from the shell receiver to ha-paneld.
 
 ## The `/api/v1` namespace (0.8.5)
 
-The UI redesign introduced a versioned machine API under **`/api/v1`**; the flat endpoints above keep
-working unchanged for existing tooling. New endpoints (no flat equivalent):
+The machine API lives under **`/api/v1`** as of 0.8.5. The pre-0.8.5 flat paths (`/config`, `/perf`,
+`/action`, `/proximity`, …) respond **308 Permanent Redirect** to their `/api/v1` homes — the method and
+body are preserved, so `curl -L` and any HTTP client that follows redirects keeps working; new tooling
+should target `/api/v1` directly. Two exceptions stay served **directly at the root as well**: `GET
+/health` and `POST /play` — the external contract endpoints that automations and monitors call with
+plain `curl` (which doesn't follow redirects by default). Key `/api/v1` endpoints:
 
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
@@ -73,7 +77,7 @@ working unchanged for existing tooling. New endpoints (no flat equivalent):
 | `/api/v1/input` | POST | Inject a tap at device pixel `x`,`y` (the Test tab's interactive screenshot; needs root) |
 | `/api/v1/ui/layout` | GET / POST | Per-panel dashboard layout blob (groundwork for customisable card layout) |
 
-`/api/v1/{health,perf,proximity,diag}` mirror their flat counterparts.
+The full surface is in `/api/v1/openapi.json` (browse it live at `http://<panel>:8888/api`).
 
 ## Pairing
 
