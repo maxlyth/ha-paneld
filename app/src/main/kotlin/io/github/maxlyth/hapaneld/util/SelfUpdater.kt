@@ -10,7 +10,7 @@ import java.net.URL
 
 /**
  * ha-paneld self-update — the panels have no Play Store, so ha-paneld is its own update path (same
- * pinned-signer install as HACA, via [AppInstaller.HA_PANELD]). A per-panel **channel** selects which
+ * pinned-signer install as the Companion updater, via [AppInstaller.HA_PANELD]). A per-panel **channel** selects which
  * releases to follow: `stable` (GitHub releases/latest — non-prerelease) or `prerelease` (the newest
  * published release, incl. rc builds). Installing a newer build restarts the service (the package's
  * MY_PACKAGE_REPLACED receiver relaunches it); a channel switch may move down a version — allowed by

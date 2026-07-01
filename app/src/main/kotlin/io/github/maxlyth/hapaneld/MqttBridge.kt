@@ -85,7 +85,7 @@ class MqttBridge(
     // HA's advertised base URL (scheme+host+port) from zeroconf TXT — for the "Open in HA" device link,
     // so we never guess a port/scheme. Null if HA isn't found / advertises no URL.
     private val discoverHaUrl: () -> String? = { null },
-    // Trigger a HACA (HA Companion App) install/update. Injected by the service (needs Context + a
+    // Trigger an HA Companion app install/update. Injected by the service (needs Context + a
     // coroutine); runs off the MQTT thread. Fired by the update_companion button.
     private val onUpdateCompanion: () -> Unit = {},
     // Trigger a ha-paneld self-update on the configured channel. force=true installs the channel's newest
@@ -386,7 +386,7 @@ class MqttBridge(
                 cmdWakeOnWave -> handleWakeOnWave(payload)
                 cmdTouchSound -> handleTouchSound(payload)
                 cmdWatchdog -> handleWatchdog(payload)
-                cmdUpdateCompanion -> onUpdateCompanion() // install/update HACA; runs off-thread in the service
+                cmdUpdateCompanion -> onUpdateCompanion() // install/update the Companion; runs off-thread in the service
                 cmdCompanionAuto -> handleCompanionAuto(payload)
                 cmdUpdatePaneld -> onSelfUpdate(true)      // force self-update to the channel's newest (off-thread)
                 cmdSelfUpdate -> handleSelfUpdate(payload)
@@ -848,7 +848,7 @@ class MqttBridge(
         )
         publish(c, stateWatchdog, if (config.watchdogEnabled) "ON" else "OFF", retain = true)
 
-        // HACA (HA Companion App) auto-update — installs/updates the minimal Companion over root (the
+        // HA Companion app auto-update — installs/updates the minimal Companion over root (the
         // only update path on these no-Play panels). Off by default; the button forces it on demand.
         publishConfig(
             c, "switch", "${panel}_companion_auto_update",

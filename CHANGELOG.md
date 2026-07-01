@@ -29,7 +29,7 @@ content appear. Earlier releases predate this convention and keep their flat lis
 
 ### Changed
 
-- **HACA (Companion) installer hardened (security)** — the auto-install/update is now gated by a **signer + package allowlist**: the downloaded APK must declare the allowlisted package **and** be signed by the pinned official HA Companion certificate, otherwise it's refused. This closes the fresh-install / MITM vector (Android's same-signer rule only protects *updates*, not first installs). Downgrades remain allowed (`pm install -d`), reserved for future stable/pre-release channel switching.
+- **HA Companion app installer hardened (security)** — the auto-install/update is now gated by a **signer + package allowlist**: the downloaded APK must declare the allowlisted package **and** be signed by the pinned official HA Companion certificate, otherwise it's refused. This closes the fresh-install / MITM vector (Android's same-signer rule only protects *updates*, not first installs). Downgrades remain allowed (`pm install -d`), reserved for future stable/pre-release channel switching.
 
 ### Added
 

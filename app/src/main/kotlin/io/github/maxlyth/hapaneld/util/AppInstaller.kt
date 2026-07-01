@@ -16,7 +16,7 @@ import java.security.MessageDigest
  * Shared root APK installer with a **pinned signer + package allowlist**. This is NOT a generic
  * installer: an install proceeds only if the downloaded APK declares the pinned package AND is signed
  * by the pinned certificate — a package/signer mismatch is refused, so a MITM / DNS-spoof / compromised
- * asset can't be installed even on a fresh (no-incumbent) install. Used by both the HACA (Companion)
+ * asset can't be installed even on a fresh (no-incumbent) install. Used by both the HA Companion app
  * updater and ha-paneld's own self-update.
  *
  * Install path: `su` directly, else the peer-uid-locked helper `INSTALL` verb. `pm install -r -d` — the

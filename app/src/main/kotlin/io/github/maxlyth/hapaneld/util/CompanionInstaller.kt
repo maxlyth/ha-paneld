@@ -6,7 +6,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /**
- * HACA (HA Companion App) installer / updater. The panels have no Play Store, so the **minimal**
+ * HA Companion app installer / updater. The panels have no Play Store, so the **minimal**
  * Companion never auto-updates — ha-paneld is the only update path. Self-heals a missing or
  * out-of-date Companion via the shared [AppInstaller] (pinned signer + package allowlist). Leaves a
  * Play-managed *full* Companion alone. Network + su — call OFF the main / MQTT thread.
@@ -18,7 +18,7 @@ object CompanionInstaller {
     // Canonical minimal APK from the latest (non-prerelease) home-assistant/android release.
     private const val MINIMAL_APK_URL =
         "https://github.com/home-assistant/android/releases/latest/download/app-minimal-release.apk"
-    private const val TAG = "ha-paneld/haca"
+    private const val TAG = "ha-paneld/companion"
 
     /** The installed Companion package (full or minimal), or null if neither is present. */
     fun installedPkg(context: Context): String? =
@@ -26,7 +26,7 @@ object CompanionInstaller {
             runCatching { context.packageManager.getPackageInfo(it, 0) }.isSuccess
         }
 
-    /** Install the minimal HACA if missing, or update it if a newer release exists. [force] skips the
+    /** Install the minimal Companion if missing, or update it if a newer release exists. [force] skips the
      *  version check (the manual-button path). Returns a short human status. */
     suspend fun installOrUpdate(context: Context, force: Boolean = false): String = withContext(Dispatchers.IO) {
         if (AppInstaller.installedVersion(context, FULL_PKG).isNotBlank())
@@ -44,7 +44,7 @@ object CompanionInstaller {
         if (r != "OK") return@withContext r
         val now = AppInstaller.installedVersion(context, MINIMAL_PKG)
         val verb = if (missing) "installed" else "updated"
-        Log.i(TAG, "HACA $verb -> $now")
-        "$verb HACA ($now)"
+        Log.i(TAG, "Companion $verb -> $now")
+        "$verb HA Companion app ($now)"
     }
 }

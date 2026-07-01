@@ -178,11 +178,11 @@ class PaneldService : Service() {
         discoverHaIp = { mdns.discoverHaIp() },
         // HA's advertised base URL (from zeroconf) for the "Open in HA" device link.
         discoverHaUrl = { mdns.discoverHaBaseUrl() },
-        // HACA install/update button → run off-thread (network + su).
+        // Companion install/update button → run off-thread (network + su).
         onUpdateCompanion = {
             scope.launch {
                 val r = CompanionInstaller.installOrUpdate(this@PaneldService, force = true)
-                Log.i(TAG, "HACA manual update: $r")
+                Log.i(TAG, "Companion manual update: $r")
             }
         },
         // ha-paneld self-update (off-thread): force=true from the update_paneld button + a pre-release→
@@ -358,11 +358,11 @@ class PaneldService : Service() {
                 delay(30_000L)  // let startup settle before hitting the network
                 while (isActive) {
                     runCatching { UpdateChecker.check(this@PaneldService, config.updateChannel) }
-                    // HACA self-heal: when enabled, install a missing Companion / update an out-of-date one.
+                    // Companion self-heal: when enabled, install a missing Companion / update an out-of-date one.
                     if (config.companionAutoUpdate) {
                         runCatching {
                             val r = CompanionInstaller.installOrUpdate(this@PaneldService)
-                            Log.i(TAG, "HACA auto: $r")
+                            Log.i(TAG, "Companion auto: $r")
                         }
                     }
                     // ha-paneld self-update LAST — a successful install restarts this process (and this loop).
