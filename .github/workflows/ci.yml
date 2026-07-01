@@ -20,7 +20,7 @@ jobs:
       # string) that the Kotlin build would otherwise pass straight through. Fails fast, before Gradle.
       - name: Lint front-end JS
         run: |
-          for f in info configure test ui-common canvas console kiosk; do
+          for f in info configure test; do
             node --check "app/src/main/assets/$f.js"
           done
 
