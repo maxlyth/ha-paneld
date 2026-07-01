@@ -56,6 +56,29 @@ Live-verified on a 120P (BMP, fw `NSPanel120P_3.7.1`): `wm size`=750×1334, dens
 >
 > **⚠ 4.5.1 and 4.5.2 have widespread reboot-loop reports** (~10–60 min intervals on both models). For HA-only panels, the community recommendation is to pin at **4.0.12** for stability. Check the firmware Discussion for the current consensus before applying 4.5.x.
 
+### Firmware quirks by version
+
+Behaviour that changes across eWeLink firmware versions, newest-relevant first. `ro.product.version`
+is the **internal** id (`s6_android_x.y.z` on the 86P / `NSPanelXXXP_x.y.z` on the 120P) — *not* the
+marketing/OTA number the eWeLink app shows (4.0.12, 4.5.x). Detection and any version-keyed logic must
+read `ro.product.version`, not the marketing string.
+
+| Firmware | Quirk / behaviour | Impact — what to do |
+|---|---|---|
+| **all shipping** | Stock system WebView is **Chromium 107.0.5304.105** (verified on fw 3.5.1) — far too old to render a modern HA dashboard | Update the WebView **first** — [WebView — update this first](#webview--update-this-first). ha-paneld's panel-health banner also flags this (min Chromium 110). |
+| **older (pre-1.3.2)** | No in-app adb toggle; developer options unreachable from the UI | Enable adb via the internal **OTG port** (open the case) — [Gaining adb + root](#gaining-adb--root-access). |
+| **v1.3.2+** | adb enable moved into the eWeLink app | eWeLink → *Device Settings* → tap **Device ID ×8** → developer mode → adb. |
+| **v1.4+** | Developer mode **removed** from the UI | Enable adb via the **5× power-cycle** at the Sonoff boot animation — [Gaining adb + root](#gaining-adb--root-access). |
+| **v3.7.1** (120P, live) | Baseline reference build | `wm size`=750×1334, density 240, `ro.board.platform=rk3326`. |
+| **v4.0.0** (roll-out 2025-09-19) | Stock firmware **bundles F-Droid** + promotes FOSS/HA app install; markedly faster UI | On-device install path opens — [Firmware v4.0.0](#firmware-v400--official-f-droid-app-install). Confirm **APP** *and* **OS** version both read ≥ 4.0.0. |
+| **v4.0.12** | Proximity **graded** restored on **86P**; **120P stays binary** (per-model kernel divergence) | Recommended stable pin for HA-only panels. Graded/binary is model-**and**-firmware specific — see [Sensors](#sensors--light--proximity-are-app-direct). |
+| **v4.5.1 / v4.5.2** | **Widespread reboot-loop reports** (~10–60 min, both models); 4.5.2 is an APK-only layer on 4.5.1 | Community recommendation: **pin at 4.0.12** for stability. Check the firmware Discussion for current consensus before applying 4.5.x. |
+
+> [!NOTE]
+> These are **Gen1** (86P/120P) quirks. The NSPanel Pro **Gen2** (RK3326-**S**, dual relays,
+> EFR32**MG24**) is a different target with its own firmware line — do not assume Gen1 firmware notes
+> carry over.
+
 Sibling Tuya-family boards — **S6E/T6E** (relay variants; S6E = T6E + 2 relays), [**S9E**](s9e.md) (Smatek),
 [**TPA10**](tpa10.md) (rk3326-class, A53, Android 11) — are separate targets, not NSPanel Pro firmware.
 
