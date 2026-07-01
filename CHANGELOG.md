@@ -10,13 +10,19 @@ content appear. Earlier releases predate this convention and keep their flat lis
 
 ## v0.8.5-rc1 - 2026-07-01
 
+### Added
+
+- **Central log shipping** — optionally forward each panel's own-process logcat (its own `Log.*` output plus the Ktor/HiveMQ library logs — **no root, no `READ_LOGS`**) to a configurable sink for fleet-wide debugging without per-panel `adb logcat`. Two transports: **syslog** (TCP, RFC5424) or **HTTP** (NDJSON batches). Off by default; set the destination via `POST /config` or `provision.sh --log-host/--log-port/--log-proto`, with live status on the info page + `/diag`. Each line is redacted for tokens / passwords / URL secrets before it leaves the device; LAN-only by intent.
+- **S9E GPIO diagnostic** — `/diag` now reports each gpiochip's base/ngpio/label plus the per-pin export state on Smatek S9E panels, so a missing-button-LED result can be told apart from a gpiochip-base shift.
+
 ### Fixed
 
 - **Panels no longer get stuck offline after an HA restart or network flap** — the MQTT bridge relied solely on HiveMQ's built-in auto-reconnect, which could stall after a *transient* auth rejection during an HA/broker restart (the broker returns before its auth backend is ready) or when its reconnect thread was deferred by Android power management, leaving the panel showing "MQTT credentials rejected" and never recovering until a manual config save or app restart. Added a service-level **reconnect watchdog** that forces a fresh connection whenever the bridge stays non-connected, plus a **connectivity-regained callback** that reconnects the instant the network returns.
+- **WebView age check reads the real engine version** — the *"System WebView is too old"* warning now derives the Chromium version from the WebView User-Agent (`Chrome/<v>`) instead of the package `versionName`, which a Cromite / LineageOS SystemWebView deliberately stamps to the OEM stock value to clear a signature-locked provider gate. A panel running a modern engine behind a stamped-old package (e.g. Cromite on the Tuya TPA10) is no longer falsely warned, and the info row now shows the real engine when it differs. The lookup escalates only when the package version looks old, so modern-package panels are unaffected.
 
-### Added
+### Docs
 
-- **Remote log shipping (opt-in)** — forward each panel's own-process log (its `Log.*` output plus the Ktor/HiveMQ library logs — own-uid, so no `READ_LOGS` and no root) to a central **syslog** or **HTTP** sink for fleet-wide debugging without per-panel `adb logcat`. Per-line redaction of tokens/passwords/JWTs, a drop-oldest bounded queue, reconnect backoff, LAN-only. Off by default; set the destination via `provision.sh --log-host/--log-port/--log-proto` or `POST /config` (`log_ship_*`), with live status on the info page and `/diag`.
+- README slimmed — reference, build and roadmap material moved into `docs/`.
 
 ## v0.8.4 - 2026-06-29
 
