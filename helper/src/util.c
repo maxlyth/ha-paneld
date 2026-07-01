@@ -125,3 +125,20 @@ int valid_gbl_path(const char *s) {
     for (size_t i = 0; i < n; i++) if (s[i] == '\'') return 0;
     return 1;
 }
+
+// INSTALL source path — only an .apk staged by ha-paneld INSIDE its own data dir. Peer-uid already
+// restricts callers to ha-paneld's uid; this keeps a compromised caller from pointing the root install
+// at an arbitrary /system, /sdcard or vendor APK. No traversal, no quote (shell-safe).
+int valid_apk_path(const char *s) {
+    // ha-paneld's own data dir, either legacy (/data/data) or multi-user (/data/user/0) form —
+    // getCacheDir() returns the /data/user/0 form on API 24+.
+    static const char A[] = "/data/data/io.github.maxlyth.hapaneld/";
+    static const char B[] = "/data/user/0/io.github.maxlyth.hapaneld/";
+    if (!s || s[0] != '/') return 0;
+    if (strstr(s, "..")) return 0;
+    if (strncmp(s, A, sizeof A - 1) != 0 && strncmp(s, B, sizeof B - 1) != 0) return 0;
+    size_t n = strlen(s);
+    if (n < 5 || strcmp(s + n - 4, ".apk") != 0) return 0;
+    for (size_t i = 0; i < n; i++) if (s[i] == '\'') return 0;
+    return 1;
+}

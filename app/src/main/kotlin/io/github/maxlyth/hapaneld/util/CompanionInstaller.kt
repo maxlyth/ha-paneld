@@ -74,7 +74,9 @@ object CompanionInstaller {
                 return@withContext "up to date ($installed)"
             }
         }
-        if (!Su.available()) return@withContext "skipped: no root (su needed to install)"
+        val hasSu = Su.available()
+        val hasDaemon = HelperClient.available()
+        if (!hasSu && !hasDaemon) return@withContext "skipped: no root (su or helper daemon needed)"
 
         val apk = File(context.cacheDir, "haca-minimal.apk")
         if (!download(entry.url, apk)) return@withContext "download failed"
@@ -83,15 +85,28 @@ object CompanionInstaller {
         val why = verifyApk(context, apk.absolutePath, entry)
         if (why != null) { apk.delete(); Log.w(TAG, "refused install: $why"); return@withContext "refused ($why)" }
 
-        // Stage into /data/local/tmp (world-readable context) so the installer can read it regardless of
-        // app-cache SELinux labelling, then install and clean up. `-d` (allow downgrade) is deliberate —
-        // future stable<->pre-release channel switching must be able to move between versions either way.
-        val staged = "/data/local/tmp/haca-minimal.apk"
+        // Install over root. `su` path: stage into /data/local/tmp (world-readable label the installer can
+        // always read) + `pm install`. No-su path: the helper daemon's INSTALL verb (it re-validates the
+        // path + is peer-uid-locked; it stages + installs internally). The APK was already signer-verified
+        // above. `-d` (allow downgrade) is deliberate — future stable<->pre-release channel switching must
+        // be able to move between versions either way.
         val out = try {
-            if (!Su.run("cp '${apk.absolutePath}' $staged && chmod 644 $staged")) return@withContext "stage failed"
-            Su.runOutput("pm install -r -d $staged 2>&1")?.trim() ?: ""
+            if (hasSu) {
+                val staged = "/data/local/tmp/haca-minimal.apk"
+                try {
+                    if (!Su.run("cp '${apk.absolutePath}' $staged && chmod 644 $staged")) "stage failed"
+                    else Su.runOutput("pm install -r -d $staged 2>&1")?.trim() ?: ""
+                } finally { runCatching { Su.run("rm -f $staged") } }
+            } else {
+                // Daemon reads the verified APK from our data dir; send() is synchronous, so it's done by
+                // the time we return and the finally-delete is safe. OK → success.
+                when (HelperClient.send("INSTALL ${apk.absolutePath}")) {
+                    "OK" -> "Success"
+                    null -> "daemon unreachable"
+                    else -> "daemon install failed"
+                }
+            }
         } finally {
-            runCatching { Su.run("rm -f $staged") }
             apk.delete()
         }
 

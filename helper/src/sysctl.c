@@ -259,3 +259,26 @@ void cmd_overlay(conn_ctx *ctx, const char *args) {
     sscanf(args, "%127s %7s", pkg, mode);
     reply(ctx->fd, set_overlay(pkg, mode) == 0 ? "OK\n" : "ERR\n");
 }
+
+// Root install of an APK that ha-paneld has ALREADY downloaded to its own data dir AND verified (the
+// app checks the pinned signer + allowlisted package before calling this — see CompanionInstaller).
+// The daemon's independent layer: peer-uid (only ha-paneld connects) + valid_apk_path (path must be an
+// .apk inside ha-paneld's own data dir — no arbitrary /system, /sdcard or vendor APK). We copy it into
+// /data/local/tmp (world-readable label the installer can always read) and pm-install from there. `-d`
+// (allow downgrade) is deliberate — future stable<->pre-release channel switching must move either way.
+static int install_apk(const char *src) {
+    if (!valid_apk_path(src)) return -1;
+    char cmd[600];
+    snprintf(cmd, sizeof cmd,
+        "cp '%s' /data/local/tmp/hapaneld-install.apk 2>/dev/null && chmod 644 /data/local/tmp/hapaneld-install.apk", src);
+    if (sysexec_run(cmd) != 0) return -1;
+    int rc = sysexec_run("pm install -r -d /data/local/tmp/hapaneld-install.apk 2>&1 | grep -q Success");
+    sysexec_run("rm -f /data/local/tmp/hapaneld-install.apk");
+    return rc == 0 ? 0 : -1;
+}
+
+void cmd_install(conn_ctx *ctx, const char *args) {
+    char path[256] = "";
+    sscanf(args, "%255s", path);
+    reply(ctx->fd, install_apk(path) == 0 ? "OK\n" : "ERR\n");
+}
