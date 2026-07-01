@@ -28,7 +28,7 @@ CORE_SRCS := $(addprefix $(SRC_DIR)/, util.c led.c screen.c input.c sysctl.c per
 DAEMON_SRCS := $(CORE_SRCS) $(SRC_DIR)/main.c $(SRC_DIR)/sysexec.c
 STUB := test/sysexec_stub.c
 
-.PHONY: all daemon test fuzz clean print-core
+.PHONY: all daemon test fuzz contract clean print-core
 all: daemon
 
 # Host build of the real daemon — a compile sanity check (-Werror); the shipped binary is build.sh.
@@ -43,6 +43,10 @@ test: $(BUILD)/unit
 # real /dev/ledjni; only test code emits ioctls in this build, so the wrap is unambiguous.
 $(BUILD)/unit: $(CORE_SRCS) $(STUB) test/unit.c | $(BUILD)
 	$(CC) $(CFLAGS) -I$(SRC_DIR) $(CORE_SRCS) $(STUB) test/unit.c $(LDLIBS) -Wl,--wrap=ioctl -o $@
+
+# App<->daemon verb-contract cross-check: every verb the app sends must be handled by dispatch.c.
+contract:
+	./test/contract-check.sh
 
 # Fuzz: ASan+UBSan over the same CORE_SRCS (the script asks this Makefile for the list).
 fuzz:
