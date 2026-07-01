@@ -148,6 +148,7 @@ class MqttBridge(
     private val cmdAmbientLux = "ha-paneld/$panel/ambient_lux/set"
     private val stateAmbientLux = "ha-paneld/$panel/ambient_lux/state"
 
+    @Synchronized
     fun start() {
         var broker = config.mqttBroker.trim()
         if (broker.isEmpty()) {
@@ -211,6 +212,22 @@ class MqttBridge(
         } catch (e: Exception) {
             Log.w(TAG, "MQTT connect failed", e)
         }
+    }
+
+    /**
+     * Force a fresh connection attempt, disposing any existing client first. Called by the service-level
+     * reconnect watchdog and the connectivity-regained callback when HiveMQ's built-in auto-reconnect has
+     * stalled — e.g. after a transient `NOT_AUTHORIZED` during an HA/broker restart (broker back up before
+     * its auth backend is ready), or when the reconnect thread is deferred by Android power management.
+     * Unlike [stop] it does NOT publish a retained "offline" — the availability LWT already covered the
+     * drop and we're trying to come back, so we must not flap HA to offline on every retry.
+     */
+    @Synchronized
+    fun reconnect() {
+        if (state == "disabled") return // no broker configured/discovered — nothing to reconnect to
+        runCatching { client?.disconnect() } // tears down the old client + its auto-reconnect + socket
+        client = null
+        start()
     }
 
     /** Runs on every (re)connect: (re)subscribe to commands and (re)publish discovery + online. */
@@ -877,6 +894,7 @@ class MqttBridge(
             .send()
     }
 
+    @Synchronized
     fun stop() {
         ButtonBus.listener = null
         PanelStatus.mqttConnected = false

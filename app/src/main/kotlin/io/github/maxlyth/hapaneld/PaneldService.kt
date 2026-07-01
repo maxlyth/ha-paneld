@@ -7,6 +7,8 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
+import android.net.Network
 import android.os.Build
 import android.os.IBinder
 import android.provider.Settings
@@ -69,6 +71,8 @@ class PaneldService : Service() {
     private lateinit var server: PaneldServer
     private lateinit var mdns: MdnsAdvertiser
     private lateinit var mqtt: MqttBridge
+    // Default-network callback that nudges an MQTT reconnect when the network returns (see registerNetworkCallback).
+    private var netCallback: ConnectivityManager.NetworkCallback? = null
     private lateinit var sensors: SensorReporter
     private lateinit var logShipper: LogShipper
 
@@ -337,8 +341,49 @@ class PaneldService : Service() {
                     delay(24 * 3_600 * 1_000L)
                 }
             }
+            // MQTT reconnect watchdog. HiveMQ's built-in auto-reconnect can stall after a transient auth
+            // rejection during an HA/broker restart (broker back before its auth backend), or when its
+            // reconnect thread is deferred by Android power management — leaving the panel stuck "offline"
+            // in HA until a manual /config save. This forces a fresh connection once the bridge has been
+            // non-connected across two consecutive checks, so a stuck panel self-heals within a few minutes.
+            launch {
+                var staleTicks = 0
+                while (isActive) {
+                    delay(MQTT_WATCHDOG_MS)
+                    when (mqtt.state) {
+                        "connected", "disabled" -> staleTicks = 0
+                        else -> {
+                            staleTicks++
+                            if (staleTicks >= 2) {
+                                Log.w(TAG, "MQTT stuck (${mqtt.state}) — forcing reconnect")
+                                runCatching { mqtt.reconnect() }
+                                staleTicks = 0
+                            }
+                        }
+                    }
+                }
+            }
         }
+        registerNetworkCallback()
         return START_STICKY
+    }
+
+    /**
+     * Nudge MQTT to reconnect the moment the default network returns (Wi-Fi / router flap), instead of
+     * waiting out the auto-reconnect backoff. Best-effort: no-op if MQTT is already connected or disabled.
+     */
+    private fun registerNetworkCallback() {
+        if (netCallback != null) return
+        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return
+        val cb = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                if (mqtt.state != "connected" && mqtt.state != "disabled") {
+                    Log.i(TAG, "network available — nudging MQTT reconnect")
+                    Thread { runCatching { mqtt.reconnect() } }.start()
+                }
+            }
+        }
+        runCatching { cm.registerDefaultNetworkCallback(cb) }.onSuccess { netCallback = cb }
     }
 
     private fun startForegroundCompat() {
@@ -368,6 +413,10 @@ class PaneldService : Service() {
 
     override fun onDestroy() {
         started = false
+        netCallback?.let { cb ->
+            runCatching { (getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager)?.unregisterNetworkCallback(cb) }
+            netCallback = null
+        }
         runCatching { navbar.cleanup() }
         runCatching { watchdog.stop() }
         runCatching { sensors.stop() }
@@ -385,6 +434,8 @@ class PaneldService : Service() {
         private const val TAG = "ha-paneld/svc"
         private const val CHANNEL_ID = "ha-paneld"
         private const val NOTIF_ID = 1
+        // MQTT reconnect-watchdog poll interval; a stuck bridge self-heals after ~2 of these.
+        private const val MQTT_WATCHDOG_MS = 60_000L
 
         fun start(context: Context) {
             val intent = Intent(context, PaneldService::class.java)

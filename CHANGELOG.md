@@ -8,6 +8,16 @@ From **v0.8.0**, entries are grouped under **Added** (new features/entities), **
 changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
 content appear. Earlier releases predate this convention and keep their flat lists.
 
+## v0.8.5-rc1 - 2026-07-01
+
+### Fixed
+
+- **Panels no longer get stuck offline after an HA restart or network flap** — the MQTT bridge relied solely on HiveMQ's built-in auto-reconnect, which could stall after a *transient* auth rejection during an HA/broker restart (the broker returns before its auth backend is ready) or when its reconnect thread was deferred by Android power management, leaving the panel showing "MQTT credentials rejected" and never recovering until a manual config save or app restart. Added a service-level **reconnect watchdog** that forces a fresh connection whenever the bridge stays non-connected, plus a **connectivity-regained callback** that reconnects the instant the network returns.
+
+### Added
+
+- **Remote log shipping (opt-in)** — forward each panel's own-process log (its `Log.*` output plus the Ktor/HiveMQ library logs — own-uid, so no `READ_LOGS` and no root) to a central **syslog** or **HTTP** sink for fleet-wide debugging without per-panel `adb logcat`. Per-line redaction of tokens/passwords/JWTs, a drop-oldest bounded queue, reconnect backoff, LAN-only. Off by default; set the destination via `provision.sh --log-host/--log-port/--log-proto` or `POST /config` (`log_ship_*`), with live status on the info page and `/diag`.
+
 ## v0.8.4 - 2026-06-29
 
 Highlights since 0.8.3: a hardened privileged helper, the full control surface on sandbox-walled (no-`su`) panels, opt-in vendor-app taming, a dashboard watchdog, an admin launcher, panel-health warnings, and preliminary Shelly Wall Display profiles. (The per-RC sections below detail the path to this release.)
