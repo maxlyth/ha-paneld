@@ -251,6 +251,13 @@ class PaneldService : Service() {
             "Local IP" to (localIpv4() ?: "?"),
             "Local IPv6" to (localIpv6() ?: "—"),
             "MQTT" to mqttStatus,
+            // Host-free state + liveness age + family preference. Deliberately separate from "MQTT"
+            // (which carries the broker host and is omitted from /diag): this row IS included in a
+            // /diag dump, so a pasted report finally answers "is this panel broker-connected?".
+            "MQTT state" to mqtt.statusPublic(),
+            // Wakelock/Wi-Fi-lock intent vs reality — a panel that should be keep-awake but isn't
+            // holding the lock is a strong hint for stalled-idle-connection reports.
+            "Keep awake" to if (config.keepAwake) (if (power.isHeld()) "on · wakelock held" else "on · wakelock NOT held") else "off",
             "mDNS" to "${config.panelId} ${Config.MDNS_SERVICE_TYPE}",
             "Platform" to "${profile.displayName} · ${profile.socClass}",
             "Model" to modelRow,
