@@ -8,6 +8,12 @@ From **v0.8.0**, entries are grouped under **Added** (new features/entities), **
 changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
 content appear. Earlier releases predate this convention and keep their flat lists.
 
+## v0.8.5-rc8 - 2026-07-01
+
+### Added
+
+- **IPv6 treated as a first-class transport for MQTT** — ha-paneld now resolves the broker and connects with an address-family preference, and the connection watchdog flips family on a stalled reconnect, so if one family won't hold (e.g. a flaky IPv6 path) the panel automatically lands on whichever works instead of flapping. It also holds a **Wi-Fi high-performance lock** (alongside the existing wakelock) so the radio never drops into power-save and stalls an idle connection. IPv6 broker literals (`tcp://[…]:1883`) are now parsed correctly, and a new test harness (broker-address parsing + a real IPv6-loopback connect test) guards against IPv6 regressions.
+
 ## v0.8.5-rc7 - 2026-07-01
 
 ### Fixed
