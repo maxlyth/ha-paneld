@@ -247,7 +247,14 @@ class PaneldService : Service() {
         val auto = config.mqttBroker.isBlank() && mqtt.activeBroker.isNotBlank()
         val mqttStatus = when (mqtt.state) {
             "connected" -> "$host · connected" + (if (auto) " (auto)" else "")
-            "auth-failed" -> "$host · reachable, auth rejected — check username/password"
+            // Only claim "credentials rejected" when the rejection is PERSISTENT (no broker-ACKed
+            // activity for a while). A transient NOT_AUTHORIZED during a broker/HA restart — or a
+            // reconnect racing its predecessor — self-heals within a watchdog cycle, and flashing a
+            // scary "check username/password" banner for that erodes trust in a working setup.
+            "auth-failed" ->
+                if (mqtt.lastOkMs != 0L && mqtt.msSinceLastOk() < AUTH_PERSIST_MS)
+                    "$host · reconnecting…"
+                else "$host · reachable, auth rejected — check username/password"
             "unreachable" -> "$host · unreachable"
             "connecting" -> "$host · connecting…"
             else -> "disabled"
@@ -605,6 +612,9 @@ class PaneldService : Service() {
         // A rebuild thread wedged inside the old client for this long is abandoned (it stays parked as
         // a leaked daemon thread) and a fresh rebuild is attempted — healing must never stay disabled.
         private const val REBUILD_ABANDON_MS = 300_000L
+        // An auth-rejected state younger than this (vs the last broker-ACKed activity) renders as
+        // "reconnecting…" — only a PERSISTENT rejection surfaces the check-your-credentials warning.
+        private const val AUTH_PERSIST_MS = 300_000L
         // No broker-ACKed publish for this long (with a heartbeat sent every tick) ⇒ the link is dead
         // even if HiveMQ still claims "connected" (half-open socket) ⇒ force a rebuild. ~2.5 missed ticks.
         private const val MQTT_STALE_MS = 150_000L

@@ -224,6 +224,14 @@ class MqttBridge(
                     ?.let { BrokerEndpoint.hostString(it) }
             }.getOrNull() ?: host
 
+            // Generation guard: listeners fire for THIS client instance only. After a rebuild, the
+            // superseded client is torn down on a detached thread — but until that completes, its
+            // auto-reconnect keeps retrying (observed getting NOT_AUTHORIZED from a broker that accepts
+            // the live client — the long-unexplained rc1 mystery), and without this guard its
+            // disconnected-listener overwrote the LIVE connection's state: the UI showed "credentials
+            // rejected" while connected, and the state-watchdog force-rebuilt every 2 min, spawning
+            // more zombies. Superseded clients are ignored AND told to stop reconnecting.
+            var self: com.hivemq.client.mqtt.mqtt5.Mqtt5AsyncClient? = null
             val c = MqttClient.builder()
                 .useMqttVersion5()
                 .identifier("ha-paneld-$panel")
@@ -232,19 +240,25 @@ class MqttBridge(
                 // Auto-reconnect so a network blip / broker restart never permanently orphans the
                 // panel. Re-subscribe + re-publish discovery happen in onConnected on every connect.
                 .automaticReconnectWithDefaultConfig()
-                .addConnectedListener { onConnected() }
-                .addDisconnectedListener {
+                .addConnectedListener { if (client === self) onConnected() }
+                .addDisconnectedListener { ctx ->
+                    if (client !== self) {
+                        // Zombie (superseded or stopped) client: kill its auto-reconnect and ignore it.
+                        runCatching { ctx.reconnector.reconnect(false) }
+                        return@addDisconnectedListener
+                    }
                     // Classify so the UI can say "auth rejected" vs "unreachable" rather than just "down".
-                    val m = (it.cause?.message ?: it.cause?.toString() ?: "").uppercase()
+                    val m = (ctx.cause?.message ?: ctx.cause?.toString() ?: "").uppercase()
                     state = when {
                         Regex("NOT_AUTHORIZED|BAD_USER_NAME|PASSWORD|AUTHENTICAT|BANNED").containsMatchIn(m) -> "auth-failed"
                         Regex("REFUSED|TIMEOUT|UNREACHABLE|UNRESOLVED|RESET|NO ROUTE|CONNECTION|FAILED").containsMatchIn(m) -> "unreachable"
                         else -> "disconnected"
                     }
                     PanelStatus.mqttConnected = false
-                    Log.w(TAG, "MQTT disconnected ($state) — auto-reconnecting: ${it.cause?.message}")
+                    Log.w(TAG, "MQTT disconnected ($state) — auto-reconnecting: ${ctx.cause?.message}")
                 }
                 .buildAsync()
+            self = c
             client = c
             ButtonBus.listener = { event -> publishButton(event) }
 

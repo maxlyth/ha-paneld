@@ -8,6 +8,12 @@ From **v0.8.0**, entries are grouped under **Added** (new features/entities), **
 changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
 content appear. Earlier releases predate this convention and keep their flat lists.
 
+## v0.8.6-rc1 - 2026-07-02
+
+### Fixed
+
+- **False "credentials rejected" while connected** — after a connection rebuild, the superseded MQTT client could keep auto-reconnecting in the background before its teardown completed; its rejected attempts overwrote the live connection's status, so the UI warned about invalid MQTT credentials (and the watchdog force-rebuilt every couple of minutes) while the panel was in fact connected and healthy. Superseded clients are now ignored by the status listeners and told to stop reconnecting, and the credentials warning only appears when the rejection is persistent — a transient rejection during a broker restart renders as "reconnecting…" instead. This also explains (and ends) the long-standing pattern of NOT_AUTHORIZED loops from a broker that accepts a fresh client.
+
 ## v0.8.5 - 2026-07-02
 
 The reliability release: MQTT connectivity that survives broker restarts, network flaps and flaky address families; safe, pinned app updating; and the first cut of the redesigned web UI. Consolidates rc1–rc11; the rc sections below carry the detail.
