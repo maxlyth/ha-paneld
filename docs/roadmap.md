@@ -17,10 +17,10 @@ direction, ordered roughly by priority within each tier.
   default for graded sensors. (Gauge auto-ranging shipped in 0.8.0.)
 - **More performance tooling** — deeper on-device instrumentation to measure, diagnose and tune
   dashboard performance on weak panels.
-- **Central log shipping** — optionally forward panel logs to a central logging server for fleet-wide debugging: the Android system log (`logcat` / ha-paneld's own service log) **and** the dashboard **browser console** (WebView JS console + errors, captured over the existing CDP path). Avoids per-panel `adb logcat` to chase a remote issue. Configurable sink (syslog / HTTP / Loki-style) and **opt-in** — logs can carry tokens and URLs, so redaction + LAN-only by default.
+- **Central log shipping — remaining surfaces** — the core shipped in 0.8.5 (opt-in, redacted forwarding of ha-paneld's own logs to a configurable syslog/HTTP sink). Still to come: capturing the dashboard **browser console** (WebView JS console + errors, over the existing CDP path) and shipping the full **system** `logcat` where root allows.
 - **Auto-brightness self-calibration** — an opt-in mode that records the panel's ambient-light sensor and any manual brightness corrections over a **24-hour cycle**, then fits the lux→backlight curve to the room's real day/night light profile instead of today's hand-tuned default + bias. Turns the fixed curve into a learned, per-panel one; re-runnable when the panel moves or the room's lighting changes.
 - **MQTT TLS (with self-signed support)** — the HiveMQ client supports TLS, but ha-paneld connects **plaintext** only today (`tcp://…:1883`). Add TLS with **zero-config autodiscovery**: a TLS-first probe (8883, or the configured port) that falls back to plaintext (1883) if the handshake fails, plus explicit `ssl://` / `mqtts://` scheme handling. For the common home **self-signed** broker, fail back gracefully — **trust-on-first-use** (pin the presented cert's fingerprint, shown in the `:8888` UI to confirm), a **user-supplied CA** upload for the strict path, or a clearly-labelled **opt-in "accept self-signed / insecure"** toggle — never a silent trust-all (MITM footgun).
-- **Reload returns to the current dashboard (+ per-panel home dashboard)** — the reload control (`button.<panel>_reload`) hard-restarts the dashboard app (`am force-stop` + relaunch), which cold-starts onto the Companion's **default** dashboard and loses the current view. Keep the hard restart (it's the right recovery for a wedged/frozen WebView — the classic reason panels get nightly-rebooted), but **re-navigate to the intended dashboard once the WebView is back up** (handling the cold-start timing — the deeplink must fire after the frontend loads). Introduce a per-panel **home dashboard** setting as that target, so reload, auto-return-to-dashboard, and cold-start all land on *this panel's* dashboard rather than the Companion's user-default. Shares the intended-dashboard concept with the navigate item above.
+- **Boot-to-dashboard + auto-return** — reload already returns to the per-panel **home dashboard** (shipped in 0.8.5, along with the setting itself); extend the same target to cold-start/boot and the idle auto-return, so every path lands on *this panel's* dashboard rather than the Companion's user-default.
 - **Installer default-app setup** — a deploy-time flag for `install.sh` / `provision.sh` that sets the Android defaults over root, idempotently: **HA Companion as the home/launcher** (sidelines the vendor launcher; boots straight to the dashboard) and **HA Companion as the "Assist & voice input" default app** (so the assist gesture / long-press-home triggers HA Assist via the Companion's `VoiceCommandIntentActivity`). The on-demand admin launcher itself already ships (the navbar **Launcher** button); this is the installer automation around it.
 - **Built-in relay control beyond the S9E** — the same `switch.<panel>_relay*` model on other panels
   with onboard relays, once each one's control path (GPIO / vendor node) is known.
@@ -43,15 +43,7 @@ direction, ordered roughly by priority within each tier.
   ha-paneld isn't managing Zigbee. Detect it (zgateway crash-loop / high CPU) and offer to stop or take
   over the gateway; also make ha-paneld's existing vendor-native stop `awk`-free (awk is absent on some
   panels, so the current stop can silently fail).
-- **A mains panel must never become unresponsive** — only the backlight/screen should power down for
-  efficiency; the SoC, network and touch must stay live at all times. ha-paneld should hold a
-  **partial wakelock** (CPU + network up, screen free to sleep) so a panel can never suspend into the
-  unreachable "zombie" state — energy-efficient *and* always reachable. It should also **detect and warn**
-  about settings that can make a panel unresponsive — native screen-off → SoC-suspend,
-  `stay_on_while_plugged_in=0`, aggressive Doze, a mis-reported power source — surfacing them with a
-  one-tap fix in the **HTTP info page, the on-panel config UI, and the installer**. Panels ha-paneld lands
-  on have usually run other software first, so their power/settings state **can't be assumed — check it,
-  don't trust it**.
+- **Unresponsive-panel settings detection** — the always-reachable core shipped in 0.8.5 (a partial wakelock plus a Wi-Fi high-performance lock keep the SoC and network up while the screen sleeps freely). Still to come: **detect and warn** about settings that can make a panel unresponsive — native screen-off → SoC-suspend, `stay_on_while_plugged_in=0`, aggressive Doze, a mis-reported power source — surfaced with a one-tap fix in the web UI and the installer. Panels ha-paneld lands on have usually run other software first, so their power state can't be assumed.
 
 ## Stretch goals
 

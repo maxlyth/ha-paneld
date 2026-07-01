@@ -8,6 +8,31 @@ From **v0.8.0**, entries are grouped under **Added** (new features/entities), **
 changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
 content appear. Earlier releases predate this convention and keep their flat lists.
 
+## v0.8.5 - 2026-07-02
+
+The reliability release: MQTT connectivity that survives broker restarts, network flaps and flaky address families; safe, pinned app updating; and the first cut of the redesigned web UI. Consolidates rc1–rc11; the rc sections below carry the detail.
+
+### Added
+
+- **HA Companion app auto-install / update** (opt-in) — self-heals a missing or out-of-date minimal Companion over root, gated by a **signer + package allowlist** (pinned official certificate; a MITM/compromised asset can't install). *(rc2, rc3)*
+- **ha-paneld self-update with Stable / Pre-release channels** (opt-in, default off — auto-pull from the release repo is a supply-chain decision each operator makes deliberately; same pinned-signer install path) with no silent downgrades. *(rc4, rc6)*
+- **IPv6 as a first-class transport** — the broker connect resolves with an address-family preference and the watchdog flips family when one path won't hold, so panels land on whichever network family actually works; IPv6 broker literals parse correctly; a Wi-Fi high-performance lock plus a partial wakelock (`keep_awake`, on by default) keep the radio and SoC from power-save-stalling idle connections; an IPv6-loopback test harness guards regressions. *(rc5, rc8)*
+- **Redesigned web UI (first iteration, evolving)** — tabbed multi-page app (Dashboard · Configure · Test · Install · Fleet · API), a declarative settings registry driving a schema-generated Configure form, per-entity **Home Assistant exposure toggles**, a canonical versioned **`/api/v1`** (flat paths 308-redirect; `GET /health` + `POST /play` stay at the root), config **export/import bundles** with on-panel revision history, and an interactive remote-control screenshot. *(rc9)*
+- **`/diag` diagnostics depth** — capture timestamp + uptime, and a paste-safe `MQTT state` line (connection state, broker-ACK liveness age, family preference) plus wakelock state. *(rc3, rc9)*
+- **Reload returns to the intended dashboard** — a per-panel home-dashboard setting that reload navigates back to. *(rc4)*
+
+### Fixed
+
+- **MQTT reliability, end to end** — the headline of this release. Stuck-offline after an HA/broker restart (stalled auto-reconnect) self-heals via a service-level reconnect watchdog + network-regained nudge *(rc1)*; half-open (CLOSE-WAIT) connections that still claim "connected" are caught by **broker-ACK liveness** with a 30 s keepalive and heartbeat *(rc5)*; the watchdog runs on a dedicated thread immune to thread-pool starvation *(rc7)*; and the watchdog itself can never be frozen by the wedged connection it supervises — its probe and rebuild run on guarded side-threads with detached teardown *(rc11)*. Panels that used to sit "unavailable" in Home Assistant until an app restart now self-heal within ~2–3 minutes.
+- **Never-blank-screen guard** — retained/stale MQTT screen-off commands are ignored, deliberate screen-offs are tracked, and a watchdog re-lights an unintentionally dark panel. *(rc2)*
+- **No zombie entities across upgrades** — discovery is published un-retained and actively pruned on version change, so removed/renamed entities disappear from Home Assistant instead of lingering. *(rc4)*
+- **ANR under a wedged broker** — sensor callbacks moved off the main thread. *(rc10)*
+- **Network-adb persistence** — re-asserted at boot/reconnect when enabled; ownership-aware off. *(rc4)*
+
+### Docs
+
+- NSPanel Pro firmware-quirks-by-version table; helper daemon verb-contract CI cross-check; connection-cap unit tests. *(rc4, rc5)*
+
 ## v0.8.5-rc11 - 2026-07-02
 
 ### Fixed
