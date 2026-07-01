@@ -152,9 +152,12 @@ class Config(context: Context) {
     }
 
     // ha-paneld self-update: when on, ha-paneld installs a newer build of ITSELF from GitHub releases on
-    // the selected [updateChannel] (root; no Play Store on these panels). Default off — self-update is
-    // powerful; opt in per panel. Channel: "stable" (releases/latest) or "prerelease" (newest incl. rc).
-    val selfUpdate: Boolean get() = prefs.getBoolean("self_update", false)
+    // the selected [updateChannel] (root; no Play Store on these panels). **Default ON** for the stable
+    // channel — a panel should track stable releases by default. It never auto-DOWNGRADES: running a
+    // pre-release build while on the stable channel simply waits (auto-update "suspended") until stable
+    // catches up — isNewer treats a same-numbered stable as newer than its rc, but an older stable as not
+    // newer. The one deliberate move off an rc is an explicit channel switch pre-release→stable (forced).
+    val selfUpdate: Boolean get() = prefs.getBoolean("self_update", true)
     fun setSelfUpdate(on: Boolean) {
         prefs.edit().putBoolean("self_update", on).apply()
     }
@@ -170,6 +173,14 @@ class Config(context: Context) {
     val networkAdbEnabled: Boolean get() = prefs.getBoolean("network_adb_enabled", false)
     fun setNetworkAdbEnabled(on: Boolean) {
         prefs.edit().putBoolean("network_adb_enabled", on).apply()
+    }
+
+    // Per-panel intended "home" dashboard path (e.g. "/lovelace/0"). When set, a reload keeps the hard
+    // restart but re-navigates HERE once the frontend is back up, instead of leaving the Companion on its
+    // user-default view. Empty = keep current behaviour (cold-start to the Companion default).
+    val homeDashboard: String get() = prefs.getString("home_dashboard", "")!!
+    fun setHomeDashboard(p: String) {
+        prefs.edit().putString("home_dashboard", p.trim()).apply()
     }
 
     // The screen-off timeout (ms) seen before we first raised it, so disabling preventIdleDim can restore

@@ -88,8 +88,9 @@ class MqttBridge(
     // Trigger a HACA (HA Companion App) install/update. Injected by the service (needs Context + a
     // coroutine); runs off the MQTT thread. Fired by the update_companion button.
     private val onUpdateCompanion: () -> Unit = {},
-    // Trigger a ha-paneld self-update on the configured channel. Fired by the update_paneld button.
-    private val onUpdatePaneld: () -> Unit = {},
+    // Trigger a ha-paneld self-update on the configured channel. force=true installs the channel's newest
+    // regardless of the version check (the update_paneld button + a pre-release→stable channel switch).
+    private val onSelfUpdate: (force: Boolean) -> Unit = {},
 ) {
     private var client: Mqtt5AsyncClient? = null
 
@@ -111,6 +112,8 @@ class MqttBridge(
     private val cmdNavigate = "ha-paneld/$panel/navigate/set"
     private val cmdVolume = "ha-paneld/$panel/volume/set"
     private val cmdReload = "ha-paneld/$panel/reload/set"
+    private val cmdHomeDashboard = "ha-paneld/$panel/home_dashboard/set"
+    private val stateHomeDashboard = "ha-paneld/$panel/home_dashboard/state"
     private val cmdReboot = "ha-paneld/$panel/reboot/set"
     private val cmdLauncher = "ha-paneld/$panel/launcher/set"
     private val cmdHome = "ha-paneld/$panel/home/set"
@@ -344,7 +347,8 @@ class MqttBridge(
                 cmdLed -> handleLed(payload)
                 cmdNavigate -> handleNavigate(payload)
                 cmdVolume -> handleVolume(payload)
-                cmdReload -> system.reloadDashboard(config.dashboardPackage)
+                cmdReload -> handleReload()
+                cmdHomeDashboard -> handleHomeDashboard(payload)
                 cmdReboot -> system.reboot()
                 cmdLauncher -> system.launchLauncher(config.launcherPackage)
                 cmdHome -> system.launchHome(config.dashboardPackage)
@@ -358,7 +362,7 @@ class MqttBridge(
                 cmdWatchdog -> handleWatchdog(payload)
                 cmdUpdateCompanion -> onUpdateCompanion() // install/update HACA; runs off-thread in the service
                 cmdCompanionAuto -> handleCompanionAuto(payload)
-                cmdUpdatePaneld -> onUpdatePaneld()        // self-update ha-paneld; off-thread in the service
+                cmdUpdatePaneld -> onSelfUpdate(true)      // force self-update to the channel's newest (off-thread)
                 cmdSelfUpdate -> handleSelfUpdate(payload)
                 cmdUpdateChannel -> handleUpdateChannel(payload)
                 cmdSilenceBootChime -> handleSilenceBootChime(payload)
@@ -471,8 +475,14 @@ class MqttBridge(
     }
 
     private fun handleUpdateChannel(payload: String) {
+        val was = config.updateChannel
         config.setUpdateChannel(payload.trim().trim('"'))
+        val now = config.updateChannel
         client?.let { publish(it, stateUpdateChannel, updateChannelLabel(), retain = true) }
+        // Apply the new channel now (when self-update is on). Switching pre-release → stable FORCES the
+        // move onto stable even if that's a downgrade off the current rc (the deliberate exception to the
+        // no-auto-downgrade rule); any other switch just takes the new channel's newest if it's newer.
+        if (config.selfUpdate && now != was) onSelfUpdate(was == "prerelease" && now == "stable")
     }
 
     // HA select uses the capitalised labels; Config stores "stable"/"prerelease".
@@ -604,6 +614,29 @@ class MqttBridge(
         client?.let { publish(it, stateNavbar, navbar.mode, retain = true) }
     }
 
+    private fun handleHomeDashboard(payload: String) {
+        val path = toLocalPath(payload) // normalise to a leading-slash local path (or "" to clear)
+        config.setHomeDashboard(if (path == "/") "" else path)
+        client?.let { publish(it, stateHomeDashboard, config.homeDashboard, retain = true) }
+    }
+
+    // Reload: keep the hard restart (the right recovery for a wedged WebView), but if a per-panel home
+    // dashboard is set, deep-link back to it once the frontend has cold-started — so reload lands on THIS
+    // panel's dashboard, not the Companion's user-default. The delayed nav runs off the MQTT thread.
+    private fun handleReload() {
+        system.reloadDashboard(config.dashboardPackage)
+        val home = toLocalPath(config.homeDashboard)
+        if (config.homeDashboard.isNotBlank() && home.isNotEmpty() && home != "/") {
+            Thread {
+                Thread.sleep(RELOAD_NAV_DELAY_MS)
+                navigate.navigate("homeassistant://navigate$home")
+                config.lastNavigate = home
+                client?.let { publish(it, stateNavigate, home, retain = true) }
+                Log.i(TAG, "reload -> re-navigated to intended dashboard $home")
+            }.start()
+        }
+    }
+
     private fun handleNavigate(payload: String) {
         // Local navigation only: strip any scheme + host so an external URL can't be pushed (the HA
         // Companion opens a disorienting in-app WebView for those). We keep just the path and drive the
@@ -698,6 +731,14 @@ class MqttBridge(
             c, "text", "${panel}_navigate",
             """{"name":"Navigate","unique_id":"${panel}_navigate","command_topic":"$cmdNavigate","state_topic":"$stateNavigate","mode":"text","icon":"mdi:monitor-dashboard",$avail,$device}""",
         )
+
+        // Per-panel intended "home" dashboard path (e.g. /lovelace/0) — reload re-navigates here once the
+        // frontend is back up. Empty = keep the Companion default. Config category.
+        publishConfig(
+            c, "text", "${panel}_home_dashboard",
+            """{"name":"Home dashboard","unique_id":"${panel}_home_dashboard","command_topic":"$cmdHomeDashboard","state_topic":"$stateHomeDashboard","mode":"text","icon":"mdi:home-search","entity_category":"config",$avail,$device}""",
+        )
+        publish(c, stateHomeDashboard, config.homeDashboard, retain = true)
 
         // The button event entity surfaces a11y key capture AND daemon-instrumented evdev buttons
         // (e.g. the WF1589T power key), so publish it whenever either source exists.
@@ -939,7 +980,7 @@ class MqttBridge(
         val c = client ?: return
         val entities = listOf(
             "light" to "${panel}_screen", "light" to "${panel}_led",
-            "text" to "${panel}_navigate", "event" to "${panel}_button",
+            "text" to "${panel}_navigate", "text" to "${panel}_home_dashboard", "event" to "${panel}_button",
             "button" to "${panel}_back", "button" to "${panel}_recents",
             "number" to "${panel}_volume", "sensor" to "${panel}_illuminance",
             "binary_sensor" to "${panel}_proximity",
@@ -989,5 +1030,8 @@ class MqttBridge(
 
     companion object {
         private const val TAG = "ha-paneld/mqtt"
+        // How long to wait after a reload before deep-linking to the intended dashboard — lets the WebView
+        // cold-start + the HA frontend load so the navigate deeplink isn't swallowed.
+        private const val RELOAD_NAV_DELAY_MS = 8_000L
     }
 }

@@ -185,11 +185,12 @@ class PaneldService : Service() {
                 Log.i(TAG, "HACA manual update: $r")
             }
         },
-        // ha-paneld self-update button → force an update to the channel's newest build (off-thread).
-        onUpdatePaneld = {
+        // ha-paneld self-update (off-thread): force=true from the update_paneld button + a pre-release→
+        // stable channel switch; force=false lets isNewer gate (no auto-downgrade off an rc).
+        onSelfUpdate = { force ->
             scope.launch {
-                val r = SelfUpdater.checkAndUpdate(this@PaneldService, config.updateChannel, force = true)
-                Log.i(TAG, "self-update (manual): $r")
+                val r = SelfUpdater.checkAndUpdate(this@PaneldService, config.updateChannel, force)
+                Log.i(TAG, "self-update (force=$force): $r")
             }
         },
     )
