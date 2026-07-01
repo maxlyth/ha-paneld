@@ -7,6 +7,8 @@
 // A clean run prints "UNIT OK" and exits 0; any failed assertion prints the case and exits 1.
 #define _GNU_SOURCE
 #include <fcntl.h>
+#include <pthread.h>
+#include <sched.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -258,6 +260,91 @@ static void test_ledjni_ioctl(void) {
     if (fd >= 0) close(fd);
 }
 
+// --- concurrent-connection cap (MAX_CONN) -------------------------------------------------------
+// The accept loop admits at most MAX_CONN simultaneous connections (main.c), via server.c's
+// conn_admit()/conn_release() gate. Fuzz/parsing tests can't reach this — the cap lives in the
+// connection lifecycle, not the byte parser — so pin it three ways: (1) the exact boundary,
+// deterministically; (2) concurrent rejection while MAX_CONN slots are genuinely held open by other
+// threads; (3) that a hammer of racing admit/release never lets more than MAX_CONN through at once
+// (the atomics are correct — a non-atomic gate would over-admit here).
+
+// (2) holders: each admits, waits, then releases on a shared signal — so the cap is under real
+// concurrent pressure when the main thread probes it.
+static volatile int hold_admitted = 0;   // holders that have run conn_admit()
+static volatile int hold_release  = 0;    // main thread sets this to let holders release
+static volatile int hold_admit_ok = 1;   // cleared if any holder's admit was (wrongly) refused
+static void *cap_holder(void *arg) {
+    (void)arg;
+    if (!conn_admit()) __atomic_store_n(&hold_admit_ok, 0, __ATOMIC_SEQ_CST);
+    __atomic_add_fetch(&hold_admitted, 1, __ATOMIC_SEQ_CST);
+    while (!__atomic_load_n(&hold_release, __ATOMIC_SEQ_CST)) sched_yield();
+    conn_release();
+    return NULL;
+}
+
+// (3) hammer: admit/release in a tight loop, tracking the high-water mark of simultaneously-admitted
+// connections. A correct gate keeps that peak <= MAX_CONN under any interleaving.
+#define CAP_THREADS 64
+#define CAP_ITERS   4000
+static volatile int cap_live = 0;         // connections currently past the gate (our own mirror)
+static volatile int cap_peak = 0;         // high-water mark of cap_live
+static void *cap_hammer(void *arg) {
+    (void)arg;
+    for (int i = 0; i < CAP_ITERS; i++) {
+        if (conn_admit()) {
+            int c = __atomic_add_fetch(&cap_live, 1, __ATOMIC_SEQ_CST);
+            int peak;
+            while ((peak = __atomic_load_n(&cap_peak, __ATOMIC_SEQ_CST)) < c &&
+                   !__atomic_compare_exchange_n(&cap_peak, &peak, c, 0,
+                                                __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) { }
+            sched_yield();                 // widen the window so a racy gate would over-admit
+            __atomic_sub_fetch(&cap_live, 1, __ATOMIC_SEQ_CST);
+            conn_release();
+        }
+    }
+    return NULL;
+}
+
+static void test_conn_cap(void) {
+    CHECK(conn_active() == 0, "conn cap starts clean at 0 (got %d)\n", conn_active());
+
+    // (1) Exact boundary, single-threaded: MAX_CONN admits succeed, the next is refused and leaks
+    // nothing, one release frees exactly one slot, then it drains back to 0.
+    for (int i = 0; i < MAX_CONN; i++)
+        CHECK(conn_admit() == 1, "admit %d/%d within cap succeeds\n", i + 1, MAX_CONN);
+    CHECK(conn_active() == MAX_CONN, "active == MAX_CONN when full (got %d)\n", conn_active());
+    CHECK(conn_admit() == 0, "the (MAX_CONN+1)th admit is refused\n");
+    CHECK(conn_active() == MAX_CONN, "a refused admit leaks no slot (got %d)\n", conn_active());
+    conn_release();
+    CHECK(conn_active() == MAX_CONN - 1, "release frees one slot (got %d)\n", conn_active());
+    CHECK(conn_admit() == 1, "one admit is allowed again after a release\n");
+    for (int i = 0; i < MAX_CONN; i++) conn_release();
+    CHECK(conn_active() == 0, "drains back to 0 (got %d)\n", conn_active());
+
+    // (2) Concurrent rejection: MAX_CONN threads hold slots open; a probe admit must be refused while
+    // they hold, then everything releases cleanly.
+    hold_admitted = 0; hold_release = 0; hold_admit_ok = 1;
+    pthread_t holders[MAX_CONN];
+    for (int i = 0; i < MAX_CONN; i++) pthread_create(&holders[i], NULL, cap_holder, NULL);
+    while (__atomic_load_n(&hold_admitted, __ATOMIC_SEQ_CST) < MAX_CONN) sched_yield();
+    CHECK(hold_admit_ok, "all MAX_CONN concurrent holders were admitted\n");
+    CHECK(conn_active() == MAX_CONN, "MAX_CONN slots held concurrently (got %d)\n", conn_active());
+    CHECK(conn_admit() == 0, "admit refused while MAX_CONN held by other threads\n");
+    __atomic_store_n(&hold_release, 1, __ATOMIC_SEQ_CST);
+    for (int i = 0; i < MAX_CONN; i++) pthread_join(holders[i], NULL);
+    CHECK(conn_active() == 0, "all held slots released back to 0 (got %d)\n", conn_active());
+
+    // (3) Race invariant: hammer admit/release from many threads; the gate must never let the live
+    // count exceed MAX_CONN, and must not leak a slot afterwards.
+    cap_live = 0; cap_peak = 0;
+    pthread_t hammer[CAP_THREADS];
+    for (int i = 0; i < CAP_THREADS; i++) pthread_create(&hammer[i], NULL, cap_hammer, NULL);
+    for (int i = 0; i < CAP_THREADS; i++) pthread_join(hammer[i], NULL);
+    CHECK(cap_peak <= MAX_CONN, "gate never admits more than MAX_CONN at once (peak %d)\n", cap_peak);
+    CHECK(cap_peak >= 1, "the hammer actually admitted connections (peak %d)\n", cap_peak);
+    CHECK(conn_active() == 0, "no slot leaked after the connection storm (got %d)\n", conn_active());
+}
+
 int main(void) {
     test_validators();
     test_clamp();
@@ -265,6 +352,7 @@ int main(void) {
     test_dispatch_exact_match();
     test_line_accumulator();
     test_ledjni_ioctl();
+    test_conn_cap();
 
     if (failures) { printf("UNIT FAILED: %d assertion(s)\n", failures); return 1; }
     printf("UNIT OK\n");

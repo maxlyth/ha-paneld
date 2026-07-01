@@ -6,8 +6,17 @@
 
 #define MAX_LINE 512   // longest accepted command line; longer lines are dropped, not mis-split
 #define IDLE_SEC 30    // drop a non-SUBSCRIBE connection that sends nothing for this long
+#define MAX_CONN 16    // max concurrent client connections; the (MAX_CONN+1)th is refused
 
 // Serve a connected socket fd until the client (half-)closes or an idle non-subscriber times out.
 void server_serve(int cfd);
+
+// Concurrent-connection admission gate for the accept loop (main.c). conn_admit() atomically reserves
+// a slot and returns 1, or returns 0 WITHOUT reserving when the cap (MAX_CONN) is already reached;
+// conn_release() frees a slot when a connection ends; conn_active() reports the live count. Lock-free
+// and thread-safe. Factored out of main.c's accept loop so the cap is unit-testable without it.
+int  conn_admit(void);
+void conn_release(void);
+int  conn_active(void);
 
 #endif

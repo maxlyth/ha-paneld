@@ -42,7 +42,8 @@
 #define SOCK_NAME  "hapaneld-helper"
 // ha-paneld's data dir — we stat() it to learn the app's uid (it changes on every reinstall).
 #define APP_DATA   "/data/data/io.github.maxlyth.hapaneld"
-#define MAX_CONN   16            // concurrent connections cap (thread-per-conn backstop)
+// MAX_CONN (the concurrent-connection cap) + the conn_admit/release/active gate live in server.[ch]
+// so the cap is unit-testable without this accept loop.
 
 // --- peer authentication --------------------------------------------------------------------------
 // ha-paneld's uid changes on every (re)install, so resolve it live by stat'ing its data dir rather
@@ -56,8 +57,6 @@ static int uid_allowed(uid_t uid) {
     return app_uid != (uid_t)-1 && uid == app_uid;
 }
 
-static volatile int conn_count = 0;   // live connection count, capped at MAX_CONN
-
 // One thread per connection, so a long-lived SUBSCRIBE stream doesn't block other commands. Removes
 // the fd from the subscriber registry on disconnect.
 static void *conn_thread(void *arg) {
@@ -66,7 +65,7 @@ static void *conn_thread(void *arg) {
     server_serve(cfd);
     input_unsubscribe(cfd);
     close(cfd);
-    __atomic_sub_fetch(&conn_count, 1, __ATOMIC_SEQ_CST);
+    conn_release();
     return NULL;
 }
 
@@ -111,17 +110,14 @@ int main(int argc, char **argv) {
         }
 
         // Cap concurrent connections so a connection flood can't exhaust the thread-per-conn model.
-        if (__atomic_add_fetch(&conn_count, 1, __ATOMIC_SEQ_CST) > MAX_CONN) {
-            __atomic_sub_fetch(&conn_count, 1, __ATOMIC_SEQ_CST);
-            close(cfd); continue;
-        }
+        if (!conn_admit()) { close(cfd); continue; }
 
         int *p = malloc(sizeof(int));
         *p = cfd;
         pthread_t t;
         if (pthread_create(&t, NULL, conn_thread, p) != 0) {
             free(p); close(cfd);
-            __atomic_sub_fetch(&conn_count, 1, __ATOMIC_SEQ_CST);
+            conn_release();
             continue;
         }
         pthread_detach(t);

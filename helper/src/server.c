@@ -6,6 +6,30 @@
 #include <sys/time.h>
 #include <unistd.h>
 
+// --- concurrent-connection cap (see server.h) ---------------------------------------------------
+// The accept loop admits at most MAX_CONN simultaneous connections; a flood beyond that is refused so
+// the thread-per-conn model can't be exhausted. Lock-free via SEQ_CST atomics (this logic lived
+// inline in main.c's accept loop before it was factored out here to be unit-testable).
+static volatile int conn_count = 0;
+
+int conn_admit(void) {
+    // Optimistically reserve, then back out if that pushed us over the cap — so two racing admits
+    // can never both slip past MAX_CONN (the compare and the increment are one atomic step).
+    if (__atomic_add_fetch(&conn_count, 1, __ATOMIC_SEQ_CST) > MAX_CONN) {
+        __atomic_sub_fetch(&conn_count, 1, __ATOMIC_SEQ_CST);
+        return 0;
+    }
+    return 1;
+}
+
+void conn_release(void) {
+    __atomic_sub_fetch(&conn_count, 1, __ATOMIC_SEQ_CST);
+}
+
+int conn_active(void) {
+    return __atomic_load_n(&conn_count, __ATOMIC_SEQ_CST);
+}
+
 void server_serve(int cfd) {
     // Idle timeout: a connection that sends nothing for IDLE_SEC is dropped — unless it SUBSCRIBEs,
     // where sitting idle (only reading the KEY stream) is the whole point. SO_RCVTIMEO affects reads
