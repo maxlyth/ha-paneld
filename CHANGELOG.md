@@ -21,6 +21,12 @@ HTTP UI redesign — a declarative settings registry, configurable Home Assistan
 - **Config bundles + revision history** — `GET /api/v1/config/export` (versioned, secrets excluded by default) and a transactional `POST /api/v1/config/import` (migrate → scope/secret filter → validate-all-or-reject → snapshot → apply; `?dry_run=1` previews the diff, `?mode=fleet` applies only portable keys). On-panel revision ring buffer with `GET /api/v1/config/revisions` + restore.
 - **Tabbed web UI** — Dashboard / Configure / Test / Install / Fleet / API. **Configure** is a schema-driven Basic/Advanced form with inline expose pips and bundle backup/restore; **Test** adds an interactive screenshot (View/Control — tap the image to touch the panel) plus on-screen nav actions and a TTS test; **Install** surfaces panel-health warnings + the capabilities matrix. Self-contained, offline, no build step.
 
+## v0.8.5-rc8 - 2026-07-01
+
+### Added
+
+- **IPv6 treated as a first-class transport for MQTT** — ha-paneld now resolves the broker and connects with an address-family preference, and the connection watchdog flips family on a stalled reconnect, so if one family won't hold (e.g. a flaky IPv6 path) the panel automatically lands on whichever works instead of flapping. It also holds a **Wi-Fi high-performance lock** (alongside the existing wakelock) so the radio never drops into power-save and stalls an idle connection. IPv6 broker literals (`tcp://[…]:1883`) are now parsed correctly, and a new test harness (broker-address parsing + a real IPv6-loopback connect test) guards against IPv6 regressions.
+
 ## v0.8.5-rc7 - 2026-07-01
 
 ### Fixed

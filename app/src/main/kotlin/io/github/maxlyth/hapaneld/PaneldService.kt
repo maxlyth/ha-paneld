@@ -440,16 +440,16 @@ class PaneldService : Service() {
                 val livenessStale = mqtt.state != "disabled" && mqtt.lastOkMs != 0L && sinceOk > MQTT_STALE_MS
                 when {
                     livenessStale -> {
-                        Log.w(TAG, "MQTT liveness stale (${sinceOk}ms, state=${mqtt.state}) — forcing reconnect")
-                        runCatching { mqtt.reconnect() }
+                        Log.w(TAG, "MQTT liveness stale (${sinceOk}ms, state=${mqtt.state}) — forcing reconnect (flip family)")
+                        runCatching { mqtt.reconnect(flipFamily = true) }   // current family isn't holding — try the other
                         staleTicks = 0
                     }
                     mqtt.state == "connected" || mqtt.state == "disabled" -> staleTicks = 0
                     else -> {
                         staleTicks++
                         if (staleTicks >= 2) {
-                            Log.w(TAG, "MQTT stuck (${mqtt.state}) — forcing reconnect")
-                            runCatching { mqtt.reconnect() }
+                            Log.w(TAG, "MQTT stuck (${mqtt.state}) — forcing reconnect (flip family)")
+                            runCatching { mqtt.reconnect(flipFamily = true) }
                             staleTicks = 0
                         }
                     }
