@@ -130,6 +130,57 @@ object SettingsRegistry {
         ),
 
         SettingSpec(
+            key = "touch_sound", type = SettingType.BOOL, group = "Behaviour",
+            label = "Touch sound", default = "false",
+            help = "Audible tap feedback (system touch sounds).",
+            ha = HaEntity(
+                "switch", "touch_sound", "Touch sound",
+                """"command_topic":"ha-paneld/{panel}/touch_sound/set","state_topic":"ha-paneld/{panel}/touch_sound/state","icon":"mdi:volume-high","entity_category":"config"""",
+            ),
+        ),
+        SettingSpec(
+            key = "cpu_governor", type = SettingType.ENUM, group = "System",
+            label = "CPU profile", default = "Auto",
+            // Mirrors CpuController.TIERS (kept literal — this package is pure/Android-free).
+            options = listOf("Performance", "Efficiency", "Auto"),
+            help = "CPU scaling intent; Auto = the SoC's dynamic governor.",
+            availableWhen = { it.cpuGovernors },
+            ha = HaEntity(
+                "select", "cpu_governor", "CPU profile",
+                """"command_topic":"ha-paneld/{panel}/cpu_governor/set","state_topic":"ha-paneld/{panel}/cpu_governor/state","options":["Performance","Efficiency","Auto"],"icon":"mdi:speedometer","entity_category":"config"""",
+            ),
+        ),
+        SettingSpec(
+            key = "network_adb", type = SettingType.BOOL, group = "System",
+            label = "Network ADB", default = "false", scope = Scope.DEVICE,
+            help = "Standing LAN adb on :5555, re-asserted at boot/reconnect (root panels).",
+            availableWhen = { it.networkAdb },
+            ha = HaEntity(
+                "switch", "network_adb", "Network ADB",
+                """"command_topic":"ha-paneld/{panel}/network_adb/set","state_topic":"ha-paneld/{panel}/network_adb/state","icon":"mdi:adb","entity_category":"config"""",
+            ),
+        ),
+        SettingSpec(
+            key = "zigbee_router", type = SettingType.BOOL, group = "System",
+            label = "Zigbee router", default = "false", scope = Scope.DEVICE,
+            help = "Run the on-board Zigbee gateway as a router/repeater (NSPanel Pro).",
+            availableWhen = { it.zigbeePresent },
+            ha = HaEntity(
+                "switch", "zigbee_router", "Zigbee router",
+                """"command_topic":"ha-paneld/{panel}/zigbee_router/set","state_topic":"ha-paneld/{panel}/zigbee_router/state","icon":"mdi:zigbee","entity_category":"config"""",
+            ),
+        ),
+        SettingSpec(
+            key = "ambient_lux", type = SettingType.INT, group = "Display",
+            label = "Ambient lux (HA-fed)", default = "0", min = 0.0, max = 100000.0,
+            transient = true,
+            help = "Room lux an HA automation feeds to auto-brightness (sensor-less panels).",
+            ha = HaEntity(
+                "number", "ambient_lux", "Ambient lux (HA-fed)",
+                """"command_topic":"ha-paneld/{panel}/ambient_lux/set","state_topic":"ha-paneld/{panel}/ambient_lux/state","min":0,"max":100000,"step":1,"mode":"box","unit_of_measurement":"lx","icon":"mdi:brightness-5","entity_category":"config"""",
+            ),
+        ),
+        SettingSpec(
             key = "keep_awake", type = SettingType.BOOL, group = "Behaviour",
             label = "Keep awake", default = "true",
             help = "Hold a partial wakelock so the SoC/network never suspend (screen still sleeps freely).",

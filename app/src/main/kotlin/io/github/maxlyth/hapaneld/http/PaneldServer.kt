@@ -73,6 +73,12 @@ class PaneldServer(
     // hardware → publish HA state). Lets the config API set the formerly MQTT-only keys identically
     // to an HA command. Returns true if the key was a recognised live setting.
     private val applySetting: (String, String) -> Boolean,
+    // Current values of the CONTROLLER-sourced settings (touch_sound, cpu_governor, network_adb,
+    // zigbee_router) — their state lives in controllers, not SharedPreferences, so the config
+    // form/schema/dashboard read them through this instead of Config.getRaw.
+    private val liveValues: () -> Map<String, String> = { emptyMap() },
+    // This panel's capability snapshot (sensors + cpu/adb/zigbee probes) for availableWhen gating.
+    private val capabilities: () -> Capabilities = { Capabilities() },
     private val info: () -> Map<String, String>,
     // Per-panel "HA-optimised" density + text-scale suggestions (DeviceProfile), or null.
     private val recommendedDensity: Int? = null,
@@ -338,7 +344,7 @@ class PaneldServer(
                     }
                     val verb = if (untame) "re-enabling" else "taming"
                     call.respondText(
-                        "<!doctype html><meta charset=utf-8><meta http-equiv=refresh content='2;url=/'>" +
+                        "<!doctype html><meta charset=utf-8><meta http-equiv=refresh content='2;url=/configure'>" +
                             "<body style='font-family:system-ui;background:#111;color:#eee;padding:20px'>" +
                             "$verb ${esc(pkg)}…</body>",
                         ContentType.Text.Html,
@@ -378,7 +384,7 @@ class PaneldServer(
                         }
                     }
                     call.respondText(
-                        "<!doctype html><meta charset=utf-8><meta http-equiv=refresh content='1;url=/'>" +
+                        "<!doctype html><meta charset=utf-8><meta http-equiv=refresh content='1;url=/configure'>" +
                             "<body style='font-family:system-ui;background:#111;color:#eee;padding:20px'>" +
                             (if (ok) "display density applied" else "density unchanged") + "…</body>",
                         ContentType.Text.Html,
@@ -524,11 +530,15 @@ $body
 
     /** Configure tab — schema-driven form (Basic/Advanced + inline expose pips) + bundle backup/restore. */
     private fun configureBody(): String = """
-<div class="cfg-tabs"><button id="tab-basic" class="on" onclick="cfgTab(false)">Basic</button><button id="tab-adv" onclick="cfgTab(true)">Advanced</button></div>
+<div class="cfg-tabs"><button id="tab-basic" onclick="cfgTab(false)">Basic</button><button id="tab-adv" class="on" onclick="cfgTab(true)">Advanced</button></div>
 <div id="cfg-status" class="muted" style="margin-bottom:10px">Loading settings…</div>
 <div id="cfg-groups" class="cards"></div>
 <div class="savebar"><button id="savebtn" disabled onclick="cfgSave()">Save changes</button><span id="cfg-msg" class="muted"></span></div>
-<div class="cards"><div class="card"><h2>Backup &amp; restore</h2>
+<div class="cards">
+${proximityCardHtml()}
+${displayCardHtml()}
+${tameCardHtml()}
+<div class="card"><h2>Backup &amp; restore</h2>
 <p class="note">Download this panel's configuration as a versioned bundle, or apply one — validated, all-or-nothing, with a change preview before it writes.</p>
 <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
  <a class="pbtn" href="/api/v1/config/export">⭳ Export bundle</a>
@@ -536,7 +546,8 @@ $body
  <label class="pbtn" style="cursor:pointer">⭱ Import…<input type="file" id="impfile" accept="application/json" style="display:none" onchange="cfgImport(this)"></label>
 </div>
 <pre id="imp-result" class="muted" style="white-space:pre-wrap;margin-top:10px"></pre></div></div>
-<script src="/assets/configure.js"></script>"""
+<script src="/assets/configure.js"></script>
+<script src="/assets/prox.js"></script>"""
 
     /** Test tab — interactive screenshot (View/Control), on-screen nav actions, TTS test. */
     private fun testBody(): String {
@@ -653,6 +664,83 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
     }
 
 
+    /** Proximity tuning card — lives on the Configure tab; driven by /assets/prox.js. */
+    private fun proximityCardHtml(): String = """<div class="card"><h2>Proximity tuning <small id="proxstate"></small></h2>
+<div id="proxbox" style="display:none">
+<canvas id="proxgauge" width="600" height="46" class="gradedonly" style="height:46px"></canvas>
+<div style="font-size:.85rem;margin-bottom:8px">raw <b id="proxraw" style="color:#4a9eff">–</b>
+ <span id="proxthwrap" class="gradedonly">· threshold <b id="proxth">–</b></span> · state <b id="proxnear">–</b></div>
+<div class="gradedonly" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;font-size:.85rem;margin-bottom:8px">
+ <span style="color:#9af">Capture:</span>
+ <button type="button" class="pbtn" onclick="proxCap('near')">Near</button>
+ <button type="button" class="pbtn" onclick="proxCap('far')">Far</button>
+ <span class="gradedonly" style="color:#9af;margin-left:10px">Sensitivity:</span>
+ <button type="button" class="pbtn psen gradedonly" data-s="HIGH" onclick="proxSen('HIGH')">High</button>
+ <button type="button" class="pbtn psen gradedonly" data-s="MEDIUM" onclick="proxSen('MEDIUM')">Med</button>
+ <button type="button" class="pbtn psen gradedonly" data-s="LOW" onclick="proxSen('LOW')">Low</button>
+ <button type="button" class="pbtn" style="margin-left:10px" onclick="proxReset()">Reset</button></div>
+<label class="gradedonly" style="font-size:.8rem;color:#9af">Threshold fine-tune
+ <input type="range" id="proxslider" min="0" max="100" step="0.1" style="width:100%"
+  oninput="document.getElementById('proxth').textContent=(+this.value).toFixed(1)"
+  onchange="proxThSet(this.value)"></label>
+<p id="proxhint" class="note"></p>
+</div></div>"""
+
+    /**
+     * Read-only "Configuration values" card for the Dashboard: every registry setting available on
+     * this panel (controller-sourced ones read live), plus the live control states HA sees (volume /
+     * navigate / LED / screen brightness) and the tuning summary (density / text size / proximity /
+     * tamed packages). Editing happens on the Configure tab — this keeps the values VISIBLE here.
+     */
+    private fun configValuesCardHtml(): String {
+        val live = liveValues()
+        val caps = capabilities()
+        fun row(k: String, v: String) = """<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>"""
+        val settingRows = SettingsRegistry.settable()
+            .filter { it.availableWhen(caps) && !it.transient }
+            .joinToString("\n") { spec ->
+                val raw = effectiveValue(spec, live)
+                val shown = when {
+                    spec.secret -> if (raw.isNotEmpty()) "set" else "—"
+                    spec.type == SettingType.BOOL -> if (raw.toBoolean()) "on" else "off"
+                    raw.isBlank() -> "—"
+                    else -> raw
+                }
+                row(spec.label, shown)
+            }
+        // Live control states (what HA's control entities currently show).
+        val led = config.lastLed.split(",").mapNotNull { it.toIntOrNull() }
+        val ledShown = if (led.size == 5 && led[0] == 1) "on · rgb(${led[2]},${led[3]},${led[4]}) @ ${led[1]}" else "off"
+        val brightnessShown = runCatching {
+            android.provider.Settings.System.getInt(appContext.contentResolver, android.provider.Settings.System.SCREEN_BRIGHTNESS)
+        }.getOrNull()?.toString() ?: "?"
+        val stateRows = listOf(
+            "Screen brightness" to brightnessShown,
+            "Volume" to "${volume.getPercent()}%",
+            "Navigate" to config.lastNavigate.ifEmpty { "/" },
+            "LED" to ledShown,
+        ).joinToString("\n") { (k, v) -> row(k, v) }
+        // Tuning summary (the editable cards live on Configure).
+        val proxShown = when {
+            !sensors.hasProximity() -> "not present"
+            config.proximityCalibrated -> "calibrated · threshold ${"%.1f".format(config.proximityThreshold)}"
+            else -> "not calibrated"
+        }
+        val tuningRows = listOf(
+            "Density" to "${density.current() ?: "?"} dpi (native ${density.native() ?: "?"})",
+            "Text size" to density.fontScale().toString(),
+            "Proximity" to proxShown,
+            "Tamed packages" to config.tameVendorPackagesRaw.ifBlank { "none" },
+        ).joinToString("\n") { (k, v) -> row(k, v) }
+        return """<div class="card"><h2 id="config">Configuration values <small>· read-only</small></h2>
+<p class="note">Everything Home Assistant can see or set, live. Edit on the <a href="/configure" style="color:#9cf">Configure</a> tab.</p>
+<table>
+$stateRows
+$settingRows
+$tuningRows
+</table></div>"""
+    }
+
     private fun infoHtml(): String {
         val pid = esc(config.panelId)
         // Banner reflects the LIVE MQTT state (from the info map), not just whether a broker string is
@@ -663,7 +751,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         // mid-(re)connect must not be reported as missing.
         val needs = SetupBanner.needs(mqtt, config.mqttBroker.isNotBlank(), config.panelIdIsDefault)
         val setupBanner = if (needs.isNotEmpty())
-            """<div class="setup">⚠ This panel needs <a href="#config">${needs.joinToString(" and ")}</a> — set below.</div>"""
+            """<div class="setup">⚠ This panel needs <a href="/configure">${needs.joinToString(" and ")}</a> — set on the Configure tab.</div>"""
         else ""
         val updateBanner = UpdateChecker.available.joinToString("") { u ->
             """<div class="setup">⬆ <b>${esc(u.label)}</b> ${esc(u.latestVersion)} is available""" +
@@ -688,7 +776,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
             if (renderers.isEmpty()) append(
                 """<div class="setup">ℹ <b>No dashboard app detected</b> — install the HA Companion app, """ +
                     """<a href="https://www.fully-kiosk.com/" target="_blank" rel="noopener">Fully Kiosk</a>, or set a """ +
-                    """dashboard package <a href="#config">below</a>, or this panel won't display a dashboard. """ +
+                    """dashboard package on <a href="/configure">Configure</a>, or this panel won't display a dashboard. """ +
                     """<small>(ha-paneld itself runs fine without one.)</small></div>"""
             )
         }
@@ -796,61 +884,12 @@ report of this panel's hardware, firmware, SELinux, su and node probes for bug r
 <table id="perf"><tr><td style="color:#888">sampling…</td></tr></table></div>
 <div class="card"><h2>Top processes <small>· by CPU</small></h2>
 <table class="dt" id="topproc"><tr><td style="color:#888">top processes…</td></tr></table></div>
-<div class="card"><h2>Proximity tuning <small id="proxstate"></small></h2>
-<div id="proxbox" style="display:none">
-<canvas id="proxgauge" width="600" height="46" class="gradedonly" style="height:46px"></canvas>
-<div style="font-size:.85rem;margin-bottom:8px">raw <b id="proxraw" style="color:#4a9eff">–</b>
- <span id="proxthwrap" class="gradedonly">· threshold <b id="proxth">–</b></span> · state <b id="proxnear">–</b></div>
-<div class="gradedonly" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;font-size:.85rem;margin-bottom:8px">
- <span style="color:#9af">Capture:</span>
- <button type="button" class="pbtn" onclick="proxCap('near')">Near</button>
- <button type="button" class="pbtn" onclick="proxCap('far')">Far</button>
- <span class="gradedonly" style="color:#9af;margin-left:10px">Sensitivity:</span>
- <button type="button" class="pbtn psen gradedonly" data-s="HIGH" onclick="proxSen('HIGH')">High</button>
- <button type="button" class="pbtn psen gradedonly" data-s="MEDIUM" onclick="proxSen('MEDIUM')">Med</button>
- <button type="button" class="pbtn psen gradedonly" data-s="LOW" onclick="proxSen('LOW')">Low</button>
- <button type="button" class="pbtn" style="margin-left:10px" onclick="proxReset()">Reset</button></div>
-<label class="gradedonly" style="font-size:.8rem;color:#9af">Threshold fine-tune
- <input type="range" id="proxslider" min="0" max="100" step="0.1" style="width:100%"
-  oninput="document.getElementById('proxth').textContent=(+this.value).toFixed(1)"
-  onchange="proxThSet(this.value)"></label>
-<p id="proxhint" class="note"></p>
-</div></div>
 <div class="card"><h2>WebView debugging <small id="insthdr"></small></h2>
 <div style="display:flex;gap:8px;margin-bottom:4px">
  <button type="button" class="pbtn" onclick="inspStart()">Enable</button>
  <button type="button" class="pbtn" onclick="inspStop()">Stop</button></div>
 <p class="note" id="insthint"></p></div>
-${displayCardHtml()}
-${tameCardHtml()}
-<div class="card"><h2 id="config">Configuration</h2>
-<form method="post" action="/config">
- <label>Panel id <small>(entity_ids / MQTT topics)</small>
-  <input name="panel_id" autocapitalize="none" autocorrect="off" spellcheck="false" value="$pid" pattern="[a-z0-9_]+" title="lowercase letters, digits, underscore" required></label>
- <label>Friendly name <small>(HA device name)</small>
-  <input name="friendly_name" value="${esc(config.friendlyName)}" placeholder="Office Dash"></label>
- <label>Manufacturer <small>(HA device card; blank = ${esc(config.manufacturer)})</small>
-  <input name="manufacturer" value="${esc(config.manufacturerRaw)}" placeholder="${esc(config.manufacturer)}"></label>
- <label>Model <small>(HA device card; blank = ${esc(config.model)})</small>
-  <input name="model" value="${esc(config.modelRaw)}" placeholder="${esc(config.model)}"></label>
- <label>MQTT broker
-  <input class="secret" name="mqtt_broker" autocapitalize="none" autocorrect="off" spellcheck="false" value="${esc(config.mqttBroker)}" placeholder="blank = auto-discover Home Assistant on the LAN"></label>
- <label>MQTT username
-  <input class="secret" name="mqtt_user" autocapitalize="none" autocorrect="off" spellcheck="false" value="${esc(config.mqttUser)}" placeholder="blank if the broker needs no login" autocomplete="off"></label>
- <label>MQTT password
-  <input name="mqtt_password" type="password" value="" placeholder="blank keeps it; clear the username to remove auth" autocomplete="new-password"></label>
- <label>Dashboard package <small>(Reload button; blank = auto-detect Companion)</small>
-  <input name="dashboard_package" autocapitalize="none" autocorrect="off" spellcheck="false" value="${esc(config.dashboardPackage)}" placeholder="io.homeassistant.companion.android"></label>
- <label>Launcher package <small>(blank = auto-detect)</small>
-  <input name="launcher_package" autocapitalize="none" autocorrect="off" spellcheck="false" value="${esc(config.launcherPackage)}" placeholder="auto"></label>
- <button type="submit">Save</button>
-</form>
-<p class="note">Leave the broker blank to auto-discover Home Assistant on the LAN (via mDNS) and use its
-MQTT broker on :1883; set it explicitly if your broker is elsewhere, on a non-HA host, or if your
-network has more than one Home Assistant instance. Leave username/password blank if the broker allows
-anonymous connections; if it needs a login (e.g. the HA Mosquitto add-on), enter your MQTT credentials —
-the MQTT line above shows <b>auth rejected</b> until they're correct. Password never shown — blank keeps
-the current one. Changing the panel id may leave the old device in HA to remove manually.</p></div>
+${configValuesCardHtml()}
 </div>
 <p class="note" style="text-align:center;margin-top:18px"><a href="/api" style="color:#9cf">REST API explorer</a>
  · <a href="/diag" target="_blank" style="color:#9cf">diagnostics</a></p>
@@ -1088,12 +1127,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
      */
     private fun configSchemaJson(): String {
         fun s(v: String) = "\"" + v.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
-        val caps = Capabilities(
-            hasProximity = sensors.hasProximity(),
-            hasLight = sensors.hasLight(),
-            hasTemperature = sensors.hasTemperature(),
-            hasHumidity = sensors.hasHumidity(),
-        )
+        val caps = capabilities()
         val items = SettingsRegistry.settable().joinToString(",") { spec ->
             val opts = spec.options.joinToString(",") { s(it) }
             val isHa = spec.ha != null
@@ -1119,17 +1153,21 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
         return "[$items]"
     }
 
+    /** A setting's effective current value: controller-sourced live state where it exists, identity
+     *  fields resolved (panel_id auto-derives when unset), else the persisted value. */
+    private fun effectiveValue(spec: io.github.maxlyth.hapaneld.config.SettingSpec, live: Map<String, String>): String =
+        live[spec.key] ?: when (spec.key) {
+            "panel_id" -> config.panelId
+            "friendly_name" -> config.friendlyName
+            else -> config.getRaw(spec)
+        }
+
     /** Registry-driven current values (typed JSON; secrets blanked) for the Configure form. */
     private fun settingsValuesJson(): String {
         fun s(v: String) = "\"" + v.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+        val live = liveValues()
         val parts = SettingsRegistry.settable().joinToString(",") { spec ->
-            // Identity fields show their EFFECTIVE value (panel_id is auto-derived when unset) so the
-            // form is never blank — an empty panel_id would be rejected on save.
-            val raw = when (spec.key) {
-                "panel_id" -> config.panelId
-                "friendly_name" -> config.friendlyName
-                else -> config.getRaw(spec)
-            }
+            val raw = effectiveValue(spec, live)
             val v = when {
                 spec.secret -> "\"\""
                 spec.type == SettingType.BOOL -> if (raw.toBoolean()) "true" else "false"
@@ -1161,22 +1199,27 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
 
     // ---- config bundles (export / transactional import) + on-panel revision history ----
 
-    /** Current registry values as a flat map (skips transient inputs). The basis for export, the
-     *  pre-change snapshot, and the dry-run diff. */
+    /** Current registry values as a flat map (skips transient inputs; controller-sourced settings
+     *  read their live state). The basis for export, the pre-change snapshot, and the dry-run diff. */
     private fun currentValues(): Map<String, String> {
+        val live = liveValues()
         val m = LinkedHashMap<String, String>()
-        for (spec in SettingsRegistry.settable()) if (!spec.transient) m[spec.key] = config.getRaw(spec)
+        for (spec in SettingsRegistry.settable()) {
+            if (spec.transient) continue
+            m[spec.key] = live[spec.key] ?: config.getRaw(spec)
+        }
         return m
     }
 
     /** Export a versioned config bundle. Secrets are excluded unless `?include_secrets=1`. */
     private suspend fun handleConfigExport(call: ApplicationCall) {
         val includeSecrets = call.request.queryParameters["include_secrets"] == "1"
+        val live = liveValues()
         val values = LinkedHashMap<String, String>()
         for (spec in SettingsRegistry.settable()) {
             if (spec.transient) continue
             if (spec.secret && !includeSecrets) continue
-            values[spec.key] = config.getRaw(spec)
+            values[spec.key] = live[spec.key] ?: config.getRaw(spec)
         }
         val bundle = ConfigBundle.fromValues(
             values, exportedAt = System.currentTimeMillis().toString(), exportedBy = config.panelId,

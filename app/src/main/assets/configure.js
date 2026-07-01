@@ -3,7 +3,8 @@
 // "expose to HA" pip on each HA-capable row, and saves via partial-merge POST. Vanilla, no build.
 (function () {
   "use strict";
-  var schema = [], values = {}, expose = {}, advanced = false, dirty = false;
+  // Advanced is the DEFAULT view until the reduced Basic set is settled (user, 2026-07-01).
+  var schema = [], values = {}, expose = {}, advanced = true, dirty = false;
 
   function el(tag, attrs, kids) {
     var e = document.createElement(tag);
