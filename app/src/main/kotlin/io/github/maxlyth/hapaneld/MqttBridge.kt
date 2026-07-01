@@ -85,6 +85,9 @@ class MqttBridge(
     // HA's advertised base URL (scheme+host+port) from zeroconf TXT — for the "Open in HA" device link,
     // so we never guess a port/scheme. Null if HA isn't found / advertises no URL.
     private val discoverHaUrl: () -> String? = { null },
+    // Trigger a HACA (HA Companion App) install/update. Injected by the service (needs Context + a
+    // coroutine); runs off the MQTT thread. Fired by the update_companion button.
+    private val onUpdateCompanion: () -> Unit = {},
 ) {
     private var client: Mqtt5AsyncClient? = null
 
@@ -122,6 +125,9 @@ class MqttBridge(
     private val stateTouchSound = "ha-paneld/$panel/touch_sound/state"
     private val cmdWatchdog = "ha-paneld/$panel/watchdog/set"
     private val stateWatchdog = "ha-paneld/$panel/watchdog/state"
+    private val cmdUpdateCompanion = "ha-paneld/$panel/update_companion/set"
+    private val cmdCompanionAuto = "ha-paneld/$panel/companion_auto_update/set"
+    private val stateCompanionAuto = "ha-paneld/$panel/companion_auto_update/state"
     private val cmdSilenceBootChime = "ha-paneld/$panel/silence_boot_chime/set"
     private val stateSilenceBootChime = "ha-paneld/$panel/silence_boot_chime/state"
     private val cmdPreventIdleDim = "ha-paneld/$panel/prevent_idle_dim/set"
@@ -342,6 +348,8 @@ class MqttBridge(
                 cmdWakeOnWave -> handleWakeOnWave(payload)
                 cmdTouchSound -> handleTouchSound(payload)
                 cmdWatchdog -> handleWatchdog(payload)
+                cmdUpdateCompanion -> onUpdateCompanion() // install/update HACA; runs off-thread in the service
+                cmdCompanionAuto -> handleCompanionAuto(payload)
                 cmdSilenceBootChime -> handleSilenceBootChime(payload)
                 cmdPreventIdleDim -> handlePreventIdleDim(payload)
                 cmdZigbee -> handleZigbee(payload)
@@ -437,6 +445,12 @@ class MqttBridge(
         config.setWatchdogEnabled(on)
         watchdog.apply(on)
         client?.let { publish(it, stateWatchdog, if (on) "ON" else "OFF", retain = true) }
+    }
+
+    private fun handleCompanionAuto(payload: String) {
+        val on = payload.trim().equals("ON", ignoreCase = true)
+        config.setCompanionAutoUpdate(on)
+        client?.let { publish(it, stateCompanionAuto, if (on) "ON" else "OFF", retain = true) }
     }
 
     private fun handleSilenceBootChime(payload: String) {
@@ -738,6 +752,19 @@ class MqttBridge(
             """{"name":"App watchdog","unique_id":"${panel}_watchdog","command_topic":"$cmdWatchdog","state_topic":"$stateWatchdog","icon":"mdi:restart-alert","entity_category":"config",$avail,$device}""",
         )
         publish(c, stateWatchdog, if (config.watchdogEnabled) "ON" else "OFF", retain = true)
+
+        // HACA (HA Companion App) auto-update — installs/updates the minimal Companion over root (the
+        // only update path on these no-Play panels). Off by default; the button forces it on demand.
+        publishConfig(
+            c, "switch", "${panel}_companion_auto_update",
+            """{"name":"Companion auto-update","unique_id":"${panel}_companion_auto_update","command_topic":"$cmdCompanionAuto","state_topic":"$stateCompanionAuto","icon":"mdi:cellphone-arrow-down","entity_category":"config",$avail,$device}""",
+        )
+        publish(c, stateCompanionAuto, if (config.companionAutoUpdate) "ON" else "OFF", retain = true)
+        publishConfig(
+            c, "button", "${panel}_update_companion",
+            """{"name":"Update Companion app","unique_id":"${panel}_update_companion","command_topic":"$cmdUpdateCompanion","icon":"mdi:home-assistant","entity_category":"config",$avail,$device}""",
+        )
+
         publishConfig(
             c, "switch", "${panel}_silence_boot_chime",
             """{"name":"Silence boot chime","unique_id":"${panel}_silence_boot_chime","command_topic":"$cmdSilenceBootChime","state_topic":"$stateSilenceBootChime","icon":"mdi:volume-off","entity_category":"config",$avail,$device}""",
@@ -878,6 +905,7 @@ class MqttBridge(
             "light" to "${panel}_buttons", "switch" to "${panel}_wake_on_wave",
             "switch" to "${panel}_touch_sound", "switch" to "${panel}_watchdog",
             "switch" to "${panel}_silence_boot_chime", "switch" to "${panel}_prevent_idle_dim",
+            "switch" to "${panel}_companion_auto_update", "button" to "${panel}_update_companion",
             "switch" to "${panel}_zigbee_router",
             "switch" to "${panel}_auto_brightness", "number" to "${panel}_brightness_bias",
             "number" to "${panel}_ambient_lux",

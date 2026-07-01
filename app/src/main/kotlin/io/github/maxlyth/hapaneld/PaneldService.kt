@@ -50,6 +50,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import io.github.maxlyth.hapaneld.util.UpdateChecker
+import io.github.maxlyth.hapaneld.util.CompanionInstaller
 
 /**
  * Persistent foreground service. Hosts the Ktor HTTP listener, the JmDNS advertiser, the MQTT
@@ -176,6 +177,13 @@ class PaneldService : Service() {
         discoverHaIp = { mdns.discoverHaIp() },
         // HA's advertised base URL (from zeroconf) for the "Open in HA" device link.
         discoverHaUrl = { mdns.discoverHaBaseUrl() },
+        // HACA install/update button → run off-thread (network + su).
+        onUpdateCompanion = {
+            scope.launch {
+                val r = CompanionInstaller.installOrUpdate(this@PaneldService, force = true)
+                Log.i(TAG, "HACA manual update: $r")
+            }
+        },
     )
 
     /**
@@ -338,6 +346,13 @@ class PaneldService : Service() {
                 delay(30_000L)  // let startup settle before hitting the network
                 while (isActive) {
                     runCatching { UpdateChecker.check(this@PaneldService) }
+                    // HACA self-heal: when enabled, install a missing Companion / update an out-of-date one.
+                    if (config.companionAutoUpdate) {
+                        runCatching {
+                            val r = CompanionInstaller.installOrUpdate(this@PaneldService)
+                            Log.i(TAG, "HACA auto: $r")
+                        }
+                    }
                     delay(24 * 3_600 * 1_000L)
                 }
             }

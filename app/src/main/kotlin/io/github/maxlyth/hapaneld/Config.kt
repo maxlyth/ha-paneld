@@ -142,6 +142,15 @@ class Config(context: Context) {
         prefs.edit().putBoolean("watchdog_enabled", on).apply()
     }
 
+    // HACA (HA Companion App) auto-manage: when on, ha-paneld installs the minimal Companion if it's
+    // missing and updates it when a newer release exists (root panels; the minimal variant has no Play
+    // auto-update, so ha-paneld is the only update path). Default off — installing/updating an app is
+    // invasive; opt in per panel (provision --companion-auto or the MQTT switch).
+    val companionAutoUpdate: Boolean get() = prefs.getBoolean("companion_auto_update", false)
+    fun setCompanionAutoUpdate(on: Boolean) {
+        prefs.edit().putBoolean("companion_auto_update", on).apply()
+    }
+
     // The screen-off timeout (ms) seen before we first raised it, so disabling preventIdleDim can restore
     // the firmware default. -1 = not yet captured.
     var savedScreenOffTimeout: Int

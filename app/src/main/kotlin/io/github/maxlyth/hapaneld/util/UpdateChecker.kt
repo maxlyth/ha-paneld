@@ -65,7 +65,7 @@ object UpdateChecker {
         available = found
     }
 
-    private fun fetchLatest(repo: String): Pair<String, String>? = runCatching {
+    internal fun fetchLatest(repo: String): Pair<String, String>? = runCatching {
         val conn = URL("https://api.github.com/repos/$repo/releases/latest").openConnection() as HttpURLConnection
         conn.connectTimeout = 8_000
         conn.readTimeout = 8_000
