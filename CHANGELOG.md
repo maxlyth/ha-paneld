@@ -8,7 +8,7 @@ From **v0.8.0**, entries are grouped under **Added** (new features/entities), **
 changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
 content appear. Earlier releases predate this convention and keep their flat lists.
 
-## Unreleased
+## v0.8.5-rc9 - 2026-07-01
 
 > **⚠ The web UI has been significantly revised in this release — and it is a work in progress.**
 > The single-page info/control surface is now a tabbed, multi-page app (Dashboard · Configure · Test ·
