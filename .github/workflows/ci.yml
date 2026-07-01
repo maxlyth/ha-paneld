@@ -65,3 +65,6 @@ jobs:
 
       - name: Unit tests
         run: make -C helper test
+
+      - name: App↔daemon contract cross-check
+        run: helper/test/contract-check.sh

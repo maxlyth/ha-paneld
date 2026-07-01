@@ -28,6 +28,7 @@ static const struct { const char *verb; cmd_fn fn; } COMMANDS[] = {
     { "DISABLE",   cmd_disable },
     { "ENABLE",    cmd_enable },
     { "OVERLAY",   cmd_overlay },
+    { "INSTALL",   cmd_install },
     { "WATCH",     cmd_watch },
     { "SUBSCRIBE", cmd_subscribe },
     { "REBOOT",    cmd_reboot },

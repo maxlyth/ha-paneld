@@ -138,11 +138,69 @@ class Config(context: Context) {
         prefs.edit().putBoolean("prevent_idle_dim", on).apply()
     }
 
+    // Hold a partial wakelock so the SoC + network never suspend (screen still free to sleep). ON by
+    // default: a mains wall panel must never Doze into an unreachable state where the MQTT reactor +
+    // keepalive freeze and the broker connection dies half-open. Toggle off only for a battery panel.
+    val keepAwake: Boolean get() = prefs.getBoolean("keep_awake", true)
+    fun setKeepAwake(on: Boolean) {
+        prefs.edit().putBoolean("keep_awake", on).apply()
+    }
+
     // App watchdog: poll the dashboard app and self-heal it — relaunch if its process dies, and return
     // to it if it's been backgrounded too long. Opt-in (off by default): a stock panel never auto-acts.
     val watchdogEnabled: Boolean get() = prefs.getBoolean("watchdog_enabled", false)
     fun setWatchdogEnabled(on: Boolean) {
         prefs.edit().putBoolean("watchdog_enabled", on).apply()
+    }
+
+    // HA Companion app auto-manage: when on, ha-paneld installs the minimal Companion if it's
+    // missing and updates it when a newer release exists (root panels; the minimal variant has no Play
+    // auto-update, so ha-paneld is the only update path). Default off — installing/updating an app is
+    // invasive; opt in per panel (provision --companion-auto or the MQTT switch).
+    val companionAutoUpdate: Boolean get() = prefs.getBoolean("companion_auto_update", false)
+    fun setCompanionAutoUpdate(on: Boolean) {
+        prefs.edit().putBoolean("companion_auto_update", on).apply()
+    }
+
+    // ha-paneld self-update: when on, ha-paneld installs a newer build of ITSELF from GitHub releases on
+    // the selected [updateChannel] (root; no Play Store on these panels). **Default OFF** — silent
+    // auto-pull from the release repo is a supply-chain risk if control of the repo were ever lost, so it
+    // is strictly opt-in (the pinned-signer check in AppInstaller mitigates a repo-only compromise, but
+    // off-by-default is the safer stance the user chose, 2026-07-01). When a user DOES enable it, it never
+    // auto-DOWNGRADES: running a pre-release while on the stable channel simply waits ("suspended") until
+    // stable catches up; the one deliberate move off an rc is an explicit channel switch pre-release→stable.
+    val selfUpdate: Boolean get() = prefs.getBoolean("self_update", false)
+    fun setSelfUpdate(on: Boolean) {
+        prefs.edit().putBoolean("self_update", on).apply()
+    }
+    val updateChannel: String get() = prefs.getString("update_channel", "stable") ?: "stable"
+    fun setUpdateChannel(ch: String) {
+        val v = if (ch.trim().lowercase().startsWith("pre")) "prerelease" else "stable"
+        prefs.edit().putString("update_channel", v).apply()
+    }
+
+    // Network-adb persist INTENT (the switch). ha-paneld re-asserts adb-tcp at boot/reconnect when this
+    // is true (some firmwares strip persist.adb.tcp.port at boot), and only tears adb down on OFF if it
+    // was ha-paneld that turned it on — never disabling adb another mechanism started.
+    val networkAdbEnabled: Boolean get() = prefs.getBoolean("network_adb_enabled", false)
+    fun setNetworkAdbEnabled(on: Boolean) {
+        prefs.edit().putBoolean("network_adb_enabled", on).apply()
+    }
+
+    // The ha-paneld version whose discovery set was last published to HA. On an upgrade (this differs
+    // from the running version) MqttBridge prunes any entity a prior version published but this one no
+    // longer does — so a refactored-away entity is actively removed from HA, not left as a zombie.
+    val lastDiscoveryVersion: String get() = prefs.getString("last_discovery_version", "")!!
+    fun setLastDiscoveryVersion(v: String) {
+        prefs.edit().putString("last_discovery_version", v).apply()
+    }
+
+    // Per-panel intended "home" dashboard path (e.g. "/lovelace/0"). When set, a reload keeps the hard
+    // restart but re-navigates HERE once the frontend is back up, instead of leaving the Companion on its
+    // user-default view. Empty = keep current behaviour (cold-start to the Companion default).
+    val homeDashboard: String get() = prefs.getString("home_dashboard", "")!!
+    fun setHomeDashboard(p: String) {
+        prefs.edit().putString("home_dashboard", p.trim()).apply()
     }
 
     // The screen-off timeout (ms) seen before we first raised it, so disabling preventIdleDim can restore

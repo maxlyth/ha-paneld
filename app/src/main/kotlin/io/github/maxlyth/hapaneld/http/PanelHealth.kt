@@ -18,8 +18,24 @@ object PanelHealth {
     fun chromiumMajor(webView: String): Int? =
         Regex("""(\d+)\.\d+\.\d+\.\d+""").find(webView)?.groupValues?.get(1)?.toIntOrNull()
 
-    /** True when the WebView version parses AND is below [MIN_CHROMIUM]. Unparseable/unknown → false:
-     *  don't cry wolf — a Cromite SystemWebView swap reports the stale OEM version yet actually renders. */
-    fun webViewTooOld(webView: String): Boolean =
-        chromiumMajor(webView)?.let { it < MIN_CHROMIUM } ?: false
+    /** Full Chromium version from a WebView User-Agent's `Chrome/<v>` token (e.g. "147.0.7727.56"),
+     *  or null. This is the TRUE engine version: a Cromite/LineageOS SystemWebView stamps the OEM
+     *  stock package versionName/Code to clear the provider's signature + min-version gate (the only
+     *  way to install a modern WebView on a signature-locked ROM like the TPA10), but reports its real
+     *  version in the UA — so the UA, not the package version, is authoritative for the age check. */
+    fun engineVersionFromUa(ua: String): String? =
+        Regex("""Chrome/(\d+\.\d+\.\d+\.\d+)""").find(ua)?.groupValues?.get(1)
+
+    /** Chromium major from a WebView UA, or null. */
+    fun engineMajorFromUa(ua: String): Int? =
+        engineVersionFromUa(ua)?.substringBefore('.')?.toIntOrNull()
+
+    /** True when the WebView is below [MIN_CHROMIUM]. [engineMajor] — the real version read from the
+     *  WebView UA — is authoritative when known; otherwise fall back to the package version. Both
+     *  unknown → false: don't cry wolf (a Cromite swap reports the stale OEM version yet renders fine,
+     *  and an unparseable value tells us nothing). */
+    fun webViewTooOld(packageVersion: String, engineMajor: Int?): Boolean {
+        engineMajor?.let { return it < MIN_CHROMIUM }
+        return chromiumMajor(packageVersion)?.let { it < MIN_CHROMIUM } ?: false
+    }
 }

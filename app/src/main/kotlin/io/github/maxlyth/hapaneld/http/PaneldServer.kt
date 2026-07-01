@@ -585,9 +585,10 @@ $body
 
     /** Install tab — setup health warnings, capabilities, and config backup. */
     private fun installBody(): String {
-        val facts = info()
-        val webViewVal = facts["System WebView"] ?: ""
-        val tooOld = PanelHealth.webViewTooOld(webViewVal)
+        // Engine-aware WebView age check (a Cromite swap reports the stale OEM package version).
+        val webViewStatus = PanelInfo.webViewStatus(appContext)
+        val webViewVal = webViewStatus.display
+        val tooOld = webViewStatus.tooOld
         val renderers = PanelInfo.dashboardRenderers(appContext, config.dashboardPackage)
         val capColor = mapOf("ok" to "#48c774", "degraded" to "#d9a528", "none" to "#d04a3b")
         val caps = DiagReader.capabilities(appContext).joinToString("\n") { c ->
@@ -635,11 +636,11 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
 
     /** Health + capabilities as JSON for the variant UIs. Warnings are ready-to-render HTML fragments. */
     private fun statusJson(): String {
-        val facts = info()
-        val webViewVal = facts["System WebView"] ?: ""
+        // Engine-aware WebView age check (a Cromite swap reports the stale OEM package version).
+        val webViewStatus = PanelInfo.webViewStatus(appContext)
         val warns = mutableListOf<String>()
-        if (PanelHealth.webViewTooOld(webViewVal)) warns.add(
-            "⚠ <b>System WebView is too old</b> (${esc(webViewVal)}) — the Home Assistant dashboard may render blank. " +
+        if (webViewStatus.tooOld) warns.add(
+            "⚠ <b>System WebView is too old</b> (${esc(webViewStatus.display)}) — the Home Assistant dashboard may render blank. " +
                 "<a href=\"$WEBVIEW_DOC\" target=\"_blank\" rel=\"noopener\">How &amp; why to update</a> (target Chromium ${PanelHealth.MIN_CHROMIUM}+).",
         )
         if (PanelInfo.dashboardRenderers(appContext, config.dashboardPackage).isEmpty()) warns.add(
@@ -760,14 +761,17 @@ ${variantSwitcher("kiosk")}
         // Panel-health warnings: states that stop the panel rendering the dashboard as expected but that the
         // info map otherwise reports neutrally. Soft + best-effort — ha-paneld itself runs fine regardless.
         val webViewVal = facts["System WebView"] ?: ""
-        val webViewTooOld = PanelHealth.webViewTooOld(webViewVal)
+        // Verdict from the REAL engine version (WebView UA), not the stamped package version — the
+        // engine fetch is cached, so this re-call after collect() is cheap. See PanelInfo.webViewStatus.
+        val webViewTooOld = PanelInfo.webViewStatus(appContext).tooOld
         val renderers = PanelInfo.dashboardRenderers(appContext, config.dashboardPackage)
         val healthBanner = buildString {
             if (webViewTooOld) append(
                 """<div class="setup">⚠ <b>System WebView is too old</b> (${esc(webViewVal)}) — the Home Assistant """ +
                     """dashboard may render blank or broken. <a href="$WEBVIEW_DOC" target="_blank" rel="noopener">""" +
                     """How &amp; why to update</a> (target: Chromium ${PanelHealth.MIN_CHROMIUM}+). """ +
-                    """<small>Swapped in Cromite SystemWebView? It reports the stale OEM version — ignore this.</small></div>"""
+                    """<small>Checked against the real engine version (from the WebView UA), not just the """ +
+                    """stamped package version — so a Cromite/LineageOS SystemWebView won't trip this.</small></div>"""
             )
             if (renderers.isEmpty()) append(
                 """<div class="setup">ℹ <b>No dashboard app detected</b> — install the HA Companion app, """ +
@@ -1093,6 +1097,8 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
                 .filter { it.isNotEmpty() && !TameController.isCritical(it) }.toSet())
         }
         p["silence_boot_chime"]?.let { config.setSilenceBootChime(it.trim().equals("true", ignoreCase = true) || it.trim() == "1") }
+        // Keep-awake (partial wakelock so SoC/network never suspend). Applied live by reconfigure().
+        p["keep_awake"]?.let { config.setKeepAwake(it.trim().equals("true", ignoreCase = true) || it.trim() == "1") }
         val logEnabled = p["log_ship_enabled"]?.let { it.trim().equals("true", ignoreCase = true) || it.trim() == "1" }
         val logHost = p["log_ship_host"]?.trim()
         val logPort = p["log_ship_port"]?.trim()?.toIntOrNull()
@@ -1160,6 +1166,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
         "wake_on_wave", "prevent_idle_dim", "watchdog_enabled", "auto_brightness",
         "brightness_bias", "navbar_mode", "touch_sound", "cpu_governor",
         "network_adb", "zigbee_router", "ambient_lux",
+        "companion_auto_update", "self_update", "update_channel", "home_dashboard",
     )
 
     /**
@@ -1386,6 +1393,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             "\"launcher_package\":${s(config.launcherPackage)}," +
             "\"tame_vendor_packages\":${s(config.tameVendorPackagesRaw)}," +
             "\"silence_boot_chime\":${config.silenceBootChime}," +
+            "\"keep_awake\":${config.keepAwake}," +
             "\"log_ship_enabled\":${config.logShipEnabled}," +
             "\"log_ship_host\":${s(config.logShipHost)}," +
             "\"log_ship_port\":${config.logShipPort}," +

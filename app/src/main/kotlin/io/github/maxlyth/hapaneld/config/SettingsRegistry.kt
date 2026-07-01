@@ -129,7 +129,46 @@ object SettingsRegistry {
             ),
         ),
 
+        SettingSpec(
+            key = "keep_awake", type = SettingType.BOOL, group = "Behaviour",
+            label = "Keep awake", default = "true",
+            help = "Hold a partial wakelock so the SoC/network never suspend (screen still sleeps freely).",
+        ),
+        SettingSpec(
+            key = "home_dashboard", type = SettingType.STRING, group = "Behaviour",
+            label = "Home dashboard", default = "",
+            help = "Local dashboard path a reload returns to (e.g. /lovelace/0; blank = wherever it was).",
+        ),
+
         // ---- System ------------------------------------------------------------------------------
+        SettingSpec(
+            key = "companion_auto_update", type = SettingType.BOOL, group = "System",
+            label = "Companion auto-update", default = "false", scope = Scope.DEVICE,
+            help = "Install/update the minimal HA Companion over root when missing or out of date.",
+            ha = HaEntity(
+                "switch", "companion_auto_update", "Companion auto-update",
+                """"command_topic":"ha-paneld/{panel}/companion_auto_update/set","state_topic":"ha-paneld/{panel}/companion_auto_update/state","icon":"mdi:cellphone-arrow-down","entity_category":"config"""",
+            ),
+        ),
+        SettingSpec(
+            key = "self_update", type = SettingType.BOOL, group = "System",
+            label = "Self-update", default = "false", scope = Scope.DEVICE,
+            help = "ha-paneld updates itself from GitHub releases on the selected channel (opt-in).",
+            ha = HaEntity(
+                "switch", "self_update", "Self-update",
+                """"command_topic":"ha-paneld/{panel}/self_update/set","state_topic":"ha-paneld/{panel}/self_update/state","icon":"mdi:package-up","entity_category":"config"""",
+            ),
+        ),
+        SettingSpec(
+            key = "update_channel", type = SettingType.ENUM, group = "System",
+            label = "Update channel", default = "stable", options = listOf("stable", "prerelease"),
+            scope = Scope.DEVICE,
+            help = "Release channel the self-updater follows.",
+            ha = HaEntity(
+                "select", "update_channel", "Update channel",
+                """"command_topic":"ha-paneld/{panel}/update_channel/set","state_topic":"ha-paneld/{panel}/update_channel/state","options":["Stable","Pre-release"],"icon":"mdi:source-branch","entity_category":"config"""",
+            ),
+        ),
         SettingSpec(
             key = "dashboard_package", type = SettingType.STRING, group = "System",
             label = "Dashboard app", default = "",

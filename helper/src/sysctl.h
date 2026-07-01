@@ -20,5 +20,6 @@ void cmd_stop(conn_ctx *ctx, const char *args);       // STOP <pkg>        force
 void cmd_disable(conn_ctx *ctx, const char *args);    // DISABLE <pkg>     pm disable-user (boot block)
 void cmd_enable(conn_ctx *ctx, const char *args);     // ENABLE <pkg>      pm enable (reverse DISABLE)
 void cmd_overlay(conn_ctx *ctx, const char *args);    // OVERLAY <pkg> deny|allow  SYSTEM_ALERT_WINDOW
+void cmd_install(conn_ctx *ctx, const char *args);    // INSTALL <apk-path>  root pm install of a staged, allowlisted APK
 
 #endif

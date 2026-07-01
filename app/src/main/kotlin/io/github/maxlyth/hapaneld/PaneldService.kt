@@ -7,6 +7,8 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
+import android.net.Network
 import android.os.Build
 import android.os.IBinder
 import android.provider.Settings
@@ -20,6 +22,7 @@ import io.github.maxlyth.hapaneld.control.BootChimeController
 import io.github.maxlyth.hapaneld.control.BrightnessController
 import io.github.maxlyth.hapaneld.control.CpuController
 import io.github.maxlyth.hapaneld.control.NavbarController
+import io.github.maxlyth.hapaneld.control.PowerController
 import io.github.maxlyth.hapaneld.control.NavigateController
 import io.github.maxlyth.hapaneld.control.RelayController
 import io.github.maxlyth.hapaneld.control.ScreenController
@@ -48,6 +51,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import io.github.maxlyth.hapaneld.util.UpdateChecker
+import io.github.maxlyth.hapaneld.util.CompanionInstaller
+import io.github.maxlyth.hapaneld.util.SelfUpdater
 
 /**
  * Persistent foreground service. Hosts the Ktor HTTP listener, the JmDNS advertiser, the MQTT
@@ -69,6 +74,10 @@ class PaneldService : Service() {
     private lateinit var server: PaneldServer
     private lateinit var mdns: MdnsAdvertiser
     private lateinit var mqtt: MqttBridge
+    // Default-network callback that nudges an MQTT reconnect when the network returns (see registerNetworkCallback).
+    private var netCallback: ConnectivityManager.NetworkCallback? = null
+    // MQTT watchdog runs on a DEDICATED thread (not Dispatchers.IO), so slow/contended su can't starve it.
+    @Volatile private var mqttWatchdogAlive = false
     private lateinit var sensors: SensorReporter
     private lateinit var logShipper: LogShipper
 
@@ -89,6 +98,7 @@ class PaneldService : Service() {
     private lateinit var relay: RelayController
     private lateinit var cpu: CpuController
     private lateinit var adb: AdbController
+    private lateinit var power: PowerController
     private lateinit var profile: DeviceProfile
     private var configUrl: String? = null
     // One-time-start guard for onStartCommand (see there for why). Reset in onDestroy.
@@ -143,7 +153,8 @@ class PaneldService : Service() {
         zigbee = ZigbeeController(profile)
         relay = RelayController(profile)
         cpu = CpuController(profile)
-        adb = AdbController()
+        adb = AdbController(config)
+        power = PowerController(this)
         configUrl = localIpv4()?.let { "http://$it:${config.httpPort}/" }
 
         mqtt = buildMqtt()
@@ -175,6 +186,21 @@ class PaneldService : Service() {
         discoverHaIp = { mdns.discoverHaIp() },
         // HA's advertised base URL (from zeroconf) for the "Open in HA" device link.
         discoverHaUrl = { mdns.discoverHaBaseUrl() },
+        // Companion install/update button → run off-thread (network + su).
+        onUpdateCompanion = {
+            scope.launch {
+                val r = CompanionInstaller.installOrUpdate(this@PaneldService, force = true)
+                Log.i(TAG, "Companion manual update: $r")
+            }
+        },
+        // ha-paneld self-update (off-thread): force=true from the update_paneld button + a pre-release→
+        // stable channel switch; force=false lets isNewer gate (no auto-downgrade off an rc).
+        onSelfUpdate = { force ->
+            scope.launch {
+                val r = SelfUpdater.checkAndUpdate(this@PaneldService, config.updateChannel, force)
+                Log.i(TAG, "self-update (force=$force): $r")
+            }
+        },
     )
 
     /**
@@ -193,6 +219,7 @@ class PaneldService : Service() {
             mqtt.start()
             // Re-read the log sink (host/port/protocol/enabled); restarts only if it changed.
             runCatching { logShipper.reconfigure() }
+            runCatching { power.apply(config.keepAwake) }   // apply a keep_awake toggle live
             io.github.maxlyth.hapaneld.http.PerfReader.dashboardPkg = dashboardTarget()
             Log.i(TAG, "reconfigured: panel=${config.panelId} broker=${config.mqttBroker.ifEmpty { "(disabled)" }}")
         }
@@ -243,8 +270,8 @@ class PaneldService : Service() {
             "Relays" to relay.count().let { if (it > 0) it.toString() else "none" },
             "CPU profile" to (cpu.currentTier() ?: "n/a"),
             "Network ADB" to when {
-                adb.isPersisted() -> "persistent (5555) · survives reboot"
-                adb.isActive() -> "active (5555) · not persistent (off after reboot)"
+                adb.isPersisted() -> "persistent (5555) · re-asserted by ha-paneld at boot"
+                adb.isActive() -> "active (5555) · external — not persisted by ha-paneld"
                 else -> "off"
             },
             "Log shipping" to logShipper.statusText(),
@@ -304,6 +331,9 @@ class PaneldService : Service() {
         // double-start mqtt/mdns/sensors). started is reset in onDestroy so a genuine restart re-inits.
         if (started) return START_STICKY
         started = true
+        // Keep the SoC + network awake (screen still free to sleep) so Doze/suspend can't freeze the
+        // MQTT reactor + keepalive into a half-open, unreachable connection. On by default; see keep_awake.
+        runCatching { power.apply(config.keepAwake) }
         scope.launch {
             io.github.maxlyth.hapaneld.http.PerfReader.dashboardPkg = dashboardTarget()
             io.github.maxlyth.hapaneld.http.PerfReader.enabled = config.instrumentationEnabled
@@ -318,6 +348,9 @@ class PaneldService : Service() {
             navbar.apply(config.navbarMode)
             // Start the app watchdog if enabled (off by default; self-heals a dead/abandoned dashboard).
             watchdog.apply(config.watchdogEnabled)
+            // Boot re-assert of network adb — some firmwares strip persist.adb.tcp.port at boot, so
+            // re-apply it when ha-paneld is persisting it (no-op otherwise). See AdbController.reassert.
+            runCatching { adb.reassert() }
             sensors.start(
                 onLux = { lux -> mqtt.publishLight(lux) },
                 onLuxRaw = { lux -> autoBright.submitLux(lux) },
@@ -336,12 +369,111 @@ class PaneldService : Service() {
             launch {
                 delay(30_000L)  // let startup settle before hitting the network
                 while (isActive) {
-                    runCatching { UpdateChecker.check(this@PaneldService) }
+                    runCatching { UpdateChecker.check(this@PaneldService, config.updateChannel) }
+                    // Companion self-heal: when enabled, install a missing Companion / update an out-of-date one.
+                    if (config.companionAutoUpdate) {
+                        runCatching {
+                            val r = CompanionInstaller.installOrUpdate(this@PaneldService)
+                            Log.i(TAG, "Companion auto: $r")
+                        }
+                    }
+                    // ha-paneld self-update LAST — a successful install restarts this process (and this loop).
+                    if (config.selfUpdate) {
+                        runCatching {
+                            val r = SelfUpdater.checkAndUpdate(this@PaneldService, config.updateChannel)
+                            Log.i(TAG, "self-update auto: $r")
+                        }
+                    }
                     delay(24 * 3_600 * 1_000L)
                 }
             }
+            startMqttWatchdog()
+            // Never-blank-screen watchdog. A screen-off kills the backlight but leaves the device
+            // interactive, and nothing re-lights it — so a stray/stale screen-off (e.g. the retained-command
+            // strand) or a firmware idle-dim can leave the panel dark and apparently bricked. If the screen
+            // is dark but ha-paneld did NOT deliberately turn it off, re-light it; a user-intended
+            // "screen off" (isIntendedOff) is left alone.
+            launch {
+                delay(15_000L) // let boot settle before the first check
+                while (isActive) {
+                    runCatching {
+                        if (!screen.isIntendedOff() && screen.looksDark()) {
+                            Log.w(TAG, "screen dark with no intent — re-lighting (never-blank guard)")
+                            screen.wake()
+                            mqtt.publishScreenOn()
+                        }
+                    }
+                    delay(SCREEN_WATCHDOG_MS)
+                }
+            }
         }
+        registerNetworkCallback()
         return START_STICKY
+    }
+
+    /**
+     * MQTT reconnect watchdog on a DEDICATED thread — deliberately NOT a coroutine on Dispatchers.IO.
+     * On a panel with slow/contended `su` (toolbox su under load), blocking su calls exhaust the IO
+     * thread pool, so a coroutine watchdog's post-delay continuation never gets scheduled and it silently
+     * stops ticking (observed on kitchen 2026-07-01: MQTT connected but zero watchdog ticks, so a
+     * half-open connection never self-healed). A plain thread ticks regardless of dispatcher pressure.
+     *
+     * Two stall modes, both healed by a full client rebuild:
+     *   (1) STATE-stuck — HiveMQ's auto-reconnect stalls (transient auth reject on an HA/broker restart,
+     *       or its reconnect thread is power-management-deferred); rebuild after 2 non-connected checks.
+     *   (2) LIVENESS-stale — the broker dropped the link but HiveMQ never noticed the half-open
+     *       (CLOSE-WAIT) socket, so it still reports "connected" while publishing into the void.
+     *       isConnected() lies, so key on TRUE liveness: each tick send a heartbeat (a QoS-1 publish the
+     *       broker must ACK) and, if nothing has been ACKed for MQTT_STALE_MS, force a rebuild.
+     */
+    private fun startMqttWatchdog() {
+        if (mqttWatchdogAlive) return
+        mqttWatchdogAlive = true
+        Thread {
+            var staleTicks = 0
+            while (mqttWatchdogAlive) {
+                try { Thread.sleep(MQTT_WATCHDOG_MS) } catch (e: InterruptedException) { break }
+                if (!mqttWatchdogAlive) break
+                runCatching { mqtt.heartbeat() }   // exercise the socket so liveness is measurable
+                val sinceOk = mqtt.msSinceLastOk()
+                Log.i(TAG, "mqtt watchdog tick: state=${mqtt.state} sinceOk=${sinceOk}ms")
+                val livenessStale = mqtt.state != "disabled" && mqtt.lastOkMs != 0L && sinceOk > MQTT_STALE_MS
+                when {
+                    livenessStale -> {
+                        Log.w(TAG, "MQTT liveness stale (${sinceOk}ms, state=${mqtt.state}) — forcing reconnect")
+                        runCatching { mqtt.reconnect() }
+                        staleTicks = 0
+                    }
+                    mqtt.state == "connected" || mqtt.state == "disabled" -> staleTicks = 0
+                    else -> {
+                        staleTicks++
+                        if (staleTicks >= 2) {
+                            Log.w(TAG, "MQTT stuck (${mqtt.state}) — forcing reconnect")
+                            runCatching { mqtt.reconnect() }
+                            staleTicks = 0
+                        }
+                    }
+                }
+            }
+        }.apply { isDaemon = true; name = "mqtt-watchdog" }.start()
+    }
+
+    /**
+     * Nudge MQTT to reconnect the moment the default network returns (Wi-Fi / router flap), instead of
+     * waiting out the auto-reconnect backoff. Best-effort: no-op if MQTT is already connected or disabled.
+     */
+    private fun registerNetworkCallback() {
+        if (netCallback != null) return
+        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return
+        val cb = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                if (mqtt.state != "connected" && mqtt.state != "disabled") {
+                    Log.i(TAG, "network available — nudging MQTT reconnect")
+                    Thread { runCatching { mqtt.reconnect() } }.start()
+                }
+            }
+        }
+        runCatching { cm.registerDefaultNetworkCallback(cb) }.onSuccess { netCallback = cb }
     }
 
     private fun startForegroundCompat() {
@@ -371,6 +503,12 @@ class PaneldService : Service() {
 
     override fun onDestroy() {
         started = false
+        netCallback?.let { cb ->
+            runCatching { (getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager)?.unregisterNetworkCallback(cb) }
+            netCallback = null
+        }
+        mqttWatchdogAlive = false            // stop the dedicated watchdog thread
+        runCatching { power.apply(false) }   // release the wakelock so we don't leak it on teardown
         runCatching { navbar.cleanup() }
         runCatching { watchdog.stop() }
         runCatching { sensors.stop() }
@@ -388,6 +526,13 @@ class PaneldService : Service() {
         private const val TAG = "ha-paneld/svc"
         private const val CHANNEL_ID = "ha-paneld"
         private const val NOTIF_ID = 1
+        // MQTT reconnect-watchdog poll interval; a stuck bridge self-heals after ~2 of these.
+        private const val MQTT_WATCHDOG_MS = 60_000L
+        // No broker-ACKed publish for this long (with a heartbeat sent every tick) ⇒ the link is dead
+        // even if HiveMQ still claims "connected" (half-open socket) ⇒ force a rebuild. ~2.5 missed ticks.
+        private const val MQTT_STALE_MS = 150_000L
+        // Never-blank-screen watchdog poll interval; re-lights an unintentionally-dark panel within one tick.
+        private const val SCREEN_WATCHDOG_MS = 60_000L
 
         fun start(context: Context) {
             val intent = Intent(context, PaneldService::class.java)

@@ -1,6 +1,7 @@
 package io.github.maxlyth.hapaneld
 
 import android.os.Build
+import android.os.SystemClock
 import android.util.Log
 import com.hivemq.client.mqtt.MqttClient
 import com.hivemq.client.mqtt.datatypes.MqttQos
@@ -87,6 +88,12 @@ class MqttBridge(
     // HA's advertised base URL (scheme+host+port) from zeroconf TXT — for the "Open in HA" device link,
     // so we never guess a port/scheme. Null if HA isn't found / advertises no URL.
     private val discoverHaUrl: () -> String? = { null },
+    // Trigger an HA Companion app install/update. Injected by the service (needs Context + a
+    // coroutine); runs off the MQTT thread. Fired by the update_companion button.
+    private val onUpdateCompanion: () -> Unit = {},
+    // Trigger a ha-paneld self-update on the configured channel. force=true installs the channel's newest
+    // regardless of the version check (the update_paneld button + a pre-release→stable channel switch).
+    private val onSelfUpdate: (force: Boolean) -> Unit = {},
 ) {
     private var client: Mqtt5AsyncClient? = null
 
@@ -101,6 +108,20 @@ class MqttBridge(
 
     fun isConnected(): Boolean = state == "connected"
 
+    /** Monotonic timestamp (elapsedRealtime) of the last publish that the broker actually ACKed, plus
+     *  every (re)connect. This is a TRUE liveness signal — unlike [state]/[isConnected], which reflect
+     *  only HiveMQ's own connect/disconnect callbacks and stay "connected" on a half-open (CLOSE-WAIT)
+     *  socket the broker already dropped. The service watchdog reconnects when this goes stale. 0 until
+     *  the first successful connect. */
+    @Volatile var lastOkMs: Long = 0L
+        private set
+
+    private fun markOk() { lastOkMs = SystemClock.elapsedRealtime() }
+
+    /** Milliseconds since the last broker-ACKed activity, or 0 if never connected (so a not-yet-started
+     *  bridge never looks "stale" to the watchdog — the state-based check covers startup). */
+    fun msSinceLastOk(): Long = if (lastOkMs == 0L) 0L else SystemClock.elapsedRealtime() - lastOkMs
+
     private val panel = config.panelId
     private val availabilityTopic = "ha-paneld/$panel/availability"
     private val cmdScreen = "ha-paneld/$panel/screen/set"
@@ -108,6 +129,8 @@ class MqttBridge(
     private val cmdNavigate = "ha-paneld/$panel/navigate/set"
     private val cmdVolume = "ha-paneld/$panel/volume/set"
     private val cmdReload = "ha-paneld/$panel/reload/set"
+    private val cmdHomeDashboard = "ha-paneld/$panel/home_dashboard/set"
+    private val stateHomeDashboard = "ha-paneld/$panel/home_dashboard/state"
     private val cmdReboot = "ha-paneld/$panel/reboot/set"
     private val cmdLauncher = "ha-paneld/$panel/launcher/set"
     private val cmdHome = "ha-paneld/$panel/home/set"
@@ -124,6 +147,14 @@ class MqttBridge(
     private val stateTouchSound = "ha-paneld/$panel/touch_sound/state"
     private val cmdWatchdog = "ha-paneld/$panel/watchdog/set"
     private val stateWatchdog = "ha-paneld/$panel/watchdog/state"
+    private val cmdUpdateCompanion = "ha-paneld/$panel/update_companion/set"
+    private val cmdCompanionAuto = "ha-paneld/$panel/companion_auto_update/set"
+    private val stateCompanionAuto = "ha-paneld/$panel/companion_auto_update/state"
+    private val cmdUpdatePaneld = "ha-paneld/$panel/update_paneld/set"
+    private val cmdSelfUpdate = "ha-paneld/$panel/self_update/set"
+    private val stateSelfUpdate = "ha-paneld/$panel/self_update/state"
+    private val cmdUpdateChannel = "ha-paneld/$panel/update_channel/set"
+    private val stateUpdateChannel = "ha-paneld/$panel/update_channel/state"
     private val cmdSilenceBootChime = "ha-paneld/$panel/silence_boot_chime/set"
     private val stateSilenceBootChime = "ha-paneld/$panel/silence_boot_chime/state"
     private val cmdPreventIdleDim = "ha-paneld/$panel/prevent_idle_dim/set"
@@ -150,6 +181,7 @@ class MqttBridge(
     private val cmdAmbientLux = "ha-paneld/$panel/ambient_lux/set"
     private val stateAmbientLux = "ha-paneld/$panel/ambient_lux/state"
 
+    @Synchronized
     fun start() {
         var broker = config.mqttBroker.trim()
         if (broker.isEmpty()) {
@@ -196,7 +228,13 @@ class MqttBridge(
             client = c
             ButtonBus.listener = { event -> publishButton(event) }
 
-            val connect = c.connectWith().willPublish()
+            val connect = c.connectWith()
+                // Explicit keepalive: send a PINGREQ every KEEPALIVE_SEC of idle so a dead link is
+                // detected (missed PINGRESP → HiveMQ auto-reconnect) instead of lingering half-open,
+                // and the broker fires our LWT sooner so HA marks the panel unavailable rather than
+                // showing stale data. Default (60s) left it too slow / suspend-frozen.
+                .keepAlive(KEEPALIVE_SEC)
+                .willPublish()
                 .topic(availabilityTopic)
                 .payload("offline".toByteArray())
                 .qos(MqttQos.AT_LEAST_ONCE)
@@ -215,22 +253,66 @@ class MqttBridge(
         }
     }
 
+    /**
+     * Force a fresh connection attempt, disposing any existing client first. Called by the service-level
+     * reconnect watchdog and the connectivity-regained callback when HiveMQ's built-in auto-reconnect has
+     * stalled — e.g. after a transient `NOT_AUTHORIZED` during an HA/broker restart (broker back up before
+     * its auth backend is ready), or when the reconnect thread is deferred by Android power management.
+     * Unlike [stop] it does NOT publish a retained "offline" — the availability LWT already covered the
+     * drop and we're trying to come back, so we must not flap HA to offline on every retry.
+     */
+    @Synchronized
+    fun reconnect() {
+        if (state == "disabled") return // no broker configured/discovered — nothing to reconnect to
+        runCatching { client?.disconnect() } // tears down the old client + its auto-reconnect + socket
+        client = null
+        start()
+    }
+
     /** Runs on every (re)connect: (re)subscribe to commands and (re)publish discovery + online. */
     private fun onConnected() {
         val c = client ?: return
         state = "connected"
+        markOk()   // reset the liveness clock; the subscribe/discovery publishes below keep it fresh
         PanelStatus.mqttConnected = true
         c.subscribeWith()
             .topicFilter("ha-paneld/$panel/+/set")
             .qos(MqttQos.AT_LEAST_ONCE)
             .callback { publish -> onCommand(publish) }
             .send()
+        // Re-announce discovery when HA (re)starts — its birth message on homeassistant/status. With
+        // non-retained discovery this is what rebuilds our entities after an HA restart. (payload may be
+        // "online"/"offline"; act only on online. The retained "online" delivered on subscribe just
+        // re-runs the announce we do below — harmless.)
+        c.subscribeWith()
+            .topicFilter("homeassistant/status")
+            .qos(MqttQos.AT_LEAST_ONCE)
+            .callback { p -> if (String(p.payloadAsBytes).trim().equals("online", ignoreCase = true)) reAnnounce() }
+            .send()
         publishDiscovery(c)
+        // On an upgrade (running version differs from the one that last announced), actively clear any
+        // entity a prior version published but this one no longer does — so a refactored-away entity is
+        // removed from HA, not left as a zombie. Runs once per upgrade; publishDiscovery above populated
+        // publishedConfigTopics for the current set.
+        if (config.lastDiscoveryVersion != Config.VERSION) {
+            pruneStaleDiscovery(c)
+            config.setLastDiscoveryVersion(Config.VERSION)
+        }
         publish(c, availabilityTopic, "online", retain = true)
         restoreAndPublishStates(c)
         reconcileZigbeeOnConnect(c) // boot-restore: start the gateway if left ON and nothing else has
+        Thread { runCatching { adb.reassert() } }.start() // re-assert network-adb if ha-paneld persists it (firmware may strip the prop)
         maybeResolveHaLink() // best-effort "Open in HA" link via the MQTT creds; off-thread, silent on failure
         Log.i(TAG, "MQTT connected — (re)subscribed + discovery for $panel")
+    }
+
+    /** Re-publish discovery + current states — on HA's `online` birth (non-retained discovery must be
+     *  re-sent when HA restarts). No-op if not connected. */
+    private fun reAnnounce() {
+        val c = client ?: return
+        publishDiscovery(c)
+        restoreAndPublishStates(c)
+        Log.i(TAG, "HA online — re-announced discovery for $panel")
     }
 
     /**
@@ -292,6 +374,14 @@ class MqttBridge(
     private fun onCommand(publish: Mqtt5Publish) {
         val topic = publish.topic.toString()
         val payload = String(publish.payloadAsBytes)
+        // NEVER act on a RETAINED command. Command topics are fire-and-forget; a retained payload is
+        // always stale — e.g. a broker- or automation-retained screen-off replayed on every (re)subscribe,
+        // which is exactly what stranded a panel dark after a reconnect. Our own state/discovery stays
+        // retained; inbound commands must be fresh.
+        if (publish.isRetain) {
+            Log.w(TAG, "ignoring RETAINED command on $topic (stale — not acted): $payload")
+            return
+        }
         try {
             // Relay + button-LED topics are dynamic (relay1/…, button_led1/…) — match before the fixed set.
             if (topic.startsWith("ha-paneld/$panel/relay") && topic.endsWith("/set")) {
@@ -307,7 +397,8 @@ class MqttBridge(
                 cmdLed -> handleLed(payload)
                 cmdNavigate -> handleNavigate(payload)
                 cmdVolume -> handleVolume(payload)
-                cmdReload -> system.reloadDashboard(config.dashboardPackage)
+                cmdReload -> handleReload()
+                cmdHomeDashboard -> handleHomeDashboard(payload)
                 cmdReboot -> system.reboot()
                 cmdLauncher -> system.launchLauncher(config.launcherPackage)
                 cmdHome -> system.launchHome(config.dashboardPackage)
@@ -319,6 +410,11 @@ class MqttBridge(
                 cmdWakeOnWave -> handleWakeOnWave(payload)
                 cmdTouchSound -> handleTouchSound(payload)
                 cmdWatchdog -> handleWatchdog(payload)
+                cmdUpdateCompanion -> onUpdateCompanion() // install/update the Companion; runs off-thread in the service
+                cmdCompanionAuto -> handleCompanionAuto(payload)
+                cmdUpdatePaneld -> onSelfUpdate(true)      // force self-update to the channel's newest (off-thread)
+                cmdSelfUpdate -> handleSelfUpdate(payload)
+                cmdUpdateChannel -> handleUpdateChannel(payload)
                 cmdSilenceBootChime -> handleSilenceBootChime(payload)
                 cmdPreventIdleDim -> handlePreventIdleDim(payload)
                 cmdZigbee -> handleZigbee(payload)
@@ -415,6 +511,32 @@ class MqttBridge(
         watchdog.apply(on)
         client?.let { publish(it, stateWatchdog, if (on) "ON" else "OFF", retain = true) }
     }
+
+    private fun handleCompanionAuto(payload: String) {
+        val on = payload.trim().equals("ON", ignoreCase = true)
+        config.setCompanionAutoUpdate(on)
+        client?.let { publish(it, stateCompanionAuto, if (on) "ON" else "OFF", retain = true) }
+    }
+
+    private fun handleSelfUpdate(payload: String) {
+        val on = payload.trim().equals("ON", ignoreCase = true)
+        config.setSelfUpdate(on)
+        client?.let { publish(it, stateSelfUpdate, if (on) "ON" else "OFF", retain = true) }
+    }
+
+    private fun handleUpdateChannel(payload: String) {
+        val was = config.updateChannel
+        config.setUpdateChannel(payload.trim().trim('"'))
+        val now = config.updateChannel
+        client?.let { publish(it, stateUpdateChannel, updateChannelLabel(), retain = true) }
+        // Apply the new channel now (when self-update is on). Switching pre-release → stable FORCES the
+        // move onto stable even if that's a downgrade off the current rc (the deliberate exception to the
+        // no-auto-downgrade rule); any other switch just takes the new channel's newest if it's newer.
+        if (config.selfUpdate && now != was) onSelfUpdate(was == "prerelease" && now == "stable")
+    }
+
+    // HA select uses the capitalised labels; Config stores "stable"/"prerelease".
+    private fun updateChannelLabel(): String = if (config.updateChannel == "prerelease") "Pre-release" else "Stable"
 
     private fun handleSilenceBootChime(payload: String) {
         val on = payload.trim().equals("ON", ignoreCase = true)
@@ -542,6 +664,29 @@ class MqttBridge(
         client?.let { publish(it, stateNavbar, navbar.mode, retain = true) }
     }
 
+    private fun handleHomeDashboard(payload: String) {
+        val path = toLocalPath(payload) // normalise to a leading-slash local path (or "" to clear)
+        config.setHomeDashboard(if (path == "/") "" else path)
+        client?.let { publish(it, stateHomeDashboard, config.homeDashboard, retain = true) }
+    }
+
+    // Reload: keep the hard restart (the right recovery for a wedged WebView), but if a per-panel home
+    // dashboard is set, deep-link back to it once the frontend has cold-started — so reload lands on THIS
+    // panel's dashboard, not the Companion's user-default. The delayed nav runs off the MQTT thread.
+    private fun handleReload() {
+        system.reloadDashboard(config.dashboardPackage)
+        val home = toLocalPath(config.homeDashboard)
+        if (config.homeDashboard.isNotBlank() && home.isNotEmpty() && home != "/") {
+            Thread {
+                Thread.sleep(RELOAD_NAV_DELAY_MS)
+                navigate.navigate("homeassistant://navigate$home")
+                config.lastNavigate = home
+                client?.let { publish(it, stateNavigate, home, retain = true) }
+                Log.i(TAG, "reload -> re-navigated to intended dashboard $home")
+            }.start()
+        }
+    }
+
     private fun handleNavigate(payload: String) {
         // Local navigation only: strip any scheme + host so an external URL can't be pushed (the HA
         // Companion opens a disorienting in-app WebView for those). We keep just the path and drive the
@@ -586,8 +731,11 @@ class MqttBridge(
         client?.let { publish(it, eventButton, """{"event_type":"$event"}""") }
     }
 
+    // Sensor readings are NOT retained: a fresh sample arrives shortly, so retaining only adds broker
+    // clutter + a brief stale value on reconnect. (Occupancy/proximity IS retained — it has no periodic
+    // sample between transitions, so the last state must survive a reconnect. Stateful controls too.)
     fun publishLight(lux: Int) {
-        client?.let { publish(it, stateIlluminance, lux.toString(), retain = true) }
+        client?.let { publish(it, stateIlluminance, lux.toString(), retain = false) }
     }
 
     fun publishProximity(near: Boolean) {
@@ -596,11 +744,11 @@ class MqttBridge(
 
     // Rounded at publish (1dp temp, integer humidity) so precision wobble can't create recorder rows.
     fun publishTemperature(celsius: Float) {
-        client?.let { publish(it, stateTemperature, String.format(java.util.Locale.US, "%.1f", celsius), retain = true) }
+        client?.let { publish(it, stateTemperature, String.format(java.util.Locale.US, "%.1f", celsius), retain = false) }
     }
 
     fun publishHumidity(percent: Float) {
-        client?.let { publish(it, stateHumidity, Math.round(percent).toString(), retain = true) }
+        client?.let { publish(it, stateHumidity, Math.round(percent).toString(), retain = false) }
     }
 
     /**
@@ -626,6 +774,10 @@ class MqttBridge(
             "ambient_lux" -> handleAmbientLux(value)
             "cpu_governor" -> handleCpuGov(value)
             "navbar_mode" -> handleNavbar(value)
+            "companion_auto_update" -> handleCompanionAuto(onOff)
+            "self_update" -> handleSelfUpdate(onOff)
+            "update_channel" -> handleUpdateChannel(value)
+            "home_dashboard" -> handleHomeDashboard(value)
             else -> return false
         }
         return true
@@ -635,9 +787,11 @@ class MqttBridge(
 
     /**
      * Publish — or, when the user has hidden it via the per-panel "expose to HA" toggle, CLEAR — one
-     * discovery entity. Hiding publishes a retained empty payload to the config topic, which removes
-     * the entity from HA entirely (zero recorder / state-machine cost). [publishState] runs only when
-     * the entity is exposed. This is what makes the HA footprint configurable per panel.
+     * discovery entity. Hiding publishes an empty payload to the config topic, which removes the
+     * entity from HA entirely (zero recorder / state-machine cost); with the 0.8.5 un-retained
+     * discovery model nothing on the broker can resurrect it, and [reAnnounce] re-evaluates this gate
+     * on every HA birth. [publishState] runs only when the entity is exposed. This is what makes the
+     * HA footprint configurable per panel.
      */
     private fun exposable(
         c: Mqtt5AsyncClient,
@@ -686,6 +840,14 @@ class MqttBridge(
             c, "text", "${panel}_navigate",
             """{"name":"Navigate","unique_id":"${panel}_navigate","command_topic":"$cmdNavigate","state_topic":"$stateNavigate","mode":"text","icon":"mdi:monitor-dashboard",$avail,$device}""",
         )
+
+        // Per-panel intended "home" dashboard path (e.g. /lovelace/0) — reload re-navigates here once the
+        // frontend is back up. Empty = keep the Companion default. Config category.
+        publishConfig(
+            c, "text", "${panel}_home_dashboard",
+            """{"name":"Home dashboard","unique_id":"${panel}_home_dashboard","command_topic":"$cmdHomeDashboard","state_topic":"$stateHomeDashboard","mode":"text","icon":"mdi:home-search","entity_category":"config",$avail,$device}""",
+        )
+        publish(c, stateHomeDashboard, config.homeDashboard, retain = true)
 
         // The button event entity surfaces a11y key capture AND daemon-instrumented evdev buttons
         // (e.g. the WF1589T power key), so publish it whenever either source exists.
@@ -763,6 +925,29 @@ class MqttBridge(
         exposable(c, "touch_sound", "switch", "${panel}_touch_sound", {
             """{"name":"Touch sound","unique_id":"${panel}_touch_sound","command_topic":"$cmdTouchSound","state_topic":"$stateTouchSound","icon":"mdi:volume-high","entity_category":"config",$avail,$device}"""
         }) { publish(c, stateTouchSound, if (touchSound.isEnabled()) "ON" else "OFF", retain = true) }
+
+        // HA Companion app auto-update — installs/updates the minimal Companion over root (the
+        // only update path on these no-Play panels). Off by default; the button forces it on demand.
+        exposable(c, "companion_auto_update", "switch", "${panel}_companion_auto_update", {
+            """{"name":"Companion auto-update","unique_id":"${panel}_companion_auto_update","command_topic":"$cmdCompanionAuto","state_topic":"$stateCompanionAuto","icon":"mdi:cellphone-arrow-down","entity_category":"config",$avail,$device}"""
+        }) { publish(c, stateCompanionAuto, if (config.companionAutoUpdate) "ON" else "OFF", retain = true) }
+        publishConfig(
+            c, "button", "${panel}_update_companion",
+            """{"name":"Update Companion app","unique_id":"${panel}_update_companion","command_topic":"$cmdUpdateCompanion","icon":"mdi:home-assistant","entity_category":"config",$avail,$device}""",
+        )
+
+        // ha-paneld self-update — follows the update channel; installs a newer build of itself over root.
+        // Off by default; the update_paneld button forces it on demand.
+        exposable(c, "self_update", "switch", "${panel}_self_update", {
+            """{"name":"Self-update","unique_id":"${panel}_self_update","command_topic":"$cmdSelfUpdate","state_topic":"$stateSelfUpdate","icon":"mdi:package-up","entity_category":"config",$avail,$device}"""
+        }) { publish(c, stateSelfUpdate, if (config.selfUpdate) "ON" else "OFF", retain = true) }
+        exposable(c, "update_channel", "select", "${panel}_update_channel", {
+            """{"name":"Update channel","unique_id":"${panel}_update_channel","command_topic":"$cmdUpdateChannel","state_topic":"$stateUpdateChannel","options":["Stable","Pre-release"],"icon":"mdi:source-branch","entity_category":"config",$avail,$device}"""
+        }) { publish(c, stateUpdateChannel, updateChannelLabel(), retain = true) }
+        publishConfig(
+            c, "button", "${panel}_update_paneld",
+            """{"name":"Update ha-paneld","unique_id":"${panel}_update_paneld","command_topic":"$cmdUpdatePaneld","icon":"mdi:package-up","entity_category":"config",$avail,$device}""",
+        )
 
         exposable(c, "watchdog_enabled", "switch", "${panel}_watchdog", { reg("watchdog_enabled") }) {
             publish(c, stateWatchdog, if (config.watchdogEnabled) "ON" else "OFF", retain = true)
@@ -868,39 +1053,73 @@ class MqttBridge(
     private fun jsonEsc(s: String): String =
         s.replace("\\", "\\\\").replace("\"", "\\\"")
 
+    // Discovery configs are published NON-retained. Entities still rebuild on an HA restart because we
+    // re-announce on HA's `homeassistant/status` = online birth message (+ on our own every connect) —
+    // but a deleted/renamed/decommissioned entity's config no longer lingers retained on the broker to
+    // resurrect it. (State topics + the availability LWT stay retained.)
+    // Every discovery config topic published THIS session — recorded as we publish, so teardown/prune act
+    // on exactly what we announced (no hardcoded drift). Thread-safe: publishConfig runs on the MQTT
+    // thread; prune/clear may run from reconfigure on another thread.
+    private val publishedConfigTopics = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+
     private fun publishConfig(c: Mqtt5AsyncClient, component: String, objectId: String, payload: String) {
-        publish(c, "homeassistant/$component/$objectId/config", payload, retain = true)
+        val topic = "homeassistant/$component/$objectId/config"
+        publishedConfigTopics.add(topic)
+        publish(c, topic, payload, retain = false)
     }
 
     /**
-     * Clear this panel's retained discovery (empty payload per topic) so a panel_id change doesn't
-     * leave an orphan device in HA. Covers every entity we may have published for the current id.
+     * The historical SUPERSET of every entity ha-paneld has ever published for a panel — the tombstone
+     * list. KEEP entities here even after they're removed from [publishDiscovery], so an upgrade can
+     * actively clear a now-refactored-away entity (see [pruneStaleDiscovery]) instead of zombie-ing it.
+     */
+    private fun knownConfigTopics(): List<String> = listOf(
+        "light" to "${panel}_screen", "light" to "${panel}_led",
+        "text" to "${panel}_navigate", "text" to "${panel}_home_dashboard", "event" to "${panel}_button",
+        "button" to "${panel}_back", "button" to "${panel}_recents",
+        "number" to "${panel}_volume", "sensor" to "${panel}_illuminance",
+        "binary_sensor" to "${panel}_proximity",
+        "sensor" to "${panel}_temperature", "sensor" to "${panel}_humidity",
+        "light" to "${panel}_buttons", "switch" to "${panel}_wake_on_wave",
+        "switch" to "${panel}_touch_sound", "switch" to "${panel}_watchdog",
+        "switch" to "${panel}_silence_boot_chime", "switch" to "${panel}_prevent_idle_dim",
+        "switch" to "${panel}_companion_auto_update", "button" to "${panel}_update_companion",
+        "switch" to "${panel}_self_update", "select" to "${panel}_update_channel",
+        "button" to "${panel}_update_paneld",
+        "switch" to "${panel}_zigbee_router",
+        "switch" to "${panel}_auto_brightness", "number" to "${panel}_brightness_bias",
+        "number" to "${panel}_ambient_lux",
+        "switch" to "${panel}_relay1", "switch" to "${panel}_relay2",
+        "switch" to "${panel}_relay3", "switch" to "${panel}_relay4",
+        "light" to "${panel}_button_led1", "light" to "${panel}_button_led2",
+        "light" to "${panel}_button_led3", "light" to "${panel}_button_led4",
+        "select" to "${panel}_cpu_governor", "select" to "${panel}_navbar",
+        "switch" to "${panel}_network_adb",
+        "button" to "${panel}_reload", "button" to "${panel}_reboot",
+        "button" to "${panel}_launcher", "button" to "${panel}_home",
+        "button" to "${panel}_admin_launcher",
+    ).map { (comp, obj) -> "homeassistant/$comp/$obj/config" }
+
+    /**
+     * Clear this panel's discovery (empty retained payload per topic) so a panel_id change doesn't leave
+     * an orphan device in HA. Clears the full known superset for the (old) id.
      */
     fun clearDiscovery() {
         val c = client ?: return
-        val entities = listOf(
-            "light" to "${panel}_screen", "light" to "${panel}_led",
-            "text" to "${panel}_navigate", "event" to "${panel}_button",
-            "button" to "${panel}_back", "button" to "${panel}_recents",
-            "number" to "${panel}_volume", "sensor" to "${panel}_illuminance",
-            "binary_sensor" to "${panel}_proximity",
-            "sensor" to "${panel}_temperature", "sensor" to "${panel}_humidity",
-            "light" to "${panel}_buttons", "switch" to "${panel}_wake_on_wave",
-            "switch" to "${panel}_touch_sound", "switch" to "${panel}_watchdog",
-            "switch" to "${panel}_silence_boot_chime", "switch" to "${panel}_prevent_idle_dim",
-            "switch" to "${panel}_zigbee_router",
-            "switch" to "${panel}_auto_brightness", "number" to "${panel}_brightness_bias",
-            "number" to "${panel}_ambient_lux",
-            "switch" to "${panel}_relay1", "switch" to "${panel}_relay2",
-            "light" to "${panel}_button_led1", "light" to "${panel}_button_led2",
-            "light" to "${panel}_button_led3", "light" to "${panel}_button_led4",
-            "select" to "${panel}_cpu_governor", "select" to "${panel}_navbar",
-            "switch" to "${panel}_network_adb",
-            "button" to "${panel}_reload", "button" to "${panel}_reboot",
-            "button" to "${panel}_launcher", "button" to "${panel}_home",
-            "button" to "${panel}_admin_launcher",
-        )
-        entities.forEach { (comp, obj) -> publish(c, "homeassistant/$comp/$obj/config", "", retain = true) }
+        knownConfigTopics().forEach { publish(c, it, "", retain = true) }
+    }
+
+    /**
+     * Active upgrade migration: clear any KNOWN entity we did NOT publish this session — i.e. one a prior
+     * version announced but this version refactored away (or a now-absent capability) — so it's removed
+     * from HA instead of lingering as a zombie. Called once after an upgrade (version change). Empty
+     * retained payload also clears configs an older, retain=true version left on the broker.
+     */
+    private fun pruneStaleDiscovery(c: Mqtt5AsyncClient) {
+        val published = publishedConfigTopics.toSet()
+        var n = 0
+        knownConfigTopics().forEach { if (it !in published) { publish(c, it, "", retain = true); n++ } }
+        Log.i(TAG, "discovery prune: cleared $n refactored-away/absent entities for $panel")
     }
 
     private fun publish(c: Mqtt5AsyncClient, topic: String, payload: String, retain: Boolean = false) {
@@ -910,8 +1129,25 @@ class MqttBridge(
             .qos(MqttQos.AT_LEAST_ONCE)
             .retain(retain)
             .send()
+            // A QoS-1 publish the broker ACKs is proof the link is truly alive — the liveness signal the
+            // watchdog trusts instead of HiveMQ's self-reported connected state. On a half-open socket the
+            // ACK never comes, so lastOkMs goes stale and the watchdog rebuilds.
+            .whenComplete { _, ex -> if (ex == null) markOk() }
     }
 
+    /**
+     * Liveness probe: publish a monotonic-independent `last_seen` (epoch seconds) so a healthy link keeps
+     * [lastOkMs] fresh even when nothing else is publishing, and a dead half-open link stops ACKing and
+     * goes stale (→ watchdog reconnect). Non-retained (a stale retained heartbeat would be misleading).
+     * No-op when there's no client / broker. Called each watchdog tick from the service.
+     */
+    fun heartbeat() {
+        val c = client ?: return
+        if (state == "disabled") return
+        runCatching { publish(c, "ha-paneld/$panel/last_seen", (System.currentTimeMillis() / 1000).toString()) }
+    }
+
+    @Synchronized
     fun stop() {
         ButtonBus.listener = null
         PanelStatus.mqttConnected = false
@@ -926,5 +1162,11 @@ class MqttBridge(
 
     companion object {
         private const val TAG = "ha-paneld/mqtt"
+        // How long to wait after a reload before deep-linking to the intended dashboard — lets the WebView
+        // cold-start + the HA frontend load so the navigate deeplink isn't swallowed.
+        private const val RELOAD_NAV_DELAY_MS = 8_000L
+        // MQTT keepalive: PINGREQ every this-many idle seconds. Short enough to detect a dead link within
+        // ~1.5× this, well under the service liveness-watchdog's stale threshold.
+        private const val KEEPALIVE_SEC = 30
     }
 }

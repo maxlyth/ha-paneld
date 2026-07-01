@@ -26,7 +26,26 @@ class ScreenController(
     // Last known "on" level, used by the brightness fallback. Survives an off/on cycle.
     @Volatile private var savedLevel = DEFAULT_ON
 
+    // True only between a genuine screen-off and the next wake. The never-blank watchdog uses this to
+    // tell a USER-intended dark screen (leave it) from an unintended one (re-light it) — so a stray/
+    // stale screen-off can never strand the panel dark, but a deliberate "screen off" still stays off.
+    @Volatile private var intendedOff = false
+
     fun isOn(): Boolean = pm.isInteractive
+
+    /** Whether the last screen state ha-paneld set was a deliberate off (vs. never-asked / woken). */
+    fun isIntendedOff(): Boolean = intendedOff
+
+    /** Best-effort: is the backlight actually dark? bl_power 4=off/0=on (root/daemon panels); else the
+     *  brightness-fallback path where 0 == off. Unknown → false (never re-light on a guess). */
+    fun looksDark(): Boolean {
+        val bl = Su.runOutput("d=\$(ls -d /sys/class/backlight/*/ 2>/dev/null|head -1);cat \${d}bl_power 2>/dev/null")?.trim()
+        return when (bl) {
+            "4" -> true
+            "0" -> false
+            else -> brightness.getBrightness() <= 0
+        }
+    }
 
     /** Record an explicit brightness so the fallback off/on restores to it. */
     fun noteLevel(level: Int) {
@@ -34,6 +53,7 @@ class ScreenController(
     }
 
     fun sleep() {
+        intendedOff = true
         if (HelperClient.send("SCREEN OFF") == "OK") {
             Log.d(TAG, "screen -> off (daemon bl_power)")
             return
@@ -50,6 +70,7 @@ class ScreenController(
     }
 
     fun wake() {
+        intendedOff = false
         if (HelperClient.send("SCREEN ON") == "OK") {
             pulseWake()
             Log.d(TAG, "screen -> on (daemon bl_power)")

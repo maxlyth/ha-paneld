@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+#
+# App<->daemon contract cross-check.
+#
+# Verb names are hand-duplicated across the Kotlin clients and the daemon's dispatch table, so a verb
+# added on one side but not the other (or a rename) would drift silently. This asserts every verb the
+# app SENDS to the helper daemon is HANDLED by dispatch.c's COMMANDS table — a mismatch fails CI.
+#
+# Scope: verb NAMES only. Arg formats + reply strings are pinned separately by the daemon's own golden
+# request->reply unit tests (helper/test/unit.c).
+#
+# App send sites covered:
+#   - HelperClient.send / sendBytes / sendLong("VERB …")   (the primary daemon client)
+#   - TameController.privileged("VERB …")                  (STOP/DISABLE/ENABLE/OVERLAY)
+#   - EvdevButtonClient's socket out.write("VERB …")       (WATCH/SUBSCRIBE)
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+APP="$ROOT/app/src/main/kotlin"
+DISPATCH="$ROOT/helper/src/dispatch.c"
+
+daemon=$(grep -oE '\{ +"[A-Z_]+"' "$DISPATCH" | grep -oE '[A-Z_]+' | sort -u)
+
+app_helper=$(grep -rhoE '(HelperClient\.(send|sendBytes|sendLong)|privileged)\("[A-Z_]+' "$APP" | grep -oE '"[A-Z_]+' | tr -d '"')
+app_evdev=$(grep -hoE 'out\.write\("[A-Z_]+' "$APP/io/github/maxlyth/hapaneld/input/EvdevButtonClient.kt" 2>/dev/null | grep -oE '"[A-Z_]+' | tr -d '"' || true)
+app=$(printf '%s\n%s\n' "$app_helper" "$app_evdev" | grep -E '.' | sort -u)
+
+missing=""
+for v in $app; do printf '%s\n' "$daemon" | grep -qx "$v" || missing="$missing $v"; done
+
+if [ -n "$missing" ]; then
+    echo "FAIL: app sends verb(s) the daemon does NOT handle:$missing" >&2
+    echo "  daemon COMMANDS: $(printf '%s ' $daemon)" >&2
+    exit 1
+fi
+echo "app<->daemon contract OK — $(printf '%s\n' "$app" | grep -c .) app verbs, all handled by the daemon"

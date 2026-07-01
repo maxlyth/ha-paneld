@@ -21,6 +21,81 @@ HTTP UI redesign — a declarative settings registry, configurable Home Assistan
 - **Config bundles + revision history** — `GET /api/v1/config/export` (versioned, secrets excluded by default) and a transactional `POST /api/v1/config/import` (migrate → scope/secret filter → validate-all-or-reject → snapshot → apply; `?dry_run=1` previews the diff, `?mode=fleet` applies only portable keys). On-panel revision ring buffer with `GET /api/v1/config/revisions` + restore.
 - **Tabbed web UI** — Dashboard / Configure / Test / Install / Fleet / API. **Configure** is a schema-driven Basic/Advanced form with inline expose pips and bundle backup/restore; **Test** adds an interactive screenshot (View/Control — tap the image to touch the panel) plus on-screen nav actions and a TTS test; **Install** surfaces panel-health warnings + the capabilities matrix. Self-contained, offline, no build step.
 
+## v0.8.5-rc7 - 2026-07-01
+
+### Fixed
+
+- **MQTT reconnect watchdog now runs on a dedicated thread** — on panels with slow/contended root (`su`), blocking calls could exhaust the shared background thread pool and silently stall the watchdog, so a dropped MQTT connection never self-healed. The watchdog is now its own thread, immune to that starvation, so a stuck/half-open connection is always detected and rebuilt.
+
+## v0.8.5-rc6 - 2026-07-01
+
+### Changed
+
+- **ha-paneld self-update now defaults to OFF** — automatic self-update is a supply-chain risk if control of the release repo were ever lost, so it is now strictly opt-in for new installs (the pinned-signer check still guards it when enabled). Turn it on per panel with the **Self-update** switch if you want a panel to track releases automatically.
+
+## v0.8.5-rc5 - 2026-07-01
+
+### Fixed
+
+- **MQTT panels no longer silently stop updating after a broker/network flap** — a broker-side disconnect could leave the panel's socket half-open (CLOSE-WAIT) while the MQTT client still reported itself connected, so it published into a dead link and Home Assistant showed stale values, with the reconnect-watchdog none the wiser. Three layered fixes: ha-paneld now holds a **partial wakelock** so the SoC and network never suspend into that state (screen still sleeps freely; on by default, `keep_awake`); the MQTT connection sets an explicit **30 s keepalive** so a dead link is detected quickly (and Home Assistant is told the panel is unavailable sooner, rather than shown stale); and the reconnect watchdog is now **liveness-based** — it tracks broker-acknowledged publishes and forces a full reconnect when nothing has been acknowledged for a few minutes, even if the client still claims to be connected.
+
+### Changed
+
+- **Helper connection-cap now unit-tested** — the daemon's concurrent-connection limit is covered by tests (boundary + concurrent rejection + a race check); no behaviour change.
+
+## v0.8.5-rc4 - 2026-07-01
+
+### Added
+
+- **ha-paneld self-update (stable / pre-release channels)** — ha-paneld can now update **itself** over root from GitHub releases, following a configurable channel. A **Self-update** switch (on by default on the stable channel) checks on the 24 h cadence; an **Update channel** select picks **Stable** or **Pre-release**; an **Update ha-paneld** button forces it on demand. Uses the same pinned-signer install path as the Companion updater. It never auto-**downgrades** — moving from a running pre-release back to stable waits for the stable channel to catch up, while a forward update (or a stable→pre-release switch) installs immediately.
+
+### Changed
+
+- **MQTT retain rework — no zombie entities across upgrades** — discovery config is now published un-retained and tracked, so when ha-paneld starts a newer version it actively prunes the discovery topics it no longer publishes (version-gated) and re-announces the current set. Entities removed or renamed between versions no longer linger as dead entries in Home Assistant, and deletions stick.
+- **Reload returns to the intended dashboard** — a dashboard reload now navigates back to the configured home dashboard after reloading, instead of leaving the WebView wherever it happened to be.
+- **Network-adb persistence redesign** — the network-adb switch no longer just writes a boot prop and hopes the OS honours it (some firmwares strip it). ha-paneld now re-asserts network-adb at every boot and MQTT reconnect while the switch is on, distinguishes "active (enabled elsewhere)" from "persistent via ha-paneld" in the status, and won't disable adb that another mechanism turned on.
+- **App↔daemon contract cross-check (reliability)** — a CI check now verifies every helper verb the app sends is implemented by the native daemon, so a protocol drift between the Kotlin clients and the helper fails the build instead of silently breaking a control at runtime.
+
+### Docs
+
+- **NSPanel Pro firmware-quirks-by-version table** — consolidated the per-firmware behaviour (stock WebView 107, per-version adb-enable route, v4.0.0 F-Droid bundle, 4.0.12 proximity graded/binary, 4.5.x reboot loops) into one quick-reference table in the hardware docs.
+
+## v0.8.5-rc3 - 2026-07-01
+
+### Changed
+
+- **HA Companion app installer hardened (security)** — the auto-install/update is now gated by a **signer + package allowlist**: the downloaded APK must declare the allowlisted package **and** be signed by the pinned official HA Companion certificate, otherwise it's refused. This closes the fresh-install / MITM vector (Android's same-signer rule only protects *updates*, not first installs). Downgrades remain allowed (`pm install -d`), reserved for future stable/pre-release channel switching.
+
+### Added
+
+- **`/diag` capture time + uptime** — a `[captured]` header line (ISO-8601 timestamp + device uptime) so a pasted diagnostics dump can be correlated with logs/events; the capabilities block stays time-free for regression-diff stability.
+
+## v0.8.5-rc2 - 2026-07-01
+
+### Added
+
+- **HA Companion app auto-install / update** — ha-paneld can now install a missing Companion or update an out-of-date one over root, self-healing the render stack on these no-Play panels (the minimal Companion variant has no Play auto-update, so ha-paneld is the only update path). Fetches the latest **minimal** APK from `home-assistant/android` releases. Opt-in per panel via the new **Companion auto-update** switch (checked on the 24 h update cadence); an **Update Companion app** button forces it on demand. Leaves a Play-managed *full* Companion alone.
+
+### Fixed
+
+- **Never-blank-screen guard** — a stray or stale screen-off (notably a broker- or automation-**retained** screen-off replayed on reconnect) could leave a panel dark and apparently bricked, since a screen-off kills the backlight but nothing re-lit it. ha-paneld now **ignores retained inbound MQTT commands** (commands must be fresh; state/discovery stays retained), tracks whether a screen-off was **deliberate**, and runs a watchdog that re-lights an unintentionally-dark panel within a minute — while leaving a genuine, user-requested screen-off alone.
+
+## v0.8.5-rc1 - 2026-07-01
+
+### Added
+
+- **Central log shipping** — optionally forward each panel's own-process logcat (its own `Log.*` output plus the Ktor/HiveMQ library logs — **no root, no `READ_LOGS`**) to a configurable sink for fleet-wide debugging without per-panel `adb logcat`. Two transports: **syslog** (TCP, RFC5424) or **HTTP** (NDJSON batches). Off by default; set the destination via `POST /config` or `provision.sh --log-host/--log-port/--log-proto`, with live status on the info page + `/diag`. Each line is redacted for tokens / passwords / URL secrets before it leaves the device; LAN-only by intent.
+- **S9E GPIO diagnostic** — `/diag` now reports each gpiochip's base/ngpio/label plus the per-pin export state on Smatek S9E panels, so a missing-button-LED result can be told apart from a gpiochip-base shift.
+
+### Fixed
+
+- **Panels no longer get stuck offline after an HA restart or network flap** — the MQTT bridge relied solely on HiveMQ's built-in auto-reconnect, which could stall after a *transient* auth rejection during an HA/broker restart (the broker returns before its auth backend is ready) or when its reconnect thread was deferred by Android power management, leaving the panel showing "MQTT credentials rejected" and never recovering until a manual config save or app restart. Added a service-level **reconnect watchdog** that forces a fresh connection whenever the bridge stays non-connected, plus a **connectivity-regained callback** that reconnects the instant the network returns.
+- **WebView age check reads the real engine version** — the *"System WebView is too old"* warning now derives the Chromium version from the WebView User-Agent (`Chrome/<v>`) instead of the package `versionName`, which a Cromite / LineageOS SystemWebView deliberately stamps to the OEM stock value to clear a signature-locked provider gate. A panel running a modern engine behind a stamped-old package (e.g. Cromite on the Tuya TPA10) is no longer falsely warned, and the info row now shows the real engine when it differs. The lookup escalates only when the package version looks old, so modern-package panels are unaffected.
+
+### Docs
+
+- README slimmed — reference, build and roadmap material moved into `docs/`.
+
 ## v0.8.4 - 2026-06-29
 
 Highlights since 0.8.3: a hardened privileged helper, the full control surface on sandbox-walled (no-`su`) panels, opt-in vendor-app taming, a dashboard watchdog, an admin launcher, panel-health warnings, and preliminary Shelly Wall Display profiles. (The per-RC sections below detail the path to this release.)

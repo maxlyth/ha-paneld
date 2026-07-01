@@ -29,19 +29,22 @@ object UpdateChecker {
     @Volatile private var lastCheckMs = 0L
 
     /** Check if [staleMs] have elapsed since the last check; if so, run a new one. */
-    suspend fun checkIfStale(context: Context, staleMs: Long = 3_600_000L) {
-        if (System.currentTimeMillis() - lastCheckMs > staleMs) check(context)
+    suspend fun checkIfStale(context: Context, channel: String = "stable", staleMs: Long = 3_600_000L) {
+        if (System.currentTimeMillis() - lastCheckMs > staleMs) check(context, channel)
     }
 
-    /** Unconditional check against the GitHub releases API; updates [available] in place. */
-    suspend fun check(context: Context) = withContext(Dispatchers.IO) {
+    /** Unconditional check against the GitHub releases API; updates [available] in place. The ha-paneld
+     *  entry follows [channel] ("stable" | "prerelease") so the banner matches the self-update target. */
+    suspend fun check(context: Context, channel: String = "stable") = withContext(Dispatchers.IO) {
         lastCheckMs = System.currentTimeMillis()
         val found = mutableListOf<UpdateInfo>()
 
-        fetchLatest("maxlyth/ha-paneld")?.let { (tag, url) ->
-            val latest = tag.removePrefix("v")
+        val paneldLatest = if (channel == "prerelease") SelfUpdater.resolve("prerelease")?.first
+                           else fetchLatest("maxlyth/ha-paneld")?.first?.removePrefix("v")
+        paneldLatest?.let { latest ->
             val current = BuildConfig.VERSION_NAME
-            if (isNewer(latest, current)) found += UpdateInfo("ha-paneld", current, latest, url)
+            if (isNewer(latest, current))
+                found += UpdateInfo("ha-paneld", current, latest, "https://github.com/maxlyth/ha-paneld/releases")
         }
 
         // HA Companion (either full or minimal variant, if installed on this no-Play-Store panel)
@@ -65,7 +68,7 @@ object UpdateChecker {
         available = found
     }
 
-    private fun fetchLatest(repo: String): Pair<String, String>? = runCatching {
+    internal fun fetchLatest(repo: String): Pair<String, String>? = runCatching {
         val conn = URL("https://api.github.com/repos/$repo/releases/latest").openConnection() as HttpURLConnection
         conn.connectTimeout = 8_000
         conn.readTimeout = 8_000
@@ -91,7 +94,16 @@ object UpdateChecker {
             val b = cur.getOrElse(i) { 0 }
             if (a != b) return a > b
         }
-        // Equal numeric version: stable (no suffix) trumps a prerelease (has suffix)
-        return !candidate.contains('-') && current.contains('-')
+        // Equal numeric base — order by the prerelease suffix so the pre-release channel advances (e.g.
+        // rc4 > rc3): a stable (no suffix) beats any prerelease; between prereleases the trailing number
+        // wins; identical suffixes are not newer.
+        val cs = candidate.substringAfter('-', "")
+        val curs = current.substringAfter('-', "")
+        if (cs == curs) return false
+        if (cs.isEmpty()) return true      // candidate stable, current prerelease
+        if (curs.isEmpty()) return false   // candidate prerelease, current stable
+        val cn = Regex("""\d+""").findAll(cs).lastOrNull()?.value?.toIntOrNull() ?: 0
+        val curn = Regex("""\d+""").findAll(curs).lastOrNull()?.value?.toIntOrNull() ?: 0
+        return cn > curn
     }
 }
