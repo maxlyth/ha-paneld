@@ -127,6 +127,15 @@ class MqttBridge(
      *  bridge never looks "stale" to the watchdog — the state-based check covers startup). */
     fun msSinceLastOk(): Long = if (lastOkMs == 0L) 0L else SystemClock.elapsedRealtime() - lastOkMs
 
+    /** Public-paste-safe MQTT status — state + broker-ACKed liveness age + address-family preference,
+     *  deliberately WITHOUT the broker host (the host stays in the info page's "MQTT" row, which /diag
+     *  omits). This is the row a /diag dump needs to answer "is this panel broker-connected?". */
+    fun statusPublic(): String {
+        if (state == "disabled") return "disabled"
+        val age = if (lastOkMs == 0L) "never" else "${msSinceLastOk() / 1000}s ago"
+        return "$state · last-ok $age · prefer ${if (preferIpv4) "IPv4" else "IPv6"}"
+    }
+
     private val panel = config.panelId
     private val availabilityTopic = "ha-paneld/$panel/availability"
     private val cmdScreen = "ha-paneld/$panel/screen/set"
