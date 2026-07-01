@@ -67,7 +67,8 @@
       f.help ? el("small", { text: f.help }) : null,
     ]);
     var ctl = el("div", { class: "fctl" }, [pip(f), control(f)]);
-    return el("div", { class: "frow" + (f.available ? "" : " muted") }, [label, ctl]);
+    // Anchor id so dashboard "edit" icons can deep-link straight to this setting.
+    return el("div", { class: "frow" + (f.available ? "" : " muted"), id: "cfg-" + f.key }, [label, ctl]);
   }
 
   function render() {
@@ -154,6 +155,15 @@
         if (values[f.key] != null && typeof values[f.key] !== "string") values[f.key] = String(values[f.key]);
       });
       render();
+      // Deep-link support: /configure#cfg-<key> scrolls to and flashes the target setting/card.
+      if (location.hash) {
+        var t = document.getElementById(location.hash.slice(1));
+        if (t) {
+          t.scrollIntoView({ block: "center" });
+          t.classList.add("flash");
+          setTimeout(function () { t.classList.remove("flash"); }, 1800);
+        }
+      }
     }).catch(function (e) {
       document.getElementById("cfg-status").textContent = "Could not load settings (" + e + ").";
     });

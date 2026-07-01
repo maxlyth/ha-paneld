@@ -665,7 +665,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
 
 
     /** Proximity tuning card — lives on the Configure tab; driven by /assets/prox.js. */
-    private fun proximityCardHtml(): String = """<div class="card"><h2>Proximity tuning <small id="proxstate"></small></h2>
+    private fun proximityCardHtml(): String = """<div class="card" id="cfg-proximity"><h2>Proximity tuning <small id="proxstate"></small></h2>
 <div id="proxbox" style="display:none">
 <canvas id="proxgauge" width="600" height="46" class="gradedonly" style="height:46px"></canvas>
 <div style="font-size:.85rem;margin-bottom:8px">raw <b id="proxraw" style="color:#4a9eff">–</b>
@@ -686,59 +686,79 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
 <p id="proxhint" class="note"></p>
 </div></div>"""
 
+    /** The pencil that marks a value as CONFIGURABLE (vs a static fact) and deep-links to the exact
+     *  setting/card on the Configure tab (`/configure#<anchor>` scrolls + flashes it). */
+    private fun cfgIcon(anchor: String): String =
+        """ <a class="cfglink" href="/configure#$anchor" title="Edit on the Configure tab" aria-label="Edit">✎</a>"""
+
+    /** One read-only dashboard row for a registry setting: label → current value + the edit pencil.
+     *  Null when the setting doesn't exist on this panel (capability-gated). */
+    private fun settingRowHtml(key: String, live: Map<String, String>, caps: Capabilities): String? {
+        val spec = SettingsRegistry.spec(key) ?: return null
+        if (!spec.availableWhen(caps)) return null
+        val raw = effectiveValue(spec, live)
+        val shown = when {
+            spec.secret -> if (raw.isNotEmpty()) "set" else "—"
+            spec.type == SettingType.BOOL -> if (raw.toBoolean()) "on" else "off"
+            raw.isBlank() -> "—"
+            else -> raw
+        }
+        return """<tr><th>${esc(spec.label)}</th><td>${esc(shown)}${cfgIcon("cfg-$key")}</td></tr>"""
+    }
+
     /**
-     * Read-only "Configuration values" card for the Dashboard: every registry setting available on
-     * this panel (controller-sourced ones read live), plus the live control states HA sees (volume /
-     * navigate / LED / screen brightness) and the tuning summary (density / text size / proximity /
-     * tamed packages). Editing happens on the Configure tab — this keeps the values VISIBLE here.
+     * The read-only dashboard value cards — the settings HA can see/set, distributed by topic
+     * (Behaviour / Display / Updates / Live state) instead of one monolithic table. Every
+     * CONFIGURABLE value carries the ✎ deep-link; live control states are plain (they're driven
+     * from HA/the panel, not the Configure form).
      */
-    private fun configValuesCardHtml(): String {
+    private fun dashboardValueCards(): String {
         val live = liveValues()
         val caps = capabilities()
-        fun row(k: String, v: String) = """<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>"""
-        val settingRows = SettingsRegistry.settable()
-            .filter { it.availableWhen(caps) && !it.transient }
-            .joinToString("\n") { spec ->
-                val raw = effectiveValue(spec, live)
-                val shown = when {
-                    spec.secret -> if (raw.isNotEmpty()) "set" else "—"
-                    spec.type == SettingType.BOOL -> if (raw.toBoolean()) "on" else "off"
-                    raw.isBlank() -> "—"
-                    else -> raw
-                }
-                row(spec.label, shown)
-            }
-        // Live control states (what HA's control entities currently show).
+        fun rows(keys: List<String>) = keys.mapNotNull { settingRowHtml(it, live, caps) }.joinToString("\n")
+        fun card(title: String, body: String, note: String = ""): String =
+            if (body.isBlank()) "" else """<div class="card"><h2>${esc(title)}</h2>$note<table>
+$body
+</table></div>"""
+
+        // Live control states (what HA's control entities currently show) — controls, not config.
         val led = config.lastLed.split(",").mapNotNull { it.toIntOrNull() }
         val ledShown = if (led.size == 5 && led[0] == 1) "on · rgb(${led[2]},${led[3]},${led[4]}) @ ${led[1]}" else "off"
         val brightnessShown = runCatching {
             android.provider.Settings.System.getInt(appContext.contentResolver, android.provider.Settings.System.SCREEN_BRIGHTNESS)
         }.getOrNull()?.toString() ?: "?"
-        val stateRows = listOf(
+        val liveRows = listOf(
             "Screen brightness" to brightnessShown,
             "Volume" to "${volume.getPercent()}%",
             "Navigate" to config.lastNavigate.ifEmpty { "/" },
             "LED" to ledShown,
-        ).joinToString("\n") { (k, v) -> row(k, v) }
-        // Tuning summary (the editable cards live on Configure).
+        ).joinToString("\n") { (k, v) -> """<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>""" }
+
+        val behaviour = rows(
+            listOf(
+                "wake_on_wave", "prevent_idle_dim", "watchdog_enabled", "touch_sound",
+                "silence_boot_chime", "keep_awake", "home_dashboard", "dashboard_package", "launcher_package",
+            ),
+        )
+        // Display & tuning: registry values plus the Configure-card-backed ones (density / text /
+        // proximity / tame), each deep-linking to its card.
         val proxShown = when {
-            !sensors.hasProximity() -> "not present"
+            !sensors.hasProximity() -> null
             config.proximityCalibrated -> "calibrated · threshold ${"%.1f".format(config.proximityThreshold)}"
             else -> "not calibrated"
         }
-        val tuningRows = listOf(
-            "Density" to "${density.current() ?: "?"} dpi (native ${density.native() ?: "?"})",
-            "Text size" to density.fontScale().toString(),
-            "Proximity" to proxShown,
-            "Tamed packages" to config.tameVendorPackagesRaw.ifBlank { "none" },
-        ).joinToString("\n") { (k, v) -> row(k, v) }
-        return """<div class="card"><h2 id="config">Configuration values <small>· read-only</small></h2>
-<p class="note">Everything Home Assistant can see or set, live. Edit on the <a href="/configure" style="color:#9cf">Configure</a> tab.</p>
-<table>
-$stateRows
-$settingRows
-$tuningRows
-</table></div>"""
+        val displayRows = rows(listOf("auto_brightness", "brightness_bias")) + "\n" + listOfNotNull(
+            density.current()?.let { """<tr><th>Density</th><td>$it dpi (native ${density.native() ?: "?"})${cfgIcon("cfg-display")}</td></tr>""" },
+            density.current()?.let { """<tr><th>Text size</th><td>${density.fontScale()}${cfgIcon("cfg-display")}</td></tr>""" },
+            proxShown?.let { """<tr><th>Proximity</th><td>${esc(it)}${cfgIcon("cfg-proximity")}</td></tr>""" },
+            """<tr><th>Tamed packages</th><td>${esc(config.tameVendorPackagesRaw.ifBlank { "none" })}${cfgIcon("cfg-tame")}</td></tr>""",
+        ).joinToString("\n")
+        val updates = rows(listOf("self_update", "update_channel", "companion_auto_update"))
+
+        return card("Live state", liveRows, """<p class="note">What Home Assistant's control entities currently show.</p>""") +
+            card("Behaviour", behaviour) +
+            card("Display & tuning", displayRows) +
+            card("Updates", updates)
     }
 
     private fun infoHtml(): String {
@@ -810,7 +830,10 @@ $tuningRows
                 } else {
                     esc(v)
                 }
-                "<tr><th>${esc(k)}</th><td>$cell</td></tr>"
+                // Facts backed by a setting get the ✎ marker (configurable vs static at a glance),
+                // deep-linking to the exact row on the Configure tab.
+                val edit = FACT_CFG[k]?.let { cfgIcon(it) } ?: ""
+                "<tr><th>${esc(k)}</th><td>$cell$edit</td></tr>"
             }
         fun factCard(title: String, keys: List<String>, note: String = ""): String {
             val r = factRows(keys)
@@ -889,7 +912,7 @@ report of this panel's hardware, firmware, SELinux, su and node probes for bug r
  <button type="button" class="pbtn" onclick="inspStart()">Enable</button>
  <button type="button" class="pbtn" onclick="inspStop()">Stop</button></div>
 <p class="note" id="insthint"></p></div>
-${configValuesCardHtml()}
+${dashboardValueCards()}
 </div>
 <p class="note" style="text-align:center;margin-top:18px"><a href="/api" style="color:#9cf">REST API explorer</a>
  · <a href="/diag" target="_blank" style="color:#9cf">diagnostics</a></p>
@@ -964,7 +987,7 @@ ${configValuesCardHtml()}
         val body = rows.ifBlank {
             """<p class="note">Nothing tamed yet. Press <b>Find a package…</b> to see what's on this panel.</p>"""
         }
-        return """<div class="card"><h2>Vendor packages <small style="color:#d9a528">· experimental</small></h2>
+        return """<div class="card" id="cfg-tame"><h2>Vendor packages <small style="color:#d9a528">· experimental</small></h2>
 <p class="note"><b>Tame</b> force-stops an app, stops it relaunching on boot, and blocks it drawing over the dashboard — applied immediately and on every boot. <b>Re-enable</b> undoes it. Critical system apps are never offered; nothing changes until you press a button.</p>
 $body
 <div style="display:flex;gap:8px;margin-top:12px">
@@ -993,7 +1016,7 @@ fetch('/tame/suggest').then(function(r){return r.text()}).then(function(t){docum
         val fs = density.fontScale()
         val rec = if (recommendedDensity != null || recommendedFontScale != null)
             """ <button type="submit" name="action" value="rec" formnovalidate>HA-optimised</button>""" else ""
-        return """<div class="card"><h2>Display sizing <small style="color:#d9a528">· experimental (R&amp;D)</small></h2>
+        return """<div class="card" id="cfg-display"><h2>Display sizing <small style="color:#d9a528">· experimental (R&amp;D)</small></h2>
 <p class="note"><b>Pre-release / R&amp;D — the right values aren't dialled in yet; experiment at your own
 pace.</b> Match an HA dashboard's size to a desktop browser. <b>Density</b> scales the whole layout
 (lower dpi = more fits); <b>text size</b> scales WebView text. Panel firmware often ships these
@@ -1363,6 +1386,19 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
 
     companion object {
         private const val TAG = "ha-paneld/http"
+
+        // Dashboard fact rows that are BACKED BY A SETTING → the Configure anchor the ✎ marker
+        // deep-links to. Facts absent here are static (hardware/runtime) and get no marker.
+        private val FACT_CFG = mapOf(
+            "panel_id" to "cfg-panel_id",
+            "Friendly name" to "cfg-friendly_name",
+            "MQTT" to "cfg-mqtt_broker",
+            "Navbar" to "cfg-navbar_mode",
+            "Zigbee" to "cfg-zigbee_router",
+            "CPU profile" to "cfg-cpu_governor",
+            "Network ADB" to "cfg-network_adb",
+            "Log shipping" to "cfg-log_ship_enabled",
+        )
         private const val RELEASES_URL = "https://github.com/maxlyth/ha-paneld/releases"
         private const val REPO_URL = "https://github.com/maxlyth/ha-paneld"
         private const val WEBVIEW_DOC = "https://github.com/maxlyth/ha-paneld/blob/main/docs/hardware/README.md#updating-the-system-webview"

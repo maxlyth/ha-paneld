@@ -111,3 +111,11 @@ body.revealed input.secret,input.secret:focus,input.secret.shown{color:#eee;text
 .seg{display:inline-flex;border:1px solid #333;border-radius:8px;overflow:hidden}
 .seg button{background:#1c1c1c;border:0;color:#bbb;padding:6px 16px;cursor:pointer;font:inherit}
 .seg button.on{background:#2557a7;color:#fff}
+
+/* ---- configurable-value marker (Dashboard) + anchor flash (Configure) ---- */
+/* A small pencil after a value marks it CONFIGURABLE (vs a static fact) and deep-links to the
+   exact setting on the Configure tab. Muted until hover so the dashboard stays calm. */
+.cfglink{display:inline-block;margin-left:6px;color:#4a6a8a;text-decoration:none;font-size:.85em;opacity:.55;vertical-align:baseline}
+.cfglink:hover{color:#9cf;opacity:1}
+@keyframes cfgflash{0%{background:#2557a7}100%{background:transparent}}
+.flash{animation:cfgflash 1.6s ease-out;border-radius:8px}
