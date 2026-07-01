@@ -257,6 +257,7 @@ class MqttBridge(
         publish(c, availabilityTopic, "online", retain = true)
         restoreAndPublishStates(c)
         reconcileZigbeeOnConnect(c) // boot-restore: start the gateway if left ON and nothing else has
+        Thread { runCatching { adb.reassert() } }.start() // re-assert network-adb if ha-paneld persists it (firmware may strip the prop)
         maybeResolveHaLink() // best-effort "Open in HA" link via the MQTT creds; off-thread, silent on failure
         Log.i(TAG, "MQTT connected — (re)subscribed + discovery for $panel")
     }

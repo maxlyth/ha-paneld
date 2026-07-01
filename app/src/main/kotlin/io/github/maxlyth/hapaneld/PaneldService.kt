@@ -149,7 +149,7 @@ class PaneldService : Service() {
         zigbee = ZigbeeController(profile)
         relay = RelayController(profile)
         cpu = CpuController(profile)
-        adb = AdbController()
+        adb = AdbController(config)
         configUrl = localIpv4()?.let { "http://$it:${config.httpPort}/" }
 
         mqtt = buildMqtt()
@@ -260,8 +260,8 @@ class PaneldService : Service() {
             "Relays" to relay.count().let { if (it > 0) it.toString() else "none" },
             "CPU profile" to (cpu.currentTier() ?: "n/a"),
             "Network ADB" to when {
-                adb.isPersisted() -> "persistent (5555) · survives reboot"
-                adb.isActive() -> "active (5555) · not persistent (off after reboot)"
+                adb.isPersisted() -> "persistent (5555) · re-asserted by ha-paneld at boot"
+                adb.isActive() -> "active (5555) · external — not persisted by ha-paneld"
                 else -> "off"
             },
             "Log shipping" to logShipper.statusText(),
@@ -335,6 +335,9 @@ class PaneldService : Service() {
             navbar.apply(config.navbarMode)
             // Start the app watchdog if enabled (off by default; self-heals a dead/abandoned dashboard).
             watchdog.apply(config.watchdogEnabled)
+            // Boot re-assert of network adb — some firmwares strip persist.adb.tcp.port at boot, so
+            // re-apply it when ha-paneld is persisting it (no-op otherwise). See AdbController.reassert.
+            runCatching { adb.reassert() }
             sensors.start(
                 onLux = { lux -> mqtt.publishLight(lux) },
                 onLuxRaw = { lux -> autoBright.submitLux(lux) },

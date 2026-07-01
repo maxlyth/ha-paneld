@@ -164,6 +164,14 @@ class Config(context: Context) {
         prefs.edit().putString("update_channel", v).apply()
     }
 
+    // Network-adb persist INTENT (the switch). ha-paneld re-asserts adb-tcp at boot/reconnect when this
+    // is true (some firmwares strip persist.adb.tcp.port at boot), and only tears adb down on OFF if it
+    // was ha-paneld that turned it on — never disabling adb another mechanism started.
+    val networkAdbEnabled: Boolean get() = prefs.getBoolean("network_adb_enabled", false)
+    fun setNetworkAdbEnabled(on: Boolean) {
+        prefs.edit().putBoolean("network_adb_enabled", on).apply()
+    }
+
     // The screen-off timeout (ms) seen before we first raised it, so disabling preventIdleDim can restore
     // the firmware default. -1 = not yet captured.
     var savedScreenOffTimeout: Int
