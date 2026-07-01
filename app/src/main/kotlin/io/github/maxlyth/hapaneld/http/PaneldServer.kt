@@ -302,6 +302,8 @@ class PaneldServer(
                             .filter { it.isNotEmpty() && !TameController.isCritical(it) }.toSet())
                     }
                     p["silence_boot_chime"]?.let { config.setSilenceBootChime(it.trim().equals("true", ignoreCase = true) || it.trim() == "1") }
+                    // Keep-awake (partial wakelock so SoC/network never suspend). Applied live by reconfigure().
+                    p["keep_awake"]?.let { config.setKeepAwake(it.trim().equals("true", ignoreCase = true) || it.trim() == "1") }
                     // Remote log shipping (fleet log → Vector/syslog or HTTP sink). Partial-merge like
                     // the rest: absent keys keep their current value. No browser-form fields (no on-panel
                     // UI by design) — this is the fleet/provision JSON path only.
@@ -808,6 +810,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             "\"launcher_package\":${s(config.launcherPackage)}," +
             "\"tame_vendor_packages\":${s(config.tameVendorPackagesRaw)}," +
             "\"silence_boot_chime\":${config.silenceBootChime}," +
+            "\"keep_awake\":${config.keepAwake}," +
             "\"log_ship_enabled\":${config.logShipEnabled}," +
             "\"log_ship_host\":${s(config.logShipHost)}," +
             "\"log_ship_port\":${config.logShipPort}," +

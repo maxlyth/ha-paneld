@@ -135,6 +135,14 @@ class Config(context: Context) {
         prefs.edit().putBoolean("prevent_idle_dim", on).apply()
     }
 
+    // Hold a partial wakelock so the SoC + network never suspend (screen still free to sleep). ON by
+    // default: a mains wall panel must never Doze into an unreachable state where the MQTT reactor +
+    // keepalive freeze and the broker connection dies half-open. Toggle off only for a battery panel.
+    val keepAwake: Boolean get() = prefs.getBoolean("keep_awake", true)
+    fun setKeepAwake(on: Boolean) {
+        prefs.edit().putBoolean("keep_awake", on).apply()
+    }
+
     // App watchdog: poll the dashboard app and self-heal it — relaunch if its process dies, and return
     // to it if it's been backgrounded too long. Opt-in (off by default): a stock panel never auto-acts.
     val watchdogEnabled: Boolean get() = prefs.getBoolean("watchdog_enabled", false)

@@ -1,6 +1,7 @@
 package io.github.maxlyth.hapaneld
 
 import android.os.Build
+import android.os.SystemClock
 import android.util.Log
 import com.hivemq.client.mqtt.MqttClient
 import com.hivemq.client.mqtt.datatypes.MqttQos
@@ -104,6 +105,20 @@ class MqttBridge(
         private set
 
     fun isConnected(): Boolean = state == "connected"
+
+    /** Monotonic timestamp (elapsedRealtime) of the last publish that the broker actually ACKed, plus
+     *  every (re)connect. This is a TRUE liveness signal — unlike [state]/[isConnected], which reflect
+     *  only HiveMQ's own connect/disconnect callbacks and stay "connected" on a half-open (CLOSE-WAIT)
+     *  socket the broker already dropped. The service watchdog reconnects when this goes stale. 0 until
+     *  the first successful connect. */
+    @Volatile var lastOkMs: Long = 0L
+        private set
+
+    private fun markOk() { lastOkMs = SystemClock.elapsedRealtime() }
+
+    /** Milliseconds since the last broker-ACKed activity, or 0 if never connected (so a not-yet-started
+     *  bridge never looks "stale" to the watchdog — the state-based check covers startup). */
+    fun msSinceLastOk(): Long = if (lastOkMs == 0L) 0L else SystemClock.elapsedRealtime() - lastOkMs
 
     private val panel = config.panelId
     private val availabilityTopic = "ha-paneld/$panel/availability"
@@ -211,7 +226,13 @@ class MqttBridge(
             client = c
             ButtonBus.listener = { event -> publishButton(event) }
 
-            val connect = c.connectWith().willPublish()
+            val connect = c.connectWith()
+                // Explicit keepalive: send a PINGREQ every KEEPALIVE_SEC of idle so a dead link is
+                // detected (missed PINGRESP → HiveMQ auto-reconnect) instead of lingering half-open,
+                // and the broker fires our LWT sooner so HA marks the panel unavailable rather than
+                // showing stale data. Default (60s) left it too slow / suspend-frozen.
+                .keepAlive(KEEPALIVE_SEC)
+                .willPublish()
                 .topic(availabilityTopic)
                 .payload("offline".toByteArray())
                 .qos(MqttQos.AT_LEAST_ONCE)
@@ -250,6 +271,7 @@ class MqttBridge(
     private fun onConnected() {
         val c = client ?: return
         state = "connected"
+        markOk()   // reset the liveness clock; the subscribe/discovery publishes below keep it fresh
         PanelStatus.mqttConnected = true
         c.subscribeWith()
             .topicFilter("ha-paneld/$panel/+/set")
@@ -1073,6 +1095,22 @@ class MqttBridge(
             .qos(MqttQos.AT_LEAST_ONCE)
             .retain(retain)
             .send()
+            // A QoS-1 publish the broker ACKs is proof the link is truly alive — the liveness signal the
+            // watchdog trusts instead of HiveMQ's self-reported connected state. On a half-open socket the
+            // ACK never comes, so lastOkMs goes stale and the watchdog rebuilds.
+            .whenComplete { _, ex -> if (ex == null) markOk() }
+    }
+
+    /**
+     * Liveness probe: publish a monotonic-independent `last_seen` (epoch seconds) so a healthy link keeps
+     * [lastOkMs] fresh even when nothing else is publishing, and a dead half-open link stops ACKing and
+     * goes stale (→ watchdog reconnect). Non-retained (a stale retained heartbeat would be misleading).
+     * No-op when there's no client / broker. Called each watchdog tick from the service.
+     */
+    fun heartbeat() {
+        val c = client ?: return
+        if (state == "disabled") return
+        runCatching { publish(c, "ha-paneld/$panel/last_seen", (System.currentTimeMillis() / 1000).toString()) }
     }
 
     @Synchronized
@@ -1093,5 +1131,8 @@ class MqttBridge(
         // How long to wait after a reload before deep-linking to the intended dashboard — lets the WebView
         // cold-start + the HA frontend load so the navigate deeplink isn't swallowed.
         private const val RELOAD_NAV_DELAY_MS = 8_000L
+        // MQTT keepalive: PINGREQ every this-many idle seconds. Short enough to detect a dead link within
+        // ~1.5× this, well under the service liveness-watchdog's stale threshold.
+        private const val KEEPALIVE_SEC = 30
     }
 }

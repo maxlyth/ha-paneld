@@ -22,6 +22,7 @@ import io.github.maxlyth.hapaneld.control.BootChimeController
 import io.github.maxlyth.hapaneld.control.BrightnessController
 import io.github.maxlyth.hapaneld.control.CpuController
 import io.github.maxlyth.hapaneld.control.NavbarController
+import io.github.maxlyth.hapaneld.control.PowerController
 import io.github.maxlyth.hapaneld.control.NavigateController
 import io.github.maxlyth.hapaneld.control.RelayController
 import io.github.maxlyth.hapaneld.control.ScreenController
@@ -95,6 +96,7 @@ class PaneldService : Service() {
     private lateinit var relay: RelayController
     private lateinit var cpu: CpuController
     private lateinit var adb: AdbController
+    private lateinit var power: PowerController
     private lateinit var profile: DeviceProfile
     private var configUrl: String? = null
     // One-time-start guard for onStartCommand (see there for why). Reset in onDestroy.
@@ -150,6 +152,7 @@ class PaneldService : Service() {
         relay = RelayController(profile)
         cpu = CpuController(profile)
         adb = AdbController(config)
+        power = PowerController(this)
         configUrl = localIpv4()?.let { "http://$it:${config.httpPort}/" }
 
         mqtt = buildMqtt()
@@ -211,6 +214,7 @@ class PaneldService : Service() {
             mqtt.start()
             // Re-read the log sink (host/port/protocol/enabled); restarts only if it changed.
             runCatching { logShipper.reconfigure() }
+            runCatching { power.apply(config.keepAwake) }   // apply a keep_awake toggle live
             io.github.maxlyth.hapaneld.http.PerfReader.dashboardPkg = dashboardTarget()
             Log.i(TAG, "reconfigured: panel=${config.panelId} broker=${config.mqttBroker.ifEmpty { "(disabled)" }}")
         }
@@ -322,6 +326,9 @@ class PaneldService : Service() {
         // double-start mqtt/mdns/sensors). started is reset in onDestroy so a genuine restart re-inits.
         if (started) return START_STICKY
         started = true
+        // Keep the SoC + network awake (screen still free to sleep) so Doze/suspend can't freeze the
+        // MQTT reactor + keepalive into a half-open, unreachable connection. On by default; see keep_awake.
+        runCatching { power.apply(config.keepAwake) }
         scope.launch {
             io.github.maxlyth.hapaneld.http.PerfReader.dashboardPkg = dashboardTarget()
             io.github.maxlyth.hapaneld.http.PerfReader.enabled = config.instrumentationEnabled
@@ -375,17 +382,29 @@ class PaneldService : Service() {
                     delay(24 * 3_600 * 1_000L)
                 }
             }
-            // MQTT reconnect watchdog. HiveMQ's built-in auto-reconnect can stall after a transient auth
-            // rejection during an HA/broker restart (broker back before its auth backend), or when its
-            // reconnect thread is deferred by Android power management — leaving the panel stuck "offline"
-            // in HA until a manual /config save. This forces a fresh connection once the bridge has been
-            // non-connected across two consecutive checks, so a stuck panel self-heals within a few minutes.
+            // MQTT reconnect watchdog. Two independent stall modes, both self-healed by a full rebuild:
+            //   (1) STATE-stuck — HiveMQ's auto-reconnect stalls after a transient auth rejection during an
+            //       HA/broker restart, or its reconnect thread is power-management-deferred, so state sits
+            //       non-connected. Rebuild after 2 consecutive non-connected checks (~2 min).
+            //   (2) LIVENESS-stale (the 2026-07-01 fleet stall) — the broker dropped the link but HiveMQ
+            //       never noticed the half-open (CLOSE-WAIT) socket, so it still reports "connected" while
+            //       publishing into the void. isConnected() lies, so key on TRUE liveness instead: each tick
+            //       send a heartbeat (a QoS-1 publish the broker must ACK); if nothing has been ACKed for
+            //       MQTT_STALE_MS, force a rebuild regardless of what state claims.
             launch {
                 var staleTicks = 0
                 while (isActive) {
                     delay(MQTT_WATCHDOG_MS)
-                    when (mqtt.state) {
-                        "connected", "disabled" -> staleTicks = 0
+                    runCatching { mqtt.heartbeat() }   // exercise the socket so liveness is measurable
+                    val livenessStale = mqtt.state != "disabled" && mqtt.lastOkMs != 0L &&
+                        mqtt.msSinceLastOk() > MQTT_STALE_MS
+                    when {
+                        livenessStale -> {
+                            Log.w(TAG, "MQTT liveness stale (${mqtt.msSinceLastOk()}ms, state=${mqtt.state}) — forcing reconnect")
+                            runCatching { mqtt.reconnect() }
+                            staleTicks = 0
+                        }
+                        mqtt.state == "connected" || mqtt.state == "disabled" -> staleTicks = 0
                         else -> {
                             staleTicks++
                             if (staleTicks >= 2) {
@@ -469,6 +488,7 @@ class PaneldService : Service() {
             runCatching { (getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager)?.unregisterNetworkCallback(cb) }
             netCallback = null
         }
+        runCatching { power.apply(false) }   // release the wakelock so we don't leak it on teardown
         runCatching { navbar.cleanup() }
         runCatching { watchdog.stop() }
         runCatching { sensors.stop() }
@@ -488,6 +508,9 @@ class PaneldService : Service() {
         private const val NOTIF_ID = 1
         // MQTT reconnect-watchdog poll interval; a stuck bridge self-heals after ~2 of these.
         private const val MQTT_WATCHDOG_MS = 60_000L
+        // No broker-ACKed publish for this long (with a heartbeat sent every tick) ⇒ the link is dead
+        // even if HiveMQ still claims "connected" (half-open socket) ⇒ force a rebuild. ~2.5 missed ticks.
+        private const val MQTT_STALE_MS = 150_000L
         // Never-blank-screen watchdog poll interval; re-lights an unintentionally-dark panel within one tick.
         private const val SCREEN_WATCHDOG_MS = 60_000L
 
