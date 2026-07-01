@@ -363,6 +363,24 @@ class PaneldService : Service() {
                     }
                 }
             }
+            // Never-blank-screen watchdog. A screen-off kills the backlight but leaves the device
+            // interactive, and nothing re-lights it — so a stray/stale screen-off (e.g. the retained-command
+            // strand) or a firmware idle-dim can leave the panel dark and apparently bricked. If the screen
+            // is dark but ha-paneld did NOT deliberately turn it off, re-light it; a user-intended
+            // "screen off" (isIntendedOff) is left alone.
+            launch {
+                delay(15_000L) // let boot settle before the first check
+                while (isActive) {
+                    runCatching {
+                        if (!screen.isIntendedOff() && screen.looksDark()) {
+                            Log.w(TAG, "screen dark with no intent — re-lighting (never-blank guard)")
+                            screen.wake()
+                            mqtt.publishScreenOn()
+                        }
+                    }
+                    delay(SCREEN_WATCHDOG_MS)
+                }
+            }
         }
         registerNetworkCallback()
         return START_STICKY
@@ -436,6 +454,8 @@ class PaneldService : Service() {
         private const val NOTIF_ID = 1
         // MQTT reconnect-watchdog poll interval; a stuck bridge self-heals after ~2 of these.
         private const val MQTT_WATCHDOG_MS = 60_000L
+        // Never-blank-screen watchdog poll interval; re-lights an unintentionally-dark panel within one tick.
+        private const val SCREEN_WATCHDOG_MS = 60_000L
 
         fun start(context: Context) {
             val intent = Intent(context, PaneldService::class.java)

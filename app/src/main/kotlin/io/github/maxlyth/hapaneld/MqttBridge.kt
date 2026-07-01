@@ -307,6 +307,14 @@ class MqttBridge(
     private fun onCommand(publish: Mqtt5Publish) {
         val topic = publish.topic.toString()
         val payload = String(publish.payloadAsBytes)
+        // NEVER act on a RETAINED command. Command topics are fire-and-forget; a retained payload is
+        // always stale — e.g. a broker- or automation-retained screen-off replayed on every (re)subscribe,
+        // which is exactly what stranded a panel dark after a reconnect. Our own state/discovery stays
+        // retained; inbound commands must be fresh.
+        if (publish.isRetain) {
+            Log.w(TAG, "ignoring RETAINED command on $topic (stale — not acted): $payload")
+            return
+        }
         try {
             // Relay + button-LED topics are dynamic (relay1/…, button_led1/…) — match before the fixed set.
             if (topic.startsWith("ha-paneld/$panel/relay") && topic.endsWith("/set")) {
