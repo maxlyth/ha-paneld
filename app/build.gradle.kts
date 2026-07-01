@@ -16,7 +16,7 @@ android {
     defaultConfig {
         applicationId = "io.github.maxlyth.hapaneld"
         // minSdk 26: clears the HiveMQ "<26 cannot connect over IoT" bug (#598) and covers
-        // the whole panel fleet (NSPanelPro Android 8.1 = API 27, Hall TPA10 Android 11 = API 30).
+        // the supported panels (NSPanel Pro Android 8.1 = API 27, TPA10 Android 11 = API 30).
         minSdk = 26
         targetSdk = 35
         versionCode = 67
