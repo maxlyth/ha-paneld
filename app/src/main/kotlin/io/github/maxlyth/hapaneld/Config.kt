@@ -153,7 +153,10 @@ class Config(context: Context) {
     // HA Companion app auto-manage: when on, ha-paneld installs the minimal Companion if it's
     // missing and updates it when a newer release exists (root panels; the minimal variant has no Play
     // auto-update, so ha-paneld is the only update path). Default off — installing/updating an app is
-    // invasive; opt in per panel (provision --companion-auto or the MQTT switch).
+    // invasive, AND an upstream Companion release can be incompatible with a panel's old Android (e.g.
+    // 2026.6.5-minimal crash-loops on Android 8.1/PX30 — a missing android.car class — blanking the
+    // dashboard fleet-wide when auto-update was on). Opt in per panel (provision --companion-auto or the
+    // MQTT switch); a per-profile known-good version pin is the planned safer gate.
     val companionAutoUpdate: Boolean get() = prefs.getBoolean("companion_auto_update", false)
     fun setCompanionAutoUpdate(on: Boolean) {
         prefs.edit().putBoolean("companion_auto_update", on).apply()
