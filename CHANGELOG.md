@@ -8,6 +8,16 @@ From **v0.8.0**, entries are grouped under **Added** (new features/entities), **
 changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
 content appear. Earlier releases predate this convention and keep their flat lists.
 
+## v0.8.5-rc2 - 2026-07-01
+
+### Added
+
+- **HA Companion app auto-install / update** — ha-paneld can now install a missing Companion or update an out-of-date one over root, self-healing the render stack on these no-Play panels (the minimal Companion variant has no Play auto-update, so ha-paneld is the only update path). Fetches the latest **minimal** APK from `home-assistant/android` releases. Opt-in per panel via the new **Companion auto-update** switch (checked on the 24 h update cadence); an **Update Companion app** button forces it on demand. Leaves a Play-managed *full* Companion alone.
+
+### Fixed
+
+- **Never-blank-screen guard** — a stray or stale screen-off (notably a broker- or automation-**retained** screen-off replayed on reconnect) could leave a panel dark and apparently bricked, since a screen-off kills the backlight but nothing re-lit it. ha-paneld now **ignores retained inbound MQTT commands** (commands must be fresh; state/discovery stays retained), tracks whether a screen-off was **deliberate**, and runs a watchdog that re-lights an unintentionally-dark panel within a minute — while leaving a genuine, user-requested screen-off alone.
+
 ## v0.8.5-rc1 - 2026-07-01
 
 ### Added
