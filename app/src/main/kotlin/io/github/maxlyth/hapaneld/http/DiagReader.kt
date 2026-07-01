@@ -89,6 +89,9 @@ object DiagReader {
      */
     fun dump(ctx: Context, facts: Map<String, String> = emptyMap()): String = buildString {
         appendLine("ha-paneld diagnostics — ${BuildConfig.VERSION_NAME} (build ${BuildConfig.VERSION_CODE})")
+        // Capture metadata — a normalise-me line for the regression harness: when this dump was taken +
+        // how long the panel has been up (uptime is often more telling than wall-clock on a panel).
+        appendLine("[captured] ${java.time.OffsetDateTime.now()} uptime=${fmtUptime(android.os.SystemClock.elapsedRealtime())}")
         if (facts.isNotEmpty()) {
             appendLine()
             appendLine("[panel]")
@@ -144,6 +147,17 @@ object DiagReader {
     private fun a11yEnabled(ctx: Context): Boolean =
         (Settings.Secure.getString(ctx.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: "")
             .contains(ctx.packageName)
+
+    /** Compact device uptime from elapsed-realtime ms, e.g. "3d2h", "5h12m", "47m", "23s". */
+    private fun fmtUptime(ms: Long): String {
+        val s = ms / 1000; val d = s / 86400; val h = (s % 86400) / 3600; val m = (s % 3600) / 60
+        return when {
+            d > 0 -> "${d}d${h}h"
+            h > 0 -> "${h}h${m}m"
+            m > 0 -> "${m}m"
+            else -> "${s}s"
+        }
+    }
 
     private fun readFile(p: String): String? = runCatching { File(p).readText() }.getOrNull()
 
