@@ -8,6 +8,12 @@ From **v0.8.0**, entries are grouped under **Added** (new features/entities), **
 changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
 content appear. Earlier releases predate this convention and keep their flat lists.
 
+## v0.8.5-rc10 - 2026-07-02
+
+### Fixed
+
+- **ANR under a wedged MQTT connection** — the light/proximity/temperature/humidity sensor callbacks were delivered on the **main thread**, and each fans out to an MQTT publish. A HiveMQ publish can block on an internal monitor while the broker connection is (re)establishing, so a stalled broker plus a live light sensor could hang the UI thread → "ha-paneld isn't responding". Sensor callbacks now run on a dedicated background thread, so a slow/blocked publish can never stall the app. (Surfaced when the whole fleet reconnected to one broker at once after an update.)
+
 ## v0.8.5-rc9 - 2026-07-01
 
 > **⚠ The web UI has been significantly revised in this release — and it is a work in progress.**

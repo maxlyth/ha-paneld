@@ -5,6 +5,8 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.os.Handler
+import android.os.HandlerThread
 import android.util.Log
 import io.github.maxlyth.hapaneld.Config
 import io.github.maxlyth.hapaneld.control.Su
@@ -49,6 +51,8 @@ class SensorReporter(context: Context, private val config: Config) {
     private var lastHumid = Float.NaN
     private var lastHumidAt = 0L
     private var listener: SensorEventListener? = null
+    // Background thread the SensorManager delivers callbacks on (keeps blocking MQTT publishes off main).
+    private var sensorThread: HandlerThread? = null
     private var onProximity: ((Boolean) -> Unit)? = null
     private var onTemp: ((Float) -> Unit)? = null
     private var onHumid: ((Float) -> Unit)? = null
@@ -158,14 +162,23 @@ class SensorReporter(context: Context, private val config: Config) {
                 }
             }
         }
-        lightSensor?.let { sm.registerListener(listener, it, SensorManager.SENSOR_DELAY_NORMAL) }
+        // Deliver sensor callbacks on a DEDICATED background thread, not the main looper. onSensorChanged
+        // fans out to MQTT publishes (publishLight/Proximity/Temperature/Humidity); a HiveMQ publish can
+        // block on an internal monitor while the connection is (re)establishing, so on the main thread a
+        // wedged broker + a live light sensor = a hung UI thread → ANR ("ha-paneld isn't responding").
+        // Off-main, a slow/blocked publish only stalls this thread, never the app. (Same class of fix as
+        // moving Su.run() off the main thread.)
+        val h = HandlerThread("ha-paneld-sensors").also { it.start() }
+        sensorThread = h
+        val handler = Handler(h.looper)
+        lightSensor?.let { sm.registerListener(listener, it, SensorManager.SENSOR_DELAY_NORMAL, handler) }
         // Proximity: poll the raw GPIO over root where the SensorManager sensor never fires (S9E);
         // otherwise register the real SensorManager sensor. UI delay (not NORMAL) keeps wake-on-approach
         // and live UI tuning responsive without meaningful battery cost.
         if (proximityGpio != null) startProximityPoll(proximityGpio)
-        else proximitySensor?.let { sm.registerListener(listener, it, SensorManager.SENSOR_DELAY_UI) }
-        tempSensor?.let { sm.registerListener(listener, it, SensorManager.SENSOR_DELAY_NORMAL) }
-        humiditySensor?.let { sm.registerListener(listener, it, SensorManager.SENSOR_DELAY_NORMAL) }
+        else proximitySensor?.let { sm.registerListener(listener, it, SensorManager.SENSOR_DELAY_UI, handler) }
+        tempSensor?.let { sm.registerListener(listener, it, SensorManager.SENSOR_DELAY_NORMAL, handler) }
+        humiditySensor?.let { sm.registerListener(listener, it, SensorManager.SENSOR_DELAY_NORMAL, handler) }
         Log.i(TAG, "sensors started (light=${hasLight()} proximity=${hasProximity()} temp=${hasTemperature()} humidity=${hasHumidity()})")
     }
 
@@ -257,6 +270,8 @@ class SensorReporter(context: Context, private val config: Config) {
         proxPoller = null
         listener?.let { sm.unregisterListener(it) }
         listener = null
+        sensorThread?.quitSafely()
+        sensorThread = null
         onProximity = null
         onTemp = null
         onHumid = null
