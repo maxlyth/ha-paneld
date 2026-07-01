@@ -256,13 +256,39 @@ class MqttBridge(
             .qos(MqttQos.AT_LEAST_ONCE)
             .callback { publish -> onCommand(publish) }
             .send()
+        // Re-announce discovery when HA (re)starts — its birth message on homeassistant/status. With
+        // non-retained discovery this is what rebuilds our entities after an HA restart. (payload may be
+        // "online"/"offline"; act only on online. The retained "online" delivered on subscribe just
+        // re-runs the announce we do below — harmless.)
+        c.subscribeWith()
+            .topicFilter("homeassistant/status")
+            .qos(MqttQos.AT_LEAST_ONCE)
+            .callback { p -> if (String(p.payloadAsBytes).trim().equals("online", ignoreCase = true)) reAnnounce() }
+            .send()
         publishDiscovery(c)
+        // On an upgrade (running version differs from the one that last announced), actively clear any
+        // entity a prior version published but this one no longer does — so a refactored-away entity is
+        // removed from HA, not left as a zombie. Runs once per upgrade; publishDiscovery above populated
+        // publishedConfigTopics for the current set.
+        if (config.lastDiscoveryVersion != Config.VERSION) {
+            pruneStaleDiscovery(c)
+            config.setLastDiscoveryVersion(Config.VERSION)
+        }
         publish(c, availabilityTopic, "online", retain = true)
         restoreAndPublishStates(c)
         reconcileZigbeeOnConnect(c) // boot-restore: start the gateway if left ON and nothing else has
         Thread { runCatching { adb.reassert() } }.start() // re-assert network-adb if ha-paneld persists it (firmware may strip the prop)
         maybeResolveHaLink() // best-effort "Open in HA" link via the MQTT creds; off-thread, silent on failure
         Log.i(TAG, "MQTT connected — (re)subscribed + discovery for $panel")
+    }
+
+    /** Re-publish discovery + current states — on HA's `online` birth (non-retained discovery must be
+     *  re-sent when HA restarts). No-op if not connected. */
+    private fun reAnnounce() {
+        val c = client ?: return
+        publishDiscovery(c)
+        restoreAndPublishStates(c)
+        Log.i(TAG, "HA online — re-announced discovery for $panel")
     }
 
     /**
@@ -681,8 +707,11 @@ class MqttBridge(
         client?.let { publish(it, eventButton, """{"event_type":"$event"}""") }
     }
 
+    // Sensor readings are NOT retained: a fresh sample arrives shortly, so retaining only adds broker
+    // clutter + a brief stale value on reconnect. (Occupancy/proximity IS retained — it has no periodic
+    // sample between transitions, so the last state must survive a reconnect. Stateful controls too.)
     fun publishLight(lux: Int) {
-        client?.let { publish(it, stateIlluminance, lux.toString(), retain = true) }
+        client?.let { publish(it, stateIlluminance, lux.toString(), retain = false) }
     }
 
     fun publishProximity(near: Boolean) {
@@ -691,11 +720,11 @@ class MqttBridge(
 
     // Rounded at publish (1dp temp, integer humidity) so precision wobble can't create recorder rows.
     fun publishTemperature(celsius: Float) {
-        client?.let { publish(it, stateTemperature, String.format(java.util.Locale.US, "%.1f", celsius), retain = true) }
+        client?.let { publish(it, stateTemperature, String.format(java.util.Locale.US, "%.1f", celsius), retain = false) }
     }
 
     fun publishHumidity(percent: Float) {
-        client?.let { publish(it, stateHumidity, Math.round(percent).toString(), retain = true) }
+        client?.let { publish(it, stateHumidity, Math.round(percent).toString(), retain = false) }
     }
 
     // ---- discovery ----
@@ -968,42 +997,73 @@ class MqttBridge(
     private fun jsonEsc(s: String): String =
         s.replace("\\", "\\\\").replace("\"", "\\\"")
 
+    // Discovery configs are published NON-retained. Entities still rebuild on an HA restart because we
+    // re-announce on HA's `homeassistant/status` = online birth message (+ on our own every connect) —
+    // but a deleted/renamed/decommissioned entity's config no longer lingers retained on the broker to
+    // resurrect it. (State topics + the availability LWT stay retained.)
+    // Every discovery config topic published THIS session — recorded as we publish, so teardown/prune act
+    // on exactly what we announced (no hardcoded drift). Thread-safe: publishConfig runs on the MQTT
+    // thread; prune/clear may run from reconfigure on another thread.
+    private val publishedConfigTopics = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+
     private fun publishConfig(c: Mqtt5AsyncClient, component: String, objectId: String, payload: String) {
-        publish(c, "homeassistant/$component/$objectId/config", payload, retain = true)
+        val topic = "homeassistant/$component/$objectId/config"
+        publishedConfigTopics.add(topic)
+        publish(c, topic, payload, retain = false)
     }
 
     /**
-     * Clear this panel's retained discovery (empty payload per topic) so a panel_id change doesn't
-     * leave an orphan device in HA. Covers every entity we may have published for the current id.
+     * The historical SUPERSET of every entity ha-paneld has ever published for a panel — the tombstone
+     * list. KEEP entities here even after they're removed from [publishDiscovery], so an upgrade can
+     * actively clear a now-refactored-away entity (see [pruneStaleDiscovery]) instead of zombie-ing it.
+     */
+    private fun knownConfigTopics(): List<String> = listOf(
+        "light" to "${panel}_screen", "light" to "${panel}_led",
+        "text" to "${panel}_navigate", "text" to "${panel}_home_dashboard", "event" to "${panel}_button",
+        "button" to "${panel}_back", "button" to "${panel}_recents",
+        "number" to "${panel}_volume", "sensor" to "${panel}_illuminance",
+        "binary_sensor" to "${panel}_proximity",
+        "sensor" to "${panel}_temperature", "sensor" to "${panel}_humidity",
+        "light" to "${panel}_buttons", "switch" to "${panel}_wake_on_wave",
+        "switch" to "${panel}_touch_sound", "switch" to "${panel}_watchdog",
+        "switch" to "${panel}_silence_boot_chime", "switch" to "${panel}_prevent_idle_dim",
+        "switch" to "${panel}_companion_auto_update", "button" to "${panel}_update_companion",
+        "switch" to "${panel}_self_update", "select" to "${panel}_update_channel",
+        "button" to "${panel}_update_paneld",
+        "switch" to "${panel}_zigbee_router",
+        "switch" to "${panel}_auto_brightness", "number" to "${panel}_brightness_bias",
+        "number" to "${panel}_ambient_lux",
+        "switch" to "${panel}_relay1", "switch" to "${panel}_relay2",
+        "switch" to "${panel}_relay3", "switch" to "${panel}_relay4",
+        "light" to "${panel}_button_led1", "light" to "${panel}_button_led2",
+        "light" to "${panel}_button_led3", "light" to "${panel}_button_led4",
+        "select" to "${panel}_cpu_governor", "select" to "${panel}_navbar",
+        "switch" to "${panel}_network_adb",
+        "button" to "${panel}_reload", "button" to "${panel}_reboot",
+        "button" to "${panel}_launcher", "button" to "${panel}_home",
+        "button" to "${panel}_admin_launcher",
+    ).map { (comp, obj) -> "homeassistant/$comp/$obj/config" }
+
+    /**
+     * Clear this panel's discovery (empty retained payload per topic) so a panel_id change doesn't leave
+     * an orphan device in HA. Clears the full known superset for the (old) id.
      */
     fun clearDiscovery() {
         val c = client ?: return
-        val entities = listOf(
-            "light" to "${panel}_screen", "light" to "${panel}_led",
-            "text" to "${panel}_navigate", "text" to "${panel}_home_dashboard", "event" to "${panel}_button",
-            "button" to "${panel}_back", "button" to "${panel}_recents",
-            "number" to "${panel}_volume", "sensor" to "${panel}_illuminance",
-            "binary_sensor" to "${panel}_proximity",
-            "sensor" to "${panel}_temperature", "sensor" to "${panel}_humidity",
-            "light" to "${panel}_buttons", "switch" to "${panel}_wake_on_wave",
-            "switch" to "${panel}_touch_sound", "switch" to "${panel}_watchdog",
-            "switch" to "${panel}_silence_boot_chime", "switch" to "${panel}_prevent_idle_dim",
-            "switch" to "${panel}_companion_auto_update", "button" to "${panel}_update_companion",
-            "switch" to "${panel}_self_update", "select" to "${panel}_update_channel",
-            "button" to "${panel}_update_paneld",
-            "switch" to "${panel}_zigbee_router",
-            "switch" to "${panel}_auto_brightness", "number" to "${panel}_brightness_bias",
-            "number" to "${panel}_ambient_lux",
-            "switch" to "${panel}_relay1", "switch" to "${panel}_relay2",
-            "light" to "${panel}_button_led1", "light" to "${panel}_button_led2",
-            "light" to "${panel}_button_led3", "light" to "${panel}_button_led4",
-            "select" to "${panel}_cpu_governor", "select" to "${panel}_navbar",
-            "switch" to "${panel}_network_adb",
-            "button" to "${panel}_reload", "button" to "${panel}_reboot",
-            "button" to "${panel}_launcher", "button" to "${panel}_home",
-            "button" to "${panel}_admin_launcher",
-        )
-        entities.forEach { (comp, obj) -> publish(c, "homeassistant/$comp/$obj/config", "", retain = true) }
+        knownConfigTopics().forEach { publish(c, it, "", retain = true) }
+    }
+
+    /**
+     * Active upgrade migration: clear any KNOWN entity we did NOT publish this session — i.e. one a prior
+     * version announced but this version refactored away (or a now-absent capability) — so it's removed
+     * from HA instead of lingering as a zombie. Called once after an upgrade (version change). Empty
+     * retained payload also clears configs an older, retain=true version left on the broker.
+     */
+    private fun pruneStaleDiscovery(c: Mqtt5AsyncClient) {
+        val published = publishedConfigTopics.toSet()
+        var n = 0
+        knownConfigTopics().forEach { if (it !in published) { publish(c, it, "", retain = true); n++ } }
+        Log.i(TAG, "discovery prune: cleared $n refactored-away/absent entities for $panel")
     }
 
     private fun publish(c: Mqtt5AsyncClient, topic: String, payload: String, retain: Boolean = false) {

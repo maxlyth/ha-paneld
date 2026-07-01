@@ -175,6 +175,14 @@ class Config(context: Context) {
         prefs.edit().putBoolean("network_adb_enabled", on).apply()
     }
 
+    // The ha-paneld version whose discovery set was last published to HA. On an upgrade (this differs
+    // from the running version) MqttBridge prunes any entity a prior version published but this one no
+    // longer does — so a refactored-away entity is actively removed from HA, not left as a zombie.
+    val lastDiscoveryVersion: String get() = prefs.getString("last_discovery_version", "")!!
+    fun setLastDiscoveryVersion(v: String) {
+        prefs.edit().putString("last_discovery_version", v).apply()
+    }
+
     // Per-panel intended "home" dashboard path (e.g. "/lovelace/0"). When set, a reload keeps the hard
     // restart but re-navigates HERE once the frontend is back up, instead of leaving the Companion on its
     // user-default view. Empty = keep current behaviour (cold-start to the Companion default).
