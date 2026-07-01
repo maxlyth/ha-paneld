@@ -160,12 +160,13 @@ class Config(context: Context) {
     }
 
     // ha-paneld self-update: when on, ha-paneld installs a newer build of ITSELF from GitHub releases on
-    // the selected [updateChannel] (root; no Play Store on these panels). **Default ON** for the stable
-    // channel — a panel should track stable releases by default. It never auto-DOWNGRADES: running a
-    // pre-release build while on the stable channel simply waits (auto-update "suspended") until stable
-    // catches up — isNewer treats a same-numbered stable as newer than its rc, but an older stable as not
-    // newer. The one deliberate move off an rc is an explicit channel switch pre-release→stable (forced).
-    val selfUpdate: Boolean get() = prefs.getBoolean("self_update", true)
+    // the selected [updateChannel] (root; no Play Store on these panels). **Default OFF** — silent
+    // auto-pull from the release repo is a supply-chain risk if control of the repo were ever lost, so it
+    // is strictly opt-in (the pinned-signer check in AppInstaller mitigates a repo-only compromise, but
+    // off-by-default is the safer stance the user chose, 2026-07-01). When a user DOES enable it, it never
+    // auto-DOWNGRADES: running a pre-release while on the stable channel simply waits ("suspended") until
+    // stable catches up; the one deliberate move off an rc is an explicit channel switch pre-release→stable.
+    val selfUpdate: Boolean get() = prefs.getBoolean("self_update", false)
     fun setSelfUpdate(on: Boolean) {
         prefs.edit().putBoolean("self_update", on).apply()
     }
