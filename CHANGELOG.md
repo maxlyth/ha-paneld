@@ -8,6 +8,31 @@ From **v0.8.0**, entries are grouped under **Added** (new features/entities), **
 changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
 content appear. Earlier releases predate this convention and keep their flat lists.
 
+## v0.8.5-rc9 - 2026-07-01
+
+> **⚠ The web UI has been significantly revised in this release — and it is a work in progress.**
+> The single-page info/control surface is now a tabbed, multi-page app (Dashboard · Configure · Test ·
+> Install · Fleet · API), and configuration has moved to a schema-driven Configure tab. Expect the
+> layout, grouping and navigation to **keep changing over the next few releases** as the design
+> settles — treat the current arrangement as a first iteration, not the final shape.
+> **Nothing has been removed**: every control, value and workflow from the previous UI is still
+> present (some have moved — proximity tuning, display sizing and vendor taming now live on the
+> Configure tab, with their values still visible on the Dashboard), the old flat HTTP paths redirect
+> permanently (308) to the new `/api/v1` API — with `GET /health` and `POST /play` still served at the
+> root for plain-`curl` automations — and the MQTT entities are unchanged by default. The redesign
+> runs on its own track and does not slow the regular feature release pace.
+
+HTTP UI redesign — a declarative settings registry, configurable Home Assistant exposure, a canonical config API, config bundles with on-panel history, and a tabbed multi-page web UI.
+
+### Added
+
+- **Declarative settings registry** — a single source of truth (`config/SettingsRegistry`) describing each setting's type, group, Basic/Advanced tier, portability scope, validation, and Home Assistant entity. Drives the config API, the generated form, and MQTT discovery so the three can't drift. Pure/unit-tested, with golden tests asserting byte-identical discovery payloads.
+- **Configurable HA exposure** — every config entity gains a per-panel "expose to Home Assistant" toggle. Hiding one clears its retained discovery (the entity leaves HA entirely — zero recorder / state-machine cost). Set from the new Configure page or `POST /api/v1/config` (`ha_expose_<key>`).
+- **Canonical config over HTTP** — the formerly MQTT-only settings (`wake_on_wave`, `prevent_idle_dim`, `watchdog`, `auto_brightness`, `brightness_bias`, `navbar`, `touch_sound`, `cpu_governor`, `network_adb`, `zigbee_router`, `ambient_lux`) are now settable via the config API, applied through the same path an HA command uses.
+- **`/api/v1` namespace** — the machine API is now versioned and canonical under `/api/v1` (config, schema, bundles, perf, proximity, diag, action, tame, display, inspect, screenshot, input, status). The pre-0.8.5 flat paths respond **308 Permanent Redirect** (method + body preserved) to their `/api/v1` homes; `GET /health` and `POST /play` — the external contract endpoints — also stay served at the root for plain-`curl` callers. `provision.sh` and the OpenAPI spec/explorer target `/api/v1`.
+- **Config bundles + revision history** — `GET /api/v1/config/export` (versioned, secrets excluded by default) and a transactional `POST /api/v1/config/import` (migrate → scope/secret filter → validate-all-or-reject → snapshot → apply; `?dry_run=1` previews the diff, `?mode=fleet` applies only portable keys). On-panel revision ring buffer with `GET /api/v1/config/revisions` + restore.
+- **Tabbed web UI** — Dashboard / Configure / Test / Install / Fleet / API. **Configure** is a schema-driven Basic/Advanced form with inline expose pips and bundle backup/restore; **Test** adds an interactive screenshot (View/Control — tap the image to touch the panel) plus on-screen nav actions and a TTS test; **Install** surfaces panel-health warnings + the capabilities matrix. Self-contained, offline, no build step.
+
 ## v0.8.5-rc8 - 2026-07-01
 
 ### Added

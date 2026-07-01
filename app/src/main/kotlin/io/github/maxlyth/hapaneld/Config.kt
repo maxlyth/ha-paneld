@@ -1,8 +1,11 @@
 package io.github.maxlyth.hapaneld
 
 import android.content.Context
+import android.content.SharedPreferences
 import android.os.Build
 import android.provider.Settings
+import io.github.maxlyth.hapaneld.config.SettingSpec
+import io.github.maxlyth.hapaneld.config.SettingType
 import io.github.maxlyth.hapaneld.device.DeviceProfile
 import java.util.Locale
 
@@ -389,6 +392,42 @@ class Config(context: Context) {
     var lastLed: String
         get() = prefs.getString("last_led", "")!!
         set(v) { prefs.edit().putString("last_led", v).apply() }
+
+    // --- arrangeable dashboard layout (per-panel; serialized by the web UI, opaque to the backend) ---
+    /** Gridstack layout JSON for the Dashboard tab, persisted per-panel (empty = default layout). */
+    var uiDashboardLayout: String
+        get() = prefs.getString("ui_dashboard_layout", "")!!
+        set(v) { prefs.edit().putString("ui_dashboard_layout", v).apply() }
+
+    // --- registry-driven generic access (HTTP config API + bundles + revisions) -----------------
+    // These read/write a setting by its [SettingSpec] so the config API, form generation, export and
+    // import all go through one typed path instead of ~35 bespoke getters. Typed convenience getters
+    // above remain for callers; they read the same SharedPreferences keys.
+
+    /** Current raw string value for a registry key (the spec default if unset). */
+    fun getRaw(spec: SettingSpec): String = when (spec.type) {
+        SettingType.BOOL -> prefs.getBoolean(spec.key, spec.default.toBoolean()).toString()
+        SettingType.INT -> prefs.getInt(spec.key, spec.default.toIntOrNull() ?: 0).toString()
+        SettingType.FLOAT -> prefs.getFloat(spec.key, spec.default.toFloatOrNull() ?: 0f).toString()
+        else -> prefs.getString(spec.key, spec.default) ?: spec.default
+    }
+
+    /** Stage a typed write into [editor] (no commit) — used by the transactional bundle import. */
+    fun stage(editor: SharedPreferences.Editor, spec: SettingSpec, normalized: String) {
+        when (spec.type) {
+            SettingType.BOOL -> editor.putBoolean(spec.key, normalized.toBoolean())
+            SettingType.INT -> editor.putInt(spec.key, normalized.toIntOrNull() ?: 0)
+            SettingType.FLOAT -> editor.putFloat(spec.key, normalized.toFloatOrNull() ?: 0f)
+            else -> editor.putString(spec.key, normalized)
+        }
+    }
+
+    /** A new editor for staging a batch of registry writes (commit with [SharedPreferences.Editor.commit]). */
+    fun editor(): SharedPreferences.Editor = prefs.edit()
+
+    /** Whether an HA-capable setting is currently exposed to Home Assistant (per-panel override). */
+    fun haExposed(key: String, default: Boolean = true): Boolean = prefs.getBoolean("ha_expose_$key", default)
+    fun setHaExposed(key: String, on: Boolean) { prefs.edit().putBoolean("ha_expose_$key", on).apply() }
 
     private fun slug(s: String): String =
         s.lowercase(Locale.ROOT)

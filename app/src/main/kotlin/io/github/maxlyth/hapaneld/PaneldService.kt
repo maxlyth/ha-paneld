@@ -36,6 +36,7 @@ import io.github.maxlyth.hapaneld.hardware.LedController
 import io.github.maxlyth.hapaneld.hardware.LedFactory
 import io.github.maxlyth.hapaneld.hardware.Rk3576LedController
 import io.github.maxlyth.hapaneld.hardware.SocketLedController
+import io.github.maxlyth.hapaneld.config.Capabilities
 import io.github.maxlyth.hapaneld.http.PaneldServer
 import io.github.maxlyth.hapaneld.http.PanelInfo
 import io.github.maxlyth.hapaneld.logship.LogShipper
@@ -160,10 +161,26 @@ class PaneldService : Service() {
         mqtt = buildMqtt()
         mdns = MdnsAdvertiser(this, config)
         server = PaneldServer(
-            config, cacheDir, scope, this, sensors, system, volume, ::reconfigure, ::panelInfo,
-            profile.recommendedDensity, profile.recommendedFontScale,
+            config, cacheDir, scope, this, sensors, system, volume, ::reconfigure,
+            // Capture the field (not the current instance) so it always targets the live bridge,
+            // which reconfigure() rebuilds on a panel_id / MQTT change.
+            { k, v -> mqtt.applySetting(k, v) },
+            // Controller-sourced setting values (their state isn't in SharedPreferences) so the
+            // config form/schema/dashboard show live truth. Called on Ktor IO threads (su-safe).
+            liveValues = {
+                mapOf(
+                    "touch_sound" to touchSound.isEnabled().toString(),
+                    "cpu_governor" to (cpu.currentTier() ?: "Auto"),
+                    "network_adb" to adb.isPersisted().toString(),
+                    "zigbee_router" to config.zigbeeRouterEnabled.toString(),
+                )
+            },
+            capabilities = ::capabilitiesSnapshot,
+            info = ::panelInfo,
+            recommendedDensity = profile.recommendedDensity,
+            recommendedFontScale = profile.recommendedFontScale,
             // Vendor taming: the controller and this panel's curated recommendations (picker group 1).
-            tame, profile.tameVendorCandidates,
+            tame = tame, tameProfileCandidates = profile.tameVendorCandidates,
         )
         // Stream daemon-instrumented hardware buttons (e.g. WF1589T power key) into the same event
         // entity as the a11y key capture. No-op on panels with no evdev buttons.
@@ -304,6 +321,24 @@ class PaneldService : Service() {
      *  Binary · near/far (0 / 5 cm)"). */
     private fun sensorRow(present: Boolean, tech: String?, desc: String?): String =
         if (!present) "no" else "yes" + listOfNotNull(tech, desc).joinToString("") { " · $it" }
+
+    // zigbee.present() costs a su exec, so probe it once (lazily, off the main thread — first caller
+    // is an HTTP handler or MQTT connect, both on background threads) and reuse the answer.
+    private val zigbeePresent: Boolean by lazy { zigbee.present() }
+
+    /** This panel's capability snapshot for the settings registry's availableWhen gates
+     *  (the Configure form/schema + the dashboard's read-only values card). */
+    private fun capabilitiesSnapshot(): Capabilities = Capabilities(
+        hasProximity = sensors.hasProximity(),
+        hasLight = sensors.hasLight(),
+        hasTemperature = sensors.hasTemperature(),
+        hasHumidity = sensors.hasHumidity(),
+        appCanSu = profile.appCanSu,
+        hasRecents = profile.hasRecents,
+        cpuGovernors = cpu.available(),
+        networkAdb = adb.available(),
+        zigbeePresent = zigbeePresent,
+    )
 
     /** Smoothness-metrics target: the configured override, else the installed HA Companion app
      *  (this is an HA project — the dashboard is the Companion app, so no config needed normally). */

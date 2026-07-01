@@ -2,59 +2,123 @@
   "openapi": "3.0.3",
   "info": {
     "title": "ha-paneld",
-    "version": "0.5.0",
-    "description": "Local HTTP control API for a Home Assistant wall-panel agent. Plain HTTP on the LAN, no auth. Config endpoints enable fleet management."
+    "version": "0.8.5",
+    "description": "Local HTTP control API for a Home Assistant wall-panel agent. Plain HTTP on the LAN, no auth. The canonical machine API lives under /api/v1; the pre-0.8.5 flat paths respond 308 Permanent Redirect to their /api/v1 homes (method + body preserved). Exceptions: GET /health and POST /play are also served directly at the root — they are the external contract endpoints called by plain curl from automations and monitors."
   },
   "servers": [{ "url": "/" }],
   "paths": {
-    "/health": { "get": { "summary": "Liveness probe + version + panel id", "tags": ["status"], "responses": { "200": { "description": "OK" } } } },
-    "/config": {
-      "get": { "summary": "Read full config (MQTT password redacted to a boolean)", "tags": ["config"], "responses": { "200": { "description": "config JSON" } } },
+    "/health": { "get": { "summary": "Liveness probe + version + panel id + build token (also at /api/v1/health)", "tags": ["status"], "responses": { "200": { "description": "OK" } } } },
+    "/play": {
+      "post": { "summary": "Play audio / TTS from a URL (also at /api/v1/play)", "tags": ["media"],
+        "requestBody": { "content": { "text/plain": { "schema": { "type": "string", "description": "a raw URL, or {\"url\":\"https://…\"}" } } } },
+        "responses": { "200": { "description": "playing" }, "400": { "description": "no-url" } } }
+    },
+    "/api/v1/status": { "get": { "summary": "Panel-health warnings + capability matrix as JSON", "tags": ["status"], "responses": { "200": { "description": "{warnings:[html], capabilities:[{name,note,color}]}" } } } },
+    "/api/v1/config": {
+      "get": { "summary": "Read full config (MQTT password redacted) incl. registry `settings` + `ha_expose` flags", "tags": ["config"], "responses": { "200": { "description": "config JSON" } } },
       "post": {
-        "summary": "Update config — partial-merge: only the keys you send change", "tags": ["config"],
+        "summary": "Update config — partial-merge: only the keys you send change. Accepts every settings-registry key (see /api/v1/config/schema) plus per-entity ha_expose_<key> toggles.", "tags": ["config"],
         "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "properties": {
           "panel_id": { "type": "string", "description": "lowercase/digits/underscore; used in entity_ids + MQTT topics" },
           "friendly_name": { "type": "string" }, "manufacturer": { "type": "string" }, "model": { "type": "string" },
-          "mqtt_broker": { "type": "string", "description": "tcp://host:1883; blank = MQTT disabled" },
+          "mqtt_broker": { "type": "string", "description": "tcp://host:1883; blank = auto-discover HA on the LAN" },
           "mqtt_user": { "type": "string" }, "mqtt_password": { "type": "string", "description": "blank = unchanged" },
-          "dashboard_package": { "type": "string" }, "launcher_package": { "type": "string" }
+          "dashboard_package": { "type": "string" }, "launcher_package": { "type": "string" },
+          "wake_on_wave": { "type": "boolean" }, "prevent_idle_dim": { "type": "boolean" },
+          "watchdog_enabled": { "type": "boolean" }, "touch_sound": { "type": "boolean" },
+          "silence_boot_chime": { "type": "boolean" }, "keep_awake": { "type": "boolean" },
+          "auto_brightness": { "type": "boolean" }, "brightness_bias": { "type": "integer" },
+          "navbar_mode": { "type": "string", "enum": ["Off", "Always on", "Swipe reveal"] },
+          "cpu_governor": { "type": "string", "enum": ["Performance", "Efficiency", "Auto"] },
+          "network_adb": { "type": "boolean" }, "zigbee_router": { "type": "boolean" },
+          "home_dashboard": { "type": "string" }, "companion_auto_update": { "type": "boolean" },
+          "self_update": { "type": "boolean" }, "update_channel": { "type": "string", "enum": ["stable", "prerelease"] },
+          "log_ship_enabled": { "type": "boolean" }, "log_ship_host": { "type": "string" },
+          "log_ship_port": { "type": "integer" }, "log_ship_protocol": { "type": "string", "enum": ["syslog", "http"] }
         } } } } },
         "responses": { "200": { "description": "updated" }, "400": { "description": "invalid panel_id" } }
       }
     },
-    "/perf": { "get": { "summary": "Live CPU/GPU/RAM, CPU clock, temperature, top processes, responsiveness + history", "tags": ["performance"], "responses": { "200": { "description": "perf JSON" } } } },
-    "/instrumentation": {
-      "post": {
-        "summary": "Enable/disable the performance sampler (persisted)", "tags": ["performance"],
-        "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "required": ["enabled"], "properties": { "enabled": { "type": "boolean" } } } } } },
-        "responses": { "200": { "description": "{\"enabled\":bool}" }, "400": { "description": "bad-value" } }
-      }
+    "/api/v1/config/schema": { "get": { "summary": "Settings-registry metadata (key/type/group/label/help/default/tier/scope/options/range + HA-capable/exposed), capability-gated to this panel", "tags": ["config"], "responses": { "200": { "description": "[{key,…}]" } } } },
+    "/api/v1/config/export": {
+      "get": { "summary": "Export a versioned config bundle", "tags": ["config"],
+        "parameters": [{ "name": "include_secrets", "in": "query", "schema": { "type": "string", "enum": ["1"] }, "description": "include secret values (excluded by default)" }],
+        "responses": { "200": { "description": "{kind, schema, exported_at, exported_by, values}" } } }
     },
-    "/diag": { "get": { "summary": "Plain-text diagnostics dump (hardware, firmware, SELinux, su/node probes)", "tags": ["status"], "responses": { "200": { "description": "text/plain report" } } } },
-    "/proximity": { "get": { "summary": "Live proximity raw + calibration (raw stays local; only the derived binary goes to HA)", "tags": ["proximity"], "responses": { "200": { "description": "proximity JSON" } } } },
-    "/proximity/capture": {
+    "/api/v1/config/import": {
+      "post": { "summary": "Transactional bundle import: migrate → scope/secret filter → validate ALL (reject whole bundle on any failure) → snapshot revision → apply", "tags": ["config"],
+        "parameters": [
+          { "name": "dry_run", "in": "query", "schema": { "type": "string", "enum": ["1"] }, "description": "preview the diff without writing" },
+          { "name": "mode", "in": "query", "schema": { "type": "string", "enum": ["restore", "fleet"] }, "description": "fleet = apply only portable, non-secret keys" }
+        ],
+        "requestBody": { "content": { "application/json": { "schema": { "type": "object", "description": "a bundle from /api/v1/config/export" } } } },
+        "responses": { "200": { "description": "{status, applied, skipped, warnings, errors} or the dry-run diff" }, "400": { "description": "bad-bundle" }, "422": { "description": "rejected (validation)" } } }
+    },
+    "/api/v1/config/revisions": { "get": { "summary": "On-panel config history (ring buffer, newest first)", "tags": ["config"], "responses": { "200": { "description": "[{id, exported_at, keys}]" } } } },
+    "/api/v1/config/revisions/{id}/restore": {
+      "post": { "summary": "Roll back to a stored revision (itself recorded, so restores are undoable)", "tags": ["config"],
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }],
+        "responses": { "200": { "description": "{status:restored,…}" }, "404": { "description": "not-found" } } }
+    },
+    "/api/v1/ui/layout": {
+      "get": { "summary": "Per-panel dashboard layout blob (customisable-layout groundwork)", "tags": ["config"], "responses": { "200": { "description": "{layout}" } } },
+      "post": { "summary": "Persist the dashboard layout blob", "tags": ["config"],
+        "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "properties": { "layout": { "type": "string" } } } } } },
+        "responses": { "200": { "description": "{ok:true}" } } }
+    },
+    "/api/v1/perf": { "get": { "summary": "Live CPU/GPU/RAM, CPU clock, temperature, top processes, responsiveness + history", "tags": ["performance"], "responses": { "200": { "description": "perf JSON" } } } },
+    "/api/v1/instrumentation": {
+      "post": { "summary": "Enable/disable the performance sampler (persisted)", "tags": ["performance"],
+        "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "required": ["enabled"], "properties": { "enabled": { "type": "boolean" } } } } } },
+        "responses": { "200": { "description": "{\"enabled\":bool}" }, "400": { "description": "bad-value" } } }
+    },
+    "/api/v1/diag": { "get": { "summary": "Plain-text diagnostics dump (hardware, firmware, SELinux, su/node probes)", "tags": ["status"], "responses": { "200": { "description": "text/plain report" } } } },
+    "/api/v1/sensortrace": {
+      "get": { "summary": "Debug sensor-trace ring buffer (instrumentation-gated)", "tags": ["sensors"],
+        "parameters": [{ "name": "format", "in": "query", "schema": { "type": "string", "enum": ["csv", "json"] } }],
+        "responses": { "200": { "description": "CSV (default) or JSON" } } }
+    },
+    "/api/v1/screenshot.png": { "get": { "summary": "Live panel screenshot (root screencap or the helper daemon); usable as an HA camera still_image_url", "tags": ["control"], "responses": { "200": { "description": "PNG" }, "503": { "description": "screenshot-unavailable" } } } },
+    "/api/v1/action": {
+      "post": { "summary": "On-screen nav action", "tags": ["control"],
+        "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "required": ["a"], "properties": { "a": { "type": "string", "enum": ["back", "recents", "launcher", "admin_launcher", "reboot", "volup", "voldn"] } } } } } },
+        "responses": { "200": { "description": "ok" }, "400": { "description": "bad-action" } } }
+    },
+    "/api/v1/input": {
+      "post": { "summary": "Inject a tap at device pixel (x,y) — the interactive screenshot's control mode (needs root)", "tags": ["control"],
+        "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "required": ["x", "y"], "properties": { "x": { "type": "number" }, "y": { "type": "number" } } } } } },
+        "responses": { "200": { "description": "ok" }, "400": { "description": "bad-coords" }, "503": { "description": "no-input-capability" } } }
+    },
+    "/api/v1/proximity": { "get": { "summary": "Live proximity raw + calibration (raw stays local; only the derived binary goes to HA)", "tags": ["proximity"], "responses": { "200": { "description": "proximity JSON" } } } },
+    "/api/v1/proximity/capture": {
       "post": { "summary": "Snapshot the current raw value into the near/far calibration slot", "tags": ["proximity"],
         "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "required": ["step"], "properties": { "step": { "type": "string", "enum": ["near", "far"] } } } } } },
         "responses": { "200": { "description": "proximity JSON" }, "400": { "description": "bad-step / no-reading" } } }
     },
-    "/proximity/threshold": {
+    "/api/v1/proximity/threshold": {
       "post": { "summary": "Manual threshold fine-tune (overrides the captured midpoint)", "tags": ["proximity"],
         "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "required": ["v"], "properties": { "v": { "type": "number" } } } } } },
         "responses": { "200": { "description": "proximity JSON" }, "400": { "description": "bad-value" } } }
     },
-    "/proximity/sensitivity": {
+    "/api/v1/proximity/sensitivity": {
       "post": { "summary": "Hysteresis band width (flap resistance)", "tags": ["proximity"],
         "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "required": ["s"], "properties": { "s": { "type": "string", "enum": ["HIGH", "MEDIUM", "LOW"] } } } } } },
         "responses": { "200": { "description": "proximity JSON" } } }
     },
-    "/proximity/reset": { "post": { "summary": "Clear proximity calibration", "tags": ["proximity"], "responses": { "200": { "description": "proximity JSON" } } } },
-    "/inspect": { "get": { "summary": "CDP/DevTools relay status", "tags": ["debug"], "responses": { "200": { "description": "inspect JSON" } } } },
-    "/inspect/start": { "post": { "summary": "Start the WebView DevTools relay on :9222 (needs root + WebView debugging)", "tags": ["debug"], "responses": { "200": { "description": "inspect JSON" } } } },
-    "/inspect/stop": { "post": { "summary": "Stop the DevTools relay", "tags": ["debug"], "responses": { "200": { "description": "inspect JSON" } } } },
-    "/play": {
-      "post": { "summary": "Play audio / TTS from a URL", "tags": ["media"],
-        "requestBody": { "content": { "text/plain": { "schema": { "type": "string", "description": "a raw URL, or {\"url\":\"https://…\"}" } } } },
-        "responses": { "200": { "description": "playing" }, "400": { "description": "no-url" } } }
-    }
+    "/api/v1/proximity/reset": { "post": { "summary": "Clear proximity calibration", "tags": ["proximity"], "responses": { "200": { "description": "proximity JSON" } } } },
+    "/api/v1/tame": {
+      "post": { "summary": "Tame or re-enable a vendor package (root/helper; protected packages refused)", "tags": ["control"],
+        "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "required": ["pkg"], "properties": { "pkg": { "type": "string" }, "action": { "type": "string", "enum": ["tame", "untame"] } } } } } },
+        "responses": { "200": { "description": "HTML redirect back to /configure" } } }
+    },
+    "/api/v1/tame/suggest": { "get": { "summary": "Grouped package-picker suggestions (recommended / other / top-CPU)", "tags": ["control"], "responses": { "200": { "description": "HTML fragment" } } } },
+    "/api/v1/display/density": {
+      "post": { "summary": "Display sizing: density (dpi) + text scale (su panels)", "tags": ["control"],
+        "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "properties": { "density": { "type": "integer" }, "font": { "type": "number" }, "action": { "type": "string", "enum": ["reset", "rec"] } } } } } },
+        "responses": { "200": { "description": "HTML redirect back to /configure" } } }
+    },
+    "/api/v1/inspect": { "get": { "summary": "CDP/DevTools relay status", "tags": ["debug"], "responses": { "200": { "description": "inspect JSON" } } } },
+    "/api/v1/inspect/start": { "post": { "summary": "Start the WebView DevTools relay on :9222 (needs root + WebView debugging)", "tags": ["debug"], "responses": { "200": { "description": "inspect JSON" } } } },
+    "/api/v1/inspect/stop": { "post": { "summary": "Stop the DevTools relay", "tags": ["debug"], "responses": { "200": { "description": "inspect JSON" } } } }
   }
 }
