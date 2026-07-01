@@ -454,7 +454,7 @@ class PaneldService : Service() {
      * MQTT reconnect watchdog on a DEDICATED thread — deliberately NOT a coroutine on Dispatchers.IO.
      * On a panel with slow/contended `su` (toolbox su under load), blocking su calls exhaust the IO
      * thread pool, so a coroutine watchdog's post-delay continuation never gets scheduled and it silently
-     * stops ticking (observed on kitchen 2026-07-01: MQTT connected but zero watchdog ticks, so a
+     * stops ticking (observed in the field: MQTT "connected" but zero watchdog ticks, so a
      * half-open connection never self-healed). A plain thread ticks regardless of dispatcher pressure.
      *
      * Two stall modes, both healed by a full client rebuild:
@@ -464,23 +464,51 @@ class PaneldService : Service() {
      *       (CLOSE-WAIT) socket, so it still reports "connected" while publishing into the void.
      *       isConnected() lies, so key on TRUE liveness: each tick send a heartbeat (a QoS-1 publish the
      *       broker must ACK) and, if nothing has been ACKed for MQTT_STALE_MS, force a rebuild.
+     *
+     * CRITICAL INVARIANT: the loop thread makes NO potentially-blocking MQTT call. A HiveMQ publish —
+     * and even disconnect/rebuild — can block on an internal client monitor exactly when the connection
+     * is wedged (the same trap as the sensor-callback ANR), which is precisely when the watchdog is
+     * needed. rc10 called heartbeat() inline and the watchdog froze inside its own probe (observed in
+     * the field: thread parked on a futex, liveness 44 min stale, no rebuild). So heartbeat and rebuild
+     * each run on their own guarded side-thread: if the previous one is still in flight, skip — an
+     * in-flight heartbeat can't refresh lastOkMs, so staleness still trips, and the rebuild guard
+     * re-arms via a timeout so a hung rebuild can't permanently disable healing.
      */
     private fun startMqttWatchdog() {
         if (mqttWatchdogAlive) return
         mqttWatchdogAlive = true
         Thread {
             var staleTicks = 0
+            var heartbeat: Thread? = null
+            var rebuild: Thread? = null
+            var rebuildStartedAt = 0L
+            fun spawnRebuild(reason: String) {
+                val now = android.os.SystemClock.elapsedRealtime()
+                if (rebuild?.isAlive == true) {
+                    // A previous rebuild is wedged inside the client. Don't stack another on the same
+                    // monitor immediately — but after REBUILD_ABANDON_MS give up on it (leak one parked
+                    // thread) and try fresh, so healing is never permanently disabled.
+                    if (now - rebuildStartedAt < REBUILD_ABANDON_MS) {
+                        Log.w(TAG, "mqtt rebuild already in flight (${now - rebuildStartedAt}ms) — skipping ($reason)")
+                        return
+                    }
+                    Log.w(TAG, "mqtt rebuild wedged for ${now - rebuildStartedAt}ms — abandoning it, starting fresh ($reason)")
+                }
+                rebuildStartedAt = now
+                rebuild = Thread({
+                    runCatching { mqtt.reconnect(flipFamily = true) }
+                }, "mqtt-rebuild").apply { isDaemon = true; start() }
+            }
             while (mqttWatchdogAlive) {
                 try { Thread.sleep(MQTT_WATCHDOG_MS) } catch (e: InterruptedException) { break }
                 if (!mqttWatchdogAlive) break
-                runCatching { mqtt.heartbeat() }   // exercise the socket so liveness is measurable
                 val sinceOk = mqtt.msSinceLastOk()
-                Log.i(TAG, "mqtt watchdog tick: state=${mqtt.state} sinceOk=${sinceOk}ms")
+                Log.i(TAG, "mqtt watchdog tick: state=${mqtt.state} sinceOk=${sinceOk}ms hb=${heartbeat?.isAlive == true} rebuild=${rebuild?.isAlive == true}")
                 val livenessStale = mqtt.state != "disabled" && mqtt.lastOkMs != 0L && sinceOk > MQTT_STALE_MS
                 when {
                     livenessStale -> {
                         Log.w(TAG, "MQTT liveness stale (${sinceOk}ms, state=${mqtt.state}) — forcing reconnect (flip family)")
-                        runCatching { mqtt.reconnect(flipFamily = true) }   // current family isn't holding — try the other
+                        spawnRebuild("liveness")
                         staleTicks = 0
                     }
                     mqtt.state == "connected" || mqtt.state == "disabled" -> staleTicks = 0
@@ -488,10 +516,17 @@ class PaneldService : Service() {
                         staleTicks++
                         if (staleTicks >= 2) {
                             Log.w(TAG, "MQTT stuck (${mqtt.state}) — forcing reconnect (flip family)")
-                            runCatching { mqtt.reconnect(flipFamily = true) }
+                            spawnRebuild("state")
                             staleTicks = 0
                         }
                     }
+                }
+                // Heartbeat LAST and OFF-THREAD: a wedged client blocks the publish, but only this
+                // sacrificial thread — the loop keeps ticking and the un-refreshed lastOkMs is itself
+                // the failure signal. Skip while one is still in flight (its ACK never came).
+                if (heartbeat?.isAlive != true) {
+                    heartbeat = Thread({ runCatching { mqtt.heartbeat() } }, "mqtt-heartbeat")
+                        .apply { isDaemon = true; start() }
                 }
             }
         }.apply { isDaemon = true; name = "mqtt-watchdog" }.start()
@@ -567,6 +602,9 @@ class PaneldService : Service() {
         private const val NOTIF_ID = 1
         // MQTT reconnect-watchdog poll interval; a stuck bridge self-heals after ~2 of these.
         private const val MQTT_WATCHDOG_MS = 60_000L
+        // A rebuild thread wedged inside the old client for this long is abandoned (it stays parked as
+        // a leaked daemon thread) and a fresh rebuild is attempted — healing must never stay disabled.
+        private const val REBUILD_ABANDON_MS = 300_000L
         // No broker-ACKed publish for this long (with a heartbeat sent every tick) ⇒ the link is dead
         // even if HiveMQ still claims "connected" (half-open socket) ⇒ force a rebuild. ~2.5 missed ticks.
         private const val MQTT_STALE_MS = 150_000L

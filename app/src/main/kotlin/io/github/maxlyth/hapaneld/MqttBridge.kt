@@ -287,8 +287,14 @@ class MqttBridge(
         // A liveness-triggered reconnect flips the address family — if the current family (e.g. IPv6 on
         // the PX panels) won't hold, the next connect tries the other and lands on whatever works.
         if (flipFamily) preferIpv4 = !preferIpv4
-        runCatching { client?.disconnect() } // tears down the old client + its auto-reconnect + socket
+        // Detach the old client FIRST and tear it down on a throwaway daemon thread: disconnect() on a
+        // WEDGED client (half-open socket, frozen reactor — the very case that triggers a liveness
+        // rebuild) can block on an internal client monitor, and that must never delay the replacement
+        // connection. In the wedged case the old reactor is frozen anyway, so it won't fight the new
+        // client's session; in the healthy case the background disconnect completes normally.
+        val old = client
         client = null
+        old?.let { Thread({ runCatching { it.disconnect() } }, "mqtt-teardown").apply { isDaemon = true }.start() }
         start()
     }
 

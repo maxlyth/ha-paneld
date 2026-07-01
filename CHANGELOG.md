@@ -8,6 +8,12 @@ From **v0.8.0**, entries are grouped under **Added** (new features/entities), **
 changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
 content appear. Earlier releases predate this convention and keep their flat lists.
 
+## v0.8.5-rc11 - 2026-07-02
+
+### Fixed
+
+- **Panels no longer stay "unavailable" in Home Assistant after a broker drop** — the connection watchdog could freeze inside its own liveness probe: the heartbeat publish runs into the same internal client monitor that a wedged (half-open) connection holds, so the exact failure the watchdog exists to heal also disabled the watchdog, leaving the panel unavailable until a manual app restart. The watchdog loop now never makes a potentially-blocking MQTT call itself: the heartbeat and the connection rebuild each run on their own guarded side-thread (skipped while a previous one is still in flight, with a timeout that re-arms healing if a rebuild wedges), and tearing down a wedged client is fully detached from bringing up its replacement. A stalled connection now self-heals within ~2–3 minutes, flipping address family so it lands on whichever network path actually holds.
+
 ## v0.8.5-rc10 - 2026-07-02
 
 ### Fixed
