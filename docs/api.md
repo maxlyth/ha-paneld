@@ -57,6 +57,24 @@ The agent listens on **:8888**. Self-signed HTTPS sources are accepted (panels l
 LAN). This is the same contract as the reference shell receiver it replaces, so HA-side automation
 needs no change when a panel migrates from the shell receiver to ha-paneld.
 
+## The `/api/v1` namespace (0.8.5)
+
+The UI redesign introduced a versioned machine API under **`/api/v1`**; the flat endpoints above keep
+working unchanged for existing tooling. New endpoints (no flat equivalent):
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/api/v1/config` | GET / POST | Config as JSON incl. registry `settings` + `ha_expose` flags; partial-merge POST accepts **every** setting (including the formerly MQTT-only ones) and per-entity `ha_expose_<key>` toggles |
+| `/api/v1/config/schema` | GET | Settings-registry metadata (type, group, tier, range/options, HA-capable, exposed) — drives the Configure form |
+| `/api/v1/config/export` | GET | Versioned config bundle (secrets excluded unless `?include_secrets=1`) |
+| `/api/v1/config/import` | POST | Transactional bundle apply — validate-all-or-reject; `?dry_run=1` previews the diff; `?mode=fleet` applies only portable, non-secret keys |
+| `/api/v1/config/revisions` | GET | On-panel config history (ring buffer); `POST …/{id}/restore` rolls back |
+| `/api/v1/status` | GET | Panel-health warnings + capability matrix as JSON |
+| `/api/v1/input` | POST | Inject a tap at device pixel `x`,`y` (the Test tab's interactive screenshot; needs root) |
+| `/api/v1/ui/layout` | GET / POST | Per-panel dashboard layout blob (groundwork for customisable card layout) |
+
+`/api/v1/{health,perf,proximity,diag}` mirror their flat counterparts.
+
 ## Pairing
 
 The agent advertises `_ha-paneld._tcp.local.` with TXT records (`ver`, `caps`, `path`). If an MQTT

@@ -10,7 +10,18 @@ content appear. Earlier releases predate this convention and keep their flat lis
 
 ## Unreleased
 
-HTTP UI redesign — a declarative settings registry, configurable Home Assistant exposure, a canonical config API, config bundles with on-panel history, and a tabbed multi-page web UI. (On the `http-ui-redesign` branch; not yet released.)
+> **⚠ The web UI has been significantly revised in this release — and it is a work in progress.**
+> The single-page info/control surface is now a tabbed, multi-page app (Dashboard · Configure · Test ·
+> Install · Fleet · API), and configuration has moved to a schema-driven Configure tab. Expect the
+> layout, grouping and navigation to **keep changing over the next few releases** as the design
+> settles — treat the current arrangement as a first iteration, not the final shape.
+> **Nothing has been removed**: every control, value and workflow from the previous UI is still
+> present (some have moved — proximity tuning, display sizing and vendor taming now live on the
+> Configure tab, with their values still visible on the Dashboard), the existing flat HTTP endpoints
+> keep working for current tooling, and the MQTT entities are unchanged by default. The redesign runs
+> on its own track and does not slow the regular feature release pace.
+
+HTTP UI redesign — a declarative settings registry, configurable Home Assistant exposure, a canonical config API, config bundles with on-panel history, and a tabbed multi-page web UI.
 
 ### Added
 
