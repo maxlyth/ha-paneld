@@ -237,12 +237,12 @@ class Config(context: Context) {
     // --- remote log shipping (opt-in) --------------------------------------------------------------
     // Forward ha-paneld's OWN process logcat (its Log.* output + the Ktor/HiveMQ SLF4J library logs,
     // all emitted by this app's uid → readable with no READ_LOGS and no root) to a central aggregator
-    // (e.g. a Vector collector) for fleet-wide debugging without per-panel `adb logcat`. OFF by default
+    // (any syslog- or HTTP-ingesting log collector) for fleet-wide debugging without per-panel `adb logcat`. OFF by default
     // with an EMPTY host — a stock panel ships nothing until deliberately configured. LAN-only by intent;
     // lines are redacted (tokens/passwords/URL secrets) before they leave the device. No on-panel UI:
     // set via the HTTP /config endpoint (provision.sh --log-* flags). See logship/LogShipper.
     val logShipEnabled: Boolean get() = prefs.getBoolean("log_ship_enabled", false)
-    /** Sink host (e.g. a Vector collector). Empty => shipping stays inert regardless of the flag. */
+    /** Sink host (the log collector to ship to). Empty => shipping stays inert regardless of the flag. */
     val logShipHost: String get() = prefs.getString("log_ship_host", "")!!
     val logShipPort: Int get() = prefs.getInt("log_ship_port", 514)
     /** Transport: "syslog" (TCP, RFC5424) or "http" (NDJSON POST). */

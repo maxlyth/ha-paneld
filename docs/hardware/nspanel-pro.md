@@ -298,7 +298,7 @@ The NSPanel Pro is **CPU- and RAM-constrained** for rich dashboards:
 - The A35 cores make page transitions and animations visibly slower than on A55/A72 panels.
 
 Mitigations (all covered by ha-paneld + [docs/performance.md](../performance.md)): keep dashboards
-lean, prefer the split-instance (HADS) approach to cut WebSocket event volume, and use ha-paneld's
+lean, prefer the split-instance approach to cut WebSocket event volume, and use ha-paneld's
 instrumentation (CPU clock/throttling, responsiveness, top-5 processes, 1-click WebView DevTools
 relay) to find what's actually costing frames on *this* hardware.
 

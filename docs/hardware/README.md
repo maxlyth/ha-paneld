@@ -101,7 +101,7 @@ Each panel under its own real workload:
 - **The NSPanel Pro — the most common panel — has the slowest CPU** (A35), so transitions and
   animations are visibly slower than on A55/A72 units. Keep its dashboards the leanest.
 - **The biggest cross-panel win is cutting WebSocket event volume** reaching the panel — see
-  [../performance.md](../performance.md) (the split-instance / HADS approach).
+  [../performance.md](../performance.md) (the split-instance approach).
 - **ha-paneld is the diagnostic for all of this**: CPU clock vs max (throttling), the responsiveness
   metric, top-5 processes and the 1-click WebView DevTools relay tell you whether the *hardware*, the
   *dashboard* or the *data feed* is the bottleneck on your specific unit — rather than guessing.

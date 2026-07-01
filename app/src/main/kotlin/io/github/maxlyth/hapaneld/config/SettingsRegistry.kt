@@ -250,7 +250,7 @@ object SettingsRegistry {
         SettingSpec(
             key = "log_ship_host", type = SettingType.STRING, group = "Logging",
             label = "Sink host", default = "", scope = Scope.DEVICE,
-            help = "Collector host (e.g. a Vector instance); blank keeps shipping inert.",
+            help = "Log-collector host; blank keeps shipping inert.",
         ),
         SettingSpec(
             key = "log_ship_port", type = SettingType.INT, group = "Logging",

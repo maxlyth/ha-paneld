@@ -22,18 +22,17 @@ import java.util.concurrent.TimeUnit
 /**
  * Optional remote log shipping. Streams ha-paneld's OWN process logcat — its `android.util.Log`
  * output plus the Ktor/HiveMQ SLF4J library logs, all emitted by this app's uid, so readable with no
- * `READ_LOGS` permission and no root — to a central aggregator (e.g. a Vector collector) for
- * fleet-wide debugging without per-panel `adb logcat`.
+ * `READ_LOGS` permission and no root — to a central log collector for fleet-wide debugging without
+ * per-panel `adb logcat`.
  *
  * OFF by default and inert unless a sink host is configured ([Config.logShipActive]); LAN-only by
  * intent; every line is [redact]ed for tokens / passwords / URL secrets before it leaves the device.
  * No on-panel UI — configured via the HTTP `/config` endpoint (provision.sh `--log-*` flags).
  *
- * Two transports, selected by `log_ship_protocol`:
- *  - `syslog` (default): newline-delimited RFC5424 frames over a persistent TCP socket — Vector's
- *    `syslog` source decodes these natively.
- *  - `http`: newline-delimited JSON (NDJSON) POSTed in batches — Vector's `http_server` source with
- *    `framing.method = "newline_delimited"` + `decoding.codec = "json"`.
+ * Two transports, selected by `log_ship_protocol` — both are plain, widely-supported wire formats, so
+ * any collector with a syslog or HTTP/NDJSON input can ingest them:
+ *  - `syslog` (default): newline-delimited RFC5424 frames over a persistent TCP socket.
+ *  - `http`: newline-delimited JSON (NDJSON) POSTed in batches to the collector's HTTP-ingest endpoint.
  *
  * Capture is a long-lived `logcat` subprocess (streaming, own-uid lines only). Lines pass through a
  * bounded queue, so a slow/unreachable sink applies backpressure by dropping the OLDEST lines — best-
@@ -178,7 +177,7 @@ class LogShipper(
     }
 
     private suspend fun CoroutineScope.shipHttp() {
-        val url = "http://$runHost:$runPort/"   // Vector http_server default path
+        val url = "http://$runHost:$runPort/"   // collector HTTP-ingest root path
         val batch = ArrayList<String>(BATCH_MAX)
         while (isActive) {
             batch.clear()
