@@ -1,6 +1,8 @@
 package io.github.maxlyth.hapaneld.control
 
 import io.github.maxlyth.hapaneld.device.DeviceProfile
+import io.github.maxlyth.hapaneld.platform.Daemon
+import io.github.maxlyth.hapaneld.platform.RootShell
 import io.github.maxlyth.hapaneld.util.HelperClient
 import java.io.File
 
@@ -21,7 +23,11 @@ import java.io.File
  * panels (NSPanel Pro, WF1589T), via the root daemon's `GOV` command on sandbox-walled panels (TPA10,
  * `appCanSu=false`). Previously su-only, so the control (and the "Responsiveness" card) was absent there.
  */
-class CpuController(private val profile: DeviceProfile = DeviceProfile.detect()) {
+class CpuController(
+    private val profile: DeviceProfile = DeviceProfile.detect(),
+    private val root: RootShell = Su,
+    private val daemon: Daemon = HelperClient,
+) {
 
     /** Governors the kernel offers (e.g. [powersave, performance, schedutil]); empty if unreadable. */
     fun governors(): List<String> =
@@ -35,7 +41,7 @@ class CpuController(private val profile: DeviceProfile = DeviceProfile.detect())
 
     /** Read a cpufreq sysfs node. World-readable, so read directly off-su; su panels keep the su read. */
     private fun readNode(path: String): String? =
-        if (profile.appCanSu) Su.runOutput("cat $path 2>/dev/null")
+        if (profile.appCanSu) root.runOutput("cat $path 2>/dev/null")
         else runCatching { File(path).readText() }.getOrNull()
 
     /** Apply [g] to every core. Returns true if the write ran. */
@@ -43,8 +49,8 @@ class CpuController(private val profile: DeviceProfile = DeviceProfile.detect())
         // Governor names are lowercase letters (+ digits in a few BSPs) — sanitise to keep the write safe.
         if (!g.matches(Regex("[a-z0-9_]+"))) return false
         return if (profile.appCanSu)
-            Su.run("for f in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do echo $g > \$f; done")
-        else HelperClient.send("GOV $g") == "OK"
+            root.run("for f in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do echo $g > \$f; done")
+        else daemon.send("GOV $g") == "OK"
     }
 
     /** Resolve a friendly [tier] to a kernel governor: profile default if the SoC offers it, else from
