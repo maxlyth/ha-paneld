@@ -19,7 +19,9 @@ android {
         // the supported panels (NSPanel Pro Android 8.1 = API 27, TPA10 Android 11 = API 30).
         minSdk = 26
         targetSdk = 35
-        versionCode = 68
+        // versionCode bumps on EVERY internal build (it drives upgrades + the /health build token);
+        // the -rcN suffix in versionName increments ONLY when an rc is published to GitHub.
+        versionCode = 75
         versionName = "0.8.6-rc1"
 
         // Only the fleet's ARM ABIs — bounds the native LED lib (libhapaneld_led.so) + APK size.

@@ -26,21 +26,47 @@ object CompanionInstaller {
             runCatching { context.packageManager.getPackageInfo(it, 0) }.isSuccess
         }
 
-    /** Install the minimal Companion if missing, or update it if a newer release exists. [force] skips the
-     *  version check (the manual-button path). Returns a short human status. */
-    suspend fun installOrUpdate(context: Context, force: Boolean = false): String = withContext(Dispatchers.IO) {
+    /** Resolve the newest release on [channel] to (version, minimal-APK url). `stable` uses
+     *  releases/latest (never a prerelease); `prerelease` takes the newest release of any kind from the
+     *  release list — GitHub orders it newest-first, so the first `tag_name` and the first
+     *  `app-minimal-release.apk` asset URL in document order belong to that release. */
+    private fun resolve(channel: String): Pair<String, String>? {
+        if (channel != "prerelease")
+            return UpdateChecker.fetchLatest("home-assistant/android")
+                ?.first?.removePrefix("v")?.let { UpdateChecker.stripVariant(it) to MINIMAL_APK_URL }
+        return runCatching {
+            val conn = java.net.URL("https://api.github.com/repos/home-assistant/android/releases?per_page=10")
+                .openConnection() as java.net.HttpURLConnection
+            conn.connectTimeout = 8_000; conn.readTimeout = 8_000
+            conn.setRequestProperty("Accept", "application/vnd.github+json")
+            if (conn.responseCode != 200) return@runCatching null
+            val json = conn.inputStream.bufferedReader().readText()
+            val tag = Regex(""""tag_name"\s*:\s*"([^"]+)"""").find(json)?.groupValues?.get(1)
+                ?.removePrefix("v") ?: return@runCatching null
+            val url = Regex(""""browser_download_url"\s*:\s*"([^"]*app-minimal-release\.apk)"""")
+                .find(json)?.groupValues?.get(1) ?: return@runCatching null
+            UpdateChecker.stripVariant(tag) to url
+        }.getOrNull()
+    }
+
+    /** Install the minimal Companion if missing, or update it if a newer release exists on [channel].
+     *  [force] skips the version check (the manual-button path). Returns a short human status. */
+    suspend fun installOrUpdate(context: Context, force: Boolean = false, channel: String = "stable"): String = withContext(Dispatchers.IO) {
         if (AppInstaller.installedVersion(context, FULL_PKG).isNotBlank())
             return@withContext "skipped: full Companion present (Play-managed)"
 
         val installed = AppInstaller.installedVersion(context, MINIMAL_PKG)
         val missing = installed.isBlank()
+        val resolved = resolve(channel)
         if (!missing && !force) {
-            val latest = UpdateChecker.fetchLatest("home-assistant/android")?.first
-                ?.removePrefix("v")?.let { Regex("-(?:full|minimal|wear)$").replace(it, "") }
-            if (latest != null && !UpdateChecker.isNewer(latest, installed)) return@withContext "up to date ($installed)"
+            // Compare variant-stripped ("2026.6.5-minimal" IS 2026.6.5 — issue #17); a same-version
+            // install of the other variant is never an upgrade.
+            val latest = resolved?.first
+            if (latest != null && !UpdateChecker.isNewer(latest, UpdateChecker.stripVariant(installed)))
+                return@withContext "up to date ($installed)"
         }
 
-        val r = AppInstaller.install(context, MINIMAL_APK_URL, AppInstaller.COMPANION_MINIMAL)
+        val r = AppInstaller.install(context, resolved?.second ?: MINIMAL_APK_URL, AppInstaller.COMPANION_MINIMAL)
         if (r != "OK") return@withContext r
         val now = AppInstaller.installedVersion(context, MINIMAL_PKG)
         val verb = if (missing) "installed" else "updated"

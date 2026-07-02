@@ -26,7 +26,7 @@ step() { echo "${CYN}${B}$1${X} $2"; }
 
 trap 'echo "${RED}${B}✗ provisioning incomplete${X} — re-run the SAME command to finish (it is idempotent)." >&2' ERR
 
-TARGET="${1:?usage: provision.sh <panel-ip:5555> [APK] [--id ID] [--mqtt tcp://host:1883] [--mqtt-user U] [--mqtt-pass P] [--log-host HOST] [--log-port N] [--log-proto syslog|http] [--log-off] [--latest] [--force] [--persist-adb] [--strip-vendor] [--verify]}"
+TARGET="${1:?usage: provision.sh <panel-ip:5555> [APK] [--id ID] [--mqtt tcp://host:1883] [--mqtt-user U] [--mqtt-pass P] [--log-host HOST] [--log-port N] [--log-proto syslog|http] [--log-off] [--export FILE] [--restore FILE] [--restore-fleet FILE] [--latest] [--force] [--persist-adb] [--strip-vendor] [--verify]}"
 shift
 REPO="maxlyth/ha-paneld"
 LOCAL_APK="app/build/outputs/apk/debug/app-debug.apk"
@@ -34,6 +34,7 @@ PKG="io.github.maxlyth.hapaneld"
 A11Y="$PKG/.input.PanelAccessibilityService"
 APK=""; PANEL_ID=""; MQTT=""; MQTT_USER=""; MQTT_PASS=""; VERIFY_ONLY=0; LATEST=0; FORCE=0; PERSIST_ADB=0; STRIP_VENDOR=0; TOINSTALL_VER=""
 LOG_HOST=""; LOG_PORT=""; LOG_PROTO=""; LOG_ENABLE=""
+EXPORT_FILE=""; RESTORE_FILE=""; RESTORE_MODE=""
 
 if [ "${1:-}" ] && [ "${1#--}" = "${1:-}" ]; then APK="$1"; shift; fi
 while [ "${1:-}" ]; do
@@ -51,6 +52,9 @@ while [ "${1:-}" ]; do
     --log-port) LOG_PORT="$2"; shift 2 ;;     # log sink port (default 514 for syslog)
     --log-proto) LOG_PROTO="$2"; shift 2 ;;   # syslog (default) | http
     --log-off) LOG_ENABLE=false; shift ;;     # disable log shipping
+    --export) EXPORT_FILE="$2"; shift 2 ;;    # save the panel's config bundle (incl. secrets) to FILE
+    --restore) RESTORE_FILE="$2"; RESTORE_MODE="restore"; shift 2 ;;      # best-effort import of a bundle (full restore)
+    --restore-fleet) RESTORE_FILE="$2"; RESTORE_MODE="fleet"; shift 2 ;;  # apply only PORTABLE keys (cross-panel deploy)
     --verify) VERIFY_ONLY=1; shift ;;
     *) echo "${RED}unknown arg: $1${X}" >&2; exit 2 ;;
   esac
@@ -274,6 +278,24 @@ ARGS=()
 if [ ${#ARGS[@]} -gt 0 ]; then
   step "⚙️  configuring" "${D}panel_id / MQTT / log shipping${X}"
   curl -fsS -H 'Accept: application/json' -X POST "${ARGS[@]}" "$URL/api/v1/config" >/dev/null && echo "   ${GRN}✓${X} applied"
+fi
+
+# Config bundle restore (best-effort import: valid keys apply, invalid/unknown are reported + skipped —
+# a bundle from different hardware or another ha-paneld version restores what it can). --restore applies
+# everything incl. device-scoped keys (same-panel recovery / like-for-like replacement); --restore-fleet
+# applies only PORTABLE non-secret keys (cross-panel deployment).
+if [ -n "$RESTORE_FILE" ]; then
+  [ -f "$RESTORE_FILE" ] || { echo "${RED}✗ bundle not found: $RESTORE_FILE${X}" >&2; exit 2; }
+  MODE_Q=""; [ "$RESTORE_MODE" = "fleet" ] && MODE_Q="?mode=fleet"
+  step "📦 restoring config" "${D}$RESTORE_FILE (${RESTORE_MODE})${X}"
+  resp="$(curl -fsS -H 'Content-Type: application/json' --data-binary @"$RESTORE_FILE" "$URL/api/v1/config/import$MODE_Q" 2>&1)"     && echo "   ${GRN}✓${X} $resp"     || echo "   ${RED}✗ import failed:${X} $resp"
+fi
+
+# Config bundle export (after any restore/config, so the file reflects the final state). Includes
+# secrets — the bundle is a full-recovery artifact; store it like a credential.
+if [ -n "$EXPORT_FILE" ]; then
+  step "📦 exporting config" "${D}→ $EXPORT_FILE (includes secrets — protect it)${X}"
+  curl -fsS "$URL/api/v1/config/export?include_secrets=1" -o "$EXPORT_FILE"     && echo "   ${GRN}✓${X} $(wc -c < "$EXPORT_FILE") bytes"     || echo "   ${RED}✗ export failed${X}"
 fi
 
 echo

@@ -202,21 +202,31 @@ object SettingsRegistry {
             ),
         ),
         SettingSpec(
+            key = "companion_update_channel", type = SettingType.ENUM, group = "System",
+            label = "Companion auto-update channel", default = "stable", options = listOf("stable", "prerelease"),
+            scope = Scope.DEVICE,
+            help = "Release channel the Companion auto-updater follows.",
+            ha = HaEntity(
+                "select", "companion_update_channel", "Companion auto-update channel",
+                """"command_topic":"ha-paneld/{panel}/companion_update_channel/set","state_topic":"ha-paneld/{panel}/companion_update_channel/state","options":["Stable","Pre-release"],"icon":"mdi:source-branch","entity_category":"config"""",
+            ),
+        ),
+        SettingSpec(
             key = "self_update", type = SettingType.BOOL, group = "System",
-            label = "Self-update", default = "false", scope = Scope.DEVICE,
+            label = "ha-paneld auto-update", default = "false", scope = Scope.DEVICE,
             help = "ha-paneld updates itself from GitHub releases on the selected channel (opt-in).",
             ha = HaEntity(
-                "switch", "self_update", "Self-update",
+                "switch", "self_update", "ha-paneld auto-update",
                 """"command_topic":"ha-paneld/{panel}/self_update/set","state_topic":"ha-paneld/{panel}/self_update/state","icon":"mdi:package-up","entity_category":"config"""",
             ),
         ),
         SettingSpec(
             key = "update_channel", type = SettingType.ENUM, group = "System",
-            label = "Update channel", default = "stable", options = listOf("stable", "prerelease"),
+            label = "ha-paneld auto-update channel", default = "stable", options = listOf("stable", "prerelease"),
             scope = Scope.DEVICE,
             help = "Release channel the self-updater follows.",
             ha = HaEntity(
-                "select", "update_channel", "Update channel",
+                "select", "update_channel", "ha-paneld auto-update channel",
                 """"command_topic":"ha-paneld/{panel}/update_channel/set","state_topic":"ha-paneld/{panel}/update_channel/state","options":["Stable","Pre-release"],"icon":"mdi:source-branch","entity_category":"config"""",
             ),
         ),

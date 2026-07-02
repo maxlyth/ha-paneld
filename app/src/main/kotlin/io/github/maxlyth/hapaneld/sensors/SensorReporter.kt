@@ -46,6 +46,14 @@ class SensorReporter(context: Context, private val config: Config) {
 
     private var lastLux = -1f
     private var lastLuxAt = 0L
+    // Live (un-throttled) readings for the Sensors card — updated on EVERY sensor event, independent
+    // of the publish throttles and of whether the value is exposed to HA at all.
+    @Volatile private var liveLux = Float.NaN
+    @Volatile private var liveLuxAt = 0L
+    @Volatile private var liveTemp = Float.NaN
+    @Volatile private var liveTempAt = 0L
+    @Volatile private var liveHumid = Float.NaN
+    @Volatile private var liveHumidAt = 0L
     private var lastNear: Boolean? = null
     private var lastTemp = Float.NaN
     private var lastTempAt = 0L
@@ -84,6 +92,27 @@ class SensorReporter(context: Context, private val config: Config) {
     /** Light value-type + range for the info page (lux is a continuous float), or null if absent. */
     fun lightDesc(): String? = lightSensor?.let { "Float · 0–${fmtV(it.maximumRange)} lx" }
 
+    /**
+     * LIVE sensor readings as a JSON FRAGMENT (no outer braces) for the `/api/v1/sensors` endpoint —
+     * the Sensors card. Shows ALL sensors the panel has, independent of publish throttles and of
+     * whether a value is exposed to HA (config can hide entities; the hardware view must not hide
+     * with them). Ages are seconds since the last reading; a sensor that exists but has not reported
+     * yet has a null value.
+     */
+    fun valuesJson(): String {
+        val now = System.currentTimeMillis()
+        fun age(at: Long) = if (at <= 0L) "null" else ((now - at) / 1000).toString()
+        val light = if (!hasLight()) """"present":false""" else
+            """"present":true,"lux":${if (liveLux.isNaN()) "null" else fmtV(liveLux)},"age_s":${age(liveLuxAt)}"""
+        val prox = if (!hasProximity()) """"present":false""" else
+            """"present":true,"near":${lastNear ?: "null"},"raw":${if (lastRaw.isNaN()) "null" else fmtV(lastRaw)}"""
+        val temp = if (!hasTemperature()) """"present":false""" else
+            """"present":true,"c":${if (liveTemp.isNaN()) "null" else fmtV(liveTemp)},"age_s":${age(liveTempAt)}"""
+        val humid = if (!hasHumidity()) """"present":false""" else
+            """"present":true,"pct":${if (liveHumid.isNaN()) "null" else fmtV(liveHumid)},"age_s":${age(liveHumidAt)}"""
+        return """"light":{$light},"proximity":{$prox},"temperature":{$temp},"humidity":{$humid}"""
+    }
+
     /** Proximity value-type + range for the info page, or null if absent. Graded vs binary via
      *  [proximityGraded] (firmware rule where known, else observation); graded → Integer/Float by the
      *  sensor's resolution, binary → near/far. Range from the sensor's maximumRange. */
@@ -120,6 +149,7 @@ class SensorReporter(context: Context, private val config: Config) {
                 when (e.sensor.type) {
                     Sensor.TYPE_LIGHT -> {
                         val lux = e.values[0]
+                        liveLux = lux; liveLuxAt = System.currentTimeMillis()
                         onLuxRaw(lux)   // un-throttled → auto-brightness engine
                         val now = System.currentTimeMillis()
                         val changed = lastLux < 0 || abs(lux - lastLux) >= max(1f, lastLux * 0.2f)
@@ -144,12 +174,14 @@ class SensorReporter(context: Context, private val config: Config) {
                     // (1dp temp, integer humidity) at publish so precision wobble can't make rows.
                     Sensor.TYPE_AMBIENT_TEMPERATURE -> {
                         val t = e.values[0]; val now = System.currentTimeMillis()
+                        liveTemp = t; liveTempAt = now
                         if ((lastTemp.isNaN() || abs(t - lastTemp) >= 0.2f) && now - lastTempAt >= 60000) {
                             lastTemp = t; lastTempAt = now; onTemp?.invoke(t)
                         }
                     }
                     Sensor.TYPE_RELATIVE_HUMIDITY -> {
                         val h = e.values[0]; val now = System.currentTimeMillis()
+                        liveHumid = h; liveHumidAt = now
                         if ((lastHumid.isNaN() || abs(h - lastHumid) >= 1.0f) && now - lastHumidAt >= 60000) {
                             lastHumid = h; lastHumidAt = now; onHumid?.invoke(h)
                         }

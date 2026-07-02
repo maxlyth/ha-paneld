@@ -59,7 +59,7 @@ object UpdateChecker {
             fetchLatest("home-assistant/android")?.let { (tag, url) ->
                 // HA Android tags: "3.3.2-full", "2024.11.1-minimal", etc. — strip variant suffix
                 val latest = tag.removePrefix("v").let { Regex("-(?:full|minimal|wear)$").replace(it, "") }
-                if (installed.isNotBlank() && isNewer(latest, installed)) {
+                if (installed.isNotBlank() && isNewer(latest, stripVariant(installed))) {
                     found += UpdateInfo("HA Companion", installed, latest, url)
                 }
             }
@@ -67,6 +67,12 @@ object UpdateChecker {
 
         available = found
     }
+
+    /** HA Companion versionNames/tags carry a VARIANT suffix ("-minimal"/"-full"/"-wear") that is not a
+     *  prerelease marker — "2026.6.5-minimal" IS version 2026.6.5. Strip it before any comparison, else
+     *  [isNewer]'s suffix ordering treats an installed minimal build as older than its own version and
+     *  offers a same-version "upgrade" (GitHub issue #17). */
+    internal fun stripVariant(v: String): String = Regex("-(?:full|minimal|wear)$").replace(v.trim(), "")
 
     internal fun fetchLatest(repo: String): Pair<String, String>? = runCatching {
         val conn = URL("https://api.github.com/repos/$repo/releases/latest").openConnection() as HttpURLConnection

@@ -8,11 +8,24 @@ From **v0.8.0**, entries are grouped under **Added** (new features/entities), **
 changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
 content appear. Earlier releases predate this convention and keep their flat lists.
 
-## v0.8.6-rc1 - 2026-07-02
+## v0.8.6-rc1 - Unreleased
+
+### Added
+
+- **Live log viewer** — a new **Logs** tab tails the panel's logs in the browser, no `adb logcat` needed: pick **App** (ha-paneld's own process log, works with no root) or **System** (the full device logcat, root panels), filter by level or text, pause/resume, and follow the tail. Served as a plain Server-Sent-Events stream at `/api/v1/logs/stream` (also `curl -N`-able). Tokens/passwords are redacted server-side by the same single pass that guards remote log shipping — the capture subprocess only runs while someone is watching (or shipping is on) and stops when the last viewer disconnects.
+- **Live Sensors card** — the Dashboard now shows live readings from **all of the panel's sensors** — ambient light, proximity (near/far + raw), temperature, humidity, plus volume and brightness — refreshed every 2 seconds via a new `/api/v1/sensors` endpoint. Readings are the hardware's live values, shown **even when a sensor is hidden from Home Assistant** by the exposure config, with an age indicator per reading; the card renderer is reusable so other tabs can mount it.
+- **Companion auto-update channel** — the Companion updater gains the same **Stable / Pre-release** channel select as ha-paneld's own auto-update (`select.<panel>_companion_update_channel`, default Stable; also on the Configure tab). Switching channel triggers an immediate check when Companion auto-update is on.
+- **Config export/restore from the provision script** — `provision.sh --export FILE` saves a panel's full config bundle (includes secrets — protect the file), `--restore FILE` best-effort-imports a bundle (full restore, device keys included), `--restore-fleet FILE` applies only the portable keys for cross-panel deployment. Completes the bundle feature across API + web UI + fleet scripts.
+
+### Changed
+
+- **Config import is now best-effort** — a bundle exported from a different panel model or a different ha-paneld version restores everything it validly can: valid keys apply, invalid values are reported and skipped, unknown keys warn and skip (previously a single invalid value rejected the whole bundle). `?strict=1` keeps the old all-or-nothing behaviour; dry-run previews now list what would be skipped. Status reports `applied` / `partial` / `rejected`.
+- **Clearer update-entity names** — "Self-update" is now **"ha-paneld auto-update"** and "Update channel" is **"ha-paneld auto-update channel"**, so it's obvious they apply to ha-paneld and not the Companion app. Display names only — entity ids are unchanged, so no Home Assistant entity churn. (#18)
 
 ### Fixed
 
 - **False "credentials rejected" while connected** — after a connection rebuild, the superseded MQTT client could keep auto-reconnecting in the background before its teardown completed; its rejected attempts overwrote the live connection's status, so the UI warned about invalid MQTT credentials (and the watchdog force-rebuilt every couple of minutes) while the panel was in fact connected and healthy. Superseded clients are now ignored by the status listeners and told to stop reconnecting, and the credentials warning only appears when the rejection is persistent — a transient rejection during a broker restart renders as "reconnecting…" instead. This also explains (and ends) the long-standing pattern of NOT_AUTHORIZED loops from a broker that accepts a fresh client.
+- **No more false Companion "update available" for the installed variant** — the update check compared the installed `-minimal` versionName against the release tag as if the variant suffix were a prerelease marker, so a panel on `2026.6.5-minimal` was offered "2026.6.5" as an upgrade. Versions are now compared variant-stripped, in both the banner check and the auto-updater. (#17)
 
 ## v0.8.5 - 2026-07-02
 
