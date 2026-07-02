@@ -55,6 +55,7 @@ import io.github.maxlyth.hapaneld.util.UpdateChecker
 import io.github.maxlyth.hapaneld.util.CompanionInstaller
 import io.github.maxlyth.hapaneld.util.SelfUpdater
 import io.github.maxlyth.hapaneld.mqtt.ConnectionSupervisor
+import io.github.maxlyth.hapaneld.util.periodic
 import io.github.maxlyth.hapaneld.util.SystemProps
 
 /**
@@ -408,25 +409,28 @@ class PaneldService : Service() {
                 onTemperature = { c -> mqtt.publishTemperature(c) },
                 onHumidity = { h -> mqtt.publishHumidity(h) },
             )
-            launch {
-                delay(30_000L)  // let startup settle before hitting the network
-                while (isActive) {
-                    runCatching { UpdateChecker.check(this@PaneldService, config.updateChannel) }
-                    // Companion self-heal: when enabled, install a missing Companion / update an out-of-date one.
-                    if (config.companionAutoUpdate) {
-                        runCatching {
-                            val r = CompanionInstaller.installOrUpdate(this@PaneldService)
-                            Log.i(TAG, "Companion auto: $r")
-                        }
+            periodic(
+                intervalMs = 24 * 3_600 * 1_000L,
+                initialDelayMs = 30_000L, // let startup settle before hitting the network
+                tag = TAG,
+                name = "update-check",
+            ) {
+                // Each sub-step is isolated so one failing doesn't skip the others; the periodic boundary
+                // is the outer net that keeps the loop alive across an unexpected throw.
+                runCatching { UpdateChecker.check(this@PaneldService, config.updateChannel) }
+                // Companion self-heal: when enabled, install a missing Companion / update an out-of-date one.
+                if (config.companionAutoUpdate) {
+                    runCatching {
+                        val r = CompanionInstaller.installOrUpdate(this@PaneldService)
+                        Log.i(TAG, "Companion auto: $r")
                     }
-                    // ha-paneld self-update LAST — a successful install restarts this process (and this loop).
-                    if (config.selfUpdate) {
-                        runCatching {
-                            val r = SelfUpdater.checkAndUpdate(this@PaneldService, config.updateChannel)
-                            Log.i(TAG, "self-update auto: $r")
-                        }
+                }
+                // ha-paneld self-update LAST — a successful install restarts this process (and this loop).
+                if (config.selfUpdate) {
+                    runCatching {
+                        val r = SelfUpdater.checkAndUpdate(this@PaneldService, config.updateChannel)
+                        Log.i(TAG, "self-update auto: $r")
                     }
-                    delay(24 * 3_600 * 1_000L)
                 }
             }
             startMqttWatchdog()
@@ -435,17 +439,16 @@ class PaneldService : Service() {
             // strand) or a firmware idle-dim can leave the panel dark and apparently bricked. If the screen
             // is dark but ha-paneld did NOT deliberately turn it off, re-light it; a user-intended
             // "screen off" (isIntendedOff) is left alone.
-            launch {
-                delay(15_000L) // let boot settle before the first check
-                while (isActive) {
-                    runCatching {
-                        if (!screen.isIntendedOff() && screen.looksDark()) {
-                            Log.w(TAG, "screen dark with no intent — re-lighting (never-blank guard)")
-                            screen.wake()
-                            mqtt.publishScreenOn()
-                        }
-                    }
-                    delay(SCREEN_WATCHDOG_MS)
+            periodic(
+                intervalMs = SCREEN_WATCHDOG_MS,
+                initialDelayMs = 15_000L, // let boot settle before the first check
+                tag = TAG,
+                name = "never-blank",
+            ) {
+                if (!screen.isIntendedOff() && screen.looksDark()) {
+                    Log.w(TAG, "screen dark with no intent — re-lighting (never-blank guard)")
+                    screen.wake()
+                    mqtt.publishScreenOn()
                 }
             }
         }

@@ -3,13 +3,11 @@ package io.github.maxlyth.hapaneld.control
 import android.os.SystemClock
 import android.util.Log
 import io.github.maxlyth.hapaneld.Config
+import io.github.maxlyth.hapaneld.util.periodic
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
 
 /**
  * App watchdog — keeps the dashboard alive on a wall panel so it self-heals without intervention.
@@ -41,37 +39,34 @@ class WatchdogController(
         job = null
         if (!enabled) { Log.i(TAG, "watchdog off"); return }
         Log.i(TAG, "watchdog on (poll ${INTERVAL_MS / 1000}s, bg-return ${BG_TIMEOUT_MS / 1000}s)")
-        job = scope.launch {
-            var deadStreak = 0
-            var bgSince = 0L
-            while (isActive) {
-                delay(INTERVAL_MS)
-                val pkg = config.dashboardPackage
-                when (runCatching { system.dashboardState(pkg) }.getOrDefault(AppState.UNKNOWN)) {
-                    AppState.FG -> { deadStreak = 0; bgSince = 0L }
-                    AppState.BG -> {
-                        deadStreak = 0
-                        val now = SystemClock.elapsedRealtime()
-                        if (bgSince == 0L) {
-                            bgSince = now
-                        } else if (now - bgSince >= BG_TIMEOUT_MS) {
-                            Log.i(TAG, "dashboard backgrounded > ${BG_TIMEOUT_MS / 1000}s -> returning to it")
-                            system.launchHome(pkg)
-                            bgSince = 0L
-                        }
-                    }
-                    AppState.DEAD -> {
+        var deadStreak = 0
+        var bgSince = 0L
+        job = scope.periodic(INTERVAL_MS, initialDelayMs = INTERVAL_MS, tag = TAG, name = "watchdog") {
+            val pkg = config.dashboardPackage
+            when (runCatching { system.dashboardState(pkg) }.getOrDefault(AppState.UNKNOWN)) {
+                AppState.FG -> { deadStreak = 0; bgSince = 0L }
+                AppState.BG -> {
+                    deadStreak = 0
+                    val now = SystemClock.elapsedRealtime()
+                    if (bgSince == 0L) {
+                        bgSince = now
+                    } else if (now - bgSince >= BG_TIMEOUT_MS) {
+                        Log.i(TAG, "dashboard backgrounded > ${BG_TIMEOUT_MS / 1000}s -> returning to it")
+                        system.launchHome(pkg)
                         bgSince = 0L
-                        if (++deadStreak >= DEAD_STREAK) {
-                            Log.w(TAG, "dashboard process dead -> relaunching")
-                            system.launchHome(pkg)
-                            deadStreak = 0
-                        }
                     }
-                    // Transient probe failure (su/daemon hiccup): stay cautious — don't relaunch, and
-                    // keep any running background timer rather than losing it to one bad read.
-                    AppState.UNKNOWN -> deadStreak = 0
                 }
+                AppState.DEAD -> {
+                    bgSince = 0L
+                    if (++deadStreak >= DEAD_STREAK) {
+                        Log.w(TAG, "dashboard process dead -> relaunching")
+                        system.launchHome(pkg)
+                        deadStreak = 0
+                    }
+                }
+                // Transient probe failure (su/daemon hiccup): stay cautious — don't relaunch, and
+                // keep any running background timer rather than losing it to one bad read.
+                AppState.UNKNOWN -> deadStreak = 0
             }
         }
     }
