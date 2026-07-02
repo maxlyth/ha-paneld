@@ -4,6 +4,9 @@ import android.content.Context
 import android.provider.Settings
 import android.util.Log
 import io.github.maxlyth.hapaneld.Config
+import io.github.maxlyth.hapaneld.util.Cached
+import io.github.maxlyth.hapaneld.util.HelperClient
+import java.io.File
 
 /**
  * Screen brightness via the standard `Settings.System` API — no vendor lib. Requires the
@@ -65,15 +68,76 @@ class BrightnessController(private val context: Context) : Backlight {
             val hw = (v.toLong() * max / 255).toInt().coerceIn(0, max)
             Su.runOutput("echo $hw > ${dir}brightness")
         }
+        // No su → drive the node through the daemon (BLSET scales from the daemon-read max), so a
+        // brightness command moves the REAL backlight on sandbox-walled panels too.
+        if (backlight == null && HelperClient.available()) {
+            HelperClient.send("BLREAD")?.trim()?.split(' ')?.getOrNull(1)?.toIntOrNull()?.let { max ->
+                if (max > 0) HelperClient.send("BLSET ${(v.toLong() * max / 255).toInt().coerceIn(0, max)}")
+            }
+        }
+        effective.invalidate()   // a read right after a set must see the new level, not the cache
+    }
+
+    // Read path for the EFFECTIVE backlight. The sysfs node carries the generic `sysfs` SELinux label
+    // on the supported panels, so actual_brightness is usually readable with NO root — which is what
+    // makes effective reporting work on daemon-only panels (TPA10) whose firmware also moves the
+    // backlight behind SCREEN_BRIGHTNESS's back. Verified by actually reading during discovery
+    // (canRead() only checks DAC; SELinux denials surface as the read throwing).
+    private val readNode: Pair<File, Int>? by lazy {
+        runCatching {
+            File("/sys/class/backlight").listFiles()?.sortedBy { it.name }?.firstNotNullOfOrNull { d ->
+                val max = runCatching { File(d, "max_brightness").readText().trim().toIntOrNull() }.getOrNull()
+                val f = File(d, "actual_brightness")
+                val probe = runCatching { f.readText().trim().toIntOrNull() }.getOrNull()
+                if (max != null && max > 0 && probe != null) f to max else null
+            }
+        }.getOrNull()
+    }
+
+    // Effective reads are cheap as plain files but an su round-trip on the fallback path, and callers
+    // include per-tick reconciles and UI polls — cache briefly; writes invalidate so a fresh set reads back.
+    private val effective = Cached(EFFECTIVE_TTL_MS) { readEffective() }
+
+    /** Sysfs actual_brightness scaled to 0–255 (plain file read, else su), or -1 when unavailable. */
+    private fun readEffective(): Int {
+        readNode?.let { (f, max) ->
+            runCatching { f.readText().trim().toIntOrNull() }.getOrNull()?.let {
+                return (it.toLong() * 255 / max).toInt().coerceIn(0, 255)
+            }
+        }
+        // Daemon leg (TPA10-class panels: the app is SELinux-denied on the node and has no su).
+        if (HelperClient.available()) {
+            HelperClient.send("BLREAD")?.trim()?.split(' ')?.let { p ->
+                val actual = p.getOrNull(0)?.toIntOrNull()
+                val max = p.getOrNull(1)?.toIntOrNull()
+                if (actual != null && max != null && max > 0) {
+                    return (actual.toLong() * 255 / max).toInt().coerceIn(0, 255)
+                }
+            }
+        }
+        backlight?.let { (dir, max) ->
+            Su.runOutput("cat ${dir}actual_brightness 2>/dev/null")?.trim()?.toIntOrNull()?.let {
+                return (it.toLong() * 255 / max).toInt().coerceIn(0, 255)
+            }
+        }
+        return -1
+    }
+
+    /** The COMMANDED brightness — the Android setting, i.e. the 0–255 scale HA and the UI command in.
+     *  Distinct from [getBrightness]: the framework maps the setting through a per-device brightness
+     *  curve before driving the hardware node, so the effective (node) value is a DIFFERENT scale on
+     *  curved panels (NSPanel Pro: setting 241 → node ~102). State publishes must use this scale. */
+    fun getCommanded(): Int = try {
+        Settings.System.getInt(context.contentResolver, Settings.System.SCREEN_BRIGHTNESS)
+    } catch (e: Settings.SettingNotFoundException) {
+        -1
     }
 
     /** Reports the EFFECTIVE backlight (sysfs actual_brightness, scaled to 0–255) so HA reflects external /
      *  firmware dimming that bypasses SCREEN_BRIGHTNESS; falls back to the Android setting. */
     override fun getBrightness(): Int {
-        backlight?.let { (dir, max) ->
-            val actual = Su.runOutput("cat ${dir}actual_brightness 2>/dev/null")?.trim()?.toIntOrNull()
-            if (actual != null) return (actual.toLong() * 255 / max).toInt().coerceIn(0, 255)
-        }
+        val eff = effective.get()
+        if (eff >= 0) return eff
         return try {
             Settings.System.getInt(context.contentResolver, Settings.System.SCREEN_BRIGHTNESS)
         } catch (e: Settings.SettingNotFoundException) {
@@ -110,6 +174,7 @@ class BrightnessController(private val context: Context) : Backlight {
     companion object {
         private const val TAG = "ha-paneld/brightness"
         private const val MIN_VISIBLE = 10 // setBrightness floor: a dim command must never blank the panel
+        private const val EFFECTIVE_TTL_MS = 5_000L // effective-backlight read cache (UI polls + reconcile ticks)
         private const val NEVER = Int.MAX_VALUE // ~24.8 days; the conventional "never auto-off" sentinel
     }
 }

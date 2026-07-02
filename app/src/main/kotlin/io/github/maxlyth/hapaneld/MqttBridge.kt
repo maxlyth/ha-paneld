@@ -184,6 +184,15 @@ class MqttBridge(
     private val cmdNetAdb = "ha-paneld/$panel/network_adb/set"
     private val stateNetAdb = "ha-paneld/$panel/network_adb/state"
     private val stateScreen = "ha-paneld/$panel/screen/state"
+    // Last brightness reported to HA on stateScreen (-1 = screen reported OFF); heartbeat reconciles
+    // the effective hardware backlight against this so firmware dims reach HA between commands.
+    @Volatile private var lastScreenBrightness = -1
+    // Effective (node-scale) level the last command settled at; -1 = capture on next heartbeat tick.
+    @Volatile private var screenEffectiveBaseline = -1
+    // Per-channel sync state: previous tick's read (settle detection) + last published volume.
+    @Volatile private var prevTickBrightness = -1
+    @Volatile private var prevTickVolume = -1
+    @Volatile private var lastPublishedVolume = -1
     private val stateLed = "ha-paneld/$panel/led/state"
     private val stateNavigate = "ha-paneld/$panel/navigate/state"
     private val stateVolume = "ha-paneld/$panel/volume/state"
@@ -355,9 +364,10 @@ class MqttBridge(
      * publishes the current screen/volume/navigate states.
      */
     private fun restoreAndPublishStates() {
-        publish(stateVolume, volume.getPercent().toString(), retain = true)
-        // Screen: panels come up on; report ON + the current brightness.
-        publish(stateScreen, """{"state":"ON","brightness":${brightness.getBrightness().coerceAtLeast(1)}}""", retain = true)
+        volume.getPercent().let { lastPublishedVolume = it; publish(stateVolume, it.toString(), retain = true) }
+        // Screen: panels come up on; report ON + the current COMMANDED brightness (the setting scale
+        // HA commands in — the effective node value is a different scale on curve-mapped panels).
+        publishScreenBrightness(brightness.getCommanded().coerceAtLeast(1))
         // Navigate: last pushed path, else default to the dashboard root "/" so the entity shows a
         // sensible local path instead of "unknown" before anything has been navigated.
         val navInit = config.lastNavigate.ifEmpty { "/" }
@@ -438,13 +448,15 @@ class MqttBridge(
     /** Publish screen=ON to HA after a LOCAL wake (e.g. wake-on-wave), so `light.<panel>_screen` tracks
      *  reality instead of staying OFF. No-op if the broker isn't connected yet. */
     fun publishScreenOn() {
-        publish(stateScreen, """{"state":"ON","brightness":${brightness.getBrightness().coerceAtLeast(1)}}""", retain = true)
+        publishScreenBrightness(brightness.getCommanded().coerceAtLeast(1))
     }
 
     /** Publish the current volume to HA after a LOCAL change (e.g. navbar Volume ±), so
      *  `number.<panel>_volume` tracks reality. No-op if the broker isn't connected yet. */
     fun publishVolume() {
-        publish(stateVolume, volume.getPercent().toString(), retain = true)
+        val v = volume.getPercent()
+        lastPublishedVolume = v
+        publish(stateVolume, v.toString(), retain = true)
     }
 
     private fun handleScreen(payload: String) {
@@ -452,6 +464,7 @@ class MqttBridge(
         val on = json.optString("state", "ON").equals("ON", ignoreCase = true)
         if (!on) {
             screen.sleep()
+            lastScreenBrightness = -1
             publish(stateScreen, """{"state":"OFF"}""", retain = true)
             return
         }
@@ -459,10 +472,10 @@ class MqttBridge(
         val level = if (json.has("brightness")) {
             json.getInt("brightness").also { brightness.setBrightness(it) }
         } else {
-            brightness.getBrightness().coerceAtLeast(1)
+            brightness.getCommanded().coerceAtLeast(1)
         }
         screen.noteLevel(level)
-        publish(stateScreen, """{"state":"ON","brightness":$level}""", retain = true)
+        publishScreenBrightness(level)
     }
 
     private fun handleLed(payload: String) {
@@ -736,7 +749,7 @@ class MqttBridge(
         // number entity sends a plain numeric string (0..100).
         val pct = payload.trim().trim('"').toDoubleOrNull()?.toInt() ?: return
         volume.setPercent(pct)
-        publish(stateVolume, volume.getPercent().toString(), retain = true)
+        volume.getPercent().let { lastPublishedVolume = it; publish(stateVolume, it.toString(), retain = true) }
     }
 
     private fun publishButton(event: String) {
@@ -813,7 +826,11 @@ class MqttBridge(
         payload: () -> String,
         publishState: () -> Unit,
     ) {
-        if (config.haExposed(key)) {
+        // Honour the spec's per-setting default so a setting declared haExposedByDefault=false is
+        // local-only (HTTP UI) until the user opts in via the expose pip — matching what the Configure
+        // UI/schema shows. Falls back to true for keys with no registry spec (e.g. relay/button_led).
+        val default = SettingsRegistry.spec(key)?.haExposedByDefault ?: true
+        if (config.haExposed(key, default)) {
             publishConfig(component, objectId, payload())
             publishState()
         } else {
@@ -1156,6 +1173,74 @@ class MqttBridge(
     fun heartbeat() {
         if (state == "disabled") return
         runCatching { publish("ha-paneld/$panel/last_seen", (System.currentTimeMillis() / 1000).toString()) }
+        runCatching { syncLocalState() }
+    }
+
+    /**
+     * Local-state → MQTT sync: panel values can change OUTSIDE ha-paneld's API (auto-brightness and
+     * any local app writing the setting, hardware volume keys, vendor firmware dimming the backlight
+     * node), and HA must track them without being flooded. One pass per heartbeat tick per channel:
+     * publish only when the value differs from the LAST PUBLISHED beyond the channel's deadband AND
+     * has settled (change since the previous tick within the settle band) — fast oscillation
+     * publishes nothing until it stops, a slow ramp publishes at most once per tick, steady state
+     * publishes zero messages. Runs on the watchdog thread (su-safe, off-main).
+     */
+    private fun syncLocalState() {
+        // Channel: commanded brightness (Android setting — the scale HA commands in). Catches
+        // auto-brightness and any local actor. Skipped while the screen is deliberately off.
+        if (!screen.isIntendedOff() && lastScreenBrightness >= 0) {
+            val cur = brightness.getCommanded()
+            if (settled(cur, prevTickBrightness, lastScreenBrightness, deadband = 3)) {
+                Log.i(TAG, "local brightness changed outside MQTT: $lastScreenBrightness -> $cur — syncing")
+                publishScreenBrightness(cur.coerceAtLeast(1))
+            }
+            prevTickBrightness = cur
+
+            // Channel: effective backlight vs its post-command baseline — ONLY when the commanded
+            // setting hasn't moved (else the channel above owns it). Catches firmware node-dims. The
+            // node scale differs from the setting scale on curve-mapped panels, so drift is reported
+            // back-mapped proportionally into the commanded scale.
+            if (cur == lastScreenBrightness || kotlin.math.abs(cur - lastScreenBrightness) <= 3) {
+                val eff = brightness.getBrightness()
+                if (eff >= 0) {
+                    val base = screenEffectiveBaseline
+                    if (base < 0) {
+                        screenEffectiveBaseline = eff   // command settled — remember its hardware level
+                    } else if (kotlin.math.abs(eff - base) > SCREEN_DRIFT) {
+                        val reported = (lastScreenBrightness.toLong() * eff / base.coerceAtLeast(1))
+                            .toInt().coerceIn(1, 255)
+                        Log.i(TAG, "screen backlight moved externally: baseline $base -> $eff — reporting $reported")
+                        publishScreenBrightness(reported)
+                        screenEffectiveBaseline = eff
+                    }
+                }
+            }
+        }
+
+        // Channel: volume — hardware keys / local apps change it outside MQTT.
+        runCatching {
+            val cur = volume.getPercent()
+            if (settled(cur, prevTickVolume, lastPublishedVolume, deadband = 1)) {
+                Log.i(TAG, "local volume changed outside MQTT: $lastPublishedVolume -> $cur — syncing")
+                lastPublishedVolume = cur
+                publish(stateVolume, cur.toString(), retain = true)
+            }
+            prevTickVolume = cur
+        }
+    }
+
+    /** Sync predicate: [cur] differs from [published] beyond [deadband] AND isn't still moving fast
+     *  (within SETTLE_BAND of the previous tick's read — a mid-flight value waits for the next tick). */
+    private fun settled(cur: Int, prevTick: Int, published: Int, deadband: Int): Boolean =
+        cur >= 0 && published >= 0 && kotlin.math.abs(cur - published) > deadband &&
+            (prevTick < 0 || kotlin.math.abs(cur - prevTick) <= SETTLE_BAND)
+
+    /** Publish screen=ON at [level] and remember it as the last-reported brightness (the reconcile
+     *  in [heartbeat] compares the effective backlight against this). */
+    private fun publishScreenBrightness(level: Int) {
+        lastScreenBrightness = level
+        screenEffectiveBaseline = -1   // re-capture on the next tick, after the framework settles
+        publish(stateScreen, """{"state":"ON","brightness":$level}""", retain = true)
     }
 
     @Synchronized
@@ -1170,6 +1255,8 @@ class MqttBridge(
 
     companion object {
         private const val TAG = "ha-paneld/mqtt"
+        private const val SCREEN_DRIFT = 2   // reconcile threshold (0-255 scale) — ignore rounding jitter
+        private const val SETTLE_BAND = 6    // "still moving" if the value shifted more than this since last tick
         // How long to wait after a reload before deep-linking to the intended dashboard — lets the WebView
         // cold-start + the HA frontend load so the navigate deeplink isn't swallowed.
         private const val RELOAD_NAV_DELAY_MS = 8_000L

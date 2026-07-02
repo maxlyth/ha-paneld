@@ -250,7 +250,7 @@ class NavbarController(
         dismissSlider()
         if (!canDraw()) return
         val level0 = when (kind) {
-            Slider.BRIGHTNESS -> brightness.getBrightness().coerceIn(0, 255) / 255f
+            Slider.BRIGHTNESS -> brightness.getCommanded().coerceIn(0, 255) / 255f
             Slider.VOLUME -> volume.getPercent() / 100f
         }
         val slider = VerticalSlider(level0) { lv ->
@@ -453,7 +453,7 @@ class NavbarController(
     }
 
     private fun updateBrightLabel() {
-        brightLabel?.text = "${(brightness.getBrightness().coerceAtLeast(0) * 100 + 127) / 255}%"
+        brightLabel?.text = "${(brightness.getCommanded().coerceAtLeast(0) * 100 + 127) / 255}%"
     }
 
     private fun updateVolLabel() {
@@ -567,7 +567,7 @@ class NavbarController(
 
     /** Step screen brightness by [delta] (of 0–255), floored at 10 so the screen never goes black. */
     private fun stepBrightness(delta: Int) {
-        val cur = brightness.getBrightness().let { if (it < 0) 128 else it }
+        val cur = brightness.getCommanded().let { if (it < 0) 128 else it }
         brightness.setBrightness((cur + delta).coerceIn(10, 255))
         onBrightnessChanged()
     }

@@ -124,7 +124,11 @@ data class SettingSpec(
     val step: Double? = null,
     val options: List<String> = emptyList(), // ENUM choices
     val ha: HaEntity? = null,                // discovery descriptor, or null if never an HA entity
-    val haExposedByDefault: Boolean = true,  // per-panel default for the expose-to-HA pip (only if ha != null)
+    // Per-panel default for the expose-to-HA pip. Defaults to FALSE: a setting is local-only (HTTP UI)
+    // unless it explicitly opts in with haExposedByDefault=true in SettingsRegistry. Consulted by the
+    // discovery gate for every HA-publishable setting (those with `ha`, plus the discovery-pass entities
+    // like navbar that carry no `ha` block here). A per-panel expose pip can still override it either way.
+    val haExposedByDefault: Boolean = false,
     val transient: Boolean = false,          // accepted + routed to a controller but never persisted (e.g. ambient_lux)
     val availableWhen: (Capabilities) -> Boolean = { true },
     val validate: (String) -> Validation = { Validation.Ok(it) },

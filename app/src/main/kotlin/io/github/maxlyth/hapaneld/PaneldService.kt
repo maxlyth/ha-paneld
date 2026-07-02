@@ -197,6 +197,7 @@ class PaneldService : Service() {
             tame = tame, tameProfileCandidates = profile.tameVendorCandidates,
             // Live log viewer sources (Logs tab). System is gated on Su.available() per request.
             logApp = logCaptureApp, logSystem = logCaptureSystem,
+            effectiveBrightness = { brightness.getBrightness() },
         )
         // Stream daemon-instrumented hardware buttons (e.g. WF1589T power key) into the same event
         // entity as the a11y key capture. No-op on panels with no evdev buttons.

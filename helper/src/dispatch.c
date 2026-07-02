@@ -19,6 +19,8 @@ static const struct { const char *verb; cmd_fn fn; } COMMANDS[] = {
     { "BTN",       cmd_btn },
     { "LEDPROBE",  cmd_ledprobe },
     { "SCREEN",    cmd_screen },
+    { "BLREAD",    cmd_blread },
+    { "BLSET",     cmd_blset },
     { "SCREENCAP", cmd_screencap },
     { "RELOAD",    cmd_reload },
     { "START",     cmd_start },
