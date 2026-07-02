@@ -2,6 +2,7 @@ package io.github.maxlyth.hapaneld.logship
 
 import android.util.Log
 import io.github.maxlyth.hapaneld.Config
+import io.github.maxlyth.hapaneld.util.Json
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -289,19 +290,6 @@ class LogShipper(
             return s
         }
 
-        private fun jsonStr(v: String): String {
-            val sb = StringBuilder(v.length + 2)
-            sb.append('"')
-            for (c in v) when (c) {
-                '\\' -> sb.append("\\\\")
-                '"' -> sb.append("\\\"")
-                '\n' -> sb.append("\\n")
-                '\r' -> sb.append("\\r")
-                '\t' -> sb.append("\\t")
-                else -> if (c < ' ') sb.append("\\u%04x".format(c.code)) else sb.append(c)
-            }
-            sb.append('"')
-            return sb.toString()
-        }
+        private fun jsonStr(v: String): String = Json.str(v)
     }
 }

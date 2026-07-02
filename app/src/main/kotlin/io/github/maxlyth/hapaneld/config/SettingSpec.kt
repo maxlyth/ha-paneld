@@ -1,5 +1,7 @@
 package io.github.maxlyth.hapaneld.config
 
+import io.github.maxlyth.hapaneld.util.Json
+
 /**
  * Declarative settings registry — the single source of truth for ha-paneld configuration.
  *
@@ -99,7 +101,7 @@ data class HaEntity(
     }
 
     companion object {
-        fun jsonEsc(s: String): String = s.replace("\\", "\\\\").replace("\"", "\\\"")
+        fun jsonEsc(s: String): String = Json.esc(s)
     }
 }
 

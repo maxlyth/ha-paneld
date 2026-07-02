@@ -29,6 +29,7 @@ import io.github.maxlyth.hapaneld.config.SettingsRegistry
 import io.github.maxlyth.hapaneld.hardware.LedController
 import io.github.maxlyth.hapaneld.input.ButtonBus
 import io.github.maxlyth.hapaneld.util.HelperClient
+import io.github.maxlyth.hapaneld.util.Json
 import kotlin.math.roundToInt
 import org.json.JSONObject
 
@@ -1090,8 +1091,7 @@ class MqttBridge(
         )
     }
 
-    private fun jsonEsc(s: String): String =
-        s.replace("\\", "\\\\").replace("\"", "\\\"")
+    private fun jsonEsc(s: String): String = Json.esc(s)
 
     // Discovery configs are published NON-retained. Entities still rebuild on an HA restart because we
     // re-announce on HA's `homeassistant/status` = online birth message (+ on our own every connect) —

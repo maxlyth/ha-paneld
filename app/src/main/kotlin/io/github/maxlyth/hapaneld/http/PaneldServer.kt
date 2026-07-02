@@ -23,6 +23,7 @@ import io.github.maxlyth.hapaneld.device.TameCandidate
 import io.github.maxlyth.hapaneld.input.PanelAccessibilityService
 import io.github.maxlyth.hapaneld.sensors.SensorReporter
 import io.github.maxlyth.hapaneld.util.HelperClient
+import io.github.maxlyth.hapaneld.util.Json
 import io.github.maxlyth.hapaneld.util.UpdateChecker
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
@@ -960,7 +961,7 @@ ${dashboardValueCards()}
         .replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
 
     /** JSON-quote a string value (escapes backslash + double-quote). */
-    private fun jsonStr(s: String): String = "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+    private fun jsonStr(s: String): String = Json.str(s)
 
     /** Persist a new tame blocklist and apply the delta off-thread (tame additions, re-enable removals).
      *  Used by the fleet/JSON `tame_vendor_packages` path; the browser card uses per-package POST /tame. */
@@ -1185,7 +1186,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
      * Values themselves come from GET /config; this endpoint is metadata only.
      */
     private fun configSchemaJson(): String {
-        fun s(v: String) = "\"" + v.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+        fun s(v: String) = Json.str(v)
         val caps = capabilities()
         val items = SettingsRegistry.settable().joinToString(",") { spec ->
             val opts = spec.options.joinToString(",") { s(it) }
@@ -1223,7 +1224,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
 
     /** Registry-driven current values (typed JSON; secrets blanked) for the Configure form. */
     private fun settingsValuesJson(): String {
-        fun s(v: String) = "\"" + v.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+        fun s(v: String) = Json.str(v)
         val live = liveValues()
         val parts = SettingsRegistry.settable().joinToString(",") { spec ->
             val raw = effectiveValue(spec, live)
@@ -1377,13 +1378,13 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
     }
 
     private fun jarr(items: List<String>): String =
-        "[" + items.joinToString(",") { "\"" + it.replace("\\", "\\\\").replace("\"", "\\\"") + "\"" } + "]"
+        "[" + items.joinToString(",") { Json.str(it) } + "]"
 
     private fun importJson(status: String, applied: List<String>, skipped: List<String>, warnings: List<String>, errors: List<String>): String =
         "{\"status\":\"$status\",\"applied\":${jarr(applied)},\"skipped\":${jarr(skipped)},\"warnings\":${jarr(warnings)},\"errors\":${jarr(errors)}}"
 
     private fun dryRunJson(diff: List<ConfigDiff.Change>, skipped: List<String>, warnings: List<String>): String {
-        fun q(v: String) = "\"" + v.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+        fun q(v: String) = Json.str(v)
         val changes = diff.joinToString(",") { c ->
             "{\"key\":${q(c.key)},\"from\":${c.from?.let { q(it) } ?: "null"},\"to\":${q(c.to)}}"
         }
@@ -1393,7 +1394,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
     /** Full config as JSON for fleet management. The MQTT password is never emitted — only a boolean
      *  saying whether one is set. `http_port` is read-only (changing it needs a restart). */
     private fun configJson(): String {
-        fun s(v: String) = "\"" + v.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+        fun s(v: String) = Json.str(v)
         return "{" +
             "\"panel_id\":${s(config.panelId)}," +
             "\"friendly_name\":${s(config.friendlyName)}," +

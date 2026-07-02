@@ -1,5 +1,7 @@
 package io.github.maxlyth.hapaneld.config
 
+import io.github.maxlyth.hapaneld.util.Json
+
 /**
  * A versioned, self-describing config document for export / import / revision snapshots.
  * Pure: serialize/parse operate on a flat `Map<String,String>` of values so this runs on the JVM
@@ -62,16 +64,7 @@ data class ConfigBundle(
             ConfigBundle(kind, schema, at, by, values)
         }.getOrNull()
 
-        private fun esc(s: String): String = buildString {
-            for (c in s) when (c) {
-                '\\' -> append("\\\\")
-                '"' -> append("\\\"")
-                '\n' -> append("\\n")
-                '\r' -> append("\\r")
-                '\t' -> append("\\t")
-                else -> append(c)
-            }
-        }
+        private fun esc(s: String): String = Json.esc(s)
     }
 
     /** Tiny recursive-descent reader for the limited JSON this module emits (strings, ints, flat maps). */
