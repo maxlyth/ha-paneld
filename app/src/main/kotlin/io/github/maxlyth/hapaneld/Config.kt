@@ -156,6 +156,23 @@ class Config(context: Context) {
         edit { putString("tame_vendor_packages", raw.trim()) }
     }
 
+    /**
+     * Extra hostnames allowed in the HTTP `Host` header — the anti-DNS-rebinding allowlist for the
+     * `:8888` guard ([http.OriginGuard.hostAllowed]). The guard always allows IP literals, `localhost`,
+     * and `*.local` (mDNS), which covers reaching a panel by IP or its mDNS name, so this is only needed
+     * when a panel is fronted by a **custom DNS name** (e.g. `kitchen-panel.myhome.lan`). Set it via the
+     * always-allowed IP path (`POST /config` to `http://<ip>:8888`) or provisioning — never a lockout.
+     * Whitespace/comma-separated; matched case-insensitively; default empty.
+     */
+    val httpAllowedHosts: Set<String>
+        get() = prefs.getString("http_allowed_hosts", "")!!
+            .split(Regex("[\\s,]+")).map { it.trim().lowercase() }.filter { it.isNotEmpty() }.toSet()
+    /** Raw user-set value — for the Configure form's input value. */
+    val httpAllowedHostsRaw: String get() = prefs.getString("http_allowed_hosts", "")!!
+    fun setHttpAllowedHosts(raw: String) {
+        edit { putString("http_allowed_hosts", raw.trim()) }
+    }
+
     /** Master switch for the (instrumentation-only) performance sampler. Default on, but page-view
      *  gated so it idles near-zero; a user who's finished tuning can hard-disable it here. */
     val instrumentationEnabled: Boolean get() = prefs.getBoolean("instrumentation", true)

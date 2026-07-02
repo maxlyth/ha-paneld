@@ -30,7 +30,11 @@ The state-changing routes on `:8888` are where the exposure concentrates:
 - `POST /inspect/start` — starts the CDP relay (the `:9222` surface above).
 - `GET /diag` — device/capability info (recon). Intentionally a support tool (issue template).
 
-**Browser-mediated CSRF is guarded** ([`OriginGuard`](../../app/src/main/kotlin/io/github/maxlyth/hapaneld/http/OriginGuard.kt)): a state-changing request (`POST`/`PUT`/`PATCH`/`DELETE`) whose `Origin`/`Referer` is present and doesn't match the request `Host` is refused, so a malicious LAN web page can't silently drive these endpoints. Same-origin UI `fetch`es and header-less API clients (curl / HA `rest_command`) are unaffected. This does **not** cover active DNS-rebinding (which is genuinely same-origin — a `Host` allowlist would, at some false-positive cost on custom-DNS access) nor authenticate the caller (decision 3).
+**Browser-mediated attacks are guarded** ([`OriginGuard`](../../app/src/main/kotlin/io/github/maxlyth/hapaneld/http/OriginGuard.kt)):
+- **CSRF** — a state-changing request (`POST`/`PUT`/`PATCH`/`DELETE`) whose `Origin`/`Referer` is present and doesn't match the request `Host` is refused, so a malicious LAN web page can't silently drive these endpoints. Same-origin UI `fetch`es and header-less API clients (curl / HA `rest_command`) are unaffected.
+- **DNS-rebinding** — the `Host` header must be an IP literal, `localhost`, `*.local` (mDNS), or an operator-configured name (`http_allowed_hosts`); any other hostname is refused (all methods), so an attacker who rebinds their own DNS name to the panel can't pose as same-origin to read secrets (`GET /config/export`) or drive the surface. Reaching a panel by IP — the norm — is always allowed and is inherently rebinding-immune.
+
+Neither authenticates the *caller*; a credentialled LAN actor is still trusted (decision 3 is the upgrade path).
 
 ## Decisions
 
@@ -43,7 +47,8 @@ The state-changing routes on `:8888` are where the exposure concentrates:
 ## Done
 
 - Zigbee `setRole()` allowlists the role before shell interpolation (no arbitrary-string injection).
-- **Cross-origin (CSRF) guard** on state-changing `:8888` routes ([`OriginGuard`](../../app/src/main/kotlin/io/github/maxlyth/hapaneld/http/OriginGuard.kt)) — refuses a browser write whose `Origin`/`Referer` doesn't match the request `Host`; API clients (no `Origin`) and same-origin UI unaffected.
+- **Cross-origin (CSRF) guard** on state-changing `:8888` routes ([`OriginGuard.allowed`](../../app/src/main/kotlin/io/github/maxlyth/hapaneld/http/OriginGuard.kt)) — refuses a browser write whose `Origin`/`Referer` doesn't match the request `Host`; API clients (no `Origin`) and same-origin UI unaffected.
+- **DNS-rebinding guard** ([`OriginGuard.hostAllowed`](../../app/src/main/kotlin/io/github/maxlyth/hapaneld/http/OriginGuard.kt)) — pins the `Host` header to IP literals / `localhost` / `*.local` / configured names (`http_allowed_hosts`); other hostnames refused, so a rebound name can't masquerade as same-origin.
 - **APK-installer downloads are HTTPS-only** ([`AppInstaller`](../../app/src/main/kotlin/io/github/maxlyth/hapaneld/util/AppInstaller.kt)) — the initial URL and every redirect hop must be `https` (defence-in-depth on top of the post-download signer/package pin, which already blocks installing a substituted APK).
 
 [^ha-ipban]: HA's own IP allowlist / `ip_ban` secures HA's HTTP server, **not** the panel's separate `:8888`, so it doesn't apply directly; network segmentation is the "use what exists" control here.

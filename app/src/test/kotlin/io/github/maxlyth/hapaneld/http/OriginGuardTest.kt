@@ -52,4 +52,41 @@ class OriginGuardTest {
     // --- case-insensitive host compare ---
     @Test fun hostCaseInsensitive() =
         assertTrue(OriginGuard.allowed("POST", "http://Panel.Local:8888", null, "panel.local:8888"))
+
+    // ===== hostAllowed (anti-DNS-rebinding) =====
+    private val none = emptySet<String>()
+
+    @Test fun ipv4LiteralAllowed() {
+        assertTrue(OriginGuard.hostAllowed("192.168.1.50:8888", none))
+        assertTrue(OriginGuard.hostAllowed("10.0.0.1", none))
+    }
+
+    @Test fun ipv6LiteralAllowed() {
+        assertTrue("bracketed ipv6 with port", OriginGuard.hostAllowed("[fe80::1]:8888", none))
+        assertTrue("bare ipv6", OriginGuard.hostAllowed("::1", none))
+    }
+
+    @Test fun localhostAllowed() = assertTrue(OriginGuard.hostAllowed("localhost:8888", none))
+
+    @Test fun mdnsLocalAllowed() = assertTrue(OriginGuard.hostAllowed("kitchen-panel.local:8888", none))
+
+    @Test fun missingHostAllowed() {
+        assertTrue(OriginGuard.hostAllowed(null, none))
+        assertTrue(OriginGuard.hostAllowed("", none))
+    }
+
+    @Test fun unknownDnsHostRefused() =
+        assertFalse("a rebound public hostname must be refused", OriginGuard.hostAllowed("panel.attacker.example:8888", none))
+
+    @Test fun configuredNameAllowed() =
+        assertTrue(OriginGuard.hostAllowed("kitchen-panel.myhome.lan:8888", setOf("kitchen-panel.myhome.lan")))
+
+    @Test fun configuredNameCaseInsensitive() =
+        assertTrue(OriginGuard.hostAllowed("Kitchen-Panel.MyHome.LAN", setOf("kitchen-panel.myhome.lan")))
+
+    @Test fun nonConfiguredNameStillRefused() =
+        assertFalse(OriginGuard.hostAllowed("other.myhome.lan", setOf("kitchen-panel.myhome.lan")))
+
+    @Test fun almostIpNotTreatedAsLiteral() =
+        assertFalse("300 is not a valid octet — treat as a hostname, refuse", OriginGuard.hostAllowed("300.1.2.3", none))
 }

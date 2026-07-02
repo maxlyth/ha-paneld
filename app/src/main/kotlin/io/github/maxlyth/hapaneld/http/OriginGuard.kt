@@ -18,10 +18,11 @@ package io.github.maxlyth.hapaneld.http
  *    that's the LAN API contract, and browsers always attach `Origin` on cross-origin writes.
  *  - A malicious cross-origin page carries its own `Origin` → refused.
  *
- * Scope note: this stops classic CSRF (a page POSTing to the panel's address). It does **not** stop
- * active DNS-rebinding (which makes the request genuinely same-origin) — that needs a `Host`
- * allowlist, tracked separately, and the higher-assurance path is HA-token auth (security decision 3).
- * GETs are not guarded: they're idempotent, and cross-origin reads are already CORS-blocked.
+ * Scope note: [allowed] stops classic CSRF (a page POSTing to the panel's address) but not active
+ * DNS-rebinding (which makes the request genuinely same-origin); [hostAllowed] covers rebinding via a
+ * `Host` allowlist. GETs aren't origin-guarded (idempotent + cross-origin reads are CORS-blocked), but
+ * they *are* host-guarded, since rebinding also enables reads. The higher-assurance path for an
+ * untrusted network remains HA-token auth (security decision 3), deferred under the LAN-trust model.
  */
 object OriginGuard {
     private val MUTATING = setOf("POST", "PUT", "PATCH", "DELETE")
@@ -45,5 +46,40 @@ object OriginGuard {
     private fun authorityOf(url: String): String? {
         val afterScheme = url.substringAfter("://", "").ifEmpty { return null }
         return afterScheme.substringBefore('/').substringBefore('?').ifEmpty { null }
+    }
+
+    /**
+     * Anti-DNS-rebinding guard: the `Origin` check above is defeated by active DNS-rebinding (the
+     * attacker's page rebinds its own name to the panel's IP, so the request becomes genuinely
+     * same-origin). The defence is to pin the `Host` header to values that can't be rebound onto the
+     * panel: **IP literals** (v4/v6 — reached directly, no DNS name to rebind), `localhost`, and
+     * `*.local` (mDNS, LAN-only resolution), plus any operator-configured [allowedNames]. Any other
+     * DNS hostname in `Host` is refused. Applies to every method (rebinding also enables reads —
+     * `GET /config/export`, `/screenshot`). A missing `Host` is not a rebinding vector, so it passes.
+     *
+     * [allowedNames] must be lowercased by the caller ([io.github.maxlyth.hapaneld.Config.httpAllowedHosts]).
+     */
+    fun hostAllowed(host: String?, allowedNames: Set<String>): Boolean {
+        val raw = host?.trim()?.ifEmpty { null } ?: return true // no Host header — not a rebinding vector
+        val name = hostnameOf(raw).lowercase()
+        if (name.isEmpty()) return true
+        return isIpLiteral(name) || name == "localhost" || name.endsWith(".local") || name in allowedNames
+    }
+
+    /** The hostname part of a `Host` header — strips the port and IPv6 brackets. */
+    private fun hostnameOf(host: String): String {
+        if (host.startsWith("[")) { // [ipv6]:port
+            val end = host.indexOf(']')
+            return if (end > 1) host.substring(1, end) else host.removePrefix("[")
+        }
+        // 2+ colons ⇒ a bare (unbracketed) IPv6 literal, which has no port suffix; keep it whole.
+        return if (host.count { it == ':' } >= 2) host else host.substringBefore(':')
+    }
+
+    /** True if [hostname] is an IPv4 dotted-quad or an IPv6 literal (both are unrebindable). */
+    private fun isIpLiteral(hostname: String): Boolean {
+        if (hostname.contains(':')) return true // IPv6
+        val octets = hostname.split('.')
+        return octets.size == 4 && octets.all { o -> o.toIntOrNull()?.let { it in 0..255 } == true }
     }
 }

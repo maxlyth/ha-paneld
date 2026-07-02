@@ -187,6 +187,13 @@ class PaneldServer(
                     call.respondText("cross-origin refused\n", status = HttpStatusCode.Forbidden)
                     return@intercept finish()
                 }
+                // Anti-DNS-rebinding: pin the Host header to unrebindable values (IP / localhost /
+                // *.local) + any configured names, so a rebound hostname can't read secrets or drive
+                // the surface as "same-origin". See OriginGuard.hostAllowed.
+                if (!OriginGuard.hostAllowed(call.request.headers["Host"], config.httpAllowedHosts)) {
+                    call.respondText("host not allowed\n", status = HttpStatusCode.Forbidden)
+                    return@intercept finish()
+                }
             }
             routing {
                 get("/") {
@@ -1231,6 +1238,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
                 applyTameBlocklist(raw.split(Regex("[\\s,]+")).map { it.trim() }
                     .filter { it.isNotEmpty() && !TameController.isCritical(it) }.toSet())
             }
+            p["http_allowed_hosts"]?.let { config.setHttpAllowedHosts(it) }
             p["silence_boot_chime"]?.let { config.setSilenceBootChime(it.trim().equals("true", ignoreCase = true) || it.trim() == "1") }
             // Keep-awake (partial wakelock so SoC/network never suspend). Applied live by reconfigure().
             p["keep_awake"]?.let { config.setKeepAwake(it.trim().equals("true", ignoreCase = true) || it.trim() == "1") }
