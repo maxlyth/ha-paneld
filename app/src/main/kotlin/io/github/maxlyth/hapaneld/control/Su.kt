@@ -92,13 +92,11 @@ object Su {
         if (form == 2) return null
         val forms = if (form in 0..1) intArrayOf(form) else intArrayOf(0, 1)
         for (f in forms) {
-            try {
-                val p = Runtime.getRuntime().exec(argvOneShot(f, cmd))
-                val bytes = p.inputStream.readBytes() // binary-safe; read before waitFor (avoid deadlock)
-                if (p.waitFor() == 0) { form = f; return bytes }
-            } catch (e: Exception) {
-                Log.d(TAG, "su bytes form $f failed for: $cmd", e)
+            val bytes = runBounded("bytes", argvOneShot(f, cmd)) { p ->
+                val b = p.inputStream.readBytes() // binary-safe; read before waitFor (avoid deadlock)
+                if (p.waitFor() == 0) b else null
             }
+            if (bytes != null) { form = f; return bytes }
         }
         if (form == -1) form = 2
         return null
@@ -182,14 +180,38 @@ object Su {
 
     // --- one-shot fallback (pre-0.8.3 behaviour; also the form probe) ---
 
+    /**
+     * Run a one-shot `su` [argv], bounding the whole call (exec + [reader]) to [CMD_TIMEOUT_MS] so a `su`
+     * that hangs on auth can never block the caller for the life of the process — the same guarantee the
+     * persistent shell already has via its timed future. [reader] consumes the process (wait / read stdout)
+     * on a throwaway daemon thread; on timeout or failure the child is force-killed and null is returned.
+     */
+    private fun <T> runBounded(label: String, argv: Array<String>, reader: (Process) -> T): T? {
+        val p = try {
+            Runtime.getRuntime().exec(argv)
+        } catch (e: Exception) {
+            Log.d(TAG, "su $label exec failed: ${argv.joinToString(" ")}", e)
+            return null
+        }
+        val ex = Executors.newSingleThreadExecutor { r ->
+            Thread(r, "ha-paneld-su-1shot").apply { isDaemon = true }
+        }
+        return try {
+            ex.submit(Callable { reader(p) }).get(CMD_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        } catch (e: Exception) {
+            // timeout / broken pipe / reader failure — kill the child so it can't linger, then give up.
+            Log.d(TAG, "su $label timed out or failed", e)
+            runCatching { p.destroyForcibly() }
+            null
+        } finally {
+            ex.shutdownNow()
+        }
+    }
+
     private fun oneShotRun(cmd: String): Boolean {
         val forms = if (form in 0..1) intArrayOf(form) else intArrayOf(0, 1)
         for (f in forms) {
-            try {
-                if (Runtime.getRuntime().exec(argvOneShot(f, cmd)).waitFor() == 0) { form = f; return true }
-            } catch (e: Exception) {
-                Log.d(TAG, "su form $f failed for: $cmd", e)
-            }
+            if (runBounded("run", argvOneShot(f, cmd)) { it.waitFor() } == 0) { form = f; return true }
         }
         if (form == -1) form = 2
         return false
@@ -198,13 +220,11 @@ object Su {
     private fun oneShotOutput(cmd: String): String? {
         val forms = if (form in 0..1) intArrayOf(form) else intArrayOf(0, 1)
         for (f in forms) {
-            try {
-                val p = Runtime.getRuntime().exec(argvOneShot(f, cmd))
-                val out = p.inputStream.bufferedReader().readText() // read before waitFor (avoid deadlock)
-                if (p.waitFor() == 0) { form = f; return out }
-            } catch (e: Exception) {
-                Log.d(TAG, "su out form $f failed for: $cmd", e)
+            val out = runBounded("out", argvOneShot(f, cmd)) { p ->
+                val text = p.inputStream.bufferedReader().readText() // read before waitFor (avoid deadlock)
+                if (p.waitFor() == 0) text else null
             }
+            if (out != null) { form = f; return out }
         }
         if (form == -1) form = 2
         return null
