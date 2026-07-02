@@ -91,16 +91,30 @@ object AppInstaller {
         return if (ok) null else "signer mismatch"
     }
 
-    /** Download [url] to [dest], following redirects (GitHub release → CDN). True on success. */
+    /**
+     * Download [url] to [dest], following redirects (GitHub release → CDN). True on success.
+     *
+     * HTTPS-only for every hop: the initial URL and each redirect target must be `https`, else the
+     * fetch is refused. The APK is signer-pinned after download ([verifyApk]), so a substituted blob
+     * still can't install — but refusing plaintext hops closes the residual downgrade (an
+     * `https→http` redirect would otherwise fetch the update over cleartext, leaking the request and
+     * letting a network attacker waste the download before the pin rejects it). All real callers use
+     * GitHub `https` release URLs that redirect to `https` CDNs, so this rejects nothing legitimate.
+     */
     private fun download(url: String, dest: File): Boolean = runCatching {
-        var current = url
+        var current = URL(url).takeIf { it.protocol.equals("https", true) }
+            ?: run { Log.w(TAG, "refusing non-HTTPS URL"); return false }
         repeat(5) {
-            val conn = URL(current).openConnection() as HttpURLConnection
+            val conn = current.openConnection() as HttpURLConnection
             conn.instanceFollowRedirects = false
             conn.connectTimeout = 15_000
             conn.readTimeout = 60_000
             when (conn.responseCode) {
-                in 300..399 -> { current = conn.getHeaderField("Location") ?: return false; conn.disconnect() }
+                in 300..399 -> {
+                    val loc = conn.getHeaderField("Location") ?: return false
+                    conn.disconnect()
+                    current = httpsRedirect(current, loc) ?: run { Log.w(TAG, "refusing non-HTTPS redirect"); return false }
+                }
                 200 -> {
                     conn.inputStream.use { input -> dest.outputStream().use { input.copyTo(it) } }
                     return dest.length() > 0
@@ -110,4 +124,12 @@ object AppInstaller {
         }
         false
     }.getOrElse { Log.w(TAG, "download error", it); false }
+
+    /**
+     * Resolve a redirect [location] (absolute or relative) against [base] and return it **only** if the
+     * result is HTTPS; null means "refuse" (non-HTTPS target, or unparseable). Resolving against [base]
+     * also handles relative `Location` headers, which the previous `URL(location)` mishandled.
+     */
+    internal fun httpsRedirect(base: URL, location: String): URL? =
+        runCatching { URL(base, location) }.getOrNull()?.takeIf { it.protocol.equals("https", true) }
 }
