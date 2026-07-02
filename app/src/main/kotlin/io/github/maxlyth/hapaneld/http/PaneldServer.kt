@@ -347,13 +347,10 @@ class PaneldServer(
                             "back" -> { PanelAccessibilityService.navBack(); true }
                             "recents" -> { PanelAccessibilityService.navRecents(); true }
                             // Launcher, not Home: the HA Companion IS the home/launcher on these panels, so the
-                            // hard, useful action is escaping TO a launcher to reach Settings/config apps. Honour a
-                            // configured launcher only while it's installed, else open our own admin launcher.
-                            "launcher" -> {
-                                if (system.isLaunchable(config.launcherPackage)) system.launchLauncher(config.launcherPackage)
-                                else system.launchAdminLauncher()
-                                true
-                            }
+                            // hard, useful action is escaping TO a launcher to reach Settings/config apps.
+                            // launchLauncher itself falls back to the admin launcher when nothing resolves
+                            // (stale configured pkg, or no launcher app at all) — same path as the navbar key.
+                            "launcher" -> { system.launchLauncher(config.launcherPackage); true }
                             "admin_launcher" -> { system.launchAdminLauncher(); true }
                             "reboot" -> { scope.launch { system.reboot() }; true }
                             // step() (adjustStreamVolume) not setPercent: on a coarse stream (e.g. the TPA10's
@@ -864,10 +861,12 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         """ <a class="cfglink" href="/configure#$anchor" title="Edit on the Configure tab" aria-label="Edit">✎</a>"""
 
     /** What the "auto" (blank) package settings actually resolved to — shown as `auto (pkg)` in the
-     *  dashboard rows and as the Configure-field placeholder, so "auto" is never a mystery. */
+     *  dashboard rows and as the Configure-field placeholder, so "auto" is never a mystery. When no
+     *  launcher app resolves, the Launcher key falls back to ha-paneld's own admin launcher (see
+     *  SystemController.launchLauncher) — say so instead of leaving a "—" that reads like a dead key. */
     private fun autoHints(): Map<String, String> = buildMap {
         system.resolveDashboard("").takeIf { it.isNotBlank() }?.let { put("dashboard_package", it) }
-        system.resolvedLauncher("")?.let { put("launcher_package", it) }
+        put("launcher_package", system.resolvedLauncher("") ?: "ha-paneld admin launcher")
     }
 
     /** One read-only dashboard row for a registry setting: label → current value + the edit pencil.

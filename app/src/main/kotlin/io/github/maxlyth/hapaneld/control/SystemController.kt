@@ -70,12 +70,16 @@ class SystemController(
     /**
      * Bring a launcher (home screen) to the foreground — for panels with no physical home button.
      * [configuredPkg] forces a package; blank => first registered HOME launcher that isn't the
-     * current default, ourselves, or settings.
+     * current default, ourselves, or settings. When nothing resolves (kiosk panels often have no
+     * dedicated launcher app — the Companion registers HOME but is the dashboard, and the vendor
+     * pseudo-launcher may be tamed/absent), falls back to our own admin launcher so the Launcher
+     * key always lands somewhere; a stale configured package degrades the same way.
      */
     fun launchLauncher(configuredPkg: String) {
         val ri = pickLauncher(configuredPkg)
         if (ri == null) {
-            Log.w(TAG, "launcher: no suitable launcher found (set launcher_package?)")
+            Log.i(TAG, "launcher: none resolvable — opening the admin launcher")
+            launchAdminLauncher()
             return
         }
         val comp = ri.component
@@ -106,10 +110,6 @@ class SystemController(
             else -> all.firstOrNull { !notALauncher(it.pkg) && it.pkg != default }
         }
     }
-
-    /** True if [pkg] is installed with a launchable activity — guards a stale configured launcher. */
-    fun isLaunchable(pkg: String): Boolean =
-        pkg.isNotBlank() && env.launchComponent(pkg) != null
 
     /**
      * Open ha-paneld's own on-demand admin launcher (an app drawer for panel admin). The default for

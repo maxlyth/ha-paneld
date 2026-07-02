@@ -127,11 +127,25 @@ class SystemControllerTest {
         assertTrue("configured launcher wins over default", root.ran.contains("am start -n com.other.home/L"))
     }
 
-    @Test fun launcherNoneSuitableDoesNothing() {
-        // Only the Companion registers HOME (and it's the default) → nothing to land on.
+    @Test fun launcherNoneSuitableFallsBackToAdminLauncher() {
+        // Only the Companion registers HOME (and it's the default) → no launcher app to land on, so
+        // the key must open ha-paneld's own admin launcher instead of silently doing nothing.
         val (c, root, _) = sc(launcherEnv(MIN, MIN), daemon = null)
         c.launchLauncher("")
-        assertTrue("no start attempted", root.ran.isEmpty())
+        assertTrue(
+            "admin launcher opened as the fallback",
+            root.ran.contains("am start -n io.github.maxlyth.hapaneld/.AdminLauncherActivity"),
+        )
+    }
+
+    @Test fun launcherStaleConfiguredPkgFallsBackToAdminLauncher() {
+        // A configured launcher that's no longer installed degrades the same way as none-resolvable.
+        val (c, root, _) = sc(launcherEnv(MIN, MIN), daemon = null)
+        c.launchLauncher("com.gone.launcher")
+        assertTrue(
+            "admin launcher opened for a stale configured package",
+            root.ran.contains("am start -n io.github.maxlyth.hapaneld/.AdminLauncherActivity"),
+        )
     }
 
     @Test fun launcherViaDaemonStart() {
@@ -146,14 +160,6 @@ class SystemControllerTest {
         val (c, _, _) = sc(env, daemon = null, su = false) // no daemon, su run fails
         c.launchLauncher("")
         assertTrue("direct-start fallback used, got ${env.directStarts}", env.directStarts.contains("$VENDOR/L"))
-    }
-
-    // ---------- isLaunchable ----------
-    @Test fun isLaunchableReflectsLaunchComponent() {
-        val c = sc(FakeSystemEnv(launchers = mapOf("com.x" to "com.x/.A")), daemon = null).first
-        assertTrue(c.isLaunchable("com.x"))
-        assertFalse("no launch component", c.isLaunchable("com.y"))
-        assertFalse("blank", c.isLaunchable(""))
     }
 
     // ---------- launchAdminLauncher ----------
