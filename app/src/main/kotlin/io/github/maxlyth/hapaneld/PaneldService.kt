@@ -56,6 +56,7 @@ import io.github.maxlyth.hapaneld.util.UpdateChecker
 import io.github.maxlyth.hapaneld.util.CompanionInstaller
 import io.github.maxlyth.hapaneld.util.SelfUpdater
 import io.github.maxlyth.hapaneld.mqtt.ConnectionSupervisor
+import io.github.maxlyth.hapaneld.platform.AndroidScreenPower
 import io.github.maxlyth.hapaneld.util.periodic
 import io.github.maxlyth.hapaneld.util.SystemProps
 
@@ -132,7 +133,7 @@ class PaneldService : Service() {
         brightness = BrightnessController(this)
         brightness.applyPreventIdleDim(config.preventIdleDim, config)
         autoBright = AutoBrightnessController(brightness, config)
-        screen = ScreenController(this, brightness)
+        screen = ScreenController(brightness, AndroidScreenPower(this))
         led = LedFactory.detect(profile)
         navigate = NavigateController(this)
         volume = VolumeController(this)

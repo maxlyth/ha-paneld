@@ -94,6 +94,12 @@ android {
         jvmTarget = "17"
     }
 
+    testOptions {
+        // JVM unit tests exercise code that touches android.util.Log etc.; return stub defaults instead of
+        // throwing "not mocked", so controllers that legitimately log on the tested path stay unit-testable.
+        unitTests.isReturnDefaultValues = true
+    }
+
     packaging {
         resources {
             // HiveMQ pulls Netty; these metadata files collide across the dependency graph.

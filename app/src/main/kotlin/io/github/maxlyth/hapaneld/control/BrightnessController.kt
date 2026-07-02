@@ -17,7 +17,7 @@ import io.github.maxlyth.hapaneld.Config
  *
  * HA brightness is 0–255; Android `SCREEN_BRIGHTNESS` is also 0–255, so it maps 1:1.
  */
-class BrightnessController(private val context: Context) {
+class BrightnessController(private val context: Context) : Backlight {
 
     fun canWrite(): Boolean = Settings.System.canWrite(context)
 
@@ -37,11 +37,11 @@ class BrightnessController(private val context: Context) {
      * blank + touch-dead. A deliberate screen-off is a separate operation via [ScreenController], which
      * uses [setBrightnessRaw] for its last-resort dim-to-0.
      */
-    fun setBrightness(level: Int) = applyBrightness(level.coerceIn(MIN_VISIBLE, 255))
+    override fun setBrightness(level: Int) = applyBrightness(level.coerceIn(MIN_VISIBLE, 255))
 
     /** Apply a raw level with NO minimum floor (0 allowed). For [ScreenController]'s screen-off fallback
      *  only — every other caller must use [setBrightness] to preserve the never-blank guarantee. */
-    fun setBrightnessRaw(level: Int) = applyBrightness(level.coerceIn(0, 255))
+    override fun setBrightnessRaw(level: Int) = applyBrightness(level.coerceIn(0, 255))
 
     private fun applyBrightness(v: Int) {
         try {
@@ -69,7 +69,7 @@ class BrightnessController(private val context: Context) {
 
     /** Reports the EFFECTIVE backlight (sysfs actual_brightness, scaled to 0–255) so HA reflects external /
      *  firmware dimming that bypasses SCREEN_BRIGHTNESS; falls back to the Android setting. */
-    fun getBrightness(): Int {
+    override fun getBrightness(): Int {
         backlight?.let { (dir, max) ->
             val actual = Su.runOutput("cat ${dir}actual_brightness 2>/dev/null")?.trim()?.toIntOrNull()
             if (actual != null) return (actual.toLong() * 255 / max).toInt().coerceIn(0, 255)

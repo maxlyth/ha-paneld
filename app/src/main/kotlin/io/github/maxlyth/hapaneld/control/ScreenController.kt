@@ -1,8 +1,9 @@
 package io.github.maxlyth.hapaneld.control
 
-import android.content.Context
-import android.os.PowerManager
 import android.util.Log
+import io.github.maxlyth.hapaneld.platform.Daemon
+import io.github.maxlyth.hapaneld.platform.RootShell
+import io.github.maxlyth.hapaneld.platform.ScreenPower
 import io.github.maxlyth.hapaneld.util.HelperClient
 
 /**
@@ -15,14 +16,15 @@ import io.github.maxlyth.hapaneld.util.HelperClient
  *  3. Brightness 0 — last-resort dim for panels with neither daemon nor su.
  *
  * This deliberately avoids `DevicePolicyManager.lockNow()`, which turns the screen off via the
- * keyguard and therefore demands the device PIN on wake.
+ * keyguard and therefore demands the device PIN on wake. Its collaborators are seamed ([Backlight],
+ * [ScreenPower], [RootShell], [Daemon]) so the never-blank logic is unit-testable without a device.
  */
 class ScreenController(
-    context: Context,
-    private val brightness: BrightnessController,
+    private val backlight: Backlight,
+    private val power: ScreenPower,
+    private val root: RootShell = Su,
+    private val daemon: Daemon = HelperClient,
 ) {
-    private val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
-
     // Last known "on" level, used by the brightness fallback. Survives an off/on cycle.
     @Volatile private var savedLevel = DEFAULT_ON
 
@@ -31,7 +33,7 @@ class ScreenController(
     // stale screen-off can never strand the panel dark, but a deliberate "screen off" still stays off.
     @Volatile private var intendedOff = false
 
-    fun isOn(): Boolean = pm.isInteractive
+    fun isOn(): Boolean = power.isInteractive()
 
     /** Whether the last screen state ha-paneld set was a deliberate off (vs. never-asked / woken). */
     fun isIntendedOff(): Boolean = intendedOff
@@ -39,11 +41,11 @@ class ScreenController(
     /** Best-effort: is the backlight actually dark? bl_power 4=off/0=on (root/daemon panels); else the
      *  brightness-fallback path where 0 == off. Unknown → false (never re-light on a guess). */
     fun looksDark(): Boolean {
-        val bl = Su.runOutput("d=\$(ls -d /sys/class/backlight/*/ 2>/dev/null|head -1);cat \${d}bl_power 2>/dev/null")?.trim()
+        val bl = root.runOutput("d=\$(ls -d /sys/class/backlight/*/ 2>/dev/null|head -1);cat \${d}bl_power 2>/dev/null")?.trim()
         return when (bl) {
             "4" -> true
             "0" -> false
-            else -> brightness.getBrightness() <= 0
+            else -> backlight.getBrightness() <= 0
         }
     }
 
@@ -54,36 +56,36 @@ class ScreenController(
 
     fun sleep() {
         intendedOff = true
-        if (HelperClient.send("SCREEN OFF") == "OK") {
+        if (daemon.send("SCREEN OFF") == "OK") {
             Log.d(TAG, "screen -> off (daemon bl_power)")
             return
         }
-        if (Su.run(blPower(false))) {
+        if (root.run(blPower(false))) {
             Log.d(TAG, "screen -> off (su bl_power)")
             return
         }
         // Last resort: no daemon, no su — dim to 0 (only a dim on panels that clamp a minimum). Uses the
         // raw setter so it can reach 0: the public setBrightness floors at MIN_VISIBLE to stay never-blank.
-        val cur = brightness.getBrightness()
+        val cur = backlight.getBrightness()
         if (cur > 0) savedLevel = cur
-        brightness.setBrightnessRaw(0)
+        backlight.setBrightnessRaw(0)
         Log.d(TAG, "screen -> off (brightness fallback; saved=$savedLevel)")
     }
 
     fun wake() {
         intendedOff = false
-        if (HelperClient.send("SCREEN ON") == "OK") {
-            pulseWake()
+        if (daemon.send("SCREEN ON") == "OK") {
+            power.pulseWake()
             Log.d(TAG, "screen -> on (daemon bl_power)")
             return
         }
-        if (Su.run(blPower(true))) {
-            pulseWake()
+        if (root.run(blPower(true))) {
+            power.pulseWake()
             Log.d(TAG, "screen -> on (su bl_power)")
             return
         }
-        brightness.setBrightness(savedLevel.coerceAtLeast(MIN_ON))
-        pulseWake()
+        backlight.setBrightness(savedLevel.coerceAtLeast(MIN_ON))
+        power.pulseWake()
         Log.d(TAG, "screen -> on (brightness fallback; $savedLevel)")
     }
 
@@ -93,15 +95,6 @@ class ScreenController(
         val v = if (on) 0 else 4
         return "d=\$(ls -d /sys/class/backlight/*/ 2>/dev/null|head -1);" +
             "[ -n \"\$d\" ]&&echo $v >\${d}bl_power"
-    }
-
-    @Suppress("DEPRECATION")
-    private fun pulseWake() {
-        val wl = pm.newWakeLock(
-            PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP,
-            "ha-paneld:wake",
-        )
-        wl.acquire(3_000)
     }
 
     companion object {

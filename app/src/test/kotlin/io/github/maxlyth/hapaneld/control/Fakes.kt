@@ -7,6 +7,7 @@ import io.github.maxlyth.hapaneld.device.ScreenOff
 import io.github.maxlyth.hapaneld.device.SuForm
 import io.github.maxlyth.hapaneld.platform.Daemon
 import io.github.maxlyth.hapaneld.platform.RootShell
+import io.github.maxlyth.hapaneld.platform.ScreenPower
 
 /** Minimal [DeviceProfile] for controller tests — only the fields a controller reads need setting. */
 fun fakeProfile(
@@ -64,4 +65,19 @@ class FakeDaemon(
     override fun available() = available
     override fun send(cmd: String): String? { sent += cmd; return replies[cmd] }
     override fun sendBytes(cmd: String): ByteArray? = null
+}
+
+/** Fake [Backlight]: serves a settable [level] for getBrightness; records set calls. */
+class FakeBacklight(var level: Int = 160) : Backlight {
+    val calls = mutableListOf<String>()
+    override fun getBrightness() = level
+    override fun setBrightness(level: Int) { calls += "set:$level"; this.level = level }
+    override fun setBrightnessRaw(level: Int) { calls += "raw:$level"; this.level = level }
+}
+
+/** Fake [ScreenPower]: settable interactivity; counts wake pulses. */
+class FakeScreenPower(var interactive: Boolean = true) : ScreenPower {
+    var pulses = 0
+    override fun isInteractive() = interactive
+    override fun pulseWake() { pulses++ }
 }
