@@ -164,6 +164,12 @@ class Config(context: Context) {
     fun setCompanionAutoUpdate(on: Boolean) {
         prefs.edit().putBoolean("companion_auto_update", on).apply()
     }
+    /** Release channel the Companion auto-updater follows — mirrors [updateChannel] for ha-paneld. */
+    val companionUpdateChannel: String get() = prefs.getString("companion_update_channel", "stable") ?: "stable"
+    fun setCompanionUpdateChannel(ch: String) {
+        val v = if (ch.trim().lowercase().startsWith("pre")) "prerelease" else "stable"
+        prefs.edit().putString("companion_update_channel", v).apply()
+    }
 
     // ha-paneld self-update: when on, ha-paneld installs a newer build of ITSELF from GitHub releases on
     // the selected [updateChannel] (root; no Play Store on these panels). **Default OFF** — silent

@@ -8,6 +8,20 @@ From **v0.8.0**, entries are grouped under **Added** (new features/entities), **
 changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
 content appear. Earlier releases predate this convention and keep their flat lists.
 
+## v0.8.6-rc2 - 2026-07-02
+
+### Added
+
+- **Companion auto-update channel** — the Companion updater gains the same **Stable / Pre-release** channel select as ha-paneld's own auto-update (`select.<panel>_companion_update_channel`, default Stable; also on the Configure tab). Switching channel triggers an immediate check when Companion auto-update is on.
+
+### Fixed
+
+- **No more false Companion "update available" for the installed variant** — the update check compared the installed `-minimal` versionName against the release tag as if the variant suffix were a prerelease marker, so a panel on `2026.6.5-minimal` was offered "2026.6.5" as an upgrade. Versions are now compared variant-stripped, in both the banner check and the auto-updater. (#17)
+
+### Changed
+
+- **Clearer update-entity names** — "Self-update" is now **"ha-paneld auto-update"** and "Update channel" is **"ha-paneld auto-update channel"**, so it's obvious they apply to ha-paneld and not the Companion app. Display names only — entity ids are unchanged, so no Home Assistant entity churn. (#18)
+
 ## v0.8.6-rc1 - 2026-07-02
 
 ### Fixed

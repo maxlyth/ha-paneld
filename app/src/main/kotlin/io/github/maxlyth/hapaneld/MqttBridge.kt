@@ -165,6 +165,8 @@ class MqttBridge(
     private val cmdCompanionAuto = "ha-paneld/$panel/companion_auto_update/set"
     private val stateCompanionAuto = "ha-paneld/$panel/companion_auto_update/state"
     private val cmdUpdatePaneld = "ha-paneld/$panel/update_paneld/set"
+    private val cmdCompanionChannel = "ha-paneld/$panel/companion_update_channel/set"
+    private val stateCompanionChannel = "ha-paneld/$panel/companion_update_channel/state"
     private val cmdSelfUpdate = "ha-paneld/$panel/self_update/set"
     private val stateSelfUpdate = "ha-paneld/$panel/self_update/state"
     private val cmdUpdateChannel = "ha-paneld/$panel/update_channel/set"
@@ -456,6 +458,7 @@ class MqttBridge(
                 cmdUpdateCompanion -> onUpdateCompanion() // install/update the Companion; runs off-thread in the service
                 cmdCompanionAuto -> handleCompanionAuto(payload)
                 cmdUpdatePaneld -> onSelfUpdate(true)      // force self-update to the channel's newest (off-thread)
+                cmdCompanionChannel -> handleCompanionChannel(payload)
                 cmdSelfUpdate -> handleSelfUpdate(payload)
                 cmdUpdateChannel -> handleUpdateChannel(payload)
                 cmdSilenceBootChime -> handleSilenceBootChime(payload)
@@ -578,8 +581,18 @@ class MqttBridge(
         if (config.selfUpdate && now != was) onSelfUpdate(was == "prerelease" && now == "stable")
     }
 
+    private fun handleCompanionChannel(payload: String) {
+        val was = config.companionUpdateChannel
+        config.setCompanionUpdateChannel(payload.trim().trim('"'))
+        val now = config.companionUpdateChannel
+        client?.let { publish(it, stateCompanionChannel, companionChannelLabel(), retain = true) }
+        // Apply the new channel now when auto-update is on (a forced check via the existing callback).
+        if (config.companionAutoUpdate && now != was) onUpdateCompanion()
+    }
+
     // HA select uses the capitalised labels; Config stores "stable"/"prerelease".
     private fun updateChannelLabel(): String = if (config.updateChannel == "prerelease") "Pre-release" else "Stable"
+    private fun companionChannelLabel(): String = if (config.companionUpdateChannel == "prerelease") "Pre-release" else "Stable"
 
     private fun handleSilenceBootChime(payload: String) {
         val on = payload.trim().equals("ON", ignoreCase = true)
@@ -818,6 +831,7 @@ class MqttBridge(
             "cpu_governor" -> handleCpuGov(value)
             "navbar_mode" -> handleNavbar(value)
             "companion_auto_update" -> handleCompanionAuto(onOff)
+            "companion_update_channel" -> handleCompanionChannel(value)
             "self_update" -> handleSelfUpdate(onOff)
             "update_channel" -> handleUpdateChannel(value)
             "home_dashboard" -> handleHomeDashboard(value)
@@ -981,11 +995,14 @@ class MqttBridge(
 
         // ha-paneld self-update — follows the update channel; installs a newer build of itself over root.
         // Off by default; the update_paneld button forces it on demand.
+        exposable(c, "companion_update_channel", "select", "${panel}_companion_update_channel", {
+            """{"name":"Companion auto-update channel","unique_id":"${panel}_companion_update_channel","command_topic":"$cmdCompanionChannel","state_topic":"$stateCompanionChannel","options":["Stable","Pre-release"],"icon":"mdi:source-branch","entity_category":"config",$avail,$device}"""
+        }) { publish(c, stateCompanionChannel, companionChannelLabel(), retain = true) }
         exposable(c, "self_update", "switch", "${panel}_self_update", {
-            """{"name":"Self-update","unique_id":"${panel}_self_update","command_topic":"$cmdSelfUpdate","state_topic":"$stateSelfUpdate","icon":"mdi:package-up","entity_category":"config",$avail,$device}"""
+            """{"name":"ha-paneld auto-update","unique_id":"${panel}_self_update","command_topic":"$cmdSelfUpdate","state_topic":"$stateSelfUpdate","icon":"mdi:package-up","entity_category":"config",$avail,$device}"""
         }) { publish(c, stateSelfUpdate, if (config.selfUpdate) "ON" else "OFF", retain = true) }
         exposable(c, "update_channel", "select", "${panel}_update_channel", {
-            """{"name":"Update channel","unique_id":"${panel}_update_channel","command_topic":"$cmdUpdateChannel","state_topic":"$stateUpdateChannel","options":["Stable","Pre-release"],"icon":"mdi:source-branch","entity_category":"config",$avail,$device}"""
+            """{"name":"ha-paneld auto-update channel","unique_id":"${panel}_update_channel","command_topic":"$cmdUpdateChannel","state_topic":"$stateUpdateChannel","options":["Stable","Pre-release"],"icon":"mdi:source-branch","entity_category":"config",$avail,$device}"""
         }) { publish(c, stateUpdateChannel, updateChannelLabel(), retain = true) }
         publishConfig(
             c, "button", "${panel}_update_paneld",
@@ -1127,6 +1144,7 @@ class MqttBridge(
         "switch" to "${panel}_touch_sound", "switch" to "${panel}_watchdog",
         "switch" to "${panel}_silence_boot_chime", "switch" to "${panel}_prevent_idle_dim",
         "switch" to "${panel}_companion_auto_update", "button" to "${panel}_update_companion",
+        "select" to "${panel}_companion_update_channel",
         "switch" to "${panel}_self_update", "select" to "${panel}_update_channel",
         "button" to "${panel}_update_paneld",
         "switch" to "${panel}_zigbee_router",
