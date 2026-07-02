@@ -1,5 +1,7 @@
 package io.github.maxlyth.hapaneld.device
 
+import io.github.maxlyth.hapaneld.util.SystemProps
+
 /**
  * Sonoff NSPanel Pro (Rockchip PX30 / rk3326, Android 8.1). Fingerprint: model/device `px30_evb`.
  * Toolbox `su -c` is reachable from the app. No RGB LED node. Has a Silicon Labs EFR32 Zigbee gateway
@@ -67,16 +69,9 @@ object NSPanelPro : DeviceProfile {
     // product string, so the "120" check covers it (→ 160). Text scale 1.0 across the board. Read lazily so
     // ro.product.version is available (post-boot).
     override val recommendedDensity: Int? by lazy {
-        if ("120" in sysProp("ro.product.version").substringBefore('_')) 250 else 160
+        if ("120" in SystemProps.get("ro.product.version").substringBefore('_')) 250 else 160
     }
     override val recommendedFontScale: Float? = 1.0f
-
-    /** Read an Android system property via SystemProperties reflection (e.g. ro.product.version). */
-    private fun sysProp(key: String): String = runCatching {
-        @Suppress("PrivateApi")
-        val m = Class.forName("android.os.SystemProperties").getMethod("get", String::class.java)
-        (m.invoke(null, key) as? String).orEmpty()
-    }.getOrDefault("")
 }
 
 /** True if dotted-numeric version [a] < [b] (e.g. "1.2.6" < "3.0.0"). Non-numeric/missing parts → 0. */

@@ -1,6 +1,7 @@
 package io.github.maxlyth.hapaneld.device
 
 import android.os.Build
+import io.github.maxlyth.hapaneld.util.SystemProps
 
 /**
  * Per-platform canonical silo. Everything device/platform-specific that the generic functional modules
@@ -136,12 +137,18 @@ interface DeviceProfile {
     val recommendedFontScale: Float?
 
     companion object {
+        /** Memoized detected profile: [match] is pure per boot (Build fields + one system property), yet
+         *  several call sites re-invoke [detect] on request paths — so resolve it once and reuse. */
+        private val cached: DeviceProfile by lazy { match() }
+
         /**
          * Pick the profile for the running device from [Build] fingerprints; [Generic] when none match.
          * Build-only (no Context needed). Presence-based capabilities (relays/zigbee/sensors) are still
          * runtime-probed by their controllers, so [Generic] is a safe fallback for unknown panels.
          */
-        fun detect(): DeviceProfile {
+        fun detect(): DeviceProfile = cached
+
+        private fun match(): DeviceProfile {
             val model = Build.MODEL.lowercase()
             val device = Build.DEVICE.lowercase()
             // The Smatek S9E reports generic Build fields (MODEL "S9" / DEVICE "rk3566_r") but carries
@@ -149,7 +156,7 @@ interface DeviceProfile {
             // reporter's /diag (GitHub #3, 2026-06-15). Match that so it doesn't fall back to Generic
             // (which hides its relays + button LEDs). rk3566 is shared with the TPA10, but the TPA10 is
             // matched first by device == "tpa10".
-            val productVersion = sysProp("ro.product.version").lowercase()
+            val productVersion = SystemProps.get("ro.product.version").lowercase()
             return when {
                 // px30 = Gen1 86P/120P; rk3326(-s) = Gen2 (best-effort — capabilities are runtime-probed,
                 // so an unverified Gen2 still detects relays/zigbee/sensors correctly).
@@ -174,14 +181,6 @@ interface DeviceProfile {
                 else -> Generic
             }
         }
-
-        /** Read an Android system property (e.g. ro.product.version) via SystemProperties reflection —
-         *  no Context needed, so it's usable from this Build-only detector. */
-        private fun sysProp(key: String): String = runCatching {
-            @Suppress("PrivateApi")
-            val m = Class.forName("android.os.SystemProperties").getMethod("get", String::class.java)
-            (m.invoke(null, key) as? String).orEmpty()
-        }.getOrDefault("")
     }
 }
 

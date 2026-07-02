@@ -11,6 +11,7 @@ import android.util.Log
 import io.github.maxlyth.hapaneld.Config
 import io.github.maxlyth.hapaneld.control.Su
 import io.github.maxlyth.hapaneld.device.DeviceProfile
+import io.github.maxlyth.hapaneld.util.SystemProps
 import kotlin.math.abs
 import kotlin.math.max
 
@@ -61,13 +62,7 @@ class SensorReporter(context: Context, private val config: Config) {
     // Authoritative graded/binary from the firmware version where the profile knows the rule (NSPanel Pro
     // kernel-driver cutover), so a graded sensor never reads "Binary" at idle. Null → observe (TPA10 etc.).
     private val fwGraded: Boolean? =
-        runCatching { DeviceProfile.detect().proximityGradedForFirmware(sysProp("ro.product.version")) }.getOrNull()
-
-    private fun sysProp(key: String): String = runCatching {
-        @Suppress("PrivateApi")
-        val m = Class.forName("android.os.SystemProperties").getMethod("get", String::class.java)
-        (m.invoke(null, key) as? String).orEmpty()
-    }.getOrDefault("")
+        runCatching { DeviceProfile.detect().proximityGradedForFirmware(SystemProps.get("ro.product.version")) }.getOrNull()
 
     private fun gradedObserved(): Boolean =
         synchronized(seenRaw) { seenRaw.size > 2 && (seenRaw.last() - seenRaw.first()) >= 2f }

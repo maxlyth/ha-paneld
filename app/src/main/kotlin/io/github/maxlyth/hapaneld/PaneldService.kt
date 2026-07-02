@@ -54,6 +54,7 @@ import kotlinx.coroutines.launch
 import io.github.maxlyth.hapaneld.util.UpdateChecker
 import io.github.maxlyth.hapaneld.util.CompanionInstaller
 import io.github.maxlyth.hapaneld.util.SelfUpdater
+import io.github.maxlyth.hapaneld.util.SystemProps
 
 /**
  * Persistent foreground service. Hosts the Ktor HTTP listener, the JmDNS advertiser, the MQTT
@@ -262,7 +263,7 @@ class PaneldService : Service() {
         // Variant + firmware from ro.product.version (e.g. "NSPanel120P_3.7.1" -> "NSPanel 120P · fw 3.7.1").
         // This is the authoritative model/generation key — distinguishes 86P / 120P / 86P-Gen2 and the
         // firmware that drives the proximity-reporting + zigbee-layout quirks.
-        val pv = sysProp("ro.product.version")
+        val pv = SystemProps.get("ro.product.version")
         val modelRow = if (pv.isNotEmpty()) {
             val m = pv.substringBefore('_').replace("NSPanel", "NSPanel ").trim()
             val fw = pv.substringAfter('_', "")
@@ -306,13 +307,6 @@ class PaneldService : Service() {
         )
         return PanelInfo.collect(this, extras)
     }
-
-    /** Read an Android system property (e.g. ro.product.version) via SystemProperties reflection. */
-    private fun sysProp(key: String): String = runCatching {
-        @Suppress("PrivateApi")
-        val m = Class.forName("android.os.SystemProperties").getMethod("get", String::class.java)
-        (m.invoke(null, key) as? String).orEmpty()
-    }.getOrDefault("")
 
     private fun ledLabel(): String = when {
         !led.available() -> "none"
