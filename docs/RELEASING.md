@@ -33,6 +33,11 @@ then builds, signs and publishes the APK, taking the human-readable notes from t
    - **Stable tags**: add `## vX.Y.Z - <date>` with cumulative notes for the whole version. The workflow
      falls back to the base-version section only for stable tags, so the stable section is the one place
      to summarise the full release for users upgrading directly from the previous stable.
+   - **The stable section must be SELF-CONTAINED** — it is the canonical summary of everything the RC
+     line delivered, so it must not point at or cite RC notes (no "see the rc sections", no per-bullet
+     `(rcN)` attributions). The RC prereleases are **deleted on promote** (next section), so any RC
+     reference in the published stable note dangles. The dated `-rcN` sections may stay in
+     `CHANGELOG.md` as in-repo development history, but the stable note has to read complete without them.
 
    Group entries under **Added / Changed / Fixed / Docs** (only the groups with content) — see the
    format note at the top of `CHANGELOG.md`.
