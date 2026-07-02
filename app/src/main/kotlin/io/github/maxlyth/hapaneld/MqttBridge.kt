@@ -826,7 +826,11 @@ class MqttBridge(
         payload: () -> String,
         publishState: () -> Unit,
     ) {
-        if (config.haExposed(key)) {
+        // Honour the spec's per-setting default so a setting declared haExposedByDefault=false is
+        // local-only (HTTP UI) until the user opts in via the expose pip — matching what the Configure
+        // UI/schema shows. Falls back to true for keys with no registry spec (e.g. relay/button_led).
+        val default = SettingsRegistry.spec(key)?.haExposedByDefault ?: true
+        if (config.haExposed(key, default)) {
             publishConfig(component, objectId, payload())
             publishState()
         } else {
