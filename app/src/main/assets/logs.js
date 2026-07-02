@@ -96,6 +96,18 @@
     if (follow) toBottom();
   });
 
+  // Fit the log view to the window: collapse it, measure the slack between the page bottom and the
+  // viewport bottom, and hand that slack to the view. Self-adapts to header wrap / banners / the
+  // note below — no hard-coded offsets. Min height keeps it usable on tiny windows (page scrolls).
+  function fit() {
+    out.style.height = "150px";
+    var slack = window.innerHeight - document.body.getBoundingClientRect().bottom;
+    out.style.height = Math.max(150, 150 + slack) + "px";
+    if (follow) toBottom();
+  }
+  window.addEventListener("resize", fit);
+  fit();
+
   // Stop the stream (and with it the panel-side logcat subprocess) when the page is hidden for a
   // while; reconnect on return. Closing the tab closes the SSE socket → server unsubscribes.
   document.addEventListener("visibilitychange", function () {
