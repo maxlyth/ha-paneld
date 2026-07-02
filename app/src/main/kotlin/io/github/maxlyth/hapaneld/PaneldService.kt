@@ -54,6 +54,7 @@ import kotlinx.coroutines.launch
 import io.github.maxlyth.hapaneld.util.UpdateChecker
 import io.github.maxlyth.hapaneld.util.CompanionInstaller
 import io.github.maxlyth.hapaneld.util.SelfUpdater
+import io.github.maxlyth.hapaneld.mqtt.ConnectionSupervisor
 import io.github.maxlyth.hapaneld.util.SystemProps
 
 /**
@@ -474,54 +475,32 @@ class PaneldService : Service() {
      * the field: thread parked on a futex, liveness 44 min stale, no rebuild). So heartbeat and rebuild
      * each run on their own guarded side-thread: if the previous one is still in flight, skip — an
      * in-flight heartbeat can't refresh lastOkMs, so staleness still trips, and the rebuild guard
-     * re-arms via a timeout so a hung rebuild can't permanently disable healing.
+     * re-arms via a timeout so a hung rebuild can't permanently disable healing. The rebuild DECISION
+     * (which stall mode, whether to rebuild, and the wedged-rebuild abandon) lives in [ConnectionSupervisor];
+     * this thread owns only the tick cadence and the off-thread heartbeat/rebuild execution.
      */
     private fun startMqttWatchdog() {
         if (mqttWatchdogAlive) return
         mqttWatchdogAlive = true
+        val supervisor = ConnectionSupervisor(MQTT_STALE_MS, REBUILD_ABANDON_MS)
         Thread {
-            var staleTicks = 0
             var heartbeat: Thread? = null
             var rebuild: Thread? = null
-            var rebuildStartedAt = 0L
-            fun spawnRebuild(reason: String) {
-                val now = android.os.SystemClock.elapsedRealtime()
-                if (rebuild?.isAlive == true) {
-                    // A previous rebuild is wedged inside the client. Don't stack another on the same
-                    // monitor immediately — but after REBUILD_ABANDON_MS give up on it (leak one parked
-                    // thread) and try fresh, so healing is never permanently disabled.
-                    if (now - rebuildStartedAt < REBUILD_ABANDON_MS) {
-                        Log.w(TAG, "mqtt rebuild already in flight (${now - rebuildStartedAt}ms) — skipping ($reason)")
-                        return
-                    }
-                    Log.w(TAG, "mqtt rebuild wedged for ${now - rebuildStartedAt}ms — abandoning it, starting fresh ($reason)")
-                }
-                rebuildStartedAt = now
-                rebuild = Thread({
-                    runCatching { mqtt.reconnect(flipFamily = true) }
-                }, "mqtt-rebuild").apply { isDaemon = true; start() }
-            }
             while (mqttWatchdogAlive) {
                 try { Thread.sleep(MQTT_WATCHDOG_MS) } catch (e: InterruptedException) { break }
                 if (!mqttWatchdogAlive) break
                 val sinceOk = mqtt.msSinceLastOk()
+                val now = android.os.SystemClock.elapsedRealtime()
                 Log.i(TAG, "mqtt watchdog tick: state=${mqtt.state} sinceOk=${sinceOk}ms hb=${heartbeat?.isAlive == true} rebuild=${rebuild?.isAlive == true}")
-                val livenessStale = mqtt.state != "disabled" && mqtt.lastOkMs != 0L && sinceOk > MQTT_STALE_MS
-                when {
-                    livenessStale -> {
-                        Log.w(TAG, "MQTT liveness stale (${sinceOk}ms, state=${mqtt.state}) — forcing reconnect (flip family)")
-                        spawnRebuild("liveness")
-                        staleTicks = 0
+                when (val action = supervisor.tick(mqtt.state, mqtt.lastOkMs, sinceOk, now, rebuild?.isAlive == true)) {
+                    is ConnectionSupervisor.Action.Rebuild -> {
+                        Log.w(TAG, "MQTT ${action.reason} stall (${sinceOk}ms, state=${mqtt.state}) — forcing reconnect (flip family)")
+                        rebuild = Thread({ runCatching { mqtt.reconnect(flipFamily = true) } }, "mqtt-rebuild")
+                            .apply { isDaemon = true; start() }
                     }
-                    mqtt.state == "connected" || mqtt.state == "disabled" -> staleTicks = 0
-                    else -> {
-                        staleTicks++
-                        if (staleTicks >= 2) {
-                            Log.w(TAG, "MQTT stuck (${mqtt.state}) — forcing reconnect (flip family)")
-                            spawnRebuild("state")
-                            staleTicks = 0
-                        }
-                    }
+                    is ConnectionSupervisor.Action.SkipRebuild ->
+                        Log.w(TAG, "mqtt ${action.reason} rebuild wanted but one in flight ${action.inFlightMs}ms — skipping")
+                    ConnectionSupervisor.Action.None -> {}
                 }
                 // Heartbeat LAST and OFF-THREAD: a wedged client blocks the publish, but only this
                 // sacrificial thread — the loop keeps ticking and the un-refreshed lastOkMs is itself
