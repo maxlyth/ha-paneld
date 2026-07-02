@@ -514,9 +514,6 @@ class MqttBridge(
         }
         val br = if (json.has("brightness")) json.getInt("brightness") else 255
         val color = json.optJSONObject("color")
-        var r = color?.optInt("r", 255) ?: 255
-        var g = color?.optInt("g", 255) ?: 255
-        var b = color?.optInt("b", 255) ?: 255
         val cr = color?.optInt("r", 255) ?: 255
         val cg = color?.optInt("g", 255) ?: 255
         val cb = color?.optInt("b", 255) ?: 255
