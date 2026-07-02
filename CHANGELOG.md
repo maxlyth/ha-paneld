@@ -19,6 +19,7 @@ content appear. Earlier releases predate this convention and keep their flat lis
 
 ### Changed
 
+- **The web UI loads instantly** — the Dashboard previously gathered every root-probed value (Zigbee state, CPU governor, network-ADB, density, touch sound…) before sending any HTML, leaving a blank page for 10+ seconds on slower panels (and ~4s on the Configure tab). The page shell now renders immediately and the probe-backed values hydrate in place from a new `GET /api/v1/info`; the probes themselves run through a cached, single-flight snapshot (pre-warmed at start, refreshed at most every 15s, invalidated on config changes), which also makes `/api/v1/diag` and the Configure tab fast.
 - **Config import is now best-effort** — a bundle exported from a different panel model or a different ha-paneld version restores everything it validly can: valid keys apply, invalid values are reported and skipped, unknown keys warn and skip (previously a single invalid value rejected the whole bundle). `?strict=1` keeps the old all-or-nothing behaviour; dry-run previews now list what would be skipped. Status reports `applied` / `partial` / `rejected`.
 - **Clearer update-entity names** — "Self-update" is now **"ha-paneld auto-update"** and "Update channel" is **"ha-paneld auto-update channel"**, so it's obvious they apply to ha-paneld and not the Companion app. Display names only — entity ids are unchanged, so no Home Assistant entity churn. (#18)
 

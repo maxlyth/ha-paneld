@@ -74,6 +74,7 @@
         "responses": { "200": { "description": "{\"enabled\":bool}" }, "400": { "description": "bad-value" } } }
     },
     "/api/v1/diag": { "get": { "summary": "Plain-text diagnostics dump (hardware, firmware, SELinux, su/node probes)", "tags": ["status"], "responses": { "200": { "description": "text/plain report" } } } },
+    "/api/v1/info": { "get": { "summary": "Dashboard hydration payload — the probe-backed facts/value/capability fragments as ready-to-inject HTML (cached snapshot, single-flight)", "tags": ["status"], "responses": { "200": { "description": "{banners, shot, controls, cards} JSON" } } } },
     "/api/v1/logs/stream": {
       "get": { "summary": "Live log tail as Server-Sent Events (redacted logcat lines; capture stops when the last client disconnects)", "tags": ["status"],
         "parameters": [{ "name": "source", "in": "query", "schema": { "type": "string", "enum": ["app", "system"], "default": "app" }, "description": "app = ha-paneld's own process log (no root); system = full device logcat (root panels only)" }],
