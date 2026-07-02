@@ -1,6 +1,7 @@
 package io.github.maxlyth.hapaneld.control
 
 import io.github.maxlyth.hapaneld.device.DeviceProfile
+import io.github.maxlyth.hapaneld.platform.RootShell
 import org.json.JSONObject
 
 /**
@@ -22,7 +23,7 @@ import org.json.JSONObject
  *   - role switch:  `zigbee/system/network-role/switch`        ←  `{"role":"Repeater"}`
  * Everything here needs root via [Su].
  */
-class ZigbeeController(profile: DeviceProfile = DeviceProfile.detect()) {
+class ZigbeeController(profile: DeviceProfile = DeviceProfile.detect(), private val root: RootShell = Su) {
 
     private val dir: String? = profile.zigbeeGatewayDir
 
@@ -45,7 +46,7 @@ class ZigbeeController(profile: DeviceProfile = DeviceProfile.detect()) {
      */
     fun driver(): String? {
         val dir = dir ?: return null
-        val raw = Su.runOutput("cat $dir/package_version 2>/dev/null")?.trim()
+        val raw = root.runOutput("cat $dir/package_version 2>/dev/null")?.trim()
         if (!raw.isNullOrEmpty()) {
             val tail = raw.substringAfter(':', raw)
             val type = tail.substringBefore('-', tail)
@@ -56,15 +57,15 @@ class ZigbeeController(profile: DeviceProfile = DeviceProfile.detect()) {
     }
 
     private fun fileExists(path: String): Boolean =
-        Su.runOutput("ls $path 2>/dev/null")?.trim()?.isNotEmpty() == true
+        root.runOutput("ls $path 2>/dev/null")?.trim()?.isNotEmpty() == true
 
     /** True when the zgateway host process is running (the radio is in use). */
-    fun running(): Boolean = Su.runOutput("pidof zgateway")?.trim()?.isNotEmpty() == true
+    fun running(): Boolean = root.runOutput("pidof zgateway")?.trim()?.isNotEmpty() == true
 
     /** Current network role from the local broker, or null if unreadable (gateway/broker down). */
     fun role(): String? {
         val dir = dir ?: return null
-        val out = Su.runOutput(
+        val out = root.runOutput(
             "export LD_LIBRARY_PATH=$dir; $dir/mosquitto_sub -h 127.0.0.1 -p 1883 -i hapaneld_zr " +
                 "-t zigbee/system/network-role/information -C 1 -W 3",
         )?.trim() ?: return null
@@ -73,7 +74,7 @@ class ZigbeeController(profile: DeviceProfile = DeviceProfile.detect()) {
 
     /** A guard supervisor is already running (matched by exact cmdline, excluding our own shells). */
     private fun guardRunning(): Boolean =
-        Su.runOutput("ps -A -o ARGS= 2>/dev/null | grep guard_process.sh | grep -v ' -c ' | grep -v grep")
+        root.runOutput("ps -A -o ARGS= 2>/dev/null | grep guard_process.sh | grep -v ' -c ' | grep -v grep")
             ?.trim()?.isNotEmpty() == true
 
     /**
@@ -86,8 +87,8 @@ class ZigbeeController(profile: DeviceProfile = DeviceProfile.detect()) {
     fun enable(): Boolean {
         val dir = dir ?: return false
         if (running() || guardRunning()) return true // already up — never spawn a duplicate guard
-        val ok = if (managed()) Su.run("sh $dir/run_guard_process.sh")
-        else Su.run("nohup sh $dir/guard_process.sh >/dev/null 2>&1 &")
+        val ok = if (managed()) root.run("sh $dir/run_guard_process.sh")
+        else root.run("nohup sh $dir/guard_process.sh >/dev/null 2>&1 &")
         runCatching {
             val r = role()
             if (r != null && !r.equals(ROLE_REPEATER, ignoreCase = true)) setRole(ROLE_REPEATER)
@@ -108,8 +109,8 @@ class ZigbeeController(profile: DeviceProfile = DeviceProfile.detect()) {
         // bug pkill -f had: its cmdline contains "guard_process.sh"). Then best-effort SIGKILL the radio —
         // but on stock firmware zgateway runs in the init domain and the vendor `su` returns EPERM, so this
         // is a no-op there and the radio persists until reboot (a firmware limit, surfaced in status()).
-        return if (managed()) Su.run("sh $dir/run_guard_process.sh stop")
-        else Su.run(
+        return if (managed()) root.run("sh $dir/run_guard_process.sh stop")
+        else root.run(
             "for p in \$(ps -A -o PID=,ARGS= 2>/dev/null | grep guard_process.sh | grep -v ' -c ' | " +
                 "grep -v grep | awk '{print \$1}'); do kill -9 \$p 2>/dev/null; done; " +
                 "killall -9 zgateway 2>/dev/null; true",
@@ -141,7 +142,7 @@ class ZigbeeController(profile: DeviceProfile = DeviceProfile.detect()) {
             "repeater" -> "Repeater"
             else -> return
         }
-        Su.run(
+        root.run(
             "export LD_LIBRARY_PATH=$dir; $dir/mosquitto_pub -h 127.0.0.1 -p 1883 -i hapaneld_zp " +
                 "-t zigbee/system/network-role/switch -m '{\"role\":\"$r\"}'",
         )

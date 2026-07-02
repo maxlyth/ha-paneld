@@ -1,6 +1,8 @@
 package io.github.maxlyth.hapaneld.control
 
 import io.github.maxlyth.hapaneld.device.DeviceProfile
+import io.github.maxlyth.hapaneld.platform.Daemon
+import io.github.maxlyth.hapaneld.platform.RootShell
 import io.github.maxlyth.hapaneld.util.HelperClient
 
 /**
@@ -18,7 +20,11 @@ import io.github.maxlyth.hapaneld.util.HelperClient
  * daemon's `DENSITY` command and font scale through its `FONTSCALE` command, so both controls are
  * available there too.
  */
-class DensityController(private val canSu: Boolean = DeviceProfile.detect().appCanSu) {
+class DensityController(
+    private val canSu: Boolean = DeviceProfile.detect().appCanSu,
+    private val root: RootShell = Su,
+    private val daemon: Daemon = HelperClient,
+) {
 
     /** Native (physical) density, or null if unreadable. */
     fun native(): Int? = if (canSu) parseSu("Physical density:") else daemonField("PHYS")
@@ -34,43 +40,43 @@ class DensityController(private val canSu: Boolean = DeviceProfile.detect().appC
     /** Set the override density (dpi). Bounded to keep the UI usable/bootable. Returns true if applied. */
     fun set(dpi: Int): Boolean {
         if (dpi < MIN_DPI || dpi > MAX_DPI) return false
-        return if (canSu) Su.run("wm density $dpi") else HelperClient.send("DENSITY $dpi") == "OK"
+        return if (canSu) root.run("wm density $dpi") else daemon.send("DENSITY $dpi") == "OK"
     }
 
     /** Restore the native density. */
     fun reset(): Boolean =
-        if (canSu) Su.run("wm density reset") else HelperClient.send("DENSITY reset") == "OK"
+        if (canSu) root.run("wm density reset") else daemon.send("DENSITY reset") == "OK"
 
     /** Current system font scale (1.0 when unset). WebView text follows this (textZoom = scale × 100). */
     fun fontScale(): Float =
-        if (canSu) (Su.runOutput("settings get system font_scale 2>/dev/null") ?: "").trim().toFloatOrNull() ?: 1.0f
+        if (canSu) (root.runOutput("settings get system font_scale 2>/dev/null") ?: "").trim().toFloatOrNull() ?: 1.0f
         else daemonScale() ?: 1.0f
 
     /** Set the system font scale (text size). Bounded to keep text legible. Returns true if applied. */
     fun setFontScale(scale: Float): Boolean {
         if (scale < MIN_FONT || scale > MAX_FONT) return false
-        return if (canSu) Su.run("settings put system font_scale $scale")
-        else HelperClient.send("FONTSCALE $scale") == "OK"
+        return if (canSu) root.run("settings put system font_scale $scale")
+        else daemon.send("FONTSCALE $scale") == "OK"
     }
 
     /** Restore the default font scale (1.0). */
     fun resetFontScale(): Boolean =
-        if (canSu) Su.run("settings delete system font_scale")
-        else HelperClient.send("FONTSCALE reset") == "OK"
+        if (canSu) root.run("settings delete system font_scale")
+        else daemon.send("FONTSCALE reset") == "OK"
 
     // su path: parse the `wm density` output ("Physical density: N" / "Override density: N").
     private fun parseSu(key: String): Int? =
-        (Su.runOutput("wm density 2>/dev/null") ?: "")
+        (root.runOutput("wm density 2>/dev/null") ?: "")
             .lineSequence().firstOrNull { it.contains(key) }
             ?.substringAfter(key)?.trim()?.toIntOrNull()
 
     // daemon path: parse the daemon's "PHYS=<n> OVER=<n|->" reply (OVER absent/"-" => no override).
     private fun daemonField(key: String): Int? =
-        HelperClient.send("DENSITY")?.let { Regex("$key=(\\d+)").find(it)?.groupValues?.get(1)?.toIntOrNull() }
+        daemon.send("DENSITY")?.let { Regex("$key=(\\d+)").find(it)?.groupValues?.get(1)?.toIntOrNull() }
 
     // daemon path: parse the daemon's "SCALE=<v>" reply ("null" when unset => no override, read as 1.0).
     private fun daemonScale(): Float? =
-        HelperClient.send("FONTSCALE")?.let { Regex("SCALE=([0-9.]+)").find(it)?.groupValues?.get(1)?.toFloatOrNull() }
+        daemon.send("FONTSCALE")?.let { Regex("SCALE=([0-9.]+)").find(it)?.groupValues?.get(1)?.toFloatOrNull() }
 
     companion object {
         const val MIN_DPI = 80

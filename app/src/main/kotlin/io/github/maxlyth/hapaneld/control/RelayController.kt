@@ -1,6 +1,7 @@
 package io.github.maxlyth.hapaneld.control
 
 import io.github.maxlyth.hapaneld.device.DeviceProfile
+import io.github.maxlyth.hapaneld.platform.RootShell
 
 /**
  * On-board relay + button-LED control for panels that expose them — currently the **Smatek S9E**,
@@ -19,7 +20,7 @@ import io.github.maxlyth.hapaneld.device.DeviceProfile
  * seaky/nspanel_pro_tools_apk#98 + two stock firmware images; no S9E was available to validate. These
  * switch **mains loads**, so treat as experimental until confirmed on a real unit.
  */
-class RelayController(profile: DeviceProfile = DeviceProfile.detect()) {
+class RelayController(profile: DeviceProfile = DeviceProfile.detect(), private val root: RootShell = Su) {
 
     // Candidate relay-class bases, primary first. The S9E renamed st_relay -> strelay across firmware,
     // so the profile supplies both; base() picks the first whose dir actually holds relayN nodes.
@@ -36,7 +37,7 @@ class RelayController(profile: DeviceProfile = DeviceProfile.detect()) {
     }
 
     private fun relayNodeCount(b: String): Int {
-        val out = Su.runOutput("ls $b 2>/dev/null") ?: return 0
+        val out = root.runOutput("ls $b 2>/dev/null") ?: return 0
         return out.split(Regex("\\s+")).count { it.matches(Regex("relay\\d+")) }
     }
 
@@ -48,13 +49,13 @@ class RelayController(profile: DeviceProfile = DeviceProfile.detect()) {
     /** Set relay [n] (1-based) on/off. Returns true if the write ran. */
     fun set(n: Int, on: Boolean): Boolean {
         val base = base() ?: return false
-        return Su.run("echo ${if (on) 1 else 0} > $base/relay$n")
+        return root.run("echo ${if (on) 1 else 0} > $base/relay$n")
     }
 
     /** Current state of relay [n], or false if unreadable. */
     fun get(n: Int): Boolean {
         val base = base() ?: return false
-        return Su.runOutput("cat $base/relay$n 2>/dev/null")?.trim() == "1"
+        return root.runOutput("cat $base/relay$n 2>/dev/null")?.trim() == "1"
     }
 
     // --- S9E button LEDs: gpio <buttonLedGpioBase..+3>, on/off via su ---
@@ -70,13 +71,13 @@ class RelayController(profile: DeviceProfile = DeviceProfile.detect()) {
     /** Set button LED [i] (0-based, F1..F4) on/off. */
     fun ledSet(i: Int, on: Boolean): Boolean {
         val node = ledNode(i) ?: return false
-        return Su.run("echo ${if (on) 1 else 0} > $node")
+        return root.run("echo ${if (on) 1 else 0} > $node")
     }
 
     /** Current state of button LED [i], or false if unreadable. */
     fun ledGet(i: Int): Boolean {
         val node = ledNode(i) ?: return false
-        return Su.runOutput("cat $node 2>/dev/null")?.trim() == "1"
+        return root.runOutput("cat $node 2>/dev/null")?.trim() == "1"
     }
 
     private fun ledNode(i: Int): String? = ledBase?.let { "/sys/class/gpio/gpio${it + i}/value" }
@@ -85,11 +86,11 @@ class RelayController(profile: DeviceProfile = DeviceProfile.detect()) {
      *  both best-effort/idempotent, then report whether its `value` node is now present. */
     private fun ensureGpio(gpio: Int): Boolean {
         val dir = "/sys/class/gpio/gpio$gpio"
-        Su.run("[ -e $dir ] || echo $gpio > /sys/class/gpio/export 2>/dev/null; " +
+        root.run("[ -e $dir ] || echo $gpio > /sys/class/gpio/export 2>/dev/null; " +
             "[ -w $dir/direction ] && echo out > $dir/direction 2>/dev/null")
         return exists("$dir/value")
     }
 
     private fun exists(p: String?): Boolean =
-        p != null && Su.runOutput("ls $p 2>/dev/null")?.trim()?.isNotEmpty() == true
+        p != null && root.runOutput("ls $p 2>/dev/null")?.trim()?.isNotEmpty() == true
 }
