@@ -184,6 +184,9 @@ class MqttBridge(
     private val cmdNetAdb = "ha-paneld/$panel/network_adb/set"
     private val stateNetAdb = "ha-paneld/$panel/network_adb/state"
     private val stateScreen = "ha-paneld/$panel/screen/state"
+    // Last brightness reported to HA on stateScreen (-1 = screen reported OFF); heartbeat reconciles
+    // the effective hardware backlight against this so firmware dims reach HA between commands.
+    @Volatile private var lastScreenBrightness = -1
     private val stateLed = "ha-paneld/$panel/led/state"
     private val stateNavigate = "ha-paneld/$panel/navigate/state"
     private val stateVolume = "ha-paneld/$panel/volume/state"
@@ -357,7 +360,7 @@ class MqttBridge(
     private fun restoreAndPublishStates() {
         publish(stateVolume, volume.getPercent().toString(), retain = true)
         // Screen: panels come up on; report ON + the current brightness.
-        publish(stateScreen, """{"state":"ON","brightness":${brightness.getBrightness().coerceAtLeast(1)}}""", retain = true)
+        publishScreenBrightness(brightness.getBrightness().coerceAtLeast(1))
         // Navigate: last pushed path, else default to the dashboard root "/" so the entity shows a
         // sensible local path instead of "unknown" before anything has been navigated.
         val navInit = config.lastNavigate.ifEmpty { "/" }
@@ -438,7 +441,7 @@ class MqttBridge(
     /** Publish screen=ON to HA after a LOCAL wake (e.g. wake-on-wave), so `light.<panel>_screen` tracks
      *  reality instead of staying OFF. No-op if the broker isn't connected yet. */
     fun publishScreenOn() {
-        publish(stateScreen, """{"state":"ON","brightness":${brightness.getBrightness().coerceAtLeast(1)}}""", retain = true)
+        publishScreenBrightness(brightness.getBrightness().coerceAtLeast(1))
     }
 
     /** Publish the current volume to HA after a LOCAL change (e.g. navbar Volume ±), so
@@ -452,6 +455,7 @@ class MqttBridge(
         val on = json.optString("state", "ON").equals("ON", ignoreCase = true)
         if (!on) {
             screen.sleep()
+            lastScreenBrightness = -1
             publish(stateScreen, """{"state":"OFF"}""", retain = true)
             return
         }
@@ -462,7 +466,7 @@ class MqttBridge(
             brightness.getBrightness().coerceAtLeast(1)
         }
         screen.noteLevel(level)
-        publish(stateScreen, """{"state":"ON","brightness":$level}""", retain = true)
+        publishScreenBrightness(level)
     }
 
     private fun handleLed(payload: String) {
@@ -1156,6 +1160,26 @@ class MqttBridge(
     fun heartbeat() {
         if (state == "disabled") return
         runCatching { publish("ha-paneld/$panel/last_seen", (System.currentTimeMillis() / 1000).toString()) }
+        // Reconcile the reported brightness with the EFFECTIVE backlight: vendor firmware (NSPanel
+        // Pro idle-dim; also observed on the TPA10) moves the hardware node without touching
+        // SCREEN_BRIGHTNESS, so between commands HA's light would show a stale level forever. Runs on
+        // the watchdog thread (su-safe, off-main); skipped while the screen is deliberately off.
+        runCatching {
+            if (!screen.isIntendedOff() && lastScreenBrightness >= 0) {
+                val eff = brightness.getBrightness()
+                if (eff >= 0 && kotlin.math.abs(eff - lastScreenBrightness) > SCREEN_DRIFT) {
+                    Log.i(TAG, "screen brightness drift: reported $lastScreenBrightness, effective $eff — reconciling")
+                    publishScreenBrightness(eff.coerceAtLeast(1))
+                }
+            }
+        }
+    }
+
+    /** Publish screen=ON at [level] and remember it as the last-reported brightness (the reconcile
+     *  in [heartbeat] compares the effective backlight against this). */
+    private fun publishScreenBrightness(level: Int) {
+        lastScreenBrightness = level
+        publish(stateScreen, """{"state":"ON","brightness":$level}""", retain = true)
     }
 
     @Synchronized
@@ -1170,6 +1194,7 @@ class MqttBridge(
 
     companion object {
         private const val TAG = "ha-paneld/mqtt"
+        private const val SCREEN_DRIFT = 2   // reconcile threshold (0-255 scale) — ignore rounding jitter
         // How long to wait after a reload before deep-linking to the intended dashboard — lets the WebView
         // cold-start + the HA frontend load so the navigate deeplink isn't swallowed.
         private const val RELOAD_NAV_DELAY_MS = 8_000L

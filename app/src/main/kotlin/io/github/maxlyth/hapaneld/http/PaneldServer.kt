@@ -101,6 +101,9 @@ class PaneldServer(
     // full logcat via su, gated on Su.available() at request time. Null → the viewer 404s.
     private val logApp: LogCapture? = null,
     private val logSystem: LogCapture? = null,
+    // EFFECTIVE backlight (sysfs actual_brightness via BrightnessController, cached) — the sensors
+    // endpoint + Live-state row report what the hardware is doing, not just the Android setting.
+    private val effectiveBrightness: () -> Int = { -1 },
 ) {
     // Per-INSTALL build token (changes on every (re)install, not just a version bump) so an open info
     // page can auto-reload after the app is updated — even a same-version dev re-spin. /health carries it.
@@ -281,7 +284,8 @@ class PaneldServer(
                     // Live Sensors card: last-published values + live extras. Volume is the current
                     // media-stream percent; brightness is the system setting (0-255, -1 unknown).
                     get("/sensors") {
-                        val bright = runCatching {
+                        // Effective backlight first (reflects firmware dims); raw setting as fallback.
+                        val bright = effectiveBrightness().takeIf { it >= 0 } ?: runCatching {
                             android.provider.Settings.System.getInt(appContext.contentResolver, android.provider.Settings.System.SCREEN_BRIGHTNESS)
                         }.getOrDefault(-1)
                         call.respondText(
@@ -1013,7 +1017,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
     private fun liveRowsHtml(): String {
         val led = config.lastLed.split(",").mapNotNull { it.toIntOrNull() }
         val ledShown = if (led.size == 5 && led[0] == 1) "on · rgb(${led[2]},${led[3]},${led[4]}) @ ${led[1]}" else "off"
-        val brightnessShown = runCatching {
+        val brightnessShown = effectiveBrightness().takeIf { it >= 0 }?.toString() ?: runCatching {
             android.provider.Settings.System.getInt(appContext.contentResolver, android.provider.Settings.System.SCREEN_BRIGHTNESS)
         }.getOrNull()?.toString() ?: "?"
         return listOf(

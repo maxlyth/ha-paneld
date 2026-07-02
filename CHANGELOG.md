@@ -8,6 +8,12 @@ From **v0.8.0**, entries are grouped under **Added** (new features/entities), **
 changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
 content appear. Earlier releases predate this convention and keep their flat lists.
 
+## v0.8.6-rc3 - Unreleased
+
+### Fixed
+
+- **`light.<panel>_screen` now reports the REAL backlight level** — panel firmware (NSPanel Pro idle-dim; also observed on the TPA10) moves the hardware backlight without touching Android's brightness setting, so the HA entity showed a stale level until the next command. ha-paneld now reads the effective level from the backlight sysfs (plain file read where permitted, root, or two new helper-daemon verbs `BLREAD`/`BLSET` on no-root panels), reconciles HA whenever it drifts from the last reported value, and the sensors endpoint + dashboard report the same effective value. Brightness commands on no-root daemon panels now also drive the hardware node directly, so they take effect past a firmware dim. Daemon panels need the updated helper binary (redeployed automatically by `install-daemon.sh`).
+
 ## v0.8.6-rc2 - 2026-07-02
 
 ### Added
