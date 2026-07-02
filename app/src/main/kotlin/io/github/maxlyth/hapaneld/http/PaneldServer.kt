@@ -1092,49 +1092,64 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
         val p = call.receiveParameters()
         // Partial-merge: apply ONLY keys present, so a fleet tool can set one field without clobbering
         // the rest. The UI form sends every key (blank = clear), preserving its full-replace behaviour.
-        p["panel_id"]?.let {
+        // Validate panel_id up front so an invalid value is rejected before any write begins.
+        val panelId = p["panel_id"]?.let {
             val slug = it.lowercase().replace(Regex("[^a-z0-9]+"), "_").trim('_')
             if (slug.isEmpty()) {
                 call.respondText("invalid panel_id\n", status = HttpStatusCode.BadRequest)
                 return
             }
-            config.setPanelId(slug)
+            slug
         }
-        p["friendly_name"]?.let { config.setFriendlyName(it.trim()) }
-        p["dashboard_package"]?.let { config.setDashboardPackage(it.trim()) }
-        p["launcher_package"]?.let { config.setLauncherPackage(it.trim()) }
-        p["tame_vendor_packages"]?.let { raw ->
-            applyTameBlocklist(raw.split(Regex("[\\s,]+")).map { it.trim() }
-                .filter { it.isNotEmpty() && !TameController.isCritical(it) }.toSet())
-        }
-        p["silence_boot_chime"]?.let { config.setSilenceBootChime(it.trim().equals("true", ignoreCase = true) || it.trim() == "1") }
-        // Keep-awake (partial wakelock so SoC/network never suspend). Applied live by reconfigure().
-        p["keep_awake"]?.let { config.setKeepAwake(it.trim().equals("true", ignoreCase = true) || it.trim() == "1") }
-        val logEnabled = p["log_ship_enabled"]?.let { it.trim().equals("true", ignoreCase = true) || it.trim() == "1" }
-        val logHost = p["log_ship_host"]?.trim()
-        val logPort = p["log_ship_port"]?.trim()?.toIntOrNull()
-        val logProto = p["log_ship_protocol"]?.trim()
-        if (logEnabled != null || logHost != null || logPort != null || logProto != null) {
-            config.setLogShipping(
-                logEnabled ?: config.logShipEnabled,
-                logHost ?: config.logShipHost,
-                logPort ?: config.logShipPort,
-                logProto ?: config.logShipProtocol,
+        // Persisted fields are staged into one editor and committed atomically, so a power loss mid-apply
+        // can't leave a half-written config (e.g. broker set but credentials not). Live side-effects
+        // (behaviour keys, reconfigure) run after the commit so they read freshly-committed state.
+        config.applyBatch {
+            panelId?.let { config.setPanelId(it) }
+            p["friendly_name"]?.let { config.setFriendlyName(it.trim()) }
+            p["dashboard_package"]?.let { config.setDashboardPackage(it.trim()) }
+            p["launcher_package"]?.let { config.setLauncherPackage(it.trim()) }
+            p["tame_vendor_packages"]?.let { raw ->
+                applyTameBlocklist(raw.split(Regex("[\\s,]+")).map { it.trim() }
+                    .filter { it.isNotEmpty() && !TameController.isCritical(it) }.toSet())
+            }
+            p["silence_boot_chime"]?.let { config.setSilenceBootChime(it.trim().equals("true", ignoreCase = true) || it.trim() == "1") }
+            // Keep-awake (partial wakelock so SoC/network never suspend). Applied live by reconfigure().
+            p["keep_awake"]?.let { config.setKeepAwake(it.trim().equals("true", ignoreCase = true) || it.trim() == "1") }
+            val logEnabled = p["log_ship_enabled"]?.let { it.trim().equals("true", ignoreCase = true) || it.trim() == "1" }
+            val logHost = p["log_ship_host"]?.trim()
+            val logPort = p["log_ship_port"]?.trim()?.toIntOrNull()
+            val logProto = p["log_ship_protocol"]?.trim()
+            if (logEnabled != null || logHost != null || logPort != null || logProto != null) {
+                config.setLogShipping(
+                    logEnabled ?: config.logShipEnabled,
+                    logHost ?: config.logShipHost,
+                    logPort ?: config.logShipPort,
+                    logProto ?: config.logShipProtocol,
+                )
+            }
+            val mfr = p["manufacturer"]?.trim()
+            val mdl = p["model"]?.trim()
+            if (mfr != null || mdl != null) config.setHardware(
+                (mfr ?: config.manufacturer).ifEmpty { "ha-paneld" },
+                (mdl ?: config.model).ifEmpty { "panel agent" },
             )
+            val broker = p["mqtt_broker"]?.trim()
+            val user = p["mqtt_user"]?.trim()
+            // Blank password keeps the current one; clearing the username clears the password too.
+            val pw = if (user != null && user.isEmpty()) "" else p["mqtt_password"]?.takeIf { it.isNotEmpty() }
+            if (broker != null || user != null || pw != null) config.setMqtt(
+                broker ?: config.mqttBroker, user ?: config.mqttUser, pw,
+            )
+            // Per-row "expose to HA" toggles (ha_expose_<key>=true|false) — take effect on the reconfigure.
+            for (name in p.names()) {
+                if (name.startsWith("ha_expose_")) {
+                    SettingValue.parseBool(p[name].orEmpty())?.let {
+                        config.setHaExposed(name.removePrefix("ha_expose_"), it)
+                    }
+                }
+            }
         }
-        val mfr = p["manufacturer"]?.trim()
-        val mdl = p["model"]?.trim()
-        if (mfr != null || mdl != null) config.setHardware(
-            (mfr ?: config.manufacturer).ifEmpty { "ha-paneld" },
-            (mdl ?: config.model).ifEmpty { "panel agent" },
-        )
-        val broker = p["mqtt_broker"]?.trim()
-        val user = p["mqtt_user"]?.trim()
-        // Blank password keeps the current one; clearing the username clears the password too.
-        val pw = if (user != null && user.isEmpty()) "" else p["mqtt_password"]?.takeIf { it.isNotEmpty() }
-        if (broker != null || user != null || pw != null) config.setMqtt(
-            broker ?: config.mqttBroker, user ?: config.mqttUser, pw,
-        )
         // Formerly MQTT-only behaviour settings — applied through the bridge's command path so HTTP
         // and HA behave identically. Registry-validated where the key is registered; invalid skipped.
         for (key in HTTP_LIVE_KEYS) {
@@ -1149,14 +1164,6 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
                 raw.trim()
             }
             applySetting(key, value)
-        }
-        // Per-row "expose to HA" toggles (ha_expose_<key>=true|false) — take effect on the reconfigure.
-        for (name in p.names()) {
-            if (name.startsWith("ha_expose_")) {
-                SettingValue.parseBool(p[name].orEmpty())?.let {
-                    config.setHaExposed(name.removePrefix("ha_expose_"), it)
-                }
-            }
         }
         onReconfigure()
         if (call.request.headers["Accept"]?.contains("application/json") == true) {
