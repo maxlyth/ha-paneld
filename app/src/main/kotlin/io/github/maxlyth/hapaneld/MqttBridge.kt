@@ -28,6 +28,7 @@ import io.github.maxlyth.hapaneld.config.SettingValue
 import io.github.maxlyth.hapaneld.config.SettingsRegistry
 import io.github.maxlyth.hapaneld.hardware.LedController
 import io.github.maxlyth.hapaneld.input.ButtonBus
+import io.github.maxlyth.hapaneld.mqtt.classifyDisconnect
 import io.github.maxlyth.hapaneld.util.HelperClient
 import io.github.maxlyth.hapaneld.util.Json
 import kotlin.math.roundToInt
@@ -249,12 +250,7 @@ class MqttBridge(
                         return@addDisconnectedListener
                     }
                     // Classify so the UI can say "auth rejected" vs "unreachable" rather than just "down".
-                    val m = (ctx.cause?.message ?: ctx.cause?.toString() ?: "").uppercase()
-                    state = when {
-                        Regex("NOT_AUTHORIZED|BAD_USER_NAME|PASSWORD|AUTHENTICAT|BANNED").containsMatchIn(m) -> "auth-failed"
-                        Regex("REFUSED|TIMEOUT|UNREACHABLE|UNRESOLVED|RESET|NO ROUTE|CONNECTION|FAILED").containsMatchIn(m) -> "unreachable"
-                        else -> "disconnected"
-                    }
+                    state = classifyDisconnect(ctx.cause?.message ?: ctx.cause?.toString())
                     PanelStatus.mqttConnected = false
                     Log.w(TAG, "MQTT disconnected ($state) — auto-reconnecting: ${ctx.cause?.message}")
                 }
