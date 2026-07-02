@@ -3,10 +3,6 @@ package io.github.maxlyth.hapaneld
 import android.os.Build
 import android.os.SystemClock
 import android.util.Log
-import com.hivemq.client.mqtt.MqttClient
-import com.hivemq.client.mqtt.datatypes.MqttQos
-import com.hivemq.client.mqtt.mqtt5.Mqtt5AsyncClient
-import com.hivemq.client.mqtt.mqtt5.message.publish.Mqtt5Publish
 import io.github.maxlyth.hapaneld.control.AdbController
 import io.github.maxlyth.hapaneld.control.AutoBrightnessController
 import io.github.maxlyth.hapaneld.control.BootChimeController
@@ -28,6 +24,10 @@ import io.github.maxlyth.hapaneld.config.SettingValue
 import io.github.maxlyth.hapaneld.config.SettingsRegistry
 import io.github.maxlyth.hapaneld.hardware.LedController
 import io.github.maxlyth.hapaneld.input.ButtonBus
+import io.github.maxlyth.hapaneld.mqtt.HiveMqTransport
+import io.github.maxlyth.hapaneld.mqtt.MqttCallbacks
+import io.github.maxlyth.hapaneld.mqtt.MqttConnectConfig
+import io.github.maxlyth.hapaneld.mqtt.MqttTransport
 import io.github.maxlyth.hapaneld.mqtt.classifyDisconnect
 import io.github.maxlyth.hapaneld.util.HelperClient
 import io.github.maxlyth.hapaneld.util.Json
@@ -97,7 +97,7 @@ class MqttBridge(
     // regardless of the version check (the update_paneld button + a pre-release→stable channel switch).
     private val onSelfUpdate: (force: Boolean) -> Unit = {},
 ) {
-    private var client: Mqtt5AsyncClient? = null
+    private val transport: MqttTransport = HiveMqTransport()
 
     /** Broker actually in use — configured, or auto-discovered as `tcp://<ha-ip>:1883`; "" if none. */
     var activeBroker: String = ""
@@ -226,58 +226,32 @@ class MqttBridge(
                     ?.let { BrokerEndpoint.hostString(it) }
             }.getOrNull() ?: host
 
-            // Generation guard: listeners fire for THIS client instance only. After a rebuild, the
-            // superseded client is torn down on a detached thread — but until that completes, its
-            // auto-reconnect keeps retrying (observed getting NOT_AUTHORIZED from a broker that accepts
-            // the live client — the long-unexplained rc1 mystery), and without this guard its
-            // disconnected-listener overwrote the LIVE connection's state: the UI showed "credentials
-            // rejected" while connected, and the state-watchdog force-rebuilt every 2 min, spawning
-            // more zombies. Superseded clients are ignored AND told to stop reconnecting.
-            var self: com.hivemq.client.mqtt.mqtt5.Mqtt5AsyncClient? = null
-            val c = MqttClient.builder()
-                .useMqttVersion5()
-                .identifier("ha-paneld-$panel")
-                .serverHost(connectHost)
-                .serverPort(port)
-                // Auto-reconnect so a network blip / broker restart never permanently orphans the
-                // panel. Re-subscribe + re-publish discovery happen in onConnected on every connect.
-                .automaticReconnectWithDefaultConfig()
-                .addConnectedListener { if (client === self) onConnected() }
-                .addDisconnectedListener { ctx ->
-                    if (client !== self) {
-                        // Zombie (superseded or stopped) client: kill its auto-reconnect and ignore it.
-                        runCatching { ctx.reconnector.reconnect(false) }
-                        return@addDisconnectedListener
-                    }
-                    // Classify so the UI can say "auth rejected" vs "unreachable" rather than just "down".
-                    state = classifyDisconnect(ctx.cause?.message ?: ctx.cause?.toString())
-                    PanelStatus.mqttConnected = false
-                    Log.w(TAG, "MQTT disconnected ($state) — auto-reconnecting: ${ctx.cause?.message}")
-                }
-                .buildAsync()
-            self = c
-            client = c
+            // The client lifecycle — build, connect, the connected/disconnected listeners, and the
+            // superseded-client generation guard — lives in the transport (see HiveMqTransport). This
+            // bridge only supplies the connection config + callbacks and keeps the HA semantics.
             ButtonBus.listener = { event -> publishButton(event) }
-
-            val connect = c.connectWith()
-                // Explicit keepalive: send a PINGREQ every KEEPALIVE_SEC of idle so a dead link is
-                // detected (missed PINGRESP → HiveMQ auto-reconnect) instead of lingering half-open,
-                // and the broker fires our LWT sooner so HA marks the panel unavailable rather than
-                // showing stale data. Default (60s) left it too slow / suspend-frozen.
-                .keepAlive(KEEPALIVE_SEC)
-                .willPublish()
-                .topic(availabilityTopic)
-                .payload("offline".toByteArray())
-                .qos(MqttQos.AT_LEAST_ONCE)
-                .retain(true)
-                .applyWillPublish()
-            if (config.mqttUser.isNotEmpty()) {
-                connect.simpleAuth()
-                    .username(config.mqttUser)
-                    .password(config.mqttPassword.toByteArray())
-                    .applySimpleAuth()
-            }
-            connect.send() // async; onConnected() does subscribe + discovery on success
+            transport.connect(
+                MqttConnectConfig(
+                    host = connectHost,
+                    port = port,
+                    clientId = "ha-paneld-$panel",
+                    user = config.mqttUser.ifEmpty { null },
+                    password = config.mqttPassword,
+                    keepAliveSeconds = KEEPALIVE_SEC,
+                    willTopic = availabilityTopic,
+                    willPayload = "offline",
+                ),
+                object : MqttCallbacks {
+                    override fun onConnected() = this@MqttBridge.onConnected()
+                    override fun onDisconnected(causeMessage: String?) {
+                        // Classify so the UI can say "auth rejected" vs "unreachable" rather than "down".
+                        state = classifyDisconnect(causeMessage)
+                        PanelStatus.mqttConnected = false
+                        Log.w(TAG, "MQTT disconnected ($state) — auto-reconnecting: $causeMessage")
+                    }
+                    override fun onPublishAck() = markOk()
+                },
+            )
             Log.i(TAG, "MQTT connecting to $connectHost:$port (host=$host, prefer=${if (preferIpv4) "IPv4" else "IPv6"}) for $panel")
         } catch (e: Exception) {
             Log.w(TAG, "MQTT connect failed", e)
@@ -303,44 +277,35 @@ class MqttBridge(
         // rebuild) can block on an internal client monitor, and that must never delay the replacement
         // connection. In the wedged case the old reactor is frozen anyway, so it won't fight the new
         // client's session; in the healthy case the background disconnect completes normally.
-        val old = client
-        client = null
-        old?.let { Thread({ runCatching { it.disconnect() } }, "mqtt-teardown").apply { isDaemon = true }.start() }
+        transport.disconnectDetached()
         start()
     }
 
     /** Runs on every (re)connect: (re)subscribe to commands and (re)publish discovery + online. */
     private fun onConnected() {
-        val c = client ?: return
         state = "connected"
         markOk()   // reset the liveness clock; the subscribe/discovery publishes below keep it fresh
         PanelStatus.mqttConnected = true
-        c.subscribeWith()
-            .topicFilter("ha-paneld/$panel/+/set")
-            .qos(MqttQos.AT_LEAST_ONCE)
-            .callback { publish -> onCommand(publish) }
-            .send()
+        transport.subscribe("ha-paneld/$panel/+/set") { topic, payload, retained -> onCommand(topic, payload, retained) }
         // Re-announce discovery when HA (re)starts — its birth message on homeassistant/status. With
         // non-retained discovery this is what rebuilds our entities after an HA restart. (payload may be
         // "online"/"offline"; act only on online. The retained "online" delivered on subscribe just
         // re-runs the announce we do below — harmless.)
-        c.subscribeWith()
-            .topicFilter("homeassistant/status")
-            .qos(MqttQos.AT_LEAST_ONCE)
-            .callback { p -> if (String(p.payloadAsBytes).trim().equals("online", ignoreCase = true)) reAnnounce() }
-            .send()
-        publishDiscovery(c)
+        transport.subscribe("homeassistant/status") { _, payload, _ ->
+            if (String(payload).trim().equals("online", ignoreCase = true)) reAnnounce()
+        }
+        publishDiscovery()
         // On an upgrade (running version differs from the one that last announced), actively clear any
         // entity a prior version published but this one no longer does — so a refactored-away entity is
         // removed from HA, not left as a zombie. Runs once per upgrade; publishDiscovery above populated
         // publishedConfigTopics for the current set.
         if (config.lastDiscoveryVersion != Config.VERSION) {
-            pruneStaleDiscovery(c)
+            pruneStaleDiscovery()
             config.setLastDiscoveryVersion(Config.VERSION)
         }
-        publish(c, availabilityTopic, "online", retain = true)
-        restoreAndPublishStates(c)
-        reconcileZigbeeOnConnect(c) // boot-restore: start the gateway if left ON and nothing else has
+        publish(availabilityTopic, "online", retain = true)
+        restoreAndPublishStates()
+        reconcileZigbeeOnConnect() // boot-restore: start the gateway if left ON and nothing else has
         Thread { runCatching { adb.reassert() } }.start() // re-assert network-adb if ha-paneld persists it (firmware may strip the prop)
         maybeResolveHaLink() // best-effort "Open in HA" link via the MQTT creds; off-thread, silent on failure
         Log.i(TAG, "MQTT connected — (re)subscribed + discovery for $panel")
@@ -349,9 +314,9 @@ class MqttBridge(
     /** Re-publish discovery + current states — on HA's `online` birth (non-retained discovery must be
      *  re-sent when HA restarts). No-op if not connected. */
     private fun reAnnounce() {
-        val c = client ?: return
-        publishDiscovery(c)
-        restoreAndPublishStates(c)
+        if (!isConnected()) return
+        publishDiscovery()
+        restoreAndPublishStates()
         Log.i(TAG, "HA online — re-announced discovery for $panel")
     }
 
@@ -387,38 +352,37 @@ class MqttBridge(
      * (hardware resets, but HA holds the last retained state). Re-applies the last LED colour and
      * publishes the current screen/volume/navigate states.
      */
-    private fun restoreAndPublishStates(c: Mqtt5AsyncClient) {
-        publish(c, stateVolume, volume.getPercent().toString(), retain = true)
+    private fun restoreAndPublishStates() {
+        publish(stateVolume, volume.getPercent().toString(), retain = true)
         // Screen: panels come up on; report ON + the current brightness.
-        publish(c, stateScreen, """{"state":"ON","brightness":${brightness.getBrightness().coerceAtLeast(1)}}""", retain = true)
+        publish(stateScreen, """{"state":"ON","brightness":${brightness.getBrightness().coerceAtLeast(1)}}""", retain = true)
         // Navigate: last pushed path, else default to the dashboard root "/" so the entity shows a
         // sensible local path instead of "unknown" before anything has been navigated.
         val navInit = config.lastNavigate.ifEmpty { "/" }
-        publish(c, stateNavigate, navInit, retain = true)
+        publish(stateNavigate, navInit, retain = true)
         // LED: re-apply the last colour to the hardware (reset on reboot) and publish it.
         val led = config.lastLed.split(",").mapNotNull { it.toIntOrNull() }
         if (led.size == 5 && led[0] == 1) {
             val (_, br, r, g, b) = led
             this.led.setRgb(r * br / 255, g * br / 255, b * br / 255)
-            publish(c, stateLed, ledStateJson(br, r, g, b), retain = true)
+            publish(stateLed, ledStateJson(br, r, g, b), retain = true)
         } else {
             // Force the hardware off too — the LED can power up to a default on reboot, so publishing
             // OFF without driving it leaves HA and the physical LED disagreeing (office-dash rk3576).
             this.led.off()
-            publish(c, stateLed, """{"state":"OFF"}""", retain = true)
+            publish(stateLed, """{"state":"OFF"}""", retain = true)
         }
     }
 
     // ---- command dispatch ----
 
-    private fun onCommand(publish: Mqtt5Publish) {
-        val topic = publish.topic.toString()
-        val payload = String(publish.payloadAsBytes)
+    private fun onCommand(topic: String, payloadBytes: ByteArray, retained: Boolean) {
+        val payload = String(payloadBytes)
         // NEVER act on a RETAINED command. Command topics are fire-and-forget; a retained payload is
         // always stale — e.g. a broker- or automation-retained screen-off replayed on every (re)subscribe,
         // which is exactly what stranded a panel dark after a reconnect. Our own state/discovery stays
         // retained; inbound commands must be fresh.
-        if (publish.isRetain) {
+        if (retained) {
             Log.w(TAG, "ignoring RETAINED command on $topic (stale — not acted): $payload")
             return
         }
@@ -471,15 +435,13 @@ class MqttBridge(
     /** Publish screen=ON to HA after a LOCAL wake (e.g. wake-on-wave), so `light.<panel>_screen` tracks
      *  reality instead of staying OFF. No-op if the broker isn't connected yet. */
     fun publishScreenOn() {
-        val c = client ?: return
-        publish(c, stateScreen, """{"state":"ON","brightness":${brightness.getBrightness().coerceAtLeast(1)}}""", retain = true)
+        publish(stateScreen, """{"state":"ON","brightness":${brightness.getBrightness().coerceAtLeast(1)}}""", retain = true)
     }
 
     /** Publish the current volume to HA after a LOCAL change (e.g. navbar Volume ±), so
      *  `number.<panel>_volume` tracks reality. No-op if the broker isn't connected yet. */
     fun publishVolume() {
-        val c = client ?: return
-        publish(c, stateVolume, volume.getPercent().toString(), retain = true)
+        publish(stateVolume, volume.getPercent().toString(), retain = true)
     }
 
     private fun handleScreen(payload: String) {
@@ -487,7 +449,7 @@ class MqttBridge(
         val on = json.optString("state", "ON").equals("ON", ignoreCase = true)
         if (!on) {
             screen.sleep()
-            publish(client!!, stateScreen, """{"state":"OFF"}""", retain = true)
+            publish(stateScreen, """{"state":"OFF"}""", retain = true)
             return
         }
         screen.wake() // power the backlight on (daemon bl_power) or restore brightness (fallback)
@@ -497,7 +459,7 @@ class MqttBridge(
             brightness.getBrightness().coerceAtLeast(1)
         }
         screen.noteLevel(level)
-        publish(client!!, stateScreen, """{"state":"ON","brightness":$level}""", retain = true)
+        publish(stateScreen, """{"state":"ON","brightness":$level}""", retain = true)
     }
 
     private fun handleLed(payload: String) {
@@ -506,7 +468,7 @@ class MqttBridge(
         if (!on) {
             led.off()
             config.lastLed = "0,0,0,0,0"
-            publish(client!!, stateLed, """{"state":"OFF"}""", retain = true)
+            publish(stateLed, """{"state":"OFF"}""", retain = true)
             return
         }
         val br = if (json.has("brightness")) json.getInt("brightness") else 255
@@ -517,7 +479,7 @@ class MqttBridge(
         // Apply HA brightness as a scalar over the colour (json light sends them separately).
         led.setRgb(cr * br / 255, cg * br / 255, cb * br / 255)
         config.lastLed = "1,$br,$cr,$cg,$cb" // remember for restore on reboot
-        publish(client!!, stateLed, ledStateJson(br, cr, cg, cb), retain = true)
+        publish(stateLed, ledStateJson(br, cr, cg, cb), retain = true)
     }
 
     private fun ledStateJson(br: Int, r: Int, g: Int, b: Int) =
@@ -526,46 +488,46 @@ class MqttBridge(
     private fun handleWakeOnWave(payload: String) {
         val on = payload.trim().equals("ON", ignoreCase = true)
         config.setWakeOnWave(on)
-        client?.let { publish(it, stateWakeOnWave, if (on) "ON" else "OFF", retain = true) }
+        publish(stateWakeOnWave, if (on) "ON" else "OFF", retain = true)
     }
 
     private fun handlePreventIdleDim(payload: String) {
         val on = payload.trim().equals("ON", ignoreCase = true)
         config.setPreventIdleDim(on)
         brightness.applyPreventIdleDim(on, config)
-        client?.let { publish(it, statePreventIdleDim, if (on) "ON" else "OFF", retain = true) }
+        publish(statePreventIdleDim, if (on) "ON" else "OFF", retain = true)
     }
 
     private fun handleTouchSound(payload: String) {
         val on = payload.trim().equals("ON", ignoreCase = true)
         touchSound.set(on)
-        client?.let { publish(it, stateTouchSound, if (touchSound.isEnabled()) "ON" else "OFF", retain = true) }
+        publish(stateTouchSound, if (touchSound.isEnabled()) "ON" else "OFF", retain = true)
     }
 
     private fun handleWatchdog(payload: String) {
         val on = payload.trim().equals("ON", ignoreCase = true)
         config.setWatchdogEnabled(on)
         watchdog.apply(on)
-        client?.let { publish(it, stateWatchdog, if (on) "ON" else "OFF", retain = true) }
+        publish(stateWatchdog, if (on) "ON" else "OFF", retain = true)
     }
 
     private fun handleCompanionAuto(payload: String) {
         val on = payload.trim().equals("ON", ignoreCase = true)
         config.setCompanionAutoUpdate(on)
-        client?.let { publish(it, stateCompanionAuto, if (on) "ON" else "OFF", retain = true) }
+        publish(stateCompanionAuto, if (on) "ON" else "OFF", retain = true)
     }
 
     private fun handleSelfUpdate(payload: String) {
         val on = payload.trim().equals("ON", ignoreCase = true)
         config.setSelfUpdate(on)
-        client?.let { publish(it, stateSelfUpdate, if (on) "ON" else "OFF", retain = true) }
+        publish(stateSelfUpdate, if (on) "ON" else "OFF", retain = true)
     }
 
     private fun handleUpdateChannel(payload: String) {
         val was = config.updateChannel
         config.setUpdateChannel(payload.trim().trim('"'))
         val now = config.updateChannel
-        client?.let { publish(it, stateUpdateChannel, updateChannelLabel(), retain = true) }
+        publish(stateUpdateChannel, updateChannelLabel(), retain = true)
         // Apply the new channel now (when self-update is on). Switching pre-release → stable FORCES the
         // move onto stable even if that's a downgrade off the current rc (the deliberate exception to the
         // no-auto-downgrade rule); any other switch just takes the new channel's newest if it's newer.
@@ -578,26 +540,26 @@ class MqttBridge(
     private fun handleSilenceBootChime(payload: String) {
         val on = payload.trim().equals("ON", ignoreCase = true)
         bootChime.set(on)
-        client?.let { publish(it, stateSilenceBootChime, if (on) "ON" else "OFF", retain = true) }
+        publish(stateSilenceBootChime, if (on) "ON" else "OFF", retain = true)
     }
 
     private fun handleAutoBright(payload: String) {
         val on = payload.trim().equals("ON", ignoreCase = true)
         config.setAutoBrightness(on)
-        client?.let { publish(it, stateAutoBright, if (on) "ON" else "OFF", retain = true) }
+        publish(stateAutoBright, if (on) "ON" else "OFF", retain = true)
     }
 
     private fun handleBrightnessBias(payload: String) {
         val v = payload.trim().trim('"').toDoubleOrNull()?.roundToInt() ?: return
         config.setBrightnessBias(v)
-        client?.let { publish(it, stateBrightnessBias, config.brightnessBias.toString(), retain = true) }
+        publish(stateBrightnessBias, config.brightnessBias.toString(), retain = true)
     }
 
     // HA writes room lux here (the only auto-brightness source on sensor-less panels); feed engine + echo.
     private fun handleAmbientLux(payload: String) {
         val lux = payload.trim().trim('"').toFloatOrNull() ?: return
         autoBright.submitLux(lux)
-        client?.let { publish(it, stateAmbientLux, lux.roundToInt().toString(), retain = true) }
+        publish(stateAmbientLux, lux.roundToInt().toString(), retain = true)
     }
 
     // Button backlight (e.g. TPA10): a brightness-only light, driven via the root daemon's BTN command
@@ -608,7 +570,7 @@ class MqttBridge(
         val level = if (!on) 0 else if (json.has("brightness")) json.getInt("brightness") else 255
         HelperClient.send("BTN $level")
         publish(
-            client!!, stateButtons,
+            stateButtons,
             if (on) """{"state":"ON","brightness":$level}""" else """{"state":"OFF"}""",
             retain = true,
         )
@@ -624,7 +586,7 @@ class MqttBridge(
     private fun handleZigbee(payload: String) {
         val on = payload.trim().equals("ON", ignoreCase = true)
         config.setZigbeeRouterEnabled(on) // persist desired state so it survives a reboot (boot-restore)
-        client?.let { publish(it, stateZigbee, if (on) "ON" else "OFF", retain = true) }
+        publish(stateZigbee, if (on) "ON" else "OFF", retain = true)
         Thread {
             try {
                 val settled = if (on) {
@@ -636,7 +598,7 @@ class MqttBridge(
                     zigbee.disable() // blocks until the stack is down
                     zigbee.running()
                 }
-                client?.let { publish(it, stateZigbee, if (settled) "ON" else "OFF", retain = true) }
+                publish(stateZigbee, if (settled) "ON" else "OFF", retain = true)
             } catch (e: Exception) {
                 Log.w(TAG, "zigbee toggle failed", e)
             }
@@ -648,16 +610,16 @@ class MqttBridge(
     // explicit choice on every connect: start it if they left it ON and nothing has; STOP it if they
     // turned it OFF (otherwise the vendor-started gateway returns each reboot). Gated on the switch having
     // been CONFIGURED — we never disable a stock vendor gateway by our default. Slow lifecycle off-thread.
-    private fun reconcileZigbeeOnConnect(c: Mqtt5AsyncClient) {
+    private fun reconcileZigbeeOnConnect() {
         if (!zigbee.present() || !config.zigbeeRouterConfigured) return
         val want = config.zigbeeRouterEnabled
         if (want == zigbee.running()) return // already in the desired state
-        publish(c, stateZigbee, if (want) "ON" else "OFF", retain = true) // optimistic; reconciled once settled
+        publish(stateZigbee, if (want) "ON" else "OFF", retain = true) // optimistic; reconciled once settled
         Thread {
             try {
                 zigbee.reconcile(want)
                 if (want) for (i in 0 until 18) { if (zigbee.running()) break; Thread.sleep(5_000) }
-                client?.let { publish(it, stateZigbee, if (zigbee.running()) "ON" else "OFF", retain = true) }
+                publish(stateZigbee, if (zigbee.running()) "ON" else "OFF", retain = true)
                 Log.i(TAG, "zigbee reconcile -> ${if (want) "on" else "off"}; running=${zigbee.running()}")
             } catch (e: Exception) {
                 Log.w(TAG, "zigbee reconcile failed", e)
@@ -670,7 +632,7 @@ class MqttBridge(
         val n = topic.substringAfter("/relay").substringBefore("/set").toIntOrNull() ?: return
         val on = payload.trim().let { it.equals("ON", ignoreCase = true) || it == "1" }
         relay.set(n, on)
-        client?.let { publish(it, "ha-paneld/$panel/relay$n/state", if (relay.get(n)) "ON" else "OFF", retain = true) }
+        publish("ha-paneld/$panel/relay$n/state", if (relay.get(n)) "ON" else "OFF", retain = true)
     }
 
     // S9E button LED. topic = ha-paneld/<panel>/button_led<N>/set (N 1-based); payload ON/OFF.
@@ -678,33 +640,33 @@ class MqttBridge(
         val n = topic.substringAfter("/button_led").substringBefore("/set").toIntOrNull() ?: return
         val on = payload.trim().let { it.equals("ON", ignoreCase = true) || it == "1" }
         relay.ledSet(n - 1, on)
-        client?.let { publish(it, "ha-paneld/$panel/button_led$n/state", if (relay.ledGet(n - 1)) "ON" else "OFF", retain = true) }
+        publish("ha-paneld/$panel/button_led$n/state", if (relay.ledGet(n - 1)) "ON" else "OFF", retain = true)
     }
 
     // CPU scaling governor (select). Quick su write; publishes the read-back governor.
     private fun handleCpuGov(payload: String) {
         val tier = payload.trim().trim('"')   // "Performance" | "Efficiency" | "Auto"
-        if (cpu.setTier(tier)) client?.let { publish(it, stateCpuGov, cpu.currentTier() ?: tier, retain = true) }
+        if (cpu.setTier(tier)) publish(stateCpuGov, cpu.currentTier() ?: tier, retain = true)
     }
 
     // Persistent network adb (switch). Restarts adbd to apply; that only affects adb, not MQTT.
     private fun handleNetAdb(payload: String) {
         val on = payload.trim().equals("ON", ignoreCase = true)
         adb.set(on)
-        client?.let { publish(it, stateNetAdb, if (adb.isPersisted()) "ON" else "OFF", retain = true) }
+        publish(stateNetAdb, if (adb.isPersisted()) "ON" else "OFF", retain = true)
     }
 
     // Soft navbar mode (select). Persist + apply the overlay; publish the normalised mode back.
     private fun handleNavbar(payload: String) {
         navbar.apply(payload)
         config.setNavbarMode(navbar.mode)
-        client?.let { publish(it, stateNavbar, navbar.mode, retain = true) }
+        publish(stateNavbar, navbar.mode, retain = true)
     }
 
     private fun handleHomeDashboard(payload: String) {
         val path = toLocalPath(payload) // normalise to a leading-slash local path (or "" to clear)
         config.setHomeDashboard(if (path == "/") "" else path)
-        client?.let { publish(it, stateHomeDashboard, config.homeDashboard, retain = true) }
+        publish(stateHomeDashboard, config.homeDashboard, retain = true)
     }
 
     // Reload: keep the hard restart (the right recovery for a wedged WebView), but if a per-panel home
@@ -718,7 +680,7 @@ class MqttBridge(
                 Thread.sleep(RELOAD_NAV_DELAY_MS)
                 navigate.navigate("homeassistant://navigate$home")
                 config.lastNavigate = home
-                client?.let { publish(it, stateNavigate, home, retain = true) }
+                publish(stateNavigate, home, retain = true)
                 Log.i(TAG, "reload -> re-navigated to intended dashboard $home")
             }.start()
         }
@@ -736,7 +698,7 @@ class MqttBridge(
             } else {
                 navigate.navigate("homeassistant://navigate$path")
                 config.lastNavigate = path
-                publish(client!!, stateNavigate, path, retain = true)
+                publish(stateNavigate, path, retain = true)
             }
         }
     }
@@ -761,31 +723,31 @@ class MqttBridge(
         // number entity sends a plain numeric string (0..100).
         val pct = payload.trim().trim('"').toDoubleOrNull()?.toInt() ?: return
         volume.setPercent(pct)
-        publish(client!!, stateVolume, volume.getPercent().toString(), retain = true)
+        publish(stateVolume, volume.getPercent().toString(), retain = true)
     }
 
     private fun publishButton(event: String) {
-        client?.let { publish(it, eventButton, """{"event_type":"$event"}""") }
+        publish(eventButton, """{"event_type":"$event"}""")
     }
 
     // Sensor readings are NOT retained: a fresh sample arrives shortly, so retaining only adds broker
     // clutter + a brief stale value on reconnect. (Occupancy/proximity IS retained — it has no periodic
     // sample between transitions, so the last state must survive a reconnect. Stateful controls too.)
     fun publishLight(lux: Int) {
-        client?.let { publish(it, stateIlluminance, lux.toString(), retain = false) }
+        publish(stateIlluminance, lux.toString(), retain = false)
     }
 
     fun publishProximity(near: Boolean) {
-        client?.let { publish(it, stateProximity, if (near) "ON" else "OFF", retain = true) }
+        publish(stateProximity, if (near) "ON" else "OFF", retain = true)
     }
 
     // Rounded at publish (1dp temp, integer humidity) so precision wobble can't create recorder rows.
     fun publishTemperature(celsius: Float) {
-        client?.let { publish(it, stateTemperature, String.format(java.util.Locale.US, "%.1f", celsius), retain = false) }
+        publish(stateTemperature, String.format(java.util.Locale.US, "%.1f", celsius), retain = false)
     }
 
     fun publishHumidity(percent: Float) {
-        client?.let { publish(it, stateHumidity, Math.round(percent).toString(), retain = false) }
+        publish(stateHumidity, Math.round(percent).toString(), retain = false)
     }
 
     /**
@@ -831,7 +793,6 @@ class MqttBridge(
      * HA footprint configurable per panel.
      */
     private fun exposable(
-        c: Mqtt5AsyncClient,
         key: String,
         component: String,
         objectId: String,
@@ -839,14 +800,14 @@ class MqttBridge(
         publishState: () -> Unit,
     ) {
         if (config.haExposed(key)) {
-            publishConfig(c, component, objectId, payload())
+            publishConfig(component, objectId, payload())
             publishState()
         } else {
-            publishConfig(c, component, objectId, "")
+            publishConfig(component, objectId, "")
         }
     }
 
-    private fun publishDiscovery(c: Mqtt5AsyncClient) {
+    private fun publishDiscovery() {
         // device.name = the configurable friendly name; entity names are the capability ONLY, so HA
         // composes a clean `<domain>.<panel>_<cap>` entity_id without doubling the panel id.
         // configuration_url -> HA renders a "Visit" link on the device page (the panel's info UI).
@@ -861,36 +822,36 @@ class MqttBridge(
         val avail = """"availability_topic":"$availabilityTopic","payload_available":"online","payload_not_available":"offline""""
 
         publishConfig(
-            c, "light", "${panel}_screen",
+            "light", "${panel}_screen",
             """{"name":"Screen","unique_id":"${panel}_screen","schema":"json","brightness":true,"supported_color_modes":["brightness"],"command_topic":"$cmdScreen","state_topic":"$stateScreen",$avail,$device}""",
         )
 
         if (led.available()) {
             val modes = if (led.colorCapable()) """["rgb"]""" else """["brightness"]"""
             publishConfig(
-                c, "light", "${panel}_led",
+                "light", "${panel}_led",
                 """{"name":"LED","unique_id":"${panel}_led","schema":"json","brightness":true,"supported_color_modes":$modes,"command_topic":"$cmdLed","state_topic":"$stateLed",$avail,$device}""",
             )
         }
 
         publishConfig(
-            c, "text", "${panel}_navigate",
+            "text", "${panel}_navigate",
             """{"name":"Navigate","unique_id":"${panel}_navigate","command_topic":"$cmdNavigate","state_topic":"$stateNavigate","mode":"text","icon":"mdi:monitor-dashboard",$avail,$device}""",
         )
 
         // Per-panel intended "home" dashboard path (e.g. /lovelace/0) — reload re-navigates here once the
         // frontend is back up. Empty = keep the Companion default. Config category.
         publishConfig(
-            c, "text", "${panel}_home_dashboard",
+            "text", "${panel}_home_dashboard",
             """{"name":"Home dashboard","unique_id":"${panel}_home_dashboard","command_topic":"$cmdHomeDashboard","state_topic":"$stateHomeDashboard","mode":"text","icon":"mdi:home-search","entity_category":"config",$avail,$device}""",
         )
-        publish(c, stateHomeDashboard, config.homeDashboard, retain = true)
+        publish(stateHomeDashboard, config.homeDashboard, retain = true)
 
         // The button event entity surfaces a11y key capture AND daemon-instrumented evdev buttons
         // (e.g. the WF1589T power key), so publish it whenever either source exists.
         if (buttonsEnabled || hasEvdevButtons) {
             publishConfig(
-                c, "event", "${panel}_button",
+                "event", "${panel}_button",
                 """{"name":"Button","unique_id":"${panel}_button","state_topic":"$eventButton","event_types":["KEYCODE_POWER","KEYCODE_MUTE","KEYCODE_F","KEYCODE_F1","KEYCODE_F2","KEYCODE_F3","KEYCODE_F4","KEYCODE_BACK","KEYCODE_HOME","KEYCODE_DPAD_CENTER","KEYCODE_VOLUME_UP","KEYCODE_VOLUME_DOWN"],$avail,$device}""",
             )
         }
@@ -898,12 +859,12 @@ class MqttBridge(
         // additionally gated on the firmware actually having an overview screen.
         if (appCanSu || buttonsEnabled) {
             publishConfig(
-                c, "button", "${panel}_back",
+                "button", "${panel}_back",
                 """{"name":"Back","unique_id":"${panel}_back","command_topic":"$cmdBack","icon":"mdi:arrow-left",$avail,$device}""",
             )
             if (hasRecents) {
                 publishConfig(
-                    c, "button", "${panel}_recents",
+                    "button", "${panel}_recents",
                     """{"name":"Recents","unique_id":"${panel}_recents","command_topic":"$cmdRecents","icon":"mdi:view-agenda",$avail,$device}""",
                 )
             }
@@ -912,38 +873,38 @@ class MqttBridge(
         // TTS/announce playback volume (STREAM_MUSIC). HA has no MQTT media_player platform, so
         // volume is a number entity rather than a media_player slider.
         publishConfig(
-            c, "number", "${panel}_volume",
+            "number", "${panel}_volume",
             """{"name":"Volume","unique_id":"${panel}_volume","command_topic":"$cmdVolume","state_topic":"$stateVolume","min":0,"max":100,"step":1,"mode":"slider","unit_of_measurement":"%","icon":"mdi:volume-high",$avail,$device}""",
         )
 
         // Panel sensors — exposed as data only; room sensors stay the occupancy/lux authority.
         if (hasLight) {
             publishConfig(
-                c, "sensor", "${panel}_illuminance",
+                "sensor", "${panel}_illuminance",
                 """{"name":"Illuminance","unique_id":"${panel}_illuminance","state_topic":"$stateIlluminance","device_class":"illuminance","unit_of_measurement":"lx","state_class":"measurement",$avail,$device}""",
             )
         }
         if (hasProximity) {
             publishConfig(
-                c, "binary_sensor", "${panel}_proximity",
+                "binary_sensor", "${panel}_proximity",
                 """{"name":"Proximity","unique_id":"${panel}_proximity","state_topic":"$stateProximity","device_class":"occupancy","payload_on":"ON","payload_off":"OFF",$avail,$device}""",
             )
         }
         if (hasTemperature) {
             publishConfig(
-                c, "sensor", "${panel}_temperature",
+                "sensor", "${panel}_temperature",
                 """{"name":"Temperature","unique_id":"${panel}_temperature","state_topic":"$stateTemperature","device_class":"temperature","unit_of_measurement":"°C","state_class":"measurement",$avail,$device}""",
             )
         }
         if (hasHumidity) {
             publishConfig(
-                c, "sensor", "${panel}_humidity",
+                "sensor", "${panel}_humidity",
                 """{"name":"Humidity","unique_id":"${panel}_humidity","state_topic":"$stateHumidity","device_class":"humidity","unit_of_measurement":"%","state_class":"measurement",$avail,$device}""",
             )
         }
         if (hasButtonBacklight) {
             publishConfig(
-                c, "light", "${panel}_buttons",
+                "light", "${panel}_buttons",
                 """{"name":"Button backlight","unique_id":"${panel}_buttons","schema":"json","brightness":true,"supported_color_modes":["brightness"],"command_topic":"$cmdButtons","state_topic":"$stateButtons","icon":"mdi:gesture-tap-button",$avail,$device}""",
             )
         }
@@ -955,86 +916,86 @@ class MqttBridge(
         fun reg(key: String) = SettingsRegistry.spec(key)!!.ha!!.buildDiscoveryJson(panel, avail, device)
 
         if (hasProximity) {
-            exposable(c, "wake_on_wave", "switch", "${panel}_wake_on_wave", { reg("wake_on_wave") }) {
-                publish(c, stateWakeOnWave, if (config.wakeOnWave) "ON" else "OFF", retain = true)
+            exposable("wake_on_wave", "switch", "${panel}_wake_on_wave", { reg("wake_on_wave") }) {
+                publish(stateWakeOnWave, if (config.wakeOnWave) "ON" else "OFF", retain = true)
             }
         }
-        exposable(c, "touch_sound", "switch", "${panel}_touch_sound", {
+        exposable("touch_sound", "switch", "${panel}_touch_sound", {
             """{"name":"Touch sound","unique_id":"${panel}_touch_sound","command_topic":"$cmdTouchSound","state_topic":"$stateTouchSound","icon":"mdi:volume-high","entity_category":"config",$avail,$device}"""
-        }) { publish(c, stateTouchSound, if (touchSound.isEnabled()) "ON" else "OFF", retain = true) }
+        }) { publish(stateTouchSound, if (touchSound.isEnabled()) "ON" else "OFF", retain = true) }
 
         // HA Companion app auto-update — installs/updates the minimal Companion over root (the
         // only update path on these no-Play panels). Off by default; the button forces it on demand.
-        exposable(c, "companion_auto_update", "switch", "${panel}_companion_auto_update", {
+        exposable("companion_auto_update", "switch", "${panel}_companion_auto_update", {
             """{"name":"Companion auto-update","unique_id":"${panel}_companion_auto_update","command_topic":"$cmdCompanionAuto","state_topic":"$stateCompanionAuto","icon":"mdi:cellphone-arrow-down","entity_category":"config",$avail,$device}"""
-        }) { publish(c, stateCompanionAuto, if (config.companionAutoUpdate) "ON" else "OFF", retain = true) }
+        }) { publish(stateCompanionAuto, if (config.companionAutoUpdate) "ON" else "OFF", retain = true) }
         publishConfig(
-            c, "button", "${panel}_update_companion",
+            "button", "${panel}_update_companion",
             """{"name":"Update Companion app","unique_id":"${panel}_update_companion","command_topic":"$cmdUpdateCompanion","icon":"mdi:home-assistant","entity_category":"config",$avail,$device}""",
         )
 
         // ha-paneld self-update — follows the update channel; installs a newer build of itself over root.
         // Off by default; the update_paneld button forces it on demand.
-        exposable(c, "self_update", "switch", "${panel}_self_update", {
+        exposable("self_update", "switch", "${panel}_self_update", {
             """{"name":"Self-update","unique_id":"${panel}_self_update","command_topic":"$cmdSelfUpdate","state_topic":"$stateSelfUpdate","icon":"mdi:package-up","entity_category":"config",$avail,$device}"""
-        }) { publish(c, stateSelfUpdate, if (config.selfUpdate) "ON" else "OFF", retain = true) }
-        exposable(c, "update_channel", "select", "${panel}_update_channel", {
+        }) { publish(stateSelfUpdate, if (config.selfUpdate) "ON" else "OFF", retain = true) }
+        exposable("update_channel", "select", "${panel}_update_channel", {
             """{"name":"Update channel","unique_id":"${panel}_update_channel","command_topic":"$cmdUpdateChannel","state_topic":"$stateUpdateChannel","options":["Stable","Pre-release"],"icon":"mdi:source-branch","entity_category":"config",$avail,$device}"""
-        }) { publish(c, stateUpdateChannel, updateChannelLabel(), retain = true) }
+        }) { publish(stateUpdateChannel, updateChannelLabel(), retain = true) }
         publishConfig(
-            c, "button", "${panel}_update_paneld",
+            "button", "${panel}_update_paneld",
             """{"name":"Update ha-paneld","unique_id":"${panel}_update_paneld","command_topic":"$cmdUpdatePaneld","icon":"mdi:package-up","entity_category":"config",$avail,$device}""",
         )
 
-        exposable(c, "watchdog_enabled", "switch", "${panel}_watchdog", { reg("watchdog_enabled") }) {
-            publish(c, stateWatchdog, if (config.watchdogEnabled) "ON" else "OFF", retain = true)
+        exposable("watchdog_enabled", "switch", "${panel}_watchdog", { reg("watchdog_enabled") }) {
+            publish(stateWatchdog, if (config.watchdogEnabled) "ON" else "OFF", retain = true)
         }
-        exposable(c, "silence_boot_chime", "switch", "${panel}_silence_boot_chime", { reg("silence_boot_chime") }) {
-            publish(c, stateSilenceBootChime, if (bootChime.isEnabled()) "ON" else "OFF", retain = true)
+        exposable("silence_boot_chime", "switch", "${panel}_silence_boot_chime", { reg("silence_boot_chime") }) {
+            publish(stateSilenceBootChime, if (bootChime.isEnabled()) "ON" else "OFF", retain = true)
         }
-        exposable(c, "prevent_idle_dim", "switch", "${panel}_prevent_idle_dim", { reg("prevent_idle_dim") }) {
-            publish(c, statePreventIdleDim, if (config.preventIdleDim) "ON" else "OFF", retain = true)
+        exposable("prevent_idle_dim", "switch", "${panel}_prevent_idle_dim", { reg("prevent_idle_dim") }) {
+            publish(statePreventIdleDim, if (config.preventIdleDim) "ON" else "OFF", retain = true)
         }
         // Auto-brightness — optional on-panel engine (off by default). When on, drives the screen
         // backlight from the panel's own light sensor where present, or the HA-fed ambient-lux number.
-        exposable(c, "auto_brightness", "switch", "${panel}_auto_brightness", { reg("auto_brightness") }) {
-            publish(c, stateAutoBright, if (config.autoBrightness) "ON" else "OFF", retain = true)
+        exposable("auto_brightness", "switch", "${panel}_auto_brightness", { reg("auto_brightness") }) {
+            publish(stateAutoBright, if (config.autoBrightness) "ON" else "OFF", retain = true)
         }
-        exposable(c, "brightness_bias", "number", "${panel}_brightness_bias", { reg("brightness_bias") }) {
-            publish(c, stateBrightnessBias, config.brightnessBias.toString(), retain = true)
+        exposable("brightness_bias", "number", "${panel}_brightness_bias", { reg("brightness_bias") }) {
+            publish(stateBrightnessBias, config.brightnessBias.toString(), retain = true)
         }
         // HA-fed room lux → auto-brightness input. The only source on sensor-less panels (e.g. WF1589T);
         // an HA automation pushes room lux here and the engine applies the curve. No state on connect.
-        exposable(c, "ambient_lux", "number", "${panel}_ambient_lux", {
+        exposable("ambient_lux", "number", "${panel}_ambient_lux", {
             """{"name":"Ambient lux (HA-fed)","unique_id":"${panel}_ambient_lux","command_topic":"$cmdAmbientLux","state_topic":"$stateAmbientLux","min":0,"max":100000,"step":1,"mode":"box","unit_of_measurement":"lx","icon":"mdi:brightness-5","entity_category":"config",$avail,$device}"""
         }) { }
 
         // Zigbee router — only on panels with the Sonoff gateway package (NSPanel Pro). present()
         // costs a su exec; safe here because onConnected runs off the main thread.
         if (zigbee.present()) {
-            exposable(c, "zigbee_router", "switch", "${panel}_zigbee_router", {
+            exposable("zigbee_router", "switch", "${panel}_zigbee_router", {
                 """{"name":"Zigbee router","unique_id":"${panel}_zigbee_router","command_topic":"$cmdZigbee","state_topic":"$stateZigbee","icon":"mdi:zigbee","entity_category":"config",$avail,$device}"""
-            }) { publish(c, stateZigbee, if (zigbee.running()) "ON" else "OFF", retain = true) }
+            }) { publish(stateZigbee, if (zigbee.running()) "ON" else "OFF", retain = true) }
         }
 
         // On-board relays (Smatek S9E `st_relay`). count() probes sysfs via su — off-main-thread here.
         val relays = relay.count()
         for (n in 1..relays) {
             publishConfig(
-                c, "switch", "${panel}_relay$n",
+                "switch", "${panel}_relay$n",
                 """{"name":"Relay $n","unique_id":"${panel}_relay$n","command_topic":"ha-paneld/$panel/relay$n/set","state_topic":"ha-paneld/$panel/relay$n/state","icon":"mdi:electric-switch",$avail,$device}""",
             )
-            publish(c, "ha-paneld/$panel/relay$n/state", if (relay.get(n)) "ON" else "OFF", retain = true)
+            publish("ha-paneld/$panel/relay$n/state", if (relay.get(n)) "ON" else "OFF", retain = true)
         }
 
         // S9E button LEDs (gpio147-150) — on/off lights, gated on the gpio nodes being present.
         val leds = relay.ledCount()
         for (n in 1..leds) {
             publishConfig(
-                c, "light", "${panel}_button_led$n",
+                "light", "${panel}_button_led$n",
                 """{"name":"Button LED $n","unique_id":"${panel}_button_led$n","command_topic":"ha-paneld/$panel/button_led$n/set","state_topic":"ha-paneld/$panel/button_led$n/state","icon":"mdi:led-on",$avail,$device}""",
             )
-            publish(c, "ha-paneld/$panel/button_led$n/state", if (relay.ledGet(n - 1)) "ON" else "OFF", retain = true)
+            publish("ha-paneld/$panel/button_led$n/state", if (relay.ledGet(n - 1)) "ON" else "OFF", retain = true)
         }
 
         // CPU governor (select) — su panels with cpufreq. Three intent-based tiers (Performance /
@@ -1042,9 +1003,9 @@ class MqttBridge(
         // SoC's governor (Auto = its dynamic governor — ramps up on interaction, idles low).
         if (cpu.available()) {
             val opts = CpuController.TIERS.joinToString(",") { "\"${jsonEsc(it)}\"" }
-            exposable(c, "cpu_governor", "select", "${panel}_cpu_governor", {
+            exposable("cpu_governor", "select", "${panel}_cpu_governor", {
                 """{"name":"CPU profile","unique_id":"${panel}_cpu_governor","command_topic":"$cmdCpuGov","state_topic":"$stateCpuGov","options":[$opts],"icon":"mdi:speedometer","entity_category":"config",$avail,$device}"""
-            }) { cpu.currentTier()?.let { publish(c, stateCpuGov, it, retain = true) } }
+            }) { cpu.currentTier()?.let { publish(stateCpuGov, it, retain = true) } }
         }
 
         // Soft navbar (select) — overlay Back/Home/Recents bar for panels whose firmware hides the
@@ -1052,37 +1013,37 @@ class MqttBridge(
         // needs SYSTEM_ALERT_WINDOW (root-granted by NavbarController); a no-op select otherwise.
         run {
             val opts = NavbarController.MODES.joinToString(",") { "\"${jsonEsc(it)}\"" }
-            exposable(c, "navbar_mode", "select", "${panel}_navbar", {
+            exposable("navbar_mode", "select", "${panel}_navbar", {
                 """{"name":"Navbar","unique_id":"${panel}_navbar","command_topic":"$cmdNavbar","state_topic":"$stateNavbar","options":[$opts],"icon":"mdi:gesture-tap-button","entity_category":"config",$avail,$device}"""
-            }) { publish(c, stateNavbar, config.navbarMode, retain = true) }
+            }) { publish(stateNavbar, config.navbarMode, retain = true) }
         }
 
         // Persistent network adb (switch) — opt-in; root panels only. Standing LAN adb port when ON.
         if (adb.available()) {
-            exposable(c, "network_adb", "switch", "${panel}_network_adb", {
+            exposable("network_adb", "switch", "${panel}_network_adb", {
                 """{"name":"Network ADB","unique_id":"${panel}_network_adb","command_topic":"$cmdNetAdb","state_topic":"$stateNetAdb","icon":"mdi:adb","entity_category":"config",$avail,$device}"""
-            }) { publish(c, stateNetAdb, if (adb.isPersisted()) "ON" else "OFF", retain = true) }
+            }) { publish(stateNetAdb, if (adb.isPersisted()) "ON" else "OFF", retain = true) }
         }
 
         // Panel actions (root via su; graceful no-op without it).
         publishConfig(
-            c, "button", "${panel}_reload",
+            "button", "${panel}_reload",
             """{"name":"Reload dashboard","unique_id":"${panel}_reload","command_topic":"$cmdReload","icon":"mdi:web-refresh",$avail,$device}""",
         )
         publishConfig(
-            c, "button", "${panel}_reboot",
+            "button", "${panel}_reboot",
             """{"name":"Reboot","unique_id":"${panel}_reboot","command_topic":"$cmdReboot","device_class":"restart","icon":"mdi:restart",$avail,$device}""",
         )
         publishConfig(
-            c, "button", "${panel}_launcher",
+            "button", "${panel}_launcher",
             """{"name":"Launcher","unique_id":"${panel}_launcher","command_topic":"$cmdLauncher","icon":"mdi:apps",$avail,$device}""",
         )
         publishConfig(
-            c, "button", "${panel}_home",
+            "button", "${panel}_home",
             """{"name":"Home Assistant","unique_id":"${panel}_home","command_topic":"$cmdHome","icon":"mdi:home-assistant",$avail,$device}""",
         )
         publishConfig(
-            c, "button", "${panel}_admin_launcher",
+            "button", "${panel}_admin_launcher",
             """{"name":"Admin launcher","unique_id":"${panel}_admin_launcher","command_topic":"$cmdAdminLauncher","icon":"mdi:cog-box",$avail,$device}""",
         )
     }
@@ -1098,10 +1059,10 @@ class MqttBridge(
     // thread; prune/clear may run from reconfigure on another thread.
     private val publishedConfigTopics = java.util.Collections.synchronizedSet(mutableSetOf<String>())
 
-    private fun publishConfig(c: Mqtt5AsyncClient, component: String, objectId: String, payload: String) {
+    private fun publishConfig(component: String, objectId: String, payload: String) {
         val topic = "homeassistant/$component/$objectId/config"
         publishedConfigTopics.add(topic)
-        publish(c, topic, payload, retain = false)
+        publish(topic, payload, retain = false)
     }
 
     /**
@@ -1141,8 +1102,7 @@ class MqttBridge(
      * an orphan device in HA. Clears the full known superset for the (old) id.
      */
     fun clearDiscovery() {
-        val c = client ?: return
-        knownConfigTopics().forEach { publish(c, it, "", retain = true) }
+        knownConfigTopics().forEach { publish(it, "", retain = true) }
     }
 
     /**
@@ -1151,24 +1111,17 @@ class MqttBridge(
      * from HA instead of lingering as a zombie. Called once after an upgrade (version change). Empty
      * retained payload also clears configs an older, retain=true version left on the broker.
      */
-    private fun pruneStaleDiscovery(c: Mqtt5AsyncClient) {
+    private fun pruneStaleDiscovery() {
         val published = publishedConfigTopics.toSet()
         var n = 0
-        knownConfigTopics().forEach { if (it !in published) { publish(c, it, "", retain = true); n++ } }
+        knownConfigTopics().forEach { if (it !in published) { publish(it, "", retain = true); n++ } }
         Log.i(TAG, "discovery prune: cleared $n refactored-away/absent entities for $panel")
     }
 
-    private fun publish(c: Mqtt5AsyncClient, topic: String, payload: String, retain: Boolean = false) {
-        c.publishWith()
-            .topic(topic)
-            .payload(payload.toByteArray())
-            .qos(MqttQos.AT_LEAST_ONCE)
-            .retain(retain)
-            .send()
-            // A QoS-1 publish the broker ACKs is proof the link is truly alive — the liveness signal the
-            // watchdog trusts instead of HiveMQ's self-reported connected state. On a half-open socket the
-            // ACK never comes, so lastOkMs goes stale and the watchdog rebuilds.
-            .whenComplete { _, ex -> if (ex == null) markOk() }
+    private fun publish(topic: String, payload: String, retain: Boolean = false) {
+        // Routed through the transport, whose broker-ACK callback fires onPublishAck (markOk) — the QoS-1
+        // liveness signal the watchdog trusts over HiveMQ's self-reported connected state.
+        transport.publish(topic, payload.toByteArray(), retain)
     }
 
     /**
@@ -1178,9 +1131,8 @@ class MqttBridge(
      * No-op when there's no client / broker. Called each watchdog tick from the service.
      */
     fun heartbeat() {
-        val c = client ?: return
         if (state == "disabled") return
-        runCatching { publish(c, "ha-paneld/$panel/last_seen", (System.currentTimeMillis() / 1000).toString()) }
+        runCatching { publish("ha-paneld/$panel/last_seen", (System.currentTimeMillis() / 1000).toString()) }
     }
 
     @Synchronized
@@ -1188,12 +1140,9 @@ class MqttBridge(
         ButtonBus.listener = null
         PanelStatus.mqttConnected = false
         runCatching {
-            client?.let {
-                publish(it, availabilityTopic, "offline", retain = true)
-                it.disconnect()
-            }
+            publish(availabilityTopic, "offline", retain = true)
+            transport.disconnectDetached()
         }
-        client = null
     }
 
     companion object {
