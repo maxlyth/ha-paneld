@@ -16,6 +16,8 @@ content appear. Earlier releases predate this convention and keep their flat lis
 
 ### Changed
 
+- **The panel's immutable hardware id anchors its HA device** — discovery now carries a second device identifier derived from the Android device ID (alongside the panel_id one), so Home Assistant recognises the same physical panel across a panel_id change instead of creating a duplicate device. Existing devices gain the new identifier automatically on the next discovery publish.
+- **Stable entity ids for new registrations** — every MQTT discovery payload now carries an `object_id` keyed to the panel's unique `panel_id`, so Home Assistant names newly-registered entities `<domain>.<panel_id>_<capability>` instead of deriving the id from the device's friendly display name. Friendly names remain purely cosmetic, and two panels sharing a display name can no longer collide into `_2` suffixes. Entities already registered in HA keep their existing ids (HA pins them by `unique_id`) — no churn on existing setups.
 - **Configure tab renders instantly** — the Display card, form values and schema now read through the same cached probe snapshot as the dashboard (stale-while-revalidate: last-known values render immediately, a background refresh keeps them current), removing the multi-second block that recurred whenever the density probe cache had expired.
 
 ## v0.8.6-rc1 - 2026-07-02

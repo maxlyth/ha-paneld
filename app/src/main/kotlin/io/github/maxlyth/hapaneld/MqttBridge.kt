@@ -832,32 +832,37 @@ class MqttBridge(
         // hw_version = panel firmware/build; surfaces in HA's device-info section (sw_version is
         // ha-paneld's own version). serial_number = stable Android id.
         val hw = jsonEsc("Android ${Build.VERSION.RELEASE} · ${Build.DISPLAY}")
-        val device = """"device":{"identifiers":["ha-paneld-$panel"],"name":"$name","manufacturer":"$mfr","model":"$mdl","sw_version":"${Config.VERSION}","hw_version":"$hw","serial_number":"${config.androidId}"$cu}"""
+        // Two device identifiers: the panel_id one (historical primary — existing registrations match
+        // on it) plus the IMMUTABLE Android device id. HA merges a device on ANY matching identifier,
+        // so a later panel_id change re-attaches to the SAME HA device instead of minting a duplicate.
+        val aid = config.androidId
+        val ids = if (aid.isNotBlank()) """["ha-paneld-$panel","ha-paneld-aid-$aid"]""" else """["ha-paneld-$panel"]"""
+        val device = """"device":{"identifiers":$ids,"name":"$name","manufacturer":"$mfr","model":"$mdl","sw_version":"${Config.VERSION}","hw_version":"$hw","serial_number":"${config.androidId}"$cu}"""
         val avail = """"availability_topic":"$availabilityTopic","payload_available":"online","payload_not_available":"offline""""
 
         publishConfig(
             "light", "${panel}_screen",
-            """{"name":"Screen","unique_id":"${panel}_screen","schema":"json","brightness":true,"supported_color_modes":["brightness"],"command_topic":"$cmdScreen","state_topic":"$stateScreen",$avail,$device}""",
+            """{"name":"Screen","object_id":"${panel}_screen","unique_id":"${panel}_screen","schema":"json","brightness":true,"supported_color_modes":["brightness"],"command_topic":"$cmdScreen","state_topic":"$stateScreen",$avail,$device}""",
         )
 
         if (led.available()) {
             val modes = if (led.colorCapable()) """["rgb"]""" else """["brightness"]"""
             publishConfig(
                 "light", "${panel}_led",
-                """{"name":"LED","unique_id":"${panel}_led","schema":"json","brightness":true,"supported_color_modes":$modes,"command_topic":"$cmdLed","state_topic":"$stateLed",$avail,$device}""",
+                """{"name":"LED","object_id":"${panel}_led","unique_id":"${panel}_led","schema":"json","brightness":true,"supported_color_modes":$modes,"command_topic":"$cmdLed","state_topic":"$stateLed",$avail,$device}""",
             )
         }
 
         publishConfig(
             "text", "${panel}_navigate",
-            """{"name":"Navigate","unique_id":"${panel}_navigate","command_topic":"$cmdNavigate","state_topic":"$stateNavigate","mode":"text","icon":"mdi:monitor-dashboard",$avail,$device}""",
+            """{"name":"Navigate","object_id":"${panel}_navigate","unique_id":"${panel}_navigate","command_topic":"$cmdNavigate","state_topic":"$stateNavigate","mode":"text","icon":"mdi:monitor-dashboard",$avail,$device}""",
         )
 
         // Per-panel intended "home" dashboard path (e.g. /lovelace/0) — reload re-navigates here once the
         // frontend is back up. Empty = keep the Companion default. Config category.
         publishConfig(
             "text", "${panel}_home_dashboard",
-            """{"name":"Home dashboard","unique_id":"${panel}_home_dashboard","command_topic":"$cmdHomeDashboard","state_topic":"$stateHomeDashboard","mode":"text","icon":"mdi:home-search","entity_category":"config",$avail,$device}""",
+            """{"name":"Home dashboard","object_id":"${panel}_home_dashboard","unique_id":"${panel}_home_dashboard","command_topic":"$cmdHomeDashboard","state_topic":"$stateHomeDashboard","mode":"text","icon":"mdi:home-search","entity_category":"config",$avail,$device}""",
         )
         publish(stateHomeDashboard, config.homeDashboard, retain = true)
 
@@ -866,7 +871,7 @@ class MqttBridge(
         if (buttonsEnabled || hasEvdevButtons) {
             publishConfig(
                 "event", "${panel}_button",
-                """{"name":"Button","unique_id":"${panel}_button","state_topic":"$eventButton","event_types":["KEYCODE_POWER","KEYCODE_MUTE","KEYCODE_F","KEYCODE_F1","KEYCODE_F2","KEYCODE_F3","KEYCODE_F4","KEYCODE_BACK","KEYCODE_HOME","KEYCODE_DPAD_CENTER","KEYCODE_VOLUME_UP","KEYCODE_VOLUME_DOWN"],$avail,$device}""",
+                """{"name":"Button","object_id":"${panel}_button","unique_id":"${panel}_button","state_topic":"$eventButton","event_types":["KEYCODE_POWER","KEYCODE_MUTE","KEYCODE_F","KEYCODE_F1","KEYCODE_F2","KEYCODE_F3","KEYCODE_F4","KEYCODE_BACK","KEYCODE_HOME","KEYCODE_DPAD_CENTER","KEYCODE_VOLUME_UP","KEYCODE_VOLUME_DOWN"],$avail,$device}""",
             )
         }
         // Nav actions work via root `input keyevent` (appCanSu) OR an enabled a11y service. Recents is
@@ -874,12 +879,12 @@ class MqttBridge(
         if (appCanSu || buttonsEnabled) {
             publishConfig(
                 "button", "${panel}_back",
-                """{"name":"Back","unique_id":"${panel}_back","command_topic":"$cmdBack","icon":"mdi:arrow-left",$avail,$device}""",
+                """{"name":"Back","object_id":"${panel}_back","unique_id":"${panel}_back","command_topic":"$cmdBack","icon":"mdi:arrow-left",$avail,$device}""",
             )
             if (hasRecents) {
                 publishConfig(
                     "button", "${panel}_recents",
-                    """{"name":"Recents","unique_id":"${panel}_recents","command_topic":"$cmdRecents","icon":"mdi:view-agenda",$avail,$device}""",
+                    """{"name":"Recents","object_id":"${panel}_recents","unique_id":"${panel}_recents","command_topic":"$cmdRecents","icon":"mdi:view-agenda",$avail,$device}""",
                 )
             }
         }
@@ -888,38 +893,38 @@ class MqttBridge(
         // volume is a number entity rather than a media_player slider.
         publishConfig(
             "number", "${panel}_volume",
-            """{"name":"Volume","unique_id":"${panel}_volume","command_topic":"$cmdVolume","state_topic":"$stateVolume","min":0,"max":100,"step":1,"mode":"slider","unit_of_measurement":"%","icon":"mdi:volume-high",$avail,$device}""",
+            """{"name":"Volume","object_id":"${panel}_volume","unique_id":"${panel}_volume","command_topic":"$cmdVolume","state_topic":"$stateVolume","min":0,"max":100,"step":1,"mode":"slider","unit_of_measurement":"%","icon":"mdi:volume-high",$avail,$device}""",
         )
 
         // Panel sensors — exposed as data only; room sensors stay the occupancy/lux authority.
         if (hasLight) {
             publishConfig(
                 "sensor", "${panel}_illuminance",
-                """{"name":"Illuminance","unique_id":"${panel}_illuminance","state_topic":"$stateIlluminance","device_class":"illuminance","unit_of_measurement":"lx","state_class":"measurement",$avail,$device}""",
+                """{"name":"Illuminance","object_id":"${panel}_illuminance","unique_id":"${panel}_illuminance","state_topic":"$stateIlluminance","device_class":"illuminance","unit_of_measurement":"lx","state_class":"measurement",$avail,$device}""",
             )
         }
         if (hasProximity) {
             publishConfig(
                 "binary_sensor", "${panel}_proximity",
-                """{"name":"Proximity","unique_id":"${panel}_proximity","state_topic":"$stateProximity","device_class":"occupancy","payload_on":"ON","payload_off":"OFF",$avail,$device}""",
+                """{"name":"Proximity","object_id":"${panel}_proximity","unique_id":"${panel}_proximity","state_topic":"$stateProximity","device_class":"occupancy","payload_on":"ON","payload_off":"OFF",$avail,$device}""",
             )
         }
         if (hasTemperature) {
             publishConfig(
                 "sensor", "${panel}_temperature",
-                """{"name":"Temperature","unique_id":"${panel}_temperature","state_topic":"$stateTemperature","device_class":"temperature","unit_of_measurement":"°C","state_class":"measurement",$avail,$device}""",
+                """{"name":"Temperature","object_id":"${panel}_temperature","unique_id":"${panel}_temperature","state_topic":"$stateTemperature","device_class":"temperature","unit_of_measurement":"°C","state_class":"measurement",$avail,$device}""",
             )
         }
         if (hasHumidity) {
             publishConfig(
                 "sensor", "${panel}_humidity",
-                """{"name":"Humidity","unique_id":"${panel}_humidity","state_topic":"$stateHumidity","device_class":"humidity","unit_of_measurement":"%","state_class":"measurement",$avail,$device}""",
+                """{"name":"Humidity","object_id":"${panel}_humidity","unique_id":"${panel}_humidity","state_topic":"$stateHumidity","device_class":"humidity","unit_of_measurement":"%","state_class":"measurement",$avail,$device}""",
             )
         }
         if (hasButtonBacklight) {
             publishConfig(
                 "light", "${panel}_buttons",
-                """{"name":"Button backlight","unique_id":"${panel}_buttons","schema":"json","brightness":true,"supported_color_modes":["brightness"],"command_topic":"$cmdButtons","state_topic":"$stateButtons","icon":"mdi:gesture-tap-button",$avail,$device}""",
+                """{"name":"Button backlight","object_id":"${panel}_buttons","unique_id":"${panel}_buttons","schema":"json","brightness":true,"supported_color_modes":["brightness"],"command_topic":"$cmdButtons","state_topic":"$stateButtons","icon":"mdi:gesture-tap-button",$avail,$device}""",
             )
         }
         // Config switches/numbers — each honours its per-panel "expose to HA" toggle (hidden → the
@@ -935,33 +940,33 @@ class MqttBridge(
             }
         }
         exposable("touch_sound", "switch", "${panel}_touch_sound", {
-            """{"name":"Touch sound","unique_id":"${panel}_touch_sound","command_topic":"$cmdTouchSound","state_topic":"$stateTouchSound","icon":"mdi:volume-high","entity_category":"config",$avail,$device}"""
+            """{"name":"Touch sound","object_id":"${panel}_touch_sound","unique_id":"${panel}_touch_sound","command_topic":"$cmdTouchSound","state_topic":"$stateTouchSound","icon":"mdi:volume-high","entity_category":"config",$avail,$device}"""
         }) { publish(stateTouchSound, if (touchSound.isEnabled()) "ON" else "OFF", retain = true) }
 
         // HA Companion app auto-update — installs/updates the minimal Companion over root (the
         // only update path on these no-Play panels). Off by default; the button forces it on demand.
         exposable("companion_auto_update", "switch", "${panel}_companion_auto_update", {
-            """{"name":"Companion auto-update","unique_id":"${panel}_companion_auto_update","command_topic":"$cmdCompanionAuto","state_topic":"$stateCompanionAuto","icon":"mdi:cellphone-arrow-down","entity_category":"config",$avail,$device}"""
+            """{"name":"Companion auto-update","object_id":"${panel}_companion_auto_update","unique_id":"${panel}_companion_auto_update","command_topic":"$cmdCompanionAuto","state_topic":"$stateCompanionAuto","icon":"mdi:cellphone-arrow-down","entity_category":"config",$avail,$device}"""
         }) { publish(stateCompanionAuto, if (config.companionAutoUpdate) "ON" else "OFF", retain = true) }
         publishConfig(
             "button", "${panel}_update_companion",
-            """{"name":"Update Companion app","unique_id":"${panel}_update_companion","command_topic":"$cmdUpdateCompanion","icon":"mdi:home-assistant","entity_category":"config",$avail,$device}""",
+            """{"name":"Update Companion app","object_id":"${panel}_update_companion","unique_id":"${panel}_update_companion","command_topic":"$cmdUpdateCompanion","icon":"mdi:home-assistant","entity_category":"config",$avail,$device}""",
         )
 
         // ha-paneld self-update — follows the update channel; installs a newer build of itself over root.
         // Off by default; the update_paneld button forces it on demand.
         exposable("companion_update_channel", "select", "${panel}_companion_update_channel", {
-            """{"name":"Companion auto-update channel","unique_id":"${panel}_companion_update_channel","command_topic":"$cmdCompanionChannel","state_topic":"$stateCompanionChannel","options":["Stable","Pre-release"],"icon":"mdi:source-branch","entity_category":"config",$avail,$device}"""
+            """{"name":"Companion auto-update channel","object_id":"${panel}_companion_update_channel","unique_id":"${panel}_companion_update_channel","command_topic":"$cmdCompanionChannel","state_topic":"$stateCompanionChannel","options":["Stable","Pre-release"],"icon":"mdi:source-branch","entity_category":"config",$avail,$device}"""
         }) { publish(stateCompanionChannel, companionChannelLabel(), retain = true) }
         exposable("self_update", "switch", "${panel}_self_update", {
-            """{"name":"ha-paneld auto-update","unique_id":"${panel}_self_update","command_topic":"$cmdSelfUpdate","state_topic":"$stateSelfUpdate","icon":"mdi:package-up","entity_category":"config",$avail,$device}"""
+            """{"name":"ha-paneld auto-update","object_id":"${panel}_self_update","unique_id":"${panel}_self_update","command_topic":"$cmdSelfUpdate","state_topic":"$stateSelfUpdate","icon":"mdi:package-up","entity_category":"config",$avail,$device}"""
         }) { publish(stateSelfUpdate, if (config.selfUpdate) "ON" else "OFF", retain = true) }
         exposable("update_channel", "select", "${panel}_update_channel", {
-            """{"name":"ha-paneld auto-update channel","unique_id":"${panel}_update_channel","command_topic":"$cmdUpdateChannel","state_topic":"$stateUpdateChannel","options":["Stable","Pre-release"],"icon":"mdi:source-branch","entity_category":"config",$avail,$device}"""
+            """{"name":"ha-paneld auto-update channel","object_id":"${panel}_update_channel","unique_id":"${panel}_update_channel","command_topic":"$cmdUpdateChannel","state_topic":"$stateUpdateChannel","options":["Stable","Pre-release"],"icon":"mdi:source-branch","entity_category":"config",$avail,$device}"""
         }) { publish(stateUpdateChannel, updateChannelLabel(), retain = true) }
         publishConfig(
             "button", "${panel}_update_paneld",
-            """{"name":"Update ha-paneld","unique_id":"${panel}_update_paneld","command_topic":"$cmdUpdatePaneld","icon":"mdi:package-up","entity_category":"config",$avail,$device}""",
+            """{"name":"Update ha-paneld","object_id":"${panel}_update_paneld","unique_id":"${panel}_update_paneld","command_topic":"$cmdUpdatePaneld","icon":"mdi:package-up","entity_category":"config",$avail,$device}""",
         )
 
         exposable("watchdog_enabled", "switch", "${panel}_watchdog", { reg("watchdog_enabled") }) {
@@ -984,14 +989,14 @@ class MqttBridge(
         // HA-fed room lux → auto-brightness input. The only source on sensor-less panels (e.g. WF1589T);
         // an HA automation pushes room lux here and the engine applies the curve. No state on connect.
         exposable("ambient_lux", "number", "${panel}_ambient_lux", {
-            """{"name":"Ambient lux (HA-fed)","unique_id":"${panel}_ambient_lux","command_topic":"$cmdAmbientLux","state_topic":"$stateAmbientLux","min":0,"max":100000,"step":1,"mode":"box","unit_of_measurement":"lx","icon":"mdi:brightness-5","entity_category":"config",$avail,$device}"""
+            """{"name":"Ambient lux (HA-fed)","object_id":"${panel}_ambient_lux","unique_id":"${panel}_ambient_lux","command_topic":"$cmdAmbientLux","state_topic":"$stateAmbientLux","min":0,"max":100000,"step":1,"mode":"box","unit_of_measurement":"lx","icon":"mdi:brightness-5","entity_category":"config",$avail,$device}"""
         }) { }
 
         // Zigbee router — only on panels with the Sonoff gateway package (NSPanel Pro). present()
         // costs a su exec; safe here because onConnected runs off the main thread.
         if (zigbee.present()) {
             exposable("zigbee_router", "switch", "${panel}_zigbee_router", {
-                """{"name":"Zigbee router","unique_id":"${panel}_zigbee_router","command_topic":"$cmdZigbee","state_topic":"$stateZigbee","icon":"mdi:zigbee","entity_category":"config",$avail,$device}"""
+                """{"name":"Zigbee router","object_id":"${panel}_zigbee_router","unique_id":"${panel}_zigbee_router","command_topic":"$cmdZigbee","state_topic":"$stateZigbee","icon":"mdi:zigbee","entity_category":"config",$avail,$device}"""
             }) { publish(stateZigbee, if (zigbee.running()) "ON" else "OFF", retain = true) }
         }
 
@@ -1000,7 +1005,7 @@ class MqttBridge(
         for (n in 1..relays) {
             publishConfig(
                 "switch", "${panel}_relay$n",
-                """{"name":"Relay $n","unique_id":"${panel}_relay$n","command_topic":"ha-paneld/$panel/relay$n/set","state_topic":"ha-paneld/$panel/relay$n/state","icon":"mdi:electric-switch",$avail,$device}""",
+                """{"name":"Relay $n","object_id":"${panel}_relay$n","unique_id":"${panel}_relay$n","command_topic":"ha-paneld/$panel/relay$n/set","state_topic":"ha-paneld/$panel/relay$n/state","icon":"mdi:electric-switch",$avail,$device}""",
             )
             publish("ha-paneld/$panel/relay$n/state", if (relay.get(n)) "ON" else "OFF", retain = true)
         }
@@ -1010,7 +1015,7 @@ class MqttBridge(
         for (n in 1..leds) {
             publishConfig(
                 "light", "${panel}_button_led$n",
-                """{"name":"Button LED $n","unique_id":"${panel}_button_led$n","command_topic":"ha-paneld/$panel/button_led$n/set","state_topic":"ha-paneld/$panel/button_led$n/state","icon":"mdi:led-on",$avail,$device}""",
+                """{"name":"Button LED $n","object_id":"${panel}_button_led$n","unique_id":"${panel}_button_led$n","command_topic":"ha-paneld/$panel/button_led$n/set","state_topic":"ha-paneld/$panel/button_led$n/state","icon":"mdi:led-on",$avail,$device}""",
             )
             publish("ha-paneld/$panel/button_led$n/state", if (relay.ledGet(n - 1)) "ON" else "OFF", retain = true)
         }
@@ -1021,7 +1026,7 @@ class MqttBridge(
         if (cpu.available()) {
             val opts = CpuController.TIERS.joinToString(",") { "\"${jsonEsc(it)}\"" }
             exposable("cpu_governor", "select", "${panel}_cpu_governor", {
-                """{"name":"CPU profile","unique_id":"${panel}_cpu_governor","command_topic":"$cmdCpuGov","state_topic":"$stateCpuGov","options":[$opts],"icon":"mdi:speedometer","entity_category":"config",$avail,$device}"""
+                """{"name":"CPU profile","object_id":"${panel}_cpu_governor","unique_id":"${panel}_cpu_governor","command_topic":"$cmdCpuGov","state_topic":"$stateCpuGov","options":[$opts],"icon":"mdi:speedometer","entity_category":"config",$avail,$device}"""
             }) { cpu.currentTier()?.let { publish(stateCpuGov, it, retain = true) } }
         }
 
@@ -1031,37 +1036,37 @@ class MqttBridge(
         run {
             val opts = NavbarController.MODES.joinToString(",") { "\"${jsonEsc(it)}\"" }
             exposable("navbar_mode", "select", "${panel}_navbar", {
-                """{"name":"Navbar","unique_id":"${panel}_navbar","command_topic":"$cmdNavbar","state_topic":"$stateNavbar","options":[$opts],"icon":"mdi:gesture-tap-button","entity_category":"config",$avail,$device}"""
+                """{"name":"Navbar","object_id":"${panel}_navbar","unique_id":"${panel}_navbar","command_topic":"$cmdNavbar","state_topic":"$stateNavbar","options":[$opts],"icon":"mdi:gesture-tap-button","entity_category":"config",$avail,$device}"""
             }) { publish(stateNavbar, config.navbarMode, retain = true) }
         }
 
         // Persistent network adb (switch) — opt-in; root panels only. Standing LAN adb port when ON.
         if (adb.available()) {
             exposable("network_adb", "switch", "${panel}_network_adb", {
-                """{"name":"Network ADB","unique_id":"${panel}_network_adb","command_topic":"$cmdNetAdb","state_topic":"$stateNetAdb","icon":"mdi:adb","entity_category":"config",$avail,$device}"""
+                """{"name":"Network ADB","object_id":"${panel}_network_adb","unique_id":"${panel}_network_adb","command_topic":"$cmdNetAdb","state_topic":"$stateNetAdb","icon":"mdi:adb","entity_category":"config",$avail,$device}"""
             }) { publish(stateNetAdb, if (adb.isPersisted()) "ON" else "OFF", retain = true) }
         }
 
         // Panel actions (root via su; graceful no-op without it).
         publishConfig(
             "button", "${panel}_reload",
-            """{"name":"Reload dashboard","unique_id":"${panel}_reload","command_topic":"$cmdReload","icon":"mdi:web-refresh",$avail,$device}""",
+            """{"name":"Reload dashboard","object_id":"${panel}_reload","unique_id":"${panel}_reload","command_topic":"$cmdReload","icon":"mdi:web-refresh",$avail,$device}""",
         )
         publishConfig(
             "button", "${panel}_reboot",
-            """{"name":"Reboot","unique_id":"${panel}_reboot","command_topic":"$cmdReboot","device_class":"restart","icon":"mdi:restart",$avail,$device}""",
+            """{"name":"Reboot","object_id":"${panel}_reboot","unique_id":"${panel}_reboot","command_topic":"$cmdReboot","device_class":"restart","icon":"mdi:restart",$avail,$device}""",
         )
         publishConfig(
             "button", "${panel}_launcher",
-            """{"name":"Launcher","unique_id":"${panel}_launcher","command_topic":"$cmdLauncher","icon":"mdi:apps",$avail,$device}""",
+            """{"name":"Launcher","object_id":"${panel}_launcher","unique_id":"${panel}_launcher","command_topic":"$cmdLauncher","icon":"mdi:apps",$avail,$device}""",
         )
         publishConfig(
             "button", "${panel}_home",
-            """{"name":"Home Assistant","unique_id":"${panel}_home","command_topic":"$cmdHome","icon":"mdi:home-assistant",$avail,$device}""",
+            """{"name":"Home Assistant","object_id":"${panel}_home","unique_id":"${panel}_home","command_topic":"$cmdHome","icon":"mdi:home-assistant",$avail,$device}""",
         )
         publishConfig(
             "button", "${panel}_admin_launcher",
-            """{"name":"Admin launcher","unique_id":"${panel}_admin_launcher","command_topic":"$cmdAdminLauncher","icon":"mdi:cog-box",$avail,$device}""",
+            """{"name":"Admin launcher","object_id":"${panel}_admin_launcher","unique_id":"${panel}_admin_launcher","command_topic":"$cmdAdminLauncher","icon":"mdi:cog-box",$avail,$device}""",
         )
     }
 
