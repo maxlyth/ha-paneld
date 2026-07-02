@@ -30,6 +30,11 @@ then builds, signs and publishes the APK, taking the human-readable notes from t
      changed since the previous RC** — not a repeat of prior RC content. The workflow appends the
      auto-generated commit list below it, so you don't need to list every commit; one bullet per
      user-visible change is enough.
+   - **RC numbers track PUBLISHED prereleases only** — the `-rcN` suffix increments when an rc is
+     tagged and pushed to GitHub, never for internal/fleet-only builds. Internal iteration bumps
+     `versionCode` alone (bump it aggressively — it drives in-place upgrades and the `/health` build
+     token) while `versionName` stays on the next unpublished rc, whose single CHANGELOG section
+     ("`- Unreleased`" until tagged) absorbs everything since the last published tag.
    - **Stable tags**: add `## vX.Y.Z - <date>` with cumulative notes for the whole version. The workflow
      falls back to the base-version section only for stable tags, so the stable section is the one place
      to summarise the full release for users upgrading directly from the previous stable.
