@@ -23,6 +23,7 @@ import io.github.maxlyth.hapaneld.device.TameCandidate
 import io.github.maxlyth.hapaneld.input.PanelAccessibilityService
 import io.github.maxlyth.hapaneld.logship.LogCapture
 import io.github.maxlyth.hapaneld.sensors.SensorReporter
+import io.github.maxlyth.hapaneld.util.Cached
 import io.github.maxlyth.hapaneld.util.HelperClient
 import io.github.maxlyth.hapaneld.util.Json
 import io.github.maxlyth.hapaneld.util.UpdateChecker
@@ -288,7 +289,16 @@ class PaneldServer(
                             ContentType.Application.Json,
                         )
                     }
-                    get("/diag") { call.respondText(DiagReader.dump(appContext, info()), ContentType.Text.Plain) }
+                    // Hydration payload for the dashboard (see infoJson) — the one place the probe
+                    // suite actually runs; cached + single-flight, so concurrent viewers share it.
+                    get("/info") {
+                        call.respondText(withContext(Dispatchers.IO) { infoJson() }, ContentType.Application.Json)
+                    }
+                    get("/diag") {
+                        // Reuses the snapshot facts (≤15s old) instead of re-running the probe suite.
+                        val facts = withContext(Dispatchers.IO) { snapCache.get().facts }
+                        call.respondText(DiagReader.dump(appContext, facts), ContentType.Text.Plain)
+                    }
                     // Live log tail as Server-Sent Events (?source=app|system). Feeds the Logs tab;
                     // also curl-able (`curl -N .../api/v1/logs/stream`). Lines are pre-redacted.
                     get("/logs/stream") { handleLogStream(call) }
@@ -439,6 +449,7 @@ class PaneldServer(
                             val next = config.tameVendorPackages.toMutableSet()
                             if (untame) next.remove(pkg) else next.add(pkg)
                             config.setTameVendorPackages(next.joinToString(" "))
+                            snapInvalidate()
                             scope.launch { if (untame) tame.untame(pkg) else tame.tame(pkg) }
                         }
                         val verb = if (untame) "re-enabling" else "taming"
@@ -482,6 +493,7 @@ class PaneldServer(
                                     (f?.let { density.setFontScale(it) } ?: false)
                             }
                         }
+                        snapInvalidate()
                         call.respondText(
                             "<!doctype html><meta charset=utf-8><meta http-equiv=refresh content='1;url=/configure'>" +
                                 "<body style='font-family:system-ui;background:#111;color:#eee;padding:20px'>" +
@@ -514,6 +526,8 @@ class PaneldServer(
         } catch (e: Exception) {
             Log.e(TAG, "HTTP bind on :${config.httpPort} failed (already running?) — continuing", e)
         }
+        // Pre-warm the probe snapshot so even the first dashboard visit usually renders complete.
+        scope.launch(Dispatchers.IO) { runCatching { snapCache.get() } }
     }
 
     fun stop() {
@@ -591,7 +605,7 @@ class PaneldServer(
     private suspend fun handleLogStream(call: ApplicationCall) {
         val cap = when (val src = call.request.queryParameters["source"] ?: "app") {
             "app" -> logApp
-            "system" -> if (Su.available()) logSystem else {
+            "system" -> if (suCache.get()) logSystem else {
                 call.respondText("system log needs root\n", status = HttpStatusCode.ServiceUnavailable)
                 return
             }
@@ -683,7 +697,7 @@ ${tameCardHtml()}
 
     /** Test tab — interactive screenshot (View/Control), on-screen nav actions, TTS test. */
     private fun testBody(): String {
-        val rootOk = Su.available() || HelperClient.available()
+        val rootOk = rootOk()
         val cap = if (rootOk) "Captured on demand via root / the helper daemon."
         else "Screenshot + tap control need root or the helper daemon — unavailable on this panel."
         return """
@@ -766,7 +780,7 @@ $allGood</div>"""
 
     /** Logs tab — live log tail over SSE. App source always; system source needs root (gated live). */
     private fun logsBody(): String {
-        val sysOk = Su.available()
+        val sysOk = suCache.get()
         val sysBtn = if (sysOk) """<button id="lg-src-system" onclick="lgSource('system')">System</button>"""
         else """<button id="lg-src-system" disabled title="Full system logcat needs root — unavailable on this panel">System</button>"""
         // Deliberately NOT inside a `.cards` masonry container — the log card wants the full page width.
@@ -864,191 +878,264 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         return """<tr><th>${esc(spec.label)}</th><td>${esc(shown)}${cfgIcon("cfg-$key")}</td></tr>"""
     }
 
-    /**
-     * The read-only dashboard value cards — the settings HA can see/set, distributed by topic
-     * (Behaviour / Display / Updates / Live state) instead of one monolithic table. Every
-     * CONFIGURABLE value carries the ✎ deep-link; live control states are plain (they're driven
-     * from HA/the panel, not the Configure form).
-     */
-    private fun dashboardValueCards(): String {
-        val live = liveValues()
-        val caps = capabilities()
-        fun rows(keys: List<String>) = keys.mapNotNull { settingRowHtml(it, live, caps) }.joinToString("\n")
-        fun card(title: String, body: String, note: String = ""): String =
-            if (body.isBlank()) "" else """<div class="card"><h2>${esc(title)}</h2>$note<table>
-$body
-</table></div>"""
+    // ---- dashboard snapshot (probe results) + hydration ---------------------------------------------
+    //
+    // Rendering `/` used to gather every root/probe value inline — ~8 serialized su round-trips
+    // (zigbee status, CPU tier, network-ADB ×2, touch sound, `wm density` ×3, su presence), a 12+s
+    // blank page on PX30 panels. The probes now funnel through ONE cached snapshot: `/` renders
+    // whatever is last known instantly (placeholders on a cold start) and the page hydrates from
+    // GET /api/v1/info, which is the only place the probes actually run — at most once per TTL,
+    // single-flight, pre-warmed at server start.
 
-        // Live control states (what HA's control entities currently show) — controls, not config.
-        val led = config.lastLed.split(",").mapNotNull { it.toIntOrNull() }
-        val ledShown = if (led.size == 5 && led[0] == 1) "on · rgb(${led[2]},${led[3]},${led[4]}) @ ${led[1]}" else "off"
-        val brightnessShown = runCatching {
-            android.provider.Settings.System.getInt(appContext.contentResolver, android.provider.Settings.System.SCREEN_BRIGHTNESS)
-        }.getOrNull()?.toString() ?: "?"
-        val liveRows = listOf(
-            "Screen brightness" to brightnessShown,
-            "Volume" to "${volume.getPercent()}%",
-            "Navigate" to config.lastNavigate.ifEmpty { "/" },
-            "LED" to ledShown,
-        ).joinToString("\n") { (k, v) -> """<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>""" }
+    /** Everything the dashboard shows that costs a root/probe round-trip, gathered once. */
+    private class Snap(
+        val facts: Map<String, String>,
+        val live: Map<String, String>,
+        val caps: Capabilities,
+        val densityCur: Int?,
+        val densityNat: Int?,
+        val fontScale: Float,
+        val rootOk: Boolean,
+    )
 
-        val behaviour = rows(
-            listOf(
-                "wake_on_wave", "prevent_idle_dim", "watchdog_enabled", "touch_sound",
-                "silence_boot_chime", "keep_awake", "home_dashboard", "dashboard_package", "launcher_package",
-            ),
+    // The density trio is shared with the Configure tab's Display card (the bulk of ITS slow render).
+    private val densityCache = Cached(DENSITY_TTL_MS) { Triple(density.current(), density.native(), density.fontScale()) }
+    // su presence doesn't flap — cache the probe gating screenshot / controls / system logs / taming.
+    private val suCache = Cached(SU_TTL_MS) { Su.available() }
+    private fun rootOk(): Boolean = suCache.get() || HelperClient.available()
+
+    private val snapCache = Cached(SNAP_TTL_MS) {
+        val d = densityCache.get()
+        Snap(
+            facts = info(),
+            live = liveValues(),
+            caps = capabilities(),
+            densityCur = d.first, densityNat = d.second, fontScale = d.third,
+            rootOk = rootOk(),
         )
-        // Display & tuning: registry values plus the Configure-card-backed ones (density / text /
-        // proximity / tame), each deep-linking to its card.
-        val proxShown = when {
-            !sensors.hasProximity() -> null
-            config.proximityCalibrated -> "calibrated · threshold ${"%.1f".format(config.proximityThreshold)}"
-            else -> "not calibrated"
-        }
-        val displayRows = rows(listOf("auto_brightness", "brightness_bias")) + "\n" + listOfNotNull(
-            density.current()?.let { """<tr><th>Density</th><td>$it dpi (native ${density.native() ?: "?"})${cfgIcon("cfg-display")}</td></tr>""" },
-            density.current()?.let { """<tr><th>Text size</th><td>${density.fontScale()}${cfgIcon("cfg-display")}</td></tr>""" },
-            proxShown?.let { """<tr><th>Proximity</th><td>${esc(it)}${cfgIcon("cfg-proximity")}</td></tr>""" },
-            """<tr><th>Tamed packages</th><td>${esc(config.tameVendorPackagesRaw.ifBlank { "none" })}${cfgIcon("cfg-tame")}</td></tr>""",
-        ).joinToString("\n")
-        val updates = rows(listOf("self_update", "update_channel", "companion_auto_update"))
-
-        return card("Live state", liveRows, """<p class="note">What Home Assistant's control entities currently show.</p>""") +
-            card("Behaviour", behaviour) +
-            card("Display & tuning", displayRows) +
-            card("Updates", updates)
     }
 
-    private fun infoHtml(): String {
-        val pid = esc(config.panelId)
-        // Banner reflects the LIVE MQTT state (from the info map), not just whether a broker string is
-        // set — so auto-discovery + a real connection clears it, and an auth rejection says so.
-        val facts = info()
-        val mqtt = facts["MQTT"] ?: "disabled"
+    /** Call after any write that changes probed state (config apply/import/restore, density, tame),
+     *  so the next render doesn't show pre-write values for a TTL. */
+    private fun snapInvalidate() {
+        snapCache.invalidate()
+        densityCache.invalidate()
+    }
+
+    private val NET_KEYS = listOf("Local IP", "Local IPv6", "HTTP port", "MQTT", "mDNS", "Network ADB")
+    // Rows whose values are DECLARED by the DeviceProfile, so wrong data points a contributor straight
+    // at the fix: Platform=displayName/socClass, LED=ledMechanism, sensor tech=proximityTech/lightTech,
+    // Zigbee=zigbeeGatewayDir, Relays=relayBase, CPU profile=cpuGovernors.
+    private val PROF_KEYS = listOf("Platform", "LED", "Light sensor", "Proximity", "Zigbee", "Relays", "CPU profile")
+    private fun infoKeys(s: Snap): List<String> = s.facts.keys.filter { it !in NET_KEYS && it !in PROF_KEYS }
+
+    /** The setup / health / update banners — everything above the cards. Needs the facts map (MQTT
+     *  state), so on a cold start it hydrates with the rest. */
+    private fun bannersHtml(s: Snap): String {
+        val mqtt = s.facts["MQTT"] ?: "disabled"
         // Pure decision (unit-tested in SetupBannerTest) — note a CONFIGURED broker that's merely
         // mid-(re)connect must not be reported as missing.
         val needs = SetupBanner.needs(mqtt, config.mqttBroker.isNotBlank(), config.panelIdIsDefault)
-        val setupBanner = if (needs.isNotEmpty())
+        val setup = if (needs.isNotEmpty())
             """<div class="setup">⚠ This panel needs <a href="/configure">${needs.joinToString(" and ")}</a> — set on the Configure tab.</div>"""
         else ""
-        val updateBanner = UpdateChecker.available.joinToString("") { u ->
+        val update = UpdateChecker.available.joinToString("") { u ->
             """<div class="setup">⬆ <b>${esc(u.label)}</b> ${esc(u.latestVersion)} is available""" +
                 """ (installed: ${esc(u.currentVersion)}) — """ +
                 """<a href="${esc(u.releaseUrl)}" target="_blank" rel="noopener">download</a></div>"""
         }
-        // Panel-health warnings: states that stop the panel rendering the dashboard as expected but that the
-        // info map otherwise reports neutrally. Soft + best-effort — ha-paneld itself runs fine regardless.
-        val webViewVal = facts["System WebView"] ?: ""
+        // Panel-health warnings: states that stop the panel rendering the dashboard as expected but that
+        // the info map otherwise reports neutrally. Soft + best-effort — ha-paneld runs fine regardless.
         // Verdict from the REAL engine version (WebView UA), not the stamped package version — the
-        // engine fetch is cached, so this re-call after collect() is cheap. See PanelInfo.webViewStatus.
-        val webViewTooOld = PanelInfo.webViewStatus(appContext).tooOld
-        val renderers = PanelInfo.dashboardRenderers(appContext, config.dashboardPackage)
-        val healthBanner = buildString {
-            if (webViewTooOld) append(
-                """<div class="setup">⚠ <b>System WebView is too old</b> (${esc(webViewVal)}) — the Home Assistant """ +
+        // engine fetch is cached, so this call is cheap. See PanelInfo.webViewStatus.
+        val health = buildString {
+            if (PanelInfo.webViewStatus(appContext).tooOld) append(
+                """<div class="setup">⚠ <b>System WebView is too old</b> (${esc(s.facts["System WebView"] ?: "")}) — the Home Assistant """ +
                     """dashboard may render blank or broken. <a href="$WEBVIEW_DOC" target="_blank" rel="noopener">""" +
                     """How &amp; why to update</a> (target: Chromium ${PanelHealth.MIN_CHROMIUM}+). """ +
                     """<small>Checked against the real engine version (from the WebView UA), not just the """ +
                     """stamped package version — so a Cromite/LineageOS SystemWebView won't trip this.</small></div>"""
             )
-            if (renderers.isEmpty()) append(
+            if (PanelInfo.dashboardRenderers(appContext, config.dashboardPackage).isEmpty()) append(
                 """<div class="setup">ℹ <b>No dashboard app detected</b> — install the HA Companion app, """ +
                     """<a href="https://www.fully-kiosk.com/" target="_blank" rel="noopener">Fully Kiosk</a>, or set a """ +
                     """dashboard package on <a href="/configure">Configure</a>, or this panel won't display a dashboard. """ +
                     """<small>(ha-paneld itself runs fine without one.)</small></div>"""
             )
         }
-        // Split the flat fact map into separate cards so it renders ACROSS masonry columns instead of one
-        // ever-growing tall card. Networking + ha-paneld-profile are carved out; everything else (device /
-        // OS facts, plus any future key) falls through to "Panel information".
-        val netKeys = listOf("Local IP", "Local IPv6", "HTTP port", "MQTT", "mDNS", "Network ADB")
-        // Rows whose values are DECLARED by the DeviceProfile, so wrong data points a contributor straight
-        // at the fix: Platform=displayName/socClass, LED=ledMechanism, sensor tech=proximityTech/lightTech,
-        // Zigbee=zigbeeGatewayDir, Relays=relayBase, CPU profile=cpuGovernors.
-        // (panel_id / Friendly name are user config and Accessibility nav is runtime state — they fall
-        // through to Panel information.)
-        val profKeys = listOf("Platform", "LED", "Light sensor", "Proximity", "Zigbee", "Relays", "CPU profile")
-        val grouped = (netKeys + profKeys).toSet()
-        val infoKeys = facts.keys.filter { it !in grouped }
-        fun factRows(keys: List<String>): String =
-            keys.filter { facts.containsKey(it) }.joinToString("\n") { k ->
-                val v = facts.getValue(k)
-                // Version: plain text + a small "open releases" icon (a hyperlinked version reads ugly).
-                val cell = if (k == "ha-paneld") {
-                    """${esc(v)} <a class="ext" href="$RELEASES_URL" target="_blank" rel="noopener" """ +
-                        """title="Releases" aria-label="Releases"><svg viewBox="0 0 24 24"><path d="$EXT_ICON"/></svg></a>"""
-                } else if (k == "Display") {
-                    displayCell(v)
-                } else if (k == "System WebView" && webViewTooOld) {
-                    """<span style="color:#f5c451">${esc(v)} ⚠</span>"""
-                } else if (k in SECRET_FIELDS || (k in ADDRESS_FIELDS && isRoutable(v))) {
-                    // Blurred by default so a casual screenshot doesn't leak it; "Reveal" un-blurs (screenshot
-                    // hygiene, not access control — the value is still in the page source).
-                    """<span class="secret">${esc(v)}</span>"""
-                } else {
-                    esc(v)
-                }
-                // Facts backed by a setting get the ✎ marker (configurable vs static at a glance),
-                // deep-linking to the exact row on the Configure tab.
-                val edit = FACT_CFG[k]?.let { cfgIcon(it) } ?: ""
-                "<tr><th>${esc(k)}</th><td>$cell$edit</td></tr>"
+        return update + health + setup
+    }
+
+    /** Table rows for one facts card (Panel information / Networking / ha-paneld profile). */
+    private fun factRowsHtml(s: Snap, keys: List<String>): String {
+        val webViewTooOld = PanelInfo.webViewStatus(appContext).tooOld
+        return keys.filter { s.facts.containsKey(it) }.joinToString("\n") { k ->
+            val v = s.facts.getValue(k)
+            // Version: plain text + a small "open releases" icon (a hyperlinked version reads ugly).
+            val cell = if (k == "ha-paneld") {
+                """${esc(v)} <a class="ext" href="$RELEASES_URL" target="_blank" rel="noopener" """ +
+                    """title="Releases" aria-label="Releases"><svg viewBox="0 0 24 24"><path d="$EXT_ICON"/></svg></a>"""
+            } else if (k == "Display") {
+                displayCell(v)
+            } else if (k == "System WebView" && webViewTooOld) {
+                """<span style="color:#f5c451">${esc(v)} ⚠</span>"""
+            } else if (k in SECRET_FIELDS || (k in ADDRESS_FIELDS && isRoutable(v))) {
+                // Blurred by default so a casual screenshot doesn't leak it; "Reveal" un-blurs (screenshot
+                // hygiene, not access control — the value is still in the page source).
+                """<span class="secret">${esc(v)}</span>"""
+            } else {
+                esc(v)
             }
-        fun factCard(title: String, keys: List<String>, note: String = ""): String {
-            val r = factRows(keys)
-            return if (r.isBlank()) "" else """<div class="card"><h2>${esc(title)}</h2><table>$r</table>$note</div>"""
+            // Facts backed by a setting get the ✎ marker (configurable vs static at a glance),
+            // deep-linking to the exact row on the Configure tab.
+            val edit = FACT_CFG[k]?.let { cfgIcon(it) } ?: ""
+            "<tr><th>${esc(k)}</th><td>$cell$edit</td></tr>"
         }
-        // Controls buttons: render but DISABLE (not hide, not silently-broken) when the action's capability
-        // is missing — back/recents need the a11y service, launcher/reboot need root; volume always works.
-        val a11yOk = facts["Nav actions (a11y)"] == "yes"
-        // Recents is only real where the firmware has an overview screen — KEYCODE_APP_SWITCH no-ops on
-        // single-purpose panels (TPA10), so gate the button on the profile rather than show a dead one.
-        val hasRecents = io.github.maxlyth.hapaneld.device.DeviceProfile.detect().hasRecents
-        val rootOk = Su.available() || HelperClient.available()
-        fun pbtn(action: String, label: String, ok: Boolean, needs: String, style: String = ""): String {
-            val dis = if (ok) "" else """ disabled title="needs $needs""""
-            return """<button class="pbtn"$style onclick="act('$action')"$dis>$label</button>"""
+    }
+
+    // Live control states (what HA's control entities currently show) — controls, not config.
+    private fun liveRowsHtml(): String {
+        val led = config.lastLed.split(",").mapNotNull { it.toIntOrNull() }
+        val ledShown = if (led.size == 5 && led[0] == 1) "on · rgb(${led[2]},${led[3]},${led[4]}) @ ${led[1]}" else "off"
+        val brightnessShown = runCatching {
+            android.provider.Settings.System.getInt(appContext.contentResolver, android.provider.Settings.System.SCREEN_BRIGHTNESS)
+        }.getOrNull()?.toString() ?: "?"
+        return listOf(
+            "Screen brightness" to brightnessShown,
+            "Volume" to "${volume.getPercent()}%",
+            "Navigate" to config.lastNavigate.ifEmpty { "/" },
+            "LED" to ledShown,
+        ).joinToString("\n") { (k, v) -> """<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>""" }
+    }
+
+    private fun behaviourRowsHtml(s: Snap): String = listOf(
+        "wake_on_wave", "prevent_idle_dim", "watchdog_enabled", "touch_sound",
+        "silence_boot_chime", "keep_awake", "home_dashboard", "dashboard_package", "launcher_package",
+    ).mapNotNull { settingRowHtml(it, s.live, s.caps) }.joinToString("\n")
+
+    // Display & tuning: registry values plus the Configure-card-backed ones (density / text /
+    // proximity / tame), each deep-linking to its card.
+    private fun displayRowsHtml(s: Snap): String {
+        val proxShown = when {
+            !sensors.hasProximity() -> null
+            config.proximityCalibrated -> "calibrated · threshold ${"%.1f".format(config.proximityThreshold)}"
+            else -> "not calibrated"
         }
+        return listOf("auto_brightness", "brightness_bias").mapNotNull { settingRowHtml(it, s.live, s.caps) }
+            .joinToString("\n") + "\n" + listOfNotNull(
+            s.densityCur?.let { """<tr><th>Density</th><td>$it dpi (native ${s.densityNat ?: "?"})${cfgIcon("cfg-display")}</td></tr>""" },
+            s.densityCur?.let { """<tr><th>Text size</th><td>${s.fontScale}${cfgIcon("cfg-display")}</td></tr>""" },
+            proxShown?.let { """<tr><th>Proximity</th><td>${esc(it)}${cfgIcon("cfg-proximity")}</td></tr>""" },
+            """<tr><th>Tamed packages</th><td>${esc(config.tameVendorPackagesRaw.ifBlank { "none" })}${cfgIcon("cfg-tame")}</td></tr>""",
+        ).joinToString("\n")
+    }
+
+    private fun updatesRowsHtml(s: Snap): String = listOf("self_update", "update_channel", "companion_auto_update")
+        .mapNotNull { settingRowHtml(it, s.live, s.caps) }.joinToString("\n")
+
+    private fun capRowsHtml(): String {
         val capColor = mapOf("ok" to "#48c774", "degraded" to "#d9a528", "none" to "#d04a3b")
-        val capRows = DiagReader.capabilities(appContext).joinToString("\n") { c ->
+        return DiagReader.capabilities(appContext).joinToString("\n") { c ->
             val col = capColor[c.status] ?: "#888"
             """<tr><th>${esc(c.name)}</th><td><span style="color:$col">●</span> ${esc(c.note)}</td></tr>"""
         }
-        return """<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ha-paneld · $pid</title>
-<link rel="icon" href="/icon.svg">
-<link rel="stylesheet" href="/info.css"></head><body data-ver="${Config.VERSION}" data-build="${buildToken()}"><div class="wrap">
-<div class="hdr"><h1><img src="/icon.svg" class="logo" alt="">ha-paneld <small>· $pid</small></h1>
- <span style="display:flex;gap:10px;align-items:center">${if (config.haDeviceUrl.isNotBlank()) """<a class="pbtn" href="${esc(config.haDeviceUrl)}" target="_blank" rel="noopener" title="Open this panel's device page in Home Assistant">Open in HA</a>""" else ""}<button id="revbtn" class="pbtn" onclick="toggleReveal()" title="Show/hide blurred values for editing — they're blurred by default so screenshots don't leak them">Reveal</button>
- <a class="gh" href="$REPO_URL" target="_blank" rel="noopener" title="ha-paneld on GitHub" aria-label="GitHub"><svg viewBox="0 0 24 24"><path d="$GH_ICON"/></svg></a></span></div>
-${navBar("dashboard")}
-<div id="verbar" class="setup" style="display:none">⟳ A newer ha-paneld is installed — <a href="#" onclick="location.reload();return false">reload</a> to refresh this page.</div>
-$updateBanner$healthBanner$setupBanner
-<div class="cards">
-<div class="card"><h2>Controls <small>· software nav bar</small></h2>
-<div style="display:flex;gap:8px;flex-wrap:wrap">
+    }
+
+    /** The Controls-card button rows. [s] null (cold shell) → everything disabled as "checking…";
+     *  hydration swaps in the capability-gated real state. */
+    private fun controlsHtml(s: Snap?): String {
+        // Controls buttons: render but DISABLE (not hide, not silently-broken) when the action's capability
+        // is missing — back/recents need the a11y service, launcher/reboot need root; volume always works.
+        val a11yOk = s?.facts?.get("Nav actions (a11y)") == "yes"
+        // Recents is only real where the firmware has an overview screen — KEYCODE_APP_SWITCH no-ops on
+        // single-purpose panels (TPA10), so gate the button on the profile rather than show a dead one.
+        val hasRecents = io.github.maxlyth.hapaneld.device.DeviceProfile.detect().hasRecents
+        val rootOk = s?.rootOk == true
+        val checking = s == null
+        fun pbtn(action: String, label: String, ok: Boolean, needs: String, style: String = ""): String {
+            val dis = if (checking) """ disabled title="checking capabilities…""""
+            else if (!ok) """ disabled title="needs $needs"""" else ""
+            return """<button class="pbtn"$style onclick="act('$action')"$dis>$label</button>"""
+        }
+        return """<div style="display:flex;gap:8px;flex-wrap:wrap">
  ${pbtn("back", "← Back", a11yOk, "the accessibility service")}
  ${pbtn("recents", "▢ Recents", a11yOk && hasRecents, if (hasRecents) "the accessibility service" else "a Recents/overview screen (absent on this panel)")}
  ${pbtn("launcher", "⊞ Launcher", rootOk, "root (su or the helper daemon)")}
  ${pbtn("admin_launcher", "⚙ Admin launcher", rootOk, "root (su or the helper daemon)")}
 </div>
 <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
- ${pbtn("voldn", "Vol −", true, "")}
- ${pbtn("volup", "Vol +", true, "")}
+ ${pbtn("voldn", "Vol −", !checking, "")}
+ ${pbtn("volup", "Vol +", !checking, "")}
  ${pbtn("reboot", "⟳ Reboot", rootOk, "root (su or the helper daemon)", """ style="margin-left:auto;border-color:#7a3a2a;color:#f5a08a"""")}
-</div>
+</div>"""
+    }
+
+    /** Hydration payload for the dashboard: ready-to-inject HTML fragments, rendered by the same
+     *  functions as the warm server render so the two paths can't drift. Builds the snapshot (this
+     *  is where the probe cost actually lands — once per TTL). */
+    private fun infoJson(): String {
+        val s = snapCache.get()
+        val cards = listOf(
+            "livetbl" to liveRowsHtml(),
+            "behavtbl" to behaviourRowsHtml(s),
+            "disptbl" to displayRowsHtml(s),
+            "updtbl" to updatesRowsHtml(s),
+            "infotbl" to factRowsHtml(s, infoKeys(s)),
+            "nettbl" to factRowsHtml(s, NET_KEYS),
+            "proftbl" to factRowsHtml(s, PROF_KEYS),
+            "captbl" to capRowsHtml(),
+        ).joinToString(",") { (k, v) -> "\"$k\":${jsonStr(v)}" }
+        return """{"banners":${jsonStr(bannersHtml(s))},"shot":${s.rootOk},"controls":${jsonStr(controlsHtml(s))},"cards":{$cards}}"""
+    }
+
+    private fun infoHtml(): String {
+        val pid = esc(config.panelId)
+        // Stale-while-revalidate: render the last-known snapshot instantly (placeholders if none yet)
+        // and let the page hydrate/refresh from /api/v1/info when the snapshot is missing or old.
+        val s = snapCache.peek()
+        val hydrate = s == null || snapCache.ageMs() > SNAP_TTL_MS
+        val placeholder = """<tr><td style="color:#888">reading…</td></tr>"""
+        // One facts/value card: cold → placeholder rows (hydration fills or hides); warm → rows, and
+        // an EMPTY card is omitted exactly as before.
+        fun tcard(id: String, title: String, rows: String?, pre: String = "", post: String = ""): String = when {
+            rows == null -> """<div class="card"><h2>${esc(title)}</h2>$pre<table id="$id">$placeholder</table>$post</div>"""
+            rows.isBlank() -> ""
+            else -> """<div class="card"><h2>${esc(title)}</h2>$pre<table id="$id">$rows</table>$post</div>"""
+        }
+        val profNote = """<p class="note">Values declared by this panel's <a href="$REPO_URL/blob/main/docs/architecture/device-profiles.md" target="_blank" rel="noopener" style="color:#9cf">device profile</a> — if one looks wrong, that's where to correct it.</p>"""
+        val capNote = """<p class="note"><a href="/api/v1/diag" target="_blank" style="color:#9cf">⭳ Diagnostics dump</a> — a copy-paste
+report of this panel's hardware, firmware, SELinux, su and node probes for bug reports.</p>"""
+        // Screenshot card: needs root, which the cold shell doesn't know yet — render it hidden with
+        // the img src deferred (data-src) so a rootless panel never fires a doomed screencap request.
+        val shotInner = { src: Boolean ->
+            """<a class="shot" href="/api/v1/screenshot.png" target="_blank" rel="noopener" title="Open full size in a new window" style="aspect-ratio:${screenAspectRatio()}"><img ${if (src) "src=\"/api/v1/screenshot.png\"" else "data-src=\"/api/v1/screenshot.png\""} alt="panel screenshot" onload="this.parentElement.classList.add('loaded')" onerror="this.parentElement.classList.add('failed')"></a>
+<p class="note"><a href="#" onclick="var s=this.closest('.card').querySelector('.shot');s.classList.remove('loaded','failed');s.querySelector('img').src='/api/v1/screenshot.png?t='+Date.now();return false" style="color:#9cf">↻ Refresh</a> · click the image to open it full size. Captured on demand via root (`screencap`); local-network only.</p>"""
+        }
+        val shotCard = when {
+            s == null -> """<div class="card" id="shotcard" style="display:none"><h2>Screenshot <small>· live panel</small></h2>${shotInner(false)}</div>"""
+            s.rootOk -> """<div class="card" id="shotcard"><h2>Screenshot <small>· live panel</small></h2>${shotInner(true)}</div>"""
+            else -> ""
+        }
+        return """<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ha-paneld · $pid</title>
+<link rel="icon" href="/icon.svg">
+<link rel="stylesheet" href="/info.css"></head><body data-ver="${Config.VERSION}" data-build="${buildToken()}" data-hydrate="${if (hydrate) "1" else "0"}"><div class="wrap">
+<div class="hdr"><h1><img src="/icon.svg" class="logo" alt="">ha-paneld <small>· $pid</small></h1>
+ <span style="display:flex;gap:10px;align-items:center">${if (config.haDeviceUrl.isNotBlank()) """<a class="pbtn" href="${esc(config.haDeviceUrl)}" target="_blank" rel="noopener" title="Open this panel's device page in Home Assistant">Open in HA</a>""" else ""}<button id="revbtn" class="pbtn" onclick="toggleReveal()" title="Show/hide blurred values for editing — they're blurred by default so screenshots don't leak them">Reveal</button>
+ <a class="gh" href="$REPO_URL" target="_blank" rel="noopener" title="ha-paneld on GitHub" aria-label="GitHub"><svg viewBox="0 0 24 24"><path d="$GH_ICON"/></svg></a></span></div>
+${navBar("dashboard")}
+<div id="verbar" class="setup" style="display:none">⟳ A newer ha-paneld is installed — <a href="#" onclick="location.reload();return false">reload</a> to refresh this page.</div>
+<div id="bannerzone">${s?.let { bannersHtml(it) } ?: ""}</div>
+<div class="cards">
+<div class="card"><h2>Controls <small>· software nav bar</small></h2>
+<div id="ctlzone">${controlsHtml(s)}</div>
 <p class="note">For panels with no physical nav bar. Back/Recents use the accessibility service; Launcher/Reboot need root — actions whose capability is missing are disabled (hover for why).</p></div>
-${if (rootOk) """<div class="card"><h2>Screenshot <small>· live panel</small></h2>
-<a class="shot" href="/api/v1/screenshot.png" target="_blank" rel="noopener" title="Open full size in a new window" style="aspect-ratio:${screenAspectRatio()}"><img src="/api/v1/screenshot.png" alt="panel screenshot" onload="this.parentElement.classList.add('loaded')" onerror="this.parentElement.classList.add('failed')"></a>
-<p class="note"><a href="#" onclick="var s=this.closest('.card').querySelector('.shot');s.classList.remove('loaded','failed');s.querySelector('img').src='/api/v1/screenshot.png?t='+Date.now();return false" style="color:#9cf">↻ Refresh</a> · click the image to open it full size. Captured on demand via root (`screencap`); local-network only.</p></div>""" else ""}
-${factCard("Panel information", infoKeys)}
-${factCard("Networking", netKeys)}
-${factCard("ha-paneld profile", profKeys, """<p class="note">Values declared by this panel's <a href="$REPO_URL/blob/main/docs/architecture/device-profiles.md" target="_blank" rel="noopener" style="color:#9cf">device profile</a> — if one looks wrong, that's where to correct it.</p>""")}
-<div class="card"><h2>Capabilities</h2><table>
-$capRows
-</table>
-<p class="note"><a href="/api/v1/diag" target="_blank" style="color:#9cf">⭳ Diagnostics dump</a> — a copy-paste
-report of this panel's hardware, firmware, SELinux, su and node probes for bug reports.</p></div>
+$shotCard
+${tcard("infotbl", "Panel information", s?.let { factRowsHtml(it, infoKeys(it)) })}
+${tcard("nettbl", "Networking", s?.let { factRowsHtml(it, NET_KEYS) })}
+${tcard("proftbl", "ha-paneld profile", s?.let { factRowsHtml(it, PROF_KEYS) }, post = profNote)}
+${tcard("captbl", "Capabilities", if (s == null) null else capRowsHtml(), post = capNote)}
 <div class="card"><h2>Responsiveness <small id="smhdr"></small></h2>
 <canvas id="smchart" width="600" height="130" style="height:130px"></canvas>
 <div class="leg">dashboard main-thread CPU (% of one core) ·
@@ -1073,7 +1160,10 @@ report of this panel's hardware, firmware, SELinux, su and node probes for bug r
  <button type="button" class="pbtn" onclick="inspStart()">Enable</button>
  <button type="button" class="pbtn" onclick="inspStop()">Stop</button></div>
 <p class="note" id="insthint"></p></div>
-${dashboardValueCards()}
+${tcard("livetbl", "Live state", if (s == null) null else liveRowsHtml(), pre = """<p class="note">What Home Assistant's control entities currently show.</p>""")}
+${tcard("behavtbl", "Behaviour", s?.let { behaviourRowsHtml(it) })}
+${tcard("disptbl", "Display & tuning", s?.let { displayRowsHtml(it) })}
+${tcard("updtbl", "Updates", s?.let { updatesRowsHtml(it) })}
 </div>
 <p class="note" style="text-align:center;margin-top:18px"><a href="/api" style="color:#9cf">REST API explorer</a>
  · <a href="/api/v1/diag" target="_blank" style="color:#9cf">diagnostics</a></p>
@@ -1139,7 +1229,7 @@ ${dashboardValueCards()}
     }
 
     private fun tameCardHtml(): String {
-        if (!Su.available() && !HelperClient.available()) return ""   // no root/daemon → taming can't act
+        if (!rootOk()) return ""   // no root/daemon → taming can't act
         // The card shows what's currently TAMED (the blocklist); discovery lives in the Find-a-package
         // picker. So a tamed package always has a visible Re-enable here.
         val cands = runCatching {
@@ -1173,9 +1263,10 @@ fetch('/api/v1/tame/suggest').then(function(r){return r.text()}).then(function(t
 
     /** Display-sizing card (density + text scale). Empty when su isn't reachable (no control). */
     private fun displayCardHtml(): String {
-        val cur = density.current() ?: return ""
-        val nat = density.native()
-        val fs = density.fontScale()
+        // Through the shared density cache — these are three `wm`/settings su round-trips, and they
+        // were most of the Configure tab's multi-second render.
+        val (cur0, nat, fs) = densityCache.get()
+        val cur = cur0 ?: return ""
         val rec = if (recommendedDensity != null || recommendedFontScale != null)
             """ <button type="submit" name="action" value="rec" formnovalidate>HA-optimised</button>""" else ""
         return """<div class="card" id="cfg-display"><h2>Display sizing <small style="color:#d9a528">· experimental (R&amp;D)</small></h2>
@@ -1291,6 +1382,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             }
             applySetting(key, value)
         }
+        snapInvalidate()
         onReconfigure()
         if (call.request.headers["Accept"]?.contains("application/json") == true) {
             call.respondText(configJson(), ContentType.Application.Json)
@@ -1489,6 +1581,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
         }
         editor.commit()
         for ((k, v) in live) applySetting(k, v)
+        snapInvalidate()
         onReconfigure()
     }
 
@@ -1562,6 +1655,12 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
 
     companion object {
         private const val TAG = "ha-paneld/http"
+
+        // Probe-cache TTLs: the dashboard renders from the snapshot, so these bound both staleness
+        // and how often the su round-trips can run. Density/su flap even less than the rest.
+        private const val SNAP_TTL_MS = 15_000L
+        private const val DENSITY_TTL_MS = 30_000L
+        private const val SU_TTL_MS = 60_000L
 
         // Dashboard fact rows that are BACKED BY A SETTING → the Configure anchor the ✎ marker
         // deep-links to. Facts absent here are static (hardware/runtime) and get no marker.

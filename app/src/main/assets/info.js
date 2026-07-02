@@ -175,3 +175,26 @@ document.addEventListener('click',function(e){var s=e.target.closest&&e.target.c
 
 // Display-card diagonal: click to toggle inches <-> cm (W×H is in the title tooltip).
 function diagToggle(el){el.textContent=(el.textContent.indexOf('cm')<0)?el.dataset.cm:el.dataset['in'];}
+
+// Dashboard hydration: the shell now renders instantly (the probe-backed values used to block the
+// whole page ~12s on PX30). When the server marked the page stale/cold (body data-hydrate="1"),
+// fetch /api/v1/info — ready-to-inject HTML fragments rendered by the same Kotlin as the warm
+// server render — and fill the facts/value/capabilities tables, banners, controls and screenshot.
+(function(){
+ if(document.body.getAttribute('data-hydrate')!=='1')return;
+ function apply(d){
+  var bz=document.getElementById('bannerzone');if(bz&&typeof d.banners==='string')bz.innerHTML=d.banners;
+  Object.keys(d.cards||{}).forEach(function(id){var el=document.getElementById(id);if(!el)return;
+   var card=el.closest('.card');
+   if(d.cards[id]&&d.cards[id].trim()){el.innerHTML=d.cards[id];if(card)card.style.display='';}
+   else if(card){card.style.display='none';}});          // probe says this card has nothing to show
+  var cz=document.getElementById('ctlzone');if(cz&&d.controls)cz.innerHTML=d.controls;
+  var sc=document.getElementById('shotcard');
+  if(sc){if(d.shot){var im=sc.querySelector('img');
+    if(im&&!im.getAttribute('src'))im.src=im.getAttribute('data-src');sc.style.display='';}
+   else{sc.style.display='none';}}
+ }
+ function hydrate(tries){fetch('/api/v1/info').then(function(r){return r.json();}).then(apply)
+  .catch(function(){if(tries>0)setTimeout(function(){hydrate(tries-1);},3000);});}
+ hydrate(10);
+})();
