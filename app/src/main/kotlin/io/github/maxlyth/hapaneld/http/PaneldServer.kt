@@ -628,11 +628,13 @@ class PaneldServer(
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>ha-paneld · ${esc(title)} · ${esc(config.panelId)}</title>
 <link rel="icon" href="/icon.svg">
-<link rel="stylesheet" href="/info.css"></head><body><div class="wrap">
+<link rel="stylesheet" href="/info.css"></head><body data-build="${buildToken()}"><div class="wrap">
 <div class="hdr"><h1><img src="/icon.svg" class="logo" alt="">ha-paneld <small>· ${esc(config.panelId)}</small></h1>
  <span style="display:flex;gap:10px;align-items:center">$haLink</span></div>
 ${navBar(active)}
+<div id="verbar" class="setup" style="display:none">⟳ A newer ha-paneld is installed — <a href="#" onclick="location.reload();return false">reload</a> to refresh this page.</div>
 $body
+<script src="/assets/buildwatch.js"></script>
 </div></body></html>"""
     }
 
@@ -1054,6 +1056,7 @@ ${dashboardValueCards()}
 <p class="note" style="text-align:center;margin-top:18px"><a href="/api" style="color:#9cf">REST API explorer</a>
  · <a href="/api/v1/diag" target="_blank" style="color:#9cf">diagnostics</a></p>
 <script src="/info.js"></script>
+<script src="/assets/buildwatch.js"></script>
 </div></body></html>"""
     }
 

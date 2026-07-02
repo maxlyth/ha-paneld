@@ -157,13 +157,7 @@ insp();
 // Layout is pure CSS multi-column masonry now (.cards{columns:400px} in info.css) — the browser packs and
 // height-balances the cards. No JS column packing (the old greedy mis-balanced on placeholder heights).
 
-// Build watch: /health carries a per-INSTALL build token (changes on every (re)install, even a same-
-// version dev re-spin). If it changes while this page is open, the app was updated → AUTO-RELOAD to pull
-// fresh html/css/js (assets are no-cache). Exception: if the user is mid-edit in a field, show the reload
-// banner instead so typed input isn't lost. Baseline = <body data-build>.
-(function(){var LB=(document.body.getAttribute('data-build')||'');
- function vc(){fetch('/health').then(function(r){return r.text();}).then(function(t){var m=t.match(/build=(\S+)/);if(!m||!LB||m[1]===LB)return;if(document.querySelector('input:focus,textarea:focus')){var b=document.getElementById('verbar');if(b)b.style.display='';}else{location.reload();}}).catch(function(){});}
- setInterval(vc,10000);vc();})();
+// Build watch moved to the shared /assets/buildwatch.js (loaded by EVERY page, not just the dashboard).
 
 // Controls card actions: POST /action a=<back|recents|home|reboot|volup|voldn>. Reboot confirms first.
 function act(a){if(a==='reboot'&&!confirm('Reboot this panel now?'))return;
