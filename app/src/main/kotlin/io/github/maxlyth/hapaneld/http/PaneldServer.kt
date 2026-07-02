@@ -872,6 +872,10 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
     private fun autoHints(): Map<String, String> = buildMap {
         system.resolveDashboard("").takeIf { it.isNotBlank() }?.let { put("dashboard_package", it) }
         system.resolvedLauncher("")?.let { put("launcher_package", it) }
+        // Unset home_dashboard = reload/boot land on whatever HA's frontend picks (the device-level
+        // "set as default on this device" if ever used, else the HA user's profile default). The
+        // Companion has no config of its own for this, so there's nothing more specific to read.
+        put("home_dashboard", "HA default view")
     }
 
     /** One read-only dashboard row for a registry setting: label → current value + the edit pencil.
