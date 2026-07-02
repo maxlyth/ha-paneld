@@ -67,12 +67,18 @@
         "responses": { "200": { "description": "{ok:true}" } } }
     },
     "/api/v1/perf": { "get": { "summary": "Live CPU/GPU/RAM, CPU clock, temperature, top processes, responsiveness + history", "tags": ["performance"], "responses": { "200": { "description": "perf JSON" } } } },
+    "/api/v1/sensors": { "get": { "summary": "Live sensor readings (light, proximity, temperature, humidity) plus volume percent and raw screen brightness — independent of HA exposure settings", "tags": ["sensors"], "responses": { "200": { "description": "live values JSON" } } } },
     "/api/v1/instrumentation": {
       "post": { "summary": "Enable/disable the performance sampler (persisted)", "tags": ["performance"],
         "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "required": ["enabled"], "properties": { "enabled": { "type": "boolean" } } } } } },
         "responses": { "200": { "description": "{\"enabled\":bool}" }, "400": { "description": "bad-value" } } }
     },
     "/api/v1/diag": { "get": { "summary": "Plain-text diagnostics dump (hardware, firmware, SELinux, su/node probes)", "tags": ["status"], "responses": { "200": { "description": "text/plain report" } } } },
+    "/api/v1/logs/stream": {
+      "get": { "summary": "Live log tail as Server-Sent Events (redacted logcat lines; capture stops when the last client disconnects)", "tags": ["status"],
+        "parameters": [{ "name": "source", "in": "query", "schema": { "type": "string", "enum": ["app", "system"], "default": "app" }, "description": "app = ha-paneld's own process log (no root); system = full device logcat (root panels only)" }],
+        "responses": { "200": { "description": "text/event-stream of log lines" }, "503": { "description": "system source requested but the panel has no root" } } }
+    },
     "/api/v1/sensortrace": {
       "get": { "summary": "Debug sensor-trace ring buffer (instrumentation-gated)", "tags": ["sensors"],
         "parameters": [{ "name": "format", "in": "query", "schema": { "type": "string", "enum": ["csv", "json"] } }],

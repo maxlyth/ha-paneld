@@ -21,6 +21,7 @@ import io.github.maxlyth.hapaneld.control.TameController
 import io.github.maxlyth.hapaneld.control.VolumeController
 import io.github.maxlyth.hapaneld.device.TameCandidate
 import io.github.maxlyth.hapaneld.input.PanelAccessibilityService
+import io.github.maxlyth.hapaneld.logship.LogCapture
 import io.github.maxlyth.hapaneld.sensors.SensorReporter
 import io.github.maxlyth.hapaneld.util.HelperClient
 import io.github.maxlyth.hapaneld.util.UpdateChecker
@@ -37,12 +38,18 @@ import io.ktor.server.request.receiveText
 import io.ktor.server.request.uri
 import io.ktor.server.response.respondBytes
 import io.ktor.server.response.respondText
+import io.ktor.server.response.respondTextWriter
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 
 /**
@@ -88,6 +95,10 @@ class PaneldServer(
     // picker's "Recommended" group).
     private val tame: TameController,
     private val tameProfileCandidates: List<TameCandidate> = emptyList(),
+    // Live log viewer sources (Logs tab / SSE stream). App = own-process logcat (no root); system =
+    // full logcat via su, gated on Su.available() at request time. Null → the viewer 404s.
+    private val logApp: LogCapture? = null,
+    private val logSystem: LogCapture? = null,
 ) {
     // Per-INSTALL build token (changes on every (re)install, not just a version bump) so an open info
     // page can auto-reload after the app is updated — even a same-version dev re-spin. /health carries it.
@@ -202,6 +213,7 @@ class PaneldServer(
                 get("/test") { call.respondText(page("test", "Test", testBody()), ContentType.Text.Html) }
                 get("/install") { call.respondText(page("install", "Install", installBody()), ContentType.Text.Html) }
                 get("/fleet") { call.respondText(page("fleet", "Fleet", fleetBody()), ContentType.Text.Html) }
+                get("/logs") { call.respondText(page("logs", "Logs", logsBody()), ContentType.Text.Html) }
                 // Self-contained REST API explorer (no Swagger-UI CDN bundle) + the OpenAPI spec it
                 // renders — the spec also imports into Swagger/Postman for fleet tooling.
                 get("/api") {
@@ -255,6 +267,9 @@ class PaneldServer(
                         )
                     }
                     get("/diag") { call.respondText(DiagReader.dump(appContext, info()), ContentType.Text.Plain) }
+                    // Live log tail as Server-Sent Events (?source=app|system). Feeds the Logs tab;
+                    // also curl-able (`curl -N .../api/v1/logs/stream`). Lines are pre-redacted.
+                    get("/logs/stream") { handleLogStream(call) }
                     // Health + capabilities as JSON (warnings as ready-to-render HTML) — feeds every
                     // variant's Install/health section client-side.
                     get("/status") { call.respondText(statusJson(), ContentType.Application.Json) }
@@ -544,6 +559,51 @@ class PaneldServer(
         }
     }
 
+    // ---- live log stream (SSE) ----
+
+    /** Tail a [LogCapture] to the client as Server-Sent Events. Backlog first (ring snapshot while
+     *  capture is already running for the shipper / another viewer, else a one-shot `logcat -d`
+     *  dump), then live lines. A per-connection drop-oldest channel means a stalled browser can
+     *  never back-pressure the capture; a 15s `: ping` comment detects dead peers so the
+     *  subscription (and with it the logcat subprocess) is released. */
+    private suspend fun handleLogStream(call: ApplicationCall) {
+        val cap = when (val src = call.request.queryParameters["source"] ?: "app") {
+            "app" -> logApp
+            "system" -> if (Su.available()) logSystem else {
+                call.respondText("system log needs root\n", status = HttpStatusCode.ServiceUnavailable)
+                return
+            }
+            else -> {
+                call.respondText("unknown source '$src' (app|system)\n", status = HttpStatusCode.BadRequest)
+                return
+            }
+        }
+        if (cap == null) {
+            call.respondText("log viewer unavailable\n", status = HttpStatusCode.NotFound)
+            return
+        }
+        // Backlog BEFORE subscribing: a few ms of lines can fall in the gap, which beats the visible
+        // duplicates the opposite order produces (the dump overlaps the live stream's first lines).
+        val backlog = withContext(Dispatchers.IO) { cap.snapshot().ifEmpty { cap.dump() } }
+        val chan = Channel<String>(capacity = 512, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+        val sub = cap.subscribe { chan.trySend(it) }
+        try {
+            call.response.headers.append("Cache-Control", "no-cache")
+            call.respondTextWriter(ContentType.Text.EventStream) {
+                for (line in backlog) write("data: $line\n\n")
+                flush()
+                while (true) {
+                    val line = withTimeoutOrNull(15_000) { chan.receive() }
+                    write(if (line == null) ": ping\n\n" else "data: $line\n\n")
+                    flush()
+                }
+            }
+        } finally {
+            runCatching { sub.close() }
+            chan.close()
+        }
+    }
+
     // ---- tabbed multi-page shell ----
 
     /** The shared tab bar; [active] highlights the current page. */
@@ -556,6 +616,7 @@ class PaneldServer(
             tab("test", "/test", "Test") +
             tab("install", "/install", "Install") +
             tab("fleet", "/fleet", "Fleet") +
+            tab("logs", "/logs", "Logs") +
             """<a href="/api">API</a></div>"""
     }
 
@@ -677,6 +738,33 @@ $caps
 <p class="note">Export the full configuration bundle for safe-keeping, or to clone settings to another panel (Configure → Import).</p>
 <a class="pbtn" href="/api/v1/config/export">⭳ Export config bundle</a></div>
 $allGood</div>"""
+    }
+
+    /** Logs tab — live log tail over SSE. App source always; system source needs root (gated live). */
+    private fun logsBody(): String {
+        val sysOk = Su.available()
+        val sysBtn = if (sysOk) """<button id="lg-src-system" onclick="lgSource('system')">System</button>"""
+        else """<button id="lg-src-system" disabled title="Full system logcat needs root — unavailable on this panel">System</button>"""
+        return """
+<div class="cards">
+<div class="card" style="flex:1 1 100%"><h2>Live logs <small id="lg-state" class="muted">· connecting…</small></h2>
+<div class="modebar" style="flex-wrap:wrap;gap:8px">
+ <span class="seg"><button id="lg-src-app" class="on" onclick="lgSource('app')">App</button>$sysBtn</span>
+ <select id="lg-level" onchange="lgRender()" title="Minimum level">
+  <option value="V" selected>Verbose+</option><option value="D">Debug+</option><option value="I">Info+</option>
+  <option value="W">Warning+</option><option value="E">Error+</option>
+ </select>
+ <input id="lg-filter" placeholder="filter text…" oninput="lgRender()" style="flex:1;min-width:120px">
+ <button id="lg-pause" class="pbtn" onclick="lgPause()">⏸ Pause</button>
+ <button class="pbtn" onclick="lgClear()">Clear</button>
+ <label class="muted" style="display:flex;align-items:center;gap:4px"><input type="checkbox" id="lg-follow" checked> Follow</label>
+</div>
+<div id="lg-out" class="logview" onscroll="lgScrolled()"></div>
+<p class="note">App = ha-paneld's own process log (no root needed). System = the full device logcat (root).
+Tokens/passwords are redacted before display; the stream is LAN-only and stops when this page closes.
+Raw stream: <code>curl -N http://&lt;panel&gt;:${config.httpPort}/api/v1/logs/stream</code></p></div>
+</div>
+<script src="/assets/logs.js"></script>"""
     }
 
     /** Fleet tab — placeholder (discovery hooks exist; the roster lands later). */

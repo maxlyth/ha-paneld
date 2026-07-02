@@ -26,24 +26,26 @@ import java.util.concurrent.TimeUnit
  * per-panel `adb logcat`.
  *
  * OFF by default and inert unless a sink host is configured ([Config.logShipActive]); LAN-only by
- * intent; every line is [redact]ed for tokens / passwords / URL secrets before it leaves the device.
- * No on-panel UI — configured via the HTTP `/config` endpoint (provision.sh `--log-*` flags).
+ * intent; every line is [LogCapture.redact]ed for tokens / passwords / URL secrets before it leaves
+ * the device. Configured via the HTTP `/config` endpoint (provision.sh `--log-*` flags) or Configure tab.
  *
  * Two transports, selected by `log_ship_protocol` — both are plain, widely-supported wire formats, so
  * any collector with a syslog or HTTP/NDJSON input can ingest them:
  *  - `syslog` (default): newline-delimited RFC5424 frames over a persistent TCP socket.
  *  - `http`: newline-delimited JSON (NDJSON) POSTed in batches to the collector's HTTP-ingest endpoint.
  *
- * Capture is a long-lived `logcat` subprocess (streaming, own-uid lines only). Lines pass through a
- * bounded queue, so a slow/unreachable sink applies backpressure by dropping the OLDEST lines — best-
- * effort telemetry must never OOM or block the panel. The sink connection reconnects with backoff.
+ * Capture comes from the shared [LogCapture] (one own-uid `logcat` subprocess + one redaction pass,
+ * shared with the `:8888` live log viewer). Lines pass through a bounded queue, so a slow/unreachable
+ * sink applies backpressure by dropping the OLDEST lines — best-effort telemetry must never OOM or
+ * block the panel. The sink connection reconnects with backoff.
  */
 class LogShipper(
     private val config: Config,
     private val scope: CoroutineScope,
+    private val capture: LogCapture,
 ) {
     @Volatile private var job: Job? = null
-    @Volatile private var captureProc: Process? = null
+    @Volatile private var captureSub: AutoCloseable? = null
 
     // Bounded; full => drop oldest (telemetry is best-effort and never back-pressures the app).
     private val queue = ArrayBlockingQueue<String>(QUEUE_CAP)
@@ -71,10 +73,8 @@ class LogShipper(
         runPort = config.logShipPort
         runProto = config.logShipProtocol.ifBlank { "syslog" }
         sent = 0; dropped = 0; connected = false; lastError = null
-        job = scope.launch(Dispatchers.IO) {
-            launch { captureLoop() }
-            launch { shipLoop() }
-        }
+        captureSub = capture.subscribe { offer(it) }   // lines arrive already redacted
+        job = scope.launch(Dispatchers.IO) { shipLoop() }
         Log.i(TAG, "started → $runProto://$runHost:$runPort")
     }
 
@@ -92,8 +92,8 @@ class LogShipper(
     fun stop() {
         job?.cancel()
         job = null
-        runCatching { captureProc?.destroy() }
-        captureProc = null
+        runCatching { captureSub?.close() }
+        captureSub = null
         queue.clear()
         connected = false
     }
@@ -105,32 +105,6 @@ class LogShipper(
         else -> "$runProto://$runHost:$runPort · " +
             (if (connected) "connected" else "disconnected${lastError?.let { " ($it)" } ?: ""}") +
             " · sent=$sent${if (dropped > 0) " dropped=$dropped" else ""}"
-    }
-
-    // --- capture: stream our own process logcat into the queue --------------------------------------
-
-    private suspend fun CoroutineScope.captureLoop() {
-        while (isActive) {
-            try {
-                // Own-uid logcat — no READ_LOGS / root needed. threadtime format, all priorities.
-                // `-T 1` starts at "now" so a restart doesn't replay the whole ring buffer.
-                val proc = ProcessBuilder("logcat", "-v", "threadtime", "-T", "1", "*:V")
-                    .redirectErrorStream(true)
-                    .start()
-                captureProc = proc
-                proc.inputStream.bufferedReader().use { reader ->
-                    while (isActive) {
-                        val line = reader.readLine() ?: break
-                        offer(redact(line))
-                    }
-                }
-            } catch (e: Exception) {
-                lastError = e.message ?: e.javaClass.simpleName
-                Log.w(TAG, "capture restart: ${e.message}")
-            }
-            captureProc = null
-            if (isActive) delay(CAPTURE_BACKOFF_MS)
-        }
     }
 
     /** Bounded, drop-oldest: never block the capture thread on a slow sink. */
@@ -254,7 +228,6 @@ class LogShipper(
         private const val QUEUE_CAP = 4000          // ~ a few MB worst case; drop-oldest beyond this
         private const val BATCH_MAX = 200           // HTTP: events per POST
         private const val POLL_SECONDS = 5L         // queue wait before re-checking liveness
-        private const val CAPTURE_BACKOFF_MS = 2_000L
         private const val SINK_BACKOFF_MS = 5_000L
         private const val HTTP_TIMEOUT_MS = 5_000
 
@@ -268,26 +241,6 @@ class LogShipper(
         // threadtime line: "MM-DD HH:MM:SS.mmm  PID  TID L TAG: message" — capture the level char L.
         private val LEVEL_RE =
             Regex("""^\d\d-\d\d \d\d:\d\d:\d\d\.\d{3}\s+\d+\s+\d+\s+([VDIWEF])\s""")
-
-        // Conservative redaction — strip the obvious secret shapes before a line leaves the device.
-        private val REDACTIONS: List<Pair<Regex, String>> = listOf(
-            Regex("""(?i)(authorization:\s*bearer\s+)\S+""") to "$1***",
-            // Value bounded by [^\s&]+ (not \S+) so it stops at the next URL query param / whitespace,
-            // redacting only the secret rather than eating the rest of the line.
-            Regex("""(?i)\b(password|passwd|pwd|secret|api[_-]?key|access[_-]?token|token)(["'=:\s]+)[^\s&]+""")
-                to "$1$2***",
-            // Home Assistant long-lived tokens / JWTs.
-            Regex("""\beyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{6,}""") to "***jwt***",
-            // Secrets carried in URL query strings.
-            Regex("""(?i)([?&](?:token|auth|access_token|api_key|key|password)=)[^&\s"]+""") to "$1***",
-        )
-
-        /** Apply [REDACTIONS] in sequence. Public for unit testing. */
-        fun redact(line: String): String {
-            var s = line
-            for ((re, repl) in REDACTIONS) s = re.replace(s, repl)
-            return s
-        }
 
         private fun jsonStr(v: String): String {
             val sb = StringBuilder(v.length + 2)

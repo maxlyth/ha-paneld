@@ -119,3 +119,11 @@ body.revealed input.secret,input.secret:focus,input.secret.shown{color:#eee;text
 .cfglink:hover{color:#9cf;opacity:1}
 @keyframes cfgflash{0%{background:#2557a7}100%{background:transparent}}
 .flash{animation:cfgflash 1.6s ease-out;border-radius:8px}
+
+/* Logs tab — live tail view. Monospace, bounded height, level-coloured lines. */
+.logview{height:60vh;overflow-y:auto;background:#0d0d0d;border:1px solid #2a2a2a;border-radius:8px;padding:8px 10px;font:.78rem/1.45 ui-monospace,Menlo,Consolas,monospace;white-space:pre-wrap;word-break:break-all}
+.lg-line{min-height:1em}
+.lg-V,.lg-D{color:#777}
+.lg-I{color:#cfcfcf}
+.lg-W{color:#f5c451}
+.lg-E,.lg-F{color:#f07868}

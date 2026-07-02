@@ -39,6 +39,7 @@ import io.github.maxlyth.hapaneld.hardware.SocketLedController
 import io.github.maxlyth.hapaneld.config.Capabilities
 import io.github.maxlyth.hapaneld.http.PaneldServer
 import io.github.maxlyth.hapaneld.http.PanelInfo
+import io.github.maxlyth.hapaneld.logship.LogCapture
 import io.github.maxlyth.hapaneld.logship.LogShipper
 import io.github.maxlyth.hapaneld.sensors.SensorReporter
 import io.github.maxlyth.hapaneld.util.localIpv4
@@ -81,6 +82,8 @@ class PaneldService : Service() {
     @Volatile private var mqttWatchdogAlive = false
     private lateinit var sensors: SensorReporter
     private lateinit var logShipper: LogShipper
+    private lateinit var logCaptureApp: LogCapture
+    private lateinit var logCaptureSystem: LogCapture
 
     // Controllers are fields so the MQTT bridge can be rebuilt on a panel_id change.
     private lateinit var brightness: BrightnessController
@@ -113,9 +116,14 @@ class PaneldService : Service() {
         // each re-detecting). The canonical per-platform silo for paths/quirks; see device/.
         profile = DeviceProfile.detect()
         config.attachProfile(profile)   // supplies per-panel manufacturer/model defaults
+        // Shared demand-driven logcat captures (one subprocess + one redaction pass each): the app
+        // source feeds both remote shipping and the :8888 live log viewer; the system source (su)
+        // only the viewer. Idle-stopped — no subprocess runs until something subscribes.
+        logCaptureApp = LogCapture.app(scope)
+        logCaptureSystem = LogCapture.system(scope)
         // Optional remote log shipping (off + inert unless a sink host is configured). Started in
         // onStartCommand alongside the other network subsystems; restarted on a /config change.
-        logShipper = LogShipper(config, scope)
+        logShipper = LogShipper(config, scope, logCaptureApp)
 
         brightness = BrightnessController(this)
         brightness.applyPreventIdleDim(config.preventIdleDim, config)
@@ -181,6 +189,8 @@ class PaneldService : Service() {
             recommendedFontScale = profile.recommendedFontScale,
             // Vendor taming: the controller and this panel's curated recommendations (picker group 1).
             tame = tame, tameProfileCandidates = profile.tameVendorCandidates,
+            // Live log viewer sources (Logs tab). System is gated on Su.available() per request.
+            logApp = logCaptureApp, logSystem = logCaptureSystem,
         )
         // Stream daemon-instrumented hardware buttons (e.g. WF1589T power key) into the same event
         // entity as the a11y key capture. No-op on panels with no evdev buttons.
