@@ -173,6 +173,20 @@ class PaneldServer(
                     call.respondText("forbidden\n", status = HttpStatusCode.Forbidden)
                     return@intercept finish()
                 }
+                // CSRF guard: a LAN browser on a malicious page must not be able to silently drive a
+                // state-changing endpoint (e.g. POST /config → MQTT takeover). Cross-origin writes carry
+                // a mismatched Origin/Referer and are refused; same-origin UI fetches and header-less API
+                // clients (curl / HA rest_command) pass. See OriginGuard.
+                if (!OriginGuard.allowed(
+                        call.request.origin.method.value,
+                        call.request.headers["Origin"],
+                        call.request.headers["Referer"],
+                        call.request.headers["Host"],
+                    )
+                ) {
+                    call.respondText("cross-origin refused\n", status = HttpStatusCode.Forbidden)
+                    return@intercept finish()
+                }
             }
             routing {
                 get("/") {
