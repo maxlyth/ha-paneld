@@ -44,14 +44,52 @@ class Config(context: Context) {
         else slug(Build.MODEL) + "_" + androidId.takeLast(4).ifBlank { "panel" }
     }
 
+    // --- atomic batch writes -----------------------------------------------------------------------
+    // Setters normally each fire their own async prefs.edit().apply(). Inside [applyBatch] they instead
+    // stage into one shared editor, committed once, so a multi-field write (e.g. the /config form apply)
+    // is all-or-nothing and durable before we return — a power loss can't leave a half-applied config.
+    @Volatile private var batchEditor: SharedPreferences.Editor? = null
+    @Volatile private var batchThread: Thread? = null
+
+    /** Run [block] with every [edit]-based setter write staged into one editor and committed atomically
+     *  when it returns. Confined to the calling thread: a setter fired on another thread during the batch
+     *  takes its normal immediate-apply path (SharedPreferences.Editor isn't thread-safe). Non-nesting;
+     *  the /config apply that uses it is single-threaded per request. */
+    @Synchronized
+    fun applyBatch(block: () -> Unit) {
+        val ed = prefs.edit()
+        batchEditor = ed
+        batchThread = Thread.currentThread()
+        try {
+            block()
+        } finally {
+            batchEditor = null
+            batchThread = null
+        }
+        ed.commit()
+    }
+
+    /** Write helper: stage into the active [applyBatch] editor (same thread) or, outside a batch, apply
+     *  immediately exactly as before. Setters call this instead of prefs.edit()…apply() so they compose. */
+    private inline fun edit(block: SharedPreferences.Editor.() -> Unit) {
+        val b = batchEditor
+        if (b != null && batchThread === Thread.currentThread()) {
+            b.block()
+        } else {
+            val e = prefs.edit()
+            e.block()
+            e.apply()
+        }
+    }
+
     /** Persist a new panel id (used by the HTTP config page). */
     fun setPanelId(id: String) {
         // The panel_id is the HA device identifier, so only an ACTUAL change invalidates the cached device
         // link. The config form resubmits panel_id on every save (unchanged), so clearing unconditionally
         // would drop the link on every save.
         val changed = id != prefs.getString("panel_id", null)
-        prefs.edit().putString("panel_id", id).apply()
-        if (changed) prefs.edit().remove("ha_device_url").apply()
+        edit { putString("panel_id", id) }
+        if (changed) edit { remove("ha_device_url") }
     }
 
     /** Cached HA device-settings URL (resolved once via HaLink when the MQTT creds are a valid HA user);
@@ -68,7 +106,7 @@ class Config(context: Context) {
     val friendlyName: String
         get() = prefs.getString("friendly_name", null)?.takeIf { it.isNotBlank() } ?: deviceName()
     fun setFriendlyName(name: String) {
-        prefs.edit().putString("friendly_name", name).apply()
+        edit { putString("friendly_name", name) }
     }
 
     /** Stable per-device id (Settings.Secure.ANDROID_ID); used as the HA device serial_number. */
@@ -82,24 +120,23 @@ class Config(context: Context) {
 
     /** Persist MQTT settings (used by the HTTP config page). A null password leaves it unchanged. */
     fun setMqtt(broker: String, user: String, password: String?) {
-        prefs.edit().apply {
+        edit {
             putString("mqtt_broker", broker)
             putString("mqtt_user", user)
             if (password != null) putString("mqtt_password", password)
-            apply()
         }
     }
 
     /** App package whose force-stop+relaunch is the dashboard "reload". Empty => reload disabled. */
     val dashboardPackage: String get() = prefs.getString("dashboard_package", "")!!
     fun setDashboardPackage(pkg: String) {
-        prefs.edit().putString("dashboard_package", pkg).apply()
+        edit { putString("dashboard_package", pkg) }
     }
 
     /** Launcher package the Launcher button brings forward. Empty => auto-pick a non-default home. */
     val launcherPackage: String get() = prefs.getString("launcher_package", "")!!
     fun setLauncherPackage(pkg: String) {
-        prefs.edit().putString("launcher_package", pkg).apply()
+        edit { putString("launcher_package", pkg) }
     }
 
     /**
@@ -116,7 +153,7 @@ class Config(context: Context) {
     /** Raw user-set value (whitespace/comma-separated) — for the Configure form's input value. */
     val tameVendorPackagesRaw: String get() = prefs.getString("tame_vendor_packages", "")!!
     fun setTameVendorPackages(raw: String) {
-        prefs.edit().putString("tame_vendor_packages", raw.trim()).apply()
+        edit { putString("tame_vendor_packages", raw.trim()) }
     }
 
     /** Master switch for the (instrumentation-only) performance sampler. Default on, but page-view
@@ -146,7 +183,7 @@ class Config(context: Context) {
     // keepalive freeze and the broker connection dies half-open. Toggle off only for a battery panel.
     val keepAwake: Boolean get() = prefs.getBoolean("keep_awake", true)
     fun setKeepAwake(on: Boolean) {
-        prefs.edit().putBoolean("keep_awake", on).apply()
+        edit { putBoolean("keep_awake", on) }
     }
 
     // App watchdog: poll the dashboard app and self-heal it — relaunch if its process dies, and return
@@ -235,7 +272,7 @@ class Config(context: Context) {
     // Silence the firmware startup chime by zeroing the ring/notification volume via Settings.System.
     // Default off — existing panels already have their own volume state; only opt in deliberately.
     val silenceBootChime: Boolean get() = prefs.getBoolean("silence_boot_chime", false)
-    fun setSilenceBootChime(on: Boolean) { prefs.edit().putBoolean("silence_boot_chime", on).apply() }
+    fun setSilenceBootChime(on: Boolean) { edit { putBoolean("silence_boot_chime", on) } }
 
     // --- remote log shipping (opt-in) --------------------------------------------------------------
     // Forward ha-paneld's OWN process logcat (its Log.* output + the Ktor/HiveMQ SLF4J library logs,
@@ -253,12 +290,11 @@ class Config(context: Context) {
     /** True only when shipping is enabled AND a sink host is configured. */
     val logShipActive: Boolean get() = logShipEnabled && logShipHost.isNotBlank()
     fun setLogShipping(enabled: Boolean, host: String, port: Int, protocol: String) {
-        prefs.edit().apply {
+        edit {
             putBoolean("log_ship_enabled", enabled)
             putString("log_ship_host", host.trim())
             putInt("log_ship_port", port)
             putString("log_ship_protocol", protocol.trim().lowercase(Locale.ROOT).ifBlank { "syslog" })
-            apply()
         }
     }
     // Desired Zigbee-router state, persisted so the gateway can be auto-started on boot when nothing
@@ -318,7 +354,7 @@ class Config(context: Context) {
         listOf(Build.MODEL, Build.DEVICE, Build.PRODUCT).firstOrNull { !it.isNullOrBlank() } ?: "panel"
 
     fun setHardware(manufacturer: String, model: String) {
-        prefs.edit().putString("manufacturer", manufacturer).putString("model", model).apply()
+        edit { putString("manufacturer", manufacturer); putString("model", model) }
     }
 
     // --- proximity calibration (raw values stay on-device & in the HTTP UI; only the derived
@@ -458,7 +494,7 @@ class Config(context: Context) {
 
     /** Whether an HA-capable setting is currently exposed to Home Assistant (per-panel override). */
     fun haExposed(key: String, default: Boolean = true): Boolean = prefs.getBoolean("ha_expose_$key", default)
-    fun setHaExposed(key: String, on: Boolean) { prefs.edit().putBoolean("ha_expose_$key", on).apply() }
+    fun setHaExposed(key: String, on: Boolean) { edit { putBoolean("ha_expose_$key", on) } }
 
     private fun slug(s: String): String =
         s.lowercase(Locale.ROOT)
