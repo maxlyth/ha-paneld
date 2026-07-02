@@ -863,16 +863,23 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
     private fun cfgIcon(anchor: String): String =
         """ <a class="cfglink" href="/configure#$anchor" title="Edit on the Configure tab" aria-label="Edit">✎</a>"""
 
+    /** What the "auto" (blank) package settings actually resolved to — shown as `auto (pkg)` in the
+     *  dashboard rows and as the Configure-field placeholder, so "auto" is never a mystery. */
+    private fun autoHints(): Map<String, String> = buildMap {
+        system.resolveDashboard("").takeIf { it.isNotBlank() }?.let { put("dashboard_package", it) }
+        system.resolvedLauncher("")?.let { put("launcher_package", it) }
+    }
+
     /** One read-only dashboard row for a registry setting: label → current value + the edit pencil.
      *  Null when the setting doesn't exist on this panel (capability-gated). */
-    private fun settingRowHtml(key: String, live: Map<String, String>, caps: Capabilities): String? {
+    private fun settingRowHtml(key: String, live: Map<String, String>, caps: Capabilities, hints: Map<String, String> = emptyMap()): String? {
         val spec = SettingsRegistry.spec(key) ?: return null
         if (!spec.availableWhen(caps)) return null
         val raw = effectiveValue(spec, live)
         val shown = when {
             spec.secret -> if (raw.isNotEmpty()) "set" else "—"
             spec.type == SettingType.BOOL -> if (raw.toBoolean()) "on" else "off"
-            raw.isBlank() -> "—"
+            raw.isBlank() -> hints[key]?.let { "auto ($it)" } ?: "—"
             else -> raw
         }
         return """<tr><th>${esc(spec.label)}</th><td>${esc(shown)}${cfgIcon("cfg-$key")}</td></tr>"""
@@ -920,6 +927,15 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
     private fun snapInvalidate() {
         snapCache.invalidate()
         densityCache.invalidate()
+    }
+
+    /** Last-known snapshot with a background refresh when stale — never blocks once built, so the
+     *  Configure endpoints (form values, schema capabilities, Display card) render instantly like
+     *  the dashboard. Blocks only before the start-up pre-warm has ever completed. */
+    private fun snapStaleOk(): Snap {
+        val p = snapCache.peek() ?: return snapCache.get()
+        if (snapCache.ageMs() > SNAP_TTL_MS) scope.launch(Dispatchers.IO) { runCatching { snapCache.get() } }
+        return p
     }
 
     private val NET_KEYS = listOf("Local IP", "Local IPv6", "HTTP port", "MQTT", "mDNS", "Network ADB")
@@ -1011,7 +1027,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
     private fun behaviourRowsHtml(s: Snap): String = listOf(
         "wake_on_wave", "prevent_idle_dim", "watchdog_enabled", "touch_sound",
         "silence_boot_chime", "keep_awake", "home_dashboard", "dashboard_package", "launcher_package",
-    ).mapNotNull { settingRowHtml(it, s.live, s.caps) }.joinToString("\n")
+    ).let { keys -> val hints = autoHints(); keys.mapNotNull { settingRowHtml(it, s.live, s.caps, hints) } }.joinToString("\n")
 
     // Display & tuning: registry values plus the Configure-card-backed ones (density / text /
     // proximity / tame), each deep-linking to its card.
@@ -1263,10 +1279,12 @@ fetch('/api/v1/tame/suggest').then(function(r){return r.text()}).then(function(t
 
     /** Display-sizing card (density + text scale). Empty when su isn't reachable (no control). */
     private fun displayCardHtml(): String {
-        // Through the shared density cache — these are three `wm`/settings su round-trips, and they
-        // were most of the Configure tab's multi-second render.
-        val (cur0, nat, fs) = densityCache.get()
-        val cur = cur0 ?: return ""
+        // From the shared snapshot (stale-ok + background refresh) — the density trio is three
+        // `wm`/settings su round-trips and was most of the Configure tab's multi-second render.
+        val snap = snapStaleOk()
+        val nat = snap.densityNat
+        val fs = snap.fontScale
+        val cur = snap.densityCur ?: return ""
         val rec = if (recommendedDensity != null || recommendedFontScale != null)
             """ <button type="submit" name="action" value="rec" formnovalidate>HA-optimised</button>""" else ""
         return """<div class="card" id="cfg-display"><h2>Display sizing <small style="color:#d9a528">· experimental (R&amp;D)</small></h2>
@@ -1412,10 +1430,12 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
      */
     private fun configSchemaJson(): String {
         fun s(v: String) = Json.str(v)
-        val caps = capabilities()
+        val caps = snapStaleOk().caps   // capability probes (cpu/adb su) via the snapshot
+        val hints = autoHints()   // what blank ("auto") package fields resolve to → field placeholder
         val items = SettingsRegistry.settable().joinToString(",") { spec ->
             val opts = spec.options.joinToString(",") { s(it) }
             val isHa = spec.ha != null
+            val placeholder = hints[spec.key]?.let { "auto ($it)" }
             "{" +
                 "\"key\":${s(spec.key)}," +
                 "\"type\":${s(spec.type.name)}," +
@@ -1432,7 +1452,8 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
                 "\"max\":${spec.max?.toString() ?: "null"}," +
                 "\"step\":${spec.step?.toString() ?: "null"}," +
                 "\"ha\":$isHa," +
-                "\"exposed\":${if (isHa) config.haExposed(spec.key, spec.haExposedByDefault) else false}" +
+                "\"exposed\":${if (isHa) config.haExposed(spec.key, spec.haExposedByDefault) else false}," +
+                "\"placeholder\":${placeholder?.let { s(it) } ?: "null"}" +
                 "}"
         }
         return "[$items]"
@@ -1450,7 +1471,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
     /** Registry-driven current values (typed JSON; secrets blanked) for the Configure form. */
     private fun settingsValuesJson(): String {
         fun s(v: String) = Json.str(v)
-        val live = liveValues()
+        val live = snapStaleOk().live   // controller-sourced keys via the snapshot, not fresh su probes
         val parts = SettingsRegistry.settable().joinToString(",") { spec ->
             val raw = effectiveValue(spec, live)
             val v = when {

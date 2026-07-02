@@ -8,6 +8,16 @@ From **v0.8.0**, entries are grouped under **Added** (new features/entities), **
 changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
 content appear. Earlier releases predate this convention and keep their flat lists.
 
+## v0.8.6-rc2 - Unreleased
+
+### Added
+
+- **"auto" now shows what it picked** — the Dashboard app and Launcher app settings display the detected package when unset: the read-only dashboard rows show e.g. `auto (io.homeassistant.companion.android.minimal)`, and the Configure fields carry the same as a placeholder — so "auto" is never a mystery.
+
+### Changed
+
+- **Configure tab renders instantly** — the Display card, form values and schema now read through the same cached probe snapshot as the dashboard (stale-while-revalidate: last-known values render immediately, a background refresh keeps them current), removing the multi-second block that recurred whenever the density probe cache had expired.
+
 ## v0.8.6-rc1 - 2026-07-02
 
 ### Added

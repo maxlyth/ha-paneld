@@ -39,8 +39,9 @@ class SystemController(
         return root.run("am start -n $component")
     }
 
-    /** Configured dashboard pkg, else the installed HA Companion (this is an HA project). */
-    private fun resolveDashboard(pkg: String): String {
+    /** Configured dashboard pkg, else the installed HA Companion (this is an HA project). Public so
+     *  the config UI can show what a blank ("auto") dashboard_package actually resolved to. */
+    fun resolveDashboard(pkg: String): String {
         if (pkg.isNotBlank()) return pkg
         for (p in listOf("io.homeassistant.companion.android.minimal", "io.homeassistant.companion.android")) {
             if (env.isInstalled(p)) return p
@@ -72,6 +73,21 @@ class SystemController(
      * current default, ourselves, or settings.
      */
     fun launchLauncher(configuredPkg: String) {
+        val ri = pickLauncher(configuredPkg)
+        if (ri == null) {
+            Log.w(TAG, "launcher: no suitable launcher found (set launcher_package?)")
+            return
+        }
+        val comp = ri.component
+        if (!privilegedStart(comp)) env.directStart(comp)
+        Log.i(TAG, "launcher -> $comp")
+    }
+
+    /** The launcher package [launchLauncher] would land on for [configuredPkg] (query-only) — lets
+     *  the config UI show what a blank ("auto") launcher_package actually resolved to. */
+    fun resolvedLauncher(configuredPkg: String): String? = pickLauncher(configuredPkg)?.pkg
+
+    private fun pickLauncher(configuredPkg: String): io.github.maxlyth.hapaneld.platform.ActivityRef? {
         val all = env.homeActivities()
         val default = env.defaultHome()?.pkg
         // Apps that register CATEGORY_HOME but are NOT an app-drawer launcher we'd want to land on:
@@ -80,7 +96,7 @@ class SystemController(
             p == env.ownPackage || p == "com.android.settings" ||
                 p == "io.homeassistant.companion.android" || p == "io.homeassistant.companion.android.minimal"
         }
-        val ri = when {
+        return when {
             configuredPkg.isNotBlank() -> all.firstOrNull { it.pkg == configuredPkg }
             // Prefer the actual default home when it's a real launcher (e.g. the vendor launcher) — the old
             // code always skipped the default and grabbed the first alternate, which on kiosk panels is the
@@ -89,13 +105,6 @@ class SystemController(
             // Default IS a kiosk/dashboard (or us): fall back to any other real launcher.
             else -> all.firstOrNull { !notALauncher(it.pkg) && it.pkg != default }
         }
-        if (ri == null) {
-            Log.w(TAG, "launcher: no suitable launcher found (set launcher_package?)")
-            return
-        }
-        val comp = ri.component
-        if (!privilegedStart(comp)) env.directStart(comp)
-        Log.i(TAG, "launcher -> $comp")
     }
 
     /** True if [pkg] is installed with a launchable activity — guards a stale configured launcher. */

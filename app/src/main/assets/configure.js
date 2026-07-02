@@ -42,6 +42,7 @@
     var type = f.type === "PASSWORD" ? "password" : (f.type === "INT" || f.type === "FLOAT") ? "number" : "text";
     var inp = el("input", { type: type, value: f.secret ? "" : (v == null ? "" : v) });
     if (f.secret) inp.placeholder = "blank keeps current";
+    else if (f.placeholder) inp.placeholder = f.placeholder;   // e.g. "auto (io.homeassistant…)" on package fields
     if (f.min != null) inp.min = f.min;
     if (f.max != null) inp.max = f.max;
     if (f.step != null) inp.step = f.step;
