@@ -109,6 +109,28 @@ async function perf(){
  }catch(e){document.getElementById('perfage').textContent='· unavailable';}
 }
 perf();setInterval(perf,2000);
+// Live Sensors card — REUSABLE: sensorsCard(tableId, ageId) mounts the same card on any tab that
+// includes a table + age element; polls /api/v1/sensors every 2s, pauses while the tab is hidden.
+function sensorsCard(tbl,age){
+ function fA(a){return a==null?'':(a<90?'· '+a+'s ago':(a<5400?'· '+Math.round(a/60)+'m ago':'· '+Math.round(a/3600)+'h ago'));}
+ async function s(){
+  if(document.hidden)return;
+  try{
+   var d=await (await fetch('/api/v1/sensors')).json(),rows=[];
+   if(d.light&&d.light.present)rows.push({label:'Ambient light',val:d.light.lux!=null?d.light.lux+' lx':'no reading yet',suf:fA(d.light.age_s)});
+   if(d.proximity&&d.proximity.present)rows.push({label:'Proximity',val:d.proximity.near==null?'no reading yet':(d.proximity.near?'near':'far'),suf:d.proximity.raw!=null?'· raw '+d.proximity.raw:''});
+   if(d.temperature&&d.temperature.present)rows.push({label:'Temperature',val:d.temperature.c!=null?d.temperature.c+' °C':'no reading yet',suf:fA(d.temperature.age_s)});
+   if(d.humidity&&d.humidity.present)rows.push({label:'Humidity',val:d.humidity.pct!=null?d.humidity.pct+' %':'no reading yet',suf:fA(d.humidity.age_s)});
+   if(d.volume_pct!=null&&d.volume_pct>=0)rows.push({label:'Volume',val:d.volume_pct+' %'});
+   if(d.brightness!=null&&d.brightness>=0)rows.push({label:'Brightness',val:d.brightness+' / 255'});
+   if(!rows.length)rows.push({label:'',val:'no sensors on this panel',col:'#888'});
+   paint(tbl,rows);
+   var a=document.getElementById(age);if(a)a.textContent='· live';
+  }catch(e){var a=document.getElementById(age);if(a)a.textContent='· unavailable';}
+ }
+ s();setInterval(s,2000);
+}
+sensorsCard('senstbl','sensage');
 // High-water-mark: the two live cards whose heights swing most — Responsiveness (the Rendering-load row
 // flips between a long "X% janky…" line and a short "idle") and Top processes (process names wrap to 1–2
 // lines) — never shrink below the tallest they've been (latched min-height on the card). They stop jumping

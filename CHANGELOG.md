@@ -8,6 +8,12 @@ From **v0.8.0**, entries are grouped under **Added** (new features/entities), **
 changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
 content appear. Earlier releases predate this convention and keep their flat lists.
 
+## v0.8.6-rc3 - 2026-07-02
+
+### Added
+
+- **Live Sensors card** — the Dashboard now shows live readings from **all of the panel's sensors** — ambient light, proximity (near/far + raw), temperature, humidity, plus volume and brightness — refreshed every 2 seconds via a new `/api/v1/sensors` endpoint. Readings are the hardware's live values, shown **even when a sensor is hidden from Home Assistant** by the exposure config, with an age indicator per reading; the card renderer is reusable so other tabs can mount it.
+
 ## v0.8.6-rc2 - 2026-07-02
 
 ### Added
