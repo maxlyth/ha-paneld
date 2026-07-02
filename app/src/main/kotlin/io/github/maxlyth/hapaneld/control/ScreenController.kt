@@ -62,10 +62,11 @@ class ScreenController(
             Log.d(TAG, "screen -> off (su bl_power)")
             return
         }
-        // Last resort: no daemon, no su — dim to 0 (only a dim on panels that clamp a minimum).
+        // Last resort: no daemon, no su — dim to 0 (only a dim on panels that clamp a minimum). Uses the
+        // raw setter so it can reach 0: the public setBrightness floors at MIN_VISIBLE to stay never-blank.
         val cur = brightness.getBrightness()
         if (cur > 0) savedLevel = cur
-        brightness.setBrightness(0)
+        brightness.setBrightnessRaw(0)
         Log.d(TAG, "screen -> off (brightness fallback; saved=$savedLevel)")
     }
 

@@ -31,9 +31,19 @@ class BrightnessController(private val context: Context) {
         if (max == null || max <= 0) null else dir to max
     }
 
-    /** @param level 0–255. Switches the panel to manual brightness mode and applies [level]. */
-    fun setBrightness(level: Int) {
-        val v = level.coerceIn(0, 255)
+    /**
+     * @param level 0–255. Switches the panel to manual brightness mode and applies [level], floored at
+     * [MIN_VISIBLE] so a brightness command (HA, auto-brightness, navbar) can never leave the panel
+     * blank + touch-dead. A deliberate screen-off is a separate operation via [ScreenController], which
+     * uses [setBrightnessRaw] for its last-resort dim-to-0.
+     */
+    fun setBrightness(level: Int) = applyBrightness(level.coerceIn(MIN_VISIBLE, 255))
+
+    /** Apply a raw level with NO minimum floor (0 allowed). For [ScreenController]'s screen-off fallback
+     *  only — every other caller must use [setBrightness] to preserve the never-blank guarantee. */
+    fun setBrightnessRaw(level: Int) = applyBrightness(level.coerceIn(0, 255))
+
+    private fun applyBrightness(v: Int) {
         try {
             Settings.System.putInt(
                 context.contentResolver,
@@ -99,6 +109,7 @@ class BrightnessController(private val context: Context) {
 
     companion object {
         private const val TAG = "ha-paneld/brightness"
+        private const val MIN_VISIBLE = 10 // setBrightness floor: a dim command must never blank the panel
         private const val NEVER = Int.MAX_VALUE // ~24.8 days; the conventional "never auto-off" sentinel
     }
 }
