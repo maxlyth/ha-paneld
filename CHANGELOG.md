@@ -8,7 +8,7 @@ From **v0.8.0**, entries are grouped under **Added** (new features/entities), **
 changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
 content appear. Earlier releases predate this convention and keep their flat lists.
 
-## v0.8.6-rc1 - Unreleased
+## v0.8.6-rc1 - 2026-07-02
 
 ### Added
 
@@ -27,6 +27,9 @@ content appear. Earlier releases predate this convention and keep their flat lis
 
 - **False "credentials rejected" while connected** — after a connection rebuild, the superseded MQTT client could keep auto-reconnecting in the background before its teardown completed; its rejected attempts overwrote the live connection's status, so the UI warned about invalid MQTT credentials (and the watchdog force-rebuilt every couple of minutes) while the panel was in fact connected and healthy. Superseded clients are now ignored by the status listeners and told to stop reconnecting, and the credentials warning only appears when the rejection is persistent — a transient rejection during a broker restart renders as "reconnecting…" instead. This also explains (and ends) the long-standing pattern of NOT_AUTHORIZED loops from a broker that accepts a fresh client.
 - **No more false Companion "update available" for the installed variant** — the update check compared the installed `-minimal` versionName against the release tag as if the variant suffix were a prerelease marker, so a panel on `2026.6.5-minimal` was offered "2026.6.5" as an upgrade. Versions are now compared variant-stripped, in both the banner check and the auto-updater. (#17)
+- **A brightness command can never blank the panel** — the HA brightness command and auto-brightness could drive the backlight to 0 outside the screen-off path, leaving the panel dark until the never-blank watchdog re-lit it. The brightness setter now floors at a minimum-visible level; a deliberate screen-off remains the only path to 0.
+- **Config saves are atomic** — the Configure form previously applied fields one by one, so an interruption mid-save could persist a half-written config (e.g. a broker without its credentials). All fields now commit in a single atomic write, and the saved config migrates across schema changes on upgrade.
+- **A hung `su` can no longer stall the app** — one-shot root commands now run with a hard timeout and are force-killed on expiry, degrading to "no root" instead of occupying a thread forever when a root shell hangs on auth.
 
 ### Security
 
