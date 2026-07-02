@@ -1302,11 +1302,15 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
     }
 
     /**
-     * Transactional bundle import. Parse → migrate to the current schema → scope/secret filter
-     * (`?mode=fleet` applies only PORTABLE, non-secret keys; default `restore` applies everything) →
-     * validate ALL against the registry (any failure rejects the whole bundle, nothing written) →
-     * snapshot a revision → commit the batch → apply live keys + reconfigure. `?dry_run=1` returns the
-     * diff without writing. Newer-than-current bundles and unknown keys are tolerated with a warning.
+     * Bundle import — BEST-EFFORT by design (a bundle exported from different hardware or a different
+     * ha-paneld version must still restore what it can). Parse → migrate to the current schema →
+     * scope/secret filter (`?mode=fleet` applies only PORTABLE, non-secret keys; default `restore`
+     * applies everything) → validate per-key against the registry: valid keys apply, invalid keys are
+     * reported in `errors` and skipped, unknown keys warn and skip. `?strict=1` restores the old
+     * all-or-nothing transactional behaviour. Apply itself is transactional (snapshot a revision →
+     * commit the batch → live keys + reconfigure); `?dry_run=1` returns the diff without writing.
+     * Status: "applied" (all valid), "partial" (some skipped as invalid), "rejected" (nothing usable
+     * or strict mode with any error).
      */
     private suspend fun handleConfigImport(call: ApplicationCall) {
         val bundle = ConfigBundle.parse(call.receiveText())
@@ -1331,16 +1335,18 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
                 is Validation.Bad -> errors.add(v.reason)
             }
         }
-        if (errors.isNotEmpty()) {
+        val strict = call.request.queryParameters["strict"] == "1"
+        if ((strict && errors.isNotEmpty()) || (accepted.isEmpty() && errors.isNotEmpty())) {
             call.respondText(importJson("rejected", emptyList(), skipped, warn, errors), ContentType.Application.Json, HttpStatusCode.UnprocessableEntity)
             return
         }
         if (dryRun) {
-            call.respondText(dryRunJson(ConfigDiff.diff(currentValues(), accepted), skipped, warn), ContentType.Application.Json)
+            call.respondText(dryRunJson(ConfigDiff.diff(currentValues(), accepted), skipped, warn + errors.map { "would skip (invalid): $it" }), ContentType.Application.Json)
             return
         }
         applyAccepted(accepted)
-        call.respondText(importJson("applied", accepted.keys.toList(), skipped, warn, errors), ContentType.Application.Json)
+        val status = if (errors.isEmpty()) "applied" else "partial"
+        call.respondText(importJson(status, accepted.keys.toList(), skipped, warn, errors), ContentType.Application.Json)
     }
 
     /** Apply a validated value set transactionally: snapshot current → commit batch → run live-key

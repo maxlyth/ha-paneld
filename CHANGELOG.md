@@ -8,6 +8,16 @@ From **v0.8.0**, entries are grouped under **Added** (new features/entities), **
 changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
 content appear. Earlier releases predate this convention and keep their flat lists.
 
+## v0.8.6-rc4 - 2026-07-02
+
+### Changed
+
+- **Config import is now best-effort** — a bundle exported from a different panel model or a different ha-paneld version restores everything it validly can: valid keys apply, invalid values are reported and skipped, unknown keys warn and skip (previously a single invalid value rejected the whole bundle). `?strict=1` keeps the old all-or-nothing behaviour; dry-run previews now list what would be skipped. Status reports `applied` / `partial` / `rejected`.
+
+### Added
+
+- **Config export/restore from the provision script** — `provision.sh --export FILE` saves a panel's full config bundle (includes secrets — protect the file), `--restore FILE` best-effort-imports a bundle (full restore, device keys included), `--restore-fleet FILE` applies only the portable keys for cross-panel deployment. Completes the bundle feature across API + web UI + fleet scripts.
+
 ## v0.8.6-rc3 - 2026-07-02
 
 ### Added
