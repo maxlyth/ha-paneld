@@ -104,12 +104,13 @@ offer_strip_vendor() {
     return 0
   fi
   # Guard 3 — a non-vendor home launcher must exist before we disable the vendor launcher.
+  # ha-paneld itself ships an admin launcher (AdminLauncherActivity registers HOME), so it counts.
   local home=""
-  for L in l.l io.homeassistant.companion.android.minimal io.homeassistant.companion.android; do
+  for L in io.homeassistant.companion.android.minimal io.homeassistant.companion.android io.github.maxlyth.hapaneld; do
     if adb -s "$TARGET" shell pm path "$L" >/dev/null 2>&1; then home="$L"; break; fi
   done
   if [ -z "$home" ]; then
-    echo "   ${YEL}⚠ vendor-strip skipped: install a replacement launcher first (the l.l slim launcher or HA Companion).${X}"
+    echo "   ${YEL}⚠ vendor-strip skipped: install a replacement launcher first (HA Companion, or ha-paneld's admin launcher).${X}"
     return 0
   fi
 
