@@ -5,9 +5,11 @@ import io.github.maxlyth.hapaneld.device.EvdevButton
 import io.github.maxlyth.hapaneld.device.LedMechanism
 import io.github.maxlyth.hapaneld.device.ScreenOff
 import io.github.maxlyth.hapaneld.device.SuForm
+import io.github.maxlyth.hapaneld.platform.ActivityRef
 import io.github.maxlyth.hapaneld.platform.Daemon
 import io.github.maxlyth.hapaneld.platform.RootShell
 import io.github.maxlyth.hapaneld.platform.ScreenPower
+import io.github.maxlyth.hapaneld.platform.SystemEnv
 
 /** Minimal [DeviceProfile] for controller tests — only the fields a controller reads need setting. */
 fun fakeProfile(
@@ -80,4 +82,24 @@ class FakeScreenPower(var interactive: Boolean = true) : ScreenPower {
     var pulses = 0
     override fun isInteractive() = interactive
     override fun pulseWake() { pulses++ }
+}
+
+/**
+ * Fake [SystemEnv]: an in-memory package/activity environment. [installed] gates [isInstalled];
+ * [launchers] maps a package to its launch component; [homes] is the CATEGORY_HOME activity list;
+ * [default] is the current default HOME. [directStarts] records best-effort direct starts.
+ */
+class FakeSystemEnv(
+    override val ownPackage: String = "io.github.maxlyth.hapaneld",
+    var installed: Set<String> = emptySet(),
+    var launchers: Map<String, String> = emptyMap(),
+    var homes: List<ActivityRef> = emptyList(),
+    var default: ActivityRef? = null,
+) : SystemEnv {
+    val directStarts = mutableListOf<String>()
+    override fun isInstalled(pkg: String) = pkg in installed
+    override fun launchComponent(pkg: String) = launchers[pkg]
+    override fun homeActivities() = homes
+    override fun defaultHome() = default
+    override fun directStart(component: String) { directStarts += component }
 }

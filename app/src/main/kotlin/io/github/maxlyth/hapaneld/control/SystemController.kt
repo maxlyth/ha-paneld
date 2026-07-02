@@ -1,8 +1,9 @@
 package io.github.maxlyth.hapaneld.control
 
-import android.content.Context
-import android.content.Intent
 import android.util.Log
+import io.github.maxlyth.hapaneld.platform.Daemon
+import io.github.maxlyth.hapaneld.platform.RootShell
+import io.github.maxlyth.hapaneld.platform.SystemEnv
 import io.github.maxlyth.hapaneld.util.HelperClient
 
 /** Foreground/liveness state of the dashboard app, as seen by the app watchdog. */
@@ -18,28 +19,31 @@ enum class AppState { FG, BG, DEAD, UNKNOWN }
  * root helper daemon or `su` (`am start` / `monkey`) runs from a shell/root domain that BAL doesn't
  * restrict. We resolve the target *component* in-app (just a PackageManager query, always allowed)
  * and hand it to the privileged launcher. Pre-BAL panels fall back to a direct start.
+ *
+ * Collaborators are seamed — package/activity queries via [SystemEnv], privilege via [RootShell] /
+ * [Daemon] — so the launcher-selection, default-home, and dashboard-state logic is unit-testable
+ * without a device.
  */
-class SystemController(private val context: Context) {
+class SystemController(
+    private val env: SystemEnv,
+    private val root: RootShell = Su,
+    private val daemon: Daemon = HelperClient,
+) {
 
     /** Launch an activity [component] ("pkg/cls") via the privileged path (daemon START, else su). */
     private fun privilegedStart(component: String): Boolean {
         if (component.isBlank()) return false
         // Prefer the daemon, but only trust an explicit OK — an older daemon without the START verb
         // replies ERR, so fall back to su (covers su-capable panels with a stale daemon).
-        if (HelperClient.available() && HelperClient.send("START $component") == "OK") return true
-        return Su.run("am start -n $component")
-    }
-
-    /** Direct fallback for pre-BAL (API < 29) panels where the service can start activities. */
-    private fun directStart(intent: Intent) {
-        runCatching { context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+        if (daemon.available() && daemon.send("START $component") == "OK") return true
+        return root.run("am start -n $component")
     }
 
     /** Configured dashboard pkg, else the installed HA Companion (this is an HA project). */
     private fun resolveDashboard(pkg: String): String {
         if (pkg.isNotBlank()) return pkg
         for (p in listOf("io.homeassistant.companion.android.minimal", "io.homeassistant.companion.android")) {
-            if (runCatching { context.packageManager.getPackageInfo(p, 0) }.isSuccess) return p
+            if (env.isInstalled(p)) return p
         }
         return ""
     }
@@ -48,14 +52,14 @@ class SystemController(private val context: Context) {
     fun reloadDashboard(dashboardPkg: String) {
         val pkg = resolveDashboard(dashboardPkg)
         if (pkg.isBlank()) { Log.w(TAG, "reload: no dashboard pkg (set dashboard_package)"); return }
-        if (HelperClient.available()) { // daemon force-stops + monkey-relaunches as root (no BAL)
-            HelperClient.send("RELOAD $pkg")
+        if (daemon.available()) { // daemon force-stops + monkey-relaunches as root (no BAL)
+            daemon.send("RELOAD $pkg")
             Log.i(TAG, "reload via daemon ($pkg)")
             return
         }
-        if (Su.run("am force-stop $pkg")) {
-            val comp = context.packageManager.getLaunchIntentForPackage(pkg)?.component?.flattenToShortString()
-            if (comp == null || !privilegedStart(comp)) Su.run("monkey -p $pkg 1")
+        if (root.run("am force-stop $pkg")) {
+            val comp = env.launchComponent(pkg)
+            if (comp == null || !privilegedStart(comp)) root.run("monkey -p $pkg 1")
             Log.i(TAG, "reload via su ($pkg)")
         } else {
             Log.w(TAG, "reload: neither daemon nor su available")
@@ -68,37 +72,35 @@ class SystemController(private val context: Context) {
      * current default, ourselves, or settings.
      */
     fun launchLauncher(configuredPkg: String) {
-        val pm = context.packageManager
-        val home = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
-        val all = pm.queryIntentActivities(home, 0)
-        val default = pm.resolveActivity(home, 0)?.activityInfo?.packageName
+        val all = env.homeActivities()
+        val default = env.defaultHome()?.pkg
         // Apps that register CATEGORY_HOME but are NOT an app-drawer launcher we'd want to land on:
         // ourselves, Settings, and the HA Companion (a kiosk dashboard, which registers as HOME).
         val notALauncher = { p: String ->
-            p == context.packageName || p == "com.android.settings" ||
+            p == env.ownPackage || p == "com.android.settings" ||
                 p == "io.homeassistant.companion.android" || p == "io.homeassistant.companion.android.minimal"
         }
         val ri = when {
-            configuredPkg.isNotBlank() -> all.firstOrNull { it.activityInfo.packageName == configuredPkg }
+            configuredPkg.isNotBlank() -> all.firstOrNull { it.pkg == configuredPkg }
             // Prefer the actual default home when it's a real launcher (e.g. the vendor launcher) — the old
             // code always skipped the default and grabbed the first alternate, which on kiosk panels is the
             // HA Companion (registers as HOME) → opened the dashboard instead of a launcher (the bug).
-            default != null && !notALauncher(default) -> all.firstOrNull { it.activityInfo.packageName == default }
+            default != null && !notALauncher(default) -> all.firstOrNull { it.pkg == default }
             // Default IS a kiosk/dashboard (or us): fall back to any other real launcher.
-            else -> all.firstOrNull { !notALauncher(it.activityInfo.packageName) && it.activityInfo.packageName != default }
+            else -> all.firstOrNull { !notALauncher(it.pkg) && it.pkg != default }
         }
         if (ri == null) {
             Log.w(TAG, "launcher: no suitable launcher found (set launcher_package?)")
             return
         }
-        val comp = "${ri.activityInfo.packageName}/${ri.activityInfo.name}"
-        if (!privilegedStart(comp)) directStart(home.setPackage(ri.activityInfo.packageName))
+        val comp = ri.component
+        if (!privilegedStart(comp)) env.directStart(comp)
         Log.i(TAG, "launcher -> $comp")
     }
 
     /** True if [pkg] is installed with a launchable activity — guards a stale configured launcher. */
     fun isLaunchable(pkg: String): Boolean =
-        pkg.isNotBlank() && runCatching { context.packageManager.getLaunchIntentForPackage(pkg) != null }.getOrDefault(false)
+        pkg.isNotBlank() && env.launchComponent(pkg) != null
 
     /**
      * Open ha-paneld's own on-demand admin launcher (an app drawer for panel admin). The default for
@@ -106,18 +108,16 @@ class SystemController(private val context: Context) {
      * component, so it works even when no other launcher is installed.
      */
     fun launchAdminLauncher() {
-        val comp = "${context.packageName}/.AdminLauncherActivity"
-        if (!privilegedStart(comp)) {
-            directStart(Intent().setClassName(context.packageName, "${context.packageName}.AdminLauncherActivity"))
-        }
+        val comp = "${env.ownPackage}/.AdminLauncherActivity"
+        if (!privilegedStart(comp)) env.directStart(comp)
         Log.i(TAG, "admin launcher -> $comp")
     }
 
     /** Set the default HOME (launcher) to [component] ("pkg/cls"). Daemon SETHOME, else su. */
     private fun setHomeActivity(component: String): Boolean {
         if (component.isBlank()) return false
-        if (HelperClient.available() && HelperClient.send("SETHOME $component") == "OK") return true
-        return Su.run("cmd package set-home-activity $component")
+        if (daemon.available() && daemon.send("SETHOME $component") == "OK") return true
+        return root.run("cmd package set-home-activity $component")
     }
 
     /**
@@ -134,15 +134,11 @@ class SystemController(private val context: Context) {
     fun ensureDashboardHome(dashboardPkg: String) {
         val target = resolveDashboard(dashboardPkg)
         if (target.isBlank()) { Log.i(TAG, "ensureHome: no dashboard app installed; leaving home as-is"); return }
-        val pm = context.packageManager
-        val home = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
-        val current = pm.resolveActivity(home, 0)?.activityInfo?.packageName
+        val current = env.defaultHome()?.pkg
         if (current == target) return                                   // already correct
         // Respect a real third-party launcher the user chose; only reclaim from "no default" or ourselves.
-        if (current != null && current != "android" && current != context.packageName) return
-        val comp = pm.queryIntentActivities(home, 0)
-            .firstOrNull { it.activityInfo.packageName == target }
-            ?.let { "${it.activityInfo.packageName}/${it.activityInfo.name}" }
+        if (current != null && current != "android" && current != env.ownPackage) return
+        val comp = env.homeActivities().firstOrNull { it.pkg == target }?.component
         if (comp == null) { Log.w(TAG, "ensureHome: $target has no HOME activity"); return }
         Log.i(TAG, "ensureHome: default home was '$current' -> $comp")
         setHomeActivity(comp)
@@ -150,18 +146,10 @@ class SystemController(private val context: Context) {
 
     /** Bring the dashboard (or the default home app) to the foreground. */
     fun launchHome(dashboardPkg: String) {
-        val pm = context.packageManager
         val pkg = resolveDashboard(dashboardPkg)
-        val comp = if (pkg.isNotBlank()) {
-            pm.getLaunchIntentForPackage(pkg)?.component?.flattenToShortString()
-        } else {
-            val home = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
-            pm.resolveActivity(home, 0)?.activityInfo?.let { "${it.packageName}/${it.name}" }
-        }
+        val comp = if (pkg.isNotBlank()) env.launchComponent(pkg) else env.defaultHome()?.component
         if (comp == null) { Log.w(TAG, "home: no target resolved"); return }
-        if (!privilegedStart(comp)) {
-            directStart(pm.getLaunchIntentForPackage(pkg) ?: Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME))
-        }
+        if (!privilegedStart(comp)) env.directStart(comp)
         Log.i(TAG, "home -> $comp")
     }
 
@@ -175,28 +163,28 @@ class SystemController(private val context: Context) {
     fun dashboardState(dashboardPkg: String): AppState {
         val pkg = resolveDashboard(dashboardPkg)
         if (pkg.isBlank()) return AppState.UNKNOWN
-        if (HelperClient.available()) {
-            return when (HelperClient.send("APPSTATE $pkg")) {
+        if (daemon.available()) {
+            return when (daemon.send("APPSTATE $pkg")) {
                 "FG" -> AppState.FG
                 "BG" -> AppState.BG
                 "DEAD" -> AppState.DEAD
                 else -> AppState.UNKNOWN
             }
         }
-        val pid = Su.runOutput("pidof $pkg 2>/dev/null; true") ?: return AppState.UNKNOWN
+        val pid = root.runOutput("pidof $pkg 2>/dev/null; true") ?: return AppState.UNKNOWN
         if (pid.isBlank()) return AppState.DEAD
-        val focus = Su.runOutput("dumpsys window 2>/dev/null | grep mCurrentFocus") ?: ""
+        val focus = root.runOutput("dumpsys window 2>/dev/null | grep mCurrentFocus") ?: ""
         return if (focus.contains("$pkg/")) AppState.FG else AppState.BG
     }
 
     fun reboot() {
-        if (HelperClient.available()) {
-            HelperClient.send("REBOOT")
+        if (daemon.available()) {
+            daemon.send("REBOOT")
             Log.i(TAG, "reboot via daemon")
             return
         }
         Log.i(TAG, "reboot via su")
-        Su.fireAndForget("reboot")
+        root.fireAndForget("reboot")
     }
 
     companion object {

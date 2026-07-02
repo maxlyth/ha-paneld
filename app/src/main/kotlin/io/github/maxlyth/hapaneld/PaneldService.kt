@@ -57,6 +57,7 @@ import io.github.maxlyth.hapaneld.util.CompanionInstaller
 import io.github.maxlyth.hapaneld.util.SelfUpdater
 import io.github.maxlyth.hapaneld.mqtt.ConnectionSupervisor
 import io.github.maxlyth.hapaneld.platform.AndroidScreenPower
+import io.github.maxlyth.hapaneld.platform.AndroidSystemEnv
 import io.github.maxlyth.hapaneld.util.periodic
 import io.github.maxlyth.hapaneld.util.SystemProps
 
@@ -137,7 +138,7 @@ class PaneldService : Service() {
         led = LedFactory.detect(profile)
         navigate = NavigateController(this)
         volume = VolumeController(this)
-        system = SystemController(this)
+        system = SystemController(AndroidSystemEnv(this))
         watchdog = WatchdogController(system, config)
         tame = TameController(this)
         // Tame opt-in: neutralise the vendor packages the user listed (force-stop + disable boot-relaunch
