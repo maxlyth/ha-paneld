@@ -8,7 +8,15 @@ From **v0.8.0**, entries are grouped under **Added** (new features/entities), **
 changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
 content appear. Earlier releases predate this convention and keep their flat lists.
 
-## v0.8.6-rc3 - Unreleased
+## v0.8.6-rc3 - 2026-07-02
+
+### Added
+
+- **Home dashboard shows what "auto" resolves to** — an unset per-panel home dashboard now reads `auto (HA default view)` in the dashboard row and Configure placeholder, instead of a bare `—`, so it's clear a reload lands on Home Assistant's own default view.
+
+### Changed
+
+- **Publishing a setting to Home Assistant is now opt-in per setting** — each setting declares whether it appears in HA by default; the admin-oriented ones (self-update, Companion auto-update + channels, network ADB, Zigbee router, app watchdog, brightness bias) are now **panel-local by default** — configurable in the `:8888` web UI but not cluttering HA unless you enable their expose toggle. The everyday controls (wake-on-wave, prevent-idle-dim, navbar, auto-brightness, touch sound, CPU profile) stay in HA as before. Existing panels keep whatever they already expose; this only changes freshly-provisioned panels. Touch sound and boot-chime silence now default on for new panels.
 
 ### Fixed
 
