@@ -89,7 +89,6 @@ object SettingsRegistry {
             key = "watchdog_enabled", type = SettingType.BOOL, group = "Behaviour",
             label = "App watchdog", default = "false", scope = Scope.PORTABLE,
             help = "Self-heal the dashboard app: relaunch if it dies, return if backgrounded too long.",
-            haExposedByDefault = true,
             ha = HaEntity(
                 "switch", "watchdog", "App watchdog",
                 """"command_topic":"ha-paneld/{panel}/watchdog/set","state_topic":"ha-paneld/{panel}/watchdog/state","icon":"mdi:restart-alert","entity_category":"config"""",
@@ -97,9 +96,8 @@ object SettingsRegistry {
         ),
         SettingSpec(
             key = "silence_boot_chime", type = SettingType.BOOL, group = "Behaviour",
-            label = "Silence boot chime", default = "false", scope = Scope.DEVICE,
+            label = "Silence boot chime", default = "true", scope = Scope.DEVICE,
             help = "Mute the firmware startup chime.",
-            haExposedByDefault = true,
             ha = HaEntity(
                 "switch", "silence_boot_chime", "Silence boot chime",
                 """"command_topic":"ha-paneld/{panel}/silence_boot_chime/set","state_topic":"ha-paneld/{panel}/silence_boot_chime/state","icon":"mdi:volume-off","entity_category":"config"""",
@@ -129,7 +127,6 @@ object SettingsRegistry {
             key = "brightness_bias", type = SettingType.INT, group = "Display",
             label = "Brightness bias", default = "0", min = -100.0, max = 100.0, step = 5.0,
             help = "Dimmer (−) ↔ brighter (+) offset added to the auto-brightness curve.",
-            haExposedByDefault = true,
             ha = HaEntity(
                 "number", "brightness_bias", "Brightness bias",
                 """"command_topic":"ha-paneld/{panel}/brightness_bias/set","state_topic":"ha-paneld/{panel}/brightness_bias/state","min":-100,"max":100,"step":5,"mode":"slider","icon":"mdi:brightness-6","entity_category":"config"""",
@@ -138,7 +135,7 @@ object SettingsRegistry {
 
         SettingSpec(
             key = "touch_sound", type = SettingType.BOOL, group = "Behaviour",
-            label = "Touch sound", default = "false",
+            label = "Touch sound", default = "true",
             help = "Audible tap feedback (system touch sounds).",
             haExposedByDefault = true,
             ha = HaEntity(
@@ -164,7 +161,6 @@ object SettingsRegistry {
             label = "Network ADB", default = "false", scope = Scope.DEVICE,
             help = "Standing LAN adb on :5555, re-asserted at boot/reconnect (root panels).",
             availableWhen = { it.networkAdb },
-            haExposedByDefault = true,
             ha = HaEntity(
                 "switch", "network_adb", "Network ADB",
                 """"command_topic":"ha-paneld/{panel}/network_adb/set","state_topic":"ha-paneld/{panel}/network_adb/state","icon":"mdi:adb","entity_category":"config"""",
@@ -175,7 +171,6 @@ object SettingsRegistry {
             label = "Zigbee router", default = "false", scope = Scope.DEVICE,
             help = "Run the on-board Zigbee gateway as a router/repeater (NSPanel Pro).",
             availableWhen = { it.zigbeePresent },
-            haExposedByDefault = true,
             ha = HaEntity(
                 "switch", "zigbee_router", "Zigbee router",
                 """"command_topic":"ha-paneld/{panel}/zigbee_router/set","state_topic":"ha-paneld/{panel}/zigbee_router/state","icon":"mdi:zigbee","entity_category":"config"""",
@@ -208,7 +203,6 @@ object SettingsRegistry {
             key = "companion_auto_update", type = SettingType.BOOL, group = "System",
             label = "Companion auto-update", default = "false", scope = Scope.DEVICE,
             help = "Install/update the minimal HA Companion over root when missing or out of date.",
-            haExposedByDefault = true,
             ha = HaEntity(
                 "switch", "companion_auto_update", "Companion auto-update",
                 """"command_topic":"ha-paneld/{panel}/companion_auto_update/set","state_topic":"ha-paneld/{panel}/companion_auto_update/state","icon":"mdi:cellphone-arrow-down","entity_category":"config"""",
@@ -219,7 +213,6 @@ object SettingsRegistry {
             label = "Companion auto-update channel", default = "stable", options = listOf("stable", "prerelease"),
             scope = Scope.DEVICE,
             help = "Release channel the Companion auto-updater follows.",
-            haExposedByDefault = true,
             ha = HaEntity(
                 "select", "companion_update_channel", "Companion auto-update channel",
                 """"command_topic":"ha-paneld/{panel}/companion_update_channel/set","state_topic":"ha-paneld/{panel}/companion_update_channel/state","options":["Stable","Pre-release"],"icon":"mdi:source-branch","entity_category":"config"""",
@@ -229,7 +222,6 @@ object SettingsRegistry {
             key = "self_update", type = SettingType.BOOL, group = "System",
             label = "ha-paneld auto-update", default = "false", scope = Scope.DEVICE,
             help = "ha-paneld updates itself from GitHub releases on the selected channel (opt-in).",
-            haExposedByDefault = true,
             ha = HaEntity(
                 "switch", "self_update", "ha-paneld auto-update",
                 """"command_topic":"ha-paneld/{panel}/self_update/set","state_topic":"ha-paneld/{panel}/self_update/state","icon":"mdi:package-up","entity_category":"config"""",
@@ -240,7 +232,6 @@ object SettingsRegistry {
             label = "ha-paneld auto-update channel", default = "stable", options = listOf("stable", "prerelease"),
             scope = Scope.DEVICE,
             help = "Release channel the self-updater follows.",
-            haExposedByDefault = true,
             ha = HaEntity(
                 "select", "update_channel", "ha-paneld auto-update channel",
                 """"command_topic":"ha-paneld/{panel}/update_channel/set","state_topic":"ha-paneld/{panel}/update_channel/state","options":["Stable","Pre-release"],"icon":"mdi:source-branch","entity_category":"config"""",
