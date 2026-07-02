@@ -3,6 +3,7 @@ package io.github.maxlyth.hapaneld.util
 import android.net.LocalSocket
 import android.net.LocalSocketAddress
 import android.util.Log
+import io.github.maxlyth.hapaneld.platform.Daemon
 import java.io.BufferedReader
 import java.io.InputStreamReader
 
@@ -14,7 +15,7 @@ import java.io.InputStreamReader
  * unauthenticated `127.0.0.1:8889` TCP. Used by the sysfs LED + screen controllers (and others).
  * All calls are short blocking socket I/O — invoke off the main thread.
  */
-object HelperClient {
+object HelperClient : Daemon {
     private const val SOCK = "hapaneld-helper"   // abstract socket name; matches SOCK_NAME in main.c
     private const val TIMEOUT_MS = 500
     private const val TAG = "ha-paneld/helper"
@@ -26,10 +27,10 @@ object HelperClient {
     }
 
     /** True when the daemon answers `PING`. */
-    fun available(): Boolean = send("PING") == "OK"
+    override fun available(): Boolean = send("PING") == "OK"
 
     /** Send one command; return the daemon's reply line (trimmed), or null if unreachable. */
-    fun send(cmd: String): String? = try {
+    override fun send(cmd: String): String? = try {
         open().use { s ->
             s.soTimeout = TIMEOUT_MS
             s.outputStream.apply { write((cmd + "\n").toByteArray()); flush() }
@@ -43,7 +44,7 @@ object HelperClient {
     /** Send one command and read the full **binary** reply (e.g. `SCREENCAP` PNG bytes). Half-closes the
      *  write side so the daemon's serve loop sees EOF, processes the command, and closes — giving us EOF
      *  after all the bytes. Longer timeout (screencap takes ~1-2s). Null if unreachable/empty. */
-    fun sendBytes(cmd: String): ByteArray? = try {
+    override fun sendBytes(cmd: String): ByteArray? = try {
         open().use { s ->
             s.soTimeout = 5000
             s.outputStream.apply { write((cmd + "\n").toByteArray()); flush() }

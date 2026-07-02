@@ -1,6 +1,7 @@
 package io.github.maxlyth.hapaneld.control
 
 import android.util.Log
+import io.github.maxlyth.hapaneld.platform.RootShell
 import java.io.BufferedReader
 import java.io.IOException
 import java.io.Writer
@@ -28,7 +29,7 @@ import java.util.concurrent.TimeUnit
  * [fireAndForget] (e.g. `reboot`) and the form probe always use one-shot execs — a `reboot` must not be
  * fed into the shared shell, and the probe is what discovers/caches the form the shell is opened with.
  */
-object Su {
+object Su : RootShell {
     private const val TAG = "ha-paneld/su"
     private const val SENTINEL = "__hapaneld_done__"
     private const val CMD_TIMEOUT_MS = 5000L
@@ -58,21 +59,21 @@ object Su {
 
     /** Run [cmd] as root, waiting for completion. Returns true on exit 0. */
     @Synchronized
-    fun run(cmd: String): Boolean {
+    override fun run(cmd: String): Boolean {
         piped(cmd)?.let { return it.second == 0 }
         return oneShotRun(cmd)
     }
 
     /** Run [cmd] as root and return its stdout, or null if no su form works / it exits non-zero. */
     @Synchronized
-    fun runOutput(cmd: String): String? {
+    override fun runOutput(cmd: String): String? {
         piped(cmd)?.let { return if (it.second == 0) it.first else null }
         return oneShotOutput(cmd)
     }
 
     /** Fire [cmd] as root without waiting (for commands like `reboot` that kill the process). Always a
      *  one-shot — never sent into the shared persistent shell (it would take the shell down with it). */
-    fun fireAndForget(cmd: String) {
+    override fun fireAndForget(cmd: String) {
         val forms = if (form in 0..1) intArrayOf(form) else intArrayOf(0, 1)
         for (f in forms) {
             try {
@@ -88,7 +89,7 @@ object Su {
      *  protocol is text-only, so binary output like `screencap -p` needs a dedicated exec). Not
      *  synchronized: it doesn't touch the shared shell, so a screenshot won't stall navbar root actions.
      *  Null on failure / no su. */
-    fun runBytes(cmd: String): ByteArray? {
+    override fun runBytes(cmd: String): ByteArray? {
         if (form == 2) return null
         val forms = if (form in 0..1) intArrayOf(form) else intArrayOf(0, 1)
         for (f in forms) {
@@ -102,7 +103,7 @@ object Su {
         return null
     }
 
-    fun available(): Boolean = run("true")
+    override fun available(): Boolean = run("true")
 
     // --- persistent shell ---
 
