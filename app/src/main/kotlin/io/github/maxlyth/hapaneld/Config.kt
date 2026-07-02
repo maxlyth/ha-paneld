@@ -4,8 +4,11 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.os.Build
 import android.provider.Settings
+import android.util.Log
+import io.github.maxlyth.hapaneld.config.Migrations
 import io.github.maxlyth.hapaneld.config.SettingSpec
 import io.github.maxlyth.hapaneld.config.SettingType
+import io.github.maxlyth.hapaneld.config.SettingsRegistry
 import io.github.maxlyth.hapaneld.device.DeviceProfile
 import java.util.Locale
 
@@ -425,6 +428,34 @@ class Config(context: Context) {
     /** A new editor for staging a batch of registry writes (commit with [SharedPreferences.Editor.commit]). */
     fun editor(): SharedPreferences.Editor = prefs.edit()
 
+    /** Schema the live store was last written at. Absent → 1 (the original shape, before this tracking),
+     *  so an app upgrade that bumps [SettingsRegistry.SCHEMA] triggers a one-time on-device migration. */
+    private val storedSchema: Int get() = prefs.getInt("config_schema", 1)
+
+    /**
+     * Migrate the live SharedPreferences store to the current [SettingsRegistry.SCHEMA] when it was
+     * written by an older shape, using the same [Migrations] chain as bundle import. A fleet self-updates
+     * unattended, so the first time a key is renamed or retyped the persisted value must be carried
+     * forward, not silently reset to its default. No-op (and cheap) while already current; call once at
+     * startup before the store is read. Committed synchronously so a reboot can't race the write.
+     */
+    fun migrateLiveStore() {
+        val from = storedSchema
+        if (from == SettingsRegistry.SCHEMA) return
+        val specs = SettingsRegistry.SPECS.filterNot { it.readOnly || it.transient }
+        val current = specs.associate { it.key to getRaw(it) }
+        val (migrated, warnings) = Migrations.migrate(from, current)
+        warnings.forEach { Log.w(TAG, "live-store migration: $it") }
+        val ed = prefs.edit()
+        for (spec in specs) {
+            val next = migrated[spec.key] ?: continue
+            if (next != current[spec.key]) stage(ed, spec, next)
+        }
+        ed.putInt("config_schema", SettingsRegistry.SCHEMA)
+        ed.commit()
+        Log.i(TAG, "migrated live config store: schema $from -> ${SettingsRegistry.SCHEMA}")
+    }
+
     /** Whether an HA-capable setting is currently exposed to Home Assistant (per-panel override). */
     fun haExposed(key: String, default: Boolean = true): Boolean = prefs.getBoolean("ha_expose_$key", default)
     fun setHaExposed(key: String, on: Boolean) { prefs.edit().putBoolean("ha_expose_$key", on).apply() }
@@ -436,6 +467,7 @@ class Config(context: Context) {
             .ifEmpty { "ha_paneld_panel" }
 
     companion object {
+        private const val TAG = "ha-paneld/config"
         const val DEFAULT_PORT = 8888
         const val VERSION = BuildConfig.VERSION_NAME
         const val MDNS_SERVICE_TYPE = "_ha-paneld._tcp.local."

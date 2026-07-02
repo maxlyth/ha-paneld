@@ -109,6 +109,7 @@ class PaneldService : Service() {
     override fun onCreate() {
         super.onCreate()
         config = Config(this)
+        config.migrateLiveStore()   // carry persisted settings across a schema bump before anything reads them
         sensors = SensorReporter(this, config)
         // Detect the device profile once and hand it to the hardware-specific controllers (instead of
         // each re-detecting). The canonical per-platform silo for paths/quirks; see device/.
