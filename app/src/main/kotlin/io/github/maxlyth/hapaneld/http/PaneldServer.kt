@@ -745,9 +745,9 @@ $allGood</div>"""
         val sysOk = Su.available()
         val sysBtn = if (sysOk) """<button id="lg-src-system" onclick="lgSource('system')">System</button>"""
         else """<button id="lg-src-system" disabled title="Full system logcat needs root — unavailable on this panel">System</button>"""
+        // Deliberately NOT inside a `.cards` masonry container — the log card wants the full page width.
         return """
-<div class="cards">
-<div class="card" style="flex:1 1 100%"><h2>Live logs <small id="lg-state" class="muted">· connecting…</small></h2>
+<div class="card"><h2>Live logs <small id="lg-state" class="muted">· connecting…</small></h2>
 <div class="modebar" style="flex-wrap:wrap;gap:8px">
  <span class="seg"><button id="lg-src-app" class="on" onclick="lgSource('app')">App</button>$sysBtn</span>
  <select id="lg-level" onchange="lgRender()" title="Minimum level">
@@ -763,7 +763,6 @@ $allGood</div>"""
 <p class="note">App = ha-paneld's own process log (no root needed). System = the full device logcat (root).
 Tokens/passwords are redacted before display; the stream is LAN-only and stops when this page closes.
 Raw stream: <code>curl -N http://&lt;panel&gt;:${config.httpPort}/api/v1/logs/stream</code></p></div>
-</div>
 <script src="/assets/logs.js"></script>"""
     }
 
