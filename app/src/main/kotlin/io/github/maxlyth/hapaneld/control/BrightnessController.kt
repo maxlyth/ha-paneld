@@ -123,6 +123,16 @@ class BrightnessController(private val context: Context) : Backlight {
         return -1
     }
 
+    /** The COMMANDED brightness — the Android setting, i.e. the 0–255 scale HA and the UI command in.
+     *  Distinct from [getBrightness]: the framework maps the setting through a per-device brightness
+     *  curve before driving the hardware node, so the effective (node) value is a DIFFERENT scale on
+     *  curved panels (NSPanel Pro: setting 241 → node ~102). State publishes must use this scale. */
+    fun getCommanded(): Int = try {
+        Settings.System.getInt(context.contentResolver, Settings.System.SCREEN_BRIGHTNESS)
+    } catch (e: Settings.SettingNotFoundException) {
+        -1
+    }
+
     /** Reports the EFFECTIVE backlight (sysfs actual_brightness, scaled to 0–255) so HA reflects external /
      *  firmware dimming that bypasses SCREEN_BRIGHTNESS; falls back to the Android setting. */
     override fun getBrightness(): Int {
