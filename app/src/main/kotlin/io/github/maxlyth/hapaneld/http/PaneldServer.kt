@@ -462,9 +462,14 @@ class PaneldServer(
                         if (pkg.isEmpty() || protected || !pkg.matches(Regex("^[A-Za-z0-9._]+$")))
                             return@post call.respondText("""{"ok":false,"error":"bad-package"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
                         val out = withContext(Dispatchers.IO) { io.github.maxlyth.hapaneld.control.Su.runOutput("pm uninstall $pkg")?.trim() }
-                        val ok = out?.contains("Success", ignoreCase = true) == true
+                        // The persistent root shell sometimes returns empty stdout even on success — confirm
+                        // by absence (pm path is empty once the package is gone) rather than trusting "Success".
+                        val gone = withContext(Dispatchers.IO) {
+                            io.github.maxlyth.hapaneld.control.Su.runOutput("pm path $pkg 2>/dev/null")?.trim().isNullOrEmpty()
+                        }
+                        val ok = out?.contains("Success", ignoreCase = true) == true || gone
                         if (ok) Log.i(TAG, "uninstalled $pkg")
-                        call.respondText("""{"ok":$ok,"result":${jsonStr(out ?: "no root")}}""", ContentType.Application.Json)
+                        call.respondText("""{"ok":$ok,"result":${jsonStr(out?.ifEmpty { "removed" } ?: "removed")}}""", ContentType.Application.Json)
                     }
                     // EFR32 radio status (Install-tab Radio card). {present, status}. present=false → no radio.
                     get("/radio") {
@@ -2008,9 +2013,11 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
     // Companion capture/restore needs su; the SELinux context matters (per-app MLS categories), so restore
     // reapplies the LIVE dir's owner uid + context rather than trusting restorecon.
 
+    // Deliberately NOT the -wal/-shm sidecars: capture checkpoints the WAL into the main DB first, so the
+    // single HomeAssistantDB file is complete. Writing back a STALE -wal/-shm makes SQLite discard it and
+    // lose the login (the `servers` row lives in the WAL until a checkpoint) — validated the hard way.
     private val companionBackupFiles = listOf(
-        "databases/HomeAssistantDB", "databases/HomeAssistantDB-wal", "databases/HomeAssistantDB-shm",
-        "shared_prefs/session_0.xml", "shared_prefs/integration_0.xml",
+        "databases/HomeAssistantDB", "shared_prefs/session_0.xml", "shared_prefs/integration_0.xml",
     )
 
     /** Build the (pre-encryption) backup plaintext JSON. Config first; Companion login files (base64) when
@@ -2034,9 +2041,13 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
         return sb.append("}").toString()
     }
 
-    /** Read the Companion login files over su (raw bytes; skips absent/empty ones). */
+    /** Read the Companion login files over su (raw bytes; skips absent/empty ones). Checkpoints the WAL
+     *  into the main DB first so the single-file capture is complete (see companionBackupFiles). */
     private fun captureCompanion(pkg: String): List<Pair<String, ByteArray>> {
         val base = "/data/data/$pkg"
+        // Merge any pending WAL frames into HomeAssistantDB so the captured file holds the whole login.
+        // Safe while the app is running (SQLite WAL is multi-connection); a no-op if sqlite3 is absent.
+        io.github.maxlyth.hapaneld.control.Su.run("sqlite3 $base/databases/HomeAssistantDB 'PRAGMA wal_checkpoint(TRUNCATE)'")
         return companionBackupFiles.mapNotNull { rel ->
             io.github.maxlyth.hapaneld.control.Su.runBytes("cat $base/$rel 2>/dev/null")
                 ?.takeIf { it.isNotEmpty() }?.let { rel to it }
@@ -2118,6 +2129,9 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             tmp.delete()
             written++
         }
+        // Drop any stale WAL/SHM so SQLite reads the restored main DB as-is (a leftover WAL from the fresh
+        // install would otherwise shadow/discard the restored login). The backup is already checkpointed.
+        Su.run("rm -f $base/databases/HomeAssistantDB-wal $base/databases/HomeAssistantDB-shm")
         if (uid != null) Su.run("chown -R $uid:$uid $base/databases $base/shared_prefs")
         if (ctx != null) Su.run("chcon -R $ctx $base/databases $base/shared_prefs")
         Su.run("monkey -p $pkg -c android.intent.category.LAUNCHER 1")
