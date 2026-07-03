@@ -106,7 +106,9 @@ object PanelInfo {
     }
 
     /** Package + real-engine WebView status for the info row and the health banner. */
-    class WebViewStatus(val display: String, val tooOld: Boolean)
+    // [engineMajor] = the real Chromium major (from the WebView UA when the package version looked old),
+    // or the package major on the fast path, or null. The WebView auto-heal keys its install on this.
+    class WebViewStatus(val display: String, val tooOld: Boolean, val engineMajor: Int? = null)
 
     /**
      * WebView status, disambiguating the Cromite/LineageOS version spoof. The package versionName
@@ -120,13 +122,13 @@ object PanelInfo {
         val pkg = webViewPackage()
         val pkgMajor = PanelHealth.chromiumMajor(pkg)
         // Fast path: unknown or already ≥ threshold — trust it, don't load the WebView provider.
-        if (pkgMajor == null || pkgMajor >= PanelHealth.MIN_CHROMIUM) return WebViewStatus(pkg, false)
+        if (pkgMajor == null || pkgMajor >= PanelHealth.MIN_CHROMIUM) return WebViewStatus(pkg, false, pkgMajor)
         // Package looks old: could be genuinely old, or a Cromite/LineageOS swap stamping the OEM
         // version. The UA carries the true engine version — use it.
         val engine = engineVersion(context)
         val engineMajor = engine?.substringBefore('.')?.toIntOrNull()
         val display = if (engineMajor != null && engineMajor != pkgMajor) "$pkg · engine Chromium $engine" else pkg
-        return WebViewStatus(display, PanelHealth.webViewTooOld(pkg, engineMajor))
+        return WebViewStatus(display, PanelHealth.webViewTooOld(pkg, engineMajor), engineMajor ?: pkgMajor)
     }
 
     private fun webViewPackage(): String = try {

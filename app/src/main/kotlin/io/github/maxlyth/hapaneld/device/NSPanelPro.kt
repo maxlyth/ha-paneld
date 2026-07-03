@@ -75,6 +75,14 @@ object NSPanelPro : DeviceProfile {
         if ("120" in SystemProps.get("ro.product.version").substringBefore('_')) 250 else 160
     }
     override val recommendedFontScale: Float? = 1.0f
+
+    // LineageOS Android System WebView — the last build that installs on Android 8.1 (Chromium 138).
+    // The stock ~107 renders the HA dashboard blank. Signer pinned; sideloaded from the mirror.
+    override val recommendedWebView = WebViewSpec(
+        url = "https://github.com/maxlyth/ha-paneld/releases/download/webview-mirror/lineageos-webview-138.0.7204.63.apk",
+        version = "138.0.7204.63",
+        certSha256 = "518325ef7f96c0d1194c2e856b040d636166ffb846717d72fa87f4fae5be7bbb",
+    )
 }
 
 /** True if dotted-numeric version [a] < [b] (e.g. "1.2.6" < "3.0.0"). Non-numeric/missing parts → 0. */

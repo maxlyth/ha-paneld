@@ -8,6 +8,12 @@ From **v0.8.0**, entries are grouped under **Added** (new features/entities), **
 changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
 content appear. Earlier releases predate this convention and keep their flat lists.
 
+## v0.8.6-rc5 - Unreleased
+
+### Added
+
+- **One-tap WebView auto-heal** — a too-old System WebView is the most common reason a panel shows a blank Home Assistant dashboard, and these panels have no Play Store to update it. When ha-paneld detects the WebView is too old and the panel profile has a known-good build (NSPanel Pro → LineageOS 138, TPA10 → Cromite 147), the Install tab's warning now offers an **"Update WebView now"** button that downloads the correct `com.android.webview` from the ha-paneld WebView mirror and installs it over root — signature-pinned, like the app/Companion updaters — then reloads the dashboard. No adb, no F-Droid, no manual sideload. (#5)
+
 ## v0.8.6-rc4 - 2026-07-03
 
 ### Added

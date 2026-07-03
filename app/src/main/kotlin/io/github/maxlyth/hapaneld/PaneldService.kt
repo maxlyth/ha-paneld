@@ -198,6 +198,7 @@ class PaneldService : Service() {
             // Live log viewer sources (Logs tab). System is gated on Su.available() per request.
             logApp = logCaptureApp, logSystem = logCaptureSystem,
             effectiveBrightness = { brightness.getBrightness() },
+            onHealWebView = { healWebView() },
         )
         // Stream daemon-instrumented hardware buttons (e.g. WF1589T power key) into the same event
         // entity as the a11y key capture. No-op on panels with no evdev buttons.
@@ -356,6 +357,21 @@ class PaneldService : Service() {
         networkAdb = adb.available(),
         zigbeePresent = zigbeePresent,
     )
+
+    /** WebView auto-heal (Install-tab "Update WebView now" button): download + install the profile's
+     *  recommended System WebView, then reload the dashboard so the new provider takes effect. force=true
+     *  (the user asked); off-thread (large download + su). */
+    private fun healWebView() {
+        scope.launch {
+            val r = io.github.maxlyth.hapaneld.util.WebViewInstaller.heal(this@PaneldService, profile, engineMajor = null, force = true)
+            Log.i(TAG, "WebView heal: $r")
+            if (r.startsWith("OK")) {
+                // The Companion picks up a new WebView provider only on process restart — reload it.
+                kotlinx.coroutines.delay(2_000)
+                system.reloadDashboard(config.dashboardPackage)
+            }
+        }
+    }
 
     /** Smoothness-metrics target: the configured override, else the installed HA Companion app
      *  (this is an HA project — the dashboard is the Companion app, so no config needed normally). */

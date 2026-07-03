@@ -136,6 +136,13 @@ interface DeviceProfile {
     val recommendedDensity: Int?
     val recommendedFontScale: Float?
 
+    /** The System WebView build to install when this panel's stock WebView is too old to render the HA
+     *  dashboard. These panels have no Play Store, so ha-paneld sideloads a known-good `com.android.webview`
+     *  from the `webview-mirror` release (pinned signer). null = no known-good build for this panel (leave
+     *  the WebView alone). Pick the newest the panel's Android version supports (NSPanel Pro's 8.1 caps at
+     *  138). See [WebViewInstaller] and docs/hardware/README.md. */
+    val recommendedWebView: WebViewSpec? get() = null
+
     companion object {
         /** Memoized detected profile: [match] is pure per boot (Build fields + one system property), yet
          *  several call sites re-invoke [detect] on request paths — so resolve it once and reuse. */
@@ -187,6 +194,22 @@ interface DeviceProfile {
 /** `su` invocation form: toolbox `su -c '<cmd>'` (Sonoff PX30) vs Android `su 0 sh -c '<cmd>'` (Tuya
  *  userdebug); NONE = su is not reachable from the app sandbox (use the helper daemon instead). */
 enum class SuForm { TOOLBOX, ANDROID, NONE }
+
+/**
+ * A known-good System WebView build for a panel (see [DeviceProfile.recommendedWebView]). The package
+ * is always `com.android.webview` — the id the Android framework requires to auto-select a WebView
+ * provider — so only the source + version + pinned signer vary. [version] is the full Chromium version
+ * the build provides (e.g. "138.0.7204.63"); its major gates the "is a newer one worth installing"
+ * check. [certSha256] is the build's signing cert (LineageOS / Cromite / …), verified before install.
+ */
+data class WebViewSpec(
+    val url: String,
+    val version: String,
+    val certSha256: String,
+) {
+    /** Chromium major of [version] (e.g. 138), or 0 if unparseable. */
+    val major: Int get() = version.substringBefore('.').toIntOrNull() ?: 0
+}
 
 /** RGB-LED control mechanism. RK3576_IOCTL = app-direct ioctl on `/dev/ledjni` (e.g. WF1589T);
  *  RK3576_IOCTL_DAEMON = the *same* ioctl but routed through the root helper daemon, for panels where

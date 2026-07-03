@@ -31,6 +31,9 @@ object AppInstaller {
     val COMPANION_MINIMAL = Pin("io.homeassistant.companion.android.minimal", "11194ba809b42ddf0e1a7dec6842a59c7ff1119c5482e95febffd5c6014daa5a")
 
     private const val TAG = "ha-paneld/install"
+    // Staging + `pm install` of a large APK (a WebView build ~250 MB) needs far longer than the default
+    // 5s su bound. 3 min covers a slow-eMMC copy + install with margin.
+    private const val INSTALL_TIMEOUT_MS = 180_000L
 
     fun installedVersion(context: Context, pkg: String): String =
         runCatching { context.packageManager.getPackageInfo(pkg, 0).versionName ?: "" }.getOrElse { "" }
@@ -55,8 +58,10 @@ object AppInstaller {
             if (hasSu) {
                 val staged = "/data/local/tmp/hapaneld-dl.apk"
                 try {
-                    if (!Su.run("cp '${apk.absolutePath}' $staged && chmod 644 $staged")) "stage failed"
-                    else Su.runOutput("pm install -r -d $staged 2>&1")?.trim() ?: ""
+                    // Long-timeout su: staging + installing a large APK (a WebView build is ~250 MB)
+                    // far exceeds the default 5s su bound. Always one-shot, so it can't wedge the shell.
+                    if (!Su.runLong("cp '${apk.absolutePath}' $staged && chmod 644 $staged", INSTALL_TIMEOUT_MS)) "stage failed"
+                    else Su.runOutputLong("pm install -r -d $staged 2>&1", INSTALL_TIMEOUT_MS)?.trim() ?: ""
                 } finally { runCatching { Su.run("rm -f $staged") } }
             } else {
                 // Daemon reads the verified APK from our data dir; send() is synchronous so the delete

@@ -187,7 +187,7 @@ object Su : RootShell {
      * persistent shell already has via its timed future. [reader] consumes the process (wait / read stdout)
      * on a throwaway daemon thread; on timeout or failure the child is force-killed and null is returned.
      */
-    private fun <T> runBounded(label: String, argv: Array<String>, reader: (Process) -> T): T? {
+    private fun <T> runBounded(label: String, argv: Array<String>, timeoutMs: Long = CMD_TIMEOUT_MS, reader: (Process) -> T): T? {
         val p = try {
             Runtime.getRuntime().exec(argv)
         } catch (e: Exception) {
@@ -198,7 +198,7 @@ object Su : RootShell {
             Thread(r, "ha-paneld-su-1shot").apply { isDaemon = true }
         }
         return try {
-            ex.submit(Callable { reader(p) }).get(CMD_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            ex.submit(Callable { reader(p) }).get(timeoutMs, TimeUnit.MILLISECONDS)
         } catch (e: Exception) {
             // timeout / broken pipe / reader failure — kill the child so it can't linger, then give up.
             Log.d(TAG, "su $label timed out or failed", e)
@@ -216,6 +216,32 @@ object Su : RootShell {
         }
         if (form == -1) form = 2
         return false
+    }
+
+    /** Long-running one-shot su [cmd] (exit 0 → true), bounded to [timeoutMs]. Always a one-shot — a
+     *  minutes-long op (e.g. staging + installing a large APK) must NOT occupy the shared persistent
+     *  shell, whose sentinel protocol is bounded to the short [CMD_TIMEOUT_MS]. */
+    fun runLong(cmd: String, timeoutMs: Long): Boolean {
+        val forms = if (form in 0..1) intArrayOf(form) else intArrayOf(0, 1)
+        for (f in forms) {
+            if (runBounded("run-long", argvOneShot(f, cmd), timeoutMs) { it.waitFor() } == 0) { form = f; return true }
+        }
+        if (form == -1) form = 2
+        return false
+    }
+
+    /** Long-running one-shot su [cmd] returning stdout (null on non-zero/failure), bounded to [timeoutMs]. */
+    fun runOutputLong(cmd: String, timeoutMs: Long): String? {
+        val forms = if (form in 0..1) intArrayOf(form) else intArrayOf(0, 1)
+        for (f in forms) {
+            val out = runBounded("out-long", argvOneShot(f, cmd), timeoutMs) { p ->
+                val text = p.inputStream.bufferedReader().readText()
+                if (p.waitFor() == 0) text else null
+            }
+            if (out != null) { form = f; return out }
+        }
+        if (form == -1) form = 2
+        return null
     }
 
     private fun oneShotOutput(cmd: String): String? {

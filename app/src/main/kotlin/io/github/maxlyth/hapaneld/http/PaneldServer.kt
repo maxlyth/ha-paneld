@@ -104,6 +104,9 @@ class PaneldServer(
     // EFFECTIVE backlight (sysfs actual_brightness via BrightnessController, cached) — the sensors
     // endpoint + Live-state row report what the hardware is doing, not just the Android setting.
     private val effectiveBrightness: () -> Int = { -1 },
+    // Trigger a WebView auto-heal (download + install the profile's recommended System WebView). Injected
+    // by the service (needs Context + a coroutine); runs off the request thread. Fired by the Install-tab button.
+    private val onHealWebView: () -> Unit = {},
 ) {
     // Per-INSTALL build token (changes on every (re)install, not just a version bump) so an open info
     // page can auto-reload after the app is updated — even a same-version dev re-spin. /health carries it.
@@ -309,6 +312,12 @@ class PaneldServer(
                     // Health + capabilities as JSON (warnings as ready-to-render HTML) — feeds every
                     // variant's Install/health section client-side.
                     get("/status") { call.respondText(statusJson(), ContentType.Application.Json) }
+                    // Auto-heal the System WebView (download + install the profile's recommended build).
+                    // Fire-and-forget: the install runs off-thread (large download); the client refreshes.
+                    post("/webview/heal") {
+                        onHealWebView()
+                        call.respondText("""{"status":"started"}""", ContentType.Application.Json)
+                    }
                     // Per-panel Canvas dashboard layout (opaque Gridstack JSON, stored in Config).
                     get("/ui/layout") {
                         call.respondText("""{"layout":${jsonStr(config.uiDashboardLayout)}}""", ContentType.Application.Json)
@@ -772,11 +781,16 @@ ${tameCardHtml()}
             val col = capColor[c.status] ?: "#888"
             """<tr><th>${esc(c.name)}</th><td><span style="color:$col">●</span> ${esc(c.note)}</td></tr>"""
         }
+        // Auto-heal offer: if the profile ships a known-good WebView and we have root/daemon to install it,
+        // the too-old warning gets a one-tap "Update WebView now" button (POST /api/v1/webview/heal).
+        val canHeal = tooOld && io.github.maxlyth.hapaneld.device.DeviceProfile.detect().recommendedWebView != null && rootOk()
         val warnings = buildString {
             if (tooOld) append(
                 """<div class="setup">⚠ <b>System WebView is too old</b> (${esc(webViewVal)}) — the Home Assistant """ +
                     """dashboard may render blank or broken. <a href="$WEBVIEW_DOC" target="_blank" rel="noopener">""" +
-                    """How &amp; why to update</a> (target: Chromium ${PanelHealth.MIN_CHROMIUM}+).</div>""",
+                    """How &amp; why to update</a> (target: Chromium ${PanelHealth.MIN_CHROMIUM}+).""" +
+                    (if (canHeal) """<div style="margin-top:10px"><button class="pbtn" onclick="healWebView(this)">⬇ Update WebView now</button> <span id="wv-heal" class="muted"></span></div>""" else "") +
+                    """</div>""",
             )
             if (renderers.isEmpty()) append(
                 """<div class="setup">ℹ <b>No dashboard app detected</b> — install the HA Companion app, """ +
@@ -800,7 +814,14 @@ $caps
 <div class="card"><h2>Backup this panel</h2>
 <p class="note">Export the full configuration bundle for safe-keeping, or to clone settings to another panel (Configure → Import).</p>
 <a class="pbtn" href="/api/v1/config/export">⭳ Export config bundle</a></div>
-$allGood</div>"""
+$allGood</div>
+<script>
+function healWebView(btn){btn.disabled=true;var s=document.getElementById('wv-heal');
+ if(s)s.textContent='Downloading + installing… this takes a minute.';
+ fetch('/api/v1/webview/heal',{method:'POST'}).then(function(r){return r.json();}).then(function(){
+  if(s)s.textContent='Installing WebView — reload the dashboard, then refresh this page to confirm the new version.';
+ }).catch(function(){if(s)s.textContent='Failed to start — check root/daemon.';btn.disabled=false;});}
+</script>"""
     }
 
     /** Logs tab — live log tail over SSE. App source always; system source needs root (gated live). */

@@ -50,4 +50,11 @@ object Tpa10 : DeviceProfile {
     override val cpuGovernors = mapOf("Performance" to "performance", "Efficiency" to "powersave", "Auto" to "schedutil")
     override val recommendedDensity: Int? = 226     // 10" 1920×1200 ≈ 226 ppi — natural 1:1 layout scale
     override val recommendedFontScale: Float? = 1.0f
+
+    // Cromite SystemWebView (Android 11 runs current Cromite). Signer pinned; sideloaded from the mirror.
+    override val recommendedWebView = WebViewSpec(
+        url = "https://github.com/maxlyth/ha-paneld/releases/download/webview-mirror/cromite-webview-147.0.7727.56.apk",
+        version = "147.0.7727.56",
+        certSha256 = "633fa41d8211d6d0916a819b89668c6de92e64232da67f9d16fd81c3b7e923ff",
+    )
 }
