@@ -8,10 +8,11 @@ From **v0.8.0**, entries are grouped under **Added** (new features/entities), **
 changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
 content appear. Earlier releases predate this convention and keep their flat lists.
 
-## v0.8.6-rc4 - Unreleased
+## v0.8.6-rc4 - 2026-07-03
 
 ### Added
 
+- **Provisioning tames the recommended vendor apps by default** — `scripts/provision.sh` now disables a panel profile's known-intrusive vendor apps (on NSPanel Pro: the eWeLink control panel overlay + the factory test tools) as part of provisioning, so a freshly set-up panel isn't obstructed by vendor clutter. It's fully reversible and **can never strand the panel** (a home launcher is only tamed once ha-paneld's admin launcher is a fallback home, and the home role is handed over first); pass `--no-tame` to skip. A stock, un-provisioned panel is never modified on its own — only running provisioning applies it. The `:8888` tame picker also gains a one-click "tame all recommended".
 - **Diagnostic sensors for Home Assistant (opt-in)** — a new **Diagnostics** section in the Configure tab exposes the panel's **IP address, CPU usage, memory usage, SoC temperature and boot time** as HA sensor entities. Every one is **off by default** (panel-local until you tick its "expose to HA" pip), and the values are pushed with a per-metric deadband so they never flood the broker. CPU and SoC temperature need root/su (unavailable on sandbox-walled panels); IP, memory and boot time work everywhere.
 
 ### Fixed
