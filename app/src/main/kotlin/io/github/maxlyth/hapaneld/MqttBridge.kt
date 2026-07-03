@@ -1112,7 +1112,18 @@ class MqttBridge(
     private fun publishConfig(component: String, objectId: String, payload: String) {
         val topic = "homeassistant/$component/$objectId/config"
         publishedConfigTopics.add(topic)
-        publish(topic, payload, retain = false)
+        // Pin the HA entity_id to `<component>.<panel_id>_<suffix>` via `default_entity_id` — the field
+        // HA actually honours (its `object_id` is IGNORED, verified 2026-07-03; this is how Zigbee2MQTT
+        // fixes ids too). It anchors the entity_id to the stable panel_id INDEPENDENTLY of the device
+        // name, so renaming the friendly (device) name no longer drifts newly-registered entity_ids;
+        // `device.name` stays the friendly name for a pretty display. "default" = applied at registration
+        // only, so existing entities keep their current id (no churn). Empty payload = tombstone (skip).
+        val body = if (payload.isNotEmpty() && !payload.contains("\"default_entity_id\"")) {
+            """{"default_entity_id":"$component.$objectId",""" + payload.substring(1)
+        } else {
+            payload
+        }
+        publish(topic, body, retain = false)
     }
 
     /**
