@@ -7,6 +7,8 @@
 #   scripts/provision.sh <panel-ip:5555> [APK] \
 #       [--id PANEL_ID] [--mqtt tcp://host:1883] [--mqtt-user U] [--mqtt-pass P] [--apk PATH] \
 #       [--log-host HOST] [--log-port N] [--log-proto syslog|http]   # forward logcat to an aggregator
+#   By default provisioning also TAMES the panel profile's recommended vendor apps (eWeLink overlay +
+#   factory test tools) — reversible + never strands the panel; pass --no-tame to skip.
 #   scripts/provision.sh <panel-ip:5555> --verify        # check end-state only, make no changes
 #
 # IDEMPOTENCY (safe to re-run after a cancel/failure — re-running converges to the full state):
@@ -26,13 +28,13 @@ step() { echo "${CYN}${B}$1${X} $2"; }
 
 trap 'echo "${RED}${B}✗ provisioning incomplete${X} — re-run the SAME command to finish (it is idempotent)." >&2' ERR
 
-TARGET="${1:?usage: provision.sh <panel-ip:5555> [APK] [--id ID] [--mqtt tcp://host:1883] [--mqtt-user U] [--mqtt-pass P] [--log-host HOST] [--log-port N] [--log-proto syslog|http] [--log-off] [--export FILE] [--restore FILE] [--restore-fleet FILE] [--latest] [--force] [--persist-adb] [--strip-vendor] [--verify]}"
+TARGET="${1:?usage: provision.sh <panel-ip:5555> [APK] [--id ID] [--mqtt tcp://host:1883] [--mqtt-user U] [--mqtt-pass P] [--log-host HOST] [--log-port N] [--log-proto syslog|http] [--log-off] [--export FILE] [--restore FILE] [--restore-fleet FILE] [--latest] [--force] [--persist-adb] [--strip-vendor] [--no-tame] [--verify]}"
 shift
 REPO="maxlyth/ha-paneld"
 LOCAL_APK="app/build/outputs/apk/debug/app-debug.apk"
 PKG="io.github.maxlyth.hapaneld"
 A11Y="$PKG/.input.PanelAccessibilityService"
-APK=""; PANEL_ID=""; MQTT=""; MQTT_USER=""; MQTT_PASS=""; VERIFY_ONLY=0; LATEST=0; FORCE=0; PERSIST_ADB=0; STRIP_VENDOR=0; TOINSTALL_VER=""
+APK=""; PANEL_ID=""; MQTT=""; MQTT_USER=""; MQTT_PASS=""; VERIFY_ONLY=0; LATEST=0; FORCE=0; PERSIST_ADB=0; STRIP_VENDOR=0; NO_TAME=0; TOINSTALL_VER=""
 LOG_HOST=""; LOG_PORT=""; LOG_PROTO=""; LOG_ENABLE=""
 EXPORT_FILE=""; RESTORE_FILE=""; RESTORE_MODE=""
 
@@ -48,6 +50,7 @@ while [ "${1:-}" ]; do
     --force) FORCE=1; shift ;;       # skip the same/older-version prompt
     --persist-adb) PERSIST_ADB=1; shift ;;  # keep network adb (tcp 5555) across reboots (opt-in; standing LAN port)
     --strip-vendor) STRIP_VENDOR=1; shift ;; # disable the Tuya vendor apps (TPA10) non-interactively (skips the prompt)
+    --no-tame) NO_TAME=1; shift ;;   # skip the default "tame recommended vendor apps" step (eWeLink + factory test tools)
     --log-host) LOG_HOST="$2"; LOG_ENABLE=true; shift 2 ;;  # ship logcat to this aggregator (host enables shipping)
     --log-port) LOG_PORT="$2"; shift 2 ;;     # log sink port (default 514 for syslog)
     --log-proto) LOG_PROTO="$2"; shift 2 ;;   # syslog (default) | http
@@ -290,6 +293,18 @@ if [ -n "$RESTORE_FILE" ]; then
   MODE_Q=""; [ "$RESTORE_MODE" = "fleet" ] && MODE_Q="?mode=fleet"
   step "📦 restoring config" "${D}$RESTORE_FILE (${RESTORE_MODE})${X}"
   resp="$(curl -fsS -H 'Content-Type: application/json' --data-binary @"$RESTORE_FILE" "$URL/api/v1/config/import$MODE_Q" 2>&1)"     && echo "   ${GRN}✓${X} $resp"     || echo "   ${RED}✗ import failed:${X} $resp"
+fi
+
+# Recommended vendor-app taming — tame the panel profile's `defaultTame` set (eWeLink's over-the-dashboard
+# overlay + factory burn-in/test tools) in one call. Guarded app-side: tame() hands the home role to
+# ha-paneld's admin launcher and refuses to strand the panel, and it's reversible from the :8888 picker.
+# Default ON during provisioning; --no-tame skips. Runs after any restore so it isn't clobbered. Best-effort
+# — a profile with no recommendations, or a panel with no privileged path, is a harmless no-op.
+if [ "$NO_TAME" != 1 ]; then
+  step "🧹 taming" "${D}recommended vendor apps (eWeLink, factory test tools)${X}"
+  curl -fsS --data-urlencode "action=recommended" "$URL/api/v1/tame" >/dev/null 2>&1 \
+    && echo "   ${GRN}✓${X} recommended set applied (where present + safe)" \
+    || echo "   ${D}(nothing to tame / no privileged path)${X}"
 fi
 
 # Config bundle export (after any restore/config, so the file reflects the final state). Includes

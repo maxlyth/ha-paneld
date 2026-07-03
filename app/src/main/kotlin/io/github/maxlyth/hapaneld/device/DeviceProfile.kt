@@ -231,9 +231,16 @@ data class EvdevButton(
  *              over the screen), "boot" (auto-starts). Free-form; the UI just renders them.
  * @param note  a one-line rationale from the profile author, shown under the row so the user understands
  *              why it's flagged and whether they want it gone. Empty = no note.
+ * @param defaultTame  true for genuinely-intrusive firmware clutter (an overlay-drawing vendor kiosk, a
+ *              factory burn-in/test tool) that a panel-as-HA-dashboard almost always wants gone. Marks the
+ *              candidate as a **recommended default**: badged + one-click "Tame all recommended" in the
+ *              `:8888` picker, and auto-applied at provision time (`provision.sh`, guarded — `tame()` never
+ *              strands the panel). Off for merely-optional apps (demos, an OTA updater) — those stay a
+ *              deliberate per-package choice. Never modifies a stock, un-provisioned panel on its own.
  */
 data class TameCandidate(
     val pkg: String,
     val tags: List<String> = emptyList(),
     val note: String = "",
+    val defaultTame: Boolean = false,
 )

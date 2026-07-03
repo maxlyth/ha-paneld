@@ -45,21 +45,24 @@ object NSPanelPro : DeviceProfile {
     // (the PX30 SoC vendor) factory/demo apps that small-production panels routinely ship — they look
     // alarming but are safe to disable. All are suggestions only; nothing is auto-disabled, and every
     // action is reversible. Listed even if a given firmware lacks one (absent packages drop out silently).
+    // eWeLink + the factory burn-in/test tools are `defaultTame` — a panel run as an HA dashboard almost
+    // always wants them gone (eWeLink draws over the dashboard; the test tools are dead weight). The demo
+    // video player stays OFF (a deliberate per-package choice, not clutter to strip by default).
     override val tameVendorCandidates = listOf(
         TameCandidate("com.eWeLinkControlPanel", listOf("vendor", "overlay", "boot"),
-            "eWeLink/Sonoff control-panel app. After some Sonoff firmware updates it starts on boot and draws a floating widget over the dashboard."),
+            "eWeLink/Sonoff control-panel app. After some Sonoff firmware updates it starts on boot and draws a floating widget over the dashboard.", defaultTame = true),
         TameCandidate("com.android.rk", listOf("chipset", "test"),
-            "Rockchip (PX30 SoC) factory/test app left in the firmware image. Not used by the panel in normal operation."),
+            "Rockchip (PX30 SoC) factory/test app left in the firmware image. Not used by the panel in normal operation.", defaultTame = true),
         TameCandidate("android.rk.RockVideoPlayer", listOf("chipset", "demo"),
             "Rockchip demo video player bundled with the SoC image. Safe to disable unless you actually use it."),
         TameCandidate("com.cghs.stresstest", listOf("vendor", "test", "clutter"),
-            "Factory hardware stress-test (\"burn-in\") tool (app label \"Stresstest for 8.1\"). Used on the production line to soak the panel; not needed in normal operation."),
+            "Factory hardware stress-test (\"burn-in\") tool (app label \"Stresstest for 8.1\"). Used on the production line to soak the panel; not needed in normal operation.", defaultTame = true),
         TameCandidate("com.smatek.test", listOf("vendor", "test", "clutter"),
-            "CoolKit (eWeLink/Sonoff) factory test tool (label \"测试工具\" = \"Test Tool\"), bundled in /oem so it survives a factory reset. Diagnostic only — not used in normal operation."),
+            "CoolKit (eWeLink/Sonoff) factory test tool (label \"测试工具\" = \"Test Tool\"), bundled in /oem so it survives a factory reset. Diagnostic only — not used in normal operation.", defaultTame = true),
         TameCandidate("com.rockchip.devicetest", listOf("chipset", "test", "clutter"),
-            "Rockchip (PX30 SoC) factory device-test suite. Diagnostic only; not used by the panel in normal operation."),
+            "Rockchip (PX30 SoC) factory device-test suite. Diagnostic only; not used by the panel in normal operation.", defaultTame = true),
         TameCandidate("com.DeviceTest", listOf("vendor", "test", "clutter"),
-            "Factory device-test app (privileged system, label \"DeviceTest(android8.0)\") left in the firmware image. Diagnostic only — not used in normal operation."),
+            "Factory device-test app (privileged system, label \"DeviceTest(android8.0)\") left in the firmware image. Diagnostic only — not used in normal operation.", defaultTame = true),
     )
     override val evdevButtons = emptyList<EvdevButton>()
     // PX30 offers no schedutil; its load-following governor is interactive.

@@ -441,6 +441,25 @@ class PaneldServer(
                     // the info page (the row's new state shows on reload).
                     post("/tame") {
                         val p = call.receiveParameters()
+                        // One-click "Tame all recommended" (the profile's defaultTame set) — no pkg needed.
+                        // Persists the actually-tamed packages so they re-apply on boot; tame() is guarded
+                        // (hands over the home role + refuses to strand), so this never leaves the panel homeless.
+                        if (p["action"]?.trim() == "recommended") {
+                            scope.launch {
+                                val tamed = tame.applyRecommended(tameProfileCandidates)
+                                if (tamed.isNotEmpty()) {
+                                    config.setTameVendorPackages((config.tameVendorPackages.toSet() + tamed).joinToString(" "))
+                                    snapInvalidate()
+                                }
+                            }
+                            call.respondText(
+                                "<!doctype html><meta charset=utf-8><meta http-equiv=refresh content='2;url=/configure'>" +
+                                    "<body style='font-family:system-ui;background:#111;color:#eee;padding:20px'>" +
+                                    "applying recommended vendor-app taming…</body>",
+                                ContentType.Text.Html,
+                            )
+                            return@post
+                        }
                         val pkg = p["pkg"]?.trim().orEmpty()
                         val untame = p["action"]?.trim() == "untame"
                         // Re-enable is always allowed; taming is refused for protected packages (the brick-guard
@@ -478,7 +497,12 @@ class PaneldServer(
                             """<h4 style="margin:14px 0 1px">${esc(g.title)}</h4>""" +
                                 """<p class="note" style="margin:0 0 4px">${esc(g.hint)}</p>$items"""
                         }
-                        call.respondText(frag, ContentType.Text.Html)
+                        // One-click "Tame all recommended", shown only when there's an active recommended pick.
+                        val hasRec = groups.any { g -> g.items.any { it.recommended && !it.blocked && !it.disabled && it.installed } }
+                        val recBtn = if (hasRec)
+                            """<form method="post" action="/api/v1/tame" style="margin:0 0 12px"><input type="hidden" name="action" value="recommended"><button type="submit" style="background:#2e6b3f;border-color:#2e6b3f">✓ Tame all recommended</button> <span class="note" style="font-size:.8em">the badged first-picks below, in one click</span></form>"""
+                            else ""
+                        call.respondText(recBtn + frag, ContentType.Text.Html)
                     }
                     post("/display/density") {
                         val p = call.receiveParameters()
@@ -1245,6 +1269,10 @@ ${tcard("updtbl", "Updates", s?.let { updatesRowsHtml(it) })}
         val tags = c.tags.joinToString("") {
             """<span style="display:inline-block;background:#2a3340;color:#9cc;border-radius:4px;padding:0 6px;margin-left:5px;font-size:.7em;vertical-align:1px">${esc(it)}</span>"""
         }
+        // A "recommended" badge marks the profile's defaultTame picks (safe first picks / the "Tame all
+        // recommended" set) while they're still active.
+        val recBadge = if (c.recommended && !tamed)
+            """<span style="display:inline-block;background:#1f4d2e;color:#8fe0a8;border-radius:4px;padding:0 6px;margin-left:5px;font-size:.7em;vertical-align:1px">recommended</span>""" else ""
         val note = if (c.note.isNotBlank())
             """<br><small style="color:#9aa">${esc(c.note)}</small>""" else ""
         // A non-removable package (core Android / dashboard / ourselves) is shown for context with a muted
@@ -1254,7 +1282,7 @@ ${tcard("updtbl", "Updates", s?.let { updatesRowsHtml(it) })}
         else
             """<form method="post" action="/api/v1/tame" style="margin:0"><input type="hidden" name="pkg" value="${esc(c.pkg)}"><input type="hidden" name="action" value="$action"><button type="submit" style="$btn;white-space:nowrap">$label</button></form>"""
         return """  <div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid #222">
-   <span style="flex:1;min-width:0;overflow:hidden">${esc(c.label)}$tags<br><small style="color:#888">${esc(c.pkg)}</small>$note</span>
+   <span style="flex:1;min-width:0;overflow:hidden">${esc(c.label)}$recBadge$tags<br><small style="color:#888">${esc(c.pkg)}</small>$note</span>
    $state
    $control
   </div>"""

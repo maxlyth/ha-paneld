@@ -32,6 +32,17 @@ class TameController(private val context: Context) {
     fun applyBlocklist(packages: List<String>): List<String> =
         packages.filter { tame(it) }
 
+    /**
+     * The **recommended set**: tame every profile candidate flagged [TameCandidate.defaultTame] that's
+     * installed and safe to act on right now. Idempotent; reuses [tame], which hands the home role to
+     * ha-paneld's admin launcher before disabling and **refuses to strand** the panel (a home launcher is
+     * only tamed when ha-paneld is a fallback home) — so this can't leave the panel without a home even
+     * "before a replacement home is secured". Returns the packages actually tamed (for the caller to persist
+     * into the blocklist so they re-apply on boot).
+     */
+    fun applyRecommended(profileCandidates: List<TameCandidate>): List<String> =
+        profileCandidates.filter { it.defaultTame }.map { it.pkg }.filter { tame(it) }
+
     /** One row in the Vendor-packages UI: a package, its label + current state, whether it's tamed, and
      *  (for profile-curated packages) the author's [tags] and [note] explaining what it is. */
     data class Candidate(
@@ -45,6 +56,8 @@ class TameController(private val context: Context) {
         // false for packages that must not be disabled (core Android, the dashboard, ourselves) — shown for
         // context (e.g. a heavy core process) but with no Tame button.
         val removable: Boolean = true,
+        // A profile `defaultTame` pick — badged as "recommended" and covered by "Tame all recommended".
+        val recommended: Boolean = false,
     )
 
     // Heuristic tags for a DISCOVERED package (one with no profile-authored metadata), so a non-engineer
@@ -165,7 +178,7 @@ class TameController(private val context: Context) {
         // Profile-authored tags win; otherwise derive them from heuristics so discovered packages still
         // carry "core / vendor / user / overlay" context.
         return Candidate(pkg, label, installed = ai != null, disabled = disabled, blocked = pkg in blocked,
-            tags = meta?.tags ?: autoTags(pkg, ai), note = meta?.note ?: "")
+            tags = meta?.tags ?: autoTags(pkg, ai), note = meta?.note ?: "", recommended = meta?.defaultTame == true)
     }
 
     // Discovery: a package is a candidate if it (a) has a launcher activity or holds the overlay
