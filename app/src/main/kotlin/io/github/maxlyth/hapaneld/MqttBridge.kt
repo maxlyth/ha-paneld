@@ -194,6 +194,11 @@ class MqttBridge(
     @Volatile private var prevTickBrightness = -1
     @Volatile private var prevTickVolume = -1
     @Volatile private var lastPublishedVolume = -1
+    // Last CPU-tier reported to HA — baselined at announce / on command, so the sync channel only fires
+    // when the live sysfs governor is changed by something else (a thermal daemon, another app).
+    @Volatile private var lastPublishedGovTier: String? = null
+    // Recent "changed outside MQTT" events, surfaced on the info page + /diag for debugging.
+    private val syncLog = io.github.maxlyth.hapaneld.mqtt.SyncLog()
     // Last-published diagnostic values, for the per-sensor deadband (numeric) / change (IP) gate.
     private val lastDiagNumeric = HashMap<String, Double>()
     private val lastDiagString = HashMap<String, String>()
@@ -676,7 +681,7 @@ class MqttBridge(
     // CPU scaling governor (select). Quick su write; publishes the read-back governor.
     private fun handleCpuGov(payload: String) {
         val tier = payload.trim().trim('"')   // "Performance" | "Efficiency" | "Auto"
-        if (cpu.setTier(tier)) publish(stateCpuGov, cpu.currentTier() ?: tier, retain = true)
+        if (cpu.setTier(tier)) (cpu.currentTier() ?: tier).also { lastPublishedGovTier = it; publish(stateCpuGov, it, retain = true) }
     }
 
     // Persistent network adb (switch). Restarts adbd to apply; that only affects adb, not MQTT.
@@ -1048,7 +1053,7 @@ class MqttBridge(
             val opts = CpuController.TIERS.joinToString(",") { "\"${jsonEsc(it)}\"" }
             exposable("cpu_governor", "select", "${panel}_cpu_governor", {
                 """{"name":"CPU profile","object_id":"${panel}_cpu_governor","unique_id":"${panel}_cpu_governor","command_topic":"$cmdCpuGov","state_topic":"$stateCpuGov","options":[$opts],"icon":"mdi:speedometer","entity_category":"config",$avail,$device}"""
-            }) { cpu.currentTier()?.let { publish(stateCpuGov, it, retain = true) } }
+            }) { cpu.currentTier()?.let { lastPublishedGovTier = it; publish(stateCpuGov, it, retain = true) } }
         }
 
         // Soft navbar (select) — overlay Back/Home/Recents bar for panels whose firmware hides the
@@ -1214,6 +1219,7 @@ class MqttBridge(
             val cur = brightness.getCommanded()
             if (settled(cur, prevTickBrightness, lastScreenBrightness, deadband = 3)) {
                 Log.i(TAG, "local brightness changed outside MQTT: $lastScreenBrightness -> $cur — syncing")
+                syncLog.record(SystemClock.elapsedRealtime(), "brightness $lastScreenBrightness→$cur")
                 publishScreenBrightness(cur.coerceAtLeast(1))
             }
             prevTickBrightness = cur
@@ -1232,6 +1238,7 @@ class MqttBridge(
                         val reported = (lastScreenBrightness.toLong() * eff / base.coerceAtLeast(1))
                             .toInt().coerceIn(1, 255)
                         Log.i(TAG, "screen backlight moved externally: baseline $base -> $eff — reporting $reported")
+                        syncLog.record(SystemClock.elapsedRealtime(), "backlight →$reported (firmware dim)")
                         publishScreenBrightness(reported)
                         screenEffectiveBaseline = eff
                     }
@@ -1244,10 +1251,27 @@ class MqttBridge(
             val cur = volume.getPercent()
             if (settled(cur, prevTickVolume, lastPublishedVolume, deadband = 1)) {
                 Log.i(TAG, "local volume changed outside MQTT: $lastPublishedVolume -> $cur — syncing")
+                syncLog.record(SystemClock.elapsedRealtime(), "volume $lastPublishedVolume→$cur")
                 lastPublishedVolume = cur
                 publish(stateVolume, cur.toString(), retain = true)
             }
             prevTickVolume = cur
+        }
+
+        // Channel: CPU governor — a thermal daemon or another app can change the scaling governor;
+        // currentTier() reads the LIVE sysfs governor, so publish when the mapped tier no longer matches
+        // what HA last saw. Categorical (not numeric) — publish on any change vs the baseline, no deadband.
+        // The baseline is set at announce / on command, so this only fires on a genuinely external change.
+        runCatching {
+            if (cpu.available()) {
+                val tier = cpu.currentTier()
+                if (tier != null && lastPublishedGovTier != null && tier != lastPublishedGovTier) {
+                    Log.i(TAG, "cpu governor changed outside MQTT: $lastPublishedGovTier -> $tier — syncing")
+                    syncLog.record(SystemClock.elapsedRealtime(), "cpu_governor $lastPublishedGovTier→$tier")
+                    lastPublishedGovTier = tier
+                    publish(stateCpuGov, tier, retain = true)
+                }
+            }
         }
 
         // Diagnostic sensors — refresh each exposed one, deadbanded so slow drift (temperature, memory,
@@ -1297,11 +1321,15 @@ class MqttBridge(
         }
     }
 
-    /** Sync predicate: [cur] differs from [published] beyond [deadband] AND isn't still moving fast
-     *  (within SETTLE_BAND of the previous tick's read — a mid-flight value waits for the next tick). */
+    /** Sync predicate — delegates to the pure [io.github.maxlyth.hapaneld.mqtt.SyncGate] (unit-tested):
+     *  [cur] differs from [published] beyond [deadband] AND isn't still moving fast (within SETTLE_BAND of
+     *  the previous tick's read — a mid-flight value waits for the next tick). */
     private fun settled(cur: Int, prevTick: Int, published: Int, deadband: Int): Boolean =
-        cur >= 0 && published >= 0 && kotlin.math.abs(cur - published) > deadband &&
-            (prevTick < 0 || kotlin.math.abs(cur - prevTick) <= SETTLE_BAND)
+        io.github.maxlyth.hapaneld.mqtt.SyncGate.settled(cur, prevTick, published, deadband, SETTLE_BAND)
+
+    /** Recent local-state sync events (newest first) for the info page + /diag. Empty when nothing has
+     *  changed outside MQTT since boot. */
+    fun recentSyncEvents(): List<String> = syncLog.recent(SystemClock.elapsedRealtime())
 
     /** Publish screen=ON at [level] and remember it as the last-reported brightness (the reconcile
      *  in [heartbeat] compares the effective backlight against this). */
