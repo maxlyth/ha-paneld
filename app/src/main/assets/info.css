@@ -34,6 +34,14 @@ canvas{width:100%;display:block;background:#0d0d0d;border:1px solid #2a2a2a;bord
 .dt th{font-size:.68rem;text-transform:uppercase;letter-spacing:.03em;color:#7c8a99;font-weight:600;width:auto;border-bottom:2px solid #333}
 .dt td{color:#ccc;font-weight:400}
 .dt .num{text-align:right;width:32%}
+/* Install-tab managed-component rows: name on the left, channel/version picker + actions on the right. */
+.comprow{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid #2a2a2a}
+.comprow:last-of-type{border-bottom:0}
+.compname{font-size:.92rem}
+.comppick{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.comppick label{flex-direction:row;align-items:center;gap:5px;color:#8a97a6;margin:0}
+.comppick select{font-size:.85rem;padding:4px 7px;border-radius:7px;border:1px solid #444;background:#1c1c1c;color:#eee;max-width:190px}
+.cnotes{font-size:1rem;text-decoration:none;padding:0 4px}
 /* Live-polled tables (updated every 2s): values WRAP to show full content — touch panels can't hover for
    the title= tooltip, so truncation hid data on the exact devices this runs on. Stability now comes from
    content-visibility (off-screen cards) + CSS columns; the only residual motion is the card you're

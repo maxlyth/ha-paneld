@@ -8,6 +8,7 @@ import io.github.maxlyth.hapaneld.config.Capabilities
 import io.github.maxlyth.hapaneld.config.ConfigBundle
 import io.github.maxlyth.hapaneld.config.ConfigDiff
 import io.github.maxlyth.hapaneld.config.Migrations
+import io.github.maxlyth.hapaneld.backup.PanelBackup
 import io.github.maxlyth.hapaneld.config.Scope
 import io.github.maxlyth.hapaneld.config.SettingType
 import io.github.maxlyth.hapaneld.config.SettingValue
@@ -20,13 +21,19 @@ import io.github.maxlyth.hapaneld.control.Su
 import io.github.maxlyth.hapaneld.control.SystemController
 import io.github.maxlyth.hapaneld.control.TameController
 import io.github.maxlyth.hapaneld.control.VolumeController
+import io.github.maxlyth.hapaneld.device.DeviceProfile
 import io.github.maxlyth.hapaneld.device.TameCandidate
 import io.github.maxlyth.hapaneld.input.PanelAccessibilityService
 import io.github.maxlyth.hapaneld.logship.LogCapture
 import io.github.maxlyth.hapaneld.sensors.SensorReporter
 import io.github.maxlyth.hapaneld.util.Cached
+import io.github.maxlyth.hapaneld.util.AppInstaller
+import io.github.maxlyth.hapaneld.util.CompanionInstaller
 import io.github.maxlyth.hapaneld.util.HelperClient
+import io.github.maxlyth.hapaneld.util.InstallProgress
 import io.github.maxlyth.hapaneld.util.Json
+import io.github.maxlyth.hapaneld.util.ReleaseCatalog
+import io.github.maxlyth.hapaneld.util.SelfUpdater
 import io.github.maxlyth.hapaneld.util.UpdateChecker
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
@@ -37,6 +44,7 @@ import io.ktor.server.cio.CIO
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.plugins.origin
 import io.ktor.server.request.receiveParameters
+import io.ktor.server.request.receiveStream
 import io.ktor.server.request.receiveText
 import io.ktor.server.request.uri
 import io.ktor.server.response.respondBytes
@@ -111,6 +119,13 @@ class PaneldServer(
     // Repair a Companion server row with an empty internal_url (the HA 2026.7 "Missing Host header"
     // incident). Injected by the service; runs off the request thread. Fired by the Install-tab button.
     private val onRepairCompanionUrl: () -> Unit = {},
+    // Install/update a managed component from the Install tab. name ∈ {paneld, companion, webview};
+    // action ∈ {update, reinstall}; version = a specific release tag to install (blank = channel newest).
+    // Runs off-thread; progress is reported via InstallProgress. Injected by the service.
+    private val onInstallComponent: (String, String, String) -> Unit = { _, _, _ -> },
+    // One-line EFR32 radio status ("sonoff 3.5.0 · running · Repeater"), or null when this panel has no
+    // radio gateway — drives the Install-tab Radio card. Injected by the service (ZigbeeController, su).
+    private val radioStatus: () -> String? = { null },
 ) {
     // Per-INSTALL build token (changes on every (re)install, not just a version bump) so an open info
     // page can auto-reload after the app is updated — even a same-version dev re-spin. /health carries it.
@@ -276,6 +291,26 @@ class PaneldServer(
                     // Versioned config bundle: backup (export) and transactional restore/deploy (import).
                     get("/config/export") { handleConfigExport(call) }
                     post("/config/import") { handleConfigImport(call) }
+                    // Full panel backup: a bundle of the ha-paneld config (incl. secrets) plus, when
+                    // include_companion, the HA Companion's login DB. A passphrase is OPTIONAL — supply one
+                    // to encrypt the bundle (recommended if it'll be stored off the panel, since it carries
+                    // HA tokens); omit it for a plain bundle. Streams a .hpb (encrypted) or .json download.
+                    post("/backup") {
+                        val p = call.receiveParameters()
+                        val pw = p["passphrase"].orEmpty()
+                        val includeComp = p["include_companion"]?.let { it == "true" || it == "1" } ?: true
+                        val bytes = withContext(Dispatchers.IO) {
+                            val json = backupJson(includeComp).toByteArray()
+                            if (pw.isEmpty()) json else PanelBackup.seal(json, pw)
+                        }
+                        val ext = if (pw.isEmpty()) "json" else "hpb"
+                        call.response.headers.append("Content-Disposition", "attachment; filename=\"${config.panelId}-backup.$ext\"")
+                        call.respondBytes(bytes, ContentType.Application.OctetStream)
+                    }
+                    // Restore a .hpb bundle (raw body; passphrase in the X-Backup-Passphrase header so it
+                    // never lands in a query log). ?dry_run=1 decrypts + reports the contents WITHOUT writing.
+                    // A real restore is DESTRUCTIVE (rewrites config; force-stops + rewrites the Companion DB).
+                    post("/restore") { handleRestore(call) }
                     // On-panel revision history + rollback.
                     get("/config/revisions") { call.respondText(revisionsJson(), ContentType.Application.Json) }
                     post("/config/revisions/{id}/restore") {
@@ -314,8 +349,140 @@ class PaneldServer(
                     // also curl-able (`curl -N .../api/v1/logs/stream`). Lines are pre-redacted.
                     get("/logs/stream") { handleLogStream(call) }
                     // Health + capabilities as JSON (warnings as ready-to-render HTML) — feeds every
-                    // variant's Install/health section client-side.
-                    get("/status") { call.respondText(statusJson(), ContentType.Application.Json) }
+                    // variant's Install/health section client-side. ?refresh=1 forces a fresh GitHub
+                    // update check first (the "Run health audit" button), else the cached result is used.
+                    get("/status") {
+                        if (call.request.queryParameters["refresh"] == "1")
+                            withContext(Dispatchers.IO) { runCatching { UpdateChecker.check(appContext, config.updateChannel) } }
+                        call.respondText(statusJson(), ContentType.Application.Json)
+                    }
+                    // Dismiss a component update from the DASHBOARD banner only (per-version; re-surfaces when
+                    // a newer release ships). The Install tab still lists it. See Config.ignoreUpdate.
+                    post("/updates/ignore") {
+                        val p = call.receiveParameters()
+                        val label = p["label"]?.trim().orEmpty()
+                        val version = p["version"]?.trim().orEmpty()
+                        if (label.isEmpty() || version.isEmpty())
+                            call.respondText("""{"ok":false}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+                        else { config.ignoreUpdate(label, version); call.respondText("""{"ok":true}""", ContentType.Application.Json) }
+                    }
+                    // Recent installable versions for a component's picker (name ∈ {paneld,companion};
+                    // channel ∈ {stable,prerelease}). Up to 10, newest first, each with a release-notes URL.
+                    get("/install/versions") {
+                        val name = call.request.queryParameters["name"]?.trim().orEmpty()
+                        val channel = call.request.queryParameters["channel"]?.trim()?.ifEmpty { "stable" } ?: "stable"
+                        val vers = withContext(Dispatchers.IO) {
+                            when (name) {
+                                "paneld" -> SelfUpdater.versions(channel)
+                                "companion" -> CompanionInstaller.versions(channel)
+                                else -> emptyList()
+                            }
+                        }
+                        val arr = vers.joinToString(",") { v ->
+                            """{"version":${jsonStr(v.version)},"tag":${jsonStr(v.tag)},"notes":${jsonStr(v.notesUrl)},"installable":${v.installable}}"""
+                        }
+                        call.respondText("""{"channel":${jsonStr(channel)},"versions":[$arr]}""", ContentType.Application.Json)
+                    }
+                    // Install/update a managed component (Install tab). name ∈ {paneld,companion,webview}.
+                    // A `version` (release tag) installs that exact build (the picker); otherwise `action` ∈
+                    // {update,reinstall} takes the channel's newest. Fire-and-forget off-thread; poll
+                    // /install/status. Rejects if an install is already running (single-slot).
+                    post("/install/component") {
+                        val p = call.receiveParameters()
+                        val name = p["name"]?.trim().orEmpty()
+                        val action = p["action"]?.trim()?.ifEmpty { "update" } ?: "update"
+                        val version = p["version"]?.trim().orEmpty()
+                        if (name !in setOf("paneld", "companion", "webview"))
+                            call.respondText("""{"status":"bad-component"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+                        else if (version.isNotEmpty() && !ReleaseCatalog.validTag(version))
+                            call.respondText("""{"status":"bad-version"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+                        else if (InstallProgress.running)
+                            call.respondText("""{"status":"busy"}""", ContentType.Application.Json)
+                        else { onInstallComponent(name, action, version); call.respondText("""{"status":"started"}""", ContentType.Application.Json) }
+                    }
+                    get("/install/status") { call.respondText(InstallProgress.json(), ContentType.Application.Json) }
+                    // ---- APK upload (Install tab). ⚠ SECURITY: root-installs an ARBITRARY user-supplied
+                    // APK over the UNAUTHENTICATED LAN-trust :8888 — the highest-impact verb on this server.
+                    // Mitigations: gated on config.apkUploadAllowed + rootOk + the LAN source-gate + an
+                    // explicit client confirm (the staged package/version/signer are shown first). This does
+                    // NOT add authentication — token auth is planned but not before v1.0. ----
+                    // Stage an uploaded APK (raw request body) and return its parsed identity for confirm.
+                    post("/install/apk") {
+                        if (!config.apkUploadAllowed) return@post call.respondText(
+                            """{"ok":false,"error":"disabled"}""", ContentType.Application.Json, HttpStatusCode.Forbidden)
+                        if (!rootOk()) return@post call.respondText(
+                            """{"ok":false,"error":"no-root"}""", ContentType.Application.Json, HttpStatusCode.ServiceUnavailable)
+                        val staged = File(appContext.cacheDir, "apk-upload.apk")
+                        val got = withContext(Dispatchers.IO) {
+                            runCatching { call.receiveStream().use { i -> staged.outputStream().use { i.copyTo(it) } }; staged.length() > 0 }
+                                .getOrDefault(false)
+                        }
+                        if (!got) { staged.delete(); return@post call.respondText(
+                            """{"ok":false,"error":"upload-failed"}""", ContentType.Application.Json, HttpStatusCode.BadRequest) }
+                        val info = withContext(Dispatchers.IO) { AppInstaller.inspect(appContext, staged.absolutePath) }
+                        if (info == null) { staged.delete(); return@post call.respondText(
+                            """{"ok":false,"error":"not-an-apk"}""", ContentType.Application.Json, HttpStatusCode.BadRequest) }
+                        pendingApk?.takeIf { it.absolutePath != staged.absolutePath }?.delete()
+                        pendingApk = staged
+                        call.respondText(
+                            """{"ok":true,"package":${jsonStr(info.pkg)},"version":${jsonStr(info.version)},"signer":${jsonStr(info.signerSha256 ?: "unsigned")}}""",
+                            ContentType.Application.Json)
+                    }
+                    // Confirm + install the staged APK (off-thread; poll /install/status).
+                    post("/install/apk/commit") {
+                        if (!config.apkUploadAllowed) return@post call.respondText(
+                            """{"status":"disabled"}""", ContentType.Application.Json, HttpStatusCode.Forbidden)
+                        val apk = pendingApk
+                        if (apk == null || !apk.exists()) return@post call.respondText(
+                            """{"status":"none-staged"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+                        if (InstallProgress.running) return@post call.respondText(
+                            """{"status":"busy"}""", ContentType.Application.Json)
+                        pendingApk = null
+                        InstallProgress.start("APK")
+                        scope.launch {
+                            val r = runCatching { AppInstaller.installLocalApk(appContext, apk) }.getOrElse { "error: ${it.message}" }
+                            Log.i(TAG, "APK upload install: $r")
+                            InstallProgress.finish(r)
+                        }
+                        call.respondText("""{"status":"started"}""", ContentType.Application.Json)
+                    }
+                    // Enable/disable the APK-upload capability (the card's toggle).
+                    post("/install/apk/allow") {
+                        val on = call.receiveParameters()["on"]?.let { it == "true" || it == "1" } ?: true
+                        config.setApkUploadAllowed(on)
+                        call.respondText("""{"ok":true,"allowed":$on}""", ContentType.Application.Json)
+                    }
+                    // Removable apps (third-party + updated-system; excludes ha-paneld + stock system apps,
+                    // which pm can't uninstall anyway) for the Uninstall card's picker.
+                    get("/packages") { call.respondText(withContext(Dispatchers.IO) { packagesJson() }, ContentType.Application.Json) }
+                    // Uninstall a package over root. Guarded: never ha-paneld itself; the picker only offers
+                    // removable apps. `pm uninstall` (system/vendor apps aren't removable, only disable-able
+                    // via taming — a separate, safer path).
+                    post("/uninstall") {
+                        if (!rootOk()) return@post call.respondText(
+                            """{"ok":false,"error":"no-root"}""", ContentType.Application.Json, HttpStatusCode.ServiceUnavailable)
+                        val pkg = call.receiveParameters()["pkg"]?.trim().orEmpty()
+                        val protected = pkg == appContext.packageName || pkg == io.github.maxlyth.hapaneld.util.WebViewInstaller.WEBVIEW_PKG
+                        if (pkg.isEmpty() || protected || !pkg.matches(Regex("^[A-Za-z0-9._]+$")))
+                            return@post call.respondText("""{"ok":false,"error":"bad-package"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+                        val out = withContext(Dispatchers.IO) { io.github.maxlyth.hapaneld.control.Su.runOutput("pm uninstall $pkg")?.trim() }
+                        // The persistent root shell sometimes returns empty stdout even on success — confirm
+                        // by absence (pm path is empty once the package is gone) rather than trusting "Success".
+                        val gone = withContext(Dispatchers.IO) {
+                            io.github.maxlyth.hapaneld.control.Su.runOutput("pm path $pkg 2>/dev/null")?.trim().isNullOrEmpty()
+                        }
+                        val ok = out?.contains("Success", ignoreCase = true) == true || gone
+                        if (ok) Log.i(TAG, "uninstalled $pkg")
+                        call.respondText("""{"ok":$ok,"result":${jsonStr(out?.ifEmpty { "removed" } ?: "removed")}}""", ContentType.Application.Json)
+                    }
+                    // EFR32 radio status (Install-tab Radio card). {present, status}. present=false → no radio.
+                    get("/radio") {
+                        val st = withContext(Dispatchers.IO) { radioStatus() }
+                        call.respondText(
+                            """{"present":${st != null},"status":${jsonStr(st ?: "none")}}""",
+                            ContentType.Application.Json,
+                        )
+                    }
                     // Auto-heal the System WebView (download + install the profile's recommended build).
                     // Fire-and-forget: the install runs off-thread (large download); the client refreshes.
                     post("/webview/heal") {
@@ -781,38 +948,30 @@ ${tameCardHtml()}
 <script src="/assets/test.js"></script>"""
     }
 
-    /** Install tab — setup health warnings, capabilities, and config backup. */
+    /** Install tab — software-management hub: setup warnings, managed component versions, radio firmware,
+     *  on-demand health audit, and config backup. (The Capabilities card lives on the Dashboard.) */
     private fun installBody(): String {
         // Engine-aware WebView age check (a Cromite swap reports the stale OEM package version).
-        val webViewStatus = PanelInfo.webViewStatus(appContext)
-        val webViewVal = webViewStatus.display
-        val tooOld = webViewStatus.tooOld
-        val renderers = PanelInfo.dashboardRenderers(appContext, config.dashboardPackage)
-        val capColor = mapOf("ok" to "#48c774", "degraded" to "#d9a528", "none" to "#d04a3b")
-        val caps = DiagReader.capabilities(appContext).joinToString("\n") { c ->
-            val col = capColor[c.status] ?: "#888"
-            """<tr><th>${esc(c.name)}</th><td><span style="color:$col">●</span> ${esc(c.note)}</td></tr>"""
-        }
+        val wv = PanelInfo.webViewStatus(appContext)
+        val root = rootOk()
+        // Same finding set as the dashboard banner (HealthAudit). Update findings are surfaced by the
+        // Managed-components card below, so the top warnings show only the render-blocking states.
+        val problems = HealthAudit.evaluate(
+            webViewTooOld = wv.tooOld,
+            webViewDisplay = wv.display,
+            hasRenderer = PanelInfo.dashboardRenderers(appContext, config.dashboardPackage).isNotEmpty(),
+            updates = emptyList(),
+        )
         // Auto-heal offer: if the profile ships a known-good WebView and we have root/daemon to install it,
         // the too-old warning gets a one-tap "Update WebView now" button (POST /api/v1/webview/heal).
-        val canHeal = tooOld && io.github.maxlyth.hapaneld.device.DeviceProfile.detect().recommendedWebView != null && rootOk()
-        val warnings = buildString {
+        val canHeal = wv.tooOld && DeviceProfile.detect().recommendedWebView != null && root
+        // Two extra warnings not modelled by HealthAudit: a crash-looping dashboard app, and a Companion
+        // server row with a blank internal_url (HA 2026.7 "Missing 'Host' header") + a one-tap repair.
+        val extra = buildString {
             if (io.github.maxlyth.hapaneld.PanelStatus.dashboardCrashLooping) append(
                 """<div class="setup">⛔ <b>Dashboard app is crash-looping</b> — the watchdog stopped relaunching it """ +
                     """to avoid a restart storm. This usually means an incompatible dashboard-app update; reinstall or """ +
                     """downgrade the dashboard/Companion app (see <a href="/install">updates</a>), or reboot the panel.</div>""",
-            )
-            if (tooOld) append(
-                """<div class="setup">⚠ <b>System WebView is too old</b> (${esc(webViewVal)}) — the Home Assistant """ +
-                    """dashboard may render blank or broken. <a href="$WEBVIEW_DOC" target="_blank" rel="noopener">""" +
-                    """How &amp; why to update</a> (target: Chromium ${PanelHealth.MIN_CHROMIUM}+).""" +
-                    (if (canHeal) """<div style="margin-top:10px"><button class="pbtn" onclick="healWebView(this)">⬇ Update WebView now</button> <span id="wv-heal" class="muted"></span></div>""" else "") +
-                    """</div>""",
-            )
-            if (renderers.isEmpty()) append(
-                """<div class="setup">ℹ <b>No dashboard app detected</b> — install the HA Companion app, """ +
-                    """<a href="https://www.fully-kiosk.com/" target="_blank" rel="noopener">Fully Kiosk</a>, or set a """ +
-                    """dashboard package on <a href="/configure">Configure</a>.</div>""",
             )
             // Companion server row with a blank internal_url → HA 2026.7 rejects with "Missing Host header"
             // and the dashboard renders blank. Offer a one-tap repair (copy external_url into internal_url).
@@ -825,37 +984,181 @@ ${tameCardHtml()}
                         """</div>""",
                 )
             }
-            UpdateChecker.available.forEach { u ->
-                append(
-                    """<div class="setup">⬆ <b>${esc(u.label)}</b> ${esc(u.latestVersion)} is available """ +
-                        """(installed: ${esc(u.currentVersion)}) — <a href="${esc(u.releaseUrl)}" target="_blank" rel="noopener">download</a></div>""",
-                )
-            }
         }
-        val allGood = if (warnings.isEmpty()) """<div class="card"><p class="note">✓ No setup problems detected — this panel looks ready.</p></div>""" else ""
+        val warnings = extra + problems.joinToString("") { installWarning(it, canHeal) }
+        val allGood = if (problems.isEmpty() && extra.isEmpty()) """<div class="card"><p class="note">✓ No setup problems detected — this panel looks ready.</p></div>""" else ""
         return """$warnings
 <div class="cards">
-<div class="card"><h2>Capabilities</h2><table>
-$caps
-</table>
+${componentsCardHtml(wv, root)}
+${apkCardHtml(root)}
+${uninstallCardHtml(root)}
+<div class="card" id="radiocard" style="display:none"><h2>Radio firmware</h2>
+<table><tr><th>EFR32 radio</th><td id="radio-status">…</td></tr></table>
+<p class="note">Zigbee gateway on this panel's Silicon Labs EFR32. Toggle the <b>Zigbee router</b> role on the <a href="/configure#cfg-zigbee_router">Configure</a> tab. <span class="muted">Thread NCP flashing is planned (experimental) — not yet available.</span></p></div>
+<div class="card"><h2>Health audit</h2>
+<p class="note">Re-check this panel for problems that stop the dashboard rendering — old WebView, no dashboard app, available updates.</p>
+<button class="pbtn" onclick="healthAudit(this)">Run health audit</button>
+<div id="audit-out" style="margin-top:10px"></div>
 <p class="note"><a href="/api/v1/diag" target="_blank" style="color:#9cf">⭳ Diagnostics dump</a> — full hardware/firmware/SELinux/su report for bug reports.</p></div>
-<div class="card"><h2>Backup this panel</h2>
-<p class="note">Export the full configuration bundle for safe-keeping, or to clone settings to another panel (Configure → Import).</p>
-<a class="pbtn" href="/api/v1/config/export">⭳ Export config bundle</a></div>
+${backupCardHtml(root)}
 $allGood</div>
-<script>
-function healWebView(btn){btn.disabled=true;var s=document.getElementById('wv-heal');
- if(s)s.textContent='Downloading + installing… this takes a minute.';
- fetch('/api/v1/webview/heal',{method:'POST'}).then(function(r){return r.json();}).then(function(){
-  if(s)s.textContent='Installing WebView — reload the dashboard, then refresh this page to confirm the new version.';
- }).catch(function(){if(s)s.textContent='Failed to start — check root/daemon.';btn.disabled=false;});}
-function repairCompUrl(btn){btn.disabled=true;var s=document.getElementById('cu-fix');
- if(s)s.textContent='Repairing + relaunching the Companion…';
- fetch('/api/v1/companion/repair-url',{method:'POST'}).then(function(r){return r.json();}).then(function(){
-  if(s)s.textContent='Repair started — the Companion will relaunch; refresh this page in a few seconds to confirm.';
- }).catch(function(){if(s)s.textContent='Failed to start — check root.';btn.disabled=false;});}
-</script>"""
+<script src="/assets/install.js"></script>"""
     }
+
+    /** One top-of-tab warning for a render-blocking finding (WebView old / no dashboard app). The WebView
+     *  finding gets the inline "Update WebView now" heal button when [canHeal]. */
+    private fun installWarning(f: HealthAudit.Finding, canHeal: Boolean): String = when (f.kind) {
+        HealthAudit.Kind.WEBVIEW_OLD ->
+            """<div class="setup">⚠ <b>System WebView is too old</b> (${esc(f.detail)}) — the Home Assistant """ +
+                """dashboard may render blank or broken. <a href="$WEBVIEW_DOC" target="_blank" rel="noopener">""" +
+                """How &amp; why to update</a> (target: Chromium ${PanelHealth.MIN_CHROMIUM}+).""" +
+                (if (canHeal) """<div style="margin-top:10px"><button class="pbtn" onclick="healWebView(this)">⬇ Update WebView now</button> <span id="wv-heal" class="muted"></span></div>""" else "") +
+                """</div>"""
+        HealthAudit.Kind.NO_RENDERER ->
+            """<div class="setup">ℹ <b>No dashboard app detected</b> — install the HA Companion app, """ +
+                """<a href="https://www.fully-kiosk.com/" target="_blank" rel="noopener">Fully Kiosk</a>, or set a """ +
+                """dashboard package on <a href="/configure">Configure</a>.</div>"""
+        HealthAudit.Kind.UPDATE -> "" // shown in the Managed-components card, not as a top warning
+    }
+
+    /** Managed-components card. ha-paneld + HA Companion get a channel + version picker (default channel
+     *  from Configure; up to 10 recent versions hydrated by install.js) with a release-notes link and an
+     *  Install-selected-version button. The System WebView is a single known-good build (heal/up-to-date).
+     *  All actions POST /api/v1/install/component and poll /api/v1/install/status. */
+    private fun componentsCardHtml(wv: PanelInfo.WebViewStatus, root: Boolean): String {
+        val paneldCur = Config.VERSION
+        val compPkg = CompanionInstaller.installedPkg(appContext)
+        val compFull = compPkg == CompanionInstaller.FULL_PKG
+        val compCur = compPkg?.let { AppInstaller.installedVersion(appContext, it) }?.takeIf { it.isNotBlank() }
+        val rec = DeviceProfile.detect().recommendedWebView
+
+        val paneldRow = pickerRow("paneld", "ha-paneld", paneldCur, config.updateChannel, root)
+        // A Play-managed FULL Companion must never be touched by ha-paneld — show it read-only.
+        val compRow = if (compFull)
+            simpleRow("HA Companion", compCur, """<span class="muted">Play-managed — updates via the Play Store</span>""")
+        else pickerRow("companion", "HA Companion", compCur, config.companionUpdateChannel, root)
+        val wvAction = when {
+            wv.tooOld && rec != null && root -> """<button class="pbtn" onclick="installComp('webview','update',this)">⬇ Update WebView</button>"""
+            wv.tooOld && rec != null -> """<span class="muted">needs root/daemon to update</span>"""
+            wv.tooOld -> """<span class="muted">no known-good build for this panel</span>"""
+            else -> """<span class="muted">up to date</span>"""
+        }
+        val rootNote = if (root) "" else """<p class="note">⚠ Installing/updating needs root or the helper daemon — unavailable on this panel.</p>"""
+        return """<div class="card"><h2>Managed components</h2>
+$paneldRow
+$compRow
+${simpleRow("System WebView", wv.display, wvAction)}
+$rootNote
+<p class="note">The default channel is set on the <a href="/configure">Configure</a> tab; changing it here only affects this picker.</p>
+<p class="note" id="comp-msg"></p></div>"""
+    }
+
+    /** Backup & restore card: an ENCRYPTED device-state bundle (ha-paneld config + optionally the HA
+     *  Companion login) with a passphrase; restore shows a decrypt preview before the destructive apply.
+     *  Also links the plain config-only bundle (for cloning settings between panels). */
+    private fun backupCardHtml(root: Boolean): String {
+        val compRow = if (root)
+            """<label style="display:flex;gap:8px;align-items:center;font-size:.85rem"><input type="checkbox" id="bk-comp" checked> Include HA Companion login <span class="muted">(its HA tokens — keep the bundle safe)</span></label>"""
+        else """<p class="note">The HA Companion login can only be captured on a rooted panel.</p>"""
+        val restoreWarn = if (root) " and rewrites the HA Companion login (force-stops it)" else ""
+        return """<div class="card"><h2>Backup &amp; restore</h2>
+<p class="note">A bundle of this panel's ha-paneld config${if (root) " + the HA Companion login" else ""}. A passphrase is optional — add one to <b>encrypt</b> the bundle (worth it if you'll store it off the panel, since it holds HA tokens); it can't be recovered if lost.</p>
+<div style="display:flex;flex-direction:column;gap:8px;max-width:440px">
+$compRow
+<input type="password" id="bk-pw" placeholder="Passphrase (optional — encrypts the bundle)">
+<button class="pbtn" onclick="doBackup(this)">⭳ Download backup</button>
+</div>
+<hr style="border:0;border-top:1px solid #2a2a2a;margin:14px 0">
+<p class="note"><b>Restore</b> overwrites this panel's config$restoreWarn — you'll see a preview of the bundle's contents before it applies.</p>
+<div style="display:flex;flex-direction:column;gap:8px;max-width:440px">
+<input type="password" id="rs-pw" placeholder="Bundle passphrase">
+<label class="pbtn" style="cursor:pointer">⭱ Choose backup (.hpb)…<input type="file" id="rs-file" accept=".hpb,application/octet-stream" style="display:none" onchange="restorePick(this)"></label>
+<div id="rs-preview"></div>
+</div>
+<p class="note" id="bk-msg"></p>
+<p class="note"><a href="/api/v1/config/export" style="color:#9cf">⭳ Config-only bundle (unencrypted)</a> — settings only, for cloning to another panel via Configure → Import.</p></div>"""
+    }
+
+    /** "Install an APK" card (Install tab). ⚠ Root-installs an arbitrary user-supplied APK over the
+     *  unauthenticated LAN-trust :8888 — carries a prominent in-card security warning, an enable toggle
+     *  (config.apkUploadAllowed), and a parse-then-confirm flow (see install.js). Root-gated. */
+    private fun apkCardHtml(root: Boolean): String {
+        val body = if (!root) {
+            """<p class="note">⚠ Installing an APK needs root or the helper daemon — unavailable on this panel.</p>"""
+        } else {
+            val allowed = config.apkUploadAllowed
+            """<div class="setup">⚠ <b>Security:</b> this root-installs <b>any</b> APK you choose, over the panel's """ +
+                """<b>unauthenticated</b> LAN web UI. Only upload APKs you trust. """ +
+                """<small>(Panel access is LAN-only today; authenticated access is planned for a later release.)</small></div>
+<label style="display:flex;gap:8px;align-items:center;margin:10px 0"><input type="checkbox" id="apk-allow" ${if (allowed) "checked" else ""} onchange="apkAllow(this)"> Enable APK install on this panel</label>
+<div id="apk-ui"${if (allowed) "" else " style=\"display:none\""}>
+<label class="pbtn" style="cursor:pointer">⭱ Choose APK…<input type="file" id="apk-file" accept=".apk,application/vnd.android.package-archive" style="display:none" onchange="apkPick(this)"></label>
+<div id="apk-preview" style="margin-top:10px"></div>
+</div>"""
+        }
+        return """<div class="card"><h2>Install an APK</h2>
+<p class="note">Sideload an app (e.g. a dashboard renderer) by uploading its APK — you'll see its package, version and signer before it installs.</p>
+$body
+<p class="note" id="apk-msg"></p></div>"""
+    }
+
+    /** "Uninstall an app" card. Lists only removable apps (see packagesJson) so the picker can't strand the
+     *  panel; the endpoint additionally refuses ha-paneld itself. Root-gated. */
+    private fun uninstallCardHtml(root: Boolean): String {
+        val body = if (!root) """<p class="note">⚠ Uninstalling an app needs root — unavailable on this panel.</p>"""
+        else """<p class="note">Remove an installed app. Only removable (third-party / updated) apps are listed — ha-paneld and stock system apps are excluded. To just hide a vendor app, <a href="/configure">tame</a> it instead.</p>
+<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+<select id="uninst-pkg" style="min-width:220px;background:#1c1c1c;color:#eee;border:1px solid #444;border-radius:7px;padding:5px 8px"><option>loading…</option></select>
+<button class="pbtn" onclick="doUninstall(this)">Uninstall</button>
+</div>
+<p class="note" id="uninst-msg"></p>"""
+        return """<div class="card"><h2>Uninstall an app</h2>
+$body</div>"""
+    }
+
+    /** Removable apps (third-party or updated-system) for the Uninstall picker, sorted by label. Stock
+     *  system apps + ha-paneld are excluded — pm can't uninstall stock system apps (only disable), and
+     *  self-uninstall would kill the tool. */
+    private fun packagesJson(): String {
+        val pm = appContext.packageManager
+        // Exclude ha-paneld itself and the System WebView provider — uninstalling the WebView reverts it to
+        // the ancient stock build and blanks the dashboard (the opposite of the WebView-heal feature).
+        val excluded = setOf(appContext.packageName, io.github.maxlyth.hapaneld.util.WebViewInstaller.WEBVIEW_PKG)
+        val apps = runCatching {
+            pm.getInstalledApplications(0)
+                .filter { it.packageName !in excluded }
+                .filter {
+                    it.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM == 0 ||
+                        it.flags and android.content.pm.ApplicationInfo.FLAG_UPDATED_SYSTEM_APP != 0
+                }
+                .map { it.packageName to runCatching { pm.getApplicationLabel(it).toString() }.getOrDefault(it.packageName) }
+                .sortedBy { it.second.lowercase(java.util.Locale.ROOT) }
+        }.getOrDefault(emptyList())
+        val arr = apps.joinToString(",") { (pkg, label) -> "{\"pkg\":${jsonStr(pkg)},\"label\":${jsonStr(label)}}" }
+        return "{\"packages\":[$arr]}"
+    }
+
+    /** A component row with a channel + version picker (versions hydrated by install.js), a release-notes
+     *  link, and an Install button — for the GitHub-hosted components (ha-paneld, HA Companion). The
+     *  channel select defaults to [defaultChannel] (the Configure-tab setting). */
+    private fun pickerRow(name: String, label: String, installed: String?, defaultChannel: String, root: Boolean): String {
+        fun sel(v: String) = if (defaultChannel == v) " selected" else ""
+        return """<div class="comprow" data-name="${esc(name)}">
+<div class="compname"><b>${esc(label)}</b> <span class="muted">installed <span class="cver">${esc(installed ?: "not installed")}</span></span></div>
+<div class="comppick">
+<label class="muted">Channel <select class="cchan" onchange="loadVersions('$name')"><option value="stable"${sel("stable")}>Stable</option><option value="prerelease"${sel("prerelease")}>Prerelease</option></select></label>
+<label class="muted">Version <select class="cvsel" onchange="verChanged('$name')"><option>loading…</option></select></label>
+<a class="cfglink cnotes" target="_blank" rel="noopener" title="Release notes ↗" style="visibility:hidden">↗</a>
+<button class="pbtn cinstall" onclick="installSel('$name',this)" data-root="${if (root) "1" else "0"}" disabled>Install</button>
+</div></div>"""
+    }
+
+    /** A component row with no picker — installed version + a single action/state (System WebView, or a
+     *  Play-managed Companion). */
+    private fun simpleRow(label: String, installed: String?, action: String): String =
+        """<div class="comprow">
+<div class="compname"><b>${esc(label)}</b> <span class="muted">installed <span class="cver">${esc(installed ?: "not installed")}</span></span></div>
+<div class="comppick">$action</div></div>"""
 
     /** Logs tab — live log tail over SSE. App source always; system source needs root (gated live). */
     private fun logsBody(): String {
@@ -893,19 +1196,21 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
 
     /** Health + capabilities as JSON for the variant UIs. Warnings are ready-to-render HTML fragments. */
     private fun statusJson(): String {
-        // Engine-aware WebView age check (a Cromite swap reports the stale OEM package version).
-        val webViewStatus = PanelInfo.webViewStatus(appContext)
+        // Engine-aware WebView age check (a Cromite swap reports the stale OEM package version). Same finding
+        // set as the dashboard banner + Install tab (HealthAudit); the audit lists ALL available updates
+        // (not the ignore-filtered view — Ignore only silences the dashboard banner). Plus two warnings not
+        // modelled by HealthAudit: a crash-looping dashboard app and a Companion with a blank internal_url.
+        val wv = PanelInfo.webViewStatus(appContext)
+        val findings = HealthAudit.evaluate(
+            webViewTooOld = wv.tooOld,
+            webViewDisplay = wv.display,
+            hasRenderer = PanelInfo.dashboardRenderers(appContext, config.dashboardPackage).isNotEmpty(),
+            updates = UpdateChecker.available,
+        )
         val warns = mutableListOf<String>()
         if (io.github.maxlyth.hapaneld.PanelStatus.dashboardCrashLooping) warns.add(
             "⛔ <b>Dashboard app is crash-looping</b> — the watchdog stopped relaunching it to avoid a restart storm. " +
                 "Reinstall or downgrade the dashboard/Companion app, or reboot the panel.",
-        )
-        if (webViewStatus.tooOld) warns.add(
-            "⚠ <b>System WebView is too old</b> (${esc(webViewStatus.display)}) — the Home Assistant dashboard may render blank. " +
-                "<a href=\"$WEBVIEW_DOC\" target=\"_blank\" rel=\"noopener\">How &amp; why to update</a> (target Chromium ${PanelHealth.MIN_CHROMIUM}+).",
-        )
-        if (PanelInfo.dashboardRenderers(appContext, config.dashboardPackage).isEmpty()) warns.add(
-            "ℹ <b>No dashboard app detected</b> — install the HA Companion, Fully Kiosk, or set a dashboard package.",
         )
         companionUrlCache.get().let { u ->
             if (u.needsRepair) warns.add(
@@ -913,15 +1218,26 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
                     "the dashboard can fail with \"Missing 'Host' header\". Repair it on the Install tab.",
             )
         }
-        UpdateChecker.available.forEach { u ->
-            warns.add("⬆ <b>${esc(u.label)}</b> ${esc(u.latestVersion)} is available (installed ${esc(u.currentVersion)}) — " +
-                "<a href=\"${esc(u.releaseUrl)}\" target=\"_blank\" rel=\"noopener\">download</a>")
-        }
+        warns.addAll(findings.map { statusWarning(it) })
         val capColor = mapOf("ok" to "#48c774", "degraded" to "#d9a528", "none" to "#d04a3b")
         val caps = DiagReader.capabilities(appContext).joinToString(",") { c ->
             "{\"name\":${jsonStr(c.name)},\"note\":${jsonStr(c.note)},\"color\":${jsonStr(capColor[c.status] ?: "#888")}}"
         }
         return "{\"warnings\":[${warns.joinToString(",") { jsonStr(it) }}],\"capabilities\":[$caps]}"
+    }
+
+    /** A health finding as a one-line HTML warning for GET /api/v1/status (no Ignore button; updates keep
+     *  a direct download link — this is the machine-readable audit, not the dashboard banner). */
+    private fun statusWarning(f: HealthAudit.Finding): String = when (f.kind) {
+        HealthAudit.Kind.WEBVIEW_OLD ->
+            "⚠ <b>System WebView is too old</b> (${esc(f.detail)}) — the Home Assistant dashboard may render blank. " +
+                "<a href=\"$WEBVIEW_DOC\" target=\"_blank\" rel=\"noopener\">How &amp; why to update</a> (target Chromium ${PanelHealth.MIN_CHROMIUM}+)."
+        HealthAudit.Kind.NO_RENDERER ->
+            "ℹ <b>No dashboard app detected</b> — install the HA Companion, Fully Kiosk, or set a dashboard package."
+        HealthAudit.Kind.UPDATE -> f.update!!.let { u ->
+            "⬆ <b>${esc(u.label)}</b> ${esc(u.latestVersion)} is available (installed ${esc(u.currentVersion)}) — " +
+                "<a href=\"${esc(u.releaseUrl)}\" target=\"_blank\" rel=\"noopener\">download</a>"
+        }
     }
 
 
@@ -1011,6 +1327,9 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
     private val companionUrlCache = Cached(COMPANION_URL_TTL_MS) {
         if (suCache.get()) CompanionDb.internalUrlStatus(appContext, Su) else CompanionDb.UrlStatus(false, 0)
     }
+    // Single pending APK-upload slot (Install-tab "install an APK"): a staged file awaiting an explicit
+    // commit. One at a time — the confirm is immediate; a new upload replaces (and deletes) the previous.
+    @Volatile private var pendingApk: File? = null
 
     private val snapCache = Cached(SNAP_TTL_MS) {
         val d = densityCache.get()
@@ -1056,31 +1375,43 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         val setup = if (needs.isNotEmpty())
             """<div class="setup">⚠ This panel needs <a href="/configure">${needs.joinToString(" and ")}</a> — set on the Configure tab.</div>"""
         else ""
-        val update = UpdateChecker.available.joinToString("") { u ->
-            """<div class="setup">⬆ <b>${esc(u.label)}</b> ${esc(u.latestVersion)} is available""" +
-                """ (installed: ${esc(u.currentVersion)}) — """ +
-                """<a href="${esc(u.releaseUrl)}" target="_blank" rel="noopener">download</a></div>"""
+        // Panel-health + update findings: states that stop the panel rendering the dashboard as expected but
+        // that the info map otherwise reports neutrally. Soft + best-effort — ha-paneld runs fine regardless.
+        // The WebView verdict is from the REAL engine version (WebView UA), not the stamped package version
+        // (cached, so cheap). Shared decision — see HealthAudit; updates are filtered by the per-version
+        // dismissals so an "Ignore this version" click stays hidden until a newer release ticks it back.
+        val findings = HealthAudit.evaluate(
+            webViewTooOld = PanelInfo.webViewStatus(appContext).tooOld,
+            webViewDisplay = s.facts["System WebView"] ?: "",
+            hasRenderer = PanelInfo.dashboardRenderers(appContext, config.dashboardPackage).isNotEmpty(),
+            updates = UpdateChecker.visible(config.ignoredUpdates),
+        )
+        return findings.joinToString("") { bannerFor(it) } + setup
+    }
+
+    /** One dashboard banner for a health finding. Update findings link to the Install tab (where the user
+     *  manages versions) and carry an "Ignore this version" button — a per-version dismissal that stays
+     *  hidden until a newer release ships (see Config.ignoreUpdate / UpdateChecker.visible). */
+    private fun bannerFor(f: HealthAudit.Finding): String = when (f.kind) {
+        HealthAudit.Kind.WEBVIEW_OLD ->
+            """<div class="setup">⚠ <b>System WebView is too old</b> (${esc(f.detail)}) — the Home Assistant """ +
+                """dashboard may render blank or broken. <a href="$WEBVIEW_DOC" target="_blank" rel="noopener">""" +
+                """How &amp; why to update</a> (target: Chromium ${PanelHealth.MIN_CHROMIUM}+). """ +
+                """<small>Checked against the real engine version (from the WebView UA), not just the """ +
+                """stamped package version — so a Cromite/LineageOS SystemWebView won't trip this.</small> """ +
+                """<a href="/install">Manage on the Install tab →</a></div>"""
+        HealthAudit.Kind.NO_RENDERER ->
+            """<div class="setup">ℹ <b>No dashboard app detected</b> — install the HA Companion app, """ +
+                """<a href="https://www.fully-kiosk.com/" target="_blank" rel="noopener">Fully Kiosk</a>, or set a """ +
+                """dashboard package on <a href="/configure">Configure</a>, or this panel won't display a dashboard. """ +
+                """<small>(ha-paneld itself runs fine without one.)</small> <a href="/install">Install tab →</a></div>"""
+        HealthAudit.Kind.UPDATE -> {
+            val u = f.update!!
+            """<div class="setup" data-update="${esc(u.label)}" data-version="${esc(u.latestVersion)}">""" +
+                """⬆ <b>${esc(u.label)}</b> ${esc(u.latestVersion)} is available (installed: ${esc(u.currentVersion)}) — """ +
+                """<a href="/install">manage on the Install tab</a> """ +
+                """<button class="pbtn" onclick="ignoreUpdate(this)">Ignore this version</button></div>"""
         }
-        // Panel-health warnings: states that stop the panel rendering the dashboard as expected but that
-        // the info map otherwise reports neutrally. Soft + best-effort — ha-paneld runs fine regardless.
-        // Verdict from the REAL engine version (WebView UA), not the stamped package version — the
-        // engine fetch is cached, so this call is cheap. See PanelInfo.webViewStatus.
-        val health = buildString {
-            if (PanelInfo.webViewStatus(appContext).tooOld) append(
-                """<div class="setup">⚠ <b>System WebView is too old</b> (${esc(s.facts["System WebView"] ?: "")}) — the Home Assistant """ +
-                    """dashboard may render blank or broken. <a href="$WEBVIEW_DOC" target="_blank" rel="noopener">""" +
-                    """How &amp; why to update</a> (target: Chromium ${PanelHealth.MIN_CHROMIUM}+). """ +
-                    """<small>Checked against the real engine version (from the WebView UA), not just the """ +
-                    """stamped package version — so a Cromite/LineageOS SystemWebView won't trip this.</small></div>"""
-            )
-            if (PanelInfo.dashboardRenderers(appContext, config.dashboardPackage).isEmpty()) append(
-                """<div class="setup">ℹ <b>No dashboard app detected</b> — install the HA Companion app, """ +
-                    """<a href="https://www.fully-kiosk.com/" target="_blank" rel="noopener">Fully Kiosk</a>, or set a """ +
-                    """dashboard package on <a href="/configure">Configure</a>, or this panel won't display a dashboard. """ +
-                    """<small>(ha-paneld itself runs fine without one.)</small></div>"""
-            )
-        }
-        return update + health + setup
     }
 
     /** Table rows for one facts card (Panel information / Networking / ha-paneld profile). */
@@ -1722,6 +2053,138 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
         for ((k, v) in live) applySetting(k, v)
         snapInvalidate()
         onReconfigure()
+    }
+
+    // ---- Full panel backup / restore (device-state bundle) ------------------------------------------
+    //
+    // A backup bundle = ha-paneld config (all settable keys incl. secrets) + optionally the HA Companion's
+    // login files (its HomeAssistantDB carries HA access/refresh tokens). Always encrypted (PanelBackup).
+    // Companion capture/restore needs su; the SELinux context matters (per-app MLS categories), so restore
+    // reapplies the LIVE dir's owner uid + context rather than trusting restorecon.
+
+    // Deliberately NOT the -wal/-shm sidecars: capture checkpoints the WAL into the main DB first, so the
+    // single HomeAssistantDB file is complete. Writing back a STALE -wal/-shm makes SQLite discard it and
+    // lose the login (the `servers` row lives in the WAL until a checkpoint) — validated the hard way.
+    private val companionBackupFiles = listOf(
+        "databases/HomeAssistantDB", "shared_prefs/session_0.xml", "shared_prefs/integration_0.xml",
+    )
+
+    /** Build the (pre-encryption) backup plaintext JSON. Config first; Companion login files (base64) when
+     *  [includeCompanion] and su + a Companion are present. */
+    private fun backupJson(includeCompanion: Boolean): String {
+        val live = liveValues()
+        val cfg = SettingsRegistry.settable().filterNot { it.transient }
+            .joinToString(",") { s -> "${jsonStr(s.key)}:${jsonStr(live[s.key] ?: config.getRaw(s))}" }
+        val sb = StringBuilder("{\"kind\":\"ha-paneld-backup\",\"schema\":${SettingsRegistry.SCHEMA}")
+        sb.append(",\"panel_id\":${jsonStr(config.panelId)},\"created\":${jsonStr(System.currentTimeMillis().toString())}")
+        sb.append(",\"config\":{").append(cfg).append("}")
+        val pkg = if (includeCompanion) CompanionInstaller.installedPkg(appContext) else null
+        if (pkg != null && io.github.maxlyth.hapaneld.control.Su.available()) {
+            val files = captureCompanion(pkg)
+            if (files.isNotEmpty()) {
+                val enc = java.util.Base64.getEncoder()
+                val arr = files.joinToString(",") { (rel, b) -> "{\"rel\":${jsonStr(rel)},\"b64\":${jsonStr(enc.encodeToString(b))}}" }
+                sb.append(",\"companion\":{\"pkg\":${jsonStr(pkg)},\"files\":[").append(arr).append("]}")
+            }
+        }
+        return sb.append("}").toString()
+    }
+
+    /** Read the Companion login files over su (raw bytes; skips absent/empty ones). Checkpoints the WAL
+     *  into the main DB first so the single-file capture is complete (see companionBackupFiles). */
+    private fun captureCompanion(pkg: String): List<Pair<String, ByteArray>> {
+        val base = "/data/data/$pkg"
+        // Merge any pending WAL frames into HomeAssistantDB so the captured file holds the whole login.
+        // Safe while the app is running (SQLite WAL is multi-connection); a no-op if sqlite3 is absent.
+        io.github.maxlyth.hapaneld.control.Su.run("sqlite3 $base/databases/HomeAssistantDB 'PRAGMA wal_checkpoint(TRUNCATE)'")
+        return companionBackupFiles.mapNotNull { rel ->
+            io.github.maxlyth.hapaneld.control.Su.runBytes("cat $base/$rel 2>/dev/null")
+                ?.takeIf { it.isNotEmpty() }?.let { rel to it }
+        }
+    }
+
+    /** Restore endpoint: decrypt + validate; ?dry_run=1 reports contents without writing. A real restore is
+     *  DESTRUCTIVE (config rewrite + Companion force-stop/rewrite), run off-thread with InstallProgress. */
+    private suspend fun handleRestore(call: ApplicationCall) {
+        val pw = call.request.headers["X-Backup-Passphrase"].orEmpty()
+        val dryRun = call.request.queryParameters["dry_run"] == "1"
+        val bundle = withContext(Dispatchers.IO) { call.receiveStream().use { it.readBytes() } }
+        // Encrypted (needs the passphrase) vs plain bundle — auto-detected from the magic.
+        val plain = if (PanelBackup.isSealed(bundle)) {
+            if (pw.isEmpty()) return call.respondText(
+                """{"ok":false,"error":"this bundle is encrypted — enter its passphrase"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+            PanelBackup.open(bundle, pw)
+        } else bundle
+        if (plain == null) return call.respondText(
+            """{"ok":false,"error":"wrong passphrase or corrupt bundle"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+        val obj = runCatching { org.json.JSONObject(String(plain, Charsets.UTF_8)) }.getOrNull()
+        if (obj == null || obj.optString("kind") != "ha-paneld-backup")
+            return call.respondText("""{"ok":false,"error":"not a ha-paneld backup"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+        val cfgObj = obj.optJSONObject("config")
+        val comp = obj.optJSONObject("companion")
+        val compFiles = comp?.optJSONArray("files")?.length() ?: 0
+        if (dryRun) return call.respondText(
+            """{"ok":true,"dry_run":true,"panel_id":${jsonStr(obj.optString("panel_id"))},""" +
+                """"config_keys":${cfgObj?.length() ?: 0},"companion_pkg":${jsonStr(comp?.optString("pkg") ?: "")},"companion_files":$compFiles}""",
+            ContentType.Application.Json)
+        if (InstallProgress.running) return call.respondText("""{"status":"busy"}""", ContentType.Application.Json)
+        InstallProgress.start("Restore")
+        scope.launch {
+            val r = runCatching {
+                val n = if (cfgObj != null) applyRestoreConfig(cfgObj) else 0
+                val c = if (comp != null) restoreCompanion(comp) else "no companion in bundle"
+                "restored $n config keys; $c"
+            }.getOrElse { Log.w(TAG, "restore failed", it); "error: ${it.message}" }
+            Log.i(TAG, "restore: $r")
+            InstallProgress.finish(r)
+        }
+        call.respondText("""{"status":"started"}""", ContentType.Application.Json)
+    }
+
+    /** Validate + apply the config half of a backup (reuses the import apply path). Returns keys applied. */
+    private fun applyRestoreConfig(cfgObj: org.json.JSONObject): Int {
+        val accepted = LinkedHashMap<String, String>()
+        for (key in cfgObj.keys()) {
+            val spec = SettingsRegistry.spec(key) ?: continue
+            if (spec.readOnly || spec.transient) continue
+            (SettingValue.validate(spec, cfgObj.getString(key)) as? Validation.Ok)?.let { accepted[key] = it.normalized }
+        }
+        applyAccepted(accepted)
+        return accepted.size
+    }
+
+    /** DESTRUCTIVE: write the Companion login files back over su, fix owner uid + SELinux context (captured
+     *  from the LIVE app dir — restorecon drops the per-app MLS categories), and relaunch. force-stop first
+     *  so the app isn't holding/overwriting the DB. */
+    private fun restoreCompanion(comp: org.json.JSONObject): String {
+        val Su = io.github.maxlyth.hapaneld.control.Su
+        val pkg = comp.optString("pkg").ifBlank { return "no companion pkg" }
+        if (!Su.available()) return "companion restore needs su"
+        val files = comp.optJSONArray("files") ?: return "no companion files"
+        val base = "/data/data/$pkg"
+        val uid = Su.runOutput("stat -c %u $base 2>/dev/null")?.trim()?.takeIf { it.isNotEmpty() && it != "?" }
+        // `ls -Zd` prints "<context> <name>" — the context is the first field.
+        val ctx = Su.runOutput("ls -Zd $base 2>/dev/null")?.trim()?.substringBefore(' ')?.takeIf { it.startsWith("u:") }
+        Su.run("am force-stop $pkg")
+        val dec = java.util.Base64.getDecoder()
+        var written = 0
+        for (i in 0 until files.length()) {
+            val f = files.getJSONObject(i)
+            val rel = f.optString("rel")
+            if (rel.isEmpty() || rel.contains("..")) continue
+            val bytes = runCatching { dec.decode(f.optString("b64")) }.getOrNull() ?: continue
+            val tmp = File(appContext.cacheDir, "restore.tmp").apply { writeBytes(bytes) }
+            Su.runWithStdinLong("cat > $base/$rel", tmp, 60_000)
+            tmp.delete()
+            written++
+        }
+        // Drop any stale WAL/SHM so SQLite reads the restored main DB as-is (a leftover WAL from the fresh
+        // install would otherwise shadow/discard the restored login). The backup is already checkpointed.
+        Su.run("rm -f $base/databases/HomeAssistantDB-wal $base/databases/HomeAssistantDB-shm")
+        if (uid != null) Su.run("chown -R $uid:$uid $base/databases $base/shared_prefs")
+        if (ctx != null) Su.run("chcon -R $ctx $base/databases $base/shared_prefs")
+        Su.run("monkey -p $pkg -c android.intent.category.LAUNCHER 1")
+        return "restored companion $pkg ($written files, uid=${uid ?: "?"}, ctx=${if (ctx != null) "set" else "?"})"
     }
 
     /** List on-panel revisions (newest first) as `[{id, exported_at, keys}]`. */

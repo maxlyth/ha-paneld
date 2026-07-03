@@ -21,6 +21,22 @@ object SelfUpdater {
     const val PRERELEASE = "prerelease"
     private const val REPO = "maxlyth/ha-paneld"
     private const val TAG = "ha-paneld/selfupdate"
+    // The ha-paneld release ships a single APK asset.
+    private val APK_MATCH: (String) -> Boolean = { it.endsWith(".apk", ignoreCase = true) }
+
+    /** Up to [limit] recent versions on [channel] for the Install-tab picker (version + release-notes URL). */
+    fun versions(channel: String, limit: Int = 10): List<ReleaseCatalog.Version> =
+        ReleaseCatalog.list(REPO, channel, limit, APK_MATCH) { it.removePrefix("v") }
+
+    /** Install a SPECIFIC ha-paneld release by its [tag] (the version picker). Resolves the tag's APK asset
+     *  server-side (the tag comes from the client, so it's validated + only used to look up the pinned
+     *  asset), then installs with the pinned signer. Downgrades are allowed (`pm install -d`). */
+    suspend fun installVersion(context: Context, tag: String): String = withContext(Dispatchers.IO) {
+        val url = ReleaseCatalog.apkUrl(REPO, tag, APK_MATCH) ?: return@withContext "no APK asset for $tag"
+        Log.i(TAG, "self-install ha-paneld tag $tag")
+        val r = AppInstaller.install(context, url, AppInstaller.HA_PANELD)
+        if (r == "OK") "installing ha-paneld $tag" else r // process restarts on success
+    }
 
     /** The newest release for [channel] → (versionTag without leading v, apk asset URL), or null. */
     fun resolve(channel: String): Pair<String, String>? = runCatching {

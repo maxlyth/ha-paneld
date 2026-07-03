@@ -54,7 +54,9 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import io.github.maxlyth.hapaneld.util.UpdateChecker
 import io.github.maxlyth.hapaneld.util.CompanionInstaller
+import io.github.maxlyth.hapaneld.util.InstallProgress
 import io.github.maxlyth.hapaneld.util.SelfUpdater
+import io.github.maxlyth.hapaneld.util.WebViewInstaller
 import io.github.maxlyth.hapaneld.mqtt.ConnectionSupervisor
 import io.github.maxlyth.hapaneld.platform.AndroidScreenPower
 import io.github.maxlyth.hapaneld.platform.AndroidSystemEnv
@@ -200,6 +202,9 @@ class PaneldService : Service() {
             effectiveBrightness = { brightness.getBrightness() },
             onHealWebView = { healWebView() },
             onRepairCompanionUrl = { repairCompanionUrl() },
+            onInstallComponent = { name, action, version -> installComponent(name, action, version) },
+            // One-line EFR32 radio status for the Install-tab Radio card; null when this panel has no radio.
+            radioStatus = { if (profile.zigbeeGatewayDir != null) zigbee.status() else null },
         )
         // Stream daemon-instrumented hardware buttons (e.g. WF1589T power key) into the same event
         // entity as the a11y key capture. No-op on panels with no evdev buttons.
@@ -387,6 +392,40 @@ class PaneldService : Service() {
                 io.github.maxlyth.hapaneld.control.Su,
             )
             Log.i(TAG, "Companion internal_url repair: $r")
+        }
+    }
+
+    /** Install/update a managed component from the Install tab (POST /api/v1/install/component). Runs
+     *  off-thread; progress is reported via InstallProgress so the web UI can poll. action="reinstall"
+     *  forces even when the installed build is already current. Single-slot (InstallProgress.start gates). */
+    private fun installComponent(name: String, action: String, version: String) {
+        val label = when (name) {
+            "paneld" -> "ha-paneld"; "companion" -> "HA Companion"; "webview" -> "System WebView"; else -> name
+        }
+        if (!InstallProgress.start(label)) return // another install is already running
+        val force = action == "reinstall"
+        val tag = version.takeIf { it.isNotBlank() }
+        scope.launch {
+            val r = try {
+                when (name) {
+                    // A specific picked version installs that exact tag; otherwise the channel's newest.
+                    "paneld" -> if (tag != null) SelfUpdater.installVersion(this@PaneldService, tag)
+                        else SelfUpdater.checkAndUpdate(this@PaneldService, config.updateChannel, force = force)
+                    "companion" -> if (tag != null) CompanionInstaller.installVersion(this@PaneldService, tag)
+                        else CompanionInstaller.installOrUpdate(this@PaneldService, force = force, channel = config.companionUpdateChannel)
+                    "webview" -> WebViewInstaller.heal(this@PaneldService, profile, engineMajor = null, force = true).also {
+                        // The Companion picks up a new WebView provider only on process restart — reload it.
+                        if (it.startsWith("OK")) { kotlinx.coroutines.delay(2_000); system.reloadDashboard(config.dashboardPackage) }
+                    }
+                    else -> "unknown component"
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "install $name failed", e); "error: ${e.message}"
+            }
+            Log.i(TAG, "install $name: $r")
+            InstallProgress.finish(r)
+            // Refresh the available-update list so the banner + Install tab reflect the new state.
+            runCatching { UpdateChecker.check(this@PaneldService, config.updateChannel) }
         }
     }
 

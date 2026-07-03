@@ -198,3 +198,12 @@ function diagToggle(el){el.textContent=(el.textContent.indexOf('cm')<0)?el.datas
   .catch(function(){if(tries>0)setTimeout(function(){hydrate(tries-1);},3000);});}
  hydrate(10);
 })();
+// Dismiss a component-update banner for its current version (POST the label+version; the server keeps
+// it hidden until a newer release ships — see Config.ignoreUpdate). Removes the banner on success.
+function ignoreUpdate(btn){var b=btn.closest('.setup');if(!b)return;
+ var label=b.getAttribute('data-update')||'',version=b.getAttribute('data-version')||'';
+ btn.disabled=true;
+ fetch('/api/v1/updates/ignore',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},
+  body:'label='+encodeURIComponent(label)+'&version='+encodeURIComponent(version)})
+  .then(function(r){if(r.ok)b.remove();else btn.disabled=false;})
+  .catch(function(){btn.disabled=false;});}
