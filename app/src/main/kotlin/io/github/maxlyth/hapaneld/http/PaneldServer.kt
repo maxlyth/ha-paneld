@@ -1075,15 +1075,24 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         val hasRecents = io.github.maxlyth.hapaneld.device.DeviceProfile.detect().hasRecents
         val rootOk = s?.rootOk == true
         val checking = s == null
-        fun pbtn(action: String, label: String, ok: Boolean, needs: String, style: String = ""): String {
-            val dis = if (checking) """ disabled title="checking capabilities…""""
-            else if (!ok) """ disabled title="needs $needs"""" else ""
+        fun pbtn(action: String, label: String, ok: Boolean, needs: String, style: String = "", disabledTitle: String? = null): String {
+            val dis = when {
+                checking -> """ disabled title="checking capabilities…""""
+                !ok -> """ disabled title="needs $needs""""
+                disabledTitle != null -> """ disabled title="$disabledTitle""""
+                else -> ""
+            }
             return """<button class="pbtn"$style onclick="act('$action')"$dis>$label</button>"""
         }
+        // "Launcher" opens the best real home-screen launcher; "Admin launcher" always opens ha-paneld's
+        // own. When no separate launcher exists (e.g. the vendor kiosk is tamed), "Launcher" would just
+        // fall through to the admin launcher — so DISABLE it rather than show two buttons that do the same
+        // thing. resolvedLauncher() is a cheap PackageManager query (no root).
+        val hasDistinctLauncher = !checking && system.resolvedLauncher(config.launcherPackage) != null
         return """<div style="display:flex;gap:8px;flex-wrap:wrap">
  ${pbtn("back", "← Back", a11yOk, "the accessibility service")}
  ${pbtn("recents", "▢ Recents", a11yOk && hasRecents, if (hasRecents) "the accessibility service" else "a Recents/overview screen (absent on this panel)")}
- ${pbtn("launcher", "⊞ Launcher", rootOk, "root (su or the helper daemon)")}
+ ${pbtn("launcher", "⊞ Launcher", rootOk, "root (su or the helper daemon)", disabledTitle = if (hasDistinctLauncher) null else "No separate launcher on this panel — same as Admin launcher")}
  ${pbtn("admin_launcher", "⚙ Admin launcher", rootOk, "root (su or the helper daemon)")}
 </div>
 <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
