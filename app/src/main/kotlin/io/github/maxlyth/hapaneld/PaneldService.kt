@@ -199,6 +199,7 @@ class PaneldService : Service() {
             logApp = logCaptureApp, logSystem = logCaptureSystem,
             effectiveBrightness = { brightness.getBrightness() },
             onHealWebView = { healWebView() },
+            onRepairCompanionUrl = { repairCompanionUrl() },
         )
         // Stream daemon-instrumented hardware buttons (e.g. WF1589T power key) into the same event
         // entity as the a11y key capture. No-op on panels with no evdev buttons.
@@ -370,6 +371,19 @@ class PaneldService : Service() {
                 kotlinx.coroutines.delay(2_000)
                 system.reloadDashboard(config.dashboardPackage)
             }
+        }
+    }
+
+    /** Companion internal_url repair (Install-tab button): copy each server's external_url into a blank
+     *  internal_url so HA 2026.7 stops rejecting the dashboard with "Missing 'Host' header". Off-thread
+     *  (su force-stops + relaunches the Companion). */
+    private fun repairCompanionUrl() {
+        scope.launch {
+            val r = io.github.maxlyth.hapaneld.control.CompanionDb.repairInternalUrl(
+                this@PaneldService,
+                io.github.maxlyth.hapaneld.control.Su,
+            )
+            Log.i(TAG, "Companion internal_url repair: $r")
         }
     }
 

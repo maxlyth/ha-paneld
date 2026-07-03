@@ -14,6 +14,7 @@ import io.github.maxlyth.hapaneld.config.SettingValue
 import io.github.maxlyth.hapaneld.config.SettingsRegistry
 import io.github.maxlyth.hapaneld.config.Validation
 import io.github.maxlyth.hapaneld.control.CdpRelay
+import io.github.maxlyth.hapaneld.control.CompanionDb
 import io.github.maxlyth.hapaneld.control.DensityController
 import io.github.maxlyth.hapaneld.control.Su
 import io.github.maxlyth.hapaneld.control.SystemController
@@ -107,6 +108,9 @@ class PaneldServer(
     // Trigger a WebView auto-heal (download + install the profile's recommended System WebView). Injected
     // by the service (needs Context + a coroutine); runs off the request thread. Fired by the Install-tab button.
     private val onHealWebView: () -> Unit = {},
+    // Repair a Companion server row with an empty internal_url (the HA 2026.7 "Missing Host header"
+    // incident). Injected by the service; runs off the request thread. Fired by the Install-tab button.
+    private val onRepairCompanionUrl: () -> Unit = {},
 ) {
     // Per-INSTALL build token (changes on every (re)install, not just a version bump) so an open info
     // page can auto-reload after the app is updated — even a same-version dev re-spin. /health carries it.
@@ -316,6 +320,14 @@ class PaneldServer(
                     // Fire-and-forget: the install runs off-thread (large download); the client refreshes.
                     post("/webview/heal") {
                         onHealWebView()
+                        call.respondText("""{"status":"started"}""", ContentType.Application.Json)
+                    }
+                    // Repair a Companion server row with an empty internal_url (HA 2026.7 "Missing Host
+                    // header" incident). Fire-and-forget: the repair force-stops + relaunches the Companion
+                    // off-thread; invalidate the health cache so the warning clears on the next poll.
+                    post("/companion/repair-url") {
+                        onRepairCompanionUrl()
+                        companionUrlCache.invalidate()
                         call.respondText("""{"status":"started"}""", ContentType.Application.Json)
                     }
                     // Per-panel Canvas dashboard layout (opaque Gridstack JSON, stored in Config).
@@ -802,6 +814,17 @@ ${tameCardHtml()}
                     """<a href="https://www.fully-kiosk.com/" target="_blank" rel="noopener">Fully Kiosk</a>, or set a """ +
                     """dashboard package on <a href="/configure">Configure</a>.</div>""",
             )
+            // Companion server row with a blank internal_url → HA 2026.7 rejects with "Missing Host header"
+            // and the dashboard renders blank. Offer a one-tap repair (copy external_url into internal_url).
+            companionUrlCache.get().let { u ->
+                if (u.needsRepair) append(
+                    """<div class="setup">⚠ <b>Home Assistant Companion has no internal URL</b> """ +
+                        """(${u.affected} server${if (u.affected == 1) "" else "s"}) — the dashboard can fail to load """ +
+                        """with <i>"Missing 'Host' header"</i>. Repair sets the internal URL to the external URL.""" +
+                        """<div style="margin-top:10px"><button class="pbtn" onclick="repairCompUrl(this)">⚙ Repair internal URL</button> <span id="cu-fix" class="muted"></span></div>""" +
+                        """</div>""",
+                )
+            }
             UpdateChecker.available.forEach { u ->
                 append(
                     """<div class="setup">⬆ <b>${esc(u.label)}</b> ${esc(u.latestVersion)} is available """ +
@@ -826,6 +849,11 @@ function healWebView(btn){btn.disabled=true;var s=document.getElementById('wv-he
  fetch('/api/v1/webview/heal',{method:'POST'}).then(function(r){return r.json();}).then(function(){
   if(s)s.textContent='Installing WebView — reload the dashboard, then refresh this page to confirm the new version.';
  }).catch(function(){if(s)s.textContent='Failed to start — check root/daemon.';btn.disabled=false;});}
+function repairCompUrl(btn){btn.disabled=true;var s=document.getElementById('cu-fix');
+ if(s)s.textContent='Repairing + relaunching the Companion…';
+ fetch('/api/v1/companion/repair-url',{method:'POST'}).then(function(r){return r.json();}).then(function(){
+  if(s)s.textContent='Repair started — the Companion will relaunch; refresh this page in a few seconds to confirm.';
+ }).catch(function(){if(s)s.textContent='Failed to start — check root.';btn.disabled=false;});}
 </script>"""
     }
 
@@ -879,6 +907,12 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         if (PanelInfo.dashboardRenderers(appContext, config.dashboardPackage).isEmpty()) warns.add(
             "ℹ <b>No dashboard app detected</b> — install the HA Companion, Fully Kiosk, or set a dashboard package.",
         )
+        companionUrlCache.get().let { u ->
+            if (u.needsRepair) warns.add(
+                "⚠ <b>Home Assistant Companion has no internal URL</b> (${u.affected} server${if (u.affected == 1) "" else "s"}) — " +
+                    "the dashboard can fail with \"Missing 'Host' header\". Repair it on the Install tab.",
+            )
+        }
         UpdateChecker.available.forEach { u ->
             warns.add("⬆ <b>${esc(u.label)}</b> ${esc(u.latestVersion)} is available (installed ${esc(u.currentVersion)}) — " +
                 "<a href=\"${esc(u.releaseUrl)}\" target=\"_blank\" rel=\"noopener\">download</a>")
@@ -971,6 +1005,12 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
     // su presence doesn't flap — cache the probe gating screenshot / controls / system logs / taming.
     private val suCache = Cached(SU_TTL_MS) { Su.available() }
     private fun rootOk(): Boolean = suCache.get() || HelperClient.available()
+
+    // Companion internal_url health (root sqlite3 read). Cached so the polled /status endpoint doesn't
+    // spawn su per request; only checked when su is present (the DB is app-private). Invalidated on repair.
+    private val companionUrlCache = Cached(COMPANION_URL_TTL_MS) {
+        if (suCache.get()) CompanionDb.internalUrlStatus(appContext, Su) else CompanionDb.UrlStatus(false, 0)
+    }
 
     private val snapCache = Cached(SNAP_TTL_MS) {
         val d = densityCache.get()
@@ -1760,6 +1800,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
         private const val SNAP_TTL_MS = 15_000L
         private const val DENSITY_TTL_MS = 30_000L
         private const val SU_TTL_MS = 60_000L
+        private const val COMPANION_URL_TTL_MS = 60_000L
 
         // Dashboard fact rows that are BACKED BY A SETTING → the Configure anchor the ✎ marker
         // deep-links to. Facts absent here are static (hardware/runtime) and get no marker.
