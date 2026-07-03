@@ -139,6 +139,64 @@
 
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
 
+  // --- Encrypted backup / restore ---
+  var bkMsg = function (t) { var e = document.getElementById('bk-msg'); if (e) e.textContent = t; };
+  var rsFile = null;
+
+  window.doBackup = function (btn) {
+    var pw = (document.getElementById('bk-pw') || {}).value || '';
+    if (pw.length < 6) { bkMsg('Passphrase must be at least 6 characters.'); return; }
+    var comp = document.getElementById('bk-comp');
+    btn.disabled = true; bkMsg('Building encrypted backup…');
+    fetch('/api/v1/backup', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: 'passphrase=' + encodeURIComponent(pw) + '&include_companion=' + (comp && comp.checked ? '1' : '0') })
+      .then(function (r) { if (!r.ok) throw 0; return r.blob(); }).then(function (b) {
+        var a = document.createElement('a'), url = URL.createObjectURL(b);
+        a.href = url; a.download = (document.title.split('·').pop() || 'panel').trim() + '-backup.hpb';
+        document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+        bkMsg('Backup downloaded — store it with its passphrase.'); btn.disabled = false;
+      }).catch(function () { bkMsg('Backup failed.'); btn.disabled = false; });
+  };
+
+  // Pick a bundle → decrypt-preview (dry run, non-destructive) → offer a Confirm restore.
+  window.restorePick = function (input) {
+    rsFile = input.files && input.files[0]; if (!rsFile) return;
+    var pw = (document.getElementById('rs-pw') || {}).value || '';
+    var prev = document.getElementById('rs-preview');
+    if (!pw) { if (prev) prev.innerHTML = '<p class="note">Enter the bundle passphrase first, then choose the file again.</p>'; return; }
+    if (prev) prev.innerHTML = '<p class="note">Decrypting preview…</p>';
+    fetch('/api/v1/restore?dry_run=1', { method: 'POST', headers: { 'X-Backup-Passphrase': pw }, body: rsFile })
+      .then(function (r) { return r.json(); }).then(function (d) {
+        if (!prev) return;
+        if (!d.ok) { prev.innerHTML = '<p class="note">' + esc(d.error || 'could not read bundle') + '</p>'; return; }
+        var comp = d.companion_files ? (esc(d.companion_pkg) + ' (' + d.companion_files + ' files)') : 'none';
+        prev.innerHTML = '<table class="dt"><tr><th>Panel</th><td>' + esc(d.panel_id) + '</td></tr>' +
+          '<tr><th>Config keys</th><td>' + d.config_keys + '</td></tr>' +
+          '<tr><th>Companion login</th><td>' + comp + '</td></tr></table>' +
+          '<button class="pbtn" style="margin-top:8px" onclick="restoreConfirm(this)">⚠ Restore this bundle now</button>';
+      }).catch(function () { if (prev) prev.innerHTML = '<p class="note">Preview failed.</p>'; });
+  };
+
+  window.restoreConfirm = function (btn) {
+    if (!rsFile) return;
+    if (!confirm('Restore overwrites this panel\'s config and Companion login. Continue?')) return;
+    var pw = (document.getElementById('rs-pw') || {}).value || '';
+    btn.disabled = true; bkMsg('Restoring…');
+    fetch('/api/v1/restore', { method: 'POST', headers: { 'X-Backup-Passphrase': pw }, body: rsFile })
+      .then(function (r) { return r.json(); }).then(function (d) {
+        if (d.status === 'busy') { bkMsg('Another operation is running — try again shortly.'); btn.disabled = false; return; }
+        if (d.status !== 'started') { bkMsg('Could not start: ' + (d.status || 'error')); btn.disabled = false; return; }
+        pollRestore(0);
+      }).catch(function () { bkMsg('Restore failed to start.'); btn.disabled = false; });
+  };
+
+  function pollRestore(n) {
+    fetch('/api/v1/install/status').then(function (r) { return r.json(); }).then(function (d) {
+      if (d.running) { bkMsg('Restoring…'); setTimeout(function () { pollRestore(n + 1); }, 2500); return; }
+      bkMsg('Restore: ' + (d.message || 'done'));
+    }).catch(function () { if (n < 20) setTimeout(function () { pollRestore(n + 1); }, 3000); else bkMsg('Lost contact — reload to check.'); });
+  }
+
   // Radio card: show it only when this panel actually has an EFR32 radio gateway.
   fetch('/api/v1/radio').then(function (r) { return r.json(); }).then(function (d) {
     if (!d || !d.present) return;

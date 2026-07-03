@@ -8,6 +8,7 @@ import io.github.maxlyth.hapaneld.config.Capabilities
 import io.github.maxlyth.hapaneld.config.ConfigBundle
 import io.github.maxlyth.hapaneld.config.ConfigDiff
 import io.github.maxlyth.hapaneld.config.Migrations
+import io.github.maxlyth.hapaneld.backup.PanelBackup
 import io.github.maxlyth.hapaneld.config.Scope
 import io.github.maxlyth.hapaneld.config.SettingType
 import io.github.maxlyth.hapaneld.config.SettingValue
@@ -286,6 +287,23 @@ class PaneldServer(
                     // Versioned config bundle: backup (export) and transactional restore/deploy (import).
                     get("/config/export") { handleConfigExport(call) }
                     post("/config/import") { handleConfigImport(call) }
+                    // Full panel backup: an ENCRYPTED bundle of the ha-paneld config (incl. secrets) plus,
+                    // when include_companion, the HA Companion's login DB (its HA tokens — full-HA-access
+                    // secrets, hence mandatory passphrase encryption). Streams a .hpb download.
+                    post("/backup") {
+                        val p = call.receiveParameters()
+                        val pw = p["passphrase"].orEmpty()
+                        if (pw.length < 6) return@post call.respondText(
+                            """{"ok":false,"error":"passphrase too short (min 6)"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+                        val includeComp = p["include_companion"]?.let { it == "true" || it == "1" } ?: true
+                        val bytes = withContext(Dispatchers.IO) { PanelBackup.seal(backupJson(includeComp).toByteArray(), pw) }
+                        call.response.headers.append("Content-Disposition", "attachment; filename=\"${config.panelId}-backup.hpb\"")
+                        call.respondBytes(bytes, ContentType.Application.OctetStream)
+                    }
+                    // Restore a .hpb bundle (raw body; passphrase in the X-Backup-Passphrase header so it
+                    // never lands in a query log). ?dry_run=1 decrypts + reports the contents WITHOUT writing.
+                    // A real restore is DESTRUCTIVE (rewrites config; force-stops + rewrites the Companion DB).
+                    post("/restore") { handleRestore(call) }
                     // On-panel revision history + rollback.
                     get("/config/revisions") { call.respondText(revisionsJson(), ContentType.Application.Json) }
                     post("/config/revisions/{id}/restore") {
@@ -923,9 +941,7 @@ ${apkCardHtml(root)}
 <button class="pbtn" onclick="healthAudit(this)">Run health audit</button>
 <div id="audit-out" style="margin-top:10px"></div>
 <p class="note"><a href="/api/v1/diag" target="_blank" style="color:#9cf">⭳ Diagnostics dump</a> — full hardware/firmware/SELinux/su report for bug reports.</p></div>
-<div class="card"><h2>Backup this panel</h2>
-<p class="note">Export the full configuration bundle for safe-keeping, or to clone settings to another panel (Configure → Import).</p>
-<a class="pbtn" href="/api/v1/config/export">⭳ Export config bundle</a></div>
+${backupCardHtml(root)}
 $allGood</div>
 <script src="/assets/install.js"></script>"""
     }
@@ -976,6 +992,32 @@ ${simpleRow("System WebView", wv.display, wvAction)}
 $rootNote
 <p class="note">The default channel is set on the <a href="/configure">Configure</a> tab; changing it here only affects this picker.</p>
 <p class="note" id="comp-msg"></p></div>"""
+    }
+
+    /** Backup & restore card: an ENCRYPTED device-state bundle (ha-paneld config + optionally the HA
+     *  Companion login) with a passphrase; restore shows a decrypt preview before the destructive apply.
+     *  Also links the plain config-only bundle (for cloning settings between panels). */
+    private fun backupCardHtml(root: Boolean): String {
+        val compRow = if (root)
+            """<label style="display:flex;gap:8px;align-items:center;font-size:.85rem"><input type="checkbox" id="bk-comp" checked> Include HA Companion login <span class="muted">(its HA tokens — keep the bundle safe)</span></label>"""
+        else """<p class="note">The HA Companion login can only be captured on a rooted panel.</p>"""
+        val restoreWarn = if (root) " and rewrites the HA Companion login (force-stops it)" else ""
+        return """<div class="card"><h2>Backup &amp; restore</h2>
+<p class="note">An <b>encrypted</b> bundle of this panel's ha-paneld config${if (root) " + the HA Companion login" else ""}. Keep the passphrase — it can't be recovered.</p>
+<div style="display:flex;flex-direction:column;gap:8px;max-width:440px">
+$compRow
+<input type="password" id="bk-pw" placeholder="Backup passphrase (min 6)">
+<button class="pbtn" onclick="doBackup(this)">⭳ Download encrypted backup</button>
+</div>
+<hr style="border:0;border-top:1px solid #2a2a2a;margin:14px 0">
+<p class="note"><b>Restore</b> overwrites this panel's config$restoreWarn — you'll see a preview of the bundle's contents before it applies.</p>
+<div style="display:flex;flex-direction:column;gap:8px;max-width:440px">
+<input type="password" id="rs-pw" placeholder="Bundle passphrase">
+<label class="pbtn" style="cursor:pointer">⭱ Choose backup (.hpb)…<input type="file" id="rs-file" accept=".hpb,application/octet-stream" style="display:none" onchange="restorePick(this)"></label>
+<div id="rs-preview"></div>
+</div>
+<p class="note" id="bk-msg"></p>
+<p class="note"><a href="/api/v1/config/export" style="color:#9cf">⭳ Config-only bundle (unencrypted)</a> — settings only, for cloning to another panel via Configure → Import.</p></div>"""
     }
 
     /** "Install an APK" card (Install tab). ⚠ Root-installs an arbitrary user-supplied APK over the
@@ -1899,6 +1941,123 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
         for ((k, v) in live) applySetting(k, v)
         snapInvalidate()
         onReconfigure()
+    }
+
+    // ---- Full panel backup / restore (device-state bundle) ------------------------------------------
+    //
+    // A backup bundle = ha-paneld config (all settable keys incl. secrets) + optionally the HA Companion's
+    // login files (its HomeAssistantDB carries HA access/refresh tokens). Always encrypted (PanelBackup).
+    // Companion capture/restore needs su; the SELinux context matters (per-app MLS categories), so restore
+    // reapplies the LIVE dir's owner uid + context rather than trusting restorecon.
+
+    private val companionBackupFiles = listOf(
+        "databases/HomeAssistantDB", "databases/HomeAssistantDB-wal", "databases/HomeAssistantDB-shm",
+        "shared_prefs/session_0.xml", "shared_prefs/integration_0.xml",
+    )
+
+    /** Build the (pre-encryption) backup plaintext JSON. Config first; Companion login files (base64) when
+     *  [includeCompanion] and su + a Companion are present. */
+    private fun backupJson(includeCompanion: Boolean): String {
+        val live = liveValues()
+        val cfg = SettingsRegistry.settable().filterNot { it.transient }
+            .joinToString(",") { s -> "${jsonStr(s.key)}:${jsonStr(live[s.key] ?: config.getRaw(s))}" }
+        val sb = StringBuilder("{\"kind\":\"ha-paneld-backup\",\"schema\":${SettingsRegistry.SCHEMA}")
+        sb.append(",\"panel_id\":${jsonStr(config.panelId)},\"created\":${jsonStr(System.currentTimeMillis().toString())}")
+        sb.append(",\"config\":{").append(cfg).append("}")
+        val pkg = if (includeCompanion) CompanionInstaller.installedPkg(appContext) else null
+        if (pkg != null && io.github.maxlyth.hapaneld.control.Su.available()) {
+            val files = captureCompanion(pkg)
+            if (files.isNotEmpty()) {
+                val enc = java.util.Base64.getEncoder()
+                val arr = files.joinToString(",") { (rel, b) -> "{\"rel\":${jsonStr(rel)},\"b64\":${jsonStr(enc.encodeToString(b))}}" }
+                sb.append(",\"companion\":{\"pkg\":${jsonStr(pkg)},\"files\":[").append(arr).append("]}")
+            }
+        }
+        return sb.append("}").toString()
+    }
+
+    /** Read the Companion login files over su (raw bytes; skips absent/empty ones). */
+    private fun captureCompanion(pkg: String): List<Pair<String, ByteArray>> {
+        val base = "/data/data/$pkg"
+        return companionBackupFiles.mapNotNull { rel ->
+            io.github.maxlyth.hapaneld.control.Su.runBytes("cat $base/$rel 2>/dev/null")
+                ?.takeIf { it.isNotEmpty() }?.let { rel to it }
+        }
+    }
+
+    /** Restore endpoint: decrypt + validate; ?dry_run=1 reports contents without writing. A real restore is
+     *  DESTRUCTIVE (config rewrite + Companion force-stop/rewrite), run off-thread with InstallProgress. */
+    private suspend fun handleRestore(call: ApplicationCall) {
+        val pw = call.request.headers["X-Backup-Passphrase"].orEmpty()
+        val dryRun = call.request.queryParameters["dry_run"] == "1"
+        val bundle = withContext(Dispatchers.IO) { call.receiveStream().use { it.readBytes() } }
+        val plain = PanelBackup.open(bundle, pw)
+            ?: return call.respondText("""{"ok":false,"error":"wrong passphrase or corrupt bundle"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+        val obj = runCatching { org.json.JSONObject(String(plain, Charsets.UTF_8)) }.getOrNull()
+        if (obj == null || obj.optString("kind") != "ha-paneld-backup")
+            return call.respondText("""{"ok":false,"error":"not a ha-paneld backup"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+        val cfgObj = obj.optJSONObject("config")
+        val comp = obj.optJSONObject("companion")
+        val compFiles = comp?.optJSONArray("files")?.length() ?: 0
+        if (dryRun) return call.respondText(
+            """{"ok":true,"dry_run":true,"panel_id":${jsonStr(obj.optString("panel_id"))},""" +
+                """"config_keys":${cfgObj?.length() ?: 0},"companion_pkg":${jsonStr(comp?.optString("pkg") ?: "")},"companion_files":$compFiles}""",
+            ContentType.Application.Json)
+        if (InstallProgress.running) return call.respondText("""{"status":"busy"}""", ContentType.Application.Json)
+        InstallProgress.start("Restore")
+        scope.launch {
+            val r = runCatching {
+                val n = if (cfgObj != null) applyRestoreConfig(cfgObj) else 0
+                val c = if (comp != null) restoreCompanion(comp) else "no companion in bundle"
+                "restored $n config keys; $c"
+            }.getOrElse { Log.w(TAG, "restore failed", it); "error: ${it.message}" }
+            Log.i(TAG, "restore: $r")
+            InstallProgress.finish(r)
+        }
+        call.respondText("""{"status":"started"}""", ContentType.Application.Json)
+    }
+
+    /** Validate + apply the config half of a backup (reuses the import apply path). Returns keys applied. */
+    private fun applyRestoreConfig(cfgObj: org.json.JSONObject): Int {
+        val accepted = LinkedHashMap<String, String>()
+        for (key in cfgObj.keys()) {
+            val spec = SettingsRegistry.spec(key) ?: continue
+            if (spec.readOnly || spec.transient) continue
+            (SettingValue.validate(spec, cfgObj.getString(key)) as? Validation.Ok)?.let { accepted[key] = it.normalized }
+        }
+        applyAccepted(accepted)
+        return accepted.size
+    }
+
+    /** DESTRUCTIVE: write the Companion login files back over su, fix owner uid + SELinux context (captured
+     *  from the LIVE app dir — restorecon drops the per-app MLS categories), and relaunch. force-stop first
+     *  so the app isn't holding/overwriting the DB. */
+    private fun restoreCompanion(comp: org.json.JSONObject): String {
+        val Su = io.github.maxlyth.hapaneld.control.Su
+        val pkg = comp.optString("pkg").ifBlank { return "no companion pkg" }
+        if (!Su.available()) return "companion restore needs su"
+        val files = comp.optJSONArray("files") ?: return "no companion files"
+        val base = "/data/data/$pkg"
+        val uid = Su.runOutput("stat -c %u $base 2>/dev/null")?.trim()?.takeIf { it.isNotEmpty() && it != "?" }
+        // `ls -Zd` prints "<context> <name>" — the context is the first field.
+        val ctx = Su.runOutput("ls -Zd $base 2>/dev/null")?.trim()?.substringBefore(' ')?.takeIf { it.startsWith("u:") }
+        Su.run("am force-stop $pkg")
+        val dec = java.util.Base64.getDecoder()
+        var written = 0
+        for (i in 0 until files.length()) {
+            val f = files.getJSONObject(i)
+            val rel = f.optString("rel")
+            if (rel.isEmpty() || rel.contains("..")) continue
+            val bytes = runCatching { dec.decode(f.optString("b64")) }.getOrNull() ?: continue
+            val tmp = File(appContext.cacheDir, "restore.tmp").apply { writeBytes(bytes) }
+            Su.runWithStdinLong("cat > $base/$rel", tmp, 60_000)
+            tmp.delete()
+            written++
+        }
+        if (uid != null) Su.run("chown -R $uid:$uid $base/databases $base/shared_prefs")
+        if (ctx != null) Su.run("chcon -R $ctx $base/databases $base/shared_prefs")
+        Su.run("monkey -p $pkg -c android.intent.category.LAUNCHER 1")
+        return "restored companion $pkg ($written files, uid=${uid ?: "?"}, ctx=${if (ctx != null) "set" else "?"})"
     }
 
     /** List on-panel revisions (newest first) as `[{id, exported_at, keys}]`. */
