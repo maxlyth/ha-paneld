@@ -49,28 +49,67 @@ object CompanionInstaller {
         }.getOrNull()
     }
 
+    /** True when [latestVersion] is newer than the panel's [maxVersion] cap (so it must NOT be installed).
+     *  Pure — unit-tested. Null cap = no ceiling. */
+    internal fun exceedsCap(latestVersion: String, maxVersion: String?): Boolean =
+        maxVersion != null && UpdateChecker.isNewer(UpdateChecker.stripVariant(latestVersion), maxVersion)
+
+    /** The newest release on [channel] whose version is at or below [maxVersion], as (version, minimal-APK
+     *  url), or null if none / on error. GitHub lists releases newest-first, so the first one within the cap
+     *  is the newest within it. Used when the latest release exceeds the panel's Companion version cap. */
+    private fun resolveCapped(channel: String, maxVersion: String): Pair<String, String>? = runCatching {
+        val conn = java.net.URL("https://api.github.com/repos/home-assistant/android/releases?per_page=40")
+            .openConnection() as java.net.HttpURLConnection
+        conn.connectTimeout = 8_000; conn.readTimeout = 8_000
+        conn.setRequestProperty("Accept", "application/vnd.github+json")
+        if (conn.responseCode != 200) return@runCatching null
+        val arr = org.json.JSONArray(conn.inputStream.bufferedReader().readText())
+        for (i in 0 until arr.length()) {
+            val rel = arr.getJSONObject(i)
+            if (channel != "prerelease" && rel.optBoolean("prerelease", false)) continue
+            val ver = UpdateChecker.stripVariant(rel.optString("tag_name").removePrefix("v"))
+            if (ver.isEmpty() || UpdateChecker.isNewer(ver, maxVersion)) continue   // skip > cap
+            val assets = rel.optJSONArray("assets") ?: continue
+            for (j in 0 until assets.length()) {
+                val url = assets.getJSONObject(j).optString("browser_download_url")
+                if (url.endsWith("app-minimal-release.apk")) return@runCatching ver to url
+            }
+        }
+        null
+    }.getOrNull()
+
     /** Install the minimal Companion if missing, or update it if a newer release exists on [channel].
-     *  [force] skips the version check (the manual-button path). Returns a short human status. */
-    suspend fun installOrUpdate(context: Context, force: Boolean = false, channel: String = "stable"): String = withContext(Dispatchers.IO) {
+     *  [force] skips the up-to-date check (manual button) but STILL honours [maxVersion] — the cap is a
+     *  safety guard (e.g. 2026.6.5 crash-loops on PX30/8.1), not a preference. Returns a short human status. */
+    suspend fun installOrUpdate(
+        context: Context,
+        force: Boolean = false,
+        channel: String = "stable",
+        maxVersion: String? = null,
+    ): String = withContext(Dispatchers.IO) {
         if (AppInstaller.installedVersion(context, FULL_PKG).isNotBlank())
             return@withContext "skipped: full Companion present (Play-managed)"
 
         val installed = AppInstaller.installedVersion(context, MINIMAL_PKG)
         val missing = installed.isBlank()
-        val resolved = resolve(channel)
-        if (!missing && !force) {
-            // Compare variant-stripped ("2026.6.5-minimal" IS 2026.6.5 — issue #17); a same-version
-            // install of the other variant is never an upgrade.
-            val latest = resolved?.first
-            if (latest != null && !UpdateChecker.isNewer(latest, UpdateChecker.stripVariant(installed)))
-                return@withContext "up to date ($installed)"
+        val latest = resolve(channel)
+        // Cap: if the latest release exceeds this panel's known-good ceiling, target the newest release
+        // AT OR BELOW the cap instead — never install the crash-looping build.
+        val capped = latest != null && exceedsCap(latest.first, maxVersion)
+        val target = (if (capped) resolveCapped(channel, maxVersion!!) else latest)
+            ?: return@withContext if (capped) "no Companion release within the $maxVersion cap for this panel" else "no release found"
+
+        if (!missing && !force && !UpdateChecker.isNewer(target.first, UpdateChecker.stripVariant(installed))) {
+            return@withContext if (capped)
+                "pinned at $installed (latest ${latest!!.first} exceeds this panel's $maxVersion cap)"
+            else "up to date ($installed)"
         }
 
-        val r = AppInstaller.install(context, resolved?.second ?: MINIMAL_APK_URL, AppInstaller.COMPANION_MINIMAL)
+        val r = AppInstaller.install(context, target.second, AppInstaller.COMPANION_MINIMAL)
         if (r != "OK") return@withContext r
         val now = AppInstaller.installedVersion(context, MINIMAL_PKG)
         val verb = if (missing) "installed" else "updated"
-        Log.i(TAG, "Companion $verb -> $now")
-        "$verb HA Companion app ($now)"
+        Log.i(TAG, "Companion $verb -> $now${if (capped) " (capped at $maxVersion)" else ""}")
+        "$verb HA Companion app ($now)${if (capped) " — pinned to the $maxVersion cap for this panel" else ""}"
     }
 }

@@ -785,6 +785,11 @@ ${tameCardHtml()}
         // the too-old warning gets a one-tap "Update WebView now" button (POST /api/v1/webview/heal).
         val canHeal = tooOld && io.github.maxlyth.hapaneld.device.DeviceProfile.detect().recommendedWebView != null && rootOk()
         val warnings = buildString {
+            if (io.github.maxlyth.hapaneld.PanelStatus.dashboardCrashLooping) append(
+                """<div class="setup">⛔ <b>Dashboard app is crash-looping</b> — the watchdog stopped relaunching it """ +
+                    """to avoid a restart storm. This usually means an incompatible dashboard-app update; reinstall or """ +
+                    """downgrade the dashboard/Companion app (see <a href="/install">updates</a>), or reboot the panel.</div>""",
+            )
             if (tooOld) append(
                 """<div class="setup">⚠ <b>System WebView is too old</b> (${esc(webViewVal)}) — the Home Assistant """ +
                     """dashboard may render blank or broken. <a href="$WEBVIEW_DOC" target="_blank" rel="noopener">""" +
@@ -863,6 +868,10 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         // Engine-aware WebView age check (a Cromite swap reports the stale OEM package version).
         val webViewStatus = PanelInfo.webViewStatus(appContext)
         val warns = mutableListOf<String>()
+        if (io.github.maxlyth.hapaneld.PanelStatus.dashboardCrashLooping) warns.add(
+            "⛔ <b>Dashboard app is crash-looping</b> — the watchdog stopped relaunching it to avoid a restart storm. " +
+                "Reinstall or downgrade the dashboard/Companion app, or reboot the panel.",
+        )
         if (webViewStatus.tooOld) warns.add(
             "⚠ <b>System WebView is too old</b> (${esc(webViewStatus.display)}) — the Home Assistant dashboard may render blank. " +
                 "<a href=\"$WEBVIEW_DOC\" target=\"_blank\" rel=\"noopener\">How &amp; why to update</a> (target Chromium ${PanelHealth.MIN_CHROMIUM}+).",

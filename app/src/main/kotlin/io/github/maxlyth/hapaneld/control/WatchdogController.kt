@@ -3,6 +3,7 @@ package io.github.maxlyth.hapaneld.control
 import android.os.SystemClock
 import android.util.Log
 import io.github.maxlyth.hapaneld.Config
+import io.github.maxlyth.hapaneld.PanelStatus
 import io.github.maxlyth.hapaneld.util.periodic
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -16,8 +17,10 @@ import kotlinx.coroutines.SupervisorJob
  * (the daemon's `APPSTATE` verb, else `su`) and recovers two failure modes:
  *
  * - **process died** — the dashboard crashed or was killed: relaunch it. Debounced over [DEAD_STREAK]
- *   consecutive dead checks so a momentary restart isn't mistaken for a crash, and the streak resets
- *   after each relaunch so a crash-looping app is retried at most once per [DEAD_STREAK] intervals.
+ *   consecutive dead checks so a momentary restart isn't mistaken for a crash. Relaunches are rate-limited
+ *   by a [CrashLoopTracker]: if the app crashes on launch (e.g. an incompatible Companion update) and is
+ *   relaunched too many times too fast, it backs off and raises [PanelStatus.dashboardCrashLooping] rather
+ *   than storming the screen — cleared automatically when the dashboard comes back foreground.
  * - **backgrounded too long** — the dashboard is alive but hasn't been foreground for [BG_TIMEOUT_MS]
  *   (someone opened another app / Settings and walked away): bring it back.
  *
@@ -41,10 +44,16 @@ class WatchdogController(
         Log.i(TAG, "watchdog on (poll ${INTERVAL_MS / 1000}s, bg-return ${BG_TIMEOUT_MS / 1000}s)")
         var deadStreak = 0
         var bgSince = 0L
+        val crashLoop = CrashLoopTracker()
         job = scope.periodic(INTERVAL_MS, initialDelayMs = INTERVAL_MS, tag = TAG, name = "watchdog") {
             val pkg = config.dashboardPackage
             when (runCatching { system.dashboardState(pkg) }.getOrDefault(AppState.UNKNOWN)) {
-                AppState.FG -> { deadStreak = 0; bgSince = 0L }
+                AppState.FG -> {
+                    deadStreak = 0; bgSince = 0L
+                    // Dashboard is healthy again — clear any crash-loop backoff + warning.
+                    if (PanelStatus.dashboardCrashLooping) PanelStatus.dashboardCrashLooping = false
+                    crashLoop.reset()
+                }
                 AppState.BG -> {
                     deadStreak = 0
                     val now = SystemClock.elapsedRealtime()
@@ -59,9 +68,19 @@ class WatchdogController(
                 AppState.DEAD -> {
                     bgSince = 0L
                     if (++deadStreak >= DEAD_STREAK) {
-                        Log.w(TAG, "dashboard process dead -> relaunching")
-                        system.launchHome(pkg)
                         deadStreak = 0
+                        val now = SystemClock.elapsedRealtime()
+                        if (crashLoop.onRelaunchAttempt(now)) {
+                            Log.w(TAG, "dashboard process dead -> relaunching")
+                            system.launchHome(pkg)
+                        } else {
+                            // Too many relaunches too fast — the dashboard is crash-looping (e.g. an
+                            // incompatible app update). Stop hammering it; raise a health warning instead.
+                            if (!PanelStatus.dashboardCrashLooping) {
+                                Log.e(TAG, "dashboard crash-looping -> backing off relaunches; see health warning")
+                                PanelStatus.dashboardCrashLooping = true
+                            }
+                        }
                     }
                 }
                 // Transient probe failure (su/daemon hiccup): stay cautious — don't relaunch, and

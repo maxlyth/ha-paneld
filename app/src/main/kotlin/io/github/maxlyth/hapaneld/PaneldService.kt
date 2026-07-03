@@ -221,7 +221,7 @@ class PaneldService : Service() {
         // Companion install/update button → run off-thread (network + su).
         onUpdateCompanion = {
             scope.launch {
-                val r = CompanionInstaller.installOrUpdate(this@PaneldService, force = true, channel = config.companionUpdateChannel)
+                val r = CompanionInstaller.installOrUpdate(this@PaneldService, force = true, channel = config.companionUpdateChannel, maxVersion = profile.companionMaxVersion)
                 Log.i(TAG, "Companion manual update: $r")
             }
         },
@@ -450,7 +450,7 @@ class PaneldService : Service() {
                 // Companion self-heal: when enabled, install a missing Companion / update an out-of-date one.
                 if (config.companionAutoUpdate) {
                     runCatching {
-                        val r = CompanionInstaller.installOrUpdate(this@PaneldService, channel = config.companionUpdateChannel)
+                        val r = CompanionInstaller.installOrUpdate(this@PaneldService, channel = config.companionUpdateChannel, maxVersion = profile.companionMaxVersion)
                         Log.i(TAG, "Companion auto: $r")
                     }
                 }

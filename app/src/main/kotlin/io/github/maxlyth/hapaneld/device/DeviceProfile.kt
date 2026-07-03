@@ -143,6 +143,12 @@ interface DeviceProfile {
      *  138). See [WebViewInstaller] and docs/hardware/README.md. */
     val recommendedWebView: WebViewSpec? get() = null
 
+    /** The newest HA Companion version known-good on this platform, or null = no cap. The Companion
+     *  auto-updater refuses to install a release NEWER than this. 2026.6.5-minimal crash-loops on
+     *  PX30/Android 8.1 (missing `CarUxRestrictionsManager` class), so the NSPanel Pro pins to 2026.5.4.
+     *  Compared with `UpdateChecker.isNewer` (dotted numeric). */
+    val companionMaxVersion: String? get() = null
+
     companion object {
         /** Memoized detected profile: [match] is pure per boot (Build fields + one system property), yet
          *  several call sites re-invoke [detect] on request paths — so resolve it once and reuse. */

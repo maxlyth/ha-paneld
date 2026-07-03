@@ -76,6 +76,10 @@ object NSPanelPro : DeviceProfile {
     }
     override val recommendedFontScale: Float? = 1.0f
 
+    // HA Companion 2026.6.5+ crash-loops on this PX30/Android 8.1 base (missing CarUxRestrictionsManager
+    // class → NoClassDefFoundError, classloader poisoned). Pin the auto-updater to the last good build.
+    override val companionMaxVersion = "2026.5.4"
+
     // LineageOS Android System WebView — the last build that installs on Android 8.1 (Chromium 138).
     // The stock ~107 renders the HA dashboard blank. Signer pinned; sideloaded from the mirror.
     override val recommendedWebView = WebViewSpec(
