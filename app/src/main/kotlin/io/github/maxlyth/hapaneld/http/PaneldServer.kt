@@ -1439,7 +1439,10 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
         fun s(v: String) = Json.str(v)
         val caps = snapStaleOk().caps   // capability probes (cpu/adb su) via the snapshot
         val hints = autoHints()   // what blank ("auto") package fields resolve to → field placeholder
-        val items = SettingsRegistry.settable().joinToString(",") { spec ->
+        // Include the settable settings PLUS the read-only HA sensors (diagnostics): the latter carry
+        // no editable value but still render an expose pip, so the user can opt them into HA.
+        val schemaSpecs = SettingsRegistry.SPECS.filter { !it.readOnly || it.ha != null }
+        val items = schemaSpecs.joinToString(",") { spec ->
             val opts = spec.options.joinToString(",") { s(it) }
             val isHa = spec.ha != null
             val placeholder = hints[spec.key]?.let { "auto ($it)" }
@@ -1453,6 +1456,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
                 "\"tier\":${s(spec.tier.name)}," +
                 "\"scope\":${s(spec.scope.name)}," +
                 "\"secret\":${spec.secret}," +
+                "\"readOnly\":${spec.readOnly}," +
                 "\"available\":${spec.availableWhen(caps)}," +
                 "\"options\":[$opts]," +
                 "\"min\":${spec.min?.toString() ?: "null"}," +

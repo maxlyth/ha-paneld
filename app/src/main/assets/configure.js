@@ -67,7 +67,8 @@
       el("span", { text: f.label }),
       f.help ? el("small", { text: f.help }) : null,
     ]);
-    var ctl = el("div", { class: "fctl" }, [pip(f), control(f)]);
+    // Read-only rows (diagnostic sensors) have no editable value — just the expose-to-HA pip.
+    var ctl = el("div", { class: "fctl" }, f.readOnly ? [pip(f)] : [pip(f), control(f)]);
     // Anchor id so dashboard "edit" icons can deep-link straight to this setting.
     return el("div", { class: "frow" + (f.available ? "" : " muted"), id: "cfg-" + f.key }, [label, ctl]);
   }

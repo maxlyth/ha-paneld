@@ -27,6 +27,7 @@ import io.github.maxlyth.hapaneld.input.ButtonBus
 import io.github.maxlyth.hapaneld.mqtt.HiveMqTransport
 import io.github.maxlyth.hapaneld.mqtt.MqttCallbacks
 import io.github.maxlyth.hapaneld.mqtt.MqttConnectConfig
+import io.github.maxlyth.hapaneld.control.Diagnostics
 import io.github.maxlyth.hapaneld.mqtt.MqttTransport
 import io.github.maxlyth.hapaneld.mqtt.classifyDisconnect
 import io.github.maxlyth.hapaneld.util.HelperClient
@@ -193,6 +194,9 @@ class MqttBridge(
     @Volatile private var prevTickBrightness = -1
     @Volatile private var prevTickVolume = -1
     @Volatile private var lastPublishedVolume = -1
+    // Last-published diagnostic values, for the per-sensor deadband (numeric) / change (IP) gate.
+    private val lastDiagNumeric = HashMap<String, Double>()
+    private val lastDiagString = HashMap<String, String>()
     private val stateLed = "ha-paneld/$panel/led/state"
     private val stateNavigate = "ha-paneld/$panel/navigate/state"
     private val stateVolume = "ha-paneld/$panel/volume/state"
@@ -1064,6 +1068,13 @@ class MqttBridge(
             }) { publish(stateNetAdb, if (adb.isPersisted()) "ON" else "OFF", retain = true) }
         }
 
+        // Diagnostic sensors (read-only) — all OPT-IN (haExposedByDefault=false), so a panel is silent
+        // in HA until a pip is enabled. Publish the current value on expose; syncLocalState() refreshes
+        // them each heartbeat tick with a deadband. Boot time is constant, so it's published only here.
+        for (key in DIAG_KEYS) {
+            exposable(key, "sensor", "${panel}_$key", { reg(key) }) { publishDiag(key) }
+        }
+
         // Panel actions (root via su; graceful no-op without it).
         publishConfig(
             "button", "${panel}_reload",
@@ -1227,6 +1238,52 @@ class MqttBridge(
             }
             prevTickVolume = cur
         }
+
+        // Diagnostic sensors — refresh each exposed one, deadbanded so slow drift (temperature, memory,
+        // CPU average) never floods the broker. Boot time is constant, so it's not re-published here.
+        runCatching { syncDiagnostics() }
+    }
+
+    // Current string value for a diagnostic sensor, or null when unavailable on this panel.
+    private fun diagValue(key: String): String? = when (key) {
+        "diag_ip" -> Diagnostics.ipAddress()
+        "diag_cpu" -> Diagnostics.cpuPercent()?.toString()
+        "diag_memory" -> Diagnostics.memoryPercent()?.toString()
+        "diag_soc_temp" -> Diagnostics.socTempC()?.let { String.format(java.util.Locale.US, "%.1f", it) }
+        "diag_boot" -> Diagnostics.bootTime()
+        else -> null
+    }
+
+    /** Publish a diagnostic sensor's current value (unconditional — used at expose time). */
+    private fun publishDiag(key: String) {
+        val v = diagValue(key) ?: return
+        publish(SettingsRegistry.spec(key)!!.ha!!.stateTopic(panel), v, retain = true)
+        lastDiagNumeric[key] = v.toDoubleOrNull() ?: return
+    }
+
+    /** Per-tick refresh of the numeric/IP diagnostic sensors, gated on expose + a per-metric deadband
+     *  so steady state costs zero messages. Boot time (constant) is published only at expose. */
+    private fun syncDiagnostics() {
+        val deadband = mapOf("diag_cpu" to 5.0, "diag_memory" to 3.0, "diag_soc_temp" to 0.5)
+        for (key in DIAG_KEYS) {
+            if (key == "diag_boot") continue
+            if (!config.haExposed(key, false)) continue
+            val raw = diagValue(key) ?: continue
+            val num = raw.toDoubleOrNull()
+            if (num == null) {
+                // Non-numeric (IP) — publish on any change.
+                if (lastDiagString[key] != raw) {
+                    lastDiagString[key] = raw
+                    publish(SettingsRegistry.spec(key)!!.ha!!.stateTopic(panel), raw, retain = true)
+                }
+                continue
+            }
+            val prev = lastDiagNumeric[key]
+            if (prev == null || kotlin.math.abs(num - prev) >= (deadband[key] ?: 1.0)) {
+                lastDiagNumeric[key] = num
+                publish(SettingsRegistry.spec(key)!!.ha!!.stateTopic(panel), raw, retain = true)
+            }
+        }
     }
 
     /** Sync predicate: [cur] differs from [published] beyond [deadband] AND isn't still moving fast
@@ -1257,6 +1314,8 @@ class MqttBridge(
         private const val TAG = "ha-paneld/mqtt"
         private const val SCREEN_DRIFT = 2   // reconcile threshold (0-255 scale) — ignore rounding jitter
         private const val SETTLE_BAND = 6    // "still moving" if the value shifted more than this since last tick
+        // Diagnostic sensors published via the opt-in exposable() gate (all default local-only).
+        private val DIAG_KEYS = listOf("diag_ip", "diag_cpu", "diag_memory", "diag_soc_temp", "diag_boot")
         // How long to wait after a reload before deep-linking to the intended dashboard — lets the WebView
         // cold-start + the HA frontend load so the navigate deeplink isn't swallowed.
         private const val RELOAD_NAV_DELAY_MS = 8_000L

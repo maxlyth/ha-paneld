@@ -96,7 +96,10 @@ data class HaEntity(
         enabledByDefault: Boolean = true,
     ): String {
         val edb = if (enabledByDefault) "" else ""","enabled_by_default":false"""
-        return "{\"name\":\"${jsonEsc(name)}\",\"unique_id\":\"${panel}_$objectSuffix\"," +
+        // object_id keys the HA entity_id to the stable panel_id, not the cosmetic device name —
+        // matches the hand-written discovery payloads (discovery-identity anchoring).
+        return "{\"name\":\"${jsonEsc(name)}\",\"object_id\":\"${panel}_$objectSuffix\"," +
+            "\"unique_id\":\"${panel}_$objectSuffix\"," +
             body.replace("{panel}", panel) + edb + ",$availJson,$deviceJson}"
     }
 

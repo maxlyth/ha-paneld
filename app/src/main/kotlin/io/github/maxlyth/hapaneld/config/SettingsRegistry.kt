@@ -278,6 +278,66 @@ object SettingsRegistry {
             label = "Protocol", default = "syslog", options = listOf("syslog", "http"),
             scope = Scope.DEVICE,
         ),
+
+        // ---- Diagnostics -------------------------------------------------------------------------
+        // Publish-only panel telemetry (readOnly sensors), all OPT-IN (haExposedByDefault=false): the
+        // panel stays quiet in HA until a pip is enabled. Values come from [control.Diagnostics] and
+        // are pushed on the heartbeat tick with a deadband so they never flap the broker. (Issue #19)
+        SettingSpec(
+            key = "diag_ip", type = SettingType.STRING, group = "Diagnostics",
+            label = "IP address", default = "",
+            help = "This panel's LAN IPv4 address as a sensor.",
+            haExposedByDefault = false,
+            ha = HaEntity(
+                "sensor", "diag_ip", "IP address",
+                """"state_topic":"ha-paneld/{panel}/diag_ip/state","icon":"mdi:ip-network","entity_category":"diagnostic"""",
+                readOnly = true,
+            ),
+        ),
+        SettingSpec(
+            key = "diag_cpu", type = SettingType.INT, group = "Diagnostics",
+            label = "CPU usage", default = "",
+            help = "Overall CPU busy percentage (root/su panels; unavailable on sandbox-walled panels).",
+            haExposedByDefault = false,
+            ha = HaEntity(
+                "sensor", "diag_cpu", "CPU usage",
+                """"state_topic":"ha-paneld/{panel}/diag_cpu/state","unit_of_measurement":"%","state_class":"measurement","icon":"mdi:cpu-64-bit","entity_category":"diagnostic"""",
+                readOnly = true,
+            ),
+        ),
+        SettingSpec(
+            key = "diag_memory", type = SettingType.INT, group = "Diagnostics",
+            label = "Memory usage", default = "",
+            help = "Used RAM as a percentage.",
+            haExposedByDefault = false,
+            ha = HaEntity(
+                "sensor", "diag_memory", "Memory usage",
+                """"state_topic":"ha-paneld/{panel}/diag_memory/state","unit_of_measurement":"%","state_class":"measurement","icon":"mdi:memory","entity_category":"diagnostic"""",
+                readOnly = true,
+            ),
+        ),
+        SettingSpec(
+            key = "diag_soc_temp", type = SettingType.FLOAT, group = "Diagnostics",
+            label = "SoC temperature", default = "",
+            help = "System-on-chip temperature (root/su panels; unavailable on sandbox-walled panels).",
+            haExposedByDefault = false,
+            ha = HaEntity(
+                "sensor", "diag_soc_temp", "SoC temperature",
+                """"state_topic":"ha-paneld/{panel}/diag_soc_temp/state","device_class":"temperature","unit_of_measurement":"°C","state_class":"measurement","entity_category":"diagnostic"""",
+                readOnly = true,
+            ),
+        ),
+        SettingSpec(
+            key = "diag_boot", type = SettingType.STRING, group = "Diagnostics",
+            label = "Boot time", default = "",
+            help = "When the panel last booted (a timestamp — HA shows the elapsed uptime).",
+            haExposedByDefault = false,
+            ha = HaEntity(
+                "sensor", "diag_boot", "Boot time",
+                """"state_topic":"ha-paneld/{panel}/diag_boot/state","device_class":"timestamp","icon":"mdi:clock-start","entity_category":"diagnostic"""",
+                readOnly = true,
+            ),
+        ),
     )
 
     private val byKey: Map<String, SettingSpec> = SPECS.associateBy { it.key }

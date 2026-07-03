@@ -22,42 +22,42 @@ class DiscoveryParityTest {
 
     @Test fun wakeOnWaveMatchesLegacy() {
         assertEquals(
-            """{"name":"Wake on wave","unique_id":"test_wake_on_wave","command_topic":"ha-paneld/test/wake_on_wave/set","state_topic":"ha-paneld/test/wake_on_wave/state","icon":"mdi:gesture-tap","entity_category":"config",$avail,$device}""",
+            """{"name":"Wake on wave","object_id":"test_wake_on_wave","unique_id":"test_wake_on_wave","command_topic":"ha-paneld/test/wake_on_wave/set","state_topic":"ha-paneld/test/wake_on_wave/state","icon":"mdi:gesture-tap","entity_category":"config",$avail,$device}""",
             build("wake_on_wave"),
         )
     }
 
     @Test fun watchdogMatchesLegacy() {
         assertEquals(
-            """{"name":"App watchdog","unique_id":"test_watchdog","command_topic":"ha-paneld/test/watchdog/set","state_topic":"ha-paneld/test/watchdog/state","icon":"mdi:restart-alert","entity_category":"config",$avail,$device}""",
+            """{"name":"App watchdog","object_id":"test_watchdog","unique_id":"test_watchdog","command_topic":"ha-paneld/test/watchdog/set","state_topic":"ha-paneld/test/watchdog/state","icon":"mdi:restart-alert","entity_category":"config",$avail,$device}""",
             build("watchdog_enabled"),
         )
     }
 
     @Test fun preventIdleDimMatchesLegacy() {
         assertEquals(
-            """{"name":"Prevent idle dim","unique_id":"test_prevent_idle_dim","command_topic":"ha-paneld/test/prevent_idle_dim/set","state_topic":"ha-paneld/test/prevent_idle_dim/state","icon":"mdi:brightness-7","entity_category":"config",$avail,$device}""",
+            """{"name":"Prevent idle dim","object_id":"test_prevent_idle_dim","unique_id":"test_prevent_idle_dim","command_topic":"ha-paneld/test/prevent_idle_dim/set","state_topic":"ha-paneld/test/prevent_idle_dim/state","icon":"mdi:brightness-7","entity_category":"config",$avail,$device}""",
             build("prevent_idle_dim"),
         )
     }
 
     @Test fun silenceBootChimeMatchesLegacy() {
         assertEquals(
-            """{"name":"Silence boot chime","unique_id":"test_silence_boot_chime","command_topic":"ha-paneld/test/silence_boot_chime/set","state_topic":"ha-paneld/test/silence_boot_chime/state","icon":"mdi:volume-off","entity_category":"config",$avail,$device}""",
+            """{"name":"Silence boot chime","object_id":"test_silence_boot_chime","unique_id":"test_silence_boot_chime","command_topic":"ha-paneld/test/silence_boot_chime/set","state_topic":"ha-paneld/test/silence_boot_chime/state","icon":"mdi:volume-off","entity_category":"config",$avail,$device}""",
             build("silence_boot_chime"),
         )
     }
 
     @Test fun autoBrightnessMatchesLegacy() {
         assertEquals(
-            """{"name":"Auto-brightness","unique_id":"test_auto_brightness","command_topic":"ha-paneld/test/auto_brightness/set","state_topic":"ha-paneld/test/auto_brightness/state","icon":"mdi:brightness-auto","entity_category":"config",$avail,$device}""",
+            """{"name":"Auto-brightness","object_id":"test_auto_brightness","unique_id":"test_auto_brightness","command_topic":"ha-paneld/test/auto_brightness/set","state_topic":"ha-paneld/test/auto_brightness/state","icon":"mdi:brightness-auto","entity_category":"config",$avail,$device}""",
             build("auto_brightness"),
         )
     }
 
     @Test fun brightnessBiasNumberMatchesLegacy() {
         assertEquals(
-            """{"name":"Brightness bias","unique_id":"test_brightness_bias","command_topic":"ha-paneld/test/brightness_bias/set","state_topic":"ha-paneld/test/brightness_bias/state","min":-100,"max":100,"step":5,"mode":"slider","icon":"mdi:brightness-6","entity_category":"config",$avail,$device}""",
+            """{"name":"Brightness bias","object_id":"test_brightness_bias","unique_id":"test_brightness_bias","command_topic":"ha-paneld/test/brightness_bias/set","state_topic":"ha-paneld/test/brightness_bias/state","min":-100,"max":100,"step":5,"mode":"slider","icon":"mdi:brightness-6","entity_category":"config",$avail,$device}""",
             build("brightness_bias"),
         )
     }
