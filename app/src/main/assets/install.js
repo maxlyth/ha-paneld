@@ -139,32 +139,53 @@
 
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
 
+  // --- Uninstall an app ---
+  function loadPackages() {
+    var sel = document.getElementById('uninst-pkg'); if (!sel) return;
+    fetch('/api/v1/packages').then(function (r) { return r.json(); }).then(function (d) {
+      var ps = (d && d.packages) || [];
+      if (!ps.length) { sel.innerHTML = '<option value="">no removable apps</option>'; return; }
+      sel.innerHTML = ps.map(function (p) { return '<option value="' + esc(p.pkg) + '">' + esc(p.label) + ' (' + esc(p.pkg) + ')</option>'; }).join('');
+    }).catch(function () { sel.innerHTML = '<option value="">load failed</option>'; });
+  }
+  window.doUninstall = function (btn) {
+    var sel = document.getElementById('uninst-pkg'), msg = document.getElementById('uninst-msg');
+    var pkg = sel && sel.value; if (!pkg) return;
+    if (!confirm('Uninstall ' + pkg + '? This removes the app and its data.')) return;
+    btn.disabled = true; if (msg) msg.textContent = 'Uninstalling ' + pkg + '…';
+    fetch('/api/v1/uninstall', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'pkg=' + encodeURIComponent(pkg) })
+      .then(function (r) { return r.json(); }).then(function (d) {
+        if (msg) msg.textContent = d.ok ? ('Uninstalled ' + pkg) : ('Failed: ' + (d.result || d.error || 'error'));
+        btn.disabled = false; if (d.ok) loadPackages();
+      }).catch(function () { if (msg) msg.textContent = 'Failed.'; btn.disabled = false; });
+  };
+  if (document.getElementById('uninst-pkg')) loadPackages();
+
   // --- Encrypted backup / restore ---
   var bkMsg = function (t) { var e = document.getElementById('bk-msg'); if (e) e.textContent = t; };
   var rsFile = null;
 
   window.doBackup = function (btn) {
     var pw = (document.getElementById('bk-pw') || {}).value || '';
-    if (pw.length < 6) { bkMsg('Passphrase must be at least 6 characters.'); return; }
     var comp = document.getElementById('bk-comp');
-    btn.disabled = true; bkMsg('Building encrypted backup…');
+    btn.disabled = true; bkMsg(pw ? 'Building encrypted backup…' : 'Building backup…');
     fetch('/api/v1/backup', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: 'passphrase=' + encodeURIComponent(pw) + '&include_companion=' + (comp && comp.checked ? '1' : '0') })
       .then(function (r) { if (!r.ok) throw 0; return r.blob(); }).then(function (b) {
         var a = document.createElement('a'), url = URL.createObjectURL(b);
-        a.href = url; a.download = (document.title.split('·').pop() || 'panel').trim() + '-backup.hpb';
+        a.href = url; a.download = (document.title.split('·').pop() || 'panel').trim() + '-backup.' + (pw ? 'hpb' : 'json');
         document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
-        bkMsg('Backup downloaded — store it with its passphrase.'); btn.disabled = false;
+        bkMsg('Backup downloaded' + (pw ? ' (encrypted) — keep the passphrase.' : '.')); btn.disabled = false;
       }).catch(function () { bkMsg('Backup failed.'); btn.disabled = false; });
   };
 
-  // Pick a bundle → decrypt-preview (dry run, non-destructive) → offer a Confirm restore.
+  // Pick a bundle → preview (dry run, non-destructive) → offer a Confirm restore. Passphrase only needed
+  // for an encrypted bundle (the server says so if it is one and the field is blank).
   window.restorePick = function (input) {
     rsFile = input.files && input.files[0]; if (!rsFile) return;
     var pw = (document.getElementById('rs-pw') || {}).value || '';
     var prev = document.getElementById('rs-preview');
-    if (!pw) { if (prev) prev.innerHTML = '<p class="note">Enter the bundle passphrase first, then choose the file again.</p>'; return; }
-    if (prev) prev.innerHTML = '<p class="note">Decrypting preview…</p>';
+    if (prev) prev.innerHTML = '<p class="note">Reading preview…</p>';
     fetch('/api/v1/restore?dry_run=1', { method: 'POST', headers: { 'X-Backup-Passphrase': pw }, body: rsFile })
       .then(function (r) { return r.json(); }).then(function (d) {
         if (!prev) return;

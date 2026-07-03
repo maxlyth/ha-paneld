@@ -287,17 +287,20 @@ class PaneldServer(
                     // Versioned config bundle: backup (export) and transactional restore/deploy (import).
                     get("/config/export") { handleConfigExport(call) }
                     post("/config/import") { handleConfigImport(call) }
-                    // Full panel backup: an ENCRYPTED bundle of the ha-paneld config (incl. secrets) plus,
-                    // when include_companion, the HA Companion's login DB (its HA tokens — full-HA-access
-                    // secrets, hence mandatory passphrase encryption). Streams a .hpb download.
+                    // Full panel backup: a bundle of the ha-paneld config (incl. secrets) plus, when
+                    // include_companion, the HA Companion's login DB. A passphrase is OPTIONAL — supply one
+                    // to encrypt the bundle (recommended if it'll be stored off the panel, since it carries
+                    // HA tokens); omit it for a plain bundle. Streams a .hpb (encrypted) or .json download.
                     post("/backup") {
                         val p = call.receiveParameters()
                         val pw = p["passphrase"].orEmpty()
-                        if (pw.length < 6) return@post call.respondText(
-                            """{"ok":false,"error":"passphrase too short (min 6)"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
                         val includeComp = p["include_companion"]?.let { it == "true" || it == "1" } ?: true
-                        val bytes = withContext(Dispatchers.IO) { PanelBackup.seal(backupJson(includeComp).toByteArray(), pw) }
-                        call.response.headers.append("Content-Disposition", "attachment; filename=\"${config.panelId}-backup.hpb\"")
+                        val bytes = withContext(Dispatchers.IO) {
+                            val json = backupJson(includeComp).toByteArray()
+                            if (pw.isEmpty()) json else PanelBackup.seal(json, pw)
+                        }
+                        val ext = if (pw.isEmpty()) "json" else "hpb"
+                        call.response.headers.append("Content-Disposition", "attachment; filename=\"${config.panelId}-backup.$ext\"")
                         call.respondBytes(bytes, ContentType.Application.OctetStream)
                     }
                     // Restore a .hpb bundle (raw body; passphrase in the X-Backup-Passphrase header so it
@@ -444,6 +447,24 @@ class PaneldServer(
                         val on = call.receiveParameters()["on"]?.let { it == "true" || it == "1" } ?: true
                         config.setApkUploadAllowed(on)
                         call.respondText("""{"ok":true,"allowed":$on}""", ContentType.Application.Json)
+                    }
+                    // Removable apps (third-party + updated-system; excludes ha-paneld + stock system apps,
+                    // which pm can't uninstall anyway) for the Uninstall card's picker.
+                    get("/packages") { call.respondText(withContext(Dispatchers.IO) { packagesJson() }, ContentType.Application.Json) }
+                    // Uninstall a package over root. Guarded: never ha-paneld itself; the picker only offers
+                    // removable apps. `pm uninstall` (system/vendor apps aren't removable, only disable-able
+                    // via taming — a separate, safer path).
+                    post("/uninstall") {
+                        if (!rootOk()) return@post call.respondText(
+                            """{"ok":false,"error":"no-root"}""", ContentType.Application.Json, HttpStatusCode.ServiceUnavailable)
+                        val pkg = call.receiveParameters()["pkg"]?.trim().orEmpty()
+                        val protected = pkg == appContext.packageName || pkg == io.github.maxlyth.hapaneld.util.WebViewInstaller.WEBVIEW_PKG
+                        if (pkg.isEmpty() || protected || !pkg.matches(Regex("^[A-Za-z0-9._]+$")))
+                            return@post call.respondText("""{"ok":false,"error":"bad-package"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+                        val out = withContext(Dispatchers.IO) { io.github.maxlyth.hapaneld.control.Su.runOutput("pm uninstall $pkg")?.trim() }
+                        val ok = out?.contains("Success", ignoreCase = true) == true
+                        if (ok) Log.i(TAG, "uninstalled $pkg")
+                        call.respondText("""{"ok":$ok,"result":${jsonStr(out ?: "no root")}}""", ContentType.Application.Json)
                     }
                     // EFR32 radio status (Install-tab Radio card). {present, status}. present=false → no radio.
                     get("/radio") {
@@ -933,6 +954,7 @@ ${tameCardHtml()}
 <div class="cards">
 ${componentsCardHtml(wv, root)}
 ${apkCardHtml(root)}
+${uninstallCardHtml(root)}
 <div class="card" id="radiocard" style="display:none"><h2>Radio firmware</h2>
 <table><tr><th>EFR32 radio</th><td id="radio-status">…</td></tr></table>
 <p class="note">Zigbee gateway on this panel's Silicon Labs EFR32. Toggle the <b>Zigbee router</b> role on the <a href="/configure#cfg-zigbee_router">Configure</a> tab. <span class="muted">Thread NCP flashing is planned (experimental) — not yet available.</span></p></div>
@@ -1003,11 +1025,11 @@ $rootNote
         else """<p class="note">The HA Companion login can only be captured on a rooted panel.</p>"""
         val restoreWarn = if (root) " and rewrites the HA Companion login (force-stops it)" else ""
         return """<div class="card"><h2>Backup &amp; restore</h2>
-<p class="note">An <b>encrypted</b> bundle of this panel's ha-paneld config${if (root) " + the HA Companion login" else ""}. Keep the passphrase — it can't be recovered.</p>
+<p class="note">A bundle of this panel's ha-paneld config${if (root) " + the HA Companion login" else ""}. A passphrase is optional — add one to <b>encrypt</b> the bundle (worth it if you'll store it off the panel, since it holds HA tokens); it can't be recovered if lost.</p>
 <div style="display:flex;flex-direction:column;gap:8px;max-width:440px">
 $compRow
-<input type="password" id="bk-pw" placeholder="Backup passphrase (min 6)">
-<button class="pbtn" onclick="doBackup(this)">⭳ Download encrypted backup</button>
+<input type="password" id="bk-pw" placeholder="Passphrase (optional — encrypts the bundle)">
+<button class="pbtn" onclick="doBackup(this)">⭳ Download backup</button>
 </div>
 <hr style="border:0;border-top:1px solid #2a2a2a;margin:14px 0">
 <p class="note"><b>Restore</b> overwrites this panel's config$restoreWarn — you'll see a preview of the bundle's contents before it applies.</p>
@@ -1041,6 +1063,42 @@ $compRow
 <p class="note">Sideload an app (e.g. a dashboard renderer) by uploading its APK — you'll see its package, version and signer before it installs.</p>
 $body
 <p class="note" id="apk-msg"></p></div>"""
+    }
+
+    /** "Uninstall an app" card. Lists only removable apps (see packagesJson) so the picker can't strand the
+     *  panel; the endpoint additionally refuses ha-paneld itself. Root-gated. */
+    private fun uninstallCardHtml(root: Boolean): String {
+        val body = if (!root) """<p class="note">⚠ Uninstalling an app needs root — unavailable on this panel.</p>"""
+        else """<p class="note">Remove an installed app. Only removable (third-party / updated) apps are listed — ha-paneld and stock system apps are excluded. To just hide a vendor app, <a href="/configure">tame</a> it instead.</p>
+<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+<select id="uninst-pkg" style="min-width:220px;background:#1c1c1c;color:#eee;border:1px solid #444;border-radius:7px;padding:5px 8px"><option>loading…</option></select>
+<button class="pbtn" onclick="doUninstall(this)">Uninstall</button>
+</div>
+<p class="note" id="uninst-msg"></p>"""
+        return """<div class="card"><h2>Uninstall an app</h2>
+$body</div>"""
+    }
+
+    /** Removable apps (third-party or updated-system) for the Uninstall picker, sorted by label. Stock
+     *  system apps + ha-paneld are excluded — pm can't uninstall stock system apps (only disable), and
+     *  self-uninstall would kill the tool. */
+    private fun packagesJson(): String {
+        val pm = appContext.packageManager
+        // Exclude ha-paneld itself and the System WebView provider — uninstalling the WebView reverts it to
+        // the ancient stock build and blanks the dashboard (the opposite of the WebView-heal feature).
+        val excluded = setOf(appContext.packageName, io.github.maxlyth.hapaneld.util.WebViewInstaller.WEBVIEW_PKG)
+        val apps = runCatching {
+            pm.getInstalledApplications(0)
+                .filter { it.packageName !in excluded }
+                .filter {
+                    it.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM == 0 ||
+                        it.flags and android.content.pm.ApplicationInfo.FLAG_UPDATED_SYSTEM_APP != 0
+                }
+                .map { it.packageName to runCatching { pm.getApplicationLabel(it).toString() }.getOrDefault(it.packageName) }
+                .sortedBy { it.second.lowercase(java.util.Locale.ROOT) }
+        }.getOrDefault(emptyList())
+        val arr = apps.joinToString(",") { (pkg, label) -> "{\"pkg\":${jsonStr(pkg)},\"label\":${jsonStr(label)}}" }
+        return "{\"packages\":[$arr]}"
     }
 
     /** A component row with a channel + version picker (versions hydrated by install.js), a release-notes
@@ -1991,8 +2049,14 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
         val pw = call.request.headers["X-Backup-Passphrase"].orEmpty()
         val dryRun = call.request.queryParameters["dry_run"] == "1"
         val bundle = withContext(Dispatchers.IO) { call.receiveStream().use { it.readBytes() } }
-        val plain = PanelBackup.open(bundle, pw)
-            ?: return call.respondText("""{"ok":false,"error":"wrong passphrase or corrupt bundle"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+        // Encrypted (needs the passphrase) vs plain bundle — auto-detected from the magic.
+        val plain = if (PanelBackup.isSealed(bundle)) {
+            if (pw.isEmpty()) return call.respondText(
+                """{"ok":false,"error":"this bundle is encrypted — enter its passphrase"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+            PanelBackup.open(bundle, pw)
+        } else bundle
+        if (plain == null) return call.respondText(
+            """{"ok":false,"error":"wrong passphrase or corrupt bundle"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
         val obj = runCatching { org.json.JSONObject(String(plain, Charsets.UTF_8)) }.getOrNull()
         if (obj == null || obj.optString("kind") != "ha-paneld-backup")
             return call.respondText("""{"ok":false,"error":"not a ha-paneld backup"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)

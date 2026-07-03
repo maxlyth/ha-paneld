@@ -38,6 +38,12 @@ class PanelBackupTest {
         assertNull(PanelBackup.open(ByteArray(3), "pw"))
     }
 
+    @Test fun isSealedDistinguishesEncryptedFromPlain() {
+        assertTrue(PanelBackup.isSealed(PanelBackup.seal(plain, "pw")))
+        assertFalse(PanelBackup.isSealed("""{"kind":"ha-paneld-backup"}""".toByteArray()))
+        assertFalse(PanelBackup.isSealed(ByteArray(2)))
+    }
+
     @Test fun eachSealUsesFreshSaltAndIv() {
         val a = PanelBackup.seal(plain, "pw")
         val b = PanelBackup.seal(plain, "pw")

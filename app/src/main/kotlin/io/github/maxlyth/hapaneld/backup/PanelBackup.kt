@@ -25,6 +25,10 @@ object PanelBackup {
     private const val ITERATIONS = 210_000
     private const val KEY_BITS = 256
 
+    /** True if [bytes] is a sealed envelope (starts with the magic) vs a plain, unencrypted bundle. */
+    fun isSealed(bytes: ByteArray): Boolean =
+        bytes.size > MAGIC.size && bytes.copyOfRange(0, MAGIC.size).contentEquals(MAGIC)
+
     /** Encrypt [plaintext] under [passphrase] into a self-describing envelope (magic|salt|iv|ciphertext). */
     fun seal(plaintext: ByteArray, passphrase: String): ByteArray {
         val rnd = SecureRandom()
