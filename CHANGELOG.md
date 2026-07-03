@@ -14,6 +14,10 @@ content appear. Earlier releases predate this convention and keep their flat lis
 
 - **Diagnostic sensors for Home Assistant (opt-in)** — a new **Diagnostics** section in the Configure tab exposes the panel's **IP address, CPU usage, memory usage, SoC temperature and boot time** as HA sensor entities. Every one is **off by default** (panel-local until you tick its "expose to HA" pip), and the values are pushed with a per-metric deadband so they never flood the broker. CPU and SoC temperature need root/su (unavailable on sandbox-walled panels); IP, memory and boot time work everywhere.
 
+### Fixed
+
+- **Vendor kiosk launchers (eWeLink) can be tamed and no longer hijack the Launcher button** — on Sonoff panels the eWeLink control panel registers itself as a HOME launcher, which made it both un-tameable (the brick-guard protects home launchers so the panel can't be stranded with no home) and the app the navbar Launcher button opened, obstructing the dashboard. Taming a vendor home launcher is now allowed as long as ha-paneld's own admin launcher remains as the fallback home — the home role is handed over before the app is disabled, so the panel can never be stranded — and the Launcher button skips known vendor kiosks, falling through to a real launcher or ha-paneld's admin launcher. eWeLink now appears in the tame picker's "Recommended" group on NSPanel Pro.
+
 ## v0.8.6-rc3 - 2026-07-02
 
 ### Added

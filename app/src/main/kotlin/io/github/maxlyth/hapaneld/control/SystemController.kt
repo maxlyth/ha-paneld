@@ -95,10 +95,13 @@ class SystemController(
         val all = env.homeActivities()
         val default = env.defaultHome()?.pkg
         // Apps that register CATEGORY_HOME but are NOT an app-drawer launcher we'd want to land on:
-        // ourselves, Settings, and the HA Companion (a kiosk dashboard, which registers as HOME).
+        // ourselves, Settings, the HA Companion (a kiosk dashboard, which registers as HOME), and known
+        // vendor kiosk pseudo-launchers (e.g. eWeLink's control panel on Sonoff panels) — landing on
+        // those obstructs the dashboard instead of giving the user an app drawer.
         val notALauncher = { p: String ->
             p == env.ownPackage || p == "com.android.settings" ||
-                p == "io.homeassistant.companion.android" || p == "io.homeassistant.companion.android.minimal"
+                p == "io.homeassistant.companion.android" || p == "io.homeassistant.companion.android.minimal" ||
+                p in VENDOR_PSEUDO_LAUNCHERS
         }
         return when {
             configuredPkg.isNotBlank() -> all.firstOrNull { it.pkg == configuredPkg }
@@ -198,5 +201,10 @@ class SystemController(
 
     companion object {
         private const val TAG = "ha-paneld/system"
+
+        // Vendor kiosk apps that register CATEGORY_HOME but aren't real launchers — the navbar Launcher
+        // button must never land on them (they obstruct the dashboard). eWeLink's control panel on
+        // Sonoff/NSPanel Pro is the known offender; add more here as other vendors surface.
+        private val VENDOR_PSEUDO_LAUNCHERS = setOf("com.eWeLinkControlPanel")
     }
 }

@@ -97,18 +97,18 @@ class TameController(private val context: Context) {
      * (critical / HA / ourselves) are never offered. Empty groups are dropped.
      */
     fun suggestionGroups(profileCandidates: List<TameCandidate>, exclude: Set<String>, resourceNames: List<String>): List<Group> {
-        val pm = context.packageManager
         val meta = profileCandidates.associateBy { it.pkg }
-        // EVERY home-registered launcher (not just the current default), so a secondary launcher like the
-        // panel's "l.l" is never offered — you navigate with it. Plus the active IME.
-        val homes = runCatching {
-            pm.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME),
-                PackageManager.MATCH_DISABLED_COMPONENTS).map { it.activityInfo.packageName }.toSet()
-        }.getOrDefault(emptySet())
+        // Home launchers we must NOT offer to disable — but ONLY the protected ones (the Companion
+        // dashboard, or every home when ha-paneld isn't a fallback home). A vendor kiosk that just
+        // registers HOME (eWeLink) IS offered, since ha-paneld's admin launcher keeps the panel homed.
+        // Plus the active IME.
+        val homes = homeLaunchers()
+        val ownIsHome = context.packageName in homes
+        val protectedHomes = if (ownIsHome) homes.filter { it == context.packageName || it in HA_PACKAGES }.toSet() else homes
         val ime = runCatching {
             Settings.Secure.getString(context.contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD)?.substringBefore('/')
         }.getOrNull()
-        val nav = homes + setOfNotNull(ime)            // launchers (l.l) + IME — never offer to disable
+        val nav = protectedHomes + setOfNotNull(ime)   // protected launchers + IME — never offer to disable
         val apps = installedApps()
         val seen = exclude.toMutableSet()
         fun take(src: List<String>, extra: (String) -> Boolean = { true }): List<Candidate> {
@@ -224,21 +224,54 @@ class TameController(private val context: Context) {
         if (pkg.isBlank() || isUntouchable(pkg)) return true
         val ai = installedApps()[pkg]
         if (ai != null && (ai.flags and ApplicationInfo.FLAG_PERSISTENT) != 0) return true
-        val pm = context.packageManager
-        val isHome = runCatching {
-            pm.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME),
-                PackageManager.MATCH_DISABLED_COMPONENTS).any { it.activityInfo.packageName == pkg }
-        }.getOrDefault(false)
-        if (isHome) return true
+        if (isProtectedHome(pkg)) return true
         val ime = runCatching {
             Settings.Secure.getString(context.contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD)?.substringBefore('/')
         }.getOrNull()
         return pkg == ime
     }
 
+    /**
+     * Home-launcher brick-guard, relaxed for vendor kiosks. A HOME-registered package is protected so
+     * the panel can't be stranded with no home — BUT a vendor kiosk (e.g. `com.eWeLinkControlPanel`)
+     * merely *registers* HOME while being useless as a launcher, and blanket-protecting it made it
+     * impossible to tame. So a home is protected only when it's the Companion dashboard, or when
+     * ha-paneld's own admin launcher is NOT itself a registered home (no fallback → keep the strand-safe
+     * behaviour of protecting every home). ha-paneld itself is already covered by [isUntouchable].
+     */
+    private fun isProtectedHome(pkg: String): Boolean {
+        val homes = homeLaunchers()
+        if (pkg !in homes) return false
+        if (pkg in HA_PACKAGES) return true                 // the dashboard renderer — leave it alone
+        return context.packageName !in homes                // no ha-paneld fallback home → protect all homes
+    }
+
+    /** Every HOME-registered package (incl. disabled), the panel's set of possible home launchers. */
+    private fun homeLaunchers(): Set<String> = runCatching {
+        context.packageManager.queryIntentActivities(
+            Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME),
+            PackageManager.MATCH_DISABLED_COMPONENTS,
+        ).map { it.activityInfo.packageName }.toSet()
+    }.getOrDefault(emptySet())
+
+    /** The package that currently owns the default home role, or null. */
+    private fun currentDefaultHome(): String? = runCatching {
+        context.packageManager.resolveActivity(
+            Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME), 0,
+        )?.activityInfo?.packageName
+    }.getOrNull()
+
     /** force-stop + disable boot-relaunch + deny the overlay permission for [pkg]. */
     fun tame(pkg: String): Boolean {
         if (!actOn(pkg)) return false
+        // If we're disabling the CURRENT default home (e.g. a vendor kiosk like eWeLink left as home),
+        // hand the home role to ha-paneld's admin launcher FIRST so Android doesn't pop a home chooser
+        // or strand the panel. The dashboard app is re-asserted as home by ensureDashboardHome later.
+        if (pkg == currentDefaultHome()) {
+            val comp = "${context.packageName}/.AdminLauncherActivity"
+            privileged("SETHOME $comp", "cmd package set-home-activity $comp")
+            Log.i(TAG, "tame $pkg: was default home → set ha-paneld admin launcher as home first")
+        }
         val stopped = privileged("STOP $pkg", "am force-stop $pkg")
         val disabled = privileged("DISABLE $pkg", "pm disable-user --user 0 $pkg")
         val overlay = privileged("OVERLAY $pkg deny", "appops set $pkg SYSTEM_ALERT_WINDOW deny")

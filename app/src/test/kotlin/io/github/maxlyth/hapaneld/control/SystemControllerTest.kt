@@ -121,6 +121,26 @@ class SystemControllerTest {
         assertTrue("skipped kiosk default, chose real launcher", root.ran.contains("am start -n $VENDOR/L"))
     }
 
+    @Test fun launcherSkipsEweLinkKioskDefault() {
+        // eWeLink's control panel registers HOME but is vendor kiosk garbage, not a launcher — when it's
+        // the default home, the Launcher button must fall through to a real launcher (bmp's complaint).
+        val ewelink = "com.eWeLinkControlPanel"
+        val (c, root, _) = sc(launcherEnv(ewelink, ewelink, VENDOR), daemon = null)
+        c.launchLauncher("")
+        assertTrue("skipped eWeLink kiosk, chose real launcher", root.ran.contains("am start -n $VENDOR/L"))
+    }
+
+    @Test fun launcherEweLinkOnlyHomeFallsBackToAdminLauncher() {
+        // eWeLink the sole registered home → no real launcher, so open ha-paneld's admin launcher.
+        val ewelink = "com.eWeLinkControlPanel"
+        val (c, root, _) = sc(launcherEnv(ewelink, ewelink), daemon = null)
+        c.launchLauncher("")
+        assertTrue(
+            "admin launcher opened when only eWeLink registers HOME",
+            root.ran.contains("am start -n io.github.maxlyth.hapaneld/.AdminLauncherActivity"),
+        )
+    }
+
     @Test fun launcherHonoursConfiguredPkg() {
         val (c, root, _) = sc(launcherEnv(VENDOR, VENDOR, "com.other.home"), daemon = null)
         c.launchLauncher("com.other.home")
