@@ -161,15 +161,25 @@ interface DeviceProfile {
          */
         fun detect(): DeviceProfile = cached
 
-        private fun match(): DeviceProfile {
-            val model = Build.MODEL.lowercase()
-            val device = Build.DEVICE.lowercase()
+        private fun match(): DeviceProfile =
+            match(Build.MODEL, Build.DEVICE, SystemProps.get("ro.product.version"))
+
+        /**
+         * Pure fingerprint match over the raw [Build] fields + `ro.product.version` (lowercased here).
+         * Extracted from the Android-facing [match] so the whole per-platform mapping — including the
+         * order-sensitive collision cases (SMT1019 vs WF1589T, TPA10 vs the rk3566-sharing S9E, Gen1 vs
+         * Gen2 NSPanel Pro) — is unit-testable without a device. **Branch order is significant**; keep the
+         * comments. [Generic] is the no-match fallback.
+         */
+        internal fun match(rawModel: String, rawDevice: String, rawProductVersion: String): DeviceProfile {
+            val model = rawModel.lowercase()
+            val device = rawDevice.lowercase()
             // The Smatek S9E reports generic Build fields (MODEL "S9" / DEVICE "rk3566_r") but carries
             // its vendor model code in ro.product.version ("S9_Android_1.1.0") — confirmed from a
             // reporter's /diag (GitHub #3, 2026-06-15). Match that so it doesn't fall back to Generic
             // (which hides its relays + button LEDs). rk3566 is shared with the TPA10, but the TPA10 is
             // matched first by device == "tpa10".
-            val productVersion = SystemProps.get("ro.product.version").lowercase()
+            val productVersion = rawProductVersion.lowercase()
             return when {
                 // px30 = Gen1 86P/120P; rk3326(-s) = Gen2 (best-effort — capabilities are runtime-probed,
                 // so an unverified Gen2 still detects relays/zigbee/sensors correctly).
