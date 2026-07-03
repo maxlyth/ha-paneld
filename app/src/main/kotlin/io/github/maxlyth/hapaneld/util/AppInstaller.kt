@@ -66,15 +66,45 @@ object AppInstaller {
         val why = verifyApk(context, apk.absolutePath, pin)
         if (why != null) { apk.delete(); Log.w(TAG, "refused install: $why"); return@withContext "refused ($why)" }
 
+        installLocalApk(context, apk)
+    }
+
+    /** Metadata read from an APK file (no install) — for the Install-tab "upload an APK" preview. */
+    data class ApkInfo(val pkg: String, val version: String, val signerSha256: String?)
+
+    /** Parse an APK's package name, versionName and signer SHA-256 without installing it. Null if the file
+     *  isn't a readable APK. Used to show the user WHAT they're about to install before they confirm. */
+    @Suppress("DEPRECATION") // GET_SIGNATURES / PackageInfo.signatures for API < 28
+    fun inspect(context: Context, apkPath: String): ApkInfo? {
+        val pm = context.packageManager
+        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P)
+            PackageManager.GET_SIGNING_CERTIFICATES else PackageManager.GET_SIGNATURES
+        val info = pm.getPackageArchiveInfo(apkPath, flags) ?: return null
+        val sigs = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P)
+            info.signingInfo?.apkContentsSigners else info.signatures
+        val md = MessageDigest.getInstance("SHA-256")
+        val sha = sigs?.firstOrNull()?.let { md.digest(it.toByteArray()).joinToString("") { b -> "%02x".format(b) } }
+        return ApkInfo(info.packageName ?: "?", info.versionName ?: "?", sha)
+    }
+
+    /**
+     * Install an APK already on local disk over root, then delete it. Shared install tail used by both the
+     * pinned-download path ([install]) and the Install-tab APK upload. **No signer pin is applied here** —
+     * [install] verifies BEFORE calling this; the upload path installs whatever the user explicitly chose
+     * (surfaced package/version/signer + confirmed first). Streams straight into `pm install -S` (no
+     * /data/local/tmp copy) or the peer-uid-locked daemon `INSTALL` verb. Returns "OK" or a short reason.
+     */
+    suspend fun installLocalApk(context: Context, apk: File): String = withContext(Dispatchers.IO) {
+        val hasSu = Su.available()
+        val hasDaemon = HelperClient.available()
+        if (!hasSu && !hasDaemon) { apk.delete(); return@withContext "skipped: no root (su or helper daemon needed)" }
         val out = try {
             if (hasSu) {
-                // Stream the verified APK straight into `pm install -S <size>` — no intermediate
-                // /data/local/tmp copy (halves peak disk use vs cp+install). Long-timeout: staging a
-                // ~250 MB stream far exceeds the default 5s su bound.
+                // Stream the APK straight into `pm install -S <size>` — no intermediate /data/local/tmp copy
+                // (halves peak disk use). Long-timeout: staging a large stream far exceeds the 5s su bound.
                 Su.runWithStdinLong("pm install -S ${apk.length()} -r -d 2>&1", apk, INSTALL_TIMEOUT_MS)?.trim() ?: ""
             } else {
-                // Daemon reads the verified APK from our data dir; send() is synchronous so the delete
-                // below is safe. OK → success.
+                // Daemon reads the APK from our data dir; send() is synchronous so the delete below is safe.
                 when (HelperClient.send("INSTALL ${apk.absolutePath}")) {
                     "OK" -> "Success"
                     null -> "daemon unreachable"

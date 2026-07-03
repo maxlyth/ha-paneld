@@ -68,6 +68,17 @@ object UpdateChecker {
         available = found
     }
 
+    /** Available updates minus any the user has dismissed at their *current* latest version. [ignored]
+     *  maps a component label ("HA Companion") to the exact version string that was ignored, so an ignore
+     *  only silences that one release — when a newer version is later published [latestVersion] no longer
+     *  matches and the entry re-surfaces ("ticks again"). Used to filter the dashboard banner only; the
+     *  Install tab always lists [available] in full. Pure — unit-tested in UpdateVisibilityTest. */
+    fun visible(ignored: Map<String, String>): List<UpdateInfo> = filterIgnored(available, ignored)
+
+    /** Pure core of [visible] — unit-tested in UpdateVisibilityTest. */
+    internal fun filterIgnored(list: List<UpdateInfo>, ignored: Map<String, String>): List<UpdateInfo> =
+        list.filterNot { ignored[it.label] == it.latestVersion }
+
     /** HA Companion versionNames/tags carry a VARIANT suffix ("-minimal"/"-full"/"-wear") that is not a
      *  prerelease marker — "2026.6.5-minimal" IS version 2026.6.5. Strip it before any comparison, else
      *  [isNewer]'s suffix ordering treats an installed minimal build as older than its own version and

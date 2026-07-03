@@ -97,6 +97,28 @@ class Config(context: Context) {
     val haDeviceUrl: String get() = prefs.getString("ha_device_url", "")!!
     fun setHaDeviceUrl(url: String) { prefs.edit().putString("ha_device_url", url).apply() }
 
+    /** Update versions the user dismissed from the dashboard banner, label -> ignored latestVersion.
+     *  Stored as newline-joined "label\tversion" rows (component labels + semver never contain \t or \n).
+     *  Only the dashboard banner honours this — the Install tab always lists every available update. The
+     *  suppression is version-exact ([UpdateChecker.visible]), so a newer release re-surfaces the banner. */
+    val ignoredUpdates: Map<String, String>
+        get() = prefs.getString("update_ignored", "")!!.lineSequence()
+            .mapNotNull { row -> row.indexOf('\t').let { i -> if (i <= 0) null else row.substring(0, i) to row.substring(i + 1) } }
+            .toMap()
+
+    /** Record that [label]'s update to [version] was dismissed (merges with any existing ignores). */
+    fun ignoreUpdate(label: String, version: String) {
+        val raw = ignoredUpdates.toMutableMap().apply { put(label, version) }
+            .entries.joinToString("\n") { "${it.key}\t${it.value}" }
+        edit { putString("update_ignored", raw) }
+    }
+
+    /** Whether the Install tab may install an arbitrary user-uploaded APK over root. Default ON (the turnkey
+     *  LAN-trust posture — see the Install-tab security note), but flippable per-panel so a hardened
+     *  deployment can disable this high-impact, unauthenticated capability until token auth lands. */
+    val apkUploadAllowed: Boolean get() = prefs.getBoolean("allow_apk_upload", true)
+    fun setApkUploadAllowed(on: Boolean) { edit { putBoolean("allow_apk_upload", on) } }
+
     /**
      * HA device display name (`device.name` in discovery). Defaults to the device's own name —
      * the same source the HA Companion app uses for its default device name. (ha-paneld can't read
