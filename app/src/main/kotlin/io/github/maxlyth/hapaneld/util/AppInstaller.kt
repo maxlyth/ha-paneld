@@ -49,6 +49,18 @@ object AppInstaller {
         if (!hasSu && !hasDaemon) return@withContext "skipped: no root (su or helper daemon needed)"
 
         val apk = File(context.cacheDir, "hapaneld-dl.apk")
+        // Preflight free space BEFORE downloading, so a large APK (a WebView build is ~250 MB) can't
+        // fill /data or fail half-written on a low-storage panel. We need room for the download only —
+        // the su install streams straight from it (no second /data/local/tmp copy). +64 MB margin.
+        val size = contentLength(url)
+        if (size > 0L) {
+            val need = size + 64L * 1024 * 1024
+            val free = apk.parentFile?.usableSpace ?: Long.MAX_VALUE
+            if (free < need) {
+                Log.w(TAG, "insufficient storage: need ${need / 1048576}MB, have ${free / 1048576}MB free")
+                return@withContext "insufficient storage (need ${need / 1048576}MB, ${free / 1048576}MB free)"
+            }
+        }
         if (!download(url, apk)) return@withContext "download failed"
 
         val why = verifyApk(context, apk.absolutePath, pin)
@@ -56,13 +68,10 @@ object AppInstaller {
 
         val out = try {
             if (hasSu) {
-                val staged = "/data/local/tmp/hapaneld-dl.apk"
-                try {
-                    // Long-timeout su: staging + installing a large APK (a WebView build is ~250 MB)
-                    // far exceeds the default 5s su bound. Always one-shot, so it can't wedge the shell.
-                    if (!Su.runLong("cp '${apk.absolutePath}' $staged && chmod 644 $staged", INSTALL_TIMEOUT_MS)) "stage failed"
-                    else Su.runOutputLong("pm install -r -d $staged 2>&1", INSTALL_TIMEOUT_MS)?.trim() ?: ""
-                } finally { runCatching { Su.run("rm -f $staged") } }
+                // Stream the verified APK straight into `pm install -S <size>` — no intermediate
+                // /data/local/tmp copy (halves peak disk use vs cp+install). Long-timeout: staging a
+                // ~250 MB stream far exceeds the default 5s su bound.
+                Su.runWithStdinLong("pm install -S ${apk.length()} -r -d 2>&1", apk, INSTALL_TIMEOUT_MS)?.trim() ?: ""
             } else {
                 // Daemon reads the verified APK from our data dir; send() is synchronous so the delete
                 // below is safe. OK → success.
@@ -106,6 +115,28 @@ object AppInstaller {
      * letting a network attacker waste the download before the pin rejects it). All real callers use
      * GitHub `https` release URLs that redirect to `https` CDNs, so this rejects nothing legitimate.
      */
+    /** The download's size in bytes from a HEAD (following HTTPS redirects), or -1 if unknown. Used to
+     *  preflight free space before committing to a large download. */
+    private fun contentLength(url: String): Long = runCatching {
+        var current = URL(url).takeIf { it.protocol.equals("https", true) } ?: return -1L
+        repeat(5) {
+            val conn = (current.openConnection() as HttpURLConnection).apply {
+                requestMethod = "HEAD"; instanceFollowRedirects = false
+                connectTimeout = 15_000; readTimeout = 15_000
+            }
+            when (conn.responseCode) {
+                in 300..399 -> {
+                    val loc = conn.getHeaderField("Location") ?: return -1L
+                    conn.disconnect()
+                    current = httpsRedirect(current, loc) ?: return -1L
+                }
+                200 -> return conn.contentLengthLong.also { conn.disconnect() }
+                else -> return -1L
+            }
+        }
+        -1L
+    }.getOrDefault(-1L)
+
     private fun download(url: String, dest: File): Boolean = runCatching {
         var current = URL(url).takeIf { it.protocol.equals("https", true) }
             ?: run { Log.w(TAG, "refusing non-HTTPS URL"); return false }

@@ -10,6 +10,10 @@ content appear. Earlier releases predate this convention and keep their flat lis
 
 ## v0.8.6-rc5 - Unreleased
 
+### Changed
+
+- **Safer, leaner APK installs** — every over-the-air install (ha-paneld self-update, the HA Companion updater, and the new WebView heal) now **preflights free space** before downloading, so a large APK can't fill `/data` or fail half-written on a low-storage panel, and **streams the verified APK straight into the installer** instead of keeping a second staged copy — halving peak disk use (a WebView build is ~250 MB).
+
 ### Added
 
 - **One-tap WebView auto-heal** — a too-old System WebView is the most common reason a panel shows a blank Home Assistant dashboard, and these panels have no Play Store to update it. When ha-paneld detects the WebView is too old and the panel profile has a known-good build (NSPanel Pro → LineageOS 138, TPA10 → Cromite 147), the Install tab's warning now offers an **"Update WebView now"** button that downloads the correct `com.android.webview` from the ha-paneld WebView mirror and installs it over root — signature-pinned, like the app/Companion updaters — then reloads the dashboard. No adb, no F-Droid, no manual sideload. (#5)

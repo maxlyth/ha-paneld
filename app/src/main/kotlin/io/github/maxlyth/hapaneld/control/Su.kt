@@ -230,6 +230,29 @@ object Su : RootShell {
         return false
     }
 
+    /** Run a long one-shot su [cmd], streaming [input]'s bytes to its stdin (then closing stdin), and
+     *  return the command's stdout. For `pm install -S <size>` streaming, which installs an APK straight
+     *  from a byte stream — no intermediate `/data/local/tmp` copy. stdin is fed on a daemon thread so a
+     *  reader that consumes stdout concurrently can't deadlock against a full pipe. Bounded to [timeoutMs].
+     *  Always one-shot. */
+    fun runWithStdinLong(cmd: String, input: java.io.File, timeoutMs: Long): String? {
+        val forms = if (form in 0..1) intArrayOf(form) else intArrayOf(0, 1)
+        for (f in forms) {
+            val out = runBounded("stdin-long", argvOneShot(f, cmd), timeoutMs) { p ->
+                val feeder = Thread {
+                    runCatching { p.outputStream.use { os -> input.inputStream().use { it.copyTo(os) } } }
+                }.apply { isDaemon = true; start() }
+                val text = p.inputStream.bufferedReader().readText()  // read before waitFor (avoid deadlock)
+                feeder.join(timeoutMs)
+                p.waitFor()
+                text
+            }
+            if (out != null) { form = f; return out }
+        }
+        if (form == -1) form = 2
+        return null
+    }
+
     /** Long-running one-shot su [cmd] returning stdout (null on non-zero/failure), bounded to [timeoutMs]. */
     fun runOutputLong(cmd: String, timeoutMs: Long): String? {
         val forms = if (form in 0..1) intArrayOf(form) else intArrayOf(0, 1)
