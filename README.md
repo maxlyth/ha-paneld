@@ -146,15 +146,17 @@ panels are welcome — contribute a HAL adapter for your hardware. Deep per-pane
 Validated across the panel fleet: Sonoff NSPanel Pro (PX30, Android 8.1), Tuya TPA10 (rk3566,
 Android 11), Electron WF1589T (rk3576, Android 14).
 
-**Latest release — 0.8.4:** a hardened root helper, the full control surface on sandbox-walled
-(no-`su`) panels, vendor-app taming, a built-in admin launcher + dashboard watchdog, and panel-health
-warnings. Full notes for every release are in [CHANGELOG.md](CHANGELOG.md).
+**Latest release — 0.8.6:** a software-management hub on the Install tab (view/update ha-paneld, the
+HA Companion and the System WebView, with one-tap auto-heal for a too-old WebView or a broken
+Companion login), encrypted panel backup & restore, a panel switcher in the `:8888` header for
+multi-panel networks, and more prominent panel-health warnings. Full notes for every release are in
+[CHANGELOG.md](CHANGELOG.md).
 
 **Where it's heading** — the near-term direction is **fleet-scale operation** and **full remote
 provisioning**: bringing a new or factory-wiped panel all the way up (dashboard renderer + Home
-Assistant login) with zero typing on the panel, fleet discovery + a panel-switcher in the web UI, and
-central log shipping. Other planned work includes MQTT TLS, an on-device scheduler, deeper performance
-tooling, and a sectioned HTTP UI. The full curated list is in **[docs/roadmap.md](docs/roadmap.md)**.
+Assistant login) with zero typing on the panel, and pushing config/updates to a whole fleet from one
+place. Other planned work includes MQTT TLS, an on-device scheduler, deeper performance tooling, and
+continued iteration on the HTTP UI. The full curated list is in **[docs/roadmap.md](docs/roadmap.md)**.
 
 ## Documentation
 

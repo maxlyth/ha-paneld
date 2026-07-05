@@ -8,6 +8,49 @@ From **v0.8.0**, entries are grouped under **Added** (new features/entities), **
 changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
 content appear. Earlier releases predate this convention and keep their flat lists.
 
+## v0.8.6 - 2026-07-05
+
+The Install tab becomes a software-management hub, panels get encrypted backup/restore and self-healing update paths, and health problems surface much earlier and more clearly.
+
+### Added
+
+- **The Install tab is a software-management hub** — view and update ha-paneld, the HA Companion and the System WebView from `:8888`, each with a channel selector and a picker of recent releases, an on-demand health re-check, and an update banner with a per-version "Ignore this version" dismissal.
+- **Encrypted panel backup & restore** — export a panel's full state (ha-paneld config plus, on a rooted panel, the HA Companion login) as a passphrase-sealed bundle; restore reapplies the config and re-logs in the Companion with no on-panel OAuth — the wall-panel equivalent of the cloud app-data backup these GMS-less panels don't have.
+- **One-tap self-heal for the two most common blank-dashboard causes** — a too-old System WebView (downloaded and installed from the ha-paneld WebView mirror, per-panel known-good build) and a Companion with no internal URL (which shows as a "Missing 'Host' header" screen).
+- **Watchdog crash-loop protection** — a dashboard app that crashes on every launch backs off instead of restart-storming and raises a clear health warning; a per-panel Companion version cap guards against a known-bad update (e.g. the NSPanel Pro's Android 8.1 crashing on Companion 2026.6.5+).
+- **Install an APK from the web UI**, and **uninstall** a removable app — both gated behind explicit opt-in toggles (ha-paneld itself and the System WebView provider can't be removed this way).
+- **Opt-in diagnostic sensors** (IP address, CPU usage, memory usage, SoC temperature, boot time), and **local-state sync extended to the CPU governor** — values changed outside ha-paneld now reach Home Assistant without flooding the broker.
+- **Panel switcher in the `:8888` header** — on a multi-panel network, the panel's name becomes a dropdown that jumps your browser to the same view on another panel.
+- **Experimental kiosk lock** — an opt-in per-panel setting that keeps non-admin users on the dashboard by suppressing the Android navigation bar and returning to the dashboard on any navigate-away; always reversible (on-panel 7-tap unlock, `:8888`, Home Assistant, or a reboot).
+- **Dashboard & Launcher app pickers** are now dropdowns of installed apps, and both settings show what "auto" resolves to instead of a bare placeholder.
+- **Provisioning tames recommended vendor apps by default** (e.g. the NSPanel Pro's eWeLink control-panel overlay and factory test tools) — reversible, and it can never strand the panel's home role.
+- **Live log viewer** (Logs tab, app + system sources, pause/filter/follow) and a **live Sensors card** on the Dashboard, both served over Server-Sent Events with the same redaction pass as remote log shipping.
+- **Companion auto-update channel** (Stable / Pre-release), and full config export/import via `provision.sh`.
+
+### Changed
+
+- **Publishing a setting to Home Assistant is now opt-in per setting** — admin-oriented settings (self-update, Companion auto-update, network ADB, Zigbee router, app watchdog) are panel-local by default; existing panels keep whatever they already expose.
+- **The web UI loads instantly** — the Dashboard and Configure tab render immediately from a cached, single-flight probe snapshot instead of blocking on every root-probed value.
+- **Safer, leaner APK installs** — every over-the-air install preflights free space and streams the verified APK straight into the installer instead of keeping a second staged copy.
+- **The header shows the panel's friendly name** instead of its `panel_id`, and panel-health warnings are more prominent, with a one-tap self-heal offered from a failed Companion login.
+- Clearer update-entity names ("ha-paneld auto-update"), and config import is now best-effort — valid keys apply even when others in the same bundle don't.
+
+### Fixed
+
+- **Home Assistant entity ids are anchored to the panel id, not the friendly name** — new entities keep stable `sensor.<panel>_*`-style ids regardless of how the device is renamed.
+- **Local changes now reach Home Assistant** — brightness, volume and the effective backlight sync back to HA via a deadbanded, settle-aware heartbeat instead of going stale until the next command.
+- **Vendor kiosk launchers (eWeLink) can be tamed** without stranding the panel, and the Launcher button always falls back to something usable instead of doing nothing.
+- **MQTT reliability** — a superseded client rebuilding in the background could no longer overwrite the live connection's status with a false "credentials rejected" warning.
+- **A brightness command or an interrupted config save can no longer leave the panel in a bad state** — brightness floors above zero, and config writes are atomic.
+- **A hung `su` can no longer stall the app** — one-shot root commands now run with a hard timeout.
+- **Touch-to-wake** — a screen-off can never strand the panel dark, even before proximity calibration.
+- **"Open in Home Assistant" self-heals** when HA's device id changes, and auto-return after a relaunch now waits for the MQTT reconnect instead of giving up after 8 seconds.
+
+### Security
+
+- **CSRF and DNS-rebinding protection** on the `:8888` control API.
+- **App and Companion updates download over HTTPS only**, on top of the existing signature + package pin.
+
 ## v0.8.6-rc6 - 2026-07-05
 
 ### Added
