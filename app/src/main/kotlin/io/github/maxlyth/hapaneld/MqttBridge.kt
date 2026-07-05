@@ -1117,18 +1117,7 @@ class MqttBridge(
     private fun publishConfig(component: String, objectId: String, payload: String) {
         val topic = "homeassistant/$component/$objectId/config"
         publishedConfigTopics.add(topic)
-        // Pin the HA entity_id to `<component>.<panel_id>_<suffix>` via `default_entity_id` — the field
-        // HA actually honours (its `object_id` is IGNORED, verified 2026-07-03; this is how Zigbee2MQTT
-        // fixes ids too). It anchors the entity_id to the stable panel_id INDEPENDENTLY of the device
-        // name, so renaming the friendly (device) name no longer drifts newly-registered entity_ids;
-        // `device.name` stays the friendly name for a pretty display. "default" = applied at registration
-        // only, so existing entities keep their current id (no churn). Empty payload = tombstone (skip).
-        val body = if (payload.isNotEmpty() && !payload.contains("\"default_entity_id\"")) {
-            """{"default_entity_id":"$component.$objectId",""" + payload.substring(1)
-        } else {
-            payload
-        }
-        publish(topic, body, retain = false)
+        publish(topic, withDefaultEntityId(component, objectId, payload), retain = false)
     }
 
     /**
@@ -1351,6 +1340,25 @@ class MqttBridge(
 
     companion object {
         private const val TAG = "ha-paneld/mqtt"
+
+        /**
+         * Inject `default_entity_id` = `<component>.<objectId>` as the FIRST key of a discovery payload —
+         * the field HA actually honours to pin the entity_id. HA's `object_id` discovery key is IGNORED
+         * (it isn't in the MQTT schema; verified against live HA 2026.7.1 source + registry): MQTT entities
+         * are ALWAYS `has_entity_name=True`, so without this the entity_id derives from the mutable
+         * device/friendly name (`slug(device.name + entity.name)`) and drifts when the friendly name is
+         * renamed. `default_entity_id` anchors it to the stable panel_id instead, while `device.name` stays
+         * the pretty friendly name. HA applies it at REGISTRATION only, so existing entities keep their id
+         * (no churn). Empty payload = tombstone (returned unchanged). Idempotent. Pure — tested in
+         * DefaultEntityIdTest.
+         */
+        fun withDefaultEntityId(component: String, objectId: String, payload: String): String =
+            if (payload.isNotEmpty() && !payload.contains("\"default_entity_id\"")) {
+                """{"default_entity_id":"$component.$objectId",""" + payload.substring(1)
+            } else {
+                payload
+            }
+
         private const val SCREEN_DRIFT = 2   // reconcile threshold (0-255 scale) — ignore rounding jitter
         private const val SETTLE_BAND = 6    // "still moving" if the value shifted more than this since last tick
         // Diagnostic sensors published via the opt-in exposable() gate (all default local-only).
