@@ -1898,7 +1898,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
 
     /** Behaviour keys settable over HTTP (routed through [applySetting] / the MQTT command path). */
     private val HTTP_LIVE_KEYS = listOf(
-        "wake_on_wave", "prevent_idle_dim", "watchdog_enabled", "auto_brightness",
+        "wake_on_wave", "prevent_idle_dim", "watchdog_enabled", "kiosk_lock", "auto_brightness",
         "brightness_bias", "navbar_mode", "touch_sound", "cpu_governor",
         "network_adb", "zigbee_router", "ambient_lux",
         "companion_auto_update", "self_update", "update_channel", "home_dashboard",

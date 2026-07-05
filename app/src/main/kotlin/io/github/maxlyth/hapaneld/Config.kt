@@ -232,6 +232,13 @@ class Config(context: Context) {
         prefs.edit().putBoolean("watchdog_enabled", on).apply()
     }
 
+    // Experimental kiosk lock: suppress + disable the system nav (HOME/RECENT/shade) so a non-admin can't
+    // accidentally leave the dashboard. Runtime-only + many escapes (see KioskController); off by default.
+    val kioskLock: Boolean get() = prefs.getBoolean("kiosk_lock", false)
+    fun setKioskLock(on: Boolean) {
+        prefs.edit().putBoolean("kiosk_lock", on).apply()
+    }
+
     // HA Companion app auto-manage: when on, ha-paneld installs the minimal Companion if it's
     // missing and updates it when a newer release exists (root panels; the minimal variant has no Play
     // auto-update, so ha-paneld is the only update path). Default off — installing/updating an app is

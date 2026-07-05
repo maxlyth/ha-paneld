@@ -29,6 +29,7 @@ import io.github.maxlyth.hapaneld.control.OverlayWakeTap
 import io.github.maxlyth.hapaneld.control.ScreenController
 import io.github.maxlyth.hapaneld.control.SystemController
 import io.github.maxlyth.hapaneld.control.TameController
+import io.github.maxlyth.hapaneld.control.KioskController
 import io.github.maxlyth.hapaneld.control.WatchdogController
 import io.github.maxlyth.hapaneld.control.TouchSoundController
 import io.github.maxlyth.hapaneld.control.VolumeController
@@ -104,6 +105,7 @@ class PaneldService : Service() {
     private lateinit var tame: TameController
     private lateinit var navbar: NavbarController
     private lateinit var watchdog: WatchdogController
+    private lateinit var kiosk: KioskController
     private lateinit var touchSound: TouchSoundController
     private lateinit var bootChime: BootChimeController
     private lateinit var zigbee: ZigbeeController
@@ -145,6 +147,16 @@ class PaneldService : Service() {
         volume = VolumeController(this)
         system = SystemController(AndroidSystemEnv(this))
         watchdog = WatchdogController(system, config)
+        kiosk = KioskController(this, system, config)
+        // On-device unlock gesture (7 corner taps): persist OFF + clear the lock + tell HA — off the main
+        // thread (the gesture fires on the overlay's touch listener; root + HiveMQ must not run there).
+        kiosk.onUnlockRequested = {
+            Thread {
+                config.setKioskLock(false)
+                runCatching { kiosk.apply(false) }
+                runCatching { mqtt.publishKioskState(false) }
+            }.apply { isDaemon = true; name = "kiosk-unlock" }.start()
+        }
         tame = TameController(this)
         // Tame opt-in: neutralise the vendor packages the user listed (force-stop + disable boot-relaunch
         // + strip the overlay permission). No-op when the blocklist is empty (the default — a stock panel
@@ -218,7 +230,7 @@ class PaneldService : Service() {
     }
 
     private fun buildMqtt(): MqttBridge = MqttBridge(
-        config, brightness, screen, led, navigate, volume, system, navbar, watchdog, touchSound, bootChime, zigbee, relay, cpu, adb,
+        config, brightness, screen, led, navigate, volume, system, navbar, watchdog, kiosk, touchSound, bootChime, zigbee, relay, cpu, adb,
         accessibilityEnabled(), profile.evdevButtons.isNotEmpty(),
         sensors.hasLight(), sensors.hasProximity(),
         sensors.hasTemperature(), sensors.hasHumidity(),
@@ -482,6 +494,13 @@ class PaneldService : Service() {
             navbar.apply(config.navbarMode)
             // Start the app watchdog if enabled (off by default; self-heals a dead/abandoned dashboard).
             watchdog.apply(config.watchdogEnabled)
+            // Experimental kiosk lock: a reboot CLEARS the runtime lock (by design — the anti-brick net), so
+            // re-assert it after a delay if it was enabled. The delay leaves an unlocked window each boot so
+            // an admin is never stranded; skipped if it was turned off (corner gesture / :8888 / HA) meanwhile.
+            if (config.kioskLock) Thread {
+                try { Thread.sleep(KIOSK_REASSERT_MS) } catch (e: InterruptedException) { return@Thread }
+                if (config.kioskLock) runCatching { kiosk.apply(true) }
+            }.apply { isDaemon = true; name = "kiosk-reassert" }.start()
             // Boot re-assert of network adb — some firmwares strip persist.adb.tcp.port at boot, so
             // re-apply it when ha-paneld is persisting it (no-op otherwise). See AdbController.reassert.
             runCatching { adb.reassert() }
@@ -688,6 +707,7 @@ class PaneldService : Service() {
         private const val MQTT_STALE_MS = 150_000L
         // Never-blank-screen watchdog poll interval; re-lights an unintentionally-dark panel within one tick.
         private const val SCREEN_WATCHDOG_MS = 60_000L
+        private const val KIOSK_REASSERT_MS = 60_000L // post-boot delay before re-locking (admin escape window)
 
         fun start(context: Context) {
             val intent = Intent(context, PaneldService::class.java)

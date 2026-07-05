@@ -16,6 +16,7 @@ import io.github.maxlyth.hapaneld.control.NavigateController
 import io.github.maxlyth.hapaneld.control.RelayController
 import io.github.maxlyth.hapaneld.control.ScreenController
 import io.github.maxlyth.hapaneld.control.SystemController
+import io.github.maxlyth.hapaneld.control.KioskController
 import io.github.maxlyth.hapaneld.control.WatchdogController
 import io.github.maxlyth.hapaneld.control.TouchSoundController
 import io.github.maxlyth.hapaneld.control.VolumeController
@@ -60,6 +61,8 @@ class MqttBridge(
     private val navbar: NavbarController,
     // App watchdog (switch): self-heals a dead/abandoned dashboard. Toggling restarts its poll loop.
     private val watchdog: WatchdogController,
+    // Experimental kiosk lock (switch): suppress/disable the system nav so a non-admin can't leave the dashboard.
+    private val kiosk: KioskController,
     private val touchSound: TouchSoundController,
     private val bootChime: BootChimeController,
     // Zigbee gateway control (Sonoff NSPanel Pro only). Presence is detected lazily on the MQTT
@@ -164,6 +167,8 @@ class MqttBridge(
     private val stateTouchSound = "ha-paneld/$panel/touch_sound/state"
     private val cmdWatchdog = "ha-paneld/$panel/watchdog/set"
     private val stateWatchdog = "ha-paneld/$panel/watchdog/state"
+    private val cmdKiosk = "ha-paneld/$panel/kiosk_lock/set"
+    private val stateKiosk = "ha-paneld/$panel/kiosk_lock/state"
     private val cmdUpdateCompanion = "ha-paneld/$panel/update_companion/set"
     private val cmdCompanionAuto = "ha-paneld/$panel/companion_auto_update/set"
     private val stateCompanionAuto = "ha-paneld/$panel/companion_auto_update/state"
@@ -435,6 +440,7 @@ class MqttBridge(
                 cmdWakeOnWave -> handleWakeOnWave(payload)
                 cmdTouchSound -> handleTouchSound(payload)
                 cmdWatchdog -> handleWatchdog(payload)
+                cmdKiosk -> handleKiosk(payload)
                 cmdUpdateCompanion -> onUpdateCompanion() // install/update the Companion; runs off-thread in the service
                 cmdCompanionAuto -> handleCompanionAuto(payload)
                 cmdUpdatePaneld -> onSelfUpdate(true)      // force self-update to the channel's newest (off-thread)
@@ -535,6 +541,17 @@ class MqttBridge(
         watchdog.apply(on)
         publish(stateWatchdog, if (on) "ON" else "OFF", retain = true)
     }
+
+    private fun handleKiosk(payload: String) {
+        val on = payload.trim().equals("ON", ignoreCase = true)
+        config.setKioskLock(on)
+        kiosk.apply(on)
+        publish(stateKiosk, if (on) "ON" else "OFF", retain = true)
+    }
+
+    /** Publish the kiosk-lock state — used by the on-device unlock gesture, which turns it OFF outside the
+     *  MQTT/HTTP command path and must still tell HA. */
+    fun publishKioskState(on: Boolean) = publish(stateKiosk, if (on) "ON" else "OFF", retain = true)
 
     private fun handleCompanionAuto(payload: String) {
         val on = payload.trim().equals("ON", ignoreCase = true)
@@ -799,6 +816,7 @@ class MqttBridge(
             "wake_on_wave" -> handleWakeOnWave(onOff)
             "prevent_idle_dim" -> handlePreventIdleDim(onOff)
             "watchdog_enabled" -> handleWatchdog(onOff)
+            "kiosk_lock" -> handleKiosk(onOff)
             "silence_boot_chime" -> handleSilenceBootChime(onOff)
             "auto_brightness" -> handleAutoBright(onOff)
             "touch_sound" -> handleTouchSound(onOff)
@@ -998,6 +1016,9 @@ class MqttBridge(
         exposable("watchdog_enabled", "switch", "${panel}_watchdog", { reg("watchdog_enabled") }) {
             publish(stateWatchdog, if (config.watchdogEnabled) "ON" else "OFF", retain = true)
         }
+        exposable("kiosk_lock", "switch", "${panel}_kiosk_lock", { reg("kiosk_lock") }) {
+            publish(stateKiosk, if (config.kioskLock) "ON" else "OFF", retain = true)
+        }
         exposable("silence_boot_chime", "switch", "${panel}_silence_boot_chime", { reg("silence_boot_chime") }) {
             publish(stateSilenceBootChime, if (bootChime.isEnabled()) "ON" else "OFF", retain = true)
         }
@@ -1133,7 +1154,7 @@ class MqttBridge(
         "binary_sensor" to "${panel}_proximity",
         "sensor" to "${panel}_temperature", "sensor" to "${panel}_humidity",
         "light" to "${panel}_buttons", "switch" to "${panel}_wake_on_wave",
-        "switch" to "${panel}_touch_sound", "switch" to "${panel}_watchdog",
+        "switch" to "${panel}_touch_sound", "switch" to "${panel}_watchdog", "switch" to "${panel}_kiosk_lock",
         "switch" to "${panel}_silence_boot_chime", "switch" to "${panel}_prevent_idle_dim",
         "switch" to "${panel}_companion_auto_update", "button" to "${panel}_update_companion",
         "select" to "${panel}_companion_update_channel",
