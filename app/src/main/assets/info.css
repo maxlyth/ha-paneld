@@ -3,6 +3,11 @@ body{font-family:system-ui,-apple-system,sans-serif;margin:0;background:#111;col
 .hdr{display:flex;align-items:center;justify-content:space-between;gap:12px}
 h1{font-size:1.3rem;margin:0 0 .2rem;display:flex;align-items:center} h1 small{color:#9af;font-weight:400}
 .logo{width:1.7em;height:1.7em;margin-right:.45em;border-radius:6px;flex:none}
+/* Header panel-switcher: the friendly-name in the title becomes this dropdown when >1 ha-paneld is on the
+   LAN. Styled to read like the title (#9af) but clearly a control. Kept as pure header CONTENT so it's
+   unaffected by the planned fixed/sticky-header rework. */
+#pswitch select.pswitch-sel{font:inherit;color:#9af;background:#1c1c1c;border:1px solid #2a3550;border-radius:6px;padding:1px 5px;margin-left:2px;cursor:pointer;max-width:44vw;vertical-align:baseline}
+#pswitch select.pswitch-sel:hover{border-color:#4a6ba0}
 h2{font-size:.95rem;margin:0 0 .5rem;color:#9cf;text-transform:uppercase;letter-spacing:.04em}
 h2 small{text-transform:none;letter-spacing:0;color:#8a8;font-weight:400}
 .gh svg{width:24px;height:24px;fill:#7c8a99}

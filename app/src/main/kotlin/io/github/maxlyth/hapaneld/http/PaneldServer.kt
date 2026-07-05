@@ -126,6 +126,9 @@ class PaneldServer(
     // One-line EFR32 radio status ("sonoff 3.5.0 · running · Repeater"), or null when this panel has no
     // radio gateway — drives the Install-tab Radio card. Injected by the service (ZigbeeController, su).
     private val radioStatus: () -> String? = { null },
+    // LAN ha-paneld peers discovered over mDNS — powers the header panel switcher. Injected by the service
+    // (captures the live MdnsAdvertiser field). Blocking browse; called only through [peersCache] off-thread.
+    private val peers: () -> List<io.github.maxlyth.hapaneld.Peer> = { emptyList() },
 ) {
     // Per-INSTALL build token (changes on every (re)install, not just a version bump) so an open info
     // page can auto-reload after the app is updated — even a same-version dev re-spin. /health carries it.
@@ -334,6 +337,11 @@ class PaneldServer(
                             """{${sensors.valuesJson()},"volume_pct":${runCatching { volume.getPercent() }.getOrDefault(-1)},"brightness":$bright}""",
                             ContentType.Application.Json,
                         )
+                    }
+                    // LAN ha-paneld panels for the header panel switcher — a cheap, non-blocking snapshot of
+                    // the live mDNS roster (a background listener keeps it converged + fresh; see browsePeers).
+                    get("/peers") {
+                        call.respondText(peersJson(peers()), ContentType.Application.Json)
                     }
                     // Hydration payload for the dashboard (see infoJson) — the one place the probe
                     // suite actually runs; cached + single-flight, so concurrent viewers share it.
@@ -875,14 +883,15 @@ class PaneldServer(
             """<a class="pbtn" href="${esc(config.haDeviceUrl)}" target="_blank" rel="noopener">Open in HA</a>""" else ""
         return """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ha-paneld · ${esc(title)} · ${esc(config.panelId)}</title>
+<title>ha-paneld · ${esc(title)} · ${esc(config.friendlyName)}</title>
 <link rel="icon" href="/icon.svg">
 <link rel="stylesheet" href="/info.css"></head><body data-build="${buildToken()}"><div class="wrap">
-<div class="hdr"><h1><img src="/icon.svg" class="logo" alt="">ha-paneld <small>· ${esc(config.panelId)}</small></h1>
+<div class="hdr"><h1><img src="/icon.svg" class="logo" alt="">ha-paneld <small id="pswitch" data-self-id="${esc(config.panelId)}" data-self-name="${esc(config.friendlyName)}">· ${esc(config.friendlyName)}</small></h1>
  <span style="display:flex;gap:10px;align-items:center">$haLink</span></div>
 ${navBar(active)}
 <div id="verbar" class="setup" style="display:none">⟳ A newer ha-paneld is installed — <a href="#" onclick="location.reload();return false">reload</a> to refresh this page.</div>
 $body
+<script src="/assets/switcher.js"></script>
 <script src="/assets/buildwatch.js"></script>
 </div></body></html>"""
     }
@@ -1563,6 +1572,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
 
     private fun infoHtml(): String {
         val pid = esc(config.panelId)
+        val fname = esc(config.friendlyName)
         // Stale-while-revalidate: render the last-known snapshot instantly (placeholders if none yet)
         // and let the page hydrate/refresh from /api/v1/info when the snapshot is missing or old.
         val s = snapCache.peek()
@@ -1591,10 +1601,10 @@ report of this panel's hardware, firmware, SELinux, su and node probes for bug r
         }
         return """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ha-paneld · $pid</title>
+<title>ha-paneld · $fname</title>
 <link rel="icon" href="/icon.svg">
 <link rel="stylesheet" href="/info.css"></head><body data-ver="${Config.VERSION}" data-build="${buildToken()}" data-hydrate="${if (hydrate) "1" else "0"}"><div class="wrap">
-<div class="hdr"><h1><img src="/icon.svg" class="logo" alt="">ha-paneld <small>· $pid</small></h1>
+<div class="hdr"><h1><img src="/icon.svg" class="logo" alt="">ha-paneld <small id="pswitch" data-self-id="$pid" data-self-name="$fname">· $fname</small></h1>
  <span style="display:flex;gap:10px;align-items:center">${if (config.haDeviceUrl.isNotBlank()) """<a class="pbtn" href="${esc(config.haDeviceUrl)}" target="_blank" rel="noopener" title="Open this panel's device page in Home Assistant">Open in HA</a>""" else ""}<button id="revbtn" class="pbtn" onclick="toggleReveal()" title="Show/hide blurred values for editing — they're blurred by default so screenshots don't leak them">Reveal</button>
  <a class="gh" href="$REPO_URL" target="_blank" rel="noopener" title="ha-paneld on GitHub" aria-label="GitHub"><svg viewBox="0 0 24 24"><path d="$GH_ICON"/></svg></a></span></div>
 ${navBar("dashboard")}
@@ -1641,6 +1651,7 @@ ${tcard("updtbl", "Updates", s?.let { updatesRowsHtml(it) })}
 <p class="note" style="text-align:center;margin-top:18px"><a href="/api" style="color:#9cf">REST API explorer</a>
  · <a href="/api/v1/diag" target="_blank" style="color:#9cf">diagnostics</a></p>
 <script src="/info.js"></script>
+<script src="/assets/switcher.js"></script>
 <script src="/assets/buildwatch.js"></script>
 </div></body></html>"""
     }
@@ -1650,6 +1661,15 @@ ${tcard("updtbl", "Updates", s?.let { updatesRowsHtml(it) })}
 
     /** JSON-quote a string value (escapes backslash + double-quote). */
     private fun jsonStr(s: String): String = Json.str(s)
+
+    /** Serialise the mDNS peer roster for GET /api/v1/peers. `ip`/`url` are literal `null` when the record
+     *  didn't resolve to an IPv4 (such peers aren't navigable in the switcher). */
+    private fun peersJson(list: List<io.github.maxlyth.hapaneld.Peer>): String =
+        list.joinToString(",", "[", "]") { p ->
+            val ip = p.ip?.let { jsonStr(it) } ?: "null"
+            val url = p.ip?.let { jsonStr("http://$it:${p.port}/") } ?: "null"
+            """{"panel_id":${jsonStr(p.panelId)},"name":${jsonStr(p.name)},"ip":$ip,"port":${p.port},"url":$url,"version":${jsonStr(p.version)},"self":${p.self}}"""
+        }
 
     /** Persist a new tame blocklist and apply the delta off-thread (tame additions, re-enable removals).
      *  Used by the fleet/JSON `tame_vendor_packages` path; the browser card uses per-package POST /tame. */

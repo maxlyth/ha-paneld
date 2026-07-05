@@ -5,8 +5,11 @@ import android.net.wifi.WifiManager
 import android.util.Log
 import io.github.maxlyth.hapaneld.util.localIpv4
 import java.net.InetAddress
+import java.util.concurrent.ConcurrentHashMap
 import javax.jmdns.JmDNS
+import javax.jmdns.ServiceEvent
 import javax.jmdns.ServiceInfo
+import javax.jmdns.ServiceListener
 
 /**
  * Advertises `_ha-paneld._tcp.local.` via JmDNS so HA's zeroconf discovery can auto-pair the
@@ -17,6 +20,53 @@ import javax.jmdns.ServiceInfo
 class MdnsAdvertiser(private val context: Context, private val config: Config) {
     private var jmdns: JmDNS? = null
     private var lock: WifiManager.MulticastLock? = null
+    @Volatile private var browsing = false
+
+    // Live roster of discovered ha-paneld panels (keyed by mDNS instance name = panel_id), maintained by a
+    // persistent [peerListener]. Reads are cheap + non-blocking and — unlike a one-shot dns.list, which
+    // returns only what's in this JmDNS's cache within a short window (observed to miss panels a peer sees) —
+    // this converges to the full fleet over the listener's periodic queries and self-prunes on service-removed.
+    private val peerMap = ConcurrentHashMap<String, Peer>()
+
+    private val peerListener = object : ServiceListener {
+        override fun serviceAdded(event: ServiceEvent) {
+            // Resolve OFF the JmDNS packet thread (getServiceInfo blocks) so we never stall mDNS processing.
+            val dns = jmdns ?: return
+            val type = event.type
+            val name = event.name
+            Thread {
+                runCatching { dns.getServiceInfo(type, name, RESOLVE_MS) }.getOrNull()?.let { record(it, name) }
+            }.apply { isDaemon = true; this.name = "mdns-resolve" }.start()
+        }
+
+        override fun serviceResolved(event: ServiceEvent) {
+            event.info?.let { record(it, event.name) } // some JmDNS paths deliver the resolved info directly
+        }
+
+        override fun serviceRemoved(event: ServiceEvent) {
+            peerMap.remove(event.name)
+        }
+    }
+
+    /** Fold a resolved mDNS record into the roster (needs a resolved IPv4 to be navigable). */
+    private fun record(info: ServiceInfo, fallbackName: String) {
+        val p = toPeer(
+            instanceName = info.name ?: fallbackName,
+            txtName = info.getPropertyString("name"),
+            txtVer = info.getPropertyString("ver"),
+            ipv4 = info.inet4Addresses?.firstOrNull()?.hostAddress,
+            port = info.port,
+            selfId = config.panelId,
+            selfIp = localIpv4(),
+        )
+        if (p.panelId.isBlank() || p.ip == null) return
+        // Don't DOWNGRADE a resolved friendly name back to the panel_id fallback: a later TXT-less resolve
+        // (common right after a whole-fleet restart floods mDNS) must not clobber a good name. Otherwise store.
+        val existing = peerMap[p.panelId]
+        val newHasName = p.name != p.panelId
+        val oldHasName = existing != null && existing.name != existing.panelId
+        if (existing == null || newHasName || !oldHasName) peerMap[p.panelId] = p
+    }
 
     /** Blocking network setup — call off the main thread. */
     fun start() {
@@ -33,6 +83,9 @@ class MdnsAdvertiser(private val context: Context, private val config: Config) {
                 "ver" to Config.VERSION,
                 "caps" to "tts",
                 "path" to "/play",
+                // Friendly name so a peer's fleet switcher can label this panel nicely (falls back to the
+                // instance name = panel_id on older panels that don't advertise it). Additive TXT key.
+                "name" to config.friendlyName.ifBlank { config.panelId },
             )
             val info = ServiceInfo.create(
                 Config.MDNS_SERVICE_TYPE,
@@ -44,6 +97,19 @@ class MdnsAdvertiser(private val context: Context, private val config: Config) {
             )
             dns.registerService(info)
             jmdns = dns
+            // Start the persistent peer browse (powers the header switcher) — begins querying immediately
+            // and keeps the roster fresh in the background, so a UI read is instant + complete.
+            runCatching { dns.addServiceListener(Config.MDNS_SERVICE_TYPE, peerListener) }
+            // Periodic re-browse: dns.list resolves each service fully (incl. TXT), so this refreshes names
+            // and fills any TXT missed during a congested (whole-fleet-restart) window. Merges with the
+            // don't-downgrade rule in record(), so it only closes gaps and never flaps a good name.
+            browsing = true
+            Thread {
+                while (browsing) {
+                    try { Thread.sleep(REFRESH_MS) } catch (e: InterruptedException) { break }
+                    jmdns?.let { d -> runCatching { d.list(Config.MDNS_SERVICE_TYPE, LIST_MS)?.forEach { record(it, it.name ?: "") } } }
+                }
+            }.apply { isDaemon = true; name = "mdns-peer-refresh" }.start()
             Log.i(TAG, "advertising ${Config.MDNS_SERVICE_TYPE} as ${config.panelId} @ $addr:${config.httpPort}")
         } catch (e: Exception) {
             Log.w(TAG, "mDNS advertise failed", e)
@@ -51,6 +117,9 @@ class MdnsAdvertiser(private val context: Context, private val config: Config) {
     }
 
     fun stop() {
+        browsing = false
+        runCatching { jmdns?.removeServiceListener(Config.MDNS_SERVICE_TYPE, peerListener) }
+        peerMap.clear()
         runCatching { jmdns?.unregisterAllServices() }
         runCatching { jmdns?.close() }
         jmdns = null
@@ -110,6 +179,27 @@ class MdnsAdvertiser(private val context: Context, private val config: Config) {
         return url
     }
 
+    /**
+     * The LAN ha-paneld roster (`_ha-paneld._tcp.local.`) for the header panel switcher — a cheap,
+     * non-blocking snapshot of [peerMap], which [peerListener] keeps converged + fresh in the background.
+     * This panel's own advertised service is included and [Peer.self]-marked; self is re-evaluated against
+     * the CURRENT identity so a reconfigure between resolve and read can't mis-mark it. Never throws.
+     */
+    fun browsePeers(): List<Peer> {
+        val selfId = config.panelId
+        val selfIp = localIpv4()
+        val selfName = config.friendlyName.ifBlank { selfId }
+        return dedupePeers(
+            peerMap.values.map {
+                val self = it.panelId == selfId || (it.ip != null && it.ip == selfIp)
+                // mDNS self-resolution can miss our OWN TXT (name), so a panel would show ITSELF as its
+                // panel_id while peers show its friendly name — making the alphabetical menu order differ
+                // between panels. Force this panel's authoritative friendly name for the self entry.
+                if (self) it.copy(self = true, name = selfName) else it.copy(self = false)
+            },
+        )
+    }
+
     /** All of the configured MQTT broker host's IP addresses (v4 + v6), to match against HA mDNS records. */
     private fun brokerHostIps(): Set<String> = runCatching {
         val host = config.mqttBroker.substringAfter("://").substringBefore(":").substringBefore("/").trim()
@@ -130,5 +220,50 @@ class MdnsAdvertiser(private val context: Context, private val config: Config) {
 
     companion object {
         private const val TAG = "ha-paneld/mdns"
+        private const val RESOLVE_MS = 2500L // per-peer mDNS resolve budget (off the JmDNS thread)
+        private const val REFRESH_MS = 60_000L // periodic re-browse interval (name refresh / gap fill)
+        private const val LIST_MS = 3000L // dns.list resolve budget per refresh sweep
     }
 }
+
+/** One ha-paneld panel discovered over mDNS (or this panel itself, [self]=true). [ip] is null when the
+ *  record didn't resolve to an IPv4 (IPv6-only / unresolved) — such peers aren't navigable in the switcher. */
+data class Peer(
+    val panelId: String,
+    val name: String,
+    val ip: String?,
+    val port: Int,
+    val version: String,
+    val self: Boolean,
+)
+
+/** Pure: dedupe by panel id (a panel can resolve to several records/addresses), preferring the entry with
+ *  a resolved IPv4; sort purely by friendly name so the roster is IDENTICAL on every panel (self is flagged,
+ *  not reordered — the switcher must look the same everywhere). Blank panel ids are dropped. Unit-tested. */
+internal fun dedupePeers(peers: List<Peer>): List<Peer> {
+    val byId = LinkedHashMap<String, Peer>()
+    for (p in peers) {
+        if (p.panelId.isBlank()) continue
+        val existing = byId[p.panelId]
+        if (existing == null || (existing.ip == null && p.ip != null)) byId[p.panelId] = p
+    }
+    return byId.values.sortedBy { it.name.lowercase() }
+}
+
+/** Pure mDNS-record → [Peer] mapper (plain strings, no ServiceInfo) so it's JVM-unit-testable. */
+internal fun toPeer(
+    instanceName: String,
+    txtName: String?,
+    txtVer: String?,
+    ipv4: String?,
+    port: Int,
+    selfId: String,
+    selfIp: String?,
+): Peer = Peer(
+    panelId = instanceName,
+    name = txtName?.takeIf { it.isNotBlank() } ?: instanceName,
+    ip = ipv4,
+    port = port,
+    version = txtVer ?: "",
+    self = instanceName == selfId || (ipv4 != null && ipv4 == selfIp),
+)

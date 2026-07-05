@@ -208,6 +208,9 @@ class PaneldService : Service() {
             onInstallComponent = { name, action, version -> installComponent(name, action, version) },
             // One-line EFR32 radio status for the Install-tab Radio card; null when this panel has no radio.
             radioStatus = { if (profile.zigbeeGatewayDir != null) zigbee.status() else null },
+            // LAN ha-paneld peers over mDNS for the header panel switcher. Captures the `mdns` FIELD (not a
+            // snapshot) so it follows reconfigure()'s reassignment; browsePeers null-guards the swap window.
+            peers = { mdns.browsePeers() },
         )
         // Stream daemon-instrumented hardware buttons (e.g. WF1589T power key) into the same event
         // entity as the a11y key capture. No-op on panels with no evdev buttons.

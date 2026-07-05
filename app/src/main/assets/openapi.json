@@ -68,6 +68,7 @@
     },
     "/api/v1/perf": { "get": { "summary": "Live CPU/GPU/RAM, CPU clock, temperature, top processes, responsiveness + history", "tags": ["performance"], "responses": { "200": { "description": "perf JSON" } } } },
     "/api/v1/sensors": { "get": { "summary": "Live sensor readings (light, proximity, temperature, humidity) plus volume percent and raw screen brightness — independent of HA exposure settings", "tags": ["sensors"], "responses": { "200": { "description": "live values JSON" } } } },
+    "/api/v1/peers": { "get": { "summary": "ha-paneld panels discovered on the LAN over mDNS — powers the header panel switcher", "tags": ["fleet"], "parameters": [ { "name": "refresh", "in": "query", "required": false, "schema": { "type": "string", "enum": ["1"] }, "description": "Force a fresh mDNS browse instead of the ~10s cache" } ], "responses": { "200": { "description": "[{panel_id,name,ip,port,url,version,self}] — ip/url null when unresolved" } } } },
     "/api/v1/instrumentation": {
       "post": { "summary": "Enable/disable the performance sampler (persisted)", "tags": ["performance"],
         "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "required": ["enabled"], "properties": { "enabled": { "type": "boolean" } } } } } },
