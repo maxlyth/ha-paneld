@@ -349,11 +349,19 @@ class MqttBridge(
      * Resolve this panel's HA device-settings URL using the MQTT username/password (when those are also a
      * valid HA user — typical with the built-in Mosquitto add-on) and cache it for the info page's
      * "Open in Home Assistant" link. Off the MQTT thread; anonymous brokers and any failure no-op silently.
-     * Resolved once (the device id is stable); cache is cleared on a panel_id change.
+     * Cached until stale (re-resolved at most every [HA_LINK_TTL_MS] so a device delete+recreate self-heals)
+     * and cleared on a panel_id change. A failed re-resolve keeps the existing link (never clobbers).
      */
     private fun maybeResolveHaLink() {
-        if (config.haDeviceUrl.isNotBlank()) return
         if (config.mqttUser.isBlank() || config.mqttPassword.isBlank()) return
+        // Re-resolve if never done OR the cached link is stale: HA's device id changes on a re-provision or
+        // a device delete+recreate (with no panel_id change), which left "Open in HA" pointing at a deleted
+        // device forever. TTL-gated so a flapping connection can't hammer HA's login.
+        if (config.haDeviceUrl.isNotBlank() &&
+            System.currentTimeMillis() - config.haLinkResolvedAt < HA_LINK_TTL_MS
+        ) {
+            return
+        }
         Thread {
             // Prefer mDNS (broker-matched). Else derive HA from the broker HOST: a working broker is very
             // likely the HA server too, and reaching it by hostname works even across a tunnel where mDNS
@@ -1361,6 +1369,7 @@ class MqttBridge(
 
     companion object {
         private const val TAG = "ha-paneld/mqtt"
+        private const val HA_LINK_TTL_MS = 6 * 3_600_000L // re-resolve the "Open in HA" link at most every 6h
 
         /**
          * Inject `default_entity_id` = `<component>.<objectId>` as the FIRST key of a discovery payload —

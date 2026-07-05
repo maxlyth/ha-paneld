@@ -95,7 +95,12 @@ class Config(context: Context) {
     /** Cached HA device-settings URL (resolved once via HaLink when the MQTT creds are a valid HA user);
      *  blank until/unless resolved. Shown as an "Open in Home Assistant" link on the info page. */
     val haDeviceUrl: String get() = prefs.getString("ha_device_url", "")!!
-    fun setHaDeviceUrl(url: String) { prefs.edit().putString("ha_device_url", url).apply() }
+    /** When [haDeviceUrl] was last resolved — drives a periodic re-resolve so a link left stale by an HA
+     *  device delete+recreate (the id changes without a panel_id change) self-heals. */
+    val haLinkResolvedAt: Long get() = prefs.getLong("ha_link_at", 0L)
+    fun setHaDeviceUrl(url: String) {
+        prefs.edit().putString("ha_device_url", url).putLong("ha_link_at", System.currentTimeMillis()).apply()
+    }
 
     /** Update versions the user dismissed from the dashboard banner, label -> ignored latestVersion.
      *  Stored as newline-joined "label\tversion" rows (component labels + semver never contain \t or \n).
