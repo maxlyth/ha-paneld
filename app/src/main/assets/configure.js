@@ -135,7 +135,15 @@
       method: "POST", headers: { "Accept": "application/json", "Content-Type": "application/x-www-form-urlencoded" },
       body: body.toString(),
     }).then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
-      .then(function () { msg.textContent = "Saved · reconnecting MQTT…"; dirty = false; document.getElementById("savebtn").disabled = true; load(); })
+      .then(function () {
+        msg.textContent = "Saving…"; dirty = false; document.getElementById("savebtn").disabled = true;
+        // Reload the form from the server, then land on a terminal message — don't leave a
+        // "reconnecting…" string hanging (it reads as stuck even though the save is done).
+        load(function (ok) {
+          msg.textContent = ok ? "Saved." : "Saved (reload failed — refresh the page).";
+          if (ok) setTimeout(function () { if (msg.textContent === "Saved.") msg.textContent = ""; }, 2500);
+        });
+      })
       .catch(function (e) { msg.textContent = "Save failed (" + e + ")"; });
   };
 
@@ -164,7 +172,7 @@
     input.value = "";
   };
 
-  function load() {
+  function load(done) {
     Promise.all([
       fetch("/api/v1/config/schema").then(function (r) { return r.json(); }),
       fetch("/api/v1/config").then(function (r) { return r.json(); }),
@@ -190,8 +198,10 @@
           setTimeout(function () { t.classList.remove("flash"); }, 1800);
         }
       }
+      if (done) done(true);
     }).catch(function (e) {
       document.getElementById("cfg-status").textContent = "Could not load settings (" + e + ").";
+      if (done) done(false);
     });
   }
 
