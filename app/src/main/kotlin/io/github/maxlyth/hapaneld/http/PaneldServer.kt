@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import io.github.maxlyth.hapaneld.AudioPlayer
 import io.github.maxlyth.hapaneld.Config
+import io.github.maxlyth.hapaneld.peersJson
 import io.github.maxlyth.hapaneld.config.Capabilities
 import io.github.maxlyth.hapaneld.config.ConfigBundle
 import io.github.maxlyth.hapaneld.config.ConfigDiff
@@ -1685,13 +1686,6 @@ ${tcard("updtbl", "Updates", s?.let { updatesRowsHtml(it) })}
 
     /** Serialise the mDNS peer roster for GET /api/v1/peers. `ip`/`url` are literal `null` when the record
      *  didn't resolve to an IPv4 (such peers aren't navigable in the switcher). */
-    private fun peersJson(list: List<io.github.maxlyth.hapaneld.Peer>): String =
-        list.joinToString(",", "[", "]") { p ->
-            val ip = p.ip?.let { jsonStr(it) } ?: "null"
-            val url = p.ip?.let { jsonStr("http://$it:${p.port}/") } ?: "null"
-            """{"panel_id":${jsonStr(p.panelId)},"name":${jsonStr(p.name)},"ip":$ip,"port":${p.port},"url":$url,"version":${jsonStr(p.version)},"self":${p.self}}"""
-        }
-
     /** Persist a new tame blocklist and apply the delta off-thread (tame additions, re-enable removals).
      *  Used by the fleet/JSON `tame_vendor_packages` path; the browser card uses per-package POST /tame. */
     private fun applyTameBlocklist(next: Set<String>) {

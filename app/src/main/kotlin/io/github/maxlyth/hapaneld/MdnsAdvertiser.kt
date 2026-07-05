@@ -3,6 +3,7 @@ package io.github.maxlyth.hapaneld
 import android.content.Context
 import android.net.wifi.WifiManager
 import android.util.Log
+import io.github.maxlyth.hapaneld.util.Json
 import io.github.maxlyth.hapaneld.util.localIpv4
 import java.net.InetAddress
 import java.util.concurrent.ConcurrentHashMap
@@ -249,6 +250,16 @@ internal fun dedupePeers(peers: List<Peer>): List<Peer> {
     }
     return byId.values.sortedBy { it.name.lowercase() }
 }
+
+/** Pure: serialize the switcher roster to the `/api/v1/peers` JSON array. Kept here beside the peer
+ *  mapping (not inline in the HTTP server, which needs a Context) so it's unit-testable without booting
+ *  Ktor — `ip`/`url` emit a literal `null` for a peer whose IPv4 didn't resolve (un-navigable). */
+internal fun peersJson(list: List<Peer>): String =
+    list.joinToString(",", "[", "]") { p ->
+        val ip = p.ip?.let { Json.str(it) } ?: "null"
+        val url = p.ip?.let { Json.str("http://$it:${p.port}/") } ?: "null"
+        """{"panel_id":${Json.str(p.panelId)},"name":${Json.str(p.name)},"ip":$ip,"port":${p.port},"url":$url,"version":${Json.str(p.version)},"self":${p.self}}"""
+    }
 
 /** Pure mDNS-record → [Peer] mapper (plain strings, no ServiceInfo) so it's JVM-unit-testable. */
 internal fun toPeer(

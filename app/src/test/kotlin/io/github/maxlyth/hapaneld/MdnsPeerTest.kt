@@ -65,4 +65,37 @@ class MdnsPeerTest {
         )
         assertEquals(listOf("Aaa Panel", "My Panel", "Zzz Panel"), out.map { it.name })
     }
+
+    // --- peersJson (the /api/v1/peers serializer the switcher fetches) ---
+    @Test fun peersJsonEmptyListIsEmptyArray() = assertEquals("[]", peersJson(emptyList()))
+
+    @Test fun peersJsonResolvedPeerCarriesIpAndDerivedUrl() {
+        val json = peersJson(listOf(peer("kitchen_ha_paneld", name = "Kitchen", ip = "10.0.0.7", ver = "0.8.6")))
+        assertEquals(
+            """[{"panel_id":"kitchen_ha_paneld","name":"Kitchen","ip":"10.0.0.7","port":8888,""" +
+                """"url":"http://10.0.0.7:8888/","version":"0.8.6","self":false}]""",
+            json,
+        )
+    }
+
+    @Test fun peersJsonUnresolvedIpEmitsLiteralNullForIpAndUrl() {
+        // A peer whose IPv4 didn't resolve is un-navigable — ip/url MUST be JSON null (not "null"),
+        // so switcher.js can filter it out rather than build a broken "http://null:.." link.
+        val json = peersJson(listOf(peer("hall_ha_paneld", name = "Hall", ip = null)))
+        assertTrue(json, json.contains(""""ip":null"""))
+        assertTrue(json, json.contains(""""url":null"""))
+        assertFalse("a null ip must never be quoted", json.contains(""""ip":"null""""))
+    }
+
+    @Test fun peersJsonSelfIsABooleanNotAString() {
+        val json = peersJson(listOf(peer("me", name = "Me", self = true)))
+        assertTrue(json, json.contains(""""self":true"""))
+        assertFalse("self must be a JSON boolean", json.contains(""""self":"true""""))
+    }
+
+    @Test fun peersJsonEscapesNameAndPanelId() {
+        // A friendly name is user/peer-supplied — a quote must be escaped, not break the JSON.
+        val json = peersJson(listOf(peer("p", name = "A \"quoted\" panel")))
+        assertTrue(json, json.contains("""A \"quoted\" panel"""))
+    }
 }
