@@ -965,27 +965,13 @@ ${tameCardHtml()}
         // Auto-heal offer: if the profile ships a known-good WebView and we have root/daemon to install it,
         // the too-old warning gets a one-tap "Update WebView now" button (POST /api/v1/webview/heal).
         val canHeal = wv.tooOld && DeviceProfile.detect().recommendedWebView != null && root
-        // Two extra warnings not modelled by HealthAudit: a crash-looping dashboard app, and a Companion
-        // server row with a blank internal_url (HA 2026.7 "Missing 'Host' header") + a one-tap repair.
-        val extra = buildString {
-            if (io.github.maxlyth.hapaneld.PanelStatus.dashboardCrashLooping) append(
-                """<div class="setup">⛔ <b>Dashboard app is crash-looping</b> — the watchdog stopped relaunching it """ +
-                    """to avoid a restart storm. This usually means an incompatible dashboard-app update; reinstall or """ +
-                    """downgrade the dashboard/Companion app (see <a href="/install">updates</a>), or reboot the panel.</div>""",
-            )
-            // Companion server row with a blank internal_url → HA 2026.7 rejects with "Missing Host header"
-            // and the dashboard renders blank. Offer a one-tap repair (copy external_url into internal_url).
-            companionUrlCache.get().let { u ->
-                if (u.needsRepair) append(
-                    """<div class="setup">⚠ <b>Home Assistant Companion has no internal URL</b> """ +
-                        """(${u.affected} server${if (u.affected == 1) "" else "s"}) — the dashboard can fail to load """ +
-                        """with <i>"Missing 'Host' header"</i>. Repair sets the internal URL to the external URL.""" +
-                        """<div style="margin-top:10px"><button class="pbtn" onclick="repairCompUrl(this)">⚙ Repair internal URL</button> <span id="cu-fix" class="muted"></span></div>""" +
-                        """</div>""",
-                )
-            }
-        }
-        val warnings = extra + problems.joinToString("") { installWarning(it, canHeal) }
+        // A missing dashboard app can be self-healed by installing the minimal HA Companion over root — a
+        // Play-managed full Companion would already count as a renderer, so NO_RENDERER + root ⇒ safe.
+        val canInstallCompanion = root
+        // Two warnings not modelled by HealthAudit (crash-looping dashboard, Companion blank internal_url)
+        // — shared with the dashboard banner. Here (Install tab, install.js loaded) they get inline buttons.
+        val extra = adHocWarnings(inlineRepair = true)
+        val warnings = extra + problems.joinToString("") { installWarning(it, canHeal, canInstallCompanion) }
         val allGood = if (problems.isEmpty() && extra.isEmpty()) """<div class="card"><p class="note">✓ No setup problems detected — this panel looks ready.</p></div>""" else ""
         return """$warnings
 <div class="cards">
@@ -1005,11 +991,12 @@ $allGood</div>
 <script src="/assets/install.js"></script>"""
     }
 
-    /** One top-of-tab warning for a render-blocking finding (WebView old / no dashboard app). The WebView
-     *  finding gets the inline "Update WebView now" heal button when [canHeal]. */
-    private fun installWarning(f: HealthAudit.Finding, canHeal: Boolean): String = when (f.kind) {
+    /** One top-of-tab warning for a render-blocking finding (WebView old / no dashboard app). WebView gets
+     *  the inline "Update WebView now" heal button when [canHeal]; a missing renderer gets a one-tap
+     *  "Install HA Companion" button when [canInstallCompanion]. */
+    private fun installWarning(f: HealthAudit.Finding, canHeal: Boolean, canInstallCompanion: Boolean): String = when (f.kind) {
         HealthAudit.Kind.WEBVIEW_OLD ->
-            """<div class="setup">⚠ <b>System WebView is too old</b> (${esc(f.detail)}) — the Home Assistant """ +
+            """<div class="setup crit">⚠ <b>System WebView is too old</b> (${esc(f.detail)}) — the Home Assistant """ +
                 """dashboard may render blank or broken. <a href="$WEBVIEW_DOC" target="_blank" rel="noopener">""" +
                 """How &amp; why to update</a> (target: Chromium ${PanelHealth.MIN_CHROMIUM}+).""" +
                 (if (canHeal) """<div style="margin-top:10px"><button class="pbtn" onclick="healWebView(this)">⬇ Update WebView now</button> <span id="wv-heal" class="muted"></span></div>""" else "") +
@@ -1017,7 +1004,9 @@ $allGood</div>
         HealthAudit.Kind.NO_RENDERER ->
             """<div class="setup">ℹ <b>No dashboard app detected</b> — install the HA Companion app, """ +
                 """<a href="https://www.fully-kiosk.com/" target="_blank" rel="noopener">Fully Kiosk</a>, or set a """ +
-                """dashboard package on <a href="/configure">Configure</a>.</div>"""
+                """dashboard package on <a href="/configure">Configure</a>.""" +
+                (if (canInstallCompanion) """<div style="margin-top:10px"><button class="pbtn" onclick="installComp('companion','update',this)">⬇ Install HA Companion</button> <span class="muted">progress shows in Managed components below.</span></div>""" else "") +
+                """</div>"""
         HealthAudit.Kind.UPDATE -> "" // shown in the Managed-components card, not as a top warning
     }
 
@@ -1386,7 +1375,34 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
             hasRenderer = PanelInfo.dashboardRenderers(appContext, config.dashboardPackage).isNotEmpty(),
             updates = UpdateChecker.visible(config.ignoredUpdates),
         )
-        return findings.joinToString("") { bannerFor(it) } + setup
+        // Order: actively-broken states (crash-loop / blank internal_url) first, then render findings
+        // (WebView / renderer / updates), then the needs-config setup notice. On the dashboard the ad-hoc
+        // warnings link to the Install tab for the fix (their one-tap buttons live there, with install.js).
+        return adHocWarnings(inlineRepair = false) + findings.joinToString("") { bannerFor(it) } + setup
+    }
+
+    /** Render-blocking warnings not modelled by HealthAudit: a crash-looping dashboard app, and a Companion
+     *  server row with a blank internal_url (HA 2026.7 "Missing 'Host' header"). Shown on BOTH the dashboard
+     *  banner and the Install tab as high-severity (`crit`). [inlineRepair] adds the one-tap repair button
+     *  (Install tab, where install.js is loaded); the dashboard links to the Install tab for the action. */
+    private fun adHocWarnings(inlineRepair: Boolean): String = buildString {
+        if (io.github.maxlyth.hapaneld.PanelStatus.dashboardCrashLooping) append(
+            """<div class="setup crit">⛔ <b>Dashboard app is crash-looping</b> — the watchdog stopped relaunching it """ +
+                """to avoid a restart storm. This usually means an incompatible dashboard-app update; reinstall or """ +
+                """downgrade the dashboard/Companion app (see <a href="/install">updates</a>), or reboot the panel.</div>""",
+        )
+        companionUrlCache.get().let { u ->
+            if (u.needsRepair) {
+                val action = if (inlineRepair)
+                    """<div style="margin-top:10px"><button class="pbtn" onclick="repairCompUrl(this)">⚙ Repair internal URL</button> <span id="cu-fix" class="muted"></span></div>"""
+                else """ <a href="/install">Repair on the Install tab →</a>"""
+                append(
+                    """<div class="setup crit">⚠ <b>Home Assistant Companion has no internal URL</b> """ +
+                        """(${u.affected} server${if (u.affected == 1) "" else "s"}) — the dashboard can fail to load """ +
+                        """with <i>"Missing 'Host' header"</i>. Repair sets the internal URL to the external URL.$action</div>""",
+                )
+            }
+        }
     }
 
     /** One dashboard banner for a health finding. Update findings link to the Install tab (where the user
@@ -1394,7 +1410,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
      *  hidden until a newer release ships (see Config.ignoreUpdate / UpdateChecker.visible). */
     private fun bannerFor(f: HealthAudit.Finding): String = when (f.kind) {
         HealthAudit.Kind.WEBVIEW_OLD ->
-            """<div class="setup">⚠ <b>System WebView is too old</b> (${esc(f.detail)}) — the Home Assistant """ +
+            """<div class="setup crit">⚠ <b>System WebView is too old</b> (${esc(f.detail)}) — the Home Assistant """ +
                 """dashboard may render blank or broken. <a href="$WEBVIEW_DOC" target="_blank" rel="noopener">""" +
                 """How &amp; why to update</a> (target: Chromium ${PanelHealth.MIN_CHROMIUM}+). """ +
                 """<small>Checked against the real engine version (from the WebView UA), not just the """ +
@@ -1407,7 +1423,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
                 """<small>(ha-paneld itself runs fine without one.)</small> <a href="/install">Install tab →</a></div>"""
         HealthAudit.Kind.UPDATE -> {
             val u = f.update!!
-            """<div class="setup" data-update="${esc(u.label)}" data-version="${esc(u.latestVersion)}">""" +
+            """<div class="setup info" data-update="${esc(u.label)}" data-version="${esc(u.latestVersion)}">""" +
                 """⬆ <b>${esc(u.label)}</b> ${esc(u.latestVersion)} is available (installed: ${esc(u.currentVersion)}) — """ +
                 """<a href="/install">manage on the Install tab</a> """ +
                 """<button class="pbtn" onclick="ignoreUpdate(this)">Ignore this version</button></div>"""
