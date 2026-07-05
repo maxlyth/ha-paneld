@@ -32,9 +32,10 @@ direction, ordered roughly by priority within each tier.
   the vendor tools' scheduled screen-on / reboot.
 - **HTTP UI redesign — continued iteration** — the first cut shipped in 0.8.5 (a tabbed multi-page
   app: Dashboard · Configure · Test · Install · Fleet · API, with a schema-driven Configure tab and
-  per-setting Home Assistant exposure). The layout, grouping and navigation are **still settling** and
-  will keep changing over the next releases: curating the reduced "Basic" settings view, refining which
-  values sit on which dashboard cards, and the customisable layout below.
+  per-setting Home Assistant exposure); 0.8.6 turned the Install tab into a full software-management
+  hub and added a panel switcher to the header. The layout, grouping and navigation are **still
+  settling** and will keep changing over the next releases: curating the reduced "Basic" settings view,
+  refining which values sit on which dashboard cards, and the customisable layout below.
 - **Customisable info-page layout** — drag-and-drop card re-ordering plus a per-card collapse
   (disclosure triangle) so users can hide cards they don't care about, with the card order + collapsed
   state **persisted per panel**. (Card title bars were demarcated as the groundwork for this.)
