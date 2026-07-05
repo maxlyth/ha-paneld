@@ -76,16 +76,28 @@ class MainActivity : AppCompatActivity() {
     }
 
     // After an app update the launcher lands on this UI; if the panel is configured (MQTT connected)
-    // and the Companion is installed, bounce back to the dashboard so it doesn't linger. One-shot per
-    // launch, cancelled by any touch (so someone who opened it on purpose isn't yanked away). Gated on
-    // a recent app update, so a deliberate open long afterwards just stays put.
+    // and the Companion is installed, bounce back to the dashboard so it doesn't linger. Cancelled by any
+    // touch (so someone who opened it on purpose isn't yanked away). Gated on a recent app update, so a
+    // deliberate open long afterwards just stays put.
+    //
+    // POLL rather than check once: after a restart (worst case a whole-fleet restart flooding the broker)
+    // MQTT can take well over 8s to reconnect. The old one-shot at 8s silently skipped the redirect and
+    // never retried, leaving the panel stranded on this UI. Now we re-check every [AUTO_RETURN_POLL_MS]
+    // until connected or the [AUTO_RETURN_WINDOW_MS] window elapses, redirecting as soon as it's up.
     private fun maybeArmAutoReturn() {
         if (!config.autoReturnDashboard || companionPackage() == null) return
         val updated = runCatching { packageManager.getPackageInfo(packageName, 0).lastUpdateTime }.getOrDefault(0L)
         if (System.currentTimeMillis() - updated > 5 * 60 * 1000L) return // not a post-update launch
-        val r = Runnable { if (PanelStatus.mqttConnected) openDashboard() }
+        val deadline = System.currentTimeMillis() + AUTO_RETURN_WINDOW_MS
+        val r = object : Runnable {
+            override fun run() {
+                if (PanelStatus.mqttConnected) { autoReturn = null; openDashboard(); return }
+                if (System.currentTimeMillis() >= deadline) { autoReturn = null; return } // give up (unconfigured)
+                handler.postDelayed(this, AUTO_RETURN_POLL_MS)
+            }
+        }
         autoReturn = r
-        handler.postDelayed(r, 8_000)
+        handler.postDelayed(r, AUTO_RETURN_FIRST_MS) // let a genuine touch cancel + give MQTT a head start
     }
 
     private fun cancelAutoReturn() {
@@ -244,5 +256,11 @@ class MainActivity : AppCompatActivity() {
                 startActivity(it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); return
             }
         }
+    }
+
+    private companion object {
+        const val AUTO_RETURN_FIRST_MS = 8_000L   // initial delay before the first redirect attempt
+        const val AUTO_RETURN_POLL_MS = 2_000L    // re-check cadence while waiting for MQTT to reconnect
+        const val AUTO_RETURN_WINDOW_MS = 90_000L // give up after this (genuinely unconfigured panel)
     }
 }
