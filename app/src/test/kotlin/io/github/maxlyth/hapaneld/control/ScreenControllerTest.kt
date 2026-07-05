@@ -14,6 +14,7 @@ class ScreenControllerTest {
 
     private val backlight = FakeBacklight()
     private val power = FakeScreenPower()
+    private val wakeTap = FakeWakeTap()  // canArm=true by default: overlay available, so real screen-off runs
 
     private fun controller(
         blPower: String? = null,          // bl_power read result: "4"=off, "0"=on, null=unreadable
@@ -21,7 +22,7 @@ class ScreenControllerTest {
         daemon: Map<String, String> = emptyMap(),
     ): Pair<ScreenController, FakeRootShell> {
         val root = FakeRootShell(outputs = blPower?.let { mapOf("bl_power" to it) } ?: emptyMap(), runResult = suRuns)
-        return ScreenController(backlight, power, root, FakeDaemon(daemon)) to root
+        return ScreenController(backlight, power, root, FakeDaemon(daemon), wakeTap) to root
     }
 
     // --- looksDark polarity ---
@@ -77,5 +78,38 @@ class ScreenControllerTest {
         sc.wake()
         assertTrue("expected a brightness set, got ${backlight.calls}", backlight.calls.any { it.startsWith("set:") })
         assertEquals(1, power.pulses)
+    }
+
+    // --- touch-to-wake: a real screen-off arms the tap; wake disarms it ---
+    @Test fun sleepArmsWakeTapAndWakeDisarmsIt() {
+        val (sc, _) = controller(daemon = mapOf("SCREEN OFF" to "OK", "SCREEN ON" to "OK"))
+        sc.sleep()
+        assertTrue("screen-off must arm touch-to-wake", wakeTap.armed)
+        sc.wake()
+        assertFalse("wake must disarm touch-to-wake", wakeTap.armed)
+    }
+
+    @Test fun tapWhileDarkWakesAndNotifies() {
+        val (sc, _) = controller(daemon = mapOf("SCREEN OFF" to "OK", "SCREEN ON" to "OK"))
+        var notified = false
+        sc.onWakeByTap = { notified = true }
+        sc.sleep()
+        assertTrue(sc.isIntendedOff())
+        wakeTap.fireTap()                     // simulate a touch on the dark screen
+        assertFalse("tap must wake (clear intendedOff)", sc.isIntendedOff())
+        assertFalse("tap must disarm the tap", wakeTap.armed)
+        assertTrue("tap must notify so HA tracks screen=ON", notified)
+    }
+
+    // --- guaranteed-wake degradation: no overlay -> dim instead of a true (unwakeable) off ---
+    @Test fun sleepDimsInsteadOfDarkWhenNoWakeGuarantee() {
+        wakeTap.canArm = false
+        val (sc, root) = controller(daemon = mapOf("SCREEN OFF" to "OK"))
+        sc.sleep()
+        assertTrue("must dim to a visible floor, got ${backlight.calls}", backlight.calls.any { it.startsWith("set:") })
+        assertFalse("must NOT raw-dim to 0 (that's blank)", backlight.calls.contains("raw:0"))
+        assertTrue("must NOT power the backlight off via daemon/su", root.ran.isEmpty())
+        assertFalse("must not arm a tap it can't arm", wakeTap.armed)
+        assertTrue("still an intended off", sc.isIntendedOff())
     }
 }

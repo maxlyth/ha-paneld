@@ -25,6 +25,7 @@ import io.github.maxlyth.hapaneld.control.NavbarController
 import io.github.maxlyth.hapaneld.control.PowerController
 import io.github.maxlyth.hapaneld.control.NavigateController
 import io.github.maxlyth.hapaneld.control.RelayController
+import io.github.maxlyth.hapaneld.control.OverlayWakeTap
 import io.github.maxlyth.hapaneld.control.ScreenController
 import io.github.maxlyth.hapaneld.control.SystemController
 import io.github.maxlyth.hapaneld.control.TameController
@@ -136,7 +137,9 @@ class PaneldService : Service() {
         brightness = BrightnessController(this)
         brightness.applyPreventIdleDim(config.preventIdleDim, config)
         autoBright = AutoBrightnessController(brightness, config)
-        screen = ScreenController(brightness, AndroidScreenPower(this))
+        screen = ScreenController(brightness, AndroidScreenPower(this), wakeTap = OverlayWakeTap(this))
+        // After a LOCAL touch-wake, tell HA the screen is on so `light.<panel>_screen` tracks reality.
+        screen.onWakeByTap = { runCatching { mqtt.publishScreenOn() } }
         led = LedFactory.detect(profile)
         navigate = NavigateController(this)
         volume = VolumeController(this)
