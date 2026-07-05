@@ -8,6 +8,27 @@ From **v0.8.0**, entries are grouped under **Added** (new features/entities), **
 changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
 content appear. Earlier releases predate this convention and keep their flat lists.
 
+## v0.8.6-rc6 - 2026-07-05
+
+### Added
+
+- **Panel switcher in the `:8888` header** — when more than one ha-paneld panel is on your network, the panel's name in the header becomes a dropdown of the others; picking one jumps your browser to the **same view on that panel** (e.g. `/configure` on panel A → `/configure` on panel B), so you can hop between local panels without remembering IP addresses. A single-panel network just shows the name as plain text.
+- **Experimental kiosk lock** — an opt-in, per-panel setting (marked experimental) that keeps non-admin users on the dashboard by suppressing the Android navigation bar and returning to the dashboard if they navigate away. Aimed at generic Android panels with a working system navbar (the vendor panels are already covered by taming); on-panel unlock is a 7-tap top-left corner, and it's designed so it can't strand a panel or lock an admin out.
+- **Dashboard & Launcher app pickers on the Configure tab** — the *Dashboard app* and *Launcher app* settings are now dropdown menus of the apps installed on the panel, instead of free-text package-name fields (a blank entry still means auto-detect).
+
+### Changed
+
+- **The header now shows the panel's friendly name** instead of its `panel_id`, on both the dashboard and the tabbed UI shell.
+- **Panel-health warnings are more prominent**, and a failed HA Companion login now offers a **one-tap self-heal** from the warning.
+- **Removed the redundant "Tame vendor packages" field** from the Configure tab — the Vendor packages card already covers it.
+
+### Fixed
+
+- **Touch-to-wake — a screen-off can never strand the panel dark.** Touching a dark screen always wakes it, even before proximity calibration, so no screen-off path can leave the panel unresponsive.
+- **"Open in Home Assistant" self-heals when HA's device id changes.** If a panel's HA device is deleted and recreated (new device id, same panel), the info-page link re-resolves instead of pointing forever at the deleted device (which showed *"Device / service not found"*).
+- **Saving on the Configure tab settles on a clear "Saved."** instead of hanging on a "reconnecting MQTT…" message that never cleared.
+- **Auto-return to the dashboard after a relaunch now waits for the MQTT reconnect** (polling for up to 90s) instead of a single 8-second check, so a slow reconnect after a restart no longer leaves the panel sitting on the ha-paneld UI.
+
 ## v0.8.6-rc5 - 2026-07-03
 
 ### Changed

@@ -21,8 +21,8 @@ android {
         targetSdk = 35
         // versionCode bumps on EVERY internal build (it drives upgrades + the /health build token);
         // the -rcN suffix in versionName increments ONLY when an rc is published to GitHub.
-        versionCode = 116
-        versionName = "0.8.6-rc5"
+        versionCode = 117
+        versionName = "0.8.6-rc6"
 
         // Only the fleet's ARM ABIs — bounds the native LED lib (libhapaneld_led.so) + APK size.
         ndk {
