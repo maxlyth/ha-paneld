@@ -4,7 +4,7 @@
 (function () {
   "use strict";
   // Advanced is the DEFAULT view until the reduced Basic set is settled (user, 2026-07-01).
-  var schema = [], values = {}, expose = {}, advanced = true, dirty = false;
+  var schema = [], values = {}, expose = {}, advanced = true, dirty = false, apps = [];
 
   function el(tag, attrs, kids) {
     var e = document.createElement(tag);
@@ -38,6 +38,27 @@
       });
       s.addEventListener("change", function () { values[f.key] = s.value; setDirty(); });
       return s;
+    }
+    // Package picker: a dropdown of installed apps. Blank = "Auto-detect"; a currently-set package that
+    // isn't in the list (e.g. since-uninstalled or a manual entry) is kept as its own option.
+    if (f.picker === "package") {
+      var cur = v == null ? "" : v;
+      var sel = el("select", { class: "pkgsel" });
+      var autoLabel = f.placeholder || "Auto-detect";
+      sel.appendChild(el("option", { value: "", text: autoLabel }));
+      var seen = {};
+      apps.forEach(function (a) {
+        seen[a.pkg] = true;
+        var op = el("option", { value: a.pkg, text: a.label + " · " + a.pkg });
+        if (a.pkg === cur) op.selected = true;
+        sel.appendChild(op);
+      });
+      if (cur && !seen[cur]) {
+        var o2 = el("option", { value: cur, text: cur + " · (not installed)" });
+        o2.selected = true; sel.appendChild(o2);
+      }
+      sel.addEventListener("change", function () { values[f.key] = sel.value; setDirty(); });
+      return sel;
     }
     var type = f.type === "PASSWORD" ? "password" : (f.type === "INT" || f.type === "FLOAT") ? "number" : "text";
     var inp = el("input", { type: type, value: f.secret ? "" : (v == null ? "" : v) });
@@ -147,10 +168,13 @@
     Promise.all([
       fetch("/api/v1/config/schema").then(function (r) { return r.json(); }),
       fetch("/api/v1/config").then(function (r) { return r.json(); }),
+      // Installed launchable apps for the package pickers; tolerate failure (picker falls back to text).
+      fetch("/api/v1/apps").then(function (r) { return r.json(); }).catch(function () { return { apps: [] }; }),
     ]).then(function (res) {
       schema = res[0];
       values = res[1].settings || {};
       expose = res[1].ha_expose || {};
+      apps = (res[2] && res[2].apps) || [];
       // Normalize bool values to the "true"/"false" strings the toggle compares against.
       schema.forEach(function (f) {
         if (f.type === "BOOL" && typeof values[f.key] === "boolean") values[f.key] = values[f.key] ? "true" : "false";

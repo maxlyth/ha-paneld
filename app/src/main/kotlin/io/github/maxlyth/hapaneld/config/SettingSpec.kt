@@ -126,6 +126,7 @@ data class SettingSpec(
     val max: Double? = null,
     val step: Double? = null,
     val options: List<String> = emptyList(), // ENUM choices
+    val picker: String? = null,              // dynamic picker for a STRING field ("package" → installed-apps dropdown)
     val ha: HaEntity? = null,                // discovery descriptor, or null if never an HA entity
     // Per-panel default for the expose-to-HA pip. Defaults to FALSE: a setting is local-only (HTTP UI)
     // unless it explicitly opts in with haExposedByDefault=true in SettingsRegistry. Consulted by the

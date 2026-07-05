@@ -250,19 +250,16 @@ object SettingsRegistry {
         ),
         SettingSpec(
             key = "dashboard_package", type = SettingType.STRING, group = "System",
-            label = "Dashboard app", default = "",
-            help = "Package whose force-stop+relaunch is the dashboard \"reload\" (blank = auto-detect).",
+            label = "Dashboard app", default = "", picker = "package",
+            help = "App whose force-stop+relaunch is the dashboard \"reload\" (blank = auto-detect).",
         ),
         SettingSpec(
             key = "launcher_package", type = SettingType.STRING, group = "System",
-            label = "Launcher app", default = "",
-            help = "Package the Launcher button brings forward (blank = auto-pick).",
+            label = "Launcher app", default = "", picker = "package",
+            help = "App the Launcher button brings forward (blank = auto-pick).",
         ),
-        SettingSpec(
-            key = "tame_vendor_packages", type = SettingType.STRING, group = "System",
-            label = "Tame vendor packages", default = "",
-            help = "Space/comma-separated packages to force-stop + disable on boot (opt-in).",
-        ),
+        // Vendor taming is managed by the "Vendor packages" card (add/re-enable per app), so no free-text
+        // field here — the card is the single source. `config.tameVendorPackages` + POST /tame still drive it.
         SettingSpec(
             key = "instrumentation", type = SettingType.BOOL, group = "System",
             label = "Performance sampler", default = "true",

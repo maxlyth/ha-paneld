@@ -463,6 +463,9 @@ class PaneldServer(
                     // Removable apps (third-party + updated-system; excludes ha-paneld + stock system apps,
                     // which pm can't uninstall anyway) for the Uninstall card's picker.
                     get("/packages") { call.respondText(withContext(Dispatchers.IO) { packagesJson() }, ContentType.Application.Json) }
+                    // Launchable apps (incl. system launchers/renderers) — populates the Configure tab's
+                    // Dashboard-app / Launcher-app pickers.
+                    get("/apps") { call.respondText(withContext(Dispatchers.IO) { launchableAppsJson() }, ContentType.Application.Json) }
                     // Uninstall a package over root. Guarded: never ha-paneld itself; the picker only offers
                     // removable apps. `pm uninstall` (system/vendor apps aren't removable, only disable-able
                     // via taming — a separate, safer path).
@@ -1117,6 +1120,24 @@ $body</div>"""
     /** Removable apps (third-party or updated-system) for the Uninstall picker, sorted by label. Stock
      *  system apps + ha-paneld are excluded — pm can't uninstall stock system apps (only disable), and
      *  self-uninstall would kill the tool. */
+    /** All apps with a launcher entry (incl. system launchers/renderers), {pkg,label} sorted by label —
+     *  the source for the Configure tab's Dashboard-app / Launcher-app pickers. */
+    private fun launchableAppsJson(): String {
+        val pm = appContext.packageManager
+        val intent = android.content.Intent(android.content.Intent.ACTION_MAIN)
+            .addCategory(android.content.Intent.CATEGORY_LAUNCHER)
+        val apps = runCatching {
+            pm.queryIntentActivities(intent, 0)
+                .mapNotNull { it.activityInfo?.applicationInfo }
+                .filter { it.packageName != appContext.packageName }
+                .associate { it.packageName to runCatching { pm.getApplicationLabel(it).toString() }.getOrDefault(it.packageName) }
+                .toList()
+                .sortedBy { it.second.lowercase(java.util.Locale.ROOT) }
+        }.getOrDefault(emptyList())
+        val arr = apps.joinToString(",") { (pkg, label) -> "{\"pkg\":${jsonStr(pkg)},\"label\":${jsonStr(label)}}" }
+        return "{\"apps\":[$arr]}"
+    }
+
     private fun packagesJson(): String {
         val pm = appContext.packageManager
         // Exclude ha-paneld itself and the System WebView provider — uninstalling the WebView reverts it to
@@ -1933,6 +1954,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
                 "\"readOnly\":${spec.readOnly}," +
                 "\"available\":${spec.availableWhen(caps)}," +
                 "\"options\":[$opts]," +
+                "\"picker\":${spec.picker?.let { s(it) } ?: "null"}," +
                 "\"min\":${spec.min?.toString() ?: "null"}," +
                 "\"max\":${spec.max?.toString() ?: "null"}," +
                 "\"step\":${spec.step?.toString() ?: "null"}," +
