@@ -8,6 +8,19 @@ From **v0.8.0**, entries are grouped under **Added** (new features/entities), **
 changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
 content appear. Earlier releases predate this convention and keep their flat lists.
 
+## v0.8.7-rc2 - 2026-07-06
+
+### Added
+
+- **Room temperature & humidity on the Tuya TPA10** — the onboard CHT8305 chip is exposed as opt-in Room temperature / Room humidity sensors in Home Assistant (proper temperature/humidity device classes, off by default), with a per-panel calibration offset to correct for panel self-heating.
+
+### Changed
+
+- **Responsive `:8888` header** — a sticky top bar that never scrolls away; on a narrow/single-column panel the tab bar collapses to a hamburger menu and header items progressively hide instead of wrapping, so the header never overflows. The GitHub link stays reachable on every tab and in the footer.
+- **Config & controls polish** — the "expose to Home Assistant" control is now a link / broken-link icon toggle, checkbox rows lay out correctly, and the Controls action buttons collapse to icons when the row would otherwise wrap.
+- **"Open in Home Assistant" is more reliable** — it falls back to the URL the HA Companion already uses when the panel's own HA device-page URL can't resolve (e.g. a remote panel over a tunnel), so the button appears on every tab whenever a Companion is configured.
+- **Removed the low-value instrumentation master switch** — the performance sampler and sensor trace are always on (still page-view gated, which is the real cost control).
+
 ## v0.8.7-rc1 - 2026-07-06
 
 ### Changed
