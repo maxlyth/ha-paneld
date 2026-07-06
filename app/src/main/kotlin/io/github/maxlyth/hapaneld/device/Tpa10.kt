@@ -21,6 +21,11 @@ object Tpa10 : DeviceProfile {
     override val proximityTech: String? = "Time-of-Flight"
     override val proximityNearBelow: Boolean? = true   // ToF: a nearer object reads a *smaller* distance
     override val lightTech: String? = "Ambient light"
+    // CHT8305 room temp/humidity on i2c bus 3 @0x40, reported via the input subsystem (root-owned nodes)
+    // — read through the helper daemon's CHT8305 verb. See docs/hardware/tpa10.md.
+    override val hasCht8305 = true
+    // roomTempOffsetC stays 0 until self-heating is characterised over time; the user can trim live via
+    // the room_temp_offset config key. (One spot reading — ~+1.9 °C vs room — is not yet a calibration.)
     override val manufacturer = "Tuya"
     override val model = "TPA10"
     // Curated tame suggestions (live-enumerated). "vendor" = the Tuya/Xinch "SmartOS" app suite; "chipset"

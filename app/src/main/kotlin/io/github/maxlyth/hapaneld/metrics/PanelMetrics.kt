@@ -77,6 +77,8 @@ class PanelMetrics(
     private val lock = Any()
     private var prevStat: List<LongArray>? = null   // the ONE shared /proc/stat delta baseline
     private var cached: Snapshot? = null
+    private var roomCachedAt: Long? = null           // value-freshness cache for the off-tick room read (null = never read)
+    private var roomCached: RoomClimate? = null
 
     // Per-metric source resolvers, cheap-first (DIRECT before DAEMON). A DAEMON strategy pulls from the
     // tick's memoized PERFDUMP, so several daemon-resolved metrics still cost one round-trip.
@@ -119,6 +121,19 @@ class PanelMetrics(
 
     /** Raw cpu0 available governors (space-separated). */
     fun cpuAvailableGovernors(): String? = source.cpuAvailableGovernors()
+
+    /**
+     * Room air temperature + humidity (CHT8305), or null on panels without the chip. Daemon-only + read
+     * off-tick on the heartbeat (not the 2 s perf tick), so it's a plain passthrough — not a [Resolvable] —
+     * but it keeps its own [freshMs] value cache so the two heartbeat consumers (the temp sensor and the
+     * humidity sensor) coalesce onto one `CHT8305` round-trip instead of reading twice.
+     */
+    fun roomClimate(now: Long = clock()): RoomClimate? = synchronized(lock) {
+        roomCachedAt?.let { if (now - it < freshMs) return roomCached }
+        roomCached = MetricParse.parseCht8305(source.roomClimate())
+        roomCachedAt = now
+        roomCached
+    }
 
     private fun readCoherent(now: Long): Snapshot {
         val ctx = TickCtx(source)

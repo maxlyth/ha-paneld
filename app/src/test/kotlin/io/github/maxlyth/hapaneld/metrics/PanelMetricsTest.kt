@@ -28,9 +28,11 @@ class PanelMetricsTest {
         var ip: String? = null
         var selinux: String? = null
         var dump: String? = null
+        var room: String? = null
 
         var statCalls = 0
         var dumpCalls = 0
+        var roomCalls = 0
 
         override fun perfDump(): String? { dumpCalls++; return dump }
         override fun statText(): String? { statCalls++; return stat }
@@ -44,6 +46,7 @@ class PanelMetricsTest {
         override fun selinuxEnforce(): String? = selinux
         override fun cpuGovernor(): String? = null
         override fun cpuAvailableGovernors(): String? = null
+        override fun roomClimate(): String? { roomCalls++; return room }
     }
 
     private var now = 0L
@@ -59,6 +62,26 @@ class PanelMetricsTest {
     // A fully-healthy rooted panel: every direct read succeeds, so nothing ever touches the daemon.
     private fun healthyDirect() = FakeSource().apply {
         stat = statStr(0, 100); loadavg = "0.5 0.4 0.3"; thermal = listOf(42000L); gpu = "45@800000000Hz"
+    }
+
+    @Test fun roomClimateParsesAndCoalescesWithinTheFreshnessWindow() {
+        val src = FakeSource().apply { room = "T=2820 H=3400" }
+        val r = reader(src, freshMs = 1500L)
+        val a = r.roomClimate(now)!!
+        assertEquals(28.20, a.tempC, 0.0001)
+        assertEquals(34.0, a.humidityPct, 0.0001)
+        // A second read within freshMs (the temp + humidity sensors on one heartbeat) reuses the value —
+        // one daemon round-trip, not two.
+        r.roomClimate(now + 100)
+        assertEquals("temp+humidity coalesce onto one CHT8305 read", 1, src.roomCalls)
+        // Past the window, it reads again.
+        r.roomClimate(now + 2000)
+        assertEquals(2, src.roomCalls)
+    }
+
+    @Test fun roomClimateIsNullWhenTheDaemonHasNoChip() {
+        val src = FakeSource().apply { room = null }   // daemon replies ERR → source returns null
+        assertNull(reader(src).roomClimate(now))
     }
 
     @Test fun resolvesDirectOnceAndDoesNotReprobeOnSuccessfulReads() {

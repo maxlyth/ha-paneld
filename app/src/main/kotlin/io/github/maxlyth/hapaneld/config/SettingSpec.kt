@@ -50,6 +50,7 @@ data class Capabilities(
     val hasLight: Boolean = false,
     val hasTemperature: Boolean = false,
     val hasHumidity: Boolean = false,
+    val hasCht8305: Boolean = false,
     val hasButtonBacklight: Boolean = false,
     val buttonsEnabled: Boolean = false,
     val hasEvdevButtons: Boolean = false,

@@ -78,6 +78,7 @@ class FakeMetricSource(
     override fun selinuxEnforce(): String? = null
     override fun cpuGovernor(): String? = governor
     override fun cpuAvailableGovernors(): String? = availableGovernors
+    override fun roomClimate(): String? = null
 }
 
 /** Fake [Daemon]. [replies] maps an exact command line to its reply; sends are recorded in [sent]. */

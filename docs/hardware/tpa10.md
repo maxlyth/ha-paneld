@@ -186,8 +186,12 @@ Proximity is app-direct via `SensorManager`; temperature, humidity and ambient l
 (input subsystem / i2c) and need the helper daemon.
 
 > [!TIP]
-> The CHT8305 makes this panel a viable **room temperature/humidity sensor** for Home Assistant —
-> read it via the root helper daemon and publish over MQTT. Not yet implemented.
+> The CHT8305 makes this panel a viable **room temperature/humidity sensor** for Home Assistant. The
+> helper daemon reads it (the `CHT8305` verb — it point-reads the driver's `ABS_THROTTLE` input axis via
+> `EVIOCGABS`, matching the `temperature`/`humidity` input devices by name), and ha-paneld exposes two
+> opt-in **Room temperature** / **Room humidity** sensors over MQTT (Configure → Diagnostics; off by
+> default). An Advanced **Room temperature offset** setting (or the profile's `roomTempOffsetC`) corrects
+> for panel self-heating.
 
 The TPA10 ToF means proximity is genuinely distance-based, but the Android HAL quantises it; ha-paneld
 calibrates the reported value (near/far capture) rather than trusting a fixed cutoff.

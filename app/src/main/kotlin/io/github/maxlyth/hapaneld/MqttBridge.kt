@@ -81,6 +81,8 @@ class MqttBridge(
     private val hasProximity: Boolean,
     private val hasTemperature: Boolean,
     private val hasHumidity: Boolean,
+    // Panel carries a CHT8305 room temp/humidity chip (daemon-read) — gates the opt-in Room sensors.
+    private val hasCht8305: Boolean,
     private val hasButtonBacklight: Boolean,
     // Back/Recents route (root keyevent vs accessibility) + whether the firmware has an overview screen.
     private val appCanSu: Boolean,
@@ -1109,6 +1111,12 @@ class MqttBridge(
             exposable(key, "sensor", "${panel}_$key", { reg(key) }) { publishDiag(key) }
         }
 
+        // Room climate (CHT8305 panels only, e.g. TPA10) — real environmental sensors, opt-in like the
+        // diagnostics. Same publish machinery (deadbanded heartbeat refresh via syncDiagnostics).
+        if (hasCht8305) for (key in ROOM_KEYS) {
+            exposable(key, "sensor", "${panel}_$key", { reg(key) }) { publishDiag(key) }
+        }
+
         // Panel actions (root via su; graceful no-op without it).
         publishConfig(
             "button", "${panel}_reload",
@@ -1161,6 +1169,7 @@ class MqttBridge(
         "number" to "${panel}_volume", "sensor" to "${panel}_illuminance",
         "binary_sensor" to "${panel}_proximity",
         "sensor" to "${panel}_temperature", "sensor" to "${panel}_humidity",
+        "sensor" to "${panel}_room_temp", "sensor" to "${panel}_room_humidity",
         "light" to "${panel}_buttons", "switch" to "${panel}_wake_on_wave",
         "switch" to "${panel}_touch_sound", "switch" to "${panel}_watchdog", "switch" to "${panel}_kiosk_lock",
         "switch" to "${panel}_silence_boot_chime", "switch" to "${panel}_prevent_idle_dim",
@@ -1304,6 +1313,9 @@ class MqttBridge(
         "diag_memory" -> Diagnostics.memoryPercent()?.toString()
         "diag_soc_temp" -> Diagnostics.socTempC()?.let { String.format(java.util.Locale.US, "%.1f", it) }
         "diag_boot" -> Diagnostics.bootTime()
+        // Room climate — apply the calibration offset to temperature; humidity is reported whole-percent.
+        "room_temp" -> Diagnostics.roomTempC()?.let { String.format(java.util.Locale.US, "%.1f", it + config.roomTempOffsetC) }
+        "room_humidity" -> Diagnostics.roomHumidity()?.let { String.format(java.util.Locale.US, "%.0f", it) }
         else -> null
     }
 
@@ -1317,8 +1329,12 @@ class MqttBridge(
     /** Per-tick refresh of the numeric/IP diagnostic sensors, gated on expose + a per-metric deadband
      *  so steady state costs zero messages. Boot time (constant) is published only at expose. */
     private fun syncDiagnostics() {
-        val deadband = mapOf("diag_cpu" to 5.0, "diag_memory" to 3.0, "diag_soc_temp" to 0.5)
-        for (key in DIAG_KEYS) {
+        val deadband = mapOf(
+            "diag_cpu" to 5.0, "diag_memory" to 3.0, "diag_soc_temp" to 0.5,
+            "room_temp" to 0.2, "room_humidity" to 1.0,
+        )
+        val keys = if (hasCht8305) DIAG_KEYS + ROOM_KEYS else DIAG_KEYS
+        for (key in keys) {
             if (key == "diag_boot") continue
             if (!config.haExposed(key, false)) continue
             val raw = diagValue(key) ?: continue
@@ -1393,6 +1409,8 @@ class MqttBridge(
         private const val SETTLE_BAND = 6    // "still moving" if the value shifted more than this since last tick
         // Diagnostic sensors published via the opt-in exposable() gate (all default local-only).
         private val DIAG_KEYS = listOf("diag_ip", "diag_cpu", "diag_memory", "diag_soc_temp", "diag_boot")
+        // Room climate sensors — same opt-in machinery, but only on panels with a CHT8305 (see hasCht8305).
+        private val ROOM_KEYS = listOf("room_temp", "room_humidity")
         // How long to wait after a reload before deep-linking to the intended dashboard — lets the WebView
         // cold-start + the HA frontend load so the navigate deeplink isn't swallowed.
         private const val RELOAD_NAV_DELAY_MS = 8_000L

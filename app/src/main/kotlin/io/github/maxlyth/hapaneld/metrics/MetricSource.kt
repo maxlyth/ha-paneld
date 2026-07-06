@@ -39,6 +39,10 @@ interface MetricSource {
     // Control read-backs routed through the reader (direct→su fallback; no daemon read verb exists).
     fun cpuGovernor(): String?
     fun cpuAvailableGovernors(): String?
+
+    /** Raw `CHT8305` daemon reply ("T=<centi> H=<centi>") for panels with the room temp/humidity chip, or
+     *  null. Daemon-only: the driver's input nodes are root-owned, so there is no direct/su path. */
+    fun roomClimate(): String?
 }
 
 /**
@@ -95,6 +99,10 @@ class OsMetricSource(
 
     /** cpu0 available governors (raw, space-separated). Same direct→su read path as [cpuGovernor]. */
     override fun cpuAvailableGovernors(): String? = directThenSu(AVAIL)
+
+    /** CHT8305 room temp/humidity — the driver's `/dev/input` nodes are root-owned (system:system), so
+     *  this is daemon-only; a panel without the chip / daemon returns null (the daemon replies "ERR"). */
+    override fun roomClimate(): String? = daemon.send("CHT8305")?.takeIf { it.startsWith("T=") }
 
     /** Direct file read, falling back to `su cat` when the app can't read the node directly. */
     private fun directThenSu(path: String): String? =

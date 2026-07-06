@@ -105,6 +105,16 @@ interface DeviceProfile {
     /** Declared ambient-light-sensor technology (e.g. "Ambient light (ALS)"), or null if unknown. */
     val lightTech: String? get() = null
 
+    /** True on panels carrying a CHT8305 room temperature/humidity chip whose readings are only reachable
+     *  via the root helper daemon (its `/dev/input` nodes are root-owned) — e.g. the TPA10. Gates the opt-in
+     *  Room temperature/humidity HA sensors + their calibration offset. Null/false elsewhere. */
+    val hasCht8305: Boolean get() = false
+
+    /** Baseline calibration offset (°C) added to the CHT8305 room-temperature reading to correct for panel
+     *  self-heating. The maintainer sets a characterised value per profile once measured; the user can add a
+     *  further trim via the `room_temp_offset` config key (the two are additive). 0 = no baseline correction. */
+    val roomTempOffsetC: Float get() = 0f
+
     /** Authoritative proximity graded(true) / binary(false) decided from the firmware version, where the
      *  profile knows the rule (e.g. NSPanel Pro's kernel-driver cutover) — overrides runtime observation,
      *  so a graded sensor never momentarily reads "Binary" at idle. Null → fall back to observation.

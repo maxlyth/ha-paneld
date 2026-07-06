@@ -234,6 +234,7 @@ class PaneldService : Service() {
         accessibilityEnabled(), profile.evdevButtons.isNotEmpty(),
         sensors.hasLight(), sensors.hasProximity(),
         sensors.hasTemperature(), sensors.hasHumidity(),
+        profile.hasCht8305,
         // Button backlight lives on the sysfs/daemon LED panels (TPA10), reached via the daemon's BTN.
         led is SocketLedController,
         profile.appCanSu, profile.hasRecents,
@@ -378,6 +379,7 @@ class PaneldService : Service() {
         hasLight = sensors.hasLight(),
         hasTemperature = sensors.hasTemperature(),
         hasHumidity = sensors.hasHumidity(),
+        hasCht8305 = profile.hasCht8305,
         appCanSu = profile.appCanSu,
         hasRecents = profile.hasRecents,
         cpuGovernors = cpu.available(),

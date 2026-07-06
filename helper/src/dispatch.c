@@ -7,6 +7,7 @@
 #include "input.h"
 #include "sysctl.h"
 #include "perf.h"
+#include "cht8305.h"
 #include "util.h"
 
 static void cmd_ping(conn_ctx *ctx, const char *args) { (void)args; reply(ctx->fd, "OK\n"); }
@@ -38,6 +39,7 @@ static const struct { const char *verb; cmd_fn fn; } COMMANDS[] = {
     { "FONTSCALE", cmd_fontscale },
     { "GOV",       cmd_gov },
     { "PERFDUMP",      cmd_perfdump },
+    { "CHT8305",       cmd_cht8305 },
     { "PING",          cmd_ping },
 };
 

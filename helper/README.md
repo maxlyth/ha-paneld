@@ -47,6 +47,7 @@ connection.
 | `DENSITY` / `DENSITY <n>\|reset` | get display density / set it (`wm density`) | `PHYS=<n> OVER=<n\|->` (get) · `OK` / `ERR` (set) |
 | `GOV <name>` | set the CPU scaling governor on all cores | `OK` / `ERR` |
 | `PERFDUMP` | CPU/load/temp/gpu/process snapshot (for sandbox-walled apps) | marker-delimited stream, then EOF |
+| `CHT8305` | room temp/humidity from the CHT8305 input devices (`EVIOCGABS` on the `temperature`/`humidity` nodes) | `T=<centi> H=<centi>` / `ERR` |
 | `REBOOT` | reboot the panel | `OK` (then down) |
 | `PING` | liveness probe | `OK` |
 | anything else | — | `ERR` |
@@ -164,6 +165,7 @@ service keep their historical names — only the source is modular):
 | `led.c` / `screen.c` / `input.c` | LED (sysfs + ledjni), backlight power, evdev buttons |
 | `sysctl.c` | density / governor / reload / start / reboot / screencap (the shell-out verbs) |
 | `perf.c` | `PERFDUMP` `/proc` snapshot |
+| `cht8305.c` | `CHT8305` room temp/humidity read (input-subsystem `EVIOCGABS`, no exec) |
 | `util.c` | clamp, node IO, the argument validators |
 | `sysexec.c` | **the only file that execs / pipes / spawns / reboots** — every shell-out funnels here |
 

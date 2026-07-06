@@ -93,4 +93,26 @@ class MetricParseTest {
         assertEquals(-1L, d.tempMilli)
         assertNull(MetricParse.dumpTempC(d.tempMilli))
     }
+
+    @Test fun parseCht8305ScalesCentiUnitsToDegreesAndPercent() {
+        val r = MetricParse.parseCht8305("T=3006 H=3409")!!
+        assertEquals(30.06, r.tempC, 0.0001)
+        assertEquals(34.09, r.humidityPct, 0.0001)
+    }
+
+    @Test fun parseCht8305IsWhitespaceAndTrailingNewlineTolerant() {
+        val r = MetricParse.parseCht8305("  T=2500   H=5000\n")!!
+        assertEquals(25.0, r.tempC, 0.0001)
+        assertEquals(50.0, r.humidityPct, 0.0001)
+    }
+
+    @Test fun parseCht8305RejectsErrorMissingAndNonPositive() {
+        assertNull(MetricParse.parseCht8305(null))
+        assertNull(MetricParse.parseCht8305(""))
+        assertNull(MetricParse.parseCht8305("ERR"))
+        assertNull(MetricParse.parseCht8305("T=3006"))          // humidity missing
+        assertNull(MetricParse.parseCht8305("H=3409"))          // temperature missing
+        assertNull(MetricParse.parseCht8305("T=0 H=3409"))      // non-positive sentinel
+        assertNull(MetricParse.parseCht8305("T=xx H=3409"))     // unparseable
+    }
 }

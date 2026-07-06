@@ -44,4 +44,11 @@ object Diagnostics {
     /** Overall CPU busy percentage since the previous read (a ~tick-length average), or null on the first
      *  read / when unreadable. */
     fun cpuPercent(): Int? = PanelMetrics.shared.systemSnapshot().cpuOverall
+
+    /** Room air temperature in °C from the CHT8305 (daemon-only; panels with the chip), or null. RAW — the
+     *  calibration offset is applied by the publisher, not here. Coalesced with [roomHumidity] onto one read. */
+    fun roomTempC(): Double? = PanelMetrics.shared.roomClimate()?.tempC
+
+    /** Room relative humidity (%RH) from the CHT8305, or null. */
+    fun roomHumidity(): Double? = PanelMetrics.shared.roomClimate()?.humidityPct
 }

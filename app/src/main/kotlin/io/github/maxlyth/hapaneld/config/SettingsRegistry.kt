@@ -346,6 +346,41 @@ object SettingsRegistry {
                 readOnly = true,
             ),
         ),
+
+        // ---- Room climate (CHT8305 panels only, e.g. TPA10) --------------------------------------
+        // Real environmental sensors (NOT entity_category=diagnostic), opt-in like the diagnostics above.
+        // Read root-only via the helper daemon; only offered where the chip is present.
+        SettingSpec(
+            key = "room_temp", type = SettingType.FLOAT, group = "Diagnostics",
+            label = "Room temperature", default = "",
+            help = "Room air temperature from the panel's CHT8305 sensor (calibration offset applied).",
+            haExposedByDefault = false, availableWhen = { it.hasCht8305 },
+            ha = HaEntity(
+                "sensor", "room_temp", "Room temperature",
+                """"state_topic":"ha-paneld/{panel}/room_temp/state","device_class":"temperature","unit_of_measurement":"°C","state_class":"measurement"""",
+                readOnly = true,
+            ),
+        ),
+        SettingSpec(
+            key = "room_humidity", type = SettingType.INT, group = "Diagnostics",
+            label = "Room humidity", default = "",
+            help = "Relative humidity from the panel's CHT8305 sensor.",
+            haExposedByDefault = false, availableWhen = { it.hasCht8305 },
+            ha = HaEntity(
+                "sensor", "room_humidity", "Room humidity",
+                """"state_topic":"ha-paneld/{panel}/room_humidity/state","device_class":"humidity","unit_of_measurement":"%","state_class":"measurement"""",
+                readOnly = true,
+            ),
+        ),
+        // Self-heat calibration trim (°C) added to the reported room temperature. Advanced + local-only
+        // (no HA entity); the profile carries a baseline and this is an additional user trim. API-settable.
+        SettingSpec(
+            key = "room_temp_offset", type = SettingType.FLOAT, group = "Diagnostics",
+            label = "Room temperature offset", default = "0", tier = Tier.ADVANCED, scope = Scope.DEVICE,
+            min = -20.0, max = 20.0, step = 0.1, availableWhen = { it.hasCht8305 },
+            help = "Correction (°C) added to the reported room temperature — usually negative, since panel " +
+                "self-heating reads high. Per-panel (depends on mounting), so not cloned by a fleet push.",
+        ),
     )
 
     private val byKey: Map<String, SettingSpec> = SPECS.associateBy { it.key }

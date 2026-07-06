@@ -477,6 +477,13 @@ class Config(context: Context) {
         prefs.edit().remove("prox_near_raw").remove("prox_far_raw").remove("prox_threshold").apply()
     }
 
+    /** Effective CHT8305 room-temperature calibration offset (°C): the profile's characterised self-heat
+     *  baseline PLUS the user's `room_temp_offset` trim (both default 0 → no correction). Additive so either
+     *  the profile or the API can move it independently, and a future schema migration writing the config
+     *  default (0) can't wipe the profile baseline. */
+    val roomTempOffsetC: Float
+        get() = (profile?.roomTempOffsetC ?: 0f) + prefs.getFloat("room_temp_offset", 0f)
+
     // --- last-known actuator state, re-applied/published on (re)connect so HA reflects reality ---
 
     /** Last navigated URL (published as the navigate state on connect; empty if never set). */

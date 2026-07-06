@@ -120,4 +120,26 @@ object MetricParse {
     /** Dump's `@TEMP` millidegrees → °C (or null when the daemon reported none, i.e. −1). */
     fun dumpTempC(tempMilli: Long): Double? =
         tempMilli.takeIf { it >= 0 }?.let { if (it > 1000) it / 1000.0 else it.toDouble() }
+
+    /**
+     * The `CHT8305` daemon reply → a room temperature/humidity reading. The wire format (see
+     * helper/src/cht8305.c) is `T=<centi> H=<centi>` where each value is the reading × 100 (the driver's
+     * ABS_THROTTLE axis units). Returns null for "ERR", a missing field, or a non-positive value (the
+     * driver's uninitialised/min sentinel), so a bad read publishes nothing rather than a bogus 0/1 °C.
+     */
+    fun parseCht8305(raw: String?): RoomClimate? {
+        if (raw.isNullOrBlank()) return null
+        var t: Long? = null
+        var h: Long? = null
+        for (tok in raw.trim().split(Regex("\\s+"))) when {
+            tok.startsWith("T=") -> t = tok.removePrefix("T=").toLongOrNull()
+            tok.startsWith("H=") -> h = tok.removePrefix("H=").toLongOrNull()
+        }
+        if (t == null || h == null || t <= 0 || h <= 0) return null
+        return RoomClimate(t / 100.0, h / 100.0)
+    }
 }
+
+/** A CHT8305 reading: room air temperature (°C) and relative humidity (%RH), both already scaled from the
+ *  driver's centi-unit axis values. The calibration offset is applied downstream (at publish), not here. */
+data class RoomClimate(val tempC: Double, val humidityPct: Double)
