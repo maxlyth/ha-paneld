@@ -47,8 +47,14 @@
     // `pageshow` fires on that restore (persisted=true) as well as normal load; reset to self either way.
     window.addEventListener('pageshow', function () { sel.selectedIndex = selfIndex(sel); });
     while (el.firstChild) el.removeChild(el.firstChild);
-    el.appendChild(document.createTextNode('· '));
+    var sep = document.createElement('span');   // equal margins both sides (info.css #pswitch .sep)
+    sep.className = 'sep';
+    sep.textContent = '·';
+    el.appendChild(sep);
     el.appendChild(sel);
+    // The dropdown changes the header width vs the plain "· name" text — re-run the responsive header
+    // fit (tab collapse + overflow hide) now that the final header content is in place.
+    window.dispatchEvent(new Event('resize'));
   }
 
   function selfIndex(sel) {
@@ -64,4 +70,53 @@
     if (!list.some(isSelf) && selfName) list = list.concat([{ panel_id: selfId, name: selfName, self: true }]);
     build(list);
   }).catch(function () { /* best-effort — leave the plain title on any failure */ });
+})();
+
+// ---- Responsive tab bar -> header hamburger ------------------------------------------------------
+// When the .nav tab list can't fit on one line, collapse it into the #navburger hamburger (the first
+// item in the header). Overflow is measured by forcing the nav to a single line (.nav-measure) and
+// comparing its content width to the available width; on load + (debounced) resize we toggle
+// body.nav-collapsed. The hamburger toggles body.nav-open, which drops the tabs as a vertical menu.
+(function () {
+  var body = document.body;
+  var nav = document.querySelector('.nav');
+  var burger = document.getElementById('navburger');
+  var hdr = document.querySelector('.hdr');
+
+  // Collapse the tab bar into the hamburger when it can't fit one line.
+  function fitNav() {
+    if (!nav || !burger) return;
+    body.classList.remove('nav-collapsed');   // restore the inline bar so the measurement is clean
+    nav.classList.add('nav-measure');          // force one line -> overflow shows as horizontal scroll
+    var overflow = nav.scrollWidth > nav.clientWidth + 1;
+    nav.classList.remove('nav-measure');
+    body.classList.toggle('nav-collapsed', overflow);
+    if (!overflow) body.classList.remove('nav-open');   // fits again -> ensure the menu is closed
+  }
+
+  // Prevent horizontal overflow of the (nowrap) header by dropping items in priority order until it
+  // fits: the GitHub icon first, then the "ha-paneld" brand text. Reset + re-apply each pass so hidden
+  // items reappear when the window widens again.
+  var HIDE_ORDER = ['hdr-hide-gh', 'hdr-hide-brand'];
+  function fitHeader() {
+    if (!hdr) return;
+    HIDE_ORDER.forEach(function (c) { body.classList.remove(c); });
+    for (var i = 0; i < HIDE_ORDER.length; i++) {
+      if (hdr.scrollWidth <= hdr.clientWidth + 1) return;
+      body.classList.add(HIDE_ORDER[i]);
+    }
+  }
+
+  function fitAll() { fitNav(); fitHeader(); }   // nav first — the hamburger changes the header's width
+
+  if (burger) {
+    burger.addEventListener('click', function (e) {
+      e.stopPropagation();                       // don't let the document handler immediately re-close it
+      body.classList.toggle('nav-open');
+    });
+    document.addEventListener('click', function () { body.classList.remove('nav-open'); }); // outside tap closes
+  }
+  var t;
+  window.addEventListener('resize', function () { clearTimeout(t); t = setTimeout(fitAll, 120); });
+  fitAll();
 })();

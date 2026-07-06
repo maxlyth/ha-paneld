@@ -260,11 +260,6 @@ object SettingsRegistry {
         ),
         // Vendor taming is managed by the "Vendor packages" card (add/re-enable per app), so no free-text
         // field here — the card is the single source. `config.tameVendorPackages` + POST /tame still drive it.
-        SettingSpec(
-            key = "instrumentation", type = SettingType.BOOL, group = "System",
-            label = "Performance sampler", default = "true",
-            help = "Master switch for the (page-view gated) performance sampler.",
-        ),
 
         // ---- Logging -----------------------------------------------------------------------------
         SettingSpec(

@@ -58,9 +58,10 @@ object PerfReader {
     private var prevTopTotal = 0L                 // /proc/stat aggregate jiffies at last top sample
     private var prevProc = HashMap<Int, Long>()   // pid -> utime+stime jiffies at last top sample
 
-    // Master switch (from config) + page-view gate. Instrumentation is the tool, not a tax: it must
-    // not be the panel's biggest CPU consumer 24/7. So sampling runs only when [enabled] AND the info
-    // page has been fetched within [ACTIVE_MS]; otherwise the loop just compares a timestamp and sleeps.
+    // Page-view gate. Instrumentation is the tool, not a tax: it must not be the panel's biggest CPU
+    // consumer 24/7. So sampling runs only while the info page has been fetched within [ACTIVE_MS];
+    // otherwise the loop just compares a timestamp and sleeps. [enabled] is always true (the old master
+    // switch was removed — the page-view gate is the sole cost control).
     @Volatile var enabled = true
     @Volatile private var lastAccessAt = 0L
 

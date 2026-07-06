@@ -200,13 +200,6 @@ class Config(context: Context) {
         edit { putString("http_allowed_hosts", raw.trim()) }
     }
 
-    /** Master switch for the (instrumentation-only) performance sampler. Default on, but page-view
-     *  gated so it idles near-zero; a user who's finished tuning can hard-disable it here. */
-    val instrumentationEnabled: Boolean get() = prefs.getBoolean("instrumentation", true)
-    fun setInstrumentation(on: Boolean) {
-        prefs.edit().putBoolean("instrumentation", on).apply()
-    }
-
     // Wake the screen locally the instant proximity reads near (low latency, network-independent).
     // Default on where a proximity sensor exists; the HA switch can disable it (e.g. a hallway panel).
     val wakeOnWave: Boolean get() = prefs.getBoolean("wake_on_wave", true)

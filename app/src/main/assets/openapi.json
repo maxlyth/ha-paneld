@@ -69,11 +69,6 @@
     "/api/v1/perf": { "get": { "summary": "Live CPU/GPU/RAM, CPU clock, temperature, top processes, responsiveness + history", "tags": ["performance"], "responses": { "200": { "description": "perf JSON" } } } },
     "/api/v1/sensors": { "get": { "summary": "Live sensor readings (light, proximity, temperature, humidity) plus volume percent and raw screen brightness — independent of HA exposure settings", "tags": ["sensors"], "responses": { "200": { "description": "live values JSON" } } } },
     "/api/v1/peers": { "get": { "summary": "ha-paneld panels discovered on the LAN over mDNS — powers the header panel switcher", "tags": ["fleet"], "parameters": [ { "name": "refresh", "in": "query", "required": false, "schema": { "type": "string", "enum": ["1"] }, "description": "Force a fresh mDNS browse instead of the ~10s cache" } ], "responses": { "200": { "description": "[{panel_id,name,ip,port,url,version,self}] — ip/url null when unresolved" } } } },
-    "/api/v1/instrumentation": {
-      "post": { "summary": "Enable/disable the performance sampler (persisted)", "tags": ["performance"],
-        "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "required": ["enabled"], "properties": { "enabled": { "type": "boolean" } } } } } },
-        "responses": { "200": { "description": "{\"enabled\":bool}" }, "400": { "description": "bad-value" } } }
-    },
     "/api/v1/diag": { "get": { "summary": "Plain-text diagnostics dump (hardware, firmware, SELinux, su/node probes)", "tags": ["status"], "responses": { "200": { "description": "text/plain report" } } } },
     "/api/v1/info": { "get": { "summary": "Dashboard hydration payload — the probe-backed facts/value/capability fragments as ready-to-inject HTML (cached snapshot, single-flight)", "tags": ["status"], "responses": { "200": { "description": "{banners, shot, controls, cards} JSON" } } } },
     "/api/v1/logs/stream": {
@@ -82,7 +77,7 @@
         "responses": { "200": { "description": "text/event-stream of log lines" }, "503": { "description": "system source requested but the panel has no root" } } }
     },
     "/api/v1/sensortrace": {
-      "get": { "summary": "Debug sensor-trace ring buffer (instrumentation-gated)", "tags": ["sensors"],
+      "get": { "summary": "Debug sensor-trace ring buffer", "tags": ["sensors"],
         "parameters": [{ "name": "format", "in": "query", "schema": { "type": "string", "enum": ["csv", "json"] } }],
         "responses": { "200": { "description": "CSV (default) or JSON" } } }
     },

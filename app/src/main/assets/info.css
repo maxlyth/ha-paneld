@@ -1,13 +1,26 @@
 body{font-family:system-ui,-apple-system,sans-serif;margin:0;background:#111;color:#eee;color-scheme:dark}
 .wrap{max-width:1860px;margin:0 auto;padding:20px}             /* cap + centre: up to 4 masonry cols on a 1920/2560 panel */
-.hdr{display:flex;align-items:center;justify-content:space-between;gap:12px}
+/* Fixed header + tab bar: the .topbar wraps .hdr + .nav and sticks to the top of the viewport so it
+   never scrolls away; page content scrolls underneath it (opaque bg + a soft drop shadow to separate).
+   When the tab bar collapses to the hamburger menu, the open menu is part of the topbar and sticks too. */
+.topbar{position:sticky;top:0;z-index:20;background:#111;box-shadow:0 6px 14px -10px #000}
+.topbar .nav{margin-bottom:0;padding-bottom:2px}
+.hdr{display:flex;align-items:center;justify-content:space-between;gap:12px;white-space:nowrap}
+/* No header element ever word-wraps — the brand, the panel-switcher (its "· name" + dropdown) and the
+   Open in HA / Reveal buttons stay on one line (they collapse/hide on narrow screens instead). */
 h1{font-size:1.3rem;margin:0 0 .2rem;display:flex;align-items:center} h1 small{color:#9af;font-weight:400}
-.logo{width:1.7em;height:1.7em;margin-right:.45em;border-radius:6px;flex:none}
+.logo{width:2.1em;height:2.1em;margin-right:.3em;border-radius:6px;flex:none}
+.brand{white-space:nowrap;flex:none}   /* product name — never wrap/split at the hyphen */
 /* Header panel-switcher: the friendly-name in the title becomes this dropdown when >1 ha-paneld is on the
    LAN. Styled to read like the title (#9af) but clearly a control. Kept as pure header CONTENT so it's
    unaffected by the planned fixed/sticky-header rework. */
-#pswitch select.pswitch-sel{font:inherit;color:#9af;background:#1c1c1c;border:1px solid #2a3550;border-radius:6px;padding:1px 5px;margin-left:2px;cursor:pointer;max-width:44vw;vertical-align:baseline}
+#pswitch .sep{margin:0 .3em}   /* the "·" separator — equal space on both sides */
+#pswitch select.pswitch-sel{font:inherit;color:#9af;background:#1c1c1c;border:1px solid #2a3550;border-radius:6px;padding:1px 5px;cursor:pointer;max-width:44vw;vertical-align:baseline}
 #pswitch select.pswitch-sel:hover{border-color:#4a6ba0}
+/* Hide the header "Reveal" button once the card masonry drops below 3 columns (a narrow/small panel).
+   The grid is columns:400px + 18px gap inside .wrap (40px padding), so 3 columns need viewport
+   >= 3*400 + 2*18 + 40 = 1276px; below that, hide #revbtn (per-value click-to-reveal still works). */
+@media (max-width:1275px){#revbtn{display:none}}
 h2{font-size:.95rem;margin:0 0 .5rem;color:#9cf;text-transform:uppercase;letter-spacing:.04em}
 h2 small{text-transform:none;letter-spacing:0;color:#8a8;font-weight:400}
 .gh svg{width:24px;height:24px;fill:#7c8a99}
@@ -56,6 +69,7 @@ label{display:flex;flex-direction:column;gap:4px;font-size:.78rem;color:#9af}
 label small{color:#6a7a8a}
 input,button{font-size:.95rem;padding:8px 11px;border-radius:8px;border:1px solid #444;background:#1c1c1c;color:#eee;box-sizing:border-box}
 input{width:100%}
+input[type=checkbox]{width:auto;flex:none}   /* checkboxes keep their natural size (never the 100% above) */
 button{background:#2557a7;border-color:#2557a7;cursor:pointer;align-self:flex-start}
 .note{color:#8a8;margin-top:8px;font-size:.82rem}
 .binary .gradedonly{display:none}
@@ -64,6 +78,9 @@ button{background:#2557a7;border-color:#2557a7;cursor:pointer;align-self:flex-st
 .pbtn{font-size:.8rem;padding:6px 12px;background:#1c1c1c;border:1px solid #444;border-radius:8px;color:#eee;cursor:pointer;text-decoration:none;display:inline-block;line-height:1.3;font-family:inherit}
 .pbtn.on{background:#2557a7;border-color:#2557a7}
 .pbtn:disabled{opacity:.4;cursor:not-allowed}   /* capability missing (no a11y / no root) — shown but inert */
+/* Controls panel: when the action row would wrap to 2 lines, collapse the labelled buttons to icons only
+   (info.js measures the row height + toggles .collapsed). */
+.ctlrow.collapsed .lbl{display:none}
 .setup{background:#3a2f10;border:1px solid #7a5a2a;border-radius:8px;padding:12px 14px;margin:10px 0 0;color:#f5c451;font-size:.92rem}
 .setup a{color:#ffd97a;font-weight:600}
 /* Severity: crit = render-blocking (WebView too old, no dashboard, crash-loop, blank internal_url) —
@@ -99,6 +116,29 @@ body.revealed input.secret,input.secret:focus,input.secret.shown{color:#eee;text
 .nav a{padding:9px 16px;color:#bbb;text-decoration:none;border-bottom:2px solid transparent;font-size:.95rem}
 .nav a:hover{color:#eee;background:#1a1a1a}
 .nav a.active{color:#fff;border-bottom-color:#2557a7}
+/* Responsive tab bar -> header hamburger: when the tabs can't fit one line, switcher.js sets
+   body.nav-collapsed; the #navburger (first item in .hdr, before the logo) then replaces the inline bar,
+   and tapping it (body.nav-open) drops the tabs as a vertical menu in flow below the header. */
+/* The hamburger shares .pbtn's box (padding/border/radius) so it matches Open in HA / Reveal; here we
+   only hide it by default, keep it a fixed flex item, vertically centre it (the generic button rule
+   top-aligns otherwise) and give the glyph a touch more size without growing the button height. */
+.navburger{display:none;flex:none;align-self:center;font-size:1rem;line-height:1}
+.hdr>h1{margin-right:auto}                              /* keep the hamburger + logo together at the left */
+body.nav-collapsed .navburger{display:inline-flex;align-items:center}
+body.nav-collapsed .nav{display:none}                  /* collapsed + closed: just the hamburger */
+/* Open menu: an OVERLAY dropdown (absolute, anchored below the header inside the sticky .topbar) so it
+   floats over the page instead of pushing content down. */
+body.nav-collapsed.nav-open .nav{display:flex;flex-direction:column;flex-wrap:nowrap;gap:0;
+  position:absolute;top:100%;left:0;z-index:30;min-width:180px;
+  background:#1c1c1c;border:1px solid #2a2a2a;border-radius:0 0 10px 10px;box-shadow:0 10px 22px -6px #000;overflow:hidden}
+body.nav-collapsed.nav-open .nav a{width:100%;box-sizing:border-box;border-bottom:1px solid #242424;border-left:3px solid transparent}
+body.nav-collapsed.nav-open .nav a:last-child{border-bottom:0}
+body.nav-collapsed.nav-open .nav a.active{border-left-color:#2557a7;background:#181818}
+.nav.nav-measure{flex-wrap:nowrap;overflow:hidden}     /* measurement only — force one line so overflow is detectable */
+/* Progressive header hide to prevent horizontal overflow — switcher.js measures the header and drops
+   items in priority order until it fits: the GitHub icon first, then the "ha-paneld" brand text. */
+body.hdr-hide-gh .hdr .gh{display:none}
+body.hdr-hide-brand .hdr .brand{display:none}
 
 /* ---- Configure page ---- */
 .cfg-tabs{display:flex;gap:8px;margin-bottom:14px}
@@ -113,8 +153,13 @@ body.revealed input.secret,input.secret:focus,input.secret.shown{color:#eee;text
 /* Package pickers can have very long option text (label · pkg); cap them to their column so the label
    isn't crushed into many wrapped lines — the select truncates the shown value, the dropdown shows it all. */
 .frow select.pkgsel{min-width:0;max-width:100%;text-overflow:ellipsis}
-.pip{display:inline-flex;align-items:center;gap:4px;font-size:.68rem;color:#7a93ad;white-space:nowrap;cursor:pointer;user-select:none}
-.pip input{accent-color:#2557a7;margin:0}
+/* Expose-to-HA toggle: an icon button (no checkbox) drawn with an inline link / broken-link SVG.
+   Linked = bright accent (highlight); unlinked = muted grey. Overrides the generic button{} box. */
+.pip{display:inline-flex;align-items:center;justify-content:center;align-self:center;line-height:0;
+  padding:3px;border-radius:7px;border:1px solid transparent;background:transparent;color:#6a7a8a;cursor:pointer;user-select:none}
+.pip svg{display:block;width:18px;height:18px}
+.pip.on{color:#4a9eff}                             /* linked — highlight colour */
+.pip:hover{background:#1c1c1c;border-color:#333}
 .toggle{position:relative;width:42px;height:24px;border-radius:12px;background:#333;border:1px solid #444;cursor:pointer;transition:.15s;flex:0 0 auto}
 .toggle.on{background:#2557a7;border-color:#2557a7}
 .toggle::after{content:"";position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:#eee;transition:.15s}

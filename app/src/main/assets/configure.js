@@ -72,15 +72,28 @@
     return inp;
   }
 
-  // The little 🔗 expose-to-HA pip (only on settings that are HA entities).
+  // Link / broken-link icons (Lucide link + unlink — a complementary pair; currentColor so CSS tints them).
+  var SVG_ATTRS = 'viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"';
+  var ICON_LINK = '<svg ' + SVG_ATTRS + '><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>';
+  var ICON_UNLINK = '<svg ' + SVG_ATTRS + '><path d="M18.84 12.25l1.72-1.71a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M5.17 11.75l-1.71 1.71a5 5 0 0 0 7.07 7.07l1.71-1.71"/><line x1="8" y1="2" x2="8" y2="5"/><line x1="2" y1="8" x2="5" y2="8"/><line x1="16" y1="19" x2="16" y2="22"/><line x1="19" y1="16" x2="22" y2="16"/></svg>';
+
+  // Expose-to-HA toggle (only on settings that are HA entities): an icon button, no checkbox —
+  // a link icon = exposed as an HA entity (highlighted), a broken-link icon = hidden. Click toggles it.
   function pip(f) {
     if (!f.ha) return null;
-    var cb = el("input", { type: "checkbox" });
-    cb.checked = expose[f.key] !== false;
-    cb.addEventListener("change", function () { expose[f.key] = cb.checked; setDirty(); });
-    var lab = el("label", { class: "pip", title: "Show this as an entity in Home Assistant" }, [cb]);
-    lab.appendChild(document.createTextNode("🔗 HA"));
-    return lab;
+    var on = expose[f.key] !== false;
+    var btn = el("button", { class: "pip", type: "button" });
+    function render() {
+      btn.classList.toggle("on", on);
+      btn.innerHTML = on ? ICON_LINK : ICON_UNLINK;
+      btn.title = on ? "Exposed to Home Assistant — click to hide"
+                     : "Hidden from Home Assistant — click to expose";
+      btn.setAttribute("aria-label", on ? "Exposed to Home Assistant" : "Hidden from Home Assistant");
+      btn.setAttribute("aria-pressed", on ? "true" : "false");
+    }
+    btn.addEventListener("click", function () { on = !on; expose[f.key] = on; render(); setDirty(); });
+    render();
+    return btn;
   }
 
   function row(f) {

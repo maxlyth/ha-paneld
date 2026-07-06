@@ -7,8 +7,7 @@ import kotlin.math.max
  * Debug-only rolling **RAM** ring buffer of raw sensor samples plus the auto-brightness engine's
  * internals, for **fit-testing the filters** — NOT a user-facing surface, never persisted (zero eMMC
  * wear, negligible CPU). Served via `GET /sensortrace` (CSV for analysis, JSON for a future on-panel
- * chart). Gated by [enabled] (tied to the instrumentation master switch); records are cheap no-ops when
- * off.
+ * chart). Gated by [enabled] (on by default; negligible RAM/CPU); records are cheap no-ops when off.
  *
  * **Decimation** keeps it bounded yet hours-long: a sample is kept on a *meaningful change* (so a fast
  * lights-on step is captured at full detail) OR once every [MIN_INTERVAL_MS] when quiet (so slow
@@ -19,7 +18,7 @@ import kotlin.math.max
  * HTTP thread.
  */
 object SensorTrace {
-    @Volatile var enabled: Boolean = false
+    @Volatile var enabled: Boolean = true
 
     private const val CAP = 4000              // bounded RAM (~160 KB); ~1 h at the 1 Hz floor, less with bursts
     private const val MIN_INTERVAL_MS = 1000L // slow-regime floor: ≤1 sample/sec when nothing's changing

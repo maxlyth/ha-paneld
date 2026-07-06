@@ -73,10 +73,6 @@ async function perf(){
  if(document.hidden)return;   // a hidden/background tab must not keep the sampler (or panel) busy
  try{
   var d=await (await fetch('/api/v1/perf')).json();
-  setInstr(d.enabled!==false);
-  if(d.enabled===false){paint('perf',[{label:'',val:'instrumentation off — turn it on to measure',col:'#888'}]);
-   paintTop(null,'instrumentation off');paint('smtbl',[{label:'',val:'instrumentation off',col:'#888'}]);
-   document.getElementById('perfage').textContent='· off';return;}
   if(d.hist){cpuH=d.hist.cpu||[];ramH=d.hist.ram||[];gpuH=d.hist.gpu||[];}  // server FIFO
   draw();
   var ramPct=d.memTotalMb?Math.round(d.memUsedMb*100/d.memTotalMb):0;
@@ -138,8 +134,21 @@ sensorsCard('senstbl','sensage');
 // voiding the old max). Other cards keep wrapping freely — only these two opted in.
 function hwm(id){var t=document.getElementById(id);if(!t)return;var c=t.parentNode,h=c.offsetHeight;if(h>(c._hwm||0)){c._hwm=h;c.style.minHeight=h+'px';}}
 window.addEventListener('resize',function(){['smtbl','topproc'].forEach(function(id){var t=document.getElementById(id),c=t&&t.parentNode;if(c){c._hwm=0;c.style.minHeight='';}});});
-function setInstr(on){var a=document.getElementById('instron'),b=document.getElementById('instroff');if(a)a.className='pbtn'+(on?' on':'');if(b)b.className='pbtn'+(on?'':' on');}
-function instr(on){fetch('/api/v1/instrumentation',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'enabled='+on}).then(function(r){return r.json();}).then(function(){perf();}).catch(function(){});}
+
+// Controls panel: collapse the labelled action buttons (Back/Recents/Launcher/Admin) to icons-only when
+// the row would wrap to 2 lines. Force one line, check overflow, toggle .collapsed. Runs on load, resize,
+// and after the controls re-render (hydrate + the 2s status refresh).
+function fitControls(){
+ var row=document.querySelector('#ctlzone .ctlrow');
+ if(!row)return;
+ row.classList.remove('collapsed');                 // show labels, let it wrap naturally
+ var btn=row.querySelector('.pbtn');
+ var oneLine=btn?btn.offsetHeight:32;
+ var wrapped=row.offsetHeight>oneLine+4;             // taller than one button => it wrapped to 2+ lines
+ row.classList.toggle('collapsed',wrapped);
+}
+window.addEventListener('resize',fitControls);
+if(document.readyState!=='loading')fitControls();else document.addEventListener('DOMContentLoaded',fitControls);
 function inspApply(d){
  var hdr=document.getElementById('insthdr'),hint=document.getElementById('insthint');
  var hp='<b>'+location.hostname+':'+d.port+'</b>';
@@ -188,7 +197,7 @@ function diagToggle(el){el.textContent=(el.textContent.indexOf('cm')<0)?el.datas
    var card=el.closest('.card');
    if(d.cards[id]&&d.cards[id].trim()){el.innerHTML=d.cards[id];if(card)card.style.display='';}
    else if(card){card.style.display='none';}});          // probe says this card has nothing to show
-  var cz=document.getElementById('ctlzone');if(cz&&d.controls)cz.innerHTML=d.controls;
+  var cz=document.getElementById('ctlzone');if(cz&&d.controls){cz.innerHTML=d.controls;fitControls();}
   var sc=document.getElementById('shotcard');
   if(sc){if(d.shot){var im=sc.querySelector('img');
     if(im&&!im.getAttribute('src'))im.src=im.getAttribute('data-src');sc.style.display='';}

@@ -531,19 +531,6 @@ class PaneldServer(
                             else call.respondText("no-input-capability\n", status = HttpStatusCode.ServiceUnavailable)
                         }
                     }
-                    // Master switch for the instrumentation sampler (enabled=true|false) — persisted + live.
-                    post("/instrumentation") {
-                        val on = call.receiveParameters()["enabled"]?.toBooleanStrictOrNull()
-                        if (on == null) {
-                            call.respondText("bad-value\n", status = HttpStatusCode.BadRequest)
-                        } else {
-                            config.setInstrumentation(on)
-                            PerfReader.enabled = on
-                            io.github.maxlyth.hapaneld.sensors.SensorTrace.enabled = on
-                            if (on) PerfReader.touch()
-                            call.respondText("""{"enabled":$on}""", ContentType.Application.Json)
-                        }
-                    }
                     // On-screen Controls card (software navbar) for panels with no physical nav bar.
                     post("/action") {
                         val a = call.receiveParameters()["a"]
@@ -566,7 +553,7 @@ class PaneldServer(
                         }
                         if (ok) call.respondText("ok\n") else call.respondText("bad-action\n", status = HttpStatusCode.BadRequest)
                     }
-                    // Debug-only sensor trace (RAM ring buffer, instrumentation-gated) for fit-testing the
+                    // Debug-only sensor trace (RAM ring buffer, on by default) for fit-testing the
                     // auto-brightness + proximity filters. CSV by default (drop into a plot); ?format=json
                     // for programmatic use / a future on-panel chart. Not an HA/MQTT surface.
                     get("/sensortrace") {
@@ -795,7 +782,6 @@ class PaneldServer(
     private fun io.ktor.server.routing.Route.legacyRedirects() {
         val map = mapOf(
             "/perf" to "/api/v1/perf",
-            "/instrumentation" to "/api/v1/instrumentation",
             "/action" to "/api/v1/action",
             "/diag" to "/api/v1/diag",
             "/sensortrace" to "/api/v1/sensortrace",
@@ -890,9 +876,9 @@ class PaneldServer(
 <title>ha-paneld · ${esc(title)} · ${esc(config.friendlyName)}</title>
 <link rel="icon" href="/icon.svg">
 <link rel="stylesheet" href="/info.css"></head><body data-build="${buildToken()}"><div class="wrap">
-<div class="hdr"><h1><img src="/icon.svg" class="logo" alt="">ha-paneld <small id="pswitch" data-self-id="${esc(config.panelId)}" data-self-name="${esc(config.friendlyName)}">· ${esc(config.friendlyName)}</small></h1>
- <span style="display:flex;gap:10px;align-items:center">$haLink</span></div>
-${navBar(active)}
+<div class="topbar"><div class="hdr"><button id="navburger" class="navburger pbtn" aria-label="Menu">☰</button><h1><img src="/icon.svg" class="logo" alt=""><span class="brand">ha-paneld</span> <small id="pswitch" data-self-id="${esc(config.panelId)}" data-self-name="${esc(config.friendlyName)}"><span class="sep">·</span>${esc(config.friendlyName)}</small></h1>
+ <span style="display:flex;gap:10px;align-items:center">$haLink<a class="gh" href="$REPO_URL" target="_blank" rel="noopener" title="ha-paneld on GitHub" aria-label="GitHub"><svg viewBox="0 0 24 24"><path d="$GH_ICON"/></svg></a></span></div>
+${navBar(active)}</div>
 <div id="verbar" class="setup" style="display:none">⟳ A newer ha-paneld is installed — <a href="#" onclick="location.reload();return false">reload</a> to refresh this page.</div>
 $body
 <script src="/assets/switcher.js"></script>
@@ -1060,7 +1046,7 @@ $rootNote
      *  Also links the plain config-only bundle (for cloning settings between panels). */
     private fun backupCardHtml(root: Boolean): String {
         val compRow = if (root)
-            """<label style="display:flex;gap:8px;align-items:center;font-size:.85rem"><input type="checkbox" id="bk-comp" checked> Include HA Companion login <span class="muted">(its HA tokens — keep the bundle safe)</span></label>"""
+            """<label style="display:flex;flex-direction:row;gap:8px;align-items:center;font-size:.85rem"><input type="checkbox" id="bk-comp" checked> Include HA Companion login</label>"""
         else """<p class="note">The HA Companion login can only be captured on a rooted panel.</p>"""
         val restoreWarn = if (root) " and rewrites the HA Companion login (force-stops it)" else ""
         return """<div class="card"><h2>Backup &amp; restore</h2>
@@ -1092,7 +1078,7 @@ $compRow
             """<div class="setup">⚠ <b>Security:</b> this root-installs <b>any</b> APK you choose, over the panel's """ +
                 """<b>unauthenticated</b> LAN web UI. Only upload APKs you trust. """ +
                 """<small>(Panel access is LAN-only today; authenticated access is planned for a later release.)</small></div>
-<label style="display:flex;gap:8px;align-items:center;margin:10px 0"><input type="checkbox" id="apk-allow" ${if (allowed) "checked" else ""} onchange="apkAllow(this)"> Enable APK install on this panel</label>
+<label style="display:flex;flex-direction:row;gap:8px;align-items:center;margin:10px 0"><input type="checkbox" id="apk-allow" ${if (allowed) "checked" else ""} onchange="apkAllow(this)"> Enable APK install on this panel</label>
 <div id="apk-ui"${if (allowed) "" else " style=\"display:none\""}>
 <label class="pbtn" style="cursor:pointer">⭱ Choose APK…<input type="file" id="apk-file" accept=".apk,application/vnd.android.package-archive" style="display:none" onchange="apkPick(this)"></label>
 <div id="apk-preview" style="margin-top:10px"></div>
@@ -1197,7 +1183,7 @@ $body</div>"""
  <input id="lg-filter" placeholder="filter text…" oninput="lgRender()" style="flex:1;min-width:120px">
  <button id="lg-pause" class="pbtn" onclick="lgPause()">⏸ Pause</button>
  <button class="pbtn" onclick="lgClear()">Clear</button>
- <label class="muted" style="display:flex;align-items:center;gap:4px"><input type="checkbox" id="lg-follow" checked> Follow</label>
+ <label class="muted" style="display:flex;flex-direction:row;align-items:center;gap:4px"><input type="checkbox" id="lg-follow" checked> Follow</label>
 </div>
 <div id="lg-out" class="logview" onscroll="lgScrolled()"></div>
 <p class="note">App = ha-paneld's own process log (no root needed). System = the full device logcat (root).
@@ -1561,11 +1547,11 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         // fall through to the admin launcher — so DISABLE it rather than show two buttons that do the same
         // thing. resolvedLauncher() is a cheap PackageManager query (no root).
         val hasDistinctLauncher = !checking && system.resolvedLauncher(config.launcherPackage) != null
-        return """<div style="display:flex;gap:8px;flex-wrap:wrap">
- ${pbtn("back", "← Back", a11yOk, "the accessibility service")}
- ${pbtn("recents", "▢ Recents", a11yOk && hasRecents, if (hasRecents) "the accessibility service" else "a Recents/overview screen (absent on this panel)")}
- ${pbtn("launcher", "⊞ Launcher", rootOk, "root (su or the helper daemon)", disabledTitle = if (hasDistinctLauncher) null else "No separate launcher on this panel — same as Admin launcher")}
- ${pbtn("admin_launcher", "⚙ Admin launcher", rootOk, "root (su or the helper daemon)")}
+        return """<div class="ctlrow" style="display:flex;gap:8px;flex-wrap:wrap">
+ ${pbtn("back", "←<span class=\"lbl\"> Back</span>", a11yOk, "the accessibility service")}
+ ${pbtn("recents", "▢<span class=\"lbl\"> Recents</span>", a11yOk && hasRecents, if (hasRecents) "the accessibility service" else "a Recents/overview screen (absent on this panel)")}
+ ${pbtn("launcher", "⊞<span class=\"lbl\"> Launcher</span>", rootOk, "root (su or the helper daemon)", """ style="margin-left:auto"""", disabledTitle = if (hasDistinctLauncher) null else "No separate launcher on this panel — same as Admin launcher")}
+ ${pbtn("admin_launcher", "⚙<span class=\"lbl\"> Admin launcher</span>", rootOk, "root (su or the helper daemon)")}
 </div>
 <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
  ${pbtn("voldn", "Vol −", !checking, "")}
@@ -1626,10 +1612,10 @@ report of this panel's hardware, firmware, SELinux, su and node probes for bug r
 <title>ha-paneld · $fname</title>
 <link rel="icon" href="/icon.svg">
 <link rel="stylesheet" href="/info.css"></head><body data-ver="${Config.VERSION}" data-build="${buildToken()}" data-hydrate="${if (hydrate) "1" else "0"}"><div class="wrap">
-<div class="hdr"><h1><img src="/icon.svg" class="logo" alt="">ha-paneld <small id="pswitch" data-self-id="$pid" data-self-name="$fname">· $fname</small></h1>
+<div class="topbar"><div class="hdr"><button id="navburger" class="navburger pbtn" aria-label="Menu">☰</button><h1><img src="/icon.svg" class="logo" alt=""><span class="brand">ha-paneld</span> <small id="pswitch" data-self-id="$pid" data-self-name="$fname"><span class="sep">·</span>$fname</small></h1>
  <span style="display:flex;gap:10px;align-items:center">${if (config.haDeviceUrl.isNotBlank()) """<a class="pbtn" href="${esc(config.haDeviceUrl)}" target="_blank" rel="noopener" title="Open this panel's device page in Home Assistant">Open in HA</a>""" else ""}<button id="revbtn" class="pbtn" onclick="toggleReveal()" title="Show/hide blurred values for editing — they're blurred by default so screenshots don't leak them">Reveal</button>
  <a class="gh" href="$REPO_URL" target="_blank" rel="noopener" title="ha-paneld on GitHub" aria-label="GitHub"><svg viewBox="0 0 24 24"><path d="$GH_ICON"/></svg></a></span></div>
-${navBar("dashboard")}
+${navBar("dashboard")}</div>
 <div id="verbar" class="setup" style="display:none">⟳ A newer ha-paneld is installed — <a href="#" onclick="location.reload();return false">reload</a> to refresh this page.</div>
 <div id="bannerzone">${s?.let { bannersHtml(it) } ?: ""}</div>
 <div class="cards">
@@ -1650,11 +1636,7 @@ ${tcard("captbl", "Capabilities", if (s == null) null else capRowsHtml(), post =
 <table id="senstbl"><tr><td style="color:#888">reading…</td></tr></table>
 <p class="note">Live readings from this panel’s sensors — shown even when a value is hidden from Home Assistant.</p></div>
 <div class="card"><h2>Performance <small id="perfage"></small></h2>
-<div style="display:flex;gap:6px;align-items:center;font-size:.78rem;margin-bottom:8px">
- <span style="color:#8a8">Instrumentation</span>
- <button type="button" class="pbtn" id="instron" onclick="instr(true)">On</button>
- <button type="button" class="pbtn" id="instroff" onclick="instr(false)">Off</button>
- <span style="color:#666">· samples only while this page is open; Off stops it entirely</span></div>
+<div style="color:#666;font-size:.78rem;margin-bottom:8px">Samples only while this page is open.</div>
 <canvas id="perfchart" width="600" height="96" style="height:96px"></canvas>
 <div class="leg"><span style="color:#4a9eff">■</span> CPU&nbsp;&nbsp;<span style="color:#48c774">■</span> RAM&nbsp;&nbsp;<span style="color:#f5a623">■</span> GPU (% used) · ~4&nbsp;min</div>
 <table id="perf"><tr><td style="color:#888">sampling…</td></tr></table></div>
@@ -1671,7 +1653,7 @@ ${tcard("disptbl", "Display & tuning", s?.let { displayRowsHtml(it) })}
 ${tcard("updtbl", "Updates", s?.let { updatesRowsHtml(it) })}
 </div>
 <p class="note" style="text-align:center;margin-top:18px"><a href="/api" style="color:#9cf">REST API explorer</a>
- · <a href="/api/v1/diag" target="_blank" style="color:#9cf">diagnostics</a></p>
+ · <a href="/api/v1/diag" target="_blank" style="color:#9cf">diagnostics</a> · <a href="$REPO_URL" target="_blank" rel="noopener" style="color:#9cf">GitHub</a></p>
 <script src="/info.js"></script>
 <script src="/assets/switcher.js"></script>
 <script src="/assets/buildwatch.js"></script>
@@ -1754,9 +1736,9 @@ ${tcard("updtbl", "Updates", s?.let { updatesRowsHtml(it) })}
         return """<div class="card" id="cfg-tame"><h2>Vendor packages <small style="color:#d9a528">· experimental</small></h2>
 <p class="note"><b>Tame</b> force-stops an app, stops it relaunching on boot, and blocks it drawing over the dashboard — applied immediately and on every boot. <b>Re-enable</b> undoes it. Critical system apps are never offered; nothing changes until you press a button.</p>
 $body
-<div style="display:flex;gap:8px;margin-top:12px">
+<div style="display:flex;flex-direction:column;gap:8px;margin-top:12px">
  <button type="button" onclick="pkgPick()">Find a package…</button>
- <form method="post" action="/api/v1/tame" style="display:flex;gap:8px;flex:1;margin:0">
+ <form method="post" action="/api/v1/tame" style="display:flex;flex-direction:row;gap:8px;margin:0">
   <input name="pkg" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="…or tame a package by name" style="flex:1">
   <input type="hidden" name="action" value="tame">
   <button type="submit">Tame</button>
