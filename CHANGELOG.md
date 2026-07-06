@@ -8,6 +8,12 @@ From **v0.8.0**, entries are grouped under **Added** (new features/entities), **
 changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
 content appear. Earlier releases predate this convention and keep their flat lists.
 
+## v0.8.7-rc1 - 2026-07-06
+
+### Changed
+
+- **Diagnostic sensors report on more panels** — CPU usage and SoC temperature now fall back to the root helper daemon when the app can't read them directly, so they populate on panels where they previously showed "Unknown". All OS-sourced panel telemetry (the diagnostic sensors and the `:8888` performance view) now flows through one shared reader, replacing two separate read paths that could disagree.
+
 ## v0.8.6 - 2026-07-05
 
 The Install tab becomes a software-management hub, panels get encrypted backup/restore and self-healing update paths, and health problems surface much earlier and more clearly.
