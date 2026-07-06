@@ -5,6 +5,7 @@ import io.github.maxlyth.hapaneld.device.EvdevButton
 import io.github.maxlyth.hapaneld.device.LedMechanism
 import io.github.maxlyth.hapaneld.device.ScreenOff
 import io.github.maxlyth.hapaneld.device.SuForm
+import io.github.maxlyth.hapaneld.metrics.MetricSource
 import io.github.maxlyth.hapaneld.platform.ActivityRef
 import io.github.maxlyth.hapaneld.platform.Daemon
 import io.github.maxlyth.hapaneld.platform.RootShell
@@ -56,6 +57,27 @@ class FakeRootShell(
         outputs.entries.sortedByDescending { it.key.length }.firstOrNull { cmd.contains(it.key) }?.value
     override fun runBytes(cmd: String): ByteArray? = null
     override fun fireAndForget(cmd: String) { ran += cmd }
+}
+
+/** Fake [MetricSource] for controllers that read through [io.github.maxlyth.hapaneld.metrics.PanelMetrics]
+ *  (e.g. [CpuController]'s governor reads). Only the fields a test needs are set; everything else is the
+ *  "unavailable" default. */
+class FakeMetricSource(
+    private val governor: String? = null,
+    private val availableGovernors: String? = null,
+) : MetricSource {
+    override fun perfDump(): String? = null
+    override fun statText(): String? = null
+    override fun meminfoText(): String? = null
+    override fun loadavgText(): String? = null
+    override fun thermalMilliValues(): List<Long> = emptyList()
+    override fun gpuLoadRaw(): String? = null
+    override fun cpuFreqCurMhz(): List<Long> = emptyList()
+    override fun cpuFreqMaxMhz(): Long = 0
+    override fun localIp(): String? = null
+    override fun selinuxEnforce(): String? = null
+    override fun cpuGovernor(): String? = governor
+    override fun cpuAvailableGovernors(): String? = availableGovernors
 }
 
 /** Fake [Daemon]. [replies] maps an exact command line to its reply; sends are recorded in [sent]. */

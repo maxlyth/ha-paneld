@@ -1,5 +1,6 @@
 package io.github.maxlyth.hapaneld.control
 
+import io.github.maxlyth.hapaneld.metrics.PanelMetrics
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -7,47 +8,47 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * CpuController's pure logic — governor parsing, tier reverse-mapping, and tier→governor resolution —
- * over the RootShell seam, with no device and no su. Uses the shared controller test fakes (Fakes.kt).
+ * CpuController's pure logic — governor parsing, tier reverse-mapping, and tier→governor resolution.
+ * Governors are now READ through the shared [PanelMetrics] reader (fed a [FakeMetricSource]); the *write*
+ * still goes through the [RootShell] seam, so writes are asserted via `root.ran`. No device, no su.
  */
 class CpuControllerTest {
 
-    private val avail = "/sys/devices/system/cpu/cpu0/cpufreq/scaling_available_governors"
-    private val gov0 = "/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor"
-
     private fun controller(
-        nodes: Map<String, String>,
+        avail: String? = null,
+        gov: String? = null,
         cpuGovernors: Map<String, String>? = null,
     ): Pair<CpuController, FakeRootShell> {
-        val root = FakeRootShell(nodes)
-        return CpuController(fakeProfile(appCanSu = true, cpuGovernors = cpuGovernors), root, FakeDaemon(available = false)) to root
+        val root = FakeRootShell()   // records writes
+        val metrics = PanelMetrics(FakeMetricSource(governor = gov, availableGovernors = avail))
+        return CpuController(fakeProfile(appCanSu = true, cpuGovernors = cpuGovernors), root, FakeDaemon(available = false), metrics) to root
     }
 
     @Test fun governorsParsesTheAvailableList() {
-        val (cpu, _) = controller(mapOf(avail to "powersave performance schedutil\n"))
+        val (cpu, _) = controller(avail = "powersave performance schedutil\n")
         assertEquals(listOf("powersave", "performance", "schedutil"), cpu.governors())
         assertTrue(cpu.available())
     }
 
     @Test fun currentTierReverseMapsGovernors() {
-        assertEquals(CpuController.PERFORMANCE, controller(mapOf(gov0 to "performance")).first.currentTier())
-        assertEquals(CpuController.EFFICIENCY, controller(mapOf(gov0 to "powersave")).first.currentTier())
+        assertEquals(CpuController.PERFORMANCE, controller(gov = "performance").first.currentTier())
+        assertEquals(CpuController.EFFICIENCY, controller(gov = "powersave").first.currentTier())
         // any dynamic governor reads back as Auto
-        assertEquals(CpuController.AUTO, controller(mapOf(gov0 to "schedutil")).first.currentTier())
+        assertEquals(CpuController.AUTO, controller(gov = "schedutil").first.currentTier())
     }
 
     @Test fun currentTierNullWhenUnreadable() {
-        assertNull(controller(emptyMap()).first.currentTier())
+        assertNull(controller().first.currentTier())
     }
 
     @Test fun setTierResolvesAutoToADynamicGovernorAndWritesIt() {
-        val (cpu, root) = controller(mapOf(avail to "powersave performance schedutil"))
+        val (cpu, root) = controller(avail = "powersave performance schedutil")
         assertTrue(cpu.setTier(CpuController.AUTO))
         assertTrue("expected a schedutil write, got ${root.ran}", root.ran.any { it.contains("echo schedutil") })
     }
 
     @Test fun setTierPerformancePicksThePerformanceGovernor() {
-        val (cpu, root) = controller(mapOf(avail to "powersave performance schedutil"))
+        val (cpu, root) = controller(avail = "powersave performance schedutil")
         assertTrue(cpu.setTier(CpuController.PERFORMANCE))
         assertTrue(root.ran.any { it.contains("echo performance") })
     }
@@ -55,7 +56,7 @@ class CpuControllerTest {
     @Test fun profileGovernorOverrideHonouredWhenAvailable() {
         // PX30 maps Auto -> interactive; the profile mapping wins when the SoC offers that governor.
         val (cpu, root) = controller(
-            nodes = mapOf(avail to "powersave performance interactive schedutil"),
+            avail = "powersave performance interactive schedutil",
             cpuGovernors = mapOf(CpuController.AUTO to "interactive"),
         )
         assertTrue(cpu.setTier(CpuController.AUTO))
@@ -63,7 +64,7 @@ class CpuControllerTest {
     }
 
     @Test fun setTierFalseWhenNoGovernorsAvailable() {
-        val (cpu, _) = controller(emptyMap())
+        val (cpu, _) = controller()
         assertFalse(cpu.setTier(CpuController.AUTO))
     }
 }

@@ -1,34 +1,45 @@
 package io.github.maxlyth.hapaneld.http
 
 import io.github.maxlyth.hapaneld.control.Su
-import io.github.maxlyth.hapaneld.device.DeviceProfile
-import io.github.maxlyth.hapaneld.util.HelperClient
+import io.github.maxlyth.hapaneld.metrics.MetricRegistry
+import io.github.maxlyth.hapaneld.metrics.MetricSample
+import io.github.maxlyth.hapaneld.metrics.PanelMetrics
+import io.github.maxlyth.hapaneld.metrics.PerfDump
+import io.github.maxlyth.hapaneld.metrics.RamRingSink
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import java.io.File
 
 /**
- * Background performance sampler for the info page. A coroutine ticks every [INTERVAL_MS], computes
- * CPU/GPU/RAM utilisation and keeps the last [MAX] samples in an in-RAM FIFO, so `GET /perf` returns
- * the latest values **plus** the history — the chart is populated immediately on page load and the
- * series survives reloads (it's lost only on app restart). All from world-readable /proc + /sys
- * (no root; readable as the app uid on Android 8.1 + 14).
+ * Background performance sampler for the info page. A coroutine ticks every [INTERVAL_MS], reads the
+ * system telemetry union from the shared [PanelMetrics] reader (CPU/GPU/RAM/temp/load/freq, with its
+ * direct→daemon fallback), and keeps the last [MAX] samples in an in-RAM FIFO ([RamRingSink]) so
+ * `GET /perf` returns the latest values **plus** the history — the chart is populated immediately on page
+ * load and the series survives reloads (lost only on app restart).
  *
- * CPU % is the delta between consecutive ticks (so the first tick has no value). GPU is Rockchip
- * Mali devfreq load ("<load>@<freq>Hz"); absent on panels without it.
+ * The heavy per-process metrics that only this page needs — top-5 by CPU and dashboard render jank — stay
+ * PerfReader-local (their deltas + su cadence are not shared with Diagnostics). On sandbox panels those
+ * come free from the shared reader's PERFDUMP (exposed as [io.github.maxlyth.hapaneld.metrics.Snapshot.dump]),
+ * so no second dump is fetched; on rooted panels they're separate `su` calls spread across ticks.
+ *
+ * CPU % is a delta the reader computes (so the first tick has no value). GPU is Rockchip Mali devfreq load
+ * ("<load>@<freq>Hz"); absent on panels without it.
  */
 object PerfReader {
     private const val MAX = 120          // ~4 min at 2s
     private const val INTERVAL_MS = 2000L
     private const val ACTIVE_MS = 30_000L // sample only within this window of the last page view
 
+    // Internal history keys (also the future store's schema — see MetricRegistry). The /perf JSON still
+    // exposes them as the stable "cpu"/"ram"/"gpu" fields the chart expects.
+    private val CPU_KEY = MetricRegistry.CPU.key
+    private val RAM_KEY = MetricRegistry.MEM.key
+    private val GPU_KEY = MetricRegistry.GPU_LOAD.key
+
     private val lock = Any()
-    private var prevStat: List<LongArray>? = null
-    private val cpuHist = ArrayDeque<Int>()
-    private val ramHist = ArrayDeque<Int>()
-    private val gpuHist = ArrayDeque<Int>()
+    // History retention behind the MetricSink seam (a durable store swaps in without touching this class).
+    private val sink = RamRingSink(MAX)
     @Volatile private var latestFields = """"cpu":0,"cores":[],"load":[],"freqMhz":[],"freqMaxMhz":0,"gpu":null,"gpuMhz":0,"tempC":null,"memUsedMb":0,"memTotalMb":0"""
 
     // Top-5 processes by CPU (from `dumpsys cpuinfo`) — needs root, so probed once and sampled on a
@@ -43,9 +54,6 @@ object PerfReader {
     private var prevRenderJiffies = HashMap<Int, Long>() // renderer pid -> CrRendererMain utime+stime
     private var prevRenderAt = 0L
     private var rootOk = false
-    // Sandbox panels (appCanSu=false) are SELinux-denied proc_stat/proc_loadavg/thermal/other-pid stat,
-    // so the whole sampler reads come from the root daemon's PERFDUMP instead of direct /proc.
-    private var daemonMode = false
     private var tickCount = 0
     private var prevTopTotal = 0L                 // /proc/stat aggregate jiffies at last top sample
     private var prevProc = HashMap<Int, Long>()   // pid -> utime+stime jiffies at last top sample
@@ -63,28 +71,31 @@ object PerfReader {
     fun start(scope: CoroutineScope) {
         scope.launch {
             rootOk = runCatching { Su.available() }.getOrDefault(false)
-            daemonMode = runCatching { !DeviceProfile.detect().appCanSu }.getOrDefault(false)
             while (isActive) {
                 if (enabled && System.currentTimeMillis() - lastAccessAt < ACTIVE_MS) {
                     runCatching { tick() }
                 } else {
-                    resetBaselines() // re-baseline so the first sample after waking isn't a bogus delta
+                    resetLocalBaselines() // re-baseline the top/render deltas so the first sample after waking isn't a huge gap
                 }
                 delay(INTERVAL_MS)
             }
         }
     }
 
-    /** Clear delta baselines while idle so the next active tick measures a fresh interval, not a huge gap. */
-    private fun resetBaselines() {
-        prevStat = null; prevTopTotal = 0L
+    /** Clear PerfReader's OWN top/render delta baselines while idle. The shared /proc/stat baseline lives
+     *  in [PanelMetrics] and is deliberately NOT reset here (a stale prev just yields one valid
+     *  longer-window CPU% on the next read, never a bogus delta). */
+    private fun resetLocalBaselines() {
+        prevTopTotal = 0L
         prevProc = HashMap(); prevRenderJiffies = HashMap(); prevRenderAt = 0L
     }
 
     /** Latest sample + history FIFO + top-5 procs + render jank, as JSON, for `GET /perf`. */
     fun json(): String = synchronized(lock) {
-        """{"enabled":$enabled,$latestFields,"top":$topJson,"render":$renderJson,"hist":{"cpu":${cpuHist.toList()},"ram":${ramHist.toList()},"gpu":${gpuHist.toList()}}}"""
+        """{"enabled":$enabled,$latestFields,"top":$topJson,"render":$renderJson,"hist":{"cpu":${histInts(CPU_KEY)},"ram":${histInts(RAM_KEY)},"gpu":${histInts(GPU_KEY)}}}"""
     }
+
+    private fun histInts(key: String): List<Int> = sink.history(key).map { it.num?.toInt() ?: 0 }
 
     /** Process names (full cmdlines) of the latest top-by-CPU sample, most-active first — for the tame
      *  picker's "using the most CPU" group. Empty until the sampler has produced a ranking. */
@@ -228,54 +239,10 @@ object PerfReader {
         while (q.size > MAX) q.removeFirst()
     }
 
-    // --- daemon-sourced sampling (sandbox panels) -------------------------------------------------
-    private class Dump(
-        val stat: List<LongArray>,
-        val load: List<String>,
-        val tempMilli: Long,
-        val gpuRaw: String?,
-        val proc: List<Triple<Int, Long, String>>,  // pid, utime+stime jiffies, comm
-        val rend: Map<Int, Long>                     // renderer pid -> CrRendererMain jiffies
-    )
-
-    /** Fetch + parse one PERFDUMP from the root daemon. Null if the daemon is unreachable. */
-    private fun fetchDump(): Dump? {
-        val raw = HelperClient.sendBytes("PERFDUMP")?.toString(Charsets.UTF_8) ?: return null
-        val stat = ArrayList<LongArray>()
-        val proc = ArrayList<Triple<Int, Long, String>>()
-        val rend = HashMap<Int, Long>()
-        var load: List<String> = emptyList()
-        var tempMilli = -1L
-        var gpuRaw: String? = null
-        var section = ""
-        for (line in raw.lineSequence()) {
-            when {
-                line == "@STAT" -> { section = "stat"; continue }
-                line == "@PROC" -> { section = "proc"; continue }
-                line == "@REND" -> { section = "rend"; continue }
-                line == "@END" -> break
-                line.startsWith("@LOAD ") -> { load = line.removePrefix("@LOAD ").trim().split(" ").take(3); continue }
-                line.startsWith("@TEMP ") -> { tempMilli = line.removePrefix("@TEMP ").trim().toLongOrNull() ?: -1L; continue }
-                line.startsWith("@GPU ") -> { gpuRaw = line.removePrefix("@GPU ").trim().takeIf { it != "-" }; continue }
-            }
-            when (section) {
-                "stat" -> if (line.startsWith("cpu"))
-                    stat.add(line.trim().split(Regex("\\s+")).drop(1).map { it.toLongOrNull() ?: 0L }.toLongArray())
-                "proc" -> line.split('\t').let { t ->
-                    val pid = t.getOrNull(0)?.toIntOrNull(); val j = t.getOrNull(1)?.toLongOrNull()
-                    if (pid != null && j != null) proc.add(Triple(pid, j, t.getOrElse(2) { "" }))
-                }
-                "rend" -> line.split('\t').let { t ->
-                    val pid = t.getOrNull(0)?.toIntOrNull(); val j = t.getOrNull(1)?.toLongOrNull()
-                    if (pid != null && j != null) rend[pid] = j
-                }
-            }
-        }
-        return Dump(stat, load, tempMilli, gpuRaw, proc, rend)
-    }
+    // --- daemon-sourced top/render (sandbox panels), from the shared reader's PERFDUMP ---------------
 
     /** Top-5 by CPU from the daemon's process table (comm only — truncated to 16 chars, no cmdline). */
-    private fun sampleTopDump(dump: Dump) {
+    private fun sampleTopDump(dump: PerfDump) {
         val total = dump.stat.firstOrNull()?.sum() ?: return       // "cpu" aggregate line
         val cur = HashMap<Int, Long>()
         val comm = HashMap<Int, String>()
@@ -299,7 +266,7 @@ object PerfReader {
 
     /** Dashboard responsiveness from the daemon's CrRendererMain thread jiffies (primary metric; the
      *  gfxinfo secondary needs dumpsys/su, so it's omitted on sandbox panels). */
-    private fun sampleRenderDump(dump: Dump) {
+    private fun sampleRenderDump(dump: PerfDump) {
         val now = System.currentTimeMillis()
         var mainPct = -1.0
         for ((pid, j) in dump.rend) {
@@ -323,96 +290,37 @@ object PerfReader {
         }
     }
 
-    private fun readStat(): List<LongArray> =
-        File("/proc/stat").readLines()
-            .filter { it.startsWith("cpu") }
-            .map { line -> line.trim().split(Regex("\\s+")).drop(1).map { it.toLongOrNull() ?: 0L }.toLongArray() }
-
     private fun tick() {
-        // Sandbox panels: one PERFDUMP from the root daemon supplies everything the app can't read.
-        val dump = if (daemonMode) runCatching { fetchDump() }.getOrNull() else null
-        if (daemonMode && dump == null) { resetBaselines(); return } // daemon unreachable — no bogus deltas
+        val snap = PanelMetrics.shared.systemSnapshot()
+        // Top-5 + render jank (PerfReader-only, spread across ticks). Prefer the shared reader's PERFDUMP
+        // tables when it fetched a dump this tick (sandbox panels); else the direct su path on rooted panels.
+        val dump = snap.dump
         when {
-            daemonMode -> when (tickCount % 3) {   // dump is non-null here
-                0 -> runCatching { sampleTopDump(dump!!) }
-                1 -> runCatching { sampleRenderDump(dump!!) }
+            dump != null -> when (tickCount % 3) {
+                0 -> runCatching { sampleTopDump(dump) }
+                1 -> runCatching { sampleRenderDump(dump) }
             }
-            rootOk -> when (tickCount % 3) {        // spread the su calls across ticks (~6s each)
+            rootOk -> when (tickCount % 3) {           // spread the su calls across ticks (~6s each)
                 0 -> runCatching { sampleTop() }
                 1 -> runCatching { sampleRender() }
             }
         }
         tickCount++
-        val stat = if (daemonMode) dump!!.stat else runCatching { readStat() }.getOrNull()
-        val pct = ArrayList<Int>()
-        val prev = prevStat
-        if (stat != null && prev != null && stat.size == prev.size) {
-            for (i in stat.indices) {
-                val totA = prev[i].sum(); val totB = stat[i].sum()
-                val idleA = prev[i].getOrElse(3) { 0 } + prev[i].getOrElse(4) { 0 }
-                val idleB = stat[i].getOrElse(3) { 0 } + stat[i].getOrElse(4) { 0 }
-                val dTot = totB - totA; val dIdle = idleB - idleA
-                pct.add(if (dTot > 0) (((dTot - dIdle) * 100) / dTot).toInt().coerceIn(0, 100) else 0)
-            }
-        }
-        if (stat != null) prevStat = stat
-        if (pct.isEmpty()) return // first tick (no delta yet)
 
-        val overall = pct.first()
-        val cores = if (pct.size > 1) pct.drop(1) else emptyList()
+        val overall = snap.cpuOverall ?: return // first tick (no delta yet) / CPU source unavailable
 
-        val load = if (daemonMode) dump!!.load
-            else runCatching { File("/proc/loadavg").readText().trim().split(" ").take(3) }.getOrNull() ?: emptyList()
-        val freqMhz = runCatching {
-            File("/sys/devices/system/cpu").listFiles { f -> f.name.matches(Regex("cpu[0-9]+")) }
-                ?.sortedBy { it.name }
-                ?.map { File(it, "cpufreq/scaling_cur_freq") }
-                ?.map { if (it.exists()) (it.readText().trim().toLongOrNull() ?: 0L) / 1000 else 0L }
-                ?: emptyList()
-        }.getOrNull() ?: emptyList()
-        // Hardware max clock (static) — current vs this shows DVFS headroom / thermal throttling.
-        val freqMaxMhz = runCatching {
-            File("/sys/devices/system/cpu").listFiles { f -> f.name.matches(Regex("cpu[0-9]+")) }
-                ?.mapNotNull { File(it, "cpufreq/cpuinfo_max_freq").takeIf { x -> x.exists() }?.readText()?.trim()?.toLongOrNull() }
-                ?.maxOrNull()?.div(1000) ?: 0L
-        }.getOrNull() ?: 0L
-
-        val gpuRaw = if (daemonMode) dump!!.gpuRaw
-            else runCatching {
-                File("/sys/class/devfreq").listFiles { f -> f.name.contains("gpu") }
-                    ?.firstNotNullOfOrNull { d -> File(d, "load").takeIf { it.exists() }?.readText()?.trim() }
-            }.getOrNull()
-        var gpuPct = -1; var gpuMhz = 0L
-        gpuRaw?.let { raw ->
-            val at = raw.indexOf('@')
-            gpuPct = (if (at >= 0) raw.substring(0, at) else raw).trim().toIntOrNull() ?: -1
-            if (at >= 0) gpuMhz = raw.substring(at + 1).removeSuffix("Hz").trim().toLongOrNull()?.div(1_000_000) ?: 0L
-        }
-
-        val tempC = if (daemonMode) dump!!.tempMilli.takeIf { it >= 0 }?.let { if (it > 1000) it / 1000.0 else it.toDouble() }
-            else runCatching {
-                File("/sys/class/thermal").listFiles { f -> f.name.startsWith("thermal_zone") }
-                    ?.mapNotNull { File(it, "temp").takeIf { t -> t.exists() }?.readText()?.trim()?.toLongOrNull() }
-                    ?.maxOrNull()?.let { if (it > 1000) it / 1000.0 else it.toDouble() }
-            }.getOrNull()
-
-        val mem = runCatching {
-            val m = File("/proc/meminfo").readLines().associate {
-                val p = it.split(":")
-                p[0].trim() to (p.getOrNull(1)?.trim()?.removeSuffix(" kB")?.trim()?.toLongOrNull() ?: 0L)
-            }
-            val total = m["MemTotal"] ?: 0L
-            val avail = m["MemAvailable"] ?: m["MemFree"] ?: 0L
-            Pair((total - avail) / 1024, total / 1024)
-        }.getOrNull() ?: Pair(0L, 0L)
-        val ramPct = if (mem.second > 0) (mem.first * 100 / mem.second).toInt() else 0
-
-        val loadJson = load.joinToString(",") { "\"$it\"" }
+        val cores = snap.cpuCores
+        val loadJson = snap.loadavg.joinToString(",") { "\"$it\"" }
+        val ramPct = if (snap.memTotalMb > 0) (snap.memUsedMb * 100 / snap.memTotalMb).toInt() else 0
+        val gpuPct = snap.gpuPct
+        val now = snap.ts
         synchronized(lock) {
-            push(cpuHist, overall); push(ramHist, ramPct); push(gpuHist, gpuPct.coerceAtLeast(0))
-            latestFields = """"cpu":$overall,"cores":$cores,"load":[$loadJson],"freqMhz":$freqMhz,"freqMaxMhz":$freqMaxMhz,""" +
-                """"gpu":${if (gpuPct >= 0) gpuPct else "null"},"gpuMhz":$gpuMhz,""" +
-                """"tempC":${tempC ?: "null"},"memUsedMb":${mem.first},"memTotalMb":${mem.second}"""
+            sink.record(MetricSample.num(CPU_KEY, overall.toDouble(), now, "%"))
+            sink.record(MetricSample.num(RAM_KEY, ramPct.toDouble(), now, "%"))
+            sink.record(MetricSample.num(GPU_KEY, gpuPct.coerceAtLeast(0).toDouble(), now, "%"))
+            latestFields = """"cpu":$overall,"cores":$cores,"load":[$loadJson],"freqMhz":${snap.freqCurMhz},"freqMaxMhz":${snap.freqMaxMhz},""" +
+                """"gpu":${if (gpuPct >= 0) gpuPct else "null"},"gpuMhz":${snap.gpuMhz},""" +
+                """"tempC":${snap.socTempC ?: "null"},"memUsedMb":${snap.memUsedMb},"memTotalMb":${snap.memTotalMb}"""
         }
     }
 }

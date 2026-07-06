@@ -8,6 +8,7 @@ import io.github.maxlyth.hapaneld.control.Su
 import io.github.maxlyth.hapaneld.control.TameController
 import io.github.maxlyth.hapaneld.device.DeviceProfile
 import io.github.maxlyth.hapaneld.hardware.NativeLed
+import io.github.maxlyth.hapaneld.metrics.PanelMetrics
 import io.github.maxlyth.hapaneld.util.HelperClient
 import io.github.maxlyth.hapaneld.util.UpdateChecker
 import java.io.File
@@ -100,7 +101,7 @@ object DiagReader {
         appendLine()
         appendLine("[build] fingerprint=${Build.FINGERPRINT}")
         appendLine("board=${Build.BOARD} product=${Build.PRODUCT} hardware=${Build.HARDWARE} abis=${Build.SUPPORTED_ABIS.joinToString(",")}")
-        appendLine("[env] selinux=${readFile("/sys/fs/selinux/enforce")?.trim() ?: "?"} su=${Su.available()} write_settings=${Settings.System.canWrite(ctx)} a11y=${a11yEnabled(ctx)} daemon=${HelperClient.available()} ledjni=${NativeLed.available()}")
+        appendLine("[env] selinux=${PanelMetrics.shared.selinuxEnforce() ?: "?"} su=${Su.available()} write_settings=${Settings.System.canWrite(ctx)} a11y=${a11yEnabled(ctx)} daemon=${HelperClient.available()} ledjni=${NativeLed.available()}")
         appendLine("[sysfs] leds=${listDir("/sys/class/leds")} backlight=${listDir("/sys/class/backlight")} devfreq=${listDir("/sys/class/devfreq")}")
         appendLine("[labels] ${exec("ls -Zd /sys/class/leds/*/ /sys/class/backlight/*/ /dev/ledjni 2>&1").replace("\n", " ")}")
         // GPIO export diagnostic — only for panels with sysfs button-LED pins (the S9E, gpio147–150).

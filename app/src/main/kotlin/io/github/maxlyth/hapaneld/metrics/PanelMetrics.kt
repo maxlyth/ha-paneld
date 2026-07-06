@@ -1,0 +1,238 @@
+package io.github.maxlyth.hapaneld.metrics
+
+/**
+ * A coherent reading of the system telemetry union at [ts]. [cpuOverall] is null on the very first read
+ * (no prior baseline) or when the CPU source is unavailable; [gpuPct] is −1 when there's no GPU load
+ * figure. [dump] is populated only when this reading came from a helper-daemon `PERFDUMP` — it carries the
+ * process + renderer tables PerfReader needs for its top/render deltas, so no second dump is ever fetched.
+ */
+data class Snapshot(
+    val ts: Long,
+    val cpuOverall: Int?,
+    val cpuCores: List<Int>,
+    val memUsedMb: Long,
+    val memTotalMb: Long,
+    val memPercent: Int?,
+    val socTempC: Double?,
+    val gpuPct: Int,
+    val gpuMhz: Long,
+    val loadavg: List<String>,
+    val freqCurMhz: List<Long>,
+    val freqMaxMhz: Long,
+    val dump: PerfDump?,
+) {
+    /**
+     * The forward-compat **emit** hook: this reading as normalized [MetricSample] records, keyed by
+     * [MetricRegistry]. Nothing consumes it yet — it's the seam an on-device history store subscribes to
+     * later, so it can persist rows without re-deriving structure from a consumer's JSON. Computed on
+     * demand (no per-tick allocation until called). Only headline scalars are emitted; per-core CPU +
+     * current freq stay on the Snapshot for a store that wants them.
+     */
+    fun toSamples(): List<MetricSample> = buildList {
+        cpuOverall?.let { add(MetricSample.num(MetricRegistry.CPU.key, it.toDouble(), ts, "%")) }
+        memPercent?.let { add(MetricSample.num(MetricRegistry.MEM.key, it.toDouble(), ts, "%")) }
+        if (memTotalMb > 0) {
+            add(MetricSample.num(MetricRegistry.MEM_USED.key, memUsedMb.toDouble(), ts, "MB"))
+            add(MetricSample.num(MetricRegistry.MEM_TOTAL.key, memTotalMb.toDouble(), ts, "MB"))
+        }
+        socTempC?.let { add(MetricSample.num(MetricRegistry.SOC_TEMP.key, it, ts, "°C")) }
+        if (gpuPct >= 0) add(MetricSample.num(MetricRegistry.GPU_LOAD.key, gpuPct.toDouble(), ts, "%"))
+        if (gpuMhz > 0) add(MetricSample.num(MetricRegistry.GPU_FREQ.key, gpuMhz.toDouble(), ts, "MHz"))
+        loadavg.firstOrNull()?.toDoubleOrNull()?.let { add(MetricSample.num(MetricRegistry.LOAD1.key, it, ts)) }
+        if (freqMaxMhz > 0) add(MetricSample.num(MetricRegistry.CPU_FREQ_MAX.key, freqMaxMhz.toDouble(), ts, "MHz"))
+    }
+}
+
+/**
+ * The single source of truth for ha-paneld's OS-sourced **poll** telemetry — the union of what PerfReader
+ * (the page-gated `/perf` chart) and Diagnostics (the always-on HA `diag_*` sensors) used to read via
+ * duplicated, divergent `/proc`+`/sys` logic. Both now call this one reader while keeping their own
+ * lifecycles; only the data source is shared.
+ *
+ * **Two distinct caches** (they must not be conflated):
+ *  - *Source-resolution* ([Resolvable]) — which strategy WORKS for a metric (direct `/proc`+`/sys`, then
+ *    the root daemon) is a static property of the panel (SELinux mode, uid, which nodes exist, daemon
+ *    reachability). It's discovered ONCE by probing cheap-first, then cached sticky; steady-state reads go
+ *    straight to the winner with zero probing. A read failure triggers exactly one re-resolution pass; a
+ *    metric that resolves to "no working source" is retried only slowly ([unavailRetryMs]) so a
+ *    late-arriving daemon can still recover it.
+ *  - *Value-freshness* — the last coherent [Snapshot] + its timestamp, reused within [freshMs] so the 2 s
+ *    chart and 60 s heartbeat consumers coalesce onto one read (and one PERFDUMP) instead of double-reading.
+ *
+ * **One `/proc/stat` baseline.** The CPU busy-% delta lives here once (guarded by [lock]) so two callers
+ * at different cadences can't each keep a broken half-baseline. Only a real read advances it. PerfReader's
+ * top/render deltas stay PerfReader-local.
+ *
+ * **One PERFDUMP per tick.** A [TickCtx] memoizes the dump for a single [readCoherent], so however many
+ * metrics resolve to the daemon, they share one round-trip.
+ *
+ * The whole read runs under [lock] (single-flight, like [io.github.maxlyth.hapaneld.util.Cached.get]).
+ */
+class PanelMetrics(
+    private val source: MetricSource = OsMetricSource(),
+    private val clock: () -> Long = System::currentTimeMillis,
+    private val freshMs: Long = FRESH_MS,
+    unavailRetryMs: Long = UNAVAIL_RETRY_MS,
+) {
+    private val lock = Any()
+    private var prevStat: List<LongArray>? = null   // the ONE shared /proc/stat delta baseline
+    private var cached: Snapshot? = null
+
+    // Per-metric source resolvers, cheap-first (DIRECT before DAEMON). A DAEMON strategy pulls from the
+    // tick's memoized PERFDUMP, so several daemon-resolved metrics still cost one round-trip.
+    private val statR = Resolvable(unavailRetryMs, listOf(
+        Strategy(SourceKind.DIRECT) { c -> MetricParse.cpuStatLines(c.source.statText().orEmpty()).takeIf { it.isNotEmpty() } },
+        Strategy(SourceKind.DAEMON) { c -> c.dump()?.stat?.takeIf { it.isNotEmpty() } },
+    ))
+    private val tempR = Resolvable(unavailRetryMs, listOf(
+        Strategy(SourceKind.DIRECT) { c -> MetricParse.maxThermalC(c.source.thermalMilliValues()) },
+        Strategy(SourceKind.DAEMON) { c -> c.dump()?.let { MetricParse.dumpTempC(it.tempMilli) } },
+    ))
+    private val gpuR = Resolvable(unavailRetryMs, listOf(
+        Strategy(SourceKind.DIRECT) { c -> c.source.gpuLoadRaw() },
+        Strategy(SourceKind.DAEMON) { c -> c.dump()?.gpuRaw },
+    ))
+    private val loadR = Resolvable(unavailRetryMs, listOf(
+        Strategy(SourceKind.DIRECT) { c -> c.source.loadavgText()?.let { MetricParse.loadavg3(it) }?.takeIf { it.isNotEmpty() } },
+        Strategy(SourceKind.DAEMON) { c -> c.dump()?.loadavg?.takeIf { it.isNotEmpty() } },
+    ))
+
+    /** A coherent reading, freshness-cached. Thread-safe: safe to call from the PerfReader coroutine and
+     *  the MQTT heartbeat thread concurrently. */
+    fun systemSnapshot(now: Long = clock()): Snapshot = synchronized(lock) {
+        cached?.let { if (now - it.ts < freshMs) return it }
+        readCoherent(now).also { cached = it }
+    }
+
+    /** LAN IPv4 (headline diag sensor). Not delta/cache-sensitive — a straight source read. */
+    fun ipAddress(): String? = source.localIp()
+
+    /** SELinux mode ("1"/"0"). A control read-back routed through the reader (with [cpuGovernor] below);
+     *  backlight / relay / LED reads are registered in [MetricRegistry] but still read in their controllers
+     *  pending a follow-on — see the registry notes. Read off-tick, so a plain direct→su fallback in the
+     *  source, not a [Resolvable] (avoids a resolution-state race with the tick). */
+    fun selinuxEnforce(): String? = source.selinuxEnforce()
+
+    /** Raw cpu0 scaling governor — a control read-back routed through the reader (direct→su in the source;
+     *  no daemon read verb). Off-tick, so a plain passthrough, not a cached [Resolvable]. */
+    fun cpuGovernor(): String? = source.cpuGovernor()
+
+    /** Raw cpu0 available governors (space-separated). */
+    fun cpuAvailableGovernors(): String? = source.cpuAvailableGovernors()
+
+    private fun readCoherent(now: Long): Snapshot {
+        val ctx = TickCtx(source)
+
+        // CPU busy% vs the single shared baseline. Advance the baseline only on a real read.
+        val statLines = statR.read(ctx, now) ?: emptyList()
+        val cpuPct = MetricParse.cpuBusyPercents(prevStat, statLines)
+        if (statLines.isNotEmpty()) prevStat = statLines
+        val cpuOverall = cpuPct.firstOrNull()
+        val cpuCores = if (cpuPct.size > 1) cpuPct.drop(1) else emptyList()
+
+        // Memory — /proc/meminfo is world-readable on every panel, always direct (no daemon verb exists).
+        val memKb = MetricParse.memKb(source.meminfoText().orEmpty())
+        val memUsedMb = memKb?.let { it.first / 1024 } ?: 0L
+        val memTotalMb = memKb?.let { it.second / 1024 } ?: 0L
+        val memPercent = memKb?.let { (used, total) ->
+            if (total > 0) ((used * 100) / total).toInt().coerceIn(0, 100) else null
+        }
+
+        val socTempC = tempR.read(ctx, now)
+        val (gpuPct, gpuMhz) = MetricParse.gpuLoadFreq(gpuR.read(ctx, now))
+        val loadavg = loadR.read(ctx, now) ?: emptyList()
+
+        // CPU frequency — cpufreq sysfs is world-readable on every panel, always direct.
+        val freqCurMhz = source.cpuFreqCurMhz()
+        val freqMaxMhz = source.cpuFreqMaxMhz()
+
+        return Snapshot(
+            ts = now,
+            cpuOverall = cpuOverall,
+            cpuCores = cpuCores,
+            memUsedMb = memUsedMb,
+            memTotalMb = memTotalMb,
+            memPercent = memPercent,
+            socTempC = socTempC,
+            gpuPct = gpuPct,
+            gpuMhz = gpuMhz,
+            loadavg = loadavg,
+            freqCurMhz = freqCurMhz,
+            freqMaxMhz = freqMaxMhz,
+            dump = ctx.dumpOrNull(),
+        )
+    }
+
+    companion object {
+        private const val FRESH_MS = 1500L          // < PerfReader's 2 s tick, so its chart samples fresh + undisturbed
+        // Slow retry for a metric that resolved to "no working source": rare (both consumers first read
+        // after the daemon is up), and a down daemon's socket refuses instantly so the retry is cheap — but
+        // capped well above the tick so a hung/absent daemon isn't re-probed every 2 s. A daemon-connect
+        // event could wake these sooner; the periodic retry is the simpler baseline that still recovers.
+        private const val UNAVAIL_RETRY_MS = 120_000L
+        /** Process-wide shared reader — the one baseline both consumers coordinate through. */
+        val shared: PanelMetrics by lazy { PanelMetrics() }
+    }
+}
+
+/** Which kind of source a strategy reads from — cheap-first ordering is DIRECT < DAEMON < SU. */
+internal enum class SourceKind { DIRECT, DAEMON, SU }
+
+/** One way to read a metric; [read] returns null when that source is unavailable/denied this tick. */
+internal class Strategy<out T>(val kind: SourceKind, val read: (TickCtx) -> T?)
+
+/**
+ * Per-tick context handed to strategies: exposes the [source] and memoizes the one `PERFDUMP` so multiple
+ * daemon-resolved metrics in a single [PanelMetrics.readCoherent] share one round-trip (constraint: one
+ * dump per tick). The dump is fetched lazily — only if some metric actually needs the daemon.
+ */
+internal class TickCtx(val source: MetricSource) {
+    private var fetched = false
+    private var dump: PerfDump? = null
+
+    /** The tick's PERFDUMP (fetched at most once), or null if the daemon is unreachable. */
+    fun dump(): PerfDump? {
+        if (!fetched) {
+            dump = runCatching { source.perfDump()?.let(MetricParse::parsePerfDump) }.getOrNull()
+            fetched = true
+        }
+        return dump
+    }
+
+    /** The dump if one was fetched during this tick, else null — without triggering a fetch. */
+    fun dumpOrNull(): PerfDump? = if (fetched) dump else null
+}
+
+/**
+ * A metric's source-resolution cache. [resolved] is −1 (never resolved), −2 (no working source — retried
+ * only every [unavailRetryMs]), or the winning strategy index. All state is mutated only inside
+ * [PanelMetrics.readCoherent], under the reader lock, so it needs no separate synchronization.
+ */
+internal class Resolvable<T : Any>(
+    private val unavailRetryMs: Long,
+    private val strategies: List<Strategy<T>>,
+) {
+    private var resolved = -1
+    private var lastResolveAt = 0L
+
+    fun read(ctx: TickCtx, now: Long): T? {
+        val idx = resolved
+        return when {
+            idx >= 0 -> strategies[idx].read(ctx) ?: reResolve(ctx, now)   // sticky winner; re-resolve if it fails
+            idx == -1 -> reResolve(ctx, now)                                // first read
+            now - lastResolveAt >= unavailRetryMs -> reResolve(ctx, now)    // unavailable: slow retry
+            else -> null                                                    // unavailable, within backoff
+        }
+    }
+
+    /** One pass down the ordered strategies; caches the first that yields a value, else marks unavailable. */
+    private fun reResolve(ctx: TickCtx, now: Long): T? {
+        lastResolveAt = now
+        for (i in strategies.indices) {
+            val v = strategies[i].read(ctx)
+            if (v != null) { resolved = i; return v }
+        }
+        resolved = -2
+        return null
+    }
+}
