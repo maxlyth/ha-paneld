@@ -25,8 +25,18 @@ if [ -t 1 ]; then
   RED=$'\033[31m'; GRN=$'\033[32m'; YEL=$'\033[33m'; CYN=$'\033[36m'; MAG=$'\033[35m'
 else B=; D=; X=; RED=; GRN=; YEL=; CYN=; MAG=; fi
 step() { echo "${CYN}${B}$1${X} $2"; }
+warn() { echo "   ${YEL}⚠ $1${X}"; }
 
 trap 'echo "${RED}${B}✗ provisioning incomplete${X} — re-run the SAME command to finish (it is idempotent)." >&2' ERR
+
+# Fatal with SPECIFIC recovery steps. Disarms the generic re-run trap first: these are the failures
+# re-running cannot fix, so the trap's blanket advice would mislead.
+fail() {
+  trap - ERR
+  echo "${RED}${B}✗ $1${X}" >&2; shift
+  local l; for l in "$@"; do echo "   $l" >&2; done
+  exit 1
+}
 
 TARGET="${1:?usage: provision.sh <panel-ip:5555> [APK] [--id ID] [--mqtt tcp://host:1883] [--mqtt-user U] [--mqtt-pass P] [--log-host HOST] [--log-port N] [--log-proto syslog|http] [--log-off] [--export FILE] [--restore FILE] [--restore-fleet FILE] [--latest] [--force] [--persist-adb] [--strip-vendor] [--no-tame] [--verify]}"
 shift
@@ -68,12 +78,20 @@ URL="http://$IP:8888"
 verify() {
   step "🔎 verifying" "${D}$URL${X}"
   local diag cfg rc=0
-  diag="$(curl -fsS --max-time 4 "$URL/api/v1/diag" 2>/dev/null || true)"
+  # A COLD /diag probes the panel's capabilities (su, daemon, sensors) and takes >12s on a PX30;
+  # warm it's instant. 4s here made verify fail on every fresh run — keep the timeout generous.
+  diag="$(curl -fsS --max-time 25 "$URL/api/v1/diag" 2>/dev/null || true)"
   cfg="$(curl -fsS --max-time 3 "$URL/api/v1/config" 2>/dev/null || true)"
   chk() { if printf '%s' "$2" | grep -q "$3"; then echo "   ${GRN}✓${X} $1"; else echo "   ${RED}✗ $1${X}"; rc=1; fi; }
   chk "HTTP server reachable"  "$diag" "ha-paneld diagnostics"
   chk "WRITE_SETTINGS granted" "$diag" "write_settings=true"
-  chk "accessibility enabled"  "$diag" "a11y.enabled=true"
+  chk "accessibility enabled"  "$diag" "a11y=true"
+  # Root helper daemon — informational (only sandbox-walled panels need it; see the closing note).
+  if printf '%s' "$diag" | grep -q "daemon=true"; then
+    echo "   ${GRN}✓${X} root helper daemon: running"
+  elif [ -n "$diag" ]; then
+    echo "   ${YEL}ℹ${X} root helper daemon: ${YEL}not detected${X} ${D}(needed on sandbox-walled panels — helper/install-daemon.sh)${X}"
+  fi
   # panel_id + MQTT (informational — install-only is valid). grep/cut so no python (Git Bash-friendly).
   local broker pid
   broker="$(printf '%s' "$cfg" | grep -o '"mqtt_broker":"[^"]*"' | head -1 | cut -d'"' -f4)"
@@ -82,6 +100,81 @@ verify() {
   else echo "   ${YEL}ℹ${X} MQTT broker: ${YEL}not set${X} ${D}(set it on the page to enable HA discovery)${X}"; fi
   echo "   ${YEL}ℹ${X} panel_id: ${B}${pid:-?}${X}"
   return $rc
+}
+
+# `adb connect` exits 0 even when it FAILS ("cannot connect"), and a connected device can still sit
+# "unauthorized" (RSA dialog waiting on the panel screen) or "offline" (stale adbd session). Verify the
+# state explicitly so the failure surfaces HERE with recovery steps, not as an obscure error (or a
+# hang) at the first real adb command.
+adb_preflight() {
+  step "🔌 connecting" "$TARGET"
+  # `adb connect` itself can block for MINUTES on a dead IP (TCP retry) — run it in the background
+  # and bound the wait; the poll below reads the device state the adb server ends up with.
+  adb connect "$TARGET" >/dev/null 2>&1 &
+  local cpid=$!
+  local state="" i
+  for i in $(seq 1 12); do
+    state="$(adb devices 2>/dev/null | awk -v t="$TARGET" '$1==t {print $2}')"
+    if [ "$state" = "device" ]; then kill "$cpid" 2>/dev/null || true; return 0; fi
+    # Stale session ("offline"): reset it once, then keep polling.
+    if [ "$state" = "offline" ] && [ "$i" = 4 ]; then
+      adb disconnect "$TARGET" >/dev/null 2>&1 || true
+      ( adb connect "$TARGET" >/dev/null 2>&1 & )
+    fi
+    sleep 1
+  done
+  kill "$cpid" 2>/dev/null || true
+  case "$state" in
+    unauthorized) fail "panel refused adb: unauthorized" \
+      "Accept the ADB authorization dialog shown ON THE PANEL'S SCREEN (tick 'always allow'), then re-run." \
+      "No dialog visible? Toggle 'ADB debugging' off/on in the panel's Developer options and re-run." ;;
+    offline) fail "panel is stuck 'offline' on adb" \
+      "Toggle 'ADB debugging' off/on in the panel's Developer options (or power-cycle the panel if you are next to it), then re-run." \
+      "A session held by another machine can also cause this — run 'adb disconnect' there first." ;;
+    *) fail "cannot reach $TARGET over adb" \
+      "Check: the IP is right, network ADB is enabled (Developer options → 'ADB debugging' / 'Network ADB'), the port ($TARGET), and that this machine is on the same network/VLAN as the panel." \
+      "Some panels only expose adb on USB until 'adb tcpip 5555' is run once — see docs/provisioning.md ('Bootstrapping adb')." ;;
+  esac
+}
+
+# Root-path probe — vendor root varies TWICE over: the prefix (`su 0`, `su root`, `su -c`) AND the
+# dialect. Join-style su (SuperSU/toolbox) re-joins argv and runs it through its own `sh -c`, so a
+# command must be passed as ONE quoted word (`su 0 "cmd a b"`) — adding `sh -c` double-wraps and
+# silently STRIPS the quoting ("getprop x" becomes a bare getprop). Execvp-style su (AOSP) execs argv
+# directly, so a command string DOES need the `sh -c` wrapper. `"id; id"` only succeeds through a
+# shell, so probing with it identifies the wrapping that preserves a multi-word command. Userdebug
+# panels can also have a root adbd with NO su at all — probed first. Probe once, cache the winner.
+# A su that prompts on-screen (Magisk) can take ~10s to auto-deny a form — the probe tolerates that.
+SU_FORM=""
+probe_su() {
+  if [ -n "$SU_FORM" ]; then [ "$SU_FORM" != none ]; return; fi
+  local u key pre
+  u="$(adb -s "$TARGET" shell id 2>/dev/null | tr -d '\r')" || u=""
+  case "$u" in uid=0*) SU_FORM=shell; return 0 ;; esac
+  for key in su0 suroot; do
+    case "$key" in su0) pre="su 0" ;; suroot) pre="su root" ;; esac
+    u="$(adb -s "$TARGET" shell "$pre \"id; id\"" 2>/dev/null | tr -d '\r')" || u=""
+    case "$u" in *uid=0*) SU_FORM="${key}join"; return 0 ;; esac
+    u="$(adb -s "$TARGET" shell "$pre sh -c \"id; id\"" 2>/dev/null | tr -d '\r')" || u=""
+    case "$u" in *uid=0*) SU_FORM="${key}shc"; return 0 ;; esac
+  done
+  u="$(adb -s "$TARGET" shell "su -c \"id; id\"" 2>/dev/null | tr -d '\r')" || u=""
+  case "$u" in *uid=0*) SU_FORM=suc; return 0 ;; esac
+  SU_FORM=none; return 1
+}
+
+# Run one command string as root via the probed form. Keep the string free of quotes — it reaches
+# the device shell inside double quotes.
+run_root() {
+  probe_su || return 1
+  case "$SU_FORM" in
+    shell)      adb -s "$TARGET" shell "$1" ;;
+    su0join)    adb -s "$TARGET" shell "su 0 \"$1\"" ;;
+    su0shc)     adb -s "$TARGET" shell "su 0 sh -c \"$1\"" ;;
+    surootjoin) adb -s "$TARGET" shell "su root \"$1\"" ;;
+    surootshc)  adb -s "$TARGET" shell "su root sh -c \"$1\"" ;;
+    suc)        adb -s "$TARGET" shell "su -c \"$1\"" ;;
+  esac
 }
 
 # Tuya panels (TPA10) ship a closed vendor stack (launcher, system UI, Tuya IoT, hardware, diagnostics)
@@ -93,9 +186,9 @@ offer_strip_vendor() {
   model="$(adb -s "$TARGET" shell getprop ro.product.model 2>/dev/null | tr -d '\r')"
   case "$brand $model" in *[Tt]uya*|*TPA10*) ;; *) return 0 ;; esac   # Tuya/TPA10 only
 
-  # Guard 1 — root (vendor apps are system apps; pm disable-user needs su on the userdebug build).
-  if ! adb -s "$TARGET" shell 'su 0 id 2>/dev/null' | grep -q 'uid=0'; then
-    if [ "$STRIP_VENDOR" = 1 ]; then echo "   ${YEL}⚠ --strip-vendor ignored: no root (need userdebug su).${X}"; fi
+  # Guard 1 — root (vendor apps are system apps; pm disable-user needs root on the userdebug build).
+  if ! probe_su; then
+    if [ "$STRIP_VENDOR" = 1 ]; then echo "   ${YEL}⚠ --strip-vendor ignored: no root path found (su or adbd-root).${X}"; fi
     return 0
   fi
   # Guard 2 — persistent adb, else disabling the diagnostics-app adb backdoor can lock you out.
@@ -219,39 +312,83 @@ if [ "$VERIFY_ONLY" = 1 ]; then
   verify; exit $?
 fi
 
-resolve_apk
+# Preflight the panel BEFORE fetching an APK — an unreachable/unauthorized panel should fail in
+# seconds with recovery steps, not after a release download.
+adb_preflight
 
-step "🔌 connecting" "$TARGET"
-adb connect "$TARGET" >/dev/null
+resolve_apk
 
 version_guard
 
 step "📦 installing" "${D}$APK${X}"
-adb -s "$TARGET" install -r -g "$APK" >/dev/null 2>&1 || adb -s "$TARGET" install -r "$APK"
+# Try with -g (grant-all) first — some vendor builds reject the flag, so retry plain. Capture the
+# output: adb's raw INSTALL_FAILED_* codes are cryptic, so classify the common ones into recovery steps.
+install_apk() {
+  local out
+  out="$(adb -s "$TARGET" install -r -g "$APK" 2>&1)" && return 0
+  out="$(adb -s "$TARGET" install -r "$APK" 2>&1)" && return 0
+  echo "$out" | sed 's/^/   /' >&2
+  case "$out" in
+    *INSTALL_FAILED_UPDATE_INCOMPATIBLE*|*"signatures do not match"*)
+      fail "install failed: signature mismatch — the ha-paneld already on the panel was signed with a different key (e.g. a local debug build vs a GitHub release)" \
+        "1. If the panel is reachable, back up its config first: re-run with --export FILE (or on the panel's :8888 page → Install → Backup)." \
+        "2. adb -s $TARGET uninstall $PKG    (removes the app AND its on-panel config)" \
+        "3. Re-run this command; restore the config with --restore FILE." ;;
+    *INSTALL_FAILED_VERSION_DOWNGRADE*)
+      fail "install failed: the panel already runs a NEWER version than this APK" \
+        "Install the newest release instead (--latest), or to force this older build: adb -s $TARGET uninstall $PKG (loses on-panel config), then re-run." ;;
+    *INSTALL_FAILED_INSUFFICIENT_STORAGE*)
+      fail "install failed: the panel is out of storage" \
+        "Free space on the panel (Settings → Storage; or clear app caches: adb -s $TARGET shell pm trim-caches 999G), then re-run." ;;
+    *)
+      fail "adb install failed (output above)" \
+        "Fix the cause shown above, then re-run the SAME command — provisioning is idempotent." ;;
+  esac
+}
+install_apk
 
 step "🔑 permissions" "${D}notifications · WRITE_SETTINGS (brightness/screen) · SYSTEM_ALERT_WINDOW (navbar) · a11y (buttons)${X}"
+# Grants degrade gracefully: some vendor builds refuse appops/settings writes from the adb shell.
+# A failed grant must not abort the run — the app works with reduced capability, verify() reports the
+# true end-state, and each warning names the manual Settings path to finish the job by hand.
 adb -s "$TARGET" shell pm grant "$PKG" android.permission.POST_NOTIFICATIONS >/dev/null 2>&1 || true
-adb -s "$TARGET" shell appops set "$PKG" WRITE_SETTINGS allow
+adb -s "$TARGET" shell appops set "$PKG" WRITE_SETTINGS allow >/dev/null 2>&1 \
+  || warn "could not grant WRITE_SETTINGS via adb — grant manually: Settings → Apps → ha-paneld → 'Modify system settings'"
 # Soft-navbar overlay. SuperSU panels self-grant this at runtime via in-app su, but sandbox-walled
 # panels (Tuya TPA10, SELinux-blocked from exec'ing su) can't — so grant it here for every panel.
-adb -s "$TARGET" shell appops set "$PKG" SYSTEM_ALERT_WINDOW allow
-EXISTING="$(adb -s "$TARGET" shell settings get secure enabled_accessibility_services | tr -d '\r')"
-if [ "$EXISTING" = "null" ] || [ -z "$EXISTING" ]; then
-  adb -s "$TARGET" shell settings put secure enabled_accessibility_services "$A11Y"
+adb -s "$TARGET" shell appops set "$PKG" SYSTEM_ALERT_WINDOW allow >/dev/null 2>&1 \
+  || warn "could not grant SYSTEM_ALERT_WINDOW via adb — grant manually: Settings → Apps → ha-paneld → 'Display over other apps'"
+# Enable the accessibility service, preserving whatever else is enabled. If the READ fails we must
+# NOT write: a blind write would replace the whole list and silently disable any other a11y service.
+if EXISTING="$(adb -s "$TARGET" shell settings get secure enabled_accessibility_services 2>/dev/null)"; then
+  EXISTING="${EXISTING//$'\r'/}"
+  if [ "$EXISTING" = "null" ] || [ -z "$EXISTING" ]; then
+    adb -s "$TARGET" shell settings put secure enabled_accessibility_services "$A11Y" >/dev/null 2>&1 \
+      || warn "could not enable the accessibility service — enable manually: Settings → Accessibility → ha-paneld"
+  else
+    case "$EXISTING" in
+      *"$A11Y"*) : ;;
+      *) adb -s "$TARGET" shell settings put secure enabled_accessibility_services "$EXISTING:$A11Y" >/dev/null 2>&1 \
+           || warn "could not enable the accessibility service — enable manually: Settings → Accessibility → ha-paneld" ;;
+    esac
+  fi
+  adb -s "$TARGET" shell settings put secure accessibility_enabled 1 >/dev/null 2>&1 || true
 else
-  case "$EXISTING" in
-    *"$A11Y"*) : ;;
-    *) adb -s "$TARGET" shell settings put secure enabled_accessibility_services "$EXISTING:$A11Y" ;;
-  esac
+  warn "could not read the accessibility settings — skipping a11y enable (hardware buttons). Enable manually: Settings → Accessibility → ha-paneld."
 fi
-adb -s "$TARGET" shell settings put secure accessibility_enabled 1
 
 # Opt-in: persist network adb across reboots. Sets the prop only (no adbd restart — that would drop
 # this very connection mid-provision); it's already on tcp, so the prop just makes it survive a reboot.
 if [ "$PERSIST_ADB" = 1 ]; then
   step "🔌 network adb" "${D}persisting tcp 5555 across reboot${X}"
-  adb -s "$TARGET" shell su 0 setprop persist.adb.tcp.port 5555 >/dev/null 2>&1 \
-    || adb -s "$TARGET" shell su -c 'setprop persist.adb.tcp.port 5555' >/dev/null 2>&1 || true
+  run_root 'setprop persist.adb.tcp.port 5555' >/dev/null 2>&1 || true
+  # Trust the read-back, not the command: su forms vary per vendor and a failed setprop is silent.
+  PERSISTED="$(adb -s "$TARGET" shell getprop persist.adb.tcp.port 2>/dev/null | tr -d '\r' || true)"
+  if [ "$PERSISTED" = "5555" ]; then
+    echo "   ${GRN}✓${X} persist.adb.tcp.port=5555"
+  else
+    warn "could not persist network adb (needs root — no working su/adbd-root path). After a reboot, re-enable it on the panel (Developer options) or via USB: adb tcpip 5555"
+  fi
 fi
 
 # MUST launch after install: `adb install -r` leaves the app in Android's "stopped" state, which does
@@ -267,7 +404,8 @@ launch_and_wait() {
 step "▶️  starting" "the panel agent"
 if ! launch_and_wait; then
   step "▶️  re-starting" "${D}agent didn't answer — retrying${X}"
-  launch_and_wait || echo "   ${YEL}⚠ web server still not answering on $URL — check the panel.${X}"
+  launch_and_wait || { warn "web server still not answering on $URL — the app may be running anyway: open $URL in a browser."
+                       echo "   ${D}If the page loads there, only THIS machine can't reach the panel on :8888 (firewall/VLAN) — the remaining config steps need that port.${X}"; }
 fi
 
 ARGS=()
@@ -281,7 +419,12 @@ ARGS=()
 [ -n "$LOG_PROTO" ]  && ARGS+=(--data-urlencode "log_ship_protocol=$LOG_PROTO")
 if [ ${#ARGS[@]} -gt 0 ]; then
   step "⚙️  configuring" "${D}panel_id / MQTT / log shipping${X}"
-  curl -fsS -H 'Accept: application/json' -X POST "${ARGS[@]}" "$URL/api/v1/config" >/dev/null && echo "   ${GRN}✓${X} applied"
+  if CFG_ERR="$(curl -fsS -H 'Accept: application/json' -X POST "${ARGS[@]}" "$URL/api/v1/config" 2>&1 >/dev/null)"; then
+    echo "   ${GRN}✓${X} applied"
+  else
+    warn "config not applied: ${CFG_ERR:-no response}"
+    echo "   ${D}If the agent was still starting, re-running applies it. A 403 means the panel refused the source: its API only accepts LAN addresses — provision from a host on the panel's own network, not via VPN/routed subnet.${X}"
+  fi
 fi
 
 # Config bundle restore (best-effort import: valid keys apply, invalid/unknown are reported + skipped —
@@ -316,7 +459,8 @@ fi
 
 echo
 verify && echo "${GRN}${B}✅ provisioned${X} — ${B}$URL/${X}" || echo "${YEL}↻ re-run the same command to finish (idempotent).${X}"
-echo "${D}   Root daemon (helper/install-daemon.sh): required on EVERY sandbox-walled panel (appCanSu=false — TPA10, SMT1019, …), not just LED panels. It's the privileged path for screen-off, density, governor, screenshot, perf and buttons even when ledMechanism=NONE. rk3576/PX30 panels can exec su directly and don't need it.${X}"
+echo "${D}   Root daemon: required on EVERY sandbox-walled panel (appCanSu=false — TPA10, SMT1019, …), not just LED panels. It's the privileged path for screen-off, density, governor, screenshot, perf and buttons even when ledMechanism=NONE. rk3576/PX30 panels can exec su directly and don't need it.${X}"
+echo "${D}   Install it with:  ./helper/build.sh && ./helper/install-daemon.sh $TARGET${X}"
 
 # Flag a too-old system WebView (informational; the dashboard won't render on ancient Chrome).
 check_webview

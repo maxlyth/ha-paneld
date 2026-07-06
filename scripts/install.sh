@@ -37,6 +37,10 @@ TTY=/dev/tty
 echo "${Y}First enable network ADB on the panel (Developer options → ADB / 'ADB debugging').${X}"
 printf "Panel IP (or ip:port): " > "$TTY"; read -r IP < "$TTY"
 [ -n "${IP:-}" ] || { echo "${R}No IP entered.${X}"; exit 1; }
+# Loose sanity check (hostname/IPv4[:port]) — catch typos here rather than as an obscure adb error.
+case "$IP" in
+  *[!0-9a-zA-Z.:-]*|.*|-*) echo "${R}'$IP' doesn't look like an IP address or hostname (optionally :port).${X} Find it on the panel under Settings → About → Status, or in your router's client list."; exit 1 ;;
+esac
 case "$IP" in *:*) TARGET="$IP" ;; *) TARGET="$IP:5555" ;; esac
 printf "Panel id [blank = auto from device name]: " > "$TTY"; read -r PID < "$TTY" || PID=""
 printf "MQTT broker tcp://host:1883 [blank = auto-discover Home Assistant]: " > "$TTY"; read -r BROKER < "$TTY" || BROKER=""
