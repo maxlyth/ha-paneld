@@ -482,6 +482,14 @@ class PaneldService : Service() {
         // Keep the SoC + network awake (screen still free to sleep) so Doze/suspend can't freeze the
         // MQTT reactor + keepalive into a half-open, unreachable connection. On by default; see keep_awake.
         runCatching { power.apply(config.keepAwake) }
+        // Cache HA's frontend URL from the Companion (its internal/external_url) so the header "Open in HA"
+        // button always has a target — even when the panel's own device-page URL hasn't resolved (e.g. a
+        // remote panel over a tunnel). Root sqlite read, off the main thread; best-effort.
+        scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching {
+                io.github.maxlyth.hapaneld.control.CompanionDb.serverUrl(this@PaneldService, io.github.maxlyth.hapaneld.control.Su)
+            }.getOrNull()?.let { config.setHaBaseUrl(it) }
+        }
         scope.launch {
             io.github.maxlyth.hapaneld.http.PerfReader.dashboardPkg = dashboardTarget()
             io.github.maxlyth.hapaneld.http.PerfReader.start(scope)

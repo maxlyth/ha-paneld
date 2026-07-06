@@ -102,6 +102,15 @@ class Config(context: Context) {
         prefs.edit().putString("ha_device_url", url).putLong("ha_link_at", System.currentTimeMillis()).apply()
     }
 
+    /** HA's frontend URL as the Companion knows it (its internal/external_url), resolved from the Companion
+     *  DB + cached. The header "Open in HA" button falls back to this when [haDeviceUrl] (the panel's own
+     *  device page) hasn't resolved — e.g. a remote panel over a tunnel — so the button is always present. */
+    val haBaseUrl: String get() = prefs.getString("ha_base_url", "")!!
+    fun setHaBaseUrl(url: String) { prefs.edit().putString("ha_base_url", url).apply() }
+
+    /** Best "Open in HA" target: the resolved device page if known, else the Companion's HA frontend URL. */
+    val haLinkUrl: String get() = haDeviceUrl.ifBlank { haBaseUrl }
+
     /** Update versions the user dismissed from the dashboard banner, label -> ignored latestVersion.
      *  Stored as newline-joined "label\tversion" rows (component labels + semver never contain \t or \n).
      *  Only the dashboard banner honours this — the Install tab always lists every available update. The

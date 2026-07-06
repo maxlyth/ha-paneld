@@ -70,6 +70,19 @@ object CompanionDb {
         return parseServers(out)
     }
 
+    /** The active HA server URL as the Companion knows it — internal_url preferred, else external_url,
+     *  from the first server row that has one. Null when there's no Companion / no root / no server row.
+     *  A root sqlite read — call off the main thread. Used as the header "Open in HA" target when the
+     *  panel's own HA device-page URL hasn't resolved (e.g. a remote panel over a tunnel). */
+    fun serverUrl(context: Context, root: RootShell): String? {
+        val rows = readServers(context, root) ?: return null
+        for (r in rows) {
+            val u = r.internalUrl.takeUnless { isBlank(it) } ?: r.externalUrl.takeUnless { isBlank(it) }
+            if (u != null) return u.trimEnd('/')
+        }
+        return null
+    }
+
     /** Health status for the Install-tab warning. Never throws; (false, 0) when it can't tell. */
     fun internalUrlStatus(context: Context, root: RootShell): UrlStatus {
         val rows = readServers(context, root) ?: return UrlStatus(false, 0)
