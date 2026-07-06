@@ -22,6 +22,18 @@ re-checks a panel without changing anything.
 
 Non-root panels: use the in-app setup screen, which fires the standard system permission intents.
 
+**Sandbox-walled panels (TPA10, SMT1019, … — the app itself can't exec `su`):** also install the
+[root helper daemon](../helper/README.md), which is the privileged control path there (screen-off,
+density, CPU governor, screenshot, perf, buttons, LED):
+
+```bash
+./helper/build.sh && ./helper/install-daemon.sh <panel-ip:5555>
+```
+
+rk3576 / PX30 panels run `su` in-app and don't need it. The installer probes the panel's root path
+(vendor `su` variants or a root adbd) and picks a `/system` or systemless (Magisk-style `service.d`)
+install automatically; it is idempotent and safe to re-run.
+
 ## Updating a whole fleet
 
 Use [`scripts/update-fleet.sh`](../scripts/update-fleet.sh). The fleet script downloads the release

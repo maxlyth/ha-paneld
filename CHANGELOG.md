@@ -8,6 +8,27 @@ From **v0.8.0**, entries are grouped under **Added** (new features/entities), **
 changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
 content appear. Earlier releases predate this convention and keep their flat lists.
 
+## v0.8.7-rc3 - Unreleased
+
+### Fixed
+
+- **`provision.sh` self-verify works again** — the end-of-run checklist grepped for a diagnostics token that no longer exists (`a11y.enabled=`) and gave a cold `/diag` only 4 seconds (it can take >12s while the panel probes its capabilities), so every run ended "re-run to finish" even when the panel was fully provisioned, and `--verify` always exited non-zero. Verify now passes on a healthy panel and also reports whether the root helper daemon is running.
+- **Root commands now work on SuperSU-style panels (NSPanel Pro)** — that `su` re-joins its arguments and runs them through its own `sh -c`, so wrapping a command in `sh -c` silently stripped the quoting (the daemon installer's multi-step root blocks were mangled). Both scripts now probe the panel's su dialect (join-style vs exec-style, plus `su 0` / `su root` / `su -c` prefixes and root-adbd with no su at all) and wrap commands accordingly.
+- **The daemon installer's systemless boot script is pushed as a file** instead of being generated through nested device shells, which evaluated its boot-completed wait once at install time instead of at boot.
+- **`provision.sh` can no longer wipe other accessibility services** — if reading the current enabled-services list fails, it skips the write (with a manual-path hint) instead of overwriting the whole list.
+- **`--persist-adb` is verified by read-back** — previously a silent no-op on panels whose su form wasn't one of the two it tried.
+
+### Changed
+
+- **Provisioning and the daemon installer preflight the adb connection** — connect failures, the on-panel authorization dialog, and stale "offline" sessions are detected up front and fail fast (~12s instead of minutes) with specific recovery steps, before any release download.
+- **Install failures are classified with recovery steps** — signature mismatch (debug vs release), downgrade, and out-of-storage each explain how to recover (including backing up config first) instead of aborting with a raw adb error.
+- **Permission grants degrade gracefully** — a vendor build that refuses adb-side grants no longer aborts provisioning; each failed grant names the manual Settings path and the run continues to the self-verify.
+- **`install-daemon.sh` exit code now reflects daemon liveness** — files-in-place but no running process is reported as a failure with recovery steps; the script also states which root path it is using.
+
+### Docs
+
+- Sandbox-walled panels' root-daemon install step (`helper/install-daemon.sh`) is now linked from the provisioning guide, not just `helper/README.md`.
+
 ## v0.8.7-rc2 - 2026-07-06
 
 ### Added
