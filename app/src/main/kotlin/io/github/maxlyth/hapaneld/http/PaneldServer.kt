@@ -350,8 +350,10 @@ class PaneldServer(
                         call.respondText(withContext(Dispatchers.IO) { infoJson() }, ContentType.Application.Json)
                     }
                     get("/diag") {
-                        // Reuses the snapshot facts (≤15s old) instead of re-running the probe suite.
-                        val facts = withContext(Dispatchers.IO) { snapCache.get().facts }
+                        // Last-known snapshot facts, refreshed in the background: the [panel] block is
+                        // ancillary context, and a blocking snapCache.get() re-ran the FULL probe suite
+                        // whenever the snapshot was stale (>12s on a PX30 for a "simple" text page).
+                        val facts = withContext(Dispatchers.IO) { snapStaleOk().facts }
                         call.respondText(DiagReader.dump(appContext, facts), ContentType.Text.Plain)
                     }
                     // Live log tail as Server-Sent Events (?source=app|system). Feeds the Logs tab;

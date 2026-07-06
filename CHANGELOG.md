@@ -12,6 +12,7 @@ content appear. Earlier releases predate this convention and keep their flat lis
 
 ### Fixed
 
+- **`/api/v1/diag` responds instantly** — it claimed to reuse the cached panel snapshot but actually re-ran the full probe suite (a dozen su/system probes, >12s on an NSPanel Pro) whenever the snapshot was more than 15s old. It now serves the last-known snapshot and refreshes it in the background, like the Configure endpoints already did.
 - **`provision.sh` self-verify works again** — the end-of-run checklist grepped for a diagnostics token that no longer exists (`a11y.enabled=`) and gave a cold `/diag` only 4 seconds (it can take >12s while the panel probes its capabilities), so every run ended "re-run to finish" even when the panel was fully provisioned, and `--verify` always exited non-zero. Verify now passes on a healthy panel and also reports whether the root helper daemon is running.
 - **Root commands now work on SuperSU-style panels (NSPanel Pro)** — that `su` re-joins its arguments and runs them through its own `sh -c`, so wrapping a command in `sh -c` silently stripped the quoting (the daemon installer's multi-step root blocks were mangled). Both scripts now probe the panel's su dialect (join-style vs exec-style, plus `su 0` / `su root` / `su -c` prefixes and root-adbd with no su at all) and wrap commands accordingly.
 - **The daemon installer's systemless boot script is pushed as a file** instead of being generated through nested device shells, which evaluated its boot-completed wait once at install time instead of at boot.
