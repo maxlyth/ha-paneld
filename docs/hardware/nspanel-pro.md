@@ -49,7 +49,7 @@ The spec table above and most of this page were captured on an **86P**; the **12
 | Proximity firmware | **4.0.12 restored graded** proximity | stayed **binary** at 4.x (per-model kernel divergence — see [Sensors](#sensors--light--proximity-are-app-direct)) |
 
 Both share the EFR32 Zigbee radio, Android 8.1 (AOSP), arm64-v8a, and the root/recovery story below.
-Live-verified on a 120P (BMP, fw `NSPanel120P_3.7.1`): `wm size`=750×1334, density 240, `ro.board.platform=rk3326`.
+Live-verified on a 120P (fw `NSPanel120P_3.7.1`): `wm size`=750×1334, density 240, `ro.board.platform=rk3326`.
 
 > [!NOTE]
 > Both models reach the current ROM (**4.6.0**, the June 2026 official *Stable*) via a 2-step path: 4.0.12 full ROM → 4.6.0 diff. (**4.5.2** was an APK-only layer on the now-superseded 4.5.1.) The CoolKit CDN scheme, every verified OTA URL, and the full flashing how-to are on the [firmware & flashing page](nspanel-pro-firmware.md); the live, community-maintained version index is the Discussion linked from there.
