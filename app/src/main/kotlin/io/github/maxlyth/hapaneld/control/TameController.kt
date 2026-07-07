@@ -26,7 +26,15 @@ import io.github.maxlyth.hapaneld.util.HelperClient
  * the framework, and ha-paneld itself. Only installed packages are acted on. The feature is **off by
  * default** — the blocklist is empty unless the user deliberately populates it.
  */
-class TameController(private val context: Context) {
+class TameController(
+    private val context: Context,
+    // Invoked right after [tame] disables a package that WAS the current default home (a vendor kiosk
+    // like eWeLink left as home). The caller re-asserts the dashboard as the default home AND foregrounds
+    // it — otherwise disabling the vendor home strands the panel on ha-paneld's admin launcher until the
+    // 300s "dashboard backgrounded" watchdog eventually returns to it (a ~5-minute blank-to-dashboard gap
+    // seen on boot). Default no-op so plain construction (tests / non-boot use) is unaffected.
+    private val onDefaultHomeDisabled: () -> Unit = {},
+) {
 
     /** Tame every blocklisted package that's installed and safe. Returns the packages actually tamed. */
     fun applyBlocklist(packages: List<String>): List<String> =
@@ -280,7 +288,8 @@ class TameController(private val context: Context) {
         // If we're disabling the CURRENT default home (e.g. a vendor kiosk like eWeLink left as home),
         // hand the home role to ha-paneld's admin launcher FIRST so Android doesn't pop a home chooser
         // or strand the panel. The dashboard app is re-asserted as home by ensureDashboardHome later.
-        if (pkg == currentDefaultHome()) {
+        val wasDefaultHome = pkg == currentDefaultHome()
+        if (wasDefaultHome) {
             val comp = "${context.packageName}/.AdminLauncherActivity"
             privileged("SETHOME $comp", "cmd package set-home-activity $comp")
             Log.i(TAG, "tame $pkg: was default home → set ha-paneld admin launcher as home first")
@@ -290,6 +299,12 @@ class TameController(private val context: Context) {
         val overlay = privileged("OVERLAY $pkg deny", "appops set $pkg SYSTEM_ALERT_WINDOW deny")
         val ok = stopped && disabled && overlay
         Log.i(TAG, "tame $pkg: stop=$stopped disable=$disabled overlay=$overlay")
+        // We just removed the vendor home and parked the home role on our admin launcher; hand it on to
+        // the real dashboard now (set-as-home + foreground) instead of waiting for the 300s watchdog.
+        if (wasDefaultHome && disabled) {
+            Log.i(TAG, "tame $pkg: default home disabled → re-asserting dashboard home + foreground")
+            runCatching { onDefaultHomeDisabled() }
+        }
         return ok
     }
 

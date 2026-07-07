@@ -157,7 +157,14 @@ class PaneldService : Service() {
                 runCatching { mqtt.publishKioskState(false) }
             }.apply { isDaemon = true; name = "kiosk-unlock" }.start()
         }
-        tame = TameController(this)
+        // When taming disables a vendor home launcher (e.g. eWeLink), immediately re-assert the dashboard
+        // as home and foreground it — otherwise the panel sits on our admin launcher until the 300s
+        // watchdog returns to the dashboard (a ~5-minute gap on boot). Off-main is already guaranteed:
+        // tame() only ever runs inside a scope.launch / worker thread.
+        tame = TameController(this) {
+            system.ensureDashboardHome(config.dashboardPackage)
+            system.launchHome(config.dashboardPackage)
+        }
         // Tame opt-in: neutralise the vendor packages the user listed (force-stop + disable boot-relaunch
         // + strip the overlay permission). No-op when the blocklist is empty (the default — a stock panel
         // is never touched); run off-main since pm/am are slow and this is a boot-time one-shot. Critical
