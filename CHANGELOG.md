@@ -10,6 +10,10 @@ content appear. Earlier releases predate this convention and keep their flat lis
 
 ## v0.8.8-rc1 - Unreleased
 
+### Added
+
+- **LED effects** — the panel RGB LED now offers `strobe`, `blink` and `pulse` effects through Home Assistant's built-in light effect dropdown, so an automation can flash or pulse the LED (e.g. during an alarm-armed door-open countdown) just by selecting an effect, instead of hand-scheduling colour steps. Effects use the light's own colour and brightness, and resume after a reconnect or reboot. Select "none" (or set a plain colour) to stop.
+
 ### Fixed
 
 - **Dashboard comes up promptly after taming a vendor home launcher** — on panels where ha-paneld tames the vendor kiosk launcher (e.g. eWeLink) that was set as the home app, the panel could sit on ha-paneld's admin launcher for up to five minutes before the dashboard appeared. It now re-asserts the dashboard as home and brings it to the foreground immediately after the vendor launcher is disabled, instead of waiting for the background watchdog.

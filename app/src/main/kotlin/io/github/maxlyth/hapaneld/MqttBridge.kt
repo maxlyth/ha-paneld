@@ -8,6 +8,8 @@ import io.github.maxlyth.hapaneld.control.AutoBrightnessController
 import io.github.maxlyth.hapaneld.control.BootChimeController
 import io.github.maxlyth.hapaneld.control.BrightnessController
 import io.github.maxlyth.hapaneld.control.CpuController
+import io.github.maxlyth.hapaneld.control.LedEffectController
+import io.github.maxlyth.hapaneld.hardware.LedEffects
 import io.github.maxlyth.hapaneld.util.BrokerEndpoint
 import io.github.maxlyth.hapaneld.util.HaLink
 import io.github.maxlyth.hapaneld.control.NavbarController
@@ -210,6 +212,8 @@ class MqttBridge(
     private val lastDiagNumeric = HashMap<String, Double>()
     private val lastDiagString = HashMap<String, String>()
     private val stateLed = "ha-paneld/$panel/led/state"
+    // Runs strobe/blink/pulse on the LED (HA's built-in light `effect`). Self-owns its IO scope.
+    private val ledEffect = LedEffectController(led)
     private val stateNavigate = "ha-paneld/$panel/navigate/state"
     private val stateVolume = "ha-paneld/$panel/volume/state"
     private val eventButton = "ha-paneld/$panel/button/event"
@@ -400,8 +404,14 @@ class MqttBridge(
         val led = config.lastLed.split(",").mapNotNull { it.toIntOrNull() }
         if (led.size == 5 && led[0] == 1) {
             val (_, br, r, g, b) = led
-            this.led.setRgb(r * br / 255, g * br / 255, b * br / 255)
-            publish(stateLed, ledStateJson(br, r, g, b), retain = true)
+            val effect = LedEffects.Effect.from(config.lastLedEffect)
+            if (effect != null) {
+                ledEffect.start(effect, r, g, b, br)
+                publish(stateLed, ledStateJson(br, r, g, b, effect.effectName), retain = true)
+            } else {
+                this.led.setRgb(r * br / 255, g * br / 255, b * br / 255)
+                publish(stateLed, ledStateJson(br, r, g, b), retain = true)
+            }
         } else {
             // Force the hardware off too — the LED can power up to a default on reboot, so publishing
             // OFF without driving it leaves HA and the physical LED disagreeing (seen on rk3576).
@@ -507,24 +517,39 @@ class MqttBridge(
         val json = JSONObject(payload)
         val on = json.optString("state", "ON").equals("ON", ignoreCase = true)
         if (!on) {
+            ledEffect.stop()
             led.off()
             config.lastLed = "0,0,0,0,0"
+            config.lastLedEffect = ""
             publish(stateLed, """{"state":"OFF"}""", retain = true)
             return
         }
-        val br = if (json.has("brightness")) json.getInt("brightness") else 255
+        // HA's built-in light `effect`; null = "none"/blank/absent = a plain solid colour.
+        val effect = LedEffects.Effect.from(json.optString("effect"))
+        // Fall back to the last solid colour/brightness when the command omits them — HA sends
+        // {"state":"ON","effect":"strobe"} with no colour when you just pick an effect in the light card.
+        val base = config.lastLed.split(",").mapNotNull { it.toIntOrNull() }.takeIf { it.size == 5 && it[0] == 1 }
+        val br = if (json.has("brightness")) json.getInt("brightness") else base?.get(1) ?: 255
         val color = json.optJSONObject("color")
-        val cr = color?.optInt("r", 255) ?: 255
-        val cg = color?.optInt("g", 255) ?: 255
-        val cb = color?.optInt("b", 255) ?: 255
-        // Apply HA brightness as a scalar over the colour (json light sends them separately).
-        led.setRgb(cr * br / 255, cg * br / 255, cb * br / 255)
-        config.lastLed = "1,$br,$cr,$cg,$cb" // remember for restore on reboot
-        publish(stateLed, ledStateJson(br, cr, cg, cb), retain = true)
+        val cr = color?.optInt("r", 255) ?: base?.get(2) ?: 255
+        val cg = color?.optInt("g", 255) ?: base?.get(3) ?: 255
+        val cb = color?.optInt("b", 255) ?: base?.get(4) ?: 255
+        config.lastLed = "1,$br,$cr,$cg,$cb" // base colour, for restore + as the effect's colour
+        if (effect != null) {
+            ledEffect.start(effect, cr, cg, cb, br)
+            config.lastLedEffect = effect.effectName
+            publish(stateLed, ledStateJson(br, cr, cg, cb, effect.effectName), retain = true)
+        } else {
+            ledEffect.stop()
+            // Apply HA brightness as a scalar over the colour (json light sends them separately).
+            led.setRgb(cr * br / 255, cg * br / 255, cb * br / 255)
+            config.lastLedEffect = ""
+            publish(stateLed, ledStateJson(br, cr, cg, cb), retain = true)
+        }
     }
 
-    private fun ledStateJson(br: Int, r: Int, g: Int, b: Int) =
-        """{"state":"ON","color_mode":"rgb","brightness":$br,"color":{"r":$r,"g":$g,"b":$b}}"""
+    private fun ledStateJson(br: Int, r: Int, g: Int, b: Int, effect: String = "none") =
+        """{"state":"ON","color_mode":"rgb","brightness":$br,"color":{"r":$r,"g":$g,"b":$b},"effect":"$effect"}"""
 
     private fun handleWakeOnWave(payload: String) {
         val on = payload.trim().equals("ON", ignoreCase = true)
@@ -903,7 +928,7 @@ class MqttBridge(
             val modes = if (led.colorCapable()) """["rgb"]""" else """["brightness"]"""
             publishConfig(
                 "light", "${panel}_led",
-                """{"name":"LED","object_id":"${panel}_led","unique_id":"${panel}_led","schema":"json","brightness":true,"supported_color_modes":$modes,"command_topic":"$cmdLed","state_topic":"$stateLed",$avail,$device}""",
+                """{"name":"LED","object_id":"${panel}_led","unique_id":"${panel}_led","schema":"json","brightness":true,"supported_color_modes":$modes,"effect":true,"effect_list":["none","strobe","blink","pulse"],"command_topic":"$cmdLed","state_topic":"$stateLed",$avail,$device}""",
             )
         }
 

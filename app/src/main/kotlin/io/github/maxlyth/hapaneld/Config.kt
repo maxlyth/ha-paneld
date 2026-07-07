@@ -504,10 +504,16 @@ class Config(context: Context) {
         get() = prefs.getString("last_navigate", "")!!
         set(v) { prefs.edit().putString("last_navigate", v).apply() }
 
-    /** Last LED state packed as "on,r,g,b" (e.g. "1,255,0,0"); empty if never set. */
+    /** Last LED state packed as "on,br,r,g,b" (e.g. "1,255,255,0,0"); empty if never set. */
     var lastLed: String
         get() = prefs.getString("last_led", "")!!
         set(v) { prefs.edit().putString("last_led", v).apply() }
+
+    /** Last active LED effect name (HA `effect_list` member, e.g. "strobe"); empty = solid colour. Kept
+     *  separate from [lastLed] (which stays the base colour) so the effect resumes on reconnect/reboot. */
+    var lastLedEffect: String
+        get() = prefs.getString("last_led_effect", "")!!
+        set(v) { prefs.edit().putString("last_led_effect", v).apply() }
 
     // --- arrangeable dashboard layout (per-panel; serialized by the web UI, opaque to the backend) ---
     /** Gridstack layout JSON for the Dashboard tab, persisted per-panel (empty = default layout). */
