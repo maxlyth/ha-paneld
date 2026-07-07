@@ -8,7 +8,7 @@ From **v0.8.0**, entries are grouped under **Added** (new features/entities), **
 changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
 content appear. Earlier releases predate this convention and keep their flat lists.
 
-## v0.8.7-rc4 - Unreleased
+## v0.8.7-rc4 - 2026-07-07
 
 ### Fixed
 
