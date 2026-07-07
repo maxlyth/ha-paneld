@@ -19,8 +19,22 @@ class BrokerEndpointTest {
 
     @Test fun parsesSchemes() {
         assertEquals("broker.example" to 1883, BrokerEndpoint.parse("tcp://broker.example:1883"))
-        assertEquals("host" to 1883, BrokerEndpoint.parse("mqtts://host"))
+        assertEquals("host" to 8883, BrokerEndpoint.parse("mqtts://host"))   // TLS scheme → default 8883
         assertEquals("192.0.2.8" to 8883, BrokerEndpoint.parse("ssl://192.0.2.8:8883"))
+    }
+
+    @Test fun endpointFlagsTlsAndDefaultsPortPerScheme() {
+        // plain / no-scheme → TCP on 1883
+        assertEquals(BrokerEndpoint.Endpoint("host", 1883, false, "tcp"), BrokerEndpoint.endpoint("host"))
+        assertEquals(BrokerEndpoint.Endpoint("host", 1883, false, "tcp"), BrokerEndpoint.endpoint("tcp://host"))
+        // TLS schemes → tls flag + default 8883 when no explicit port
+        assertEquals(BrokerEndpoint.Endpoint("host", 8883, true, "ssl"), BrokerEndpoint.endpoint("ssl://host"))
+        assertEquals(BrokerEndpoint.Endpoint("host", 8883, true, "mqtts"), BrokerEndpoint.endpoint("mqtts://host"))
+        // an explicit port always wins over the scheme default
+        assertEquals(BrokerEndpoint.Endpoint("host", 1884, true, "ssl"), BrokerEndpoint.endpoint("ssl://host:1884"))
+        // case-insensitive scheme
+        assertTrue(BrokerEndpoint.endpoint("MQTTS://host")!!.tls)
+        assertNull(BrokerEndpoint.endpoint(""))
     }
 
     @Test fun stripsIpv6Brackets() {

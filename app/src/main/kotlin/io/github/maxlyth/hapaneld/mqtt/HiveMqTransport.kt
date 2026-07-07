@@ -18,7 +18,7 @@ class HiveMqTransport : MqttTransport {
     override fun connect(config: MqttConnectConfig, callbacks: MqttCallbacks) {
         this.callbacks = callbacks
         var self: Mqtt5AsyncClient? = null
-        val c = MqttClient.builder()
+        var builder = MqttClient.builder()
             .useMqttVersion5()
             .identifier(config.clientId)
             .serverHost(config.host)
@@ -34,7 +34,9 @@ class HiveMqTransport : MqttTransport {
                 }
                 callbacks.onDisconnected(ctx.cause?.message ?: ctx.cause?.toString())
             }
-            .buildAsync()
+        // ssl:///mqtts:// broker → TLS with the default JVM trust store (CA-signed cert validates).
+        if (config.tls) builder = builder.sslWithDefaultConfig()
+        val c = builder.buildAsync()
         self = c
         client = c
         val connect = c.connectWith()

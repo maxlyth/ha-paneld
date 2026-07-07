@@ -13,6 +13,7 @@ content appear. Earlier releases predate this convention and keep their flat lis
 ### Added
 
 - **LED effects** — the panel RGB LED now offers `strobe`, `blink` and `pulse` effects through Home Assistant's built-in light effect dropdown, so an automation can flash or pulse the LED (e.g. during an alarm-armed door-open countdown) just by selecting an effect, instead of hand-scheduling colour steps. Effects use the light's own colour and brightness, and resume after a reconnect or reboot. Select "none" (or set a plain colour) to stop.
+- **MQTT over TLS** — a broker URL with a `ssl://` or `mqtts://` scheme now connects over TLS (previously the scheme was accepted but the connection was made in plain text). The default JVM trust store is used, so a CA-signed broker certificate validates; the port defaults to 8883 for a TLS scheme. Plain `tcp://` stays the default, and the active transport (TCP/TLS) is shown on the info page and `/diag`. (Self-signed broker certificates and WebSocket transport are separate follow-ups.)
 
 ### Fixed
 

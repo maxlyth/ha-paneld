@@ -27,6 +27,9 @@ interface MqttTransport {
 data class MqttConnectConfig(
     val host: String,
     val port: Int,
+    // Connect over TLS (from a ssl:///mqtts:// broker URL). Uses the default JVM trust store — a
+    // CA-signed broker cert validates; self-signed brokers are a separate follow-up.
+    val tls: Boolean,
     val clientId: String,
     val user: String?,
     val password: String?,

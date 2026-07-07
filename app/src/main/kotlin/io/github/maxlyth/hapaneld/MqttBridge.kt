@@ -111,6 +111,11 @@ class MqttBridge(
     var activeBroker: String = ""
         private set
 
+    /** Whether the active connection uses TLS (a ssl:///mqtts:// broker URL). Surfaced on the info page
+     *  + /diag so a TLS setup is visible. */
+    @Volatile var tlsActive: Boolean = false
+        private set
+
     /** Live connection state for the UI, so an auth failure reads differently from "unreachable":
      *  connected | auth-failed | unreachable | connecting | disabled. */
     @Volatile var state: String = "disabled"
@@ -143,7 +148,8 @@ class MqttBridge(
     fun statusPublic(): String {
         if (state == "disabled") return "disabled"
         val age = if (lastOkMs == 0L) "never" else "${msSinceLastOk() / 1000}s ago"
-        return "$state · last-ok $age · prefer ${if (preferIpv4) "IPv4" else "IPv6"}"
+        val transport = if (tlsActive) "TLS" else "TCP"
+        return "$state · $transport · last-ok $age · prefer ${if (preferIpv4) "IPv4" else "IPv6"}"
     }
 
     private val panel = config.panelId
@@ -247,7 +253,9 @@ class MqttBridge(
         activeBroker = broker
         state = "connecting"
         try {
-            val (host, port) = BrokerEndpoint.parse(broker) ?: return
+            val ep = BrokerEndpoint.endpoint(broker) ?: return
+            val (host, port) = ep.host to ep.port
+            tlsActive = ep.tls
             // Happy-eyeballs: resolve the host and connect to a chosen address family, so a flaky family
             // (e.g. the PX30 panels' idle-IPv6 stall) is survived by flipping [preferIpv4] on the next
             // reconnect and landing on the family that holds. Falls back to the raw host when it's a
@@ -265,6 +273,7 @@ class MqttBridge(
                 MqttConnectConfig(
                     host = connectHost,
                     port = port,
+                    tls = ep.tls,
                     clientId = "ha-paneld-$panel",
                     user = config.mqttUser.ifEmpty { null },
                     password = config.mqttPassword,

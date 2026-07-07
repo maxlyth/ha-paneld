@@ -19,10 +19,21 @@ import java.net.URI
 object BrokerEndpoint {
     const val DEFAULT_PORT = 1883
 
-    /** Parse a broker spec into (host, port), or null if unusable. Host has any IPv6 `[...]` brackets and
-     *  `%zone` suffix stripped; port defaults to [DEFAULT_PORT] when absent. A bare `host`/`[v6]`/`v4`
-     *  (no scheme) is accepted by prefixing a synthetic `tcp://`. */
-    fun parse(raw: String): Pair<String, Int>? {
+    /** Conventional MQTT-over-TLS port, used when a `ssl://`/`mqtts://` URL omits an explicit port. */
+    const val TLS_PORT = 8883
+
+    /** Broker URL schemes that mean "MQTT over TLS". (`ws://`/`wss://` WebSocket transport is not yet
+     *  supported — the HiveMQ websocket module breaks the AGP build; see gradle/libs.versions.toml.) */
+    private val TLS_SCHEMES = setOf("ssl", "mqtts", "tls")
+
+    /** A parsed broker spec: bare [host] (IPv6 brackets/zone stripped), resolved [port], whether the
+     *  scheme selects TLS, and the normalised [scheme]. */
+    data class Endpoint(val host: String, val port: Int, val tls: Boolean, val scheme: String)
+
+    /** Parse a broker spec into an [Endpoint], or null if unusable. Host has any IPv6 `[...]` brackets and
+     *  `%zone` suffix stripped; the scheme (default `tcp`) selects TLS; the port defaults to [TLS_PORT] for
+     *  a TLS scheme else [DEFAULT_PORT]. A bare `host`/`[v6]`/`v4` (no scheme) is treated as plain `tcp`. */
+    fun endpoint(raw: String): Endpoint? {
         val s = raw.trim()
         if (s.isEmpty()) return null
         val uri = runCatching { URI(if (s.contains("://")) s else "tcp://$s") }.getOrNull() ?: return null
@@ -30,9 +41,15 @@ object BrokerEndpoint {
         if (host.length >= 2 && host.startsWith("[") && host.endsWith("]")) host = host.substring(1, host.length - 1)
         host = host.substringBefore('%')          // drop any IPv6 scope/zone id
         if (host.isEmpty()) return null
-        val port = if (uri.port in 1..65535) uri.port else DEFAULT_PORT
-        return host to port
+        val scheme = (uri.scheme ?: "tcp").lowercase()
+        val tls = scheme in TLS_SCHEMES
+        val port = if (uri.port in 1..65535) uri.port else if (tls) TLS_PORT else DEFAULT_PORT
+        return Endpoint(host, port, tls, scheme)
     }
+
+    /** Parse a broker spec into (host, port), or null if unusable — the host/port projection of
+     *  [endpoint]. Kept for callers that don't need the TLS flag. */
+    fun parse(raw: String): Pair<String, Int>? = endpoint(raw)?.let { it.host to it.port }
 
     /** Happy-eyeballs family selection: return the first address of the preferred family, else the first
      *  of the other family, else null. Deterministic (first-of-family) so reconnect behaviour is stable. */
