@@ -963,18 +963,19 @@ class MqttBridge(
                 """{"name":"Proximity","object_id":"${panel}_proximity","unique_id":"${panel}_proximity","state_topic":"$stateProximity","device_class":"occupancy","payload_on":"ON","payload_off":"OFF",$avail,$device}""",
             )
         }
-        if (hasTemperature) {
-            publishConfig(
-                "sensor", "${panel}_temperature",
-                """{"name":"Temperature","object_id":"${panel}_temperature","unique_id":"${panel}_temperature","state_topic":"$stateTemperature","device_class":"temperature","unit_of_measurement":"°C","state_class":"measurement",$avail,$device}""",
-            )
-        }
-        if (hasHumidity) {
-            publishConfig(
-                "sensor", "${panel}_humidity",
-                """{"name":"Humidity","object_id":"${panel}_humidity","unique_id":"${panel}_humidity","state_topic":"$stateHumidity","device_class":"humidity","unit_of_measurement":"%","state_class":"measurement",$avail,$device}""",
-            )
-        }
+        // SensorManager climate. On CHT8305 panels (TPA10) these are suppressed in favour of the
+        // daemon-read room_temp/room_humidity, so publish an EMPTY config (tombstone) instead of
+        // skipping — a panel upgrading from a version that DID expose them then sheds the now-duplicate,
+        // stale entity from HA (SensorManager never streams a value on that chip). Empty on a panel that
+        // never had the sensor is a harmless no-op.
+        publishConfig(
+            "sensor", "${panel}_temperature",
+            if (hasTemperature) """{"name":"Temperature","object_id":"${panel}_temperature","unique_id":"${panel}_temperature","state_topic":"$stateTemperature","device_class":"temperature","unit_of_measurement":"°C","state_class":"measurement",$avail,$device}""" else "",
+        )
+        publishConfig(
+            "sensor", "${panel}_humidity",
+            if (hasHumidity) """{"name":"Humidity","object_id":"${panel}_humidity","unique_id":"${panel}_humidity","state_topic":"$stateHumidity","device_class":"humidity","unit_of_measurement":"%","state_class":"measurement",$avail,$device}""" else "",
+        )
         if (hasButtonBacklight) {
             publishConfig(
                 "light", "${panel}_buttons",

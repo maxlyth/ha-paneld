@@ -35,9 +35,14 @@ class SensorReporter(context: Context, private val config: Config) {
     private val sm = context.applicationContext.getSystemService(Context.SENSOR_SERVICE) as SensorManager
     private val lightSensor: Sensor? = sm.getDefaultSensor(Sensor.TYPE_LIGHT)
     private val proximitySensor: Sensor? = sm.getDefaultSensor(Sensor.TYPE_PROXIMITY)
-    // Onboard climate (e.g. TPA10 CHT8305) — standard HAL sensors, no root/vendor lib.
-    private val tempSensor: Sensor? = sm.getDefaultSensor(Sensor.TYPE_AMBIENT_TEMPERATURE)
-    private val humiditySensor: Sensor? = sm.getDefaultSensor(Sensor.TYPE_RELATIVE_HUMIDITY)
+    // Onboard climate via the standard HAL — SUPPRESSED on CHT8305 panels (TPA10). There the chip is read
+    // through the root helper daemon as room_temp/room_humidity instead: its SensorManager ambient-temp /
+    // humidity sensors register (present) but never stream a value, so they'd only surface a frozen, stale
+    // reading duplicating the daemon entities. Defer entirely to the daemon path where the profile declares
+    // the chip; on any other panel the HAL sensors work as before.
+    private val hasCht8305: Boolean = runCatching { DeviceProfile.detect().hasCht8305 }.getOrNull() == true
+    private val tempSensor: Sensor? = if (hasCht8305) null else sm.getDefaultSensor(Sensor.TYPE_AMBIENT_TEMPERATURE)
+    private val humiditySensor: Sensor? = if (hasCht8305) null else sm.getDefaultSensor(Sensor.TYPE_RELATIVE_HUMIDITY)
     // Root binary proximity GPIO (1=near, 0=far) for panels whose SensorManager proximity never fires
     // (Smatek S9E gpio18). Null → use [proximitySensor] above. Polled instead of registered when set.
     private val proximityGpio: Int? = runCatching { DeviceProfile.detect().proximityGpio }.getOrNull()
