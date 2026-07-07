@@ -486,6 +486,17 @@ class Config(context: Context) {
     val roomTempOffsetC: Float
         get() = (profile?.roomTempOffsetC ?: 0f) + prefs.getFloat("room_temp_offset", 0f)
 
+    /** Persist the user's `room_temp_offset` trim (°C), clamped to the registry range. Uses [edit] so it
+     *  composes with the /config POST batch — without this the key had a [SettingSpec] and rendered a form
+     *  field but no persistence path, so a posted value was silently dropped. */
+    fun setRoomTempOffset(raw: String) {
+        val v = raw.trim().toFloatOrNull() ?: return   // non-numeric → keep current
+        val spec = SettingsRegistry.spec("room_temp_offset")
+        val lo = spec?.min?.toFloat() ?: -20f
+        val hi = spec?.max?.toFloat() ?: 20f
+        edit { putFloat("room_temp_offset", v.coerceIn(lo, hi)) }
+    }
+
     // --- last-known actuator state, re-applied/published on (re)connect so HA reflects reality ---
 
     /** Last navigated URL (published as the navigate state on connect; empty if never set). */

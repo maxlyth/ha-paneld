@@ -210,10 +210,10 @@ Direct, clickable, **live-verified** download links for Sonoff NSPanel Pro OTA f
 Flashing how-to (fully remote, no recovery-mode ADB): see [the repo's firmware guide](https://github.com/maxlyth/ha-paneld/blob/main/docs/hardware/nspanel-pro-firmware.md). `/data` (apps + settings) is preserved across an OTA.
 
 > [!TIP]
-> **To reach the latest verified ROM (4.5.1):** flash the **4.0.12 full ROM**, then apply the **4.0.12 → 4.5.1 diff** (or **4.4.0 → 4.5.1** if you're already on 4.4.0). `4.0.12` is the full-ROM checkpoint; everything past `3.x` is incremental. **4.5.2 is an APK-only app update** that installs over the 4.5.1 ROM — there is no 4.5.2 ROM, and no full ROM newer than 4.0.12.
+> **To reach the latest verified ROM (4.6.0):** flash the **4.0.12 full ROM**, then apply the **4.0.12 → 4.6.0 diff** (or **4.4.0 → 4.6.0** / **4.5.1 → 4.6.0** if you're already newer). `4.0.12` is the full-ROM checkpoint; everything past `3.x` is incremental. **4.5.2 is an APK-only app update** (over the 4.5.1 ROM) — there is no 4.5.2 ROM, and **no full ROM newer than 4.0.12**.
 
 > [!NOTE]
-> **Frontier / help wanted:** the newest published **ROM** target is **4.5.1**; **4.5.0 / 4.5.2** ship **APK-only** on top of it. No full ROM newer than `4.0.12` is published — distribution is diff-based off that checkpoint. Spot a newer build or a missing link? Reply with the URL (plus a `curl -I` showing `206` + size) and it gets added. This thread is the living list.
+> **Frontier / help wanted:** the newest published **ROM** target is **4.6.0** (the current official *Stable* release, June 2026); **4.5.0 / 4.5.2** ship **APK-only**. No full ROM newer than `4.0.12` is published — distribution is diff-based off that checkpoint. Spot a newer build or a missing link? Reply with the URL (plus a `curl -I` showing `206` + size) and it gets added. This thread is the living list.
 """
 
 CHANGES = """## Which version should an HA panel run? (newer isn't always better)
@@ -224,7 +224,7 @@ Vendor release notes are written for eWeLink / Zigbee-hub users, not for people 
 > **Picking a build for an HA-only panel:**
 > - **Lean kiosk:** a late **3.x** build is lighter, keeps the **Web Shortcut** web-app (point straight at a dashboard URL, no sideload), and ships **no Termux**.
 > - **Modern app model:** if you want F-Droid / the HA Companion app or 4.x MQTT features, stop at **4.0.12** — the stable full-ROM checkpoint — then turn on **Settings → About → Block Firmware Updates** to pin it.
-> - **Avoid the bleeding edge:** the current ROM target is **4.5.1** (with **4.5.2** an app-only update on top), but community reports cite reboot loops every ~10–60 min on both 120P and 86P — pin a known-good build rather than chasing it.
+> - **Latest / bleeding edge:** **4.6.0** (June 2026) is now the official *Stable* ROM target — it supersedes **4.5.1 / 4.5.2**, whose community reports cited reboot loops every ~10–60 min on both 120P and 86P. 4.6.0 is recent and not yet fleet-verified here, so try it on one panel before a fleet roll; **4.0.12** remains the conservative full-ROM checkpoint to pin for maximum stability.
 > - **Always:** sideload a current **System WebView** — the stock one is too old to render the HA dashboard (see the repo's [docs/hardware](https://github.com/maxlyth/ha-paneld/tree/main/docs/hardware) notes).
 
 | Version | What it changes for HA-panel use | Watch out for |
@@ -237,6 +237,7 @@ Vendor release notes are written for eWeLink / Zigbee-hub users, not for people 
 | [**4.3.0**](https://forum.ewelink.cc/t/nspanel-pro-v4-3-0-officially-released-new-features-enhancements/207281) | **Panel exposes its own capabilities as HA entities over MQTT** (speaker, screen on/off, brightness, ambient light, security status, IP); 0.1 °C heating; custom ringtones. | **[c]** Tap-to-toggle vs tap-for-details is fiddly; heating over-cycles on small thresholds; schedules reset on config change. |
 | [**4.4.0**](https://forum.ewelink.cc/t/nspanel-pro-v4-4-0-officially-released-new-features-enhancements/207640) | Native **wake-on-proximity**, **mic recording** and **speaker playback** over MQTT (play a file or URL from HA); Zigbee NCP 8.x. | **[c]** Widespread **persistent ticking/tapping sound** from the proximity feature (disable Touch Sounds or the feature); heating not shutting off at setpoint. |
 | [**4.5.1 / 4.5.2**](https://forum.ewelink.cc/t/nspanel-pro-firmware-4-5-2-has-been-released/208527) | Zigbee water-valve + PIR motion support; general fixes. 4.5.1 is the ROM; 4.5.2 is an APK-only update on top. | **[c]** **Frequent restarts (~10–60 min) on both 120P and 86P**; app crashes viewing logs; Matter Bridge missing on some units. |
+| [**4.6.0**](https://forum.ewelink.cc/t/rolling-with-new-releases-nspanel-pro-firmware-updates/207466) | **Local Web Portal** — the panel is now reachable on the LAN at `http://nspanelpro.local` (or its IP) for setup + management: add Zigbee / eWeLink sub-devices, arm/disarm Smart Security, configure the **MQTT broker to sync Zigbee into Home Assistant**, authorize HA + Matter Bridge pairing, upload custom ringtones/screensavers. The new official **Stable** target, superseding the reboot-loopy 4.5.x. | Released **2026-06-30** — too new for independent/fleet verification here yet. Ships **diff-only** off 4.0.12 / 4.4.0 / 4.5.1 (no new full ROM). |
 
 **Cross-cutting gotchas (firmware-independent) [f]:**
 
@@ -260,6 +261,7 @@ Notes are published per "NSPanel Pro" — not split by 86P vs 120P.
 | 4.1.0 / 4.2.0 / 4.3.0 | eWeLink per-version threads ([4.1.0](https://forum.ewelink.cc/t/nspanel-pro-v4-1-0-release-new-features-enhancements/206443) · [4.2.0](https://forum.ewelink.cc/t/nspanel-pro-v4-2-0-officially-released-new-features-enhancements/206900) · [4.3.0](https://forum.ewelink.cc/t/nspanel-pro-v4-3-0-officially-released-new-features-enhancements/207281)) |
 | 4.4.0 | [eWeLink — V4.4.0 officially released](https://forum.ewelink.cc/t/nspanel-pro-v4-4-0-officially-released-new-features-enhancements/207640) (native wake-on-proximity, mic record + speaker playback over MQTT) |
 | 4.5.1 / 4.5.2 | [eWeLink — firmware 4.5.2 released](https://forum.ewelink.cc/t/nspanel-pro-firmware-4-5-2-has-been-released/208527) |
+| 4.6.0 | [eWeLink — "[Rolling] NSPanel Pro Firmware Updates"](https://forum.ewelink.cc/t/rolling-with-new-releases-nspanel-pro-firmware-updates/207466) (Local Web Portal; current Stable) |
 | 3.9.4 / 4.0.10 / 4.0.12 | No official notes published (bug threads only) |
 | All 4.x (rolling) | [eWeLink "[Rolling] NSPanel Pro Firmware Updates"](https://forum.ewelink.cc/t/rolling-with-new-releases-nspanel-pro-firmware-updates/207466) |
 """

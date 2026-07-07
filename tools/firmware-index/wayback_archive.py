@@ -7,7 +7,7 @@ firmware with it. This preserves a copy in the Internet Archive:
   1. The index page (GitHub Discussion #7) is saved with capture_outlinks=1 — a
      bonus snapshot of the release-note / repo links.
   2. Every firmware URL is submitted to Save Page Now *explicitly*, newest-first,
-     so the current builds (4.5.1, 4.4.0, 4.0.12, recent APKs) are preserved
+     so the current builds (4.6.0, 4.5.1, 4.4.0, 4.0.12, recent APKs) are preserved
      before the long tail. capture_outlinks caps at 100 links per request — far
      short of the ~196 files — so we don't rely on the page crawler to find them.
 

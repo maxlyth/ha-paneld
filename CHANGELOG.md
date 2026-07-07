@@ -8,7 +8,7 @@ From **v0.8.0**, entries are grouped under **Added** (new features/entities), **
 changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
 content appear. Earlier releases predate this convention and keep their flat lists.
 
-## v0.8.7-rc3 - Unreleased
+## v0.8.7-rc4 - Unreleased
 
 ### Fixed
 
@@ -29,6 +29,16 @@ content appear. Earlier releases predate this convention and keep their flat lis
 ### Docs
 
 - Sandbox-walled panels' root-daemon install step (`helper/install-daemon.sh`) is now linked from the provisioning guide, not just `helper/README.md`.
+
+## v0.8.7-rc3 - 2026-07-07
+
+### Changed
+
+- **On the Tuya TPA10, room climate now reports as `room_temp` / `room_humidity`** (read through the panel's helper daemon) instead of the previous `temperature` / `humidity` sensors, which read through a standard Android sensor that never streams a value on this chip — so they showed a frozen, stale reading. The old entities are retired automatically; update any automation or dashboard card that referenced them.
+
+### Fixed
+
+- **The room-temperature calibration offset saves from the web UI again** — a posted value was accepted (HTTP 200) but silently dropped, so the field always reverted to 0.
 
 ## v0.8.7-rc2 - 2026-07-06
 

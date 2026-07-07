@@ -45,16 +45,16 @@ The spec table above and most of this page were captured on an **86P**; the **12
 | Display | **480×480** square, ~160 dpi, portrait-only | **750×1334** portrait, **240 dpi** (override 250); landscape available; ~1 cm narrower + longer than the 86P |
 | Build ids | both report `ro.product.model/device/name = px30_evb` (shared Rockchip board name — *not* a reliable variant discriminator) | as 86P |
 | `ro.product.version` | `s6_android_x.y.z`-class | `NSPanelXXXP_x.y.z` (OTA channel `nspanel-pro-ver120`, full ROM `SN_3326S_750X1334_…`) |
-| OTA latest | **4.0.12** (full) → **4.5.1** (diff) → **4.5.2** (APK-only) | **4.0.12** (full) → **4.5.1** (diff) → **4.5.2** (APK-only) |
+| OTA latest | **4.0.12** (full) → **4.6.0** (diff, current Stable) | **4.0.12** (full) → **4.6.0** (diff, current Stable) |
 | Proximity firmware | **4.0.12 restored graded** proximity | stayed **binary** at 4.x (per-model kernel divergence — see [Sensors](#sensors--light--proximity-are-app-direct)) |
 
 Both share the EFR32 Zigbee radio, Android 8.1 (AOSP), arm64-v8a, and the root/recovery story below.
-Live-verified on a 120P (BMP, fw `NSPanel120P_3.7.1`): `wm size`=750×1334, density 240, `ro.board.platform=rk3326`.
+Live-verified on a 120P (fw `NSPanel120P_3.7.1`): `wm size`=750×1334, density 240, `ro.board.platform=rk3326`.
 
 > [!NOTE]
-> Both models reach the current ROM (**4.5.1**) via a 2-step path: 4.0.12 full ROM → 4.5.1 diff. **4.5.2** is an APK-only layer on top of 4.5.1. The CoolKit CDN scheme, every verified OTA URL, and the full flashing how-to are on the [firmware & flashing page](nspanel-pro-firmware.md); the live, community-maintained version index is the Discussion linked from there.
+> Both models reach the current ROM (**4.6.0**, the June 2026 official *Stable*) via a 2-step path: 4.0.12 full ROM → 4.6.0 diff. (**4.5.2** was an APK-only layer on the now-superseded 4.5.1.) The CoolKit CDN scheme, every verified OTA URL, and the full flashing how-to are on the [firmware & flashing page](nspanel-pro-firmware.md); the live, community-maintained version index is the Discussion linked from there.
 >
-> **⚠ 4.5.1 and 4.5.2 have widespread reboot-loop reports** (~10–60 min intervals on both models). For HA-only panels, the community recommendation is to pin at **4.0.12** for stability. Check the firmware Discussion for the current consensus before applying 4.5.x.
+> **⚠ 4.5.1 / 4.5.2 had widespread reboot-loop reports** (~10–60 min intervals on both models); **4.6.0** (June 2026) is the current official *Stable* that supersedes them. 4.6.0 is recent and not yet verified on our fleet, so try it on one panel before a fleet roll; **4.0.12** remains the conservative full-ROM checkpoint to pin for maximum stability. Check the firmware Discussion for the current consensus.
 
 ### Firmware quirks by version
 
@@ -72,7 +72,8 @@ read `ro.product.version`, not the marketing string.
 | **v3.7.1** (120P, live) | Baseline reference build | `wm size`=750×1334, density 240, `ro.board.platform=rk3326`. |
 | **v4.0.0** (roll-out 2025-09-19) | Stock firmware **bundles F-Droid** + promotes FOSS/HA app install; markedly faster UI | On-device install path opens — [Firmware v4.0.0](#firmware-v400--official-f-droid-app-install). Confirm **APP** *and* **OS** version both read ≥ 4.0.0. |
 | **v4.0.12** | Proximity **graded** restored on **86P**; **120P stays binary** (per-model kernel divergence) | Recommended stable pin for HA-only panels. Graded/binary is model-**and**-firmware specific — see [Sensors](#sensors--light--proximity-are-app-direct). |
-| **v4.5.1 / v4.5.2** | **Widespread reboot-loop reports** (~10–60 min, both models); 4.5.2 is an APK-only layer on 4.5.1 | Community recommendation: **pin at 4.0.12** for stability. Check the firmware Discussion for current consensus before applying 4.5.x. |
+| **v4.5.1 / v4.5.2** | **Widespread reboot-loop reports** (~10–60 min, both models); 4.5.2 is an APK-only layer on 4.5.1 | **Superseded by v4.6.0.** Pin at **4.0.12** for maximum stability, or move to 4.6.0 (verify on one panel first). Check the firmware Discussion for current consensus. |
+| **v4.6.0** (Jun 2026) | Current official **Stable**; **Local Web Portal** (`nspanelpro.local` — LAN setup, MQTT→HA sync, Matter Bridge); diff-only off 4.0.12 / 4.4.0 / 4.5.1 | New — not yet fleet-verified here. The stable successor to the reboot-loopy 4.5.x; still verify on one panel before a fleet roll. |
 
 > [!NOTE]
 > These are **Gen1** (86P/120P) quirks. The NSPanel Pro **Gen2** (RK3326-**S**, dual relays,

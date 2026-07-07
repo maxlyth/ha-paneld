@@ -1831,6 +1831,9 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             p["silence_boot_chime"]?.let { config.setSilenceBootChime(it.trim().equals("true", ignoreCase = true) || it.trim() == "1") }
             // Keep-awake (partial wakelock so SoC/network never suspend). Applied live by reconfigure().
             p["keep_awake"]?.let { config.setKeepAwake(it.trim().equals("true", ignoreCase = true) || it.trim() == "1") }
+            // Room-temperature calibration trim (°C) — a plain local pref with no MQTT command, so it
+            // persists here rather than through HTTP_LIVE_KEYS/applySetting (the command path).
+            p["room_temp_offset"]?.let { config.setRoomTempOffset(it) }
             val logEnabled = p["log_ship_enabled"]?.let { it.trim().equals("true", ignoreCase = true) || it.trim() == "1" }
             val logHost = p["log_ship_host"]?.trim()
             val logPort = p["log_ship_port"]?.trim()?.toIntOrNull()

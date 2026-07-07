@@ -55,14 +55,14 @@ object AudioPlayer {
      * Plays [file] and suspends until playback completes (or errors). Suspending is what keeps a
      * strong reference to the MediaPlayer for the whole playback — an earlier version let the
      * player fall out of scope after start(), so GC finalised it mid-playback and cut longer clips
-     * short (confirmed on BMP, 2026-06-03: a 7s TTS render was truncated to ~2.4s).
+     * short (confirmed on an NSPanel Pro, 2026-06-03: a 7s TTS render was truncated to ~2.4s).
      */
     private suspend fun playAndAwait(file: File) = suspendCancellableCoroutine<Unit> { cont ->
         val player = MediaPlayer().apply {
             // USAGE_MEDIA -> STREAM_MUSIC, matching the bash reference (`sox play`). The earlier
             // USAGE_ASSISTANCE_ACCESSIBILITY routed to the accessibility stream, which is separate
             // from — and far quieter than — the music volume the panels actually have turned up
-            // (confirmed near-inaudible on BMP, 2026-06-03 on-device test).
+            // (confirmed near-inaudible on an NSPanel Pro, 2026-06-03 on-device test).
             setAudioAttributes(
                 AudioAttributes.Builder()
                     .setUsage(AudioAttributes.USAGE_MEDIA)
