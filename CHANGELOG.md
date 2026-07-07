@@ -8,6 +8,12 @@ From **v0.8.0**, entries are grouped under **Added** (new features/entities), **
 changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
 content appear. Earlier releases predate this convention and keep their flat lists.
 
+## v0.8.8-rc1 - Unreleased
+
+### Fixed
+
+- **Dashboard comes up promptly after taming a vendor home launcher** — on panels where ha-paneld tames the vendor kiosk launcher (e.g. eWeLink) that was set as the home app, the panel could sit on ha-paneld's admin launcher for up to five minutes before the dashboard appeared. It now re-asserts the dashboard as home and brings it to the foreground immediately after the vendor launcher is disabled, instead of waiting for the background watchdog.
+
 ## v0.8.7 - 2026-07-07
 
 **This release includes a large amount of work to improve the reliability of the install and provisioning scripts** (`install.sh`, `provision.sh`, and the root-daemon installer) across the supported panels — su-dialect probing, adb preflighting, honest self-verification, and clear, classified failure reporting. If you still hit an install or provisioning problem, **please [report it](https://github.com/maxlyth/ha-paneld/issues)** so it can be fixed.
