@@ -146,11 +146,11 @@ panels are welcome — contribute a HAL adapter for your hardware. Deep per-pane
 Validated across the panel fleet: Sonoff NSPanel Pro (PX30, Android 8.1), Tuya TPA10 (rk3566,
 Android 11), Electron WF1589T (rk3576, Android 14).
 
-**Latest release — 0.8.6:** a software-management hub on the Install tab (view/update ha-paneld, the
-HA Companion and the System WebView, with one-tap auto-heal for a too-old WebView or a broken
-Companion login), encrypted panel backup & restore, a panel switcher in the `:8888` header for
-multi-panel networks, and more prominent panel-health warnings. Full notes for every release are in
-[CHANGELOG.md](CHANGELOG.md).
+**Latest release — 0.8.7:** substantially more reliable install/provisioning scripts (su-dialect
+probing, adb preflighting, honest verification and classified failure reporting), more reliable panel
+telemetry — diagnostic sensors that populate on more hardware via the helper daemon — room
+temperature/humidity on the Tuya TPA10, and a responsive `:8888` header for narrow panels. Full notes
+for every release are in [CHANGELOG.md](CHANGELOG.md).
 
 **Where it's heading** — the near-term direction is **fleet-scale operation** and **full remote
 provisioning**: bringing a new or factory-wiped panel all the way up (dashboard renderer + Home

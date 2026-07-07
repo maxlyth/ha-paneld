@@ -8,6 +8,34 @@ From **v0.8.0**, entries are grouped under **Added** (new features/entities), **
 changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
 content appear. Earlier releases predate this convention and keep their flat lists.
 
+## v0.8.7 - 2026-07-07
+
+**This release includes a large amount of work to improve the reliability of the install and provisioning scripts** (`install.sh`, `provision.sh`, and the root-daemon installer) across the supported panels — su-dialect probing, adb preflighting, honest self-verification, and clear, classified failure reporting. If you still hit an install or provisioning problem, **please [report it](https://github.com/maxlyth/ha-paneld/issues)** so it can be fixed.
+
+Beyond that, panel telemetry is more reliable across the fleet, the Tuya TPA10 gains room temperature/humidity sensors, and the `:8888` header is now responsive on narrow panels.
+
+### Added
+
+- **Room temperature & humidity on the Tuya TPA10** — the onboard CHT8305 chip is exposed as opt-in Room temperature / Room humidity sensors in Home Assistant, read through the root helper daemon (proper temperature/humidity device classes, off by default), with a per-panel calibration offset for panel self-heating.
+
+### Changed
+
+- **Provisioning is much more robust** — `provision.sh` and the root-daemon installer now probe each panel's `su` dialect (join-style vs exec-style, `su 0` / `su root` / `su -c`, or root-adbd with no `su`), preflight the adb connection and fail fast (~12s) with specific recovery steps instead of hanging, classify install failures (signature mismatch, downgrade, out-of-storage) with how to recover, and degrade gracefully when a vendor build refuses adb-side permission grants. The daemon installer's exit code now reflects whether the daemon is actually running.
+- **Diagnostic sensors populate on more panels** — CPU usage and SoC temperature fall back to the root helper daemon when the app can't read them directly, so they no longer show "Unknown" on sandboxed panels. All OS-sourced telemetry — the diagnostic sensors and the `:8888` performance view — now flows through one shared reader instead of two paths that could disagree.
+- **Responsive `:8888` header** — a sticky top bar that never scrolls away; on a narrow or single-column panel the tab bar collapses to a hamburger menu and header items progressively hide instead of wrapping, so the header never overflows.
+- **Config & controls polish** — the "expose to Home Assistant" control is now a link / broken-link icon toggle, and the Controls action buttons collapse to icons when the row would otherwise wrap. The low-value instrumentation master switch is gone (the performance sampler stays gated by page views, the real cost control).
+
+### Fixed
+
+- **`/api/v1/diag` responds instantly** — it serves the last-known panel snapshot and refreshes in the background instead of re-running the full probe suite (which can take >12s on an NSPanel Pro).
+- **`provision.sh` self-verify and `--persist-adb` work reliably** — verify no longer always ended "re-run to finish", `--persist-adb` is confirmed by read-back, and provisioning can no longer clobber other accessibility services if it can't read the current list.
+- **"Open in Home Assistant" is more reliable** — it falls back to the URL the HA Companion already uses when the panel's own HA device-page URL can't resolve.
+- **On the Tuya TPA10, the room-temperature calibration offset saves from the web UI** (a posted value was previously accepted but silently dropped), and the older `temperature`/`humidity` sensors — which never streamed a live value on this chip — are retired in favour of the daemon-read `room_temp`/`room_humidity`.
+
+### Docs
+
+- The root-daemon install step (`helper/install-daemon.sh`) is now linked from the provisioning guide.
+
 ## v0.8.7-rc4 - 2026-07-07
 
 ### Fixed
