@@ -40,6 +40,9 @@ prompts for the panel IP (and optional id / MQTT broker), downloads the **latest
 provisions the panel. For scripted/fleet installs use [`scripts/provision.sh`](scripts/provision.sh)
 directly — see [Provisioning & fleet updates](docs/provisioning.md).
 
+> [!IMPORTANT]
+> **On Windows, run this in Git Bash or WSL — not PowerShell.** It's a `bash` one-liner (and PowerShell's `curl` is an alias for `Invoke-WebRequest`, not the real thing), so PowerShell fails at the `bash` step. Git Bash ships with [Git for Windows](https://gitforwindows.org/); install `adb` first with `winget install Google.PlatformTools`, then reopen the shell and paste the command. macOS and Linux run it as-is.
+
 > [!NOTE]
 > ha-paneld is the headless agent — your dashboard launcher is the
 > [HA Companion app](https://github.com/home-assistant/android). On panels without Google Play, install
