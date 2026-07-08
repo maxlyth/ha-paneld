@@ -49,9 +49,21 @@ class DashboardActivity : AppCompatActivity() {
     }
 
     // Publish foreground state so SystemController.dashboardState can drive the watchdog + kiosk
-    // return-loop from a lifecycle flag (in-process) instead of a root pidof/dumpsys probe.
+    // return-loop from an in-process signal instead of a root pidof/dumpsys probe.
+    //
+    // The precise signal is TOP-RESUMED, not focus or resume/pause. On some OEM launchers (verified on
+    // rk3576/Android-14 quickstep) opening Overview/Recents leaves the dashboard both window-FOCUSED and
+    // RESUMED behind a translucent overlay — so onPause and onWindowFocusChanged never fire — yet the
+    // dashboard is no longer the top activity the user is on. onTopResumedActivityChanged (API 29+) is
+    // the lifecycle form of dumpsys `topResumedActivity` and flips exactly on that transition.
+    // onResume/onPause are the API<29 baseline (older panels lack the callback; their launchers also
+    // predate translucent Overview, so resume/pause suffices there).
     override fun onResume() { super.onResume(); BuiltinDashboard.foreground = true }
     override fun onPause() { BuiltinDashboard.foreground = false; super.onPause() }
+    override fun onTopResumedActivityChanged(isTopResumedActivity: Boolean) {
+        super.onTopResumedActivityChanged(isTopResumedActivity)
+        BuiltinDashboard.foreground = isTopResumedActivity
+    }
 
     @SuppressLint("SetJavaScriptEnabled")
     private fun buildAndLoad(config: Config) {
