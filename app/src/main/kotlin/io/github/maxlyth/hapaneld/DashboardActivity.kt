@@ -11,6 +11,7 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.appcompat.app.AppCompatActivity
+import io.github.maxlyth.hapaneld.control.BuiltinDashboard
 import org.json.JSONObject
 
 /**
@@ -46,6 +47,11 @@ class DashboardActivity : AppCompatActivity() {
         super.onNewIntent(intent)
         web?.reload()
     }
+
+    // Publish foreground state so SystemController.dashboardState can drive the watchdog + kiosk
+    // return-loop from a lifecycle flag (in-process) instead of a root pidof/dumpsys probe.
+    override fun onResume() { super.onResume(); BuiltinDashboard.foreground = true }
+    override fun onPause() { BuiltinDashboard.foreground = false; super.onPause() }
 
     @SuppressLint("SetJavaScriptEnabled")
     private fun buildAndLoad(config: Config) {

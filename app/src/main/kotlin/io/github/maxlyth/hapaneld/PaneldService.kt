@@ -459,6 +459,8 @@ class PaneldService : Service() {
     /** Smoothness-metrics target: the configured override, else the installed HA Companion app
      *  (this is an HA project — the dashboard is the Companion app, so no config needed normally). */
     private fun dashboardTarget(): String {
+        // Built-in renderer: the WebView runs in our own process, so smoothness metrics target us.
+        if (config.dashboardPackage == SystemController.BUILTIN_DASHBOARD) return packageName
         config.dashboardPackage.takeIf { it.isNotBlank() }?.let { return it }
         for (p in listOf("io.homeassistant.companion.android.minimal", "io.homeassistant.companion.android")) {
             if (runCatching { packageManager.getPackageInfo(p, 0) }.isSuccess) return p

@@ -49,13 +49,22 @@
 
         <!-- Built-in dashboard renderer (experimental). exported so the privileged am start path can
              open it; singleTask so a repeat launch reaches the running instance (onNewIntent = reload)
-             instead of stacking a second WebView. No LAUNCHER category (see AdminLauncherActivity note)
-             and no HOME category yet — home-app adoption is a post-PoC decision. -->
+             instead of stacking a second WebView. Declares CATEGORY_HOME (like AdminLauncherActivity) so
+             ensureDashboardHome can set it as the default home when dashboard_package=builtin — boots to
+             the dashboard + Home returns to it. NOT CATEGORY_LAUNCHER (a second MAIN/LAUNCHER activity
+             makes the app's front door resolve to the chooser); MainActivity stays the sole launcher icon. -->
         <activity
             android:name=".DashboardActivity"
             android:exported="true"
             android:label="HA dashboard"
-            android:launchMode="singleTask" />
+            android:launchMode="singleTask">
+            <!-- Selectable / assignable HOME so it can become the boot-to dashboard home. -->
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.HOME" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
 
         <!-- Admin app drawer. Reachable three ways: the navbar Launcher button (privileged am start),
              as a selectable/last-resort HOME app (Settings -> Home), and the HA/:8888 trigger. It does

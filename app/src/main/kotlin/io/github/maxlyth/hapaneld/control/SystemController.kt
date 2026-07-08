@@ -28,6 +28,9 @@ class SystemController(
     private val env: SystemEnv,
     private val root: RootShell = Su,
     private val daemon: Daemon = HelperClient,
+    // Foreground state of the built-in renderer (our own activity) — seamed so the `builtin` dashboard
+    // path stays unit-testable without loading an Android Activity. Defaults to the live process flag.
+    private val builtinForeground: () -> Boolean = { BuiltinDashboard.foreground },
 ) {
 
     /** Launch an activity [component] ("pkg/cls") via the privileged path (daemon START, else su). */
@@ -39,8 +42,19 @@ class SystemController(
         return root.run("am start -n $component")
     }
 
-    /** Configured dashboard pkg, else the installed HA Companion (this is an HA project). Public so
-     *  the config UI can show what a blank ("auto") dashboard_package actually resolved to. */
+    /** True when [pkg] selects ha-paneld's own built-in WebView renderer rather than a foreign app. */
+    private fun isBuiltin(pkg: String) = pkg == BUILTIN_DASHBOARD
+
+    /** Start (or, if already running, reload via singleTask onNewIntent) our built-in DashboardActivity. */
+    private fun startBuiltin() {
+        val comp = "${env.ownPackage}/.DashboardActivity"
+        if (!privilegedStart(comp)) env.directStart(comp)
+        Log.i(TAG, "builtin dashboard -> $comp")
+    }
+
+    /** Configured dashboard pkg, else the installed HA Companion (this is an HA project). The sentinel
+     *  [BUILTIN_DASHBOARD] passes through unchanged (it's non-blank) — downstream methods special-case it.
+     *  Public so the config UI can show what a blank ("auto") dashboard_package actually resolved to. */
     fun resolveDashboard(pkg: String): String {
         if (pkg.isNotBlank()) return pkg
         for (p in listOf("io.homeassistant.companion.android.minimal", "io.homeassistant.companion.android")) {
@@ -52,6 +66,8 @@ class SystemController(
     /** Force-stop the dashboard and relaunch it. */
     fun reloadDashboard(dashboardPkg: String) {
         val pkg = resolveDashboard(dashboardPkg)
+        // Built-in renderer: relaunching the singleTask activity fires onNewIntent → WebView.reload().
+        if (isBuiltin(pkg)) { startBuiltin(); return }
         if (pkg.isBlank()) { Log.w(TAG, "reload: no dashboard pkg (set dashboard_package)"); return }
         if (daemon.available()) { // daemon force-stops + monkey-relaunches as root (no BAL)
             daemon.send("RELOAD $pkg")
@@ -145,6 +161,7 @@ class SystemController(
      */
     fun ensureDashboardHome(dashboardPkg: String) {
         val target = resolveDashboard(dashboardPkg)
+        if (isBuiltin(target)) { ensureBuiltinHome(); return }
         if (target.isBlank()) { Log.i(TAG, "ensureHome: no dashboard app installed; leaving home as-is"); return }
         val current = env.defaultHome()?.pkg
         if (current == target) return                                   // already correct
@@ -156,9 +173,24 @@ class SystemController(
         setHomeActivity(comp)
     }
 
+    /** Make our built-in DashboardActivity the default home (parity with the Companion path): so the
+     *  panel boots to it, the Home key returns to it, and it self-heals as a home app. Only reclaims
+     *  from an unowned ("android") resolver or ourselves — a deliberate third-party home is left alone. */
+    private fun ensureBuiltinHome() {
+        val comp = env.homeActivities().firstOrNull { it.pkg == env.ownPackage && it.cls.endsWith("DashboardActivity") }?.component
+        if (comp == null) { Log.w(TAG, "ensureHome(builtin): DashboardActivity has no HOME activity"); return }
+        val current = env.defaultHome()
+        if (current?.component == comp) return                           // already correct
+        val curPkg = current?.pkg
+        if (curPkg != null && curPkg != "android" && curPkg != env.ownPackage) return
+        Log.i(TAG, "ensureHome(builtin): default home was '${current?.component}' -> $comp")
+        setHomeActivity(comp)
+    }
+
     /** Bring the dashboard (or the default home app) to the foreground. */
     fun launchHome(dashboardPkg: String) {
         val pkg = resolveDashboard(dashboardPkg)
+        if (isBuiltin(pkg)) { startBuiltin(); return }
         val comp = if (pkg.isNotBlank()) env.launchComponent(pkg) else env.defaultHome()?.component
         if (comp == null) { Log.w(TAG, "home: no target resolved"); return }
         if (!privilegedStart(comp)) env.directStart(comp)
@@ -174,6 +206,10 @@ class SystemController(
      */
     fun dashboardState(dashboardPkg: String): AppState {
         val pkg = resolveDashboard(dashboardPkg)
+        // Built-in renderer lives in our always-running process, so it's never DEAD: a direct lifecycle
+        // flag gives FG (resumed) / BG (paused or not yet created) with no root/daemon probe. BG lets the
+        // kiosk/watchdog return-loops recreate it via launchHome without ever tripping the crash-loop path.
+        if (isBuiltin(pkg)) return if (builtinForeground()) AppState.FG else AppState.BG
         if (pkg.isBlank()) return AppState.UNKNOWN
         if (daemon.available()) {
             return when (daemon.send("APPSTATE $pkg")) {
@@ -201,6 +237,10 @@ class SystemController(
 
     companion object {
         private const val TAG = "ha-paneld/system"
+
+        /** Sentinel `dashboard_package` value selecting ha-paneld's own built-in WebView renderer
+         *  ([io.github.maxlyth.hapaneld.DashboardActivity]) instead of a foreign dashboard app. */
+        const val BUILTIN_DASHBOARD = "builtin"
 
         // Vendor kiosk apps that register CATEGORY_HOME but aren't real launchers — the navbar Launcher
         // button must never land on them (they obstruct the dashboard). eWeLink's control panel on

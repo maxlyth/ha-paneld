@@ -24,11 +24,15 @@ class SystemControllerTest {
         daemon: Map<String, String>? = null,
         su: Boolean = true,
         suOut: Map<String, String> = emptyMap(),
+        builtinForeground: Boolean = false,
     ): Triple<SystemController, FakeRootShell, FakeDaemon> {
         val root = FakeRootShell(outputs = suOut, runResult = su)
         val d = FakeDaemon(replies = daemon ?: emptyMap(), available = daemon != null)
-        return Triple(SystemController(env, root, d), root, d)
+        return Triple(SystemController(env, root, d, builtinForeground = { builtinForeground }), root, d)
     }
+
+    private val BUILTIN = SystemController.BUILTIN_DASHBOARD
+    private val DASH_HOME = ActivityRef(OWN, "io.github.maxlyth.hapaneld.DashboardActivity")
 
     // ---------- reboot ----------
     @Test fun rebootPrefersDaemon() {
@@ -260,5 +264,67 @@ class SystemControllerTest {
         val (c, root, _) = sc(env, daemon = null)
         c.launchHome("")
         assertTrue("no target → no start", root.ran.isEmpty() && env.directStarts.isEmpty())
+    }
+
+    // ---------- built-in renderer (dashboard_package = "builtin") ----------
+    // The built-in renderer is ha-paneld's own DashboardActivity. resolveDashboard passes the sentinel
+    // through, and dashboardState/launchHome/reloadDashboard/ensureDashboardHome special-case it so the
+    // kiosk return-loop + watchdog drive it with no root/daemon probe and no foreign package.
+
+    @Test fun builtinDashboardStateFromForegroundFlag() {
+        // FG when our activity is resumed, BG otherwise — never DEAD (our process is always alive), so the
+        // watchdog's crash-loop path can't trip. No daemon/su probe is consulted.
+        val env = FakeSystemEnv()
+        assertEquals(AppState.FG, sc(env, daemon = null, builtinForeground = true).first.dashboardState(BUILTIN))
+        assertEquals(AppState.BG, sc(env, daemon = null, builtinForeground = false).first.dashboardState(BUILTIN))
+    }
+
+    @Test fun builtinDashboardStateIgnoresDaemon() {
+        // Even with a daemon available, the built-in path uses the lifecycle flag, not APPSTATE.
+        val (c, _, d) = sc(FakeSystemEnv(), daemon = mapOf("APPSTATE $BUILTIN" to "DEAD"), builtinForeground = true)
+        assertEquals(AppState.FG, c.dashboardState(BUILTIN))
+        assertTrue("no APPSTATE probe for builtin", d.sent.isEmpty())
+    }
+
+    @Test fun builtinLaunchHomeStartsDashboardActivity() {
+        val (c, root, _) = sc(FakeSystemEnv(), daemon = null, su = true)
+        c.launchHome(BUILTIN)
+        assertTrue("started our DashboardActivity", root.ran.contains("am start -n $OWN/.DashboardActivity"))
+    }
+
+    @Test fun builtinLaunchHomeFallsToDirectStart() {
+        val env = FakeSystemEnv()
+        val (c, _, _) = sc(env, daemon = null, su = false) // no daemon, su fails
+        c.launchHome(BUILTIN)
+        assertTrue("direct-start fallback", env.directStarts.contains("$OWN/.DashboardActivity"))
+    }
+
+    @Test fun builtinReloadRelaunchesActivity() {
+        // No force-stop / monkey for builtin — a singleTask relaunch is the reload (onNewIntent).
+        val (c, root, d) = sc(FakeSystemEnv(), daemon = mapOf("RELOAD $BUILTIN" to "OK"))
+        c.reloadDashboard(BUILTIN)
+        assertTrue("relaunch via START", d.sent.contains("START $OWN/.DashboardActivity"))
+        assertFalse("no RELOAD force-stop path", d.sent.contains("RELOAD $BUILTIN"))
+    }
+
+    @Test fun builtinEnsureHomeSetsDashboardActivityFromResolver() {
+        val env = FakeSystemEnv(homes = listOf(DASH_HOME), default = ActivityRef("android", "Resolver"))
+        val (c, root, _) = sc(env, daemon = null, su = true)
+        c.ensureDashboardHome(BUILTIN)
+        assertTrue("set home to DashboardActivity", root.ran.contains("cmd package set-home-activity ${DASH_HOME.component}"))
+    }
+
+    @Test fun builtinEnsureHomeNoopWhenAlreadyDefault() {
+        val env = FakeSystemEnv(homes = listOf(DASH_HOME), default = DASH_HOME)
+        val (c, root, d) = sc(env, daemon = null, su = true)
+        c.ensureDashboardHome(BUILTIN)
+        assertTrue("already our home → nothing set", root.ran.isEmpty() && d.sent.isEmpty())
+    }
+
+    @Test fun builtinEnsureHomeRespectsThirdPartyLauncher() {
+        val env = FakeSystemEnv(homes = listOf(DASH_HOME), default = ActivityRef("com.thirdparty.home", "L"))
+        val (c, root, d) = sc(env, daemon = null, su = true)
+        c.ensureDashboardHome(BUILTIN)
+        assertTrue("a deliberate 3rd-party home is left alone", root.ran.isEmpty() && d.sent.isEmpty())
     }
 }
