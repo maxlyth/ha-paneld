@@ -960,7 +960,7 @@ ${tameCardHtml()}
         val problems = HealthAudit.evaluate(
             webViewTooOld = wv.tooOld,
             webViewDisplay = wv.display,
-            hasRenderer = PanelInfo.dashboardRenderers(appContext, config.dashboardPackage).isNotEmpty(),
+            hasRenderer = PanelInfo.dashboardRenderers(appContext, config.dashboardPackage, config.haUrl).isNotEmpty(),
             updates = emptyList(),
         )
         // Auto-heal offer: if the profile ships a known-good WebView and we have root/daemon to install it,
@@ -1212,7 +1212,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         val findings = HealthAudit.evaluate(
             webViewTooOld = wv.tooOld,
             webViewDisplay = wv.display,
-            hasRenderer = PanelInfo.dashboardRenderers(appContext, config.dashboardPackage).isNotEmpty(),
+            hasRenderer = PanelInfo.dashboardRenderers(appContext, config.dashboardPackage, config.haUrl).isNotEmpty(),
             updates = UpdateChecker.available,
         )
         val warns = mutableListOf<String>()
@@ -1391,7 +1391,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         val findings = HealthAudit.evaluate(
             webViewTooOld = PanelInfo.webViewStatus(appContext).tooOld,
             webViewDisplay = s.facts["System WebView"] ?: "",
-            hasRenderer = PanelInfo.dashboardRenderers(appContext, config.dashboardPackage).isNotEmpty(),
+            hasRenderer = PanelInfo.dashboardRenderers(appContext, config.dashboardPackage, config.haUrl).isNotEmpty(),
             updates = UpdateChecker.visible(config.ignoredUpdates),
         )
         // Order: actively-broken states (crash-loop / blank internal_url) first, then render findings
@@ -1858,6 +1858,13 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             val pw = if (user != null && user.isEmpty()) "" else p["mqtt_password"]?.takeIf { it.isNotEmpty() }
             if (broker != null || user != null || pw != null) config.setMqtt(
                 broker ?: config.mqttBroker, user ?: config.mqttUser, pw,
+            )
+            // Built-in renderer connection — same semantics: blank token keeps the current one;
+            // clearing the URL clears the token too (no orphaned HA credential on the panel).
+            val haUrl = p["ha_url"]?.trim()
+            val haToken = if (haUrl != null && haUrl.isEmpty()) "" else p["ha_token"]?.takeIf { it.isNotEmpty() }
+            if (haUrl != null || haToken != null) config.setHaConnection(
+                haUrl ?: config.haUrl, haToken,
             )
             // Per-row "expose to HA" toggles (ha_expose_<key>=true|false) — take effect on the reconfigure.
             for (name in p.names()) {

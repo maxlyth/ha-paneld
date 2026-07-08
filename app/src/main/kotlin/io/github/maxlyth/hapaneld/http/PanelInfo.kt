@@ -193,12 +193,14 @@ object PanelInfo {
     const val FULLY_KIOSK = "de.ozerov.fully"
 
     /** Dashboard renderers actually installed on this panel: HA Companion (either variant), Fully Kiosk,
-     *  and any explicitly configured dashboard package. Empty ⇒ nothing will draw a dashboard (ha-paneld
-     *  itself still runs fine). Drives the soft "no dashboard app detected" health notice. */
-    fun dashboardRenderers(context: Context, dashboardPackage: String): List<String> {
+     *  the built-in renderer (counts only once ha_url is configured — DashboardActivity is a blank
+     *  screen without it), and any explicitly configured dashboard package. Empty ⇒ nothing will draw
+     *  a dashboard (ha-paneld itself still runs fine). Drives the soft "no dashboard app" health notice. */
+    fun dashboardRenderers(context: Context, dashboardPackage: String, haUrl: String = ""): List<String> {
         val out = mutableListOf<String>()
         if (COMPANION_IDS.any { installed(context, it) }) out += "HA Companion"
         if (installed(context, FULLY_KIOSK)) out += "Fully Kiosk"
+        if (haUrl.isNotBlank()) out += "Built-in renderer"
         if (dashboardPackage.isNotBlank() && installed(context, dashboardPackage)) out += dashboardPackage
         return out
     }

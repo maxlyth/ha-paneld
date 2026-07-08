@@ -254,6 +254,16 @@ object SettingsRegistry {
             help = "App whose force-stop+relaunch is the dashboard \"reload\" (blank = auto-detect).",
         ),
         SettingSpec(
+            key = "ha_url", type = SettingType.STRING, group = "System",
+            label = "Home Assistant URL", default = "",
+            help = "Base URL for the built-in dashboard renderer (experimental), e.g. http://homeassistant.local:8123. Blank disables it.",
+        ),
+        SettingSpec(
+            key = "ha_token", type = SettingType.PASSWORD, group = "System",
+            label = "HA access token", default = "", secret = true,
+            help = "Long-lived access token the built-in renderer signs into HA with. Blank on save keeps the current token.",
+        ),
+        SettingSpec(
             key = "launcher_package", type = SettingType.STRING, group = "System",
             label = "Launcher app", default = "", picker = "package",
             help = "App the Launcher button brings forward (blank = auto-pick).",

@@ -16,6 +16,9 @@ jmdns = "3.5.9"
 coroutines = "1.9.0"
 slf4jAndroid = "1.7.36"
 junit = "4.13.2"
+# Real org.json for JVM unit tests — the android.jar stub returns defaults (returnDefaultValues),
+# which would silently no-op any JSON-building code under test (e.g. the dashboard auth bridge).
+orgJson = "20240303"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -31,6 +34,7 @@ jmdns = { group = "org.jmdns", name = "jmdns", version.ref = "jmdns" }
 slf4j-android = { group = "org.slf4j", name = "slf4j-android", version.ref = "slf4jAndroid" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "coroutines" }
+org-json = { group = "org.json", name = "json", version.ref = "orgJson" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

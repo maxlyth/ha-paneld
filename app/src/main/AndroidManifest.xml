@@ -47,6 +47,16 @@
             android:exported="false"
             android:label="ha-paneld configuration" />
 
+        <!-- Built-in dashboard renderer (experimental). exported so the privileged am start path can
+             open it; singleTask so a repeat launch reaches the running instance (onNewIntent = reload)
+             instead of stacking a second WebView. No LAUNCHER category (see AdminLauncherActivity note)
+             and no HOME category yet — home-app adoption is a post-PoC decision. -->
+        <activity
+            android:name=".DashboardActivity"
+            android:exported="true"
+            android:label="HA dashboard"
+            android:launchMode="singleTask" />
+
         <!-- Admin app drawer. Reachable three ways: the navbar Launcher button (privileged am start),
              as a selectable/last-resort HOME app (Settings -> Home), and the HA/:8888 trigger. It does
              NOT carry CATEGORY_LAUNCHER on purpose — a second MAIN/LAUNCHER activity makes the package's

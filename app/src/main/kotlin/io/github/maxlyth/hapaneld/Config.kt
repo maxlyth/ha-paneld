@@ -169,6 +169,23 @@ class Config(context: Context) {
         edit { putString("dashboard_package", pkg) }
     }
 
+    /** Home Assistant base URL for the built-in dashboard renderer, e.g. "http://homeassistant.local:8123".
+     *  Empty => the built-in renderer is unavailable (external renderers unaffected). */
+    val haUrl: String get() = prefs.getString("ha_url", "")!!
+
+    /** Access token the built-in renderer hands the HA frontend via the external-auth bridge. A
+     *  long-lived access token minted on the admin's machine — never typed on the panel. */
+    val haToken: String get() = prefs.getString("ha_token", "")!!
+
+    /** Persist the built-in renderer connection (HTTP config page / provisioning). A null token leaves
+     *  it unchanged, mirroring [setMqtt]'s password semantics. */
+    fun setHaConnection(url: String, token: String?) {
+        edit {
+            putString("ha_url", url.trim().trimEnd('/'))
+            if (token != null) putString("ha_token", token)
+        }
+    }
+
     /** Launcher package the Launcher button brings forward. Empty => auto-pick a non-default home. */
     val launcherPackage: String get() = prefs.getString("launcher_package", "")!!
     fun setLauncherPackage(pkg: String) {
