@@ -103,7 +103,7 @@ class DashboardActivity : AppCompatActivity() {
         }
         web = w
         setContentView(w)
-        w.loadUrl("${config.haUrl}/?external_auth=1")
+        w.loadUrl(ExternalAuthProtocol.dashboardUrl(config.haUrl, config.homeDashboard))
     }
 
     /**
@@ -147,6 +147,16 @@ class DashboardActivity : AppCompatActivity() {
  * dropped rather than executed).
  */
 object ExternalAuthProtocol {
+
+    /** Build the dashboard URL: `<haUrl>/<path>?external_auth=1`. [path] is an optional local dashboard
+     *  path (e.g. `bmp-panel/dash` or `/lovelace/0`); leading/trailing slashes are normalised, blank =
+     *  the HA root. `external_auth=1` tells the frontend to authenticate via our JS bridge. */
+    fun dashboardUrl(haUrl: String, path: String): String {
+        val base = haUrl.trim().trimEnd('/')
+        val p = path.trim().trim('/')
+        return if (p.isEmpty()) "$base/?external_auth=1" else "$base/$p?external_auth=1"
+    }
+
 
     /** `getExternalAuth` reply: `externalAuthSetToken(true, {access_token, expires_in})`, or a
      *  `(false)` failure when no token is available (unconfigured, or a refresh that failed closed).

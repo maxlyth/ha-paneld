@@ -269,6 +269,11 @@ object SettingsRegistry {
             help = "Optional OAuth refresh token (from provisioning with a username/password login). When set, the renderer refreshes the access token itself, so no long-lived token lives on the panel. Blank on save keeps the current one.",
         ),
         SettingSpec(
+            key = "ha_client_id", type = SettingType.STRING, group = "System",
+            label = "HA OAuth client_id", default = "",
+            help = "client_id used when refreshing the token. Blank = the HA URL (the frontend default). Set it to the client the refresh token was issued for, e.g. https://home-assistant.io/android to reuse an HA Companion refresh token.",
+        ),
+        SettingSpec(
             key = "launcher_package", type = SettingType.STRING, group = "System",
             label = "Launcher app", default = "", picker = "package",
             help = "App the Launcher button brings forward (blank = auto-pick).",

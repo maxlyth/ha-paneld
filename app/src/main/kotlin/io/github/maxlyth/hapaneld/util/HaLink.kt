@@ -56,8 +56,10 @@ object HaLink {
      * unreachable) so the caller can fall back to a still-valid cached token or fail closed. Blocking
      * HTTP — call it off the main thread (the renderer's JS-bridge thread is fine).
      */
-    fun refreshAccessToken(base: String, refreshToken: String): TokenSet? = runCatching {
-        val cid = "${base.trimEnd('/')}/" // client_id = HA origin, matching the login flow + the frontend
+    fun refreshAccessToken(base: String, refreshToken: String, clientId: String = ""): TokenSet? = runCatching {
+        // client_id must match the one the refresh token was issued for. Default = HA origin (the
+        // frontend's own client_id); override to reuse a token from another client (e.g. the Companion).
+        val cid = clientId.ifBlank { "${base.trimEnd('/')}/" }
         val json = JSONObject(
             post(
                 "${base.trimEnd('/')}/auth/token", null,

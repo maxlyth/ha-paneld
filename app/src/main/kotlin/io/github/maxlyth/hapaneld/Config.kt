@@ -186,6 +186,11 @@ class Config(context: Context) {
     /** Epoch-seconds expiry of the current [haToken] (refresh model only). 0 => unknown → refresh now. */
     val haTokenExpiry: Long get() = prefs.getLong("ha_token_expiry", 0L)
 
+    /** OAuth client_id to use when refreshing [haToken]. Blank => the HA origin (`<ha_url>/`, what the
+     *  frontend uses). Set it to match the client the refresh token was issued for — e.g.
+     *  `https://home-assistant.io/android` to reuse an HA Companion refresh token. */
+    val haClientId: String get() = prefs.getString("ha_client_id", "")!!
+
     /** Persist the built-in renderer connection (HTTP config page / provisioning). A null token leaves
      *  it unchanged, mirroring [setMqtt]'s password semantics. */
     fun setHaConnection(url: String, token: String?) {
@@ -205,6 +210,9 @@ class Config(context: Context) {
 
     /** Set the current access-token expiry (epoch seconds) — provisioning path. */
     fun setHaTokenExpiry(epochSec: Long) { edit { putLong("ha_token_expiry", epochSec) } }
+
+    /** Set (or clear, with "") the OAuth client_id used for token refresh. */
+    fun setHaClientId(clientId: String) { edit { putString("ha_client_id", clientId) } }
 
     /** Launcher package the Launcher button brings forward. Empty => auto-pick a non-default home. */
     val launcherPackage: String get() = prefs.getString("launcher_package", "")!!

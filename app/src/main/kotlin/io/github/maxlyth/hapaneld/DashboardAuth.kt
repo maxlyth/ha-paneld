@@ -71,7 +71,7 @@ object DashboardAuth {
     fun forConfig(config: Config, nowSec: Long = System.currentTimeMillis() / 1000): Session? {
         val r = resolve(
             config.haUrl, config.haToken, config.haRefreshToken, config.haTokenExpiry, nowSec,
-            HaLink::refreshAccessToken,
+            { url, refresh -> HaLink.refreshAccessToken(url, refresh, config.haClientId) },
         )
         r.persist?.let { (access, expiry) -> config.setHaRefreshedToken(access, expiry) }
         return r.session

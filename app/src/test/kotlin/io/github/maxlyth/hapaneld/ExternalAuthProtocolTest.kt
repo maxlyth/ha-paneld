@@ -81,6 +81,19 @@ class ExternalAuthProtocolTest {
         }
     }
 
+    // --- dashboardUrl -----------------------------------------------------------------------------
+
+    @Test
+    fun `dashboard url appends path and external_auth`() {
+        assertEquals("https://ha/bmp-panel/dash?external_auth=1",
+            ExternalAuthProtocol.dashboardUrl("https://ha", "bmp-panel/dash"))
+        // trailing/leading slashes on either side are normalised, not doubled
+        assertEquals("https://ha/lovelace/0?external_auth=1",
+            ExternalAuthProtocol.dashboardUrl("https://ha/", "/lovelace/0/"))
+        // blank path → the HA root
+        assertEquals("https://ha/?external_auth=1", ExternalAuthProtocol.dashboardUrl("https://ha", ""))
+    }
+
     @Test
     fun `other bus messages are swallowed silently`() {
         assertNull(ExternalAuthProtocol.busReply("""{"type":"connection-status","payload":{"event":"connected"}}""", "v"))

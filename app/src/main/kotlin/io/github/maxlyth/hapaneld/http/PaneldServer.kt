@@ -1873,6 +1873,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             val haRefresh = if (clearingHa) "" else p["ha_refresh_token"]?.takeIf { it.isNotEmpty() }
             haRefresh?.let { config.setHaRefreshToken(it) }
             p["ha_token_expiry"]?.trim()?.toLongOrNull()?.let { config.setHaTokenExpiry(it) }
+            p["ha_client_id"]?.trim()?.let { config.setHaClientId(if (clearingHa) "" else it) }
             if (clearingHa) config.setHaRefreshToken("")
             // Per-row "expose to HA" toggles (ha_expose_<key>=true|false) — take effect on the reconfigure.
             for (name in p.names()) {
