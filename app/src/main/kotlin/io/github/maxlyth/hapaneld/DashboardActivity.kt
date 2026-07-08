@@ -116,7 +116,12 @@ class DashboardActivity : AppCompatActivity() {
     inner class ExternalAuthBridge(private val config: Config) {
 
         @JavascriptInterface
-        fun getExternalAuth(payload: String) = evaluate(ExternalAuthProtocol.authReply(payload, config.haToken))
+        fun getExternalAuth(payload: String) {
+            // Resolve (and lazily refresh) the access token off the main thread — we're already on the
+            // WebView's JS-bridge thread, so the blocking refresh HTTP is fine here.
+            val session = DashboardAuth.forConfig(config)
+            evaluate(ExternalAuthProtocol.authReply(payload, session?.accessToken, session?.expiresInSec ?: 0L))
+        }
 
         @JavascriptInterface
         fun revokeExternalAuth(payload: String) = evaluate(ExternalAuthProtocol.revokeReply(payload))
@@ -144,12 +149,12 @@ class DashboardActivity : AppCompatActivity() {
 object ExternalAuthProtocol {
 
     /** `getExternalAuth` reply: `externalAuthSetToken(true, {access_token, expires_in})`, or a
-     *  `(false)` failure when no token is configured. A long-lived token advertises a year of
-     *  validity — the frontend only tracks expiry to know when to ask again. */
-    fun authReply(payload: String, token: String): String? {
+     *  `(false)` failure when no token is available (unconfigured, or a refresh that failed closed).
+     *  [expiresInSec] is the token's remaining life the frontend uses to know when to ask again. */
+    fun authReply(payload: String, accessToken: String?, expiresInSec: Long): String? {
         if (callbackOf(payload) != "externalAuthSetToken") return null
-        if (token.isBlank()) return "externalAuthSetToken(false)"
-        val auth = JSONObject().put("access_token", token).put("expires_in", 31_536_000L)
+        if (accessToken.isNullOrBlank()) return "externalAuthSetToken(false)"
+        val auth = JSONObject().put("access_token", accessToken).put("expires_in", expiresInSec)
         return "externalAuthSetToken(true, $auth)"
     }
 

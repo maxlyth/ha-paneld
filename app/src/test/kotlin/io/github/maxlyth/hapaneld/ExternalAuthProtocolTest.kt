@@ -18,19 +18,23 @@ class ExternalAuthProtocolTest {
     // --- getExternalAuth ---------------------------------------------------------------------------
 
     @Test
-    fun `auth reply carries the token and a seconds expiry`() {
-        val js = ExternalAuthProtocol.authReply("""{"callback":"externalAuthSetToken"}""", "tok123")!!
+    fun `auth reply carries the token and its real expiry`() {
+        val js = ExternalAuthProtocol.authReply("""{"callback":"externalAuthSetToken"}""", "tok123", 1800L)!!
         assertTrue(js.startsWith("externalAuthSetToken(true, "))
         val json = JSONObject(js.removePrefix("externalAuthSetToken(true, ").removeSuffix(")"))
         assertEquals("tok123", json.getString("access_token"))
-        assertTrue(json.getLong("expires_in") > 86_400)
+        assertEquals(1800L, json.getLong("expires_in"))
     }
 
     @Test
     fun `auth reply fails closed with no token`() {
         assertEquals(
             "externalAuthSetToken(false)",
-            ExternalAuthProtocol.authReply("""{"callback":"externalAuthSetToken","force":true}""", ""),
+            ExternalAuthProtocol.authReply("""{"callback":"externalAuthSetToken","force":true}""", "", 0L),
+        )
+        assertEquals(
+            "externalAuthSetToken(false)",
+            ExternalAuthProtocol.authReply("""{"callback":"externalAuthSetToken"}""", null, 0L),
         )
     }
 
@@ -38,14 +42,14 @@ class ExternalAuthProtocolTest {
     fun `unexpected callback name is never evaluated`() {
         // The callback name becomes a JS function call — anything but the frontend's fixed constant
         // must be dropped, or a hostile page could execute an arbitrary function with our token.
-        assertNull(ExternalAuthProtocol.authReply("""{"callback":"alert"}""", "tok"))
-        assertNull(ExternalAuthProtocol.authReply("not json", "tok"))
-        assertNull(ExternalAuthProtocol.authReply("{}", "tok"))
+        assertNull(ExternalAuthProtocol.authReply("""{"callback":"alert"}""", "tok", 1800L))
+        assertNull(ExternalAuthProtocol.authReply("not json", "tok", 1800L))
+        assertNull(ExternalAuthProtocol.authReply("{}", "tok", 1800L))
     }
 
     @Test
     fun `token with quotes is JSON-escaped not injected`() {
-        val js = ExternalAuthProtocol.authReply("""{"callback":"externalAuthSetToken"}""", """t"),alert("x""")!!
+        val js = ExternalAuthProtocol.authReply("""{"callback":"externalAuthSetToken"}""", """t"),alert("x""", 1800L)!!
         val json = JSONObject(js.removePrefix("externalAuthSetToken(true, ").removeSuffix(")"))
         assertEquals("""t"),alert("x""", json.getString("access_token"))
     }

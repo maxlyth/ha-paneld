@@ -47,6 +47,27 @@ object HaLink {
         }.onFailure { Log.i(TAG, "resolve failed: ${it.message}") }.getOrNull()
     }
 
+    /** An access token plus its remaining lifetime in seconds (as HA's /auth/token reports `expires_in`). */
+    data class TokenSet(val accessToken: String, val expiresInSec: Long)
+
+    /**
+     * Exchange a refresh token for a fresh access token (OAuth `grant_type=refresh_token`, the same call
+     * the HA Companion makes). Returns null on any failure (revoked/invalid refresh token, HA
+     * unreachable) so the caller can fall back to a still-valid cached token or fail closed. Blocking
+     * HTTP — call it off the main thread (the renderer's JS-bridge thread is fine).
+     */
+    fun refreshAccessToken(base: String, refreshToken: String): TokenSet? = runCatching {
+        val cid = "${base.trimEnd('/')}/" // client_id = HA origin, matching the login flow + the frontend
+        val json = JSONObject(
+            post(
+                "${base.trimEnd('/')}/auth/token", null,
+                "grant_type=refresh_token&refresh_token=${enc(refreshToken)}&client_id=${enc(cid)}", FORM,
+            ),
+        )
+        val access = json.optString("access_token").takeIf { it.isNotBlank() } ?: return@runCatching null
+        TokenSet(access, json.optLong("expires_in", 1800L))
+    }.onFailure { Log.i(TAG, "refresh failed: ${it.message}") }.getOrNull()
+
     /** HA frontend login flow with username/password → short-lived access token, or null. */
     private fun login(base: String, user: String, pass: String): String? {
         val cid = "$base/" // client_id = HA's own origin (the frontend does the same), so no extra fetch

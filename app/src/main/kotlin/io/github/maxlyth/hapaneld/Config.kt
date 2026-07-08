@@ -173,9 +173,18 @@ class Config(context: Context) {
      *  Empty => the built-in renderer is unavailable (external renderers unaffected). */
     val haUrl: String get() = prefs.getString("ha_url", "")!!
 
-    /** Access token the built-in renderer hands the HA frontend via the external-auth bridge. A
-     *  long-lived access token minted on the admin's machine — never typed on the panel. */
+    /** Access token the built-in renderer hands the HA frontend via the external-auth bridge. Either a
+     *  long-lived access token (set once at provisioning) OR the current short-lived access token kept
+     *  fresh from [haRefreshToken]. Never typed on the panel. */
     val haToken: String get() = prefs.getString("ha_token", "")!!
+
+    /** OAuth refresh token (from a provisioning login). When set, [haToken] is a short-lived access
+     *  token the app refreshes on demand — so no 10-year token lives on the panel. Blank => [haToken] is
+     *  treated as a static long-lived token that never needs refreshing. */
+    val haRefreshToken: String get() = prefs.getString("ha_refresh_token", "")!!
+
+    /** Epoch-seconds expiry of the current [haToken] (refresh model only). 0 => unknown → refresh now. */
+    val haTokenExpiry: Long get() = prefs.getLong("ha_token_expiry", 0L)
 
     /** Persist the built-in renderer connection (HTTP config page / provisioning). A null token leaves
      *  it unchanged, mirroring [setMqtt]'s password semantics. */
@@ -185,6 +194,17 @@ class Config(context: Context) {
             if (token != null) putString("ha_token", token)
         }
     }
+
+    /** Persist a refreshed access token + its expiry (called by the on-demand refresh in the renderer). */
+    fun setHaRefreshedToken(access: String, expiryEpochSec: Long) {
+        edit { putString("ha_token", access); putLong("ha_token_expiry", expiryEpochSec) }
+    }
+
+    /** Set (or clear, with "") the OAuth refresh token — provisioning path. */
+    fun setHaRefreshToken(refresh: String) { edit { putString("ha_refresh_token", refresh) } }
+
+    /** Set the current access-token expiry (epoch seconds) — provisioning path. */
+    fun setHaTokenExpiry(epochSec: Long) { edit { putLong("ha_token_expiry", epochSec) } }
 
     /** Launcher package the Launcher button brings forward. Empty => auto-pick a non-default home. */
     val launcherPackage: String get() = prefs.getString("launcher_package", "")!!

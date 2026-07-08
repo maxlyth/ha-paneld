@@ -1866,6 +1866,14 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             if (haUrl != null || haToken != null) config.setHaConnection(
                 haUrl ?: config.haUrl, haToken,
             )
+            // Refresh token (+ optional access-token expiry) from a provisioning login. Blank keeps the
+            // current; clearing the URL clears it too. When set with an access token + expiry, persist
+            // the whole session so the renderer's lazy refresh has a valid starting point.
+            val clearingHa = haUrl != null && haUrl.isEmpty()
+            val haRefresh = if (clearingHa) "" else p["ha_refresh_token"]?.takeIf { it.isNotEmpty() }
+            haRefresh?.let { config.setHaRefreshToken(it) }
+            p["ha_token_expiry"]?.trim()?.toLongOrNull()?.let { config.setHaTokenExpiry(it) }
+            if (clearingHa) config.setHaRefreshToken("")
             // Per-row "expose to HA" toggles (ha_expose_<key>=true|false) — take effect on the reconfigure.
             for (name in p.names()) {
                 if (name.startsWith("ha_expose_")) {

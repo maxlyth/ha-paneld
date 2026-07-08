@@ -46,7 +46,15 @@
       var sel = el("select", { class: "pkgsel" });
       var autoLabel = f.placeholder || "Auto-detect";
       sel.appendChild(el("option", { value: "", text: autoLabel }));
-      var seen = {};
+      var seen = { "": true };
+      // The dashboard field can also select ha-paneld's own built-in WebView renderer (needs an HA URL
+      // set below / via provisioning). Offered only for the dashboard, not the launcher picker.
+      if (f.key === "dashboard_package") {
+        seen.builtin = true;
+        var ob = el("option", { value: "builtin", text: "Built-in renderer (ha-paneld)" });
+        if (cur === "builtin") ob.selected = true;
+        sel.appendChild(ob);
+      }
       apps.forEach(function (a) {
         seen[a.pkg] = true;
         var op = el("option", { value: a.pkg, text: a.label + " · " + a.pkg });

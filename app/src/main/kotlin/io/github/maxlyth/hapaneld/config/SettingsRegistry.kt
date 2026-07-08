@@ -261,7 +261,12 @@ object SettingsRegistry {
         SettingSpec(
             key = "ha_token", type = SettingType.PASSWORD, group = "System",
             label = "HA access token", default = "", secret = true,
-            help = "Long-lived access token the built-in renderer signs into HA with. Blank on save keeps the current token.",
+            help = "Access token the built-in renderer signs into HA with (a long-lived token, or the current short-lived one when a refresh token is set). Blank on save keeps the current token.",
+        ),
+        SettingSpec(
+            key = "ha_refresh_token", type = SettingType.PASSWORD, group = "System",
+            label = "HA refresh token", default = "", secret = true,
+            help = "Optional OAuth refresh token (from provisioning with a username/password login). When set, the renderer refreshes the access token itself, so no long-lived token lives on the panel. Blank on save keeps the current one.",
         ),
         SettingSpec(
             key = "launcher_package", type = SettingType.STRING, group = "System",

@@ -7,6 +7,11 @@
 #   scripts/provision.sh <panel-ip:5555> [APK] \
 #       [--id PANEL_ID] [--mqtt tcp://host:1883] [--mqtt-user U] [--mqtt-pass P] [--apk PATH] \
 #       [--log-host HOST] [--log-port N] [--log-proto syslog|http]   # forward logcat to an aggregator
+#   Built-in WebView renderer (experimental — no HA Companion / kiosk app needed):
+#       [--ha-url https://homeassistant.local:8123] [--builtin] \
+#       [--ha-token <LLAT>]              # simple: a long-lived access token (a standing credential), OR
+#       [--ha-user U --ha-pass P]        # preferred: log in HERE to mint a REFRESH token; the password
+#                                        # never reaches the panel, and no 10-year token lives on it.
 #   By default provisioning also TAMES the panel profile's recommended vendor apps (eWeLink overlay +
 #   factory test tools) — reversible + never strands the panel; pass --no-tame to skip.
 #   scripts/provision.sh <panel-ip:5555> --verify        # check end-state only, make no changes
@@ -38,7 +43,7 @@ fail() {
   exit 1
 }
 
-TARGET="${1:?usage: provision.sh <panel-ip:5555> [APK] [--id ID] [--mqtt tcp://host:1883] [--mqtt-user U] [--mqtt-pass P] [--log-host HOST] [--log-port N] [--log-proto syslog|http] [--log-off] [--export FILE] [--restore FILE] [--restore-fleet FILE] [--latest] [--force] [--persist-adb] [--strip-vendor] [--no-tame] [--verify]}"
+TARGET="${1:?usage: provision.sh <panel-ip:5555> [APK] [--id ID] [--mqtt tcp://host:1883] [--mqtt-user U] [--mqtt-pass P] [--ha-url URL] [--ha-token LLAT | --ha-user U --ha-pass P] [--builtin] [--log-host HOST] [--log-port N] [--log-proto syslog|http] [--log-off] [--export FILE] [--restore FILE] [--restore-fleet FILE] [--latest] [--force] [--persist-adb] [--strip-vendor] [--no-tame] [--verify]}"
 shift
 REPO="maxlyth/ha-paneld"
 LOCAL_APK="app/build/outputs/apk/debug/app-debug.apk"
@@ -47,6 +52,7 @@ A11Y="$PKG/.input.PanelAccessibilityService"
 APK=""; PANEL_ID=""; MQTT=""; MQTT_USER=""; MQTT_PASS=""; VERIFY_ONLY=0; LATEST=0; FORCE=0; PERSIST_ADB=0; STRIP_VENDOR=0; NO_TAME=0; TOINSTALL_VER=""
 LOG_HOST=""; LOG_PORT=""; LOG_PROTO=""; LOG_ENABLE=""
 EXPORT_FILE=""; RESTORE_FILE=""; RESTORE_MODE=""
+HA_URL=""; HA_TOKEN=""; HA_USER=""; HA_PASS=""; HA_REFRESH=""; HA_EXPIRY=""; BUILTIN=0
 
 if [ "${1:-}" ] && [ "${1#--}" = "${1:-}" ]; then APK="$1"; shift; fi
 while [ "${1:-}" ]; do
@@ -65,6 +71,11 @@ while [ "${1:-}" ]; do
     --log-port) LOG_PORT="$2"; shift 2 ;;     # log sink port (default 514 for syslog)
     --log-proto) LOG_PROTO="$2"; shift 2 ;;   # syslog (default) | http
     --log-off) LOG_ENABLE=false; shift ;;     # disable log shipping
+    --ha-url) HA_URL="$2"; shift 2 ;;         # Home Assistant URL for the built-in WebView renderer
+    --ha-token) HA_TOKEN="$2"; shift 2 ;;     # long-lived access token (simple path; a standing credential)
+    --ha-user) HA_USER="$2"; shift 2 ;;       # HA username — login here to mint a refresh token (no LLAT)
+    --ha-pass) HA_PASS="$2"; shift 2 ;;       # HA password — used ONLY on this machine to log in; never sent to the panel
+    --builtin) BUILTIN=1; shift ;;            # select ha-paneld's built-in renderer as the dashboard
     --export) EXPORT_FILE="$2"; shift 2 ;;    # save the panel's config bundle (incl. secrets) to FILE
     --restore) RESTORE_FILE="$2"; RESTORE_MODE="restore"; shift 2 ;;      # best-effort import of a bundle (full restore)
     --restore-fleet) RESTORE_FILE="$2"; RESTORE_MODE="fleet"; shift 2 ;;  # apply only PORTABLE keys (cross-panel deploy)
@@ -408,17 +419,50 @@ if ! launch_and_wait; then
                        echo "   ${D}If the page loads there, only THIS machine can't reach the panel on :8888 (firewall/VLAN) — the remaining config steps need that port.${X}"; }
 fi
 
+# Built-in-renderer login (optional): when --ha-user/--ha-pass are given, log in to HA *here on this
+# machine* (the password never reaches the panel) to mint a refresh token, so the panel holds a
+# revocable refresh token rather than a 10-year access token. Sets HA_TOKEN/HA_REFRESH/HA_EXPIRY.
+if [ -n "$HA_USER" ] && [ -n "$HA_PASS" ]; then
+  if [ -z "$HA_URL" ]; then warn "--ha-user/--ha-pass need --ha-url; skipping login"; else
+    step "🔑  HA login" "${D}minting a refresh token for $HA_USER (password stays on this machine)${X}"
+    cid="${HA_URL%/}/"
+    fl="$(curl -fsS -X POST "${HA_URL%/}/auth/login_flow" -H 'Content-Type: application/json' \
+          --data "{\"client_id\":\"$cid\",\"handler\":[\"homeassistant\",null],\"redirect_uri\":\"$cid\"}" 2>/dev/null)"
+    flow_id="$(printf '%s' "$fl" | grep -o '"flow_id":"[^"]*"' | head -1 | cut -d'"' -f4)"
+    if [ -z "$flow_id" ]; then warn "HA login_flow failed (is $HA_URL reachable?)"; else
+      res="$(curl -fsS -X POST "${HA_URL%/}/auth/login_flow/$flow_id" -H 'Content-Type: application/json' \
+             --data "{\"client_id\":\"$cid\",\"username\":\"$HA_USER\",\"password\":\"$HA_PASS\"}" 2>/dev/null)"
+      code="$(printf '%s' "$res" | grep -o '"result":"[^"]*"' | head -1 | cut -d'"' -f4)"
+      if [ -z "$code" ]; then warn "HA login rejected (bad credentials or MFA-enabled account)"; else
+        tok="$(curl -fsS -X POST "${HA_URL%/}/auth/token" \
+               --data-urlencode "grant_type=authorization_code" \
+               --data-urlencode "code=$code" --data-urlencode "client_id=$cid" 2>/dev/null)"
+        HA_TOKEN="$(printf '%s' "$tok" | grep -o '"access_token":"[^"]*"' | cut -d'"' -f4)"
+        HA_REFRESH="$(printf '%s' "$tok" | grep -o '"refresh_token":"[^"]*"' | cut -d'"' -f4)"
+        exp="$(printf '%s' "$tok" | grep -o '"expires_in":[0-9]*' | grep -o '[0-9]*')"
+        [ -n "$exp" ] && HA_EXPIRY="$(( $(date +%s) + exp ))"
+        if [ -n "$HA_REFRESH" ]; then echo "   ${GRN}✓${X} refresh token minted"; else warn "no refresh token in HA response"; fi
+      fi
+    fi
+  fi
+fi
+
 ARGS=()
 [ -n "$PANEL_ID" ]   && ARGS+=(--data-urlencode "panel_id=$PANEL_ID")
 [ -n "$MQTT" ]       && ARGS+=(--data-urlencode "mqtt_broker=$MQTT")
 [ -n "$MQTT_USER" ]  && ARGS+=(--data-urlencode "mqtt_user=$MQTT_USER")
 [ -n "$MQTT_PASS" ]  && ARGS+=(--data-urlencode "mqtt_password=$MQTT_PASS")
+[ -n "$HA_URL" ]     && ARGS+=(--data-urlencode "ha_url=$HA_URL")
+[ -n "$HA_TOKEN" ]   && ARGS+=(--data-urlencode "ha_token=$HA_TOKEN")
+[ -n "$HA_REFRESH" ] && ARGS+=(--data-urlencode "ha_refresh_token=$HA_REFRESH")
+[ -n "$HA_EXPIRY" ]  && ARGS+=(--data-urlencode "ha_token_expiry=$HA_EXPIRY")
+[ "$BUILTIN" = 1 ]   && ARGS+=(--data-urlencode "dashboard_package=builtin")
 [ -n "$LOG_ENABLE" ] && ARGS+=(--data-urlencode "log_ship_enabled=$LOG_ENABLE")
 [ -n "$LOG_HOST" ]   && ARGS+=(--data-urlencode "log_ship_host=$LOG_HOST")
 [ -n "$LOG_PORT" ]   && ARGS+=(--data-urlencode "log_ship_port=$LOG_PORT")
 [ -n "$LOG_PROTO" ]  && ARGS+=(--data-urlencode "log_ship_protocol=$LOG_PROTO")
 if [ ${#ARGS[@]} -gt 0 ]; then
-  step "⚙️  configuring" "${D}panel_id / MQTT / log shipping${X}"
+  step "⚙️  configuring" "${D}panel_id / MQTT / renderer / log shipping${X}"
   if CFG_ERR="$(curl -fsS -H 'Accept: application/json' -X POST "${ARGS[@]}" "$URL/api/v1/config" 2>&1 >/dev/null)"; then
     echo "   ${GRN}✓${X} applied"
   else
