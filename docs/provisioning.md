@@ -4,6 +4,9 @@ Headless setup for rooted / userdebug panels — all permissions granted over ad
 tap-through. For the quick single-panel install see the [README](../README.md#install); this page
 covers the scriptable path and rolling a whole fleet.
 
+> [!NOTE]
+> These are `bash` + `adb` commands. On **Windows**, run them in **Git Bash** (from [Git for Windows](https://gitforwindows.org/)) or **WSL** — not PowerShell — with `adb` on `PATH` (`winget install Google.PlatformTools`). macOS and Linux run them as-is.
+
 ## One panel
 
 Run the same script on every panel:
