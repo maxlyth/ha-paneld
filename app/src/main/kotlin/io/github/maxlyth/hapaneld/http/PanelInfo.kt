@@ -10,6 +10,7 @@ import android.os.Looper
 import android.os.StatFs
 import android.provider.Settings
 import android.webkit.WebSettings
+import io.github.maxlyth.hapaneld.control.SystemController
 import android.webkit.WebView
 import io.github.maxlyth.hapaneld.BuildConfig
 import java.io.File
@@ -192,15 +193,16 @@ object PanelInfo {
     /** Package id of Fully Kiosk Browser — a dashboard renderer some users prefer over the Companion. */
     const val FULLY_KIOSK = "de.ozerov.fully"
 
-    /** Dashboard renderers actually installed on this panel: HA Companion (either variant), Fully Kiosk,
-     *  the built-in renderer (counts only once ha_url is configured — DashboardActivity is a blank
-     *  screen without it), and any explicitly configured dashboard package. Empty ⇒ nothing will draw
-     *  a dashboard (ha-paneld itself still runs fine). Drives the soft "no dashboard app" health notice. */
+    /** Dashboard renderers that will actually draw on this panel: HA Companion (either variant), Fully
+     *  Kiosk, the built-in renderer (only when it is BOTH selected — `dashboard_package=builtin` — AND
+     *  configured with an `ha_url`; an `ha_url` alone doesn't render anything), and any explicitly
+     *  configured dashboard package. Empty ⇒ nothing will draw a dashboard (ha-paneld itself still runs
+     *  fine). Drives the soft "no dashboard app" health notice, so a mere `ha_url` must not suppress it. */
     fun dashboardRenderers(context: Context, dashboardPackage: String, haUrl: String = ""): List<String> {
         val out = mutableListOf<String>()
         if (COMPANION_IDS.any { installed(context, it) }) out += "HA Companion"
         if (installed(context, FULLY_KIOSK)) out += "Fully Kiosk"
-        if (haUrl.isNotBlank()) out += "Built-in renderer"
+        if (dashboardPackage == SystemController.BUILTIN_DASHBOARD && haUrl.isNotBlank()) out += "Built-in renderer"
         if (dashboardPackage.isNotBlank() && installed(context, dashboardPackage)) out += dashboardPackage
         return out
     }

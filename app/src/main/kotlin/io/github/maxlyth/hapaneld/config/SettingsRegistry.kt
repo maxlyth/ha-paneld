@@ -203,10 +203,38 @@ object SettingsRegistry {
             label = "Keep awake", default = "true",
             help = "Hold a partial wakelock so the SoC/network never suspend (screen still sleeps freely).",
         ),
+
+        // ---- Dashboard ---------------------------------------------------------------------------
+        // Which app renders the dashboard + (for the skunk-works built-in renderer) how it connects to HA.
         SettingSpec(
-            key = "home_dashboard", type = SettingType.STRING, group = "Behaviour",
+            key = "dashboard_package", type = SettingType.STRING, group = "Dashboard",
+            label = "Dashboard app", default = "", picker = "renderer",
+            help = "Which app renders the dashboard: the HA Companion, Fully Kiosk, or ha-paneld's built-in renderer (skunk-works). Blank = auto-detect the installed Companion.",
+        ),
+        SettingSpec(
+            key = "home_dashboard", type = SettingType.STRING, group = "Dashboard",
             label = "Home dashboard", default = "",
-            help = "Local dashboard path a reload returns to (e.g. /lovelace/0; blank = wherever it was).",
+            help = "Local dashboard path a reload returns to, e.g. /lovelace/0 (built-in renderer: the view it loads). Blank = wherever it was.",
+        ),
+        SettingSpec(
+            key = "ha_url", type = SettingType.STRING, group = "Dashboard",
+            label = "Home Assistant URL", default = "",
+            help = "Built-in renderer only (skunk-works): the HA base URL, e.g. http://homeassistant.local:8123. Blank disables the built-in renderer.",
+        ),
+        SettingSpec(
+            key = "ha_token", type = SettingType.PASSWORD, group = "Dashboard",
+            label = "HA access token", default = "", secret = true,
+            help = "Built-in renderer only: the access token it signs into HA with (a long-lived token, or the current short-lived one when a refresh token is set). Blank on save keeps the current token.",
+        ),
+        SettingSpec(
+            key = "ha_refresh_token", type = SettingType.PASSWORD, group = "Dashboard",
+            label = "HA refresh token", default = "", secret = true,
+            help = "Built-in renderer only: optional OAuth refresh token (from a username/password login at provisioning). When set, the renderer refreshes its own access token, so no long-lived token lives on the panel. Blank on save keeps the current one.",
+        ),
+        SettingSpec(
+            key = "ha_client_id", type = SettingType.STRING, group = "Dashboard",
+            label = "HA OAuth client_id", default = "",
+            help = "Built-in renderer only: client_id used when refreshing the token. Blank = the HA URL (the frontend default). Set it to the client the refresh token was issued for, e.g. https://home-assistant.io/android to reuse an HA Companion refresh token.",
         ),
 
         // ---- System ------------------------------------------------------------------------------
@@ -247,31 +275,6 @@ object SettingsRegistry {
                 "select", "update_channel", "ha-paneld auto-update channel",
                 """"command_topic":"ha-paneld/{panel}/update_channel/set","state_topic":"ha-paneld/{panel}/update_channel/state","options":["Stable","Pre-release"],"icon":"mdi:source-branch","entity_category":"config"""",
             ),
-        ),
-        SettingSpec(
-            key = "dashboard_package", type = SettingType.STRING, group = "System",
-            label = "Dashboard app", default = "", picker = "package",
-            help = "App whose force-stop+relaunch is the dashboard \"reload\" (blank = auto-detect).",
-        ),
-        SettingSpec(
-            key = "ha_url", type = SettingType.STRING, group = "System",
-            label = "Home Assistant URL", default = "",
-            help = "Base URL for the built-in dashboard renderer (experimental), e.g. http://homeassistant.local:8123. Blank disables it.",
-        ),
-        SettingSpec(
-            key = "ha_token", type = SettingType.PASSWORD, group = "System",
-            label = "HA access token", default = "", secret = true,
-            help = "Access token the built-in renderer signs into HA with (a long-lived token, or the current short-lived one when a refresh token is set). Blank on save keeps the current token.",
-        ),
-        SettingSpec(
-            key = "ha_refresh_token", type = SettingType.PASSWORD, group = "System",
-            label = "HA refresh token", default = "", secret = true,
-            help = "Optional OAuth refresh token (from provisioning with a username/password login). When set, the renderer refreshes the access token itself, so no long-lived token lives on the panel. Blank on save keeps the current one.",
-        ),
-        SettingSpec(
-            key = "ha_client_id", type = SettingType.STRING, group = "System",
-            label = "HA OAuth client_id", default = "",
-            help = "client_id used when refreshing the token. Blank = the HA URL (the frontend default). Set it to the client the refresh token was issued for, e.g. https://home-assistant.io/android to reuse an HA Companion refresh token.",
         ),
         SettingSpec(
             key = "launcher_package", type = SettingType.STRING, group = "System",

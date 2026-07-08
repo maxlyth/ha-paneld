@@ -1299,6 +1299,8 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
             spec.secret -> if (raw.isNotEmpty()) "set" else "—"
             spec.type == SettingType.BOOL -> if (raw.toBoolean()) "on" else "off"
             raw.isBlank() -> hints[key]?.let { "auto ($it)" } ?: "—"
+            // The built-in renderer sentinel has no package label — show its friendly name, not "builtin".
+            raw == SystemController.BUILTIN_DASHBOARD -> "Built-in renderer (skunk-works)"
             else -> raw
         }
         return """<tr><th>${esc(spec.label)}</th><td>${esc(shown)}${cfgIcon("cfg-$key")}</td></tr>"""

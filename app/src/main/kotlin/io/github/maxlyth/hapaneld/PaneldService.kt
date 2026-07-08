@@ -162,7 +162,7 @@ class PaneldService : Service() {
         // watchdog returns to the dashboard (a ~5-minute gap on boot). Off-main is already guaranteed:
         // tame() only ever runs inside a scope.launch / worker thread.
         tame = TameController(this) {
-            system.ensureDashboardHome(config.dashboardPackage)
+            system.ensureDashboardHome(config.dashboardPackage, config.haUrl.isNotBlank())
             system.launchHome(config.dashboardPackage)
         }
         // Tame opt-in: neutralise the vendor packages the user listed (force-stop + disable boot-relaunch
@@ -176,7 +176,7 @@ class PaneldService : Service() {
         // CATEGORY_HOME, and Android clears the default-home association on each install/update of a
         // HOME app — so without this, Home would pop a chooser instead of booting to the dashboard.
         // No-op unless home was cleared (or is us); off-main as it may call su. See ensureDashboardHome.
-        scope.launch { system.ensureDashboardHome(config.dashboardPackage) }
+        scope.launch { system.ensureDashboardHome(config.dashboardPackage, config.haUrl.isNotBlank()) }
         navbar = NavbarController(
             this, system, volume, brightness, { config.launcherPackage }, { dashboardTarget() },
             profile.appCanSu, profile.hasRecents,

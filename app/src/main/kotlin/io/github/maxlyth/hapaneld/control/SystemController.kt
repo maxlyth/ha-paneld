@@ -159,9 +159,11 @@ class SystemController(
      * third-party launcher set as home is left alone. If the dashboard app isn't installed we do nothing,
      * leaving our admin launcher as the genuine last-resort home.
      */
-    fun ensureDashboardHome(dashboardPkg: String) {
+    fun ensureDashboardHome(dashboardPkg: String, builtinReady: Boolean = true) {
         val target = resolveDashboard(dashboardPkg)
-        if (isBuiltin(target)) { ensureBuiltinHome(); return }
+        // Only claim HOME for the built-in renderer once it's actually renderable (an HA URL is set) —
+        // else DashboardActivity would be the home yet immediately hand off, churning HOME needlessly.
+        if (isBuiltin(target)) { if (builtinReady) ensureBuiltinHome(); return }
         if (target.isBlank()) { Log.i(TAG, "ensureHome: no dashboard app installed; leaving home as-is"); return }
         val current = env.defaultHome()?.pkg
         if (current == target) return                                   // already correct

@@ -39,6 +39,8 @@ object DashboardAuth {
      * @param refreshToken OAuth refresh token, or blank for the static model.
      * @param expiryEpochSec epoch-seconds expiry of [access] (refresh model); 0 => unknown.
      * @param nowSec       current epoch seconds.
+     * @param force        the frontend's force flag: bypass the cached token (it was just rejected) and
+     *                     refresh; on a refresh failure, fail closed rather than re-hand the dead token.
      * @param refresher    (url, refreshToken) -> new token set, or null on failure.
      */
     fun resolve(
@@ -47,30 +49,34 @@ object DashboardAuth {
         refreshToken: String,
         expiryEpochSec: Long,
         nowSec: Long,
+        force: Boolean,
         refresher: (String, String) -> HaLink.TokenSet?,
     ): Result {
         if (url.isBlank()) return Result(null)
-        // Static model: no refresh token → the access token is long-lived, hand it back as-is.
+        // Static model: no refresh token → the access token is long-lived, hand it back as-is. (Nothing
+        // to refresh, so `force` can't produce a different token — the LLAT is all there is.)
         if (refreshToken.isBlank()) {
             return if (access.isBlank()) Result(null)
             else Result(Session(access, STATIC_TTL_SEC))
         }
-        // Refresh model: reuse the cached access token while it has comfortable life left.
+        // Refresh model: reuse the cached access token while it has comfortable life left — unless the
+        // frontend forced a refresh (the cached token was just rejected server-side).
         val ttl = expiryEpochSec - nowSec
-        if (access.isNotBlank() && ttl > REFRESH_SKEW_SEC) return Result(Session(access, ttl))
-        // Expired / near-expiry / unknown → mint a new one.
+        if (!force && access.isNotBlank() && ttl > REFRESH_SKEW_SEC) return Result(Session(access, ttl))
+        // Expired / near-expiry / unknown / forced → mint a new one.
         val fresh = refresher(url, refreshToken)
         if (fresh != null) {
             return Result(Session(fresh.accessToken, fresh.expiresInSec), fresh.accessToken to (nowSec + fresh.expiresInSec))
         }
-        // Refresh failed: fall back to a still-usable cached token, else fail closed.
-        return if (access.isNotBlank() && ttl > 0) Result(Session(access, ttl)) else Result(null)
+        // Refresh failed. On a forced refresh the cached token was rejected — re-handing it just loops,
+        // so fail closed. On a non-forced near-expiry refresh, a transient failure can reuse the cache.
+        return if (!force && access.isNotBlank() && ttl > 0) Result(Session(access, ttl)) else Result(null)
     }
 
     /** Android glue: resolve against [config], persist a refreshed token, and return the session. */
-    fun forConfig(config: Config, nowSec: Long = System.currentTimeMillis() / 1000): Session? {
+    fun forConfig(config: Config, nowSec: Long = System.currentTimeMillis() / 1000, force: Boolean = false): Session? {
         val r = resolve(
-            config.haUrl, config.haToken, config.haRefreshToken, config.haTokenExpiry, nowSec,
+            config.haUrl, config.haToken, config.haRefreshToken, config.haTokenExpiry, nowSec, force,
             { url, refresh -> HaLink.refreshAccessToken(url, refresh, config.haClientId) },
         )
         r.persist?.let { (access, expiry) -> config.setHaRefreshedToken(access, expiry) }

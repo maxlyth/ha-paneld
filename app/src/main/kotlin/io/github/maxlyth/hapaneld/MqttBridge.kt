@@ -17,6 +17,7 @@ import io.github.maxlyth.hapaneld.control.NavActions
 import io.github.maxlyth.hapaneld.control.NavigateController
 import io.github.maxlyth.hapaneld.control.RelayController
 import io.github.maxlyth.hapaneld.control.ScreenController
+import io.github.maxlyth.hapaneld.control.BuiltinDashboard
 import io.github.maxlyth.hapaneld.control.SystemController
 import io.github.maxlyth.hapaneld.control.KioskController
 import io.github.maxlyth.hapaneld.control.WatchdogController
@@ -769,6 +770,13 @@ class MqttBridge(
     // dashboard is set, deep-link back to it once the frontend has cold-started — so reload lands on THIS
     // panel's dashboard, not the Companion's user-default. The delayed nav runs off the MQTT thread.
     private fun handleReload() {
+        // Built-in renderer: reload returns to the configured home dashboard (clear any navigate path),
+        // and the WebView reloads its own view — no Companion deep-link re-navigation is needed.
+        if (config.dashboardPackage == SystemController.BUILTIN_DASHBOARD) {
+            BuiltinDashboard.navPath = null
+            system.reloadDashboard(config.dashboardPackage)
+            return
+        }
         system.reloadDashboard(config.dashboardPackage)
         val home = toLocalPath(config.homeDashboard)
         if (config.homeDashboard.isNotBlank() && home.isNotEmpty() && home != "/") {
@@ -784,18 +792,25 @@ class MqttBridge(
 
     private fun handleNavigate(payload: String) {
         // Local navigation only: strip any scheme + host so an external URL can't be pushed (the HA
-        // Companion opens a disorienting in-app WebView for those). We keep just the path and drive the
-        // dashboard via the homeassistant:// deep link, which navigates in-app with no WebView.
+        // Companion opens a disorienting in-app WebView for those). We keep just the path.
         val path = toLocalPath(payload)
-        if (path.isNotEmpty()) {
-            if (path == config.lastNavigate) {
-                // Already on this path — the deeplink is a no-op, so reload the dashboard instead.
-                system.reloadDashboard(config.dashboardPackage)
-            } else {
-                navigate.navigate("homeassistant://navigate$path")
-                config.lastNavigate = path
-                publish(stateNavigate, path, retain = true)
-            }
+        if (path.isEmpty()) return
+        if (config.dashboardPackage == SystemController.BUILTIN_DASHBOARD) {
+            // Built-in renderer: set the target path and (re)launch DashboardActivity, which loads it —
+            // the deep link targets the Companion and would no-op on a builtin-only panel.
+            BuiltinDashboard.navPath = path
+            system.launchHome(config.dashboardPackage)
+            config.lastNavigate = path
+            publish(stateNavigate, path, retain = true)
+            return
+        }
+        if (path == config.lastNavigate) {
+            // Already on this path — the deeplink is a no-op, so reload the dashboard instead.
+            system.reloadDashboard(config.dashboardPackage)
+        } else {
+            navigate.navigate("homeassistant://navigate$path")
+            config.lastNavigate = path
+            publish(stateNavigate, path, retain = true)
         }
     }
 

@@ -12,4 +12,9 @@ package io.github.maxlyth.hapaneld.control
 object BuiltinDashboard {
     /** True while DashboardActivity is resumed (foreground). Set from its onResume/onPause. */
     @Volatile var foreground = false
+
+    /** The dashboard path the renderer should show — set by an MQTT `navigate` command, then the
+     *  renderer is (re)launched and reads this on load. Null = fall back to the configured home
+     *  dashboard. Lets `navigate` drive the built-in WebView the way a deep link drives the Companion. */
+    @Volatile var navPath: String? = null
 }

@@ -8,6 +8,12 @@ From **v0.8.0**, entries are grouped under **Added** (new features/entities), **
 changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
 content appear. Earlier releases predate this convention and keep their flat lists.
 
+## v0.8.8-rc2 - 2026-07-08
+
+### Added
+
+- **Built-in dashboard renderer (skunk-works preview)** — ha-paneld can now render the Home Assistant dashboard itself in a built-in WebView, so a panel can show the dashboard without the HA Companion app or a third-party kiosk browser. It is **off by default** and a **skunk-works preview** for soak testing, kept deliberately separate from the other experimental features: choose "Built-in renderer — skunk-works" as the dashboard app and set the Home Assistant URL on the Configure tab (or `provision.sh --ha-url … --builtin`). It signs in through the frontend's external-auth bridge — the same mechanism the Companion app uses — with either a long-lived access token (`--ha-token`) or a refresh token minted by logging in once during provisioning (`--ha-user`/`--ha-pass`, so the password never reaches the panel and no long-lived token is stored on it); the token is refreshed on the panel as needed. An optional local dashboard path loads a specific view, the built-in renderer is recognised by the kiosk-lock and watchdog return loops, and a crashed WebView renderer is rebuilt in place. The HA Companion app remains the default, fully-supported dashboard host.
+
 ## v0.8.8-rc1 - 2026-07-08
 
 ### Added

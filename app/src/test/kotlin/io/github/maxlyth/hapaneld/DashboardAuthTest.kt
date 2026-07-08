@@ -17,24 +17,24 @@ class DashboardAuthTest {
     }
 
     @Test fun `no url yields no session`() {
-        val r = DashboardAuth.resolve("", "tok", "", 0, NOW, ::neverRefresh)
+        val r = DashboardAuth.resolve("", "tok", "", 0, NOW, false, ::neverRefresh)
         assertNull(r.session); assertNull(r.persist)
     }
 
     @Test fun `static token is returned as-is with a long life and never refreshed`() {
-        val r = DashboardAuth.resolve("https://ha", "llat", "", 0, NOW, ::neverRefresh)
+        val r = DashboardAuth.resolve("https://ha", "llat", "", 0, NOW, false, ::neverRefresh)
         assertEquals("llat", r.session!!.accessToken)
         assertEquals(DashboardAuth.STATIC_TTL_SEC, r.session!!.expiresInSec)
         assertNull("static model never persists a refresh", r.persist)
     }
 
     @Test fun `static model with blank token fails closed`() {
-        assertNull(DashboardAuth.resolve("https://ha", "", "", 0, NOW, ::neverRefresh).session)
+        assertNull(DashboardAuth.resolve("https://ha", "", "", 0, NOW, false, ::neverRefresh).session)
     }
 
     @Test fun `refresh model reuses a still-fresh access token`() {
         // expiry comfortably beyond now+skew → reuse, no refresh.
-        val r = DashboardAuth.resolve("https://ha", "acc", "refr", NOW + 3600, NOW, ::neverRefresh)
+        val r = DashboardAuth.resolve("https://ha", "acc", "refr", NOW + 3600, NOW, false, ::neverRefresh)
         assertEquals("acc", r.session!!.accessToken)
         assertEquals(3600L, r.session!!.expiresInSec)
         assertNull(r.persist)
@@ -45,7 +45,7 @@ class DashboardAuthTest {
         val refresher = { _: String, rt: String ->
             called = true; assertEquals("refr", rt); HaLink.TokenSet("new-acc", 1800L)
         }
-        val r = DashboardAuth.resolve("https://ha", "old", "refr", NOW - 10, NOW, refresher)
+        val r = DashboardAuth.resolve("https://ha", "old", "refr", NOW - 10, NOW, false, refresher)
         assertTrue(called)
         assertEquals("new-acc", r.session!!.accessToken)
         assertEquals(1800L, r.session!!.expiresInSec)
@@ -53,25 +53,40 @@ class DashboardAuthTest {
     }
 
     @Test fun `near-expiry within skew triggers a refresh`() {
-        val r = DashboardAuth.resolve("https://ha", "old", "refr", NOW + 30, NOW, { _, _ -> HaLink.TokenSet("n", 1800L) })
+        val r = DashboardAuth.resolve("https://ha", "old", "refr", NOW + 30, NOW, false, { _, _ -> HaLink.TokenSet("n", 1800L) })
         assertEquals("n", r.session!!.accessToken) // 30s < REFRESH_SKEW_SEC(60) → refreshed
     }
 
     @Test fun `unknown expiry (0) forces a refresh`() {
-        val r = DashboardAuth.resolve("https://ha", "acc", "refr", 0, NOW, { _, _ -> HaLink.TokenSet("n", 1800L) })
+        val r = DashboardAuth.resolve("https://ha", "acc", "refr", 0, NOW, false, { _, _ -> HaLink.TokenSet("n", 1800L) })
         assertEquals("n", r.session!!.accessToken)
     }
 
     @Test fun `refresh failure falls back to a still-usable cached token`() {
         // Cached token has 30s left (< skew so a refresh was attempted) but refresh returned null → reuse it.
-        val r = DashboardAuth.resolve("https://ha", "cached", "refr", NOW + 30, NOW, { _, _ -> null })
+        val r = DashboardAuth.resolve("https://ha", "cached", "refr", NOW + 30, NOW, false, { _, _ -> null })
         assertEquals("cached", r.session!!.accessToken)
         assertEquals(30L, r.session!!.expiresInSec)
         assertNull("no persist on a failed refresh", r.persist)
     }
 
     @Test fun `refresh failure with a fully-expired token fails closed`() {
-        val r = DashboardAuth.resolve("https://ha", "dead", "refr", NOW - 100, NOW, { _, _ -> null })
+        val r = DashboardAuth.resolve("https://ha", "dead", "refr", NOW - 100, NOW, false, { _, _ -> null })
         assertNull(r.session)
+    }
+
+    // --- force flag (frontend demands a fresh token after a 401) ---
+
+    @Test fun `force refreshes even when the cached token looks fresh`() {
+        // Cached token has plenty of clock-life left, but HA rejected it → force must refresh, not reuse.
+        val r = DashboardAuth.resolve("https://ha", "stale-but-unexpired", "refr", NOW + 3600, NOW, true,
+            { _, _ -> HaLink.TokenSet("fresh", 1800L) })
+        assertEquals("fresh", r.session!!.accessToken)
+        assertEquals("fresh" to (NOW + 1800L), r.persist)
+    }
+
+    @Test fun `force fails closed when refresh fails - never re-hands the rejected token`() {
+        val r = DashboardAuth.resolve("https://ha", "rejected", "refr", NOW + 3600, NOW, true, { _, _ -> null })
+        assertNull("must not re-hand the rejected token on a forced refresh", r.session)
     }
 }

@@ -39,6 +39,36 @@
       s.addEventListener("change", function () { values[f.key] = s.value; setDirty(); });
       return s;
     }
+    // Dashboard-app picker: strictly the KNOWN renderers (not every installed app) — the built-in
+    // renderer, plus whichever of the HA Companion / Fully Kiosk are installed. Blank = auto-detect.
+    if (f.picker === "renderer") {
+      var cur = v == null ? "" : v;
+      var sel = el("select", { class: "pkgsel" });
+      sel.appendChild(el("option", { value: "", text: f.placeholder || "Auto-detect" }));
+      var seen = { "": true };
+      // Ordered known renderers; each shown only if it's the built-in one or an installed package.
+      var KNOWN = [
+        { pkg: "builtin", label: "Built-in renderer — skunk-works (ha-paneld)" },
+        { pkg: "io.homeassistant.companion.android", label: "Home Assistant Companion" },
+        { pkg: "io.homeassistant.companion.android.minimal", label: "Home Assistant Companion (minimal)" },
+        { pkg: "de.ozerov.fully", label: "Fully Kiosk Browser" }
+      ];
+      var installed = {}; apps.forEach(function (a) { installed[a.pkg] = true; });
+      KNOWN.forEach(function (r) {
+        if (r.pkg !== "builtin" && !installed[r.pkg]) return; // only offer installed dashboard apps
+        seen[r.pkg] = true;
+        var op = el("option", { value: r.pkg, text: r.label });
+        if (r.pkg === cur) op.selected = true;
+        sel.appendChild(op);
+      });
+      // A currently-set value that isn't a known/installed renderer is preserved so it isn't silently lost.
+      if (cur && !seen[cur]) {
+        var o2 = el("option", { value: cur, text: cur + " · (not a known renderer)" });
+        o2.selected = true; sel.appendChild(o2);
+      }
+      sel.addEventListener("change", function () { values[f.key] = sel.value; setDirty(); });
+      return sel;
+    }
     // Package picker: a dropdown of installed apps. Blank = "Auto-detect"; a currently-set package that
     // isn't in the list (e.g. since-uninstalled or a manual entry) is kept as its own option.
     if (f.picker === "package") {
@@ -47,14 +77,6 @@
       var autoLabel = f.placeholder || "Auto-detect";
       sel.appendChild(el("option", { value: "", text: autoLabel }));
       var seen = { "": true };
-      // The dashboard field can also select ha-paneld's own built-in WebView renderer (needs an HA URL
-      // set below / via provisioning). Offered only for the dashboard, not the launcher picker.
-      if (f.key === "dashboard_package") {
-        seen.builtin = true;
-        var ob = el("option", { value: "builtin", text: "Built-in renderer (ha-paneld)" });
-        if (cur === "builtin") ob.selected = true;
-        sel.appendChild(ob);
-      }
       apps.forEach(function (a) {
         seen[a.pkg] = true;
         var op = el("option", { value: a.pkg, text: a.label + " · " + a.pkg });

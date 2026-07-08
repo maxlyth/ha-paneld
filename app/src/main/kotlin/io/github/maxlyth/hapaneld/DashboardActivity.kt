@@ -3,6 +3,7 @@ package io.github.maxlyth.hapaneld
 import android.annotation.SuppressLint
 import android.content.Intent
 import android.os.Bundle
+import android.os.SystemClock
 import android.util.Log
 import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
@@ -29,24 +30,53 @@ import org.json.JSONObject
 class DashboardActivity : AppCompatActivity() {
 
     private var web: WebView? = null
+    // Renderer-crash rebuild budget (never-blank): a page that reliably crashes the WebView renderer
+    // must not become a tight rebuild loop — after [MAX_REBUILDS] within [REBUILD_WINDOW_MS] we fall
+    // back to the admin launcher instead of respawning.
+    private var rebuilds = 0
+    private var rebuildWindowStart = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         supportActionBar?.hide()
         val config = Config(this)
         if (config.haUrl.isBlank()) {
-            Log.w(TAG, "no ha_url configured — nothing to render")
-            finish()
+            // We're a HOME activity: never finish to a blank home. With no URL to render, hand off to
+            // the admin launcher (also a HOME activity) so the panel is never stranded.
+            Log.w(TAG, "no ha_url configured — opening the admin launcher instead")
+            fallbackToLauncher()
             return
         }
         buildAndLoad(config)
     }
 
-    /** Reload on re-launch (singleTask): a second start intent is the "reload the dashboard" signal. */
+    /** Hand off to ha-paneld's admin launcher and finish — the never-strand fallback for a missing
+     *  WebView, an unconfigured URL, or a crash-looping renderer. */
+    private fun fallbackToLauncher() {
+        runCatching {
+            startActivity(Intent(this, AdminLauncherActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        }.onFailure { Log.e(TAG, "admin-launcher fallback failed: ${it.message}") }
+        finish()
+    }
+
+    /** Allow a renderer rebuild if within budget; resets the counter each [REBUILD_WINDOW_MS] window. */
+    private fun allowRebuild(): Boolean {
+        val now = SystemClock.elapsedRealtime()
+        if (now - rebuildWindowStart > REBUILD_WINDOW_MS) { rebuildWindowStart = now; rebuilds = 0 }
+        return ++rebuilds <= MAX_REBUILDS
+    }
+
+    /** Re-launch (singleTask) is the reload / navigate signal: load the current target (an MQTT
+     *  navigate sets [BuiltinDashboard.navPath]; otherwise the configured home dashboard), so a plain
+     *  reload re-loads the same view and a navigate switches to the new path. */
     override fun onNewIntent(intent: Intent?) {
         super.onNewIntent(intent)
-        web?.reload()
+        web?.loadUrl(currentUrl(Config(this)))
     }
+
+    /** The URL to show: the navigate path if one is pending, else the configured home dashboard. */
+    private fun currentUrl(config: Config): String =
+        ExternalAuthProtocol.dashboardUrl(config.haUrl, BuiltinDashboard.navPath ?: config.homeDashboard)
 
     // Publish foreground state so SystemController.dashboardState can drive the watchdog + kiosk
     // return-loop from an in-process signal instead of a root pidof/dumpsys probe.
@@ -67,43 +97,58 @@ class DashboardActivity : AppCompatActivity() {
 
     @SuppressLint("SetJavaScriptEnabled")
     private fun buildAndLoad(config: Config) {
-        // Own WebView => we can expose its DevTools socket; the CDP relay (off by default) is what
-        // actually publishes it to the LAN, so this alone only enables local adb inspection.
-        WebView.setWebContentsDebuggingEnabled(true)
-        val w = WebView(this).apply {
-            settings.javaScriptEnabled = true
-            settings.domStorageEnabled = true
-            // The HA frontend relies on cookies (incl. third-party for some integrations).
-            CookieManager.getInstance().setAcceptCookie(true)
-            CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
-            addJavascriptInterface(ExternalAuthBridge(config), "externalApp")
-            webViewClient = object : WebViewClient() {
-                // A dead renderer process must not take the app down with it: swallow the loss and
-                // rebuild the WebView in place, else Android kills the whole process (and with it
-                // the panel's HTTP/MQTT service).
-                override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
-                    Log.w(TAG, "renderer process gone (crash=${detail.didCrash()}) — rebuilding")
-                    (view.parent as? android.view.ViewGroup)?.removeView(view)
-                    view.destroy()
-                    if (web === view) {
-                        web = null
-                        runOnUiThread { buildAndLoad(Config(this@DashboardActivity)) }
-                    }
-                    return true
-                }
-
-                // Keep navigation on the dashboard: the panel has no browser, so external links
-                // would either silently do nothing or wedge the kiosk on a foreign page.
-                override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-                    val target = request.url
-                    val allowed = android.net.Uri.parse(config.haUrl)
-                    return !(target.host == allowed.host && target.scheme == allowed.scheme)
-                }
-            }
+        // The page carries a live HA session, so only expose the WebView's DevTools socket when network
+        // adb is deliberately on (a debug posture) — not by default. The CDP relay (also off by default)
+        // is the LAN publisher on top of this.
+        WebView.setWebContentsDebuggingEnabled(config.networkAdbEnabled)
+        val w = try {
+            createWebView(config)
+        } catch (e: Throwable) {
+            // A missing / updating / broken system WebView (exactly the population WebView-auto-heal
+            // targets) throws here. As a HOME activity we must not crash — Android would relaunch us
+            // into a crash-loop — so fall back to the admin launcher.
+            Log.e(TAG, "system WebView unavailable — falling back to admin launcher", e)
+            fallbackToLauncher()
+            return
         }
         web = w
         setContentView(w)
-        w.loadUrl(ExternalAuthProtocol.dashboardUrl(config.haUrl, config.homeDashboard))
+        w.loadUrl(currentUrl(config))
+    }
+
+    @SuppressLint("SetJavaScriptEnabled")
+    private fun createWebView(config: Config): WebView = WebView(this).apply {
+        settings.javaScriptEnabled = true
+        settings.domStorageEnabled = true
+        // The HA frontend relies on cookies (incl. third-party for some integrations).
+        CookieManager.getInstance().setAcceptCookie(true)
+        CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+        addJavascriptInterface(ExternalAuthBridge(config), "externalApp")
+        webViewClient = object : WebViewClient() {
+            // A dead renderer process must not take the app down with it: rebuild the WebView in place
+            // (else Android kills the whole process + the panel's HTTP/MQTT service), but within a budget
+            // so a reliably-crashing page falls back to the admin launcher instead of spinning.
+            override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+                Log.w(TAG, "renderer process gone (crash=${detail.didCrash()})")
+                (view.parent as? android.view.ViewGroup)?.removeView(view)
+                view.destroy()
+                if (web === view) {
+                    web = null
+                    runOnUiThread {
+                        if (allowRebuild()) buildAndLoad(Config(this@DashboardActivity))
+                        else { Log.e(TAG, "renderer crash-looping — falling back to admin launcher"); fallbackToLauncher() }
+                    }
+                }
+                return true
+            }
+
+            // Keep navigation on the dashboard host (the panel has no browser). Allow same-host
+            // redirects across schemes (http↔https behind a proxy/HSTS); only a different HOST is
+            // treated as an external link and blocked.
+            override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                return request.url.host != android.net.Uri.parse(config.haUrl).host
+            }
+        }
     }
 
     /**
@@ -118,8 +163,9 @@ class DashboardActivity : AppCompatActivity() {
         @JavascriptInterface
         fun getExternalAuth(payload: String) {
             // Resolve (and lazily refresh) the access token off the main thread — we're already on the
-            // WebView's JS-bridge thread, so the blocking refresh HTTP is fine here.
-            val session = DashboardAuth.forConfig(config)
+            // WebView's JS-bridge thread, so the blocking refresh HTTP is fine here. `force` (set by the
+            // frontend after a 401) bypasses the cached token so a revoked token isn't re-handed.
+            val session = DashboardAuth.forConfig(config, force = ExternalAuthProtocol.forceOf(payload))
             evaluate(ExternalAuthProtocol.authReply(payload, session?.accessToken, session?.expiresInSec ?: 0L))
         }
 
@@ -137,6 +183,8 @@ class DashboardActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "ha-paneld/dashboard"
+        private const val MAX_REBUILDS = 3
+        private const val REBUILD_WINDOW_MS = 60_000L
     }
 }
 
@@ -154,8 +202,15 @@ object ExternalAuthProtocol {
     fun dashboardUrl(haUrl: String, path: String): String {
         val base = haUrl.trim().trimEnd('/')
         val p = path.trim().trim('/')
-        return if (p.isEmpty()) "$base/?external_auth=1" else "$base/$p?external_auth=1"
+        if (p.isEmpty()) return "$base/?external_auth=1"
+        // If the path already carries a query string, join with & so external_auth isn't swallowed.
+        val sep = if (p.contains('?')) "&" else "?"
+        return "$base/$p${sep}external_auth=1"
     }
+
+    /** The frontend's `force` flag (set after a 401 to demand a fresh token), false if absent/malformed. */
+    fun forceOf(payload: String): Boolean =
+        runCatching { JSONObject(payload).optBoolean("force", false) }.getOrDefault(false)
 
 
     /** `getExternalAuth` reply: `externalAuthSetToken(true, {access_token, expires_in})`, or a
