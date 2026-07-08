@@ -2,6 +2,7 @@ package io.github.maxlyth.hapaneld
 
 import android.Manifest
 import android.content.Intent
+import io.github.maxlyth.hapaneld.control.SystemController
 import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.graphics.Bitmap
@@ -85,7 +86,7 @@ class MainActivity : AppCompatActivity() {
     // never retried, leaving the panel stranded on this UI. Now we re-check every [AUTO_RETURN_POLL_MS]
     // until connected or the [AUTO_RETURN_WINDOW_MS] window elapses, redirecting as soon as it's up.
     private fun maybeArmAutoReturn() {
-        if (!config.autoReturnDashboard || companionPackage() == null) return
+        if (!config.autoReturnDashboard || dashboardIntent() == null) return
         val updated = runCatching { packageManager.getPackageInfo(packageName, 0).lastUpdateTime }.getOrDefault(0L)
         if (System.currentTimeMillis() - updated > 5 * 60 * 1000L) return // not a post-update launch
         val deadline = System.currentTimeMillis() + AUTO_RETURN_WINDOW_MS
@@ -172,7 +173,7 @@ class MainActivity : AppCompatActivity() {
         }
         // Buttons: side-by-side when vertical space is tight (shorter labels), stacked otherwise.
         val cfgBtn = button(if (compact) "Configure" else "Open configuration") { openConfig() }
-        val haBtn = companionPackage()?.let { button(if (compact) "Dashboard" else "Open Home Assistant app") { openDashboard() } }
+        val haBtn = dashboardIntent()?.let { button(if (compact) "Dashboard" else "Open dashboard") { openDashboard() } }
         if (compact && haBtn != null) {
             root.addView(LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
@@ -225,10 +226,6 @@ class MainActivity : AppCompatActivity() {
         null
     }
 
-    private fun companionPackage(): String? =
-        listOf("io.homeassistant.companion.android.minimal", "io.homeassistant.companion.android")
-            .firstOrNull { packageManager.getLaunchIntentForPackage(it) != null }
-
     private fun button(label: String, onClick: () -> Unit): Button = Button(this).apply {
         text = label
         isAllCaps = false
@@ -250,12 +247,21 @@ class MainActivity : AppCompatActivity() {
         runCatching { startActivity(Intent(this, ConfigActivity::class.java)) }
     }
 
-    private fun openDashboard() {
-        for (p in listOf("io.homeassistant.companion.android.minimal", "io.homeassistant.companion.android")) {
-            packageManager.getLaunchIntentForPackage(p)?.let {
-                startActivity(it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); return
-            }
+    /** Intent that opens the CONFIGURED dashboard: the built-in renderer when it's selected + has a URL,
+     *  otherwise the installed HA Companion. Null if nothing can render — so callers don't launch HACA on
+     *  a builtin-only panel (or auto-redirect to a dashboard that isn't there). */
+    private fun dashboardIntent(): Intent? {
+        if (config.dashboardPackage == SystemController.BUILTIN_DASHBOARD && config.haUrl.isNotBlank()) {
+            return Intent(this, DashboardActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
+        for (p in listOf("io.homeassistant.companion.android.minimal", "io.homeassistant.companion.android")) {
+            packageManager.getLaunchIntentForPackage(p)?.let { return it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+        }
+        return null
+    }
+
+    private fun openDashboard() {
+        dashboardIntent()?.let { runCatching { startActivity(it) } }
     }
 
     private companion object {
