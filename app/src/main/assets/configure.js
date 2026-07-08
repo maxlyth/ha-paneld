@@ -137,6 +137,9 @@
     return el("div", { class: "frow" + (f.available ? "" : " muted"), id: "cfg-" + f.key }, [label, ctl]);
   }
 
+  // Per-card maturity badges: [text, css-modifier]. Applied to the card heading by render().
+  var CARD_BADGES = { "Dashboard": ["skunk-works", "skunk"], "Logging": ["experimental", "exp"] };
+
   function render() {
     var root = document.getElementById("cfg-groups");
     root.innerHTML = "";
@@ -149,7 +152,12 @@
       });
       if (!fields.length) return;
       shown += fields.length;
-      var card = el("div", { class: "card" }, [el("h2", { text: g })]);
+      // Maturity badge on the whole card: the built-in-renderer Dashboard card is skunk-works; log
+      // shipping is experimental. Kept distinct so skunk-works reads as the more bleeding-edge tier.
+      var h2kids = [el("span", { text: g })];
+      var badge = CARD_BADGES[g];
+      if (badge) h2kids.push(el("span", { class: "cardbadge " + badge[1], text: badge[0] }));
+      var card = el("div", { class: "card" }, [el("h2", {}, h2kids)]);
       fields.forEach(function (f) { card.appendChild(row(f)); });
       root.appendChild(card);
     });

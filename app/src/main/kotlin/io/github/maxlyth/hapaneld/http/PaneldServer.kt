@@ -1737,7 +1737,7 @@ ${tcard("updtbl", "Updates", s?.let { updatesRowsHtml(it) })}
         val body = rows.ifBlank {
             """<p class="note">Nothing tamed yet. Press <b>Find a package…</b> to see what's on this panel.</p>"""
         }
-        return """<div class="card" id="cfg-tame"><h2>Vendor packages <small style="color:#d9a528">· experimental</small></h2>
+        return """<div class="card" id="cfg-tame"><h2>Vendor packages<span class="cardbadge exp">experimental</span></h2>
 <p class="note"><b>Tame</b> force-stops an app, stops it relaunching on boot, and blocks it drawing over the dashboard — applied immediately and on every boot. <b>Re-enable</b> undoes it. Critical system apps are never offered; nothing changes until you press a button.</p>
 $body
 <div style="display:flex;flex-direction:column;gap:8px;margin-top:12px">
@@ -1769,7 +1769,7 @@ fetch('/api/v1/tame/suggest').then(function(r){return r.text()}).then(function(t
         val cur = snap.densityCur ?: return ""
         val rec = if (recommendedDensity != null || recommendedFontScale != null)
             """ <button type="submit" name="action" value="rec" formnovalidate>HA-optimised</button>""" else ""
-        return """<div class="card" id="cfg-display"><h2>Display sizing <small style="color:#d9a528">· experimental (R&amp;D)</small></h2>
+        return """<div class="card" id="cfg-display"><h2>Display sizing<span class="cardbadge exp">experimental</span></h2>
 <p class="note"><b>Pre-release / R&amp;D — the right values aren't dialled in yet; experiment at your own
 pace.</b> Match an HA dashboard's size to a desktop browser. <b>Density</b> scales the whole layout
 (lower dpi = more fits); <b>text size</b> scales WebView text. Panel firmware often ships these
