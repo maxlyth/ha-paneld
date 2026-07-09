@@ -21,7 +21,7 @@ android {
         targetSdk = 35
         // versionCode bumps on EVERY internal build (it drives upgrades + the /health build token);
         // the -rcN suffix in versionName increments ONLY when an rc is published to GitHub.
-        versionCode = 132
+        versionCode = 133
         versionName = "0.9.0-rc1"
 
         // Only the fleet's ARM ABIs — bounds the native LED lib (libhapaneld_led.so) + APK size.
@@ -116,6 +116,8 @@ android {
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)
+    // Pull-to-refresh for the built-in dashboard renderer (drag down from the top = light page reload).
+    implementation(libs.androidx.swiperefreshlayout)
     implementation(libs.kotlinx.coroutines.android)
 
     // HTTP command surface (:8888) — Ktor CIO engine.

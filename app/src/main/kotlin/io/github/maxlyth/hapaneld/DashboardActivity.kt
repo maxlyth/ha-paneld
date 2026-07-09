@@ -5,13 +5,16 @@ import android.content.Intent
 import android.os.Bundle
 import android.os.SystemClock
 import android.util.Log
+import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
 import android.webkit.RenderProcessGoneDetail
+import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.appcompat.app.AppCompatActivity
+import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import io.github.maxlyth.hapaneld.control.BuiltinDashboard
 import org.json.JSONObject
 
@@ -30,6 +33,7 @@ import org.json.JSONObject
 class DashboardActivity : AppCompatActivity() {
 
     private var web: WebView? = null
+    private var swipe: SwipeRefreshLayout? = null
     // Renderer-crash rebuild budget (never-blank): a page that reliably crashes the WebView renderer
     // must not become a tight rebuild loop — after [MAX_REBUILDS] within [REBUILD_WINDOW_MS] we fall
     // back to the admin launcher instead of respawning.
@@ -112,7 +116,16 @@ class DashboardActivity : AppCompatActivity() {
             return
         }
         web = w
-        setContentView(w)
+        // Wrap in a pull-to-refresh layout: dragging down from the top of the dashboard does a light
+        // reload of the current page (no app relaunch). It only triggers when the WebView is scrolled to
+        // the top (SwipeRefreshLayout's default canChildScrollUp checks the child), so normal scrolling
+        // is unaffected. The spinner is cleared when the page finishes (or errors) — see the WebViewClient.
+        val refresh = SwipeRefreshLayout(this).apply {
+            addView(w, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+            setOnRefreshListener { Log.i(TAG, "pull-to-refresh -> reload"); w.reload() }
+        }
+        swipe = refresh
+        setContentView(refresh)
         w.loadUrl(currentUrl(config))
     }
 
@@ -147,6 +160,13 @@ class DashboardActivity : AppCompatActivity() {
             // treated as an external link and blocked.
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 return request.url.host != android.net.Uri.parse(config.haUrl).host
+            }
+
+            // Stop the pull-to-refresh spinner once the (main-frame) load settles, success or error, so
+            // it never spins forever on a hung reload.
+            override fun onPageFinished(view: WebView, url: String) { swipe?.isRefreshing = false }
+            override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
+                if (request.isForMainFrame) swipe?.isRefreshing = false
             }
         }
     }

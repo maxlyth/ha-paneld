@@ -6,6 +6,7 @@ agp = "8.7.2"
 kotlin = "2.0.21"
 coreKtx = "1.13.1"
 appcompat = "1.7.0"
+swiperefresh = "1.1.0"
 # Ktor CIO server — coroutine-based, no Netty thread-per-connection. Hosts :8888.
 ktor = "3.0.3"
 # HiveMQ MQTT 5 client. NIO (pure-Java) transport => ABI-agnostic (covers Hall armeabi-v7a).
@@ -23,6 +24,7 @@ orgJson = "20240303"
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 androidx-appcompat = { group = "androidx.appcompat", name = "appcompat", version.ref = "appcompat" }
+androidx-swiperefreshlayout = { group = "androidx.swiperefreshlayout", name = "swiperefreshlayout", version.ref = "swiperefresh" }
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
 ktor-server-core = { group = "io.ktor", name = "ktor-server-core", version.ref = "ktor" }
 ktor-server-cio = { group = "io.ktor", name = "ktor-server-cio", version.ref = "ktor" }

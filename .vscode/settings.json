@@ -8,5 +8,6 @@
     "activityBarBadge.foreground": "#97e7e7",
     "sash.hoverBorder": "#fff3f5",
     "tab.activeBorder": "#fff3f5"
-  }
+  },
+  "java.configuration.updateBuildConfiguration": "automatic"
 }
