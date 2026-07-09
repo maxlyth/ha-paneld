@@ -71,7 +71,9 @@ class ScreenController(
         // Never go fully dark without a guaranteed way back. If touch-to-wake can't be armed (no overlay
         // permission), a real screen-off would leave the panel unwakeable except via HA/proximity — the
         // "looks bricked" failure that stranded a freshly-provisioned panel dark. Degrade to a visible
-        // dim instead: still legible + tappable, and HA/proximity can still restore full brightness.
+        // dim instead: still legible + tappable, and HA/proximity can still restore full brightness. This
+        // path leaves the screen VISIBLE, so the built-in renderer must NOT be frozen here (a frozen
+        // WebView on a still-lit dashboard would show stale, un-tappable cards).
         if (!wakeTap.canArm()) {
             val cur = backlight.getBrightness()
             if (cur > 0) savedLevel = cur
@@ -79,13 +81,18 @@ class ScreenController(
             Log.w(TAG, "screen-off with no touch-to-wake — dimming to floor (never-blank; saved=$savedLevel)")
             return
         }
-        // Guaranteed locally wakeable: arm the tap, then power the backlight off for real.
+        // Guaranteed locally wakeable: arm the tap, then power the backlight off for real. Only the two
+        // bl_power paths below take the panel *truly* dark — freeze the WebView there (no point rendering
+        // behind a black backlight). The brightness fallback (0) is not guaranteed dark on panels that
+        // clamp a minimum, so it does NOT freeze (correctness over the CPU saving on those rare panels).
         wakeTap.arm { wake(); onWakeByTap?.invoke() }
         if (daemon.send("SCREEN OFF") == "OK") {
+            BuiltinDashboard.onScreenAwake(false)
             Log.d(TAG, "screen -> off (daemon bl_power)")
             return
         }
         if (root.run(blPower(false))) {
+            BuiltinDashboard.onScreenAwake(false)
             Log.d(TAG, "screen -> off (su bl_power)")
             return
         }
@@ -99,6 +106,8 @@ class ScreenController(
 
     fun wake() {
         intendedOff = false
+        // Resume the built-in renderer's WebView (no-op if it isn't the dashboard).
+        BuiltinDashboard.onScreenAwake(true)
         wakeTap.disarm()
         if (daemon.send("SCREEN ON") == "OK") {
             power.pulseWake()

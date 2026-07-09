@@ -17,4 +17,20 @@ object BuiltinDashboard {
      *  renderer is (re)launched and reads this on load. Null = fall back to the configured home
      *  dashboard. Lets `navigate` drive the built-in WebView the way a deep link drives the Companion. */
     @Volatile var navPath: String? = null
+
+    // Screen-state fan-out to the live renderer. A 24/7 dashboard WebView keeps churning CPU (websocket
+    // state, animations, JS timers) behind a dark screen, so when the panel screen goes off/on we tell
+    // the renderer to pause/resume the WebView. The activity registers a listener (and must marshal to
+    // the UI thread itself); [ScreenController] pokes it. Pure Kotlin so the controller stays testable.
+    @Volatile private var screenListener: ((Boolean) -> Unit)? = null
+
+    /** Renderer registers its pause/resume handler here. */
+    fun setScreenListener(l: ((Boolean) -> Unit)?) { screenListener = l }
+
+    /** Clear the listener only if it's still [l] — so a destroyed old activity instance can't wipe a
+     *  newer instance's registration when their lifecycles overlap. */
+    fun clearScreenListener(l: (Boolean) -> Unit) { if (screenListener === l) screenListener = null }
+
+    /** [ScreenController] calls this from sleep()/wake(); no-op when no renderer is listening. */
+    fun onScreenAwake(awake: Boolean) { screenListener?.invoke(awake) }
 }

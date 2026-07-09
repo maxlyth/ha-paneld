@@ -1,19 +1,33 @@
 package io.github.maxlyth.hapaneld
 
+import android.Manifest
 import android.annotation.SuppressLint
+import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.ConnectivityManager
+import android.net.Network
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
+import android.view.View
 import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
+import android.webkit.JsResult
+import android.webkit.PermissionRequest
 import android.webkit.RenderProcessGoneDetail
+import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.FrameLayout
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import io.github.maxlyth.hapaneld.control.BuiltinDashboard
 import org.json.JSONObject
@@ -34,11 +48,49 @@ class DashboardActivity : AppCompatActivity() {
 
     private var web: WebView? = null
     private var swipe: SwipeRefreshLayout? = null
+    private var root: FrameLayout? = null                       // holds the swipe layout + fullscreen video
+    private var customView: View? = null                        // active onShowCustomView (fullscreen) view
+    private var customViewCallback: WebChromeClient.CustomViewCallback? = null
     // Renderer-crash rebuild budget (never-blank): a page that reliably crashes the WebView renderer
     // must not become a tight rebuild loop — after [MAX_REBUILDS] within [REBUILD_WINDOW_MS] we fall
     // back to the admin launcher instead of respawning.
     private var rebuilds = 0
     private var rebuildWindowStart = 0L
+
+    // --- long-run reliability state (all touched on the main thread only) ---
+    private val main = Handler(Looper.getMainLooper())
+    private var conn: ConnectivityManager? = null
+    private var netCallback: ConnectivityManager.NetworkCallback? = null
+    // Set in onDestroy. Bridge/network callbacks marshal onto the main thread, so one of their posts can
+    // land AFTER onDestroy's removeCallbacksAndMessages and re-arm the self-perpetuating watchdog on a
+    // dead activity. Every posted handler checks this first so nothing runs (or re-schedules) post-destroy.
+    @Volatile private var destroyed = false
+    // Stored so onDestroy can clear it by identity — an old instance destroyed after a new one's onCreate
+    // must not wipe the new instance's registration (see BuiltinDashboard.clearScreenListener).
+    private val screenListener: (Boolean) -> Unit = { awake -> runOnUiThread { onScreenChanged(awake) } }
+    // Frontend-handshake watchdog: the page "loading" (onPageFinished) is NOT health — the frontend JS
+    // app must post `connection-status: connected` on the external bus. Until it does, we retry with
+    // backoff (a panel has no buttons to press). This catches the "loaded onto a blank/dead frontend"
+    // class that onPageFinished and the crash budget both miss. The watchdog runs ONLY while the screen is
+    // awake: a screen-off pauses JS timers, so a paused WebView could never complete the handshake and the
+    // watchdog would just reload-loop all night behind a dark panel.
+    private var frontendConnected = false
+    private var backoffMs = INITIAL_RETRY_MS
+    private var clearedThisLoad = false
+    private val watchdog = Runnable { onWatchdogTimeout() }
+    // After a screen-off reload (memory shed), let the fresh page load with timers LIVE for a settle
+    // window, then freeze — so we never reload into a frozen WebView, but also never leave it churning
+    // behind a dark screen forever. Fires only if the frontend hasn't already connected (which freezes early).
+    private val darkSettle = Runnable { if (!destroyed && !screenAwake) web?.pauseTimers() }
+    // Time-based memory ceiling. onTrimMemory's RUNNING_* levels are deprecated + never delivered on
+    // Android 14 (the fleet), so a periodic check is the portable ceiling: reload invisibly at the next
+    // screen-off past RELOAD_INTERVAL_MS, or force a (brief, visible) reload past RELOAD_HARD_MS so a
+    // never-sleeping panel still sheds accreted WebView memory ~daily.
+    private val periodicCheck = Runnable { onPeriodicCheck() }
+    private var lastFullLoadAt = 0L
+    private var reloadPending = false
+    private var screenAwake = true
+    private var sawNetworkLoss = false // so the initial registration onAvailable isn't a spurious reload
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -51,7 +103,120 @@ class DashboardActivity : AppCompatActivity() {
             fallbackToLauncher()
             return
         }
+        // Freeze the WebView when the panel screen is off (CPU/heat/memory), and reload the moment
+        // connectivity returns if the frontend isn't connected — registered for the activity's lifetime.
+        BuiltinDashboard.setScreenListener(screenListener)
+        registerNetworkCallback()
+        main.postDelayed(periodicCheck, PERIODIC_CHECK_MS)
         buildAndLoad(config)
+    }
+
+    override fun onDestroy() {
+        destroyed = true
+        BuiltinDashboard.clearScreenListener(screenListener)
+        netCallback?.let { cb -> runCatching { conn?.unregisterNetworkCallback(cb) } }
+        main.removeCallbacksAndMessages(null)
+        teardownWeb()
+        super.onDestroy()
+    }
+
+    /** Fully release the WebView so a long-lived process doesn't leak it: stop background loading,
+     *  detach the JS bridge, destroy. `resumeTimers()` is process-global and pauseTimers() may have been
+     *  called on a screen-off — without this, an activity destroyed while dark would leave JS timers
+     *  frozen for every future WebView in this forever process (a never-blank violation). */
+    private fun teardownWeb() {
+        web?.let { w ->
+            runCatching { w.resumeTimers() }
+            runCatching { w.loadUrl("about:blank") }
+            (w.parent as? ViewGroup)?.removeView(w)
+            runCatching { w.removeJavascriptInterface("externalApp") }
+            runCatching { w.destroy() }
+        }
+        web = null
+    }
+
+    /**
+     * Screen on/off fan-out. Screen ON → resume rendering + JS timers, and re-arm the handshake watchdog
+     * if the frontend isn't connected (recover a page that broke while frozen). Screen OFF → pause
+     * rendering and disarm the watchdog (no handshake retries while timers are frozen); then either shed
+     * memory with an invisible reload (kept live through a settle window, see [darkSettle]) if one is due,
+     * or freeze JS timers. `pauseTimers()` is process-global, which is fine — the dashboard is our only
+     * live WebView.
+     */
+    private fun onScreenChanged(awake: Boolean) {
+        if (destroyed) return
+        screenAwake = awake
+        val w = web ?: return
+        if (awake) {
+            main.removeCallbacks(darkSettle)
+            w.resumeTimers(); w.onResume()
+            if (!frontendConnected) armWatchdog(INITIAL_HANDSHAKE_MS)
+        } else {
+            w.onPause()
+            main.removeCallbacks(watchdog) // a paused WebView can't complete the handshake — don't loop
+            if (reloadDue()) {
+                // Reload to shed memory, but DON'T pause timers yet — a paused WebView can't load. Let it
+                // run; onConnectionStatus freezes it the moment it connects, or darkSettle freezes it after
+                // the settle window if it never does. Either way it doesn't churn all night.
+                reloadPending = false
+                lastFullLoadAt = SystemClock.elapsedRealtime()
+                doReloadNoWatchdog("quiet reload (screen off, due)")
+                main.removeCallbacks(darkSettle); main.postDelayed(darkSettle, DARK_SETTLE_MS)
+            } else {
+                w.pauseTimers()
+            }
+        }
+    }
+
+    /** A reload is worthwhile now if memory pressure asked for one, or it's been a long time since the
+     *  last full load (WebView memory accretes over days). */
+    private fun reloadDue(): Boolean =
+        reloadPending || (SystemClock.elapsedRealtime() - lastFullLoadAt > RELOAD_INTERVAL_MS)
+
+    /** Portable memory ceiling (see [periodicCheck]): reload invisibly at a screen-off past the interval,
+     *  or force a brief visible reload past the hard cap so a panel that never sleeps still sheds memory. */
+    private fun onPeriodicCheck() {
+        if (destroyed) return
+        val idle = SystemClock.elapsedRealtime() - lastFullLoadAt
+        when {
+            idle < RELOAD_INTERVAL_MS -> {}
+            !screenAwake -> {
+                lastFullLoadAt = SystemClock.elapsedRealtime()
+                doReloadNoWatchdog("periodic (screen off, ${idle / 3_600_000}h idle)")
+                main.removeCallbacks(darkSettle); main.postDelayed(darkSettle, DARK_SETTLE_MS)
+            }
+            idle >= RELOAD_HARD_MS -> doReload("periodic hard cap (${idle / 3_600_000}h idle)")
+            else -> reloadPending = true // visible now — wait for the next screen-off to reload invisibly
+        }
+        main.postDelayed(periodicCheck, PERIODIC_CHECK_MS)
+    }
+
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (destroyed) return
+        // Any real trim signal means shed the WebView's accreted memory. Gate at RUNNING_LOW so we catch
+        // BOTH the pre-14 foreground RUNNING_* levels AND the levels Android 14 actually delivers
+        // (UI_HIDDEN / BACKGROUND / MODERATE / COMPLETE, all ≥ RUNNING_LOW's value) — the previous
+        // RUNNING_MODERATE..CRITICAL window was dead code on the fleet's Android-14 panels.
+        if (level >= TRIM_MEMORY_RUNNING_LOW) {
+            reloadPending = true
+            // If we're not the visible dashboard, reload right now rather than risk an OOM renderer kill.
+            if (!screenAwake || !BuiltinDashboard.foreground) {
+                reloadPending = false
+                lastFullLoadAt = SystemClock.elapsedRealtime()
+                doReloadNoWatchdog("memory pressure L$level")
+                if (!screenAwake) { main.removeCallbacks(darkSettle); main.postDelayed(darkSettle, DARK_SETTLE_MS) }
+            }
+        }
+    }
+
+    override fun onLowMemory() {
+        super.onLowMemory()
+        if (!destroyed && (!screenAwake || !BuiltinDashboard.foreground)) {
+            lastFullLoadAt = SystemClock.elapsedRealtime()
+            doReloadNoWatchdog("onLowMemory")
+            if (!screenAwake) { main.removeCallbacks(darkSettle); main.postDelayed(darkSettle, DARK_SETTLE_MS) }
+        }
     }
 
     /** Hand off to ha-paneld's admin launcher and finish — the never-strand fallback for a missing
@@ -76,6 +241,105 @@ class DashboardActivity : AppCompatActivity() {
     override fun onNewIntent(intent: Intent?) {
         super.onNewIntent(intent)
         web?.loadUrl(currentUrl(Config(this)))
+        onLoadStarted()
+    }
+
+    // --- frontend-handshake watchdog + reconnect ---
+
+    /** Called after every page load that should be health-checked (initial, navigate, watchdog reload,
+     *  network-regain reload): reset the connected state + arm the handshake watchdog — but only while the
+     *  screen is awake, since a paused WebView can't run the JS that completes the handshake. */
+    private fun onLoadStarted() {
+        frontendConnected = false
+        clearedThisLoad = false
+        lastFullLoadAt = SystemClock.elapsedRealtime()
+        backoffMs = INITIAL_RETRY_MS
+        if (screenAwake) armWatchdog(INITIAL_HANDSHAKE_MS) else main.removeCallbacks(watchdog)
+    }
+
+    private fun armWatchdog(ms: Long) {
+        if (destroyed) return
+        main.removeCallbacks(watchdog); main.postDelayed(watchdog, ms)
+    }
+
+    private fun onWatchdogTimeout() {
+        // Never retry on a dead activity or while frozen (screen off) — either would be a runaway loop.
+        if (destroyed || frontendConnected || !screenAwake) return
+        Log.w(TAG, "frontend handshake watchdog fired (no connection-status:connected) — reloading; backoff=${backoffMs}ms")
+        web?.reload()
+        lastFullLoadAt = SystemClock.elapsedRealtime()
+        clearedThisLoad = false
+        backoffMs = (backoffMs * 2).coerceAtMost(MAX_RETRY_MS)
+        armWatchdog(backoffMs)
+    }
+
+    /** Fired from the external-bus `connection-status` message: the frontend telling us it connected or
+     *  dropped its websocket. Posted onto the main thread, so it can race onDestroy — guard on [destroyed]. */
+    private fun onConnectionStatus(event: String) {
+        if (destroyed) return
+        if (event == "connected") {
+            frontendConnected = true
+            main.removeCallbacks(watchdog)
+            backoffMs = INITIAL_RETRY_MS
+            if (!clearedThisLoad) {
+                // Drop the auth/redirect history entries so Back can't reach a stale login page, and
+                // persist cookies so an unclean process death right after login doesn't lose the session.
+                web?.clearHistory(); clearedThisLoad = true
+                runCatching { CookieManager.getInstance().flush() }
+            }
+            // If we connected while the screen is off (a screen-off memory reload), freeze now — the fresh
+            // page is loaded + connected, so there's nothing left to do behind the dark screen.
+            if (!screenAwake) { main.removeCallbacks(darkSettle); web?.pauseTimers() }
+            Log.i(TAG, "frontend connected")
+        } else {
+            // disconnected / auth-invalid: give the frontend's own reconnect a grace window, then reload —
+            // but only while awake (a frozen WebView can't reconnect; wake re-arms the handshake watchdog).
+            frontendConnected = false
+            if (screenAwake) {
+                Log.i(TAG, "frontend '$event' — arming grace watchdog")
+                armWatchdog(DISCONNECT_GRACE_MS)
+            }
+        }
+    }
+
+    private fun onNetworkAvailable() {
+        if (destroyed) return
+        // Ignore the callback the OS fires at registration time (the network was never lost) — only a real
+        // offline→online transition should force a reload.
+        if (!sawNetworkLoss) return
+        sawNetworkLoss = false
+        if (frontendConnected || !screenAwake) return // frozen page reconnects itself on wake
+        Log.i(TAG, "network regained while frontend not connected — reloading immediately")
+        doReload("network regained")
+    }
+
+    private fun registerNetworkCallback() {
+        conn = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+        val cb = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) { runOnUiThread { onNetworkAvailable() } }
+            override fun onLost(network: Network) { runOnUiThread { sawNetworkLoss = true } }
+        }
+        netCallback = cb
+        // One default-network callback for the activity's lifetime (unregistered in onDestroy) — never a
+        // per-load registration, which would hit Android's per-app callback limit on a forever process.
+        runCatching { conn?.registerDefaultNetworkCallback(cb) }
+            .onFailure { Log.w(TAG, "network callback register failed: ${it.message}") }
+    }
+
+    /** Reload + arm the handshake watchdog (only fires while awake) — for user/health-driven reloads. */
+    private fun doReload(reason: String) {
+        Log.i(TAG, "reload: $reason")
+        web?.reload()
+        onLoadStarted()
+    }
+
+    /** Reload without arming the watchdog — for screen-off memory reloads, where the settle timer (not the
+     *  watchdog) governs when the page freezes, so the watchdog can't turn a dark reload into a loop. */
+    private fun doReloadNoWatchdog(reason: String) {
+        Log.i(TAG, "reload: $reason")
+        frontendConnected = false
+        clearedThisLoad = false
+        web?.reload()
     }
 
     /** The URL to show: the navigate path if one is pending, else the configured home dashboard. */
@@ -105,6 +369,11 @@ class DashboardActivity : AppCompatActivity() {
         // adb is deliberately on (a debug posture) — not by default. The CDP relay (also off by default)
         // is the LAN publisher on top of this.
         WebView.setWebContentsDebuggingEnabled(config.networkAdbEnabled)
+        // A rebuild (renderer crash) discards the old root that held any fullscreen (onShowCustomView)
+        // view. Clear the stale references so the crash didn't leave customView non-null — otherwise every
+        // future onShowCustomView would be rejected and fullscreen video would be permanently broken.
+        customView = null
+        customViewCallback = null
         val w = try {
             createWebView(config)
         } catch (e: Throwable) {
@@ -122,21 +391,34 @@ class DashboardActivity : AppCompatActivity() {
         // is unaffected. The spinner is cleared when the page finishes (or errors) — see the WebViewClient.
         val refresh = SwipeRefreshLayout(this).apply {
             addView(w, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-            setOnRefreshListener { Log.i(TAG, "pull-to-refresh -> reload"); w.reload() }
+            setOnRefreshListener { doReload("pull-to-refresh") }
         }
         swipe = refresh
-        setContentView(refresh)
+        // A dark root behind the (transparent) WebView so a reload never flashes white — very visible on
+        // a wall panel at night. Also hosts the fullscreen-video view from onShowCustomView.
+        val container = FrameLayout(this).apply {
+            setBackgroundColor(BG_DARK)
+            addView(refresh, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+        }
+        root = container
+        setContentView(container)
         w.loadUrl(currentUrl(config))
+        onLoadStarted()
     }
 
     @SuppressLint("SetJavaScriptEnabled")
     private fun createWebView(config: Config): WebView = WebView(this).apply {
         settings.javaScriptEnabled = true
         settings.domStorageEnabled = true
+        // Camera cards / live feeds must start without a tap — the default (require user gesture) leaves
+        // every stream paused on a touchless panel. (Not media-file playback, which stays out of scope.)
+        settings.mediaPlaybackRequiresUserGesture = false
+        setBackgroundColor(BG_DARK) // no white flash before first paint
         // The HA frontend relies on cookies (incl. third-party for some integrations).
         CookieManager.getInstance().setAcceptCookie(true)
         CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
         addJavascriptInterface(ExternalAuthBridge(config), "externalApp")
+        webChromeClient = dashboardChromeClient()
         webViewClient = object : WebViewClient() {
             // A dead renderer process must not take the app down with it: rebuild the WebView in place
             // (else Android kills the whole process + the panel's HTTP/MQTT service), but within a budget
@@ -172,6 +454,65 @@ class DashboardActivity : AppCompatActivity() {
     }
 
     /**
+     * Without a WebChromeClient, three dashboard interactions fail SILENTLY: JS `confirm()` (the frontend
+     * uses it for destructive actions — the UI hangs on an unanswered result), fullscreen video, and
+     * getUserMedia permission requests. This provides the minimum: native dialogs for confirm/alert,
+     * fullscreen show/hide, and a permission handler that grants only resources whose Android permission
+     * we actually hold (none of camera/mic by default — the getUserMedia/intercom path is out of scope),
+     * else denies explicitly so the card shows its own error instead of hanging.
+     */
+    private fun dashboardChromeClient() = object : WebChromeClient() {
+        override fun onJsConfirm(view: WebView, url: String, message: String, result: JsResult): Boolean {
+            // Showing a dialog on a finishing/destroyed activity throws BadTokenException and takes the
+            // whole process down. If we can't show it, cancel the JS call so the frontend isn't left hung.
+            if (isFinishing || isDestroyed) { result.cancel(); return true }
+            AlertDialog.Builder(this@DashboardActivity)
+                .setMessage(message)
+                .setPositiveButton(android.R.string.ok) { _, _ -> result.confirm() }
+                .setNegativeButton(android.R.string.cancel) { _, _ -> result.cancel() }
+                .setOnCancelListener { result.cancel() }
+                .show()
+            return true
+        }
+
+        override fun onJsAlert(view: WebView, url: String, message: String, result: JsResult): Boolean {
+            if (isFinishing || isDestroyed) { result.confirm(); return true }
+            AlertDialog.Builder(this@DashboardActivity)
+                .setMessage(message)
+                .setPositiveButton(android.R.string.ok) { _, _ -> result.confirm() }
+                .setOnCancelListener { result.confirm() }
+                .show()
+            return true
+        }
+
+        override fun onShowCustomView(view: View, callback: CustomViewCallback) {
+            if (customView != null) { callback.onCustomViewHidden(); return }
+            customView = view
+            customViewCallback = callback
+            root?.addView(view, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+        }
+
+        override fun onHideCustomView() {
+            customView?.let { root?.removeView(it) }
+            customView = null
+            customViewCallback?.onCustomViewHidden()
+            customViewCallback = null
+        }
+
+        override fun onPermissionRequest(request: PermissionRequest) {
+            val granted = request.resources.filter { res ->
+                val perm = when (res) {
+                    PermissionRequest.RESOURCE_VIDEO_CAPTURE -> Manifest.permission.CAMERA
+                    PermissionRequest.RESOURCE_AUDIO_CAPTURE -> Manifest.permission.RECORD_AUDIO
+                    else -> null
+                }
+                perm != null && ContextCompat.checkSelfPermission(this@DashboardActivity, perm) == PackageManager.PERMISSION_GRANTED
+            }
+            if (granted.isNotEmpty()) request.grant(granted.toTypedArray()) else request.deny()
+        }
+    }
+
+    /**
      * The frontend's external-auth JS bridge (V1 contract; the frontend feature-detects
      * `window.externalApp` and only uses V2 when `externalAppV2` also exists, so V1 alone is
      * complete). Methods run on the WebView's JS-bridge thread — every reply hops to the main
@@ -193,7 +534,11 @@ class DashboardActivity : AppCompatActivity() {
         fun revokeExternalAuth(payload: String) = evaluate(ExternalAuthProtocol.revokeReply(payload))
 
         @JavascriptInterface
-        fun externalBus(message: String) = evaluate(ExternalAuthProtocol.busReply(message, BuildConfig.VERSION_NAME))
+        fun externalBus(message: String) {
+            // Side-channel: a `connection-status` event drives the handshake watchdog (on the main thread).
+            ExternalAuthProtocol.connectionEvent(message)?.let { ev -> runOnUiThread { onConnectionStatus(ev) } }
+            evaluate(ExternalAuthProtocol.busReply(message, BuildConfig.VERSION_NAME))
+        }
 
         private fun evaluate(script: String?) {
             if (script == null) return
@@ -205,6 +550,15 @@ class DashboardActivity : AppCompatActivity() {
         private const val TAG = "ha-paneld/dashboard"
         private const val MAX_REBUILDS = 3
         private const val REBUILD_WINDOW_MS = 60_000L
+        private const val INITIAL_HANDSHAKE_MS = 25_000L        // generous: a cold PX30 frontend can need 20s+
+        private const val INITIAL_RETRY_MS = 5_000L
+        private const val MAX_RETRY_MS = 60_000L                // retry forever (HA restart), capped cadence
+        private const val DISCONNECT_GRACE_MS = 90_000L         // let the frontend's own reconnect try first
+        private const val RELOAD_INTERVAL_MS = 6 * 60 * 60 * 1000L   // shed WebView memory at a screen-off, ~6h
+        private const val RELOAD_HARD_MS = 26 * 60 * 60 * 1000L      // force a visible reload if never idle-dark
+        private const val PERIODIC_CHECK_MS = 30 * 60 * 1000L        // how often the memory-ceiling check runs
+        private const val DARK_SETTLE_MS = 30_000L              // let a screen-off reload load before freezing
+        private const val BG_DARK = 0xFF121212.toInt()
     }
 }
 
@@ -274,6 +628,17 @@ object ExternalAuthProtocol {
             .put("success", true)
             .put("result", result)
         return "externalBus($reply);"
+    }
+
+    /** If [message] is a `connection-status` external-bus event, its event name ("connected",
+     *  "disconnected", "auth-invalid"); null for any other message. The frontend posts this so the app
+     *  knows when the websocket is up/down — the health signal `onPageFinished` can't give. Tolerates the
+     *  event under `payload.event` or at the top level. */
+    fun connectionEvent(message: String): String? {
+        val msg = runCatching { JSONObject(message) }.getOrNull() ?: return null
+        if (msg.optString("type") != "connection-status") return null
+        val ev = msg.optJSONObject("payload")?.optString("event").orEmpty().ifBlank { msg.optString("event") }
+        return ev.ifBlank { null }
     }
 
     private fun callbackOf(payload: String): String =

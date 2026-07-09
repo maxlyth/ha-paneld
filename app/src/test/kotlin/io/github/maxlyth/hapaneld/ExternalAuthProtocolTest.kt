@@ -101,4 +101,24 @@ class ExternalAuthProtocolTest {
         assertNull(ExternalAuthProtocol.busReply("""{"type":"some/future/message"}""", "v"))
         assertNull(ExternalAuthProtocol.busReply("not json", "v"))
     }
+
+    // --- connectionEvent (frontend-handshake watchdog signal) ---
+
+    @Test
+    fun `connection-status event extracted from payload or top level`() {
+        assertEquals("connected",
+            ExternalAuthProtocol.connectionEvent("""{"type":"connection-status","payload":{"event":"connected"}}"""))
+        assertEquals("disconnected",
+            ExternalAuthProtocol.connectionEvent("""{"type":"connection-status","event":"disconnected"}"""))
+        assertEquals("auth-invalid",
+            ExternalAuthProtocol.connectionEvent("""{"type":"connection-status","payload":{"event":"auth-invalid"}}"""))
+    }
+
+    @Test
+    fun `non connection-status messages yield null`() {
+        assertNull(ExternalAuthProtocol.connectionEvent("""{"type":"config/get"}"""))
+        assertNull(ExternalAuthProtocol.connectionEvent("""{"type":"theme-update"}"""))
+        assertNull(ExternalAuthProtocol.connectionEvent("""{"type":"connection-status"}""")) // no event field
+        assertNull(ExternalAuthProtocol.connectionEvent("not json"))
+    }
 }

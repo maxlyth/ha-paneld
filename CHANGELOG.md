@@ -8,6 +8,17 @@ From **v0.8.0**, entries are grouped under **Added** (new features/entities), **
 changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
 content appear. Earlier releases predate this convention and keep their flat lists.
 
+## v0.9.0-rc2 - 2026-07-09
+
+**Long-run reliability hardening for the built-in renderer**, so the soak tests a dashboard built to run untouched for weeks rather than one that only looks right on day one. No user-facing changes to how you set it up — the built-in renderer is still off by default and configured exactly as in rc1.
+
+### Fixed
+
+- **The dashboard sleeps when the screen does** — with the built-in renderer, the WebView now fully pauses (rendering and JavaScript timers) while the panel's screen is off, and resumes on wake. This removes the constant background CPU/heat of a dashboard animating and processing entity updates behind a dark screen (measured roughly a 70% drop in the renderer's CPU while asleep). A screen-off that only dims the panel (rather than truly blanking it) deliberately keeps the dashboard live so it stays readable and responsive.
+- **A dashboard that loses its connection recovers on its own** — the renderer now waits for the Home Assistant frontend to actually report "connected" (not merely that the page loaded) and, if it doesn't, reloads with a backing-off retry until it does; it also reloads immediately when network connectivity returns after an outage. This catches the "loaded onto a blank or stalled frontend" case a plain page-load check misses — important on a device with no buttons to press. These retries run only while the screen is on, so a panel can't sit in a reload loop overnight.
+- **Memory is bounded over long uptimes** — a browser engine left running for days slowly accretes memory; the renderer now sheds it with an occasional reload, done invisibly at a screen-off where possible (and, on a panel that never sleeps, a brief refresh at most about once a day), plus an immediate reload under memory pressure while the dashboard isn't the visible screen. This prevents the gradual slow-down / eventual out-of-memory reload that would otherwise hit a wall panel after a week or two.
+- **Fewer ways for a rare interaction to disrupt the dashboard** — a JavaScript dialog arriving as the screen is torn down no longer risks crashing the app; a renderer crash during a fullscreen video no longer leaves fullscreen permanently broken afterwards; and several lifecycle edge cases around teardown and screen state are handled so the always-on renderer stays healthy.
+
 ## v0.9.0-rc1 - 2026-07-09
 
 **Headline: ha-paneld can now render the Home Assistant dashboard itself — no HA Companion app and no third-party kiosk browser required.** A panel can boot straight into a logged-in dashboard from ha-paneld alone, closing the last gap that needed a second app.
