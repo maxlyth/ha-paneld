@@ -71,11 +71,11 @@ directly — see [Provisioning & fleet updates](docs/provisioning.md).
 
 ## Why not just the Home Assistant Companion app?
 
-The [HA Companion app](https://github.com/home-assistant/android) targets personal phones and tablets. Wall panels need different primitives: screen / LED / button control, hardware-button events back to HA, a built-in launcher and on-screen navigation bar for key-less hardware, arbitrary-URL audio announcements, fleet provisioning, and turnkey mDNS pairing. ha-paneld covers those; Companion keeps doing what it does (and remains the dashboard host).
+The [HA Companion app](https://github.com/home-assistant/android) targets personal phones and tablets. Wall panels need different primitives: screen / LED / button control, hardware-button events back to HA, a built-in launcher and on-screen navigation bar for key-less hardware, arbitrary-URL audio announcements, fleet provisioning, and turnkey mDNS pairing. ha-paneld covers those; Companion keeps doing what it does and remains the default dashboard host. (For panels that should run a single app, an experimental **built-in dashboard renderer** — off by default — is in soak testing; see the [changelog](CHANGELOG.md).)
 
 ## Why not Fully Kiosk?
 
-[Fully Kiosk Browser](https://www.fully-kiosk.com/) is the usual answer for HA wall panels, and it's genuinely capable. But it sits awkwardly against Home Assistant's own values, and on a small mixed fleet its wins are narrow for the friction it adds. ha-paneld is Apache-2.0, leaves dashboard hosting to the official open Companion app, and is config-as-code (MQTT auto-discovery, uniform entities across every panel, one `update-fleet.sh`). It doesn't try to replace a browser — it replaces the *panel-hardware* gap, openly, without a per-device licence.
+[Fully Kiosk Browser](https://www.fully-kiosk.com/) is the usual answer for HA wall panels, and it's genuinely capable. But it sits awkwardly against Home Assistant's own values, and on a small mixed fleet its wins are narrow for the friction it adds. ha-paneld is Apache-2.0, leaves dashboard hosting to the official open Companion app by default (with an experimental built-in renderer for single-app panels), and is config-as-code (MQTT auto-discovery, uniform entities across every panel, one `update-fleet.sh`). It doesn't try to replace a browser — it replaces the *panel-hardware* gap, openly, without a per-device licence.
 
 <details>
 <summary>The three friction points in full</summary>
@@ -88,7 +88,7 @@ The [HA Companion app](https://github.com/home-assistant/android) targets person
 - **The Companion app already serves dashboards better.** For day-to-day dashboard rendering, the
   Companion app is purpose-built for HA — native auth and sessions, push notifications, deep links,
   and it tracks the frontend. A general-purpose kiosk browser is a second rendering path to keep
-  working; ha-paneld deliberately leaves dashboard hosting to HA Companion and only adds the panel
+  working; ha-paneld leaves dashboard hosting to HA Companion by default and adds the panel
   hardware HA can't otherwise reach.
 - **Per-device config doesn't scale on a non-homogeneous fleet.** Fully Kiosk is configured per
   device (its settings UI / per-device cloud), so a mixed fleet of different panels drifts and each
