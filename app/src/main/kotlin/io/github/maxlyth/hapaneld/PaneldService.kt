@@ -405,8 +405,18 @@ class PaneldService : Service() {
             val r = io.github.maxlyth.hapaneld.util.WebViewInstaller.heal(this@PaneldService, profile, engineMajor = null, force = true)
             Log.i(TAG, "WebView heal: $r")
             if (r.startsWith("OK")) {
-                // The Companion picks up a new WebView provider only on process restart — reload it.
                 kotlinx.coroutines.delay(2_000)
+                if (config.dashboardPackage == io.github.maxlyth.hapaneld.control.SystemController.BUILTIN_DASHBOARD) {
+                    // A WebView provider binds per-process at first use, so a page reload can't swap it
+                    // for OUR OWN renderer — only a process restart can. Exit cleanly: START_STICKY
+                    // brings the service back and Android relaunches the (HOME) dashboard activity,
+                    // both on the freshly-installed provider. (Foreign renderers get the same effect
+                    // from reloadDashboard's force-stop below.)
+                    Log.i(TAG, "WebView healed — restarting process so the built-in renderer binds the new provider")
+                    kotlinx.coroutines.delay(1_000) // let the HTTP response + this log flush
+                    kotlin.system.exitProcess(0)
+                }
+                // A foreign renderer (Companion) picks up the new provider on ITS process restart — reload it.
                 system.reloadDashboard(config.dashboardPackage)
             }
         }

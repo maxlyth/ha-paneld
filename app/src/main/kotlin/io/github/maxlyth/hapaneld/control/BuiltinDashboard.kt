@@ -80,8 +80,15 @@ object BuiltinDashboard {
      *  newer instance's registration when their lifecycles overlap. */
     fun clearScreenListener(l: (Boolean) -> Unit) { if (screenListener === l) screenListener = null }
 
+    /** Last screen state pushed by [ScreenController] — read by a renderer CREATED while the panel is
+     *  dark (a watchdog/kiosk relaunch at night), which would otherwise assume the screen is on, arm the
+     *  handshake watchdog, and never freeze until the next real screen transition. Defaults awake (no
+     *  transition seen since process start = panel presumed on). */
+    @Volatile var screenAwakeNow = true
+        private set
+
     /** [ScreenController] calls this from sleep()/wake(); no-op when no renderer is listening. */
-    fun onScreenAwake(awake: Boolean) { screenListener?.invoke(awake) }
+    fun onScreenAwake(awake: Boolean) { screenAwakeNow = awake; screenListener?.invoke(awake) }
 
     /** True while the renderer is latched on "HA definitively rejected our credential" (revoked token /
      *  repeated auth-invalid). Read by the `:8888` health warnings so the failure is visible off-panel;

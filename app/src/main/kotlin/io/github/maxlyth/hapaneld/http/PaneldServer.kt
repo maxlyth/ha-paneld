@@ -1856,7 +1856,9 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
         config.applyBatch {
             panelId?.let { config.setPanelId(it) }
             p["friendly_name"]?.let { config.setFriendlyName(it.trim()) }
+            val prevDash = config.dashboardPackage
             p["dashboard_package"]?.let { config.setDashboardPackage(it.trim()) }
+            val dashChanged = p["dashboard_package"]?.trim()?.let { it != prevDash } == true
             p["launcher_package"]?.let { config.setLauncherPackage(it.trim()) }
             p["tame_vendor_packages"]?.let { raw ->
                 applyTameBlocklist(raw.split(Regex("[\\s,]+")).map { it.trim() }
@@ -1873,7 +1875,13 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             // dashboard_idle_return_min previously had NO persist path at all — the Configure field
             // rendered but silently never saved (found wiring dashboard_fullscreen, issue #25/#24 pass).
             p["dashboard_idle_return_min"]?.trim()?.toIntOrNull()?.let { config.setDashboardIdleReturnMin(it.coerceIn(0, 1440)) }
+            // Live-apply a fullscreen toggle: a bare foreground relaunch of the running renderer re-runs
+            // onResume → applyFullscreen with the new value, without touching the page (no reload flag).
+            val prevFullscreen = config.dashboardFullscreen
             p["dashboard_fullscreen"]?.let { config.setDashboardFullscreen(it.trim().equals("true", ignoreCase = true) || it.trim() == "1") }
+            if (config.dashboardFullscreen != prevFullscreen && config.dashboardPackage == "builtin" && !dashChanged) {
+                scope.launch { runCatching { system.launchHome(SystemController.BUILTIN_DASHBOARD) } }
+            }
             val logEnabled = p["log_ship_enabled"]?.let { it.trim().equals("true", ignoreCase = true) || it.trim() == "1" }
             val logHost = p["log_ship_host"]?.trim()
             val logPort = p["log_ship_port"]?.trim()?.toIntOrNull()
@@ -1938,6 +1946,18 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             if (haChanged && config.dashboardPackage == "builtin") {
                 runCatching { system.reloadDashboard(SystemController.BUILTIN_DASHBOARD) }
             }
+            // Live-apply a renderer switch: re-anchor HOME to the new renderer and bring it up now —
+            // previously changing "Dashboard app" did nothing until the next boot. Off-thread (su/daemon).
+            // The kiosk/watchdog loops read dashboard_package per tick, so they retarget on their own.
+            if (dashChanged) {
+                scope.launch {
+                    runCatching {
+                        system.ensureDashboardHome(config.dashboardPackage, config.haUrl.isNotBlank())
+                        system.launchHome(config.dashboardPackage)
+                    }
+                }
+            }
+
             // Per-row "expose to HA" toggles (ha_expose_<key>=true|false) — take effect on the reconfigure.
             for (name in p.names()) {
                 if (name.startsWith("ha_expose_")) {

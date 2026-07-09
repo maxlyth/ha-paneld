@@ -125,11 +125,18 @@ class DashboardActivity : AppCompatActivity() {
         // Freeze the WebView when the panel screen is off (CPU/heat/memory), and reload the moment
         // connectivity returns if the frontend isn't connected — registered for the activity's lifetime.
         BuiltinDashboard.setScreenListener(screenListener)
+        // Adopt the CURRENT screen state — an instance created while the panel is dark (a relaunch at
+        // night) must not assume the screen is on: it would arm the handshake watchdog against a page
+        // that's about to be frozen, and never freeze the WebView until the next real transition.
+        screenAwake = BuiltinDashboard.screenAwakeNow
         registerNetworkCallback()
         main.postDelayed(periodicCheck, PERIODIC_CHECK_MS)
         lastTouchAt = SystemClock.elapsedRealtime()
         main.postDelayed(idleCheck, IDLE_CHECK_MS)
         buildAndLoad(config)
+        // Created dark: let the initial load settle, then freeze (onLoadStarted skipped the watchdog;
+        // onConnectionStatus freezes earlier if the frontend connects first).
+        if (!screenAwake) main.postDelayed(darkSettle, DARK_SETTLE_MS)
     }
 
     /** Any touch (the WebView consumes them, but the activity sees them first) resets the idle clock. */
@@ -225,9 +232,13 @@ class DashboardActivity : AppCompatActivity() {
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
         if (destroyed || authLatched) return
+        // UI_HIDDEN is a routine lifecycle signal, NOT memory pressure — it's delivered on every
+        // screen-off (activities stop when the display sleeps), so reacting to it made every screen-off
+        // full-reload the frontend, defeating the 6-hour quiet-reload ceiling in onScreenChanged.
+        if (level == TRIM_MEMORY_UI_HIDDEN) return
         // Any real trim signal means shed the WebView's accreted memory. Gate at RUNNING_LOW so we catch
-        // BOTH the pre-14 foreground RUNNING_* levels AND the levels Android 14 actually delivers
-        // (UI_HIDDEN / BACKGROUND / MODERATE / COMPLETE, all ≥ RUNNING_LOW's value) — the previous
+        // BOTH the pre-14 foreground RUNNING_* levels AND the pressure levels Android 14 actually
+        // delivers (BACKGROUND / MODERATE / COMPLETE, all ≥ RUNNING_LOW's value) — the previous
         // RUNNING_MODERATE..CRITICAL window was dead code on the fleet's Android-14 panels.
         if (level >= TRIM_MEMORY_RUNNING_LOW) {
             reloadPending = true
@@ -675,7 +686,9 @@ class DashboardActivity : AppCompatActivity() {
             // redirects across schemes (http↔https behind a proxy/HSTS); only a different HOST is
             // treated as an external link and blocked.
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-                return request.url.host != android.net.Uri.parse(config.haUrl).host
+                // Case-insensitive: DNS hostnames are, and a frontend redirect that upper-cases the
+                // host (or a user-typed mixed-case ha_url) must not be treated as an external link.
+                return !request.url.host.equals(android.net.Uri.parse(config.haUrl).host, ignoreCase = true)
             }
 
             // Stop the pull-to-refresh spinner once the (main-frame) load settles, success or error, so
