@@ -51,12 +51,25 @@ object HaLink {
     data class TokenSet(val accessToken: String, val expiresInSec: Long)
 
     /**
-     * Exchange a refresh token for a fresh access token (OAuth `grant_type=refresh_token`, the same call
-     * the HA Companion makes). Returns null on any failure (revoked/invalid refresh token, HA
-     * unreachable) so the caller can fall back to a still-valid cached token or fail closed. Blocking
-     * HTTP — call it off the main thread (the renderer's JS-bridge thread is fine).
+     * Outcome of a refresh-token exchange. The distinction matters on an unattended panel: a
+     * [Rejected] means the server definitively refused the refresh token (revoked/invalid — retrying
+     * can never succeed, and the stored credential is dead), while a [Transient] failure (HA
+     * restarting, network blip, timeout, 5xx) says nothing about the token and must never be treated
+     * as a revocation — nuking a valid login over a flaky moment leaves a wall panel dead until an
+     * admin re-provisions it.
      */
-    fun refreshAccessToken(base: String, refreshToken: String, clientId: String = ""): TokenSet? = runCatching {
+    sealed class Refresh {
+        data class Success(val tokens: TokenSet) : Refresh()
+        object Rejected : Refresh()
+        object Transient : Refresh()
+    }
+
+    /**
+     * Exchange a refresh token for a fresh access token (OAuth `grant_type=refresh_token`, the same call
+     * the HA Companion makes). Classifies failures — see [Refresh]. Blocking HTTP — call it off the main
+     * thread (the renderer's JS-bridge thread is fine).
+     */
+    fun refreshAccessToken(base: String, refreshToken: String, clientId: String = ""): Refresh = try {
         // client_id must match the one the refresh token was issued for. Default = HA origin (the
         // frontend's own client_id); override to reuse a token from another client (e.g. the Companion).
         val cid = clientId.ifBlank { "${base.trimEnd('/')}/" }
@@ -66,9 +79,19 @@ object HaLink {
                 "grant_type=refresh_token&refresh_token=${enc(refreshToken)}&client_id=${enc(cid)}", FORM,
             ),
         )
-        val access = json.optString("access_token").takeIf { it.isNotBlank() } ?: return@runCatching null
-        TokenSet(access, json.optLong("expires_in", 1800L))
-    }.onFailure { Log.i(TAG, "refresh failed: ${it.message}") }.getOrNull()
+        val access = json.optString("access_token").takeIf { it.isNotBlank() }
+        // A 200 without a token is a server oddity, not a revocation — treat as transient.
+        if (access == null) Refresh.Transient else Refresh.Success(TokenSet(access, json.optLong("expires_in", 1800L)))
+    } catch (e: HttpError) {
+        Log.i(TAG, "refresh failed: HTTP ${e.code}")
+        // Only the auth endpoint's own definitive refusals count as a revocation (OAuth invalid_grant
+        // is a 400; 401/403 are auth refusals). Anything else — 5xx from a restarting HA, 502/504 from
+        // a proxy, 404 from a misconfigured URL — is transient.
+        if (e.code in intArrayOf(400, 401, 403)) Refresh.Rejected else Refresh.Transient
+    } catch (e: Exception) {
+        Log.i(TAG, "refresh failed: ${e.message}")
+        Refresh.Transient
+    }
 
     /** HA frontend login flow with username/password → short-lived access token, or null. */
     private fun login(base: String, user: String, pass: String): String? {
@@ -151,6 +174,9 @@ object HaLink {
     private fun post(url: String, token: String?, body: String, ctype: String) = req(url, "POST", token, body, ctype)
     private fun get(url: String, token: String?) = req(url, "GET", token, null, null)
 
+    /** Non-2xx HTTP response — typed so callers can tell a definitive server refusal from a network fault. */
+    class HttpError(val code: Int, method: String) : RuntimeException("$method -> $code")
+
     private fun req(url: String, method: String, token: String?, body: String?, ctype: String?): String {
         val c = (URL(url).openConnection() as HttpURLConnection).apply {
             requestMethod = method; connectTimeout = 5000; readTimeout = 5000
@@ -161,7 +187,7 @@ object HaLink {
         val code = c.responseCode
         val text = (if (code in 200..299) c.inputStream else c.errorStream)?.bufferedReader()?.readText().orEmpty()
         c.disconnect()
-        if (code !in 200..299) throw RuntimeException("$method -> $code")
+        if (code !in 200..299) throw HttpError(code, method)
         return text
     }
 }

@@ -503,6 +503,30 @@ class PaneldServer(
                         onHealWebView()
                         call.respondText("""{"status":"started"}""", ContentType.Application.Json)
                     }
+                    // Clear the built-in renderer's browsing data (localStorage/IndexedDB/caches/cookies)
+                    // — the remote heal for a corrupted-storage dashboard that survives plain reloads.
+                    // Sign-in is NOT stored there (the external-auth bridge holds the token in Config),
+                    // so this never logs the panel out. Relaunches the built-in renderer when it's the
+                    // active dashboard so it comes back on a clean slate. WebView APIs are UI-thread-only.
+                    post("/dashboard/clear-storage") {
+                        android.os.Handler(android.os.Looper.getMainLooper()).post {
+                            runCatching {
+                                android.webkit.WebStorage.getInstance().deleteAllData()
+                                android.webkit.CookieManager.getInstance().removeAllCookies(null)
+                                // The HTTP resource cache is per-application but only reachable through a
+                                // WebView instance — a throwaway one clears it for every WebView we host
+                                // (a corrupted cached asset is exactly what this heal exists for).
+                                runCatching { android.webkit.WebView(appContext).apply { clearCache(true); destroy() } }
+                                if (config.dashboardPackage == "builtin") {
+                                    appContext.startActivity(
+                                        android.content.Intent(appContext, io.github.maxlyth.hapaneld.DashboardActivity::class.java)
+                                            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+                                    )
+                                }
+                            }
+                        }
+                        call.respondText("""{"status":"started"}""", ContentType.Application.Json)
+                    }
                     // Repair a Companion server row with an empty internal_url (HA 2026.7 "Missing Host
                     // header" incident). Fire-and-forget: the repair force-stops + relaunches the Companion
                     // off-thread; invalidate the health cache so the warning clears on the next poll.
@@ -1410,6 +1434,13 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
      *  banner and the Install tab as high-severity (`crit`). [inlineRepair] adds the one-tap repair button
      *  (Install tab, where install.js is loaded); the dashboard links to the Install tab for the action. */
     private fun adHocWarnings(inlineRepair: Boolean): String = buildString {
+        if (io.github.maxlyth.hapaneld.control.BuiltinDashboard.authLatched) append(
+            """<div class="setup crit">⛔ <b>Built-in renderer: Home Assistant sign-in rejected</b> — the """ +
+                """saved token appears revoked or invalid, so the dashboard stopped retrying (it shows fix """ +
+                """instructions on the panel). Set a new access or refresh token on """ +
+                """<a href="/configure">Configure → Dashboard</a>; the dashboard reloads automatically when """ +
+                """the credentials change.</div>""",
+        )
         if (io.github.maxlyth.hapaneld.PanelStatus.dashboardCrashLooping) append(
             """<div class="setup crit">⛔ <b>Dashboard app is crash-looping</b> — the watchdog stopped relaunching it """ +
                 """to avoid a restart storm. This usually means an incompatible dashboard-app update; reinstall or """ +
@@ -1880,6 +1911,17 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             p["ha_token_expiry"]?.trim()?.toLongOrNull()?.let { config.setHaTokenExpiry(it) }
             p["ha_client_id"]?.trim()?.let { config.setHaClientId(if (clearingHa) "" else it) }
             if (clearingHa) config.setHaRefreshToken("")
+            // A changed built-in-renderer credential/URL takes effect immediately: relaunch the renderer
+            // (singleTask → onNewIntent → fresh load), which also clears any auth-failure latch — the
+            // "fix the token on Configure" path the latch's on-panel message points at.
+            if ((haUrl != null || haToken != null || haRefresh != null) && config.dashboardPackage == "builtin") {
+                runCatching {
+                    appContext.startActivity(
+                        android.content.Intent(appContext, io.github.maxlyth.hapaneld.DashboardActivity::class.java)
+                            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+                    )
+                }
+            }
             // Per-row "expose to HA" toggles (ha_expose_<key>=true|false) — take effect on the reconfigure.
             for (name in p.names()) {
                 if (name.startsWith("ha_expose_")) {

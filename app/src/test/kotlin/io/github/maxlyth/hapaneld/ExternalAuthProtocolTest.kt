@@ -121,4 +121,43 @@ class ExternalAuthProtocolTest {
         assertNull(ExternalAuthProtocol.connectionEvent("""{"type":"connection-status"}""")) // no event field
         assertNull(ExternalAuthProtocol.connectionEvent("not json"))
     }
+
+    // --- navigateCommand (light refresh / idle return-to-home) ---
+
+    @Test
+    fun `navigate command carries the frontend's exact shape with replace`() {
+        val js = ExternalAuthProtocol.navigateCommand(7, "lovelace/0")
+        assertTrue(js.startsWith("externalBus(") && js.endsWith(");"))
+        val msg = JSONObject(js.removePrefix("externalBus(").removeSuffix(");"))
+        assertEquals(7, msg.getInt("id"))
+        assertEquals("command", msg.getString("type"))
+        assertEquals("navigate", msg.getString("command"))
+        val payload = msg.getJSONObject("payload")
+        assertEquals("/lovelace/0", payload.getString("path"))
+        assertTrue(payload.getJSONObject("options").getBoolean("replace"))
+    }
+
+    @Test
+    fun `navigate path slashes are normalised`() {
+        fun pathOf(js: String) = JSONObject(js.removePrefix("externalBus(").removeSuffix(");"))
+            .getJSONObject("payload").getString("path")
+        assertEquals("/lovelace/0", pathOf(ExternalAuthProtocol.navigateCommand(1, "/lovelace/0/")))
+        assertEquals("/", pathOf(ExternalAuthProtocol.navigateCommand(1, "")))
+        assertEquals("/", pathOf(ExternalAuthProtocol.navigateCommand(1, "/")))
+    }
+
+    // --- resultOf (bus command replies) ---
+
+    @Test
+    fun `command result replies are parsed`() {
+        assertEquals(7 to true, ExternalAuthProtocol.resultOf("""{"id":7,"type":"result","success":true,"result":null}"""))
+        assertEquals(9 to false, ExternalAuthProtocol.resultOf("""{"id":9,"type":"result","success":false}"""))
+    }
+
+    @Test
+    fun `non-result messages yield null`() {
+        assertNull(ExternalAuthProtocol.resultOf("""{"type":"connection-status","payload":{"event":"connected"}}"""))
+        assertNull(ExternalAuthProtocol.resultOf("""{"type":"result"}""")) // no id
+        assertNull(ExternalAuthProtocol.resultOf("not json"))
+    }
 }

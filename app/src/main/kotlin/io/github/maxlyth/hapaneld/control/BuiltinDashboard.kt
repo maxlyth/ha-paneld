@@ -33,4 +33,9 @@ object BuiltinDashboard {
 
     /** [ScreenController] calls this from sleep()/wake(); no-op when no renderer is listening. */
     fun onScreenAwake(awake: Boolean) { screenListener?.invoke(awake) }
+
+    /** True while the renderer is latched on "HA definitively rejected our credential" (revoked token /
+     *  repeated auth-invalid). Read by the `:8888` health warnings so the failure is visible off-panel;
+     *  cleared when a reload/navigate arrives or the frontend connects. */
+    @Volatile var authLatched = false
 }

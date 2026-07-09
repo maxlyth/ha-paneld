@@ -217,6 +217,11 @@ object SettingsRegistry {
             help = "Local dashboard path a reload returns to, e.g. /lovelace/0 (built-in renderer: the view it loads). Blank = wherever it was.",
         ),
         SettingSpec(
+            key = "dashboard_idle_return_min", type = SettingType.INT, group = "Dashboard",
+            label = "Idle return to home (min)", default = "0", min = 0.0, max = 1440.0,
+            help = "Built-in renderer: minutes with no touch before the dashboard snaps back to the Home dashboard view (instant in-app navigation, not a reload). 0 = off; needs Home dashboard set.",
+        ),
+        SettingSpec(
             key = "ha_url", type = SettingType.STRING, group = "Dashboard",
             label = "Home Assistant URL", default = "",
             help = "Built-in renderer only (skunk-works): the HA base URL, e.g. http://homeassistant.local:8123. Blank disables the built-in renderer.",

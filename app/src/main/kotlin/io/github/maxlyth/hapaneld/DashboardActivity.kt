@@ -91,6 +91,27 @@ class DashboardActivity : AppCompatActivity() {
     private var reloadPending = false
     private var screenAwake = true
     private var sawNetworkLoss = false // so the initial registration onAvailable isn't a spurious reload
+    // App→frontend external-bus command ids (navigate etc.); replies echo the id back (logged).
+    private var busId = 0
+    // Auth-failure latch. A *definitive* credential rejection (revoked refresh token, repeated
+    // auth-invalid from the frontend) must not become an infinite reload loop on an unattended panel —
+    // no retry revives a revoked token. Latch: stop the retry machinery and show a clear on-panel
+    // message naming the fix. Unlatched by a new load (MQTT reload/navigate, config change) or a
+    // successful connect. Transient failures (HA down) never count toward the latch.
+    private var authInvalids = 0
+    private var refreshRejects = 0
+    private var authLatched = false
+    // Idle return-to-home: after N minutes with no touch (configurable, 0 = off), navigate the frontend
+    // back to the home dashboard via the bus — cheaper than a reload, bounds history growth from casual
+    // navigation, and snaps a wandering kiosk back where it belongs.
+    private var lastTouchAt = 0L
+    private val idleCheck = Runnable { onIdleCheck() }
+    // Last light pull-to-refresh — a second pull inside the window escalates to a full hard reload.
+    private var lastLightRefreshAt = 0L
+    // True while the branded "Reconnecting…" page has replaced a failed main-frame load. Every reload
+    // path must then loadUrl() the real dashboard rather than reload() (which would reload the
+    // interstitial itself). Cleared on any real load or connect.
+    private var interstitialShown = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -108,11 +129,20 @@ class DashboardActivity : AppCompatActivity() {
         BuiltinDashboard.setScreenListener(screenListener)
         registerNetworkCallback()
         main.postDelayed(periodicCheck, PERIODIC_CHECK_MS)
+        lastTouchAt = SystemClock.elapsedRealtime()
+        main.postDelayed(idleCheck, IDLE_CHECK_MS)
         buildAndLoad(config)
+    }
+
+    /** Any touch (the WebView consumes them, but the activity sees them first) resets the idle clock. */
+    override fun dispatchTouchEvent(ev: android.view.MotionEvent?): Boolean {
+        lastTouchAt = SystemClock.elapsedRealtime()
+        return super.dispatchTouchEvent(ev)
     }
 
     override fun onDestroy() {
         destroyed = true
+        BuiltinDashboard.authLatched = false // no renderer → the latch warning would be stale
         BuiltinDashboard.clearScreenListener(screenListener)
         netCallback?.let { cb -> runCatching { conn?.unregisterNetworkCallback(cb) } }
         main.removeCallbacksAndMessages(null)
@@ -150,10 +180,12 @@ class DashboardActivity : AppCompatActivity() {
         if (awake) {
             main.removeCallbacks(darkSettle)
             w.resumeTimers(); w.onResume()
-            if (!frontendConnected) armWatchdog(INITIAL_HANDSHAKE_MS)
+            lastTouchAt = SystemClock.elapsedRealtime() // a wake implies presence — don't instantly snap home
+            if (!frontendConnected && !authLatched) armWatchdog(INITIAL_HANDSHAKE_MS)
         } else {
             w.onPause()
             main.removeCallbacks(watchdog) // a paused WebView can't complete the handshake — don't loop
+            if (authLatched) { w.pauseTimers(); return }
             if (reloadDue()) {
                 // Reload to shed memory, but DON'T pause timers yet — a paused WebView can't load. Let it
                 // run; onConnectionStatus freezes it the moment it connects, or darkSettle freezes it after
@@ -177,6 +209,7 @@ class DashboardActivity : AppCompatActivity() {
      *  or force a brief visible reload past the hard cap so a panel that never sleeps still sheds memory. */
     private fun onPeriodicCheck() {
         if (destroyed) return
+        if (authLatched) { main.postDelayed(periodicCheck, PERIODIC_CHECK_MS); return }
         val idle = SystemClock.elapsedRealtime() - lastFullLoadAt
         when {
             idle < RELOAD_INTERVAL_MS -> {}
@@ -193,7 +226,7 @@ class DashboardActivity : AppCompatActivity() {
 
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
-        if (destroyed) return
+        if (destroyed || authLatched) return
         // Any real trim signal means shed the WebView's accreted memory. Gate at RUNNING_LOW so we catch
         // BOTH the pre-14 foreground RUNNING_* levels AND the levels Android 14 actually delivers
         // (UI_HIDDEN / BACKGROUND / MODERATE / COMPLETE, all ≥ RUNNING_LOW's value) — the previous
@@ -212,7 +245,7 @@ class DashboardActivity : AppCompatActivity() {
 
     override fun onLowMemory() {
         super.onLowMemory()
-        if (!destroyed && (!screenAwake || !BuiltinDashboard.foreground)) {
+        if (!destroyed && !authLatched && (!screenAwake || !BuiltinDashboard.foreground)) {
             lastFullLoadAt = SystemClock.elapsedRealtime()
             doReloadNoWatchdog("onLowMemory")
             if (!screenAwake) { main.removeCallbacks(darkSettle); main.postDelayed(darkSettle, DARK_SETTLE_MS) }
@@ -240,6 +273,8 @@ class DashboardActivity : AppCompatActivity() {
      *  reload re-loads the same view and a navigate switches to the new path. */
     override fun onNewIntent(intent: Intent?) {
         super.onNewIntent(intent)
+        unlatchAuth("new load") // a deliberate reload/navigate (or a config change) is the retry consent
+        interstitialShown = false
         web?.loadUrl(currentUrl(Config(this)))
         onLoadStarted()
     }
@@ -263,10 +298,10 @@ class DashboardActivity : AppCompatActivity() {
     }
 
     private fun onWatchdogTimeout() {
-        // Never retry on a dead activity or while frozen (screen off) — either would be a runaway loop.
-        if (destroyed || frontendConnected || !screenAwake) return
+        // Never retry on a dead activity, while frozen (screen off), or latched — all runaway loops.
+        if (destroyed || frontendConnected || !screenAwake || authLatched) return
         Log.w(TAG, "frontend handshake watchdog fired (no connection-status:connected) — reloading; backoff=${backoffMs}ms")
-        web?.reload()
+        reloadTarget()
         lastFullLoadAt = SystemClock.elapsedRealtime()
         clearedThisLoad = false
         backoffMs = (backoffMs * 2).coerceAtMost(MAX_RETRY_MS)
@@ -279,6 +314,8 @@ class DashboardActivity : AppCompatActivity() {
         if (destroyed) return
         if (event == "connected") {
             frontendConnected = true
+            interstitialShown = false // real page demonstrably loaded
+            unlatchAuth("frontend connected") // auth demonstrably works — clear any stale latch + counters
             main.removeCallbacks(watchdog)
             backoffMs = INITIAL_RETRY_MS
             if (!clearedThisLoad) {
@@ -292,18 +329,63 @@ class DashboardActivity : AppCompatActivity() {
             if (!screenAwake) { main.removeCallbacks(darkSettle); web?.pauseTimers() }
             Log.i(TAG, "frontend connected")
         } else {
-            // disconnected / auth-invalid: give the frontend's own reconnect a grace window, then reload —
-            // but only while awake (a frozen WebView can't reconnect; wake re-arms the handshake watchdog).
             frontendConnected = false
-            if (screenAwake) {
+            // auth-invalid is the frontend saying HA refused its token. One can be a race around a token
+            // refresh; several in a row mean the credential is dead — latch instead of reload-looping.
+            if (event == "auth-invalid" && ++authInvalids >= AUTH_INVALID_LATCH) { latchAuthFailure("repeated auth-invalid") ; return }
+            // disconnected: give the frontend's own reconnect a grace window, then reload — but only
+            // while awake (a frozen WebView can't reconnect; wake re-arms the handshake watchdog).
+            if (screenAwake && !authLatched) {
                 Log.i(TAG, "frontend '$event' — arming grace watchdog")
                 armWatchdog(DISCONNECT_GRACE_MS)
             }
         }
     }
 
+    /** The token refresher got a *definitive* rejection from HA (revoked/invalid refresh token). One
+     *  could be a freak event; two consecutive means the stored credential is dead — latch. */
+    private fun onAuthRevoked() {
+        if (destroyed || authLatched) return
+        if (++refreshRejects >= REFRESH_REJECT_LATCH) latchAuthFailure("refresh token rejected by HA")
+    }
+
+    /** Stop the retry machinery and show a clear on-panel message naming the fix — a panel retrying a
+     *  revoked credential forever is churn with no exit, and a silent blank is a never-blank violation.
+     *  The `:8888` health warnings surface the same state off-panel via [BuiltinDashboard.authLatched]. */
+    private fun latchAuthFailure(why: String) {
+        if (authLatched) return
+        authLatched = true
+        BuiltinDashboard.authLatched = true
+        main.removeCallbacks(watchdog)
+        Log.e(TAG, "auth latched ($why) — showing fix instructions, no further retries until reload/reconfig")
+        val ip = io.github.maxlyth.hapaneld.control.Diagnostics.ipAddress()
+        val cfg = if (ip != null) "http://$ip:8888/configure" else "port 8888 of this panel's IP address"
+        web?.loadDataWithBaseURL(
+            null,
+            """<!doctype html><html><body style="background:#121212;color:#eee;font-family:sans-serif;
+               display:flex;align-items:center;justify-content:center;height:100vh;margin:0">
+               <div style="max-width:80%;text-align:center">
+               <h1 style="color:#f66">Home Assistant sign-in rejected</h1>
+               <p style="font-size:1.3em">This panel's saved token appears to be revoked or invalid,
+               so the dashboard has stopped retrying.</p>
+               <p style="font-size:1.3em"><b>Fix:</b> open <b>$cfg</b> &rarr; Dashboard and set a new
+               access or refresh token (or re-run provisioning). The dashboard reloads automatically
+               when the configuration changes.</p>
+               </div></body></html>""",
+            "text/html", "utf-8", null,
+        )
+    }
+
+    private fun unlatchAuth(why: String) {
+        authInvalids = 0; refreshRejects = 0
+        if (!authLatched) return
+        authLatched = false
+        BuiltinDashboard.authLatched = false
+        Log.i(TAG, "auth latch cleared ($why)")
+    }
+
     private fun onNetworkAvailable() {
-        if (destroyed) return
+        if (destroyed || authLatched) return
         // Ignore the callback the OS fires at registration time (the network was never lost) — only a real
         // offline→online transition should force a reload.
         if (!sawNetworkLoss) return
@@ -311,6 +393,48 @@ class DashboardActivity : AppCompatActivity() {
         if (frontendConnected || !screenAwake) return // frozen page reconnects itself on wake
         Log.i(TAG, "network regained while frontend not connected — reloading immediately")
         doReload("network regained")
+    }
+
+    /** Pull-to-refresh: a full `WebView.reload()` re-boots the entire frontend app (seconds of blank),
+     *  which is overkill for a healthy page — ask the running frontend to re-navigate to the current
+     *  view over the external bus instead (instant; JS bundle + websocket stay live). The full reload is
+     *  kept for the case that actually needs it: a frontend that isn't connected. */
+    private fun lightRefresh() {
+        val w = web
+        if (w == null || !frontendConnected) { doReload("pull-to-refresh (frontend not connected)"); return }
+        // Pull twice in quick succession = full hard reload (the browser's reload-vs-hard-reload
+        // pattern, no extra UI): the light navigate re-renders from the frontend's in-memory config,
+        // which can't pick up a YAML-mode dashboard edit — a second deliberate pull escalates.
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastLightRefreshAt < HARD_REFRESH_WINDOW_MS) {
+            lastLightRefreshAt = 0L
+            doReload("pull-to-refresh (hard, double-pull)")
+            return
+        }
+        lastLightRefreshAt = now
+        val path = runCatching { android.net.Uri.parse(w.url).path }.getOrNull().orEmpty()
+            .ifBlank { Config(this).homeDashboard }
+        Log.i(TAG, "pull-to-refresh -> light navigate ($path)")
+        w.evaluateJavascript(ExternalAuthProtocol.navigateCommand(++busId, path), null)
+        // No page-load events fire for a bus navigate — clear the spinner after a short beat.
+        main.postDelayed({ swipe?.isRefreshing = false }, LIGHT_REFRESH_SPINNER_MS)
+    }
+
+    /** Idle return-to-home (opt-in): after the configured minutes with no touch, swap the frontend back
+     *  to the home dashboard — a bus navigate with replace, so it's instant and keeps history flat. */
+    private fun onIdleCheck() {
+        if (destroyed) return
+        main.postDelayed(idleCheck, IDLE_CHECK_MS)
+        if (!screenAwake || !frontendConnected || authLatched) return
+        val config = Config(this)
+        val minutes = config.dashboardIdleReturnMin
+        val home = config.homeDashboard.trim().trim('/')
+        if (minutes <= 0 || home.isEmpty()) return
+        if (SystemClock.elapsedRealtime() - lastTouchAt < minutes * 60_000L) return
+        val current = runCatching { android.net.Uri.parse(web?.url).path }.getOrNull().orEmpty().trim('/')
+        if (current == home) return
+        Log.i(TAG, "idle ${minutes}min — returning to home dashboard (/$home)")
+        web?.evaluateJavascript(ExternalAuthProtocol.navigateCommand(++busId, home), null)
     }
 
     private fun registerNetworkCallback() {
@@ -326,10 +450,23 @@ class DashboardActivity : AppCompatActivity() {
             .onFailure { Log.w(TAG, "network callback register failed: ${it.message}") }
     }
 
+    /** Re-load the dashboard: a plain reload normally, but a fresh loadUrl of the real dashboard when
+     *  the WebView is currently showing the "Reconnecting…" interstitial (reloading THAT would just
+     *  re-show the interstitial forever). */
+    private fun reloadTarget() {
+        val w = web ?: return
+        if (interstitialShown) {
+            interstitialShown = false
+            w.loadUrl(currentUrl(Config(this)))
+        } else {
+            w.reload()
+        }
+    }
+
     /** Reload + arm the handshake watchdog (only fires while awake) — for user/health-driven reloads. */
     private fun doReload(reason: String) {
         Log.i(TAG, "reload: $reason")
-        web?.reload()
+        reloadTarget()
         onLoadStarted()
     }
 
@@ -339,7 +476,29 @@ class DashboardActivity : AppCompatActivity() {
         Log.i(TAG, "reload: $reason")
         frontendConnected = false
         clearedThisLoad = false
-        web?.reload()
+        reloadTarget()
+    }
+
+    /** A main-frame load failed (HA down / network out / DNS): replace Android's native gray error page
+     *  with a branded dark "reconnecting" screen while the handshake watchdog keeps retrying behind it.
+     *  The native error page can't be styled or suppressed any other way, and a wall panel showing
+     *  `net::ERR_CONNECTION_REFUSED` between retries reads as broken rather than waiting. */
+    private fun showReconnecting(detail: String) {
+        if (destroyed || authLatched || interstitialShown) return
+        interstitialShown = true
+        Log.w(TAG, "main-frame load error ($detail) — showing reconnecting page; watchdog retries continue")
+        web?.loadDataWithBaseURL(
+            null,
+            """<!doctype html><html><body style="background:#121212;color:#eee;font-family:sans-serif;
+               display:flex;align-items:center;justify-content:center;height:100vh;margin:0">
+               <div style="max-width:80%;text-align:center">
+               <h1>Reconnecting to Home Assistant&hellip;</h1>
+               <p style="font-size:1.2em;color:#aaa">The dashboard couldn't be reached and will keep
+               retrying automatically.</p>
+               <p style="color:#666"><small>$detail</small></p>
+               </div></body></html>""",
+            "text/html", "utf-8", null,
+        )
     }
 
     /** The URL to show: the navigate path if one is pending, else the configured home dashboard. */
@@ -391,7 +550,7 @@ class DashboardActivity : AppCompatActivity() {
         // is unaffected. The spinner is cleared when the page finishes (or errors) — see the WebViewClient.
         val refresh = SwipeRefreshLayout(this).apply {
             addView(w, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-            setOnRefreshListener { doReload("pull-to-refresh") }
+            setOnRefreshListener { lightRefresh() }
         }
         swipe = refresh
         // A dark root behind the (transparent) WebView so a reload never flashes white — very visible on
@@ -414,6 +573,22 @@ class DashboardActivity : AppCompatActivity() {
         // every stream paused on a touchless panel. (Not media-file playback, which stays out of scope.)
         settings.mediaPlaybackRequiresUserGesture = false
         setBackgroundColor(BG_DARK) // no white flash before first paint
+        // Force-dark on the pre-13 panels (NSPanel Pro 8.1, TPA10 11): Android 13+ has algorithmic
+        // darkening by app theme, older WebViews need the explicit flag. WEB_THEME_DARKENING_ONLY only
+        // darkens pages that declare dark support — HA's frontend does — so it can't mangle a light
+        // theme the user deliberately chose; it kills the "bright flash at 3am" reload on dark themes.
+        if (android.os.Build.VERSION.SDK_INT < 33) runCatching {
+            if (androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.FORCE_DARK)) {
+                @Suppress("DEPRECATION")
+                androidx.webkit.WebSettingsCompat.setForceDark(settings, androidx.webkit.WebSettingsCompat.FORCE_DARK_ON)
+            }
+            if (androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.FORCE_DARK_STRATEGY)) {
+                @Suppress("DEPRECATION")
+                androidx.webkit.WebSettingsCompat.setForceDarkStrategy(
+                    settings, androidx.webkit.WebSettingsCompat.DARK_STRATEGY_WEB_THEME_DARKENING_ONLY,
+                )
+            }
+        }
         // The HA frontend relies on cookies (incl. third-party for some integrations).
         CookieManager.getInstance().setAcceptCookie(true)
         CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
@@ -425,6 +600,10 @@ class DashboardActivity : AppCompatActivity() {
             // so a reliably-crashing page falls back to the admin launcher instead of spinning.
             override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
                 Log.w(TAG, "renderer process gone (crash=${detail.didCrash()})")
+                // An OOM-killed renderer can leave a corrupted Chromium code-cache behind, which can
+                // crash the REBUILT renderer too — clear it (best-effort; the view is defunct and may
+                // throw) so the crash budget isn't burned on a persistent on-disk cause.
+                runCatching { view.clearCache(true) }
                 (view.parent as? android.view.ViewGroup)?.removeView(view)
                 view.destroy()
                 if (web === view) {
@@ -448,7 +627,26 @@ class DashboardActivity : AppCompatActivity() {
             // it never spins forever on a hung reload.
             override fun onPageFinished(view: WebView, url: String) { swipe?.isRefreshing = false }
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
-                if (request.isForMainFrame) swipe?.isRefreshing = false
+                if (!request.isForMainFrame) return
+                swipe?.isRefreshing = false
+                // Replace Android's un-styleable gray net::ERR_* page with the branded reconnecting
+                // screen; the handshake watchdog (already armed by this load) keeps retrying behind it.
+                val detail = "${error.description}".replace("<", "&lt;")
+                runOnUiThread { showReconnecting(detail) }
+            }
+
+            // HTTP errors are consulted ONLY for the main frame: a sub-resource 401/404 (a HACS module,
+            // a picture card) is that card's problem, not the page's — reacting to it (HACA's early
+            // mistake) turns one broken card into a broken dashboard. A main-frame error just logs;
+            // recovery is the handshake watchdog's job (no `connected` will arrive → reload w/ backoff).
+            override fun onReceivedHttpError(
+                view: WebView,
+                request: WebResourceRequest,
+                errorResponse: android.webkit.WebResourceResponse,
+            ) {
+                if (!request.isForMainFrame) return
+                swipe?.isRefreshing = false
+                Log.w(TAG, "main-frame HTTP ${errorResponse.statusCode} for ${request.url}")
             }
         }
     }
@@ -526,8 +724,11 @@ class DashboardActivity : AppCompatActivity() {
             // Resolve (and lazily refresh) the access token off the main thread — we're already on the
             // WebView's JS-bridge thread, so the blocking refresh HTTP is fine here. `force` (set by the
             // frontend after a 401) bypasses the cached token so a revoked token isn't re-handed.
-            val session = DashboardAuth.forConfig(config, force = ExternalAuthProtocol.forceOf(payload))
-            evaluate(ExternalAuthProtocol.authReply(payload, session?.accessToken, session?.expiresInSec ?: 0L))
+            val r = DashboardAuth.forConfig(config, force = ExternalAuthProtocol.forceOf(payload))
+            // A *definitive* rejection (revoked refresh token) feeds the auth latch; transient failures
+            // (HA down) don't — the frontend just re-asks and recovers when HA does.
+            if (r.revoked) runOnUiThread { onAuthRevoked() }
+            evaluate(ExternalAuthProtocol.authReply(payload, r.session?.accessToken, r.session?.expiresInSec ?: 0L))
         }
 
         @JavascriptInterface
@@ -537,6 +738,8 @@ class DashboardActivity : AppCompatActivity() {
         fun externalBus(message: String) {
             // Side-channel: a `connection-status` event drives the handshake watchdog (on the main thread).
             ExternalAuthProtocol.connectionEvent(message)?.let { ev -> runOnUiThread { onConnectionStatus(ev) } }
+            // Command replies (navigate etc.) confirm execution — log-only, but gold when debugging.
+            ExternalAuthProtocol.resultOf(message)?.let { (id, ok) -> Log.d(TAG, "bus result id=$id success=$ok") }
             evaluate(ExternalAuthProtocol.busReply(message, BuildConfig.VERSION_NAME))
         }
 
@@ -559,6 +762,11 @@ class DashboardActivity : AppCompatActivity() {
         private const val PERIODIC_CHECK_MS = 30 * 60 * 1000L        // how often the memory-ceiling check runs
         private const val DARK_SETTLE_MS = 30_000L              // let a screen-off reload load before freezing
         private const val BG_DARK = 0xFF121212.toInt()
+        private const val LIGHT_REFRESH_SPINNER_MS = 800L       // bus navigate is instant; brief spinner ack
+        private const val HARD_REFRESH_WINDOW_MS = 6_000L       // second pull inside this = full hard reload
+        private const val IDLE_CHECK_MS = 60_000L               // idle return-to-home tick
+        private const val AUTH_INVALID_LATCH = 3                // consecutive auth-invalid events → latch
+        private const val REFRESH_REJECT_LATCH = 2              // consecutive definitive refresh rejections → latch
     }
 }
 
@@ -639,6 +847,27 @@ object ExternalAuthProtocol {
         if (msg.optString("type") != "connection-status") return null
         val ev = msg.optJSONObject("payload")?.optString("event").orEmpty().ifBlank { msg.optString("event") }
         return ev.ifBlank { null }
+    }
+
+    /** App→frontend `navigate` command: swap the frontend's view to [path] *inside* the running app —
+     *  no page reload, the JS bundle and websocket stay live (instant, vs several seconds of blank for
+     *  `WebView.reload()`). `options.replace` keeps kiosk history flat. HA ≥ 2025.6. */
+    fun navigateCommand(id: Int, path: String): String {
+        val p = "/" + path.trim().trim('/')
+        val msg = JSONObject()
+            .put("id", id)
+            .put("type", "command")
+            .put("command", "navigate")
+            .put("payload", JSONObject().put("path", p).put("options", JSONObject().put("replace", true)))
+        return "externalBus($msg);"
+    }
+
+    /** If [message] is the frontend's `result` reply to an app-sent command, its (id, success);
+     *  null otherwise. Used to confirm a bus command was actually executed. */
+    fun resultOf(message: String): Pair<Int, Boolean>? {
+        val msg = runCatching { JSONObject(message) }.getOrNull() ?: return null
+        if (msg.optString("type") != "result") return null
+        return msg.optInt("id", -1).takeIf { it >= 0 }?.let { it to msg.optBoolean("success", false) }
     }
 
     private fun callbackOf(payload: String): String =

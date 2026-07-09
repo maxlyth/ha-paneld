@@ -10,13 +10,28 @@ content appear. Earlier releases predate this convention and keep their flat lis
 
 ## v0.9.0-rc2 - 2026-07-09
 
-**Long-run reliability hardening for the built-in renderer**, so the soak tests a dashboard built to run untouched for weeks rather than one that only looks right on day one. No user-facing changes to how you set it up — the built-in renderer is still off by default and configured exactly as in rc1.
+**Long-run reliability hardening for the built-in renderer**, so the soak tests a dashboard built to run untouched for weeks rather than one that only looks right on day one. The built-in renderer is still off by default and configured exactly as in rc1.
+
+### Added
+
+- **Camera streams autoplay** (built-in renderer) — video and camera cards now start playing on their own. A browser's default is to hold all playback until a user gesture, which on a touchless wall panel meant every camera card sat paused forever; the renderer now grants media autoplay, and adds the fullscreen-video plumbing so a stream can be expanded to full screen and native handling for the frontend's confirm/alert dialogs (previously silently dropped, which could leave the UI hanging on a destructive-action prompt). Camera/microphone *capture* (two-way intercom) remains deliberately unsupported.
+- **Idle return-to-home** (built-in renderer) — an optional "Idle return to home" setting (Configure → Dashboard) snaps the dashboard back to the Home dashboard view after N minutes with no touch. It's an instant in-app navigation (not a reload), and it keeps the kiosk's history flat so casual browsing can't accumulate.
+- **Clear renderer storage** — a button on Configure → Dashboard (and a matching API endpoint) wipes the built-in renderer's cached site data, cookies and HTTP resource cache, then relaunches it: the remote fix for a corrupted dashboard that survives normal reloads. Sign-in is never affected — the panel's HA credentials live in ha-paneld's own config, not in the WebView.
+
+### Changed
+
+- **Pull-to-refresh is now instant** — dragging down from the top asks the already-running Home Assistant frontend to re-navigate to the current view (the app and its connection stay live) instead of re-booting the whole frontend, which blanked the panel for several seconds. **Pull twice in quick succession for a full hard reload** (e.g. to pick up an edited YAML-mode dashboard), and the full reload also still happens automatically when the frontend isn't connected.
+- **Dark dashboards stay dark on old Android** — on pre-Android-13 panels the renderer enables the WebView's theme-aware darkening, so a dark-themed dashboard can't flash bright during a night-time reload.
 
 ### Fixed
+
+- **A flaky network can no longer look like a revoked login** — token-refresh failures are now classified: a timeout, restart, or proxy error is treated as transient (the stored login is untouched and the renderer just retries), while a *definitive* rejection from Home Assistant (a genuinely revoked token) stops the retry churn and shows clear fix-it instructions on the panel and a matching warning in the web UI. Saving new credentials on the Configure tab reloads the dashboard automatically. A failing individual card (a broken resource returning an HTTP error) no longer risks being treated as a page failure.
 
 - **The dashboard sleeps when the screen does** — with the built-in renderer, the WebView now fully pauses (rendering and JavaScript timers) while the panel's screen is off, and resumes on wake. This removes the constant background CPU/heat of a dashboard animating and processing entity updates behind a dark screen (measured roughly a 70% drop in the renderer's CPU while asleep). A screen-off that only dims the panel (rather than truly blanking it) deliberately keeps the dashboard live so it stays readable and responsive.
 - **A dashboard that loses its connection recovers on its own** — the renderer now waits for the Home Assistant frontend to actually report "connected" (not merely that the page loaded) and, if it doesn't, reloads with a backing-off retry until it does; it also reloads immediately when network connectivity returns after an outage. This catches the "loaded onto a blank or stalled frontend" case a plain page-load check misses — important on a device with no buttons to press. These retries run only while the screen is on, so a panel can't sit in a reload loop overnight.
 - **Memory is bounded over long uptimes** — a browser engine left running for days slowly accretes memory; the renderer now sheds it with an occasional reload, done invisibly at a screen-off where possible (and, on a panel that never sleeps, a brief refresh at most about once a day), plus an immediate reload under memory pressure while the dashboard isn't the visible screen. This prevents the gradual slow-down / eventual out-of-memory reload that would otherwise hit a wall panel after a week or two.
+- **No more browser error page while Home Assistant is unreachable** — when the dashboard can't be loaded (HA restarting, network out), the panel now shows a clean dark "Reconnecting to Home Assistant…" screen instead of Android's gray `net::ERR_*` browser error page, while the automatic retries continue behind it.
+- **Renderer crash recovery clears the browser cache first** — a renderer killed under memory pressure can leave a corrupted browser code-cache behind that would crash the rebuilt view too; recovery now clears it, so a one-off crash can't turn into a repeating one.
 - **Fewer ways for a rare interaction to disrupt the dashboard** — a JavaScript dialog arriving as the screen is torn down no longer risks crashing the app; a renderer crash during a fullscreen video no longer leaves fullscreen permanently broken afterwards; and several lifecycle edge cases around teardown and screen state are handled so the always-on renderer stays healthy.
 
 ## v0.9.0-rc1 - 2026-07-09

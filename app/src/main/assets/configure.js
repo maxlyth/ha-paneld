@@ -159,6 +159,26 @@
       if (badge) h2kids.push(el("span", { class: "cardbadge " + badge[1], text: badge[0] }));
       var card = el("div", { class: "card" }, [el("h2", {}, h2kids)]);
       fields.forEach(function (f) { card.appendChild(row(f)); });
+      // Dashboard card action: clear the built-in renderer's browsing storage — the heal for a
+      // corrupted localStorage/IndexedDB that survives reloads. Never logs the panel out (auth lives
+      // in ha-paneld's config, not the WebView).
+      if (g === "Dashboard") {
+        var st = el("span", { class: "muted" });
+        var btn = el("button", { class: "pbtn", text: "🧹 Clear renderer storage" });
+        btn.onclick = function () {
+          st.textContent = "Clearing…";
+          fetch("/api/v1/dashboard/clear-storage", { method: "POST" })
+            .then(function (r) { st.textContent = r.ok ? "Cleared — renderer reloading." : "Failed (HTTP " + r.status + ")"; })
+            .catch(function () { st.textContent = "Failed (network)"; });
+        };
+        card.appendChild(el("div", { class: "frow" }, [
+          el("div", { class: "flabel" }, [
+            el("span", { text: "Renderer storage" }),
+            el("small", { text: "Clear the built-in renderer's cached site data — fixes a corrupted dashboard that survives reloads; sign-in is kept." }),
+          ]),
+          el("div", { class: "fctl" }, [btn, st]),
+        ]));
+      }
       root.appendChild(card);
     });
     document.getElementById("cfg-status").style.display = shown ? "none" : "block";

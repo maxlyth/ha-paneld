@@ -98,6 +98,8 @@ The [HA Companion app](https://github.com/home-assistant/android) targets person
 If Fully Kiosk's specific extras (e.g. its kiosk lockdown or its particular screensaver) are
 load-bearing for you, keep using it.
 
+**Fully Kiosk vs FreeKiosk — not the same app.** Despite the similar names, [FreeKiosk](https://github.com/RushB-fr/freekiosk) is an unrelated project: an MIT-licensed open-source alternative that re-implements Fully Kiosk's feature set on a completely different codebase. The licensing objection above doesn't apply to it. One technical difference worth knowing on panel hardware: FreeKiosk is built on React Native, which keeps a second JavaScript runtime resident in the app's process; on low-RAM panels (1–2 GB) that headroom comes out of the browser engine's share and makes out-of-memory dashboard reloads more likely than with a lean native host. The dashboard-serving and fleet-config points apply to both apps equally.
+
 </details>
 
 ## Capabilities

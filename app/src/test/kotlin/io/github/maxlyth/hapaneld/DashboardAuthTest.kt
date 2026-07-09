@@ -2,6 +2,7 @@ package io.github.maxlyth.hapaneld
 
 import io.github.maxlyth.hapaneld.util.HaLink
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -9,12 +10,16 @@ import org.junit.Test
 /**
  * The renderer's token-selection / lazy-refresh policy (the panel side of external_auth). Pure: a fake
  * refresher stands in for the HA `/auth/token` call, so every branch is exercised without a network.
+ * The transient-vs-rejected split matters on an unattended panel: a flaky network moment must never be
+ * treated as a revoked credential (which would dead-end the dashboard until an admin re-provisions).
  */
 class DashboardAuthTest {
     private val NOW = 1_000_000L
-    private fun neverRefresh(u: String, r: String): HaLink.TokenSet? {
+    private fun neverRefresh(u: String, r: String): HaLink.Refresh {
         throw AssertionError("must not refresh in this case")
     }
+    private fun success(token: String, ttl: Long = 1800L): HaLink.Refresh =
+        HaLink.Refresh.Success(HaLink.TokenSet(token, ttl))
 
     @Test fun `no url yields no session`() {
         val r = DashboardAuth.resolve("", "tok", "", 0, NOW, false, ::neverRefresh)
@@ -43,7 +48,7 @@ class DashboardAuthTest {
     @Test fun `refresh model mints a new token when expired and persists it`() {
         var called = false
         val refresher = { _: String, rt: String ->
-            called = true; assertEquals("refr", rt); HaLink.TokenSet("new-acc", 1800L)
+            called = true; assertEquals("refr", rt); success("new-acc")
         }
         val r = DashboardAuth.resolve("https://ha", "old", "refr", NOW - 10, NOW, false, refresher)
         assertTrue(called)
@@ -53,26 +58,44 @@ class DashboardAuthTest {
     }
 
     @Test fun `near-expiry within skew triggers a refresh`() {
-        val r = DashboardAuth.resolve("https://ha", "old", "refr", NOW + 30, NOW, false, { _, _ -> HaLink.TokenSet("n", 1800L) })
+        val r = DashboardAuth.resolve("https://ha", "old", "refr", NOW + 30, NOW, false, { _, _ -> success("n") })
         assertEquals("n", r.session!!.accessToken) // 30s < REFRESH_SKEW_SEC(60) → refreshed
     }
 
     @Test fun `unknown expiry (0) forces a refresh`() {
-        val r = DashboardAuth.resolve("https://ha", "acc", "refr", 0, NOW, false, { _, _ -> HaLink.TokenSet("n", 1800L) })
+        val r = DashboardAuth.resolve("https://ha", "acc", "refr", 0, NOW, false, { _, _ -> success("n") })
         assertEquals("n", r.session!!.accessToken)
     }
 
-    @Test fun `refresh failure falls back to a still-usable cached token`() {
-        // Cached token has 30s left (< skew so a refresh was attempted) but refresh returned null → reuse it.
-        val r = DashboardAuth.resolve("https://ha", "cached", "refr", NOW + 30, NOW, false, { _, _ -> null })
+    // --- transient refresh failures (HA down / network blip): never a revocation ---
+
+    @Test fun `transient failure falls back to a still-usable cached token`() {
+        // Cached token has 30s left (< skew so a refresh was attempted) but the refresh failed
+        // transiently → reuse it, and do NOT report revoked.
+        val r = DashboardAuth.resolve("https://ha", "cached", "refr", NOW + 30, NOW, false, { _, _ -> HaLink.Refresh.Transient })
         assertEquals("cached", r.session!!.accessToken)
         assertEquals(30L, r.session!!.expiresInSec)
         assertNull("no persist on a failed refresh", r.persist)
+        assertFalse("a transient failure is not a revocation", r.revoked)
     }
 
-    @Test fun `refresh failure with a fully-expired token fails closed`() {
-        val r = DashboardAuth.resolve("https://ha", "dead", "refr", NOW - 100, NOW, false, { _, _ -> null })
+    @Test fun `transient failure with a fully-expired token fails closed but not revoked`() {
+        val r = DashboardAuth.resolve("https://ha", "dead", "refr", NOW - 100, NOW, false, { _, _ -> HaLink.Refresh.Transient })
         assertNull(r.session)
+        assertFalse("HA being down must never read as a revoked credential", r.revoked)
+    }
+
+    // --- definitive rejection (invalid_grant): fail closed AND say so ---
+
+    @Test fun `rejected refresh fails closed and reports revoked`() {
+        val r = DashboardAuth.resolve("https://ha", "cached", "refr", NOW + 30, NOW, false, { _, _ -> HaLink.Refresh.Rejected })
+        assertNull("a revoked refresh token must not fall back to the cached token", r.session)
+        assertTrue(r.revoked)
+    }
+
+    @Test fun `success never reports revoked`() {
+        val r = DashboardAuth.resolve("https://ha", "old", "refr", NOW - 10, NOW, false, { _, _ -> success("n") })
+        assertFalse(r.revoked)
     }
 
     // --- force flag (frontend demands a fresh token after a 401) ---
@@ -80,13 +103,20 @@ class DashboardAuthTest {
     @Test fun `force refreshes even when the cached token looks fresh`() {
         // Cached token has plenty of clock-life left, but HA rejected it → force must refresh, not reuse.
         val r = DashboardAuth.resolve("https://ha", "stale-but-unexpired", "refr", NOW + 3600, NOW, true,
-            { _, _ -> HaLink.TokenSet("fresh", 1800L) })
+            { _, _ -> success("fresh") })
         assertEquals("fresh", r.session!!.accessToken)
         assertEquals("fresh" to (NOW + 1800L), r.persist)
     }
 
-    @Test fun `force fails closed when refresh fails - never re-hands the rejected token`() {
-        val r = DashboardAuth.resolve("https://ha", "rejected", "refr", NOW + 3600, NOW, true, { _, _ -> null })
+    @Test fun `force with transient failure fails closed - never re-hands the rejected token`() {
+        val r = DashboardAuth.resolve("https://ha", "rejected", "refr", NOW + 3600, NOW, true, { _, _ -> HaLink.Refresh.Transient })
         assertNull("must not re-hand the rejected token on a forced refresh", r.session)
+        assertFalse("transient stays non-revoked even under force", r.revoked)
+    }
+
+    @Test fun `force with definitive rejection reports revoked`() {
+        val r = DashboardAuth.resolve("https://ha", "rejected", "refr", NOW + 3600, NOW, true, { _, _ -> HaLink.Refresh.Rejected })
+        assertNull(r.session)
+        assertTrue(r.revoked)
     }
 }

@@ -350,6 +350,9 @@ class Config(context: Context) {
         prefs.edit().putString("home_dashboard", p.trim()).apply()
     }
 
+    /** Built-in renderer: minutes of no touch before it navigates back to [homeDashboard] (0 = off). */
+    val dashboardIdleReturnMin: Int get() = prefs.getInt("dashboard_idle_return_min", 0)
+
     // The screen-off timeout (ms) seen before we first raised it, so disabling preventIdleDim can restore
     // the firmware default. -1 = not yet captured.
     var savedScreenOffTimeout: Int
