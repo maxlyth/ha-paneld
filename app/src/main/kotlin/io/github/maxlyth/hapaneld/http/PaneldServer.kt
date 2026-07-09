@@ -890,7 +890,10 @@ $body
 
     /** Configure tab — schema-driven form (Basic/Advanced + inline expose pips) + bundle backup/restore. */
     private fun configureBody(): String = """
-<div class="cfg-tabs"><button id="tab-basic" onclick="cfgTab(false)">Basic</button><button id="tab-adv" class="on" onclick="cfgTab(true)">Advanced</button></div>
+<!-- Basic/Advanced tab bar hidden until every setting is assigned a Basic/Advanced tier; with it hidden
+     the form shows ALL settings (configure.js defaults `advanced=true`), so nothing is lost. The tier
+     machinery (SettingSpec.tier + cfgTab) stays in place — restore the bar once tiers are curated. -->
+<div class="cfg-tabs" style="display:none"><button id="tab-basic" onclick="cfgTab(false)">Basic</button><button id="tab-adv" class="on" onclick="cfgTab(true)">Advanced</button></div>
 <div id="cfg-status" class="muted" style="margin-bottom:10px">Loading settings…</div>
 <div id="cfg-groups" class="cards"></div>
 <div class="savebar"><button id="savebtn" disabled onclick="cfgSave()">Save changes</button><span id="cfg-msg" class="muted"></span></div>
@@ -1250,7 +1253,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
 
 
     /** Proximity tuning card — lives on the Configure tab; driven by /assets/prox.js. */
-    private fun proximityCardHtml(): String = """<div class="card" id="cfg-proximity"><h2>Proximity tuning <small id="proxstate"></small></h2>
+    private fun proximityCardHtml(): String = """<div class="card" id="cfg-proximity"><h2>Proximity tuning <small id="proxstate"></small><span class="cardbadge exp">experimental</span></h2>
 <div id="proxbox" style="display:none">
 <canvas id="proxgauge" width="600" height="46" class="gradedonly" style="height:46px"></canvas>
 <div style="font-size:.85rem;margin-bottom:8px">raw <b id="proxraw" style="color:#4a9eff">–</b>

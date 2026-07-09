@@ -138,7 +138,7 @@
   }
 
   // Per-card maturity badges: [text, css-modifier]. Applied to the card heading by render().
-  var CARD_BADGES = { "Dashboard": ["skunk-works", "skunk"], "Logging": ["experimental", "exp"] };
+  var CARD_BADGES = { "Dashboard": ["skunk-works", "skunk"], "Logging": ["experimental", "exp"], "Display": ["experimental", "exp"] };
 
   function render() {
     var root = document.getElementById("cfg-groups");
