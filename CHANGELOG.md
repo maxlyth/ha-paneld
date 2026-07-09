@@ -8,11 +8,25 @@ From **v0.8.0**, entries are grouped under **Added** (new features/entities), **
 changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
 content appear. Earlier releases predate this convention and keep their flat lists.
 
-## v0.8.8-rc2 - 2026-07-08
+## v0.9.0-rc1 - 2026-07-09
+
+**Headline: ha-paneld can now render the Home Assistant dashboard itself — no HA Companion app and no third-party kiosk browser required.** A panel can boot straight into a logged-in dashboard from ha-paneld alone, closing the last gap that needed a second app.
+
+**This is an experimental preview, off by default, and still in soak testing.** The HA Companion app remains the default and fully-supported way to show a dashboard, and most users should stay on it for the medium term — the built-in renderer is offered now for those who want to test a single-app panel. It does not aim to match Companion feature-for-feature (media playback, file chooser, camera/mic prompts and similar are deliberately out of scope; those use cases stay with Companion). Please [report anything you hit](https://github.com/maxlyth/ha-paneld/issues).
 
 ### Added
 
-- **Built-in dashboard renderer (skunk-works preview)** — ha-paneld can now render the Home Assistant dashboard itself in a built-in WebView, so a panel can show the dashboard without the HA Companion app or a third-party kiosk browser. It is **off by default** and a **skunk-works preview** for soak testing, kept deliberately separate from the other experimental features: choose "Built-in renderer — skunk-works" as the dashboard app and set the Home Assistant URL on the Configure tab (or `provision.sh --ha-url … --builtin`). It signs in through the frontend's external-auth bridge — the same mechanism the Companion app uses — with either a long-lived access token (`--ha-token`) or a refresh token minted by logging in once during provisioning (`--ha-user`/`--ha-pass`, so the password never reaches the panel and no long-lived token is stored on it); the token is refreshed on the panel as needed. An optional local dashboard path loads a specific view, the built-in renderer is recognised by the kiosk-lock and watchdog return loops, and a crashed WebView renderer is rebuilt in place. The HA Companion app remains the default, fully-supported dashboard host.
+- **Built-in dashboard renderer (experimental)** — ha-paneld renders the Home Assistant dashboard in a built-in WebView, so a panel can show the dashboard without the HA Companion app or a third-party kiosk browser. Off by default: choose **"Built-in renderer — skunk-works (ha-paneld)"** as the dashboard app and set the Home Assistant URL on the Configure tab (or provision it in one step with `provision.sh --ha-url … --builtin`). It signs in through the Home Assistant frontend's external-auth bridge — the same mechanism the Companion app uses — with either a long-lived access token or a refresh token, and keeps the token refreshed on the panel so no long-lived credential need be stored there. An optional dashboard path loads a specific view; the built-in renderer is recognised by the kiosk-lock and watchdog return loops (so it is treated as *the* dashboard rather than bounced away), and a crashed WebView renderer is rebuilt in place. The HA Companion app remains the default, fully-supported dashboard host.
+
+### Changed
+
+- **Dashboard settings get their own Configure card** — the dashboard app, home dashboard path, and the built-in renderer's connection settings now live together in a dedicated "Dashboard" card, and the dashboard-app picker offers only actual dashboard renderers (the built-in renderer plus whichever of the HA Companion / Fully Kiosk are installed) instead of every installed app.
+- **Configure cards now carry maturity badges** — a consistent badge marks pre-release surfaces: "skunk-works" on the Dashboard card, "experimental" on Logging, Display sizing and Vendor packages (replacing the ad-hoc labels).
+- **The performance page's top-processes list no longer blames the messenger** — sampling is considerably lighter (slower heavy probes, no per-thread process spawning, cached name lookups), and ha-paneld's own cost — including the measurement probes it spawns — is shown as a separate dimmed row instead of polluting the workload ranking, which previously showed ha-paneld as the top consumer while it was busy measuring.
+
+### Fixed
+
+- **The standing-screen "Dashboard" button and post-update auto-return honour the configured dashboard** — both previously always opened the HA Companion, so a panel set to the built-in renderer was sent back to the Companion after every update.
 
 ## v0.8.8-rc1 - 2026-07-08
 
