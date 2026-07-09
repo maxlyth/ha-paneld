@@ -235,8 +235,10 @@ object PerfReader {
         val rows = ranked.map { (pid, dj) ->
             val pct = Math.round(dj * 1000.0 / dTotal) / 10.0 // % of total capacity, 1dp, dot-decimal
             var nm = trimProcName((nameCache[pid] ?: comm[pid] ?: pid.toString()).replace("\\", "").replace("\"", ""))
-            // Make our own row self-explanatory: on a builtin panel this process hosts the dashboard.
-            if (pid == myPid) nm += if (dashboardPkg == nm) " (built-in dashboard)" else " (this app)"
+            // Make our own row self-explanatory. Dashboard-first wording when this process hosts the
+            // built-in renderer: the cost IS the dashboard (WebView browser side), and a package-first
+            // label reads as agent overhead — the exact misread this row exists to prevent.
+            if (pid == myPid) nm = if (dashboardPkg == nm) "built-in dashboard (ha-paneld)" else "$nm (this app)"
             """{"name":"$nm","cpu":$pct}"""
         }.toMutableList()
         probePct?.let { rows += """{"name":"sampling probes (su/dumpsys)","cpu":$it,"self":true}""" }
