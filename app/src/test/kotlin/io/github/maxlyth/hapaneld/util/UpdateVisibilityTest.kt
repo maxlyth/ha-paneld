@@ -29,4 +29,20 @@ class UpdateVisibilityTest {
         val out = UpdateChecker.filterIgnored(all, mapOf("ha-paneld" to "0.8.6"))
         assertEquals(listOf(companion), out)
     }
+
+    // --- filterAbsent: the hourly cache must not outlive a Companion uninstall (GitHub issue #24:
+    // a /diag showed "HA Companion: … → …" under [updates] while [packages] said not installed) ---
+
+    @Test fun companionEntryDroppedWhenNoCompanionInstalled() {
+        assertEquals(listOf(paneld), UpdateChecker.filterAbsent(all, companionInstalled = false))
+    }
+
+    @Test fun companionEntryKeptWhileInstalled() {
+        assertEquals(all, UpdateChecker.filterAbsent(all, companionInstalled = true))
+    }
+
+    @Test fun paneldEntryNeverDropped() {
+        // ha-paneld itself is always installed (we are running) — absence filtering never touches it.
+        assertEquals(listOf(paneld), UpdateChecker.filterAbsent(listOf(paneld), companionInstalled = false))
+    }
 }

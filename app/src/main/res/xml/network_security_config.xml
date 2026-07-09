@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Trust USER-INSTALLED CA certificates in addition to the system store (Android 7+ excludes them by
+     default). Home-lab HA is commonly served over HTTPS from a private CA or a self-signed cert; without
+     this the built-in dashboard renderer (and every in-app HTTPS call to HA) fails the TLS handshake and
+     the panel silently never loads — the user installs their CA in Android settings once and it works.
+     Mirrors the HA Companion app's posture. cleartextTrafficPermitted keeps plain-http HA URLs working
+     (previously granted by usesCleartextTraffic, which this file now supersedes). -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

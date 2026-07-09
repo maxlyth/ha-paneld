@@ -28,6 +28,9 @@ import android.widget.FrameLayout
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import io.github.maxlyth.hapaneld.control.BuiltinDashboard
 import org.json.JSONObject
@@ -515,7 +518,30 @@ class DashboardActivity : AppCompatActivity() {
     // the lifecycle form of dumpsys `topResumedActivity` and flips exactly on that transition.
     // onResume/onPause are the API<29 baseline (older panels lack the callback; their launchers also
     // predate translucent Overview, so resume/pause suffices there).
-    override fun onResume() { super.onResume(); BuiltinDashboard.foreground = true }
+    override fun onResume() { super.onResume(); BuiltinDashboard.foreground = true; applyFullscreen() }
+
+    /**
+     * Edge-to-edge kiosk (issue #25): hide the Android status + navigation bars while the dashboard is
+     * up. BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE keeps the admin escape — a swipe from a screen edge
+     * reveals the bars briefly — so this can never strand anyone. Now that the dashboard is our own
+     * activity this is plain app-level immersive (no root, unlike suppressing bars for a foreign
+     * renderer). Re-asserted on resume and on regaining window focus, because the system restores bars
+     * after transient reveals and some dialogs. Toggle: Configure → Dashboard → "Fullscreen dashboard".
+     */
+    private fun applyFullscreen() {
+        val controller = WindowCompat.getInsetsController(window, window.decorView)
+        if (Config(this).dashboardFullscreen) {
+            controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            controller.hide(WindowInsetsCompat.Type.systemBars())
+        } else {
+            controller.show(WindowInsetsCompat.Type.systemBars())
+        }
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) applyFullscreen()
+    }
     override fun onPause() { BuiltinDashboard.foreground = false; super.onPause() }
     override fun onTopResumedActivityChanged(isTopResumedActivity: Boolean) {
         super.onTopResumedActivityChanged(isTopResumedActivity)
@@ -569,6 +595,10 @@ class DashboardActivity : AppCompatActivity() {
     private fun createWebView(config: Config): WebView = WebView(this).apply {
         settings.javaScriptEnabled = true
         settings.domStorageEnabled = true
+        // Guard against a WebView bug that collapses fonts to unreadably small on some engines — the
+        // HA Companion carries the same workaround (their PR #3353). 5px floors it without affecting
+        // normal dashboard type.
+        settings.minimumFontSize = 5
         // Camera cards / live feeds must start without a tap — the default (require user gesture) leaves
         // every stream paused on a touchless panel. (Not media-file playback, which stays out of scope.)
         settings.mediaPlaybackRequiresUserGesture = false

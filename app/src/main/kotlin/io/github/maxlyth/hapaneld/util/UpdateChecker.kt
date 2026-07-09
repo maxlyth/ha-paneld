@@ -48,10 +48,8 @@ object UpdateChecker {
         }
 
         // HA Companion (either full or minimal variant, if installed on this no-Play-Store panel)
-        val companionPkg = listOf(
-            "io.homeassistant.companion.android",
-            "io.homeassistant.companion.android.minimal",
-        ).firstOrNull { runCatching { context.packageManager.getPackageInfo(it, 0) }.isSuccess }
+        val companionPkg = COMPANION_PKGS
+            .firstOrNull { runCatching { context.packageManager.getPackageInfo(it, 0) }.isSuccess }
         if (companionPkg != null) {
             val installed = runCatching {
                 context.packageManager.getPackageInfo(companionPkg, 0).versionName ?: ""
@@ -74,6 +72,30 @@ object UpdateChecker {
      *  matches and the entry re-surfaces ("ticks again"). Used to filter the dashboard banner only; the
      *  Install tab always lists [available] in full. Pure — unit-tested in UpdateVisibilityTest. */
     fun visible(ignored: Map<String, String>): List<UpdateInfo> = filterIgnored(available, ignored)
+
+    /**
+     * [available] revalidated against the CURRENT install state. The hourly cache can go stale within
+     * its window: a "HA Companion" entry recorded while a Companion was installed would otherwise
+     * outlive its uninstall and render an update for an absent app (seen in a GitHub issue #24 /diag
+     * dump: `[packages] … not installed` alongside `[updates] HA Companion: …`). Cheap PackageManager
+     * probe at render time; ha-paneld's own entry never needs revalidating (we are always installed).
+     */
+    fun current(context: Context, ignored: Map<String, String> = emptyMap()): List<UpdateInfo> =
+        filterAbsent(
+            filterIgnored(available, ignored),
+            companionInstalled = COMPANION_PKGS.any {
+                runCatching { context.packageManager.getPackageInfo(it, 0) }.isSuccess
+            },
+        )
+
+    /** Pure core of [current] — unit-tested in UpdateVisibilityTest. */
+    internal fun filterAbsent(list: List<UpdateInfo>, companionInstalled: Boolean): List<UpdateInfo> =
+        if (companionInstalled) list else list.filterNot { it.label == "HA Companion" }
+
+    private val COMPANION_PKGS = listOf(
+        "io.homeassistant.companion.android",
+        "io.homeassistant.companion.android.minimal",
+    )
 
     /** Pure core of [visible] — unit-tested in UpdateVisibilityTest. */
     internal fun filterIgnored(list: List<UpdateInfo>, ignored: Map<String, String>): List<UpdateInfo> =

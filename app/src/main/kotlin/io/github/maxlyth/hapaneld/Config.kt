@@ -353,6 +353,12 @@ class Config(context: Context) {
     /** Built-in renderer: minutes of no touch before it navigates back to [homeDashboard] (0 = off). */
     val dashboardIdleReturnMin: Int get() = prefs.getInt("dashboard_idle_return_min", 0)
 
+    /** Built-in renderer: hide the system status + navigation bars (immersive edge-to-edge kiosk).
+     *  Swipe-from-edge still transiently reveals them, so an admin is never locked out. */
+    val dashboardFullscreen: Boolean get() = prefs.getBoolean("dashboard_fullscreen", true)
+    fun setDashboardFullscreen(on: Boolean) { edit { putBoolean("dashboard_fullscreen", on) } }
+    fun setDashboardIdleReturnMin(min: Int) { edit { putInt("dashboard_idle_return_min", min) } }
+
     // The screen-off timeout (ms) seen before we first raised it, so disabling preventIdleDim can restore
     // the firmware default. -1 = not yet captured.
     var savedScreenOffTimeout: Int

@@ -68,8 +68,8 @@ object DiagReader {
                 }),
             Cap("RGB LED", if (rkLed || daemonLed) "ok" else "none",
                 when {
-                    rkLed -> "rk3576 /dev/ledjni (app-direct, no root)"
-                    ledProbe == "ledjni" -> "rk3576 /dev/ledjni ioctl via the helper daemon (root)"
+                    rkLed -> "Rockchip /dev/ledjni (app-direct, no root)"
+                    ledProbe == "ledjni" -> "Rockchip /dev/ledjni ioctl via the helper daemon (root)"
                     ledProbe == "sysfs" || daemonLed -> "sysfs LED via the helper daemon"
                     else -> "no reachable LED node; needs the root helper daemon (install needs su once)"
                 }),
@@ -132,7 +132,7 @@ object DiagReader {
             })
         }
         appendLine("[capabilities] " + capabilities(ctx).joinToString(" | ") { "${it.name}=${it.status}" })
-        val updates = UpdateChecker.available
+        val updates = UpdateChecker.current(ctx)   // revalidated: no stale entry for an uninstalled Companion
         if (updates.isNotEmpty()) {
             appendLine("[updates] " + updates.joinToString(" | ") { "${it.label}: ${it.currentVersion} → ${it.latestVersion}" })
         }

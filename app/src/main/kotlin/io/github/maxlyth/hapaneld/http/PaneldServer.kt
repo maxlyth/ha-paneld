@@ -1240,7 +1240,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
             webViewTooOld = wv.tooOld,
             webViewDisplay = wv.display,
             hasRenderer = PanelInfo.dashboardRenderers(appContext, config.dashboardPackage, config.haUrl).isNotEmpty(),
-            updates = UpdateChecker.available,
+            updates = UpdateChecker.current(appContext),
         )
         val warns = mutableListOf<String>()
         if (io.github.maxlyth.hapaneld.PanelStatus.dashboardCrashLooping) warns.add(
@@ -1421,7 +1421,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
             webViewTooOld = PanelInfo.webViewStatus(appContext).tooOld,
             webViewDisplay = s.facts["System WebView"] ?: "",
             hasRenderer = PanelInfo.dashboardRenderers(appContext, config.dashboardPackage, config.haUrl).isNotEmpty(),
-            updates = UpdateChecker.visible(config.ignoredUpdates),
+            updates = UpdateChecker.current(appContext, config.ignoredUpdates),
         )
         // Order: actively-broken states (crash-loop / blank internal_url) first, then render findings
         // (WebView / renderer / updates), then the needs-config setup notice. On the dashboard the ad-hoc
@@ -1870,6 +1870,11 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             // Room-temperature calibration trim (°C) — a plain local pref with no MQTT command, so it
             // persists here rather than through HTTP_LIVE_KEYS/applySetting (the command path).
             p["room_temp_offset"]?.let { config.setRoomTempOffset(it) }
+            // Built-in-renderer local prefs (no MQTT entity → bespoke persist, like room_temp_offset).
+            // dashboard_idle_return_min previously had NO persist path at all — the Configure field
+            // rendered but silently never saved (found wiring dashboard_fullscreen, issue #25/#24 pass).
+            p["dashboard_idle_return_min"]?.trim()?.toIntOrNull()?.let { config.setDashboardIdleReturnMin(it.coerceIn(0, 1440)) }
+            p["dashboard_fullscreen"]?.let { config.setDashboardFullscreen(it.trim().equals("true", ignoreCase = true) || it.trim() == "1") }
             val logEnabled = p["log_ship_enabled"]?.let { it.trim().equals("true", ignoreCase = true) || it.trim() == "1" }
             val logHost = p["log_ship_host"]?.trim()
             val logPort = p["log_ship_port"]?.trim()?.toIntOrNull()

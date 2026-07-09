@@ -362,7 +362,7 @@ class PaneldService : Service() {
 
     private fun ledLabel(): String = when {
         !led.available() -> "none"
-        led is Rk3576LedController -> "rk3576 /dev/ledjni (RGB)"
+        led is Rk3576LedController -> "Rockchip /dev/ledjni (RGB)"
         led is SocketLedController -> "sysfs helper daemon (RGB)"
         led.colorCapable() -> "RGB"
         else -> "brightness"
