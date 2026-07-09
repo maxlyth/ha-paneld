@@ -71,7 +71,7 @@ directly — see [Provisioning & fleet updates](docs/provisioning.md).
 
 ## Why not just the Home Assistant Companion app?
 
-The [HA Companion app](https://github.com/home-assistant/android) targets personal phones and tablets. Wall panels need different primitives: screen / LED / button control, hardware-button events back to HA, a built-in launcher and on-screen navigation bar for key-less hardware, arbitrary-URL audio announcements, fleet provisioning, and turnkey mDNS pairing. ha-paneld covers those; Companion keeps doing what it does and remains the default dashboard host. (For panels that should run a single app, an experimental **built-in dashboard renderer** — off by default — is in soak testing; see the [changelog](CHANGELOG.md).)
+The [HA Companion app](https://github.com/home-assistant/android) targets personal phones and tablets. Wall panels need different primitives: screen / LED / button control, hardware-button events back to HA, a built-in launcher and on-screen navigation bar for key-less hardware, arbitrary-URL audio announcements, fleet provisioning, and turnkey mDNS pairing. ha-paneld covers those; the Companion app keeps doing what it does best — hosting the dashboard, push notifications, deep links, and **Home Assistant's Voice Assistant (Assist)** for hands-free voice control — none of which ha-paneld sets out to replace. Companion remains the default dashboard host. (For panels that should run a single app, an experimental **built-in dashboard renderer** — off by default, and with no Voice Assistant — is in soak testing; see the [changelog](CHANGELOG.md).)
 
 ## Why not Fully Kiosk?
 
@@ -87,7 +87,7 @@ The [HA Companion app](https://github.com/home-assistant/android) targets person
   the official, open Companion app.
 - **The Companion app already serves dashboards better.** For day-to-day dashboard rendering, the
   Companion app is purpose-built for HA — native auth and sessions, push notifications, deep links,
-  and it tracks the frontend. A general-purpose kiosk browser is a second rendering path to keep
+  Home Assistant Voice Assistant (Assist), and it tracks the frontend. A general-purpose kiosk browser is a second rendering path to keep
   working; ha-paneld leaves dashboard hosting to HA Companion by default and adds the panel
   hardware HA can't otherwise reach.
 - **Per-device config doesn't scale on a non-homogeneous fleet.** Fully Kiosk is configured per

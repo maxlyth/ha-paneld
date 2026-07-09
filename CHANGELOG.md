@@ -12,7 +12,7 @@ content appear. Earlier releases predate this convention and keep their flat lis
 
 **Headline: ha-paneld can now render the Home Assistant dashboard itself — no HA Companion app and no third-party kiosk browser required.** A panel can boot straight into a logged-in dashboard from ha-paneld alone, closing the last gap that needed a second app.
 
-**This is an experimental preview, off by default, and still in soak testing.** The HA Companion app remains the default and fully-supported way to show a dashboard, and most users should stay on it for the medium term — the built-in renderer is offered now for those who want to test a single-app panel. It does not aim to match Companion feature-for-feature (media playback, file chooser, camera/mic prompts and similar are deliberately out of scope; those use cases stay with Companion). Please [report anything you hit](https://github.com/maxlyth/ha-paneld/issues).
+**This is an experimental preview, off by default, and still in soak testing.** The HA Companion app remains the default and fully-supported way to show a dashboard, and most users should stay on it for the medium term — the built-in renderer is offered now for those who want to test a single-app panel. **Most notably, the built-in renderer does not provide Home Assistant's Voice Assistant (Assist): voice control remains a Companion-app capability, and needing it is a strong reason to stay on the Companion app.** The renderer also does not aim to match Companion feature-for-feature — media playback, file chooser, and camera/mic prompts are deliberately out of scope. Please [report anything you hit](https://github.com/maxlyth/ha-paneld/issues).
 
 ### Added
 
