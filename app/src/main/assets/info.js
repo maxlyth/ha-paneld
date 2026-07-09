@@ -33,7 +33,12 @@ function paintTop(top,msg){
   if(!tr){tr=document.createElement('tr');tr.appendChild(document.createElement('td'));
    var c=document.createElement('td');c.className='num';tr.appendChild(c);t.appendChild(tr);}
   var nm=tr.children[0],cp=tr.children[1];
-  if(nm.textContent!==p.name)nm.textContent=p.name;nm.style.color=empty?'#888':'';nm.title=empty?'':p.name;
+  if(nm.textContent!==p.name)nm.textContent=p.name;nm.title=empty?'':p.name;
+  // The observer's own row (ha-paneld + its sampling probes) is excluded from the ranking and shown
+  // dimmed at the bottom, so the list reads as the panel's real workload.
+  var dim=empty||p.self;nm.style.color=dim?'#888':'';cp.style.color=p.self?'#888':'';
+  tr.style.borderTop=p.self?'1px solid #2a2a2a':'';
+  nm.style.fontStyle=p.self?'italic':'';cp.style.fontStyle=p.self?'italic':'';
   var cv=p.cpu==null?'':p.cpu+'%';if(cp.textContent!==cv)cp.textContent=cv;}
  while(t.children.length>data.length+1)t.removeChild(t.lastChild);
 }

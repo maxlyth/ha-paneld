@@ -57,6 +57,8 @@ object PerfReader {
     private var tickCount = 0
     private var prevTopTotal = 0L                 // /proc/stat aggregate jiffies at last top sample
     private var prevProc = HashMap<Int, Long>()   // pid -> utime+stime jiffies at last top sample
+    private var prevSelf = 0L                     // own jiffies incl. reaped children at last top sample
+    private val nameCache = HashMap<Int, String>() // pid -> cmdline (fetched once; pids recycle rarely)
 
     // Page-view gate. Instrumentation is the tool, not a tax: it must not be the panel's biggest CPU
     // consumer 24/7. So sampling runs only while the info page has been fetched within [ACTIVE_MS];
@@ -87,8 +89,9 @@ object PerfReader {
      *  in [PanelMetrics] and is deliberately NOT reset here (a stale prev just yields one valid
      *  longer-window CPU% on the next read, never a bogus delta). */
     private fun resetLocalBaselines() {
-        prevTopTotal = 0L
+        prevTopTotal = 0L; prevSelf = 0L
         prevProc = HashMap(); prevRenderJiffies = HashMap(); prevRenderAt = 0L
+        nameCache.clear()
     }
 
     /** Latest sample + history FIFO + top-5 procs + render jank, as JSON, for `GET /perf`. */
@@ -115,9 +118,11 @@ object PerfReader {
     private fun sampleRender() {
         // Primary: busiest CrRendererMain %-of-one-core across WebView renderer processes (covers a
         // Companion *or* a browser dashboard). One su call emits "<pid> <stat>" per renderer main thread.
+        // Shell `read` builtins instead of a `cat` per thread: the old form forked ~2 processes per
+        // renderer thread every sample — dozens of execs on a slow SoC — for what a redirect does free.
         val cmd = "ps -A -o PID,NAME 2>/dev/null | grep -i sandboxe | while read pid name; do " +
-            "for t in /proc/\$pid/task/*; do c=\$(cat \$t/comm 2>/dev/null); " +
-            "[ \"\$c\" = CrRendererMain ] && echo \"\$pid \$(cat \$t/stat 2>/dev/null)\"; done; done; true"
+            "for t in /proc/\$pid/task/*; do IFS= read -r c < \$t/comm 2>/dev/null || continue; " +
+            "if [ \"\$c\" = CrRendererMain ]; then IFS= read -r s < \$t/stat 2>/dev/null && echo \"\$pid \$s\"; fi; done; done; true"
         val out = Su.runOutput(cmd)
         val now = System.currentTimeMillis()
         val cur = HashMap<Int, Long>()
@@ -194,24 +199,57 @@ object PerfReader {
             cur[pid] = utime + stime
             comm[pid] = line.substring(lp + 1, rp)
         }
+        publishTop(cur, comm, total, resolveFullNames = true)
+    }
 
+    /**
+     * Rank + publish the top-5. ha-paneld's OWN process is excluded from the ranking and shown as a
+     * separate, always-last row ("ha-paneld + sampling") computed from `/proc/self/stat` INCLUDING
+     * reaped children (cutime/cstime) — the su/dumpsys/cat probes this page spawns are reaped by us, so
+     * that row is the honest total cost of the app *plus its measurement overhead*, kept out of the
+     * workload ranking it would otherwise pollute (the observer isn't the panel's workload).
+     */
+    private fun publishTop(cur: Map<Int, Long>, comm: Map<Int, String>, total: Long, resolveFullNames: Boolean) {
+        val myPid = android.os.Process.myPid()
         val dTotal = total - prevTopTotal
         val ranked = if (prevTopTotal != 0L && dTotal > 0) {
             cur.entries.mapNotNull { (pid, j) -> prevProc[pid]?.let { pid to (j - it) } }
-                .filter { it.second > 0 }.sortedByDescending { it.second }.take(5)
+                .filter { it.second > 0 && it.first != myPid }.sortedByDescending { it.second }.take(5)
         } else emptyList()
+        val selfNow = runCatching { java.io.File("/proc/self/stat").readText() }.getOrNull()?.let { selfJiffiesOf(it) }
+        val selfPct = if (selfNow != null && prevSelf > 0L && dTotal > 0) {
+            Math.round((selfNow - prevSelf) * 1000.0 / dTotal) / 10.0
+        } else null
         prevTopTotal = total
-        prevProc = cur
+        prevProc = HashMap(cur)
+        selfNow?.let { prevSelf = it }
 
-        if (ranked.isNotEmpty()) {
-            val names = fullNames(ranked.map { it.first })
-            val json = ranked.joinToString(",", "[", "]") { (pid, dj) ->
-                val pct = Math.round(dj * 1000.0 / dTotal) / 10.0 // % of total capacity, 1dp, dot-decimal
-                val nm = trimProcName((names[pid] ?: comm[pid] ?: pid.toString()).replace("\\", "").replace("\"", ""))
-                """{"name":"$nm","cpu":$pct}"""
-            }
-            synchronized(lock) { topJson = json }
+        if (ranked.isEmpty() && selfPct == null) return
+        // Full cmdlines only for ranked pids we haven't resolved before — usually zero extra su calls.
+        if (resolveFullNames) {
+            val missing = ranked.map { it.first }.filter { it !in nameCache }
+            if (missing.isNotEmpty()) fullNames(missing).forEach { (p, n) -> nameCache[p] = n }
         }
+        val rows = ranked.map { (pid, dj) ->
+            val pct = Math.round(dj * 1000.0 / dTotal) / 10.0 // % of total capacity, 1dp, dot-decimal
+            val nm = trimProcName((nameCache[pid] ?: comm[pid] ?: pid.toString()).replace("\\", "").replace("\"", ""))
+            """{"name":"$nm","cpu":$pct}"""
+        }.toMutableList()
+        selfPct?.let { rows += """{"name":"ha-paneld + sampling","cpu":$it,"self":true}""" }
+        synchronized(lock) { topJson = rows.joinToString(",", "[", "]") }
+    }
+
+    /** Own-process jiffies from a `/proc/self/stat` line: utime+stime PLUS cutime+cstime (reaped
+     *  children — the measurement probes). Null on a malformed line. */
+    internal fun selfJiffiesOf(statLine: String): Long? {
+        val rp = statLine.lastIndexOf(')')
+        if (rp < 0 || rp + 2 > statLine.length) return null
+        val rest = statLine.substring(rp + 2).split(' ')
+        val u = rest.getOrNull(11)?.toLongOrNull() ?: return null
+        val s = rest.getOrNull(12)?.toLongOrNull() ?: return null
+        val cu = rest.getOrNull(13)?.toLongOrNull() ?: 0L
+        val cs = rest.getOrNull(14)?.toLongOrNull() ?: 0L
+        return u + s + cu + cs
     }
 
     /** Full process names from `/proc/<pid>/cmdline` (comm is truncated to 16 chars) for the top pids. */
@@ -248,21 +286,7 @@ object PerfReader {
         val cur = HashMap<Int, Long>()
         val comm = HashMap<Int, String>()
         for ((pid, j, c) in dump.proc) { cur[pid] = j; comm[pid] = c }
-        val dTotal = total - prevTopTotal
-        val ranked = if (prevTopTotal != 0L && dTotal > 0) {
-            cur.entries.mapNotNull { (pid, j) -> prevProc[pid]?.let { pid to (j - it) } }
-                .filter { it.second > 0 }.sortedByDescending { it.second }.take(5)
-        } else emptyList()
-        prevTopTotal = total
-        prevProc = cur
-        if (ranked.isNotEmpty()) {
-            val json = ranked.joinToString(",", "[", "]") { (pid, dj) ->
-                val pctv = Math.round(dj * 1000.0 / dTotal) / 10.0
-                val nm = trimProcName((comm[pid] ?: pid.toString()).replace("\\", "").replace("\"", ""))
-                """{"name":"$nm","cpu":$pctv}"""
-            }
-            synchronized(lock) { topJson = json }
-        }
+        publishTop(cur, comm, total, resolveFullNames = false)     // dump comms suffice; no su available
     }
 
     /** Dashboard responsiveness from the daemon's CrRendererMain thread jiffies (primary metric; the
@@ -296,14 +320,17 @@ object PerfReader {
         // Top-5 + render jank (PerfReader-only, spread across ticks). Prefer the shared reader's PERFDUMP
         // tables when it fetched a dump this tick (sandbox panels); else the direct su path on rooted panels.
         val dump = snap.dump
+        // ~10s cadence for the heavy per-process samplers (was ~6s): they fork su probes and parse
+        // every process's stat, which on a slow SoC was itself a visible slice of panel CPU. The 2s
+        // chart above is untouched — only top-5/render slow down.
         when {
-            dump != null -> when (tickCount % 3) {
+            dump != null -> when (tickCount % 5) {
                 0 -> runCatching { sampleTopDump(dump) }
-                1 -> runCatching { sampleRenderDump(dump) }
+                2 -> runCatching { sampleRenderDump(dump) }
             }
-            rootOk -> when (tickCount % 3) {           // spread the su calls across ticks (~6s each)
+            rootOk -> when (tickCount % 5) {           // spread the su calls across ticks (~10s each)
                 0 -> runCatching { sampleTop() }
-                1 -> runCatching { sampleRender() }
+                2 -> runCatching { sampleRender() }
             }
         }
         tickCount++
