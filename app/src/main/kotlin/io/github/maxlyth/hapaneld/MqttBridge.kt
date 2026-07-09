@@ -461,7 +461,15 @@ class MqttBridge(
                 cmdHomeDashboard -> handleHomeDashboard(payload)
                 cmdReboot -> system.reboot()
                 cmdLauncher -> system.launchLauncher(config.launcherPackage)
-                cmdHome -> system.launchHome(config.dashboardPackage)
+                cmdHome -> {
+                    // Built-in renderer: `home` means "show the home dashboard", not just foreground —
+                    // launchHome alone only brings the activity forward now (kiosk snap-backs must not
+                    // reload), so stage the home path as a navigate target for onNewIntent to act on.
+                    if (config.dashboardPackage == SystemController.BUILTIN_DASHBOARD && config.homeDashboard.isNotBlank()) {
+                        BuiltinDashboard.navPath = config.homeDashboard
+                    }
+                    system.launchHome(config.dashboardPackage)
+                }
                 cmdAdminLauncher -> system.launchAdminLauncher()
                 cmdButtons -> handleButtons(payload)
                 cmdBack -> NavActions.back(appCanSu)        // root keyevent or a11y; on the MQTT thread (ok to block)

@@ -3,7 +3,9 @@ package io.github.maxlyth.hapaneld.control
 import io.github.maxlyth.hapaneld.platform.ActivityRef
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 
 /**
@@ -13,6 +15,15 @@ import org.junit.Test
  * dashboardState parsing.
  */
 class SystemControllerTest {
+    /** [BuiltinDashboard] is a process-global object — reset its mutable state so tests can't leak
+     *  a crash latch / pending reload / navigate into each other. */
+    @Before fun resetBuiltinDashboard() {
+        BuiltinDashboard.clearRendererLatch()
+        BuiltinDashboard.consumeReloadRequest()
+        BuiltinDashboard.navPath = null
+        BuiltinDashboard.foreground = false
+    }
+
     private val OWN = "io.github.maxlyth.hapaneld"
     private val MIN = "io.homeassistant.companion.android.minimal" // HA Companion (minimal)
     private val VENDOR = "com.vendor.launcher"
@@ -272,8 +283,8 @@ class SystemControllerTest {
     // kiosk return-loop + watchdog drive it with no root/daemon probe and no foreign package.
 
     @Test fun builtinDashboardStateFromForegroundFlag() {
-        // FG when our activity is resumed, BG otherwise — never DEAD (our process is always alive), so the
-        // watchdog's crash-loop path can't trip. No daemon/su probe is consulted.
+        // FG when our activity is resumed, BG otherwise (DEAD only while crash-latched — tested below).
+        // No daemon/su probe is consulted.
         val env = FakeSystemEnv()
         assertEquals(AppState.FG, sc(env, daemon = null, builtinForeground = true).first.dashboardState(BUILTIN))
         assertEquals(AppState.BG, sc(env, daemon = null, builtinForeground = false).first.dashboardState(BUILTIN))
@@ -326,5 +337,81 @@ class SystemControllerTest {
         val (c, root, d) = sc(env, daemon = null, su = true)
         c.ensureDashboardHome(BUILTIN)
         assertTrue("a deliberate 3rd-party home is left alone", root.ran.isEmpty() && d.sent.isEmpty())
+    }
+
+    @Test fun builtinEnsureHomeReclaimsFromCompanion() {
+        // ensureDashboardHome itself set the Companion as default home on every pre-0.9 panel — switching
+        // to the built-in renderer must be able to take HOME back from it (it is NOT a third-party choice).
+        val env = FakeSystemEnv(homes = listOf(DASH_HOME), default = ActivityRef(MIN, "Home"))
+        val (c, root, _) = sc(env, daemon = null, su = true)
+        c.ensureDashboardHome(BUILTIN)
+        assertTrue("reclaimed home from the Companion", root.ran.contains("cmd package set-home-activity ${DASH_HOME.component}"))
+    }
+
+    @Test fun builtinReloadWithOwnPackageNameRoutesBuiltin() {
+        // The navbar resolves the renderer to our own package name; the foreign-app path would
+        // `am force-stop` ha-paneld itself (killing service+MQTT+web UI). Own package = builtin.
+        val (c, root, d) = sc(FakeSystemEnv(), daemon = mapOf("START $OWN/.DashboardActivity" to "OK"))
+        c.reloadDashboard(OWN)
+        assertTrue("relaunch via START", d.sent.contains("START $OWN/.DashboardActivity"))
+        assertFalse("no force-stop of ourselves", d.sent.any { it.startsWith("RELOAD") } || root.ran.any { it.contains("force-stop") })
+    }
+
+    // ---------- renderer crash latch (process-global budget) ----------
+
+    private fun exhaustRebuildBudget() {
+        repeat(BuiltinDashboard.MAX_REBUILDS) { assertTrue(BuiltinDashboard.consumeRebuildBudget(0L)) }
+        assertFalse("budget exhausted → latch", BuiltinDashboard.consumeRebuildBudget(0L))
+    }
+
+    @Test fun builtinStateDeadWhileCrashLatched() {
+        exhaustRebuildBudget()
+        // DEAD hands the situation to the watchdog's crash-loop backoff; the kiosk loop ignores DEAD.
+        assertEquals(AppState.DEAD, sc(FakeSystemEnv(), daemon = null, builtinForeground = true).first.dashboardState(BUILTIN))
+    }
+
+    @Test fun builtinLaunchRefusedWhileCrashLatched() {
+        exhaustRebuildBudget()
+        val env = FakeSystemEnv()
+        val (c, root, d) = sc(env, daemon = emptyMap())
+        c.launchHome(BUILTIN)
+        assertTrue("no relaunch while latched", root.ran.isEmpty() && d.sent.isEmpty() && env.directStarts.isEmpty())
+    }
+
+    @Test fun builtinExplicitReloadClearsCrashLatch() {
+        exhaustRebuildBudget()
+        val (c, _, d) = sc(FakeSystemEnv(), daemon = mapOf("START $OWN/.DashboardActivity" to "OK"))
+        c.reloadDashboard(BUILTIN) // deliberate reload = retry consent
+        assertTrue("latch cleared, relaunch proceeds", d.sent.contains("START $OWN/.DashboardActivity"))
+        assertTrue("reload intent flagged for onNewIntent", BuiltinDashboard.consumeReloadRequest())
+        assertEquals("fresh budget after clear", true, BuiltinDashboard.consumeRebuildBudget(0L))
+    }
+
+    @Test fun rebuildBudgetWindowResets() {
+        repeat(BuiltinDashboard.MAX_REBUILDS) { assertTrue(BuiltinDashboard.consumeRebuildBudget(0L)) }
+        // Past the window the counter resets instead of latching — occasional crashes are fine.
+        assertTrue(BuiltinDashboard.consumeRebuildBudget(BuiltinDashboard.REBUILD_WINDOW_MS + 1))
+        assertFalse("latch not engaged by spaced crashes", BuiltinDashboard.rendererLatched(BuiltinDashboard.REBUILD_WINDOW_MS + 1))
+    }
+
+    @Test fun rendererLatchExpires() {
+        exhaustRebuildBudget()
+        assertTrue(BuiltinDashboard.rendererLatched(BuiltinDashboard.RENDERER_LATCH_MS - 1))
+        assertFalse("latch expires → automatic relaunches resume", BuiltinDashboard.rendererLatched(BuiltinDashboard.RENDERER_LATCH_MS))
+    }
+
+    // ---------- one-shot navigate + reload-intent flags ----------
+
+    @Test fun navPathConsumedOnce() {
+        BuiltinDashboard.navPath = "office/dash"
+        assertEquals("office/dash", BuiltinDashboard.consumeNavPath())
+        assertNull("navigate is one-shot — later rebuilds return to home", BuiltinDashboard.consumeNavPath())
+    }
+
+    @Test fun reloadRequestConsumedOnce() {
+        assertFalse("no reload pending by default (kiosk snap-back = foreground only)", BuiltinDashboard.consumeReloadRequest())
+        BuiltinDashboard.requestReload()
+        assertTrue(BuiltinDashboard.consumeReloadRequest())
+        assertFalse(BuiltinDashboard.consumeReloadRequest())
     }
 }

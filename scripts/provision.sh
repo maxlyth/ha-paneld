@@ -422,24 +422,32 @@ fi
 # Built-in-renderer login (optional): when --ha-user/--ha-pass are given, log in to HA *here on this
 # machine* (the password never reaches the panel) to mint a refresh token, so the panel holds a
 # revocable refresh token rather than a 10-year access token. Sets HA_TOKEN/HA_REFRESH/HA_EXPIRY.
+# JSON string escaping for the hand-built login bodies: a quote or backslash in a username/password
+# would otherwise produce malformed JSON and a baffling login failure.
+json_escape() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
+
 if [ -n "$HA_USER" ] && [ -n "$HA_PASS" ]; then
   if [ -z "$HA_URL" ]; then warn "--ha-user/--ha-pass need --ha-url; skipping login"; else
     step "🔑  HA login" "${D}minting a refresh token for $HA_USER (password stays on this machine)${X}"
+    # Every curl / grep-extract below is `|| true`-guarded: under set -euo pipefail a failed request or
+    # a no-match grep pipeline would abort the whole provisioning run BEFORE the warn lines could
+    # explain what happened — the warn-and-continue guards were dead code without this.
     cid="${HA_URL%/}/"
+    ju="$(json_escape "$HA_USER")"; jp="$(json_escape "$HA_PASS")"; jc="$(json_escape "$cid")"
     fl="$(curl -fsS -X POST "${HA_URL%/}/auth/login_flow" -H 'Content-Type: application/json' \
-          --data "{\"client_id\":\"$cid\",\"handler\":[\"homeassistant\",null],\"redirect_uri\":\"$cid\"}" 2>/dev/null)"
-    flow_id="$(printf '%s' "$fl" | grep -o '"flow_id":"[^"]*"' | head -1 | cut -d'"' -f4)"
+          --data "{\"client_id\":\"$jc\",\"handler\":[\"homeassistant\",null],\"redirect_uri\":\"$jc\"}" 2>/dev/null || true)"
+    flow_id="$(printf '%s' "$fl" | grep -o '"flow_id":"[^"]*"' | head -1 | cut -d'"' -f4 || true)"
     if [ -z "$flow_id" ]; then warn "HA login_flow failed (is $HA_URL reachable?)"; else
       res="$(curl -fsS -X POST "${HA_URL%/}/auth/login_flow/$flow_id" -H 'Content-Type: application/json' \
-             --data "{\"client_id\":\"$cid\",\"username\":\"$HA_USER\",\"password\":\"$HA_PASS\"}" 2>/dev/null)"
-      code="$(printf '%s' "$res" | grep -o '"result":"[^"]*"' | head -1 | cut -d'"' -f4)"
+             --data "{\"client_id\":\"$jc\",\"username\":\"$ju\",\"password\":\"$jp\"}" 2>/dev/null || true)"
+      code="$(printf '%s' "$res" | grep -o '"result":"[^"]*"' | head -1 | cut -d'"' -f4 || true)"
       if [ -z "$code" ]; then warn "HA login rejected (bad credentials or MFA-enabled account)"; else
         tok="$(curl -fsS -X POST "${HA_URL%/}/auth/token" \
                --data-urlencode "grant_type=authorization_code" \
-               --data-urlencode "code=$code" --data-urlencode "client_id=$cid" 2>/dev/null)"
-        HA_TOKEN="$(printf '%s' "$tok" | grep -o '"access_token":"[^"]*"' | cut -d'"' -f4)"
-        HA_REFRESH="$(printf '%s' "$tok" | grep -o '"refresh_token":"[^"]*"' | cut -d'"' -f4)"
-        exp="$(printf '%s' "$tok" | grep -o '"expires_in":[0-9]*' | grep -o '[0-9]*')"
+               --data-urlencode "code=$code" --data-urlencode "client_id=$cid" 2>/dev/null || true)"
+        HA_TOKEN="$(printf '%s' "$tok" | grep -o '"access_token":"[^"]*"' | cut -d'"' -f4 || true)"
+        HA_REFRESH="$(printf '%s' "$tok" | grep -o '"refresh_token":"[^"]*"' | cut -d'"' -f4 || true)"
+        exp="$(printf '%s' "$tok" | grep -o '"expires_in":[0-9]*' | grep -o '[0-9]*' || true)"
         [ -n "$exp" ] && HA_EXPIRY="$(( $(date +%s) + exp ))"
         if [ -n "$HA_REFRESH" ]; then echo "   ${GRN}✓${X} refresh token minted"; else warn "no refresh token in HA response"; fi
       fi

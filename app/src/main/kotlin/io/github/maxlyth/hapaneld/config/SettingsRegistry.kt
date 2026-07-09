@@ -234,7 +234,7 @@ object SettingsRegistry {
         SettingSpec(
             key = "ha_token", type = SettingType.PASSWORD, group = "Dashboard",
             label = "HA access token", default = "", secret = true,
-            help = "Built-in renderer only: the access token it signs into HA with (a long-lived token, or the current short-lived one when a refresh token is set). Blank on save keeps the current token.",
+            help = "Built-in renderer only: the access token it signs into HA with (a long-lived token, or the current short-lived one when a refresh token is set). Blank on save keeps the current token; entering a NEW token replaces any stored refresh token (the recovery path for a revoked login).",
         ),
         SettingSpec(
             key = "ha_refresh_token", type = SettingType.PASSWORD, group = "Dashboard",

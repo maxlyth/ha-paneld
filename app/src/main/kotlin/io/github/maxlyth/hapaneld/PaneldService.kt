@@ -177,8 +177,11 @@ class PaneldService : Service() {
         // HOME app — so without this, Home would pop a chooser instead of booting to the dashboard.
         // No-op unless home was cleared (or is us); off-main as it may call su. See ensureDashboardHome.
         scope.launch { system.ensureDashboardHome(config.dashboardPackage, config.haUrl.isNotBlank()) }
+        // The navbar gets the CONFIGURED dashboard value (may be the "builtin" sentinel), never
+        // dashboardTarget(): that resolves builtin to our own package name (for perf attribution), and
+        // reloadDashboard(ownPackage) would take the foreign-app path — `am force-stop` on ourselves.
         navbar = NavbarController(
-            this, system, volume, brightness, { config.launcherPackage }, { dashboardTarget() },
+            this, system, volume, brightness, { config.launcherPackage }, { config.dashboardPackage },
             profile.appCanSu, profile.hasRecents,
             onBrightnessChanged = { mqtt.publishScreenOn() },
             onVolumeChanged = { mqtt.publishVolume() },

@@ -54,11 +54,6 @@ class DashboardActivity : AppCompatActivity() {
     private var root: FrameLayout? = null                       // holds the swipe layout + fullscreen video
     private var customView: View? = null                        // active onShowCustomView (fullscreen) view
     private var customViewCallback: WebChromeClient.CustomViewCallback? = null
-    // Renderer-crash rebuild budget (never-blank): a page that reliably crashes the WebView renderer
-    // must not become a tight rebuild loop — after [MAX_REBUILDS] within [REBUILD_WINDOW_MS] we fall
-    // back to the admin launcher instead of respawning.
-    private var rebuilds = 0
-    private var rebuildWindowStart = 0L
 
     // --- long-run reliability state (all touched on the main thread only) ---
     private val main = Handler(Looper.getMainLooper())
@@ -264,21 +259,45 @@ class DashboardActivity : AppCompatActivity() {
         finish()
     }
 
-    /** Allow a renderer rebuild if within budget; resets the counter each [REBUILD_WINDOW_MS] window. */
-    private fun allowRebuild(): Boolean {
-        val now = SystemClock.elapsedRealtime()
-        if (now - rebuildWindowStart > REBUILD_WINDOW_MS) { rebuildWindowStart = now; rebuilds = 0 }
-        return ++rebuilds <= MAX_REBUILDS
-    }
+    /** Allow a renderer rebuild if within budget. The budget lives in [BuiltinDashboard] (process-
+     *  global), NOT here: fallbackToLauncher() finishes this instance and the kiosk/watchdog return
+     *  loop starts a fresh one — a per-instance counter would reset every relaunch, turning a reliably
+     *  crashing page into an infinite fallback/relaunch churn. Exhaustion engages the renderer latch
+     *  ([BuiltinDashboard.rendererLatched]), which suppresses automatic relaunches for a cooldown. */
+    private fun allowRebuild(): Boolean =
+        BuiltinDashboard.consumeRebuildBudget(SystemClock.elapsedRealtime())
 
-    /** Re-launch (singleTask) is the reload / navigate signal: load the current target (an MQTT
-     *  navigate sets [BuiltinDashboard.navPath]; otherwise the configured home dashboard), so a plain
-     *  reload re-loads the same view and a navigate switches to the new path. */
+    /** A singleTask relaunch reaching the live renderer means one of three things, disambiguated here:
+     *  a **navigate** ([BuiltinDashboard.navPath] set — one-shot, consumed), an explicit **reload**
+     *  ([BuiltinDashboard.consumeReloadRequest] — set by reloadDashboard / a credential change), or a
+     *  plain **bring-to-foreground** (the kiosk/watchdog return loops). A healthy foregrounded page is
+     *  left untouched — snapping back from Recents must not blank the dashboard with a full reload. */
     override fun onNewIntent(intent: Intent?) {
         super.onNewIntent(intent)
+        val config = Config(this)
+        if (config.haUrl.isBlank()) {
+            // Same never-strand guard as onCreate: the URL was cleared while we were running — a load
+            // would build a scheme-less garbage URL behind an eternal "Reconnecting…" interstitial.
+            Log.w(TAG, "ha_url cleared — opening the admin launcher instead")
+            fallbackToLauncher()
+            return
+        }
+        val nav = BuiltinDashboard.consumeNavPath()
+        val reload = BuiltinDashboard.consumeReloadRequest()
+        val w = web
+        val healthy = w != null && frontendConnected && !authLatched && !interstitialShown
+        if (nav == null && !reload && healthy) return   // foreground-only: page is fine, nothing to do
+        if (nav != null && !reload && healthy) {
+            // Navigate on a healthy page: an instant bus re-navigate (same as idle-return), not a full
+            // page load — the JS bundle + websocket stay live.
+            Log.i(TAG, "navigate -> /$nav (bus)")
+            w.evaluateJavascript(ExternalAuthProtocol.navigateCommand(++busId, nav), null)
+            return
+        }
         unlatchAuth("new load") // a deliberate reload/navigate (or a config change) is the retry consent
         interstitialShown = false
-        web?.loadUrl(currentUrl(Config(this)))
+        if (w == null) { buildAndLoad(config); return }  // defensive: relaunched with no WebView built
+        w.loadUrl(ExternalAuthProtocol.dashboardUrl(config.haUrl, nav ?: config.homeDashboard))
         onLoadStarted()
     }
 
@@ -504,9 +523,11 @@ class DashboardActivity : AppCompatActivity() {
         )
     }
 
-    /** The URL to show: the navigate path if one is pending, else the configured home dashboard. */
+    /** The URL to show: a pending navigate path (consumed — one-shot, so crash rebuilds and
+     *  interstitial recoveries return to home rather than replaying a stale navigate), else the
+     *  configured home dashboard. */
     private fun currentUrl(config: Config): String =
-        ExternalAuthProtocol.dashboardUrl(config.haUrl, BuiltinDashboard.navPath ?: config.homeDashboard)
+        ExternalAuthProtocol.dashboardUrl(config.haUrl, BuiltinDashboard.consumeNavPath() ?: config.homeDashboard)
 
     // Publish foreground state so SystemController.dashboardState can drive the watchdog + kiosk
     // return-loop from an in-process signal instead of a root pidof/dumpsys probe.
@@ -564,8 +585,12 @@ class DashboardActivity : AppCompatActivity() {
         } catch (e: Throwable) {
             // A missing / updating / broken system WebView (exactly the population WebView-auto-heal
             // targets) throws here. As a HOME activity we must not crash — Android would relaunch us
-            // into a crash-loop — so fall back to the admin launcher.
+            // into a crash-loop — so fall back to the admin launcher. This consumes the rebuild budget
+            // too: the kiosk/watchdog loops relaunch us, createWebView throws again, and without the
+            // budget that cycle would churn forever; with it the renderer latches after a burst and
+            // retries once per cooldown (plenty for a WebView update to finish installing).
             Log.e(TAG, "system WebView unavailable — falling back to admin launcher", e)
+            BuiltinDashboard.consumeRebuildBudget(SystemClock.elapsedRealtime())
             fallbackToLauncher()
             return
         }
@@ -781,8 +806,6 @@ class DashboardActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "ha-paneld/dashboard"
-        private const val MAX_REBUILDS = 3
-        private const val REBUILD_WINDOW_MS = 60_000L
         private const val INITIAL_HANDSHAKE_MS = 25_000L        // generous: a cold PX30 frontend can need 20s+
         private const val INITIAL_RETRY_MS = 5_000L
         private const val MAX_RETRY_MS = 60_000L                // retry forever (HA restart), capped cadence

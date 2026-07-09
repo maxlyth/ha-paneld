@@ -518,10 +518,9 @@ class PaneldServer(
                                 // (a corrupted cached asset is exactly what this heal exists for).
                                 runCatching { android.webkit.WebView(appContext).apply { clearCache(true); destroy() } }
                                 if (config.dashboardPackage == "builtin") {
-                                    appContext.startActivity(
-                                        android.content.Intent(appContext, io.github.maxlyth.hapaneld.DashboardActivity::class.java)
-                                            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
-                                    )
+                                    // Privileged-first relaunch (BAL rules block a plain startActivity
+                                    // from a service context) — off the main thread, it may shell out.
+                                    scope.launch { runCatching { system.reloadDashboard(SystemController.BUILTIN_DASHBOARD) } }
                                 }
                             }
                         }
@@ -1902,6 +1901,9 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             )
             // Built-in renderer connection — same semantics: blank token keeps the current one;
             // clearing the URL clears the token too (no orphaned HA credential on the panel).
+            val prevHaUrl = config.haUrl
+            val prevHaToken = config.haToken
+            val prevHaRefresh = config.haRefreshToken
             val haUrl = p["ha_url"]?.trim()
             val haToken = if (haUrl != null && haUrl.isEmpty()) "" else p["ha_token"]?.takeIf { it.isNotEmpty() }
             if (haUrl != null || haToken != null) config.setHaConnection(
@@ -1916,16 +1918,25 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             p["ha_token_expiry"]?.trim()?.toLongOrNull()?.let { config.setHaTokenExpiry(it) }
             p["ha_client_id"]?.trim()?.let { config.setHaClientId(if (clearingHa) "" else it) }
             if (clearingHa) config.setHaRefreshToken("")
-            // A changed built-in-renderer credential/URL takes effect immediately: relaunch the renderer
-            // (singleTask → onNewIntent → fresh load), which also clears any auth-failure latch — the
-            // "fix the token on Configure" path the latch's on-panel message points at.
-            if ((haUrl != null || haToken != null || haRefresh != null) && config.dashboardPackage == "builtin") {
-                runCatching {
-                    appContext.startActivity(
-                        android.content.Intent(appContext, io.github.maxlyth.hapaneld.DashboardActivity::class.java)
-                            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
-                    )
-                }
+            // A NEW access token (with no new refresh token beside it) is an explicit re-credential:
+            // drop the stored refresh token + expiry so the renderer actually uses it. Without this a
+            // revoked refresh token could never be cleared from the form ("blank keeps current") and
+            // DashboardAuth would keep preferring the dead refresh model — the auth latch's own "set a
+            // new access token" fix instructions wouldn't work.
+            val refreshCleared = haToken != null && haToken.isNotEmpty() && haRefresh == null && prevHaRefresh.isNotEmpty()
+            if (refreshCleared) { config.setHaRefreshToken(""); config.setHaTokenExpiry(0L) }
+            // A CHANGED built-in-renderer credential/URL takes effect immediately: reloadDashboard is
+            // the privileged-first relaunch (a plain startActivity from a service context is silently
+            // blocked by Android 10+ background-activity-launch rules), flags reload-intent for
+            // onNewIntent, and clears the crash latch — the "fix the token on Configure" path the
+            // latch's on-panel message points at. Change-gated, not presence-gated: the form posts
+            // every key on every save, and relaunching on presence would reload the dashboard on every
+            // unrelated settings save.
+            val haChanged = (haUrl != null && haUrl != prevHaUrl) ||
+                (haToken != null && haToken != prevHaToken) ||
+                (haRefresh != null && haRefresh != prevHaRefresh) || refreshCleared
+            if (haChanged && config.dashboardPackage == "builtin") {
+                runCatching { system.reloadDashboard(SystemController.BUILTIN_DASHBOARD) }
             }
             // Per-row "expose to HA" toggles (ha_expose_<key>=true|false) — take effect on the reconfigure.
             for (name in p.names()) {
