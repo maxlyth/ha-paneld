@@ -203,28 +203,30 @@ object PerfReader {
     }
 
     /**
-     * Rank + publish the top-5. ha-paneld's OWN process is excluded from the ranking and shown as a
-     * separate, always-last row ("ha-paneld + sampling") computed from `/proc/self/stat` INCLUDING
-     * reaped children (cutime/cstime) — the su/dumpsys/cat probes this page spawns are reaped by us, so
-     * that row is the honest total cost of the app *plus its measurement overhead*, kept out of the
-     * workload ranking it would otherwise pollute (the observer isn't the panel's workload).
+     * Rank + publish the top-5. ha-paneld ranks like any other process — with the built-in renderer the
+     * WebView's browser side (compositing, service threads) genuinely runs in this process, so it IS
+     * panel workload and hiding it would lie; on a builtin panel its row is labelled "(built-in
+     * dashboard)" so the reading is obvious. What's kept OUT of the ranking is the measurement itself:
+     * the su/dumpsys/cat probes this page spawns are reaped children of this process, so their exact
+     * cost (`cutime+cstime` from `/proc/self/stat`) is shown as a separate, dimmed "sampling probes"
+     * row — the observer's overhead, attributed honestly instead of polluting the workload list.
      */
     private fun publishTop(cur: Map<Int, Long>, comm: Map<Int, String>, total: Long, resolveFullNames: Boolean) {
         val myPid = android.os.Process.myPid()
         val dTotal = total - prevTopTotal
         val ranked = if (prevTopTotal != 0L && dTotal > 0) {
             cur.entries.mapNotNull { (pid, j) -> prevProc[pid]?.let { pid to (j - it) } }
-                .filter { it.second > 0 && it.first != myPid }.sortedByDescending { it.second }.take(5)
+                .filter { it.second > 0 }.sortedByDescending { it.second }.take(5)
         } else emptyList()
-        val selfNow = runCatching { java.io.File("/proc/self/stat").readText() }.getOrNull()?.let { selfJiffiesOf(it) }
-        val selfPct = if (selfNow != null && prevSelf > 0L && dTotal > 0) {
-            Math.round((selfNow - prevSelf) * 1000.0 / dTotal) / 10.0
+        val kidsNow = runCatching { java.io.File("/proc/self/stat").readText() }.getOrNull()?.let { childJiffiesOf(it) }
+        val probePct = if (kidsNow != null && prevSelf > 0L && dTotal > 0) {
+            Math.round((kidsNow - prevSelf) * 1000.0 / dTotal) / 10.0
         } else null
         prevTopTotal = total
         prevProc = HashMap(cur)
-        selfNow?.let { prevSelf = it }
+        kidsNow?.let { prevSelf = it }
 
-        if (ranked.isEmpty() && selfPct == null) return
+        if (ranked.isEmpty() && probePct == null) return
         // Full cmdlines only for ranked pids we haven't resolved before — usually zero extra su calls.
         if (resolveFullNames) {
             val missing = ranked.map { it.first }.filter { it !in nameCache }
@@ -232,24 +234,25 @@ object PerfReader {
         }
         val rows = ranked.map { (pid, dj) ->
             val pct = Math.round(dj * 1000.0 / dTotal) / 10.0 // % of total capacity, 1dp, dot-decimal
-            val nm = trimProcName((nameCache[pid] ?: comm[pid] ?: pid.toString()).replace("\\", "").replace("\"", ""))
+            var nm = trimProcName((nameCache[pid] ?: comm[pid] ?: pid.toString()).replace("\\", "").replace("\"", ""))
+            // Make our own row self-explanatory: on a builtin panel this process hosts the dashboard.
+            if (pid == myPid) nm += if (dashboardPkg == nm) " (built-in dashboard)" else " (this app)"
             """{"name":"$nm","cpu":$pct}"""
         }.toMutableList()
-        selfPct?.let { rows += """{"name":"ha-paneld + sampling","cpu":$it,"self":true}""" }
+        probePct?.let { rows += """{"name":"sampling probes (su/dumpsys)","cpu":$it,"self":true}""" }
         synchronized(lock) { topJson = rows.joinToString(",", "[", "]") }
     }
 
-    /** Own-process jiffies from a `/proc/self/stat` line: utime+stime PLUS cutime+cstime (reaped
-     *  children — the measurement probes). Null on a malformed line. */
-    internal fun selfJiffiesOf(statLine: String): Long? {
+    /** Reaped-children jiffies (cutime+cstime) from a `/proc/self/stat` line — the measurement probes
+     *  this process spawns and reaps. Null on a malformed line. */
+    internal fun childJiffiesOf(statLine: String): Long? {
         val rp = statLine.lastIndexOf(')')
         if (rp < 0 || rp + 2 > statLine.length) return null
         val rest = statLine.substring(rp + 2).split(' ')
-        val u = rest.getOrNull(11)?.toLongOrNull() ?: return null
-        val s = rest.getOrNull(12)?.toLongOrNull() ?: return null
-        val cu = rest.getOrNull(13)?.toLongOrNull() ?: 0L
-        val cs = rest.getOrNull(14)?.toLongOrNull() ?: 0L
-        return u + s + cu + cs
+        rest.getOrNull(12)?.toLongOrNull() ?: return null // require a well-formed line through stime
+        val cu = rest.getOrNull(13)?.toLongOrNull() ?: return null
+        val cs = rest.getOrNull(14)?.toLongOrNull() ?: return null
+        return cu + cs
     }
 
     /** Full process names from `/proc/<pid>/cmdline` (comm is truncated to 16 chars) for the top pids. */

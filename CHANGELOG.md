@@ -22,7 +22,7 @@ content appear. Earlier releases predate this convention and keep their flat lis
 
 - **Dashboard settings get their own Configure card** — the dashboard app, home dashboard path, and the built-in renderer's connection settings now live together in a dedicated "Dashboard" card, and the dashboard-app picker offers only actual dashboard renderers (the built-in renderer plus whichever of the HA Companion / Fully Kiosk are installed) instead of every installed app.
 - **Configure cards now carry maturity badges** — a consistent badge marks pre-release surfaces: "skunk-works" on the Dashboard card, "experimental" on Logging, Display sizing and Vendor packages (replacing the ad-hoc labels).
-- **The performance page's top-processes list no longer blames the messenger** — sampling is considerably lighter (slower heavy probes, no per-thread process spawning, cached name lookups), and ha-paneld's own cost — including the measurement probes it spawns — is shown as a separate dimmed row instead of polluting the workload ranking, which previously showed ha-paneld as the top consumer while it was busy measuring.
+- **The performance page's top-processes list is lighter and attributes cost honestly** — sampling costs considerably less (heavy probes run every 10s instead of 6s, the renderer probe no longer spawns a process per thread, name lookups are cached), and the measurement's own overhead (the su/dumpsys probes) is shown as a separate dimmed "sampling probes" row instead of blending into the ranking. With the built-in renderer, ha-paneld's ranked row is labelled "(built-in dashboard)" — the WebView's browser side runs inside ha-paneld's process there, so that row is genuine dashboard workload, not agent overhead.
 
 ### Fixed
 
