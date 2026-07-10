@@ -8,12 +8,26 @@ From **v0.8.0**, entries are grouped under **Added** (new features/entities), **
 changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
 content appear. Earlier releases predate this convention and keep their flat lists.
 
-## Unreleased
+## v0.9.0-rc3 - 2026-07-10
+
+**Light mode, and a web UI that keeps itself honest.** The built-in renderer line continues: rc3 brings proper light/dark theming across every surface, and the Configure page now notices when the settings change underneath it.
 
 ### Added
 
 - **The web UI follows your browser's light/dark preference** — the `:8888` pages now render in a proper light theme when the viewing browser (laptop, phone) prefers light, and keep the familiar dark look otherwise. The primary-action blue, the callout banners, and the terminal-style logs and chart panels deliberately keep their look in both themes.
-- **Dark mode toggle for panels without a system setting** — Android 9 and older (e.g. NSPanel Pro) has no OS dark/light control, so a new "Dark mode" toggle on the Display card (default on) fills the gap: it themes ha-paneld's own screens and sets the built-in dashboard's default colour scheme. Panels running Android 10+ follow the system setting for all of that automatically — including live re-theming of the dashboard when the OS switches — so the toggle is hidden there. A theme picked inside Home Assistant always overrides the dashboard default.
+- **Dark mode toggle for panels without a system setting** — Android 9 and older (e.g. NSPanel Pro) has no OS dark/light control, so a new "Dark mode" toggle on the Display card (default on) fills the gap: it themes ha-paneld's own screens and sets the built-in dashboard's default colour scheme. Panels running Android 10+ have a real OS control, so the toggle is hidden there: ha-paneld's own screens follow the system setting, and on Android 13+ the dashboard does too, re-theming live when the OS switches. (On Android 10–12 the dashboard default doesn't yet track the OS toggle — a known gap.) A theme picked inside Home Assistant always overrides the dashboard default.
+- **Force a theme for testing** — append `?theme=light` or `?theme=dark` to any web-UI URL to pin that page's theme regardless of the browser's preference (it follows you across the tabs); drop the parameter to return to normal.
+- **The Configure page follows settings changed outside it** — when the panel's settings change underneath an open Configure tab (the REST API, a Home Assistant entity, another browser), the page now reloads itself to show reality. Unsaved edits are never destroyed: with a field mid-edit or an enabled Save button, a banner offers the reload instead — and that same protection now also guards the existing "app was updated" auto-reload.
+
+### Changed
+
+- **Companion auto-update settings step back when there's no Companion** — on a panel without the HA Companion app installed, the "Companion auto-update" settings (meaningless there) are hidden from the Configure form and their Home Assistant entities are withdrawn. They also now list after ha-paneld's own update settings. More generally, any capability-gated setting on a panel lacking the capability no longer publishes a Home Assistant entity.
+
+### Fixed
+
+- **The Fullscreen dashboard toggle now truly applies on save** — rc2 claimed live-apply, but a config-write batching subtlety meant the change-detection never fired (the same root cause initially kept the new Dark mode toggle from re-rendering); all settings side-effects now detect changes from the submitted values and run after the write commits.
+- **The Install tab reads "not installed" for an absent managed component** — previously the row said "installed not installed".
+- **The bug-report template's diagnostics command works again** — it pointed at the legacy `/diag` path, which now redirects; a plain `curl` printed only the redirect notice, so reports arrived without their diagnostics. It now calls `/api/v1/diag`.
 
 ## v0.9.0-rc2 - 2026-07-09
 
