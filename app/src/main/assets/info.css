@@ -122,6 +122,12 @@ button{background:#2557a7;border-color:#2557a7;color:#fff;cursor:pointer;align-s
 .pbtn{font-size:.8rem;padding:6px 12px;background:var(--input-bg);border:1px solid var(--border-strong);border-radius:8px;color:var(--text);cursor:pointer;text-decoration:none;display:inline-block;line-height:1.3;font-family:inherit}
 .pbtn.on{background:#2557a7;border-color:#2557a7;color:#fff}
 .pbtn:disabled{opacity:.4;cursor:not-allowed}   /* capability missing (no a11y / no root) — shown but inert */
+/* Root-gated features are never hidden — shown, greyed, with a visible reason (a tooltip is invisible on
+   a touch panel). This banner + disabled controls tell a no-root user what they're missing and why. */
+.setup.rootlock{background:var(--card-head);border-color:var(--border);color:var(--dim);border-left:4px solid var(--border-strong)}
+button:disabled{background:var(--disabled-bg);border-color:var(--border);color:var(--disabled-fg);cursor:not-allowed}
+input:disabled,select:disabled{background:var(--disabled-bg);color:var(--disabled-fg);cursor:not-allowed}
+.locked{opacity:.6}
 /* Controls panel: when the action row would wrap to 2 lines, collapse the labelled buttons to icons only
    (info.js measures the row height + toggles .collapsed). */
 .ctlrow.collapsed .lbl{display:none}

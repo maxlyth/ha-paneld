@@ -1562,6 +1562,11 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         }
     }
 
+    /** Visible "this needs root" banner for a root-gated card/control group — shown (never hidden) so a
+     *  no-root user sees the feature and what root would unlock, next to controls rendered disabled. */
+    private fun rootLockBanner(unlocks: String): String =
+        """<div class="setup rootlock">🔒 Needs a rooted panel — this one has no root, so the controls below are disabled. $unlocks</div>"""
+
     /** The Controls-card button rows. [s] null (cold shell) → everything disabled as "checking…";
      *  hydration swaps in the capability-gated real state. */
     private fun controlsHtml(s: Snap?): String {
@@ -1587,16 +1592,20 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         // fall through to the admin launcher — so DISABLE it rather than show two buttons that do the same
         // thing. resolvedLauncher() is a cheap PackageManager query (no root).
         val hasDistinctLauncher = !checking && system.resolvedLauncher(config.launcherPackage) != null
-        return """<div class="ctlrow" style="display:flex;gap:8px;flex-wrap:wrap">
+        // Launcher / Admin launcher / Reboot need root; a disabled button's tooltip is invisible on a
+        // touch panel, so add a visible note when root is absent (back/recents/volume still work).
+        val rootNote = if (!checking && !rootOk)
+            """<div class="setup rootlock" style="margin:0 0 8px">🔒 Launcher, Admin launcher and Reboot need root — disabled on this panel. Back, Recents and volume still work.</div>""" else ""
+        return """$rootNote<div class="ctlrow" style="display:flex;gap:8px;flex-wrap:wrap">
  ${pbtn("back", "←<span class=\"lbl\"> Back</span>", a11yOk, "the accessibility service")}
  ${pbtn("recents", "▢<span class=\"lbl\"> Recents</span>", a11yOk && hasRecents, if (hasRecents) "the accessibility service" else "a Recents/overview screen (absent on this panel)")}
- ${pbtn("launcher", "⊞<span class=\"lbl\"> Launcher</span>", rootOk, "root (su or the helper daemon)", """ style="margin-left:auto"""", disabledTitle = if (hasDistinctLauncher) null else "No separate launcher on this panel — same as Admin launcher")}
- ${pbtn("admin_launcher", "⚙<span class=\"lbl\"> Admin launcher</span>", rootOk, "root (su or the helper daemon)")}
+ ${pbtn("launcher", "⊞<span class=\"lbl\"> Launcher</span>", rootOk, "a rooted panel", """ style="margin-left:auto"""", disabledTitle = if (hasDistinctLauncher) null else "No separate launcher on this panel — same as Admin launcher")}
+ ${pbtn("admin_launcher", "⚙<span class=\"lbl\"> Admin launcher</span>", rootOk, "a rooted panel")}
 </div>
 <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
  ${pbtn("voldn", "Vol −", !checking, "")}
  ${pbtn("volup", "Vol +", !checking, "")}
- ${pbtn("reboot", "⟳ Reboot", rootOk, "root (su or the helper daemon)", """ style="margin-left:auto;border-color:#7a3a2a;color:#f5a08a"""")}
+ ${pbtn("reboot", "⟳ Reboot", rootOk, "a rooted panel", """ style="margin-left:auto;border-color:#7a3a2a;color:#f5a08a"""")}
 </div>"""
     }
 
@@ -1731,7 +1740,7 @@ ${tcard("updtbl", "Updates", s?.let { updatesRowsHtml(it) })}
     /** One Vendor-packages row: label + package id, an optional state badge, and the single action button.
      *  Shared by the card and the picker. [showState] is false on the card — every row there is already
      *  tamed (disabled), so the column is redundant and just crowds the layout. */
-    private fun tameRowHtml(c: TameController.Candidate, showState: Boolean = true): String {
+    private fun tameRowHtml(c: TameController.Candidate, showState: Boolean = true, disabled: Boolean = false): String {
         val tamed = c.blocked || c.disabled
         val state = if (!showState) "" else when {
             !c.installed -> """<span style="width:80px;text-align:right;font-size:.85em;color:var(--dim)">not installed</span>"""
@@ -1756,7 +1765,7 @@ ${tcard("updtbl", "Updates", s?.let { updatesRowsHtml(it) })}
         val control = if (!c.removable)
             """<span style="font-size:.8em;color:#777;white-space:nowrap">protected</span>"""
         else
-            """<form method="post" action="/api/v1/tame" style="margin:0"><input type="hidden" name="pkg" value="${esc(c.pkg)}"><input type="hidden" name="action" value="$action"><button type="submit" style="$btn;white-space:nowrap">$label</button></form>"""
+            """<form method="post" action="/api/v1/tame" style="margin:0"><input type="hidden" name="pkg" value="${esc(c.pkg)}"><input type="hidden" name="action" value="$action"><button type="submit" style="$btn;white-space:nowrap"${if (disabled) " disabled" else ""}>$label</button></form>"""
         return """  <div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid #222">
    <span style="flex:1;min-width:0;overflow:hidden">${esc(c.label)}$recBadge$tags<br><small style="color:#888">${esc(c.pkg)}</small>$note</span>
    $state
@@ -1765,26 +1774,34 @@ ${tcard("updtbl", "Updates", s?.let { updatesRowsHtml(it) })}
     }
 
     private fun tameCardHtml(): String {
-        if (!rootOk()) return """<div class="card"><h2>Vendor packages<span class="cardbadge exp">experimental</span></h2>
-<p class="note">Taming force-stops vendor apps and blocks them relaunching — this needs root or the helper daemon, which this panel doesn't have, so it's unavailable here.</p></div>"""
+        // Root-gated, but shown (never hidden) so a no-root user sees the feature: the profile's candidate
+        // vendor apps are listed greyed with a lock banner, actions disabled. Discovery (PackageManager)
+        // needs no root; the tame/re-enable ACTIONS do.
+        val locked = !rootOk()
         // The card shows what's currently TAMED (the blocklist); discovery lives in the Find-a-package
-        // picker. So a tamed package always has a visible Re-enable here.
+        // picker. So a tamed package always has a visible Re-enable here. When locked, fall back to the
+        // profile's candidate list so there's something to show.
         val cands = runCatching {
             tame.cardCandidates(config.tameVendorPackages, tameProfileCandidates)
         }.getOrDefault(emptyList())
-        val rows = cands.joinToString("\n") { tameRowHtml(it, showState = false) }
-        val body = rows.ifBlank {
-            """<p class="note">Nothing tamed yet. Press <b>Find a package…</b> to see what's on this panel.</p>"""
+        val rows = cands.joinToString("\n") { tameRowHtml(it, showState = false, disabled = locked) }
+        val body = when {
+            locked -> """<div class="locked">${rows.ifBlank { """<p class="note">The vendor apps this panel could hide would be listed here.</p>""" }}</div>"""
+            else -> rows.ifBlank {
+                """<p class="note">Nothing tamed yet. Press <b>Find a package…</b> to see what's on this panel.</p>"""
+            }
         }
+        val dis = if (locked) " disabled" else ""
+        val lock = if (locked) rootLockBanner("With root, ha-paneld can hide vendor clutter (test tools, the vendor launcher) so only your dashboard shows.") else ""
         return """<div class="card" id="cfg-tame"><h2>Vendor packages<span class="cardbadge exp">experimental</span></h2>
-<p class="note"><b>Tame</b> force-stops an app, stops it relaunching on boot, and blocks it drawing over the dashboard — applied immediately and on every boot. <b>Re-enable</b> undoes it. Critical system apps are never offered; nothing changes until you press a button.</p>
+$lock<p class="note"><b>Tame</b> force-stops an app, stops it relaunching on boot, and blocks it drawing over the dashboard — applied immediately and on every boot. <b>Re-enable</b> undoes it. Critical system apps are never offered; nothing changes until you press a button.</p>
 $body
-<div style="display:flex;flex-direction:column;gap:8px;margin-top:12px">
- <button type="button" onclick="pkgPick()">Find a package…</button>
+<div style="display:flex;flex-direction:column;gap:8px;margin-top:12px" class="${if (locked) "locked" else ""}">
+ <button type="button" onclick="pkgPick()"$dis>Find a package…</button>
  <form method="post" action="/api/v1/tame" style="display:flex;flex-direction:row;gap:8px;margin:0">
-  <input name="pkg" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="…or tame a package by name" style="flex:1">
+  <input name="pkg" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="…or tame a package by name" style="flex:1"$dis>
   <input type="hidden" name="action" value="tame">
-  <button type="submit">Tame</button>
+  <button type="submit"$dis>Tame</button>
  </form>
 </div>
 <dialog id="pkgdlg" style="background:#1a1a1a;color:#eee;border:1px solid #333;border-radius:12px;max-width:520px;width:92%;padding:16px">
@@ -1805,26 +1822,31 @@ fetch('/api/v1/tame/suggest').then(function(r){return r.text()}).then(function(t
         val snap = snapStaleOk()
         val nat = snap.densityNat
         val fs = snap.fontScale
-        val cur = snap.densityCur ?: return ""
-        val rec = if (recommendedDensity != null || recommendedFontScale != null)
+        // Shown even without root (density can't be READ without it either) so a no-root user sees the
+        // feature — but greyed, with a lock banner, and every control disabled. `dis` toggles all of it.
+        val locked = !rootOk()
+        val cur = snap.densityCur ?: nat ?: DensityController.MIN_DPI
+        val dis = if (locked) " disabled" else ""
+        val rec = if (!locked && (recommendedDensity != null || recommendedFontScale != null))
             """ <button type="submit" name="action" value="rec" formnovalidate>HA-optimised</button>""" else ""
+        val lock = if (locked) rootLockBanner("With root, ha-paneld can match the dashboard's density and text size to the physical screen.") else ""
         return """<div class="card" id="cfg-display"><h2>Display sizing<span class="cardbadge exp">experimental</span></h2>
-<p class="note"><b>Pre-release / R&amp;D — the right values aren't dialled in yet; experiment at your own
+$lock<p class="note"><b>Pre-release / R&amp;D — the right values aren't dialled in yet; experiment at your own
 pace.</b> Match an HA dashboard's size to a desktop browser. <b>Density</b> scales the whole layout
 (lower dpi = more fits); <b>text size</b> scales WebView text. Panel firmware often ships these
 mismatched to the physical screen. Applies live, persists across reboot; needs root or the helper daemon.</p>
-<form method="post" action="/api/v1/display/density" style="display:flex;flex-direction:column;gap:10px">
+<form method="post" action="/api/v1/display/density" class="${if (locked) "locked" else ""}" style="display:flex;flex-direction:column;gap:10px">
  <label style="display:flex;flex-direction:row;justify-content:space-between;align-items:center;gap:12px">
   <span>Density (dpi) <small style="color:#888">· native ${nat ?: "?"}</small></span>
-  <input name="density" type="number" min="${DensityController.MIN_DPI}" max="${DensityController.MAX_DPI}" value="$cur" style="width:96px">
+  <input name="density" type="number" min="${DensityController.MIN_DPI}" max="${DensityController.MAX_DPI}" value="$cur" style="width:96px"$dis>
  </label>
  <label style="display:flex;flex-direction:row;justify-content:space-between;align-items:center;gap:12px">
   <span>Text size <small style="color:#888">· default 1.0</small></span>
-  <input name="font" type="number" step="0.05" min="${DensityController.MIN_FONT}" max="${DensityController.MAX_FONT}" value="$fs" style="width:96px">
+  <input name="font" type="number" step="0.05" min="${DensityController.MIN_FONT}" max="${DensityController.MAX_FONT}" value="$fs" style="width:96px"$dis>
  </label>
  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:2px">
-  <button type="submit">Apply</button>$rec
-  <button type="submit" name="action" value="reset" formnovalidate>Reset</button>
+  <button type="submit"$dis>Apply</button>$rec
+  <button type="submit" name="action" value="reset" formnovalidate$dis>Reset</button>
  </div>
 </form></div>"""
     }
