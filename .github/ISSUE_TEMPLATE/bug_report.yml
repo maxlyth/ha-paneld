@@ -55,7 +55,7 @@ body:
         Paste the panel's diagnostic dump. From any machine on the same LAN:
 
         ```
-        curl http://<panel-ip>:8888/diag
+        curl http://<panel-ip>:8888/api/v1/diag
         ```
 
         (Or open `http://<panel-ip>:8888/` and copy the **diagnostics / capabilities** section.)
