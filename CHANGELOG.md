@@ -16,6 +16,7 @@ content appear. Earlier releases predate this convention and keep their flat lis
 
 - **Root-gated features are shown, greyed, with a visible reason** — on a panel without root, features that need it (Display sizing, Vendor-package taming, and the Launcher/Reboot controls) now render disabled with a 🔒 note saying so, instead of vanishing or presenting a live-looking control that quietly fails. You can see what root would unlock rather than wondering why something is missing.
 - **Download-APK link on the Install tab (no-root panels)** — where ha-paneld can't install an update itself (no root), the component pickers now offer a direct APK download link for the selected version, with the manual `adb install -r` step in the tooltip — instead of a permanently disabled Install button.
+- **One-line prerelease install** — add `--prerelease` to the installer to get the latest release candidate instead of the newest stable, no manual APK download: `curl -fsSL …/install.sh | bash -s -- --prerelease` (also `provision.sh <ip> --prerelease`).
 - **The installer says plainly when a panel has no root** — provisioning now reports whether the panel has root and, if not, lists what works everywhere versus what will appear greyed, so it's clear from the first install that the reduced set is the panel's permission model, not a fault.
 
 ### Changed

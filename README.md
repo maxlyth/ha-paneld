@@ -42,7 +42,13 @@ curl -fsSL https://raw.githubusercontent.com/maxlyth/ha-paneld/main/scripts/inst
 
 No checkout, no parameters: it checks your tools (with fix-it hints if `adb`/`curl` are missing),
 prompts for the panel IP (and optional id / MQTT broker), downloads the **latest signed release**, and
-provisions the panel. For scripted/fleet installs use [`scripts/provision.sh`](scripts/provision.sh)
+provisions the panel. To install the latest **pre-release** (release candidate) instead, append
+`--prerelease`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/maxlyth/ha-paneld/main/scripts/install.sh | bash -s -- --prerelease
+```
+ For scripted/fleet installs use [`scripts/provision.sh`](scripts/provision.sh)
 directly — see [Provisioning & fleet updates](docs/provisioning.md).
 
 > [!IMPORTANT]

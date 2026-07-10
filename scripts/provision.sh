@@ -43,13 +43,13 @@ fail() {
   exit 1
 }
 
-TARGET="${1:?usage: provision.sh <panel-ip:5555> [APK] [--id ID] [--mqtt tcp://host:1883] [--mqtt-user U] [--mqtt-pass P] [--ha-url URL] [--ha-token LLAT | --ha-user U --ha-pass P] [--builtin] [--log-host HOST] [--log-port N] [--log-proto syslog|http] [--log-off] [--export FILE] [--restore FILE] [--restore-fleet FILE] [--latest] [--force] [--persist-adb] [--strip-vendor] [--no-tame] [--verify]}"
+TARGET="${1:?usage: provision.sh <panel-ip:5555> [APK] [--id ID] [--mqtt tcp://host:1883] [--mqtt-user U] [--mqtt-pass P] [--ha-url URL] [--ha-token LLAT | --ha-user U --ha-pass P] [--builtin] [--log-host HOST] [--log-port N] [--log-proto syslog|http] [--log-off] [--export FILE] [--restore FILE] [--restore-fleet FILE] [--latest | --prerelease] [--force] [--persist-adb] [--strip-vendor] [--no-tame] [--verify]}"
 shift
 REPO="maxlyth/ha-paneld"
 LOCAL_APK="app/build/outputs/apk/debug/app-debug.apk"
 PKG="io.github.maxlyth.hapaneld"
 A11Y="$PKG/.input.PanelAccessibilityService"
-APK=""; PANEL_ID=""; MQTT=""; MQTT_USER=""; MQTT_PASS=""; VERIFY_ONLY=0; LATEST=0; FORCE=0; PERSIST_ADB=0; STRIP_VENDOR=0; NO_TAME=0; TOINSTALL_VER=""
+APK=""; PANEL_ID=""; MQTT=""; MQTT_USER=""; MQTT_PASS=""; VERIFY_ONLY=0; LATEST=0; PRERELEASE=0; FORCE=0; PERSIST_ADB=0; STRIP_VENDOR=0; NO_TAME=0; TOINSTALL_VER=""
 LOG_HOST=""; LOG_PORT=""; LOG_PROTO=""; LOG_ENABLE=""
 EXPORT_FILE=""; RESTORE_FILE=""; RESTORE_MODE=""
 HA_URL=""; HA_TOKEN=""; HA_USER=""; HA_PASS=""; HA_REFRESH=""; HA_EXPIRY=""; BUILTIN=0
@@ -62,7 +62,8 @@ while [ "${1:-}" ]; do
     --mqtt) MQTT="$2"; shift 2 ;;
     --mqtt-user) MQTT_USER="$2"; shift 2 ;;
     --mqtt-pass) MQTT_PASS="$2"; shift 2 ;;
-    --latest) LATEST=1; shift ;;     # ignore any local build, fetch the newest GitHub release
+    --latest) LATEST=1; shift ;;     # ignore any local build, fetch the newest STABLE GitHub release
+    --prerelease|--pre) PRERELEASE=1; LATEST=1; shift ;;   # fetch the newest release incl. release-candidates
     --force) FORCE=1; shift ;;       # skip the same/older-version prompt
     --persist-adb) PERSIST_ADB=1; shift ;;  # keep network adb (tcp 5555) across reboots (opt-in; standing LAN port)
     --strip-vendor) STRIP_VENDOR=1; shift ;; # disable the Tuya vendor apps (TPA10) non-interactively (skips the prompt)
@@ -276,14 +277,26 @@ check_webview() {
 
 # Fetch the newest signed release APK from GitHub (gh if present, else the API via curl). Sets APK + TOINSTALL_VER.
 download_latest() {
-  local dir tag url json
+  local dir tag url json api
   dir="$(mktemp -d)"
+  # PRERELEASE=1 → newest release of ANY kind (incl. rc); else the newest STABLE. GitHub's
+  # /releases/latest EXCLUDES prereleases, so the prerelease path lists all releases and takes the first.
   if command -v gh >/dev/null 2>&1; then
-    tag="$(gh release view --repo "$REPO" --json tagName -q .tagName 2>/dev/null || true)"
-    gh release download --repo "$REPO" --pattern '*.apk' --dir "$dir" >/dev/null 2>&1 || true
+    if [ "$PRERELEASE" = 1 ]; then
+      tag="$(gh release list --repo "$REPO" --limit 1 --json tagName -q '.[0].tagName' 2>/dev/null || true)"
+      [ -n "$tag" ] && gh release download "$tag" --repo "$REPO" --pattern '*.apk' --dir "$dir" >/dev/null 2>&1 || true
+    else
+      tag="$(gh release view --repo "$REPO" --json tagName -q .tagName 2>/dev/null || true)"
+      gh release download --repo "$REPO" --pattern '*.apk' --dir "$dir" >/dev/null 2>&1 || true
+    fi
   fi
   if ! ls "$dir"/*.apk >/dev/null 2>&1; then
-    json="$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null || true)"
+    if [ "$PRERELEASE" = 1 ]; then
+      api="https://api.github.com/repos/$REPO/releases?per_page=1"   # newest release, prerelease included
+    else
+      api="https://api.github.com/repos/$REPO/releases/latest"        # newest stable only
+    fi
+    json="$(curl -fsSL "$api" 2>/dev/null || true)"
     tag="$(printf '%s' "$json" | grep -o '"tag_name": *"[^"]*"' | head -1 | cut -d'"' -f4)"
     url="$(printf '%s' "$json" | grep -o '"browser_download_url": *"[^"]*\.apk"' | head -1 | cut -d'"' -f4)"
     [ -n "$url" ] && curl -fsSL "$url" -o "$dir/ha-paneld-latest.apk"
