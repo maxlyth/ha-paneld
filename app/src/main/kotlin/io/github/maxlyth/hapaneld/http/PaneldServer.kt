@@ -1180,7 +1180,7 @@ $body</div>"""
     private fun pickerRow(name: String, label: String, installed: String?, defaultChannel: String, root: Boolean): String {
         fun sel(v: String) = if (defaultChannel == v) " selected" else ""
         return """<div class="comprow" data-name="${esc(name)}">
-<div class="compname"><b>${esc(label)}</b> <span class="muted">installed <span class="cver">${esc(installed ?: "not installed")}</span></span></div>
+<div class="compname"><b>${esc(label)}</b> <span class="muted">${if (installed != null) """installed <span class="cver">${esc(installed)}</span>""" else """<span class="cver">not installed</span>"""}</span></div>
 <div class="comppick">
 <label class="muted">Channel <select class="cchan" onchange="loadVersions('$name')"><option value="stable"${sel("stable")}>Stable</option><option value="prerelease"${sel("prerelease")}>Prerelease</option></select></label>
 <label class="muted">Version <select class="cvsel" onchange="verChanged('$name')"><option>loading…</option></select></label>
@@ -1193,7 +1193,7 @@ $body</div>"""
      *  Play-managed Companion). */
     private fun simpleRow(label: String, installed: String?, action: String): String =
         """<div class="comprow">
-<div class="compname"><b>${esc(label)}</b> <span class="muted">installed <span class="cver">${esc(installed ?: "not installed")}</span></span></div>
+<div class="compname"><b>${esc(label)}</b> <span class="muted">${if (installed != null) """installed <span class="cver">${esc(installed)}</span>""" else """<span class="cver">not installed</span>"""}</span></div>
 <div class="comppick">$action</div></div>"""
 
     /** Logs tab — live log tail over SSE. App source always; system source needs root (gated live). */
