@@ -208,6 +208,13 @@
     }).then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
       .then(function () {
         msg.textContent = "Saving…"; dirty = false; document.getElementById("savebtn").disabled = true;
+        // Re-stamp the config-watch baseline: OUR save changes the cfg fingerprint too, and without
+        // this buildwatch.js would mistake it for an external change and reload 10s after every save.
+        setTimeout(function () {
+          fetch("/health").then(function (r) { return r.text(); }).then(function (t) {
+            var m = t.match(/cfg=(\S+)/); if (m) document.body.setAttribute("data-cfg", m[1]);
+          }).catch(function () {});
+        }, 500);
         // Reload the form from the server, then land on a terminal message — don't leave a
         // "reconnecting…" string hanging (it reads as stuck even though the save is done).
         load(function (ok) {

@@ -272,7 +272,7 @@ class PaneldServer(
                     call.respondText(asset("api.html"), ContentType.Text.Html)
                 }
                 get("/health") {
-                    call.respondText("ha-paneld ${Config.VERSION} panel=${config.panelId} build=${buildToken()}\n")
+                    call.respondText("ha-paneld ${Config.VERSION} panel=${config.panelId} build=${buildToken()} cfg=${io.github.maxlyth.hapaneld.config.ConfigHash.of(currentValues())}\n")
                 }
                 // TTS/announce contract — REAL at the root (external automations call it with plain
                 // curl, which doesn't follow 308) as well as under /api/v1.
@@ -287,7 +287,7 @@ class PaneldServer(
                 // monitors. Human pages + static assets stay top-level. ----
                 route("/api/v1") {
                     get("/health") {
-                        call.respondText("ha-paneld ${Config.VERSION} panel=${config.panelId} build=${buildToken()}\n")
+                        call.respondText("ha-paneld ${Config.VERSION} panel=${config.panelId} build=${buildToken()} cfg=${io.github.maxlyth.hapaneld.config.ConfigHash.of(currentValues())}\n")
                     }
                     get("/config") { call.respondText(configJson(), ContentType.Application.Json) }
                     post("/config") { handleConfigPost(call) }
@@ -902,7 +902,7 @@ class PaneldServer(
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>ha-paneld · ${esc(title)} · ${esc(config.friendlyName)}</title>
 <link rel="icon" href="/icon.svg">
-<link rel="stylesheet" href="/info.css"></head><body data-build="${buildToken()}"><div class="wrap">
+<link rel="stylesheet" href="/info.css"></head><body data-build="${buildToken()}" data-cfg="${io.github.maxlyth.hapaneld.config.ConfigHash.of(currentValues())}"><div class="wrap">
 <div class="topbar"><div class="hdr"><button id="navburger" class="navburger pbtn" aria-label="Menu">☰</button><h1><img src="/icon.svg" class="logo" alt=""><span class="brand">ha-paneld</span> <small id="pswitch" data-self-id="${esc(config.panelId)}" data-self-name="${esc(config.friendlyName)}"><span class="sep">·</span>${esc(config.friendlyName)}</small></h1>
  <span style="display:flex;gap:10px;align-items:center">$haLink<a class="gh" href="$REPO_URL" target="_blank" rel="noopener" title="ha-paneld on GitHub" aria-label="GitHub"><svg viewBox="0 0 24 24"><path d="$GH_ICON"/></svg></a></span></div>
 ${navBar(active)}</div>
@@ -1652,7 +1652,7 @@ report of this panel's hardware, firmware, SELinux, su and node probes for bug r
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>ha-paneld · $fname</title>
 <link rel="icon" href="/icon.svg">
-<link rel="stylesheet" href="/info.css"></head><body data-ver="${Config.VERSION}" data-build="${buildToken()}" data-hydrate="${if (hydrate) "1" else "0"}"><div class="wrap">
+<link rel="stylesheet" href="/info.css"></head><body data-ver="${Config.VERSION}" data-build="${buildToken()}" data-cfg="${io.github.maxlyth.hapaneld.config.ConfigHash.of(currentValues())}" data-hydrate="${if (hydrate) "1" else "0"}"><div class="wrap">
 <div class="topbar"><div class="hdr"><button id="navburger" class="navburger pbtn" aria-label="Menu">☰</button><h1><img src="/icon.svg" class="logo" alt=""><span class="brand">ha-paneld</span> <small id="pswitch" data-self-id="$pid" data-self-name="$fname"><span class="sep">·</span>$fname</small></h1>
  <span style="display:flex;gap:10px;align-items:center">${if (config.haLinkUrl.isNotBlank()) """<a class="pbtn" href="${esc(config.haLinkUrl)}" target="_blank" rel="noopener" title="Open Home Assistant (this panel's device page when known)">Open in HA</a>""" else ""}<button id="revbtn" class="pbtn" onclick="toggleReveal()" title="Show/hide blurred values for editing — they're blurred by default so screenshots don't leak them">Reveal</button>
  <a class="gh" href="$REPO_URL" target="_blank" rel="noopener" title="ha-paneld on GitHub" aria-label="GitHub"><svg viewBox="0 0 24 24"><path d="$GH_ICON"/></svg></a></span></div>
