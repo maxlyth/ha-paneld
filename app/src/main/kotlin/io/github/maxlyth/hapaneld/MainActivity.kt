@@ -150,7 +150,8 @@ class MainActivity : AppCompatActivity() {
         root.addView(text(
             "This device is a Home Assistant wall panel. ha-paneld runs in the background so Home " +
                 "Assistant can control the screen, LED, buttons and speaker and read its sensors — all " +
-                "over your local network. The dashboard itself runs in the Home Assistant app.",
+                "over your local network. The dashboard is rendered either by ha-paneld's own built-in " +
+                "renderer or by the Home Assistant app.",
             if (compact) 12.5f else 14f, pal.body, padBottom = if (compact) 10 else 22,
         ))
         // The full URL — tappable here, and readable so it can be typed on another device.
