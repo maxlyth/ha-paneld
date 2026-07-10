@@ -12,15 +12,15 @@ no YAML:
 |--------|------------|-------|
 | `light.<panel>_screen` | brightness + on/off | on = backlight on, off = true backlight-off (no keyguard/PIN); JSON schema, brightness 0–255 |
 | `light.<panel>_led` | RGB | published only when a LED backend is present (NDK `/dev/ledjni` or the root helper) |
-| `text.<panel>_navigate` | push a URL to the panel | depends on Companion intent handling; last URL restored on reconnect |
+| `text.<panel>_navigate` | push a dashboard path to the panel | Companion: deep-link intent; built-in renderer: in-app bus navigate (no reload). Last path restored on reconnect |
 | `event.<panel>_button` | hardware button presses | published only when the a11y key-filter is enabled |
 | `number.<panel>_volume` | TTS/announce volume | 0–100% → `STREAM_MUSIC`; playback is the HTTP `/play` contract below |
 | `sensor.<panel>_illuminance` | ambient lux | standard `SensorManager` `TYPE_LIGHT`; published only if present |
 | `binary_sensor.<panel>_proximity` | proximity (occupancy) | standard `SensorManager` `TYPE_PROXIMITY`; published only if present |
-| `button.<panel>_reload` | reload dashboard | force-stop + relaunch the configured dashboard package (root helper, else `su`) |
+| `button.<panel>_reload` | reload dashboard | foreign renderer: force-stop + relaunch (root helper, else `su`); built-in renderer: reloads its own WebView in-process (no root needed) |
 | `button.<panel>_reboot` | reboot panel | root helper, else `su` |
 | `button.<panel>_launcher` | bring a launcher to the foreground | fires `CATEGORY_HOME` at a non-default launcher (or configured `launcher_package`), leaving the boot/default home app unchanged |
-| `button.<panel>_home` | bring the HA dashboard to the foreground | launches `dashboard_package` if set, else the default home app (the HA Companion) — the complement of the Launcher button |
+| `button.<panel>_home` | bring the HA dashboard to the foreground | launches the resolved dashboard — the built-in renderer, a configured `dashboard_package`, else the installed HA Companion — the complement of the Launcher button |
 
 The device's display name (`configuration_url` "Visit" link, friendly name) and the LED/screen
 states are re-published on every (re)connect, and the MQTT client auto-reconnects, so HA stays in

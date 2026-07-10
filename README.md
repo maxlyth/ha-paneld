@@ -196,6 +196,7 @@ continued iteration on the HTTP UI. The full curated list is in **[docs/roadmap.
   spec is at `/openapi.json`.
 - **[docs/provisioning.md](docs/provisioning.md)** — headless provisioning, whole-fleet updates, adb
   bootstrap, and the permission grants.
+- **[docs/built-in-renderer.md](docs/built-in-renderer.md)** — the built-in dashboard renderer (experimental): what it is, turning it on (incl. the one-click Companion sign-in borrow), theming, and what it deliberately omits.
 - **[docs/building.md](docs/building.md)** — build from source (Docker or local toolchain) and the
   signing notes forkers need. See also [docs/local-builds.md](docs/local-builds.md) (devcontainer).
 - **[docs/roadmap.md](docs/roadmap.md)** — the full planned + stretch roadmap (shipped work is in

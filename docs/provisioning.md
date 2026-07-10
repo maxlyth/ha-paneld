@@ -13,11 +13,13 @@ Run the same script on every panel:
 
 ```bash
 scripts/provision.sh <panel-ip:5555> \
-    [--id NAME] [--mqtt tcp://host:1883] [--latest] [--force]
+    [--id NAME] [--mqtt tcp://host:1883] [--latest] [--prerelease] [--force] \
+    [--builtin --ha-url URL {--ha-token LLAT | --ha-user U --ha-pass P}]
 ```
 
 With no `--apk` and no local build it downloads the **latest signed release** from GitHub (`--latest`
-forces that even when a local build exists). It connects, installs, grants the permissions below,
+forces that even when a local build exists; `--prerelease` fetches the newest release-candidate
+instead of the latest stable). It connects, installs, grants the permissions below,
 starts the agent, optionally sets the panel id / MQTT, and ends with a self-verify checklist. It is
 **idempotent** — re-run the same command to finish after any interruption — and warns before
 reinstalling the same or an older version (`--force` skips that). `scripts/provision.sh <ip> --verify`
@@ -37,6 +39,30 @@ rk3576 / PX30 panels run `su` in-app and don't need it. The installer probes the
 (vendor `su` variants or a root adbd) and picks a `/system` or systemless (Magisk-style `service.d`)
 install automatically; it is idempotent and safe to re-run.
 
+## Provisioning the built-in dashboard renderer
+
+Since 0.9, ha-paneld can render the dashboard itself instead of the HA Companion app (experimental,
+off by default). `--builtin` selects it and provisions its Home Assistant sign-in **from this machine**,
+so nothing is typed on the panel:
+
+```bash
+# username/password (recommended): logs in HERE, mints a revocable refresh token; the password
+# never reaches the panel.
+scripts/provision.sh <panel-ip:5555> --builtin --ha-url https://ha.example --ha-user USER --ha-pass PASS
+
+# or a long-lived access token instead of a login:
+scripts/provision.sh <panel-ip:5555> --builtin --ha-url https://ha.example --ha-token LLAT
+```
+
+On a **rooted** panel already running a signed-in HA Companion, none of that is needed: set the
+dashboard app to **Built-in renderer** in the `:8888` Configure tab (or POST `dashboard_package=builtin`)
+and it borrows the Companion's sign-in automatically — the Companion keeps its own login, and switching
+back is the same picker change.
+
+Reverting to the Companion: set the dashboard app back to it in the Configure tab (or blank
+`dashboard_package`). The built-in renderer deliberately has **no Voice Assistant (Assist) and no
+notifications** — keep the Companion where those matter.
+
 ## Updating a whole fleet
 
 Use [`scripts/update-fleet.sh`](../scripts/update-fleet.sh). The fleet script downloads the release
@@ -44,6 +70,7 @@ once and runs `provision.sh` per panel, so every one is installed **and launched
 
 ```bash
 scripts/update-fleet.sh --latest -- 192.168.1.10 192.168.1.11:5555
+# --prerelease rolls the newest release-candidate instead of the latest stable.
 # or pipe a host list:  printf '%s\n' 192.168.1.10 192.168.1.11 | scripts/update-fleet.sh --latest
 ```
 
