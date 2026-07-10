@@ -390,7 +390,7 @@ class PaneldServer(
                             }
                         }
                         val arr = vers.joinToString(",") { v ->
-                            """{"version":${jsonStr(v.version)},"tag":${jsonStr(v.tag)},"notes":${jsonStr(v.notesUrl)},"installable":${v.installable}}"""
+                            """{"version":${jsonStr(v.version)},"tag":${jsonStr(v.tag)},"notes":${jsonStr(v.notesUrl)},"installable":${v.installable},"apk":${jsonStr(v.apkUrl ?: "")}}"""
                         }
                         call.respondText("""{"channel":${jsonStr(channel)},"versions":[$arr]}""", ContentType.Application.Json)
                     }
@@ -1185,7 +1185,8 @@ $body</div>"""
 <label class="muted">Channel <select class="cchan" onchange="loadVersions('$name')"><option value="stable"${sel("stable")}>Stable</option><option value="prerelease"${sel("prerelease")}>Prerelease</option></select></label>
 <label class="muted">Version <select class="cvsel" onchange="verChanged('$name')"><option>loading…</option></select></label>
 <a class="cfglink cnotes" target="_blank" rel="noopener" title="Release notes ↗" style="visibility:hidden">↗</a>
-<button class="pbtn cinstall" onclick="installSel('$name',this)" data-root="${if (root) "1" else "0"}" disabled>Install</button>
+${if (root) """<button class="pbtn cinstall" onclick="installSel('$name',this)" data-root="1" disabled>Install</button>"""
+        else """<a class="pbtn cdl" style="display:none" target="_blank" rel="noopener" title="This panel has no root, so ha-paneld can't install APKs itself — download the APK, then install it from your admin machine: adb install -r <file>">⬇ Download APK</a>"""}
 </div></div>"""
     }
 

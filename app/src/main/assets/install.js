@@ -20,6 +20,7 @@
           var o = document.createElement('option');
           o.value = v.tag; o.textContent = v.version + (v.installable ? '' : ' (no APK)');
           o.setAttribute('data-notes', v.notes || ''); o.setAttribute('data-installable', v.installable ? '1' : '0');
+          o.setAttribute('data-apk', v.apk || '');
           if (v.version === installed) pick = i;
           vsel.appendChild(o);
         });
@@ -32,10 +33,16 @@
   window.verChanged = function (name) {
     var r = row(name); if (!r) return;
     var o = r.querySelector('.cvsel').selectedOptions[0];
-    var notes = r.querySelector('.cnotes'), btn = r.querySelector('.cinstall');
+    var notes = r.querySelector('.cnotes'), btn = r.querySelector('.cinstall'), dl = r.querySelector('.cdl');
     var url = o ? o.getAttribute('data-notes') : '', installable = o && o.getAttribute('data-installable') === '1';
     if (notes) { if (url) { notes.href = url; notes.style.visibility = 'visible'; } else { notes.style.visibility = 'hidden'; } }
     if (btn) btn.disabled = !(btn.getAttribute('data-root') === '1' && installable);
+    // No-root panels render a Download link instead of the Install button (ha-paneld can't install
+    // APKs without root): point it at the selected version's APK asset for a manual adb install -r.
+    if (dl) {
+      var apk = o ? o.getAttribute('data-apk') : '';
+      if (installable && apk) { dl.href = apk; dl.style.display = ''; } else { dl.style.display = 'none'; }
+    }
   };
 
   // Install the selected version of a picker component.

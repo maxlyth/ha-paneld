@@ -20,7 +20,15 @@ object ReleaseCatalog {
     data class Raw(val tag: String, val prerelease: Boolean, val notesUrl: String, val apkUrl: String?)
 
     /** A pickable version for the UI: [version] is the display label, [tag] the API/install key. */
-    data class Version(val version: String, val tag: String, val notesUrl: String, val installable: Boolean)
+    data class Version(
+        val version: String,
+        val tag: String,
+        val notesUrl: String,
+        val installable: Boolean,
+        // Direct APK asset URL (null when the release ships none) — surfaced so a NO-ROOT panel's
+        // Install tab can offer the download for a manual `adb install -r` from the admin machine.
+        val apkUrl: String? = null,
+    )
 
     /** A tag is only ever interpolated into a GitHub API path — restrict it to release-tag characters so
      *  a crafted value can't escape the path. */
@@ -35,7 +43,7 @@ object ReleaseCatalog {
         raw.asSequence()
             .filter { channel == "prerelease" || !it.prerelease }
             .take(limit)
-            .map { Version(normalize(it.tag), it.tag, it.notesUrl, it.apkUrl != null) }
+            .map { Version(normalize(it.tag), it.tag, it.notesUrl, it.apkUrl != null, it.apkUrl) }
             .toList()
 
     /** Fetch + parse the releases list for [repo]; [apkMatch] picks the installable asset by name. Returns
