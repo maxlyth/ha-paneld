@@ -66,6 +66,9 @@ data class Capabilities(
     // Android 10+ ships a system-wide dark/light setting; panels that have it follow the OS and hide
     // ha-paneld's own dark_mode toggle (Android 9- panels have no such control, so ours fills the gap).
     val hasSystemDarkMode: Boolean = false,
+    // HA Companion (full or minimal) present on the panel — gates the Companion auto-update settings
+    // (meaningless without it) and their HA entities.
+    val companionInstalled: Boolean = false,
 )
 
 /**

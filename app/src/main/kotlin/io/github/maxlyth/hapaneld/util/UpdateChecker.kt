@@ -92,7 +92,7 @@ object UpdateChecker {
     internal fun filterAbsent(list: List<UpdateInfo>, companionInstalled: Boolean): List<UpdateInfo> =
         if (companionInstalled) list else list.filterNot { it.label == "HA Companion" }
 
-    private val COMPANION_PKGS = listOf(
+    internal val COMPANION_PKGS = listOf(
         "io.homeassistant.companion.android",
         "io.homeassistant.companion.android.minimal",
     )

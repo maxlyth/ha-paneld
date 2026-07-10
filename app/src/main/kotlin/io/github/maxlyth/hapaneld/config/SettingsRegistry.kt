@@ -257,25 +257,6 @@ object SettingsRegistry {
 
         // ---- System ------------------------------------------------------------------------------
         SettingSpec(
-            key = "companion_auto_update", type = SettingType.BOOL, group = "System",
-            label = "Companion auto-update", default = "false", scope = Scope.DEVICE,
-            help = "Install/update the minimal HA Companion over root when missing or out of date.",
-            ha = HaEntity(
-                "switch", "companion_auto_update", "Companion auto-update",
-                """"command_topic":"ha-paneld/{panel}/companion_auto_update/set","state_topic":"ha-paneld/{panel}/companion_auto_update/state","icon":"mdi:cellphone-arrow-down","entity_category":"config"""",
-            ),
-        ),
-        SettingSpec(
-            key = "companion_update_channel", type = SettingType.ENUM, group = "System",
-            label = "Companion auto-update channel", default = "stable", options = listOf("stable", "prerelease"),
-            scope = Scope.DEVICE,
-            help = "Release channel the Companion auto-updater follows.",
-            ha = HaEntity(
-                "select", "companion_update_channel", "Companion auto-update channel",
-                """"command_topic":"ha-paneld/{panel}/companion_update_channel/set","state_topic":"ha-paneld/{panel}/companion_update_channel/state","options":["Stable","Pre-release"],"icon":"mdi:source-branch","entity_category":"config"""",
-            ),
-        ),
-        SettingSpec(
             key = "self_update", type = SettingType.BOOL, group = "System",
             label = "ha-paneld auto-update", default = "false", scope = Scope.DEVICE,
             help = "ha-paneld updates itself from GitHub releases on the selected channel (opt-in).",
@@ -293,6 +274,27 @@ object SettingsRegistry {
                 "select", "update_channel", "ha-paneld auto-update channel",
                 """"command_topic":"ha-paneld/{panel}/update_channel/set","state_topic":"ha-paneld/{panel}/update_channel/state","options":["Stable","Pre-release"],"icon":"mdi:source-branch","entity_category":"config"""",
             ),
+        ),
+        SettingSpec(
+            key = "companion_auto_update", type = SettingType.BOOL, group = "System",
+            label = "Companion auto-update", default = "false", scope = Scope.DEVICE,
+            help = "Install/update the minimal HA Companion over root when missing or out of date.",
+            availableWhen = { it.companionInstalled },
+            ha = HaEntity(
+                "switch", "companion_auto_update", "Companion auto-update",
+                """"command_topic":"ha-paneld/{panel}/companion_auto_update/set","state_topic":"ha-paneld/{panel}/companion_auto_update/state","icon":"mdi:cellphone-arrow-down","entity_category":"config"""",
+            ),
+        ),
+        SettingSpec(
+            key = "companion_update_channel", type = SettingType.ENUM, group = "System",
+            label = "Companion auto-update channel", default = "stable", options = listOf("stable", "prerelease"),
+            scope = Scope.DEVICE,
+            help = "Release channel the Companion auto-updater follows.",
+            ha = HaEntity(
+                "select", "companion_update_channel", "Companion auto-update channel",
+                """"command_topic":"ha-paneld/{panel}/companion_update_channel/set","state_topic":"ha-paneld/{panel}/companion_update_channel/state","options":["Stable","Pre-release"],"icon":"mdi:source-branch","entity_category":"config"""",
+            ),
+            availableWhen = { it.companionInstalled },
         ),
         SettingSpec(
             key = "launcher_package", type = SettingType.STRING, group = "System",

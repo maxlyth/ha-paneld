@@ -80,6 +80,9 @@ class MqttBridge(
     // Panel has hardware buttons instrumented via the daemon (evdev) — publish the event entity even
     // when the accessibility key capture is off (e.g. the WF1589T power button).
     private val hasEvdevButtons: Boolean,
+    // Capability snapshot supplier for availableWhen gating of registry entities (null = no gating,
+    // used by tests). Called on the MQTT thread at discovery time, so probes stay off the main thread.
+    private val capabilities: (() -> io.github.maxlyth.hapaneld.config.Capabilities)? = null,
     private val hasLight: Boolean,
     private val hasProximity: Boolean,
     private val hasTemperature: Boolean,
@@ -923,8 +926,12 @@ class MqttBridge(
         // Honour the spec's per-setting default so a setting declared haExposedByDefault=false is
         // local-only (HTTP UI) until the user opts in via the expose pip — matching what the Configure
         // UI/schema shows. Falls back to true for keys with no registry spec (e.g. relay/button_led).
-        val default = SettingsRegistry.spec(key)?.haExposedByDefault ?: true
-        if (config.haExposed(key, default)) {
+        // An UNAVAILABLE setting (availableWhen false — e.g. Companion auto-update with no Companion
+        // installed) publishes the empty config, removing any stale HA entity, regardless of the pip.
+        val spec = SettingsRegistry.spec(key)
+        val default = spec?.haExposedByDefault ?: true
+        val available = capabilities?.let { c -> spec?.availableWhen?.invoke(c()) } ?: true
+        if (available && config.haExposed(key, default)) {
             publishConfig(component, objectId, payload())
             publishState()
         } else {

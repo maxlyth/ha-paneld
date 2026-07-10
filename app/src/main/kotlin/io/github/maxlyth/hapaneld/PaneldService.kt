@@ -242,6 +242,7 @@ class PaneldService : Service() {
     private fun buildMqtt(): MqttBridge = MqttBridge(
         config, brightness, screen, led, navigate, volume, system, navbar, watchdog, kiosk, touchSound, bootChime, zigbee, relay, cpu, adb,
         accessibilityEnabled(), profile.evdevButtons.isNotEmpty(),
+        { capabilitiesSnapshot() },
         sensors.hasLight(), sensors.hasProximity(),
         sensors.hasTemperature(), sensors.hasHumidity(),
         profile.hasCht8305,
@@ -396,6 +397,9 @@ class PaneldService : Service() {
         networkAdb = adb.available(),
         zigbeePresent = zigbeePresent,
         hasSystemDarkMode = Build.VERSION.SDK_INT >= 29,   // Android 10+ has the system dark/light setting
+        companionInstalled = UpdateChecker.COMPANION_PKGS.any {
+            runCatching { packageManager.getPackageInfo(it, 0) }.isSuccess
+        },
     )
 
     /** WebView auto-heal (Install-tab "Update WebView now" button): download + install the profile's
