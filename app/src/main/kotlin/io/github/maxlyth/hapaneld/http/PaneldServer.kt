@@ -1857,6 +1857,13 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
         // Persisted fields are staged into one editor and committed atomically, so a power loss mid-apply
         // can't leave a half-written config (e.g. broker set but credentials not). Live side-effects
         // (behaviour keys, reconfigure) run after the commit so they read freshly-committed state.
+        // Live-apply side-effects are DETECTED inside the batch (from POSTED values — a read-back inside
+        // applyBatch returns the pre-commit value, which silently defeated change-detection) but EXECUTED
+        // after it commits, so the relaunched renderer can never read stale config.
+        var applyDark: Boolean? = null
+        var relaunchForHa = false
+        var relaunchForDash = false
+        var relaunchForFullscreen = false
         config.applyBatch {
             panelId?.let { config.setPanelId(it) }
             p["friendly_name"]?.let { config.setFriendlyName(it.trim()) }
@@ -1881,30 +1888,18 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             p["dashboard_idle_return_min"]?.trim()?.toIntOrNull()?.let { config.setDashboardIdleReturnMin(it.coerceIn(0, 1440)) }
             // Live-apply a fullscreen toggle: a bare foreground relaunch of the running renderer re-runs
             // onResume → applyFullscreen with the new value, without touching the page (no reload flag).
+            // Detected from the POSTED value — config read-back inside the batch is pre-commit.
             val prevFullscreen = config.dashboardFullscreen
-            p["dashboard_fullscreen"]?.let { config.setDashboardFullscreen(it.trim().equals("true", ignoreCase = true) || it.trim() == "1") }
-            if (config.dashboardFullscreen != prevFullscreen && config.dashboardPackage == "builtin" && !dashChanged) {
-                scope.launch { runCatching { system.launchHome(SystemController.BUILTIN_DASHBOARD) } }
-            }
+            val postedFullscreen = p["dashboard_fullscreen"]?.let { it.trim().equals("true", ignoreCase = true) || it.trim() == "1" }
+            postedFullscreen?.let { config.setDashboardFullscreen(it) }
+            relaunchForFullscreen = postedFullscreen != null && postedFullscreen != prevFullscreen && !dashChanged
             // Dark mode (Display card; only meaningful on panels WITHOUT a system dark-mode setting,
-            // Android 9-): re-theme the native app surfaces via the DayNight default (AppCompat
-            // recreates started activities itself) and reload the built-in renderer so its force-dark
-            // + the page's colour scheme re-evaluate. Panels WITH a system control (10+) follow that
-            // instead — the setting is hidden there and a stray POST must not fight the OS.
+            // Android 9-). Detected from the POSTED value (read-back inside the batch is pre-commit —
+            // this exact bug made the toggle a silent no-op); executed after the batch commits.
             val prevDark = config.darkMode
-            p["dark_mode"]?.let { config.setDarkMode(it.trim().equals("true", ignoreCase = true) || it.trim() == "1") }
-            if (config.darkMode != prevDark && android.os.Build.VERSION.SDK_INT < 29) {
-                val dark = config.darkMode
-                android.os.Handler(android.os.Looper.getMainLooper()).post {
-                    androidx.appcompat.app.AppCompatDelegate.setDefaultNightMode(
-                        if (dark) androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_YES
-                        else androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_NO,
-                    )
-                }
-                if (config.dashboardPackage == "builtin") {
-                    scope.launch { runCatching { system.reloadDashboard(SystemController.BUILTIN_DASHBOARD) } }
-                }
-            }
+            val postedDark = p["dark_mode"]?.let { it.trim().equals("true", ignoreCase = true) || it.trim() == "1" }
+            postedDark?.let { config.setDarkMode(it) }
+            if (postedDark != null && postedDark != prevDark && android.os.Build.VERSION.SDK_INT < 29) applyDark = postedDark
             val logEnabled = p["log_ship_enabled"]?.let { it.trim().equals("true", ignoreCase = true) || it.trim() == "1" }
             val logHost = p["log_ship_host"]?.trim()
             val logPort = p["log_ship_port"]?.trim()?.toIntOrNull()
@@ -1966,20 +1961,11 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             val haChanged = (haUrl != null && haUrl != prevHaUrl) ||
                 (haToken != null && haToken != prevHaToken) ||
                 (haRefresh != null && haRefresh != prevHaRefresh) || refreshCleared
-            if (haChanged && config.dashboardPackage == "builtin") {
-                runCatching { system.reloadDashboard(SystemController.BUILTIN_DASHBOARD) }
-            }
+            relaunchForHa = haChanged
             // Live-apply a renderer switch: re-anchor HOME to the new renderer and bring it up now —
             // previously changing "Dashboard app" did nothing until the next boot. Off-thread (su/daemon).
             // The kiosk/watchdog loops read dashboard_package per tick, so they retarget on their own.
-            if (dashChanged) {
-                scope.launch {
-                    runCatching {
-                        system.ensureDashboardHome(config.dashboardPackage, config.haUrl.isNotBlank())
-                        system.launchHome(config.dashboardPackage)
-                    }
-                }
-            }
+            relaunchForDash = dashChanged
 
             // Per-row "expose to HA" toggles (ha_expose_<key>=true|false) — take effect on the reconfigure.
             for (name in p.names()) {
@@ -1988,6 +1974,33 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
                         config.setHaExposed(name.removePrefix("ha_expose_"), it)
                     }
                 }
+            }
+        }
+        // ---- post-commit side-effects: config reads from here (and from anything we relaunch) see
+        // the committed values. Order: renderer switch first (it re-anchors HOME), then reloads.
+        if (relaunchForDash) {
+            scope.launch {
+                runCatching {
+                    system.ensureDashboardHome(config.dashboardPackage, config.haUrl.isNotBlank())
+                    system.launchHome(config.dashboardPackage)
+                }
+            }
+        }
+        if (relaunchForHa && config.dashboardPackage == "builtin") {
+            scope.launch { runCatching { system.reloadDashboard(SystemController.BUILTIN_DASHBOARD) } }
+        }
+        if (relaunchForFullscreen && config.dashboardPackage == "builtin") {
+            scope.launch { runCatching { system.launchHome(SystemController.BUILTIN_DASHBOARD) } }
+        }
+        applyDark?.let { dark ->
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                androidx.appcompat.app.AppCompatDelegate.setDefaultNightMode(
+                    if (dark) androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_YES
+                    else androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_NO,
+                )
+            }
+            if (config.dashboardPackage == "builtin") {
+                scope.launch { runCatching { system.reloadDashboard(SystemController.BUILTIN_DASHBOARD) } }
             }
         }
         // Formerly MQTT-only behaviour settings — applied through the bridge's command path so HTTP

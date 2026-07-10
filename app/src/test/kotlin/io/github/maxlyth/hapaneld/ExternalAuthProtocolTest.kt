@@ -160,4 +160,19 @@ class ExternalAuthProtocolTest {
         assertNull(ExternalAuthProtocol.resultOf("""{"type":"result"}""")) // no id
         assertNull(ExternalAuthProtocol.resultOf("not json"))
     }
+
+    // --- selectedThemeJs: the HA per-device theme store is the ONLY lever that re-renders HA ---
+
+    @Test fun themeSeedOnlyWritesWhenAbsent() {
+        val js = ExternalAuthProtocol.selectedThemeJs(dark = true, onlyIfAbsent = true)
+        assertTrue("guarded on absence — must not stomp a user-picked HA theme", js.contains("if(!localStorage.getItem('selectedTheme'))"))
+        assertTrue(js.contains("""JSON.stringify({dark:true})"""))
+        assertTrue("localStorage can throw on data: URLs — must be try/caught", js.startsWith("try{"))
+    }
+
+    @Test fun themeToggleOverridesUnconditionally() {
+        val js = ExternalAuthProtocol.selectedThemeJs(dark = false, onlyIfAbsent = false)
+        assertTrue("a deliberate toggle overrides like HA's own radio", !js.contains("getItem"))
+        assertTrue(js.contains("""JSON.stringify({dark:false})"""))
+    }
 }

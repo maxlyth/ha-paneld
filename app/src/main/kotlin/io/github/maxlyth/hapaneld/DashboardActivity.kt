@@ -308,7 +308,23 @@ class DashboardActivity : AppCompatActivity() {
         unlatchAuth("new load") // a deliberate reload/navigate (or a config change) is the retry consent
         interstitialShown = false
         if (w == null) { buildAndLoad(config); return }  // defensive: relaunched with no WebView built
-        w.loadUrl(ExternalAuthProtocol.dashboardUrl(config.haUrl, nav ?: config.homeDashboard))
+        // Re-apply force-dark (only set at WebView creation otherwise) and, on the no-system-dark-mode
+        // panels, write the panel's dark_mode into HA's own per-device theme store before the fresh
+        // load — that store is what actually re-renders HA (see selectedThemeJs; force-dark alone is a
+        // no-op on HA). The write must precede loadUrl: localStorage is synchronous and origin-scoped,
+        // so the reloaded frontend boots straight into the new scheme.
+        applyForceDark(w)
+        val url = ExternalAuthProtocol.dashboardUrl(config.haUrl, nav ?: config.homeDashboard)
+        if (android.os.Build.VERSION.SDK_INT < 29) {
+            // The theme write must COMPLETE before the navigation — evaluateJavascript is async (queued
+            // to the JS thread), and a loadUrl issued right after can tear the page down first, losing
+            // the write. The result callback runs after evaluation, on the UI thread.
+            w.evaluateJavascript(ExternalAuthProtocol.selectedThemeJs(Config(this).darkMode, onlyIfAbsent = false)) {
+                w.loadUrl(url)
+            }
+        } else {
+            w.loadUrl(url)
+        }
         onLoadStarted()
     }
 
@@ -680,6 +696,16 @@ class DashboardActivity : AppCompatActivity() {
         settings.mediaPlaybackRequiresUserGesture = false
         setBackgroundColor(BG_DARK) // no white flash before first paint
         applyForceDark(this)
+        // Seed the dashboard's DEFAULT colour scheme through HA's own per-device theme store, before
+        // any page script runs — only when the panel has no system dark mode (the Display-card toggle
+        // population) and only if the user hasn't picked a theme in HA (see selectedThemeJs).
+        if (android.os.Build.VERSION.SDK_INT < 29) runCatching {
+            if (androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.DOCUMENT_START_SCRIPT)) {
+                androidx.webkit.WebViewCompat.addDocumentStartJavaScript(
+                    this, ExternalAuthProtocol.selectedThemeJs(config.darkMode, onlyIfAbsent = true), setOf("*"),
+                )
+            }
+        }
         // The HA frontend relies on cookies (incl. third-party for some integrations).
         CookieManager.getInstance().setAcceptCookie(true)
         CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
@@ -879,6 +905,22 @@ object ExternalAuthProtocol {
         // If the path already carries a query string, join with & so external_auth isn't swallowed.
         val sep = if (p.contains('?')) "&" else "?"
         return "$base/$p${sep}external_auth=1"
+    }
+
+    /**
+     * JS that writes the HA frontend's own per-device theme store (`selectedTheme` in localStorage —
+     * exactly what the profile page's Auto/Light/Dark radio writes). This is the lever that actually
+     * re-renders HA: the WebView force-dark route is a no-op on HA because WEB_THEME_DARKENING_ONLY
+     * only acts on pages whose `color-scheme` meta declares dark support, and HA only declares it
+     * AFTER it has already gone dark (verified live on an Android 8.1 panel, 2026-07-10 — the media
+     * query never flips, so force-dark alone never darkened HA at all). [onlyIfAbsent] = seed a
+     * DEFAULT without stomping a theme the user picked in HA; false = a deliberate dark-mode toggle,
+     * which overrides like the radio does.
+     */
+    fun selectedThemeJs(dark: Boolean, onlyIfAbsent: Boolean): String {
+        val write = """localStorage.setItem('selectedTheme', JSON.stringify({dark:$dark}))"""
+        return if (onlyIfAbsent) "try{if(!localStorage.getItem('selectedTheme')){$write}}catch(e){}"
+        else "try{$write}catch(e){}"
     }
 
     /** The frontend's `force` flag (set after a 401 to demand a fresh token), false if absent/malformed. */
