@@ -58,6 +58,62 @@ object CompanionDb {
 
     private fun dbPath(pkg: String) = "/data/data/$pkg/databases/HomeAssistantDB"
 
+    // ---- login borrow: reuse the Companion's sign-in for the built-in renderer ----
+    // Same panel, same HA user; HA does not rotate refresh tokens on use, so both apps refresh
+    // independently off the same token and the Companion keeps working as a fallback (mechanism in
+    // production on the maintainer fleet since 2026-07-09; the DB columns are plain text).
+
+    /** The client_id the Companion's refresh token was issued to — a refresh only works with it. */
+    const val COMPANION_CLIENT_ID = "https://home-assistant.io/android"
+
+    private const val LOGIN_SQL =
+        "SELECT id||char(31)||coalesce(internal_url,'')||char(31)||coalesce(external_url,'')||char(31)||" +
+            "coalesce(refresh_token,'')||char(31)||coalesce(access_token,'')||char(31)||coalesce(token_expiration,'') FROM servers;"
+
+    data class LoginRow(
+        val id: String,
+        val internalUrl: String,
+        val externalUrl: String,
+        val refreshToken: String,
+        val accessToken: String,
+        val expirySec: Long,           // epoch SECONDS (the Companion's unit; DashboardAuth's too)
+    ) {
+        val url: String get() = (internalUrl.takeUnless(::isBlank) ?: externalUrl).trimEnd('/')
+    }
+
+    /** Parse the `LOGIN_SQL` lines. Same tolerance rules as [parseServers]. */
+    fun parseLogins(output: String): List<LoginRow> =
+        output.lineSequence().map { it.trimEnd('\r') }.filter { it.isNotEmpty() }.mapNotNull { line ->
+            val f = line.split(US)
+            if (f[0].isBlank()) null else LoginRow(
+                f[0], f.getOrElse(1) { "" }, f.getOrElse(2) { "" },
+                f.getOrElse(3) { "" }, f.getOrElse(4) { "" },
+                f.getOrElse(5) { "" }.toLongOrNull() ?: 0L,
+            )
+        }.toList()
+
+    /** The Companion's active server id from `session_0.xml` (`<int name="active_server" value="N"/>`),
+     *  or null when unreadable — multi-server installs must borrow the server the panel actually shows. */
+    fun parseActiveServer(xml: String?): String? =
+        xml?.let { Regex("\"active_server\"\\s+value=\"(\\d+)\"").find(it)?.groupValues?.get(1) }
+
+    /** Pick the row to borrow: the active server when known, else the first signed-in row (has a
+     *  refresh token and a URL). Null = nothing borrowable. */
+    fun pickLogin(rows: List<LoginRow>, activeId: String?): LoginRow? {
+        val signed = rows.filter { it.refreshToken.isNotBlank() && !isBlank(it.url) }
+        return signed.firstOrNull { it.id == activeId } ?: signed.firstOrNull()
+    }
+
+    /** Read the borrowable login via root, or null (no root / no Companion / no signed-in server).
+     *  Read-only immutable open — never leaves root-owned WAL files. Call OFF the main thread. */
+    fun readLogin(context: Context, root: RootShell): LoginRow? {
+        val pkg = CompanionInstaller.installedPkg(context) ?: return null
+        val db = dbPath(pkg)
+        val out = root.runOutput("""sqlite3 "file:$db?immutable=1" "$LOGIN_SQL" 2>/dev/null""") ?: return null
+        val active = parseActiveServer(root.runOutput("""cat "/data/data/$pkg/shared_prefs/session_0.xml" 2>/dev/null"""))
+        return pickLogin(parseLogins(out), active)
+    }
+
     /** Read the Companion `servers` rows via root sqlite3, or null when unavailable (no root / no
      *  Companion / no DB / no sqlite3). Opens the file as an **immutable** URI: read-only, WAL ignored,
      *  and crucially it never creates the `-wal`/`-shm` files — so a root read can't leave root-owned

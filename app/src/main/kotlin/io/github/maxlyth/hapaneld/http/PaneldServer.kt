@@ -1981,6 +1981,20 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
         if (relaunchForDash) {
             scope.launch {
                 runCatching {
+                    // Switching TO the built-in renderer with no connection configured: borrow the
+                    // Companion's sign-in (root read of its own server row — same panel, same HA user)
+                    // so trying the built-in dashboard is a picker change, not a form-filling exercise.
+                    // The Companion keeps its login (HA doesn't rotate refresh tokens); switching back
+                    // is the same picker.
+                    if (config.dashboardPackage == SystemController.BUILTIN_DASHBOARD && config.haUrl.isBlank()) {
+                        io.github.maxlyth.hapaneld.control.CompanionDb.readLogin(appContext, io.github.maxlyth.hapaneld.control.Su)?.let { l ->
+                            config.setHaConnection(l.url, l.accessToken.takeIf { it.isNotBlank() })
+                            config.setHaRefreshToken(l.refreshToken)
+                            if (l.expirySec > 0) config.setHaTokenExpiry(l.expirySec)
+                            config.setHaClientId(io.github.maxlyth.hapaneld.control.CompanionDb.COMPANION_CLIENT_ID)
+                            android.util.Log.i(TAG, "borrowed the Companion sign-in for the built-in renderer (${l.url})")
+                        }
+                    }
                     system.ensureDashboardHome(config.dashboardPackage, config.haUrl.isNotBlank())
                     system.launchHome(config.dashboardPackage)
                 }
