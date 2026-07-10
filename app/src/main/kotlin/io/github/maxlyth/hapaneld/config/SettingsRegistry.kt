@@ -97,9 +97,10 @@ object SettingsRegistry {
         SettingSpec(
             key = "kiosk_lock", type = SettingType.BOOL, group = "Behaviour",
             label = "Kiosk lock (experimental)", default = "false", scope = Scope.DEVICE,
-            help = "EXPERIMENTAL. Suppress + disable the Android system nav bar (Home/Recents/notification " +
-                "shade) so a non-admin can't accidentally leave the dashboard. Needs root. A reboot always " +
-                "clears it; release from here, HA, adb, or 7 rapid taps in the top-left corner.",
+            help = "EXPERIMENTAL. Needs root — no effect on a panel without it. Suppress + disable the " +
+                "Android system nav bar (Home/Recents/notification shade) so a non-admin can't accidentally " +
+                "leave the dashboard. A reboot always clears it; release from here, HA, adb, or 7 rapid " +
+                "taps in the top-left corner.",
             ha = HaEntity(
                 "switch", "kiosk_lock", "Kiosk lock",
                 """"command_topic":"ha-paneld/{panel}/kiosk_lock/set","state_topic":"ha-paneld/{panel}/kiosk_lock/state","icon":"mdi:lock","entity_category":"config"""",

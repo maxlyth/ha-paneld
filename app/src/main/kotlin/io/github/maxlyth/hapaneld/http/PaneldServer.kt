@@ -1765,7 +1765,8 @@ ${tcard("updtbl", "Updates", s?.let { updatesRowsHtml(it) })}
     }
 
     private fun tameCardHtml(): String {
-        if (!rootOk()) return ""   // no root/daemon → taming can't act
+        if (!rootOk()) return """<div class="card"><h2>Vendor packages<span class="cardbadge exp">experimental</span></h2>
+<p class="note">Taming force-stops vendor apps and blocks them relaunching — this needs root or the helper daemon, which this panel doesn't have, so it's unavailable here.</p></div>"""
         // The card shows what's currently TAMED (the blocklist); discovery lives in the Find-a-package
         // picker. So a tamed package always has a visible Re-enable here.
         val cands = runCatching {
