@@ -174,20 +174,19 @@ panels are welcome — contribute a HAL adapter for your hardware. Deep per-pane
 Validated across the panel fleet: Sonoff NSPanel Pro (PX30, Android 8.1), Tuya TPA10 (rk3566,
 Android 11), Electron WF1589T (rk3576, Android 14).
 
-**Current line — 0.9 (release candidates):** the headline is the **built-in dashboard renderer** —
-ha-paneld can now render the Home Assistant dashboard itself (experimental, off by default), turning a
-panel into a single-app appliance with sign-in provisioned from your admin machine and page-level
-resilience built for weeks-long uptimes. The 0.9 rcs also brought light/dark theming across the web UI,
-app and dashboard, LED effects, MQTT over TLS, and a self-refreshing Configure page. The latest stable
-remains **0.8.7** (better install/provisioning scripts, more reliable telemetry, TPA10 room
-temperature/humidity, responsive header) — the one-line installer serves it until 0.9.0 promotes. Full
-notes for every release are in [CHANGELOG.md](CHANGELOG.md).
+**Latest release — 0.9.0:** the headline is the **built-in dashboard renderer** — ha-paneld can now
+render the Home Assistant dashboard itself (experimental, off by default), turning a panel into a
+single-app appliance: switch the picker and it borrows an installed Companion's sign-in automatically,
+or provision a fresh panel with zero typing from your admin machine, with page-level resilience built
+for weeks-long uptimes. 0.9 also brought light/dark theming across the web UI, app and dashboard, LED
+effects, MQTT over TLS, and a self-refreshing Configure page. Full notes for every release are in
+[CHANGELOG.md](CHANGELOG.md).
 
-**Where it's heading** — the near-term focus is proving the built-in renderer through soak toward a
-stable 0.9.0, then **fleet-scale operation**: bringing a new or factory-wiped panel all the way up with
-zero typing on the panel, and pushing config/updates to a whole fleet from one place. Other planned
-work includes MQTT TLS for self-signed brokers, an on-device scheduler, deeper performance tooling, and
-continued iteration on the HTTP UI. The full curated list is in **[docs/roadmap.md](docs/roadmap.md)**.
+**Where it's heading** — the near-term direction is **fleet-scale operation** and **full remote
+provisioning**: bringing a new or factory-wiped panel all the way up with zero typing on the panel, and
+pushing config/updates to a whole fleet from one place. Other planned work includes MQTT TLS for
+self-signed brokers, an on-device scheduler, deeper performance tooling, and continued iteration on the
+HTTP UI. The full curated list is in **[docs/roadmap.md](docs/roadmap.md)**.
 
 ## Documentation
 
