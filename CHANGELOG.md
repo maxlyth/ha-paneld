@@ -8,6 +8,26 @@ From **v0.8.0**, entries are grouped under **Added** (new features/entities), **
 changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
 content appear. Earlier releases predate this convention and keep their flat lists.
 
+## v0.9.0-rc5 - 2026-07-10
+
+**A clearer experience on panels without root.** A few ha-paneld features reach hardware Android only exposes to a privileged process, so they need root — which most wall panels have, but some consumer devices don't. rc5 stops those features from looking broken on such panels: they're shown, clearly marked as needing root, rather than hidden or silently doing nothing.
+
+### Added
+
+- **Root-gated features are shown, greyed, with a visible reason** — on a panel without root, features that need it (Display sizing, Vendor-package taming, and the Launcher/Reboot controls) now render disabled with a 🔒 note saying so, instead of vanishing or presenting a live-looking control that quietly fails. You can see what root would unlock rather than wondering why something is missing.
+- **Download-APK link on the Install tab (no-root panels)** — where ha-paneld can't install an update itself (no root), the component pickers now offer a direct APK download link for the selected version, with the manual `adb install -r` step in the tooltip — instead of a permanently disabled Install button.
+- **The installer says plainly when a panel has no root** — provisioning now reports whether the panel has root and, if not, lists what works everywhere versus what will appear greyed, so it's clear from the first install that the reduced set is the panel's permission model, not a fault.
+
+### Changed
+
+- **The REST API explorer follows your browser's light/dark preference**, like the rest of the web UI (it was previously always dark).
+- **Clearer "needs root" wording** throughout — "needs a rooted panel" rather than the internal "su or the helper daemon" phrasing.
+- **The standing screen** no longer says the dashboard only runs in the Home Assistant app — it's rendered by ha-paneld's own built-in renderer or the HA app.
+
+### Fixed
+
+- **The Responsiveness panel names the built-in renderer correctly** (it showed a bare package fragment).
+
 ## v0.9.0-rc4 - 2026-07-10
 
 ### Added
