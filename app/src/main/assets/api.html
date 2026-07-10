@@ -1,28 +1,39 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8">
+<script>/* ?theme=light|dark override, else the browser preference (prefers-color-scheme) */
+(function(){var m=location.search.match(/[?&]theme=(dark|light)\b/);if(m)document.documentElement.setAttribute("data-theme",m[1])})();</script>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>ha-paneld · REST API</title>
 <link rel="icon" href="/icon.svg">
 <style>
- body{font-family:system-ui,-apple-system,sans-serif;margin:0;background:#111;color:#eee}
+ /* Theme-aware (matches the main UI): dark values are the original palette; light via the media query,
+    with a ?theme= / data-theme override. The action blue, the GET/POST badges and the response <pre>
+    stay theme-agnostic (terminal look), like the logs panel elsewhere. */
+ :root{color-scheme:dark;--bg:#111;--text:#eee;--accent:#9af;--accent2:#9cf;--icon:#7c8a99;
+   --border:#242424;--card:#181818;--input-bg:#1c1c1c;--border-strong:#444;--ok-dim:#8a8}
+ @media (prefers-color-scheme:light){:root:not([data-theme=dark]){color-scheme:light;--bg:#f2f3f5;--text:#1b2430;
+   --accent:#1e56a8;--accent2:#0b6a8e;--icon:#5b6b7a;--border:#d9dde3;--card:#fff;--input-bg:#f6f7f9;--border-strong:#b6bec8;--ok-dim:#3f7d49}}
+ :root[data-theme=light]{color-scheme:light;--bg:#f2f3f5;--text:#1b2430;--accent:#1e56a8;--accent2:#0b6a8e;
+   --icon:#5b6b7a;--border:#d9dde3;--card:#fff;--input-bg:#f6f7f9;--border-strong:#b6bec8;--ok-dim:#3f7d49}
+ body{font-family:system-ui,-apple-system,sans-serif;margin:0;background:var(--bg);color:var(--text)}
  .wrap{max-width:900px;margin:0 auto;padding:20px}
  .hdr{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:6px}
- h1{font-size:1.3rem;margin:0} h1 small{color:#9af;font-weight:400}
- a{color:#9cf}
- h2{font-size:.8rem;text-transform:uppercase;letter-spacing:.05em;color:#7c8a99;margin:22px 0 8px;border-bottom:1px solid #242424;padding-bottom:4px}
- .ep{background:#181818;border:1px solid #242424;border-radius:10px;margin:0 0 10px;overflow:hidden}
+ h1{font-size:1.3rem;margin:0} h1 small{color:var(--accent);font-weight:400}
+ a{color:var(--accent2)}
+ h2{font-size:.8rem;text-transform:uppercase;letter-spacing:.05em;color:var(--icon);margin:22px 0 8px;border-bottom:1px solid var(--border);padding-bottom:4px}
+ .ep{background:var(--card);border:1px solid var(--border);border-radius:10px;margin:0 0 10px;overflow:hidden}
  summary{display:flex;align-items:center;gap:10px;padding:11px 14px;cursor:pointer;list-style:none}
  summary::-webkit-details-marker{display:none}
  .m{font-weight:700;font-size:.72rem;padding:3px 8px;border-radius:6px;min-width:46px;text-align:center}
  .get{background:#173d2a;color:#5ad18a} .post{background:#1b3a5c;color:#6db3ff}
- .path{font-family:ui-monospace,monospace;font-size:.92rem;color:#eee} .sum{color:#8a8;font-size:.85rem;margin-left:auto;text-align:right}
- .body{padding:0 14px 14px;border-top:1px solid #242424}
- label{display:block;font-size:.78rem;color:#9af;margin:10px 0 4px}
- input,select,textarea,button{font:inherit;font-size:.9rem;padding:7px 10px;border-radius:7px;border:1px solid #444;background:#1c1c1c;color:#eee;box-sizing:border-box;width:100%}
+ .path{font-family:ui-monospace,monospace;font-size:.92rem;color:var(--text)} .sum{color:var(--ok-dim);font-size:.85rem;margin-left:auto;text-align:right}
+ .body{padding:0 14px 14px;border-top:1px solid var(--border)}
+ label{display:block;font-size:.78rem;color:var(--accent);margin:10px 0 4px}
+ input,select,textarea,button{font:inherit;font-size:.9rem;padding:7px 10px;border-radius:7px;border:1px solid var(--border-strong);background:var(--input-bg);color:var(--text);box-sizing:border-box;width:100%}
  textarea{min-height:54px;font-family:ui-monospace,monospace}
- button{background:#2557a7;border-color:#2557a7;cursor:pointer;width:auto;margin-top:12px}
- pre{background:#0d0d0d;border:1px solid #242424;border-radius:7px;padding:10px;margin-top:10px;white-space:pre-wrap;word-break:break-word;font-size:.82rem;color:#cdd;max-height:300px;overflow:auto}
+ button{background:#2557a7;border-color:#2557a7;color:#fff;cursor:pointer;width:auto;margin-top:12px}
+ pre{background:#0d0d0d;border:1px solid var(--border);border-radius:7px;padding:10px;margin-top:10px;white-space:pre-wrap;word-break:break-word;font-size:.82rem;color:#cdd;max-height:300px;overflow:auto}
  .st{font-size:.78rem;margin-top:8px}
- .desc{color:#8a8;font-size:.82rem;margin:2px 0 0}
+ .desc{color:var(--ok-dim);font-size:.82rem;margin:2px 0 0}
 </style></head><body><div class="wrap">
 <div class="hdr"><h1>ha-paneld <small>· REST API</small></h1><a href="/">← back to panel</a></div>
 <p class="desc">Live, on-panel API explorer. <a href="/api/v1/openapi.json" target="_blank">openapi.json</a> — import into Swagger/Postman for fleet tooling. No auth; LAN only.</p>
