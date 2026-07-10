@@ -63,6 +63,9 @@ data class Capabilities(
     val networkAdb: Boolean = false,
     val relays: Int = 0,
     val buttonLeds: Int = 0,
+    // Android 10+ ships a system-wide dark/light setting; panels that have it follow the OS and hide
+    // ha-paneld's own dark_mode toggle (Android 9- panels have no such control, so ours fills the gap).
+    val hasSystemDarkMode: Boolean = false,
 )
 
 /**

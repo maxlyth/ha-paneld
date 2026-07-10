@@ -120,3 +120,16 @@
   window.addEventListener('resize', function () { clearTimeout(t); t = setTimeout(fitAll, 120); });
   fitAll();
 })();
+
+/* Testing aid: when ?theme= pinned the UI theme (see the inline head script), carry the param across
+   the tab links so clicking through the pages keeps the forced theme. No persistence — drop the param
+   (or open a clean URL) and the browser preference rules again. */
+(function () {
+  var forced = document.documentElement.getAttribute("data-theme");
+  if (!forced) return;
+  document.querySelectorAll(".nav a[href]").forEach(function (a) {
+    var u = new URL(a.getAttribute("href"), location.origin);
+    u.searchParams.set("theme", forced);
+    a.setAttribute("href", u.pathname + u.search);
+  });
+})();

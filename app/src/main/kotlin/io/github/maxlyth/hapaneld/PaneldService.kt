@@ -395,6 +395,7 @@ class PaneldService : Service() {
         cpuGovernors = cpu.available(),
         networkAdb = adb.available(),
         zigbeePresent = zigbeePresent,
+        hasSystemDarkMode = Build.VERSION.SDK_INT >= 29,   // Android 10+ has the system dark/light setting
     )
 
     /** WebView auto-heal (Install-tab "Update WebView now" button): download + install the profile's

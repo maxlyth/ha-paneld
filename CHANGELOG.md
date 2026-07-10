@@ -8,6 +8,13 @@ From **v0.8.0**, entries are grouped under **Added** (new features/entities), **
 changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
 content appear. Earlier releases predate this convention and keep their flat lists.
 
+## Unreleased
+
+### Added
+
+- **The web UI follows your browser's light/dark preference** — the `:8888` pages now render in a proper light theme when the viewing browser (laptop, phone) prefers light, and keep the familiar dark look otherwise. The primary-action blue, the callout banners, and the terminal-style logs and chart panels deliberately keep their look in both themes.
+- **Dark mode toggle for panels without a system setting** — Android 9 and older (e.g. NSPanel Pro) has no OS dark/light control, so a new "Dark mode" toggle on the Display card (default on) fills the gap: it themes ha-paneld's own screens and sets the built-in dashboard's default colour scheme. Panels running Android 10+ follow the system setting for all of that automatically — including live re-theming of the dashboard when the OS switches — so the toggle is hidden there. A theme picked inside Home Assistant always overrides the dashboard default.
+
 ## v0.9.0-rc2 - 2026-07-09
 
 **Long-run reliability hardening for the built-in renderer**, so the soak tests a dashboard built to run untouched for weeks rather than one that only looks right on day one. The built-in renderer is still off by default and configured exactly as in rc1.

@@ -897,6 +897,8 @@ class PaneldServer(
         val haLink = if (config.haLinkUrl.isNotBlank())
             """<a class="pbtn" href="${esc(config.haLinkUrl)}" target="_blank" rel="noopener">Open in HA</a>""" else ""
         return """<!doctype html><html lang="en"><head><meta charset="utf-8">
+<script>/* ?theme=light|dark pins the UI theme for testing (else the browser preference rules) */
+(function(){var m=location.search.match(/[?&]theme=(dark|light)\b/);if(m)document.documentElement.setAttribute("data-theme",m[1])})();</script>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>ha-paneld · ${esc(title)} · ${esc(config.friendlyName)}</title>
 <link rel="icon" href="/icon.svg">
@@ -1645,6 +1647,8 @@ report of this panel's hardware, firmware, SELinux, su and node probes for bug r
             else -> ""
         }
         return """<!doctype html><html lang="en"><head><meta charset="utf-8">
+<script>/* ?theme=light|dark pins the UI theme for testing (else the browser preference rules) */
+(function(){var m=location.search.match(/[?&]theme=(dark|light)\b/);if(m)document.documentElement.setAttribute("data-theme",m[1])})();</script>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>ha-paneld · $fname</title>
 <link rel="icon" href="/icon.svg">
@@ -1729,7 +1733,7 @@ ${tcard("updtbl", "Updates", s?.let { updatesRowsHtml(it) })}
     private fun tameRowHtml(c: TameController.Candidate, showState: Boolean = true): String {
         val tamed = c.blocked || c.disabled
         val state = if (!showState) "" else when {
-            !c.installed -> """<span style="width:80px;text-align:right;font-size:.85em;color:#888">not installed</span>"""
+            !c.installed -> """<span style="width:80px;text-align:right;font-size:.85em;color:var(--dim)">not installed</span>"""
             c.disabled -> """<span style="width:80px;text-align:right;font-size:.85em;color:#d9a528">disabled</span>"""
             else -> """<span style="width:80px;text-align:right;font-size:.85em;color:#3fb950">active</span>"""
         }
@@ -1738,12 +1742,12 @@ ${tcard("updtbl", "Updates", s?.let { updatesRowsHtml(it) })}
         val btn = if (tamed) "" else "background:#7a2e2e;border-color:#7a2e2e"
         // Tags (authored or heuristic: core/vendor/user/overlay) after the label; note below the package id.
         val tags = c.tags.joinToString("") {
-            """<span style="display:inline-block;background:#2a3340;color:#9cc;border-radius:4px;padding:0 6px;margin-left:5px;font-size:.7em;vertical-align:1px">${esc(it)}</span>"""
+            """<span class="vtag">${esc(it)}</span>"""
         }
         // A "recommended" badge marks the profile's defaultTame picks (safe first picks / the "Tame all
         // recommended" set) while they're still active.
         val recBadge = if (c.recommended && !tamed)
-            """<span style="display:inline-block;background:#1f4d2e;color:#8fe0a8;border-radius:4px;padding:0 6px;margin-left:5px;font-size:.7em;vertical-align:1px">recommended</span>""" else ""
+            """<span class="vtag rec">recommended</span>""" else ""
         val note = if (c.note.isNotBlank())
             """<br><small style="color:#9aa">${esc(c.note)}</small>""" else ""
         // A non-removable package (core Android / dashboard / ourselves) is shown for context with a muted
@@ -1881,6 +1885,25 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             p["dashboard_fullscreen"]?.let { config.setDashboardFullscreen(it.trim().equals("true", ignoreCase = true) || it.trim() == "1") }
             if (config.dashboardFullscreen != prevFullscreen && config.dashboardPackage == "builtin" && !dashChanged) {
                 scope.launch { runCatching { system.launchHome(SystemController.BUILTIN_DASHBOARD) } }
+            }
+            // Dark mode (Display card; only meaningful on panels WITHOUT a system dark-mode setting,
+            // Android 9-): re-theme the native app surfaces via the DayNight default (AppCompat
+            // recreates started activities itself) and reload the built-in renderer so its force-dark
+            // + the page's colour scheme re-evaluate. Panels WITH a system control (10+) follow that
+            // instead — the setting is hidden there and a stray POST must not fight the OS.
+            val prevDark = config.darkMode
+            p["dark_mode"]?.let { config.setDarkMode(it.trim().equals("true", ignoreCase = true) || it.trim() == "1") }
+            if (config.darkMode != prevDark && android.os.Build.VERSION.SDK_INT < 29) {
+                val dark = config.darkMode
+                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                    androidx.appcompat.app.AppCompatDelegate.setDefaultNightMode(
+                        if (dark) androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_YES
+                        else androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_NO,
+                    )
+                }
+                if (config.dashboardPackage == "builtin") {
+                    scope.launch { runCatching { system.reloadDashboard(SystemController.BUILTIN_DASHBOARD) } }
+                }
             }
             val logEnabled = p["log_ship_enabled"]?.let { it.trim().equals("true", ignoreCase = true) || it.trim() == "1" }
             val logHost = p["log_ship_host"]?.trim()

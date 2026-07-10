@@ -580,6 +580,46 @@ class DashboardActivity : AppCompatActivity() {
         BuiltinDashboard.foreground = isTopResumedActivity
     }
 
+    /**
+     * The dashboard's DEFAULT colour scheme, by Android tier (a theme picked inside HA always wins —
+     * WEB_THEME_DARKENING_ONLY never darkens a page that pinned a light theme):
+     *  - 13+: nothing to do — the WebView derives prefers-color-scheme from the app theme, which is
+     *    FOLLOW_SYSTEM, so the OS setting drives it live (uiMode arrives via onConfigurationChanged).
+     *  - 10..12: a system dark/light setting exists but old WebViews don't follow the app theme — mirror
+     *    the CURRENT system uiMode into the force-dark flag (re-applied on every uiMode change below).
+     *  - 9-: no system setting exists — the panel's `dark_mode` config (Display card) decides.
+     */
+    private fun applyForceDark(w: WebView) = runCatching {
+        if (android.os.Build.VERSION.SDK_INT >= 33) return@runCatching
+        val dark = if (android.os.Build.VERSION.SDK_INT >= 29) {
+            (resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
+                android.content.res.Configuration.UI_MODE_NIGHT_YES
+        } else {
+            Config(this).darkMode
+        }
+        if (androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.FORCE_DARK)) {
+            @Suppress("DEPRECATION")
+            androidx.webkit.WebSettingsCompat.setForceDark(
+                w.settings,
+                if (dark) androidx.webkit.WebSettingsCompat.FORCE_DARK_ON else androidx.webkit.WebSettingsCompat.FORCE_DARK_OFF,
+            )
+        }
+        if (dark && androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.FORCE_DARK_STRATEGY)) {
+            @Suppress("DEPRECATION")
+            androidx.webkit.WebSettingsCompat.setForceDarkStrategy(
+                w.settings, androidx.webkit.WebSettingsCompat.DARK_STRATEGY_WEB_THEME_DARKENING_ONLY,
+            )
+        }
+    }
+
+    /** configChanges declares uiMode, so a system dark/light flip lands here instead of recreating the
+     *  activity — re-mirror it into the 10..12 force-dark flag (the frontend re-themes live off the
+     *  resulting prefers-color-scheme change; no reload). No-op below 10 (config-driven) and on 13+. */
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        if (android.os.Build.VERSION.SDK_INT in 29..32) web?.let { applyForceDark(it) }
+    }
+
     @SuppressLint("SetJavaScriptEnabled")
     private fun buildAndLoad(config: Config) {
         // The page carries a live HA session, so only expose the WebView's DevTools socket when network
@@ -639,22 +679,7 @@ class DashboardActivity : AppCompatActivity() {
         // every stream paused on a touchless panel. (Not media-file playback, which stays out of scope.)
         settings.mediaPlaybackRequiresUserGesture = false
         setBackgroundColor(BG_DARK) // no white flash before first paint
-        // Force-dark on the pre-13 panels (NSPanel Pro 8.1, TPA10 11): Android 13+ has algorithmic
-        // darkening by app theme, older WebViews need the explicit flag. WEB_THEME_DARKENING_ONLY only
-        // darkens pages that declare dark support — HA's frontend does — so it can't mangle a light
-        // theme the user deliberately chose; it kills the "bright flash at 3am" reload on dark themes.
-        if (android.os.Build.VERSION.SDK_INT < 33) runCatching {
-            if (androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.FORCE_DARK)) {
-                @Suppress("DEPRECATION")
-                androidx.webkit.WebSettingsCompat.setForceDark(settings, androidx.webkit.WebSettingsCompat.FORCE_DARK_ON)
-            }
-            if (androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.FORCE_DARK_STRATEGY)) {
-                @Suppress("DEPRECATION")
-                androidx.webkit.WebSettingsCompat.setForceDarkStrategy(
-                    settings, androidx.webkit.WebSettingsCompat.DARK_STRATEGY_WEB_THEME_DARKENING_ONLY,
-                )
-            }
-        }
+        applyForceDark(this)
         // The HA frontend relies on cookies (incl. third-party for some integrations).
         CookieManager.getInstance().setAcceptCookie(true)
         CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)

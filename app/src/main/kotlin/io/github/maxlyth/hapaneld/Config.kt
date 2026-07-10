@@ -186,6 +186,13 @@ class Config(context: Context) {
     /** Epoch-seconds expiry of the current [haToken] (refresh model only). 0 => unknown → refresh now. */
     val haTokenExpiry: Long get() = prefs.getLong("ha_token_expiry", 0L)
 
+    /** Dark mode for panels WITHOUT a system dark/light setting (Android 9-; default true — wall panels
+     *  live in dark rooms): themes ha-paneld's own native activities (DayNight) and sets the built-in
+     *  renderer's dashboard default. Android 10+ panels follow the OS setting instead (the Display-card
+     *  toggle is hidden there); the `:8888` web UI always follows the viewing browser's preference. */
+    val darkMode: Boolean get() = prefs.getBoolean("dark_mode", true)
+    fun setDarkMode(v: Boolean) = edit { putBoolean("dark_mode", v) }
+
     /** OAuth client_id to use when refreshing [haToken]. Blank => the HA origin (`<ha_url>/`, what the
      *  frontend uses). Set it to match the client the refresh token was issued for — e.g.
      *  `https://home-assistant.io/android` to reuse an HA Companion refresh token. */

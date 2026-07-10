@@ -1,124 +1,165 @@
-body{font-family:system-ui,-apple-system,sans-serif;margin:0;background:#111;color:#eee;color-scheme:dark}
+/* ---- theme palette ----
+   Dark values are the original hardcoded palette (dark mode stays pixel-identical); the light block
+   overrides the STRUCTURAL roles only. Deliberately theme-agnostic (unchanged in light mode): the
+   primary-action blue #2557a7, the .setup callout banners, badges, and the logs/chart panels (.logview
+   + canvas keep their dark terminal look in both themes). The theme follows the VIEWING BROWSER's own
+   light/dark preference (prefers-color-scheme) — the panel's dark_mode setting governs the panel's own
+   screens + the dashboard default, never this UI. */
+:root{color-scheme:dark;
+  --bg:#111;--card:#181818;--card-head:#1e1e1e;--input-bg:#1c1c1c;--input-bg2:#161616;
+  --card-border:#242424;--divider:#2a2a2a;--border:#333;--border2:#383838;--border-strong:#444;
+  --text:#eee;--text-bright:#fff;--text-soft:#ccc;--tab:#bbb;--dim:#888;
+  --accent:#9af;--accent2:#9cf;--ok-dim:#8a8;--icon:#7c8a99;--icon-dim:#6a7a8a;
+  --hover:#1a1a1a;--knob:#eee;--disabled-bg:#222;--disabled-fg:#666;
+  --shadow:#000;--shimA:#141414;--shimB:#1f1f1f;--plot:#0d0d0d;--vtag-bg:#2a3340;--vtag-fg:#9cc;--vtagrec-bg:#1f4d2e;--vtagrec-fg:#8fe0a8;--bexp-bg:#0f2f3a;--bexp-fg:#5cc4e0;--bexp-bd:#1a4a5a;--bskunk-bg:#3a2600;--bskunk-fg:#ffb454;--bskunk-bd:#6b4500;--setup-bg:#3a2f10;--setup-bd:#7a5a2a;--setup-fg:#f5c451;--setup-link:#ffd97a;--crit-bg:#3a1512;--crit-bd:#a5342a;--crit-fg:#ffb3a6;--crit-link:#ffc9bf;--info-bg:#12233a;--info-bd:#2a557a;--info-fg:#9cc4ee;--info-link:#bcd9f5}
+/* Auto: follow the viewing browser… unless a ?theme= test override pinned dark. */
+@media (prefers-color-scheme: light){:root:not([data-theme=dark]){color-scheme:light;
+  --bg:#f2f3f5;--card:#fff;--card-head:#e7ebef;--input-bg:#f6f7f9;--input-bg2:#fafbfc;
+  --card-border:#d9dde3;--divider:#e4e7ec;--border:#c9cfd7;--border2:#c4cad2;--border-strong:#b6bec8;
+  --text:#1b2430;--text-bright:#000;--text-soft:#2c3644;--tab:#4a5462;--dim:#6a7480;
+  --accent:#1e56a8;--accent2:#0b6a8e;--ok-dim:#3f7d49;--icon:#5b6b7a;--icon-dim:#74818f;
+  --hover:#e9ecef;--knob:#fff;--disabled-bg:#e2e5e9;--disabled-fg:#9aa3ad;
+  --shadow:rgba(0,0,0,.18);--shimA:#e8eaee;--shimB:#f6f7f9;--plot:#e8ecf0;--vtag-bg:#e2e8ef;--vtag-fg:#33586b;--vtagrec-bg:#d9efe0;--vtagrec-fg:#1f6b3a;--bexp-bg:#ddeef5;--bexp-fg:#0b607f;--bexp-bd:#b3d4e2;--bskunk-bg:#f8ead3;--bskunk-fg:#8a5800;--bskunk-bd:#e2c894;--setup-bg:#fcf4dc;--setup-bd:#e3cf94;--setup-fg:#7a5a10;--setup-link:#8a6400;--crit-bg:#fceceb;--crit-bd:#eab3ac;--crit-fg:#a02c20;--crit-link:#7c1f16;--info-bg:#e9f1fb;--info-bd:#b9d2ec;--info-fg:#26567e;--info-link:#1a4468}}
+/* Forced via ?theme=light|dark (testing aid, set by the inline head script; no persistence —
+   drop the param to return to the browser preference). KEEP IDENTICAL to the block above. */
+:root[data-theme=light]{color-scheme:light;
+  --bg:#f2f3f5;--card:#fff;--card-head:#e7ebef;--input-bg:#f6f7f9;--input-bg2:#fafbfc;
+  --card-border:#d9dde3;--divider:#e4e7ec;--border:#c9cfd7;--border2:#c4cad2;--border-strong:#b6bec8;
+  --text:#1b2430;--text-bright:#000;--text-soft:#2c3644;--tab:#4a5462;--dim:#6a7480;
+  --accent:#1e56a8;--accent2:#0b6a8e;--ok-dim:#3f7d49;--icon:#5b6b7a;--icon-dim:#74818f;
+  --hover:#e9ecef;--knob:#fff;--disabled-bg:#e2e5e9;--disabled-fg:#9aa3ad;
+  --shadow:rgba(0,0,0,.18);--shimA:#e8eaee;--shimB:#f6f7f9;--plot:#e8ecf0;--vtag-bg:#e2e8ef;--vtag-fg:#33586b;--vtagrec-bg:#d9efe0;--vtagrec-fg:#1f6b3a;--bexp-bg:#ddeef5;--bexp-fg:#0b607f;--bexp-bd:#b3d4e2;--bskunk-bg:#f8ead3;--bskunk-fg:#8a5800;--bskunk-bd:#e2c894;--setup-bg:#fcf4dc;--setup-bd:#e3cf94;--setup-fg:#7a5a10;--setup-link:#8a6400;--crit-bg:#fceceb;--crit-bd:#eab3ac;--crit-fg:#a02c20;--crit-link:#7c1f16;--info-bg:#e9f1fb;--info-bd:#b9d2ec;--info-fg:#26567e;--info-link:#1a4468}
+body{font-family:system-ui,-apple-system,sans-serif;margin:0;background:var(--bg);color:var(--text)}
 .wrap{max-width:1860px;margin:0 auto;padding:20px}             /* cap + centre: up to 4 masonry cols on a 1920/2560 panel */
 /* Fixed header + tab bar: the .topbar wraps .hdr + .nav and sticks to the top of the viewport so it
    never scrolls away; page content scrolls underneath it (opaque bg + a soft drop shadow to separate).
    When the tab bar collapses to the hamburger menu, the open menu is part of the topbar and sticks too. */
-.topbar{position:sticky;top:0;z-index:20;background:#111;box-shadow:0 6px 14px -10px #000}
+/* The sticky-header rework zeroed .nav's old 16px bottom margin (the sticky bar itself must not carry
+   inner spacing) but never re-added the gap below the bar — so the first card touched the tab row on
+   every page. Invisible dark-on-dark; obvious in the light theme. The margin lives on the topbar's
+   flow box, so the gap sits in the page and content still scrolls under the stuck bar's shadow. */
+.topbar{position:sticky;top:0;z-index:20;background:var(--bg);box-shadow:0 6px 14px -10px var(--shadow);margin-bottom:16px}
 .topbar .nav{margin-bottom:0;padding-bottom:2px}
 .hdr{display:flex;align-items:center;justify-content:space-between;gap:12px;white-space:nowrap}
 /* No header element ever word-wraps — the brand, the panel-switcher (its "· name" + dropdown) and the
    Open in HA / Reveal buttons stay on one line (they collapse/hide on narrow screens instead). */
-h1{font-size:1.3rem;margin:0 0 .2rem;display:flex;align-items:center} h1 small{color:#9af;font-weight:400}
+h1{font-size:1.3rem;margin:0 0 .2rem;display:flex;align-items:center} h1 small{color:var(--accent);font-weight:400}
 .logo{width:2.1em;height:2.1em;margin-right:.3em;border-radius:6px;flex:none}
 .brand{white-space:nowrap;flex:none}   /* product name — never wrap/split at the hyphen */
 /* Header panel-switcher: the friendly-name in the title becomes this dropdown when >1 ha-paneld is on the
-   LAN. Styled to read like the title (#9af) but clearly a control. Kept as pure header CONTENT so it's
+   LAN. Styled to read like the title (var(--accent)) but clearly a control. Kept as pure header CONTENT so it's
    unaffected by the planned fixed/sticky-header rework. */
 #pswitch .sep{margin:0 .3em}   /* the "·" separator — equal space on both sides */
-#pswitch select.pswitch-sel{font:inherit;color:#9af;background:#1c1c1c;border:1px solid #2a3550;border-radius:6px;padding:1px 5px;cursor:pointer;max-width:44vw;vertical-align:baseline}
+#pswitch select.pswitch-sel{font:inherit;color:var(--accent);background:var(--input-bg);border:1px solid #2a3550;border-radius:6px;padding:1px 5px;cursor:pointer;max-width:44vw;vertical-align:baseline}
 #pswitch select.pswitch-sel:hover{border-color:#4a6ba0}
 /* Hide the header "Reveal" button once the card masonry drops below 3 columns (a narrow/small panel).
    The grid is columns:400px + 18px gap inside .wrap (40px padding), so 3 columns need viewport
    >= 3*400 + 2*18 + 40 = 1276px; below that, hide #revbtn (per-value click-to-reveal still works). */
 @media (max-width:1275px){#revbtn{display:none}}
-h2{font-size:.95rem;margin:0 0 .5rem;color:#9cf;text-transform:uppercase;letter-spacing:.04em}
-h2 small{text-transform:none;letter-spacing:0;color:#8a8;font-weight:400}
-.gh svg{width:24px;height:24px;fill:#7c8a99}
-.gh:hover svg{fill:#eee}
-.ext svg{width:14px;height:14px;fill:#9cf;vertical-align:-2px;margin-left:3px}
-.ext:hover svg{fill:#fff}
+h2{font-size:.95rem;margin:0 0 .5rem;color:var(--accent2);text-transform:uppercase;letter-spacing:.04em}
+h2 small{text-transform:none;letter-spacing:0;color:var(--ok-dim);font-weight:400}
+.gh svg{width:24px;height:24px;fill:var(--icon)}
+.gh:hover svg{fill:var(--text)}
+.ext svg{width:14px;height:14px;fill:var(--accent2);vertical-align:-2px;margin-left:3px}
+.ext:hover svg{fill:var(--text-bright)}
 /* CSS multi-column masonry: the browser packs .card elements into height-balanced columns
    (column-fill:balance, the default) — ~400px wide, so 1 column on a phone up to 4 on a 1920/2560 panel.
    No JS: this replaces a hand-rolled greedy that mis-balanced because it measured placeholder heights. */
 .cards{columns:400px;column-gap:18px}
-.card{background:#181818;border:1px solid #242424;border-radius:12px;padding:14px 16px;margin:0 0 18px;break-inside:avoid;-webkit-column-break-inside:avoid;box-sizing:border-box}
+.card{background:var(--card);border:1px solid var(--card-border);border-radius:12px;padding:14px 16px;margin:0 0 18px;break-inside:avoid;-webkit-column-break-inside:avoid;box-sizing:border-box}
 /* Card title-bar: a subtly demarcated full-width header (slight tint + divider) separating the title
    from content. Also the intended drag handle for card reordering + home for a collapse triangle. */
-.card h2{margin:-14px -16px 12px;padding:9px 16px;background:#1e1e1e;border-bottom:1px solid #2a2a2a;border-radius:12px 12px 0 0}
+.card h2{margin:-14px -16px 12px;padding:9px 16px;background:var(--card-head);border-bottom:1px solid var(--divider);border-radius:12px 12px 0 0}
 .cardbadge{float:right;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;padding:1px 8px;border-radius:10px;margin-top:1px}
-.cardbadge.skunk{background:#3a2600;color:#ffb454;border:1px solid #6b4500}
-.cardbadge.exp{background:#0f2f3a;color:#5cc4e0;border:1px solid #1a4a5a}
+.cardbadge.skunk{background:var(--bskunk-bg);color:var(--bskunk-fg);border:1px solid var(--bskunk-bd)}
+.cardbadge.exp{background:var(--bexp-bg);color:var(--bexp-fg);border:1px solid var(--bexp-bd)}
 /* content-visibility skips rendering an OFF-SCREEN card (placeholder height via contain-intrinsic-size) so
    a live card changing height while scrolled out of view can't reflow the page and shove the viewport.
    SCOPED to the single-column regime only (<858px = one ~400px column): in multi-column it would feed
    placeholder heights to the browser's column balancer and unbalance the layout — the bug this replaces. */
 @media (max-width:857px){.wrap{padding:8px}.card{margin-bottom:10px;content-visibility:auto;contain-intrinsic-size:auto 300px}}
 table{border-collapse:collapse;width:100%;table-layout:fixed}
-th,td{text-align:left;padding:6px 8px;border-bottom:1px solid #2a2a2a;vertical-align:top;font-size:.9rem;overflow-wrap:anywhere;word-break:break-word}
+th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--divider);vertical-align:top;font-size:.9rem;overflow-wrap:anywhere;word-break:break-word}
 tr:last-child td,tr:last-child th{border-bottom:0}   /* dividers only BETWEEN rows, never after the last */
-th{color:#9af;width:46%;font-weight:600}
-/* charts: darker than the card (#181818) + a border, so the line's extent reads against the plot area */
-canvas{width:100%;display:block;background:#0d0d0d;border:1px solid #2a2a2a;border-radius:8px;margin-bottom:6px}
-.leg{font-size:.72rem;color:#8a8;margin-bottom:6px}
+th{color:var(--accent);width:46%;font-weight:600}
+/* charts: darker than the card (var(--card)) + a border, so the line's extent reads against the plot area */
+canvas{width:100%;display:block;background:#0d0d0d;border:1px solid var(--divider);border-radius:8px;margin-bottom:6px}
+/* The proximity gauge is mostly empty plot — a black slab on a light card reads as broken, so it themes
+   (unlike the perf charts above, which draw light strokes and deliberately stay dark in both themes). */
+#proxgauge{background:var(--plot)}
+/* Vendor-package tag chips (server-rendered rows use these classes; themed, unlike their old inline styles). */
+.vtag{display:inline-block;background:var(--vtag-bg);color:var(--vtag-fg);border-radius:4px;padding:0 6px;margin-left:5px;font-size:.7em;vertical-align:1px}
+.vtag.rec{background:var(--vtagrec-bg);color:var(--vtagrec-fg)}
+.leg{font-size:.72rem;color:var(--ok-dim);margin-bottom:6px}
 /* sub-heading + data table (column headers) so an in-card table reads as its own thing */
-.sub{margin:14px 0 2px;padding-top:10px;border-top:1px solid #2a2a2a;font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;color:#9cf}
-.dt th{font-size:.68rem;text-transform:uppercase;letter-spacing:.03em;color:#7c8a99;font-weight:600;width:auto;border-bottom:2px solid #333}
-.dt td{color:#ccc;font-weight:400}
+.sub{margin:14px 0 2px;padding-top:10px;border-top:1px solid var(--divider);font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;color:var(--accent2)}
+.dt th{font-size:.68rem;text-transform:uppercase;letter-spacing:.03em;color:var(--icon);font-weight:600;width:auto;border-bottom:2px solid var(--border)}
+.dt td{color:var(--text-soft);font-weight:400}
 .dt .num{text-align:right;width:32%}
 /* Install-tab managed-component rows: name on the left, channel/version picker + actions on the right. */
-.comprow{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid #2a2a2a}
+.comprow{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--divider)}
 .comprow:last-of-type{border-bottom:0}
 .compname{font-size:.92rem}
 .comppick{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-.comppick label{flex-direction:row;align-items:center;gap:5px;color:#8a97a6;margin:0}
-.comppick select{font-size:.85rem;padding:4px 7px;border-radius:7px;border:1px solid #444;background:#1c1c1c;color:#eee;max-width:190px}
+.comppick label{flex-direction:row;align-items:center;gap:5px;color:var(--icon);margin:0}
+.comppick select{font-size:.85rem;padding:4px 7px;border-radius:7px;border:1px solid var(--border-strong);background:var(--input-bg);color:var(--text);max-width:190px}
 .cnotes{font-size:1rem;text-decoration:none;padding:0 4px}
 /* Live-polled tables (updated every 2s): values WRAP to show full content — touch panels can't hover for
    the title= tooltip, so truncation hid data on the exact devices this runs on. Stability now comes from
    content-visibility (off-screen cards) + CSS columns; the only residual motion is the card you're
    actively viewing growing, which is acceptable. Validated on the CLS harness (worst-case name cycling). */
 form{display:flex;flex-direction:column;gap:10px}
-label{display:flex;flex-direction:column;gap:4px;font-size:.78rem;color:#9af}
-label small{color:#6a7a8a}
-input,button{font-size:.95rem;padding:8px 11px;border-radius:8px;border:1px solid #444;background:#1c1c1c;color:#eee;box-sizing:border-box}
+label{display:flex;flex-direction:column;gap:4px;font-size:.78rem;color:var(--accent)}
+label small{color:var(--icon-dim)}
+input,button{font-size:.95rem;padding:8px 11px;border-radius:8px;border:1px solid var(--border-strong);background:var(--input-bg);color:var(--text);box-sizing:border-box}
 input{width:100%}
 input[type=checkbox]{width:auto;flex:none}   /* checkboxes keep their natural size (never the 100% above) */
-button{background:#2557a7;border-color:#2557a7;cursor:pointer;align-self:flex-start}
-.note{color:#8a8;margin-top:8px;font-size:.82rem}
+button{background:#2557a7;border-color:#2557a7;color:#fff;cursor:pointer;align-self:flex-start}
+.note{color:var(--ok-dim);margin-top:8px;font-size:.82rem}
 .binary .gradedonly{display:none}
 /* Self-contained so it looks identical on <button> AND <a> (the "Open in HA" link) — anchors don't
    inherit the button{} border/radius/colour, so spell them out + kill the link underline. */
-.pbtn{font-size:.8rem;padding:6px 12px;background:#1c1c1c;border:1px solid #444;border-radius:8px;color:#eee;cursor:pointer;text-decoration:none;display:inline-block;line-height:1.3;font-family:inherit}
-.pbtn.on{background:#2557a7;border-color:#2557a7}
+.pbtn{font-size:.8rem;padding:6px 12px;background:var(--input-bg);border:1px solid var(--border-strong);border-radius:8px;color:var(--text);cursor:pointer;text-decoration:none;display:inline-block;line-height:1.3;font-family:inherit}
+.pbtn.on{background:#2557a7;border-color:#2557a7;color:#fff}
 .pbtn:disabled{opacity:.4;cursor:not-allowed}   /* capability missing (no a11y / no root) — shown but inert */
 /* Controls panel: when the action row would wrap to 2 lines, collapse the labelled buttons to icons only
    (info.js measures the row height + toggles .collapsed). */
 .ctlrow.collapsed .lbl{display:none}
-.setup{background:#3a2f10;border:1px solid #7a5a2a;border-radius:8px;padding:12px 14px;margin:10px 0 0;color:#f5c451;font-size:.92rem}
-.setup a{color:#ffd97a;font-weight:600}
+.setup{background:var(--setup-bg);border:1px solid var(--setup-bd);border-radius:8px;padding:12px 14px;margin:10px 0 0;color:var(--setup-fg);font-size:.92rem}
+.setup a{color:var(--setup-link);font-weight:600}
 /* Severity: crit = render-blocking (WebView too old, no dashboard, crash-loop, blank internal_url) —
    red + a heavier left rule so it reads as "fix this to see a dashboard"; info = a calm blue update notice.
    Base .setup (amber) stays for soft/needs-config notices. */
-.setup.crit{background:#3a1512;border-color:#a5342a;border-left:4px solid #e05a48;color:#ffb3a6}
-.setup.crit a{color:#ffc9bf}
-.setup.info{background:#12233a;border-color:#2a557a;border-left:4px solid #3d7fd0;color:#9cc4ee}
-.setup.info a{color:#bcd9f5}
+.setup.crit{background:var(--crit-bg);border-color:var(--crit-bd);border-left:4px solid #e05a48;color:var(--crit-fg)}
+.setup.crit a{color:var(--crit-link)}
+.setup.info{background:var(--info-bg);border-color:var(--info-bd);border-left:4px solid #3d7fd0;color:var(--info-fg)}
+.setup.info a{color:var(--info-link)}
 /* Screenshot hygiene: blur sensitive identity/network values by default; "Reveal" or focusing the field
    un-blurs. NOT access control — the value is still in the page source. Works on <span> and <input>. */
 .secret{filter:blur(5px);transition:filter .12s;cursor:pointer}   /* click to reveal just that one */
 body.revealed .secret,.secret:focus,.secret.shown{filter:none;cursor:auto}
 /* On <input> filter:blur would blur the field's border too — blur only the TEXT via a transparent colour
-   + a blurred text-shadow (input text colour is #eee), leaving the outline crisp. */
-input.secret{filter:none;color:transparent;text-shadow:0 0 6px #eee}
-body.revealed input.secret,input.secret:focus,input.secret.shown{color:#eee;text-shadow:none}
-.diag{cursor:pointer;border-bottom:1px dotted #9af;color:#9cf}   /* click to toggle inches <-> cm */
+   + a blurred text-shadow (input text colour is var(--text)), leaving the outline crisp. */
+input.secret{filter:none;color:transparent;text-shadow:0 0 6px var(--text)}
+body.revealed input.secret,input.secret:focus,input.secret.shown{color:var(--text);text-shadow:none}
+.diag{cursor:pointer;border-bottom:1px dotted var(--accent);color:var(--accent2)}   /* click to toggle inches <-> cm */
 /* Screenshot card: reserve the panel's aspect ratio (set inline from its resolution) so the image arriving
    doesn't reflow the page. A shimmer animates while loading; it stops + shows a glyph if the capture fails. */
-.shot{position:relative;display:block;width:100%;border-radius:6px;overflow:hidden;background:#111}
+.shot{position:relative;display:block;width:100%;border-radius:6px;overflow:hidden;background:var(--bg)}
 .shot img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;display:block;opacity:0;transition:opacity .2s}
 .shot.loaded img{opacity:1}
-.shot::after{content:"";position:absolute;inset:0;background:linear-gradient(110deg,#141414 30%,#1f1f1f 50%,#141414 70%);background-size:220% 100%;animation:shot-sheen 1.2s linear infinite}
+.shot::after{content:"";position:absolute;inset:0;background:linear-gradient(110deg,var(--shimA) 30%,var(--shimB) 50%,var(--shimA) 70%);background-size:220% 100%;animation:shot-sheen 1.2s linear infinite}
 .shot.loaded::after{display:none}                          /* image arrived — drop the shimmer */
-.shot.failed::after{animation:none;background:#141414}      /* capture failed — stop animating */
+.shot.failed::after{animation:none;background:var(--shimA)}      /* capture failed — stop animating */
 .shot.failed::before{content:"⚠ screenshot unavailable";position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#a88;font-size:.85rem}
 @keyframes shot-sheen{0%{background-position:120% 0}100%{background-position:-120% 0}}
 @media (prefers-reduced-motion:reduce){.shot::after{animation:none}}
 
 /* ---- multi-page shell (tab bar) ---- */
-.nav{display:flex;gap:2px;flex-wrap:wrap;margin:0 0 16px;border-bottom:1px solid #242424}
-.nav a{padding:9px 16px;color:#bbb;text-decoration:none;border-bottom:2px solid transparent;font-size:.95rem}
-.nav a:hover{color:#eee;background:#1a1a1a}
-.nav a.active{color:#fff;border-bottom-color:#2557a7}
+.nav{display:flex;gap:2px;flex-wrap:wrap;margin:0 0 16px;border-bottom:1px solid var(--card-border)}
+.nav a{padding:9px 16px;color:var(--tab);text-decoration:none;border-bottom:2px solid transparent;font-size:.95rem}
+.nav a:hover{color:var(--text);background:var(--hover)}
+.nav a.active{color:var(--text-bright);border-bottom-color:#2557a7}
 /* Responsive tab bar -> header hamburger: when the tabs can't fit one line, switcher.js sets
    body.nav-collapsed; the #navburger (first item in .hdr, before the logo) then replaces the inline bar,
    and tapping it (body.nav-open) drops the tabs as a vertical menu in flow below the header. */
@@ -133,10 +174,10 @@ body.nav-collapsed .nav{display:none}                  /* collapsed + closed: ju
    floats over the page instead of pushing content down. */
 body.nav-collapsed.nav-open .nav{display:flex;flex-direction:column;flex-wrap:nowrap;gap:0;
   position:absolute;top:100%;left:0;z-index:30;min-width:180px;
-  background:#1c1c1c;border:1px solid #2a2a2a;border-radius:0 0 10px 10px;box-shadow:0 10px 22px -6px #000;overflow:hidden}
-body.nav-collapsed.nav-open .nav a{width:100%;box-sizing:border-box;border-bottom:1px solid #242424;border-left:3px solid transparent}
+  background:var(--input-bg);border:1px solid var(--divider);border-radius:0 0 10px 10px;box-shadow:0 10px 22px -6px var(--shadow);overflow:hidden}
+body.nav-collapsed.nav-open .nav a{width:100%;box-sizing:border-box;border-bottom:1px solid var(--card-border);border-left:3px solid transparent}
 body.nav-collapsed.nav-open .nav a:last-child{border-bottom:0}
-body.nav-collapsed.nav-open .nav a.active{border-left-color:#2557a7;background:#181818}
+body.nav-collapsed.nav-open .nav a.active{border-left-color:#2557a7;background:var(--card)}
 .nav.nav-measure{flex-wrap:nowrap;overflow:hidden}     /* measurement only — force one line so overflow is detectable */
 /* Progressive header hide to prevent horizontal overflow — switcher.js measures the header and drops
    items in priority order until it fits: the GitHub icon first, then the "ha-paneld" brand text. */
@@ -145,54 +186,56 @@ body.hdr-hide-brand .hdr .brand{display:none}
 
 /* ---- Configure page ---- */
 .cfg-tabs{display:flex;gap:8px;margin-bottom:14px}
-.cfg-tabs button{background:#1c1c1c;border:1px solid #333;color:#bbb;padding:6px 18px;border-radius:8px;cursor:pointer;font-size:.9rem}
+.cfg-tabs button{background:var(--input-bg);border:1px solid var(--border);color:var(--tab);padding:6px 18px;border-radius:8px;cursor:pointer;font-size:.9rem}
 .cfg-tabs button.on{background:#2557a7;border-color:#2557a7;color:#fff}
-.frow{display:flex;align-items:center;gap:12px;padding:10px 0;border-top:1px solid #1e1e1e}
+/* Row dividers use the same token as the table dividers — the original #1e1e1e-on-#181818 was a 6-step
+   delta, i.e. invisible in dark mode; now Configure rows separate exactly like the info-card tables. */
+.frow{display:flex;align-items:center;gap:12px;padding:10px 0;border-top:1px solid var(--divider)}
 .frow:first-child{border-top:0}
 .frow .flabel{flex:1;min-width:0}
-.frow .flabel small{display:block;color:#888;font-weight:400;font-size:.8em;margin-top:2px}
+.frow .flabel small{display:block;color:var(--dim);font-weight:400;font-size:.8em;margin-top:2px}
 .frow .fctl{flex:0 0 auto;display:flex;align-items:center;gap:12px;max-width:50%}
-.frow input[type=text],.frow input[type=password],.frow input[type=number],.frow select{background:#161616;border:1px solid #383838;color:#eee;border-radius:6px;padding:6px 8px;min-width:170px;font:inherit}
+.frow input[type=text],.frow input[type=password],.frow input[type=number],.frow select{background:var(--input-bg2);border:1px solid var(--border2);color:var(--text);border-radius:6px;padding:6px 8px;min-width:170px;font:inherit}
 /* Package pickers can have very long option text (label · pkg); cap them to their column so the label
    isn't crushed into many wrapped lines — the select truncates the shown value, the dropdown shows it all. */
 .frow select.pkgsel{min-width:0;max-width:100%;text-overflow:ellipsis}
 /* Expose-to-HA toggle: an icon button (no checkbox) drawn with an inline link / broken-link SVG.
    Linked = bright accent (highlight); unlinked = muted grey. Overrides the generic button{} box. */
 .pip{display:inline-flex;align-items:center;justify-content:center;align-self:center;line-height:0;
-  padding:3px;border-radius:7px;border:1px solid transparent;background:transparent;color:#6a7a8a;cursor:pointer;user-select:none}
+  padding:3px;border-radius:7px;border:1px solid transparent;background:transparent;color:var(--icon-dim);cursor:pointer;user-select:none}
 .pip svg{display:block;width:18px;height:18px}
 .pip.on{color:#4a9eff}                             /* linked — highlight colour */
-.pip:hover{background:#1c1c1c;border-color:#333}
-.toggle{position:relative;width:42px;height:24px;border-radius:12px;background:#333;border:1px solid #444;cursor:pointer;transition:.15s;flex:0 0 auto}
+.pip:hover{background:var(--input-bg);border-color:var(--border)}
+.toggle{position:relative;width:42px;height:24px;border-radius:12px;background:var(--border);border:1px solid var(--border-strong);cursor:pointer;transition:.15s;flex:0 0 auto}
 .toggle.on{background:#2557a7;border-color:#2557a7}
-.toggle::after{content:"";position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:#eee;transition:.15s}
+.toggle::after{content:"";position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:var(--knob);transition:.15s}
 .toggle.on::after{left:20px}
-.savebar{position:sticky;bottom:0;background:#111;padding:12px 0;margin-top:16px;border-top:1px solid #242424;display:flex;gap:14px;align-items:center;z-index:5}
+.savebar{position:sticky;bottom:0;background:var(--bg);padding:12px 0;margin-top:16px;border-top:1px solid var(--card-border);display:flex;gap:14px;align-items:center;z-index:5}
 .savebar button{background:#2557a7;border:1px solid #2557a7;color:#fff;padding:9px 24px;border-radius:8px;cursor:pointer;font-size:.95rem}
-.savebar button:disabled{background:#222;border-color:#333;color:#666;cursor:default}
-.muted{color:#888}
+.savebar button:disabled{background:var(--disabled-bg);border-color:var(--border);color:var(--disabled-fg);cursor:default}
+.muted{color:var(--dim)}
 
 /* ---- interactive screenshot (Test) ---- */
 .screen-wrap{position:relative;display:inline-block;max-width:100%;line-height:0}
-.screen-wrap img{display:block;max-width:100%;border:1px solid #333;border-radius:8px}
+.screen-wrap img{display:block;max-width:100%;border:1px solid var(--border);border-radius:8px}
 .screen-wrap.control{cursor:crosshair}
 .screen-wrap .ripple{position:absolute;width:26px;height:26px;margin:-13px 0 0 -13px;border:2px solid #4a9eff;border-radius:50%;pointer-events:none;animation:rip .5s ease-out forwards}
 @keyframes rip{from{transform:scale(.3);opacity:.9}to{transform:scale(1.4);opacity:0}}
 .modebar{display:flex;gap:8px;margin-bottom:10px;align-items:center;flex-wrap:wrap}
-.seg{display:inline-flex;border:1px solid #333;border-radius:8px;overflow:hidden}
-.seg button{background:#1c1c1c;border:0;color:#bbb;padding:6px 16px;cursor:pointer;font:inherit}
+.seg{display:inline-flex;border:1px solid var(--border);border-radius:8px;overflow:hidden}
+.seg button{background:var(--input-bg);border:0;color:var(--tab);padding:6px 16px;cursor:pointer;font:inherit}
 .seg button.on{background:#2557a7;color:#fff}
 
 /* ---- configurable-value marker (Dashboard) + anchor flash (Configure) ---- */
 /* A small pencil after a value marks it CONFIGURABLE (vs a static fact) and deep-links to the
    exact setting on the Configure tab. Muted until hover so the dashboard stays calm. */
 .cfglink{display:inline-block;margin-left:6px;color:#4a6a8a;text-decoration:none;font-size:.85em;opacity:.55;vertical-align:baseline}
-.cfglink:hover{color:#9cf;opacity:1}
+.cfglink:hover{color:var(--accent2);opacity:1}
 @keyframes cfgflash{0%{background:#2557a7}100%{background:transparent}}
 .flash{animation:cfgflash 1.6s ease-out;border-radius:8px}
 
 /* Logs tab — live tail view. Monospace, bounded height, level-coloured lines. */
-.logview{height:60vh;overflow-y:auto;background:#0d0d0d;border:1px solid #2a2a2a;border-radius:8px;padding:8px 10px;font:.78rem/1.45 ui-monospace,Menlo,Consolas,monospace;white-space:pre-wrap;word-break:break-all}
+.logview{height:60vh;overflow-y:auto;background:#0d0d0d;border:1px solid var(--divider);border-radius:8px;padding:8px 10px;font:.78rem/1.45 ui-monospace,Menlo,Consolas,monospace;white-space:pre-wrap;word-break:break-all}
 .lg-line{min-height:1em}
 .lg-V,.lg-D{color:#777}
 .lg-I{color:#cfcfcf}

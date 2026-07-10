@@ -232,6 +232,14 @@ object SettingsRegistry {
             help = "Built-in renderer only (skunk-works): the HA base URL, e.g. http://homeassistant.local:8123. Blank disables the built-in renderer.",
         ),
         SettingSpec(
+            key = "dark_mode", type = SettingType.BOOL, group = "Display",
+            label = "Dark mode", default = "true",
+            help = "Themes ha-paneld's own screens and sets the dashboard's default colour scheme on panels without a system dark-mode setting (Android 9 and older). A theme picked inside Home Assistant overrides the dashboard default; this web UI always follows the viewing browser's own preference.",
+            // Panels with a native system dark/light control (Android 10+) follow the OS setting for
+            // everything, so the toggle is hidden there.
+            availableWhen = { !it.hasSystemDarkMode },
+        ),
+        SettingSpec(
             key = "ha_token", type = SettingType.PASSWORD, group = "Dashboard",
             label = "HA access token", default = "", secret = true,
             help = "Built-in renderer only: the access token it signs into HA with (a long-lived token, or the current short-lived one when a refresh token is set). Blank on save keeps the current token; entering a NEW token replaces any stored refresh token (the recovery path for a revoked login).",
