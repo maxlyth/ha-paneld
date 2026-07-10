@@ -8,6 +8,12 @@ From **v0.8.0**, entries are grouped under **Added** (new features/entities), **
 changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
 content appear. Earlier releases predate this convention and keep their flat lists.
 
+## v0.9.0-rc4 - 2026-07-10
+
+### Added
+
+- **Switching to the built-in renderer borrows the Companion's sign-in automatically** — picking "Built-in renderer" on a panel with no HA connection configured now lifts the URL and tokens from an installed, signed-in HA Companion app (root panels; multi-server installs borrow the active server), so trying the built-in dashboard is a single picker change with nothing to type. The Companion keeps its own login untouched — switching back is the same picker. Panels without root or without a Companion use the manual fields or provisioning flags exactly as before.
+
 ## v0.9.0-rc3 - 2026-07-10
 
 **Light mode, and a web UI that keeps itself honest.** The built-in renderer line continues: rc3 brings proper light/dark theming across every surface, and the Configure page now notices when the settings change underneath it.
