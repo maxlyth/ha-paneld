@@ -103,6 +103,20 @@ verify() {
   elif [ -n "$diag" ]; then
     echo "   ${YEL}ℹ${X} root helper daemon: ${YEL}not detected${X} ${D}(needed on sandbox-walled panels — helper/install-daemon.sh)${X}"
   fi
+  # Root — the single biggest capability divider. Say it PLAINLY at install time so a no-root user
+  # knows from the outset they're getting a subset (a panel-permissions shortfall, not ha-paneld bugs).
+  if printf '%s' "$diag" | grep -q "su=true"; then
+    echo "   ${GRN}✓${X} root (su): available — full feature set"
+  elif printf '%s' "$diag" | grep -q "daemon=true"; then
+    echo "   ${GRN}✓${X} root: via the helper daemon — full feature set"
+  elif [ -n "$diag" ]; then
+    echo "   ${YEL}⚠ THIS PANEL HAS NO ROOT — ha-paneld runs with a REDUCED feature set.${X}"
+    echo "     ${D}Working: HA sensors + MQTT, brightness, screen dim, audio/TTS, the dashboard renderers,${X}"
+    echo "     ${D}the web UI, Back/Recents. Unavailable (shown greyed + locked in the UI): true screen-off,${X}"
+    echo "     ${D}LED, vendor-app taming, display sizing, self-update/Companion install, remote screenshot${X}"
+    echo "     ${D}+ tap, system logs, kiosk lock. This is the panel's permission model, not a fault —${X}"
+    echo "     ${D}see README → \"What needs root\".${X}"
+  fi
   # panel_id + MQTT (informational — install-only is valid). grep/cut so no python (Git Bash-friendly).
   local broker pid
   broker="$(printf '%s' "$cfg" | grep -o '"mqtt_broker":"[^"]*"' | head -1 | cut -d'"' -f4)"
