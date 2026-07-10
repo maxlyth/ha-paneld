@@ -98,7 +98,7 @@ async function perf(){
    drawSm(r.hist);
    var col=r.verdict==='smooth'?'#48c774':(r.verdict==='occasional'?'#d9a528':'#d04a3b');
    var vv=r.verdict==='smooth'?'Snappy':(r.verdict==='occasional'?'Sluggish':'Laggy');
-   smh.textContent='· '+(/homeassistant|companion/i.test(r.pkg)?'HA Companion App UI':r.pkg.split('.').pop());smh.title='measuring '+r.pkg;
+   smh.textContent='· '+(/maxlyth\.hapaneld/.test(r.pkg)?'built-in dashboard':(/homeassistant|companion/i.test(r.pkg)?'HA Companion App UI':r.pkg.split('.').pop()));smh.title='measuring '+r.pkg;
    var sm=[{label:'How it feels',val:'● '+vv,col:col,bold:true},
     {label:'Dashboard main-thread',val:r.mainPct+'% of one core',suf:'(100% = event processing maxed out)',bold:true}];
    if(r.jankPct!=null){pseen.jank=true;sm.push({label:'Rendering load',val:r.jankPct+'% janky',suf:'· only counts when actively drawing (e.g. video) — worst frame '+r.p99+' ms'});}

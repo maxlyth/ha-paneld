@@ -21,7 +21,7 @@ android {
         targetSdk = 35
         // versionCode bumps on EVERY internal build (it drives upgrades + the /health build token);
         // the -rcN suffix in versionName increments ONLY when an rc is published to GitHub.
-        versionCode = 153
+        versionCode = 154
         versionName = "0.9.0-rc4"
 
         // Only the fleet's ARM ABIs — bounds the native LED lib (libhapaneld_led.so) + APK size.
