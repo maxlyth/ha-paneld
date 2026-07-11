@@ -13,6 +13,9 @@ object Wf1589t : DeviceProfile {
     override val suForm = SuForm.ANDROID
     override val appCanSu = true
     override val ledMechanism = LedMechanism.RK3576_IOCTL
+    // Stub transfer for the /dev/ledjni LED — non-linear, 0..255-capable (probed 2026-07-11); currently
+    // the safe 0..15 region. Replace with a measured per-channel curve to use more range. See LedTransfer.
+    override val ledTransfer = io.github.maxlyth.hapaneld.hardware.LedTransfer.Rk3576FourBit
     override val screenOff = ScreenOff.SU_BLPOWER
     override val zigbeeGatewayDir: String? = null
     override val relayBase: String? = null

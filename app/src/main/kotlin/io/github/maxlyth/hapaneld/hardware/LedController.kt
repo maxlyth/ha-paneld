@@ -49,7 +49,7 @@ object LedFactory {
         LedMechanism.NONE -> NoOpLedController()
         LedMechanism.SYSFS_DAEMON -> SocketLedController()
         LedMechanism.RK3576_IOCTL_DAEMON -> SocketLedController()
-        LedMechanism.RK3576_IOCTL -> Rk3576LedController().takeIf { it.available() } ?: SocketLedController()
-        LedMechanism.AUTODETECT -> Rk3576LedController().takeIf { it.available() } ?: SocketLedController()
+        LedMechanism.RK3576_IOCTL -> Rk3576LedController(profile.ledTransfer).takeIf { it.available() } ?: SocketLedController()
+        LedMechanism.AUTODETECT -> Rk3576LedController(profile.ledTransfer).takeIf { it.available() } ?: SocketLedController()
     }
 }

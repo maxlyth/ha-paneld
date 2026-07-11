@@ -57,6 +57,12 @@ interface DeviceProfile {
     /** How the RGB LED is driven, if any. */
     val ledMechanism: LedMechanism
 
+    /** Per-channel LED transfer function (requested 0..255 → hardware value), correcting the panel's
+     *  non-linear LED response. Only consumed on the rk3576 ioctl path. Default = passthrough; rk3576
+     *  profiles override with a curve for their LED. See [io.github.maxlyth.hapaneld.hardware.LedTransfer]. */
+    val ledTransfer: io.github.maxlyth.hapaneld.hardware.LedTransfer
+        get() = io.github.maxlyth.hapaneld.hardware.LedTransfer.Identity
+
     /** Preferred true-screen-off path (runtime tiering still falls back as needed). */
     val screenOff: ScreenOff
 
