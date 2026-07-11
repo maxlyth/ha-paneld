@@ -12,6 +12,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.CookieManager
@@ -662,11 +663,12 @@ class DashboardActivity : AppCompatActivity() {
             return
         }
         web = w
-        // Wrap in a pull-to-refresh layout: dragging down from the top of the dashboard does a light
-        // reload of the current page (no app relaunch). It only triggers when the WebView is scrolled to
-        // the top (SwipeRefreshLayout's default canChildScrollUp checks the child), so normal scrolling
-        // is unaffected. The spinner is cleared when the page finishes (or errors) — see the WebViewClient.
-        val refresh = SwipeRefreshLayout(this).apply {
+        // Wrap in a pull-to-refresh layout: a drag that starts at the very top edge of the screen and
+        // pulls down does a light reload of the current page (no app relaunch). The gesture is gated on
+        // its ORIGIN (see EdgePullRefreshLayout) — a downward drag that begins inside the dashboard
+        // content never triggers it, so scrolling views and adjusting cards behave normally (#29).
+        // The spinner is cleared when the page finishes (or errors) — see the WebViewClient.
+        val refresh = EdgePullRefreshLayout(this).apply {
             addView(w, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
             setOnRefreshListener { lightRefresh() }
         }
@@ -884,6 +886,32 @@ class DashboardActivity : AppCompatActivity() {
         private const val IDLE_CHECK_MS = 60_000L               // idle return-to-home tick
         private const val AUTH_INVALID_LATCH = 3                // consecutive auth-invalid events → latch
         private const val REFRESH_REJECT_LATCH = 2              // consecutive definitive refresh rejections → latch
+    }
+}
+
+/**
+ * Pull-to-refresh that only arms for a drag beginning at the very top edge of the screen — a pull in
+ * from the bezel. SwipeRefreshLayout's stock gate asks whether the child can scroll up, but the HA
+ * frontend scrolls *inside* the page, so the WebView always reports "at the top" and every downward
+ * drag on the dashboard (scrolling a view, dragging a slider card) would start the gesture (#29).
+ * Gating on the gesture's origin makes scroll position irrelevant: a drag whose initial touch lands
+ * below the edge band is never intercepted, so the content underneath sees it untouched.
+ */
+private class EdgePullRefreshLayout(context: Context) : SwipeRefreshLayout(context) {
+    private val edgePx = (EDGE_BAND_DP * resources.displayMetrics.density).toInt()
+    private var armed = false
+
+    override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
+        if (ev.actionMasked == MotionEvent.ACTION_DOWN) armed = ev.y <= edgePx
+        return armed && super.onInterceptTouchEvent(ev)
+    }
+
+    override fun onTouchEvent(ev: MotionEvent): Boolean = armed && super.onTouchEvent(ev)
+
+    private companion object {
+        // Wide enough that a quick bezel swipe's first sampled touch still lands inside it; narrow
+        // enough that a drag starting on dashboard content (HA's header alone is ~56dp) never does.
+        const val EDGE_BAND_DP = 24
     }
 }
 
