@@ -1,49 +1,27 @@
 # Roadmap
 
-The curated public roadmap for ha-paneld. The [README](../README.md#status--roadmap) carries a short
-"where it's heading" summary; this is the full list. Shipped work lives in
-[CHANGELOG.md](../CHANGELOG.md). Nothing here is a dated commitment during the v0.x line — it's the
-direction, ordered roughly by priority within each tier.
+The curated public roadmap for ha-paneld. The [README](../README.md#status--roadmap) carries a short "where it's heading" summary; this is the full list. Shipped work lives in [CHANGELOG.md](../CHANGELOG.md). Nothing here is a dated commitment during the v0.x line — it's the direction, ordered roughly by priority within each tier.
 
 ## Planned
 
-- **Proximity-calibration capture UX** — the capture flow is still unintuitive and **fails quietly**.
-  Make it a clear guided near→far flow with a live raw readout and an explicit **calibrated ✓ /
-  incomplete ⚠** state. Two concrete traps to fix: capturing only *near* leaves it `calibrated:false`
-  with no visible cue (the user thinks they've set it but haven't); and **wake-on-wave silently does
-  nothing until calibration is complete** — the uncalibrated fallback (`raw < maxRange`) doesn't fit the
-  NSPanel Pro's graded sensor (raw ~50–100, range 9 cm), so a wave never registers as "near". Surface
-  "not calibrated → wake-on-wave inactive" prominently, and/or give the uncalibrated fallback a sensible
-  default for graded sensors. (Gauge auto-ranging shipped in 0.8.0.)
-- **More performance tooling** — deeper on-device instrumentation to measure, diagnose and tune
-  dashboard performance on weak panels.
+- **Proximity-calibration capture UX** — the capture flow is still unintuitive and **fails quietly**. Make it a clear guided near→far flow with a live raw readout and an explicit **calibrated ✓ / incomplete ⚠** state. Two concrete traps to fix: capturing only *near* leaves it `calibrated:false` with no visible cue (the user thinks they've set it but haven't); and **wake-on-wave silently does nothing until calibration is complete**. The uncalibrated fallback (`raw < maxRange`) doesn't fit the NSPanel Pro's graded sensor (raw ~50–100, range 9 cm), so a wave never registers as "near". Surface "not calibrated → wake-on-wave inactive" prominently, and/or give the uncalibrated fallback a sensible default for graded sensors. (Gauge auto-ranging shipped in 0.8.0.)
+- **More performance tooling** — deeper on-device instrumentation to measure, diagnose and tune dashboard performance on weak panels.
 - **Central log shipping — remaining surfaces** — the core shipped in 0.8.5 (opt-in, redacted forwarding of ha-paneld's own logs to a configurable syslog/HTTP sink), and 0.8.6 adds a live in-browser log viewer (Logs tab, app + system sources). Still to come: capturing the dashboard **browser console** (WebView JS console + errors, over the existing CDP path) and **shipping** the full system `logcat` to the remote sink where root allows (the local viewer already tails it).
 - **Auto-brightness self-calibration** — an opt-in mode that records the panel's ambient-light sensor and any manual brightness corrections over a **24-hour cycle**, then fits the lux→backlight curve to the room's real day/night light profile instead of today's hand-tuned default + bias. Turns the fixed curve into a learned, per-panel one; re-runnable when the panel moves or the room's lighting changes.
-- **MQTT TLS — self-signed & autodiscovery** — explicit `ssl://` / `mqtts://` TLS shipped in 0.8.8 (the default trust store is used, so a **CA-signed** broker certificate validates; the port defaults to 8883). Still planned: **zero-config autodiscovery** (a TLS-first probe on 8883 that falls back to plaintext 1883 on a failed handshake) and graceful handling of the common home **self-signed** broker — **trust-on-first-use** (pin the presented cert's fingerprint, shown in the `:8888` UI to confirm), a **user-supplied CA** upload for the strict path, or a clearly-labelled **opt-in "accept self-signed / insecure"** toggle — never a silent trust-all (MITM footgun). MQTT-over-WebSocket (`ws://` / `wss://`) is a related follow-up.
+- **MQTT TLS — self-signed & autodiscovery** — explicit `ssl://` / `mqtts://` TLS shipped in 0.8.8 (the default trust store is used, so a **CA-signed** broker certificate validates; the port defaults to 8883). Still planned: **zero-config autodiscovery** (a TLS-first probe on 8883 that falls back to plaintext 1883 on a failed handshake), and graceful handling of the common home **self-signed** broker. That handling should be one of the following, never a silent trust-all (MITM footgun):
+  - **trust-on-first-use** — pin the presented cert's fingerprint, shown in the `:8888` UI to confirm
+  - a **user-supplied CA** upload for the strict path
+  - a clearly-labelled **opt-in "accept self-signed / insecure"** toggle
+
+  MQTT-over-WebSocket (`ws://` / `wss://`) is a related follow-up.
 - **Boot-to-dashboard + auto-return** — reload returns to the per-panel **home dashboard** (0.8.5), and the built-in renderer adds boot-to-dashboard + an optional **idle return-to-home** (0.9). Still to extend to the Companion path: cold-start/boot and idle auto-return landing on *this panel's* dashboard rather than the Companion's user-default.
 - **Installer default-app setup** — a deploy-time flag for `install.sh` / `provision.sh` that sets the Android defaults over root, idempotently: **HA Companion as the home/launcher** (sidelines the vendor launcher; boots straight to the dashboard) and **HA Companion as the "Assist & voice input" default app** (so the assist gesture / long-press-home triggers HA Assist via the Companion's `VoiceCommandIntentActivity`). The on-demand admin launcher itself already ships (the navbar **Launcher** button); this is the installer automation around it.
-- **Built-in relay control beyond the S9E** — the same `switch.<panel>_relay*` model on other panels
-  with onboard relays, once each one's control path (GPIO / vendor node) is known.
-- Daemon boot-persistence on su-only (PX30) panels, if true-off is wanted without relying on `su`
-  at runtime.
-- **On-device scheduler** — run panel actions (screen on/off, sleep/wake, reboot, reload/navigate URL)
-  at **fixed times or repeating intervals**, configured from the HTTP UI or REST API. Runs on-device, so
-  schedules keep working through Home Assistant or network outages (unlike an HA automation). Parity with
-  the vendor tools' scheduled screen-on / reboot.
-- **HTTP UI redesign — continued iteration** — the first cut shipped in 0.8.5 (a tabbed multi-page
-  app: Dashboard · Configure · Test · Install · Fleet · API, with a schema-driven Configure tab and
-  per-setting Home Assistant exposure); 0.8.6 turned the Install tab into a full software-management
-  hub and added a panel switcher to the header. The layout, grouping and navigation are **still
-  settling** and will keep changing over the next releases: curating the reduced "Basic" settings view,
-  refining which values sit on which dashboard cards, and the customisable layout below.
-- **Customisable info-page layout** — drag-and-drop card re-ordering plus a per-card collapse
-  (disclosure triangle) so users can hide cards they don't care about, with the card order + collapsed
-  state **persisted per panel**. (Card title bars were demarcated as the groundwork for this.)
-- **Tame a runaway vendor Zigbee guard** — the panel's stock `guard_process.sh` can pin a CPU core
-  endlessly restarting a `zgateway` that won't stay up (the *120P vendor-guard spin*), even when
-  ha-paneld isn't managing Zigbee. Detect it (zgateway crash-loop / high CPU) and offer to stop or take
-  over the gateway; also make ha-paneld's existing vendor-native stop `awk`-free (awk is absent on some
-  panels, so the current stop can silently fail).
+- **Built-in relay control beyond the S9E** — the same `switch.<panel>_relay*` model on other panels with onboard relays, once each one's control path (GPIO / vendor node) is known.
+- Daemon boot-persistence on su-only (PX30) panels, if true-off is wanted without relying on `su` at runtime.
+- **On-device scheduler** — run panel actions (screen on/off, sleep/wake, reboot, reload/navigate URL) at **fixed times or repeating intervals**, configured from the HTTP UI or REST API. Runs on-device, so schedules keep working through Home Assistant or network outages (unlike an HA automation). Parity with the vendor tools' scheduled screen-on / reboot.
+- **HTTP UI redesign — continued iteration** — the first cut shipped in 0.8.5 (a tabbed multi-page app: Dashboard · Configure · Test · Install · Fleet · API, with a schema-driven Configure tab and per-setting Home Assistant exposure); 0.8.6 turned the Install tab into a full software-management hub and added a panel switcher to the header. The layout, grouping and navigation are **still settling** and will keep changing over the next releases: curating the reduced "Basic" settings view, refining which values sit on which dashboard cards, and the customisable layout below.
+- **Customisable info-page layout** — drag-and-drop card re-ordering plus a per-card collapse (disclosure triangle) so users can hide cards they don't care about, with the card order + collapsed state **persisted per panel**. (Card title bars were demarcated as the groundwork for this.)
+- **Tame a runaway vendor Zigbee guard** — the panel's stock `guard_process.sh` can pin a CPU core endlessly restarting a `zgateway` that won't stay up (the *120P vendor-guard spin*), even when ha-paneld isn't managing Zigbee. Detect it (zgateway crash-loop / high CPU) and offer to stop or take over the gateway; also make ha-paneld's existing vendor-native stop `awk`-free (awk is absent on some panels, so the current stop can silently fail).
 - **Unresponsive-panel settings detection** — the always-reachable core shipped in 0.8.5 (a partial wakelock plus a Wi-Fi high-performance lock keep the SoC and network up while the screen sleeps freely). Still to come: **detect and warn** about settings that can make a panel unresponsive — native screen-off → SoC-suspend, `stay_on_while_plugged_in=0`, aggressive Doze, a mis-reported power source — surfaced with a one-tap fix in the web UI and the installer. Panels ha-paneld lands on have usually run other software first, so their power state can't be assumed.
 
 ## Stretch goals

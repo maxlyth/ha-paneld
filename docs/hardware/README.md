@@ -1,9 +1,6 @@
 # Panel hardware references
 
-Reverse-engineered hardware fact sheets for the wall panels ha-paneld targets — SoC, LED control,
-sensors, buttons, NFC, Zigbee/IR, relays, adb/root access. These devices ship with almost no public
-documentation, so these notes record what is physically on each board and how to drive it, gathered
-from live units (rooted / userdebug `adb root`) on 2026-06-05.
+Reverse-engineered hardware fact sheets for the wall panels ha-paneld targets — SoC, LED control, sensors, buttons, NFC, Zigbee/IR, relays, adb/root access. These devices ship with almost no public documentation, so these notes record what is physically on each board and how to drive it, gathered from live units (rooted / userdebug `adb root`) on 2026-06-05.
 
 | Panel | SoC | LED control | Notable sensors | NFC | Zigbee/IR | Reference |
 |---|---|---|---|---|---|---|
@@ -21,19 +18,14 @@ from live units (rooted / userdebug `adb root`) on 2026-06-05.
 § Shelly Wall Display facts are from firmware OTA analysis (incl. a device-tree parse of the modern partition image), the official changelog, and community/KB sources — **not** validated on a unit here. Both firmware tracks are *userdebug* builds, so `adb root` may be reachable if an adb foothold exists. `ShellyWallDisplay` + `ShellyWallDisplayV2` profiles are implemented but speculative.
 
 > [!TIP]
-> Before modifying firmware on a **button-less** panel, read
-> [Firmware backup & restore](../firmware-backup-restore.md) — these are all Rockchip devices, so the
-> usual button-combo fastboot/recovery advice does not apply; backup/restore goes via `adb reboot
-> loader` + `rkdeveloptool` (open-source, Linux), with maskrom as the un-brickable fallback.
+> Before modifying firmware on a **button-less** panel, read [Firmware backup & restore](../firmware-backup-restore.md) — these are all Rockchip devices, so the usual button-combo fastboot/recovery advice does not apply; backup/restore goes via `adb reboot loader` + `rkdeveloptool` (open-source, Linux), with maskrom as the un-brickable fallback.
 
 ## Method
 
-- **Real silicon**: bound i2c devices via `/sys/bus/i2c/devices/*/name` — *not* `…/drivers/`, because
-  Rockchip BSPs compile in hundreds of optional drivers and the `drivers/` listing over-reports badly.
+- **Real silicon**: bound i2c devices via `/sys/bus/i2c/devices/*/name` — *not* `…/drivers/`, because Rockchip BSPs compile in hundreds of optional drivers and the `drivers/` listing over-reports badly.
 - **Radios**: `pm list features` (`nfc`, `consumerir`, `bluetooth`, `ethernet`, …) + `/dev` nodes.
 - **Android-exposed sensors**: `dumpsys sensorservice`.
-- **Control surfaces**: `/sys/class/leds`, `/dev`, and each LED node's own attributes (some panels
-  self-document, e.g. the TPA10's `avsux_info` / `avsux_firmware`).
+- **Control surfaces**: `/sys/class/leds`, `/dev`, and each LED node's own attributes (some panels self-document, e.g. the TPA10's `avsux_info` / `avsux_firmware`).
 
 Corrections and additions for other panels are welcome.
 
@@ -41,19 +33,13 @@ Corrections and additions for other panels are welcome.
 
 Each panel reaches adb/root differently; the per-panel pages have the full, firmware-specific steps:
 
-- **Sonoff NSPanel Pro** — `userdebug`/test-keys, **no adb password**; the only hurdle is reaching
-  developer mode (varies by eWeLink firmware). `adb root` + remount + a SuperSU `su`.
-  → [nspanel-pro.md](nspanel-pro.md#gaining-adb--root-access).
-- **Tuya TPA10** — adb is **password-protected**; the reliable route is the USB diagnostics-app
-  backdoor (`su` already present). → [tpa10.md](tpa10.md#gaining-adb--root-access).
-- **Electron WF1589T** — `userdebug` with Google Play; `adb root` works directly (LED is app-direct,
-  so root is rarely needed). → [wf1589t.md](wf1589t.md).
+- **Sonoff NSPanel Pro** — `userdebug`/test-keys, **no adb password**; the only hurdle is reaching developer mode (varies by eWeLink firmware). `adb root` + remount + a SuperSU `su`. → [nspanel-pro.md](nspanel-pro.md#gaining-adb--root-access).
+- **Tuya TPA10** — adb is **password-protected**; the reliable route is the USB diagnostics-app backdoor (`su` already present). → [tpa10.md](tpa10.md#gaining-adb--root-access).
+- **Electron WF1589T** — `userdebug` with Google Play; `adb root` works directly (LED is app-direct, so root is rarely needed). → [wf1589t.md](wf1589t.md).
 
 ## Performance comparison & practical deployment
 
-The three panel classes form a clear ladder: **NSPanel Pro (PX30)** entry-level, **TPA10 (rk3566)**
-mid, **WF1589T (rk3576)** high. Screen geometry is the first design constraint; on the 2 GB panels RAM
-is the binding one. Figures are from ha-paneld's own `/perf` endpoint + device specs.
+The three panel classes form a clear ladder: **NSPanel Pro (PX30)** entry-level, **TPA10 (rk3566)** mid, **WF1589T (rk3576)** high. Screen geometry is the first design constraint; on the 2 GB panels RAM is the binding one. Figures are from ha-paneld's own `/perf` endpoint + device specs.
 
 <details>
 <summary>Spec ladder (CPU / RAM / GPU / display)</summary>
@@ -89,48 +75,26 @@ Each panel under its own real workload:
 
 **What this means for a real dashboard deployment:**
 
-- **Screen geometry is the first design constraint.** The NSPanel Pro's 480×480 **square** (480 dp)
-  only fits a single narrow column; the TPA10's 10" 1920×1200 (≈1280×800 dp) is genuinely roomy for
-  multi-column dashboards; the WF1589T is sharp (~400 ppi) but ships at a low logical density so the UI
-  is tiny until raised. Design the dashboard to the panel's **dp canvas + aspect ratio**, not its raw
-  pixel count.
-- **2 GB panels (PX30, TPA10): RAM is the binding constraint.** The dashboard WebView, the HA
-  Companion app and Android itself share ~2 GB; heavy dashboards (many cards, large images, long
-  history graphs, heavy custom cards) trigger WebView reloads and jank. The WF1589T's 4 GB largely
-  removes this pressure.
-- **The NSPanel Pro — the most common panel — has the slowest CPU** (A35), so transitions and
-  animations are visibly slower than on A55/A72 units. Keep its dashboards the leanest.
-- **The biggest cross-panel win is cutting WebSocket event volume** reaching the panel — see
-  [../performance.md](../performance.md) (the split-instance approach).
-- **ha-paneld is the diagnostic for all of this**: CPU clock vs max (throttling), the responsiveness
-  metric, top-5 processes and the 1-click WebView DevTools relay tell you whether the *hardware*, the
-  *dashboard* or the *data feed* is the bottleneck on your specific unit — rather than guessing.
+- **Screen geometry is the first design constraint.** The NSPanel Pro's 480×480 **square** (480 dp) only fits a single narrow column; the TPA10's 10" 1920×1200 (≈1280×800 dp) is genuinely roomy for multi-column dashboards; the WF1589T is sharp (~400 ppi) but ships at a low logical density so the UI is tiny until raised. Design the dashboard to the panel's **dp canvas + aspect ratio**, not its raw pixel count.
+- **2 GB panels (PX30, TPA10): RAM is the binding constraint.** The dashboard WebView, the HA Companion app and Android itself share ~2 GB; heavy dashboards (many cards, large images, long history graphs, heavy custom cards) trigger WebView reloads and jank. The WF1589T's 4 GB largely removes this pressure.
+- **The NSPanel Pro — the most common panel — has the slowest CPU** (A35), so transitions and animations are visibly slower than on A55/A72 units. Keep its dashboards the leanest.
+- **The biggest cross-panel win is cutting WebSocket event volume** reaching the panel — see [../performance.md](../performance.md) (the split-instance approach).
+- **ha-paneld is the diagnostic for all of this**: CPU clock vs max (throttling), the responsiveness metric, top-5 processes and the 1-click WebView DevTools relay tell you whether the *hardware*, the *dashboard* or the *data feed* is the bottleneck on your specific unit — rather than guessing.
 
 ## Updating the system WebView
 
 **Read this before anything else** — it's the single most common first-run failure on these panels.
 
-The HA Companion app renders the Lovelace dashboard in Android's **system WebView**, and most of these
-panels ship with one far too old to run a current Home Assistant frontend — so out of the box you get
-a **blank or broken dashboard, missing cards, or "browser not supported"**. Panels **without** Google
-Play (NSPanel Pro, TPA10) can't auto-update it, so you must **sideload** a current WebView (below). The
-**WF1589T has Google Play**, so just update *Android System WebView* from the Play Store (or the Play
-WebView dev channel) — no sideload needed.
+The HA Companion app renders the Lovelace dashboard in Android's **system WebView**, and most of these panels ship with one far too old to run a current Home Assistant frontend — so out of the box you get a **blank or broken dashboard, missing cards, or "browser not supported"**. Panels **without** Google Play (NSPanel Pro, TPA10) can't auto-update it, so you must **sideload** a current WebView (below). The **WF1589T has Google Play**, so just update *Android System WebView* from the Play Store (or the Play WebView dev channel) — no sideload needed.
 
-The clean way — **no F-Droid, no third-party app store** (the workarounds the NSPanel-Pro community
-threads resort to) — is a direct adb sideload of the standard Android System WebView (package
-**`com.android.webview`**), matched to the panel's Android version and ABI. Per-panel known-working
-builds and the full sideload/verify steps are below.
+The clean way is a direct adb sideload of the standard Android System WebView (package **`com.android.webview`**), matched to the panel's Android version and ABI — **no F-Droid, no third-party app store** (the workarounds the NSPanel-Pro community threads resort to). Per-panel known-working builds and the full sideload/verify steps are below.
 
 > [!TIP]
-> The package name must be `com.android.webview` for the system to select it automatically. Mind the
-> distinction: the **SystemWebView** builds from Cromite and LineageOS use `com.android.webview` and
-> *do* register as the provider — but the regular **Cromite / Bromite *browser*** app uses a different
-> package and does **not**. Use the SystemWebView build, not the browser APK.
+> The package name must be `com.android.webview` for the system to select it automatically. Mind the distinction: the **SystemWebView** builds from Cromite and LineageOS use `com.android.webview` and *do* register as the provider — but the regular **Cromite / Bromite *browser*** app uses a different package and does **not**. Use the SystemWebView build, not the browser APK.
 
 ### Per-panel stock versions and known-working replacements
 
-"Stock" = what the vendor firmware ships from factory, verified from firmware OTA inspection or live device. "Replacement" = what is confirmed working after sideload. Redistributable builds are mirrored as ha-paneld Release assets; sideload with `adb install -r <file>`.
+"Stock" = what the vendor firmware ships from factory, verified from firmware OTA inspection or a live device. "Replacement" = what is confirmed working after sideload. Redistributable builds are mirrored as ha-paneld Release assets; sideload with `adb install -r <file>`.
 
 | Panel | ABI | Stock (vendor firmware) | Replacement (`com.android.webview`) | Download |
 |---|---|---|---|---|
@@ -145,21 +109,13 @@ builds and the full sideload/verify steps are below.
 All mirrored builds live in the [**Panel WebView mirror** release](https://github.com/maxlyth/ha-paneld/releases/tag/webview-mirror) — intended as a living, community list of known-working versions. Got one working on another panel or version? Contributions welcome.
 
 > [!NOTE]
-> - **Pick the newest WebView your panel's Android version supports.** The NSPanel Pro's Android 8.1
->   caps at 138; newer builds won't install. Newer Android (the TPA10's 11) runs current Cromite.
-> - **APKMirror's *direct* download links are short-lived presigned URLs that expire within the hour** —
->   use the page, or the ha-paneld Release assets above (durable). The mirror exists precisely because
->   panels lack Play and ship years-old firmware, and a working build can otherwise take days to find.
+> - **Pick the newest WebView your panel's Android version supports.** The NSPanel Pro's Android 8.1 caps at 138; newer builds won't install. Newer Android (the TPA10's 11) runs current Cromite.
+> - **APKMirror's *direct* download links are short-lived presigned URLs that expire within the hour** — use the page, or the ha-paneld Release assets above (durable). The mirror exists precisely because panels lack Play and ship years-old firmware, and a working build can otherwise take days to find.
 
 <details>
 <summary>Sideload + verify steps</summary>
 
-1. Download a current **Android System WebView** APK — package **`com.android.webview`**. The build that
-   works depends on the panel's Android version (see the table): the **LineageOS** Android System
-   WebView covers old Android (e.g. 8.1), **Cromite's SystemWebView** build covers newer Android — both
-   deliberately use the `com.android.webview` package, so they're picked as the provider automatically
-   (no allowlist editing, no extra app), and both are open / freely redistributable. Match your panel's
-   ABI; per-panel downloads are above.
+1. Download a current **Android System WebView** APK — package **`com.android.webview`**. The build that works depends on the panel's Android version (see the table): the **LineageOS** Android System WebView covers old Android (e.g. 8.1), **Cromite's SystemWebView** build covers newer Android. Both deliberately use the `com.android.webview` package, so they're picked as the provider automatically (no allowlist editing, no extra app), and both are open / freely redistributable. Match your panel's ABI; per-panel downloads are above.
 2. Sideload it (no root):
 
    ```sh
@@ -185,5 +141,4 @@ or via Developer options → *WebView implementation*.
 
 ---
 
-Per-panel fact sheets: [NSPanel Pro](nspanel-pro.md) · [TPA10](tpa10.md) · [WF1589T](wf1589t.md) ·
-[S9E](s9e.md).
+Per-panel fact sheets: [NSPanel Pro](nspanel-pro.md) · [TPA10](tpa10.md) · [WF1589T](wf1589t.md) · [S9E](s9e.md).

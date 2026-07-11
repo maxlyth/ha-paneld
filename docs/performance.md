@@ -1,6 +1,6 @@
 # Performance tuning for Home Assistant wall panels
 
-This is a field guide to why cheap Android wall panels (Sonoff NSPanel Pro, Tuya TPA10, generic rk3566/rk3576 boards) feel sluggish, stutter when scrolling, blank out, or silently stop updating — and how to **measure** the cause with ha-paneld and apply the fixes that actually move the needle, in rough order of impact.
+This is a field guide to why cheap Android wall panels (Sonoff NSPanel Pro, Tuya TPA10, generic rk3566/rk3576 boards) feel sluggish, stutter when scrolling, blank out, or silently stop updating. It shows how to **measure** the cause with ha-paneld, then apply the fixes that actually move the needle, in rough order of impact.
 
 > [!TIP]
 > The single biggest cause is usually **the Home Assistant WebSocket event firehose**, not the panel's CPU. The biggest fix is to **reduce the number of state events the dashboard has to process**, not to buy a faster panel.

@@ -1,28 +1,17 @@
 # Firmware backup & restore (wall panels)
 
-Wall panels have **no buttons** — no volume or power keys — so the standard Android recovery guides, which
-all start with "hold Volume-Down + Power to enter [fastboot](https://en.wikipedia.org/wiki/Fastboot)/recovery",
-simply can't work here. If you've already failed a few times following them, that's why: there's no
-button to hold. These are [Rockchip](https://en.wikipedia.org/wiki/Rockchip) panels, which use a
-different route — and this guide covers it.
+Wall panels have **no buttons** — no volume or power keys. The standard Android recovery guides all start with "hold Volume-Down + Power to enter [fastboot](https://en.wikipedia.org/wiki/Fastboot)/recovery", so they simply can't work here. If you've already failed a few times following them, that's why: there's no button to hold. These are [Rockchip](https://en.wikipedia.org/wiki/Rockchip) panels, which use a different route — and this guide covers it.
 
-A complete backup is easy and low-risk: it runs over the network, no cable, no mode changes
-([Back up now](#back-up-now)). Restoring is more involved — it needs a USB cable and a laptop — but these
-panels are practically impossible to permanently brick, because a recovery mode
-([Maskrom](#why-these-panels-need-special-steps)) lives in the chip itself. Back up first; change
-firmware only if you want to.
+A complete backup is easy and low-risk: it runs over the network, no cable, no mode changes ([Back up now](#back-up-now)). Restoring is more involved — it needs a USB cable and a laptop — but these panels are practically impossible to permanently brick, because a recovery mode ([Maskrom](#why-these-panels-need-special-steps)) lives in the chip itself. Back up first; change firmware only if you want to.
 
 Canonical, open-source, cross-platform — no Windows-only vendor tools.[^tools]
 
 > [!NOTE]
-> Backups are safe and routine. The restore steps are the recovery path and haven't been brick-tested
-> here yet — two per-panel details (the maskrom entry, the loader file) are still being confirmed.
-> Neither affects taking a backup today.
+> Backups are safe and routine. The restore steps are the recovery path and haven't been brick-tested here yet — two per-panel details (the maskrom entry, the loader file) are still being confirmed. Neither affects taking a backup today.
 
 ## Back up now
 
-Read every partition straight off the running panel, over the network. No reboot, no cable, nothing that
-can brick it — you only need the panel's IP and [`adb`](#setting-up-rkdeveloptool).[^adb]
+Read every partition straight off the running panel, over the network. No reboot, no cable, nothing that can brick it — you only need the panel's IP and [`adb`](#setting-up-rkdeveloptool).[^adb]
 
 ```bash
 IP=192.168.1.50         # your panel's IP
@@ -37,8 +26,7 @@ adb -s $IP:5555 shell 'su 0 sh -c "for f in /dev/block/by-name/*; do echo \$(bas
     done
 ```
 
-That's the whole backup — keep the folder somewhere safe. Then grab one extra piece the loop above
-doesn't catch (the loader at the very start of the flash — it's what makes the un-brickable rescue work):
+That's the whole backup — keep the folder somewhere safe. Then grab one extra piece the loop above doesn't catch (the loader at the very start of the flash — it's what makes the un-brickable rescue work):
 
 ```bash
 adb -s $IP:5555 shell "su 0 dd if=/dev/block/mmcblk2 of=/sdcard/idb_head.img bs=1M count=8"   # mmcblk2 on TPA10; mmcblk1 on WF1589T
@@ -46,29 +34,22 @@ adb -s $IP:5555 pull /sdcard/idb_head.img backup/ && adb -s $IP:5555 shell "rm /
 ```
 
 > [!NOTE]
-> **What you just saved.** Every named partition: the bootloader (`uboot`, `trust`, `security`), the
-> system (`boot`, `recovery`, `super`, …) and your data (`userdata` — large; back it up occasionally, on
-> its own). Needs root (`su 0`), which the rk3566/rk3576 panels have; NSPanel Pro uses
-> [seaky's roottool](#per-panel-notes).
+> **What you just saved.** Every named partition: the bootloader (`uboot`, `trust`, `security`), the system (`boot`, `recovery`, `super`, …) and your data (`userdata` — large; back it up occasionally, on its own). Needs root (`su 0`), which the rk3566/rk3576 panels have; NSPanel Pro uses [seaky's roottool](#per-panel-notes).
 
 ## Stop unwanted updates
 
-If you've enabled adb you probably want to stop the vendor pushing an update that reverts your changes.
-Disable the updater app (reversible — `pm enable` puts it back):
+If you've enabled adb you probably want to stop the vendor pushing an update that reverts your changes. Disable the updater app (reversible — `pm enable` puts it back):
 
 ```bash
 adb -s $IP:5555 shell 'pm disable-user --user 0 com.elclcd.otaupdater'   # WF1589T
 ```
 
 > [!NOTE]
-> The updater app differs per panel — **WF1589T** is `com.elclcd.otaupdater`; **TPA10** has no dedicated
-> updater (just watch for Tuya pushes). See [Per-panel notes](#per-panel-notes).
+> The updater app differs per panel — **WF1589T** is `com.elclcd.otaupdater`; **TPA10** has no dedicated updater (just watch for Tuya pushes). See [Per-panel notes](#per-panel-notes).
 
 ## If you ever need to restore
 
-Restoring *writes* to the panel, so — unlike backup — it needs a **USB cable to a computer** (a laptop
-carried to the panel; you may have to unmount it to reach the USB port) and the `rkdeveloptool` program.
-One-time setup is in [Setting up rkdeveloptool](#setting-up-rkdeveloptool). Then, two situations:
+Restoring *writes* to the panel, so unlike backup it needs a **USB cable to a computer** and the `rkdeveloptool` program. Bring a laptop to the panel; you may have to unmount the panel to reach the USB port. One-time setup is in [Setting up rkdeveloptool](#setting-up-rkdeveloptool). Then, two situations:
 
 **The panel still boots** — switch it to flashing mode over the network, write the partition back:
 
@@ -89,9 +70,7 @@ rkdeveloptool wlx boot boot.img      # then restore
 ```
 
 > [!CAUTION]
-> Maskrom rescue needs the panel's own **loader file** — that's why [Back up now](#back-up-now) grabs it.
-> Restore by partition **name** (`wlx`), not raw sector. On a wall-mounted panel, rehearse on a spare
-> first if you can. Full detail in [Safety notes](#safety-notes).
+> Maskrom rescue needs the panel's own **loader file** — that's why [Back up now](#back-up-now) grabs it. Restore by partition **name** (`wlx`), not raw sector. On a wall-mounted panel, rehearse on a spare first if you can. Full detail in [Safety notes](#safety-notes).
 
 ---
 
@@ -101,9 +80,7 @@ Everything below is background and look-up — you don't need it to take a backu
 
 ### Setting up rkdeveloptool
 
-Only needed for [restore](#if-you-ever-need-to-restore). `rkdeveloptool` is the open-source replacement
-for the old Windows-only Rockchip tools; it talks to the panel over USB via
-[libusb](https://libusb.info), so it runs on whatever laptop you already have:
+Only needed for [restore](#if-you-ever-need-to-restore). `rkdeveloptool` is the open-source replacement for the old Windows-only Rockchip tools; it talks to the panel over USB via [libusb](https://libusb.info), so it runs on whatever laptop you already have:
 
 | Your computer | Works? | How |
 | --- | --- | --- |
@@ -147,9 +124,7 @@ Docker Desktop on macOS/Windows can't reach USB (it runs in a VM), so the contai
 </details>
 
 > [!NOTE]
-> Backup and switching to Loader mode use [`adb`](https://developer.android.com/tools/adb) over the
-> network (port 5555) — **no USB**. USB is needed only for the `rkdeveloptool` steps, which is why those
-> are the only part requiring a laptop at the panel.
+> Backup and switching to Loader mode use [`adb`](https://developer.android.com/tools/adb) over the network (port 5555) — **no USB**. USB is needed only for the `rkdeveloptool` steps, which is why those are the only part requiring a laptop at the panel.
 
 ### rkdeveloptool commands
 
@@ -171,59 +146,35 @@ From the tool's own `--help` (run `rkdeveloptool -h` to confirm your build):
 
 ### Why these panels need special steps
 
-Every supported panel is a [Rockchip](https://en.wikipedia.org/wiki/Rockchip) SoC (px30 / rk3566 /
-rk3576) booting from [eMMC](https://en.wikipedia.org/wiki/MultiMediaCard#eMMC). That's why the usual
-Android advice fails:
+Every supported panel is a [Rockchip](https://en.wikipedia.org/wiki/Rockchip) SoC (px30 / rk3566 / rk3576) booting from [eMMC](https://en.wikipedia.org/wiki/MultiMediaCard#eMMC). That's why the usual Android advice fails:
 
-- **No buttons.** Guides that say "hold Volume-Down + Power for
-  [fastboot](https://en.wikipedia.org/wiki/Fastboot)/recovery" can't apply.
-- **Not fastboot.** Rockchip uses its own USB protocol, *rockusb*, with two
-  [flashing modes](https://wiki.radxa.com/Rock5/install/rockchip-flash-tools):
+- **No buttons.** Guides that say "hold Volume-Down + Power for [fastboot](https://en.wikipedia.org/wiki/Fastboot)/recovery" can't apply.
+- **Not fastboot.** Rockchip uses its own USB protocol, *rockusb*, with two [flashing modes](https://wiki.radxa.com/Rock5/install/rockchip-flash-tools):
     - **Loader** — entered in software with `adb reboot loader` (no buttons). Normal restores use this.
-    - **Maskrom** — a rescue mode baked into the chip's ROM that runs even with a wiped bootloader. It's
-      the un-brickable fallback, entered by a hardware step (a pin-hole / test-point — see
-      [Per-panel notes](#per-panel-notes)); because it starts with no RAM set up, you feed it the loader
-      first (`db`), which is why your backup keeps a copy.
+    - **Maskrom** — a rescue mode baked into the chip's ROM that runs even with a wiped bootloader. It's the un-brickable fallback, entered by a hardware step (a pin-hole / test-point — see [Per-panel notes](#per-panel-notes)). It starts with no RAM set up, so you feed it the loader first (`db`) — that's why your backup keeps a copy.
 
 ### Per-panel notes
 
 Partition tables read live 2026-06-07 (model facts, not device secrets).
 
-**TPA10** (rk3566, Android 11, 7.28 GB eMMC `mmcblk2`) — root `su 0`; maskrom entry: the pin-hole by the
-USB-C port is the candidate (confirm reset-vs-maskrom before relying on it); USB-C port.
-Partitions: `security uboot trust misc dtbo vbmeta boot recovery backup cache metadata logo frp upgrade super userdata`.
+**TPA10** (rk3566, Android 11, 7.28 GB eMMC `mmcblk2`) — root `su 0`; maskrom entry: the pin-hole by the USB-C port is the candidate (confirm reset-vs-maskrom before relying on it); USB-C port. Partitions: `security uboot trust misc dtbo vbmeta boot recovery backup cache metadata logo frp upgrade super userdata`.
 
-**WF1589T** (rk3576, Android 14, 58.24 GB eMMC `mmcblk1`) — root `su 0`; updater `com.elclcd.otaupdater`;
-maskrom test-point not yet located.
-Partitions: `security uboot trust misc dtbo vbmeta boot recovery backup cache metadata frp baseparameter updatekey super userdata`.
+**WF1589T** (rk3576, Android 14, 58.24 GB eMMC `mmcblk1`) — root `su 0`; updater `com.elclcd.otaupdater`; maskrom test-point not yet located. Partitions: `security uboot trust misc dtbo vbmeta boot recovery backup cache metadata frp baseparameter updatekey super userdata`.
 
-**NSPanel Pro 86P** (px30) / **120P** (rk3326-S) — use seaky's proven tooling rather than rkdeveloptool:
-[roottool](https://github.com/seaky/nspanel_pro_roottool_apk) ·
-[tools incl. firmware restore](https://github.com/seaky/nspanel_pro_tools_apk). Key facts distilled from
-seaky's issue threads (second-hand — not live-read here):
+**NSPanel Pro 86P** (px30) / **120P** (rk3326-S) — use seaky's proven tooling rather than rkdeveloptool: [roottool](https://github.com/seaky/nspanel_pro_roottool_apk) · [tools incl. firmware restore](https://github.com/seaky/nspanel_pro_tools_apk). Key facts distilled from seaky's issue threads (second-hand — not live-read here):
 
-- **Never touch Rockchip vendor storage** (`/dev/vendor_storage`): slot **7** holds the licence string
-  (items 4–5 are the two MACs), slot **8** the product id (`SN-RKPX30-NSP-01`). Wiping it boots the panel
-  to a Chinese factory/QR screen. (roottool#1)
-- **QR-screen unbrick *without* reflash:** sideload a launcher over adb → join Wi-Fi → reopen the eWeLink
-  panel app → tap **Activate** a few times → the licence re-provisions online and the panel recovers. (roottool#9)
-- **5× power-cycle** (power off at the Sonoff boot logo, repeated ×5) factory-resets to the *recovery
-  partition's* firmware — often the **shipped version** (e.g. reverts a 2.3 unit to 1.7; OTA upgrades are
-  not written to recovery). (roottool#1/#8)
-- **No downgrade** (Android OTA restriction); **dev-mode/root is permanent** and survives factory reset
-  (eWeLink-registered rooted devices also lose some cloud features permanently). (roottool#1)
-- **Dead-eMMC signs:** backlight-on-then-off boot loop with recovery unresponsive, or a verify-fail when
-  flashing a known-good file = eMMC fault (or a deleted system cert) — usually unrecoverable. (roottool#8/#12)
-- Raw reflash = **RKDumper + Rockchip AndroidTool** over USB (maskrom; px30 needs a USB-driver tweak).
-  Recovery-mode adb identity = `product/model/device = px30_evb`, shown as `rockchipplatform … recovery`. (roottool#2, tools#87)
+- **Never touch Rockchip vendor storage** (`/dev/vendor_storage`): slot **7** holds the licence string (items 4–5 are the two MACs), slot **8** the product id (`SN-RKPX30-NSP-01`). Wiping it boots the panel to a Chinese factory/QR screen. (roottool#1)
+- **QR-screen unbrick *without* reflash:** sideload a launcher over adb → join Wi-Fi → reopen the eWeLink panel app → tap **Activate** a few times → the licence re-provisions online and the panel recovers. (roottool#9)
+- **5× power-cycle** (power off at the Sonoff boot logo, repeated ×5) factory-resets to the *recovery partition's* firmware — often the **shipped version** (e.g. reverts a 2.3 unit to 1.7; OTA upgrades are not written to recovery). (roottool#1/#8)
+- **No downgrade** (Android OTA restriction); **dev-mode/root is permanent** and survives factory reset (eWeLink-registered rooted devices also lose some cloud features permanently). (roottool#1)
+- **Dead-eMMC signs:** backlight-on-then-off boot loop with recovery unresponsive, or a verify-fail when flashing a known-good file = eMMC fault (or a deleted system cert) — usually unrecoverable. (roottool#8/#12)
+- Raw reflash = **RKDumper + Rockchip AndroidTool** over USB (maskrom; px30 needs a USB-driver tweak). Recovery-mode adb identity = `product/model/device = px30_evb`, shown as `rockchipplatform … recovery`. (roottool#2, tools#87)
 - ⚠️ Cross-flashing **Sonoff OTA onto a Tuya T6E/S6E clone bricks it** (no `stop` binary, recovery-stuck). (tools#87)
 
 ### Safety notes
 
-- Restore by partition **name** (`wlx`), not raw sector — the tool resolves the offset, so you can't
-  clobber the wrong region.
-- Avoid raw full-disk writes (`wl` at sector 0) — they hit a rockusb `0x2000`-sector offset quirk; stick
-  to per-partition `wlx`/`rl`.
+- Restore by partition **name** (`wlx`), not raw sector — the tool resolves the offset, so you can't clobber the wrong region.
+- Avoid raw full-disk writes (`wl` at sector 0) — they hit a rockusb `0x2000`-sector offset quirk; stick to per-partition `wlx`/`rl`.
 - Don't write `uboot`/`trust`/loader without a verified backup **and** the loader file in hand.
 - Rehearse a restore on a spare unit before doing it on a panel in a wall, if you can.
 
@@ -233,9 +184,6 @@ seaky's issue threads (second-hand — not live-read here):
 - Document **loader-file** sourcing/extraction per panel — the one prerequisite for maskrom rescue.
 - One end-to-end **brick-and-restore test** on a spare to validate the restore steps.
 
-[^tools]: The old vendor tools (`RKDevTool` / `AndroidTool`) are Windows-only GUIs. This guide uses
-    `rkdeveloptool`, which is open-source and runs on Linux, macOS, or Windows (via WSL2) — see
-    [Setting up rkdeveloptool](#setting-up-rkdeveloptool).
+[^tools]: The old vendor tools (`RKDevTool` / `AndroidTool`) are Windows-only GUIs. This guide uses `rkdeveloptool`, which is open-source and runs on Linux, macOS, or Windows (via WSL2) — see [Setting up rkdeveloptool](#setting-up-rkdeveloptool).
 
-[^adb]: `adb` (Android Debug Bridge) is already in the Home Assistant SSH add-on. The panels expose it on
-    TCP port 5555, so backup and entering Loader mode happen entirely over the network — no USB.
+[^adb]: `adb` (Android Debug Bridge) is already in the Home Assistant SSH add-on. The panels expose it on TCP port 5555, so backup and entering Loader mode happen entirely over the network — no USB.

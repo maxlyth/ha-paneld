@@ -2,7 +2,7 @@
 
 Speak any Home Assistant TTS voice (Piper, Home Assistant Cloud, …) on a panel with two `rest_command`s and a small script: HA renders the phrase to an audio URL and the panel downloads and plays it via `POST /play`. Copy the three blocks under [Setup](#setup), then call `script.ha_paneld_say`.
 
-Server-side TTS keeps modern voices — far better than the on-device TTS on older panels.
+Server-side TTS gives you modern voices — far better than the on-device TTS on older panels.
 
 > [!NOTE]
 > Home Assistant has **no MQTT `media_player` platform**, so a panel isn't (yet) a `media_player` you can aim `tts.speak` at directly — that's on the [roadmap](../README.md#status--roadmap). This recipe is the interim path.

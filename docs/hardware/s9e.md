@@ -1,16 +1,9 @@
 # Smatek S9E (Rockchip RK3566)
 
-A 10.1" **1920×1200** RK3566 in-wall panel — same SoC family as the TPA10 — with **2 on-board mains
-relays**, four LED-backlit buttons, a radar proximity sensor, plus **Zigbee, Ethernet and RS485**.
-Unlike the other pages here, this is **not** reverse-engineered on a unit in hand: specs are from
-Smatek's listing and control paths from community sources. Treat control-path details as unconfirmed
-until validated on hardware.
+A 10.1" **1920×1200** RK3566 in-wall panel — same SoC family as the TPA10 — with **2 on-board mains relays**, four LED-backlit buttons, a radar proximity sensor, plus **Zigbee, Ethernet and RS485**. Unlike the other pages here, this is **not** reverse-engineered on a unit in hand: specs are from Smatek's listing and control paths from community sources. Treat control-path details as unconfirmed until validated on hardware.
 
 > [!TIP]
-> Most-needed facts: shares the TPA10's **RK3566** platform, so app-side features likely work without
-> S9E-specific code; the **relays switch mains loads** (root sysfs, implemented but untested); buttons
-> emit **`F1`–`F4`** KeyEvents (app-direct, no root). Update the **very old (Chromium 83) WebView**
-> first.
+> Most-needed facts: shares the TPA10's **RK3566** platform, so app-side features likely work without S9E-specific code; the **relays switch mains loads** (root sysfs, implemented but untested); buttons emit **`F1`–`F4`** KeyEvents (app-direct, no root). Update the **very old (Chromium 83) WebView** first.
 
 | | |
 |---|---|
@@ -25,27 +18,17 @@ until validated on hardware.
 | Root | vendor app uses `execRootCmd` → root is available; some units ship with developer mode pre-unlocked. Whether `su` is reachable from a normal app sandbox is **unconfirmed** (it decides whether ha-paneld drives the sysfs nodes directly or needs the root helper daemon). |
 
 > [!CAUTION]
-> The control surfaces below are **root sysfs** writes, and the relays switch **mains loads**. The
-> ha-paneld support is implemented from the reported paths but is **untested on hardware** — validate
-> on a real S9E before relying on it.
+> The control surfaces below are **root sysfs** writes, and the relays switch **mains loads**. The ha-paneld support is implemented from the reported paths but is **untested on hardware** — validate on a real S9E before relying on it.
 
 > [!TIP]
-> Because the S9E shares the TPA10's **RK3566** platform, ha-paneld's existing app-side features likely
-> work without S9E-specific code: temperature/humidity/light may surface through `SensorManager` (as on
-> the TPA10's CHT8305), and the **WebView is shipped very old (Chromium 83)** — update it first (Magisk
-> OpenWebView, the 2025-03-24 firmware, or a sideloaded SystemWebView). Confirm on a unit.
+> The S9E shares the TPA10's **RK3566** platform, so ha-paneld's existing app-side features likely work without S9E-specific code; temperature/humidity/light may surface through `SensorManager` (as on the TPA10's CHT8305). Separately, the shipped **WebView is very old (Chromium 83)** — update it first (Magisk OpenWebView, the 2025-03-24 firmware, or a sideloaded SystemWebView). Confirm on a unit.
 
 > [!TIP]
-> Changing firmware on a button-less panel? Read [Firmware backup & restore](../firmware-backup-restore.md)
-> first — the S9E is an RK3566 Rockchip device, so the usual button-combo fastboot/recovery advice does
-> not apply (partition table not yet captured on a unit here).
+> Changing firmware on a button-less panel? Read [Firmware backup & restore](../firmware-backup-restore.md) first — the S9E is an RK3566 Rockchip device, so the usual button-combo fastboot/recovery advice does not apply (partition table not yet captured on a unit here).
 
 ## Firmware versions
 
-Two stock images have been analysed (block-OTA `.zip`, AOSP dynamic-partition format — `brotli -d`
-the `.new.dat.br`, `lpunpack` the super image, `strings`-grep `build.prop` + init `.rc`). Both report
-`Build.MODEL` **`S9`** / `Build.DEVICE` **`rk3566_r`**, Android 11; the vendor build code lives in
-**`ro.product.version`**:
+Two stock images have been analysed (block-OTA `.zip`, AOSP dynamic-partition format — `brotli -d` the `.new.dat.br`, `lpunpack` the super image, `strings`-grep `build.prop` + init `.rc`). Both report `Build.MODEL` **`S9`** / `Build.DEVICE` **`rk3566_r`**, Android 11; the vendor build code lives in **`ro.product.version`**:
 
 | Image | `ro.product.version` | Build | Relay class |
 |---|---|---|---|
@@ -53,31 +36,21 @@ the `.new.dat.br`, `lpunpack` the super image, `strings`-grep `build.prop` + ini
 | `S9_1920x1200_20251202_Android_US` | `S9_Android_1.1.0` | `eng.xiaolp.20251202.160404` | `/sys/class/strelay` |
 
 > [!IMPORTANT]
-> **The relay sysfs class was renamed between firmware versions.** Only the **initial** image (1.0.2)
-> uses `/sys/class/st_relay`; **all newer** images (1.1.0+) use `/sys/class/strelay` — reporter-confirmed
-> in [#3](https://github.com/maxlyth/ha-paneld/issues/3) and matched by the firmware diff. ha-paneld
-> ≤ 0.8.2 probes only `st_relay`, so relays are invisible on any panel running 1.1.0 or later. The fix
-> (probe both class names) is tracked for **0.8.3** — see the relay section below.
+> **The relay sysfs class was renamed between firmware versions.** Only the **initial** image (1.0.2) uses `/sys/class/st_relay`; **all newer** images (1.1.0+) use `/sys/class/strelay` — reporter-confirmed in [#3](https://github.com/maxlyth/ha-paneld/issues/3) and matched by the firmware diff. ha-paneld ≤ 0.8.2 probes only `st_relay`, so relays are invisible on any panel running 1.1.0 or later. The fix (probe both class names) is tracked for **0.8.3** — see the relay section below.
 
 Downloads (Smatek, as shared by the reporter in [#3](https://github.com/maxlyth/ha-paneld/issues/3)):
 
 - `S9_1920x1200_20240712_Android_US` — **1.0.2** *(original Smatek link `docs.smatek.store:10001` — unreachable as of 2026-06-26; contact Smatek or the reporter in #3 for a copy)*
 - `S9_1920x1200_20251202_Android_US` — **1.1.0** *(same — link dead)*
 
-Diffing the two images: **only `ro.product.version` and the relay class differ.** Every other control
-path documented below (button keycodes, button-LED GPIOs, proximity GPIO, sensor wiring) is identical
-across both — so detection keyed on `ro.product.version` starting `S9` covers the whole line.
+Diffing the two images: **only `ro.product.version` and the relay class differ.** Every other control path documented below (button keycodes, button-LED GPIOs, proximity GPIO, sensor wiring) is identical across both — so detection keyed on `ro.product.version` starting `S9` covers the whole line.
 
 ## Relays — `strelay` / `st_relay` class (root)
 
-ha-paneld exposes the two mains relays as `switch.<panel>_relay1` / `switch.<panel>_relay2`, gated on
-the presence of the relay sysfs class (so the entities appear only on a panel that has it). This is the
-first concrete panel for the [built-in relay roadmap item](../../README.md#status--roadmap).
+ha-paneld exposes the two mains relays as `switch.<panel>_relay1` / `switch.<panel>_relay2`, gated on the presence of the relay sysfs class (so the entities appear only on a panel that has it). This is the first concrete panel for the [built-in relay roadmap item](../../README.md#status--roadmap).
 
 > [!NOTE]
-> **The class name is firmware-dependent** (see [Firmware versions](#firmware-versions)): `st_relay` on
-> the initial 1.0.2 image, `strelay` on 1.1.0 and later. ha-paneld probes **both** names since **0.8.2**
-> and uses whichever the panel exposes. **Confirmed working on hardware** (reporter, 0.8.2, GitHub #3).
+> **The class name is firmware-dependent** (see [Firmware versions](#firmware-versions)): `st_relay` on the initial 1.0.2 image, `strelay` on 1.1.0 and later. ha-paneld probes **both** names since **0.8.2** and uses whichever the panel exposes. **Confirmed working on hardware** (reporter, 0.8.2, GitHub #3).
 
 ```bash
 # firmware 1.1.0+ (most panels in the field)
@@ -91,25 +64,14 @@ echo 1 > /sys/class/st_relay/relay1
 
 ## Buttons — `F1`–`F4` KeyEvents (app-direct)
 
-The four buttons emit standard Android key codes **131–134** = `KEYCODE_F1`–`KEYCODE_F4`. ha-paneld's
-accessibility-service capture already reports these to `event.<panel>_button` (event types
-`KEYCODE_F1`…`KEYCODE_F4`); bind dashboard actions to them in HA. No root needed for the events.
+The four buttons emit standard Android key codes **131–134** = `KEYCODE_F1`–`KEYCODE_F4`. ha-paneld's accessibility-service capture already reports these to `event.<panel>_button` (event types `KEYCODE_F1`…`KEYCODE_F4`); bind dashboard actions to them in HA. No root needed for the events.
 
 ## LED — per-button GPIO backlight (confirmed working, 0.8.2)
 
-Each button has an LED at `/sys/class/gpio/gpio<16+keycode>/value` — i.e. gpio **147–150** for buttons
-F1–F4. Per-button on/off, monochrome. ha-paneld exposes these as `light.<panel>_button_led1..4`
-(on/off via `su`), counted from the `buttonLedGpioBase` profile value. This was inert on the S9E until
-**0.8.2-rc3** fixed device detection (GitHub #3/#4 — the panel was falling back to the generic profile);
-the write path matches the reporter's vendor code exactly. **Confirmed working on hardware** (reporter,
-0.8.2, GitHub #3/#4). Note the LEDs are **not** under `/sys/class/leds` (that class holds only the
-`mmc2::` SD-card LED on the S9E) — they are raw GPIOs.
+Each button has an LED at `/sys/class/gpio/gpio<16+keycode>/value` — i.e. gpio **147–150** for buttons F1–F4. Per-button on/off, monochrome. ha-paneld exposes these as `light.<panel>_button_led1..4` (on/off via `su`), counted from the `buttonLedGpioBase` profile value. This was inert on the S9E until **0.8.2-rc3** fixed device detection (GitHub #3/#4 — the panel was falling back to the generic profile); the write path matches the reporter's vendor code exactly. **Confirmed working on hardware** (reporter, 0.8.2, GitHub #3/#4). Note the LEDs are **not** under `/sys/class/leds` (that class holds only the `mmc2::` SD-card LED on the S9E) — they are raw GPIOs.
 
 > [!NOTE]
-> **Firmware analysis (2026-06-16):** the init scripts export **only `gpio113`** — the button-LED pins
-> **gpio147–150 are not exported at boot**, so the `/sys/class/gpio/gpioNNN/value` nodes don't exist
-> until exported. **0.8.2** exports (and sets to output) each pin on demand before the first write, which
-> is why the LEDs now work despite not being init-exported.
+> **Firmware analysis (2026-06-16):** the init scripts export **only `gpio113`** — the button-LED pins **gpio147–150 are not exported at boot**, so the `/sys/class/gpio/gpioNNN/value` nodes don't exist until exported. **0.8.2** exports (and sets to output) each pin on demand before the first write, which is why the LEDs now work despite not being init-exported.
 
 ```bash
 echo 147 > /sys/class/gpio/export        # one-time, if the node is absent
@@ -117,32 +79,20 @@ echo 1 > /sys/class/gpio/gpio147/value   # button F1 LED on
 ```
 
 > [!TIP]
-> The firmware also carries an **RGB status LED** (`led_r` / `led_g` / `led_b`), a **vibrator/haptic**
-> motor and **Ethernet-activity LEDs** — none currently exposed by ha-paneld. The RGB LED is the most
-> useful future addition (a panel-wide status colour); the rest are low value. Not yet wired.
+> The firmware also carries an **RGB status LED** (`led_r` / `led_g` / `led_b`), a **vibrator/haptic** motor and **Ethernet-activity LEDs** — none currently exposed by ha-paneld. The RGB LED is the most useful future addition (a panel-wide status colour); the rest are low value. Not yet wired.
 
 ## Sensors — proximity (SensorManager registers but does NOT deliver; gpio18 is the real path)
 
 > [!IMPORTANT]
-> **Corrected 2026-06-16** from the reporter's live readings (GitHub #5). A proximity sensor is
-> *registered* in `SensorManager` (an earlier `/diag` showed `Proximity=yes · Binary · 0/1 cm`), but on
-> the S9E it **never delivers events**: `binary_sensor.<panel>_proximity` reads **Unknown** in HA, the
-> tuning card shows **`raw —` · FAR**, and waving a hand changes nothing. The light sensor on the same
-> panel works (≈46 lx), so this is proximity-specific. The earlier claim that SensorManager proximity
-> "already works" on the S9E was **wrong** — and so the local **wake-on-wave** does not work on the S9E.
+> **Corrected 2026-06-16** from the reporter's live readings (GitHub #5). A proximity sensor is *registered* in `SensorManager` (an earlier `/diag` showed `Proximity=yes · Binary · 0/1 cm`), but on the S9E it **never delivers events**: `binary_sensor.<panel>_proximity` reads **Unknown** in HA, the tuning card shows **`raw —` · FAR**, and waving a hand changes nothing. The light sensor on the same panel works (≈46 lx), so this is proximity-specific. The earlier claim that SensorManager proximity "already works" on the S9E was **wrong** — and so the local **wake-on-wave** does not work on the S9E.
 
-The real signal is a **root GPIO read at GPIO 18** (the kernel registers a phantom Android sensor that
-never fires, so the value has to be read from sysfs):
+The real signal is a **root GPIO read at GPIO 18** (the kernel registers a phantom Android sensor that never fires, so the value has to be read from sysfs):
 
 ```bash
 cat /sys/class/gpio/gpio18/value   # 1 = near, 0 = far  (no export needed — reporter-confirmed, #5)
 ```
 
-So S9E proximity reads `gpio18` over root directly instead of relying on `SensorManager`. **Implemented
-in 0.8.3**: `DeviceProfile.proximityGpio` = 18, so `SensorReporter` polls the node ~2×/s through the
-persistent `su` shell and feeds the same `binary_sensor.<panel>_proximity` + wake-on-wave path (the dead
-SensorManager proximity isn't registered on the S9E). Reporter-confirmed: gpio18 reads **0 far / 1
-near**, no export needed. Ambient light + temperature/humidity surface via `SensorManager` as expected.
+So S9E proximity reads `gpio18` over root directly instead of relying on `SensorManager`. **Implemented in 0.8.3**: `DeviceProfile.proximityGpio` = 18, so `SensorReporter` polls the node ~2×/s through the persistent `su` shell and feeds the same `binary_sensor.<panel>_proximity` + wake-on-wave path (the dead SensorManager proximity isn't registered on the S9E). Reporter-confirmed: gpio18 reads **0 far / 1 near**, no export needed. Ambient light + temperature/humidity surface via `SensorManager` as expected.
 
 ## Access model summary
 
@@ -168,6 +118,4 @@ near**, no export needed. Ambient light + temperature/humidity surface via `Sens
 
 ---
 
-See the [panel hardware index](README.md) for the cross-panel comparison and method, and the
-[NSPanel Pro](nspanel-pro.md) / [TPA10](tpa10.md) (the same RK3566 platform) / [WF1589T](wf1589t.md)
-references for the other panels.
+See the [panel hardware index](README.md) for the cross-panel comparison and method, and the [NSPanel Pro](nspanel-pro.md) / [TPA10](tpa10.md) (the same RK3566 platform) / [WF1589T](wf1589t.md) references for the other panels.

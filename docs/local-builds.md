@@ -15,7 +15,7 @@ Output lands in `app/build/outputs/apk/`. `adb` is on the container's PATH, so `
 
 ## Local release signing (optional)
 
-Release builds are unsigned by default — CI post-signs them with `apksigner` from Actions secrets. To sign locally with your **real release key** (so a local `assembleRelease` installs in place over the public releases, no uninstall), copy the template and fill it in:
+Release builds are unsigned by default — CI post-signs them with `apksigner` from Actions secrets. A locally signed `assembleRelease` installs in place over the public releases, with no uninstall needed. To sign locally with your **real release key**, copy the template and fill it in:
 
 ```bash
 cp keystore.properties.example keystore.properties

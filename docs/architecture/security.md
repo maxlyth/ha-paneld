@@ -31,7 +31,7 @@ The state-changing routes on `:8888` are where the exposure concentrates:
 - `GET /diag` — device/capability info (recon). Intentionally a support tool (issue template).
 
 **Browser-mediated attacks are guarded** ([`OriginGuard`](../../app/src/main/kotlin/io/github/maxlyth/hapaneld/http/OriginGuard.kt)):
-- **CSRF** — a state-changing request (`POST`/`PUT`/`PATCH`/`DELETE`) whose `Origin`/`Referer` is present and doesn't match the request `Host` is refused, so a malicious LAN web page can't silently drive these endpoints. Same-origin UI `fetch`es and header-less API clients (curl / HA `rest_command`) are unaffected.
+- **CSRF** — OriginGuard refuses a state-changing request (`POST`/`PUT`/`PATCH`/`DELETE`) whose `Origin`/`Referer` is present and doesn't match the request `Host`, so a malicious LAN web page can't silently drive these endpoints. Same-origin UI `fetch`es and header-less API clients (curl / HA `rest_command`) are unaffected.
 - **DNS-rebinding** — the `Host` header must be an IP literal, `localhost`, `*.local` (mDNS), or an operator-configured name (`http_allowed_hosts`); any other hostname is refused (all methods), so an attacker who rebinds their own DNS name to the panel can't pose as same-origin to read secrets (`GET /config/export`) or drive the surface. Reaching a panel by IP — the norm — is always allowed and is inherently rebinding-immune.
 
 Neither authenticates the *caller*; a credentialled LAN actor is still trusted (decision 3 is the upgrade path).
