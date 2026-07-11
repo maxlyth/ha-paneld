@@ -7,9 +7,9 @@ import android.util.Log
  * through ha-paneld's own NDK ([NativeLed]) — clean-room ioctl, NO vendor `libjnielc.so`, no root,
  * no helper. The char device is world-rwx + app-accessible (SELinux `device` label).
  *
- * HA sends r/g/b as 0..255; the panel's PWM is 4-bit (0..15), so each channel is scaled ×15/255
- * before the ioctl. [available] is gated on the native lib loading AND the node being openable, so
- * only the rk3576 panel reports the LED entity.
+ * HA sends r/g/b as 0..255; the panel's PWM is 4-bit (0..15), so each channel is scaled to that range
+ * ([Led4bitScale.to4bit] — rounded, hue-preserving) before the ioctl. [available] is gated on the
+ * native lib loading AND the node being openable, so only the rk3576 panel reports the LED entity.
  */
 class Rk3576LedController : LedController {
 
@@ -27,7 +27,7 @@ class Rk3576LedController : LedController {
         if (rc != 0) Log.w(TAG, "off failed rc=$rc")
     }
 
-    private fun scale(v: Int): Int = (v.coerceIn(0, 255) * 15) / 255
+    private fun scale(v: Int): Int = Led4bitScale.to4bit(v)
 
     companion object {
         private const val TAG = "ha-paneld/led-rk3576"

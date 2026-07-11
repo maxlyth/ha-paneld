@@ -56,7 +56,31 @@ class LedEffectsTest {
     @Test fun stepPeriodsAreSane() {
         assertTrue(Effect.STROBE.stepMs in 50..150)
         assertTrue(Effect.BLINK.stepMs >= 300)
-        assertTrue(Effect.PULSE.stepMs in 60..120)   // keeps daemon-panel writes ≲ 16/s
+        // Fast enough (≈25 Hz) that the breath doesn't skip 4-bit levels, but ≥ 40 ms so a daemon-backed
+        // LED stays ≲ 25 socket writes/s during the effect.
+        assertTrue(Effect.PULSE.stepMs in 40..60)
+    }
+
+    @Test fun pulseIsSymmetricNoSawtooth() {
+        // The fade in and fade out must take equal time — the VISIBLE 4-bit level at phase p equals the
+        // level at PULSE_STEPS - p — so the breath never reads as a slow-fade / fast-rise sawtooth. (We
+        // compare the hardware level, not the raw 0..255 value: cos(π/2) vs cos(3π/2) differ by 1 ULP, a
+        // ±1 wobble at the half-brightness crossing that vanishes once quantised to 16 levels.)
+        for (p in 0..LedEffects.PULSE_STEPS) {
+            val up = Led4bitScale.to4bit(brightnessOf(LedEffects.frame(Effect.PULSE, p, 0, 0, 255, 255)))
+            val down = Led4bitScale.to4bit(brightnessOf(LedEffects.frame(Effect.PULSE, LedEffects.PULSE_STEPS - p, 0, 0, 255, 255)))
+            assertEquals("pulse asymmetric at phase $p", up, down)
+        }
+    }
+
+    @Test fun pulseDoesNotSkipLevels() {
+        // At 25 Hz the cosine ramp walks the 4-bit LED one level at a time — no lurching over the up-ramp.
+        var prev = -1
+        for (s in 0..(LedEffects.PULSE_STEPS / 2)) {
+            val v = Led4bitScale.to4bit(brightnessOf(LedEffects.frame(Effect.PULSE, s, 0, 0, 255, 255)))
+            if (prev >= 0) assertTrue("4-bit level jumped >1 at step $s ($prev→$v)", v - prev <= 1)
+            prev = v
+        }
     }
 
     private fun brightnessOf(f: Frame): Int = when (f) {
