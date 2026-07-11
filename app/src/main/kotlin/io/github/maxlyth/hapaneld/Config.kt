@@ -340,7 +340,9 @@ class Config(context: Context) {
     // and the pin is advanced deliberately by the maintainer (there is no clean upstream feed to chase).
     val webViewAutoUpdate: Boolean get() = prefs.getBoolean("webview_auto_update", false)
     fun setWebViewAutoUpdate(on: Boolean) {
-        prefs.edit().putBoolean("webview_auto_update", on).apply()
+        // commit() (not apply()): the natural workflow is "enable, then reboot to let it run", and an
+        // async write can be lost if the reboot lands before it flushes to disk.
+        prefs.edit().putBoolean("webview_auto_update", on).commit()
     }
     // Loop guard: the exact recommended version last auto-installed. If a later tick still doesn't see it
     // as the engine, the provider isn't switching (variant hardware) — don't re-download it daily; a pin
