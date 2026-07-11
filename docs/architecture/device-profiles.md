@@ -45,7 +45,7 @@ Two consequences:
 - Capability support is still detected by **bottom-up runtime probing** inside each functional module — robust, and now backed by a per-device canonical place for the customisations.
 
 > [!NOTE]
-> A static product matrix is fragile. Observed counter-examples: `.45`/bmp had an orphaned zgateway with an empty `siliconlabs_host` dir; the S9E is rk3566 like the TPA10. Declaring candidates and probing to confirm sidesteps both.
+> A static product matrix is fragile. Observed counter-examples: one panel had an orphaned zgateway with an empty `siliconlabs_host` dir where its siblings didn't; the S9E is rk3566 like the TPA10. Declaring candidates and probing to confirm sidesteps both.
 
 ## Onboarding a new panel
 

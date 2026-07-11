@@ -202,8 +202,6 @@ The Stargate APK native-lib path confirms ABI: `lib/armeabi-v7a/libstargate_inpu
 | `SAWD-0A1XX10EU1-stable-firmware.zip` | repo.shelly.cloud (static) | 1.2.1 (2023-08-15) | armeabi-v7a | 12.5 MB |
 | `SAWD-0A1XX10EU1-stable-WebViewUpdate.zip` | repo.shelly.cloud (static) | WebView for Android 7 | armeabi-v7a | 107.5 MB |
 
-Archived to Google Drive `shelly/` 2026-06-26.
-
 ---
 
 ## Security
