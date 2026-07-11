@@ -3,7 +3,9 @@ package io.github.maxlyth.hapaneld.util
 import io.github.maxlyth.hapaneld.device.WebViewSpec
 import io.github.maxlyth.hapaneld.util.WebViewInstaller.Decision
 import io.github.maxlyth.hapaneld.util.WebViewInstaller.decide
+import io.github.maxlyth.hapaneld.util.WebViewInstaller.shouldSkipAutoUpdate
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -72,5 +74,38 @@ class WebViewInstallerTest {
     @Test fun autoUpdateAlsoHealsABrokenEngine() {
         // Below the floor AND older than the pin → the auto-update path covers the heal case in one branch.
         assertEquals(Decision.Install(rec), decide(rec, engineMajor = 83, minChromium = MIN, force = false, autoUpdate = true))
+    }
+
+    // --- loop guard for the scheduled auto-update (shouldSkipAutoUpdate) ---
+    // The ONLY thing preventing a daily ~90 MB re-download (and, on the built-in renderer, an exitProcess
+    // restart) on an opt-in panel where the provider won't switch. It lives in a Service method the JVM
+    // suite can't exercise, so pin the extracted predicate here — a regression (record-only-on-OK, or
+    // flipping the comparison) would otherwise reintroduce the loop with the whole suite still green.
+
+    @Test fun autoUpdateGuardSkipsWhenAttemptedPinNeverBound() {
+        // Signature-locked TPA10: recorded the pin last tick, cross-signer install rejected → engine still 147.
+        assertTrue(shouldSkipAutoUpdate(lastVersion = "150.0.7871.63", recVersion = "150.0.7871.63", recMajor = 150, engineMajor = 147))
+    }
+
+    @Test fun autoUpdateGuardSkipsWhenEngineUnknownAfterAttempt() {
+        // Recorded the pin but the UA won't parse (records-then-can't-verify) → treat as not switched, stop.
+        assertTrue(shouldSkipAutoUpdate(lastVersion = "150.0.7871.63", recVersion = "150.0.7871.63", recMajor = 150, engineMajor = null))
+    }
+
+    @Test fun autoUpdateGuardDoesNotSkipAfterProviderBound() {
+        // Successful swap: engine now at/above the pin's major → don't skip (decide then returns NotNewer,
+        // so still no reinstall loop, but the guard itself must NOT short-circuit here).
+        assertFalse(shouldSkipAutoUpdate(lastVersion = "150.0.7871.63", recVersion = "150.0.7871.63", recMajor = 150, engineMajor = 150))
+        assertFalse(shouldSkipAutoUpdate(lastVersion = "150.0.7871.63", recVersion = "150.0.7871.63", recMajor = 150, engineMajor = 151))
+    }
+
+    @Test fun autoUpdateGuardDoesNotSkipOnPinBump() {
+        // Maintainer advanced the pin (new version string) → re-attempt even though the old one was recorded.
+        assertFalse(shouldSkipAutoUpdate(lastVersion = "150.0.7871.63", recVersion = "151.0.0.0", recMajor = 151, engineMajor = 147))
+    }
+
+    @Test fun autoUpdateGuardDoesNotSkipOnFirstAttempt() {
+        // Nothing recorded yet (fresh panel) → never skip the first attempt.
+        assertFalse(shouldSkipAutoUpdate(lastVersion = "", recVersion = "150.0.7871.63", recMajor = 150, engineMajor = 147))
     }
 }

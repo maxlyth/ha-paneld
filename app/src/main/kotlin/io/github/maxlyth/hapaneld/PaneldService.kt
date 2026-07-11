@@ -436,7 +436,7 @@ class PaneldService : Service() {
     private suspend fun autoUpdateWebView() {
         val rec = profile.recommendedWebView ?: return
         val engineMajor = io.github.maxlyth.hapaneld.http.PanelInfo.webViewStatus(this@PaneldService).engineMajor
-        if (config.webViewAutoLastVersion == rec.version && (engineMajor == null || engineMajor < rec.major)) {
+        if (io.github.maxlyth.hapaneld.util.WebViewInstaller.shouldSkipAutoUpdate(config.webViewAutoLastVersion, rec.version, rec.major, engineMajor)) {
             Log.w(TAG, "WebView auto-update: ${rec.version} already attempted but the engine is still ${engineMajor ?: "?"} — provider not switching; skipping (manual heal may be needed)")
             return
         }

@@ -53,6 +53,20 @@ object WebViewInstaller {
         else -> Decision.Install(rec)
     }
 
+    /**
+     * Loop guard for the scheduled auto-update ([io.github.maxlyth.hapaneld.PaneldService] `autoUpdateWebView`):
+     * skip re-attempting the same pinned [recVersion] once a prior tick recorded it AND the running
+     * [engineMajor] still hasn't reached [recMajor] — i.e. the provider isn't actually switching
+     * (variant / signature-locked hardware where `pm install` can't change the WebView signer), so
+     * re-downloading ~90 MB (and, on the built-in renderer, restarting the process) every 24 h tick would be
+     * pointless. A pin bump ([recVersion] differs from the recorded one) clears it and re-attempts; an
+     * unknown engine ([engineMajor] == null) counts as "still not switched" so a records-then-can't-verify
+     * panel also stops retrying. Kept pure + unit-tested because this predicate is the only thing standing
+     * between an opt-in panel and a daily re-download/restart loop, and a regression here stays green.
+     */
+    fun shouldSkipAutoUpdate(lastVersion: String, recVersion: String, recMajor: Int, engineMajor: Int?): Boolean =
+        lastVersion == recVersion && (engineMajor == null || engineMajor < recMajor)
+
     /** Heal the WebView per [decide]. Returns a short human status; "OK: …" on a successful install.
      *  [autoUpdate] = the scheduled update-to-pin path (advance a working engine to a newer pin). */
     suspend fun heal(context: Context, profile: DeviceProfile, engineMajor: Int?, force: Boolean = false, autoUpdate: Boolean = false): String =
