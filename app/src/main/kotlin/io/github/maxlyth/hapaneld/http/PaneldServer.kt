@@ -1460,6 +1460,22 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
                 )
             }
         }
+        // Built-in renderer zoomed off 100% (usually carried over from the Companion's "Page zoom"). App
+        // zoom is a compatibility lever; the cleaner way to size the dashboard is the panel display density
+        // — so we only nudge when that's actually available (rooted / helper daemon). No root = app zoom is
+        // the only sizing tool, so stay quiet. densityNat comes from the shared snapshot (no su round-trip).
+        val zoom = config.dashboardZoom
+        if (config.dashboardPackage == SystemController.BUILTIN_DASHBOARD && zoom != 100 && snapStaleOk().densityNat != null) {
+            val action = if (inlineRepair)
+                """ <form method="post" action="/api/v1/config" style="display:inline"><input type="hidden" name="dashboard_zoom" value="100"><button class="pbtn">Reset zoom to 100%</button></form>"""
+            else " <a href=\"/configure#cfg-display\">Display sizing →</a>"
+            append(
+                """<div class="setup">⚠ <b>Dashboard zoom is $zoom%</b> (not 100%) — usually carried over from the """ +
+                    """Companion app's Page zoom. The cleaner way to size a dashboard is the panel's """ +
+                    """<a href="/configure#cfg-display">display density</a>, which scales the whole panel crisply; """ +
+                    """set that, then reset the zoom to 100%.$action</div>""",
+            )
+        }
     }
 
     /** One dashboard banner for a health finding. Update findings link to the Install tab (where the user
