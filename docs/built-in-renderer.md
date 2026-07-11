@@ -19,6 +19,8 @@ Engineered for weeks-long unattended uptime:
 
 Also: instant pull-to-refresh (drag down from the very top edge of the screen; double-pull for a full reload), optional idle return-to-home, an edge-to-edge fullscreen mode (swipe from a screen edge to reveal the bars), camera-stream autoplay, and private-CA HTTPS (user-installed CAs are trusted).
 
+The renderer sizes the dashboard the same way the Home Assistant Companion app does, so a panel switched over from the Companion keeps its layout; the **Dashboard zoom** setting adjusts it (100% = the Companion default). It also adds an **App Configuration** entry to the Home Assistant sidebar that opens this panel's configuration page, and on first run it hides the sidebar and keeps the connection alive while idle — sensible defaults for a wall panel that you can still change afterwards.
+
 ## Turning it on
 
 **On a rooted panel already running a signed-in HA Companion** — nothing to type. In the `:8888` **Configure** tab, set **Dashboard app → Built-in renderer**. It borrows the Companion's sign-in automatically (URL + tokens); the Companion keeps its own login, so switching back is the same picker change.

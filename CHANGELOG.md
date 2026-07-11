@@ -10,6 +10,12 @@ content appear. Earlier releases predate this convention and keep their flat lis
 
 ## v0.9.1-rc1 - 2026-07-11
 
+### Added
+
+- **Dashboard sizing matches the Companion app** — the built-in renderer now scales the page the same way the Home Assistant Companion app does, so a panel switched over from the Companion keeps its dashboard layout instead of rendering more compact. A new "Dashboard zoom" setting tunes it per panel (100% = Companion default); pinch-to-zoom stays off, since a fixed panel wants a deliberate zoom, not an accidental one.
+- **"App Configuration" in the dashboard sidebar** — the built-in renderer now adds the same sidebar entry the Companion app does; tapping it opens ha-paneld's own configuration page on the panel.
+- **Panel-appropriate defaults on first run** — a panel running the built-in renderer now starts with the sidebar hidden and background connections kept alive (so it stays responsive when idle), values most people never think to set. These are applied once and remain changeable afterwards.
+
 ### Changed
 
 - **The built-in renderer no longer bounces on overscroll** — dragging past the top or bottom of the dashboard used to show Android's elastic stretch (or edge glow on older panels), which looks out of place on a wall panel that rarely scrolls, so it is now off by default. A `dashboard_overscroll` setting restores the native effect for anyone who wants it (settable over the API).

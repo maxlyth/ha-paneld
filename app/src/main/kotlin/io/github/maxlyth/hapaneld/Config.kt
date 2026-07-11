@@ -371,6 +371,11 @@ class Config(context: Context) {
     val dashboardOverscroll: Boolean get() = prefs.getBoolean("dashboard_overscroll", false)
     fun setDashboardOverscroll(on: Boolean) { edit { putBoolean("dashboard_overscroll", on) } }
 
+    /** Built-in renderer: dashboard page zoom %. 100 matches the HA Companion's default sizing (which
+     *  scales the page by device density), so a switched-over panel keeps its layout. */
+    val dashboardZoom: Int get() = prefs.getInt("dashboard_zoom", 100)
+    fun setDashboardZoom(pct: Int) { edit { putInt("dashboard_zoom", pct) } }
+
     // The screen-off timeout (ms) seen before we first raised it, so disabling preventIdleDim can restore
     // the firmware default. -1 = not yet captured.
     var savedScreenOffTimeout: Int

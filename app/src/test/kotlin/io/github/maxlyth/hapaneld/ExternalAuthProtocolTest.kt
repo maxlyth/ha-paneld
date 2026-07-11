@@ -65,7 +65,7 @@ class ExternalAuthProtocolTest {
     // --- externalBus -------------------------------------------------------------------------------
 
     @Test
-    fun `config-get is answered with every capability off`() {
+    fun `config-get advertises only the settings screen, every other capability off`() {
         val js = ExternalAuthProtocol.busReply("""{"id":7,"type":"config/get"}""", "0.9.0-test")!!
         assertTrue(js.startsWith("externalBus(") && js.endsWith(");"))
         val reply = JSONObject(js.removePrefix("externalBus(").removeSuffix(");"))
@@ -75,10 +75,31 @@ class ExternalAuthProtocolTest {
         val result = reply.getJSONObject("result")
         assertEquals("0.9.0-test", result.getString("appVersion"))
         assertEquals(0, result.getInt("hasBarCodeScanner"))
+        // The sidebar "App Configuration" entry (→ config_screen/show → our :8888 config) is the one
+        // capability a panel offers; every phone-only feature stays off.
+        assertTrue("hasSettingsScreen must be on", result.getBoolean("hasSettingsScreen"))
         for (key in result.keys()) {
-            if (key == "appVersion" || key == "hasBarCodeScanner") continue
+            if (key == "appVersion" || key == "hasBarCodeScanner" || key == "hasSettingsScreen") continue
             assertFalse("capability $key must be off on a panel", result.getBoolean(key))
         }
+    }
+
+    @Test
+    fun `config_screen show is recognised, other messages are not`() {
+        assertTrue(ExternalAuthProtocol.isConfigScreenShow("""{"type":"config_screen/show","id":5}"""))
+        assertFalse(ExternalAuthProtocol.isConfigScreenShow("""{"type":"config/get","id":1}"""))
+        assertFalse(ExternalAuthProtocol.isConfigScreenShow("""{"type":"connection-status"}"""))
+        assertFalse(ExternalAuthProtocol.isConfigScreenShow("not json"))
+    }
+
+    @Test
+    fun `panel defaults seed forces the panel-appropriate prefs behind a sentinel`() {
+        val js = ExternalAuthProtocol.panelDefaultsJs()
+        assertTrue("self-gated so it runs once", js.contains("__hapaneld_panel_defaults"))
+        assertTrue("hide the sidebar", js.contains("dockedSidebar") && js.contains("always_hidden"))
+        assertTrue("keep the background connection", js.contains("suspendWhenHidden"))
+        assertTrue("no haptics", js.contains("vibrate"))
+        assertTrue("values JSON-stringified to match ha-pref-storage", js.contains("JSON.stringify"))
     }
 
     // --- dashboardUrl -----------------------------------------------------------------------------

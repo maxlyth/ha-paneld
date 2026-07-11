@@ -24,7 +24,9 @@ class ConfigActivity : AppCompatActivity() {
             webViewClient = WebViewClient() // keep links + the config-form POST inside this WebView
         }
         setContentView(web)
-        web.loadUrl("http://127.0.0.1:${Config.DEFAULT_PORT}/")
+        // Optional path (e.g. the sidebar "App Configuration" tap opens /configure); default = the info page.
+        val path = intent?.getStringExtra("path")?.takeIf { it.startsWith("/") } ?: "/"
+        web.loadUrl("http://127.0.0.1:${Config.DEFAULT_PORT}$path")
     }
 
     @Deprecated("Deprecated in Java")
