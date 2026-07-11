@@ -52,4 +52,12 @@ object Smt1019 : DeviceProfile {
     override val cpuGovernors: Map<String, String>? = null
     override val recommendedDensity: Int? = null
     override val recommendedFontScale: Float? = null
+    // LineageOS SystemWebView (arm64-v8a universal build; vanilla Chromium, autoplay-ALLOW,
+    // com.android.webview). PROVISIONAL — SMT1019 is unverified hardware (rk3576 / Android 14, arm64, no
+    // GMS). Net-new pin (none before), so this only adds the manual "Update WebView" option until verified.
+    override val recommendedWebView = WebViewSpec(
+        url = "https://github.com/maxlyth/ha-paneld/releases/download/webview-mirror/lineageos-webview-150.0.7871.63-arm64.apk",
+        version = "150.0.7871.63",
+        certSha256 = "32a2fc74d731105859e5a85df16d95f102d85b22099b8064c5d8915c61dad1e0",
+    )
 }

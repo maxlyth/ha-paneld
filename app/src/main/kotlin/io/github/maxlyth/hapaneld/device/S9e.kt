@@ -36,4 +36,13 @@ object S9e : DeviceProfile {
     override val cpuGovernors = mapOf("Performance" to "performance", "Efficiency" to "powersave", "Auto" to "schedutil")
     override val recommendedDensity: Int? = null
     override val recommendedFontScale: Float? = null
+    // LineageOS SystemWebView (armeabi-v7a; vanilla Chromium, autoplay-ALLOW, com.android.webview).
+    // PROVISIONAL — S9E is unverified hardware (rk3566 / Android 11, same family as the TPA10, assumed
+    // 32-bit userspace); confirm the v7a build registers as the provider on real hardware before relying
+    // on it. It was net-new here (no pin before), so this only adds the manual "Update WebView" option.
+    override val recommendedWebView = WebViewSpec(
+        url = "https://github.com/maxlyth/ha-paneld/releases/download/webview-mirror/lineageos-webview-150.0.7871.63-arm.apk",
+        version = "150.0.7871.63",
+        certSha256 = "32a2fc74d731105859e5a85df16d95f102d85b22099b8064c5d8915c61dad1e0",
+    )
 }
