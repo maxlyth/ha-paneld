@@ -10,8 +10,42 @@ package io.github.maxlyth.hapaneld.control
  * so the controller stays unit-testable.
  */
 object BuiltinDashboard {
+    // --- foreground state + change fan-out (navbar overlay-strip suppression) ---
+    //
+    // While the built-in renderer is foreground, [NavbarController] must NOT arm its full-width bottom
+    // overlay strip (which consumes every touch in its 48dp band) — the renderer detects the
+    // swipe-reveal gesture in-activity instead (zero-latency taps, no root). The controller registers
+    // here to learn foreground changes; the fan-out fires on CHANGE only (all writers are main-thread
+    // lifecycle callbacks, so the read-modify-write is safe without extra locking).
+    @Volatile private var foregroundListener: ((Boolean) -> Unit)? = null
+
+    /** [NavbarController] registers its strip suppress/re-arm handler here. */
+    fun setForegroundListener(l: ((Boolean) -> Unit)?) { foregroundListener = l }
+
     /** True while DashboardActivity is resumed (foreground). Set from its onResume/onPause. */
     @Volatile var foreground = false
+        set(value) {
+            val changed = field != value
+            field = value
+            if (changed) foregroundListener?.invoke(value)
+        }
+
+    // --- navbar swipe-reveal handoff ---
+    //
+    // Non-null exactly while navbar mode is "Swipe reveal" (set/cleared by [NavbarController.apply]), so
+    // the renderer's edge detector arms only when a reveal can actually happen — never steals a scroll
+    // gesture for a no-op. The renderer's `BottomSwipeFrame` reads [navbarSwipeEnabled] at each DOWN and
+    // calls [requestNavbarReveal] on a qualifying edge-swipe.
+    @Volatile private var navbarReveal: (() -> Unit)? = null
+
+    /** [NavbarController.apply] publishes its reveal trigger here for "Swipe reveal" mode, null otherwise. */
+    fun setNavbarRevealHandler(h: (() -> Unit)?) { navbarReveal = h }
+
+    /** True while a bottom-edge swipe should reveal the soft navbar (i.e. navbar mode is "Swipe reveal"). */
+    val navbarSwipeEnabled: Boolean get() = navbarReveal != null
+
+    /** Fired by the renderer's `BottomSwipeFrame` when a bottom-edge swipe qualifies; no-op if unset. */
+    fun requestNavbarReveal() { navbarReveal?.invoke() }
 
     /** The dashboard path the renderer should show — set by an MQTT `navigate` command, then the
      *  renderer is (re)launched and reads this on load. Null = fall back to the configured home

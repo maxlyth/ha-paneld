@@ -69,6 +69,9 @@ data class Capabilities(
     // HA Companion (full or minimal) present on the panel — gates the Companion auto-update settings
     // (meaningless without it) and their HA entities.
     val companionInstalled: Boolean = false,
+    // The profile pins a known-good System WebView build in the webview-mirror release — gates the
+    // webview_auto_update setting (there's nothing to update to without a pin; e.g. Play-updated panels).
+    val webViewManaged: Boolean = false,
 )
 
 /**
@@ -141,6 +144,9 @@ data class SettingSpec(
     // like navbar that carry no `ha` block here). A per-panel expose pip can still override it either way.
     val haExposedByDefault: Boolean = false,
     val transient: Boolean = false,          // accepted + routed to a controller but never persisted (e.g. ambient_lux)
+    // Omit from the generated Configure form (an API-only setting): still readable via GET /config,
+    // settable via POST /config, and carried in config bundles — just never rendered as a form field.
+    val hidden: Boolean = false,
     val availableWhen: (Capabilities) -> Boolean = { true },
     val validate: (String) -> Validation = { Validation.Ok(it) },
 ) {

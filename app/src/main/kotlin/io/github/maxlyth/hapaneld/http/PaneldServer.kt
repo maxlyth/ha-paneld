@@ -1888,6 +1888,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
         var relaunchForHa = false
         var relaunchForDash = false
         var relaunchForFullscreen = false
+        var relaunchForOverscroll = false
         config.applyBatch {
             panelId?.let { config.setPanelId(it) }
             p["friendly_name"]?.let { config.setFriendlyName(it.trim()) }
@@ -1917,6 +1918,13 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             val postedFullscreen = p["dashboard_fullscreen"]?.let { it.trim().equals("true", ignoreCase = true) || it.trim() == "1" }
             postedFullscreen?.let { config.setDashboardFullscreen(it) }
             relaunchForFullscreen = postedFullscreen != null && postedFullscreen != prevFullscreen && !dashChanged
+            // Overscroll stretch/glow (hidden, API-only). Same live-apply as fullscreen: a foreground
+            // relaunch re-runs onResume → applyOverscroll. Detected from the POSTED value (read-back
+            // inside applyBatch is pre-commit).
+            val prevOverscroll = config.dashboardOverscroll
+            val postedOverscroll = p["dashboard_overscroll"]?.let { it.trim().equals("true", ignoreCase = true) || it.trim() == "1" }
+            postedOverscroll?.let { config.setDashboardOverscroll(it) }
+            relaunchForOverscroll = postedOverscroll != null && postedOverscroll != prevOverscroll && !dashChanged
             // Dark mode (Display card; only meaningful on panels WITHOUT a system dark-mode setting,
             // Android 9-). Detected from the POSTED value (read-back inside the batch is pre-commit —
             // this exact bug made the toggle a silent no-op); executed after the batch commits.
@@ -2027,7 +2035,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
         if (relaunchForHa && config.dashboardPackage == "builtin") {
             scope.launch { runCatching { system.reloadDashboard(SystemController.BUILTIN_DASHBOARD) } }
         }
-        if (relaunchForFullscreen && config.dashboardPackage == "builtin") {
+        if ((relaunchForFullscreen || relaunchForOverscroll) && config.dashboardPackage == "builtin") {
             scope.launch { runCatching { system.launchHome(SystemController.BUILTIN_DASHBOARD) } }
         }
         applyDark?.let { dark ->
@@ -2076,7 +2084,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
         "wake_on_wave", "prevent_idle_dim", "watchdog_enabled", "kiosk_lock", "auto_brightness",
         "brightness_bias", "navbar_mode", "touch_sound", "cpu_governor",
         "network_adb", "zigbee_router", "ambient_lux",
-        "companion_auto_update", "self_update", "update_channel", "home_dashboard",
+        "companion_auto_update", "self_update", "webview_auto_update", "update_channel", "home_dashboard",
     )
 
     /**
@@ -2090,7 +2098,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
         val hints = autoHints()   // what blank ("auto") package fields resolve to → field placeholder
         // Include the settable settings PLUS the read-only HA sensors (diagnostics): the latter carry
         // no editable value but still render an expose pip, so the user can opt them into HA.
-        val schemaSpecs = SettingsRegistry.SPECS.filter { !it.readOnly || it.ha != null }
+        val schemaSpecs = SettingsRegistry.SPECS.filter { (!it.readOnly || it.ha != null) && !it.hidden }
         val items = schemaSpecs.joinToString(",") { spec ->
             val opts = spec.options.joinToString(",") { s(it) }
             val isHa = spec.ha != null

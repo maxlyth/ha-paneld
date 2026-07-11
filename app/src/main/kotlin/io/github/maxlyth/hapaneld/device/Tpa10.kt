@@ -56,10 +56,14 @@ object Tpa10 : DeviceProfile {
     override val recommendedDensity: Int? = 226     // 10" 1920×1200 ≈ 226 ppi — natural 1:1 layout scale
     override val recommendedFontScale: Float? = 1.0f
 
-    // Cromite SystemWebView (Android 11 runs current Cromite). Signer pinned; sideloaded from the mirror.
+    // LineageOS SystemWebView (armeabi-v7a; vanilla Chromium). Swapped off Cromite (2026-07-11): Cromite
+    // patches the autoplay content-setting to BLOCK, which broke HA camera-card WebRTC autoplay in the
+    // built-in renderer, and its releases have stalled — LineageOS is a newer, maintained, autoplay-ALLOW
+    // engine on the same `com.android.webview` package + install route. Cromite 147 stays in the mirror as
+    // the rollback asset. Signer pinned; sideloaded from the mirror.
     override val recommendedWebView = WebViewSpec(
-        url = "https://github.com/maxlyth/ha-paneld/releases/download/webview-mirror/cromite-webview-147.0.7727.56.apk",
-        version = "147.0.7727.56",
-        certSha256 = "633fa41d8211d6d0916a819b89668c6de92e64232da67f9d16fd81c3b7e923ff",
+        url = "https://github.com/maxlyth/ha-paneld/releases/download/webview-mirror/lineageos-webview-150.0.7871.63-arm.apk",
+        version = "150.0.7871.63",
+        certSha256 = "32a2fc74d731105859e5a85df16d95f102d85b22099b8064c5d8915c61dad1e0",
     )
 }

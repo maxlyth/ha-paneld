@@ -68,39 +68,75 @@ The panel must be on Wi-Fi for the network route; thereafter `adb connect <panel
 
 ## WebView — update this first
 
-The stock WebView is **Chrome 83** — far too old for a current HA frontend, so the Companion app shows a blank/broken dashboard until you replace it. The verified-working build is **Cromite SystemWebView 147.0.7727.56** (armeabi-v7a). It is the *last* 32-bit Cromite; newer builds are arm64-only, so keep this exact version.
+The stock WebView is **Chrome 83** — far too old for a current HA frontend, so the dashboard shows blank or broken until you replace it. The recommended build is **LineageOS System WebView 150** (`armeabi-v7a`) — a current, maintained, vanilla-Chromium engine. Prefer it over Cromite: Cromite patches Chromium's autoplay content-setting to *block*, which stops Home Assistant camera-card (WebRTC) streams from starting without a tap; LineageOS leaves autoplay allowed, so camera streams start on their own.
 
-It is packaged as `com.android.webview`, so it must **replace** the stock system WebView — and the two "obvious" routes don't work on this Android-11 panel:
+Download it from the ha-paneld mirror (stable URL):
 
-- A plain `adb install -r` is rejected: `INSTALL_FAILED_UPDATE_INCOMPATIBLE: signatures do not match` (Cromite is `CN=CromiteOrg`, not the Tuya platform key).
-- The ROM's provider allowlist accepts **only** `com.android.webview`, so the `com.google.android.webview` ("…Google") Cromite variant installs but can't be selected.
-
-**Working method (root; verified) — replace the file + clear the signature lock:**
-
-```bash
-adb root && adb disable-verity && adb reboot     # one-time: enable the rw overlay
-adb root && adb remount                           # re-run each session (/system is RO again after a reboot)
-# 1. replace the stock system WebView APK with the Cromite SystemWebView:
-adb push cromite-147-SystemWebView-armv7.apk /data/local/tmp/wv.apk
-adb shell 'cp /product/app/webview/webview.apk /data/local/tmp/webview-stock.bak;
-           cp /data/local/tmp/wv.apk /product/app/webview/webview.apk;
-           chmod 644 /product/app/webview/webview.apk; restorecon /product/app/webview/webview.apk'
-# 2. clear the stock's leftover packages.xml entry so PM re-registers the Cromite APK FRESH. This is the
-#    key step: it sidesteps the signature lock AND stops the lower-versioned stock being auto-selected
-#    (remove only the single <package name="com.android.webview" …> element with a real XML parser):
-adb pull /data/system/packages.xml ./packages.xml      # edit out that element, then:
-adb push packages.xml /data/system/packages.xml
-adb shell 'chown system:system /data/system/packages.xml; chmod 660 /data/system/packages.xml;
-           restorecon /data/system/packages.xml'
-adb reboot                                        # PM registers Cromite fresh → engine is Cromite 147
+```
+https://github.com/maxlyth/ha-paneld/releases/download/webview-mirror/lineageos-webview-150.0.7871.63-arm.apk
 ```
 
-> [!CAUTION]
-> **The reported WebView version is wrong with this method — don't trust it.** `Settings → WebView` and `adb shell dumpsys webviewupdate` both show **`83.0.4103.120`**, because Cromite SystemWebView deliberately **stamps the OEM stock `versionName`/`versionCode`** so it clears the webview min-version gate and gets selected. The *actual* rendering engine is Cromite 147. Verify the real version by:
-> - **User-Agent** — the engine HA Companion actually uses: open any "what's my user-agent" page on the panel; the UA contains `Chrome/147.0.7727.56`.
-> - **From the APK** — `unzip -p webview.apk lib/armeabi-v7a/libwebviewchromium.so | strings | grep -m1 -oE '[0-9]+\.0\.7[0-9]{3}\.[0-9]+'` → `147.0.7727.56`. (The on-device libs aren't extracted — `extractNativeLibs=false` — so read it from the APK, not from disk.)
+### Why a plain install doesn't work
 
-A clean adb sideload does **not** work on this signature-locked panel.
+The WebView is packaged as `com.android.webview`, so it must **replace** the system provider, and the two obvious routes both fail on this Android-11 panel:
+
+- `adb install -r` is rejected — `INSTALL_FAILED_UPDATE_INCOMPATIBLE: signatures do not match`. Android only lets you update `com.android.webview` with an APK signed by the **same key** as what's already installed, and each WebView vendor uses a different key. This is also why **ha-paneld's built-in "Update WebView" / auto-update can't do this first swap** — it installs over `pm install`, which the panel blocks. The swap below is a **one-time** manual step; once LineageOS is in place, ha-paneld *can* auto-apply future LineageOS updates (same signer).
+- The ROM's allowlist accepts only `com.android.webview` (not the `com.google.android.webview` variant), so a "…Google" build installs but is never selected.
+
+### Working method (root) — replace the file + clear the signature lock
+
+The panel is signature-locked, but it is rootable: the app can't `su`, but a shell can (`adb shell su root <cmd>`). The trick is to drop the new APK into the *system* WebView slot and delete its entry from the package database so PackageManager re-registers it **fresh** on reboot (which reads the new APK's own signature — no conflict).
+
+```bash
+IP=<panel-ip>:5555                                    # e.g. 192.168.1.50:5555
+adb connect $IP
+adb -s $IP shell su root id                           # confirm it prints uid=0(root)
+
+# 1. push the new WebView, and back up the current WebView + package database first:
+adb -s $IP push lineageos-webview-150.0.7871.63-arm.apk /data/local/tmp/wv-new.apk
+adb -s $IP shell su root sh -c 'cp /product/app/webview/webview.apk /data/local/tmp/webview.bak;
+                                cp /data/system/packages.xml /data/local/tmp/packages.xml.bak'
+
+# 2. replace the system WebView APK (remount /product read-write first — verity must already be off;
+#    a never-modified panel needs a one-time `adb root && adb disable-verity && adb reboot` beforehand):
+adb -s $IP shell su root sh -c 'mount -o rw,remount /product;
+    cp /data/local/tmp/wv-new.apk /product/app/webview/webview.apk;
+    chmod 644 /product/app/webview/webview.apk; chown root:root /product/app/webview/webview.apk;
+    restorecon /product/app/webview/webview.apk'
+
+# 3. remove the single <package name="com.android.webview" …>…</package> element from packages.xml.
+#    Do NOT hand-edit it — pull it, let a parser remove exactly that element, then push it back:
+adb -s $IP shell su root sh -c 'cp /data/system/packages.xml /data/local/tmp/pkgs.xml; chmod 644 /data/local/tmp/pkgs.xml'
+adb -s $IP pull /data/local/tmp/pkgs.xml packages.xml
+python3 - <<'PY'
+import xml.etree.ElementTree as ET
+d = open('packages.xml', encoding='utf-8').read()
+m = '<package name="com.android.webview"'
+assert d.count(m) == 1, 'expected exactly one com.android.webview package'
+s  = d.find(m); ls = d.rfind('\n', 0, s) + 1                      # start of that line
+e  = d.find('</package>', s) + len('</package>'); le = d.find('\n', e) + 1  # end of its closing line
+new = d[:ls] + d[le:]
+ET.fromstring(new)                                                # abort if the result isn't valid XML
+open('packages.xml', 'w', encoding='utf-8').write(new)
+print('removed com.android.webview; XML still valid')
+PY
+adb -s $IP push packages.xml /data/local/tmp/pkgs.new
+adb -s $IP shell su root sh -c 'cp /data/local/tmp/pkgs.new /data/system/packages.xml;
+    chown system:system /data/system/packages.xml; chmod 660 /data/system/packages.xml;
+    restorecon /data/system/packages.xml'
+
+# 4. reboot — PackageManager registers the new WebView fresh:
+adb -s $IP reboot
+```
+
+**If anything goes wrong**, revert with the backups from step 1: copy `/data/local/tmp/webview.bak` back over `/product/app/webview/webview.apk` and `/data/local/tmp/packages.xml.bak` back over `/data/system/packages.xml` (same `chown`/`chmod`/`restorecon`), then reboot.
+
+> [!CAUTION]
+> **The reported WebView version is wrong with this method — don't trust it.** `Settings → WebView` and `adb shell dumpsys webviewupdate` still show **`83.0.4103.120`**, because a sideloaded SystemWebView **stamps the OEM stock `versionName`/`versionCode`** to clear the panel's min-version gate and get selected. The *actual* engine is 150. Verify it by:
+> - **User-Agent** — open any "what's my user agent" page on the panel; the UA contains `Chrome/150.0.7871.63`.
+> - **ha-paneld** — the `:8888` info page / `/api/v1/diag` shows `engine Chromium 150.0.7871.63` (it reads the UA, not the stamped package version).
+
+(This supersedes the earlier "clean adb sideload" note, which does **not** work on this signature-locked panel. Cromite 147 remains available in the mirror as a fallback — same procedure, different APK — if you ever need it.)
 
 ## LED
 

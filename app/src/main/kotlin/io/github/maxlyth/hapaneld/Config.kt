@@ -333,6 +333,26 @@ class Config(context: Context) {
         prefs.edit().putString("update_channel", v).apply()
     }
 
+    // System WebView auto-update: when on, ha-paneld advances the WebView to the profile's pinned
+    // recommended build (from the webview-mirror release) on the update tick — the same curated pin the
+    // too-old auto-heal installs, but proactively rather than only when the engine is broken. **Default
+    // OFF**: a provider swap binds per-process (needs a restart) and is more invasive than an app update,
+    // and the pin is advanced deliberately by the maintainer (there is no clean upstream feed to chase).
+    val webViewAutoUpdate: Boolean get() = prefs.getBoolean("webview_auto_update", false)
+    fun setWebViewAutoUpdate(on: Boolean) {
+        // commit() (not apply()): the natural workflow is "enable, then reboot to let it run", and an
+        // async write can be lost if the reboot lands before it flushes to disk.
+        prefs.edit().putBoolean("webview_auto_update", on).commit()
+    }
+    // Loop guard: the exact recommended version last auto-installed. If a later tick still doesn't see it
+    // as the engine, the provider isn't switching (variant hardware) — don't re-download it daily; a pin
+    // bump (new version string) clears the guard. commit() (not apply): must persist across the restart
+    // the successful install triggers.
+    val webViewAutoLastVersion: String get() = prefs.getString("webview_auto_last_version", "") ?: ""
+    fun setWebViewAutoLastVersion(v: String) {
+        prefs.edit().putString("webview_auto_last_version", v).commit()
+    }
+
     // Network-adb persist INTENT (the switch). ha-paneld re-asserts adb-tcp at boot/reconnect when this
     // is true (some firmwares strip persist.adb.tcp.port at boot), and only tears adb down on OFF if it
     // was ha-paneld that turned it on — never disabling adb another mechanism started.
@@ -365,6 +385,11 @@ class Config(context: Context) {
     val dashboardFullscreen: Boolean get() = prefs.getBoolean("dashboard_fullscreen", true)
     fun setDashboardFullscreen(on: Boolean) { edit { putBoolean("dashboard_fullscreen", on) } }
     fun setDashboardIdleReturnMin(min: Int) { edit { putInt("dashboard_idle_return_min", min) } }
+
+    /** Built-in renderer: allow Android's overscroll stretch/glow past the top or bottom of the page.
+     *  Off by default (a wall panel rarely scrolls; the bounce looks out of place). API-only setting. */
+    val dashboardOverscroll: Boolean get() = prefs.getBoolean("dashboard_overscroll", false)
+    fun setDashboardOverscroll(on: Boolean) { edit { putBoolean("dashboard_overscroll", on) } }
 
     // The screen-off timeout (ms) seen before we first raised it, so disabling preventIdleDim can restore
     // the firmware default. -1 = not yet captured.

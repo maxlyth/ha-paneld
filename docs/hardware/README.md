@@ -99,23 +99,26 @@ The clean way is a direct adb sideload of the standard Android System WebView (p
 | Panel | ABI | Stock (vendor firmware) | Replacement (`com.android.webview`) | Download |
 |---|---|---|---|---|
 | NSPanel Pro (PX30) | arm64-v8a | **unknown** — Android 8.1 AOSP base; confirmed too old for current HA frontend | **LineageOS** 138.0.7204.63 — last build for Android **8.1** | [release asset](https://github.com/maxlyth/ha-paneld/releases/download/webview-mirror/lineageos-webview-138.0.7204.63.apk) · [APKMirror](https://www.apkmirror.com/apk/lineageos/android-system-webview-2/android-system-webview-138-0-7204-63-2-release/android-system-webview-138-0-7204-63-8-android-apk-download/download) |
-| TPA10 (rk3566) | armeabi-v7a | **Chrome 83** (`com.android.webview`) — too old for current HA frontend | **Cromite** SystemWebView 147.0.7727.56 | [release asset](https://github.com/maxlyth/ha-paneld/releases/download/webview-mirror/cromite-webview-147.0.7727.56.apk) · [Cromite releases](https://github.com/uazo/cromite/releases) |
+| TPA10 (rk3566) | armeabi-v7a | **Chrome 83** (`com.android.webview`) — too old for current HA frontend | **LineageOS** SystemWebView 150.0.7871.63 — vanilla Chromium, allows camera autoplay (Cromite 147 blocks it, kept as fallback). **Signature-locked — needs the root swap in [tpa10.md](tpa10.md#webview--update-this-first), not a plain sideload.** | [arm asset](https://github.com/maxlyth/ha-paneld/releases/download/webview-mirror/lineageos-webview-150.0.7871.63-arm.apk) |
 | WF1589T (rk3576) | arm64-v8a | Google Play WebView (auto-updates) | update via Play Store — no sideload needed | — |
-| S9E (rk3566) | arm64-v8a | **Chromium 83** (`com.android.webview`) — too old for current HA frontend | arm64 SystemWebView build — community contributions welcome | [WebView mirror](https://github.com/maxlyth/ha-paneld/releases/tag/webview-mirror) |
-| SMT1019 (rk3576) | arm64-v8a | **unknown** — Android 14, no GMS; likely needs sideload | arm64 SystemWebView build — community contributions welcome | [WebView mirror](https://github.com/maxlyth/ha-paneld/releases/tag/webview-mirror) |
+| S9E (rk3566) | armeabi-v7a | **Chromium 83** (`com.android.webview`) — too old for current HA frontend | **LineageOS** 150.0.7871.63 (arm) — *provisional, unverified hardware*; likely signature-locked like the TPA10 | [arm asset](https://github.com/maxlyth/ha-paneld/releases/download/webview-mirror/lineageos-webview-150.0.7871.63-arm.apk) |
+| SMT1019 (rk3576) | arm64-v8a | **unknown** — Android 14, no GMS; likely needs sideload | **LineageOS** 150.0.7871.63 (arm64) — *provisional, unverified hardware* | [arm64 asset](https://github.com/maxlyth/ha-paneld/releases/download/webview-mirror/lineageos-webview-150.0.7871.63-arm64.apk) |
 | Shelly WD legacy (MT6580) | armeabi-v7a | **unknown** (Android 7 base ROM) | Atlantis only: `com.google.android.webview` **119.0.6045.194** via [official Shelly ZIP](https://repo.shelly.cloud/firmware/SAWD-0A1XX10EU1/stable/SAWD-0A1XX10EU1-WebViewUpdate.zip) — see [shelly-wall-display.md](shelly-wall-display.md#webview) | — |
 | Shelly WD V2 (arm64 / PX30) | arm64-v8a | **unknown** (Android 11 base ROM; not present in Shelly OTA) | not established — check `adb shell dumpsys webviewupdate` | — |
 
 All mirrored builds live in the [**Panel WebView mirror** release](https://github.com/maxlyth/ha-paneld/releases/tag/webview-mirror) — intended as a living, community list of known-working versions. Got one working on another panel or version? Contributions welcome.
 
 > [!NOTE]
-> - **Pick the newest WebView your panel's Android version supports.** The NSPanel Pro's Android 8.1 caps at 138; newer builds won't install. Newer Android (the TPA10's 11) runs current Cromite.
+> - **Pick the newest WebView your panel's Android version supports.** The NSPanel Pro's Android 8.1 caps at 138 (the last Chromium for Android 8/9); newer builds won't install. Android 10+ (the TPA10's 11) runs current **LineageOS** WebView (150).
 > - **APKMirror's *direct* download links are short-lived presigned URLs that expire within the hour** — use the page, or the ha-paneld Release assets above (durable). The mirror exists precisely because panels lack Play and ship years-old firmware, and a working build can otherwise take days to find.
 
 <details>
 <summary>Sideload + verify steps</summary>
 
-1. Download a current **Android System WebView** APK — package **`com.android.webview`**. The build that works depends on the panel's Android version (see the table): the **LineageOS** Android System WebView covers old Android (e.g. 8.1), **Cromite's SystemWebView** build covers newer Android. Both deliberately use the `com.android.webview` package, so they're picked as the provider automatically (no allowlist editing, no extra app), and both are open / freely redistributable. Match your panel's ABI; per-panel downloads are above.
+1. Download a current **Android System WebView** APK — package **`com.android.webview`**. **LineageOS** System WebView is the recommended build across Android versions: 138 is the last for Android 8.1, and 150 covers Android 10+ (both in the mirror). It's vanilla Chromium, so it doesn't carry Cromite's autoplay block that stops HA camera streams. It uses the `com.android.webview` package, so it's picked as the provider automatically (no allowlist editing, no extra app), and it's open / freely redistributable. Match your panel's ABI; per-panel downloads are above.
+
+> [!IMPORTANT]
+> The simple sideload below works on panels whose ROM waives the WebView signature check (e.g. the NSPanel Pro's userdebug build). **Signature-locked panels (the TPA10, and likely other vendor user builds) reject a plain sideload** — `signatures do not match`. Those need the one-time root swap (replace the system WebView file + clear its `packages.xml` entry); see [tpa10.md → WebView](tpa10.md#webview--update-this-first) for the exact procedure.
 2. Sideload it (no root):
 
    ```sh

@@ -404,6 +404,7 @@ class PaneldService : Service() {
         companionInstalled = UpdateChecker.COMPANION_PKGS.any {
             runCatching { packageManager.getPackageInfo(it, 0) }.isSuccess
         },
+        webViewManaged = profile.recommendedWebView != null,
     )
 
     /** WebView auto-heal (Install-tab "Update WebView now" button): download + install the profile's
@@ -428,6 +429,38 @@ class PaneldService : Service() {
                 // A foreign renderer (Companion) picks up the new provider on ITS process restart — reload it.
                 system.reloadDashboard(config.dashboardPackage)
             }
+        }
+    }
+
+    /** Scheduled WebView auto-update (opt-in, update tick): advance the System WebView to the profile's
+     *  pinned build when it's newer than the running engine. A provider binds per-process, so a
+     *  successful install restarts the process to pick it up (mirrors [healWebView]). A loop guard skips
+     *  re-downloading a version that already installed but never became the provider (variant hardware);
+     *  it clears when the pinned version advances. Off-thread (large download + su). */
+    private suspend fun autoUpdateWebView() {
+        val rec = profile.recommendedWebView ?: return
+        val engineMajor = io.github.maxlyth.hapaneld.http.PanelInfo.webViewStatus(this@PaneldService).engineMajor
+        if (io.github.maxlyth.hapaneld.util.WebViewInstaller.shouldSkipAutoUpdate(config.webViewAutoLastVersion, rec.version, rec.major, engineMajor)) {
+            Log.w(TAG, "WebView auto-update: ${rec.version} already attempted but the engine is still ${engineMajor ?: "?"} — provider not switching; skipping (manual heal may be needed)")
+            return
+        }
+        val r = io.github.maxlyth.hapaneld.util.WebViewInstaller.heal(
+            this@PaneldService, profile, engineMajor = engineMajor, force = false, autoUpdate = true,
+        )
+        // Record the attempt (ANY outcome, before the OK check) so a version that FAILS to install isn't
+        // re-downloaded every tick — notably a signature-locked panel (e.g. TPA10) rejecting a cross-signer
+        // provider swap (`pm install` can't change the WebView's signer; that needs the manual root route).
+        // A pin bump (new version string) clears the guard; the manual "Update WebView" button always retries.
+        config.setWebViewAutoLastVersion(rec.version) // commit() so it survives the restart below
+        Log.i(TAG, "WebView auto-update: $r")
+        if (r.startsWith("OK")) {
+            kotlinx.coroutines.delay(2_000)
+            if (config.dashboardPackage == io.github.maxlyth.hapaneld.control.SystemController.BUILTIN_DASHBOARD) {
+                Log.i(TAG, "WebView auto-updated — restarting process so the built-in renderer binds the new provider")
+                kotlinx.coroutines.delay(1_000)
+                kotlin.system.exitProcess(0)
+            }
+            system.reloadDashboard(config.dashboardPackage) // foreign renderer picks it up on ITS restart
         }
     }
 
@@ -573,6 +606,11 @@ class PaneldService : Service() {
                         val r = CompanionInstaller.installOrUpdate(this@PaneldService, channel = config.companionUpdateChannel, maxVersion = profile.companionMaxVersion)
                         Log.i(TAG, "Companion auto: $r")
                     }
+                }
+                // System WebView auto-update (opt-in): advance to the profile's pinned build. BEFORE
+                // self-update because a successful WebView install also restarts the process.
+                if (config.webViewAutoUpdate) {
+                    runCatching { autoUpdateWebView() }
                 }
                 // ha-paneld self-update LAST — a successful install restarts this process (and this loop).
                 if (config.selfUpdate) {
