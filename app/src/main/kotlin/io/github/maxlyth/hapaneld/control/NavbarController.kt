@@ -108,12 +108,6 @@ class NavbarController(
     fun apply(newMode: String) {
         val m = normalise(newMode)
         mode = m
-        // Publish/withdraw the built-in renderer's in-activity reveal trigger: set only in Swipe-reveal
-        // mode. reveal() is main-thread view work; the mode re-check inside the post guards a live
-        // mode-flip race (mode changed to Off between the swipe and the post running).
-        BuiltinDashboard.setNavbarRevealHandler(
-            if (m == MODE_SWIPE) { { main.post { if (mode == MODE_SWIPE) reveal() } } } else null,
-        )
         if (m != MODE_OFF) {
             ensureOverlayPermission()
             if (volReceiver == null) {
@@ -135,6 +129,16 @@ class NavbarController(
         } else {
             volReceiver?.let { runCatching { context.unregisterReceiver(it) }; volReceiver = null }
         }
+        // Publish/withdraw the built-in renderer's in-activity reveal trigger: set only in Swipe-reveal
+        // mode AND only when a bar can actually be drawn — canDraw() is checked HERE, after
+        // ensureOverlayPermission() above, so a freshly root-granted overlay counts. Without the canDraw()
+        // gate a panel that can't hold SYSTEM_ALERT_WINDOW would let BottomSwipeFrame steal a bottom-edge
+        // swipe while reveal()→addBar() can never show a bar — eating the swipe with nothing shown (a
+        // regression vs the canDraw()-gated strip). reveal() is main-thread view work; the mode re-check
+        // inside the post guards a live mode-flip race (mode changed to Off between the swipe and the post).
+        BuiltinDashboard.setNavbarRevealHandler(
+            if (m == MODE_SWIPE && canDraw()) { { main.post { if (mode == MODE_SWIPE) reveal() } } } else null,
+        )
         if (appCanSu && m == MODE_ALWAYS) {
             // Always-on: apply the display overscan (blocking) before posting the bar so the content
             // visibly shifts up before the bar appears, not after. Su contention is acceptable here
