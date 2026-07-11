@@ -14,7 +14,7 @@ Open the panel's web page (`http://<panel-ip>:8888/`, the HA device's **Visit** 
 - **Performance chart** — live CPU / GPU / RAM history + load average + temperature. If CPU/load are pegged, the panel is compute-bound; if RAM is high and climbing, suspect the heap-ceiling stall.
 - **Capabilities** — what works on *this* firmware, and how to fix shortfalls. See the [hardware overview](hardware/README.md) for per-panel detail.
 - **Diagnostics dump** (`/diag`) — paste into a bug report.
-- **Rendering metrics** (planned, via the DevTools/CDP relay) — FPS, jank %, main-thread long tasks, and **JS heap %** straight from the WebView, so you can see the heap-ceiling stall coming.
+- **Rendering metrics** — FPS, jank %, main-thread long tasks, and **JS heap %** straight from the WebView, so you can see the heap-ceiling stall coming.
 
 ## Fixes, in order of impact
 

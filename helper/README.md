@@ -49,7 +49,7 @@ Newline-terminated ASCII on the abstract UNIX socket `@hapaneld-helper`. One or 
 - The commands that shell out (`RELOAD`, `START`, `REBOOT` via `am`/`svc`) sanitise their argument against a strict char-whitelist; the LED/backlight writes touch **only** the whitelisted nodes (`avs-pwm-led/avsux_animation`, `button-backlight/brightness`).
 
 > [!CAUTION]
-> The daemon never writes `avs-pwm-led/avsux_select` or `custom_animation`. Those are firmware-backed and **reliably reboot the TPA10** (verified 2026-06-03).
+> The daemon never writes `avs-pwm-led/avsux_select` or `custom_animation`. Those are firmware-backed and **reliably reboot the TPA10**.
 
 A set colour **holds** until the next command (no auto-revert); `OFF` writes black. Handing the LED back to the vendor's idle animation currently requires a reboot.
 
@@ -71,7 +71,7 @@ How well each capability meets that today:
 
 ### The one current seam: LED
 
-`RGB`/`OFF`/`BTN` hardcode the TPA10 node paths (`avs-pwm-led/avsux_animation`, `button-backlight/brightness`) and that panel's `HOLD_MS:RRGGBB` write format. A panel with a root-only LED at a *different* path or format can't be added without editing the shared `set_rgb`/`write_node` core. The intended fix is to **parameterise it like `WATCH`** (not yet needed — the TPA10 is the only daemon-LED panel; rk3576/px30 drive LEDs app-direct):
+`RGB`/`OFF`/`BTN` hardcode the TPA10 node paths (`avs-pwm-led/avsux_animation`, `button-backlight/brightness`) and that panel's `HOLD_MS:RRGGBB` write format. A panel with a root-only LED at a *different* path or format can't be added without editing the shared `set_rgb`/`write_node` core. The intended fix is to **parameterise it like `WATCH`** (the TPA10 is the only daemon-LED panel; rk3576/px30 drive LEDs app-direct):
 
 ```text
 LED <node> <payload>        # app supplies the target + payload from its DeviceProfile
@@ -149,4 +149,4 @@ adb -s <ip:5555> remount
 adb -s <ip:5555> reboot           # confirm the init service auto-starts the daemon
 ```
 
-Verified on a WF1589T (rk3576, Android 14) 2026-06-04: after a cold boot the daemon runs with SELinux context `u:r:su:s0` and answers `PING`. Trade-off: this disables dm-verity and writes `/system` (an OTA/factory-reset would remove it) — acceptable for a controlled, already-rooted fleet.
+Verified on a WF1589T (rk3576, Android 14): after a cold boot the daemon runs with SELinux context `u:r:su:s0` and answers `PING`. Trade-off: this disables dm-verity and writes `/system` (an OTA/factory-reset would remove it) — acceptable on an already-rooted panel.

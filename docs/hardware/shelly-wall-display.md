@@ -3,8 +3,6 @@
 > [!NOTE]
 > **Research-only — no physical unit tested here.** Facts are sourced from firmware OTA analysis (including a device-tree parse of the modern partition image), the official [ShellyGroup/Wall-Display-Changelog](https://github.com/ShellyGroup/Wall-Display-Changelog), Shelly KB articles, the HA frontend issue tracker, and Pen Test Partners' security disclosure. `ShellyWallDisplay` (legacy) and `ShellyWallDisplayV2` (modern) DeviceProfiles are implemented but remain **speculative** until verified on hardware.
 
-*Researched 2026-06-26; firmware deep-parse 2026-06-28.*
-
 ---
 
 ## Product family
@@ -83,7 +81,7 @@ The built-in browser WebView on the Wall Display XL had rendering/layout problem
 
 ### WebView
 
-**Legacy (MT6580, Android 7 — Stargate, Pegasus, Atlantis):** The stock system WebView is not included in the standard Shelly OTA packages — it comes from the base factory ROM and its exact version has not been established from available firmware. For the **Stargate** model (`SAWD-0A1XX10EU1`), Shelly publishes a separate WebView update package on the static CDN (`SAWD-0A1XX10EU1-WebViewUpdate.zip`, 107 MB) that installs `com.google.android.webview` **119.0.6045.194** (Chrome 119, ~Oct 2023, armeabi-v7a, minSDK 24/Android 7.0). Inspection of this ZIP (2026-06-26): package installs to `system/app/GoogleWebView/GoogleWebView.apk`. There is no equivalent WebView update ZIP for Stargate or Pegasus — users on those models are limited to whatever the factory ROM ships.
+**Legacy (MT6580, Android 7 — Stargate, Pegasus, Atlantis):** The stock system WebView is not included in the standard Shelly OTA packages — it comes from the base factory ROM and its exact version has not been established from available firmware. For the **Stargate** model (`SAWD-0A1XX10EU1`), Shelly publishes a separate WebView update package on the static CDN (`SAWD-0A1XX10EU1-WebViewUpdate.zip`, 107 MB) that installs `com.google.android.webview` **119.0.6045.194** (Chrome 119, ~Oct 2023, armeabi-v7a, minSDK 24/Android 7.0). Inspection of this ZIP: package installs to `system/app/GoogleWebView/GoogleWebView.apk`. There is no equivalent WebView update ZIP for Stargate or Pegasus — users on those models are limited to whatever the factory ROM ships.
 
 **Modern V2 (arm64, Android 11 — Jenna confirmed; Blake/Cally/Maverick/Dayna):** The standard Shelly OTA does not include a WebView package (the 2.7.1 OTA contains only app updates — Stargate.apk, Camera2.apk, ShellyPlaceholder.apk). The stock WebView version from the base image has not been extracted. (Note: the Stargate APK is *built against* the Android 13 SDK — `platformBuildVersion=13` — but the device OS is Android 11, per the partition OTA's build fingerprint.)
 
@@ -139,7 +137,7 @@ Shelly.Update { "url": "..." }         // install from a custom URL
 
 An hourly check (added 2.6.0) and a startup check trigger automatically. The 2.7.0 OTA sanity check verifies the downloaded update is built for the correct hardware before applying.
 
-### Update manifest endpoints (verified 2026-06-26)
+### Update manifest endpoints (verified)
 
 There are **two firmware tracks** — one per hardware generation:
 
@@ -151,7 +149,7 @@ GET https://updates.shelly.cloud/update/WallDisplay
 
 Covers SAWD-0A1XX10EU1 (Stargate) and SAWD-2A1XX10EU1 (Pegasus). The OTA updater-script asserts `ro.product.device` is `k400_mt6580_32_n` (Stargate) or `e500_7731e_32u_o` (Pegasus) before applying.
 
-Response as of 2026-06-26 (`stable.version`: `2.7.1`, `build_id`: `20260609-205046/2.7.1-857d7175`; CDN URL is a SHA-256-named blob — see note below).
+Response (`stable.version`: `2.7.1`, `build_id`: `20260609-205046/2.7.1-857d7175`; CDN URL is a SHA-256-named blob — see note below).
 
 #### Track 2 — Modern (arm64-v8a, Android 11+: all five modern SKUs)
 
@@ -161,12 +159,12 @@ GET https://updates.shelly.cloud/update/WallDisplayV2
 
 Covers Blake, Jenna, Cally, Maverick, Dayna. The OTA updater-script reads `ro.build.product` for logging only — no per-product assertion — so one ZIP installs on all modern models.
 
-Response as of 2026-06-26: same version (`2.7.1`) and build_id as Track 1; compiled for arm64-v8a.
+Response: same version (`2.7.1`) and build_id as Track 1; compiled for arm64-v8a.
 
 Both tracks share version numbers and build IDs — they are compiled together from the same codebase for different ABIs.
 
 > [!NOTE]
-> **The CDN URL is content-addressed (SHA-256 filename, no version in path).** It rotates with every release and cannot be inferred for older versions. There are no Wayback Machine archives of the CDN blobs. To build a version archive: monitor both manifest endpoints on each firmware release (track via ShellyGroup/Wall-Display-Changelog commits) and download both URLs immediately — they are unreachable after they rotate.
+> **The CDN URL is content-addressed (SHA-256 filename, no version in path).** It rotates with every release and cannot be inferred for older versions, and there are no Wayback Machine archives of the CDN blobs — so once a URL rotates, that firmware is unrecoverable unless it was captured from the manifest endpoint at release time.
 
 #### Static legacy CDN (SAWD-0A1XX10EU1 only)
 
@@ -179,7 +177,7 @@ Frozen at version 1.2.1 (2023-08-15). The WebView update ZIP (107.5 MB) contains
 
 ### OTA file format
 
-Verified from both tracks (2026-06-26):
+Verified from both tracks:
 
 Common structure of every OTA ZIP:
 - `META-INF/com/google/android/updater-script` — custom shell-script OTA applier (not Edify)
@@ -193,7 +191,7 @@ Modern additions: `device_owner_2.xml`, `device_admins.xml`, `tzdata/` updates; 
 
 The Stargate APK native-lib path confirms ABI: `lib/armeabi-v7a/libstargate_input.so` (legacy), `lib/arm64-v8a/libstargate_input.so` (modern).
 
-### Files downloaded 2026-06-26
+### Known firmware artifacts
 
 | File | Track | Version | ABI | Size |
 |---|---|---|---|---|

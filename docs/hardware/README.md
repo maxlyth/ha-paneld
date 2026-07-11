@@ -1,6 +1,6 @@
 # Panel hardware references
 
-Reverse-engineered hardware fact sheets for the wall panels ha-paneld targets — SoC, LED control, sensors, buttons, NFC, Zigbee/IR, relays, adb/root access. These devices ship with almost no public documentation, so these notes record what is physically on each board and how to drive it, gathered from live units (rooted / userdebug `adb root`) on 2026-06-05.
+Reverse-engineered hardware fact sheets for the wall panels ha-paneld targets — SoC, LED control, sensors, buttons, NFC, Zigbee/IR, relays, adb/root access. These devices ship with almost no public documentation, so these notes record what is physically on each board and how to drive it, gathered from live units (rooted / userdebug `adb root`).
 
 | Panel | SoC | LED control | Notable sensors | NFC | Zigbee/IR | Reference |
 |---|---|---|---|---|---|---|
@@ -69,7 +69,7 @@ Each panel under its own real workload:
 | Temp | 49 °C | 63 °C |
 | Responsiveness | smooth, main-thread 3.6 % | smooth, main-thread 25.9 % |
 
-(TPA10 sits between the two on CPU; its sampler was off during capture.)
+(TPA10 sits between the two on CPU.)
 
 </details>
 

@@ -7,7 +7,7 @@ A complete backup is easy and low-risk: it runs over the network, no cable, no m
 Canonical, open-source, cross-platform — no Windows-only vendor tools.[^tools]
 
 > [!NOTE]
-> Backups are safe and routine. The restore steps are the recovery path and haven't been brick-tested here yet — two per-panel details (the maskrom entry, the loader file) are still being confirmed. Neither affects taking a backup today.
+> Backups are safe and routine. The restore steps are the recovery path and have not been brick-tested; two per-panel details — the maskrom entry, the loader file — are unconfirmed. Neither affects taking a backup today.
 
 ## Back up now
 
@@ -155,13 +155,13 @@ Every supported panel is a [Rockchip](https://en.wikipedia.org/wiki/Rockchip) So
 
 ### Per-panel notes
 
-Partition tables read live 2026-06-07 (model facts, not device secrets).
+Partition tables read from live units.
 
 **TPA10** (rk3566, Android 11, 7.28 GB eMMC `mmcblk2`) — root `su 0`; maskrom entry: the pin-hole by the USB-C port is the candidate (confirm reset-vs-maskrom before relying on it); USB-C port. Partitions: `security uboot trust misc dtbo vbmeta boot recovery backup cache metadata logo frp upgrade super userdata`.
 
 **WF1589T** (rk3576, Android 14, 58.24 GB eMMC `mmcblk1`) — root `su 0`; updater `com.elclcd.otaupdater`; maskrom test-point not yet located. Partitions: `security uboot trust misc dtbo vbmeta boot recovery backup cache metadata frp baseparameter updatekey super userdata`.
 
-**NSPanel Pro 86P** (px30) / **120P** (rk3326-S) — use seaky's proven tooling rather than rkdeveloptool: [roottool](https://github.com/seaky/nspanel_pro_roottool_apk) · [tools incl. firmware restore](https://github.com/seaky/nspanel_pro_tools_apk). Key facts distilled from seaky's issue threads (second-hand — not live-read here):
+**NSPanel Pro 86P** (px30) / **120P** (rk3326-S) — use seaky's proven tooling rather than rkdeveloptool: [roottool](https://github.com/seaky/nspanel_pro_roottool_apk) · [tools incl. firmware restore](https://github.com/seaky/nspanel_pro_tools_apk). Key facts distilled from seaky's issue threads (second-hand, not hardware-verified):
 
 - **Never touch Rockchip vendor storage** (`/dev/vendor_storage`): slot **7** holds the licence string (items 4–5 are the two MACs), slot **8** the product id (`SN-RKPX30-NSP-01`). Wiping it boots the panel to a Chinese factory/QR screen. (roottool#1)
 - **QR-screen unbrick *without* reflash:** sideload a launcher over adb → join Wi-Fi → reopen the eWeLink panel app → tap **Activate** a few times → the licence re-provisions online and the panel recovers. (roottool#9)

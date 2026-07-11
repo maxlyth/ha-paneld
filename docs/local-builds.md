@@ -31,7 +31,7 @@ keyPassword=...
 Both `keystore.properties` and `*.jks` are gitignored.
 
 > [!CAUTION]
-> **Never commit `keystore.properties` or the `.jks`.** The release private key can sign in-place updates for every ha-paneld user. Keep the keystore on your own machine (not the HA server), with tight file permissions.
+> **Never commit `keystore.properties` or the `.jks`.** The release private key can sign in-place updates for every ha-paneld user. Keep the keystore on your own build machine, with tight file permissions.
 
 With the file present, `assembleRelease` is release-signed; without it (e.g. CI, or a fresh clone), gradle leaves the release APK unsigned and the rest of the pipeline is unaffected.
 

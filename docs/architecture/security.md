@@ -11,8 +11,6 @@ The panel and Home Assistant sit on a **trusted LAN**, and the app is built arou
 
 ## Attack surface
 
-Review dated 2026-06-05.
-
 | Surface | Exposure | Notes |
 | --- | --- | --- |
 | **HTTP API `:8888`** | unauthenticated; binds dual-stack (`::`) | state-changing routes are the risk — see below |
@@ -41,7 +39,7 @@ Neither authenticates the *caller*; a credentialled LAN actor is still trusted (
 1. **No bespoke API token.** A per-panel secret is throwaway and breaks the easy UX. (Rejected.)
 2. **No in-app network allowlist.** Restricting *who* can reach `:8888` is delegated to the network/infrastructure layer (router / VLAN / firewall segmentation) rather than reinvented in the app — consistent with leaning on existing platform/infra capabilities. The in-app upgrade path, when warranted, is the HA-auth model (decision 3).[^ha-ipban]
 3. **Future auth: integrate with HA's auth model**, not a custom scheme. When real auth is warranted, require `Authorization: Bearer <token>` on state-changing endpoints and **validate the token against the configured HA instance** (cached `GET /api/`). This reuses HA's token lifecycle (issue/revoke in the HA UI), works with HA `rest_command` bearer headers, and **maps directly onto a future custom integration** (which would authenticate via HA natively) — so it survives a possible MQTT→custom migration instead of being discarded.
-4. **Credential-at-rest encryption descoped.** MQTT creds live in app SharedPreferences; encrypting them only defends against a root/file attacker who already owns the device, at the cost of a deprecated `security-crypto` dependency and a live-fleet cred migration. Low value for the cost.
+4. **Credential-at-rest encryption descoped.** MQTT creds live in app SharedPreferences; encrypting them only defends against a root/file attacker who already owns the device, at the cost of a deprecated `security-crypto` dependency and a credential migration across deployed panels; low value for the cost.
 5. **TLS-disabled `/play`** stays (LAN self-signed convenience) under the LAN-trust model; revisit if HA-auth (decision 3) lands.
 
 ## Done

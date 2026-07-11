@@ -1,6 +1,6 @@
 # Sonoff NSPanel Pro (Rockchip PX30 / rk3326)
 
-The most common Home-Assistant wall panel on the market: a small **480×480 square** PX30 panel with a built-in **Zigbee 3.0 coordinator**, no NFC/IR, and the lowest-power CPU of the panels documented here. It ships in two physically different sizes — the **86P** (the unit specced below) and the larger **120P**, which is a *different panel* (RK3326-S, 750×1334 portrait) — see [Variants](#variants--86p-vs-120p). Reverse-engineered on a live **86P** (Android 8.1, rooted, toolbox `su`) on 2026-06-05.
+The most common Home-Assistant wall panel on the market: a small **480×480 square** PX30 panel with a built-in **Zigbee 3.0 coordinator**, no NFC/IR, and the lowest-power CPU of the panels documented here. It ships in two physically different sizes — the **86P** (the unit specced below) and the larger **120P**, which is a *different panel* (RK3326-S, 750×1334 portrait) — see [Variants](#variants--86p-vs-120p). Reverse-engineered on a live **86P** (Android 8.1, rooted, toolbox `su`).
 
 > [!TIP]
 > Most-needed facts: ships **`userdebug` with no adb password** (`adb root` just works); **LED is not characterised** (no controllable RGB node found); light + proximity are **app-direct**; the on-board **EFR32 Zigbee radio** is managed over a local broker, not by reflashing. Update the **WebView first** — see [WebView — update this first](#webview--update-this-first).
@@ -41,7 +41,7 @@ Both share the EFR32 Zigbee radio, Android 8.1 (AOSP), arm64-v8a, and the root/r
 > [!NOTE]
 > Both models reach the current ROM (**4.6.0**, the June 2026 official *Stable*) via a 2-step path: 4.0.12 full ROM → 4.6.0 diff. (**4.5.2** was an APK-only layer on the now-superseded 4.5.1.) The CoolKit CDN scheme, every verified OTA URL, and the full flashing how-to are on the [firmware & flashing page](nspanel-pro-firmware.md); the live, community-maintained version index is the Discussion linked from there.
 >
-> **⚠ 4.5.1 / 4.5.2 had widespread reboot-loop reports** (~10–60 min intervals on both models); **4.6.0** (June 2026) is the current official *Stable* that supersedes them. 4.6.0 is recent and not yet verified on our fleet, so try it on one panel before a fleet roll; **4.0.12** remains the conservative full-ROM checkpoint to pin for maximum stability. Check the firmware Discussion for the current consensus.
+> **⚠ 4.5.1 / 4.5.2 had widespread reboot-loop reports** (~10–60 min intervals on both models); **4.6.0** (June 2026) is the current official *Stable* that supersedes them. 4.6.0 is recent; verify it on one panel before deploying widely. **4.0.12** remains the conservative full-ROM checkpoint to pin for maximum stability. Check the firmware Discussion for the current consensus.
 
 ### Firmware quirks by version
 
@@ -57,7 +57,7 @@ Behaviour that changes across eWeLink firmware versions, newest-relevant first. 
 | **v4.0.0** (roll-out 2025-09-19) | Stock firmware **bundles F-Droid** + promotes FOSS/HA app install; markedly faster UI | On-device install path opens — [Firmware v4.0.0](#firmware-v400--official-f-droid-app-install). Confirm **APP** *and* **OS** version both read ≥ 4.0.0. |
 | **v4.0.12** | Proximity **graded** restored on **86P**; **120P stays binary** (per-model kernel divergence) | Recommended stable pin for HA-only panels. Graded/binary is model-**and**-firmware specific — see [Sensors](#sensors--light--proximity-are-app-direct). |
 | **v4.5.1 / v4.5.2** | **Widespread reboot-loop reports** (~10–60 min, both models); 4.5.2 is an APK-only layer on 4.5.1 | **Superseded by v4.6.0.** Pin at **4.0.12** for maximum stability, or move to 4.6.0 (verify on one panel first). Check the firmware Discussion for current consensus. |
-| **v4.6.0** (Jun 2026) | Current official **Stable**; **Local Web Portal** (`nspanelpro.local` — LAN setup, MQTT→HA sync, Matter Bridge); diff-only off 4.0.12 / 4.4.0 / 4.5.1 | New — not yet fleet-verified here. The stable successor to the reboot-loopy 4.5.x; still verify on one panel before a fleet roll. |
+| **v4.6.0** (Jun 2026) | Current official **Stable**; **Local Web Portal** (`nspanelpro.local` — LAN setup, MQTT→HA sync, Matter Bridge); diff-only off 4.0.12 / 4.4.0 / 4.5.1 | New — the stable successor to the reboot-loopy 4.5.x; verify on one panel before deploying widely. |
 
 > [!NOTE]
 > These are **Gen1** (86P/120P) quirks. The NSPanel Pro **Gen2** (RK3326-**S**, dual relays, EFR32**MG24**) is a different target with its own firmware line — do not assume Gen1 firmware notes carry over.
@@ -104,9 +104,7 @@ adb shell chmod 06755 /system/xbin/su
 From **v4.0.0** (phased roll-out from 19 September 2025) the stock eWeLink firmware **officially bundles [F-Droid](https://f-droid.org/)** and promotes installing FOSS apps on the panel — Home Assistant's own Companion app is the headline example. Update via the panel (top drop-down → *Settings → About → Software update*) or the eWeLink app, then confirm both **APP Version** and **OS Version** read ≥ 4.0.0. Sonoff states F-Droid apps "will not affect NSPanel Pro's original features" (existing setups/automations stay intact) and that an app's F-Droid build "may differ slightly from the latest release". The update also markedly speeds up screen-swipe/UI responsiveness. Source: [Sonoff — NSPanel Pro V4.0.0 update](https://sonoff.tech/en-us/blogs/news/nspanel-pro-v4-0-0-update-now-supports-f-droid-and-home-assistant-app-install).
 
 > [!NOTE]
-> **Why this matters for ha-paneld.** F-Droid is a sanctioned, **on-device** install channel, so an APK can reach a panel with **no PC/adb** and F-Droid handles update notifications. ha-paneld could be distributed either through the **f-droid.org main repo** or — more practically — our **own F-Droid repo** (signed with our release key, so it updates the GitHub-release builds in place). **But F-Droid solves distribution, not privilege:** the headline features (overlay navbar, screen on/off, relays, button LEDs, Zigbee control) still need `su`, so the adb/root setup above stays a prerequisite for full function — only the non-privileged surface (MQTT discovery, sensors, brightness, HTTP UI) works on a stock unrooted panel.
->
-> **To confirm on a 4.0.0 unit:** whether the bundled F-Droid client allows **adding a custom repo URL** (needed for our own repo) or is locked to the official repo; whether 4.0.0 also relaxes arbitrary-APK "unknown sources" sideloading; and which models/SoC the 4.x line covers (86P / 120P — not stated in the post).
+> **Why this matters for ha-paneld.** F-Droid is a sanctioned, **on-device** install channel, so an APK can reach a panel with **no PC/adb** and F-Droid handles update notifications. **But F-Droid solves distribution, not privilege:** the headline features (overlay navbar, screen on/off, relays, button LEDs, Zigbee control) still need `su`, so the adb/root setup above stays a prerequisite for full function — only the non-privileged surface (MQTT discovery, sensors, brightness, HTTP UI) works on a stock unrooted panel.
 
 ## WebView — update this first
 
@@ -148,7 +146,7 @@ ha-paneld manages it directly (v0.6.1+): `switch.<panel>_zigbee_router` turns th
 > [!NOTE]
 > **Zigbee-only — no Thread.** The EFR32 (EZSP v8, stack 6.10.1) is a Zigbee radio; RK3326 (2018) has no 802.15.4 Thread radio, so despite 4.x firmware's "Matter Bridge" marketing there is **no native Thread border router** on these panels.
 >
-> **4.x reworked the Zigbee stack** — Sonoff shipped a forked Zigbee2MQTT (herdsman 23.53 vs upstream ~25.x), decommissioned the old NCP client, changed the on-device MQTT password, and altered the boot sequence. ha-paneld's `zigbee_router` was built against ≤3.x and **may need adapting on 4.x** — and Sonoff disabled coordinator↔router switching on stock 4.x firmware. Tracked for a future release. (Sources: seaky tools #244/#241/#255, roottool#3.)
+> **4.x reworked the Zigbee stack** — Sonoff shipped a forked Zigbee2MQTT (herdsman 23.53 vs upstream ~25.x), decommissioned the old NCP client, changed the on-device MQTT password, and altered the boot sequence. ha-paneld's `zigbee_router` was built against ≤3.x and **may need adapting on 4.x** — and Sonoff disabled coordinator↔router switching on stock 4.x firmware. (Sources: seaky tools #244/#241/#255, roottool#3.)
 
 ### Requirements — firmware ≥ v2.2.0
 
@@ -164,7 +162,7 @@ ha-paneld **drives** the gateway; it doesn't ship or install it (it's eWeLink's 
 [NSPanelTools (NSPPT)](https://github.com/seaky/nspanel_pro_tools_apk) side-loads the official Sonoff gateway package onto firmware that didn't ship it; many users run it today. ha-paneld coexists and can take over the gateway:
 
 - **Side-by-side is fine.** ha-paneld's router control is idempotent — it **defers** to whatever already runs the gateway (won't double-start or fight NSPPT); auto-brightness is opt-in/off. Nothing conflicts by default.
-- **Handing the gateway to ha-paneld:** the host stack lives in `/vendor` and **survives uninstalling the NSPPT app** (verified 2026-06-08 — a persistent hook even keeps boot-starting it). Remove the NSPPT APK and ha-paneld keeps driving the gateway; if the boot hook is also stripped, ha-paneld's boot-restore starts it when the switch was left ON.
+- **Handing the gateway to ha-paneld:** the host stack lives in `/vendor` and **survives uninstalling the NSPPT app** (verified — a persistent hook even keeps boot-starting it). Remove the NSPPT APK and ha-paneld keeps driving the gateway; if the boot hook is also stripped, ha-paneld's boot-restore starts it when the switch was left ON.
 
 > [!NOTE]
 > Both tools touch the screen/sensors. Coexistence is benign today, but enabling overlapping features (e.g. wake-on-wave alongside an NSPPT equivalent) can cause redundant actions — remove NSPPT once ha-paneld covers your needs.

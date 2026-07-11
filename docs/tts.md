@@ -8,7 +8,7 @@ Server-side TTS gives you modern voices — far better than the on-device TTS on
 > Home Assistant has **no MQTT `media_player` platform**, so a panel isn't (yet) a `media_player` you can aim `tts.speak` at directly — that's on the [roadmap](../README.md#status--roadmap). This recipe is the interim path.
 
 > [!NOTE]
-> Verified end-to-end (Piper → panel) on 2026-06-05. `/play` accepts the bare URL as the request body (or `{"url":"…"}`), **not** a form field.
+> `/play` accepts the bare URL as the request body (or `{"url":"…"}`), **not** a form field.
 
 ## Setup
 

@@ -31,7 +31,7 @@ curl -sS -I -L "<url>"                       # 206 + Content-Range total = exist
 curl -sS -r 0-3 -L "<url>" | od -An -tx1     # 50 4b 03 04 = real ZIP
 ```
 
-## Update-path rule — VERIFIED on hardware (2026-06-17)
+## Update-path rule — VERIFIED on hardware
 
 From ~3.0.0 (86P) / ~3.5.0 (120P) onward, the on-device updater is incremental-only for most builds. The exception is **4.0.12**: it is distributed **full-ROM-only** (no inbound diff exists on either channel) yet *is* accepted on-device as a checkpoint. So the path to the current ROM is still **2 steps**:
 
@@ -39,10 +39,10 @@ From ~3.0.0 (86P) / ~3.5.0 (120P) onward, the on-device updater is incremental-o
 <your 3.x / 4.0.x build> → 4.0.12 (FULL ROM) → 4.6.0 (diff)
 ```
 
-Verified on a 120P (2026-06-17): **3.7.1 → 4.0.12 full ROM (applied directly) → 4.4.0 diff**. 4.4.0 was the current target at the time; the same two-step path now targets **4.6.0**. The intermediate 4.0.10 diff is **not** needed. Current ROM on both models is **4.6.0** (June 2026 official *Stable*); **4.5.2** was an APK-only layer on the now-superseded 4.5.1 (still no separate full ROM past 4.0.12).
+Verified on a 120P: **3.7.1 → 4.0.12 full ROM (applied directly) → 4.4.0 diff**. 4.4.0 was the current target at the time; the same two-step path now targets **4.6.0**. The intermediate 4.0.10 diff is **not** needed. Current ROM on both models is **4.6.0** (June 2026 official *Stable*); **4.5.2** was an APK-only layer on the now-superseded 4.5.1 (still no separate full ROM past 4.0.12).
 
 > [!WARNING]
-> **4.5.1 / 4.5.2 had widespread restart-loop reports** (~10–60 min intervals, both 86P and 120P); **4.6.0** (June 2026) is the current official *Stable* that supersedes them. It's recent and not yet fleet-verified here — try it on one panel before a fleet roll; **4.0.12** remains the conservative full-ROM checkpoint to pin. See the firmware index Discussion for the current consensus.
+> **4.5.1 / 4.5.2 had widespread restart-loop reports** (~10–60 min intervals, both 86P and 120P); **4.6.0** (June 2026) is the current official *Stable* that supersedes them. It's recent — verify it on one panel before deploying widely; **4.0.12** remains the conservative full-ROM checkpoint to pin. See the firmware index Discussion for the current consensus.
 
 ## Flashing a panel (verified procedure)
 
@@ -82,5 +82,4 @@ In every block, `DEV=<PANEL_IP>:5555` and the panel is rooted (`su` works).
 
 ## Provenance
 
-- CDN scheme + indices verified 2026-06-17 via range-GET against `global-otadl2bsy.coolkit.cc`; full chain flash-verified on a 120P the same day.
-- Local image inventory is kept in a private archive (gitignored; not shipped here).
+- CDN scheme + indices verified via range-GET against `global-otadl2bsy.coolkit.cc`; full chain flash-verified on a 120P.

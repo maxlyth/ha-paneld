@@ -1,6 +1,6 @@
 # Tuya TPA10 (Rockchip rk3566)
 
-A roomy **10" 1920×1200** rk3566 panel with a single front RGB LED, a monochrome button backlight, a rich sensor stack (ToF proximity, temperature + humidity, ambient light) and five physical buttons — no Zigbee, NFC or IR. Reverse-engineered on a live unit (Android 11, rooted, `su` present) on 2026-06-05.
+A roomy **10" 1920×1200** rk3566 panel with a single front RGB LED, a monochrome button backlight, a rich sensor stack (ToF proximity, temperature + humidity, ambient light) and five physical buttons — no Zigbee, NFC or IR. Reverse-engineered on a live unit (Android 11, rooted, `su` present).
 
 > [!TIP]
 > Most-needed facts: adb is **password-protected** — use the USB diagnostics-app backdoor; LED and the root-only sensors need the **`hapaneld-helper` root helper daemon**; the front LED's `custom_animation` write can **reboot the panel** (see caution below). Update the **WebView first** — see [WebView — update this first](#webview--update-this-first).
@@ -32,7 +32,7 @@ adb shell su 0 id    # uid=0 → root confirmed
 
 The TPA10's adb-root is more dependable over the USB port than over the network.
 
-**3. Make adb persist (root, password-free — the reliable route).** With the diagnostics app foreground you have a rooted adb session (`su` is present; `adb root` also works — it's a `userdebug` build). Use it to persist adb so you never need the test app or a password again. This survives the diagnostics app closing **and** a full reboot — verified on a live unit (2026-06-19: network adb returned on its own at `:5555` after a reboot, test app closed, no on-screen "Allow"). Push + run as root:
+**3. Make adb persist (root, password-free — the reliable route).** With the diagnostics app foreground you have a rooted adb session (`su` is present; `adb root` also works — it's a `userdebug` build). Use it to persist adb so you never need the test app or a password again. This survives the diagnostics app closing **and** a full reboot — verified on a live unit. Push + run as root:
 
 ```bash
 # persist-adb.sh — run via the diagnostics-app backdoor:
@@ -58,7 +58,7 @@ echo "adb persisted: adb_enabled=$(settings get global adb_enabled) tcp=$(getpro
 The panel must be on Wi-Fi for the network route; thereafter `adb connect <panel-ip>:5555` works from any pre-authorised machine, across reboots, with the vendor apps closed. A `/data` wipe / factory reset clears `adb_keys` + `adb_enabled`, so re-run this after one.
 
 > [!WARNING]
-> **The Developer-options "Enable ADB" *password* is not a usable path — do not try to compute it.** Contrary to the [#123](https://github.com/seaky/nspanel_pro_tools_apk/issues/123) community recipe, it does not reproduce. Decompiling `checkDevPassword` in `com.smartos.xinch.setting` confirms the *shape*: `base64(takeLast(ro.tuya.uuid,3) + takeLast(deviceId,3))` then `takeLast(6)`, case-insensitive (or `takeLast(ro.tuya.uuid,6)` when `deviceId` is empty). But the `deviceId` field it uses could not be matched to any readable identifier — `ro.serialno`, `android_id` and `ro.tuya.key` were all rejected on a live unit (2026-06-19). The app's logger is **not** logcat, so the expected value can't be read on-device either. The #123 worked example also has a typo (`11a`+`xia` written as `11xia`; it must be `11axia`). Use the root method above — it makes the password irrelevant.
+> **The Developer-options "Enable ADB" *password* is not a usable path — do not try to compute it.** Contrary to the [#123](https://github.com/seaky/nspanel_pro_tools_apk/issues/123) community recipe, it does not reproduce. Decompiling `checkDevPassword` in `com.smartos.xinch.setting` confirms the *shape*: `base64(takeLast(ro.tuya.uuid,3) + takeLast(deviceId,3))` then `takeLast(6)`, case-insensitive (or `takeLast(ro.tuya.uuid,6)` when `deviceId` is empty). But the `deviceId` field it uses could not be matched to any readable identifier — `ro.serialno`, `android_id` and `ro.tuya.key` were all rejected on a live unit. The app's logger is **not** logcat, so the expected value can't be read on-device either. The #123 worked example also has a typo (`11a`+`xia` written as `11xia`; it must be `11axia`). Use the root method above — it makes the password irrelevant.
 
 > [!CAUTION]
 > Disable the vendor `com.smartos.xinch.*` packages only as the **very last step**, after confirming adb is solid *and* you have a replacement for the hardware buttons. Disabling the hardware/setting apps before adb is reliable can lock you out. ha-paneld's remote nav actions (Back/Recents) and the button-backlight/LED entities replace the vendor app's functions.
@@ -75,7 +75,7 @@ It is packaged as `com.android.webview`, so it must **replace** the stock system
 - A plain `adb install -r` is rejected: `INSTALL_FAILED_UPDATE_INCOMPATIBLE: signatures do not match` (Cromite is `CN=CromiteOrg`, not the Tuya platform key).
 - The ROM's provider allowlist accepts **only** `com.android.webview`, so the `com.google.android.webview` ("…Google") Cromite variant installs but can't be selected.
 
-**Working method (root; verified 2026-06-19) — replace the file + clear the signature lock:**
+**Working method (root; verified) — replace the file + clear the signature lock:**
 
 ```bash
 adb root && adb disable-verity && adb reboot     # one-time: enable the rw overlay
@@ -100,7 +100,7 @@ adb reboot                                        # PM registers Cromite fresh �
 > - **User-Agent** — the engine HA Companion actually uses: open any "what's my user-agent" page on the panel; the UA contains `Chrome/147.0.7727.56`.
 > - **From the APK** — `unzip -p webview.apk lib/armeabi-v7a/libwebviewchromium.so | strings | grep -m1 -oE '[0-9]+\.0\.7[0-9]{3}\.[0-9]+'` → `147.0.7727.56`. (The on-device libs aren't extracted — `extractNativeLibs=false` — so read it from the APK, not from disk.)
 
-(This supersedes the earlier "clean adb sideload" note, which does **not** work on this signature-locked panel.)
+A clean adb sideload does **not** work on this signature-locked panel.
 
 ## LED
 
@@ -152,7 +152,7 @@ The TPA10 ToF means proximity is genuinely distance-based, but the Android HAL q
 
 ## Buttons
 
-The TPA10 has **three classes** of physical button, confirmed on-device with `getevent` (2026-06):
+The TPA10 has **three classes** of physical button, confirmed on-device with `getevent`:
 
 - **The four side buttons** — `adc-keys`, standard KeyEvents mapped to `F1`–`F4`, captured by ha-paneld's accessibility key-filter (no special path).
 - **The 5th (orange) button** — an `EV_SW` *switch*, not a key; instrumented through the root helper daemon's evdev reader and emitted as an HA event.
@@ -163,7 +163,7 @@ The TPA10 has **three classes** of physical button, confirmed on-device with `ge
 
 **1. The four side buttons — `adc-keys`, standard KeyEvents.** On the rk3566 **SARADC** (`fe720000.saradc`), device `adc-keys1` (`/dev/input/event7`), scancodes `59`–`62`. Stock `Generic.kl` maps these to **`F1`–`F4`** → Android `KEYCODE_F1`–`F4`, which ha-paneld captures via its accessibility key-filter (no special path). They can be remapped by editing `/system/usr/keylayout/Generic.kl` (e.g. to `BRIGHTNESS_*` / `VOLUME_*`) on an su-capable unit.
 
-**2. The 5th (orange) button — a *switch*, not a key.** On `gpio-keys` (`/dev/input/event8`) it reports **`EV_SW` `SW_MUTE_DEVICE`** (switch code `14`), a *latching* event — **not** an `EV_KEY`. This is why no keylayout entry exists for it and Android/a11y never surface it (so the stock firmware leaves it dead). ha-paneld instruments it through the root helper daemon's evdev reader (`WATCH /dev/input/event8`, `sw=true`) and emits an HA event (`KEYCODE_MUTE`) on each toggle — validated end-to-end 2026-06. This is **stock** behaviour (undocumented elsewhere as of this writing).
+**2. The 5th (orange) button — a *switch*, not a key.** On `gpio-keys` (`/dev/input/event8`) it reports **`EV_SW` `SW_MUTE_DEVICE`** (switch code `14`), a *latching* event — **not** an `EV_KEY`. This is why no keylayout entry exists for it and Android/a11y never surface it (so the stock firmware leaves it dead). ha-paneld instruments it through the root helper daemon's evdev reader (`WATCH /dev/input/event8`, `sw=true`) and emits an HA event (`KEYCODE_MUTE`) on each toggle — validated end-to-end. This is **stock** behaviour (undocumented elsewhere as of this writing).
 
 **3. The pin-hole button (recessed, beside the USB-C port) — recovery / reflash, not input.** Not wired to the Linux input subsystem (absent from `getevent`, `gpio-keys`, and `dmesg`), so it is **not HA-instrumentable**. By placement and platform (Rockchip rk3566) it serves the usual recessed-pin roles: a **factory-reset / default** trigger (paperclip or SIM tool, hold ~5–10 s) and the Rockchip **MASKROM/loader** pin — grounding it forces the SoC into USB flashing mode for low-level recovery with `rkdeveloptool` (see [Firmware backup & restore](../firmware-backup-restore.md)). Use it for un-bricking / reflashing, not for automation.
 

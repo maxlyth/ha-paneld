@@ -67,20 +67,10 @@ There was no `Tpa10` file. A contributor with a new "XXX panel" had no single si
 </details>
 
 <details>
-<summary>Relationship to a capability registry (complementary, not required for 0.7.0)</summary>
+<summary>Relationship to a capability registry (complementary)</summary>
 
 - **`DeviceProfile`** = *what a device has + where + quirks* (this document; the per-device axis).
-- A **capability registry** = *how to drive a feature + publish/diag it* (the per-feature axis) — would also fix the current drift where detection, MQTT discovery gating, and the `/diag` capability matrix are three separate implementations. Optional follow-on; out of scope for the 0.7.0 silo work.
-
-</details>
-
-<details>
-<summary>Migration (staged, one concern per commit; no behaviour change)</summary>
-
-1. Define `DeviceProfile` + enums + `Generic` + `DeviceProfile.detect()`.
-2. Add one real profile (e.g. `NSPanelPro`) as the reference; wire `Su`/`ScreenController`/`ZigbeeController` to read it. Verify on-device — identical behaviour.
-3. Migrate the remaining device-specific modules (LED, relay/button-LED) one per commit.
-4. Document the "Adding a panel" onboarding path; cross-link the per-panel hardware docs.
+- A **capability registry** = *how to drive a feature + publish/diag it* (the per-feature axis) — would also fix the current drift where detection, MQTT discovery gating, and the `/diag` capability matrix are three separate implementations. An optional follow-on.
 
 </details>
 
