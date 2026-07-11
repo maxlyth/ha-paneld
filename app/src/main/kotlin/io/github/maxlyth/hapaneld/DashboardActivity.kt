@@ -568,7 +568,7 @@ class DashboardActivity : AppCompatActivity() {
     // the lifecycle form of dumpsys `topResumedActivity` and flips exactly on that transition.
     // onResume/onPause are the API<29 baseline (older panels lack the callback; their launchers also
     // predate translucent Overview, so resume/pause suffices there).
-    override fun onResume() { super.onResume(); BuiltinDashboard.foreground = true; applyFullscreen(); applyOverscroll() }
+    override fun onResume() { super.onResume(); BuiltinDashboard.foreground = true; applyFullscreen(); applyOverscroll(); applyZoom() }
 
     /** Android's overscroll stretch (12+) / edge-glow (older) when a drag runs past the top or bottom
      *  of the page. Off by default on a wall panel; the hidden `dashboard_overscroll` API setting turns
@@ -576,6 +576,12 @@ class DashboardActivity : AppCompatActivity() {
     private fun applyOverscroll() {
         web?.overScrollMode =
             if (Config(this).dashboardOverscroll) View.OVER_SCROLL_ALWAYS else View.OVER_SCROLL_NEVER
+    }
+
+    /** Page zoom (%). Re-read + applied on resume so a live `dashboard_zoom` change lands; the POST
+     *  path also reloads the page, since a fresh load is where the initial scale reliably takes effect. */
+    private fun applyZoom() {
+        web?.setInitialScale((resources.displayMetrics.density * Config(this).dashboardZoom).toInt())
     }
 
     /**
@@ -714,6 +720,9 @@ class DashboardActivity : AppCompatActivity() {
         setBackgroundColor(BG_DARK) // no white flash before first paint
         // Overscroll stretch/glow off by default (see applyOverscroll) — set before first layout.
         overScrollMode = if (config.dashboardOverscroll) View.OVER_SCROLL_ALWAYS else View.OVER_SCROLL_NEVER
+        // Page zoom to match the HA Companion's default sizing (it scales by device density); pinch
+        // stays off (no builtInZoomControls) — the zoom is a deliberate per-panel value (see applyZoom).
+        setInitialScale((resources.displayMetrics.density * config.dashboardZoom).toInt())
         applyForceDark(this)
         // Seed the dashboard's DEFAULT colour scheme through HA's own per-device theme store, before
         // any page script runs — only when the panel has no system dark mode (the Display-card toggle
@@ -722,6 +731,17 @@ class DashboardActivity : AppCompatActivity() {
             if (androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.DOCUMENT_START_SCRIPT)) {
                 androidx.webkit.WebViewCompat.addDocumentStartJavaScript(
                     this, ExternalAuthProtocol.selectedThemeJs(config.darkMode, onlyIfAbsent = true), setOf("*"),
+                )
+            }
+        }
+        // Force panel-appropriate HA frontend prefs on this WebView's FIRST run: hide the sidebar,
+        // never suspend the websocket when idle, no haptics. HA's defaults are wrong for a wall panel
+        // and don't carry over from the Companion, and most users don't know these settings exist —
+        // so seed them once (self-gated by a localStorage sentinel), then leave them user-changeable.
+        runCatching {
+            if (androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.DOCUMENT_START_SCRIPT)) {
+                androidx.webkit.WebViewCompat.addDocumentStartJavaScript(
+                    this, ExternalAuthProtocol.panelDefaultsJs(), setOf("*"),
                 )
             }
         }
@@ -763,7 +783,14 @@ class DashboardActivity : AppCompatActivity() {
 
             // Stop the pull-to-refresh spinner once the (main-frame) load settles, success or error, so
             // it never spins forever on a hung reload.
-            override fun onPageFinished(view: WebView, url: String) { swipe?.isRefreshing = false }
+            override fun onPageFinished(view: WebView, url: String) {
+                swipe?.isRefreshing = false
+                // Re-assert the page zoom AFTER load — HA's frontend ships its own <meta viewport
+                // initial-scale=1>, which overrides a scale set before load, so a pre-load setInitialScale
+                // silently reverts to default (dashboard looks compact). HACA does exactly this in its
+                // own onPageFinished. Keeps our sizing matching the Companion app's.
+                applyZoom()
+            }
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
                 if (!request.isForMainFrame) return
                 swipe?.isRefreshing = false
@@ -874,6 +901,19 @@ class DashboardActivity : AppCompatActivity() {
 
         @JavascriptInterface
         fun externalBus(message: String) {
+            // Tap on the sidebar's "App Configuration" entry → open our :8888 Configure UI on the panel.
+            if (ExternalAuthProtocol.isConfigScreenShow(message)) {
+                runOnUiThread {
+                    runCatching {
+                        // No NEW_TASK: launched from this Activity context, ConfigActivity stacks on the
+                        // dashboard's task, so its back/close returns straight to the live dashboard.
+                        startActivity(
+                            Intent(this@DashboardActivity, ConfigActivity::class.java)
+                                .putExtra("path", "/configure"),
+                        )
+                    }
+                }
+            }
             // Side-channel: a `connection-status` event drives the handshake watchdog (on the main thread).
             ExternalAuthProtocol.connectionEvent(message)?.let { ev -> runOnUiThread { onConnectionStatus(ev) } }
             // Command replies (navigate etc.) confirm execution — log-only, but gold when debugging.
@@ -1043,7 +1083,9 @@ object ExternalAuthProtocol {
         val msg = runCatching { JSONObject(message) }.getOrNull() ?: return null
         if (msg.optString("type") != "config/get") return null
         val result = JSONObject()
-            .put("hasSettingsScreen", false)
+            // true → HA renders an "App Configuration" entry in the sidebar; a tap sends the incoming
+            // `config_screen/show` bus message, which we route to ConfigActivity (the :8888 Configure UI).
+            .put("hasSettingsScreen", true)
             .put("canWriteTag", false)
             .put("hasExoPlayer", false)
             .put("canCommissionMatter", false)
@@ -1062,6 +1104,26 @@ object ExternalAuthProtocol {
             .put("result", result)
         return "externalBus($reply);"
     }
+
+    /** True if [message] is the frontend's `config_screen/show` command — sent when the user taps the
+     *  "App Configuration" sidebar entry (which we enable via `hasSettingsScreen`). The app opens its
+     *  own config UI in response. */
+    fun isConfigScreenShow(message: String): Boolean =
+        runCatching { JSONObject(message).optString("type") == "config_screen/show" }.getOrDefault(false)
+
+    /** Document-start script that forces panel-appropriate HA frontend prefs on this WebView's FIRST
+     *  run, then never again: hide the sidebar, keep the websocket alive when idle, no haptics. Values
+     *  are `JSON.stringify`'d to match HA's `ha-pref-storage` localStorage format. Self-gated by a
+     *  sentinel key so it applies once, survives reloads/restarts, never clobbers a later user change,
+     *  and re-applies after a renderer-storage wipe (a fresh first run). */
+    fun panelDefaultsJs(): String =
+        """(function(){try{
+            if(localStorage.getItem('__hapaneld_panel_defaults'))return;
+            localStorage.setItem('dockedSidebar',JSON.stringify('always_hidden'));
+            localStorage.setItem('suspendWhenHidden',JSON.stringify(false));
+            localStorage.setItem('vibrate',JSON.stringify(false));
+            localStorage.setItem('__hapaneld_panel_defaults','1');
+        }catch(e){}})();"""
 
     /** If [message] is a `connection-status` external-bus event, its event name ("connected",
      *  "disconnected", "auth-invalid"); null for any other message. The frontend posts this so the app

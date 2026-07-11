@@ -13,6 +13,9 @@ content appear. Earlier releases predate this convention and keep their flat lis
 ### Added
 
 - **Opt-in System WebView auto-update** — a new "WebView auto-update" switch (off by default; shown only where ha-paneld pins a recommended WebView for the panel) keeps the system WebView on that pinned build, installing a newer one over root on the update check. Note that the first swap between two *different* WebView vendors on a signature-locked panel is still a one-time manual step — see the panel's hardware guide.
+- **Dashboard sizing matches the Companion app** — the built-in renderer now scales the page the same way the Home Assistant Companion app does, so a panel switched over from the Companion keeps its dashboard layout instead of rendering more compact. A new "Dashboard zoom" setting tunes it per panel (100% = Companion default); pinch-to-zoom stays off, since a fixed panel wants a deliberate zoom, not an accidental one. Switching a panel to the built-in renderer also carries over the zoom you had chosen in the Companion app's "Page zoom" setting.
+- **"App Configuration" in the dashboard sidebar** — the built-in renderer now adds the same sidebar entry the Companion app does; tapping it opens ha-paneld's own configuration page on the panel.
+- **Panel-appropriate defaults on first run** — a panel running the built-in renderer now starts with the sidebar hidden and background connections kept alive (so it stays responsive when idle), values most people never think to set. These are applied once and remain changeable afterwards.
 
 ### Changed
 

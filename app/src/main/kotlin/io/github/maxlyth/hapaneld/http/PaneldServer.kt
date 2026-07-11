@@ -1889,6 +1889,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
         var relaunchForDash = false
         var relaunchForFullscreen = false
         var relaunchForOverscroll = false
+        var reloadForZoom = false
         config.applyBatch {
             panelId?.let { config.setPanelId(it) }
             p["friendly_name"]?.let { config.setFriendlyName(it.trim()) }
@@ -1925,6 +1926,12 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             val postedOverscroll = p["dashboard_overscroll"]?.let { it.trim().equals("true", ignoreCase = true) || it.trim() == "1" }
             postedOverscroll?.let { config.setDashboardOverscroll(it) }
             relaunchForOverscroll = postedOverscroll != null && postedOverscroll != prevOverscroll && !dashChanged
+            // Page zoom (%). A fresh load is where setInitialScale reliably takes effect, so on a change
+            // we reload the renderer rather than just re-foregrounding it. Detected from the POSTED value.
+            val prevZoom = config.dashboardZoom
+            val postedZoom = p["dashboard_zoom"]?.trim()?.toIntOrNull()?.coerceIn(50, 300)
+            postedZoom?.let { config.setDashboardZoom(it) }
+            reloadForZoom = postedZoom != null && postedZoom != prevZoom && !dashChanged
             // Dark mode (Display card; only meaningful on panels WITHOUT a system dark-mode setting,
             // Android 9-). Detected from the POSTED value (read-back inside the batch is pre-commit —
             // this exact bug made the toggle a silent no-op); executed after the batch commits.
@@ -2026,13 +2033,21 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
                             config.setHaClientId(io.github.maxlyth.hapaneld.control.CompanionDb.COMPANION_CLIENT_ID)
                             android.util.Log.i(TAG, "borrowed the Companion sign-in for the built-in renderer (${l.url})")
                         }
+                        // Also carry over the zoom the user picked in the Companion's "Page zoom" setting
+                        // (dashboard_zoom is its direct analog), so a switched-over panel keeps its sizing.
+                        io.github.maxlyth.hapaneld.control.CompanionDb.readPageZoom(appContext, io.github.maxlyth.hapaneld.control.Su)?.let { z ->
+                            config.setDashboardZoom(z.coerceIn(50, 300))
+                            android.util.Log.i(TAG, "carried over the Companion page zoom ($z%) to dashboard_zoom")
+                        }
                     }
                     system.ensureDashboardHome(config.dashboardPackage, config.haUrl.isNotBlank())
                     system.launchHome(config.dashboardPackage)
                 }
             }
         }
-        if (relaunchForHa && config.dashboardPackage == "builtin") {
+        // A zoom change needs a fresh page load (where setInitialScale takes effect) — same reload as
+        // an HA-connection change, so fold them to avoid reloading twice when both changed.
+        if ((relaunchForHa || reloadForZoom) && config.dashboardPackage == "builtin") {
             scope.launch { runCatching { system.reloadDashboard(SystemController.BUILTIN_DASHBOARD) } }
         }
         if ((relaunchForFullscreen || relaunchForOverscroll) && config.dashboardPackage == "builtin") {

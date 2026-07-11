@@ -230,6 +230,13 @@ object SettingsRegistry {
                 "the bounce looks out of place). API-only — set true to restore the native effect.",
         ),
         SettingSpec(
+            key = "dashboard_zoom", type = SettingType.INT, group = "Dashboard",
+            label = "Dashboard zoom (%)", default = "100", min = 50.0, max = 300.0, step = 10.0,
+            help = "Built-in renderer: dashboard page zoom, as a percentage. 100 matches the Home " +
+                "Assistant Companion app's default sizing, so a panel switched over from the Companion " +
+                "keeps the same layout. Raise it to enlarge cards and text on a distant panel.",
+        ),
+        SettingSpec(
             key = "dashboard_idle_return_min", type = SettingType.INT, group = "Dashboard",
             label = "Idle return to home (min)", default = "0", min = 0.0, max = 1440.0,
             help = "Built-in renderer: minutes with no touch before the dashboard snaps back to the Home dashboard view (instant in-app navigation, not a reload). 0 = off; needs Home dashboard set.",
