@@ -8,6 +8,16 @@ From **v0.8.0**, entries are grouped under **Added** (new features/entities), **
 changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
 content appear. Earlier releases predate this convention and keep their flat lists.
 
+## v0.9.1-rc1 - 2026-07-11
+
+### Changed
+
+- **Smoother LED effect animations** — the pulse (breathing) effect now runs at a higher frame rate along a smooth curve, so it glides rather than steps, and no longer flashes white at the dim end of each breath.
+
+### Fixed
+
+- **LED effects now stop reliably** — an effect (strobe, blink or pulse) stops the moment the light is turned off or the effect is changed. Previously an effect could keep running after the light was turned off, and occasionally get stuck flashing until the app was restarted. (#16)
+
 ## v0.9.0 - 2026-07-10
 
 **Headline: ha-paneld can now render the Home Assistant dashboard itself.** 0.9 changes the project's stance: previously a headless agent that always deferred dashboard rendering to the HA Companion app, ha-paneld now offers its own **built-in renderer** (experimental, off by default) so a panel can run as a single-app appliance. The Companion app remains today's default and a permanently supported path. Everything below is cumulative since v0.8.7.
