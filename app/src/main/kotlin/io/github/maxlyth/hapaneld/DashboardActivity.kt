@@ -776,7 +776,14 @@ class DashboardActivity : AppCompatActivity() {
 
             // Stop the pull-to-refresh spinner once the (main-frame) load settles, success or error, so
             // it never spins forever on a hung reload.
-            override fun onPageFinished(view: WebView, url: String) { swipe?.isRefreshing = false }
+            override fun onPageFinished(view: WebView, url: String) {
+                swipe?.isRefreshing = false
+                // Re-assert the page zoom AFTER load — HA's frontend ships its own <meta viewport
+                // initial-scale=1>, which overrides a scale set before load, so a pre-load setInitialScale
+                // silently reverts to default (dashboard looks compact). HACA does exactly this in its
+                // own onPageFinished. Keeps our sizing matching the Companion app's.
+                applyZoom()
+            }
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
                 if (!request.isForMainFrame) return
                 swipe?.isRefreshing = false
@@ -891,9 +898,10 @@ class DashboardActivity : AppCompatActivity() {
             if (ExternalAuthProtocol.isConfigScreenShow(message)) {
                 runOnUiThread {
                     runCatching {
+                        // No NEW_TASK: launched from this Activity context, ConfigActivity stacks on the
+                        // dashboard's task, so its back/close returns straight to the live dashboard.
                         startActivity(
                             Intent(this@DashboardActivity, ConfigActivity::class.java)
-                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                                 .putExtra("path", "/configure"),
                         )
                     }
