@@ -366,6 +366,11 @@ class Config(context: Context) {
     fun setDashboardFullscreen(on: Boolean) { edit { putBoolean("dashboard_fullscreen", on) } }
     fun setDashboardIdleReturnMin(min: Int) { edit { putInt("dashboard_idle_return_min", min) } }
 
+    /** Built-in renderer: allow Android's overscroll stretch/glow past the top or bottom of the page.
+     *  Off by default (a wall panel rarely scrolls; the bounce looks out of place). API-only setting. */
+    val dashboardOverscroll: Boolean get() = prefs.getBoolean("dashboard_overscroll", false)
+    fun setDashboardOverscroll(on: Boolean) { edit { putBoolean("dashboard_overscroll", on) } }
+
     // The screen-off timeout (ms) seen before we first raised it, so disabling preventIdleDim can restore
     // the firmware default. -1 = not yet captured.
     var savedScreenOffTimeout: Int

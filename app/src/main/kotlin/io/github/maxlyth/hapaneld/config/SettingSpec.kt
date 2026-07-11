@@ -141,6 +141,9 @@ data class SettingSpec(
     // like navbar that carry no `ha` block here). A per-panel expose pip can still override it either way.
     val haExposedByDefault: Boolean = false,
     val transient: Boolean = false,          // accepted + routed to a controller but never persisted (e.g. ambient_lux)
+    // Omit from the generated Configure form (an API-only setting): still readable via GET /config,
+    // settable via POST /config, and carried in config bundles — just never rendered as a form field.
+    val hidden: Boolean = false,
     val availableWhen: (Capabilities) -> Boolean = { true },
     val validate: (String) -> Validation = { Validation.Ok(it) },
 ) {

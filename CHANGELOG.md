@@ -10,6 +10,10 @@ content appear. Earlier releases predate this convention and keep their flat lis
 
 ## v0.9.1-rc1 - 2026-07-11
 
+### Changed
+
+- **The built-in renderer no longer bounces on overscroll** — dragging past the top or bottom of the dashboard used to show Android's elastic stretch (or edge glow on older panels), which looks out of place on a wall panel that rarely scrolls, so it is now off by default. A `dashboard_overscroll` setting restores the native effect for anyone who wants it (settable over the API).
+
 ### Fixed
 
 - **Pull-to-refresh no longer fires from a drag inside the dashboard** — the built-in renderer's refresh gesture now arms only for a drag that starts at the very top edge of the screen and pulls down into it. Previously any downward drag on the dashboard content could trigger it, because the Home Assistant frontend scrolls inside the page and the stock gesture check therefore always believed the view was at the top. Scrolling views and dragging card controls now never start a refresh, regardless of scroll position. (#29)

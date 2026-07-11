@@ -223,6 +223,13 @@ object SettingsRegistry {
             help = "Built-in renderer: hide the Android status and navigation bars for an edge-to-edge dashboard (swipe from a screen edge to reveal them briefly). Turn off to keep the system bars visible.",
         ),
         SettingSpec(
+            key = "dashboard_overscroll", type = SettingType.BOOL, group = "Dashboard",
+            label = "Dashboard overscroll effect", default = "false", hidden = true,
+            help = "Built-in renderer: allow Android's overscroll stretch/glow when a drag runs past " +
+                "the top or bottom of the dashboard. Off by default (a wall panel rarely scrolls, and " +
+                "the bounce looks out of place). API-only — set true to restore the native effect.",
+        ),
+        SettingSpec(
             key = "dashboard_idle_return_min", type = SettingType.INT, group = "Dashboard",
             label = "Idle return to home (min)", default = "0", min = 0.0, max = 1440.0,
             help = "Built-in renderer: minutes with no touch before the dashboard snaps back to the Home dashboard view (instant in-app navigation, not a reload). 0 = off; needs Home dashboard set.",

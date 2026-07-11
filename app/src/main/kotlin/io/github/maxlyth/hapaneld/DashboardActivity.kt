@@ -567,7 +567,15 @@ class DashboardActivity : AppCompatActivity() {
     // the lifecycle form of dumpsys `topResumedActivity` and flips exactly on that transition.
     // onResume/onPause are the API<29 baseline (older panels lack the callback; their launchers also
     // predate translucent Overview, so resume/pause suffices there).
-    override fun onResume() { super.onResume(); BuiltinDashboard.foreground = true; applyFullscreen() }
+    override fun onResume() { super.onResume(); BuiltinDashboard.foreground = true; applyFullscreen(); applyOverscroll() }
+
+    /** Android's overscroll stretch (12+) / edge-glow (older) when a drag runs past the top or bottom
+     *  of the page. Off by default on a wall panel; the hidden `dashboard_overscroll` API setting turns
+     *  it back on. Re-read + applied on resume so a live config change lands on the foreground relaunch. */
+    private fun applyOverscroll() {
+        web?.overScrollMode =
+            if (Config(this).dashboardOverscroll) View.OVER_SCROLL_ALWAYS else View.OVER_SCROLL_NEVER
+    }
 
     /**
      * Edge-to-edge kiosk (issue #25): hide the Android status + navigation bars while the dashboard is
@@ -697,6 +705,8 @@ class DashboardActivity : AppCompatActivity() {
         // every stream paused on a touchless panel. (Not media-file playback, which stays out of scope.)
         settings.mediaPlaybackRequiresUserGesture = false
         setBackgroundColor(BG_DARK) // no white flash before first paint
+        // Overscroll stretch/glow off by default (see applyOverscroll) — set before first layout.
+        overScrollMode = if (config.dashboardOverscroll) View.OVER_SCROLL_ALWAYS else View.OVER_SCROLL_NEVER
         applyForceDark(this)
         // Seed the dashboard's DEFAULT colour scheme through HA's own per-device theme store, before
         // any page script runs — only when the panel has no system dark mode (the Display-card toggle
