@@ -10,12 +10,18 @@ content appear. Earlier releases predate this convention and keep their flat lis
 
 ## v0.9.1-rc1 - 2026-07-11
 
+### Added
+
+- **Opt-in System WebView auto-update** — a new "WebView auto-update" switch (off by default; shown only where ha-paneld pins a recommended WebView for the panel) keeps the system WebView on that pinned build, installing a newer one over root on the update check. Note that the first swap between two *different* WebView vendors on a signature-locked panel is still a one-time manual step — see the panel's hardware guide.
+
 ### Changed
 
+- **TPA10-class panels now recommend LineageOS WebView 150** instead of Cromite. LineageOS is a newer, maintained, vanilla-Chromium build that — unlike Cromite — leaves autoplay enabled, so Home Assistant camera-card (WebRTC) streams start without a tap. Cromite remains available as a fallback.
 - **The built-in renderer no longer bounces on overscroll** — dragging past the top or bottom of the dashboard used to show Android's elastic stretch (or edge glow on older panels), which looks out of place on a wall panel that rarely scrolls, so it is now off by default. A `dashboard_overscroll` setting restores the native effect for anyone who wants it (settable over the API).
 
 ### Fixed
 
+- **The soft navbar no longer swallows taps at the bottom of the built-in renderer** — in "Swipe reveal" mode ha-paneld armed a full-width overlay strip that consumed every touch in the bottom ~48dp band (re-injecting non-swipe taps via a slow root call, and dropping them entirely on panels without root). The built-in renderer now detects the reveal swipe within the dashboard activity instead, so taps and scrolls at the bottom edge reach the dashboard with no latency, while a genuine upward edge-swipe still reveals the bar.
 - **Pull-to-refresh no longer fires from a drag inside the dashboard** — the built-in renderer's refresh gesture now arms only for a drag that starts at the very top edge of the screen and pulls down into it. Previously any downward drag on the dashboard content could trigger it, because the Home Assistant frontend scrolls inside the page and the stock gesture check therefore always believed the view was at the top. Scrolling views and dragging card controls now never start a refresh, regardless of scroll position. (#29)
 
 ## v0.9.0 - 2026-07-10
