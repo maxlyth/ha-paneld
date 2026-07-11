@@ -57,6 +57,9 @@ class MqttBridge(
     private val brightness: BrightnessController,
     private val screen: ScreenController,
     private val led: LedController,
+    // Drives strobe/blink/pulse on the LED (HA's built-in light `effect`). Service-owned + injected so a
+    // bridge rebuild (reconfigure) can never orphan a running effect loop — there is only ever one.
+    private val ledEffect: LedEffectController,
     private val navigate: NavigateController,
     private val volume: VolumeController,
     private val system: SystemController,
@@ -222,8 +225,6 @@ class MqttBridge(
     private val lastDiagNumeric = HashMap<String, Double>()
     private val lastDiagString = HashMap<String, String>()
     private val stateLed = "ha-paneld/$panel/led/state"
-    // Runs strobe/blink/pulse on the LED (HA's built-in light `effect`). Self-owns its IO scope.
-    private val ledEffect = LedEffectController(led)
     private val stateNavigate = "ha-paneld/$panel/navigate/state"
     private val stateVolume = "ha-paneld/$panel/volume/state"
     private val eventButton = "ha-paneld/$panel/button/event"

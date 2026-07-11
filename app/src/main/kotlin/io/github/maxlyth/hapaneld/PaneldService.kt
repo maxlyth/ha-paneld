@@ -30,6 +30,7 @@ import io.github.maxlyth.hapaneld.control.ScreenController
 import io.github.maxlyth.hapaneld.control.SystemController
 import io.github.maxlyth.hapaneld.control.TameController
 import io.github.maxlyth.hapaneld.control.KioskController
+import io.github.maxlyth.hapaneld.control.LedEffectController
 import io.github.maxlyth.hapaneld.control.WatchdogController
 import io.github.maxlyth.hapaneld.control.TouchSoundController
 import io.github.maxlyth.hapaneld.control.VolumeController
@@ -99,6 +100,8 @@ class PaneldService : Service() {
     private lateinit var autoBright: AutoBrightnessController
     private lateinit var screen: ScreenController
     private lateinit var led: LedController
+    // Effect loop for the LED — owned here (not the MQTT bridge) so a bridge rebuild never orphans it.
+    private lateinit var ledEffect: LedEffectController
     private lateinit var navigate: NavigateController
     private lateinit var volume: VolumeController
     private lateinit var system: SystemController
@@ -143,6 +146,7 @@ class PaneldService : Service() {
         // After a LOCAL touch-wake, tell HA the screen is on so `light.<panel>_screen` tracks reality.
         screen.onWakeByTap = { runCatching { mqtt.publishScreenOn() } }
         led = LedFactory.detect(profile)
+        ledEffect = LedEffectController(led)
         navigate = NavigateController(this)
         volume = VolumeController(this)
         system = SystemController(AndroidSystemEnv(this))
@@ -240,7 +244,7 @@ class PaneldService : Service() {
     }
 
     private fun buildMqtt(): MqttBridge = MqttBridge(
-        config, brightness, screen, led, navigate, volume, system, navbar, watchdog, kiosk, touchSound, bootChime, zigbee, relay, cpu, adb,
+        config, brightness, screen, led, ledEffect, navigate, volume, system, navbar, watchdog, kiosk, touchSound, bootChime, zigbee, relay, cpu, adb,
         accessibilityEnabled(), profile.evdevButtons.isNotEmpty(),
         { capabilitiesSnapshot() },
         sensors.hasLight(), sensors.hasProximity(),
@@ -714,6 +718,7 @@ class PaneldService : Service() {
         runCatching { power.apply(false) }   // release the wakelock so we don't leak it on teardown
         runCatching { navbar.cleanup() }
         runCatching { watchdog.stop() }
+        runCatching { ledEffect.stop() }     // kill any running LED effect loop with the service
         runCatching { sensors.stop() }
         runCatching { logShipper.stop() }
         runCatching { server.stop() }
