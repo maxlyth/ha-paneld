@@ -2084,7 +2084,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
         "wake_on_wave", "prevent_idle_dim", "watchdog_enabled", "kiosk_lock", "auto_brightness",
         "brightness_bias", "navbar_mode", "touch_sound", "cpu_governor",
         "network_adb", "zigbee_router", "ambient_lux",
-        "companion_auto_update", "self_update", "update_channel", "home_dashboard",
+        "companion_auto_update", "self_update", "webview_auto_update", "update_channel", "home_dashboard",
     )
 
     /**

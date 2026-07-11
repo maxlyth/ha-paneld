@@ -47,4 +47,30 @@ class WebViewInstallerTest {
         assertEquals(138, rec.major)
         assertEquals(0, WebViewSpec("u", "unknown", "c").major)
     }
+
+    // --- auto-update path (Mechanism A): advance a WORKING engine to a newer pin ---
+
+    private val newer = WebViewSpec("https://example/lineageos-150.apk", "150.0.7871.63", "beef")
+
+    @Test fun autoUpdateAdvancesAWorkingEngineToANewerPin() {
+        // The Cromite-147 → LineageOS-150 swap: the engine renders HA (147 ≥ 110) so the heal path leaves
+        // it alone, but the auto-update path advances it to the newer pinned build.
+        assertTrue(decide(newer, engineMajor = 147, minChromium = MIN, force = false) is Decision.UpToDate)
+        assertEquals(Decision.Install(newer), decide(newer, engineMajor = 147, minChromium = MIN, force = false, autoUpdate = true))
+    }
+
+    @Test fun autoUpdateSkipsWhenPinNotNewer() {
+        // Already on the pinned major (or newer) → NotNewer, so no reinstall loop after a successful swap.
+        assertTrue(decide(rec, engineMajor = 138, minChromium = MIN, force = false, autoUpdate = true) is Decision.NotNewer)
+        assertTrue(decide(rec, engineMajor = 150, minChromium = MIN, force = false, autoUpdate = true) is Decision.NotNewer)
+    }
+
+    @Test fun autoUpdateNeverActsOnUnknownEngine() {
+        assertTrue(decide(rec, engineMajor = null, minChromium = MIN, force = false, autoUpdate = true) is Decision.UpToDate)
+    }
+
+    @Test fun autoUpdateAlsoHealsABrokenEngine() {
+        // Below the floor AND older than the pin → the auto-update path covers the heal case in one branch.
+        assertEquals(Decision.Install(rec), decide(rec, engineMajor = 83, minChromium = MIN, force = false, autoUpdate = true))
+    }
 }

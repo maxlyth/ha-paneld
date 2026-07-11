@@ -191,6 +191,8 @@ class MqttBridge(
     private val stateCompanionChannel = "ha-paneld/$panel/companion_update_channel/state"
     private val cmdSelfUpdate = "ha-paneld/$panel/self_update/set"
     private val stateSelfUpdate = "ha-paneld/$panel/self_update/state"
+    private val cmdWebViewAuto = "ha-paneld/$panel/webview_auto_update/set"
+    private val stateWebViewAuto = "ha-paneld/$panel/webview_auto_update/state"
     private val cmdUpdateChannel = "ha-paneld/$panel/update_channel/set"
     private val stateUpdateChannel = "ha-paneld/$panel/update_channel/state"
     private val cmdSilenceBootChime = "ha-paneld/$panel/silence_boot_chime/set"
@@ -487,6 +489,7 @@ class MqttBridge(
                 cmdUpdatePaneld -> onSelfUpdate(true)      // force self-update to the channel's newest (off-thread)
                 cmdCompanionChannel -> handleCompanionChannel(payload)
                 cmdSelfUpdate -> handleSelfUpdate(payload)
+                cmdWebViewAuto -> handleWebViewAuto(payload)
                 cmdUpdateChannel -> handleUpdateChannel(payload)
                 cmdSilenceBootChime -> handleSilenceBootChime(payload)
                 cmdPreventIdleDim -> handlePreventIdleDim(payload)
@@ -619,6 +622,12 @@ class MqttBridge(
         val on = payload.trim().equals("ON", ignoreCase = true)
         config.setSelfUpdate(on)
         publish(stateSelfUpdate, if (on) "ON" else "OFF", retain = true)
+    }
+
+    private fun handleWebViewAuto(payload: String) {
+        val on = payload.trim().equals("ON", ignoreCase = true)
+        config.setWebViewAutoUpdate(on)
+        publish(stateWebViewAuto, if (on) "ON" else "OFF", retain = true)
     }
 
     private fun handleUpdateChannel(payload: String) {
@@ -899,6 +908,7 @@ class MqttBridge(
             "companion_auto_update" -> handleCompanionAuto(onOff)
             "companion_update_channel" -> handleCompanionChannel(value)
             "self_update" -> handleSelfUpdate(onOff)
+            "webview_auto_update" -> handleWebViewAuto(onOff)
             "update_channel" -> handleUpdateChannel(value)
             "home_dashboard" -> handleHomeDashboard(value)
             else -> return false
@@ -1087,6 +1097,11 @@ class MqttBridge(
             "button", "${panel}_update_paneld",
             """{"name":"Update ha-paneld","object_id":"${panel}_update_paneld","unique_id":"${panel}_update_paneld","command_topic":"$cmdUpdatePaneld","icon":"mdi:package-up","entity_category":"config",$avail,$device}""",
         )
+        // System WebView auto-update — advances to the profile's pinned build (webview-mirror) over root.
+        // Auto-gated on webViewManaged (removed on Play-updated panels with no recommended pin).
+        exposable("webview_auto_update", "switch", "${panel}_webview_auto_update", { reg("webview_auto_update") }) {
+            publish(stateWebViewAuto, if (config.webViewAutoUpdate) "ON" else "OFF", retain = true)
+        }
 
         exposable("watchdog_enabled", "switch", "${panel}_watchdog", { reg("watchdog_enabled") }) {
             publish(stateWatchdog, if (config.watchdogEnabled) "ON" else "OFF", retain = true)
@@ -1242,6 +1257,7 @@ class MqttBridge(
         "select" to "${panel}_companion_update_channel",
         "switch" to "${panel}_self_update", "select" to "${panel}_update_channel",
         "button" to "${panel}_update_paneld",
+        "switch" to "${panel}_webview_auto_update",
         "switch" to "${panel}_zigbee_router",
         "switch" to "${panel}_auto_brightness", "number" to "${panel}_brightness_bias",
         "number" to "${panel}_ambient_lux",

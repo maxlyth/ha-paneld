@@ -38,21 +38,25 @@ object WebViewInstaller {
 
     /**
      * Decide whether to install. [engineMajor] is the real Chromium major from the WebView UA (null =
-     * unknown). [force] skips the age check (the manual "Update WebView" button). Heal only when the
-     * engine is genuinely below [minChromium] AND the recommended build is newer, so there's no reinstall
-     * loop and an unknown/modern engine is never disturbed.
+     * unknown). [force] skips every check (the manual "Update WebView" button). [autoUpdate] is the
+     * scheduled auto-update intent: it drops the "engine already renders HA → leave it" short-circuit so
+     * a WORKING engine still advances to a newer pinned build — the heal path (autoUpdate=false) instead
+     * only touches an engine genuinely below [minChromium]. Either way an unknown engine is never
+     * disturbed and a pin that isn't newer is a no-op, so there's no reinstall loop from [decide] alone.
      */
-    fun decide(rec: WebViewSpec?, engineMajor: Int?, minChromium: Int, force: Boolean): Decision = when {
+    fun decide(rec: WebViewSpec?, engineMajor: Int?, minChromium: Int, force: Boolean, autoUpdate: Boolean = false): Decision = when {
         rec == null -> Decision.NoRecommendation
         force -> Decision.Install(rec)
-        engineMajor == null || engineMajor >= minChromium -> Decision.UpToDate(engineMajor)
+        engineMajor == null -> Decision.UpToDate(null) // can't compare → don't touch
+        !autoUpdate && engineMajor >= minChromium -> Decision.UpToDate(engineMajor) // heal-only: leave a working engine
         rec.major <= engineMajor -> Decision.NotNewer(rec.version)
         else -> Decision.Install(rec)
     }
 
-    /** Heal the WebView per [decide]. Returns a short human status; "OK: …" on a successful install. */
-    suspend fun heal(context: Context, profile: DeviceProfile, engineMajor: Int?, force: Boolean = false): String =
-        when (val d = decide(profile.recommendedWebView, engineMajor, PanelHealth.MIN_CHROMIUM, force)) {
+    /** Heal the WebView per [decide]. Returns a short human status; "OK: …" on a successful install.
+     *  [autoUpdate] = the scheduled update-to-pin path (advance a working engine to a newer pin). */
+    suspend fun heal(context: Context, profile: DeviceProfile, engineMajor: Int?, force: Boolean = false, autoUpdate: Boolean = false): String =
+        when (val d = decide(profile.recommendedWebView, engineMajor, PanelHealth.MIN_CHROMIUM, force, autoUpdate)) {
             is Decision.NoRecommendation -> "no known-good WebView for this panel"
             is Decision.UpToDate -> "up to date (Chromium ${d.engineMajor ?: "?"})"
             is Decision.NotNewer -> "already current (${d.version})"

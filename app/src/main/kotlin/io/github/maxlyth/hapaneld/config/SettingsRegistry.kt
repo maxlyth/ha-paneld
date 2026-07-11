@@ -305,6 +305,16 @@ object SettingsRegistry {
             availableWhen = { it.companionInstalled },
         ),
         SettingSpec(
+            key = "webview_auto_update", type = SettingType.BOOL, group = "System",
+            label = "WebView auto-update", default = "false", scope = Scope.DEVICE,
+            help = "Keep the System WebView on this panel's recommended build (from the ha-paneld mirror), installing a newer one over root on the update check. Off by default — a WebView swap needs a restart to take effect. Only shown where a recommended build exists (not on Play-updated panels).",
+            availableWhen = { it.webViewManaged },
+            ha = HaEntity(
+                "switch", "webview_auto_update", "WebView auto-update",
+                """"command_topic":"ha-paneld/{panel}/webview_auto_update/set","state_topic":"ha-paneld/{panel}/webview_auto_update/state","icon":"mdi:web-sync","entity_category":"config"""",
+            ),
+        ),
+        SettingSpec(
             key = "launcher_package", type = SettingType.STRING, group = "System",
             label = "Launcher app", default = "", picker = "package",
             help = "App the Launcher button brings forward (blank = auto-pick).",
