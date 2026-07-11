@@ -443,9 +443,13 @@ class PaneldService : Service() {
         val r = io.github.maxlyth.hapaneld.util.WebViewInstaller.heal(
             this@PaneldService, profile, engineMajor = engineMajor, force = false, autoUpdate = true,
         )
+        // Record the attempt (ANY outcome, before the OK check) so a version that FAILS to install isn't
+        // re-downloaded every tick — notably a signature-locked panel (e.g. TPA10) rejecting a cross-signer
+        // provider swap (`pm install` can't change the WebView's signer; that needs the manual root route).
+        // A pin bump (new version string) clears the guard; the manual "Update WebView" button always retries.
+        config.setWebViewAutoLastVersion(rec.version) // commit() so it survives the restart below
         Log.i(TAG, "WebView auto-update: $r")
         if (r.startsWith("OK")) {
-            config.setWebViewAutoLastVersion(rec.version) // commit() so the guard survives the restart below
             kotlinx.coroutines.delay(2_000)
             if (config.dashboardPackage == io.github.maxlyth.hapaneld.control.SystemController.BUILTIN_DASHBOARD) {
                 Log.i(TAG, "WebView auto-updated — restarting process so the built-in renderer binds the new provider")
