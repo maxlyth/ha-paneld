@@ -97,6 +97,20 @@ object CompanionDb {
     fun parseActiveServer(xml: String?): String? =
         xml?.let { Regex("\"active_server\"\\s+value=\"(\\d+)\"").find(it)?.groupValues?.get(1) }
 
+    /** The Companion's "Page zoom" App-Settings value from `themes_0.xml`
+     *  (`<int name="page_zoom_level" value="N"/>`), or null when unset — the Companion's own default is
+     *  100. This is the direct analog of ha-paneld's `dashboard_zoom`, so a panel switched from the
+     *  Companion can keep the zoom the user chose there. */
+    fun parsePageZoom(xml: String?): Int? =
+        xml?.let { Regex("\"page_zoom_level\"\\s+value=\"(\\d+)\"").find(it)?.groupValues?.get(1)?.toIntOrNull() }
+
+    /** Read the Companion's chosen page-zoom % via root, or null (no root / no Companion / unset).
+     *  Call OFF the main thread. */
+    fun readPageZoom(context: Context, root: RootShell): Int? {
+        val pkg = CompanionInstaller.installedPkg(context) ?: return null
+        return parsePageZoom(root.runOutput("""cat "/data/data/$pkg/shared_prefs/themes_0.xml" 2>/dev/null"""))
+    }
+
     /** Pick the row to borrow: the active server when known, else the first signed-in row (has a
      *  refresh token and a URL). Null = nothing borrowable. */
     fun pickLogin(rows: List<LoginRow>, activeId: String?): LoginRow? {

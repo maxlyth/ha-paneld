@@ -2,6 +2,7 @@ package io.github.maxlyth.hapaneld.control
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -55,5 +56,22 @@ class CompanionDbTest {
     @Test fun emptyOutputYieldsNoRows() {
         assertTrue(CompanionDb.parseServers("").isEmpty())
         assertTrue(CompanionDb.parseServers("\n\n").isEmpty())
+    }
+
+    @Test fun parsesCompanionPageZoomFromThemesXml() {
+        val xml = """
+            <?xml version='1.0' encoding='utf-8' standalone='yes' ?>
+            <map>
+                <int name="page_zoom_level" value="115" />
+                <string name="theme">dark</string>
+            </map>
+        """.trimIndent()
+        assertEquals(115, CompanionDb.parsePageZoom(xml))
+    }
+
+    @Test fun pageZoomNullWhenAbsentOrUnreadable() {
+        assertNull(CompanionDb.parsePageZoom("""<map><string name="theme">dark</string></map>"""))
+        assertNull(CompanionDb.parsePageZoom(""))
+        assertNull(CompanionDb.parsePageZoom(null))
     }
 }

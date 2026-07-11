@@ -2033,6 +2033,12 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
                             config.setHaClientId(io.github.maxlyth.hapaneld.control.CompanionDb.COMPANION_CLIENT_ID)
                             android.util.Log.i(TAG, "borrowed the Companion sign-in for the built-in renderer (${l.url})")
                         }
+                        // Also carry over the zoom the user picked in the Companion's "Page zoom" setting
+                        // (dashboard_zoom is its direct analog), so a switched-over panel keeps its sizing.
+                        io.github.maxlyth.hapaneld.control.CompanionDb.readPageZoom(appContext, io.github.maxlyth.hapaneld.control.Su)?.let { z ->
+                            config.setDashboardZoom(z.coerceIn(50, 300))
+                            android.util.Log.i(TAG, "carried over the Companion page zoom ($z%) to dashboard_zoom")
+                        }
                     }
                     system.ensureDashboardHome(config.dashboardPackage, config.haUrl.isNotBlank())
                     system.launchHome(config.dashboardPackage)
