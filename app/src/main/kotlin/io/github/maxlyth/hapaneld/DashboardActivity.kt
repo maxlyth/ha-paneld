@@ -33,6 +33,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
+import io.github.maxlyth.hapaneld.control.BottomSwipeDetector
 import io.github.maxlyth.hapaneld.control.BuiltinDashboard
 import org.json.JSONObject
 
@@ -682,8 +683,14 @@ class DashboardActivity : AppCompatActivity() {
         }
         swipe = refresh
         // A dark root behind the (transparent) WebView so a reload never flashes white — very visible on
-        // a wall panel at night. Also hosts the fullscreen-video view from onShowCustomView.
-        val container = FrameLayout(this).apply {
+        // a wall panel at night. Also hosts the fullscreen-video view from onShowCustomView. The root is a
+        // BottomSwipeFrame so a bottom-edge swipe-up reveals the soft navbar in-process (see the class) —
+        // replacing the service's overlay strip that made the dashboard's bottom band tap-dead.
+        val container = BottomSwipeFrame(
+            this,
+            enabled = { BuiltinDashboard.navbarSwipeEnabled },
+            onSwipeUp = { BuiltinDashboard.requestNavbarReveal() },
+        ).apply {
             setBackgroundColor(BG_DARK)
             addView(refresh, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
         }
@@ -922,6 +929,53 @@ private class EdgePullRefreshLayout(context: Context) : SwipeRefreshLayout(conte
         // Wide enough that a quick bezel swipe's first sampled touch still lands inside it; narrow
         // enough that a drag starting on dashboard content (HA's header alone is ~56dp) never does.
         const val EDGE_BAND_DP = 24
+    }
+}
+
+/**
+ * Root container that detects the soft-navbar swipe-reveal gesture IN-PROCESS while the built-in
+ * renderer is foreground — replacing [io.github.maxlyth.hapaneld.control.NavbarController]'s bottom
+ * overlay strip, which consumed every touch in its 48dp band and made the dashboard's bottom edge
+ * tap-dead (root `input tap` re-injection) or tap-dropping (no root). Qualification is by the gesture's
+ * ORIGIN in a bottom edge band, never by content-scroll state — the same principle as
+ * [EdgePullRefreshLayout] at the top edge. A gesture that never crosses the upward-travel threshold is
+ * NEVER intercepted, so taps and scrolls reach the WebView untouched with zero latency.
+ */
+private class BottomSwipeFrame(
+    context: Context,
+    private val enabled: () -> Boolean,
+    private val onSwipeUp: () -> Unit,
+) : FrameLayout(context) {
+    private val density = resources.displayMetrics.density
+    private val detector = BottomSwipeDetector(
+        bandPx = BottomSwipeDetector.BAND_DP * density,
+        minTravelPx = BottomSwipeDetector.MIN_TRAVEL_DP * density,
+    )
+    private var stolen = false
+
+    override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
+        when (ev.actionMasked) {
+            MotionEvent.ACTION_DOWN -> { stolen = false; detector.onDown(ev.x, ev.y, height, enabled()) }
+            MotionEvent.ACTION_POINTER_DOWN -> detector.abort() // a pinch on a bottom-band card is not a reveal
+            MotionEvent.ACTION_MOVE -> if (detector.onMove(ev.x, ev.y)) {
+                stolen = true
+                onSwipeUp()
+                return true // steal: the framework CANCELs the child chain (page sees a normal touchcancel)
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> detector.abort()
+        }
+        return false
+    }
+
+    /** After a steal, consume the remainder of the gesture so the stream stays with us. */
+    override fun onTouchEvent(ev: MotionEvent): Boolean = stolen
+
+    /** WebView content (slider/map cards handling their own drag) calls this to stop us intercepting;
+     *  honour it for everything EXCEPT an edge-origin gesture we're still tracking, so page content can't
+     *  defeat the reveal (the DrawerLayout edge-swipe precedent). */
+    override fun requestDisallowInterceptTouchEvent(disallowIntercept: Boolean) {
+        if (disallowIntercept && detector.tracking) return
+        super.requestDisallowInterceptTouchEvent(disallowIntercept)
     }
 }
 

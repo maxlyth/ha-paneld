@@ -92,6 +92,14 @@ class NavbarController(
     var mode: String = MODE_OFF
         private set
 
+    init {
+        // While the built-in renderer is foreground it detects the reveal swipe in-activity, so the
+        // touch-consuming overlay strip must not sit over it (see [BuiltinDashboard]); re-arm when a
+        // foreign surface returns to the foreground. Single-slot: a service restart's new controller
+        // overwrites this cleanly even if the old one's cleanup() didn't run.
+        BuiltinDashboard.setForegroundListener { fg -> onBuiltinForeground(fg) }
+    }
+
     /**
      * Idempotent: tear down the current overlay state and rebuild for [newMode]. Called off the main
      * thread (MQTT / startup coroutine), so the one potentially-blocking step — granting the overlay
@@ -100,6 +108,12 @@ class NavbarController(
     fun apply(newMode: String) {
         val m = normalise(newMode)
         mode = m
+        // Publish/withdraw the built-in renderer's in-activity reveal trigger: set only in Swipe-reveal
+        // mode. reveal() is main-thread view work; the mode re-check inside the post guards a live
+        // mode-flip race (mode changed to Off between the swipe and the post running).
+        BuiltinDashboard.setNavbarRevealHandler(
+            if (m == MODE_SWIPE) { { main.post { if (mode == MODE_SWIPE) reveal() } } } else null,
+        )
         if (m != MODE_OFF) {
             ensureOverlayPermission()
             if (volReceiver == null) {
@@ -139,9 +153,22 @@ class NavbarController(
             main.post {
                 main.removeCallbacks(hideRunnable)
                 removeBar(); removeStrip()
-                if (m == MODE_SWIPE) addStrip()
+                // Don't arm the strip while the built-in renderer is foreground — it handles the reveal
+                // swipe in-activity (onBuiltinForeground re-arms when it backgrounds). Read inside the
+                // post so a service restarted while the renderer is foreground sees the fresh state.
+                if (m == MODE_SWIPE && !BuiltinDashboard.foreground) addStrip()
             }
             if (appCanSu) Thread { runCatching { applyOverscan(0) } }.start()
+        }
+    }
+
+    /** The built-in renderer took ([fg]=true) or left the foreground. In Swipe-reveal mode, suppress the
+     *  touch-consuming strip while it's foreground (it detects the reveal itself) and re-arm otherwise.
+     *  No-op in Off / Always-on. addStrip/removeStrip are idempotent + canDraw()-gated. */
+    private fun onBuiltinForeground(fg: Boolean) {
+        main.post {
+            if (mode != MODE_SWIPE) return@post
+            if (fg) removeStrip() else addStrip()
         }
     }
 
@@ -591,6 +618,8 @@ class NavbarController(
     /** Reset any display overscan set by this controller. Call from the service's onDestroy so the
      *  reserved bottom margin doesn't persist after ha-paneld stops. */
     fun cleanup() {
+        BuiltinDashboard.setNavbarRevealHandler(null)
+        BuiltinDashboard.setForegroundListener(null)
         volReceiver?.let { runCatching { context.unregisterReceiver(it) }; volReceiver = null }
         main.post { dismissSlider() }
         if (appCanSu && mode == MODE_ALWAYS) {
@@ -623,9 +652,12 @@ class NavbarController(
         val MODES = listOf(MODE_OFF, MODE_ALWAYS, MODE_SWIPE)
 
         private const val BAR_HEIGHT_DP = 56   // taller so the icons read at a glance
-        private const val STRIP_HEIGHT_DP = 48   // swipe-reveal capture zone — 12→28→48: a fast off-screen
-        // swipe-up's DOWN sometimes landed above a thinner strip, so the dashboard caught it and scrolled
-        private const val SWIPE_MIN_DP = 20     // upward travel (dp) before a strip touch counts as a swipe
+        // Swipe-reveal capture zone + threshold. Canonical values live in [BottomSwipeDetector] so the
+        // overlay strip (this) and the built-in renderer's in-activity detector can't drift. (12→28→48:
+        // a fast off-screen swipe-up's DOWN sometimes landed above a thinner strip, so the dashboard
+        // caught it and scrolled.)
+        private const val STRIP_HEIGHT_DP = BottomSwipeDetector.BAND_DP
+        private const val SWIPE_MIN_DP = BottomSwipeDetector.MIN_TRAVEL_DP
         private const val FEEDBACK_MIN_MS = 350L  // min press-highlight visible time (bridges su latency)
         private const val ICON_SIZE_DP = 30    // fixed icon size, centred in its cell (uniform across all buttons)
         private const val TIGHTEN = 0.65f      // triple-member cell weight vs nav's 1.0 → ~35% tighter spacing
