@@ -2,9 +2,6 @@
 
 Each supported panel has **one canonical silo** — a `DeviceProfile` — that declares everything ha-paneld does specially for that hardware. Generic functional modules read the active profile instead of hard-coding paths and quirks, so "what does ha-paneld do for the TPA10?" has a single answer, and onboarding a new panel is a single file to write.
 
-> [!NOTE]
-> Status: **implemented in 0.7.0** — an architecture-focused release, no new user features. The LED, Zigbee and relay controllers read the active profile; `Su` and `ScreenController` deliberately stay on their runtime autodetect/tiering (already device-agnostic); their profile fields are declarative only.
-
 ## The profile
 
 `DeviceProfile` is one canonical silo per platform. It declares the device-specific paths, mechanisms and quirks; generic modules consume it rather than hard-coding them.
@@ -43,9 +40,6 @@ Two consequences:
 
 - **The `Generic` profile probes everything generically**, so an unknown panel still advertises whatever it physically has with no profile written. A `device/Xxx.kt` is added only when a panel needs a quirk the generic path can't infer.
 - Capability support is still detected by **bottom-up runtime probing** inside each functional module — robust, and now backed by a per-device canonical place for the customisations.
-
-> [!NOTE]
-> A static product matrix is fragile. Observed counter-examples: one panel had an orphaned zgateway with an empty `siliconlabs_host` dir where its siblings didn't; the S9E is rk3566 like the TPA10. Declaring candidates and probing to confirm sidesteps both.
 
 ## Onboarding a new panel
 
