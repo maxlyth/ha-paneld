@@ -721,19 +721,27 @@ class PaneldService : Service() {
 
     private fun startForegroundCompat() {
         val mgr = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        if (mgr.getNotificationChannel(CHANNEL_ID) == null) {
+        val silent = config.silenceBootChime
+        val channelId = if (silent) SILENT_CHANNEL_ID else CHANNEL_ID
+        if (mgr.getNotificationChannel(channelId) == null) {
             mgr.createNotificationChannel(
-                NotificationChannel(CHANNEL_ID, "ha-paneld", NotificationManager.IMPORTANCE_MIN).apply {
+                NotificationChannel(channelId, "ha-paneld", NotificationManager.IMPORTANCE_MIN).apply {
                     description = "Panel hardware agent for Home Assistant"
+                    if (silent) {
+                        setSound(null, null)
+                        enableVibration(false)
+                        setShowBadge(false)
+                    }
                 },
             )
         }
-        val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
+        val notification: Notification = NotificationCompat.Builder(this, channelId)
             .setContentTitle("ha-paneld")
             .setContentText("Listening on :${config.httpPort}")
             .setSmallIcon(android.R.drawable.stat_notify_sync_noanim)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_MIN)
+            .setSilent(silent)
             .build()
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -769,6 +777,9 @@ class PaneldService : Service() {
     companion object {
         private const val TAG = "ha-paneld/svc"
         private const val CHANNEL_ID = "ha-paneld"
+        // Channel sound is immutable after creation. A distinct ID guarantees the silence setting can
+        // supersede an older install whose original channel was created with a notification sound.
+        private const val SILENT_CHANNEL_ID = "ha-paneld-silent-v1"
         private const val NOTIF_ID = 1
         // MQTT reconnect-watchdog poll interval; a stuck bridge self-heals after ~2 of these.
         private const val MQTT_WATCHDOG_MS = 60_000L
