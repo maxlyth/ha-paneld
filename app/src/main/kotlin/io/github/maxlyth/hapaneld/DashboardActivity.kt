@@ -12,6 +12,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
+import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
@@ -26,6 +27,7 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
+import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
@@ -131,11 +133,11 @@ class DashboardActivity : AppCompatActivity() {
         // night) must not assume the screen is on: it would arm the handshake watchdog against a page
         // that's about to be frozen, and never freeze the WebView until the next real transition.
         screenAwake = BuiltinDashboard.screenAwakeNow
-        registerNetworkCallback()
+        val networkAvailable = registerNetworkCallback()
         main.postDelayed(periodicCheck, PERIODIC_CHECK_MS)
         lastTouchAt = SystemClock.elapsedRealtime()
         main.postDelayed(idleCheck, IDLE_CHECK_MS)
-        buildAndLoad(config)
+        if (networkAvailable) buildAndLoad(config) else showWaitingForNetwork()
         // Created dark: let the initial load settle, then freeze (onLoadStarted skipped the watchdog;
         // onConnectionStatus freezes earlier if the frontend connects first).
         if (!screenAwake) main.postDelayed(darkSettle, DARK_SETTLE_MS)
@@ -445,6 +447,16 @@ class DashboardActivity : AppCompatActivity() {
         // Ignore only the registration callback when the activity started online. If it started without
         // a default network, its first onAvailable is the boot-time Wi-Fi arrival and must recover now.
         if (networkRecovery?.onAvailable() != true) return
+        if (web == null) {
+            Log.i(TAG, "network became available during startup — creating dashboard WebView")
+            retryPolicy.reset()
+            buildAndLoad(Config(this))
+            if (!screenAwake) {
+                main.removeCallbacks(darkSettle)
+                main.postDelayed(darkSettle, DARK_SETTLE_MS)
+            }
+            return
+        }
         if (frontendConnected || !screenAwake) return // frozen page reconnects itself on wake
         Log.i(TAG, "network regained while frontend not connected — reloading immediately")
         retryPolicy.reset() // a changed environment deserves a fresh fast cadence if HA is still starting
@@ -493,9 +505,13 @@ class DashboardActivity : AppCompatActivity() {
         web?.evaluateJavascript(ExternalAuthProtocol.navigateCommand(++busId, home), null)
     }
 
-    private fun registerNetworkCallback() {
+    /** Register once and return whether Android already has a default network. When false, onCreate
+     *  holds the WebView back entirely: loading HA's cached shell while offline only exposes HA's own
+     *  long connection-failed countdown on top of Chromium's main-frame failure. */
+    private fun registerNetworkCallback(): Boolean {
         conn = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-        networkRecovery = NetworkRecoveryGate(initiallyAvailable = conn?.activeNetwork != null)
+        val initiallyAvailable = conn?.activeNetwork != null
+        networkRecovery = NetworkRecoveryGate(initiallyAvailable)
         val cb = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) { runOnUiThread { onNetworkAvailable() } }
             override fun onLost(network: Network) { runOnUiThread {
@@ -505,8 +521,34 @@ class DashboardActivity : AppCompatActivity() {
         netCallback = cb
         // One default-network callback for the activity's lifetime (unregistered in onDestroy) — never a
         // per-load registration, which would hit Android's per-app callback limit on a forever process.
-        runCatching { conn?.registerDefaultNetworkCallback(cb) }
-            .onFailure { Log.w(TAG, "network callback register failed: ${it.message}") }
+        val registered = runCatching {
+            val manager = conn ?: error("ConnectivityManager unavailable")
+            manager.registerDefaultNetworkCallback(cb)
+        }.onFailure { Log.w(TAG, "network callback register failed: ${it.message}") }.isSuccess
+        // Never strand on the waiting screen if this OEM cannot register the callback: fall back to the
+        // existing WebView watchdog path, which can still recover by polling loads.
+        return initiallyAvailable || !registered
+    }
+
+    /** One quiet startup state while Android brings networking up. This is native rather than cached
+     *  WebView content, so neither Chromium's error UI nor HA's 60-second reconnect page can appear. */
+    private fun showWaitingForNetwork() {
+        val label = TextView(this).apply {
+            text = "Waiting for network\u2026"
+            setTextColor(0xFFEEEEEE.toInt())
+            textSize = 24f
+            gravity = Gravity.CENTER
+        }
+        val container = FrameLayout(this).apply {
+            setBackgroundColor(BG_DARK)
+            addView(label, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT,
+            ))
+        }
+        root = container
+        setContentView(container)
+        Log.i(TAG, "no default network at startup — waiting before creating WebView")
     }
 
     /** Re-load the dashboard: a plain reload normally, but a fresh loadUrl of the real dashboard when
