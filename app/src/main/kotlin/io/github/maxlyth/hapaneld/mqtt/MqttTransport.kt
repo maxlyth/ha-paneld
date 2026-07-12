@@ -16,7 +16,7 @@ interface MqttTransport {
 
     /** Publish [payload] to [topic]; on a broker ACK, [MqttCallbacks.onPublishAck] fires (the QoS-1
      *  liveness signal the reconnect watchdog trusts). No-op when there is no current client. */
-    fun publish(topic: String, payload: ByteArray, retain: Boolean)
+    fun publish(topic: String, payload: ByteArray, retain: Boolean, onComplete: ((Boolean) -> Unit)? = null)
 
     /** Subscribe to [topicFilter]; [onMessage] receives (topic, payload, retained) per delivery. The
      *  retained flag lets the bridge reject stale retained commands (the never-blank incident guard). */

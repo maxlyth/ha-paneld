@@ -52,10 +52,17 @@ class RelayController(profile: DeviceProfile = DeviceProfile.detect(), private v
         return root.run("echo ${if (on) 1 else 0} > $base/relay$n")
     }
 
-    /** Current state of relay [n], or false if unreadable. */
-    fun get(n: Int): Boolean {
-        val base = base() ?: return false
-        return root.runOutput("cat $base/relay$n 2>/dev/null")?.trim() == "1"
+    /** Current state of relay [n], retaining the legacy false fallback for existing callers. */
+    fun get(n: Int): Boolean = read(n) == true
+
+    /** Physical state, preserving unreadable as null rather than inventing OFF. */
+    fun read(n: Int): Boolean? {
+        val base = base() ?: return null
+        return when (root.runOutput("cat $base/relay$n 2>/dev/null")?.trim()) {
+            "1" -> true
+            "0" -> false
+            else -> null
+        }
     }
 
     // --- S9E button LEDs: gpio <buttonLedGpioBase..+3>, on/off via su ---
@@ -74,10 +81,17 @@ class RelayController(profile: DeviceProfile = DeviceProfile.detect(), private v
         return root.run("echo ${if (on) 1 else 0} > $node")
     }
 
-    /** Current state of button LED [i], or false if unreadable. */
-    fun ledGet(i: Int): Boolean {
-        val node = ledNode(i) ?: return false
-        return root.runOutput("cat $node 2>/dev/null")?.trim() == "1"
+    /** Current state of button LED [i], retaining the legacy false fallback for existing callers. */
+    fun ledGet(i: Int): Boolean = ledRead(i) == true
+
+    /** Physical button-LED state, preserving unreadable as null rather than inventing OFF. */
+    fun ledRead(i: Int): Boolean? {
+        val node = ledNode(i) ?: return null
+        return when (root.runOutput("cat $node 2>/dev/null")?.trim()) {
+            "1" -> true
+            "0" -> false
+            else -> null
+        }
     }
 
     private fun ledNode(i: Int): String? = ledBase?.let { "/sys/class/gpio/gpio${it + i}/value" }

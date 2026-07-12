@@ -365,6 +365,7 @@ class PaneldService : Service() {
         // Recent "changed outside MQTT" events (brightness/volume/backlight/governor) — shown only when
         // something has actually synced, so it doesn't clutter a steady panel. Flows to /diag too.
         mqtt.recentSyncEvents().takeIf { it.isNotEmpty() }?.let { extras["Local-state sync"] = it.joinToString(" · ") }
+        extras["State convergence"] = mqtt.convergenceStatus()
         return PanelInfo.collect(this, extras)
     }
 

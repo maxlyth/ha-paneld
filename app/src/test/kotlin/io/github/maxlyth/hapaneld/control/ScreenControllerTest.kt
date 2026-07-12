@@ -45,6 +45,12 @@ class ScreenControllerTest {
         assertFalse("brightness >0 with unknown bl_power reads lit", controller(blPower = null).first.looksDark())
     }
 
+    @Test fun observedDarkPreservesUnknownWhenNeitherTierCanRead() {
+        backlight.level = -1
+        assertEquals(null, controller(blPower = null).first.observedDark())
+        assertFalse("unknown must not trigger never-blank hardware changes", controller(blPower = null).first.looksDark())
+    }
+
     // --- intendedOff transitions (what the never-blank watchdog keys on) ---
     @Test fun intendedOffSetOnSleepClearedOnWake() {
         val (sc, _) = controller(daemon = mapOf("SCREEN OFF" to "OK", "SCREEN ON" to "OK"))

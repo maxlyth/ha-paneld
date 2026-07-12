@@ -52,15 +52,19 @@ class ScreenController(
 
     /** Best-effort: is the backlight actually dark? bl_power 4=off/0=on (root/daemon panels); else the
      *  brightness-fallback path where 0 == off. Unknown → false (never re-light on a guess). */
-    fun looksDark(): Boolean {
+    fun observedDark(): Boolean? {
         val bl = root.runOutput("d=\$(ls -d /sys/class/backlight/*/ 2>/dev/null|head -1);cat \${d}bl_power 2>/dev/null")?.trim()
+        val effective = { backlight.getBrightness().takeIf { it >= 0 }?.let { it <= 0 } }
         return when (bl) {
             "4" -> true
             // A powered backlight with an effective level of zero is still physically dark.
-            "0" -> backlight.getBrightness() <= 0
-            else -> backlight.getBrightness() <= 0
+            "0" -> effective()
+            else -> effective()
         }
     }
+
+    /** Cautious boolean used by the never-blank watchdog: unknown is not grounds to alter hardware. */
+    fun looksDark(): Boolean = observedDark() == true
 
     /** Record an explicit brightness so the fallback off/on restores to it. */
     fun noteLevel(level: Int) {

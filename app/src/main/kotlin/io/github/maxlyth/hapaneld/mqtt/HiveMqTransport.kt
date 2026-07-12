@@ -62,8 +62,8 @@ class HiveMqTransport : MqttTransport {
         old?.let { Thread({ runCatching { it.disconnect() } }, "mqtt-teardown").apply { isDaemon = true }.start() }
     }
 
-    override fun publish(topic: String, payload: ByteArray, retain: Boolean) {
-        val c = client ?: return
+    override fun publish(topic: String, payload: ByteArray, retain: Boolean, onComplete: ((Boolean) -> Unit)?) {
+        val c = client ?: run { onComplete?.invoke(false); return }
         c.publishWith()
             .topic(topic)
             .payload(payload)
@@ -72,7 +72,11 @@ class HiveMqTransport : MqttTransport {
             .send()
             // A QoS-1 publish the broker ACKs proves the link is truly alive — the liveness signal the
             // watchdog trusts over HiveMQ's self-reported connected state (which lies on a half-open socket).
-            .whenComplete { _, ex -> if (ex == null) callbacks?.onPublishAck() }
+            .whenComplete { _, ex ->
+                val success = ex == null
+                if (success) callbacks?.onPublishAck()
+                onComplete?.invoke(success)
+            }
     }
 
     override fun subscribe(topicFilter: String, onMessage: (String, ByteArray, Boolean) -> Unit) {

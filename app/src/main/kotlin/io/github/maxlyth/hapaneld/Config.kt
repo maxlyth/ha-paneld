@@ -606,6 +606,11 @@ class Config(context: Context) {
         get() = prefs.getString("last_led_effect", "")!!
         set(v) { prefs.edit().putString("last_led_effect", v).apply() }
 
+    /** Last requested button-backlight level (0=off, 1..255=on, -1=never commanded/readable). */
+    var lastButtonBacklight: Int
+        get() = prefs.getInt("last_button_backlight", -1)
+        set(v) { prefs.edit().putInt("last_button_backlight", v.coerceIn(-1, 255)).apply() }
+
     // --- arrangeable dashboard layout (per-panel; serialized by the web UI, opaque to the backend) ---
     /** Gridstack layout JSON for the Dashboard tab, persisted per-panel (empty = default layout). */
     var uiDashboardLayout: String
