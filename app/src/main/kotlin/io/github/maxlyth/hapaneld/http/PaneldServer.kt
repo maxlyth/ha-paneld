@@ -1853,17 +1853,17 @@ fetch('/api/v1/tame/suggest').then(function(r){return r.text()}).then(function(t
 
     /** Display-sizing card (density + text scale). Empty when su isn't reachable (no control). */
     private fun displayCardHtml(): String {
-        // From the shared snapshot (stale-ok + background refresh) — the density trio is three
-        // `wm`/settings su round-trips and was most of the Configure tab's multi-second render.
-        val snap = snapStaleOk()
-        val nat = snap.densityNat
-        val fs = snap.fontScale
+        // Read the density trio FRESH from densityCache (not the stale-while-revalidate snapshot) so a
+        // value just applied via this card shows immediately: the POST primes densityCache, whereas
+        // snapStaleOk returns the pre-change snapshot for a refresh cycle. densityCache is TTL-cached and
+        // primed on write, so this only pays the su reads on a genuinely cold Configure load.
+        val (curOverride, nat, fs) = densityCache.get()
         // Shown even without root (density can't be READ without it either) so a no-root user sees the
         // feature — but greyed, with a lock banner, and every control disabled. `dis` toggles all of it.
         val locked = !rootOk()
         // Prefill: the active override if one is set, else the profile's HA-optimised recommendation
         // (so a fresh panel offers the right value to Apply rather than the raw native density), else native.
-        val cur = snap.densityCur?.takeIf { it != nat } ?: recommendedDensity ?: nat ?: DensityController.MIN_DPI
+        val cur = curOverride?.takeIf { it != nat } ?: recommendedDensity ?: nat ?: DensityController.MIN_DPI
         val dis = if (locked) " disabled" else ""
         val rec = if (!locked && (recommendedDensity != null || recommendedFontScale != null))
             """ <button type="submit" name="action" value="rec" formnovalidate>HA-optimised</button>""" else ""
