@@ -61,6 +61,7 @@ class DashboardActivity : AppCompatActivity() {
     private val main = Handler(Looper.getMainLooper())
     private var conn: ConnectivityManager? = null
     private var netCallback: ConnectivityManager.NetworkCallback? = null
+    private var networkRecovery: NetworkRecoveryGate? = null
     // Set in onDestroy. Bridge/network callbacks marshal onto the main thread, so one of their posts can
     // land AFTER onDestroy's removeCallbacksAndMessages and re-arm the self-perpetuating watchdog on a
     // dead activity. Every posted handler checks this first so nothing runs (or re-schedules) post-destroy.
@@ -75,7 +76,7 @@ class DashboardActivity : AppCompatActivity() {
     // awake: a screen-off pauses JS timers, so a paused WebView could never complete the handshake and the
     // watchdog would just reload-loop all night behind a dark panel.
     private var frontendConnected = false
-    private var backoffMs = INITIAL_RETRY_MS
+    private val retryPolicy = DashboardRetryPolicy()
     private var clearedThisLoad = false
     private val watchdog = Runnable { onWatchdogTimeout() }
     // After a screen-off reload (memory shed), let the fresh page load with timers LIVE for a settle
@@ -90,7 +91,6 @@ class DashboardActivity : AppCompatActivity() {
     private var lastFullLoadAt = 0L
     private var reloadPending = false
     private var screenAwake = true
-    private var sawNetworkLoss = false // so the initial registration onAvailable isn't a spurious reload
     // App→frontend external-bus command ids (navigate etc.); replies echo the id back (logged).
     private var busId = 0
     // Auth-failure latch. A *definitive* credential rejection (revoked refresh token, repeated
@@ -308,6 +308,7 @@ class DashboardActivity : AppCompatActivity() {
             return
         }
         unlatchAuth("new load") // a deliberate reload/navigate (or a config change) is the retry consent
+        retryPolicy.reset()
         interstitialShown = false
         if (w == null) { buildAndLoad(config); return }  // defensive: relaunched with no WebView built
         // Re-apply force-dark (only set at WebView creation otherwise) and, on the no-system-dark-mode
@@ -340,7 +341,6 @@ class DashboardActivity : AppCompatActivity() {
         clearedThisLoad = false
         lastFullLoadAt = SystemClock.elapsedRealtime()
         BuiltinDashboard.recordLoadStart(lastFullLoadAt) // TTI origin (first call since process start = cold)
-        backoffMs = INITIAL_RETRY_MS
         if (screenAwake) armWatchdog(INITIAL_HANDSHAKE_MS) else main.removeCallbacks(watchdog)
     }
 
@@ -352,14 +352,13 @@ class DashboardActivity : AppCompatActivity() {
     private fun onWatchdogTimeout() {
         // Never retry on a dead activity, while frozen (screen off), or latched — all runaway loops.
         if (destroyed || frontendConnected || !screenAwake || authLatched) return
-        Log.w(TAG, "frontend handshake watchdog fired (no connection-status:connected) — reloading; backoff=${backoffMs}ms")
+        Log.w(TAG, "frontend handshake watchdog fired (no connection-status:connected) — reloading")
         reloadTarget()
         lastFullLoadAt = SystemClock.elapsedRealtime()
         BuiltinDashboard.recordRendererReload(lastFullLoadAt) // involuntary: handshake stalled
         BuiltinDashboard.recordLoadStart(lastFullLoadAt)      // warm TTI origin for the recovery load
         clearedThisLoad = false
-        backoffMs = (backoffMs * 2).coerceAtMost(MAX_RETRY_MS)
-        armWatchdog(backoffMs)
+        armWatchdog(retryPolicy.afterRetry())
     }
 
     /** Fired from the external-bus `connection-status` message: the frontend telling us it connected or
@@ -372,7 +371,7 @@ class DashboardActivity : AppCompatActivity() {
             interstitialShown = false // real page demonstrably loaded
             unlatchAuth("frontend connected") // auth demonstrably works — clear any stale latch + counters
             main.removeCallbacks(watchdog)
-            backoffMs = INITIAL_RETRY_MS
+            retryPolicy.reset()
             if (!clearedThisLoad) {
                 // Drop the auth/redirect history entries so Back can't reach a stale login page, and
                 // persist cookies so an unclean process death right after login doesn't lose the session.
@@ -384,6 +383,7 @@ class DashboardActivity : AppCompatActivity() {
             if (!screenAwake) { main.removeCallbacks(darkSettle); web?.pauseTimers() }
             Log.i(TAG, "frontend connected")
         } else {
+            val wasConnected = frontendConnected
             frontendConnected = false
             // auth-invalid is the frontend saying HA refused its token. One can be a race around a token
             // refresh; several in a row mean the credential is dead — latch instead of reload-looping.
@@ -391,8 +391,9 @@ class DashboardActivity : AppCompatActivity() {
             // disconnected: give the frontend's own reconnect a grace window, then reload — but only
             // while awake (a frozen WebView can't reconnect; wake re-arms the handshake watchdog).
             if (screenAwake && !authLatched) {
-                Log.i(TAG, "frontend '$event' — arming grace watchdog")
-                armWatchdog(DISCONNECT_GRACE_MS)
+                val delay = retryPolicy.connectionFailureDelay(wasConnected)
+                Log.i(TAG, "frontend '$event' — arming retry watchdog in ${delay}ms (wasConnected=$wasConnected)")
+                armWatchdog(delay)
             }
         }
     }
@@ -441,12 +442,12 @@ class DashboardActivity : AppCompatActivity() {
 
     private fun onNetworkAvailable() {
         if (destroyed || authLatched) return
-        // Ignore the callback the OS fires at registration time (the network was never lost) — only a real
-        // offline→online transition should force a reload.
-        if (!sawNetworkLoss) return
-        sawNetworkLoss = false
+        // Ignore only the registration callback when the activity started online. If it started without
+        // a default network, its first onAvailable is the boot-time Wi-Fi arrival and must recover now.
+        if (networkRecovery?.onAvailable() != true) return
         if (frontendConnected || !screenAwake) return // frozen page reconnects itself on wake
         Log.i(TAG, "network regained while frontend not connected — reloading immediately")
+        retryPolicy.reset() // a changed environment deserves a fresh fast cadence if HA is still starting
         doReload("network regained")
     }
 
@@ -494,9 +495,12 @@ class DashboardActivity : AppCompatActivity() {
 
     private fun registerNetworkCallback() {
         conn = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+        networkRecovery = NetworkRecoveryGate(initiallyAvailable = conn?.activeNetwork != null)
         val cb = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) { runOnUiThread { onNetworkAvailable() } }
-            override fun onLost(network: Network) { runOnUiThread { sawNetworkLoss = true } }
+            override fun onLost(network: Network) { runOnUiThread {
+                networkRecovery?.onLost()
+            } }
         }
         netCallback = cb
         // One default-network callback for the activity's lifetime (unregistered in onDestroy) — never a
@@ -936,9 +940,6 @@ class DashboardActivity : AppCompatActivity() {
     companion object {
         private const val TAG = "ha-paneld/dashboard"
         private const val INITIAL_HANDSHAKE_MS = 25_000L        // generous: a cold PX30 frontend can need 20s+
-        private const val INITIAL_RETRY_MS = 5_000L
-        private const val MAX_RETRY_MS = 60_000L                // retry forever (HA restart), capped cadence
-        private const val DISCONNECT_GRACE_MS = 90_000L         // let the frontend's own reconnect try first
         private const val RELOAD_INTERVAL_MS = 6 * 60 * 60 * 1000L   // shed WebView memory at a screen-off, ~6h
         private const val RELOAD_HARD_MS = 26 * 60 * 60 * 1000L      // force a visible reload if never idle-dark
         private const val PERIODIC_CHECK_MS = 30 * 60 * 1000L        // how often the memory-ceiling check runs
