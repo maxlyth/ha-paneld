@@ -72,7 +72,10 @@ class BootChimeController(
         if (direct) return true
         return root.run(
             "settings put system $RING_SPEAKER_KEY $level; " +
-                "settings put system $RING_STANDARD_KEY $level",
+                "settings put system $RING_STANDARD_KEY $level; " +
+                // Android 14 keeps a live per-device volume separate from these persistent keys.
+                // Root is required: shell/app callers are blocked by notification-policy access.
+                "cmd media_session volume --stream $RING_STREAM --set $level",
         )
     }
 
@@ -80,5 +83,6 @@ class BootChimeController(
         private const val TAG = "ha-paneld/bootchime"
         private const val RING_SPEAKER_KEY = "volume_ring_speaker"
         private const val RING_STANDARD_KEY = "volume_ring"
+        private const val RING_STREAM = 2 // AudioManager.STREAM_RING; numeric for the shell command
     }
 }
