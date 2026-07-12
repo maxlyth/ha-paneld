@@ -235,12 +235,6 @@ object SettingsRegistry {
             help = "Built-in renderer: minutes with no touch before the dashboard snaps back to the Home dashboard view (instant in-app navigation, not a reload). 0 = off; needs Home dashboard set.",
         ),
         SettingSpec(
-            key = "dashboard_zoom", type = SettingType.INT, group = "Dashboard",
-            label = "Dashboard zoom (%)", default = "100", min = 50.0, max = 300.0, step = 10.0,
-            help = "Built-in renderer page zoom % (100 = Companion default). Prefer Display sizing " +
-                "(density) for crisp scaling; this is a compatibility fallback.",
-        ),
-        SettingSpec(
             key = "ha_url", type = SettingType.STRING, group = "Dashboard",
             label = "Home Assistant URL", default = "",
             help = "Built-in renderer only (skunk-works): the HA base URL, e.g. http://homeassistant.local:8123. Blank disables the built-in renderer.",
@@ -267,6 +261,14 @@ object SettingsRegistry {
             key = "ha_client_id", type = SettingType.STRING, group = "Dashboard",
             label = "HA OAuth client_id", default = "",
             help = "Built-in renderer only: client_id used when refreshing the token. Blank = the HA URL (the frontend default). Set it to the client the refresh token was issued for, e.g. https://home-assistant.io/android to reuse an HA Companion refresh token.",
+        ),
+        // Last in the group on purpose: the display-density control is the preferred way to size a
+        // dashboard, so this app-level zoom sits below the connection settings users should actually set.
+        SettingSpec(
+            key = "dashboard_zoom", type = SettingType.INT, group = "Dashboard",
+            label = "Dashboard zoom (%)", default = "100", min = 50.0, max = 300.0, step = 10.0,
+            help = "Built-in renderer page zoom % (100 = Companion default). Prefer Display sizing " +
+                "(density) for crisp scaling; this is a compatibility fallback.",
         ),
 
         // ---- System ------------------------------------------------------------------------------
