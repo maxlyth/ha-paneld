@@ -56,7 +56,8 @@ class ScreenController(
         val bl = root.runOutput("d=\$(ls -d /sys/class/backlight/*/ 2>/dev/null|head -1);cat \${d}bl_power 2>/dev/null")?.trim()
         return when (bl) {
             "4" -> true
-            "0" -> false
+            // A powered backlight with an effective level of zero is still physically dark.
+            "0" -> backlight.getBrightness() <= 0
             else -> backlight.getBrightness() <= 0
         }
     }

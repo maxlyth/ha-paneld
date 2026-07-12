@@ -28,7 +28,15 @@ class ScreenControllerTest {
     // --- looksDark polarity ---
     @Test fun looksDarkTrueWhenBlPowerOff() = assertTrue(controller(blPower = "4").first.looksDark())
 
-    @Test fun looksDarkFalseWhenBlPowerOn() = assertFalse(controller(blPower = "0").first.looksDark())
+    @Test fun looksDarkFalseWhenBlPowerOnAndBrightnessVisible() {
+        backlight.level = 120
+        assertFalse(controller(blPower = "0").first.looksDark())
+    }
+
+    @Test fun looksDarkTrueWhenBlPowerOnButBrightnessZero() {
+        backlight.level = 0
+        assertTrue(controller(blPower = "0").first.looksDark())
+    }
 
     @Test fun looksDarkFallsBackToBrightnessWhenBlPowerUnreadable() {
         backlight.level = 0

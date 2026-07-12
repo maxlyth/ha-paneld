@@ -409,9 +409,14 @@ class MqttBridge(
      */
     private fun restoreAndPublishStates() {
         volume.getPercent().let { lastPublishedVolume = it; publish(stateVolume, it.toString(), retain = true) }
-        // Screen: panels come up on; report ON + the current COMMANDED brightness (the setting scale
-        // HA commands in — the effective node value is a different scale on curve-mapped panels).
-        publishScreenBrightness(brightness.getCommanded().coerceAtLeast(1))
+        // A reconnect says nothing about the physical display. Refresh HA from the observed backlight
+        // instead of blindly overwriting a deliberately dark panel with a retained ON state.
+        when (io.github.maxlyth.hapaneld.mqtt.ScreenStateSync.onReconnect(screen.looksDark())) {
+            io.github.maxlyth.hapaneld.mqtt.ScreenStateSync.Action.OFF -> publishScreenOff()
+            io.github.maxlyth.hapaneld.mqtt.ScreenStateSync.Action.ON ->
+                publishScreenBrightness(brightness.getCommanded().coerceAtLeast(1))
+            io.github.maxlyth.hapaneld.mqtt.ScreenStateSync.Action.NONE -> Unit
+        }
         // Navigate: last pushed path, else default to the dashboard root "/" so the entity shows a
         // sensible local path instead of "unknown" before anything has been navigated.
         val navInit = config.lastNavigate.ifEmpty { "/" }
@@ -524,8 +529,7 @@ class MqttBridge(
         val on = json.optString("state", "ON").equals("ON", ignoreCase = true)
         if (!on) {
             screen.sleep()
-            lastScreenBrightness = -1
-            publish(stateScreen, """{"state":"OFF"}""", retain = true)
+            publishScreenOff()
             return
         }
         screen.wake() // power the backlight on (daemon bl_power) or restore brightness (fallback)
@@ -1322,9 +1326,30 @@ class MqttBridge(
      * publishes zero messages. Runs on the watchdog thread (su-safe, off-main).
      */
     private fun syncLocalState() {
+        val screenAction = io.github.maxlyth.hapaneld.mqtt.ScreenStateSync.onHeartbeat(
+            physicallyDark = screen.looksDark(),
+            lastBrightness = lastScreenBrightness,
+        )
+        when (screenAction) {
+            io.github.maxlyth.hapaneld.mqtt.ScreenStateSync.Action.OFF -> {
+                Log.i(TAG, "screen became physically dark outside MQTT — syncing OFF")
+                syncLog.record(SystemClock.elapsedRealtime(), "screen →OFF (physical)")
+                publishScreenOff()
+            }
+            io.github.maxlyth.hapaneld.mqtt.ScreenStateSync.Action.ON -> {
+                val level = brightness.getCommanded().coerceAtLeast(1)
+                Log.i(TAG, "screen became physically lit outside MQTT — syncing ON")
+                syncLog.record(SystemClock.elapsedRealtime(), "screen →ON (physical)")
+                publishScreenBrightness(level)
+            }
+            io.github.maxlyth.hapaneld.mqtt.ScreenStateSync.Action.NONE -> Unit
+        }
+
         // Channel: commanded brightness (Android setting — the scale HA commands in). Catches
         // auto-brightness and any local actor. Skipped while the screen is deliberately off.
-        if (!screen.isIntendedOff() && lastScreenBrightness >= 0) {
+        if (screenAction != io.github.maxlyth.hapaneld.mqtt.ScreenStateSync.Action.OFF &&
+            !screen.isIntendedOff() && lastScreenBrightness >= 0
+        ) {
             val cur = brightness.getCommanded()
             if (settled(cur, prevTickBrightness, lastScreenBrightness, deadband = 3)) {
                 Log.i(TAG, "local brightness changed outside MQTT: $lastScreenBrightness -> $cur — syncing")
@@ -1446,6 +1471,13 @@ class MqttBridge(
     /** Recent local-state sync events (newest first) for the info page + /diag. Empty when nothing has
      *  changed outside MQTT since boot. */
     fun recentSyncEvents(): List<String> = syncLog.recent(SystemClock.elapsedRealtime())
+
+    /** Publish screen=OFF and reset the brightness baseline used by local-state reconciliation. */
+    private fun publishScreenOff() {
+        lastScreenBrightness = -1
+        screenEffectiveBaseline = -1
+        publish(stateScreen, """{"state":"OFF"}""", retain = true)
+    }
 
     /** Publish screen=ON at [level] and remember it as the last-reported brightness (the reconcile
      *  in [heartbeat] compares the effective backlight against this). */

@@ -19,6 +19,22 @@ object SyncGate {
             (prevTick < 0 || kotlin.math.abs(cur - prevTick) <= settleBand)
 }
 
+/** Pure screen-state decision used by reconnect and heartbeat reconciliation. */
+object ScreenStateSync {
+    enum class Action { NONE, OFF, ON }
+
+    /** A reconnect must always refresh HA from the observed physical state. */
+    fun onReconnect(physicallyDark: Boolean): Action =
+        if (physicallyDark) Action.OFF else Action.ON
+
+    /** A heartbeat publishes only when observed physical state differs from the last MQTT state. */
+    fun onHeartbeat(physicallyDark: Boolean, lastBrightness: Int): Action = when {
+        physicallyDark && lastBrightness >= 0 -> Action.OFF
+        !physicallyDark && lastBrightness < 0 -> Action.ON
+        else -> Action.NONE
+    }
+}
+
 /**
  * Bounded, newest-first ring of recent "this changed outside MQTT" events, surfaced on the info page +
  * `/diag` so an operator can see what the panel synced and when. Thread-safe: recorded on the watchdog
