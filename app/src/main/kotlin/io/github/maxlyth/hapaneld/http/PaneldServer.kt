@@ -730,7 +730,25 @@ class PaneldServer(
                                     (f?.let { density.setFontScale(it) } ?: false)
                             }
                         }
+                        // Prime the density cache with the KNOWN result so the redirected /configure shows it
+                        // at once — reading `wm density` back immediately after a change can still return the
+                        // pre-write override for a second or two (the change is async), which flashed a stale
+                        // value on the page until a manual reload. Only the just-changed field could race, so
+                        // we take the value we set (d / recommendedDensity / native) and only re-read the
+                        // unchanged fields (which are stable).
+                        val nat = density.native()
+                        val postDpi = when (action) {
+                            "reset" -> nat
+                            "rec" -> recommendedDensity ?: density.current()
+                            else -> d ?: density.current()
+                        }
+                        val postFont = when (action) {
+                            "reset" -> 1.0f
+                            "rec" -> recommendedFontScale ?: density.fontScale()
+                            else -> f ?: density.fontScale()
+                        }
                         snapInvalidate()
+                        if (ok) densityCache.set(Triple(postDpi, nat, postFont))
                         call.respondText(
                             "<!doctype html><meta charset=utf-8><meta http-equiv=refresh content='1;url=/configure'>" +
                                 "<body style='font-family:system-ui;background:#111;color:#eee;padding:20px'>" +
@@ -1843,7 +1861,9 @@ fetch('/api/v1/tame/suggest').then(function(r){return r.text()}).then(function(t
         // Shown even without root (density can't be READ without it either) so a no-root user sees the
         // feature — but greyed, with a lock banner, and every control disabled. `dis` toggles all of it.
         val locked = !rootOk()
-        val cur = snap.densityCur ?: nat ?: DensityController.MIN_DPI
+        // Prefill: the active override if one is set, else the profile's HA-optimised recommendation
+        // (so a fresh panel offers the right value to Apply rather than the raw native density), else native.
+        val cur = snap.densityCur?.takeIf { it != nat } ?: recommendedDensity ?: nat ?: DensityController.MIN_DPI
         val dis = if (locked) " disabled" else ""
         val rec = if (!locked && (recommendedDensity != null || recommendedFontScale != null))
             """ <button type="submit" name="action" value="rec" formnovalidate>HA-optimised</button>""" else ""

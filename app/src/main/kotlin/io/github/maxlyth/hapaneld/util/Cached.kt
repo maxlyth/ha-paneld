@@ -35,4 +35,13 @@ class Cached<T : Any>(
     fun invalidate() {
         builtAt = 0L
     }
+
+    /** Prime the cache with a known value (fresh). Use after a write whose result is known, so the UI
+     *  shows it immediately instead of racing a re-probe that may still read the pre-write state. */
+    fun set(v: T) {
+        synchronized(lock) {
+            value = v
+            builtAt = System.currentTimeMillis()
+        }
+    }
 }
