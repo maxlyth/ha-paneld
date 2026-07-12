@@ -23,7 +23,7 @@ class Config(context: Context) {
 
     val httpPort: Int get() = prefs.getInt("http_port", DEFAULT_PORT)
 
-    /** Empty => MQTT disabled. e.g. "tcp://172.31.12.1:1883". */
+    /** Empty => MQTT disabled. e.g. "tcp://192.168.1.10:1883". */
     val mqttBroker: String get() = prefs.getString("mqtt_broker", "")!!
     val mqttUser: String get() = prefs.getString("mqtt_user", "")!!
     val mqttPassword: String get() = prefs.getString("mqtt_password", "")!!

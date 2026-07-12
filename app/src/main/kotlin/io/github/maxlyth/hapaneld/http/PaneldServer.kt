@@ -198,7 +198,7 @@ class PaneldServer(
             intercept(ApplicationCallPipeline.Plugins) {
                 // Use origin.remoteAddress (the RAW peer IP), NOT remoteHost — remoteHost reverse-resolves to
                 // a hostname, and forward-resolving that picks a (possibly global) address that fails the
-                // RFC1918 check, 403-ing legitimate LAN clients. Verified: remoteAddress returns 172.31.x etc.
+                // RFC1918 check, 403-ing legitimate LAN clients. Verified: remoteAddress returns 192.168.x etc.
                 if (!isLocalSource(call.request.origin.remoteAddress)) {
                     call.respondText("forbidden\n", status = HttpStatusCode.Forbidden)
                     return@intercept finish()
