@@ -26,6 +26,8 @@ body:
         - Tuya TPA10 (rk3566)
         - Electron / ELCLCD WF1589T (rk3576)
         - ZHICAI SMT1019 / WF2489T
+        - ZX-SMT156 / RK3566_T (rk3566 / arm64)
+        - Amazon Echo Show 5 Gen 2 / cronos (LineageOS / MT8163)
         - Smatek S9E
         - Shelly Wall Display — legacy (Stargate 4", Pegasus X2, Atlantis, MT6580)
         - Shelly Wall Display — modern (Blake XL, Jenna X2i, Cally, Maverick U1, Dayna D1, arm64)

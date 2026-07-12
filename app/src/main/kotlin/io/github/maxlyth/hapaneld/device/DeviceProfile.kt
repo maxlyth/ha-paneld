@@ -7,7 +7,7 @@ import io.github.maxlyth.hapaneld.util.SystemProps
  * Per-platform canonical silo. Everything device/platform-specific that the generic functional modules
  * need — su form, LED mechanism, screen-off path, and the sysfs/vendor locations of optional hardware —
  * is declared here, one `object` per platform (see `NSPanelPro`, `Tpa10`, `Wf1589t`, `Smt1019`, `S9e`,
- * `ShellyWallDisplay`, `ShellyWallDisplayV2`, `Generic`).
+ * `ShellyWallDisplay`, `ShellyWallDisplayV2`, `EchoShow5Gen2`, `ZxSmt156`, `Generic`).
  *
  * Design rule (see docs/architecture/device-profiles.md): a profile declares **candidates + quirks**;
  * the functional modules still **runtime-probe to confirm** (profile says *where to look*, the probe
@@ -201,6 +201,13 @@ interface DeviceProfile {
                 // so an unverified Gen2 still detects relays/zigbee/sensors correctly).
                 "px30" in model || "px30" in device || "rk3326" in model || "rk3326" in device -> NSPanelPro
                 model == "tpa10" || device == "tpa10" -> Tpa10
+                // Echo Show 5 Gen 2 running the community LineageOS build. `cronos` is Amazon's stable
+                // device codename; exact matching avoids the related `checkers` (Gen 1) and `crown`
+                // (Echo Show 8 Gen 1) devices, which need their own profiles.
+                device == "cronos" || model == "cronos" -> EchoShow5Gen2
+                // 15.6-inch unbranded rk3566 panel. Match the exact device code; generic `rk3566`
+                // cannot be used because it is shared by TPA10 and S9E-class hardware.
+                device == "rk3566_t" || model == "rk3566_t" -> ZxSmt156
                 // Shelly Wall Display V2 — modern arm64: Blake/XL, Jenna/X2i, Cally/XLi, Maverick/U1, Dayna/D1.
                 // Build.MODEL is either the device codename or the full SKU (SAWD-3A1XE10EU2 etc.).
                 model in setOf("blake", "jenna", "cally", "maverick", "dayna") ||

@@ -15,6 +15,7 @@ _In development — changes for the next release accumulate here._
 ### Added
 
 - **Built-in renderer responsiveness measurements** — the Performance page and `/api/v1/perf` now report the built-in dashboard's cold and warm time to interactive plus involuntary renderer reloads over the last 24 hours. The measurements run inside the renderer and do not require root, making before/after renderer comparisons available on every panel.
+- **Preliminary profiles for two community-reported panels** — the Amazon Echo Show 5 Gen 2 running LineageOS (`cronos`, MT8163) and the unbranded ZX-SMT156/RK3566_T now identify correctly and use conservative, evidence-backed capability declarations. The diagnostic dump also adds a bounded hardware-characterisation block so follow-up reports can expose input, I²C/IIO, thermal and relay kernel surfaces without a long manual adb session.
 - **Useful dashboard startup progress** — when Android networking is still starting, the built-in renderer now shows a calm native launch screen instead of appearing broken. It reports the current phase (network services, link, address or connection), learns how long that panel usually takes and shows determinate progress on later boots. The screen follows the dashboard's remembered light/dark choice, fits 480×480 panels, and disappears entirely when networking is already ready.
 
 ### Changed

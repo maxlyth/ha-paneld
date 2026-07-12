@@ -16,7 +16,8 @@ import org.junit.Test
  */
 class DeviceProfileCapabilityTest {
     private val all = listOf(
-        NSPanelPro, Tpa10, Smt1019, Wf1589t, S9e, Generic, ShellyWallDisplay, ShellyWallDisplayV2,
+        NSPanelPro, Tpa10, Smt1019, Wf1589t, S9e, EchoShow5Gen2, ZxSmt156, Generic,
+        ShellyWallDisplay, ShellyWallDisplayV2,
     )
 
     @Test fun idsArePresentAndUnique() {

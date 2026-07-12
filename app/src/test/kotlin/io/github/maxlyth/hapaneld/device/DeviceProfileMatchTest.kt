@@ -24,6 +24,16 @@ class DeviceProfileMatchTest {
         assertSame(Tpa10, match("something", "tpa10"))
     }
 
+    @Test fun echoShow5Gen2ByCronosCodename() {
+        assertSame(EchoShow5Gen2, match("Amzn Echo Show 5 (2nd Generation)", "cronos"))
+        assertSame(EchoShow5Gen2, match("CRONOS", "unrelated"))
+    }
+
+    @Test fun zxSmt156ByExactRk3566tFingerprint() {
+        assertSame(ZxSmt156, match("rk3566_t", "rk3566_t", "ZX-SMT156-R128V1.2B"))
+        assertSame(ZxSmt156, match("unrelated", "RK3566_T"))
+    }
+
     @Test fun shellyV2ByCodenameOrSku() {
         assertSame(ShellyWallDisplayV2, match("blake", ""))
         assertSame(ShellyWallDisplayV2, match("jenna", ""))
@@ -73,5 +83,7 @@ class DeviceProfileMatchTest {
         assertSame(NSPanelPro, match("PX30_EVB", "PX30"))
         assertSame(Tpa10, match("TPA10", "TPA10"))
         assertSame(Smt1019, match("RK3576_U", "WF2489T"))
+        assertSame(EchoShow5Gen2, match("CRONOS", "CRONOS"))
+        assertSame(ZxSmt156, match("RK3566_T", "RK3566_T"))
     }
 }

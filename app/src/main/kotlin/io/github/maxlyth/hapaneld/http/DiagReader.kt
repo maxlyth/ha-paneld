@@ -104,6 +104,16 @@ object DiagReader {
         appendLine("[env] selinux=${PanelMetrics.shared.selinuxEnforce() ?: "?"} su=${Su.available()} write_settings=${Settings.System.canWrite(ctx)} a11y=${a11yEnabled(ctx)} daemon=${HelperClient.available()} ledjni=${NativeLed.available()}")
         appendLine("[sysfs] leds=${listDir("/sys/class/leds")} backlight=${listDir("/sys/class/backlight")} devfreq=${listDir("/sys/class/devfreq")}")
         appendLine("[labels] ${exec("ls -Zd /sys/class/leds/*/ /sys/class/backlight/*/ /dev/ledjni 2>&1").replace("\n", " ")}")
+        // Bounded, read-only characterization for an unknown/new panel. These are the high-signal
+        // names needed to locate vendor climate sensors, relay controllers and input devices without
+        // asking a non-developer reporter to run a long sequence of adb commands. Avoid raw uevent,
+        // serial and address data; every list is sanitized and capped.
+        appendLine("[hardware]")
+        appendLine("  inputs=${HardwareCharacterization.inputDevices(readFile("/proc/bus/input/devices"))}")
+        appendLine("  i2c=${HardwareCharacterization.namedDevices(File("/sys/bus/i2c/devices"), "name")}")
+        appendLine("  iio=${HardwareCharacterization.namedDevices(File("/sys/bus/iio/devices"), "name")}")
+        appendLine("  thermal=${HardwareCharacterization.namedDevices(File("/sys/class/thermal"), "type")}")
+        appendLine("  relays=${HardwareCharacterization.relayClasses(listOf(File("/sys/class/relay"), File("/sys/class/st_relay"), File("/sys/class/strelay")))}")
         // GPIO export diagnostic — only for panels with sysfs button-LED pins (the S9E, gpio147–150).
         // RelayController.ledCount() exports those pins on demand; if a reporter still sees 0 LEDs the
         // usual cause is a gpiochip-base shift (the kernel numbered the pins differently), which these

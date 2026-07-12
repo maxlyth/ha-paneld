@@ -9,6 +9,8 @@ Reverse-engineered hardware fact sheets for the wall panels ha-paneld targets �
 | Sonoff NSPanel Pro | rk3326 / PX30 | none (no RGB node) | STK3A5x light + proximity (app-direct) | no | **Zigbee** (Silabs EFR32, UART); no IR | [nspanel-pro.md](nspanel-pro.md) |
 | Smatek S9E † | rk3566 | per-button GPIO LEDs (root) | radar proximity, light, temp+humidity; **2 mains relays** (`st_relay`); RS485 + Ethernet | no | **Zigbee** | [s9e.md](s9e.md) |
 | ZHICAI SMT1019 ‡ | rk3576 | none (LED ioctl root-locked, no su) | none Android-exposed reported | no | no | [smt1019.md](smt1019.md) |
+| ZX-SMT156 / RK3566_T ‡ | rk3566 | `/dev/ledjni` (app-direct) | binary proximity, ambient light; vendor climate path unknown | unknown | vendor relays reported, control path unknown | [zx-smt156.md](zx-smt156.md) |
+| Amazon Echo Show 5 Gen 2 ‡ | MediaTek MT8163 | none | ambient light; no proximity reported | no | no | [echo-show-5-gen2.md](echo-show-5-gen2.md) |
 | Shelly Wall Display § | MT6580 (legacy) / **PX30** (modern, Jenna — Smatek-built, like the S9E) | none (no RGB node) | STK3A5x light + proximity (Jenna, like NSPanel Pro); reported LD2410 radar (Blake/XL, app-only); on-board GPIO relays (1–2/model, via Stargate RPC) | no | no | [shelly-wall-display.md](shelly-wall-display.md) |
 
 † S9E specs are from Smatek's listing; control paths are from [#98](https://github.com/seaky/nspanel_pro_tools_apk/issues/98) + the HA community thread, **not** validated on a unit here — relay/button support is implemented but untested.
@@ -103,6 +105,8 @@ The clean way is a direct adb sideload of the standard Android System WebView (p
 | WF1589T (rk3576) | arm64-v8a | Google Play WebView (auto-updates) | update via Play Store — no sideload needed | — |
 | S9E (rk3566) | armeabi-v7a | **Chromium 83** (`com.android.webview`) — too old for current HA frontend | **LineageOS** 150.0.7871.63 (arm) — *provisional, unverified hardware*; likely signature-locked like the TPA10 | [arm asset](https://github.com/maxlyth/ha-paneld/releases/download/webview-mirror/lineageos-webview-150.0.7871.63-arm.apk) |
 | SMT1019 (rk3576) | arm64-v8a | **unknown** — Android 14, no GMS; likely needs sideload | **LineageOS** 150.0.7871.63 (arm64) — *provisional, unverified hardware* | [arm64 asset](https://github.com/maxlyth/ha-paneld/releases/download/webview-mirror/lineageos-webview-150.0.7871.63-arm64.apk) |
+| ZX-SMT156 / RK3566_T | arm64-v8a | Google WebView **149.0.7827.164** (reporter firmware) | Google WebView is current; no replacement needed | — |
+| Echo Show 5 Gen 2 (`cronos`) | armeabi-v7a | LineageOS WebView **146.0.7680.153** | LineageOS build is current; no replacement needed | — |
 | Shelly WD legacy (MT6580) | armeabi-v7a | **unknown** (Android 7 base ROM) | Atlantis only: `com.google.android.webview` **119.0.6045.194** via [official Shelly ZIP](https://repo.shelly.cloud/firmware/SAWD-0A1XX10EU1/stable/SAWD-0A1XX10EU1-WebViewUpdate.zip) — see [shelly-wall-display.md](shelly-wall-display.md#webview) | — |
 | Shelly WD V2 (arm64 / PX30) | arm64-v8a | **unknown** (Android 11 base ROM; not present in Shelly OTA) | not established — check `adb shell dumpsys webviewupdate` | — |
 
@@ -144,4 +148,4 @@ or via Developer options → *WebView implementation*.
 
 ---
 
-Per-panel fact sheets: [NSPanel Pro](nspanel-pro.md) · [TPA10](tpa10.md) · [WF1589T](wf1589t.md) · [S9E](s9e.md).
+Per-panel fact sheets: [NSPanel Pro](nspanel-pro.md) · [TPA10](tpa10.md) · [WF1589T](wf1589t.md) · [S9E](s9e.md) · [ZX-SMT156](zx-smt156.md) · [Echo Show 5 Gen 2](echo-show-5-gen2.md).
