@@ -6,11 +6,15 @@ import org.junit.Test
 
 class StateConvergerTest {
     private data class Sent(val topic: String, val payload: String, val done: (Boolean) -> Unit)
+    private fun converger(sent: MutableList<Sent>) = StateConverger(
+        sender = { topic, payload, _, done -> sent += Sent(topic, payload, done) },
+        schedule = { it() },
+    )
 
     @Test fun acknowledgedStateSuppressesStableRepublish() {
         var value = "ON"
         val sent = mutableListOf<Sent>()
-        val c = StateConverger { topic, payload, _, done -> sent += Sent(topic, payload, done) }
+        val c = converger(sent)
         c.register(StateConverger.Channel("screen", "screen/state", observe = { StateConverger.Observation.Known(value) }))
 
         c.reconcile("screen")
@@ -22,7 +26,7 @@ class StateConvergerTest {
 
     @Test fun failedPublishRemainsDirtyAndRetries() {
         val sent = mutableListOf<Sent>()
-        val c = StateConverger { topic, payload, _, done -> sent += Sent(topic, payload, done) }
+        val c = converger(sent)
         c.register(StateConverger.Channel("screen", "screen/state", observe = { StateConverger.Observation.Known("OFF") }))
 
         c.reconcile("screen")
@@ -35,7 +39,7 @@ class StateConvergerTest {
 
     @Test fun statusShowsAcknowledgedConvergence() {
         val sent = mutableListOf<Sent>()
-        val c = StateConverger { topic, payload, _, done -> sent += Sent(topic, payload, done) }
+        val c = converger(sent)
         c.register(StateConverger.Channel("volume", "volume/state", observe = {
             StateConverger.Observation.Known("50")
         }))
@@ -48,7 +52,7 @@ class StateConvergerTest {
     @Test fun olderAcknowledgementCannotOverrideNewerObservation() {
         var value = "ON"
         val sent = mutableListOf<Sent>()
-        val c = StateConverger { topic, payload, _, done -> sent += Sent(topic, payload, done) }
+        val c = converger(sent)
         c.register(StateConverger.Channel("screen", "screen/state", observe = { StateConverger.Observation.Known(value) }))
 
         c.reconcile("screen")
@@ -64,7 +68,7 @@ class StateConvergerTest {
     @Test fun unknownAndUnavailableNeverInventState() {
         val sent = mutableListOf<Sent>()
         var observation: StateConverger.Observation = StateConverger.Observation.Unknown
-        val c = StateConverger { topic, payload, _, done -> sent += Sent(topic, payload, done) }
+        val c = converger(sent)
         c.register(StateConverger.Channel("relay", "relay/state", observe = { observation }))
 
         c.reconcile("relay")
@@ -77,13 +81,32 @@ class StateConvergerTest {
 
     @Test fun forceDoesNotDuplicateIdenticalInFlightPayload() {
         val sent = mutableListOf<Sent>()
-        val c = StateConverger { topic, payload, _, done -> sent += Sent(topic, payload, done) }
+        val c = converger(sent)
         c.register(StateConverger.Channel("screen", "screen/state", observe = {
             StateConverger.Observation.Known("ON")
         }))
         c.reconcile("screen", force = true)
         c.reconcile("screen", force = true)
         assertEquals(1, sent.size)
+    }
+
+    @Test fun boundedOutboxPumpsAfterAcknowledgement() {
+        val sent = mutableListOf<Sent>()
+        val c = StateConverger(
+            sender = { topic, payload, _, done -> sent += Sent(topic, payload, done) },
+            schedule = { it() },
+        )
+        repeat(6) { n ->
+            c.register(StateConverger.Channel("c$n", "state/$n", observe = {
+                StateConverger.Observation.Known(n.toString())
+            }))
+        }
+        c.reconcileAll()
+        assertEquals(4, sent.size)
+        assertEquals(4, c.status().inFlight)
+        sent.first().done(true)
+        assertEquals(5, sent.size)
+        assertEquals(4, c.status().inFlight)
     }
 
     @Test fun semanticChangeBeatsNumericDeadband() {

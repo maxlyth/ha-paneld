@@ -251,9 +251,9 @@ class MqttBridge(
     private fun createStateConverger(): io.github.maxlyth.hapaneld.mqtt.StateConverger {
         val known = { payload: String -> io.github.maxlyth.hapaneld.mqtt.StateConverger.Observation.Known(payload) }
         val unknown = io.github.maxlyth.hapaneld.mqtt.StateConverger.Observation.Unknown
-        val c = io.github.maxlyth.hapaneld.mqtt.StateConverger { topic, payload, retain, done ->
-            publish(topic, payload, retain, done)
-        }
+        val c = io.github.maxlyth.hapaneld.mqtt.StateConverger(
+            sender = { topic, payload, retain, done -> publish(topic, payload, retain, done) },
+        )
         fun channel(
             key: String,
             topic: String,

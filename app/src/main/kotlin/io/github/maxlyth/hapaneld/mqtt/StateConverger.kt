@@ -7,6 +7,7 @@ package io.github.maxlyth.hapaneld.mqtt
  */
 class StateConverger(
     private val sender: (topic: String, payload: String, retain: Boolean, done: (Boolean) -> Unit) -> Unit,
+    private val schedule: (() -> Unit) -> Unit = { task -> PUMP.execute(task) },
 ) {
     sealed interface Observation {
         data class Known(val payload: String) : Observation
@@ -60,6 +61,7 @@ class StateConverger(
         synchronized(this) {
             if (runtime.inFlight && runtime.sent == payload) return
             if (!force && !runtime.dirty && runtime.acknowledged?.let { runtime.channel.equivalent(it, payload) } == true) return
+            if (channels.values.count { it.inFlight } >= MAX_IN_FLIGHT) return
             generation = ++runtime.generation
             runtime.sent = payload
             runtime.inFlight = true
@@ -67,16 +69,19 @@ class StateConverger(
         }
 
         sender(runtime.channel.topic, payload, runtime.channel.retain) { success ->
+            var pump = false
             synchronized(this) {
                 if (generation != runtime.generation) return@synchronized
                 runtime.inFlight = false
                 if (success) {
                     runtime.acknowledged = payload
                     runtime.dirty = false
+                    pump = true
                 } else {
                     runtime.dirty = true
                 }
             }
+            if (pump) schedule { reconcileAll() }
         }
     }
 
@@ -104,6 +109,11 @@ class StateConverger(
     )
 
     companion object {
+        private const val MAX_IN_FLIGHT = 4
+        private val PUMP = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+            Thread(r, "state-convergence").apply { isDaemon = true }
+        }
+
         fun numericDeadband(deadband: Double): (String, String) -> Boolean = { acknowledged, observed ->
             val old = acknowledged.toDoubleOrNull()
             val new = observed.toDoubleOrNull()
