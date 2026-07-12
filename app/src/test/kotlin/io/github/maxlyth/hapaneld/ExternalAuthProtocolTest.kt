@@ -106,8 +106,8 @@ class ExternalAuthProtocolTest {
 
     @Test
     fun `dashboard url appends path and external_auth`() {
-        assertEquals("https://ha/bmp-panel/dash?external_auth=1",
-            ExternalAuthProtocol.dashboardUrl("https://ha", "bmp-panel/dash"))
+        assertEquals("https://ha/my-panel/dash?external_auth=1",
+            ExternalAuthProtocol.dashboardUrl("https://ha", "my-panel/dash"))
         // trailing/leading slashes on either side are normalised, not doubled
         assertEquals("https://ha/lovelace/0?external_auth=1",
             ExternalAuthProtocol.dashboardUrl("https://ha/", "/lovelace/0/"))

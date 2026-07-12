@@ -8,7 +8,7 @@
 // bundles NO vendor bytes; this file is its own implementation.
 //
 // Protocol:  open(O_RDONLY|O_NOCTTY); ioctl(fd,0xa1,R); ioctl(fd,0xa2,G); ioctl(fd,0xa3,B); close.
-//            all-off = ioctl(fd,0x99,0). The vendor lib passed 0..15, but a hardware probe (office-dash,
+//            all-off = ioctl(fd,0x99,0). The vendor lib passed 0..15, but a hardware probe (an rk3576 panel,
 //            2026-07-11) showed the node responds across the full 0..255 range per channel (brightness
 //            ramps 15->31->63->127->255) — it is NOT 4-bit. Per-channel response is non-linear, though,
 //            so the correct value comes from a per-profile LedTransfer (Kotlin), not raw passthrough.

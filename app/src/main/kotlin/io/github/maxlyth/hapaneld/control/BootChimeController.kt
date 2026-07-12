@@ -88,6 +88,6 @@ class BootChimeController(
         private const val RING_STANDARD_KEY = "volume_ring"
         private const val NOTIFICATION_KEY = "volume_notification"
         private const val RING_STREAM = 2 // AudioManager.STREAM_RING; numeric for the shell command
-        private const val NOTIFICATION_STREAM = 5 // separate group on Android 14 / office-dash
+        private const val NOTIFICATION_STREAM = 5 // separate group on Android 14
     }
 }

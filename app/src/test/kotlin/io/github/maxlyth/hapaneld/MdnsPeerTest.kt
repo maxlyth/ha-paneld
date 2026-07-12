@@ -18,9 +18,9 @@ class MdnsPeerTest {
 
     // --- toPeer ---
     @Test fun nameFallsBackToInstanceWhenTxtMissingOrBlank() {
-        assertEquals("kitchen_ha_paneld", toPeer("kitchen_ha_paneld", null, "9", "10.0.0.1", 8888, "x", null).name)
-        assertEquals("kitchen_ha_paneld", toPeer("kitchen_ha_paneld", "  ", "9", "10.0.0.1", 8888, "x", null).name)
-        assertEquals("Kitchen Panel", toPeer("kitchen_ha_paneld", "Kitchen Panel", "9", "10.0.0.1", 8888, "x", null).name)
+        assertEquals("gamma_ha_paneld", toPeer("gamma_ha_paneld", null, "9", "10.0.0.1", 8888, "x", null).name)
+        assertEquals("gamma_ha_paneld", toPeer("gamma_ha_paneld", "  ", "9", "10.0.0.1", 8888, "x", null).name)
+        assertEquals("Gamma Panel", toPeer("gamma_ha_paneld", "Gamma Panel", "9", "10.0.0.1", 8888, "x", null).name)
     }
 
     @Test fun versionFallsBackToEmpty() {
@@ -29,23 +29,23 @@ class MdnsPeerTest {
     }
 
     @Test fun selfMatchesById() =
-        assertTrue(toPeer("office_ha_paneld", "Office", "9", "10.0.0.5", 8888, selfId = "office_ha_paneld", selfIp = "10.0.0.99").self)
+        assertTrue(toPeer("alpha_ha_paneld", "Alpha", "9", "10.0.0.5", 8888, selfId = "alpha_ha_paneld", selfIp = "10.0.0.99").self)
 
     @Test fun selfMatchesByIp() =
-        assertTrue(toPeer("office_ha_paneld", "Office", "9", "10.0.0.5", 8888, selfId = "other", selfIp = "10.0.0.5").self)
+        assertTrue(toPeer("alpha_ha_paneld", "Alpha", "9", "10.0.0.5", 8888, selfId = "other", selfIp = "10.0.0.5").self)
 
     @Test fun notSelfWhenNeitherMatches() =
-        assertFalse(toPeer("hall_ha_paneld", "Hall", "9", "10.0.0.5", 8888, selfId = "office_ha_paneld", selfIp = "10.0.0.99").self)
+        assertFalse(toPeer("beta_ha_paneld", "Beta", "9", "10.0.0.5", 8888, selfId = "alpha_ha_paneld", selfIp = "10.0.0.99").self)
 
     @Test fun unresolvedIpIsNull() =
         assertNull(toPeer("p", "P", "9", null, 8888, "x", null).ip)
 
     @Test fun selfIpNullNeverFalseMatchesUnresolvedPeer() =
-        assertFalse("null selfIp must not match a null peer ip", toPeer("hall", "Hall", "9", null, 8888, "office", null).self)
+        assertFalse("null selfIp must not match a null peer ip", toPeer("beta", "Beta", "9", null, 8888, "alpha", null).self)
 
     // --- dedupePeers ---
     @Test fun dedupesByPanelIdPreferringResolvedIp() {
-        val out = dedupePeers(listOf(peer("hall_ha_paneld", ip = null), peer("hall_ha_paneld", ip = "10.0.0.7")))
+        val out = dedupePeers(listOf(peer("beta_ha_paneld", ip = null), peer("beta_ha_paneld", ip = "10.0.0.7")))
         assertEquals(1, out.size)
         assertEquals("10.0.0.7", out[0].ip)
     }
@@ -70,9 +70,9 @@ class MdnsPeerTest {
     @Test fun peersJsonEmptyListIsEmptyArray() = assertEquals("[]", peersJson(emptyList()))
 
     @Test fun peersJsonResolvedPeerCarriesIpAndDerivedUrl() {
-        val json = peersJson(listOf(peer("kitchen_ha_paneld", name = "Kitchen", ip = "10.0.0.7", ver = "0.8.6")))
+        val json = peersJson(listOf(peer("gamma_ha_paneld", name = "Gamma", ip = "10.0.0.7", ver = "0.8.6")))
         assertEquals(
-            """[{"panel_id":"kitchen_ha_paneld","name":"Kitchen","ip":"10.0.0.7","port":8888,""" +
+            """[{"panel_id":"gamma_ha_paneld","name":"Gamma","ip":"10.0.0.7","port":8888,""" +
                 """"url":"http://10.0.0.7:8888/","version":"0.8.6","self":false}]""",
             json,
         )
@@ -81,7 +81,7 @@ class MdnsPeerTest {
     @Test fun peersJsonUnresolvedIpEmitsLiteralNullForIpAndUrl() {
         // A peer whose IPv4 didn't resolve is un-navigable — ip/url MUST be JSON null (not "null"),
         // so switcher.js can filter it out rather than build a broken "http://null:.." link.
-        val json = peersJson(listOf(peer("hall_ha_paneld", name = "Hall", ip = null)))
+        val json = peersJson(listOf(peer("beta_ha_paneld", name = "Beta", ip = null)))
         assertTrue(json, json.contains(""""ip":null"""))
         assertTrue(json, json.contains(""""url":null"""))
         assertFalse("a null ip must never be quoted", json.contains(""""ip":"null""""))

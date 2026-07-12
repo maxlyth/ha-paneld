@@ -1253,7 +1253,7 @@ private class BottomSwipeFrame(
 object ExternalAuthProtocol {
 
     /** Build the dashboard URL: `<haUrl>/<path>?external_auth=1`. [path] is an optional local dashboard
-     *  path (e.g. `bmp-panel/dash` or `/lovelace/0`); leading/trailing slashes are normalised, blank =
+     *  path (e.g. `my-panel/dash` or `/lovelace/0`); leading/trailing slashes are normalised, blank =
      *  the HA root. `external_auth=1` tells the frontend to authenticate via our JS bridge. */
     fun dashboardUrl(haUrl: String, path: String): String {
         val base = haUrl.trim().trimEnd('/')

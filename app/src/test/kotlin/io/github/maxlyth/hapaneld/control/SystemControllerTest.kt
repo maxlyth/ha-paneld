@@ -138,7 +138,7 @@ class SystemControllerTest {
 
     @Test fun launcherSkipsEweLinkKioskDefault() {
         // eWeLink's control panel registers HOME but is vendor kiosk garbage, not a launcher — when it's
-        // the default home, the Launcher button must fall through to a real launcher (bmp's complaint).
+        // the default home, the Launcher button must fall through to a real launcher (a field report).
         val ewelink = "com.eWeLinkControlPanel"
         val (c, root, _) = sc(launcherEnv(ewelink, ewelink, VENDOR), daemon = null)
         c.launchLauncher("")

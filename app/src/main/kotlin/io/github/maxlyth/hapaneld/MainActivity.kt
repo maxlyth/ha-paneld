@@ -219,9 +219,9 @@ class MainActivity : AppCompatActivity() {
     private fun qrBitmap(text: String, size: Int): Bitmap? = try {
         val bits = com.google.zxing.qrcode.QRCodeWriter()
             .encode(text, com.google.zxing.BarcodeFormat.QR_CODE, size, size)
-        Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888).also { bmp ->
+        Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888).also { qr ->
             for (x in 0 until size) for (y in 0 until size)
-                bmp.setPixel(x, y, if (bits.get(x, y)) Color.BLACK else Color.WHITE)
+                qr.setPixel(x, y, if (bits.get(x, y)) Color.BLACK else Color.WHITE)
         }
     } catch (e: Exception) {
         null
