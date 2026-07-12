@@ -27,6 +27,8 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
+import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -114,6 +116,16 @@ class DashboardActivity : AppCompatActivity() {
     // path must then loadUrl() the real dashboard rather than reload() (which would reload the
     // interstitial itself). Cleared on any real load or connect.
     private var interstitialShown = false
+    private var waitingStatus: TextView? = null
+    private var waitingStartedAt = 0L
+    private val waitingTick = object : Runnable {
+        override fun run() {
+            if (destroyed || waitingStatus == null) return
+            val seconds = (SystemClock.elapsedRealtime() - waitingStartedAt) / 1_000L
+            waitingStatus?.text = "Waiting ${seconds}s for Android network\u2026"
+            main.postDelayed(this, 1_000L)
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -449,6 +461,8 @@ class DashboardActivity : AppCompatActivity() {
         if (networkRecovery?.onAvailable() != true) return
         if (web == null) {
             Log.i(TAG, "network became available during startup — creating dashboard WebView")
+            waitingStatus = null
+            main.removeCallbacks(waitingTick)
             retryPolicy.reset()
             buildAndLoad(Config(this))
             if (!screenAwake) {
@@ -533,21 +547,51 @@ class DashboardActivity : AppCompatActivity() {
     /** One quiet startup state while Android brings networking up. This is native rather than cached
      *  WebView content, so neither Chromium's error UI nor HA's 60-second reconnect page can appear. */
     private fun showWaitingForNetwork() {
-        val label = TextView(this).apply {
-            text = "Waiting for network\u2026"
+        val density = resources.displayMetrics.density
+        val title = TextView(this).apply {
+            text = "ha-paneld is running"
             setTextColor(0xFFEEEEEE.toInt())
-            textSize = 24f
+            textSize = 28f
             gravity = Gravity.CENTER
+        }
+        val explanation = TextView(this).apply {
+            text = "Android networking is still starting. Home Assistant will load automatically when the connection is ready."
+            setTextColor(0xFFBBBBBB.toInt())
+            textSize = 18f
+            gravity = Gravity.CENTER
+        }
+        val status = TextView(this).apply {
+            setTextColor(0xFF888888.toInt())
+            textSize = 16f
+            gravity = Gravity.CENTER
+        }
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding((24 * density).toInt(), 0, (24 * density).toInt(), 0)
+            addView(title)
+            addView(ProgressBar(this@DashboardActivity).apply { isIndeterminate = true }, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { topMargin = (24 * density).toInt(); bottomMargin = (24 * density).toInt() })
+            addView(explanation)
+            addView(status, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { topMargin = (18 * density).toInt() })
         }
         val container = FrameLayout(this).apply {
             setBackgroundColor(BG_DARK)
-            addView(label, FrameLayout.LayoutParams(
+            addView(content, FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT,
             ))
         }
         root = container
         setContentView(container)
+        waitingStatus = status
+        waitingStartedAt = SystemClock.elapsedRealtime()
+        waitingTick.run()
         Log.i(TAG, "no default network at startup — waiting before creating WebView")
     }
 
