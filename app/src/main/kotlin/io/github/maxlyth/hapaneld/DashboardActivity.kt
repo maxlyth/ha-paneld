@@ -4,7 +4,9 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
+import android.content.res.ColorStateList
 import android.content.pm.PackageManager
+import android.graphics.Typeface
 import android.net.ConnectivityManager
 import android.net.Network
 import android.os.Bundle
@@ -27,6 +29,7 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
@@ -117,12 +120,15 @@ class DashboardActivity : AppCompatActivity() {
     // interstitial itself). Cleared on any real load or connect.
     private var interstitialShown = false
     private var waitingStatus: TextView? = null
+    private var waitingProgress: ProgressBar? = null
+    private var waitingEstimateMs = 0L
     private var waitingStartedAt = 0L
     private val waitingTick = object : Runnable {
         override fun run() {
             if (destroyed || waitingStatus == null) return
-            val seconds = (SystemClock.elapsedRealtime() - waitingStartedAt) / 1_000L
-            waitingStatus?.text = "Waiting ${seconds}s for Android network\u2026"
+            val elapsed = SystemClock.elapsedRealtime() - waitingStartedAt
+            waitingStatus?.text = "${elapsed / 1_000L}s elapsed"
+            if (waitingEstimateMs > 0L) waitingProgress?.progress = networkWaitProgress(elapsed, waitingEstimateMs)
             main.postDelayed(this, 1_000L)
         }
     }
@@ -460,8 +466,11 @@ class DashboardActivity : AppCompatActivity() {
         // a default network, its first onAvailable is the boot-time Wi-Fi arrival and must recover now.
         if (networkRecovery?.onAvailable() != true) return
         if (web == null) {
-            Log.i(TAG, "network became available during startup — creating dashboard WebView")
+            val waitMs = (SystemClock.elapsedRealtime() - waitingStartedAt).coerceAtLeast(0L)
+            if (waitingStartedAt > 0L) Config(this).setLastNetworkWaitMs(waitMs)
+            Log.i(TAG, "network became available during startup after ${waitMs}ms — creating dashboard WebView")
             waitingStatus = null
+            waitingProgress = null
             main.removeCallbacks(waitingTick)
             retryPolicy.reset()
             buildAndLoad(Config(this))
@@ -548,37 +557,81 @@ class DashboardActivity : AppCompatActivity() {
      *  WebView content, so neither Chromium's error UI nor HA's 60-second reconnect page can appear. */
     private fun showWaitingForNetwork() {
         val density = resources.displayMetrics.density
+        val config = Config(this)
+        waitingEstimateMs = config.lastNetworkWaitMs
+        val accent = 0xFF18BCF2.toInt()
+        val secondary = 0xFFB8C1CC.toInt()
+        val muted = 0xFF74808E.toInt()
+        val mark = ImageView(this).apply {
+            setImageResource(R.mipmap.ic_launcher)
+            contentDescription = "ha-paneld"
+        }
         val title = TextView(this).apply {
-            text = "ha-paneld is running"
+            text = "Getting your dashboard ready"
             setTextColor(0xFFEEEEEE.toInt())
-            textSize = 28f
+            textSize = 30f
+            setTypeface(typeface, Typeface.BOLD)
             gravity = Gravity.CENTER
         }
         val explanation = TextView(this).apply {
-            text = "Android networking is still starting. Home Assistant will load automatically when the connection is ready."
-            setTextColor(0xFFBBBBBB.toInt())
+            text = "ha-paneld is up and running. Android is reconnecting this panel to your network."
+            setTextColor(secondary)
             textSize = 18f
             gravity = Gravity.CENTER
         }
-        val status = TextView(this).apply {
-            setTextColor(0xFF888888.toInt())
-            textSize = 16f
+        val destination = TextView(this).apply {
+            text = "Home Assistant will open automatically"
+            setTextColor(accent)
+            textSize = 17f
+            setTypeface(typeface, Typeface.BOLD)
             gravity = Gravity.CENTER
+        }
+        val estimate = TextView(this).apply {
+            text = if (waitingEstimateMs > 0L) {
+                "Usually ready in about ${((waitingEstimateMs + 2_500L) / 5_000L) * 5L} seconds"
+            } else {
+                "Learning this panel's startup time"
+            }
+            setTextColor(muted)
+            textSize = 15f
+            gravity = Gravity.CENTER
+        }
+        val status = TextView(this).apply {
+            setTextColor(muted)
+            textSize = 14f
+            gravity = Gravity.CENTER
+        }
+        val progress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 1_000
+            progress = 0
+            progressTintList = ColorStateList.valueOf(accent)
+            progressBackgroundTintList = ColorStateList.valueOf(0xFF303944.toInt())
+            indeterminateTintList = ColorStateList.valueOf(accent)
+            isIndeterminate = waitingEstimateMs <= 0L
         }
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
-            setPadding((24 * density).toInt(), 0, (24 * density).toInt(), 0)
+            setPadding((42 * density).toInt(), 0, (42 * density).toInt(), 0)
+            addView(mark, LinearLayout.LayoutParams((88 * density).toInt(), (88 * density).toInt()).apply {
+                bottomMargin = (24 * density).toInt()
+                gravity = Gravity.CENTER_HORIZONTAL
+            })
             addView(title)
-            addView(ProgressBar(this@DashboardActivity).apply { isIndeterminate = true }, LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-            ).apply { topMargin = (24 * density).toInt(); bottomMargin = (24 * density).toInt() })
-            addView(explanation)
+            addView(explanation, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { topMargin = (14 * density).toInt() })
+            addView(progress, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, (8 * density).toInt().coerceAtLeast(4),
+            ).apply { topMargin = (34 * density).toInt(); bottomMargin = (18 * density).toInt() })
+            addView(destination)
+            addView(estimate, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { topMargin = (10 * density).toInt() })
             addView(status, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT,
-            ).apply { topMargin = (18 * density).toInt() })
+            ).apply { topMargin = (6 * density).toInt() })
         }
         val container = FrameLayout(this).apply {
             setBackgroundColor(BG_DARK)
@@ -590,6 +643,7 @@ class DashboardActivity : AppCompatActivity() {
         root = container
         setContentView(container)
         waitingStatus = status
+        waitingProgress = progress
         waitingStartedAt = SystemClock.elapsedRealtime()
         waitingTick.run()
         Log.i(TAG, "no default network at startup — waiting before creating WebView")

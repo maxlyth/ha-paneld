@@ -424,6 +424,13 @@ class Config(context: Context) {
     val silenceBootChime: Boolean get() = prefs.getBoolean("silence_boot_chime", false)
     fun setSilenceBootChime(on: Boolean) { edit { putBoolean("silence_boot_chime", on) } }
 
+    /** Last measured DashboardActivity-start → Android default-network wait. Used only to make the
+     * next boot's launch progress honest for this particular panel; zero means no learned estimate. */
+    val lastNetworkWaitMs: Long get() = prefs.getLong("last_network_wait_ms", 0L)
+    fun setLastNetworkWaitMs(ms: Long) {
+        prefs.edit().putLong("last_network_wait_ms", ms.coerceIn(1_000L, 300_000L)).apply()
+    }
+
     // --- remote log shipping (opt-in) --------------------------------------------------------------
     // Forward ha-paneld's OWN process logcat (its Log.* output + the Ktor/HiveMQ SLF4J library logs,
     // all emitted by this app's uid → readable with no READ_LOGS and no root) to a central aggregator

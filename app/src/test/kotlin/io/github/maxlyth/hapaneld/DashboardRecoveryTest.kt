@@ -45,4 +45,11 @@ class DashboardRecoveryTest {
         policy.reset()
         assertEquals(5_000L, policy.connectionFailureDelay(wasConnected = false))
     }
+
+    @Test fun `learned network wait drives progress without claiming completion`() {
+        assertEquals(0, networkWaitProgress(elapsedMs = 10_000L, estimateMs = 0L))
+        assertEquals(500, networkWaitProgress(elapsedMs = 30_000L, estimateMs = 60_000L))
+        assertEquals(950, networkWaitProgress(elapsedMs = 60_000L, estimateMs = 60_000L))
+        assertEquals(950, networkWaitProgress(elapsedMs = 90_000L, estimateMs = 60_000L))
+    }
 }

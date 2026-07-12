@@ -38,3 +38,10 @@ internal class DashboardRetryPolicy(
         retryMs = initialRetryMs
     }
 }
+
+/** 0..950 launch-progress scale. Never claims completion: the real completion signal is Android's
+ * network callback, after which the launch view is immediately replaced by the dashboard. */
+internal fun networkWaitProgress(elapsedMs: Long, estimateMs: Long): Int {
+    if (estimateMs <= 0L) return 0
+    return ((elapsedMs.coerceAtLeast(0L) * 1_000L) / estimateMs).coerceAtMost(950L).toInt()
+}
