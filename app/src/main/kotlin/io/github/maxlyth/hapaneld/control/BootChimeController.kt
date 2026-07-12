@@ -66,16 +66,19 @@ class BootChimeController(
     private fun writeLevel(level: Int): Boolean {
         val direct = runCatching {
             Settings.System.putInt(cr, RING_SPEAKER_KEY, level) &&
-                Settings.System.putInt(cr, RING_STANDARD_KEY, level)
+                Settings.System.putInt(cr, RING_STANDARD_KEY, level) &&
+                Settings.System.putInt(cr, NOTIFICATION_KEY, level)
         }.onFailure { Log.w(TAG, "app settings write failed; trying root: ${it.message}") }
             .getOrDefault(false)
         if (direct) return true
         return root.run(
             "settings put system $RING_SPEAKER_KEY $level; " +
                 "settings put system $RING_STANDARD_KEY $level; " +
+                "settings put system $NOTIFICATION_KEY $level; " +
                 // Android 14 keeps a live per-device volume separate from these persistent keys.
                 // Root is required: shell/app callers are blocked by notification-policy access.
-                "cmd media_session volume --stream $RING_STREAM --set $level",
+                "cmd media_session volume --stream $RING_STREAM --set $level; " +
+                "cmd media_session volume --stream $NOTIFICATION_STREAM --set $level",
         )
     }
 
@@ -83,6 +86,8 @@ class BootChimeController(
         private const val TAG = "ha-paneld/bootchime"
         private const val RING_SPEAKER_KEY = "volume_ring_speaker"
         private const val RING_STANDARD_KEY = "volume_ring"
+        private const val NOTIFICATION_KEY = "volume_notification"
         private const val RING_STREAM = 2 // AudioManager.STREAM_RING; numeric for the shell command
+        private const val NOTIFICATION_STREAM = 5 // separate group on Android 14 / office-dash
     }
 }

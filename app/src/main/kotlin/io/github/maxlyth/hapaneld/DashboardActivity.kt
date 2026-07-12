@@ -4,9 +4,10 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
-import android.content.res.ColorStateList
 import android.content.pm.PackageManager
-import android.graphics.Typeface
+import android.content.res.ColorStateList
+import android.content.res.Configuration
+import android.graphics.Color
 import android.net.ConnectivityManager
 import android.net.Network
 import android.os.Bundle
@@ -32,6 +33,7 @@ import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
+import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -122,14 +124,20 @@ class DashboardActivity : AppCompatActivity() {
     private var waitingStatus: TextView? = null
     private var waitingProgress: ProgressBar? = null
     private var waitingEstimateMs = 0L
+    private var waitingEstimateLearned = false
     private var waitingStartedAt = 0L
     private val waitingTick = object : Runnable {
         override fun run() {
             if (destroyed || waitingStatus == null) return
             val elapsed = SystemClock.elapsedRealtime() - waitingStartedAt
-            waitingStatus?.text = "${elapsed / 1_000L}s elapsed"
-            if (waitingEstimateMs > 0L) waitingProgress?.progress = networkWaitProgress(elapsed, waitingEstimateMs)
-            main.postDelayed(this, 1_000L)
+            val expected = ((waitingEstimateMs + 2_500L) / 5_000L) * 5L
+            waitingStatus?.text = if (waitingEstimateLearned) {
+                "${elapsed / 1_000L}s elapsed  ·  usually about ${expected}s"
+            } else {
+                "${elapsed / 1_000L}s elapsed  ·  learning this panel's timing"
+            }
+            waitingProgress?.progress = networkWaitProgress(elapsed, waitingEstimateMs)
+            main.postDelayed(this, 250L)
         }
     }
 
@@ -556,89 +564,94 @@ class DashboardActivity : AppCompatActivity() {
     /** One quiet startup state while Android brings networking up. This is native rather than cached
      *  WebView content, so neither Chromium's error UI nor HA's 60-second reconnect page can appear. */
     private fun showWaitingForNetwork() {
-        val density = resources.displayMetrics.density
+        val dm = resources.displayMetrics
+        val density = dm.density
+        val hDp = (dm.heightPixels / density).toInt()
+        val compact = hDp < 560
         val config = Config(this)
-        waitingEstimateMs = config.lastNetworkWaitMs
-        val accent = 0xFF18BCF2.toInt()
-        val secondary = 0xFFB8C1CC.toInt()
-        val muted = 0xFF74808E.toInt()
-        val mark = ImageView(this).apply {
-            setImageResource(R.mipmap.ic_launcher)
+        waitingEstimateLearned = config.lastNetworkWaitMs > 0L
+        waitingEstimateMs = config.lastNetworkWaitMs.takeIf { it > 0L } ?: DEFAULT_NETWORK_WAIT_MS
+        val dark = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
+            Configuration.UI_MODE_NIGHT_YES
+        val bg = Color.parseColor(if (dark) "#111111" else "#ffffff")
+        val body = Color.parseColor(if (dark) "#c8ccd2" else "#2a2e34")
+        val subtle = Color.parseColor(if (dark) "#8a8f99" else "#5a6068")
+        val accent = Color.parseColor(if (dark) "#4a9eff" else "#1669d6")
+        val track = Color.parseColor(if (dark) "#30343a" else "#dce1e7")
+        val wordmark = ImageView(this).apply {
+            setImageResource(R.drawable.wordmark)
+            adjustViewBounds = true
+            scaleType = ImageView.ScaleType.FIT_CENTER
             contentDescription = "ha-paneld"
         }
-        val title = TextView(this).apply {
-            text = "Getting your dashboard ready"
-            setTextColor(0xFFEEEEEE.toInt())
-            textSize = 30f
-            setTypeface(typeface, Typeface.BOLD)
+        val running = TextView(this).apply {
+            text = "v${BuildConfig.VERSION_NAME} · running"
+            setTextColor(subtle)
+            textSize = 12f
             gravity = Gravity.CENTER
         }
         val explanation = TextView(this).apply {
-            text = "ha-paneld is up and running. Android is reconnecting this panel to your network."
-            setTextColor(secondary)
-            textSize = 18f
+            text = "Android is reconnecting this panel to the network before the dashboard starts."
+            setTextColor(body)
+            textSize = if (compact) 12.5f else 14f
             gravity = Gravity.CENTER
         }
         val destination = TextView(this).apply {
             text = "Home Assistant will open automatically"
             setTextColor(accent)
-            textSize = 17f
-            setTypeface(typeface, Typeface.BOLD)
-            gravity = Gravity.CENTER
-        }
-        val estimate = TextView(this).apply {
-            text = if (waitingEstimateMs > 0L) {
-                "Usually ready in about ${((waitingEstimateMs + 2_500L) / 5_000L) * 5L} seconds"
-            } else {
-                "Learning this panel's startup time"
-            }
-            setTextColor(muted)
-            textSize = 15f
+            textSize = if (compact) 14f else 16f
             gravity = Gravity.CENTER
         }
         val status = TextView(this).apply {
-            setTextColor(muted)
-            textSize = 14f
+            setTextColor(subtle)
+            textSize = if (compact) 11.5f else 13f
             gravity = Gravity.CENTER
         }
         val progress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
             max = 1_000
             progress = 0
             progressTintList = ColorStateList.valueOf(accent)
-            progressBackgroundTintList = ColorStateList.valueOf(0xFF303944.toInt())
-            indeterminateTintList = ColorStateList.valueOf(accent)
-            isIndeterminate = waitingEstimateMs <= 0L
+            progressBackgroundTintList = ColorStateList.valueOf(track)
+            isIndeterminate = false
         }
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
-            setPadding((42 * density).toInt(), 0, (42 * density).toInt(), 0)
-            addView(mark, LinearLayout.LayoutParams((88 * density).toInt(), (88 * density).toInt()).apply {
-                bottomMargin = (24 * density).toInt()
+            val verticalPad = (if (compact) 16 else 36) * density
+            setPadding((24 * density).toInt(), verticalPad.toInt(), (24 * density).toInt(), verticalPad.toInt())
+            addView(wordmark, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, ((if (compact) 52 else 72) * density).toInt(),
+            ).apply {
+                bottomMargin = ((if (compact) 8 else 14) * density).toInt()
                 gravity = Gravity.CENTER_HORIZONTAL
             })
-            addView(title)
+            addView(running)
             addView(explanation, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT,
-            ).apply { topMargin = (14 * density).toInt() })
+            ).apply { topMargin = ((if (compact) 16 else 24) * density).toInt() })
             addView(progress, LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, (8 * density).toInt().coerceAtLeast(4),
-            ).apply { topMargin = (34 * density).toInt(); bottomMargin = (18 * density).toInt() })
+                ((if (compact) 220 else 280) * density).toInt(), (5 * density).toInt().coerceAtLeast(3),
+            ).apply {
+                topMargin = ((if (compact) 24 else 32) * density).toInt()
+                bottomMargin = ((if (compact) 14 else 18) * density).toInt()
+                gravity = Gravity.CENTER_HORIZONTAL
+            })
             addView(destination)
-            addView(estimate, LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT,
-            ).apply { topMargin = (10 * density).toInt() })
             addView(status, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT,
-            ).apply { topMargin = (6 * density).toInt() })
+            ).apply { topMargin = ((if (compact) 7 else 10) * density).toInt() })
         }
         val container = FrameLayout(this).apply {
-            setBackgroundColor(BG_DARK)
-            addView(content, FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT,
-            ))
+            setBackgroundColor(bg)
+            val colW = minOf(dm.widthPixels - (48 * density).toInt(), (512 * density).toInt())
+            addView(ScrollView(this@DashboardActivity).apply {
+                isFillViewport = true
+                setBackgroundColor(bg)
+                addView(content, FrameLayout.LayoutParams(
+                    colW, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.CENTER_HORIZONTAL,
+                ))
+            }, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
         }
         root = container
         setContentView(container)
@@ -1090,6 +1103,7 @@ class DashboardActivity : AppCompatActivity() {
         private const val IDLE_CHECK_MS = 60_000L               // idle return-to-home tick
         private const val AUTH_INVALID_LATCH = 3                // consecutive auth-invalid events → latch
         private const val REFRESH_REJECT_LATCH = 2              // consecutive definitive refresh rejections → latch
+        private const val DEFAULT_NETWORK_WAIT_MS = 60_000L     // calm first-boot progress until learned
     }
 }
 
