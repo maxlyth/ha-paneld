@@ -32,7 +32,9 @@ class HiveMqTransport : MqttTransport {
                     runCatching { ctx.reconnector.reconnect(false) } // zombie: kill its auto-reconnect
                     return@addDisconnectedListener
                 }
-                callbacks.onDisconnected(ctx.cause?.message ?: ctx.cause?.toString())
+                if (!callbacks.onDisconnected(ctx.cause?.message ?: ctx.cause?.toString())) {
+                    runCatching { ctx.reconnector.reconnect(false) }
+                }
             }
         // ssl:///mqtts:// broker → TLS with the default JVM trust store (CA-signed cert validates).
         if (config.tls) builder = builder.sslWithDefaultConfig()

@@ -9,6 +9,11 @@ import org.junit.Test
  * now unit-testable via the ConnectionSupervisor extraction. Times are in the same units the service uses.
  */
 class ConnectionSupervisorTest {
+    @Test fun `authentication recovery is not rebuilt or family-flipped by generic watchdog`() {
+        val s = ConnectionSupervisor(staleMs = 100, rebuildAbandonMs = 1_000)
+        assertEquals(ConnectionSupervisor.Action.None, s.tick("auth-retrying", 1, 10_000, 10_001, false))
+        assertEquals(ConnectionSupervisor.Action.None, s.tick("auth-failed", 1, 20_000, 20_001, false))
+    }
 
     private val stale = 150_000L
     private val abandon = 300_000L

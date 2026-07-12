@@ -34,6 +34,7 @@ import io.github.maxlyth.hapaneld.mqtt.MqttConnectConfig
 import io.github.maxlyth.hapaneld.control.Diagnostics
 import io.github.maxlyth.hapaneld.mqtt.MqttTransport
 import io.github.maxlyth.hapaneld.mqtt.classifyDisconnect
+import io.github.maxlyth.hapaneld.mqtt.AuthRecovery
 import io.github.maxlyth.hapaneld.util.HelperClient
 import io.github.maxlyth.hapaneld.util.Json
 import kotlin.math.roundToInt
@@ -143,6 +144,15 @@ class MqttBridge(
      *  whichever family actually works and stays there. */
     @Volatile private var preferIpv4: Boolean = false
 
+    private val authRecovery = AuthRecovery(jitter = { base, _ ->
+        // Bounded ±20% jitter prevents a fleet-wide broker restart becoming a synchronized retry storm.
+        (base * (80 + java.util.concurrent.ThreadLocalRandom.current().nextInt(41)) / 100)
+    })
+    private val authScheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r ->
+        Thread(r, "mqtt-auth-recovery").apply { isDaemon = true }
+    }
+    @Volatile private var authRetryGeneration = 0L
+
     private fun markOk() { lastOkMs = SystemClock.elapsedRealtime() }
 
     /** Milliseconds since the last broker-ACKed activity, or 0 if never connected (so a not-yet-started
@@ -156,7 +166,11 @@ class MqttBridge(
         if (state == "disabled") return "disabled"
         val age = if (lastOkMs == 0L) "never" else "${msSinceLastOk() / 1000}s ago"
         val transport = if (tlsActive) "TLS" else "TCP"
-        return "$state · $transport · last-ok $age · prefer ${if (preferIpv4) "IPv4" else "IPv6"}"
+        val a = authRecovery.snapshot(SystemClock.elapsedRealtime())
+        val auth = if (a.consecutiveRejects == 0) "auth-ok" else
+            "${a.state} · rejects ${a.consecutiveRejects} · attempt ${a.retryAttempt} · next ${a.nextRetryMs?.let { ((it - SystemClock.elapsedRealtime()).coerceAtLeast(0) / 1000).toString() + "s" } ?: "none"}"
+        val lastAuth = a.lastSuccessMs?.let { "${((SystemClock.elapsedRealtime() - it).coerceAtLeast(0) / 1000)}s ago" } ?: "never"
+        return "$state · $transport · last-ok $age · last-auth $lastAuth · $auth · prefer ${if (preferIpv4) "IPv4" else "IPv6"}"
     }
 
     private val panel = config.panelId
@@ -341,6 +355,7 @@ class MqttBridge(
 
     @Synchronized
     fun start() {
+        authRecovery.configure("${config.mqttBroker}\u0000${config.mqttUser}\u0000${config.mqttPassword}")
         var broker = config.mqttBroker.trim()
         if (broker.isEmpty()) {
             // No explicit broker — try to find HA on the LAN (mDNS) and default to its :1883.
@@ -388,12 +403,19 @@ class MqttBridge(
                 ),
                 object : MqttCallbacks {
                     override fun onConnected() = this@MqttBridge.onConnected()
-                    override fun onDisconnected(causeMessage: String?) {
+                    override fun onDisconnected(causeMessage: String?): Boolean {
                         // Classify so the UI can say "auth rejected" vs "unreachable" rather than "down".
-                        state = classifyDisconnect(causeMessage)
+                        val classified = classifyDisconnect(causeMessage)
+                        if (classified == "auth-failed") {
+                            val now = SystemClock.elapsedRealtime()
+                            val retryAt = authRecovery.rejected(now)
+                            state = authRecovery.snapshot(now).state
+                            scheduleAuthRetry(retryAt)
+                        } else state = classified
                         PanelStatus.mqttConnected = false
-                        Log.w(TAG, "MQTT disconnected ($state) — auto-reconnecting: $causeMessage")
+                        Log.w(TAG, "MQTT disconnected ($state): $causeMessage")
                         stateConverger.markAllDirty()
+                        return classified != "auth-failed"
                     }
                     override fun onPublishAck() = markOk()
                 },
@@ -402,6 +424,17 @@ class MqttBridge(
         } catch (e: Exception) {
             Log.w(TAG, "MQTT connect failed", e)
         }
+    }
+
+    private fun scheduleAuthRetry(atMs: Long) {
+        val generation = ++authRetryGeneration
+        val delay = (atMs - SystemClock.elapsedRealtime()).coerceAtLeast(0L)
+        authScheduler.schedule({
+            if (generation == authRetryGeneration && state.startsWith("auth-")) {
+                Log.i(TAG, "MQTT auth retry — building fresh client with unchanged address family")
+                reconnect(flipFamily = false)
+            }
+        }, delay, java.util.concurrent.TimeUnit.MILLISECONDS)
     }
 
     /**
@@ -429,6 +462,8 @@ class MqttBridge(
 
     /** Runs on every (re)connect: (re)subscribe to commands and (re)publish discovery + online. */
     private fun onConnected() {
+        authRetryGeneration++
+        authRecovery.authenticated(SystemClock.elapsedRealtime())
         state = "connected"
         markOk()   // reset the liveness clock; the subscribe/discovery publishes below keep it fresh
         PanelStatus.mqttConnected = true
@@ -1562,6 +1597,8 @@ class MqttBridge(
 
     @Synchronized
     fun stop() {
+        authRetryGeneration++
+        authScheduler.shutdownNow()
         ButtonBus.listener = null
         PanelStatus.mqttConnected = false
         zigbeeExecutor.shutdownNow()

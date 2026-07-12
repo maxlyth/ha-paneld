@@ -37,6 +37,27 @@ class StateConvergerTest {
         assertEquals(1, c.status().dirty)
     }
 
+    @Test fun outageRetainsRealStateAndDrainsAfterReconnectWithoutInventingFallbacks() {
+        var screen: StateConverger.Observation = StateConverger.Observation.Known("""{"state":"ON","brightness":73}""")
+        var relay: StateConverger.Observation = StateConverger.Observation.Unknown
+        val sent = mutableListOf<Sent>()
+        val c = converger(sent)
+        c.register(StateConverger.Channel("screen", "screen/state", observe = { screen }))
+        c.register(StateConverger.Channel("relay", "relay/state", observe = { relay }))
+
+        c.reconcileAll()
+        assertEquals(listOf("""{"state":"ON","brightness":73}"""), sent.map { it.payload })
+        sent.single().done(false) // broker/auth outage
+        c.markAllDirty()
+        assertEquals(2, c.status().dirty)
+
+        c.reconcileAll() // reconnect: known state drains; unknown state publishes no OFF/zero/unavailable
+        assertEquals(listOf("""{"state":"ON","brightness":73}""", """{"state":"ON","brightness":73}"""), sent.map { it.payload })
+        sent.last().done(true)
+        assertEquals(0, c.status().dirty)
+        assertEquals(1, c.status().unknown)
+    }
+
     @Test fun statusShowsAcknowledgedConvergence() {
         val sent = mutableListOf<Sent>()
         val c = converger(sent)

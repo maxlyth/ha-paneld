@@ -41,6 +41,7 @@ data class MqttConnectConfig(
 /** Lifecycle callbacks the transport invokes for the LIVE client only (superseded clients are filtered). */
 interface MqttCallbacks {
     fun onConnected()
-    fun onDisconnected(causeMessage: String?)
+    /** False suppresses HiveMQ's in-place reconnect; the owner will build a fresh client. */
+    fun onDisconnected(causeMessage: String?): Boolean
     fun onPublishAck()
 }

@@ -305,14 +305,8 @@ class PaneldService : Service() {
         val auto = config.mqttBroker.isBlank() && mqtt.activeBroker.isNotBlank()
         val mqttStatus = when (mqtt.state) {
             "connected" -> "$host · connected" + (if (auto) " (auto)" else "")
-            // Only claim "credentials rejected" when the rejection is PERSISTENT (no broker-ACKed
-            // activity for a while). A transient NOT_AUTHORIZED during a broker/HA restart — or a
-            // reconnect racing its predecessor — self-heals within a watchdog cycle, and flashing a
-            // scary "check username/password" banner for that erodes trust in a working setup.
-            "auth-failed" ->
-                if (mqtt.lastOkMs != 0L && mqtt.msSinceLastOk() < AUTH_PERSIST_MS)
-                    "$host · reconnecting…"
-                else "$host · reachable, auth rejected — check username/password"
+            "auth-retrying" -> "$host · auth retrying…"
+            "auth-failed" -> "$host · reachable, auth rejected — check username/password"
             "unreachable" -> "$host · unreachable"
             "connecting" -> "$host · connecting…"
             else -> "disabled"
