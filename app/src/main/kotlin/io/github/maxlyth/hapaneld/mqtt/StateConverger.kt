@@ -31,9 +31,12 @@ class StateConverger(
         var inFlight: Boolean = false,
         var dirty: Boolean = true,
         var unknown: Boolean = false,
+        var sentAtMs: Long = 0,
     )
 
     private val channels = linkedMapOf<String, Runtime>()
+    private var successes = 0L
+    private var failures = 0L
 
     @Synchronized
     fun register(channel: Channel) {
@@ -66,6 +69,7 @@ class StateConverger(
             runtime.sent = payload
             runtime.inFlight = true
             runtime.dirty = true
+            runtime.sentAtMs = System.currentTimeMillis()
         }
 
         sender(runtime.channel.topic, payload, runtime.channel.retain) { success ->
@@ -74,10 +78,12 @@ class StateConverger(
                 if (generation != runtime.generation) return@synchronized
                 runtime.inFlight = false
                 if (success) {
+                    successes++
                     runtime.acknowledged = payload
                     runtime.dirty = false
                     pump = true
                 } else {
+                    failures++
                     runtime.dirty = true
                 }
             }
@@ -98,7 +104,15 @@ class StateConverger(
     @Synchronized
     fun keys(): Set<String> = channels.keys.toSet()
 
-    data class Status(val channels: Int, val dirty: Int, val inFlight: Int, val unknown: Int)
+    data class Status(
+        val channels: Int,
+        val dirty: Int,
+        val inFlight: Int,
+        val unknown: Int,
+        val successes: Long,
+        val failures: Long,
+        val pending: List<String>,
+    )
 
     @Synchronized
     fun status(): Status = Status(
@@ -106,6 +120,11 @@ class StateConverger(
         dirty = channels.values.count { it.dirty },
         inFlight = channels.values.count { it.inFlight },
         unknown = channels.values.count { it.unknown },
+        successes = successes,
+        failures = failures,
+        pending = channels.values.filter { it.inFlight }.map {
+            "${it.channel.key}:${((System.currentTimeMillis() - it.sentAtMs).coerceAtLeast(0) / 1000)}s"
+        },
     )
 
     companion object {

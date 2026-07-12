@@ -1541,7 +1541,8 @@ class MqttBridge(
     fun recentSyncEvents(): List<String> = syncLog.recent(SystemClock.elapsedRealtime())
 
     fun convergenceStatus(): String = stateConverger.status().let {
-        "${it.channels} channels · ${it.dirty} dirty · ${it.inFlight} in-flight · ${it.unknown} unknown"
+        "${it.channels} channels · ${it.dirty} dirty · ${it.inFlight} in-flight · ${it.unknown} unknown · " +
+            "ack ${it.successes}/${it.failures} · pending ${it.pending.joinToString(",").ifEmpty { "none" }}"
     }
 
     /** Publish screen=OFF and reset the brightness baseline used by local-state reconciliation. */

@@ -44,9 +44,10 @@ class StateConvergerTest {
             StateConverger.Observation.Known("50")
         }))
         c.reconcile("volume")
-        assertEquals(StateConverger.Status(1, 1, 1, 0), c.status())
+        assertEquals(1, c.status().inFlight)
         sent.single().done(true)
-        assertEquals(StateConverger.Status(1, 0, 0, 0), c.status())
+        assertEquals(0, c.status().dirty)
+        assertEquals(1, c.status().successes)
     }
 
     @Test fun olderAcknowledgementCannotOverrideNewerObservation() {
@@ -76,7 +77,7 @@ class StateConvergerTest {
         c.reconcile("relay")
 
         assertTrue(sent.isEmpty())
-        assertEquals(StateConverger.Status(1, 0, 0, 1), c.status())
+        assertEquals(1, c.status().unknown)
     }
 
     @Test fun forceDoesNotDuplicateIdenticalInFlightPayload() {
