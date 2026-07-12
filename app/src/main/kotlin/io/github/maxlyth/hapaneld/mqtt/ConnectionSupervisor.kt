@@ -44,7 +44,7 @@ class ConnectionSupervisor(
         val reason = when {
             // AuthRecovery owns this failure class with a bounded fresh-client schedule. The generic
             // watchdog must neither stack retries nor flip address families for credential rejection.
-            state.startsWith("auth-") -> { staleTicks = 0; return Action.None }
+            isAuthRecoveryState(state) -> { staleTicks = 0; return Action.None }
             state != DISABLED && lastOkMs != 0L && sinceOkMs > staleMs -> { staleTicks = 0; "liveness" }
             state == CONNECTED || state == DISABLED -> { staleTicks = 0; return Action.None }
             else -> {

@@ -35,6 +35,7 @@ import io.github.maxlyth.hapaneld.control.Diagnostics
 import io.github.maxlyth.hapaneld.mqtt.MqttTransport
 import io.github.maxlyth.hapaneld.mqtt.classifyDisconnect
 import io.github.maxlyth.hapaneld.mqtt.AuthRecovery
+import io.github.maxlyth.hapaneld.mqtt.isAuthRecoveryState
 import io.github.maxlyth.hapaneld.util.HelperClient
 import io.github.maxlyth.hapaneld.util.Json
 import kotlin.math.roundToInt
@@ -430,7 +431,7 @@ class MqttBridge(
         val generation = ++authRetryGeneration
         val delay = (atMs - SystemClock.elapsedRealtime()).coerceAtLeast(0L)
         authScheduler.schedule({
-            if (generation == authRetryGeneration && state.startsWith("auth-")) {
+            if (generation == authRetryGeneration && isAuthRecoveryState(state)) {
                 Log.i(TAG, "MQTT auth retry — building fresh client with unchanged address family")
                 reconnect(flipFamily = false)
             }

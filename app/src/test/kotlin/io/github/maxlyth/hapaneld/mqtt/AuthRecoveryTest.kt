@@ -5,6 +5,13 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 class AuthRecoveryTest {
+    @Test fun `only authentication states reserve reconnect scheduling`() {
+        assertEquals(true, isAuthRecoveryState("auth-retrying"))
+        assertEquals(true, isAuthRecoveryState("auth-failed"))
+        assertEquals(false, isAuthRecoveryState("unreachable"))
+        assertEquals(false, isAuthRecoveryState("connecting"))
+    }
+
     @Test fun `previously valid credentials retry transient rejection quickly`() {
         val r = AuthRecovery(jitter = { base, _ -> base })
         r.configure("same")

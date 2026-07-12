@@ -1,5 +1,8 @@
 package io.github.maxlyth.hapaneld.mqtt
 
+/** True when auth recovery exclusively owns reconnect scheduling for the bridge. */
+fun isAuthRecoveryState(state: String): Boolean = state == "auth-retrying" || state == "auth-failed"
+
 /** Pure policy for MQTT credential rejection. Time is monotonic; the caller owns scheduling/client I/O. */
 class AuthRecovery(
     private val persistentAfterMs: Long = 5 * 60_000L,

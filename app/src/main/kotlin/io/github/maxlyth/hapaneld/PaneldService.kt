@@ -61,6 +61,7 @@ import io.github.maxlyth.hapaneld.util.InstallProgress
 import io.github.maxlyth.hapaneld.util.SelfUpdater
 import io.github.maxlyth.hapaneld.util.WebViewInstaller
 import io.github.maxlyth.hapaneld.mqtt.ConnectionSupervisor
+import io.github.maxlyth.hapaneld.mqtt.isAuthRecoveryState
 import io.github.maxlyth.hapaneld.platform.AndroidScreenPower
 import io.github.maxlyth.hapaneld.platform.AndroidSystemEnv
 import io.github.maxlyth.hapaneld.util.periodic
@@ -707,7 +708,7 @@ class PaneldService : Service() {
         val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return
         val cb = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
-                if (mqtt.state != "connected" && mqtt.state != "disabled") {
+                if (mqtt.state != "connected" && mqtt.state != "disabled" && !isAuthRecoveryState(mqtt.state)) {
                     Log.i(TAG, "network available — nudging MQTT reconnect")
                     Thread { runCatching { mqtt.reconnect() } }.start()
                 }
