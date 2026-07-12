@@ -87,13 +87,19 @@ class StateConverger(
                     runtime.dirty = true
                 }
             }
-            if (pump) schedule { reconcileAll() }
+            if (pump) schedule { reconcileDirty() }
         }
     }
 
     fun reconcileAll(force: Boolean = false) {
         val keys = synchronized(this) { channels.keys.toList() }
         keys.forEach { reconcile(it, force) }
+    }
+
+    /** Drain only channels already queued/dirty; do not turn ACK completion into a fresh sensor poll. */
+    fun reconcileDirty() {
+        val keys = synchronized(this) { channels.filterValues { it.dirty && !it.inFlight }.keys.toList() }
+        keys.forEach { reconcile(it) }
     }
 
     @Synchronized

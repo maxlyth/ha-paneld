@@ -110,6 +110,19 @@ class StateConvergerTest {
         assertEquals(4, c.status().inFlight)
     }
 
+    @Test fun acknowledgementPumpDoesNotReobserveCleanNoisyChannel() {
+        var reads = 0
+        val sent = mutableListOf<Sent>()
+        val c = converger(sent)
+        c.register(StateConverger.Channel("temperature", "temperature/state", observe = {
+            StateConverger.Observation.Known((reads++).toString())
+        }))
+        c.reconcile("temperature")
+        sent.single().done(true)
+        assertEquals(1, reads)
+        assertEquals(1, sent.size)
+    }
+
     @Test fun semanticChangeBeatsNumericDeadband() {
         val equivalent = StateConverger.numericDeadband(5.0)
         assertTrue(equivalent("50", "53"))
