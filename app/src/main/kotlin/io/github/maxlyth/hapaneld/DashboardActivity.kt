@@ -406,6 +406,7 @@ class DashboardActivity : AppCompatActivity() {
                 web?.clearHistory(); clearedThisLoad = true
                 runCatching { CookieManager.getInstance().flush() }
             }
+            captureDashboardTheme()
             // If we connected while the screen is off (a screen-off memory reload), freeze now — the fresh
             // page is loaded + connected, so there's nothing left to do behind the dark screen.
             if (!screenAwake) { main.removeCallbacks(darkSettle); web?.pauseTimers() }
@@ -422,6 +423,18 @@ class DashboardActivity : AppCompatActivity() {
                 val delay = retryPolicy.connectionFailureDelay(wasConnected)
                 Log.i(TAG, "frontend '$event' — arming retry watchdog in ${delay}ms (wasConnected=$wasConnected)")
                 armWatchdog(delay)
+            }
+        }
+    }
+
+    /** Remember HA's own per-device theme so the native pre-WebView launch screen matches it on the
+     * next boot. The JS returns only true/false/null, avoiding any localStorage contents in logs. */
+    private fun captureDashboardTheme() {
+        val script = """(function(){try{var t=JSON.parse(localStorage.getItem('selectedTheme')||'null');return t&&typeof t.dark==='boolean'?t.dark:null}catch(e){return null}})()"""
+        web?.evaluateJavascript(script) { result ->
+            when (result) {
+                "true" -> Config(this).setDashboardThemeDark(true)
+                "false" -> Config(this).setDashboardThemeDark(false)
             }
         }
     }
@@ -571,15 +584,21 @@ class DashboardActivity : AppCompatActivity() {
         val config = Config(this)
         waitingEstimateLearned = config.lastNetworkWaitMs > 0L
         waitingEstimateMs = config.lastNetworkWaitMs.takeIf { it > 0L } ?: DEFAULT_NETWORK_WAIT_MS
-        val dark = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
+        val systemDark = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
             Configuration.UI_MODE_NIGHT_YES
+        val fallbackDark = if (android.os.Build.VERSION.SDK_INT >= 29) systemDark else config.darkMode
+        val dark = config.dashboardThemeDark ?: fallbackDark
         val bg = Color.parseColor(if (dark) "#111111" else "#ffffff")
         val body = Color.parseColor(if (dark) "#c8ccd2" else "#2a2e34")
         val subtle = Color.parseColor(if (dark) "#8a8f99" else "#5a6068")
         val accent = Color.parseColor(if (dark) "#4a9eff" else "#1669d6")
         val track = Color.parseColor(if (dark) "#30343a" else "#dce1e7")
         val wordmark = ImageView(this).apply {
-            setImageResource(R.drawable.wordmark)
+            val themed = Configuration(resources.configuration).apply {
+                uiMode = (uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or
+                    (if (dark) Configuration.UI_MODE_NIGHT_YES else Configuration.UI_MODE_NIGHT_NO)
+            }
+            setImageDrawable(createConfigurationContext(themed).getDrawable(R.drawable.wordmark))
             adjustViewBounds = true
             scaleType = ImageView.ScaleType.FIT_CENTER
             contentDescription = "ha-paneld"
@@ -591,7 +610,7 @@ class DashboardActivity : AppCompatActivity() {
             gravity = Gravity.CENTER
         }
         val explanation = TextView(this).apply {
-            text = "Android is reconnecting this panel to the network before the dashboard starts."
+            text = "The panel service is running.\nAndroid is reconnecting to the network."
             setTextColor(body)
             textSize = if (compact) 12.5f else 14f
             gravity = Gravity.CENTER
@@ -1079,6 +1098,7 @@ class DashboardActivity : AppCompatActivity() {
             }
             // Side-channel: a `connection-status` event drives the handshake watchdog (on the main thread).
             ExternalAuthProtocol.connectionEvent(message)?.let { ev -> runOnUiThread { onConnectionStatus(ev) } }
+            if (ExternalAuthProtocol.isThemeUpdate(message)) runOnUiThread { captureDashboardTheme() }
             // Command replies (navigate etc.) confirm execution — log-only, but gold when debugging.
             ExternalAuthProtocol.resultOf(message)?.let { (id, ok) -> Log.d(TAG, "bus result id=$id success=$ok") }
             evaluate(ExternalAuthProtocol.busReply(message, BuildConfig.VERSION_NAME))
@@ -1296,6 +1316,9 @@ object ExternalAuthProtocol {
         val ev = msg.optJSONObject("payload")?.optString("event").orEmpty().ifBlank { msg.optString("event") }
         return ev.ifBlank { null }
     }
+
+    fun isThemeUpdate(message: String): Boolean =
+        runCatching { JSONObject(message).optString("type") == "theme-update" }.getOrDefault(false)
 
     /** App→frontend `navigate` command: swap the frontend's view to [path] *inside* the running app —
      *  no page reload, the JS bundle and websocket stay live (instant, vs several seconds of blank for

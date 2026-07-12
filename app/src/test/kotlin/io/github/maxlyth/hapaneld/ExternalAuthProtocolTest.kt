@@ -143,6 +143,12 @@ class ExternalAuthProtocolTest {
         assertNull(ExternalAuthProtocol.connectionEvent("not json"))
     }
 
+    @Test fun `theme update is recognised without treating other bus messages as theme changes`() {
+        assertTrue(ExternalAuthProtocol.isThemeUpdate("""{"type":"theme-update"}"""))
+        assertFalse(ExternalAuthProtocol.isThemeUpdate("""{"type":"connection-status"}"""))
+        assertFalse(ExternalAuthProtocol.isThemeUpdate("not json"))
+    }
+
     // --- navigateCommand (light refresh / idle return-to-home) ---
 
     @Test

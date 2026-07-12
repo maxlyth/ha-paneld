@@ -431,6 +431,14 @@ class Config(context: Context) {
         prefs.edit().putLong("last_network_wait_ms", ms.coerceIn(1_000L, 300_000L)).apply()
     }
 
+    /** Last light/dark choice observed from HA's own `localStorage.selectedTheme`. Null until the
+     * renderer has seen an explicit HA preference; the launch screen then follows the OS/config. */
+    val dashboardThemeDark: Boolean?
+        get() = if (prefs.contains("dashboard_theme_dark")) prefs.getBoolean("dashboard_theme_dark", true) else null
+    fun setDashboardThemeDark(dark: Boolean) {
+        prefs.edit().putBoolean("dashboard_theme_dark", dark).apply()
+    }
+
     // --- remote log shipping (opt-in) --------------------------------------------------------------
     // Forward ha-paneld's OWN process logcat (its Log.* output + the Ktor/HiveMQ SLF4J library logs,
     // all emitted by this app's uid → readable with no READ_LOGS and no root) to a central aggregator
