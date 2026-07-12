@@ -15,6 +15,7 @@ _In development — changes for the next release accumulate here._
 ### Added
 
 - **Built-in renderer responsiveness measurements** — the Performance page and `/api/v1/perf` now report the built-in dashboard's cold and warm time to interactive plus involuntary renderer reloads over the last 24 hours. The measurements run inside the renderer and do not require root, making before/after renderer comparisons available on every panel.
+- **Useful dashboard startup progress** — when Android networking is still starting, the built-in renderer now shows a calm native launch screen instead of appearing broken. It reports the current phase (network services, link, address or connection), learns how long that panel usually takes and shows determinate progress on later boots. The screen follows the dashboard's remembered light/dark choice, fits 480×480 panels, and disappears entirely when networking is already ready.
 
 ### Changed
 
@@ -24,6 +25,8 @@ _In development — changes for the next release accumulate here._
 
 - **Transient MQTT credential rejection now recovers automatically** — a rejected connection creates a fresh client and retries with bounded backoff on the same network family instead of remaining offline or stacking retries from the generic liveness and network callbacks. Diagnostics expose the retry state, rejection count and next attempt, and a successful connection resets the recovery state.
 - **State publication remains live without flooding the broker** — convergence retries and concurrent publishes are bounded, clean sensor polling continues to pump pending acknowledgements, failed publishes retain the real observed value, and physical backlight changes synchronize the screen state correctly.
+- **Panel reboot no longer shows two consecutive connection failures** — the built-in renderer now waits for Android's default network before creating WebView, preventing Chromium's offline error followed by Home Assistant's cached 60-second connection-failed countdown. Once networking arrives, the dashboard opens directly; genuine later failures still use bounded retries.
+- **“Silence boot chime” also silences Android startup notifications** — panels where ring and notification audio use separate streams no longer play notification sounds as ha-paneld's overlay controls and foreground service start. The existing setting now covers the persistent and live notification volume as well as the ring stream, with a silent notification channel.
 
 ## v0.9.1 - 2026-07-12
 
