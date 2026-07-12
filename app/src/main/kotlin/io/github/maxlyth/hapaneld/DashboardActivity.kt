@@ -45,6 +45,9 @@ import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import io.github.maxlyth.hapaneld.control.BottomSwipeDetector
 import io.github.maxlyth.hapaneld.control.BuiltinDashboard
 import org.json.JSONObject
+import java.io.File
+import java.net.NetworkInterface
+import java.util.Collections
 
 /**
  * Built-in dashboard renderer (experimental): a full-screen WebView onto the configured Home
@@ -122,6 +125,7 @@ class DashboardActivity : AppCompatActivity() {
     // interstitial itself). Cleared on any real load or connect.
     private var interstitialShown = false
     private var waitingStatus: TextView? = null
+    private var waitingStage: TextView? = null
     private var waitingProgress: ProgressBar? = null
     private var waitingEstimateMs = 0L
     private var waitingEstimateLearned = false
@@ -137,7 +141,8 @@ class DashboardActivity : AppCompatActivity() {
                 "${elapsed / 1_000L}s elapsed  ·  learning this panel's timing"
             }
             waitingProgress?.progress = networkWaitProgress(elapsed, waitingEstimateMs)
-            main.postDelayed(this, 250L)
+            waitingStage?.text = startupNetworkStage(startupNetworkSnapshot())
+            main.postDelayed(this, 1_000L)
         }
     }
 
@@ -491,6 +496,7 @@ class DashboardActivity : AppCompatActivity() {
             if (waitingStartedAt > 0L) Config(this).setLastNetworkWaitMs(waitMs)
             Log.i(TAG, "network became available during startup after ${waitMs}ms — creating dashboard WebView")
             waitingStatus = null
+            waitingStage = null
             waitingProgress = null
             main.removeCallbacks(waitingTick)
             retryPolicy.reset()
@@ -610,9 +616,15 @@ class DashboardActivity : AppCompatActivity() {
             gravity = Gravity.CENTER
         }
         val explanation = TextView(this).apply {
-            text = "The panel service is running.\nAndroid is reconnecting to the network."
+            text = "The panel service is running."
             setTextColor(body)
             textSize = if (compact) 12.5f else 14f
+            gravity = Gravity.CENTER
+        }
+        val stage = TextView(this).apply {
+            text = startupNetworkStage(startupNetworkSnapshot())
+            setTextColor(body)
+            textSize = if (compact) 14f else 16f
             gravity = Gravity.CENTER
         }
         val destination = TextView(this).apply {
@@ -648,6 +660,9 @@ class DashboardActivity : AppCompatActivity() {
             addView(explanation, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT,
             ).apply { topMargin = ((if (compact) 16 else 24) * density).toInt() })
+            addView(stage, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { topMargin = ((if (compact) 18 else 26) * density).toInt() })
             addView(progress, LinearLayout.LayoutParams(
                 ((if (compact) 220 else 280) * density).toInt(), (5 * density).toInt().coerceAtLeast(3),
             ).apply {
@@ -675,10 +690,41 @@ class DashboardActivity : AppCompatActivity() {
         root = container
         setContentView(container)
         waitingStatus = status
+        waitingStage = stage
         waitingProgress = progress
         waitingStartedAt = SystemClock.elapsedRealtime()
         waitingTick.run()
         Log.i(TAG, "no default network at startup — waiting before creating WebView")
+    }
+
+    /** Best-effort portable view of pre-default-network progress. Ethernet carrier comes from sysfs
+     * when readable; interface/address state uses java.net and works without privileged APIs. */
+    private fun startupNetworkSnapshot(): StartupNetworkSnapshot {
+        val interfaces = runCatching {
+            Collections.list(NetworkInterface.getNetworkInterfaces()).filterNot { it.isLoopback }
+        }.getOrDefault(emptyList())
+        val candidates = interfaces.filter {
+            it.name.startsWith("eth") || it.name.startsWith("en") || it.name.startsWith("wlan")
+        }
+        val ethernet = candidates.any { it.name.startsWith("eth") || it.name.startsWith("en") }
+        val linkUp = candidates.any { iface ->
+            val carrier = if (iface.name.startsWith("eth") || iface.name.startsWith("en")) {
+                runCatching { File("/sys/class/net/${iface.name}/carrier").readText().trim() == "1" }.getOrNull()
+            } else null
+            carrier ?: runCatching { iface.isUp }.getOrDefault(false)
+        }
+        val addressAssigned = candidates.any { iface ->
+            Collections.list(iface.inetAddresses).any { address ->
+                !address.isAnyLocalAddress && !address.isLoopbackAddress && !address.isLinkLocalAddress
+            }
+        }
+        return StartupNetworkSnapshot(
+            interfacePresent = candidates.isNotEmpty(),
+            linkUp = linkUp,
+            addressAssigned = addressAssigned,
+            defaultNetwork = conn?.activeNetwork != null,
+            ethernet = ethernet,
+        )
     }
 
     /** Re-load the dashboard: a plain reload normally, but a fresh loadUrl of the real dashboard when

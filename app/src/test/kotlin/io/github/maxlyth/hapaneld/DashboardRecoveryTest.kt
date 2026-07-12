@@ -52,4 +52,18 @@ class DashboardRecoveryTest {
         assertEquals(950, networkWaitProgress(elapsedMs = 60_000L, estimateMs = 60_000L))
         assertEquals(950, networkWaitProgress(elapsedMs = 90_000L, estimateMs = 60_000L))
     }
+
+    @Test fun `startup stages distinguish ethernet address delay`() {
+        fun stage(present: Boolean, link: Boolean, address: Boolean, default: Boolean, ethernet: Boolean = true) =
+            startupNetworkStage(StartupNetworkSnapshot(present, link, address, default, ethernet))
+
+        assertEquals("Starting Android network services", stage(false, false, false, false))
+        assertEquals("Waiting for a network link", stage(true, false, false, false))
+        assertEquals(
+            "Ethernet connected\nWaiting for the network to assign an address",
+            stage(true, true, false, false),
+        )
+        assertEquals("Network address received\nPreparing the connection", stage(true, true, true, false))
+        assertEquals("Network ready\nOpening Home Assistant", stage(true, true, true, true))
+    }
 }
