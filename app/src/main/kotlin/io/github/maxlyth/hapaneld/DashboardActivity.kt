@@ -339,6 +339,7 @@ class DashboardActivity : AppCompatActivity() {
         frontendConnected = false
         clearedThisLoad = false
         lastFullLoadAt = SystemClock.elapsedRealtime()
+        BuiltinDashboard.recordLoadStart(lastFullLoadAt) // TTI origin (first call since process start = cold)
         backoffMs = INITIAL_RETRY_MS
         if (screenAwake) armWatchdog(INITIAL_HANDSHAKE_MS) else main.removeCallbacks(watchdog)
     }
@@ -354,6 +355,8 @@ class DashboardActivity : AppCompatActivity() {
         Log.w(TAG, "frontend handshake watchdog fired (no connection-status:connected) — reloading; backoff=${backoffMs}ms")
         reloadTarget()
         lastFullLoadAt = SystemClock.elapsedRealtime()
+        BuiltinDashboard.recordRendererReload(lastFullLoadAt) // involuntary: handshake stalled
+        BuiltinDashboard.recordLoadStart(lastFullLoadAt)      // warm TTI origin for the recovery load
         clearedThisLoad = false
         backoffMs = (backoffMs * 2).coerceAtMost(MAX_RETRY_MS)
         armWatchdog(backoffMs)
@@ -365,6 +368,7 @@ class DashboardActivity : AppCompatActivity() {
         if (destroyed) return
         if (event == "connected") {
             frontendConnected = true
+            BuiltinDashboard.recordConnected(SystemClock.elapsedRealtime()) // TTI: load-start → interactive
             interstitialShown = false // real page demonstrably loaded
             unlatchAuth("frontend connected") // auth demonstrably works — clear any stale latch + counters
             main.removeCallbacks(watchdog)
@@ -765,8 +769,10 @@ class DashboardActivity : AppCompatActivity() {
                 if (web === view) {
                     web = null
                     runOnUiThread {
-                        if (allowRebuild()) buildAndLoad(Config(this@DashboardActivity))
-                        else { Log.e(TAG, "renderer crash-looping — falling back to admin launcher"); fallbackToLauncher() }
+                        if (allowRebuild()) {
+                            BuiltinDashboard.recordRendererReload(SystemClock.elapsedRealtime()) // involuntary crash rebuild
+                            buildAndLoad(Config(this@DashboardActivity))
+                        } else { Log.e(TAG, "renderer crash-looping — falling back to admin launcher"); fallbackToLauncher() }
                     }
                 }
                 return true

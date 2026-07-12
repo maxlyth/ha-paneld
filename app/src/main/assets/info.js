@@ -92,8 +92,15 @@ async function perf(){
   paint('perf',rows.filter(Boolean));
   paintTop(d.top);
   var r=d.render,smh=document.getElementById('smhdr');
-  if(r==null){smh.textContent='· needs root';paint('smtbl',[{label:'Responsiveness',val:'needs root to measure',col:'#888'}]);drawSm([]);}
-  else if(r.status==='no-renderer'){smh.textContent='· waiting';drawSm(r.hist||[]);paint('smtbl',[{label:'Responsiveness',val:'no dashboard WebView detected yet',col:'#888'}]);}
+  // Built-in renderer self-measurement (time-to-interactive + involuntary-reload churn). It runs
+  // in-process, so — unlike the root/daemon main-thread metric below — it shows even with no root.
+  var bRows=[],b=d.builtin;
+  if(b){
+   if(b.ttiColdMs>=0)bRows.push({label:'Time to interactive',val:(b.ttiColdMs/1000).toFixed(1)+'s cold',suf:b.ttiWarmMedianMs>=0?'· reload '+(b.ttiWarmMedianMs/1000).toFixed(1)+'s':'· launch → dashboard ready'});
+   bRows.push({label:'Renderer reloads (24h)',val:''+b.reloads24h,col:b.reloads24h>0?'#d9a528':'#888',suf:b.reloads24h>0?'· heap/OOM churn':'· stable'});
+  }
+  if(r==null){smh.textContent='· needs root';paint('smtbl',[{label:'Responsiveness',val:'needs root to measure',col:'#888'}].concat(bRows));drawSm([]);}
+  else if(r.status==='no-renderer'){smh.textContent='· waiting';drawSm(r.hist||[]);paint('smtbl',[{label:'Responsiveness',val:'no dashboard WebView detected yet',col:'#888'}].concat(bRows));}
   else{
    drawSm(r.hist);
    var col=r.verdict==='smooth'?'#48c774':(r.verdict==='occasional'?'#d9a528':'#d04a3b');
@@ -103,7 +110,7 @@ async function perf(){
     {label:'Dashboard main-thread',val:r.mainPct+'% of one core',suf:'(100% = event processing maxed out)',bold:true}];
    if(r.jankPct!=null){pseen.jank=true;sm.push({label:'Rendering load',val:r.jankPct+'% janky',suf:'· only counts when actively drawing (e.g. video) — worst frame '+r.p99+' ms'});}
    else if(pseen.jank)sm.push({label:'Rendering load',val:'idle — not drawing',col:'#888'});
-   paint('smtbl',sm);
+   paint('smtbl',sm.concat(bRows));
   }
   hwm('smtbl');hwm('topproc');
   document.getElementById('perfage').textContent='· live';

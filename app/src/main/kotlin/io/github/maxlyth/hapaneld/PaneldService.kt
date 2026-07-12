@@ -294,6 +294,7 @@ class PaneldService : Service() {
             runCatching { logShipper.reconfigure() }
             runCatching { power.apply(config.keepAwake) }   // apply a keep_awake toggle live
             io.github.maxlyth.hapaneld.http.PerfReader.dashboardPkg = dashboardTarget()
+            io.github.maxlyth.hapaneld.http.PerfReader.builtinActive = config.dashboardPackage == SystemController.BUILTIN_DASHBOARD
             Log.i(TAG, "reconfigured: panel=${config.panelId} broker=${config.mqttBroker.ifEmpty { "(disabled)" }}")
         }
     }
@@ -552,6 +553,7 @@ class PaneldService : Service() {
         }
         scope.launch {
             io.github.maxlyth.hapaneld.http.PerfReader.dashboardPkg = dashboardTarget()
+            io.github.maxlyth.hapaneld.http.PerfReader.builtinActive = config.dashboardPackage == SystemController.BUILTIN_DASHBOARD
             io.github.maxlyth.hapaneld.http.PerfReader.start(scope)
             server.start()
             mdns.start()

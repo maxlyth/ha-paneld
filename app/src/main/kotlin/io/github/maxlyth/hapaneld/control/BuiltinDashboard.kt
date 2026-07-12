@@ -101,6 +101,95 @@ object BuiltinDashboard {
     const val REBUILD_WINDOW_MS = 60_000L
     const val RENDERER_LATCH_MS = 10 * 60_000L      // one 3-attempt burst per 10 min, not per 1.2s poll
 
+    // --- built-in renderer responsiveness self-measurement (time-to-interactive + reload churn) ---
+    //
+    // The built-in and Companion renderers share the same system WebView engine, so raw paint speed is
+    // identical — a real responsiveness difference comes from event-processing headroom and host-app
+    // footprint, not rendering. These two cheap in-process measurements let a user read a before/after
+    // number when they switch renderers (surfaced on `/api/v1/perf`), and let traditional (non-firehose-
+    // stripped) setups produce their own evidence.
+    //
+    // Time-to-interactive = the gap from a page load STARTING (DashboardActivity.onLoadStarted) to the
+    // frontend reporting `connection-status: connected` (onConnectionStatus) — the app's own "websocket
+    // up, cards rendering" signal, the closest analog to the Companion's connected state. The COLD number
+    // is launch → first-connected (the meaningful renderer-comparison figure, measured from the FIRST
+    // load-start since process start so a failed-then-retried initial load still counts full launch time);
+    // navigate / reload / crash-rebuild loads are WARM. Times are caller-supplied elapsed-realtime millis
+    // so this stays pure Kotlin (JVM-unit-testable); a non-positive or absurd gap is dropped.
+    private const val TTI_RING = 10
+    private const val TTI_MAX_MS = 120_000L         // a gap beyond 2 min is a watchdog/stall artefact, not a load
+    private var firstLoadStartAt = -1L              // first load-start since process start (drives the cold number)
+    private var lastLoadStartAt = -1L               // most-recent load-start (drives warm navigate/reload TTIs)
+    private var coldTtiMs = -1L                      // launch → first-connected (ms); -1 until captured
+    private var coldCaptured = false
+    private val warmTti = ArrayDeque<Long>()        // recent WARM durations (ms), newest last, capped at TTI_RING
+
+    /** Record a page load STARTING. The first call since process start pins the cold-load origin. Main-thread. */
+    @Synchronized fun recordLoadStart(nowMs: Long) {
+        if (firstLoadStartAt < 0) firstLoadStartAt = nowMs
+        lastLoadStartAt = nowMs
+    }
+
+    /** Record the frontend reaching `connected`. The first connect since process start closes the cold
+     *  window (diffed against the launch origin); later connects are warm (diffed against the pending
+     *  load-start, consumed so a duplicate `connected` can't double-count). Out-of-range gaps are dropped. */
+    @Synchronized fun recordConnected(nowMs: Long) {
+        if (!coldCaptured && firstLoadStartAt >= 0) {
+            coldCaptured = true
+            lastLoadStartAt = -1                     // the cold load is consumed — a later bare reconnect (no
+            val d = nowMs - firstLoadStartAt         // fresh load) must not diff against the stale launch stamp
+            if (d in 1..TTI_MAX_MS) coldTtiMs = d
+            return                                   // the cold-closing connect is not also a warm sample
+        }
+        val start = lastLoadStartAt
+        if (start < 0) return                        // no pending fresh load (bare reconnect) → ignore
+        lastLoadStartAt = -1
+        val d = nowMs - start
+        if (d in 1..TTI_MAX_MS) { warmTti.addLast(d); while (warmTti.size > TTI_RING) warmTti.removeFirst() }
+    }
+
+    // Involuntary renderer reload/rebuild churn — a proxy for the heap-ceiling/OOM kills that force a
+    // reload (the footprint pressure a leaner host relieves). Distinct from the crash-loop budget above
+    // (which resets every 60s): this is a monotonic lifetime count plus a 24h rolling window, so `:8888`
+    // can show "renderer reloads (24h)". Only INVOLUNTARY reloads count (crash rebuild, handshake-watchdog
+    // reload) — an explicit navigate / user reload is not churn. Stamps are elapsed-realtime millis; the
+    // ring is pruned on write and on read, and size-capped so a pathological loop can't grow it unbounded.
+    private const val RELOAD_WINDOW_MS = 24 * 60 * 60_000L
+    private const val RELOAD_STAMP_CAP = 1000
+    private val reloadStamps = ArrayDeque<Long>()
+    private var reloadsTotal = 0L
+
+    private fun pruneReloads(nowMs: Long) {
+        val cutoff = nowMs - RELOAD_WINDOW_MS
+        while (reloadStamps.isNotEmpty() && reloadStamps.first() < cutoff) reloadStamps.removeFirst()
+    }
+
+    /** Record one INVOLUNTARY renderer reload/rebuild (crash rebuild or handshake-watchdog reload). */
+    @Synchronized fun recordRendererReload(nowMs: Long) {
+        reloadsTotal++
+        reloadStamps.addLast(nowMs)
+        pruneReloads(nowMs)
+        while (reloadStamps.size > RELOAD_STAMP_CAP) reloadStamps.removeFirst()
+    }
+
+    /** Involuntary reloads in the last 24h (prunes first so a long-idle panel doesn't over-report). */
+    @Synchronized fun reloads24h(nowMs: Long): Int { pruneReloads(nowMs); return reloadStamps.size }
+
+    /** Responsiveness snapshot for `/api/v1/perf`. -1 fields = not yet captured. Pure (caller supplies now). */
+    data class RendererPerf(val coldTtiMs: Long, val warmTtiMedianMs: Long, val reloads24h: Int)
+
+    @Synchronized fun rendererPerf(nowMs: Long): RendererPerf {
+        val warmMedian = if (warmTti.isEmpty()) -1L else warmTti.sorted().let { it[it.size / 2] }
+        return RendererPerf(coldTtiMs, warmMedian, reloads24h(nowMs))
+    }
+
+    /** Clear all responsiveness-measurement state. Real code never needs this (process-global is correct);
+     *  it exists so unit tests sharing the JVM can isolate, matching the other reset seams here. */
+    @Synchronized fun resetRendererPerf() {
+        firstLoadStartAt = -1L; lastLoadStartAt = -1L; coldTtiMs = -1L; coldCaptured = false
+        warmTti.clear(); reloadStamps.clear(); reloadsTotal = 0L
+    }
+
     // Screen-state fan-out to the live renderer. A 24/7 dashboard WebView keeps churning CPU (websocket
     // state, animations, JS timers) behind a dark screen, so when the panel screen goes off/on we tell
     // the renderer to pause/resume the WebView. The activity registers a listener (and must marshal to

@@ -1,5 +1,6 @@
 package io.github.maxlyth.hapaneld.http
 
+import io.github.maxlyth.hapaneld.control.BuiltinDashboard
 import io.github.maxlyth.hapaneld.control.Su
 import io.github.maxlyth.hapaneld.metrics.MetricRegistry
 import io.github.maxlyth.hapaneld.metrics.MetricSample
@@ -49,6 +50,10 @@ object PerfReader {
     // Dashboard rendering jank from `dumpsys gfxinfo <pkg>` (root). Quick "is there a problem" signal;
     // the deeper "why" is the 1-click DevTools relay. Target reuses the dashboard_package config.
     @Volatile var dashboardPkg: String = ""
+    // True while the active dashboard renderer is the built-in WebView (set by the service alongside
+    // [dashboardPkg]). Gates the `builtin` block below: TTI + reload self-measurement only exists for
+    // the built-in renderer (the Companion is a foreign app and can't self-report).
+    @Volatile var builtinActive = false
     @Volatile private var renderJson = "null"
     private val stutterHist = ArrayDeque<Int>()   // CrRendererMain %-of-one-core per render window
     private var prevRenderJiffies = HashMap<Int, Long>() // renderer pid -> CrRendererMain utime+stime
@@ -96,7 +101,15 @@ object PerfReader {
 
     /** Latest sample + history FIFO + top-5 procs + render jank, as JSON, for `GET /perf`. */
     fun json(): String = synchronized(lock) {
-        """{"enabled":$enabled,$latestFields,"top":$topJson,"render":$renderJson,"hist":{"cpu":${histInts(CPU_KEY)},"ram":${histInts(RAM_KEY)},"gpu":${histInts(GPU_KEY)}}}"""
+        """{"enabled":$enabled,$latestFields,"top":$topJson,"render":$renderJson,"builtin":${builtinJson()},"hist":{"cpu":${histInts(CPU_KEY)},"ram":${histInts(RAM_KEY)},"gpu":${histInts(GPU_KEY)}}}"""
+    }
+
+    /** Built-in renderer responsiveness (time-to-interactive + 24h involuntary-reload count) for the perf
+     *  card, or `null` when the active renderer isn't the built-in WebView. -1 fields = not yet captured. */
+    private fun builtinJson(): String {
+        if (!builtinActive) return "null"
+        val p = BuiltinDashboard.rendererPerf(android.os.SystemClock.elapsedRealtime())
+        return """{"ttiColdMs":${p.coldTtiMs},"ttiWarmMedianMs":${p.warmTtiMedianMs},"reloads24h":${p.reloads24h}}"""
     }
 
     private fun histInts(key: String): List<Int> = sink.history(key).map { it.num?.toInt() ?: 0 }
