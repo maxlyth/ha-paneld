@@ -706,7 +706,6 @@ class DashboardActivity : AppCompatActivity() {
         val candidates = interfaces.filter {
             it.name.startsWith("eth") || it.name.startsWith("en") || it.name.startsWith("wlan")
         }
-        val ethernet = candidates.any { it.name.startsWith("eth") || it.name.startsWith("en") }
         val linkUp = candidates.any { iface ->
             val carrier = if (iface.name.startsWith("eth") || iface.name.startsWith("en")) {
                 runCatching { File("/sys/class/net/${iface.name}/carrier").readText().trim() == "1" }.getOrNull()
@@ -723,7 +722,6 @@ class DashboardActivity : AppCompatActivity() {
             linkUp = linkUp,
             addressAssigned = addressAssigned,
             defaultNetwork = conn?.activeNetwork != null,
-            ethernet = ethernet,
         )
     }
 

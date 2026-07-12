@@ -51,15 +51,13 @@ internal data class StartupNetworkSnapshot(
     val linkUp: Boolean,
     val addressAssigned: Boolean,
     val defaultNetwork: Boolean,
-    val ethernet: Boolean,
 )
 
 /** User-facing network phase. Deliberate line breaks keep every state balanced on a 480px square. */
 internal fun startupNetworkStage(s: StartupNetworkSnapshot): String = when {
     !s.interfacePresent -> "Starting Android network services"
     !s.linkUp -> "Waiting for a network link"
-    !s.addressAssigned && s.ethernet -> "Ethernet connected\nWaiting for the network to assign an address"
-    !s.addressAssigned -> "Network link connected\nWaiting for an address"
+    !s.addressAssigned -> "Network link connected\nWaiting for a network address"
     !s.defaultNetwork -> "Network address received\nPreparing the connection"
     else -> "Network ready\nOpening Home Assistant"
 }
