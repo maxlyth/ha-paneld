@@ -12,6 +12,19 @@ content appear. Earlier releases predate this convention and keep their flat lis
 
 _In development — changes for the next release accumulate here._
 
+### Added
+
+- **Built-in renderer responsiveness measurements** — the Performance page and `/api/v1/perf` now report the built-in dashboard's cold and warm time to interactive plus involuntary renderer reloads over the last 24 hours. The measurements run inside the renderer and do not require root, making before/after renderer comparisons available on every panel.
+
+### Changed
+
+- **Panel state converges through one observed-state authority** — screen power, brightness, volume, relays, LEDs, proximity and other locally controlled state now share a bounded, acknowledgement-aware publication path. Changes made on the panel or by another process converge back to Home Assistant without parallel publishers racing or manufacturing values for state that has not yet been observed.
+
+### Fixed
+
+- **Transient MQTT credential rejection now recovers automatically** — a rejected connection creates a fresh client and retries with bounded backoff on the same network family instead of remaining offline or stacking retries from the generic liveness and network callbacks. Diagnostics expose the retry state, rejection count and next attempt, and a successful connection resets the recovery state.
+- **State publication remains live without flooding the broker** — convergence retries and concurrent publishes are bounded, clean sensor polling continues to pump pending acknowledgements, failed publishes retain the real observed value, and physical backlight changes synchronize the screen state correctly.
+
 ## v0.9.1 - 2026-07-12
 
 ### Added
