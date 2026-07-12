@@ -1466,14 +1466,16 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         // the only sizing tool, so stay quiet. densityNat comes from the shared snapshot (no su round-trip).
         val zoom = config.dashboardZoom
         if (config.dashboardPackage == SystemController.BUILTIN_DASHBOARD && zoom != 100 && snapStaleOk().densityNat != null) {
-            val action = if (inlineRepair)
-                """ <form method="post" action="/api/v1/config" style="display:inline"><input type="hidden" name="dashboard_zoom" value="100"><button class="pbtn">Reset zoom to 100%</button></form>"""
-            else " <a href=\"/configure#cfg-display\">Display sizing →</a>"
+            // Reset is a plain form POST (no JS), so it works on the dashboard banner too — not just the
+            // Install tab. The message already links to the Display-sizing card.
             append(
                 """<div class="setup">⚠ <b>Dashboard zoom is $zoom%</b> (not 100%) — usually carried over from the """ +
                     """Companion app's Page zoom. The cleaner way to size a dashboard is the panel's """ +
                     """<a href="/configure#cfg-display">display density</a>, which scales the whole panel crisply; """ +
-                    """set that, then reset the zoom to 100%.$action</div>""",
+                    """set that, then reset the zoom here.""" +
+                    """ <form method="post" action="/api/v1/config" style="display:inline">""" +
+                    """<input type="hidden" name="dashboard_zoom" value="100">""" +
+                    """<button class="pbtn" type="submit">Reset zoom to 100%</button></form></div>""",
             )
         }
     }
