@@ -451,7 +451,7 @@ class MqttBridge(
         }
         publish(availabilityTopic, "online", retain = true)
         restoreAndPublishStates()
-        stateConverger.reconcileAll(force = true)
+        stateConverger.reconcileAll()
         reconcileZigbeeOnConnect() // boot-restore: start the gateway if left ON and nothing else has
         Thread { runCatching { adb.reassert() } }.start() // re-assert network-adb if ha-paneld persists it (firmware may strip the prop)
         maybeResolveHaLink() // best-effort "Open in HA" link via the MQTT creds; off-thread, silent on failure
@@ -1541,7 +1541,7 @@ class MqttBridge(
     fun recentSyncEvents(): List<String> = syncLog.recent(SystemClock.elapsedRealtime())
 
     fun convergenceStatus(): String = stateConverger.status().let {
-        "${it.channels} channels · ${it.dirty} dirty · ${it.inFlight} in-flight"
+        "${it.channels} channels · ${it.dirty} dirty · ${it.inFlight} in-flight · ${it.unknown} unknown"
     }
 
     /** Publish screen=OFF and reset the brightness baseline used by local-state reconciliation. */

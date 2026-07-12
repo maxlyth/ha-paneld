@@ -29,6 +29,7 @@ class StateConverger(
         var generation: Long = 0,
         var inFlight: Boolean = false,
         var dirty: Boolean = true,
+        var unknown: Boolean = false,
     )
 
     private val channels = linkedMapOf<String, Runtime>()
@@ -42,14 +43,23 @@ class StateConverger(
     fun reconcile(key: String, force: Boolean = false) {
         val runtime = synchronized(this) { channels[key] } ?: return
         val payload = when (val observation = runCatching { runtime.channel.observe() }.getOrDefault(Observation.Unknown)) {
-            is Observation.Known -> observation.payload
-            Observation.Unknown, Observation.Unavailable -> return
+            is Observation.Known -> observation.payload.also {
+                synchronized(this) { runtime.unknown = false }
+            }
+            Observation.Unknown, Observation.Unavailable -> {
+                synchronized(this) {
+                    runtime.unknown = true
+                    runtime.dirty = false
+                    runtime.inFlight = false
+                }
+                return
+            }
         }
 
         val generation: Long
         synchronized(this) {
+            if (runtime.inFlight && runtime.sent == payload) return
             if (!force && !runtime.dirty && runtime.acknowledged?.let { runtime.channel.equivalent(it, payload) } == true) return
-            if (!force && runtime.inFlight && runtime.sent == payload) return
             generation = ++runtime.generation
             runtime.sent = payload
             runtime.inFlight = true
@@ -83,13 +93,14 @@ class StateConverger(
     @Synchronized
     fun keys(): Set<String> = channels.keys.toSet()
 
-    data class Status(val channels: Int, val dirty: Int, val inFlight: Int)
+    data class Status(val channels: Int, val dirty: Int, val inFlight: Int, val unknown: Int)
 
     @Synchronized
     fun status(): Status = Status(
         channels = channels.size,
         dirty = channels.values.count { it.dirty },
         inFlight = channels.values.count { it.inFlight },
+        unknown = channels.values.count { it.unknown },
     )
 
     companion object {

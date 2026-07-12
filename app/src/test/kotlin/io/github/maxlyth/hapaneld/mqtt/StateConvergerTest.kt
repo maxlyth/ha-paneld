@@ -40,9 +40,9 @@ class StateConvergerTest {
             StateConverger.Observation.Known("50")
         }))
         c.reconcile("volume")
-        assertEquals(StateConverger.Status(1, 1, 1), c.status())
+        assertEquals(StateConverger.Status(1, 1, 1, 0), c.status())
         sent.single().done(true)
-        assertEquals(StateConverger.Status(1, 0, 0), c.status())
+        assertEquals(StateConverger.Status(1, 0, 0, 0), c.status())
     }
 
     @Test fun olderAcknowledgementCannotOverrideNewerObservation() {
@@ -72,6 +72,18 @@ class StateConvergerTest {
         c.reconcile("relay")
 
         assertTrue(sent.isEmpty())
+        assertEquals(StateConverger.Status(1, 0, 0, 1), c.status())
+    }
+
+    @Test fun forceDoesNotDuplicateIdenticalInFlightPayload() {
+        val sent = mutableListOf<Sent>()
+        val c = StateConverger { topic, payload, _, done -> sent += Sent(topic, payload, done) }
+        c.register(StateConverger.Channel("screen", "screen/state", observe = {
+            StateConverger.Observation.Known("ON")
+        }))
+        c.reconcile("screen", force = true)
+        c.reconcile("screen", force = true)
+        assertEquals(1, sent.size)
     }
 
     @Test fun semanticChangeBeatsNumericDeadband() {
