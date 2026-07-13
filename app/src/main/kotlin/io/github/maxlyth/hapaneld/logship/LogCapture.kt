@@ -33,22 +33,43 @@ class LogCapture(
 ) {
     private val listeners = CopyOnWriteArrayList<(String) -> Unit>()
     private val ring = ArrayDeque<String>(RING_CAP)
+    private val dumps = mutableSetOf<Process>()
 
     // Each start() gets its own Run so a stop→start race can never orphan the new subprocess.
     private class Run {
         @Volatile var job: Job? = null
         @Volatile var proc: Process? = null
-        fun cancel() {
+        private var cancelled = false
+
+        fun attach(candidate: Process): Boolean = synchronized(this) {
+            if (cancelled) {
+                candidate.destroy()
+                false
+            } else {
+                proc = candidate
+                true
+            }
+        }
+
+        fun detach(candidate: Process) = synchronized(this) {
+            if (proc === candidate) proc = null
+        }
+
+        fun cancel() = synchronized(this) {
+            cancelled = true
             job?.cancel()
             runCatching { proc?.destroy() }   // unblocks the reader parked in readLine()
+            proc = null
         }
     }
     private var run: Run? = null
+    @Volatile private var closed = false
 
     /** Register [listener] for every future (redacted) line; starts the capture if it's the first
      *  consumer. Close the returned handle to detach — the last detach stops the subprocess. */
     fun subscribe(listener: (String) -> Unit): AutoCloseable {
         synchronized(this) {
+            if (closed) return AutoCloseable {}
             listeners.add(listener)
             if (run == null) start()
         }
@@ -66,11 +87,34 @@ class LogCapture(
     /** One-shot dump of the last [lines] log lines (redacted) — backlog prefill for a fresh viewer
      *  when the stream has only just started. Blocking; call off the request thread's fast path. */
     fun dump(lines: Int = DUMP_LINES): List<String> = runCatching {
+        if (closed) return@runCatching emptyList()
         val p = ProcessBuilder(dumpCmd(lines)).redirectErrorStream(true).start()
-        val out = p.inputStream.bufferedReader().readLines().map { redact(it) }.takeLast(lines)
-        p.waitFor()
-        out
+        val admitted = synchronized(this) {
+            if (closed) false else dumps.add(p)
+        }
+        if (!admitted) {
+            p.destroy()
+            return@runCatching emptyList()
+        }
+        try {
+            val out = p.inputStream.bufferedReader().readLines().map { redact(it) }.takeLast(lines)
+            p.waitFor()
+            out
+        } finally {
+            synchronized(this) { dumps.remove(p) }
+            runCatching { p.destroy() }
+        }
     }.getOrDefault(emptyList())
+
+    /** Permanently close this service-owned capture and destroy a blocked streaming subprocess. */
+    fun close() = synchronized(this) {
+        if (closed) return@synchronized
+        closed = true
+        listeners.clear()
+        dumps.forEach { runCatching { it.destroy() } }
+        dumps.clear()
+        stop()
+    }
 
     private fun start() {
         val r = Run()
@@ -79,17 +123,20 @@ class LogCapture(
             while (isActive) {
                 try {
                     val p = ProcessBuilder(streamCmd).redirectErrorStream(true).start()
-                    r.proc = p
-                    p.inputStream.bufferedReader().use { reader ->
-                        while (isActive) {
-                            val line = reader.readLine() ?: break
-                            emit(redact(line))
+                    if (!r.attach(p)) break
+                    try {
+                        p.inputStream.bufferedReader().use { reader ->
+                            while (isActive) {
+                                val line = reader.readLine() ?: break
+                                emit(redact(line))
+                            }
                         }
+                    } finally {
+                        r.detach(p)
                     }
                 } catch (e: Exception) {
                     Log.w(TAG, "capture restart: ${e.message}")
                 }
-                r.proc = null
                 if (isActive) delay(BACKOFF_MS)
             }
         }
@@ -102,6 +149,7 @@ class LogCapture(
     }
 
     private fun emit(line: String) {
+        if (closed) return
         synchronized(ring) {
             if (ring.size >= RING_CAP) ring.removeFirst()
             ring.addLast(line)

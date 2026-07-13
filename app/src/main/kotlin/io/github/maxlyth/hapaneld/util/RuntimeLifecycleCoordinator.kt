@@ -48,6 +48,9 @@ class RuntimeLifecycleCoordinator(
     /** The generation reconnect producers may target, or null while no coherent runtime is active. */
     fun currentGeneration(): Long? = view.takeIf { it.state == State.RUNNING }?.generation
 
+    /** Whether [generation] still names the coherent running runtime observed by background work. */
+    fun isCurrent(generation: Long): Boolean = view.let { it.state == State.RUNNING && it.generation == generation }
+
     /** Queue the one initial start. Duplicate starts are rejected when they reach the lane. */
     fun start(block: () -> Unit): Future<Boolean> = submit("start") {
         transition(State.STARTING, setOf(State.NEW), block)

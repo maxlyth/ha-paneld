@@ -52,6 +52,8 @@ class RuntimeLifecycleCoordinatorTest {
         var reconnects = 0
 
         assertFalse(staleReconnect.get(2, TimeUnit.SECONDS))
+        assertFalse(coordinator.isCurrent(oldGeneration))
+        assertTrue(coordinator.isCurrent(currentGeneration))
         assertTrue(coordinator.reconnect(currentGeneration) { reconnects++ }.get(2, TimeUnit.SECONDS))
         assertEquals(1, reconnects)
         assertTrue(coordinator.shutdown(2_000) {})

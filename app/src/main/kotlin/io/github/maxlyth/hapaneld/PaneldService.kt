@@ -93,6 +93,9 @@ class PaneldService : Service() {
     private var netCallback: ConnectivityManager.NetworkCallback? = null
     // MQTT watchdog runs on a DEDICATED thread (not Dispatchers.IO), so slow/contended su can't starve it.
     @Volatile private var mqttWatchdogAlive = false
+    @Volatile private var mqttWatchdogThread: Thread? = null
+    @Volatile private var serviceStopping = false
+    @Volatile private var kioskReassertThread: Thread? = null
     private lateinit var sensors: SensorReporter
     private lateinit var logShipper: LogShipper
     private lateinit var logCaptureApp: LogCapture
@@ -159,9 +162,10 @@ class PaneldService : Service() {
         // thread (the gesture fires on the overlay's touch listener; root + HiveMQ must not run there).
         kiosk.onUnlockRequested = {
             Thread {
+                if (serviceStopping) return@Thread
                 config.setKioskLock(false)
                 runCatching { kiosk.apply(false) }
-                runCatching { mqtt.publishKioskState(false) }
+                if (!serviceStopping) runCatching { mqtt.publishKioskState(false) }
             }.apply { isDaemon = true; name = "kiosk-unlock" }.start()
         }
         // When taming disables a vendor home launcher (e.g. eWeLink), immediately re-assert the dashboard
@@ -240,9 +244,6 @@ class PaneldService : Service() {
             // snapshot) so it follows reconfigure()'s reassignment; browsePeers null-guards the swap window.
             peers = { mdns.browsePeers() },
         )
-        // Stream daemon-instrumented hardware buttons (e.g. WF1589T power key) into the same event
-        // entity as the a11y key capture. No-op on panels with no evdev buttons.
-        EvdevButtonClient.start(profile.evdevButtons)
     }
 
     private fun buildMqtt(): MqttBridge = MqttBridge(
@@ -482,10 +483,10 @@ class PaneldService : Service() {
         val label = when (name) {
             "paneld" -> "ha-paneld"; "companion" -> "HA Companion"; "webview" -> "System WebView"; else -> name
         }
-        if (!InstallProgress.start(label)) return // another install is already running
+        val progress = InstallProgress.start(label) ?: return // another install is already running
         val force = action == "reinstall"
         val tag = version.takeIf { it.isNotBlank() }
-        scope.launch {
+        val job = scope.launch {
             val r = try {
                 when (name) {
                     // A specific picked version installs that exact tag; otherwise the channel's newest.
@@ -503,10 +504,11 @@ class PaneldService : Service() {
                 Log.w(TAG, "install $name failed", e); "error: ${e.message}"
             }
             Log.i(TAG, "install $name: $r")
-            InstallProgress.finish(r)
+            InstallProgress.finish(progress, r)
             // Refresh the available-update list so the banner + Install tab reflect the new state.
             runCatching { UpdateChecker.check(this@PaneldService, config.updateChannel) }
         }
+        InstallProgress.finishOnFailure(progress, job)
     }
 
     /** Smoothness-metrics target: the configured override, else the installed HA Companion app
@@ -568,10 +570,7 @@ class PaneldService : Service() {
             // Experimental kiosk lock: a reboot CLEARS the runtime lock (by design — the anti-brick net), so
             // re-assert it after a delay if it was enabled. The delay leaves an unlocked window each boot so
             // an admin is never stranded; skipped if it was turned off (corner gesture / :8888 / HA) meanwhile.
-            if (config.kioskLock) Thread {
-                try { Thread.sleep(KIOSK_REASSERT_MS) } catch (e: InterruptedException) { return@Thread }
-                if (config.kioskLock) runCatching { kiosk.apply(true) }
-            }.apply { isDaemon = true; name = "kiosk-reassert" }.start()
+            if (config.kioskLock) scheduleKioskReassert()
             // Boot re-assert of network adb — some firmwares strip persist.adb.tcp.port at boot, so
             // re-apply it when ha-paneld is persisting it (no-op otherwise). See AdbController.reassert.
             runCatching { adb.reassert() }
@@ -585,11 +584,18 @@ class PaneldService : Service() {
                     // HA screen entity tracks the local wake (GitHub #6 — was staying OFF in HA).
                     // screen.wake() calls Su.run() — must NOT run on the main thread (ANR risk when
                     // su is under load during the proximity callback, which delivers on the main looper).
-                    if (near && config.wakeOnWave) Thread { screen.wake(); mqtt.publishScreenOn() }.start()
+                    if (near && config.wakeOnWave) Thread {
+                        if (serviceStopping) return@Thread
+                        screen.wake()
+                        if (!serviceStopping) mqtt.publishScreenOn()
+                    }.start()
                 },
                 onTemperature = { c -> mqtt.publishTemperature(c) },
                 onHumidity = { h -> mqtt.publishHumidity(h) },
             )
+            // Stream daemon-instrumented hardware buttons into the same event entity as a11y capture.
+            // It starts and stops with this runtime so a recreated service cannot inherit a blocked reader.
+            EvdevButtonClient.start(profile.evdevButtons)
             scope.periodic(
                 intervalMs = 24 * 3_600 * 1_000L,
                 initialDelayMs = 30_000L, // let startup settle before hitting the network
@@ -672,36 +678,47 @@ class PaneldService : Service() {
         if (mqttWatchdogAlive) return
         mqttWatchdogAlive = true
         val supervisor = ConnectionSupervisor(MQTT_STALE_MS, REBUILD_ABANDON_MS)
-        Thread {
-            var heartbeat: Thread? = null
-            var rebuild: java.util.concurrent.Future<Boolean>? = null
-            while (mqttWatchdogAlive) {
-                try { Thread.sleep(MQTT_WATCHDOG_MS) } catch (e: InterruptedException) { break }
-                if (!mqttWatchdogAlive) break
-                val sinceOk = mqtt.msSinceLastOk()
-                val now = android.os.SystemClock.elapsedRealtime()
-                Log.i(TAG, "mqtt watchdog tick: state=${mqtt.state} sinceOk=${sinceOk}ms hb=${heartbeat?.isAlive == true} rebuild=${rebuild?.isDone == false}")
-                when (val action = supervisor.tick(mqtt.state, mqtt.lastOkMs, sinceOk, now, rebuild?.isDone == false)) {
-                    is ConnectionSupervisor.Action.Rebuild -> {
-                        Log.w(TAG, "MQTT ${action.reason} stall (${sinceOk}ms, state=${mqtt.state}) — forcing reconnect (flip family)")
-                        runtime.currentGeneration()?.let { generation ->
-                            val target = mqtt
-                            rebuild = runtime.reconnect(generation) { target.reconnect(flipFamily = true) }
+        val worker = Thread {
+            try {
+                var heartbeat: Thread? = null
+                var rebuild: java.util.concurrent.Future<Boolean>? = null
+                while (mqttWatchdogAlive) {
+                    try { Thread.sleep(MQTT_WATCHDOG_MS) } catch (e: InterruptedException) { break }
+                    if (!mqttWatchdogAlive) break
+                    val sinceOk = mqtt.msSinceLastOk()
+                    val now = android.os.SystemClock.elapsedRealtime()
+                    Log.i(TAG, "mqtt watchdog tick: state=${mqtt.state} sinceOk=${sinceOk}ms hb=${heartbeat?.isAlive == true} rebuild=${rebuild?.isDone == false}")
+                    when (val action = supervisor.tick(mqtt.state, mqtt.lastOkMs, sinceOk, now, rebuild?.isDone == false)) {
+                        is ConnectionSupervisor.Action.Rebuild -> {
+                            Log.w(TAG, "MQTT ${action.reason} stall (${sinceOk}ms, state=${mqtt.state}) — forcing reconnect (flip family)")
+                            runtime.currentGeneration()?.let { generation ->
+                                val target = mqtt
+                                rebuild = runtime.reconnect(generation) { target.reconnect(flipFamily = true) }
+                            }
                         }
+                        is ConnectionSupervisor.Action.SkipRebuild ->
+                            Log.w(TAG, "mqtt ${action.reason} rebuild wanted but one in flight ${action.inFlightMs}ms — skipping")
+                        ConnectionSupervisor.Action.None -> {}
                     }
-                    is ConnectionSupervisor.Action.SkipRebuild ->
-                        Log.w(TAG, "mqtt ${action.reason} rebuild wanted but one in flight ${action.inFlightMs}ms — skipping")
-                    ConnectionSupervisor.Action.None -> {}
+                    // Heartbeat LAST and OFF-THREAD: a wedged client blocks the publish, but only this
+                    // sacrificial thread — the loop keeps ticking and the un-refreshed lastOkMs is itself
+                    // the failure signal. Skip while one is still in flight (its ACK never came).
+                    if (heartbeat?.isAlive != true) {
+                        val generation = runtime.currentGeneration()
+                        val target = mqtt
+                        heartbeat = Thread({
+                            if (generation != null && runtime.isCurrent(generation)) runCatching { target.heartbeat() }
+                        }, "mqtt-heartbeat").apply { isDaemon = true; start() }
+                    }
                 }
-                // Heartbeat LAST and OFF-THREAD: a wedged client blocks the publish, but only this
-                // sacrificial thread — the loop keeps ticking and the un-refreshed lastOkMs is itself
-                // the failure signal. Skip while one is still in flight (its ACK never came).
-                if (heartbeat?.isAlive != true) {
-                    heartbeat = Thread({ runCatching { mqtt.heartbeat() } }, "mqtt-heartbeat")
-                        .apply { isDaemon = true; start() }
+            } finally {
+                synchronized(this@PaneldService) {
+                    if (mqttWatchdogThread === Thread.currentThread()) mqttWatchdogThread = null
                 }
             }
-        }.apply { isDaemon = true; name = "mqtt-watchdog" }.start()
+        }.apply { isDaemon = true; name = "mqtt-watchdog" }
+        synchronized(this) { mqttWatchdogThread = worker }
+        worker.start()
     }
 
     /**
@@ -758,14 +775,17 @@ class PaneldService : Service() {
     }
 
     override fun onDestroy() {
+        serviceStopping = true
         started = false
         netCallback?.let { cb ->
             runCatching { (getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager)?.unregisterNetworkCallback(cb) }
             netCallback = null
         }
-        mqttWatchdogAlive = false            // stop the dedicated watchdog thread
+        stopMqttWatchdog()
         scope.cancel()
         val stopped = runtime.shutdown(RUNTIME_SHUTDOWN_MS) {
+            cancelKioskReassert()
+            runCatching { EvdevButtonClient.stop() }
             runCatching { power.apply(false) }   // release the wakelock so we don't leak it on teardown
             runCatching { navbar.cleanup() }
             runCatching { watchdog.stop() }
@@ -773,11 +793,43 @@ class PaneldService : Service() {
             runCatching { sensors.stop() }
             runCatching { logShipper.stop() }
             runCatching { server.stop() }
+            runCatching { logCaptureApp.close() }
+            runCatching { logCaptureSystem.close() }
             runCatching { mdns.stop() }
             runCatching { mqtt.stop() }
         }
         if (!stopped) Log.w(TAG, "runtime teardown exceeded ${RUNTIME_SHUTDOWN_MS}ms; cleanup continues on its owner thread")
         super.onDestroy()
+    }
+
+    private fun scheduleKioskReassert() {
+        val worker = Thread {
+            try {
+                Thread.sleep(KIOSK_REASSERT_MS)
+                if (!serviceStopping && config.kioskLock) runCatching { kiosk.apply(true) }
+            } catch (_: InterruptedException) {
+                // Service teardown cancels the delayed lock before it can act.
+            } finally {
+                synchronized(this@PaneldService) {
+                    if (kioskReassertThread === Thread.currentThread()) kioskReassertThread = null
+                }
+            }
+        }.apply { isDaemon = true; name = "kiosk-reassert" }
+        synchronized(this) { kioskReassertThread = worker }
+        worker.start()
+    }
+
+    private fun cancelKioskReassert() {
+        val worker = synchronized(this) { kioskReassertThread.also { kioskReassertThread = null } }
+        worker?.interrupt()
+        runCatching { worker?.join(KIOSK_CANCEL_JOIN_MS) }
+    }
+
+    private fun stopMqttWatchdog() {
+        mqttWatchdogAlive = false
+        val worker = synchronized(this) { mqttWatchdogThread.also { mqttWatchdogThread = null } }
+        worker?.interrupt()
+        runCatching { worker?.join(WATCHDOG_CANCEL_JOIN_MS) }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -803,6 +855,8 @@ class PaneldService : Service() {
         // Never-blank-screen watchdog poll interval; re-lights an unintentionally-dark panel within one tick.
         private const val SCREEN_WATCHDOG_MS = 60_000L
         private const val KIOSK_REASSERT_MS = 60_000L // post-boot delay before re-locking (admin escape window)
+        private const val KIOSK_CANCEL_JOIN_MS = 500L
+        private const val WATCHDOG_CANCEL_JOIN_MS = 500L
         private const val RUNTIME_SHUTDOWN_MS = 5_000L
 
         fun start(context: Context) {

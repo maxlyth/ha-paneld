@@ -184,8 +184,11 @@ class PaneldServer(
     // Stored as a stop lambda over a type-inferred server local, so we never have to name Ktor's
     // EmbeddedServer<TEngine, TConfiguration> generic type (which shifts between Ktor versions).
     private var stopServer: (() -> Unit)? = null
+    private val inspectLock = Any()
+    @Volatile private var stopping = true
 
     fun start() {
+        stopping = false
         // Bind the IPv6 wildcard "::" — on Android this is dual-stack (net.ipv6.bindv6only=0), so the
         // server answers on both IPv6 and IPv4, instead of the IPv4-only default 0.0.0.0.
         val server = embeddedServer(CIO, port = config.httpPort, host = "::") {
@@ -449,12 +452,14 @@ class PaneldServer(
                         if (InstallProgress.running) return@post call.respondText(
                             """{"status":"busy"}""", ContentType.Application.Json)
                         pendingApk = null
-                        InstallProgress.start("APK")
-                        scope.launch {
+                        val progress = InstallProgress.start("APK") ?: return@post call.respondText(
+                            """{"status":"busy"}""", ContentType.Application.Json)
+                        val job = scope.launch {
                             val r = runCatching { AppInstaller.installLocalApk(appContext, apk) }.getOrElse { "error: ${it.message}" }
                             Log.i(TAG, "APK upload install: $r")
-                            InstallProgress.finish(r)
+                            InstallProgress.finish(progress, r)
                         }
+                        InstallProgress.finishOnFailure(progress, job)
                         call.respondText("""{"status":"started"}""", ContentType.Application.Json)
                     }
                     // Enable/disable the APK-upload capability (the card's toggle).
@@ -762,10 +767,13 @@ class PaneldServer(
                         call.respondText(inspectJson(if (CdpRelay.running) "started" else "off"), ContentType.Application.Json)
                     }
                     post("/inspect/start") {
-                        call.respondText(inspectJson(CdpRelay.start(appContext)), ContentType.Application.Json)
+                        val status = synchronized(inspectLock) {
+                            if (stopping) "off" else CdpRelay.start(appContext)
+                        }
+                        call.respondText(inspectJson(status), ContentType.Application.Json)
                     }
                     post("/inspect/stop") {
-                        CdpRelay.stop()
+                        synchronized(inspectLock) { if (CdpRelay.running) CdpRelay.stop() }
                         call.respondText(inspectJson("off"), ContentType.Application.Json)
                     }
                     post("/play") { handlePlay(call) }
@@ -786,8 +794,13 @@ class PaneldServer(
     }
 
     fun stop() {
+        stopping = true
         stopServer?.invoke()
         stopServer = null
+        // Serialize against an admitted start: teardown either prevents it or waits and then kills it.
+        synchronized(inspectLock) { if (CdpRelay.running) CdpRelay.stop() }
+        pendingApk?.delete()
+        pendingApk = null
     }
 
     // The panel's physical resolution as a CSS aspect-ratio (e.g. "750/1334") so the Screenshot card can
@@ -2412,16 +2425,18 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
                 """"config_keys":${cfgObj?.length() ?: 0},"companion_pkg":${jsonStr(comp?.optString("pkg") ?: "")},"companion_files":$compFiles}""",
             ContentType.Application.Json)
         if (InstallProgress.running) return call.respondText("""{"status":"busy"}""", ContentType.Application.Json)
-        InstallProgress.start("Restore")
-        scope.launch {
+        val progress = InstallProgress.start("Restore") ?: return call.respondText(
+            """{"status":"busy"}""", ContentType.Application.Json)
+        val job = scope.launch {
             val r = runCatching {
                 val n = if (cfgObj != null) applyRestoreConfig(cfgObj) else 0
                 val c = if (comp != null) restoreCompanion(comp) else "no companion in bundle"
                 "restored $n config keys; $c"
             }.getOrElse { Log.w(TAG, "restore failed", it); "error: ${it.message}" }
             Log.i(TAG, "restore: $r")
-            InstallProgress.finish(r)
+            InstallProgress.finish(progress, r)
         }
+        InstallProgress.finishOnFailure(progress, job)
         call.respondText("""{"status":"started"}""", ContentType.Application.Json)
     }
 

@@ -6,6 +6,8 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 /**
  * [LogCapture.redact] is the last line of defence before a log line reaches ANY consumer — the
@@ -105,5 +107,39 @@ class LogCaptureTest {
         val out = cap.dump(10)
         assertEquals("ok", out[0])
         assertFalse(out[1].contains("ZZZZ9999ZZZZ"))
+    }
+
+    @Test fun terminalCloseClearsStateAndRejectsNewSubscribers() {
+        val cap = capture("echo before-close; sleep 30")
+        val before = java.util.concurrent.CopyOnWriteArrayList<String>()
+        val first = cap.subscribe { before.add(it) }
+        await { before.isNotEmpty() }
+
+        cap.close()
+        assertTrue(cap.snapshot().isEmpty())
+        assertTrue(cap.dump().isEmpty())
+        val after = java.util.concurrent.CopyOnWriteArrayList<String>()
+        val rejected = cap.subscribe { after.add(it) }
+        Thread.sleep(100)
+        assertTrue(after.isEmpty())
+        first.close()
+        rejected.close()
+    }
+
+    @Test fun terminalCloseDestroysBlockedDumpProcess() {
+        val cap = LogCapture(
+            CoroutineScope(Dispatchers.IO),
+            listOf("true"),
+            { listOf("sleep", "30") },
+        )
+        val executor = Executors.newSingleThreadExecutor()
+        try {
+            val dump = executor.submit<List<String>> { cap.dump() }
+            Thread.sleep(100)
+            cap.close()
+            assertTrue(dump.get(2, TimeUnit.SECONDS).isEmpty())
+        } finally {
+            executor.shutdownNow()
+        }
     }
 }

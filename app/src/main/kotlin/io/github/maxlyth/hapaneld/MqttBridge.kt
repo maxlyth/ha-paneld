@@ -1448,8 +1448,10 @@ class MqttBridge(
      * No-op when there's no client / broker. Called each watchdog tick from the service.
      */
     fun heartbeat() {
+        if (stopped) return
         if (state == "disabled") return
         runCatching { publish("ha-paneld/$panel/last_seen", (System.currentTimeMillis() / 1000).toString()) }
+        if (stopped) return
         runCatching { syncLocalState() }
     }
 

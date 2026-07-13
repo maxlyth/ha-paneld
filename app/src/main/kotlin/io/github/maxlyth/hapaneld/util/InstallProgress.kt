@@ -1,5 +1,7 @@
 package io.github.maxlyth.hapaneld.util
 
+import kotlinx.coroutines.Job
+
 /**
  * Cross-thread progress for a one-shot install/update kicked off from the Install tab (managed
  * components + WebView heal). The service flips [running] around the off-thread install and records the
@@ -8,25 +10,38 @@ package io.github.maxlyth.hapaneld.util
  * the action buttons while [running]).
  */
 object InstallProgress {
+    class Ticket internal constructor(internal val id: Long)
+
     @Volatile var running: Boolean = false; private set
     @Volatile var component: String = ""; private set
     @Volatile var message: String = ""; private set
+    private var generation = 0L
+    private var active: Ticket? = null
 
-    /** Mark an install of [component] as started. Returns false if one is already in flight. */
+    /** Mark an install of [component] as started. Returns null if one is already in flight. */
     @Synchronized
-    fun start(component: String): Boolean {
-        if (running) return false
+    fun start(component: String): Ticket? {
+        if (running) return null
+        val ticket = Ticket(++generation)
+        active = ticket
         this.component = component
         this.message = "Working…"
         this.running = true
-        return true
+        return ticket
     }
 
-    /** Record the finished install's [result] (installer return string) and clear [running]. */
+    /** Record [result] only if [ticket] still owns the single progress slot. */
     @Synchronized
-    fun finish(result: String) {
+    fun finish(ticket: Ticket, result: String) {
+        if (active != ticket) return
         this.message = result
         this.running = false
+        this.active = null
+    }
+
+    /** Ensure cancellation before a launched body begins cannot strand the process-global slot busy. */
+    fun finishOnFailure(ticket: Ticket, job: Job): Job = job.also {
+        it.invokeOnCompletion { cause -> if (cause != null) finish(ticket, "cancelled") }
     }
 
     fun json(): String =
