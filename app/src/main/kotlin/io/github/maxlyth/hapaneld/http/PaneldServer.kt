@@ -91,6 +91,7 @@ class PaneldServer(
     private val scope: CoroutineScope,
     private val appContext: Context,
     private val sensors: SensorReporter,
+    private val profile: DeviceProfile,
     // For the on-screen Controls card (software navbar) on panels with no physical nav bar.
     private val system: SystemController,
     private val volume: VolumeController,
@@ -186,8 +187,8 @@ class PaneldServer(
     }
 
     // Display sizing (density + text scale) via `wm density` / `font_scale` — su panels only.
-    private val density = DensityController()
-    private val interactive = InteractiveController()
+    private val density = DensityController(canSu = profile.appCanSu)
+    private val interactive = InteractiveController(canSu = profile.appCanSu)
     // On-panel config revision history (ring buffer) — written on every successful apply.
     private val revisions = RevisionStore(appContext.filesDir)
     private val urlRegex = Regex("""https?://[^\s"']+""")
@@ -400,7 +401,7 @@ class PaneldServer(
                         // ancillary context, and a blocking snapCache.get() re-ran the FULL probe suite
                         // whenever the snapshot was stale (>12s on a PX30 for a "simple" text page).
                         val facts = withContext(Dispatchers.IO) { snapStaleOk().facts }
-                        call.respondText(DiagReader.dump(appContext, facts), ContentType.Text.Plain)
+                        call.respondText(DiagReader.dump(appContext, facts, profile), ContentType.Text.Plain)
                     }
                     // Live log tail as Server-Sent Events (?source=app|system). Feeds the Logs tab;
                     // also curl-able (`curl -N .../api/v1/logs/stream`). Lines are pre-redacted.
@@ -1121,7 +1122,7 @@ ${tameCardHtml()}
         )
         // Auto-heal offer: if the profile ships a known-good WebView and we have root/daemon to install it,
         // the too-old warning gets a one-tap "Update WebView now" button (POST /api/v1/webview/heal).
-        val canHeal = wv.tooOld && DeviceProfile.detect().recommendedWebView != null && root
+        val canHeal = wv.tooOld && profile.recommendedWebView != null && root
         // A missing dashboard app can be self-healed by installing the minimal HA Companion over root — a
         // Play-managed full Companion would already count as a renderer, so NO_RENDERER + root ⇒ safe.
         val canInstallCompanion = root
@@ -1176,7 +1177,7 @@ $allGood</div>
         val compPkg = CompanionInstaller.installedPkg(appContext)
         val compFull = compPkg == CompanionInstaller.FULL_PKG
         val compCur = compPkg?.let { AppInstaller.installedVersion(appContext, it) }?.takeIf { it.isNotBlank() }
-        val rec = DeviceProfile.detect().recommendedWebView
+        val rec = profile.recommendedWebView
 
         val paneldRow = pickerRow("paneld", "ha-paneld", paneldCur, config.updateChannel, root)
         // A Play-managed FULL Companion must never be touched by ha-paneld — show it read-only.
@@ -1385,7 +1386,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         }
         warns.addAll(findings.map { statusWarning(it) })
         val capColor = mapOf("ok" to "#48c774", "degraded" to "#d9a528", "none" to "#d04a3b")
-        val caps = DiagReader.capabilities(appContext).joinToString(",") { c ->
+        val caps = DiagReader.capabilities(appContext, profile).joinToString(",") { c ->
             "{\"name\":${jsonStr(c.name)},\"note\":${jsonStr(c.note)},\"color\":${jsonStr(capColor[c.status] ?: "#888")}}"
         }
         return "{\"warnings\":[${warns.joinToString(",") { jsonStr(it) }}],\"capabilities\":[$caps]}"
@@ -1698,7 +1699,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
 
     private fun capRowsHtml(): String {
         val capColor = mapOf("ok" to "#48c774", "degraded" to "#d9a528", "none" to "#d04a3b")
-        return DiagReader.capabilities(appContext).joinToString("\n") { c ->
+        return DiagReader.capabilities(appContext, profile).joinToString("\n") { c ->
             val col = capColor[c.status] ?: "#888"
             """<tr><th>${esc(c.name)}</th><td><span style="color:$col">●</span> ${esc(c.note)}</td></tr>"""
         }
@@ -1717,7 +1718,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         val a11yOk = s?.facts?.get("Nav actions (a11y)") == "yes"
         // Recents is only real where the firmware has an overview screen — KEYCODE_APP_SWITCH no-ops on
         // single-purpose panels (TPA10), so gate the button on the profile rather than show a dead one.
-        val hasRecents = io.github.maxlyth.hapaneld.device.DeviceProfile.detect().hasRecents
+        val hasRecents = profile.hasRecents
         val rootOk = s?.rootOk == true
         val checking = s == null
         fun pbtn(action: String, label: String, ok: Boolean, needs: String, style: String = "", disabledTitle: String? = null): String {

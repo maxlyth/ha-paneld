@@ -1,5 +1,6 @@
 package io.github.maxlyth.hapaneld.device
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
 import org.junit.Test
 
@@ -85,5 +86,34 @@ class DeviceProfileMatchTest {
         assertSame(Smt1019, match("RK3576_U", "WF2489T"))
         assertSame(EchoShow5Gen2, match("CRONOS", "CRONOS"))
         assertSame(ZxSmt156, match("RK3566_T", "RK3566_T"))
+    }
+
+    @Test fun exactProductIdentityWinsOverAnotherVendorsBroadSocAlias() {
+        assertSame(ShellyWallDisplayV2, match("PX30_EVB", "Jenna"))
+        assertSame(ShellyWallDisplayV2, match("rk3326", "SAWD-5A1XX10EU0"))
+        assertSame(EchoShow5Gen2, match("rk3326", "cronos"))
+        assertSame(ZxSmt156, match("rk3576_u", "rk3566_t"))
+        assertSame(Smt1019, match("rk3576_u", "wf2489t"))
+    }
+
+    @Test fun productVersionCanProvideAnExactNsPanelIdentity() {
+        assertSame(NSPanelPro, match("unknown", "unknown", "NSPanel120P_3.7.1"))
+        assertSame(NSPanelPro, match("unknown", "unknown", "s6_android_4.6.0"))
+    }
+
+    @Test fun modelLabelParsingIsOwnedByTheProfileThatUnderstandsTheVendorString() {
+        assertEquals("NSPanel 120P · fw 3.7.1", NSPanelPro.panelModelLabel("NSPanel120P_3.7.1"))
+        assertEquals("NSPanel 86P · fw 4.6.0", NSPanelPro.panelModelLabel("s6_android_4.6.0"))
+        assertEquals(NSPanelPro.displayName, NSPanelPro.panelModelLabel(""))
+        assertEquals(NSPanelPro.displayName, NSPanelPro.panelModelLabel("unrelated_vendor_format"))
+        assertEquals(Wf1589t.displayName, Wf1589t.panelModelLabel("unrelated_vendor_format"))
+    }
+
+    @Test fun proximityFirmwareRulesParseBothNsPanelProductVersionFormats() {
+        assertEquals(true, NSPanelPro.proximityGradedForFirmware("s6_android_2.9.9"))
+        assertEquals(false, NSPanelPro.proximityGradedForFirmware("s6_android_3.0.0"))
+        assertEquals(true, NSPanelPro.proximityGradedForFirmware("NSPanel120P_3.4.9"))
+        assertEquals(false, NSPanelPro.proximityGradedForFirmware("NSPanel120P_3.5.0"))
+        assertEquals(null, NSPanelPro.proximityGradedForFirmware("unrelated_vendor_format"))
     }
 }

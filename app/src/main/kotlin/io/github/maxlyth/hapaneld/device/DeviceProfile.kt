@@ -10,12 +10,10 @@ import io.github.maxlyth.hapaneld.util.SystemProps
  * `ShellyWallDisplay`, `ShellyWallDisplayV2`, `EchoShow5Gen2`, `ZxSmt156`, `Generic`).
  *
  * Design rule (see docs/architecture/device-profiles.md): a profile declares **candidates + quirks**;
- * the functional modules still **runtime-probe to confirm** (profile says *where to look*, the probe
- * says *whether it's actually there*). The [Generic] profile probes everything generically, so an
- * unknown panel still works for whatever it physically has, with no profile written.
- *
- * Stage 1 (0.7.0): this module is defined but not yet consumed — no behaviour change. Controllers are
- * migrated to read the active profile one at a time in later stages.
+ * the functional modules still **runtime-probe to confirm** whenever the platform exposes a probe
+ * (profile says *where to look*, the probe says *whether it's actually there*). [Generic] deliberately
+ * keeps unknown hardware conservative: standard Android sensors and generic LED/CPU routes can be
+ * probed, while relays, evdev buttons and vendor protocols stay absent until their paths are known.
  */
 interface DeviceProfile {
     /** Stable id, e.g. "nspanel-pro" / "tpa10" / "generic". */
@@ -34,13 +32,17 @@ interface DeviceProfile {
      *  need the root helper daemon for privileged writes). */
     val appCanSu: Boolean
 
-    /** Whether this panel relies on the root helper daemon (`helper/hapaneld-helper`) as its privileged
-     *  control path — true for every sandbox-walled panel ([appCanSu] = false). There the app can't exec
-     *  `su`, so the daemon is what drives the root-only controls: screen-off (`bl_power`), display
-     *  density, CPU governor, screenshot, perf sampling, hardware buttons AND the LED. So the daemon must
-     *  be installed on these panels regardless of [ledMechanism] — a sandbox panel with no LED still needs
-     *  it, else those controls silently stay empty. Daemon-need is its own concept, NOT the LED mechanism. */
-    val usesDaemon: Boolean get() = !appCanSu
+    /** Whether full profile behavior relies on `helper/hapaneld-helper`. Every sandbox-walled panel needs
+     *  it for privileged controls, but app-su panels can need it too: WF1589T's evdev power button is the
+     *  important counterexample. This is a diagnostic requirement, not a routing gate; live controllers
+     *  still fall through between safe routes when the preferred transport is unavailable. */
+    val usesDaemon: Boolean get() =
+        !appCanSu ||
+            ledMechanism == LedMechanism.SYSFS_DAEMON ||
+            ledMechanism == LedMechanism.RK3576_IOCTL_DAEMON ||
+            screenOff == ScreenOff.DAEMON_BLPOWER ||
+            hasButtonBacklight ||
+            evdevButtons.isNotEmpty()
 
     /** Curated, annotated packages for THIS panel's "Recommended" list in the Vendor-packages card — each a
      *  [TameCandidate] carrying its tags (e.g. "vendor"/"chipset"/"test"/"overlay") and a one-line note from
@@ -56,6 +58,11 @@ interface DeviceProfile {
 
     /** How the RGB LED is driven, if any. */
     val ledMechanism: LedMechanism
+
+    /** A distinct monochrome button-backlight node driven by the helper's `BTN` command. Do not infer
+     *  this from a daemon-backed RGB controller: SMT1019 uses that controller for `/dev/ledjni` but has
+     *  no `/sys/class/leds/button-backlight` node. */
+    val hasButtonBacklight: Boolean get() = false
 
     /** Per-channel LED transfer function (requested 0..255 → hardware value), correcting the panel's
      *  non-linear LED response. Only consumed on the rk3576 ioctl path. Default = passthrough; rk3576
@@ -136,6 +143,10 @@ interface DeviceProfile {
      *  co-installed integration managing the same hardware; the user's form value overrides verbatim. */
     val model: String?
 
+    /** Model text for the local info page. Most profiles use [displayName]; a profile may decode its
+     *  vendor product-version string when that string carries a real variant/firmware identity. */
+    fun panelModelLabel(productVersion: String): String = displayName
+
     /** Hardware buttons the Android input pipeline doesn't usefully deliver to the app, instrumented
      *  via the root helper daemon's evdev WATCH/grab instead. Empty when none. See [EvdevButton]. */
     val evdevButtons: List<EvdevButton>
@@ -166,6 +177,21 @@ interface DeviceProfile {
     val companionMaxVersion: String? get() = null
 
     companion object {
+        /** Every production profile, including [Generic]. Cross-profile contract tests iterate this list;
+         *  add a new profile here in the same change that adds its detection rule. */
+        internal val knownProfiles: List<DeviceProfile> = listOf(
+            NSPanelPro,
+            Tpa10,
+            EchoShow5Gen2,
+            ZxSmt156,
+            ShellyWallDisplayV2,
+            ShellyWallDisplay,
+            Smt1019,
+            Wf1589t,
+            S9e,
+            Generic,
+        )
+
         /** Memoized detected profile: [match] is pure per boot (Build fields + one system property), yet
          *  several call sites re-invoke [detect] on request paths — so resolve it once and reuse. */
         private val cached: DeviceProfile by lazy { match() }
@@ -190,40 +216,33 @@ interface DeviceProfile {
         internal fun match(rawModel: String, rawDevice: String, rawProductVersion: String): DeviceProfile {
             val model = rawModel.lowercase()
             val device = rawDevice.lowercase()
-            // The Smatek S9E reports generic Build fields (MODEL "S9" / DEVICE "rk3566_r") but carries
-            // its vendor model code in ro.product.version ("S9_Android_1.1.0") — confirmed from a
-            // reporter's /diag (GitHub #3, 2026-06-15). Match that so it doesn't fall back to Generic
-            // (which hides its relays + button LEDs). rk3566 is shared with the TPA10, but the TPA10 is
-            // matched first by device == "tpa10".
             val productVersion = rawProductVersion.lowercase()
             return when {
-                // px30 = Gen1 86P/120P; rk3326(-s) = Gen2 (best-effort — capabilities are runtime-probed,
-                // so an unverified Gen2 still detects relays/zigbee/sensors correctly).
-                "px30" in model || "px30" in device || "rk3326" in model || "rk3326" in device -> NSPanelPro
+                // Exact product identities must win over broad SoC aliases. This matters when another
+                // vendor ships the same Rockchip reference platform: a Shelly Jenna can truthfully carry
+                // PX30/rk3326 in one Build field while its product/device field still says "jenna".
                 model == "tpa10" || device == "tpa10" -> Tpa10
-                // Echo Show 5 Gen 2 running the community LineageOS build. `cronos` is Amazon's stable
-                // device codename; exact matching avoids the related `checkers` (Gen 1) and `crown`
-                // (Echo Show 8 Gen 1) devices, which need their own profiles.
                 device == "cronos" || model == "cronos" -> EchoShow5Gen2
-                // 15.6-inch unbranded rk3566 panel. Match the exact device code; generic `rk3566`
-                // cannot be used because it is shared by TPA10 and S9E-class hardware.
                 device == "rk3566_t" || model == "rk3566_t" -> ZxSmt156
-                // Shelly Wall Display V2 — modern arm64: Blake/XL, Jenna/X2i, Cally/XLi, Maverick/U1, Dayna/D1.
-                // Build.MODEL is either the device codename or the full SKU (SAWD-3A1XE10EU2 etc.).
                 model in setOf("blake", "jenna", "cally", "maverick", "dayna") ||
+                    device in setOf("blake", "jenna", "cally", "maverick", "dayna") ||
                     Regex("^sawd-[3456]").containsMatchIn(model) ||
                     Regex("^sawd-[3456]").containsMatchIn(device) -> ShellyWallDisplayV2
-                // Shelly Wall Display legacy — MT6580/armeabi-v7a: Stargate/4", Atlantis, Pegasus/X2.
                 model in setOf("stargate", "pegasus", "atlantis") ||
+                    device in setOf("stargate", "pegasus", "atlantis") ||
                     Regex("^sawd-[012]").containsMatchIn(model) ||
                     Regex("^sawd-[012]").containsMatchIn(device) ||
                     "k400_mt6580" in device || "e500_7731e" in device -> ShellyWallDisplay
-                // The ZHICAI SMT1019 (device WF2489T) shares the rk3576 "rk3576_u" model code with the
-                // WF1589T, but is a locked-down, no-root unit with no app-direct LED — match it first so
-                // the rk3576_u clause below doesn't hand it the WF1589T's app-LED profile (GitHub #8).
                 "wf2489" in device -> Smt1019
-                "wf1589" in device || model == "rk3576_u" -> Wf1589t
+                "wf1589" in device -> Wf1589t
+                // The Smatek S9E reports generic Build fields but carries its vendor model code in
+                // ro.product.version ("S9_Android_1.1.0"). Exact TPA10/rk3566_t rules already won above.
                 "s9e" in model || "s9e" in device || model == "s9" || productVersion.startsWith("s9") -> S9e
+                productVersion.startsWith("nspanel") || productVersion.startsWith("s6_android_") -> NSPanelPro
+                // Broad reference-platform fallbacks come last. They retain support for historical
+                // NSPanel/WF diagnostics while never overriding a product identity known above.
+                "px30" in model || "px30" in device || "rk3326" in model || "rk3326" in device -> NSPanelPro
+                model == "rk3576_u" -> Wf1589t
                 else -> Generic
             }
         }

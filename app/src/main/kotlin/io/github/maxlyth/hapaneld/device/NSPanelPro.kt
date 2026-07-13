@@ -32,15 +32,31 @@ object NSPanelPro : DeviceProfile {
 
     // Seaky firmware quirk (github.com/seaky/nspanel_pro_roottool_apk): a new kernel proximity driver lands
     // at fw >= 3.0.0 (86P) / >= 3.5.0 (120P) and drops graded distance → BINARY; below that it's GRADED.
-    // ro.product.version e.g. "NSPanel120P_3.7.1" / "NSPanel86P_1.2.6".
+    // ro.product.version is `s6_android_x.y.z` on the 86P and `NSPanel120P_x.y.z` on the 120P.
     override fun proximityGradedForFirmware(productVersion: String): Boolean? {
-        val fw = productVersion.substringAfter('_', "").ifBlank { return null }
+        val fw = firmwareVersion(productVersion) ?: return null
         val threshold = if ("120" in productVersion.substringBefore('_')) "3.5.0" else "3.0.0"
         return verLt(fw, threshold)
     }
 
     override val manufacturer = "Sonoff"
     override val model = "NSPanel Pro"
+    override fun panelModelLabel(productVersion: String): String = when {
+        productVersion.startsWith(S6_VERSION_PREFIX, ignoreCase = true) ->
+            "NSPanel 86P" + firmwareVersion(productVersion)?.let { " · fw $it" }.orEmpty()
+        productVersion.startsWith("NSPanel", ignoreCase = true) -> {
+            val suffix = productVersion.substringBefore('_').drop("NSPanel".length)
+            if (suffix.isBlank()) displayName
+            else "NSPanel $suffix" + firmwareVersion(productVersion)?.let { " · fw $it" }.orEmpty()
+        }
+        else -> displayName
+    }
+
+    private fun firmwareVersion(productVersion: String): String? = when {
+        productVersion.startsWith(S6_VERSION_PREFIX, ignoreCase = true) -> productVersion.drop(S6_VERSION_PREFIX.length)
+        productVersion.startsWith("NSPanel", ignoreCase = true) -> productVersion.substringAfter('_', "")
+        else -> ""
+    }.ifBlank { null }
     // Curated, annotated tame suggestions. "vendor" = Sonoff/eWeLink's own apps; "chipset" = Rockchip
     // (the PX30 SoC vendor) factory/demo apps that small-production panels routinely ship — they look
     // alarming but are safe to disable. All are suggestions only; nothing is auto-disabled, and every
@@ -87,6 +103,8 @@ object NSPanelPro : DeviceProfile {
         version = "138.0.7204.63",
         certSha256 = "518325ef7f96c0d1194c2e856b040d636166ffb846717d72fa87f4fae5be7bbb",
     )
+
+    private const val S6_VERSION_PREFIX = "s6_android_"
 }
 
 /** True if dotted-numeric version [a] < [b] (e.g. "1.2.6" < "3.0.0"). Non-numeric/missing parts → 0. */

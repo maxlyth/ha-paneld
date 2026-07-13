@@ -30,7 +30,7 @@ object DiagReader {
     /** status: "ok" | "degraded" | "none" */
     data class Cap(val name: String, val status: String, val note: String)
 
-    fun capabilities(ctx: Context): List<Cap> {
+    fun capabilities(ctx: Context, profile: DeviceProfile = DeviceProfile.detect()): List<Cap> {
         val pkg = ctx.packageName
         val su = Su.available()
         val daemon = HelperClient.available()
@@ -46,21 +46,19 @@ object DiagReader {
         }
         val canWrite = Settings.System.canWrite(ctx)
         val a11y = a11yEnabled(ctx)
-        val profile = DeviceProfile.detect()
         val evdev = EvdevButtonClient.snapshot()
         val buttonHealth = ButtonCaptureHealth.evaluate(a11y, profile.evdevButtons.size, evdev, pkg)
         val rootish = su || daemon
-        // Sandbox-walled panel (can't exec su) → the daemon is its ONLY privileged control path, needed
-        // regardless of the LED mechanism. Surfaced below so a missing-but-needed daemon isn't a silent
-        // dead end (controls present but empty); omitted on su panels where it isn't required.
+        // Surface the helper whenever this profile needs it for privileged control or profile-specific
+        // hardware such as daemon-only LEDs and evdev buttons, even if the app can also execute su.
         val usesDaemon = profile.usesDaemon
         return listOfNotNull(
             Cap("Root (su)", if (su) "ok" else "none",
                 if (su) "available" else
                     "no su on this firmware — sysfs-LED, reboot/reload and true screen-off are unavailable; everything else still works"),
             if (usesDaemon) Cap("Helper daemon", if (daemon) "ok" else "none",
-                if (daemon) "running — the privileged control path on this sandbox-walled panel (the app can't exec su)"
-                else "NEEDED but not running — this panel can't su, so screen-off, density, CPU, screenshot and the LED stay unavailable until it's installed (helper/install-daemon.sh)")
+                if (daemon) daemonRequirement(profile, running = true)
+                else daemonRequirement(profile, running = false))
             else null,
             Cap("Brightness", if (canWrite) "ok" else "none",
                 if (canWrite) "WRITE_SETTINGS granted" else
@@ -84,6 +82,46 @@ object DiagReader {
         )
     }
 
+    /** Hardware-button truth combines the two independent sources. Accessibility sees Android-delivered
+     * keys; profile-declared evdev keys require the helper daemon and can exist even when accessibility is
+     * off. A missing daemon degrades an otherwise-working accessibility path instead of hiding the loss. */
+    internal fun hardwareButtonsCapability(
+        accessibility: Boolean,
+        daemon: Boolean,
+        evdevButtonCount: Int,
+        packageName: String = "io.github.maxlyth.hapaneld",
+    ): Cap = when {
+        accessibility && evdevButtonCount > 0 && daemon -> Cap(
+            "Hardware buttons", "ok",
+            "accessibility key capture plus $evdevButtonCount daemon-instrumented physical button(s)",
+        )
+        accessibility && evdevButtonCount > 0 -> Cap(
+            "Hardware buttons", "degraded",
+            "accessibility key capture works; $evdevButtonCount profiled physical button(s) need the helper daemon",
+        )
+        accessibility -> Cap("Hardware buttons", "ok", "accessibility key capture enabled")
+        evdevButtonCount > 0 && daemon -> Cap(
+            "Hardware buttons", "ok", "$evdevButtonCount profiled physical button(s) via the helper daemon",
+        )
+        evdevButtonCount > 0 -> Cap(
+            "Hardware buttons", "none", "$evdevButtonCount profiled physical button(s) need the helper daemon",
+        )
+        else -> Cap(
+            "Hardware buttons", "none",
+            "enable (no root): adb shell settings put secure enabled_accessibility_services $packageName/.input.PanelAccessibilityService && adb shell settings put secure accessibility_enabled 1",
+        )
+    }
+
+    private fun daemonRequirement(profile: DeviceProfile, running: Boolean): String {
+        val state = if (running) "running" else "NEEDED but not running"
+        return when {
+            !profile.appCanSu -> "$state — the privileged control path on this sandbox-walled panel; without it, root-only controls remain unavailable"
+            profile.evdevButtons.isNotEmpty() -> "$state — required for ${profile.evdevButtons.size} profiled physical button(s), even though ordinary privileged actions can use su"
+            profile.hasButtonBacklight -> "$state — required for the profiled button backlight"
+            else -> "$state — required for this profile's daemon-backed hardware"
+        }
+    }
+
     /**
      * Terse, version-stamped copy-paste report for GitHub issues. The `[panel]` block reuses the EXACT
      * facts shown on the info page ([facts], passed by the caller) so it auto-tracks every field we add —
@@ -91,7 +129,11 @@ object DiagReader {
      * public thread. Every other section is one line. The version+build header is the version control: a
      * pasted report is always attributable to the build that produced it.
      */
-    fun dump(ctx: Context, facts: Map<String, String> = emptyMap()): String = buildString {
+    fun dump(
+        ctx: Context,
+        facts: Map<String, String> = emptyMap(),
+        profile: DeviceProfile = DeviceProfile.detect(),
+    ): String = buildString {
         appendLine("ha-paneld diagnostics — ${BuildConfig.VERSION_NAME} (build ${BuildConfig.VERSION_CODE})")
         // Capture metadata — a normalise-me line for the regression harness: when this dump was taken +
         // how long the panel has been up (uptime is often more telling than wall-clock on a panel).
@@ -128,7 +170,7 @@ object DiagReader {
         // usual cause is a gpiochip-base shift (the kernel numbered the pins differently), which these
         // lines expose: check that led_base falls inside some chip's [base, base+ngpio) range, and which
         // pin dirs / value nodes actually came up. Read-only.
-        DeviceProfile.detect().buttonLedGpioBase?.let { base ->
+        profile.buttonLedGpioBase?.let { base ->
             val pinPaths = (0 until 4).map { "/sys/class/gpio/gpio${base + it}" }
             val chips = probe("grep -H '' /sys/class/gpio/gpiochip*/base /sys/class/gpio/gpiochip*/ngpio /sys/class/gpio/gpiochip*/label 2>/dev/null")
                 .replace("/sys/class/gpio/", "").replace("\n", " ")
@@ -143,14 +185,14 @@ object DiagReader {
             .joinToString(" ") { "${it.substringAfterLast('.')}=${pkgVer(ctx, it)}" })
         // Vendor packages this panel's profile knows about, with live state — so a maintainer can see the
         // tame candidates and what's present/disabled on this firmware. Only when the profile defines them.
-        val tameCandidates = DeviceProfile.detect().tameVendorCandidates
+        val tameCandidates = profile.tameVendorCandidates
         if (tameCandidates.isNotEmpty()) {
             appendLine("[vendor-tame] " + TameController(ctx).profileReport(tameCandidates).joinToString(" | ") { c ->
                 val state = if (!c.installed) "absent" else if (c.disabled) "disabled" else "active"
                 c.pkg + "=" + state + if (c.tags.isNotEmpty()) "(${c.tags.joinToString(",")})" else ""
             })
         }
-        appendLine("[capabilities] " + capabilities(ctx).joinToString(" | ") { "${it.name}=${it.status}" })
+        appendLine("[capabilities] " + capabilities(ctx, profile).joinToString(" | ") { "${it.name}=${it.status}" })
         val updates = UpdateChecker.current(ctx)   // revalidated: no stale entry for an uninstalled Companion
         if (updates.isNotEmpty()) {
             appendLine("[updates] " + updates.joinToString(" | ") { "${it.label}: ${it.currentVersion} → ${it.latestVersion}" })

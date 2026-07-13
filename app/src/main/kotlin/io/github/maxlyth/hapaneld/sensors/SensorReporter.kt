@@ -31,7 +31,11 @@ import kotlin.math.max
  * Publishing is change-gated to avoid MQTT spam: light on a >=20% lux change (min 2s apart);
  * proximity only on near<->far transitions (the raw stream never leaves the device).
  */
-class SensorReporter(context: Context, private val config: Config) {
+class SensorReporter(
+    context: Context,
+    private val config: Config,
+    private val profile: DeviceProfile = DeviceProfile.detect(),
+) {
     private val sm = context.applicationContext.getSystemService(Context.SENSOR_SERVICE) as SensorManager
     private val lightSensor: Sensor? = sm.getDefaultSensor(Sensor.TYPE_LIGHT)
     private val proximitySensor: Sensor? = sm.getDefaultSensor(Sensor.TYPE_PROXIMITY)
@@ -40,12 +44,12 @@ class SensorReporter(context: Context, private val config: Config) {
     // humidity sensors register (present) but never stream a value, so they'd only surface a frozen, stale
     // reading duplicating the daemon entities. Defer entirely to the daemon path where the profile declares
     // the chip; on any other panel the HAL sensors work as before.
-    private val hasCht8305: Boolean = runCatching { DeviceProfile.detect().hasCht8305 }.getOrNull() == true
+    private val hasCht8305: Boolean = profile.hasCht8305
     private val tempSensor: Sensor? = if (hasCht8305) null else sm.getDefaultSensor(Sensor.TYPE_AMBIENT_TEMPERATURE)
     private val humiditySensor: Sensor? = if (hasCht8305) null else sm.getDefaultSensor(Sensor.TYPE_RELATIVE_HUMIDITY)
     // Root binary proximity GPIO (1=near, 0=far) for panels whose SensorManager proximity never fires
     // (Smatek S9E gpio18). Null → use [proximitySensor] above. Polled instead of registered when set.
-    private val proximityGpio: Int? = runCatching { DeviceProfile.detect().proximityGpio }.getOrNull()
+    private val proximityGpio: Int? = profile.proximityGpio
     @Volatile private var proxPolling = false
     private var proxPoller: Thread? = null
 
@@ -75,7 +79,7 @@ class SensorReporter(context: Context, private val config: Config) {
     // Authoritative graded/binary from the firmware version where the profile knows the rule (NSPanel Pro
     // kernel-driver cutover), so a graded sensor never reads "Binary" at idle. Null → observe (TPA10 etc.).
     private val fwGraded: Boolean? =
-        runCatching { DeviceProfile.detect().proximityGradedForFirmware(SystemProps.get("ro.product.version")) }.getOrNull()
+        profile.proximityGradedForFirmware(SystemProps.get("ro.product.version"))
 
     private fun gradedObserved(): Boolean =
         synchronized(seenRaw) { seenRaw.size > 2 && (seenRaw.last() - seenRaw.first()) >= 2f }

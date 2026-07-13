@@ -14,6 +14,7 @@ object Tpa10 : DeviceProfile {
     override val appCanSu = false
     override val hasRecents = false   // Tuya firmware has no overview screen (KEYCODE_APP_SWITCH is a no-op)
     override val ledMechanism = LedMechanism.SYSFS_DAEMON
+    override val hasButtonBacklight = true
     override val screenOff = ScreenOff.DAEMON_BLPOWER
     override val zigbeeGatewayDir: String? = null
     override val relayBase: String? = null

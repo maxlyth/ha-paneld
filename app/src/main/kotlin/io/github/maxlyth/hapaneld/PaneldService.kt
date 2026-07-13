@@ -37,6 +37,7 @@ import io.github.maxlyth.hapaneld.control.WatchdogController
 import io.github.maxlyth.hapaneld.control.TouchSoundController
 import io.github.maxlyth.hapaneld.control.VolumeController
 import io.github.maxlyth.hapaneld.control.ZigbeeController
+import io.github.maxlyth.hapaneld.device.LedMechanism
 import io.github.maxlyth.hapaneld.hardware.LedController
 import io.github.maxlyth.hapaneld.hardware.LedFactory
 import io.github.maxlyth.hapaneld.hardware.Rk3576LedController
@@ -145,11 +146,11 @@ class PaneldService : Service() {
         config = Config(this)
         config.migrateLiveStore()   // carry persisted settings across a schema bump before anything reads them
         reconcileHelperInstallStaging()
-        sensors = SensorReporter(this, config)
         // Detect the device profile once and hand it to the hardware-specific controllers (instead of
         // each re-detecting). The canonical per-platform silo for paths/quirks; see device/.
         profile = DeviceProfile.detect()
         config.attachProfile(profile)   // supplies per-panel manufacturer/model defaults
+        sensors = SensorReporter(this, config, profile)
         // Shared demand-driven logcat captures (one subprocess + one redaction pass each): the app
         // source feeds both remote shipping and the :8888 live log viewer; the system source (su)
         // only the viewer. Idle-stopped — no subprocess runs until something subscribes.
@@ -253,7 +254,7 @@ class PaneldService : Service() {
             completeLaunch = config::completeRendererLaunch,
         )
         server = PaneldServer(
-            config, cacheDir, scope, this, sensors, system, volume, audio::submit, ::reconfigure,
+            config, cacheDir, scope, this, sensors, profile, system, volume, audio::submit, ::reconfigure,
             // Capture the field (not the current instance) so it always targets the live bridge,
             // which reconfigure() rebuilds on a panel_id / MQTT change.
             { k, v -> mqtt.applySetting(k, v) },
@@ -294,8 +295,9 @@ class PaneldService : Service() {
         sensors.hasLight(), sensors.hasProximity(),
         sensors.hasTemperature(), sensors.hasHumidity(),
         profile.hasCht8305,
-        // Button backlight lives on the sysfs/daemon LED panels (TPA10), reached via the daemon's BTN.
-        led is SocketLedController,
+        // Button backlight is a distinct profiled node (TPA10), not a property of the RGB backend:
+        // SMT1019 also uses SocketLedController for RGB but has no button-backlight node.
+        profile.hasButtonBacklight,
         profile.appCanSu, profile.hasRecents,
         autoBright, configUrl,
         // When no broker is configured, find HA on the LAN via mDNS and default to its :1883.
@@ -366,15 +368,7 @@ class PaneldService : Service() {
             "connecting" -> "$host · connecting…"
             else -> "disabled"
         }
-        // Variant + firmware from ro.product.version (e.g. "NSPanel120P_3.7.1" -> "NSPanel 120P · fw 3.7.1").
-        // This is the authoritative model/generation key — distinguishes 86P / 120P / 86P-Gen2 and the
-        // firmware that drives the proximity-reporting + zigbee-layout quirks.
         val pv = SystemProps.get("ro.product.version")
-        val modelRow = if (pv.isNotEmpty()) {
-            val m = pv.substringBefore('_').replace("NSPanel", "NSPanel ").trim()
-            val fw = pv.substringAfter('_', "")
-            m + (if (fw.isNotEmpty()) " · fw $fw" else "")
-        } else "${profile.displayName}"
         val extras = linkedMapOf(
             "panel_id" to config.panelId,
             "Friendly name" to config.friendlyName,
@@ -391,7 +385,7 @@ class PaneldService : Service() {
             "Keep awake" to if (config.keepAwake) (if (power.isHeld()) "on · wakelock held" else "on · wakelock NOT held") else "off",
             "mDNS" to "${config.panelId} ${Config.MDNS_SERVICE_TYPE}",
             "Platform" to "${profile.displayName} · ${profile.socClass}",
-            "Model" to modelRow,
+            "Model" to profile.panelModelLabel(pv),
             "LED" to ledLabel(),
             "Light sensor" to sensorRow(sensors.hasLight(), profile.lightTech, sensors.lightDesc()),
             "Proximity" to sensorRow(sensors.hasProximity(), profile.proximityTech, sensors.proximityDesc()),
@@ -412,6 +406,7 @@ class PaneldService : Service() {
             "Log shipping" to logShipper.statusText(),
             "Audio playback" to audio.snapshot().statusText(),
         )
+        if (pv.isNotEmpty()) extras["Product version"] = pv
         // Recent "changed outside MQTT" events (brightness/volume/backlight/governor) — shown only when
         // something has actually synced, so it doesn't clutter a steady panel. Flows to /diag too.
         mqtt.recentSyncEvents().takeIf { it.isNotEmpty() }?.let { extras["Local-state sync"] = it.joinToString(" · ") }
@@ -422,7 +417,9 @@ class PaneldService : Service() {
     private fun ledLabel(): String = when {
         !led.available() -> "none"
         led is Rk3576LedController -> "Rockchip /dev/ledjni (RGB)"
-        led is SocketLedController -> "sysfs helper daemon (RGB)"
+        led is SocketLedController && profile.ledMechanism == LedMechanism.RK3576_IOCTL_DAEMON -> "Rockchip /dev/ledjni helper daemon (RGB)"
+        led is SocketLedController && profile.ledMechanism == LedMechanism.SYSFS_DAEMON -> "sysfs helper daemon (RGB)"
+        led is SocketLedController -> "helper daemon (RGB)"
         led.colorCapable() -> "RGB"
         else -> "brightness"
     }

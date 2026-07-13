@@ -15,10 +15,7 @@ import org.junit.Test
  * that silently does nothing), so failing here is the point.
  */
 class DeviceProfileCapabilityTest {
-    private val all = listOf(
-        NSPanelPro, Tpa10, Smt1019, Wf1589t, S9e, EchoShow5Gen2, ZxSmt156, Generic,
-        ShellyWallDisplay, ShellyWallDisplayV2,
-    )
+    private val all = DeviceProfile.knownProfiles
 
     @Test fun idsArePresentAndUnique() {
         all.forEach { assertTrue("blank id on ${it.displayName}", it.id.isNotBlank()) }
@@ -26,9 +23,16 @@ class DeviceProfileCapabilityTest {
         assertEquals("duplicate profile ids", ids.size, ids.toSet().size)
     }
 
-    @Test fun usesDaemonIsTheInverseOfAppCanSu() {
-        // The daemon is the privileged path exactly when the app can't exec su.
-        all.forEach { assertEquals("usesDaemon/appCanSu mismatch on ${it.id}", !it.appCanSu, it.usesDaemon) }
+    @Test fun sandboxedAndDaemonBackedProfilesDeclareTheirDaemonRequirement() {
+        all.forEach {
+            if (!it.appCanSu) assertTrue("sandboxed profile must require daemon on ${it.id}", it.usesDaemon)
+            val daemonHardware = it.ledMechanism in setOf(
+                LedMechanism.SYSFS_DAEMON,
+                LedMechanism.RK3576_IOCTL_DAEMON,
+            ) || it.screenOff == ScreenOff.DAEMON_BLPOWER || it.hasButtonBacklight || it.evdevButtons.isNotEmpty()
+            if (daemonHardware) assertTrue("daemon-backed feature omitted from usesDaemon on ${it.id}", it.usesDaemon)
+        }
+        assertTrue("WF1589T evdev power button requires the helper despite app su", Wf1589t.usesDaemon)
     }
 
     @Test fun noSuFormImpliesAppCannotSu() {
@@ -57,6 +61,49 @@ class DeviceProfileCapabilityTest {
         all.forEach {
             if (it.ledMechanism == LedMechanism.SYSFS_DAEMON || it.ledMechanism == LedMechanism.RK3576_IOCTL_DAEMON) {
                 assertFalse("daemon LED but appCanSu on ${it.id}", it.appCanSu)
+            }
+        }
+    }
+
+    @Test fun buttonBacklightIsAnExplicitHardwareFactNotAnRgbBackendInference() {
+        assertTrue(Tpa10.hasButtonBacklight)
+        all.filterNot { it === Tpa10 }.forEach {
+            assertFalse("unexpected button-backlight on ${it.id}", it.hasButtonBacklight)
+        }
+        assertTrue(LedFactory.detect(Smt1019) is SocketLedController)
+        assertFalse("SMT1019 daemon RGB must not imply a button-backlight", Smt1019.hasButtonBacklight)
+    }
+
+    @Test fun profileMetadataIsStructurallyValid() {
+        val packageName = Regex("^[A-Za-z0-9_]+(?:\\.[A-Za-z0-9_]+)+$")
+        val eventType = Regex("^KEYCODE_[A-Z0-9_]+$")
+        val cert = Regex("^[0-9a-f]{64}$")
+        all.forEach { profile ->
+            assertTrue("blank display name on ${profile.id}", profile.displayName.isNotBlank())
+            assertTrue("blank soc class on ${profile.id}", profile.socClass.isNotBlank())
+            profile.recommendedDensity?.let { assertTrue("invalid density on ${profile.id}", it in 72..640) }
+            profile.recommendedFontScale?.let { assertTrue("invalid font scale on ${profile.id}", it in 0.5f..2f) }
+            assertTrue("non-finite room offset on ${profile.id}", profile.roomTempOffsetC.isFinite())
+            assertEquals(
+                "profile proximity calibration must provide both endpoints on ${profile.id}",
+                profile.proximityNearRaw == null,
+                profile.proximityFarRaw == null,
+            )
+            profile.recommendedWebView?.let { webView ->
+                assertTrue("non-HTTPS WebView pin on ${profile.id}", webView.url.startsWith("https://"))
+                assertTrue("unparseable WebView version on ${profile.id}", webView.major > 0)
+                assertTrue("invalid WebView cert on ${profile.id}", cert.matches(webView.certSha256))
+            }
+            val tamePackages = profile.tameVendorCandidates.map { it.pkg }
+            assertEquals("duplicate tame package on ${profile.id}", tamePackages.size, tamePackages.toSet().size)
+            profile.tameVendorCandidates.forEach {
+                assertTrue("invalid tame package ${it.pkg} on ${profile.id}", packageName.matches(it.pkg))
+                assertTrue("blank tame rationale for ${it.pkg} on ${profile.id}", it.note.isNotBlank())
+            }
+            profile.evdevButtons.forEach {
+                assertTrue("invalid evdev node ${it.node} on ${profile.id}", it.node.matches(Regex("^/dev/input/event\\d+$")))
+                assertTrue("invalid evdev code on ${profile.id}", it.code > 0)
+                assertTrue("invalid event type ${it.eventType} on ${profile.id}", eventType.matches(it.eventType))
             }
         }
     }

@@ -1,10 +1,9 @@
 package io.github.maxlyth.hapaneld.device
 
 /**
- * Fallback profile for an unrecognised panel. Declares no device-specific paths/quirks, so the
- * functional modules fall back to pure runtime probing — an unknown panel still advertises whatever it
- * physically has (LED via the rk3576/daemon probes, sensors via SensorManager, etc.). A real
- * `device/<panel>.kt` is only needed when a panel requires a quirk the generic path can't infer.
+ * Fallback profile for an unrecognised panel. It permits only generic runtime probes such as Android
+ * sensors, available CPU governors and known LED transports. Vendor paths and mappings remain absent:
+ * relays, radios, evdev buttons and climate protocols need an exact profile before they are exposed.
  */
 object Generic : DeviceProfile {
     override val id = "generic"
@@ -12,7 +11,7 @@ object Generic : DeviceProfile {
     override val socClass = "?"
     override val suForm = SuForm.ANDROID    // try the common Android form; Su autodetects either way
     override val appCanSu = true            // optimistic; Su.available() confirms at runtime
-    override val ledMechanism = LedMechanism.AUTODETECT   // probe everything; unknown panel may have a LED
+    override val ledMechanism = LedMechanism.AUTODETECT   // probe only the known generic LED transports
     // If AUTODETECT resolves to the rk3576 ioctl LED, use the safe stub transfer (correct colour). See LedTransfer.
     override val ledTransfer = io.github.maxlyth.hapaneld.hardware.LedTransfer.Rk3576FourBit
     override val screenOff = ScreenOff.BRIGHTNESS_ZERO
