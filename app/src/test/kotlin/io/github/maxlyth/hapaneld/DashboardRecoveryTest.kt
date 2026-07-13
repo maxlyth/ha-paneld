@@ -66,4 +66,31 @@ class DashboardRecoveryTest {
         assertEquals("Network address received\nPreparing the connection", stage(true, true, true, false))
         assertEquals("Network ready\nOpening Home Assistant", stage(true, true, true, true))
     }
+
+    @Test fun `renderer generation rejects replaced and closed callbacks`() {
+        val gate = RendererGenerationGate()
+        val first = gate.open()
+        assertTrue(gate.owns(first))
+
+        val second = gate.open()
+        assertFalse(gate.owns(first))
+        assertTrue(gate.owns(second))
+
+        gate.invalidate()
+        assertFalse(gate.owns(second))
+        val third = gate.open()
+        gate.close()
+        assertFalse(gate.owns(third))
+        assertTrue(runCatching { gate.open() }.isFailure)
+    }
+
+    @Test fun `dashboard navigation stays on the configured authority`() {
+        assertTrue(dashboardNavigationAllowed("https://ha.example", "https://HA.EXAMPLE/lovelace/0"))
+        assertTrue(dashboardNavigationAllowed("http://ha.example", "https://ha.example/lovelace/0"))
+        assertTrue(dashboardNavigationAllowed("http://ha.example:8123", "https://ha.example:8123/lovelace/0"))
+        assertFalse(dashboardNavigationAllowed("https://ha.example", "https://ha.example:8443/lovelace/0"))
+        assertFalse(dashboardNavigationAllowed("https://ha.example", "file://ha.example/data/local/tmp/page"))
+        assertFalse(dashboardNavigationAllowed("https://ha.example", "https://other.example/lovelace/0"))
+        assertFalse(dashboardNavigationAllowed("not a url", "https://ha.example/lovelace/0"))
+    }
 }

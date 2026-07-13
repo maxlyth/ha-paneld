@@ -19,15 +19,29 @@ import io.github.maxlyth.hapaneld.util.HaLink
  */
 object DashboardAuth {
 
+    internal data class CredentialOwner(
+        val url: String,
+        val accessToken: String,
+        val refreshToken: String,
+        val expiryEpochSec: Long,
+        val clientId: String,
+    )
+
     /** The reply material for one external-auth handshake. */
     data class Session(val accessToken: String, val expiresInSec: Long)
 
     /** Outcome of [resolve]: a session to reply with (or null = fail closed), when a refresh happened
-     *  the (access, epoch-expiry) to persist so the next handshake reuses it, and [revoked] when the
-     *  server *definitively* refused the refresh token — the caller should surface that (latch/warn)
-     *  rather than retry, because no amount of retrying revives a revoked credential. A transient
-     *  refresh failure never sets [revoked]. */
-    data class Result(val session: Session?, val persist: Pair<String, Long>? = null, val revoked: Boolean = false)
+     *  the (access, epoch-expiry) to persist so the next handshake reuses it, and [rejected] when the
+     *  server terminally refused the unchanged refresh request. Home Assistant can reject either the
+     *  token or its required OAuth client id; a transient refresh failure never sets [rejected]. */
+    data class Result(val session: Session?, val persist: Pair<String, Long>? = null, val rejected: Boolean = false)
+
+    internal fun retainIfOwned(
+        expected: CredentialOwner,
+        current: CredentialOwner,
+        stillCurrent: Boolean,
+        result: Result,
+    ): Result = if (stillCurrent && current == expected) result else Result(null)
 
     /** Comfortable life a cached access token must have left to be reused rather than refreshed. */
     const val REFRESH_SKEW_SEC = 60L
@@ -73,11 +87,11 @@ object DashboardAuth {
                     Session(fresh.tokens.accessToken, fresh.tokens.expiresInSec),
                     fresh.tokens.accessToken to (nowSec + fresh.tokens.expiresInSec),
                 )
-            // Definitive server refusal: the refresh token is revoked. Fail closed AND say so, so the
-            // renderer can latch a clear "token revoked" state instead of retry-looping forever.
-            is HaLink.Refresh.Rejected -> Result(null, revoked = true)
+            // Terminal server refusal: the refresh token or its OAuth client identity is invalid. Fail
+            // closed and surface setup repair instead of retrying the unchanged request forever.
+            is HaLink.Refresh.Rejected -> Result(null, rejected = true)
             // Transient (HA down / network blip): says nothing about the token. On a forced refresh the
-            // cached token was rejected — re-handing it just loops, so fail closed (but NOT revoked — the
+            // cached token was rejected — re-handing it just loops, so fail closed (but NOT terminally rejected — the
             // frontend will re-ask and a recovered network can still succeed). On a non-forced
             // near-expiry refresh, reuse the cached token while it has any life left.
             is HaLink.Refresh.Transient ->
@@ -86,13 +100,36 @@ object DashboardAuth {
     }
 
     /** Android glue: resolve against [config], persist a refreshed token, and return the full result
-     *  (the caller reads `.session` for the reply and `.revoked` for the latch signal). */
-    fun forConfig(config: Config, nowSec: Long = System.currentTimeMillis() / 1000, force: Boolean = false): Result {
-        val r = resolve(
-            config.haUrl, config.haToken, config.haRefreshToken, config.haTokenExpiry, nowSec, force,
-            { url, refresh -> HaLink.refreshAccessToken(url, refresh, config.haClientId) },
+     *  (the caller reads `.session` for the reply and `.rejected` for the latch signal). */
+    fun forConfig(
+        config: Config,
+        nowSec: Long = System.currentTimeMillis() / 1000,
+        force: Boolean = false,
+        stillCurrent: () -> Boolean = { true },
+    ): Result {
+        if (!stillCurrent()) return Result(null)
+        val owner = CredentialOwner(
+            config.haUrl,
+            config.haToken,
+            config.haRefreshToken,
+            config.haTokenExpiry,
+            config.haClientId,
         )
-        r.persist?.let { (access, expiry) -> config.setHaRefreshedToken(access, expiry) }
-        return r
+        val r = resolve(
+            owner.url, owner.accessToken, owner.refreshToken, owner.expiryEpochSec, nowSec, force,
+            { url, refresh -> HaLink.refreshAccessToken(url, refresh, owner.clientId) },
+        )
+        // A refresh is blocking. If this renderer was replaced or any credential changed while the HTTP
+        // request was in flight, neither return nor persist the old result into the new configuration.
+        val current = CredentialOwner(
+            config.haUrl,
+            config.haToken,
+            config.haRefreshToken,
+            config.haTokenExpiry,
+            config.haClientId,
+        )
+        val owned = retainIfOwned(owner, current, stillCurrent(), r)
+        owned.persist?.let { (access, expiry) -> config.setHaRefreshedToken(access, expiry) }
+        return owned
     }
 }

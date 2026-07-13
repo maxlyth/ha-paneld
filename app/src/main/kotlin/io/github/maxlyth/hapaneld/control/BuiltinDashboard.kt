@@ -10,6 +10,36 @@ package io.github.maxlyth.hapaneld.control
  * so the controller stays unit-testable.
  */
 object BuiltinDashboard {
+    // Activity lifetimes can overlap while Android replaces a task. Global renderer state therefore
+    // belongs to the newest activity lease: a late onPause/onDestroy from its predecessor must not mark
+    // the replacement background or clear its authentication warning.
+    private var nextActivityOwner = 0L
+    @Volatile private var activityOwner = 0L
+
+    @Synchronized fun acquireActivityOwner(): Long {
+        val owner = ++nextActivityOwner
+        activityOwner = owner
+        authLatched = false
+        return owner
+    }
+
+    @Synchronized fun ownsActivity(owner: Long): Boolean = owner != 0L && activityOwner == owner
+
+    @Synchronized fun setActivityForeground(owner: Long, value: Boolean) {
+        if (activityOwner == owner) foreground = value
+    }
+
+    @Synchronized fun setActivityAuthLatched(owner: Long, value: Boolean) {
+        if (activityOwner == owner) authLatched = value
+    }
+
+    @Synchronized fun releaseActivityOwner(owner: Long) {
+        if (activityOwner != owner) return
+        activityOwner = 0L
+        authLatched = false
+        foreground = false
+    }
+
     // --- foreground state + change fan-out (navbar overlay-strip suppression) ---
     //
     // While the built-in renderer is foreground, [NavbarController] must NOT arm its full-width bottom
@@ -24,7 +54,7 @@ object BuiltinDashboard {
 
     /** True while DashboardActivity is resumed (foreground). Set from its onResume/onPause. */
     @Volatile var foreground = false
-        set(value) {
+        private set(value) {
             val changed = field != value
             field = value
             if (changed) foregroundListener?.invoke(value)
@@ -213,8 +243,9 @@ object BuiltinDashboard {
     /** [ScreenController] calls this from sleep()/wake(); no-op when no renderer is listening. */
     fun onScreenAwake(awake: Boolean) { screenAwakeNow = awake; screenListener?.invoke(awake) }
 
-    /** True while the renderer is latched on "HA definitively rejected our credential" (revoked token /
+    /** True while the renderer is latched on "HA rejected our login settings" (terminal refresh response /
      *  repeated auth-invalid). Read by the `:8888` health warnings so the failure is visible off-panel;
      *  cleared when a reload/navigate arrives or the frontend connects. */
     @Volatile var authLatched = false
+        private set
 }

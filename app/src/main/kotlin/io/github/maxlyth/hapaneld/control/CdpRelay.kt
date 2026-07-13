@@ -5,6 +5,31 @@ import android.os.Build
 import android.util.Log
 import java.io.File
 
+/** Truthful lifecycle state for the native relay: command acceptance is not process liveness. */
+internal class RelayProcessState(private val probe: () -> Boolean) {
+    private var expected = false
+
+    @Synchronized fun start(launch: () -> Boolean): Boolean {
+        expected = false
+        if (!launch()) return false
+        expected = probe()
+        return expected
+    }
+
+    @Synchronized fun running(): Boolean {
+        if (!expected) return false
+        if (probe()) return true
+        expected = false
+        return false
+    }
+
+    @Synchronized fun stop(terminate: () -> Boolean): Boolean {
+        val stopped = terminate()
+        expected = false
+        return stopped
+    }
+}
+
 /**
  * On-demand bridge that exposes the dashboard WebView's Chrome DevTools endpoint
  * (`@webview_devtools_remote_<pid>`) to the LAN on :[PORT], so a user can open chrome://inspect
@@ -24,9 +49,11 @@ object CdpRelay {
     const val PORT = 9222
     private const val BIN = "/data/local/tmp/cdprelay"
 
-    @Volatile
-    var running = false
-        private set
+    private val process = RelayProcessState {
+        Su.runOutput("pidof cdprelay 2>/dev/null")?.trim()?.isNotEmpty() == true
+    }
+
+    val running: Boolean get() = process.running()
 
     /** Resolve the WebView CDP abstract socket name (null if debugging isn't enabled / no root). */
     private fun socketName(): String? =
@@ -48,17 +75,14 @@ object CdpRelay {
         val name = socketName() ?: return "no-socket" // WebView debugging not enabled
         val bin = extractBinary(ctx) ?: return "no-binary"
         stop() // clear any stale instance first
-        val ok = Su.run(
-            "cp ${bin.absolutePath} $BIN && chmod 755 $BIN && ( $BIN $PORT $name >/dev/null 2>&1 & )",
-        )
-        running = ok
+        val ok = process.start {
+            // Give the child a short chance to bind and fail before probing; a successful background
+            // shell launch alone cannot prove that the socket name or TCP port was usable.
+            Su.run("cp ${bin.absolutePath} $BIN && chmod 755 $BIN && ( $BIN $PORT $name >/dev/null 2>&1 & ) && sleep 1")
+        }
         Log.i(TAG, "start relay ($name) -> $ok")
         return if (ok) "started" else "failed"
     }
 
-    fun stop(): Boolean {
-        val ok = Su.run("pkill -f $BIN")
-        running = false
-        return ok
-    }
+    fun stop(): Boolean = process.stop { Su.run("pkill -f $BIN") }
 }

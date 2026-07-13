@@ -5,6 +5,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.After
 import org.junit.Before
 import org.junit.Test
 
@@ -15,14 +16,19 @@ import org.junit.Test
  * dashboardState parsing.
  */
 class SystemControllerTest {
+    private var builtinOwner = 0L
+
     /** [BuiltinDashboard] is a process-global object — reset its mutable state so tests can't leak
      *  a crash latch / pending reload / navigate into each other. */
     @Before fun resetBuiltinDashboard() {
         BuiltinDashboard.clearRendererLatch()
         BuiltinDashboard.consumeReloadRequest()
         BuiltinDashboard.navPath = null
-        BuiltinDashboard.foreground = false
+        builtinOwner = BuiltinDashboard.acquireActivityOwner()
+        BuiltinDashboard.setActivityForeground(builtinOwner, false)
     }
+
+    @After fun releaseBuiltinDashboard() = BuiltinDashboard.releaseActivityOwner(builtinOwner)
 
     private val OWN = "io.github.maxlyth.hapaneld"
     private val MIN = "io.homeassistant.companion.android.minimal" // HA Companion (minimal)

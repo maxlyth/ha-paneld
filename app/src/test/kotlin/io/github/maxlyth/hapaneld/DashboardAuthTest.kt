@@ -21,6 +21,8 @@ class DashboardAuthTest {
     private fun success(token: String, ttl: Long = 1800L): HaLink.Refresh =
         HaLink.Refresh.Success(HaLink.TokenSet(token, ttl))
 
+    private val OWNER = DashboardAuth.CredentialOwner("https://ha", "old", "refresh", NOW - 1, "client")
+
     @Test fun `no url yields no session`() {
         val r = DashboardAuth.resolve("", "tok", "", 0, NOW, false, ::neverRefresh)
         assertNull(r.session); assertNull(r.persist)
@@ -76,26 +78,26 @@ class DashboardAuthTest {
         assertEquals("cached", r.session!!.accessToken)
         assertEquals(30L, r.session!!.expiresInSec)
         assertNull("no persist on a failed refresh", r.persist)
-        assertFalse("a transient failure is not a revocation", r.revoked)
+        assertFalse("a transient failure is not a rejection", r.rejected)
     }
 
-    @Test fun `transient failure with a fully-expired token fails closed but not revoked`() {
+    @Test fun `transient failure with a fully-expired token fails closed but not rejected`() {
         val r = DashboardAuth.resolve("https://ha", "dead", "refr", NOW - 100, NOW, false, { _, _ -> HaLink.Refresh.Transient })
         assertNull(r.session)
-        assertFalse("HA being down must never read as a revoked credential", r.revoked)
+        assertFalse("HA being down must never read as rejected login settings", r.rejected)
     }
 
-    // --- definitive rejection (invalid_grant): fail closed AND say so ---
+    // --- terminal rejection: fail closed AND say so ---
 
-    @Test fun `rejected refresh fails closed and reports revoked`() {
+    @Test fun `rejected refresh fails closed and reports rejection`() {
         val r = DashboardAuth.resolve("https://ha", "cached", "refr", NOW + 30, NOW, false, { _, _ -> HaLink.Refresh.Rejected })
-        assertNull("a revoked refresh token must not fall back to the cached token", r.session)
-        assertTrue(r.revoked)
+        assertNull("rejected login settings must not fall back to the cached token", r.session)
+        assertTrue(r.rejected)
     }
 
-    @Test fun `success never reports revoked`() {
+    @Test fun `success never reports rejection`() {
         val r = DashboardAuth.resolve("https://ha", "old", "refr", NOW - 10, NOW, false, { _, _ -> success("n") })
-        assertFalse(r.revoked)
+        assertFalse(r.rejected)
     }
 
     // --- force flag (frontend demands a fresh token after a 401) ---
@@ -111,12 +113,29 @@ class DashboardAuthTest {
     @Test fun `force with transient failure fails closed - never re-hands the rejected token`() {
         val r = DashboardAuth.resolve("https://ha", "rejected", "refr", NOW + 3600, NOW, true, { _, _ -> HaLink.Refresh.Transient })
         assertNull("must not re-hand the rejected token on a forced refresh", r.session)
-        assertFalse("transient stays non-revoked even under force", r.revoked)
+        assertFalse("transient stays non-rejected even under force", r.rejected)
     }
 
-    @Test fun `force with definitive rejection reports revoked`() {
+    @Test fun `force with terminal rejection reports rejection`() {
         val r = DashboardAuth.resolve("https://ha", "rejected", "refr", NOW + 3600, NOW, true, { _, _ -> HaLink.Refresh.Rejected })
         assertNull(r.session)
-        assertTrue(r.revoked)
+        assertTrue(r.rejected)
+    }
+
+    @Test fun `completed refresh is discarded after renderer or credential ownership changes`() {
+        val refreshed = DashboardAuth.Result(
+            DashboardAuth.Session("new", 1800),
+            "new" to (NOW + 1800),
+        )
+        assertNull(DashboardAuth.retainIfOwned(OWNER, OWNER, false, refreshed).session)
+        assertNull(
+            DashboardAuth.retainIfOwned(
+                OWNER,
+                OWNER.copy(clientId = "replacement-client"),
+                true,
+                refreshed,
+            ).session,
+        )
+        assertEquals(refreshed, DashboardAuth.retainIfOwned(OWNER, OWNER, true, refreshed))
     }
 }

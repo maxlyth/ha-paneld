@@ -140,6 +140,7 @@ class ExternalAuthProtocolTest {
         assertNull(ExternalAuthProtocol.connectionEvent("""{"type":"config/get"}"""))
         assertNull(ExternalAuthProtocol.connectionEvent("""{"type":"theme-update"}"""))
         assertNull(ExternalAuthProtocol.connectionEvent("""{"type":"connection-status"}""")) // no event field
+        assertNull(ExternalAuthProtocol.connectionEvent("""{"type":"connection-status","event":"future-state"}"""))
         assertNull(ExternalAuthProtocol.connectionEvent("not json"))
     }
 

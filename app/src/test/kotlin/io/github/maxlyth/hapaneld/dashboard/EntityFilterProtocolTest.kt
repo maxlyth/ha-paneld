@@ -141,8 +141,8 @@ class EntityFilterProtocolTest {
     }
 
     @Test fun telemetryResetsAndEmitsValidCounterJson() {
-        EntityFilterTelemetry.started(ids)
-        EntityFilterTelemetry.subscriptionModified()
+        val lease = EntityFilterTelemetry.started(ids)
+        EntityFilterTelemetry.subscriptionModified(lease)
 
         val json = JSONObject(EntityFilterTelemetry.json())
         assertTrue(json.getBoolean("active"))
@@ -150,11 +150,29 @@ class EntityFilterProtocolTest {
         assertEquals(ids.size, json.getInt("entityCount"))
         assertEquals(1, json.getInt("modifiedSubscriptions"))
 
-        EntityFilterTelemetry.stopped()
+        EntityFilterTelemetry.stop(lease)
         val stopped = JSONObject(EntityFilterTelemetry.json())
         assertFalse(stopped.getBoolean("active"))
         assertEquals(0, stopped.getInt("entityCount"))
         assertEquals("", stopped.getString("filterHash"))
         assertEquals(0, stopped.getLong("modifiedSubscriptions"))
+    }
+
+    @Test fun staleTelemetryLeaseCannotMutateOrStopReplacementState() {
+        val old = EntityFilterTelemetry.started(listOf("light.old"))
+        val current = EntityFilterTelemetry.started(ids)
+
+        EntityFilterTelemetry.subscriptionModified(old)
+        EntityFilterTelemetry.failed(old, "stale")
+        EntityFilterTelemetry.directFallback(old)
+        EntityFilterTelemetry.stop(old)
+
+        val live = JSONObject(EntityFilterTelemetry.json())
+        assertTrue(live.getBoolean("active"))
+        assertEquals(ids.size, live.getInt("entityCount"))
+        assertEquals(0, live.getLong("modifiedSubscriptions"))
+        assertEquals(0, live.getLong("failures"))
+        assertEquals("", live.getString("lastError"))
+        EntityFilterTelemetry.stop(current)
     }
 }

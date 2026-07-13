@@ -1563,8 +1563,8 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
     private fun adHocWarnings(inlineRepair: Boolean): String = buildString {
         if (io.github.maxlyth.hapaneld.control.BuiltinDashboard.authLatched) append(
             """<div class="setup crit">⛔ <b>Built-in renderer: Home Assistant sign-in rejected</b> — the """ +
-                """saved token appears revoked or invalid, so the dashboard stopped retrying (it shows fix """ +
-                """instructions on the panel). Set a new access or refresh token on """ +
+                """saved login settings were rejected, so the dashboard stopped retrying (it shows fix """ +
+                """instructions on the panel). Check the refresh token and OAuth client ID, or set a long-lived access token on """ +
                 """<a href="/configure">Configure → Dashboard</a>; the dashboard reloads automatically when """ +
                 """the credentials change.</div>""",
         )

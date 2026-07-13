@@ -52,8 +52,8 @@ object HaLink {
 
     /**
      * Outcome of a refresh-token exchange. The distinction matters on an unattended panel: a
-     * [Rejected] means the server definitively refused the refresh token (revoked/invalid — retrying
-     * can never succeed, and the stored credential is dead), while a [Transient] failure (HA
+     * [Rejected] means the server terminally refused the unchanged refresh request (invalid/revoked
+     * token, wrong required client id, or inactive user), while a [Transient] failure (HA
      * restarting, network blip, timeout, 5xx) says nothing about the token and must never be treated
      * as a revocation — nuking a valid login over a flaky moment leaves a wall panel dead until an
      * admin re-provisions it.
@@ -84,9 +84,9 @@ object HaLink {
         if (access == null) Refresh.Transient else Refresh.Success(TokenSet(access, json.optLong("expires_in", 1800L)))
     } catch (e: HttpError) {
         Log.i(TAG, "refresh failed: HTTP ${e.code}")
-        // Only the auth endpoint's own definitive refusals count as a revocation (OAuth invalid_grant
-        // is a 400; 401/403 are auth refusals). Anything else — 5xx from a restarting HA, 502/504 from
-        // a proxy, 404 from a misconfigured URL — is transient.
+        // Home Assistant uses 400 for invalid refresh requests, including a wrong required client id,
+        // and 403 for an inactive user. These unchanged requests cannot recover by retrying; 5xx from a
+        // restart or proxy and 404 from a wrong endpoint remain transient/configuration evidence.
         if (e.code in intArrayOf(400, 401, 403)) Refresh.Rejected else Refresh.Transient
     } catch (e: Exception) {
         Log.i(TAG, "refresh failed: ${e.message}")

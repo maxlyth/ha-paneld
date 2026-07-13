@@ -15,7 +15,7 @@ Engineered for weeks-long unattended uptime:
 - A handshake watchdog reloads a dashboard that loaded but never actually connected, with backing-off retries behind a clean "Reconnecting…" screen instead of a browser error page.
 - Memory is shed by invisible reloads at screen-off.
 - Renderer crashes are contained and rate-limited — a reliably-crashing page falls back to the admin launcher rather than churning all night.
-- A definitively revoked login latches and shows fix-it instructions on the panel instead of retrying forever.
+- Terminally rejected login settings latch and show fix-it instructions on the panel instead of retrying forever; check the refresh token and OAuth client ID, or replace them with a long-lived access token.
 
 Also: instant pull-to-refresh (drag down from the very top edge of the screen; double-pull for a full reload), optional idle return-to-home, an edge-to-edge fullscreen mode (swipe from a screen edge to reveal the bars), camera-stream autoplay, and private-CA HTTPS (user-installed CAs are trusted).
 
