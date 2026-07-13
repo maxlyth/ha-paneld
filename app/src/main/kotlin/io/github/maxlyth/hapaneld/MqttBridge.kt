@@ -129,6 +129,7 @@ class MqttBridge(
      *  connected | auth-failed | unreachable | connecting | disabled. */
     @Volatile var state: String = "disabled"
         private set
+    @Volatile private var stopped = false
 
     fun isConnected(): Boolean = state == "connected"
 
@@ -356,6 +357,7 @@ class MqttBridge(
 
     @Synchronized
     fun start() {
+        if (stopped) return
         authRecovery.configure("${config.mqttBroker}\u0000${config.mqttUser}\u0000${config.mqttPassword}")
         var broker = config.mqttBroker.trim()
         if (broker.isEmpty()) {
@@ -405,6 +407,7 @@ class MqttBridge(
                 object : MqttCallbacks {
                     override fun onConnected() = this@MqttBridge.onConnected()
                     override fun onDisconnected(causeMessage: String?): Boolean {
+                        if (stopped) return false
                         // Classify so the UI can say "auth rejected" vs "unreachable" rather than "down".
                         val classified = classifyDisconnect(causeMessage)
                         if (classified == "auth-failed") {
@@ -428,14 +431,17 @@ class MqttBridge(
     }
 
     private fun scheduleAuthRetry(atMs: Long) {
+        if (stopped) return
         val generation = ++authRetryGeneration
         val delay = (atMs - SystemClock.elapsedRealtime()).coerceAtLeast(0L)
-        authScheduler.schedule({
-            if (generation == authRetryGeneration && isAuthRecoveryState(state)) {
-                Log.i(TAG, "MQTT auth retry — building fresh client with unchanged address family")
-                reconnect(flipFamily = false)
-            }
-        }, delay, java.util.concurrent.TimeUnit.MILLISECONDS)
+        runCatching {
+            authScheduler.schedule({
+                if (generation == authRetryGeneration && isAuthRecoveryState(state)) {
+                    Log.i(TAG, "MQTT auth retry — building fresh client with unchanged address family")
+                    reconnect(flipFamily = false)
+                }
+            }, delay, java.util.concurrent.TimeUnit.MILLISECONDS)
+        }.onFailure { if (!stopped) Log.w(TAG, "failed to schedule MQTT auth retry", it) }
     }
 
     /**
@@ -448,6 +454,7 @@ class MqttBridge(
      */
     @Synchronized
     fun reconnect(flipFamily: Boolean = false) {
+        if (stopped) return
         if (state == "disabled") return // no broker configured/discovered — nothing to reconnect to
         // A liveness-triggered reconnect flips the address family — if the current family (e.g. IPv6 on
         // the PX panels) won't hold, the next connect tries the other and lands on whatever works.
@@ -463,6 +470,7 @@ class MqttBridge(
 
     /** Runs on every (re)connect: (re)subscribe to commands and (re)publish discovery + online. */
     private fun onConnected() {
+        if (stopped) return
         authRetryGeneration++
         authRecovery.authenticated(SystemClock.elapsedRealtime())
         state = "connected"
@@ -1599,11 +1607,14 @@ class MqttBridge(
 
     @Synchronized
     fun stop() {
+        if (stopped) return
+        stopped = true
         authRetryGeneration++
         authScheduler.shutdownNow()
         ButtonBus.listener = null
         PanelStatus.mqttConnected = false
         zigbeeExecutor.shutdownNow()
+        state = "disabled"
         runCatching {
             publish(availabilityTopic, "offline", retain = true)
             transport.disconnectDetached()

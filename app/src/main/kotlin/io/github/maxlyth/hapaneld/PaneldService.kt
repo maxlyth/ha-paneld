@@ -50,7 +50,7 @@ import io.github.maxlyth.hapaneld.util.localIpv6
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import io.github.maxlyth.hapaneld.util.Serializer
+import io.github.maxlyth.hapaneld.util.RuntimeLifecycleCoordinator
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -78,15 +78,17 @@ import io.github.maxlyth.hapaneld.util.SystemProps
  */
 class PaneldService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    // Serializes reconfigure() — it stops + rebuilds + restarts the MQTT/mDNS stack, and two overlapping
-    // runs (e.g. a quick resubmit of the config form) would interleave stop/build/start and leave the
-    // bridge stopped or half-built. Each reconfigure runs atomically; queued ones re-apply the (now
-    // identical) latest config harmlessly. No-interleave property is regression-tested in SerializerTest.
-    private val reconfigurer = Serializer(scope)
+    // One dedicated transition lane owns initial start, config rebuilds, reconnects, and final teardown.
+    // Generation checks reject watchdog/network work aimed at a bridge that reconfigure has replaced.
+    private val runtime = RuntimeLifecycleCoordinator("ha-paneld-runtime") { operation, error ->
+        Log.e(TAG, "runtime $operation failed", error)
+    }
     private lateinit var config: Config
     private lateinit var server: PaneldServer
-    private lateinit var mdns: MdnsAdvertiser
-    private lateinit var mqtt: MqttBridge
+    private data class NetworkRuntime(val mqtt: MqttBridge, val mdns: MdnsAdvertiser)
+    @Volatile private lateinit var networkRuntime: NetworkRuntime
+    private val mqtt: MqttBridge get() = networkRuntime.mqtt
+    private val mdns: MdnsAdvertiser get() = networkRuntime.mdns
     // Default-network callback that nudges an MQTT reconnect when the network returns (see registerNetworkCallback).
     private var netCallback: ConnectivityManager.NetworkCallback? = null
     // MQTT watchdog runs on a DEDICATED thread (not Dispatchers.IO), so slow/contended su can't starve it.
@@ -204,8 +206,7 @@ class PaneldService : Service() {
         power = PowerController(this)
         configUrl = localIpv4()?.let { "http://$it:${config.httpPort}/" }
 
-        mqtt = buildMqtt()
-        mdns = MdnsAdvertiser(this, config)
+        networkRuntime = NetworkRuntime(buildMqtt(), MdnsAdvertiser(this, config))
         server = PaneldServer(
             config, cacheDir, scope, this, sensors, system, volume, ::reconfigure,
             // Capture the field (not the current instance) so it always targets the live bridge,
@@ -281,15 +282,15 @@ class PaneldService : Service() {
      * MQTT bridge still holds the old panel id), then rebuild MQTT + mDNS from the new config.
      */
     private fun reconfigure() {
-        // Atomic: never let a second reconfigure interleave with this one's stop/build/start (see Serializer).
-        reconfigurer.launch {
-            runCatching { mqtt.clearDiscovery() } // bridge was built with the previous panel id
-            runCatching { mqtt.stop() }
-            runCatching { mdns.stop() }
-            mqtt = buildMqtt()
-            mdns = MdnsAdvertiser(this@PaneldService, config)
-            mdns.start()
-            mqtt.start()
+        runtime.reconfigure {
+            val previous = networkRuntime
+            runCatching { previous.mqtt.clearDiscovery() } // bridge was built with the previous panel id
+            runCatching { previous.mqtt.stop() }
+            runCatching { previous.mdns.stop() }
+            val replacement = NetworkRuntime(buildMqtt(), MdnsAdvertiser(this@PaneldService, config))
+            networkRuntime = replacement
+            replacement.mdns.start()
+            replacement.mqtt.start()
             // Re-read the log sink (host/port/protocol/enabled); restarts only if it changed.
             runCatching { logShipper.reconfigure() }
             runCatching { power.apply(config.keepAwake) }   // apply a keep_awake toggle live
@@ -540,9 +541,6 @@ class PaneldService : Service() {
         // double-start mqtt/mdns/sensors). started is reset in onDestroy so a genuine restart re-inits.
         if (started) return START_STICKY
         started = true
-        // Keep the SoC + network awake (screen still free to sleep) so Doze/suspend can't freeze the
-        // MQTT reactor + keepalive into a half-open, unreachable connection. On by default; see keep_awake.
-        runCatching { power.apply(config.keepAwake) }
         // Cache HA's frontend URL from the Companion (its internal/external_url) so the header "Open in HA"
         // button always has a target — even when the panel's own device-page URL hasn't resolved (e.g. a
         // remote panel over a tunnel). Root sqlite read, off the main thread; best-effort.
@@ -551,7 +549,10 @@ class PaneldService : Service() {
                 io.github.maxlyth.hapaneld.control.CompanionDb.serverUrl(this@PaneldService, io.github.maxlyth.hapaneld.control.Su)
             }.getOrNull()?.let { config.setHaBaseUrl(it) }
         }
-        scope.launch {
+        runtime.start {
+            // Keep the SoC + network awake (screen still free to sleep) so Doze/suspend can't freeze the
+            // MQTT reactor + keepalive into a half-open, unreachable connection. On by default; see keep_awake.
+            runCatching { power.apply(config.keepAwake) }
             io.github.maxlyth.hapaneld.http.PerfReader.dashboardPkg = dashboardTarget()
             io.github.maxlyth.hapaneld.http.PerfReader.builtinActive = config.dashboardPackage == SystemController.BUILTIN_DASHBOARD
             io.github.maxlyth.hapaneld.http.PerfReader.start(scope)
@@ -589,7 +590,7 @@ class PaneldService : Service() {
                 onTemperature = { c -> mqtt.publishTemperature(c) },
                 onHumidity = { h -> mqtt.publishHumidity(h) },
             )
-            periodic(
+            scope.periodic(
                 intervalMs = 24 * 3_600 * 1_000L,
                 initialDelayMs = 30_000L, // let startup settle before hitting the network
                 tag = TAG,
@@ -624,7 +625,7 @@ class PaneldService : Service() {
             // strand) or a firmware idle-dim can leave the panel dark and apparently bricked. If the screen
             // is dark but ha-paneld did NOT deliberately turn it off, re-light it; a user-intended
             // "screen off" (isIntendedOff) is left alone.
-            periodic(
+            scope.periodic(
                 intervalMs = SCREEN_WATCHDOG_MS,
                 initialDelayMs = 15_000L, // let boot settle before the first check
                 tag = TAG,
@@ -660,12 +661,12 @@ class PaneldService : Service() {
      * and even disconnect/rebuild — can block on an internal client monitor exactly when the connection
      * is wedged (the same trap as the sensor-callback ANR), which is precisely when the watchdog is
      * needed. rc10 called heartbeat() inline and the watchdog froze inside its own probe (observed in
-     * the field: thread parked on a futex, liveness 44 min stale, no rebuild). So heartbeat and rebuild
-     * each run on their own guarded side-thread: if the previous one is still in flight, skip — an
-     * in-flight heartbeat can't refresh lastOkMs, so staleness still trips, and the rebuild guard
-     * re-arms via a timeout so a hung rebuild can't permanently disable healing. The rebuild DECISION
-     * (which stall mode, whether to rebuild, and the wedged-rebuild abandon) lives in [ConnectionSupervisor];
-     * this thread owns only the tick cadence and the off-thread heartbeat/rebuild execution.
+     * the field: thread parked on a futex, liveness 44 min stale, no rebuild). Heartbeat therefore uses
+     * a sacrificial side-thread. Rebuild admission is generation-checked on the lifecycle coordinator,
+     * then the accepted reconnect runs on a recovery worker so neither the watchdog nor the serialized
+     * transition lane can be trapped by it. If the previous operation is still in flight, skip; the guard
+     * re-arms via a timeout so a hung rebuild cannot permanently disable healing. The rebuild DECISION
+     * lives in [ConnectionSupervisor]; this thread owns only tick cadence and off-thread dispatch.
      */
     private fun startMqttWatchdog() {
         if (mqttWatchdogAlive) return
@@ -673,18 +674,20 @@ class PaneldService : Service() {
         val supervisor = ConnectionSupervisor(MQTT_STALE_MS, REBUILD_ABANDON_MS)
         Thread {
             var heartbeat: Thread? = null
-            var rebuild: Thread? = null
+            var rebuild: java.util.concurrent.Future<Boolean>? = null
             while (mqttWatchdogAlive) {
                 try { Thread.sleep(MQTT_WATCHDOG_MS) } catch (e: InterruptedException) { break }
                 if (!mqttWatchdogAlive) break
                 val sinceOk = mqtt.msSinceLastOk()
                 val now = android.os.SystemClock.elapsedRealtime()
-                Log.i(TAG, "mqtt watchdog tick: state=${mqtt.state} sinceOk=${sinceOk}ms hb=${heartbeat?.isAlive == true} rebuild=${rebuild?.isAlive == true}")
-                when (val action = supervisor.tick(mqtt.state, mqtt.lastOkMs, sinceOk, now, rebuild?.isAlive == true)) {
+                Log.i(TAG, "mqtt watchdog tick: state=${mqtt.state} sinceOk=${sinceOk}ms hb=${heartbeat?.isAlive == true} rebuild=${rebuild?.isDone == false}")
+                when (val action = supervisor.tick(mqtt.state, mqtt.lastOkMs, sinceOk, now, rebuild?.isDone == false)) {
                     is ConnectionSupervisor.Action.Rebuild -> {
                         Log.w(TAG, "MQTT ${action.reason} stall (${sinceOk}ms, state=${mqtt.state}) — forcing reconnect (flip family)")
-                        rebuild = Thread({ runCatching { mqtt.reconnect(flipFamily = true) } }, "mqtt-rebuild")
-                            .apply { isDaemon = true; start() }
+                        runtime.currentGeneration()?.let { generation ->
+                            val target = mqtt
+                            rebuild = runtime.reconnect(generation) { target.reconnect(flipFamily = true) }
+                        }
                     }
                     is ConnectionSupervisor.Action.SkipRebuild ->
                         Log.w(TAG, "mqtt ${action.reason} rebuild wanted but one in flight ${action.inFlightMs}ms — skipping")
@@ -710,9 +713,11 @@ class PaneldService : Service() {
         val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return
         val cb = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
+                val generation = runtime.currentGeneration() ?: return
                 if (mqtt.state != "connected" && mqtt.state != "disabled" && !isAuthRecoveryState(mqtt.state)) {
                     Log.i(TAG, "network available — nudging MQTT reconnect")
-                    Thread { runCatching { mqtt.reconnect() } }.start()
+                    val target = mqtt
+                    runtime.reconnect(generation) { target.reconnect() }
                 }
             }
         }
@@ -759,16 +764,19 @@ class PaneldService : Service() {
             netCallback = null
         }
         mqttWatchdogAlive = false            // stop the dedicated watchdog thread
-        runCatching { power.apply(false) }   // release the wakelock so we don't leak it on teardown
-        runCatching { navbar.cleanup() }
-        runCatching { watchdog.stop() }
-        runCatching { ledEffect.stop() }     // kill any running LED effect loop with the service
-        runCatching { sensors.stop() }
-        runCatching { logShipper.stop() }
-        runCatching { server.stop() }
-        runCatching { mdns.stop() }
-        runCatching { mqtt.stop() }
         scope.cancel()
+        val stopped = runtime.shutdown(RUNTIME_SHUTDOWN_MS) {
+            runCatching { power.apply(false) }   // release the wakelock so we don't leak it on teardown
+            runCatching { navbar.cleanup() }
+            runCatching { watchdog.stop() }
+            runCatching { ledEffect.stop() }     // kill any running LED effect loop with the service
+            runCatching { sensors.stop() }
+            runCatching { logShipper.stop() }
+            runCatching { server.stop() }
+            runCatching { mdns.stop() }
+            runCatching { mqtt.stop() }
+        }
+        if (!stopped) Log.w(TAG, "runtime teardown exceeded ${RUNTIME_SHUTDOWN_MS}ms; cleanup continues on its owner thread")
         super.onDestroy()
     }
 
@@ -795,6 +803,7 @@ class PaneldService : Service() {
         // Never-blank-screen watchdog poll interval; re-lights an unintentionally-dark panel within one tick.
         private const val SCREEN_WATCHDOG_MS = 60_000L
         private const val KIOSK_REASSERT_MS = 60_000L // post-boot delay before re-locking (admin escape window)
+        private const val RUNTIME_SHUTDOWN_MS = 5_000L
 
         fun start(context: Context) {
             val intent = Intent(context, PaneldService::class.java)
