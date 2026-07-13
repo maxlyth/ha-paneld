@@ -1,6 +1,7 @@
 package io.github.maxlyth.hapaneld
 
 import android.content.Context
+import android.content.ContentResolver
 import android.content.SharedPreferences
 import android.os.Build
 import android.provider.Settings
@@ -17,9 +18,17 @@ import java.util.Locale
  * (Phase >=2) will write these. The MQTT broker defaults to empty, which disables MQTT — the
  * /play HTTP contract works standalone without a broker, so first-run never blocks on MQTT.
  */
-class Config(context: Context) {
-    private val appCtx = context.applicationContext
-    private val prefs = context.getSharedPreferences("ha-paneld", Context.MODE_PRIVATE)
+class Config private constructor(
+    private val prefs: SharedPreferences,
+    private val contentResolver: ContentResolver?,
+) {
+    constructor(context: Context) : this(
+        context.getSharedPreferences("ha-paneld", Context.MODE_PRIVATE),
+        context.applicationContext.contentResolver,
+    )
+
+    /** JVM-test seam; identity defaults that consult Android settings require the production constructor. */
+    internal constructor(prefs: SharedPreferences) : this(prefs, null)
 
     val httpPort: Int get() = prefs.getInt("http_port", DEFAULT_PORT)
 
@@ -38,7 +47,8 @@ class Config(context: Context) {
     val panelIdIsDefault: Boolean get() = prefs.getString("panel_id", null).isNullOrBlank()
 
     private fun defaultPanelId(): String {
-        val name = Settings.Global.getString(appCtx.contentResolver, Settings.Global.DEVICE_NAME)
+        val resolver = requireNotNull(contentResolver) { "Android settings unavailable" }
+        val name = Settings.Global.getString(resolver, Settings.Global.DEVICE_NAME)
         // A meaningful, non-generic device name → use it; else model + a short ANDROID_ID suffix.
         return if (!name.isNullOrBlank() && !name.equals(Build.MODEL, ignoreCase = true)) slug(name)
         else slug(Build.MODEL) + "_" + androidId.takeLast(4).ifBlank { "panel" }
@@ -56,7 +66,7 @@ class Config(context: Context) {
      *  takes its normal immediate-apply path (SharedPreferences.Editor isn't thread-safe). Non-nesting;
      *  the /config apply that uses it is single-threaded per request. */
     @Synchronized
-    fun applyBatch(block: () -> Unit) {
+    fun applyBatch(block: () -> Unit): Boolean {
         val ed = prefs.edit()
         batchEditor = ed
         batchThread = Thread.currentThread()
@@ -66,7 +76,7 @@ class Config(context: Context) {
             batchEditor = null
             batchThread = null
         }
-        ed.commit()
+        return ed.commit()
     }
 
     /** Write helper: stage into the active [applyBatch] editor (same thread) or, outside a batch, apply
@@ -82,14 +92,31 @@ class Config(context: Context) {
         }
     }
 
+    /** Synchronous variant for writes that must survive an immediate reboot. Still composes into a batch. */
+    private inline fun editCommit(block: SharedPreferences.Editor.() -> Unit) {
+        val b = batchEditor
+        if (b != null && batchThread === Thread.currentThread()) {
+            b.block()
+        } else {
+            val e = prefs.edit()
+            e.block()
+            e.commit()
+        }
+    }
+
     /** Persist a new panel id (used by the HTTP config page). */
     fun setPanelId(id: String) {
+        edit { this@Config.stagePanelId(this, id) }
+    }
+
+    /** Stage [id] and its dependent HA-link invalidation into a caller-owned transaction. */
+    fun stagePanelId(editor: SharedPreferences.Editor, id: String) {
         // The panel_id is the HA device identifier, so only an ACTUAL change invalidates the cached device
         // link. The config form resubmits panel_id on every save (unchanged), so clearing unconditionally
         // would drop the link on every save.
         val changed = id != prefs.getString("panel_id", null)
-        edit { putString("panel_id", id) }
-        if (changed) edit { remove("ha_device_url") }
+        editor.putString("panel_id", id)
+        if (changed) editor.remove("ha_device_url")
     }
 
     /** Cached HA device-settings URL (resolved once via HaLink when the MQTT creds are a valid HA user);
@@ -147,11 +174,11 @@ class Config(context: Context) {
 
     /** Stable per-device id (Settings.Secure.ANDROID_ID); used as the HA device serial_number. */
     val androidId: String
-        get() = Settings.Secure.getString(appCtx.contentResolver, Settings.Secure.ANDROID_ID) ?: ""
+        get() = Settings.Secure.getString(requireNotNull(contentResolver), Settings.Secure.ANDROID_ID) ?: ""
 
     /** The device's configured name (Companion's default-name source), else the model. */
     private fun deviceName(): String =
-        (Settings.Global.getString(appCtx.contentResolver, Settings.Global.DEVICE_NAME)
+        (Settings.Global.getString(requireNotNull(contentResolver), Settings.Global.DEVICE_NAME)
             ?: Build.MODEL).ifBlank { Build.MODEL }
 
     /** Persist MQTT settings (used by the HTTP config page). A null password leaves it unchanged. */
@@ -265,7 +292,7 @@ class Config(context: Context) {
     // Default on where a proximity sensor exists; the HA switch can disable it (e.g. a hallway panel).
     val wakeOnWave: Boolean get() = prefs.getBoolean("wake_on_wave", true)
     fun setWakeOnWave(on: Boolean) {
-        prefs.edit().putBoolean("wake_on_wave", on).apply()
+        edit { putBoolean("wake_on_wave", on) }
     }
 
     // Prevent the vendor firmware idle-dimming the backlight at the screen-off timeout (it drops the
@@ -273,7 +300,7 @@ class Config(context: Context) {
     // these are mains-powered wall panels; turn it off to restore the firmware's own dimming behaviour.
     val preventIdleDim: Boolean get() = prefs.getBoolean("prevent_idle_dim", true)
     fun setPreventIdleDim(on: Boolean) {
-        prefs.edit().putBoolean("prevent_idle_dim", on).apply()
+        edit { putBoolean("prevent_idle_dim", on) }
     }
 
     // Hold a partial wakelock so the SoC + network never suspend (screen still free to sleep). ON by
@@ -288,14 +315,14 @@ class Config(context: Context) {
     // to it if it's been backgrounded too long. Opt-in (off by default): a stock panel never auto-acts.
     val watchdogEnabled: Boolean get() = prefs.getBoolean("watchdog_enabled", false)
     fun setWatchdogEnabled(on: Boolean) {
-        prefs.edit().putBoolean("watchdog_enabled", on).apply()
+        edit { putBoolean("watchdog_enabled", on) }
     }
 
     // Experimental kiosk lock: suppress + disable the system nav (HOME/RECENT/shade) so a non-admin can't
     // accidentally leave the dashboard. Runtime-only + many escapes (see KioskController); off by default.
     val kioskLock: Boolean get() = prefs.getBoolean("kiosk_lock", false)
     fun setKioskLock(on: Boolean) {
-        prefs.edit().putBoolean("kiosk_lock", on).apply()
+        edit { putBoolean("kiosk_lock", on) }
     }
 
     // HA Companion app auto-manage: when on, ha-paneld installs the minimal Companion if it's
@@ -307,13 +334,13 @@ class Config(context: Context) {
     // MQTT switch); a per-profile known-good version pin is the planned safer gate.
     val companionAutoUpdate: Boolean get() = prefs.getBoolean("companion_auto_update", false)
     fun setCompanionAutoUpdate(on: Boolean) {
-        prefs.edit().putBoolean("companion_auto_update", on).apply()
+        edit { putBoolean("companion_auto_update", on) }
     }
     /** Release channel the Companion auto-updater follows — mirrors [updateChannel] for ha-paneld. */
     val companionUpdateChannel: String get() = prefs.getString("companion_update_channel", "stable") ?: "stable"
     fun setCompanionUpdateChannel(ch: String) {
         val v = if (ch.trim().lowercase().startsWith("pre")) "prerelease" else "stable"
-        prefs.edit().putString("companion_update_channel", v).apply()
+        edit { putString("companion_update_channel", v) }
     }
 
     // ha-paneld self-update: when on, ha-paneld installs a newer build of ITSELF from GitHub releases on
@@ -325,12 +352,12 @@ class Config(context: Context) {
     // stable catches up; the one deliberate move off an rc is an explicit channel switch pre-release→stable.
     val selfUpdate: Boolean get() = prefs.getBoolean("self_update", false)
     fun setSelfUpdate(on: Boolean) {
-        prefs.edit().putBoolean("self_update", on).apply()
+        edit { putBoolean("self_update", on) }
     }
     val updateChannel: String get() = prefs.getString("update_channel", "stable") ?: "stable"
     fun setUpdateChannel(ch: String) {
         val v = if (ch.trim().lowercase().startsWith("pre")) "prerelease" else "stable"
-        prefs.edit().putString("update_channel", v).apply()
+        edit { putString("update_channel", v) }
     }
 
     // System WebView auto-update: when on, ha-paneld advances the WebView to the profile's pinned
@@ -342,7 +369,7 @@ class Config(context: Context) {
     fun setWebViewAutoUpdate(on: Boolean) {
         // commit() (not apply()): the natural workflow is "enable, then reboot to let it run", and an
         // async write can be lost if the reboot lands before it flushes to disk.
-        prefs.edit().putBoolean("webview_auto_update", on).commit()
+        editCommit { putBoolean("webview_auto_update", on) }
     }
     // Loop guard: the exact recommended version last auto-installed. If a later tick still doesn't see it
     // as the engine, the provider isn't switching (variant hardware) — don't re-download it daily; a pin
@@ -358,7 +385,7 @@ class Config(context: Context) {
     // was ha-paneld that turned it on — never disabling adb another mechanism started.
     val networkAdbEnabled: Boolean get() = prefs.getBoolean("network_adb_enabled", false)
     fun setNetworkAdbEnabled(on: Boolean) {
-        prefs.edit().putBoolean("network_adb_enabled", on).apply()
+        edit { putBoolean("network_adb_enabled", on) }
     }
 
     // The ha-paneld version whose discovery set was last published to HA. On an upgrade (this differs
@@ -374,7 +401,7 @@ class Config(context: Context) {
     // user-default view. Empty = keep current behaviour (cold-start to the Companion default).
     val homeDashboard: String get() = prefs.getString("home_dashboard", "")!!
     fun setHomeDashboard(p: String) {
-        prefs.edit().putString("home_dashboard", p.trim()).apply()
+        edit { putString("home_dashboard", p.trim()) }
     }
 
     /** Built-in renderer: minutes of no touch before it navigates back to [homeDashboard] (0 = off). */
@@ -409,14 +436,14 @@ class Config(context: Context) {
     // opts a panel in via the HA select. Persisted so the bar is restored on boot.
     val navbarMode: String get() = prefs.getString("navbar_mode", "Off")!!
     fun setNavbarMode(mode: String) {
-        prefs.edit().putString("navbar_mode", mode).apply()
+        edit { putString("navbar_mode", mode) }
     }
 
     // After an app update the launcher shows the App UI; when configured + MQTT-connected, bounce back
     // to the dashboard so it doesn't linger. Default on.
     val autoReturnDashboard: Boolean get() = prefs.getBoolean("auto_return_dashboard", true)
     fun setAutoReturnDashboard(on: Boolean) {
-        prefs.edit().putBoolean("auto_return_dashboard", on).apply()
+        edit { putBoolean("auto_return_dashboard", on) }
     }
 
     // Silence the firmware startup chime by zeroing the ring/notification volume via Settings.System.
@@ -470,7 +497,7 @@ class Config(context: Context) {
     // default — so panels relying on stock vendor Zigbee are left untouched until configured.
     val zigbeeRouterConfigured: Boolean get() = prefs.getBoolean("zigbee_router_configured", false)
     fun setZigbeeRouterEnabled(on: Boolean) {
-        prefs.edit().putBoolean("zigbee_router_enabled", on).putBoolean("zigbee_router_configured", true).apply()
+        edit { putBoolean("zigbee_router_enabled", on); putBoolean("zigbee_router_configured", true) }
     }
 
     // Optional on-panel auto-brightness engine (see control/AutoBrightnessController). Default OFF →
@@ -478,13 +505,13 @@ class Config(context: Context) {
     // stream (panel ALS where present, else HA-fed) to the backlight.
     val autoBrightness: Boolean get() = prefs.getBoolean("auto_brightness", false)
     fun setAutoBrightness(on: Boolean) {
-        prefs.edit().putBoolean("auto_brightness", on).apply()
+        edit { putBoolean("auto_brightness", on) }
     }
 
     /** Dimmer(−) ↔ Brighter(+) bias added to the auto-brightness curve, in 0–255 brightness units. */
     val brightnessBias: Int get() = prefs.getInt("brightness_bias", 0)
     fun setBrightnessBias(v: Int) {
-        prefs.edit().putInt("brightness_bias", v.coerceIn(-100, 100)).apply()
+        edit { putInt("brightness_bias", v.coerceIn(-100, 100)) }
     }
 
     /**

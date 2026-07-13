@@ -1018,6 +1018,7 @@ class MqttBridge(
      * rather than via the static config setters + reconfigure()).
      */
     fun applySetting(key: String, value: String): Boolean {
+        if (key !in APPLY_SETTING_KEYS) return false
         val onOff = if (SettingValue.parseBool(value) == true) "ON" else "OFF"
         when (key) {
             "wake_on_wave" -> handleWakeOnWave(onOff)
@@ -1039,7 +1040,7 @@ class MqttBridge(
             "webview_auto_update" -> handleWebViewAuto(onOff)
             "update_channel" -> handleUpdateChannel(value)
             "home_dashboard" -> handleHomeDashboard(value)
-            else -> return false
+            else -> error("live setting declared without a dispatcher: $key")
         }
         return true
     }
@@ -1612,6 +1613,15 @@ class MqttBridge(
     companion object {
         private const val TAG = "ha-paneld/mqtt"
         private const val HA_LINK_TTL_MS = 6 * 3_600_000L // re-resolve the "Open in HA" link at most every 6h
+
+        /** Keys accepted by [applySetting]. Kept explicit so non-MQTT callers can verify their routing. */
+        internal val APPLY_SETTING_KEYS = setOf(
+            "wake_on_wave", "prevent_idle_dim", "watchdog_enabled", "kiosk_lock",
+            "silence_boot_chime", "auto_brightness", "touch_sound", "network_adb",
+            "zigbee_router", "brightness_bias", "ambient_lux", "cpu_governor", "navbar_mode",
+            "companion_auto_update", "companion_update_channel", "self_update", "webview_auto_update",
+            "update_channel", "home_dashboard",
+        )
 
         /**
          * Inject `default_entity_id` = `<component>.<objectId>` as the FIRST key of a discovery payload —

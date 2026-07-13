@@ -292,7 +292,7 @@ class PaneldServer(
                     get("/config") { call.respondText(configJson(), ContentType.Application.Json) }
                     post("/config") { handleConfigPost(call) }
                     get("/config/schema") { call.respondText(configSchemaJson(), ContentType.Application.Json) }
-                    // Versioned config bundle: backup (export) and transactional restore/deploy (import).
+                    // Versioned config bundle: backup (export) and validated restore/deploy (import).
                     get("/config/export") { handleConfigExport(call) }
                     post("/config/import") { handleConfigImport(call) }
                     // Full panel backup: a bundle of the ha-paneld config (incl. secrets) plus, when
@@ -945,7 +945,7 @@ ${proximityCardHtml()}
 ${displayCardHtml()}
 ${tameCardHtml()}
 <div class="card"><h2>Backup &amp; restore</h2>
-<p class="note">Download this panel's configuration as a versioned bundle, or apply one — validated, all-or-nothing, with a change preview before it writes.</p>
+<p class="note">Download this panel's configuration as a versioned bundle, or preview and apply one. Valid entries are applied; invalid or unsupported entries are reported and skipped.</p>
 <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
  <a class="pbtn" href="/api/v1/config/export">⭳ Export bundle</a>
  <a class="pbtn" href="/api/v1/config/export?include_secrets=1">⭳ Export incl. secrets</a>
@@ -1928,7 +1928,11 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
         var relaunchForFullscreen = false
         var relaunchForOverscroll = false
         var reloadForZoom = false
-        config.applyBatch {
+        val previous = ConfigBundle.fromValues(
+            currentValues(), kind = ConfigBundle.KIND_REVISION,
+            exportedAt = System.currentTimeMillis().toString(), exportedBy = config.panelId,
+        )
+        val committed = config.applyBatch {
             panelId?.let { config.setPanelId(it) }
             p["friendly_name"]?.let { config.setFriendlyName(it.trim()) }
             val prevDash = config.dashboardPackage
@@ -2053,6 +2057,11 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
                 }
             }
         }
+        if (!committed) {
+            call.respondText("configuration commit failed\n", status = HttpStatusCode.InternalServerError)
+            return
+        }
+        revisions.snapshot(previous)
         // ---- post-commit side-effects: config reads from here (and from anything we relaunch) see
         // the committed values. Order: renderer switch first (it re-anchors HOME), then reloads.
         if (relaunchForDash) {
@@ -2131,14 +2140,6 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             )
         }
     }
-
-    /** Behaviour keys settable over HTTP (routed through [applySetting] / the MQTT command path). */
-    private val HTTP_LIVE_KEYS = listOf(
-        "wake_on_wave", "prevent_idle_dim", "watchdog_enabled", "kiosk_lock", "auto_brightness",
-        "brightness_bias", "navbar_mode", "touch_sound", "cpu_governor",
-        "network_adb", "zigbee_router", "ambient_lux",
-        "companion_auto_update", "self_update", "webview_auto_update", "update_channel", "home_dashboard",
-    )
 
     /**
      * Registry metadata for generating the Configure form (type/group/tier/scope/options/range +
@@ -2225,7 +2226,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             Su.run("input tap $xi $yi")
     }
 
-    // ---- config bundles (export / transactional import) + on-panel revision history ----
+    // ---- config bundles (export / validated import) + on-panel revision history ----------------
 
     /** Current registry values as a flat map (skips transient inputs; controller-sourced settings
      *  read their live state). The basis for export, the pre-change snapshot, and the dry-run diff. */
@@ -2234,7 +2235,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
         val m = LinkedHashMap<String, String>()
         for (spec in SettingsRegistry.settable()) {
             if (spec.transient) continue
-            m[spec.key] = live[spec.key] ?: config.getRaw(spec)
+            m[spec.key] = effectiveValue(spec, live)
         }
         return m
     }
@@ -2247,7 +2248,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
         for (spec in SettingsRegistry.settable()) {
             if (spec.transient) continue
             if (spec.secret && !includeSecrets) continue
-            values[spec.key] = live[spec.key] ?: config.getRaw(spec)
+            values[spec.key] = effectiveValue(spec, live)
         }
         val bundle = ConfigBundle.fromValues(
             values, exportedAt = System.currentTimeMillis().toString(), exportedBy = config.panelId,
@@ -2262,8 +2263,10 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
      * scope/secret filter (`?mode=fleet` applies only PORTABLE, non-secret keys; default `restore`
      * applies everything) → validate per-key against the registry: valid keys apply, invalid keys are
      * reported in `errors` and skipped, unknown keys warn and skip. `?strict=1` restores the old
-     * all-or-nothing transactional behaviour. Apply itself is transactional (snapshot a revision →
-     * commit the batch → live keys + reconfigure); `?dry_run=1` returns the diff without writing.
+     * all-or-nothing validation behaviour. Apply is ordered in two phases: atomically commit ordinary
+     * preferences, then apply controller/hardware-backed live settings and reconfigure. The latter
+     * cannot be rolled back across Android settings, sysfs, services, and hardware. `?dry_run=1`
+     * returns the diff without writing.
      * Status: "applied" (all valid), "partial" (some skipped as invalid), "rejected" (nothing usable
      * or strict mode with any error).
      */
@@ -2299,33 +2302,42 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             call.respondText(dryRunJson(ConfigDiff.diff(currentValues(), accepted), skipped, warn + errors.map { "would skip (invalid): $it" }), ContentType.Application.Json)
             return
         }
-        applyAccepted(accepted)
+        if (!applyAccepted(accepted)) {
+            call.respondText(
+                importJson("error", emptyList(), skipped, warn, listOf("configuration commit failed")),
+                ContentType.Application.Json,
+                HttpStatusCode.InternalServerError,
+            )
+            return
+        }
         val status = if (errors.isEmpty()) "applied" else "partial"
         call.respondText(importJson(status, accepted.keys.toList(), skipped, warn, errors), ContentType.Application.Json)
     }
 
-    /** Apply a validated value set transactionally: snapshot current → commit batch → run live-key
-     *  side-effects → reconfigure. panel_id goes through its setter (cache invalidation). */
-    private fun applyAccepted(accepted: Map<String, String>) {
-        revisions.snapshot(
-            ConfigBundle.fromValues(
-                currentValues(), kind = ConfigBundle.KIND_REVISION,
-                exportedAt = System.currentTimeMillis().toString(), exportedBy = config.panelId,
-            ),
+    /** Apply a validated value set in two ordered phases: snapshot current → atomically commit ordinary
+     *  preference fields → run live controller/hardware persistence and side-effects → reconfigure.
+     *  External state cannot be rolled back and only starts after a successful preference commit.
+     *  Returns false without starting side-effects when the preference commit fails. */
+    private fun applyAccepted(accepted: Map<String, String>): Boolean {
+        val previous = ConfigBundle.fromValues(
+            currentValues(), kind = ConfigBundle.KIND_REVISION,
+            exportedAt = System.currentTimeMillis().toString(), exportedBy = config.panelId,
         )
         val editor = config.editor()
         val live = ArrayList<Pair<String, String>>()
         for ((key, value) in accepted) {
             when {
-                key == "panel_id" -> config.setPanelId(value)
+                key == "panel_id" -> config.stagePanelId(editor, value)
                 key in HTTP_LIVE_KEYS -> live.add(key to value)
                 else -> SettingsRegistry.spec(key)?.let { config.stage(editor, it, value) }
             }
         }
-        editor.commit()
+        if (!editor.commit()) return false
+        revisions.snapshot(previous)
         for ((k, v) in live) applySetting(k, v)
         snapInvalidate()
         onReconfigure()
+        return true
     }
 
     // ---- Full panel backup / restore (device-state bundle) ------------------------------------------
@@ -2347,7 +2359,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
     private fun backupJson(includeCompanion: Boolean): String {
         val live = liveValues()
         val cfg = SettingsRegistry.settable().filterNot { it.transient }
-            .joinToString(",") { s -> "${jsonStr(s.key)}:${jsonStr(live[s.key] ?: config.getRaw(s))}" }
+            .joinToString(",") { s -> "${jsonStr(s.key)}:${jsonStr(effectiveValue(s, live))}" }
         val sb = StringBuilder("{\"kind\":\"ha-paneld-backup\",\"schema\":${SettingsRegistry.SCHEMA}")
         sb.append(",\"panel_id\":${jsonStr(config.panelId)},\"created\":${jsonStr(System.currentTimeMillis().toString())}")
         sb.append(",\"config\":{").append(cfg).append("}")
@@ -2422,7 +2434,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             if (spec.readOnly || spec.transient) continue
             (SettingValue.validate(spec, cfgObj.getString(key)) as? Validation.Ok)?.let { accepted[key] = it.normalized }
         }
-        applyAccepted(accepted)
+        check(applyAccepted(accepted)) { "configuration commit failed" }
         return accepted.size
     }
 
@@ -2480,7 +2492,14 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             if (spec.readOnly || spec.transient) continue
             (SettingValue.validate(spec, raw) as? Validation.Ok)?.let { accepted[key] = it.normalized }
         }
-        applyAccepted(accepted)
+        if (!applyAccepted(accepted)) {
+            call.respondText(
+                importJson("error", emptyList(), emptyList(), emptyList(), listOf("configuration commit failed")),
+                ContentType.Application.Json,
+                HttpStatusCode.InternalServerError,
+            )
+            return
+        }
         call.respondText(importJson("restored", accepted.keys.toList(), emptyList(), emptyList(), emptyList()), ContentType.Application.Json)
     }
 
@@ -2530,6 +2549,16 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
 
     companion object {
         private const val TAG = "ha-paneld/http"
+
+        /** Behaviour keys routed through [applySetting] after an HTTP persistence commit. Boot-chime
+         *  silence is the one dispatcher key applied by the ordinary config/reconfigure path. */
+        internal val HTTP_LIVE_KEYS = listOf(
+            "wake_on_wave", "prevent_idle_dim", "watchdog_enabled", "kiosk_lock", "auto_brightness",
+            "brightness_bias", "navbar_mode", "touch_sound", "cpu_governor",
+            "network_adb", "zigbee_router", "ambient_lux",
+            "companion_auto_update", "companion_update_channel", "self_update", "webview_auto_update",
+            "update_channel", "home_dashboard",
+        )
 
         // Probe-cache TTLs: the dashboard renders from the snapshot, so these bound both staleness
         // and how often the su round-trips can run. Density/su flap even less than the rest.
