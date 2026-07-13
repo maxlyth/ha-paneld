@@ -14,6 +14,7 @@ import kotlinx.coroutines.withContext
 object CompanionInstaller {
     const val FULL_PKG = "io.homeassistant.companion.android"
     const val MINIMAL_PKG = "io.homeassistant.companion.android.minimal"
+    val SUPPORTED_PACKAGES = listOf(FULL_PKG, MINIMAL_PKG)
 
     // Canonical minimal APK from the latest (non-prerelease) home-assistant/android release.
     private const val MINIMAL_APK_URL =
@@ -25,7 +26,12 @@ object CompanionInstaller {
 
     /** The installed Companion package (full or minimal), or null if neither is present. */
     fun installedPkg(context: Context): String? =
-        listOf(FULL_PKG, MINIMAL_PKG).firstOrNull {
+        SUPPORTED_PACKAGES.firstOrNull {
+            runCatching { context.packageManager.getPackageInfo(it, 0) }.isSuccess
+        }
+
+    fun installedPackages(context: Context): Set<String> =
+        SUPPORTED_PACKAGES.filterTo(linkedSetOf()) {
             runCatching { context.packageManager.getPackageInfo(it, 0) }.isSuccess
         }
 

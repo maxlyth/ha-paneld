@@ -54,4 +54,14 @@ class SettingValueTest {
         assertEquals("bedroom_ml", ok(SettingValue.validate(s, "Bedroom-ML")))
         assertTrue(SettingValue.validate(s, "  -- ") is Validation.Bad)
     }
+
+    @Test fun dashboardPackageRejectsShellInput() {
+        val s = SettingsRegistry.spec("dashboard_package")!!
+        listOf("", "builtin", "io.homeassistant.companion.android.minimal").forEach {
+            assertEquals(it, ok(SettingValue.validate(s, it)))
+        }
+        listOf("com.example;reboot", "com.example dashboard", "com/example").forEach {
+            assertTrue(SettingValue.validate(s, it) is Validation.Bad)
+        }
+    }
 }

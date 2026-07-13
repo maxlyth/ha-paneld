@@ -117,6 +117,15 @@ class SystemControllerTest {
         assertTrue(root.ran.isEmpty() && d.sent.isEmpty())
     }
 
+    @Test fun invalidStoredDashboardNeverCrossesPrivilegeBoundary() {
+        val injected = "com.example;reboot"
+        val (c, root, d) = sc(FakeSystemEnv(), daemon = emptyMap())
+        c.reloadDashboard(injected)
+        assertEquals(AppState.UNKNOWN, c.dashboardState(injected))
+        assertTrue(root.ran.isEmpty())
+        assertTrue(d.sent.isEmpty())
+    }
+
     // ---------- launchLauncher (the selection algorithm) ----------
     private fun launcherEnv(default: String?, vararg homes: String) = FakeSystemEnv(
         homes = homes.map { ActivityRef(it, "L") },

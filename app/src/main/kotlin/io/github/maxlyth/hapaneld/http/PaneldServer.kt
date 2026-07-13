@@ -10,6 +10,7 @@ import io.github.maxlyth.hapaneld.config.ConfigBundle
 import io.github.maxlyth.hapaneld.config.ConfigDiff
 import io.github.maxlyth.hapaneld.config.Migrations
 import io.github.maxlyth.hapaneld.backup.PanelBackup
+import io.github.maxlyth.hapaneld.backup.CompanionRestore
 import io.github.maxlyth.hapaneld.config.Scope
 import io.github.maxlyth.hapaneld.config.SettingType
 import io.github.maxlyth.hapaneld.config.SettingValue
@@ -29,6 +30,7 @@ import io.github.maxlyth.hapaneld.logship.LogCapture
 import io.github.maxlyth.hapaneld.sensors.SensorReporter
 import io.github.maxlyth.hapaneld.util.Cached
 import io.github.maxlyth.hapaneld.util.AppInstaller
+import io.github.maxlyth.hapaneld.util.AndroidInput
 import io.github.maxlyth.hapaneld.util.CompanionInstaller
 import io.github.maxlyth.hapaneld.util.HelperClient
 import io.github.maxlyth.hapaneld.util.InstallProgress
@@ -486,7 +488,7 @@ class PaneldServer(
                             """{"ok":false,"error":"no-root"}""", ContentType.Application.Json, HttpStatusCode.ServiceUnavailable)
                         val pkg = call.receiveParameters()["pkg"]?.trim().orEmpty()
                         val protected = pkg == appContext.packageName || pkg == io.github.maxlyth.hapaneld.util.WebViewInstaller.WEBVIEW_PKG
-                        if (pkg.isEmpty() || protected || !pkg.matches(Regex("^[A-Za-z0-9._]+$")))
+                        if (pkg.isEmpty() || protected || !AndroidInput.isPackage(pkg))
                             return@post call.respondText("""{"ok":false,"error":"bad-package"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
                         val out = withContext(Dispatchers.IO) { io.github.maxlyth.hapaneld.control.Su.runOutput("pm uninstall $pkg")?.trim() }
                         // The persistent root shell sometimes returns empty stdout even on success — confirm
@@ -1921,6 +1923,12 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             }
             slug
         }
+        val dashboardPackage = p["dashboard_package"]?.trim()?.also {
+            if (!AndroidInput.isDashboardTarget(it)) {
+                call.respondText("invalid dashboard_package\n", status = HttpStatusCode.BadRequest)
+                return
+            }
+        }
         // Persisted fields are staged into one editor and committed atomically, so a power loss mid-apply
         // can't leave a half-written config (e.g. broker set but credentials not). Live side-effects
         // (behaviour keys, reconfigure) run after the commit so they read freshly-committed state.
@@ -1945,8 +1953,8 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
                     panelId?.let { config.setPanelId(it) }
                     p["friendly_name"]?.let { config.setFriendlyName(it.trim()) }
                     val prevDash = config.dashboardPackage
-                    p["dashboard_package"]?.let { config.setDashboardPackage(it.trim()) }
-                    val dashChanged = p["dashboard_package"]?.trim()?.let { it != prevDash } == true
+                    dashboardPackage?.let { config.setDashboardPackage(it) }
+                    val dashChanged = dashboardPackage?.let { it != prevDash } == true
                     p["launcher_package"]?.let { config.setLauncherPackage(it.trim()) }
                     p["tame_vendor_packages"]?.let { raw ->
                         val next = raw.split(Regex("[\\s,]+")).map { it.trim() }
@@ -2398,9 +2406,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
     // Deliberately NOT the -wal/-shm sidecars: capture checkpoints the WAL into the main DB first, so the
     // single HomeAssistantDB file is complete. Writing back a STALE -wal/-shm makes SQLite discard it and
     // lose the login (the `servers` row lives in the WAL until a checkpoint) — validated the hard way.
-    private val companionBackupFiles = listOf(
-        "databases/HomeAssistantDB", "shared_prefs/session_0.xml", "shared_prefs/integration_0.xml",
-    )
+    private val companionBackupFiles = CompanionRestore.ALLOWED_FILES
 
     /** Build the (pre-encryption) backup plaintext JSON. Config first; Companion login files (base64) when
      *  [includeCompanion] and su + a Companion are present. */
@@ -2426,6 +2432,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
     /** Read the Companion login files over su (raw bytes; skips absent/empty ones). Checkpoints the WAL
      *  into the main DB first so the single-file capture is complete (see companionBackupFiles). */
     private fun captureCompanion(pkg: String): List<Pair<String, ByteArray>> {
+        if (pkg !in CompanionInstaller.SUPPORTED_PACKAGES || !AndroidInput.isPackage(pkg)) return emptyList()
         val base = "/data/data/$pkg"
         // Merge any pending WAL frames into HomeAssistantDB so the captured file holds the whole login.
         // Safe while the app is running (SQLite WAL is multi-connection); a no-op if sqlite3 is absent.
@@ -2455,11 +2462,34 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             return call.respondText("""{"ok":false,"error":"not a ha-paneld backup"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
         val cfgObj = obj.optJSONObject("config")
         val comp = obj.optJSONObject("companion")
-        val compFiles = comp?.optJSONArray("files")?.length() ?: 0
+        if (obj.has("companion") && comp == null) {
+            return call.respondText(
+                """{"ok":false,"error":"Invalid Companion restore section"}""",
+                ContentType.Application.Json,
+                HttpStatusCode.BadRequest,
+            )
+        }
+        val plannedCompanion = comp?.let(::planCompanionRestore)
+        if (plannedCompanion is CompanionRestore.PlanResult.Invalid) {
+            return call.respondText(
+                """{"ok":false,"error":${jsonStr(plannedCompanion.reason)}}""",
+                ContentType.Application.Json,
+                HttpStatusCode.BadRequest,
+            )
+        }
+        val companionPlan = (plannedCompanion as? CompanionRestore.PlanResult.Valid)?.plan
+        val compFiles = companionPlan?.files?.size ?: 0
         if (dryRun) return call.respondText(
             """{"ok":true,"dry_run":true,"panel_id":${jsonStr(obj.optString("panel_id"))},""" +
-                """"config_keys":${cfgObj?.length() ?: 0},"companion_pkg":${jsonStr(comp?.optString("pkg") ?: "")},"companion_files":$compFiles}""",
+                """"config_keys":${cfgObj?.length() ?: 0},"companion_pkg":${jsonStr(companionPlan?.packageName ?: "")},"companion_files":$compFiles}""",
             ContentType.Application.Json)
+        if (companionPlan != null && !withContext(Dispatchers.IO) { Su.available() }) {
+            return call.respondText(
+                """{"ok":false,"error":"Companion restore needs su"}""",
+                ContentType.Application.Json,
+                HttpStatusCode.ServiceUnavailable,
+            )
+        }
         if (InstallProgress.running) return call.respondText("""{"status":"busy"}""", ContentType.Application.Json)
         val progress = InstallProgress.start("Restore") ?: return call.respondText(
             """{"status":"busy"}""", ContentType.Application.Json)
@@ -2468,12 +2498,12 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
                 var c = "no companion in bundle"
                 val n = if (cfgObj != null) {
                     applyRestoreConfig(cfgObj) { effects ->
-                        c = if (comp != null) restoreCompanion(comp) else c
+                        c = companionPlan?.let(::restoreCompanion) ?: c
                         reconcileAfterCompanionRestore(effects)
                     }
                 } else {
                     rendererPreparation.transaction {
-                        c = if (comp != null) restoreCompanion(comp) else c
+                        c = companionPlan?.let(::restoreCompanion) ?: c
                         reconcileAfterCompanionRestore(null)
                     }
                     0
@@ -2485,6 +2515,23 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
         }
         InstallProgress.finishOnFailure(progress, job)
         call.respondText("""{"status":"started"}""", ContentType.Application.Json)
+    }
+
+    /** Convert untrusted JSON to a completely validated and decoded plan before any config commit or app stop. */
+    private fun planCompanionRestore(comp: org.json.JSONObject): CompanionRestore.PlanResult {
+        val files = comp.optJSONArray("files")
+            ?: return CompanionRestore.PlanResult.Invalid("Companion restore contains no files")
+        val encoded = ArrayList<CompanionRestore.EncodedFile>(files.length())
+        for (i in 0 until files.length()) {
+            val file = files.optJSONObject(i)
+                ?: return CompanionRestore.PlanResult.Invalid("Invalid Companion file entry at index $i")
+            encoded += CompanionRestore.EncodedFile(file.optString("rel"), file.optString("b64"))
+        }
+        return CompanionRestore.plan(
+            packageName = comp.optString("pkg"),
+            files = encoded,
+            installedPackages = CompanionInstaller.installedPackages(appContext),
+        )
     }
 
     /** Validate + apply the config half of a backup (reuses the import apply path). Returns keys applied. */
@@ -2513,38 +2560,109 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
         requireRendererResult(result)
     }
 
-    /** DESTRUCTIVE: write the Companion login files back over su, fix owner uid + SELinux context (captured
-     *  from the LIVE app dir — restorecon drops the per-app MLS categories), and relaunch. force-stop first
-     *  so the app isn't holding/overwriting the DB. */
-    private fun restoreCompanion(comp: org.json.JSONObject): String {
+    /** Execute a prevalidated Companion restore through staged writes and a rollback-capable commit. */
+    private fun restoreCompanion(plan: CompanionRestore.Plan): String {
         val Su = io.github.maxlyth.hapaneld.control.Su
-        val pkg = comp.optString("pkg").ifBlank { return "no companion pkg" }
         if (!Su.available()) return "companion restore needs su"
-        val files = comp.optJSONArray("files") ?: return "no companion files"
-        val base = "/data/data/$pkg"
-        val uid = Su.runOutput("stat -c %u $base 2>/dev/null")?.trim()?.takeIf { it.isNotEmpty() && it != "?" }
-        // `ls -Zd` prints "<context> <name>" — the context is the first field.
-        val ctx = Su.runOutput("ls -Zd $base 2>/dev/null")?.trim()?.substringBefore(' ')?.takeIf { it.startsWith("u:") }
-        Su.run("am force-stop $pkg")
-        val dec = java.util.Base64.getDecoder()
-        var written = 0
-        for (i in 0 until files.length()) {
-            val f = files.getJSONObject(i)
-            val rel = f.optString("rel")
-            if (rel.isEmpty() || rel.contains("..")) continue
-            val bytes = runCatching { dec.decode(f.optString("b64")) }.getOrNull() ?: continue
-            val tmp = File(appContext.cacheDir, "restore.tmp").apply { writeBytes(bytes) }
-            Su.runWithStdinLong("cat > $base/$rel", tmp, 60_000)
-            tmp.delete()
-            written++
+        val result = CompanionRestore.execute(plan, object : CompanionRestore.Executor {
+            override fun inspectTarget(packageName: String): CompanionRestore.TargetInfo? {
+                val base = "/data/data/$packageName"
+                val uid = Su.runOutput("stat -c %u $base 2>/dev/null")?.trim()
+                    ?.takeIf { it.matches(Regex("^[0-9]+$")) } ?: return null
+                val context = Su.runOutput("ls -Zd $base 2>/dev/null")?.trim()?.substringBefore(' ')
+                    ?.takeIf { it.matches(Regex("^[A-Za-z0-9_:,.]+$")) && it.startsWith("u:") } ?: return null
+                return CompanionRestore.TargetInfo(uid, context)
+            }
+
+            override fun forceStop(packageName: String): Boolean = Su.run("am force-stop $packageName")
+
+            override fun stage(packageName: String, file: CompanionRestore.FilePayload): Boolean {
+                val tmp = runCatching {
+                    File.createTempFile("companion-restore-", ".tmp", cacheDir).apply { writeBytes(file.bytes) }
+                }.getOrNull() ?: return false
+                return try {
+                    val staged = "/data/data/$packageName/${file.relativePath}.hapaneld-restore"
+                    Su.runWithStdinLongChecked(
+                        "cat > $staged && [ \"\$(stat -c %s $staged)\" = \"${file.bytes.size}\" ]",
+                        tmp,
+                        60_000,
+                    ) != null
+                } finally {
+                    tmp.delete()
+                }
+            }
+
+            override fun commit(plan: CompanionRestore.Plan, target: CompanionRestore.TargetInfo): Boolean {
+                val script = runCatching {
+                    File.createTempFile("companion-commit-", ".sh", cacheDir).apply {
+                        writeText(companionCommitScript(plan, target))
+                    }
+                }.getOrNull() ?: return false
+                return try {
+                    Su.runWithStdinLongChecked("sh", script, 60_000) != null
+                } finally {
+                    script.delete()
+                }
+            }
+
+            override fun discard(plan: CompanionRestore.Plan): Boolean {
+                val paths = plan.files.joinToString(" ") {
+                    "/data/data/${plan.packageName}/${it.relativePath}.hapaneld-restore"
+                }
+                return Su.run("rm -f $paths")
+            }
+
+            override fun relaunch(packageName: String): Boolean =
+                Su.run("monkey -p $packageName -c android.intent.category.LAUNCHER 1")
+        })
+        return if (result.ok) {
+            "${result.message} (${result.committedFiles} files, owner/context restored)"
+        } else {
+            "error: ${result.message}; committed=${result.committedFiles ?: "unknown"}; relaunched=${result.relaunched}"
         }
-        // Drop any stale WAL/SHM so SQLite reads the restored main DB as-is (a leftover WAL from the fresh
-        // install would otherwise shadow/discard the restored login). The backup is already checkpointed.
-        Su.run("rm -f $base/databases/HomeAssistantDB-wal $base/databases/HomeAssistantDB-shm")
-        if (uid != null) Su.run("chown -R $uid:$uid $base/databases $base/shared_prefs")
-        if (ctx != null) Su.run("chcon -R $ctx $base/databases $base/shared_prefs")
-        Su.run("monkey -p $pkg -c android.intent.category.LAUNCHER 1")
-        return "restored companion $pkg ($written files, uid=${uid ?: "?"}, ctx=${if (ctx != null) "set" else "?"})"
+    }
+
+    /** Root-side commit script: keep old live files until every staged write exists, then roll back on any failed effect. */
+    private fun companionCommitScript(plan: CompanionRestore.Plan, target: CompanionRestore.TargetInfo): String {
+        val base = "/data/data/${plan.packageName}"
+        val livePaths = plan.files.map { it.relativePath }.toMutableList()
+        if ("databases/HomeAssistantDB" in livePaths) {
+            livePaths += "databases/HomeAssistantDB-wal"
+            livePaths += "databases/HomeAssistantDB-shm"
+        }
+        return buildString {
+            appendLine("set -eu")
+            appendLine("base='$base'")
+            appendLine("rollback=\"\$base/.hapaneld-restore-rollback-\$\$\"")
+            appendLine("mkdir \"\$rollback\"")
+            appendLine("restore_old() {")
+            appendLine("  rc=\$?")
+            appendLine("  set +e")
+            livePaths.forEachIndexed { index, rel ->
+                appendLine("  if [ -f \"\$rollback/$index\" ]; then cp -p \"\$rollback/$index\" \"\$base/$rel\"; elif [ -f \"\$rollback/$index.missing\" ]; then rm -f \"\$base/$rel\"; fi")
+            }
+            plan.files.forEach { file -> appendLine("  rm -f \"\$base/${file.relativePath}.hapaneld-restore\"") }
+            appendLine("  rm -rf \"\$rollback\"")
+            appendLine("  trap - EXIT")
+            appendLine("  exit \"\$rc\"")
+            appendLine("}")
+            appendLine("trap restore_old EXIT")
+            livePaths.forEachIndexed { index, rel ->
+                appendLine("if [ -f \"\$base/$rel\" ]; then cp -p \"\$base/$rel\" \"\$rollback/$index\"; else : > \"\$rollback/$index.missing\"; fi")
+            }
+            plan.files.forEach { file ->
+                appendLine("[ \"\$(stat -c %s \"\$base/${file.relativePath}.hapaneld-restore\")\" = \"${file.bytes.size}\" ]")
+            }
+            plan.files.forEach { file -> appendLine("mv \"\$base/${file.relativePath}.hapaneld-restore\" \"\$base/${file.relativePath}\"") }
+            if ("databases/HomeAssistantDB" in livePaths) {
+                appendLine("rm -f \"\$base/databases/HomeAssistantDB-wal\" \"\$base/databases/HomeAssistantDB-shm\"")
+            }
+            val restored = plan.files.joinToString(" ") { "\"\$base/${it.relativePath}\"" }
+            appendLine("chown ${target.uid}:${target.uid} $restored")
+            appendLine("chcon ${target.selinuxContext} $restored")
+            appendLine("rm -rf \"\$rollback\"")
+            appendLine("trap - EXIT")
+        }
     }
 
     /** List on-panel revisions (newest first) as `[{id, exported_at, keys}]`. */

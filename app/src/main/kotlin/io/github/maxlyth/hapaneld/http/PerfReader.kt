@@ -7,6 +7,7 @@ import io.github.maxlyth.hapaneld.metrics.MetricSample
 import io.github.maxlyth.hapaneld.metrics.PanelMetrics
 import io.github.maxlyth.hapaneld.metrics.PerfDump
 import io.github.maxlyth.hapaneld.metrics.RamRingSink
+import io.github.maxlyth.hapaneld.util.AndroidInput
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -166,8 +167,8 @@ object PerfReader {
 
         // Secondary: gfxinfo jank (rendering load — only meaningful with video/animation). Optional.
         var jankFields = ""
-        val pkg = dashboardPkg
-        if (pkg.isNotBlank()) {
+        val pkg = dashboardPkg.takeIf(AndroidInput::isPackage).orEmpty()
+        if (pkg.isNotEmpty()) {
             val g = Su.runOutput("dumpsys gfxinfo $pkg; dumpsys gfxinfo $pkg reset >/dev/null 2>&1; true")
             if (g != null) {
                 val tot = Regex("""Total frames rendered:\s*(\d+)""").find(g)?.groupValues?.get(1)?.toLongOrNull() ?: 0

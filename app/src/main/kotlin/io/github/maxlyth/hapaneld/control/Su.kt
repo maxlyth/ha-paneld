@@ -230,12 +230,9 @@ object Su : RootShell {
         return false
     }
 
-    /** Run a long one-shot su [cmd], streaming [input]'s bytes to its stdin (then closing stdin), and
-     *  return the command's stdout. For `pm install -S <size>` streaming, which installs an APK straight
-     *  from a byte stream — no intermediate `/data/local/tmp` copy. stdin is fed on a daemon thread so a
-     *  reader that consumes stdout concurrently can't deadlock against a full pipe. Bounded to [timeoutMs].
-     *  Always one-shot. */
-    fun runWithStdinLong(cmd: String, input: java.io.File, timeoutMs: Long): String? {
+    private data class StdinResult(val stdout: String, val exitCode: Int)
+
+    private fun runWithStdinLongResult(cmd: String, input: java.io.File, timeoutMs: Long): StdinResult? {
         val forms = if (form in 0..1) intArrayOf(form) else intArrayOf(0, 1)
         for (f in forms) {
             val out = runBounded("stdin-long", argvOneShot(f, cmd), timeoutMs) { p ->
@@ -244,14 +241,21 @@ object Su : RootShell {
                 }.apply { isDaemon = true; start() }
                 val text = p.inputStream.bufferedReader().readText()  // read before waitFor (avoid deadlock)
                 feeder.join(timeoutMs)
-                p.waitFor()
-                text
+                StdinResult(text, p.waitFor())
             }
             if (out != null) { form = f; return out }
         }
         if (form == -1) form = 2
         return null
     }
+
+    /** Long one-shot command with streamed stdin. Returns stdout even when the child exits non-zero. */
+    fun runWithStdinLong(cmd: String, input: java.io.File, timeoutMs: Long): String? =
+        runWithStdinLongResult(cmd, input, timeoutMs)?.stdout
+
+    /** Checked variant for data restoration: non-zero exit is failure even when the command wrote stdout. */
+    fun runWithStdinLongChecked(cmd: String, input: java.io.File, timeoutMs: Long): String? =
+        runWithStdinLongResult(cmd, input, timeoutMs)?.takeIf { it.exitCode == 0 }?.stdout
 
     /** Long-running one-shot su [cmd] returning stdout (null on non-zero/failure), bounded to [timeoutMs]. */
     fun runOutputLong(cmd: String, timeoutMs: Long): String? {

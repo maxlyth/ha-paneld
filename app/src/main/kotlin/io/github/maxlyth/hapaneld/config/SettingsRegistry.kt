@@ -1,5 +1,6 @@
 package io.github.maxlyth.hapaneld.config
 
+import io.github.maxlyth.hapaneld.util.AndroidInput
 import java.util.Locale
 
 /**
@@ -211,6 +212,10 @@ object SettingsRegistry {
             key = "dashboard_package", type = SettingType.STRING, group = "Dashboard",
             label = "Dashboard app", default = "", picker = "renderer",
             help = "Which app renders the dashboard: the HA Companion, Fully Kiosk, or ha-paneld's built-in renderer (skunk-works). Blank = auto-detect the installed Companion.",
+            validate = { value ->
+                if (AndroidInput.isDashboardTarget(value)) Validation.Ok(value)
+                else Validation.Bad("dashboard_package: expected blank, builtin, or an Android package name")
+            },
         ),
         SettingSpec(
             key = "home_dashboard", type = SettingType.STRING, group = "Dashboard",

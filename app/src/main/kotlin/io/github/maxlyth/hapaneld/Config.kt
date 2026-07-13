@@ -11,6 +11,7 @@ import io.github.maxlyth.hapaneld.config.SettingSpec
 import io.github.maxlyth.hapaneld.config.SettingType
 import io.github.maxlyth.hapaneld.config.SettingsRegistry
 import io.github.maxlyth.hapaneld.device.DeviceProfile
+import io.github.maxlyth.hapaneld.util.AndroidInput
 import java.util.Locale
 
 /**
@@ -221,6 +222,7 @@ class Config private constructor(
     /** App package whose force-stop+relaunch is the dashboard "reload". Empty => reload disabled. */
     val dashboardPackage: String get() = prefs.getString("dashboard_package", "")!!
     fun setDashboardPackage(pkg: String) {
+        require(AndroidInput.isDashboardTarget(pkg)) { "invalid dashboard package" }
         val changed = pkg != dashboardPackage
         edit {
             putString("dashboard_package", pkg)

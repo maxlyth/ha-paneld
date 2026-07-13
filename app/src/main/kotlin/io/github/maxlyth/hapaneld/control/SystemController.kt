@@ -5,6 +5,7 @@ import android.util.Log
 import io.github.maxlyth.hapaneld.platform.Daemon
 import io.github.maxlyth.hapaneld.platform.RootShell
 import io.github.maxlyth.hapaneld.platform.SystemEnv
+import io.github.maxlyth.hapaneld.util.AndroidInput
 import io.github.maxlyth.hapaneld.util.HelperClient
 
 /** Foreground/liveness state of the dashboard app, as seen by the app watchdog. */
@@ -36,7 +37,7 @@ class SystemController(
 
     /** Launch an activity [component] ("pkg/cls") via the privileged path (daemon START, else su). */
     private fun privilegedStart(component: String): Boolean {
-        if (component.isBlank()) return false
+        if (!AndroidInput.isComponent(component)) return false
         // Prefer the daemon, but only trust an explicit OK — an older daemon without the START verb
         // replies ERR, so fall back to su (covers su-capable panels with a stale daemon).
         if (daemon.available() && daemon.send("START $component") == "OK") return true
@@ -67,7 +68,7 @@ class SystemController(
      *  [BUILTIN_DASHBOARD] passes through unchanged (it's non-blank) — downstream methods special-case it.
      *  Public so the config UI can show what a blank ("auto") dashboard_package actually resolved to. */
     fun resolveDashboard(pkg: String): String {
-        if (pkg.isNotBlank()) return pkg
+        if (pkg.isNotBlank()) return pkg.takeIf(AndroidInput::isDashboardTarget).orEmpty()
         for (p in listOf("io.homeassistant.companion.android.minimal", "io.homeassistant.companion.android")) {
             if (env.isInstalled(p)) return p
         }
@@ -85,7 +86,7 @@ class SystemController(
             startBuiltin()
             return
         }
-        if (pkg.isBlank()) { Log.w(TAG, "reload: no dashboard pkg (set dashboard_package)"); return }
+        if (!AndroidInput.isPackage(pkg)) { Log.w(TAG, "reload: invalid or missing dashboard package"); return }
         if (daemon.available()) { // daemon force-stops + monkey-relaunches as root (no BAL)
             daemon.send("RELOAD $pkg")
             Log.i(TAG, "reload via daemon ($pkg)")
@@ -160,7 +161,7 @@ class SystemController(
 
     /** Set the default HOME (launcher) to [component] ("pkg/cls"). Daemon SETHOME, else su. */
     private fun setHomeActivity(component: String): Boolean {
-        if (component.isBlank()) return false
+        if (!AndroidInput.isComponent(component)) return false
         if (daemon.available() && daemon.send("SETHOME $component") == "OK") return true
         return root.run("cmd package set-home-activity $component")
     }
@@ -238,7 +239,7 @@ class SystemController(
             builtinForeground() -> AppState.FG
             else -> AppState.BG
         }
-        if (pkg.isBlank()) return AppState.UNKNOWN
+        if (!AndroidInput.isPackage(pkg)) return AppState.UNKNOWN
         if (daemon.available()) {
             return when (daemon.send("APPSTATE $pkg")) {
                 "FG" -> AppState.FG
