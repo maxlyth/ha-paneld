@@ -14,6 +14,10 @@ interface MqttTransport {
      *  triggers a liveness rebuild) must never block the caller while the replacement connects. */
     fun disconnectDetached()
 
+    /** Publish final retained values, wait for their QoS acknowledgements, then disconnect. A bounded
+     *  fallback still detaches a wedged client, and the entire operation must return immediately. */
+    fun publishThenDisconnect(publications: List<MqttFinalPublish>, timeoutMs: Long)
+
     /** Publish [payload] to [topic]; on a broker ACK, [MqttCallbacks.onPublishAck] fires (the QoS-1
      *  liveness signal the reconnect watchdog trusts). No-op when there is no current client. */
     fun publish(topic: String, payload: ByteArray, retain: Boolean, onComplete: ((Boolean) -> Unit)? = null)
@@ -22,6 +26,8 @@ interface MqttTransport {
      *  retained flag lets the bridge reject stale retained commands (the never-blank incident guard). */
     fun subscribe(topicFilter: String, onMessage: (topic: String, payload: ByteArray, retained: Boolean) -> Unit)
 }
+
+data class MqttFinalPublish(val topic: String, val payload: ByteArray, val retain: Boolean)
 
 /** Everything needed to open one MQTT connection. */
 data class MqttConnectConfig(

@@ -7,7 +7,7 @@ package io.github.maxlyth.hapaneld.mqtt
  */
 class StateConverger(
     private val sender: (topic: String, payload: String, retain: Boolean, done: (Boolean) -> Unit) -> Unit,
-    private val schedule: (() -> Unit) -> Unit = { task -> PUMP.execute(task) },
+    private val schedule: (() -> Unit) -> Unit = ::dispatch,
 ) {
     sealed interface Observation {
         data class Known(val payload: String) : Observation
@@ -37,24 +37,32 @@ class StateConverger(
     private val channels = linkedMapOf<String, Runtime>()
     private var successes = 0L
     private var failures = 0L
+    private var closed = false
 
     @Synchronized
     fun register(channel: Channel) {
+        check(!closed) { "state converger is closed" }
         check(channel.key !in channels) { "duplicate state channel ${channel.key}" }
         channels[channel.key] = Runtime(channel)
     }
 
     fun reconcile(key: String, force: Boolean = false) {
-        val runtime = synchronized(this) { channels[key] } ?: return
+        val runtime = synchronized(this) { if (closed) null else channels[key] } ?: return
         val payload = when (val observation = runCatching { runtime.channel.observe() }.getOrDefault(Observation.Unknown)) {
             is Observation.Known -> observation.payload.also {
-                synchronized(this) { runtime.unknown = false }
+                synchronized(this) {
+                    if (closed) return
+                    runtime.unknown = false
+                }
             }
             Observation.Unknown, Observation.Unavailable -> {
                 synchronized(this) {
+                    if (closed) return
                     runtime.unknown = true
-                    runtime.dirty = false
-                    runtime.inFlight = false
+                    // An observation failure cannot cancel a publish already admitted to the bounded
+                    // outbox. Keep its slot until the callback arrives; otherwise repeated unknown reads
+                    // can make the actual MQTT in-flight count exceed MAX_IN_FLIGHT.
+                    if (!runtime.inFlight) runtime.dirty = false
                 }
                 return
             }
@@ -62,6 +70,7 @@ class StateConverger(
 
         val generation: Long
         synchronized(this) {
+            if (closed) return
             if (runtime.inFlight && runtime.sent == payload) return
             if (!force && !runtime.dirty && runtime.acknowledged?.let { runtime.channel.equivalent(it, payload) } == true) return
             if (channels.values.count { it.inFlight } >= MAX_IN_FLIGHT) return
@@ -75,7 +84,7 @@ class StateConverger(
         sender(runtime.channel.topic, payload, runtime.channel.retain) { success ->
             var pump = false
             synchronized(this) {
-                if (generation != runtime.generation) return@synchronized
+                if (closed || generation != runtime.generation) return@synchronized
                 runtime.inFlight = false
                 if (success) {
                     successes++
@@ -92,19 +101,46 @@ class StateConverger(
     }
 
     fun reconcileAll(force: Boolean = false) {
-        val keys = synchronized(this) { channels.keys.toList() }
+        val keys = synchronized(this) { if (closed) emptyList() else channels.keys.toList() }
         keys.forEach { reconcile(it, force) }
     }
 
     /** Drain only channels already queued/dirty; do not turn ACK completion into a fresh sensor poll. */
     fun reconcileDirty() {
-        val keys = synchronized(this) { channels.filterValues { it.dirty && !it.inFlight }.keys.toList() }
+        val keys = synchronized(this) {
+            if (closed) emptyList() else channels.filterValues { it.dirty && !it.inFlight }.keys.toList()
+        }
         keys.forEach { reconcile(it) }
     }
 
+    /**
+     * Invalidate every acknowledgement from the previous broker connection. A QoS acknowledgement is
+     * evidence about the connection that produced it, not permission to suppress publication forever:
+     * a replacement broker/session may have no retained copy. Incrementing each generation also makes
+     * completions from the superseded connection harmless if they arrive after reconnect.
+     */
     @Synchronized
     fun markAllDirty() {
-        channels.values.forEach { it.dirty = true; it.inFlight = false }
+        if (closed) return
+        channels.values.forEach {
+            it.generation++
+            it.acknowledged = null
+            it.sent = null
+            it.dirty = true
+            it.inFlight = false
+        }
+    }
+
+    /** Terminal owner boundary: reject queued audits and invalidate every late completion. */
+    @Synchronized
+    fun close() {
+        if (closed) return
+        closed = true
+        channels.values.forEach {
+            it.generation++
+            it.inFlight = false
+            it.dirty = false
+        }
     }
 
     @Synchronized
@@ -138,6 +174,9 @@ class StateConverger(
         private val PUMP = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
             Thread(r, "state-convergence").apply { isDaemon = true }
         }
+
+        /** Serialize local UI/hardware notifications with acknowledgement-driven outbox pumping. */
+        internal fun dispatch(task: () -> Unit) = PUMP.execute(task)
 
         fun numericDeadband(deadband: Double): (String, String) -> Boolean = { acknowledged, observed ->
             val old = acknowledged.toDoubleOrNull()

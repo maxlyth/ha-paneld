@@ -183,7 +183,7 @@ class PaneldService : Service() {
                 if (serviceStopping) return@Thread
                 config.setKioskLock(false)
                 runCatching { kiosk.apply(false) }
-                if (!serviceStopping) runCatching { mqtt.publishKioskState(false) }
+                if (!serviceStopping) runCatching { mqtt.publishKioskState() }
             }.apply { isDaemon = true; name = "kiosk-unlock" }.start()
         }
         // When taming disables a vendor home launcher (e.g. eWeLink), immediately re-assert the dashboard
@@ -287,7 +287,7 @@ class PaneldService : Service() {
         )
     }
 
-    private fun buildMqtt(): MqttBridge = MqttBridge(
+    private fun buildMqtt(stalePanelId: String? = null): MqttBridge = MqttBridge(
         config, brightness, screen, led, ledEffect, navigate, volume, system, navbar, watchdog, kiosk, touchSound, bootChime, zigbee, relay, cpu, adb,
         accessibilityEnabled(), profile.evdevButtons.isNotEmpty(),
         { capabilitiesSnapshot() },
@@ -315,19 +315,31 @@ class PaneldService : Service() {
                 Log.w(TAG, "self-update skipped: another destructive operation is running")
             }
         },
+        stalePanelId = stalePanelId,
     )
 
     /**
-     * Apply config the HTTP page has already written to [config]: clear the OLD discovery (the live
-     * MQTT bridge still holds the old panel id), then rebuild MQTT + mDNS from the new config.
+     * Apply config the HTTP page has already written to [config], then rebuild MQTT + mDNS. A renamed
+     * panel's discovery cleanup is handed to the replacement bridge so it runs on a live connection.
      */
     private fun reconfigure() {
         runtime.reconfigure {
             val previous = networkRuntime
-            runCatching { previous.mqtt.clearDiscovery() } // bridge was built with the previous panel id
-            runCatching { previous.mqtt.stop() }
+            val stalePanelId = previous.mqtt.panelId.takeIf { it != config.panelId }
+            // The replacement uses the same availability topic unless the panel id changed. Do not race
+            // its retained online with a late offline from the retiring client. A genuinely different
+            // broker still needs an explicit offline because the replacement cannot clean that broker.
+            val publishOffline = mqttReconfigurePublishesOffline(
+                previous.mqtt.panelId,
+                config.panelId,
+                previous.mqtt.configuredBroker,
+                config.mqttBroker,
+            )
+            runCatching {
+                previous.mqtt.stop(publishOffline = publishOffline, clearDiscovery = publishOffline)
+            }
             runCatching { previous.mdns.stop() }
-            val replacement = NetworkRuntime(buildMqtt(), MdnsAdvertiser(this@PaneldService, config))
+            val replacement = NetworkRuntime(buildMqtt(stalePanelId), MdnsAdvertiser(this@PaneldService, config))
             networkRuntime = replacement
             replacement.mdns.start()
             replacement.mqtt.start()

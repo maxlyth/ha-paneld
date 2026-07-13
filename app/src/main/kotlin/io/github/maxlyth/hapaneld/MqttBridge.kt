@@ -31,6 +31,7 @@ import io.github.maxlyth.hapaneld.input.ButtonBus
 import io.github.maxlyth.hapaneld.mqtt.HiveMqTransport
 import io.github.maxlyth.hapaneld.mqtt.MqttCallbacks
 import io.github.maxlyth.hapaneld.mqtt.MqttConnectConfig
+import io.github.maxlyth.hapaneld.mqtt.MqttFinalPublish
 import io.github.maxlyth.hapaneld.control.Diagnostics
 import io.github.maxlyth.hapaneld.mqtt.MqttTransport
 import io.github.maxlyth.hapaneld.mqtt.classifyDisconnect
@@ -113,12 +114,25 @@ class MqttBridge(
     // Trigger a ha-paneld self-update on the configured channel. force=true installs the channel's newest
     // regardless of the version check (the update_paneld button + a pre-release→stable channel switch).
     private val onSelfUpdate: (force: Boolean) -> Unit = {},
+    // A panel-id replaced by reconfiguration. Its discovery and availability are cleared by the NEW
+    // connection, so cleanup cannot be lost when the old client is detached or the broker was offline.
+    private val stalePanelId: String? = null,
 ) {
     private val transport: MqttTransport = HiveMqTransport()
+    // One value per channel-shaping capability per bridge generation. Discovery and the state-channel
+    // registry must not make independent root probes and disagree about whether a channel exists.
+    private val zigbeeAvailable by lazy { capabilities?.invoke()?.zigbeePresent ?: zigbee.present() }
+    private val cpuAvailable by lazy { capabilities?.invoke()?.cpuGovernors ?: cpu.available() }
+    private val networkAdbAvailable by lazy { capabilities?.invoke()?.networkAdb ?: adb.available() }
+    private val relayCount by lazy { relay.count() }
+    private val buttonLedCount by lazy { relay.ledCount() }
 
     /** Broker actually in use — configured, or auto-discovered as `tcp://<ha-ip>:1883`; "" if none. */
     var activeBroker: String = ""
         private set
+    // The configured broker string at construction time. Config is a live mutable store, so the service
+    // needs this snapshot to decide whether reconfigure is retiring a genuinely different broker.
+    internal val configuredBroker: String = config.mqttBroker.trim()
 
     /** Whether the active connection uses TLS (a ssl:///mqtts:// broker URL). Surfaced on the info page
      *  + /diag so a TLS setup is visible. */
@@ -176,6 +190,7 @@ class MqttBridge(
     }
 
     private val panel = config.panelId
+    internal val panelId: String get() = panel
     private val availabilityTopic = "ha-paneld/$panel/availability"
     private val cmdScreen = "ha-paneld/$panel/screen/set"
     private val cmdLed = "ha-paneld/$panel/led/set"
@@ -259,7 +274,8 @@ class MqttBridge(
     @Volatile private var lastTemperature: Float? = null
     @Volatile private var lastHumidity: Float? = null
 
-    private val stateConverger by lazy { createStateConverger() }
+    private val stateConvergerOwner = lazy { createStateConverger() }
+    private val stateConverger by stateConvergerOwner
     private val zigbeeExecutor = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
         Thread(r, "zigbee-state").apply { isDaemon = true }
     }
@@ -280,8 +296,18 @@ class MqttBridge(
 
         channel("screen", stateScreen) {
             when (screen.observedDark()) {
-                true -> known("""{"state":"OFF"}""")
-                false -> known("""{"state":"ON","brightness":${lastScreenBrightness.takeIf { it >= 0 } ?: brightness.getCommanded().coerceAtLeast(1)}}""")
+                true -> {
+                    lastScreenBrightness = -1
+                    screenEffectiveBaseline = -1
+                    known("""{"state":"OFF"}""")
+                }
+                false -> {
+                    val level = lastScreenBrightness.takeIf { it >= 0 } ?: brightness.getCommanded().coerceAtLeast(1)
+                    // Baseline the first authoritative observation too. Otherwise the first heartbeat
+                    // misclassifies an already-lit startup as a local wake and emits a duplicate state.
+                    lastScreenBrightness = level
+                    known("""{"state":"ON","brightness":$level}""")
+                }
                 null -> unknown
             }
         }
@@ -315,16 +341,14 @@ class MqttBridge(
         channel("brightness_bias", stateBrightnessBias) { known(config.brightnessBias.toString()) }
         channel("ambient_lux", stateAmbientLux) { lastAmbientLux?.let { known(it.toString()) } ?: unknown }
         channel("navbar", stateNavbar) { known(config.navbarMode) }
-        if (adb.available()) channel("network_adb", stateNetAdb) { known(if (adb.isPersisted()) "ON" else "OFF") }
-        if (zigbee.present()) channel("zigbee_router", stateZigbee) { known(if (zigbee.running()) "ON" else "OFF") }
-        if (cpu.available()) channel("cpu_governor", stateCpuGov) { cpu.currentTier()?.let(known) ?: unknown }
+        if (networkAdbAvailable) channel("network_adb", stateNetAdb) { known(if (adb.isPersisted()) "ON" else "OFF") }
+        if (zigbeeAvailable) channel("zigbee_router", stateZigbee) { known(if (zigbee.running()) "ON" else "OFF") }
+        if (cpuAvailable) channel("cpu_governor", stateCpuGov) { cpu.currentTier()?.let(known) ?: unknown }
 
-        val relays = relay.count()
-        for (n in 1..relays) channel("relay$n", "ha-paneld/$panel/relay$n/state") {
+        for (n in 1..relayCount) channel("relay$n", "ha-paneld/$panel/relay$n/state") {
             relay.read(n)?.let { known(if (it) "ON" else "OFF") } ?: unknown
         }
-        val buttonLeds = relay.ledCount()
-        for (n in 1..buttonLeds) channel("button_led$n", "ha-paneld/$panel/button_led$n/state") {
+        for (n in 1..buttonLedCount) channel("button_led$n", "ha-paneld/$panel/button_led$n/state") {
             relay.ledRead(n - 1)?.let { known(if (it) "ON" else "OFF") } ?: unknown
         }
 
@@ -418,7 +442,10 @@ class MqttBridge(
                         } else state = classified
                         PanelStatus.mqttConnected = false
                         Log.w(TAG, "MQTT disconnected ($state): $causeMessage")
-                        stateConverger.markAllDirty()
+                        // A connection that failed before its first onConnected has no published state to
+                        // invalidate. Do not construct the registry (and run capability/root probes) on the
+                        // disconnected listener merely to mark an empty outbox.
+                        if (stateConvergerOwner.isInitialized()) stateConverger.markAllDirty()
                         return classified != "auth-failed"
                     }
                     override fun onPublishAck() = markOk()
@@ -474,7 +501,10 @@ class MqttBridge(
         authRetryGeneration++
         authRecovery.authenticated(SystemClock.elapsedRealtime())
         state = "connected"
-        markOk()   // reset the liveness clock; the subscribe/discovery publishes below keep it fresh
+        markOk()   // arm liveness before capability/root observations can delay the rest of onConnected
+        // ACKs belong to one broker connection. Invalidate the previous connection even when a watchdog
+        // rebuild detached it before its disconnected callback could run, then republish every known state.
+        stateConverger.markAllDirty()
         PanelStatus.mqttConnected = true
         transport.subscribe("ha-paneld/$panel/+/set") { topic, payload, retained -> onCommand(topic, payload, retained) }
         // Re-announce discovery when HA (re)starts — its birth message on homeassistant/status. With
@@ -482,7 +512,10 @@ class MqttBridge(
         // "online"/"offline"; act only on online. The retained "online" delivered on subscribe just
         // re-runs the announce we do below — harmless.)
         transport.subscribe("homeassistant/status") { _, payload, _ ->
-            if (String(payload).trim().equals("online", ignoreCase = true)) reAnnounce()
+            if (mqttIsHaOnline(payload)) reAnnounce()
+        }
+        mqttStalePanelCleanup(stalePanelId, panel).forEach {
+            publish(it.topic, it.payload, retain = it.retain)
         }
         publishDiscovery()
         // On an upgrade (running version differs from the one that last announced), actively clear any
@@ -578,15 +611,17 @@ class MqttBridge(
     // ---- command dispatch ----
 
     private fun onCommand(topic: String, payloadBytes: ByteArray, retained: Boolean) {
+        if (!mqttAcceptsCommand(stopped, retained)) {
+            if (retained && !stopped) {
+                Log.w(TAG, "ignoring RETAINED command on $topic (stale — not acted): ${String(payloadBytes)}")
+            }
+            return
+        }
         val payload = String(payloadBytes)
         // NEVER act on a RETAINED command. Command topics are fire-and-forget; a retained payload is
         // always stale — e.g. a broker- or automation-retained screen-off replayed on every (re)subscribe,
         // which is exactly what stranded a panel dark after a reconnect. Our own state/discovery stays
         // retained; inbound commands must be fresh.
-        if (retained) {
-            Log.w(TAG, "ignoring RETAINED command on $topic (stale — not acted): $payload")
-            return
-        }
         try {
             // Relay + button-LED topics are dynamic (relay1/…, button_led1/…) — match before the fixed set.
             if (topic.startsWith("ha-paneld/$panel/relay") && topic.endsWith("/set")) {
@@ -647,13 +682,17 @@ class MqttBridge(
     /** Publish screen=ON to HA after a LOCAL wake (e.g. wake-on-wave), so `light.<panel>_screen` tracks
      *  reality instead of staying OFF. No-op if the broker isn't connected yet. */
     fun publishScreenOn() {
-        publishScreenBrightness(brightness.getCommanded().coerceAtLeast(1))
+        io.github.maxlyth.hapaneld.mqtt.StateConverger.dispatch {
+            if (!stopped) publishScreenBrightness(brightness.getCommanded().coerceAtLeast(1))
+        }
     }
 
     /** Publish the current volume to HA after a LOCAL change (e.g. navbar Volume ±), so
      *  `number.<panel>_volume` tracks reality. No-op if the broker isn't connected yet. */
     fun publishVolume() {
-        stateConverger.reconcile("volume", force = true)
+        io.github.maxlyth.hapaneld.mqtt.StateConverger.dispatch {
+            if (!stopped) stateConverger.reconcile("volume", force = true)
+        }
     }
 
     private fun handleScreen(payload: String) {
@@ -747,7 +786,11 @@ class MqttBridge(
 
     /** Publish the kiosk-lock state — used by the on-device unlock gesture, which turns it OFF outside the
      *  MQTT/HTTP command path and must still tell HA. */
-    fun publishKioskState(on: Boolean) = stateConverger.reconcile("kiosk_lock", force = true)
+    fun publishKioskState() {
+        io.github.maxlyth.hapaneld.mqtt.StateConverger.dispatch {
+            if (!stopped) stateConverger.reconcile("kiosk_lock", force = true)
+        }
+    }
 
     private fun handleCompanionAuto(payload: String) {
         val on = payload.trim().equals("ON", ignoreCase = true)
@@ -860,7 +903,7 @@ class MqttBridge(
     // turned it OFF (otherwise the vendor-started gateway returns each reboot). Gated on the switch having
     // been CONFIGURED — we never disable a stock vendor gateway by our default. Slow lifecycle off-thread.
     private fun reconcileZigbeeOnConnect() {
-        if (!zigbee.present() || !config.zigbeeRouterConfigured) return
+        if (!zigbeeAvailable || !config.zigbeeRouterConfigured) return
         val want = config.zigbeeRouterEnabled
         if (want == zigbee.running()) return // already in the desired state
         zigbeeExecutor.execute {
@@ -1068,6 +1111,7 @@ class MqttBridge(
         component: String,
         objectId: String,
         payload: () -> String,
+        availableOverride: Boolean? = null,
         publishState: () -> Unit,
     ) {
         // Honour the spec's per-setting default so a setting declared haExposedByDefault=false is
@@ -1077,7 +1121,9 @@ class MqttBridge(
         // installed) publishes the empty config, removing any stale HA entity, regardless of the pip.
         val spec = SettingsRegistry.spec(key)
         val default = spec?.haExposedByDefault ?: true
-        val available = capabilities?.let { c -> spec?.availableWhen?.invoke(c()) } ?: true
+        val available = availableOverride
+            ?: capabilities?.let { c -> spec?.availableWhen?.invoke(c()) }
+            ?: true
         if (available && config.haExposed(key, default)) {
             publishConfig(component, objectId, payload())
             publishState()
@@ -1266,15 +1312,14 @@ class MqttBridge(
 
         // Zigbee router — only on panels with the Sonoff gateway package (NSPanel Pro). present()
         // costs a su exec; safe here because onConnected runs off the main thread.
-        if (zigbee.present()) {
+        if (zigbeeAvailable) {
             exposable("zigbee_router", "switch", "${panel}_zigbee_router", {
                 """{"name":"Zigbee router","object_id":"${panel}_zigbee_router","unique_id":"${panel}_zigbee_router","command_topic":"$cmdZigbee","state_topic":"$stateZigbee","icon":"mdi:zigbee","entity_category":"config",$avail,$device}"""
-            }) { stateConverger.reconcile("zigbee_router", force = true) }
+            }, availableOverride = true) { stateConverger.reconcile("zigbee_router", force = true) }
         }
 
         // On-board relays (Smatek S9E `st_relay`). count() probes sysfs via su — off-main-thread here.
-        val relays = relay.count()
-        for (n in 1..relays) {
+        for (n in 1..relayCount) {
             publishConfig(
                 "switch", "${panel}_relay$n",
                 """{"name":"Relay $n","object_id":"${panel}_relay$n","unique_id":"${panel}_relay$n","command_topic":"ha-paneld/$panel/relay$n/set","state_topic":"ha-paneld/$panel/relay$n/state","icon":"mdi:electric-switch",$avail,$device}""",
@@ -1283,8 +1328,7 @@ class MqttBridge(
         }
 
         // S9E button LEDs (gpio147-150) — on/off lights, gated on the gpio nodes being present.
-        val leds = relay.ledCount()
-        for (n in 1..leds) {
+        for (n in 1..buttonLedCount) {
             publishConfig(
                 "light", "${panel}_button_led$n",
                 """{"name":"Button LED $n","object_id":"${panel}_button_led$n","unique_id":"${panel}_button_led$n","command_topic":"ha-paneld/$panel/button_led$n/set","state_topic":"ha-paneld/$panel/button_led$n/state","icon":"mdi:led-on",$avail,$device}""",
@@ -1295,11 +1339,11 @@ class MqttBridge(
         // CPU governor (select) — su panels with cpufreq. Three intent-based tiers (Performance /
         // Efficiency / Auto) rather than raw kernel governor names; CpuController maps each to this
         // SoC's governor (Auto = its dynamic governor — ramps up on interaction, idles low).
-        if (cpu.available()) {
+        if (cpuAvailable) {
             val opts = CpuController.TIERS.joinToString(",") { "\"${jsonEsc(it)}\"" }
             exposable("cpu_governor", "select", "${panel}_cpu_governor", {
                 """{"name":"CPU profile","object_id":"${panel}_cpu_governor","unique_id":"${panel}_cpu_governor","command_topic":"$cmdCpuGov","state_topic":"$stateCpuGov","options":[$opts],"icon":"mdi:speedometer","entity_category":"config",$avail,$device}"""
-            }) { cpu.currentTier()?.let { lastPublishedGovTier = it }; stateConverger.reconcile("cpu_governor", force = true) }
+            }, availableOverride = true) { cpu.currentTier()?.let { lastPublishedGovTier = it }; stateConverger.reconcile("cpu_governor", force = true) }
         }
 
         // Soft navbar (select) — overlay Back/Home/Recents bar for panels whose firmware hides the
@@ -1313,10 +1357,10 @@ class MqttBridge(
         }
 
         // Persistent network adb (switch) — opt-in; root panels only. Standing LAN adb port when ON.
-        if (adb.available()) {
+        if (networkAdbAvailable) {
             exposable("network_adb", "switch", "${panel}_network_adb", {
                 """{"name":"Network ADB","object_id":"${panel}_network_adb","unique_id":"${panel}_network_adb","command_topic":"$cmdNetAdb","state_topic":"$stateNetAdb","icon":"mdi:adb","entity_category":"config",$avail,$device}"""
-            }) { stateConverger.reconcile("network_adb", force = true) }
+            }, availableOverride = true) { stateConverger.reconcile("network_adb", force = true) }
         }
 
         // Diagnostic sensors (read-only) — all OPT-IN (haExposedByDefault=false), so a panel is silent
@@ -1369,7 +1413,10 @@ class MqttBridge(
     private fun publishConfig(component: String, objectId: String, payload: String) {
         val topic = "homeassistant/$component/$objectId/config"
         publishedConfigTopics.add(topic)
-        publish(topic, withDefaultEntityId(component, objectId, payload), retain = false)
+        // Live configs are deliberately non-retained. Empty payloads are different: retaining the
+        // tombstone clears any config an older retain=true release left on the broker, so a hidden or
+        // unavailable entity cannot resurrect while this panel is offline.
+        publish(topic, withDefaultEntityId(component, objectId, payload), retain = mqttDiscoveryRetain(payload))
     }
 
     /**
@@ -1377,43 +1424,7 @@ class MqttBridge(
      * list. KEEP entities here even after they're removed from [publishDiscovery], so an upgrade can
      * actively clear a now-refactored-away entity (see [pruneStaleDiscovery]) instead of zombie-ing it.
      */
-    private fun knownConfigTopics(): List<String> = listOf(
-        "light" to "${panel}_screen", "light" to "${panel}_led",
-        "text" to "${panel}_navigate", "text" to "${panel}_home_dashboard", "event" to "${panel}_button",
-        "button" to "${panel}_back", "button" to "${panel}_recents",
-        "number" to "${panel}_volume", "sensor" to "${panel}_illuminance",
-        "binary_sensor" to "${panel}_proximity",
-        "sensor" to "${panel}_temperature", "sensor" to "${panel}_humidity",
-        "sensor" to "${panel}_room_temp", "sensor" to "${panel}_room_humidity",
-        "light" to "${panel}_buttons", "switch" to "${panel}_wake_on_wave",
-        "switch" to "${panel}_touch_sound", "switch" to "${panel}_watchdog", "switch" to "${panel}_kiosk_lock",
-        "switch" to "${panel}_silence_boot_chime", "switch" to "${panel}_prevent_idle_dim",
-        "switch" to "${panel}_companion_auto_update", "button" to "${panel}_update_companion",
-        "select" to "${panel}_companion_update_channel",
-        "switch" to "${panel}_self_update", "select" to "${panel}_update_channel",
-        "button" to "${panel}_update_paneld",
-        "switch" to "${panel}_webview_auto_update",
-        "switch" to "${panel}_zigbee_router",
-        "switch" to "${panel}_auto_brightness", "number" to "${panel}_brightness_bias",
-        "number" to "${panel}_ambient_lux",
-        "switch" to "${panel}_relay1", "switch" to "${panel}_relay2",
-        "switch" to "${panel}_relay3", "switch" to "${panel}_relay4",
-        "light" to "${panel}_button_led1", "light" to "${panel}_button_led2",
-        "light" to "${panel}_button_led3", "light" to "${panel}_button_led4",
-        "select" to "${panel}_cpu_governor", "select" to "${panel}_navbar",
-        "switch" to "${panel}_network_adb",
-        "button" to "${panel}_reload", "button" to "${panel}_reboot",
-        "button" to "${panel}_launcher", "button" to "${panel}_home",
-        "button" to "${panel}_admin_launcher",
-    ).map { (comp, obj) -> "homeassistant/$comp/$obj/config" }
-
-    /**
-     * Clear this panel's discovery (empty retained payload per topic) so a panel_id change doesn't leave
-     * an orphan device in HA. Clears the full known superset for the (old) id.
-     */
-    fun clearDiscovery() {
-        knownConfigTopics().forEach { publish(it, "", retain = true) }
-    }
+    private fun knownConfigTopics(): Set<String> = mqttKnownConfigTopics(panel)
 
     /**
      * Active upgrade migration: clear any KNOWN entity we did NOT publish this session — i.e. one a prior
@@ -1422,7 +1433,7 @@ class MqttBridge(
      * retained payload also clears configs an older, retain=true version left on the broker.
      */
     private fun pruneStaleDiscovery() {
-        val published = publishedConfigTopics.toSet()
+        val published = synchronized(publishedConfigTopics) { publishedConfigTopics.toSet() }
         var n = 0
         knownConfigTopics().forEach { if (it !in published) { publish(it, "", retain = true); n++ } }
         Log.i(TAG, "discovery prune: cleared $n refactored-away/absent entities for $panel")
@@ -1434,6 +1445,10 @@ class MqttBridge(
         retain: Boolean = false,
         onComplete: ((Boolean) -> Unit)? = null,
     ) {
+        if (stopped) {
+            onComplete?.invoke(false)
+            return
+        }
         // Routed through the transport, whose broker-ACK callback fires onPublishAck (markOk) — the QoS-1
         // liveness signal the watchdog trusts over HiveMQ's self-reported connected state.
         transport.publish(topic, payload.toByteArray(), retain, onComplete)
@@ -1527,7 +1542,7 @@ class MqttBridge(
         // what HA last saw. Categorical (not numeric) — publish on any change vs the baseline, no deadband.
         // The baseline is set at announce / on command, so this only fires on a genuinely external change.
         runCatching {
-            if (cpu.available()) {
+            if (cpuAvailable) {
                 val tier = cpu.currentTier()
                 if (tier != null && lastPublishedGovTier != null && tier != lastPublishedGovTier) {
                     Log.i(TAG, "cpu governor changed outside MQTT: $lastPublishedGovTier -> $tier — syncing")
@@ -1606,7 +1621,7 @@ class MqttBridge(
     }
 
     @Synchronized
-    fun stop() {
+    fun stop(publishOffline: Boolean = true, clearDiscovery: Boolean = false) {
         if (stopped) return
         stopped = true
         authRetryGeneration++
@@ -1614,10 +1629,25 @@ class MqttBridge(
         ButtonBus.listener = null
         PanelStatus.mqttConnected = false
         zigbeeExecutor.shutdownNow()
+        if (stateConvergerOwner.isInitialized()) stateConverger.close()
         state = "disabled"
         runCatching {
-            publish(availabilityTopic, "offline", retain = true)
-            transport.disconnectDetached()
+            val finalPublications = buildList {
+                if (clearDiscovery) knownConfigTopics().forEach {
+                    add(MqttFinalPublish(it, byteArrayOf(), retain = true))
+                }
+                if (publishOffline) {
+                    add(MqttFinalPublish(availabilityTopic, "offline".toByteArray(), retain = true))
+                }
+            }
+            if (finalPublications.isNotEmpty()) {
+                transport.publishThenDisconnect(
+                    finalPublications,
+                    timeoutMs = FINAL_PUBLISH_TIMEOUT_MS,
+                )
+            } else {
+                transport.disconnectDetached()
+            }
         }
     }
 
@@ -1664,5 +1694,74 @@ class MqttBridge(
         // MQTT keepalive: PINGREQ every this-many idle seconds. Short enough to detect a dead link within
         // ~1.5× this, well under the service liveness-watchdog's stale threshold.
         private const val KEEPALIVE_SEC = 30
+        private const val FINAL_PUBLISH_TIMEOUT_MS = 2_000L
     }
 }
+
+/**
+ * The historical discovery superset is deliberately explicit: if a registry entity is later removed,
+ * its topic must remain here so an upgrade or panel-id change can still delete the old HA entity. The
+ * coverage test requires every current registry entity to be added before it can ship.
+ */
+internal fun mqttKnownConfigTopics(panel: String): Set<String> = listOf(
+    "light" to "${panel}_screen", "light" to "${panel}_led",
+    "text" to "${panel}_navigate", "text" to "${panel}_home_dashboard", "event" to "${panel}_button",
+    "button" to "${panel}_back", "button" to "${panel}_recents",
+    "number" to "${panel}_volume", "sensor" to "${panel}_illuminance",
+    "binary_sensor" to "${panel}_proximity",
+    "sensor" to "${panel}_temperature", "sensor" to "${panel}_humidity",
+    "sensor" to "${panel}_room_temp", "sensor" to "${panel}_room_humidity",
+    "light" to "${panel}_buttons", "switch" to "${panel}_wake_on_wave",
+    "switch" to "${panel}_touch_sound", "switch" to "${panel}_watchdog", "switch" to "${panel}_kiosk_lock",
+    "switch" to "${panel}_silence_boot_chime", "switch" to "${panel}_prevent_idle_dim",
+    "switch" to "${panel}_companion_auto_update", "button" to "${panel}_update_companion",
+    "select" to "${panel}_companion_update_channel",
+    "switch" to "${panel}_self_update", "select" to "${panel}_update_channel",
+    "button" to "${panel}_update_paneld",
+    "switch" to "${panel}_webview_auto_update",
+    "switch" to "${panel}_zigbee_router",
+    "switch" to "${panel}_auto_brightness", "number" to "${panel}_brightness_bias",
+    "number" to "${panel}_ambient_lux",
+    "switch" to "${panel}_relay1", "switch" to "${panel}_relay2",
+    "switch" to "${panel}_relay3", "switch" to "${panel}_relay4",
+    "light" to "${panel}_button_led1", "light" to "${panel}_button_led2",
+    "light" to "${panel}_button_led3", "light" to "${panel}_button_led4",
+    "select" to "${panel}_cpu_governor", "select" to "${panel}_navbar",
+    "switch" to "${panel}_network_adb",
+    "sensor" to "${panel}_diag_ip", "sensor" to "${panel}_diag_cpu",
+    "sensor" to "${panel}_diag_memory", "sensor" to "${panel}_diag_soc_temp",
+    "sensor" to "${panel}_diag_boot",
+    "button" to "${panel}_reload", "button" to "${panel}_reboot",
+    "button" to "${panel}_launcher", "button" to "${panel}_home",
+    "button" to "${panel}_admin_launcher",
+).mapTo(linkedSetOf()) { (comp, obj) -> "homeassistant/$comp/$obj/config" }
+
+internal data class MqttCleanupPublication(val topic: String, val payload: String, val retain: Boolean)
+
+/** Cleanup for a renamed panel is owned by the replacement connection and therefore retries with it. */
+internal fun mqttStalePanelCleanup(stalePanel: String?, currentPanel: String): List<MqttCleanupPublication> {
+    if (stalePanel == null || stalePanel == currentPanel) return emptyList()
+    return buildList {
+        mqttKnownConfigTopics(stalePanel).forEach { add(MqttCleanupPublication(it, "", retain = true)) }
+        add(MqttCleanupPublication("ha-paneld/$stalePanel/availability", "offline", retain = true))
+    }
+}
+
+/** Avoid a late offline/online race on an in-place rebuild; retire identities or old brokers explicitly. */
+internal fun mqttReconfigurePublishesOffline(
+    oldPanel: String,
+    newPanel: String,
+    oldBroker: String,
+    newBroker: String,
+): Boolean = oldPanel != newPanel || mqttBrokerIdentity(oldBroker) != mqttBrokerIdentity(newBroker)
+
+internal fun mqttBrokerIdentity(raw: String): String = BrokerEndpoint.endpoint(raw)?.let {
+    "${if (it.tls) "tls" else "tcp"}://${it.host.lowercase()}:${it.port}"
+} ?: raw.trim()
+
+internal fun mqttAcceptsCommand(stopped: Boolean, retained: Boolean): Boolean = !stopped && !retained
+
+internal fun mqttIsHaOnline(payload: ByteArray): Boolean =
+    String(payload, Charsets.UTF_8).trim().equals("online", ignoreCase = true)
+
+internal fun mqttDiscoveryRetain(payload: String): Boolean = payload.isEmpty()

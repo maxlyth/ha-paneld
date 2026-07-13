@@ -64,6 +64,38 @@ class HiveMqTransport : MqttTransport {
         old?.let { Thread({ runCatching { it.disconnect() } }, "mqtt-teardown").apply { isDaemon = true }.start() }
     }
 
+    override fun publishThenDisconnect(publications: List<MqttFinalPublish>, timeoutMs: Long) {
+        val c = client ?: return
+        val finished = java.util.concurrent.atomic.AtomicBoolean(false)
+        val detach = {
+            if (finished.compareAndSet(false, true)) {
+                if (client === c) client = null
+                Thread({ runCatching { c.disconnect() } }, "mqtt-teardown").apply { isDaemon = true }.start()
+            }
+        }
+        // HiveMQ's async API documents publish->disconnect as a composed future. Keep both the potentially
+        // blocking send admission and the timeout away from the lifecycle lane: ACK wins on a healthy link;
+        // timeout wins on a wedged one; the atomic boundary makes either ordering idempotent.
+        Thread({
+            runCatching {
+                val pending = publications.map { publication ->
+                    c.publishWith()
+                        .topic(publication.topic)
+                        .payload(publication.payload)
+                        .qos(MqttQos.AT_LEAST_ONCE)
+                        .retain(publication.retain)
+                        .send()
+                }
+                java.util.concurrent.CompletableFuture.allOf(*pending.toTypedArray())
+                    .whenComplete { _, _ -> detach() }
+            }.onFailure { detach() }
+        }, "mqtt-final-publish").apply { isDaemon = true }.start()
+        Thread({
+            try { Thread.sleep(timeoutMs) } catch (_: InterruptedException) { }
+            detach()
+        }, "mqtt-final-timeout").apply { isDaemon = true }.start()
+    }
+
     override fun publish(topic: String, payload: ByteArray, retain: Boolean, onComplete: ((Boolean) -> Unit)?) {
         val c = client ?: run { onComplete?.invoke(false); return }
         c.publishWith()
@@ -75,6 +107,9 @@ class HiveMqTransport : MqttTransport {
             // A QoS-1 publish the broker ACKs proves the link is truly alive — the liveness signal the
             // watchdog trusts over HiveMQ's self-reported connected state (which lies on a half-open socket).
             .whenComplete { _, ex ->
+                // A superseded client's future can complete after a watchdog rebuild. It must not refresh
+                // the replacement connection's liveness or complete state work owned by that connection.
+                if (client !== c) return@whenComplete
                 val success = ex == null
                 if (success) callbacks?.onPublishAck()
                 onComplete?.invoke(success)
@@ -86,7 +121,11 @@ class HiveMqTransport : MqttTransport {
         c.subscribeWith()
             .topicFilter(topicFilter)
             .qos(MqttQos.AT_LEAST_ONCE)
-            .callback { p -> onMessage(p.topic.toString(), p.payloadAsBytes, p.isRetain) }
+            .callback { p ->
+                // A watchdog rebuild can leave the old reactor alive briefly. Commands and HA-birth
+                // messages from that superseded client must not cross into the replacement generation.
+                if (client === c) onMessage(p.topic.toString(), p.payloadAsBytes, p.isRetain)
+            }
             .send()
     }
 }

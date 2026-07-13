@@ -87,6 +87,44 @@ class StateConvergerTest {
         assertEquals(listOf("ON", "OFF"), sent.map { it.payload })
     }
 
+    @Test fun connectionInvalidationRejectsOldAckAndRepublishesStableState() {
+        val sent = mutableListOf<Sent>()
+        val c = converger(sent)
+        c.register(StateConverger.Channel("screen", "screen/state", observe = {
+            StateConverger.Observation.Known("ON")
+        }))
+
+        c.reconcile("screen")
+        val oldConnection = sent.single()
+        c.markAllDirty()
+        oldConnection.done(true)
+
+        assertEquals(1, c.status().dirty)
+        assertEquals(0, c.status().successes)
+        c.reconcileAll()
+        assertEquals(listOf("ON", "ON"), sent.map { it.payload })
+        sent.last().done(true)
+        assertEquals(0, c.status().dirty)
+        assertEquals(1, c.status().successes)
+    }
+
+    @Test fun unknownObservationCannotReuseAcknowledgementFromOldConnection() {
+        var observation: StateConverger.Observation = StateConverger.Observation.Known("ON")
+        val sent = mutableListOf<Sent>()
+        val c = converger(sent)
+        c.register(StateConverger.Channel("relay", "relay/state", observe = { observation }))
+
+        c.reconcile("relay")
+        sent.single().done(true)
+        c.markAllDirty()
+        observation = StateConverger.Observation.Unknown
+        c.reconcile("relay")
+        observation = StateConverger.Observation.Known("ON")
+        c.reconcile("relay")
+
+        assertEquals(listOf("ON", "ON"), sent.map { it.payload })
+    }
+
     @Test fun unknownAndUnavailableNeverInventState() {
         val sent = mutableListOf<Sent>()
         var observation: StateConverger.Observation = StateConverger.Observation.Unknown
@@ -101,6 +139,28 @@ class StateConvergerTest {
         assertEquals(1, c.status().unknown)
     }
 
+    @Test fun unknownObservationDoesNotReleaseAnInFlightSlot() {
+        var first: StateConverger.Observation = StateConverger.Observation.Known("0")
+        val sent = mutableListOf<Sent>()
+        val c = converger(sent)
+        repeat(5) { n ->
+            c.register(StateConverger.Channel("c$n", "state/$n", observe = {
+                if (n == 0) first else StateConverger.Observation.Known(n.toString())
+            }))
+        }
+
+        c.reconcileAll()
+        assertEquals(4, sent.size)
+        first = StateConverger.Observation.Unknown
+        c.reconcile("c0")
+        c.reconcile("c4")
+
+        assertEquals(4, sent.size)
+        assertEquals(4, c.status().inFlight)
+        sent.first().done(true)
+        assertEquals(5, sent.size)
+    }
+
     @Test fun forceDoesNotDuplicateIdenticalInFlightPayload() {
         val sent = mutableListOf<Sent>()
         val c = converger(sent)
@@ -110,6 +170,24 @@ class StateConvergerTest {
         c.reconcile("screen", force = true)
         c.reconcile("screen", force = true)
         assertEquals(1, sent.size)
+    }
+
+    @Test fun closeRejectsQueuedAuditsAndLateAcknowledgements() {
+        val sent = mutableListOf<Sent>()
+        val c = converger(sent)
+        c.register(StateConverger.Channel("screen", "screen/state", observe = {
+            StateConverger.Observation.Known("ON")
+        }))
+
+        c.reconcile("screen")
+        c.close()
+        sent.single().done(true)
+        c.reconcileAll(force = true)
+
+        assertEquals(1, sent.size)
+        assertEquals(0, c.status().inFlight)
+        assertEquals(0, c.status().dirty)
+        assertEquals(0, c.status().successes)
     }
 
     @Test fun boundedOutboxPumpsAfterAcknowledgement() {
