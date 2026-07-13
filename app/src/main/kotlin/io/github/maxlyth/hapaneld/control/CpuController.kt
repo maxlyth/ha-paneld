@@ -20,8 +20,8 @@ import io.github.maxlyth.hapaneld.util.HelperClient
  * on rk3566/rk3576, interactive on PX30) — and falls back to resolving from the runtime-available list
  * when the profile has no mapping. Governors are **read** through the shared [PanelMetrics] reader (the
  * cpufreq sysfs is world-readable, so its direct→su strategy reads directly on every panel); the *write*
- * needs root — su-direct on su-reachable panels (NSPanel Pro, WF1589T), via the root daemon's `GOV`
- * command on sandbox-walled panels (TPA10, `appCanSu=false`).
+ * needs root. [DeviceProfile.appCanSu] orders the live attempts: su first on known su-reachable panels,
+ * helper first on sandbox-walled panels. A failed preferred route always falls through to the other.
  */
 class CpuController(
     private val profile: DeviceProfile = DeviceProfile.detect(),
@@ -34,19 +34,26 @@ class CpuController(
     fun governors(): List<String> =
         metrics.cpuAvailableGovernors()?.trim()?.split(Regex("\\s+"))?.filter { it.isNotEmpty() } ?: emptyList()
 
-    /** True when governors are readable — i.e. we can also set them. */
+    /** True when governors are readable. A later set can still fail if neither privileged route works. */
     fun available(): Boolean = governors().isNotEmpty()
 
     /** Current raw governor (cpu0), or null if unreadable. */
     private fun gov(): String? = metrics.cpuGovernor()?.trim()?.takeIf { it.isNotEmpty() }
 
-    /** Apply [g] to every core. Returns true if the write ran. */
+    /** Apply [g] to every core. Returns true only when one live route reports success. */
     private fun set(g: String): Boolean {
         // Governor names are lowercase letters (+ digits in a few BSPs) — sanitise to keep the write safe.
         if (!g.matches(Regex("[a-z0-9_]+"))) return false
-        return if (profile.appCanSu)
-            root.run("for f in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do echo $g > \$f; done")
-        else daemon.send("GOV $g") == "OK"
+        val su = EffectAttempt(PrivilegeRoute.SU) {
+            root.run(
+                "found=0; failed=0; for f in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; " +
+                    "do found=1; { echo $g > \"\$f\"; } 2>/dev/null || failed=1; done; " +
+                    "[ \"\$found\" -eq 1 ] && [ \"\$failed\" -eq 0 ]"
+            )
+        }
+        val helper = EffectAttempt(PrivilegeRoute.DAEMON) { daemon.send("GOV $g") == "OK" }
+        val attempts = if (profile.appCanSu) arrayOf(su, helper) else arrayOf(helper, su)
+        return ShortOperationRouter.effect(*attempts) != null
     }
 
     /** Resolve a friendly [tier] to a kernel governor: profile default if the SoC offers it, else from
@@ -62,7 +69,7 @@ class CpuController(
         } ?: avail.firstOrNull()
     }
 
-    /** Apply the governor for a friendly [tier]. Returns true if the write ran. */
+    /** Apply the governor for a friendly [tier]. Returns true when one privileged route succeeds. */
     fun setTier(tier: String): Boolean = govFor(tier)?.let { set(it) } ?: false
 
     /** The current tier, reverse-mapped from the live governor (any dynamic governor reads as Auto). */

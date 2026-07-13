@@ -9,42 +9,53 @@ import org.junit.Test
 
 /**
  * CpuController's pure logic — governor parsing, tier reverse-mapping, and tier→governor resolution.
- * Governors are now READ through the shared [PanelMetrics] reader (fed a [FakeMetricSource]); the *write*
- * still goes through the [RootShell] seam, so writes are asserted via `root.ran`. No device, no su.
+ * Governors are read through the shared [PanelMetrics] reader (fed a [FakeMetricSource]); writes are
+ * asserted through fake su/helper routes. No device, root command, or helper socket is used.
  */
 class CpuControllerTest {
+
+    private data class Harness(
+        val cpu: CpuController,
+        val root: FakeRootShell,
+        val daemon: FakeDaemon,
+    )
 
     private fun controller(
         avail: String? = null,
         gov: String? = null,
         cpuGovernors: Map<String, String>? = null,
-    ): Pair<CpuController, FakeRootShell> {
-        val root = FakeRootShell()   // records writes
+        appCanSu: Boolean = true,
+        suResult: Boolean = true,
+        daemonReplies: Map<String, String> = emptyMap(),
+    ): Harness {
+        val root = FakeRootShell(runResult = suResult)
+        val daemon = FakeDaemon(replies = daemonReplies)
         val metrics = PanelMetrics(FakeMetricSource(governor = gov, availableGovernors = avail))
-        return CpuController(fakeProfile(appCanSu = true, cpuGovernors = cpuGovernors), root, FakeDaemon(available = false), metrics) to root
+        return Harness(CpuController(fakeProfile(appCanSu = appCanSu, cpuGovernors = cpuGovernors), root, daemon, metrics), root, daemon)
     }
 
     @Test fun governorsParsesTheAvailableList() {
-        val (cpu, _) = controller(avail = "powersave performance schedutil\n")
-        assertEquals(listOf("powersave", "performance", "schedutil"), cpu.governors())
-        assertTrue(cpu.available())
+        val h = controller(avail = "powersave performance schedutil\n")
+        assertEquals(listOf("powersave", "performance", "schedutil"), h.cpu.governors())
+        assertTrue(h.cpu.available())
     }
 
     @Test fun currentTierReverseMapsGovernors() {
-        assertEquals(CpuController.PERFORMANCE, controller(gov = "performance").first.currentTier())
-        assertEquals(CpuController.EFFICIENCY, controller(gov = "powersave").first.currentTier())
+        assertEquals(CpuController.PERFORMANCE, controller(gov = "performance").cpu.currentTier())
+        assertEquals(CpuController.EFFICIENCY, controller(gov = "powersave").cpu.currentTier())
         // any dynamic governor reads back as Auto
-        assertEquals(CpuController.AUTO, controller(gov = "schedutil").first.currentTier())
+        assertEquals(CpuController.AUTO, controller(gov = "schedutil").cpu.currentTier())
     }
 
     @Test fun currentTierNullWhenUnreadable() {
-        assertNull(controller().first.currentTier())
+        assertNull(controller().cpu.currentTier())
     }
 
     @Test fun setTierResolvesAutoToADynamicGovernorAndWritesIt() {
-        val (cpu, root) = controller(avail = "powersave performance schedutil")
-        assertTrue(cpu.setTier(CpuController.AUTO))
-        assertTrue("expected a schedutil write, got ${root.ran}", root.ran.any { it.contains("echo schedutil") })
+        val h = controller(avail = "powersave performance schedutil")
+        assertTrue(h.cpu.setTier(CpuController.AUTO))
+        assertTrue("expected a schedutil write, got ${h.root.ran}", h.root.ran.any { it.contains("echo schedutil") })
+        assertTrue("su success short-circuits helper", h.daemon.sent.isEmpty())
     }
 
     @Test fun setTierPerformancePicksThePerformanceGovernor() {
@@ -64,7 +75,70 @@ class CpuControllerTest {
     }
 
     @Test fun setTierFalseWhenNoGovernorsAvailable() {
-        val (cpu, _) = controller()
-        assertFalse(cpu.setTier(CpuController.AUTO))
+        val h = controller()
+        assertFalse(h.cpu.setTier(CpuController.AUTO))
+    }
+
+    @Test fun suPreferredProfileFallsThroughToHelper() {
+        val h = controller(
+            avail = "performance",
+            appCanSu = true,
+            suResult = false,
+            daemonReplies = mapOf("GOV performance" to "OK"),
+        )
+        assertTrue(h.cpu.setTier(CpuController.PERFORMANCE))
+        assertTrue("preferred su attempted", h.root.ran.isNotEmpty())
+        assertEquals(listOf("GOV performance"), h.daemon.sent)
+    }
+
+    @Test fun helperPreferredProfileShortCircuitsSuOnSuccess() {
+        val h = controller(
+            avail = "performance",
+            appCanSu = false,
+            daemonReplies = mapOf("GOV performance" to "OK"),
+        )
+        assertTrue(h.cpu.setTier(CpuController.PERFORMANCE))
+        assertEquals(listOf("GOV performance"), h.daemon.sent)
+        assertTrue("helper success suppresses su", h.root.ran.isEmpty())
+    }
+
+    @Test fun helperPreferredProfileFallsThroughToSu() {
+        val h = controller(
+            avail = "performance",
+            appCanSu = false,
+            daemonReplies = mapOf("GOV performance" to "ERR"),
+        )
+        assertTrue(h.cpu.setTier(CpuController.PERFORMANCE))
+        assertEquals(listOf("GOV performance"), h.daemon.sent)
+        assertTrue("stale helper falls through to su", h.root.ran.isNotEmpty())
+    }
+
+    @Test fun setTierFailsAfterBothRoutesFail() {
+        val h = controller(
+            avail = "performance",
+            appCanSu = false,
+            suResult = false,
+            daemonReplies = mapOf("GOV performance" to "ERR"),
+        )
+        assertFalse(h.cpu.setTier(CpuController.PERFORMANCE))
+        assertEquals(listOf("GOV performance"), h.daemon.sent)
+        assertTrue(h.root.ran.isNotEmpty())
+    }
+
+    @Test fun rootWriteRequiresEveryGovernorNode() {
+        val h = controller(avail = "performance")
+        assertTrue(h.cpu.setTier(CpuController.PERFORMANCE))
+        val cmd = h.root.ran.single()
+        assertTrue(cmd.contains("failed=0"))
+        assertTrue(cmd.contains("|| failed=1"))
+        assertTrue(cmd.contains("[ \"\$found\" -eq 1 ]"))
+        assertTrue(cmd.contains("[ \"\$failed\" -eq 0 ]"))
+    }
+
+    @Test fun invalidRuntimeGovernorNeverCrossesPrivilegeBoundary() {
+        val h = controller(avail = "performance;reboot")
+        assertFalse(h.cpu.setTier(CpuController.AUTO))
+        assertTrue(h.root.ran.isEmpty())
+        assertTrue(h.daemon.sent.isEmpty())
     }
 }
