@@ -34,6 +34,7 @@ import io.github.maxlyth.hapaneld.util.HelperClient
 import io.github.maxlyth.hapaneld.util.InstallProgress
 import io.github.maxlyth.hapaneld.util.Json
 import io.github.maxlyth.hapaneld.util.ReleaseCatalog
+import io.github.maxlyth.hapaneld.util.RendererPreparationCoordinator
 import io.github.maxlyth.hapaneld.util.SelfUpdater
 import io.github.maxlyth.hapaneld.util.UpdateChecker
 import io.ktor.http.ContentType
@@ -130,6 +131,9 @@ class PaneldServer(
     // LAN ha-paneld peers discovered over mDNS — powers the header panel switcher. Injected by the service
     // (captures the live MdnsAdvertiser field). Blocking browse; called only through [peersCache] off-thread.
     private val peers: () -> List<io.github.maxlyth.hapaneld.Peer> = { emptyList() },
+    // Shared with the service startup path: serializes renderer config commit → atomic Companion borrow →
+    // launch, and retries an interrupted built-in switch from its durable blank-URL state.
+    private val rendererPreparation: RendererPreparationCoordinator,
 ) {
     // Per-INSTALL build token (changes on every (re)install, not just a version bump) so an open info
     // page can auto-reload after the app is updated — even a same-version dev re-spin. /health carries it.
@@ -1930,156 +1934,166 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
         var relaunchForOverscroll = false
         var reloadForZoom = false
         var tameDelta = TameDelta.NONE
-        val previous = ConfigBundle.fromValues(
-            currentValues(), kind = ConfigBundle.KIND_REVISION,
-            exportedAt = System.currentTimeMillis().toString(), exportedBy = config.panelId,
-        )
-        val committed = config.applyBatch {
-            panelId?.let { config.setPanelId(it) }
-            p["friendly_name"]?.let { config.setFriendlyName(it.trim()) }
-            val prevDash = config.dashboardPackage
-            p["dashboard_package"]?.let { config.setDashboardPackage(it.trim()) }
-            val dashChanged = p["dashboard_package"]?.trim()?.let { it != prevDash } == true
-            p["launcher_package"]?.let { config.setLauncherPackage(it.trim()) }
-            p["tame_vendor_packages"]?.let { raw ->
-                val next = raw.split(Regex("[\\s,]+")).map { it.trim() }
-                    .filter { it.isNotEmpty() && !TameController.isCritical(it) }.toSet()
-                tameDelta = TameDelta.between(config.tameVendorPackages.toSet(), next)
-                if (!tameDelta.isEmpty) config.setTameVendorPackages(next.joinToString(" "))
-            }
-            p["http_allowed_hosts"]?.let { config.setHttpAllowedHosts(it) }
-            p["silence_boot_chime"]?.let { config.setSilenceBootChime(it.trim().equals("true", ignoreCase = true) || it.trim() == "1") }
-            // Keep-awake (partial wakelock so SoC/network never suspend). Applied live by reconfigure().
-            p["keep_awake"]?.let { config.setKeepAwake(it.trim().equals("true", ignoreCase = true) || it.trim() == "1") }
-            // Room-temperature calibration trim (°C) — a plain local pref with no MQTT command, so it
-            // persists here rather than through HTTP_LIVE_KEYS/applySetting (the command path).
-            p["room_temp_offset"]?.let { config.setRoomTempOffset(it) }
-            // Built-in-renderer local prefs (no MQTT entity → bespoke persist, like room_temp_offset).
-            // dashboard_idle_return_min previously had NO persist path at all — the Configure field
-            // rendered but silently never saved (found wiring dashboard_fullscreen, issue #25/#24 pass).
-            p["dashboard_idle_return_min"]?.trim()?.toIntOrNull()?.let { config.setDashboardIdleReturnMin(it.coerceIn(0, 1440)) }
-            // Live-apply a fullscreen toggle: a bare foreground relaunch of the running renderer re-runs
-            // onResume → applyFullscreen with the new value, without touching the page (no reload flag).
-            // Detected from the POSTED value — config read-back inside the batch is pre-commit.
-            val prevFullscreen = config.dashboardFullscreen
-            val postedFullscreen = p["dashboard_fullscreen"]?.let { it.trim().equals("true", ignoreCase = true) || it.trim() == "1" }
-            postedFullscreen?.let { config.setDashboardFullscreen(it) }
-            relaunchForFullscreen = postedFullscreen != null && postedFullscreen != prevFullscreen && !dashChanged
-            // Overscroll stretch/glow (hidden, API-only). Same live-apply as fullscreen: a foreground
-            // relaunch re-runs onResume → applyOverscroll. Detected from the POSTED value (read-back
-            // inside applyBatch is pre-commit).
-            val prevOverscroll = config.dashboardOverscroll
-            val postedOverscroll = p["dashboard_overscroll"]?.let { it.trim().equals("true", ignoreCase = true) || it.trim() == "1" }
-            postedOverscroll?.let { config.setDashboardOverscroll(it) }
-            relaunchForOverscroll = postedOverscroll != null && postedOverscroll != prevOverscroll && !dashChanged
-            // Page zoom (%). A fresh load is where setInitialScale reliably takes effect, so on a change
-            // we reload the renderer rather than just re-foregrounding it. Detected from the POSTED value.
-            val prevZoom = config.dashboardZoom
-            val postedZoom = p["dashboard_zoom"]?.trim()?.toIntOrNull()?.coerceIn(50, 300)
-            postedZoom?.let { config.setDashboardZoom(it) }
-            reloadForZoom = postedZoom != null && postedZoom != prevZoom && !dashChanged
-            // Dark mode (Display card; only meaningful on panels WITHOUT a system dark-mode setting,
-            // Android 9-). Detected from the POSTED value (read-back inside the batch is pre-commit —
-            // this exact bug made the toggle a silent no-op); executed after the batch commits.
-            val prevDark = config.darkMode
-            val postedDark = p["dark_mode"]?.let { it.trim().equals("true", ignoreCase = true) || it.trim() == "1" }
-            postedDark?.let { config.setDarkMode(it) }
-            if (postedDark != null && postedDark != prevDark && android.os.Build.VERSION.SDK_INT < 29) applyDark = postedDark
-            val logEnabled = p["log_ship_enabled"]?.let { it.trim().equals("true", ignoreCase = true) || it.trim() == "1" }
-            val logHost = p["log_ship_host"]?.trim()
-            val logPort = p["log_ship_port"]?.trim()?.toIntOrNull()
-            val logProto = p["log_ship_protocol"]?.trim()
-            if (logEnabled != null || logHost != null || logPort != null || logProto != null) {
-                config.setLogShipping(
-                    logEnabled ?: config.logShipEnabled,
-                    logHost ?: config.logShipHost,
-                    logPort ?: config.logShipPort,
-                    logProto ?: config.logShipProtocol,
+        var rendererFailure: Throwable? = null
+        val committed = withContext(Dispatchers.IO) {
+            rendererPreparation.transaction {
+                val previous = ConfigBundle.fromValues(
+                    currentValues(), kind = ConfigBundle.KIND_REVISION,
+                    exportedAt = System.currentTimeMillis().toString(), exportedBy = config.panelId,
                 )
-            }
-            val mfr = p["manufacturer"]?.trim()
-            val mdl = p["model"]?.trim()
-            if (mfr != null || mdl != null) config.setHardware(
-                (mfr ?: config.manufacturer).ifEmpty { "ha-paneld" },
-                (mdl ?: config.model).ifEmpty { "panel agent" },
-            )
-            val broker = p["mqtt_broker"]?.trim()
-            val user = p["mqtt_user"]?.trim()
-            // Blank password keeps the current one; clearing the username clears the password too.
-            val pw = if (user != null && user.isEmpty()) "" else p["mqtt_password"]?.takeIf { it.isNotEmpty() }
-            if (broker != null || user != null || pw != null) config.setMqtt(
-                broker ?: config.mqttBroker, user ?: config.mqttUser, pw,
-            )
-            // Built-in renderer connection — same semantics: blank token keeps the current one;
-            // clearing the URL clears the token too (no orphaned HA credential on the panel).
-            val prevHaUrl = config.haUrl
-            val prevHaToken = config.haToken
-            val prevHaRefresh = config.haRefreshToken
-            val haUrl = p["ha_url"]?.trim()
-            val haToken = if (haUrl != null && haUrl.isEmpty()) "" else p["ha_token"]?.takeIf { it.isNotEmpty() }
-            if (haUrl != null || haToken != null) config.setHaConnection(
-                haUrl ?: config.haUrl, haToken,
-            )
-            // Refresh token (+ optional access-token expiry) from a provisioning login. Blank keeps the
-            // current; clearing the URL clears it too. When set with an access token + expiry, persist
-            // the whole session so the renderer's lazy refresh has a valid starting point.
-            val clearingHa = haUrl != null && haUrl.isEmpty()
-            val haRefresh = if (clearingHa) "" else p["ha_refresh_token"]?.takeIf { it.isNotEmpty() }
-            haRefresh?.let { config.setHaRefreshToken(it) }
-            p["ha_token_expiry"]?.trim()?.toLongOrNull()?.let { config.setHaTokenExpiry(it) }
-            p["ha_client_id"]?.trim()?.let { config.setHaClientId(if (clearingHa) "" else it) }
-            if (clearingHa) config.setHaRefreshToken("")
-            // A NEW access token (with no new refresh token beside it) is an explicit re-credential:
-            // drop the stored refresh token + expiry so the renderer actually uses it. Without this a
-            // revoked refresh token could never be cleared from the form ("blank keeps current") and
-            // DashboardAuth would keep preferring the dead refresh model — the auth latch's own "set a
-            // new access token" fix instructions wouldn't work.
-            val refreshCleared = haToken != null && haToken.isNotEmpty() && haRefresh == null && prevHaRefresh.isNotEmpty()
-            if (refreshCleared) { config.setHaRefreshToken(""); config.setHaTokenExpiry(0L) }
-            // A CHANGED built-in-renderer credential/URL takes effect immediately: reloadDashboard is
-            // the privileged-first relaunch (a plain startActivity from a service context is silently
-            // blocked by Android 10+ background-activity-launch rules), flags reload-intent for
-            // onNewIntent, and clears the crash latch — the "fix the token on Configure" path the
-            // latch's on-panel message points at. Change-gated, not presence-gated: the form posts
-            // every key on every save, and relaunching on presence would reload the dashboard on every
-            // unrelated settings save.
-            val haChanged = (haUrl != null && haUrl != prevHaUrl) ||
-                (haToken != null && haToken != prevHaToken) ||
-                (haRefresh != null && haRefresh != prevHaRefresh) || refreshCleared
-            relaunchForHa = haChanged
-            // Live-apply a renderer switch: re-anchor HOME to the new renderer and bring it up now —
-            // previously changing "Dashboard app" did nothing until the next boot. Off-thread (su/daemon).
-            // The kiosk/watchdog loops read dashboard_package per tick, so they retarget on their own.
-            relaunchForDash = dashChanged
+                val saved = config.applyBatch {
+                    panelId?.let { config.setPanelId(it) }
+                    p["friendly_name"]?.let { config.setFriendlyName(it.trim()) }
+                    val prevDash = config.dashboardPackage
+                    p["dashboard_package"]?.let { config.setDashboardPackage(it.trim()) }
+                    val dashChanged = p["dashboard_package"]?.trim()?.let { it != prevDash } == true
+                    p["launcher_package"]?.let { config.setLauncherPackage(it.trim()) }
+                    p["tame_vendor_packages"]?.let { raw ->
+                        val next = raw.split(Regex("[\\s,]+")).map { it.trim() }
+                            .filter { it.isNotEmpty() && !TameController.isCritical(it) }.toSet()
+                        tameDelta = TameDelta.between(config.tameVendorPackages.toSet(), next)
+                        if (!tameDelta.isEmpty) config.setTameVendorPackages(next.joinToString(" "))
+                    }
+                    p["http_allowed_hosts"]?.let { config.setHttpAllowedHosts(it) }
+                    p["silence_boot_chime"]?.let { config.setSilenceBootChime(it.trim().equals("true", ignoreCase = true) || it.trim() == "1") }
+                    // Keep-awake (partial wakelock so SoC/network never suspend). Applied live by reconfigure().
+                    p["keep_awake"]?.let { config.setKeepAwake(it.trim().equals("true", ignoreCase = true) || it.trim() == "1") }
+                    // Room-temperature calibration trim (°C) — a plain local pref with no MQTT command, so it
+                    // persists here rather than through HTTP_LIVE_KEYS/applySetting (the command path).
+                    p["room_temp_offset"]?.let { config.setRoomTempOffset(it) }
+                    // Built-in-renderer local prefs (no MQTT entity → bespoke persist, like room_temp_offset).
+                    // dashboard_idle_return_min previously had NO persist path at all — the Configure field
+                    // rendered but silently never saved (found wiring dashboard_fullscreen, issue #25/#24 pass).
+                    p["dashboard_idle_return_min"]?.trim()?.toIntOrNull()?.let { config.setDashboardIdleReturnMin(it.coerceIn(0, 1440)) }
+                    // Live-apply a fullscreen toggle: a bare foreground relaunch of the running renderer re-runs
+                    // onResume → applyFullscreen with the new value, without touching the page (no reload flag).
+                    // Detected from the POSTED value — config read-back inside the batch is pre-commit.
+                    val prevFullscreen = config.dashboardFullscreen
+                    val postedFullscreen = p["dashboard_fullscreen"]?.let { it.trim().equals("true", ignoreCase = true) || it.trim() == "1" }
+                    postedFullscreen?.let { config.setDashboardFullscreen(it) }
+                    relaunchForFullscreen = postedFullscreen != null && postedFullscreen != prevFullscreen && !dashChanged
+                    // Overscroll stretch/glow (hidden, API-only). Same live-apply as fullscreen: a foreground
+                    // relaunch re-runs onResume → applyOverscroll. Detected from the POSTED value (read-back
+                    // inside applyBatch is pre-commit).
+                    val prevOverscroll = config.dashboardOverscroll
+                    val postedOverscroll = p["dashboard_overscroll"]?.let { it.trim().equals("true", ignoreCase = true) || it.trim() == "1" }
+                    postedOverscroll?.let { config.setDashboardOverscroll(it) }
+                    relaunchForOverscroll = postedOverscroll != null && postedOverscroll != prevOverscroll && !dashChanged
+                    // Page zoom (%). A fresh load is where setInitialScale reliably takes effect, so on a change
+                    // we reload the renderer rather than just re-foregrounding it. Detected from the POSTED value.
+                    val prevZoom = config.dashboardZoom
+                    val postedZoom = p["dashboard_zoom"]?.trim()?.toIntOrNull()?.coerceIn(50, 300)
+                    postedZoom?.let { config.setDashboardZoom(it) }
+                    reloadForZoom = postedZoom != null && postedZoom != prevZoom && !dashChanged
+                    // Dark mode (Display card; only meaningful on panels WITHOUT a system dark-mode setting,
+                    // Android 9-). Detected from the POSTED value (read-back inside the batch is pre-commit —
+                    // this exact bug made the toggle a silent no-op); executed after the batch commits.
+                    val prevDark = config.darkMode
+                    val postedDark = p["dark_mode"]?.let { it.trim().equals("true", ignoreCase = true) || it.trim() == "1" }
+                    postedDark?.let { config.setDarkMode(it) }
+                    if (postedDark != null && postedDark != prevDark && android.os.Build.VERSION.SDK_INT < 29) applyDark = postedDark
+                    val logEnabled = p["log_ship_enabled"]?.let { it.trim().equals("true", ignoreCase = true) || it.trim() == "1" }
+                    val logHost = p["log_ship_host"]?.trim()
+                    val logPort = p["log_ship_port"]?.trim()?.toIntOrNull()
+                    val logProto = p["log_ship_protocol"]?.trim()
+                    if (logEnabled != null || logHost != null || logPort != null || logProto != null) {
+                        config.setLogShipping(
+                            logEnabled ?: config.logShipEnabled,
+                            logHost ?: config.logShipHost,
+                            logPort ?: config.logShipPort,
+                            logProto ?: config.logShipProtocol,
+                        )
+                    }
+                    val mfr = p["manufacturer"]?.trim()
+                    val mdl = p["model"]?.trim()
+                    if (mfr != null || mdl != null) config.setHardware(
+                        (mfr ?: config.manufacturer).ifEmpty { "ha-paneld" },
+                        (mdl ?: config.model).ifEmpty { "panel agent" },
+                    )
+                    val broker = p["mqtt_broker"]?.trim()
+                    val user = p["mqtt_user"]?.trim()
+                    // Blank password keeps the current one; clearing the username clears the password too.
+                    val pw = if (user != null && user.isEmpty()) "" else p["mqtt_password"]?.takeIf { it.isNotEmpty() }
+                    if (broker != null || user != null || pw != null) config.setMqtt(
+                        broker ?: config.mqttBroker, user ?: config.mqttUser, pw,
+                    )
+                    // Built-in renderer connection — same semantics: blank token keeps the current one;
+                    // clearing the URL clears the token too (no orphaned HA credential on the panel).
+                    val prevHaUrl = config.haUrl
+                    val prevHaToken = config.haToken
+                    val prevHaRefresh = config.haRefreshToken
+                    val haUrl = p["ha_url"]?.trim()
+                    val haToken = if (haUrl != null && haUrl.isEmpty()) "" else p["ha_token"]?.takeIf { it.isNotEmpty() }
+                    if (haUrl != null || haToken != null) config.setHaConnection(
+                        haUrl ?: config.haUrl, haToken,
+                    )
+                    // Refresh token (+ optional access-token expiry) from a provisioning login. Blank keeps the
+                    // current; clearing the URL clears it too. When set with an access token + expiry, persist
+                    // the whole session so the renderer's lazy refresh has a valid starting point.
+                    val clearingHa = haUrl != null && haUrl.isEmpty()
+                    val haRefresh = if (clearingHa) "" else p["ha_refresh_token"]?.takeIf { it.isNotEmpty() }
+                    haRefresh?.let { config.setHaRefreshToken(it) }
+                    p["ha_token_expiry"]?.trim()?.toLongOrNull()?.let { config.setHaTokenExpiry(it) }
+                    p["ha_client_id"]?.trim()?.let { config.setHaClientId(if (clearingHa) "" else it) }
+                    if (clearingHa) config.setHaRefreshToken("")
+                    // A NEW access token (with no new refresh token beside it) is an explicit re-credential:
+                    // drop the stored refresh token + expiry so the renderer actually uses it. Without this a
+                    // revoked refresh token could never be cleared from the form ("blank keeps current") and
+                    // DashboardAuth would keep preferring the dead refresh model — the auth latch's own "set a
+                    // new access token" fix instructions wouldn't work.
+                    val refreshCleared = haToken != null && haToken.isNotEmpty() && haRefresh == null && prevHaRefresh.isNotEmpty()
+                    if (refreshCleared) { config.setHaRefreshToken(""); config.setHaTokenExpiry(0L) }
+                    // A CHANGED built-in-renderer credential/URL takes effect immediately: reloadDashboard is
+                    // the privileged-first relaunch (a plain startActivity from a service context is silently
+                    // blocked by Android 10+ background-activity-launch rules), flags reload-intent for
+                    // onNewIntent, and clears the crash latch — the "fix the token on Configure" path the
+                    // latch's on-panel message points at. Change-gated, not presence-gated: the form posts
+                    // every key on every save, and relaunching on presence would reload the dashboard on every
+                    // unrelated settings save.
+                    val haChanged = (haUrl != null && haUrl != prevHaUrl) ||
+                        (haToken != null && haToken != prevHaToken) ||
+                        (haRefresh != null && haRefresh != prevHaRefresh) || refreshCleared
+                    relaunchForHa = haChanged
+                    // Live-apply a renderer switch: re-anchor HOME to the new renderer and bring it up now —
+                    // previously changing "Dashboard app" did nothing until the next boot. Off-thread (su/daemon).
+                    // The kiosk/watchdog loops read dashboard_package per tick, so they retarget on their own.
+                    relaunchForDash = dashChanged
 
-            // Per-row "expose to HA" toggles (ha_expose_<key>=true|false) — take effect on the reconfigure.
-            for (name in p.names()) {
-                if (name.startsWith("ha_expose_")) {
-                    SettingValue.parseBool(p[name].orEmpty())?.let {
-                        config.setHaExposed(name.removePrefix("ha_expose_"), it)
+                    // Per-row "expose to HA" toggles (ha_expose_<key>=true|false) — take effect on the reconfigure.
+                    for (name in p.names()) {
+                        if (name.startsWith("ha_expose_")) {
+                            SettingValue.parseBool(p[name].orEmpty())?.let {
+                                config.setHaExposed(name.removePrefix("ha_expose_"), it)
+                            }
+                        }
                     }
                 }
+                if (saved) {
+                    revisions.snapshot(previous)
+                    runCatching {
+                        applyRendererEffects(
+                            RendererConfigEffects.coalesce(
+                                dashboardChanged = relaunchForDash,
+                                credentialChanged = relaunchForHa,
+                                zoomChanged = reloadForZoom,
+                                fullscreenChanged = relaunchForFullscreen,
+                                overscrollChanged = relaunchForOverscroll,
+                                darkMode = applyDark,
+                            ),
+                        )
+                    }.onFailure { rendererFailure = it }
+                }
+                saved
             }
         }
         if (!committed) {
             call.respondText("configuration commit failed\n", status = HttpStatusCode.InternalServerError)
             return
         }
-        revisions.snapshot(previous)
         if (!tameDelta.isEmpty) scope.launch {
             tameDelta.add.forEach { tame.tame(it) }
             tameDelta.remove.forEach { tame.untame(it) }
         }
-        applyRendererEffects(
-            RendererConfigEffects.coalesce(
-                dashboardChanged = relaunchForDash,
-                credentialChanged = relaunchForHa,
-                zoomChanged = reloadForZoom,
-                fullscreenChanged = relaunchForFullscreen,
-                overscrollChanged = relaunchForOverscroll,
-                darkMode = applyDark,
-            ),
-        )
         // Formerly MQTT-only behaviour settings — applied through the bridge's command path so HTTP
         // and HA behave identically. Registry-validated where the key is registered; invalid skipped.
         for (key in HTTP_LIVE_KEYS) {
@@ -2097,6 +2111,15 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
         }
         snapInvalidate()
         onReconfigure()
+        rendererFailure?.let {
+            Log.e(TAG, "configuration committed but renderer preparation failed", it)
+            call.respondText(
+                "settings saved; renderer preparation failed and remains retryable on service restart\n",
+                ContentType.Text.Plain,
+                HttpStatusCode.InternalServerError,
+            )
+            return
+        }
         if (call.request.headers["Accept"]?.contains("application/json") == true) {
             call.respondText(configJson(), ContentType.Application.Json)
         } else {
@@ -2287,28 +2310,39 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
      *  preference fields → run live controller/hardware persistence and side-effects → reconfigure.
      *  External state cannot be rolled back and only starts after a successful preference commit.
      *  Returns false without starting side-effects when the preference commit fails. */
-    private fun applyAccepted(accepted: Map<String, String>): Boolean {
-        val previous = ConfigBundle.fromValues(
-            currentValues(), kind = ConfigBundle.KIND_REVISION,
-            exportedAt = System.currentTimeMillis().toString(), exportedBy = config.panelId,
-        )
-        val editor = config.editor()
-        val live = ArrayList<Pair<String, String>>()
-        for ((key, value) in accepted) {
-            when {
-                key == "panel_id" -> config.stagePanelId(editor, value)
-                key in HTTP_LIVE_KEYS -> live.add(key to value)
-                else -> SettingsRegistry.spec(key)?.let { config.stage(editor, it, value) }
+    private suspend fun applyAccepted(
+        accepted: Map<String, String>,
+        afterCommitBeforeRenderer: (RendererConfigEffects) -> Unit = {},
+    ): Boolean = withContext(Dispatchers.IO) {
+        rendererPreparation.transaction {
+            val previous = ConfigBundle.fromValues(
+                currentValues(), kind = ConfigBundle.KIND_REVISION,
+                exportedAt = System.currentTimeMillis().toString(), exportedBy = config.panelId,
+            )
+            val editor = config.editor()
+            val live = ArrayList<Pair<String, String>>()
+            for ((key, value) in accepted) {
+                when {
+                    key == "panel_id" -> config.stagePanelId(editor, value)
+                    key in HTTP_LIVE_KEYS -> live.add(key to value)
+                    else -> SettingsRegistry.spec(key)?.let { config.stage(editor, it, value) }
+                }
             }
+            config.stageImportDependencies(editor, accepted)
+            if (!editor.commit()) return@transaction false
+            revisions.snapshot(previous)
+            val effects = RendererConfigEffects.between(previous.values, accepted)
+            var rendererFailure: Throwable? = null
+            runCatching {
+                afterCommitBeforeRenderer(effects)
+                applyRendererEffects(effects)
+            }.onFailure { rendererFailure = it }
+            for ((k, v) in live) applySetting(k, v)
+            snapInvalidate()
+            onReconfigure()
+            rendererFailure?.let { throw it }
+            true
         }
-        config.stageImportDependencies(editor, accepted)
-        if (!editor.commit()) return false
-        revisions.snapshot(previous)
-        applyRendererEffects(RendererConfigEffects.between(previous.values, accepted))
-        for ((k, v) in live) applySetting(k, v)
-        snapInvalidate()
-        onReconfigure()
-        return true
     }
 
     /** Apply renderer changes only after their preferences commit. A dashboard switch dominates all
@@ -2324,31 +2358,33 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             }
         }
         when {
-            effects.dashboardChanged -> scope.launch {
-                runCatching {
-                    // Switching TO the built-in renderer with no connection configured: borrow the
-                    // Companion's sign-in and page zoom so the picker change is immediately usable.
-                    if (config.dashboardPackage == SystemController.BUILTIN_DASHBOARD && config.haUrl.isBlank()) {
-                        CompanionDb.readLogin(appContext, Su)?.let { l ->
-                            config.setHaConnection(l.url, l.accessToken.takeIf { it.isNotBlank() })
-                            config.setHaRefreshToken(l.refreshToken)
-                            if (l.expirySec > 0) config.setHaTokenExpiry(l.expirySec)
-                            config.setHaClientId(CompanionDb.COMPANION_CLIENT_ID)
-                            Log.i(TAG, "borrowed the Companion sign-in for the built-in renderer (${l.url})")
-                        }
-                        CompanionDb.readPageZoom(appContext, Su)?.let { z ->
-                            config.setDashboardZoom(z.coerceIn(50, 300))
-                            Log.i(TAG, "carried over the Companion page zoom ($z%) to dashboard_zoom")
-                        }
-                    }
-                    system.ensureDashboardHome(config.dashboardPackage, config.haUrl.isNotBlank())
-                    system.launchHome(config.dashboardPackage)
-                }
+            effects.dashboardChanged -> {
+                val result = rendererPreparation.launchConfigured(
+                    ensureHome = { pkg, ready -> system.ensureDashboardHome(pkg, ready) },
+                    launchHome = { pkg -> system.launchHome(pkg) },
+                )
+                requireRendererResult(result)
+                Log.i(TAG, "renderer switch completed (preparation=$result)")
             }
-            effects.reloadBuiltin && config.dashboardPackage == SystemController.BUILTIN_DASHBOARD ->
-                scope.launch { runCatching { system.reloadDashboard(SystemController.BUILTIN_DASHBOARD) } }
-            effects.relaunchBuiltin && config.dashboardPackage == SystemController.BUILTIN_DASHBOARD ->
-                scope.launch { runCatching { system.launchHome(SystemController.BUILTIN_DASHBOARD) } }
+            effects.reloadBuiltin && config.dashboardPackage == SystemController.BUILTIN_DASHBOARD -> {
+                val result = rendererPreparation.prepareIfNeeded()
+                requireRendererResult(result)
+                system.reloadDashboard(SystemController.BUILTIN_DASHBOARD)
+            }
+            effects.relaunchBuiltin && config.dashboardPackage == SystemController.BUILTIN_DASHBOARD -> {
+                val result = rendererPreparation.prepareIfNeeded()
+                requireRendererResult(result)
+                system.launchHome(SystemController.BUILTIN_DASHBOARD)
+            }
+        }
+    }
+
+    private fun requireRendererResult(result: RendererPreparationCoordinator.Result) {
+        check(result != RendererPreparationCoordinator.Result.PERSIST_FAILED) {
+            "built-in renderer preparation did not commit"
+        }
+        check(result != RendererPreparationCoordinator.Result.CLOSED) {
+            "renderer lifecycle is stopping"
         }
     }
 
@@ -2429,8 +2465,19 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             """{"status":"busy"}""", ContentType.Application.Json)
         val job = scope.launch {
             val r = runCatching {
-                val n = if (cfgObj != null) applyRestoreConfig(cfgObj) else 0
-                val c = if (comp != null) restoreCompanion(comp) else "no companion in bundle"
+                var c = "no companion in bundle"
+                val n = if (cfgObj != null) {
+                    applyRestoreConfig(cfgObj) { effects ->
+                        c = if (comp != null) restoreCompanion(comp) else c
+                        reconcileAfterCompanionRestore(effects)
+                    }
+                } else {
+                    rendererPreparation.transaction {
+                        c = if (comp != null) restoreCompanion(comp) else c
+                        reconcileAfterCompanionRestore(null)
+                    }
+                    0
+                }
                 "restored $n config keys; $c"
             }.getOrElse { Log.w(TAG, "restore failed", it); "error: ${it.message}" }
             Log.i(TAG, "restore: $r")
@@ -2441,15 +2488,29 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
     }
 
     /** Validate + apply the config half of a backup (reuses the import apply path). Returns keys applied. */
-    private fun applyRestoreConfig(cfgObj: org.json.JSONObject): Int {
+    private suspend fun applyRestoreConfig(
+        cfgObj: org.json.JSONObject,
+        afterCommitBeforeRenderer: (RendererConfigEffects) -> Unit,
+    ): Int {
         val accepted = LinkedHashMap<String, String>()
         for (key in cfgObj.keys()) {
             val spec = SettingsRegistry.spec(key) ?: continue
             if (spec.readOnly || spec.transient) continue
             (SettingValue.validate(spec, cfgObj.getString(key)) as? Validation.Ok)?.let { accepted[key] = it.normalized }
         }
-        check(applyAccepted(accepted)) { "configuration commit failed" }
+        check(applyAccepted(accepted, afterCommitBeforeRenderer)) { "configuration commit failed" }
         return accepted.size
+    }
+
+    /** A Companion-only restore can make an interrupted built-in switch repairable without changing a
+     * renderer setting. When an ordinary renderer effect exists, that effect performs preparation. */
+    private fun reconcileAfterCompanionRestore(effects: RendererConfigEffects?) {
+        if (effects != null && (effects.dashboardChanged || effects.reloadBuiltin || effects.relaunchBuiltin)) return
+        val result = rendererPreparation.reconcileStartup(
+            ensureHome = { pkg, ready -> system.ensureDashboardHome(pkg, ready) },
+            launchHome = { pkg -> system.launchHome(pkg) },
+        )
+        requireRendererResult(result)
     }
 
     /** DESTRUCTIVE: write the Companion login files back over su, fix owner uid + SELinux context (captured

@@ -21,12 +21,14 @@ import io.github.maxlyth.hapaneld.control.AutoBrightnessController
 import io.github.maxlyth.hapaneld.control.BootChimeController
 import io.github.maxlyth.hapaneld.control.BrightnessController
 import io.github.maxlyth.hapaneld.control.CpuController
+import io.github.maxlyth.hapaneld.control.CompanionDb
 import io.github.maxlyth.hapaneld.control.NavbarController
 import io.github.maxlyth.hapaneld.control.PowerController
 import io.github.maxlyth.hapaneld.control.NavigateController
 import io.github.maxlyth.hapaneld.control.RelayController
 import io.github.maxlyth.hapaneld.control.OverlayWakeTap
 import io.github.maxlyth.hapaneld.control.ScreenController
+import io.github.maxlyth.hapaneld.control.Su
 import io.github.maxlyth.hapaneld.control.SystemController
 import io.github.maxlyth.hapaneld.control.TameController
 import io.github.maxlyth.hapaneld.control.KioskController
@@ -51,6 +53,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import io.github.maxlyth.hapaneld.util.RuntimeLifecycleCoordinator
+import io.github.maxlyth.hapaneld.util.BorrowedRendererSettings
+import io.github.maxlyth.hapaneld.util.RendererPreparationCoordinator
+import io.github.maxlyth.hapaneld.util.RendererPreparationState
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -85,6 +90,7 @@ class PaneldService : Service() {
     }
     private lateinit var config: Config
     private lateinit var server: PaneldServer
+    private lateinit var rendererPreparation: RendererPreparationCoordinator
     private data class NetworkRuntime(val mqtt: MqttBridge, val mdns: MdnsAdvertiser)
     @Volatile private lateinit var networkRuntime: NetworkRuntime
     private val mqtt: MqttBridge get() = networkRuntime.mqtt
@@ -183,11 +189,6 @@ class PaneldService : Service() {
         config.tameVendorPackages.takeIf { it.isNotEmpty() }?.let { pkgs ->
             scope.launch { tame.applyBlocklist(pkgs) }
         }
-        // Re-assert the dashboard (HA Companion) as the default home. Our admin launcher declares
-        // CATEGORY_HOME, and Android clears the default-home association on each install/update of a
-        // HOME app — so without this, Home would pop a chooser instead of booting to the dashboard.
-        // No-op unless home was cleared (or is us); off-main as it may call su. See ensureDashboardHome.
-        scope.launch { system.ensureDashboardHome(config.dashboardPackage, config.haUrl.isNotBlank()) }
         // The navbar gets the CONFIGURED dashboard value (may be the "builtin" sentinel), never
         // dashboardTarget(): that resolves builtin to our own package name (for perf attribution), and
         // reloadDashboard(ownPackage) would take the foreign-app path — `am force-stop` on ourselves.
@@ -211,6 +212,34 @@ class PaneldService : Service() {
         configUrl = localIpv4()?.let { "http://$it:${config.httpPort}/" }
 
         networkRuntime = NetworkRuntime(buildMqtt(), MdnsAdvertiser(this, config))
+        rendererPreparation = RendererPreparationCoordinator(
+            builtinPackage = SystemController.BUILTIN_DASHBOARD,
+            state = { RendererPreparationState(
+                config.dashboardPackage,
+                config.haUrl,
+                config.rendererLaunchPending,
+            ) },
+            borrow = borrow@{
+                val login = CompanionDb.readLogin(this, Su) ?: return@borrow null
+                BorrowedRendererSettings(
+                    url = login.url,
+                    accessToken = login.accessToken,
+                    refreshToken = login.refreshToken,
+                    tokenExpiry = login.expirySec,
+                    clientId = CompanionDb.COMPANION_CLIENT_ID,
+                    zoom = CompanionDb.readPageZoom(this, Su)?.coerceIn(50, 300),
+                )
+            },
+            persist = { borrowed -> config.setBorrowedRendererSettings(
+                url = borrowed.url,
+                accessToken = borrowed.accessToken,
+                refreshToken = borrowed.refreshToken,
+                tokenExpiry = borrowed.tokenExpiry,
+                clientId = borrowed.clientId,
+                zoom = borrowed.zoom,
+            ) },
+            completeLaunch = config::completeRendererLaunch,
+        )
         server = PaneldServer(
             config, cacheDir, scope, this, sensors, system, volume, ::reconfigure,
             // Capture the field (not the current instance) so it always targets the live bridge,
@@ -243,6 +272,7 @@ class PaneldService : Service() {
             // LAN ha-paneld peers over mDNS for the header panel switcher. Captures the `mdns` FIELD (not a
             // snapshot) so it follows reconfigure()'s reassignment; browsePeers null-guards the swap window.
             peers = { mdns.browsePeers() },
+            rendererPreparation = rendererPreparation,
         )
     }
 
@@ -551,7 +581,18 @@ class PaneldService : Service() {
                 io.github.maxlyth.hapaneld.control.CompanionDb.serverUrl(this@PaneldService, io.github.maxlyth.hapaneld.control.Su)
             }.getOrNull()?.let { config.setHaBaseUrl(it) }
         }
-        runtime.start {
+        runtime.start runtimeStart@{
+            // Re-assert the configured HOME and repair an interrupted switch to the built-in renderer
+            // before the HTTP surface can accept another configuration transaction. The durable retry
+            // condition is built-in + blank URL; borrowed connection and zoom commit atomically.
+            val rendererResult = rendererPreparation.reconcileStartup(
+                ensureHome = { pkg, ready -> system.ensureDashboardHome(pkg, ready) },
+                launchHome = { pkg -> system.launchHome(pkg) },
+            )
+            if (rendererResult == RendererPreparationCoordinator.Result.PERSIST_FAILED) {
+                Log.e(TAG, "built-in renderer startup preparation did not commit; leaving it retryable")
+            }
+            if (rendererResult == RendererPreparationCoordinator.Result.CLOSED) return@runtimeStart
             // Keep the SoC + network awake (screen still free to sleep) so Doze/suspend can't freeze the
             // MQTT reactor + keepalive into a half-open, unreachable connection. On by default; see keep_awake.
             runCatching { power.apply(config.keepAwake) }
@@ -782,6 +823,9 @@ class PaneldService : Service() {
             netCallback = null
         }
         stopMqttWatchdog()
+        if (!rendererPreparation.close(RENDERER_SHUTDOWN_MS)) {
+            Log.w(TAG, "renderer transaction did not become idle within ${RENDERER_SHUTDOWN_MS}ms")
+        }
         scope.cancel()
         val stopped = runtime.shutdown(RUNTIME_SHUTDOWN_MS) {
             cancelKioskReassert()
@@ -857,6 +901,7 @@ class PaneldService : Service() {
         private const val KIOSK_REASSERT_MS = 60_000L // post-boot delay before re-locking (admin escape window)
         private const val KIOSK_CANCEL_JOIN_MS = 500L
         private const val WATCHDOG_CANCEL_JOIN_MS = 500L
+        private const val RENDERER_SHUTDOWN_MS = 1_000L
         private const val RUNTIME_SHUTDOWN_MS = 5_000L
 
         fun start(context: Context) {

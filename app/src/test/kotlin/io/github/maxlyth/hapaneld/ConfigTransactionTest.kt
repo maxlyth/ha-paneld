@@ -138,6 +138,78 @@ class ConfigTransactionTest {
         assertEquals("new-refresh", prefs.values["ha_refresh_token"])
     }
 
+    @Test fun borrowedRendererConnectionAndZoomPublishInOneCommit() {
+        val prefs = fakePreferences(initial = mapOf("dashboard_zoom" to 100))
+        val config = Config(prefs.instance)
+
+        assertTrue(config.setBorrowedRendererSettings(
+            url = "http://ha:8123/",
+            accessToken = "access",
+            refreshToken = "refresh",
+            tokenExpiry = 1234L,
+            clientId = "client",
+            zoom = 125,
+        ))
+
+        assertEquals("http://ha:8123", prefs.values["ha_url"])
+        assertEquals("access", prefs.values["ha_token"])
+        assertEquals("refresh", prefs.values["ha_refresh_token"])
+        assertEquals(1234L, prefs.values["ha_token_expiry"])
+        assertEquals("client", prefs.values["ha_client_id"])
+        assertEquals(125, prefs.values["dashboard_zoom"])
+        assertEquals(true, prefs.values["renderer_launch_pending"])
+    }
+
+    @Test fun failedBorrowedRendererCommitPublishesNothing() {
+        val prefs = fakePreferences(
+            initial = mapOf("dashboard_zoom" to 100),
+            commitSucceeds = false,
+        )
+        val config = Config(prefs.instance)
+
+        assertFalse(config.setBorrowedRendererSettings(
+            url = "http://ha:8123",
+            accessToken = "access",
+            refreshToken = "refresh",
+            tokenExpiry = 1234L,
+            clientId = "client",
+            zoom = 125,
+        ))
+
+        assertFalse(prefs.values.containsKey("ha_url"))
+        assertFalse(prefs.values.containsKey("ha_token"))
+        assertFalse(prefs.values.containsKey("ha_refresh_token"))
+        assertEquals(100, prefs.values["dashboard_zoom"])
+        assertFalse(prefs.values.containsKey("renderer_launch_pending"))
+    }
+
+    @Test fun rendererSwitchAndLaunchHandoffAreDurable() {
+        val prefs = fakePreferences(initial = mapOf("dashboard_package" to "foreign.renderer"))
+        val config = Config(prefs.instance)
+
+        assertTrue(config.applyBatch {
+            config.setDashboardPackage("builtin")
+            assertFalse(config.rendererLaunchPending)
+        })
+        assertEquals("builtin", config.dashboardPackage)
+        assertTrue(config.rendererLaunchPending)
+
+        assertTrue(config.completeRendererLaunch())
+        assertFalse(config.rendererLaunchPending)
+    }
+
+    @Test fun importedRendererSwitchStagesLaunchHandoffInTheSameCommit() {
+        val prefs = fakePreferences(initial = mapOf("dashboard_package" to "foreign.renderer"))
+        val config = Config(prefs.instance)
+        val editor = config.editor().putString("dashboard_package", "builtin")
+
+        config.stageImportDependencies(editor, mapOf("dashboard_package" to "builtin"))
+
+        assertTrue(editor.commit())
+        assertEquals("builtin", config.dashboardPackage)
+        assertTrue(config.rendererLaunchPending)
+    }
+
     private data class FakePreferences(
         val instance: SharedPreferences,
         val values: MutableMap<String, Any?>,

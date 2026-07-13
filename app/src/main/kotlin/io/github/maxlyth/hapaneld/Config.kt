@@ -126,6 +126,10 @@ class Config private constructor(
     internal fun stageImportDependencies(editor: SharedPreferences.Editor, accepted: Map<String, String>) {
         if (accepted["mqtt_user"]?.isEmpty() == true) editor.putString("mqtt_password", "")
 
+        accepted["dashboard_package"]?.let { next ->
+            if (next != dashboardPackage) editor.putBoolean("renderer_launch_pending", true)
+        }
+
         val haUrl = accepted["ha_url"]
         if (haUrl != null) editor.putString("ha_url", haUrl.trimEnd('/'))
         if (haUrl?.isEmpty() == true) {
@@ -217,7 +221,19 @@ class Config private constructor(
     /** App package whose force-stop+relaunch is the dashboard "reload". Empty => reload disabled. */
     val dashboardPackage: String get() = prefs.getString("dashboard_package", "")!!
     fun setDashboardPackage(pkg: String) {
-        edit { putString("dashboard_package", pkg) }
+        val changed = pkg != dashboardPackage
+        edit {
+            putString("dashboard_package", pkg)
+            if (changed) putBoolean("renderer_launch_pending", true)
+        }
+    }
+
+    /** Durable handoff between a renderer config commit and its required launch side-effect. */
+    val rendererLaunchPending: Boolean get() = prefs.getBoolean("renderer_launch_pending", false)
+
+    /** Clear the handoff only after the configured renderer has been launched. */
+    fun completeRendererLaunch(): Boolean = applyBatch {
+        edit { putBoolean("renderer_launch_pending", false) }
     }
 
     /** Home Assistant base URL for the built-in dashboard renderer, e.g. "http://homeassistant.local:8123".
@@ -271,6 +287,23 @@ class Config private constructor(
 
     /** Set (or clear, with "") the OAuth client_id used for token refresh. */
     fun setHaClientId(clientId: String) { edit { putString("ha_client_id", clientId) } }
+
+    /** Atomically persist every value borrowed from the Companion for a built-in renderer switch. */
+    fun setBorrowedRendererSettings(
+        url: String,
+        accessToken: String,
+        refreshToken: String,
+        tokenExpiry: Long,
+        clientId: String,
+        zoom: Int?,
+    ): Boolean = applyBatch {
+        setHaConnection(url, accessToken)
+        setHaRefreshToken(refreshToken)
+        setHaTokenExpiry(tokenExpiry)
+        setHaClientId(clientId)
+        zoom?.let(::setDashboardZoom)
+        edit { putBoolean("renderer_launch_pending", true) }
+    }
 
     /** Launcher package the Launcher button brings forward. Empty => auto-pick a non-default home. */
     val launcherPackage: String get() = prefs.getString("launcher_package", "")!!
