@@ -67,6 +67,17 @@
         "responses": { "200": { "description": "{ok:true}" } } }
     },
     "/api/v1/perf": { "get": { "summary": "Live CPU/GPU/RAM, CPU clock, temperature, top processes, responsiveness + history", "tags": ["performance"], "responses": { "200": { "description": "perf JSON" } } } },
+    "/api/v1/dashboard/entity-filter": {
+      "get": { "summary": "Experimental built-in-renderer entity-filter status (count/hash only; ids are not returned)", "tags": ["performance"], "responses": { "200": { "description": "{enabled,entity_count,filter_hash,runtime}" } } },
+      "post": {
+        "summary": "Replace or toggle the experimental exact entity allow-list; omitted fields remain unchanged", "tags": ["performance"],
+        "requestBody": { "content": { "application/json": { "schema": { "type": "object", "properties": {
+          "enabled": { "type": "boolean" },
+          "entity_ids": { "type": "array", "maxItems": 50000, "items": { "type": "string", "pattern": "^[a-z0-9_]+\\.[a-z0-9_]+$" } }
+        } } } } },
+        "responses": { "200": { "description": "Updated count/hash status; active built-in renderer reloads" }, "400": { "description": "Invalid body/entity id" }, "413": { "description": "Request too large" } }
+      }
+    },
     "/api/v1/sensors": { "get": { "summary": "Live sensor readings (light, proximity, temperature, humidity) plus volume percent and raw screen brightness — independent of HA exposure settings", "tags": ["sensors"], "responses": { "200": { "description": "live values JSON" } } } },
     "/api/v1/peers": { "get": { "summary": "ha-paneld panels discovered on the LAN over mDNS — powers the header panel switcher", "tags": ["fleet"], "parameters": [ { "name": "refresh", "in": "query", "required": false, "schema": { "type": "string", "enum": ["1"] }, "description": "Force a fresh mDNS browse instead of the ~10s cache" } ], "responses": { "200": { "description": "[{panel_id,name,ip,port,url,version,self}] — ip/url null when unresolved" } } } },
     "/api/v1/diag": { "get": { "summary": "Plain-text diagnostics dump (hardware, firmware, SELinux, su/node probes)", "tags": ["status"], "responses": { "200": { "description": "text/plain report" } } } },

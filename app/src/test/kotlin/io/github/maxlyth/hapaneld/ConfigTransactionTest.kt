@@ -210,6 +210,27 @@ class ConfigTransactionTest {
         assertTrue(config.rendererLaunchPending)
     }
 
+    @Test fun entityFilterListAndEnableFlagPublishAtomically() {
+        val prefs = fakePreferences()
+        val config = Config(prefs.instance)
+
+        assertTrue(config.setDashboardEntityFilter(true, listOf("sensor.b", "light.a", "sensor.b")))
+
+        assertTrue(config.dashboardEntityFilterEnabled)
+        assertEquals(listOf("light.a", "sensor.b"), config.dashboardEntityFilterIds)
+        assertEquals("light.a\nsensor.b", prefs.values["dashboard_entity_filter_ids"])
+    }
+
+    @Test fun failedEntityFilterCommitPublishesNeitherListNorFlag() {
+        val prefs = fakePreferences(commitSucceeds = false)
+        val config = Config(prefs.instance)
+
+        assertFalse(config.setDashboardEntityFilter(true, listOf("sensor.one")))
+
+        assertFalse(config.dashboardEntityFilterEnabled)
+        assertTrue(config.dashboardEntityFilterIds.isEmpty())
+    }
+
     private data class FakePreferences(
         val instance: SharedPreferences,
         val values: MutableMap<String, Any?>,

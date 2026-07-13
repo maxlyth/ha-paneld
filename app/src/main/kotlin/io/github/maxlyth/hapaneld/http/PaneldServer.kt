@@ -24,6 +24,8 @@ import io.github.maxlyth.hapaneld.control.Su
 import io.github.maxlyth.hapaneld.control.SystemController
 import io.github.maxlyth.hapaneld.control.TameController
 import io.github.maxlyth.hapaneld.control.VolumeController
+import io.github.maxlyth.hapaneld.dashboard.EntityFilterProtocol
+import io.github.maxlyth.hapaneld.dashboard.EntityFilterTelemetry
 import io.github.maxlyth.hapaneld.device.DeviceProfile
 import io.github.maxlyth.hapaneld.device.TameCandidate
 import io.github.maxlyth.hapaneld.logship.LogCapture
@@ -65,7 +67,9 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.InputStream
 
 /**
  * Ktor CIO HTTP surface on :8888. Serves the TTS-announce contract plus a small panel info/config
@@ -336,6 +340,12 @@ class PaneldServer(
                         PerfReader.touch()
                         call.respondText(PerfReader.json(), ContentType.Application.Json)
                     }
+                    // Experimental built-in-renderer entity filter. The exact ids are accepted at runtime
+                    // but never echoed, logged, or included in config exports; status is count+hash.
+                    get("/dashboard/entity-filter") {
+                        call.respondText(entityFilterStatusJson(), ContentType.Application.Json)
+                    }
+                    post("/dashboard/entity-filter") { handleEntityFilterPost(call) }
                     get("/proximity") { call.respondText(sensors.proximityJson(), ContentType.Application.Json) }
                     // Live Sensors card: last-published values + live extras. Volume is the current
                     // media-stream percent; brightness is the system setting (0-255, -1 unknown).
@@ -1919,6 +1929,72 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
 
     private fun inspectJson(status: String): String =
         """{"running":${CdpRelay.running},"port":${CdpRelay.PORT},"status":"$status"}"""
+
+    private fun entityFilterStatusJson(): String {
+        val ids = runCatching { EntityFilterProtocol.normalize(config.dashboardEntityFilterIds) }
+            .getOrDefault(emptyList())
+        val hash = if (ids.isEmpty()) "" else EntityFilterProtocol.hash(ids)
+        return "{" +
+            "\"enabled\":${config.dashboardEntityFilterEnabled && ids.isNotEmpty()}," +
+            "\"entity_count\":${ids.size},\"filter_hash\":\"$hash\"," +
+            "\"runtime\":${EntityFilterTelemetry.json()}}"
+    }
+
+    private class EntityFilterBodyTooLarge : RuntimeException()
+
+    /** Bound chunked as well as Content-Length requests before JSON parsing or persistence. */
+    private fun readEntityFilterBody(input: InputStream): String {
+        val out = ByteArrayOutputStream()
+        val buffer = ByteArray(16 * 1024)
+        var total = 0
+        while (true) {
+            val read = input.read(buffer)
+            if (read < 0) break
+            total += read
+            if (total > EntityFilterProtocol.MAX_API_BODY_BYTES) throw EntityFilterBodyTooLarge()
+            out.write(buffer, 0, read)
+        }
+        return out.toString(Charsets.UTF_8.name())
+    }
+
+    /** Replace/toggle the complete experimental allow-list. Existing state supplies omitted fields,
+     *  making `{\"enabled\":false}` a cheap A/B switch while the list remains stored on the panel. */
+    private suspend fun handleEntityFilterPost(call: ApplicationCall) {
+        val declared = call.request.headers["Content-Length"]?.toLongOrNull()
+        if (declared != null && declared > EntityFilterProtocol.MAX_API_BODY_BYTES) {
+            call.respondText("request too large\n", status = HttpStatusCode.PayloadTooLarge)
+            return
+        }
+        val body = try {
+            val input = call.receiveStream()
+            withContext(Dispatchers.IO) { input.use(::readEntityFilterBody) }
+        } catch (_: EntityFilterBodyTooLarge) {
+            call.respondText("request too large\n", status = HttpStatusCode.PayloadTooLarge)
+            return
+        }
+        val update = runCatching { EntityFilterProtocol.parseUpdate(body) }
+            .getOrElse {
+                call.respondText("invalid entity filter: ${it.message}\n", status = HttpStatusCode.BadRequest)
+                return
+            }
+        val ids = update.entityIds ?: config.dashboardEntityFilterIds
+        val enabled = update.enabled ?: config.dashboardEntityFilterEnabled
+        if (enabled && ids.isEmpty()) {
+            call.respondText("entity_ids required when enabled\n", status = HttpStatusCode.BadRequest)
+            return
+        }
+        val committed = withContext(Dispatchers.IO) { config.setDashboardEntityFilter(enabled, ids) }
+        if (!committed) {
+            call.respondText("configuration commit failed\n", status = HttpStatusCode.InternalServerError)
+            return
+        }
+        call.respondText(entityFilterStatusJson(), ContentType.Application.Json)
+        // The live renderer is singleTask. reloadDashboard marks a reload intent; onNewIntent sees the
+        // changed filter signature and rebuilds the WebView so document-start wiring is atomic.
+        if (config.dashboardPackage == SystemController.BUILTIN_DASHBOARD) {
+            scope.launch { runCatching { system.reloadDashboard(SystemController.BUILTIN_DASHBOARD) } }
+        }
+    }
 
     /**
      * Apply a POSTed config form/JSON (partial-merge), then live-reconfigure. Shared by the legacy

@@ -2,6 +2,7 @@ package io.github.maxlyth.hapaneld.http
 
 import io.github.maxlyth.hapaneld.control.BuiltinDashboard
 import io.github.maxlyth.hapaneld.control.Su
+import io.github.maxlyth.hapaneld.dashboard.EntityFilterTelemetry
 import io.github.maxlyth.hapaneld.metrics.MetricRegistry
 import io.github.maxlyth.hapaneld.metrics.MetricSample
 import io.github.maxlyth.hapaneld.metrics.PanelMetrics
@@ -102,7 +103,14 @@ object PerfReader {
 
     /** Latest sample + history FIFO + top-5 procs + render jank, as JSON, for `GET /perf`. */
     fun json(): String = synchronized(lock) {
-        """{"enabled":$enabled,$latestFields,"top":$topJson,"render":$renderJson,"builtin":${builtinJson()},"hist":{"cpu":${histInts(CPU_KEY)},"ram":${histInts(RAM_KEY)},"gpu":${histInts(GPU_KEY)}}}"""
+        """{"enabled":$enabled,$latestFields,"top":$topJson,"render":$renderJson,"builtin":${builtinJson()},"network":${networkJson()},"entityFilter":${EntityFilterTelemetry.json()},"hist":{"cpu":${histInts(CPU_KEY)},"ram":${histInts(RAM_KEY)},"gpu":${histInts(GPU_KEY)}}}"""
+    }
+
+    /** Absolute host-UID counters; harvesters take arm start/end deltas. -1 means unsupported. */
+    private fun networkJson(): String {
+        val uid = android.os.Process.myUid()
+        return "{\"uidRxBytes\":${android.net.TrafficStats.getUidRxBytes(uid)}," +
+            "\"uidTxBytes\":${android.net.TrafficStats.getUidTxBytes(uid)}}"
     }
 
     /** Built-in renderer responsiveness (time-to-interactive + 24h involuntary-reload count) for the perf

@@ -482,6 +482,30 @@ class Config private constructor(
     val dashboardZoom: Int get() = prefs.getInt("dashboard_zoom", 100)
     fun setDashboardZoom(pct: Int) { edit { putInt("dashboard_zoom", pct) } }
 
+    /**
+     * Experimental built-in-renderer entity filter. The exact entity ids deliberately live outside the
+     * settings registry: they are a potentially large, installation-specific API input rather than a
+     * settled product setting or an HA entity. The dedicated `/api/v1/dashboard/entity-filter` endpoint
+     * is the only management surface and reports count/hash rather than echoing the ids.
+     */
+    val dashboardEntityFilterEnabled: Boolean
+        get() = prefs.getBoolean("dashboard_entity_filter_enabled", false)
+    val dashboardEntityFilterIds: List<String>
+        get() = prefs.getString("dashboard_entity_filter_ids", "").orEmpty()
+            .lineSequence().map(String::trim).filter(String::isNotEmpty).distinct().sorted().toList()
+
+    /** Persist the complete experimental filter atomically so enabled cannot reference a partial list. */
+    fun setDashboardEntityFilter(enabled: Boolean, entityIds: Collection<String>): Boolean {
+        val normalized = entityIds.asSequence().map(String::trim).filter(String::isNotEmpty)
+            .distinct().sorted().joinToString("\n")
+        return applyBatch {
+            edit {
+                putString("dashboard_entity_filter_ids", normalized)
+                putBoolean("dashboard_entity_filter_enabled", enabled && normalized.isNotEmpty())
+            }
+        }
+    }
+
     // The screen-off timeout (ms) seen before we first raised it, so disabling preventIdleDim can restore
     // the firmware default. -1 = not yet captured.
     var savedScreenOffTimeout: Int

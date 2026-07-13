@@ -44,6 +44,8 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import io.github.maxlyth.hapaneld.control.BottomSwipeDetector
 import io.github.maxlyth.hapaneld.control.BuiltinDashboard
+import io.github.maxlyth.hapaneld.dashboard.EntityFilterProtocol
+import io.github.maxlyth.hapaneld.dashboard.EntityFilterTelemetry
 import org.json.JSONObject
 import java.io.File
 import java.net.NetworkInterface
@@ -66,6 +68,7 @@ class DashboardActivity : AppCompatActivity() {
     private var web: WebView? = null
     private var swipe: SwipeRefreshLayout? = null
     private var root: FrameLayout? = null                       // holds the swipe layout + fullscreen video
+    private var entityFilterSignature = "disabled"
     private var customView: View? = null                        // active onShowCustomView (fullscreen) view
     private var customViewCallback: WebChromeClient.CustomViewCallback? = null
 
@@ -157,6 +160,7 @@ class DashboardActivity : AppCompatActivity() {
             fallbackToLauncher()
             return
         }
+        configureEntityFilter(config)
         // Freeze the WebView when the panel screen is off (CPU/heat/memory), and reload the moment
         // connectivity returns if the frontend isn't connected — registered for the activity's lifetime.
         BuiltinDashboard.setScreenListener(screenListener)
@@ -203,6 +207,49 @@ class DashboardActivity : AppCompatActivity() {
             runCatching { w.destroy() }
         }
         web = null
+    }
+
+    private fun entityFilterSignature(config: Config): String {
+        if (!config.dashboardEntityFilterEnabled) return "disabled"
+        return runCatching {
+            val ids = EntityFilterProtocol.normalize(config.dashboardEntityFilterIds)
+            if (ids.isEmpty()) "disabled" else "enabled:${EntityFilterProtocol.hash(ids)}:${config.haUrl}"
+        }.getOrDefault("invalid")
+    }
+
+    /** Prepare the exact allow-list for document-start interception. Unsupported/invalid state degrades
+     *  to the ordinary direct HA connection without changing the persisted opt-in. */
+    private fun configureEntityFilter(config: Config) {
+        entityFilterSignature = entityFilterSignature(config)
+        if (!entityFilterSignature.startsWith("enabled:")) {
+            EntityFilterTelemetry.stopped()
+            return
+        }
+        if (!androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.DOCUMENT_START_SCRIPT)) {
+            Log.w(TAG, "entity filter unavailable: document-start script unsupported")
+            EntityFilterTelemetry.failed("document_start_unsupported")
+            EntityFilterTelemetry.directFallback()
+            return
+        }
+        runCatching { EntityFilterProtocol.normalize(config.dashboardEntityFilterIds) }
+            .onSuccess(EntityFilterTelemetry::started)
+            .onFailure {
+                Log.e(TAG, "invalid entity-filter configuration", it)
+                entityFilterSignature = "disabled"
+                EntityFilterTelemetry.failed("invalid_configuration")
+                EntityFilterTelemetry.directFallback()
+            }
+    }
+
+    /** Document-start installation failed before page load. Continue on the ordinary native socket so
+     *  the opt-in can never strand the dashboard; telemetry makes the unfiltered fallback explicit. */
+    private fun fallbackFromEntityFilterInterceptor(error: Throwable) {
+        Log.e(TAG, "failed to install entity-filter subscription interceptor", error)
+        entityFilterSignature = "disabled"
+        if (EntityFilterTelemetry.isActive()) {
+            EntityFilterTelemetry.failed("document_start_install")
+            EntityFilterTelemetry.directFallback()
+        }
     }
 
     /**
@@ -326,6 +373,20 @@ class DashboardActivity : AppCompatActivity() {
             // would build a scheme-less garbage URL behind an eternal "Reconnecting…" interstitial.
             Log.w(TAG, "ha_url cleared — opening the admin launcher instead")
             fallbackToLauncher()
+            return
+        }
+        // The filter endpoint reloads this singleTask activity after committing. A document-start script
+        // cannot be replaced in an existing WebView, so a filter-set/enable change deliberately rebuilds
+        // only the WebView while keeping the foreground service and app process alive.
+        val nextFilterSignature = entityFilterSignature(config)
+        if (nextFilterSignature != entityFilterSignature) {
+            Log.i(TAG, "entity-filter configuration changed — rebuilding dashboard WebView")
+            unlatchAuth("entity-filter change")
+            retryPolicy.reset()
+            interstitialShown = false
+            teardownWeb()
+            configureEntityFilter(config)
+            buildAndLoad(config)
             return
         }
         val nav = BuiltinDashboard.consumeNavPath()
@@ -969,6 +1030,15 @@ class DashboardActivity : AppCompatActivity() {
                 )
             }
         }
+        // Intercept only the primary HA socket's outbound subscribe_entities command. The socket itself
+        // remains Chromium-native, preserving its TLS, compression and external-app lifecycle signals.
+        if (EntityFilterTelemetry.isActive()) runCatching {
+            androidx.webkit.WebViewCompat.addDocumentStartJavaScript(
+                this,
+                EntityFilterProtocol.documentStartScript(config.haUrl, config.dashboardEntityFilterIds),
+                setOf("*"),
+            )
+        }.onFailure(::fallbackFromEntityFilterInterceptor)
         // The HA frontend relies on cookies (incl. third-party for some integrations).
         CookieManager.getInstance().setAcceptCookie(true)
         CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
@@ -1124,6 +1194,12 @@ class DashboardActivity : AppCompatActivity() {
 
         @JavascriptInterface
         fun revokeExternalAuth(payload: String) = evaluate(ExternalAuthProtocol.revokeReply(payload))
+
+        /** Called only by the document-start WebSocket wrapper after it rewrites subscribe_entities. */
+        @JavascriptInterface
+        fun entityFilterSubscriptionModified() {
+            if (config.dashboardEntityFilterEnabled) EntityFilterTelemetry.subscriptionModified()
+        }
 
         @JavascriptInterface
         fun externalBus(message: String) {
