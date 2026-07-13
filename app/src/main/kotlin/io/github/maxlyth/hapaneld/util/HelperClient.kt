@@ -4,6 +4,7 @@ import android.net.LocalSocket
 import android.net.LocalSocketAddress
 import android.util.Log
 import io.github.maxlyth.hapaneld.platform.Daemon
+import io.github.maxlyth.hapaneld.platform.DaemonLongResult
 import java.io.BufferedReader
 import java.io.InputStreamReader
 
@@ -13,7 +14,7 @@ import java.io.InputStreamReader
  * daemon owns (LED + backlight power), so it asks the daemon. The daemon authenticates us by uid
  * (`SO_PEERCRED`) and rejects any other app — which is why this is a UNIX socket, not the old
  * unauthenticated `127.0.0.1:8889` TCP. Used by the sysfs LED + screen controllers (and others).
- * All calls are short blocking socket I/O — invoke off the main thread.
+ * Calls are blocking socket I/O with verb-appropriate bounds — invoke off the main thread.
  */
 object HelperClient : Daemon {
     private const val SOCK = "hapaneld-helper"   // abstract socket name; matches SOCK_NAME in main.c
@@ -39,6 +40,33 @@ object HelperClient : Daemon {
     } catch (e: Exception) {
         Log.d(TAG, "daemon not reachable (${e.message})")
         null
+    }
+
+    /**
+     * Long textual call for operations such as `INSTALL`. Once writing starts, any missing terminal
+     * reply is indeterminate: closing our socket does not cancel the daemon's per-connection worker.
+     */
+    override fun sendLong(cmd: String, timeoutMs: Long): DaemonLongResult {
+        val socket = try {
+            open()
+        } catch (e: Exception) {
+            Log.d(TAG, "daemon long call not submitted (${e.message})")
+            return DaemonLongResult.NotSubmitted
+        }
+        return socket.use { s ->
+            var submissionBegan = false
+            try {
+                s.soTimeout = timeoutMs.coerceIn(1L, Int.MAX_VALUE.toLong()).toInt()
+                submissionBegan = true
+                s.outputStream.apply { write((cmd + "\n").toByteArray()); flush() }
+                BufferedReader(InputStreamReader(s.inputStream)).readLine()?.trim()
+                    ?.let(DaemonLongResult::Reply)
+                    ?: DaemonLongResult.Indeterminate
+            } catch (e: Exception) {
+                Log.d(TAG, "daemon long call ${if (submissionBegan) "indeterminate" else "not submitted"} (${e.message})")
+                if (submissionBegan) DaemonLongResult.Indeterminate else DaemonLongResult.NotSubmitted
+            }
+        }
     }
 
     /** Send one command and read the full **binary** reply (e.g. `SCREENCAP` PNG bytes). Half-closes the

@@ -8,6 +8,7 @@ import io.github.maxlyth.hapaneld.device.SuForm
 import io.github.maxlyth.hapaneld.metrics.MetricSource
 import io.github.maxlyth.hapaneld.platform.ActivityRef
 import io.github.maxlyth.hapaneld.platform.Daemon
+import io.github.maxlyth.hapaneld.platform.DaemonLongResult
 import io.github.maxlyth.hapaneld.platform.RootShell
 import io.github.maxlyth.hapaneld.platform.ScreenPower
 import io.github.maxlyth.hapaneld.platform.SystemEnv
@@ -92,6 +93,8 @@ class FakeDaemon(
     val sent = mutableListOf<String>()
     override fun available() = available
     override fun send(cmd: String): String? { sent += cmd; return replies[cmd] }
+    override fun sendLong(cmd: String, timeoutMs: Long): DaemonLongResult =
+        send(cmd)?.let(DaemonLongResult::Reply) ?: DaemonLongResult.NotSubmitted
     override fun sendBytes(cmd: String): ByteArray? = null
 }
 

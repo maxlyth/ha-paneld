@@ -2,6 +2,7 @@
 #include "sysexec.h"
 #include "util.h"
 
+#include <pthread.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/wait.h>
@@ -277,15 +278,26 @@ void cmd_overlay(conn_ctx *ctx, const char *args) {
 // .apk inside ha-paneld's own data dir — no arbitrary /system, /sdcard or vendor APK). We copy it into
 // /data/local/tmp (world-readable label the installer can always read) and pm-install from there. `-d`
 // (allow downgrade) is deliberate — future stable<->pre-release channel switching must move either way.
+static pthread_mutex_t install_lock = PTHREAD_MUTEX_INITIALIZER;
+
 static int install_apk(const char *src) {
     if (!valid_apk_path(src)) return -1;
+    // Every connection has its own worker thread, but the root staging pathname is intentionally fixed.
+    // Reject overlap instead of letting two copies/pm installs replace one another's bytes or queue long
+    // enough for the second client's ownership timeout to expire.
+    if (pthread_mutex_trylock(&install_lock) != 0) return -1;
     char cmd[600];
     snprintf(cmd, sizeof cmd,
         "cp '%s' /data/local/tmp/hapaneld-install.apk 2>/dev/null && chmod 644 /data/local/tmp/hapaneld-install.apk", src);
-    if (sysexec_run(cmd) != 0) return -1;
-    int rc = sysexec_run("pm install -r -d /data/local/tmp/hapaneld-install.apk 2>&1 | grep -q Success");
+    int result = -1;
+    if (sysexec_run(cmd) == 0) {
+        int rc = sysexec_run("pm install -r -d /data/local/tmp/hapaneld-install.apk 2>&1 | grep -q Success");
+        result = rc == 0 ? 0 : -1;
+    }
+    // Also remove a partial/stale destination when copy or chmod failed after creating it.
     sysexec_run("rm -f /data/local/tmp/hapaneld-install.apk");
-    return rc == 0 ? 0 : -1;
+    pthread_mutex_unlock(&install_lock);
+    return result;
 }
 
 void cmd_install(conn_ctx *ctx, const char *args) {

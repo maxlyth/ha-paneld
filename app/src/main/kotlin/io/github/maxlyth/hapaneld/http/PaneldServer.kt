@@ -433,7 +433,15 @@ class PaneldServer(
                             """{"ok":false,"error":"disabled"}""", ContentType.Application.Json, HttpStatusCode.Forbidden)
                         if (!rootOk()) return@post call.respondText(
                             """{"ok":false,"error":"no-root"}""", ContentType.Application.Json, HttpStatusCode.ServiceUnavailable)
-                        val staged = File(appContext.cacheDir, "apk-upload.apk")
+                        val staged = runCatching {
+                            File.createTempFile("apk-upload-", ".apk", appContext.cacheDir)
+                        }.getOrElse {
+                            return@post call.respondText(
+                                """{"ok":false,"error":"upload-staging-failed"}""",
+                                ContentType.Application.Json,
+                                HttpStatusCode.InternalServerError,
+                            )
+                        }
                         val got = withContext(Dispatchers.IO) {
                             runCatching { call.receiveStream().use { i -> staged.outputStream().use { i.copyTo(it) } }; staged.length() > 0 }
                                 .getOrDefault(false)
@@ -466,6 +474,7 @@ class PaneldServer(
                             Log.i(TAG, "APK upload install: $r")
                             InstallProgress.finish(progress, r)
                         }
+                        job.invokeOnCompletion { cause -> if (cause != null) apk.delete() }
                         InstallProgress.finishOnFailure(progress, job)
                         call.respondText("""{"status":"started"}""", ContentType.Application.Json)
                     }

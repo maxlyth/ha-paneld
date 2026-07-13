@@ -2,6 +2,7 @@ package io.github.maxlyth.hapaneld.control
 
 import io.github.maxlyth.hapaneld.platform.AccessibilityActions
 import io.github.maxlyth.hapaneld.platform.Daemon
+import io.github.maxlyth.hapaneld.platform.DaemonLongResult
 import io.github.maxlyth.hapaneld.platform.RootShell
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -40,6 +41,7 @@ class InteractiveControllerTest {
 
         override fun available() = false
         override fun send(cmd: String): String? = null
+        override fun sendLong(cmd: String, timeoutMs: Long) = DaemonLongResult.NotSubmitted
         override fun sendBytes(cmd: String): ByteArray? {
             calls += "helper-bytes:$cmd"
             return if (bytes.isEmpty()) null else bytes.removeAt(0)

@@ -31,10 +31,6 @@ object AppInstaller {
     val COMPANION_MINIMAL = Pin("io.homeassistant.companion.android.minimal", "11194ba809b42ddf0e1a7dec6842a59c7ff1119c5482e95febffd5c6014daa5a")
 
     private const val TAG = "ha-paneld/install"
-    // Staging + `pm install` of a large APK (a WebView build ~250 MB) needs far longer than the default
-    // 5s su bound. 3 min covers a slow-eMMC copy + install with margin.
-    private const val INSTALL_TIMEOUT_MS = 180_000L
-
     fun installedVersion(context: Context, pkg: String): String =
         runCatching { context.packageManager.getPackageInfo(pkg, 0).versionName ?: "" }.getOrElse { "" }
 
@@ -48,25 +44,31 @@ object AppInstaller {
         val hasDaemon = HelperClient.available()
         if (!hasSu && !hasDaemon) return@withContext "skipped: no root (su or helper daemon needed)"
 
-        val apk = File(context.cacheDir, "hapaneld-dl.apk")
         // Preflight free space BEFORE downloading, so a large APK (a WebView build is ~250 MB) can't
         // fill /data or fail half-written on a low-storage panel. We need room for the download only —
         // the su install streams straight from it (no second /data/local/tmp copy). +64 MB margin.
         val size = contentLength(url)
         if (size > 0L) {
             val need = size + 64L * 1024 * 1024
-            val free = apk.parentFile?.usableSpace ?: Long.MAX_VALUE
+            val free = context.cacheDir.usableSpace
             if (free < need) {
                 Log.w(TAG, "insufficient storage: need ${need / 1048576}MB, have ${free / 1048576}MB free")
                 return@withContext "insufficient storage (need ${need / 1048576}MB, ${free / 1048576}MB free)"
             }
         }
-        if (!download(url, apk)) return@withContext "download failed"
-
-        val why = verifyApk(context, apk.absolutePath, pin)
-        if (why != null) { apk.delete(); Log.w(TAG, "refused install: $why"); return@withContext "refused ($why)" }
-
-        installLocalApk(context, apk)
+        val apk = runCatching { File.createTempFile("hapaneld-dl-", ".apk", context.cacheDir) }
+            .getOrElse { return@withContext "download staging failed" }
+        try {
+            if (!download(url, apk)) return@withContext "download failed"
+            val why = verifyApk(context, apk.absolutePath, pin)
+            if (why != null) {
+                Log.w(TAG, "refused install: $why")
+                return@withContext "refused ($why)"
+            }
+            installLocalApk(context, apk)
+        } finally {
+            apk.delete()
+        }
     }
 
     /** Metadata read from an APK file (no install) — for the Install-tab "upload an APK" preview. */
@@ -98,23 +100,29 @@ object AppInstaller {
         val hasSu = Su.available()
         val hasDaemon = HelperClient.available()
         if (!hasSu && !hasDaemon) { apk.delete(); return@withContext "skipped: no root (su or helper daemon needed)" }
-        val out = try {
-            if (hasSu) {
+        if (hasSu) {
+            val out = try {
                 // Stream the APK straight into `pm install -S <size>` — no intermediate /data/local/tmp copy
                 // (halves peak disk use). Long-timeout: staging a large stream far exceeds the 5s su bound.
-                Su.runWithStdinLong("pm install -S ${apk.length()} -r -d 2>&1", apk, INSTALL_TIMEOUT_MS)?.trim() ?: ""
-            } else {
-                // Daemon reads the APK from our data dir; send() is synchronous so the delete below is safe.
-                when (HelperClient.send("INSTALL ${apk.absolutePath}")) {
-                    "OK" -> "Success"
-                    null -> "daemon unreachable"
-                    else -> "daemon install failed"
-                }
+                Su.runWithStdinLong(
+                    "pm install -S ${apk.length()} -r -d 2>&1",
+                    apk,
+                    HelperInstallTransaction.INSTALL_TIMEOUT_MS,
+                )?.trim() ?: ""
+            } finally {
+                apk.delete()
             }
-        } finally { apk.delete() }
+            if (out.contains("Success", ignoreCase = true)) return@withContext "OK"
+            Log.w(TAG, "install failed: $out")
+            return@withContext "install failed: ${out.take(120)}"
+        }
 
-        if (out.contains("Success", ignoreCase = true)) "OK"
-        else { Log.w(TAG, "install failed: $out"); "install failed: ${out.take(120)}" }
+        val result = HelperInstallTransaction(HelperClient).install(
+            apk,
+            File(context.filesDir, HelperInstallTransaction.STAGING_DIR),
+        )
+        if (result != "OK") Log.w(TAG, result)
+        result
     }
 
     /** Null = APK declares [pin].pkg AND is signed by the pinned cert; else a short reason. */

@@ -56,6 +56,26 @@ static void dispatch_reply(const char *line, char *out, size_t outsz) {
     close(sv[0]); close(sv[1]);
 }
 
+typedef struct {
+    const char *line;
+    char out[64];
+} dispatch_job;
+
+static void *dispatch_worker(void *arg) {
+    dispatch_job *job = arg;
+    int sv[2];
+    socketpair(AF_UNIX, SOCK_STREAM, 0, sv);
+    char tmp[MAX_LINE + 1];
+    snprintf(tmp, sizeof tmp, "%s", job->line);
+    conn_ctx ctx = { .fd = sv[0], .subscribed = 0 };
+    dispatch(&ctx, tmp);
+    fcntl(sv[1], F_SETFL, O_NONBLOCK);
+    ssize_t n = read(sv[1], job->out, sizeof job->out - 1);
+    job->out[n > 0 ? n : 0] = '\0';
+    close(sv[0]); close(sv[1]);
+    return NULL;
+}
+
 // Feed a raw byte stream to server_serve() (half-closed) and return all reply bytes.
 static void serve_reply(const char *bytes, size_t len, char *out, size_t outsz) {
     int sv[2];
@@ -306,13 +326,33 @@ static void test_sysctl_execution_results(void) {
     sysexec_stub_reset();
     dispatch_reply(install, out, sizeof out);
     CHECK(strcmp(out, "OK\n") == 0, "INSTALL succeeds when staging and package install succeed (got '%s')\n", out);
+    CHECK(sysexec_stub_count_run("rm -f /data/local/tmp/hapaneld-install.apk") == 1,
+          "INSTALL removes root staging after success\n");
     sysexec_stub_fail_run("cp '", 256);
     dispatch_reply(install, out, sizeof out);
     CHECK(strcmp(out, "ERR\n") == 0, "INSTALL reports staging failure (got '%s')\n", out);
+    CHECK(sysexec_stub_count_run("rm -f /data/local/tmp/hapaneld-install.apk") == 2,
+          "INSTALL removes partial root staging after copy failure\n");
     sysexec_stub_reset();
     sysexec_stub_fail_run("pm install", 256);
     dispatch_reply(install, out, sizeof out);
     CHECK(strcmp(out, "ERR\n") == 0, "INSTALL reports package-manager failure (got '%s')\n", out);
+    CHECK(sysexec_stub_count_run("rm -f /data/local/tmp/hapaneld-install.apk") == 1,
+          "INSTALL removes root staging after package-manager failure\n");
+    sysexec_stub_reset();
+
+    // The daemon is thread-per-connection but uses one root staging path. A concurrent INSTALL must
+    // fail immediately instead of replacing the first transaction's staged bytes or waiting behind it.
+    sysexec_stub_block_run("cp '");
+    dispatch_job first = { .line = install, .out = "" };
+    pthread_t install_thread;
+    pthread_create(&install_thread, NULL, dispatch_worker, &first);
+    sysexec_stub_wait_blocked();
+    dispatch_reply(install, out, sizeof out);
+    CHECK(strcmp(out, "ERR\n") == 0, "overlapping INSTALL is rejected while one owns root staging (got '%s')\n", out);
+    sysexec_stub_release_run();
+    pthread_join(install_thread, NULL);
+    CHECK(strcmp(first.out, "OK\n") == 0, "first INSTALL completes after overlap rejection (got '%s')\n", first.out);
     sysexec_stub_reset();
 }
 
