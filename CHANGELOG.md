@@ -14,6 +14,10 @@ content appear. Earlier releases predate this convention and keep their flat lis
 
 - **Experimental entity-stream filtering for built-in-renderer testers** — an API-only, disabled-by-default option asks Home Assistant to send a configured exact entity allow-list instead of the full state stream, reducing the WebView work caused by large instances. Automatic entity discovery and an HTML setting are not included yet; testers configure and verify it through `/api/v1/dashboard/entity-filter`. See [the tester instructions](docs/built-in-renderer.md#experimental-entity-filter-092).
 
+### Changed
+
+- **Installer-first release downloads** — GitHub releases now lead with a release-pinned installer that provisions and verifies the panel, while the APK is clearly labelled as a manual-setup asset. This makes the supported installation path visible before users reach for a bare `adb install`, without removing on-device sideloading.
+
 ## v0.9.2-rc1 - 2026-07-12
 
 ### Added
@@ -24,7 +28,6 @@ content appear. Earlier releases predate this convention and keep their flat lis
 
 ### Changed
 
-- **Installer-first release downloads** — GitHub releases now lead with a release-pinned installer that provisions and verifies the panel, while the APK is clearly labelled as a manual-setup asset. This makes the supported installation path visible before users reach for a bare `adb install`, without removing on-device sideloading.
 - **Panel state converges through one observed-state authority** — screen power, brightness, volume, relays, LEDs, proximity and other locally controlled state now share a bounded, acknowledgement-aware publication path. Changes made on the panel or by another process converge back to Home Assistant without parallel publishers racing or manufacturing values for state that has not yet been observed.
 
 ### Fixed
