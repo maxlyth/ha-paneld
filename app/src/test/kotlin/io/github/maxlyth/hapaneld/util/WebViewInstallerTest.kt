@@ -108,4 +108,21 @@ class WebViewInstallerTest {
         // Nothing recorded yet (fresh panel) → never skip the first attempt.
         assertFalse(shouldSkipAutoUpdate(lastVersion = "", recVersion = "150.0.7871.63", recMajor = 150, engineMajor = 147))
     }
+
+    @Test fun autoAttemptMarkerKeepsTransientFailuresRetryable() {
+        assertFalse(WebViewInstaller.shouldRecordAutoAttempt("download failed"))
+        assertFalse(WebViewInstaller.shouldRecordAutoAttempt("download staging failed"))
+        assertFalse(WebViewInstaller.shouldRecordAutoAttempt("insufficient storage (need 300MB)"))
+        assertFalse(WebViewInstaller.shouldRecordAutoAttempt("skipped: no root (su or helper daemon needed)"))
+        assertFalse(WebViewInstaller.shouldRecordAutoAttempt("install failed: daemon unreachable"))
+        assertFalse(WebViewInstaller.shouldRecordAutoAttempt("install outcome unknown: helper staging retained for safety"))
+    }
+
+    @Test fun autoAttemptMarkerRecordsTerminalProviderOutcomes() {
+        assertTrue(WebViewInstaller.shouldRecordAutoAttempt("OK: installed WebView 150 — reloading the dashboard"))
+        assertTrue(WebViewInstaller.shouldRecordAutoAttempt("install failed: Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE]"))
+        assertTrue(WebViewInstaller.shouldRecordAutoAttempt("install failed: daemon install failed"))
+        assertTrue(WebViewInstaller.shouldRecordAutoAttempt("refused (signer mismatch)"))
+        assertTrue(WebViewInstaller.shouldRecordAutoAttempt("already current (150.0.1)"))
+    }
 }

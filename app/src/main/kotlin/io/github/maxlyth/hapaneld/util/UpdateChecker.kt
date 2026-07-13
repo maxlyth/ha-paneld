@@ -1,19 +1,18 @@
 package io.github.maxlyth.hapaneld.util
 
 import android.content.Context
+import android.os.SystemClock
 import io.github.maxlyth.hapaneld.BuildConfig
+import io.github.maxlyth.hapaneld.Config
+import io.github.maxlyth.hapaneld.device.DeviceProfile
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import java.net.HttpURLConnection
-import java.net.URL
 
 /**
- * Checks GitHub releases/latest for available updates to ha-paneld and the installed HA Companion
- * app. Results are cached; [checkIfStale] is called on a schedule so the web UI always reflects the
- * most recently known state without hitting the API on every page load.
- *
- * `releases/latest` only returns non-prerelease, non-draft releases — so an rc build will correctly
- * show the next stable release as an available update once one is published.
+ * Checks GitHub releases for available updates to ha-paneld and the installed HA Companion app. Catalog
+ * state is cached, but every entry remains tied to the channel and device safety policy used to resolve it.
  */
 object UpdateChecker {
 
@@ -24,125 +23,187 @@ object UpdateChecker {
         val releaseUrl: String,
     )
 
+    private data class CacheKey(val paneldChannel: String, val companionChannel: String, val companionCap: String?)
+
     @Volatile var available: List<UpdateInfo> = emptyList()
         private set
-    @Volatile private var lastCheckMs = 0L
+    @Volatile private var lastCheckElapsedMs = -1L
+    @Volatile private var cacheKey: CacheKey? = null
+    @Volatile private var paneldCacheChannel: String? = null
+    @Volatile private var companionCachePolicy: Pair<String, String?>? = null
+    private val checkMutex = Mutex()
 
-    /** Check if [staleMs] have elapsed since the last check; if so, run a new one. */
-    suspend fun checkIfStale(context: Context, channel: String = "stable", staleMs: Long = 3_600_000L) {
-        if (System.currentTimeMillis() - lastCheckMs > staleMs) check(context, channel)
+    /** True when a monotonic cache stamp is absent, rolled back, expired, or belongs to another policy. */
+    internal fun shouldCheck(nowMs: Long, lastMs: Long, staleMs: Long, samePolicy: Boolean): Boolean =
+        !samePolicy || lastMs < 0L || nowMs < lastMs || nowMs - lastMs > staleMs
+
+    /** Check only when the cache is stale or was resolved for different channels/cap. */
+    suspend fun checkIfStale(
+        context: Context,
+        channel: String = "stable",
+        staleMs: Long = 3_600_000L,
+        companionChannel: String = Config(context).companionUpdateChannel,
+        companionMaxVersion: String? = DeviceProfile.detect().companionMaxVersion,
+    ) {
+        val key = CacheKey(channel, companionChannel, companionMaxVersion)
+        if (shouldCheck(SystemClock.elapsedRealtime(), lastCheckElapsedMs, staleMs, cacheKey == key)) {
+            check(context, channel, companionChannel, companionMaxVersion)
+        }
     }
 
-    /** Unconditional check against the GitHub releases API; updates [available] in place. The ha-paneld
-     *  entry follows [channel] ("stable" | "prerelease") so the banner matches the self-update target. */
-    suspend fun check(context: Context, channel: String = "stable") = withContext(Dispatchers.IO) {
-        lastCheckMs = System.currentTimeMillis()
-        val found = mutableListOf<UpdateInfo>()
-
-        val paneldLatest = if (channel == "prerelease") SelfUpdater.resolve("prerelease")?.first
-                           else fetchLatest("maxlyth/ha-paneld")?.first?.removePrefix("v")
-        paneldLatest?.let { latest ->
-            val current = BuildConfig.VERSION_NAME
-            if (isNewer(latest, current))
-                found += UpdateInfo("ha-paneld", current, latest, "https://github.com/maxlyth/ha-paneld/releases")
-        }
-
-        // HA Companion (either full or minimal variant, if installed on this no-Play-Store panel)
-        val companionPkg = COMPANION_PKGS
-            .firstOrNull { runCatching { context.packageManager.getPackageInfo(it, 0) }.isSuccess }
-        if (companionPkg != null) {
-            val installed = runCatching {
-                context.packageManager.getPackageInfo(companionPkg, 0).versionName ?: ""
-            }.getOrElse { "" }
-            fetchLatest("home-assistant/android")?.let { (tag, url) ->
-                // HA Android tags: "3.3.2-full", "2024.11.1-minimal", etc. — strip variant suffix
-                val latest = tag.removePrefix("v").let { Regex("-(?:full|minimal|wear)$").replace(it, "") }
-                if (installed.isNotBlank() && isNewer(latest, stripVariant(installed))) {
-                    found += UpdateInfo("HA Companion", installed, latest, url)
+    /** Resolve both components under one serialized cache transaction. A failed component lookup keeps its
+     *  last-known result and leaves the cache stale so a later stale check can retry; a successful lookup
+     *  authoritatively adds or removes that component's update. */
+    suspend fun check(
+        context: Context,
+        channel: String = "stable",
+        companionChannel: String = Config(context).companionUpdateChannel,
+        companionMaxVersion: String? = DeviceProfile.detect().companionMaxVersion,
+    ) = withContext(Dispatchers.IO) {
+        checkMutex.withLock {
+            val previous = available
+            val paneldLatest = SelfUpdater.resolve(channel)?.first
+            val paneld = if (paneldLatest == null) {
+                if (paneldCacheChannel == channel) previous.filter { it.label == PANELD_LABEL } else emptyList()
+            } else {
+                paneldCacheChannel = channel
+                val current = BuildConfig.VERSION_NAME
+                if (isNewer(paneldLatest, current)) {
+                    listOf(UpdateInfo(PANELD_LABEL, current, paneldLatest, "https://github.com/maxlyth/ha-paneld/releases"))
+                } else {
+                    emptyList()
                 }
             }
-        }
 
-        available = found
+            val companion = installedCompanion(context)
+            val companionTarget = if (companion == null) null else CompanionInstaller.target(companionChannel, companionMaxVersion)
+            val requestedCompanionPolicy = companionChannel to companionMaxVersion
+            val companionUpdates = when {
+                companion == null -> {
+                    companionCachePolicy = requestedCompanionPolicy
+                    emptyList()
+                }
+                companionTarget == null -> {
+                    if (companionCachePolicy == requestedCompanionPolicy) {
+                        previous.filter { it.label == COMPANION_LABEL }
+                    } else {
+                        emptyList()
+                    }
+                }
+                else -> {
+                    companionCachePolicy = requestedCompanionPolicy
+                    if (isNewer(companionTarget.version, stripVariant(companion.second))) {
+                        listOf(
+                            UpdateInfo(
+                                COMPANION_LABEL,
+                                companion.second,
+                                companionTarget.version,
+                                companionTarget.releaseUrl,
+                            ),
+                        )
+                    } else {
+                        emptyList()
+                    }
+                }
+            }
+
+            available = paneld + companionUpdates
+            if (paneldLatest != null && (companion == null || companionTarget != null)) {
+                cacheKey = CacheKey(channel, companionChannel, companionMaxVersion)
+                lastCheckElapsedMs = SystemClock.elapsedRealtime()
+            }
+        }
     }
 
-    /** Available updates minus any the user has dismissed at their *current* latest version. [ignored]
-     *  maps a component label ("HA Companion") to the exact version string that was ignored, so an ignore
-     *  only silences that one release — when a newer version is later published [latestVersion] no longer
-     *  matches and the entry re-surfaces ("ticks again"). Used to filter the dashboard banner only; the
-     *  Install tab always lists [available] in full. Pure — unit-tested in UpdateVisibilityTest. */
+    /** Available updates minus any the user dismissed at their current latest version. */
     fun visible(ignored: Map<String, String>): List<UpdateInfo> = filterIgnored(available, ignored)
 
-    /**
-     * [available] revalidated against the CURRENT install state. The hourly cache can go stale within
-     * its window: a "HA Companion" entry recorded while a Companion was installed would otherwise
-     * outlive its uninstall and render an update for an absent app (seen in a GitHub issue #24 /diag
-     * dump: `[packages] … not installed` alongside `[updates] HA Companion: …`). Cheap PackageManager
-     * probe at render time; ha-paneld's own entry never needs revalidating (we are always installed).
-     */
-    fun current(context: Context, ignored: Map<String, String> = emptyMap()): List<UpdateInfo> =
-        filterAbsent(
-            filterIgnored(available, ignored),
-            companionInstalled = COMPANION_PKGS.any {
-                runCatching { context.packageManager.getPackageInfo(it, 0) }.isSuccess
-            },
-        )
+    /** Revalidate the cache against the current install state and version. This drops a stale Companion
+     *  entry after uninstall or successful install even when the following network refresh failed. */
+    fun current(context: Context, ignored: Map<String, String> = emptyMap()): List<UpdateInfo> {
+        val companion = installedCompanion(context)
+        return filterCurrent(filterIgnored(available, ignored), companion?.second)
+    }
 
-    /** Pure core of [current] — unit-tested in UpdateVisibilityTest. */
+    private fun installedCompanion(context: Context): Pair<String, String>? = COMPANION_PKGS.firstNotNullOfOrNull { pkg ->
+        runCatching {
+            val version = context.packageManager.getPackageInfo(pkg, 0).versionName ?: ""
+            pkg to version
+        }.getOrNull()
+    }
+
+    /** Pure core of [current]. */
+    internal fun filterCurrent(list: List<UpdateInfo>, companionVersion: String?): List<UpdateInfo> = list.mapNotNull { info ->
+        if (info.label != COMPANION_LABEL) return@mapNotNull info
+        val installed = companionVersion?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+        if (isNewer(info.latestVersion, stripVariant(installed))) info.copy(currentVersion = installed) else null
+    }
+
+    /** Compatibility wrapper retained for existing tests/callers. */
     internal fun filterAbsent(list: List<UpdateInfo>, companionInstalled: Boolean): List<UpdateInfo> =
-        if (companionInstalled) list else list.filterNot { it.label == "HA Companion" }
+        if (companionInstalled) list else list.filterNot { it.label == COMPANION_LABEL }
 
     internal val COMPANION_PKGS = listOf(
-        "io.homeassistant.companion.android",
-        "io.homeassistant.companion.android.minimal",
+        CompanionInstaller.FULL_PKG,
+        CompanionInstaller.MINIMAL_PKG,
     )
 
-    /** Pure core of [visible] — unit-tested in UpdateVisibilityTest. */
     internal fun filterIgnored(list: List<UpdateInfo>, ignored: Map<String, String>): List<UpdateInfo> =
         list.filterNot { ignored[it.label] == it.latestVersion }
 
-    /** HA Companion versionNames/tags carry a VARIANT suffix ("-minimal"/"-full"/"-wear") that is not a
-     *  prerelease marker — "2026.6.5-minimal" IS version 2026.6.5. Strip it before any comparison, else
-     *  [isNewer]'s suffix ordering treats an installed minimal build as older than its own version and
-     *  offers a same-version "upgrade" (GitHub issue #17). */
+    /** HA Companion version names carry a variant suffix that is not a prerelease marker. */
     internal fun stripVariant(v: String): String = Regex("-(?:full|minimal|wear)$").replace(v.trim(), "")
 
-    internal fun fetchLatest(repo: String): Pair<String, String>? = runCatching {
-        val conn = URL("https://api.github.com/repos/$repo/releases/latest").openConnection() as HttpURLConnection
-        conn.connectTimeout = 8_000
-        conn.readTimeout = 8_000
-        conn.setRequestProperty("Accept", "application/vnd.github.v3+json")
-        if (conn.responseCode != 200) return@runCatching null
-        val json = conn.inputStream.bufferedReader().readText()
-        val tag = Regex(""""tag_name"\s*:\s*"([^"]+)"""").find(json)?.groupValues?.get(1) ?: return@runCatching null
-        val url = Regex(""""html_url"\s*:\s*"([^"]+)"""").find(json)?.groupValues?.get(1) ?: ""
-        tag to url
-    }.getOrNull()
+    private data class ParsedVersion(val numeric: List<Int>, val suffix: String)
 
-    /**
-     * True when [candidate] is strictly newer than [current] by numeric major.minor.patch.
-     * Suffixes (e.g. -rc3, -beta) are stripped before comparison, so stable "0.8.4" is newer
-     * than prerelease "0.8.4-rc3" — matching GitHub's own latest-release logic.
-     */
-    internal fun isNewer(candidate: String, current: String): Boolean {
-        fun parts(v: String) = v.substringBefore('-').split('.').mapNotNull { it.toIntOrNull() }
-        val c = parts(candidate)
-        val cur = parts(current)
-        for (i in 0 until maxOf(c.size, cur.size)) {
-            val a = c.getOrElse(i) { 0 }
-            val b = cur.getOrElse(i) { 0 }
-            if (a != b) return a > b
-        }
-        // Equal numeric base — order by the prerelease suffix so the pre-release channel advances (e.g.
-        // rc4 > rc3): a stable (no suffix) beats any prerelease; between prereleases the trailing number
-        // wins; identical suffixes are not newer.
-        val cs = candidate.substringAfter('-', "")
-        val curs = current.substringAfter('-', "")
-        if (cs == curs) return false
-        if (cs.isEmpty()) return true      // candidate stable, current prerelease
-        if (curs.isEmpty()) return false   // candidate prerelease, current stable
-        val cn = Regex("""\d+""").findAll(cs).lastOrNull()?.value?.toIntOrNull() ?: 0
-        val curn = Regex("""\d+""").findAll(curs).lastOrNull()?.value?.toIntOrNull() ?: 0
-        return cn > curn
+    private fun parseVersion(value: String): ParsedVersion? {
+        val normalized = value.trim().removePrefix("v")
+        val base = normalized.substringBefore('-')
+        if (base.isEmpty()) return null
+        val numeric = base.split('.').map { it.toIntOrNull() ?: return null }
+        return ParsedVersion(numeric, normalized.substringAfter('-', "").lowercase())
     }
+
+    /** Compare dotted versions with stable > prerelease and alpha < beta < rc ordering. Null means one
+     *  input was malformed, allowing safety callers to fail closed instead of treating junk as version 0. */
+    internal fun compareVersions(candidate: String, current: String): Int? {
+        val left = parseVersion(candidate) ?: return null
+        val right = parseVersion(current) ?: return null
+        for (i in 0 until maxOf(left.numeric.size, right.numeric.size)) {
+            val compared = left.numeric.getOrElse(i) { 0 }.compareTo(right.numeric.getOrElse(i) { 0 })
+            if (compared != 0) return compared
+        }
+        if (left.suffix == right.suffix) return 0
+        if (left.suffix.isEmpty()) return 1
+        if (right.suffix.isEmpty()) return -1
+        return comparePrerelease(left.suffix, right.suffix)
+    }
+
+    private fun comparePrerelease(left: String, right: String): Int {
+        fun parts(value: String): Pair<String, Int> {
+            val label = Regex("[a-z]+").find(value)?.value.orEmpty()
+            val number = Regex("\\d+").findAll(value).lastOrNull()?.value?.toIntOrNull() ?: 0
+            return label to number
+        }
+        fun rank(label: String): Int = when (label) {
+            "alpha" -> 0
+            "beta" -> 1
+            "rc" -> 2
+            else -> -1
+        }
+        val (leftLabel, leftNumber) = parts(left)
+        val (rightLabel, rightNumber) = parts(right)
+        if (leftLabel != rightLabel) {
+            val leftRank = rank(leftLabel)
+            val rightRank = rank(rightLabel)
+            if (leftRank != rightRank) return leftRank.compareTo(rightRank)
+            return leftLabel.compareTo(rightLabel)
+        }
+        return leftNumber.compareTo(rightNumber)
+    }
+
+    internal fun isNewer(candidate: String, current: String): Boolean = compareVersions(candidate, current)?.let { it > 0 } == true
+
+    private const val PANELD_LABEL = "ha-paneld"
+    private const val COMPANION_LABEL = "HA Companion"
 }

@@ -3,6 +3,7 @@ package io.github.maxlyth.hapaneld.util
 import io.github.maxlyth.hapaneld.util.ReleaseCatalog.Raw
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -42,5 +43,20 @@ class ReleaseCatalogTest {
         assertFalse(ReleaseCatalog.validTag("../../etc"))
         assertFalse(ReleaseCatalog.validTag("v1 0"))
         assertFalse(ReleaseCatalog.validTag(""))
+    }
+
+    @Test fun newestKeepsTagAndAssetFromOneRelease() {
+        val selected = ReleaseCatalog.newest(raw, "prerelease")
+        assertEquals("v0.8.6", selected?.tag)
+        assertEquals("u6", selected?.apkUrl)
+    }
+
+    @Test fun newestDoesNotFallBackPastAReleaseWithoutAnApk() {
+        val missingHead = listOf(
+            Raw("v0.8.7-rc1", true, "n7", null),
+            Raw("v0.8.6", false, "n6", "u6"),
+        )
+        assertNull(ReleaseCatalog.newest(missingHead, "prerelease")?.apkUrl)
+        assertEquals("v0.8.6", ReleaseCatalog.newest(missingHead, "stable")?.tag)
     }
 }

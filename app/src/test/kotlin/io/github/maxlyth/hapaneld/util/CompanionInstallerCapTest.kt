@@ -1,6 +1,8 @@
 package io.github.maxlyth.hapaneld.util
 
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -28,4 +30,55 @@ class CompanionInstallerCapTest {
         assertFalse(CompanionInstaller.exceedsCap("2026.5.4-minimal", "2026.5.4"))
         assertTrue(CompanionInstaller.exceedsCap("2026.6.5-full", "2026.5.4"))
     }
+
+    @Test fun malformedVersionFailsClosedUnderCap() {
+        assertTrue(CompanionInstaller.exceedsCap("not-a-version", "2026.5.4"))
+        assertFalse(CompanionInstaller.withinCap("not-a-version", "2026.5.4"))
+    }
+
+    @Test fun exactVersionPickerCannotBypassSafetyCap() {
+        assertNull(CompanionInstaller.exactVersionRefusal("2026.5.4-minimal", "2026.5.4"))
+        assertTrue(CompanionInstaller.exactVersionRefusal("2026.6.5-minimal", "2026.5.4")!!.startsWith("refused:"))
+        assertTrue(CompanionInstaller.exactVersionRefusal("not-a-version", "2026.5.4")!!.startsWith("refused:"))
+    }
+
+    @Test fun unsafeInstalledBuildIsDowngradedButOrdinaryOlderTargetIsNot() {
+        assertTrue(CompanionInstaller.shouldInstallTarget("2026.6.5-minimal", "2026.5.4", force = false, maxVersion = "2026.5.4"))
+        assertFalse(CompanionInstaller.shouldInstallTarget("2026.5.4-minimal", "2026.5.3", force = false, maxVersion = "2026.5.4"))
+        assertTrue(CompanionInstaller.shouldInstallTarget("2026.5.4-minimal", "2026.5.3", force = true, maxVersion = "2026.5.4"))
+    }
+
+    @Test fun cappedTargetUsesNewestCompleteReleaseInsideCeiling() {
+        val versions = listOf(
+            version("2026.6.5", "u665"),
+            version("2026.5.4", "u554"),
+            version("2026.5.3", "u553"),
+        )
+        val target = CompanionInstaller.chooseTarget(versions, "2026.5.4")
+        assertEquals("2026.5.4", target?.version)
+        assertEquals("u554", target?.apkUrl)
+        assertEquals("2026.6.5", target?.newestVersion)
+        assertTrue(target?.capped == true)
+    }
+
+    @Test fun uncappedHeadWithoutApkDoesNotSilentlySelectOlderRelease() {
+        val versions = listOf(version("2026.6.5", null), version("2026.5.4", "u554"))
+        assertNull(CompanionInstaller.chooseTarget(versions, null))
+    }
+
+    @Test fun pickerLeavesUnsafeReleaseVisibleButNotInstallable() {
+        val versions = listOf(version("2026.6.5", "u665"), version("2026.5.4", "u554"))
+        val capped = CompanionInstaller.applyCap(versions, "2026.5.4")
+        assertFalse(capped[0].installable)
+        assertNull(capped[0].apkUrl)
+        assertTrue(capped[1].installable)
+    }
+
+    private fun version(version: String, apk: String?) = ReleaseCatalog.Version(
+        version = version,
+        tag = version,
+        notesUrl = "notes-$version",
+        installable = apk != null,
+        apkUrl = apk,
+    )
 }

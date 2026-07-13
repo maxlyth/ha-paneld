@@ -46,6 +46,12 @@ object ReleaseCatalog {
             .map { Version(normalize(it.tag), it.tag, it.notesUrl, it.apkUrl != null, it.apkUrl) }
             .toList()
 
+    /** The newest release on [channel], preserving the release object as the authority boundary. Keeping
+     *  the tag and APK URL in one [Raw] prevents a list parser from pairing the newest tag with an asset
+     *  found later in a different release. */
+    internal fun newest(raw: List<Raw>, channel: String): Raw? =
+        raw.firstOrNull { channel == "prerelease" || !it.prerelease }
+
     /** Fetch + parse the releases list for [repo]; [apkMatch] picks the installable asset by name. Returns
      *  an empty list on any network/parse error (the picker degrades to "no versions").
      *
@@ -69,14 +75,37 @@ object ReleaseCatalog {
         }.getOrElse { Log.w(TAG, "apkUrl $repo $tag failed", it); null }
     }
 
+    /** Resolve the newest installable release on [channel] as one coherent tag/asset pair. A newest
+     *  release without the expected APK returns null; it is never silently combined with or replaced by
+     *  an older release. */
+    fun newestApk(
+        repo: String,
+        channel: String,
+        apkMatch: (String) -> Boolean,
+        normalize: (String) -> String,
+    ): Pair<String, String>? = runCatching {
+        val release = if (channel == "prerelease") {
+            newest(fetch(repo, 10, apkMatch), channel)
+        } else {
+            val json = get("https://api.github.com/repos/$repo/releases/latest") ?: return null
+            raw(JSONObject(json), apkMatch)
+        } ?: return null
+        val apk = release.apkUrl ?: return null
+        normalize(release.tag) to apk
+    }.getOrElse { Log.w(TAG, "newestApk $repo failed", it); null }
+
     private fun fetch(repo: String, limit: Int, apkMatch: (String) -> Boolean): List<Raw> {
         val json = get("https://api.github.com/repos/$repo/releases?per_page=$limit") ?: return emptyList()
         val arr = JSONArray(json)
-        return (0 until arr.length()).map { i ->
-            val o = arr.getJSONObject(i)
-            Raw(o.getString("tag_name"), o.optBoolean("prerelease", false), o.optString("html_url", ""), assetUrl(o, apkMatch))
-        }
+        return (0 until arr.length()).map { i -> raw(arr.getJSONObject(i), apkMatch) }
     }
+
+    private fun raw(release: JSONObject, apkMatch: (String) -> Boolean): Raw = Raw(
+        release.getString("tag_name"),
+        release.optBoolean("prerelease", false),
+        release.optString("html_url", ""),
+        assetUrl(release, apkMatch),
+    )
 
     private fun assetUrl(release: JSONObject, apkMatch: (String) -> Boolean): String? {
         val assets = release.optJSONArray("assets") ?: return null
@@ -91,6 +120,10 @@ object ReleaseCatalog {
         val conn = URL(url).openConnection() as HttpURLConnection
         conn.connectTimeout = 8_000; conn.readTimeout = 8_000
         conn.setRequestProperty("Accept", "application/vnd.github+json")
-        return if (conn.responseCode == 200) conn.inputStream.bufferedReader().use { it.readText() } else null
+        return try {
+            if (conn.responseCode == 200) conn.inputStream.bufferedReader().use { it.readText() } else null
+        } finally {
+            conn.disconnect()
+        }
     }
 }

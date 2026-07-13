@@ -67,6 +67,19 @@ object WebViewInstaller {
     fun shouldSkipAutoUpdate(lastVersion: String, recVersion: String, recMajor: Int, engineMajor: Int?): Boolean =
         lastVersion == recVersion && (engineMajor == null || engineMajor < recMajor)
 
+    /** Whether an auto-update result is durable evidence that retrying the same pin cannot help. Network,
+     *  staging, storage, and temporarily unavailable privilege failures remain retryable on the next tick;
+     *  successful/no-op decisions and package-manager rejection of a provider swap are terminal until the
+     *  profile pin changes or the user explicitly retries. */
+    internal fun shouldRecordAutoAttempt(result: String): Boolean =
+        result.startsWith("OK") ||
+            result.startsWith("already current") ||
+            result.startsWith("up to date") ||
+            result.startsWith("no known-good") ||
+            result.startsWith("refused") ||
+            result == "install failed: daemon install failed" ||
+            result.startsWith("install failed: Failure [")
+
     /** Heal the WebView per [decide]. Returns a short human status; "OK: …" on a successful install.
      *  [autoUpdate] = the scheduled update-to-pin path (advance a working engine to a newer pin). */
     suspend fun heal(context: Context, profile: DeviceProfile, engineMajor: Int?, force: Boolean = false, autoUpdate: Boolean = false): String =

@@ -9,6 +9,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * App watchdog — keeps the dashboard alive on a wall panel so it self-heals without intervention.
@@ -35,63 +36,62 @@ class WatchdogController(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     @Volatile
     private var job: Job? = null
+    private val runGeneration = AtomicLong()
 
     /** Idempotent: (re)start the poll loop when [enabled], else stop it. Called at boot and on toggle. */
+    @Synchronized
     fun apply(enabled: Boolean) {
+        val generation = synchronized(this) {
+            runGeneration.incrementAndGet().also { PanelStatus.dashboardCrashLooping = false }
+        }
         job?.cancel()
         job = null
         if (!enabled) { Log.i(TAG, "watchdog off"); return }
         Log.i(TAG, "watchdog on (poll ${INTERVAL_MS / 1000}s, bg-return ${BG_TIMEOUT_MS / 1000}s)")
-        var deadStreak = 0
-        var bgSince = 0L
-        val crashLoop = CrashLoopTracker()
+        val policy = DashboardRecoveryPolicy(DEAD_STREAK, BG_TIMEOUT_MS)
         job = scope.periodic(INTERVAL_MS, initialDelayMs = INTERVAL_MS, tag = TAG, name = "watchdog") {
             val pkg = config.dashboardPackage
-            when (runCatching { system.dashboardState(pkg) }.getOrDefault(AppState.UNKNOWN)) {
-                AppState.FG -> {
-                    deadStreak = 0; bgSince = 0L
-                    // Dashboard is healthy again — clear any crash-loop backoff + warning.
-                    if (PanelStatus.dashboardCrashLooping) PanelStatus.dashboardCrashLooping = false
-                    crashLoop.reset()
+            val state = runCatching { system.dashboardState(pkg) }.getOrDefault(AppState.UNKNOWN)
+            if (generation != runGeneration.get() || pkg != config.dashboardPackage) return@periodic
+            val decision = policy.evaluate(pkg, state, SystemClock.elapsedRealtime())
+            if (generation != runGeneration.get() || pkg != config.dashboardPackage) return@periodic
+            val becameCrashLooping = publishCrashStatus(generation, decision.crashLooping) ?: return@periodic
+            if (becameCrashLooping) {
+                Log.e(TAG, "dashboard crash-looping -> backing off relaunches; see health warning")
+            }
+            if (generation != runGeneration.get() || pkg != config.dashboardPackage) return@periodic
+            when (decision.action) {
+                DashboardRecoveryPolicy.Action.NONE -> Unit
+                DashboardRecoveryPolicy.Action.RELAUNCH_DEAD -> {
+                    Log.w(TAG, "dashboard process dead -> relaunching")
+                    system.launchHome(pkg)
                 }
-                AppState.BG -> {
-                    deadStreak = 0
-                    val now = SystemClock.elapsedRealtime()
-                    if (bgSince == 0L) {
-                        bgSince = now
-                    } else if (now - bgSince >= BG_TIMEOUT_MS) {
-                        Log.i(TAG, "dashboard backgrounded > ${BG_TIMEOUT_MS / 1000}s -> returning to it")
-                        system.launchHome(pkg)
-                        bgSince = 0L
-                    }
+                DashboardRecoveryPolicy.Action.RETURN_FROM_BACKGROUND -> {
+                    Log.i(TAG, "dashboard backgrounded > ${BG_TIMEOUT_MS / 1000}s -> returning to it")
+                    system.launchHome(pkg)
                 }
-                AppState.DEAD -> {
-                    bgSince = 0L
-                    if (++deadStreak >= DEAD_STREAK) {
-                        deadStreak = 0
-                        val now = SystemClock.elapsedRealtime()
-                        if (crashLoop.onRelaunchAttempt(now)) {
-                            Log.w(TAG, "dashboard process dead -> relaunching")
-                            system.launchHome(pkg)
-                        } else {
-                            // Too many relaunches too fast — the dashboard is crash-looping (e.g. an
-                            // incompatible app update). Stop hammering it; raise a health warning instead.
-                            if (!PanelStatus.dashboardCrashLooping) {
-                                Log.e(TAG, "dashboard crash-looping -> backing off relaunches; see health warning")
-                                PanelStatus.dashboardCrashLooping = true
-                            }
-                        }
-                    }
-                }
-                // Transient probe failure (su/daemon hiccup): stay cautious — don't relaunch, and
-                // keep any running background timer rather than losing it to one bad read.
-                AppState.UNKNOWN -> deadStreak = 0
             }
         }
     }
 
     /** Stop the loop for good (service teardown). */
-    fun stop() { job?.cancel(); job = null }
+    @Synchronized
+    fun stop() {
+        synchronized(this) {
+            runGeneration.incrementAndGet()
+            PanelStatus.dashboardCrashLooping = false
+        }
+        job?.cancel()
+        job = null
+    }
+
+    /** Publish only for the live run. Null means this run was retired; true means the warning rose. */
+    private fun publishCrashStatus(generation: Long, crashLooping: Boolean): Boolean? = synchronized(this) {
+        if (generation != runGeneration.get()) return@synchronized null
+        val becameCrashLooping = !PanelStatus.dashboardCrashLooping && crashLooping
+        PanelStatus.dashboardCrashLooping = crashLooping
+        becameCrashLooping
+    }
 
     companion object {
         private const val TAG = "ha-paneld/watchdog"
