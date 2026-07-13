@@ -33,8 +33,10 @@ import io.github.maxlyth.hapaneld.sensors.SensorReporter
 import io.github.maxlyth.hapaneld.util.Cached
 import io.github.maxlyth.hapaneld.util.AppInstaller
 import io.github.maxlyth.hapaneld.util.AndroidInput
+import io.github.maxlyth.hapaneld.util.BoundedStreams
 import io.github.maxlyth.hapaneld.util.CompanionInstaller
 import io.github.maxlyth.hapaneld.util.HelperClient
+import io.github.maxlyth.hapaneld.util.ByteLimitExceeded
 import io.github.maxlyth.hapaneld.util.InstallProgress
 import io.github.maxlyth.hapaneld.util.Json
 import io.github.maxlyth.hapaneld.util.ReleaseCatalog
@@ -51,7 +53,6 @@ import io.ktor.server.engine.embeddedServer
 import io.ktor.server.plugins.origin
 import io.ktor.server.request.receiveParameters
 import io.ktor.server.request.receiveStream
-import io.ktor.server.request.receiveText
 import io.ktor.server.request.uri
 import io.ktor.server.response.respondBytes
 import io.ktor.server.response.respondText
@@ -121,16 +122,13 @@ class PaneldServer(
     // EFFECTIVE backlight (sysfs actual_brightness via BrightnessController, cached) — the sensors
     // endpoint + Live-state row report what the hardware is doing, not just the Android setting.
     private val effectiveBrightness: () -> Int = { -1 },
-    // Trigger a WebView auto-heal (download + install the profile's recommended System WebView). Injected
-    // by the service (needs Context + a coroutine); runs off the request thread. Fired by the Install-tab button.
-    private val onHealWebView: () -> Unit = {},
     // Repair a Companion server row with an empty internal_url (the HA 2026.7 "Missing Host header"
-    // incident). Injected by the service; runs off the request thread. Fired by the Install-tab button.
-    private val onRepairCompanionUrl: () -> Unit = {},
+    // incident). False means the shared destructive-operation lane is busy.
+    private val onRepairCompanionUrl: () -> Boolean = { false },
     // Install/update a managed component from the Install tab. name ∈ {paneld, companion, webview};
     // action ∈ {update, reinstall}; version = a specific release tag to install (blank = channel newest).
     // Runs off-thread; progress is reported via InstallProgress. Injected by the service.
-    private val onInstallComponent: (String, String, String) -> Unit = { _, _, _ -> },
+    private val onInstallComponent: (String, String, String) -> Boolean = { _, _, _ -> false },
     // One-line EFR32 radio status ("sonoff 3.5.0 · running · Repeater"), or null when this panel has no
     // radio gateway — drives the Install-tab Radio card. Injected by the service (ZigbeeController, su).
     private val radioStatus: () -> String? = { null },
@@ -197,9 +195,11 @@ class PaneldServer(
     private var stopServer: (() -> Unit)? = null
     private val inspectLock = Any()
     @Volatile private var stopping = true
+    private val pendingApks = PendingUploadStore()
 
     fun start() {
         stopping = false
+        pendingApks.open()
         // Bind the IPv6 wildcard "::" — on Android this is dual-stack (net.ipv6.bindv6only=0), so the
         // server answers on both IPv6 and IPv4, instead of the IPv4-only default 0.0.0.0.
         val server = embeddedServer(CIO, port = config.httpPort, host = "::") {
@@ -317,9 +317,34 @@ class PaneldServer(
                         val p = call.receiveParameters()
                         val pw = p["passphrase"].orEmpty()
                         val includeComp = p["include_companion"]?.let { it == "true" || it == "1" } ?: true
-                        val bytes = withContext(Dispatchers.IO) {
-                            val json = backupJson(includeComp).toByteArray()
-                            if (pw.isEmpty()) json else PanelBackup.seal(json, pw)
+                        val progress = if (includeComp) InstallProgress.start("Backup") else null
+                        if (includeComp && progress == null) return@post call.respondText(
+                            """{"ok":false,"error":"busy"}""",
+                            ContentType.Application.Json,
+                            HttpStatusCode.Conflict,
+                        )
+                        var progressResult = "backup cancelled"
+                        val bytes = try {
+                            withContext(Dispatchers.IO) {
+                                val json = backupJson(includeComp).toByteArray()
+                                if (pw.isEmpty()) json else PanelBackup.seal(json, pw)
+                            }.also { progressResult = "backup ready" }
+                        } catch (_: ByteLimitExceeded) {
+                            progressResult = "Companion backup is too large"
+                            return@post call.respondText(
+                                """{"ok":false,"error":"companion-backup-too-large"}""",
+                                ContentType.Application.Json,
+                                HttpStatusCode.PayloadTooLarge,
+                            )
+                        } catch (e: CompanionBackupUnavailable) {
+                            progressResult = e.reason
+                            return@post call.respondText(
+                                """{"ok":false,"error":${jsonStr(e.reason)}}""",
+                                ContentType.Application.Json,
+                                HttpStatusCode.UnprocessableEntity,
+                            )
+                        } finally {
+                            if (progress != null) InstallProgress.finish(progress, progressResult)
                         }
                         val ext = if (pw.isEmpty()) "json" else "hpb"
                         call.response.headers.append("Content-Disposition", "attachment; filename=\"${config.panelId}-backup.$ext\"")
@@ -425,11 +450,14 @@ class PaneldServer(
                         val version = p["version"]?.trim().orEmpty()
                         if (name !in setOf("paneld", "companion", "webview"))
                             call.respondText("""{"status":"bad-component"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+                        else if (action !in setOf("update", "reinstall"))
+                            call.respondText("""{"status":"bad-action"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
                         else if (version.isNotEmpty() && !ReleaseCatalog.validTag(version))
                             call.respondText("""{"status":"bad-version"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
-                        else if (InstallProgress.running)
-                            call.respondText("""{"status":"busy"}""", ContentType.Application.Json)
-                        else { onInstallComponent(name, action, version); call.respondText("""{"status":"started"}""", ContentType.Application.Json) }
+                        else {
+                            val status = if (onInstallComponent(name, action, version)) "started" else "busy"
+                            call.respondText("""{"status":"$status"}""", ContentType.Application.Json)
+                        }
                     }
                     get("/install/status") { call.respondText(InstallProgress.json(), ContentType.Application.Json) }
                     // ---- APK upload (Install tab). ⚠ SECURITY: root-installs an ARBITRARY user-supplied
@@ -443,6 +471,8 @@ class PaneldServer(
                             """{"ok":false,"error":"disabled"}""", ContentType.Application.Json, HttpStatusCode.Forbidden)
                         if (!rootOk()) return@post call.respondText(
                             """{"ok":false,"error":"no-root"}""", ContentType.Application.Json, HttpStatusCode.ServiceUnavailable)
+                        val lease = pendingApks.begin() ?: return@post call.respondText(
+                            """{"ok":false,"error":"stopping"}""", ContentType.Application.Json, HttpStatusCode.ServiceUnavailable)
                         val staged = runCatching {
                             File.createTempFile("apk-upload-", ".apk", appContext.cacheDir)
                         }.getOrElse {
@@ -452,33 +482,48 @@ class PaneldServer(
                                 HttpStatusCode.InternalServerError,
                             )
                         }
-                        val got = withContext(Dispatchers.IO) {
-                            runCatching { call.receiveStream().use { i -> staged.outputStream().use { i.copyTo(it) } }; staged.length() > 0 }
-                                .getOrDefault(false)
+                        val got = try {
+                            withContext(Dispatchers.IO) {
+                                call.receiveStream().use { input ->
+                                    staged.outputStream().use { output ->
+                                        BoundedStreams.copy(input, output, MAX_APK_UPLOAD_BYTES)
+                                    }
+                                } > 0L
+                            }
+                        } catch (_: ByteLimitExceeded) {
+                            staged.delete()
+                            return@post call.respondText(
+                                """{"ok":false,"error":"upload-too-large"}""",
+                                ContentType.Application.Json,
+                                HttpStatusCode.PayloadTooLarge,
+                            )
+                        } catch (_: Exception) {
+                            false
                         }
                         if (!got) { staged.delete(); return@post call.respondText(
                             """{"ok":false,"error":"upload-failed"}""", ContentType.Application.Json, HttpStatusCode.BadRequest) }
                         val info = withContext(Dispatchers.IO) { AppInstaller.inspect(appContext, staged.absolutePath) }
                         if (info == null) { staged.delete(); return@post call.respondText(
                             """{"ok":false,"error":"not-an-apk"}""", ContentType.Application.Json, HttpStatusCode.BadRequest) }
-                        pendingApk?.takeIf { it.absolutePath != staged.absolutePath }?.delete()
-                        pendingApk = staged
+                        val entry = pendingApks.stage(lease, staged) ?: return@post call.respondText(
+                            """{"ok":false,"error":"stopping"}""", ContentType.Application.Json, HttpStatusCode.ServiceUnavailable)
                         call.respondText(
-                            """{"ok":true,"package":${jsonStr(info.pkg)},"version":${jsonStr(info.version)},"signer":${jsonStr(info.signerSha256 ?: "unsigned")}}""",
+                            """{"ok":true,"token":${jsonStr(entry.token)},"package":${jsonStr(info.pkg)},"version":${jsonStr(info.version)},"signer":${jsonStr(info.signerSha256 ?: "unsigned")}}""",
                             ContentType.Application.Json)
                     }
                     // Confirm + install the staged APK (off-thread; poll /install/status).
                     post("/install/apk/commit") {
                         if (!config.apkUploadAllowed) return@post call.respondText(
                             """{"status":"disabled"}""", ContentType.Application.Json, HttpStatusCode.Forbidden)
-                        val apk = pendingApk
-                        if (apk == null || !apk.exists()) return@post call.respondText(
-                            """{"status":"none-staged"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
-                        if (InstallProgress.running) return@post call.respondText(
-                            """{"status":"busy"}""", ContentType.Application.Json)
-                        pendingApk = null
-                        val progress = InstallProgress.start("APK") ?: return@post call.respondText(
-                            """{"status":"busy"}""", ContentType.Application.Json)
+                        val token = call.receiveParameters()["token"].orEmpty()
+                        val claimed = pendingApks.claim(token) ?: return@post call.respondText(
+                            """{"status":"stale-or-missing"}""", ContentType.Application.Json, HttpStatusCode.Conflict)
+                        val progress = InstallProgress.start("APK")
+                        if (progress == null) {
+                            pendingApks.restore(claimed)
+                            return@post call.respondText("""{"status":"busy"}""", ContentType.Application.Json)
+                        }
+                        val apk = claimed.file
                         val job = scope.launch {
                             val r = runCatching { AppInstaller.installLocalApk(appContext, apk) }.getOrElse { "error: ${it.message}" }
                             Log.i(TAG, "APK upload install: $r")
@@ -492,6 +537,7 @@ class PaneldServer(
                     post("/install/apk/allow") {
                         val on = call.receiveParameters()["on"]?.let { it == "true" || it == "1" } ?: true
                         config.setApkUploadAllowed(on)
+                        if (!on) pendingApks.clear()
                         call.respondText("""{"ok":true,"allowed":$on}""", ContentType.Application.Json)
                     }
                     // Removable apps (third-party + updated-system; excludes ha-paneld + stock system apps,
@@ -504,21 +550,29 @@ class PaneldServer(
                     // removable apps. `pm uninstall` (system/vendor apps aren't removable, only disable-able
                     // via taming — a separate, safer path).
                     post("/uninstall") {
-                        if (!rootOk()) return@post call.respondText(
+                        if (!suCache.get()) return@post call.respondText(
                             """{"ok":false,"error":"no-root"}""", ContentType.Application.Json, HttpStatusCode.ServiceUnavailable)
                         val pkg = call.receiveParameters()["pkg"]?.trim().orEmpty()
                         val protected = pkg == appContext.packageName || pkg == io.github.maxlyth.hapaneld.util.WebViewInstaller.WEBVIEW_PKG
                         if (pkg.isEmpty() || protected || !AndroidInput.isPackage(pkg))
                             return@post call.respondText("""{"ok":false,"error":"bad-package"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
-                        val out = withContext(Dispatchers.IO) { io.github.maxlyth.hapaneld.control.Su.runOutput("pm uninstall $pkg")?.trim() }
-                        // The persistent root shell sometimes returns empty stdout even on success — confirm
-                        // by absence (pm path is empty once the package is gone) rather than trusting "Success".
-                        val gone = withContext(Dispatchers.IO) {
-                            io.github.maxlyth.hapaneld.control.Su.runOutput("pm path $pkg 2>/dev/null")?.trim().isNullOrEmpty()
+                        val progress = InstallProgress.start("Uninstall") ?: return@post call.respondText(
+                            """{"ok":false,"error":"busy"}""", ContentType.Application.Json, HttpStatusCode.Conflict)
+                        var progressResult = "uninstall cancelled"
+                        try {
+                            val (out, path) = withContext(Dispatchers.IO) {
+                                Su.runOutput("pm uninstall $pkg")?.trim() to
+                                    Su.runOutput("pm path $pkg 2>/dev/null")?.trim()
+                            }
+                            // Empty stdout can be a real persistent-shell success, but null means the probe failed.
+                            val ok = uninstallSucceeded(out, path)
+                            progressResult = if (ok) "uninstalled $pkg" else "uninstall failed: $pkg"
+                            if (ok) Log.i(TAG, "uninstalled $pkg")
+                            val result = out?.ifEmpty { if (ok) "removed" else "uninstall failed" } ?: "uninstall failed"
+                            call.respondText("""{"ok":$ok,"result":${jsonStr(result)}}""", ContentType.Application.Json)
+                        } finally {
+                            InstallProgress.finish(progress, progressResult)
                         }
-                        val ok = out?.contains("Success", ignoreCase = true) == true || gone
-                        if (ok) Log.i(TAG, "uninstalled $pkg")
-                        call.respondText("""{"ok":$ok,"result":${jsonStr(out?.ifEmpty { "removed" } ?: "removed")}}""", ContentType.Application.Json)
                     }
                     // EFR32 radio status (Install-tab Radio card). {present, status}. present=false → no radio.
                     get("/radio") {
@@ -531,8 +585,8 @@ class PaneldServer(
                     // Auto-heal the System WebView (download + install the profile's recommended build).
                     // Fire-and-forget: the install runs off-thread (large download); the client refreshes.
                     post("/webview/heal") {
-                        onHealWebView()
-                        call.respondText("""{"status":"started"}""", ContentType.Application.Json)
+                        val status = if (onInstallComponent("webview", "reinstall", "")) "started" else "busy"
+                        call.respondText("""{"status":"$status"}""", ContentType.Application.Json)
                     }
                     // Clear the built-in renderer's browsing data (localStorage/IndexedDB/caches/cookies)
                     // — the remote heal for a corrupted-storage dashboard that survives plain reloads.
@@ -561,9 +615,9 @@ class PaneldServer(
                     // header" incident). Fire-and-forget: the repair force-stops + relaunches the Companion
                     // off-thread; invalidate the health cache so the warning clears on the next poll.
                     post("/companion/repair-url") {
-                        onRepairCompanionUrl()
-                        companionUrlCache.invalidate()
-                        call.respondText("""{"status":"started"}""", ContentType.Application.Json)
+                        val started = onRepairCompanionUrl()
+                        if (started) companionUrlCache.invalidate()
+                        call.respondText("""{"status":"${if (started) "started" else "busy"}"}""", ContentType.Application.Json)
                     }
                     // Per-panel Canvas dashboard layout (opaque Gridstack JSON, stored in Config).
                     get("/ui/layout") {
@@ -832,8 +886,7 @@ class PaneldServer(
         stopServer = null
         // Serialize against an admitted start: teardown either prevents it or waits and then kills it.
         synchronized(inspectLock) { if (CdpRelay.running) CdpRelay.stop() }
-        pendingApk?.delete()
-        pendingApk = null
+        pendingApks.close()
     }
 
     // The panel's physical resolution as a CSS aspect-ratio (e.g. "750/1334") so the Screenshot card can
@@ -847,7 +900,14 @@ class PaneldServer(
 
     /** Shared TTS/announce handler — served at both `/play` (external contract) and `/api/v1/play`. */
     private suspend fun handlePlay(call: ApplicationCall) {
-        val body = call.receiveText()
+        val body = try {
+            withContext(Dispatchers.IO) {
+                call.receiveStream().use { String(BoundedStreams.readBytes(it, MAX_PLAY_BODY_BYTES), Charsets.UTF_8) }
+            }
+        } catch (_: ByteLimitExceeded) {
+            call.respondText("body-too-large\n", status = HttpStatusCode.PayloadTooLarge)
+            return
+        }
         val url = urlRegex.find(body)?.value
         if (url == null) {
             call.respondText("no-url\n", status = HttpStatusCode.BadRequest)
@@ -1047,6 +1107,7 @@ ${tameCardHtml()}
         // Engine-aware WebView age check (a Cromite swap reports the stale OEM package version).
         val wv = PanelInfo.webViewStatus(appContext)
         val root = rootOk()
+        val su = suCache.get()
         // Same finding set as the dashboard banner (HealthAudit). Update findings are surfaced by the
         // Managed-components card below, so the top warnings show only the render-blocking states.
         val problems = HealthAudit.evaluate(
@@ -1070,7 +1131,7 @@ ${tameCardHtml()}
 <div class="cards">
 ${componentsCardHtml(wv, root)}
 ${apkCardHtml(root)}
-${uninstallCardHtml(root)}
+${uninstallCardHtml(su)}
 <div class="card" id="radiocard" style="display:none"><h2>Radio firmware</h2>
 <table><tr><th>EFR32 radio</th><td id="radio-status">…</td></tr></table>
 <p class="note">Zigbee gateway on this panel's Silicon Labs EFR32. Toggle the <b>Zigbee router</b> role on the <a href="/configure#cfg-zigbee_router">Configure</a> tab. <span class="muted">Thread NCP flashing is planned (experimental) — not yet available.</span></p></div>
@@ -1079,7 +1140,7 @@ ${uninstallCardHtml(root)}
 <button class="pbtn" onclick="healthAudit(this)">Run health audit</button>
 <div id="audit-out" style="margin-top:10px"></div>
 <p class="note"><a href="/api/v1/diag" target="_blank" style="color:#9cf">⭳ Diagnostics dump</a> — full hardware/firmware/SELinux/su report for bug reports.</p></div>
-${backupCardHtml(root)}
+${backupCardHtml(su)}
 $allGood</div>
 <script src="/assets/install.js"></script>"""
     }
@@ -1430,10 +1491,6 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
     private val companionUrlCache = Cached(COMPANION_URL_TTL_MS) {
         if (suCache.get()) CompanionDb.internalUrlStatus(appContext, Su) else CompanionDb.UrlStatus(false, 0)
     }
-    // Single pending APK-upload slot (Install-tab "install an APK"): a staged file awaiting an explicit
-    // commit. One at a time — the confirm is immediate; a new upload replaces (and deletes) the previous.
-    @Volatile private var pendingApk: File? = null
-
     private val snapCache = Cached(SNAP_TTL_MS) {
         val d = densityCache.get()
         Snap(
@@ -2358,7 +2415,15 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
      * or strict mode with any error).
      */
     private suspend fun handleConfigImport(call: ApplicationCall) {
-        val bundle = ConfigBundle.parse(call.receiveText())
+        val body = try {
+            withContext(Dispatchers.IO) {
+                call.receiveStream().use { String(BoundedStreams.readBytes(it, MAX_CONFIG_IMPORT_BYTES), Charsets.UTF_8) }
+            }
+        } catch (_: ByteLimitExceeded) {
+            call.respondText("""{"status":"too-large"}""", ContentType.Application.Json, HttpStatusCode.PayloadTooLarge)
+            return
+        }
+        val bundle = ConfigBundle.parse(body)
         if (bundle == null) {
             call.respondText("""{"status":"bad-bundle"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
             return
@@ -2495,8 +2560,9 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
     // lose the login (the `servers` row lives in the WAL until a checkpoint) — validated the hard way.
     private val companionBackupFiles = CompanionRestore.ALLOWED_FILES
 
-    /** Build the (pre-encryption) backup plaintext JSON. Config first; Companion login files (base64) when
-     *  [includeCompanion] and su + a Companion are present. */
+    /** Build the backup plaintext. A requested Companion capture is all-or-error, never silently omitted. */
+    private class CompanionBackupUnavailable(val reason: String) : Exception(reason)
+
     private fun backupJson(includeCompanion: Boolean): String {
         val live = liveValues()
         val cfg = SettingsRegistry.settable().filterNot { it.transient }
@@ -2504,14 +2570,19 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
         val sb = StringBuilder("{\"kind\":\"ha-paneld-backup\",\"schema\":${SettingsRegistry.SCHEMA}")
         sb.append(",\"panel_id\":${jsonStr(config.panelId)},\"created\":${jsonStr(System.currentTimeMillis().toString())}")
         sb.append(",\"config\":{").append(cfg).append("}")
-        val pkg = if (includeCompanion) CompanionInstaller.installedPkg(appContext) else null
-        if (pkg != null && io.github.maxlyth.hapaneld.control.Su.available()) {
-            val files = captureCompanion(pkg)
-            if (files.isNotEmpty()) {
-                val enc = java.util.Base64.getEncoder()
-                val arr = files.joinToString(",") { (rel, b) -> "{\"rel\":${jsonStr(rel)},\"b64\":${jsonStr(enc.encodeToString(b))}}" }
-                sb.append(",\"companion\":{\"pkg\":${jsonStr(pkg)},\"files\":[").append(arr).append("]}")
+        if (includeCompanion) {
+            val pkg = CompanionInstaller.installedPkg(appContext)
+                ?: throw CompanionBackupUnavailable("HA Companion is not installed")
+            if (!io.github.maxlyth.hapaneld.control.Su.available()) {
+                throw CompanionBackupUnavailable("Companion backup needs su")
             }
+            val files = captureCompanion(pkg)
+            if (files.none { it.first == "databases/HomeAssistantDB" }) {
+                throw CompanionBackupUnavailable("Companion login database could not be captured")
+            }
+            val enc = java.util.Base64.getEncoder()
+            val arr = files.joinToString(",") { (rel, b) -> "{\"rel\":${jsonStr(rel)},\"b64\":${jsonStr(enc.encodeToString(b))}}" }
+            sb.append(",\"companion\":{\"pkg\":${jsonStr(pkg)},\"files\":[").append(arr).append("]}")
         }
         return sb.append("}").toString()
     }
@@ -2524,9 +2595,13 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
         // Merge any pending WAL frames into HomeAssistantDB so the captured file holds the whole login.
         // Safe while the app is running (SQLite WAL is multi-connection); a no-op if sqlite3 is absent.
         io.github.maxlyth.hapaneld.control.Su.run("sqlite3 $base/databases/HomeAssistantDB 'PRAGMA wal_checkpoint(TRUNCATE)'")
+        val budget = BoundedStreams.Budget(MAX_COMPANION_BACKUP_BYTES)
         return companionBackupFiles.mapNotNull { rel ->
-            io.github.maxlyth.hapaneld.control.Su.runBytes("cat $base/$rel 2>/dev/null")
-                ?.takeIf { it.isNotEmpty() }?.let { rel to it }
+            // Read at most one byte beyond the aggregate budget so a growing/corrupt DB cannot exhaust RAM.
+            val bytes = io.github.maxlyth.hapaneld.control.Su.runBytes(
+                "head -c ${budget.remaining + 1L} $base/$rel 2>/dev/null",
+            )?.takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+            rel to budget.accept(bytes)
         }
     }
 
@@ -2535,7 +2610,17 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
     private suspend fun handleRestore(call: ApplicationCall) {
         val pw = call.request.headers["X-Backup-Passphrase"].orEmpty()
         val dryRun = call.request.queryParameters["dry_run"] == "1"
-        val bundle = withContext(Dispatchers.IO) { call.receiveStream().use { it.readBytes() } }
+        val bundle = try {
+            withContext(Dispatchers.IO) {
+                call.receiveStream().use { BoundedStreams.readBytes(it, MAX_RESTORE_BYTES) }
+            }
+        } catch (_: ByteLimitExceeded) {
+            return call.respondText(
+                """{"ok":false,"error":"bundle-too-large"}""",
+                ContentType.Application.Json,
+                HttpStatusCode.PayloadTooLarge,
+            )
+        }
         // Encrypted (needs the passphrase) vs plain bundle — auto-detected from the magic.
         val plain = if (PanelBackup.isSealed(bundle)) {
             if (pw.isEmpty()) return call.respondText(
@@ -2577,7 +2662,6 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
                 HttpStatusCode.ServiceUnavailable,
             )
         }
-        if (InstallProgress.running) return call.respondText("""{"status":"busy"}""", ContentType.Application.Json)
         val progress = InstallProgress.start("Restore") ?: return call.respondText(
             """{"status":"busy"}""", ContentType.Application.Json)
         val job = scope.launch {
@@ -2846,6 +2930,11 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
         private const val DENSITY_TTL_MS = 30_000L
         private const val SU_TTL_MS = 60_000L
         private const val COMPANION_URL_TTL_MS = 60_000L
+        internal const val MAX_PLAY_BODY_BYTES = 16L * 1024L
+        internal const val MAX_CONFIG_IMPORT_BYTES = 1L * 1024L * 1024L
+        internal const val MAX_RESTORE_BYTES = 64L * 1024L * 1024L
+        internal const val MAX_APK_UPLOAD_BYTES = 256L * 1024L * 1024L
+        internal const val MAX_COMPANION_BACKUP_BYTES = 32L * 1024L * 1024L
 
         // Dashboard fact rows that are BACKED BY A SETTING → the Configure anchor the ✎ marker
         // deep-links to. Facts absent here are static (hardware/runtime) and get no marker.

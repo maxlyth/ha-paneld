@@ -31,6 +31,7 @@ object AppInstaller {
     val COMPANION_MINIMAL = Pin("io.homeassistant.companion.android.minimal", "11194ba809b42ddf0e1a7dec6842a59c7ff1119c5482e95febffd5c6014daa5a")
 
     private const val TAG = "ha-paneld/install"
+    private const val MAX_APK_DOWNLOAD_BYTES = 512L * 1024L * 1024L
     fun installedVersion(context: Context, pkg: String): String =
         runCatching { context.packageManager.getPackageInfo(pkg, 0).versionName ?: "" }.getOrElse { "" }
 
@@ -48,18 +49,26 @@ object AppInstaller {
         // fill /data or fail half-written on a low-storage panel. We need room for the download only —
         // the su install streams straight from it (no second /data/local/tmp copy). +64 MB margin.
         val size = contentLength(url)
-        if (size > 0L) {
-            val need = size + 64L * 1024 * 1024
-            val free = context.cacheDir.usableSpace
-            if (free < need) {
-                Log.w(TAG, "insufficient storage: need ${need / 1048576}MB, have ${free / 1048576}MB free")
-                return@withContext "insufficient storage (need ${need / 1048576}MB, ${free / 1048576}MB free)"
-            }
+        if (size > MAX_APK_DOWNLOAD_BYTES) {
+            Log.w(TAG, "refusing oversized APK download: $size bytes")
+            return@withContext "download too large (${size / 1048576}MB)"
+        }
+        val margin = 64L * 1024L * 1024L
+        val free = context.cacheDir.usableSpace
+        val spaceLimit = (free - margin).coerceAtLeast(0L)
+        if (size > 0L && size > spaceLimit) {
+            val need = size + margin
+            Log.w(TAG, "insufficient storage: need ${need / 1048576}MB, have ${free / 1048576}MB free")
+            return@withContext "insufficient storage (need ${need / 1048576}MB, ${free / 1048576}MB free)"
+        }
+        val downloadLimit = minOf(MAX_APK_DOWNLOAD_BYTES, spaceLimit)
+        if (downloadLimit == 0L) {
+            return@withContext "insufficient storage (64MB safety margin unavailable)"
         }
         val apk = runCatching { File.createTempFile("hapaneld-dl-", ".apk", context.cacheDir) }
             .getOrElse { return@withContext "download staging failed" }
         try {
-            if (!download(url, apk)) return@withContext "download failed"
+            if (!download(url, apk, downloadLimit)) return@withContext "download failed"
             val why = verifyApk(context, apk.absolutePath, pin)
             if (why != null) {
                 Log.w(TAG, "refused install: $why")
@@ -163,20 +172,23 @@ object AppInstaller {
                 requestMethod = "HEAD"; instanceFollowRedirects = false
                 connectTimeout = 15_000; readTimeout = 15_000
             }
-            when (conn.responseCode) {
-                in 300..399 -> {
-                    val loc = conn.getHeaderField("Location") ?: return -1L
-                    conn.disconnect()
-                    current = httpsRedirect(current, loc) ?: return -1L
+            try {
+                when (conn.responseCode) {
+                    in 300..399 -> {
+                        val loc = conn.getHeaderField("Location") ?: return -1L
+                        current = httpsRedirect(current, loc) ?: return -1L
+                    }
+                    200 -> return conn.contentLengthLong
+                    else -> return -1L
                 }
-                200 -> return conn.contentLengthLong.also { conn.disconnect() }
-                else -> return -1L
+            } finally {
+                conn.disconnect()
             }
         }
         -1L
     }.getOrDefault(-1L)
 
-    private fun download(url: String, dest: File): Boolean = runCatching {
+    private fun download(url: String, dest: File, maxBytes: Long): Boolean = runCatching {
         var current = URL(url).takeIf { it.protocol.equals("https", true) }
             ?: run { Log.w(TAG, "refusing non-HTTPS URL"); return false }
         repeat(5) {
@@ -184,17 +196,30 @@ object AppInstaller {
             conn.instanceFollowRedirects = false
             conn.connectTimeout = 15_000
             conn.readTimeout = 60_000
-            when (conn.responseCode) {
-                in 300..399 -> {
-                    val loc = conn.getHeaderField("Location") ?: return false
-                    conn.disconnect()
-                    current = httpsRedirect(current, loc) ?: run { Log.w(TAG, "refusing non-HTTPS redirect"); return false }
+            try {
+                when (conn.responseCode) {
+                    in 300..399 -> {
+                        val loc = conn.getHeaderField("Location") ?: return false
+                        current = httpsRedirect(current, loc)
+                            ?: run { Log.w(TAG, "refusing non-HTTPS redirect"); return false }
+                    }
+                    200 -> {
+                        val declared = conn.contentLengthLong
+                        if (declared > maxBytes) {
+                            Log.w(TAG, "refusing oversized APK response: $declared bytes")
+                            return false
+                        }
+                        conn.inputStream.use { input ->
+                            dest.outputStream().use { output ->
+                                BoundedStreams.copy(input, output, maxBytes)
+                            }
+                        }
+                        return dest.length() > 0
+                    }
+                    else -> return false
                 }
-                200 -> {
-                    conn.inputStream.use { input -> dest.outputStream().use { input.copyTo(it) } }
-                    return dest.length() > 0
-                }
-                else -> return false
+            } finally {
+                conn.disconnect()
             }
         }
         false

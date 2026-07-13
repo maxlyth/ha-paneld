@@ -3,6 +3,8 @@ package io.github.maxlyth.hapaneld
 import android.media.AudioAttributes
 import android.media.MediaPlayer
 import android.util.Log
+import io.github.maxlyth.hapaneld.util.BoundedStreams
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -24,6 +26,7 @@ object AudioPlayer {
     private const val TAG = "ha-paneld/audio"
     private const val CONNECT_TIMEOUT_MS = 15_000
     private const val READ_TIMEOUT_MS = 15_000
+    private const val MAX_AUDIO_BYTES = 32L * 1024L * 1024L
 
     /** Download [url] to a temp file then play it. Blocking download on IO dispatcher. */
     suspend fun play(cacheDir: File, url: String) = withContext(Dispatchers.IO) {
@@ -31,6 +34,9 @@ object AudioPlayer {
         try {
             download(url, tmp)
             playAndAwait(tmp)
+        } catch (e: CancellationException) {
+            tmp.delete()
+            throw e
         } catch (e: Exception) {
             Log.w(TAG, "play failed for $url", e)
             tmp.delete()
@@ -48,7 +54,15 @@ object AudioPlayer {
             conn.sslSocketFactory = trustAllFactory()
             conn.hostnameVerifier = javax.net.ssl.HostnameVerifier { _, _ -> true }
         }
-        conn.inputStream.use { input -> dest.outputStream().use { input.copyTo(it) } }
+        try {
+            val declared = conn.contentLengthLong
+            require(declared < 0L || declared <= MAX_AUDIO_BYTES) { "audio exceeds $MAX_AUDIO_BYTES bytes" }
+            conn.inputStream.use { input ->
+                dest.outputStream().use { output -> BoundedStreams.copy(input, output, MAX_AUDIO_BYTES) }
+            }
+        } finally {
+            conn.disconnect()
+        }
     }
 
     /**
@@ -87,7 +101,10 @@ object AudioPlayer {
             start()
         }
         Log.d(TAG, "playing ${file.name} (${file.length()} bytes)")
-        cont.invokeOnCancellation { runCatching { player.release() } }
+        cont.invokeOnCancellation {
+            runCatching { player.release() }
+            file.delete()
+        }
     }
 
     private fun trustAllFactory() = SSLContext.getInstance("TLS").apply {

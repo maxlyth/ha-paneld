@@ -3,11 +3,9 @@ package io.github.maxlyth.hapaneld.util
 import kotlinx.coroutines.Job
 
 /**
- * Cross-thread progress for a one-shot install/update kicked off from the Install tab (managed
- * components + WebView heal). The service flips [running] around the off-thread install and records the
- * installer's result string; the web UI polls GET /api/v1/install/status to know when to re-read the
- * installed versions. Single-slot by design — only one component install runs at a time (the UI disables
- * the action buttons while [running]).
+ * Process-wide ownership and progress for destructive control-plane operations. HTTP, MQTT, and scheduled
+ * callers all acquire the same single slot before installs, uninstall, repair, or restore; the web UI polls
+ * GET /api/v1/install/status for the current owner and result.
  */
 object InstallProgress {
     class Ticket internal constructor(internal val id: Long)
@@ -18,7 +16,7 @@ object InstallProgress {
     private var generation = 0L
     private var active: Ticket? = null
 
-    /** Mark an install of [component] as started. Returns null if one is already in flight. */
+    /** Claim the operation lane for [component]. Returns null if another owner is already in flight. */
     @Synchronized
     fun start(component: String): Ticket? {
         if (running) return null

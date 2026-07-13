@@ -49,6 +49,7 @@ import io.github.maxlyth.hapaneld.logship.LogShipper
 import io.github.maxlyth.hapaneld.sensors.SensorReporter
 import io.github.maxlyth.hapaneld.util.localIpv4
 import io.github.maxlyth.hapaneld.util.localIpv6
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -269,7 +270,6 @@ class PaneldService : Service() {
             // Live log viewer sources (Logs tab). System is gated on Su.available() per request.
             logApp = logCaptureApp, logSystem = logCaptureSystem,
             effectiveBrightness = { brightness.getBrightness() },
-            onHealWebView = { healWebView() },
             onRepairCompanionUrl = { repairCompanionUrl() },
             onInstallComponent = { name, action, version -> installComponent(name, action, version) },
             // One-line EFR32 radio status for the Install-tab Radio card; null when this panel has no radio.
@@ -298,17 +298,15 @@ class PaneldService : Service() {
         discoverHaUrl = { mdns.discoverHaBaseUrl() },
         // Companion install/update button → run off-thread (network + su).
         onUpdateCompanion = {
-            scope.launch {
-                val r = CompanionInstaller.installOrUpdate(this@PaneldService, force = true, channel = config.companionUpdateChannel, maxVersion = profile.companionMaxVersion)
-                Log.i(TAG, "Companion manual update: $r")
+            if (!installComponent("companion", "reinstall", "")) {
+                Log.w(TAG, "Companion manual update skipped: another destructive operation is running")
             }
         },
         // ha-paneld self-update (off-thread): force=true from the update_paneld button + a pre-release→
         // stable channel switch; force=false lets isNewer gate (no auto-downgrade off an rc).
         onSelfUpdate = { force ->
-            scope.launch {
-                val r = SelfUpdater.checkAndUpdate(this@PaneldService, config.updateChannel, force)
-                Log.i(TAG, "self-update (force=$force): $r")
+            if (!installComponent("paneld", if (force) "reinstall" else "update", "")) {
+                Log.w(TAG, "self-update skipped: another destructive operation is running")
             }
         },
     )
@@ -441,42 +439,85 @@ class PaneldService : Service() {
         webViewManaged = profile.recommendedWebView != null,
     )
 
-    /** WebView auto-heal (Install-tab "Update WebView now" button): download + install the profile's
-     *  recommended System WebView, then reload the dashboard so the new provider takes effect. force=true
-     *  (the user asked); off-thread (large download + su). */
-    private fun healWebView() {
-        scope.launch {
-            val r = io.github.maxlyth.hapaneld.util.WebViewInstaller.heal(this@PaneldService, profile, engineMajor = null, force = true)
-            Log.i(TAG, "WebView heal: $r")
-            if (r.startsWith("OK")) {
-                kotlinx.coroutines.delay(2_000)
-                if (config.dashboardPackage == io.github.maxlyth.hapaneld.control.SystemController.BUILTIN_DASHBOARD) {
-                    // A WebView provider binds per-process at first use, so a page reload can't swap it
-                    // for OUR OWN renderer — only a process restart can. Exit cleanly: START_STICKY
-                    // brings the service back and Android relaunches the (HOME) dashboard activity,
-                    // both on the freshly-installed provider. (Foreign renderers get the same effect
-                    // from reloadDashboard's force-stop below.)
-                    Log.i(TAG, "WebView healed — restarting process so the built-in renderer binds the new provider")
-                    kotlinx.coroutines.delay(1_000) // let the HTTP response + this log flush
-                    kotlin.system.exitProcess(0)
-                }
-                // A foreign renderer (Companion) picks up the new provider on ITS process restart — reload it.
-                system.reloadDashboard(config.dashboardPackage)
+    /** Run one destructive operation under the same process-wide ticket used by HTTP restore/APK routes. */
+    private suspend fun completeOperation(
+        progress: InstallProgress.Ticket,
+        logLabel: String,
+        operation: suspend () -> String,
+        after: suspend (String) -> Unit = {},
+    ): String {
+        var result = "cancelled"
+        try {
+            result = try {
+                operation()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "$logLabel failed", e)
+                "error: ${e.message}"
             }
+            Log.i(TAG, "$logLabel: $result")
+            InstallProgress.finish(progress, result)
+            after(result)
+            return result
+        } finally {
+            // Covers cancellation, fatal errors, and direct callers; stale tickets cannot clear a successor.
+            InstallProgress.finish(progress, result)
         }
     }
 
+    /** Start an asynchronous destructive operation only when the shared lane is free. */
+    private fun launchOperation(
+        component: String,
+        logLabel: String,
+        operation: suspend () -> String,
+        after: suspend (String) -> Unit = {},
+    ): Boolean {
+        val progress = InstallProgress.start(component) ?: return false
+        val job = scope.launch { completeOperation(progress, logLabel, operation, after) }
+        // A cancelled job can complete before its body starts, so the body's finally is not sufficient.
+        InstallProgress.finishOnFailure(progress, job)
+        return true
+    }
+
+    /** Run a scheduled destructive operation inline, or skip it when another owner holds the lane. */
+    private suspend fun runOperation(
+        component: String,
+        logLabel: String,
+        operation: suspend () -> String,
+        after: suspend (String) -> Unit = {},
+    ): String? {
+        val progress = InstallProgress.start(component) ?: run {
+            Log.i(TAG, "$logLabel skipped: another destructive operation is running")
+            return null
+        }
+        return completeOperation(progress, logLabel, operation, after)
+    }
+
+    /** Activate a successfully installed WebView provider in whichever renderer owns the dashboard. */
+    private suspend fun activateWebView(result: String, verb: String) {
+        if (!result.startsWith("OK")) return
+        kotlinx.coroutines.delay(2_000)
+        if (config.dashboardPackage == io.github.maxlyth.hapaneld.control.SystemController.BUILTIN_DASHBOARD) {
+            // A WebView provider binds once per process. Progress is terminal and the HTTP reply has
+            // time to flush before START_STICKY restarts the service and HOME on the new provider.
+            Log.i(TAG, "WebView $verb — restarting process so the built-in renderer binds the new provider")
+            kotlinx.coroutines.delay(1_000)
+            kotlin.system.exitProcess(0)
+        }
+        system.reloadDashboard(config.dashboardPackage)
+    }
+
     /** Scheduled WebView auto-update (opt-in, update tick): advance the System WebView to the profile's
-     *  pinned build when it's newer than the running engine. A provider binds per-process, so a
-     *  successful install restarts the process to pick it up (mirrors [healWebView]). A loop guard skips
-     *  re-downloading a version that already installed but never became the provider (variant hardware);
-     *  it clears when the pinned version advances. Off-thread (large download + su). */
-    private suspend fun autoUpdateWebView() {
-        val rec = profile.recommendedWebView ?: return
+     *  pinned build when it's newer than the running engine. A loop guard skips re-downloading a version
+     *  that already installed but never became the provider; it clears when the pinned version advances. */
+    private suspend fun autoUpdateWebView(): String {
+        val rec = profile.recommendedWebView ?: return "skipped: no managed WebView"
         val engineMajor = io.github.maxlyth.hapaneld.http.PanelInfo.webViewStatus(this@PaneldService).engineMajor
         if (io.github.maxlyth.hapaneld.util.WebViewInstaller.shouldSkipAutoUpdate(config.webViewAutoLastVersion, rec.version, rec.major, engineMajor)) {
-            Log.w(TAG, "WebView auto-update: ${rec.version} already attempted but the engine is still ${engineMajor ?: "?"} — provider not switching; skipping (manual heal may be needed)")
-            return
+            val skipped = "skipped: ${rec.version} already attempted but engine is ${engineMajor ?: "?"}; manual heal may be needed"
+            Log.w(TAG, "WebView auto-update: $skipped")
+            return skipped
         }
         val r = io.github.maxlyth.hapaneld.util.WebViewInstaller.heal(
             this@PaneldService, profile, engineMajor = engineMajor, force = false, autoUpdate = true,
@@ -486,64 +527,59 @@ class PaneldService : Service() {
         // provider swap (`pm install` can't change the WebView's signer; that needs the manual root route).
         // A pin bump (new version string) clears the guard; the manual "Update WebView" button always retries.
         config.setWebViewAutoLastVersion(rec.version) // commit() so it survives the restart below
-        Log.i(TAG, "WebView auto-update: $r")
-        if (r.startsWith("OK")) {
-            kotlinx.coroutines.delay(2_000)
-            if (config.dashboardPackage == io.github.maxlyth.hapaneld.control.SystemController.BUILTIN_DASHBOARD) {
-                Log.i(TAG, "WebView auto-updated — restarting process so the built-in renderer binds the new provider")
-                kotlinx.coroutines.delay(1_000)
-                kotlin.system.exitProcess(0)
-            }
-            system.reloadDashboard(config.dashboardPackage) // foreign renderer picks it up on ITS restart
-        }
+        return r
     }
 
     /** Companion internal_url repair (Install-tab button): copy each server's external_url into a blank
      *  internal_url so HA 2026.7 stops rejecting the dashboard with "Missing 'Host' header". Off-thread
      *  (su force-stops + relaunches the Companion). */
-    private fun repairCompanionUrl() {
-        scope.launch {
-            val r = io.github.maxlyth.hapaneld.control.CompanionDb.repairInternalUrl(
-                this@PaneldService,
-                io.github.maxlyth.hapaneld.control.Su,
-            )
-            Log.i(TAG, "Companion internal_url repair: $r")
-        }
+    private fun repairCompanionUrl(): Boolean {
+        return launchOperation(
+            component = "Companion URL repair",
+            logLabel = "Companion internal_url repair",
+            operation = {
+                io.github.maxlyth.hapaneld.control.CompanionDb.repairInternalUrl(
+                    this@PaneldService,
+                    io.github.maxlyth.hapaneld.control.Su,
+                )
+            },
+        )
     }
 
     /** Install/update a managed component from the Install tab (POST /api/v1/install/component). Runs
      *  off-thread; progress is reported via InstallProgress so the web UI can poll. action="reinstall"
      *  forces even when the installed build is already current. Single-slot (InstallProgress.start gates). */
-    private fun installComponent(name: String, action: String, version: String) {
+    private fun installComponent(name: String, action: String, version: String): Boolean {
         val label = when (name) {
             "paneld" -> "ha-paneld"; "companion" -> "HA Companion"; "webview" -> "System WebView"; else -> name
         }
-        val progress = InstallProgress.start(label) ?: return // another install is already running
         val force = action == "reinstall"
         val tag = version.takeIf { it.isNotBlank() }
-        val job = scope.launch {
-            val r = try {
+        return launchOperation(
+            component = label,
+            logLabel = "install $name",
+            operation = {
                 when (name) {
                     // A specific picked version installs that exact tag; otherwise the channel's newest.
                     "paneld" -> if (tag != null) SelfUpdater.installVersion(this@PaneldService, tag)
                         else SelfUpdater.checkAndUpdate(this@PaneldService, config.updateChannel, force = force)
                     "companion" -> if (tag != null) CompanionInstaller.installVersion(this@PaneldService, tag)
-                        else CompanionInstaller.installOrUpdate(this@PaneldService, force = force, channel = config.companionUpdateChannel)
-                    "webview" -> WebViewInstaller.heal(this@PaneldService, profile, engineMajor = null, force = true).also {
-                        // The Companion picks up a new WebView provider only on process restart — reload it.
-                        if (it.startsWith("OK")) { kotlinx.coroutines.delay(2_000); system.reloadDashboard(config.dashboardPackage) }
-                    }
+                        else CompanionInstaller.installOrUpdate(
+                            this@PaneldService,
+                            force = force,
+                            channel = config.companionUpdateChannel,
+                            maxVersion = profile.companionMaxVersion,
+                        )
+                    "webview" -> WebViewInstaller.heal(this@PaneldService, profile, engineMajor = null, force = true)
                     else -> "unknown component"
                 }
-            } catch (e: Exception) {
-                Log.w(TAG, "install $name failed", e); "error: ${e.message}"
-            }
-            Log.i(TAG, "install $name: $r")
-            InstallProgress.finish(progress, r)
-            // Refresh the available-update list so the banner + Install tab reflect the new state.
-            runCatching { UpdateChecker.check(this@PaneldService, config.updateChannel) }
-        }
-        InstallProgress.finishOnFailure(progress, job)
+            },
+            after = { result ->
+                if (name == "webview") activateWebView(result, "healed")
+                // Refresh the available-update list so the banner + Install tab reflect the new state.
+                runCatching { UpdateChecker.check(this@PaneldService, config.updateChannel) }
+            },
+        )
     }
 
     /** Smoothness-metrics target: the configured override, else the installed HA Companion app
@@ -653,22 +689,35 @@ class PaneldService : Service() {
                 runCatching { UpdateChecker.check(this@PaneldService, config.updateChannel) }
                 // Companion self-heal: when enabled, install a missing Companion / update an out-of-date one.
                 if (config.companionAutoUpdate) {
-                    runCatching {
-                        val r = CompanionInstaller.installOrUpdate(this@PaneldService, channel = config.companionUpdateChannel, maxVersion = profile.companionMaxVersion)
-                        Log.i(TAG, "Companion auto: $r")
-                    }
+                    runOperation(
+                        component = "HA Companion",
+                        logLabel = "Companion auto",
+                        operation = {
+                            CompanionInstaller.installOrUpdate(
+                                this@PaneldService,
+                                channel = config.companionUpdateChannel,
+                                maxVersion = profile.companionMaxVersion,
+                            )
+                        },
+                    )
                 }
                 // System WebView auto-update (opt-in): advance to the profile's pinned build. BEFORE
                 // self-update because a successful WebView install also restarts the process.
                 if (config.webViewAutoUpdate) {
-                    runCatching { autoUpdateWebView() }
+                    runOperation(
+                        component = "System WebView",
+                        logLabel = "WebView auto-update",
+                        operation = { autoUpdateWebView() },
+                        after = { result -> activateWebView(result, "auto-updated") },
+                    )
                 }
                 // ha-paneld self-update LAST — a successful install restarts this process (and this loop).
                 if (config.selfUpdate) {
-                    runCatching {
-                        val r = SelfUpdater.checkAndUpdate(this@PaneldService, config.updateChannel)
-                        Log.i(TAG, "self-update auto: $r")
-                    }
+                    runOperation(
+                        component = "ha-paneld",
+                        logLabel = "self-update auto",
+                        operation = { SelfUpdater.checkAndUpdate(this@PaneldService, config.updateChannel) },
+                    )
                 }
             }
             startMqttWatchdog()

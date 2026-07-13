@@ -86,7 +86,8 @@
   window.healWebView = function (btn) {
     btn.disabled = true; var s = document.getElementById('wv-heal');
     if (s) s.textContent = 'Downloading + installing… this takes a minute.';
-    fetch('/api/v1/webview/heal', { method: 'POST' }).then(function (r) { return r.json(); }).then(function () {
+    fetch('/api/v1/webview/heal', { method: 'POST' }).then(function (r) { return r.json(); }).then(function (d) {
+      if (d.status === 'busy') { if (s) s.textContent = 'Another operation is running — try again shortly.'; btn.disabled = false; return; }
       if (s) s.textContent = 'Installing WebView — reload the dashboard, then refresh this page to confirm the new version.';
     }).catch(function () { if (s) s.textContent = 'Failed to start — check root/daemon.'; btn.disabled = false; });
   };
@@ -96,7 +97,8 @@
   window.repairCompUrl = function (btn) {
     btn.disabled = true; var s = document.getElementById('cu-fix');
     if (s) s.textContent = 'Repairing + relaunching the Companion…';
-    fetch('/api/v1/companion/repair-url', { method: 'POST' }).then(function (r) { return r.json(); }).then(function () {
+    fetch('/api/v1/companion/repair-url', { method: 'POST' }).then(function (r) { return r.json(); }).then(function (d) {
+      if (d.status === 'busy') { if (s) s.textContent = 'Another operation is running — try again shortly.'; btn.disabled = false; return; }
       if (s) s.textContent = 'Repair started — the Companion will relaunch; refresh this page in a few seconds to confirm.';
     }).catch(function () { if (s) s.textContent = 'Failed to start — check root.'; btn.disabled = false; });
   };
@@ -134,14 +136,16 @@
         prev.innerHTML = '<table class="dt"><tr><th>Package</th><td>' + esc(d.package) + '</td></tr>' +
           '<tr><th>Version</th><td>' + esc(d.version) + '</td></tr>' +
           '<tr><th>Signer SHA-256</th><td style="word-break:break-all">' + esc(d.signer) + '</td></tr></table>' +
-          '<button class="pbtn" style="margin-top:8px" onclick="apkInstall(this)">⬇ Install ' + esc(d.package) + '</button>';
+          '<button class="pbtn" style="margin-top:8px" data-token="' + esc(d.token) + '" onclick="apkInstall(this)">⬇ Install ' + esc(d.package) + '</button>';
       }).catch(function () { if (prev) prev.innerHTML = '<p class="note">Upload failed.</p>'; });
   };
 
   window.apkInstall = function (btn) {
     btn.disabled = true; apkMsg('Installing…');
-    fetch('/api/v1/install/apk/commit', { method: 'POST' }).then(function (r) { return r.json(); }).then(function (d) {
+    var body = 'token=' + encodeURIComponent(btn.getAttribute('data-token') || '');
+    fetch('/api/v1/install/apk/commit', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body }).then(function (r) { return r.json(); }).then(function (d) {
       if (d.status === 'busy') { apkMsg('Another install is running — try again shortly.'); btn.disabled = false; return; }
+      if (d.status === 'stale-or-missing') { apkMsg('This upload was replaced or expired — choose the APK again.'); btn.disabled = false; return; }
       if (d.status !== 'started') { apkMsg('Could not start: ' + (d.status || 'error')); btn.disabled = false; return; }
       pollApk(0);
     }).catch(function () { apkMsg('Failed to start.'); btn.disabled = false; });
@@ -188,12 +192,15 @@
     btn.disabled = true; bkMsg(pw ? 'Building encrypted backup…' : 'Building backup…');
     fetch('/api/v1/backup', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: 'passphrase=' + encodeURIComponent(pw) + '&include_companion=' + (comp && comp.checked ? '1' : '0') })
-      .then(function (r) { if (!r.ok) throw 0; return r.blob(); }).then(function (b) {
+      .then(function (r) {
+        if (r.ok) return r.blob();
+        return r.json().then(function (d) { throw new Error(d.error || 'request failed'); });
+      }).then(function (b) {
         var a = document.createElement('a'), url = URL.createObjectURL(b);
         a.href = url; a.download = (document.title.split('·').pop() || 'panel').trim() + '-backup.' + (pw ? 'hpb' : 'json');
         document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
         bkMsg('Backup downloaded' + (pw ? ' (encrypted) — keep the passphrase.' : '.')); btn.disabled = false;
-      }).catch(function () { bkMsg('Backup failed.'); btn.disabled = false; });
+      }).catch(function (e) { bkMsg('Backup failed: ' + (e.message || 'request failed')); btn.disabled = false; });
   };
 
   // Pick a bundle → preview (dry run, non-destructive) → offer a Confirm restore. Passphrase only needed
