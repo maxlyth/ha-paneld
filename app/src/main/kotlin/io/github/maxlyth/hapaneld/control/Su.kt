@@ -14,9 +14,9 @@ import java.util.concurrent.TimeUnit
  * Root command execution.
  *
  * Two su syntaxes across the fleet: toolbox `su -c '<cmd>'` (Sonoff PX30) and Android `su 0 sh -c
- * '<cmd>'` (Tuya TPA10 userdebug). Probed once, the working form cached. Graceful: returns false/null
- * if no su works (a panel without root just loses the root-gated capabilities — LED, relays, reload,
- * reboot — like load-if-present).
+ * '<cmd>'` (Tuya TPA10 userdebug). A working form is cached; a negative probe is retried by later
+ * one-shot operations because the root manager may become ready after boot. Graceful: returns
+ * false/null if no su works (a panel without root just loses the root-gated capabilities).
  *
  * **Persistent shell (0.8.3).** [run]/[runOutput] are piped into a single long-lived root shell rather
  * than forking `su` per call. A fresh `su` fork+auth costs ~200–300 ms, which made the navbar's
@@ -34,9 +34,10 @@ object Su : RootShell {
     private const val SENTINEL = "__hapaneld_done__"
     private const val CMD_TIMEOUT_MS = 5000L
 
-    // -1 = unprobed, 0 = "su -c", 1 = "su 0 sh -c", 2 = none-found
+    // A successful dialect is sticky. NONE_LAST_PROBE records diagnostics only; it must not suppress
+    // later one-shot probes because root-manager readiness can change during the process lifetime.
     @Volatile
-    private var form: Int = -1
+    private var form: Int = SuFormPolicy.UNPROBED
 
     private var shell: ShellHandle? = null
 
@@ -74,7 +75,7 @@ object Su : RootShell {
     /** Fire [cmd] as root without waiting (for commands like `reboot` that kill the process). Always a
      *  one-shot — never sent into the shared persistent shell (it would take the shell down with it). */
     override fun fireAndForget(cmd: String): Boolean {
-        val forms = if (form in 0..1) intArrayOf(form) else intArrayOf(0, 1)
+        val forms = SuFormPolicy.candidates(form)
         for (f in forms) {
             try {
                 Runtime.getRuntime().exec(argvOneShot(f, cmd))
@@ -91,8 +92,7 @@ object Su : RootShell {
      *  synchronized: it doesn't touch the shared shell, so a screenshot won't stall navbar root actions.
      *  Null on failure / no su. */
     override fun runBytes(cmd: String): ByteArray? {
-        if (form == 2) return null
-        val forms = if (form in 0..1) intArrayOf(form) else intArrayOf(0, 1)
+        val forms = SuFormPolicy.candidates(form)
         for (f in forms) {
             val bytes = runBounded("bytes", argvOneShot(f, cmd)) { p ->
                 val b = p.inputStream.readBytes() // binary-safe; read before waitFor (avoid deadlock)
@@ -100,7 +100,7 @@ object Su : RootShell {
             }
             if (bytes != null) { form = f; return bytes }
         }
-        if (form == -1) form = 2
+        if (form == SuFormPolicy.UNPROBED) form = SuFormPolicy.NONE_LAST_PROBE
         return null
     }
 
@@ -111,7 +111,7 @@ object Su : RootShell {
     /** Send [cmd] through the persistent root shell; returns (stdout, exitCode), or null if the shell
      *  path is unavailable/broke — the caller then falls back to a one-shot exec. */
     private fun piped(cmd: String): Pair<String, Int>? {
-        if (form == 2) return null
+        if (form == SuFormPolicy.NONE_LAST_PROBE) return null
         val sh = ensureShell() ?: return null
         return try {
             sh.io.submit(Callable { transact(sh, cmd) }).get(CMD_TIMEOUT_MS, TimeUnit.MILLISECONDS)
@@ -143,9 +143,9 @@ object Su : RootShell {
     private fun ensureShell(): ShellHandle? {
         shell?.let { if (it.process.isAlive) return it }
         closeShell()
-        if (form !in 0..1) {
-            oneShotRun("true")              // probe + cache the working form (or mark form = 2)
-            if (form !in 0..1) return null
+        if (!SuFormPolicy.working(form)) {
+            oneShotRun("true")              // probe + cache a working form, or record a negative probe
+            if (!SuFormPolicy.working(form)) return null
         }
         return try {
             val p = Runtime.getRuntime().exec(argvShell(form))
@@ -211,11 +211,11 @@ object Su : RootShell {
     }
 
     private fun oneShotRun(cmd: String): Boolean {
-        val forms = if (form in 0..1) intArrayOf(form) else intArrayOf(0, 1)
+        val forms = SuFormPolicy.candidates(form)
         for (f in forms) {
             if (runBounded("run", argvOneShot(f, cmd)) { it.waitFor() } == 0) { form = f; return true }
         }
-        if (form == -1) form = 2
+        if (form == SuFormPolicy.UNPROBED) form = SuFormPolicy.NONE_LAST_PROBE
         return false
     }
 
@@ -223,18 +223,18 @@ object Su : RootShell {
      *  minutes-long op (e.g. staging + installing a large APK) must NOT occupy the shared persistent
      *  shell, whose sentinel protocol is bounded to the short [CMD_TIMEOUT_MS]. */
     fun runLong(cmd: String, timeoutMs: Long): Boolean {
-        val forms = if (form in 0..1) intArrayOf(form) else intArrayOf(0, 1)
+        val forms = SuFormPolicy.candidates(form)
         for (f in forms) {
             if (runBounded("run-long", argvOneShot(f, cmd), timeoutMs) { it.waitFor() } == 0) { form = f; return true }
         }
-        if (form == -1) form = 2
+        if (form == SuFormPolicy.UNPROBED) form = SuFormPolicy.NONE_LAST_PROBE
         return false
     }
 
     private data class StdinResult(val stdout: String, val exitCode: Int)
 
     private fun runWithStdinLongResult(cmd: String, input: java.io.File, timeoutMs: Long): StdinResult? {
-        val forms = if (form in 0..1) intArrayOf(form) else intArrayOf(0, 1)
+        val forms = SuFormPolicy.candidates(form)
         for (f in forms) {
             val out = runBounded("stdin-long", argvOneShot(f, cmd), timeoutMs) { p ->
                 val feeder = Thread {
@@ -246,7 +246,7 @@ object Su : RootShell {
             }
             if (out != null) { form = f; return out }
         }
-        if (form == -1) form = 2
+        if (form == SuFormPolicy.UNPROBED) form = SuFormPolicy.NONE_LAST_PROBE
         return null
     }
 
@@ -260,7 +260,7 @@ object Su : RootShell {
 
     /** Long-running one-shot su [cmd] returning stdout (null on non-zero/failure), bounded to [timeoutMs]. */
     fun runOutputLong(cmd: String, timeoutMs: Long): String? {
-        val forms = if (form in 0..1) intArrayOf(form) else intArrayOf(0, 1)
+        val forms = SuFormPolicy.candidates(form)
         for (f in forms) {
             val out = runBounded("out-long", argvOneShot(f, cmd), timeoutMs) { p ->
                 val text = p.inputStream.bufferedReader().readText()
@@ -268,12 +268,12 @@ object Su : RootShell {
             }
             if (out != null) { form = f; return out }
         }
-        if (form == -1) form = 2
+        if (form == SuFormPolicy.UNPROBED) form = SuFormPolicy.NONE_LAST_PROBE
         return null
     }
 
     private fun oneShotOutput(cmd: String): String? {
-        val forms = if (form in 0..1) intArrayOf(form) else intArrayOf(0, 1)
+        val forms = SuFormPolicy.candidates(form)
         for (f in forms) {
             val out = runBounded("out", argvOneShot(f, cmd)) { p ->
                 val text = p.inputStream.bufferedReader().readText() // read before waitFor (avoid deadlock)
@@ -281,7 +281,7 @@ object Su : RootShell {
             }
             if (out != null) { form = f; return out }
         }
-        if (form == -1) form = 2
+        if (form == SuFormPolicy.UNPROBED) form = SuFormPolicy.NONE_LAST_PROBE
         return null
     }
 }
