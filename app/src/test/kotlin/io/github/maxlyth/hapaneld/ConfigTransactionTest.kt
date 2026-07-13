@@ -54,6 +54,90 @@ class ConfigTransactionTest {
         assertFalse(prefs.values.containsKey("ha_device_url"))
     }
 
+    @Test fun importClearingCredentialIdentitiesClearsDependentSecretsInTheSameCommit() {
+        val prefs = fakePreferences(
+            initial = mapOf(
+                "mqtt_user" to "old-user", "mqtt_password" to "old-password",
+                "ha_url" to "http://ha:8123", "ha_token" to "old-access",
+                "ha_refresh_token" to "old-refresh", "ha_client_id" to "old-client",
+                "ha_token_expiry" to 1234L,
+            ),
+        )
+        val config = Config(prefs.instance)
+        val editor = config.editor()
+        editor.putString("mqtt_user", "").putString("ha_url", "")
+
+        config.stageImportDependencies(editor, mapOf("mqtt_user" to "", "ha_url" to ""))
+
+        assertEquals("old-password", prefs.values["mqtt_password"])
+        assertTrue(editor.commit())
+        assertEquals("", prefs.values["mqtt_password"])
+        assertEquals("", prefs.values["ha_token"])
+        assertEquals("", prefs.values["ha_refresh_token"])
+        assertEquals("", prefs.values["ha_client_id"])
+        assertEquals(0L, prefs.values["ha_token_expiry"])
+    }
+
+    @Test fun importReplacementAccessTokenSupersedesAnUnreplacedRefreshSession() {
+        val prefs = fakePreferences(
+            initial = mapOf(
+                "ha_url" to "http://ha:8123", "ha_token" to "old-access",
+                "ha_refresh_token" to "old-refresh", "ha_token_expiry" to 1234L,
+            ),
+        )
+        val config = Config(prefs.instance)
+        val editor = config.editor().putString("ha_token", "new-access")
+
+        config.stageImportDependencies(editor, mapOf("ha_token" to "new-access"))
+
+        assertTrue(editor.commit())
+        assertEquals("new-access", prefs.values["ha_token"])
+        assertEquals("", prefs.values["ha_refresh_token"])
+        assertEquals(0L, prefs.values["ha_token_expiry"])
+    }
+
+    @Test fun importExplicitAccessTokenReassertionStillDropsTheOldRefreshSession() {
+        val prefs = fakePreferences(
+            initial = mapOf(
+                "ha_token" to "same-access", "ha_refresh_token" to "old-refresh",
+                "ha_token_expiry" to 1234L,
+            ),
+        )
+        val config = Config(prefs.instance)
+        val editor = config.editor().putString("ha_token", "same-access")
+
+        config.stageImportDependencies(editor, mapOf("ha_token" to "same-access"))
+
+        assertTrue(editor.commit())
+        assertEquals("", prefs.values["ha_refresh_token"])
+        assertEquals(0L, prefs.values["ha_token_expiry"])
+    }
+
+    @Test fun importNewRefreshSessionAndHaUrlKeepTheirCanonicalValues() {
+        val prefs = fakePreferences(
+            initial = mapOf("ha_token" to "old-access", "ha_refresh_token" to "old-refresh"),
+        )
+        val config = Config(prefs.instance)
+        val editor = config.editor()
+            .putString("ha_url", "http://ha:8123/")
+            .putString("ha_token", "new-access")
+            .putString("ha_refresh_token", "new-refresh")
+
+        config.stageImportDependencies(
+            editor,
+            mapOf(
+                "ha_url" to "http://ha:8123/",
+                "ha_token" to "new-access",
+                "ha_refresh_token" to "new-refresh",
+            ),
+        )
+
+        assertTrue(editor.commit())
+        assertEquals("http://ha:8123", prefs.values["ha_url"])
+        assertEquals("new-access", prefs.values["ha_token"])
+        assertEquals("new-refresh", prefs.values["ha_refresh_token"])
+    }
+
     private data class FakePreferences(
         val instance: SharedPreferences,
         val values: MutableMap<String, Any?>,

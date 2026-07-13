@@ -119,6 +119,30 @@ class Config private constructor(
         if (changed) editor.remove("ha_device_url")
     }
 
+    /** Apply secondary-key semantics for a validated bundle import using the SAME transaction as its
+     *  primary values. These mirror the config form: clearing an identity also clears its credential,
+     *  and a replacement HA access token supersedes an old refresh session unless a new refresh token
+     *  is supplied beside it. Call after staging the accepted values so these safety clears win. */
+    internal fun stageImportDependencies(editor: SharedPreferences.Editor, accepted: Map<String, String>) {
+        if (accepted["mqtt_user"]?.isEmpty() == true) editor.putString("mqtt_password", "")
+
+        val haUrl = accepted["ha_url"]
+        if (haUrl != null) editor.putString("ha_url", haUrl.trimEnd('/'))
+        if (haUrl?.isEmpty() == true) {
+            editor.putString("ha_token", "")
+            editor.putString("ha_refresh_token", "")
+            editor.putString("ha_client_id", "")
+            editor.putLong("ha_token_expiry", 0L)
+        } else {
+            val access = accepted["ha_token"]
+            val explicitAccess = access != null && access.isNotEmpty()
+            if (explicitAccess && "ha_refresh_token" !in accepted && haRefreshToken.isNotEmpty()) {
+                editor.putString("ha_refresh_token", "")
+                editor.putLong("ha_token_expiry", 0L)
+            }
+        }
+    }
+
     /** Cached HA device-settings URL (resolved once via HaLink when the MQTT creds are a valid HA user);
      *  blank until/unless resolved. Shown as an "Open in Home Assistant" link on the info page. */
     val haDeviceUrl: String get() = prefs.getString("ha_device_url", "")!!

@@ -1753,18 +1753,6 @@ ${tcard("updtbl", "Updates", s?.let { updatesRowsHtml(it) })}
     /** JSON-quote a string value (escapes backslash + double-quote). */
     private fun jsonStr(s: String): String = Json.str(s)
 
-    /** Serialise the mDNS peer roster for GET /api/v1/peers. `ip`/`url` are literal `null` when the record
-     *  didn't resolve to an IPv4 (such peers aren't navigable in the switcher). */
-    /** Persist a new tame blocklist and apply the delta off-thread (tame additions, re-enable removals).
-     *  Used by the fleet/JSON `tame_vendor_packages` path; the browser card uses per-package POST /tame. */
-    private fun applyTameBlocklist(next: Set<String>) {
-        val old = config.tameVendorPackages.toSet()
-        if (next == old) return
-        config.setTameVendorPackages(next.joinToString(" "))
-        val add = next - old; val remove = old - next
-        scope.launch { add.forEach { tame.tame(it) }; remove.forEach { tame.untame(it) } }
-    }
-
     /**
      * Standalone "Vendor packages" card. Taming intrusive firmware apps is a distinct, deploy-time concept
      * — not part of basic configuration — so it gets its own card with **per-package action buttons**, not
@@ -1928,6 +1916,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
         var relaunchForFullscreen = false
         var relaunchForOverscroll = false
         var reloadForZoom = false
+        var tameDelta = TameDelta.NONE
         val previous = ConfigBundle.fromValues(
             currentValues(), kind = ConfigBundle.KIND_REVISION,
             exportedAt = System.currentTimeMillis().toString(), exportedBy = config.panelId,
@@ -1940,8 +1929,10 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             val dashChanged = p["dashboard_package"]?.trim()?.let { it != prevDash } == true
             p["launcher_package"]?.let { config.setLauncherPackage(it.trim()) }
             p["tame_vendor_packages"]?.let { raw ->
-                applyTameBlocklist(raw.split(Regex("[\\s,]+")).map { it.trim() }
-                    .filter { it.isNotEmpty() && !TameController.isCritical(it) }.toSet())
+                val next = raw.split(Regex("[\\s,]+")).map { it.trim() }
+                    .filter { it.isNotEmpty() && !TameController.isCritical(it) }.toSet()
+                tameDelta = TameDelta.between(config.tameVendorPackages.toSet(), next)
+                if (!tameDelta.isEmpty) config.setTameVendorPackages(next.joinToString(" "))
             }
             p["http_allowed_hosts"]?.let { config.setHttpAllowedHosts(it) }
             p["silence_boot_chime"]?.let { config.setSilenceBootChime(it.trim().equals("true", ignoreCase = true) || it.trim() == "1") }
@@ -2062,55 +2053,20 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             return
         }
         revisions.snapshot(previous)
-        // ---- post-commit side-effects: config reads from here (and from anything we relaunch) see
-        // the committed values. Order: renderer switch first (it re-anchors HOME), then reloads.
-        if (relaunchForDash) {
-            scope.launch {
-                runCatching {
-                    // Switching TO the built-in renderer with no connection configured: borrow the
-                    // Companion's sign-in (root read of its own server row — same panel, same HA user)
-                    // so trying the built-in dashboard is a picker change, not a form-filling exercise.
-                    // The Companion keeps its login (HA doesn't rotate refresh tokens); switching back
-                    // is the same picker.
-                    if (config.dashboardPackage == SystemController.BUILTIN_DASHBOARD && config.haUrl.isBlank()) {
-                        io.github.maxlyth.hapaneld.control.CompanionDb.readLogin(appContext, io.github.maxlyth.hapaneld.control.Su)?.let { l ->
-                            config.setHaConnection(l.url, l.accessToken.takeIf { it.isNotBlank() })
-                            config.setHaRefreshToken(l.refreshToken)
-                            if (l.expirySec > 0) config.setHaTokenExpiry(l.expirySec)
-                            config.setHaClientId(io.github.maxlyth.hapaneld.control.CompanionDb.COMPANION_CLIENT_ID)
-                            android.util.Log.i(TAG, "borrowed the Companion sign-in for the built-in renderer (${l.url})")
-                        }
-                        // Also carry over the zoom the user picked in the Companion's "Page zoom" setting
-                        // (dashboard_zoom is its direct analog), so a switched-over panel keeps its sizing.
-                        io.github.maxlyth.hapaneld.control.CompanionDb.readPageZoom(appContext, io.github.maxlyth.hapaneld.control.Su)?.let { z ->
-                            config.setDashboardZoom(z.coerceIn(50, 300))
-                            android.util.Log.i(TAG, "carried over the Companion page zoom ($z%) to dashboard_zoom")
-                        }
-                    }
-                    system.ensureDashboardHome(config.dashboardPackage, config.haUrl.isNotBlank())
-                    system.launchHome(config.dashboardPackage)
-                }
-            }
+        if (!tameDelta.isEmpty) scope.launch {
+            tameDelta.add.forEach { tame.tame(it) }
+            tameDelta.remove.forEach { tame.untame(it) }
         }
-        // A zoom change needs a fresh page load (where setInitialScale takes effect) — same reload as
-        // an HA-connection change, so fold them to avoid reloading twice when both changed.
-        if ((relaunchForHa || reloadForZoom) && config.dashboardPackage == "builtin") {
-            scope.launch { runCatching { system.reloadDashboard(SystemController.BUILTIN_DASHBOARD) } }
-        }
-        if ((relaunchForFullscreen || relaunchForOverscroll) && config.dashboardPackage == "builtin") {
-            scope.launch { runCatching { system.launchHome(SystemController.BUILTIN_DASHBOARD) } }
-        }
-        applyDark?.let { dark ->
-            android.os.Handler(android.os.Looper.getMainLooper()).post {
-                androidx.appcompat.app.AppCompatDelegate.setDefaultNightMode(
-                    if (dark) androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_YES
-                    else androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_NO,
-                )
-            }
-            if (config.dashboardPackage == "builtin") {
-                scope.launch { runCatching { system.reloadDashboard(SystemController.BUILTIN_DASHBOARD) } }
-            }
-        }
+        applyRendererEffects(
+            RendererConfigEffects.coalesce(
+                dashboardChanged = relaunchForDash,
+                credentialChanged = relaunchForHa,
+                zoomChanged = reloadForZoom,
+                fullscreenChanged = relaunchForFullscreen,
+                overscrollChanged = relaunchForOverscroll,
+                darkMode = applyDark,
+            ),
+        )
         // Formerly MQTT-only behaviour settings — applied through the bridge's command path so HTTP
         // and HA behave identically. Registry-validated where the key is registered; invalid skipped.
         for (key in HTTP_LIVE_KEYS) {
@@ -2332,12 +2288,55 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
                 else -> SettingsRegistry.spec(key)?.let { config.stage(editor, it, value) }
             }
         }
+        config.stageImportDependencies(editor, accepted)
         if (!editor.commit()) return false
         revisions.snapshot(previous)
+        applyRendererEffects(RendererConfigEffects.between(previous.values, accepted))
         for ((k, v) in live) applySetting(k, v)
         snapInvalidate()
         onReconfigure()
         return true
+    }
+
+    /** Apply renderer changes only after their preferences commit. A dashboard switch dominates all
+     *  reloads; otherwise a reload dominates a foreground relaunch, so one request schedules at most
+     *  one renderer operation. */
+    private fun applyRendererEffects(effects: RendererConfigEffects) {
+        effects.darkMode?.let { dark ->
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                androidx.appcompat.app.AppCompatDelegate.setDefaultNightMode(
+                    if (dark) androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_YES
+                    else androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_NO,
+                )
+            }
+        }
+        when {
+            effects.dashboardChanged -> scope.launch {
+                runCatching {
+                    // Switching TO the built-in renderer with no connection configured: borrow the
+                    // Companion's sign-in and page zoom so the picker change is immediately usable.
+                    if (config.dashboardPackage == SystemController.BUILTIN_DASHBOARD && config.haUrl.isBlank()) {
+                        CompanionDb.readLogin(appContext, Su)?.let { l ->
+                            config.setHaConnection(l.url, l.accessToken.takeIf { it.isNotBlank() })
+                            config.setHaRefreshToken(l.refreshToken)
+                            if (l.expirySec > 0) config.setHaTokenExpiry(l.expirySec)
+                            config.setHaClientId(CompanionDb.COMPANION_CLIENT_ID)
+                            Log.i(TAG, "borrowed the Companion sign-in for the built-in renderer (${l.url})")
+                        }
+                        CompanionDb.readPageZoom(appContext, Su)?.let { z ->
+                            config.setDashboardZoom(z.coerceIn(50, 300))
+                            Log.i(TAG, "carried over the Companion page zoom ($z%) to dashboard_zoom")
+                        }
+                    }
+                    system.ensureDashboardHome(config.dashboardPackage, config.haUrl.isNotBlank())
+                    system.launchHome(config.dashboardPackage)
+                }
+            }
+            effects.reloadBuiltin && config.dashboardPackage == SystemController.BUILTIN_DASHBOARD ->
+                scope.launch { runCatching { system.reloadDashboard(SystemController.BUILTIN_DASHBOARD) } }
+            effects.relaunchBuiltin && config.dashboardPackage == SystemController.BUILTIN_DASHBOARD ->
+                scope.launch { runCatching { system.launchHome(SystemController.BUILTIN_DASHBOARD) } }
+        }
     }
 
     // ---- Full panel backup / restore (device-state bundle) ------------------------------------------
@@ -2585,5 +2584,61 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
         // GitHub mark (official, CC0 simple-icons) + Material "open in new" glyph — icon links in the UI.
         private const val GH_ICON = "M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"
         private const val EXT_ICON = "M14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3m-2 16H5V5h7V3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2v-7h-2v7z"
+    }
+}
+
+/** Package actions required to converge a vendor-taming blocklist after its preference commit. */
+internal data class TameDelta(val add: Set<String>, val remove: Set<String>) {
+    val isEmpty: Boolean get() = add.isEmpty() && remove.isEmpty()
+
+    companion object {
+        val NONE = TameDelta(emptySet(), emptySet())
+        fun between(old: Set<String>, next: Set<String>) = TameDelta(next - old, old - next)
+    }
+}
+
+/** Coalesced renderer work caused by a committed configuration change. */
+internal data class RendererConfigEffects(
+    val dashboardChanged: Boolean,
+    val reloadBuiltin: Boolean,
+    val relaunchBuiltin: Boolean,
+    val darkMode: Boolean?,
+) {
+    companion object {
+        private val CREDENTIAL_KEYS = setOf("ha_url", "ha_token", "ha_refresh_token", "ha_client_id")
+
+        fun between(previous: Map<String, String>, accepted: Map<String, String>): RendererConfigEffects {
+            fun changed(key: String): Boolean {
+                val next = accepted[key] ?: return false
+                val before = previous[key]
+                return if (key == "ha_url") next.trimEnd('/') != before?.trimEnd('/') else next != before
+            }
+            val accessReplacesRefresh = accepted["ha_token"]?.isNotEmpty() == true &&
+                "ha_refresh_token" !in accepted && previous["ha_refresh_token"].orEmpty().isNotEmpty()
+            val urlClearDropsCredentials = accepted["ha_url"]?.isEmpty() == true &&
+                listOf("ha_token", "ha_refresh_token", "ha_client_id").any { previous[it].orEmpty().isNotEmpty() }
+            return coalesce(
+                dashboardChanged = changed("dashboard_package"),
+                credentialChanged = CREDENTIAL_KEYS.any(::changed) || accessReplacesRefresh || urlClearDropsCredentials,
+                zoomChanged = changed("dashboard_zoom"),
+                fullscreenChanged = changed("dashboard_fullscreen"),
+                overscrollChanged = changed("dashboard_overscroll"),
+                darkMode = accepted["dark_mode"]?.toBooleanStrictOrNull()
+                    ?.takeIf { changed("dark_mode") && android.os.Build.VERSION.SDK_INT < 29 },
+            )
+        }
+
+        fun coalesce(
+            dashboardChanged: Boolean,
+            credentialChanged: Boolean,
+            zoomChanged: Boolean,
+            fullscreenChanged: Boolean,
+            overscrollChanged: Boolean,
+            darkMode: Boolean?,
+        ): RendererConfigEffects {
+            val reload = !dashboardChanged && (credentialChanged || zoomChanged || darkMode != null)
+            val relaunch = !dashboardChanged && !reload && (fullscreenChanged || overscrollChanged)
+            return RendererConfigEffects(dashboardChanged, reload, relaunch, darkMode)
+        }
     }
 }
