@@ -279,6 +279,25 @@ void cmd_overlay(conn_ctx *ctx, const char *args) {
 // /data/local/tmp (world-readable label the installer can always read) and pm-install from there. `-d`
 // (allow downgrade) is deliberate — future stable<->pre-release channel switching must move either way.
 static pthread_mutex_t install_lock = PTHREAD_MUTEX_INITIALIZER;
+// A cleanup request may win the mutex before an old INSTALL worker that was submitted but not yet
+// scheduled. Keep a bounded daemon-lifetime tombstone so that late worker must fail after the app
+// deletes its own input. Retaining a file is safer than evicting a tombstone when this bound is full.
+#define MAX_CANCELLED_INSTALLS 64
+static char cancelled_installs[MAX_CANCELLED_INSTALLS][256];
+static size_t cancelled_install_count;
+
+static int install_cancelled(const char *src) {
+    for (size_t i = 0; i < cancelled_install_count; i++)
+        if (strcmp(cancelled_installs[i], src) == 0) return 1;
+    return 0;
+}
+
+static int cancel_install(const char *src) {
+    if (install_cancelled(src)) return 0;
+    if (cancelled_install_count >= MAX_CANCELLED_INSTALLS) return -1;
+    snprintf(cancelled_installs[cancelled_install_count++], 256, "%s", src);
+    return 0;
+}
 
 static int install_apk(const char *src) {
     if (!valid_apk_path(src)) return -1;
@@ -286,6 +305,10 @@ static int install_apk(const char *src) {
     // Reject overlap instead of letting two copies/pm installs replace one another's bytes or queue long
     // enough for the second client's ownership timeout to expire.
     if (pthread_mutex_trylock(&install_lock) != 0) return -1;
+    if (install_cancelled(src)) {
+        pthread_mutex_unlock(&install_lock);
+        return -1;
+    }
     char cmd[600];
     snprintf(cmd, sizeof cmd,
         "cp '%s' /data/local/tmp/hapaneld-install.apk 2>/dev/null && chmod 644 /data/local/tmp/hapaneld-install.apk", src);
@@ -304,4 +327,24 @@ void cmd_install(conn_ctx *ctx, const char *args) {
     char path[256] = "";
     sscanf(args, "%255s", path);
     reply(ctx->fd, install_apk(path) == 0 ? "OK\n" : "ERR\n");
+}
+
+// Authorise the app to delete a retained input while owning the same mutex as INSTALL. A status-only
+// probe would race a worker that received INSTALL but has not acquired the mutex yet. The tombstone
+// makes both orders safe without requiring this SELinux domain to write inside the app's data dir:
+// an active worker yields BUSY; a late worker acquires the mutex, sees cancellation, and aborts.
+void cmd_installgc(conn_ctx *ctx, const char *args) {
+    char path[256] = "";
+    sscanf(args, "%255s", path);
+    if (!valid_apk_path(path)) {
+        reply(ctx->fd, "ERR\n");
+        return;
+    }
+    if (pthread_mutex_trylock(&install_lock) != 0) {
+        reply(ctx->fd, "BUSY\n");
+        return;
+    }
+    int ok = cancel_install(path) == 0;
+    pthread_mutex_unlock(&install_lock);
+    reply(ctx->fd, ok ? "OK\n" : "ERR\n");
 }

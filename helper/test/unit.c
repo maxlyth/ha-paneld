@@ -341,6 +341,17 @@ static void test_sysctl_execution_results(void) {
           "INSTALL removes root staging after package-manager failure\n");
     sysexec_stub_reset();
 
+    const char *install_gc = "INSTALLGC /data/user/0/io.github.maxlyth.hapaneld/files/helper-install-staging/retained.apk";
+    dispatch_reply(install_gc, out, sizeof out);
+    CHECK(strcmp(out, "OK\n") == 0, "INSTALLGC authorises retained-input cleanup while install lane is idle (got '%s')\n", out);
+    dispatch_reply(install_gc, out, sizeof out);
+    CHECK(strcmp(out, "OK\n") == 0, "duplicate INSTALLGC remains idempotent (got '%s')\n", out);
+    dispatch_reply("INSTALL /data/user/0/io.github.maxlyth.hapaneld/files/helper-install-staging/retained.apk", out, sizeof out);
+    CHECK(strcmp(out, "ERR\n") == 0, "a late INSTALL is rejected after cleanup authorisation (got '%s')\n", out);
+    CHECK(sysexec_stub_count_run("cp '") == 0, "cancelled late INSTALL never consumes the retained input\n");
+    dispatch_reply("INSTALLGC /data/local/tmp/not-owned.apk", out, sizeof out);
+    CHECK(strcmp(out, "ERR\n") == 0, "INSTALLGC rejects paths outside app-private storage (got '%s')\n", out);
+
     // The daemon is thread-per-connection but uses one root staging path. A concurrent INSTALL must
     // fail immediately instead of replacing the first transaction's staged bytes or waiting behind it.
     sysexec_stub_block_run("cp '");
@@ -350,6 +361,8 @@ static void test_sysctl_execution_results(void) {
     sysexec_stub_wait_blocked();
     dispatch_reply(install, out, sizeof out);
     CHECK(strcmp(out, "ERR\n") == 0, "overlapping INSTALL is rejected while one owns root staging (got '%s')\n", out);
+    dispatch_reply(install_gc, out, sizeof out);
+    CHECK(strcmp(out, "BUSY\n") == 0, "INSTALLGC retains input while an install owns the lane (got '%s')\n", out);
     sysexec_stub_release_run();
     pthread_join(install_thread, NULL);
     CHECK(strcmp(first.out, "OK\n") == 0, "first INSTALL completes after overlap rejection (got '%s')\n", first.out);

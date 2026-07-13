@@ -63,6 +63,9 @@ import kotlinx.coroutines.launch
 import io.github.maxlyth.hapaneld.util.UpdateChecker
 import io.github.maxlyth.hapaneld.util.CompanionInstaller
 import io.github.maxlyth.hapaneld.util.InstallProgress
+import io.github.maxlyth.hapaneld.util.HelperClient
+import io.github.maxlyth.hapaneld.util.HelperInstallReconciler
+import io.github.maxlyth.hapaneld.util.HelperInstallTransaction
 import io.github.maxlyth.hapaneld.util.SelfUpdater
 import io.github.maxlyth.hapaneld.util.WebViewInstaller
 import io.github.maxlyth.hapaneld.mqtt.ConnectionSupervisor
@@ -71,6 +74,7 @@ import io.github.maxlyth.hapaneld.platform.AndroidScreenPower
 import io.github.maxlyth.hapaneld.platform.AndroidSystemEnv
 import io.github.maxlyth.hapaneld.util.periodic
 import io.github.maxlyth.hapaneld.util.SystemProps
+import java.io.File
 
 /**
  * Persistent foreground service. Hosts the Ktor HTTP listener, the JmDNS advertiser, the MQTT
@@ -137,6 +141,7 @@ class PaneldService : Service() {
         super.onCreate()
         config = Config(this)
         config.migrateLiveStore()   // carry persisted settings across a schema bump before anything reads them
+        reconcileHelperInstallStaging()
         sensors = SensorReporter(this, config)
         // Detect the device profile once and hand it to the hardware-specific controllers (instead of
         // each re-detecting). The canonical per-platform silo for paths/quirks; see device/.
@@ -876,6 +881,22 @@ class PaneldService : Service() {
         runCatching { worker?.join(WATCHDOG_CANCEL_JOIN_MS) }
     }
 
+    private fun reconcileHelperInstallStaging() {
+        scope.launch {
+            val stagingDir = File(filesDir, HelperInstallTransaction.STAGING_DIR)
+            val reconciler = HelperInstallReconciler(HelperClient)
+            while (isActive) {
+                val result = runCatching { reconciler.reconcile(stagingDir) }
+                    .onFailure { Log.w(TAG, "helper install staging reconciliation failed", it) }
+                    .getOrNull()
+                if (result != null && (result.removed > 0 || result.remaining > 0)) {
+                    Log.d(TAG, "helper install staging: removed=${result.removed} remaining=${result.remaining}")
+                }
+                delay(INSTALL_RECONCILE_MS)
+            }
+        }
+    }
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     companion object {
@@ -898,6 +919,7 @@ class PaneldService : Service() {
         private const val MQTT_STALE_MS = 150_000L
         // Never-blank-screen watchdog poll interval; re-lights an unintentionally-dark panel within one tick.
         private const val SCREEN_WATCHDOG_MS = 60_000L
+        private const val INSTALL_RECONCILE_MS = 60_000L
         private const val KIOSK_REASSERT_MS = 60_000L // post-boot delay before re-locking (admin escape window)
         private const val KIOSK_CANCEL_JOIN_MS = 500L
         private const val WATCHDOG_CANCEL_JOIN_MS = 500L

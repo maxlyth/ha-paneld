@@ -110,6 +110,7 @@ int main(int argc, char **argv) {
         "OVERLAY com.eWeLinkControlPanel deny\n", "OVERLAY com.android.systemui deny\n",
         "OVERLAY com.foo allow\n", "OVERLAY com.foo wipe\n", "OVERLAY\n", "OVERLAY com.foo\n",
         "INSTALL /data/user/0/io.github.maxlyth.hapaneld/files/helper-install-staging/update.apk\n",
+        "INSTALLGC /data/user/0/io.github.maxlyth.hapaneld/files/helper-install-staging/update.apk\n",
         "INSTALL /data/user/0/io.github.maxlyth.hapaneld/files/../escape.apk\n",
         "INSTALL /data/user/0/io.github.maxlyth.hapaneld/files/update.apk';reboot\n",
         "PERFDUMP\n", "LEDPROBE\n", "CHT8305\n",

@@ -17,12 +17,17 @@ class HelperInstallTransactionTest {
 
     private class LongDaemon(
         var result: DaemonLongResult,
+        private val onSend: (String) -> String? = { null },
         private val onCall: (String, Long) -> Unit = { _, _ -> },
     ) : Daemon {
         val calls = mutableListOf<Pair<String, Long>>()
+        val shortCalls = mutableListOf<String>()
 
         override fun available() = true
-        override fun send(cmd: String): String? = null
+        override fun send(cmd: String): String? {
+            shortCalls += cmd
+            return onSend(cmd)
+        }
         override fun sendLong(cmd: String, timeoutMs: Long): DaemonLongResult {
             calls += cmd to timeoutMs
             onCall(cmd, timeoutMs)
@@ -109,5 +114,76 @@ class HelperInstallTransactionTest {
         )
         assertFalse(source.exists())
         assertTrue(daemon.calls.isEmpty())
+    }
+
+    @Test fun reconciliationCannotSelectAnInputOwnedByThisProcess() {
+        val source = apk("active.apk", byteArrayOf(1, 2, 3))
+        val directory = temporary.newFolder("active-staging")
+        val staging = HelperInstallStaging()
+        lateinit var daemon: LongDaemon
+        daemon = LongDaemon(DaemonLongResult.Reply("OK"), onCall = { _, _ ->
+            val result = HelperInstallReconciler(daemon, staging).reconcile(directory)
+            assertTrue(result.complete)
+            assertTrue(daemon.shortCalls.isEmpty())
+        })
+
+        assertEquals("OK", HelperInstallTransaction(daemon, staging = staging).install(source, directory))
+    }
+
+    @Test fun indeterminateInputIsRemovedOnlyAfterHelperAuthorisesLockedCleanup() {
+        val source = apk("indeterminate.apk", byteArrayOf(4, 5, 6))
+        val directory = temporary.newFolder("reconcile-staging")
+        val staging = HelperInstallStaging()
+        val daemon = LongDaemon(
+            result = DaemonLongResult.Indeterminate,
+            onSend = { cmd ->
+                assertTrue(cmd.startsWith("INSTALLGC "))
+                assertTrue(File(cmd.substringAfter("INSTALLGC ")).exists())
+                "OK"
+            },
+        )
+
+        assertEquals(
+            "install outcome unknown: helper staging retained for safety",
+            HelperInstallTransaction(daemon, staging = staging).install(source, directory),
+        )
+        assertEquals(1, directory.listFiles().orEmpty().size)
+
+        val result = HelperInstallReconciler(daemon, staging).reconcile(directory)
+
+        assertEquals(1, result.removed)
+        assertEquals(0, result.remaining)
+        assertTrue(result.complete)
+        assertTrue(directory.listFiles().orEmpty().isEmpty())
+    }
+
+    @Test fun busyFailedOrUnreachableCleanupRetainsInputForRetry() {
+        listOf("BUSY", "ERR", null).forEachIndexed { index, reply ->
+            val source = apk("retained-$index.apk", byteArrayOf(index.toByte(), 9))
+            val directory = temporary.newFolder("retained-reconcile-$index")
+            val staging = HelperInstallStaging()
+            val daemon = LongDaemon(DaemonLongResult.Indeterminate, onSend = { reply })
+            HelperInstallTransaction(daemon, staging = staging).install(source, directory)
+
+            val result = HelperInstallReconciler(daemon, staging).reconcile(directory)
+
+            assertEquals(0, result.removed)
+            assertEquals(1, result.remaining)
+            assertFalse(result.complete)
+            assertTrue(directory.listFiles().orEmpty().single().exists())
+        }
+    }
+
+    @Test fun reconciliationIgnoresFilesOutsideItsOwnedNamePattern() {
+        val directory = temporary.newFolder("unrelated-staging")
+        File(directory, "user-upload.apk").writeBytes(byteArrayOf(7))
+        File(directory, "${HelperInstallTransaction.STAGING_PREFIX}partial.tmp").writeBytes(byteArrayOf(8))
+        val daemon = LongDaemon(DaemonLongResult.NotSubmitted)
+
+        val result = HelperInstallReconciler(daemon, HelperInstallStaging()).reconcile(directory)
+
+        assertTrue(result.complete)
+        assertTrue(daemon.shortCalls.isEmpty())
+        assertEquals(2, directory.listFiles().orEmpty().size)
     }
 }

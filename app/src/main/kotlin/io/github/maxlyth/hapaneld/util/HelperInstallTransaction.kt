@@ -16,53 +16,25 @@ import java.io.File
 internal class HelperInstallTransaction(
     private val daemon: Daemon,
     private val timeoutMs: Long = INSTALL_TIMEOUT_MS,
+    private val staging: HelperInstallStaging = HelperInstallStaging.shared,
 ) {
     fun install(apk: File, stagingDir: File): String {
-        val owned = claim(apk, stagingDir)
+        val owned = staging.claim(apk, stagingDir)
             ?: return "install failed: could not claim helper staging"
         return when (val result = daemon.sendLong("INSTALL ${owned.absolutePath}", timeoutMs)) {
             is DaemonLongResult.Reply -> {
-                owned.delete()
+                staging.release(owned, delete = true)
                 if (result.value == "OK") "OK" else "install failed: daemon install failed"
             }
             DaemonLongResult.NotSubmitted -> {
-                owned.delete()
+                staging.release(owned, delete = true)
                 "install failed: daemon unreachable"
             }
-            DaemonLongResult.Indeterminate ->
+            DaemonLongResult.Indeterminate -> {
+                staging.release(owned, delete = false)
                 "install outcome unknown: helper staging retained for safety"
-        }
-    }
-
-    private fun claim(apk: File, stagingDir: File): File? {
-        if (!apk.isFile || apk.length() <= 0L) {
-            apk.delete()
-            return null
-        }
-        if (!stagingDir.isDirectory && !stagingDir.mkdirs()) {
-            apk.delete()
-            return null
-        }
-        val expected = apk.length()
-        val owned = runCatching {
-            File.createTempFile(STAGING_PREFIX, ".apk", stagingDir).also {
-                if (!it.delete()) error("could not reserve staging path")
             }
-        }.getOrElse {
-            apk.delete()
-            return null
         }
-        val claimed = apk.renameTo(owned) || runCatching {
-            apk.inputStream().use { input -> owned.outputStream().use { input.copyTo(it) } }
-            owned.length() == expected
-        }.getOrDefault(false)
-        if (!claimed || !owned.isFile || owned.length() != expected) {
-            owned.delete()
-            apk.delete()
-            return null
-        }
-        apk.delete()
-        return owned
     }
 
     companion object {
