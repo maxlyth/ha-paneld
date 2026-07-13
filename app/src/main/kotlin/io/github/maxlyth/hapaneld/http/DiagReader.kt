@@ -8,6 +8,8 @@ import io.github.maxlyth.hapaneld.control.Su
 import io.github.maxlyth.hapaneld.control.TameController
 import io.github.maxlyth.hapaneld.device.DeviceProfile
 import io.github.maxlyth.hapaneld.hardware.NativeLed
+import io.github.maxlyth.hapaneld.input.ButtonCaptureHealth
+import io.github.maxlyth.hapaneld.input.EvdevButtonClient
 import io.github.maxlyth.hapaneld.metrics.PanelMetrics
 import io.github.maxlyth.hapaneld.util.HelperClient
 import io.github.maxlyth.hapaneld.util.UpdateChecker
@@ -44,11 +46,14 @@ object DiagReader {
         }
         val canWrite = Settings.System.canWrite(ctx)
         val a11y = a11yEnabled(ctx)
+        val profile = DeviceProfile.detect()
+        val evdev = EvdevButtonClient.snapshot()
+        val buttonHealth = ButtonCaptureHealth.evaluate(a11y, profile.evdevButtons.size, evdev, pkg)
         val rootish = su || daemon
         // Sandbox-walled panel (can't exec su) → the daemon is its ONLY privileged control path, needed
         // regardless of the LED mechanism. Surfaced below so a missing-but-needed daemon isn't a silent
         // dead end (controls present but empty); omitted on su panels where it isn't required.
-        val usesDaemon = DeviceProfile.detect().usesDaemon
+        val usesDaemon = profile.usesDaemon
         return listOfNotNull(
             Cap("Root (su)", if (su) "ok" else "none",
                 if (su) "available" else
@@ -73,9 +78,7 @@ object DiagReader {
                     ledProbe == "sysfs" || daemonLed -> "sysfs LED via the helper daemon"
                     else -> "no reachable LED node; needs the root helper daemon (install needs su once)"
                 }),
-            Cap("Hardware buttons", if (a11y) "ok" else "none",
-                if (a11y) "accessibility key capture enabled" else
-                    "enable (no root): adb shell settings put secure enabled_accessibility_services $pkg/.input.PanelAccessibilityService && adb shell settings put secure accessibility_enabled 1"),
+            Cap("Hardware buttons", buttonHealth.status, buttonHealth.note),
             Cap("Reboot / reload / launcher", if (rootish) "ok" else "none",
                 if (rootish) "available" else "needs su or the helper daemon"),
         )
@@ -101,7 +104,13 @@ object DiagReader {
         appendLine()
         appendLine("[build] fingerprint=${Build.FINGERPRINT}")
         appendLine("board=${Build.BOARD} product=${Build.PRODUCT} hardware=${Build.HARDWARE} abis=${Build.SUPPORTED_ABIS.joinToString(",")}")
-        appendLine("[env] selinux=${PanelMetrics.shared.selinuxEnforce() ?: "?"} su=${Su.available()} write_settings=${Settings.System.canWrite(ctx)} a11y=${a11yEnabled(ctx)} daemon=${HelperClient.available()} ledjni=${NativeLed.available()}")
+        val evdev = EvdevButtonClient.snapshot()
+        appendLine("[env] selinux=${PanelMetrics.shared.selinuxEnforce() ?: "?"} su=${Su.available()} write_settings=${Settings.System.canWrite(ctx)} a11y=${a11yEnabled(ctx)} daemon=${HelperClient.available()} evdev=${evdev.state.name.lowercase()}/${evdev.mode?.name?.lowercase() ?: "none"} ledjni=${NativeLed.available()}")
+        val expectedButtons = DeviceProfile.detect().evdevButtons
+        if (expectedButtons.isNotEmpty()) {
+            val requested = expectedButtons.joinToString(",") { "${it.node}:${if (it.sw) "SW" else "KEY"}/${it.code}:${if (it.grab) "grab" else "watch"}" }
+            appendLine("[evdev] requested=$requested state=${evdev.state.name.lowercase()} mode=${evdev.mode?.name?.lowercase() ?: "none"} error=${evdev.lastError ?: "-"}")
+        }
         appendLine("[sysfs] leds=${listDir("/sys/class/leds")} backlight=${listDir("/sys/class/backlight")} devfreq=${listDir("/sys/class/devfreq")}")
         appendLine("[labels] ${exec("ls -Zd /sys/class/leds/*/ /sys/class/backlight/*/ /dev/ledjni 2>&1").replace("\n", " ")}")
         // Bounded, read-only characterization for an unknown/new panel. These are the high-signal

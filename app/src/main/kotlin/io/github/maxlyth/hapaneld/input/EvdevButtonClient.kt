@@ -4,8 +4,6 @@ import android.net.LocalSocket
 import android.net.LocalSocketAddress
 import android.util.Log
 import io.github.maxlyth.hapaneld.device.EvdevButton
-import java.io.BufferedReader
-import java.io.InputStreamReader
 
 /**
  * Streams hardware-button events from the root helper daemon (`hapaneld-helper`, abstract UNIX socket
@@ -22,11 +20,12 @@ object EvdevButtonClient {
     private const val TAG = "ha-paneld/evdev"
 
     private class Run(val buttons: List<EvdevButton>) {
+        @Volatile var cancelled = false
         @Volatile var socket: LocalSocket? = null
         lateinit var thread: Thread
 
         fun attach(candidate: LocalSocket): Boolean = synchronized(this) {
-            if (thread.isInterrupted) {
+            if (cancelled || thread.isInterrupted) {
                 runCatching { candidate.close() }
                 false
             } else {
@@ -40,6 +39,7 @@ object EvdevButtonClient {
         }
 
         fun cancelAndJoin() {
+            cancelled = true
             thread.interrupt()
             synchronized(this) {
                 runCatching { socket?.close() } // interruption alone does not unblock LocalSocket readLine()
@@ -49,26 +49,43 @@ object EvdevButtonClient {
         }
     }
 
+    internal enum class State { STOPPED, CONNECTING, ACTIVE, RETRYING }
+    internal data class Snapshot(val state: State, val mode: EvdevStreamSession.Mode?, val lastError: String?)
+
     @Volatile private var active: Run? = null
+    @Volatile private var state = State.STOPPED
+    @Volatile private var mode: EvdevStreamSession.Mode? = null
+    @Volatile private var lastError: String? = null
+
+    internal fun snapshot(): Snapshot = synchronized(this) { Snapshot(state, mode, lastError) }
 
     /** Idempotent. No-op when [buttons] is empty (panels with no evdev-instrumented buttons). */
     @Synchronized
     fun start(buttons: List<EvdevButton>) {
         if (active != null || buttons.isEmpty()) return
-        val r = Run(buttons)
+        val r = Run(buttons.toList())
         r.thread = Thread({ run(r) }, "evdev-buttons").apply { isDaemon = true }
         active = r
+        state = State.CONNECTING
+        mode = null
+        lastError = null
         r.thread.start()
     }
 
     fun stop() {
-        // Keep the run published while it is being cancelled so a concurrent service start cannot
-        // admit a second socket reader before the first has actually left readLine().
-        val r = synchronized(this) { active }
-        r?.cancelAndJoin()
-        synchronized(this) {
-            if (active === r && r?.thread?.isAlive == false) active = null
+        // Invalidate delivery before closing the socket. A replacement runtime may start even if an
+        // old platform read takes longer than the bounded join; that stale run cannot emit into it.
+        val r = synchronized(this) {
+            active.also {
+                it?.cancelled = true
+                if (active === it) {
+                    active = null
+                    state = State.STOPPED
+                    mode = null
+                }
+            }
         }
+        r?.cancelAndJoin()
     }
 
     private fun run(run: Run) {
@@ -76,33 +93,28 @@ object EvdevButtonClient {
             while (!Thread.currentThread().isInterrupted) {
                 var candidate: LocalSocket? = null
                 try {
+                    update(run, State.CONNECTING)
                     candidate = LocalSocket()
                     if (!run.attach(candidate)) break
                     candidate.use { s ->
                         s.connect(LocalSocketAddress(SOCK, LocalSocketAddress.Namespace.ABSTRACT))
-                        val out = s.outputStream
-                        val br = BufferedReader(InputStreamReader(s.inputStream))
-                        // Establish the watches (idempotent in the daemon) then subscribe to the stream.
-                        run.buttons.forEach { out.write("WATCH ${it.node} ${if (it.grab) 1 else 0}\n".toByteArray()) }
-                        out.write("SUBSCRIBE\n".toByteArray())
-                        out.flush()
-                        var line = br.readLine()
-                        while (line != null && !Thread.currentThread().isInterrupted) {
-                            // "KEY <code> <value>" (momentary) or "SW <code> <value>" (latching switch).
-                            val p = line.trim().split(" ")
-                            if (p.size == 3 && (p[0] == "KEY" || p[0] == "SW")) {
-                                val isSw = p[0] == "SW"
-                                val code = p[1].toIntOrNull()
-                                val down = p[2] == "1"
-                                run.buttons.firstOrNull { it.code == code && it.sw == isSw }?.let { b ->
-                                    // KEY: emit on DOWN; SW: emit on every toggle (each press flips it).
-                                    if (isSw || down) ButtonBus.emit(b.eventType)
-                                }
-                            }
-                            line = br.readLine()
+                        s.soTimeout = HANDSHAKE_TIMEOUT_MS
+                        EvdevStreamSession.run(
+                            buttons = run.buttons,
+                            input = s.inputStream,
+                            output = s.outputStream,
+                            onSubscribed = { verifiedMode ->
+                                s.soTimeout = 0
+                                update(run, State.ACTIVE, verifiedMode, null)
+                            },
+                        ) { event ->
+                            val current = synchronized(this) { active === run && !run.cancelled }
+                            if (current) ButtonBus.emit(event)
                         }
+                        update(run, State.RETRYING, error = "helper stream closed")
                     }
                 } catch (e: Exception) {
+                    update(run, State.RETRYING, error = e.message ?: e.javaClass.simpleName)
                     Log.d(TAG, "evdev stream unavailable (${e.message}); retrying")
                 } finally {
                     candidate?.let { run.detach(it) }
@@ -112,10 +124,28 @@ object EvdevButtonClient {
             }
         } finally {
             synchronized(this) {
-                if (active === run) active = null
+                if (active === run) {
+                    active = null
+                    state = State.STOPPED
+                    mode = null
+                }
             }
         }
     }
 
+    private fun update(
+        run: Run,
+        next: State,
+        verifiedMode: EvdevStreamSession.Mode? = mode,
+        error: String? = lastError,
+    ) = synchronized(this) {
+        if (active === run && !run.cancelled) {
+            state = next
+            mode = verifiedMode
+            lastError = error?.replace(Regex("[\\r\\n]+"), " ")?.take(160)
+        }
+    }
+
     private const val STOP_JOIN_MS = 1_000L
+    private const val HANDSHAKE_TIMEOUT_MS = 2_000
 }

@@ -144,6 +144,7 @@ class MqttBridge(
     @Volatile var state: String = "disabled"
         private set
     @Volatile private var stopped = false
+    private var buttonSubscription: ButtonBus.Subscription? = null
 
     fun isConnected(): Boolean = state == "connected"
 
@@ -415,7 +416,9 @@ class MqttBridge(
             // The client lifecycle — build, connect, the connected/disconnected listeners, and the
             // superseded-client generation guard — lives in the transport (see HiveMqTransport). This
             // bridge only supplies the connection config + callbacks and keeps the HA semantics.
-            ButtonBus.listener = { event -> publishButton(event) }
+            if (buttonSubscription == null) {
+                buttonSubscription = ButtonBus.subscribe { event -> publishButton(event) }
+            }
             transport.connect(
                 MqttConnectConfig(
                     host = connectHost,
@@ -1626,7 +1629,8 @@ class MqttBridge(
         stopped = true
         authRetryGeneration++
         authScheduler.shutdownNow()
-        ButtonBus.listener = null
+        buttonSubscription?.close()
+        buttonSubscription = null
         PanelStatus.mqttConnected = false
         zigbeeExecutor.shutdownNow()
         if (stateConvergerOwner.isInitialized()) stateConverger.close()

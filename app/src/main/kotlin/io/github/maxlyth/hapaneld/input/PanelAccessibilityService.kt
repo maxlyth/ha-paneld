@@ -39,10 +39,14 @@ class PanelAccessibilityService : AccessibilityService() {
     override fun onInterrupt() {}
 
     override fun onKeyEvent(event: KeyEvent): Boolean {
-        if (event.action == KeyEvent.ACTION_DOWN) {
-            val name = KeyEvent.keyCodeToString(event.keyCode)
+        val name = KeyEvent.keyCodeToString(event.keyCode)
+        ButtonEventPolicy.accessibility(
+            down = event.action == KeyEvent.ACTION_DOWN,
+            repeatCount = event.repeatCount,
+            eventType = name,
+        )?.let {
             Log.d(TAG, "key down: $name")
-            ButtonBus.emit(name)
+            ButtonBus.emit(it)
         }
         // Do not consume — let the system handle the key normally.
         return super.onKeyEvent(event)

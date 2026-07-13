@@ -8,11 +8,14 @@
 
 #include "cmd.h"
 
+#define INPUT_MAX_SUBSCRIBERS 8
+
 void input_init(void);                  // reset the subscriber registry (call once at startup)
 int  input_watch(const char *path, int grab);  // start watching a node (also used for --grab/--watch argv)
 void input_unsubscribe(int fd);         // drop a connection's fd from the registry (on disconnect)
 
 void cmd_watch(conn_ctx *ctx, const char *args);      // WATCH <evdev> <0|1>
+void cmd_inputv2(conn_ctx *ctx, const char *args);    // INPUTV2 capability acknowledgement
 void cmd_subscribe(conn_ctx *ctx, const char *args);  // SUBSCRIBE
 
 #endif

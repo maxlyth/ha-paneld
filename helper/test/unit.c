@@ -8,6 +8,7 @@
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
+#include <linux/input.h>
 #include <pthread.h>
 #include <sched.h>
 #include <stdarg.h>
@@ -35,9 +36,29 @@ static int failures = 0;
 // a real /dev/ledjni (the SMT1019 isn't hardware we own). Returns 0 = success so the handler proceeds.
 static unsigned long cap_cmd[8];
 static int cap_val[8], cap_n;
+static int evdev_open_ok = 1;
+static int evdev_grab_ok = 1;
+static int evdev_open_count;
+static int evdev_grab_acquire_count;
+static int evdev_grab_release_count;
+int __real_open(const char *path, int flags, ...);
+int __wrap_open(const char *path, int flags, ...) {
+    if (strncmp(path, "/dev/input/event", 16) == 0) {
+        evdev_open_count++;
+        if (!evdev_open_ok) { errno = ENOENT; return -1; }
+        return __real_open("/dev/null", flags);
+    }
+    return __real_open(path, flags);
+}
 int __wrap_ioctl(int fd, unsigned long req, ...) {
-    (void)fd;
-    va_list ap; va_start(ap, req); int arg = va_arg(ap, int); va_end(ap);
+    va_list ap; va_start(ap, req);
+    if (req == EVIOCGRAB) {
+        (void)fd; long active = (long)va_arg(ap, void *); va_end(ap);
+        if (!evdev_grab_ok) { errno = EBUSY; return -1; }
+        if (active) evdev_grab_acquire_count++; else evdev_grab_release_count++;
+        return 0;
+    }
+    int arg = va_arg(ap, int); va_end(ap);
     if (cap_n < 8) { cap_cmd[cap_n] = req; cap_val[cap_n] = arg; cap_n++; }
     return 0;
 }
@@ -526,6 +547,143 @@ static void test_line_accumulator(void) {
     CHECK(strcmp(out, "OK\n") == 0, "overlong line dropped, next line parses (got '%s')\n", out);
 }
 
+static void test_input_watch_contract(void) {
+    char reply[16];
+    dispatch_reply("INPUTV2", reply, sizeof reply);
+    CHECK(strcmp(reply, "OK\n") == 0, "INPUTV2 identifies truthful WATCH semantics (got '%s')\n", reply);
+
+    sysexec_stub_reset();
+    sysexec_stub_set_spawn_result(0);
+    evdev_open_ok = 1; evdev_grab_ok = 1;
+    dispatch_reply("WATCH /dev/input/event7 1", reply, sizeof reply);
+    CHECK(strcmp(reply, "OK\n") == 0, "well-formed WATCH gets OK after setup (got '%s')\n", reply);
+    dispatch_reply("WATCH /dev/input/event7 2", reply, sizeof reply);
+    CHECK(strcmp(reply, "ERR\n") == 0, "WATCH rejects non-boolean grab values (got '%s')\n", reply);
+    dispatch_reply("WATCH /dev/input/event7 1 trailing", reply, sizeof reply);
+    CHECK(strcmp(reply, "ERR\n") == 0, "WATCH rejects trailing fields (got '%s')\n", reply);
+    dispatch_reply("WATCH /dev/input/event7/extra 1", reply, sizeof reply);
+    CHECK(strcmp(reply, "ERR\n") == 0, "WATCH rejects paths below an event node (got '%s')\n", reply);
+
+    input_init();
+    sysexec_stub_reset();
+    sysexec_stub_set_spawn_result(0);
+    evdev_open_ok = 1; evdev_grab_ok = 1; evdev_open_count = 0;
+
+    CHECK(input_watch("/dev/input/event1", 1) == 0, "WATCH succeeds only after initial open+grab+spawn\n");
+    CHECK(evdev_open_count == 1, "first WATCH opens the node exactly once (got %d)\n", evdev_open_count);
+    CHECK(input_watch("/dev/input/event1", 1) == 0, "same WATCH is idempotent\n");
+    CHECK(evdev_open_count == 1, "idempotent WATCH does not reopen the node (got %d)\n", evdev_open_count);
+    CHECK(input_watch("/dev/input/event1", 0) != 0, "same node with different grab policy is rejected\n");
+
+    input_init();
+    evdev_grab_ok = 0;
+    CHECK(input_watch("/dev/input/event2", 1) != 0, "failed EVIOCGRAB is not reported as a working watch\n");
+    evdev_grab_ok = 1;
+    CHECK(input_watch("/dev/input/event2", 1) == 0, "grab failure rolls back so a retry can succeed\n");
+
+    input_init();
+    evdev_open_ok = 0;
+    CHECK(input_watch("/dev/input/event3", 0) != 0, "unopenable node is not reported as watched\n");
+    evdev_open_ok = 1;
+    CHECK(input_watch("/dev/input/event3", 0) == 0, "open failure rolls back so a retry can succeed\n");
+
+    input_init();
+    sysexec_stub_set_spawn_result(-1);
+    CHECK(input_watch("/dev/input/event4", 0) != 0, "thread-start failure rejects the watch\n");
+    sysexec_stub_set_spawn_result(0);
+    CHECK(input_watch("/dev/input/event4", 0) == 0, "thread-start failure rolls back so a retry can succeed\n");
+
+    CHECK(input_watch("/dev/input/event", 0) != 0, "WATCH rejects a path without a numeric event suffix\n");
+    CHECK(input_watch("/dev/input/event4/extra", 0) != 0, "WATCH rejects path traversal below an event node\n");
+    CHECK(input_watch("/dev/input/event5", 2) != 0, "WATCH rejects a grab value other than 0 or 1\n");
+    input_init();
+    sysexec_stub_reset();
+}
+
+static void test_subscriber_admission(void) {
+    input_init();
+    int sockets[INPUT_MAX_SUBSCRIBERS + 1][2];
+    conn_ctx contexts[INPUT_MAX_SUBSCRIBERS + 1];
+    for (int i = 0; i <= INPUT_MAX_SUBSCRIBERS; i++) {
+        socketpair(AF_UNIX, SOCK_STREAM, 0, sockets[i]);
+        contexts[i] = (conn_ctx){ .fd = sockets[i][0], .subscribed = 0 };
+        char line[] = "SUBSCRIBE";
+        dispatch(&contexts[i], line);
+        char out[8] = "";
+        ssize_t n = read(sockets[i][1], out, sizeof out - 1);
+        out[n > 0 ? n : 0] = '\0';
+        if (i < INPUT_MAX_SUBSCRIBERS) {
+            CHECK(strcmp(out, "OK\n") == 0, "subscriber %d within cap gets OK (got '%s')\n", i + 1, out);
+            CHECK(contexts[i].subscribed == 1, "admitted subscriber %d is timeout-exempt\n", i + 1);
+        } else {
+            CHECK(strcmp(out, "ERR\n") == 0, "subscriber beyond cap gets ERR (got '%s')\n", out);
+            CHECK(contexts[i].subscribed == 0, "rejected subscriber is not timeout-exempt\n");
+        }
+    }
+
+    input_unsubscribe(sockets[0][0]);
+    char retry[] = "SUBSCRIBE";
+    dispatch(&contexts[INPUT_MAX_SUBSCRIBERS], retry);
+    char out[8] = "";
+    ssize_t n = read(sockets[INPUT_MAX_SUBSCRIBERS][1], out, sizeof out - 1);
+    out[n > 0 ? n : 0] = '\0';
+    CHECK(strcmp(out, "OK\n") == 0, "unsubscribe releases one subscriber slot (got '%s')\n", out);
+
+    for (int i = 0; i <= INPUT_MAX_SUBSCRIBERS; i++) {
+        input_unsubscribe(sockets[i][0]);
+        close(sockets[i][0]); close(sockets[i][1]);
+    }
+    input_init();
+}
+
+static void test_grab_subscription_ownership(void) {
+    input_init();
+    sysexec_stub_reset();
+    sysexec_stub_set_spawn_result(0);
+    evdev_open_ok = 1; evdev_grab_ok = 1;
+    evdev_grab_acquire_count = 0; evdev_grab_release_count = 0;
+    CHECK(input_watch("/dev/input/event6", 1) == 0, "grab-capable WATCH is established\n");
+    CHECK(evdev_grab_acquire_count == 1 && evdev_grab_release_count == 1,
+          "WATCH verifies grab capability but releases it before subscription (got %d/%d)\n",
+          evdev_grab_acquire_count, evdev_grab_release_count);
+
+    int sockets[2][2];
+    conn_ctx contexts[2];
+    for (int i = 0; i < 2; i++) {
+        socketpair(AF_UNIX, SOCK_STREAM, 0, sockets[i]);
+        contexts[i] = (conn_ctx){ .fd = sockets[i][0], .subscribed = 0 };
+    }
+
+    evdev_grab_ok = 0;
+    char rejected[] = "SUBSCRIBE";
+    dispatch(&contexts[0], rejected);
+    char rejected_out[8] = "";
+    ssize_t rejected_n = read(sockets[0][1], rejected_out, sizeof rejected_out - 1);
+    rejected_out[rejected_n > 0 ? rejected_n : 0] = '\0';
+    CHECK(strcmp(rejected_out, "ERR\n") == 0 && contexts[0].subscribed == 0,
+          "SUBSCRIBE rejects a grab that can no longer be acquired (got '%s')\n", rejected_out);
+    evdev_grab_ok = 1;
+
+    for (int i = 0; i < 2; i++) {
+        char subscribe[] = "SUBSCRIBE";
+        dispatch(&contexts[i], subscribe);
+        char out[8] = "";
+        ssize_t n = read(sockets[i][1], out, sizeof out - 1);
+        out[n > 0 ? n : 0] = '\0';
+        CHECK(strcmp(out, "OK\n") == 0, "owned subscriber %d admitted (got '%s')\n", i + 1, out);
+    }
+    CHECK(evdev_grab_acquire_count == 2, "first subscriber acquires exactly one live grab (got %d)\n", evdev_grab_acquire_count);
+
+    input_unsubscribe(sockets[0][0]);
+    CHECK(evdev_grab_release_count == 1, "one remaining subscriber keeps the grab owned\n");
+    input_unsubscribe(sockets[1][0]);
+    CHECK(evdev_grab_release_count == 2, "last subscriber releases the live grab\n");
+
+    for (int i = 0; i < 2; i++) { close(sockets[i][0]); close(sockets[i][1]); }
+    input_init();
+    sysexec_stub_reset();
+}
+
 // The SMT1019 LED path: per-channel ioctl on /dev/ledjni. Untestable on owned hardware, so pin the
 // wire protocol here — the exact command numbers and the 0..255 -> 0..15 scaling. The expected values
 // are HARDCODED (not pulled from led.c's #defines) so an accidental change to either fails this test.
@@ -645,6 +803,9 @@ int main(void) {
     test_dispatch_exact_match();
     test_sysctl_execution_results();
     test_line_accumulator();
+    test_input_watch_contract();
+    test_subscriber_admission();
+    test_grab_subscription_ownership();
     test_ledjni_ioctl();
     test_conn_cap();
 

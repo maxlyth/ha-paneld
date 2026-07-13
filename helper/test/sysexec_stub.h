@@ -9,5 +9,6 @@ void sysexec_stub_block_run(const char *needle);
 void sysexec_stub_wait_blocked(void);
 void sysexec_stub_release_run(void);
 void sysexec_stub_add_popen(const char *needle, const char *output, int close_status);
+void sysexec_stub_set_spawn_result(int status);
 
 #endif

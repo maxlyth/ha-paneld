@@ -35,6 +35,7 @@ static int run_history_count;
 static popen_rule popen_rules[MAX_POPEN_RULES];
 static int popen_rule_count;
 static open_pipe open_pipes[MAX_OPEN_PIPES];
+static int spawn_status = -1;
 
 void sysexec_stub_reset(void) {
     for (int i = 0; i < MAX_OPEN_PIPES; i++) {
@@ -52,7 +53,10 @@ void sysexec_stub_reset(void) {
     memset(popen_rules, 0, sizeof popen_rules);
     popen_rule_count = 0;
     memset(open_pipes, 0, sizeof open_pipes);
+    spawn_status = -1;
 }
+
+void sysexec_stub_set_spawn_result(int status) { spawn_status = status; }
 
 void sysexec_stub_block_run(const char *needle) {
     pthread_mutex_lock(&run_block_lock);
@@ -151,9 +155,8 @@ int sysexec_pclose(FILE *p) {
     return -1;
 }
 
-// Return failure so input_watch() frees its per-node arg itself (the real daemon hands it to a
-// lifetime evdev thread). No thread is spawned here, and nothing leaks — so the fuzz build can run
-// with LeakSanitizer ON.
-int   sysexec_spawn(void *(*fn)(void *), void *arg) { (void)fn; (void)arg; return -1; }
+// No thread is spawned on the host. input.c keeps watcher state in a bounded static registry, so a
+// configured success is safe for unit tests and the default failure stays leak-free for fuzzing.
+int sysexec_spawn(void *(*fn)(void *), void *arg) { (void)fn; (void)arg; return spawn_status; }
 
 void  sysexec_reboot(void)                { }

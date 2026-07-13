@@ -1,15 +1,34 @@
 package io.github.maxlyth.hapaneld.input
 
 /**
- * Bridges the system-instantiated [PanelAccessibilityService] to the MQTT bridge. The a11y service
- * is created by the framework (not by us), so it can't hold a reference to the bridge directly;
- * the bridge registers a [listener] here and the service emits key events through it.
+ * Bridges process-instantiated input sources to the current MQTT bridge. A subscription owns exactly
+ * the listener it installed: closing an old bridge's subscription cannot clear a replacement bridge's
+ * listener after a service reconfiguration.
  */
 object ButtonBus {
-    @Volatile
-    var listener: ((event: String) -> Unit)? = null
+    private data class Listener(val id: Long, val emit: (String) -> Unit)
+
+    class Subscription internal constructor(private val id: Long) : AutoCloseable {
+        override fun close() = unsubscribe(id)
+    }
+
+    private val lock = Any()
+    private var nextId = 0L
+    private var listener: Listener? = null
+
+    /** Replace the process's event consumer and return an ownership token for only this registration. */
+    fun subscribe(emit: (event: String) -> Unit): Subscription = synchronized(lock) {
+        val id = ++nextId
+        listener = Listener(id, emit)
+        Subscription(id)
+    }
 
     fun emit(event: String) {
-        listener?.invoke(event)
+        val target = synchronized(lock) { listener?.emit }
+        target?.invoke(event)
+    }
+
+    private fun unsubscribe(id: Long) = synchronized(lock) {
+        if (listener?.id == id) listener = null
     }
 }
