@@ -2,9 +2,14 @@
 #include "sysexec.h"
 #include "util.h"
 
+#include <errno.h>
+#include <fcntl.h>
 #include <pthread.h>
+#include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -286,6 +291,13 @@ static pthread_mutex_t install_lock = PTHREAD_MUTEX_INITIALIZER;
 static char cancelled_installs[MAX_CANCELLED_INSTALLS][256];
 static size_t cancelled_install_count;
 
+#ifdef HAPANELD_TEST
+#define INSTALL_STREAM_STAGE "/tmp/hapaneld-helper-install-stream-test.apk"
+#else
+#define INSTALL_STREAM_STAGE "/data/local/tmp/hapaneld-install.apk"
+#endif
+#define MAX_INSTALL_STREAM_BYTES (1024ULL * 1024ULL * 1024ULL)
+
 static int install_cancelled(const char *src) {
     for (size_t i = 0; i < cancelled_install_count; i++)
         if (strcmp(cancelled_installs[i], src) == 0) return 1;
@@ -327,6 +339,85 @@ void cmd_install(conn_ctx *ctx, const char *args) {
     char path[256] = "";
     sscanf(args, "%255s", path);
     reply(ctx->fd, install_apk(path) == 0 ? "OK\n" : "ERR\n");
+}
+
+static int parse_install_stream_size(const char *args, uint64_t *size) {
+    if (!args || !*args) return -1;
+    errno = 0;
+    char *end = NULL;
+    unsigned long long value = strtoull(args, &end, 10);
+    if (errno != 0 || end == args || *end != '\0' || value == 0 || value > MAX_INSTALL_STREAM_BYTES)
+        return -1;
+    *size = (uint64_t)value;
+    return 0;
+}
+
+static int copy_exact(int input, int output, uint64_t remaining) {
+    char buf[65536];
+    while (remaining > 0) {
+        size_t wanted = remaining < sizeof buf ? (size_t)remaining : sizeof buf;
+        ssize_t n = read(input, buf, wanted);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        if (n == 0) return -1;
+        size_t offset = 0;
+        while (offset < (size_t)n) {
+            ssize_t written = write(output, buf + offset, (size_t)n - offset);
+            if (written < 0) {
+                if (errno == EINTR) continue;
+                return -1;
+            }
+            if (written == 0) return -1;
+            offset += (size_t)written;
+        }
+        remaining -= (uint64_t)n;
+    }
+    char extra;
+    for (;;) {
+        ssize_t n = read(input, &extra, 1);
+        if (n < 0 && errno == EINTR) continue;
+        return n == 0 ? 0 : -1;
+    }
+}
+
+// Two-phase upload keeps binary bytes out of server.c's line accumulator: the client sends only this
+// command, waits for READY, then writes exactly <bytes>. The app opened its own private file, while
+// this SELinux domain reads only the authenticated socket and writes the root staging path.
+void cmd_installstream(conn_ctx *ctx, const char *args) {
+    uint64_t size;
+    if (parse_install_stream_size(args, &size) != 0) {
+        reply(ctx->fd, "STREAMERR\n");
+        return;
+    }
+    if (pthread_mutex_trylock(&install_lock) != 0) {
+        reply(ctx->fd, "BUSY\n");
+        return;
+    }
+
+    int output = open(INSTALL_STREAM_STAGE, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+    if (output < 0 || fchmod(output, 0644) != 0) {
+        if (output >= 0) close(output);
+        unlink(INSTALL_STREAM_STAGE);
+        pthread_mutex_unlock(&install_lock);
+        reply(ctx->fd, "STREAMERR\n");
+        return;
+    }
+
+    reply(ctx->fd, "READY\n");
+    // EOF is part of the frame: it proves the client sent neither fewer nor more bytes than declared.
+    int copied = copy_exact(ctx->fd, output, size) == 0;
+    int closed = close(output) == 0;
+    int installed = 0;
+    if (copied && closed) {
+        char cmd[320];
+        snprintf(cmd, sizeof cmd, "pm install -r -d %s 2>&1 | grep -q Success", INSTALL_STREAM_STAGE);
+        installed = sysexec_run(cmd) == 0;
+    }
+    unlink(INSTALL_STREAM_STAGE);
+    pthread_mutex_unlock(&install_lock);
+    reply(ctx->fd, installed ? "OK\n" : "ERR\n");
 }
 
 // Authorise the app to delete a retained input while owning the same mutex as INSTALL. A status-only

@@ -93,8 +93,9 @@ object AppInstaller {
      * Install an APK already on local disk over root, then delete it. Shared install tail used by both the
      * pinned-download path ([install]) and the Install-tab APK upload. **No signer pin is applied here** —
      * [install] verifies BEFORE calling this; the upload path installs whatever the user explicitly chose
-     * (surfaced package/version/signer + confirmed first). Streams straight into `pm install -S` (no
-     * /data/local/tmp copy) or the peer-uid-locked daemon `INSTALL` verb. Returns "OK" or a short reason.
+     * (surfaced package/version/signer + confirmed first). Streams straight into `pm install -S` or over
+     * the peer-uid-locked daemon socket; an older daemon falls back to its path-based `INSTALL` verb.
+     * Returns "OK" or a short reason.
      */
     suspend fun installLocalApk(context: Context, apk: File): String = withContext(Dispatchers.IO) {
         val hasSu = Su.available()

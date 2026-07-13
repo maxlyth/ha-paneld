@@ -5,7 +5,9 @@ import android.net.LocalSocketAddress
 import android.util.Log
 import io.github.maxlyth.hapaneld.platform.Daemon
 import io.github.maxlyth.hapaneld.platform.DaemonLongResult
+import io.github.maxlyth.hapaneld.platform.DaemonStreamResult
 import java.io.BufferedReader
+import java.io.File
 import java.io.InputStreamReader
 
 /**
@@ -66,6 +68,45 @@ object HelperClient : Daemon {
                 Log.d(TAG, "daemon long call ${if (submissionBegan) "indeterminate" else "not submitted"} (${e.message})")
                 if (submissionBegan) DaemonLongResult.Indeterminate else DaemonLongResult.NotSubmitted
             }
+        }
+    }
+
+    /**
+     * Stream a caller-openable file without asking the helper's SELinux domain to read app-private
+     * storage. The helper must acknowledge `READY` before bytes are written, preventing its line
+     * accumulator from reading payload bytes ahead of the command handler.
+     */
+    override fun sendFile(cmd: String, source: File, timeoutMs: Long): DaemonStreamResult {
+        val socket = try {
+            open()
+        } catch (e: Exception) {
+            Log.d(TAG, "daemon stream not submitted (${e.message})")
+            return DaemonStreamResult.NotSubmitted
+        }
+        val deadline = StreamDeadline(timeoutMs) { runCatching { socket.close() } }
+        return try {
+            socket.use { s ->
+                var submissionBegan = false
+                try {
+                    s.soTimeout = timeoutMs.coerceIn(1L, Int.MAX_VALUE.toLong()).toInt()
+                    val output = s.outputStream
+                    val replies = BufferedReader(InputStreamReader(s.inputStream))
+                    submissionBegan = true
+                    DaemonStreamProtocol.exchange(
+                        command = cmd,
+                        openSource = source::inputStream,
+                        expectedBytes = source.length(),
+                        replies = replies,
+                        output = output,
+                        shutdownOutput = s::shutdownOutput,
+                    )
+                } catch (e: Exception) {
+                    Log.d(TAG, "daemon stream ${if (submissionBegan) "indeterminate" else "not submitted"} (${e.message})")
+                    if (submissionBegan) DaemonStreamResult.Indeterminate else DaemonStreamResult.NotSubmitted
+                }
+            }
+        } finally {
+            deadline.close()
         }
     }
 

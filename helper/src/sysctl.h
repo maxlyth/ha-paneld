@@ -21,6 +21,7 @@ void cmd_disable(conn_ctx *ctx, const char *args);    // DISABLE <pkg>     pm di
 void cmd_enable(conn_ctx *ctx, const char *args);     // ENABLE <pkg>      pm enable (reverse DISABLE)
 void cmd_overlay(conn_ctx *ctx, const char *args);    // OVERLAY <pkg> deny|allow  SYSTEM_ALERT_WINDOW
 void cmd_install(conn_ctx *ctx, const char *args);    // INSTALL <apk-path>  root pm install of a staged, allowlisted APK
+void cmd_installstream(conn_ctx *ctx, const char *args); // INSTALLSTREAM <bytes> two-phase socket upload + install
 void cmd_installgc(conn_ctx *ctx, const char *args);  // INSTALLGC <apk-path> remove retained input under install lock
 
 #endif

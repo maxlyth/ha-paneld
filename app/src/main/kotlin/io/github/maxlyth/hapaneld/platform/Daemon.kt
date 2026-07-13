@@ -1,5 +1,7 @@
 package io.github.maxlyth.hapaneld.platform
 
+import java.io.File
+
 /**
  * The root-helper-daemon boundary — a thin seam over [io.github.maxlyth.hapaneld.util.HelperClient] so
  * callers can depend on an interface (and be unit-tested with a fake) instead of the concrete socket
@@ -19,6 +21,13 @@ interface Daemon {
      */
     fun sendLong(cmd: String, timeoutMs: Long): DaemonLongResult
 
+    /**
+     * Negotiate a two-phase command, stream [source] only after the daemon replies `READY`, then wait
+     * for one terminal line. The default keeps injected/older daemon implementations compatible.
+     */
+    fun sendFile(cmd: String, source: File, timeoutMs: Long): DaemonStreamResult =
+        DaemonStreamResult.Unsupported
+
     /** Send one command and read the full binary reply (e.g. a `SCREENCAP` PNG), or null. */
     fun sendBytes(cmd: String): ByteArray?
 }
@@ -32,4 +41,18 @@ sealed interface DaemonLongResult {
 
     /** Submission began but EOF, timeout, or I/O failure prevented a terminal reply. */
     data object Indeterminate : DaemonLongResult
+}
+
+sealed interface DaemonStreamResult {
+    /** The daemon returned a terminal reply, either before or after accepting the payload. */
+    data class Reply(val value: String) : DaemonStreamResult
+
+    /** The daemon returned the legacy unknown-command `ERR` before accepting any payload. */
+    data object Unsupported : DaemonStreamResult
+
+    /** Socket connection failed before command submission began. */
+    data object NotSubmitted : DaemonStreamResult
+
+    /** Submission began but no terminal reply arrived; closing the socket ends source consumption. */
+    data object Indeterminate : DaemonStreamResult
 }

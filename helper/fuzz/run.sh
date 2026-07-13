@@ -23,6 +23,7 @@ CORE_SRCS="$(cd "$HELPER" && make --no-print-directory -s print-core)"
 echo ">> compiling sanitizer smoke harness (real src/*.c + sysexec stub, ASan+UBSan)…"
 ( cd "$HELPER" && \
   gcc -O1 -g -Wall -Wextra -Werror -Wno-format-truncation \
+      -DHAPANELD_TEST \
       -fsanitize=address,undefined -fno-sanitize-recover=all \
       -Isrc $CORE_SRCS test/sysexec_stub.c "$HERE/fuzz_parser.c" -lpthread -o "$OUT/fuzz_parser" )
 

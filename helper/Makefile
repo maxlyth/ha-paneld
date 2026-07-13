@@ -42,7 +42,7 @@ test: $(BUILD)/unit
 # --wrap=ioctl lets the tests capture the ledjni per-channel ioctls (the SMT1019 LED path) without a
 # real /dev/ledjni; only test code emits ioctls in this build, so the wrap is unambiguous.
 $(BUILD)/unit: $(CORE_SRCS) $(STUB) test/unit.c | $(BUILD)
-	$(CC) $(CFLAGS) -I$(SRC_DIR) $(CORE_SRCS) $(STUB) test/unit.c $(LDLIBS) -Wl,--wrap=ioctl -o $@
+	$(CC) $(CFLAGS) -DHAPANELD_TEST -I$(SRC_DIR) $(CORE_SRCS) $(STUB) test/unit.c $(LDLIBS) -Wl,--wrap=ioctl -o $@
 
 # App<->daemon verb-contract cross-check: every verb the app sends must be handled by dispatch.c.
 contract:

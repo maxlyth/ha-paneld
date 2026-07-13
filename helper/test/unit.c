@@ -6,6 +6,7 @@
 //
 // A clean run prints "UNIT OK" and exits 0; any failed assertion prints the case and exits 1.
 #define _GNU_SOURCE
+#include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
 #include <sched.h>
@@ -13,6 +14,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "cmd.h"
@@ -74,6 +76,45 @@ static void *dispatch_worker(void *arg) {
     job->out[n > 0 ? n : 0] = '\0';
     close(sv[0]); close(sv[1]);
     return NULL;
+}
+
+typedef struct {
+    int fd;
+    const char *line;
+} stream_dispatch_job;
+
+static void *stream_dispatch_worker(void *arg) {
+    stream_dispatch_job *job = arg;
+    char line[MAX_LINE + 1];
+    snprintf(line, sizeof line, "%s", job->line);
+    conn_ctx ctx = { .fd = job->fd, .subscribed = 0 };
+    dispatch(&ctx, line);
+    close(job->fd);
+    return NULL;
+}
+
+static ssize_t read_reply_line(int fd, char *out, size_t outsz) {
+    size_t used = 0;
+    while (used + 1 < outsz) {
+        ssize_t n = read(fd, out + used, 1);
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) break;
+        if (out[used++] == '\n') break;
+    }
+    out[used] = '\0';
+    return (ssize_t)used;
+}
+
+static int write_all_fd(int fd, const void *bytes, size_t size) {
+    const char *p = bytes;
+    while (size > 0) {
+        ssize_t n = write(fd, p, size);
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) return -1;
+        p += n;
+        size -= (size_t)n;
+    }
+    return 0;
 }
 
 // Feed a raw byte stream to server_serve() (half-closed) and return all reply bytes.
@@ -354,6 +395,95 @@ static void test_sysctl_execution_results(void) {
     dispatch_reply("INSTALLGC /data/local/tmp/not-owned.apk", out, sizeof out);
     CHECK(strcmp(out, "ERR\n") == 0, "INSTALLGC rejects paths outside app-private storage (got '%s')\n", out);
 
+    // INSTALLSTREAM waits for READY before the client sends binary bytes, then installs only after the
+    // exact declared length reaches root-owned staging. Block pm install so the staged bytes can be
+    // inspected before terminal cleanup.
+    const char *stream_stage = "/tmp/hapaneld-helper-install-stream-test.apk";
+    const char payload[] = { 0x50, 0x4b, 0x03, 0x04, 0x7f };
+    unlink(stream_stage);
+    sysexec_stub_reset();
+    sysexec_stub_block_run("pm install");
+    int stream_sv[2];
+    socketpair(AF_UNIX, SOCK_STREAM, 0, stream_sv);
+    stream_dispatch_job stream = { .fd = stream_sv[0], .line = "INSTALLSTREAM 5" };
+    pthread_t stream_thread;
+    pthread_create(&stream_thread, NULL, stream_dispatch_worker, &stream);
+    read_reply_line(stream_sv[1], out, sizeof out);
+    CHECK(strcmp(out, "READY\n") == 0, "INSTALLSTREAM acknowledges before payload (got '%s')\n", out);
+    CHECK(write_all_fd(stream_sv[1], payload, sizeof payload) == 0, "INSTALLSTREAM client writes full payload\n");
+    shutdown(stream_sv[1], SHUT_WR);
+    sysexec_stub_wait_blocked();
+    int staged = open(stream_stage, O_RDONLY);
+    char staged_bytes[sizeof payload] = {0};
+    ssize_t staged_n = staged >= 0 ? read(staged, staged_bytes, sizeof staged_bytes) : -1;
+    if (staged >= 0) close(staged);
+    CHECK(staged_n == (ssize_t)sizeof payload && memcmp(staged_bytes, payload, sizeof payload) == 0,
+          "INSTALLSTREAM stages the exact declared bytes before package install\n");
+    sysexec_stub_release_run();
+    read_reply_line(stream_sv[1], out, sizeof out);
+    CHECK(strcmp(out, "OK\n") == 0, "INSTALLSTREAM reports package-manager success (got '%s')\n", out);
+    pthread_join(stream_thread, NULL);
+    close(stream_sv[1]);
+    CHECK(access(stream_stage, F_OK) != 0, "INSTALLSTREAM removes root staging after success\n");
+
+    // Package-manager failure is a terminal ERR and still removes the completed root staging file.
+    sysexec_stub_reset();
+    sysexec_stub_fail_run("pm install", 1);
+    socketpair(AF_UNIX, SOCK_STREAM, 0, stream_sv);
+    stream = (stream_dispatch_job){ .fd = stream_sv[0], .line = "INSTALLSTREAM 5" };
+    pthread_create(&stream_thread, NULL, stream_dispatch_worker, &stream);
+    read_reply_line(stream_sv[1], out, sizeof out);
+    CHECK(strcmp(out, "READY\n") == 0, "failing INSTALLSTREAM receives READY (got '%s')\n", out);
+    CHECK(write_all_fd(stream_sv[1], payload, sizeof payload) == 0, "failing INSTALLSTREAM writes full payload\n");
+    shutdown(stream_sv[1], SHUT_WR);
+    read_reply_line(stream_sv[1], out, sizeof out);
+    CHECK(strcmp(out, "ERR\n") == 0, "INSTALLSTREAM reports package-manager failure (got '%s')\n", out);
+    pthread_join(stream_thread, NULL);
+    close(stream_sv[1]);
+    CHECK(access(stream_stage, F_OK) != 0, "INSTALLSTREAM removes root staging after package-manager failure\n");
+
+    // EOF before the declared length is terminal failure: no package install and no stale root file.
+    sysexec_stub_reset();
+    socketpair(AF_UNIX, SOCK_STREAM, 0, stream_sv);
+    stream = (stream_dispatch_job){ .fd = stream_sv[0], .line = "INSTALLSTREAM 5" };
+    pthread_create(&stream_thread, NULL, stream_dispatch_worker, &stream);
+    read_reply_line(stream_sv[1], out, sizeof out);
+    CHECK(strcmp(out, "READY\n") == 0, "partial INSTALLSTREAM receives READY (got '%s')\n", out);
+    CHECK(write_all_fd(stream_sv[1], payload, 3) == 0, "partial INSTALLSTREAM writes prefix\n");
+    shutdown(stream_sv[1], SHUT_WR);
+    read_reply_line(stream_sv[1], out, sizeof out);
+    CHECK(strcmp(out, "ERR\n") == 0, "partial INSTALLSTREAM reports failure (got '%s')\n", out);
+    pthread_join(stream_thread, NULL);
+    close(stream_sv[1]);
+    CHECK(sysexec_stub_count_run("pm install") == 0, "partial INSTALLSTREAM never invokes package manager\n");
+    CHECK(access(stream_stage, F_OK) != 0, "partial INSTALLSTREAM removes root staging\n");
+
+    // Extra bytes violate the frame and cannot be interpreted as another command after the handler.
+    sysexec_stub_reset();
+    socketpair(AF_UNIX, SOCK_STREAM, 0, stream_sv);
+    stream = (stream_dispatch_job){ .fd = stream_sv[0], .line = "INSTALLSTREAM 4" };
+    pthread_create(&stream_thread, NULL, stream_dispatch_worker, &stream);
+    read_reply_line(stream_sv[1], out, sizeof out);
+    CHECK(strcmp(out, "READY\n") == 0, "overlong INSTALLSTREAM receives READY (got '%s')\n", out);
+    CHECK(write_all_fd(stream_sv[1], payload, sizeof payload) == 0, "overlong INSTALLSTREAM writes payload\n");
+    shutdown(stream_sv[1], SHUT_WR);
+    read_reply_line(stream_sv[1], out, sizeof out);
+    CHECK(strcmp(out, "ERR\n") == 0, "overlong INSTALLSTREAM reports failure (got '%s')\n", out);
+    pthread_join(stream_thread, NULL);
+    close(stream_sv[1]);
+    CHECK(sysexec_stub_count_run("pm install") == 0, "overlong INSTALLSTREAM never invokes package manager\n");
+    CHECK(access(stream_stage, F_OK) != 0, "overlong INSTALLSTREAM removes root staging\n");
+
+    // Protocol bounds and pre-staging failure are explicit responses before READY.
+    dispatch_reply("INSTALLSTREAM 0", out, sizeof out);
+    CHECK(strcmp(out, "STREAMERR\n") == 0, "INSTALLSTREAM rejects zero bytes (got '%s')\n", out);
+    dispatch_reply("INSTALLSTREAM 1073741825", out, sizeof out);
+    CHECK(strcmp(out, "STREAMERR\n") == 0, "INSTALLSTREAM rejects over 1GiB (got '%s')\n", out);
+    mkdir(stream_stage, 0700);
+    dispatch_reply("INSTALLSTREAM 5", out, sizeof out);
+    CHECK(strcmp(out, "STREAMERR\n") == 0, "INSTALLSTREAM reports root staging open failure (got '%s')\n", out);
+    rmdir(stream_stage);
+
     // The daemon is thread-per-connection but uses one root staging path. A concurrent INSTALL must
     // fail immediately instead of replacing the first transaction's staged bytes or waiting behind it.
     sysexec_stub_block_run("cp '");
@@ -363,6 +493,8 @@ static void test_sysctl_execution_results(void) {
     sysexec_stub_wait_blocked();
     dispatch_reply(install, out, sizeof out);
     CHECK(strcmp(out, "ERR\n") == 0, "overlapping INSTALL is rejected while one owns root staging (got '%s')\n", out);
+    dispatch_reply("INSTALLSTREAM 5", out, sizeof out);
+    CHECK(strcmp(out, "BUSY\n") == 0, "overlapping INSTALLSTREAM is rejected before READY (got '%s')\n", out);
     dispatch_reply(install_gc, out, sizeof out);
     CHECK(strcmp(out, "BUSY\n") == 0, "INSTALLGC retains input while an install owns the lane (got '%s')\n", out);
     sysexec_stub_release_run();

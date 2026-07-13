@@ -2,16 +2,16 @@ package io.github.maxlyth.hapaneld.util
 
 import io.github.maxlyth.hapaneld.platform.Daemon
 import io.github.maxlyth.hapaneld.platform.DaemonLongResult
+import io.github.maxlyth.hapaneld.platform.DaemonStreamResult
 import java.io.File
 
 /**
- * Owns one helper-backed APK install from source-file claim through terminal daemon reply. The source
- * is moved into a unique persistent app-private staging path before submission, so neither cache
- * eviction nor a later upload/download can replace bytes an in-flight helper may still consume.
+ * Owns one helper-backed APK install through terminal daemon reply. A current helper receives bytes
+ * over the authenticated socket, so its SELinux domain never opens app-private storage. Closing that
+ * socket ends source consumption even when the install outcome is unknown.
  *
- * A terminal reply or definite connection failure releases the staged file. An indeterminate call
- * deliberately retains it: the helper worker is independent of the client socket, so deletion would
- * violate input ownership when no terminal reply proved completion.
+ * An older helper rejects the stream verb before payload and falls back to the path-based transaction:
+ * the source is then claimed into unique persistent staging and retained after an indeterminate call.
  */
 internal class HelperInstallTransaction(
     private val daemon: Daemon,
@@ -19,6 +19,26 @@ internal class HelperInstallTransaction(
     private val staging: HelperInstallStaging = HelperInstallStaging.shared,
 ) {
     fun install(apk: File, stagingDir: File): String {
+        if (!apk.isFile || apk.length() <= 0L) {
+            apk.delete()
+            return "install failed: invalid APK input"
+        }
+        when (val streamed = daemon.sendFile("INSTALLSTREAM ${apk.length()}", apk, timeoutMs)) {
+            is DaemonStreamResult.Reply -> {
+                apk.delete()
+                return if (streamed.value == "OK") "OK" else "install failed: daemon install failed"
+            }
+            DaemonStreamResult.NotSubmitted -> {
+                apk.delete()
+                return "install failed: daemon unreachable"
+            }
+            DaemonStreamResult.Indeterminate -> {
+                apk.delete()
+                return "install outcome unknown: streamed input released"
+            }
+            DaemonStreamResult.Unsupported -> Unit
+        }
+
         val owned = staging.claim(apk, stagingDir)
             ?: return "install failed: could not claim helper staging"
         return when (val result = daemon.sendLong("INSTALL ${owned.absolutePath}", timeoutMs)) {

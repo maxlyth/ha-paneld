@@ -2,6 +2,7 @@ package io.github.maxlyth.hapaneld.util
 
 import io.github.maxlyth.hapaneld.platform.Daemon
 import io.github.maxlyth.hapaneld.platform.DaemonLongResult
+import io.github.maxlyth.hapaneld.platform.DaemonStreamResult
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -17,11 +18,14 @@ class HelperInstallTransactionTest {
 
     private class LongDaemon(
         var result: DaemonLongResult,
+        var streamResult: DaemonStreamResult = DaemonStreamResult.Unsupported,
+        private val onStream: (String, File, Long) -> Unit = { _, _, _ -> },
         private val onSend: (String) -> String? = { null },
         private val onCall: (String, Long) -> Unit = { _, _ -> },
     ) : Daemon {
         val calls = mutableListOf<Pair<String, Long>>()
         val shortCalls = mutableListOf<String>()
+        val streamCalls = mutableListOf<Triple<String, File, Long>>()
 
         override fun available() = true
         override fun send(cmd: String): String? {
@@ -33,11 +37,81 @@ class HelperInstallTransactionTest {
             onCall(cmd, timeoutMs)
             return result
         }
+        override fun sendFile(cmd: String, source: File, timeoutMs: Long): DaemonStreamResult {
+            streamCalls += Triple(cmd, source, timeoutMs)
+            onStream(cmd, source, timeoutMs)
+            return streamResult
+        }
         override fun sendBytes(cmd: String): ByteArray? = null
     }
 
     private fun apk(name: String, bytes: ByteArray): File =
         temporary.newFile(name).apply { writeBytes(bytes) }
+
+    @Test fun invalidLocalInputIsRejectedBeforeEitherDaemonProtocol() {
+        val empty = apk("empty.apk", byteArrayOf())
+        val directory = temporary.newFolder("invalid-staging")
+        val daemon = LongDaemon(DaemonLongResult.Reply("OK"), streamResult = DaemonStreamResult.Reply("OK"))
+
+        assertEquals("install failed: invalid APK input", HelperInstallTransaction(daemon).install(empty, directory))
+        assertFalse(empty.exists())
+        assertTrue(daemon.streamCalls.isEmpty())
+        assertTrue(daemon.calls.isEmpty())
+    }
+
+    @Test fun streamSuccessUsesOriginalInputAndNeverCreatesLegacyStaging() {
+        val source = apk("stream.apk", byteArrayOf(0x50, 0x4b, 3, 4))
+        val directory = temporary.newFolder("stream-staging")
+        val daemon = LongDaemon(
+            result = DaemonLongResult.Reply("ERR"),
+            streamResult = DaemonStreamResult.Reply("OK"),
+            onStream = { cmd, input, timeout ->
+                assertEquals("INSTALLSTREAM 4", cmd)
+                assertEquals(source, input)
+                assertArrayEquals(byteArrayOf(0x50, 0x4b, 3, 4), input.readBytes())
+                assertEquals(180_000L, timeout)
+            },
+        )
+
+        assertEquals("OK", HelperInstallTransaction(daemon).install(source, directory))
+        assertFalse(source.exists())
+        assertTrue(directory.listFiles().orEmpty().isEmpty())
+        assertTrue(daemon.calls.isEmpty())
+    }
+
+    @Test fun streamTerminalFailureAndDefiniteNonSubmissionReleaseInput() {
+        listOf(
+            DaemonStreamResult.Reply("ERR") to "install failed: daemon install failed",
+            DaemonStreamResult.Reply("BUSY") to "install failed: daemon install failed",
+            DaemonStreamResult.NotSubmitted to "install failed: daemon unreachable",
+        ).forEachIndexed { index, (streamResult, expected) ->
+            val source = apk("stream-failed-$index.apk", byteArrayOf(index.toByte(), 7))
+            val directory = temporary.newFolder("stream-failed-staging-$index")
+            val daemon = LongDaemon(DaemonLongResult.Reply("OK"), streamResult = streamResult)
+
+            assertEquals(expected, HelperInstallTransaction(daemon).install(source, directory))
+            assertFalse(source.exists())
+            assertTrue(directory.listFiles().orEmpty().isEmpty())
+            assertTrue(daemon.calls.isEmpty())
+        }
+    }
+
+    @Test fun indeterminateStreamReleasesSourceBecauseSocketClosureEndsConsumption() {
+        val source = apk("stream-indeterminate.apk", byteArrayOf(1, 2, 3))
+        val directory = temporary.newFolder("stream-indeterminate-staging")
+        val daemon = LongDaemon(
+            result = DaemonLongResult.Reply("OK"),
+            streamResult = DaemonStreamResult.Indeterminate,
+        )
+
+        assertEquals(
+            "install outcome unknown: streamed input released",
+            HelperInstallTransaction(daemon).install(source, directory),
+        )
+        assertFalse(source.exists())
+        assertTrue(directory.listFiles().orEmpty().isEmpty())
+        assertTrue(daemon.calls.isEmpty())
+    }
 
     @Test fun terminalSuccessKeepsClaimedInputUntilReplyThenDeletesIt() {
         val source = apk("source.apk", byteArrayOf(1, 2, 3))
