@@ -733,12 +733,16 @@ class PaneldServer(
                         val d = p["density"]?.trim()?.toIntOrNull()       // custom density (Apply)
                         val f = p["font"]?.trim()?.toFloatOrNull()        // custom font scale (Apply)
                         val ok = when (action) {
-                            "reset" -> density.reset() or density.resetFontScale()
-                            "rec" -> (recommendedDensity?.let { density.set(it) } ?: false) or
-                                (recommendedFontScale?.let { density.setFontScale(it) } ?: false)
+                            "reset" -> DensityController.allApplied(density.reset(), density.resetFontScale())
+                            "rec" -> DensityController.allApplied(
+                                recommendedDensity?.let { density.set(it) },
+                                recommendedFontScale?.let { density.setFontScale(it) },
+                            )
                             else -> {  // Apply: set whichever fields were provided
-                                (d?.let { density.set(it) } ?: false) or
-                                    (f?.let { density.setFontScale(it) } ?: false)
+                                DensityController.allApplied(
+                                    d?.let { density.set(it) },
+                                    f?.let { density.setFontScale(it) },
+                                )
                             }
                         }
                         // Prime the density cache with the KNOWN result so the redirected /configure shows it

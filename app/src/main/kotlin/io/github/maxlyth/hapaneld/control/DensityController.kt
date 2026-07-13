@@ -14,74 +14,126 @@ import io.github.maxlyth.hapaneld.util.HelperClient
  * so HA cards come out too big/small or text mis-sized vs desktop; iOS keeps these aligned, Android
  * panels frequently don't.
  *
- * Both persist across reboot (secure/system settings), so a one-shot set sticks. Both are privileged
- * (`wm density` / `settings put system font_scale`): su-direct on su-reachable panels (NSPanel Pro
- * PX30, WF1589T); on sandbox-walled panels (TPA10, `appCanSu=false`) density routes through the root
- * daemon's `DENSITY` command and font scale through its `FONTSCALE` command, so both controls are
- * available there too.
+ * Both persist across reboot (secure/system settings), so a one-shot set sticks. Both are privileged.
+ * [DeviceProfile.appCanSu] orders live su/helper attempts; it never suppresses the alternate route.
  */
 class DensityController(
     private val canSu: Boolean = DeviceProfile.detect().appCanSu,
     private val root: RootShell = Su,
     private val daemon: Daemon = HelperClient,
 ) {
+    private data class DensityState(val physical: Int, val override: Int?)
 
     /** Native (physical) density, or null if unreadable. */
-    fun native(): Int? = if (canSu) parseSu("Physical density:") else daemonField("PHYS")
+    fun native(): Int? = densityState()?.physical
 
     /** Current effective density — the override if one is set, else the physical density. */
-    fun current(): Int? =
-        if (canSu) (parseSu("Override density:") ?: native())
-        else (daemonField("OVER") ?: native())
+    fun current(): Int? = densityState()?.let { it.override ?: it.physical }
 
-    /** True when density is readable — i.e. we can also set it. */
+    /** True when density is readable. A later set can still fail if neither privileged route works. */
     fun available(): Boolean = native() != null
 
     /** Set the override density (dpi). Bounded to keep the UI usable/bootable. Returns true if applied. */
     fun set(dpi: Int): Boolean {
         if (dpi < MIN_DPI || dpi > MAX_DPI) return false
-        return if (canSu) root.run("wm density $dpi") else daemon.send("DENSITY $dpi") == "OK"
+        return routedEffect(
+            su = { root.run("wm density $dpi") },
+            helper = { daemon.send("DENSITY $dpi") == "OK" },
+        )
     }
 
     /** Restore the native density. */
-    fun reset(): Boolean =
-        if (canSu) root.run("wm density reset") else daemon.send("DENSITY reset") == "OK"
+    fun reset(): Boolean = routedEffect(
+        su = { root.run("wm density reset") },
+        helper = { daemon.send("DENSITY reset") == "OK" },
+    )
 
     /** Current system font scale (1.0 when unset). WebView text follows this (textZoom = scale × 100). */
-    fun fontScale(): Float =
-        if (canSu) (root.runOutput("settings get system font_scale 2>/dev/null") ?: "").trim().toFloatOrNull() ?: 1.0f
-        else daemonScale() ?: 1.0f
+    fun fontScale(): Float = routedValue(
+        su = { parseRootScale(root.runOutput("settings get system font_scale 2>/dev/null")) },
+        helper = { parseHelperScale(daemon.send("FONTSCALE")) },
+    ) ?: 1.0f
 
     /** Set the system font scale (text size). Bounded to keep text legible. Returns true if applied. */
     fun setFontScale(scale: Float): Boolean {
-        if (scale < MIN_FONT || scale > MAX_FONT) return false
-        return if (canSu) root.run("settings put system font_scale $scale")
-        else daemon.send("FONTSCALE $scale") == "OK"
+        if (!scale.isFinite() || scale < MIN_FONT || scale > MAX_FONT) return false
+        return routedEffect(
+            su = { root.run("settings put system font_scale $scale") },
+            helper = { daemon.send("FONTSCALE $scale") == "OK" },
+        )
     }
 
     /** Restore the default font scale (1.0). */
-    fun resetFontScale(): Boolean =
-        if (canSu) root.run("settings delete system font_scale")
-        else daemon.send("FONTSCALE reset") == "OK"
+    fun resetFontScale(): Boolean = routedEffect(
+        su = { root.run("settings delete system font_scale") },
+        helper = { daemon.send("FONTSCALE reset") == "OK" },
+    )
 
-    // su path: parse the `wm density` output ("Physical density: N" / "Override density: N").
-    private fun parseSu(key: String): Int? =
-        (root.runOutput("wm density 2>/dev/null") ?: "")
-            .lineSequence().firstOrNull { it.contains(key) }
+    private fun densityState(): DensityState? = routedValue(
+        su = { parseRootDensity(root.runOutput("wm density 2>/dev/null")) },
+        helper = { parseHelperDensity(daemon.send("DENSITY")) },
+    )
+
+    private fun parseRootDensity(reply: String?): DensityState? {
+        if (reply == null) return null
+        fun field(key: String): Int? = reply.lineSequence()
+            .firstOrNull { it.contains(key) }
             ?.substringAfter(key)?.trim()?.toIntOrNull()
+        val physical = field("Physical density:") ?: return null
+        return DensityState(physical, field("Override density:"))
+    }
 
-    // daemon path: parse the daemon's "PHYS=<n> OVER=<n|->" reply (OVER absent/"-" => no override).
-    private fun daemonField(key: String): Int? =
-        daemon.send("DENSITY")?.let { Regex("$key=(\\d+)").find(it)?.groupValues?.get(1)?.toIntOrNull() }
+    private fun parseHelperDensity(reply: String?): DensityState? {
+        val match = DENSITY_REPLY.matchEntire(reply?.trim().orEmpty()) ?: return null
+        val physical = match.groupValues[1].toIntOrNull() ?: return null
+        val override = match.groupValues[2].takeUnless { it == "-" }?.toIntOrNull()
+        return DensityState(physical, override)
+    }
 
-    // daemon path: parse the daemon's "SCALE=<v>" reply ("null" when unset => no override, read as 1.0).
-    private fun daemonScale(): Float? =
-        daemon.send("FONTSCALE")?.let { Regex("SCALE=([0-9.]+)").find(it)?.groupValues?.get(1)?.toFloatOrNull() }
+    private fun parseRootScale(reply: String?): Float? {
+        if (reply == null) return null
+        val token = reply.trim()
+        if (token.isEmpty()) return null
+        return parseScaleToken(token)
+    }
+
+    private fun parseHelperScale(reply: String?): Float? {
+        val token = SCALE_REPLY.matchEntire(reply?.trim().orEmpty())?.groupValues?.get(1) ?: return null
+        return parseScaleToken(token)
+    }
+
+    private fun parseScaleToken(token: String): Float? {
+        if (token == "null") return 1.0f
+        return token.toFloatOrNull()?.takeIf { it.isFinite() && it > 0f }
+    }
+
+    private fun routedEffect(su: () -> Boolean, helper: () -> Boolean): Boolean {
+        val suAttempt = EffectAttempt(PrivilegeRoute.SU, su)
+        val helperAttempt = EffectAttempt(PrivilegeRoute.DAEMON, helper)
+        val attempts = if (canSu) arrayOf(suAttempt, helperAttempt) else arrayOf(helperAttempt, suAttempt)
+        return ShortOperationRouter.effect(*attempts) != null
+    }
+
+    private fun <T : Any> routedValue(su: () -> T?, helper: () -> T?): T? {
+        val suAttempt = ValueAttempt(PrivilegeRoute.SU, su)
+        val helperAttempt = ValueAttempt(PrivilegeRoute.DAEMON, helper)
+        val attempts = if (canSu) arrayOf(suAttempt, helperAttempt) else arrayOf(helperAttempt, suAttempt)
+        return ShortOperationRouter.value(*attempts)?.value
+    }
 
     companion object {
         const val MIN_DPI = 80
         const val MAX_DPI = 640
         const val MIN_FONT = 0.5f
         const val MAX_FONT = 1.5f
+
+        private val DENSITY_REPLY = Regex("^PHYS=(\\d+) OVER=(\\d+|-)$")
+        private val SCALE_REPLY = Regex("^SCALE=(null|[0-9]+(?:\\.[0-9]+)?)$")
+
+        /** True only when at least one requested display effect exists and every requested effect succeeded. */
+        internal fun allApplied(vararg results: Boolean?): Boolean {
+            val requested = results.filterNotNull()
+            return requested.isNotEmpty() && requested.all { it }
+        }
     }
 }
