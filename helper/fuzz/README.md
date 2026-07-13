@@ -1,33 +1,34 @@
-# hapaneld-helper parser fuzzing
+# hapaneld-helper sanitizer smoke harness
 
-A small harness that fuzzes the daemon's command parser (`server_serve()` / `dispatch()` in `../src/`) for memory safety against hostile or malformed input on the socket.
+This internally authored harness feeds malformed and adversarial bytes through the daemon's real command parser and handlers under AddressSanitizer, UndefinedBehaviorSanitizer, and LeakSanitizer. It is a reproducible developer smoke test, not independent security validation, a coverage-guided fuzzer, or a semantic correctness oracle.
 
 ## Run
 
 ```bash
-./helper/fuzz/run.sh            # 1,000,000 random iters + corpus + length-boundary cases
-./helper/fuzz/run.sh 5000000    # longer run
+./helper/fuzz/run.sh            # corpus + length boundaries + 100,000 deterministic random inputs
+./helper/fuzz/run.sh 1000000    # optional longer smoke run
 make -C helper fuzz             # same thing, via the Makefile
 ```
 
-Only `gcc` is needed (host toolchain; no clang/NDK). A clean run ends with `FUZZ OK` and exit 0; any overflow / out-of-bounds / undefined behaviour / leak aborts with an ASan/UBSan/LSan report.
+Only `gcc` is needed. A clean run ends with `SANITIZER SMOKE OK` and exit 0; a sanitizer-visible overflow, out-of-bounds access, undefined behaviour, or leak aborts with a diagnostic. A clean run does not prove that every path was reached or that accepted commands have the correct semantics.
 
 ## What it does
 
-`fuzz_parser.c` **links the real daemon modules** together with `test/sysexec_stub.c`. The modules are `helper/src/*.c` via the Makefile's `CORE_SRCS` — the exact set the binary ships, so the fuzzer can't drift from the daemon. The stub is the trick: every host-effecting call (`system`/`popen`/thread-spawn/`reboot`) is funnelled through `sysexec.c` in the daemon, so swapping one object neutralises all of them **at the link layer** — no per-call macro stubbing. A valid `REBOOT`/`RELOAD`/`WATCH` runs through the real handler and does nothing on the host. Everything that matters for memory safety runs for real under ASan+UBSan+LSan:
+`fuzz_parser.c` links the production capability, parser, and transport modules with `test/sysexec_stub.c`. The stub replaces real command execution, pipes, thread spawning, and reboot at the link boundary. `src/commands.def` supplies both the live dispatch table and the random-input verb bias, preventing a command from being wired into production while remaining absent from that bias.
 
-- the bounded line accumulator in `server_serve()` (split reads, overlong-line drop, `MAX_LINE` boundary),
-- the verb split + exact-match dispatch in `dispatch()` and every argument `sscanf` in the handlers,
-- the `snprintf` shell-command builders and the `valid_pkg`/`valid_num`/`valid_decimal`/`valid_gov`/`valid_component`/`is_critical_pkg` validators.
+- The bounded line accumulator in `server_serve()`, including split reads, overlong-line dropping, and `MAX_LINE` boundaries.
+- Exact-match dispatch, argument parsing, command construction, and validators reached by the supplied inputs.
+- A hand-written adversarial corpus, deterministic cases around parser length boundaries, and fixed-seed pseudo-random byte streams biased toward every live command verb.
 
-Inputs: a hand-written adversarial corpus (oversized args, embedded NULs, partial lines, CRLF mixes, `%d` integer-overflow values, shell metacharacters), lines sized at `MAX_LINE ± 1` / 64 KB for every verb, then millions of random byte streams (biased to start with real verbs so deep paths are hit). The RNG seed is fixed, so runs are reproducible.
+The fixed seed makes regressions reproducible but also limits exploration: repeated runs with the same iteration count exercise the same inputs. Iteration count is therefore a runtime parameter, not an assurance score.
 
 ## Scope
 
-This fuzzes the **socket attack surface** — bytes an attacker controls. It does **not** test:
+The harness does not test:
 
-- **Peer authentication** (`SO_PEERCRED` uid gate) — a separate, kernel-enforced control.
-- The `/proc` parsers in `PERFDUMP`, which read *trusted* kernel files, not attacker input. (The `stat_jiffies` parser does have dedicated unit tests — `make -C helper test`.)
-- Concurrency / the `MAX_CONN` cap under parallel load.
+- Peer authentication, the accept loop, process lifecycle, or the production `sysexec` implementation.
+- Semantic correctness of replies, command ordering, resource ownership, or failure propagation; deterministic unit and integration tests own those assertions.
+- Concurrency, connection admission, idle timeouts, or races between handlers.
+- Coverage-guided mutation, corpus evolution, coverage thresholds, independent implementation, or third-party review.
 
-LeakSanitizer is **on**: the stub's `sysexec_spawn` returns failure, so `input_watch()` frees its per-node allocation itself instead of handing it to a (never-spawned) thread — no harness leak. You will see a few `sysexec_spawn: …` lines on stderr from that expected stub failure; they're benign.
+The stub makes host-effecting calls succeed or fail according to test rules, which can hide behaviours that depend on the real operating system. Those behaviours require native unit tests, Android integration tests, hardware exercises, or independent review rather than stronger claims about this harness.

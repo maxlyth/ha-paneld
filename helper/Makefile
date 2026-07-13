@@ -7,7 +7,7 @@
 #
 #   make            # -Werror host build of the daemon (compile sanity check)
 #   make test       # build + run the unit tests
-#   make fuzz       # ASan+UBSan parser fuzz (delegates to fuzz/run.sh)
+#   make fuzz       # bounded ASan+UBSan parser/handler smoke (delegates to fuzz/run.sh)
 #   make clean
 
 CC      ?= cc
@@ -48,7 +48,7 @@ $(BUILD)/unit: $(CORE_SRCS) $(STUB) test/unit.c | $(BUILD)
 contract:
 	./test/contract-check.sh
 
-# Fuzz: ASan+UBSan over the same CORE_SRCS (the script asks this Makefile for the list).
+# Sanitizer smoke: ASan+UBSan over the same CORE_SRCS (the script asks for the list).
 fuzz:
 	./fuzz/run.sh
 

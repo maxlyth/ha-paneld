@@ -12,35 +12,12 @@
 
 static void cmd_ping(conn_ctx *ctx, const char *args) { (void)args; reply(ctx->fd, "OK\n"); }
 
-// The command table — the single place a verb is wired to a handler. Handlers live in the capability
-// module that owns the verb (led.c, screen.c, …); a new command is one row here plus its handler.
+// Handlers live in the capability module that owns the verb (led.c, screen.c, …). commands.def is the
+// single manifest shared with the sanitizer smoke harness, so a new live verb cannot be omitted there.
 static const struct { const char *verb; cmd_fn fn; } COMMANDS[] = {
-    { "RGB",       cmd_rgb },
-    { "OFF",       cmd_off },
-    { "BTN",       cmd_btn },
-    { "LEDPROBE",  cmd_ledprobe },
-    { "SCREEN",    cmd_screen },
-    { "BLREAD",    cmd_blread },
-    { "BLSET",     cmd_blset },
-    { "SCREENCAP", cmd_screencap },
-    { "RELOAD",    cmd_reload },
-    { "START",     cmd_start },
-    { "SETHOME",   cmd_sethome },
-    { "APPSTATE",  cmd_appstate },
-    { "STOP",      cmd_stop },
-    { "DISABLE",   cmd_disable },
-    { "ENABLE",    cmd_enable },
-    { "OVERLAY",   cmd_overlay },
-    { "INSTALL",   cmd_install },
-    { "WATCH",     cmd_watch },
-    { "SUBSCRIBE", cmd_subscribe },
-    { "REBOOT",    cmd_reboot },
-    { "DENSITY",   cmd_density },
-    { "FONTSCALE", cmd_fontscale },
-    { "GOV",       cmd_gov },
-    { "PERFDUMP",      cmd_perfdump },
-    { "CHT8305",       cmd_cht8305 },
-    { "PING",          cmd_ping },
+#define COMMAND(verb, handler) { #verb, handler },
+#include "commands.def"
+#undef COMMAND
 };
 
 void dispatch(conn_ctx *ctx, char *line) {

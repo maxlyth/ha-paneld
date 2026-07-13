@@ -1,21 +1,19 @@
-// Fuzz harness for the hapaneld-helper command parser (server_serve() / dispatch()).
+// Internally authored sanitizer smoke harness for the hapaneld-helper parser and handlers.
 //
 // It links the REAL capability + transport modules (helper/src/*.c, the same set the daemon ships —
 // see the Makefile's CORE_SRCS) together with test/sysexec_stub.c, so every byte of the parsing path
 // runs under the sanitizers while the only host-effecting calls (system/popen/thread-spawn/reboot,
 // all funnelled through sysexec) are neutralised at the LINK layer — no per-call macro stubbing.
 //
-// What gets exercised for real: the bounded line accumulator in server_serve(), the verb split +
-// exact-match dispatch in dispatch(), every argument sscanf in the handlers, the snprintf shell-
-// command builders, and the valid_pkg / valid_num / valid_decimal / valid_gov / valid_component /
-// is_critical_pkg validators. The goal
-// is memory safety against hostile/malformed input from an ALLOWED peer (the SO_PEERCRED uid gate is
-// a separate, kernel-enforced control — not what this fuzzes).
+// It has no semantic oracle and is not independent validation. It can detect sanitizer-visible faults
+// in paths reached by its corpus and deterministic pseudo-random byte streams. Peer authentication,
+// real host effects, process lifetime, and concurrent connection behaviour are outside this harness.
 //
 // Build + run:  ./helper/fuzz/run.sh [iterations]
-// A clean run prints "FUZZ OK" and exits 0 with no ASan/UBSan/LSan report.
+// A clean run prints "SANITIZER SMOKE OK" and exits 0 with no ASan/UBSan/LSan report.
 
 #define _GNU_SOURCE
+#include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -36,12 +34,26 @@ static int devnull;
 // the dropped/reused host fds safe across iterations).
 static void reset_state(void) { input_init(); }
 
+static void write_all(int fd, const uint8_t *data, size_t n) {
+    while (n > 0) {
+        ssize_t written = write(fd, data, n);
+        if (written > 0) {
+            data += written;
+            n -= (size_t)written;
+        } else if (written < 0 && errno == EINTR) {
+            continue;
+        } else {
+            break;
+        }
+    }
+}
+
 // Drive server_serve() exactly as a real connection would: write the bytes, then half-close so it
 // sees EOF.
 static void run_serve(const uint8_t *data, size_t n) {
     int sv[2];
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) return;
-    if (n) { ssize_t w = write(sv[1], data, n); (void)w; }
+    write_all(sv[1], data, n);
     shutdown(sv[1], SHUT_WR);
     reset_state();
     server_serve(sv[0]);
@@ -59,7 +71,7 @@ static void run_handle(const uint8_t *data, size_t n) {
 }
 
 int main(int argc, char **argv) {
-    long iters = (argc > 1) ? strtol(argv[1], NULL, 10) : 1000000;
+    long iters = (argc > 1) ? strtol(argv[1], NULL, 10) : 100000;
     signal(SIGPIPE, SIG_IGN);
     devnull = open("/dev/null", O_WRONLY);
     reset_state();
@@ -75,10 +87,13 @@ int main(int argc, char **argv) {
         "OFF\n", "OFFOFFOFF\n", "OF\n",
         "BTN 5\n", "BTN -99999999999\n", "BTN 99999999999999999999\n", "BTN\n",
         "SCREEN ON\n", "SCREEN OFF\n", "SCREEN off\n", "SCREEN\n", "SCREEN xyzzyqqq\n",
+        "BLREAD\n", "BLSET 127\n", "BLSET -1\n", "BLSET 99999999999999999999\n",
         "SCREENCAP\n", "SCREENCAPEXTRA\n",
         "RELOAD com.foo.bar\n", "RELOAD \n", "RELOAD ;reboot\n", "RELOAD a|b`c$d(e)\n",
         "RELOAD ../../etc/passwd\n", "RELOAD \"$(rm -rf)\"\n",
         "START com.foo/.Bar\n", "START a/b/c/../d\n", "START ;reboot\n", "START \n",
+        "SETHOME com.foo/.Home\n", "SETHOME ;reboot\n",
+        "APPSTATE com.foo\n", "APPSTATE ;reboot\n",
         "WATCH /dev/input/event0 1\n", "WATCH /dev/input/event0 0\n",
         "WATCH /etc/passwd 1\n", "WATCH ../../dev/input/x 1\n",
         "WATCH /dev/input/event0 99999999999\n", "WATCH\n", "WATCH /dev/input/\n",
@@ -94,18 +109,25 @@ int main(int argc, char **argv) {
         "ENABLE com.eWeLinkControlPanel\n", "ENABLE com.android.settings\n",
         "OVERLAY com.eWeLinkControlPanel deny\n", "OVERLAY com.android.systemui deny\n",
         "OVERLAY com.foo allow\n", "OVERLAY com.foo wipe\n", "OVERLAY\n", "OVERLAY com.foo\n",
-        "PERFDUMP\n", "LEDPROBE\n",
+        "INSTALL /data/user/0/io.github.maxlyth.hapaneld/files/helper-install-staging/update.apk\n",
+        "INSTALL /data/user/0/io.github.maxlyth.hapaneld/files/../escape.apk\n",
+        "INSTALL /data/user/0/io.github.maxlyth.hapaneld/files/update.apk';reboot\n",
+        "PERFDUMP\n", "LEDPROBE\n", "CHT8305\n",
         "RGB 1 2 3\r\nOFF\r\nBTN 9\r\n",
-        "RGB 1 2 3\0OFF\n",                  // embedded NUL (fed with explicit length below)
         "no newline at all just bytes",
-        "\xff\xfe\x00\x01\x02 garbage \x80\x90\n",
     };
     size_t ncorp = sizeof corpus / sizeof corpus[0];
     for (size_t i = 0; i < ncorp; i++) {
-        size_t L = (i == ncorp - 3) ? 14 : strlen(corpus[i]);   // explicit len for the embedded-NUL case ("RGB 1 2 3\0OFF\n")
+        size_t L = strlen(corpus[i]);
         run_serve((const uint8_t *)corpus[i], L);
         run_handle((const uint8_t *)corpus[i], L);
     }
+    static const uint8_t embedded_nul[] = { 'R','G','B',' ','1',' ','2',' ','3',0,'O','F','F','\n' };
+    static const uint8_t binary_bytes[] = { 0xff,0xfe,0x00,0x01,0x02,' ','x',0x80,0x90,'\n' };
+    run_serve(embedded_nul, sizeof embedded_nul);
+    run_handle(embedded_nul, sizeof embedded_nul);
+    run_serve(binary_bytes, sizeof binary_bytes);
+    run_handle(binary_bytes, sizeof binary_bytes);
 
     // 2) length-boundary lines around MAX_LINE for every verb.
     size_t lens[] = { MAX_LINE - 1, MAX_LINE, MAX_LINE + 1, 4096, 65536 };
@@ -127,9 +149,11 @@ int main(int argc, char **argv) {
     // 3) random fuzzing: serve() (multi-line) and handle() (single line), fixed seed = reproducible.
     srand(0xC0FFEE);
     uint8_t buf[3000];
-    const char *kw[] = { "RGB", "OFF", "BTN", "SCREEN", "SCREENCAP", "RELOAD", "START", "WATCH",
-                         "SUBSCRIBE", "REBOOT", "DENSITY", "FONTSCALE", "GOV", "PERFDUMP", "LEDPROBE", "PING",
-                         "STOP", "DISABLE", "ENABLE", "OVERLAY" };
+    const char *kw[] = {
+#define COMMAND(verb, handler) #verb,
+#include "commands.def"
+#undef COMMAND
+    };
     for (long it = 0; it < iters; it++) {
         size_t n = rand() % sizeof buf;
         for (size_t k = 0; k < n; k++) {

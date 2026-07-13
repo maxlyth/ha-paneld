@@ -4,7 +4,7 @@
 #
 # Verb names are hand-duplicated across the Kotlin clients and the daemon's dispatch table, so a verb
 # added on one side but not the other (or a rename) would drift silently. This asserts every verb the
-# app SENDS to the helper daemon is HANDLED by dispatch.c's COMMANDS table — a mismatch fails CI.
+# app SENDS to the helper daemon is HANDLED by the shared commands.def manifest — a mismatch fails CI.
 #
 # Scope: verb NAMES only. Arg formats + reply strings are pinned separately by the daemon's own golden
 # request->reply unit tests (helper/test/unit.c).
@@ -17,9 +17,9 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 APP="$ROOT/app/src/main/kotlin"
-DISPATCH="$ROOT/helper/src/dispatch.c"
+COMMANDS="$ROOT/helper/src/commands.def"
 
-daemon=$(grep -oE '\{ +"[A-Z][A-Z0-9_]*"' "$DISPATCH" | grep -oE '[A-Z][A-Z0-9_]*' | sort -u)
+daemon=$(grep -oE '^COMMAND\([A-Z][A-Z0-9_]*' "$COMMANDS" | cut -d'(' -f2 | sort -u)
 
 app_helper=$(grep -rhoE '((HelperClient|daemon)\.(send|sendBytes|sendLong)|privileged)\("[A-Z][A-Z0-9_]*' "$APP" | grep -oE '"[A-Z][A-Z0-9_]*' | tr -d '"')
 app_client=$(grep -hoE '(send|sendBytes|sendLong)\("[A-Z][A-Z0-9_]*' "$APP/io/github/maxlyth/hapaneld/util/HelperClient.kt" | grep -oE '"[A-Z][A-Z0-9_]*' | tr -d '"')

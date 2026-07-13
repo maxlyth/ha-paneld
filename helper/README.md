@@ -99,7 +99,7 @@ The daemon is split by capability under `helper/src/` (the binary, `@hapaneld-he
 | --- | --- |
 | `main.c` | accept loop, abstract-socket bind, `SO_PEERCRED` peer-auth, connection cap |
 | `server.c` | the bounded line accumulator (`server_serve`) + idle timeout |
-| `dispatch.c` | the verb→handler **table** + exact-match `dispatch()` |
+| `commands.def` / `dispatch.c` | the shared verb→handler manifest + exact-match `dispatch()` |
 | `led.c` / `screen.c` / `input.c` | LED (sysfs + ledjni), backlight power, evdev buttons |
 | `sysctl.c` | density / governor / reload / start / reboot / screencap (the shell-out verbs) |
 | `perf.c` | `PERFDUMP` `/proc` snapshot |
@@ -107,16 +107,16 @@ The daemon is split by capability under `helper/src/` (the binary, `@hapaneld-he
 | `util.c` | clamp, node IO, the argument validators |
 | `sysexec.c` | **the only file that execs / pipes / spawns / reboots** — every shell-out funnels here |
 
-Isolating `sysexec` keeps the entire privilege/injection surface in one auditable file, and lets the fuzz + unit-test builds swap it for a stub so the real parser runs on the host with no side effects.
+Isolating `sysexec` keeps the entire privilege/injection surface in one auditable file, and lets the sanitizer-smoke and unit-test builds swap it for a stub so the real parser runs on the host with no side effects.
 
-## Build, test, fuzz
+## Build and test
 
 ```bash
 ./helper/build.sh        # cross-compile both ABIs -> helper/dist/<abi>/hapaneld-helper (Docker; reuses tools/build)
 
 make -C helper           # host -Werror compile check (the same src/*.c set)
 make -C helper test      # host-native unit tests (validators, clamp, /proc parser, dispatch, accumulator)
-make -C helper fuzz      # ASan+UBSan parser fuzz — see fuzz/README.md
+make -C helper fuzz      # bounded in-house ASan+UBSan smoke — see fuzz/README.md for its limits
 ```
 
 Or compile by hand with any Android NDK: `*-clang -O2 -s -Ihelper/src -o hapaneld-helper helper/src/*.c`.
