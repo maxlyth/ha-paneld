@@ -1,0 +1,186 @@
+package io.github.maxlyth.hapaneld.media
+
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import java.util.concurrent.atomic.AtomicBoolean
+
+internal interface AudioPlaybackRun {
+    suspend fun execute()
+    fun cancel()
+}
+
+internal fun interface AudioPlaybackRunFactory {
+    fun create(url: String): AudioPlaybackRun
+}
+
+/** Owns one latest-wins announcement lane for the service lifetime. */
+internal class AudioPlaybackCoordinator(
+    private val factory: AudioPlaybackRunFactory,
+    dispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val onFailure: (Throwable) -> Unit = {},
+) {
+    enum class State { IDLE, QUEUED, ACTIVE, FAILED, CLOSED }
+
+    data class Snapshot(
+        val state: State,
+        val generation: Long,
+        val error: String? = null,
+    ) {
+        fun statusText(): String = when (state) {
+            State.IDLE -> "idle"
+            State.QUEUED -> "queued"
+            State.ACTIVE -> "active"
+            State.FAILED -> "failed" + error?.let { " · $it" }.orEmpty()
+            State.CLOSED -> "closed"
+        }
+    }
+
+    private data class Request(val generation: Long, val url: String)
+    private class Active(val run: AudioPlaybackRun, val job: Job) {
+        private val cancelled = AtomicBoolean(false)
+        fun cancel() {
+            if (cancelled.compareAndSet(false, true)) {
+                run.cancel()
+                job.cancel()
+            }
+        }
+    }
+
+    private val owner = SupervisorJob()
+    private val scope = CoroutineScope(owner + dispatcher)
+    private val requests = Channel<Request>(Channel.CONFLATED)
+    private var generation = 0L
+    private var closed = false
+    private var snapshot = Snapshot(State.IDLE, 0L)
+    @Volatile private var active: Active? = null
+    private val worker = scope.launch { consume() }
+
+    /** Accept an announcement for this service lifetime. A newer accepted request replaces older work. */
+    @Synchronized
+    fun submit(url: String): Boolean {
+        if (closed) return false
+        val request = Request(++generation, url)
+        snapshot = Snapshot(State.QUEUED, request.generation)
+        if (requests.trySend(request).isSuccess) return true
+        closed = true
+        snapshot = Snapshot(State.CLOSED, generation)
+        return false
+    }
+
+    /** Close admission immediately so an HTTP request cannot receive a false acceptance during teardown. */
+    @Synchronized
+    fun closeAdmission() {
+        if (closed) return
+        closed = true
+        snapshot = Snapshot(State.CLOSED, generation)
+        requests.close()
+    }
+
+    /** Trigger current resource cancellation without waiting; used from the Android main thread before teardown blocks it. */
+    fun cancelCurrent() {
+        active?.cancel()
+    }
+
+    /** Cancel the current run and wait up to [timeoutMs] for its owned resources to finish cleanup. */
+    suspend fun close(timeoutMs: Long): Boolean {
+        require(timeoutMs > 0L)
+        closeAdmission()
+        cancelCurrent()
+        owner.cancel()
+        return withTimeoutOrNull(timeoutMs) {
+            owner.join()
+            true
+        } ?: false
+    }
+
+    @Synchronized
+    fun snapshot(): Snapshot = snapshot
+
+    private suspend fun consume() {
+        try {
+            while (true) {
+                var request = requests.receiveCatching().getOrNull() ?: break
+                while (true) {
+                    val newer = requests.tryReceive().getOrNull() ?: break
+                    request = newer
+                }
+                val previous = active
+                if (previous != null) {
+                    previous.cancel()
+                    previous.job.cancelAndJoin()
+                    if (active === previous) active = null
+                }
+                if (isClosed()) break
+
+                val run = try {
+                    factory.create(request.url)
+                } catch (error: Throwable) {
+                    fail(request.generation, error)
+                    continue
+                }
+                val job = scope.launch(start = CoroutineStart.LAZY) {
+                    try {
+                        run.execute()
+                        complete(request.generation)
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (error: Throwable) {
+                        fail(request.generation, error)
+                    }
+                }
+                val current = Active(run, job)
+                active = current
+                activate(request.generation)
+                job.invokeOnCompletion {
+                    if (active === current) active = null
+                }
+                job.start()
+            }
+        } finally {
+            withContext(NonCancellable) {
+                val current = active
+                active = null
+                if (current != null) {
+                    current.cancel()
+                    current.job.cancelAndJoin()
+                }
+            }
+        }
+    }
+
+    @Synchronized
+    private fun isClosed(): Boolean = closed
+
+    @Synchronized
+    private fun activate(requestGeneration: Long) {
+        if (!closed && snapshot.generation == requestGeneration) snapshot = Snapshot(State.ACTIVE, requestGeneration)
+    }
+
+    @Synchronized
+    private fun complete(requestGeneration: Long) {
+        if (!closed && snapshot.generation == requestGeneration) snapshot = Snapshot(State.IDLE, requestGeneration)
+    }
+
+    private fun fail(requestGeneration: Long, error: Throwable) {
+        runCatching { onFailure(error) }
+        val detail = error.javaClass.simpleName.takeIf { it.isNotBlank() }?.take(MAX_ERROR_CHARS) ?: "error"
+        synchronized(this) {
+            if (!closed && snapshot.generation == requestGeneration) snapshot = Snapshot(State.FAILED, requestGeneration, detail)
+        }
+    }
+
+    private companion object {
+        const val MAX_ERROR_CHARS = 160
+    }
+}

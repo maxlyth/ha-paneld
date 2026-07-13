@@ -46,6 +46,7 @@ import io.github.maxlyth.hapaneld.http.PaneldServer
 import io.github.maxlyth.hapaneld.http.PanelInfo
 import io.github.maxlyth.hapaneld.logship.LogCapture
 import io.github.maxlyth.hapaneld.logship.LogShipper
+import io.github.maxlyth.hapaneld.media.AudioPlaybackCoordinator
 import io.github.maxlyth.hapaneld.sensors.SensorReporter
 import io.github.maxlyth.hapaneld.util.localIpv4
 import io.github.maxlyth.hapaneld.util.localIpv6
@@ -121,6 +122,7 @@ class PaneldService : Service() {
     private lateinit var ledEffect: LedEffectController
     private lateinit var navigate: NavigateController
     private lateinit var volume: VolumeController
+    private lateinit var audio: AudioPlaybackCoordinator
     private lateinit var system: SystemController
     private lateinit var tame: TameController
     private lateinit var navbar: NavbarController
@@ -167,6 +169,10 @@ class PaneldService : Service() {
         ledEffect = LedEffectController(led)
         navigate = NavigateController(this)
         volume = VolumeController(this)
+        audio = AudioPlaybackCoordinator(
+            AudioPlayer.factory(cacheDir),
+            onFailure = { error -> Log.w(TAG, "audio playback failed: ${error.javaClass.simpleName}") },
+        )
         system = SystemController(AndroidSystemEnv(this))
         watchdog = WatchdogController(system, config)
         kiosk = KioskController(this, system, config)
@@ -247,7 +253,7 @@ class PaneldService : Service() {
             completeLaunch = config::completeRendererLaunch,
         )
         server = PaneldServer(
-            config, cacheDir, scope, this, sensors, system, volume, ::reconfigure,
+            config, cacheDir, scope, this, sensors, system, volume, audio::submit, ::reconfigure,
             // Capture the field (not the current instance) so it always targets the live bridge,
             // which reconfigure() rebuilds on a panel_id / MQTT change.
             { k, v -> mqtt.applySetting(k, v) },
@@ -392,6 +398,7 @@ class PaneldService : Service() {
                 else -> "off"
             },
             "Log shipping" to logShipper.statusText(),
+            "Audio playback" to audio.snapshot().statusText(),
         )
         // Recent "changed outside MQTT" events (brightness/volume/backlight/governor) — shown only when
         // something has actually synced, so it doesn't clutter a steady panel. Flows to /diag too.
@@ -871,6 +878,8 @@ class PaneldService : Service() {
 
     override fun onDestroy() {
         serviceStopping = true
+        audio.closeAdmission()
+        audio.cancelCurrent()
         started = false
         netCallback?.let { cb ->
             runCatching { (getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager)?.unregisterNetworkCallback(cb) }
@@ -882,6 +891,11 @@ class PaneldService : Service() {
         }
         scope.cancel()
         val stopped = runtime.shutdown(RUNTIME_SHUTDOWN_MS) {
+            runCatching { server.stop() }
+            val audioStopped = runCatching {
+                kotlinx.coroutines.runBlocking { audio.close(AUDIO_SHUTDOWN_MS) }
+            }.getOrDefault(false)
+            if (!audioStopped) Log.w(TAG, "audio cleanup exceeded ${AUDIO_SHUTDOWN_MS}ms")
             cancelKioskReassert()
             runCatching { EvdevButtonClient.stop() }
             runCatching { power.apply(false) }   // release the wakelock so we don't leak it on teardown
@@ -890,7 +904,6 @@ class PaneldService : Service() {
             runCatching { ledEffect.stop() }     // kill any running LED effect loop with the service
             runCatching { sensors.stop() }
             runCatching { logShipper.stop() }
-            runCatching { server.stop() }
             runCatching { logCaptureApp.close() }
             runCatching { logCaptureSystem.close() }
             runCatching { mdns.stop() }
@@ -973,6 +986,7 @@ class PaneldService : Service() {
         private const val KIOSK_CANCEL_JOIN_MS = 500L
         private const val WATCHDOG_CANCEL_JOIN_MS = 500L
         private const val RENDERER_SHUTDOWN_MS = 1_000L
+        private const val AUDIO_SHUTDOWN_MS = 2_000L
         private const val RUNTIME_SHUTDOWN_MS = 5_000L
 
         fun start(context: Context) {

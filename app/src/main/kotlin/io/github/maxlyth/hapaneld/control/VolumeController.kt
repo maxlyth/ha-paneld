@@ -5,7 +5,7 @@ import android.media.AudioManager
 import android.util.Log
 
 /**
- * TTS/announce playback volume — the STREAM_MUSIC level, which is the stream [AudioPlayer] plays
+ * TTS/announce playback volume — the STREAM_MUSIC level, which is the stream [io.github.maxlyth.hapaneld.AudioPlayer] plays
  * on (USAGE_MEDIA). Exposed in HA as a 0–100% number so the panel's announce loudness is settable
  * and persists, independent of whatever the panel's media volume happened to be.
  */

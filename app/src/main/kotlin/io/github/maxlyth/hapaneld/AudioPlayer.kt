@@ -2,116 +2,267 @@ package io.github.maxlyth.hapaneld
 
 import android.media.AudioAttributes
 import android.media.MediaPlayer
-import android.util.Log
+import android.os.Handler
+import android.os.Looper
+import io.github.maxlyth.hapaneld.media.AudioPlaybackRun
+import io.github.maxlyth.hapaneld.media.AudioPlaybackRunFactory
 import io.github.maxlyth.hapaneld.util.BoundedStreams
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import java.io.File
-import kotlin.coroutines.resume
+import java.io.FilterInputStream
+import java.io.IOException
+import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
+import javax.net.ssl.HostnameVerifier
 import javax.net.ssl.HttpsURLConnection
 import javax.net.ssl.SSLContext
 import javax.net.ssl.TrustManager
 import javax.net.ssl.X509TrustManager
+import kotlin.coroutines.coroutineContext
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
-/**
- * Downloads an audio URL and plays it through the panel speaker. Mirrors the bash reference
- * implementation (`curl -sLk … | sox play`): the `-k` insecure flag is reproduced here because
- * the HA internal_url often serves a self-signed cert and the panels live on a trusted LAN.
- */
+/** Builds one resource-owned URL download and speaker playback run per accepted announcement. */
 object AudioPlayer {
-    private const val TAG = "ha-paneld/audio"
-    private const val CONNECT_TIMEOUT_MS = 15_000
-    private const val READ_TIMEOUT_MS = 15_000
-    private const val MAX_AUDIO_BYTES = 32L * 1024L * 1024L
+    internal const val MAX_AUDIO_BYTES = 32L * 1024L * 1024L
+    internal const val TEMP_PREFIX = "ha-paneld-audio-"
+    internal const val TEMP_SUFFIX = ".media"
 
-    /** Download [url] to a temp file then play it. Blocking download on IO dispatcher. */
-    suspend fun play(cacheDir: File, url: String) = withContext(Dispatchers.IO) {
-        val tmp = File.createTempFile("audio", ".media", cacheDir)
-        try {
-            download(url, tmp)
-            playAndAwait(tmp)
-        } catch (e: CancellationException) {
-            tmp.delete()
-            throw e
-        } catch (e: Exception) {
-            Log.w(TAG, "play failed for $url", e)
-            tmp.delete()
+    internal fun factory(cacheDir: File): AudioPlaybackRunFactory {
+        cleanupStale(cacheDir)
+        return AudioPlaybackRunFactory { url ->
+            DownloadedAudioRun(
+                url = url,
+                createTemp = { File.createTempFile(TEMP_PREFIX, TEMP_SUFFIX, cacheDir) },
+                transfer = HttpAudioTransfer(MAX_AUDIO_BYTES),
+                clip = AndroidAudioClip(),
+            )
         }
     }
 
-    private fun download(url: String, dest: File) {
-        val conn = (URL(url).openConnection() as HttpURLConnection).apply {
-            connectTimeout = CONNECT_TIMEOUT_MS
-            readTimeout = READ_TIMEOUT_MS
-            instanceFollowRedirects = true
-        }
-        if (conn is HttpsURLConnection) {
-            // LAN-trust: accept self-signed certs, matching the `curl -k` reference contract.
-            conn.sslSocketFactory = trustAllFactory()
-            conn.hostnameVerifier = javax.net.ssl.HostnameVerifier { _, _ -> true }
-        }
+    internal fun cleanupStale(cacheDir: File): Int {
+        val stale = cacheDir.listFiles { file ->
+            file.isFile && file.name.startsWith(TEMP_PREFIX) && file.name.endsWith(TEMP_SUFFIX)
+        }.orEmpty()
+        return stale.count { it.delete() }
+    }
+}
+
+internal interface AudioTransfer : AutoCloseable {
+    fun download(url: String, destination: File)
+    fun cancel()
+}
+
+internal interface AudioClip {
+    suspend fun play(file: File)
+    fun cancel()
+    suspend fun close()
+}
+
+internal class DownloadedAudioRun(
+    private val url: String,
+    private val createTemp: () -> File,
+    private val transfer: AudioTransfer,
+    private val clip: AudioClip,
+    private val dispatcher: CoroutineDispatcher = Dispatchers.IO,
+) : AudioPlaybackRun {
+    override suspend fun execute() {
+        val file = withContext(dispatcher) { createTemp() }
         try {
+            withContext(dispatcher) { transfer.download(url, file) }
+            coroutineContext.ensureActive()
+            clip.play(file)
+        } finally {
+            withContext(NonCancellable + dispatcher) {
+                runCatching { transfer.close() }
+                runCatching { clip.close() }
+                file.delete()
+            }
+        }
+    }
+
+    override fun cancel() {
+        runCatching { transfer.cancel() }
+        runCatching { clip.cancel() }
+    }
+}
+
+internal class HttpAudioTransfer(
+    private val maxBytes: Long,
+    private val openConnection: (URL) -> HttpURLConnection = { url -> url.openConnection() as HttpURLConnection },
+    private val downloadTimeoutMs: Long = DOWNLOAD_TIMEOUT_MS,
+    private val nanoTime: () -> Long = System::nanoTime,
+) : AudioTransfer {
+    private val cancelled = AtomicBoolean(false)
+    private val connection = AtomicReference<HttpURLConnection?>()
+    private val input = AtomicReference<InputStream?>()
+
+    init {
+        require(maxBytes in 0 until Long.MAX_VALUE)
+        require(downloadTimeoutMs > 0L)
+    }
+
+    override fun download(url: String, destination: File) {
+        val parsed = URL(url)
+        require(parsed.protocol == "http" || parsed.protocol == "https") { "audio URL must use http or https" }
+        if (cancelled.get()) throw CancellationException("audio transfer cancelled")
+        val conn = openConnection(parsed)
+        check(connection.compareAndSet(null, conn)) { "audio transfer already started" }
+        try {
+            conn.connectTimeout = CONNECT_TIMEOUT_MS
+            conn.readTimeout = READ_TIMEOUT_MS
+            conn.instanceFollowRedirects = true
+            if (conn is HttpsURLConnection) {
+                conn.sslSocketFactory = trustAllFactory()
+                conn.hostnameVerifier = HostnameVerifier { _, _ -> true }
+            }
+            if (cancelled.get()) throw CancellationException("audio transfer cancelled")
             val declared = conn.contentLengthLong
-            require(declared < 0L || declared <= MAX_AUDIO_BYTES) { "audio exceeds $MAX_AUDIO_BYTES bytes" }
-            conn.inputStream.use { input ->
-                dest.outputStream().use { output -> BoundedStreams.copy(input, output, MAX_AUDIO_BYTES) }
+            if (declared > maxBytes) throw io.github.maxlyth.hapaneld.util.ByteLimitExceeded(maxBytes)
+            val stream = conn.inputStream
+            input.set(stream)
+            if (cancelled.get()) throw CancellationException("audio transfer cancelled")
+            val deadlineNanos = nanoTime() + downloadTimeoutMs * 1_000_000L
+            DeadlineInputStream(stream, deadlineNanos, nanoTime).use { source ->
+                destination.outputStream().use { output -> BoundedStreams.copy(source, output, maxBytes) }
             }
         } finally {
-            conn.disconnect()
+            runCatching { input.getAndSet(null)?.close() }
+            connection.compareAndSet(conn, null)
+            runCatching { conn.disconnect() }
         }
     }
 
-    /**
-     * Plays [file] and suspends until playback completes (or errors). Suspending is what keeps a
-     * strong reference to the MediaPlayer for the whole playback — an earlier version let the
-     * player fall out of scope after start(), so GC finalised it mid-playback and cut longer clips
-     * short (confirmed on an NSPanel Pro, 2026-06-03: a 7s TTS render was truncated to ~2.4s).
-     */
-    private suspend fun playAndAwait(file: File) = suspendCancellableCoroutine<Unit> { cont ->
-        val player = MediaPlayer().apply {
-            // USAGE_MEDIA -> STREAM_MUSIC, matching the bash reference (`sox play`). The earlier
-            // USAGE_ASSISTANCE_ACCESSIBILITY routed to the accessibility stream, which is separate
-            // from — and far quieter than — the music volume the panels actually have turned up
-            // (confirmed near-inaudible on an NSPanel Pro, 2026-06-03 on-device test).
-            setAudioAttributes(
+    override fun cancel() {
+        cancelled.set(true)
+        runCatching { input.getAndSet(null)?.close() }
+        runCatching { connection.getAndSet(null)?.disconnect() }
+    }
+
+    override fun close() = cancel()
+
+    private companion object {
+        const val CONNECT_TIMEOUT_MS = 15_000
+        const val READ_TIMEOUT_MS = 15_000
+        const val DOWNLOAD_TIMEOUT_MS = 120_000L
+
+        fun trustAllFactory() = SSLContext.getInstance("TLS").apply {
+            init(null, arrayOf<TrustManager>(object : X509TrustManager {
+                override fun checkClientTrusted(c: Array<java.security.cert.X509Certificate>?, a: String?) {}
+                override fun checkServerTrusted(c: Array<java.security.cert.X509Certificate>?, a: String?) {}
+                override fun getAcceptedIssuers() = arrayOf<java.security.cert.X509Certificate>()
+            }), java.security.SecureRandom())
+        }.socketFactory
+    }
+
+    private class DeadlineInputStream(
+        source: InputStream,
+        private val deadlineNanos: Long,
+        private val nanoTime: () -> Long,
+    ) : FilterInputStream(source) {
+        override fun read(): Int {
+            checkDeadline()
+            return super.read()
+        }
+
+        override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+            checkDeadline()
+            return super.read(buffer, offset, length)
+        }
+
+        private fun checkDeadline() {
+            if (nanoTime() - deadlineNanos >= 0L) throw AudioDownloadDeadlineExceeded()
+        }
+    }
+}
+
+internal class AudioDownloadDeadlineExceeded : IOException("audio download deadline exceeded")
+
+/** Keeps all MediaPlayer state transitions on Android's main looper and makes release awaitable. */
+internal class AndroidAudioClip : AudioClip {
+    private val cancelled = AtomicBoolean(false)
+    private val player = AtomicReference<MediaPlayer?>()
+    private val owner = Handler(Looper.getMainLooper())
+
+    override suspend fun play(file: File) = withContext(Dispatchers.Main.immediate) {
+        playOnOwner(file)
+    }
+
+    private suspend fun playOnOwner(file: File) = suspendCancellableCoroutine<Unit> { continuation ->
+        val mediaPlayer = MediaPlayer()
+        val finished = AtomicBoolean(false)
+
+        fun releaseOwned() {
+            if (player.compareAndSet(mediaPlayer, null)) runCatching { mediaPlayer.release() }
+        }
+
+        fun finish(error: Throwable? = null) {
+            if (!finished.compareAndSet(false, true)) return
+            releaseOwned()
+            if (!continuation.isActive) return
+            when {
+                cancelled.get() -> continuation.cancel(CancellationException("audio playback cancelled"))
+                error != null -> continuation.resumeWithException(error)
+                else -> continuation.resume(Unit)
+            }
+        }
+
+        if (!player.compareAndSet(null, mediaPlayer)) {
+            runCatching { mediaPlayer.release() }
+            throw IllegalStateException("audio player already active")
+        }
+        continuation.invokeOnCancellation {
+            cancelled.set(true)
+            owner.post { releaseOwned() }
+        }
+        try {
+            mediaPlayer.setAudioAttributes(
                 AudioAttributes.Builder()
                     .setUsage(AudioAttributes.USAGE_MEDIA)
                     .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                     .build(),
             )
-            setVolume(1f, 1f)
-            setOnCompletionListener {
-                it.release()
-                file.delete()
-                if (cont.isActive) cont.resume(Unit)
+            mediaPlayer.setVolume(1f, 1f)
+            mediaPlayer.setOnPreparedListener { prepared ->
+                if (cancelled.get()) {
+                    finish()
+                } else {
+                    runCatching { prepared.start() }.onFailure(::finish)
+                }
             }
-            setOnErrorListener { mp, what, extra ->
-                Log.w(TAG, "MediaPlayer error what=$what extra=$extra")
-                mp.release()
-                file.delete()
-                if (cont.isActive) cont.resume(Unit)
+            mediaPlayer.setOnCompletionListener { finish() }
+            mediaPlayer.setOnErrorListener { _, what, extra ->
+                finish(IOException("MediaPlayer error what=$what extra=$extra"))
                 true
             }
-            setDataSource(file.absolutePath)
-            prepare()
-            start()
-        }
-        Log.d(TAG, "playing ${file.name} (${file.length()} bytes)")
-        cont.invokeOnCancellation {
-            runCatching { player.release() }
-            file.delete()
+            mediaPlayer.setDataSource(file.absolutePath)
+            if (cancelled.get()) finish() else mediaPlayer.prepareAsync()
+        } catch (error: Throwable) {
+            finish(error)
         }
     }
 
-    private fun trustAllFactory() = SSLContext.getInstance("TLS").apply {
-        init(null, arrayOf<TrustManager>(object : X509TrustManager {
-            override fun checkClientTrusted(c: Array<java.security.cert.X509Certificate>?, a: String?) {}
-            override fun checkServerTrusted(c: Array<java.security.cert.X509Certificate>?, a: String?) {}
-            override fun getAcceptedIssuers() = arrayOf<java.security.cert.X509Certificate>()
-        }), java.security.SecureRandom())
-    }.socketFactory
+    override fun cancel() {
+        cancelled.set(true)
+        if (Looper.myLooper() == owner.looper) releaseCurrent() else owner.post { releaseCurrent() }
+    }
+
+    override suspend fun close() {
+        cancelled.set(true)
+        if (player.get() == null) return
+        withContext(Dispatchers.Main.immediate) { releaseCurrent() }
+    }
+
+    private fun releaseCurrent() {
+        runCatching { player.getAndSet(null)?.release() }
+    }
 }

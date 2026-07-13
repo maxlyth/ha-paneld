@@ -1,0 +1,171 @@
+package io.github.maxlyth.hapaneld.media
+
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import java.util.concurrent.atomic.AtomicInteger
+
+@OptIn(ExperimentalCoroutinesApi::class)
+class AudioPlaybackCoordinatorTest {
+    private class FakeRun(
+        private val name: String,
+        private val events: MutableList<String>,
+        private val active: AtomicInteger,
+        private val maximum: AtomicInteger,
+        private val error: Throwable? = null,
+    ) : AudioPlaybackRun {
+        val started = CompletableDeferred<Unit>()
+        var cancelCalls = 0
+
+        override suspend fun execute() {
+            val now = active.incrementAndGet()
+            maximum.updateAndGet { maxOf(it, now) }
+            events += "start:$name"
+            started.complete(Unit)
+            try {
+                error?.let { throw it }
+                awaitCancellation()
+            } finally {
+                events += "finish:$name"
+                active.decrementAndGet()
+            }
+        }
+
+        override fun cancel() {
+            cancelCalls++
+            events += "cancel:$name"
+        }
+    }
+
+    @Test fun replacementFinishesTheOldRunBeforeStartingTheNewRun() = runTest {
+        val events = mutableListOf<String>()
+        val active = AtomicInteger()
+        val maximum = AtomicInteger()
+        val runs = linkedMapOf<String, FakeRun>()
+        val coordinator = AudioPlaybackCoordinator(
+            AudioPlaybackRunFactory { url -> FakeRun(url, events, active, maximum).also { runs[url] = it } },
+            StandardTestDispatcher(testScheduler),
+        )
+
+        assertTrue(coordinator.submit("first"))
+        runCurrent()
+        assertTrue(runs.getValue("first").started.isCompleted)
+        assertTrue(coordinator.submit("second"))
+        runCurrent()
+
+        assertEquals(listOf("start:first", "cancel:first", "finish:first", "start:second"), events)
+        assertEquals(1, maximum.get())
+        assertEquals(AudioPlaybackCoordinator.State.ACTIVE, coordinator.snapshot().state)
+        assertEquals(2L, coordinator.snapshot().generation)
+        assertTrue(coordinator.close(1_000L))
+        assertEquals(1, runs.getValue("second").cancelCalls)
+    }
+
+    @Test fun queuedReplacementsConflateToTheNewestRequest() = runTest {
+        val events = mutableListOf<String>()
+        val active = AtomicInteger()
+        val maximum = AtomicInteger()
+        val created = mutableListOf<String>()
+        val coordinator = AudioPlaybackCoordinator(
+            AudioPlaybackRunFactory { url ->
+                created += url
+                FakeRun(url, events, active, maximum)
+            },
+            StandardTestDispatcher(testScheduler),
+        )
+
+        coordinator.submit("first")
+        runCurrent()
+        coordinator.submit("superseded")
+        coordinator.submit("newest")
+        runCurrent()
+
+        assertEquals(listOf("first", "newest"), created)
+        assertEquals(3L, coordinator.snapshot().generation)
+        assertTrue(coordinator.close(1_000L))
+    }
+
+    @Test fun closedAdmissionRejectsWithoutClaimingPlayback() = runTest {
+        val events = mutableListOf<String>()
+        val active = AtomicInteger()
+        val maximum = AtomicInteger()
+        lateinit var run: FakeRun
+        val coordinator = AudioPlaybackCoordinator(
+            AudioPlaybackRunFactory { FakeRun(it, events, active, maximum).also { created -> run = created } },
+            StandardTestDispatcher(testScheduler),
+        )
+        coordinator.submit("current")
+        runCurrent()
+
+        coordinator.closeAdmission()
+        assertFalse(coordinator.submit("late"))
+        assertEquals(AudioPlaybackCoordinator.State.CLOSED, coordinator.snapshot().state)
+        assertEquals(0, run.cancelCalls)
+        coordinator.cancelCurrent()
+        assertEquals(1, run.cancelCalls)
+        assertTrue(coordinator.close(1_000L))
+        assertEquals(1, run.cancelCalls)
+    }
+
+    @Test fun failureIsBoundedSanitizedAndOwnedByItsGeneration() = runTest {
+        val failures = mutableListOf<Throwable>()
+        val message = "bad\n" + "x".repeat(300)
+        val coordinator = AudioPlaybackCoordinator(
+            AudioPlaybackRunFactory {
+                FakeRun(it, mutableListOf(), AtomicInteger(), AtomicInteger(), IllegalStateException(message))
+            },
+            StandardTestDispatcher(testScheduler),
+            failures::add,
+        )
+
+        coordinator.submit("secret-url")
+        runCurrent()
+
+        val snapshot = coordinator.snapshot()
+        assertEquals(AudioPlaybackCoordinator.State.FAILED, snapshot.state)
+        assertEquals(1, failures.size)
+        assertFalse(snapshot.error.orEmpty().contains('\n'))
+        assertFalse(snapshot.error.orEmpty().contains("secret-url"))
+        assertTrue(snapshot.error.orEmpty().length <= 160)
+        assertTrue(coordinator.close(1_000L))
+    }
+
+    @Test fun closeIsBoundedEvenWhenABackendIgnoresCoroutineCancellation() = runTest {
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var cancelCalls = 0
+        val coordinator = AudioPlaybackCoordinator(
+            AudioPlaybackRunFactory {
+                object : AudioPlaybackRun {
+                    override suspend fun execute() {
+                        started.complete(Unit)
+                        withContext(NonCancellable) { release.await() }
+                    }
+
+                    override fun cancel() {
+                        cancelCalls++
+                    }
+                }
+            },
+            StandardTestDispatcher(testScheduler),
+        )
+        coordinator.submit("stubborn")
+        runCurrent()
+        assertTrue(started.isCompleted)
+
+        assertFalse(coordinator.close(10L))
+        assertFalse(coordinator.submit("late"))
+        assertEquals(1, cancelCalls)
+        release.complete(Unit)
+        runCurrent()
+    }
+}

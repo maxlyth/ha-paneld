@@ -45,6 +45,8 @@ POST /play          body contains an audio URL (raw or {"url":"…"})
                     -> 400 "no-url"   (no URL found in body)
 ```
 
+`/play` owns one announcement lane per panel. A newer accepted request cancels and replaces any queued, downloading, or playing announcement, so clips never overlap on the speaker; shutdown rejects new work with `503 stopping` after closing admission.
+
 The web page at `/` is how a user sets the **MQTT broker** without adb — find the panel's IP (mDNS `_ha-paneld._tcp`, or the router), open `http://<ip>:8888/`, fill in the broker + credentials, Save.
 
 The agent listens on **:8888**. Self-signed HTTPS sources are accepted (panels live on a trusted LAN). This is the same contract as the reference shell receiver it replaces, so HA-side automation needs no change when a panel migrates from the shell receiver to ha-paneld.

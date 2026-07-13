@@ -9,9 +9,9 @@
   "paths": {
     "/health": { "get": { "summary": "Liveness probe + version + panel id + build token (also at /api/v1/health)", "tags": ["status"], "responses": { "200": { "description": "OK" } } } },
     "/play": {
-      "post": { "summary": "Play audio / TTS from a URL (also at /api/v1/play)", "tags": ["media"],
+      "post": { "summary": "Play audio / TTS from a URL; newest request replaces current playback (also at /api/v1/play)", "tags": ["media"],
         "requestBody": { "content": { "text/plain": { "schema": { "type": "string", "description": "a raw URL, or {\"url\":\"https://…\"}" } } } },
-        "responses": { "200": { "description": "playing" }, "400": { "description": "no-url" } } }
+        "responses": { "200": { "description": "playing" }, "400": { "description": "no-url" }, "503": { "description": "stopping" } } }
     },
     "/api/v1/status": { "get": { "summary": "Panel-health warnings + capability matrix as JSON", "tags": ["status"], "responses": { "200": { "description": "{warnings:[html], capabilities:[{name,note,color}]}" } } } },
     "/api/v1/config": {

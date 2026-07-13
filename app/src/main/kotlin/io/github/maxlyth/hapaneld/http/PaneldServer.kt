@@ -2,7 +2,6 @@ package io.github.maxlyth.hapaneld.http
 
 import android.content.Context
 import android.util.Log
-import io.github.maxlyth.hapaneld.AudioPlayer
 import io.github.maxlyth.hapaneld.Config
 import io.github.maxlyth.hapaneld.peersJson
 import io.github.maxlyth.hapaneld.config.Capabilities
@@ -95,6 +94,8 @@ class PaneldServer(
     // For the on-screen Controls card (software navbar) on panels with no physical nav bar.
     private val system: SystemController,
     private val volume: VolumeController,
+    // Service-owned latest-wins audio lane. False means teardown has closed admission.
+    private val playAudio: (String) -> Boolean,
     // Called after this server has written new settings to [config]; the service rebuilds MQTT/mDNS.
     private val onReconfigure: () -> Unit,
     // Applies a single behaviour setting through the MQTT bridge's command path (persist → drive
@@ -913,9 +914,11 @@ class PaneldServer(
             call.respondText("no-url\n", status = HttpStatusCode.BadRequest)
             return
         }
-        // Respond immediately; playback runs detached (mirrors socat + setsid nohup).
+        if (!playAudio(url)) {
+            call.respondText("stopping\n", status = HttpStatusCode.ServiceUnavailable)
+            return
+        }
         call.respondText("playing\n")
-        scope.launch { AudioPlayer.play(cacheDir, url) }
     }
 
     /** 308 for a legacy flat path — preserves method, body and query so pre-0.8.5 tooling keeps working. */
