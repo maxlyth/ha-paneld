@@ -102,7 +102,7 @@ class PanelMetrics(
     /** A coherent reading, freshness-cached. Thread-safe: safe to call from the PerfReader coroutine and
      *  the MQTT heartbeat thread concurrently. */
     fun systemSnapshot(now: Long = clock()): Snapshot = synchronized(lock) {
-        cached?.let { if (now - it.ts < freshMs) return it }
+        cached?.let { if (isWithinForwardWindow(now, it.ts, freshMs)) return it }
         readCoherent(now).also { cached = it }
     }
 
@@ -129,7 +129,7 @@ class PanelMetrics(
      * humidity sensor) coalesce onto one `CHT8305` round-trip instead of reading twice.
      */
     fun roomClimate(now: Long = clock()): RoomClimate? = synchronized(lock) {
-        roomCachedAt?.let { if (now - it < freshMs) return roomCached }
+        roomCachedAt?.let { if (isWithinForwardWindow(now, it, freshMs)) return roomCached }
         roomCached = MetricParse.parseCht8305(source.roomClimate())
         roomCachedAt = now
         roomCached
@@ -235,7 +235,7 @@ internal class Resolvable<T : Any>(
         return when {
             idx >= 0 -> strategies[idx].read(ctx) ?: reResolve(ctx, now)   // sticky winner; re-resolve if it fails
             idx == -1 -> reResolve(ctx, now)                                // first read
-            now - lastResolveAt >= unavailRetryMs -> reResolve(ctx, now)    // unavailable: slow retry
+            retryDue(now, lastResolveAt, unavailRetryMs) -> reResolve(ctx, now) // unavailable: slow retry
             else -> null                                                    // unavailable, within backoff
         }
     }
@@ -251,3 +251,10 @@ internal class Resolvable<T : Any>(
         return null
     }
 }
+
+/** Wall-clock rollback is an expiry boundary, never a reason to retain stale data or suppress recovery. */
+private fun isWithinForwardWindow(now: Long, then: Long, windowMs: Long): Boolean =
+    now >= then && now - then < windowMs
+
+private fun retryDue(now: Long, lastAttempt: Long, intervalMs: Long): Boolean =
+    now < lastAttempt || now - lastAttempt >= intervalMs

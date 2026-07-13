@@ -151,6 +151,41 @@ class PanelMetricsTest {
         assertEquals(2, src.statCalls)
     }
 
+    @Test fun wallClockRollbackExpiresSnapshotAndRoomCaches() {
+        val src = healthyDirect().apply { room = "T=2820 H=3400" }
+        val r = reader(src, freshMs = 1500L)
+        now = 10_000
+        r.systemSnapshot()
+        r.roomClimate()
+        assertEquals(1, src.statCalls)
+        assertEquals(1, src.roomCalls)
+
+        now = 10_500
+        r.systemSnapshot()
+        r.roomClimate()
+        assertEquals("forward time inside the window remains cached", 1, src.statCalls)
+        assertEquals(1, src.roomCalls)
+
+        now = 9_000
+        assertEquals(9_000L, r.systemSnapshot().ts)
+        r.roomClimate()
+        assertEquals("rollback is an expiry boundary", 2, src.statCalls)
+        assertEquals(2, src.roomCalls)
+    }
+
+    @Test fun wallClockRollbackRetriesAnUnavailableSourceImmediately() {
+        val src = FakeSource()
+        val r = reader(src, unavailRetryMs = 120_000L)
+        now = 10_000
+        assertNull(r.systemSnapshot().socTempC)
+        val failedAttempts = src.dumpCalls
+
+        src.dump = dumpText
+        now = 9_000
+        assertEquals(42.0, r.systemSnapshot().socTempC!!, 0.0001)
+        assertTrue("rollback must not preserve an unavailable-source backoff", src.dumpCalls > failedAttempts)
+    }
+
     @Test fun cpuDeltaUsesTheSingleSharedBaselineAcrossReads() {
         val src = healthyDirect()
         val r = reader(src)

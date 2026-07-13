@@ -36,7 +36,7 @@ class LogCapture(
     private val dumps = mutableSetOf<Process>()
 
     // Each start() gets its own Run so a stop→start race can never orphan the new subprocess.
-    private class Run {
+    internal class Run {
         @Volatile var job: Job? = null
         @Volatile var proc: Process? = null
         private var cancelled = false
@@ -64,6 +64,8 @@ class LogCapture(
     }
     private var run: Run? = null
     @Volatile private var closed = false
+
+    internal fun activeRun(): Run? = synchronized(this) { run }
 
     /** Register [listener] for every future (redacted) line; starts the capture if it's the first
      *  consumer. Close the returned handle to detach — the last detach stops the subprocess. */
@@ -128,7 +130,7 @@ class LogCapture(
                         p.inputStream.bufferedReader().use { reader ->
                             while (isActive) {
                                 val line = reader.readLine() ?: break
-                                emit(redact(line))
+                                emit(r, redact(line))
                             }
                         }
                     } finally {
@@ -148,13 +150,18 @@ class LogCapture(
         synchronized(ring) { ring.clear() }
     }
 
-    private fun emit(line: String) {
-        if (closed) return
-        synchronized(ring) {
-            if (ring.size >= RING_CAP) ring.removeFirst()
-            ring.addLast(line)
+    internal fun emit(source: Run, line: String) {
+        val targets = synchronized(this) {
+            // A process can produce one final buffered line after destroy(). Never let that line cross a
+            // stop→start boundary into the replacement generation's ring or listeners.
+            if (closed || run !== source) return
+            synchronized(ring) {
+                if (ring.size >= RING_CAP) ring.removeFirst()
+                ring.addLast(line)
+            }
+            listeners.toList()
         }
-        for (l in listeners) runCatching { l(line) }
+        for (listener in targets) runCatching { listener(line) }
     }
 
     companion object {

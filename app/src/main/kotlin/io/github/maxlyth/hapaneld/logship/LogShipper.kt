@@ -11,6 +11,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.IOException
 import java.net.HttpURLConnection
+import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.URL
 import java.text.SimpleDateFormat
@@ -19,202 +20,296 @@ import java.util.Locale
 import java.util.TimeZone
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
+
+/** Immutable view of the preferences relevant to one log-shipping decision. */
+internal data class LogShipConfigSnapshot(
+    val enabled: Boolean,
+    val host: String,
+    val port: Int,
+    val protocol: String,
+    val panelId: String,
+) {
+    fun targetOrNull(): LogShipTarget? {
+        if (!enabled || host.isBlank()) return null
+        return LogShipTarget(host, port, if (protocol == "http") "http" else "syslog", panelId)
+    }
+}
+
+/** A target belongs to one run; live preference reads never change a run underneath its worker. */
+internal data class LogShipTarget(val host: String, val port: Int, val protocol: String, val panelId: String)
+
+/** A transport is created inert, attached to its run, and only then allowed to block in [connect]. */
+internal interface LogSink : AutoCloseable {
+    fun connect()
+    fun send(lines: List<String>)
+}
+
+internal fun interface LogSinkFactory {
+    fun create(target: LogShipTarget, encode: (String) -> String): LogSink
+}
 
 /**
- * Optional remote log shipping. Streams ha-paneld's OWN process logcat — its `android.util.Log`
- * output plus the Ktor/HiveMQ SLF4J library logs, all emitted by this app's uid, so readable with no
- * `READ_LOGS` permission and no root — to a central log collector for fleet-wide debugging without
- * per-panel `adb logcat`.
- *
- * OFF by default and inert unless a sink host is configured ([Config.logShipActive]); LAN-only by
- * intent; every line is [LogCapture.redact]ed for tokens / passwords / URL secrets before it leaves
- * the device. Configured via the HTTP `/config` endpoint (provision.sh `--log-*` flags) or Configure tab.
- *
- * Two transports, selected by `log_ship_protocol` — both are plain, widely-supported wire formats, so
- * any collector with a syslog or HTTP/NDJSON input can ingest them:
- *  - `syslog` (default): newline-delimited RFC5424 frames over a persistent TCP socket.
- *  - `http`: newline-delimited JSON (NDJSON) POSTed in batches to the collector's HTTP-ingest endpoint.
- *
- * Capture comes from the shared [LogCapture] (one own-uid `logcat` subprocess + one redaction pass,
- * shared with the `:8888` live log viewer). Lines pass through a bounded queue, so a slow/unreachable
- * sink applies backpressure by dropping the OLDEST lines — best-effort telemetry must never OOM or
- * block the panel. The sink connection reconnects with backoff.
+ * Everything mutable for one shipping generation. Its queue, counters, capture subscription, worker,
+ * and blocking transport cannot be observed or consumed by a replacement generation.
  */
-class LogShipper(
-    private val config: Config,
-    private val scope: CoroutineScope,
-    private val capture: LogCapture,
-) {
-    @Volatile private var job: Job? = null
-    @Volatile private var captureSub: AutoCloseable? = null
+internal class LogShipRun(
+    val target: LogShipTarget,
+    queueCapacity: Int,
+) : AutoCloseable {
+    data class Status(val connected: Boolean, val sent: Long, val dropped: Long, val lastError: String?)
 
-    // Bounded; full => drop oldest (telemetry is best-effort and never back-pressures the app).
-    private val queue = ArrayBlockingQueue<String>(QUEUE_CAP)
-    @Volatile private var dropped = 0L
-    @Volatile private var sent = 0L
+    private val queue = ArrayBlockingQueue<Any>(queueCapacity)
+    private val sent = AtomicLong()
+    private val dropped = AtomicLong()
+    @Volatile private var open = true
     @Volatile private var connected = false
     @Volatile private var lastError: String? = null
+    private var subscription: AutoCloseable? = null
+    private var job: Job? = null
+    private var sink: LogSink? = null
 
-    // Snapshot of the sink config this run was started with, so reconfigure() knows when to restart.
-    @Volatile private var runHost = ""
-    @Volatile private var runPort = 0
-    @Volatile private var runProto = "syslog"
+    fun isOpen(): Boolean = open
 
-    private val rfc3339 = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US)
-        .apply { timeZone = TimeZone.getTimeZone("UTC") }
+    fun bindSubscription(candidate: AutoCloseable) = synchronized(this) {
+        if (open) subscription = candidate else runCatching { candidate.close() }
+    }
 
-    /** Start shipping if enabled + host set; otherwise stay inert. Idempotent. */
-    fun start() {
-        if (job != null) return
-        if (!config.logShipActive) {
-            Log.i(TAG, "disabled (no sink configured)")
-            return
+    fun bindJob(candidate: Job) = synchronized(this) {
+        if (open) job = candidate else candidate.cancel()
+    }
+
+    fun attachSink(candidate: LogSink): Boolean = synchronized(this) {
+        if (!open) false else {
+            sink = candidate
+            true
         }
-        runHost = config.logShipHost
-        runPort = config.logShipPort
-        runProto = config.logShipProtocol.ifBlank { "syslog" }
-        sent = 0; dropped = 0; connected = false; lastError = null
-        captureSub = capture.subscribe { offer(it) }   // lines arrive already redacted
-        job = scope.launch(Dispatchers.IO) { shipLoop() }
-        Log.i(TAG, "started → $runProto://$runHost:$runPort")
     }
 
-    /** Re-read config; restart only if the sink target changed (or was enabled/disabled). No-op otherwise. */
-    fun reconfigure() {
-        val active = config.logShipActive
-        val changed = config.logShipHost != runHost ||
-            config.logShipPort != runPort ||
-            config.logShipProtocol.ifBlank { "syslog" } != runProto
-        if (job != null && (!active || changed)) stop()
-        if (active && job == null) start()
+    fun detachSink(candidate: LogSink) = synchronized(this) {
+        if (sink === candidate) sink = null
     }
 
-    /** Stop capture + shipping. Idempotent. */
-    fun stop() {
-        job?.cancel()
-        job = null
-        runCatching { captureSub?.close() }
-        captureSub = null
-        queue.clear()
-        connected = false
-    }
-
-    /** One-line status for the info page / diag. The sink host is operator infra, shown like the broker. */
-    fun statusText(): String = when {
-        !config.logShipEnabled -> "off"
-        config.logShipHost.isBlank() -> "enabled · no host set"
-        else -> "$runProto://$runHost:$runPort · " +
-            (if (connected) "connected" else "disconnected${lastError?.let { " ($it)" } ?: ""}") +
-            " · sent=$sent${if (dropped > 0) " dropped=$dropped" else ""}"
-    }
-
-    /** Bounded, drop-oldest: never block the capture thread on a slow sink. */
-    private fun offer(line: String) {
+    /** Bounded, drop-oldest admission. A closed generation rejects lines from a late capture callback. */
+    fun offer(line: String) {
+        if (!open) return
         if (!queue.offer(line)) {
             queue.poll()
-            dropped++
+            dropped.incrementAndGet()
             queue.offer(line)
         }
     }
 
-    // --- ship: drain the queue to the configured sink -----------------------------------------------
+    /** A close wake-up is deliberately not a String, so it can never collide with captured content. */
+    fun takeBatch(max: Int, timeoutSeconds: Long): List<String> {
+        val first = queue.poll(timeoutSeconds, TimeUnit.SECONDS) as? String ?: return emptyList()
+        val out = ArrayList<String>(max)
+        out.add(first)
+        while (out.size < max) {
+            val next = queue.poll() ?: break
+            if (next is String) out.add(next)
+        }
+        return out
+    }
 
-    private suspend fun CoroutineScope.shipLoop() {
-        when (runProto) {
-            "http" -> shipHttp()
-            else -> shipSyslog()
+    fun markConnected() {
+        if (!open) return
+        connected = true
+        lastError = null
+    }
+
+    fun markFailure(error: Throwable) {
+        if (!open) return
+        connected = false
+        lastError = error.message ?: error.javaClass.simpleName
+    }
+
+    fun recordSent(count: Int) {
+        if (count > 0) sent.addAndGet(count.toLong())
+    }
+
+    fun recordDropped(count: Int) {
+        if (count > 0) dropped.addAndGet(count.toLong())
+    }
+
+    fun status(): Status = Status(connected, sent.get(), dropped.get(), lastError)
+
+    override fun close() {
+        val resources = synchronized(this) {
+            if (!open) return
+            open = false
+            connected = false
+            queue.clear()
+            queue.offer(WAKE)
+            val captured = Triple(subscription, job, sink)
+            subscription = null
+            job = null
+            sink = null
+            captured
+        }
+        resources.second?.cancel()
+        runCatching { resources.first?.close() }
+        runCatching { resources.third?.close() }
+    }
+
+    private companion object {
+        val WAKE = Any()
+    }
+}
+
+/**
+ * Optional remote log shipping. Streams ha-paneld's own redacted process log to a configured syslog or
+ * HTTP/NDJSON collector. Capture is demand-driven and the sink queue is bounded, so this best-effort
+ * telemetry cannot back-pressure the app or grow without limit.
+ *
+ * Each start owns a complete [LogShipRun]. Reconfiguration closes the old capture subscription and any
+ * blocking transport before creating the replacement, while late callbacks are rejected by the closed run.
+ */
+class LogShipper internal constructor(
+    private val configSnapshot: () -> LogShipConfigSnapshot,
+    private val scope: CoroutineScope,
+    private val subscribeCapture: ((String) -> Unit) -> AutoCloseable,
+    private val sinkFactory: LogSinkFactory,
+) {
+    constructor(config: Config, scope: CoroutineScope, capture: LogCapture) : this(
+        configSnapshot = {
+            LogShipConfigSnapshot(
+                enabled = config.logShipEnabled,
+                host = config.logShipHost,
+                port = config.logShipPort,
+                protocol = config.logShipProtocol.ifBlank { "syslog" },
+                panelId = config.panelId,
+            )
+        },
+        scope = scope,
+        subscribeCapture = capture::subscribe,
+        sinkFactory = NetworkLogSinkFactory,
+    )
+
+    private val lock = Any()
+    private var run: LogShipRun? = null
+    private val rfc3339 = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US)
+        .apply { timeZone = TimeZone.getTimeZone("UTC") }
+
+    /** Start shipping if enabled and a host is set. Idempotent and serialized with reconfiguration. */
+    fun start() = synchronized(lock) {
+        if (run != null) return@synchronized
+        val target = configSnapshot().targetOrNull()
+        if (target == null) {
+            Log.i(TAG, "disabled (no sink configured)")
+            return@synchronized
+        }
+        startLocked(target)
+    }
+
+    /** Replace the complete run when enablement, target, protocol, or panel identity changes. */
+    fun reconfigure() = synchronized(lock) {
+        val target = configSnapshot().targetOrNull()
+        if (run?.target == target || (run == null && target == null)) return@synchronized
+        run?.close()
+        run = null
+        if (target != null) startLocked(target)
+    }
+
+    /** Terminally detach and close the current generation. Idempotent. */
+    fun stop() = synchronized(lock) {
+        run?.close()
+        run = null
+    }
+
+    /** One-line status for the info page and diagnostics. */
+    fun statusText(): String {
+        val config = configSnapshot()
+        if (!config.enabled) return "off"
+        if (config.host.isBlank()) return "enabled · no host set"
+        val current = synchronized(lock) { run }
+        val target = current?.target ?: config.targetOrNull()!!
+        val status = current?.status() ?: LogShipRun.Status(false, 0, 0, null)
+        return "${target.protocol}://${target.host}:${target.port} · " +
+            (if (status.connected) "connected" else "disconnected${status.lastError?.let { " ($it)" } ?: ""}") +
+            " · sent=${status.sent}${if (status.dropped > 0) " dropped=${status.dropped}" else ""}"
+    }
+
+    private fun startLocked(target: LogShipTarget) {
+        val candidate = LogShipRun(target, QUEUE_CAP)
+        run = candidate
+        try {
+            candidate.bindSubscription(subscribeCapture(candidate::offer))
+            candidate.bindJob(scope.launch(Dispatchers.IO) { shipLoop(candidate) })
+            Log.i(TAG, "started → ${target.protocol}://${target.host}:${target.port}")
+        } catch (e: Exception) {
+            run = null
+            candidate.close()
+            Log.w(TAG, "start failed: ${e.message}")
         }
     }
 
-    private suspend fun CoroutineScope.shipSyslog() {
-        while (isActive) {
+    private suspend fun CoroutineScope.shipLoop(run: LogShipRun) {
+        val target = run.target
+        val batchMax = if (target.protocol == "http") BATCH_MAX else 1
+        val encode: (String) -> String = if (target.protocol == "http") {
+            { line -> jsonEvent(line, target.panelId) }
+        } else {
+            { line -> syslogFrame(line, target.panelId) }
+        }
+        while (isActive && run.isOpen()) {
+            var sink: LogSink? = null
             try {
-                Socket(runHost, runPort).use { sock ->
-                    sock.tcpNoDelay = true
-                    val out = sock.getOutputStream()
-                    connected = true
-                    lastError = null
-                    Log.i(TAG, "syslog connected $runHost:$runPort")
-                    while (isActive) {
-                        val line = queue.poll(POLL_SECONDS, TimeUnit.SECONDS) ?: continue
-                        out.write(syslogFrame(line).toByteArray(Charsets.UTF_8))
-                        out.flush()
-                        sent++
+                val candidate = sinkFactory.create(target, encode)
+                if (!run.attachSink(candidate)) {
+                    candidate.close()
+                    return
+                }
+                sink = candidate
+                candidate.connect()
+                if (target.protocol == "syslog") run.markConnected()
+                while (isActive && run.isOpen()) {
+                    val batch = run.takeBatch(batchMax, POLL_SECONDS)
+                    if (batch.isEmpty()) continue
+                    try {
+                        candidate.send(batch)
+                        run.recordSent(batch.size)
+                        run.markConnected()
+                    } catch (e: Exception) {
+                        // The batch left the bounded queue and will not be retried, so account for its loss.
+                        run.recordDropped(batch.size)
+                        throw e
                     }
                 }
             } catch (e: Exception) {
-                connected = false
-                lastError = e.message ?: e.javaClass.simpleName
-                Log.w(TAG, "syslog $runHost:$runPort: ${e.message}")
-                if (isActive) delay(SINK_BACKOFF_MS)
+                // Closing a run deliberately breaks its transport. Do not leak that expected exception
+                // into a replacement generation's newly captured log stream.
+                if (run.isOpen()) {
+                    run.markFailure(e)
+                    Log.w(TAG, "${target.protocol} ${target.host}:${target.port}: ${e.message}")
+                    if (isActive) delay(SINK_BACKOFF_MS)
+                }
+            } finally {
+                sink?.let {
+                    run.detachSink(it)
+                    runCatching { it.close() }
+                }
             }
         }
     }
 
-    private suspend fun CoroutineScope.shipHttp() {
-        val url = "http://$runHost:$runPort/"   // collector HTTP-ingest root path
-        val batch = ArrayList<String>(BATCH_MAX)
-        while (isActive) {
-            batch.clear()
-            val first = queue.poll(POLL_SECONDS, TimeUnit.SECONDS) ?: continue
-            batch.add(first)
-            queue.drainTo(batch, BATCH_MAX - 1)
-            try {
-                postNdjson(url, batch)
-                connected = true
-                lastError = null
-                sent += batch.size
-            } catch (e: Exception) {
-                connected = false
-                lastError = e.message ?: e.javaClass.simpleName
-                Log.w(TAG, "http $url: ${e.message}")
-                // Best-effort: drop this batch rather than retry-loop it (avoids unbounded buildup).
-                if (isActive) delay(SINK_BACKOFF_MS)
-            }
-        }
-    }
+    private fun timestamp(): String = synchronized(rfc3339) { rfc3339.format(Date()) }
 
-    private fun postNdjson(url: String, lines: List<String>) {
-        val body = lines.joinToString("\n") { jsonEvent(it) }.toByteArray(Charsets.UTF_8)
-        val conn = (URL(url).openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            connectTimeout = HTTP_TIMEOUT_MS
-            readTimeout = HTTP_TIMEOUT_MS
-            doOutput = true
-            setRequestProperty("Content-Type", "application/x-ndjson")
-        }
-        try {
-            conn.outputStream.use { it.write(body) }
-            val code = conn.responseCode
-            if (code !in 200..299) throw IOException("HTTP $code")
-        } finally {
-            conn.disconnect()
-        }
-    }
-
-    // --- framing -------------------------------------------------------------------------------------
-
-    /** RFC5424 frame: `<PRI>1 TIMESTAMP HOSTNAME APP-NAME PROCID MSGID SD MSG`, newline-terminated. */
-    private fun syslogFrame(line: String): String {
+    /** RFC5424 frame: `<PRI>1 TIMESTAMP HOSTNAME APP-NAME PROCID MSGID SD MSG`. */
+    private fun syslogFrame(line: String, panelId: String): String {
         val pri = FACILITY_USER * 8 + severityOf(line)
-        val ts = rfc3339.format(Date())
-        val host = config.panelId.ifBlank { "panel" }.replace(' ', '_')
-        return "<$pri>1 $ts $host $APP - - - $line\n"
+        val host = panelId.ifBlank { "panel" }.replace(' ', '_')
+        return "<$pri>1 ${timestamp()} $host $APP - - - $line\n"
     }
 
-    private fun jsonEvent(line: String): String {
-        val ts = rfc3339.format(Date())
-        val host = config.panelId.ifBlank { "panel" }
-        return "{\"timestamp\":\"$ts\",\"host\":${jsonStr(host)},\"app\":\"$APP\"," +
-            "\"message\":${jsonStr(line)}}"
-    }
+    private fun jsonEvent(line: String, panelId: String): String =
+        "{\"timestamp\":\"${timestamp()}\",\"host\":${jsonStr(panelId.ifBlank { "panel" })}," +
+            "\"app\":\"$APP\",\"message\":${jsonStr(line)}}"
 
-    /** Map the logcat threadtime level char to a syslog severity (default info). */
     private fun severityOf(line: String): Int {
-        val m = LEVEL_RE.find(line) ?: return SEV_INFO
-        return when (m.groupValues[1]) {
+        val level = LEVEL_RE.find(line)?.groupValues?.get(1) ?: return SEV_INFO
+        return when (level) {
             "V", "D" -> SEV_DEBUG
-            "I" -> SEV_INFO
             "W" -> SEV_WARNING
             "E" -> SEV_ERROR
             "F" -> SEV_CRIT
@@ -225,12 +320,11 @@ class LogShipper(
     companion object {
         private const val TAG = "ha-paneld/logship"
         private const val APP = "ha-paneld"
-
-        private const val QUEUE_CAP = 4000          // ~ a few MB worst case; drop-oldest beyond this
-        private const val BATCH_MAX = 200           // HTTP: events per POST
-        private const val POLL_SECONDS = 5L         // queue wait before re-checking liveness
+        private const val QUEUE_CAP = 4000
+        private const val BATCH_MAX = 200
+        private const val POLL_SECONDS = 5L
         private const val SINK_BACKOFF_MS = 5_000L
-        private const val HTTP_TIMEOUT_MS = 5_000
+        internal const val NETWORK_TIMEOUT_MS = 5_000
 
         private const val FACILITY_USER = 1
         private const val SEV_CRIT = 2
@@ -239,30 +333,82 @@ class LogShipper(
         private const val SEV_INFO = 6
         private const val SEV_DEBUG = 7
 
-        // threadtime line: "MM-DD HH:MM:SS.mmm  PID  TID L TAG: message" — capture the level char L.
         private val LEVEL_RE =
             Regex("""^\d\d-\d\d \d\d:\d\d:\d\d\.\d{3}\s+\d+\s+\d+\s+([VDIWEF])\s""")
 
-        // Conservative redaction — strip the obvious secret shapes before a line leaves the device.
-        private val REDACTIONS: List<Pair<Regex, String>> = listOf(
-            Regex("""(?i)(authorization:\s*bearer\s+)\S+""") to "$1***",
-            // Value bounded by [^\s&]+ (not \S+) so it stops at the next URL query param / whitespace,
-            // redacting only the secret rather than eating the rest of the line.
-            Regex("""(?i)\b(password|passwd|pwd|secret|api[_-]?key|access[_-]?token|token)(["'=:\s]+)[^\s&]+""")
-                to "$1$2***",
-            // Home Assistant long-lived tokens / JWTs.
-            Regex("""\beyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{6,}""") to "***jwt***",
-            // Secrets carried in URL query strings.
-            Regex("""(?i)([?&](?:token|auth|access_token|api_key|key|password)=)[^&\s"]+""") to "$1***",
-        )
+        private fun jsonStr(value: String): String = Json.str(value)
+    }
+}
 
-        /** Apply [REDACTIONS] in sequence. Public for unit testing. */
-        fun redact(line: String): String {
-            var s = line
-            for ((re, repl) in REDACTIONS) s = re.replace(s, repl)
-            return s
+/** Production transports. Creation never blocks; [LogSink.connect] begins only after run attachment. */
+private object NetworkLogSinkFactory : LogSinkFactory {
+    override fun create(target: LogShipTarget, encode: (String) -> String): LogSink =
+        if (target.protocol == "http") HttpLogSink(target, encode) else SyslogLogSink(target, encode)
+}
+
+private class SyslogLogSink(
+    private val target: LogShipTarget,
+    private val encode: (String) -> String,
+) : LogSink {
+    private val socket = Socket()
+
+    override fun connect() {
+        socket.connect(InetSocketAddress(target.host, target.port), LogShipper.NETWORK_TIMEOUT_MS)
+        socket.tcpNoDelay = true
+    }
+
+    override fun send(lines: List<String>) {
+        val out = socket.getOutputStream()
+        for (line in lines) out.write(encode(line).toByteArray(Charsets.UTF_8))
+        out.flush()
+    }
+
+    override fun close() = socket.close()
+}
+
+private class HttpLogSink(
+    target: LogShipTarget,
+    private val encode: (String) -> String,
+) : LogSink {
+    private val url = "http://${target.host}:${target.port}/"
+    @Volatile private var closed = false
+    private var connection: HttpURLConnection? = null
+
+    override fun connect() {
+        if (closed) throw IOException("closed")
+    }
+
+    override fun send(lines: List<String>) {
+        val body = lines.joinToString("\n") { encode(it) }.toByteArray(Charsets.UTF_8)
+        val candidate = (URL(url).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = LogShipper.NETWORK_TIMEOUT_MS
+            readTimeout = LogShipper.NETWORK_TIMEOUT_MS
+            doOutput = true
+            setRequestProperty("Content-Type", "application/x-ndjson")
         }
+        synchronized(this) {
+            if (closed) {
+                candidate.disconnect()
+                throw IOException("closed")
+            }
+            connection = candidate
+        }
+        try {
+            candidate.outputStream.use { it.write(body) }
+            val code = candidate.responseCode
+            if (code !in 200..299) throw IOException("HTTP $code")
+        } finally {
+            synchronized(this) { if (connection === candidate) connection = null }
+            candidate.disconnect()
+        }
+    }
 
-        private fun jsonStr(v: String): String = Json.str(v)
+    override fun close() {
+        val active = synchronized(this) {
+            closed = true
+            connection.also { connection = null }
+        }
+        active?.disconnect()
     }
 }

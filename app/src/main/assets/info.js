@@ -80,13 +80,14 @@ async function perf(){
   var d=await (await fetch('/api/v1/perf')).json();
   if(d.hist){cpuH=d.hist.cpu||[];ramH=d.hist.ram||[];gpuH=d.hist.gpu||[];}  // server FIFO
   draw();
-  var ramPct=d.memTotalMb?Math.round(d.memUsedMb*100/d.memTotalMb):0;
+  var ramOk=d.memTotalMb!=null&&d.memTotalMb>0&&d.memUsedMb!=null;
+  var ramPct=ramOk?Math.round(d.memUsedMb*100/d.memTotalMb):null;
   var peak=(d.cores&&d.cores.length)?Math.max.apply(null,d.cores):d.cpu;
   var fok=!!(d.freqMhz&&d.freqMhz.length),cur=fok?Math.max.apply(null,d.freqMhz):0,mx=d.freqMaxMhz||0;
-  var rows=[{label:'CPU',val:d.cpu+'%',suf:'peak core '+peak+'%'},
+  var rows=[{label:'CPU',val:d.cpu==null?'–':d.cpu+'%',suf:peak==null?'waiting for sample':'peak core '+peak+'%'},
    opt('clk','CPU clock',fok,(cur/1000).toFixed(2)+' GHz',mx?'/ '+(mx/1000).toFixed(2)+' GHz max':''),
    opt('gpu','GPU',d.gpu!=null,d.gpu+'%',d.gpuMhz?d.gpuMhz+' MHz':''),
-   {label:'RAM',val:d.memUsedMb+' / '+d.memTotalMb+' MB ('+ramPct+'%)'},
+   {label:'RAM',val:ramOk?d.memUsedMb+' / '+d.memTotalMb+' MB ('+ramPct+'%)':'–'},
    opt('load','Load avg',!!(d.load&&d.load.length),d.load?d.load.join('  '):''),
    opt('temp','Temperature',d.tempC!=null,d.tempC!=null?d.tempC.toFixed(1)+' °C':'')];
   paint('perf',rows.filter(Boolean));

@@ -35,4 +35,9 @@ class RamRingSink(private val capacity: Int) : MetricSink {
     override fun history(key: String): List<MetricSample> = synchronized(lock) {
         rings[key]?.toList() ?: emptyList()
     }
+
+    /** Drop every retained series when the owning sampler reaches a terminal lifecycle boundary. */
+    fun clear() = synchronized(lock) {
+        rings.clear()
+    }
 }

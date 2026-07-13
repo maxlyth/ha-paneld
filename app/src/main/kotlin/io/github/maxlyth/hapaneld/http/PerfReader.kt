@@ -10,6 +10,7 @@ import io.github.maxlyth.hapaneld.metrics.PerfDump
 import io.github.maxlyth.hapaneld.metrics.RamRingSink
 import io.github.maxlyth.hapaneld.util.AndroidInput
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -19,7 +20,7 @@ import kotlinx.coroutines.launch
  * system telemetry union from the shared [PanelMetrics] reader (CPU/GPU/RAM/temp/load/freq, with its
  * direct→daemon fallback), and keeps the last [MAX] samples in an in-RAM FIFO ([RamRingSink]) so
  * `GET /perf` returns the latest values **plus** the history — the chart is populated immediately on page
- * load and the series survives reloads (lost only on app restart).
+ * load and the series survives page reloads (cleared when the service-owned sampler stops).
  *
  * The heavy per-process metrics that only this page needs — top-5 by CPU and dashboard render jank — stay
  * PerfReader-local (their deltas + su cadence are not shared with Diagnostics). On sandbox panels those
@@ -43,7 +44,7 @@ object PerfReader {
     private val lock = Any()
     // History retention behind the MetricSink seam (a durable store swaps in without touching this class).
     private val sink = RamRingSink(MAX)
-    @Volatile private var latestFields = """"cpu":0,"cores":[],"load":[],"freqMhz":[],"freqMaxMhz":0,"gpu":null,"gpuMhz":0,"tempC":null,"memUsedMb":0,"memTotalMb":0"""
+    @Volatile private var latestFields = EMPTY_FIELDS
 
     // Top-5 processes by CPU (from `dumpsys cpuinfo`) — needs root, so probed once and sampled on a
     // slower cadence than the 2s chart. Lets a user confirm the dashboard app dominates and spot
@@ -73,24 +74,81 @@ object PerfReader {
     // switch was removed — the page-view gate is the sole cost control).
     @Volatile var enabled = true
     @Volatile private var lastAccessAt = 0L
+    private val lifecycleLock = Any()
+    @Volatile private var generation = 0L
+    private var nextGeneration = 0L
+    private var samplerJob: Job? = null
 
     /** Mark the perf page as being viewed; sampling stays live for [ACTIVE_MS] after the last call. */
-    fun touch() { lastAccessAt = System.currentTimeMillis() }
+    fun touch() { lastAccessAt = android.os.SystemClock.elapsedRealtime() }
 
-    /** Start the sampling loop on [scope] (idempotent enough for a single service lifetime). */
+    /** Start one owned sampling generation on [scope]. */
     fun start(scope: CoroutineScope) {
-        scope.launch {
-            rootOk = runCatching { Su.available() }.getOrDefault(false)
-            while (isActive) {
-                if (enabled && System.currentTimeMillis() - lastAccessAt < ACTIVE_MS) {
-                    runCatching { tick() }
+        val runGeneration = synchronized(lifecycleLock) {
+            if (generation != 0L) return
+            resetStateLocked()
+            (++nextGeneration).also { generation = it }
+        }
+        val candidate = scope.launch {
+            val available = runCatching { Su.available() }.getOrDefault(false)
+            ifCurrent(runGeneration) { rootOk = available } ?: return@launch
+            while (isActive && isCurrent(runGeneration)) {
+                val now = android.os.SystemClock.elapsedRealtime()
+                if (enabled && withinActiveWindow(now, lastAccessAt)) {
+                    runCatching { tick(runGeneration) }
                 } else {
-                    resetLocalBaselines() // re-baseline the top/render deltas so the first sample after waking isn't a huge gap
+                    ifCurrent(runGeneration) { resetLocalBaselines() }
                 }
                 delay(INTERVAL_MS)
             }
         }
+        synchronized(lifecycleLock) {
+            if (generation == runGeneration) samplerJob = candidate else candidate.cancel()
+        }
+        candidate.invokeOnCompletion {
+            synchronized(lifecycleLock) {
+                if (samplerJob === candidate) {
+                    samplerJob = null
+                    if (generation == runGeneration) generation = 0L
+                }
+            }
+        }
     }
+
+    /** Cancel the owned loop and remove values that would otherwise survive a service recreation. */
+    fun stop() {
+        val oldJob = synchronized(lifecycleLock) {
+            generation = 0L
+            resetStateLocked()
+            samplerJob.also { samplerJob = null }
+        }
+        oldJob?.cancel()
+    }
+
+    /** Caller holds [lifecycleLock], so a terminal reset cannot interleave with a generation mutation. */
+    private fun resetStateLocked() {
+        lastAccessAt = 0L
+        rootOk = false
+        tickCount = 0
+        resetLocalBaselines()
+        synchronized(lock) {
+            sink.clear()
+            latestFields = EMPTY_FIELDS
+            topJson = "null"
+            renderJson = "null"
+            stutterHist.clear()
+        }
+    }
+
+    private fun isCurrent(candidate: Long): Boolean = generation == candidate
+
+    internal fun lifecycleGeneration(): Long = generation
+
+    private inline fun <T : Any> ifCurrent(candidate: Long, action: () -> T): T? =
+        synchronized(lifecycleLock) { if (generation == candidate) action() else null }
+
+    internal fun withinActiveWindow(now: Long, lastAccess: Long): Boolean =
+        lastAccess > 0L && now >= lastAccess && now - lastAccess < ACTIVE_MS
 
     /** Clear PerfReader's OWN top/render delta baselines while idle. The shared /proc/stat baseline lives
      *  in [PanelMetrics] and is deliberately NOT reset here (a stale prev just yields one valid
@@ -137,7 +195,7 @@ object PerfReader {
      * misses entirely. gfxinfo jank is kept as a SECONDARY "rendering load" field (only meaningful with
      * video/animation, e.g. a camera card). Needs root. HZ assumed 100 (Android default).
      */
-    private fun sampleRender() {
+    private fun sampleRender(runGeneration: Long) {
         // Primary: busiest CrRendererMain %-of-one-core across WebView renderer processes (covers a
         // Companion *or* a browser dashboard). One su call emits "<pid> <stat>" per renderer main thread.
         // Shell `read` builtins instead of a `cat` per thread: the old form forked ~2 processes per
@@ -146,9 +204,10 @@ object PerfReader {
             "for t in /proc/\$pid/task/*; do IFS= read -r c < \$t/comm 2>/dev/null || continue; " +
             "if [ \"\$c\" = CrRendererMain ]; then IFS= read -r s < \$t/stat 2>/dev/null && echo \"\$pid \$s\"; fi; done; done; true"
         val out = Su.runOutput(cmd)
-        val now = System.currentTimeMillis()
+        val now = android.os.SystemClock.elapsedRealtime()
         val cur = HashMap<Int, Long>()
         var mainPct = -1.0
+        val parsed = HashMap<Int, Long>()
         if (out != null) for (line in out.lineSequence()) {
             val sp = line.indexOf(' ')
             if (sp <= 0) continue
@@ -157,17 +216,24 @@ object PerfReader {
             val ut = rest.getOrNull(11)?.toLongOrNull() ?: continue
             val st = rest.getOrNull(12)?.toLongOrNull() ?: 0
             val j = ut + st
-            cur[pid] = j
-            val prev = prevRenderJiffies[pid]
-            if (prev != null && prevRenderAt > 0L) {
-                val dt = (now - prevRenderAt) / 1000.0
-                if (dt > 0) { val p = (j - prev) / dt; if (p > mainPct) mainPct = p } // HZ=100 -> jiffies/s == %-of-core
-            }
+            parsed[pid] = j
         }
-        prevRenderJiffies = cur
-        prevRenderAt = now
+        ifCurrent(runGeneration) {
+            cur.putAll(parsed)
+            for ((pid, j) in cur) {
+                val prev = prevRenderJiffies[pid]
+                if (prev != null && prevRenderAt > 0L) {
+                    val dt = (now - prevRenderAt) / 1000.0
+                    if (dt > 0) { val p = (j - prev) / dt; if (p > mainPct) mainPct = p }
+                }
+            }
+            prevRenderJiffies = cur
+            prevRenderAt = now
+        } ?: return
         if (mainPct < 0) { // first sample, or no Chromium renderer running
-            synchronized(lock) { renderJson = "{\"status\":\"no-renderer\",\"hist\":${stutterHist.toList()}}" }
+            ifCurrent(runGeneration) {
+                synchronized(lock) { renderJson = "{\"status\":\"no-renderer\",\"hist\":${stutterHist.toList()}}" }
+            }
             return
         }
         val pct1 = Math.round(mainPct.coerceIn(0.0, 100.0) * 10) / 10.0
@@ -187,10 +253,12 @@ object PerfReader {
                 }
             }
         }
-        synchronized(lock) {
-            push(stutterHist, Math.round(pct1).toInt())
-            renderJson = "{\"pkg\":\"${pkg.ifBlank { "dashboard" }}\",\"mainPct\":$pct1,\"verdict\":\"$verdict\"" +
-                jankFields + ",\"hist\":${stutterHist.toList()}}"
+        ifCurrent(runGeneration) {
+            synchronized(lock) {
+                push(stutterHist, Math.round(pct1).toInt())
+                renderJson = "{\"pkg\":\"${pkg.ifBlank { "dashboard" }}\",\"mainPct\":$pct1,\"verdict\":\"$verdict\"" +
+                    jankFields + ",\"hist\":${stutterHist.toList()}}"
+            }
         }
     }
 
@@ -201,7 +269,7 @@ object PerfReader {
      * (`/proc` is `hidepid`). CPU is expressed as % of total capacity (sums to <=100 across procs,
      * consistent with the overall CPU figure). Full names come from `/proc/<pid>/cmdline`.
      */
-    private fun sampleTop() {
+    private fun sampleTop(runGeneration: Long) {
         // `; true` so a vanished-pid `cat` (non-zero) doesn't null the whole capture.
         val out = Su.runOutput("cat /proc/stat; echo @@; cat /proc/[0-9]*/stat 2>/dev/null; true") ?: return
         val parts = out.split("@@")
@@ -221,7 +289,7 @@ object PerfReader {
             cur[pid] = utime + stime
             comm[pid] = line.substring(lp + 1, rp)
         }
-        publishTop(cur, comm, total, resolveFullNames = true)
+        publishTop(runGeneration, cur, comm, total, resolveFullNames = true)
     }
 
     /**
@@ -233,38 +301,48 @@ object PerfReader {
      * cost (`cutime+cstime` from `/proc/self/stat`) is shown as a separate, dimmed "sampling probes"
      * row — the observer's overhead, attributed honestly instead of polluting the workload list.
      */
-    private fun publishTop(cur: Map<Int, Long>, comm: Map<Int, String>, total: Long, resolveFullNames: Boolean) {
+    private fun publishTop(
+        runGeneration: Long,
+        cur: Map<Int, Long>,
+        comm: Map<Int, String>,
+        total: Long,
+        resolveFullNames: Boolean,
+    ) {
         val myPid = android.os.Process.myPid()
-        val dTotal = total - prevTopTotal
-        val ranked = if (prevTopTotal != 0L && dTotal > 0) {
-            cur.entries.mapNotNull { (pid, j) -> prevProc[pid]?.let { pid to (j - it) } }
-                .filter { it.second > 0 }.sortedByDescending { it.second }.take(5)
-        } else emptyList()
         val kidsNow = runCatching { java.io.File("/proc/self/stat").readText() }.getOrNull()?.let { childJiffiesOf(it) }
-        val probePct = if (kidsNow != null && prevSelf > 0L && dTotal > 0) {
-            Math.round((kidsNow - prevSelf) * 1000.0 / dTotal) / 10.0
-        } else null
-        prevTopTotal = total
-        prevProc = HashMap(cur)
-        kidsNow?.let { prevSelf = it }
+        var dTotal = 0L
+        var ranked = emptyList<Pair<Int, Long>>()
+        var probePct: Double? = null
+        var missing = emptyList<Int>()
+        ifCurrent(runGeneration) {
+            dTotal = total - prevTopTotal
+            ranked = if (prevTopTotal != 0L && dTotal > 0) {
+                cur.entries.mapNotNull { (pid, j) -> prevProc[pid]?.let { pid to (j - it) } }
+                    .filter { it.second > 0 }.sortedByDescending { it.second }.take(5)
+            } else emptyList()
+            probePct = if (kidsNow != null && prevSelf > 0L && dTotal > 0) {
+                Math.round((kidsNow - prevSelf) * 1000.0 / dTotal) / 10.0
+            } else null
+            prevTopTotal = total
+            prevProc = HashMap(cur)
+            kidsNow?.let { prevSelf = it }
+            if (resolveFullNames) missing = ranked.map { it.first }.filter { it !in nameCache }
+        } ?: return
 
         if (ranked.isEmpty() && probePct == null) return
         // Full cmdlines only for ranked pids we haven't resolved before — usually zero extra su calls.
-        if (resolveFullNames) {
-            val missing = ranked.map { it.first }.filter { it !in nameCache }
-            if (missing.isNotEmpty()) fullNames(missing).forEach { (p, n) -> nameCache[p] = n }
+        val resolvedNames = if (missing.isEmpty()) emptyMap() else fullNames(missing)
+        ifCurrent(runGeneration) {
+            resolvedNames.forEach { (pid, name) -> nameCache[pid] = name }
+            val rows = ranked.map { (pid, delta) ->
+                val pct = Math.round(delta * 1000.0 / dTotal) / 10.0
+                var name = trimProcName((nameCache[pid] ?: comm[pid] ?: pid.toString()).replace("\\", "").replace("\"", ""))
+                if (pid == myPid) name = if (dashboardPkg == name) "built-in dashboard (ha-paneld)" else "$name (this app)"
+                """{"name":"$name","cpu":$pct}"""
+            }.toMutableList()
+            probePct?.let { rows += """{"name":"sampling probes (su/dumpsys)","cpu":$it,"self":true}""" }
+            synchronized(lock) { topJson = rows.joinToString(",", "[", "]") }
         }
-        val rows = ranked.map { (pid, dj) ->
-            val pct = Math.round(dj * 1000.0 / dTotal) / 10.0 // % of total capacity, 1dp, dot-decimal
-            var nm = trimProcName((nameCache[pid] ?: comm[pid] ?: pid.toString()).replace("\\", "").replace("\"", ""))
-            // Make our own row self-explanatory. Dashboard-first wording when this process hosts the
-            // built-in renderer: the cost IS the dashboard (WebView browser side), and a package-first
-            // label reads as agent overhead — the exact misread this row exists to prevent.
-            if (pid == myPid) nm = if (dashboardPkg == nm) "built-in dashboard (ha-paneld)" else "$nm (this app)"
-            """{"name":"$nm","cpu":$pct}"""
-        }.toMutableList()
-        probePct?.let { rows += """{"name":"sampling probes (su/dumpsys)","cpu":$it,"self":true}""" }
-        synchronized(lock) { topJson = rows.joinToString(",", "[", "]") }
     }
 
     /** Reaped-children jiffies (cutime+cstime) from a `/proc/self/stat` line — the measurement probes
@@ -308,74 +386,93 @@ object PerfReader {
     // --- daemon-sourced top/render (sandbox panels), from the shared reader's PERFDUMP ---------------
 
     /** Top-5 by CPU from the daemon's process table (comm only — truncated to 16 chars, no cmdline). */
-    private fun sampleTopDump(dump: PerfDump) {
+    private fun sampleTopDump(runGeneration: Long, dump: PerfDump) {
         val total = dump.stat.firstOrNull()?.sum() ?: return       // "cpu" aggregate line
         val cur = HashMap<Int, Long>()
         val comm = HashMap<Int, String>()
         for ((pid, j, c) in dump.proc) { cur[pid] = j; comm[pid] = c }
-        publishTop(cur, comm, total, resolveFullNames = false)     // dump comms suffice; no su available
+        publishTop(runGeneration, cur, comm, total, resolveFullNames = false)
     }
 
     /** Dashboard responsiveness from the daemon's CrRendererMain thread jiffies (primary metric; the
      *  gfxinfo secondary needs dumpsys/su, so it's omitted on sandbox panels). */
-    private fun sampleRenderDump(dump: PerfDump) {
-        val now = System.currentTimeMillis()
+    private fun sampleRenderDump(runGeneration: Long, dump: PerfDump) {
+        val now = android.os.SystemClock.elapsedRealtime()
         var mainPct = -1.0
-        for ((pid, j) in dump.rend) {
-            val prev = prevRenderJiffies[pid]
-            if (prev != null && prevRenderAt > 0L) {
-                val dt = (now - prevRenderAt) / 1000.0
-                if (dt > 0) { val p = (j - prev) / dt; if (p > mainPct) mainPct = p } // HZ=100 -> jiffies/s == %-of-core
+        ifCurrent(runGeneration) {
+            for ((pid, j) in dump.rend) {
+                val prev = prevRenderJiffies[pid]
+                if (prev != null && prevRenderAt > 0L) {
+                    val dt = (now - prevRenderAt) / 1000.0
+                    if (dt > 0) { val p = (j - prev) / dt; if (p > mainPct) mainPct = p }
+                }
             }
-        }
-        prevRenderJiffies = HashMap(dump.rend)
-        prevRenderAt = now
+            prevRenderJiffies = HashMap(dump.rend)
+            prevRenderAt = now
+        } ?: return
         if (mainPct < 0) {
-            synchronized(lock) { renderJson = "{\"status\":\"no-renderer\",\"hist\":${stutterHist.toList()}}" }
+            ifCurrent(runGeneration) {
+                synchronized(lock) { renderJson = "{\"status\":\"no-renderer\",\"hist\":${stutterHist.toList()}}" }
+            }
             return
         }
         val pct1 = Math.round(mainPct.coerceIn(0.0, 100.0) * 10) / 10.0
         val verdict = if (pct1 < 50) "smooth" else if (pct1 < 85) "occasional" else "janky"
-        synchronized(lock) {
-            push(stutterHist, Math.round(pct1).toInt())
-            renderJson = "{\"pkg\":\"dashboard\",\"mainPct\":$pct1,\"verdict\":\"$verdict\",\"hist\":${stutterHist.toList()}}"
+        ifCurrent(runGeneration) {
+            synchronized(lock) {
+                push(stutterHist, Math.round(pct1).toInt())
+                renderJson = "{\"pkg\":\"dashboard\",\"mainPct\":$pct1,\"verdict\":\"$verdict\",\"hist\":${stutterHist.toList()}}"
+            }
         }
     }
 
-    private fun tick() {
+    private fun tick(runGeneration: Long) {
         val snap = PanelMetrics.shared.systemSnapshot()
+        if (!isCurrent(runGeneration)) return
         // Top-5 + render jank (PerfReader-only, spread across ticks). Prefer the shared reader's PERFDUMP
         // tables when it fetched a dump this tick (sandbox panels); else the direct su path on rooted panels.
         val dump = snap.dump
         // ~10s cadence for the heavy per-process samplers (was ~6s): they fork su probes and parse
         // every process's stat, which on a slow SoC was itself a visible slice of panel CPU. The 2s
         // chart above is untouched — only top-5/render slow down.
+        val runState = ifCurrent(runGeneration) { tickCount % 5 to rootOk } ?: return
         when {
-            dump != null -> when (tickCount % 5) {
-                0 -> runCatching { sampleTopDump(dump) }
-                2 -> runCatching { sampleRenderDump(dump) }
+            dump != null -> when (runState.first) {
+                0 -> runCatching { sampleTopDump(runGeneration, dump) }
+                2 -> runCatching { sampleRenderDump(runGeneration, dump) }
             }
-            rootOk -> when (tickCount % 5) {           // spread the su calls across ticks (~10s each)
-                0 -> runCatching { sampleTop() }
-                2 -> runCatching { sampleRender() }
+            runState.second -> when (runState.first) { // spread the su calls across ticks (~10s each)
+                0 -> runCatching { sampleTop(runGeneration) }
+                2 -> runCatching { sampleRender(runGeneration) }
             }
         }
-        tickCount++
+        ifCurrent(runGeneration) { tickCount++ } ?: return
 
-        val overall = snap.cpuOverall ?: return // first tick (no delta yet) / CPU source unavailable
-
-        val cores = snap.cpuCores
-        val loadJson = snap.loadavg.joinToString(",") { "\"$it\"" }
-        val ramPct = if (snap.memTotalMb > 0) (snap.memUsedMb * 100 / snap.memTotalMb).toInt() else 0
-        val gpuPct = snap.gpuPct
-        val now = snap.ts
-        synchronized(lock) {
-            sink.record(MetricSample.num(CPU_KEY, overall.toDouble(), now, "%"))
-            sink.record(MetricSample.num(RAM_KEY, ramPct.toDouble(), now, "%"))
-            sink.record(MetricSample.num(GPU_KEY, gpuPct.coerceAtLeast(0).toDouble(), now, "%"))
-            latestFields = """"cpu":$overall,"cores":$cores,"load":[$loadJson],"freqMhz":${snap.freqCurMhz},"freqMaxMhz":${snap.freqMaxMhz},""" +
-                """"gpu":${if (gpuPct >= 0) gpuPct else "null"},"gpuMhz":${snap.gpuMhz},""" +
-                """"tempC":${snap.socTempC ?: "null"},"memUsedMb":${snap.memUsedMb},"memTotalMb":${snap.memTotalMb}"""
+        val projection = projectSnapshot(snap)
+        ifCurrent(runGeneration) {
+            synchronized(lock) {
+                projection.samples.forEach(sink::record)
+                latestFields = projection.fields
+            }
         }
     }
+
+    internal data class Projection(val fields: String, val samples: List<MetricSample>)
+
+    /** Keep independent metrics independent, and omit unavailable values from history instead of writing zero. */
+    internal fun projectSnapshot(snap: io.github.maxlyth.hapaneld.metrics.Snapshot): Projection {
+        val loadJson = snap.loadavg.joinToString(",") { "\"$it\"" }
+        val memAvailable = snap.memTotalMb > 0
+        val samples = buildList {
+            snap.cpuOverall?.let { add(MetricSample.num(CPU_KEY, it.toDouble(), snap.ts, "%")) }
+            snap.memPercent?.let { add(MetricSample.num(RAM_KEY, it.toDouble(), snap.ts, "%")) }
+            if (snap.gpuPct >= 0) add(MetricSample.num(GPU_KEY, snap.gpuPct.toDouble(), snap.ts, "%"))
+        }
+        val fields = """"cpu":${snap.cpuOverall ?: "null"},"cores":${snap.cpuCores},"load":[$loadJson],"freqMhz":${snap.freqCurMhz},"freqMaxMhz":${snap.freqMaxMhz},""" +
+            """"gpu":${if (snap.gpuPct >= 0) snap.gpuPct else "null"},"gpuMhz":${snap.gpuMhz},""" +
+            """"tempC":${snap.socTempC ?: "null"},"memUsedMb":${if (memAvailable) snap.memUsedMb else "null"},"memTotalMb":${if (memAvailable) snap.memTotalMb else "null"}"""
+        return Projection(fields, samples)
+    }
+
+    private const val EMPTY_FIELDS = """"cpu":null,"cores":[],"load":[],"freqMhz":[],"freqMaxMhz":0,"gpu":null,"gpuMhz":0,"tempC":null,"memUsedMb":null,"memTotalMb":null"""
 }

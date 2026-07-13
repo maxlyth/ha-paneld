@@ -13,7 +13,6 @@ import io.github.maxlyth.hapaneld.control.Su
 import io.github.maxlyth.hapaneld.device.DeviceProfile
 import io.github.maxlyth.hapaneld.util.SystemProps
 import kotlin.math.abs
-import kotlin.math.max
 
 /**
  * Reports the panel's standard Android light + proximity sensors to HA. Both are plain
@@ -28,7 +27,7 @@ import kotlin.math.max
  * which absorbs the scale + inversion and resists flapping without adding latency. Uncalibrated panels
  * fall back to the legacy `raw < maximumRange` so behaviour is unchanged until tuned.
  *
- * Publishing is change-gated to avoid MQTT spam: light on a >=20% lux change (min 2s apart);
+ * Publishing is change-gated to avoid MQTT spam: light on a >=20% lux change (min 15s apart);
  * proximity only on near<->far transitions (the raw stream never leaves the device).
  */
 class SensorReporter(
@@ -50,11 +49,8 @@ class SensorReporter(
     // Root binary proximity GPIO (1=near, 0=far) for panels whose SensorManager proximity never fires
     // (Smatek S9E gpio18). Null → use [proximitySensor] above. Polled instead of registered when set.
     private val proximityGpio: Int? = profile.proximityGpio
-    @Volatile private var proxPolling = false
     private var proxPoller: Thread? = null
 
-    private var lastLux = -1f
-    private var lastLuxAt = 0L
     // Live (un-throttled) readings for the Sensors card — updated on EVERY sensor event, independent
     // of the publish throttles and of whether the value is exposed to HA at all.
     @Volatile private var liveLux = Float.NaN
@@ -63,17 +59,12 @@ class SensorReporter(
     @Volatile private var liveTempAt = 0L
     @Volatile private var liveHumid = Float.NaN
     @Volatile private var liveHumidAt = 0L
+    @Volatile private var liveProximityAt = 0L
     private var lastNear: Boolean? = null
-    private var lastTemp = Float.NaN
-    private var lastTempAt = 0L
-    private var lastHumid = Float.NaN
-    private var lastHumidAt = 0L
     private var listener: SensorEventListener? = null
     // Background thread the SensorManager delivers callbacks on (keeps blocking MQTT publishes off main).
     private var sensorThread: HandlerThread? = null
-    private var onProximity: ((Boolean) -> Unit)? = null
-    private var onTemp: ((Float) -> Unit)? = null
-    private var onHumid: ((Float) -> Unit)? = null
+    @Volatile private var activeRun: SensorRunCallbacks? = null
     private val seenRaw = java.util.TreeSet<Float>() // distinct raw values observed → graded vs binary
 
     // Authoritative graded/binary from the firmware version where the profile knows the rule (NSPanel Pro
@@ -109,12 +100,12 @@ class SensorReporter(
      * yet has a null value.
      */
     fun valuesJson(): String {
-        val now = System.currentTimeMillis()
+        val now = android.os.SystemClock.elapsedRealtime()
         fun age(at: Long) = if (at <= 0L) "null" else ((now - at) / 1000).toString()
         val light = if (!hasLight()) """"present":false""" else
             """"present":true,"lux":${if (liveLux.isNaN()) "null" else fmtV(liveLux)},"age_s":${age(liveLuxAt)}"""
         val prox = if (!hasProximity()) """"present":false""" else
-            """"present":true,"near":${lastNear ?: "null"},"raw":${if (lastRaw.isNaN()) "null" else fmtV(lastRaw)}"""
+            """"present":true,"near":${lastNear ?: "null"},"raw":${if (lastRaw.isNaN()) "null" else fmtV(lastRaw)},"age_s":${age(liveProximityAt)}"""
         val temp = if (!hasTemperature()) """"present":false""" else
             """"present":true,"c":${if (liveTemp.isNaN()) "null" else fmtV(liveTemp)},"age_s":${age(liveTempAt)}"""
         val humid = if (!hasHumidity()) """"present":false""" else
@@ -139,6 +130,7 @@ class SensorReporter(
     private fun fmtV(f: Float): String =
         if (f == f.toLong().toFloat()) f.toLong().toString() else "%.1f".format(f)
 
+    @Synchronized
     fun start(
         onLux: (Int) -> Unit,
         onProximity: (Boolean) -> Unit,
@@ -149,51 +141,47 @@ class SensorReporter(
         onLuxRaw: (Float) -> Unit = {},
     ) {
         if (lightSensor == null && proximitySensor == null && tempSensor == null && humiditySensor == null && proximityGpio == null) return
-        this.onProximity = onProximity
-        this.onTemp = onTemperature
-        this.onHumid = onHumidity
+        if (activeRun != null) return
+        val run = SensorRunCallbacks(onLux, onLuxRaw, onProximity, onTemperature, onHumidity)
+        activeRun = run
+        lastNear = null
         listener = object : SensorEventListener {
             override fun onAccuracyChanged(s: Sensor?, accuracy: Int) {}
             override fun onSensorChanged(e: SensorEvent) {
                 when (e.sensor.type) {
                     Sensor.TYPE_LIGHT -> {
                         val lux = e.values[0]
-                        liveLux = lux; liveLuxAt = System.currentTimeMillis()
-                        onLuxRaw(lux)   // un-throttled → auto-brightness engine
-                        val now = System.currentTimeMillis()
-                        val changed = lastLux < 0 || abs(lux - lastLux) >= max(1f, lastLux * 0.2f)
-                        if (changed && now - lastLuxAt >= 15000) {
-                            lastLux = lux
-                            lastLuxAt = now
-                            onLux(lux.toInt())
-                        }
+                        val now = android.os.SystemClock.elapsedRealtime()
+                        if (!run.isOpen()) return
+                        liveLux = lux; liveLuxAt = now
+                        run.light(lux, now)
                     }
                     Sensor.TYPE_PROXIMITY -> {
+                        if (!run.isOpen()) return
                         val raw = e.values[0]
                         lastRaw = raw
+                        liveProximityAt = android.os.SystemClock.elapsedRealtime()
                         synchronized(seenRaw) {
                             if (seenRaw.size < 32) seenRaw.add(Math.round(raw * 10) / 10f)
                         }
                         SensorTrace.recordProx(raw, computeNear(raw)) // raw trace (debug fit-testing)
-                        evaluateProximity()
+                        evaluateProximity(run)
                     }
                     // Climate is slow + informational — keep recorder load tiny: report only on a
                     // meaningful delta (>=0.2C / >=1%), min 60s apart, first reading always. Stable
                     // climate produces NO updates at all (no forced periodic). Values are rounded
                     // (1dp temp, integer humidity) at publish so precision wobble can't make rows.
                     Sensor.TYPE_AMBIENT_TEMPERATURE -> {
-                        val t = e.values[0]; val now = System.currentTimeMillis()
+                        if (!run.isOpen()) return
+                        val t = e.values[0]; val now = android.os.SystemClock.elapsedRealtime()
                         liveTemp = t; liveTempAt = now
-                        if ((lastTemp.isNaN() || abs(t - lastTemp) >= 0.2f) && now - lastTempAt >= 60000) {
-                            lastTemp = t; lastTempAt = now; onTemp?.invoke(t)
-                        }
+                        run.temperature(t, now)
                     }
                     Sensor.TYPE_RELATIVE_HUMIDITY -> {
-                        val h = e.values[0]; val now = System.currentTimeMillis()
+                        if (!run.isOpen()) return
+                        val h = e.values[0]; val now = android.os.SystemClock.elapsedRealtime()
                         liveHumid = h; liveHumidAt = now
-                        if ((lastHumid.isNaN() || abs(h - lastHumid) >= 1.0f) && now - lastHumidAt >= 60000) {
-                            lastHumid = h; lastHumidAt = now; onHumid?.invoke(h)
-                        }
+                        run.humidity(h, now)
                     }
                 }
             }
@@ -211,7 +199,7 @@ class SensorReporter(
         // Proximity: poll the raw GPIO over root where the SensorManager sensor never fires (S9E);
         // otherwise register the real SensorManager sensor. UI delay (not NORMAL) keeps wake-on-approach
         // and live UI tuning responsive without meaningful battery cost.
-        if (proximityGpio != null) startProximityPoll(proximityGpio)
+        if (proximityGpio != null) startProximityPoll(proximityGpio, run)
         else proximitySensor?.let { sm.registerListener(listener, it, SensorManager.SENSOR_DELAY_UI, handler) }
         tempSensor?.let { sm.registerListener(listener, it, SensorManager.SENSOR_DELAY_NORMAL, handler) }
         humiditySensor?.let { sm.registerListener(listener, it, SensorManager.SENSOR_DELAY_NORMAL, handler) }
@@ -222,21 +210,23 @@ class SensorReporter(
      *  but never delivers). 1 = near, 0 = far (reporter-confirmed). Feeds the same evaluate/publish path
      *  as the SensorManager proximity, so calibration UI, change-gating and wake-on-wave work unchanged.
      *  Reads go through the persistent `su` shell (~13 ms), so the steady poll is cheap. */
-    private fun startProximityPoll(gpio: Int) {
-        proxPolling = true
+    private fun startProximityPoll(gpio: Int, run: SensorRunCallbacks) {
         val node = "/sys/class/gpio/gpio$gpio/value"
         proxPoller = Thread {
-            while (proxPolling) {
+            while (run.isOpen()) {
                 val raw = when (Su.runOutput("cat $node 2>/dev/null")?.trim()) {
                     "1" -> 1f
                     "0" -> 0f
                     else -> Float.NaN
                 }
+                // The root read can outlive stop(). Reject its result before it mutates replacement state.
+                if (!run.isOpen() || activeRun !== run) break
                 if (!raw.isNaN()) {
                     lastRaw = raw
+                    liveProximityAt = android.os.SystemClock.elapsedRealtime()
                     synchronized(seenRaw) { if (seenRaw.size < 32) seenRaw.add(raw) }
                     SensorTrace.recordProx(raw, computeNear(raw))
-                    evaluateProximity()
+                    evaluateProximity(run)
                 }
                 try { Thread.sleep(PROX_POLL_MS) } catch (e: InterruptedException) { break }
             }
@@ -246,15 +236,16 @@ class SensorReporter(
 
     /** Recompute the binary from the cached raw + current calibration, publishing on a change.
      *  Called after a capture / threshold / sensitivity edit so HA reflects it without needing motion. */
-    fun reevaluate() = evaluateProximity()
+    fun reevaluate() = activeRun?.let(::evaluateProximity)
 
-    private fun evaluateProximity() {
+    private fun evaluateProximity(run: SensorRunCallbacks) {
+        if (!run.isOpen()) return
         val raw = lastRaw
         if (raw.isNaN()) return
         val near = computeNear(raw)
         if (lastNear != near) {
             lastNear = near
-            onProximity?.invoke(near)
+            run.proximity(near)
         }
     }
 
@@ -300,17 +291,16 @@ class SensorReporter(
             "\"graded\":$graded,\"distinct\":${vals.size}}"
     }
 
+    @Synchronized
     fun stop() {
-        proxPolling = false
+        activeRun?.close()
+        activeRun = null
         proxPoller?.interrupt()
         proxPoller = null
         listener?.let { sm.unregisterListener(it) }
         listener = null
         sensorThread?.quitSafely()
         sensorThread = null
-        onProximity = null
-        onTemp = null
-        onHumid = null
     }
 
     companion object {

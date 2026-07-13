@@ -142,4 +142,22 @@ class LogCaptureTest {
             executor.shutdownNow()
         }
     }
+
+    @Test fun lateLineFromStoppedRunCannotCrossIntoReplacementGeneration() {
+        val cap = capture("sleep 30")
+        val first = cap.subscribe { }
+        val stoppedRun = cap.activeRun()!!
+        first.close()
+
+        val replacementLines = java.util.concurrent.CopyOnWriteArrayList<String>()
+        val replacement = cap.subscribe(replacementLines::add)
+        try {
+            cap.emit(stoppedRun, "late-from-old-process")
+            assertTrue(replacementLines.isEmpty())
+            assertTrue(cap.snapshot().isEmpty())
+        } finally {
+            replacement.close()
+            cap.close()
+        }
+    }
 }

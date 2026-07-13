@@ -913,6 +913,7 @@ class PaneldService : Service() {
             runCatching { ledEffect.stop() }     // kill any running LED effect loop with the service
             runCatching { sensors.stop() }
             runCatching { logShipper.stop() }
+            runCatching { io.github.maxlyth.hapaneld.http.PerfReader.stop() }
             runCatching { logCaptureApp.close() }
             runCatching { logCaptureSystem.close() }
             runCatching { mdns.stop() }
