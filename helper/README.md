@@ -29,7 +29,8 @@ Newline-terminated ASCII on the abstract UNIX socket `@hapaneld-helper`. One or 
 | `APPSTATE <pkg>` | app-watchdog probe: is the package alive and focused? (`pidof` + focused window) | `FG` / `BG` / `DEAD` / `ERR` |
 | `WATCH <evdev> <0\|1>` | read an input node; `1` = `EVIOCGRAB` it (suppress the default Android action). Idempotent per node | `OK` / `ERR` |
 | `SUBSCRIBE` | this connection then receives async `KEY <code> <value>` / `SW <code> <value>` lines for every event from `WATCH`ed nodes, until it disconnects | `OK` |
-| `DENSITY` / `DENSITY <n>\|reset` | get display density / set it (`wm density`) | `PHYS=<n> OVER=<n\|->` (get) · `OK` / `ERR` (set) |
+| `DENSITY` / `DENSITY <n>\|reset` | get display density / set it (`wm density`) | `PHYS=<n> OVER=<n\|->` / `ERR` (get) · `OK` / `ERR` (set) |
+| `FONTSCALE` / `FONTSCALE <n>\|reset` | get system font scale / set it (`settings system font_scale`) | `SCALE=<n\|null>` / `ERR` (get) · `OK` / `ERR` (set) |
 | `GOV <name>` | set the CPU scaling governor on all cores | `OK` / `ERR` |
 | `PERFDUMP` | CPU/load/temp/gpu/process snapshot (for sandbox-walled apps) | marker-delimited stream, then EOF |
 | `CHT8305` | room temp/humidity from the CHT8305 input devices (`EVIOCGABS` on the `temperature`/`humidity` nodes) | `T=<centi> H=<centi>` / `ERR` |

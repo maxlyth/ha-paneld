@@ -21,6 +21,7 @@
 #include "input.h"
 #include "led.h"
 #include "perf.h"
+#include "sysexec_stub.h"
 #include "util.h"
 
 static int failures = 0;
@@ -194,10 +195,9 @@ static void test_dispatch_exact_match(void) {
     dispatch_reply("SETHOME", out, sizeof out);
     CHECK(strcmp(out, "ERR\n") == 0, "SETHOME no arg -> ERR (got '%s')\n", out);
 
-    // APPSTATE: validated pkg, then pidof + focus probe. The sysexec stub returns NULL popen, so the
-    // liveness check sees no process -> "DEAD"; a bad pkg is rejected before any shell-out.
+    // APPSTATE: a missing probe is an execution failure, not proof that the process is dead.
     dispatch_reply("APPSTATE io.homeassistant.companion.android", out, sizeof out);
-    CHECK(strcmp(out, "DEAD\n") == 0, "APPSTATE valid pkg, no proc (stub) -> DEAD (got '%s')\n", out);
+    CHECK(strcmp(out, "ERR\n") == 0, "APPSTATE missing pidof probe -> ERR (got '%s')\n", out);
     dispatch_reply("APPSTATE ;rm", out, sizeof out);
     CHECK(strcmp(out, "ERR\n") == 0, "APPSTATE metachar pkg -> ERR (got '%s')\n", out);
     dispatch_reply("APPSTATE", out, sizeof out);
@@ -208,6 +208,112 @@ static void test_dispatch_exact_match(void) {
     CHECK(strcmp(out, "ERR\n") == 0, "RGB with no LED node -> ERR (got '%s')\n", out);
     dispatch_reply("RGB 1 2", out, sizeof out);
     CHECK(strcmp(out, "ERR\n") == 0, "RGB with too few args -> ERR (got '%s')\n", out);
+}
+
+static void test_sysctl_execution_results(void) {
+    char out[128];
+    const struct { const char *line; const char *exec_match; } cases[] = {
+        { "START com.example/.Main", "am start" },
+        { "DENSITY 240", "wm density 240" },
+        { "DENSITY reset", "wm density reset" },
+        { "FONTSCALE 1.15", "settings put system font_scale" },
+        { "FONTSCALE reset", "settings delete system font_scale" },
+        { "GOV performance", "scaling_governor" },
+        { "STOP com.example.app", "am force-stop" },
+        { "DISABLE com.example.app", "pm disable-user" },
+        { "ENABLE com.example.app", "pm enable" },
+        { "OVERLAY com.example.app deny", "appops set" },
+        { "SETHOME com.example/.Home", "set-home-activity" },
+    };
+    for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+        sysexec_stub_reset();
+        dispatch_reply(cases[i].line, out, sizeof out);
+        CHECK(strcmp(out, "OK\n") == 0, "%s succeeds when command succeeds (got '%s')\n", cases[i].line, out);
+        sysexec_stub_fail_run(cases[i].exec_match, 256);
+        dispatch_reply(cases[i].line, out, sizeof out);
+        CHECK(strcmp(out, "ERR\n") == 0, "%s reports command failure (got '%s')\n", cases[i].line, out);
+    }
+
+    // RELOAD is a two-command transaction: either force-stop or relaunch failure makes it fail.
+    sysexec_stub_reset();
+    dispatch_reply("RELOAD com.example.app", out, sizeof out);
+    CHECK(strcmp(out, "OK\n") == 0, "RELOAD succeeds when both commands succeed (got '%s')\n", out);
+    sysexec_stub_fail_run("am force-stop", 256);
+    dispatch_reply("RELOAD com.example.app", out, sizeof out);
+    CHECK(strcmp(out, "ERR\n") == 0, "RELOAD reports force-stop failure (got '%s')\n", out);
+    sysexec_stub_reset();
+    sysexec_stub_fail_run("monkey -p", 256);
+    dispatch_reply("RELOAD com.example.app", out, sizeof out);
+    CHECK(strcmp(out, "ERR\n") == 0, "RELOAD reports relaunch failure (got '%s')\n", out);
+
+    // Read verbs distinguish valid state from a pipe/open/exit failure.
+    sysexec_stub_reset();
+    sysexec_stub_add_popen("wm density", "Physical density: 320\nOverride density: 240\n", 0);
+    dispatch_reply("DENSITY", out, sizeof out);
+    CHECK(strcmp(out, "PHYS=320 OVER=240\n") == 0, "DENSITY reports parsed values (got '%s')\n", out);
+    sysexec_stub_reset();
+    dispatch_reply("DENSITY", out, sizeof out);
+    CHECK(strcmp(out, "ERR\n") == 0, "DENSITY reports pipe-open failure (got '%s')\n", out);
+    sysexec_stub_add_popen("wm density", "Physical density: 320\n", 256);
+    dispatch_reply("DENSITY", out, sizeof out);
+    CHECK(strcmp(out, "ERR\n") == 0, "DENSITY reports command-exit failure (got '%s')\n", out);
+    sysexec_stub_reset();
+    sysexec_stub_add_popen("wm density", "unexpected output\n", 0);
+    dispatch_reply("DENSITY", out, sizeof out);
+    CHECK(strcmp(out, "ERR\n") == 0, "DENSITY reports unparseable output (got '%s')\n", out);
+
+    sysexec_stub_reset();
+    sysexec_stub_add_popen("settings get system font_scale", "1.25\n", 0);
+    dispatch_reply("FONTSCALE", out, sizeof out);
+    CHECK(strcmp(out, "SCALE=1.25\n") == 0, "FONTSCALE reports parsed value (got '%s')\n", out);
+    sysexec_stub_reset();
+    dispatch_reply("FONTSCALE", out, sizeof out);
+    CHECK(strcmp(out, "ERR\n") == 0, "FONTSCALE reports pipe-open failure (got '%s')\n", out);
+    sysexec_stub_add_popen("settings get system font_scale", "1.25\n", 256);
+    dispatch_reply("FONTSCALE", out, sizeof out);
+    CHECK(strcmp(out, "ERR\n") == 0, "FONTSCALE reports command-exit failure (got '%s')\n", out);
+
+    sysexec_stub_reset();
+    sysexec_stub_add_popen("pidof", "", 256);  // pidof exit 1 is the expected no-process result.
+    dispatch_reply("APPSTATE com.example.app", out, sizeof out);
+    CHECK(strcmp(out, "DEAD\n") == 0, "APPSTATE distinguishes pidof exit 1 as DEAD (got '%s')\n", out);
+    sysexec_stub_reset();
+    sysexec_stub_add_popen("pidof", "123\n", 0);
+    sysexec_stub_add_popen("dumpsys window", "mCurrentFocus=Window{ com.example.app/.Main }\n", 0);
+    dispatch_reply("APPSTATE com.example.app", out, sizeof out);
+    CHECK(strcmp(out, "FG\n") == 0, "APPSTATE reports focused live process (got '%s')\n", out);
+    sysexec_stub_reset();
+    sysexec_stub_add_popen("pidof", "123\n", 0);
+    sysexec_stub_add_popen("dumpsys window", "mCurrentFocus=Window{ com.other/.Main }\n", 0);
+    dispatch_reply("APPSTATE com.example.app", out, sizeof out);
+    CHECK(strcmp(out, "BG\n") == 0, "APPSTATE reports background live process (got '%s')\n", out);
+    sysexec_stub_reset();
+    sysexec_stub_add_popen("pidof", "", 512);
+    dispatch_reply("APPSTATE com.example.app", out, sizeof out);
+    CHECK(strcmp(out, "ERR\n") == 0, "APPSTATE reports unexpected pidof failure (got '%s')\n", out);
+    sysexec_stub_reset();
+    sysexec_stub_add_popen("pidof", "123\n", 0);
+    dispatch_reply("APPSTATE com.example.app", out, sizeof out);
+    CHECK(strcmp(out, "ERR\n") == 0, "APPSTATE reports dumpsys pipe-open failure (got '%s')\n", out);
+    sysexec_stub_reset();
+    sysexec_stub_add_popen("pidof", "123\n", 0);
+    sysexec_stub_add_popen("dumpsys window", "mCurrentFocus=Window{ com.other/.Main }\n", 256);
+    dispatch_reply("APPSTATE com.example.app", out, sizeof out);
+    CHECK(strcmp(out, "ERR\n") == 0, "APPSTATE reports dumpsys command failure (got '%s')\n", out);
+
+    // INSTALL already had a two-stage result boundary; pin it to the same injectable seam.
+    const char *install = "INSTALL /data/user/0/io.github.maxlyth.hapaneld/cache/update.apk";
+    sysexec_stub_reset();
+    dispatch_reply(install, out, sizeof out);
+    CHECK(strcmp(out, "OK\n") == 0, "INSTALL succeeds when staging and package install succeed (got '%s')\n", out);
+    sysexec_stub_fail_run("cp '", 256);
+    dispatch_reply(install, out, sizeof out);
+    CHECK(strcmp(out, "ERR\n") == 0, "INSTALL reports staging failure (got '%s')\n", out);
+    sysexec_stub_reset();
+    sysexec_stub_fail_run("pm install", 256);
+    dispatch_reply(install, out, sizeof out);
+    CHECK(strcmp(out, "ERR\n") == 0, "INSTALL reports package-manager failure (got '%s')\n", out);
+    sysexec_stub_reset();
 }
 
 static void test_line_accumulator(void) {
@@ -350,6 +456,7 @@ int main(void) {
     test_clamp();
     test_stat_jiffies();
     test_dispatch_exact_match();
+    test_sysctl_execution_results();
     test_line_accumulator();
     test_ledjni_ioctl();
     test_conn_cap();
