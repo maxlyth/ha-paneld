@@ -38,10 +38,10 @@ class SystemController(
     /** Launch an activity [component] ("pkg/cls") via the privileged path (daemon START, else su). */
     private fun privilegedStart(component: String): Boolean {
         if (!AndroidInput.isComponent(component)) return false
-        // Prefer the daemon, but only trust an explicit OK — an older daemon without the START verb
-        // replies ERR, so fall back to su (covers su-capable panels with a stale daemon).
-        if (daemon.available() && daemon.send("START $component") == "OK") return true
-        return root.run("am start -n $component")
+        return ShortOperationRouter.effect(
+            EffectAttempt(PrivilegeRoute.DAEMON) { daemon.send("START $component") == "OK" },
+            EffectAttempt(PrivilegeRoute.SU) { root.run("am start -n $component") },
+        ) != null
     }
 
     /** True when [pkg] selects ha-paneld's own built-in WebView renderer rather than a foreign app.
@@ -87,17 +87,18 @@ class SystemController(
             return
         }
         if (!AndroidInput.isPackage(pkg)) { Log.w(TAG, "reload: invalid or missing dashboard package"); return }
-        if (daemon.available()) { // daemon force-stops + monkey-relaunches as root (no BAL)
-            daemon.send("RELOAD $pkg")
-            Log.i(TAG, "reload via daemon ($pkg)")
-            return
-        }
-        if (root.run("am force-stop $pkg")) {
-            val comp = env.launchComponent(pkg)
-            if (comp == null || !privilegedStart(comp)) root.run("monkey -p $pkg 1")
-            Log.i(TAG, "reload via su ($pkg)")
-        } else {
-            Log.w(TAG, "reload: neither daemon nor su available")
+        val route = ShortOperationRouter.effect(
+            EffectAttempt(PrivilegeRoute.DAEMON) { daemon.send("RELOAD $pkg") == "OK" },
+            EffectAttempt(PrivilegeRoute.SU) {
+                if (!root.run("am force-stop $pkg")) return@EffectAttempt false
+                val comp = env.launchComponent(pkg)
+                if (comp != null && privilegedStart(comp)) true else root.run("monkey -p $pkg 1")
+            },
+        )
+        when (route) {
+            PrivilegeRoute.DAEMON -> Log.i(TAG, "reload via daemon ($pkg)")
+            PrivilegeRoute.SU -> Log.i(TAG, "reload via su fallback ($pkg)")
+            else -> Log.w(TAG, "reload: helper and su both failed")
         }
     }
 
@@ -162,8 +163,10 @@ class SystemController(
     /** Set the default HOME (launcher) to [component] ("pkg/cls"). Daemon SETHOME, else su. */
     private fun setHomeActivity(component: String): Boolean {
         if (!AndroidInput.isComponent(component)) return false
-        if (daemon.available() && daemon.send("SETHOME $component") == "OK") return true
-        return root.run("cmd package set-home-activity $component")
+        return ShortOperationRouter.effect(
+            EffectAttempt(PrivilegeRoute.DAEMON) { daemon.send("SETHOME $component") == "OK" },
+            EffectAttempt(PrivilegeRoute.SU) { root.run("cmd package set-home-activity $component") },
+        ) != null
     }
 
     /**
@@ -240,28 +243,35 @@ class SystemController(
             else -> AppState.BG
         }
         if (!AndroidInput.isPackage(pkg)) return AppState.UNKNOWN
-        if (daemon.available()) {
-            return when (daemon.send("APPSTATE $pkg")) {
-                "FG" -> AppState.FG
-                "BG" -> AppState.BG
-                "DEAD" -> AppState.DEAD
-                else -> AppState.UNKNOWN
+        return ShortOperationRouter.value(
+            ValueAttempt(PrivilegeRoute.DAEMON) {
+                when (daemon.send("APPSTATE $pkg")) {
+                    "FG" -> AppState.FG
+                    "BG" -> AppState.BG
+                    "DEAD" -> AppState.DEAD
+                    else -> null
+                }
+            },
+            ValueAttempt(PrivilegeRoute.SU) {
+                val pid = root.runOutput("pidof $pkg 2>/dev/null; true") ?: return@ValueAttempt null
+                if (pid.isBlank()) return@ValueAttempt AppState.DEAD
+                val focus = root.runOutput("dumpsys window 2>/dev/null | grep mCurrentFocus")
+                    ?: return@ValueAttempt null
+                if (focus.contains("$pkg/")) AppState.FG else AppState.BG
             }
-        }
-        val pid = root.runOutput("pidof $pkg 2>/dev/null; true") ?: return AppState.UNKNOWN
-        if (pid.isBlank()) return AppState.DEAD
-        val focus = root.runOutput("dumpsys window 2>/dev/null | grep mCurrentFocus") ?: ""
-        return if (focus.contains("$pkg/")) AppState.FG else AppState.BG
+        )?.value ?: AppState.UNKNOWN
     }
 
     fun reboot() {
-        if (daemon.available()) {
-            daemon.send("REBOOT")
-            Log.i(TAG, "reboot via daemon")
-            return
+        val route = ShortOperationRouter.effect(
+            EffectAttempt(PrivilegeRoute.DAEMON) { daemon.send("REBOOT") == "OK" },
+            EffectAttempt(PrivilegeRoute.SU) { root.fireAndForget("reboot") },
+        )
+        when (route) {
+            PrivilegeRoute.DAEMON -> Log.i(TAG, "reboot via daemon")
+            PrivilegeRoute.SU -> Log.i(TAG, "reboot via su fallback")
+            else -> Log.w(TAG, "reboot: helper and su both unavailable")
         }
-        Log.i(TAG, "reboot via su")
-        root.fireAndForget("reboot")
     }
 
     companion object {

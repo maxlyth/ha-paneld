@@ -47,7 +47,7 @@ class SystemControllerTest {
 
     // ---------- reboot ----------
     @Test fun rebootPrefersDaemon() {
-        val (c, root, d) = sc(FakeSystemEnv(), daemon = emptyMap())
+        val (c, root, d) = sc(FakeSystemEnv(), daemon = mapOf("REBOOT" to "OK"))
         c.reboot()
         assertTrue("daemon REBOOT sent", d.sent.contains("REBOOT"))
         assertTrue("no su when daemon present", root.ran.isEmpty())
@@ -57,6 +57,13 @@ class SystemControllerTest {
         val (c, root, _) = sc(FakeSystemEnv(), daemon = null)
         c.reboot()
         assertTrue("su reboot fired, got ${root.ran}", root.ran.contains("reboot"))
+    }
+
+    @Test fun rebootFallsToSuWhenDaemonRejectsVerb() {
+        val (c, root, d) = sc(FakeSystemEnv(), daemon = mapOf("REBOOT" to "ERR"))
+        c.reboot()
+        assertEquals(listOf("REBOOT"), d.sent)
+        assertTrue("stale helper falls through to su", root.ran.contains("reboot"))
     }
 
     // ---------- resolveDashboard / dashboardState ----------
@@ -72,11 +79,24 @@ class SystemControllerTest {
     }
 
     @Test fun dashboardStateDaemonRepliesMapped() {
-        fun state(reply: String) = sc(FakeSystemEnv(installed = setOf(MIN)), daemon = mapOf("APPSTATE $MIN" to reply)).first.dashboardState(MIN)
+        fun state(reply: String) = sc(
+            FakeSystemEnv(installed = setOf(MIN)),
+            daemon = mapOf("APPSTATE $MIN" to reply),
+            suOut = emptyMap(),
+        ).first.dashboardState(MIN)
         assertEquals(AppState.FG, state("FG"))
         assertEquals(AppState.BG, state("BG"))
         assertEquals(AppState.DEAD, state("DEAD"))
-        assertEquals("unknown reply → UNKNOWN", AppState.UNKNOWN, state("ERR"))
+        assertEquals("unknown reply and no su result → UNKNOWN", AppState.UNKNOWN, state("ERR"))
+    }
+
+    @Test fun dashboardStateFallsToSuWhenDaemonProbeFails() {
+        val out = mapOf("pidof" to "1234", "dumpsys window" to "mCurrentFocus=Window{$MIN/$MIN.WebViewActivity}")
+        val (c, root, d) = sc(FakeSystemEnv(installed = setOf(MIN)), daemon = mapOf("APPSTATE $MIN" to "ERR"), suOut = out)
+        assertEquals(AppState.FG, c.dashboardState(MIN))
+        assertEquals(listOf("APPSTATE $MIN"), d.sent)
+        assertTrue(root.outputRan.any { it.startsWith("pidof $MIN") })
+        assertTrue(root.outputRan.any { it.startsWith("dumpsys window") })
     }
 
     @Test fun dashboardStateViaSuPidofAndFocus() {
@@ -86,14 +106,25 @@ class SystemControllerTest {
         assertEquals(AppState.BG, state(mapOf("pidof" to "1234", "dumpsys window" to "mCurrentFocus=Window{com.android.launcher/X}")))
         assertEquals(AppState.DEAD, state(mapOf("pidof" to "")))
         assertEquals("no su output → UNKNOWN", AppState.UNKNOWN, state(emptyMap()))
+        assertEquals("live pid but failed focus probe → UNKNOWN", AppState.UNKNOWN, state(mapOf("pidof" to "1234")))
     }
 
     // ---------- reloadDashboard ----------
     @Test fun reloadPrefersDaemon() {
-        val (c, root, d) = sc(FakeSystemEnv(installed = setOf(MIN)), daemon = emptyMap())
+        val (c, root, d) = sc(FakeSystemEnv(installed = setOf(MIN)), daemon = mapOf("RELOAD $MIN" to "OK"))
         c.reloadDashboard(MIN)
         assertTrue("daemon RELOAD sent", d.sent.contains("RELOAD $MIN"))
         assertTrue("no su when daemon present", root.ran.isEmpty())
+    }
+
+    @Test fun reloadFallsToSuWhenDaemonRejectsVerb() {
+        val env = FakeSystemEnv(installed = setOf(MIN), launchers = mapOf(MIN to "$MIN/.Main"))
+        val replies = mapOf("RELOAD $MIN" to "ERR", "START $MIN/.Main" to "ERR")
+        val (c, root, d) = sc(env, daemon = replies, su = true)
+        c.reloadDashboard(MIN)
+        assertEquals(listOf("RELOAD $MIN", "START $MIN/.Main"), d.sent)
+        assertTrue(root.ran.contains("am force-stop $MIN"))
+        assertTrue(root.ran.contains("am start -n $MIN/.Main"))
     }
 
     @Test fun reloadViaSuForceStopThenPrivilegedStart() {
@@ -199,6 +230,13 @@ class SystemControllerTest {
         assertTrue("no su when daemon START ok", root.ran.isEmpty())
     }
 
+    @Test fun launcherFallsToSuWhenDaemonStartRejected() {
+        val (c, root, d) = sc(launcherEnv(VENDOR, VENDOR), daemon = mapOf("START $VENDOR/L" to "ERR"))
+        c.launchLauncher("")
+        assertEquals(listOf("START $VENDOR/L"), d.sent)
+        assertTrue("stale START falls through to su", root.ran.contains("am start -n $VENDOR/L"))
+    }
+
     @Test fun launcherFallsToDirectStartWhenPrivilegedFails() {
         val env = launcherEnv(VENDOR, VENDOR)
         val (c, _, _) = sc(env, daemon = null, su = false) // no daemon, su run fails
@@ -255,6 +293,14 @@ class SystemControllerTest {
         val (c, _, d) = sc(env, daemon = mapOf("SETHOME $MIN/Home" to "OK"))
         c.ensureDashboardHome(MIN)
         assertTrue("reclaim from ourselves via daemon SETHOME", d.sent.contains("SETHOME $MIN/Home"))
+    }
+
+    @Test fun ensureHomeFallsToSuWhenDaemonSetHomeRejected() {
+        val env = FakeSystemEnv(installed = setOf(MIN), homes = listOf(ActivityRef(MIN, "Home")), default = ActivityRef(OWN, ".AdminLauncherActivity"))
+        val (c, root, d) = sc(env, daemon = mapOf("SETHOME $MIN/Home" to "ERR"))
+        c.ensureDashboardHome(MIN)
+        assertEquals(listOf("SETHOME $MIN/Home"), d.sent)
+        assertTrue("stale SETHOME falls through to su", root.ran.contains("cmd package set-home-activity $MIN/Home"))
     }
 
     @Test fun ensureHomeNoopWhenTargetHasNoHomeActivity() {

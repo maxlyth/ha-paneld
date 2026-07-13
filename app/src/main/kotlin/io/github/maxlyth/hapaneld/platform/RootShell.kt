@@ -18,6 +18,7 @@ interface RootShell {
     /** Run [cmd] as root and return its raw stdout bytes (e.g. a screenshot), or null. */
     fun runBytes(cmd: String): ByteArray?
 
-    /** Fire [cmd] as root without waiting (for commands like `reboot` that kill the process). */
-    fun fireAndForget(cmd: String)
+    /** Submit [cmd] as root without waiting (for commands like `reboot` that kill the process).
+     *  Returns true only when a root process was successfully started. */
+    fun fireAndForget(cmd: String): Boolean
 }

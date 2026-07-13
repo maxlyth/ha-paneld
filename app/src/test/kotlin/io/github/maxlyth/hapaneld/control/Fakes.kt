@@ -51,12 +51,15 @@ class FakeRootShell(
     private val runResult: Boolean = true,
 ) : RootShell {
     val ran = mutableListOf<String>()
+    val outputRan = mutableListOf<String>()
     override fun available() = available
     override fun run(cmd: String): Boolean { ran += cmd; return runResult }
-    override fun runOutput(cmd: String): String? =
-        outputs.entries.sortedByDescending { it.key.length }.firstOrNull { cmd.contains(it.key) }?.value
+    override fun runOutput(cmd: String): String? {
+        outputRan += cmd
+        return outputs.entries.sortedByDescending { it.key.length }.firstOrNull { cmd.contains(it.key) }?.value
+    }
     override fun runBytes(cmd: String): ByteArray? = null
-    override fun fireAndForget(cmd: String) { ran += cmd }
+    override fun fireAndForget(cmd: String): Boolean { ran += cmd; return runResult }
 }
 
 /** Fake [MetricSource] for controllers that read through [io.github.maxlyth.hapaneld.metrics.PanelMetrics]

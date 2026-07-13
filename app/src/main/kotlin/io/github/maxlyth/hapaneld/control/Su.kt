@@ -73,16 +73,17 @@ object Su : RootShell {
 
     /** Fire [cmd] as root without waiting (for commands like `reboot` that kill the process). Always a
      *  one-shot — never sent into the shared persistent shell (it would take the shell down with it). */
-    override fun fireAndForget(cmd: String) {
+    override fun fireAndForget(cmd: String): Boolean {
         val forms = if (form in 0..1) intArrayOf(form) else intArrayOf(0, 1)
         for (f in forms) {
             try {
                 Runtime.getRuntime().exec(argvOneShot(f, cmd))
-                return
+                return true
             } catch (e: Exception) {
                 Log.d(TAG, "su fire form $f failed", e)
             }
         }
+        return false
     }
 
     /** Run [cmd] as root and return its raw stdout **bytes** (one-shot — the persistent shell's sentinel
