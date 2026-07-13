@@ -24,6 +24,7 @@ content appear. Earlier releases predate this convention and keep their flat lis
 
 ### Changed
 
+- **Installer-first release downloads** — GitHub releases now lead with a release-pinned installer that provisions and verifies the panel, while the APK is clearly labelled as a manual-setup asset. This makes the supported installation path visible before users reach for a bare `adb install`, without removing on-device sideloading.
 - **Panel state converges through one observed-state authority** — screen power, brightness, volume, relays, LEDs, proximity and other locally controlled state now share a bounded, acknowledgement-aware publication path. Changes made on the panel or by another process converge back to Home Assistant without parallel publishers racing or manufacturing values for state that has not yet been observed.
 
 ### Fixed

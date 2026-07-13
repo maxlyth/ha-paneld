@@ -67,11 +67,28 @@ jobs:
         run: |
           mkdir -p dist
           if [ -f app/build/outputs/apk/release/ha-paneld-release-signed.apk ]; then
-            cp app/build/outputs/apk/release/ha-paneld-release-signed.apk "dist/ha-paneld-${GITHUB_REF_NAME}.apk"
+            apk_name="ha-paneld-${GITHUB_REF_NAME}-manual-setup-required.apk"
+            cp app/build/outputs/apk/release/ha-paneld-release-signed.apk "dist/$apk_name"
           else
             echo "::warning::No signing secrets set — publishing the debug-signed APK."
-            cp app/build/outputs/apk/debug/*.apk "dist/ha-paneld-${GITHUB_REF_NAME}-debug.apk"
+            apk_name="ha-paneld-${GITHUB_REF_NAME}-manual-setup-required-debug.apk"
+            cp app/build/outputs/apk/debug/*.apk "dist/$apk_name"
           fi
+          echo "apk_name=$apk_name" >> "$GITHUB_OUTPUT"
+
+      - name: Build release-pinned installer asset
+        env:
+          APK_NAME: ${{ steps.asset.outputs.apk_name }}
+        run: |
+          installer="dist/ha-paneld-installer-${GITHUB_REF_NAME}.sh"
+          sed \
+            -e "s|^RELEASE_TAG=.*|RELEASE_TAG=\"$GITHUB_REF_NAME\"|" \
+            -e "s|^RELEASE_APK_NAME=.*|RELEASE_APK_NAME=\"$APK_NAME\"|" \
+            scripts/install.sh > "$installer"
+          chmod +x "$installer"
+          bash -n "$installer"
+          grep -Fq "RELEASE_TAG=\"$GITHUB_REF_NAME\"" "$installer"
+          grep -Fq "RELEASE_APK_NAME=\"$APK_NAME\"" "$installer"
 
       # Human-readable notes come from the matching CHANGELOG.md section; the auto-generated commit
       # list is appended below them by generate_release_notes. Keep CHANGELOG.md updated per release.
@@ -82,6 +99,8 @@ jobs:
       # Each RC must have its own CHANGELOG section describing only what changed since
       # the previous RC — repeating the prior section causes identical release notes.
       - name: Extract release notes from CHANGELOG
+        env:
+          APK_NAME: ${{ steps.asset.outputs.apk_name }}
         run: |
           tag="$GITHUB_REF_NAME"
           base="${tag%%-*}"     # v0.8.4-rc3 → v0.8.4 (used only as fallback for stable)
@@ -102,12 +121,29 @@ jobs:
             echo "::warning::No CHANGELOG.md section for $tag — add one for human-readable notes."
             echo "_No changelog entry for $GITHUB_REF_NAME._" > release-body.md
           fi
+          changelog_body="$(mktemp)"
+          mv release-body.md "$changelog_body"
+          cat > release-body.md <<EOF
+          ## Recommended installation
+
+          **Do not use \`adb install\` directly.** It installs the APK but does not complete ha-paneld's permissions, startup, configuration, and verification.
+
+          From macOS, Linux, Git Bash, or WSL, run:
+
+          \`\`\`sh
+          curl -fsSL https://github.com/maxlyth/ha-paneld/releases/download/$GITHUB_REF_NAME/ha-paneld-installer-$GITHUB_REF_NAME.sh | bash
+          \`\`\`
+
+          The \`$APK_NAME\` asset is for manual or on-device sideloading. After installing it, open ha-paneld and complete the on-panel setup.
+
+          EOF
+          cat "$changelog_body" >> release-body.md
           echo "----- release body -----"; cat release-body.md
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*.apk
+          files: dist/*
           body_path: release-body.md
           generate_release_notes: true
           # Tags with a suffix (e.g. v0.5.0-rc1) publish as pre-releases.

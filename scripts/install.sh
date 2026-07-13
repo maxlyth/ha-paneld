@@ -8,7 +8,12 @@
 #
 # Preflights adb + curl (with per-OS fix-it hints), prompts for the panel IP (and optional id / MQTT
 # broker), downloads the release, and provisions the panel. No parameters required (except --prerelease).
+# The release workflow fills RELEASE_TAG and RELEASE_APK_NAME in its downloadable copy so an installer
+# attached to a historical release always installs that exact release using its matching provisioner.
 set -euo pipefail
+
+RELEASE_TAG=""
+RELEASE_APK_NAME=""
 
 # Only flag: --prerelease selects the newest release-candidate instead of the latest stable.
 CHANNEL_ARG="--latest"
@@ -20,9 +25,16 @@ esac; done
 if [ -t 1 ]; then B=$'\033[1m'; R=$'\033[31m'; G=$'\033[32m'; Y=$'\033[33m'; X=$'\033[0m'
 else B=; R=; G=; Y=; X=; fi
 REPO="maxlyth/ha-paneld"
-PROVISION_URL="https://raw.githubusercontent.com/$REPO/main/scripts/provision.sh"
+PROVISION_REF="${RELEASE_TAG:-main}"
+PROVISION_URL="https://raw.githubusercontent.com/$REPO/$PROVISION_REF/scripts/provision.sh"
 
-if [ "$CHANNEL_ARG" = "--prerelease" ]; then echo "${B}ha-paneld installer${X} ${Y}· pre-release channel${X}"; else echo "${B}ha-paneld installer${X}"; fi
+if [ -n "$RELEASE_TAG" ]; then
+  echo "${B}ha-paneld installer${X} ${Y}· $RELEASE_TAG${X}"
+elif [ "$CHANNEL_ARG" = "--prerelease" ]; then
+  echo "${B}ha-paneld installer${X} ${Y}· pre-release channel${X}"
+else
+  echo "${B}ha-paneld installer${X}"
+fi
 
 # --- preflight: required tools, with actionable install hints ---
 miss=0
@@ -55,11 +67,19 @@ case "$IP" in *:*) TARGET="$IP" ;; *) TARGET="$IP:5555" ;; esac
 printf "Panel id [blank = auto from device name]: " > "$TTY"; read -r PID < "$TTY" || PID=""
 printf "MQTT broker tcp://host:1883 [blank = auto-discover Home Assistant]: " > "$TTY"; read -r BROKER < "$TTY" || BROKER=""
 
-# --- fetch provision.sh and run it (channel arg pulls the newest signed release / prerelease APK) ---
+# --- fetch provision.sh and run it (release assets are pinned; the main script follows its channel) ---
 echo "${B}→ provisioning $TARGET${X}"
-SCRIPT="$(mktemp)"; trap 'rm -f "$SCRIPT"' EXIT
+TMP_DIR="$(mktemp -d)"; trap 'rm -rf "$TMP_DIR"' EXIT
+SCRIPT="$TMP_DIR/provision.sh"
 curl -fsSL "$PROVISION_URL" -o "$SCRIPT"
-ARGS=("$TARGET" "$CHANNEL_ARG")
+if [ -n "$RELEASE_TAG" ]; then
+  [ -n "$RELEASE_APK_NAME" ] || { echo "${R}Release installer is missing its APK name.${X}"; exit 1; }
+  APK="$TMP_DIR/$RELEASE_APK_NAME"
+  curl -fsSL "https://github.com/$REPO/releases/download/$RELEASE_TAG/$RELEASE_APK_NAME" -o "$APK"
+  ARGS=("$TARGET" --apk "$APK")
+else
+  ARGS=("$TARGET" "$CHANNEL_ARG")
+fi
 [ -n "${PID:-}" ]    && ARGS+=(--id "$PID")
 [ -n "${BROKER:-}" ] && ARGS+=(--mqtt "$BROKER")
 # Give provision.sh the terminal as stdin so its own prompts (e.g. downgrade confirm) work.
