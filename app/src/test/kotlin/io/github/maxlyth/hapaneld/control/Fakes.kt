@@ -117,11 +117,19 @@ class FakeScreenPower(var interactive: Boolean = true) : ScreenPower {
  * Fake [WakeTap]: [canArm] is settable (models overlay-permission held/not); records arm/disarm and
  * captures the arm callback so a test can [fireTap] to simulate a touch on the dark screen.
  */
-class FakeWakeTap(var canArm: Boolean = true) : io.github.maxlyth.hapaneld.platform.WakeTap {
+class FakeWakeTap(
+    var canArm: Boolean = true,
+    var armSucceeds: Boolean = true,
+) : io.github.maxlyth.hapaneld.platform.WakeTap {
     var armed = false
     private var onTap: (() -> Unit)? = null
     override fun canArm() = canArm
-    override fun arm(onTap: () -> Unit) { armed = true; this.onTap = onTap }
+    override fun arm(onTap: () -> Unit): Boolean {
+        if (!canArm || !armSucceeds) return false
+        armed = true
+        this.onTap = onTap
+        return true
+    }
     override fun disarm() { armed = false; onTap = null }
     /** Simulate a tap while armed — invokes the wake callback ScreenController registered. */
     fun fireTap() { onTap?.invoke() }

@@ -32,59 +32,80 @@ class AutoBrightnessController(
     private val brightness: BrightnessController,
     private val config: Config,
 ) {
-    private val lock = Any()
-    private var smoothed = -1f   // EMA of lux; <0 = uninitialised (snap on first sample)
-    private var applied = -1     // last brightness we set (deadband reference)
+    private val engine = AutoBrightnessEngine()
 
     /** Feed one lux sample (ALS or HA-fed). Drives the backlight only when enabled + writable; always
      *  records to [SensorTrace] (raw lux always; smoothed/target/applied when the engine is active). */
     fun submitLux(lux: Float) {
-        if (lux.isNaN() || lux < 0f) return
-        var sm: Float? = null   // engine internals for the trace; null when the engine is idle
-        var tgt: Int? = null
-        var app: Int? = null
-        if (!config.autoBrightness) {
-            synchronized(lock) { smoothed = -1f; applied = -1 }  // reset so re-enable snaps cleanly
-        } else if (brightness.canWrite()) {
-            var toSet = -1
-            synchronized(lock) {
-                if (smoothed < 0f) {
-                    smoothed = lux                   // first sample after enable → snap, don't ramp
-                } else {
-                    // Ratio of change (perception is logarithmic): a big ratio = a real step (lights on)
-                    // → fast attack; a small ratio = drift/noise → heavy smoothing.
-                    val hi = max(lux, smoothed)
-                    val lo = max(min(lux, smoothed), 1f)
-                    val alpha = if (hi / lo >= FAST_RATIO) FAST_ALPHA else SLOW_ALPHA
-                    smoothed += alpha * (lux - smoothed)
-                }
-                val t = curve(smoothed)
-                sm = smoothed; tgt = t
-                if (applied < 0 || abs(t - applied) >= DEADBAND) { applied = t; toSet = t } // deadband
-                app = applied
-            }
-            if (toSet >= 0) {
-                brightness.setBrightness(toSet)
-                Log.d(TAG, "lux≈${sm?.roundToInt()} -> brightness $toSet (bias ${config.brightnessBias})")
-            }
+        val enabled = config.autoBrightness
+        val sample = engine.submit(
+            lux = lux,
+            enabled = enabled,
+            writable = enabled && brightness.canWrite(),
+            bias = config.brightnessBias,
+        ) ?: return
+        sample.toSet?.let {
+            brightness.setBrightness(it)
+            Log.d(TAG, "lux≈${sample.smoothed?.roundToInt()} -> brightness $it (bias ${config.brightnessBias})")
         }
-        SensorTrace.recordLux(lux, sm, tgt, app)
-    }
-
-    /** Perceptual lux→brightness: log curve from [MIN_BRIGHT]..255 over 0..[REF_LUX], shifted by bias. */
-    private fun curve(lux: Float): Int {
-        val frac = (ln(lux + 1f) / ln(REF_LUX + 1f)).coerceIn(0f, 1f)
-        val base = MIN_BRIGHT + frac * (255 - MIN_BRIGHT)
-        return (base + config.brightnessBias).roundToInt().coerceIn(MIN_BRIGHT, 255)
+        SensorTrace.recordLux(lux, sample.smoothed, sample.target, sample.applied)
     }
 
     companion object {
         private const val TAG = "ha-paneld/autobright"
+    }
+}
+
+/** Pure, serialized auto-brightness policy; Android/config access stays in [AutoBrightnessController]. */
+internal class AutoBrightnessEngine {
+    private var smoothed = -1f   // EMA of lux; <0 = uninitialised (snap on first sample)
+    private var applied = -1     // last brightness command (deadband reference)
+
+    @Synchronized
+    fun submit(lux: Float, enabled: Boolean, writable: Boolean, bias: Int): AutoBrightnessSample? {
+        if (!lux.isFinite() || lux < 0f) return null
+        if (!enabled) {
+            smoothed = -1f
+            applied = -1
+            return AutoBrightnessSample()
+        }
+        if (!writable) return AutoBrightnessSample()
+
+        if (smoothed < 0f) {
+            smoothed = lux
+        } else {
+            // Ratio of change (perception is logarithmic): a big ratio = a real step (lights on)
+            // → fast attack; a small ratio = drift/noise → heavy smoothing.
+            val hi = max(lux, smoothed)
+            val lo = max(min(lux, smoothed), 1f)
+            val alpha = if (hi / lo >= FAST_RATIO) FAST_ALPHA else SLOW_ALPHA
+            smoothed += alpha * (lux - smoothed)
+        }
+        val target = curve(smoothed, bias)
+        val toSet = if (applied < 0 || abs(target - applied) >= DEADBAND) target else null
+        if (toSet != null) applied = toSet
+        return AutoBrightnessSample(smoothed, target, applied, toSet)
+    }
+
+    /** Perceptual lux→brightness: log curve over 0..[REF_LUX], shifted by bias. */
+    private fun curve(lux: Float, bias: Int): Int {
+        val frac = (ln(lux + 1f) / ln(REF_LUX + 1f)).coerceIn(0f, 1f)
+        val base = BrightnessController.MIN_VISIBLE + frac * (255 - BrightnessController.MIN_VISIBLE)
+        return (base + bias).roundToInt().coerceIn(BrightnessController.MIN_VISIBLE, 255)
+    }
+
+    companion object {
         private const val FAST_RATIO = 2.0f   // ≥2× change vs the running average → lights-on style step
         private const val FAST_ALPHA = 0.6f   // fast attack on big steps (snappy)
         private const val SLOW_ALPHA = 0.05f  // heavy smoothing on drift / sensor noise (calm)
         private const val DEADBAND = 4        // ignore <4/255 target moves (flicker guard)
-        private const val MIN_BRIGHT = 8      // never auto-dim fully dark — keep a readable floor
         private const val REF_LUX = 1000f     // lux at which the curve reaches full brightness
     }
 }
+
+internal data class AutoBrightnessSample(
+    val smoothed: Float? = null,
+    val target: Int? = null,
+    val applied: Int? = null,
+    val toSet: Int? = null,
+)

@@ -9,7 +9,7 @@ import io.github.maxlyth.hapaneld.platform.WakeTap
 import io.github.maxlyth.hapaneld.util.HelperClient
 
 /**
- * Screen on/off — vendor-free and **lock-free**.
+ * Screen on/off — vendor-free with one serialized transition owner.
  *
  * Tiers (first that works wins), all leaving the device Awake — no keyguard, no PIN on wake:
  *  1. Root helper daemon — powers the backlight via `bl_power` (sysfs-LED panels, e.g. TPA10).
@@ -23,9 +23,9 @@ import io.github.maxlyth.hapaneld.util.HelperClient
  *
  * Never-blank guarantee: a screen-off must ALWAYS be locally wakeable. Every real off arms a [WakeTap]
  * (a non-consuming touch overlay) so a tap re-lights the panel. If a wake can't be guaranteed
- * ([WakeTap.canArm] is false — no overlay permission), the off degrades to a visible dim rather than a
- * true dark, so the panel can never look bricked (the failure mode that stranded a freshly-provisioned
- * panel dark + touch-dead).
+ * ([WakeTap.arm] cannot confirm attachment), the off degrades to a visible dim rather than a true dark,
+ * so the panel can never look bricked (the failure mode that stranded a freshly-provisioned panel dark
+ * + touch-dead).
  */
 class ScreenController(
     private val backlight: Backlight,
@@ -75,6 +75,7 @@ class ScreenController(
         if (level > 0) savedLevel = level.coerceIn(1, 255)
     }
 
+    @Synchronized
     fun sleep() {
         intendedOff = true
         // Never go fully dark without a guaranteed way back. If touch-to-wake can't be armed (no overlay
@@ -83,7 +84,7 @@ class ScreenController(
         // dim instead: still legible + tappable, and HA/proximity can still restore full brightness. This
         // path leaves the screen VISIBLE, so the built-in renderer must NOT be frozen here (a frozen
         // WebView on a still-lit dashboard would show stale, un-tappable cards).
-        if (!wakeTap.canArm()) {
+        if (!wakeTap.canArm() || !wakeTap.arm { wake(); onWakeByTap?.invoke() }) {
             val cur = backlight.getBrightness()
             if (cur > 0) savedLevel = cur
             backlight.setBrightness(NO_WAKE_DIM)
@@ -94,7 +95,6 @@ class ScreenController(
         // bl_power paths below take the panel *truly* dark — freeze the WebView there (no point rendering
         // behind a black backlight). The brightness fallback (0) is not guaranteed dark on panels that
         // clamp a minimum, so it does NOT freeze (correctness over the CPU saving on those rare panels).
-        wakeTap.arm { wake(); onWakeByTap?.invoke() }
         if (daemon.send("SCREEN OFF") == "OK") {
             BuiltinDashboard.onScreenAwake(false)
             Log.d(TAG, "screen -> off (daemon bl_power)")
@@ -113,6 +113,7 @@ class ScreenController(
         Log.d(TAG, "screen -> off (brightness fallback; saved=$savedLevel)")
     }
 
+    @Synchronized
     fun wake() {
         intendedOff = false
         // Resume the built-in renderer's WebView (no-op if it isn't the dashboard).
@@ -131,6 +132,13 @@ class ScreenController(
         backlight.setBrightness(savedLevel.coerceAtLeast(MIN_ON))
         power.pulseWake()
         Log.d(TAG, "screen -> on (brightness fallback; $savedLevel)")
+    }
+
+    /** Release the wake-overlay owner without ever leaving an intentionally dark panel behind. */
+    @Synchronized
+    fun close() {
+        onWakeByTap = null
+        if (intendedOff) wake() else wakeTap.disarm()
     }
 
     // Write FB_BLANK to the first backlight device's bl_power (0=on, 4=off). Fails (exit!=0, so the

@@ -169,7 +169,7 @@ class BrightnessController(
 
     companion object {
         private const val TAG = "ha-paneld/brightness"
-        private const val MIN_VISIBLE = 10 // setBrightness floor: a dim command must never blank the panel
+        internal const val MIN_VISIBLE = 10 // shared command floor: a dim command must never blank the panel
         private const val EFFECTIVE_TTL_MS = 5_000L // effective-backlight read cache (UI polls + reconcile ticks)
         private const val NEVER = Int.MAX_VALUE // ~24.8 days; the conventional "never auto-off" sentinel
     }

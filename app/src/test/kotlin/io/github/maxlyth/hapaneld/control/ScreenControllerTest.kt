@@ -1,9 +1,14 @@
 package io.github.maxlyth.hapaneld.control
 
+import io.github.maxlyth.hapaneld.platform.Daemon
+import io.github.maxlyth.hapaneld.platform.DaemonLongResult
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.Collections
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 /**
  * ScreenController's never-blank logic — the top invariant — over the seamed collaborators (Backlight,
@@ -155,5 +160,74 @@ class ScreenControllerTest {
         assertTrue("must NOT power the backlight off via daemon/su", root.ran.isEmpty())
         assertFalse("must not arm a tap it can't arm", wakeTap.armed)
         assertTrue("still an intended off", sc.isIntendedOff())
+    }
+
+    @Test fun sleepDimsWhenWakeWatcherCannotConfirmAttachment() {
+        wakeTap.armSucceeds = false
+        val daemon = FakeDaemon(mapOf("SCREEN OFF" to "OK"))
+        val root = FakeRootShell(runResult = true)
+        val sc = ScreenController(backlight, power, root, daemon, wakeTap)
+
+        sc.sleep()
+
+        assertEquals(listOf("set:10"), backlight.calls)
+        assertTrue("an unacknowledged watcher must block daemon screen-off", daemon.sent.isEmpty())
+        assertTrue("an unacknowledged watcher must block su screen-off", root.ran.isEmpty())
+        assertFalse(wakeTap.armed)
+    }
+
+    @Test fun closeRestoresAnIntentionallyDarkScreenBeforeReleasingWakeTap() {
+        val (sc, _) = controller(daemon = mapOf("SCREEN OFF" to "OK", "SCREEN ON" to "OK"))
+        sc.sleep()
+        assertTrue(wakeTap.armed)
+
+        sc.close()
+
+        assertFalse(sc.isIntendedOff())
+        assertFalse(wakeTap.armed)
+        assertEquals(1, power.pulses)
+    }
+
+    @Test fun concurrentWakeWaitsForTheInFlightSleepTransition() {
+        val daemon = BlockingScreenDaemon()
+        val sc = ScreenController(backlight, power, FakeRootShell(), daemon, wakeTap)
+        val sleep = Thread({ sc.sleep() }, "test-screen-sleep").apply { start() }
+        assertTrue(daemon.offEntered.await(1, TimeUnit.SECONDS))
+        val wakeStarted = CountDownLatch(1)
+        val wake = Thread({ wakeStarted.countDown(); sc.wake() }, "test-screen-wake").apply { start() }
+        assertTrue(wakeStarted.await(1, TimeUnit.SECONDS))
+
+        assertFalse("wake actuator must not overlap the blocked off actuator", daemon.onEntered.await(100, TimeUnit.MILLISECONDS))
+        daemon.releaseOff.countDown()
+        sleep.join(1_000)
+        wake.join(1_000)
+
+        assertFalse(sleep.isAlive)
+        assertFalse(wake.isAlive)
+        assertEquals(listOf("SCREEN OFF", "SCREEN ON"), daemon.sent.toList())
+        assertFalse(sc.isIntendedOff())
+    }
+
+    private class BlockingScreenDaemon : Daemon {
+        val sent = Collections.synchronizedList(mutableListOf<String>())
+        val offEntered = CountDownLatch(1)
+        val onEntered = CountDownLatch(1)
+        val releaseOff = CountDownLatch(1)
+
+        override fun available() = true
+
+        override fun send(cmd: String): String? {
+            sent += cmd
+            if (cmd == "SCREEN OFF") {
+                offEntered.countDown()
+                assertTrue(releaseOff.await(1, TimeUnit.SECONDS))
+            } else if (cmd == "SCREEN ON") {
+                onEntered.countDown()
+            }
+            return "OK"
+        }
+
+        override fun sendLong(cmd: String, timeoutMs: Long): DaemonLongResult = DaemonLongResult.NotSubmitted
+        override fun sendBytes(cmd: String): ByteArray? = null
     }
 }

@@ -909,6 +909,7 @@ class PaneldService : Service() {
             if (!audioStopped) Log.w(TAG, "audio cleanup exceeded ${AUDIO_SHUTDOWN_MS}ms")
             cancelKioskReassert()
             runCatching { EvdevButtonClient.stop() }
+            runCatching { screen.close() }        // remove wake overlay only after restoring a deliberate dark screen
             runCatching { power.apply(false) }   // release the wakelock so we don't leak it on teardown
             runCatching { navbar.cleanup() }
             runCatching { watchdog.stop() }

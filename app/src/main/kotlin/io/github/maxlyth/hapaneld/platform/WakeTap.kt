@@ -16,8 +16,12 @@ interface WakeTap {
      */
     fun canArm(): Boolean
 
-    /** Start watching; [onTap] fires on the first tap while armed (may run on any thread). Idempotent. */
-    fun arm(onTap: () -> Unit)
+    /**
+     * Start watching; [onTap] fires on the first tap while armed (may run on any thread). Returns only
+     * after the watcher is installed, and returns false when installation cannot be confirmed. A caller
+     * must not make the display dark unless this returns true.
+     */
+    fun arm(onTap: () -> Unit): Boolean
 
     /** Stop watching. Safe to call when not armed. */
     fun disarm()
@@ -27,6 +31,6 @@ interface WakeTap {
  *  safely (dim-instead-of-dark) rather than silently stranding the panel. */
 object NoWakeTap : WakeTap {
     override fun canArm() = false
-    override fun arm(onTap: () -> Unit) {}
+    override fun arm(onTap: () -> Unit) = false
     override fun disarm() {}
 }
