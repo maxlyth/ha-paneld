@@ -10,9 +10,9 @@ import kotlin.math.abs
  *
  * Why in-activity instead of the [NavbarController] overlay strip: on the built-in renderer that strip
  * is a full-width bottom [android.view.WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY] that
- * *consumes every touch* in its band and re-injects non-swipe taps via a laggy root `su input tap`
- * (dropping any tap that drifts, and everything on a no-root panel) — so the dashboard's bottom band was
- * tap-dead. This detector instead lets taps and scrolls through untouched and steals only a genuine
+ * *consumes every touch* in its band and must re-inject non-swipe taps out-of-process — so the
+ * dashboard's bottom band was tap-dead or laggy. This detector instead lets taps and scrolls through
+ * untouched and steals only a genuine
  * upward edge-swipe.
  *
  * The gesture qualifies only if the DOWN lands within [bandPx] of the bottom edge (the same 48dp the

@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">ha-paneld</string>
-    <string name="a11y_description">Reports panel hardware-button presses to Home Assistant as button events. Captures key events only; does not read screen content.</string>
+    <string name="a11y_description">Reports panel hardware-button presses to Home Assistant and enables tap injection from the panel control UI. Does not read screen content.</string>
 </resources>

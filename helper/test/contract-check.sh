@@ -10,7 +10,8 @@
 # request->reply unit tests (helper/test/unit.c).
 #
 # App send sites covered:
-#   - HelperClient.send / sendBytes / sendLong("VERB …")   (the primary daemon client)
+#   - HelperClient.send / sendBytes / sendLong("VERB …") and injected Daemon equivalents
+#   - HelperClient's own send("VERB …") calls (notably the PING availability probe)
 #   - TameController.privileged("VERB …")                  (STOP/DISABLE/ENABLE/OVERLAY)
 #   - EvdevButtonClient's socket out.write("VERB …")       (WATCH/SUBSCRIBE)
 set -euo pipefail
@@ -18,11 +19,12 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 APP="$ROOT/app/src/main/kotlin"
 DISPATCH="$ROOT/helper/src/dispatch.c"
 
-daemon=$(grep -oE '\{ +"[A-Z_]+"' "$DISPATCH" | grep -oE '[A-Z_]+' | sort -u)
+daemon=$(grep -oE '\{ +"[A-Z][A-Z0-9_]*"' "$DISPATCH" | grep -oE '[A-Z][A-Z0-9_]*' | sort -u)
 
-app_helper=$(grep -rhoE '(HelperClient\.(send|sendBytes|sendLong)|privileged)\("[A-Z_]+' "$APP" | grep -oE '"[A-Z_]+' | tr -d '"')
-app_evdev=$(grep -hoE 'out\.write\("[A-Z_]+' "$APP/io/github/maxlyth/hapaneld/input/EvdevButtonClient.kt" 2>/dev/null | grep -oE '"[A-Z_]+' | tr -d '"' || true)
-app=$(printf '%s\n%s\n' "$app_helper" "$app_evdev" | grep -E '.' | sort -u)
+app_helper=$(grep -rhoE '((HelperClient|daemon)\.(send|sendBytes|sendLong)|privileged)\("[A-Z][A-Z0-9_]*' "$APP" | grep -oE '"[A-Z][A-Z0-9_]*' | tr -d '"')
+app_client=$(grep -hoE '(send|sendBytes|sendLong)\("[A-Z][A-Z0-9_]*' "$APP/io/github/maxlyth/hapaneld/util/HelperClient.kt" | grep -oE '"[A-Z][A-Z0-9_]*' | tr -d '"')
+app_evdev=$(grep -hoE 'out\.write\("[A-Z][A-Z0-9_]*' "$APP/io/github/maxlyth/hapaneld/input/EvdevButtonClient.kt" 2>/dev/null | grep -oE '"[A-Z][A-Z0-9_]*' | tr -d '"' || true)
+app=$(printf '%s\n%s\n%s\n' "$app_helper" "$app_client" "$app_evdev" | grep -E '.' | sort -u)
 
 missing=""
 for v in $app; do printf '%s\n' "$daemon" | grep -qx "$v" || missing="$missing $v"; done

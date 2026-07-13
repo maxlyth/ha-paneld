@@ -1139,19 +1139,17 @@ class MqttBridge(
                 """{"name":"Button","object_id":"${panel}_button","unique_id":"${panel}_button","state_topic":"$eventButton","event_types":["KEYCODE_POWER","KEYCODE_MUTE","KEYCODE_F","KEYCODE_F1","KEYCODE_F2","KEYCODE_F3","KEYCODE_F4","KEYCODE_BACK","KEYCODE_HOME","KEYCODE_DPAD_CENTER","KEYCODE_VOLUME_UP","KEYCODE_VOLUME_DOWN"],$avail,$device}""",
             )
         }
-        // Nav actions work via root `input keyevent` (appCanSu) OR an enabled a11y service. Recents is
-        // additionally gated on the firmware actually having an overview screen.
-        if (appCanSu || buttonsEnabled) {
+        // Back is always advertised because profile metadata only orders the live root/accessibility
+        // attempts; it does not prove either route unavailable. Recents still reflects firmware support.
+        publishConfig(
+            "button", "${panel}_back",
+            """{"name":"Back","object_id":"${panel}_back","unique_id":"${panel}_back","command_topic":"$cmdBack","icon":"mdi:arrow-left",$avail,$device}""",
+        )
+        if (hasRecents) {
             publishConfig(
-                "button", "${panel}_back",
-                """{"name":"Back","object_id":"${panel}_back","unique_id":"${panel}_back","command_topic":"$cmdBack","icon":"mdi:arrow-left",$avail,$device}""",
+                "button", "${panel}_recents",
+                """{"name":"Recents","object_id":"${panel}_recents","unique_id":"${panel}_recents","command_topic":"$cmdRecents","icon":"mdi:view-agenda",$avail,$device}""",
             )
-            if (hasRecents) {
-                publishConfig(
-                    "button", "${panel}_recents",
-                    """{"name":"Recents","object_id":"${panel}_recents","unique_id":"${panel}_recents","command_topic":"$cmdRecents","icon":"mdi:view-agenda",$avail,$device}""",
-                )
-            }
         }
 
         // TTS/announce playback volume (STREAM_MUSIC). HA has no MQTT media_player platform, so

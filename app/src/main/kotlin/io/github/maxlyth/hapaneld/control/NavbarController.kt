@@ -61,7 +61,7 @@ class NavbarController(
     // Dashboard package whose force-stop+relaunch is the Reload button's action (blank => auto-detect the
     // HA Companion; see [SystemController.reloadDashboard]).
     private val dashboardPkg: () -> String,
-    // Back/Recents route: root `input keyevent` where the app can su, else accessibility (see NavActions).
+    // Back/Recents and tap route preference; live failure falls through (see NavActions).
     private val appCanSu: Boolean,
     // Omit the Recents button on panels whose firmware has no overview screen (e.g. Tuya TPA10).
     private val hasRecents: Boolean,
@@ -408,8 +408,8 @@ class NavbarController(
         // scroll the dashboard while also revealing the bar. Touches above the strip still pass through
         // normally (they're outside this window's bounds).
         // Reveal is gated on a genuine upward swipe (≥ SWIPE_MIN_DP travel) so taps don't accidentally
-        // pop the bar up. On root panels, taps consumed by the strip are re-injected: the strip is
-        // briefly flagged FLAG_NOT_TOUCHABLE so `input tap` routes to the underlying app rather than
+        // pop the bar up. Taps consumed by the strip are re-injected through root or accessibility: the
+        // strip is briefly flagged FLAG_NOT_TOUCHABLE so the tap reaches the app behind it rather than
         // looping back to the strip itself.
         var downX = 0f; var downY = 0f; var swiped = false
         edge.setOnTouchListener { _, e ->
@@ -423,14 +423,14 @@ class NavbarController(
                     true
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                    if (!swiped && appCanSu) {
+                    if (!swiped) {
                         val x = downX.toInt(); val y = downY.toInt()
                         // Pause strip touchability so the re-injected tap routes to the window behind
-                        // instead of back to the strip. Restored after `input tap` returns (~300 ms).
+                        // instead of back to the strip. Restored after the routed tap completes.
                         lp.flags = lp.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
                         runCatching { wm.updateViewLayout(edge, lp) }
                         Thread {
-                            runCatching { Su.run("input tap $x $y") }
+                            runCatching { NavActions.tap(appCanSu, x.toFloat(), y.toFloat()) }
                             main.post {
                                 lp.flags = lp.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
                                 runCatching { wm.updateViewLayout(edge, lp) }

@@ -19,13 +19,13 @@ import io.github.maxlyth.hapaneld.config.Validation
 import io.github.maxlyth.hapaneld.control.CdpRelay
 import io.github.maxlyth.hapaneld.control.CompanionDb
 import io.github.maxlyth.hapaneld.control.DensityController
+import io.github.maxlyth.hapaneld.control.InteractiveController
 import io.github.maxlyth.hapaneld.control.Su
 import io.github.maxlyth.hapaneld.control.SystemController
 import io.github.maxlyth.hapaneld.control.TameController
 import io.github.maxlyth.hapaneld.control.VolumeController
 import io.github.maxlyth.hapaneld.device.DeviceProfile
 import io.github.maxlyth.hapaneld.device.TameCandidate
-import io.github.maxlyth.hapaneld.input.PanelAccessibilityService
 import io.github.maxlyth.hapaneld.logship.LogCapture
 import io.github.maxlyth.hapaneld.sensors.SensorReporter
 import io.github.maxlyth.hapaneld.util.Cached
@@ -184,6 +184,7 @@ class PaneldServer(
 
     // Display sizing (density + text scale) via `wm density` / `font_scale` — su panels only.
     private val density = DensityController()
+    private val interactive = InteractiveController()
     // On-panel config revision history (ring buffer) — written on every successful apply.
     private val revisions = RevisionStore(appContext.filesDir)
     private val urlRegex = Regex("""https?://[^\s"']+""")
@@ -553,13 +554,12 @@ class PaneldServer(
                         config.uiDashboardLayout = call.receiveParameters()["layout"].orEmpty()
                         call.respondText("""{"ok":true}""", ContentType.Application.Json)
                     }
-                    // Inject a tap at device pixel (x,y) for the interactive screenshot (Test tab). Tiered:
-                    // accessibility gesture (no root) → su `input tap`. Nav keys reuse POST /action.
+                    // Inject a tap at device pixel (x,y) for the interactive screenshot (Test tab).
                     post("/input") {
                         val q = call.receiveParameters()
                         val x = q["x"]?.trim()?.toFloatOrNull()
                         val y = q["y"]?.trim()?.toFloatOrNull()
-                        if (x == null || y == null) {
+                        if (x == null || y == null || !x.isFinite() || !y.isFinite() || x < 0f || y < 0f) {
                             call.respondText("bad-coords\n", status = HttpStatusCode.BadRequest)
                         } else {
                             val ok = injectTap(x, y)
@@ -570,9 +570,9 @@ class PaneldServer(
                     // On-screen Controls card (software navbar) for panels with no physical nav bar.
                     post("/action") {
                         val a = call.receiveParameters()["a"]
-                        val ok = when (a) {
-                            "back" -> { PanelAccessibilityService.navBack(); true }
-                            "recents" -> { PanelAccessibilityService.navRecents(); true }
+                        val outcome: Boolean? = when (a) {
+                            "back" -> interactive.back()
+                            "recents" -> interactive.recents()
                             // Launcher, not Home: the HA Companion IS the home/launcher on these panels, so the
                             // hard, useful action is escaping TO a launcher to reach Settings/config apps.
                             // launchLauncher itself falls back to the admin launcher when nothing resolves
@@ -585,9 +585,16 @@ class PaneldServer(
                             // index, so +10% was a no-op. step() always moves one real notch and flashes the slider.
                             "volup" -> { volume.step(up = true); true }
                             "voldn" -> { volume.step(up = false); true }
-                            else -> false
+                            else -> null
                         }
-                        if (ok) call.respondText("ok\n") else call.respondText("bad-action\n", status = HttpStatusCode.BadRequest)
+                        when (outcome) {
+                            true -> call.respondText("ok\n")
+                            false -> call.respondText(
+                                "no-action-capability\n",
+                                status = HttpStatusCode.ServiceUnavailable,
+                            )
+                            null -> call.respondText("bad-action\n", status = HttpStatusCode.BadRequest)
+                        }
                     }
                     // Debug-only sensor trace (RAM ring buffer, on by default) for fit-testing the
                     // auto-brightness + proximity filters. CSV by default (drop into a plot); ?format=json
@@ -603,10 +610,7 @@ class PaneldServer(
                     // Embedded scaled in the info page + linkable full-size; also usable as an HA camera
                     // still_image_url. Captured on demand — no background polling.
                     get("/screenshot.png") {
-                        // su-direct on su panels; via the root daemon's SCREENCAP on sandbox panels (TPA10).
-                        val png = if (io.github.maxlyth.hapaneld.device.DeviceProfile.detect().appCanSu)
-                            Su.runBytes("screencap -p")
-                        else io.github.maxlyth.hapaneld.util.HelperClient.sendBytes("SCREENCAP")
+                        val png = interactive.screenshot()
                         if (png != null && png.isNotEmpty()) {
                             call.respondBytes(png, ContentType.Image.PNG)
                         } else {
@@ -2221,14 +2225,8 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
         return "{$parts}"
     }
 
-    /** Inject a tap at device pixel (x,y) for the interactive screenshot. su `input tap` where
-     *  available; an accessibility-gesture fallback lands with the Test tab. */
-    private fun injectTap(x: Float, y: Float): Boolean {
-        val xi = x.toInt()
-        val yi = y.toInt()
-        return io.github.maxlyth.hapaneld.device.DeviceProfile.detect().appCanSu &&
-            Su.run("input tap $xi $yi")
-    }
+    /** Inject a tap at device pixel (x,y) for the interactive screenshot. */
+    private fun injectTap(x: Float, y: Float): Boolean = interactive.tap(x, y)
 
     // ---- config bundles (export / validated import) + on-panel revision history ----------------
 
