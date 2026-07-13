@@ -8,6 +8,12 @@ From **v0.8.0**, entries are grouped under **Added** (new features/entities), **
 changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
 content appear. Earlier releases predate this convention and keep their flat lists.
 
+## v0.9.2-rc2 - Unreleased
+
+### Added
+
+- **Experimental entity-stream filtering for built-in-renderer testers** — an API-only, disabled-by-default option asks Home Assistant to send a configured exact entity allow-list instead of the full state stream, reducing the WebView work caused by large instances. Automatic entity discovery and an HTML setting are not included yet; testers configure and verify it through `/api/v1/dashboard/entity-filter`. See [the tester instructions](docs/built-in-renderer.md#experimental-entity-filter-092).
+
 ## v0.9.2-rc1 - 2026-07-12
 
 ### Added

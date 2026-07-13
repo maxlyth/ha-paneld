@@ -63,6 +63,7 @@ The machine API lives under **`/api/v1`** as of 0.8.5. The pre-0.8.5 flat paths 
 | `/api/v1/status` | GET | Panel-health warnings + capability matrix as JSON |
 | `/api/v1/input` | POST | Inject a tap at device pixel `x`,`y` (the Test tab's interactive screenshot; needs root) |
 | `/api/v1/ui/layout` | GET / POST | Per-panel dashboard layout blob (groundwork for customisable card layout) |
+| `/api/v1/dashboard/entity-filter` | GET / POST | Experimental built-in-renderer exact entity allow-list: replace or toggle it with JSON; read enabled/count/hash and runtime proof. API-only and disabled by default |
 
 The full surface is in `/api/v1/openapi.json` (browse it live at `http://<panel>:8888/api`).
 

@@ -35,6 +35,67 @@ The password never reaches the panel — the login happens on your machine and t
 
 Either way you can also set the URL and token by hand in the Configure tab's Dashboard card.
 
+## Experimental entity filter (0.9.2)
+
+> [!WARNING]
+> This is an API-only tester feature. It is disabled by default, does not discover entities automatically and has no HTML setting yet. An incomplete allow-list can leave cards missing or stale, so keep a rollback path and test it on a non-critical panel first.
+
+The filter applies only to ha-paneld's built-in renderer. It changes the frontend's Home Assistant subscription so filtering happens on the Home Assistant server before states are serialized and sent to the panel. The Companion app and other dashboard applications are unaffected.
+
+Create a JSON file containing every entity required by every dashboard tab, including entities referenced indirectly by custom cards or templates:
+
+```json
+{
+  "enabled": true,
+  "entity_ids": [
+    "binary_sensor.front_door",
+    "climate.living_room",
+    "light.kitchen"
+  ]
+}
+```
+
+Upload the complete list to the panel:
+
+```bash
+PANEL_IP=192.0.2.10
+curl --fail --show-error \
+  --header 'Content-Type: application/json' \
+  --data @entity-filter.json \
+  "http://${PANEL_IP}:8888/api/v1/dashboard/entity-filter"
+```
+
+The built-in renderer reloads after an update. Once the dashboard has reconnected, inspect the status:
+
+```bash
+curl --fail --show-error \
+  "http://${PANEL_IP}:8888/api/v1/dashboard/entity-filter"
+```
+
+A working filtered connection reports `enabled: true`, `runtime.active: true`, `runtime.mode: "native_socket"`, at least one `modifiedSubscriptions`, and zero `failures` and `directFallbacks`. A fallback means the dashboard remains connected but is receiving the ordinary unfiltered stream.
+
+Posting `entity_ids` replaces the complete list. Keep your source JSON because the status endpoint deliberately returns only the count and a stable hash, and config exports do not include the entity IDs.
+
+Disable filtering while retaining the stored list:
+
+```bash
+curl --fail --show-error \
+  --header 'Content-Type: application/json' \
+  --data '{"enabled":false}' \
+  "http://${PANEL_IP}:8888/api/v1/dashboard/entity-filter"
+```
+
+Disable filtering and remove the stored list:
+
+```bash
+curl --fail --show-error \
+  --header 'Content-Type: application/json' \
+  --data '{"enabled":false,"entity_ids":[]}' \
+  "http://${PANEL_IP}:8888/api/v1/dashboard/entity-filter"
+```
+
+Like the rest of ha-paneld's control API, this endpoint is unauthenticated and intended for use on a trusted LAN.
+
 ## Theming
 
 The dashboard follows the panel's dark/light preference by default. On Android 13+ this tracks the system setting live; on Android 9-12 the "Dark mode" toggle (Configure → Display) sets it. A theme picked *inside* Home Assistant always wins over the default.
