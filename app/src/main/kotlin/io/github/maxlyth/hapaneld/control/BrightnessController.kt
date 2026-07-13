@@ -4,6 +4,8 @@ import android.content.Context
 import android.provider.Settings
 import android.util.Log
 import io.github.maxlyth.hapaneld.Config
+import io.github.maxlyth.hapaneld.platform.Daemon
+import io.github.maxlyth.hapaneld.platform.RootShell
 import io.github.maxlyth.hapaneld.util.Cached
 import io.github.maxlyth.hapaneld.util.HelperClient
 import java.io.File
@@ -20,18 +22,24 @@ import java.io.File
  *
  * HA brightness is 0–255; Android `SCREEN_BRIGHTNESS` is also 0–255, so it maps 1:1.
  */
-class BrightnessController(private val context: Context) : Backlight {
+class BrightnessController(
+    private val context: Context,
+    private val root: RootShell = Su,
+    private val daemon: Daemon = HelperClient,
+) : Backlight {
+
+    private val hardwareWriter = BrightnessHardwareWriter(root, daemon)
 
     fun canWrite(): Boolean = Settings.System.canWrite(context)
 
     // The hardware backlight node (path, max). Sonoff firmware idle-dims this sysfs node directly and does
     // NOT honour SCREEN_BRIGHTNESS, so we read + drive it to keep HA in sync with the real backlight (and
     // to actually move it). Null → no node or no root → fall back to the Android setting. Discovered once.
-    private val backlight: Pair<String, Int>? by lazy {
-        val dir = Su.runOutput("ls -d /sys/class/backlight/*/ 2>/dev/null | head -1")?.trim()
+    private val backlight: BacklightNode? by lazy {
+        val dir = root.runOutput("ls -d /sys/class/backlight/*/ 2>/dev/null | head -1")?.trim()
         if (dir.isNullOrEmpty()) return@lazy null
-        val max = Su.runOutput("cat ${dir}max_brightness 2>/dev/null")?.trim()?.toIntOrNull()
-        if (max == null || max <= 0) null else dir to max
+        val max = root.runOutput("cat ${dir}max_brightness 2>/dev/null")?.trim()?.toIntOrNull()
+        if (max == null || max <= 0) null else BacklightNode(dir, max)
     }
 
     /**
@@ -62,18 +70,12 @@ class BrightnessController(private val context: Context) : Backlight {
         } catch (e: SecurityException) {
             Log.w(TAG, "WRITE_SETTINGS not granted — cannot set brightness", e)
         }
-        // Also drive the hardware node: on Sonoff panels the firmware owns the backlight sysfs and the
-        // Android setting alone doesn't move it. No-op where there's no node / no root.
-        backlight?.let { (dir, max) ->
-            val hw = (v.toLong() * max / 255).toInt().coerceIn(0, max)
-            Su.runOutput("echo $hw > ${dir}brightness")
-        }
-        // No su → drive the node through the daemon (BLSET scales from the daemon-read max), so a
-        // brightness command moves the REAL backlight on sandbox-walled panels too.
-        if (backlight == null && HelperClient.available()) {
-            HelperClient.send("BLREAD")?.trim()?.split(' ')?.getOrNull(1)?.toIntOrNull()?.let { max ->
-                if (max > 0) HelperClient.send("BLSET ${(v.toLong() * max / 255).toInt().coerceIn(0, max)}")
-            }
+        // Also drive the real hardware node. A discovered su path is only a candidate: its write must
+        // succeed, otherwise the helper gets the same operation rather than being masked by stale metadata.
+        when (hardwareWriter.write(v, backlight)) {
+            BrightnessWriteRoute.SU -> Log.d(TAG, "hardware brightness -> $v (su)")
+            BrightnessWriteRoute.HELPER -> Log.d(TAG, "hardware brightness -> $v (helper)")
+            BrightnessWriteRoute.NONE -> Unit // Android setting is the legitimate actuator on many panels.
         }
         effective.invalidate()   // a read right after a set must see the new level, not the cache
     }
@@ -106,18 +108,12 @@ class BrightnessController(private val context: Context) : Backlight {
             }
         }
         // Daemon leg (TPA10-class panels: the app is SELinux-denied on the node and has no su).
-        if (HelperClient.available()) {
-            HelperClient.send("BLREAD")?.trim()?.split(' ')?.let { p ->
-                val actual = p.getOrNull(0)?.toIntOrNull()
-                val max = p.getOrNull(1)?.toIntOrNull()
-                if (actual != null && max != null && max > 0) {
-                    return (actual.toLong() * 255 / max).toInt().coerceIn(0, 255)
-                }
-            }
+        parseBacklightReading(daemon.send("BLREAD"))?.let {
+            return (it.actual.toLong() * 255 / it.maximum).toInt().coerceIn(0, 255)
         }
-        backlight?.let { (dir, max) ->
-            Su.runOutput("cat ${dir}actual_brightness 2>/dev/null")?.trim()?.toIntOrNull()?.let {
-                return (it.toLong() * 255 / max).toInt().coerceIn(0, 255)
+        backlight?.let { node ->
+            root.runOutput("cat ${node.directory}actual_brightness 2>/dev/null")?.trim()?.toIntOrNull()?.let {
+                return (it.toLong() * 255 / node.maximum).toInt().coerceIn(0, 255)
             }
         }
         return -1
