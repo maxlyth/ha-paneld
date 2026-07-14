@@ -21,6 +21,7 @@ LAST_STATUS=0
 
 run_provision() {
   : > "$MOCK_CALL_LOG"
+  rm -f "$TMP/diag-attempts"
   LAST_OUTPUT="$TMP/output.txt"
   MOCK_HEALTH="${MOCK_HEALTH:-ok}" \
   MOCK_VERIFY="${MOCK_VERIFY:-ok}" \
@@ -31,6 +32,7 @@ run_provision() {
   MOCK_HA_LOGIN="${MOCK_HA_LOGIN:-ok}" \
   MOCK_HA_TOKEN="${MOCK_HA_TOKEN:-ok}" \
   MOCK_GH_FAIL="${MOCK_GH_FAIL:-0}" \
+  MOCK_STATE_DIR="$TMP" \
     bash "$PROVISION" "$@" > "$LAST_OUTPUT" 2>&1
   LAST_STATUS=$?
 }
@@ -118,6 +120,12 @@ MOCK_HEALTH=fail run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
 assert_failure "launch timeout returns nonzero"
 assert_contains '(did not start|not answering|launch|health)' "launch timeout explains what failed"
 unset MOCK_HEALTH
+
+# Some panels answer /health before the heavier diagnostics endpoint finishes root/capability probes.
+MOCK_VERIFY=transient run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "healthy panel survives one transient slow diagnostics response"
+assert_contains 'diagnostics are still starting; retrying once' "slow diagnostics retry is explained"
+unset MOCK_VERIFY
 
 # Likewise, the final permission/HTTP checklist is a success gate rather than advisory output.
 MOCK_VERIFY=fail run_provision "$MOCK_TARGET" --apk "$APK" --no-tame

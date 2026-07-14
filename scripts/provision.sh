@@ -137,13 +137,19 @@ PROVISION_FAILED=0
 
 verify() {
   step "🔎 verifying" "${D}$URL${X}"
-  local diag cfg rc=0
+  local health diag cfg rc=0
   # A COLD /diag probes the panel's capabilities (su, daemon, sensors) and takes >12s on a PX30;
   # warm it's instant. 4s here made verify fail on every fresh run — keep the timeout generous.
+  health="$(curl -fsS --max-time 5 "$URL/health" 2>/dev/null || true)"
   diag="$(curl -fsS --max-time 25 "$URL/api/v1/diag" 2>/dev/null || true)"
+  if [ -z "$diag" ] && [ -n "$health" ]; then
+    warn "the agent is healthy but diagnostics are still starting; retrying once"
+    sleep 3
+    diag="$(curl -fsS --max-time 25 "$URL/api/v1/diag" 2>/dev/null || true)"
+  fi
   cfg="$(curl -fsS --max-time 3 "$URL/api/v1/config" 2>/dev/null || true)"
   chk() { if printf '%s' "$2" | grep -q "$3"; then echo "   ${GRN}✓${X} $1"; else echo "   ${RED}✗ $1${X}"; rc=1; fi; }
-  chk "HTTP server reachable"  "$diag" "ha-paneld diagnostics"
+  chk "HTTP server reachable"  "$health" "ha-paneld"
   chk "WRITE_SETTINGS granted" "$diag" "write_settings=true"
   chk "accessibility enabled"  "$diag" "a11y=true"
   # Root helper daemon — informational (only sandbox-walled panels need it; see the closing note).

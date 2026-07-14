@@ -61,10 +61,15 @@ JSON
     ;;
   */health)
     [ "${MOCK_HEALTH:-ok}" = "ok" ] || exit 22
-    printf 'ok\n'
+    printf 'ha-paneld test health\n'
     ;;
   */api/v1/diag)
-    [ "${MOCK_VERIFY:-ok}" = "ok" ] || exit 22
+    if [ "${MOCK_VERIFY:-ok}" = "transient" ]; then
+      attempts="${MOCK_STATE_DIR:?}/diag-attempts"
+      if [ ! -f "$attempts" ]; then : > "$attempts"; exit 22; fi
+    elif [ "${MOCK_VERIFY:-ok}" != "ok" ]; then
+      exit 22
+    fi
     case "$url" in *"${MOCK_VERIFY_FAIL_HOST:-__no_host__}"*) exit 22 ;; esac
     printf 'ha-paneld diagnostics write_settings=true a11y=true su=true daemon=true\n'
     ;;
