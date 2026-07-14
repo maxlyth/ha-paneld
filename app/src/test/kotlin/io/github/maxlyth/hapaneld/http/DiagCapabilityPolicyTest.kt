@@ -1,37 +1,26 @@
 package io.github.maxlyth.hapaneld.http
 
+import io.github.maxlyth.hapaneld.control.fakeProfile
+import io.github.maxlyth.hapaneld.device.EvdevButton
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 class DiagCapabilityPolicyTest {
-    @Test fun daemonInstrumentedButtonsAreReportedWithoutAccessibility() {
-        val cap = DiagReader.hardwareButtonsCapability(
-            accessibility = false,
-            daemon = true,
-            evdevButtonCount = 1,
+    @Test fun diagnosticButtonRequestUsesTheInjectedProfile() {
+        val profile = fakeProfile(
+            evdevButtons = listOf(
+                EvdevButton("/dev/input/event7", 116, grab = true, eventType = "power"),
+                EvdevButton("/dev/input/event3", 14, grab = false, eventType = "mute", sw = true),
+            ),
         )
-        assertEquals("ok", cap.status)
-        assertTrue(cap.note.contains("helper daemon"))
+        assertEquals(
+            "/dev/input/event7:KEY/116:grab,/dev/input/event3:SW/14:watch",
+            DiagReader.evdevRequestDescription(profile),
+        )
     }
 
-    @Test fun missingDaemonDegradesAnOtherwiseWorkingButtonPath() {
-        val cap = DiagReader.hardwareButtonsCapability(
-            accessibility = true,
-            daemon = false,
-            evdevButtonCount = 1,
-        )
-        assertEquals("degraded", cap.status)
-        assertTrue(cap.note.contains("need the helper daemon"))
-    }
-
-    @Test fun noDeclaredOrLiveButtonSourceReportsNone() {
-        val cap = DiagReader.hardwareButtonsCapability(
-            accessibility = false,
-            daemon = true,
-            evdevButtonCount = 0,
-        )
-        assertEquals("none", cap.status)
-        assertTrue(cap.note.contains("accessibility"))
+    @Test fun profileWithoutEvdevButtonsHasNoRequestedStream() {
+        assertNull(DiagReader.evdevRequestDescription(fakeProfile()))
     }
 }

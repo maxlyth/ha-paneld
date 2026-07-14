@@ -2,7 +2,6 @@ package io.github.maxlyth.hapaneld.util
 
 import android.content.Context
 import android.util.Log
-import io.github.maxlyth.hapaneld.device.DeviceProfile
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -37,7 +36,7 @@ object CompanionInstaller {
     fun versions(
         channel: String,
         limit: Int = 10,
-        maxVersion: String? = DeviceProfile.detect().companionMaxVersion,
+        maxVersion: String?,
     ): List<ReleaseCatalog.Version> = applyCap(catalog(channel, limit), maxVersion)
 
     /** A release chosen for installation. [newestVersion] remains the channel head even when [version]
@@ -91,7 +90,7 @@ object CompanionInstaller {
     suspend fun installVersion(
         context: Context,
         tag: String,
-        maxVersion: String? = DeviceProfile.detect().companionMaxVersion,
+        maxVersion: String?,
     ): String = withContext(Dispatchers.IO) {
         if (AppInstaller.installedVersion(context, FULL_PKG).isNotBlank())
             return@withContext "skipped: full Companion present (Play-managed)"
@@ -135,7 +134,7 @@ object CompanionInstaller {
         context: Context,
         force: Boolean = false,
         channel: String = "stable",
-        maxVersion: String? = DeviceProfile.detect().companionMaxVersion,
+        maxVersion: String?,
     ): String = withContext(Dispatchers.IO) {
         if (AppInstaller.installedVersion(context, FULL_PKG).isNotBlank())
             return@withContext "skipped: full Companion present (Play-managed)"

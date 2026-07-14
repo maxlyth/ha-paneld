@@ -4,7 +4,6 @@ import android.content.Context
 import android.os.SystemClock
 import io.github.maxlyth.hapaneld.BuildConfig
 import io.github.maxlyth.hapaneld.Config
-import io.github.maxlyth.hapaneld.device.DeviceProfile
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -43,7 +42,7 @@ object UpdateChecker {
         channel: String = "stable",
         staleMs: Long = 3_600_000L,
         companionChannel: String = Config(context).companionUpdateChannel,
-        companionMaxVersion: String? = DeviceProfile.detect().companionMaxVersion,
+        companionMaxVersion: String?,
     ) {
         val key = CacheKey(channel, companionChannel, companionMaxVersion)
         if (shouldCheck(SystemClock.elapsedRealtime(), lastCheckElapsedMs, staleMs, cacheKey == key)) {
@@ -58,7 +57,7 @@ object UpdateChecker {
         context: Context,
         channel: String = "stable",
         companionChannel: String = Config(context).companionUpdateChannel,
-        companionMaxVersion: String? = DeviceProfile.detect().companionMaxVersion,
+        companionMaxVersion: String?,
     ) = withContext(Dispatchers.IO) {
         checkMutex.withLock {
             val previous = available

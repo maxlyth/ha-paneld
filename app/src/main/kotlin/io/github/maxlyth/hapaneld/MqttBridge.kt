@@ -43,6 +43,21 @@ import io.github.maxlyth.hapaneld.util.Json
 import kotlin.math.roundToInt
 import org.json.JSONObject
 
+internal inline fun enterMqttConnectedState(
+    stopped: Boolean,
+    authenticate: () -> Unit,
+    setConnected: () -> Unit,
+    markLiveness: () -> Unit,
+    invalidatePreviousAcks: () -> Unit,
+): Boolean {
+    if (stopped) return false
+    authenticate()
+    setConnected()
+    markLiveness()
+    invalidatePreviousAcks()
+    return true
+}
+
 /**
  * MQTT bridge — the single uniform control API across the fleet. Publishes Home Assistant
  * MQTT-discovery configs so every panel exposes identical entities (the per-hardware HAL is hidden
@@ -504,14 +519,20 @@ class MqttBridge(
 
     /** Runs on every (re)connect: (re)subscribe to commands and (re)publish discovery + online. */
     private fun onConnected() {
-        if (stopped) return
-        authRetryGeneration++
-        authRecovery.authenticated(SystemClock.elapsedRealtime())
-        state = "connected"
-        markOk()   // arm liveness before capability/root observations can delay the rest of onConnected
-        // ACKs belong to one broker connection. Invalidate the previous connection even when a watchdog
-        // rebuild detached it before its disconnected callback could run, then republish every known state.
-        stateConverger.markAllDirty()
+        if (!enterMqttConnectedState(
+                stopped = stopped,
+                authenticate = {
+                    authRetryGeneration++
+                    authRecovery.authenticated(SystemClock.elapsedRealtime())
+                },
+                setConnected = { state = "connected" },
+                // Arm liveness before capability/root observations can delay the rest of onConnected.
+                markLiveness = ::markOk,
+                // ACKs belong to one broker connection. Invalidate the previous connection even when a
+                // watchdog rebuild detached it before its disconnected callback could run.
+                invalidatePreviousAcks = { stateConverger.markAllDirty() },
+            )
+        ) return
         PanelStatus.mqttConnected = true
         transport.subscribe("ha-paneld/$panel/+/set") { topic, payload, retained -> onCommand(topic, payload, retained) }
         // Re-announce discovery when HA (re)starts — its birth message on homeassistant/status. With

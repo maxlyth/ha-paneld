@@ -21,6 +21,7 @@ fun fakeProfile(
     relayBaseFallbacks: List<String> = emptyList(),
     buttonLedGpioBase: Int? = null,
     zigbeeGatewayDir: String? = null,
+    evdevButtons: List<EvdevButton> = emptyList(),
 ): DeviceProfile = object : DeviceProfile {
     override val id = "test"
     override val displayName = "Test"
@@ -35,7 +36,7 @@ fun fakeProfile(
     override val buttonLedGpioBase = buttonLedGpioBase
     override val manufacturer: String? = null
     override val model: String? = null
-    override val evdevButtons = emptyList<EvdevButton>()
+    override val evdevButtons = evdevButtons
     override val cpuGovernors = cpuGovernors
     override val recommendedDensity: Int? = null
     override val recommendedFontScale: Float? = null

@@ -411,7 +411,16 @@ class PaneldServer(
                     // update check first (the "Run health audit" button), else the cached result is used.
                     get("/status") {
                         if (call.request.queryParameters["refresh"] == "1")
-                            withContext(Dispatchers.IO) { runCatching { UpdateChecker.check(appContext, config.updateChannel) } }
+                            withContext(Dispatchers.IO) {
+                                runCatching {
+                                    UpdateChecker.check(
+                                        appContext,
+                                        config.updateChannel,
+                                        config.companionUpdateChannel,
+                                        profile.companionMaxVersion,
+                                    )
+                                }
+                            }
                         call.respondText(statusJson(), ContentType.Application.Json)
                     }
                     // Dismiss a component update from the DASHBOARD banner only (per-version; re-surfaces when
@@ -432,7 +441,10 @@ class PaneldServer(
                         val vers = withContext(Dispatchers.IO) {
                             when (name) {
                                 "paneld" -> SelfUpdater.versions(channel)
-                                "companion" -> CompanionInstaller.versions(channel)
+                                "companion" -> CompanionInstaller.versions(
+                                    channel,
+                                    maxVersion = profile.companionMaxVersion,
+                                )
                                 else -> emptyList()
                             }
                         }

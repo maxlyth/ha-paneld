@@ -581,7 +581,11 @@ class PaneldService : Service() {
                     // A specific picked version installs that exact tag; otherwise the channel's newest.
                     "paneld" -> if (tag != null) SelfUpdater.installVersion(this@PaneldService, tag)
                         else SelfUpdater.checkAndUpdate(this@PaneldService, config.updateChannel, force = force)
-                    "companion" -> if (tag != null) CompanionInstaller.installVersion(this@PaneldService, tag)
+                    "companion" -> if (tag != null) CompanionInstaller.installVersion(
+                        this@PaneldService,
+                        tag,
+                        profile.companionMaxVersion,
+                    )
                         else CompanionInstaller.installOrUpdate(
                             this@PaneldService,
                             force = force,
@@ -595,7 +599,14 @@ class PaneldService : Service() {
             after = { result ->
                 if (name == "webview") activateWebView(result, "healed")
                 // Refresh the available-update list so the banner + Install tab reflect the new state.
-                runCatching { UpdateChecker.check(this@PaneldService, config.updateChannel) }
+                runCatching {
+                    UpdateChecker.check(
+                        this@PaneldService,
+                        config.updateChannel,
+                        config.companionUpdateChannel,
+                        profile.companionMaxVersion,
+                    )
+                }
             },
         )
     }
@@ -704,7 +715,14 @@ class PaneldService : Service() {
             ) {
                 // Each sub-step is isolated so one failing doesn't skip the others; the periodic boundary
                 // is the outer net that keeps the loop alive across an unexpected throw.
-                runCatching { UpdateChecker.check(this@PaneldService, config.updateChannel) }
+                runCatching {
+                    UpdateChecker.check(
+                        this@PaneldService,
+                        config.updateChannel,
+                        config.companionUpdateChannel,
+                        profile.companionMaxVersion,
+                    )
+                }
                 // Companion self-heal: when enabled, install a missing Companion / update an out-of-date one.
                 if (config.companionAutoUpdate) {
                     runOperation(

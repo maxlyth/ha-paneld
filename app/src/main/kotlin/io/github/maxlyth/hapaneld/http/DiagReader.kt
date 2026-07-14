@@ -82,36 +82,6 @@ object DiagReader {
         )
     }
 
-    /** Hardware-button truth combines the two independent sources. Accessibility sees Android-delivered
-     * keys; profile-declared evdev keys require the helper daemon and can exist even when accessibility is
-     * off. A missing daemon degrades an otherwise-working accessibility path instead of hiding the loss. */
-    internal fun hardwareButtonsCapability(
-        accessibility: Boolean,
-        daemon: Boolean,
-        evdevButtonCount: Int,
-        packageName: String = "io.github.maxlyth.hapaneld",
-    ): Cap = when {
-        accessibility && evdevButtonCount > 0 && daemon -> Cap(
-            "Hardware buttons", "ok",
-            "accessibility key capture plus $evdevButtonCount daemon-instrumented physical button(s)",
-        )
-        accessibility && evdevButtonCount > 0 -> Cap(
-            "Hardware buttons", "degraded",
-            "accessibility key capture works; $evdevButtonCount profiled physical button(s) need the helper daemon",
-        )
-        accessibility -> Cap("Hardware buttons", "ok", "accessibility key capture enabled")
-        evdevButtonCount > 0 && daemon -> Cap(
-            "Hardware buttons", "ok", "$evdevButtonCount profiled physical button(s) via the helper daemon",
-        )
-        evdevButtonCount > 0 -> Cap(
-            "Hardware buttons", "none", "$evdevButtonCount profiled physical button(s) need the helper daemon",
-        )
-        else -> Cap(
-            "Hardware buttons", "none",
-            "enable (no root): adb shell settings put secure enabled_accessibility_services $packageName/.input.PanelAccessibilityService && adb shell settings put secure accessibility_enabled 1",
-        )
-    }
-
     private fun daemonRequirement(profile: DeviceProfile, running: Boolean): String {
         val state = if (running) "running" else "NEEDED but not running"
         return when {
@@ -148,9 +118,7 @@ object DiagReader {
         appendLine("board=${Build.BOARD} product=${Build.PRODUCT} hardware=${Build.HARDWARE} abis=${Build.SUPPORTED_ABIS.joinToString(",")}")
         val evdev = EvdevButtonClient.snapshot()
         appendLine("[env] selinux=${PanelMetrics.shared.selinuxEnforce() ?: "?"} su=${Su.available()} write_settings=${Settings.System.canWrite(ctx)} a11y=${a11yEnabled(ctx)} daemon=${HelperClient.available()} evdev=${evdev.state.name.lowercase()}/${evdev.mode?.name?.lowercase() ?: "none"} ledjni=${NativeLed.available()}")
-        val expectedButtons = DeviceProfile.detect().evdevButtons
-        if (expectedButtons.isNotEmpty()) {
-            val requested = expectedButtons.joinToString(",") { "${it.node}:${if (it.sw) "SW" else "KEY"}/${it.code}:${if (it.grab) "grab" else "watch"}" }
+        evdevRequestDescription(profile)?.let { requested ->
             appendLine("[evdev] requested=$requested state=${evdev.state.name.lowercase()} mode=${evdev.mode?.name?.lowercase() ?: "none"} error=${evdev.lastError ?: "-"}")
         }
         appendLine("[sysfs] leds=${listDir("/sys/class/leds")} backlight=${listDir("/sys/class/backlight")} devfreq=${listDir("/sys/class/devfreq")}")
@@ -209,6 +177,11 @@ object DiagReader {
     private fun a11yEnabled(ctx: Context): Boolean =
         (Settings.Secure.getString(ctx.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: "")
             .contains(ctx.packageName)
+
+    internal fun evdevRequestDescription(profile: DeviceProfile): String? =
+        profile.evdevButtons.takeIf { it.isNotEmpty() }?.joinToString(",") {
+            "${it.node}:${if (it.sw) "SW" else "KEY"}/${it.code}:${if (it.grab) "grab" else "watch"}"
+        }
 
     /** Compact device uptime from elapsed-realtime ms, e.g. "3d2h", "5h12m", "47m", "23s". */
     private fun fmtUptime(ms: Long): String {
