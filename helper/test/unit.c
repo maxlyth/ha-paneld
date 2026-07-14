@@ -228,6 +228,8 @@ static void test_dispatch_exact_match(void) {
     CHECK(strcmp(out, "ERR\n") == 0, "RGB with no LED node -> ERR (got '%s')\n", out);
     dispatch_reply("RGB 1 2", out, sizeof out);
     CHECK(strcmp(out, "ERR\n") == 0, "RGB with too few args -> ERR (got '%s')\n", out);
+    dispatch_reply("BLPOWER", out, sizeof out);
+    CHECK(strcmp(out, "ERR\n") == 0, "BLPOWER with no host backlight node -> ERR (got '%s')\n", out);
 }
 
 static void test_sysctl_execution_results(void) {

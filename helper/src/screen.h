@@ -8,6 +8,7 @@
 
 void screen_init(void);                          // discover the backlight device (call once)
 void cmd_screen(conn_ctx *ctx, const char *args);  // SCREEN ON|OFF
+void cmd_blpower(conn_ctx *ctx, const char *args); // BLPOWER           -> bl_power integer
 void cmd_blread(conn_ctx *ctx, const char *args);  // BLREAD            -> "<actual> <max>"
 void cmd_blset(conn_ctx *ctx, const char *args);   // BLSET <n>         write hardware brightness
 

@@ -18,6 +18,10 @@ content appear. Earlier releases predate this convention and keep their flat lis
 
 - **Installer-first release downloads** — GitHub releases now lead with a release-pinned installer that provisions and verifies the panel, while the APK is clearly labelled as a manual-setup asset. This makes the supported installation path visible before users reach for a bare `adb install`, without removing on-device sideloading.
 
+### Fixed
+
+- **Screen power stays synchronized on helper-controlled panels** — panels such as the TPA10 now read the physical backlight power through the root helper instead of inferring it from brightness, which can remain nonzero after the backlight has been powered off. Home Assistant therefore reports the actual screen state after local or external changes. The updated app and helper daemon must be installed together on these panels.
+
 ## v0.9.2-rc1 - 2026-07-12
 
 ### Added

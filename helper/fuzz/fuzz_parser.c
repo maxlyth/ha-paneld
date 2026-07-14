@@ -87,7 +87,7 @@ int main(int argc, char **argv) {
         "OFF\n", "OFFOFFOFF\n", "OF\n",
         "BTN 5\n", "BTN -99999999999\n", "BTN 99999999999999999999\n", "BTN\n",
         "SCREEN ON\n", "SCREEN OFF\n", "SCREEN off\n", "SCREEN\n", "SCREEN xyzzyqqq\n",
-        "BLREAD\n", "BLSET 127\n", "BLSET -1\n", "BLSET 99999999999999999999\n",
+        "BLPOWER\n", "BLREAD\n", "BLSET 127\n", "BLSET -1\n", "BLSET 99999999999999999999\n",
         "SCREENCAP\n", "SCREENCAPEXTRA\n",
         "RELOAD com.foo.bar\n", "RELOAD \n", "RELOAD ;reboot\n", "RELOAD a|b`c$d(e)\n",
         "RELOAD ../../etc/passwd\n", "RELOAD \"$(rm -rf)\"\n",

@@ -49,6 +49,17 @@ void cmd_screen(conn_ctx *ctx, const char *args) {
     reply(ctx->fd, set_screen(on) == 0 ? "OK\n" : "ERR\n");
 }
 
+// BLPOWER — actual framebuffer blanking state: 0 = unblanked; nonzero = blanked/powered down.
+// Kept separate from BLREAD because actual_brightness can remain nonzero while bl_power=4.
+void cmd_blpower(conn_ctx *ctx, const char *args) {
+    (void)args;
+    int power = read_bl_int("bl_power");
+    if (power < 0 || power > 4) { reply(ctx->fd, "ERR\n"); return; }
+    char out[16];
+    snprintf(out, sizeof out, "%d\n", power);
+    reply(ctx->fd, out);
+}
+
 // BLREAD — reply "<actual> <max>" from the backlight sysfs. The app is SELinux-denied on these
 // nodes on newer Android (TPA10/Android 11), so effective-brightness reporting needs the daemon.
 void cmd_blread(conn_ctx *ctx, const char *args) {

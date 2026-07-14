@@ -26,6 +26,36 @@ class ScreenControllerTest {
     }
 
     // --- looksDark polarity ---
+    @Test fun daemonBlPowerOffOverridesNonzeroBrightnessAndUnreadableRoot() {
+        backlight.level = 120
+        val (sc, root) = controller(blPower = null, daemon = mapOf("BLPOWER" to "4"))
+        assertTrue(sc.looksDark())
+        assertTrue("authoritative daemon read must avoid failed root probing", root.outputRan.isEmpty())
+    }
+
+    @Test fun daemonBlPowerOnUsesEffectiveBrightnessToDistinguishVisibleFromZero() {
+        backlight.level = 120
+        assertFalse(controller(blPower = "4", daemon = mapOf("BLPOWER" to "0")).first.looksDark())
+        backlight.level = 0
+        assertTrue(controller(blPower = "4", daemon = mapOf("BLPOWER" to "0")).first.looksDark())
+    }
+
+    @Test fun daemonBlPowerUnavailableFallsBackToRootThenBrightness() {
+        backlight.level = 120
+        assertTrue(controller(blPower = "4", daemon = mapOf("BLPOWER" to "ERR")).first.looksDark())
+        backlight.level = 0
+        assertTrue(controller(blPower = null, daemon = mapOf("BLPOWER" to "ERR")).first.looksDark())
+    }
+
+    @Test fun daemonBlPowerExternalChangeIsObservedWithoutACommand() {
+        val replies = mutableMapOf("BLPOWER" to "0")
+        backlight.level = 120
+        val (sc, _) = controller(daemon = replies)
+        assertFalse(sc.looksDark())
+        replies["BLPOWER"] = "4"
+        assertTrue(sc.looksDark())
+    }
+
     @Test fun looksDarkTrueWhenBlPowerOff() = assertTrue(controller(blPower = "4").first.looksDark())
 
     @Test fun looksDarkFalseWhenBlPowerOnAndBrightnessVisible() {

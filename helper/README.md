@@ -22,6 +22,9 @@ Newline-terminated ASCII on the abstract UNIX socket `@hapaneld-helper`. One or 
 | `BTN <0..255>` | button-backlight brightness | `OK` / `ERR` |
 | `LEDPROBE` | which RGB-LED backend this panel has (so the app gates the LED entity on a reachable node) | `ledjni` / `sysfs` / `none` |
 | `SCREEN ON` / `SCREEN OFF` | screen backlight power (`bl_power` 0/4) | `OK` / `ERR` |
+| `BLPOWER` | read physical screen-backlight power (`bl_power`) | `0`–`4` / `ERR` |
+| `BLREAD` | read effective and maximum backlight brightness | `<actual> <max>` / `ERR` |
+| `BLSET <n>` | set hardware backlight brightness, clamped to its maximum | `OK` / `ERR` |
 | `SCREENCAP` | capture the screen as PNG | raw PNG bytes, then EOF |
 | `RELOAD <pkg>` | force-stop + relaunch an app (dashboard reload) | `OK` / `ERR` |
 | `START <pkg/cls>` | launch an activity by component (root, bypasses BAL limits) | `OK` / `ERR` |
