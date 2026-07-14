@@ -19,6 +19,17 @@ import java.util.concurrent.atomic.AtomicLong
 import kotlin.concurrent.thread
 
 class EntityLearningManagerSafetyTest {
+    @Test fun stateProjectionBoundsFriendlyName() {
+        val limits = HaStatesReadLimits(maxFriendlyNameChars = 18)
+        assertEquals(
+            EntityCatalogStore.StateRow("binary_sensor.window", "on", "Upper Window Group"),
+            validateHaStateRow("binary_sensor.window", "on", 1, limits, "Upper Window Group"),
+        )
+        assertThrows(IllegalStateException::class.java) {
+            validateHaStateRow("sensor.room", "on", 1, limits, "A friendly name that is too long")
+        }
+    }
+
     @Test fun stateResponseBoundsAcceptProjectionAndRejectOversizePayloadRowsAndFields() {
         val limits = HaStatesReadLimits(maxBytes = 8, maxRows = 1, maxEntityIdChars = 16, maxStateChars = 4)
         assertEquals(

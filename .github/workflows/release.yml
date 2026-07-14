@@ -18,14 +18,22 @@ jobs:
   release:
     runs-on: ubuntu-latest
     env:
-      # Set these repo secrets to publish a properly-signed release APK. Absent them, the
-      # workflow falls back to the debug-signed APK so a tag still produces an installable asset.
+      # Public releases fail closed unless all established signing credentials are available.
       KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
       KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
       KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
       KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Require release signing credentials
+        run: |
+          for name in KEYSTORE_B64 KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
+            if [ -z "${!name}" ]; then
+              echo "::error::$name is required; refusing to publish a debug-signed release asset."
+              exit 1
+            fi
+          done
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -42,17 +50,16 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      - name: Test installer and provisioning contracts
+        run: scripts/tests/provision_test.sh
+
       - name: Run JVM tests and Android lint
         run: ./gradlew :app:testDebugUnitTest :app:lintDebug --stacktrace
 
       - name: Build release APK
         run: ./gradlew :app:assembleRelease --stacktrace
 
-      - name: Build debug APK (fallback asset)
-        run: ./gradlew :app:assembleDebug --stacktrace
-
       - name: Sign release APK
-        if: env.KEYSTORE_B64 != ''
         run: |
           echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/keystore.jks"
           BUILD_TOOLS=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
@@ -69,14 +76,9 @@ jobs:
         id: asset
         run: |
           mkdir -p dist
-          if [ -f app/build/outputs/apk/release/ha-paneld-release-signed.apk ]; then
-            apk_name="ha-paneld-${GITHUB_REF_NAME}-manual-setup-required.apk"
-            cp app/build/outputs/apk/release/ha-paneld-release-signed.apk "dist/$apk_name"
-          else
-            echo "::warning::No signing secrets set — publishing the debug-signed APK."
-            apk_name="ha-paneld-${GITHUB_REF_NAME}-manual-setup-required-debug.apk"
-            cp app/build/outputs/apk/debug/*.apk "dist/$apk_name"
-          fi
+          test -s app/build/outputs/apk/release/ha-paneld-release-signed.apk
+          apk_name="ha-paneld-${GITHUB_REF_NAME}-manual-setup-required.apk"
+          cp app/build/outputs/apk/release/ha-paneld-release-signed.apk "dist/$apk_name"
           echo "apk_name=$apk_name" >> "$GITHUB_OUTPUT"
 
       - name: Build release-pinned installer asset

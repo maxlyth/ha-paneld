@@ -648,9 +648,10 @@ class Config private constructor(
     }
 
     /** Change automatic-learning mode without exposing a half-disabled stream. A fresh enable clears
-     * the activation latch but preserves the current manual filter for explicit review; disabling also
-     * turns interception off in the same preference commit. */
+     * the activation latch and reactivates any current-owner preserved allow-list for safe observation;
+     * disabling turns interception off but keeps that list for a later re-enable. */
     fun commitDashboardEntityLearningMode(enabled: Boolean, clearApplied: Boolean): Boolean {
+        val restorePreservedFilter = enabled && dashboardEntityFilterIds.isNotEmpty()
         return applyBatch {
             edit {
                 putBoolean("dashboard_entity_learning", enabled)
@@ -663,6 +664,8 @@ class Config private constructor(
                 // was explicitly disabled on another target.
                 if (!enabled) {
                     putBoolean("dashboard_entity_filter_enabled", false)
+                } else if (restorePreservedFilter) {
+                    putBoolean("dashboard_entity_filter_enabled", true)
                 }
             }
         }
@@ -724,7 +727,9 @@ class Config private constructor(
             .distinct().sorted().joinToString("\n")
         return applyBatch { edit {
             putString("dashboard_entity_filter_ids", normalized)
-            putBoolean("dashboard_entity_filter_enabled", enabled && normalized.isNotEmpty())
+            // Automatic learning may intentionally install an empty allow-list after the user ignores
+            // an unsafe selector. Enabled-empty means "subscribe nothing", never "fall back unfiltered".
+            putBoolean("dashboard_entity_filter_enabled", enabled)
             putBoolean("dashboard_entity_learning_applied", applied)
             putString("dashboard_entity_filter_instance", dashboardEntityTargetKey)
             putString("dashboard_entity_applied_instance", dashboardEntityTargetKey)
@@ -759,7 +764,6 @@ class Config private constructor(
     ): Boolean {
         val normalized = activeEntityIds?.asSequence()?.map(String::trim)?.filter(String::isNotEmpty)
             ?.distinct()?.sorted()?.joinToString("\n")
-        if (applied && normalized != null && normalized.isEmpty()) return false
         return applyBatch { edit {
             putBoolean("dashboard_entity_auto_static", staticRefs)
             putBoolean("dashboard_entity_auto_runtime", runtimeRefs)
@@ -767,7 +771,7 @@ class Config private constructor(
             putString("dashboard_entity_applied_instance", dashboardEntityTargetKey)
             if (normalized != null) {
                 putString("dashboard_entity_filter_ids", normalized)
-                putBoolean("dashboard_entity_filter_enabled", normalized.isNotEmpty())
+                putBoolean("dashboard_entity_filter_enabled", applied)
                 putString("dashboard_entity_filter_instance", dashboardEntityTargetKey)
             }
         } }

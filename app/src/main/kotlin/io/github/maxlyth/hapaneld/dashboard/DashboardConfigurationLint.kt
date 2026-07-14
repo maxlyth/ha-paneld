@@ -59,7 +59,7 @@ object DashboardConfigurationLint {
         val blocking: Boolean get() = issues.any(Issue::blocking)
     }
 
-    private data class Metadata(val area: String, val floor: String, val labels: Set<String>)
+    private data class Metadata(val area: String, val floor: String, val labels: Set<String>, val friendlyName: String)
     private data class View(val title: String, val path: String)
     private data class Source(val location: String, val cardTitle: String?)
     private data class Rule(
@@ -68,6 +68,7 @@ object DashboardConfigurationLint {
         val areas: Set<String>,
         val floors: Set<String>,
         val labels: Set<String>,
+        val namePattern: String?,
         val usable: Boolean,
         val dynamic: Boolean,
         val signature: String,
@@ -82,11 +83,16 @@ object DashboardConfigurationLint {
         val limit: Int,
     )
 
-    fun analyze(configJson: String, catalog: Collection<String>, metadataJson: Map<String, String>): Result {
+    fun analyze(
+        configJson: String,
+        catalog: Collection<String>,
+        metadataJson: Map<String, String>,
+        friendlyNames: Map<String, String> = emptyMap(),
+    ): Result {
         val root = JSONObject(configJson)
         val catalogIds = catalog.asSequence().map(String::lowercase)
             .filter(ENTITY_ID::matches).distinct().sorted().toList()
-        val metadata = catalogIds.associateWith { id -> parseMetadata(metadataJson[id]) }
+        val metadata = catalogIds.associateWith { id -> parseMetadata(metadataJson[id], friendlyNames[id].orEmpty()) }
         val safe = sortedSetOf<String>()
         val findings = mutableListOf<Finding>()
         val boundedSources = mutableListOf<Source>()
@@ -238,45 +244,65 @@ object DashboardConfigurationLint {
         val areas = structuralValues(raw.opt("area"), IDENTIFIER) + structuralValues(raw.opt("area_id"), IDENTIFIER)
         val floors = structuralValues(raw.opt("floor"), IDENTIFIER) + structuralValues(raw.opt("floor_id"), IDENTIFIER)
         val labels = structuralValues(raw.opt("label"), IDENTIFIER) + structuralValues(raw.opt("label_id"), IDENTIFIER)
-        val structuralKeys = setOf("domain", "entity_id", "area", "area_id", "floor", "floor_id", "label", "label_id")
-        val presentationKeys = setOf("options")
+        val rawName = (raw.opt("name") as? String)?.takeIf(String::isNotBlank)
+        val invalidNamePattern = raw.has("name") && (rawName == null || !isFriendlyNamePattern(rawName))
+        val namePattern = rawName?.takeIf(::isFriendlyNamePattern)
+        val structuralKeys = setOf("domain", "entity_id", "area", "area_id", "floor", "floor_id", "label", "label_id", "name")
+        val presentationKeys = setOf("options", "sort")
         val keys = raw.keys().asSequence().toSet()
         val suppliedStructural = keys.intersect(structuralKeys)
-        val invalidStructural = invalidEntityPattern || suppliedStructural.any { key ->
+        val invalidStructural = invalidEntityPattern || invalidNamePattern || suppliedStructural.any { key ->
             values(raw.opt(key)).any { value ->
                 containsTemplate(value) || when (key) {
                     "domain" -> !DOMAIN.matches(value.lowercase())
                     "entity_id" -> !isEntityPattern(value.lowercase())
+                    "name" -> !isFriendlyNamePattern(value)
                     else -> !IDENTIFIER.matches(value.lowercase())
                 }
             }
         }
         val dynamic = (keys - structuralKeys - presentationKeys).isNotEmpty() || invalidStructural
-        val usable = domains.isNotEmpty() || patterns.isNotEmpty() || areas.isNotEmpty() || floors.isNotEmpty() || labels.isNotEmpty()
+        val usable = domains.isNotEmpty() || patterns.isNotEmpty() || areas.isNotEmpty() || floors.isNotEmpty() ||
+            labels.isNotEmpty() || namePattern != null
         val signature = listOf(
             "d=" + domains.sorted().joinToString(","),
             "e=" + patterns.sorted().joinToString(","),
             "a=" + areas.sorted().joinToString(","),
             "f=" + floors.sorted().joinToString(","),
             "l=" + labels.sorted().joinToString(","),
+            "n=" + (namePattern?.let(EntityLearningProtocol::hash) ?: ""),
             "dynamic=$dynamic",
             // Preserve exact-rule grouping without placing raw template or state expressions in an
             // issue record. The short hash is deterministic but not reversible in the UI payload.
             "rule=" + EntityLearningProtocol.hash(EntityLearningProtocol.canonical(raw)),
         ).joinToString("|")
-        return Rule(domains, patterns, areas, floors, labels, usable, dynamic, signature)
+        return Rule(domains, patterns, areas, floors, labels, namePattern, usable, dynamic, signature)
     }
 
     private fun match(rule: Rule, catalog: List<String>, metadata: Map<String, Metadata>): Set<String> {
         val patterns = rule.entityPatterns.mapNotNull(::compilePattern)
+        val nameMatcher = rule.namePattern?.let(::compileFriendlyNamePattern)
         return catalog.filterTo(sortedSetOf()) { id ->
             val meta = metadata.getValue(id)
             (rule.domains.isEmpty() || id.substringBefore('.') in rule.domains) &&
                 (patterns.isEmpty() || patterns.any { it.containsMatchIn(id) }) &&
                 (rule.areas.isEmpty() || meta.area in rule.areas) &&
                 (rule.floors.isEmpty() || meta.floor in rule.floors) &&
-                (rule.labels.isEmpty() || meta.labels.any(rule.labels::contains))
+                (rule.labels.isEmpty() || meta.labels.any(rule.labels::contains)) &&
+                (nameMatcher == null || meta.friendlyName.isNotEmpty() && nameMatcher(meta.friendlyName))
         }
+    }
+
+    private fun compileFriendlyNamePattern(pattern: String): ((String) -> Boolean)? = when {
+        pattern.length >= 2 && pattern.startsWith('/') && pattern.endsWith('/') -> {
+            val source = pattern.substring(1, pattern.length - 1)
+            if (!isSafeEntitySelectorRegex(source)) null else runCatching { Regex(source) }.getOrNull()
+                ?.let { regex -> { value: String -> regex.containsMatchIn(value) } }
+        }
+        '*' in pattern -> runCatching {
+            Regex("^" + pattern.split('*').joinToString(".*") { Regex.escape(it) } + "$")
+        }.getOrNull()?.let { regex -> { value: String -> regex.matches(value) } }
+        else -> { value: String -> value == pattern }
     }
 
     private fun compilePattern(pattern: String): Regex? = when {
@@ -342,7 +368,7 @@ object DashboardConfigurationLint {
         return !escaped && !inClass
     }
 
-    private fun parseMetadata(json: String?): Metadata {
+    private fun parseMetadata(json: String?, friendlyName: String): Metadata {
         val objectValue = json?.let { runCatching { JSONObject(it) }.getOrNull() }
         fun first(vararg keys: String): String = keys.firstNotNullOfOrNull { key ->
             objectValue?.optString(key)?.lowercase()?.takeIf(String::isNotBlank)
@@ -354,7 +380,7 @@ object DashboardConfigurationLint {
                 else -> emptyList()
             }
         }
-        return Metadata(first("ai", "area_id", "area"), first("fi", "floor_id", "floor"), labels())
+        return Metadata(first("ai", "area_id", "area"), first("fi", "floor_id", "floor"), labels(), friendlyName)
     }
 
     private fun summary(rule: Rule): String {
@@ -364,8 +390,11 @@ object DashboardConfigurationLint {
         if (rule.areas.isNotEmpty()) parts += "area ${safeList(rule.areas)}"
         if (rule.floors.isNotEmpty()) parts += "floor ${safeList(rule.floors)}"
         if (rule.labels.isNotEmpty()) parts += "label ${safeList(rule.labels)}"
+        if (rule.namePattern != null) parts += "friendly name ${safeNamePattern(rule.namePattern)}"
         return parts.joinToString("; ").take(MAX_SUMMARY_LENGTH)
     }
+
+    private fun safeNamePattern(pattern: String): String = pattern.replace(Regex("[\\p{Cntrl}]"), " ").take(80)
 
     private fun safeList(values: Set<String>): String = values.sorted().take(3).joinToString(", ") { it.take(40) } +
         if (values.size > 3) " (+${values.size - 3})" else ""
@@ -392,6 +421,17 @@ object DashboardConfigurationLint {
         else -> false
     }
 
+    private fun isFriendlyNamePattern(value: String): Boolean = when {
+        value.isEmpty() || value.length > MAX_PATTERN_LENGTH || containsTemplate(value) ||
+            value.any(Char::isISOControl) -> false
+        value.length >= 2 && value.startsWith('/') && value.endsWith('/') ->
+            value.substring(1, value.length - 1).let { source ->
+                isSafeEntitySelectorRegex(source) && runCatching { Regex(source) }.isSuccess
+            }
+        '*' in value -> value.none { it in UNSAFE_GLOB_META }
+        else -> true
+    }
+
     private fun safeText(value: String): String? = value.trim().takeIf {
         it.isNotBlank() && !containsTemplate(it)
     }?.replace(Regex("[\\p{Cntrl}]"), " ")?.take(80)
@@ -405,6 +445,7 @@ object DashboardConfigurationLint {
     private val IDENTIFIER = Regex("^[a-z0-9_-]+$")
     private val ENTITY_PATTERN = Regex(".*") // Identity marker; validated by isEntityPattern.
     private val TEMPLATE_MARKERS = listOf("{{", "{%", "[[[", "hass.states", "states[")
+    private val UNSAFE_GLOB_META = setOf('\\', '.', '+', '?', '^', '$', '{', '}', '(', ')', '|', '[', ']', '/')
     private const val MAX_PATTERN_LENGTH = 160
     private const val MAX_SUMMARY_LENGTH = 240
 }

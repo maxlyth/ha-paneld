@@ -23,6 +23,9 @@ jobs:
           find app/src/main/assets -type f -name '*.js' -print0 | xargs -0 -n1 node --check
           find app/src/main/assets -type f -name '*.json' -print0 | xargs -0 -n1 node -e 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))'
 
+      - name: Test installer and provisioning contracts
+        run: scripts/tests/provision_test.sh
+
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:

@@ -9,15 +9,13 @@ class EntityBootstrapGateTest {
         assertTrue(shouldHoldRendererForEntityBootstrap(
             learningEnabled = true,
             filterEnabled = false,
-            entityIds = emptyList(),
         ))
     }
 
-    @Test fun inconsistentEnabledButEmptyFilterStillHoldsRenderer() {
-        assertTrue(shouldHoldRendererForEntityBootstrap(
+    @Test fun intentionallyEmptyAutomaticFilterMayRenderUnavailableEntities() {
+        assertFalse(shouldHoldRendererForEntityBootstrap(
             learningEnabled = true,
             filterEnabled = true,
-            entityIds = emptyList(),
         ))
     }
 
@@ -25,7 +23,6 @@ class EntityBootstrapGateTest {
         assertFalse(shouldHoldRendererForEntityBootstrap(
             learningEnabled = true,
             filterEnabled = true,
-            entityIds = listOf("light.example"),
         ))
     }
 
@@ -33,7 +30,6 @@ class EntityBootstrapGateTest {
         assertFalse(shouldHoldRendererForEntityBootstrap(
             learningEnabled = false,
             filterEnabled = false,
-            entityIds = emptyList(),
         ))
     }
 

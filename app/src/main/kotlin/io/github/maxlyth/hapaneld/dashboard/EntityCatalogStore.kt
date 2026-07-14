@@ -16,7 +16,7 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, "entity-l
         setWriteAheadLoggingEnabled(true)
     }
 
-    data class StateRow(val entityId: String, val state: String)
+    data class StateRow(val entityId: String, val state: String, val friendlyName: String = "")
     data class Snapshot(
         val state: String,
         val lastSyncAt: Long,
@@ -25,6 +25,7 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, "entity-l
         val unresolvedCount: Int,
         val issueCount: Int,
         val blockingIssueCount: Int,
+        val ignoredIssueCount: Int,
         val error: String,
         val dbBytes: Long,
     )
@@ -68,6 +69,10 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, "entity-l
         db.execSQL("CREATE INDEX membership_load ON membership(instance,path,update_bytes DESC)")
         db.execSQL("CREATE INDEX hourly_age ON hourly(hour)")
         db.execSQL("CREATE INDEX minute_rollup_age ON minute_rollup(instance,path,minute)")
+        db.execSQL("""CREATE TABLE dashboard_issue_ignore(
+            instance TEXT NOT NULL, path TEXT NOT NULL, fingerprint TEXT NOT NULL, ignored_at INTEGER NOT NULL,
+            PRIMARY KEY(instance,path,fingerprint),
+            FOREIGN KEY(instance,path) REFERENCES dashboard(instance,path) ON DELETE CASCADE)""")
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -149,6 +154,21 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, "entity-l
                     path,
                 ),
             )
+            val currentFingerprints = issues.mapNotNull { issue ->
+                issue.optString("fingerprint").takeIf(FINGERPRINT::matches)
+            }.toSet()
+            val staleIgnores = db.rawQuery(
+                "SELECT fingerprint FROM dashboard_issue_ignore WHERE instance=? AND path=?",
+                arrayOf(instance, path),
+            ).use { cursor -> buildList {
+                while (cursor.moveToNext()) cursor.getString(0).takeIf { it !in currentFingerprints }?.let(::add)
+            } }
+            staleIgnores.forEach { fingerprint ->
+                db.delete(
+                    "dashboard_issue_ignore", "instance=? AND path=? AND fingerprint=?",
+                    arrayOf(instance, path, fingerprint),
+                )
+            }
             val cutoff = now - TOMBSTONE_RETENTION_MS
             db.execSQL("DELETE FROM entity WHERE instance=? AND tombstone_at>0 AND tombstone_at<?", arrayOf(instance, cutoff))
             db.execSQL("DELETE FROM hourly WHERE hour<?", arrayOf((now - ROLLUP_RETENTION_MS) / HOUR_MS))
@@ -311,6 +331,7 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, "entity-l
             dashboard?.unresolvedJson?.let { runCatching { JSONArray(it).length() }.getOrDefault(0) } ?: 0,
             issueCounts.first,
             issueCounts.second,
+            EntityCatalogIssuePersistence.ignoredCount(dashboard?.issuesJson ?: "[]"),
             dashboard?.error ?: "",
             databaseBytes(),
         )
@@ -323,6 +344,50 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, "entity-l
             arrayOf(instance, path),
         ).use { c -> if (c.moveToFirst()) c.getString(0) else "[]" }
         return EntityCatalogIssuePersistence.boundExistingJson(stored)
+    }
+
+    fun ignoredIssueFingerprints(instance: String, path: String): Set<String> = readableDatabase.rawQuery(
+        "SELECT fingerprint FROM dashboard_issue_ignore WHERE instance=? AND path=? ORDER BY fingerprint",
+        arrayOf(instance, path),
+    ).use { cursor -> buildSet { while (cursor.moveToNext()) add(cursor.getString(0)) } }
+
+    /** Persist a dashboard-scoped diagnostic override only for an issue visible in the current scan. */
+    fun setIssueIgnored(instance: String, path: String, fingerprint: String, ignored: Boolean, now: Long): Boolean {
+        if (!FINGERPRINT.matches(fingerprint)) return false
+        val db = writableDatabase
+        db.beginTransaction()
+        return try {
+            val stored = db.rawQuery(
+                "SELECT issues_json FROM dashboard WHERE instance=? AND path=?",
+                arrayOf(instance, path),
+            ).use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null } ?: return false
+            val issues = JSONArray(EntityCatalogIssuePersistence.boundExistingJson(stored))
+            val exists = (0 until issues.length()).any { issues.optJSONObject(it)?.optString("fingerprint") == fingerprint }
+            if (!exists) return false
+            if (ignored) {
+                db.execSQL(
+                    "INSERT OR REPLACE INTO dashboard_issue_ignore(instance,path,fingerprint,ignored_at) VALUES(?,?,?,?)",
+                    arrayOf(instance, path, fingerprint, now),
+                )
+            } else {
+                db.delete(
+                    "dashboard_issue_ignore", "instance=? AND path=? AND fingerprint=?",
+                    arrayOf(instance, path, fingerprint),
+                )
+            }
+            val ignoredSet = db.rawQuery(
+                "SELECT fingerprint FROM dashboard_issue_ignore WHERE instance=? AND path=?",
+                arrayOf(instance, path),
+            ).use { cursor -> buildSet { while (cursor.moveToNext()) add(cursor.getString(0)) } }
+            db.execSQL(
+                "UPDATE dashboard SET issues_json=? WHERE instance=? AND path=?",
+                arrayOf(EntityCatalogIssuePersistence.applyIgnores(issues, ignoredSet), instance, path),
+            )
+            db.setTransactionSuccessful()
+            true
+        } finally {
+            db.endTransaction()
+        }
     }
 
     /** Internal-only source for rebuilding bounded derived diagnostics after process restart. */
@@ -617,6 +682,7 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, "entity-l
         private const val RANKING_CACHE_MS = 10_000L
         private const val MAX_RANKING_CACHE_ENTRIES = 16
         private const val MAX_SQL_ID_FILTER = 800
+        private val FINGERPRINT = Regex("^[a-f0-9]{16}$")
     }
 }
 
@@ -691,7 +757,7 @@ internal class BoundedSnapshotCache<K, V>(private val windowMs: Long, private va
 
 /** Sequential forward-only schema contract. Never add an ad-hoc conditional to [onUpgrade]. */
 object EntityCatalogSchema {
-    const val CURRENT_VERSION = 5
+    const val CURRENT_VERSION = 6
     data class Step(val from: Int, val to: Int, val sql: List<String>)
 
     private val steps = mapOf(
@@ -720,6 +786,15 @@ object EntityCatalogSchema {
         4 to Step(
             4, 5,
             listOf("ALTER TABLE dashboard ADD COLUMN issues_json TEXT NOT NULL DEFAULT '[]'"),
+        ),
+        5 to Step(
+            5, 6,
+            listOf(
+                """CREATE TABLE dashboard_issue_ignore(
+                    instance TEXT NOT NULL, path TEXT NOT NULL, fingerprint TEXT NOT NULL, ignored_at INTEGER NOT NULL,
+                    PRIMARY KEY(instance,path,fingerprint),
+                    FOREIGN KEY(instance,path) REFERENCES dashboard(instance,path) ON DELETE CASCADE)""",
+            ),
         ),
     )
 
@@ -775,6 +850,27 @@ internal object EntityCatalogIssuePersistence {
         }
         array.length() to blocking
     }.getOrDefault(0 to 0)
+
+    fun ignoredCount(raw: String): Int = runCatching {
+        val array = JSONArray(boundExistingJson(raw))
+        (0 until array.length()).count { array.optJSONObject(it)?.optBoolean("ignored", false) == true }
+    }.getOrDefault(0)
+
+    fun applyIgnores(issues: JSONArray, ignoredFingerprints: Set<String>): String {
+        val effective = buildList {
+            for (index in 0 until issues.length()) issues.optJSONObject(index)?.let { source ->
+                val issue = JSONObject(source.toString())
+                val ignored = issue.optString("fingerprint") in ignoredFingerprints
+                val wouldBlock = issue.optBoolean("would_block", issue.optBoolean("blocking", false))
+                issue.put("ignored", ignored)
+                issue.put("would_block", wouldBlock)
+                issue.put("blocking", wouldBlock && !ignored)
+                if (wouldBlock) issue.put("severity", if (ignored) "warning" else "error")
+                add(issue)
+            }
+        }
+        return boundedJson(effective)
+    }
 
     private fun sanitizeObject(input: JSONObject, depth: Int): JSONObject = JSONObject().apply {
         if (depth >= MAX_DEPTH) return@apply

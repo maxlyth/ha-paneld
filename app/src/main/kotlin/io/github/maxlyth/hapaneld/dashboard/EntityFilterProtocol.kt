@@ -11,10 +11,16 @@ object EntityFilterProtocol {
     const val MAX_ENTITY_IDS = 50_000
     const val MAX_TEXT_FRAME_CHARS = 1_000_000
     const val MAX_API_BODY_BYTES = 4_000_000
+    /** Home Assistant treats an empty entity_ids array as no filter. A syntactically valid sentinel
+     * keeps its exact-ID filter active on every HA version which supports subscribe_entities, while
+     * using a domain reserved to ha-paneld makes a real-state collision impractical. */
+    internal const val EMPTY_SUBSCRIPTION_ENTITY_ID =
+        "ha_paneld_internal.empty_subscription_5f39d48b7a6c4e2a"
 
     private val ENTITY_ID = Regex("^[a-z0-9_]+\\.[a-z0-9_]+$")
     private val FILTER_KEYS = setOf(
         "entity_ids",
+        "include", "exclude",
         "include_domains", "include_entities", "include_entity_globs",
         "exclude_domains", "exclude_entities", "exclude_entity_globs",
     )
@@ -68,11 +74,11 @@ object EntityFilterProtocol {
      * Every other command, including the token-bearing auth message, is returned without re-encoding.
      */
     fun injectSubscription(text: String, entityIds: List<String>): Mutation {
-        if (text.length > MAX_TEXT_FRAME_CHARS || entityIds.isEmpty()) return Mutation(text, false)
+        if (text.length > MAX_TEXT_FRAME_CHARS) return Mutation(text, false)
         val obj = runCatching { JSONObject(text) }.getOrNull() ?: return Mutation(text, false)
         if (obj.optString("type") != "subscribe_entities") return Mutation(text, false)
         if (FILTER_KEYS.any(obj::has)) return Mutation(text, false)
-        obj.put("entity_ids", JSONArray(entityIds))
+        obj.put("entity_ids", JSONArray(entityIds.ifEmpty { listOf(EMPTY_SUBSCRIPTION_ENTITY_ID) }))
         return Mutation(obj.toString(), true)
     }
 
@@ -111,12 +117,13 @@ object EntityFilterProtocol {
         )
         val targetWsPath = JSONObject.quote(upstream.rawPath)
         val ids = JSONArray(normalize(entityIds)).toString()
+        val emptySubscriptionEntityId = JSONObject.quote(EMPTY_SUBSCRIPTION_ENTITY_ID)
         val filterKeys = JSONArray(FILTER_KEYS.sorted()).toString()
         return """
             (()=>{
               const Native=window.WebSocket;
               if(!Native||Native.__haPaneldEntityFilter)return;
-              const targetWsOrigin=$targetWsOrigin,targetWsPath=$targetWsPath,entityIds=$ids,filterKeys=$filterKeys;
+              const targetWsOrigin=$targetWsOrigin,targetWsPath=$targetWsPath,entityIds=$ids,emptySubscriptionEntityId=$emptySubscriptionEntityId,filterKeys=$filterKeys;
               function FilteredWebSocket(url,protocols){
                 const socket=protocols===undefined?new Native(url):new Native(url,protocols);
                 try{
@@ -127,7 +134,7 @@ object EntityFilterProtocol {
                       if(typeof data==='string')try{
                         const message=JSON.parse(data);
                         if(message&&message.type==='subscribe_entities'&&!filterKeys.some(key=>Object.prototype.hasOwnProperty.call(message,key))){
-                          message.entity_ids=entityIds;
+                          message.entity_ids=entityIds.length?entityIds:[emptySubscriptionEntityId];
                           outgoing=JSON.stringify(message);
                           try{if(window.externalApp&&typeof window.externalApp.entityFilterSubscriptionModified==='function')window.externalApp.entityFilterSubscriptionModified();}catch(e){}
                         }

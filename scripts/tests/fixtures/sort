@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+if [ "${1:-}" = "-V" ]; then
+  echo "GNU sort -V must not be required by provisioning" >&2
+  exit 64
+fi
+exec /usr/bin/sort "$@"
+

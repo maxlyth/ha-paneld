@@ -3,10 +3,27 @@ package io.github.maxlyth.hapaneld.dashboard
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class EntityCatalogIssuePersistenceTest {
+    @Test fun ignoredIssuesRemainVisibleButStopBlocking() {
+        val fingerprint = "0123456789abcdef"
+        val raw = JSONArray().put(
+            JSONObject().put("fingerprint", fingerprint).put("blocking", true).put("severity", "error"),
+        )
+
+        val effective = EntityCatalogIssuePersistence.applyIgnores(raw, setOf(fingerprint))
+        val issue = JSONArray(effective).getJSONObject(0)
+
+        assertTrue(issue.getBoolean("ignored"))
+        assertTrue(issue.getBoolean("would_block"))
+        assertFalse(issue.getBoolean("blocking"))
+        assertEquals("warning", issue.getString("severity"))
+        assertEquals(1 to 0, EntityCatalogIssuePersistence.counts(effective))
+        assertEquals(1, EntityCatalogIssuePersistence.ignoredCount(effective))
+    }
     @Test fun issueGroupsAndSourcesAreBounded() {
         val issues = List(EntityCatalogIssuePersistence.MAX_ISSUE_GROUPS + 10) { index ->
             JSONObject()

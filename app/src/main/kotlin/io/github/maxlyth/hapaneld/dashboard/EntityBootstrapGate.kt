@@ -10,8 +10,7 @@ package io.github.maxlyth.hapaneld.dashboard
 internal fun shouldHoldRendererForEntityBootstrap(
     learningEnabled: Boolean,
     filterEnabled: Boolean,
-    entityIds: Collection<String>,
-): Boolean = learningEnabled && (!filterEnabled || entityIds.isEmpty())
+): Boolean = learningEnabled && !filterEnabled
 
 /** A learner may continue synchronizing while another renderer is selected, but its completion must not
  * launch the built-in activity unless that activity is still the configured renderer. */

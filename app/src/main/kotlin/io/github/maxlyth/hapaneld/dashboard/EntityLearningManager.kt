@@ -152,7 +152,6 @@ class EntityLearningManager(
         }
         if (!confirm) return JSONObject().put("ok", false).put("confirmation_required", true).toString()
         val active = desiredIds(System.currentTimeMillis())
-        require(active.isNotEmpty()) { "learned candidate set is empty" }
         val preview = subscriptionPreview(active)
         check(config.commitDashboardEntitySubscription(true, active, applied = true)) {
             "failed to commit learned entity set"
@@ -214,8 +213,22 @@ class EntityLearningManager(
         val scan = EntityLearningProtocol.scanDashboard(ws.configJson)
         val expanded = expandTargets(snapshot.baseUrl, snapshot.authToken, scan.targets)
         val catalogIds = states.asSequence().map { it.entityId }.toHashSet()
-        val lint = DashboardConfigurationLint.analyze(ws.configJson, catalogIds, ws.metadata)
-        val derived = (scan.entityIds + expanded + lint.safeEntityIds).filterTo(sortedSetOf()) { it in catalogIds }
+        val friendlyNames = states.asSequence().filter { it.friendlyName.isNotBlank() }
+            .associate { it.entityId.lowercase() to it.friendlyName }
+        val lint = DashboardConfigurationLint.analyze(ws.configJson, catalogIds, ws.metadata, friendlyNames)
+        val ignoredFingerprints = store.ignoredIssueFingerprints(snapshot.instanceKey, snapshot.dashboardPath)
+        val ignoredSelectorBudget = lint.issues.any {
+            it.type == DashboardConfigurationLint.IssueType.SELECTOR_BUDGET && it.fingerprint in ignoredFingerprints
+        }
+        val lintIds = if (ignoredSelectorBudget) emptySet() else lint.safeEntityIds
+        val derived = (scan.entityIds + expanded + lintIds).filterTo(sortedSetOf()) { it in catalogIds }
+        val effectiveIssuesJson = EntityCatalogIssuePersistence.applyIgnores(
+            JSONArray(lint.issues.map(DashboardConfigurationLint.Issue::toJson)), ignoredFingerprints,
+        )
+        val effectiveIssues = JSONArray(effectiveIssuesJson).let { array ->
+            (0 until array.length()).mapNotNull(array::optJSONObject)
+        }
+        val effectiveBlocking = effectiveIssues.any { it.optBoolean("blocking", false) }
         val now = System.currentTimeMillis()
         val bootstrap = snapshot.forceBootstrap || shouldBootstrapEntityLearning(
             learningEnabled = snapshot.learningEnabled,
@@ -226,7 +239,7 @@ class EntityLearningManager(
             learningEnabled = snapshot.learningEnabled,
             applied = snapshot.applied,
             configuredIds = snapshot.filterIds,
-            blockingIssues = lint.blocking,
+            blockingIssues = effectiveBlocking,
             forceBootstrap = snapshot.forceBootstrap,
         )
         synchronized(this@EntityLearningManager) {
@@ -242,9 +255,9 @@ class EntityLearningManager(
                     AutomaticSyncDecision.OBSERVE -> "observing"
                 },
                 now,
-                issues = lint.issues.map(DashboardConfigurationLint.Issue::toJson),
+                issues = effectiveIssues,
             )
-            bootstrapBlockingIssues = lint.issues.count { it.blocking }
+            bootstrapBlockingIssues = effectiveIssues.count { it.optBoolean("blocking", false) }
             dynamicExpressionsJson = encodeDynamicExpressions(scan.dynamicExpressions)
         }
         applyStoredOverrides(snapshot.instanceKey, snapshot.dashboardPath, snapshot.overrides)
@@ -252,14 +265,12 @@ class EntityLearningManager(
         // filter byte-for-byte, or keep a fresh renderer on its native diagnostic screen. Never apply
         // the bounded fragments of a partially unsafe dashboard and never fall back to an unfiltered
         // WebSocket while automatic learning is enabled.
-        if (lint.blocking) return@withContext
-        require(derived.isNotEmpty()) { "dashboard analysis found no visible entity dependencies" }
+        if (effectiveBlocking) return@withContext
         val active = desiredIds(
             now, snapshot.instanceKey, snapshot.dashboardPath,
             includeStatic = snapshot.autoStatic,
             includeRuntime = snapshot.autoRuntime,
         )
-        require(active.isNotEmpty()) { "automatic entity set is empty" }
         synchronized(this@EntityLearningManager) {
             check(snapshot.matchesCurrent(effectGeneration.get(), currentEffectState())) {
                 "entity-learning target or policy changed before apply"
@@ -370,10 +381,6 @@ class EntityLearningManager(
     private fun applyOverrides(ids: List<String>, override: String, force: Boolean) = synchronized(this) {
         require(override in setOf("auto", "pinned", "forced_exclude")) { "invalid override" }
         require(override != "forced_exclude" || force) { "force confirmation required" }
-        if (config.dashboardEntityLearningApplied && override == "forced_exclude") {
-            val current = desiredIds(System.currentTimeMillis()).toSet()
-            require((current - ids.toSet()).isNotEmpty()) { "cannot exclude the complete active subscription" }
-        }
         val previousOverrides = config.dashboardEntityOverrides
         val encoded = previousOverrides.toMutableMap().apply {
             for (id in ids) if (override == "auto") remove(id) else put(id, override)
@@ -389,7 +396,7 @@ class EntityLearningManager(
             applyStoreOverride = { store.setOverrides(targetInstance, targetPath, ids, override) },
             commitActiveFilter = {
                 active = desiredIds(System.currentTimeMillis(), targetInstance, targetPath)
-                !applied || (active.isNotEmpty() && config.commitDashboardEntitySubscription(true, active, applied = true))
+                !applied || config.commitDashboardEntitySubscription(true, active, applied = true)
             },
             restoreStoreOverride = {
                 ids.forEach { id -> store.setOverride(targetInstance, targetPath, id, previousOverrides[id] ?: "auto") }
@@ -433,9 +440,6 @@ class EntityLearningManager(
             includeStatic = staticRefs,
             includeRuntime = runtimeRefs,
         )
-        if (applied) require(active.isNotEmpty()) {
-            "policy would leave the live subscription empty; pin at least one entity first"
-        }
         val changed = applied && (active != config.dashboardEntityFilterIds || !config.dashboardEntityFilterEnabled)
         check(config.commitDashboardEntityPromotionPolicy(
             staticRefs = staticRefs,
@@ -454,11 +458,10 @@ class EntityLearningManager(
         bootstrapBlockingIssues = s.blockingIssueCount
         val suggestions = store.suggestedIds(instance(), dashboardPath())
         val candidates = suggestions.count { it !in config.dashboardEntityFilterIds.toSet() }
-        val filtered = config.dashboardEntityFilterEnabled && config.dashboardEntityFilterIds.isNotEmpty()
+        val filtered = config.dashboardEntityFilterEnabled
         val held = shouldHoldRendererForEntityBootstrap(
             config.dashboardEntityLearningEnabled,
             config.dashboardEntityFilterEnabled,
-            config.dashboardEntityFilterIds,
         )
         val desired = desiredIds(System.currentTimeMillis())
         val preview = subscriptionPreview(desired, s.catalogCount)
@@ -484,6 +487,7 @@ class EntityLearningManager(
             .put("apply_required", s.blockingIssueCount == 0 && (preview.streamChange || !config.dashboardEntityLearningApplied))
             .put("dashboard_issue_count", s.issueCount)
             .put("blocking_issue_count", s.blockingIssueCount)
+            .put("ignored_issue_count", s.ignoredIssueCount)
             .put("automatic_activation_blocked", s.blockingIssueCount > 0)
             .put("stream_mode", when { held -> "held"; filtered -> "filtered"; else -> "unfiltered" })
             .put("stream_entity_count", when { held -> 0; filtered -> config.dashboardEntityFilterIds.size; else -> s.catalogCount })
@@ -499,8 +503,40 @@ class EntityLearningManager(
             .put("items", JSONArray(store.issuesJson(instance(), dashboardPath())))
             .put("dashboard_issue_count", s.issueCount)
             .put("blocking_issue_count", s.blockingIssueCount)
+            .put("ignored_issue_count", s.ignoredIssueCount)
             .put("dynamic_expressions", JSONArray(dynamicExpressionsJson))
             .toString()
+    }
+
+    @Synchronized fun setIssueIgnored(fingerprint: String, ignored: Boolean): String {
+        val targetInstance = instance()
+        val targetPath = dashboardPath()
+        invalidateEffects()
+        require(store.setIssueIgnored(targetInstance, targetPath, fingerprint, ignored, System.currentTimeMillis())) {
+            "dashboard issue is no longer present"
+        }
+        bootstrapBlockingIssues = store.snapshot(targetInstance, targetPath).blockingIssueCount
+        val syncStarted = syncNow(if (ignored) "ignore-issue" else "restore-issue")
+        return JSONObject().put("ok", true).put("fingerprint", fingerprint)
+            .put("ignored", ignored).put("sync_started", syncStarted).toString()
+    }
+
+    @Synchronized fun ignoreAllBlockingIssues(): Boolean {
+        val targetInstance = instance()
+        val targetPath = dashboardPath()
+        val issues = JSONArray(store.issuesJson(targetInstance, targetPath))
+        val fingerprints = (0 until issues.length()).mapNotNull { index ->
+            issues.optJSONObject(index)?.takeIf { it.optBoolean("blocking", false) }
+                ?.optString("fingerprint")?.takeIf(String::isNotBlank)
+        }
+        if (fingerprints.isEmpty()) return false
+        invalidateEffects()
+        val now = System.currentTimeMillis()
+        check(fingerprints.all { store.setIssueIgnored(targetInstance, targetPath, it, true, now) }) {
+            "dashboard issues changed while applying overrides"
+        }
+        bootstrapBlockingIssues = store.snapshot(targetInstance, targetPath).blockingIssueCount
+        return syncNow("ignore-blocking-issues")
     }
 
     private fun encodeDynamicExpressions(expressions: List<EntityLearningProtocol.DynamicExpression>): String =
@@ -516,11 +552,10 @@ class EntityLearningManager(
     ): String {
         val subscribed = filter == "subscribed"
         val review = filter == "review"
-        val filtered = config.dashboardEntityFilterEnabled && config.dashboardEntityFilterIds.isNotEmpty()
+        val filtered = config.dashboardEntityFilterEnabled
         val held = shouldHoldRendererForEntityBootstrap(
             config.dashboardEntityLearningEnabled,
             config.dashboardEntityFilterEnabled,
-            config.dashboardEntityFilterIds,
         )
         val effectiveFilter = when {
             filter == "candidate" && query.isBlank() -> "candidate"
@@ -567,7 +602,7 @@ class EntityLearningManager(
         desired: List<String>,
         catalogCount: Int = store.snapshot(instance(), dashboardPath()).catalogCount,
     ): EntitySubscriptionPreview {
-        val filtered = config.dashboardEntityFilterEnabled && config.dashboardEntityFilterIds.isNotEmpty()
+        val filtered = config.dashboardEntityFilterEnabled
         return previewEntitySubscription(
             filtered = filtered,
             currentIds = config.dashboardEntityFilterIds,
@@ -888,10 +923,14 @@ internal data class HaStatesReadLimits(
     val maxRows: Int = 100_000,
     val maxEntityIdChars: Int = 255,
     val maxStateChars: Int = 255,
+    val maxFriendlyNameChars: Int = 1_024,
     val deadlineMs: Long = 45_000,
 ) {
     init {
-        require(maxBytes > 0 && maxRows > 0 && maxEntityIdChars > 0 && maxStateChars > 0 && deadlineMs > 0)
+        require(
+            maxBytes > 0 && maxRows > 0 && maxEntityIdChars > 0 && maxStateChars > 0 &&
+                maxFriendlyNameChars > 0 && deadlineMs > 0,
+        )
     }
 }
 
@@ -912,14 +951,16 @@ internal fun readHaStates(
                 rows++
                 var entityId = ""
                 var state = ""
+                var friendlyName = ""
                 reader.beginObject()
                 while (reader.hasNext()) when (reader.nextName()) {
                     "entity_id" -> entityId = reader.readBoundedScalar(limits.maxEntityIdChars, "entity_id")
                     "state" -> state = reader.readBoundedScalar(limits.maxStateChars, "state")
+                    "attributes" -> friendlyName = reader.readFriendlyName(limits.maxFriendlyNameChars)
                     else -> reader.skipValue()
                 }
                 reader.endObject()
-                validateHaStateRow(entityId, state, rows, limits)?.let(::add)
+                validateHaStateRow(entityId, state, rows, limits, friendlyName)?.let(::add)
             }
             reader.endArray()
         }
@@ -931,13 +972,34 @@ internal fun validateHaStateRow(
     state: String,
     rowNumber: Int,
     limits: HaStatesReadLimits,
+    friendlyName: String = "",
 ): EntityCatalogStore.StateRow? {
     check(rowNumber <= limits.maxRows) { "states response exceeds ${limits.maxRows} rows" }
     check(entityId.length <= limits.maxEntityIdChars) {
         "states entity_id exceeds ${limits.maxEntityIdChars} characters"
     }
     check(state.length <= limits.maxStateChars) { "states state exceeds ${limits.maxStateChars} characters" }
-    return entityId.takeIf(String::isNotBlank)?.let { EntityCatalogStore.StateRow(it, state) }
+    check(friendlyName.length <= limits.maxFriendlyNameChars) {
+        "states friendly_name exceeds ${limits.maxFriendlyNameChars} characters"
+    }
+    return entityId.takeIf(String::isNotBlank)?.let { EntityCatalogStore.StateRow(it, state, friendlyName) }
+}
+
+/** Selectively project the one state attribute used by static dashboard selectors. All other
+ * attributes remain streaming skips and are neither hydrated nor persisted. */
+private fun JsonReader.readFriendlyName(maxChars: Int): String {
+    if (peek() != JsonToken.BEGIN_OBJECT) {
+        skipValue()
+        return ""
+    }
+    var friendlyName = ""
+    beginObject()
+    while (hasNext()) when (nextName()) {
+        "friendly_name" -> friendlyName = readBoundedScalar(maxChars, "friendly_name")
+        else -> skipValue()
+    }
+    endObject()
+    return friendlyName
 }
 
 private fun JsonReader.readBoundedScalar(maxChars: Int, field: String): String {
@@ -1163,7 +1225,9 @@ internal fun previewEntitySubscription(
         currentCount = catalogCount,
         additions = 0,
         removals = (catalogCount - desired.size).coerceAtLeast(0),
-        streamChange = desired.isNotEmpty(),
+        // Enabling an empty allow-list is still a real transport change: the existing unfiltered
+        // WebView must reload so subscribe_entities is rewritten to entity_ids=[].
+        streamChange = true,
     )
     val current = currentIds.toSet()
     return EntitySubscriptionPreview(
@@ -1185,6 +1249,8 @@ object EntityLearningRuntime {
     fun bootstrapProblem(): EntityBootstrapProblem? = current?.bootstrapProblem()
     /** Explicit user retry only. syncNow rejects the request while an existing scan is active. */
     fun retryBootstrap(): Boolean = current?.syncNow("dashboard-retry") ?: false
+    fun ignoreBlockingIssues(): Boolean = current?.ignoreAllBlockingIssues() ?: false
+    fun disableAutomaticFilter(): Boolean = current?.setEnabled(false) ?: false
 }
 
 enum class EntityBootstrapProblem { AUTHENTICATION, SYNCHRONIZATION }

@@ -56,6 +56,10 @@ class EntityLearningProtocolTest {
             EntitySubscriptionPreview(currentCount = 100, additions = 0, removals = 97, streamChange = true),
             previewEntitySubscription(false, emptyList(), 100, listOf("light.a", "light.b", "sensor.c")),
         )
+        assertEquals(
+            EntitySubscriptionPreview(currentCount = 100, additions = 0, removals = 100, streamChange = true),
+            previewEntitySubscription(false, emptyList(), 100, emptyList()),
+        )
     }
 
     @Test fun observerAttributesInitialHydrationAndFlushesPromptly() {

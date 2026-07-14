@@ -23,6 +23,22 @@ class EntityFilterProtocolTest {
         })
     }
 
+    @Test fun intentionallyEmptyAllowListStillFiltersTheSubscription() {
+        val result = EntityFilterProtocol.injectSubscription(
+            """{"id":7,"type":"subscribe_entities"}""", emptyList(),
+        )
+
+        assertTrue(result.modified)
+        val encoded = JSONObject(result.text).getJSONArray("entity_ids")
+        assertEquals(1, encoded.length())
+        assertEquals(EntityFilterProtocol.EMPTY_SUBSCRIPTION_ENTITY_ID, encoded.getString(0))
+        // Mirror HA core's `set(msg.get("entity_ids", [])) or None`: this must stay non-null so
+        // both initial hydration and subsequent updates use the filtered path.
+        val homeAssistantEntityIds = (0 until encoded.length()).map(encoded::getString).toSet().ifEmpty { null }
+        assertTrue(homeAssistantEntityIds != null)
+        assertFalse(homeAssistantEntityIds!!.contains("light.any_real_entity"))
+    }
+
     @Test fun authAndUnrelatedMessagesRemainByteIdentical() {
         val auth = """{ "type": "auth", "access_token": "do-not-reencode" }"""
         val ping = """{"id":8,"type":"ping"}"""
@@ -36,6 +52,11 @@ class EntityFilterProtocolTest {
         assertEquals(
             EntityFilterProtocol.Mutation(existing, false),
             EntityFilterProtocol.injectSubscription(existing, ids),
+        )
+        val nested = """{ "id": 10, "type": "subscribe_entities", "exclude": {"entity_globs":["sensor.*"]} }"""
+        assertEquals(
+            EntityFilterProtocol.Mutation(nested, false),
+            EntityFilterProtocol.injectSubscription(nested, ids),
         )
     }
 
@@ -108,6 +129,7 @@ class EntityFilterProtocolTest {
         assertTrue(script.contains("targetWsPath=\"/api/websocket\""))
         assertTrue(script.contains("u.pathname===targetWsPath"))
         assertTrue(script.contains("entityIds=[\"light.alpha\",\"sensor.temperature\"]"))
+        assertTrue(script.contains("emptySubscriptionEntityId=\"${EntityFilterProtocol.EMPTY_SUBSCRIPTION_ENTITY_ID}\""))
         assertFalse(script.contains("127.0.0.1"))
         assertTrue(script.contains("FilteredWebSocket.prototype=Native.prototype"))
     }

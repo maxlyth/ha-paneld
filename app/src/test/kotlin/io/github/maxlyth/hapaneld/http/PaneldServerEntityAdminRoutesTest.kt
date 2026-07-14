@@ -24,7 +24,7 @@ import org.junit.Test
 import java.io.File
 import java.lang.reflect.InvocationTargetException
 
-/** Composed coverage for the exact private body reader plus a source contract proving all five live
+/** Composed coverage for the exact private body reader plus a source contract proving all six live
  * routes use it. PaneldServer itself is Android-bound, so the instance is allocation-only: the helper
  * under test reads no fields and runs inside a real Ktor test ApplicationCall. */
 class PaneldServerEntityAdminRoutesTest {
@@ -33,10 +33,11 @@ class PaneldServerEntityAdminRoutesTest {
         "/policy" to false,
         "/override" to false,
         "/overrides" to false,
+        "/issues" to false,
         "/reset" to true,
     )
 
-    @Test fun `all five routes reject declared and chunked overflow before JSON parsing`() = testApplication {
+    @Test fun `all six routes reject declared and chunked overflow before JSON parsing`() = testApplication {
         application { routing { installEntityReaderRoutes() } }
         val oversizedInvalid = "not-json" + "x".repeat(PaneldServer.MAX_ENTITY_ADMIN_BODY_BYTES.toInt())
 
@@ -70,13 +71,14 @@ class PaneldServerEntityAdminRoutesTest {
         }
     }
 
-    @Test fun `live route contract delegates all five endpoints to the bounded reader`() {
+    @Test fun `live route contract delegates all six endpoints to the bounded reader`() {
         val source = paneldServerSource()
         val contracts = linkedMapOf(
             "/dashboard/entities/activate" to "receiveEntityAdminJson(call, allowBlank = true)",
             "/dashboard/entities/policy" to "receiveEntityAdminJson(call)",
             "/dashboard/entities/override" to "receiveEntityAdminJson(call)",
             "/dashboard/entities/overrides" to "receiveEntityAdminJson(call)",
+            "/dashboard/entities/issues" to "receiveEntityAdminJson(call)",
             "/dashboard/entities/reset" to "receiveEntityAdminJson(call, allowBlank = true)",
         )
         contracts.forEach { (route, reader) ->
@@ -90,6 +92,17 @@ class PaneldServerEntityAdminRoutesTest {
         assertTrue(helper.indexOf("Content-Length") < helper.indexOf("JSONObject("))
         assertTrue(helper.indexOf("BoundedStreams.readBytes") < helper.indexOf("JSONObject("))
         assertTrue(helper.contains("HttpStatusCode.PayloadTooLarge"))
+    }
+
+    @Test fun `filter status preserves enabled empty allow list semantics`() {
+        val source = paneldServerSource()
+        val start = source.indexOf("private fun entityFilterStatusJson")
+        val end = source.indexOf("private class EntityFilterBodyTooLarge", start)
+        val status = source.substring(start, end)
+
+        assertTrue(status.contains("val hash = EntityFilterProtocol.hash(ids)"))
+        assertTrue(status.contains("\\\"enabled\\\":\${config.dashboardEntityFilterEnabled}"))
+        assertFalse(status.contains("ids.isNotEmpty()"))
     }
 
     @Test fun `blank explicit manual list is rejected before atomic cutover`() {

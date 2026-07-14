@@ -8,6 +8,22 @@ import org.junit.Test
 import java.lang.reflect.Proxy
 
 class ConfigTransactionTest {
+    @Test fun disablingAndReenablingLearningRestoresThePreservedNarrowStream() {
+        val prefs = fakePreferences()
+        val config = Config(prefs.instance)
+        assertTrue(config.commitDashboardEntitySubscription(true, listOf("light.kitchen"), applied = true))
+
+        assertTrue(config.commitDashboardEntityLearningMode(enabled = false, clearApplied = true))
+        assertFalse(config.dashboardEntityFilterEnabled)
+        assertEquals(listOf("light.kitchen"), config.dashboardEntityFilterIds)
+
+        assertTrue(config.commitDashboardEntityLearningMode(enabled = true, clearApplied = true))
+        assertTrue(config.dashboardEntityLearningEnabled)
+        assertTrue(config.dashboardEntityFilterEnabled)
+        assertEquals(listOf("light.kitchen"), config.dashboardEntityFilterIds)
+        assertFalse(config.dashboardEntityLearningApplied)
+    }
+
     @Test fun entityPromotionSourcesDefaultOnAndPersistIndependently() {
         val prefs = fakePreferences()
         val config = Config(prefs.instance)

@@ -32,6 +32,23 @@ else B=; D=; X=; RED=; GRN=; YEL=; CYN=; MAG=; fi
 step() { echo "${CYN}${B}$1${X} $2"; }
 warn() { echo "   ${YEL}⚠ $1${X}"; }
 
+usage() {
+  cat <<'EOF'
+Usage: scripts/provision.sh <panel-ip[:port]> [APK] [options]
+
+Common operations:
+  --latest                 Install the latest stable release
+  --prerelease             Install the latest release candidate
+  --apk FILE               Install a specific APK
+  --export FILE            Back up config only; never installs unless combined with install/config options
+  --verify                 Check the existing installation only; never installs
+  --no-tame                Leave vendor applications unchanged
+  --help                   Show this help
+
+The script installs, starts, and verifies ha-paneld. It exits nonzero if a required step is incomplete.
+EOF
+}
+
 trap 'echo "${RED}${B}✗ provisioning incomplete${X} — re-run the SAME command to finish (it is idempotent)." >&2' ERR
 
 # Fatal with SPECIFIC recovery steps. Disarms the generic re-run trap first: these are the failures
@@ -43,7 +60,9 @@ fail() {
   exit 1
 }
 
-TARGET="${1:?usage: provision.sh <panel-ip:5555> [APK] [--id ID] [--mqtt tcp://host:1883] [--mqtt-user U] [--mqtt-pass P] [--ha-url URL] [--ha-token LLAT | --ha-user U --ha-pass P] [--builtin] [--log-host HOST] [--log-port N] [--log-proto syslog|http] [--log-off] [--export FILE] [--restore FILE] [--restore-fleet FILE] [--latest | --prerelease] [--force] [--persist-adb] [--strip-vendor] [--no-tame] [--verify]}"
+[ "$#" -gt 0 ] || { usage >&2; exit 2; }
+case "$1" in -h|--help) usage; exit 0 ;; esac
+TARGET="$1"
 shift
 REPO="maxlyth/ha-paneld"
 LOCAL_APK="app/build/outputs/apk/debug/app-debug.apk"
@@ -53,9 +72,18 @@ APK=""; PANEL_ID=""; MQTT=""; MQTT_USER=""; MQTT_PASS=""; VERIFY_ONLY=0; LATEST=
 LOG_HOST=""; LOG_PORT=""; LOG_PROTO=""; LOG_ENABLE=""
 EXPORT_FILE=""; RESTORE_FILE=""; RESTORE_MODE=""
 HA_URL=""; HA_TOKEN=""; HA_USER=""; HA_PASS=""; HA_REFRESH=""; HA_EXPIRY=""; BUILTIN=0
+HA_LOGIN_FAILED=0
 
 if [ "${1:-}" ] && [ "${1#--}" = "${1:-}" ]; then APK="$1"; shift; fi
 while [ "${1:-}" ]; do
+  case "$1" in
+    --apk|--id|--mqtt|--mqtt-user|--mqtt-pass|--log-host|--log-port|--log-proto|--ha-url|--ha-token|--ha-user|--ha-pass|--export|--restore|--restore-fleet)
+      if [ "$#" -lt 2 ] || [ -z "${2:-}" ] || [ "${2#--}" != "${2:-}" ]; then
+        echo "${RED}✗ $1 needs a value.${X} Run with --help for examples." >&2
+        exit 2
+      fi
+      ;;
+  esac
   case "$1" in
     --apk) APK="$2"; shift 2 ;;
     --id) PANEL_ID="$2"; shift 2 ;;
@@ -81,11 +109,31 @@ while [ "${1:-}" ]; do
     --restore) RESTORE_FILE="$2"; RESTORE_MODE="restore"; shift 2 ;;      # best-effort import of a bundle (full restore)
     --restore-fleet) RESTORE_FILE="$2"; RESTORE_MODE="fleet"; shift 2 ;;  # apply only PORTABLE keys (cross-panel deploy)
     --verify) VERIFY_ONLY=1; shift ;;
+    -h|--help) usage; exit 0 ;;
     *) echo "${RED}unknown arg: $1${X}" >&2; exit 2 ;;
   esac
 done
-IP="${TARGET%%:*}"
-URL="http://$IP:8888"
+if { [ -n "$HA_USER" ] && [ -z "$HA_PASS" ]; } || { [ -z "$HA_USER" ] && [ -n "$HA_PASS" ]; }; then
+  echo "${RED}✗ --ha-user and --ha-pass must be supplied together.${X}" >&2
+  exit 2
+fi
+if [ -n "$HA_TOKEN" ] && [ -n "$HA_USER" ]; then
+  echo "${RED}✗ choose either --ha-token or --ha-user/--ha-pass, not both.${X}" >&2
+  exit 2
+fi
+if { [ -n "$HA_USER" ] || [ -n "$HA_TOKEN" ]; } && [ -z "$HA_URL" ]; then
+  echo "${RED}✗ --ha-user/--ha-pass and --ha-token require --ha-url.${X}" >&2
+  exit 2
+fi
+if [ "$BUILTIN" = 1 ] && [ -n "$HA_URL" ] && [ -z "$HA_TOKEN" ] && [ -z "$HA_USER" ]; then
+  echo "${RED}✗ --builtin with --ha-url also needs --ha-token or --ha-user/--ha-pass.${X}" >&2
+  echo "   Use bare --builtin only when intentionally borrowing an existing signed-in Home Assistant Companion login." >&2
+  exit 2
+fi
+HOST="${TARGET%:*}"
+[ "$HOST" != "$TARGET" ] || HOST="$TARGET"
+URL="http://$HOST:8888"
+PROVISION_FAILED=0
 
 verify() {
   step "🔎 verifying" "${D}$URL${X}"
@@ -123,7 +171,7 @@ verify() {
   broker="$(printf '%s' "$cfg" | grep -o '"mqtt_broker":"[^"]*"' | head -1 | cut -d'"' -f4)"
   pid="$(printf '%s' "$cfg" | grep -o '"panel_id":"[^"]*"' | head -1 | cut -d'"' -f4)"
   if [ -n "$broker" ]; then echo "   ${GRN}✓${X} MQTT broker: ${B}$broker${X}"
-  else echo "   ${YEL}ℹ${X} MQTT broker: ${YEL}not set${X} ${D}(set it on the page to enable HA discovery)${X}"; fi
+  else echo "   ${YEL}ℹ${X} MQTT broker: ${YEL}not explicitly set${X} ${D}(LAN auto-discovery will be attempted; it can also be set in Configure)${X}"; fi
   echo "   ${YEL}ℹ${X} panel_id: ${B}${pid:-?}${X}"
   return $rc
 }
@@ -138,8 +186,9 @@ adb_preflight() {
   # and bound the wait; the poll below reads the device state the adb server ends up with.
   adb connect "$TARGET" >/dev/null 2>&1 &
   local cpid=$!
-  local state="" i
-  for i in $(seq 1 12); do
+  local state="" i=0
+  while [ "$i" -lt 12 ]; do
+    i=$((i + 1))
     state="$(adb devices 2>/dev/null | awk -v t="$TARGET" '$1==t {print $2}')"
     if [ "$state" = "device" ]; then kill "$cpid" 2>/dev/null || true; return 0; fi
     # Stale session ("offline"): reset it once, then keep polling.
@@ -264,7 +313,7 @@ offer_strip_vendor() {
 WEBVIEW_DOC="https://github.com/$REPO/blob/main/docs/hardware/tpa10.md#webview--update-this-first"
 check_webview() {
   local wv major
-  wv="$(adb -s "$TARGET" shell dumpsys webviewupdate 2>/dev/null | grep -m1 'Current WebView package' | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+  wv="$(adb -s "$TARGET" shell dumpsys webviewupdate 2>/dev/null | grep -m1 'Current WebView package' | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
   [ -n "$wv" ] || return 0
   major="${wv%%.*}"
   case "$major" in ''|*[!0-9]*) return 0 ;; esac
@@ -297,9 +346,9 @@ download_latest() {
       api="https://api.github.com/repos/$REPO/releases/latest"        # newest stable only
     fi
     json="$(curl -fsSL "$api" 2>/dev/null || true)"
-    tag="$(printf '%s' "$json" | grep -o '"tag_name": *"[^"]*"' | head -1 | cut -d'"' -f4)"
-    url="$(printf '%s' "$json" | grep -o '"browser_download_url": *"[^"]*\.apk"' | head -1 | cut -d'"' -f4)"
-    [ -n "$url" ] && curl -fsSL "$url" -o "$dir/ha-paneld-latest.apk"
+    tag="$(printf '%s' "$json" | grep -o '"tag_name": *"[^"]*"' | head -1 | cut -d'"' -f4 || true)"
+    url="$(printf '%s' "$json" | grep -o '"browser_download_url": *"[^"]*\.apk"' | head -1 | cut -d'"' -f4 || true)"
+    [ -n "$url" ] && curl -fsSL "$url" -o "$dir/ha-paneld-latest.apk" || true
   fi
   APK="$(ls "$dir"/*.apk 2>/dev/null | head -1 || true)"
   [ -n "$APK" ] || { echo "${RED}could not fetch the latest release APK (need gh, or internet for the GitHub API)${X}" >&2; exit 1; }
@@ -325,34 +374,66 @@ resolve_apk() {
   return 0  # never let the (possibly non-zero) probe above abort the script under set -e
 }
 
-# Warn (and prompt on a TTY) before reinstalling the same or an older version; --force skips it.
+# Give a useful version transition before install. Android's package manager remains the portable,
+# authoritative downgrade guard; avoiding GNU `sort -V` keeps the supported macOS path working.
 version_guard() {
   [ "$FORCE" = 1 ] && return 0
   [ -n "$TOINSTALL_VER" ] || return 0
-  local installed newest
+  local installed
   installed="$(adb -s "$TARGET" shell dumpsys package "$PKG" 2>/dev/null | grep -m1 versionName | sed 's/.*versionName=//' | tr -d '\r ' || true)"
   [ -n "$installed" ] || return 0
-  newest="$(printf '%s\n%s\n' "$installed" "$TOINSTALL_VER" | sort -V | tail -1)"
   if [ "$installed" = "$TOINSTALL_VER" ]; then
     echo "${YEL}ℹ panel already on $installed — reinstalling.${X}"
-  elif [ "$newest" = "$installed" ]; then
-    echo "${YEL}⚠ panel has $installed; about to install OLDER $TOINSTALL_VER (downgrade).${X}"
-    if [ -t 0 ]; then printf "   continue? [y/N] "; read -r a; case "$a" in [yY]*) ;; *) echo "aborted."; exit 0 ;; esac; fi
   else
-    echo "${GRN}↑ updating $installed → $TOINSTALL_VER${X}"
+    echo "${GRN}↻ changing $installed → $TOINSTALL_VER${X}"
+    echo "   ${D}Android will safely reject an unsupported downgrade; no app data is removed.${X}"
   fi
   return 0
 }
 
-echo "${MAG}${B}🛠  ha-paneld provisioning${X} ${D}→ $TARGET${X}"
+export_config() {
+  local destination="$1" temporary="${1}.partial.$$"
+  step "📦 exporting config" "${D}→ $destination (includes secrets — protect it)${X}"
+  if ! curl -fsS --max-time 30 "$URL/api/v1/config/export?include_secrets=1" -o "$temporary"; then
+    rm -f "$temporary"
+    fail "config backup failed; the panel was not changed" \
+      "Confirm $URL opens from this computer, then run the same --export command again."
+  fi
+  if [ ! -s "$temporary" ]; then
+    rm -f "$temporary"
+    fail "config backup was empty; the panel was not changed" \
+      "Do not uninstall or replace the app until a non-empty backup has been verified."
+  fi
+  chmod 600 "$temporary" 2>/dev/null || true
+  mv "$temporary" "$destination"
+  echo "   ${GRN}✓${X} $(wc -c < "$destination") bytes saved with owner-only permissions"
+}
 
-if [ "$VERIFY_ONLY" = 1 ]; then
-  verify; exit $?
-fi
+export_is_only_operation() {
+  [ -n "$EXPORT_FILE" ] && [ -z "$APK$PANEL_ID$MQTT$MQTT_USER$MQTT_PASS$LOG_HOST$LOG_PORT$LOG_PROTO$LOG_ENABLE" ] &&
+    [ -z "$HA_URL$HA_TOKEN$HA_USER$HA_PASS$RESTORE_FILE" ] && [ "$LATEST" = 0 ] && [ "$PERSIST_ADB" = 0 ] &&
+    [ "$STRIP_VENDOR" = 0 ] && [ "$BUILTIN" = 0 ]
+}
+
+echo "${MAG}${B}🛠  ha-paneld provisioning${X} ${D}→ $TARGET${X}"
 
 # Preflight the panel BEFORE fetching an APK — an unreachable/unauthorized panel should fail in
 # seconds with recovery steps, not after a release download.
 adb_preflight
+
+# A backup must happen before any install or configuration mutation. With no other requested
+# operation, --export is deliberately read-only and exits here.
+if [ -n "$EXPORT_FILE" ]; then export_config "$EXPORT_FILE"; fi
+if [ "$VERIFY_ONLY" = 1 ]; then verify; exit $?; fi
+if export_is_only_operation; then
+  echo "${GRN}${B}✅ backup complete${X} — no app, setting, or panel state was changed."
+  exit 0
+fi
+
+if [ "$NO_TAME" != 1 ] && [ "$PROVISION_FAILED" = 0 ]; then
+  echo "${YEL}ℹ after installation, ha-paneld will reversibly disable this profile's known vendor overlays and factory-test apps.${X}"
+  echo "   ${D}Use --no-tame to leave every vendor application unchanged.${X}"
+fi
 
 resolve_apk
 
@@ -436,14 +517,20 @@ fi
 # on panels that ship no `curl` themselves) and is retried once to cover a stopped-state / slow-boot race.
 launch_and_wait() {
   adb -s "$TARGET" shell am start -n "$PKG/.MainActivity" >/dev/null 2>&1 || true
-  for _ in $(seq 1 15); do curl -fsS --max-time 2 "$URL/health" >/dev/null 2>&1 && return 0; sleep 1; done
+  local attempt=0
+  while [ "$attempt" -lt 15 ]; do
+    attempt=$((attempt + 1))
+    curl -fsS --max-time 2 "$URL/health" >/dev/null 2>&1 && return 0
+    sleep 1
+  done
   return 1
 }
 step "▶️  starting" "the panel agent"
 if ! launch_and_wait; then
   step "▶️  re-starting" "${D}agent didn't answer — retrying${X}"
-  launch_and_wait || { warn "web server still not answering on $URL — the app may be running anyway: open $URL in a browser."
-                       echo "   ${D}If the page loads there, only THIS machine can't reach the panel on :8888 (firewall/VLAN) — the remaining config steps need that port.${X}"; }
+  launch_and_wait || { warn "web server still not answering on $URL — provisioning is incomplete."
+                       echo "   ${D}Open $URL in a browser. If it loads there, this computer cannot reach the panel's :8888 port (firewall/VLAN).${X}"
+                       PROVISION_FAILED=1; }
 fi
 
 # Built-in-renderer login (optional): when --ha-user/--ha-pass are given, log in to HA *here on this
@@ -454,8 +541,7 @@ fi
 json_escape() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
 
 if [ -n "$HA_USER" ] && [ -n "$HA_PASS" ]; then
-  if [ -z "$HA_URL" ]; then warn "--ha-user/--ha-pass need --ha-url; skipping login"; else
-    step "🔑  HA login" "${D}minting a refresh token for $HA_USER (password stays on this machine)${X}"
+  step "🔑  HA login" "${D}minting a refresh token for $HA_USER (password stays on this machine)${X}"
     # Every curl / grep-extract below is `|| true`-guarded: under set -euo pipefail a failed request or
     # a no-match grep pipeline would abort the whole provisioning run BEFORE the warn lines could
     # explain what happened — the warn-and-continue guards were dead code without this.
@@ -464,11 +550,11 @@ if [ -n "$HA_USER" ] && [ -n "$HA_PASS" ]; then
     fl="$(curl -fsS -X POST "${HA_URL%/}/auth/login_flow" -H 'Content-Type: application/json' \
           --data "{\"client_id\":\"$jc\",\"handler\":[\"homeassistant\",null],\"redirect_uri\":\"$jc\"}" 2>/dev/null || true)"
     flow_id="$(printf '%s' "$fl" | grep -o '"flow_id":"[^"]*"' | head -1 | cut -d'"' -f4 || true)"
-    if [ -z "$flow_id" ]; then warn "HA login_flow failed (is $HA_URL reachable?)"; else
+    if [ -z "$flow_id" ]; then warn "HA login flow failed (is $HA_URL reachable?)"; HA_LOGIN_FAILED=1; else
       res="$(curl -fsS -X POST "${HA_URL%/}/auth/login_flow/$flow_id" -H 'Content-Type: application/json' \
              --data "{\"client_id\":\"$jc\",\"username\":\"$ju\",\"password\":\"$jp\"}" 2>/dev/null || true)"
       code="$(printf '%s' "$res" | grep -o '"result":"[^"]*"' | head -1 | cut -d'"' -f4 || true)"
-      if [ -z "$code" ]; then warn "HA login rejected (bad credentials or MFA-enabled account)"; else
+      if [ -z "$code" ]; then warn "HA login rejected (bad credentials or MFA-enabled account)"; HA_LOGIN_FAILED=1; else
         tok="$(curl -fsS -X POST "${HA_URL%/}/auth/token" \
                --data-urlencode "grant_type=authorization_code" \
                --data-urlencode "code=$code" --data-urlencode "client_id=$cid" 2>/dev/null || true)"
@@ -476,9 +562,37 @@ if [ -n "$HA_USER" ] && [ -n "$HA_PASS" ]; then
         HA_REFRESH="$(printf '%s' "$tok" | grep -o '"refresh_token":"[^"]*"' | cut -d'"' -f4 || true)"
         exp="$(printf '%s' "$tok" | grep -o '"expires_in":[0-9]*' | grep -o '[0-9]*' || true)"
         [ -n "$exp" ] && HA_EXPIRY="$(( $(date +%s) + exp ))"
-        if [ -n "$HA_REFRESH" ]; then echo "   ${GRN}✓${X} refresh token minted"; else warn "no refresh token in HA response"; fi
+        if [ -n "$HA_TOKEN" ] && [ -n "$HA_REFRESH" ]; then
+          echo "   ${GRN}✓${X} refresh token minted"
+        else
+          warn "Home Assistant returned no usable access/refresh token pair"
+          HA_LOGIN_FAILED=1
+        fi
       fi
     fi
+  if [ "$HA_LOGIN_FAILED" != 0 ]; then
+    HA_TOKEN=""; HA_REFRESH=""; HA_EXPIRY=""
+    PROVISION_FAILED=1
+    echo "   ${RED}The existing dashboard login and renderer selection were left unchanged.${X}"
+  fi
+fi
+
+# A long-lived token supplied directly is otherwise just opaque text: accepting it and selecting the
+# built-in renderer would produce a convincing false-success followed by an on-panel login failure.
+# Validate every resulting access token (direct LLAT or freshly minted short-lived token) against HA
+# before changing any saved renderer/login settings.
+if [ "$HA_LOGIN_FAILED" = 0 ] && [ -n "$HA_TOKEN" ]; then
+  step "🔐  checking HA access" "${D}validating the token before changing the panel${X}"
+  if curl -fsS --max-time 10 -H "Authorization: Bearer $HA_TOKEN" \
+      -H 'Accept: application/json' "${HA_URL%/}/api/" >/dev/null 2>&1; then
+    echo "   ${GRN}✓${X} Home Assistant accepted the token"
+  else
+    warn "Home Assistant rejected the token (or ${HA_URL%/} could not be reached)"
+    HA_LOGIN_FAILED=1
+    HA_TOKEN=""; HA_REFRESH=""; HA_EXPIRY=""
+    PROVISION_FAILED=1
+    echo "   ${RED}The existing dashboard login and renderer selection were left unchanged.${X}"
+    echo "   ${D}Create a new long-lived access token in Home Assistant → your profile, then re-run.${X}"
   fi
 fi
 
@@ -487,11 +601,13 @@ ARGS=()
 [ -n "$MQTT" ]       && ARGS+=(--data-urlencode "mqtt_broker=$MQTT")
 [ -n "$MQTT_USER" ]  && ARGS+=(--data-urlencode "mqtt_user=$MQTT_USER")
 [ -n "$MQTT_PASS" ]  && ARGS+=(--data-urlencode "mqtt_password=$MQTT_PASS")
-[ -n "$HA_URL" ]     && ARGS+=(--data-urlencode "ha_url=$HA_URL")
-[ -n "$HA_TOKEN" ]   && ARGS+=(--data-urlencode "ha_token=$HA_TOKEN")
-[ -n "$HA_REFRESH" ] && ARGS+=(--data-urlencode "ha_refresh_token=$HA_REFRESH")
-[ -n "$HA_EXPIRY" ]  && ARGS+=(--data-urlencode "ha_token_expiry=$HA_EXPIRY")
-[ "$BUILTIN" = 1 ]   && ARGS+=(--data-urlencode "dashboard_package=builtin")
+if [ "$HA_LOGIN_FAILED" = 0 ]; then
+  [ -n "$HA_URL" ]     && ARGS+=(--data-urlencode "ha_url=$HA_URL")
+  [ -n "$HA_TOKEN" ]   && ARGS+=(--data-urlencode "ha_token=$HA_TOKEN")
+  [ -n "$HA_REFRESH" ] && ARGS+=(--data-urlencode "ha_refresh_token=$HA_REFRESH")
+  [ -n "$HA_EXPIRY" ]  && ARGS+=(--data-urlencode "ha_token_expiry=$HA_EXPIRY")
+  [ "$BUILTIN" = 1 ]   && ARGS+=(--data-urlencode "dashboard_package=builtin")
+fi
 [ -n "$LOG_ENABLE" ] && ARGS+=(--data-urlencode "log_ship_enabled=$LOG_ENABLE")
 [ -n "$LOG_HOST" ]   && ARGS+=(--data-urlencode "log_ship_host=$LOG_HOST")
 [ -n "$LOG_PORT" ]   && ARGS+=(--data-urlencode "log_ship_port=$LOG_PORT")
@@ -503,6 +619,7 @@ if [ ${#ARGS[@]} -gt 0 ]; then
   else
     warn "config not applied: ${CFG_ERR:-no response}"
     echo "   ${D}If the agent was still starting, re-running applies it. A 403 means the panel refused the source: its API only accepts LAN addresses — provision from a host on the panel's own network, not via VPN/routed subnet.${X}"
+    PROVISION_FAILED=1
   fi
 fi
 
@@ -514,7 +631,12 @@ if [ -n "$RESTORE_FILE" ]; then
   [ -f "$RESTORE_FILE" ] || { echo "${RED}✗ bundle not found: $RESTORE_FILE${X}" >&2; exit 2; }
   MODE_Q=""; [ "$RESTORE_MODE" = "fleet" ] && MODE_Q="?mode=fleet"
   step "📦 restoring config" "${D}$RESTORE_FILE (${RESTORE_MODE})${X}"
-  resp="$(curl -fsS -H 'Content-Type: application/json' --data-binary @"$RESTORE_FILE" "$URL/api/v1/config/import$MODE_Q" 2>&1)"     && echo "   ${GRN}✓${X} $resp"     || echo "   ${RED}✗ import failed:${X} $resp"
+  if resp="$(curl -fsS -H 'Content-Type: application/json' --data-binary @"$RESTORE_FILE" "$URL/api/v1/config/import$MODE_Q" 2>&1)"; then
+    echo "   ${GRN}✓${X} $resp"
+  else
+    echo "   ${RED}✗ import failed:${X} $resp"
+    PROVISION_FAILED=1
+  fi
 fi
 
 # Recommended vendor-app taming — tame the panel profile's `defaultTame` set (eWeLink's over-the-dashboard
@@ -522,22 +644,22 @@ fi
 # ha-paneld's admin launcher and refuses to strand the panel, and it's reversible from the :8888 picker.
 # Default ON during provisioning; --no-tame skips. Runs after any restore so it isn't clobbered. Best-effort
 # — a profile with no recommendations, or a panel with no privileged path, is a harmless no-op.
-if [ "$NO_TAME" != 1 ]; then
+if [ "$NO_TAME" != 1 ] && [ "$PROVISION_FAILED" = 0 ]; then
   step "🧹 taming" "${D}recommended vendor apps (eWeLink, factory test tools)${X}"
   curl -fsS --data-urlencode "action=recommended" "$URL/api/v1/tame" >/dev/null 2>&1 \
     && echo "   ${GRN}✓${X} recommended set applied (where present + safe)" \
     || echo "   ${D}(nothing to tame / no privileged path)${X}"
 fi
 
-# Config bundle export (after any restore/config, so the file reflects the final state). Includes
-# secrets — the bundle is a full-recovery artifact; store it like a credential.
-if [ -n "$EXPORT_FILE" ]; then
-  step "📦 exporting config" "${D}→ $EXPORT_FILE (includes secrets — protect it)${X}"
-  curl -fsS "$URL/api/v1/config/export?include_secrets=1" -o "$EXPORT_FILE"     && echo "   ${GRN}✓${X} $(wc -c < "$EXPORT_FILE") bytes"     || echo "   ${RED}✗ export failed${X}"
-fi
-
 echo
-verify && echo "${GRN}${B}✅ provisioned${X} — ${B}$URL/${X}" || echo "${YEL}↻ re-run the same command to finish (idempotent).${X}"
+if verify; then
+  [ "$PROVISION_FAILED" = 0 ] && echo "${GRN}${B}✅ provisioned and verified${X} — ${B}$URL/${X}"
+else
+  PROVISION_FAILED=1
+fi
+if [ "$PROVISION_FAILED" != 0 ]; then
+  echo "${RED}${B}✗ provisioning incomplete${X} — correct the failed item above, then re-run the same command."
+fi
 echo "${D}   Root daemon: required on EVERY sandbox-walled panel (appCanSu=false — TPA10, SMT1019, …), not just LED panels. It's the privileged path for screen-off, density, governor, screenshot, perf and buttons even when ledMechanism=NONE. rk3576/PX30 panels can exec su directly and don't need it.${X}"
 echo "${D}   Install it with:  ./helper/build.sh && ./helper/install-daemon.sh $TARGET${X}"
 
@@ -546,4 +668,6 @@ check_webview
 
 # Tuya/TPA10 only: offer to disable the closed vendor app stack for a faster, minimal HA panel (guarded
 # on root + persistent adb + a replacement launcher; prompts unless --strip-vendor was passed).
-offer_strip_vendor
+[ "$PROVISION_FAILED" = 0 ] && offer_strip_vendor
+
+exit "$PROVISION_FAILED"

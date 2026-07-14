@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+set -u
+
+printf 'adb %s\n' "$*" >> "${MOCK_CALL_LOG:?MOCK_CALL_LOG is required}"
+
+if [ "${1:-}" = "connect" ]; then
+  exit 0
+fi
+
+if [ "${1:-}" = "devices" ]; then
+  state="${MOCK_ADB_STATE:-device}"
+  printf 'List of devices attached\n'
+  if [ "$state" != "missing" ]; then
+    for target in ${MOCK_TARGETS:-${MOCK_TARGET:-panel.test:5555}}; do printf '%s\t%s\n' "$target" "$state"; done
+  fi
+  exit 0
+fi
+
+if [ "${1:-}" = "-s" ]; then
+  shift 2
+fi
+
+case "${1:-}" in
+  install)
+    printf 'Success\n'
+    ;;
+  disconnect)
+    ;;
+  shell)
+    shift
+    command_text="$*"
+    case "$command_text" in
+      "dumpsys package "*)
+        printf 'versionName=%s\n' "${MOCK_INSTALLED_VERSION:-0.9.1}"
+        ;;
+      "settings get secure enabled_accessibility_services")
+        printf 'null\n'
+        ;;
+      "getprop ro.product.brand"|"getprop ro.product.model")
+        printf '\n'
+        ;;
+      "dumpsys webviewupdate")
+        printf 'Current WebView package (name, version): (com.android.webview, 150.0.0.0)\n'
+        ;;
+      "id")
+        printf 'uid=2000(shell) gid=2000(shell)\n'
+        ;;
+    esac
+    ;;
+  *)
+    ;;
+esac

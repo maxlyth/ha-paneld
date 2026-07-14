@@ -326,7 +326,7 @@ class DashboardActivity : AppCompatActivity() {
         if (!config.dashboardEntityFilterEnabled) return "disabled$learning"
         return runCatching {
             val ids = EntityFilterProtocol.normalize(config.dashboardEntityFilterIds)
-            if (ids.isEmpty()) "disabled$learning" else "enabled:${EntityFilterProtocol.hash(ids)}:${config.haUrl}$learning"
+            "enabled:${EntityFilterProtocol.hash(ids)}:${config.haUrl}$learning"
         }.getOrDefault("invalid$learning")
     }
 
@@ -334,7 +334,6 @@ class DashboardActivity : AppCompatActivity() {
         shouldHoldRendererForEntityBootstrap(
             learningEnabled = config.dashboardEntityLearningEnabled,
             filterEnabled = config.dashboardEntityFilterEnabled,
-            entityIds = config.dashboardEntityFilterIds,
         )
 
     /** Prepare the exact allow-list for document-start interception. Automatic filtering fails closed:
@@ -776,9 +775,10 @@ class DashboardActivity : AppCompatActivity() {
                <h1 style="color:#f66">Home Assistant sign-in rejected</h1>
                <p style="font-size:1.3em">This panel's saved Home Assistant login settings were rejected,
                so the dashboard has stopped retrying.</p>
-               <p style="font-size:1.3em"><b>Fix:</b> open <b>$cfg</b> &rarr; Dashboard and check the
-               refresh token and OAuth client ID, or set a long-lived access token. The dashboard reloads automatically
-               when the configuration changes.</p>
+               <p style="font-size:1.3em"><b>Fix:</b> open <b>$cfg</b> &rarr; Dashboard. To borrow a
+               signed-in Home Assistant Companion login again, clear the Home Assistant server URL and save;
+               or enter a new long-lived access token from your Home Assistant profile. The dashboard reloads
+               automatically when the login changes.</p>
                </div></body></html>""",
             "text/html", "utf-8", null,
         )
@@ -1283,7 +1283,7 @@ class DashboardActivity : AppCompatActivity() {
                 text = if (filterHold != null) {
                     "Optimized dashboard subscription unavailable"
                 } else if (blockingIssues > 0) {
-                    "Dashboard configuration needs attention"
+                    "Entity filter needs attention"
                 } else if (bootstrapProblem == EntityBootstrapProblem.AUTHENTICATION) {
                     "Home Assistant authentication needs attention"
                 } else if (bootstrapProblem != null) {
@@ -1301,7 +1301,7 @@ class DashboardActivity : AppCompatActivity() {
                 text = if (filterHold != null) {
                     "${filterHold.detail} Home Assistant has not been opened, preventing an unfiltered entity stream. Retry after updating System WebView, or review entity diagnostics in panel settings."
                 } else if (blockingIssues > 0) {
-                    "$blockingIssues blocking ${if (blockingIssues == 1) "issue prevents" else "issues prevent"} automatic activation. Review the entity diagnostics in panel settings."
+                    "The Home Assistant dashboard is not broken. $blockingIssues entity-filter safety ${if (blockingIssues == 1) "check needs" else "checks need"} a choice before the optimized subscription can start."
                 } else if (bootstrapProblem == EntityBootstrapProblem.AUTHENTICATION) {
                     "Home Assistant rejected the dashboard scan. Check this panel's Home Assistant login in Dashboard settings, then retry. Home Assistant remains closed to prevent an unfiltered entity stream."
                 } else if (bootstrapProblem != null) {
@@ -1335,8 +1335,38 @@ class DashboardActivity : AppCompatActivity() {
                 topMargin = (20 * density).toInt()
                 gravity = Gravity.CENTER_HORIZONTAL
             })
+            if (filterHold == null && blockingIssues > 0) {
+                addView(Button(this@DashboardActivity).apply {
+                    text = "Continue without flagged entities"
+                    setOnClickListener {
+                        isEnabled = false
+                        text = "Preparing dashboard…"
+                        if (!EntityLearningRuntime.ignoreBlockingIssues()) {
+                            isEnabled = true
+                            text = "Continue without flagged entities"
+                        }
+                    }
+                }, LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT,
+                ).apply {
+                    topMargin = (20 * density).toInt()
+                    gravity = Gravity.CENTER_HORIZONTAL
+                })
+                addView(Button(this@DashboardActivity).apply {
+                    text = "Disable entity filter"
+                    setOnClickListener {
+                        isEnabled = false
+                        if (!EntityLearningRuntime.disableAutomaticFilter()) isEnabled = true
+                    }
+                }, LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT,
+                ).apply {
+                    topMargin = (10 * density).toInt()
+                    gravity = Gravity.CENTER_HORIZONTAL
+                })
+            }
             addView(Button(this@DashboardActivity).apply {
-                text = "Open panel settings"
+                text = if (blockingIssues > 0) "Open entity-filter settings" else "Open panel settings"
                 setOnClickListener {
                     val path = if (bootstrapProblem == EntityBootstrapProblem.AUTHENTICATION) "/configure" else "/entities"
                     startActivity(Intent(this@DashboardActivity, ConfigActivity::class.java).putExtra("path", path))
@@ -1361,7 +1391,7 @@ class DashboardActivity : AppCompatActivity() {
         Log.i(TAG, if (filterHold != null) {
             "automatic entity filter held before WebView creation (${filterHold.error})"
         } else if (blockingIssues > 0) {
-            "automatic entity activation blocked by $blockingIssues dashboard configuration issue(s)"
+            "automatic entity filter awaiting a choice for $blockingIssues safety issue(s)"
         } else {
             "automatic entity set not ready — holding renderer before WebView creation"
         })

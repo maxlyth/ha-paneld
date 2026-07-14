@@ -15,7 +15,19 @@ scripts/provision.sh <panel-ip:5555> \
     [--builtin --ha-url URL {--ha-token LLAT | --ha-user U --ha-pass P}]
 ```
 
-It downloads the **latest signed release** from GitHub when no `--apk` is given and no local build exists. `--latest` forces the download even when a local build exists; `--prerelease` fetches the newest release-candidate instead of the latest stable. It connects, installs, grants the permissions below, starts the agent, optionally sets the panel id / MQTT, and ends with a self-verify checklist. It is **idempotent**, so re-run the same command to finish after any interruption. It warns before reinstalling the same or an older version (`--force` skips that). `scripts/provision.sh <ip> --verify` re-checks a panel without changing anything.
+It downloads the **latest signed release** from GitHub when no `--apk` is given and no local build exists. `--latest` forces the stable download even when a local build exists; `--prerelease` fetches the newest release candidate instead. It connects, installs, grants the permissions below, starts the agent, optionally sets the panel id / MQTT, and ends with a self-verify checklist. It is **idempotent**, so re-run the same command to finish after any interruption. Required startup, configuration, restore, and verification failures return a nonzero result and are never counted as a successful fleet update. Run `scripts/provision.sh --help` for the concise command reference.
+
+Two read-only operations are safe to run independently:
+
+```bash
+# Secret-inclusive recovery bundle. This does not resolve or install an APK.
+scripts/provision.sh <panel-ip:5555> --export panel-config.json
+
+# Check the existing installation without changing it.
+scripts/provision.sh <panel-ip:5555> --verify
+```
+
+When `--export FILE` is combined with install or configuration options, the verified backup is written **before** any panel mutation. Protect that file like a credential. Provisioning also offers the profile's known vendor overlays and factory-test apps for reversible disabling; pass `--no-tame` to leave them unchanged.
 
 Non-root panels: use the in-app setup screen, which fires the standard system permission intents.
 
@@ -32,8 +44,9 @@ rk3576 / PX30 panels run `su` in-app and don't need it. The installer probes the
 Since 0.9, ha-paneld can render the dashboard itself instead of the HA Companion app (experimental, off by default). `--builtin` selects it and provisions its Home Assistant sign-in **from this machine**, so nothing is typed on the panel:
 
 ```bash
-# username/password (recommended): logs in HERE, mints a revocable refresh token; the password
-# never reaches the panel.
+# Username/password: logs in HERE and mints a revocable refresh token; the password never reaches
+# the panel, but command-line values may remain in shell history. Prefer the Configure UI or a
+# Companion-login import when practical.
 scripts/provision.sh <panel-ip:5555> --builtin --ha-url https://ha.example --ha-user USER --ha-pass PASS
 
 # or a long-lived access token instead of a login:

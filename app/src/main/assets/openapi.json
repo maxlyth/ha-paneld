@@ -93,7 +93,11 @@
       "post": { "summary": "Start an immediate catalog and dashboard synchronization", "tags": ["performance"], "responses": { "202": { "description": "Started" }, "409": { "description": "Already running" } } }
     },
     "/api/v1/dashboard/entities/issues": {
-      "get": { "summary": "Sanitized dashboard configuration issues and non-blocking dynamic expressions", "tags": ["performance"], "responses": { "200": { "description": "{items,dashboard_issue_count,blocking_issue_count,dynamic_expressions}; issue items include severity, blocking, source locations, rule summary, candidate count, limit, reason and recommendation; dynamic expressions include source_location, literal, fingerprint and truncated" } } }
+      "get": { "summary": "Sanitized entity-filter configuration checks and non-blocking dynamic expressions", "tags": ["performance"], "responses": { "200": { "description": "{items,dashboard_issue_count,blocking_issue_count,ignored_issue_count,dynamic_expressions}; issue items include severity, blocking, ignored, source locations, rule summary, candidate count, limit, reason and recommendation" } } },
+      "post": { "summary": "Ignore or re-enable one current entity-filter safety check", "tags": ["performance"],
+        "requestBody": { "content": { "application/json": { "schema": { "type": "object", "required": ["fingerprint", "ignored"], "properties": {
+          "fingerprint": { "type": "string", "pattern": "^[a-f0-9]{16}$" }, "ignored": { "type": "boolean" }
+        } } } } }, "responses": { "200": { "description": "Override stored and replacement scan requested" }, "400": { "description": "Issue is invalid or no longer present" } } }
     },
     "/api/v1/dashboard/entities/activate": {
       "post": { "summary": "Explicitly replace the current filter with the observed candidate set", "tags": ["performance"],
@@ -105,7 +109,7 @@
         "requestBody": { "content": { "application/json": { "schema": { "type": "object", "required": ["auto_static", "auto_runtime"], "properties": {
           "auto_static": { "type": "boolean", "description": "Automatically subscribe dashboard configuration references" },
           "auto_runtime": { "type": "boolean", "description": "Automatically subscribe missing entities read through hass.states" }
-        } } } } }, "responses": { "200": { "description": "Policy applied" }, "400": { "description": "Invalid or empty resulting subscription" } } }
+        } } } } }, "responses": { "200": { "description": "Policy applied, including an intentionally empty filtered subscription when applicable" }, "400": { "description": "Invalid policy" } } }
     },
     "/api/v1/dashboard/entities/override": {
       "post": { "summary": "Pin, force-exclude or return one entity to automatic membership", "tags": ["performance"],

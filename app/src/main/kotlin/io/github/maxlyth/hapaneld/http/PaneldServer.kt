@@ -439,6 +439,20 @@ class PaneldServer(
                     get("/dashboard/entities/issues") {
                         call.respondText(entityLearning.issuesJson(), ContentType.Application.Json)
                     }
+                    post("/dashboard/entities/issues") {
+                        val obj = receiveEntityAdminJson(call) ?: return@post
+                        if (!obj.has("fingerprint") || !obj.has("ignored")) {
+                            return@post call.respondText(
+                                "fingerprint and ignored are required\n", status = HttpStatusCode.BadRequest,
+                            )
+                        }
+                        val response = runCatching {
+                            entityLearning.setIssueIgnored(obj.optString("fingerprint"), obj.optBoolean("ignored"))
+                        }.getOrElse {
+                            return@post call.respondText("invalid issue override: ${it.message}\n", status = HttpStatusCode.BadRequest)
+                        }
+                        call.respondText(response, ContentType.Application.Json)
+                    }
                     post("/dashboard/entities/sync") {
                         if (entityLearning.syncNow("manual")) {
                             call.respondText(entityLearning.statusJson(), ContentType.Application.Json, HttpStatusCode.Accepted)
@@ -1060,7 +1074,7 @@ class PaneldServer(
         <p>Enable <b>Automatic dashboard entity filter</b> on Configure → Dashboard while using the built-in renderer.</p></div></div>"""
     } else """
         <div class="cards entity-cards">
-          <div class="card"><h2>Entity subscription<span class="cardbadge skunk">skunk-works</span></h2>
+          <div class="card"><h2>Entity subscription filter<span class="cardbadge skunk">skunk-works</span></h2>
             <div id="entity-status">Loading…</div>
             <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
               <button class="pbtn" id="entity-sync">Scan dashboard now</button>
@@ -1075,7 +1089,7 @@ class PaneldServer(
             </fieldset>
             <div style="margin-top:12px"><input id="entity-search" placeholder="Search the complete Home Assistant entity catalogue"></div>
           </div>
-          <div class="card entity-issues" id="entity-issues"><h2>Dashboard configuration issues</h2>
+          <div class="card entity-issues" id="entity-issues"><h2>Entity-filter configuration checks</h2>
             <div id="entity-issues-summary" class="muted">Checking the dashboard configuration…</div>
             <div id="entity-issues-list" class="entity-issues-list"></div>
             <section id="entity-dynamic" class="entity-dynamic" hidden>
@@ -1650,7 +1664,9 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         if (io.github.maxlyth.hapaneld.control.BuiltinDashboard.authLatched) append(
             """<div class="setup crit">⛔ <b>Built-in renderer: Home Assistant sign-in rejected</b> — the """ +
                 """saved login settings were rejected, so the dashboard stopped retrying (it shows fix """ +
-                """instructions on the panel). Check the refresh token and OAuth client ID, or set a long-lived access token on """ +
+                """instructions on the panel). To borrow a signed-in Home Assistant Companion login again, clear """ +
+                """the Home Assistant server URL and save; or enter a new """ +
+                """long-lived access token from your Home Assistant profile on """ +
                 """<a href="/configure">Configure → Dashboard</a>; the dashboard reloads automatically when """ +
                 """the credentials change.</div>""",
         )
@@ -2081,9 +2097,9 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
     private fun entityFilterStatusJson(): String {
         val ids = runCatching { EntityFilterProtocol.normalize(config.dashboardEntityFilterIds) }
             .getOrDefault(emptyList())
-        val hash = if (ids.isEmpty()) "" else EntityFilterProtocol.hash(ids)
+        val hash = EntityFilterProtocol.hash(ids)
         return "{" +
-            "\"enabled\":${config.dashboardEntityFilterEnabled && ids.isNotEmpty()}," +
+            "\"enabled\":${config.dashboardEntityFilterEnabled}," +
             "\"entity_count\":${ids.size},\"filter_hash\":\"$hash\"," +
             "\"runtime\":${EntityFilterTelemetry.json()},\"learning\":${entityLearning.statusJson()}}"
     }

@@ -259,18 +259,18 @@ object SettingsRegistry {
         ),
         SettingSpec(
             key = "ha_token", type = SettingType.PASSWORD, group = "Dashboard",
-            label = "HA access token", default = "", secret = true,
-            help = "Built-in renderer only: the access token it signs into HA with (a long-lived token, or the current short-lived one when a refresh token is set). Blank on save keeps the current token; entering a NEW token replaces any stored refresh token (the recovery path for a revoked login).",
+            label = "Home Assistant long-lived access token", default = "", secret = true,
+            help = "Built-in renderer fallback when a Home Assistant Companion login cannot be borrowed. Create a long-lived access token from the Home Assistant user profile page. Blank on save keeps the current login; entering a new token replaces any borrowed or refresh-token login.",
         ),
         SettingSpec(
             key = "ha_refresh_token", type = SettingType.PASSWORD, group = "Dashboard",
-            label = "HA refresh token", default = "", secret = true,
-            help = "Built-in renderer only: optional OAuth refresh token (from a username/password login at provisioning). When set, the renderer refreshes its own access token, so no long-lived token lives on the panel. Blank on save keeps the current one.",
+            label = "HA refresh token", default = "", secret = true, hidden = true,
+            help = "Internal token state retained for API/config import compatibility. Borrowed Companion and ha-paneld-issued OAuth logins manage it automatically.",
         ),
         SettingSpec(
             key = "ha_client_id", type = SettingType.STRING, group = "Dashboard",
-            label = "HA OAuth client_id", default = "",
-            help = "Built-in renderer only: client_id used when refreshing the token. Blank = the HA URL (the frontend default). Set it to the client the refresh token was issued for, e.g. https://home-assistant.io/android to reuse an HA Companion refresh token.",
+            label = "HA OAuth client_id", default = "", hidden = true,
+            help = "Internal token provenance retained for API/config import compatibility. Borrowed Companion tokens use the Android Companion client; ha-paneld-issued tokens use the HA origin. Not a user preference.",
         ),
         SettingSpec(
             key = "dashboard_entity_overrides", type = SettingType.STRING, group = "Dashboard",

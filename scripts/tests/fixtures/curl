@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+set -u
+
+printf 'curl %s\n' "$*" >> "${MOCK_CALL_LOG:?MOCK_CALL_LOG is required}"
+
+url=""
+output_file=""
+want_output_file=0
+for arg in "$@"; do
+  if [ "$want_output_file" = 1 ]; then
+    output_file="$arg"
+    want_output_file=0
+    continue
+  fi
+  case "$arg" in
+    -o|--output) want_output_file=1 ;;
+    http://*|https://*) url="$arg" ;;
+  esac
+done
+
+case "$url" in
+  https://api.github.com/repos/maxlyth/ha-paneld/releases\?per_page=100)
+    [ "${MOCK_GITHUB_API:-fail}" = "pretty" ] || exit 22
+    cat <<'JSON'
+[
+  {
+    "url": "https://api.github.com/repos/maxlyth/ha-paneld/releases/200",
+    "tag_name": "v0.9.1",
+    "draft": false,
+    "prerelease": false,
+    "assets": [{"url": "https://api.github.com/repos/maxlyth/ha-paneld/releases/assets/900", "browser_download_url": "https://downloads.test/ha-paneld-v0.9.1.apk"}]
+  },
+  {
+    "url": "https://api.github.com/repos/maxlyth/ha-paneld/releases/201",
+    "tag_name": "v0.9.2-rc3",
+    "draft": false,
+    "prerelease": true,
+    "assets": [{"url": "https://api.github.com/repos/maxlyth/ha-paneld/releases/assets/901", "browser_download_url": "https://downloads.test/ha-paneld-v0.9.2-rc3.apk"}]
+  }
+]
+JSON
+    ;;
+  https://downloads.test/*.apk)
+    [ -n "$output_file" ] || exit 2
+    printf 'test apk\n' > "$output_file"
+    ;;
+  */auth/login_flow)
+    [ "${MOCK_HA_LOGIN:-ok}" = "flow_fail" ] && exit 22
+    printf '{"flow_id":"flow-1"}\n'
+    ;;
+  */auth/login_flow/*)
+    [ "${MOCK_HA_LOGIN:-ok}" = "rejected" ] && printf '{"errors":{"base":"invalid_auth"}}\n' || printf '{"result":"auth-code"}\n'
+    ;;
+  */auth/token)
+    if [ "${MOCK_HA_LOGIN:-ok}" = "token_missing" ]; then printf '{}\n';
+    else printf '{"access_token":"access","refresh_token":"refresh","expires_in":1800}\n'; fi
+    ;;
+  */api/)
+    [ "${MOCK_HA_TOKEN:-ok}" = "ok" ] || exit 22
+    printf '{"message":"API running."}\n'
+    ;;
+  */health)
+    [ "${MOCK_HEALTH:-ok}" = "ok" ] || exit 22
+    printf 'ok\n'
+    ;;
+  */api/v1/diag)
+    [ "${MOCK_VERIFY:-ok}" = "ok" ] || exit 22
+    case "$url" in *"${MOCK_VERIFY_FAIL_HOST:-__no_host__}"*) exit 22 ;; esac
+    printf 'ha-paneld diagnostics write_settings=true a11y=true su=true daemon=true\n'
+    ;;
+  *'/api/v1/config/export?include_secrets=1')
+    [ "${MOCK_EXPORT:-ok}" = "ok" ] || exit 22
+    if [ -n "$output_file" ]; then
+      printf '{"panel_id":"test-panel","mqtt_broker":""}\n' > "$output_file"
+    else
+      printf '{"panel_id":"test-panel","mqtt_broker":""}\n'
+    fi
+    ;;
+  */api/v1/config/import*)
+    [ "${MOCK_RESTORE:-ok}" = "ok" ] || exit 22
+    printf '{"ok":true}\n'
+    ;;
+  */api/v1/config)
+    if printf '%s\n' "$*" | grep -q -- '-X POST'; then
+      [ "${MOCK_CONFIG:-ok}" = "ok" ] || exit 22
+      printf '{"ok":true}\n'
+    else
+      printf '{"panel_id":"test-panel","mqtt_broker":""}\n'
+    fi
+    ;;
+  */api/v1/tame)
+    printf '{"ok":true}\n'
+    ;;
+  *)
+    printf 'mock curl has no response for %s\n' "$url" >&2
+    exit 22
+    ;;
+esac

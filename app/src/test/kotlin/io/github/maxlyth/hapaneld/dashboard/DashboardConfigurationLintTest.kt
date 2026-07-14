@@ -79,6 +79,55 @@ class DashboardConfigurationLintTest {
         assertEquals(65, result.issues.single().candidateCount)
     }
 
+    @Test fun friendlyNameRegexBoundsCommonAlarmSelectorsBeforeApplyingDynamicStateRules() {
+        val config = """{"views":[{"cards":[{"type":"custom:auto-entities","filter":{
+          "include":[{"domain":"binary_sensor","name":"/otion [Gg]roup/","state":"on","sort":{"method":"friendly_name"}}],
+          "exclude":[{"state":"unknown"},{"state":"unavailable"}]
+        }}]}]}"""
+        val catalog = entities("binary_sensor", 537)
+        val names = catalog.associateWith { id ->
+            when (id) {
+                "binary_sensor.sample_7" -> "Ground Floor Motion Group"
+                "binary_sensor.sample_42" -> "Garage motion group"
+                else -> "Contact ${id.substringAfterLast('_')}"
+            }
+        }
+
+        val result = DashboardConfigurationLint.analyze(config, catalog, emptyMap(), names)
+
+        assertEquals(setOf("binary_sensor.sample_7", "binary_sensor.sample_42"), result.safeEntityIds)
+        assertTrue(result.issues.isEmpty())
+    }
+
+    @Test fun friendlyNameMatchingIsCaseSensitiveAndMissingNamesNeverMatch() {
+        val config = """{"views":[{"cards":[{"type":"custom:auto-entities","filter":{"include":[
+          {"domain":"binary_sensor","name":"Window Group"}
+        ]}}]}]}"""
+        val catalog = listOf("binary_sensor.exact", "binary_sensor.lower", "binary_sensor.missing")
+
+        val result = DashboardConfigurationLint.analyze(
+            config, catalog, emptyMap(),
+            mapOf("binary_sensor.exact" to "Window Group", "binary_sensor.lower" to "window group"),
+        )
+
+        assertEquals(setOf("binary_sensor.exact"), result.safeEntityIds)
+        assertTrue(result.issues.isEmpty())
+    }
+
+    @Test fun unsafeFriendlyNamePatternCannotNarrowABroadDomain() {
+        val config = """{"views":[{"cards":[{"type":"custom:auto-entities","filter":{"include":[
+          {"domain":"binary_sensor","name":"/(.*.*)group/"}
+        ]}}]}]}"""
+        val catalog = entities("binary_sensor", 65)
+        val names = catalog.associateWith { "Window group" }
+
+        val result = DashboardConfigurationLint.analyze(config, catalog, emptyMap(), names)
+
+        assertTrue(result.safeEntityIds.isEmpty())
+        assertEquals(DashboardConfigurationLint.IssueType.BROAD_SELECTOR, result.issues.single().type)
+        assertEquals(65, result.issues.single().candidateCount)
+    }
+
     @Test fun structuralExcludeCanBoundASelectorWithoutSamplingIt() {
         val config = """{"views":[{"cards":[{"type":"custom:auto-entities","filter":{
           "include":[{"domain":"sensor"}],
