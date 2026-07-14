@@ -31,6 +31,111 @@ internal class RendererGenerationGate {
     }
 }
 
+internal data class WakeMediaRecoveryTicket(
+    val cycle: Long,
+    val rendererGeneration: Long,
+)
+
+internal enum class WakeMediaRecoveryAction { NONE, INSPECT, RELOAD }
+
+/** Owns one bounded media-resume check for each real screen-off to screen-on cycle. */
+internal class WakeMediaRecoveryGate {
+    private var sequence = 0L
+    private var current: WakeMediaRecoveryTicket? = null
+    private var recoveryClaimed = false
+    private var closed = false
+
+    @Synchronized fun begin(rendererGeneration: Long): WakeMediaRecoveryTicket {
+        check(!closed) { "wake media recovery gate is closed" }
+        return current?.takeIf { it.rendererGeneration == rendererGeneration } ?: WakeMediaRecoveryTicket(
+            cycle = ++sequence,
+            rendererGeneration = rendererGeneration,
+        ).also {
+            current = it
+            recoveryClaimed = false
+        }
+    }
+
+    @Synchronized fun owns(ticket: WakeMediaRecoveryTicket): Boolean =
+        !closed && current == ticket
+
+    @Synchronized fun onArmResult(ticket: WakeMediaRecoveryTicket, candidates: Int): WakeMediaRecoveryAction {
+        if (!owns(ticket)) return WakeMediaRecoveryAction.NONE
+        if (candidates > 0) return WakeMediaRecoveryAction.INSPECT
+        complete(ticket)
+        return WakeMediaRecoveryAction.NONE
+    }
+
+    @Synchronized fun onInspectResult(ticket: WakeMediaRecoveryTicket, stalled: Boolean): WakeMediaRecoveryAction {
+        if (!owns(ticket) || recoveryClaimed) return WakeMediaRecoveryAction.NONE
+        if (!stalled) {
+            complete(ticket)
+            return WakeMediaRecoveryAction.NONE
+        }
+        recoveryClaimed = true
+        return WakeMediaRecoveryAction.RELOAD
+    }
+
+    @Synchronized fun complete(ticket: WakeMediaRecoveryTicket) {
+        if (current == ticket) current = null
+    }
+
+    @Synchronized fun invalidate() {
+        current = null
+        recoveryClaimed = false
+    }
+
+    @Synchronized fun close() {
+        closed = true
+        invalidate()
+    }
+}
+
+/** Exact scripts evaluated in the live dashboard to distinguish healthy resumed media from a dead camera card. */
+internal object WakeMediaRecoveryScript {
+    private const val STATE = "__haPanelWakeMedia"
+
+    fun arm(cycle: Long): String =
+        """
+        (()=>{try{
+          const videos=[];
+          const visit=root=>{
+            root.querySelectorAll('video').forEach(video=>videos.push(video));
+            root.querySelectorAll('*').forEach(element=>{if(element.shadowRoot)visit(element.shadowRoot);});
+          };
+          const live=video=>{const stream=video.srcObject;return !!(stream&&typeof stream.getVideoTracks==='function'&&stream.getVideoTracks().some(track=>track.readyState==='live'));};
+          const visible=video=>{const rect=video.getBoundingClientRect();const style=getComputedStyle(video);return video.isConnected&&rect.width>0&&rect.height>0&&rect.bottom>0&&rect.right>0&&rect.top<innerHeight&&rect.left<innerWidth&&style.display!=='none'&&style.visibility!=='hidden'&&Number(style.opacity)!==0;};
+          const frames=video=>{try{return typeof video.getVideoPlaybackQuality==='function'?video.getVideoPlaybackQuality().totalVideoFrames:(video.webkitDecodedFrameCount||0);}catch(_){return 0;}};
+          visit(document);
+          const candidates=videos.filter(video=>visible(video)&&!video.ended&&(!video.paused||video.autoplay||live(video)));
+          candidates.forEach(video=>{try{const playing=video.play();if(playing&&typeof playing.catch==='function')playing.catch(()=>{});}catch(_){}});
+          window.$STATE={cycle:$cycle,samples:candidates.map(video=>({video,time:Number(video.currentTime)||0,frames:frames(video)}))};
+          return candidates.length;
+        }catch(_){return -1;}})()
+        """.trimIndent()
+
+    fun inspect(cycle: Long): String =
+        """
+        (()=>{try{
+          const state=window.$STATE;
+          delete window.$STATE;
+          if(!state||state.cycle!==$cycle||!state.samples.length)return -1;
+          const live=video=>{const stream=video.srcObject;return !!(stream&&typeof stream.getVideoTracks==='function'&&stream.getVideoTracks().some(track=>track.readyState==='live'));};
+          const visible=video=>{const rect=video.getBoundingClientRect();const style=getComputedStyle(video);return video.isConnected&&rect.width>0&&rect.height>0&&rect.bottom>0&&rect.right>0&&rect.top<innerHeight&&rect.left<innerWidth&&style.display!=='none'&&style.visibility!=='hidden'&&Number(style.opacity)!==0;};
+          const frames=video=>{try{return typeof video.getVideoPlaybackQuality==='function'?video.getVideoPlaybackQuality().totalVideoFrames:(video.webkitDecodedFrameCount||0);}catch(_){return 0;}};
+          if(state.samples.some(sample=>!visible(sample.video)||sample.video.ended||(sample.video.paused&&!sample.video.autoplay&&!live(sample.video))))return -1;
+          const progressed=state.samples.some(sample=>(Number(sample.video.currentTime)||0)>sample.time+0.05||frames(sample.video)>sample.frames);
+          return progressed?0:1;
+        }catch(_){return -1;}})()
+        """.trimIndent()
+}
+
+internal fun javascriptIntResult(result: String?): Int? =
+    result?.trim()?.removeSurrounding("\"")?.toIntOrNull()
+
+internal fun shouldArmWakeMediaRecovery(wasAwake: Boolean, awake: Boolean, frontendHealthy: Boolean): Boolean =
+    !wasAwake && awake && frontendHealthy
+
 /**
  * Keep top-level navigation on the configured HA authority. HTTP↔HTTPS redirects remain allowed when
  * both URLs use their scheme default or preserve the same explicit port; a different explicit port is

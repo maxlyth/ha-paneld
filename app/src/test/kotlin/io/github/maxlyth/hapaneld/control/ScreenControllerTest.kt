@@ -30,6 +30,20 @@ class ScreenControllerTest {
         return ScreenController(backlight, power, root, FakeDaemon(daemon), wakeTap) to root
     }
 
+    private fun assertRendererWakeAfter(sc: ScreenController, physicalWakeComplete: () -> Boolean) {
+        var observedCompleteWake = false
+        val listener: (Boolean) -> Unit = { awake ->
+            if (awake) observedCompleteWake = physicalWakeComplete() && power.pulses == 1
+        }
+        BuiltinDashboard.setScreenListener(listener)
+        try {
+            sc.wake()
+        } finally {
+            BuiltinDashboard.clearScreenListener(listener)
+        }
+        assertTrue(observedCompleteWake)
+    }
+
     // --- looksDark polarity ---
     @Test fun daemonBlPowerOffOverridesNonzeroBrightnessAndUnreadableRoot() {
         backlight.level = 120
@@ -127,6 +141,23 @@ class ScreenControllerTest {
         sc.wake()
         assertTrue("expected a brightness set, got ${backlight.calls}", backlight.calls.any { it.startsWith("set:") })
         assertEquals(1, power.pulses)
+    }
+
+    @Test fun rendererIsNotifiedAfterDaemonWakeAndWakelockPulse() {
+        val daemon = FakeDaemon(mapOf("SCREEN ON" to "OK"))
+        val sc = ScreenController(backlight, power, FakeRootShell(), daemon, wakeTap)
+        assertRendererWakeAfter(sc) { daemon.sent.contains("SCREEN ON") }
+    }
+
+    @Test fun rendererIsNotifiedAfterRootWakeAndWakelockPulse() {
+        val root = FakeRootShell(runResult = true)
+        val sc = ScreenController(backlight, power, root, FakeDaemon(), wakeTap)
+        assertRendererWakeAfter(sc) { root.ran.any { it.contains("bl_power") } }
+    }
+
+    @Test fun rendererIsNotifiedAfterBrightnessWakeAndWakelockPulse() {
+        val sc = ScreenController(backlight, power, FakeRootShell(runResult = false), FakeDaemon(), wakeTap)
+        assertRendererWakeAfter(sc) { backlight.calls.any { it.startsWith("set:") } }
     }
 
     // --- touch-to-wake: a real screen-off arms the tap; wake disarms it ---

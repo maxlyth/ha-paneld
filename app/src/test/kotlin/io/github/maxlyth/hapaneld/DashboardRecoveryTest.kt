@@ -3,6 +3,7 @@ package io.github.maxlyth.hapaneld
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
 import org.junit.Test
 
 class DashboardRecoveryTest {
@@ -82,6 +83,153 @@ class DashboardRecoveryTest {
         gate.close()
         assertFalse(gate.owns(third))
         assertTrue(runCatching { gate.open() }.isFailure)
+    }
+
+    @Test fun `wake media recovery is generation checked and at most once per wake`() {
+        val gate = WakeMediaRecoveryGate()
+        val first = gate.begin(rendererGeneration = 4)
+        assertEquals(first, gate.begin(rendererGeneration = 4))
+        assertTrue(gate.owns(first))
+        assertEquals(WakeMediaRecoveryAction.INSPECT, gate.onArmResult(first, candidates = 2))
+        assertEquals(WakeMediaRecoveryAction.RELOAD, gate.onInspectResult(first, stalled = true))
+        assertEquals(WakeMediaRecoveryAction.NONE, gate.onInspectResult(first, stalled = true))
+
+        gate.invalidate()
+        assertFalse(gate.owns(first))
+        assertEquals(WakeMediaRecoveryAction.NONE, gate.onArmResult(first, candidates = 1))
+        val second = gate.begin(rendererGeneration = 4)
+        assertTrue(second.cycle > first.cycle)
+        assertEquals(WakeMediaRecoveryAction.INSPECT, gate.onArmResult(second, candidates = 1))
+
+        val replacement = gate.begin(rendererGeneration = 5)
+        assertFalse(gate.owns(second))
+        assertEquals(WakeMediaRecoveryAction.NONE, gate.onInspectResult(second, stalled = true))
+        assertTrue(gate.owns(replacement))
+        assertEquals(WakeMediaRecoveryAction.NONE, gate.onArmResult(replacement, candidates = 0))
+        assertFalse(gate.owns(replacement))
+        val healthy = gate.begin(rendererGeneration = 5)
+        assertEquals(WakeMediaRecoveryAction.NONE, gate.onInspectResult(healthy, stalled = false))
+        assertFalse(gate.owns(healthy))
+        gate.close()
+        assertTrue(runCatching { gate.begin(6) }.isFailure)
+    }
+
+    @Test fun `javascript integer results reject malformed callbacks`() {
+        assertEquals(1, javascriptIntResult("1"))
+        assertEquals(-1, javascriptIntResult("\"-1\""))
+        assertEquals(null, javascriptIntResult("null"))
+        assertEquals(null, javascriptIntResult(null))
+    }
+
+    @Test fun `media recovery starts only on a healthy real off to on edge`() {
+        assertFalse(shouldArmWakeMediaRecovery(wasAwake = true, awake = true, frontendHealthy = true))
+        assertFalse(shouldArmWakeMediaRecovery(wasAwake = true, awake = false, frontendHealthy = true))
+        assertFalse(shouldArmWakeMediaRecovery(wasAwake = false, awake = false, frontendHealthy = true))
+        assertFalse(shouldArmWakeMediaRecovery(wasAwake = false, awake = true, frontendHealthy = false))
+        assertTrue(shouldArmWakeMediaRecovery(wasAwake = false, awake = true, frontendHealthy = true))
+    }
+
+    @Test fun `exact wake media scripts classify and sample nested dashboard video`() {
+        val node = runCatching { ProcessBuilder("node", "--version").start().let { it.waitFor() == 0 } }
+            .getOrDefault(false)
+        assumeTrue("node unavailable", node)
+        val arm = WakeMediaRecoveryScript.arm(7)
+        val inspect = WakeMediaRecoveryScript.inspect(7)
+        val harness =
+            """
+            global.window=globalThis;
+            global.innerWidth=800;
+            global.innerHeight=600;
+            global.getComputedStyle=video=>video.style;
+            const makeRoot=(videos=[],elements=[])=>({querySelectorAll(selector){return selector==='video'?videos:elements;}});
+            const makeVideo=(values={})=>Object.assign({
+              currentTime:0,webkitDecodedFrameCount:0,isConnected:true,ended:false,paused:false,autoplay:false,
+              style:{display:'block',visibility:'visible',opacity:'1'},srcObject:null,playCalls:0,
+              getBoundingClientRect(){return {width:320,height:180,top:0,left:0,bottom:180,right:320};},
+              getVideoPlaybackQuality(){return {totalVideoFrames:this.webkitDecodedFrameCount};},
+              play(){this.playCalls++;return {catch(){}};}
+            },values);
+            const arm=()=>($arm);
+            const inspect=()=>($inspect);
+            const expect=(actual,want,label)=>{if(actual!==want)throw Error(label+': got '+actual+', want '+want);};
+            document=makeRoot();
+            expect(arm(),0,'no video');
+            const hidden=makeVideo({getBoundingClientRect(){return {width:0,height:0,top:0,left:0,bottom:0,right:0};}});
+            document=makeRoot([hidden]);
+            expect(arm(),0,'hidden video');
+            const manualPause=makeVideo({paused:true});
+            document=makeRoot([manualPause]);
+            expect(arm(),0,'paused non-autoplay video');
+            const ended=makeVideo({ended:true});
+            document=makeRoot([ended]);
+            expect(arm(),0,'ended video');
+            const stalled=makeVideo();
+            document=makeRoot([stalled]);
+            expect(arm(),1,'visible stalled arm');
+            expect(stalled.playCalls,1,'resume play attempt');
+            expect(inspect(),1,'visible stalled inspect');
+            const progressing=makeVideo();
+            document=makeRoot([progressing]);
+            expect(arm(),1,'progressing arm');
+            progressing.currentTime=1;
+            expect(inspect(),0,'current time progress');
+            const frameProgress=makeVideo();
+            document=makeRoot([frameProgress]);
+            expect(arm(),1,'frame arm');
+            frameProgress.webkitDecodedFrameCount=1;
+            expect(inspect(),0,'frame progress');
+            const reconnecting=makeVideo({paused:true,autoplay:true});
+            document=makeRoot([reconnecting]);
+            expect(arm(),1,'autoplay without initial track');
+            reconnecting.currentTime=0.5;
+            expect(inspect(),0,'late transport progress');
+            const healthy=makeVideo();
+            const otherStalled=makeVideo();
+            document=makeRoot([healthy,otherStalled]);
+            expect(arm(),2,'two videos');
+            healthy.currentTime=2;
+            expect(inspect(),0,'one healthy video avoids page reload');
+            const shadowVideo=makeVideo();
+            const shadowRoot=makeRoot([shadowVideo]);
+            document=makeRoot([], [{shadowRoot}]);
+            expect(arm(),1,'open shadow root video');
+            expect(inspect(),1,'shadow video stalled');
+            const deepVideo=makeVideo();
+            const deepRoot=makeRoot([deepVideo]);
+            const middleRoot=makeRoot([], [{shadowRoot:deepRoot}]);
+            document=makeRoot([], [{shadowRoot:middleRoot}]);
+            expect(arm(),1,'recursive shadow root video');
+            expect(inspect(),1,'recursive shadow video stalled');
+            const replaced=makeVideo();
+            document=makeRoot([replaced]);
+            expect(arm(),1,'replace arm');
+            replaced.isConnected=false;
+            expect(inspect(),-1,'replaced node is inconclusive');
+            const hiddenDuringSample=makeVideo();
+            document=makeRoot([hiddenDuringSample]);
+            expect(arm(),1,'hide arm');
+            hiddenDuringSample.style.display='none';
+            expect(inspect(),-1,'hidden during sample is inconclusive');
+            const pausedDuringSample=makeVideo();
+            document=makeRoot([pausedDuringSample]);
+            expect(arm(),1,'pause arm');
+            pausedDuringSample.paused=true;
+            expect(inspect(),-1,'manual pause during sample is inconclusive');
+            const liveTrack=makeVideo({paused:true,srcObject:{getVideoTracks(){return [{readyState:'live'}];}}});
+            document=makeRoot([liveTrack]);
+            expect(arm(),1,'live track candidate');
+            expect(inspect(),1,'live track without progress');
+            const audioOnly=makeVideo({paused:true,srcObject:{getVideoTracks(){return [];},getTracks(){return [{readyState:'live'}];}}});
+            document=makeRoot([audioOnly]);
+            expect(arm(),0,'audio-only stream is not video playback');
+            if(window.__haPanelWakeMedia===undefined)throw Error('arm state missing before inspect');
+            expect(inspect(),-1,'empty sample is inconclusive');
+            if(window.__haPanelWakeMedia!==undefined)throw Error('inspect retained sampled nodes');
+            """.trimIndent()
+        val process = ProcessBuilder("node").redirectErrorStream(true).start()
+        process.outputStream.bufferedWriter().use { it.write(harness) }
+        val output = process.inputStream.bufferedReader().readText()
+        assertEquals(output, 0, process.waitFor())
     }
 
     @Test fun `dashboard navigation stays on the configured authority`() {

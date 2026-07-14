@@ -80,6 +80,7 @@ class DashboardActivity : AppCompatActivity() {
     // --- long-run reliability state (all touched on the main thread only) ---
     private val main = Handler(Looper.getMainLooper())
     private val rendererGate = RendererGenerationGate()
+    private val wakeMediaRecovery = WakeMediaRecoveryGate()
     private var rendererGeneration = 0L
     private var activityOwner = 0L
     private var conn: ConnectivityManager? = null
@@ -220,6 +221,7 @@ class DashboardActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         destroyed = true
+        wakeMediaRecovery.close()
         rendererGate.close()
         entityFilterLease?.let(EntityFilterTelemetry::stop)
         entityFilterLease = null
@@ -236,6 +238,7 @@ class DashboardActivity : AppCompatActivity() {
      *  called on a screen-off — without this, an activity destroyed while dark would leave JS timers
      *  frozen for every future WebView in this forever process (a never-blank violation). */
     private fun teardownWeb() {
+        wakeMediaRecovery.invalidate()
         rendererGate.invalidate()
         main.removeCallbacks(watchdog)
         main.removeCallbacks(darkSettle)
@@ -325,6 +328,7 @@ class DashboardActivity : AppCompatActivity() {
      */
     private fun onScreenChanged(awake: Boolean) {
         if (destroyed || !BuiltinDashboard.ownsActivity(activityOwner)) return
+        val wasAwake = screenAwake
         screenAwake = awake
         val w = web ?: return
         if (awake) {
@@ -332,7 +336,10 @@ class DashboardActivity : AppCompatActivity() {
             w.resumeTimers(); w.onResume()
             lastTouchAt = SystemClock.elapsedRealtime() // a wake implies presence — don't instantly snap home
             if (!frontendConnected && !authLatched) armWatchdog(INITIAL_HANDSHAKE_MS)
+            val frontendHealthy = frontendConnected && !authLatched && !interstitialShown
+            if (shouldArmWakeMediaRecovery(wasAwake, awake, frontendHealthy)) armWakeMediaRecovery(w, rendererGeneration)
         } else {
+            wakeMediaRecovery.invalidate()
             w.onPause()
             main.removeCallbacks(watchdog) // a paused WebView can't complete the handshake — don't loop
             if (authLatched) { w.pauseTimers(); return }
@@ -349,6 +356,39 @@ class DashboardActivity : AppCompatActivity() {
             }
         }
     }
+
+    /** WebView resume does not guarantee that HA's existing WebRTC cards rebuild a transport. After a
+     * real wake, sample only visible playing/autoplay media and allow one full-page recovery if none of
+     * it advances. Every callback is owned by both the renderer generation and the wake cycle. */
+    private fun armWakeMediaRecovery(w: WebView, generation: Long) {
+        val ticket = wakeMediaRecovery.begin(generation)
+        main.postDelayed({
+            if (!wakeMediaCurrent(ticket, w)) return@postDelayed
+            w.evaluateJavascript(WakeMediaRecoveryScript.arm(ticket.cycle)) { result ->
+                if (!wakeMediaCurrent(ticket, w)) return@evaluateJavascript
+                when (wakeMediaRecovery.onArmResult(ticket, javascriptIntResult(result) ?: -1)) {
+                    WakeMediaRecoveryAction.INSPECT ->
+                        main.postDelayed({ inspectWakeMedia(ticket, w) }, WAKE_MEDIA_SAMPLE_MS)
+                    WakeMediaRecoveryAction.NONE, WakeMediaRecoveryAction.RELOAD -> Unit
+                }
+            }
+        }, WAKE_MEDIA_SETTLE_MS)
+    }
+
+    private fun inspectWakeMedia(ticket: WakeMediaRecoveryTicket, w: WebView) {
+        if (!wakeMediaCurrent(ticket, w)) return
+        w.evaluateJavascript(WakeMediaRecoveryScript.inspect(ticket.cycle)) { result ->
+            if (!wakeMediaCurrent(ticket, w)) return@evaluateJavascript
+            if (wakeMediaRecovery.onInspectResult(ticket, javascriptIntResult(result) == 1) == WakeMediaRecoveryAction.RELOAD) {
+                Log.w(TAG, "visible dashboard media did not resume after screen wake — reloading once")
+                BuiltinDashboard.recordRendererReload(SystemClock.elapsedRealtime())
+                doReload("visible media stalled after screen wake")
+            }
+        }
+    }
+
+    private fun wakeMediaCurrent(ticket: WakeMediaRecoveryTicket, w: WebView): Boolean =
+        screenAwake && wakeMediaRecovery.owns(ticket) && rendererCurrent(ticket.rendererGeneration, w)
 
     /** A reload is worthwhile now if memory pressure asked for one, or it's been a long time since the
      *  last full load (WebView memory accretes over days). */
@@ -497,6 +537,7 @@ class DashboardActivity : AppCompatActivity() {
      *  network-regain reload): reset the connected state + arm the handshake watchdog — but only while the
      *  screen is awake, since a paused WebView can't run the JS that completes the handshake. */
     private fun onLoadStarted() {
+        wakeMediaRecovery.invalidate()
         frontendConnected = false
         clearedThisLoad = false
         lastFullLoadAt = SystemClock.elapsedRealtime()
@@ -1443,6 +1484,8 @@ class DashboardActivity : AppCompatActivity() {
         private const val REFRESH_REJECT_LATCH = 2              // consecutive definitive refresh rejections → latch
         private const val DEFAULT_NETWORK_WAIT_MS = 60_000L     // calm first-boot progress until learned
         private const val ENTITY_BOOTSTRAP_CHECK_MS = 1_000L    // missed-relaunch backstop; no network work
+        private const val WAKE_MEDIA_SETTLE_MS = 3_000L         // let resumeTimers/onResume reach the page first
+        private const val WAKE_MEDIA_SAMPLE_MS = 6_000L         // tolerate slow camera transport reconstruction
     }
 }
 

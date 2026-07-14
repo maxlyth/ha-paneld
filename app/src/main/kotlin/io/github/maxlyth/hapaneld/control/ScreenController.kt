@@ -116,22 +116,24 @@ class ScreenController(
     @Synchronized
     fun wake() {
         intendedOff = false
-        // Resume the built-in renderer's WebView (no-op if it isn't the dashboard).
-        BuiltinDashboard.onScreenAwake(true)
         wakeTap.disarm()
         if (daemon.send("SCREEN ON") == "OK") {
-            power.pulseWake()
-            Log.d(TAG, "screen -> on (daemon bl_power)")
+            completeWake("screen -> on (daemon bl_power)")
             return
         }
         if (root.run(blPower(true))) {
-            power.pulseWake()
-            Log.d(TAG, "screen -> on (su bl_power)")
+            completeWake("screen -> on (su bl_power)")
             return
         }
         backlight.setBrightness(savedLevel.coerceAtLeast(MIN_ON))
+        completeWake("screen -> on (brightness fallback; $savedLevel)")
+    }
+
+    /** Publish renderer wake only after the physical wake path and wakelock pulse have completed. */
+    private fun completeWake(message: String) {
         power.pulseWake()
-        Log.d(TAG, "screen -> on (brightness fallback; $savedLevel)")
+        BuiltinDashboard.onScreenAwake(true)
+        Log.d(TAG, message)
     }
 
     /** Release the wake-overlay owner without ever leaving an intentionally dark panel behind. */
