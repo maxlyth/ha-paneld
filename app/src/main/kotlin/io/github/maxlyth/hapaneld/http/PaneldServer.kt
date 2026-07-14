@@ -900,11 +900,11 @@ class PaneldServer(
                         // at once — reading `wm density` back immediately after a change can still return the
                         // pre-write override for a second or two (the change is async), which flashed a stale
                         // value on the page until a manual reload. Only the just-changed field could race, so
-                        // we take the value we set (d / recommendedDensity / native) and only re-read the
+                        // we take the value we set (d / recommendedDensity / base) and only re-read the
                         // unchanged fields (which are stable).
-                        val nat = density.native()
+                        val base = density.base()
                         val postDpi = when (action) {
-                            "reset" -> nat
+                            "reset" -> base
                             "rec" -> recommendedDensity ?: density.current()
                             else -> d ?: density.current()
                         }
@@ -914,7 +914,7 @@ class PaneldServer(
                             else -> f ?: density.fontScale()
                         }
                         snapInvalidate()
-                        if (ok) densityCache.set(Triple(postDpi, nat, postFont))
+                        if (ok) densityCache.set(Triple(postDpi, base, postFont))
                         call.respondText(
                             "<!doctype html><meta charset=utf-8><meta http-equiv=refresh content='1;url=/configure'>" +
                                 "<body style='font-family:system-ui;background:#111;color:#eee;padding:20px'>" +
@@ -1542,13 +1542,13 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         val live: Map<String, String>,
         val caps: Capabilities,
         val densityCur: Int?,
-        val densityNat: Int?,
+        val densityBase: Int?,
         val fontScale: Float,
         val rootOk: Boolean,
     )
 
     // The density trio is shared with the Configure tab's Display card (the bulk of ITS slow render).
-    private val densityCache = Cached(DENSITY_TTL_MS) { Triple(density.current(), density.native(), density.fontScale()) }
+    private val densityCache = Cached(DENSITY_TTL_MS) { Triple(density.current(), density.base(), density.fontScale()) }
     // su presence doesn't flap — cache the probe gating screenshot / controls / system logs / taming.
     private val suCache = Cached(SU_TTL_MS) { Su.available() }
     private fun rootOk(): Boolean = suCache.get() || HelperClient.available()
@@ -1564,7 +1564,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
             facts = info(),
             live = liveValues(),
             caps = capabilities(),
-            densityCur = d.first, densityNat = d.second, fontScale = d.third,
+            densityCur = d.first, densityBase = d.second, fontScale = d.third,
             rootOk = rootOk(),
         )
     }
@@ -1653,9 +1653,9 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         // Built-in renderer zoomed off 100% (usually carried over from the Companion's "Page zoom"). App
         // zoom is a compatibility lever; the cleaner way to size the dashboard is the panel display density
         // — so we only nudge when that's actually available (rooted / helper daemon). No root = app zoom is
-        // the only sizing tool, so stay quiet. densityNat comes from the shared snapshot (no su round-trip).
+        // the only sizing tool, so stay quiet. densityBase comes from the shared snapshot (no su round-trip).
         val zoom = config.dashboardZoom
-        if (config.dashboardPackage == SystemController.BUILTIN_DASHBOARD && zoom != 100 && snapStaleOk().densityNat != null) {
+        if (config.dashboardPackage == SystemController.BUILTIN_DASHBOARD && zoom != 100 && snapStaleOk().densityBase != null) {
             // Reset is a plain form POST (no JS), so it works on the dashboard banner too — not just the
             // Install tab. The message already links to the Display-sizing card.
             append(
@@ -1752,7 +1752,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         }
         return listOf("auto_brightness", "brightness_bias").mapNotNull { settingRowHtml(it, s.live, s.caps) }
             .joinToString("\n") + "\n" + listOfNotNull(
-            s.densityCur?.let { """<tr><th>Density</th><td>$it dpi (native ${s.densityNat ?: "?"})${cfgIcon("cfg-display")}</td></tr>""" },
+            s.densityCur?.let { """<tr><th>Logical density</th><td>$it dpi (factory base ${s.densityBase ?: "?"})${cfgIcon("cfg-display")}</td></tr>""" },
             s.densityCur?.let { """<tr><th>Text size</th><td>${s.fontScale}${cfgIcon("cfg-display")}</td></tr>""" },
             proxShown?.let { """<tr><th>Proximity</th><td>${esc(it)}${cfgIcon("cfg-proximity")}</td></tr>""" },
             """<tr><th>Tamed packages</th><td>${esc(config.tameVendorPackagesRaw.ifBlank { "none" })}${cfgIcon("cfg-tame")}</td></tr>""",
@@ -2018,13 +2018,13 @@ fetch('/api/v1/tame/suggest').then(function(r){return r.text()}).then(function(t
         // value just applied via this card shows immediately: the POST primes densityCache, whereas
         // snapStaleOk returns the pre-change snapshot for a refresh cycle. densityCache is TTL-cached and
         // primed on write, so this only pays the su reads on a genuinely cold Configure load.
-        val (curOverride, nat, fs) = densityCache.get()
+        val (curOverride, base, fs) = densityCache.get()
         // Shown even without root (density can't be READ without it either) so a no-root user sees the
         // feature — but greyed, with a lock banner, and every control disabled. `dis` toggles all of it.
         val locked = !rootOk()
         // Prefill: the active override if one is set, else the profile's HA-optimised recommendation
-        // (so a fresh panel offers the right value to Apply rather than the raw native density), else native.
-        val cur = curOverride?.takeIf { it != nat } ?: recommendedDensity ?: nat ?: DensityController.MIN_DPI
+        // (so a fresh panel offers the right value to Apply rather than the factory base), else the base.
+        val cur = curOverride?.takeIf { it != base } ?: recommendedDensity ?: base ?: DensityController.MIN_DPI
         val dis = if (locked) " disabled" else ""
         val rec = if (!locked && (recommendedDensity != null || recommendedFontScale != null))
             """ <button type="submit" name="action" value="rec" formnovalidate>HA-optimised</button>""" else ""
@@ -2036,7 +2036,7 @@ pace.</b> Match an HA dashboard's size to a desktop browser. <b>Density</b> scal
 mismatched to the physical screen. Applies live, persists across reboot; needs root or the helper daemon.</p>
 <form method="post" action="/api/v1/display/density" class="${if (locked) "locked" else ""}" style="display:flex;flex-direction:column;gap:10px">
  <label style="display:flex;flex-direction:row;justify-content:space-between;align-items:center;gap:12px">
-  <span>Density (dpi) <small style="color:#888">· native ${nat ?: "?"}</small></span>
+  <span>Logical density (dpi) <small style="color:#888">· factory base ${base ?: "?"}</small></span>
   <input name="density" type="number" min="${DensityController.MIN_DPI}" max="${DensityController.MAX_DPI}" value="$cur" style="width:96px"$dis>
  </label>
  <label style="display:flex;flex-direction:row;justify-content:space-between;align-items:center;gap:12px">

@@ -45,4 +45,5 @@ object Wf1589t : DeviceProfile {
     override val cpuGovernors = mapOf("Performance" to "performance", "Efficiency" to "powersave", "Auto" to "schedutil")
     override val recommendedDensity: Int? = 212   // 1920×1200 10.1"; the firmware default (200) renders HA a touch small
     override val recommendedFontScale: Float? = null
+    override val physicalPpi: Int = 226            // 1920×1200 at approximately 10.1 inches
 }

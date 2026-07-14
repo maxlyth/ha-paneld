@@ -83,6 +83,7 @@ class DeviceProfileCapabilityTest {
             assertTrue("blank soc class on ${profile.id}", profile.socClass.isNotBlank())
             profile.recommendedDensity?.let { assertTrue("invalid density on ${profile.id}", it in 72..640) }
             profile.recommendedFontScale?.let { assertTrue("invalid font scale on ${profile.id}", it in 0.5f..2f) }
+            profile.physicalPpi?.let { assertTrue("invalid physical ppi on ${profile.id}", it in 50..1000) }
             assertTrue("non-finite room offset on ${profile.id}", profile.roomTempOffsetC.isFinite())
             assertEquals(
                 "profile proximity calibration must provide both endpoints on ${profile.id}",

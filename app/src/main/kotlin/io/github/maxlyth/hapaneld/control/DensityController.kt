@@ -22,16 +22,18 @@ class DensityController(
     private val root: RootShell = Su,
     private val daemon: Daemon = HelperClient,
 ) {
-    private data class DensityState(val physical: Int, val override: Int?)
+    private data class DensityState(val base: Int, val override: Int?)
 
-    /** Native (physical) density, or null if unreadable. */
-    fun native(): Int? = densityState()?.physical
+    /** Android's factory/base logical density (the reset target), or null if unreadable.
+     *
+     * Android labels this `Physical density` in `wm density`, but it is not the display's measured PPI. */
+    fun base(): Int? = densityState()?.base
 
-    /** Current effective density — the override if one is set, else the physical density. */
-    fun current(): Int? = densityState()?.let { it.override ?: it.physical }
+    /** Current effective logical density — the override if one is set, else the factory/base value. */
+    fun current(): Int? = densityState()?.let { it.override ?: it.base }
 
     /** True when density is readable. A later set can still fail if neither privileged route works. */
-    fun available(): Boolean = native() != null
+    fun available(): Boolean = base() != null
 
     /** Set the override density (dpi). Bounded to keep the UI usable/bootable. Returns true if applied. */
     fun set(dpi: Int): Boolean {
@@ -42,7 +44,7 @@ class DensityController(
         )
     }
 
-    /** Restore the native density. */
+    /** Remove the override and restore Android's factory/base logical density. */
     fun reset(): Boolean = routedEffect(
         su = { root.run("wm density reset") },
         helper = { daemon.send("DENSITY reset") == "OK" },
@@ -79,15 +81,18 @@ class DensityController(
         fun field(key: String): Int? = reply.lineSequence()
             .firstOrNull { it.contains(key) }
             ?.substringAfter(key)?.trim()?.toIntOrNull()
-        val physical = field("Physical density:") ?: return null
-        return DensityState(physical, field("Override density:"))
+        // `wm density` calls the reset reference "Physical density" even though it is Android's base
+        // logical density. Keep the parser label, but do not carry that misleading name upward.
+        val base = field("Physical density:") ?: return null
+        return DensityState(base, field("Override density:"))
     }
 
     private fun parseHelperDensity(reply: String?): DensityState? {
         val match = DENSITY_REPLY.matchEntire(reply?.trim().orEmpty()) ?: return null
-        val physical = match.groupValues[1].toIntOrNull() ?: return null
+        // PHYS mirrors the `wm density` wire label; semantically it is the base logical density.
+        val base = match.groupValues[1].toIntOrNull() ?: return null
         val override = match.groupValues[2].takeUnless { it == "-" }?.toIntOrNull()
-        return DensityState(physical, override)
+        return DensityState(base, override)
     }
 
     private fun parseRootScale(reply: String?): Float? {

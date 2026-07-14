@@ -159,9 +159,13 @@ interface DeviceProfile {
     /** Optional per-panel "HA-optimised" display density (dpi) + text (font) scale, offered as a
      *  one-click preset in the display-sizing control. The genuinely-right values are a per-install
      *  preference (room, dashboard design), so these are starting suggestions to be calibrated — null =
-     *  offer only native-reset + custom. Density is the layout scale; font scale is the WebView text. */
+     *  offer only factory-base reset + custom. Density is the layout scale; font scale is the WebView text. */
     val recommendedDensity: Int?
     val recommendedFontScale: Float?
+
+    /** Trustworthy physical display pixel density. This is profile evidence, not Android's misleading
+     *  `wm density` "Physical density" field (which is only a base logical DPI). Null when unknown. */
+    val physicalPpi: Int? get() = null
 
     /** The System WebView build to install when this panel's stock WebView is too old to render the HA
      *  dashboard. These panels have no Play Store, so ha-paneld sideloads a known-good `com.android.webview`

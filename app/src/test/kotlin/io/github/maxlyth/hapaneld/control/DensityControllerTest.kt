@@ -25,15 +25,15 @@ class DensityControllerTest {
         return Harness(DensityController(canSu = canSu, root = root, daemon = daemon), root, daemon)
     }
 
-    @Test fun suReadsPhysicalAndOverrideDensityWithoutHelper() {
+    @Test fun suReadsBaseLogicalAndOverrideDensityWithoutCallingItPhysical() {
         val h = controller(rootOutputs = mapOf("wm density" to "Physical density: 320\nOverride density: 240"))
-        assertEquals(320, h.density.native())
+        assertEquals(320, h.density.base())
         assertEquals(240, h.density.current())
         assertTrue(h.density.available())
         assertTrue(h.daemon.sent.isEmpty())
     }
 
-    @Test fun currentUsesOneSnapshotAndFallsBackToPhysical() {
+    @Test fun currentUsesOneSnapshotAndFallsBackToBaseLogicalDensity() {
         val h = controller(rootOutputs = mapOf("wm density" to "Physical density: 320"))
         assertEquals(320, h.density.current())
         assertEquals(1, h.root.outputRan.count { it.startsWith("wm density") })
@@ -70,7 +70,7 @@ class DensityControllerTest {
             rootOutputs = mapOf("wm density" to "unexpected"),
             daemonReplies = mapOf("DENSITY" to "PHYS=320 OVER=- trailing"),
         )
-        assertNull(h.density.native())
+        assertNull(h.density.base())
         assertEquals(listOf("DENSITY"), h.daemon.sent)
         assertTrue(h.root.outputRan.any { it.startsWith("wm density") })
     }

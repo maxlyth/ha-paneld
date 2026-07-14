@@ -62,6 +62,6 @@ object ShellyWallDisplayV2 : DeviceProfile {
     override val tameVendorCandidates = emptyList<TameCandidate>()
     override val evdevButtons = emptyList<EvdevButton>()   // gpio-keys (/dev/input/event*) require root
     override val cpuGovernors: Map<String, String>? = null
-    override val recommendedDensity: Int? = null     // TODO: verify per-model (Jenna 720×1440 ~5.5" ≈ 300 ppi → ~320 native)
+    override val recommendedDensity: Int? = null     // TODO: verify per-model (Jenna 720×1440 ~5.5" ≈300 ppi; try ~320 logical dpi)
     override val recommendedFontScale: Float? = null
 }

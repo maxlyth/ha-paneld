@@ -11,6 +11,7 @@ import android.os.StatFs
 import android.provider.Settings
 import android.webkit.WebSettings
 import io.github.maxlyth.hapaneld.control.SystemController
+import io.github.maxlyth.hapaneld.device.DeviceProfile
 import android.webkit.WebView
 import io.github.maxlyth.hapaneld.BuildConfig
 import java.io.File
@@ -24,7 +25,11 @@ import java.util.concurrent.atomic.AtomicReference
  * objects. Returns an ordered map rendered verbatim as a key/value table.
  */
 object PanelInfo {
-    fun collect(context: Context, extras: Map<String, String>): LinkedHashMap<String, String> {
+    fun collect(
+        context: Context,
+        extras: Map<String, String>,
+        profile: DeviceProfile = DeviceProfile.detect(),
+    ): LinkedHashMap<String, String> {
         val m = LinkedHashMap<String, String>()
         m["ha-paneld"] = "${BuildConfig.VERSION_NAME} (build ${BuildConfig.VERSION_CODE})"
         m["Android"] = "${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})"
@@ -42,7 +47,7 @@ object PanelInfo {
         m["CPU"] = cpu()
         m["RAM"] = ram(context)
         m["Storage"] = storage()
-        m["Display"] = display(context)
+        m["Display"] = display(context, profile.physicalPpi)
         m["System WebView"] = webViewStatus(context).display
         m["HA Companion"] = companion(context)
         m.putAll(extras)
@@ -95,16 +100,21 @@ object PanelInfo {
     /** Marketing GB (÷10⁹) so the number reads close to the advertised spec (8 GB / 32 GB …). */
     private fun gb(bytes: Long): String = "%.1f GB".format(bytes / 1e9)
 
-    /** Physical resolution + current density (the dpi reflects any `wm density` override). */
-    private fun display(context: Context): String = try {
+    /** Physical resolution, current logical density, and independently profiled physical PPI when known. */
+    private fun display(context: Context, physicalPpi: Int?): String = try {
         val wm = context.getSystemService(Context.WINDOW_SERVICE) as android.view.WindowManager
         val dm = android.util.DisplayMetrics()
         @Suppress("DEPRECATION")
         wm.defaultDisplay.getRealMetrics(dm)
-        "${dm.widthPixels}×${dm.heightPixels} · ${dm.densityDpi} dpi"
+        displaySummary(dm.widthPixels, dm.heightPixels, dm.densityDpi, physicalPpi)
     } catch (e: Throwable) {
         "?"
     }
+
+    /** Pure formatter so a base logical density can never regress into being labelled physical/native. */
+    internal fun displaySummary(width: Int, height: Int, logicalDpi: Int, physicalPpi: Int?): String =
+        "${width}×${height} px · logical $logicalDpi dpi" +
+            (physicalPpi?.let { " · physical ≈$it ppi" } ?: "")
 
     /** Package + real-engine WebView status for the info row and the health banner. */
     // [engineMajor] = the real Chromium major (from the WebView UA when the package version looked old),

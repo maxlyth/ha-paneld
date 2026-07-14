@@ -56,6 +56,7 @@ object Tpa10 : DeviceProfile {
     override val cpuGovernors = mapOf("Performance" to "performance", "Efficiency" to "powersave", "Auto" to "schedutil")
     override val recommendedDensity: Int? = 212     // 10" 1920×1200; HA-optimised (matches the Electron 10.1" panel)
     override val recommendedFontScale: Float? = 1.0f
+    override val physicalPpi: Int = 226              // 1920×1200 at approximately 10.1 inches
 
     // LineageOS SystemWebView (armeabi-v7a; vanilla Chromium). Swapped off Cromite (2026-07-11): Cromite
     // patches the autoplay content-setting to BLOCK, which broke HA camera-card WebRTC autoplay in the

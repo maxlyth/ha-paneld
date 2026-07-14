@@ -51,9 +51,9 @@ The three panel classes form a clear ladder: **NSPanel Pro (PX30)** entry-level,
 | CPU | 4× Cortex-A35 @1.5 GHz | 4× Cortex-A55 @1.8 GHz | 4× A72 @2.1 GHz + 4× A53 @1.9 GHz |
 | RAM | 2 GB | 2 GB | 4 GB |
 | GPU | Mali-G31 | Mali-G52 (2EE) | Mali-G52 (MC3) |
-| Display | 480×480 **square**, ~4" | 1920×1200 16:10, ~10" | 1920×1200 16:10, ~5.5"/~400 ppi |
+| Display | 480×480 **square**, ~4" | 1920×1200 16:10, ~10.1"/~226 ppi | 1920×1200 16:10, ~10.1"/~226 ppi |
 | Refresh | 60 Hz | 56 Hz | 60 Hz |
-| Layout (dp) | 160 dpi → 480×480 dp | 240 dpi (ovr 200) → ~1280×800 dp | 160 dpi (ovr 186) → 1920×1200 dp — UI tiny, [raise density](wf1589t.md#display-density--raise-it) |
+| Layout (dp) | base logical 160 dpi → 480×480 dp | base logical 240 dpi; ha-paneld recommends 212 | base logical 160 dpi → 1920×1200 dp — UI tiny, [raise density](wf1589t.md#display-density--raise-it) |
 | Class | entry-level | mid | high |
 
 </details>
@@ -77,7 +77,7 @@ Each panel under its own real workload:
 
 **What this means for a real dashboard deployment:**
 
-- **Screen geometry is the first design constraint.** The NSPanel Pro's 480×480 **square** (480 dp) only fits a single narrow column; the TPA10's 10" 1920×1200 (≈1280×800 dp) is genuinely roomy for multi-column dashboards; the WF1589T is sharp (~400 ppi) but ships at a low logical density so the UI is tiny until raised. Design the dashboard to the panel's **dp canvas + aspect ratio**, not its raw pixel count.
+- **Screen geometry is the first design constraint.** The NSPanel Pro's 480×480 **square** (480 dp) only fits a single narrow column; the TPA10's 10.1" 1920×1200 display is genuinely roomy for multi-column dashboards; the WF1589T ships at a low base logical density so the UI is tiny until raised. Design the dashboard to the panel's **dp canvas + aspect ratio**, not its raw pixel count. Android's base logical DPI is a layout setting, not physical PPI.
 - **2 GB panels (PX30, TPA10): RAM is the binding constraint.** The dashboard WebView, Android and any background apps share ~2 GB; heavy dashboards with many cards, large images, long history graphs or expensive custom cards trigger WebView reloads and jank. The WF1589T's 4 GB largely removes this pressure.
 - **The NSPanel Pro — the most common panel — has the slowest CPU** (A35), so transitions and animations are visibly slower than on A55/A72 units. Keep its dashboards the leanest.
 - **For the built-in renderer, filter the Home Assistant entity subscription before simplifying a dashboard or replacing the panel.** Automatic entity learning can prevent unrelated states from reaching the WebView while preserving the panel's normal Home Assistant connection. See [Performance tuning](../performance.md).
