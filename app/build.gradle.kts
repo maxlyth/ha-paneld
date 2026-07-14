@@ -148,6 +148,8 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.ktor.server.test.host)
+    // Independent MQTT 5 broker for transport-level composition tests; never packaged in the APK.
+    testImplementation(libs.moquette.broker)
     // Real org.json — the android.jar stub's returnDefaultValues would silently no-op JSON code under test.
     testImplementation(libs.org.json)
 }
