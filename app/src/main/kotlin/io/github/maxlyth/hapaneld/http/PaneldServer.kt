@@ -401,7 +401,7 @@ class PaneldServer(
                         // ancillary context, and a blocking snapCache.get() re-ran the FULL probe suite
                         // whenever the snapshot was stale (>12s on a PX30 for a "simple" text page).
                         val facts = withContext(Dispatchers.IO) { snapStaleOk().facts }
-                        call.respondText(DiagReader.dump(appContext, facts, profile), ContentType.Text.Plain)
+                        call.respondText(DiagReader.dump(appContext, profile, facts), ContentType.Text.Plain)
                     }
                     // Live log tail as Server-Sent Events (?source=app|system). Feeds the Logs tab;
                     // also curl-able (`curl -N .../api/v1/logs/stream`). Lines are pre-redacted.

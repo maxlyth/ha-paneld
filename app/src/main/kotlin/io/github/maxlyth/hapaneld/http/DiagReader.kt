@@ -30,7 +30,7 @@ object DiagReader {
     /** status: "ok" | "degraded" | "none" */
     data class Cap(val name: String, val status: String, val note: String)
 
-    fun capabilities(ctx: Context, profile: DeviceProfile = DeviceProfile.detect()): List<Cap> {
+    fun capabilities(ctx: Context, profile: DeviceProfile): List<Cap> {
         val pkg = ctx.packageName
         val su = Su.available()
         val daemon = HelperClient.available()
@@ -101,8 +101,8 @@ object DiagReader {
      */
     fun dump(
         ctx: Context,
+        profile: DeviceProfile,
         facts: Map<String, String> = emptyMap(),
-        profile: DeviceProfile = DeviceProfile.detect(),
     ): String = buildString {
         appendLine("ha-paneld diagnostics — ${BuildConfig.VERSION_NAME} (build ${BuildConfig.VERSION_CODE})")
         // Capture metadata — a normalise-me line for the regression harness: when this dump was taken +

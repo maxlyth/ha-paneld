@@ -464,8 +464,8 @@ class SystemControllerTest {
     // ---------- one-shot navigate + reload-intent flags ----------
 
     @Test fun navPathConsumedOnce() {
-        BuiltinDashboard.navPath = "office/dash"
-        assertEquals("office/dash", BuiltinDashboard.consumeNavPath())
+        BuiltinDashboard.navPath = "rooms/main"
+        assertEquals("rooms/main", BuiltinDashboard.consumeNavPath())
         assertNull("navigate is one-shot — later rebuilds return to home", BuiltinDashboard.consumeNavPath())
     }
 

@@ -50,7 +50,7 @@ class EvdevStreamSessionTest {
 
     @Test fun failedOrMissingAcknowledgementRejectsTheSession() {
         assertThrows(IOException::class.java) {
-            EvdevStreamSession.run(listOf(key), ByteArrayInputStream("OK\nERR\n".toByteArray()), ByteArrayOutputStream(), emit = {})
+            EvdevStreamSession.run(listOf(key), ByteArrayInputStream("OK\nERR\nOK\n".toByteArray()), ByteArrayOutputStream(), emit = {})
         }
         assertThrows(IOException::class.java) {
             EvdevStreamSession.run(listOf(key), ByteArrayInputStream("OK\nOK\nERR\n".toByteArray()), ByteArrayOutputStream(), emit = {})

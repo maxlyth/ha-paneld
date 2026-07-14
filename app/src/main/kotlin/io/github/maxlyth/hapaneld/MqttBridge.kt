@@ -40,22 +40,38 @@ import io.github.maxlyth.hapaneld.mqtt.AuthRecovery
 import io.github.maxlyth.hapaneld.mqtt.isAuthRecoveryState
 import io.github.maxlyth.hapaneld.util.HelperClient
 import io.github.maxlyth.hapaneld.util.Json
+import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 import kotlin.math.roundToInt
 import org.json.JSONObject
 
-internal inline fun enterMqttConnectedState(
-    stopped: Boolean,
-    authenticate: () -> Unit,
-    setConnected: () -> Unit,
-    markLiveness: () -> Unit,
-    invalidatePreviousAcks: () -> Unit,
-): Boolean {
-    if (stopped) return false
-    authenticate()
-    setConnected()
-    markLiveness()
-    invalidatePreviousAcks()
-    return true
+internal class MqttCommandAdmission {
+    private val lock = ReentrantLock()
+    private val idle = lock.newCondition()
+    private var accepting = true
+    private var active = 0
+
+    fun run(command: () -> Unit): Boolean {
+        lock.withLock {
+            if (!accepting) return false
+            active++
+        }
+        try {
+            command()
+            return true
+        } finally {
+            lock.withLock {
+                active--
+                if (active == 0) idle.signalAll()
+            }
+        }
+    }
+
+    fun closeAndDrain() = lock.withLock {
+        accepting = false
+        while (active > 0) idle.awaitUninterruptibly()
+    }
 }
 
 /**
@@ -160,6 +176,9 @@ class MqttBridge(
     @Volatile var state: String = "disabled"
         private set
     @Volatile private var stopped = false
+    private val stopLock = Any()
+    private val lifecycleGeneration = AtomicLong()
+    private val commandAdmission = MqttCommandAdmission()
     private var buttonSubscription: ButtonBus.Subscription? = null
 
     fun isConnected(): Boolean = state == "connected"
@@ -402,6 +421,7 @@ class MqttBridge(
     @Synchronized
     fun start() {
         if (stopped) return
+        val generation = lifecycleGeneration.get()
         authRecovery.configure("${config.mqttBroker}\u0000${config.mqttUser}\u0000${config.mqttPassword}")
         var broker = config.mqttBroker.trim()
         if (broker.isEmpty()) {
@@ -438,6 +458,11 @@ class MqttBridge(
             if (buttonSubscription == null) {
                 buttonSubscription = ButtonBus.subscribe { event -> publishButton(event) }
             }
+            if (stopped || lifecycleGeneration.get() != generation) {
+                buttonSubscription?.close()
+                buttonSubscription = null
+                return
+            }
             transport.connect(
                 MqttConnectConfig(
                     host = connectHost,
@@ -473,8 +498,15 @@ class MqttBridge(
                     override fun onPublishAck() = markOk()
                 },
             )
+            if (stopped || lifecycleGeneration.get() != generation) {
+                transport.disconnectDetached()
+                buttonSubscription?.close()
+                buttonSubscription = null
+                return
+            }
             Log.i(TAG, "MQTT connecting to $connectHost:$port (host=$host, prefer=${if (preferIpv4) "IPv4" else "IPv6"}) for $panel")
         } catch (e: Exception) {
+            if (stopped || lifecycleGeneration.get() != generation) transport.disconnectDetached()
             Log.w(TAG, "MQTT connect failed", e)
         }
     }
@@ -519,20 +551,14 @@ class MqttBridge(
 
     /** Runs on every (re)connect: (re)subscribe to commands and (re)publish discovery + online. */
     private fun onConnected() {
-        if (!enterMqttConnectedState(
-                stopped = stopped,
-                authenticate = {
-                    authRetryGeneration++
-                    authRecovery.authenticated(SystemClock.elapsedRealtime())
-                },
-                setConnected = { state = "connected" },
-                // Arm liveness before capability/root observations can delay the rest of onConnected.
-                markLiveness = ::markOk,
-                // ACKs belong to one broker connection. Invalidate the previous connection even when a
-                // watchdog rebuild detached it before its disconnected callback could run.
-                invalidatePreviousAcks = { stateConverger.markAllDirty() },
-            )
-        ) return
+        if (stopped) return
+        authRetryGeneration++
+        authRecovery.authenticated(SystemClock.elapsedRealtime())
+        state = "connected"
+        markOk() // arm liveness before capability/root observations can delay the rest of onConnected
+        // ACKs belong to one broker connection. Invalidate the previous connection even when a watchdog
+        // rebuild detached it before its disconnected callback could run.
+        stateConverger.markAllDirty()
         PanelStatus.mqttConnected = true
         transport.subscribe("ha-paneld/$panel/+/set") { topic, payload, retained -> onCommand(topic, payload, retained) }
         // Re-announce discovery when HA (re)starts — its birth message on homeassistant/status. With
@@ -640,12 +666,16 @@ class MqttBridge(
     // ---- command dispatch ----
 
     private fun onCommand(topic: String, payloadBytes: ByteArray, retained: Boolean) {
-        if (!mqttAcceptsCommand(stopped, retained)) {
+        if (!mqttAcceptsCommand(stopped, retained) ||
+            !commandAdmission.run { dispatchCommand(topic, payloadBytes) }
+        ) {
             if (retained && !stopped) {
                 Log.w(TAG, "ignoring RETAINED command on $topic (stale — not acted): ${String(payloadBytes)}")
             }
-            return
         }
+    }
+
+    private fun dispatchCommand(topic: String, payloadBytes: ByteArray) {
         val payload = String(payloadBytes)
         // NEVER act on a RETAINED command. Command topics are fire-and-forget; a retained payload is
         // always stale — e.g. a broker- or automation-retained screen-off replayed on every (re)subscribe,
@@ -991,10 +1021,12 @@ class MqttBridge(
         if (config.homeDashboard.isNotBlank() && home.isNotEmpty() && home != "/") {
             Thread {
                 Thread.sleep(RELOAD_NAV_DELAY_MS)
-                navigate.navigate("homeassistant://navigate$home")
-                config.lastNavigate = home
-                stateConverger.reconcile("navigate", force = true)
-                Log.i(TAG, "reload -> re-navigated to intended dashboard $home")
+                commandAdmission.run {
+                    navigate.navigate("homeassistant://navigate$home")
+                    config.lastNavigate = home
+                    stateConverger.reconcile("navigate", force = true)
+                    Log.i(TAG, "reload -> re-navigated to intended dashboard $home")
+                }
             }.start()
         }
     }
@@ -1085,6 +1117,16 @@ class MqttBridge(
      */
     fun applySetting(key: String, value: String): Boolean {
         if (key !in APPLY_SETTING_KEYS) return false
+        if (stopped) return false
+        var applied = false
+        val admitted = commandAdmission.run {
+            dispatchSetting(key, value)
+            applied = true
+        }
+        return admitted && applied
+    }
+
+    private fun dispatchSetting(key: String, value: String) {
         val onOff = if (SettingValue.parseBool(value) == true) "ON" else "OFF"
         when (key) {
             "wake_on_wave" -> handleWakeOnWave(onOff)
@@ -1108,7 +1150,6 @@ class MqttBridge(
             "home_dashboard" -> handleHomeDashboard(value)
             else -> error("live setting declared without a dispatcher: $key")
         }
-        return true
     }
 
     // ---- discovery ----
@@ -1635,10 +1676,15 @@ class MqttBridge(
         stateConverger.reconcile("screen", force = true)
     }
 
-    @Synchronized
     fun stop(publishOffline: Boolean = true, clearDiscovery: Boolean = false) {
-        if (stopped) return
-        stopped = true
+        synchronized(stopLock) {
+            if (stopped) return
+            stopped = true
+            lifecycleGeneration.incrementAndGet()
+        }
+        // Drain both MQTT commands and HTTP live-setting dispatch before any service-owned hardware
+        // owner can be torn down. The gate holds no lock while an admitted handler performs I/O.
+        commandAdmission.closeAndDrain()
         authRetryGeneration++
         authScheduler.shutdownNow()
         buttonSubscription?.close()

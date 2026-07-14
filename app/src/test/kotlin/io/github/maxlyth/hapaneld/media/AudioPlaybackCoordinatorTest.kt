@@ -94,6 +94,45 @@ class AudioPlaybackCoordinatorTest {
         assertTrue(coordinator.close(1_000L))
     }
 
+    @Test fun cancelledRunReturningNormallyCannotOverwriteTheReplacementGeneration() = runTest {
+        val firstStarted = CompletableDeferred<Unit>()
+        val releaseFirst = CompletableDeferred<Unit>()
+        val secondStarted = CompletableDeferred<Unit>()
+        val coordinator = AudioPlaybackCoordinator(
+            AudioPlaybackRunFactory { url ->
+                object : AudioPlaybackRun {
+                    override suspend fun execute() {
+                        if (url == "first") {
+                            firstStarted.complete(Unit)
+                            withContext(NonCancellable) { releaseFirst.await() }
+                        } else {
+                            secondStarted.complete(Unit)
+                            awaitCancellation()
+                        }
+                    }
+
+                    override fun cancel() = Unit
+                }
+            },
+            StandardTestDispatcher(testScheduler),
+        )
+
+        assertTrue(coordinator.submit("first"))
+        runCurrent()
+        assertTrue(firstStarted.isCompleted)
+        assertTrue(coordinator.submit("second"))
+        runCurrent()
+        assertFalse(secondStarted.isCompleted)
+
+        releaseFirst.complete(Unit)
+        runCurrent()
+
+        assertTrue(secondStarted.isCompleted)
+        assertEquals(AudioPlaybackCoordinator.State.ACTIVE, coordinator.snapshot().state)
+        assertEquals(2L, coordinator.snapshot().generation)
+        assertTrue(coordinator.close(1_000L))
+    }
+
     @Test fun closedAdmissionRejectsWithoutClaimingPlayback() = runTest {
         val events = mutableListOf<String>()
         val active = AtomicInteger()

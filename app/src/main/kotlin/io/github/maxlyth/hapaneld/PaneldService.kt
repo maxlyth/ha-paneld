@@ -926,19 +926,21 @@ class PaneldService : Service() {
             }.getOrDefault(false)
             if (!audioStopped) Log.w(TAG, "audio cleanup exceeded ${AUDIO_SHUTDOWN_MS}ms")
             cancelKioskReassert()
+            // Close and drain command ingress before producers and hardware owners. MqttBridge.stop()
+            // also owns HTTP live-setting dispatch, so neither route can enter an owner during teardown.
+            runCatching { mqtt.stop() }
             runCatching { EvdevButtonClient.stop() }
-            runCatching { screen.close() }        // remove wake overlay only after restoring a deliberate dark screen
-            runCatching { power.apply(false) }   // release the wakelock so we don't leak it on teardown
-            runCatching { navbar.cleanup() }
-            runCatching { watchdog.stop() }
-            runCatching { ledEffect.close() }    // terminally reject late output and join the effect loop
             runCatching { sensors.stop() }
+            runCatching { watchdog.stop() }
+            runCatching { ledEffect.close() }
+            runCatching { screen.close() } // restore a deliberate dark screen before releasing power
+            runCatching { navbar.cleanup() }
+            runCatching { power.apply(false) }
             runCatching { logShipper.stop() }
             runCatching { io.github.maxlyth.hapaneld.http.PerfReader.stop() }
             runCatching { logCaptureApp.close() }
             runCatching { logCaptureSystem.close() }
             runCatching { mdns.stop() }
-            runCatching { mqtt.stop() }
         }
         if (!stopped) Log.w(TAG, "runtime teardown exceeded ${RUNTIME_SHUTDOWN_MS}ms; cleanup continues on its owner thread")
         super.onDestroy()

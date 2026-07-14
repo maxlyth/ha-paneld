@@ -15,6 +15,8 @@ class BuiltinDashboardNavbarTest {
     @Before fun reset() {
         BuiltinDashboard.setForegroundListener(null)
         BuiltinDashboard.setNavbarRevealHandler(null)
+        BuiltinDashboard.setScreenListener(null)
+        BuiltinDashboard.onScreenAwake(true)
         owner = BuiltinDashboard.acquireActivityOwner()
         BuiltinDashboard.setActivityForeground(owner, false)
     }
@@ -23,6 +25,7 @@ class BuiltinDashboardNavbarTest {
         BuiltinDashboard.releaseActivityOwner(owner)
         BuiltinDashboard.setForegroundListener(null)
         BuiltinDashboard.setNavbarRevealHandler(null)
+        BuiltinDashboard.setScreenListener(null)
     }
 
     @Test fun foregroundListenerFiresOnChangeOnly() {
@@ -81,5 +84,22 @@ class BuiltinDashboardNavbarTest {
         assertTrue(BuiltinDashboard.foreground)
         assertTrue(BuiltinDashboard.authLatched)
         owner = replacement
+    }
+
+    @Test fun staleActivityCannotClearTheReplacementScreenListener() {
+        val oldEvents = mutableListOf<Boolean>()
+        val replacementEvents = mutableListOf<Boolean>()
+        val oldListener: (Boolean) -> Unit = oldEvents::add
+        val replacementListener: (Boolean) -> Unit = replacementEvents::add
+        BuiltinDashboard.setScreenListener(oldListener)
+        BuiltinDashboard.setScreenListener(replacementListener)
+
+        BuiltinDashboard.clearScreenListener(oldListener)
+        BuiltinDashboard.onScreenAwake(false)
+        BuiltinDashboard.clearScreenListener(replacementListener)
+        BuiltinDashboard.onScreenAwake(true)
+
+        assertTrue(oldEvents.isEmpty())
+        assertEquals(listOf(false), replacementEvents)
     }
 }

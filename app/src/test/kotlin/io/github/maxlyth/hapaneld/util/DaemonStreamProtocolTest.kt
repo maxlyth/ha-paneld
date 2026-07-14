@@ -9,6 +9,7 @@ import org.junit.Test
 import java.io.BufferedReader
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.io.EOFException
 import java.io.InputStreamReader
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -99,23 +100,44 @@ class DaemonStreamProtocolTest {
         assertEquals(DaemonStreamResult.Indeterminate, noTerminal)
     }
 
-    @Test fun payloadMustMatchDeclaredLengthBeforeSocketIsHalfClosed() {
-        listOf(byteArrayOf(1, 2, 3), byteArrayOf(1, 2, 3, 4, 5)).forEach { payload ->
-            var shutdown = false
-            val failure = runCatching {
-                DaemonStreamProtocol.exchange(
-                    command = "INSTALLSTREAM 4",
-                    openSource = { ByteArrayInputStream(payload) },
-                    expectedBytes = 4,
-                    replies = replies("READY\n"),
-                    output = ByteArrayOutputStream(),
-                    shutdownOutput = { shutdown = true },
-                )
-            }.exceptionOrNull()
+    @Test fun shortPayloadFailsAfterWritingOnlyAvailableBytesWithoutHalfClose() {
+        val output = ByteArrayOutputStream()
+        var shutdown = false
 
-            assertTrue(failure != null)
-            assertFalse(shutdown)
-        }
+        val failure = runCatching {
+            DaemonStreamProtocol.exchange(
+                command = "INSTALLSTREAM 4",
+                openSource = { ByteArrayInputStream(byteArrayOf(1, 2, 3)) },
+                expectedBytes = 4,
+                replies = replies("READY\n"),
+                output = output,
+                shutdownOutput = { shutdown = true },
+            )
+        }.exceptionOrNull()
+
+        assertEquals(EOFException::class.java, failure?.javaClass)
+        assertArrayEquals("INSTALLSTREAM 4\n".toByteArray() + byteArrayOf(1, 2, 3), output.toByteArray())
+        assertFalse(shutdown)
+    }
+
+    @Test fun overlongPayloadFailsAfterDeclaredBytesWithoutHalfClose() {
+        val output = ByteArrayOutputStream()
+        var shutdown = false
+
+        val failure = runCatching {
+            DaemonStreamProtocol.exchange(
+                command = "INSTALLSTREAM 4",
+                openSource = { ByteArrayInputStream(byteArrayOf(1, 2, 3, 4, 5)) },
+                expectedBytes = 4,
+                replies = replies("READY\n"),
+                output = output,
+                shutdownOutput = { shutdown = true },
+            )
+        }.exceptionOrNull()
+
+        assertEquals(IllegalStateException::class.java, failure?.javaClass)
+        assertArrayEquals("INSTALLSTREAM 4\n".toByteArray() + byteArrayOf(1, 2, 3, 4), output.toByteArray())
+        assertFalse(shutdown)
     }
 
     @Test fun deadlineCanBeCancelledWithoutRunningTimeoutAction() {

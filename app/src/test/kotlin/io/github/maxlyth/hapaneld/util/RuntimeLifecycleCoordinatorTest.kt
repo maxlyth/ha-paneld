@@ -45,13 +45,15 @@ class RuntimeLifecycleCoordinatorTest {
             assertTrue(releaseReconfigure.await(2, TimeUnit.SECONDS))
         }
         assertTrue(reconfigureEntered.await(2, TimeUnit.SECONDS))
-        val staleReconnect = coordinator.reconnect(oldGeneration) { throw AssertionError("stale reconnect ran") }
+        var staleReconnectRuns = 0
+        val staleReconnect = coordinator.reconnect(oldGeneration) { staleReconnectRuns++ }
         releaseReconfigure.countDown()
         assertTrue(reconfigure.get(2, TimeUnit.SECONDS))
         val currentGeneration = coordinator.currentGeneration()!!
         var reconnects = 0
 
         assertFalse(staleReconnect.get(2, TimeUnit.SECONDS))
+        assertEquals(0, staleReconnectRuns)
         assertFalse(coordinator.isCurrent(oldGeneration))
         assertTrue(coordinator.isCurrent(currentGeneration))
         assertTrue(coordinator.reconnect(currentGeneration) { reconnects++ }.get(2, TimeUnit.SECONDS))

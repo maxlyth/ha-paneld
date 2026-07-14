@@ -22,6 +22,22 @@ object UpdateChecker {
         val releaseUrl: String,
     )
 
+    internal data class CompanionPolicy(val channel: String, val maxVersion: String?)
+
+    internal data class RequestedPolicies(val paneldChannel: String, val companion: CompanionPolicy)
+
+    internal sealed interface Resolution {
+        data class Resolved(val update: UpdateInfo?) : Resolution
+        data object Failed : Resolution
+    }
+
+    internal data class CacheReconciliation(
+        val available: List<UpdateInfo>,
+        val paneldCacheChannel: String?,
+        val companionCachePolicy: CompanionPolicy?,
+        val complete: Boolean,
+    )
+
     private data class CacheKey(val paneldChannel: String, val companionChannel: String, val companionCap: String?)
 
     @Volatile var available: List<UpdateInfo> = emptyList()
@@ -29,7 +45,7 @@ object UpdateChecker {
     @Volatile private var lastCheckElapsedMs = -1L
     @Volatile private var cacheKey: CacheKey? = null
     @Volatile private var paneldCacheChannel: String? = null
-    @Volatile private var companionCachePolicy: Pair<String, String?>? = null
+    @Volatile private var companionCachePolicy: CompanionPolicy? = null
     private val checkMutex = Mutex()
 
     /** True when a monotonic cache stamp is absent, rolled back, expired, or belongs to another policy. */
@@ -61,57 +77,79 @@ object UpdateChecker {
     ) = withContext(Dispatchers.IO) {
         checkMutex.withLock {
             val previous = available
-            val paneldLatest = SelfUpdater.resolve(channel)?.first
-            val paneld = if (paneldLatest == null) {
-                if (paneldCacheChannel == channel) previous.filter { it.label == PANELD_LABEL } else emptyList()
-            } else {
-                paneldCacheChannel = channel
+            val paneldResolution = SelfUpdater.resolve(channel)?.first?.let { paneldLatest ->
                 val current = BuildConfig.VERSION_NAME
-                if (isNewer(paneldLatest, current)) {
-                    listOf(UpdateInfo(PANELD_LABEL, current, paneldLatest, "https://github.com/maxlyth/ha-paneld/releases"))
-                } else {
-                    emptyList()
-                }
-            }
+                Resolution.Resolved(
+                    if (isNewer(paneldLatest, current)) {
+                        UpdateInfo(PANELD_LABEL, current, paneldLatest, "https://github.com/maxlyth/ha-paneld/releases")
+                    } else null,
+                )
+            } ?: Resolution.Failed
 
             val companion = installedCompanion(context)
             val companionTarget = if (companion == null) null else CompanionInstaller.target(companionChannel, companionMaxVersion)
-            val requestedCompanionPolicy = companionChannel to companionMaxVersion
-            val companionUpdates = when {
-                companion == null -> {
-                    companionCachePolicy = requestedCompanionPolicy
-                    emptyList()
-                }
-                companionTarget == null -> {
-                    if (companionCachePolicy == requestedCompanionPolicy) {
-                        previous.filter { it.label == COMPANION_LABEL }
-                    } else {
-                        emptyList()
-                    }
-                }
-                else -> {
-                    companionCachePolicy = requestedCompanionPolicy
+            val companionResolution = when {
+                companion == null -> Resolution.Resolved(null)
+                companionTarget == null -> Resolution.Failed
+                else -> Resolution.Resolved(
                     if (isNewer(companionTarget.version, stripVariant(companion.second))) {
-                        listOf(
-                            UpdateInfo(
-                                COMPANION_LABEL,
-                                companion.second,
-                                companionTarget.version,
-                                companionTarget.releaseUrl,
-                            ),
+                        UpdateInfo(
+                            COMPANION_LABEL,
+                            companion.second,
+                            companionTarget.version,
+                            companionTarget.releaseUrl,
                         )
-                    } else {
-                        emptyList()
-                    }
-                }
+                    } else null,
+                )
             }
 
-            available = paneld + companionUpdates
-            if (paneldLatest != null && (companion == null || companionTarget != null)) {
+            val requestedPolicies = RequestedPolicies(channel, CompanionPolicy(companionChannel, companionMaxVersion))
+            val reconciled = reconcileCache(
+                previous = previous,
+                requested = requestedPolicies,
+                paneldCachedChannel = paneldCacheChannel,
+                companionCachedPolicy = companionCachePolicy,
+                paneldResolution = paneldResolution,
+                companionResolution = companionResolution,
+            )
+            available = reconciled.available
+            paneldCacheChannel = reconciled.paneldCacheChannel
+            companionCachePolicy = reconciled.companionCachePolicy
+            if (reconciled.complete) {
                 cacheKey = CacheKey(channel, companionChannel, companionMaxVersion)
                 lastCheckElapsedMs = SystemClock.elapsedRealtime()
+            } else {
+                cacheKey = null
+                lastCheckElapsedMs = -1L
             }
         }
+    }
+
+    /** Pure cache transaction: failures preserve only an entry resolved for the exact requested policy, while a successful null result authoritatively clears that component. A transaction is fresh only when both lookups resolved. */
+    internal fun reconcileCache(
+        previous: List<UpdateInfo>,
+        requested: RequestedPolicies,
+        paneldCachedChannel: String?,
+        companionCachedPolicy: CompanionPolicy?,
+        paneldResolution: Resolution,
+        companionResolution: Resolution,
+    ): CacheReconciliation {
+        val previousPaneld = previous.firstOrNull { it.label == PANELD_LABEL }
+        val previousCompanion = previous.firstOrNull { it.label == COMPANION_LABEL }
+        val paneld = when (paneldResolution) {
+            is Resolution.Resolved -> paneldResolution.update
+            Resolution.Failed -> previousPaneld.takeIf { paneldCachedChannel == requested.paneldChannel }
+        }
+        val companion = when (companionResolution) {
+            is Resolution.Resolved -> companionResolution.update
+            Resolution.Failed -> previousCompanion.takeIf { companionCachedPolicy == requested.companion }
+        }
+        return CacheReconciliation(
+            available = listOfNotNull(paneld, companion),
+            paneldCacheChannel = if (paneldResolution is Resolution.Resolved) requested.paneldChannel else paneldCachedChannel,
+            companionCachePolicy = if (companionResolution is Resolution.Resolved) requested.companion else companionCachedPolicy,
+            complete = paneldResolution is Resolution.Resolved && companionResolution is Resolution.Resolved,
+        )
     }
 
     /** Available updates minus any the user dismissed at their current latest version. */
