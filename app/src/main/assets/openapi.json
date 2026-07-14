@@ -68,15 +68,48 @@
     },
     "/api/v1/perf": { "get": { "summary": "Live CPU/GPU/RAM, CPU clock, temperature, top processes, responsiveness + history", "tags": ["performance"], "responses": { "200": { "description": "perf JSON" } } } },
     "/api/v1/dashboard/entity-filter": {
-      "get": { "summary": "Experimental built-in-renderer entity-filter status (count/hash only; ids are not returned)", "tags": ["performance"], "responses": { "200": { "description": "{enabled,entity_count,filter_hash,runtime}" } } },
+      "get": { "summary": "Built-in-renderer entity-filter and automatic-learning status", "tags": ["performance"], "responses": { "200": { "description": "{enabled,entity_count,filter_hash,runtime,learning}" } } },
       "post": {
-        "summary": "Replace or toggle the experimental exact entity allow-list; omitted fields remain unchanged", "tags": ["performance"],
+        "summary": "Replace/toggle the exact allow-list or opt into automatic dashboard learning", "tags": ["performance"],
         "requestBody": { "content": { "application/json": { "schema": { "type": "object", "properties": {
           "enabled": { "type": "boolean" },
+          "mode": { "type": "string", "enum": ["manual", "automatic"] },
           "entity_ids": { "type": "array", "maxItems": 50000, "items": { "type": "string", "pattern": "^[a-z0-9_]+\\.[a-z0-9_]+$" } }
         } } } } },
         "responses": { "200": { "description": "Updated count/hash status; active built-in renderer reloads" }, "400": { "description": "Invalid body/entity id" }, "413": { "description": "Request too large" } }
       }
+    },
+    "/api/v1/dashboard/entities": {
+      "get": { "summary": "Paginated learned entity catalog, membership reasons and aggregate load", "tags": ["performance"],
+        "parameters": [
+          { "name": "q", "in": "query", "schema": { "type": "string" } },
+          { "name": "filter", "in": "query", "schema": { "type": "string", "enum": ["subscribed", "candidate", "review", "all", "excluded", "missing"] } },
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "maximum": 500 } },
+          { "name": "offset", "in": "query", "schema": { "type": "integer" } }
+        ], "responses": { "200": { "description": "{items,limit,offset}" } } }
+    },
+    "/api/v1/dashboard/entities/sync": {
+      "get": { "summary": "Automatic entity-learning status and last synchronization", "tags": ["performance"], "responses": { "200": { "description": "Learning status" } } },
+      "post": { "summary": "Start an immediate catalog and dashboard synchronization", "tags": ["performance"], "responses": { "202": { "description": "Started" }, "409": { "description": "Already running" } } }
+    },
+    "/api/v1/dashboard/entities/activate": {
+      "post": { "summary": "Explicitly replace the current filter with the observed candidate set", "tags": ["performance"],
+        "requestBody": { "content": { "application/json": { "schema": { "type": "object", "required": ["confirm"], "properties": { "confirm": { "type": "boolean" } } } } } },
+        "responses": { "200": { "description": "Candidate set applied" }, "409": { "description": "Explicit confirmation required" } } }
+    },
+    "/api/v1/dashboard/entities/override": {
+      "post": { "summary": "Pin, force-exclude or return one entity to automatic membership", "tags": ["performance"],
+        "requestBody": { "content": { "application/json": { "schema": { "type": "object", "required": ["entity_id", "override"], "properties": {
+          "entity_id": { "type": "string" }, "override": { "type": "string", "enum": ["auto", "pinned", "forced_exclude"] }, "force": { "type": "boolean" }
+        } } } } }, "responses": { "200": { "description": "Applied" }, "409": { "description": "Force confirmation required" } } }
+    },
+    "/api/v1/dashboard/entities/reset": {
+      "post": { "summary": "Discard rebuildable evidence and overrides for the current dashboard", "tags": ["performance"],
+        "requestBody": { "content": { "application/json": { "schema": { "type": "object", "required": ["confirm"], "properties": { "confirm": { "type": "boolean" } } } } } },
+        "responses": { "200": { "description": "Evidence cleared; synchronization started when automatic learning is enabled" }, "409": { "description": "Explicit confirmation required or synchronization is running" } } }
+    },
+    "/api/v1/dashboard/entities/export": {
+      "get": { "summary": "Download the detailed local entity catalog and evidence without credentials", "tags": ["performance"], "responses": { "200": { "description": "ha-paneld-entity-catalog JSON" } } }
     },
     "/api/v1/sensors": { "get": { "summary": "Live sensor readings (light, proximity, temperature, humidity) plus volume percent and raw screen brightness — independent of HA exposure settings", "tags": ["sensors"], "responses": { "200": { "description": "live values JSON" } } } },
     "/api/v1/peers": { "get": { "summary": "ha-paneld panels discovered on the LAN over mDNS — powers the header panel switcher", "tags": ["fleet"], "parameters": [ { "name": "refresh", "in": "query", "required": false, "schema": { "type": "string", "enum": ["1"] }, "description": "Force a fresh mDNS browse instead of the ~10s cache" } ], "responses": { "200": { "description": "[{panel_id,name,ip,port,url,version,self}] — ip/url null when unresolved" } } } },

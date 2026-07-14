@@ -494,6 +494,40 @@ class Config private constructor(
         get() = prefs.getString("dashboard_entity_filter_ids", "").orEmpty()
             .lineSequence().map(String::trim).filter(String::isNotEmpty).distinct().sorted().toList()
 
+    /** Productized learner request. Distinct from runtime filter-active so first sync can fail open. */
+    val dashboardEntityLearningEnabled: Boolean
+        get() = prefs.getBoolean("dashboard_entity_learning", false)
+    fun setDashboardEntityLearningEnabled(enabled: Boolean) { edit { putBoolean("dashboard_entity_learning", enabled) } }
+    fun commitDashboardEntityLearningEnabled(enabled: Boolean): Boolean = applyBatch {
+        setDashboardEntityLearningEnabled(enabled)
+        if (!enabled) setDashboardEntityLearningApplied(false)
+    }
+
+    /** True only after the observed candidate set has been explicitly promoted to the live filter. */
+    val dashboardEntityLearningApplied: Boolean
+        get() = prefs.getBoolean("dashboard_entity_learning_applied", false)
+    fun setDashboardEntityLearningApplied(applied: Boolean) {
+        edit { putBoolean("dashboard_entity_learning_applied", applied) }
+    }
+    fun commitDashboardEntityLearningApplied(applied: Boolean): Boolean = applyBatch {
+        setDashboardEntityLearningApplied(applied)
+    }
+
+    /** Backup-safe expert overrides; the derived catalog and metrics remain rebuildable SQLite state. */
+    val dashboardEntityOverrides: Map<String, String>
+        get() = prefs.getString("dashboard_entity_overrides", "").orEmpty().lineSequence().mapNotNull { line ->
+            val marker = line.firstOrNull() ?: return@mapNotNull null
+            val id = line.drop(1).trim().takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+            when (marker) { '+' -> id to "pinned"; '-' -> id to "forced_exclude"; else -> null }
+        }.toMap()
+
+    fun setDashboardEntityOverrides(values: Map<String, String>): Boolean {
+        val encoded = values.toSortedMap().mapNotNull { (id, value) ->
+            when (value) { "pinned" -> "+$id"; "forced_exclude" -> "-$id"; else -> null }
+        }.joinToString("\n")
+        return applyBatch { edit { putString("dashboard_entity_overrides", encoded) } }
+    }
+
     /** Persist the complete experimental filter atomically so enabled cannot reference a partial list. */
     fun setDashboardEntityFilter(enabled: Boolean, entityIds: Collection<String>): Boolean {
         val normalized = entityIds.asSequence().map(String::trim).filter(String::isNotEmpty)

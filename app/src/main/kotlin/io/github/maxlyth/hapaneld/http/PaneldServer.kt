@@ -25,6 +25,7 @@ import io.github.maxlyth.hapaneld.control.TameController
 import io.github.maxlyth.hapaneld.control.VolumeController
 import io.github.maxlyth.hapaneld.dashboard.EntityFilterProtocol
 import io.github.maxlyth.hapaneld.dashboard.EntityFilterTelemetry
+import io.github.maxlyth.hapaneld.dashboard.EntityLearningManager
 import io.github.maxlyth.hapaneld.device.DeviceProfile
 import io.github.maxlyth.hapaneld.device.TameCandidate
 import io.github.maxlyth.hapaneld.logship.LogCapture
@@ -51,6 +52,7 @@ import io.ktor.server.engine.embeddedServer
 import io.ktor.server.plugins.origin
 import io.ktor.server.request.receiveParameters
 import io.ktor.server.request.receiveStream
+import io.ktor.server.request.receiveText
 import io.ktor.server.request.uri
 import io.ktor.server.response.respondBytes
 import io.ktor.server.response.respondText
@@ -66,6 +68,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStream
@@ -139,6 +142,7 @@ class PaneldServer(
     // Shared with the service startup path: serializes renderer config commit → atomic Companion borrow →
     // launch, and retries an interrupted built-in switch from its durable blank-URL state.
     private val rendererPreparation: RendererPreparationCoordinator,
+    private val entityLearning: EntityLearningManager,
 ) {
     // Per-INSTALL build token (changes on every (re)install, not just a version bump) so an open info
     // page can auto-reload after the app is updated — even a same-version dev re-spin. /health carries it.
@@ -315,6 +319,7 @@ class PaneldServer(
                 get("/install") { call.respondText(page("install", "Install", installBody()), ContentType.Text.Html) }
                 get("/fleet") { call.respondText(page("fleet", "Fleet", fleetBody()), ContentType.Text.Html) }
                 get("/logs") { call.respondText(page("logs", "Logs", logsBody()), ContentType.Text.Html) }
+                get("/entities") { call.respondText(page("entities", "Entities", entitiesBody()), ContentType.Text.Html) }
                 // Self-contained REST API explorer (no Swagger-UI CDN bundle) + the OpenAPI spec it
                 // renders — the spec also imports into Swagger/Postman for fleet tooling.
                 get("/api") {
@@ -362,6 +367,62 @@ class PaneldServer(
                         call.respondText(entityFilterStatusJson(), ContentType.Application.Json)
                     }
                     post("/dashboard/entity-filter") { handleEntityFilterPost(call) }
+                    get("/dashboard/entities") {
+                        call.respondText(
+                            entityLearning.entitiesJson(
+                                call.request.queryParameters["q"].orEmpty(),
+                                call.request.queryParameters["filter"] ?: "active",
+                                call.request.queryParameters["limit"]?.toIntOrNull() ?: 100,
+                                call.request.queryParameters["offset"]?.toIntOrNull() ?: 0,
+                            ),
+                            ContentType.Application.Json,
+                        )
+                    }
+                    get("/dashboard/entities/sync") { call.respondText(entityLearning.statusJson(), ContentType.Application.Json) }
+                    post("/dashboard/entities/sync") {
+                        if (entityLearning.syncNow("manual")) {
+                            call.respondText(entityLearning.statusJson(), ContentType.Application.Json, HttpStatusCode.Accepted)
+                        } else call.respondText("synchronization already running\n", status = HttpStatusCode.Conflict)
+                    }
+                    post("/dashboard/entities/activate") {
+                        val obj = runCatching { JSONObject(call.receiveText().ifBlank { "{}" }) }.getOrElse {
+                            return@post call.respondText("invalid JSON\n", status = HttpStatusCode.BadRequest)
+                        }
+                        val response = runCatching { entityLearning.activate(obj.optBoolean("confirm", false)) }.getOrElse {
+                            return@post call.respondText("activation failed: ${it.message}\n", status = HttpStatusCode.BadRequest)
+                        }
+                        val status = if (JSONObject(response).optBoolean("confirmation_required")) HttpStatusCode.Conflict else HttpStatusCode.OK
+                        call.respondText(response, ContentType.Application.Json, status)
+                    }
+                    post("/dashboard/entities/override") {
+                        val body = call.receiveText()
+                        val obj = runCatching { JSONObject(body) }.getOrElse {
+                            return@post call.respondText("invalid JSON\n", status = HttpStatusCode.BadRequest)
+                        }
+                        val response = runCatching {
+                            entityLearning.setOverride(
+                                obj.optString("entity_id"), obj.optString("override"), obj.optBoolean("force", false),
+                            )
+                        }.getOrElse {
+                            return@post call.respondText("invalid override: ${it.message}\n", status = HttpStatusCode.BadRequest)
+                        }
+                        val status = if (JSONObject(response).optBoolean("confirmation_required")) HttpStatusCode.Conflict else HttpStatusCode.OK
+                        call.respondText(response, ContentType.Application.Json, status)
+                    }
+                    post("/dashboard/entities/reset") {
+                        val obj = runCatching { JSONObject(call.receiveText().ifBlank { "{}" }) }.getOrElse {
+                            return@post call.respondText("invalid JSON\n", status = HttpStatusCode.BadRequest)
+                        }
+                        val response = runCatching { entityLearning.resetEvidence(obj.optBoolean("confirm", false)) }.getOrElse {
+                            return@post call.respondText("reset failed: ${it.message}\n", status = HttpStatusCode.Conflict)
+                        }
+                        val status = if (JSONObject(response).optBoolean("confirmation_required")) HttpStatusCode.Conflict else HttpStatusCode.OK
+                        call.respondText(response, ContentType.Application.Json, status)
+                    }
+                    get("/dashboard/entities/export") {
+                        call.response.headers.append("Content-Disposition", "attachment; filename=ha-paneld-entities.json")
+                        call.respondText(entityLearning.exportJson(), ContentType.Application.Json)
+                    }
                     get("/proximity") { call.respondText(sensors.proximityJson(), ContentType.Application.Json) }
                     // Live Sensors card: last-published values + live extras. Volume is the current
                     // media-stream percent; brightness is the system setting (0-255, -1 unknown).
@@ -895,15 +956,50 @@ class PaneldServer(
     private fun navBar(active: String): String {
         fun tab(id: String, href: String, label: String): String =
             """<a href="$href"${if (id == active) " class=\"active\"" else ""}>$label</a>"""
+        val entityTab = if (config.dashboardEntityLearningEnabled && config.dashboardPackage == SystemController.BUILTIN_DASHBOARD)
+            tab("entities", "/entities", "Entities")
+        else """<span class="disabled-tab" title="Enable Automatic dashboard entity filter with the built-in renderer">Entities</span>"""
         return "<div class=\"nav\">" +
             tab("dashboard", "/", "Dashboard") +
             tab("configure", "/configure", "Configure") +
+            entityTab +
             tab("test", "/test", "Test") +
             tab("install", "/install", "Install") +
             tab("fleet", "/fleet", "Fleet") +
             tab("logs", "/logs", "Logs") +
             """<a href="/api">API</a></div>"""
     }
+
+    private fun entitiesBody(): String = if (!config.dashboardEntityLearningEnabled || config.dashboardPackage != SystemController.BUILTIN_DASHBOARD) {
+        """<div class="cards"><div class="card"><h2>Dashboard entities <small>· experimental</small></h2>
+        <p>Enable <b>Automatic dashboard entity filter</b> on Configure → Dashboard while using the built-in renderer.</p></div></div>"""
+    } else """
+        <div class="cards entity-cards">
+          <div class="card"><h2>Entity subscription<span class="cardbadge skunk">skunk-works</span></h2>
+            <div id="entity-status">Loading…</div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+              <button class="pbtn" id="entity-sync">Synchronize now</button>
+              <button class="pbtn" id="entity-activate">Apply learned set</button>
+              <a class="pbtn" href="/api/v1/dashboard/entities/export">Export details</a>
+            </div>
+            <div style="margin-top:12px"><input id="entity-search" placeholder="Search all three tables by entity ID"></div>
+          </div>
+          ${entityTableHtml("current", "Current subscribed entities", "The entities in the live Home Assistant stream. An unfiltered stream contains the complete visible catalog.", "subscribed")}
+          ${entityTableHtml("detected", "Detected dashboard entities", "Dependencies found in dashboard configuration or direct runtime state lookups. Review these before applying the learned set.", "candidate")}
+          ${entityTableHtml("review", "Stale or noisy entities", "Current-stream entities missing from Home Assistant, or receiving updates without being observed as dashboard dependencies. Review only; nothing is removed automatically.", "review")}
+        </div>
+        <script src="/assets/entities.js"></script>
+    """.trimIndent()
+
+    private fun entityTableHtml(id: String, title: String, note: String, filter: String): String = """
+      <div class="card entity-list" data-filter="$filter" data-table="$id"><h2>$title</h2>
+        <p class="muted">$note</p>
+        <div class="tablewrap"><table class="entity-table"><thead><tr><th><button data-sort="entity_id">Entity</button></th><th><button data-sort="access_1h">Accesses <small>1m / 1h / 1d</small></button></th><th><button data-sort="rate_1h_bps">Data rate <small>1m / 1h / 1d</small></button></th><th><button data-sort="reasons">Reason</button></th><th><button data-sort="last_access">Last access</button></th><th><button data-sort="override">Override</button></th></tr></thead><tbody></tbody></table></div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px">
+          <button class="pbtn entity-prev">Previous</button><button class="pbtn entity-next">Next</button><span class="muted entity-msg">Loading…</span>
+        </div>
+      </div>
+    """.trimIndent()
 
     /** Shared page shell (header + tab bar + body) for the non-dashboard tabs. */
     private fun page(active: String, title: String, body: String): String {
@@ -1883,7 +1979,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
         return "{" +
             "\"enabled\":${config.dashboardEntityFilterEnabled && ids.isNotEmpty()}," +
             "\"entity_count\":${ids.size},\"filter_hash\":\"$hash\"," +
-            "\"runtime\":${EntityFilterTelemetry.json()}}"
+            "\"runtime\":${EntityFilterTelemetry.json()},\"learning\":${entityLearning.statusJson()}}"
     }
 
     private class EntityFilterBodyTooLarge : RuntimeException()
@@ -1923,6 +2019,21 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
                 call.respondText("invalid entity filter: ${it.message}\n", status = HttpStatusCode.BadRequest)
                 return
             }
+        if (update.mode == "automatic") {
+            val requested = update.enabled ?: true
+            if (!entityLearning.setEnabled(requested)) {
+                call.respondText("configuration commit failed\n", status = HttpStatusCode.InternalServerError)
+                return
+            }
+            call.respondText(entityFilterStatusJson(), ContentType.Application.Json)
+            return
+        }
+        if (update.mode == "manual" || update.entityIds != null) {
+            if (!config.commitDashboardEntityLearningEnabled(false)) {
+                call.respondText("configuration commit failed\n", status = HttpStatusCode.InternalServerError)
+                return
+            }
+        }
         val ids = update.entityIds ?: config.dashboardEntityFilterIds
         val enabled = update.enabled ?: config.dashboardEntityFilterEnabled
         if (enabled && ids.isEmpty()) {
@@ -1980,6 +2091,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
         var relaunchForFullscreen = false
         var relaunchForOverscroll = false
         var reloadForZoom = false
+        var entityLearningChanged: Boolean? = null
         var tameDelta = TameDelta.NONE
         var rendererFailure: Throwable? = null
         val committed = withContext(Dispatchers.IO) {
@@ -2026,6 +2138,14 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
                     val postedOverscroll = p["dashboard_overscroll"]?.let { it.trim().equals("true", ignoreCase = true) || it.trim() == "1" }
                     postedOverscroll?.let { config.setDashboardOverscroll(it) }
                     relaunchForOverscroll = postedOverscroll != null && postedOverscroll != prevOverscroll && !dashChanged
+                    val prevEntityLearning = config.dashboardEntityLearningEnabled
+                    val postedEntityLearning = p["dashboard_entity_learning"]?.let {
+                        it.trim().equals("true", ignoreCase = true) || it.trim() == "1"
+                    }
+                    postedEntityLearning?.let { config.setDashboardEntityLearningEnabled(it) }
+                    if (postedEntityLearning != null && postedEntityLearning != prevEntityLearning) {
+                        entityLearningChanged = postedEntityLearning
+                    }
                     // Page zoom (%). A fresh load is where setInitialScale reliably takes effect, so on a change
                     // we reload the renderer rather than just re-foregrounding it. Detected from the POSTED value.
                     val prevZoom = config.dashboardZoom
@@ -2141,6 +2261,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             tameDelta.add.forEach { tame.tame(it) }
             tameDelta.remove.forEach { tame.untame(it) }
         }
+        entityLearningChanged?.let(entityLearning::setEnabled)
         // Formerly MQTT-only behaviour settings — applied through the bridge's command path so HTTP
         // and HA behave identically. Registry-validated where the key is registered; invalid skipped.
         for (key in HTTP_LIVE_KEYS) {

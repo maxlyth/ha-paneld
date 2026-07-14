@@ -43,6 +43,8 @@ import io.github.maxlyth.hapaneld.hardware.LedFactory
 import io.github.maxlyth.hapaneld.hardware.Rk3576LedController
 import io.github.maxlyth.hapaneld.hardware.SocketLedController
 import io.github.maxlyth.hapaneld.config.Capabilities
+import io.github.maxlyth.hapaneld.dashboard.EntityLearningManager
+import io.github.maxlyth.hapaneld.dashboard.EntityLearningRuntime
 import io.github.maxlyth.hapaneld.http.PaneldServer
 import io.github.maxlyth.hapaneld.http.PanelInfo
 import io.github.maxlyth.hapaneld.logship.LogCapture
@@ -97,6 +99,7 @@ class PaneldService : Service() {
     private lateinit var config: Config
     private lateinit var server: PaneldServer
     private lateinit var rendererPreparation: RendererPreparationCoordinator
+    private lateinit var entityLearning: EntityLearningManager
     private val mqtt: MqttBridge get() = runtime.current().mqtt
     private val mdns: MdnsAdvertiser get() = runtime.current().mdns
     // Default-network callback that nudges an MQTT reconnect when the network returns (see registerNetworkCallback).
@@ -172,6 +175,10 @@ class PaneldService : Service() {
             onFailure = { error -> Log.w(TAG, "audio playback failed: ${error.javaClass.simpleName}") },
         )
         system = SystemController(AndroidSystemEnv(this))
+        entityLearning = EntityLearningManager(this, config, scope) {
+            system.reloadDashboard(SystemController.BUILTIN_DASHBOARD)
+        }
+        EntityLearningRuntime.attach(entityLearning)
         watchdog = WatchdogController(system, config)
         kiosk = KioskController(this, system, config)
         // On-device unlock gesture (7 corner taps): persist OFF + clear the lock + tell HA — off the main
@@ -286,7 +293,9 @@ class PaneldService : Service() {
             // snapshot) so it follows reconfigure()'s reassignment; browsePeers null-guards the swap window.
             peers = { mdns.browsePeers() },
             rendererPreparation = rendererPreparation,
+            entityLearning = entityLearning,
         )
+        entityLearning.start()
     }
 
     private fun buildMqtt(stalePanelId: String? = null): MqttBridge = MqttBridge(
@@ -924,6 +933,10 @@ class PaneldService : Service() {
             netCallback = null
         }
         stopMqttWatchdog()
+        if (::entityLearning.isInitialized) {
+            EntityLearningRuntime.detach(entityLearning)
+            entityLearning.close()
+        }
         if (!rendererPreparation.close(RENDERER_SHUTDOWN_MS)) {
             Log.w(TAG, "renderer transaction did not become idle within ${RENDERER_SHUTDOWN_MS}ms")
         }

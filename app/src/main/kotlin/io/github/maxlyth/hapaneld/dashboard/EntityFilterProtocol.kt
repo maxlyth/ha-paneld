@@ -20,7 +20,7 @@ object EntityFilterProtocol {
     )
 
     data class Mutation(val text: String, val modified: Boolean)
-    data class Update(val enabled: Boolean?, val entityIds: List<String>?)
+    data class Update(val enabled: Boolean?, val entityIds: List<String>?, val mode: String? = null)
 
     /** Strict JSON body for the experimental runtime API; null fields mean "leave unchanged". */
     fun parseUpdate(text: String): Update {
@@ -36,8 +36,12 @@ object EntityFilterProtocol {
                 array.opt(i) as? String ?: throw IllegalArgumentException("entity_ids must contain strings")
             })
         } else null
-        require(enabled != null || ids != null) { "enabled or entity_ids required" }
-        return Update(enabled, ids)
+        val mode = if (obj.has("mode")) obj.optString("mode").also {
+            require(it == "manual" || it == "automatic") { "mode must be manual or automatic" }
+        } else null
+        require(enabled != null || ids != null || mode != null) { "enabled, entity_ids or mode required" }
+        require(mode != "automatic" || ids == null) { "automatic mode does not accept entity_ids" }
+        return Update(enabled, ids, mode)
     }
 
     /** Sort, de-duplicate and validate an exact HA entity-id allow-list. */

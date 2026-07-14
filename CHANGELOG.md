@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.9.2-rc3 - 2026-07-14
+
+### Added
+
+- **Entity filtering can now learn a dashboard's dependencies** — built-in-renderer testers can enable automatic observation through the API. ha-paneld inventories the Home Assistant entity catalog, scans the configured dashboard, observes direct state lookups, and builds a candidate filtered subscription without replacing a known-good stream. A full-width local Entities view exposes the evidence, manual overrides, and an explicit apply action after automatic observation is enabled.
+- **The learned entity catalog survives upgrades safely** — the on-panel SQLite catalog has an explicit schema version, sequential forward migrations, bounded retention, and rebuildable derived data. Configuration backups retain the small set of manual overrides while credentials remain outside the catalog.
+
+### Changed
+
+- **Experimental entity filtering supports manual and automatic modes** — the existing API remains backward compatible with exact `entity_ids`; testers can select automatic mode and request a rescan through the new dashboard entity endpoints. The feature remains opt-in while it soaks on real panels.
+
 ## v0.9.2-rc2 - 2026-07-14
 
 ### Added

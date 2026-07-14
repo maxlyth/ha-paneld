@@ -46,6 +46,8 @@ import io.github.maxlyth.hapaneld.control.BottomSwipeDetector
 import io.github.maxlyth.hapaneld.control.BuiltinDashboard
 import io.github.maxlyth.hapaneld.dashboard.EntityFilterProtocol
 import io.github.maxlyth.hapaneld.dashboard.EntityFilterTelemetry
+import io.github.maxlyth.hapaneld.dashboard.EntityLearningProtocol
+import io.github.maxlyth.hapaneld.dashboard.EntityLearningRuntime
 import org.json.JSONObject
 import java.io.File
 import java.net.NetworkInterface
@@ -233,11 +235,12 @@ class DashboardActivity : AppCompatActivity() {
             rendererGate.owns(generation) && (view == null || web === view)
 
     private fun entityFilterSignature(config: Config): String {
-        if (!config.dashboardEntityFilterEnabled) return "disabled"
+        val learning = ":learning=${config.dashboardEntityLearningEnabled}"
+        if (!config.dashboardEntityFilterEnabled) return "disabled$learning"
         return runCatching {
             val ids = EntityFilterProtocol.normalize(config.dashboardEntityFilterIds)
-            if (ids.isEmpty()) "disabled" else "enabled:${EntityFilterProtocol.hash(ids)}:${config.haUrl}"
-        }.getOrDefault("invalid")
+            if (ids.isEmpty()) "disabled$learning" else "enabled:${EntityFilterProtocol.hash(ids)}:${config.haUrl}$learning"
+        }.getOrDefault("invalid$learning")
     }
 
     /** Prepare the exact allow-list for document-start interception. Unsupported/invalid state degrades
@@ -405,12 +408,12 @@ class DashboardActivity : AppCompatActivity() {
             fallbackToLauncher()
             return
         }
-        // The filter endpoint reloads this singleTask activity after committing. A document-start script
-        // cannot be replaced in an existing WebView, so a filter-set/enable change deliberately rebuilds
-        // only the WebView while keeping the foreground service and app process alive.
+        // The filter endpoint reloads this singleTask activity after committing. Document-start scripts
+        // cannot be replaced in an existing WebView, so a filter-set change or learning-mode change
+        // deliberately rebuilds only the WebView while keeping the foreground service and app process alive.
         val nextFilterSignature = entityFilterSignature(config)
         if (nextFilterSignature != entityFilterSignature) {
-            Log.i(TAG, "entity-filter configuration changed — rebuilding dashboard WebView")
+            Log.i(TAG, "entity instrumentation changed — rebuilding dashboard WebView")
             unlatchAuth("entity-filter change")
             retryPolicy.reset()
             interstitialShown = false
@@ -1077,6 +1080,15 @@ class DashboardActivity : AppCompatActivity() {
                 setOf("*"),
             )
         }.onFailure(::fallbackFromEntityFilterInterceptor)
+        if (config.dashboardEntityLearningEnabled) runCatching {
+            if (androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.DOCUMENT_START_SCRIPT)) {
+                androidx.webkit.WebViewCompat.addDocumentStartJavaScript(
+                    this,
+                    EntityLearningProtocol.documentStartScript(config.haUrl),
+                    setOf("*"),
+                )
+            }
+        }.onFailure { Log.w(TAG, "entity-learning access observer unavailable", it) }
         // The HA frontend relies on cookies (incl. third-party for some integrations).
         CookieManager.getInstance().setAcceptCookie(true)
         CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
@@ -1260,6 +1272,21 @@ class DashboardActivity : AppCompatActivity() {
             val lease = filterLease ?: return
             if (rendererCurrent(generation) && config.dashboardEntityFilterEnabled) {
                 EntityFilterTelemetry.subscriptionModified(lease)
+            }
+        }
+
+        /** Batched dependency evidence from the document-start `hass.states` observer. */
+        @JavascriptInterface
+        fun entityLearningAccesses(payload: String) {
+            if (rendererCurrent(generation) && config.dashboardEntityLearningEnabled && payload.length <= 1_000_000) {
+                EntityLearningRuntime.recordAccessBatch(payload)
+            }
+        }
+
+        @JavascriptInterface
+        fun entityLearningMetrics(payload: String) {
+            if (rendererCurrent(generation) && config.dashboardEntityLearningEnabled && payload.length <= 1_000_000) {
+                EntityLearningRuntime.recordMetricBatch(payload)
             }
         }
 

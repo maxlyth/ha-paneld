@@ -75,6 +75,15 @@ class EntityFilterProtocolTest {
         ).forEach { assertTrue(it, runCatching { EntityFilterProtocol.parseUpdate(it) }.isFailure) }
     }
 
+    @Test fun automaticModeIsExplicitAndCannotCarryAnExactList() {
+        val automatic = EntityFilterProtocol.parseUpdate("""{"mode":"automatic","enabled":true}""")
+        assertEquals("automatic", automatic.mode)
+        assertEquals(true, automatic.enabled)
+        assertTrue(runCatching {
+            EntityFilterProtocol.parseUpdate("""{"mode":"automatic","entity_ids":["light.a"]}""")
+        }.isFailure)
+    }
+
     @Test fun websocketUrlAndOriginPreserveReverseProxyPathAndPort() {
         assertEquals(
             "wss://ha.example:8443/prefix/api/websocket",

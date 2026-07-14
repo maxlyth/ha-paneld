@@ -38,7 +38,7 @@ Either way you can also set the URL and token by hand in the Configure tab's Das
 ## Experimental entity filter (0.9.2)
 
 > [!WARNING]
-> This is an API-only tester feature. It is disabled by default, does not discover entities automatically and has no HTML setting yet. An incomplete allow-list can leave cards missing or stale, so keep a rollback path and test it on a non-critical panel first.
+> This is an opt-in tester feature. An incomplete allow-list can leave cards missing or stale, so keep a rollback path and test it on a non-critical panel first. Automatic mode observes and builds a candidate set without changing the working subscription; applying that candidate is a separate confirmed action.
 
 The filter applies only to ha-paneld's built-in renderer. It changes the frontend's Home Assistant subscription so filtering happens on the Home Assistant server before states are serialized and sent to the panel. The Companion app and other dashboard applications are unaffected.
 
@@ -75,6 +75,26 @@ curl --fail --show-error \
 A working filtered connection reports `enabled: true`, `runtime.active: true`, `runtime.mode: "native_socket"`, at least one `modifiedSubscriptions`, and zero `failures` and `directFallbacks`. A fallback means the dashboard remains connected but is receiving the ordinary unfiltered stream.
 
 Posting `entity_ids` replaces the complete list. Keep your source JSON because the status endpoint deliberately returns only the count and a stable hash, and config exports do not include the entity IDs.
+
+To build a candidate set automatically while retaining the current stream, enable observation:
+
+```bash
+curl --fail --show-error \
+  --header 'Content-Type: application/json' \
+  --data '{"mode":"automatic","enabled":true}' \
+  "http://${PANEL_IP}:8888/api/v1/dashboard/entity-filter"
+```
+
+Exercise every dashboard tab, then review the candidate count and evidence on the Entities tab or through `/api/v1/dashboard/entities`. When the candidate is ready, applying it is deliberately explicit:
+
+```bash
+curl --fail --show-error \
+  --header 'Content-Type: application/json' \
+  --data '{"confirm":true}' \
+  "http://${PANEL_IP}:8888/api/v1/dashboard/entities/activate"
+```
+
+Keep the manual JSON above as the immediate rollback path while testing automatic mode.
 
 Disable filtering while retaining the stored list:
 

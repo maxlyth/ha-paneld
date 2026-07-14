@@ -166,6 +166,12 @@ body.revealed input.secret,input.secret:focus,input.secret.shown{color:var(--tex
 .nav a{padding:9px 16px;color:var(--tab);text-decoration:none;border-bottom:2px solid transparent;font-size:.95rem}
 .nav a:hover{color:var(--text);background:var(--hover)}
 .nav a.active{color:var(--text-bright);border-bottom-color:#2557a7}
+.nav .disabled-tab{padding:9px 16px;color:var(--muted);opacity:.45;border-bottom:2px solid transparent;cursor:not-allowed}
+/* Entity diagnostics are one full-width data surface, not masonry cards. On a narrow panel the table
+   keeps useful columns and scrolls inside its card instead of crushing every value into a tall strip. */
+.entity-cards{columns:auto}
+.tablewrap{overflow:auto;max-width:100%}.entity-table{width:100%;min-width:1000px;table-layout:auto;border-collapse:collapse;font-size:.85rem}.entity-table th,.entity-table td{padding:8px;border-bottom:1px solid var(--card-border);text-align:left;vertical-align:top;white-space:nowrap;overflow-wrap:normal;word-break:normal}.entity-table th:first-child,.entity-table td:first-child{min-width:320px}.entity-table th:nth-child(2),.entity-table td:nth-child(2){min-width:160px}.entity-table code{white-space:nowrap}.entity-table .hot{color:#f0a060}.entity-table select{max-width:145px}
+.entity-table th button{appearance:none;border:0;background:transparent;color:inherit;font:inherit;font-weight:700;padding:0;cursor:pointer}.entity-table th button:hover,.entity-table th button.sorted{color:var(--accent2)}.entity-table th button.sorted::after{content:attr(data-dir);font-size:0}.entity-table th button[data-dir="asc"]::after{content:" \2191";font-size:inherit}.entity-table th button[data-dir="desc"]::after{content:" \2193";font-size:inherit}
 /* Responsive tab bar -> header hamburger: when the tabs can't fit one line, switcher.js sets
    body.nav-collapsed; the #navburger (first item in .hdr, before the logo) then replaces the inline bar,
    and tapping it (body.nav-open) drops the tabs as a vertical menu in flow below the header. */

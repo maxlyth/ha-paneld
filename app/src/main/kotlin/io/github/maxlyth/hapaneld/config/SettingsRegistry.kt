@@ -218,6 +218,11 @@ object SettingsRegistry {
             },
         ),
         SettingSpec(
+            key = "dashboard_entity_learning", type = SettingType.BOOL, group = "Dashboard",
+            label = "Automatic dashboard entity filter", default = "false",
+            help = "Built-in renderer only: observe the entities used by this dashboard without changing the current stream. Disabled by default. Enabling starts a catalog synchronization and unlocks the Entities tab; review the candidate set there before explicitly applying it.",
+        ),
+        SettingSpec(
             key = "home_dashboard", type = SettingType.STRING, group = "Dashboard",
             label = "Home dashboard", default = "",
             help = "Local dashboard path a reload returns to, e.g. /lovelace/0 (built-in renderer: the view it loads). Blank = wherever it was.",
@@ -266,6 +271,16 @@ object SettingsRegistry {
             key = "ha_client_id", type = SettingType.STRING, group = "Dashboard",
             label = "HA OAuth client_id", default = "",
             help = "Built-in renderer only: client_id used when refreshing the token. Blank = the HA URL (the frontend default). Set it to the client the refresh token was issued for, e.g. https://home-assistant.io/android to reuse an HA Companion refresh token.",
+        ),
+        SettingSpec(
+            key = "dashboard_entity_overrides", type = SettingType.STRING, group = "Dashboard",
+            label = "Entity filter overrides", default = "", hidden = true,
+            help = "Backup-only storage for explicit entity pins and forced exclusions managed on the Entities tab.",
+        ),
+        SettingSpec(
+            key = "dashboard_entity_learning_applied", type = SettingType.BOOL, group = "Dashboard",
+            label = "Apply learned entity filter", default = "false", hidden = true,
+            help = "Backup-safe activation latch. Automatic learning observes first; the candidate set is applied explicitly from the Entities API or tab.",
         ),
         // Last in the group on purpose: the display-density control is the preferred way to size a
         // dashboard, so this app-level zoom sits below the connection settings users should actually set.
