@@ -2,6 +2,7 @@ package io.github.maxlyth.hapaneld.dashboard
 
 import org.json.JSONArray
 import org.json.JSONObject
+import java.net.URI
 import java.security.MessageDigest
 
 /** Pure dashboard-analysis and document-start helpers for automatic entity learning. */
@@ -300,7 +301,11 @@ object EntityLearningProtocol {
      * batched separately; enumeration is deliberately ignored because it is not dependency evidence.
      */
     fun documentStartScript(haUrl: String): String {
-        val wsOrigin = JSONObject.quote(haUrl.trimEnd('/').replaceFirst("https://", "wss://").replaceFirst("http://", "ws://"))
+        val upstream = URI(EntityFilterProtocol.upstreamWebSocketUrl(haUrl))
+        val targetWsOrigin = JSONObject.quote(
+            EntityFilterProtocol.origin(haUrl).replaceFirst("https://", "wss://").replaceFirst("http://", "ws://"),
+        )
+        val targetWsPath = JSONObject.quote(upstream.rawPath)
         return """
         (()=>{
           if(window.__haPaneldEntityLearning)return;
@@ -318,10 +323,10 @@ object EntityLearningProtocol {
             if(!metrics.size)return;const out={};metrics.forEach((v,k)=>out[k]=v);metrics.clear();
             try{window.externalApp&&window.externalApp.entityLearningMetrics(JSON.stringify(out))}catch(e){}
           },5000);
-          const Parent=window.WebSocket,target=$wsOrigin;
+          const Parent=window.WebSocket,targetWsOrigin=$targetWsOrigin,targetWsPath=$targetWsPath;
           function LearningWebSocket(url,protocols){
             const socket=protocols===undefined?new Parent(url):new Parent(url,protocols);
-            try{const u=new URL(String(url),location.href);if(u.origin===target&&u.pathname.endsWith('/api/websocket')){
+            try{const u=new URL(String(url),location.href);if(u.origin===targetWsOrigin&&u.pathname===targetWsPath){
               let hydrated=false,entitySubscriptionId=null;const send=socket.send;
               Object.defineProperty(socket,'send',{configurable:true,writable:true,value:function(data){
                 if(typeof data==='string')try{const message=JSON.parse(data);if(message&&message.type==='subscribe_entities')entitySubscriptionId=message.id}catch(e){}
