@@ -7,6 +7,11 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class EntityLearningProtocolTest {
+    @Test fun manualActivationCannotBypassPendingDefaultResolverReplacement() {
+        assertFalse(canActivateLearnedEntitySet(defaultResolverRebootstrapPending = true))
+        assertTrue(canActivateLearnedEntitySet(defaultResolverRebootstrapPending = false))
+    }
+
     @Test fun resolverUpgradeForcesStartupScanDespiteExistingCatalogTimestamp() {
         assertTrue(shouldSyncEntityLearningOnStartup(
             learningEnabled = true,

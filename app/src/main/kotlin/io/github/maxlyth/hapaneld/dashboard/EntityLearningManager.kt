@@ -188,6 +188,9 @@ class EntityLearningManager(
     /** Explicitly promote the policy-selected evidence set, primarily for existing manual filters. */
     @Synchronized fun activate(confirm: Boolean): String {
         require(config.dashboardEntityLearningEnabled) { "automatic learning is not enabled" }
+        require(canActivateLearnedEntitySet(config.dashboardEntityDefaultResolverRebootstrapPending)) {
+            "a fresh default-dashboard scan must complete before activation"
+        }
         require(store.snapshot(instance(), dashboardPath()).blockingIssueCount == 0) {
             "automatic activation is blocked by dashboard configuration issues"
         }
@@ -196,9 +199,6 @@ class EntityLearningManager(
         val preview = subscriptionPreview(active)
         check(config.commitDashboardEntitySubscription(true, active, applied = true)) {
             "failed to commit learned entity set"
-        }
-        check(config.clearDashboardEntityDefaultResolverRebootstrapPending()) {
-            "failed to clear default-dashboard replacement latch"
         }
         invalidateEffects()
         if (preview.streamChange) onFilterChanged()
@@ -1235,6 +1235,9 @@ internal fun haInstanceCandidateUrls(configuredBase: String, configJson: String?
 }.distinct()
 
 private const val MAX_HA_CANDIDATE_URL_CHARS = 2_048
+
+internal fun canActivateLearnedEntitySet(defaultResolverRebootstrapPending: Boolean): Boolean =
+    !defaultResolverRebootstrapPending
 
 /** A resolver-policy upgrade must rescan even when the old, potentially wrong catalog has synced. */
 internal fun shouldSyncEntityLearningOnStartup(
