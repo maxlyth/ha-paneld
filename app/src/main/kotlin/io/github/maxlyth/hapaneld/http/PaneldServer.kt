@@ -1062,8 +1062,8 @@ class PaneldServer(
             tab("dashboard", "/", "Dashboard") +
             tab("configure", "/configure", "Configure") +
             entityTab +
-            tab("test", "/test", "Test") +
             tab("install", "/install", "Install") +
+            tab("test", "/test", "Test") +
             tab("fleet", "/fleet", "Fleet") +
             tab("logs", "/logs", "Logs") +
             """<a href="/api">API</a></div>"""
