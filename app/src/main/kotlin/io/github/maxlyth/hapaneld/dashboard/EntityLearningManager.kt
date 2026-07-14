@@ -145,7 +145,7 @@ class EntityLearningManager(
         val token = auth.session?.accessToken ?: error(if (auth.rejected) "Home Assistant credential rejected" else "Home Assistant token unavailable")
         val states = fetchStates(config.haUrl, token)
         require(states.isNotEmpty()) { "Home Assistant returned no visible states" }
-        val ws = fetchDashboardAndRegistry(config.haUrl, token, EntityLearningProtocol.dashboardUrlPath(path))
+        val ws = fetchDashboardAndRegistry(config.haUrl, token, path)
         val scan = EntityLearningProtocol.scanDashboard(ws.configJson)
         dynamicExpressionsJson = encodeDynamicExpressions(scan.dynamicExpressions)
         val expanded = expandTargets(config.haUrl, token, scan.targets)
@@ -478,7 +478,7 @@ class EntityLearningManager(
         else -> { skipValue(); "" }
     }
 
-    private suspend fun fetchDashboardAndRegistry(base: String, token: String, urlPath: String): WsSnapshot {
+    private suspend fun fetchDashboardAndRegistry(base: String, token: String, homeDashboard: String): WsSnapshot {
         var configJson: String? = null
         val metadata = mutableMapOf<String, String>()
         withHaSocket(base, token) { request ->
@@ -524,6 +524,13 @@ class EntityLearningManager(
                 if (inheritedLabels.isNotEmpty()) entity.put("lb", JSONArray(inheritedLabels.sorted()))
                 entity.toString()
             }
+            val defaultPanel = if (EntityLearningProtocol.usesFrontendDefaultPanel(homeDashboard)) {
+                runCatching {
+                    request(JSONObject().put("type", "frontend/get_user_data").put("key", "core"))
+                        .optJSONObject("result")?.optJSONObject("value")?.optString("default_panel")
+                }.getOrNull()
+            } else null
+            val urlPath = EntityLearningProtocol.dashboardUrlPath(homeDashboard, defaultPanel)
             val command = JSONObject().put("type", "lovelace/config")
             if (urlPath.isNotBlank()) command.put("url_path", urlPath)
             val response = request(command)

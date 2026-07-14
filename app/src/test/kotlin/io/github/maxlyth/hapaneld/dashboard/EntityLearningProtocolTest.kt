@@ -167,9 +167,53 @@ class EntityLearningProtocolTest {
         ).first)
     }
 
-    @Test fun dashboardUrlPathDistinguishesDefaultLovelace() {
+    @Test fun dashboardUrlPathDistinguishesExplicitDefaultLovelace() {
         assertEquals("sample-panel", EntityLearningProtocol.dashboardUrlPath("/sample-panel/dash"))
         assertEquals("", EntityLearningProtocol.dashboardUrlPath("/lovelace/0"))
+        assertFalse(EntityLearningProtocol.usesFrontendDefaultPanel("/lovelace/0"))
+        assertEquals(
+            "",
+            EntityLearningProtocol.dashboardUrlPath("/lovelace/0", defaultPanel = "/different-panel/view"),
+        )
+    }
+
+    @Test fun blankOrRootDashboardUsesSanitizedFrontendDefaultPanel() {
+        for (configured in listOf("", "   ", "/", " /?kiosk ", "/#view")) {
+            assertTrue(EntityLearningProtocol.usesFrontendDefaultPanel(configured))
+            assertEquals(
+                "wall-panel",
+                EntityLearningProtocol.dashboardUrlPath(configured, defaultPanel = "/wall-panel/main?kiosk"),
+            )
+        }
+    }
+
+    @Test fun missingInvalidOrOrdinaryFrontendDefaultFallsBackToLovelace() {
+        val invalidDefaults = listOf(
+            null,
+            "",
+            "/",
+            "lovelace",
+            "/lovelace/0",
+            "https://ha.example/wall-panel",
+            "//ha.example/wall-panel",
+            "../wall-panel",
+            "wall%2fpanel",
+            "wall\\panel",
+            "null",
+        )
+        for (defaultPanel in invalidDefaults) {
+            assertEquals("", EntityLearningProtocol.dashboardUrlPath("/", defaultPanel))
+        }
+    }
+
+    @Test fun explicitConfiguredDashboardAlwaysWinsOverFrontendDefault() {
+        assertEquals(
+            "configured-panel",
+            EntityLearningProtocol.dashboardUrlPath(
+                "/configured-panel/view?kiosk",
+                defaultPanel = "/different-panel/view",
+            ),
+        )
     }
 
     @Test fun learningScriptPreservesWebsocketShapeAndBatchesBridgeCalls() {

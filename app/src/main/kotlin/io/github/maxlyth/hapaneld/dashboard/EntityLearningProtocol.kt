@@ -9,6 +9,8 @@ object EntityLearningProtocol {
     private val ENTITY_ID = Regex("(?<![a-z0-9_])[a-z0-9_]+\\.[a-z0-9_]+(?![a-z0-9_])")
     private val DIRECT_ENTITY_ID = Regex("^[a-z0-9_]+\\.[a-z0-9_]+$")
     private val TARGET_REGISTRY_ID = Regex("^[A-Za-z0-9_-]+$")
+    private val DASHBOARD_PATH_SEGMENT = Regex("^[a-z0-9][a-z0-9_-]*$")
+    private val URL_SCHEME = Regex("^[a-z][a-z0-9+.-]*:", RegexOption.IGNORE_CASE)
     private val TARGET_KEYS = setOf("entity_id", "device_id", "area_id", "floor_id", "label_id")
     private val EXPANDABLE_TARGET_KEYS = TARGET_KEYS - "entity_id"
     private val TEMPLATE_MARKERS = listOf("{{", "{%", "[[[", "hass.states", "states[")
@@ -248,9 +250,35 @@ object EntityLearningProtocol {
     internal const val SELECTOR_TOTAL_BUDGET = 128
     internal const val MAX_DYNAMIC_EXPRESSION_LENGTH = 2048
 
-    fun dashboardUrlPath(homeDashboard: String): String {
-        val first = homeDashboard.trim().substringBefore('?').trim('/').substringBefore('/')
-        return first.takeUnless { it.isBlank() || it == "lovelace" }.orEmpty()
+    /**
+     * A blank/root renderer route means "use this HA user's default dashboard". Explicit routes,
+     * including `/lovelace`, stay authoritative and must not be replaced by frontend user data.
+     */
+    fun usesFrontendDefaultPanel(homeDashboard: String): Boolean = homeDashboard.trim()
+        .substringBefore('?')
+        .substringBefore('#')
+        .trim('/')
+        .isBlank()
+
+    /**
+     * Return the Lovelace WebSocket dashboard URL path, where an empty result selects ordinary
+     * Lovelace. [defaultPanel] is considered only when [homeDashboard] is blank/root and is treated
+     * as untrusted frontend user data.
+     */
+    fun dashboardUrlPath(homeDashboard: String, defaultPanel: String? = null): String {
+        if (!usesFrontendDefaultPanel(homeDashboard)) {
+            val first = homeDashboard.trim().substringBefore('?').substringBefore('#')
+                .trim('/').substringBefore('/')
+            return first.takeUnless { it.isBlank() || it == "lovelace" }.orEmpty()
+        }
+        return sanitizedDefaultPanelPath(defaultPanel)
+    }
+
+    private fun sanitizedDefaultPanelPath(defaultPanel: String?): String {
+        val value = defaultPanel?.trim().orEmpty()
+        if (value.isBlank() || value.startsWith("//") || '\\' in value || URL_SCHEME.containsMatchIn(value)) return ""
+        val first = value.substringBefore('?').substringBefore('#').trim('/').substringBefore('/')
+        return first.takeIf { it != "lovelace" && it != "null" && DASHBOARD_PATH_SEGMENT.matches(it) }.orEmpty()
     }
 
     fun canonical(value: Any): String = when (value) {
