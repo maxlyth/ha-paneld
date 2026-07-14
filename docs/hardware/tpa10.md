@@ -70,6 +70,8 @@ The panel must be on Wi-Fi for the network route; thereafter `adb connect <panel
 
 The stock WebView is **Chrome 83** — far too old for a current HA frontend, so the dashboard shows blank or broken until you replace it. The recommended build is **LineageOS System WebView 150** (`armeabi-v7a`) — a current, maintained, vanilla-Chromium engine. Prefer it over Cromite: Cromite patches Chromium's autoplay content-setting to *block*, which stops Home Assistant camera-card (WebRTC) streams from starting without a tap; LineageOS leaves autoplay allowed, so camera streams start on their own.
 
+The TPA10 has limited video-decoder headroom inside WebView. Multiple visible 720p WebRTC cards can drop frames or leave one stream waiting for its first frame even though a single stream is healthy. Use lower-resolution substreams, fewer simultaneous autoplay cards or snapshots that switch to live video on tap if this happens.
+
 Download it from the ha-paneld mirror (stable URL):
 
 ```

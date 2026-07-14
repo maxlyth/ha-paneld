@@ -8,7 +8,7 @@ From **v0.8.0**, entries are grouped under **Added** (new features/entities), **
 changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
 content appear. Earlier releases predate this convention and keep their flat lists.
 
-## v0.9.2-rc2 - Unreleased
+## v0.9.2-rc2 - 2026-07-14
 
 ### Added
 
@@ -25,6 +25,10 @@ content appear. Earlier releases predate this convention and keep their flat lis
 - **MQTT and live settings cannot act on torn-down hardware** — shutdown now closes and drains both MQTT commands and HTTP live-setting dispatch before releasing screen, LED, relay and other service-owned controllers. Reconnects invalidated by reconfiguration or shutdown cannot create a late replacement client.
 - **Interrupted work no longer leaks stale results into a replacement runtime** — superseded audio playback, renderer preparation, sensor callbacks, performance samples, log transports, input streams, update checks and dashboard recovery are generation-owned or terminally closed, preventing old completions from overwriting current state.
 - **Maintenance operations report only completed work** — bounded uploads and downloads, helper APK streaming, package installs, uninstalls, release selection and update caches now preserve exact ownership and failure state instead of reporting success or freshness after partial completion.
+
+### Docs
+
+- **TPA10 camera-capacity guidance** — the hardware guide now explains that multiple simultaneous 720p WebRTC cards can exceed this panel's video headroom and suggests lower-resolution substreams, fewer autoplay cards or snapshot-first cards when streams blank or drop frames.
 
 ## v0.9.2-rc1 - 2026-07-12
 

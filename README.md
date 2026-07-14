@@ -120,7 +120,7 @@ ha-paneld needs no system-signed install. Standard-Android capabilities (brightn
 
 ## Status & roadmap
 
-**Latest release candidate — 0.9.2-rc1:** panel state now converges through one bounded observed-state path, transient MQTT credential rejection recovers automatically, and the built-in renderer gains useful network-startup progress plus time-to-interactive and reload measurements. This candidate also adds preliminary profiles for the Echo Show 5 Gen 2 running LineageOS and the ZX-SMT156/RK3566_T. Full notes for every release are in [CHANGELOG.md](CHANGELOG.md).
+**Latest release candidate — 0.9.2-rc2:** screen state now remains accurate on helper-controlled panels, release downloads lead with the supported installer, and built-in-renderer testers can opt into an experimental exact entity allow-list. Reconfiguration, reconnect and shutdown handling has also been hardened across MQTT, dashboard, media, sensors, input, logging, updates and hardware controls so superseded work cannot affect the active runtime. Full notes for every release are in [CHANGELOG.md](CHANGELOG.md).
 
 **Where it's heading** — the near-term direction is **fleet-scale operation** and **full remote provisioning**: bringing a new or factory-wiped panel all the way up with zero typing on the panel, and pushing config/updates to a whole fleet from one place. Other planned work includes MQTT TLS for self-signed brokers, an on-device scheduler, deeper performance tooling, and continued iteration on the HTTP UI. The full curated list is in **[docs/roadmap.md](docs/roadmap.md)**.
 
