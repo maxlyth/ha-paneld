@@ -130,9 +130,19 @@ class Config private constructor(
         accepted["dashboard_package"]?.let { next ->
             if (next != dashboardPackage) editor.putBoolean("renderer_launch_pending", true)
         }
+        accepted["home_dashboard"]?.let { next ->
+            val nextPath = normalizeDashboardEntityPath(next)
+            if (nextPath != normalizeDashboardEntityPath(homeDashboard)) {
+                editor.putString("dashboard_entity_dashboard_path", nextPath)
+            }
+        }
 
         val haUrl = accepted["ha_url"]
-        if (haUrl != null) editor.putString("ha_url", haUrl.trimEnd('/'))
+        if (haUrl != null) {
+            val normalized = haUrl.trimEnd('/')
+            editor.putString("ha_url", normalized)
+            stageDashboardEntityHaUrlChange(editor, normalized)
+        }
         if (haUrl?.isEmpty() == true) {
             editor.putString("ha_token", "")
             editor.putString("ha_refresh_token", "")
@@ -271,7 +281,9 @@ class Config private constructor(
      *  it unchanged, mirroring [setMqtt]'s password semantics. */
     fun setHaConnection(url: String, token: String?) {
         edit {
-            putString("ha_url", url.trim().trimEnd('/'))
+            val normalized = url.trim().trimEnd('/')
+            putString("ha_url", normalized)
+            stageDashboardEntityHaUrlChange(this, normalized)
             if (token != null) putString("ha_token", token)
         }
     }
@@ -460,7 +472,14 @@ class Config private constructor(
     // user-default view. Empty = keep current behaviour (cold-start to the Companion default).
     val homeDashboard: String get() = prefs.getString("home_dashboard", "")!!
     fun setHomeDashboard(p: String) {
-        edit { putString("home_dashboard", p.trim()) }
+        edit {
+            val normalized = p.trim()
+            putString("home_dashboard", normalized)
+            val nextPath = normalizeDashboardEntityPath(normalized)
+            if (nextPath != normalizeDashboardEntityPath(homeDashboard)) {
+                putString("dashboard_entity_dashboard_path", nextPath)
+            }
+        }
     }
 
     /** Built-in renderer: minutes of no touch before it navigates back to [homeDashboard] (0 = off). */
@@ -489,10 +508,122 @@ class Config private constructor(
      * is the only management surface and reports count/hash rather than echoing the ids.
      */
     val dashboardEntityFilterEnabled: Boolean
-        get() = prefs.getBoolean("dashboard_entity_filter_enabled", false)
+        get() = entityStateOwnedByCurrent("dashboard_entity_filter_instance") &&
+            prefs.getBoolean("dashboard_entity_filter_enabled", false)
     val dashboardEntityFilterIds: List<String>
+        get() = if (entityStateOwnedByCurrent("dashboard_entity_filter_instance")) rawDashboardEntityFilterIds else emptyList()
+    internal val rawDashboardEntityFilterIds: List<String>
         get() = prefs.getString("dashboard_entity_filter_ids", "").orEmpty()
             .lineSequence().map(String::trim).filter(String::isNotEmpty).distinct().sorted().toList()
+
+    /** The evidence namespace currently selected for the configured HA endpoint. A URL-derived key is
+     *  used until mDNS can tie the authenticated endpoint to HA's stable core.uuid. */
+    val dashboardEntityInstanceKey: String get() = prefs.getString("dashboard_entity_instance", "").orEmpty()
+    val dashboardEntityInstanceOrigin: String get() = prefs.getString("dashboard_entity_instance_origin", "").orEmpty()
+    val dashboardEntityInstanceUuid: String get() = prefs.getString("dashboard_entity_instance_uuid", "").orEmpty()
+    val dashboardEntityDashboardPath: String
+        get() = prefs.getString("dashboard_entity_dashboard_path", "").orEmpty()
+    val dashboardEntityTargetKey: String
+        get() = dashboardEntityInstanceKey.takeIf(String::isNotBlank)?.let {
+            dashboardEntityTargetKey(it, dashboardEntityDashboardPath)
+        }.orEmpty()
+
+    private fun entityStateOwnedByCurrent(ownerPreference: String): Boolean {
+        val current = dashboardEntityTargetKey
+        val owner = prefs.getString(ownerPreference, "").orEmpty()
+        // Entirely blank selection/owner is the pre-instance-identity compatibility state. Once a URL or
+        // dashboard setter records a target change, even legacy unowned state must fail closed immediately.
+        if (current.isBlank() && owner.isBlank() && dashboardEntityInstanceOrigin.isBlank() &&
+            dashboardEntityDashboardPath.isBlank()) return true
+        if (current.isBlank()) return false
+        val configuredOrigin = canonicalHaOrigin(haUrl) ?: return false
+        val configuredPath = normalizeDashboardEntityPath(homeDashboard)
+        return current == owner && dashboardEntityInstanceOrigin == configuredOrigin &&
+            dashboardEntityDashboardPath == configuredPath
+    }
+
+    /** Select the URL-keyed namespace and dashboard after a target change. Existing ownership is left
+     *  behind, so a different/unverified HA or dashboard cannot inherit filter state. Null means the
+     *  durable preference transaction failed and callers must not proceed with the selected target. */
+    @Synchronized fun prepareDashboardEntityInstance(
+        origin: String,
+        dashboardPath: String,
+        legacyKey: String,
+    ): String? {
+        if (legacyKey.isBlank()) return null
+        val canonicalOrigin = canonicalHaOrigin(origin) ?: return null
+        val normalizedPath = normalizeDashboardEntityPath(dashboardPath)
+        val currentOrigin = dashboardEntityInstanceOrigin
+        val currentKey = dashboardEntityInstanceKey
+        val currentPath = dashboardEntityDashboardPath
+        if (currentKey.isNotBlank() && currentOrigin == canonicalOrigin && currentPath == normalizedPath) return currentKey
+        val firstBinding = currentKey.isBlank() && currentOrigin.isBlank() && currentPath.isBlank()
+        // A dashboard change at a verified origin retains its stable instance namespace. An origin change
+        // must fall back to its URL-derived key until mDNS proves that it is merely an alias.
+        val selectedKey = currentKey.takeIf { it.isNotBlank() && currentOrigin == canonicalOrigin } ?: legacyKey
+        val selectedUuid = dashboardEntityInstanceUuid.takeIf {
+            selectedKey == currentKey && currentOrigin == canonicalOrigin
+        }.orEmpty()
+        val selectedTarget = dashboardEntityTargetKey(selectedKey, normalizedPath)
+        val committed = applyBatch {
+            edit {
+                putString("dashboard_entity_instance_origin", canonicalOrigin)
+                putString("dashboard_entity_instance", selectedKey)
+                putString("dashboard_entity_instance_uuid", selectedUuid)
+                putString("dashboard_entity_dashboard_path", normalizedPath)
+                if (firstBinding && prefs.getString("dashboard_entity_filter_instance", "").isNullOrBlank()) {
+                    putString("dashboard_entity_filter_instance", selectedTarget)
+                }
+                if (firstBinding && prefs.getString("dashboard_entity_applied_instance", "").isNullOrBlank()) {
+                    putString("dashboard_entity_applied_instance", selectedTarget)
+                }
+                if (firstBinding && prefs.getString("dashboard_entity_override_instance", "").isNullOrBlank()) {
+                    putString("dashboard_entity_override_instance", selectedTarget)
+                }
+            }
+        }
+        return selectedKey.takeIf { committed }
+    }
+
+    /** Adopt a UUID namespace only if the endpoint is still the one that was authenticated/discovered.
+     *  First adoption moves legacy ownership without altering a known-good list; later URL aliases for
+     *  the same UUID simply select the already-owned stable key. */
+    @Synchronized fun adoptDashboardEntityInstance(
+        expectedOrigin: String,
+        expectedDashboardPath: String,
+        uuid: String,
+        legacyKey: String,
+        stableKey: String,
+    ): Boolean {
+        if (uuid.isBlank() || legacyKey.isBlank() || stableKey.isBlank()) return false
+        val canonicalOrigin = canonicalHaOrigin(expectedOrigin) ?: return false
+        val normalizedPath = normalizeDashboardEntityPath(expectedDashboardPath)
+        if (dashboardEntityInstanceOrigin != canonicalOrigin || dashboardEntityDashboardPath != normalizedPath) return false
+        val current = dashboardEntityInstanceKey
+        if (current != legacyKey && current != stableKey) return false
+        val legacyTarget = dashboardEntityTargetKey(legacyKey, normalizedPath)
+        val stableTarget = dashboardEntityTargetKey(stableKey, normalizedPath)
+        return applyBatch {
+            edit {
+                putString("dashboard_entity_instance", stableKey)
+                putString("dashboard_entity_instance_origin", canonicalOrigin)
+                putString("dashboard_entity_instance_uuid", uuid)
+                putString("dashboard_entity_dashboard_path", normalizedPath)
+                val filterOwner = prefs.getString("dashboard_entity_filter_instance", "").orEmpty()
+                if (filterOwner.isBlank() || filterOwner == legacyKey || filterOwner == legacyTarget) {
+                    putString("dashboard_entity_filter_instance", stableTarget)
+                }
+                val appliedOwner = prefs.getString("dashboard_entity_applied_instance", "").orEmpty()
+                if (appliedOwner.isBlank() || appliedOwner == legacyKey || appliedOwner == legacyTarget) {
+                    putString("dashboard_entity_applied_instance", stableTarget)
+                }
+                val overrideOwner = prefs.getString("dashboard_entity_override_instance", "").orEmpty()
+                if (overrideOwner.isBlank() || overrideOwner == legacyKey || overrideOwner == legacyTarget) {
+                    putString("dashboard_entity_override_instance", stableTarget)
+                }
+            }
+        }
+    }
 
     /** Productized learner request. Distinct from runtime filter-active so first sync can fail open. */
     val dashboardEntityLearningEnabled: Boolean
@@ -516,11 +647,36 @@ class Config private constructor(
         if (!enabled) setDashboardEntityLearningApplied(false)
     }
 
+    /** Change automatic-learning mode without exposing a half-disabled stream. A fresh enable clears
+     * the activation latch but preserves the current manual filter for explicit review; disabling also
+     * turns interception off in the same preference commit. */
+    fun commitDashboardEntityLearningMode(enabled: Boolean, clearApplied: Boolean): Boolean {
+        return applyBatch {
+            edit {
+                putBoolean("dashboard_entity_learning", enabled)
+                if (clearApplied) {
+                    putBoolean("dashboard_entity_learning_applied", false)
+                    putString("dashboard_entity_applied_instance", dashboardEntityTargetKey)
+                }
+                // Keep the old list under its old owner, but disable interception globally. Otherwise
+                // switching back to that owner later would silently reactivate a filter after learning
+                // was explicitly disabled on another target.
+                if (!enabled) {
+                    putBoolean("dashboard_entity_filter_enabled", false)
+                }
+            }
+        }
+    }
+
     /** True after a fresh installation has safely bootstrapped or an observed set was explicitly applied. */
     val dashboardEntityLearningApplied: Boolean
-        get() = prefs.getBoolean("dashboard_entity_learning_applied", false)
+        get() = entityStateOwnedByCurrent("dashboard_entity_applied_instance") &&
+            prefs.getBoolean("dashboard_entity_learning_applied", false)
     fun setDashboardEntityLearningApplied(applied: Boolean) {
-        edit { putBoolean("dashboard_entity_learning_applied", applied) }
+        edit {
+            putBoolean("dashboard_entity_learning_applied", applied)
+            putString("dashboard_entity_applied_instance", dashboardEntityTargetKey)
+        }
     }
     fun commitDashboardEntityLearningApplied(applied: Boolean): Boolean = applyBatch {
         setDashboardEntityLearningApplied(applied)
@@ -528,7 +684,8 @@ class Config private constructor(
 
     /** Backup-safe expert overrides; the derived catalog and metrics remain rebuildable SQLite state. */
     val dashboardEntityOverrides: Map<String, String>
-        get() = prefs.getString("dashboard_entity_overrides", "").orEmpty().lineSequence().mapNotNull { line ->
+        get() = if (!entityStateOwnedByCurrent("dashboard_entity_override_instance")) emptyMap() else
+            prefs.getString("dashboard_entity_overrides", "").orEmpty().lineSequence().mapNotNull { line ->
             val marker = line.firstOrNull() ?: return@mapNotNull null
             val id = line.drop(1).trim().takeIf { it.isNotEmpty() } ?: return@mapNotNull null
             when (marker) { '+' -> id to "pinned"; '-' -> id to "forced_exclude"; else -> null }
@@ -538,7 +695,10 @@ class Config private constructor(
         val encoded = values.toSortedMap().mapNotNull { (id, value) ->
             when (value) { "pinned" -> "+$id"; "forced_exclude" -> "-$id"; else -> null }
         }.joinToString("\n")
-        return applyBatch { edit { putString("dashboard_entity_overrides", encoded) } }
+        return applyBatch { edit {
+            putString("dashboard_entity_overrides", encoded)
+            putString("dashboard_entity_override_instance", dashboardEntityTargetKey)
+        } }
     }
 
     /** Persist the complete experimental filter atomically so enabled cannot reference a partial list. */
@@ -549,8 +709,98 @@ class Config private constructor(
             edit {
                 putString("dashboard_entity_filter_ids", normalized)
                 putBoolean("dashboard_entity_filter_enabled", enabled && normalized.isNotEmpty())
+                putString("dashboard_entity_filter_instance", dashboardEntityTargetKey)
             }
         }
+    }
+
+    /** Publish an automatic subscription and its activation latch as one owner-scoped transaction. */
+    fun commitDashboardEntitySubscription(
+        enabled: Boolean,
+        entityIds: Collection<String>,
+        applied: Boolean,
+    ): Boolean {
+        val normalized = entityIds.asSequence().map(String::trim).filter(String::isNotEmpty)
+            .distinct().sorted().joinToString("\n")
+        return applyBatch { edit {
+            putString("dashboard_entity_filter_ids", normalized)
+            putBoolean("dashboard_entity_filter_enabled", enabled && normalized.isNotEmpty())
+            putBoolean("dashboard_entity_learning_applied", applied)
+            putString("dashboard_entity_filter_instance", dashboardEntityTargetKey)
+            putString("dashboard_entity_applied_instance", dashboardEntityTargetKey)
+        } }
+    }
+
+    /** Reset rebuildable learning preferences in one commit. The default preserves the known-good live
+     * allow-list; an explicit clean-slate reset also clears it without disabling automatic learning. */
+    fun commitDashboardEntityEvidenceReset(clearFilter: Boolean): Boolean {
+        val target = dashboardEntityTargetKey
+        if (target.isBlank()) return false
+        return applyBatch { edit {
+            putString("dashboard_entity_overrides", "")
+            putString("dashboard_entity_override_instance", target)
+            putBoolean("dashboard_entity_learning_applied", false)
+            putString("dashboard_entity_applied_instance", target)
+            if (clearFilter) {
+                putString("dashboard_entity_filter_ids", "")
+                putBoolean("dashboard_entity_filter_enabled", false)
+                putString("dashboard_entity_filter_instance", target)
+            }
+        } }
+    }
+
+    /** Commit a promotion policy and any resulting live subscription as one durable preference change.
+     *  A null [activeEntityIds] means the current stream is unchanged. */
+    fun commitDashboardEntityPromotionPolicy(
+        staticRefs: Boolean,
+        runtimeRefs: Boolean,
+        activeEntityIds: Collection<String>?,
+        applied: Boolean,
+    ): Boolean {
+        val normalized = activeEntityIds?.asSequence()?.map(String::trim)?.filter(String::isNotEmpty)
+            ?.distinct()?.sorted()?.joinToString("\n")
+        if (applied && normalized != null && normalized.isEmpty()) return false
+        return applyBatch { edit {
+            putBoolean("dashboard_entity_auto_static", staticRefs)
+            putBoolean("dashboard_entity_auto_runtime", runtimeRefs)
+            putBoolean("dashboard_entity_learning_applied", applied)
+            putString("dashboard_entity_applied_instance", dashboardEntityTargetKey)
+            if (normalized != null) {
+                putString("dashboard_entity_filter_ids", normalized)
+                putBoolean("dashboard_entity_filter_enabled", normalized.isNotEmpty())
+                putString("dashboard_entity_filter_instance", dashboardEntityTargetKey)
+            }
+        } }
+    }
+
+    /** Atomically leave automatic learning and install a manually managed filter for the selected target.
+     *  An enabled manual filter must contain at least one id; a target must have been durably prepared. */
+    fun commitDashboardManualEntityFilter(enabled: Boolean, entityIds: Collection<String>): Boolean {
+        val normalized = entityIds.asSequence().map(String::trim).filter(String::isNotEmpty)
+            .distinct().sorted().joinToString("\n")
+        val target = dashboardEntityTargetKey
+        if (enabled && normalized.isEmpty()) return false
+        if (target.isBlank() || canonicalHaOrigin(haUrl) != dashboardEntityInstanceOrigin ||
+            normalizeDashboardEntityPath(homeDashboard) != dashboardEntityDashboardPath) return false
+        return applyBatch { edit {
+            putBoolean("dashboard_entity_learning", false)
+            putBoolean("dashboard_entity_learning_applied", false)
+            putString("dashboard_entity_applied_instance", target)
+            putString("dashboard_entity_filter_ids", normalized)
+            putBoolean("dashboard_entity_filter_enabled", enabled && normalized.isNotEmpty())
+            putString("dashboard_entity_filter_instance", target)
+        } }
+    }
+
+    /** Immediately hide filter state when the configured endpoint changes. The URL-derived instance key
+     *  is selected later by [prepareDashboardEntityInstance], once its legacy key has been calculated. */
+    private fun stageDashboardEntityHaUrlChange(editor: SharedPreferences.Editor, nextUrl: String) {
+        val current = canonicalHaOrigin(haUrl) ?: haUrl.trim().trimEnd('/')
+        val next = canonicalHaOrigin(nextUrl) ?: nextUrl.trim().trimEnd('/')
+        if (current == next) return
+        editor.remove("dashboard_entity_instance")
+            .remove("dashboard_entity_instance_uuid")
+            .putString("dashboard_entity_instance_origin", next)
     }
 
     // The screen-off timeout (ms) seen before we first raised it, so disabling preventIdleDim can restore
@@ -859,4 +1109,20 @@ class Config private constructor(
         const val VERSION = BuildConfig.VERSION_NAME
         const val MDNS_SERVICE_TYPE = "_ha-paneld._tcp.local."
     }
+}
+
+/** Dashboard paths are ownership boundaries. Query/fragment state does not identify a Lovelace dashboard. */
+internal fun normalizeDashboardEntityPath(raw: String): String {
+    val value = raw.trim().ifBlank { "/" }
+    val parsedPath = runCatching { java.net.URI(value).path }.getOrNull().orEmpty().ifBlank { value }
+    val leading = if (parsedPath.startsWith('/')) parsedPath else "/$parsedPath"
+    return leading.replace(Regex("/{2,}"), "/").let { if (it.length > 1) it.trimEnd('/') else it }
+}
+
+/** Length-prefixing avoids collisions if a future instance-key encoding contains the separator. */
+internal fun dashboardEntityTargetKey(instanceKey: String, dashboardPath: String): String {
+    val key = instanceKey.trim()
+    if (key.isEmpty()) return ""
+    val path = normalizeDashboardEntityPath(dashboardPath)
+    return "${key.length}:$key$path"
 }

@@ -91,6 +91,14 @@ class EntityFilterProtocolTest {
         )
         assertEquals("https://ha.example:8443", EntityFilterProtocol.origin("https://ha.example:8443/prefix"))
         assertEquals("https://ha.example", EntityFilterProtocol.origin("HTTPS://HA.EXAMPLE:443/prefix"))
+        assertEquals(
+            "wss://HA.EXAMPLE:443/prefix/api/websocket",
+            EntityFilterProtocol.upstreamWebSocketUrl("HTTPS://HA.EXAMPLE:443/prefix/"),
+        )
+        assertEquals(
+            "ws://[2001:db8::12]:8123/ha/api/websocket",
+            EntityFilterProtocol.upstreamWebSocketUrl("http://[2001:db8::12]:8123/ha"),
+        )
     }
 
     @Test fun documentScriptTargetsOnlyTheHaApiSocketAndPreservesNativeShape() {
@@ -173,6 +181,7 @@ class EntityFilterProtocolTest {
 
         EntityFilterTelemetry.subscriptionModified(old)
         EntityFilterTelemetry.failed(old, "stale")
+        EntityFilterTelemetry.held(old, "stale-held")
         EntityFilterTelemetry.directFallback(old)
         EntityFilterTelemetry.stop(old)
 
@@ -183,5 +192,21 @@ class EntityFilterProtocolTest {
         assertEquals(0, live.getLong("failures"))
         assertEquals("", live.getString("lastError"))
         EntityFilterTelemetry.stop(current)
+    }
+
+    @Test fun heldTelemetryIsInactiveAndPreservesConfiguredIdentityWithoutDirectFallback() {
+        val lease = EntityFilterTelemetry.started(ids)
+        val expectedHash = EntityFilterProtocol.hash(ids)
+
+        EntityFilterTelemetry.held(lease, "document_start_install")
+
+        val held = JSONObject(EntityFilterTelemetry.json())
+        assertFalse(held.getBoolean("active"))
+        assertEquals(ids.size, held.getInt("entityCount"))
+        assertEquals(expectedHash, held.getString("filterHash"))
+        assertEquals(1, held.getLong("failures"))
+        assertEquals(0, held.getLong("directFallbacks"))
+        assertEquals("document_start_install", held.getString("lastError"))
+        EntityFilterTelemetry.stop(lease)
     }
 }

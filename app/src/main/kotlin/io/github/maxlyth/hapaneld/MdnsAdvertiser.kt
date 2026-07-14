@@ -6,6 +6,7 @@ import android.util.Log
 import io.github.maxlyth.hapaneld.util.Json
 import io.github.maxlyth.hapaneld.util.localIpv4
 import java.net.InetAddress
+import java.net.URI
 import java.util.concurrent.ConcurrentHashMap
 import javax.jmdns.JmDNS
 import javax.jmdns.ServiceEvent
@@ -181,6 +182,42 @@ class MdnsAdvertiser(private val context: Context, private val config: Config) {
     }
 
     /**
+     * Resolve the stable Home Assistant instance id advertised in zeroconf TXT. Identity is accepted only
+     * when exactly one valid record matches the configured HA origin or one of [candidateUrls] returned by
+     * that authenticated HA API. IP address, MQTT location and record order are deliberately irrelevant:
+     * several HA instances can share a host or reverse proxy. A `<uuid>.local` candidate is also an exact
+     * identity match because Home Assistant defines that hostname from the same advertised uuid.
+     *
+     * Blocking for at most the bounded JmDNS browse budget; call off the main thread. Malformed, ambiguous
+     * and unmatched records all fail closed with null.
+     */
+    fun discoverHaInstanceUuid(candidateUrls: Collection<String> = emptyList(), timeoutMs: Long = 4000): String? {
+        val dns = jmdns ?: return null
+        val candidates = buildList {
+            config.haUrl.takeIf { it.isNotBlank() }?.let(::add)
+            addAll(candidateUrls)
+        }
+        if (candidates.isEmpty()) return null
+        return runCatching {
+            val services = dns.list(HA_SERVICE_TYPE, timeoutMs.coerceIn(1L, MAX_HA_BROWSE_MS))
+                ?.toList() ?: emptyList()
+            // Truncating a crowded result could hide a second matching UUID. Likewise, silently dropping
+            // a malformed record could turn an ambiguous browse into an apparently unique identity.
+            if (services.size > MAX_HA_RECORDS) return@runCatching null
+            val records = services.map { info ->
+                parseHaTxtRecord(
+                        uuid = info.getPropertyString("uuid"),
+                        internalUrl = info.getPropertyString("internal_url"),
+                        externalUrl = info.getPropertyString("external_url"),
+                        baseUrl = info.getPropertyString("base_url"),
+                        server = info.server,
+                    ) ?: return@runCatching null
+            }
+            matchHaInstanceUuid(candidates, records)
+        }.getOrNull()
+    }
+
+    /**
      * The LAN ha-paneld roster (`_ha-paneld._tcp.local.`) for the header panel switcher — a cheap,
      * non-blocking snapshot of [peerMap], which [peerListener] keeps converged + fresh in the background.
      * This panel's own advertised service is included and [Peer.self]-marked; self is re-evaluated against
@@ -224,7 +261,75 @@ class MdnsAdvertiser(private val context: Context, private val config: Config) {
         private const val RESOLVE_MS = 2500L // per-peer mDNS resolve budget (off the JmDNS thread)
         private const val REFRESH_MS = 60_000L // periodic re-browse interval (name refresh / gap fill)
         private const val LIST_MS = 3000L // dns.list resolve budget per refresh sweep
+        private const val HA_SERVICE_TYPE = "_home-assistant._tcp.local."
+        private const val MAX_HA_BROWSE_MS = 5_000L
+        private const val MAX_HA_RECORDS = 16
     }
+}
+
+/** Validated identity-bearing subset of one resolved Home Assistant zeroconf record. */
+internal data class HaTxtRecord(
+    val uuid: String,
+    val origins: Set<String>,
+    val serverHost: String?,
+)
+
+/** Pure TXT parser. A malformed UUID or non-empty advertised URL invalidates the record. */
+internal fun parseHaTxtRecord(
+    uuid: String?,
+    internalUrl: String?,
+    externalUrl: String?,
+    baseUrl: String?,
+    server: String?,
+): HaTxtRecord? {
+    val id = uuid?.trim()?.lowercase()?.takeIf { it.matches(Regex("[0-9a-f]{32}")) } ?: return null
+    val rawUrls = listOf(internalUrl, externalUrl, baseUrl).mapNotNull { it?.trim()?.takeIf(String::isNotEmpty) }
+    val origins = rawUrls.map { canonicalHaOrigin(it) ?: return null }.toSet()
+    val host = server?.trim()?.trimEnd('.')?.lowercase()?.takeIf(String::isNotEmpty)
+    return HaTxtRecord(id, origins, host)
+}
+
+/**
+ * Pure fail-closed identity matcher. Duplicate advertisements for one UUID are harmless; two distinct
+ * matching UUIDs are ambiguous. URL paths are intentionally discarded because authenticated `/api/config`
+ * candidates and configured dashboard paths still identify the same HTTP origin.
+ */
+internal fun matchHaInstanceUuid(candidateUrls: Collection<String>, records: Collection<HaTxtRecord>): String? {
+    val candidates = candidateUrls.mapNotNull(::canonicalHaCandidate).toSet()
+    if (candidates.isEmpty()) return null
+    val matches = records.asSequence().filter { record ->
+        candidates.any { candidate ->
+            candidate.origin in record.origins ||
+                candidate.host == "${record.uuid}.local" ||
+                record.serverHost == "${record.uuid}.local" && candidate.host == record.serverHost
+        }
+    }.map { it.uuid }.toSet()
+    return matches.singleOrNull()
+}
+
+private data class CanonicalHaCandidate(val origin: String, val host: String)
+
+private fun canonicalHaCandidate(raw: String): CanonicalHaCandidate? {
+    val uri = runCatching { URI(raw.trim()) }.getOrNull() ?: return null
+    val origin = canonicalHaOrigin(uri) ?: return null
+    return CanonicalHaCandidate(origin, uri.host.trimEnd('.').lowercase())
+}
+
+/** Canonical HTTP origin with scheme/host case and default ports normalized. */
+internal fun canonicalHaOrigin(raw: String): String? =
+    runCatching { URI(raw.trim()) }.getOrNull()?.let(::canonicalHaOrigin)
+
+private fun canonicalHaOrigin(uri: URI): String? {
+    val scheme = uri.scheme?.lowercase()?.takeIf { it == "http" || it == "https" } ?: return null
+    val host = uri.host?.trimEnd('.')?.lowercase()?.takeIf(String::isNotEmpty) ?: return null
+    if (uri.userInfo != null) return null
+    val port = when {
+        uri.port < 0 -> -1
+        scheme == "http" && uri.port == 80 -> -1
+        scheme == "https" && uri.port == 443 -> -1
+        else -> uri.port
+    }
+    return URI(scheme, null, host, port, null, null, null).toString()
 }
 
 /** One ha-paneld panel discovered over mDNS (or this panel itself, [self]=true). [ip] is null when the

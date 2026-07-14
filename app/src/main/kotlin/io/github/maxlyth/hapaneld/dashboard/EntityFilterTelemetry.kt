@@ -57,6 +57,16 @@ object EntityFilterTelemetry {
     @Synchronized fun failed(lease: Lease, kind: String) {
         if (owner == lease.id) { failures++; lastError = kind }
     }
+    /** Interception could not be established and the renderer was safely held before opening HA.
+     *  Preserve the configured set and error for diagnostics without claiming either an active filter
+     *  or an unfiltered direct fallback. */
+    @Synchronized fun held(lease: Lease, kind: String) {
+        if (owner == lease.id) {
+            active = false
+            failures++
+            lastError = kind
+        }
+    }
     @Synchronized fun directFallback(lease: Lease) {
         if (owner == lease.id) { directFallbacks++; active = false }
     }

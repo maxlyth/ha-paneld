@@ -7,6 +7,19 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DashboardConfigurationLintTest {
+    @Test
+    fun slashRegexSafetyRejectsBacktrackingConstructsButKeepsCommonEntityPatterns() {
+        assertTrue(DashboardConfigurationLint.isSafeEntitySelectorRegex("^sensor\\..*_temperature$"))
+        assertTrue(DashboardConfigurationLint.isSafeEntitySelectorRegex("^sensor\\.[a-z0-9_]+$"))
+        assertFalse(DashboardConfigurationLint.isSafeEntitySelectorRegex("^sensor\\..*.*_temperature$"))
+        assertFalse(DashboardConfigurationLint.isSafeEntitySelectorRegex("^.*sensor.*$"))
+        assertFalse(DashboardConfigurationLint.isSafeEntitySelectorRegex("^sensor\\.[a-z]+_[a-z]+$"))
+        assertFalse(DashboardConfigurationLint.isSafeEntitySelectorRegex("(a+)+$"))
+        assertFalse(DashboardConfigurationLint.isSafeEntitySelectorRegex("(a|aa)+$"))
+        assertFalse(DashboardConfigurationLint.isSafeEntitySelectorRegex("^(.*.*.*.*.*)z$"))
+        assertFalse(DashboardConfigurationLint.isSafeEntitySelectorRegex("^(sensor)\\.\\1$"))
+    }
+
     @Test fun resolvesStructuralSupersetsWithoutUsingDynamicRefinementsOrDisplayLimits() {
         val config = """{"views":[{"title":"Overview","path":"overview","cards":[
           {"type":"custom:auto-entities","title":"Room lights","filter":{"include":[

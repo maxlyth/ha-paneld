@@ -3,6 +3,7 @@ package io.github.maxlyth.hapaneld.http
 import android.content.Context
 import android.util.Log
 import io.github.maxlyth.hapaneld.Config
+import io.github.maxlyth.hapaneld.normalizeDashboardEntityPath
 import io.github.maxlyth.hapaneld.peersJson
 import io.github.maxlyth.hapaneld.config.Capabilities
 import io.github.maxlyth.hapaneld.config.ConfigBundle
@@ -44,6 +45,8 @@ import io.github.maxlyth.hapaneld.util.SelfUpdater
 import io.github.maxlyth.hapaneld.util.UpdateChecker
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.Parameters
+import io.ktor.http.parseQueryString
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.application.ApplicationCallPipeline
 import io.ktor.server.application.call
@@ -72,6 +75,51 @@ import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStream
+
+internal fun panelBrowserTitle(friendlyName: String, section: String? = null): String {
+    val panel = friendlyName.trim().ifBlank { "ha-paneld" }
+    val suffix = section?.trim().orEmpty()
+    return if (suffix.isBlank()) panel else "$panel · $suffix"
+}
+
+/** Bound config mutations before Ktor or JSONObject materializes attacker-controlled form/JSON data. */
+internal suspend fun receiveBoundedConfigParameters(
+    call: ApplicationCall,
+    maxBytes: Long = PaneldServer.MAX_CONFIG_POST_BODY_BYTES,
+): Parameters? {
+    val declared = call.request.headers["Content-Length"]?.toLongOrNull()
+    if (declared != null && declared > maxBytes) {
+        call.respondText("request too large\n", status = HttpStatusCode.PayloadTooLarge)
+        return null
+    }
+    val body = try {
+        withContext(Dispatchers.IO) {
+            call.receiveStream().use { String(BoundedStreams.readBytes(it, maxBytes), Charsets.UTF_8) }
+        }
+    } catch (_: ByteLimitExceeded) {
+        call.respondText("request too large\n", status = HttpStatusCode.PayloadTooLarge)
+        return null
+    }
+    return try {
+        if (call.request.headers["Content-Type"].orEmpty().substringBefore(';').trim()
+                .equals(ContentType.Application.Json.toString(), ignoreCase = true)
+        ) {
+            val json = JSONObject(body)
+            Parameters.build {
+                json.keys().forEach { key ->
+                    val value = json.get(key)
+                    require(value === JSONObject.NULL || value is String || value is Number || value is Boolean)
+                    append(key, if (value === JSONObject.NULL) "" else value.toString())
+                }
+            }
+        } else {
+            parseQueryString(body)
+        }
+    } catch (_: Throwable) {
+        call.respondText("invalid config body\n", status = HttpStatusCode.BadRequest)
+        null
+    }
+}
 
 /**
  * Ktor CIO HTTP surface on :8888. Serves the TTS-announce contract plus a small panel info/config
@@ -294,6 +342,9 @@ class PaneldServer(
                 get("/icon.svg") {
                     call.respondText(asset("icon.svg"), ContentType.Image.SVG)
                 }
+                get("/favicon.svg") {
+                    call.respondText(asset("favicon.svg"), ContentType.Image.SVG)
+                }
                 // Generic bundled-asset server for the redesigned UI (page scripts + vendored libs).
                 get("/assets/{f...}") {
                     val rel = call.parameters.getAll("f")?.joinToString("/").orEmpty()
@@ -323,7 +374,11 @@ class PaneldServer(
                 // Self-contained REST API explorer (no Swagger-UI CDN bundle) + the OpenAPI spec it
                 // renders — the spec also imports into Swagger/Postman for fleet tooling.
                 get("/api") {
-                    call.respondText(asset("api.html"), ContentType.Text.Html)
+                    val html = asset("api.html").replace(
+                        "<title>ha-paneld · REST API</title>",
+                        "<title>${esc(panelBrowserTitle(config.friendlyName, "REST API"))}</title>",
+                    )
+                    call.respondText(html, ContentType.Text.Html)
                 }
                 get("/health") {
                     call.respondText("ha-paneld ${Config.VERSION} panel=${config.panelId} build=${buildToken()} cfg=${io.github.maxlyth.hapaneld.config.ConfigHash.of(currentValues())}\n")
@@ -374,6 +429,8 @@ class PaneldServer(
                                 call.request.queryParameters["filter"] ?: "active",
                                 call.request.queryParameters["limit"]?.toIntOrNull() ?: 100,
                                 call.request.queryParameters["offset"]?.toIntOrNull() ?: 0,
+                                call.request.queryParameters["sort"] ?: "entity_id",
+                                call.request.queryParameters["dir"] ?: "asc",
                             ),
                             ContentType.Application.Json,
                         )
@@ -388,9 +445,7 @@ class PaneldServer(
                         } else call.respondText("synchronization already running\n", status = HttpStatusCode.Conflict)
                     }
                     post("/dashboard/entities/activate") {
-                        val obj = runCatching { JSONObject(call.receiveText().ifBlank { "{}" }) }.getOrElse {
-                            return@post call.respondText("invalid JSON\n", status = HttpStatusCode.BadRequest)
-                        }
+                        val obj = receiveEntityAdminJson(call, allowBlank = true) ?: return@post
                         val response = runCatching { entityLearning.activate(obj.optBoolean("confirm", false)) }.getOrElse {
                             return@post call.respondText("activation failed: ${it.message}\n", status = HttpStatusCode.BadRequest)
                         }
@@ -398,9 +453,7 @@ class PaneldServer(
                         call.respondText(response, ContentType.Application.Json, status)
                     }
                     post("/dashboard/entities/policy") {
-                        val obj = runCatching { JSONObject(call.receiveText()) }.getOrElse {
-                            return@post call.respondText("invalid JSON\n", status = HttpStatusCode.BadRequest)
-                        }
+                        val obj = receiveEntityAdminJson(call) ?: return@post
                         if (!obj.has("auto_static") || !obj.has("auto_runtime")) {
                             return@post call.respondText("auto_static and auto_runtime are required\n", status = HttpStatusCode.BadRequest)
                         }
@@ -412,10 +465,7 @@ class PaneldServer(
                         call.respondText(response, ContentType.Application.Json)
                     }
                     post("/dashboard/entities/override") {
-                        val body = call.receiveText()
-                        val obj = runCatching { JSONObject(body) }.getOrElse {
-                            return@post call.respondText("invalid JSON\n", status = HttpStatusCode.BadRequest)
-                        }
+                        val obj = receiveEntityAdminJson(call) ?: return@post
                         val response = runCatching {
                             entityLearning.setOverride(
                                 obj.optString("entity_id"), obj.optString("override"), obj.optBoolean("force", false),
@@ -427,9 +477,7 @@ class PaneldServer(
                         call.respondText(response, ContentType.Application.Json, status)
                     }
                     post("/dashboard/entities/overrides") {
-                        val obj = runCatching { JSONObject(call.receiveText()) }.getOrElse {
-                            return@post call.respondText("invalid JSON\n", status = HttpStatusCode.BadRequest)
-                        }
+                        val obj = receiveEntityAdminJson(call) ?: return@post
                         val ids = obj.optJSONArray("entity_ids")?.let { array ->
                             (0 until array.length()).map { array.optString(it) }
                         }.orEmpty()
@@ -444,10 +492,13 @@ class PaneldServer(
                         call.respondText(response, ContentType.Application.Json, status)
                     }
                     post("/dashboard/entities/reset") {
-                        val obj = runCatching { JSONObject(call.receiveText().ifBlank { "{}" }) }.getOrElse {
-                            return@post call.respondText("invalid JSON\n", status = HttpStatusCode.BadRequest)
-                        }
-                        val response = runCatching { entityLearning.resetEvidence(obj.optBoolean("confirm", false)) }.getOrElse {
+                        val obj = receiveEntityAdminJson(call, allowBlank = true) ?: return@post
+                        val response = runCatching {
+                            entityLearning.resetEvidence(
+                                confirm = obj.optBoolean("confirm", false),
+                                clearFilter = obj.optBoolean("clear_filter", false),
+                            )
+                        }.getOrElse {
                             return@post call.respondText("reset failed: ${it.message}\n", status = HttpStatusCode.Conflict)
                         }
                         val status = if (JSONObject(response).optBoolean("confirmation_required")) HttpStatusCode.Conflict else HttpStatusCode.OK
@@ -1063,8 +1114,8 @@ class PaneldServer(
 <script>/* ?theme=light|dark pins the UI theme for testing (else the browser preference rules) */
 (function(){var m=location.search.match(/[?&]theme=(dark|light)\b/);if(m)document.documentElement.setAttribute("data-theme",m[1])})();</script>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ha-paneld · ${esc(title)} · ${esc(config.friendlyName)}</title>
-<link rel="icon" href="/icon.svg">
+<title>${esc(panelBrowserTitle(config.friendlyName, title))}</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="stylesheet" href="/info.css"></head><body data-build="${buildToken()}" data-cfg="${io.github.maxlyth.hapaneld.config.ConfigHash.of(currentValues())}"><div class="wrap">
 <div class="topbar"><div class="hdr"><button id="navburger" class="navburger pbtn" aria-label="Menu">☰</button><h1><img src="/icon.svg" class="logo" alt=""><span class="brand">ha-paneld</span> <small id="pswitch" data-self-id="${esc(config.panelId)}" data-self-name="${esc(config.friendlyName)}"><span class="sep">·</span>${esc(config.friendlyName)}</small></h1>
  <span style="display:flex;gap:10px;align-items:center">$haLink<a class="gh" href="$REPO_URL" target="_blank" rel="noopener" title="ha-paneld on GitHub" aria-label="GitHub"><svg viewBox="0 0 24 24"><path d="$GH_ICON"/></svg></a></span></div>
@@ -1808,6 +1859,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
     private fun infoHtml(): String {
         val pid = esc(config.panelId)
         val fname = esc(config.friendlyName)
+        val browserTitle = esc(panelBrowserTitle(config.friendlyName))
         // Stale-while-revalidate: render the last-known snapshot instantly (placeholders if none yet)
         // and let the page hydrate/refresh from /api/v1/info when the snapshot is missing or old.
         val s = snapCache.peek()
@@ -1838,8 +1890,8 @@ report of this panel's hardware, firmware, SELinux, su and node probes for bug r
 <script>/* ?theme=light|dark pins the UI theme for testing (else the browser preference rules) */
 (function(){var m=location.search.match(/[?&]theme=(dark|light)\b/);if(m)document.documentElement.setAttribute("data-theme",m[1])})();</script>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ha-paneld · $fname</title>
-<link rel="icon" href="/icon.svg">
+<title>$browserTitle</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="stylesheet" href="/info.css"></head><body data-ver="${Config.VERSION}" data-build="${buildToken()}" data-cfg="${io.github.maxlyth.hapaneld.config.ConfigHash.of(currentValues())}" data-hydrate="${if (hydrate) "1" else "0"}"><div class="wrap">
 <div class="topbar"><div class="hdr"><button id="navburger" class="navburger pbtn" aria-label="Menu">☰</button><h1><img src="/icon.svg" class="logo" alt=""><span class="brand">ha-paneld</span> <small id="pswitch" data-self-id="$pid" data-self-name="$fname"><span class="sep">·</span>$fname</small></h1>
  <span style="display:flex;gap:10px;align-items:center">${if (config.haLinkUrl.isNotBlank()) """<a class="pbtn" href="${esc(config.haLinkUrl)}" target="_blank" rel="noopener" title="Open Home Assistant (this panel's device page when known)">Open in HA</a>""" else ""}<button id="revbtn" class="pbtn" onclick="toggleReveal()" title="Show/hide blurred values for editing — they're blurred by default so screenshots don't leak them">Reveal</button>
@@ -2038,6 +2090,31 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
 
     private class EntityFilterBodyTooLarge : RuntimeException()
 
+    /** Entity administration requests are tiny control messages. Bound both declared and chunked bodies
+     *  before materializing JSON so a LAN client cannot exhaust a panel's heap. */
+    private suspend fun receiveEntityAdminJson(call: ApplicationCall, allowBlank: Boolean = false): JSONObject? {
+        val declared = call.request.headers["Content-Length"]?.toLongOrNull()
+        if (declared != null && declared > MAX_ENTITY_ADMIN_BODY_BYTES) {
+            call.respondText("request too large\n", status = HttpStatusCode.PayloadTooLarge)
+            return null
+        }
+        val bytes = try {
+            withContext(Dispatchers.IO) {
+                call.receiveStream().use { BoundedStreams.readBytes(it, MAX_ENTITY_ADMIN_BODY_BYTES) }
+            }
+        } catch (_: ByteLimitExceeded) {
+            call.respondText("request too large\n", status = HttpStatusCode.PayloadTooLarge)
+            return null
+        }
+        val text = String(bytes, Charsets.UTF_8)
+        return try {
+            JSONObject(if (allowBlank && text.isBlank()) "{}" else text)
+        } catch (_: Throwable) {
+            call.respondText("invalid JSON\n", status = HttpStatusCode.BadRequest)
+            null
+        }
+    }
+
     /** Bound chunked as well as Content-Length requests before JSON parsing or persistence. */
     private fun readEntityFilterBody(input: InputStream): String {
         val out = ByteArrayOutputStream()
@@ -2082,19 +2159,23 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             call.respondText(entityFilterStatusJson(), ContentType.Application.Json)
             return
         }
-        if (update.mode == "manual" || update.entityIds != null) {
-            if (!config.commitDashboardEntityLearningEnabled(false)) {
-                call.respondText("configuration commit failed\n", status = HttpStatusCode.InternalServerError)
-                return
-            }
-        }
         val ids = update.entityIds ?: config.dashboardEntityFilterIds
         val enabled = update.enabled ?: config.dashboardEntityFilterEnabled
+        if (update.entityIds != null && ids.isEmpty()) {
+            call.respondText("entity_ids must contain at least one valid entity\n", status = HttpStatusCode.BadRequest)
+            return
+        }
         if (enabled && ids.isEmpty()) {
             call.respondText("entity_ids required when enabled\n", status = HttpStatusCode.BadRequest)
             return
         }
-        val committed = withContext(Dispatchers.IO) { config.setDashboardEntityFilter(enabled, ids) }
+        val committed = withContext(Dispatchers.IO) {
+            if (update.mode == "manual" || update.entityIds != null) {
+                config.commitDashboardManualEntityFilter(enabled, ids)
+            } else {
+                config.setDashboardEntityFilter(enabled, ids)
+            }
+        }
         if (!committed) {
             call.respondText("configuration commit failed\n", status = HttpStatusCode.InternalServerError)
             return
@@ -2115,7 +2196,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
      * through [applySetting] (same path as an HA command), and per-row HA-exposure toggles are stored.
      */
     private suspend fun handleConfigPost(call: ApplicationCall) {
-        val p = call.receiveParameters()
+        val p = receiveBoundedConfigParameters(call) ?: return
         // Partial-merge: apply ONLY keys present, so a fleet tool can set one field without clobbering
         // the rest. The UI form sends every key (blank = clear), preserving its full-replace behaviour.
         // Validate panel_id up front so an invalid value is rejected before any write begins.
@@ -2146,6 +2227,9 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
         var relaunchForOverscroll = false
         var reloadForZoom = false
         var entityLearningChanged: Boolean? = null
+        var entityTargetChanged = false
+        var homeDashboardAppliedEarly = false
+        var homeDashboardChangedEarly = false
         var tameDelta = TameDelta.NONE
         var rendererFailure: Throwable? = null
         val committed = withContext(Dispatchers.IO) {
@@ -2196,8 +2280,10 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
                     val postedEntityLearning = p["dashboard_entity_learning"]?.let {
                         it.trim().equals("true", ignoreCase = true) || it.trim() == "1"
                     }
-                    postedEntityLearning?.let { config.setDashboardEntityLearningEnabled(it) }
                     if (postedEntityLearning != null && postedEntityLearning != prevEntityLearning) {
+                        // The manager owns this transition after the surrounding config transaction.
+                        // Pre-writing it here makes setEnabled() observe the new value as the old value,
+                        // defeating its fresh-opt-in latch reset and bootstrap semantics.
                         entityLearningChanged = postedEntityLearning
                     }
                     // Page zoom (%). A fresh load is where setInitialScale reliably takes effect, so on a change
@@ -2243,6 +2329,8 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
                     val prevHaUrl = config.haUrl
                     val prevHaToken = config.haToken
                     val prevHaRefresh = config.haRefreshToken
+                    val prevHaExpiry = config.haTokenExpiry
+                    val prevHaClientId = config.haClientId
                     val haUrl = p["ha_url"]?.trim()
                     val haToken = if (haUrl != null && haUrl.isEmpty()) "" else p["ha_token"]?.takeIf { it.isNotEmpty() }
                     if (haUrl != null || haToken != null) config.setHaConnection(
@@ -2254,8 +2342,10 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
                     val clearingHa = haUrl != null && haUrl.isEmpty()
                     val haRefresh = if (clearingHa) "" else p["ha_refresh_token"]?.takeIf { it.isNotEmpty() }
                     haRefresh?.let { config.setHaRefreshToken(it) }
-                    p["ha_token_expiry"]?.trim()?.toLongOrNull()?.let { config.setHaTokenExpiry(it) }
-                    p["ha_client_id"]?.trim()?.let { config.setHaClientId(if (clearingHa) "" else it) }
+                    val haExpiry = p["ha_token_expiry"]?.trim()?.toLongOrNull()
+                    val haClientId = p["ha_client_id"]?.trim()?.let { if (clearingHa) "" else it }
+                    haExpiry?.let(config::setHaTokenExpiry)
+                    haClientId?.let(config::setHaClientId)
                     if (clearingHa) config.setHaRefreshToken("")
                     // A NEW access token (with no new refresh token beside it) is an explicit re-credential:
                     // drop the stored refresh token + expiry so the renderer actually uses it. Without this a
@@ -2273,8 +2363,11 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
                     // unrelated settings save.
                     val haChanged = (haUrl != null && haUrl != prevHaUrl) ||
                         (haToken != null && haToken != prevHaToken) ||
-                        (haRefresh != null && haRefresh != prevHaRefresh) || refreshCleared
+                        (haRefresh != null && haRefresh != prevHaRefresh) || refreshCleared ||
+                        (haExpiry != null && haExpiry != prevHaExpiry) ||
+                        (haClientId != null && haClientId != prevHaClientId)
                     relaunchForHa = haChanged
+                    entityTargetChanged = haChanged
                     // Live-apply a renderer switch: re-anchor HOME to the new renderer and bring it up now —
                     // previously changing "Dashboard app" did nothing until the next boot. Off-thread (su/daemon).
                     // The kiosk/watchdog loops read dashboard_package per tick, so they retarget on their own.
@@ -2292,6 +2385,20 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
                 if (saved) {
                     revisions.snapshot(previous)
                     runCatching {
+                        // Home dashboard normally travels through the live MQTT-equivalent path. Apply this
+                        // one target-defining value before any renderer effect so owner-scoped filter state
+                        // is rebound (or hidden) before a relaunched WebView can observe it.
+                        p["home_dashboard"]?.let { posted ->
+                            val previousHome = config.homeDashboard
+                            applySetting("home_dashboard", posted)
+                            homeDashboardAppliedEarly = true
+                            homeDashboardChangedEarly = config.homeDashboard != previousHome
+                        }
+                        if (entityTargetChanged && !homeDashboardChangedEarly) entityLearning.onTargetConfigurationChanged()
+                        entityLearningChanged?.let { enabled ->
+                            check(entityLearning.setEnabled(enabled)) { "entity-learning transition failed" }
+                            entityLearningChanged = null
+                        }
                         applyRendererEffects(
                             RendererConfigEffects.coalesce(
                                 dashboardChanged = relaunchForDash,
@@ -2315,10 +2422,10 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             tameDelta.add.forEach { tame.tame(it) }
             tameDelta.remove.forEach { tame.untame(it) }
         }
-        entityLearningChanged?.let(entityLearning::setEnabled)
         // Formerly MQTT-only behaviour settings — applied through the bridge's command path so HTTP
         // and HA behave identically. Registry-validated where the key is registered; invalid skipped.
         for (key in HTTP_LIVE_KEYS) {
+            if (key == "home_dashboard" && homeDashboardAppliedEarly) continue
             val raw = p[key] ?: continue
             val spec = SettingsRegistry.spec(key)
             val value = if (spec != null) {
@@ -2548,6 +2655,9 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             for ((key, value) in accepted) {
                 when {
                     key == "panel_id" -> config.stagePanelId(editor, value)
+                    // EntityLearningManager owns enable/disable transition semantics and commits this
+                    // preference after the ordinary bundle transaction succeeds.
+                    key == "dashboard_entity_learning" -> Unit
                     key in HTTP_LIVE_KEYS -> live.add(key to value)
                     else -> SettingsRegistry.spec(key)?.let { config.stage(editor, it, value) }
                 }
@@ -2558,10 +2668,25 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             val effects = RendererConfigEffects.between(previous.values, accepted)
             var rendererFailure: Throwable? = null
             runCatching {
+                val previousHome = previous.values["home_dashboard"].orEmpty()
+                live.firstOrNull { it.first == "home_dashboard" }?.let { (_, value) ->
+                    applySetting("home_dashboard", value)
+                }
+                val homeChanged = normalizeDashboardEntityPath(config.homeDashboard) !=
+                    normalizeDashboardEntityPath(previousHome)
+                val credentialsChanged = RendererConfigEffects.credentialsChanged(previous.values, accepted)
+                if (homeChanged || credentialsChanged) entityLearning.onTargetConfigurationChanged()
+                accepted["dashboard_entity_learning"]?.let { raw ->
+                    val enabled = SettingValue.parseBool(raw)
+                        ?: error("validated automatic entity-filter value became invalid")
+                    if (enabled != config.dashboardEntityLearningEnabled && !entityLearning.setEnabled(enabled)) {
+                        error("entity-learning transition failed")
+                    }
+                }
                 afterCommitBeforeRenderer(effects)
                 applyRendererEffects(effects)
             }.onFailure { rendererFailure = it }
-            for ((k, v) in live) applySetting(k, v)
+            for ((k, v) in live) if (k != "home_dashboard") applySetting(k, v)
             snapInvalidate()
             onReconfigure()
             rendererFailure?.let { throw it }
@@ -2993,6 +3118,8 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
         private const val SU_TTL_MS = 60_000L
         private const val COMPANION_URL_TTL_MS = 60_000L
         internal const val MAX_PLAY_BODY_BYTES = 16L * 1024L
+        internal const val MAX_CONFIG_POST_BODY_BYTES = 256L * 1024L
+        internal const val MAX_ENTITY_ADMIN_BODY_BYTES = 256L * 1024L
         internal const val MAX_CONFIG_IMPORT_BYTES = 1L * 1024L * 1024L
         internal const val MAX_RESTORE_BYTES = 64L * 1024L * 1024L
         internal const val MAX_APK_UPLOAD_BYTES = 256L * 1024L * 1024L
@@ -3037,9 +3164,11 @@ internal data class RendererConfigEffects(
     val darkMode: Boolean?,
 ) {
     companion object {
-        private val CREDENTIAL_KEYS = setOf("ha_url", "ha_token", "ha_refresh_token", "ha_client_id")
+        private val CREDENTIAL_KEYS = setOf(
+            "ha_url", "ha_token", "ha_refresh_token", "ha_token_expiry", "ha_client_id",
+        )
 
-        fun between(previous: Map<String, String>, accepted: Map<String, String>): RendererConfigEffects {
+        fun credentialsChanged(previous: Map<String, String>, accepted: Map<String, String>): Boolean {
             fun changed(key: String): Boolean {
                 val next = accepted[key] ?: return false
                 val before = previous[key]
@@ -3049,9 +3178,18 @@ internal data class RendererConfigEffects(
                 "ha_refresh_token" !in accepted && previous["ha_refresh_token"].orEmpty().isNotEmpty()
             val urlClearDropsCredentials = accepted["ha_url"]?.isEmpty() == true &&
                 listOf("ha_token", "ha_refresh_token", "ha_client_id").any { previous[it].orEmpty().isNotEmpty() }
+            return CREDENTIAL_KEYS.any(::changed) || accessReplacesRefresh || urlClearDropsCredentials
+        }
+
+        fun between(previous: Map<String, String>, accepted: Map<String, String>): RendererConfigEffects {
+            fun changed(key: String): Boolean {
+                val next = accepted[key] ?: return false
+                val before = previous[key]
+                return if (key == "ha_url") next.trimEnd('/') != before?.trimEnd('/') else next != before
+            }
             return coalesce(
                 dashboardChanged = changed("dashboard_package"),
-                credentialChanged = CREDENTIAL_KEYS.any(::changed) || accessReplacesRefresh || urlClearDropsCredentials,
+                credentialChanged = credentialsChanged(previous, accepted),
                 zoomChanged = changed("dashboard_zoom"),
                 fullscreenChanged = changed("dashboard_fullscreen"),
                 overscrollChanged = changed("dashboard_overscroll"),

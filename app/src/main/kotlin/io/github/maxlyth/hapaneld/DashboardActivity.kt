@@ -50,10 +50,54 @@ import io.github.maxlyth.hapaneld.dashboard.EntityFilterTelemetry
 import io.github.maxlyth.hapaneld.dashboard.shouldHoldRendererForEntityBootstrap
 import io.github.maxlyth.hapaneld.dashboard.EntityLearningProtocol
 import io.github.maxlyth.hapaneld.dashboard.EntityLearningRuntime
+import io.github.maxlyth.hapaneld.dashboard.EntityBootstrapProblem
 import org.json.JSONObject
 import java.io.File
 import java.net.NetworkInterface
 import java.util.Collections
+
+internal enum class EntityFilterFailureDisposition { HOLD_NATIVE, ALLOW_DIRECT }
+
+/** Automatic learning must never turn an interceptor failure into a full, unfiltered HA stream. */
+internal fun entityFilterFailureDisposition(
+    automaticLearningEnabled: Boolean,
+    filterConfigured: Boolean,
+): EntityFilterFailureDisposition =
+    if (automaticLearningEnabled && filterConfigured) EntityFilterFailureDisposition.HOLD_NATIVE
+    else EntityFilterFailureDisposition.ALLOW_DIRECT
+
+internal fun invalidEntityFilterFailureDisposition(
+    signature: String,
+    automaticLearningEnabled: Boolean,
+    filterConfigured: Boolean,
+): EntityFilterFailureDisposition =
+    if (signature.startsWith("invalid")) {
+        entityFilterFailureDisposition(automaticLearningEnabled, filterConfigured)
+    } else {
+        EntityFilterFailureDisposition.ALLOW_DIRECT
+    }
+
+internal fun deferReadyEntityBootstrapUntilWake(screenAwake: Boolean): Boolean = !screenAwake
+
+private data class EntityFilterNativeHold(val error: String, val detail: String)
+
+private class EntityFilterInterceptorUnavailable(cause: Throwable) : RuntimeException(cause)
+
+internal class EntityFilterRetryPolicy(
+    private val delaysMs: LongArray = longArrayOf(30_000L, 120_000L, 600_000L),
+) {
+    private var attempts = 0
+
+    /** A dark panel does no provider/WebView work and does not spend its finite retry budget. */
+    fun nextDelay(screenAwake: Boolean): Long? =
+        if (!screenAwake) null else delaysMs.getOrNull(attempts)
+
+    fun recordAttempt() {
+        if (attempts < delaysMs.size) attempts++
+    }
+
+    fun reset() { attempts = 0 }
+}
 
 /**
  * Built-in dashboard renderer (experimental): a full-screen WebView onto the configured Home
@@ -74,6 +118,7 @@ class DashboardActivity : AppCompatActivity() {
     private var root: FrameLayout? = null                       // holds the swipe layout + fullscreen video
     private var entityFilterSignature = "disabled"
     private var entityFilterLease: EntityFilterTelemetry.Lease? = null
+    private var entityFilterNativeHold: EntityFilterNativeHold? = null
     private var customView: View? = null                        // active onShowCustomView (fullscreen) view
     private var customViewCallback: WebChromeClient.CustomViewCallback? = null
 
@@ -81,6 +126,7 @@ class DashboardActivity : AppCompatActivity() {
     private val main = Handler(Looper.getMainLooper())
     private val rendererGate = RendererGenerationGate()
     private val wakeMediaRecovery = WakeMediaRecoveryGate()
+    private val entityFilterRetryPolicy = EntityFilterRetryPolicy()
     private var rendererGeneration = 0L
     private var activityOwner = 0L
     private var conn: ConnectivityManager? = null
@@ -144,6 +190,7 @@ class DashboardActivity : AppCompatActivity() {
     private var waitingEstimateMs = 0L
     private var waitingEstimateLearned = false
     private var entityBootstrapBlockedCount = -1
+    private var entityBootstrapProblem: EntityBootstrapProblem? = null
     private var waitingStartedAt = 0L
     private val waitingTick = object : Runnable {
         override fun run() {
@@ -169,10 +216,17 @@ class DashboardActivity : AppCompatActivity() {
             val config = Config(this@DashboardActivity)
             if (holdForEntityBootstrap(config)) {
                 val blocking = EntityLearningRuntime.blockingIssueCount()
-                if (blocking != entityBootstrapBlockedCount) {
+                val problem = EntityLearningRuntime.bootstrapProblem()
+                if (blocking != entityBootstrapBlockedCount || problem != entityBootstrapProblem) {
                     showWaitingForEntityBootstrap()
                     return
                 }
+                main.postDelayed(this, ENTITY_BOOTSTRAP_CHECK_MS)
+                return
+            }
+            // A sync may finish after the panel went dark. Do not create a WebView whose timers have no
+            // connection callback or dark-settle owner; the next poll after a real wake will build it.
+            if (deferReadyEntityBootstrapUntilWake(screenAwake)) {
                 main.postDelayed(this, ENTITY_BOOTSTRAP_CHECK_MS)
                 return
             }
@@ -181,6 +235,11 @@ class DashboardActivity : AppCompatActivity() {
             configureEntityFilter(config)
             buildAndLoad(config)
         }
+    }
+    private val entityFilterRetry = Runnable {
+        if (destroyed || !BuiltinDashboard.ownsActivity(activityOwner) || !screenAwake || entityFilterNativeHold == null) return@Runnable
+        entityFilterRetryPolicy.recordAttempt()
+        retryEntityFilter(Config(this@DashboardActivity))
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -278,44 +337,107 @@ class DashboardActivity : AppCompatActivity() {
             entityIds = config.dashboardEntityFilterIds,
         )
 
-    /** Prepare the exact allow-list for document-start interception. Unsupported/invalid state degrades
-     *  to the ordinary direct HA connection without changing the persisted opt-in. */
+    /** Prepare the exact allow-list for document-start interception. Automatic filtering fails closed:
+     *  an unavailable interceptor holds the native diagnostic screen rather than opening HA unfiltered. */
     private fun configureEntityFilter(config: Config) {
+        entityFilterNativeHold = null
         entityFilterSignature = entityFilterSignature(config)
         if (!entityFilterSignature.startsWith("enabled:")) {
-            entityFilterLease = EntityFilterTelemetry.stopped()
+            val lease = EntityFilterTelemetry.stopped()
+            entityFilterLease = lease
+            if (invalidEntityFilterFailureDisposition(
+                    signature = entityFilterSignature,
+                    automaticLearningEnabled = config.dashboardEntityLearningEnabled,
+                    filterConfigured = config.dashboardEntityFilterEnabled,
+                ) == EntityFilterFailureDisposition.HOLD_NATIVE
+            ) {
+                EntityFilterTelemetry.held(lease, "invalid_configuration")
+                entityFilterNativeHold = EntityFilterNativeHold(
+                    error = "invalid_configuration",
+                    detail = "The configured entity subscription is invalid and cannot be applied safely.",
+                )
+            }
             return
         }
         val ids = runCatching { EntityFilterProtocol.normalize(config.dashboardEntityFilterIds) }
             .getOrElse {
                 Log.e(TAG, "invalid entity-filter configuration", it)
-                entityFilterSignature = "disabled"
                 val lease = EntityFilterTelemetry.stopped()
                 entityFilterLease = lease
-                EntityFilterTelemetry.failed(lease, "invalid_configuration")
-                EntityFilterTelemetry.directFallback(lease)
+                if (entityFilterFailureDisposition(
+                        automaticLearningEnabled = config.dashboardEntityLearningEnabled,
+                        filterConfigured = config.dashboardEntityFilterEnabled,
+                    ) == EntityFilterFailureDisposition.HOLD_NATIVE
+                ) {
+                    EntityFilterTelemetry.held(lease, "invalid_configuration")
+                    entityFilterNativeHold = EntityFilterNativeHold(
+                        error = "invalid_configuration",
+                        detail = "The configured entity subscription is invalid and cannot be applied safely.",
+                    )
+                } else {
+                    entityFilterSignature = "disabled"
+                    EntityFilterTelemetry.failed(lease, "invalid_configuration")
+                    EntityFilterTelemetry.directFallback(lease)
+                }
                 return
             }
         val lease = EntityFilterTelemetry.started(ids)
         entityFilterLease = lease
         if (!androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.DOCUMENT_START_SCRIPT)) {
             Log.w(TAG, "entity filter unavailable: document-start script unsupported")
-            EntityFilterTelemetry.failed(lease, "document_start_unsupported")
-            EntityFilterTelemetry.directFallback(lease)
+            if (entityFilterFailureDisposition(
+                    automaticLearningEnabled = config.dashboardEntityLearningEnabled,
+                    filterConfigured = true,
+                ) == EntityFilterFailureDisposition.HOLD_NATIVE
+            ) {
+                EntityFilterTelemetry.held(lease, "document_start_unsupported")
+                entityFilterNativeHold = EntityFilterNativeHold(
+                    error = "document_start_unsupported",
+                    detail = "This System WebView cannot install the safe entity-subscription interceptor.",
+                )
+            } else {
+                EntityFilterTelemetry.failed(lease, "document_start_unsupported")
+                EntityFilterTelemetry.directFallback(lease)
+            }
             return
         }
     }
 
-    /** Document-start installation failed before page load. Continue on the ordinary native socket so
-     *  the opt-in can never strand the dashboard; telemetry makes the unfiltered fallback explicit. */
-    private fun fallbackFromEntityFilterInterceptor(error: Throwable) {
+    /** Record an interceptor installation failure. Returns true when the caller must abort WebView
+     *  creation and re-enter the native diagnostic screen instead of loading HA unfiltered. */
+    private fun fallbackFromEntityFilterInterceptor(error: Throwable, automaticLearningEnabled: Boolean): Boolean {
         Log.e(TAG, "failed to install entity-filter subscription interceptor", error)
-        entityFilterSignature = "disabled"
-        val lease = entityFilterLease ?: return
-        if (EntityFilterTelemetry.isActive(lease)) {
+        val lease = entityFilterLease ?: return false
+        val hold = entityFilterFailureDisposition(
+            automaticLearningEnabled = automaticLearningEnabled,
+            filterConfigured = entityFilterSignature.startsWith("enabled:"),
+        ) == EntityFilterFailureDisposition.HOLD_NATIVE
+        if (hold) {
+            EntityFilterTelemetry.held(lease, "document_start_install")
+            entityFilterNativeHold = EntityFilterNativeHold(
+                error = "document_start_install",
+                detail = "The safe entity-subscription interceptor could not be installed.",
+            )
+        } else {
             EntityFilterTelemetry.failed(lease, "document_start_install")
+            entityFilterSignature = "disabled"
             EntityFilterTelemetry.directFallback(lease)
         }
+        return hold
+    }
+
+    private fun retryEntityFilter(config: Config) {
+        main.removeCallbacks(entityFilterRetry)
+        entityFilterLease?.let(EntityFilterTelemetry::stop)
+        entityFilterLease = null
+        configureEntityFilter(config)
+        buildAndLoad(config)
+    }
+
+    private fun scheduleEntityFilterRetry() {
+        main.removeCallbacks(entityFilterRetry)
+        val delay = entityFilterRetryPolicy.nextDelay(screenAwake) ?: return
+        main.postDelayed(entityFilterRetry, delay)
     }
 
     /**
@@ -330,6 +452,8 @@ class DashboardActivity : AppCompatActivity() {
         if (destroyed || !BuiltinDashboard.ownsActivity(activityOwner)) return
         val wasAwake = screenAwake
         screenAwake = awake
+        if (awake && entityFilterNativeHold != null) scheduleEntityFilterRetry()
+        if (!awake) main.removeCallbacks(entityFilterRetry)
         val w = web ?: return
         if (awake) {
             main.removeCallbacks(darkSettle)
@@ -337,7 +461,10 @@ class DashboardActivity : AppCompatActivity() {
             lastTouchAt = SystemClock.elapsedRealtime() // a wake implies presence — don't instantly snap home
             if (!frontendConnected && !authLatched) armWatchdog(INITIAL_HANDSHAKE_MS)
             val frontendHealthy = frontendConnected && !authLatched && !interstitialShown
-            if (shouldArmWakeMediaRecovery(wasAwake, awake, frontendHealthy)) armWakeMediaRecovery(w, rendererGeneration)
+            if (!wasAwake && awake) {
+                if (frontendHealthy) armWakeMediaRecovery(w, rendererGeneration)
+                else if (!authLatched && !interstitialShown) wakeMediaRecovery.defer(rendererGeneration)
+            }
         } else {
             wakeMediaRecovery.invalidate()
             w.onPause()
@@ -360,8 +487,11 @@ class DashboardActivity : AppCompatActivity() {
     /** WebView resume does not guarantee that HA's existing WebRTC cards rebuild a transport. After a
      * real wake, sample only visible playing/autoplay media and allow one full-page recovery if none of
      * it advances. Every callback is owned by both the renderer generation and the wake cycle. */
-    private fun armWakeMediaRecovery(w: WebView, generation: Long) {
-        val ticket = wakeMediaRecovery.begin(generation)
+    private fun armWakeMediaRecovery(
+        w: WebView,
+        generation: Long,
+        ticket: WakeMediaRecoveryTicket = wakeMediaRecovery.begin(generation),
+    ) {
         main.postDelayed({
             if (!wakeMediaCurrent(ticket, w)) return@postDelayed
             w.evaluateJavascript(WakeMediaRecoveryScript.arm(ticket.cycle)) { result ->
@@ -554,6 +684,9 @@ class DashboardActivity : AppCompatActivity() {
         // Never retry on a dead activity, while frozen (screen off), or latched — all runaway loops.
         if (destroyed || !BuiltinDashboard.ownsActivity(activityOwner) || frontendConnected || !screenAwake || authLatched) return
         Log.w(TAG, "frontend handshake watchdog fired (no connection-status:connected) — reloading")
+        // The reconnect grace expired: this load now owns recovery, so a later connection callback must
+        // not revive the pre-timeout wake ticket against the replacement target.
+        wakeMediaRecovery.invalidate()
         reloadTarget()
         lastFullLoadAt = SystemClock.elapsedRealtime()
         BuiltinDashboard.recordRendererReload(lastFullLoadAt) // involuntary: handshake stalled
@@ -573,6 +706,9 @@ class DashboardActivity : AppCompatActivity() {
             unlatchAuth("frontend connected") // auth demonstrably works — clear any stale latch + counters
             main.removeCallbacks(watchdog)
             retryPolicy.reset()
+            wakeMediaRecovery.activateDeferred(generation)?.let { ticket ->
+                web?.let { w -> armWakeMediaRecovery(w, generation, ticket) }
+            }
             if (!clearedThisLoad) {
                 // Drop the auth/redirect history entries so Back can't reach a stale login page, and
                 // persist cookies so an unclean process death right after login doesn't lose the session.
@@ -1050,7 +1186,7 @@ class DashboardActivity : AppCompatActivity() {
     @SuppressLint("SetJavaScriptEnabled")
     private fun buildAndLoad(config: Config) {
         if (destroyed || !BuiltinDashboard.ownsActivity(activityOwner)) return
-        if (holdForEntityBootstrap(config)) {
+        if (holdForEntityBootstrap(config) || entityFilterNativeHold != null) {
             showWaitingForEntityBootstrap()
             return
         }
@@ -1070,6 +1206,10 @@ class DashboardActivity : AppCompatActivity() {
         val w = try {
             createWebView(config, generation)
         } catch (e: Throwable) {
+            if (e is EntityFilterInterceptorUnavailable) {
+                showWaitingForEntityBootstrap()
+                return
+            }
             // A missing / updating / broken system WebView (exactly the population WebView-auto-heal
             // targets) throws here. As a HOME activity we must not crash — Android would relaunch us
             // into a crash-loop — so fall back to the admin launcher. This consumes the rebuild budget
@@ -1108,6 +1248,13 @@ class DashboardActivity : AppCompatActivity() {
         setContentView(container)
         w.loadUrl(currentUrl(config))
         onLoadStarted()
+        // buildAndLoad is reached from service-triggered singleTask intents and renderer recovery as
+        // well as initial startup. Own dark settling here so no caller can leave a replacement WebView
+        // running indefinitely behind a sleeping display while it waits for a connection callback.
+        if (deferReadyEntityBootstrapUntilWake(screenAwake)) {
+            main.removeCallbacks(darkSettle)
+            main.postDelayed(darkSettle, DARK_SETTLE_MS)
+        }
     }
 
     /** Native hold screen used while the learner derives its first minimal subscription. No WebView is
@@ -1115,8 +1262,11 @@ class DashboardActivity : AppCompatActivity() {
     private fun showWaitingForEntityBootstrap() {
         main.removeCallbacks(entityBootstrapCheck)
         teardownWeb()
+        val filterHold = entityFilterNativeHold
         val blockingIssues = EntityLearningRuntime.blockingIssueCount()
+        val bootstrapProblem = EntityLearningRuntime.bootstrapProblem()
         entityBootstrapBlockedCount = blockingIssues
+        entityBootstrapProblem = bootstrapProblem
         val density = resources.displayMetrics.density
         val dark = Config(this).dashboardThemeDark ?: true
         val bg = Color.parseColor(if (dark) "#111111" else "#ffffff")
@@ -1126,10 +1276,18 @@ class DashboardActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
             setPadding((24 * density).toInt(), (32 * density).toInt(), (24 * density).toInt(), (32 * density).toInt())
-            if (blockingIssues == 0) addView(ProgressBar(this@DashboardActivity).apply { isIndeterminate = true })
+            if (blockingIssues == 0 && filterHold == null && bootstrapProblem == null) {
+                addView(ProgressBar(this@DashboardActivity).apply { isIndeterminate = true })
+            }
             addView(TextView(this@DashboardActivity).apply {
-                text = if (blockingIssues > 0) {
+                text = if (filterHold != null) {
+                    "Optimized dashboard subscription unavailable"
+                } else if (blockingIssues > 0) {
                     "Dashboard configuration needs attention"
+                } else if (bootstrapProblem == EntityBootstrapProblem.AUTHENTICATION) {
+                    "Home Assistant authentication needs attention"
+                } else if (bootstrapProblem != null) {
+                    "Dashboard scan could not finish"
                 } else {
                     "Preparing optimized dashboard subscription"
                 }
@@ -1140,8 +1298,14 @@ class DashboardActivity : AppCompatActivity() {
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT,
             ).apply { topMargin = (20 * density).toInt() })
             addView(TextView(this@DashboardActivity).apply {
-                text = if (blockingIssues > 0) {
+                text = if (filterHold != null) {
+                    "${filterHold.detail} Home Assistant has not been opened, preventing an unfiltered entity stream. Retry after updating System WebView, or review entity diagnostics in panel settings."
+                } else if (blockingIssues > 0) {
                     "$blockingIssues blocking ${if (blockingIssues == 1) "issue prevents" else "issues prevent"} automatic activation. Review the entity diagnostics in panel settings."
+                } else if (bootstrapProblem == EntityBootstrapProblem.AUTHENTICATION) {
+                    "Home Assistant rejected the dashboard scan. Check this panel's Home Assistant login in Dashboard settings, then retry. Home Assistant remains closed to prevent an unfiltered entity stream."
+                } else if (bootstrapProblem != null) {
+                    "The optimized dashboard scan failed. Check the panel connection and Home Assistant availability, then retry. Home Assistant remains closed to prevent an unfiltered entity stream."
                 } else {
                     "Home Assistant will open when the first filtered entity set is ready."
                 }
@@ -1151,10 +1315,31 @@ class DashboardActivity : AppCompatActivity() {
             }, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT,
             ).apply { topMargin = (10 * density).toInt() })
+            if (filterHold != null) addView(Button(this@DashboardActivity).apply {
+                text = "Retry optimized dashboard"
+                setOnClickListener { retryEntityFilter(Config(this@DashboardActivity)) }
+            }, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply {
+                topMargin = (20 * density).toInt()
+                gravity = Gravity.CENTER_HORIZONTAL
+            })
+            if (filterHold == null && bootstrapProblem != null) addView(Button(this@DashboardActivity).apply {
+                text = "Retry dashboard scan"
+                setOnClickListener {
+                    if (EntityLearningRuntime.retryBootstrap()) showWaitingForEntityBootstrap()
+                }
+            }, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply {
+                topMargin = (20 * density).toInt()
+                gravity = Gravity.CENTER_HORIZONTAL
+            })
             addView(Button(this@DashboardActivity).apply {
                 text = "Open panel settings"
                 setOnClickListener {
-                    startActivity(Intent(this@DashboardActivity, ConfigActivity::class.java).putExtra("path", "/entities"))
+                    val path = if (bootstrapProblem == EntityBootstrapProblem.AUTHENTICATION) "/configure" else "/entities"
+                    startActivity(Intent(this@DashboardActivity, ConfigActivity::class.java).putExtra("path", path))
                 }
             }, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT,
@@ -1171,8 +1356,11 @@ class DashboardActivity : AppCompatActivity() {
         }
         root = container
         setContentView(container)
-        main.postDelayed(entityBootstrapCheck, ENTITY_BOOTSTRAP_CHECK_MS)
-        Log.i(TAG, if (blockingIssues > 0) {
+        if (filterHold != null) scheduleEntityFilterRetry()
+        else main.postDelayed(entityBootstrapCheck, ENTITY_BOOTSTRAP_CHECK_MS)
+        Log.i(TAG, if (filterHold != null) {
+            "automatic entity filter held before WebView creation (${filterHold.error})"
+        } else if (blockingIssues > 0) {
             "automatic entity activation blocked by $blockingIssues dashboard configuration issue(s)"
         } else {
             "automatic entity set not ready — holding renderer before WebView creation"
@@ -1221,13 +1409,21 @@ class DashboardActivity : AppCompatActivity() {
         // Intercept only the primary HA socket's outbound subscribe_entities command. The socket itself
         // remains Chromium-native, preserving its TLS, compression and external-app lifecycle signals.
         val filterLease = entityFilterLease
-        if (filterLease != null && EntityFilterTelemetry.isActive(filterLease)) runCatching {
-            androidx.webkit.WebViewCompat.addDocumentStartJavaScript(
-                this,
-                EntityFilterProtocol.documentStartScript(config.haUrl, config.dashboardEntityFilterIds),
-                setOf("*"),
-            )
-        }.onFailure(::fallbackFromEntityFilterInterceptor)
+        if (filterLease != null && EntityFilterTelemetry.isActive(filterLease)) {
+            try {
+                androidx.webkit.WebViewCompat.addDocumentStartJavaScript(
+                    this,
+                    EntityFilterProtocol.documentStartScript(config.haUrl, config.dashboardEntityFilterIds),
+                    setOf("*"),
+                )
+                entityFilterRetryPolicy.reset()
+            } catch (error: Throwable) {
+                if (fallbackFromEntityFilterInterceptor(error, config.dashboardEntityLearningEnabled)) {
+                    runCatching { destroy() }
+                    throw EntityFilterInterceptorUnavailable(error)
+                }
+            }
+        }
         if (config.dashboardEntityLearningEnabled) runCatching {
             if (androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.DOCUMENT_START_SCRIPT)) {
                 androidx.webkit.WebViewCompat.addDocumentStartJavaScript(

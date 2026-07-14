@@ -197,7 +197,8 @@
         return r.json().then(function (d) { throw new Error(d.error || 'request failed'); });
       }).then(function (b) {
         var a = document.createElement('a'), url = URL.createObjectURL(b);
-        a.href = url; a.download = (document.title.split('·').pop() || 'panel').trim() + '-backup.' + (pw ? 'hpb' : 'json');
+        var switcher = document.getElementById('pswitch'), panelName = switcher && switcher.dataset && switcher.dataset.selfName;
+        a.href = url; a.download = (panelName || document.title.split('·')[0] || 'panel').trim() + '-backup.' + (pw ? 'hpb' : 'json');
         document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
         bkMsg('Backup downloaded' + (pw ? ' (encrypted) — keep the passphrase.' : '.')); btn.disabled = false;
       }).catch(function (e) { bkMsg('Backup failed: ' + (e.message || 'request failed')); btn.disabled = false; });

@@ -146,6 +146,9 @@ class MqttBridge(
     // Trigger a ha-paneld self-update on the configured channel. force=true installs the channel's newest
     // regardless of the version check (the update_paneld button + a pre-release→stable channel switch).
     private val onSelfUpdate: (force: Boolean) -> Unit = {},
+    // Home-dashboard commands change the automatic entity-learning ownership target. Notify only after
+    // the normalized path is durably visible so the manager can hide/rebuild the correct subscription.
+    private val onDashboardTargetChanged: () -> Unit = {},
     // A panel-id replaced by reconfiguration. Its discovery and availability are cleared by the NEW
     // connection, so cleanup cannot be lost when the old client is detached or the broker was offline.
     private val stalePanelId: String? = null,
@@ -1001,7 +1004,10 @@ class MqttBridge(
 
     private fun handleHomeDashboard(payload: String) {
         val path = toLocalPath(payload) // normalise to a leading-slash local path (or "" to clear)
-        config.setHomeDashboard(if (path == "/") "" else path)
+        val target = if (path == "/") "" else path
+        val changed = target != config.homeDashboard
+        config.setHomeDashboard(target)
+        if (changed) onDashboardTargetChanged()
         stateConverger.reconcile("home_dashboard", force = true)
     }
 

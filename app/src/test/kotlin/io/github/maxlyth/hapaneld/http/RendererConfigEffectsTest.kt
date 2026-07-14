@@ -65,4 +65,20 @@ class RendererConfigEffectsTest {
 
         assertFalse(effects.reloadBuiltin)
     }
+
+    @Test fun sameUrlCredentialRepairsAreTargetChanges() {
+        val previous = mapOf(
+            "ha_url" to "http://ha:8123",
+            "ha_token" to "old-token",
+            "ha_refresh_token" to "old-refresh",
+            "ha_token_expiry" to "100",
+            "ha_client_id" to "old-client",
+        )
+
+        assertTrue(RendererConfigEffects.credentialsChanged(previous, mapOf("ha_token" to "new-token")))
+        assertTrue(RendererConfigEffects.credentialsChanged(previous, mapOf("ha_refresh_token" to "new-refresh")))
+        assertTrue(RendererConfigEffects.credentialsChanged(previous, mapOf("ha_token_expiry" to "200")))
+        assertTrue(RendererConfigEffects.credentialsChanged(previous, mapOf("ha_client_id" to "new-client")))
+        assertFalse(RendererConfigEffects.credentialsChanged(previous, mapOf("ha_url" to "http://ha:8123/")))
+    }
 }

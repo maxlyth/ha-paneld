@@ -114,19 +114,35 @@ class DashboardRecoveryTest {
         assertTrue(runCatching { gate.begin(6) }.isFailure)
     }
 
+    @Test fun `disconnected wake is retained only for its renderer generation`() {
+        val gate = WakeMediaRecoveryGate()
+        val deferred = gate.defer(rendererGeneration = 7)
+
+        assertTrue(gate.owns(deferred))
+        assertEquals(null, gate.activateDeferred(rendererGeneration = 8))
+        assertEquals(deferred, gate.activateDeferred(rendererGeneration = 7))
+        assertEquals(null, gate.activateDeferred(rendererGeneration = 7))
+
+        val stale = gate.defer(rendererGeneration = 7)
+        val replacement = gate.defer(rendererGeneration = 8)
+        assertFalse(gate.owns(stale))
+        assertEquals(null, gate.activateDeferred(rendererGeneration = 7))
+        assertEquals(replacement, gate.activateDeferred(rendererGeneration = 8))
+
+        gate.defer(rendererGeneration = 8)
+        gate.invalidate()
+        assertEquals(null, gate.activateDeferred(rendererGeneration = 8))
+
+        gate.defer(rendererGeneration = 9)
+        gate.close()
+        assertEquals(null, gate.activateDeferred(rendererGeneration = 9))
+    }
+
     @Test fun `javascript integer results reject malformed callbacks`() {
         assertEquals(1, javascriptIntResult("1"))
         assertEquals(-1, javascriptIntResult("\"-1\""))
         assertEquals(null, javascriptIntResult("null"))
         assertEquals(null, javascriptIntResult(null))
-    }
-
-    @Test fun `media recovery starts only on a healthy real off to on edge`() {
-        assertFalse(shouldArmWakeMediaRecovery(wasAwake = true, awake = true, frontendHealthy = true))
-        assertFalse(shouldArmWakeMediaRecovery(wasAwake = true, awake = false, frontendHealthy = true))
-        assertFalse(shouldArmWakeMediaRecovery(wasAwake = false, awake = false, frontendHealthy = true))
-        assertFalse(shouldArmWakeMediaRecovery(wasAwake = false, awake = true, frontendHealthy = false))
-        assertTrue(shouldArmWakeMediaRecovery(wasAwake = false, awake = true, frontendHealthy = true))
     }
 
     @Test fun `exact wake media scripts classify and sample nested dashboard video`() {
@@ -172,23 +188,42 @@ class DashboardRecoveryTest {
             document=makeRoot([progressing]);
             expect(arm(),1,'progressing arm');
             progressing.currentTime=1;
-            expect(inspect(),0,'current time progress');
+            expect(inspect(),1,'time cannot mask flat supported frame counter');
+            const timeOnly=makeVideo({webkitDecodedFrameCount:undefined,getVideoPlaybackQuality:null});
+            document=makeRoot([timeOnly]);
+            expect(arm(),1,'time-only arm');
+            timeOnly.currentTime=1;
+            expect(inspect(),0,'current time fallback without frame counters');
             const frameProgress=makeVideo();
             document=makeRoot([frameProgress]);
             expect(arm(),1,'frame arm');
             frameProgress.webkitDecodedFrameCount=1;
             expect(inspect(),0,'frame progress');
+            const counterLost=makeVideo();
+            document=makeRoot([counterLost]);
+            expect(arm(),1,'counter-loss arm');
+            counterLost.getVideoPlaybackQuality=null;
+            counterLost.webkitDecodedFrameCount=undefined;
+            counterLost.currentTime=1;
+            expect(inspect(),-1,'lost supported counter is inconclusive, not time fallback');
             const reconnecting=makeVideo({paused:true,autoplay:true});
             document=makeRoot([reconnecting]);
             expect(arm(),1,'autoplay without initial track');
             reconnecting.currentTime=0.5;
-            expect(inspect(),0,'late transport progress');
+            expect(inspect(),1,'late clock movement without decoded frames is stalled');
             const healthy=makeVideo();
             const otherStalled=makeVideo();
             document=makeRoot([healthy,otherStalled]);
             expect(arm(),2,'two videos');
-            healthy.currentTime=2;
-            expect(inspect(),0,'one healthy video avoids page reload');
+            healthy.webkitDecodedFrameCount=1;
+            expect(inspect(),1,'one healthy video cannot mask another stalled video');
+            const healthyOne=makeVideo();
+            const healthyTwo=makeVideo();
+            document=makeRoot([healthyOne,healthyTwo]);
+            expect(arm(),2,'two healthy videos arm');
+            healthyOne.webkitDecodedFrameCount=1;
+            healthyTwo.webkitDecodedFrameCount=1;
+            expect(inspect(),0,'all visible videos progressing');
             const shadowVideo=makeVideo();
             const shadowRoot=makeRoot([shadowVideo]);
             document=makeRoot([], [{shadowRoot}]);

@@ -7,39 +7,51 @@ import android.util.Log
 import io.github.maxlyth.hapaneld.Config
 import io.github.maxlyth.hapaneld.DashboardAuth
 import io.github.maxlyth.hapaneld.control.BuiltinDashboard
+import io.github.maxlyth.hapaneld.util.BoundedStreams
+import io.github.maxlyth.hapaneld.util.ByteLimitExceeded
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
 import io.ktor.client.plugins.websocket.WebSockets
-import io.ktor.client.plugins.websocket.webSocket
+import io.ktor.client.plugins.websocket.webSocketSession
 import io.ktor.websocket.Frame
+import io.ktor.websocket.close
 import io.ktor.websocket.readText
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
-import java.net.URI
+import java.net.SocketTimeoutException
 import java.net.URL
+import java.io.FilterInputStream
+import java.io.InputStream
 import java.io.InputStreamReader
-import java.util.concurrent.atomic.AtomicBoolean
+import java.io.InterruptedIOException
+import java.util.concurrent.atomic.AtomicLong
 
 /** Owns catalog synchronization, automatic set promotion and the HTTP/UI query surface. */
 class EntityLearningManager(
     context: Context,
     private val config: Config,
     private val scope: CoroutineScope,
+    private val resolveInstanceUuid: suspend (candidateUrls: Collection<String>) -> String? = { null },
     private val onFilterChanged: () -> Unit,
 ) {
     private val store = EntityCatalogStore(context.applicationContext)
     private val syncMutex = Mutex()
-    private val promotionQueued = AtomicBoolean(false)
+    private val effectGeneration = AtomicLong(0)
+    private val telemetryWriteBarrier = EntityTelemetryWriteBarrier(effectGeneration::get)
     @Volatile private var syncJob: Job? = null
+    @Volatile private var promotionJob: Job? = null
     @Volatile private var bootstrapBlockingIssues = 0
     @Volatile private var resetBootstrapPending = false
     @Volatile private var dynamicExpressionsJson = "[]"
@@ -47,6 +59,15 @@ class EntityLearningManager(
     private var promotionsInWindow = 0
 
     fun start() {
+        prepareCurrentTarget()
+        refreshTargetDiagnostics()
+        schedulePeriodicSync()
+        if (config.dashboardEntityLearningEnabled && store.snapshot(instance(), dashboardPath()).lastSyncAt == 0L) {
+            syncNow("startup")
+        }
+    }
+
+    private fun refreshTargetDiagnostics() {
         bootstrapBlockingIssues = runCatching {
             store.snapshot(instance(), dashboardPath()).blockingIssueCount
         }.getOrDefault(0)
@@ -55,6 +76,9 @@ class EntityLearningManager(
                 store.dashboardConfigJson(instance(), dashboardPath()),
             ).dynamicExpressions)
         }.getOrDefault("[]")
+    }
+
+    private fun schedulePeriodicSync() {
         scope.launch {
             while (true) {
                 delay(HOURLY_CHECK_MS)
@@ -63,24 +87,49 @@ class EntityLearningManager(
                 if (System.currentTimeMillis() - s.lastSyncAt >= DAILY_SYNC_MS) syncNow("daily")
             }
         }
-        if (config.dashboardEntityLearningEnabled && store.snapshot(instance(), dashboardPath()).lastSyncAt == 0L) {
-            syncNow("startup")
+    }
+
+    fun close() {
+        synchronized(this) {
+            effectGeneration.incrementAndGet()
+            promotionJob?.cancel()
+            promotionJob = null
+            syncJob?.cancel()
+            syncJob = null
+        }
+        store.close()
+    }
+
+    /** Rebind owner-scoped state before a renderer is relaunched for a new HA URL/dashboard. */
+    fun onTargetConfigurationChanged() {
+        synchronized(this) {
+            invalidateEffects(cancelSync = true)
+            runCatching { prepareCurrentTarget() }
+                .onFailure { Log.w(TAG, "entity-learning target preparation failed: ${it.message}") }
+            refreshTargetDiagnostics()
+            if (config.dashboardEntityLearningEnabled) syncNow("target-change")
         }
     }
 
-    fun close() { syncJob?.cancel(); store.close() }
-
     fun blockingIssueCount(): Int = bootstrapBlockingIssues
+
+    /** Safe native-screen summary. Never return the stored exception text: it can contain target
+     * details, while the renderer hold only needs to distinguish credential repair from retry. */
+    fun bootstrapProblem(): EntityBootstrapProblem? = runCatching {
+        store.snapshot(instance(), dashboardPath()).let { classifyEntityBootstrapProblem(it.state, it.error) }
+    }.getOrNull()
 
     fun setEnabled(enabled: Boolean): Boolean {
         val wasEnabled = config.dashboardEntityLearningEnabled
-        val committed = config.applyBatch {
-            config.setDashboardEntityLearningEnabled(enabled)
-            // A new opt-in clears a stale activation latch. Synchronization may bootstrap an empty
-            // installation narrowly, but it never silently replaces a stored manual list.
-            if (!enabled || !wasEnabled) config.setDashboardEntityLearningApplied(false)
-        }
+        // A new opt-in clears a stale activation latch. Synchronization may bootstrap an empty
+        // installation narrowly, but it never silently replaces a stored manual list. Disable mode
+        // and interception together so a failed commit cannot expose a contradictory half-state.
+        val committed = config.commitDashboardEntityLearningMode(
+            enabled = enabled,
+            clearApplied = !enabled || !wasEnabled,
+        )
         if (!committed) return false
+        invalidateEffects()
         if (enabled) {
             syncNow("enable")
             // Always notify the renderer. A populated set rebuilds with its observer; an empty fresh
@@ -89,7 +138,6 @@ class EntityLearningManager(
             onFilterChanged()
         } else {
             resetBootstrapPending = false
-            config.setDashboardEntityFilter(false, config.dashboardEntityFilterIds)
             store.markStatus(instance(), dashboardPath(), "disabled")
             onFilterChanged()
         }
@@ -97,7 +145,7 @@ class EntityLearningManager(
     }
 
     /** Explicitly promote the policy-selected evidence set, primarily for existing manual filters. */
-    fun activate(confirm: Boolean): String {
+    @Synchronized fun activate(confirm: Boolean): String {
         require(config.dashboardEntityLearningEnabled) { "automatic learning is not enabled" }
         require(store.snapshot(instance(), dashboardPath()).blockingIssueCount == 0) {
             "automatic activation is blocked by dashboard configuration issues"
@@ -106,14 +154,11 @@ class EntityLearningManager(
         val active = desiredIds(System.currentTimeMillis())
         require(active.isNotEmpty()) { "learned candidate set is empty" }
         val preview = subscriptionPreview(active)
-        check(config.commitDashboardEntityLearningApplied(true)) { "failed to commit activation latch" }
-        if (preview.streamChange) {
-            if (!config.setDashboardEntityFilter(true, active)) {
-                config.commitDashboardEntityLearningApplied(false)
-                error("failed to commit learned entity set")
-            }
-            onFilterChanged()
+        check(config.commitDashboardEntitySubscription(true, active, applied = true)) {
+            "failed to commit learned entity set"
         }
+        invalidateEffects()
+        if (preview.streamChange) onFilterChanged()
         resetBootstrapPending = false
         store.markStatus(instance(), dashboardPath(), "active")
         return JSONObject().put("ok", true).put("entity_count", active.size)
@@ -126,115 +171,175 @@ class EntityLearningManager(
 
     fun syncNow(reason: String = "manual"): Boolean = synchronized(this) {
         if (syncJob?.isActive == true) return@synchronized false
+        val requestGeneration = effectGeneration.get()
         syncJob = scope.launch {
             syncMutex.withLock {
-                val instance = instance(); val path = dashboardPath()
-                runCatching { synchronize(instance, path) }
+                val fallbackInstance = instance(); val fallbackPath = dashboardPath()
+                runCatching { withEntityLearningDeadline(SYNC_TIMEOUT_MS) { synchronize() } }
                     .onFailure {
+                        if (it is CancellationException && it !is TimeoutCancellationException) return@onFailure
                         Log.w(TAG, "entity catalog sync failed ($reason): ${it.message}")
-                        store.markStatus(instance, path, "degraded", it.message ?: it.javaClass.simpleName)
+                        // A superseded request must not stamp its failure onto the newly-selected target.
+                        if (shouldPersistEntityLearningFailure(
+                                requestGeneration,
+                                effectGeneration.get(),
+                                fallbackInstance,
+                                fallbackPath,
+                                instance(),
+                                dashboardPath(),
+                            )) {
+                            store.markStatus(fallbackInstance, fallbackPath, "degraded", it.message ?: it.javaClass.simpleName)
+                        }
                     }
             }
         }
         true
     }
 
-    private suspend fun synchronize(instance: String, path: String) = withContext(Dispatchers.IO) {
-        require(config.haUrl.isNotBlank()) { "Home Assistant URL is not configured" }
-        val auth = DashboardAuth.forConfig(config)
-        val token = auth.session?.accessToken ?: error(if (auth.rejected) "Home Assistant credential rejected" else "Home Assistant token unavailable")
-        val states = fetchStates(config.haUrl, token)
+    private suspend fun synchronize() = withContext(Dispatchers.IO) {
+        val target = captureAuthenticatedTarget()
+        val states = fetchStates(target.baseUrl, target.authToken)
         require(states.isNotEmpty()) { "Home Assistant returned no visible states" }
-        val ws = fetchDashboardAndRegistry(config.haUrl, token, path)
+
+        val identityCandidates = haInstanceCandidateUrls(
+            target.baseUrl,
+            runCatching { fetchHaConfig(target.baseUrl, target.authToken) }.getOrNull(),
+        )
+        val resolvedUuid = resolveInstanceUuid(identityCandidates)
+        val adoptedTarget = if (resolvedUuid.isNullOrBlank()) target else adoptStableTarget(target, resolvedUuid)
+        val snapshot = captureSyncSnapshot(adoptedTarget)
+        require(snapshot.matchesCurrent(effectGeneration.get(), currentEffectState())) { "entity-learning target or policy changed" }
+
+        val ws = fetchDashboardAndRegistry(snapshot.baseUrl, snapshot.authToken, snapshot.dashboardPath)
         val scan = EntityLearningProtocol.scanDashboard(ws.configJson)
-        dynamicExpressionsJson = encodeDynamicExpressions(scan.dynamicExpressions)
-        val expanded = expandTargets(config.haUrl, token, scan.targets)
+        val expanded = expandTargets(snapshot.baseUrl, snapshot.authToken, scan.targets)
         val catalogIds = states.asSequence().map { it.entityId }.toHashSet()
         val lint = DashboardConfigurationLint.analyze(ws.configJson, catalogIds, ws.metadata)
         val derived = (scan.entityIds + expanded + lint.safeEntityIds).filterTo(sortedSetOf()) { it in catalogIds }
         val now = System.currentTimeMillis()
-        val apply = config.dashboardEntityLearningApplied
-        val bootstrap = resetBootstrapPending || shouldBootstrapEntityLearning(
-            learningEnabled = config.dashboardEntityLearningEnabled,
-            applied = apply,
-            configuredIds = config.dashboardEntityFilterIds,
+        val bootstrap = snapshot.forceBootstrap || shouldBootstrapEntityLearning(
+            learningEnabled = snapshot.learningEnabled,
+            applied = snapshot.applied,
+            configuredIds = snapshot.filterIds,
         )
         val decision = automaticSyncDecision(
-            learningEnabled = config.dashboardEntityLearningEnabled,
-            applied = apply,
-            configuredIds = config.dashboardEntityFilterIds,
+            learningEnabled = snapshot.learningEnabled,
+            applied = snapshot.applied,
+            configuredIds = snapshot.filterIds,
             blockingIssues = lint.blocking,
-            forceBootstrap = resetBootstrapPending,
+            forceBootstrap = snapshot.forceBootstrap,
         )
-        store.commitSync(
-            instance, path, states, ws.metadata, ws.configJson, derived, scan.unresolved,
-            when (decision) {
-                AutomaticSyncDecision.BLOCKED -> "blocked"
-                AutomaticSyncDecision.APPLY -> "active"
-                AutomaticSyncDecision.BOOTSTRAP -> "learning"
-                AutomaticSyncDecision.OBSERVE -> "observing"
-            },
-            now,
-            issues = lint.issues.map(DashboardConfigurationLint.Issue::toJson),
-        )
-        bootstrapBlockingIssues = lint.issues.count { it.blocking }
-        applyStoredOverrides(instance, path)
+        synchronized(this@EntityLearningManager) {
+            check(snapshot.matchesCurrent(effectGeneration.get(), currentEffectState())) {
+                "entity-learning target or policy changed before commit"
+            }
+            store.commitSync(
+                snapshot.instanceKey, snapshot.dashboardPath, states, ws.metadata, ws.configJson, derived, scan.unresolved,
+                when (decision) {
+                    AutomaticSyncDecision.BLOCKED -> "blocked"
+                    AutomaticSyncDecision.APPLY -> "active"
+                    AutomaticSyncDecision.BOOTSTRAP -> "learning"
+                    AutomaticSyncDecision.OBSERVE -> "observing"
+                },
+                now,
+                issues = lint.issues.map(DashboardConfigurationLint.Issue::toJson),
+            )
+            bootstrapBlockingIssues = lint.issues.count { it.blocking }
+            dynamicExpressionsJson = encodeDynamicExpressions(scan.dynamicExpressions)
+        }
+        applyStoredOverrides(snapshot.instanceKey, snapshot.dashboardPath, snapshot.overrides)
         // A blocking dashboard rule invalidates the proposed set as a whole. Keep an existing safe
         // filter byte-for-byte, or keep a fresh renderer on its native diagnostic screen. Never apply
         // the bounded fragments of a partially unsafe dashboard and never fall back to an unfiltered
         // WebSocket while automatic learning is enabled.
         if (lint.blocking) return@withContext
         require(derived.isNotEmpty()) { "dashboard analysis found no visible entity dependencies" }
-        val active = desiredIds(now, instance, path)
+        val active = desiredIds(
+            now, snapshot.instanceKey, snapshot.dashboardPath,
+            includeStatic = snapshot.autoStatic,
+            includeRuntime = snapshot.autoRuntime,
+        )
         require(active.isNotEmpty()) { "automatic entity set is empty" }
-        if (bootstrap) check(config.commitDashboardEntityLearningApplied(true)) { "failed to commit bootstrap latch" }
-        if (apply || bootstrap) {
-            val changed = active != config.dashboardEntityFilterIds || !config.dashboardEntityFilterEnabled
-            if (!config.setDashboardEntityFilter(true, active)) {
-                if (bootstrap) config.commitDashboardEntityLearningApplied(false)
-                error("failed to commit automatic entity set")
+        synchronized(this@EntityLearningManager) {
+            check(snapshot.matchesCurrent(effectGeneration.get(), currentEffectState())) {
+                "entity-learning target or policy changed before apply"
             }
-            if (changed) onFilterChanged()
+            if (snapshot.applied || bootstrap) {
+                val changed = active != snapshot.filterIds || !snapshot.filterEnabled
+                check(config.commitDashboardEntitySubscription(true, active, applied = true)) {
+                    "failed to commit automatic entity set"
+                }
+                if (changed) onFilterChanged()
+            }
+            if (snapshot.forceBootstrap) resetBootstrapPending = false
         }
-        resetBootstrapPending = false
     }
 
     fun recordAccessBatch(text: String) {
         if (!config.dashboardEntityLearningEnabled) return
+        val admittedGeneration = effectGeneration.get()
         val (accessed, missing) = runCatching { EntityLearningProtocol.parseAccessBatch(text) }.getOrElse { return }
         val instance = instance(); val path = dashboardPath(); val now = System.currentTimeMillis()
         scope.launch(Dispatchers.IO) {
             val knownAccessed = accessed.filterKeys { store.hasEntity(instance, it) }
             val knownMissing = missing.filterTo(mutableSetOf()) { store.hasEntity(instance, it) }
-            store.recordAccess(instance, path, knownAccessed + knownMissing.associateWith { 1L }, now)
-            if (knownMissing.isNotEmpty() && config.dashboardEntityLearningApplied && config.dashboardEntityAutoRuntime) queuePromotion()
+            telemetryWriteBarrier.writeIfCurrent(admittedGeneration) {
+                store.recordAccess(instance, path, knownAccessed + knownMissing.associateWith { 1L }, now)
+                if (knownMissing.isNotEmpty() && config.dashboardEntityLearningApplied && config.dashboardEntityAutoRuntime) {
+                    runCatching { capturePromotionSnapshot(instance, path) }.getOrNull()?.let(::queuePromotion)
+                }
+            }
         }
     }
 
     fun recordMetricBatch(text: String) {
         if (!config.dashboardEntityLearningEnabled) return
+        val admittedGeneration = effectGeneration.get()
         val metrics = runCatching { EntityLearningProtocol.parseMetricBatch(text) }.getOrElse { return }
-        scope.launch(Dispatchers.IO) { store.recordMetrics(instance(), dashboardPath(), metrics, System.currentTimeMillis()) }
+        // Bind telemetry to the dashboard that admitted the batch. A URL/dashboard change may occur
+        // before this IO coroutine is scheduled; resolving the target inside it would then contaminate
+        // the new dashboard's evidence with late metrics from the old WebView generation.
+        val instance = instance(); val path = dashboardPath(); val now = System.currentTimeMillis()
+        scope.launch(Dispatchers.IO) {
+            telemetryWriteBarrier.writeIfCurrent(admittedGeneration) {
+                store.recordMetrics(instance, path, metrics, now)
+            }
+        }
     }
 
-    private fun queuePromotion() {
-        if (bootstrapBlockingIssues > 0) return
-        if (!promotionQueued.compareAndSet(false, true)) return
-        scope.launch {
+    private fun queuePromotion(snapshot: EntityLearningPromotionSnapshot) = synchronized(this) {
+        if (!snapshot.isEligible(effectGeneration.get(), currentEffectState(), bootstrapBlockingIssues)) return
+        if (promotionJob?.isActive == true) return
+        promotionJob = scope.launch {
             delay(PROMOTION_DEBOUNCE_MS)
-            promotionQueued.set(false)
+            if (!snapshot.isEligible(effectGeneration.get(), currentEffectState(), bootstrapBlockingIssues)) return@launch
             val now = System.currentTimeMillis()
             if (now - promotionWindowStart > PROMOTION_WINDOW_MS) {
                 promotionWindowStart = now; promotionsInWindow = 0
             }
             if (promotionsInWindow >= MAX_PROMOTIONS) {
-                store.markStatus(instance(), dashboardPath(), "degraded", "runtime dependencies queued; synchronize manually")
+                store.markStatus(
+                    snapshot.instanceKey, snapshot.dashboardPath,
+                    "degraded", "runtime dependencies queued; synchronize manually",
+                )
                 return@launch
             }
-            val active = withContext(Dispatchers.IO) { desiredIds(now) }
-            if (active != config.dashboardEntityFilterIds && active.isNotEmpty()) {
-                promotionsInWindow++
-                if (config.setDashboardEntityFilter(true, active)) onFilterChanged()
+            val active = withContext(Dispatchers.IO) {
+                desiredIds(
+                    now, snapshot.instanceKey, snapshot.dashboardPath,
+                    includeStatic = snapshot.autoStatic,
+                    includeRuntime = snapshot.autoRuntime,
+                )
+            }
+            synchronized(this@EntityLearningManager) {
+                if (!snapshot.isEligible(effectGeneration.get(), currentEffectState(), bootstrapBlockingIssues)) return@synchronized
+                if (active != snapshot.filterIds && active.isNotEmpty()) {
+                    check(config.commitDashboardEntitySubscription(true, active, applied = true)) {
+                        "failed to commit runtime entity promotion"
+                    }
+                    promotionsInWindow++
+                    onFilterChanged()
+                }
             }
         }
     }
@@ -262,59 +367,84 @@ class EntityLearningManager(
         return JSONObject().put("ok", true).put("entity_count", ids.size).put("override", override).toString()
     }
 
-    private fun applyOverrides(ids: List<String>, override: String, force: Boolean) {
+    private fun applyOverrides(ids: List<String>, override: String, force: Boolean) = synchronized(this) {
         require(override in setOf("auto", "pinned", "forced_exclude")) { "invalid override" }
         require(override != "forced_exclude" || force) { "force confirmation required" }
         if (config.dashboardEntityLearningApplied && override == "forced_exclude") {
             val current = desiredIds(System.currentTimeMillis()).toSet()
             require((current - ids.toSet()).isNotEmpty()) { "cannot exclude the complete active subscription" }
         }
-        val encoded = config.dashboardEntityOverrides.toMutableMap().apply {
+        val previousOverrides = config.dashboardEntityOverrides
+        val encoded = previousOverrides.toMutableMap().apply {
             for (id in ids) if (override == "auto") remove(id) else put(id, override)
         }
-        check(config.setDashboardEntityOverrides(encoded)) { "override commit failed" }
-        store.setOverrides(instance(), dashboardPath(), ids, override)
-        val active = desiredIds(System.currentTimeMillis())
-        val changed = active != config.dashboardEntityFilterIds
-        if (config.dashboardEntityLearningApplied && active.isNotEmpty()) config.setDashboardEntityFilter(true, active)
-        if (config.dashboardEntityLearningApplied && changed) onFilterChanged()
+        invalidateEffects()
+        val targetInstance = instance()
+        val targetPath = dashboardPath()
+        val applied = config.dashboardEntityLearningApplied
+        val previousFilter = config.dashboardEntityFilterIds
+        var active = previousFilter
+        runEntityOverrideTransaction(
+            commitOverridePreferences = { config.setDashboardEntityOverrides(encoded) },
+            applyStoreOverride = { store.setOverrides(targetInstance, targetPath, ids, override) },
+            commitActiveFilter = {
+                active = desiredIds(System.currentTimeMillis(), targetInstance, targetPath)
+                !applied || (active.isNotEmpty() && config.commitDashboardEntitySubscription(true, active, applied = true))
+            },
+            restoreStoreOverride = {
+                ids.forEach { id -> store.setOverride(targetInstance, targetPath, id, previousOverrides[id] ?: "auto") }
+            },
+            restoreOverridePreferences = { config.setDashboardEntityOverrides(previousOverrides) },
+        )
+        if (applied && active != previousFilter) onFilterChanged()
     }
 
     /** Tester recovery/reset: discard derived dashboard evidence, never credentials or the HA catalog. */
-    fun resetEvidence(confirm: Boolean): String {
+    fun resetEvidence(confirm: Boolean, clearFilter: Boolean = false): String {
         if (!confirm) return JSONObject().put("ok", false).put("confirmation_required", true).toString()
         check(syncJob?.isActive != true) { "synchronization is running" }
-        check(config.setDashboardEntityOverrides(emptyMap())) { "failed to clear entity overrides" }
-        check(config.commitDashboardEntityLearningApplied(false)) { "failed to clear activation latch" }
-        if (config.dashboardEntityLearningEnabled) {
-            // Preserve a known-good live set until the replacement scan succeeds. A blocking or failed
-            // scan must never turn an explicit reset into an unfiltered renderer or a partial set.
-            resetBootstrapPending = true
+        check(config.commitDashboardEntityEvidenceReset(clearFilter)) { "failed to reset entity-learning preferences" }
+        telemetryWriteBarrier.invalidateAndWrite(
+            invalidate = { invalidateEffects() },
+        ) {
+            if (config.dashboardEntityLearningEnabled) {
+                // Preserve a known-good live set until the replacement scan succeeds. A blocking or failed
+                // default reset must never turn into an unfiltered renderer or a partial set. The explicit
+                // clean-slate path clears that set deliberately and holds the native bootstrap screen.
+                resetBootstrapPending = true
+            }
+            store.resetEvidence(instance(), dashboardPath())
         }
-        store.resetEvidence(instance(), dashboardPath())
+        if (clearFilter) onFilterChanged()
         val started = if (config.dashboardEntityLearningEnabled) syncNow("reset") else false
-        return JSONObject().put("ok", true).put("sync_started", started).toString()
+        return JSONObject().put("ok", true).put("sync_started", started)
+            .put("filter_cleared", clearFilter).toString()
     }
 
-    private fun applyStoredOverrides(instance: String, path: String) {
-        config.dashboardEntityOverrides.forEach { (id, override) -> store.setOverride(instance, path, id, override) }
+    private fun applyStoredOverrides(instance: String, path: String, overrides: Map<String, String>) {
+        overrides.forEach { (id, override) -> store.setOverride(instance, path, id, override) }
     }
 
     /** Change which evidence sources may promote entities. Collection and review continue regardless. */
-    fun setPromotionPolicy(staticRefs: Boolean, runtimeRefs: Boolean): String {
-        val previousStatic = config.dashboardEntityAutoStatic
-        val previousRuntime = config.dashboardEntityAutoRuntime
-        check(config.setDashboardEntityAutoPolicy(staticRefs, runtimeRefs)) { "policy commit failed" }
-        val active = desiredIds(System.currentTimeMillis())
-        if (config.dashboardEntityLearningApplied && active.isEmpty()) {
-            config.setDashboardEntityAutoPolicy(previousStatic, previousRuntime)
-            error("policy would leave the live subscription empty; pin at least one entity first")
+    @Synchronized fun setPromotionPolicy(staticRefs: Boolean, runtimeRefs: Boolean): String {
+        val applied = config.dashboardEntityLearningApplied
+        val active = desiredIds(
+            System.currentTimeMillis(),
+            includeStatic = staticRefs,
+            includeRuntime = runtimeRefs,
+        )
+        if (applied) require(active.isNotEmpty()) {
+            "policy would leave the live subscription empty; pin at least one entity first"
         }
-        val changed = active != config.dashboardEntityFilterIds
-        if (config.dashboardEntityLearningApplied && changed) {
-            check(config.setDashboardEntityFilter(true, active)) { "failed to apply promotion policy" }
-            onFilterChanged()
-        }
+        val changed = applied && (active != config.dashboardEntityFilterIds || !config.dashboardEntityFilterEnabled)
+        check(config.commitDashboardEntityPromotionPolicy(
+            staticRefs = staticRefs,
+            runtimeRefs = runtimeRefs,
+            activeEntityIds = active.takeIf { changed },
+            applied = applied,
+        )) { "failed to commit promotion policy" }
+        invalidateEffects()
+        if (changed) onFilterChanged()
         return JSONObject().put("ok", true).put("auto_static", staticRefs)
             .put("auto_runtime", runtimeRefs).put("entity_count", active.size).toString()
     }
@@ -376,7 +506,14 @@ class EntityLearningManager(
     private fun encodeDynamicExpressions(expressions: List<EntityLearningProtocol.DynamicExpression>): String =
         JSONArray(expressions.take(MAX_DYNAMIC_EXPRESSIONS).map(EntityLearningProtocol.DynamicExpression::toJson)).toString()
 
-    fun entitiesJson(query: String, filter: String, limit: Int, offset: Int): String {
+    fun entitiesJson(
+        query: String,
+        filter: String,
+        limit: Int,
+        offset: Int,
+        sort: String = "entity_id",
+        direction: String = "asc",
+    ): String {
         val subscribed = filter == "subscribed"
         val review = filter == "review"
         val filtered = config.dashboardEntityFilterEnabled && config.dashboardEntityFilterIds.isNotEmpty()
@@ -394,6 +531,8 @@ class EntityLearningManager(
         val currentIds = if (filtered) config.dashboardEntityFilterIds.toSet() else emptySet()
         val json = JSONObject(store.entitiesJson(
             instance(), dashboardPath(), query, effectiveFilter, limit, offset,
+            sortKey = sort,
+            sortDirection = direction,
             includeIds = when {
                 (subscribed || review) && held -> emptySet()
                 (subscribed || review) && filtered -> config.dashboardEntityFilterIds.toSet()
@@ -416,10 +555,12 @@ class EntityLearningManager(
         now: Long,
         instance: String = instance(),
         path: String = dashboardPath(),
+        includeStatic: Boolean = config.dashboardEntityAutoStatic,
+        includeRuntime: Boolean = config.dashboardEntityAutoRuntime,
     ): List<String> = store.activeIds(
         instance, path, now,
-        includeStatic = config.dashboardEntityAutoStatic,
-        includeRuntime = config.dashboardEntityAutoRuntime,
+        includeStatic = includeStatic,
+        includeRuntime = includeRuntime,
     )
 
     private fun subscriptionPreview(
@@ -435,47 +576,162 @@ class EntityLearningManager(
         )
     }
 
-    private fun instance(): String = EntityLearningProtocol.hash(normalizedOrigin(config.haUrl))
+    private fun instance(): String {
+        val base = config.haUrl.takeIf(String::isNotBlank) ?: return UNCONFIGURED_INSTANCE
+        return config.dashboardEntityInstanceKey.ifBlank { EntityLearningProtocol.hash(normalizedOrigin(base)) }
+    }
     private fun dashboardPath(): String = config.homeDashboard.ifBlank { "/" }
+
+    private fun prepareCurrentTarget(): String? {
+        val base = config.haUrl.trim().trimEnd('/')
+        if (base.isBlank()) return null
+        val origin = normalizedOrigin(base)
+        val path = dashboardPath()
+        val legacyKey = EntityLearningProtocol.hash(origin)
+        return config.prepareDashboardEntityInstance(origin, path, legacyKey)
+            ?: error("failed to prepare entity-learning target")
+    }
+
+    private fun invalidateEffects(cancelSync: Boolean = true) {
+        synchronized(this) {
+            effectGeneration.incrementAndGet()
+            promotionJob?.cancel()
+            promotionJob = null
+            if (cancelSync) {
+                syncJob = supersedeEntityLearningSync(syncJob)
+            }
+        }
+    }
+
+    private fun credentialFingerprint(): String = EntityLearningProtocol.hash(
+        listOf(
+            config.haUrl,
+            config.haToken,
+            config.haRefreshToken,
+            config.haTokenExpiry.toString(),
+            config.haClientId,
+        ).joinToString("\u0000"),
+    )
+
+    private fun currentEffectState(): EntityLearningEffectState = EntityLearningEffectState(
+        origin = runCatching { normalizedOrigin(config.haUrl) }.getOrDefault(""),
+        instanceKey = instance(),
+        targetKey = config.dashboardEntityTargetKey,
+        dashboardPath = dashboardPath(),
+        credentialFingerprint = credentialFingerprint(),
+        learningEnabled = config.dashboardEntityLearningEnabled,
+        applied = config.dashboardEntityLearningApplied,
+        filterEnabled = config.dashboardEntityFilterEnabled,
+        filterIds = config.dashboardEntityFilterIds,
+        autoStatic = config.dashboardEntityAutoStatic,
+        autoRuntime = config.dashboardEntityAutoRuntime,
+        overrides = config.dashboardEntityOverrides,
+        forceBootstrap = resetBootstrapPending,
+    )
+
+    private suspend fun captureAuthenticatedTarget(): AuthenticatedTarget {
+        val generation = effectGeneration.get()
+        val base = config.haUrl.trim().trimEnd('/')
+        require(base.isNotBlank()) { "Home Assistant URL is not configured" }
+        val origin = normalizedOrigin(base)
+        val path = dashboardPath()
+        val legacyKey = EntityLearningProtocol.hash(origin)
+        val selected = config.prepareDashboardEntityInstance(origin, path, legacyKey)
+            ?: error("failed to prepare entity-learning target")
+        val targetKey = config.dashboardEntityTargetKey
+        val stillCurrent = {
+            generation == effectGeneration.get() &&
+                runCatching { normalizedOrigin(config.haUrl) }.getOrNull() == origin &&
+                dashboardPath() == path && config.dashboardEntityInstanceKey == selected &&
+                config.dashboardEntityTargetKey == targetKey
+        }
+        val auth = DashboardAuth.forConfig(config, stillCurrent = stillCurrent)
+        val token = auth.session?.accessToken
+            ?: error(if (auth.rejected) "Home Assistant credential rejected" else "Home Assistant token unavailable")
+        check(stillCurrent()) { "entity-learning target changed during authentication" }
+        return AuthenticatedTarget(
+            generation, base, origin, path, legacyKey, selected, targetKey, token, credentialFingerprint(),
+        )
+    }
+
+    private fun adoptStableTarget(target: AuthenticatedTarget, uuid: String): AuthenticatedTarget {
+        check(target.generation == effectGeneration.get()) { "entity-learning target changed during discovery" }
+        check(normalizedOrigin(config.haUrl) == target.origin && dashboardPath() == target.dashboardPath) {
+            "entity-learning target changed during discovery"
+        }
+        check(credentialFingerprint() == target.credentialFingerprint) { "Home Assistant credential changed during discovery" }
+        val stableKey = EntityLearningProtocol.hash("ha-instance:${uuid.lowercase()}")
+        check(config.adoptDashboardEntityInstance(
+            target.origin, target.dashboardPath, uuid, target.legacyKey, stableKey,
+        )) { "Home Assistant identity changed during discovery" }
+        return target.copy(
+            instanceKey = config.dashboardEntityInstanceKey,
+            targetKey = config.dashboardEntityTargetKey,
+        )
+    }
+
+    private fun captureSyncSnapshot(target: AuthenticatedTarget): EntityLearningSyncSnapshot {
+        check(target.generation == effectGeneration.get()) { "entity-learning target changed before scan" }
+        val state = currentEffectState()
+        check(state.origin == target.origin && state.instanceKey == target.instanceKey &&
+            state.targetKey == target.targetKey && state.dashboardPath == target.dashboardPath &&
+            state.credentialFingerprint == target.credentialFingerprint
+        ) { "entity-learning target or credential changed before scan" }
+        return EntityLearningSyncSnapshot(target.generation, target.baseUrl, target.authToken, state)
+    }
+
+    private fun capturePromotionSnapshot(instance: String, path: String): EntityLearningPromotionSnapshot {
+        val state = currentEffectState()
+        return EntityLearningPromotionSnapshot(effectGeneration.get(), state).also {
+            check(state.instanceKey == instance && state.dashboardPath == path) { "entity-learning target changed" }
+        }
+    }
+
+    private data class AuthenticatedTarget(
+        val generation: Long,
+        val baseUrl: String,
+        val origin: String,
+        val dashboardPath: String,
+        val legacyKey: String,
+        val instanceKey: String,
+        val targetKey: String,
+        val authToken: String,
+        val credentialFingerprint: String,
+    )
 
     private data class WsSnapshot(val configJson: String, val metadata: Map<String, String>)
 
-    private fun fetchStates(base: String, token: String): List<EntityCatalogStore.StateRow> {
-        val c = (URL(base.trimEnd('/') + "/api/states").openConnection() as HttpURLConnection).apply {
-            connectTimeout = HTTP_TIMEOUT_MS; readTimeout = HTTP_TIMEOUT_MS
-            setRequestProperty("Authorization", "Bearer $token"); setRequestProperty("Accept", "application/json")
+    private suspend fun fetchStates(base: String, token: String): List<EntityCatalogStore.StateRow> =
+        runInterruptible(Dispatchers.IO) {
+            val c = (URL(base.trimEnd('/') + "/api/states").openConnection() as HttpURLConnection).apply {
+                connectTimeout = HTTP_TIMEOUT_MS; readTimeout = HTTP_TIMEOUT_MS
+                setRequestProperty("Authorization", "Bearer $token"); setRequestProperty("Accept", "application/json")
+            }
+            try {
+                if (c.responseCode !in 200..299) error("states request failed: HTTP ${c.responseCode}")
+                // /api/states includes every attribute payload. Stream over it without hydrating the
+                // attributes, but reject a response that exceeds any resource or wall-clock bound.
+                val limits = HaStatesReadLimits()
+                if (c.contentLengthLong > limits.maxBytes) throw ByteLimitExceeded(limits.maxBytes)
+                readHaStates(c.inputStream, limits)
+            } finally { c.disconnect() }
+        }
+
+    private fun fetchHaConfig(base: String, token: String): String {
+        val c = (URL(base.trimEnd('/') + "/api/config").openConnection() as HttpURLConnection).apply {
+            connectTimeout = HA_CONFIG_TIMEOUT_MS
+            readTimeout = HA_CONFIG_TIMEOUT_MS
+            setRequestProperty("Authorization", "Bearer $token")
+            setRequestProperty("Accept", "application/json")
         }
         try {
-            if (c.responseCode !in 200..299) error("states request failed: HTTP ${c.responseCode}")
-            // /api/states includes every attribute payload. The learner only needs entity_id/state,
-            // so stream over the response and skip attributes instead of hydrating a multi-megabyte
-            // JSONArray (and then serializing each attributes object again for SQLite).
-            return JsonReader(InputStreamReader(c.inputStream, Charsets.UTF_8)).use { reader ->
-                buildList {
-                    reader.beginArray()
-                    while (reader.hasNext()) {
-                        var entityId = ""
-                        var state = ""
-                        reader.beginObject()
-                        while (reader.hasNext()) when (reader.nextName()) {
-                            "entity_id" -> entityId = reader.readScalar()
-                            "state" -> state = reader.readScalar()
-                            else -> reader.skipValue()
-                        }
-                        reader.endObject()
-                        if (entityId.isNotBlank()) add(EntityCatalogStore.StateRow(entityId, state))
-                    }
-                    reader.endArray()
-                }
+            if (c.responseCode !in 200..299) error("config request failed: HTTP ${c.responseCode}")
+            return c.inputStream.use {
+                String(BoundedStreams.readBytes(it, MAX_HA_CONFIG_BYTES), Charsets.UTF_8)
             }
-        } finally { c.disconnect() }
-    }
-
-    private fun JsonReader.readScalar(): String = when (peek()) {
-        JsonToken.NULL -> { nextNull(); "" }
-        JsonToken.STRING, JsonToken.NUMBER -> nextString()
-        JsonToken.BOOLEAN -> nextBoolean().toString()
-        else -> { skipValue(); "" }
+        } finally {
+            c.disconnect()
+        }
     }
 
     private suspend fun fetchDashboardAndRegistry(base: String, token: String, homeDashboard: String): WsSnapshot {
@@ -566,35 +822,52 @@ class EntityLearningManager(
         token: String,
         block: suspend (suspend (JSONObject) -> JSONObject) -> Unit,
     ) {
-        val ws = normalizedOrigin(base).replaceFirst("https://", "wss://").replaceFirst("http://", "ws://") + "/api/websocket"
+        val ws = EntityFilterProtocol.upstreamWebSocketUrl(base)
         val client = HttpClient(CIO) { install(WebSockets) { maxFrameSize = MAX_WS_FRAME } }
+        var session: io.ktor.client.plugins.websocket.DefaultClientWebSocketSession? = null
         try {
-            client.webSocket(ws) {
-                (incoming.receive() as? Frame.Text)?.readText()
-                send(Frame.Text(JSONObject().put("type", "auth").put("access_token", token).toString()))
-                val auth = (incoming.receive() as? Frame.Text)?.readText().orEmpty()
-                require(auth.contains("\"type\":\"auth_ok\"")) { "Home Assistant WebSocket authentication failed" }
-                var id = 0
-                suspend fun request(command: JSONObject): JSONObject {
-                    val current = ++id; command.put("id", current); send(Frame.Text(command.toString()))
-                    repeat(MAX_RESPONSE_FRAMES) {
-                        val frame = incoming.receive() as? Frame.Text ?: return@repeat
-                        val obj = JSONObject(frame.readText())
-                        if (obj.optInt("id") == current && obj.optString("type") == "result") {
-                            require(obj.optBoolean("success")) { obj.optJSONObject("error")?.optString("message") ?: "HA command failed" }
-                            return obj
-                        }
+            val activeSession = withEntityLearningDeadline(WS_CONNECT_TIMEOUT_MS) { client.webSocketSession(ws) }
+            session = activeSession
+            withEntityLearningDeadline(WS_SOCKET_TIMEOUT_MS) {
+                with(activeSession) {
+                    withEntityLearningDeadline(WS_AUTH_TIMEOUT_MS) {
+                        (incoming.receive() as? Frame.Text)?.readText()
+                        send(Frame.Text(JSONObject().put("type", "auth").put("access_token", token).toString()))
+                        val auth = (incoming.receive() as? Frame.Text)?.readText().orEmpty()
+                        require(auth.contains("\"type\":\"auth_ok\"")) { "Home Assistant WebSocket authentication failed" }
                     }
-                    error("Home Assistant command timed out")
+                    var id = 0
+                    suspend fun request(command: JSONObject): JSONObject = withEntityLearningDeadline(WS_REQUEST_TIMEOUT_MS) {
+                        val current = ++id; command.put("id", current); send(Frame.Text(command.toString()))
+                        repeat(MAX_RESPONSE_FRAMES) {
+                            val frame = incoming.receive() as? Frame.Text ?: return@repeat
+                            val obj = JSONObject(frame.readText())
+                            if (obj.optInt("id") == current && obj.optString("type") == "result") {
+                                require(obj.optBoolean("success")) { obj.optJSONObject("error")?.optString("message") ?: "HA command failed" }
+                                return@withEntityLearningDeadline obj
+                            }
+                        }
+                        error("Home Assistant command exceeded response frame limit")
+                    }
+                    block(::request)
                 }
-                block(::request)
             }
-        } finally { client.close() }
+        } finally {
+            runCatching { session?.close() }
+            client.close()
+        }
     }
 
     companion object {
         private const val TAG = "EntityLearning"
         private const val HTTP_TIMEOUT_MS = 30_000
+        private const val HA_CONFIG_TIMEOUT_MS = 10_000
+        private const val MAX_HA_CONFIG_BYTES = 256L * 1024
+        private const val SYNC_TIMEOUT_MS = 120_000L
+        private const val WS_CONNECT_TIMEOUT_MS = 15_000L
+        private const val WS_AUTH_TIMEOUT_MS = 15_000L
+        private const val WS_REQUEST_TIMEOUT_MS = 20_000L
+        private const val WS_SOCKET_TIMEOUT_MS = 90_000L
         private const val MAX_RESPONSE_FRAMES = 32
         private const val MAX_TARGETS = 500
         private const val MAX_WS_FRAME = 32L * 1024 * 1024
@@ -604,13 +877,248 @@ class EntityLearningManager(
         private const val PROMOTION_WINDOW_MS = 10L * 60_000
         private const val MAX_PROMOTIONS = 2
         private const val MAX_DYNAMIC_EXPRESSIONS = 128
+        private const val UNCONFIGURED_INSTANCE = "unconfigured"
 
-        private fun normalizedOrigin(raw: String): String {
-            val u = URI(raw.trim().trimEnd('/'))
-            return URI(u.scheme.lowercase(), null, u.host.lowercase(), u.port, null, null, null).toString().trimEnd('/')
+        private fun normalizedOrigin(raw: String): String = EntityFilterProtocol.origin(raw)
+    }
+}
+
+internal data class HaStatesReadLimits(
+    val maxBytes: Long = 64L * 1024 * 1024,
+    val maxRows: Int = 100_000,
+    val maxEntityIdChars: Int = 255,
+    val maxStateChars: Int = 255,
+    val deadlineMs: Long = 45_000,
+) {
+    init {
+        require(maxBytes > 0 && maxRows > 0 && maxEntityIdChars > 0 && maxStateChars > 0 && deadlineMs > 0)
+    }
+}
+
+/** Parse only the state projection needed by the learner while retaining hard transport-independent
+ * bounds. The monotonic clock seam keeps elapsed-time enforcement deterministic in unit tests. */
+internal fun readHaStates(
+    input: InputStream,
+    limits: HaStatesReadLimits = HaStatesReadLimits(),
+    nanoTime: () -> Long = System::nanoTime,
+): List<EntityCatalogStore.StateRow> {
+    val bounded = DeadlineBoundedInputStream(input, limits.maxBytes, limits.deadlineMs, nanoTime)
+    return JsonReader(InputStreamReader(bounded, Charsets.UTF_8)).use { reader ->
+        buildList {
+            var rows = 0
+            reader.beginArray()
+            while (reader.hasNext()) {
+                check(rows < limits.maxRows) { "states response exceeds ${limits.maxRows} rows" }
+                rows++
+                var entityId = ""
+                var state = ""
+                reader.beginObject()
+                while (reader.hasNext()) when (reader.nextName()) {
+                    "entity_id" -> entityId = reader.readBoundedScalar(limits.maxEntityIdChars, "entity_id")
+                    "state" -> state = reader.readBoundedScalar(limits.maxStateChars, "state")
+                    else -> reader.skipValue()
+                }
+                reader.endObject()
+                validateHaStateRow(entityId, state, rows, limits)?.let(::add)
+            }
+            reader.endArray()
         }
     }
 }
+
+internal fun validateHaStateRow(
+    entityId: String,
+    state: String,
+    rowNumber: Int,
+    limits: HaStatesReadLimits,
+): EntityCatalogStore.StateRow? {
+    check(rowNumber <= limits.maxRows) { "states response exceeds ${limits.maxRows} rows" }
+    check(entityId.length <= limits.maxEntityIdChars) {
+        "states entity_id exceeds ${limits.maxEntityIdChars} characters"
+    }
+    check(state.length <= limits.maxStateChars) { "states state exceeds ${limits.maxStateChars} characters" }
+    return entityId.takeIf(String::isNotBlank)?.let { EntityCatalogStore.StateRow(it, state) }
+}
+
+private fun JsonReader.readBoundedScalar(maxChars: Int, field: String): String {
+    val value = when (peek()) {
+        JsonToken.NULL -> { nextNull(); "" }
+        JsonToken.STRING, JsonToken.NUMBER -> nextString()
+        JsonToken.BOOLEAN -> nextBoolean().toString()
+        else -> { skipValue(); "" }
+    }
+    check(value.length <= maxChars) { "states $field exceeds $maxChars characters" }
+    return value
+}
+
+/** Bounds bytes before JsonReader can allocate them. Cancellation interrupts the blocking read through
+ * runInterruptible; this stream also notices interruption and elapsed time between transport reads. */
+internal class DeadlineBoundedInputStream(
+    input: InputStream,
+    private val maxBytes: Long,
+    deadlineMs: Long,
+    private val nanoTime: () -> Long,
+) : FilterInputStream(input) {
+    private val startedAt = nanoTime()
+    private val deadlineNanos = deadlineMs * 1_000_000L
+    private var total = 0L
+
+    override fun read(): Int {
+        checkAbort()
+        val value = super.read()
+        checkAbort()
+        if (value < 0) return value
+        if (++total > maxBytes) throw ByteLimitExceeded(maxBytes)
+        return value
+    }
+
+    override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+        if (length == 0) return 0
+        checkAbort()
+        val wanted = minOf(length.toLong(), maxBytes - total + 1L).toInt()
+        val count = super.read(buffer, offset, wanted)
+        checkAbort()
+        if (count < 0) return count
+        total += count
+        if (total > maxBytes) throw ByteLimitExceeded(maxBytes)
+        return count
+    }
+
+    private fun checkAbort() {
+        if (Thread.currentThread().isInterrupted) throw InterruptedIOException("states response read cancelled")
+        if (nanoTime() - startedAt >= deadlineNanos) throw SocketTimeoutException("states response read deadline exceeded")
+    }
+}
+
+internal data class EntityLearningEffectState(
+    val origin: String,
+    val instanceKey: String,
+    val targetKey: String,
+    val dashboardPath: String,
+    val credentialFingerprint: String,
+    val learningEnabled: Boolean,
+    val applied: Boolean,
+    val filterEnabled: Boolean,
+    val filterIds: List<String>,
+    val autoStatic: Boolean,
+    val autoRuntime: Boolean,
+    val overrides: Map<String, String>,
+    val forceBootstrap: Boolean,
+)
+
+internal data class EntityLearningSyncSnapshot(
+    val generation: Long,
+    val baseUrl: String,
+    val authToken: String,
+    val state: EntityLearningEffectState,
+) {
+    val instanceKey get() = state.instanceKey
+    val dashboardPath get() = state.dashboardPath
+    val learningEnabled get() = state.learningEnabled
+    val applied get() = state.applied
+    val filterEnabled get() = state.filterEnabled
+    val filterIds get() = state.filterIds
+    val autoStatic get() = state.autoStatic
+    val autoRuntime get() = state.autoRuntime
+    val overrides get() = state.overrides
+    val forceBootstrap get() = state.forceBootstrap
+
+    fun matchesCurrent(currentGeneration: Long, currentState: EntityLearningEffectState): Boolean =
+        generation == currentGeneration && state == currentState
+}
+
+internal data class EntityLearningPromotionSnapshot(
+    val generation: Long,
+    val state: EntityLearningEffectState,
+) {
+    val instanceKey get() = state.instanceKey
+    val dashboardPath get() = state.dashboardPath
+    val filterIds get() = state.filterIds
+    val autoStatic get() = state.autoStatic
+    val autoRuntime get() = state.autoRuntime
+
+    fun isEligible(
+        currentGeneration: Long,
+        currentState: EntityLearningEffectState,
+        blockingIssues: Int,
+    ): Boolean = generation == currentGeneration && state == currentState &&
+        state.learningEnabled && state.applied && state.autoRuntime && blockingIssues == 0
+}
+
+internal suspend fun <T> withEntityLearningDeadline(
+    timeoutMs: Long,
+    block: suspend CoroutineScope.() -> T,
+): T = kotlinx.coroutines.withTimeout(timeoutMs, block)
+
+/** Effect-changing operations own a replacement generation; the prior scan must release the mutex
+ * before a replacement can run and must no longer occupy the admission slot. */
+internal fun supersedeEntityLearningSync(current: Job?): Job? {
+    current?.cancel()
+    return null
+}
+
+/** Persist failures only for the generation and target that admitted the scan. */
+internal fun shouldPersistEntityLearningFailure(
+    requestGeneration: Long,
+    currentGeneration: Long,
+    requestInstance: String,
+    requestPath: String,
+    currentInstance: String,
+    currentPath: String,
+): Boolean = requestGeneration == currentGeneration &&
+    requestInstance == currentInstance && requestPath == currentPath
+
+/** Serializes the final generation check with evidence reset. A batch that entered first is cleared
+ * by reset; a batch that reaches the barrier after reset observes the replacement generation. */
+internal class EntityTelemetryWriteBarrier(
+    private val currentGeneration: () -> Long,
+) {
+    private val lock = Any()
+
+    fun writeIfCurrent(admittedGeneration: Long, write: () -> Unit): Boolean = synchronized(lock) {
+        if (admittedGeneration != currentGeneration()) return@synchronized false
+        write()
+        true
+    }
+
+    fun invalidateAndWrite(invalidate: () -> Unit, write: () -> Unit) = synchronized(lock) {
+        invalidate()
+        write()
+    }
+}
+
+internal fun runEntityOverrideTransaction(
+    commitOverridePreferences: () -> Boolean,
+    applyStoreOverride: () -> Unit,
+    commitActiveFilter: () -> Boolean,
+    restoreStoreOverride: () -> Unit,
+    restoreOverridePreferences: () -> Boolean,
+) {
+    check(commitOverridePreferences()) { "override preference commit failed" }
+    try {
+        applyStoreOverride()
+        check(commitActiveFilter()) { "active entity filter commit failed" }
+    } catch (failure: Throwable) {
+        runCatching { restoreStoreOverride() }.exceptionOrNull()?.let(failure::addSuppressed)
+        runCatching { check(restoreOverridePreferences()) { "override preference rollback failed" } }
+            .exceptionOrNull()?.let(failure::addSuppressed)
+        throw failure
+    }
+}
+
+/** Candidate aliases are accepted only from the authenticated, bounded `/api/config` response. */
+internal fun haInstanceCandidateUrls(configuredBase: String, configJson: String?): List<String> = buildList {
+    add(configuredBase)
+    val config = configJson?.let { runCatching { JSONObject(it) }.getOrNull() } ?: return@buildList
+    for (key in listOf("internal_url", "external_url", "base_url")) {
+        val candidate = config.optString(key).trim()
+        if (candidate.length in 1..MAX_HA_CANDIDATE_URL_CHARS &&
+            runCatching { EntityFilterProtocol.origin(candidate) }.isSuccess
+        ) add(candidate)
+    }
+}.distinct()
+
+private const val MAX_HA_CANDIDATE_URL_CHARS = 2_048
 
 /** An empty installation starts narrow; any stored manual list is preserved for explicit review. */
 internal fun shouldBootstrapEntityLearning(
@@ -674,4 +1182,18 @@ object EntityLearningRuntime {
     fun recordAccessBatch(text: String) { current?.recordAccessBatch(text) }
     fun recordMetricBatch(text: String) { current?.recordMetricBatch(text) }
     fun blockingIssueCount(): Int = current?.blockingIssueCount() ?: 0
+    fun bootstrapProblem(): EntityBootstrapProblem? = current?.bootstrapProblem()
+    /** Explicit user retry only. syncNow rejects the request while an existing scan is active. */
+    fun retryBootstrap(): Boolean = current?.syncNow("dashboard-retry") ?: false
+}
+
+enum class EntityBootstrapProblem { AUTHENTICATION, SYNCHRONIZATION }
+
+internal fun classifyEntityBootstrapProblem(state: String, error: String): EntityBootstrapProblem? {
+    if (state != "degraded" || error.isBlank()) return null
+    val normalized = error.lowercase()
+    return if (
+        "http 401" in normalized || "http 403" in normalized ||
+        "credential rejected" in normalized || "token unavailable" in normalized
+    ) EntityBootstrapProblem.AUTHENTICATION else EntityBootstrapProblem.SYNCHRONIZATION
 }

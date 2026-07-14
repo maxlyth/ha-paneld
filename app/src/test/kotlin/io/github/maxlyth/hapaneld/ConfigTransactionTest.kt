@@ -242,6 +242,514 @@ class ConfigTransactionTest {
         assertTrue(config.dashboardEntityFilterIds.isEmpty())
     }
 
+    @Test fun firstIdentityBindingPreservesLegacyStateForTheConfiguredDashboard() {
+        val prefs = fakePreferences(
+            initial = mapOf(
+                "ha_url" to "http://ha.local:8123",
+                "home_dashboard" to "/lovelace/kiosk",
+                "dashboard_entity_filter_enabled" to true,
+                "dashboard_entity_filter_ids" to "light.office\nsensor.temperature",
+                "dashboard_entity_learning_applied" to true,
+                "dashboard_entity_overrides" to "+person.lise",
+            ),
+        )
+        val config = Config(prefs.instance)
+
+        assertEquals(
+            "url-key",
+            config.prepareDashboardEntityInstance("http://HA.local:8123/", "/lovelace/kiosk", "url-key"),
+        )
+
+        assertTrue(config.dashboardEntityFilterEnabled)
+        assertEquals(listOf("light.office", "sensor.temperature"), config.dashboardEntityFilterIds)
+        assertTrue(config.dashboardEntityLearningApplied)
+        assertEquals(mapOf("person.lise" to "pinned"), config.dashboardEntityOverrides)
+        assertEquals(dashboardEntityTargetKey("url-key", "/lovelace/kiosk"), config.dashboardEntityTargetKey)
+    }
+
+    @Test fun reassertingTheLegacyDashboardBeforeMigrationStillPreservesItsList() {
+        val prefs = fakePreferences(
+            initial = mapOf(
+                "ha_url" to "http://ha.local:8123",
+                "home_dashboard" to "/lovelace/kiosk",
+                "dashboard_entity_filter_enabled" to true,
+                "dashboard_entity_filter_ids" to "light.office",
+            ),
+        )
+        val config = Config(prefs.instance)
+
+        config.setHomeDashboard("/lovelace/kiosk/")
+        assertEquals("url-key", config.prepareDashboardEntityInstance(
+            "http://ha.local:8123", "/lovelace/kiosk", "url-key",
+        ))
+
+        assertTrue(config.dashboardEntityFilterEnabled)
+        assertEquals(listOf("light.office"), config.dashboardEntityFilterIds)
+    }
+
+    @Test fun endpointChangeBeforeFirstMigrationHidesUnownedLegacyState() {
+        val prefs = fakePreferences(
+            initial = mapOf(
+                "ha_url" to "http://old-ha.local:8123",
+                "home_dashboard" to "/lovelace/kiosk",
+                "dashboard_entity_filter_enabled" to true,
+                "dashboard_entity_filter_ids" to "light.old",
+                "dashboard_entity_learning_applied" to true,
+                "dashboard_entity_overrides" to "+person.old",
+            ),
+        )
+        val config = Config(prefs.instance)
+
+        config.setHaConnection("http://new-ha.local:8123", null)
+
+        assertFalse(config.dashboardEntityFilterEnabled)
+        assertTrue(config.dashboardEntityFilterIds.isEmpty())
+        assertFalse(config.dashboardEntityLearningApplied)
+        assertTrue(config.dashboardEntityOverrides.isEmpty())
+        assertEquals("url-new", config.prepareDashboardEntityInstance(
+            "http://new-ha.local:8123", "/lovelace/kiosk", "url-new",
+        ))
+        assertFalse(config.dashboardEntityFilterEnabled)
+    }
+
+    @Test fun verifiedUuidPreservesStateAcrossUrlAliasesButNotBeforeAdoption() {
+        val prefs = fakePreferences(
+            initial = mapOf(
+                "ha_url" to "http://ha.local:8123",
+                "home_dashboard" to "/lovelace/kiosk",
+                "dashboard_entity_filter_enabled" to true,
+                "dashboard_entity_filter_ids" to "light.office",
+                "dashboard_entity_learning_applied" to true,
+                "dashboard_entity_overrides" to "+person.lise",
+            ),
+        )
+        val config = Config(prefs.instance)
+        assertEquals("url-a", config.prepareDashboardEntityInstance("http://ha.local:8123", "/lovelace/kiosk", "url-a"))
+        assertTrue(config.adoptDashboardEntityInstance(
+            "http://ha.local:8123", "/lovelace/kiosk", "00112233445566778899aabbccddeeff", "url-a", "uuid-key",
+        ))
+
+        config.setHaConnection("https://ha.example.net", null)
+        assertFalse(config.dashboardEntityFilterEnabled)
+        assertTrue(config.dashboardEntityFilterIds.isEmpty())
+        assertFalse(config.dashboardEntityLearningApplied)
+        assertTrue(config.dashboardEntityOverrides.isEmpty())
+
+        assertEquals("url-alias", config.prepareDashboardEntityInstance(
+            "https://ha.example.net", "/lovelace/kiosk", "url-alias",
+        ))
+        assertFalse(config.dashboardEntityFilterEnabled)
+        assertTrue(config.adoptDashboardEntityInstance(
+            "https://ha.example.net", "/lovelace/kiosk", "00112233445566778899aabbccddeeff", "url-alias", "uuid-key",
+        ))
+        assertTrue(config.dashboardEntityFilterEnabled)
+        assertEquals(listOf("light.office"), config.dashboardEntityFilterIds)
+        assertTrue(config.dashboardEntityLearningApplied)
+        assertEquals(mapOf("person.lise" to "pinned"), config.dashboardEntityOverrides)
+    }
+
+    @Test fun dashboardChangeImmediatelyHidesStateEvenOnTheSameVerifiedInstance() {
+        val prefs = fakePreferences(
+            initial = mapOf(
+                "ha_url" to "http://ha.local:8123",
+                "home_dashboard" to "/lovelace/office",
+                "dashboard_entity_filter_enabled" to true,
+                "dashboard_entity_filter_ids" to "light.office",
+                "dashboard_entity_learning_applied" to true,
+                "dashboard_entity_overrides" to "+person.lise",
+            ),
+        )
+        val config = Config(prefs.instance)
+        assertEquals("url-key", config.prepareDashboardEntityInstance(
+            "http://ha.local:8123", "/lovelace/office", "url-key",
+        ))
+        assertTrue(config.adoptDashboardEntityInstance(
+            "http://ha.local:8123", "/lovelace/office", "00112233445566778899aabbccddeeff", "url-key", "uuid-key",
+        ))
+
+        config.setHomeDashboard("/lovelace/bedroom")
+
+        assertFalse(config.dashboardEntityFilterEnabled)
+        assertTrue(config.dashboardEntityFilterIds.isEmpty())
+        assertFalse(config.dashboardEntityLearningApplied)
+        assertTrue(config.dashboardEntityOverrides.isEmpty())
+        assertEquals("uuid-key", config.prepareDashboardEntityInstance(
+            "http://ha.local:8123", "/lovelace/bedroom", "url-key",
+        ))
+        assertFalse(config.dashboardEntityFilterEnabled)
+    }
+
+    @Test fun differentHaInstanceNeverInheritsThePreviousTargetState() {
+        val prefs = fakePreferences(
+            initial = mapOf(
+                "ha_url" to "http://ha-a.local:8123",
+                "home_dashboard" to "/lovelace/kiosk",
+                "dashboard_entity_filter_enabled" to true,
+                "dashboard_entity_filter_ids" to "light.office",
+                "dashboard_entity_learning_applied" to true,
+                "dashboard_entity_overrides" to "+person.lise",
+            ),
+        )
+        val config = Config(prefs.instance)
+        assertEquals("url-a", config.prepareDashboardEntityInstance(
+            "http://ha-a.local:8123", "/lovelace/kiosk", "url-a",
+        ))
+        assertTrue(config.adoptDashboardEntityInstance(
+            "http://ha-a.local:8123", "/lovelace/kiosk", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "url-a", "uuid-a",
+        ))
+
+        config.setHaConnection("http://ha-b.local:8123", null)
+        assertEquals("url-b", config.prepareDashboardEntityInstance(
+            "http://ha-b.local:8123", "/lovelace/kiosk", "url-b",
+        ))
+        assertTrue(config.adoptDashboardEntityInstance(
+            "http://ha-b.local:8123", "/lovelace/kiosk", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "url-b", "uuid-b",
+        ))
+
+        assertFalse(config.dashboardEntityFilterEnabled)
+        assertTrue(config.dashboardEntityFilterIds.isEmpty())
+        assertFalse(config.dashboardEntityLearningApplied)
+        assertTrue(config.dashboardEntityOverrides.isEmpty())
+    }
+
+    @Test fun failedIdentityPreferenceCommitPublishesNoPartialSelection() {
+        val prefs = fakePreferences(
+            initial = mapOf("ha_url" to "http://ha.local:8123", "home_dashboard" to "/lovelace/kiosk"),
+            commitSucceeds = false,
+        )
+        val config = Config(prefs.instance)
+
+        assertEquals(null, config.prepareDashboardEntityInstance(
+            "http://ha.local:8123", "/lovelace/kiosk", "url-key",
+        ))
+        assertEquals("", config.dashboardEntityInstanceKey)
+        assertEquals("", config.dashboardEntityTargetKey)
+        assertFalse(prefs.values.containsKey("dashboard_entity_instance_origin"))
+        assertFalse(prefs.values.containsKey("dashboard_entity_dashboard_path"))
+    }
+
+    @Test fun staleUuidAdoptionCannotCrossAConcurrentDashboardChange() {
+        val prefs = fakePreferences(
+            initial = mapOf("ha_url" to "http://ha.local:8123", "home_dashboard" to "/lovelace/office"),
+        )
+        val config = Config(prefs.instance)
+        assertEquals("url-key", config.prepareDashboardEntityInstance(
+            "http://ha.local:8123", "/lovelace/office", "url-key",
+        ))
+
+        config.setHomeDashboard("/lovelace/bedroom")
+
+        assertFalse(config.adoptDashboardEntityInstance(
+            "http://ha.local:8123", "/lovelace/office", "00112233445566778899aabbccddeeff", "url-key", "uuid-key",
+        ))
+        assertEquals("url-key", config.dashboardEntityInstanceKey)
+        assertEquals("", config.dashboardEntityInstanceUuid)
+    }
+
+    @Test fun manualFilterCutoverPublishesModeLatchAndListInOneCommit() {
+        val prefs = fakePreferences(
+            initial = mapOf(
+                "ha_url" to "http://ha.local:8123",
+                "home_dashboard" to "/lovelace/kiosk",
+                "dashboard_entity_learning" to true,
+                "dashboard_entity_learning_applied" to true,
+            ),
+        )
+        val config = Config(prefs.instance)
+        assertEquals("url-key", config.prepareDashboardEntityInstance(
+            "http://ha.local:8123", "/lovelace/kiosk", "url-key",
+        ))
+
+        assertTrue(config.commitDashboardManualEntityFilter(
+            enabled = true, entityIds = listOf("sensor.b", "light.a", "sensor.b"),
+        ))
+
+        assertFalse(config.dashboardEntityLearningEnabled)
+        assertFalse(config.dashboardEntityLearningApplied)
+        assertTrue(config.dashboardEntityFilterEnabled)
+        assertEquals(listOf("light.a", "sensor.b"), config.dashboardEntityFilterIds)
+    }
+
+    @Test fun invalidManualFilterCutoverDoesNotDisableLearning() {
+        val prefs = fakePreferences(
+            initial = mapOf(
+                "ha_url" to "http://ha.local:8123",
+                "home_dashboard" to "/lovelace/kiosk",
+                "dashboard_entity_learning" to true,
+            ),
+        )
+        val config = Config(prefs.instance)
+        assertEquals("url-key", config.prepareDashboardEntityInstance(
+            "http://ha.local:8123", "/lovelace/kiosk", "url-key",
+        ))
+
+        assertFalse(config.commitDashboardManualEntityFilter(enabled = true, entityIds = listOf(" ")))
+
+        assertTrue(config.dashboardEntityLearningEnabled)
+        assertFalse(prefs.values.containsKey("dashboard_entity_filter_enabled"))
+    }
+
+    @Test fun disablingLearningAfterTargetSwitchDoesNotClaimPreviousAllowList() {
+        val prefs = fakePreferences(
+            initial = mapOf(
+                "ha_url" to "http://ha.local:8123",
+                "home_dashboard" to "/lovelace/office",
+                "dashboard_entity_learning" to true,
+            ),
+        )
+        val config = Config(prefs.instance)
+        assertEquals("url-key", config.prepareDashboardEntityInstance(
+            "http://ha.local:8123", "/lovelace/office", "url-key",
+        ))
+        assertTrue(config.setDashboardEntityFilter(true, listOf("light.office")))
+
+        config.setHomeDashboard("/lovelace/bedroom")
+        assertEquals("url-key", config.prepareDashboardEntityInstance(
+            "http://ha.local:8123", "/lovelace/bedroom", "url-key",
+        ))
+        assertFalse(config.dashboardEntityFilterEnabled)
+        assertTrue(config.dashboardEntityFilterIds.isEmpty())
+
+        assertTrue(config.commitDashboardEntityLearningMode(enabled = false, clearApplied = true))
+
+        assertFalse(config.dashboardEntityFilterEnabled)
+        assertTrue(config.dashboardEntityFilterIds.isEmpty())
+        assertEquals("light.office", prefs.values["dashboard_entity_filter_ids"])
+
+        config.setHomeDashboard("/lovelace/office")
+        assertEquals("url-key", config.prepareDashboardEntityInstance(
+            "http://ha.local:8123", "/lovelace/office", "url-key",
+        ))
+        assertEquals(listOf("light.office"), config.dashboardEntityFilterIds)
+        assertFalse("disabled learning must not reactivate the old target's interceptor", config.dashboardEntityFilterEnabled)
+    }
+
+    @Test fun failedManualFilterCutoverPublishesNothing() {
+        val target = dashboardEntityTargetKey("url-key", "/lovelace/kiosk")
+        val prefs = fakePreferences(
+            initial = mapOf(
+                "ha_url" to "http://ha.local:8123",
+                "home_dashboard" to "/lovelace/kiosk",
+                "dashboard_entity_instance" to "url-key",
+                "dashboard_entity_instance_origin" to "http://ha.local:8123",
+                "dashboard_entity_dashboard_path" to "/lovelace/kiosk",
+                "dashboard_entity_filter_instance" to target,
+                "dashboard_entity_applied_instance" to target,
+                "dashboard_entity_learning" to true,
+                "dashboard_entity_learning_applied" to true,
+                "dashboard_entity_filter_enabled" to true,
+                "dashboard_entity_filter_ids" to "light.old",
+            ),
+            commitSucceeds = false,
+        )
+        val config = Config(prefs.instance)
+
+        assertFalse(config.commitDashboardManualEntityFilter(true, listOf("light.new")))
+
+        assertTrue(config.dashboardEntityLearningEnabled)
+        assertTrue(config.dashboardEntityLearningApplied)
+        assertTrue(config.dashboardEntityFilterEnabled)
+        assertEquals(listOf("light.old"), config.dashboardEntityFilterIds)
+    }
+
+    @Test fun activationPublishesFilterAndAppliedLatchAtomically() {
+        val prefs = fakePreferences(
+            initial = mapOf("ha_url" to "http://ha.local:8123", "home_dashboard" to "/lovelace/kiosk"),
+        )
+        val config = Config(prefs.instance)
+        assertEquals("url-key", config.prepareDashboardEntityInstance(
+            "http://ha.local:8123", "/lovelace/kiosk", "url-key",
+        ))
+
+        assertTrue(config.commitDashboardEntitySubscription(true, listOf("sensor.b", "light.a"), applied = true))
+
+        assertTrue(config.dashboardEntityLearningApplied)
+        assertTrue(config.dashboardEntityFilterEnabled)
+        assertEquals(listOf("light.a", "sensor.b"), config.dashboardEntityFilterIds)
+    }
+
+    @Test fun failedActivationCommitPublishesNeitherFilterNorAppliedLatch() {
+        val target = dashboardEntityTargetKey("url-key", "/lovelace/kiosk")
+        val prefs = fakePreferences(
+            initial = mapOf(
+                "ha_url" to "http://ha.local:8123",
+                "home_dashboard" to "/lovelace/kiosk",
+                "dashboard_entity_instance" to "url-key",
+                "dashboard_entity_instance_origin" to "http://ha.local:8123",
+                "dashboard_entity_dashboard_path" to "/lovelace/kiosk",
+                "dashboard_entity_filter_instance" to target,
+                "dashboard_entity_applied_instance" to target,
+                "dashboard_entity_filter_ids" to "light.old",
+                "dashboard_entity_filter_enabled" to true,
+                "dashboard_entity_learning_applied" to false,
+            ),
+            commitSucceeds = false,
+        )
+        val config = Config(prefs.instance)
+
+        assertFalse(config.commitDashboardEntitySubscription(true, listOf("light.new"), applied = true))
+
+        assertFalse(config.dashboardEntityLearningApplied)
+        assertEquals(listOf("light.old"), config.dashboardEntityFilterIds)
+    }
+
+    @Test fun cleanSlateEvidenceResetAtomicallyClearsFilterWithoutDisablingLearning() {
+        val prefs = fakePreferences(
+            initial = mapOf(
+                "ha_url" to "http://ha.local:8123",
+                "home_dashboard" to "/lovelace/kiosk",
+                "dashboard_entity_learning" to true,
+            ),
+        )
+        val config = Config(prefs.instance)
+        assertEquals("url-key", config.prepareDashboardEntityInstance(
+            "http://ha.local:8123", "/lovelace/kiosk", "url-key",
+        ))
+        assertTrue(config.commitDashboardEntitySubscription(true, listOf("light.old"), applied = true))
+        assertTrue(config.setDashboardEntityOverrides(mapOf("light.old" to "pinned")))
+
+        assertTrue(config.commitDashboardEntityEvidenceReset(clearFilter = true))
+
+        assertTrue(config.dashboardEntityLearningEnabled)
+        assertFalse(config.dashboardEntityLearningApplied)
+        assertFalse(config.dashboardEntityFilterEnabled)
+        assertTrue(config.dashboardEntityFilterIds.isEmpty())
+        assertTrue(config.dashboardEntityOverrides.isEmpty())
+    }
+
+    @Test fun defaultEvidenceResetPreservesKnownGoodFilter() {
+        val prefs = fakePreferences(
+            initial = mapOf(
+                "ha_url" to "http://ha.local:8123",
+                "home_dashboard" to "/lovelace/kiosk",
+                "dashboard_entity_learning" to true,
+            ),
+        )
+        val config = Config(prefs.instance)
+        assertEquals("url-key", config.prepareDashboardEntityInstance(
+            "http://ha.local:8123", "/lovelace/kiosk", "url-key",
+        ))
+        assertTrue(config.commitDashboardEntitySubscription(true, listOf("light.old"), applied = true))
+
+        assertTrue(config.commitDashboardEntityEvidenceReset(clearFilter = false))
+
+        assertTrue(config.dashboardEntityLearningEnabled)
+        assertFalse(config.dashboardEntityLearningApplied)
+        assertTrue(config.dashboardEntityFilterEnabled)
+        assertEquals(listOf("light.old"), config.dashboardEntityFilterIds)
+    }
+
+    @Test fun failedCleanSlateEvidenceResetPublishesNoPartialState() {
+        val target = dashboardEntityTargetKey("url-key", "/lovelace/kiosk")
+        val prefs = fakePreferences(
+            initial = mapOf(
+                "ha_url" to "http://ha.local:8123",
+                "home_dashboard" to "/lovelace/kiosk",
+                "dashboard_entity_instance" to "url-key",
+                "dashboard_entity_instance_origin" to "http://ha.local:8123",
+                "dashboard_entity_dashboard_path" to "/lovelace/kiosk",
+                "dashboard_entity_filter_instance" to target,
+                "dashboard_entity_applied_instance" to target,
+                "dashboard_entity_override_instance" to target,
+                "dashboard_entity_learning" to true,
+                "dashboard_entity_learning_applied" to true,
+                "dashboard_entity_filter_enabled" to true,
+                "dashboard_entity_filter_ids" to "light.old",
+                "dashboard_entity_overrides" to "+light.old",
+            ),
+            commitSucceeds = false,
+        )
+        val config = Config(prefs.instance)
+
+        assertFalse(config.commitDashboardEntityEvidenceReset(clearFilter = true))
+
+        assertTrue(config.dashboardEntityLearningEnabled)
+        assertTrue(config.dashboardEntityLearningApplied)
+        assertTrue(config.dashboardEntityFilterEnabled)
+        assertEquals(listOf("light.old"), config.dashboardEntityFilterIds)
+        assertEquals(mapOf("light.old" to "pinned"), config.dashboardEntityOverrides)
+    }
+
+    @Test fun disabledCleanSlateResetClearsEvidencePreferencesWithoutEnablingLearning() {
+        val prefs = fakePreferences(
+            initial = mapOf(
+                "ha_url" to "http://ha.local:8123",
+                "home_dashboard" to "/lovelace/kiosk",
+                "dashboard_entity_learning" to false,
+            ),
+        )
+        val config = Config(prefs.instance)
+        assertEquals("url-key", config.prepareDashboardEntityInstance(
+            "http://ha.local:8123", "/lovelace/kiosk", "url-key",
+        ))
+        assertTrue(config.commitDashboardEntitySubscription(true, listOf("light.old"), applied = true))
+        assertTrue(config.setDashboardEntityOverrides(mapOf("light.old" to "pinned")))
+
+        assertTrue(config.commitDashboardEntityEvidenceReset(clearFilter = true))
+
+        assertFalse(config.dashboardEntityLearningEnabled)
+        assertFalse(config.dashboardEntityLearningApplied)
+        assertFalse(config.dashboardEntityFilterEnabled)
+        assertTrue(config.dashboardEntityFilterIds.isEmpty())
+        assertTrue(config.dashboardEntityOverrides.isEmpty())
+    }
+
+    @Test fun promotionPolicyAndResultingSubscriptionPublishInOneCommit() {
+        val prefs = fakePreferences(
+            initial = mapOf("ha_url" to "http://ha.local:8123", "home_dashboard" to "/lovelace/kiosk"),
+        )
+        val config = Config(prefs.instance)
+        assertEquals("url-key", config.prepareDashboardEntityInstance(
+            "http://ha.local:8123", "/lovelace/kiosk", "url-key",
+        ))
+
+        assertTrue(config.commitDashboardEntityPromotionPolicy(
+            staticRefs = false,
+            runtimeRefs = true,
+            activeEntityIds = listOf("sensor.runtime"),
+            applied = true,
+        ))
+
+        assertFalse(config.dashboardEntityAutoStatic)
+        assertTrue(config.dashboardEntityAutoRuntime)
+        assertTrue(config.dashboardEntityLearningApplied)
+        assertEquals(listOf("sensor.runtime"), config.dashboardEntityFilterIds)
+    }
+
+    @Test fun failedPromotionPolicyCommitLeavesPolicyAndSubscriptionUntouched() {
+        val target = dashboardEntityTargetKey("url-key", "/lovelace/kiosk")
+        val prefs = fakePreferences(
+            initial = mapOf(
+                "ha_url" to "http://ha.local:8123",
+                "home_dashboard" to "/lovelace/kiosk",
+                "dashboard_entity_instance" to "url-key",
+                "dashboard_entity_instance_origin" to "http://ha.local:8123",
+                "dashboard_entity_dashboard_path" to "/lovelace/kiosk",
+                "dashboard_entity_filter_instance" to target,
+                "dashboard_entity_applied_instance" to target,
+                "dashboard_entity_auto_static" to true,
+                "dashboard_entity_auto_runtime" to false,
+                "dashboard_entity_filter_ids" to "light.old",
+                "dashboard_entity_filter_enabled" to true,
+                "dashboard_entity_learning_applied" to true,
+            ),
+            commitSucceeds = false,
+        )
+        val config = Config(prefs.instance)
+
+        assertFalse(config.commitDashboardEntityPromotionPolicy(
+            staticRefs = false,
+            runtimeRefs = true,
+            activeEntityIds = listOf("light.new"),
+            applied = true,
+        ))
+
+        assertTrue(config.dashboardEntityAutoStatic)
+        assertFalse(config.dashboardEntityAutoRuntime)
+        assertTrue(config.dashboardEntityLearningApplied)
+        assertEquals(listOf("light.old"), config.dashboardEntityFilterIds)
+    }
+
     private data class FakePreferences(
         val instance: SharedPreferences,
         val values: MutableMap<String, Any?>,

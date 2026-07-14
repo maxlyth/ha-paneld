@@ -254,6 +254,7 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, "entity-l
             db.delete("dashboard", "instance=? AND path=?", arrayOf(instance, path))
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
+        recentCache.invalidate(instance to path)
     }
 
     fun activeIds(
@@ -337,6 +338,8 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, "entity-l
         filter: String,
         limit: Int,
         offset: Int,
+        sortKey: String = "entity_id",
+        sortDirection: String = "asc",
         maxLimit: Int = 500,
         includeIds: Set<String>? = null,
         excludeIds: Set<String> = emptySet(),
@@ -362,76 +365,98 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, "entity-l
             "unpinned" -> where += "coalesce(m.pinned,0)=0"
             else -> Unit
         }
+        // Keep the common UI path inside SQLite: the three tables normally sort by entity id and
+        // subscribed/review sets are bounded allow-lists. Only recent-rollup columns require the
+        // in-memory global comparator. This avoids materializing and sorting the whole HA catalog
+        // three times on every refresh.
+        var sqlPageable = EntityCatalogSorting.sqlOrder(sortKey, sortDirection) != null
+        val sqlIdFiltersFit = (includeIds?.size ?: 0) + excludeIds.size <= MAX_SQL_ID_FILTER
+        if (includeIds != null) {
+            if (includeIds.isEmpty()) {
+                where += "0"
+            } else if (sqlIdFiltersFit) {
+                where += "e.entity_id IN (${includeIds.joinToString(",") { "?" }})"
+                args += includeIds.sorted()
+            } else sqlPageable = false
+        }
+        if (excludeIds.isNotEmpty()) {
+            if (sqlIdFiltersFit) {
+                where += "e.entity_id NOT IN (${excludeIds.joinToString(",") { "?" }})"
+                args += excludeIds.sorted()
+            } else sqlPageable = false
+        }
         val join = "LEFT JOIN membership m ON m.instance=e.instance AND m.entity_id=e.entity_id AND m.path=?"
-        val sql = """SELECT e.entity_id,e.state,e.metadata_json,e.first_seen,e.last_seen,e.missing_streak,
+        val baseSql = """SELECT e.entity_id,e.state,e.metadata_json,e.first_seen,e.last_seen,e.missing_streak,
             coalesce(m.static_ref,0),coalesce(m.runtime_ref,0),coalesce(m.pinned,0),coalesce(m.excluded,0),
             coalesce(m.reasons,''),coalesce(m.last_access,0),coalesce(m.access_count,0),coalesce(m.update_count,0),coalesce(m.update_bytes,0),
             coalesce(m.rate_window_start,0),coalesce(m.rate_update_bytes,0),coalesce(m.last_update_at,0)
-            FROM entity e $join WHERE ${where.joinToString(" AND ")}
-            ORDER BY m.update_bytes DESC,e.entity_id LIMIT ? OFFSET ?"""
+            FROM entity e $join WHERE ${where.joinToString(" AND ")}"""
         val effectiveLimit = limit.coerceIn(1, maxLimit)
         val effectiveOffset = offset.coerceAtLeast(0)
-        val queryArgs = args.toTypedArray()
-        val filterInMemory = includeIds != null || excludeIds.isNotEmpty()
-        val queryTotal = if (!filterInMemory) {
-            readableDatabase.rawQuery(
-                "SELECT count(*) FROM entity e $join WHERE ${where.joinToString(" AND ")}",
-                queryArgs,
-            ).use { c -> if (c.moveToFirst()) c.getInt(0) else 0 }
-        } else null
-        if (!filterInMemory) {
-            args += effectiveLimit.toString(); args += effectiveOffset.toString()
-        }
-        val effectiveSql = if (!filterInMemory) sql else sql.substringBefore(" LIMIT ? OFFSET ?")
-        val rows = JSONArray()
+        val total = if (sqlPageable) readableDatabase.rawQuery(
+            "SELECT count(*) FROM entity e $join WHERE ${where.joinToString(" AND ")}", args.toTypedArray(),
+        ).use { c -> c.moveToFirst(); c.getInt(0) } else -1
+        val sql = if (sqlPageable) {
+            "$baseSql ORDER BY ${EntityCatalogSorting.sqlOrder(sortKey, sortDirection)} LIMIT $effectiveLimit OFFSET $effectiveOffset"
+        } else baseSql
         val now = System.currentTimeMillis()
-        val recent = recentStats(instance, path, now)
-        val ranks = RecentRanks(recent.values)
-        var matched = 0
-        readableDatabase.rawQuery(effectiveSql, args.toTypedArray()).use { c ->
+        val recentSnapshot = recentSnapshot(instance, path, now)
+        val recent = recentSnapshot.rows
+        val ranks = recentSnapshot.ranks
+        val matched = ArrayList<CatalogRow>()
+        readableDatabase.rawQuery(sql, args.toTypedArray()).use { c ->
             while (c.moveToNext()) {
-                if (includeIds != null && c.getString(0) !in includeIds) continue
-                if (c.getString(0) in excludeIds) continue
-                val position = matched++
-                if (filterInMemory && (position < effectiveOffset || rows.length() >= effectiveLimit)) continue
-                rows.put(JSONObject().apply {
-                put("entity_id", c.getString(0)); put("state", c.getString(1)); put("metadata", JSONObject(c.getString(2)))
-                put("first_seen", c.getLong(3)); put("last_seen", c.getLong(4)); put("missing_streak", c.getInt(5))
-                put("static", c.getInt(6) != 0); put("runtime", c.getInt(7) != 0); put("pinned", c.getInt(8) != 0)
-                put("excluded", c.getInt(9) != 0); put("reasons", c.getString(10)); put("last_access", c.getLong(11))
-                put("access_count", c.getLong(12)); put("update_count", c.getLong(13)); put("update_bytes", c.getLong(14))
-                val windowStart = c.getLong(15); val windowBytes = c.getLong(16); val lastUpdate = c.getLong(17)
-                val rate = if (windowStart == 0L || lastUpdate == 0L || now - lastUpdate > RATE_STALE_MS) 0.0
-                    else windowBytes * 1000.0 / (now - windowStart).coerceAtLeast(1000L)
+                val entityId = c.getString(0)
+                if (!sqlPageable && (includeIds != null && entityId !in includeIds || entityId in excludeIds)) continue
+                val stats = recent[entityId]
+                matched += CatalogRow(
+                    entityId, c.getString(1), c.getString(2), c.getLong(3), c.getLong(4), c.getInt(5),
+                    c.getInt(6) != 0, c.getInt(7) != 0, c.getInt(8) != 0, c.getInt(9) != 0,
+                    c.getString(10), c.getLong(11), c.getLong(12), c.getLong(13), c.getLong(14),
+                    c.getLong(15), c.getLong(16), c.getLong(17), stats,
+                    stats?.let { it.bytes1h / observedSeconds(recentSnapshot.generatedAt, it.firstMinute, HOUR_MS) } ?: 0.0,
+                )
+            }
+        }
+        if (!sqlPageable) matched.sortWith(EntityCatalogSorting.comparator(sortKey, sortDirection) { it.sortProjection })
+        val rows = JSONArray()
+        val selected = if (sqlPageable) matched.asSequence()
+            else matched.asSequence().drop(effectiveOffset).take(effectiveLimit)
+        selected.forEach { row ->
+            val r = row.recent
+            rows.put(JSONObject().apply {
+                put("entity_id", row.entityId); put("state", row.state); put("metadata", JSONObject(row.metadataJson))
+                put("first_seen", row.firstSeen); put("last_seen", row.lastSeen); put("missing_streak", row.missingStreak)
+                put("static", row.staticRef); put("runtime", row.runtimeRef); put("pinned", row.pinned)
+                put("excluded", row.excluded); put("reasons", row.reasons); put("last_access", row.lastAccess)
+                put("access_count", row.accessCount); put("update_count", row.updateCount); put("update_bytes", row.updateBytes)
+                val rate = if (row.rateWindowStart == 0L || row.lastUpdateAt == 0L || now - row.lastUpdateAt > RATE_STALE_MS) 0.0
+                    else row.rateUpdateBytes * 1000.0 / (now - row.rateWindowStart).coerceAtLeast(1000L)
                 put("data_rate_bps", rate)
-                recent[c.getString(0)]?.let { r ->
+                if (r != null) {
                     put("access_1m", r.access1m); put("access_1h", r.access1h); put("access_1d", r.access1d)
-                    put("rate_1m_bps", r.bytes1m / observedSeconds(now, r.firstMinute, MINUTE_MS))
-                    put("rate_1h_bps", r.bytes1h / observedSeconds(now, r.firstMinute, HOUR_MS))
-                    put("rate_1d_bps", r.bytes1d / observedSeconds(now, r.firstMinute, 24L * HOUR_MS))
-                    put("access_1m_rank", ranks.rank(r.access1m, ranks.access1m))
-                    put("access_1h_rank", ranks.rank(r.access1h, ranks.access1h))
-                    put("access_1d_rank", ranks.rank(r.access1d, ranks.access1d))
-                    put("rate_1m_rank", ranks.rank(r.bytes1m, ranks.bytes1m))
-                    put("rate_1h_rank", ranks.rank(r.bytes1h, ranks.bytes1h))
-                    put("rate_1d_rank", ranks.rank(r.bytes1d, ranks.bytes1d))
-                } ?: run {
+                    put("rate_1m_bps", r.bytes1m / observedSeconds(recentSnapshot.generatedAt, r.firstMinute, MINUTE_MS))
+                    put("rate_1h_bps", row.rate1h); put("rate_1d_bps", r.bytes1d / observedSeconds(recentSnapshot.generatedAt, r.firstMinute, 24L * HOUR_MS))
+                    put("access_1m_rank", ranks.rank(r.access1m, ranks.access1m)); put("access_1h_rank", ranks.rank(r.access1h, ranks.access1h))
+                    put("access_1d_rank", ranks.rank(r.access1d, ranks.access1d)); put("rate_1m_rank", ranks.rank(r.bytes1m, ranks.bytes1m))
+                    put("rate_1h_rank", ranks.rank(r.bytes1h, ranks.bytes1h)); put("rate_1d_rank", ranks.rank(r.bytes1d, ranks.bytes1d))
+                } else {
                     put("access_1m", 0); put("access_1h", 0); put("access_1d", 0)
                     put("rate_1m_bps", 0); put("rate_1h_bps", 0); put("rate_1d_bps", 0)
                     put("access_1m_rank", 0); put("access_1h_rank", 0); put("access_1d_rank", 0)
                     put("rate_1m_rank", 0); put("rate_1h_rank", 0); put("rate_1d_rank", 0)
                 }
-                })
-            }
+            })
         }
         return JSONObject().put("items", rows).put("limit", effectiveLimit).put("offset", effectiveOffset)
-            .put("total", queryTotal ?: matched).toString()
+            .put("total", if (sqlPageable) total else matched.size).put("sort", EntityCatalogSorting.key(sortKey))
+            .put("direction", EntityCatalogSorting.direction(sortDirection)).toString()
     }
 
     fun exportJson(instance: String, path: String): String = JSONObject()
         .put("kind", "ha-paneld-entity-catalog").put("exported_at", System.currentTimeMillis())
         .put("instance_hash", EntityLearningProtocol.hash(instance)).put("dashboard", path)
-        .put("entities", JSONObject(entitiesJson(instance, path, "", "all", 50_000, 0, 50_000)).getJSONArray("items"))
+        .put("entities", JSONObject(entitiesJson(instance, path, "", "all", 50_000, 0, maxLimit = 50_000)).getJSONArray("items"))
         .toString()
 
     /**
@@ -468,6 +493,44 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, "entity-l
         val bytes1d: Long,
         val firstMinute: Long,
     )
+
+    private data class RecentSnapshot(
+        val generatedAt: Long,
+        val rows: Map<String, Recent>,
+        val ranks: RecentRanks,
+    )
+
+    private data class CatalogRow(
+        val entityId: String,
+        val state: String,
+        val metadataJson: String,
+        val firstSeen: Long,
+        val lastSeen: Long,
+        val missingStreak: Int,
+        val staticRef: Boolean,
+        val runtimeRef: Boolean,
+        val pinned: Boolean,
+        val excluded: Boolean,
+        val reasons: String,
+        val lastAccess: Long,
+        val accessCount: Long,
+        val updateCount: Long,
+        val updateBytes: Long,
+        val rateWindowStart: Long,
+        val rateUpdateBytes: Long,
+        val lastUpdateAt: Long,
+        val recent: Recent?,
+        val rate1h: Double,
+    ) {
+        val sortProjection get() = EntitySortProjection(
+            entityId = entityId,
+            access1h = recent?.access1h ?: 0,
+            rate1h = rate1h,
+            reasons = reasons,
+            lastAccess = lastAccess,
+            override = when { excluded -> "excluded"; pinned -> "pinned"; else -> "auto" },
+        )
+    }
 
     private data class DashboardRow(
         val status: String,
@@ -515,6 +578,18 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, "entity-l
         } }
     }
 
+    private val recentCache = BoundedSnapshotCache<Pair<String, String>, RecentSnapshot>(
+        windowMs = RANKING_CACHE_MS,
+        maxEntries = MAX_RANKING_CACHE_ENTRIES,
+    )
+
+    /** One immutable rollup/ranking snapshot serves all entity tables within the UI refresh window. */
+    private fun recentSnapshot(instance: String, path: String, now: Long): RecentSnapshot =
+        recentCache.get(instance to path, now) {
+            val rows = recentStats(instance, path, now).toMap()
+            RecentSnapshot(now, rows, RecentRanks(rows.values))
+        }
+
     private fun observedSeconds(now: Long, firstMinute: Long, windowMs: Long): Double {
         val start = maxOf(firstMinute * MINUTE_MS, now - windowMs)
         return (now - start).coerceIn(METRIC_BATCH_MS, windowMs) / 1000.0
@@ -539,7 +614,79 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, "entity-l
         private const val RATE_STALE_MS = 90_000L
         private const val METRIC_BATCH_MS = 5_000L
         private const val MINUTE_RETENTION_MS = 2L * 24 * HOUR_MS
+        private const val RANKING_CACHE_MS = 10_000L
+        private const val MAX_RANKING_CACHE_ENTRIES = 16
+        private const val MAX_SQL_ID_FILTER = 800
     }
+}
+
+internal data class EntitySortProjection(
+    val entityId: String,
+    val access1h: Long,
+    val rate1h: Double,
+    val reasons: String,
+    val lastAccess: Long,
+    val override: String,
+)
+
+/** Public API sort policy: unknown keys/directions never become SQL or reflection input. */
+internal object EntityCatalogSorting {
+    private val keys = setOf("entity_id", "access_1h", "rate_1h_bps", "reasons", "last_access", "override")
+    fun key(raw: String): String = raw.takeIf(keys::contains) ?: "entity_id"
+    fun direction(raw: String): String = raw.lowercase().takeIf { it == "asc" || it == "desc" } ?: "asc"
+
+    /** Validated SQL order for columns backed directly by the catalog/membership tables. Recent
+     * rollup columns intentionally return null and use the global in-memory comparator. */
+    fun sqlOrder(rawKey: String, rawDirection: String): String? {
+        val normalizedKey = key(rawKey)
+        val dir = direction(rawDirection).uppercase()
+        val expression = when (normalizedKey) {
+            "entity_id" -> return "e.entity_id COLLATE NOCASE $dir, e.entity_id $dir"
+            "reasons" -> "coalesce(m.reasons,'') COLLATE NOCASE"
+            "last_access" -> "coalesce(m.last_access,0)"
+            "override" -> "CASE WHEN coalesce(m.excluded,0)=1 THEN 'excluded' WHEN coalesce(m.pinned,0)=1 THEN 'pinned' ELSE 'auto' END COLLATE NOCASE"
+            else -> return null
+        }
+        return "$expression $dir, e.entity_id COLLATE NOCASE ASC, e.entity_id ASC"
+    }
+
+    fun <T> comparator(rawKey: String, rawDirection: String, projection: (T) -> EntitySortProjection): Comparator<T> {
+        val key = key(rawKey)
+        val sign = if (direction(rawDirection) == "desc") -1 else 1
+        return Comparator { left, right ->
+            val a = projection(left); val b = projection(right)
+            val primary = when (key) {
+                "access_1h" -> a.access1h.compareTo(b.access1h)
+                "rate_1h_bps" -> a.rate1h.compareTo(b.rate1h)
+                "reasons" -> a.reasons.compareTo(b.reasons, ignoreCase = true)
+                "last_access" -> a.lastAccess.compareTo(b.lastAccess)
+                "override" -> a.override.compareTo(b.override, ignoreCase = true)
+                else -> compareEntityIds(a.entityId, b.entityId)
+            } * sign
+            if (primary != 0) primary else compareEntityIds(a.entityId, b.entityId)
+        }
+    }
+
+    private fun compareEntityIds(a: String, b: String): Int =
+        a.compareTo(b, ignoreCase = true).takeIf { it != 0 } ?: a.compareTo(b)
+}
+
+/** Thread-safe fixed-window cache. Loader executes once per key/window and old keys are strictly bounded. */
+internal class BoundedSnapshotCache<K, V>(private val windowMs: Long, private val maxEntries: Int) {
+    init { require(windowMs > 0); require(maxEntries > 0) }
+    private data class Entry<V>(val createdAt: Long, val value: V)
+    private val entries = LinkedHashMap<K, Entry<V>>(16, 0.75f, true)
+
+    @Synchronized fun get(key: K, now: Long, loader: () -> V): V {
+        entries[key]?.takeIf { now >= it.createdAt && now - it.createdAt < windowMs }?.let { return it.value }
+        val value = loader()
+        entries[key] = Entry(now, value)
+        while (entries.size > maxEntries) entries.remove(entries.entries.first().key)
+        return value
+    }
+
+    @Synchronized fun invalidate(key: K) { entries.remove(key) }
+    @Synchronized internal fun sizeForTest(): Int = entries.size
 }
 
 /** Sequential forward-only schema contract. Never add an ad-hoc conditional to [onUpgrade]. */

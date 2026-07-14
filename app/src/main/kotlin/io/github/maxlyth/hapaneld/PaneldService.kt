@@ -56,6 +56,7 @@ import io.github.maxlyth.hapaneld.util.localIpv6
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import io.github.maxlyth.hapaneld.util.ServiceRuntimeOwner
 import io.github.maxlyth.hapaneld.util.BorrowedRendererSettings
@@ -65,6 +66,8 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 import io.github.maxlyth.hapaneld.util.UpdateChecker
 import io.github.maxlyth.hapaneld.util.CompanionInstaller
 import io.github.maxlyth.hapaneld.util.InstallProgress
@@ -81,6 +84,51 @@ import io.github.maxlyth.hapaneld.util.periodic
 import io.github.maxlyth.hapaneld.util.SystemProps
 import io.github.maxlyth.hapaneld.dashboard.shouldReloadBuiltinAfterEntityFilterChange
 import java.io.File
+
+internal fun commitBorrowedRendererTarget(
+    commit: () -> Boolean,
+    onCommitted: () -> Unit,
+): Boolean {
+    val committed = commit()
+    if (committed) onCommitted()
+    return committed
+}
+
+internal fun prepareEntityLearningStartup(
+    startMdns: () -> Unit,
+    reconcileRenderer: () -> RendererPreparationCoordinator.Result,
+    startLearning: () -> Unit,
+): RendererPreparationCoordinator.Result {
+    startMdns()
+    return reconcileRenderer().also { result ->
+        if (result != RendererPreparationCoordinator.Result.CLOSED) startLearning()
+    }
+}
+
+internal data class EntityLearningShutdownResult(
+    val ingressStopped: Boolean,
+    val rendererDrained: Boolean,
+    val scopeDrained: Boolean,
+    val storeClosed: Boolean,
+)
+
+/** Close every producer before the SQLite-backed learner. A timeout deliberately leaks the store until
+ * process death rather than letting a late HTTP/renderer/scope callback use a closed database. */
+internal fun shutdownEntityLearningAfterIngress(
+    stopIngress: () -> Boolean,
+    closeRendererAdmission: () -> Boolean,
+    detachRuntime: () -> Unit,
+    cancelAndDrainScope: () -> Boolean,
+    closeStore: () -> Unit,
+): EntityLearningShutdownResult {
+    val ingressStopped = stopIngress()
+    val rendererDrained = closeRendererAdmission()
+    detachRuntime()
+    val scopeDrained = cancelAndDrainScope()
+    val storeClosed = ingressStopped && rendererDrained && scopeDrained
+    if (storeClosed) closeStore()
+    return EntityLearningShutdownResult(ingressStopped, rendererDrained, scopeDrained, storeClosed)
+}
 
 /**
  * Persistent foreground service. Hosts the Ktor HTTP listener, the JmDNS advertiser, the MQTT
@@ -176,17 +224,25 @@ class PaneldService : Service() {
             onFailure = { error -> Log.w(TAG, "audio playback failed: ${error.javaClass.simpleName}") },
         )
         system = SystemController(AndroidSystemEnv(this))
-        entityLearning = EntityLearningManager(this, config, scope) {
-            // Synchronization can finish while another renderer is deliberately selected (for example
-            // during a staged cutover). Persist the learned set, but never let that background work
-            // launch DashboardActivity behind the configured renderer's back.
-            if (shouldReloadBuiltinAfterEntityFilterChange(
-                    config.dashboardPackage,
-                    SystemController.BUILTIN_DASHBOARD,
-                )) {
-                system.reloadDashboard(SystemController.BUILTIN_DASHBOARD)
-            }
-        }
+        entityLearning = EntityLearningManager(
+            context = this,
+            config = config,
+            scope = scope,
+            // The runtime owner is initialized here; onStartCommand starts its mDNS instance before the
+            // learner can synchronize, so UUID discovery has a live resolver from the first attempt.
+            resolveInstanceUuid = { urls -> runtime.current().mdns.discoverHaInstanceUuid(urls) },
+            onFilterChanged = {
+                // Synchronization can finish while another renderer is deliberately selected (for example
+                // during a staged cutover). Persist the learned set, but never let that background work
+                // launch DashboardActivity behind the configured renderer's back.
+                if (shouldReloadBuiltinAfterEntityFilterChange(
+                        config.dashboardPackage,
+                        SystemController.BUILTIN_DASHBOARD,
+                    )) {
+                    system.reloadDashboard(SystemController.BUILTIN_DASHBOARD)
+                }
+            },
+        )
         EntityLearningRuntime.attach(entityLearning)
         watchdog = WatchdogController(system, config)
         kiosk = KioskController(this, system, config)
@@ -260,14 +316,21 @@ class PaneldService : Service() {
                     zoom = CompanionDb.readPageZoom(this, Su)?.coerceIn(50, 300),
                 )
             },
-            persist = { borrowed -> config.setBorrowedRendererSettings(
-                url = borrowed.url,
-                accessToken = borrowed.accessToken,
-                refreshToken = borrowed.refreshToken,
-                tokenExpiry = borrowed.tokenExpiry,
-                clientId = borrowed.clientId,
-                zoom = borrowed.zoom,
-            ) },
+            persist = { borrowed ->
+                commitBorrowedRendererTarget(
+                    commit = {
+                        config.setBorrowedRendererSettings(
+                            url = borrowed.url,
+                            accessToken = borrowed.accessToken,
+                            refreshToken = borrowed.refreshToken,
+                            tokenExpiry = borrowed.tokenExpiry,
+                            clientId = borrowed.clientId,
+                            zoom = borrowed.zoom,
+                        )
+                    },
+                    onCommitted = entityLearning::onTargetConfigurationChanged,
+                )
+            },
             completeLaunch = config::completeRendererLaunch,
         )
         server = PaneldServer(
@@ -304,7 +367,6 @@ class PaneldService : Service() {
             rendererPreparation = rendererPreparation,
             entityLearning = entityLearning,
         )
-        entityLearning.start()
     }
 
     private fun buildMqtt(stalePanelId: String? = null): MqttBridge = MqttBridge(
@@ -336,6 +398,7 @@ class PaneldService : Service() {
                 Log.w(TAG, "self-update skipped: another destructive operation is running")
             }
         },
+        onDashboardTargetChanged = entityLearning::onTargetConfigurationChanged,
         stalePanelId = stalePanelId,
     )
 
@@ -677,12 +740,20 @@ class PaneldService : Service() {
             }.getOrNull()?.let { config.setHaBaseUrl(it) }
         }
         runtime.start runtimeStart@{ activeRuntime ->
-            // Re-assert the configured HOME and repair an interrupted switch to the built-in renderer
-            // before the HTTP surface can accept another configuration transaction. The durable retry
-            // condition is built-in + blank URL; borrowed connection and zoom commit atomically.
-            val rendererResult = rendererPreparation.reconcileStartup(
-                ensureHome = { pkg, ready -> system.ensureDashboardHome(pkg, ready) },
-                launchHome = { pkg -> system.launchHome(pkg) },
+            // Learning resolves the HA instance identity through this runtime. Start mDNS before either
+            // the initial learner sync or a borrowed renderer commit can notify the learner of a target.
+            val rendererResult = prepareEntityLearningStartup(
+                startMdns = activeRuntime.mdns::start,
+                reconcileRenderer = {
+                    // Re-assert the configured HOME and repair an interrupted switch to the built-in renderer
+                    // before the HTTP surface can accept another configuration transaction. The durable retry
+                    // condition is built-in + blank URL; borrowed connection and zoom commit atomically.
+                    rendererPreparation.reconcileStartup(
+                        ensureHome = { pkg, ready -> system.ensureDashboardHome(pkg, ready) },
+                        launchHome = { pkg -> system.launchHome(pkg) },
+                    )
+                },
+                startLearning = entityLearning::start,
             )
             if (rendererResult == RendererPreparationCoordinator.Result.PERSIST_FAILED) {
                 Log.e(TAG, "built-in renderer startup preparation did not commit; leaving it retryable")
@@ -695,7 +766,6 @@ class PaneldService : Service() {
             io.github.maxlyth.hapaneld.http.PerfReader.builtinActive = config.dashboardPackage == SystemController.BUILTIN_DASHBOARD
             io.github.maxlyth.hapaneld.http.PerfReader.start(scope)
             server.start()
-            activeRuntime.mdns.start()
             activeRuntime.mqtt.start()
             // Forward our own logcat to the configured aggregator (no-op unless a sink host is set).
             logShipper.start()
@@ -942,16 +1012,35 @@ class PaneldService : Service() {
             netCallback = null
         }
         stopMqttWatchdog()
-        if (::entityLearning.isInitialized) {
-            EntityLearningRuntime.detach(entityLearning)
-            entityLearning.close()
-        }
-        if (!rendererPreparation.close(RENDERER_SHUTDOWN_MS)) {
+        val learningShutdown = shutdownEntityLearningAfterIngress(
+            stopIngress = {
+                if (!::server.isInitialized) true else runCatching { server.stop() }.isSuccess
+            },
+            closeRendererAdmission = {
+                if (!::rendererPreparation.isInitialized) true
+                else rendererPreparation.close(RENDERER_SHUTDOWN_MS)
+            },
+            detachRuntime = {
+                if (::entityLearning.isInitialized) EntityLearningRuntime.detach(entityLearning)
+            },
+            cancelAndDrainScope = {
+                val root = scope.coroutineContext[Job]
+                scope.cancel()
+                if (root == null) true else runBlocking {
+                    withTimeoutOrNull(SCOPE_SHUTDOWN_MS) { root.join(); true } ?: false
+                }
+            },
+            closeStore = { if (::entityLearning.isInitialized) entityLearning.close() },
+        )
+        if (!learningShutdown.ingressStopped) Log.w(TAG, "HTTP ingress did not stop cleanly before learner teardown")
+        if (!learningShutdown.rendererDrained) {
             Log.w(TAG, "renderer transaction did not become idle within ${RENDERER_SHUTDOWN_MS}ms")
         }
-        scope.cancel()
+        if (!learningShutdown.scopeDrained) Log.w(TAG, "service jobs did not drain within ${SCOPE_SHUTDOWN_MS}ms")
+        if (::entityLearning.isInitialized && !learningShutdown.storeClosed) {
+            Log.w(TAG, "entity-learning store left open for process teardown because a producer did not drain")
+        }
         val stopped = runtime.shutdown(RUNTIME_SHUTDOWN_MS) { activeRuntime ->
-            runCatching { server.stop() }
             val audioStopped = runCatching {
                 kotlinx.coroutines.runBlocking { audio.close(AUDIO_SHUTDOWN_MS) }
             }.getOrDefault(false)
@@ -1050,6 +1139,7 @@ class PaneldService : Service() {
         private const val KIOSK_CANCEL_JOIN_MS = 500L
         private const val WATCHDOG_CANCEL_JOIN_MS = 500L
         private const val RENDERER_SHUTDOWN_MS = 1_000L
+        private const val SCOPE_SHUTDOWN_MS = 2_000L
         private const val AUDIO_SHUTDOWN_MS = 2_000L
         private const val RUNTIME_SHUTDOWN_MS = 5_000L
 

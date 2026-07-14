@@ -229,7 +229,12 @@ object DashboardConfigurationLint {
 
     private fun parseRule(raw: JSONObject): Rule {
         val domains = structuralValues(raw.opt("domain"), DOMAIN)
-        val patterns = structuralValues(raw.opt("entity_id"), ENTITY_PATTERN)
+        val rawEntityPatterns = values(raw.opt("entity_id"))
+        val invalidEntityPattern = rawEntityPatterns.any { !isEntityPattern(it.lowercase()) }
+        // Entity patterns in one include rule are alternatives. If any pattern is unsafe, dropping only
+        // that alternative would under-count the selector; discard the complete pattern constraint and
+        // retain only independent domain/area/floor/label constraints as a conservative superset.
+        val patterns = if (invalidEntityPattern) emptySet() else structuralValues(raw.opt("entity_id"), ENTITY_PATTERN)
         val areas = structuralValues(raw.opt("area"), IDENTIFIER) + structuralValues(raw.opt("area_id"), IDENTIFIER)
         val floors = structuralValues(raw.opt("floor"), IDENTIFIER) + structuralValues(raw.opt("floor_id"), IDENTIFIER)
         val labels = structuralValues(raw.opt("label"), IDENTIFIER) + structuralValues(raw.opt("label_id"), IDENTIFIER)
@@ -237,7 +242,7 @@ object DashboardConfigurationLint {
         val presentationKeys = setOf("options")
         val keys = raw.keys().asSequence().toSet()
         val suppliedStructural = keys.intersect(structuralKeys)
-        val invalidStructural = suppliedStructural.any { key ->
+        val invalidStructural = invalidEntityPattern || suppliedStructural.any { key ->
             values(raw.opt(key)).any { value ->
                 containsTemplate(value) || when (key) {
                     "domain" -> !DOMAIN.matches(value.lowercase())
@@ -275,8 +280,10 @@ object DashboardConfigurationLint {
     }
 
     private fun compilePattern(pattern: String): Regex? = when {
-        pattern.length >= 2 && pattern.startsWith('/') && pattern.endsWith('/') ->
-            runCatching { Regex(pattern.substring(1, pattern.length - 1)) }.getOrNull()
+        pattern.length >= 2 && pattern.startsWith('/') && pattern.endsWith('/') -> {
+            val source = pattern.substring(1, pattern.length - 1)
+            if (isSafeEntitySelectorRegex(source)) runCatching { Regex(source) }.getOrNull() else null
+        }
         else -> runCatching {
             Regex(buildString {
                 append('^')
@@ -288,6 +295,51 @@ object DashboardConfigurationLint {
                 append('$')
             })
         }.getOrNull()
+    }
+
+    /** Auto-entities slash patterns originate in dashboard configuration and run against the complete
+     *  catalogue. Keep the supported subset deliberately regular: no groups, alternation, counted
+     *  repetition or backreferences means quantifiers cannot nest. Permit only one unbounded quantifier:
+     *  adjacent or separated `.*`/`+` fragments can still produce catastrophic backtracking even without
+     *  those richer constructs. Rejected patterns are
+     *  treated as an unconstrained selector by [match], producing a blocking broad-selector diagnostic. */
+    internal fun isSafeEntitySelectorRegex(source: String): Boolean {
+        if (source.isEmpty() || source.length > MAX_PATTERN_LENGTH) return false
+        var escaped = false
+        var inClass = false
+        var previousQuantifier = false
+        var unboundedQuantifiers = 0
+        source.forEach { ch ->
+            if (escaped) {
+                if (ch.isDigit()) return false
+                escaped = false
+                previousQuantifier = false
+                return@forEach
+            }
+            if (ch == '\\') {
+                escaped = true
+                previousQuantifier = false
+                return@forEach
+            }
+            if (inClass) {
+                if (ch == ']') inClass = false
+                return@forEach
+            }
+            when (ch) {
+                '[' -> { inClass = true; previousQuantifier = false }
+                '(', ')', '{', '}', '|' -> return false
+                '*', '+' -> {
+                    if (previousQuantifier || ++unboundedQuantifiers > 1) return false
+                    previousQuantifier = true
+                }
+                '?' -> {
+                    if (previousQuantifier) return false
+                    previousQuantifier = true
+                }
+                else -> previousQuantifier = false
+            }
+        }
+        return !escaped && !inClass
     }
 
     private fun parseMetadata(json: String?): Metadata {
@@ -334,7 +386,9 @@ object DashboardConfigurationLint {
         ENTITY_ID.matches(value) -> true
         GLOB_ENTITY_ID.matches(value) -> true
         value.length >= 2 && value.startsWith('/') && value.endsWith('/') ->
-            runCatching { Regex(value.substring(1, value.length - 1)) }.isSuccess
+            value.substring(1, value.length - 1).let { source ->
+                isSafeEntitySelectorRegex(source) && runCatching { Regex(source) }.isSuccess
+            }
         else -> false
     }
 

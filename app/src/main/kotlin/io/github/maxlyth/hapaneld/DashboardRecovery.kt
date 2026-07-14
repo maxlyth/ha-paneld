@@ -42,11 +42,13 @@ internal enum class WakeMediaRecoveryAction { NONE, INSPECT, RELOAD }
 internal class WakeMediaRecoveryGate {
     private var sequence = 0L
     private var current: WakeMediaRecoveryTicket? = null
+    private var deferred = false
     private var recoveryClaimed = false
     private var closed = false
 
     @Synchronized fun begin(rendererGeneration: Long): WakeMediaRecoveryTicket {
         check(!closed) { "wake media recovery gate is closed" }
+        deferred = false
         return current?.takeIf { it.rendererGeneration == rendererGeneration } ?: WakeMediaRecoveryTicket(
             cycle = ++sequence,
             rendererGeneration = rendererGeneration,
@@ -54,6 +56,27 @@ internal class WakeMediaRecoveryGate {
             current = it
             recoveryClaimed = false
         }
+    }
+
+    /** Preserve a real wake edge until this exact renderer generation reconnects its frontend. */
+    @Synchronized fun defer(rendererGeneration: Long): WakeMediaRecoveryTicket {
+        check(!closed) { "wake media recovery gate is closed" }
+        val ticket = current?.takeIf { it.rendererGeneration == rendererGeneration } ?: WakeMediaRecoveryTicket(
+            cycle = ++sequence,
+            rendererGeneration = rendererGeneration,
+        ).also {
+            current = it
+            recoveryClaimed = false
+        }
+        deferred = true
+        return ticket
+    }
+
+    /** Claim a deferred wake only for the renderer that owned the original dark-to-awake edge. */
+    @Synchronized fun activateDeferred(rendererGeneration: Long): WakeMediaRecoveryTicket? {
+        val ticket = current?.takeIf { deferred && it.rendererGeneration == rendererGeneration } ?: return null
+        deferred = false
+        return ticket
     }
 
     @Synchronized fun owns(ticket: WakeMediaRecoveryTicket): Boolean =
@@ -77,11 +100,15 @@ internal class WakeMediaRecoveryGate {
     }
 
     @Synchronized fun complete(ticket: WakeMediaRecoveryTicket) {
-        if (current == ticket) current = null
+        if (current == ticket) {
+            current = null
+            deferred = false
+        }
     }
 
     @Synchronized fun invalidate() {
         current = null
+        deferred = false
         recoveryClaimed = false
     }
 
@@ -105,7 +132,7 @@ internal object WakeMediaRecoveryScript {
           };
           const live=video=>{const stream=video.srcObject;return !!(stream&&typeof stream.getVideoTracks==='function'&&stream.getVideoTracks().some(track=>track.readyState==='live'));};
           const visible=video=>{const rect=video.getBoundingClientRect();const style=getComputedStyle(video);return video.isConnected&&rect.width>0&&rect.height>0&&rect.bottom>0&&rect.right>0&&rect.top<innerHeight&&rect.left<innerWidth&&style.display!=='none'&&style.visibility!=='hidden'&&Number(style.opacity)!==0;};
-          const frames=video=>{try{return typeof video.getVideoPlaybackQuality==='function'?video.getVideoPlaybackQuality().totalVideoFrames:(video.webkitDecodedFrameCount||0);}catch(_){return 0;}};
+          const frames=video=>{try{if(typeof video.getVideoPlaybackQuality==='function'){const n=Number(video.getVideoPlaybackQuality().totalVideoFrames);if(Number.isFinite(n))return {supported:true,value:n};}if(typeof video.webkitDecodedFrameCount==='number'&&Number.isFinite(video.webkitDecodedFrameCount))return {supported:true,value:video.webkitDecodedFrameCount};}catch(_){}return {supported:false,value:0};};
           visit(document);
           const candidates=videos.filter(video=>visible(video)&&!video.ended&&(!video.paused||video.autoplay||live(video)));
           candidates.forEach(video=>{try{const playing=video.play();if(playing&&typeof playing.catch==='function')playing.catch(()=>{});}catch(_){}});
@@ -122,19 +149,17 @@ internal object WakeMediaRecoveryScript {
           if(!state||state.cycle!==$cycle||!state.samples.length)return -1;
           const live=video=>{const stream=video.srcObject;return !!(stream&&typeof stream.getVideoTracks==='function'&&stream.getVideoTracks().some(track=>track.readyState==='live'));};
           const visible=video=>{const rect=video.getBoundingClientRect();const style=getComputedStyle(video);return video.isConnected&&rect.width>0&&rect.height>0&&rect.bottom>0&&rect.right>0&&rect.top<innerHeight&&rect.left<innerWidth&&style.display!=='none'&&style.visibility!=='hidden'&&Number(style.opacity)!==0;};
-          const frames=video=>{try{return typeof video.getVideoPlaybackQuality==='function'?video.getVideoPlaybackQuality().totalVideoFrames:(video.webkitDecodedFrameCount||0);}catch(_){return 0;}};
+          const frames=video=>{try{if(typeof video.getVideoPlaybackQuality==='function'){const n=Number(video.getVideoPlaybackQuality().totalVideoFrames);if(Number.isFinite(n))return {supported:true,value:n};}if(typeof video.webkitDecodedFrameCount==='number'&&Number.isFinite(video.webkitDecodedFrameCount))return {supported:true,value:video.webkitDecodedFrameCount};}catch(_){}return {supported:false,value:0};};
           if(state.samples.some(sample=>!visible(sample.video)||sample.video.ended||(sample.video.paused&&!sample.video.autoplay&&!live(sample.video))))return -1;
-          const progressed=state.samples.some(sample=>(Number(sample.video.currentTime)||0)>sample.time+0.05||frames(sample.video)>sample.frames);
-          return progressed?0:1;
+          const progress=state.samples.map(sample=>{const now=frames(sample.video);if(sample.frames.supported){if(!now.supported)return null;return now.value>sample.frames.value;}return (Number(sample.video.currentTime)||0)>sample.time+0.05;});
+          if(progress.some(value=>value===null))return -1;
+          return progress.every(Boolean)?0:1;
         }catch(_){return -1;}})()
         """.trimIndent()
 }
 
 internal fun javascriptIntResult(result: String?): Int? =
     result?.trim()?.removeSurrounding("\"")?.toIntOrNull()
-
-internal fun shouldArmWakeMediaRecovery(wasAwake: Boolean, awake: Boolean, frontendHealthy: Boolean): Boolean =
-    !wasAwake && awake && frontendHealthy
 
 /**
  * Keep top-level navigation on the configured HA authority. HTTP↔HTTPS redirects remain allowed when
