@@ -34,8 +34,19 @@ class ConfigTransactionTest {
         assertEquals(listOf("light.old", "sensor.old"), config.dashboardEntityFilterIds)
         assertEquals(1, prefs.values["dashboard_entity_default_resolver_version"])
         assertEquals(target, prefs.values["dashboard_entity_default_resolver_target"])
+        assertEquals(target, prefs.values["dashboard_entity_default_resolver_pending"])
         assertEquals(DashboardEntityDefaultResolverMigration.NOT_NEEDED,
             config.migrateDashboardEntityDefaultResolver())
+
+        // A process restart must retain both the native hold and the obligation to replace the set.
+        val restarted = Config(prefs.instance)
+        assertTrue(restarted.dashboardEntityDefaultResolverRebootstrapPending)
+        assertFalse(restarted.dashboardEntityFilterEnabled)
+        assertTrue(restarted.commitDashboardEntitySubscription(true, listOf("light.new"), applied = true))
+        assertFalse("the replacement cannot activate before its latch clears", restarted.dashboardEntityFilterEnabled)
+        assertTrue(restarted.clearDashboardEntityDefaultResolverRebootstrapPending())
+        assertTrue(restarted.dashboardEntityFilterEnabled)
+        assertEquals(listOf("light.new"), restarted.dashboardEntityFilterIds)
     }
 
     @Test fun defaultResolverUpgradeDoesNotInvalidateExplicitDashboardFilter() {
@@ -91,6 +102,7 @@ class ConfigTransactionTest {
         assertEquals(true, prefs.values["dashboard_entity_filter_enabled"])
         assertEquals(true, prefs.values["dashboard_entity_learning_applied"])
         assertFalse(prefs.values.containsKey("dashboard_entity_default_resolver_version"))
+        assertFalse(prefs.values.containsKey("dashboard_entity_default_resolver_pending"))
     }
 
     @Test fun disablingAndReenablingLearningRestoresThePreservedNarrowStream() {

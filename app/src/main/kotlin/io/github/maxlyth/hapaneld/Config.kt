@@ -509,6 +509,7 @@ class Config private constructor(
      */
     val dashboardEntityFilterEnabled: Boolean
         get() = !dashboardEntityDefaultResolverMigrationRequired &&
+            !dashboardEntityDefaultResolverRebootstrapPending &&
             entityStateOwnedByCurrent("dashboard_entity_filter_instance") &&
             prefs.getBoolean("dashboard_entity_filter_enabled", false)
     val dashboardEntityFilterIds: List<String>
@@ -662,6 +663,7 @@ class Config private constructor(
         val committed = applyBatch { edit {
             putInt(DASHBOARD_ENTITY_DEFAULT_RESOLVER_VERSION_KEY, DASHBOARD_ENTITY_DEFAULT_RESOLVER_VERSION)
             putString(DASHBOARD_ENTITY_DEFAULT_RESOLVER_TARGET_KEY, dashboardEntityTargetKey)
+            putString(DASHBOARD_ENTITY_DEFAULT_RESOLVER_PENDING_KEY, dashboardEntityTargetKey)
             putBoolean("dashboard_entity_filter_enabled", false)
             putBoolean("dashboard_entity_learning_applied", false)
             putString("dashboard_entity_applied_instance", dashboardEntityTargetKey)
@@ -681,6 +683,19 @@ class Config private constructor(
                 DASHBOARD_ENTITY_DEFAULT_RESOLVER_VERSION ||
                 prefs.getString(DASHBOARD_ENTITY_DEFAULT_RESOLVER_TARGET_KEY, "").orEmpty() != target
         }
+
+    internal val dashboardEntityDefaultResolverRebootstrapPending: Boolean
+        get() {
+            val target = dashboardEntityTargetKey
+            return target.isNotBlank() &&
+                prefs.getString(DASHBOARD_ENTITY_DEFAULT_RESOLVER_PENDING_KEY, "").orEmpty() == target
+        }
+
+    /** Clear the durable hold only after the replacement subscription has committed successfully. */
+    @Synchronized internal fun clearDashboardEntityDefaultResolverRebootstrapPending(): Boolean {
+        if (!dashboardEntityDefaultResolverRebootstrapPending) return true
+        return applyBatch { edit { remove(DASHBOARD_ENTITY_DEFAULT_RESOLVER_PENDING_KEY) } }
+    }
 
     /** Change automatic-learning mode without exposing a half-disabled stream. A fresh enable clears
      * the activation latch and reactivates any current-owner preserved allow-list for safe observation;
@@ -1148,6 +1163,8 @@ class Config private constructor(
             "dashboard_entity_default_resolver_version"
         private const val DASHBOARD_ENTITY_DEFAULT_RESOLVER_TARGET_KEY =
             "dashboard_entity_default_resolver_target"
+        private const val DASHBOARD_ENTITY_DEFAULT_RESOLVER_PENDING_KEY =
+            "dashboard_entity_default_resolver_pending"
         private const val DASHBOARD_ENTITY_DEFAULT_RESOLVER_VERSION = 1
         const val DEFAULT_PORT = 8888
         const val VERSION = BuildConfig.VERSION_NAME

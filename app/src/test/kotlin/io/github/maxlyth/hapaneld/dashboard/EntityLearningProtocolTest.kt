@@ -18,6 +18,12 @@ class EntityLearningProtocolTest {
             lastSyncAt = 1234L,
             resolverMigration = DashboardEntityDefaultResolverMigration.NOT_NEEDED,
         ))
+        assertTrue(shouldSyncEntityLearningOnStartup(
+            learningEnabled = true,
+            lastSyncAt = 1234L,
+            resolverMigration = DashboardEntityDefaultResolverMigration.NOT_NEEDED,
+            forceBootstrap = true,
+        ))
         assertFalse(shouldSyncEntityLearningOnStartup(
             learningEnabled = true,
             lastSyncAt = 0L,

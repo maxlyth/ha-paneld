@@ -69,6 +69,7 @@ class EntityLearningManager(
                 config.dashboardEntityLearningEnabled,
                 snapshot.lastSyncAt,
                 resolverMigration,
+                resetBootstrapPending,
             )) {
             syncNow(if (resolverMigration == DashboardEntityDefaultResolverMigration.REBOOTSTRAP) {
                 "default-resolver-upgrade"
@@ -80,7 +81,8 @@ class EntityLearningManager(
 
     private fun applyDefaultResolverMigration(): DashboardEntityDefaultResolverMigration {
         val result = config.migrateDashboardEntityDefaultResolver()
-        if (result == DashboardEntityDefaultResolverMigration.REBOOTSTRAP) {
+        if (result == DashboardEntityDefaultResolverMigration.REBOOTSTRAP ||
+            config.dashboardEntityDefaultResolverRebootstrapPending) {
             // Preserve the old ids only as inactive evidence. The next scan must use bootstrap rules,
             // even when the old catalog has a non-zero lastSyncAt or the preserved list is non-empty.
             resetBootstrapPending = true
@@ -194,6 +196,9 @@ class EntityLearningManager(
         val preview = subscriptionPreview(active)
         check(config.commitDashboardEntitySubscription(true, active, applied = true)) {
             "failed to commit learned entity set"
+        }
+        check(config.clearDashboardEntityDefaultResolverRebootstrapPending()) {
+            "failed to clear default-dashboard replacement latch"
         }
         invalidateEffects()
         if (preview.streamChange) onFilterChanged()
@@ -318,6 +323,11 @@ class EntityLearningManager(
                 val changed = active != snapshot.filterIds || !snapshot.filterEnabled
                 check(config.commitDashboardEntitySubscription(true, active, applied = true)) {
                     "failed to commit automatic entity set"
+                }
+                if (snapshot.forceBootstrap) {
+                    check(config.clearDashboardEntityDefaultResolverRebootstrapPending()) {
+                        "failed to clear default-dashboard replacement latch"
+                    }
                 }
                 if (changed) onFilterChanged()
             }
@@ -1231,8 +1241,9 @@ internal fun shouldSyncEntityLearningOnStartup(
     learningEnabled: Boolean,
     lastSyncAt: Long,
     resolverMigration: DashboardEntityDefaultResolverMigration,
+    forceBootstrap: Boolean = false,
 ): Boolean = learningEnabled && resolverMigration != DashboardEntityDefaultResolverMigration.PERSIST_FAILED &&
-    (resolverMigration == DashboardEntityDefaultResolverMigration.REBOOTSTRAP || lastSyncAt == 0L)
+    (forceBootstrap || resolverMigration == DashboardEntityDefaultResolverMigration.REBOOTSTRAP || lastSyncAt == 0L)
 
 /** An empty installation starts narrow; any stored manual list is preserved for explicit review. */
 internal fun shouldBootstrapEntityLearning(
