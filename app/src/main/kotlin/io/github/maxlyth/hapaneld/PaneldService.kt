@@ -913,7 +913,7 @@ class PaneldService : Service() {
             runCatching { power.apply(false) }   // release the wakelock so we don't leak it on teardown
             runCatching { navbar.cleanup() }
             runCatching { watchdog.stop() }
-            runCatching { ledEffect.stop() }     // kill any running LED effect loop with the service
+            runCatching { ledEffect.close() }    // terminally reject late output and join the effect loop
             runCatching { sensors.stop() }
             runCatching { logShipper.stop() }
             runCatching { io.github.maxlyth.hapaneld.http.PerfReader.stop() }

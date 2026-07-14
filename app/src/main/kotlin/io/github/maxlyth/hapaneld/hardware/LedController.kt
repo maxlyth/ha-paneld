@@ -16,16 +16,19 @@ interface LedController {
     /** True if the backend can set arbitrary RGB; false = brightness-only (HA publishes no colour). */
     fun colorCapable(): Boolean
 
-    fun setRgb(r: Int, g: Int, b: Int)
-    fun off()
+    /** Apply one RGB value and report whether the backend confirmed the complete operation. */
+    fun setRgb(r: Int, g: Int, b: Int): Boolean
+
+    /** Turn every channel off and report whether the backend confirmed the operation. */
+    fun off(): Boolean
 }
 
 /** Used on panels with no known LED backend. */
 class NoOpLedController : LedController {
     override fun available() = false
     override fun colorCapable() = false
-    override fun setRgb(r: Int, g: Int, b: Int) {}
-    override fun off() {}
+    override fun setRgb(r: Int, g: Int, b: Int) = false
+    override fun off() = false
 }
 
 /**

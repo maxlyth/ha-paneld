@@ -9,6 +9,7 @@ import io.github.maxlyth.hapaneld.control.BootChimeController
 import io.github.maxlyth.hapaneld.control.BrightnessController
 import io.github.maxlyth.hapaneld.control.CpuController
 import io.github.maxlyth.hapaneld.control.LedEffectController
+import io.github.maxlyth.hapaneld.control.LedCommandPolicy
 import io.github.maxlyth.hapaneld.hardware.LedEffects
 import io.github.maxlyth.hapaneld.util.BrokerEndpoint
 import io.github.maxlyth.hapaneld.util.HaLink
@@ -244,6 +245,9 @@ class MqttBridge(
     // Last brightness reported to HA on stateScreen (-1 = screen reported OFF); heartbeat reconciles
     // the effective hardware backlight against this so firmware dims reach HA between commands.
     @Volatile private var lastScreenBrightness = -1
+    // LED hardware has no readback on every backend. Publish desired state only after the current bridge
+    // has a confirmed write; a failed command/effect frame remains Unknown instead of fabricating success.
+    @Volatile private var ledActuationKnown = false
     // Effective (node-scale) level the last command settled at; -1 = capture on next heartbeat tick.
     @Volatile private var screenEffectiveBaseline = -1
     // Per-channel sync state: previous tick's read (settle detection) + last published volume.
@@ -313,11 +317,11 @@ class MqttBridge(
             }
         }
         channel("led", stateLed) {
-            val p = config.lastLed.split(",").mapNotNull { it.toIntOrNull() }
-            if (p.size == 5 && p[0] == 1) {
-                val effect = LedEffects.Effect.from(config.lastLedEffect)?.effectName ?: "none"
-                known(ledStateJson(p[1], p[2], p[3], p[4], effect))
-            } else known("""{"state":"OFF"}""")
+            LedCommandPolicy.statePayload(
+                LedCommandPolicy.stored(config.lastLed, config.lastLedEffect),
+                ledActuationKnown,
+                ledEffect.status(),
+            )?.let(known) ?: unknown
         }
         channel("navigate", stateNavigate) { known(config.lastNavigate.ifEmpty { "/" }) }
         channel("home_dashboard", stateHomeDashboard) { known(config.homeDashboard) }
@@ -594,19 +598,20 @@ class MqttBridge(
         // Navigate: last pushed path, else default to the dashboard root "/" so the entity shows a
         // sensible local path instead of "unknown" before anything has been navigated.
         // LED: re-apply the last colour to the hardware (reset on reboot) and publish it.
-        val led = config.lastLed.split(",").mapNotNull { it.toIntOrNull() }
-        if (led.size == 5 && led[0] == 1) {
-            val (_, br, r, g, b) = led
-            val effect = LedEffects.Effect.from(config.lastLedEffect)
-            if (effect != null) {
-                ledEffect.start(effect, r, g, b, br)
-            } else {
-                this.led.setRgb(r * br / 255, g * br / 255, b * br / 255)
-            }
+        val desiredLed = LedCommandPolicy.stored(config.lastLed, config.lastLedEffect)
+        ledActuationKnown = false
+        ledActuationKnown = if (desiredLed.on && desiredLed.effect != null) {
+            ledEffect.start(desiredLed.effect, desiredLed.red, desiredLed.green, desiredLed.blue, desiredLed.brightness)
+        } else if (desiredLed.on) {
+            ledEffect.setSolid(
+                desiredLed.red * desiredLed.brightness / 255,
+                desiredLed.green * desiredLed.brightness / 255,
+                desiredLed.blue * desiredLed.brightness / 255,
+            )
         } else {
             // Force the hardware off too — the LED can power up to a default on reboot, so publishing
             // OFF without driving it leaves HA and the physical LED disagreeing (seen on rk3576).
-            this.led.off()
+            ledEffect.setOff()
         }
         config.lastButtonBacklight.takeIf { it >= 0 }?.let { HelperClient.send("BTN $it") }
     }
@@ -717,42 +722,28 @@ class MqttBridge(
     }
 
     private fun handleLed(payload: String) {
-        val json = JSONObject(payload)
-        val on = json.optString("state", "ON").equals("ON", ignoreCase = true)
-        if (!on) {
-            ledEffect.stop()
-            led.off()
-            config.lastLed = "0,0,0,0,0"
-            config.lastLedEffect = ""
-            stateConverger.reconcile("led", force = true)
-            return
-        }
-        // HA's built-in light `effect`; null = "none"/blank/absent = a plain solid colour.
-        val effect = LedEffects.Effect.from(json.optString("effect"))
-        // Fall back to the last solid colour/brightness when the command omits them — HA sends
-        // {"state":"ON","effect":"strobe"} with no colour when you just pick an effect in the light card.
-        val base = config.lastLed.split(",").mapNotNull { it.toIntOrNull() }.takeIf { it.size == 5 && it[0] == 1 }
-        val br = if (json.has("brightness")) json.getInt("brightness") else base?.get(1) ?: 255
-        val color = json.optJSONObject("color")
-        val cr = color?.optInt("r", 255) ?: base?.get(2) ?: 255
-        val cg = color?.optInt("g", 255) ?: base?.get(3) ?: 255
-        val cb = color?.optInt("b", 255) ?: base?.get(4) ?: 255
-        config.lastLed = "1,$br,$cr,$cg,$cb" // base colour, for restore + as the effect's colour
-        if (effect != null) {
-            ledEffect.start(effect, cr, cg, cb, br)
-            config.lastLedEffect = effect.effectName
-            stateConverger.reconcile("led", force = true)
+        val desired = LedCommandPolicy.command(
+            payload,
+            LedCommandPolicy.stored(config.lastLed, config.lastLedEffect),
+        )
+        // Persist user intent even when hardware is temporarily unreachable so reconnect can retry it,
+        // but clear observation authority before exposing the new desired state.
+        ledActuationKnown = false
+        config.lastLed = desired.storedColor()
+        config.lastLedEffect = desired.storedEffect()
+        ledActuationKnown = if (!desired.on) {
+            ledEffect.setOff()
+        } else if (desired.effect != null) {
+            ledEffect.start(desired.effect, desired.red, desired.green, desired.blue, desired.brightness)
         } else {
-            ledEffect.stop()
-            // Apply HA brightness as a scalar over the colour (json light sends them separately).
-            led.setRgb(cr * br / 255, cg * br / 255, cb * br / 255)
-            config.lastLedEffect = ""
-            stateConverger.reconcile("led", force = true)
+            ledEffect.setSolid(
+                desired.red * desired.brightness / 255,
+                desired.green * desired.brightness / 255,
+                desired.blue * desired.brightness / 255,
+            )
         }
+        stateConverger.reconcile("led", force = true)
     }
-
-    private fun ledStateJson(br: Int, r: Int, g: Int, b: Int, effect: String = "none") =
-        """{"state":"ON","color_mode":"rgb","brightness":$br,"color":{"r":$r,"g":$g,"b":$b},"effect":"$effect"}"""
 
     private fun handleWakeOnWave(payload: String) {
         val on = payload.trim().equals("ON", ignoreCase = true)

@@ -2,13 +2,16 @@ package io.github.maxlyth.hapaneld.control
 
 import io.github.maxlyth.hapaneld.hardware.LedController
 import io.github.maxlyth.hapaneld.hardware.LedEffects
-import io.github.maxlyth.hapaneld.util.periodic
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Runs one LED [LedEffects.Effect] as a cancellable background loop, driving [led] a frame at a time
@@ -25,11 +28,9 @@ import kotlinx.coroutines.runBlocking
  * ([io.github.maxlyth.hapaneld.hardware.SocketLedController] via `HelperClient`) does blocking socket
  * I/O on every frame. [start]/[stop] are called from the MQTT callback thread (off-main) in `handleLed`.
  *
- * [start] and [stop] are `@Synchronized` and tear the previous job down with **cancel-and-join**, so no
- * in-flight frame can write to [led] after the caller then applies a solid colour / off — otherwise a
- * frame mid-write (a blocking socket round-trip on TPA10) could land *after* `led.off()` and leave the
- * LED stuck lit while HA shows OFF. The join is bounded by one frame write (a cancelled `delay` throws
- * at once; a blocking HAL write is ≤ one ioctl / socket round-trip), which is safe off the main thread.
+ * [start], [setSolid], [setOff], [stop], and [close] are `@Synchronized` and tear the previous job down
+ * with **cancel-and-join**, so no in-flight frame can land after its replacement. [close] is terminal:
+ * once service teardown begins, a late MQTT callback cannot restart an effect or write a solid value.
  *
  * [scope] is injectable purely so unit tests can drive the loop on a real test dispatcher; production
  * always uses the default IO scope. It must be a real dispatcher, not a virtual-time TestScope — the
@@ -40,18 +41,55 @@ class LedEffectController(
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
 ) {
     @Volatile private var job: Job? = null
+    private val runtime = AtomicReference(Runtime(0, Status.IDLE))
 
-    /** Start (or replace) [effect], using base colour [r]/[g]/[b] scaled by brightness [br] (all 0..255). */
+    enum class Status { IDLE, RUNNING, FAILED, CLOSED }
+
+    private data class Runtime(val generation: Long, val status: Status)
+
+    /** Start or replace [effect]. The first frame is confirmed before success is returned. */
     @Synchronized
-    fun start(effect: LedEffects.Effect, r: Int, g: Int, b: Int, br: Int) {
-        cancelAndJoinCurrent()
-        var step = 0
-        job = scope.periodic(effect.stepMs, tag = TAG, name = "led-${effect.effectName}") {
-            when (val f = LedEffects.frame(effect, step++, r, g, b, br)) {
-                is LedEffects.Frame.Rgb -> led.setRgb(f.r, f.g, f.b)
-                LedEffects.Frame.Off -> led.off()
+    fun start(effect: LedEffects.Effect, r: Int, g: Int, b: Int, br: Int): Boolean {
+        if (status() == Status.CLOSED) return false
+        cancelAndJoinCurrent(Status.IDLE)
+        if (!write(LedEffects.frame(effect, 0, r, g, b, br))) {
+            setStatus(Status.FAILED)
+            return false
+        }
+        val run = setStatus(Status.RUNNING)
+        job = scope.launch {
+            var step = 1
+            try {
+                while (isActive) {
+                    delay(effect.stepMs)
+                    if (!write(LedEffects.frame(effect, step++, r, g, b, br))) {
+                        runtime.compareAndSet(run, Runtime(run.generation, Status.FAILED))
+                        break
+                    }
+                }
+            } finally {
+                // An external scope cancellation is a failed owner unless stop/close/replacement already
+                // advanced the generation. A normal owned cancellation therefore cannot overwrite state.
+                runtime.compareAndSet(run, Runtime(run.generation, Status.FAILED))
             }
         }
+        return true
+    }
+
+    /** Cancel any effect, then confirm one solid RGB write. */
+    @Synchronized
+    fun setSolid(r: Int, g: Int, b: Int): Boolean {
+        if (status() == Status.CLOSED) return false
+        cancelAndJoinCurrent(Status.IDLE)
+        return write(LedEffects.Frame.Rgb(r, g, b)).also { if (!it) setStatus(Status.FAILED) }
+    }
+
+    /** Cancel any effect, then confirm all channels off. */
+    @Synchronized
+    fun setOff(): Boolean {
+        if (status() == Status.CLOSED) return false
+        cancelAndJoinCurrent(Status.IDLE)
+        return write(LedEffects.Frame.Off).also { if (!it) setStatus(Status.FAILED) }
     }
 
     /**
@@ -60,18 +98,40 @@ class LedEffectController(
      */
     @Synchronized
     fun stop() {
-        cancelAndJoinCurrent()
+        if (status() != Status.CLOSED) cancelAndJoinCurrent(Status.IDLE)
     }
 
     /** True while an effect loop is active. */
-    fun running(): Boolean = job?.isActive == true
+    fun running(): Boolean = status() == Status.RUNNING && job?.isActive == true
+
+    fun status(): Status = runtime.get().status
+
+    /** Terminally refuse new output and wait for the last owned frame. Idempotent. */
+    @Synchronized
+    fun close() {
+        if (status() != Status.CLOSED) cancelAndJoinCurrent(Status.CLOSED)
+    }
 
     /** Cancel the current job and block until its last frame has finished, so no stale frame survives. */
-    private fun cancelAndJoinCurrent() {
+    private fun cancelAndJoinCurrent(next: Status) {
+        setStatus(next)
         val j = job ?: return
         job = null
         runBlocking { j.cancelAndJoin() }
     }
+
+    private fun setStatus(status: Status): Runtime {
+        val next = Runtime(runtime.get().generation + 1, status)
+        runtime.set(next)
+        return next
+    }
+
+    private fun write(frame: LedEffects.Frame): Boolean = runCatching {
+        when (frame) {
+            is LedEffects.Frame.Rgb -> led.setRgb(frame.r, frame.g, frame.b)
+            LedEffects.Frame.Off -> led.off()
+        }
+    }.onFailure { android.util.Log.w(TAG, "LED write failed", it) }.getOrDefault(false)
 
     private companion object {
         const val TAG = "ha-paneld/led-fx"

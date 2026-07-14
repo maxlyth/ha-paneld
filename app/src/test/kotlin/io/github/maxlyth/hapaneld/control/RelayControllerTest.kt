@@ -62,11 +62,58 @@ class RelayControllerTest {
         assertEquals(1, r.count())
     }
 
+    @Test fun relayDiscoveryStopsAtTheFirstMissingIndex() {
+        val (r, _) = relay(mapOf("ls $base" to "relay1 relay3 relay99"))
+
+        assertEquals(1, r.count())
+    }
+
+    @Test fun relayDiscoveryRequiresCanonicalNodeNames() {
+        val (r, _) = relay(mapOf("ls $base" to "relay01 relay-1 relayx"))
+
+        assertEquals(0, r.count())
+    }
+
+    @Test fun outOfRangeRelayNeverReachesTheRootWriter() {
+        val (r, root) = relay(mapOf("ls $base" to "relay1 relay2"))
+
+        assertFalse(r.set(0, true))
+        assertFalse(r.set(3, true))
+        assertEquals(null, r.read(3))
+        assertFalse(root.ran.any { it.contains("relay0") || it.contains("relay3") })
+        assertFalse(root.outputRan.any { it.contains("cat $base/relay3") })
+    }
+
     @Test fun ledCountCountsPresentValueNodes() {
         val ledBase = 147
         val outputs = mapOf("ls $base" to "relay1") +
             (0 until 4).associate { "gpio${ledBase + it}/value" to "x" }
         val (r, _) = relay(outputs, ledBase = ledBase)
         assertEquals(4, r.ledCount())
+    }
+
+    @Test fun ledDiscoveryDoesNotShiftPastAMissingPin() {
+        val ledBase = 147
+        val outputs = mapOf(
+            "gpio147/value" to "x",
+            "gpio148/value" to "",
+            "gpio149/value" to "x",
+            "gpio150/value" to "x",
+        )
+        val (r, _) = relay(outputs, ledBase = ledBase)
+
+        assertEquals(1, r.ledCount())
+    }
+
+    @Test fun outOfRangeButtonLedNeverAddressesAnotherGpio() {
+        val ledBase = 147
+        val outputs = (0 until 4).associate { "gpio${ledBase + it}/value" to "x" }
+        val (r, root) = relay(outputs, ledBase = ledBase)
+
+        assertFalse(r.ledSet(-1, true))
+        assertFalse(r.ledSet(4, true))
+        assertEquals(null, r.ledRead(4))
+        assertFalse(root.ran.any { it.contains("gpio146") || it.contains("gpio151") })
+        assertFalse(root.outputRan.any { it.contains("gpio146") || it.contains("gpio151") })
     }
 }

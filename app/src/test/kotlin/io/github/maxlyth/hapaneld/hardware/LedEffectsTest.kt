@@ -9,6 +9,11 @@ import org.junit.Test
 
 class LedEffectsTest {
 
+    @Test fun frameClampsInputsBeforeMultiplication() {
+        assertEquals(Frame.Rgb(0, 128, 255), LedEffects.frame(Effect.STROBE, 0, -10, 128, 999, 999))
+        assertEquals(Frame.Rgb(0, 0, 0), LedEffects.frame(Effect.STROBE, 0, 255, 255, 255, -1))
+    }
+
     @Test fun effectNameMapping() {
         assertEquals(Effect.STROBE, Effect.from("strobe"))
         assertEquals(Effect.BLINK, Effect.from("BLINK"))    // case-insensitive

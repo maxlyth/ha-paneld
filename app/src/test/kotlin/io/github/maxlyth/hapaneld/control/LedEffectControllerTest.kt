@@ -7,6 +7,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -30,10 +33,18 @@ class LedEffectControllerTest {
     /** Records every HAL write so the test can reason about ordering + counts across threads. */
     private class RecordingLed : LedController {
         val writes = CopyOnWriteArrayList<String>()
+        @Volatile var failAt = Int.MAX_VALUE
+        private var attempts = 0
         override fun available() = true
         override fun colorCapable() = true
-        override fun setRgb(r: Int, g: Int, b: Int) { writes.add("rgb:$r,$g,$b") }
-        override fun off() { writes.add("off") }
+        @Synchronized override fun setRgb(r: Int, g: Int, b: Int): Boolean {
+            writes.add("rgb:$r,$g,$b")
+            return ++attempts != failAt
+        }
+        @Synchronized override fun off(): Boolean {
+            writes.add("off")
+            return ++attempts != failAt
+        }
     }
 
     private fun awaitUntil(timeoutMs: Long = 2_000, cond: () -> Boolean) {
@@ -85,5 +96,100 @@ class LedEffectControllerTest {
         // Once the green loop is live, the red (old) loop must be gone — no red frame may appear after it.
         val redAfterGreen = led.writes.withIndex().any { (i, w) -> i > firstGreen && w == "rgb:200,0,0" }
         assertFalse("old effect loop was orphaned (red frame after the green switch)", redAfterGreen)
+    }
+
+    @Test fun startFailsBeforePublishingOwnershipWhenTheFirstFrameIsRejected() {
+        val led = RecordingLed().apply { failAt = 1 }
+        val fx = LedEffectController(led, scope)
+
+        assertFalse(fx.start(LedEffects.Effect.STROBE, r = 200, g = 0, b = 0, br = 255))
+        assertEquals(LedEffectController.Status.FAILED, fx.status())
+        assertFalse(fx.running())
+    }
+
+    @Test fun aLaterRejectedFrameTerminatesTheOwnedEffect() {
+        val led = RecordingLed().apply { failAt = 2 }
+        val fx = LedEffectController(led, scope)
+
+        assertTrue(fx.start(LedEffects.Effect.STROBE, r = 200, g = 0, b = 0, br = 255))
+        awaitUntil { fx.status() == LedEffectController.Status.FAILED }
+
+        assertFalse(fx.running())
+        val writesAtFailure = led.writes.size
+        Thread.sleep(200)
+        assertEquals("failed effect must not keep issuing frames", writesAtFailure, led.writes.size)
+    }
+
+    @Test fun solidReplacementIsTheLastConfirmedWrite() {
+        val led = RecordingLed()
+        val fx = LedEffectController(led, scope)
+        assertTrue(fx.start(LedEffects.Effect.STROBE, r = 200, g = 0, b = 0, br = 255))
+
+        assertTrue(fx.setSolid(1, 2, 3))
+        val countAtReturn = led.writes.size
+        Thread.sleep(200)
+
+        assertEquals("rgb:1,2,3", led.writes.last())
+        assertEquals(countAtReturn, led.writes.size)
+        assertEquals(LedEffectController.Status.IDLE, fx.status())
+    }
+
+    @Test fun closeIsTerminalForEffectsSolidAndOff() {
+        val led = RecordingLed()
+        val fx = LedEffectController(led, scope)
+        assertTrue(fx.setSolid(1, 2, 3))
+        fx.close()
+        val countAtClose = led.writes.size
+
+        assertFalse(fx.start(LedEffects.Effect.BLINK, 1, 2, 3, 255))
+        assertFalse(fx.setSolid(4, 5, 6))
+        assertFalse(fx.setOff())
+        assertEquals(countAtClose, led.writes.size)
+        assertEquals(LedEffectController.Status.CLOSED, fx.status())
+    }
+
+    @Test fun replacementWaitsForTheInFlightFrameBeforeItsFinalWrite() {
+        val led = BlockingSecondFrameLed()
+        val fx = LedEffectController(led, scope)
+        assertTrue(fx.start(LedEffects.Effect.STROBE, 200, 0, 0, 255))
+        assertTrue(led.blockedFrameEntered.await(1, TimeUnit.SECONDS))
+        val replacementReturned = CountDownLatch(1)
+        val replacement = Thread {
+            assertTrue(fx.setSolid(1, 2, 3))
+            replacementReturned.countDown()
+        }.apply { start() }
+
+        assertFalse("replacement must wait while the old HAL write is in flight", replacementReturned.await(100, TimeUnit.MILLISECONDS))
+        led.releaseBlockedFrame.countDown()
+        assertTrue(replacementReturned.await(1, TimeUnit.SECONDS))
+        replacement.join(1_000)
+
+        assertEquals("rgb:1,2,3", led.writes.last())
+        assertFalse(replacement.isAlive)
+    }
+
+    private class BlockingSecondFrameLed : LedController {
+        val writes = CopyOnWriteArrayList<String>()
+        val blockedFrameEntered = CountDownLatch(1)
+        val releaseBlockedFrame = CountDownLatch(1)
+        private val attempts = AtomicInteger()
+        override fun available() = true
+        override fun colorCapable() = true
+        override fun setRgb(r: Int, g: Int, b: Int): Boolean {
+            writes += "rgb:$r,$g,$b"
+            blockSecondFrame()
+            return true
+        }
+        override fun off(): Boolean {
+            writes += "off"
+            blockSecondFrame()
+            return true
+        }
+        private fun blockSecondFrame() {
+            if (attempts.incrementAndGet() == 2) {
+                blockedFrameEntered.countDown()
+                releaseBlockedFrame.await(1, TimeUnit.SECONDS)
+            }
+        }
     }
 }

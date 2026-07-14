@@ -38,16 +38,26 @@ class RelayController(profile: DeviceProfile = DeviceProfile.detect(), private v
 
     private fun relayNodeCount(b: String): Int {
         val out = root.runOutput("ls $b 2>/dev/null") ?: return 0
-        return out.split(Regex("\\s+")).count { it.matches(Regex("relay\\d+")) }
+        val present = out.split(Regex("\\s+"))
+            .mapNotNull { name -> RELAY_NODE.matchEntire(name)?.groupValues?.get(1)?.toIntOrNull() }
+            .filter { it > 0 }
+            .toSet()
+        var contiguous = 0
+        while (contiguous + 1 in present) contiguous++
+        return contiguous
     }
 
     /** Number of relays exposed (0 if no candidate relay base is present). */
+    @Synchronized
     fun count(): Int = base()?.let { relayNodeCount(it) } ?: 0
 
+    @Synchronized
     fun available(): Boolean = count() > 0
 
     /** Set relay [n] (1-based) on/off. Returns true if the write ran. */
+    @Synchronized
     fun set(n: Int, on: Boolean): Boolean {
+        if (n !in 1..count()) return false
         val base = base() ?: return false
         return root.run("echo ${if (on) 1 else 0} > $base/relay$n")
     }
@@ -56,7 +66,9 @@ class RelayController(profile: DeviceProfile = DeviceProfile.detect(), private v
     fun get(n: Int): Boolean = read(n) == true
 
     /** Physical state, preserving unreadable as null rather than inventing OFF. */
+    @Synchronized
     fun read(n: Int): Boolean? {
+        if (n !in 1..count()) return null
         val base = base() ?: return null
         return when (root.runOutput("cat $base/relay$n 2>/dev/null")?.trim()) {
             "1" -> true
@@ -70,13 +82,19 @@ class RelayController(profile: DeviceProfile = DeviceProfile.detect(), private v
     /** Number of button LEDs present (0–4); 0 when the profile declares no button-LED base. The S9E does
      *  NOT export gpio147–150 at boot (init exports only gpio113), so each pin is exported here before
      *  probing — otherwise the `/value` nodes don't exist and the LEDs would never surface. */
+    @Synchronized
     fun ledCount(): Int {
         val ledBase = ledBase ?: return 0
-        return (0 until 4).count { ensureGpio(ledBase + it) }
+        for (i in 0 until BUTTON_LED_COUNT) {
+            if (!ensureGpio(ledBase + i)) return i
+        }
+        return BUTTON_LED_COUNT
     }
 
     /** Set button LED [i] (0-based, F1..F4) on/off. */
+    @Synchronized
     fun ledSet(i: Int, on: Boolean): Boolean {
+        if (i !in 0 until ledCount()) return false
         val node = ledNode(i) ?: return false
         return root.run("echo ${if (on) 1 else 0} > $node")
     }
@@ -85,7 +103,9 @@ class RelayController(profile: DeviceProfile = DeviceProfile.detect(), private v
     fun ledGet(i: Int): Boolean = ledRead(i) == true
 
     /** Physical button-LED state, preserving unreadable as null rather than inventing OFF. */
+    @Synchronized
     fun ledRead(i: Int): Boolean? {
+        if (i !in 0 until ledCount()) return null
         val node = ledNode(i) ?: return null
         return when (root.runOutput("cat $node 2>/dev/null")?.trim()) {
             "1" -> true
@@ -107,4 +127,9 @@ class RelayController(profile: DeviceProfile = DeviceProfile.detect(), private v
 
     private fun exists(p: String?): Boolean =
         p != null && root.runOutput("ls $p 2>/dev/null")?.trim()?.isNotEmpty() == true
+
+    private companion object {
+        const val BUTTON_LED_COUNT = 4
+        val RELAY_NODE = Regex("relay([1-9]\\d*)")
+    }
 }

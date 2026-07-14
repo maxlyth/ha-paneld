@@ -65,5 +65,11 @@ object LedEffects {
     }
 
     private fun lit(r: Int, g: Int, b: Int, br: Int): Frame.Rgb =
-        Frame.Rgb(r * br / 255, g * br / 255, b * br / 255)
+        br.coerceIn(0, 255).let { level ->
+            Frame.Rgb(
+                r.coerceIn(0, 255) * level / 255,
+                g.coerceIn(0, 255) * level / 255,
+                b.coerceIn(0, 255) * level / 255,
+            )
+        }
 }
