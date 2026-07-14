@@ -238,17 +238,6 @@ body.hdr-hide-brand .hdr .brand{display:none}
 .savebar button:disabled{background:var(--disabled-bg);border-color:var(--border);color:var(--disabled-fg);cursor:default}
 .muted{color:var(--dim)}
 
-/* ---- interactive screenshot (Test) ---- */
-.screen-wrap{position:relative;display:inline-block;max-width:100%;line-height:0}
-.screen-wrap img{display:block;max-width:100%;border:1px solid var(--border);border-radius:8px}
-.screen-wrap.control{cursor:crosshair}
-.screen-wrap .ripple{position:absolute;width:26px;height:26px;margin:-13px 0 0 -13px;border:2px solid #4a9eff;border-radius:50%;pointer-events:none;animation:rip .5s ease-out forwards}
-@keyframes rip{from{transform:scale(.3);opacity:.9}to{transform:scale(1.4);opacity:0}}
-.modebar{display:flex;gap:8px;margin-bottom:10px;align-items:center;flex-wrap:wrap}
-.seg{display:inline-flex;border:1px solid var(--border);border-radius:8px;overflow:hidden}
-.seg button{background:var(--input-bg);border:0;color:var(--tab);padding:6px 16px;cursor:pointer;font:inherit}
-.seg button.on{background:#2557a7;color:#fff}
-
 /* ---- configurable-value marker (Dashboard) + anchor flash (Configure) ---- */
 /* A small pencil after a value marks it CONFIGURABLE (vs a static fact) and deep-links to the
    exact setting on the Configure tab. Muted until hover so the dashboard stays calm. */

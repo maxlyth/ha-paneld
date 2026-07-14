@@ -58,6 +58,7 @@ import io.ktor.server.request.receiveStream
 import io.ktor.server.request.receiveText
 import io.ktor.server.request.uri
 import io.ktor.server.response.respondBytes
+import io.ktor.server.response.respondRedirect
 import io.ktor.server.response.respondText
 import io.ktor.server.response.respondTextWriter
 import io.ktor.server.routing.get
@@ -366,7 +367,9 @@ class PaneldServer(
                 // Tabbed multi-page shell. `/` stays the existing dashboard (now with a tab bar); the
                 // other tabs are dedicated pages that consume /api/v1.
                 get("/configure") { call.respondText(page("configure", "Configure", configureBody()), ContentType.Text.Html) }
-                get("/test") { call.respondText(page("test", "Test", testBody()), ContentType.Text.Html) }
+                // The experimental remote-control page is withheld from 0.9.2. Keep old bookmarks
+                // useful while its tap-injection UX is reviewed for a later release.
+                get("/test") { call.respondRedirect("/") }
                 get("/install") { call.respondText(page("install", "Install", installBody()), ContentType.Text.Html) }
                 get("/fleet") { call.respondText(page("fleet", "Fleet", fleetBody()), ContentType.Text.Html) }
                 get("/logs") { call.respondText(page("logs", "Logs", logsBody()), ContentType.Text.Html) }
@@ -697,7 +700,8 @@ class PaneldServer(
                         config.uiDashboardLayout = call.receiveParameters()["layout"].orEmpty()
                         call.respondText("""{"ok":true}""", ContentType.Application.Json)
                     }
-                    // Inject a tap at device pixel (x,y) for the interactive screenshot (Test tab).
+                    // Inject a tap at device pixel (x,y). The UI is withheld pending a remote-control
+                    // review, but the API remains available for established automation and testing.
                     post("/input") {
                         val q = call.receiveParameters()
                         val x = q["x"]?.trim()?.toFloatOrNull()
@@ -1063,7 +1067,6 @@ class PaneldServer(
             tab("configure", "/configure", "Configure") +
             entityTab +
             tab("install", "/install", "Install") +
-            tab("test", "/test", "Test") +
             tab("fleet", "/fleet", "Fleet") +
             tab("logs", "/logs", "Logs") +
             """<a href="/api">API</a></div>"""
@@ -1164,46 +1167,6 @@ ${tameCardHtml()}
 <pre id="imp-result" class="muted" style="white-space:pre-wrap;margin-top:10px"></pre></div></div>
 <script src="/assets/configure.js"></script>
 <script src="/assets/prox.js"></script>"""
-
-    /** Test tab — interactive screenshot (View/Control), on-screen nav actions, TTS test. */
-    private fun testBody(): String {
-        val rootOk = rootOk()
-        val cap = if (rootOk) "Captured on demand via root / the helper daemon."
-        else "Screenshot + tap control need root or the helper daemon — unavailable on this panel."
-        return """
-<div class="cards">
-<div class="card"><h2>Panel screen <small>· live</small></h2>
-<div class="modebar">
- <span class="seg"><button id="m-view" class="on" onclick="tstMode('view')">👁 View</button><button id="m-ctl" onclick="tstMode('control')">✋ Control</button></span>
- <button class="pbtn" onclick="tstRefresh()">↻ Refresh</button>
-</div>
-<div id="shotwrap" class="screen-wrap"><img id="shot" alt="panel screen" style="aspect-ratio:${screenAspectRatio()}"></div>
-<p class="note" id="ctl-hint" style="display:none">Control mode: click/tap the image to send a real touch to the panel. ~0.5–1.5s round trip — good for waking, navigating, dismissing dialogs; not smooth dragging.</p>
-<p class="note">$cap</p></div>
-
-<div class="card"><h2>On-screen actions</h2>
-<div style="display:flex;gap:8px;flex-wrap:wrap">
- <button class="pbtn" onclick="tstAction('back')">← Back</button>
- <button class="pbtn" onclick="tstAction('recents')">▢ Recents</button>
- <button class="pbtn" onclick="tstAction('launcher')">⊞ Launcher</button>
- <button class="pbtn" onclick="tstAction('admin_launcher')">⚙ Admin</button>
- <button class="pbtn" onclick="tstAction('voldn')">Vol −</button>
- <button class="pbtn" onclick="tstAction('volup')">Vol +</button>
-</div>
-<p class="note">Drive the panel without touching it — handy while watching the screenshot above.</p></div>
-
-<div class="card"><h2>TTS / audio test</h2>
-<div style="display:flex;gap:8px;flex-wrap:wrap">
- <input id="tts-url" placeholder="https://…/clip.mp3" style="flex:1;min-width:200px">
- <button class="pbtn" onclick="tstPlay()">▶ Play</button>
-</div>
-<p class="note">Posts a URL to the announce contract (<code>/play</code>). <span id="tts-msg" class="muted"></span></p></div>
-
-<div class="card"><h2>More</h2>
-<p class="note">Proximity calibration is on the <a href="/" style="color:#9cf">Dashboard</a>. Full REST: <a href="/api" style="color:#9cf">API explorer</a>.</p></div>
-</div>
-<script src="/assets/test.js"></script>"""
-    }
 
     /** Install tab — software-management hub: setup warnings, managed component versions, radio firmware,
      *  on-demand health audit, and config backup. (The Capabilities card lives on the Dashboard.) */

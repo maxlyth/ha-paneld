@@ -13,6 +13,7 @@
 ### Changed
 
 - **Existing exact entity lists continue to work alongside automatic learning** — testers can keep a manually chosen list or switch to the new guided workflow. Filtering remains opt-in during pre-release testing.
+- **The unfinished remote-control page is withheld** — the Test tab and its screenshot tap-control workflow are hidden while the feature is reviewed for reliability. Existing screenshot, action, input and audio APIs remain available, and old `/test` bookmarks return to Dashboard.
 
 ## v0.9.2-rc2 - 2026-07-14
 
