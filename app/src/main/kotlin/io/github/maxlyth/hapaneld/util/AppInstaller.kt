@@ -5,6 +5,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.util.Log
 import io.github.maxlyth.hapaneld.control.Su
+import io.github.maxlyth.hapaneld.shizuku.ShizukuBridge
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -13,18 +14,19 @@ import java.net.URL
 import java.security.MessageDigest
 
 /**
- * Shared root APK installer with a **pinned signer + package allowlist**. This is NOT a generic
+ * Shared privileged APK installer with a **pinned signer + package allowlist**. This is NOT a generic
  * installer: an install proceeds only if the downloaded APK declares the pinned package AND is signed
  * by the pinned certificate — a package/signer mismatch is refused, so a MITM / DNS-spoof / compromised
  * asset can't be installed even on a fresh (no-incumbent) install. Used by both the HA Companion app
  * updater and ha-paneld's own self-update.
  *
- * Install path: `su` directly, else the peer-uid-locked helper `INSTALL` verb. `pm install -r -d` — the
+ * Install path: `su` directly, else the peer-uid-locked helper `INSTALL` verb, else the typed Shizuku
+ * shell-UID service. `pm install -r -d` — the
  * `-d` (allow downgrade) is deliberate, so a stable<->pre-release channel switch can move either way.
  * Network + su — always call OFF the main / MQTT thread.
  */
 object AppInstaller {
-    data class Pin(val pkg: String, val certSha256: String)
+    data class Pin(val pkg: String, val certSha256: String, val apkSha256: String? = null)
 
     // Pinned signers (public certificate fingerprints — NOT secrets).
     val HA_PANELD = Pin("io.github.maxlyth.hapaneld", "ac6193307fb0b70113aae205d7549406f96e063bc5491b67b1d5694a34b0e339")
@@ -37,13 +39,15 @@ object AppInstaller {
 
     /**
      * Download [url], refuse unless the APK declares [pin].pkg AND is signed by [pin].certSha256, then
-     * install over root. Returns "OK" on success, else a short reason. The caller owns the
+     * install over an available privileged route. Returns "OK" on success, else a short reason. The caller owns the
      * version/should-update decision.
      */
     suspend fun install(context: Context, url: String, pin: Pin): String = withContext(Dispatchers.IO) {
         val hasSu = Su.available()
         val hasDaemon = HelperClient.available()
-        if (!hasSu && !hasDaemon) return@withContext "skipped: no root (su or helper daemon needed)"
+        val hasShizuku = ShizukuBridge.available()
+        if (!hasSu && !hasDaemon && !hasShizuku)
+            return@withContext "skipped: no privileged installer (root or Shizuku needed)"
 
         // Preflight free space BEFORE downloading, so a large APK (a WebView build is ~250 MB) can't
         // fill /data or fail half-written on a low-storage panel. We need room for the download only —
@@ -109,7 +113,11 @@ object AppInstaller {
     suspend fun installLocalApk(context: Context, apk: File): String = withContext(Dispatchers.IO) {
         val hasSu = Su.available()
         val hasDaemon = HelperClient.available()
-        if (!hasSu && !hasDaemon) { apk.delete(); return@withContext "skipped: no root (su or helper daemon needed)" }
+        val hasShizuku = ShizukuBridge.available()
+        if (!hasSu && !hasDaemon && !hasShizuku) {
+            apk.delete()
+            return@withContext "skipped: no privileged installer (root or Shizuku needed)"
+        }
         if (hasSu) {
             val out = try {
                 // Stream the APK straight into `pm install -S <size>` — no intermediate /data/local/tmp copy
@@ -127,10 +135,21 @@ object AppInstaller {
             return@withContext "install failed: ${out.take(120)}"
         }
 
-        val result = HelperInstallTransaction(HelperClient).install(
-            apk,
-            File(context.filesDir, HelperInstallTransaction.STAGING_DIR),
-        )
+        val result = if (hasDaemon) {
+            HelperInstallTransaction(HelperClient).install(
+                apk,
+                File(context.filesDir, HelperInstallTransaction.STAGING_DIR),
+            )
+        } else {
+            val out = try {
+                ShizukuBridge.installApk(apk, allowDowngrade = true, HelperInstallTransaction.INSTALL_TIMEOUT_MS)
+                    ?.trim().orEmpty()
+            } finally {
+                apk.delete()
+            }
+            if (out.contains("Success", ignoreCase = true)) "OK"
+            else "install failed: ${out.ifBlank { "Shizuku installer unavailable" }.take(120)}"
+        }
         if (result != "OK") Log.w(TAG, result)
         result
     }
@@ -138,6 +157,10 @@ object AppInstaller {
     /** Null = APK declares [pin].pkg AND is signed by the pinned cert; else a short reason. */
     @Suppress("DEPRECATION") // GET_SIGNATURES / PackageInfo.signatures for API < 28
     private fun verifyApk(context: Context, apkPath: String, pin: Pin): String? {
+        pin.apkSha256?.let { expected ->
+            val actual = sha256(File(apkPath))
+            if (!actual.equals(expected, ignoreCase = true)) return "APK checksum mismatch"
+        }
         val pm = context.packageManager
         val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P)
             PackageManager.GET_SIGNING_CERTIFICATES else PackageManager.GET_SIGNATURES
@@ -151,6 +174,19 @@ object AppInstaller {
             md.digest(it.toByteArray()).joinToString("") { b -> "%02x".format(b) }.equals(pin.certSha256, true)
         }
         return if (ok) null else "signer mismatch"
+    }
+
+    internal fun sha256(file: File): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        file.inputStream().use { input ->
+            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+            while (true) {
+                val read = input.read(buffer)
+                if (read < 0) break
+                digest.update(buffer, 0, read)
+            }
+        }
+        return digest.digest().joinToString("") { byte -> "%02x".format(byte) }
     }
 
     /**

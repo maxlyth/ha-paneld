@@ -25,6 +25,7 @@ android {
         // the -rcN suffix in versionName increments ONLY when an rc is published to GitHub.
         versionCode = 224
         versionName = "0.9.3-rc1"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         // Only the fleet's ARM ABIs — bounds the native LED lib (libhapaneld_led.so) + APK size.
         ndk {
@@ -73,9 +74,15 @@ android {
 
     buildFeatures {
         buildConfig = true
+        aidl = true
     }
 
     buildTypes {
+        debug {
+            // Keep production ABIs unchanged while allowing the optional Shizuku integration job to
+            // install the real app/native library on an x86_64 Android emulator.
+            ndk.abiFilters += "x86_64"
+        }
         release {
             if (hasReleaseSigning) signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = false
@@ -143,6 +150,11 @@ dependencies {
     // Ktor/HiveMQ log via SLF4J; route it to Logcat.
     implementation(libs.slf4j.android)
 
+    // Optional shell-UID bridge for non-root panels. The manager APK remains a separate, explicit
+    // user opt-in; these small API/provider libraries only expose its authenticated Binder boundary.
+    implementation(libs.shizuku.api)
+    implementation(libs.shizuku.provider)
+
     // QR code for the on-device config URL (pure-Java encoder; no Android transitive deps).
     implementation("com.google.zxing:core:3.5.3")
 
@@ -154,6 +166,9 @@ dependencies {
     testImplementation(libs.moquette.broker)
     // Real org.json — the android.jar stub's returnDefaultValues would silently no-op JSON code under test.
     testImplementation(libs.org.json)
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test.uiautomator:uiautomator:2.3.0")
 }
 
 // Compile the CDP relay (helper/cdprelay.c) into assets at build time for the fleet ABIs, using the

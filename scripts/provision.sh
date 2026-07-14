@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # ha-paneld provisioning — install + grant all permissions over adb, no device UI, and (optionally)
 # set the panel id + MQTT broker in one shot. Requires adb access and su/adb-root on the panel.
-# For non-root panels, use the in-app setup screen instead.
+# For non-root panels, --shizuku installs and starts the pinned manager; approval remains on-panel.
 #
 # Usage:
 #   scripts/provision.sh <panel-ip:5555> [APK] \
 #       [--id PANEL_ID] [--mqtt tcp://host:1883] [--mqtt-user U] [--mqtt-pass P] [--apk PATH] \
 #       [--log-host HOST] [--log-port N] [--log-proto syslog|http]   # forward logcat to an aggregator
+#       [--shizuku]                    # non-root enhanced access; still needs local approval
 #   Built-in WebView renderer (experimental — no HA Companion / kiosk app needed):
 #       [--ha-url https://homeassistant.local:8123] [--builtin] \
 #       [--ha-token <LLAT>]              # simple: a long-lived access token (a standing credential), OR
@@ -68,7 +69,7 @@ REPO="maxlyth/ha-paneld"
 LOCAL_APK="app/build/outputs/apk/debug/app-debug.apk"
 PKG="io.github.maxlyth.hapaneld"
 A11Y="$PKG/.input.PanelAccessibilityService"
-APK=""; PANEL_ID=""; MQTT=""; MQTT_USER=""; MQTT_PASS=""; VERIFY_ONLY=0; LATEST=0; PRERELEASE=0; FORCE=0; PERSIST_ADB=0; STRIP_VENDOR=0; NO_TAME=0; TOINSTALL_VER=""
+APK=""; PANEL_ID=""; MQTT=""; MQTT_USER=""; MQTT_PASS=""; VERIFY_ONLY=0; LATEST=0; PRERELEASE=0; FORCE=0; PERSIST_ADB=0; STRIP_VENDOR=0; NO_TAME=0; SHIZUKU=0; TOINSTALL_VER=""
 LOG_HOST=""; LOG_PORT=""; LOG_PROTO=""; LOG_ENABLE=""
 EXPORT_FILE=""; RESTORE_FILE=""; RESTORE_MODE=""
 HA_URL=""; HA_TOKEN=""; HA_USER=""; HA_PASS=""; HA_REFRESH=""; HA_EXPIRY=""; BUILTIN=0
@@ -96,6 +97,7 @@ while [ "${1:-}" ]; do
     --persist-adb) PERSIST_ADB=1; shift ;;  # keep network adb (tcp 5555) across reboots (opt-in; standing LAN port)
     --strip-vendor) STRIP_VENDOR=1; shift ;; # disable the Tuya vendor apps (TPA10) non-interactively (skips the prompt)
     --no-tame) NO_TAME=1; shift ;;   # skip the default "tame recommended vendor apps" step (eWeLink + factory test tools)
+    --shizuku) SHIZUKU=1; shift ;;   # install/start pinned Shizuku on a non-root panel; permission stays local
     --log-host) LOG_HOST="$2"; LOG_ENABLE=true; shift 2 ;;  # ship logcat to this aggregator (host enables shipping)
     --log-port) LOG_PORT="$2"; shift 2 ;;     # log sink port (default 514 for syslog)
     --log-proto) LOG_PROTO="$2"; shift 2 ;;   # syslog (default) | http
@@ -164,13 +166,14 @@ verify() {
     echo "   ${GRN}✓${X} root (su): available — full feature set"
   elif printf '%s' "$diag" | grep -q "daemon=true"; then
     echo "   ${GRN}✓${X} root: via the helper daemon — full feature set"
+  elif printf '%s' "$diag" | grep -q "shizuku=ready"; then
+    echo "   ${GRN}✓${X} Shizuku enhanced access: ready — APK updates, screenshots/taps and display sizing enabled"
   elif [ -n "$diag" ]; then
     echo "   ${YEL}⚠ THIS PANEL HAS NO ROOT — ha-paneld runs with a REDUCED feature set.${X}"
     echo "     ${D}Working: HA sensors + MQTT, brightness, screen dim, audio/TTS, the dashboard renderers,${X}"
-    echo "     ${D}the web UI, Back/Recents. Unavailable (shown greyed + locked in the UI): true screen-off,${X}"
-    echo "     ${D}LED, vendor-app taming, display sizing, self-update/Companion install, remote screenshot${X}"
-    echo "     ${D}+ tap, system logs, kiosk lock. This is the panel's permission model, not a fault —${X}"
-    echo "     ${D}see README → \"What needs root\".${X}"
+    echo "     ${D}the web UI, Back/Recents. Shizuku can add APK/self/Companion updates, display sizing,${X}"
+    echo "     ${D}and screenshots/taps; true screen-off, LED, vendor taming, system logs and kiosk lock${X}"
+    echo "     ${D}still need root. Re-run with --shizuku, then approve Enhanced access on the panel.${X}"
   fi
   # panel_id + MQTT (informational — install-only is valid). grep/cut so no python (Git Bash-friendly).
   local broker pid
@@ -471,6 +474,47 @@ install_apk() {
   esac
 }
 install_apk
+
+# Optional non-root privilege bootstrap. Keep this dependency curated: never chase "latest" here.
+# The exact official APK blob is SHA-pinned, and ha-paneld independently checks the installed signing
+# certificate before binding. Shizuku still presents its own permission UI on the panel; provisioning
+# cannot silently approve ha-paneld. The adb-started service normally needs rearming after reboot on
+# older Android versions, while Shizuku 13.6 can auto-start on supported Android 13+ trusted WLANs.
+if [ "$SHIZUKU" = 1 ]; then
+  SHIZUKU_PKG="moe.shizuku.privileged.api"
+  SHIZUKU_URL="https://github.com/RikkaApps/Shizuku/releases/download/v13.6.0/shizuku-v13.6.0.r1086.2650830c-release.apk"
+  SHIZUKU_SHA256="6e273ab0e991c4e79bc8b1bbb9b9dd739ccac1a8712a541a214078886b7b790f"
+  SHIZUKU_DIR="$(mktemp -d)"
+  SHIZUKU_APK="$SHIZUKU_DIR/shizuku.apk"
+  trap 'rm -rf "${SHIZUKU_DIR:-}"' EXIT
+  step "🪄 Shizuku" "${D}installing curated v13.6.0 manager${X}"
+  curl -fsSL --proto '=https' --proto-redir '=https' "$SHIZUKU_URL" -o "$SHIZUKU_APK"
+  if command -v sha256sum >/dev/null 2>&1; then
+    SHIZUKU_GOT="$(sha256sum "$SHIZUKU_APK" | awk '{print $1}')"
+  elif command -v shasum >/dev/null 2>&1; then
+    SHIZUKU_GOT="$(shasum -a 256 "$SHIZUKU_APK" | awk '{print $1}')"
+  else
+    fail "cannot verify the Shizuku download" "Install sha256sum (or shasum) and re-run."
+  fi
+  [ "$SHIZUKU_GOT" = "$SHIZUKU_SHA256" ] || fail "Shizuku download checksum mismatch" \
+    "Expected $SHIZUKU_SHA256" "Got      $SHIZUKU_GOT" "Nothing was installed."
+  adb -s "$TARGET" install -r "$SHIZUKU_APK" >/dev/null
+  # First launch materialises Shizuku's official external start script.
+  adb -s "$TARGET" shell monkey -p "$SHIZUKU_PKG" 1 >/dev/null 2>&1 || true
+  for _ in $(seq 1 10); do
+    if adb -s "$TARGET" shell test -f "/storage/emulated/0/Android/data/$SHIZUKU_PKG/start.sh"; then break; fi
+    sleep 1
+  done
+  if adb -s "$TARGET" shell sh "/storage/emulated/0/Android/data/$SHIZUKU_PKG/start.sh" >/dev/null 2>&1; then
+    echo "   ${GRN}✓${X} Shizuku service started"
+  else
+    warn "Shizuku installed, but its service did not start. Open Shizuku on the panel and follow its ADB start instructions."
+  fi
+  # Enables Shizuku's supported Android 13+ trusted-WLAN auto-start option; the user still chooses
+  # whether to turn that option on inside Shizuku. Harmless/ignored on versions that refuse the grant.
+  adb -s "$TARGET" shell pm grant "$SHIZUKU_PKG" android.permission.WRITE_SECURE_SETTINGS >/dev/null 2>&1 || true
+  echo "   ${YEL}→${X} On the panel: ha-paneld → Settings → Enhanced access → Enable managed, then approve the Shizuku prompt."
+fi
 
 step "🔑 permissions" "${D}notifications · WRITE_SETTINGS (brightness/screen) · SYSTEM_ALERT_WINDOW (navbar) · a11y (buttons)${X}"
 # Grants degrade gracefully: some vendor builds refuse appops/settings writes from the adb shell.

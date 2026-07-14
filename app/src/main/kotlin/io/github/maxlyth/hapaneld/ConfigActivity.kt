@@ -8,6 +8,7 @@ import android.webkit.WebViewClient
 import android.widget.LinearLayout
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.Toolbar
+import io.github.maxlyth.hapaneld.shizuku.ShizukuSetupDialog
 
 /**
  * In-app config screen: a WebView onto the local config page (127.0.0.1:8888). Panels are usually
@@ -40,6 +41,13 @@ class ConfigActivity : AppCompatActivity() {
             )
             navigationContentDescription = "Back to dashboard"
             setNavigationOnClickListener { finish() }
+            menu.add("Enhanced access").apply {
+                setShowAsAction(android.view.MenuItem.SHOW_AS_ACTION_NEVER)
+                setOnMenuItemClickListener {
+                    ShizukuSetupDialog.show(this@ConfigActivity)
+                    true
+                }
+            }
         }
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL

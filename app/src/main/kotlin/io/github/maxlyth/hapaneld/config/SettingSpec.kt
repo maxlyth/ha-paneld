@@ -72,6 +72,12 @@ data class Capabilities(
     // The profile pins a known-good System WebView build in the webview-mirror release — gates the
     // webview_auto_update setting (there's nothing to update to without a pin; e.g. Play-updated panels).
     val webViewManaged: Boolean = false,
+    // Runtime-only privilege routes. These describe what the panel can do now; they are never config
+    // switches and therefore cannot be imported or changed through MQTT/HTTP.
+    val shizukuReady: Boolean = false,
+    val canInstallApk: Boolean = false,
+    val canCaptureAndInput: Boolean = false,
+    val canSetDisplay: Boolean = false,
 )
 
 /**

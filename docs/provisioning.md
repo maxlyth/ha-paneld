@@ -12,7 +12,7 @@ Run the same script on every panel:
 ```bash
 scripts/provision.sh <panel-ip:5555> \
     [--id NAME] [--mqtt tcp://host:1883] [--latest] [--prerelease] [--force] \
-    [--builtin --ha-url URL {--ha-token LLAT | --ha-user U --ha-pass P}]
+    [--builtin --ha-url URL {--ha-token LLAT | --ha-user U --ha-pass P}] [--shizuku]
 ```
 
 It downloads the **latest signed release** from GitHub when no `--apk` is given and no local build exists. `--latest` forces the stable download even when a local build exists; `--prerelease` fetches the newest release candidate instead. It connects, installs, grants the permissions below, starts the agent, optionally sets the panel id / MQTT, and ends with a self-verify checklist. It is **idempotent**, so re-run the same command to finish after any interruption. Required startup, configuration, restore, and verification failures return a nonzero result and are never counted as a successful fleet update. Run `scripts/provision.sh --help` for the concise command reference.
@@ -29,7 +29,15 @@ scripts/provision.sh <panel-ip:5555> --verify
 
 When `--export FILE` is combined with install or configuration options, the verified backup is written **before** any panel mutation. Protect that file like a credential. Provisioning also offers the profile's known vendor overlays and factory-test apps for reversible disabling; pass `--no-tame` to leave them unchanged.
 
-Non-root panels: use the in-app setup screen, which fires the standard system permission intents.
+Non-root panels can add `--shizuku`. The provisioner installs the curated, checksum-pinned Shizuku
+manager and starts its ADB service; then, on the panel, open **ha-paneld → Settings → Enhanced
+access → Enable managed** and approve Shizuku's permission prompt. That local approval is intentionally
+not available over the web UI, MQTT, config import, or fleet push. It enables APK/self/Companion updates,
+screenshots and taps, and display sizing—not logs, private app data, reboot, vendor taming, or a general shell.
+
+Shizuku started through ADB may need rearming after a reboot. Shizuku 13.6 has a supported trusted-WLAN
+auto-start option on compatible Android 13+ devices; the provisioner grants the prerequisite permission,
+but you choose whether to enable the option in Shizuku. Older panels retain the one-command ADB rearm.
 
 **Sandbox-walled panels (TPA10, SMT1019, … — the app itself can't exec `su`):** also install the [root helper daemon](../helper/README.md), which is the privileged control path there (screen-off, density, CPU governor, screenshot, perf, buttons, LED):
 

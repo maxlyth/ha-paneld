@@ -11,6 +11,9 @@ import io.github.maxlyth.hapaneld.hardware.NativeLed
 import io.github.maxlyth.hapaneld.input.ButtonCaptureHealth
 import io.github.maxlyth.hapaneld.input.EvdevButtonClient
 import io.github.maxlyth.hapaneld.metrics.PanelMetrics
+import io.github.maxlyth.hapaneld.shizuku.ShizukuBridge
+import io.github.maxlyth.hapaneld.shizuku.ShizukuConsent
+import io.github.maxlyth.hapaneld.shizuku.ShizukuManagerIdentity
 import io.github.maxlyth.hapaneld.util.HelperClient
 import io.github.maxlyth.hapaneld.util.UpdateChecker
 import java.io.File
@@ -49,6 +52,8 @@ object DiagReader {
         val evdev = EvdevButtonClient.snapshot()
         val buttonHealth = ButtonCaptureHealth.evaluate(a11y, profile.evdevButtons.size, evdev, pkg)
         val rootish = su || daemon
+        val shizuku = ShizukuBridge.available()
+        val manager = ShizukuManagerIdentity.status(ctx)
         // Surface the helper whenever this profile needs it for privileged control or profile-specific
         // hardware such as daemon-only LEDs and evdev buttons, even if the app can also execute su.
         val usesDaemon = profile.usesDaemon
@@ -58,6 +63,17 @@ object DiagReader {
                 if (daemon) daemonRequirement(profile, running = true)
                 else daemonRequirement(profile, running = false))
             else null,
+            if (ShizukuConsent.enabled(ctx) || manager != ShizukuManagerIdentity.Status.MISSING) {
+                Cap("Shizuku enhanced access", if (shizuku) "ok" else "none", when {
+                    shizuku -> "ready as shell UID; local typed operations only"
+                    manager == ShizukuManagerIdentity.Status.UNTRUSTED -> "blocked: installed manager signer is not trusted"
+                    manager == ShizukuManagerIdentity.Status.MISSING -> "manager missing; re-run provisioning with --shizuku"
+                    else -> "manager installed but not ready; start Shizuku and approve access locally"
+                })
+            } else null,
+            Cap("APK install / screenshot / display", if (rootish || shizuku) "ok" else "none",
+                if (rootish || shizuku) "available through a privileged route"
+                else "needs su, the helper daemon, or locally approved Shizuku access"),
             Cap("Brightness", if (canWrite) "ok" else "none",
                 if (canWrite) "WRITE_SETTINGS granted" else
                     "grant it (no root needed): adb shell appops set $pkg WRITE_SETTINGS allow"),
@@ -131,7 +147,7 @@ object DiagReader {
         appendLine("[build] fingerprint=${Build.FINGERPRINT}")
         appendLine("board=${Build.BOARD} product=${Build.PRODUCT} hardware=${Build.HARDWARE} abis=${Build.SUPPORTED_ABIS.joinToString(",")}")
         val evdev = EvdevButtonClient.snapshot()
-        appendLine("[env] selinux=${PanelMetrics.shared.selinuxEnforce() ?: "?"} su=${Su.available()} write_settings=${Settings.System.canWrite(ctx)} a11y=${a11yEnabled(ctx)} daemon=${HelperClient.available()} evdev=${evdev.state.name.lowercase()}/${evdev.mode?.name?.lowercase() ?: "none"} ledjni=${NativeLed.available()}")
+        appendLine("[env] selinux=${PanelMetrics.shared.selinuxEnforce() ?: "?"} su=${Su.available()} write_settings=${Settings.System.canWrite(ctx)} a11y=${a11yEnabled(ctx)} daemon=${HelperClient.available()} shizuku=${ShizukuBridge.state.name.lowercase()} evdev=${evdev.state.name.lowercase()}/${evdev.mode?.name?.lowercase() ?: "none"} ledjni=${NativeLed.available()}")
         evdevRequestDescription(profile)?.let { requested ->
             appendLine("[evdev] requested=$requested state=${evdev.state.name.lowercase()} mode=${evdev.mode?.name?.lowercase() ?: "none"} error=${evdev.lastError ?: "-"}")
         }

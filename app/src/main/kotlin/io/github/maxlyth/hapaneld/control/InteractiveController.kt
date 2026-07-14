@@ -6,6 +6,8 @@ import io.github.maxlyth.hapaneld.input.PanelAccessibilityService
 import io.github.maxlyth.hapaneld.platform.AccessibilityActions
 import io.github.maxlyth.hapaneld.platform.Daemon
 import io.github.maxlyth.hapaneld.platform.RootShell
+import io.github.maxlyth.hapaneld.platform.ShellPrivilege
+import io.github.maxlyth.hapaneld.shizuku.ShizukuBridge
 import io.github.maxlyth.hapaneld.util.HelperClient
 
 /**
@@ -22,6 +24,7 @@ internal class InteractiveController(
     private val root: RootShell = Su,
     private val daemon: Daemon = HelperClient,
     private val accessibility: AccessibilityActions = PanelAccessibilityService,
+    private val shell: ShellPrivilege = ShizukuBridge,
 ) {
     fun screenshot(): ByteArray? {
         val su = ValueAttempt(PrivilegeRoute.SU) {
@@ -30,17 +33,22 @@ internal class InteractiveController(
         val helper = ValueAttempt(PrivilegeRoute.DAEMON) {
             daemon.sendBytes("SCREENCAP")?.takeUnless { it.isEmpty() }
         }
-        val attempts = if (canSu) arrayOf(su, helper) else arrayOf(helper, su)
+        val shizuku = ValueAttempt(PrivilegeRoute.SHIZUKU) {
+            shell.screenshot()?.takeUnless { it.isEmpty() }
+        }
+        val attempts = if (canSu) arrayOf(su, helper, shizuku) else arrayOf(helper, su, shizuku)
         return ShortOperationRouter.value(*attempts)?.value
     }
 
     fun back(): Boolean = navigate(
         rootCommand = "input keyevent ${KeyEvent.KEYCODE_BACK}",
+        keyCode = KeyEvent.KEYCODE_BACK,
         accessibilityAction = accessibility::back,
     )
 
     fun recents(): Boolean = navigate(
         rootCommand = "input keyevent ${KeyEvent.KEYCODE_APP_SWITCH}",
+        keyCode = KeyEvent.KEYCODE_APP_SWITCH,
         accessibilityAction = accessibility::recents,
     )
 
@@ -53,20 +61,27 @@ internal class InteractiveController(
         return routeInput(
             su = { root.run("input tap $xi $yi") },
             accessibility = { accessibility.tap(xi, yi) },
+            shizuku = { shell.tap(xi, yi) },
         )
     }
 
-    private fun navigate(rootCommand: String, accessibilityAction: () -> Boolean): Boolean =
+    private fun navigate(rootCommand: String, keyCode: Int, accessibilityAction: () -> Boolean): Boolean =
         routeInput(
             su = { root.run(rootCommand) },
             accessibility = accessibilityAction,
+            shizuku = { shell.inputKey(keyCode) },
         )
 
-    private fun routeInput(su: () -> Boolean, accessibility: () -> Boolean): Boolean {
+    private fun routeInput(
+        su: () -> Boolean,
+        accessibility: () -> Boolean,
+        shizuku: () -> Boolean,
+    ): Boolean {
         val suAttempt = EffectAttempt(PrivilegeRoute.SU, su)
         val accessibilityAttempt = EffectAttempt(PrivilegeRoute.ACCESSIBILITY, accessibility)
-        val attempts = if (canSu) arrayOf(suAttempt, accessibilityAttempt)
-            else arrayOf(accessibilityAttempt, suAttempt)
+        val shizukuAttempt = EffectAttempt(PrivilegeRoute.SHIZUKU, shizuku)
+        val attempts = if (canSu) arrayOf(suAttempt, accessibilityAttempt, shizukuAttempt)
+            else arrayOf(accessibilityAttempt, suAttempt, shizukuAttempt)
         return ShortOperationRouter.effect(*attempts) != null
     }
 }

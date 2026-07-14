@@ -3,6 +3,7 @@ package io.github.maxlyth.hapaneld.util
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
+import java.io.File
 import java.net.URL
 
 /**
@@ -33,5 +34,15 @@ class AppInstallerTest {
     @Test fun refusesNonHttpScheme() {
         assertNull("file:// target must be refused", AppInstaller.httpsRedirect(github, "file:///etc/passwd"))
         assertNull("ftp:// target must be refused", AppInstaller.httpsRedirect(github, "ftp://host/app.apk"))
+    }
+
+    @Test fun hashesDownloadedBlobForExactReleasePins() {
+        val file = File.createTempFile("installer-hash-", ".bin")
+        try {
+            file.writeText("ha-paneld")
+            assertEquals("9e3e7fce3ad3280fc638bb3c9dd1b8a5ea8b84ecd716129b6ce18afd946e3309", AppInstaller.sha256(file))
+        } finally {
+            file.delete()
+        }
     }
 }

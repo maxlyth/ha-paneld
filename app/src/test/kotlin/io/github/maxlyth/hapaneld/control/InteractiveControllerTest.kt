@@ -4,14 +4,34 @@ import io.github.maxlyth.hapaneld.platform.AccessibilityActions
 import io.github.maxlyth.hapaneld.platform.Daemon
 import io.github.maxlyth.hapaneld.platform.DaemonLongResult
 import io.github.maxlyth.hapaneld.platform.RootShell
+import io.github.maxlyth.hapaneld.platform.ShellPrivilege
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 
 class InteractiveControllerTest {
+    private class Shell(
+        private val calls: MutableList<String>,
+        private val screenshotBytes: ByteArray? = null,
+        private val inputResult: Boolean = false,
+    ) : ShellPrivilege {
+        override fun available() = true
+        override fun uid() = 2000
+        override fun screenshot(): ByteArray? { calls += "shizuku:screenshot"; return screenshotBytes }
+        override fun inputKey(keyCode: Int): Boolean { calls += "shizuku:key:$keyCode"; return inputResult }
+        override fun tap(x: Int, y: Int): Boolean { calls += "shizuku:tap:$x:$y"; return inputResult }
+        override fun density(): String? = null
+        override fun setDensity(dpi: Int) = false
+        override fun resetDensity() = false
+        override fun fontScale(): String? = null
+        override fun setFontScale(scale: Float) = false
+        override fun resetFontScale() = false
+        override fun installApk(apk: File, allowDowngrade: Boolean, timeoutMs: Long): String? = null
+    }
     private class Root(
         private val calls: MutableList<String>,
         runResults: List<Boolean> = emptyList(),
@@ -187,5 +207,32 @@ class InteractiveControllerTest {
             assertFalse(controller(canSu = true, calls = calls).tap(x, y))
             assertTrue(calls.isEmpty())
         }
+    }
+
+    @Test fun screenshotFallsThroughExistingRoutesToShizukuLast() {
+        val calls = mutableListOf<String>()
+        val png = byteArrayOf(7, 8, 9)
+        val result = InteractiveController(
+            canSu = true,
+            root = Root(calls),
+            daemon = Helper(calls),
+            accessibility = Accessibility(calls),
+            shell = Shell(calls, screenshotBytes = png),
+        ).screenshot()
+        assertArrayEquals(png, result)
+        assertEquals(listOf("su-bytes:screencap -p", "helper-bytes:SCREENCAP", "shizuku:screenshot"), calls)
+    }
+
+    @Test fun inputFallsThroughExistingRoutesToTypedShizukuOperation() {
+        val calls = mutableListOf<String>()
+        val controller = InteractiveController(
+            canSu = false,
+            root = Root(calls),
+            daemon = Helper(calls),
+            accessibility = Accessibility(calls),
+            shell = Shell(calls, inputResult = true),
+        )
+        assertTrue(controller.tap(12f, 34f))
+        assertEquals(listOf("a11y:tap:12:34", "su:input tap 12 34", "shizuku:tap:12:34"), calls)
     }
 }

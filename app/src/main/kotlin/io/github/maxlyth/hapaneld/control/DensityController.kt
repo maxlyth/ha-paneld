@@ -3,6 +3,8 @@ package io.github.maxlyth.hapaneld.control
 import io.github.maxlyth.hapaneld.device.DeviceProfile
 import io.github.maxlyth.hapaneld.platform.Daemon
 import io.github.maxlyth.hapaneld.platform.RootShell
+import io.github.maxlyth.hapaneld.platform.ShellPrivilege
+import io.github.maxlyth.hapaneld.shizuku.ShizukuBridge
 import io.github.maxlyth.hapaneld.util.HelperClient
 
 /**
@@ -21,6 +23,7 @@ class DensityController(
     private val canSu: Boolean = DeviceProfile.detect().appCanSu,
     private val root: RootShell = Su,
     private val daemon: Daemon = HelperClient,
+    private val shell: ShellPrivilege = ShizukuBridge,
 ) {
     private data class DensityState(val base: Int, val override: Int?)
 
@@ -41,6 +44,7 @@ class DensityController(
         return routedEffect(
             su = { root.run("wm density $dpi") },
             helper = { daemon.send("DENSITY $dpi") == "OK" },
+            shizuku = { shell.setDensity(dpi) },
         )
     }
 
@@ -48,12 +52,14 @@ class DensityController(
     fun reset(): Boolean = routedEffect(
         su = { root.run("wm density reset") },
         helper = { daemon.send("DENSITY reset") == "OK" },
+        shizuku = shell::resetDensity,
     )
 
     /** Current system font scale (1.0 when unset). WebView text follows this (textZoom = scale × 100). */
     fun fontScale(): Float = routedValue(
         su = { parseRootScale(root.runOutput("settings get system font_scale 2>/dev/null")) },
         helper = { parseHelperScale(daemon.send("FONTSCALE")) },
+        shizuku = { parseRootScale(shell.fontScale()) },
     ) ?: 1.0f
 
     /** Set the system font scale (text size). Bounded to keep text legible. Returns true if applied. */
@@ -62,6 +68,7 @@ class DensityController(
         return routedEffect(
             su = { root.run("settings put system font_scale $scale") },
             helper = { daemon.send("FONTSCALE $scale") == "OK" },
+            shizuku = { shell.setFontScale(scale) },
         )
     }
 
@@ -69,11 +76,13 @@ class DensityController(
     fun resetFontScale(): Boolean = routedEffect(
         su = { root.run("settings delete system font_scale") },
         helper = { daemon.send("FONTSCALE reset") == "OK" },
+        shizuku = shell::resetFontScale,
     )
 
     private fun densityState(): DensityState? = routedValue(
         su = { parseRootDensity(root.runOutput("wm density 2>/dev/null")) },
         helper = { parseHelperDensity(daemon.send("DENSITY")) },
+        shizuku = { parseRootDensity(shell.density()) },
     )
 
     private fun parseRootDensity(reply: String?): DensityState? {
@@ -112,17 +121,29 @@ class DensityController(
         return token.toFloatOrNull()?.takeIf { it.isFinite() && it > 0f }
     }
 
-    private fun routedEffect(su: () -> Boolean, helper: () -> Boolean): Boolean {
+    private fun routedEffect(
+        su: () -> Boolean,
+        helper: () -> Boolean,
+        shizuku: () -> Boolean,
+    ): Boolean {
         val suAttempt = EffectAttempt(PrivilegeRoute.SU, su)
         val helperAttempt = EffectAttempt(PrivilegeRoute.DAEMON, helper)
-        val attempts = if (canSu) arrayOf(suAttempt, helperAttempt) else arrayOf(helperAttempt, suAttempt)
+        val shizukuAttempt = EffectAttempt(PrivilegeRoute.SHIZUKU, shizuku)
+        val attempts = if (canSu) arrayOf(suAttempt, helperAttempt, shizukuAttempt)
+            else arrayOf(helperAttempt, suAttempt, shizukuAttempt)
         return ShortOperationRouter.effect(*attempts) != null
     }
 
-    private fun <T : Any> routedValue(su: () -> T?, helper: () -> T?): T? {
+    private fun <T : Any> routedValue(
+        su: () -> T?,
+        helper: () -> T?,
+        shizuku: () -> T?,
+    ): T? {
         val suAttempt = ValueAttempt(PrivilegeRoute.SU, su)
         val helperAttempt = ValueAttempt(PrivilegeRoute.DAEMON, helper)
-        val attempts = if (canSu) arrayOf(suAttempt, helperAttempt) else arrayOf(helperAttempt, suAttempt)
+        val shizukuAttempt = ValueAttempt(PrivilegeRoute.SHIZUKU, shizuku)
+        val attempts = if (canSu) arrayOf(suAttempt, helperAttempt, shizukuAttempt)
+            else arrayOf(helperAttempt, suAttempt, shizukuAttempt)
         return ShortOperationRouter.value(*attempts)?.value
     }
 

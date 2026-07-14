@@ -31,6 +31,7 @@ import io.github.maxlyth.hapaneld.device.DeviceProfile
 import io.github.maxlyth.hapaneld.device.TameCandidate
 import io.github.maxlyth.hapaneld.logship.LogCapture
 import io.github.maxlyth.hapaneld.sensors.SensorReporter
+import io.github.maxlyth.hapaneld.shizuku.ShizukuBridge
 import io.github.maxlyth.hapaneld.util.Cached
 import io.github.maxlyth.hapaneld.util.AppInstaller
 import io.github.maxlyth.hapaneld.util.AndroidInput
@@ -1174,6 +1175,7 @@ ${tameCardHtml()}
         // Engine-aware WebView age check (a Cromite swap reports the stale OEM package version).
         val wv = PanelInfo.webViewStatus(appContext)
         val root = rootOk()
+        val installer = installOk()
         val su = suCache.get()
         // Same finding set as the dashboard banner (HealthAudit). Update findings are surfaced by the
         // Managed-components card below, so the top warnings show only the render-blocking states.
@@ -1188,7 +1190,7 @@ ${tameCardHtml()}
         val canHeal = wv.tooOld && profile.recommendedWebView != null && root
         // A missing dashboard app can be self-healed by installing the minimal HA Companion over root — a
         // Play-managed full Companion would already count as a renderer, so NO_RENDERER + root ⇒ safe.
-        val canInstallCompanion = root
+        val canInstallCompanion = installer
         // Two warnings not modelled by HealthAudit (crash-looping dashboard, Companion blank internal_url)
         // — shared with the dashboard banner. Here (Install tab, install.js loaded) they get inline buttons.
         val extra = adHocWarnings(inlineRepair = true)
@@ -1196,8 +1198,8 @@ ${tameCardHtml()}
         val allGood = if (problems.isEmpty() && extra.isEmpty()) """<div class="card"><p class="note">✓ No setup problems detected — this panel looks ready.</p></div>""" else ""
         return """$warnings
 <div class="cards">
-${componentsCardHtml(wv, root)}
-${apkCardHtml(root)}
+${componentsCardHtml(wv, root, installer)}
+${apkCardHtml(installer)}
 ${uninstallCardHtml(su)}
 <div class="card" id="radiocard" style="display:none"><h2>Radio firmware</h2>
 <table><tr><th>EFR32 radio</th><td id="radio-status">…</td></tr></table>
@@ -1235,30 +1237,30 @@ $allGood</div>
      *  from Configure; up to 10 recent versions hydrated by install.js) with a release-notes link and an
      *  Install-selected-version button. The System WebView is a single known-good build (heal/up-to-date).
      *  All actions POST /api/v1/install/component and poll /api/v1/install/status. */
-    private fun componentsCardHtml(wv: PanelInfo.WebViewStatus, root: Boolean): String {
+    private fun componentsCardHtml(wv: PanelInfo.WebViewStatus, root: Boolean, installer: Boolean): String {
         val paneldCur = Config.VERSION
         val compPkg = CompanionInstaller.installedPkg(appContext)
         val compFull = compPkg == CompanionInstaller.FULL_PKG
         val compCur = compPkg?.let { AppInstaller.installedVersion(appContext, it) }?.takeIf { it.isNotBlank() }
         val rec = profile.recommendedWebView
 
-        val paneldRow = pickerRow("paneld", "ha-paneld", paneldCur, config.updateChannel, root)
+        val paneldRow = pickerRow("paneld", "ha-paneld", paneldCur, config.updateChannel, installer)
         // A Play-managed FULL Companion must never be touched by ha-paneld — show it read-only.
         val compRow = if (compFull)
             simpleRow("HA Companion", compCur, """<span class="muted">Play-managed — updates via the Play Store</span>""")
-        else pickerRow("companion", "HA Companion", compCur, config.companionUpdateChannel, root)
+        else pickerRow("companion", "HA Companion", compCur, config.companionUpdateChannel, installer)
         val wvAction = when {
             wv.tooOld && rec != null && root -> """<button class="pbtn" onclick="installComp('webview','update',this)">⬇ Update WebView</button>"""
             wv.tooOld && rec != null -> """<span class="muted">needs root/daemon to update</span>"""
             wv.tooOld -> """<span class="muted">no known-good build for this panel</span>"""
             else -> """<span class="muted">up to date</span>"""
         }
-        val rootNote = if (root) "" else """<p class="note">⚠ Installing/updating needs root or the helper daemon — unavailable on this panel.</p>"""
+        val installNote = if (installer) "" else """<p class="note">⚠ Installing/updating needs root, the helper daemon, or locally approved Shizuku access — unavailable on this panel.</p>"""
         return """<div class="card"><h2>Managed components</h2>
 $paneldRow
 $compRow
 ${simpleRow("System WebView", wv.display, wvAction)}
-$rootNote
+$installNote
 <p class="note">The default channel is set on the <a href="/configure">Configure</a> tab; changing it here only affects this picker.</p>
 <p class="note" id="comp-msg"></p></div>"""
     }
@@ -1289,15 +1291,15 @@ $compRow
 <p class="note"><a href="/api/v1/config/export" style="color:#9cf">⭳ Config-only bundle (unencrypted)</a> — settings only, for cloning to another panel via Configure → Import.</p></div>"""
     }
 
-    /** "Install an APK" card (Install tab). ⚠ Root-installs an arbitrary user-supplied APK over the
+    /** "Install an APK" card (Install tab). ⚠ Privileged-installs an arbitrary user-supplied APK over the
      *  unauthenticated LAN-trust :8888 — carries a prominent in-card security warning, an enable toggle
-     *  (config.apkUploadAllowed), and a parse-then-confirm flow (see install.js). Root-gated. */
-    private fun apkCardHtml(root: Boolean): String {
-        val body = if (!root) {
-            """<p class="note">⚠ Installing an APK needs root or the helper daemon — unavailable on this panel.</p>"""
+     *  (config.apkUploadAllowed), and a parse-then-confirm flow (see install.js). Installer-gated. */
+    private fun apkCardHtml(installer: Boolean): String {
+        val body = if (!installer) {
+            """<p class="note">⚠ Installing an APK needs root, the helper daemon, or locally approved Shizuku access — unavailable on this panel.</p>"""
         } else {
             val allowed = config.apkUploadAllowed
-            """<div class="setup">⚠ <b>Security:</b> this root-installs <b>any</b> APK you choose, over the panel's """ +
+            """<div class="setup">⚠ <b>Security:</b> this privileged-installs <b>any</b> APK you choose, over the panel's """ +
                 """<b>unauthenticated</b> LAN web UI. Only upload APKs you trust. """ +
                 """<small>(Panel access is LAN-only today; authenticated access is planned for a later release.)</small></div>
 <label style="display:flex;flex-direction:row;gap:8px;align-items:center;margin:10px 0"><input type="checkbox" id="apk-allow" ${if (allowed) "checked" else ""} onchange="apkAllow(this)"> Enable APK install on this panel</label>
@@ -1369,7 +1371,7 @@ $body</div>"""
     /** A component row with a channel + version picker (versions hydrated by install.js), a release-notes
      *  link, and an Install button — for the GitHub-hosted components (ha-paneld, HA Companion). The
      *  channel select defaults to [defaultChannel] (the Configure-tab setting). */
-    private fun pickerRow(name: String, label: String, installed: String?, defaultChannel: String, root: Boolean): String {
+    private fun pickerRow(name: String, label: String, installed: String?, defaultChannel: String, installer: Boolean): String {
         fun sel(v: String) = if (defaultChannel == v) " selected" else ""
         return """<div class="comprow" data-name="${esc(name)}">
 <div class="compname"><b>${esc(label)}</b> <span class="muted">${if (installed != null) """installed <span class="cver">${esc(installed)}</span>""" else """<span class="cver">not installed</span>"""}</span></div>
@@ -1377,8 +1379,8 @@ $body</div>"""
 <label class="muted">Channel <select class="cchan" onchange="loadVersions('$name')"><option value="stable"${sel("stable")}>Stable</option><option value="prerelease"${sel("prerelease")}>Prerelease</option></select></label>
 <label class="muted">Version <select class="cvsel" onchange="verChanged('$name')"><option>loading…</option></select></label>
 <a class="cfglink cnotes" target="_blank" rel="noopener" title="Release notes ↗" style="visibility:hidden">↗</a>
-${if (root) """<button class="pbtn cinstall" onclick="installSel('$name',this)" data-root="1" disabled>Install</button>"""
-        else """<a class="pbtn cdl" style="display:none" target="_blank" rel="noopener" title="This panel has no root, so ha-paneld can't install APKs itself — download the APK, then install it from your admin machine: adb install -r <file>">⬇ Download APK</a>"""}
+${if (installer) """<button class="pbtn cinstall" onclick="installSel('$name',this)" data-root="1" disabled>Install</button>"""
+        else """<a class="pbtn cdl" style="display:none" target="_blank" rel="noopener" title="This panel has no privileged installer, so ha-paneld can't install APKs itself — download the APK, then install it from your admin machine: adb install -r <file>">⬇ Download APK</a>"""}
 </div></div>"""
     }
 
@@ -1545,6 +1547,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         val densityBase: Int?,
         val fontScale: Float,
         val rootOk: Boolean,
+        val captureOk: Boolean,
     )
 
     // The density trio is shared with the Configure tab's Display card (the bulk of ITS slow render).
@@ -1552,6 +1555,10 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
     // su presence doesn't flap — cache the probe gating screenshot / controls / system logs / taming.
     private val suCache = Cached(SU_TTL_MS) { Su.available() }
     private fun rootOk(): Boolean = suCache.get() || HelperClient.available()
+    private fun shellOk(): Boolean = ShizukuBridge.available()
+    private fun installOk(): Boolean = rootOk() || shellOk()
+    private fun captureOk(): Boolean = rootOk() || shellOk()
+    private fun displayOk(): Boolean = rootOk() || shellOk()
 
     // Companion internal_url health (root sqlite3 read). Cached so the polled /status endpoint doesn't
     // spawn su per request; only checked when su is present (the DB is app-private). Invalidated on repair.
@@ -1566,6 +1573,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
             caps = capabilities(),
             densityCur = d.first, densityBase = d.second, fontScale = d.third,
             rootOk = rootOk(),
+            captureOk = captureOk(),
         )
     }
 
@@ -1775,6 +1783,9 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
     private fun rootLockBanner(unlocks: String): String =
         """<div class="setup rootlock">🔒 Needs a rooted panel — this one has no root, so the controls below are disabled. $unlocks</div>"""
 
+    private fun privilegedLockBanner(unlocks: String): String =
+        """<div class="setup rootlock">🔒 Needs privileged panel access — no approved route is ready, so the controls below are disabled. $unlocks</div>"""
+
     /** The Controls-card button rows. [s] null (cold shell) → everything disabled as "checking…";
      *  hydration swaps in the capability-gated real state. */
     private fun controlsHtml(s: Snap?): String {
@@ -1832,7 +1843,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
             "proftbl" to factRowsHtml(s, PROF_KEYS),
             "captbl" to capRowsHtml(),
         ).joinToString(",") { (k, v) -> "\"$k\":${jsonStr(v)}" }
-        return """{"banners":${jsonStr(bannersHtml(s))},"shot":${s.rootOk},"controls":${jsonStr(controlsHtml(s))},"cards":{$cards}}"""
+        return """{"banners":${jsonStr(bannersHtml(s))},"shot":${s.captureOk},"controls":${jsonStr(controlsHtml(s))},"cards":{$cards}}"""
     }
 
     private fun infoHtml(): String {
@@ -1854,15 +1865,15 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         val profNote = """<p class="note">Values declared by this panel's <a href="$REPO_URL/blob/main/docs/architecture/device-profiles.md" target="_blank" rel="noopener" style="color:#9cf">device profile</a> — if one looks wrong, that's where to correct it.</p>"""
         val capNote = """<p class="note"><a href="/api/v1/diag" target="_blank" style="color:#9cf">⭳ Diagnostics dump</a> — a copy-paste
 report of this panel's hardware, firmware, SELinux, su and node probes for bug reports.</p>"""
-        // Screenshot card: needs root, which the cold shell doesn't know yet — render it hidden with
+        // Screenshot card: needs a privileged capture route, which the cold shell doesn't know yet — render it hidden with
         // the img src deferred (data-src) so a rootless panel never fires a doomed screencap request.
         val shotInner = { src: Boolean ->
             """<a class="shot" href="/api/v1/screenshot.png" target="_blank" rel="noopener" title="Open full size in a new window" style="aspect-ratio:${screenAspectRatio()}"><img ${if (src) "src=\"/api/v1/screenshot.png\"" else "data-src=\"/api/v1/screenshot.png\""} alt="panel screenshot" onload="this.parentElement.classList.add('loaded')" onerror="this.parentElement.classList.add('failed')"></a>
-<p class="note"><a href="#" onclick="var s=this.closest('.card').querySelector('.shot');s.classList.remove('loaded','failed');s.querySelector('img').src='/api/v1/screenshot.png?t='+Date.now();return false" style="color:#9cf">↻ Refresh</a> · click the image to open it full size. Captured on demand via root (`screencap`); local-network only.</p>"""
+<p class="note"><a href="#" onclick="var s=this.closest('.card').querySelector('.shot');s.classList.remove('loaded','failed');s.querySelector('img').src='/api/v1/screenshot.png?t='+Date.now();return false" style="color:#9cf">↻ Refresh</a> · click the image to open it full size. Captured on demand through the available privileged route; local-network only.</p>"""
         }
         val shotCard = when {
             s == null -> """<div class="card" id="shotcard" style="display:none"><h2>Screenshot <small>· live panel</small></h2>${shotInner(false)}</div>"""
-            s.rootOk -> """<div class="card" id="shotcard"><h2>Screenshot <small>· live panel</small></h2>${shotInner(true)}</div>"""
+            s.captureOk -> """<div class="card" id="shotcard"><h2>Screenshot <small>· live panel</small></h2>${shotInner(true)}</div>"""
             else -> ""
         }
         return """<!doctype html><html lang="en"><head><meta charset="utf-8">
@@ -2021,19 +2032,19 @@ fetch('/api/v1/tame/suggest').then(function(r){return r.text()}).then(function(t
         val (curOverride, base, fs) = densityCache.get()
         // Shown even without root (density can't be READ without it either) so a no-root user sees the
         // feature — but greyed, with a lock banner, and every control disabled. `dis` toggles all of it.
-        val locked = !rootOk()
+        val locked = !displayOk()
         // Prefill: the active override if one is set, else the profile's HA-optimised recommendation
         // (so a fresh panel offers the right value to Apply rather than the factory base), else the base.
         val cur = curOverride?.takeIf { it != base } ?: recommendedDensity ?: base ?: DensityController.MIN_DPI
         val dis = if (locked) " disabled" else ""
         val rec = if (!locked && (recommendedDensity != null || recommendedFontScale != null))
             """ <button type="submit" name="action" value="rec" formnovalidate>HA-optimised</button>""" else ""
-        val lock = if (locked) rootLockBanner("With root, ha-paneld can match the dashboard's density and text size to the physical screen.") else ""
+        val lock = if (locked) privilegedLockBanner("With root, the helper daemon, or locally approved Shizuku access, ha-paneld can match the dashboard's density and text size to the physical screen.") else ""
         return """<div class="card" id="cfg-display"><h2>Display sizing<span class="cardbadge exp">experimental</span></h2>
 $lock<p class="note"><b>Experimental / R&amp;D — the right values aren't dialled in yet; experiment at your own
 pace.</b> Match an HA dashboard's size to a desktop browser. <b>Density</b> scales the whole layout
 (lower dpi = more fits); <b>text size</b> scales WebView text. Panel firmware often ships these
-mismatched to the physical screen. Applies live, persists across reboot; needs root or the helper daemon.</p>
+mismatched to the physical screen. Applies live, persists across reboot; needs root, the helper daemon, or locally approved Shizuku access.</p>
 <form method="post" action="/api/v1/display/density" class="${if (locked) "locked" else ""}" style="display:flex;flex-direction:column;gap:10px">
  <label style="display:flex;flex-direction:row;justify-content:space-between;align-items:center;gap:12px">
   <span>Logical density (dpi) <small style="color:#888">· factory base ${base ?: "?"}</small></span>
