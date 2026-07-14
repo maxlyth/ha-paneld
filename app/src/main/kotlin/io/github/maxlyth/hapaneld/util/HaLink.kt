@@ -66,8 +66,12 @@ object HaLink {
 
     /** Cache owner for a resolution. It includes panel identity because the HA device can change without
      * the renderer endpoint changing (for example after reprovisioning with another panel id). */
-    internal fun resolutionTarget(base: String, panelId: String): String =
-        "${base.trim().trimEnd('/')}\u0000${slug(panelId)}"
+    internal fun resolutionTarget(base: String, panelId: String): String {
+        val normalizedBase = base.trim().trimEnd('/')
+        // This value is persisted in SharedPreferences' XML file. Keep the encoding XML-safe and
+        // unambiguous without relying on a delimiter which could occur in a URL.
+        return "v1:${normalizedBase.length}:$normalizedBase:${slug(panelId)}"
+    }
 
     /** An access token plus its remaining lifetime in seconds (as HA's /auth/token reports `expires_in`). */
     data class TokenSet(val accessToken: String, val expiresInSec: Long)

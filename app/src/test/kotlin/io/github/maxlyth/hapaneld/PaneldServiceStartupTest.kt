@@ -7,6 +7,19 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PaneldServiceStartupTest {
+    @Test fun liveReconfigureResolvesNativeHaLinkWithoutWaitingForMqttConnection() {
+        val events = mutableListOf<String>()
+
+        startReconfiguredNetworkRuntime(
+            startMdns = { events += "mdns" },
+            resolveHaLink = { events += "ha-link" },
+            // Models the MQTT-disabled path: start returns without an onConnected callback.
+            startMqtt = { events += "mqtt-disabled" },
+        )
+
+        assertEquals(listOf("mdns", "ha-link", "mqtt-disabled"), events)
+    }
+
     @Test fun mdnsStartsBeforeRendererReconciliationAndLearning() {
         val events = mutableListOf<String>()
 

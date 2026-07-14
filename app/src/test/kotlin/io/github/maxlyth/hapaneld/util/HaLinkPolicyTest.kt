@@ -8,9 +8,15 @@ import org.junit.Test
 class HaLinkPolicyTest {
     @Test fun `resolution target retains the exact native base path and normalizes identity`() {
         assertEquals(
-            "https://native.example/ha\u0000wall_panel",
+            "v1:25:https://native.example/ha:wall_panel",
             HaLink.resolutionTarget("  https://native.example/ha/ ", "Wall Panel"),
         )
+    }
+
+    @Test fun `resolution target is safe for SharedPreferences XML`() {
+        val target = HaLink.resolutionTarget("https://native.example/ha", "Wall Panel")
+
+        assertEquals(-1, target.indexOf('\u0000'))
     }
 
     @Test fun `native and mqtt servers cannot share a cached device id`() {

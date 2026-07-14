@@ -106,6 +106,18 @@ internal fun prepareEntityLearningStartup(
     }
 }
 
+/** Start a replacement network runtime without making native HA link resolution depend on MQTT reaching
+ * an onConnected callback. This keeps live HA URL/token changes effective when MQTT is disabled. */
+internal fun startReconfiguredNetworkRuntime(
+    startMdns: () -> Unit,
+    resolveHaLink: () -> Unit,
+    startMqtt: () -> Unit,
+) {
+    startMdns()
+    resolveHaLink()
+    startMqtt()
+}
+
 internal data class EntityLearningShutdownResult(
     val ingressStopped: Boolean,
     val rendererDrained: Boolean,
@@ -427,8 +439,11 @@ class PaneldService : Service() {
                 NetworkRuntime(buildMqtt(stalePanelId), MdnsAdvertiser(this@PaneldService, config))
             },
             start = { replacement ->
-                replacement.mdns.start()
-                replacement.mqtt.start()
+                startReconfiguredNetworkRuntime(
+                    startMdns = replacement.mdns::start,
+                    resolveHaLink = replacement.mqtt::maybeResolveHaLink,
+                    startMqtt = replacement.mqtt::start,
+                )
             },
             complete = {
                 // Re-read the log sink (host/port/protocol/enabled); restarts only if it changed.
