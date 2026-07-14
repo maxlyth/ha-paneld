@@ -85,4 +85,59 @@ class AssetSyntaxTest {
         val paths = JSONObject(File(dir, "openapi.json").readText()).getJSONObject("paths")
         assertTrue(paths.has("/api/v1/dashboard/entities/issues"))
     }
+
+    @Test fun configureSaveRefreshesEntityTabInBothDirections() {
+        val dir = assetsDir
+        assumeTrue("assets dir not found (skipping)", dir != null)
+        assumeTrue("node not available (skipping)", nodeAvailable())
+        val script = """
+            const fs=require('fs'),vm=require('vm');
+            const initiallyEnabled=process.argv[2]==='true';
+            let reloads=0,posted='';
+            const made=[];
+            function element(tag){
+              const e={tag:tag||'',style:{},dataset:{},handlers:{},children:[],className:'',textContent:'',innerHTML:'',value:'',disabled:false,
+                classList:{toggle(){},add(){},remove(){}},
+                setAttribute(k,v){this[k]=v},addEventListener(k,v){this.handlers[k]=v},appendChild(v){this.children.push(v);return v},
+                scrollIntoView(){}};
+              made.push(e);return e;
+            }
+            const ids={};['cfg-groups','cfg-status','cfg-msg','savebtn','tab-basic','tab-adv'].forEach(k=>ids[k]=element(k));
+            global.document={
+              getElementById:k=>ids[k]||(ids[k]=element(k)),createElement:tag=>element(tag),
+              querySelector:sel=>sel==='.nav a[href^="/entities"]'&&initiallyEnabled?element('a'):null
+            };
+            global.location={hash:'',reload(){reloads++}};
+            global.window=global;
+            const schema=[
+              {key:'dashboard_package',type:'STRING',group:'Dashboard',label:'Dashboard app',available:true,picker:'renderer'},
+              {key:'dashboard_entity_learning',type:'BOOL',group:'Dashboard',label:'Automatic dashboard entity filter',available:true}
+            ];
+            global.fetch=(url,opts)=>{
+              if(opts&&opts.method==='POST'){posted=String(opts.body||'');return Promise.resolve({ok:true,json:()=>Promise.resolve({})})}
+              if(url==='/api/v1/config/schema')return Promise.resolve({json:()=>Promise.resolve(schema)});
+              if(url==='/api/v1/config')return Promise.resolve({json:()=>Promise.resolve({settings:{dashboard_package:'builtin',dashboard_entity_learning:initiallyEnabled?'true':'false'},ha_expose:{}})});
+              if(url==='/api/v1/apps')return Promise.resolve({json:()=>Promise.resolve({apps:[]})});
+              return Promise.reject(new Error('unexpected fetch '+url));
+            };
+            vm.runInThisContext(fs.readFileSync(process.argv[1],'utf8'));
+            setImmediate(()=>setImmediate(()=>{
+              const toggle=made.find(e=>e.role==='switch');
+              if(!toggle||!toggle.handlers.click)process.exit(2);
+              toggle.handlers.click();
+              global.cfgSave();
+              setImmediate(()=>setImmediate(()=>{
+                const expected=initiallyEnabled?'false':'true';
+                if(!posted.includes('dashboard_entity_learning='+expected))process.exit(3);
+                if(reloads!==1)process.exit(4);
+              }));
+            }));
+        """.trimIndent()
+        for (initial in listOf(false, true)) {
+            val (code, out) = run(
+                listOf("node", "-e", script, File(dir, "configure.js").absolutePath, initial.toString()),
+            )
+            assertEquals("Configure entity-tab ${if (initial) "disable" else "enable"} transition failed:\n$out", 0, code)
+        }
+    }
 }

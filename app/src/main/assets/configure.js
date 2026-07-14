@@ -192,7 +192,17 @@
     render();
   };
 
+  // The shared navigation is server-rendered, while this page saves and reloads only the form data.
+  // Detect both stale directions before saving: enabling learning (or selecting the built-in renderer)
+  // must expose Entities, and disabling either prerequisite must remove it.
+  function entityTabNeedsShellReload() {
+    var enabledInNav = !!document.querySelector('.nav a[href^="/entities"]');
+    var enabledByForm = values.dashboard_entity_learning === "true" && values.dashboard_package === "builtin";
+    return enabledInNav !== enabledByForm;
+  }
+
   window.cfgSave = function () {
+    var reloadShellAfterSave = entityTabNeedsShellReload();
     var body = new URLSearchParams();
     schema.forEach(function (f) {
       var v = values[f.key];
@@ -208,6 +218,9 @@
     }).then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
       .then(function () {
         msg.textContent = "Saving…"; dirty = false; document.getElementById("savebtn").disabled = true;
+        // Re-render the server-owned navigation when its eligibility changed. This is deliberately
+        // symmetric so the tab cannot remain incorrectly disabled OR enabled after a successful save.
+        if (reloadShellAfterSave) { location.reload(); return; }
         // Re-stamp the config-watch baseline: OUR save changes the cfg fingerprint too, and without
         // this buildwatch.js would mistake it for an external change and reload 10s after every save.
         setTimeout(function () {
