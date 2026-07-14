@@ -1009,10 +1009,11 @@ class PaneldServer(
           <div class="card"><h2>Entity subscription<span class="cardbadge skunk">skunk-works</span></h2>
             <div id="entity-status">Loading…</div>
             <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
-              <button class="pbtn" id="entity-sync">Synchronize now</button>
-              <button class="pbtn" id="entity-activate">Apply learned set</button>
+              <button class="pbtn" id="entity-sync">Scan dashboard now</button>
+              <button class="pbtn" id="entity-activate" disabled>Checking subscription…</button>
               <a class="pbtn" href="/api/v1/dashboard/entities/export">Export details</a>
             </div>
+            <div id="entity-action-result" class="entity-action-result muted" role="status" aria-live="polite"></div>
             <fieldset class="entity-policy"><legend>Automatic promotion</legend>
               <label><input type="checkbox" id="entity-auto-static"> Add entities parsed from dashboard configuration</label>
               <label><input type="checkbox" id="entity-auto-runtime"> Add missing entities accessed through <code>hass.states</code></label>

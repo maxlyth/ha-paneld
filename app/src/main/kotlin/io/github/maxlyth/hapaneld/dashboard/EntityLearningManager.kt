@@ -86,14 +86,21 @@ class EntityLearningManager(
         if (!confirm) return JSONObject().put("ok", false).put("confirmation_required", true).toString()
         val active = desiredIds(System.currentTimeMillis())
         require(active.isNotEmpty()) { "learned candidate set is empty" }
+        val preview = subscriptionPreview(active)
         check(config.commitDashboardEntityLearningApplied(true)) { "failed to commit activation latch" }
-        if (!config.setDashboardEntityFilter(true, active)) {
-            config.commitDashboardEntityLearningApplied(false)
-            error("failed to commit learned entity set")
+        if (preview.streamChange) {
+            if (!config.setDashboardEntityFilter(true, active)) {
+                config.commitDashboardEntityLearningApplied(false)
+                error("failed to commit learned entity set")
+            }
+            onFilterChanged()
         }
         store.markStatus(instance(), dashboardPath(), "active")
-        onFilterChanged()
         return JSONObject().put("ok", true).put("entity_count", active.size)
+            .put("previous_count", preview.currentCount)
+            .put("added_count", preview.additions).put("removed_count", preview.removals)
+            .put("stream_changed", preview.streamChange)
+            .put("automatic_updates_enabled", true)
             .put("filter_hash", EntityFilterProtocol.hash(active)).toString()
     }
 
@@ -270,6 +277,8 @@ class EntityLearningManager(
         val suggestions = store.suggestedIds(instance(), dashboardPath())
         val candidates = suggestions.count { it !in config.dashboardEntityFilterIds.toSet() }
         val filtered = config.dashboardEntityFilterEnabled && config.dashboardEntityFilterIds.isNotEmpty()
+        val desired = desiredIds(System.currentTimeMillis())
+        val preview = subscriptionPreview(desired, s.catalogCount)
         return JSONObject()
             .put("requested_enabled", config.dashboardEntityLearningEnabled)
             .put("mode", if (config.dashboardEntityLearningEnabled) "automatic" else "manual")
@@ -280,8 +289,14 @@ class EntityLearningManager(
             .put("last_sync_at", s.lastSyncAt).put("catalog_count", s.catalogCount)
             .put("active_count", config.dashboardEntityFilterIds.size)
             .put("candidate_count", candidates).put("suggested_count", candidates)
+            .put("desired_count", desired.size)
+            .put("pending_additions", preview.additions).put("pending_removals", preview.removals)
+            .put("stream_change_required", preview.streamChange)
+            .put("activation_required", !config.dashboardEntityLearningApplied)
+            .put("apply_required", preview.streamChange || !config.dashboardEntityLearningApplied)
             .put("stream_mode", if (filtered) "filtered" else "unfiltered")
             .put("stream_entity_count", if (filtered) config.dashboardEntityFilterIds.size else s.catalogCount)
+            .put("stream_filter_hash", if (filtered) EntityFilterProtocol.hash(config.dashboardEntityFilterIds) else "")
             .put("unresolved_count", s.unresolvedCount)
             .put("error", s.error).put("db_bytes", s.dbBytes).put("sync_running", syncJob?.isActive == true)
             .toString()
@@ -323,6 +338,19 @@ class EntityLearningManager(
         includeStatic = config.dashboardEntityAutoStatic,
         includeRuntime = config.dashboardEntityAutoRuntime,
     )
+
+    private fun subscriptionPreview(
+        desired: List<String>,
+        catalogCount: Int = store.snapshot(instance(), dashboardPath()).catalogCount,
+    ): EntitySubscriptionPreview {
+        val filtered = config.dashboardEntityFilterEnabled && config.dashboardEntityFilterIds.isNotEmpty()
+        return previewEntitySubscription(
+            filtered = filtered,
+            currentIds = config.dashboardEntityFilterIds,
+            catalogCount = catalogCount,
+            desiredIds = desired,
+        )
+    }
 
     private fun instance(): String = EntityLearningProtocol.hash(normalizedOrigin(config.haUrl))
     private fun dashboardPath(): String = config.homeDashboard.ifBlank { "/" }
@@ -433,6 +461,36 @@ class EntityLearningManager(
 /** An empty installation starts narrow; any stored manual list is preserved for explicit review. */
 internal fun shouldBootstrapEntityLearning(applied: Boolean, configuredIds: Collection<String>): Boolean =
     !applied && configuredIds.isEmpty()
+
+internal data class EntitySubscriptionPreview(
+    val currentCount: Int,
+    val additions: Int,
+    val removals: Int,
+    val streamChange: Boolean,
+)
+
+/** Pure current→policy preview used by both status and the confirmed apply result. */
+internal fun previewEntitySubscription(
+    filtered: Boolean,
+    currentIds: Collection<String>,
+    catalogCount: Int,
+    desiredIds: Collection<String>,
+): EntitySubscriptionPreview {
+    val desired = desiredIds.toSet()
+    if (!filtered) return EntitySubscriptionPreview(
+        currentCount = catalogCount,
+        additions = 0,
+        removals = (catalogCount - desired.size).coerceAtLeast(0),
+        streamChange = desired.isNotEmpty(),
+    )
+    val current = currentIds.toSet()
+    return EntitySubscriptionPreview(
+        currentCount = current.size,
+        additions = (desired - current).size,
+        removals = (current - desired).size,
+        streamChange = current != desired,
+    )
+}
 
 /** Process-local rendezvous between the service-owned learner and DashboardActivity's JS bridge. */
 object EntityLearningRuntime {

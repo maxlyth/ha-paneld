@@ -12,6 +12,26 @@ class EntityLearningProtocolTest {
         assertFalse(shouldBootstrapEntityLearning(applied = true, configuredIds = emptyList()))
     }
 
+    @Test fun subscriptionPreviewMakesApplyOutcomeExplicit() {
+        assertEquals(
+            EntitySubscriptionPreview(currentCount = 3, additions = 1, removals = 1, streamChange = true),
+            previewEntitySubscription(
+                filtered = true,
+                currentIds = listOf("light.a", "light.b", "sensor.c"),
+                catalogCount = 100,
+                desiredIds = listOf("light.a", "light.b", "person.d"),
+            ),
+        )
+        assertEquals(
+            EntitySubscriptionPreview(currentCount = 3, additions = 0, removals = 0, streamChange = false),
+            previewEntitySubscription(true, listOf("light.a", "light.b", "sensor.c"), 100, listOf("sensor.c", "light.b", "light.a")),
+        )
+        assertEquals(
+            EntitySubscriptionPreview(currentCount = 100, additions = 0, removals = 97, streamChange = true),
+            previewEntitySubscription(false, emptyList(), 100, listOf("light.a", "light.b", "sensor.c")),
+        )
+    }
+
     @Test fun observerAttributesInitialHydrationAndFlushesPromptly() {
         val script = EntityLearningProtocol.documentStartScript("https://example.test")
         assertTrue(script.contains("JSON.stringify(event.a[k]).length"))
