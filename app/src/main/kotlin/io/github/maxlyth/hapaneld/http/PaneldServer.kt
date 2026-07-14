@@ -38,7 +38,6 @@ import io.github.maxlyth.hapaneld.util.HelperClient
 import io.github.maxlyth.hapaneld.util.ByteLimitExceeded
 import io.github.maxlyth.hapaneld.util.InstallProgress
 import io.github.maxlyth.hapaneld.util.Json
-import io.github.maxlyth.hapaneld.util.ReleaseCatalog
 import io.github.maxlyth.hapaneld.util.RendererPreparationCoordinator
 import io.github.maxlyth.hapaneld.util.SelfUpdater
 import io.github.maxlyth.hapaneld.util.UpdateChecker
@@ -191,7 +190,6 @@ class PaneldServer(
     private val interactive = InteractiveController(canSu = profile.appCanSu)
     // On-panel config revision history (ring buffer) — written on every successful apply.
     private val revisions = RevisionStore(appContext.filesDir)
-    private val urlRegex = Regex("""https?://[^\s"']+""")
     // Stored as a stop lambda over a type-inferred server local, so we never have to name Ktor's
     // EmbeddedServer<TEngine, TConfiguration> generic type (which shifts between Ktor versions).
     private var stopServer: (() -> Unit)? = null
@@ -242,6 +240,41 @@ class PaneldServer(
                 }
             }
             routing {
+                controlPlaneRoutes(
+                    ControlPlaneRouteDependencies(
+                        playAudio = playAudio,
+                        installComponent = onInstallComponent,
+                        buildBackup = { includeCompanion, passphrase ->
+                            withContext(Dispatchers.IO) {
+                                val json = backupJson(includeCompanion).toByteArray()
+                                if (passphrase.isEmpty()) json else PanelBackup.seal(json, passphrase)
+                            }
+                        },
+                        backupFileStem = { config.panelId },
+                        apkUpload = ApkUploadRouteDependencies(
+                            enabled = { config.apkUploadAllowed },
+                            rootAvailable = { rootOk() },
+                            pending = pendingApks,
+                            createStagingFile = { File.createTempFile("apk-upload-", ".apk", appContext.cacheDir) },
+                            inspect = { staged ->
+                                withContext(Dispatchers.IO) { AppInstaller.inspect(appContext, staged.absolutePath) }?.let {
+                                    UploadedApkIdentity(it.pkg, it.version, it.signerSha256)
+                                }
+                            },
+                            startInstall = { claimed, progress ->
+                                val apk = claimed.file
+                                val job = scope.launch {
+                                    val result = runCatching { AppInstaller.installLocalApk(appContext, apk) }
+                                        .getOrElse { "error: ${it.message}" }
+                                    Log.i(TAG, "APK upload install: $result")
+                                    InstallProgress.finish(progress, result)
+                                }
+                                job.invokeOnCompletion { cause -> if (cause != null) apk.delete() }
+                                InstallProgress.finishOnFailure(progress, job)
+                            },
+                        ),
+                    ),
+                )
                 get("/") {
                     call.respondText(infoHtml(), ContentType.Text.Html)
                 }
@@ -290,9 +323,6 @@ class PaneldServer(
                 get("/health") {
                     call.respondText("ha-paneld ${Config.VERSION} panel=${config.panelId} build=${buildToken()} cfg=${io.github.maxlyth.hapaneld.config.ConfigHash.of(currentValues())}\n")
                 }
-                // TTS/announce contract — REAL at the root (external automations call it with plain
-                // curl, which doesn't follow 308) as well as under /api/v1.
-                post("/play") { handlePlay(call) }
                 // Pre-0.8.5 flat machine endpoints → 308 to their /api/v1 homes.
                 legacyRedirects()
 
@@ -311,47 +341,6 @@ class PaneldServer(
                     // Versioned config bundle: backup (export) and validated restore/deploy (import).
                     get("/config/export") { handleConfigExport(call) }
                     post("/config/import") { handleConfigImport(call) }
-                    // Full panel backup: a bundle of the ha-paneld config (incl. secrets) plus, when
-                    // include_companion, the HA Companion's login DB. A passphrase is OPTIONAL — supply one
-                    // to encrypt the bundle (recommended if it'll be stored off the panel, since it carries
-                    // HA tokens); omit it for a plain bundle. Streams a .hpb (encrypted) or .json download.
-                    post("/backup") {
-                        val p = call.receiveParameters()
-                        val pw = p["passphrase"].orEmpty()
-                        val includeComp = p["include_companion"]?.let { it == "true" || it == "1" } ?: true
-                        val progress = if (includeComp) InstallProgress.start("Backup") else null
-                        if (includeComp && progress == null) return@post call.respondText(
-                            """{"ok":false,"error":"busy"}""",
-                            ContentType.Application.Json,
-                            HttpStatusCode.Conflict,
-                        )
-                        var progressResult = "backup cancelled"
-                        val bytes = try {
-                            withContext(Dispatchers.IO) {
-                                val json = backupJson(includeComp).toByteArray()
-                                if (pw.isEmpty()) json else PanelBackup.seal(json, pw)
-                            }.also { progressResult = "backup ready" }
-                        } catch (_: ByteLimitExceeded) {
-                            progressResult = "Companion backup is too large"
-                            return@post call.respondText(
-                                """{"ok":false,"error":"companion-backup-too-large"}""",
-                                ContentType.Application.Json,
-                                HttpStatusCode.PayloadTooLarge,
-                            )
-                        } catch (e: CompanionBackupUnavailable) {
-                            progressResult = e.reason
-                            return@post call.respondText(
-                                """{"ok":false,"error":${jsonStr(e.reason)}}""",
-                                ContentType.Application.Json,
-                                HttpStatusCode.UnprocessableEntity,
-                            )
-                        } finally {
-                            if (progress != null) InstallProgress.finish(progress, progressResult)
-                        }
-                        val ext = if (pw.isEmpty()) "json" else "hpb"
-                        call.response.headers.append("Content-Disposition", "attachment; filename=\"${config.panelId}-backup.$ext\"")
-                        call.respondBytes(bytes, ContentType.Application.OctetStream)
-                    }
                     // Restore a .hpb bundle (raw body; passphrase in the X-Backup-Passphrase header so it
                     // never lands in a query log). ?dry_run=1 decrypts + reports the contents WITHOUT writing.
                     // A real restore is DESTRUCTIVE (rewrites config; force-stops + rewrites the Companion DB).
@@ -453,100 +442,7 @@ class PaneldServer(
                         }
                         call.respondText("""{"channel":${jsonStr(channel)},"versions":[$arr]}""", ContentType.Application.Json)
                     }
-                    // Install/update a managed component (Install tab). name ∈ {paneld,companion,webview}.
-                    // A `version` (release tag) installs that exact build (the picker); otherwise `action` ∈
-                    // {update,reinstall} takes the channel's newest. Fire-and-forget off-thread; poll
-                    // /install/status. Rejects if an install is already running (single-slot).
-                    post("/install/component") {
-                        val p = call.receiveParameters()
-                        val name = p["name"]?.trim().orEmpty()
-                        val action = p["action"]?.trim()?.ifEmpty { "update" } ?: "update"
-                        val version = p["version"]?.trim().orEmpty()
-                        if (name !in setOf("paneld", "companion", "webview"))
-                            call.respondText("""{"status":"bad-component"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
-                        else if (action !in setOf("update", "reinstall"))
-                            call.respondText("""{"status":"bad-action"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
-                        else if (version.isNotEmpty() && !ReleaseCatalog.validTag(version))
-                            call.respondText("""{"status":"bad-version"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
-                        else {
-                            val status = if (onInstallComponent(name, action, version)) "started" else "busy"
-                            call.respondText("""{"status":"$status"}""", ContentType.Application.Json)
-                        }
-                    }
                     get("/install/status") { call.respondText(InstallProgress.json(), ContentType.Application.Json) }
-                    // ---- APK upload (Install tab). ⚠ SECURITY: root-installs an ARBITRARY user-supplied
-                    // APK over the UNAUTHENTICATED LAN-trust :8888 — the highest-impact verb on this server.
-                    // Mitigations: gated on config.apkUploadAllowed + rootOk + the LAN source-gate + an
-                    // explicit client confirm (the staged package/version/signer are shown first). This does
-                    // NOT add authentication — token auth is planned but not before v1.0. ----
-                    // Stage an uploaded APK (raw request body) and return its parsed identity for confirm.
-                    post("/install/apk") {
-                        if (!config.apkUploadAllowed) return@post call.respondText(
-                            """{"ok":false,"error":"disabled"}""", ContentType.Application.Json, HttpStatusCode.Forbidden)
-                        if (!rootOk()) return@post call.respondText(
-                            """{"ok":false,"error":"no-root"}""", ContentType.Application.Json, HttpStatusCode.ServiceUnavailable)
-                        val lease = pendingApks.begin() ?: return@post call.respondText(
-                            """{"ok":false,"error":"stopping"}""", ContentType.Application.Json, HttpStatusCode.ServiceUnavailable)
-                        val staged = runCatching {
-                            File.createTempFile("apk-upload-", ".apk", appContext.cacheDir)
-                        }.getOrElse {
-                            return@post call.respondText(
-                                """{"ok":false,"error":"upload-staging-failed"}""",
-                                ContentType.Application.Json,
-                                HttpStatusCode.InternalServerError,
-                            )
-                        }
-                        val got = try {
-                            withContext(Dispatchers.IO) {
-                                call.receiveStream().use { input ->
-                                    staged.outputStream().use { output ->
-                                        BoundedStreams.copy(input, output, MAX_APK_UPLOAD_BYTES)
-                                    }
-                                } > 0L
-                            }
-                        } catch (_: ByteLimitExceeded) {
-                            staged.delete()
-                            return@post call.respondText(
-                                """{"ok":false,"error":"upload-too-large"}""",
-                                ContentType.Application.Json,
-                                HttpStatusCode.PayloadTooLarge,
-                            )
-                        } catch (_: Exception) {
-                            false
-                        }
-                        if (!got) { staged.delete(); return@post call.respondText(
-                            """{"ok":false,"error":"upload-failed"}""", ContentType.Application.Json, HttpStatusCode.BadRequest) }
-                        val info = withContext(Dispatchers.IO) { AppInstaller.inspect(appContext, staged.absolutePath) }
-                        if (info == null) { staged.delete(); return@post call.respondText(
-                            """{"ok":false,"error":"not-an-apk"}""", ContentType.Application.Json, HttpStatusCode.BadRequest) }
-                        val entry = pendingApks.stage(lease, staged) ?: return@post call.respondText(
-                            """{"ok":false,"error":"stopping"}""", ContentType.Application.Json, HttpStatusCode.ServiceUnavailable)
-                        call.respondText(
-                            """{"ok":true,"token":${jsonStr(entry.token)},"package":${jsonStr(info.pkg)},"version":${jsonStr(info.version)},"signer":${jsonStr(info.signerSha256 ?: "unsigned")}}""",
-                            ContentType.Application.Json)
-                    }
-                    // Confirm + install the staged APK (off-thread; poll /install/status).
-                    post("/install/apk/commit") {
-                        if (!config.apkUploadAllowed) return@post call.respondText(
-                            """{"status":"disabled"}""", ContentType.Application.Json, HttpStatusCode.Forbidden)
-                        val token = call.receiveParameters()["token"].orEmpty()
-                        val claimed = pendingApks.claim(token) ?: return@post call.respondText(
-                            """{"status":"stale-or-missing"}""", ContentType.Application.Json, HttpStatusCode.Conflict)
-                        val progress = InstallProgress.start("APK")
-                        if (progress == null) {
-                            pendingApks.restore(claimed)
-                            return@post call.respondText("""{"status":"busy"}""", ContentType.Application.Json)
-                        }
-                        val apk = claimed.file
-                        val job = scope.launch {
-                            val r = runCatching { AppInstaller.installLocalApk(appContext, apk) }.getOrElse { "error: ${it.message}" }
-                            Log.i(TAG, "APK upload install: $r")
-                            InstallProgress.finish(progress, r)
-                        }
-                        job.invokeOnCompletion { cause -> if (cause != null) apk.delete() }
-                        InstallProgress.finishOnFailure(progress, job)
-                        call.respondText("""{"status":"started"}""", ContentType.Application.Json)
-                    }
                     // Enable/disable the APK-upload capability (the card's toggle).
                     post("/install/apk/allow") {
                         val on = call.receiveParameters()["on"]?.let { it == "true" || it == "1" } ?: true
@@ -877,7 +773,6 @@ class PaneldServer(
                         synchronized(inspectLock) { if (CdpRelay.running) CdpRelay.stop() }
                         call.respondText(inspectJson("off"), ContentType.Application.Json)
                     }
-                    post("/play") { handlePlay(call) }
                 }
             }
         }
@@ -911,28 +806,6 @@ class PaneldServer(
         @Suppress("DEPRECATION") wm.defaultDisplay.getRealMetrics(dm)
         if (dm.widthPixels > 0 && dm.heightPixels > 0) "${dm.widthPixels}/${dm.heightPixels}" else "3/4"
     } catch (e: Throwable) { "3/4" }
-
-    /** Shared TTS/announce handler — served at both `/play` (external contract) and `/api/v1/play`. */
-    private suspend fun handlePlay(call: ApplicationCall) {
-        val body = try {
-            withContext(Dispatchers.IO) {
-                call.receiveStream().use { String(BoundedStreams.readBytes(it, MAX_PLAY_BODY_BYTES), Charsets.UTF_8) }
-            }
-        } catch (_: ByteLimitExceeded) {
-            call.respondText("body-too-large\n", status = HttpStatusCode.PayloadTooLarge)
-            return
-        }
-        val url = urlRegex.find(body)?.value
-        if (url == null) {
-            call.respondText("no-url\n", status = HttpStatusCode.BadRequest)
-            return
-        }
-        if (!playAudio(url)) {
-            call.respondText("stopping\n", status = HttpStatusCode.ServiceUnavailable)
-            return
-        }
-        call.respondText("playing\n")
-    }
 
     /** 308 for a legacy flat path — preserves method, body and query so pre-0.8.5 tooling keeps working. */
     private suspend fun legacy(call: ApplicationCall, new: String) {
@@ -2577,8 +2450,6 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
     private val companionBackupFiles = CompanionRestore.ALLOWED_FILES
 
     /** Build the backup plaintext. A requested Companion capture is all-or-error, never silently omitted. */
-    private class CompanionBackupUnavailable(val reason: String) : Exception(reason)
-
     private fun backupJson(includeCompanion: Boolean): String {
         val live = liveValues()
         val cfg = SettingsRegistry.settable().filterNot { it.transient }

@@ -147,6 +147,7 @@ dependencies {
     // JVM unit tests (no Android/emulator deps): pure-logic + coroutine serialization regression tests.
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.ktor.server.test.host)
     // Real org.json — the android.jar stub's returnDefaultValues would silently no-op JSON code under test.
     testImplementation(libs.org.json)
 }
