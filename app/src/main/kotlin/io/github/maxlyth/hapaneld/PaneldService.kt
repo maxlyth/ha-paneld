@@ -55,7 +55,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import io.github.maxlyth.hapaneld.util.RuntimeLifecycleCoordinator
+import io.github.maxlyth.hapaneld.util.ServiceRuntimeOwner
 import io.github.maxlyth.hapaneld.util.BorrowedRendererSettings
 import io.github.maxlyth.hapaneld.util.RendererPreparationCoordinator
 import io.github.maxlyth.hapaneld.util.RendererPreparationState
@@ -91,17 +91,14 @@ import java.io.File
 class PaneldService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     // One dedicated transition lane owns initial start, config rebuilds, reconnects, and final teardown.
-    // Generation checks reject watchdog/network work aimed at a bridge that reconfigure has replaced.
-    private val runtime = RuntimeLifecycleCoordinator("ha-paneld-runtime") { operation, error ->
-        Log.e(TAG, "runtime $operation failed", error)
-    }
+    // Observations capture the generation and concrete MQTT/mDNS pair together, so watchdog/network work cannot read a generation from one runtime and then reach a replacement through a mutable field.
+    private data class NetworkRuntime(val mqtt: MqttBridge, val mdns: MdnsAdvertiser)
+    private lateinit var runtime: ServiceRuntimeOwner<NetworkRuntime>
     private lateinit var config: Config
     private lateinit var server: PaneldServer
     private lateinit var rendererPreparation: RendererPreparationCoordinator
-    private data class NetworkRuntime(val mqtt: MqttBridge, val mdns: MdnsAdvertiser)
-    @Volatile private lateinit var networkRuntime: NetworkRuntime
-    private val mqtt: MqttBridge get() = networkRuntime.mqtt
-    private val mdns: MdnsAdvertiser get() = networkRuntime.mdns
+    private val mqtt: MqttBridge get() = runtime.current().mqtt
+    private val mdns: MdnsAdvertiser get() = runtime.current().mdns
     // Default-network callback that nudges an MQTT reconnect when the network returns (see registerNetworkCallback).
     private var netCallback: ConnectivityManager.NetworkCallback? = null
     // MQTT watchdog runs on a DEDICATED thread (not Dispatchers.IO), so slow/contended su can't starve it.
@@ -224,7 +221,11 @@ class PaneldService : Service() {
         power = PowerController(this)
         configUrl = localIpv4()?.let { "http://$it:${config.httpPort}/" }
 
-        networkRuntime = NetworkRuntime(buildMqtt(), MdnsAdvertiser(this, config))
+        runtime = ServiceRuntimeOwner(
+            initial = NetworkRuntime(buildMqtt(), MdnsAdvertiser(this, config)),
+            threadName = "ha-paneld-runtime",
+            onError = { operation, error -> Log.e(TAG, "runtime $operation failed", error) },
+        )
         rendererPreparation = RendererPreparationCoordinator(
             builtinPackage = SystemController.BUILTIN_DASHBOARD,
             state = { RendererPreparationState(
@@ -325,33 +326,39 @@ class PaneldService : Service() {
      * panel's discovery cleanup is handed to the replacement bridge so it runs on a live connection.
      */
     private fun reconfigure() {
-        runtime.reconfigure {
-            val previous = networkRuntime
-            val stalePanelId = previous.mqtt.panelId.takeIf { it != config.panelId }
-            // The replacement uses the same availability topic unless the panel id changed. Do not race
-            // its retained online with a late offline from the retiring client. A genuinely different
-            // broker still needs an explicit offline because the replacement cannot clean that broker.
-            val publishOffline = mqttReconfigurePublishesOffline(
-                previous.mqtt.panelId,
-                config.panelId,
-                previous.mqtt.configuredBroker,
-                config.mqttBroker,
-            )
-            runCatching {
-                previous.mqtt.stop(publishOffline = publishOffline, clearDiscovery = publishOffline)
-            }
-            runCatching { previous.mdns.stop() }
-            val replacement = NetworkRuntime(buildMqtt(stalePanelId), MdnsAdvertiser(this@PaneldService, config))
-            networkRuntime = replacement
-            replacement.mdns.start()
-            replacement.mqtt.start()
-            // Re-read the log sink (host/port/protocol/enabled); restarts only if it changed.
-            runCatching { logShipper.reconfigure() }
-            runCatching { power.apply(config.keepAwake) }   // apply a keep_awake toggle live
-            io.github.maxlyth.hapaneld.http.PerfReader.dashboardPkg = dashboardTarget()
-            io.github.maxlyth.hapaneld.http.PerfReader.builtinActive = config.dashboardPackage == SystemController.BUILTIN_DASHBOARD
-            Log.i(TAG, "reconfigured: panel=${config.panelId} broker=${config.mqttBroker.ifEmpty { "(disabled)" }}")
-        }
+        runtime.reconfigure(
+            stop = { previous ->
+                // The replacement uses the same availability topic unless the panel id changed. Do not race
+                // its retained online with a late offline from the retiring client. A genuinely different
+                // broker still needs an explicit offline because the replacement cannot clean that broker.
+                val publishOffline = mqttReconfigurePublishesOffline(
+                    previous.mqtt.panelId,
+                    config.panelId,
+                    previous.mqtt.configuredBroker,
+                    config.mqttBroker,
+                )
+                runCatching {
+                    previous.mqtt.stop(publishOffline = publishOffline, clearDiscovery = publishOffline)
+                }
+                runCatching { previous.mdns.stop() }
+            },
+            build = { previous ->
+                val stalePanelId = previous.mqtt.panelId.takeIf { it != config.panelId }
+                NetworkRuntime(buildMqtt(stalePanelId), MdnsAdvertiser(this@PaneldService, config))
+            },
+            start = { replacement ->
+                replacement.mdns.start()
+                replacement.mqtt.start()
+            },
+            complete = {
+                // Re-read the log sink (host/port/protocol/enabled); restarts only if it changed.
+                runCatching { logShipper.reconfigure() }
+                runCatching { power.apply(config.keepAwake) }   // apply a keep_awake toggle live
+                io.github.maxlyth.hapaneld.http.PerfReader.dashboardPkg = dashboardTarget()
+                io.github.maxlyth.hapaneld.http.PerfReader.builtinActive = config.dashboardPackage == SystemController.BUILTIN_DASHBOARD
+                Log.i(TAG, "reconfigured: panel=${config.panelId} broker=${config.mqttBroker.ifEmpty { "(disabled)" }}")
+            },
+        )
     }
 
     /** Ordered facts for the info page (`GET /`). */
@@ -651,7 +658,7 @@ class PaneldService : Service() {
                 io.github.maxlyth.hapaneld.control.CompanionDb.serverUrl(this@PaneldService, io.github.maxlyth.hapaneld.control.Su)
             }.getOrNull()?.let { config.setHaBaseUrl(it) }
         }
-        runtime.start runtimeStart@{
+        runtime.start runtimeStart@{ activeRuntime ->
             // Re-assert the configured HOME and repair an interrupted switch to the built-in renderer
             // before the HTTP surface can accept another configuration transaction. The durable retry
             // condition is built-in + blank URL; borrowed connection and zoom commit atomically.
@@ -670,8 +677,8 @@ class PaneldService : Service() {
             io.github.maxlyth.hapaneld.http.PerfReader.builtinActive = config.dashboardPackage == SystemController.BUILTIN_DASHBOARD
             io.github.maxlyth.hapaneld.http.PerfReader.start(scope)
             server.start()
-            mdns.start()
-            mqtt.start()
+            activeRuntime.mdns.start()
+            activeRuntime.mqtt.start()
             // Forward our own logcat to the configured aggregator (no-op unless a sink host is set).
             logShipper.start()
             // Restore the soft navbar to its persisted mode (no-op when Off / no overlay permission).
@@ -822,9 +829,10 @@ class PaneldService : Service() {
                     when (val action = supervisor.tick(mqtt.state, mqtt.lastOkMs, sinceOk, now, rebuild?.isDone == false)) {
                         is ConnectionSupervisor.Action.Rebuild -> {
                             Log.w(TAG, "MQTT ${action.reason} stall (${sinceOk}ms, state=${mqtt.state}) — forcing reconnect (flip family)")
-                            runtime.currentGeneration()?.let { generation ->
-                                val target = mqtt
-                                rebuild = runtime.reconnect(generation) { target.reconnect(flipFamily = true) }
+                            runtime.observe()?.let { observed ->
+                                rebuild = runtime.reconnect(observed) { target ->
+                                    target.mqtt.reconnect(flipFamily = true)
+                                }
                             }
                         }
                         is ConnectionSupervisor.Action.SkipRebuild ->
@@ -835,10 +843,11 @@ class PaneldService : Service() {
                     // sacrificial thread — the loop keeps ticking and the un-refreshed lastOkMs is itself
                     // the failure signal. Skip while one is still in flight (its ACK never came).
                     if (heartbeat?.isAlive != true) {
-                        val generation = runtime.currentGeneration()
-                        val target = mqtt
+                        val observed = runtime.observe()
                         heartbeat = Thread({
-                            if (generation != null && runtime.isCurrent(generation)) runCatching { target.heartbeat() }
+                            if (observed != null && runtime.isCurrent(observed)) {
+                                runCatching { observed.value.mqtt.heartbeat() }
+                            }
                         }, "mqtt-heartbeat").apply { isDaemon = true; start() }
                     }
                 }
@@ -861,11 +870,11 @@ class PaneldService : Service() {
         val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return
         val cb = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
-                val generation = runtime.currentGeneration() ?: return
-                if (mqtt.state != "connected" && mqtt.state != "disabled" && !isAuthRecoveryState(mqtt.state)) {
+                val observed = runtime.observe() ?: return
+                val target = observed.value.mqtt
+                if (target.state != "connected" && target.state != "disabled" && !isAuthRecoveryState(target.state)) {
                     Log.i(TAG, "network available — nudging MQTT reconnect")
-                    val target = mqtt
-                    runtime.reconnect(generation) { target.reconnect() }
+                    runtime.reconnect(observed) { it.mqtt.reconnect() }
                 }
             }
         }
@@ -919,7 +928,7 @@ class PaneldService : Service() {
             Log.w(TAG, "renderer transaction did not become idle within ${RENDERER_SHUTDOWN_MS}ms")
         }
         scope.cancel()
-        val stopped = runtime.shutdown(RUNTIME_SHUTDOWN_MS) {
+        val stopped = runtime.shutdown(RUNTIME_SHUTDOWN_MS) { activeRuntime ->
             runCatching { server.stop() }
             val audioStopped = runCatching {
                 kotlinx.coroutines.runBlocking { audio.close(AUDIO_SHUTDOWN_MS) }
@@ -928,7 +937,7 @@ class PaneldService : Service() {
             cancelKioskReassert()
             // Close and drain command ingress before producers and hardware owners. MqttBridge.stop()
             // also owns HTTP live-setting dispatch, so neither route can enter an owner during teardown.
-            runCatching { mqtt.stop() }
+            runCatching { activeRuntime.mqtt.stop() }
             runCatching { EvdevButtonClient.stop() }
             runCatching { sensors.stop() }
             runCatching { watchdog.stop() }
@@ -940,7 +949,7 @@ class PaneldService : Service() {
             runCatching { io.github.maxlyth.hapaneld.http.PerfReader.stop() }
             runCatching { logCaptureApp.close() }
             runCatching { logCaptureSystem.close() }
-            runCatching { mdns.stop() }
+            runCatching { activeRuntime.mdns.stop() }
         }
         if (!stopped) Log.w(TAG, "runtime teardown exceeded ${RUNTIME_SHUTDOWN_MS}ms; cleanup continues on its owner thread")
         super.onDestroy()
