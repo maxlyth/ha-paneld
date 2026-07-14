@@ -29,8 +29,10 @@ class HaLinkPolicyTest {
     @Test fun `stable panel identity wins over an earlier friendly name match`() {
         val response = """
             {"result":{"entities":[
-              {"ei":"sensor.kitchen_display_status","di":"friendly-device"},
-              {"ei":"sensor.wall_panel_status","di":"stable-device"}
+              {"ei":"text.kitchen_display_home_dashboard","di":"friendly-device"},
+              {"ei":"light.kitchen_display_screen","di":"friendly-device"},
+              {"ei":"text.wall_panel_home_dashboard","di":"stable-device"},
+              {"ei":"light.wall_panel_screen","di":"stable-device"}
             ]}}
         """.trimIndent()
 
@@ -38,6 +40,42 @@ class HaLinkPolicyTest {
             "stable-device",
             HaLink.matchDeviceId(response, listOf("wall_panel", "kitchen_display")),
         )
+    }
+
+    @Test fun `room-name prefix cannot select an unrelated device before the panel entities`() {
+        val response = """
+            {"result":{"entities":[
+              {"ei":"sensor.kitchen_temperature","di":"temperature-device"},
+              {"ei":"binary_sensor.kitchen_motion","di":"motion-device"},
+              {"ei":"text.kitchen_home_dashboard","di":"panel-device"},
+              {"ei":"light.kitchen_screen","di":"panel-device"}
+            ]}}
+        """.trimIndent()
+
+        assertEquals("panel-device", HaLink.matchDeviceId(response, listOf("kitchen")))
+    }
+
+    @Test fun `numeric HA collision suffixes are weaker evidence than a complete panel identity`() {
+        val response = """
+            {"result":[
+              {"ei":"light.kitchen_screen","di":"unrelated-screen"},
+              {"ei":"text.kitchen_home_dashboard","di":"panel-device"},
+              {"ei":"light.kitchen_screen_2","di":"panel-device"}
+            ]}
+        """.trimIndent()
+
+        assertEquals("panel-device", HaLink.matchDeviceId(response, listOf("kitchen")))
+    }
+
+    @Test fun `one same-prefix known-looking entity is insufficient evidence`() {
+        val response = """
+            {"result":[
+              {"ei":"light.kitchen_screen","di":"unrelated-screen"},
+              {"ei":"sensor.kitchen_temperature","di":"temperature-device"}
+            ]}
+        """.trimIndent()
+
+        assertNull(HaLink.matchDeviceId(response, listOf("kitchen")))
     }
 
     @Test fun `registry response without a matching panel entity has no device destination`() {

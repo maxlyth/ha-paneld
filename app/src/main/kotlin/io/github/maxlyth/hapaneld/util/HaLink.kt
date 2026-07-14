@@ -170,7 +170,31 @@ object HaLink {
         }
     }
 
-    /** Find the `di` of the first entity whose entity_id object-part starts with one of [deviceSlugs]. */
+    private data class DeviceEntityMarker(
+        val domain: String,
+        val suffix: String,
+        /** Marker names which are specific to ha-paneld rather than plausible generic room entities. */
+        val signature: Boolean = false,
+    )
+
+    private val DEVICE_ENTITY_MARKERS = listOf(
+        DeviceEntityMarker("text", "home_dashboard", signature = true),
+        DeviceEntityMarker("text", "navigate", signature = true),
+        DeviceEntityMarker("button", "reload", signature = true),
+        DeviceEntityMarker("light", "screen"),
+        DeviceEntityMarker("number", "volume"),
+    )
+
+    /**
+     * Find the device id using exact entity ids which ha-paneld itself publishes. A broad `<slug>_…`
+     * prefix is unsafe because default panel ids are often room names: `sensor.kitchen_temperature`
+     * must never make the Kitchen panel link to a temperature-sensor device.
+     *
+     * HA appends `_2`, `_3`, … when a default entity id collides. Those forms are accepted as weaker
+     * evidence, but a device must match at least two known markers including one ha-paneld-specific
+     * marker. Ambiguous equal-scoring devices fail closed to the HA root page instead of guessing.
+     * Candidate order remains meaningful: stable panel id first, historical friendly-name fallback next.
+     */
     internal fun matchDeviceId(resp: String, deviceSlugs: Collection<String>): String? {
         val result = JSONObject(resp).opt("result")
         val arr: JSONArray = when (result) {
@@ -182,14 +206,37 @@ object HaLink {
             for (i in 0 until arr.length()) {
                 val e = arr.optJSONObject(i) ?: continue
                 val di = e.optString("di").takeIf { it.isNotBlank() } ?: continue
-                val obj = e.optString("ei").substringAfter('.', "")
-                add(obj to di)
+                val entityId = e.optString("ei")
+                val domain = entityId.substringBefore('.', "")
+                val obj = entityId.substringAfter('.', "")
+                if (domain.isNotBlank() && obj.isNotBlank()) add(Triple(domain, obj, di))
             }
         }
-        // Candidate order is meaningful: stable panel_id first, historical friendly-name fallback second.
         for (slug in deviceSlugs) {
-            entities.firstOrNull { (obj, _) -> obj == slug || obj.startsWith(slug + "_") }
-                ?.let { return it.second }
+            // device id -> marker index -> strongest evidence (exact=2, numeric collision suffix=1)
+            val evidence = linkedMapOf<String, MutableMap<Int, Int>>()
+            entities.forEach { (domain, obj, deviceId) ->
+                DEVICE_ENTITY_MARKERS.forEachIndexed { markerIndex, marker ->
+                    if (domain != marker.domain) return@forEachIndexed
+                    val base = "${slug}_${marker.suffix}"
+                    val weight = when {
+                        obj == base -> 2
+                        obj.startsWith("${base}_") &&
+                            obj.removePrefix("${base}_").toIntOrNull()?.let { it >= 2 } == true -> 1
+                        else -> 0
+                    }
+                    if (weight > 0) {
+                        val byMarker = evidence.getOrPut(deviceId) { linkedMapOf() }
+                        byMarker[markerIndex] = maxOf(byMarker[markerIndex] ?: 0, weight)
+                    }
+                }
+            }
+            val candidates = evidence.mapNotNull { (deviceId, byMarker) ->
+                val hasSignature = byMarker.keys.any { DEVICE_ENTITY_MARKERS[it].signature }
+                if (byMarker.size < 2 || !hasSignature) null else deviceId to byMarker.values.sum()
+            }
+            val bestScore = candidates.maxOfOrNull { it.second } ?: continue
+            candidates.filter { it.second == bestScore }.singleOrNull()?.let { return it.first }
         }
         return null
     }
