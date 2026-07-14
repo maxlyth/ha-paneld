@@ -5,6 +5,7 @@ import android.util.JsonReader
 import android.util.JsonToken
 import android.util.Log
 import io.github.maxlyth.hapaneld.Config
+import io.github.maxlyth.hapaneld.DashboardEntityDefaultResolverMigration
 import io.github.maxlyth.hapaneld.DashboardAuth
 import io.github.maxlyth.hapaneld.control.BuiltinDashboard
 import io.github.maxlyth.hapaneld.util.BoundedStreams
@@ -60,11 +61,34 @@ class EntityLearningManager(
 
     fun start() {
         prepareCurrentTarget()
+        val resolverMigration = applyDefaultResolverMigration()
         refreshTargetDiagnostics()
         schedulePeriodicSync()
-        if (config.dashboardEntityLearningEnabled && store.snapshot(instance(), dashboardPath()).lastSyncAt == 0L) {
-            syncNow("startup")
+        val snapshot = store.snapshot(instance(), dashboardPath())
+        if (shouldSyncEntityLearningOnStartup(
+                config.dashboardEntityLearningEnabled,
+                snapshot.lastSyncAt,
+                resolverMigration,
+            )) {
+            syncNow(if (resolverMigration == DashboardEntityDefaultResolverMigration.REBOOTSTRAP) {
+                "default-resolver-upgrade"
+            } else {
+                "startup"
+            })
         }
+    }
+
+    private fun applyDefaultResolverMigration(): DashboardEntityDefaultResolverMigration {
+        val result = config.migrateDashboardEntityDefaultResolver()
+        if (result == DashboardEntityDefaultResolverMigration.REBOOTSTRAP) {
+            // Preserve the old ids only as inactive evidence. The next scan must use bootstrap rules,
+            // even when the old catalog has a non-zero lastSyncAt or the preserved list is non-empty.
+            resetBootstrapPending = true
+            onFilterChanged()
+        } else if (result == DashboardEntityDefaultResolverMigration.PERSIST_FAILED) {
+            Log.e(TAG, "default-dashboard resolver migration did not commit; filter remains fail-closed")
+        }
+        return result
     }
 
     private fun refreshTargetDiagnostics() {
@@ -106,8 +130,16 @@ class EntityLearningManager(
             invalidateEffects(cancelSync = true)
             runCatching { prepareCurrentTarget() }
                 .onFailure { Log.w(TAG, "entity-learning target preparation failed: ${it.message}") }
+            val resolverMigration = applyDefaultResolverMigration()
             refreshTargetDiagnostics()
-            if (config.dashboardEntityLearningEnabled) syncNow("target-change")
+            if (config.dashboardEntityLearningEnabled &&
+                resolverMigration != DashboardEntityDefaultResolverMigration.PERSIST_FAILED) {
+                syncNow(if (resolverMigration == DashboardEntityDefaultResolverMigration.REBOOTSTRAP) {
+                    "default-resolver-target-change"
+                } else {
+                    "target-change"
+                })
+            }
         }
     }
 
@@ -131,7 +163,14 @@ class EntityLearningManager(
         if (!committed) return false
         invalidateEffects()
         if (enabled) {
-            syncNow("enable")
+            val resolverMigration = applyDefaultResolverMigration()
+            if (resolverMigration != DashboardEntityDefaultResolverMigration.PERSIST_FAILED) {
+                syncNow(if (resolverMigration == DashboardEntityDefaultResolverMigration.REBOOTSTRAP) {
+                    "default-resolver-enable"
+                } else {
+                    "enable"
+                })
+            }
             // Always notify the renderer. A populated set rebuilds with its observer; an empty fresh
             // bootstrap tears down any pre-existing unfiltered WebView and waits on the native bootstrap
             // screen until synchronization commits the first narrow set.
@@ -1186,6 +1225,14 @@ internal fun haInstanceCandidateUrls(configuredBase: String, configJson: String?
 }.distinct()
 
 private const val MAX_HA_CANDIDATE_URL_CHARS = 2_048
+
+/** A resolver-policy upgrade must rescan even when the old, potentially wrong catalog has synced. */
+internal fun shouldSyncEntityLearningOnStartup(
+    learningEnabled: Boolean,
+    lastSyncAt: Long,
+    resolverMigration: DashboardEntityDefaultResolverMigration,
+): Boolean = learningEnabled && resolverMigration != DashboardEntityDefaultResolverMigration.PERSIST_FAILED &&
+    (resolverMigration == DashboardEntityDefaultResolverMigration.REBOOTSTRAP || lastSyncAt == 0L)
 
 /** An empty installation starts narrow; any stored manual list is preserved for explicit review. */
 internal fun shouldBootstrapEntityLearning(

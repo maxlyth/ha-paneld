@@ -8,6 +8,91 @@ import org.junit.Test
 import java.lang.reflect.Proxy
 
 class ConfigTransactionTest {
+    @Test fun defaultResolverUpgradeInvalidatesOldAutomaticFilterButPreservesItsIds() {
+        val target = dashboardEntityTargetKey("url-key", "/")
+        val prefs = fakePreferences(initial = mapOf(
+            "ha_url" to "http://ha.local:8123",
+            "home_dashboard" to "",
+            "dashboard_entity_instance" to "url-key",
+            "dashboard_entity_instance_origin" to "http://ha.local:8123",
+            "dashboard_entity_dashboard_path" to "/",
+            "dashboard_entity_filter_instance" to target,
+            "dashboard_entity_applied_instance" to target,
+            "dashboard_entity_learning" to true,
+            "dashboard_entity_learning_applied" to true,
+            "dashboard_entity_filter_enabled" to true,
+            "dashboard_entity_filter_ids" to "light.old\nsensor.old",
+        ))
+        val config = Config(prefs.instance)
+
+        assertFalse("the suspect stream must fail closed before the migration commits", config.dashboardEntityFilterEnabled)
+        assertEquals(DashboardEntityDefaultResolverMigration.REBOOTSTRAP,
+            config.migrateDashboardEntityDefaultResolver())
+
+        assertFalse(config.dashboardEntityFilterEnabled)
+        assertFalse(config.dashboardEntityLearningApplied)
+        assertEquals(listOf("light.old", "sensor.old"), config.dashboardEntityFilterIds)
+        assertEquals(1, prefs.values["dashboard_entity_default_resolver_version"])
+        assertEquals(target, prefs.values["dashboard_entity_default_resolver_target"])
+        assertEquals(DashboardEntityDefaultResolverMigration.NOT_NEEDED,
+            config.migrateDashboardEntityDefaultResolver())
+    }
+
+    @Test fun defaultResolverUpgradeDoesNotInvalidateExplicitDashboardFilter() {
+        val target = dashboardEntityTargetKey("url-key", "/lovelace/kiosk")
+        val prefs = fakePreferences(initial = mapOf(
+            "ha_url" to "http://ha.local:8123",
+            "home_dashboard" to "/lovelace/kiosk",
+            "dashboard_entity_instance" to "url-key",
+            "dashboard_entity_instance_origin" to "http://ha.local:8123",
+            "dashboard_entity_dashboard_path" to "/lovelace/kiosk",
+            "dashboard_entity_filter_instance" to target,
+            "dashboard_entity_applied_instance" to target,
+            "dashboard_entity_learning" to true,
+            "dashboard_entity_learning_applied" to true,
+            "dashboard_entity_filter_enabled" to true,
+            "dashboard_entity_filter_ids" to "light.kiosk",
+        ))
+        val config = Config(prefs.instance)
+
+        assertEquals(DashboardEntityDefaultResolverMigration.NOT_NEEDED,
+            config.migrateDashboardEntityDefaultResolver())
+
+        assertTrue(config.dashboardEntityFilterEnabled)
+        assertTrue(config.dashboardEntityLearningApplied)
+        assertEquals(listOf("light.kiosk"), config.dashboardEntityFilterIds)
+        assertFalse(prefs.values.containsKey("dashboard_entity_default_resolver_version"))
+    }
+
+    @Test fun failedDefaultResolverUpgradeKeepsOldAutomaticFilterFailClosed() {
+        val target = dashboardEntityTargetKey("url-key", "/")
+        val prefs = fakePreferences(
+            initial = mapOf(
+                "ha_url" to "http://ha.local:8123",
+                "home_dashboard" to "",
+                "dashboard_entity_instance" to "url-key",
+                "dashboard_entity_instance_origin" to "http://ha.local:8123",
+                "dashboard_entity_dashboard_path" to "/",
+                "dashboard_entity_filter_instance" to target,
+                "dashboard_entity_applied_instance" to target,
+                "dashboard_entity_learning" to true,
+                "dashboard_entity_learning_applied" to true,
+                "dashboard_entity_filter_enabled" to true,
+                "dashboard_entity_filter_ids" to "light.old",
+            ),
+            commitSucceeds = false,
+        )
+        val config = Config(prefs.instance)
+
+        assertEquals(DashboardEntityDefaultResolverMigration.PERSIST_FAILED,
+            config.migrateDashboardEntityDefaultResolver())
+
+        assertFalse(config.dashboardEntityFilterEnabled)
+        assertEquals(true, prefs.values["dashboard_entity_filter_enabled"])
+        assertEquals(true, prefs.values["dashboard_entity_learning_applied"])
+        assertFalse(prefs.values.containsKey("dashboard_entity_default_resolver_version"))
+    }
+
     @Test fun disablingAndReenablingLearningRestoresThePreservedNarrowStream() {
         val prefs = fakePreferences()
         val config = Config(prefs.instance)

@@ -508,7 +508,8 @@ class Config private constructor(
      * is the only management surface and reports count/hash rather than echoing the ids.
      */
     val dashboardEntityFilterEnabled: Boolean
-        get() = entityStateOwnedByCurrent("dashboard_entity_filter_instance") &&
+        get() = !dashboardEntityDefaultResolverMigrationRequired &&
+            entityStateOwnedByCurrent("dashboard_entity_filter_instance") &&
             prefs.getBoolean("dashboard_entity_filter_enabled", false)
     val dashboardEntityFilterIds: List<String>
         get() = if (entityStateOwnedByCurrent("dashboard_entity_filter_instance")) rawDashboardEntityFilterIds else emptyList()
@@ -646,6 +647,40 @@ class Config private constructor(
         setDashboardEntityLearningEnabled(enabled)
         if (!enabled) setDashboardEntityLearningApplied(false)
     }
+
+    /**
+     * v220 initially resolved a blank/default dashboard as ordinary Lovelace. That could publish an
+     * exact allow-list for a different panel than the frontend rendered. Invalidate that one ambiguous
+     * automatic result once, while retaining its ids as inactive rollback/debug evidence, and require a
+     * fresh scan using the complete user -> system -> built-in Home resolution chain.
+     *
+     * [dashboardEntityFilterEnabled] also checks this migration latch, so a failed preference commit
+     * cannot briefly reactivate the suspect allow-list.
+     */
+    @Synchronized internal fun migrateDashboardEntityDefaultResolver(): DashboardEntityDefaultResolverMigration {
+        if (!dashboardEntityDefaultResolverMigrationRequired) return DashboardEntityDefaultResolverMigration.NOT_NEEDED
+        val committed = applyBatch { edit {
+            putInt(DASHBOARD_ENTITY_DEFAULT_RESOLVER_VERSION_KEY, DASHBOARD_ENTITY_DEFAULT_RESOLVER_VERSION)
+            putString(DASHBOARD_ENTITY_DEFAULT_RESOLVER_TARGET_KEY, dashboardEntityTargetKey)
+            putBoolean("dashboard_entity_filter_enabled", false)
+            putBoolean("dashboard_entity_learning_applied", false)
+            putString("dashboard_entity_applied_instance", dashboardEntityTargetKey)
+        } }
+        return when {
+            !committed -> DashboardEntityDefaultResolverMigration.PERSIST_FAILED
+            else -> DashboardEntityDefaultResolverMigration.REBOOTSTRAP
+        }
+    }
+
+    private val dashboardEntityDefaultResolverMigrationRequired: Boolean
+        get() {
+            val target = dashboardEntityTargetKey
+            if (target.isBlank() || !dashboardEntityLearningEnabled ||
+                normalizeDashboardEntityPath(homeDashboard) != "/") return false
+            return prefs.getInt(DASHBOARD_ENTITY_DEFAULT_RESOLVER_VERSION_KEY, 0) <
+                DASHBOARD_ENTITY_DEFAULT_RESOLVER_VERSION ||
+                prefs.getString(DASHBOARD_ENTITY_DEFAULT_RESOLVER_TARGET_KEY, "").orEmpty() != target
+        }
 
     /** Change automatic-learning mode without exposing a half-disabled stream. A fresh enable clears
      * the activation latch and reactivates any current-owner preserved allow-list for safe observation;
@@ -1109,10 +1144,21 @@ class Config private constructor(
 
     companion object {
         private const val TAG = "ha-paneld/config"
+        private const val DASHBOARD_ENTITY_DEFAULT_RESOLVER_VERSION_KEY =
+            "dashboard_entity_default_resolver_version"
+        private const val DASHBOARD_ENTITY_DEFAULT_RESOLVER_TARGET_KEY =
+            "dashboard_entity_default_resolver_target"
+        private const val DASHBOARD_ENTITY_DEFAULT_RESOLVER_VERSION = 1
         const val DEFAULT_PORT = 8888
         const val VERSION = BuildConfig.VERSION_NAME
         const val MDNS_SERVICE_TYPE = "_ha-paneld._tcp.local."
     }
+}
+
+internal enum class DashboardEntityDefaultResolverMigration {
+    NOT_NEEDED,
+    REBOOTSTRAP,
+    PERSIST_FAILED,
 }
 
 /** Dashboard paths are ownership boundaries. Query/fragment state does not identify a Lovelace dashboard. */

@@ -1,11 +1,30 @@
 package io.github.maxlyth.hapaneld.dashboard
 
+import io.github.maxlyth.hapaneld.DashboardEntityDefaultResolverMigration
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class EntityLearningProtocolTest {
+    @Test fun resolverUpgradeForcesStartupScanDespiteExistingCatalogTimestamp() {
+        assertTrue(shouldSyncEntityLearningOnStartup(
+            learningEnabled = true,
+            lastSyncAt = 1234L,
+            resolverMigration = DashboardEntityDefaultResolverMigration.REBOOTSTRAP,
+        ))
+        assertFalse(shouldSyncEntityLearningOnStartup(
+            learningEnabled = true,
+            lastSyncAt = 1234L,
+            resolverMigration = DashboardEntityDefaultResolverMigration.NOT_NEEDED,
+        ))
+        assertFalse(shouldSyncEntityLearningOnStartup(
+            learningEnabled = true,
+            lastSyncAt = 0L,
+            resolverMigration = DashboardEntityDefaultResolverMigration.PERSIST_FAILED,
+        ))
+    }
+
     @Test fun emptyInstallBootstrapsButExistingManualSetIsPreserved() {
         assertTrue(shouldBootstrapEntityLearning(learningEnabled = true, applied = false, configuredIds = emptyList()))
         assertFalse(shouldBootstrapEntityLearning(learningEnabled = true, applied = false, configuredIds = listOf("light.kitchen")))
