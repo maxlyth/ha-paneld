@@ -1272,6 +1272,11 @@ class DashboardActivity : AppCompatActivity() {
         val bg = Color.parseColor(if (dark) "#111111" else "#ffffff")
         val body = Color.parseColor(if (dark) "#c8ccd2" else "#2a2e34")
         val subtle = Color.parseColor(if (dark) "#8a8f99" else "#5a6068")
+        val primary = Color.parseColor(if (dark) "#03a9f4" else "#0288d1")
+        val recoveryActionWidth = minOf(
+            (360 * density).toInt(),
+            resources.displayMetrics.widthPixels - (48 * density).toInt(),
+        ).coerceAtLeast(1)
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
@@ -1337,17 +1342,19 @@ class DashboardActivity : AppCompatActivity() {
             })
             if (filterHold == null && blockingIssues > 0) {
                 addView(Button(this@DashboardActivity).apply {
-                    text = "Continue without flagged entities"
+                    text = "Ignore flagged entities and continue"
+                    backgroundTintList = ColorStateList.valueOf(primary)
+                    setTextColor(Color.WHITE)
                     setOnClickListener {
                         isEnabled = false
                         text = "Preparing dashboard…"
                         if (!EntityLearningRuntime.ignoreBlockingIssues()) {
                             isEnabled = true
-                            text = "Continue without flagged entities"
+                            text = "Ignore flagged entities and continue"
                         }
                     }
                 }, LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT,
+                    recoveryActionWidth, LinearLayout.LayoutParams.WRAP_CONTENT,
                 ).apply {
                     topMargin = (20 * density).toInt()
                     gravity = Gravity.CENTER_HORIZONTAL
@@ -1359,7 +1366,7 @@ class DashboardActivity : AppCompatActivity() {
                         if (!EntityLearningRuntime.disableAutomaticFilter()) isEnabled = true
                     }
                 }, LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT,
+                    recoveryActionWidth, LinearLayout.LayoutParams.WRAP_CONTENT,
                 ).apply {
                     topMargin = (10 * density).toInt()
                     gravity = Gravity.CENTER_HORIZONTAL
@@ -1372,9 +1379,10 @@ class DashboardActivity : AppCompatActivity() {
                     startActivity(Intent(this@DashboardActivity, ConfigActivity::class.java).putExtra("path", path))
                 }
             }, LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT,
+                if (blockingIssues > 0) recoveryActionWidth else LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
             ).apply {
-                topMargin = (20 * density).toInt()
+                topMargin = ((if (blockingIssues > 0) 10 else 20) * density).toInt()
                 gravity = Gravity.CENTER_HORIZONTAL
             })
         }
