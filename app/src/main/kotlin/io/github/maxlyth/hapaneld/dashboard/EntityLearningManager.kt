@@ -1,6 +1,8 @@
 package io.github.maxlyth.hapaneld.dashboard
 
 import android.content.Context
+import android.util.JsonReader
+import android.util.JsonToken
 import android.util.Log
 import io.github.maxlyth.hapaneld.Config
 import io.github.maxlyth.hapaneld.DashboardAuth
@@ -24,6 +26,7 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URI
 import java.net.URL
+import java.io.InputStreamReader
 import java.util.concurrent.atomic.AtomicBoolean
 
 /** Owns catalog synchronization, automatic set promotion and the HTTP/UI query surface. */
@@ -66,12 +69,11 @@ class EntityLearningManager(
         }
         if (!committed) return false
         if (enabled) {
-            val freshBootstrap = config.dashboardEntityFilterIds.isEmpty()
             syncNow("enable")
-            // Existing filters rebuild immediately so observation warms alongside the known-good set.
-            // A fresh bootstrap waits for its minimal static set first, avoiding an unnecessary
-            // unfiltered WebView reload while synchronization runs; that first apply installs the observer.
-            if (!freshBootstrap) onFilterChanged()
+            // Always notify the renderer. A populated set rebuilds with its observer; an empty fresh
+            // bootstrap tears down any pre-existing unfiltered WebView and waits on the native bootstrap
+            // screen until synchronization commits the first narrow set.
+            onFilterChanged()
         } else {
             config.setDashboardEntityFilter(false, config.dashboardEntityFilterIds)
             store.markStatus(instance(), dashboardPath(), "disabled")
@@ -130,13 +132,13 @@ class EntityLearningManager(
         val expanded = expandTargets(config.haUrl, token, scan.targets)
         val catalogIds = states.asSequence().map { it.entityId }.toHashSet()
         val selected = EntityLearningProtocol.resolveSelectors(scan.selectors, catalogIds, ws.metadata)
-        val derived = (scan.entityIds + expanded + selected).filterTo(sortedSetOf()) { it in catalogIds }
+        val derived = (scan.entityIds + expanded + selected.entityIds).filterTo(sortedSetOf()) { it in catalogIds }
         require(derived.isNotEmpty()) { "dashboard analysis found no visible entity dependencies" }
         val now = System.currentTimeMillis()
         val apply = config.dashboardEntityLearningApplied
         val bootstrap = shouldBootstrapEntityLearning(apply, config.dashboardEntityFilterIds)
         store.commitSync(
-            instance, path, states, ws.metadata, ws.configJson, derived, scan.unresolved,
+            instance, path, states, ws.metadata, ws.configJson, derived, scan.unresolved + selected.unresolved,
             when { apply -> "active"; bootstrap -> "learning"; else -> "observing" }, now,
         )
         applyStoredOverrides(instance, path)
@@ -364,13 +366,35 @@ class EntityLearningManager(
         }
         try {
             if (c.responseCode !in 200..299) error("states request failed: HTTP ${c.responseCode}")
-            val array = JSONArray(c.inputStream.bufferedReader().use { it.readText() })
-            return (0 until array.length()).mapNotNull { i ->
-                val o = array.optJSONObject(i) ?: return@mapNotNull null
-                val id = o.optString("entity_id").takeIf { it.isNotBlank() } ?: return@mapNotNull null
-                EntityCatalogStore.StateRow(id, o.optString("state"), o.optJSONObject("attributes")?.toString() ?: "{}")
+            // /api/states includes every attribute payload. The learner only needs entity_id/state,
+            // so stream over the response and skip attributes instead of hydrating a multi-megabyte
+            // JSONArray (and then serializing each attributes object again for SQLite).
+            return JsonReader(InputStreamReader(c.inputStream, Charsets.UTF_8)).use { reader ->
+                buildList {
+                    reader.beginArray()
+                    while (reader.hasNext()) {
+                        var entityId = ""
+                        var state = ""
+                        reader.beginObject()
+                        while (reader.hasNext()) when (reader.nextName()) {
+                            "entity_id" -> entityId = reader.readScalar()
+                            "state" -> state = reader.readScalar()
+                            else -> reader.skipValue()
+                        }
+                        reader.endObject()
+                        if (entityId.isNotBlank()) add(EntityCatalogStore.StateRow(entityId, state))
+                    }
+                    reader.endArray()
+                }
             }
         } finally { c.disconnect() }
+    }
+
+    private fun JsonReader.readScalar(): String = when (peek()) {
+        JsonToken.NULL -> { nextNull(); "" }
+        JsonToken.STRING, JsonToken.NUMBER -> nextString()
+        JsonToken.BOOLEAN -> nextBoolean().toString()
+        else -> { skipValue(); "" }
     }
 
     private suspend fun fetchDashboardAndRegistry(base: String, token: String, urlPath: String): WsSnapshot {
@@ -400,7 +424,12 @@ class EntityLearningManager(
         val out = linkedSetOf<String>()
         withHaSocket(base, token) { request ->
             for (target in targets.take(MAX_TARGETS)) {
-                val response = request(JSONObject().put("type", "extract_from_target").put("target", JSONObject(target)).put("expand_group", true))
+                // Dashboard configuration is extensible and third-party cards sometimes put selector
+                // syntax in target-shaped fields. A single target rejected by HA must not discard the
+                // complete catalogue/static scan; unresolved dependencies can still be learned at runtime.
+                val response = runCatching {
+                    request(JSONObject().put("type", "extract_from_target").put("target", JSONObject(target)).put("expand_group", true))
+                }.getOrNull() ?: continue
                 val entities = response.optJSONObject("result")?.optJSONArray("referenced_entities") ?: continue
                 for (i in 0 until entities.length()) entities.optString(i).takeIf { it.isNotBlank() }?.let(out::add)
             }

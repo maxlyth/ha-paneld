@@ -8,7 +8,9 @@ import java.security.MessageDigest
 object EntityLearningProtocol {
     private val ENTITY_ID = Regex("(?<![a-z0-9_])[a-z0-9_]+\\.[a-z0-9_]+(?![a-z0-9_])")
     private val DIRECT_ENTITY_ID = Regex("^[a-z0-9_]+\\.[a-z0-9_]+$")
+    private val TARGET_REGISTRY_ID = Regex("^[A-Za-z0-9_-]+$")
     private val TARGET_KEYS = setOf("entity_id", "device_id", "area_id", "floor_id", "label_id")
+    private val EXPANDABLE_TARGET_KEYS = TARGET_KEYS - "entity_id"
     private val TEMPLATE_MARKERS = listOf("{{", "{%", "[[[", "hass.states", "states[")
     private val PSEUDO_DOMAINS = setOf("variables", "config", "hass", "state", "states", "entity")
 
@@ -26,7 +28,10 @@ object EntityLearningProtocol {
         val entityGlobs: Set<String> = emptySet(),
         val areas: Set<String> = emptySet(),
         val labels: Set<String> = emptySet(),
+        val source: String = "dashboard:auto-entities-selector",
     )
+
+    data class SelectorResolution(val entityIds: Set<String>, val unresolved: List<String>)
 
     /** Scan every nested dashboard value. False-positive entity-like strings are removed against the catalog later. */
     fun scanDashboard(configJson: String): ScanResult {
@@ -42,12 +47,13 @@ object EntityLearningProtocol {
             else -> emptySet()
         }
 
-        fun selector(rule: JSONObject, exclude: Boolean): Selector = Selector(
+        fun selector(rule: JSONObject, exclude: Boolean, source: String): Selector = Selector(
             exclude = exclude,
             domains = strings(rule.opt("domain")),
             entityGlobs = strings(rule.opt("entity_id")),
             areas = strings(rule.opt("area")) + strings(rule.opt("area_id")),
             labels = strings(rule.opt("label")) + strings(rule.opt("label_id")),
+            source = source,
         )
 
         fun autoEntityRules(card: JSONObject, path: String) {
@@ -59,8 +65,8 @@ object EntityLearningProtocol {
                     is JSONObject -> listOf(value)
                     else -> emptyList()
                 }
-                for (rule in rules) {
-                    val parsed = selector(rule, excluded)
+                for ((index, rule) in rules.withIndex()) {
+                    val parsed = selector(rule, excluded, "$path:auto-entities-$name[$index]")
                     if (parsed.domains.isEmpty() && parsed.entityGlobs.isEmpty() && parsed.areas.isEmpty() && parsed.labels.isEmpty()) {
                         unresolved += "$path:auto-entities-$name"
                     } else selectors += parsed
@@ -74,6 +80,26 @@ object EntityLearningProtocol {
                 .forEach(ids::add)
         }
 
+        fun targetValues(key: String, value: Any?): Pair<Any?, Boolean> {
+            fun valid(candidate: String): Boolean = when (key) {
+                "entity_id" -> DIRECT_ENTITY_ID.matches(candidate.lowercase())
+                else -> TARGET_REGISTRY_ID.matches(candidate)
+            }
+            return when (value) {
+                is String -> if (valid(value)) value to false else null to true
+                is JSONArray -> {
+                    val accepted = JSONArray()
+                    var rejected = false
+                    for (i in 0 until value.length()) {
+                        val candidate = value.optString(i)
+                        if (candidate.isNotBlank() && valid(candidate)) accepted.put(candidate) else rejected = true
+                    }
+                    accepted.takeIf { it.length() > 0 } to rejected
+                }
+                else -> null to true
+            }
+        }
+
         fun walk(value: Any?, path: String) {
             when (value) {
                 is JSONObject -> {
@@ -81,11 +107,24 @@ object EntityLearningProtocol {
                     if (type == "custom:auto-entities") autoEntityRules(value, path)
                     val before = ids.size + targets.size + selectors.size
                     val target = JSONObject()
-                    for (key in TARGET_KEYS) if (value.has(key)) target.put(key, value.opt(key))
-                    value.optJSONObject("target")?.let { nested ->
-                        for (key in TARGET_KEYS) if (nested.has(key)) target.put(key, nested.opt(key))
+                    for (key in TARGET_KEYS) if (value.has(key)) {
+                        val (accepted, rejected) = targetValues(key, value.opt(key))
+                        if (accepted != null) target.put(key, accepted)
+                        if (rejected) unresolved += "$path.$key:dynamic-target"
                     }
-                    if (target.length() > 0) targets += canonical(target)
+                    value.optJSONObject("target")?.let { nested ->
+                        for (key in TARGET_KEYS) if (nested.has(key)) {
+                            val (accepted, rejected) = targetValues(key, nested.opt(key))
+                            if (accepted != null) target.put(key, accepted)
+                            if (rejected) unresolved += "$path.target.$key:dynamic-target"
+                        }
+                    }
+                    // Literal entity IDs are collected by scalarIds while walking the same object. HA's
+                    // extract_from_target is only needed for registry selectors; sending every card's
+                    // entity ID turns a normal dashboard into hundreds of serial WebSocket round trips.
+                    val expandableTarget = JSONObject()
+                    for (key in EXPANDABLE_TARGET_KEYS) if (target.has(key)) expandableTarget.put(key, target.opt(key))
+                    if (expandableTarget.length() > 0) targets += canonical(expandableTarget)
                     val keys = value.keys().asSequence().toList().sorted()
                     for (key in keys) walk(value.opt(key), "$path.$key")
                     if (type.startsWith("custom:") && before == ids.size + targets.size + selectors.size) {
@@ -110,28 +149,49 @@ object EntityLearningProtocol {
         selectors: List<Selector>,
         catalog: Collection<String>,
         metadata: Map<String, String>,
-    ): Set<String> {
-        fun glob(pattern: String, value: String): Boolean {
-            val regex = buildString {
+    ): SelectorResolution {
+        if (selectors.isEmpty()) return SelectorResolution(emptySet(), emptyList())
+        fun glob(pattern: String): Regex = Regex(buildString {
                 append('^')
                 for (ch in pattern) append(when (ch) { '*' -> ".*"; '?' -> "."; else -> Regex.escape(ch.toString()) })
                 append('$')
-            }
-            return Regex(regex).matches(value)
-        }
-        fun matches(selector: Selector, id: String): Boolean {
+            })
+        data class Meta(val area: String, val labels: Set<String>)
+        data class CompiledSelector(val source: Selector, val entityGlobs: List<Regex>)
+        val parsedMetadata = mutableMapOf<String, Meta>()
+        fun metadataFor(id: String): Meta = parsedMetadata.getOrPut(id) {
             val meta = metadata[id]?.let { runCatching { JSONObject(it) }.getOrNull() }
-            val labels = meta?.optJSONArray("lb")?.let { a -> (0 until a.length()).map(a::optString).map(String::lowercase).toSet() }.orEmpty()
-            return (selector.domains.isEmpty() || id.substringBefore('.') in selector.domains) &&
-                (selector.entityGlobs.isEmpty() || selector.entityGlobs.any { glob(it, id) }) &&
-                (selector.areas.isEmpty() || meta?.optString("ai")?.lowercase() in selector.areas) &&
-                (selector.labels.isEmpty() || labels.any(selector.labels::contains))
+            Meta(meta?.optString("ai")?.lowercase().orEmpty(), meta?.optJSONArray("lb")?.let { a ->
+                (0 until a.length()).map(a::optString).map(String::lowercase).toSet()
+            }.orEmpty())
         }
-        val included = selectors.filterNot(Selector::exclude).flatMap { s -> catalog.filter { matches(s, it) } }.toMutableSet()
-        val excluded = selectors.filter(Selector::exclude).flatMap { s -> catalog.filter { matches(s, it) } }.toSet()
+        val compiled = selectors.map { CompiledSelector(it, it.entityGlobs.map(::glob)) }
+        fun matches(selector: CompiledSelector, id: String): Boolean {
+            val source = selector.source
+            return (source.domains.isEmpty() || id.substringBefore('.') in source.domains) &&
+                (selector.entityGlobs.isEmpty() || selector.entityGlobs.any { it.matches(id) }) &&
+                (source.areas.isEmpty() || metadataFor(id).area in source.areas) &&
+                (source.labels.isEmpty() || metadataFor(id).labels.any(source.labels::contains))
+        }
+        val included = linkedSetOf<String>()
+        val unresolved = mutableListOf<String>()
+        for (selector in compiled.filterNot { it.source.exclude }) {
+            val matched = catalog.filterTo(sortedSetOf()) { matches(selector, it) }
+            when {
+                matched.size > SELECTOR_ENTITY_LIMIT -> unresolved +=
+                    "${selector.source.source}:broad-selector(${matched.size}>$SELECTOR_ENTITY_LIMIT)"
+                (included + matched).size > SELECTOR_TOTAL_BUDGET -> unresolved +=
+                    "${selector.source.source}:selector-budget(${included.size}+${matched.size}>$SELECTOR_TOTAL_BUDGET)"
+                else -> included += matched
+            }
+        }
+        val excluded = compiled.filter { it.source.exclude }.flatMap { s -> catalog.filter { matches(s, it) } }.toSet()
         included.removeAll(excluded)
-        return included
+        return SelectorResolution(included, unresolved)
     }
+
+    internal const val SELECTOR_ENTITY_LIMIT = 64
+    internal const val SELECTOR_TOTAL_BUDGET = 128
 
     fun dashboardUrlPath(homeDashboard: String): String {
         val first = homeDashboard.trim().substringBefore('?').trim('/').substringBefore('/')

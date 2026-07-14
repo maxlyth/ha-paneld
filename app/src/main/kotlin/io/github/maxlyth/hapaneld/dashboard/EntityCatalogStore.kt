@@ -1,6 +1,5 @@
 package io.github.maxlyth.hapaneld.dashboard
 
-import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
@@ -17,7 +16,7 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, "entity-l
         setWriteAheadLoggingEnabled(true)
     }
 
-    data class StateRow(val entityId: String, val state: String, val attributesJson: String)
+    data class StateRow(val entityId: String, val state: String)
     data class Snapshot(
         val state: String,
         val lastSyncAt: Long,
@@ -99,18 +98,29 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, "entity-l
         db.beginTransaction()
         try {
             db.execSQL("UPDATE entity SET missing_streak=missing_streak+1 WHERE instance=?", arrayOf(instance))
-            for (row in states) {
-                val values = ContentValues().apply {
-                    put("instance", instance); put("entity_id", row.entityId); put("state", row.state)
-                    put("attributes_json", row.attributesJson); put("metadata_json", metadata[row.entityId] ?: "{}")
-                    put("first_seen", now); put("last_seen", now); put("missing_streak", 0); put("tombstone_at", 0)
+            // The catalogue UI and promotion policy never read state attributes. Persisting them copied
+            // the full /api/states payload into SQLite and made attribute-heavy installations spend
+            // minutes allocating JSON strings and writing megabytes. A compiled upsert keeps the useful
+            // state/registry projection and preserves first_seen in one statement per entity.
+            val upsert = db.compileStatement(
+                """INSERT OR REPLACE INTO entity(instance,entity_id,state,attributes_json,metadata_json,
+                   first_seen,last_seen,missing_streak,tombstone_at)
+                   VALUES(?,?,?,'{}',?,coalesce((SELECT first_seen FROM entity WHERE instance=? AND entity_id=?),?),?,0,0)""",
+            )
+            try {
+                for (row in states) {
+                    upsert.clearBindings()
+                    upsert.bindString(1, instance)
+                    upsert.bindString(2, row.entityId)
+                    upsert.bindString(3, row.state)
+                    upsert.bindString(4, metadata[row.entityId] ?: "{}")
+                    upsert.bindString(5, instance)
+                    upsert.bindString(6, row.entityId)
+                    upsert.bindLong(7, now)
+                    upsert.bindLong(8, now)
+                    upsert.executeInsert()
                 }
-                db.insertWithOnConflict("entity", null, values, SQLiteDatabase.CONFLICT_IGNORE)
-                db.execSQL(
-                    "UPDATE entity SET state=?,attributes_json=?,metadata_json=?,last_seen=?,missing_streak=0,tombstone_at=0 WHERE instance=? AND entity_id=?",
-                    arrayOf(row.state, row.attributesJson, metadata[row.entityId] ?: "{}", now, instance, row.entityId),
-                )
-            }
+            } finally { upsert.close() }
             db.execSQL("UPDATE entity SET tombstone_at=? WHERE instance=? AND missing_streak>=3 AND tombstone_at=0", arrayOf(now, instance))
             db.execSQL("UPDATE membership SET static_ref=0 WHERE instance=? AND path=?", arrayOf(instance, path))
             for (id in derived) {

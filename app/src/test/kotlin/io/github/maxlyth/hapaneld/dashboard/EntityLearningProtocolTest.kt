@@ -105,7 +105,61 @@ class EntityLearningProtocolTest {
         )
         assertEquals(
             setOf("sensor.office_temp", "light.kitchen_ceiling"),
-            EntityLearningProtocol.resolveSelectors(scan.selectors, metadata.keys, metadata),
+            EntityLearningProtocol.resolveSelectors(scan.selectors, metadata.keys, metadata).entityIds,
         )
+    }
+
+    @Test fun broadSelectorIsOmittedWholeAndReportedAsUnresolved() {
+        val scan = EntityLearningProtocol.scanDashboard(
+            """{"views":[{"cards":[{"type":"custom:auto-entities","filter":{"include":[{"domain":"sensor"}]}}]}]}""",
+        )
+        val catalog = (1..(EntityLearningProtocol.SELECTOR_ENTITY_LIMIT + 1)).map { "sensor.sample_$it" }
+        val resolution = EntityLearningProtocol.resolveSelectors(scan.selectors, catalog, emptyMap())
+        assertTrue(resolution.entityIds.isEmpty())
+        assertTrue(resolution.unresolved.single().contains("broad-selector"))
+        assertTrue(resolution.unresolved.single().contains((EntityLearningProtocol.SELECTOR_ENTITY_LIMIT + 1).toString()))
+    }
+
+    @Test fun selectorBudgetOmitsWholeLaterSelectorDeterministically() {
+        val scan = EntityLearningProtocol.scanDashboard(
+            """{"views":[{"cards":[{"type":"custom:auto-entities","filter":{"include":[
+              {"domain":"sensor"},{"domain":"light"},{"domain":"switch"}
+            ]}}]}]}""",
+        )
+        val perDomain = 50
+        val catalog = listOf("sensor", "light", "switch").flatMap { domain ->
+            (1..perDomain).map { "$domain.sample_$it" }
+        }
+        val resolution = EntityLearningProtocol.resolveSelectors(scan.selectors, catalog, emptyMap())
+        assertEquals(100, resolution.entityIds.size)
+        assertTrue(resolution.entityIds.none { it.startsWith("switch.") })
+        assertTrue(resolution.unresolved.single().contains("selector-budget"))
+    }
+
+    @Test fun regexAndTemplateTargetsAreObservedAsDynamicNotSentToHomeAssistant() {
+        val scan = EntityLearningProtocol.scanDashboard(
+            """{"views":[{"cards":[
+              {"type":"custom:auto-entities","filter":{"include":[{"entity_id":"/.*_rssi/"}]}},
+              {"type":"button","tap_action":{"target":{"entity_id":"{{ dynamic_entity }}","area_id":"office"}}}
+            ]}]}""",
+        )
+        assertEquals(1, scan.targets.size)
+        assertTrue(scan.targets.single().contains("area_id"))
+        assertFalse(scan.targets.single().contains("entity_id"))
+        assertTrue(scan.unresolved.count { it.contains("dynamic-target") } >= 2)
+    }
+
+    @Test fun literalEntityTargetsAreResolvedLocallyWithoutHomeAssistantExpansion() {
+        val scan = EntityLearningProtocol.scanDashboard(
+            """{"views":[{"cards":[
+              {"type":"tile","entity_id":"light.kitchen"},
+              {"type":"button","target":{"entity_id":["switch.fan","switch.heater"]}},
+              {"type":"button","target":{"entity_id":"cover.blind","device_id":"device_123"}}
+            ]}]}""",
+        )
+        assertEquals(setOf("light.kitchen", "switch.fan", "switch.heater", "cover.blind"), scan.entityIds)
+        assertEquals(1, scan.targets.size)
+        assertTrue(scan.targets.single().contains("device_id"))
+        assertFalse(scan.targets.single().contains("entity_id"))
     }
 }

@@ -79,6 +79,7 @@ import io.github.maxlyth.hapaneld.platform.AndroidScreenPower
 import io.github.maxlyth.hapaneld.platform.AndroidSystemEnv
 import io.github.maxlyth.hapaneld.util.periodic
 import io.github.maxlyth.hapaneld.util.SystemProps
+import io.github.maxlyth.hapaneld.dashboard.shouldReloadBuiltinAfterEntityFilterChange
 import java.io.File
 
 /**
@@ -176,7 +177,15 @@ class PaneldService : Service() {
         )
         system = SystemController(AndroidSystemEnv(this))
         entityLearning = EntityLearningManager(this, config, scope) {
-            system.reloadDashboard(SystemController.BUILTIN_DASHBOARD)
+            // Synchronization can finish while another renderer is deliberately selected (for example
+            // during a staged cutover). Persist the learned set, but never let that background work
+            // launch DashboardActivity behind the configured renderer's back.
+            if (shouldReloadBuiltinAfterEntityFilterChange(
+                    config.dashboardPackage,
+                    SystemController.BUILTIN_DASHBOARD,
+                )) {
+                system.reloadDashboard(SystemController.BUILTIN_DASHBOARD)
+            }
         }
         EntityLearningRuntime.attach(entityLearning)
         watchdog = WatchdogController(system, config)

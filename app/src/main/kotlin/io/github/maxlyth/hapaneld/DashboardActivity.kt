@@ -29,6 +29,7 @@ import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -46,6 +47,7 @@ import io.github.maxlyth.hapaneld.control.BottomSwipeDetector
 import io.github.maxlyth.hapaneld.control.BuiltinDashboard
 import io.github.maxlyth.hapaneld.dashboard.EntityFilterProtocol
 import io.github.maxlyth.hapaneld.dashboard.EntityFilterTelemetry
+import io.github.maxlyth.hapaneld.dashboard.shouldHoldRendererForEntityBootstrap
 import io.github.maxlyth.hapaneld.dashboard.EntityLearningProtocol
 import io.github.maxlyth.hapaneld.dashboard.EntityLearningRuntime
 import org.json.JSONObject
@@ -156,6 +158,23 @@ class DashboardActivity : AppCompatActivity() {
             main.postDelayed(this, 1_000L)
         }
     }
+    // A fresh automatic learner has no safe document-start allow-list yet. Keep a native screen in
+    // front instead of ever loading HA unfiltered; this poll is a backstop for a missed/blocked service
+    // relaunch when synchronization commits the first set.
+    private val entityBootstrapCheck = object : Runnable {
+        override fun run() {
+            if (destroyed || !BuiltinDashboard.ownsActivity(activityOwner)) return
+            val config = Config(this@DashboardActivity)
+            if (holdForEntityBootstrap(config)) {
+                main.postDelayed(this, ENTITY_BOOTSTRAP_CHECK_MS)
+                return
+            }
+            entityFilterLease?.let(EntityFilterTelemetry::stop)
+            entityFilterLease = null
+            configureEntityFilter(config)
+            buildAndLoad(config)
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -242,6 +261,13 @@ class DashboardActivity : AppCompatActivity() {
             if (ids.isEmpty()) "disabled$learning" else "enabled:${EntityFilterProtocol.hash(ids)}:${config.haUrl}$learning"
         }.getOrDefault("invalid$learning")
     }
+
+    private fun holdForEntityBootstrap(config: Config): Boolean =
+        shouldHoldRendererForEntityBootstrap(
+            learningEnabled = config.dashboardEntityLearningEnabled,
+            filterEnabled = config.dashboardEntityFilterEnabled,
+            entityIds = config.dashboardEntityFilterIds,
+        )
 
     /** Prepare the exact allow-list for document-start interception. Unsupported/invalid state degrades
      *  to the ordinary direct HA connection without changing the persisted opt-in. */
@@ -977,6 +1003,11 @@ class DashboardActivity : AppCompatActivity() {
     @SuppressLint("SetJavaScriptEnabled")
     private fun buildAndLoad(config: Config) {
         if (destroyed || !BuiltinDashboard.ownsActivity(activityOwner)) return
+        if (holdForEntityBootstrap(config)) {
+            showWaitingForEntityBootstrap()
+            return
+        }
+        main.removeCallbacks(entityBootstrapCheck)
         val generation = rendererGate.open()
         rendererGeneration = generation
         // The page carries a live HA session, so only expose the WebView's DevTools socket when network
@@ -1029,6 +1060,61 @@ class DashboardActivity : AppCompatActivity() {
         setContentView(container)
         w.loadUrl(currentUrl(config))
         onLoadStarted()
+    }
+
+    /** Native hold screen used while the learner derives its first minimal subscription. No WebView is
+     * created here, making it impossible for an activity/watchdog/HOME race to open the full HA stream. */
+    private fun showWaitingForEntityBootstrap() {
+        main.removeCallbacks(entityBootstrapCheck)
+        teardownWeb()
+        val density = resources.displayMetrics.density
+        val dark = Config(this).dashboardThemeDark ?: true
+        val bg = Color.parseColor(if (dark) "#111111" else "#ffffff")
+        val body = Color.parseColor(if (dark) "#c8ccd2" else "#2a2e34")
+        val subtle = Color.parseColor(if (dark) "#8a8f99" else "#5a6068")
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding((24 * density).toInt(), (32 * density).toInt(), (24 * density).toInt(), (32 * density).toInt())
+            addView(ProgressBar(this@DashboardActivity).apply { isIndeterminate = true })
+            addView(TextView(this@DashboardActivity).apply {
+                text = "Preparing optimized dashboard subscription"
+                setTextColor(body)
+                textSize = 17f
+                gravity = Gravity.CENTER
+            }, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { topMargin = (20 * density).toInt() })
+            addView(TextView(this@DashboardActivity).apply {
+                text = "Home Assistant will open when the first filtered entity set is ready."
+                setTextColor(subtle)
+                textSize = 13f
+                gravity = Gravity.CENTER
+            }, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { topMargin = (10 * density).toInt() })
+            addView(Button(this@DashboardActivity).apply {
+                text = "Open panel settings"
+                setOnClickListener {
+                    startActivity(Intent(this@DashboardActivity, ConfigActivity::class.java).putExtra("path", "/entities"))
+                }
+            }, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply {
+                topMargin = (20 * density).toInt()
+                gravity = Gravity.CENTER_HORIZONTAL
+            })
+        }
+        val container = FrameLayout(this).apply {
+            setBackgroundColor(bg)
+            addView(content, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.CENTER,
+            ))
+        }
+        root = container
+        setContentView(container)
+        main.postDelayed(entityBootstrapCheck, ENTITY_BOOTSTRAP_CHECK_MS)
+        Log.i(TAG, "automatic entity set not ready — holding renderer before WebView creation")
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -1335,6 +1421,7 @@ class DashboardActivity : AppCompatActivity() {
         private const val AUTH_INVALID_LATCH = 3                // consecutive auth-invalid events → latch
         private const val REFRESH_REJECT_LATCH = 2              // consecutive definitive refresh rejections → latch
         private const val DEFAULT_NETWORK_WAIT_MS = 60_000L     // calm first-boot progress until learned
+        private const val ENTITY_BOOTSTRAP_CHECK_MS = 1_000L    // missed-relaunch backstop; no network work
     }
 }
 
