@@ -23,6 +23,8 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, "entity-l
         val catalogCount: Int,
         val activeCount: Int,
         val unresolvedCount: Int,
+        val issueCount: Int,
+        val blockingIssueCount: Int,
         val error: String,
         val dbBytes: Long,
     )
@@ -42,6 +44,7 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, "entity-l
             config_json TEXT NOT NULL DEFAULT '{}', status TEXT NOT NULL DEFAULT 'disabled',
             last_sync INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '',
             unresolved_json TEXT NOT NULL DEFAULT '[]', sync_generation INTEGER NOT NULL DEFAULT 0,
+            issues_json TEXT NOT NULL DEFAULT '[]',
             PRIMARY KEY(instance,path))""")
         db.execSQL("""CREATE TABLE membership(
             instance TEXT NOT NULL, path TEXT NOT NULL, entity_id TEXT NOT NULL,
@@ -93,6 +96,7 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, "entity-l
         unresolved: List<String>,
         status: String,
         now: Long,
+        issues: List<JSONObject> = emptyList(),
     ) {
         val db = writableDatabase
         db.beginTransaction()
@@ -133,8 +137,17 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, "entity-l
             db.execSQL("INSERT OR IGNORE INTO dashboard(instance,path) VALUES(?,?)", arrayOf(instance, path))
             db.execSQL(
                 """UPDATE dashboard SET config_hash=?,config_json=?,status=?,last_sync=?,error='',
-                   unresolved_json=?,sync_generation=sync_generation+1 WHERE instance=? AND path=?""",
-                arrayOf(EntityLearningProtocol.hash(EntityLearningProtocol.canonical(JSONObject(configJson))), configJson, status, now, JSONArray(unresolved).toString(), instance, path),
+                   unresolved_json=?,issues_json=?,sync_generation=sync_generation+1 WHERE instance=? AND path=?""",
+                arrayOf(
+                    EntityLearningProtocol.hash(EntityLearningProtocol.canonical(JSONObject(configJson))),
+                    configJson,
+                    status,
+                    now,
+                    JSONArray(unresolved).toString(),
+                    EntityCatalogIssuePersistence.boundedJson(issues),
+                    instance,
+                    path,
+                ),
             )
             val cutoff = now - TOMBSTONE_RETENTION_MS
             db.execSQL("DELETE FROM entity WHERE instance=? AND tombstone_at>0 AND tombstone_at<?", arrayOf(instance, cutoff))
@@ -281,18 +294,41 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, "entity-l
 
     fun snapshot(instance: String, path: String): Snapshot {
         val dashboard = readableDatabase.rawQuery(
-            "SELECT status,last_sync,error,unresolved_json FROM dashboard WHERE instance=? AND path=?",
+            "SELECT status,last_sync,error,unresolved_json,issues_json FROM dashboard WHERE instance=? AND path=?",
             arrayOf(instance, path),
-        ).use { c -> if (c.moveToFirst()) listOf(c.getString(0), c.getLong(1), c.getString(2), c.getString(3)) else null }
+        ).use { c ->
+            if (c.moveToFirst()) {
+                DashboardRow(c.getString(0), c.getLong(1), c.getString(2), c.getString(3), c.getString(4))
+            } else null
+        }
         fun count(sql: String) = readableDatabase.rawQuery(sql, arrayOf(instance, path)).use { c -> c.moveToFirst(); c.getInt(0) }
+        val issueCounts = EntityCatalogIssuePersistence.counts(dashboard?.issuesJson ?: "[]")
         return Snapshot(
-            dashboard?.get(0) as? String ?: "disabled", dashboard?.get(1) as? Long ?: 0L,
+            dashboard?.status ?: "disabled", dashboard?.lastSync ?: 0L,
             readableDatabase.rawQuery("SELECT count(*) FROM entity WHERE instance=? AND missing_streak<3", arrayOf(instance)).use { c -> c.moveToFirst(); c.getInt(0) },
             count("SELECT count(*) FROM membership WHERE instance=? AND path=? AND excluded=0 AND (pinned=1 OR static_ref=1 OR runtime_ref=1)"),
-            (dashboard?.get(3) as? String)?.let { runCatching { JSONArray(it).length() }.getOrDefault(0) } ?: 0,
-            dashboard?.get(2) as? String ?: "", databaseBytes(),
+            dashboard?.unresolvedJson?.let { runCatching { JSONArray(it).length() }.getOrDefault(0) } ?: 0,
+            issueCounts.first,
+            issueCounts.second,
+            dashboard?.error ?: "",
+            databaseBytes(),
         )
     }
+
+    /** Structured, bounded diagnostics only. The raw dashboard configuration is never returned. */
+    fun issuesJson(instance: String, path: String): String {
+        val stored = readableDatabase.rawQuery(
+            "SELECT issues_json FROM dashboard WHERE instance=? AND path=?",
+            arrayOf(instance, path),
+        ).use { c -> if (c.moveToFirst()) c.getString(0) else "[]" }
+        return EntityCatalogIssuePersistence.boundExistingJson(stored)
+    }
+
+    /** Internal-only source for rebuilding bounded derived diagnostics after process restart. */
+    fun dashboardConfigJson(instance: String, path: String): String = readableDatabase.rawQuery(
+        "SELECT config_json FROM dashboard WHERE instance=? AND path=?",
+        arrayOf(instance, path),
+    ).use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else "{}" }
 
     fun entitiesJson(
         instance: String,
@@ -433,6 +469,14 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, "entity-l
         val firstMinute: Long,
     )
 
+    private data class DashboardRow(
+        val status: String,
+        val lastSync: Long,
+        val error: String,
+        val unresolvedJson: String,
+        val issuesJson: String,
+    )
+
     /** Percentile ranks across every entity with evidence, independently for each time window. */
     private class RecentRanks(rows: Collection<Recent>) {
         val access1m = rows.map { it.access1m }.filter { it > 0 }.sorted()
@@ -500,7 +544,7 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, "entity-l
 
 /** Sequential forward-only schema contract. Never add an ad-hoc conditional to [onUpgrade]. */
 object EntityCatalogSchema {
-    const val CURRENT_VERSION = 4
+    const val CURRENT_VERSION = 5
     data class Step(val from: Int, val to: Int, val sql: List<String>)
 
     private val steps = mapOf(
@@ -526,6 +570,10 @@ object EntityCatalogSchema {
                 "CREATE INDEX minute_rollup_age ON minute_rollup(instance,path,minute)",
             ),
         ),
+        4 to Step(
+            4, 5,
+            listOf("ALTER TABLE dashboard ADD COLUMN issues_json TEXT NOT NULL DEFAULT '[]'"),
+        ),
     )
 
     fun plan(oldVersion: Int, newVersion: Int): List<Step> {
@@ -539,5 +587,68 @@ object EntityCatalogSchema {
             out += step; current = step.to
         }
         return out
+    }
+}
+
+/** Keeps derived issue diagnostics small even when a dashboard or parser produces hostile input. */
+internal object EntityCatalogIssuePersistence {
+    const val MAX_ISSUE_GROUPS = 64
+    const val MAX_SOURCES_PER_GROUP = 8
+    const val MAX_PAYLOAD_BYTES = 64 * 1024
+    private const val MAX_ARRAY_ITEMS = 16
+    private const val MAX_OBJECT_KEYS = 24
+    private const val MAX_KEY_CHARS = 100
+    private const val MAX_STRING_CHARS = 500
+    private const val MAX_DEPTH = 4
+
+    fun boundedJson(issues: List<JSONObject>): String {
+        val out = JSONArray()
+        for (issue in issues.take(MAX_ISSUE_GROUPS)) {
+            val sanitized = sanitizeObject(issue, 0)
+            out.put(sanitized)
+            if (out.toString().toByteArray(Charsets.UTF_8).size > MAX_PAYLOAD_BYTES) {
+                out.remove(out.length() - 1)
+            }
+        }
+        return out.toString()
+    }
+
+    fun boundExistingJson(raw: String): String = runCatching {
+        val array = JSONArray(raw)
+        boundedJson(buildList {
+            for (index in 0 until array.length()) array.optJSONObject(index)?.let(::add)
+        })
+    }.getOrDefault("[]")
+
+    fun counts(raw: String): Pair<Int, Int> = runCatching {
+        val array = JSONArray(boundExistingJson(raw))
+        var blocking = 0
+        for (index in 0 until array.length()) {
+            if (array.optJSONObject(index)?.optBoolean("blocking", false) == true) blocking++
+        }
+        array.length() to blocking
+    }.getOrDefault(0 to 0)
+
+    private fun sanitizeObject(input: JSONObject, depth: Int): JSONObject = JSONObject().apply {
+        if (depth >= MAX_DEPTH) return@apply
+        input.keys().asSequence().toList().sorted().take(MAX_OBJECT_KEYS).forEach { rawKey ->
+            val key = rawKey.take(MAX_KEY_CHARS)
+            sanitizeValue(input.opt(rawKey), depth + 1, key)?.let { put(key, it) }
+        }
+    }
+
+    private fun sanitizeValue(value: Any?, depth: Int, key: String): Any? = when {
+        value == null || value === JSONObject.NULL -> JSONObject.NULL
+        value is String -> value.take(MAX_STRING_CHARS)
+        value is Boolean || value is Number -> value
+        depth >= MAX_DEPTH -> null
+        value is JSONObject -> sanitizeObject(value, depth)
+        value is JSONArray -> JSONArray().apply {
+            val limit = if (key == "sources" || key == "source_locations") MAX_SOURCES_PER_GROUP else MAX_ARRAY_ITEMS
+            for (index in 0 until minOf(value.length(), limit)) {
+                sanitizeValue(value.opt(index), depth + 1, key)?.let { put(it) }
+            }
+        }
+        else -> value.toString().take(MAX_STRING_CHARS)
     }
 }

@@ -142,6 +142,7 @@ class DashboardActivity : AppCompatActivity() {
     private var waitingProgress: ProgressBar? = null
     private var waitingEstimateMs = 0L
     private var waitingEstimateLearned = false
+    private var entityBootstrapBlockedCount = -1
     private var waitingStartedAt = 0L
     private val waitingTick = object : Runnable {
         override fun run() {
@@ -166,6 +167,11 @@ class DashboardActivity : AppCompatActivity() {
             if (destroyed || !BuiltinDashboard.ownsActivity(activityOwner)) return
             val config = Config(this@DashboardActivity)
             if (holdForEntityBootstrap(config)) {
+                val blocking = EntityLearningRuntime.blockingIssueCount()
+                if (blocking != entityBootstrapBlockedCount) {
+                    showWaitingForEntityBootstrap()
+                    return
+                }
                 main.postDelayed(this, ENTITY_BOOTSTRAP_CHECK_MS)
                 return
             }
@@ -1008,6 +1014,7 @@ class DashboardActivity : AppCompatActivity() {
             return
         }
         main.removeCallbacks(entityBootstrapCheck)
+        entityBootstrapBlockedCount = -1
         val generation = rendererGate.open()
         rendererGeneration = generation
         // The page carries a live HA session, so only expose the WebView's DevTools socket when network
@@ -1067,6 +1074,8 @@ class DashboardActivity : AppCompatActivity() {
     private fun showWaitingForEntityBootstrap() {
         main.removeCallbacks(entityBootstrapCheck)
         teardownWeb()
+        val blockingIssues = EntityLearningRuntime.blockingIssueCount()
+        entityBootstrapBlockedCount = blockingIssues
         val density = resources.displayMetrics.density
         val dark = Config(this).dashboardThemeDark ?: true
         val bg = Color.parseColor(if (dark) "#111111" else "#ffffff")
@@ -1076,9 +1085,13 @@ class DashboardActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
             setPadding((24 * density).toInt(), (32 * density).toInt(), (24 * density).toInt(), (32 * density).toInt())
-            addView(ProgressBar(this@DashboardActivity).apply { isIndeterminate = true })
+            if (blockingIssues == 0) addView(ProgressBar(this@DashboardActivity).apply { isIndeterminate = true })
             addView(TextView(this@DashboardActivity).apply {
-                text = "Preparing optimized dashboard subscription"
+                text = if (blockingIssues > 0) {
+                    "Dashboard configuration needs attention"
+                } else {
+                    "Preparing optimized dashboard subscription"
+                }
                 setTextColor(body)
                 textSize = 17f
                 gravity = Gravity.CENTER
@@ -1086,7 +1099,11 @@ class DashboardActivity : AppCompatActivity() {
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT,
             ).apply { topMargin = (20 * density).toInt() })
             addView(TextView(this@DashboardActivity).apply {
-                text = "Home Assistant will open when the first filtered entity set is ready."
+                text = if (blockingIssues > 0) {
+                    "$blockingIssues blocking ${if (blockingIssues == 1) "issue prevents" else "issues prevent"} automatic activation. Review the entity diagnostics in panel settings."
+                } else {
+                    "Home Assistant will open when the first filtered entity set is ready."
+                }
                 setTextColor(subtle)
                 textSize = 13f
                 gravity = Gravity.CENTER
@@ -1114,7 +1131,11 @@ class DashboardActivity : AppCompatActivity() {
         root = container
         setContentView(container)
         main.postDelayed(entityBootstrapCheck, ENTITY_BOOTSTRAP_CHECK_MS)
-        Log.i(TAG, "automatic entity set not ready — holding renderer before WebView creation")
+        Log.i(TAG, if (blockingIssues > 0) {
+            "automatic entity activation blocked by $blockingIssues dashboard configuration issue(s)"
+        } else {
+            "automatic entity set not ready — holding renderer before WebView creation"
+        })
     }
 
     @SuppressLint("SetJavaScriptEnabled")

@@ -7,9 +7,35 @@ import org.junit.Test
 
 class EntityLearningProtocolTest {
     @Test fun emptyInstallBootstrapsButExistingManualSetIsPreserved() {
-        assertTrue(shouldBootstrapEntityLearning(applied = false, configuredIds = emptyList()))
-        assertFalse(shouldBootstrapEntityLearning(applied = false, configuredIds = listOf("light.kitchen")))
-        assertFalse(shouldBootstrapEntityLearning(applied = true, configuredIds = emptyList()))
+        assertTrue(shouldBootstrapEntityLearning(learningEnabled = true, applied = false, configuredIds = emptyList()))
+        assertFalse(shouldBootstrapEntityLearning(learningEnabled = true, applied = false, configuredIds = listOf("light.kitchen")))
+        assertFalse(shouldBootstrapEntityLearning(learningEnabled = true, applied = true, configuredIds = emptyList()))
+        assertFalse(shouldBootstrapEntityLearning(learningEnabled = false, applied = false, configuredIds = emptyList()))
+    }
+
+    @Test fun blockingDashboardRejectsWholeAutomaticSetAndDisabledScanOnlyObserves() {
+        assertEquals(
+            AutomaticSyncDecision.BLOCKED,
+            automaticSyncDecision(true, applied = true, configuredIds = listOf("light.known_good"), blockingIssues = true),
+        )
+        assertEquals(
+            AutomaticSyncDecision.BLOCKED,
+            automaticSyncDecision(true, applied = false, configuredIds = emptyList(), blockingIssues = true),
+        )
+        assertEquals(
+            AutomaticSyncDecision.OBSERVE,
+            automaticSyncDecision(false, applied = false, configuredIds = emptyList(), blockingIssues = false),
+        )
+        assertEquals(
+            AutomaticSyncDecision.BOOTSTRAP,
+            automaticSyncDecision(
+                learningEnabled = true,
+                applied = false,
+                configuredIds = listOf("light.known_good"),
+                blockingIssues = false,
+                forceBootstrap = true,
+            ),
+        )
     }
 
     @Test fun subscriptionPreviewMakesApplyOutcomeExplicit() {
@@ -52,6 +78,67 @@ class EntityLearningProtocolTest {
         assertTrue(scan.targets.single().contains("area_id"))
         assertTrue(scan.unresolved.any { it.contains("custom:mystery-card") })
         assertTrue(scan.unresolved.any { it.contains("dynamic-template") })
+    }
+
+    @Test fun dashboardScannerReturnsStructuredDynamicExpressionsWithVerbatimLiterals() {
+        val literal = "[[[ return hass.states['sensor.room'].state; ]]]"
+        val scan = EntityLearningProtocol.scanDashboard(
+            """{"views":[{"cards":[{"type":"custom:sample-card","value":${org.json.JSONObject.quote(literal)}}]}]}""",
+        )
+
+        val expression = scan.dynamicExpressions.single()
+        assertEquals("dashboard.views[0].cards[0].value", expression.sourceLocation)
+        assertEquals(literal, expression.literal)
+        assertFalse(expression.truncated)
+        assertEquals(expression, scan.dynamicExpressions.single())
+        assertEquals(literal, expression.toJson().getString("literal"))
+        assertEquals(expression.sourceLocation, expression.toJson().getString("source_location"))
+    }
+
+    @Test fun dynamicExpressionLiteralIsBoundedAndFingerprintUsesTheCompleteValue() {
+        val prefix = "{{ "
+        val first = prefix + "a".repeat(EntityLearningProtocol.MAX_DYNAMIC_EXPRESSION_LENGTH + 100) + " }}"
+        val second = prefix + "a".repeat(EntityLearningProtocol.MAX_DYNAMIC_EXPRESSION_LENGTH + 99) + "b }}"
+        fun scan(value: String) = EntityLearningProtocol.scanDashboard(
+            """{"views":[{"cards":[{"type":"markdown","content":${org.json.JSONObject.quote(value)}}]}]}""",
+        ).dynamicExpressions.single()
+
+        val a = scan(first)
+        val b = scan(second)
+
+        assertEquals(EntityLearningProtocol.MAX_DYNAMIC_EXPRESSION_LENGTH, a.literal.length)
+        assertTrue(a.truncated)
+        assertEquals(a.literal, b.literal)
+        assertFalse(a.fingerprint == b.fingerprint)
+    }
+
+    @Test fun autoEntitiesFilterExpressionsAreObservedButNotPromotedAsStaticIds() {
+        val literal = "{{ states('sensor.selector_source') }}"
+        val scan = EntityLearningProtocol.scanDashboard(
+            """{"views":[{"cards":[{"type":"custom:auto-entities","filter":{"include":[{"entity_id":${org.json.JSONObject.quote(literal)}}]}}]}]}""",
+        )
+
+        assertTrue(scan.entityIds.isEmpty())
+        assertEquals(literal, scan.dynamicExpressions.single().literal)
+        assertEquals(
+            "dashboard.views[0].cards[0].filter.include[0].entity_id",
+            scan.dynamicExpressions.single().sourceLocation,
+        )
+    }
+
+    @Test fun dynamicExpressionsAreDeterministicallyOrderedBySource() {
+        val scan = EntityLearningProtocol.scanDashboard(
+            """{"views":[{"cards":[
+              {"type":"markdown","content":"{{ states('sensor.first') }}"},
+              {"type":"markdown","content":"[[[ return states['sensor.second']; ]]]"}
+            ]}]}""",
+        )
+
+        assertEquals(
+            listOf("dashboard.views[0].cards[0].content", "dashboard.views[0].cards[1].content"),
+            scan.dynamicExpressions.map { it.sourceLocation },
+        )
+        assertEquals(2, scan.dynamicExpressions.map { it.fingerprint }.distinct().size)
     }
 
     @Test fun canonicalDashboardHashIsIndependentOfObjectKeyOrder() {
@@ -109,6 +196,13 @@ class EntityLearningProtocolTest {
         )
     }
 
+    @Test fun autoEntitiesExcludeIdsAreNotCollectedAsOrdinaryStaticReferences() {
+        val scan = EntityLearningProtocol.scanDashboard(
+            """{"views":[{"cards":[{"type":"custom:auto-entities","filter":{"include":[{"domain":"light"}],"exclude":[{"entity_id":"light.hidden"}]}}]}]}""",
+        )
+        assertFalse("light.hidden" in scan.entityIds)
+    }
+
     @Test fun broadSelectorIsOmittedWholeAndReportedAsUnresolved() {
         val scan = EntityLearningProtocol.scanDashboard(
             """{"views":[{"cards":[{"type":"custom:auto-entities","filter":{"include":[{"domain":"sensor"}]}}]}]}""",
@@ -146,7 +240,7 @@ class EntityLearningProtocolTest {
         assertEquals(1, scan.targets.size)
         assertTrue(scan.targets.single().contains("area_id"))
         assertFalse(scan.targets.single().contains("entity_id"))
-        assertTrue(scan.unresolved.count { it.contains("dynamic-target") } >= 2)
+        assertEquals(1, scan.unresolved.count { it.contains("dynamic-target") })
     }
 
     @Test fun literalEntityTargetsAreResolvedLocallyWithoutHomeAssistantExpansion() {

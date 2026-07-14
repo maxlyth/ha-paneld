@@ -89,8 +89,11 @@
         ], "responses": { "200": { "description": "{items,limit,offset}" } } }
     },
     "/api/v1/dashboard/entities/sync": {
-      "get": { "summary": "Automatic entity-learning status and last synchronization", "tags": ["performance"], "responses": { "200": { "description": "Learning status" } } },
+      "get": { "summary": "Automatic entity-learning status and last synchronization", "tags": ["performance"], "responses": { "200": { "description": "Learning status including dashboard_issue_count, blocking_issue_count and automatic_activation_blocked" } } },
       "post": { "summary": "Start an immediate catalog and dashboard synchronization", "tags": ["performance"], "responses": { "202": { "description": "Started" }, "409": { "description": "Already running" } } }
+    },
+    "/api/v1/dashboard/entities/issues": {
+      "get": { "summary": "Sanitized dashboard configuration issues and non-blocking dynamic expressions", "tags": ["performance"], "responses": { "200": { "description": "{items,dashboard_issue_count,blocking_issue_count,dynamic_expressions}; issue items include severity, blocking, source locations, rule summary, candidate count, limit, reason and recommendation; dynamic expressions include source_location, literal, fingerprint and truncated" } } }
     },
     "/api/v1/dashboard/entities/activate": {
       "post": { "summary": "Explicitly replace the current filter with the observed candidate set", "tags": ["performance"],

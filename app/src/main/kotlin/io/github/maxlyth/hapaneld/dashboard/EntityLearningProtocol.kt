@@ -20,7 +20,21 @@ object EntityLearningProtocol {
         val targets: List<String>,
         val unresolved: List<String>,
         val selectors: List<Selector> = emptyList(),
+        val dynamicExpressions: List<DynamicExpression> = emptyList(),
     )
+
+    data class DynamicExpression(
+        val sourceLocation: String,
+        val literal: String,
+        val truncated: Boolean,
+        val fingerprint: String,
+    ) {
+        fun toJson(): JSONObject = JSONObject()
+            .put("source_location", sourceLocation)
+            .put("literal", literal)
+            .put("truncated", truncated)
+            .put("fingerprint", fingerprint)
+    }
 
     data class Selector(
         val exclude: Boolean,
@@ -40,6 +54,30 @@ object EntityLearningProtocol {
         val targets = linkedSetOf<String>()
         val unresolved = linkedSetOf<String>()
         val selectors = mutableListOf<Selector>()
+        val dynamicExpressions = linkedMapOf<String, DynamicExpression>()
+
+        fun recordDynamicExpression(value: String, path: String) {
+            if (TEMPLATE_MARKERS.none(value::contains)) return
+            val key = "$path\u0000$value"
+            dynamicExpressions.putIfAbsent(key, DynamicExpression(
+                sourceLocation = path,
+                literal = value.take(MAX_DYNAMIC_EXPRESSION_LENGTH),
+                truncated = value.length > MAX_DYNAMIC_EXPRESSION_LENGTH,
+                fingerprint = hash(key),
+            ))
+        }
+
+        fun inspectDynamicExpressions(value: Any?, path: String) {
+            when (value) {
+                is JSONObject -> value.keys().asSequence().toList().sorted().forEach { key ->
+                    inspectDynamicExpressions(value.opt(key), "$path.$key")
+                }
+                is JSONArray -> for (index in 0 until value.length()) {
+                    inspectDynamicExpressions(value.opt(index), "$path[$index]")
+                }
+                is String -> recordDynamicExpression(value, path)
+            }
+        }
 
         fun strings(value: Any?): Set<String> = when (value) {
             is String -> setOf(value.lowercase())
@@ -104,7 +142,12 @@ object EntityLearningProtocol {
             when (value) {
                 is JSONObject -> {
                     val type = value.optString("type")
-                    if (type == "custom:auto-entities") autoEntityRules(value, path)
+                    if (type == "custom:auto-entities") {
+                        autoEntityRules(value, path)
+                        // Selector filters are not walked for ordinary literal IDs, but their dynamic
+                        // expressions are still valuable configuration evidence.
+                        value.opt("filter")?.let { inspectDynamicExpressions(it, "$path.filter") }
+                    }
                     val before = ids.size + targets.size + selectors.size
                     val target = JSONObject()
                     for (key in TARGET_KEYS) if (value.has(key)) {
@@ -125,7 +168,11 @@ object EntityLearningProtocol {
                     val expandableTarget = JSONObject()
                     for (key in EXPANDABLE_TARGET_KEYS) if (target.has(key)) expandableTarget.put(key, target.opt(key))
                     if (expandableTarget.length() > 0) targets += canonical(expandableTarget)
-                    val keys = value.keys().asSequence().toList().sorted()
+                    // The selector linter owns auto-entities filter semantics. Walking those rules as
+                    // ordinary strings would incorrectly promote literal IDs from an exclude rule.
+                    val keys = value.keys().asSequence().toList().sorted().filterNot {
+                        type == "custom:auto-entities" && it == "filter"
+                    }
                     for (key in keys) walk(value.opt(key), "$path.$key")
                     if (type.startsWith("custom:") && before == ids.size + targets.size + selectors.size) {
                         unresolved += "$path:$type"
@@ -135,6 +182,7 @@ object EntityLearningProtocol {
                 is String -> {
                     val before = ids.size
                     scalarIds(value)
+                    recordDynamicExpression(value, path)
                     if (TEMPLATE_MARKERS.any(value::contains) && ids.size == before) {
                         unresolved += "$path:dynamic-template"
                     }
@@ -142,7 +190,13 @@ object EntityLearningProtocol {
             }
         }
         walk(root, "dashboard")
-        return ScanResult(ids, targets.toList(), unresolved.toList(), selectors)
+        return ScanResult(
+            ids,
+            targets.toList(),
+            unresolved.toList(),
+            selectors,
+            dynamicExpressions.values.sortedWith(compareBy({ it.sourceLocation }, { it.fingerprint })),
+        )
     }
 
     fun resolveSelectors(
@@ -192,6 +246,7 @@ object EntityLearningProtocol {
 
     internal const val SELECTOR_ENTITY_LIMIT = 64
     internal const val SELECTOR_TOTAL_BUDGET = 128
+    internal const val MAX_DYNAMIC_EXPRESSION_LENGTH = 2048
 
     fun dashboardUrlPath(homeDashboard: String): String {
         val first = homeDashboard.trim().substringBefore('?').trim('/').substringBefore('/')

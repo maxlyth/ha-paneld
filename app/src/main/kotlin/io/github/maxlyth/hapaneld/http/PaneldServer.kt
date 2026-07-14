@@ -379,6 +379,9 @@ class PaneldServer(
                         )
                     }
                     get("/dashboard/entities/sync") { call.respondText(entityLearning.statusJson(), ContentType.Application.Json) }
+                    get("/dashboard/entities/issues") {
+                        call.respondText(entityLearning.issuesJson(), ContentType.Application.Json)
+                    }
                     post("/dashboard/entities/sync") {
                         if (entityLearning.syncNow("manual")) {
                             call.respondText(entityLearning.statusJson(), ContentType.Application.Json, HttpStatusCode.Accepted)
@@ -1020,6 +1023,16 @@ class PaneldServer(
               <p class="muted">Turn either source off to keep collecting its evidence without changing the live subscription.</p>
             </fieldset>
             <div style="margin-top:12px"><input id="entity-search" placeholder="Search the complete Home Assistant entity catalogue"></div>
+          </div>
+          <div class="card entity-issues" id="entity-issues"><h2>Dashboard configuration issues</h2>
+            <div id="entity-issues-summary" class="muted">Checking the dashboard configuration…</div>
+            <div id="entity-issues-list" class="entity-issues-list"></div>
+            <section id="entity-dynamic" class="entity-dynamic" hidden>
+              <h3>Dynamic expressions to exercise</h3>
+              <p class="muted">These expressions are not configuration errors. Exercise the relevant dashboard state so runtime observation can reveal concrete entity IDs.</p>
+              <div id="entity-dynamic-list" class="entity-dynamic-list"></div>
+            </section>
+            <button class="pbtn" id="entity-issues-rescan" type="button">Re-scan after editing dashboard</button>
           </div>
           ${entityTableHtml("current", "Current subscribed entities", "The entities in the live Home Assistant stream. An unfiltered stream contains the complete visible catalog.", "subscribed")}
           ${entityTableHtml("suggested", "Suggested dashboard entities", "Unpinned dashboard references and runtime lookups that are not currently subscribed. Excluded entities remain visible when the dashboard still uses them. While searching, this table also shows unpinned matches from the complete Home Assistant catalogue.", "candidate")}

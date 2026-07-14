@@ -40,10 +40,21 @@ class EntityLearningManager(
     private val syncMutex = Mutex()
     private val promotionQueued = AtomicBoolean(false)
     @Volatile private var syncJob: Job? = null
+    @Volatile private var bootstrapBlockingIssues = 0
+    @Volatile private var resetBootstrapPending = false
+    @Volatile private var dynamicExpressionsJson = "[]"
     private var promotionWindowStart = 0L
     private var promotionsInWindow = 0
 
     fun start() {
+        bootstrapBlockingIssues = runCatching {
+            store.snapshot(instance(), dashboardPath()).blockingIssueCount
+        }.getOrDefault(0)
+        dynamicExpressionsJson = runCatching {
+            encodeDynamicExpressions(EntityLearningProtocol.scanDashboard(
+                store.dashboardConfigJson(instance(), dashboardPath()),
+            ).dynamicExpressions)
+        }.getOrDefault("[]")
         scope.launch {
             while (true) {
                 delay(HOURLY_CHECK_MS)
@@ -58,6 +69,8 @@ class EntityLearningManager(
     }
 
     fun close() { syncJob?.cancel(); store.close() }
+
+    fun blockingIssueCount(): Int = bootstrapBlockingIssues
 
     fun setEnabled(enabled: Boolean): Boolean {
         val wasEnabled = config.dashboardEntityLearningEnabled
@@ -75,6 +88,7 @@ class EntityLearningManager(
             // screen until synchronization commits the first narrow set.
             onFilterChanged()
         } else {
+            resetBootstrapPending = false
             config.setDashboardEntityFilter(false, config.dashboardEntityFilterIds)
             store.markStatus(instance(), dashboardPath(), "disabled")
             onFilterChanged()
@@ -85,6 +99,9 @@ class EntityLearningManager(
     /** Explicitly promote the policy-selected evidence set, primarily for existing manual filters. */
     fun activate(confirm: Boolean): String {
         require(config.dashboardEntityLearningEnabled) { "automatic learning is not enabled" }
+        require(store.snapshot(instance(), dashboardPath()).blockingIssueCount == 0) {
+            "automatic activation is blocked by dashboard configuration issues"
+        }
         if (!confirm) return JSONObject().put("ok", false).put("confirmation_required", true).toString()
         val active = desiredIds(System.currentTimeMillis())
         require(active.isNotEmpty()) { "learned candidate set is empty" }
@@ -97,6 +114,7 @@ class EntityLearningManager(
             }
             onFilterChanged()
         }
+        resetBootstrapPending = false
         store.markStatus(instance(), dashboardPath(), "active")
         return JSONObject().put("ok", true).put("entity_count", active.size)
             .put("previous_count", preview.currentCount)
@@ -129,19 +147,44 @@ class EntityLearningManager(
         require(states.isNotEmpty()) { "Home Assistant returned no visible states" }
         val ws = fetchDashboardAndRegistry(config.haUrl, token, EntityLearningProtocol.dashboardUrlPath(path))
         val scan = EntityLearningProtocol.scanDashboard(ws.configJson)
+        dynamicExpressionsJson = encodeDynamicExpressions(scan.dynamicExpressions)
         val expanded = expandTargets(config.haUrl, token, scan.targets)
         val catalogIds = states.asSequence().map { it.entityId }.toHashSet()
-        val selected = EntityLearningProtocol.resolveSelectors(scan.selectors, catalogIds, ws.metadata)
-        val derived = (scan.entityIds + expanded + selected.entityIds).filterTo(sortedSetOf()) { it in catalogIds }
-        require(derived.isNotEmpty()) { "dashboard analysis found no visible entity dependencies" }
+        val lint = DashboardConfigurationLint.analyze(ws.configJson, catalogIds, ws.metadata)
+        val derived = (scan.entityIds + expanded + lint.safeEntityIds).filterTo(sortedSetOf()) { it in catalogIds }
         val now = System.currentTimeMillis()
         val apply = config.dashboardEntityLearningApplied
-        val bootstrap = shouldBootstrapEntityLearning(apply, config.dashboardEntityFilterIds)
-        store.commitSync(
-            instance, path, states, ws.metadata, ws.configJson, derived, scan.unresolved + selected.unresolved,
-            when { apply -> "active"; bootstrap -> "learning"; else -> "observing" }, now,
+        val bootstrap = resetBootstrapPending || shouldBootstrapEntityLearning(
+            learningEnabled = config.dashboardEntityLearningEnabled,
+            applied = apply,
+            configuredIds = config.dashboardEntityFilterIds,
         )
+        val decision = automaticSyncDecision(
+            learningEnabled = config.dashboardEntityLearningEnabled,
+            applied = apply,
+            configuredIds = config.dashboardEntityFilterIds,
+            blockingIssues = lint.blocking,
+            forceBootstrap = resetBootstrapPending,
+        )
+        store.commitSync(
+            instance, path, states, ws.metadata, ws.configJson, derived, scan.unresolved,
+            when (decision) {
+                AutomaticSyncDecision.BLOCKED -> "blocked"
+                AutomaticSyncDecision.APPLY -> "active"
+                AutomaticSyncDecision.BOOTSTRAP -> "learning"
+                AutomaticSyncDecision.OBSERVE -> "observing"
+            },
+            now,
+            issues = lint.issues.map(DashboardConfigurationLint.Issue::toJson),
+        )
+        bootstrapBlockingIssues = lint.issues.count { it.blocking }
         applyStoredOverrides(instance, path)
+        // A blocking dashboard rule invalidates the proposed set as a whole. Keep an existing safe
+        // filter byte-for-byte, or keep a fresh renderer on its native diagnostic screen. Never apply
+        // the bounded fragments of a partially unsafe dashboard and never fall back to an unfiltered
+        // WebSocket while automatic learning is enabled.
+        if (lint.blocking) return@withContext
+        require(derived.isNotEmpty()) { "dashboard analysis found no visible entity dependencies" }
         val active = desiredIds(now, instance, path)
         require(active.isNotEmpty()) { "automatic entity set is empty" }
         if (bootstrap) check(config.commitDashboardEntityLearningApplied(true)) { "failed to commit bootstrap latch" }
@@ -153,6 +196,7 @@ class EntityLearningManager(
             }
             if (changed) onFilterChanged()
         }
+        resetBootstrapPending = false
     }
 
     fun recordAccessBatch(text: String) {
@@ -174,6 +218,7 @@ class EntityLearningManager(
     }
 
     private fun queuePromotion() {
+        if (bootstrapBlockingIssues > 0) return
         if (!promotionQueued.compareAndSet(false, true)) return
         scope.launch {
             delay(PROMOTION_DEBOUNCE_MS)
@@ -242,9 +287,9 @@ class EntityLearningManager(
         check(config.setDashboardEntityOverrides(emptyMap())) { "failed to clear entity overrides" }
         check(config.commitDashboardEntityLearningApplied(false)) { "failed to clear activation latch" }
         if (config.dashboardEntityLearningEnabled) {
-            // Do not reload here: keep the existing narrow live socket until synchronization atomically
-            // replaces this empty persisted placeholder with the fresh minimal static set.
-            check(config.setDashboardEntityFilter(false, emptyList())) { "failed to clear entity filter" }
+            // Preserve a known-good live set until the replacement scan succeeds. A blocking or failed
+            // scan must never turn an explicit reset into an unfiltered renderer or a partial set.
+            resetBootstrapPending = true
         }
         store.resetEvidence(instance(), dashboardPath())
         val started = if (config.dashboardEntityLearningEnabled) syncNow("reset") else false
@@ -276,15 +321,25 @@ class EntityLearningManager(
 
     fun statusJson(): String {
         val s = store.snapshot(instance(), dashboardPath())
+        bootstrapBlockingIssues = s.blockingIssueCount
         val suggestions = store.suggestedIds(instance(), dashboardPath())
         val candidates = suggestions.count { it !in config.dashboardEntityFilterIds.toSet() }
         val filtered = config.dashboardEntityFilterEnabled && config.dashboardEntityFilterIds.isNotEmpty()
+        val held = shouldHoldRendererForEntityBootstrap(
+            config.dashboardEntityLearningEnabled,
+            config.dashboardEntityFilterEnabled,
+            config.dashboardEntityFilterIds,
+        )
         val desired = desiredIds(System.currentTimeMillis())
         val preview = subscriptionPreview(desired, s.catalogCount)
         return JSONObject()
             .put("requested_enabled", config.dashboardEntityLearningEnabled)
             .put("mode", if (config.dashboardEntityLearningEnabled) "automatic" else "manual")
-            .put("state", if (!config.dashboardEntityLearningEnabled) "disabled" else s.state)
+            .put("state", when {
+                !config.dashboardEntityLearningEnabled -> "disabled"
+                s.blockingIssueCount > 0 -> "blocked"
+                else -> s.state
+            })
             .put("applied", config.dashboardEntityLearningApplied)
             .put("auto_static", config.dashboardEntityAutoStatic)
             .put("auto_runtime", config.dashboardEntityAutoRuntime)
@@ -292,22 +347,44 @@ class EntityLearningManager(
             .put("active_count", config.dashboardEntityFilterIds.size)
             .put("candidate_count", candidates).put("suggested_count", candidates)
             .put("desired_count", desired.size)
-            .put("pending_additions", preview.additions).put("pending_removals", preview.removals)
-            .put("stream_change_required", preview.streamChange)
+            .put("pending_additions", if (s.blockingIssueCount > 0) 0 else preview.additions)
+            .put("pending_removals", if (s.blockingIssueCount > 0) 0 else preview.removals)
+            .put("stream_change_required", s.blockingIssueCount == 0 && preview.streamChange)
             .put("activation_required", !config.dashboardEntityLearningApplied)
-            .put("apply_required", preview.streamChange || !config.dashboardEntityLearningApplied)
-            .put("stream_mode", if (filtered) "filtered" else "unfiltered")
-            .put("stream_entity_count", if (filtered) config.dashboardEntityFilterIds.size else s.catalogCount)
+            .put("apply_required", s.blockingIssueCount == 0 && (preview.streamChange || !config.dashboardEntityLearningApplied))
+            .put("dashboard_issue_count", s.issueCount)
+            .put("blocking_issue_count", s.blockingIssueCount)
+            .put("automatic_activation_blocked", s.blockingIssueCount > 0)
+            .put("stream_mode", when { held -> "held"; filtered -> "filtered"; else -> "unfiltered" })
+            .put("stream_entity_count", when { held -> 0; filtered -> config.dashboardEntityFilterIds.size; else -> s.catalogCount })
             .put("stream_filter_hash", if (filtered) EntityFilterProtocol.hash(config.dashboardEntityFilterIds) else "")
             .put("unresolved_count", s.unresolvedCount)
             .put("error", s.error).put("db_bytes", s.dbBytes).put("sync_running", syncJob?.isActive == true)
             .toString()
     }
 
+    fun issuesJson(): String {
+        val s = store.snapshot(instance(), dashboardPath())
+        return JSONObject()
+            .put("items", JSONArray(store.issuesJson(instance(), dashboardPath())))
+            .put("dashboard_issue_count", s.issueCount)
+            .put("blocking_issue_count", s.blockingIssueCount)
+            .put("dynamic_expressions", JSONArray(dynamicExpressionsJson))
+            .toString()
+    }
+
+    private fun encodeDynamicExpressions(expressions: List<EntityLearningProtocol.DynamicExpression>): String =
+        JSONArray(expressions.take(MAX_DYNAMIC_EXPRESSIONS).map(EntityLearningProtocol.DynamicExpression::toJson)).toString()
+
     fun entitiesJson(query: String, filter: String, limit: Int, offset: Int): String {
         val subscribed = filter == "subscribed"
         val review = filter == "review"
         val filtered = config.dashboardEntityFilterEnabled && config.dashboardEntityFilterIds.isNotEmpty()
+        val held = shouldHoldRendererForEntityBootstrap(
+            config.dashboardEntityLearningEnabled,
+            config.dashboardEntityFilterEnabled,
+            config.dashboardEntityFilterIds,
+        )
         val effectiveFilter = when {
             filter == "candidate" && query.isBlank() -> "candidate"
             filter == "candidate" -> "unpinned"
@@ -317,14 +394,18 @@ class EntityLearningManager(
         val currentIds = if (filtered) config.dashboardEntityFilterIds.toSet() else emptySet()
         val json = JSONObject(store.entitiesJson(
             instance(), dashboardPath(), query, effectiveFilter, limit, offset,
-            includeIds = if ((subscribed || review) && filtered) config.dashboardEntityFilterIds.toSet() else null,
+            includeIds = when {
+                (subscribed || review) && held -> emptySet()
+                (subscribed || review) && filtered -> config.dashboardEntityFilterIds.toSet()
+                else -> null
+            },
             excludeIds = if (filter == "candidate") currentIds else emptySet(),
         ))
         if (subscribed) {
             val catalogCount = store.snapshot(instance(), dashboardPath()).catalogCount
-            json.put("stream_mode", if (filtered) "filtered" else "unfiltered")
+            json.put("stream_mode", when { held -> "held"; filtered -> "filtered"; else -> "unfiltered" })
                 .put("configured_count", if (filtered) config.dashboardEntityFilterIds.size else 0)
-                .put("catalog_present_count", if (filtered) json.optInt("total") else catalogCount)
+                .put("catalog_present_count", when { held -> 0; filtered -> json.optInt("total"); else -> catalogCount })
         }
         return json.toString()
     }
@@ -407,6 +488,42 @@ class EntityLearningManager(
             for (i in 0 until entries.length()) entries.optJSONObject(i)?.let { e ->
                 e.optString("ei").takeIf { it.isNotBlank() }?.let { metadata[it] = e.toString() }
             }
+            // Floor and label selectors inherit through entity -> device -> area in Home Assistant.
+            // list_for_display is intentionally compact and does not carry that complete ancestry, so
+            // enrich its rows before linting; otherwise a floor selector could incorrectly look empty
+            // and be accepted as a safe zero-entity subscription.
+            val areas = runCatching { request(JSONObject().put("type", "config/area_registry/list")) }.getOrNull()
+                ?.optJSONArray("result") ?: JSONArray()
+            val devices = runCatching { request(JSONObject().put("type", "config/device_registry/list")) }.getOrNull()
+                ?.optJSONArray("result") ?: JSONArray()
+            val areaRows = mutableMapOf<String, JSONObject>()
+            for (i in 0 until areas.length()) areas.optJSONObject(i)?.let { row ->
+                row.optString("area_id").ifBlank { row.optString("id") }.takeIf(String::isNotBlank)?.let { areaRows[it] = row }
+            }
+            val deviceRows = mutableMapOf<String, JSONObject>()
+            for (i in 0 until devices.length()) devices.optJSONObject(i)?.let { row ->
+                row.optString("id").ifBlank { row.optString("device_id") }.takeIf(String::isNotBlank)?.let { deviceRows[it] = row }
+            }
+            fun labels(row: JSONObject?, vararg keys: String): Set<String> = keys.flatMapTo(sortedSetOf()) { key ->
+                when (val value = row?.opt(key)) {
+                    is JSONArray -> (0 until value.length()).mapNotNull { value.optString(it).takeIf(String::isNotBlank) }
+                    is String -> listOf(value).filter(String::isNotBlank)
+                    else -> emptyList()
+                }
+            }
+            metadata.replaceAll { _, raw ->
+                val entity = JSONObject(raw)
+                val device = deviceRows[entity.optString("di").ifBlank { entity.optString("device_id") }]
+                val areaId = entity.optString("ai").ifBlank { entity.optString("area_id") }
+                    .ifBlank { device?.optString("area_id").orEmpty() }
+                val area = areaRows[areaId]
+                if (areaId.isNotBlank()) entity.put("ai", areaId)
+                area?.optString("floor_id")?.takeIf(String::isNotBlank)?.let { entity.put("fi", it) }
+                val inheritedLabels = labels(entity, "lb", "labels", "label_ids") +
+                    labels(device, "labels", "label_ids") + labels(area, "labels", "label_ids")
+                if (inheritedLabels.isNotEmpty()) entity.put("lb", JSONArray(inheritedLabels.sorted()))
+                entity.toString()
+            }
             val command = JSONObject().put("type", "lovelace/config")
             if (urlPath.isNotBlank()) command.put("url_path", urlPath)
             val response = request(command)
@@ -479,6 +596,7 @@ class EntityLearningManager(
         private const val PROMOTION_DEBOUNCE_MS = 2_000L
         private const val PROMOTION_WINDOW_MS = 10L * 60_000
         private const val MAX_PROMOTIONS = 2
+        private const val MAX_DYNAMIC_EXPRESSIONS = 128
 
         private fun normalizedOrigin(raw: String): String {
             val u = URI(raw.trim().trimEnd('/'))
@@ -488,8 +606,28 @@ class EntityLearningManager(
 }
 
 /** An empty installation starts narrow; any stored manual list is preserved for explicit review. */
-internal fun shouldBootstrapEntityLearning(applied: Boolean, configuredIds: Collection<String>): Boolean =
-    !applied && configuredIds.isEmpty()
+internal fun shouldBootstrapEntityLearning(
+    learningEnabled: Boolean,
+    applied: Boolean,
+    configuredIds: Collection<String>,
+): Boolean = learningEnabled && !applied && configuredIds.isEmpty()
+
+internal enum class AutomaticSyncDecision { BLOCKED, OBSERVE, APPLY, BOOTSTRAP }
+
+/** Pure safety policy: a blocking scan is atomic rejection, and disabled learning is scan-only. */
+internal fun automaticSyncDecision(
+    learningEnabled: Boolean,
+    applied: Boolean,
+    configuredIds: Collection<String>,
+    blockingIssues: Boolean,
+    forceBootstrap: Boolean = false,
+): AutomaticSyncDecision = when {
+    blockingIssues -> AutomaticSyncDecision.BLOCKED
+    !learningEnabled -> AutomaticSyncDecision.OBSERVE
+    applied -> AutomaticSyncDecision.APPLY
+    forceBootstrap || configuredIds.isEmpty() -> AutomaticSyncDecision.BOOTSTRAP
+    else -> AutomaticSyncDecision.OBSERVE
+}
 
 internal data class EntitySubscriptionPreview(
     val currentCount: Int,
@@ -528,4 +666,5 @@ object EntityLearningRuntime {
     fun detach(manager: EntityLearningManager) { if (current === manager) current = null }
     fun recordAccessBatch(text: String) { current?.recordAccessBatch(text) }
     fun recordMetricBatch(text: String) { current?.recordMetricBatch(text) }
+    fun blockingIssueCount(): Int = current?.blockingIssueCount() ?: 0
 }
