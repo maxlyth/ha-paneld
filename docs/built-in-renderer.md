@@ -1,7 +1,7 @@
 # The built-in dashboard renderer
 
 > [!NOTE]
-> **Experimental (0.9).** The built-in renderer is off by default and marked *skunk-works* in the UI. The HA Companion app remains the default and a permanently supported choice. Try the renderer if you want a single-app panel; keep the Companion if you need Voice Assistant or notifications.
+> **Experimental (0.9).** The built-in renderer is the integrated path for dashboard entity filtering and is marked *skunk-works* in the UI while testing continues. The HA Companion app remains supported for panels that need Voice Assistant or native notifications.
 
 Since 0.9, ha-paneld can render the Home Assistant dashboard itself, in its own WebView, instead of deferring to a separate dashboard app. A panel then runs as a single-app appliance: one APK to install, update and provision.
 
@@ -38,11 +38,23 @@ Either way you can also set the URL and token by hand in the Configure tab's Das
 ## Experimental entity filter (0.9.2)
 
 > [!WARNING]
-> This is an opt-in tester feature. An incomplete allow-list can leave cards missing or stale, so keep a rollback path and test it on a non-critical panel first. Automatic mode observes and builds a candidate set without changing the working subscription; applying that candidate is a separate confirmed action.
+> This is an opt-in tester feature. Automatic learning cannot prove every custom-card or dynamic-template dependency, and an incomplete entity set can leave cards missing or stale. Review it on a non-critical panel first and keep the filter-disable rollback available.
 
 The filter applies only to ha-paneld's built-in renderer. It changes the frontend's Home Assistant subscription so filtering happens on the Home Assistant server before states are serialized and sent to the panel. The Companion app and other dashboard applications are unaffected.
 
-Create a JSON file containing every entity required by every dashboard tab, including entities referenced indirectly by custom cards or templates:
+### Automatic workflow
+
+1. In `:8888` open **Configure → Dashboard**, select **Built-in renderer**, then enable **Automatic dashboard entity filter**.
+2. Open the **Entities** tab and select **Scan dashboard now**.
+3. Visit every dashboard tab and exercise controls, pop-ups and conditional content so runtime dependencies have a chance to be observed.
+4. Review the current, suggested and excluded lists. Pin entities used indirectly by custom cards or templates, and resolve any entity-filter checks shown above the tables.
+5. Select **Apply policy set** when the candidate is ready. ha-paneld shows the old and new entity counts before asking for confirmation, then reloads the dashboard with the filtered subscription.
+
+The Entities page explains why each entity was found, records manual inclusions and exclusions, and keeps recognized broad or dynamic rules visible until the user fixes them or explicitly chooses how to proceed. Unrecognized behavior can still exist, so test every view after activation. If anything is missing, turn off **Automatic dashboard entity filter** in Configure and reload before revising the candidate.
+
+### Manual exact list
+
+Advanced testers can bypass automatic learning and supply an exact list through the API. Create a JSON file containing every entity required by every dashboard tab, including entities referenced indirectly by custom cards or templates:
 
 ```json
 {
@@ -76,26 +88,6 @@ A working filtered connection reports `enabled: true`, `runtime.active: true`, `
 
 Posting `entity_ids` replaces the complete list. Keep your source JSON because the status endpoint deliberately returns only the count and a stable hash, and config exports do not include the entity IDs.
 
-To build a candidate set automatically while retaining the current stream, enable observation:
-
-```bash
-curl --fail --show-error \
-  --header 'Content-Type: application/json' \
-  --data '{"mode":"automatic","enabled":true}' \
-  "http://${PANEL_IP}:8888/api/v1/dashboard/entity-filter"
-```
-
-Exercise every dashboard tab, then review the candidate count and evidence on the Entities tab or through `/api/v1/dashboard/entities`. When the candidate is ready, applying it is deliberately explicit:
-
-```bash
-curl --fail --show-error \
-  --header 'Content-Type: application/json' \
-  --data '{"confirm":true}' \
-  "http://${PANEL_IP}:8888/api/v1/dashboard/entities/activate"
-```
-
-Keep the manual JSON above as the immediate rollback path while testing automatic mode.
-
 Disable filtering while retaining the stored list:
 
 ```bash
@@ -105,13 +97,13 @@ curl --fail --show-error \
   "http://${PANEL_IP}:8888/api/v1/dashboard/entity-filter"
 ```
 
-Disable filtering and remove the stored list:
+Remove the stored filter, manual overrides and rebuildable learning evidence with the confirmation-gated reset:
 
 ```bash
 curl --fail --show-error \
   --header 'Content-Type: application/json' \
-  --data '{"enabled":false,"entity_ids":[]}' \
-  "http://${PANEL_IP}:8888/api/v1/dashboard/entity-filter"
+  --data '{"confirm":true,"clear_filter":true}' \
+  "http://${PANEL_IP}:8888/api/v1/dashboard/entities/reset"
 ```
 
 Like the rest of ha-paneld's control API, this endpoint is unauthenticated and intended for use on a trusted LAN.

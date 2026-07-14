@@ -65,7 +65,11 @@ The machine API lives under **`/api/v1`** as of 0.8.5. The pre-0.8.5 flat paths 
 | `/api/v1/status` | GET | Panel-health warnings + capability matrix as JSON |
 | `/api/v1/input` | POST | Inject a tap at device pixel `x`,`y` (the Test tab's interactive screenshot; needs root) |
 | `/api/v1/ui/layout` | GET / POST | Per-panel dashboard layout blob (groundwork for customisable card layout) |
-| `/api/v1/dashboard/entity-filter` | GET / POST | Experimental built-in-renderer exact entity allow-list: replace or toggle it with JSON; read enabled/count/hash and runtime proof. API-only and disabled by default |
+| `/api/v1/dashboard/entity-filter` | GET / POST | Advanced exact-list control for the built-in renderer's experimental entity filter; replace or disable a manual set and inspect count, hash and runtime proof |
+| `/api/v1/dashboard/entities` | GET | Automatic-learning catalog with current, suggested and excluded entities plus the evidence for each choice; query, sort and paginate it as used by the Entities page |
+| `/api/v1/dashboard/entities/sync` | GET / POST | Read automatic-learning status or rescan the Home Assistant catalog and configured dashboard |
+| `/api/v1/dashboard/entities/activate` | POST | Explicitly apply the reviewed policy-selected entity set; requires `{"confirm":true}` |
+| `/api/v1/dashboard/entities/reset` | POST | Confirmation-gated reset of learned evidence and overrides; `{"confirm":true,"clear_filter":true}` also removes the stored filter |
 
 The full surface is in `/api/v1/openapi.json` (browse it live at `http://<panel>:8888/api`).
 

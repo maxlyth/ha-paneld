@@ -3,7 +3,7 @@
 > [!NOTE]
 > This preliminary profile targets the community LineageOS 18.1 Android 11 installation, not stock Fire OS. The facts below come from a contributor's diagnostic report in GitHub [#28](https://github.com/maxlyth/ha-paneld/issues/28); the device has not been validated by the maintainer.
 
-The 2021 Echo Show 5 is a compact 5.5-inch smart display codenamed `cronos`. Replacing Fire OS with the community LineageOS build turns it into a conventional userdebug Android panel on which ha-paneld and the Home Assistant Companion can run.
+The 2021 Echo Show 5 is a compact 5.5-inch smart display codenamed `cronos`. Replacing Fire OS with the community LineageOS build turns it into a conventional userdebug Android panel that can run ha-paneld's built-in dashboard or the Home Assistant Companion app.
 
 | | |
 |---|---|

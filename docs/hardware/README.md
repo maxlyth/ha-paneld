@@ -78,16 +78,16 @@ Each panel under its own real workload:
 **What this means for a real dashboard deployment:**
 
 - **Screen geometry is the first design constraint.** The NSPanel Pro's 480×480 **square** (480 dp) only fits a single narrow column; the TPA10's 10" 1920×1200 (≈1280×800 dp) is genuinely roomy for multi-column dashboards; the WF1589T is sharp (~400 ppi) but ships at a low logical density so the UI is tiny until raised. Design the dashboard to the panel's **dp canvas + aspect ratio**, not its raw pixel count.
-- **2 GB panels (PX30, TPA10): RAM is the binding constraint.** The dashboard WebView, the HA Companion app and Android itself share ~2 GB; heavy dashboards (many cards, large images, long history graphs, heavy custom cards) trigger WebView reloads and jank. The WF1589T's 4 GB largely removes this pressure.
+- **2 GB panels (PX30, TPA10): RAM is the binding constraint.** The dashboard WebView, Android and any background apps share ~2 GB; heavy dashboards with many cards, large images, long history graphs or expensive custom cards trigger WebView reloads and jank. The WF1589T's 4 GB largely removes this pressure.
 - **The NSPanel Pro — the most common panel — has the slowest CPU** (A35), so transitions and animations are visibly slower than on A55/A72 units. Keep its dashboards the leanest.
-- **The biggest cross-panel win is cutting WebSocket event volume** reaching the panel — see [../performance.md](../performance.md) (the split-instance approach).
-- **ha-paneld is the diagnostic for all of this**: CPU clock vs max (throttling), the responsiveness metric, top-5 processes and the 1-click WebView DevTools relay tell you whether the *hardware*, the *dashboard* or the *data feed* is the bottleneck on your specific unit — rather than guessing.
+- **For the built-in renderer, filter the Home Assistant entity subscription before simplifying a dashboard or replacing the panel.** Automatic entity learning can prevent unrelated states from reaching the WebView while preserving the panel's normal Home Assistant connection. See [Performance tuning](../performance.md).
+- **ha-paneld measures the remaining bottlenecks**: dashboard response time, unexpected reloads, CPU clock and throttling, memory pressure, the busiest processes and WebView rendering metrics help distinguish hardware limits from an expensive dashboard or excessive data.
 
 ## Updating the system WebView
 
 **Read this before anything else** — it's the single most common first-run failure on these panels.
 
-The HA Companion app renders the Lovelace dashboard in Android's **system WebView**, and most of these panels ship with one far too old to run a current Home Assistant frontend — so out of the box you get a **blank or broken dashboard, missing cards, or "browser not supported"**. Panels **without** Google Play (NSPanel Pro, TPA10) can't auto-update it, so you must **sideload** a current WebView (below). The **WF1589T has Google Play**, so just update *Android System WebView* from the Play Store (or the Play WebView dev channel) — no sideload needed.
+ha-paneld's built-in renderer and the HA Companion app both rely on Android's **system WebView**, and most of these panels ship with one far too old to run a current Home Assistant frontend. Out of the box this can produce a **blank or broken dashboard, missing cards, or "browser not supported"**. Panels **without** Google Play (NSPanel Pro, TPA10) cannot update it automatically through the Play Store, so install a current WebView using the appropriate method below. The **WF1589T has Google Play**, so update *Android System WebView* from the Play Store or use the Play WebView development channel.
 
 The clean way is a direct adb sideload of the standard Android System WebView (package **`com.android.webview`**), matched to the panel's Android version and ABI — **no F-Droid, no third-party app store** (the workarounds the NSPanel-Pro community threads resort to). Per-panel known-working builds and the full sideload/verify steps are below.
 

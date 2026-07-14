@@ -1,70 +1,94 @@
 # Performance tuning for Home Assistant wall panels
 
-This is a field guide to why cheap Android wall panels (Sonoff NSPanel Pro, Tuya TPA10, generic rk3566/rk3576 boards) feel sluggish, stutter when scrolling, blank out, or silently stop updating. It shows how to **measure** the cause with ha-paneld, then apply the fixes that actually move the needle, in rough order of impact.
+This guide explains why an inexpensive Android wall panel can feel sluggish, stutter while scrolling, blank out or stop updating even though the same dashboard works well on a phone or desktop. Start with the work Home Assistant sends to the panel, then measure the remaining dashboard and hardware limits instead of assuming the panel must be replaced.
 
 > [!TIP]
-> The single biggest cause is usually **the Home Assistant WebSocket event firehose**, not the panel's CPU. The biggest fix is to **reduce the number of state events the dashboard has to process**, not to buy a faster panel.
+> A common cause is the number of Home Assistant entity states and updates reaching the dashboard. A large installation can make a low-powered panel process thousands of entities that it never displays. With ha-paneld's built-in renderer, the first fix to try is the automatic dashboard entity filter.
 
-## Measure it first (with ha-paneld)
+## Measure before changing anything
 
-Don't guess — a panel that feels laggy with *low* CPU is waiting on data (event/WebSocket volume), not compute. The chart tells you which.
+Open the panel's web page at `http://<panel-ip>:8888/` or use the Home Assistant device page's **Visit** link. Record the same dashboard view for a similar period before and after each change so the comparison is meaningful.
 
-Open the panel's web page (`http://<panel-ip>:8888/`, the HA device's **Visit** link):
+- **Performance page** — dashboard response time, unexpected reloads, CPU, GPU, RAM, clock speed, temperature and the busiest processes.
+- **Rendering metrics** — frame rate, jank, main-thread long tasks and JavaScript heap use from the WebView.
+- **Entities page** — what the built-in renderer currently subscribes to, what automatic learning found and which dashboard rules still need a decision.
+- **Diagnostics dump** (`/diag`) — a copy-paste report for a bug report when the cause is still unclear.
 
-- **Performance chart** — live CPU / GPU / RAM history + load average + temperature. If CPU/load are pegged, the panel is compute-bound; if RAM is high and climbing, suspect the heap-ceiling stall.
-- **Capabilities** — what works on *this* firmware, and how to fix shortfalls. See the [hardware overview](hardware/README.md) for per-panel detail.
-- **Diagnostics dump** (`/diag`) — paste into a bug report.
-- **Rendering metrics** — FPS, jank %, main-thread long tasks, and **JS heap %** straight from the WebView, so you can see the heap-ceiling stall coming.
+High renderer CPU with a large unfiltered subscription is a strong reason to test filtering. High JavaScript heap use, repeated reloads or one unusually expensive dashboard view points toward card and layout work as well. Treat the measurements together; a single CPU snapshot cannot identify the cause by itself.
 
 ## Fixes, in order of impact
 
-### 1. Cut the event volume the panel sees (biggest lever)
+### 1. Filter the built-in renderer's entity subscription
 
-The dashboard doesn't need to subscribe to your whole instance. Two ways to shrink the firehose:
+Home Assistant's frontend normally subscribes to the state of every entity visible to the signed-in user. The panel must receive and process those states even when its dashboard uses only a small subset. ha-paneld's built-in renderer can add the dashboard's learned entity set to that native subscription, so Home Assistant filters the stream before serializing and sending it. The panel keeps its ordinary authenticated Home Assistant connection; no proxy or additional server is involved.
 
-- **Give panels a dedicated, dashboard-only HA instance** that mirrors *only* the entities the dashboards render (via the [`remote_homeassistant`](https://github.com/custom-components/remote_homeassistant) bridge, or a separate instance fed a curated include-list). In one deployment this turned a **3,410-entity / 7.3 ev/s** firehose into a **310-entity / 0.77 ev/s** view — a ~10× reduction — and was the difference between panels that stall and panels that don't. The dashboard instance runs no automations, no recorder noise, no extras: it just serves Lovelace.
-- **Or reduce event volume at the source** on your main instance (helps panels *and* the recorder): disable or throttle the noisiest entities — power meters, BLE distance/trilateration, Zigbee diagnostics, high-frequency templates. Throttle source-side (ESPHome `throttle_average`/`delta`, Zigbee `configure_reporting`), bump `scan_interval`, and trim attribute fan-out. Find the worst offenders by querying the recorder for the highest state-change rates.
+The automatic filter is opt-in and applies only to the built-in renderer:
 
-### 2. Lighten the dashboard
+1. In `:8888` open **Configure → Dashboard**, select **Built-in renderer**, then enable **Automatic dashboard entity filter**.
+2. Open the **Entities** tab and select **Scan dashboard now**.
+3. Visit every dashboard tab and exercise controls, pop-ups and conditional content so runtime dependencies have a chance to be observed.
+4. Review the current, suggested and excluded entities. Pin anything required indirectly by a custom card or template.
+5. Resolve any entity-filter checks. Narrow a broad or dynamic dashboard rule where practical, or make an explicit choice while accepting the warning shown by the panel.
+6. Apply the policy-selected set, let the dashboard reload and compare the same views on the Performance page.
 
-- Fewer cards and **fewer entities per view** — split a dense dashboard into more tabs; a view only pays for what's mounted.
-- Prefer built-in cards; some custom cards are heavy (continuous animation, large DOM, per-frame JS).
-- Watch the **JS heap**: if a view trends toward the ceiling, it's too heavy — simplify it, or schedule a periodic dashboard reload (ha-paneld's `button.<panel>_reload`) as a stopgap.
+Automatic learning cannot prove every custom card or dynamic template dependency. A missing entity may leave a card stale or unavailable, so review the result on a non-critical panel first and keep filtering disabled until the candidate is credible. The previous subscription remains available as the safe rollback: turn off **Automatic dashboard entity filter** and reload the dashboard.
 
-### 3. Right-size expectations for the hardware
+Advanced testers can supply and inspect an exact list through the API. The UI workflow, manual API format, runtime status and rollback commands are documented in [The built-in dashboard renderer](built-in-renderer.md#experimental-entity-filter-092).
 
-PX30/rk3566-class panels are fine for a curated dashboard on a reduced event feed; they are not fine as a full admin dashboard on a 3,000-entity firehose. Match the dashboard and the feed to the panel.
+### 2. Lighten the dashboard itself
+
+- Split a dense dashboard into focused views and avoid mounting cards the panel never needs.
+- Prefer built-in cards when a custom card continuously animates, creates a large document tree or performs frequent JavaScript work.
+- Watch JavaScript heap use. If one view repeatedly approaches the ceiling, simplify it or use `button.<panel>_reload` as a temporary recovery path while finding the expensive card.
+- Test camera and graph cards separately. Their decoding, history queries and rendering cost can dominate even after entity filtering is working correctly.
+
+### 3. Reduce unnecessary updates at the source
+
+Entity filtering protects the panel from unrelated entities, but it does not make a required entity cheaper. If a dashboard really displays a power meter, BLE distance sensor, rapidly changing template or noisy diagnostic entity, reduce that source's update rate where the integration supports it. This can also reduce recorder and database work for the whole Home Assistant installation.
+
+Useful controls include ESPHome throttling or delta filters, Zigbee reporting intervals, integration `scan_interval` settings and less frequent template updates. Confirm the change does not make an automation or history view less useful before applying it globally.
+
+### 4. Match the remaining dashboard to the hardware
+
+PX30 and rk3566 panels can run a focused dashboard well, but they still have limited single-thread performance and usually only 2 GB of RAM. Entity filtering removes unnecessary state work; it cannot make an oversized camera stream, complex animation or very large history graph free. Design for the panel's logical display size and test the heaviest view rather than judging only the home tab.
 
 ## Checklist
 
-- [ ] Panels connect to a **reduced** entity/event feed (dedicated dashboard instance or curated bridge), not the full instance
-- [ ] Noisiest entities disabled/throttled at the source
-- [ ] Dashboards split into focused views; heavy custom cards audited
-- [ ] CPU/RAM and (when available) JS-heap/jank watched on the ha-paneld Performance page
-- [ ] A reload path for the heap-ceiling stall (`button.<panel>_reload`)
+- [ ] The built-in renderer is selected where Assist voice control and native notifications are not required
+- [ ] Automatic dashboard entity filtering is enabled, scanned, reviewed and explicitly applied
+- [ ] Every dashboard tab, pop-up and conditional path has been exercised during learning
+- [ ] Custom-card and template dependencies are pinned or otherwise accounted for
+- [ ] Entity-filter checks have been resolved deliberately rather than ignored accidentally
+- [ ] The same views have been compared before and after filtering on the Performance page
+- [ ] Heavy cards, camera streams and graphs have been tested separately
+- [ ] Required high-frequency entities have been tuned at the source where appropriate
+- [ ] A reload and filter-disable recovery path has been verified
+
+## What the built-in filter replaced
+
+Before ha-paneld could filter its own subscription, one deployment used a dedicated dashboard-only Home Assistant instance fed through the `remote_homeassistant` integration. It reduced the panel-facing feed from about 3,410 entities and 7.3 updates per second to about 310 entities and 0.77 updates per second, making the dashboards usable. It also required a second Home Assistant installation, bridged entities, separate configuration, authentication, updates, backups, monitoring and another failure path.
+
+The built-in filter addresses that panel-load problem inside ha-paneld, so the split-instance system is no longer needed or maintained in that deployment and is not recommended for built-in-renderer users. This comparison remains here to show the amount of infrastructure the integrated solution replaces. Users who must retain the Companion app or another renderer cannot use ha-paneld's filter on that renderer; source-side tuning still applies, while any external filtering arrangement remains outside ha-paneld's supported setup.
 
 ---
 
 ## Reference
 
-Background on *why* panels get slow — useful context, but not needed to apply the fixes above.
+### Why a large Home Assistant installation can slow a panel
 
-### Why panels get slow
+The Home Assistant frontend maintains a WebSocket subscription containing the current state and subsequent updates for the entities available to the user. Without a restricted entity set, the renderer receives far more data than a focused wall dashboard normally uses. Its JavaScript main thread must parse the messages, update the frontend state model and decide whether anything visible changed.
 
-A Lovelace dashboard is a Chromium WebView. When it connects, HA's frontend WebSocket subscribes it to **every `state_changed` event in the instance**. The WebView's JavaScript main thread has to parse and process each one. On a busy Home Assistant this is a firehose:
+Low-cost panels are especially sensitive because JavaScript execution, layout and paint depend heavily on one renderer thread. Extra CPU cores help other work but do not remove that latency, and limited RAM makes garbage collection increasingly disruptive as the WebView heap grows.
 
-- A real-world example: a primary instance with **~3,400 entities emitting ~7.3 events/sec**. Every panel on it must handle all 7.3/sec, forever, on top of rendering.
-- Cheap panels are **single-thread-bound for rendering**: Chromium fans compositing/raster across cores, but JS execution + layout + paint run on one main thread. More cores raise throughput, not per-frame latency — so "8 cores at 30% each" can still jank if one thread is saturated.
-- RAM is tight. The V8 JS heap grows until it hits a ceiling, then GC[^gc] starves the render pipeline.
-
-### Failure modes you'll actually see
+### Common symptoms
 
 | Symptom | Likely cause |
 | --- | --- |
-| Scrolling/animation stutter, laggy touch | renderer main-thread saturated (event volume + heavy cards) |
-| **Whole view goes blank** (header/tabs present, cards gone), touches do nothing | **JS heap near its ceiling (~94% seen in the wild)** — GC starves rendering |
-| Dashboard slowly degrades over days of uptime | heap creep / memory fragmentation → periodic reload needed |
-| Entities stop updating, then a burst | WebSocket disconnect/reconnect under load |
-| One panel fine, another slow | heavier dashboard, more entities in view, or higher uptime |
+| Delayed taps, sluggish navigation or scrolling stutter | renderer main-thread work from a large entity stream, heavy cards or both |
+| One dashboard view is much worse than the others | expensive cards, camera decoding, history data or a large document tree on that view |
+| Whole view goes blank while the outer interface remains | WebView heap pressure or renderer failure |
+| Dashboard gradually degrades over days | heap growth, memory fragmentation or a card that accumulates work |
+| Entities stop updating and later arrive in a burst | WebSocket interruption, reconnect or a renderer unable to keep up |
+| Similar panels behave differently | different dashboard content, entity subscription, WebView version, uptime or thermal state |
 
-[^gc]: Garbage collection — V8 periodically pauses JS execution to reclaim unused heap memory. Near the heap ceiling these pauses get long and frequent enough to stall rendering.
+Garbage collection periodically pauses JavaScript to reclaim unused memory. Near the heap ceiling those pauses become longer and more frequent, which can starve rendering even when the Android process itself has not crashed.

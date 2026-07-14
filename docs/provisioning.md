@@ -1,6 +1,6 @@
 # Provisioning & fleet updates
 
-Headless setup for rooted / userdebug panels — all permissions granted over adb, no per-device tap-through. For the quick single-panel install see the [README](../README.md#install); this page covers the scriptable path and rolling a whole fleet.
+Unattended setup for rooted or userdebug panels grants permissions over adb without per-device tap-through. For the quick single-panel install see the [README](../README.md#install); this page covers the scriptable path and rolling a whole fleet.
 
 > [!NOTE]
 > These are `bash` + `adb` commands. On **Windows**, run them in **Git Bash** (from [Git for Windows](https://gitforwindows.org/)) or **WSL** — not PowerShell — with `adb` on `PATH` (`winget install Google.PlatformTools`). macOS and Linux run them as-is.
@@ -41,7 +41,7 @@ rk3576 / PX30 panels run `su` in-app and don't need it. The installer probes the
 
 ## Provisioning the built-in dashboard renderer
 
-Since 0.9, ha-paneld can render the dashboard itself instead of the HA Companion app (experimental, off by default). `--builtin` selects it and provisions its Home Assistant sign-in **from this machine**, so nothing is typed on the panel:
+Since 0.9, ha-paneld includes its own experimental dashboard renderer. `--builtin` selects it and provisions its Home Assistant sign-in **from this machine**, so nothing is typed on the panel:
 
 ```bash
 # Username/password: logs in HERE and mints a revocable refresh token; the password never reaches

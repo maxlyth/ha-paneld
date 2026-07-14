@@ -108,7 +108,7 @@ From **v4.0.0** (phased roll-out from 19 September 2025) the stock eWeLink firmw
 
 ## WebView — update this first
 
-The NSPanel Pro ships with a WebView/Chromium far too old to render a current Home Assistant dashboard (blank/broken UI in the HA Companion app). **Stock version: `com.android.webview` `107.0.5304.105`** (Chromium 107), confirmed via `adb shell dumpsys webviewupdate | grep "Current WebView"` on a unit freshly flashed to firmware `3.5.1` (build `164637`). The archived OTA diff packages don't include a WebView APK, so the version had to be read after a factory firmware install. Chromium 107 is old enough that the HA frontend renders blank, so update it first. Update it cleanly over adb — no root, no F-Droid; this unit runs Chromium **138** afterwards. See [Updating the system WebView](README.md#updating-the-system-webview).
+The NSPanel Pro ships with a WebView/Chromium far too old to render a current Home Assistant dashboard in either ha-paneld's built-in renderer or the HA Companion app. **Stock version: `com.android.webview` `107.0.5304.105`** (Chromium 107), confirmed via `adb shell dumpsys webviewupdate | grep "Current WebView"` on a unit freshly flashed to firmware `3.5.1` (build `164637`). The archived OTA diff packages do not include a WebView APK, so the version had to be read after a factory firmware install. Chromium 107 is old enough that the Home Assistant frontend renders blank, so update it first. Update it cleanly over adb — no root, no F-Droid; this unit runs Chromium **138** afterwards. See [Updating the system WebView](README.md#updating-the-system-webview).
 
 ## LED
 
@@ -194,10 +194,10 @@ For a full standalone Zigbee2MQTT/ZHA coordinator *on the panel* instead, see [s
 The NSPanel Pro is **CPU- and RAM-constrained** for rich dashboards:
 
 - Idle it sits at 408 MHz with ≈500 MB RAM in use; a heavy Lovelace dashboard pushes both hard.
-- **2 GB RAM is the binding constraint** — the dashboard WebView, the HA Companion app, and Android itself compete for it; large dashboards (many cards, big images, long history graphs, heavy custom cards) cause WebView reloads and jank.
+- **2 GB RAM is the binding constraint** — the dashboard WebView, Android and background apps compete for it; large dashboards with many cards, big images, long history graphs or expensive custom cards cause WebView reloads and jank.
 - The A35 cores make page transitions and animations visibly slower than on A55/A72 panels.
 
-Mitigations (all covered by ha-paneld + [docs/performance.md](../performance.md)): keep dashboards lean, prefer the split-instance approach to cut WebSocket event volume, and use ha-paneld's instrumentation (CPU clock/throttling, responsiveness, top-5 processes, 1-click WebView DevTools relay) to find what's actually costing frames on *this* hardware.
+When using ha-paneld's built-in renderer, start with the [automatic dashboard entity filter](../performance.md#1-filter-the-built-in-renderers-entity-subscription) so the panel does not process states its dashboard never displays. Then use the Performance page to identify remaining heavy views, memory pressure or thermal limits before simplifying the dashboard. The filter is not available to the Companion renderer, where source-side update tuning and a leaner dashboard remain the supported options.
 
 ---
 

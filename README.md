@@ -40,7 +40,7 @@ For scripted/fleet installs use [`scripts/provision.sh`](scripts/provision.sh) d
 > **On Windows, run the one-liner in Git Bash or WSL — not PowerShell.** It's a `bash` script, so PowerShell fails at the `bash` step. Git Bash ships with [Git for Windows](https://gitforwindows.org/); install `adb` first with `winget install Google.PlatformTools`, then reopen the shell and paste the command. macOS and Linux run it as-is.
 
 > [!IMPORTANT]
-> **First-run gotcha — update the panel's system WebView.** Even modern panels ship with a WebView/Chromium far too old to render a current Home Assistant dashboard, so the HA Companion app might show a blank or broken UI. Fix it cleanly over adb: see [Updating the system WebView](docs/hardware/README.md#updating-the-system-webview). This trips up almost everyone; do it before judging anything else.
+> **First-run gotcha — update the panel's system WebView.** Even modern panels can ship with a WebView/Chromium far too old to render a current Home Assistant dashboard, leaving either the built-in renderer or the HA Companion app blank or broken. See [Updating the system WebView](docs/hardware/README.md#updating-the-system-webview) before judging the panel.
 
 > [!NOTE]
 > The built-in renderer is the integrated path for dashboard entity filtering. The [HA Companion app](https://github.com/home-assistant/android) remains supported for panels that need Assist or native notifications; on panels without Google Play, use its [**minimal** release APK](https://github.com/home-assistant/android/releases/latest/download/app-minimal-release.apk).
