@@ -28,7 +28,7 @@ CORE_SRCS := $(addprefix $(SRC_DIR)/, util.c led.c screen.c input.c sysctl.c per
 DAEMON_SRCS := $(CORE_SRCS) $(SRC_DIR)/main.c $(SRC_DIR)/sysexec.c
 STUB := test/sysexec_stub.c
 
-.PHONY: all daemon test fuzz contract clean print-core
+.PHONY: all daemon test socket-test-server fuzz contract clean print-core
 all: daemon
 
 # Host build of the real daemon — a compile sanity check (-Werror); the shipped binary is build.sh.
@@ -43,6 +43,11 @@ test: $(BUILD)/unit
 # preserving the existing ledjni ioctl assertions without touching host hardware.
 $(BUILD)/unit: $(CORE_SRCS) $(STUB) test/unit.c | $(BUILD)
 	$(CC) $(CFLAGS) -DHAPANELD_TEST -I$(SRC_DIR) $(CORE_SRCS) $(STUB) test/unit.c $(LDLIBS) -Wl,--wrap=open -Wl,--wrap=ioctl -o $@
+
+# Real UNIX-socket composition fixture: production server/dispatch core with the no-exec host stub.
+socket-test-server: $(BUILD)/socket-test-server
+$(BUILD)/socket-test-server: $(CORE_SRCS) $(STUB) test/socket_server.c | $(BUILD)
+	$(CC) $(CFLAGS) -DHAPANELD_TEST -I$(SRC_DIR) -Itest $(CORE_SRCS) $(STUB) test/socket_server.c $(LDLIBS) -o $@
 
 # App<->daemon verb-contract cross-check: every verb the app sends must exist in commands.def.
 contract:

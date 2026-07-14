@@ -1,4 +1,6 @@
 import java.util.Properties
+import org.gradle.api.tasks.Exec
+import org.gradle.api.tasks.testing.Test
 
 plugins {
     alias(libs.plugins.android.application)
@@ -173,3 +175,24 @@ val compileCdpRelay by tasks.registering {
     }
 }
 tasks.named("preBuild") { dependsOn(compileCdpRelay) }
+
+val helperSocketTestServer = rootProject.file("helper/build/socket-test-server")
+val buildHelperSocketTestServer by tasks.registering(Exec::class) {
+    workingDir(rootProject.file("helper"))
+    commandLine("make", "socket-test-server")
+    inputs.files(
+        rootProject.file("helper/Makefile"),
+        rootProject.fileTree("helper/src"),
+        rootProject.file("helper/test/socket_server.c"),
+        rootProject.file("helper/test/sysexec_stub.c"),
+        rootProject.file("helper/test/sysexec_stub.h"),
+    )
+    outputs.file(helperSocketTestServer)
+}
+
+tasks.withType<Test>().configureEach {
+    if (System.getProperty("os.name").startsWith("Linux", ignoreCase = true)) {
+        dependsOn(buildHelperSocketTestServer)
+        systemProperty("hapaneld.helper.socketTestServer", helperSocketTestServer.absolutePath)
+    }
+}

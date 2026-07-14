@@ -6,9 +6,7 @@ import android.util.Log
 import io.github.maxlyth.hapaneld.platform.Daemon
 import io.github.maxlyth.hapaneld.platform.DaemonLongResult
 import io.github.maxlyth.hapaneld.platform.DaemonStreamResult
-import java.io.BufferedReader
 import java.io.File
-import java.io.InputStreamReader
 
 /**
  * Client for the root helper daemon (`helper/hapaneld-helper`) over an **abstract-namespace UNIX
@@ -36,8 +34,7 @@ object HelperClient : Daemon {
     override fun send(cmd: String): String? = try {
         open().use { s ->
             s.soTimeout = TIMEOUT_MS
-            s.outputStream.apply { write((cmd + "\n").toByteArray()); flush() }
-            BufferedReader(InputStreamReader(s.inputStream)).readLine()?.trim()
+            HelperSocketProtocol.sendLine(cmd, s.inputStream, s.outputStream)
         }
     } catch (e: Exception) {
         Log.d(TAG, "daemon not reachable (${e.message})")
@@ -60,8 +57,7 @@ object HelperClient : Daemon {
             try {
                 s.soTimeout = timeoutMs.coerceIn(1L, Int.MAX_VALUE.toLong()).toInt()
                 submissionBegan = true
-                s.outputStream.apply { write((cmd + "\n").toByteArray()); flush() }
-                BufferedReader(InputStreamReader(s.inputStream)).readLine()?.trim()
+                HelperSocketProtocol.sendLine(cmd, s.inputStream, s.outputStream)
                     ?.let(DaemonLongResult::Reply)
                     ?: DaemonLongResult.Indeterminate
             } catch (e: Exception) {
@@ -89,15 +85,13 @@ object HelperClient : Daemon {
                 var submissionBegan = false
                 try {
                     s.soTimeout = timeoutMs.coerceIn(1L, Int.MAX_VALUE.toLong()).toInt()
-                    val output = s.outputStream
-                    val replies = BufferedReader(InputStreamReader(s.inputStream))
                     submissionBegan = true
-                    DaemonStreamProtocol.exchange(
+                    HelperSocketProtocol.sendFile(
                         command = cmd,
                         openSource = source::inputStream,
                         expectedBytes = source.length(),
-                        replies = replies,
-                        output = output,
+                        input = s.inputStream,
+                        output = s.outputStream,
                         shutdownOutput = s::shutdownOutput,
                     )
                 } catch (e: Exception) {
@@ -116,9 +110,7 @@ object HelperClient : Daemon {
     override fun sendBytes(cmd: String): ByteArray? = try {
         open().use { s ->
             s.soTimeout = 5000
-            s.outputStream.apply { write((cmd + "\n").toByteArray()); flush() }
-            s.shutdownOutput()                       // daemon read -> 0 after handling -> closes -> EOF here
-            s.inputStream.readBytes().takeIf { it.isNotEmpty() }
+            HelperSocketProtocol.sendBytes(cmd, s.inputStream, s.outputStream, s::shutdownOutput)
         }
     } catch (e: Exception) {
         Log.d(TAG, "daemon bytes failed (${e.message})")
