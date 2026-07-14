@@ -1,13 +1,5 @@
 # Changelog
 
-Human-readable summaries of each release. The auto-generated commit list is appended below these
-notes on each [GitHub release](https://github.com/maxlyth/ha-paneld/releases). Cutting a release? Follow
-the pre-tag checklist in [docs/RELEASING.md](docs/RELEASING.md) (it starts with "check the README").
-
-From **v0.8.0**, entries are grouped under **Added** (new features/entities), **Changed** (behaviour
-changes to existing features), **Fixed** (bug fixes), and **Docs** (documentation) — only groups with
-content appear. Earlier releases predate this convention and keep their flat lists.
-
 ## v0.9.2-rc2 - 2026-07-14
 
 ### Added
@@ -16,85 +8,87 @@ content appear. Earlier releases predate this convention and keep their flat lis
 
 ### Changed
 
-- **Installer-first release downloads** — GitHub releases now lead with a release-pinned installer that provisions and verifies the panel, while the APK is clearly labelled as a manual-setup asset. This makes the supported installation path visible before users reach for a bare `adb install`, without removing on-device sideloading.
-- **Runtime ownership is explicit across reconfiguration and shutdown** — service startup, configuration replacement, reconnect recovery and teardown now share generation-checked lifecycle boundaries, while sensors, logs, media, dashboard recovery, display transitions and output effects retire their own work before replacements take over.
+- **Installing the APK alone leaves setup incomplete** — It does not complete ha-paneld's permissions, startup, configuration or verification. Releases now lead with an installer that performs those steps and clearly label the APK as requiring manual setup, while preserving on-device sideloading.
 
 ### Fixed
 
-- **Screen power stays synchronized on helper-controlled panels** — panels such as the TPA10 now read the physical backlight power through the root helper instead of inferring it from brightness, which can remain nonzero after the backlight has been powered off. Home Assistant therefore reports the actual screen state after local or external changes. The updated app and helper daemon must be installed together on these panels.
-- **MQTT and live settings cannot act on torn-down hardware** — shutdown now closes and drains both MQTT commands and HTTP live-setting dispatch before releasing screen, LED, relay and other service-owned controllers. Reconnects invalidated by reconfiguration or shutdown cannot create a late replacement client.
-- **Interrupted work no longer leaks stale results into a replacement runtime** — superseded audio playback, renderer preparation, sensor callbacks, performance samples, log transports, input streams, update checks and dashboard recovery are generation-owned or terminally closed, preventing old completions from overwriting current state.
-- **Maintenance operations report only completed work** — bounded uploads and downloads, helper APK streaming, package installs, uninstalls, release selection and update caches now preserve exact ownership and failure state instead of reporting success or freshness after partial completion.
-
-### Docs
-
-- **TPA10 camera-capacity guidance** — the hardware guide now explains that multiple simultaneous 720p WebRTC cards can exceed this panel's video headroom and suggests lower-resolution substreams, fewer autoplay cards or snapshot-first cards when streams blank or drop frames.
+- **Home Assistant now shows the screen's real power state** — on panels such as the TPA10, switching off the backlight could leave Home Assistant showing the screen as on because the stored brightness remained non-zero. ha-paneld now reads whether the backlight itself is powered. The updated app and helper daemon must be installed together on affected panels.
+- **Settings changes and restarts no longer mix old and new behaviour** — work already underway during a settings change, MQTT reconnect or service restart could finish using the previous configuration, allowing an old connection, dashboard, audio request or status update to reappear after the change. ha-paneld now discards anything that belongs to the previous setup once its replacement begins.
+- **Home Assistant no longer shows hardware changes that did not happen** — if an LED, relay or display command failed or was overtaken by a newer command, Home Assistant could still show the requested state even though the panel had not applied it. ha-paneld now publishes changes only after the hardware confirms them and prevents older commands from replacing newer ones.
+- **Interrupted maintenance tasks no longer look successful** — an upload, download, software installation or uninstall that stopped part-way could still be reported as complete, while a failed update check could leave an old result looking current. ha-paneld now keeps these failures visible and reports success only when the full operation finishes.
 
 ## v0.9.2-rc1 - 2026-07-12
 
 ### Added
 
-- **Built-in renderer responsiveness measurements** — the Performance page and `/api/v1/perf` now report the built-in dashboard's cold and warm time to interactive plus involuntary renderer reloads over the last 24 hours. The measurements run inside the renderer and do not require root, making before/after renderer comparisons available on every panel.
-- **Preliminary profiles for two community-reported panels** — the Amazon Echo Show 5 Gen 2 running LineageOS (`cronos`, MT8163) and the unbranded ZX-SMT156/RK3566_T now identify correctly and use conservative, evidence-backed capability declarations. The diagnostic dump also adds a bounded hardware-characterisation block so follow-up reports can expose input, I²C/IIO, thermal and relay kernel surfaces without a long manual adb session.
-- **Useful dashboard startup progress** — when Android networking is still starting, the built-in renderer now shows a calm native launch screen instead of appearing broken. It reports the current phase (network services, link, address or connection), learns how long that panel usually takes and shows determinate progress on later boots. The screen follows the dashboard's remembered light/dark choice, fits 480×480 panels, and disappears entirely when networking is already ready.
+- **Built-in dashboard performance is now measurable on every panel** — the Performance page and `/api/v1/perf` show how long a cold or warm dashboard load takes to become usable and how often the renderer has reloaded unexpectedly in the past 24 hours. These measurements do not require root and make it easier to see whether a renderer or configuration change actually helped.
+- **Two newly reported panel types now identify correctly** — preliminary profiles give the Amazon Echo Show 5 Gen 2 running LineageOS and the unbranded ZX-SMT156/RK3566_T cautious defaults based on their submitted diagnostics. Follow-up diagnostic reports also collect the remaining hardware details needed to refine support without a long manual adb session.
+- **Dashboard startup now shows what the panel is waiting for** — if networking is still coming up after a reboot, the built-in dashboard shows whether it is waiting for network services, a link, an address or a connection instead of looking broken. It learns the panel's typical startup time to give more useful progress on later boots and disappears entirely when networking is already ready.
 
 ### Changed
 
-- **Panel state converges through one observed-state authority** — screen power, brightness, volume, relays, LEDs, proximity and other locally controlled state now share a bounded, acknowledgement-aware publication path. Changes made on the panel or by another process converge back to Home Assistant without parallel publishers racing or manufacturing values for state that has not yet been observed.
+- **Changes made on the panel now stay in sync with Home Assistant** — screen power, brightness, volume, relays, LEDs and proximity could become stale or briefly jump back after a local or external change. ha-paneld now reports the latest confirmed panel state and keeps pending updates in order.
 
 ### Fixed
 
-- **Transient MQTT credential rejection now recovers automatically** — a rejected connection creates a fresh client and retries with bounded backoff on the same network family instead of remaining offline or stacking retries from the generic liveness and network callbacks. Diagnostics expose the retry state, rejection count and next attempt, and a successful connection resets the recovery state.
-- **State publication remains live without flooding the broker** — convergence retries and concurrent publishes are bounded, clean sensor polling continues to pump pending acknowledgements, failed publishes retain the real observed value, and physical backlight changes synchronize the screen state correctly.
-- **Panel reboot no longer shows two consecutive connection failures** — the built-in renderer now waits for Android's default network before creating WebView, preventing Chromium's offline error followed by Home Assistant's cached 60-second connection-failed countdown. Once networking arrives, the dashboard opens directly; genuine later failures still use bounded retries.
-- **“Silence boot chime” also silences Android startup notifications** — panels where ring and notification audio use separate streams no longer play notification sounds as ha-paneld's overlay controls and foreground service start. The existing setting now covers the persistent and live notification volume as well as the ring stream, with a silent notification channel.
+- **Panels recover automatically from a temporary MQTT login rejection** — a rejected connection could leave a panel offline or start overlapping reconnect attempts. ha-paneld now starts a fresh connection and retries at a controlled pace, while diagnostics show what happened and when the next attempt will run.
+- **Home Assistant entities no longer become stale after a failed MQTT update** — a missed state update could block later changes or trigger repeated retries. ha-paneld now keeps the latest panel state, limits the retry rate and continues sending pending updates.
+- **A reboot no longer shows two connection errors before the dashboard appears** — if networking was not ready, the built-in dashboard could first show Chromium's offline error and then Home Assistant's 60-second connection-failed countdown. It now waits for the network and opens the dashboard directly; genuine later failures still retry.
+- **“Silence boot chime” now also silences startup notification sounds** — on panels with separate ring and notification volumes, startup could still play a notification sound even when Silence boot chime was enabled. The setting now mutes both streams and uses a silent notification channel.
 
 ## v0.9.1 - 2026-07-12
 
 ### Added
 
-- **Opt-in System WebView auto-update** — a new "WebView auto-update" switch (off by default; shown only where ha-paneld pins a recommended WebView for the panel) keeps the system WebView on that pinned build, installing a newer one over root on the update check. Note that the first swap between two *different* WebView vendors on a signature-locked panel is still a one-time manual step — see the panel's hardware guide.
-- **Dashboard sizing matches the Companion app** — the built-in renderer now scales the page the same way the Home Assistant Companion app does, so a panel switched over from the Companion keeps its dashboard layout instead of rendering more compact. A new "Dashboard zoom" setting tunes it per panel (100% = Companion default); pinch-to-zoom stays off, since a fixed panel wants a deliberate zoom, not an accidental one. Switching a panel to the built-in renderer also carries over the zoom you had chosen in the Companion app's "Page zoom" setting — and on a rooted panel, if the zoom isn't 100%, ha-paneld points you at the panel display-density control (a crisper way to size the dashboard) with a one-tap reset.
-- **"App Configuration" in the dashboard sidebar** — the built-in renderer now adds the same sidebar entry the Companion app does; tapping it opens ha-paneld's own configuration page on the panel.
-- **Panel-appropriate defaults on first run** — a panel running the built-in renderer now starts with the sidebar hidden and background connections kept alive (so it stays responsive when idle), values most people never think to set. These are applied once and remain changeable afterwards.
+- **System WebView updates can now be installed automatically** — panels with a recommended WebView build gain an optional WebView auto-update switch, which is off by default and installs a newer recommended build during update checks. The first switch between different WebView vendors may still require the one-time manual procedure in the panel's hardware guide.
+- **Switching from the Companion app no longer makes the dashboard look smaller** — the built-in dashboard now uses the same scale and carries over the Companion app's Page zoom value. A Dashboard zoom setting allows deliberate per-panel adjustment, while rooted panels can use the sharper display-density control when a larger change is needed.
+- **ha-paneld settings are now available from the dashboard sidebar** — the built-in dashboard adds the same App Configuration entry as the Companion app, opening ha-paneld's configuration page directly on the panel.
+- **The built-in dashboard starts with sensible wall-panel defaults** — the sidebar starts hidden and background connections stay active so the panel remains responsive while idle. These defaults apply only on first run and remain changeable.
 
 ### Changed
 
-- **TPA10-class panels now recommend LineageOS WebView 150** instead of Cromite. LineageOS is a newer, maintained, vanilla-Chromium build that — unlike Cromite — leaves autoplay enabled, so Home Assistant camera-card (WebRTC) streams start without a tap. Cromite remains available as a fallback.
-- **The built-in renderer no longer bounces on overscroll** — dragging past the top or bottom of the dashboard used to show Android's elastic stretch (or edge glow on older panels), which looks out of place on a wall panel that rarely scrolls, so it is now off by default. A `dashboard_overscroll` setting restores the native effect for anyone who wants it (settable over the API).
-- **Smoother LED effect animations** — the pulse (breathing) effect now runs at a higher frame rate along a smooth curve, so it glides rather than steps, and no longer flashes white at the dim end of each breath.
+- **Camera streams on TPA10-class panels can now start without a tap** — LineageOS WebView 150 replaces Cromite as the recommended build because it keeps Home Assistant camera autoplay enabled. Cromite remains available as a fallback.
+- **The dashboard no longer stretches when scrolling past an edge** — the built-in dashboard now disables Android's elastic stretch or edge glow by default. The `dashboard_overscroll` API setting restores the native effect for anyone who prefers it.
+- **LED pulse effects are smoother and no longer flash white** — the breathing animation now follows a smoother curve at a higher frame rate instead of stepping visibly or flashing at its dimmest point.
 
 ### Fixed
 
-- **The soft navbar no longer swallows taps at the bottom of the built-in renderer** — in "Swipe reveal" mode ha-paneld armed a full-width overlay strip that consumed every touch in the bottom ~48dp band (re-injecting non-swipe taps via a slow root call, and dropping them entirely on panels without root). The built-in renderer now detects the reveal swipe within the dashboard activity instead, so taps and scrolls at the bottom edge reach the dashboard with no latency, while a genuine upward edge-swipe still reveals the bar.
-- **Pull-to-refresh no longer fires from a drag inside the dashboard** — the built-in renderer's refresh gesture now arms only for a drag that starts at the very top edge of the screen and pulls down into it. Previously any downward drag on the dashboard content could trigger it, because the Home Assistant frontend scrolls inside the page and the stock gesture check therefore always believed the view was at the top. Scrolling views and dragging card controls now never start a refresh, regardless of scroll position. (#29)
-- **LED effects now stop reliably** — an effect (strobe, blink or pulse) stops the moment the light is turned off or the effect is changed. Previously an effect could keep running after the light was turned off, and occasionally get stuck flashing until the app was restarted. (#16)
+- **Bottom-row dashboard controls now work normally with swipe-to-reveal navigation** — taps and scrolling near the bottom edge could be delayed or ignored because the navigation gesture captured every touch in that area. ha-paneld now intercepts only a genuine upward edge swipe, leaving ordinary dashboard interaction untouched.
+- **Dragging or scrolling a dashboard card no longer refreshes the page** — pull-to-refresh now starts only when a drag begins at the very top edge of the screen. Card controls and scrolling inside the dashboard no longer trigger an accidental reload. (#29)
+- **LED effects stop as soon as the light is turned off or another effect is selected** — strobe, blink or pulse could previously continue running, sometimes leaving the panel flashing until ha-paneld restarted. (#16)
 
 ## v0.9.0 - 2026-07-10
 
-**Headline: ha-paneld can now render the Home Assistant dashboard itself.** 0.9 changes the project's stance: previously a headless agent that always deferred dashboard rendering to the HA Companion app, ha-paneld now offers its own **built-in renderer** (experimental, off by default) so a panel can run as a single-app appliance. The Companion app remains today's default and a permanently supported path. Everything below is cumulative since v0.8.7.
+**ha-paneld can now display Home Assistant itself.** The optional built-in dashboard allows a panel to show Home Assistant without using the Companion app as the visible dashboard. It remains experimental and off by default; the Companion app remains the default and fully supported. Everything below is cumulative since v0.8.7.
 
 ### Added
 
-- **Built-in dashboard renderer (experimental)** — ha-paneld renders the HA dashboard in its own WebView: authenticated with the same `external_auth` contract the Companion uses, provisioned with zero typing on the panel (`provision.sh --builtin --ha-url` with `--ha-token` or `--ha-user`/`--ha-pass`), and integrated with the watchdog/kiosk machinery as a first-class dashboard target. Engineered for weeks-long unattended uptimes: the page freezes while the screen is off (~70% renderer CPU saved), a handshake watchdog reloads a dashboard that fails to actually connect (with backing-off retries and a clean "Reconnecting…" screen instead of a browser error page), memory is bounded by invisible screen-off reloads, renderer crashes are contained and rate-limited (falling back to the admin launcher rather than churning), and a definitively revoked login latches with on-panel fix instructions instead of retrying forever.
-- **Renderer quality-of-life** — camera streams autoplay (with fullscreen video and native confirm/alert handling), instant pull-to-refresh (drag down re-navigates the live frontend; double-pull for a full reload), an optional idle return-to-home, an edge-to-edge fullscreen mode (bars revealed by an edge swipe), a "Clear renderer storage" remote heal, and private-CA HTTPS support (user-installed CAs are trusted, matching the Companion).
-- **Light/dark theming across every surface** — the web UI follows each viewing browser's light/dark preference (with a `?theme=light|dark` override for testing); a "Dark mode" toggle on the Display card themes ha-paneld's own screens and sets the built-in dashboard's default colour scheme on panels without a system dark-mode setting (Android 9 and older); a theme picked inside HA always wins.
-- **The Configure page follows settings changed outside it** — an open Configure tab auto-reloads when the panel's settings change via the API, an HA entity, or another browser; unsaved edits are never destroyed (a banner offers the reload instead).
-- **Honest handling of features that need root** — on a panel without root, the features that require it are shown **greyed with a lock note** (never hidden) so you can see what's unavailable and why; the no-root Install picker offers a **Download APK** link for a manual update, and the installer states plainly at provision time which capability tier your panel is in.
-- **One-click switch from the Companion** — picking the built-in renderer borrows an installed Companion's sign-in automatically (root panels), so trying it is a single picker change.
-- **LED effects** — `strobe`, `blink` and `pulse` through HA's native light `effect` selector.
-- **MQTT over TLS** — `ssl://`/`mqtts://` broker URLs connect over TLS with the default trust store (CA-signed brokers validate; port defaults to 8883).
-- **`--prerelease` install channel** — `install.sh … | bash -s -- --prerelease` (and `provision.sh --prerelease`) installs the newest release-candidate instead of the latest stable, for testing pre-release builds.
+- **Optional built-in Home Assistant dashboard** — ha-paneld can show the dashboard in its own WebView, with sign-in provisioned without typing on the panel. The feature is experimental and off by default. It does not provide Companion app features such as Assist voice control, so the Companion remains the better choice when those are required.
+- **Wall-panel controls for the built-in dashboard** — camera streams start automatically and can open fullscreen, pull-to-refresh is immediate, an idle panel can return home, and edge-to-edge fullscreen mode reveals the system bars with a swipe. Renderer storage can be cleared remotely, and HTTPS servers using a user-installed private certificate authority are supported. (#25)
+- **Light and dark appearance now follows where the interface is viewed** — the web interface follows each browser's preference, while a Dark mode setting themes ha-paneld's on-panel screens and supplies a dashboard default on older Android versions. A theme chosen inside Home Assistant still takes priority.
+- **The Configure page stays current without losing unsaved edits** — settings changed through Home Assistant, the API or another browser trigger a reload when the form is untouched. If edits are in progress, a banner offers the reload instead of discarding them.
+- **Features that need root access are visible instead of silently missing** — unavailable controls are greyed out with an explanation, the Install page offers a manual APK download, and the installer states which capabilities the panel can use.
+- **The built-in dashboard can reuse the Companion app's sign-in** — on rooted panels, selecting the built-in dashboard borrows the existing Companion login so it can be tried without entering a Home Assistant URL or token on the panel.
+- **Home Assistant can control LED effects** — compatible panel lights expose strobe, blink and pulse through Home Assistant's standard light effect selector.
+- **MQTT connections can be encrypted** — `ssl://` and `mqtts://` broker addresses use TLS and the Android trust store, defaulting to port 8883.
+- **Prereleases can be installed with one option** — `install.sh … | bash -s -- --prerelease` or `provision.sh --prerelease` selects the newest release candidate instead of the latest stable release.
 
 ### Changed
 
-- **Dashboard settings get their own Configure card** with a known-renderers-only picker, and Configure cards carry maturity badges ("skunk-works" / "experimental") so pre-release surfaces are labelled.
-- **The performance page attributes cost honestly** — sampling is far lighter, the sampler's own probe cost is shown as its own row, and the built-in renderer's hosting cost is labelled as such.
-- **Companion auto-update settings step back when there's no Companion** — hidden from the form and their HA entities withdrawn on Companion-less panels; listed after ha-paneld's own update settings.
+- **Dashboard options are easier to find and experimental features are clearly marked** — dashboard settings now have their own Configure card and renderer picker, while maturity badges identify unfinished or experimental controls.
+- **The Performance page separates dashboard cost from measurement overhead** — sampling uses fewer resources, its own cost appears separately, and the work of hosting the built-in dashboard is labelled clearly.
+- **Companion-only settings no longer clutter panels without the Companion app** — those controls are hidden and their unused Home Assistant entities are retired when no Companion installation is present.
 
 ### Fixed
 
-- A cumulative pass of renderer and platform fixes shipped across the rcs, highlights: a renderer crash-loop can no longer churn the panel all night; a revoked login is recoverable from the Configure tab; kiosk/watchdog returns no longer reload a healthy dashboard; switching an existing panel to the built-in renderer reclaims the HOME role from the Companion; the soft navbar's Reload could force-stop ha-paneld itself on a builtin panel; settings side-effects (fullscreen, dark mode) now truly apply on save; a stale "Companion update available" notice can no longer outlive an uninstall; the Rockchip `/dev/ledjni` RGB-LED driver is labelled accurately for non-rk3576 SoCs; `provision.sh` login failures explain themselves and credentials with special characters work; vendor-tamed panels bring the dashboard up promptly after taming the vendor home launcher.
+- **A broken built-in dashboard no longer traps the panel in a restart loop** — repeated crashes are slowed and eventually fall back to ha-paneld's launcher, while a revoked Home Assistant login shows repair instructions and can be replaced from the Configure page.
+- **Returning to a healthy built-in dashboard no longer reloads it unnecessarily** — kiosk and watchdog recovery now bring the existing page forward, preserving its current view instead of blanking and loading it again.
+- **Switching from the Companion app reliably makes the built-in dashboard the panel's home screen** — existing panels now reclaim the Android home role immediately instead of returning to the Companion.
+- **The navigation bar's Reload action no longer stops ha-paneld itself** — reloading a built-in dashboard now refreshes the page without terminating the app that hosts it.
+- **Fullscreen and dark-mode changes now take effect when saved** — these settings previously stored the new value without visibly applying it to the running dashboard.
+- **Panel status no longer shows stale or misleading hardware and software information** — uninstalling the Companion clears its update notice, and diagnostics no longer assume every Rockchip `/dev/ledjni` RGB light uses the rk3576 controller. (#24)
+- **Provisioning login failures now explain how to recover** — failed Home Assistant sign-in no longer ends without useful guidance, and credentials containing special characters are handled correctly.
+- **The dashboard returns promptly after a vendor home app is disabled** — panels no longer remain on ha-paneld's launcher until the next watchdog interval after vendor taming.
 
 ## v0.8.7 - 2026-07-07
 
