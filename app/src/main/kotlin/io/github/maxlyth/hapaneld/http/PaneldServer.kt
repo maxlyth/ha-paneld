@@ -2030,7 +2030,7 @@ fetch('/api/v1/tame/suggest').then(function(r){return r.text()}).then(function(t
             """ <button type="submit" name="action" value="rec" formnovalidate>HA-optimised</button>""" else ""
         val lock = if (locked) rootLockBanner("With root, ha-paneld can match the dashboard's density and text size to the physical screen.") else ""
         return """<div class="card" id="cfg-display"><h2>Display sizing<span class="cardbadge exp">experimental</span></h2>
-$lock<p class="note"><b>Pre-release / R&amp;D — the right values aren't dialled in yet; experiment at your own
+$lock<p class="note"><b>Experimental / R&amp;D — the right values aren't dialled in yet; experiment at your own
 pace.</b> Match an HA dashboard's size to a desktop browser. <b>Density</b> scales the whole layout
 (lower dpi = more fits); <b>text size</b> scales WebView text. Panel firmware often ships these
 mismatched to the physical screen. Applies live, persists across reboot; needs root or the helper daemon.</p>

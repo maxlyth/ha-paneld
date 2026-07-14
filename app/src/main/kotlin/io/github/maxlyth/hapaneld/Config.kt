@@ -175,7 +175,7 @@ class Config private constructor(
             .apply()
     }
 
-    /** A pre-ownership (legacy) cache is deliberately stale so the first rc3 start repairs it. */
+    /** A pre-ownership (legacy) cache is deliberately stale so the first upgraded start repairs it. */
     fun haDeviceLinkIsFresh(target: String, nowMs: Long, ttlMs: Long): Boolean =
         haDeviceUrl.isNotBlank() && haDeviceLinkTarget == target && nowMs - haLinkResolvedAt in 0 until ttlMs
 

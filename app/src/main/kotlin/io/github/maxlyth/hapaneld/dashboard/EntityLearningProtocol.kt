@@ -388,7 +388,7 @@ object EntityLearningProtocol {
             is JSONObject -> value.keys().asSequence().mapNotNull { id ->
                 id.takeIf(DIRECT_ENTITY_ID::matches)?.let { it to value.optLong(id, 0).coerceIn(1, 1_000_000) }
             }.toMap()
-            // Accept the rc3 prototype format across an in-place WebView rebuild.
+            // Accept the legacy prototype format across an in-place WebView rebuild.
             is JSONArray -> (0 until value.length()).mapNotNull { value.optString(it).takeIf(DIRECT_ENTITY_ID::matches) }
                 .associateWith { 1L }
             else -> emptyMap()
