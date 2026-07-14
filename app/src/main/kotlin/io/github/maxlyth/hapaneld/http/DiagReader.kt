@@ -53,9 +53,7 @@ object DiagReader {
         // hardware such as daemon-only LEDs and evdev buttons, even if the app can also execute su.
         val usesDaemon = profile.usesDaemon
         return listOfNotNull(
-            Cap("Root (su)", if (su) "ok" else "none",
-                if (su) "available" else
-                    "no su on this firmware — sysfs-LED, reboot/reload and true screen-off are unavailable; everything else still works"),
+            rootSuCapability(su, daemon),
             if (usesDaemon) Cap("Helper daemon", if (daemon) "ok" else "none",
                 if (daemon) daemonRequirement(profile, running = true)
                 else daemonRequirement(profile, running = false))
@@ -81,6 +79,22 @@ object DiagReader {
                 if (rootish) "available" else "needs su or the helper daemon"),
         )
     }
+
+    /**
+     * Report app-visible `su` without confusing it with the helper-backed privilege route. In
+     * particular, the TPA10 intentionally cannot execute `su` from the app sandbox but its root helper
+     * provides reboot, reload, launcher, LED and true screen-off actions. The capability-specific rows
+     * below remain the authority for whether each action is actually available.
+     */
+    internal fun rootSuCapability(su: Boolean, daemon: Boolean): Cap = Cap(
+        name = "Root (su)",
+        status = if (su) "ok" else "none",
+        note = when {
+            su -> "available directly to ha-paneld"
+            daemon -> "not available directly to ha-paneld — privileged actions are routed through the helper daemon"
+            else -> "not available directly to ha-paneld — see the individual capability rows below"
+        },
+    )
 
     private fun daemonRequirement(profile: DeviceProfile, running: Boolean): String {
         val state = if (running) "running" else "NEEDED but not running"
