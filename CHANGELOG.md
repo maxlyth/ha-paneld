@@ -15,6 +15,12 @@
 - **Existing exact entity lists continue to work alongside automatic learning** — testers can keep a manually chosen list or switch to the new guided workflow. Filtering remains opt-in during pre-release testing.
 - **The unfinished remote-control page is withheld** — the Test tab and its screenshot tap-control workflow are hidden while the feature is reviewed for reliability. Existing screenshot, action, input and audio APIs remain available, and old `/test` bookmarks return to Dashboard.
 
+### Fixed
+
+- **“Open in Home Assistant” follows the panel's current server and device** — changing the Home Assistant server or panel identity no longer leaves the button pointing at an obsolete device or a device on the previous server.
+- **Display information no longer presents Android's base logical density as native DPI** — the logical density used to size the interface is labelled separately from the screen's physical pixels per inch, which is shown only for device profiles where it is known reliably.
+- **Helper-backed panels no longer claim that working privileged controls are unavailable** — diagnostics now distinguish direct app access to `su` from actions routed through the helper daemon, such as reboot and reload on the TPA10.
+
 ## v0.9.2-rc2 - 2026-07-14
 
 ### Added
