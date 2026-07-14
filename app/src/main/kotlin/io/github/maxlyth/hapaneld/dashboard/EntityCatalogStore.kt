@@ -202,11 +202,22 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, "entity-l
     }
 
     fun setOverride(instance: String, path: String, entityId: String, override: String) {
+        setOverrides(instance, path, listOf(entityId), override)
+    }
+
+    fun setOverrides(instance: String, path: String, entityIds: Collection<String>, override: String) {
         val pinned = if (override == "pinned") 1 else 0
         val excluded = if (override == "forced_exclude") 1 else 0
-        writableDatabase.execSQL("INSERT OR IGNORE INTO membership(instance,path,entity_id) VALUES(?,?,?)", arrayOf(instance, path, entityId))
-        writableDatabase.execSQL("UPDATE membership SET pinned=?,excluded=?,reasons=CASE WHEN ?=0 AND ?=0 THEN replace(replace(reasons,'manual',''),',,',',') WHEN instr(reasons,'manual')=0 THEN trim(reasons||',manual',',') ELSE reasons END WHERE instance=? AND path=? AND entity_id=?",
-            arrayOf(pinned, excluded, pinned, excluded, instance, path, entityId))
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            for (entityId in entityIds) {
+                db.execSQL("INSERT OR IGNORE INTO membership(instance,path,entity_id) VALUES(?,?,?)", arrayOf(instance, path, entityId))
+                db.execSQL("UPDATE membership SET pinned=?,excluded=?,reasons=CASE WHEN ?=0 AND ?=0 THEN replace(replace(reasons,'manual',''),',,',',') WHEN instr(reasons,'manual')=0 THEN trim(reasons||',manual',',') ELSE reasons END WHERE instance=? AND path=? AND entity_id=?",
+                    arrayOf(pinned, excluded, pinned, excluded, instance, path, entityId))
+            }
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
     }
 
     /** Clear rebuildable evidence for one dashboard while retaining the instance-wide HA catalog. */
@@ -222,15 +233,37 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, "entity-l
         } finally { db.endTransaction() }
     }
 
-    fun activeIds(instance: String, path: String, now: Long): List<String> {
+    fun activeIds(
+        instance: String,
+        path: String,
+        now: Long,
+        includeStatic: Boolean = true,
+        includeRuntime: Boolean = true,
+    ): List<String> {
         val cutoff = now - RUNTIME_RETENTION_MS
+        val evidence = buildList {
+            add("m.pinned=1")
+            if (includeStatic) add("m.static_ref=1")
+            if (includeRuntime) add("m.last_access>=?")
+        }.joinToString(" OR ")
+        val args = mutableListOf(instance, path)
+        if (includeRuntime) args += cutoff.toString()
         return readableDatabase.rawQuery(
             """SELECT m.entity_id FROM membership m LEFT JOIN entity e ON e.instance=m.instance AND e.entity_id=m.entity_id
-               WHERE m.instance=? AND m.path=? AND m.excluded=0 AND (m.pinned=1 OR m.static_ref=1 OR m.last_access>=?)
+               WHERE m.instance=? AND m.path=? AND m.excluded=0 AND ($evidence)
                AND (e.entity_id IS NULL OR e.missing_streak<3) ORDER BY m.entity_id""",
-            arrayOf(instance, path, cutoff.toString()),
+            args.toTypedArray(),
         ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
     }
+
+    /** Unpinned dashboard evidence, independent of exclusion and automatic-promotion policy. */
+    fun suggestedIds(instance: String, path: String): List<String> = readableDatabase.rawQuery(
+        """SELECT m.entity_id FROM membership m LEFT JOIN entity e ON e.instance=m.instance AND e.entity_id=m.entity_id
+           WHERE m.instance=? AND m.path=? AND m.pinned=0
+           AND (m.static_ref=1 OR m.runtime_ref=1)
+           AND (e.entity_id IS NULL OR e.missing_streak<3) ORDER BY m.entity_id""",
+        arrayOf(instance, path),
+    ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
 
     fun hasEntity(instance: String, entityId: String): Boolean = readableDatabase.rawQuery(
         "SELECT 1 FROM entity WHERE instance=? AND entity_id=? AND missing_streak<3", arrayOf(instance, entityId),
@@ -260,15 +293,27 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, "entity-l
         offset: Int,
         maxLimit: Int = 500,
         includeIds: Set<String>? = null,
+        excludeIds: Set<String> = emptySet(),
     ): String {
         val where = mutableListOf("e.instance=?")
         val args = mutableListOf(path, instance)
-        if (query.isNotBlank()) { where += "e.entity_id LIKE ?"; args += "%${query.take(100)}%" }
+        if (query.isNotBlank()) {
+            val raw = query.trim().take(100)
+            val slug = raw.lowercase().replace('-', '_').replace(' ', '_')
+            if (slug == raw) {
+                where += "e.entity_id LIKE ?"; args += "%$raw%"
+            } else {
+                where += "(e.entity_id LIKE ? OR e.entity_id LIKE ?)"
+                args += "%$raw%"; args += "%$slug%"
+            }
+        }
         when (filter) {
             "active" -> where += "m.excluded=0 AND (m.pinned=1 OR m.static_ref=1 OR m.runtime_ref=1)"
             "excluded" -> where += "m.excluded=1"
             "missing" -> where += "e.missing_streak>0"
             "review" -> where += "(e.missing_streak>0 OR (coalesce(m.update_count,0)>0 AND coalesce(m.last_access,0)=0 AND coalesce(m.static_ref,0)=0 AND coalesce(m.pinned,0)=0))"
+            "candidate" -> where += "coalesce(m.pinned,0)=0 AND (m.static_ref=1 OR m.runtime_ref=1)"
+            "unpinned" -> where += "coalesce(m.pinned,0)=0"
             else -> Unit
         }
         val join = "LEFT JOIN membership m ON m.instance=e.instance AND m.entity_id=e.entity_id AND m.path=?"
@@ -281,25 +326,28 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, "entity-l
         val effectiveLimit = limit.coerceIn(1, maxLimit)
         val effectiveOffset = offset.coerceAtLeast(0)
         val queryArgs = args.toTypedArray()
-        val queryTotal = if (includeIds == null) {
+        val filterInMemory = includeIds != null || excludeIds.isNotEmpty()
+        val queryTotal = if (!filterInMemory) {
             readableDatabase.rawQuery(
                 "SELECT count(*) FROM entity e $join WHERE ${where.joinToString(" AND ")}",
                 queryArgs,
             ).use { c -> if (c.moveToFirst()) c.getInt(0) else 0 }
         } else null
-        if (includeIds == null) {
+        if (!filterInMemory) {
             args += effectiveLimit.toString(); args += effectiveOffset.toString()
         }
-        val effectiveSql = if (includeIds == null) sql else sql.substringBefore(" LIMIT ? OFFSET ?")
+        val effectiveSql = if (!filterInMemory) sql else sql.substringBefore(" LIMIT ? OFFSET ?")
         val rows = JSONArray()
         val now = System.currentTimeMillis()
         val recent = recentStats(instance, path, now)
+        val ranks = RecentRanks(recent.values)
         var matched = 0
         readableDatabase.rawQuery(effectiveSql, args.toTypedArray()).use { c ->
             while (c.moveToNext()) {
                 if (includeIds != null && c.getString(0) !in includeIds) continue
+                if (c.getString(0) in excludeIds) continue
                 val position = matched++
-                if (includeIds != null && (position < effectiveOffset || rows.length() >= effectiveLimit)) continue
+                if (filterInMemory && (position < effectiveOffset || rows.length() >= effectiveLimit)) continue
                 rows.put(JSONObject().apply {
                 put("entity_id", c.getString(0)); put("state", c.getString(1)); put("metadata", JSONObject(c.getString(2)))
                 put("first_seen", c.getLong(3)); put("last_seen", c.getLong(4)); put("missing_streak", c.getInt(5))
@@ -312,11 +360,20 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, "entity-l
                 put("data_rate_bps", rate)
                 recent[c.getString(0)]?.let { r ->
                     put("access_1m", r.access1m); put("access_1h", r.access1h); put("access_1d", r.access1d)
-                    put("rate_1m_bps", r.bytes1m / 60.0); put("rate_1h_bps", r.bytes1h / 3600.0)
-                    put("rate_1d_bps", r.bytes1d / 86_400.0)
+                    put("rate_1m_bps", r.bytes1m / observedSeconds(now, r.firstMinute, MINUTE_MS))
+                    put("rate_1h_bps", r.bytes1h / observedSeconds(now, r.firstMinute, HOUR_MS))
+                    put("rate_1d_bps", r.bytes1d / observedSeconds(now, r.firstMinute, 24L * HOUR_MS))
+                    put("access_1m_rank", ranks.rank(r.access1m, ranks.access1m))
+                    put("access_1h_rank", ranks.rank(r.access1h, ranks.access1h))
+                    put("access_1d_rank", ranks.rank(r.access1d, ranks.access1d))
+                    put("rate_1m_rank", ranks.rank(r.bytes1m, ranks.bytes1m))
+                    put("rate_1h_rank", ranks.rank(r.bytes1h, ranks.bytes1h))
+                    put("rate_1d_rank", ranks.rank(r.bytes1d, ranks.bytes1d))
                 } ?: run {
                     put("access_1m", 0); put("access_1h", 0); put("access_1d", 0)
                     put("rate_1m_bps", 0); put("rate_1h_bps", 0); put("rate_1d_bps", 0)
+                    put("access_1m_rank", 0); put("access_1h_rank", 0); put("access_1d_rank", 0)
+                    put("rate_1m_rank", 0); put("rate_1h_rank", 0); put("rate_1d_rank", 0)
                 }
                 })
             }
@@ -363,7 +420,28 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, "entity-l
         val bytes1m: Long,
         val bytes1h: Long,
         val bytes1d: Long,
+        val firstMinute: Long,
     )
+
+    /** Percentile ranks across every entity with evidence, independently for each time window. */
+    private class RecentRanks(rows: Collection<Recent>) {
+        val access1m = rows.map { it.access1m }.filter { it > 0 }.sorted()
+        val access1h = rows.map { it.access1h }.filter { it > 0 }.sorted()
+        val access1d = rows.map { it.access1d }.filter { it > 0 }.sorted()
+        val bytes1m = rows.map { it.bytes1m }.filter { it > 0 }.sorted()
+        val bytes1h = rows.map { it.bytes1h }.filter { it > 0 }.sorted()
+        val bytes1d = rows.map { it.bytes1d }.filter { it > 0 }.sorted()
+
+        fun rank(value: Long, sorted: List<Long>): Double {
+            if (value <= 0 || sorted.isEmpty()) return 0.0
+            var low = 0; var high = sorted.size
+            while (low < high) {
+                val mid = (low + high) ushr 1
+                if (sorted[mid] <= value) low = mid + 1 else high = mid
+            }
+            return low.toDouble() / sorted.size
+        }
+    }
 
     private fun recentStats(instance: String, path: String, now: Long): Map<String, Recent> {
         val minute = now / MINUTE_MS
@@ -375,12 +453,17 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, "entity-l
                sum(CASE WHEN minute>=? THEN access_count ELSE 0 END),
                sum(CASE WHEN minute>=? THEN access_count ELSE 0 END),sum(access_count),
                sum(CASE WHEN minute>=? THEN update_bytes ELSE 0 END),
-               sum(CASE WHEN minute>=? THEN update_bytes ELSE 0 END),sum(update_bytes)
+               sum(CASE WHEN minute>=? THEN update_bytes ELSE 0 END),sum(update_bytes),min(minute)
                FROM minute_rollup WHERE instance=? AND path=? AND minute>=? GROUP BY entity_id""",
             arrayOf(oneMinute.toString(), oneHour.toString(), oneMinute.toString(), oneHour.toString(), instance, path, oneDay.toString()),
         ).use { c -> buildMap {
-            while (c.moveToNext()) put(c.getString(0), Recent(c.getLong(1), c.getLong(2), c.getLong(3), c.getLong(4), c.getLong(5), c.getLong(6)))
+            while (c.moveToNext()) put(c.getString(0), Recent(c.getLong(1), c.getLong(2), c.getLong(3), c.getLong(4), c.getLong(5), c.getLong(6), c.getLong(7)))
         } }
+    }
+
+    private fun observedSeconds(now: Long, firstMinute: Long, windowMs: Long): Double {
+        val start = maxOf(firstMinute * MINUTE_MS, now - windowMs)
+        return (now - start).coerceIn(METRIC_BATCH_MS, windowMs) / 1000.0
     }
 
     private fun databaseBytes(db: SQLiteDatabase = readableDatabase): Long {
@@ -400,7 +483,7 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, "entity-l
         private const val SOFT_LIMIT_BYTES = 128L * 1024 * 1024
         private const val RATE_WINDOW_MS = 5L * 60_000
         private const val RATE_STALE_MS = 90_000L
-        private const val METRIC_BATCH_MS = 30_000L
+        private const val METRIC_BATCH_MS = 5_000L
         private const val MINUTE_RETENTION_MS = 2L * 24 * HOUR_MS
     }
 }

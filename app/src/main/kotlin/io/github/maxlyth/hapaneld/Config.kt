@@ -498,12 +498,25 @@ class Config private constructor(
     val dashboardEntityLearningEnabled: Boolean
         get() = prefs.getBoolean("dashboard_entity_learning", false)
     fun setDashboardEntityLearningEnabled(enabled: Boolean) { edit { putBoolean("dashboard_entity_learning", enabled) } }
+
+    /** Which evidence sources may automatically change the live subscription. Evidence is still
+     * collected when either switch is off so the Entities tab can present it for manual pinning. */
+    val dashboardEntityAutoStatic: Boolean
+        get() = prefs.getBoolean("dashboard_entity_auto_static", true)
+    val dashboardEntityAutoRuntime: Boolean
+        get() = prefs.getBoolean("dashboard_entity_auto_runtime", true)
+    fun setDashboardEntityAutoPolicy(staticRefs: Boolean, runtimeRefs: Boolean): Boolean = applyBatch {
+        edit {
+            putBoolean("dashboard_entity_auto_static", staticRefs)
+            putBoolean("dashboard_entity_auto_runtime", runtimeRefs)
+        }
+    }
     fun commitDashboardEntityLearningEnabled(enabled: Boolean): Boolean = applyBatch {
         setDashboardEntityLearningEnabled(enabled)
         if (!enabled) setDashboardEntityLearningApplied(false)
     }
 
-    /** True only after the observed candidate set has been explicitly promoted to the live filter. */
+    /** True after a fresh installation has safely bootstrapped or an observed set was explicitly applied. */
     val dashboardEntityLearningApplied: Boolean
         get() = prefs.getBoolean("dashboard_entity_learning_applied", false)
     fun setDashboardEntityLearningApplied(applied: Boolean) {

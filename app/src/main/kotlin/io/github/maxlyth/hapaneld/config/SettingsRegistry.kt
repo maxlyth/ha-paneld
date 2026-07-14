@@ -220,7 +220,7 @@ object SettingsRegistry {
         SettingSpec(
             key = "dashboard_entity_learning", type = SettingType.BOOL, group = "Dashboard",
             label = "Automatic dashboard entity filter", default = "false",
-            help = "Built-in renderer only: observe the entities used by this dashboard without changing the current stream. Disabled by default. Enabling starts a catalog synchronization and unlocks the Entities tab; review the candidate set there before explicitly applying it.",
+            help = "Built-in renderer only: start with dashboard references, learn missing runtime dependencies, and avoid the full Home Assistant entity stream. Disabled by default. The Entities tab controls promotion sources, manual pins and diagnostics.",
         ),
         SettingSpec(
             key = "home_dashboard", type = SettingType.STRING, group = "Dashboard",
@@ -280,7 +280,17 @@ object SettingsRegistry {
         SettingSpec(
             key = "dashboard_entity_learning_applied", type = SettingType.BOOL, group = "Dashboard",
             label = "Apply learned entity filter", default = "false", hidden = true,
-            help = "Backup-safe activation latch. Automatic learning observes first; the candidate set is applied explicitly from the Entities API or tab.",
+            help = "Backup-safe activation latch. Set after a safe empty-install bootstrap or an explicit apply from the Entities API or tab.",
+        ),
+        SettingSpec(
+            key = "dashboard_entity_auto_static", type = SettingType.BOOL, group = "Dashboard",
+            label = "Auto-subscribe dashboard references", default = "true", hidden = true,
+            help = "Entities found by parsing dashboard configuration may be added automatically. Evidence remains visible when disabled.",
+        ),
+        SettingSpec(
+            key = "dashboard_entity_auto_runtime", type = SettingType.BOOL, group = "Dashboard",
+            label = "Auto-subscribe runtime accesses", default = "true", hidden = true,
+            help = "Missing entities read through hass.states may be added automatically. Evidence remains visible when disabled.",
         ),
         // Last in the group on purpose: the display-density control is the preferred way to size a
         // dashboard, so this app-level zoom sits below the connection settings users should actually set.

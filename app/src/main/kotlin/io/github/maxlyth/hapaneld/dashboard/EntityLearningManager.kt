@@ -57,18 +57,21 @@ class EntityLearningManager(
     fun close() { syncJob?.cancel(); store.close() }
 
     fun setEnabled(enabled: Boolean): Boolean {
+        val wasEnabled = config.dashboardEntityLearningEnabled
         val committed = config.applyBatch {
             config.setDashboardEntityLearningEnabled(enabled)
-            // Every opt-in begins in observation mode. A stale candidate must never silently replace a
-            // known-good manual list merely because learning was toggled off and back on.
-            config.setDashboardEntityLearningApplied(false)
+            // A new opt-in clears a stale activation latch. Synchronization may bootstrap an empty
+            // installation narrowly, but it never silently replaces a stored manual list.
+            if (!enabled || !wasEnabled) config.setDashboardEntityLearningApplied(false)
         }
         if (!committed) return false
         if (enabled) {
+            val freshBootstrap = config.dashboardEntityFilterIds.isEmpty()
             syncNow("enable")
-            // Rebuild without changing the current allow-list so the document-start access observer is
-            // present for the entire warm-up period.
-            onFilterChanged()
+            // Existing filters rebuild immediately so observation warms alongside the known-good set.
+            // A fresh bootstrap waits for its minimal static set first, avoiding an unnecessary
+            // unfiltered WebView reload while synchronization runs; that first apply installs the observer.
+            if (!freshBootstrap) onFilterChanged()
         } else {
             config.setDashboardEntityFilter(false, config.dashboardEntityFilterIds)
             store.markStatus(instance(), dashboardPath(), "disabled")
@@ -77,11 +80,11 @@ class EntityLearningManager(
         return true
     }
 
-    /** Promote the accumulated candidate set only after an explicit operator confirmation. */
+    /** Explicitly promote the policy-selected evidence set, primarily for existing manual filters. */
     fun activate(confirm: Boolean): String {
         require(config.dashboardEntityLearningEnabled) { "automatic learning is not enabled" }
         if (!confirm) return JSONObject().put("ok", false).put("confirmation_required", true).toString()
-        val active = store.activeIds(instance(), dashboardPath(), System.currentTimeMillis())
+        val active = desiredIds(System.currentTimeMillis())
         require(active.isNotEmpty()) { "learned candidate set is empty" }
         check(config.commitDashboardEntityLearningApplied(true)) { "failed to commit activation latch" }
         if (!config.setDashboardEntityFilter(true, active)) {
@@ -124,13 +127,21 @@ class EntityLearningManager(
         require(derived.isNotEmpty()) { "dashboard analysis found no visible entity dependencies" }
         val now = System.currentTimeMillis()
         val apply = config.dashboardEntityLearningApplied
-        store.commitSync(instance, path, states, ws.metadata, ws.configJson, derived, scan.unresolved, if (apply) "active" else "observing", now)
+        val bootstrap = shouldBootstrapEntityLearning(apply, config.dashboardEntityFilterIds)
+        store.commitSync(
+            instance, path, states, ws.metadata, ws.configJson, derived, scan.unresolved,
+            when { apply -> "active"; bootstrap -> "learning"; else -> "observing" }, now,
+        )
         applyStoredOverrides(instance, path)
-        val active = store.activeIds(instance, path, now)
+        val active = desiredIds(now, instance, path)
         require(active.isNotEmpty()) { "automatic entity set is empty" }
-        if (apply) {
+        if (bootstrap) check(config.commitDashboardEntityLearningApplied(true)) { "failed to commit bootstrap latch" }
+        if (apply || bootstrap) {
             val changed = active != config.dashboardEntityFilterIds || !config.dashboardEntityFilterEnabled
-            check(config.setDashboardEntityFilter(true, active)) { "failed to commit automatic entity set" }
+            if (!config.setDashboardEntityFilter(true, active)) {
+                if (bootstrap) config.commitDashboardEntityLearningApplied(false)
+                error("failed to commit automatic entity set")
+            }
             if (changed) onFilterChanged()
         }
     }
@@ -143,7 +154,7 @@ class EntityLearningManager(
             val knownAccessed = accessed.filterKeys { store.hasEntity(instance, it) }
             val knownMissing = missing.filterTo(mutableSetOf()) { store.hasEntity(instance, it) }
             store.recordAccess(instance, path, knownAccessed + knownMissing.associateWith { 1L }, now)
-            if (knownMissing.isNotEmpty() && config.dashboardEntityLearningApplied) queuePromotion()
+            if (knownMissing.isNotEmpty() && config.dashboardEntityLearningApplied && config.dashboardEntityAutoRuntime) queuePromotion()
         }
     }
 
@@ -166,7 +177,7 @@ class EntityLearningManager(
                 store.markStatus(instance(), dashboardPath(), "degraded", "runtime dependencies queued; synchronize manually")
                 return@launch
             }
-            val active = withContext(Dispatchers.IO) { store.activeIds(instance(), dashboardPath(), now) }
+            val active = withContext(Dispatchers.IO) { desiredIds(now) }
             if (active != config.dashboardEntityFilterIds && active.isNotEmpty()) {
                 promotionsInWindow++
                 if (config.setDashboardEntityFilter(true, active)) onFilterChanged()
@@ -176,20 +187,43 @@ class EntityLearningManager(
 
     fun setOverride(entityId: String, override: String, force: Boolean): String {
         val id = EntityFilterProtocol.normalize(listOf(entityId)).single()
-        require(override in setOf("auto", "pinned", "forced_exclude")) { "invalid override" }
         if (override == "forced_exclude" && !force) {
             return JSONObject().put("ok", false).put("confirmation_required", true).put("entity_id", id).toString()
         }
+        applyOverrides(listOf(id), override, force)
+        return JSONObject().put("ok", true).put("entity_id", id).put("override", override).toString()
+    }
+
+    fun setOverrides(entityIds: List<String>, allCandidates: Boolean, override: String, force: Boolean): String {
+        require(allCandidates || entityIds.isNotEmpty()) { "entity_ids or all_candidates required" }
+        val ids = if (allCandidates) {
+            val subscribed = config.dashboardEntityFilterIds.toSet()
+            store.suggestedIds(instance(), dashboardPath()).filterNot(subscribed::contains)
+        } else EntityFilterProtocol.normalize(entityIds)
+        require(ids.isNotEmpty()) { "selected entity set is empty" }
+        if (override == "forced_exclude" && !force) {
+            return JSONObject().put("ok", false).put("confirmation_required", true).put("entity_count", ids.size).toString()
+        }
+        applyOverrides(ids, override, force)
+        return JSONObject().put("ok", true).put("entity_count", ids.size).put("override", override).toString()
+    }
+
+    private fun applyOverrides(ids: List<String>, override: String, force: Boolean) {
+        require(override in setOf("auto", "pinned", "forced_exclude")) { "invalid override" }
+        require(override != "forced_exclude" || force) { "force confirmation required" }
+        if (config.dashboardEntityLearningApplied && override == "forced_exclude") {
+            val current = desiredIds(System.currentTimeMillis()).toSet()
+            require((current - ids.toSet()).isNotEmpty()) { "cannot exclude the complete active subscription" }
+        }
         val encoded = config.dashboardEntityOverrides.toMutableMap().apply {
-            if (override == "auto") remove(id) else put(id, override)
+            for (id in ids) if (override == "auto") remove(id) else put(id, override)
         }
         check(config.setDashboardEntityOverrides(encoded)) { "override commit failed" }
-        store.setOverride(instance(), dashboardPath(), id, override)
-        val active = store.activeIds(instance(), dashboardPath(), System.currentTimeMillis())
+        store.setOverrides(instance(), dashboardPath(), ids, override)
+        val active = desiredIds(System.currentTimeMillis())
         val changed = active != config.dashboardEntityFilterIds
         if (config.dashboardEntityLearningApplied && active.isNotEmpty()) config.setDashboardEntityFilter(true, active)
         if (config.dashboardEntityLearningApplied && changed) onFilterChanged()
-        return JSONObject().put("ok", true).put("entity_id", id).put("override", override).toString()
     }
 
     /** Tester recovery/reset: discard derived dashboard evidence, never credentials or the HA catalog. */
@@ -198,6 +232,11 @@ class EntityLearningManager(
         check(syncJob?.isActive != true) { "synchronization is running" }
         check(config.setDashboardEntityOverrides(emptyMap())) { "failed to clear entity overrides" }
         check(config.commitDashboardEntityLearningApplied(false)) { "failed to clear activation latch" }
+        if (config.dashboardEntityLearningEnabled) {
+            // Do not reload here: keep the existing narrow live socket until synchronization atomically
+            // replaces this empty persisted placeholder with the fresh minimal static set.
+            check(config.setDashboardEntityFilter(false, emptyList())) { "failed to clear entity filter" }
+        }
         store.resetEvidence(instance(), dashboardPath())
         val started = if (config.dashboardEntityLearningEnabled) syncNow("reset") else false
         return JSONObject().put("ok", true).put("sync_started", started).toString()
@@ -207,17 +246,40 @@ class EntityLearningManager(
         config.dashboardEntityOverrides.forEach { (id, override) -> store.setOverride(instance, path, id, override) }
     }
 
+    /** Change which evidence sources may promote entities. Collection and review continue regardless. */
+    fun setPromotionPolicy(staticRefs: Boolean, runtimeRefs: Boolean): String {
+        val previousStatic = config.dashboardEntityAutoStatic
+        val previousRuntime = config.dashboardEntityAutoRuntime
+        check(config.setDashboardEntityAutoPolicy(staticRefs, runtimeRefs)) { "policy commit failed" }
+        val active = desiredIds(System.currentTimeMillis())
+        if (config.dashboardEntityLearningApplied && active.isEmpty()) {
+            config.setDashboardEntityAutoPolicy(previousStatic, previousRuntime)
+            error("policy would leave the live subscription empty; pin at least one entity first")
+        }
+        val changed = active != config.dashboardEntityFilterIds
+        if (config.dashboardEntityLearningApplied && changed) {
+            check(config.setDashboardEntityFilter(true, active)) { "failed to apply promotion policy" }
+            onFilterChanged()
+        }
+        return JSONObject().put("ok", true).put("auto_static", staticRefs)
+            .put("auto_runtime", runtimeRefs).put("entity_count", active.size).toString()
+    }
+
     fun statusJson(): String {
         val s = store.snapshot(instance(), dashboardPath())
-        val candidates = store.activeIds(instance(), dashboardPath(), System.currentTimeMillis())
+        val suggestions = store.suggestedIds(instance(), dashboardPath())
+        val candidates = suggestions.count { it !in config.dashboardEntityFilterIds.toSet() }
         val filtered = config.dashboardEntityFilterEnabled && config.dashboardEntityFilterIds.isNotEmpty()
         return JSONObject()
             .put("requested_enabled", config.dashboardEntityLearningEnabled)
             .put("mode", if (config.dashboardEntityLearningEnabled) "automatic" else "manual")
             .put("state", if (!config.dashboardEntityLearningEnabled) "disabled" else s.state)
             .put("applied", config.dashboardEntityLearningApplied)
+            .put("auto_static", config.dashboardEntityAutoStatic)
+            .put("auto_runtime", config.dashboardEntityAutoRuntime)
             .put("last_sync_at", s.lastSyncAt).put("catalog_count", s.catalogCount)
-            .put("active_count", config.dashboardEntityFilterIds.size).put("candidate_count", candidates.size)
+            .put("active_count", config.dashboardEntityFilterIds.size)
+            .put("candidate_count", candidates).put("suggested_count", candidates)
             .put("stream_mode", if (filtered) "filtered" else "unfiltered")
             .put("stream_entity_count", if (filtered) config.dashboardEntityFilterIds.size else s.catalogCount)
             .put("unresolved_count", s.unresolvedCount)
@@ -230,13 +292,16 @@ class EntityLearningManager(
         val review = filter == "review"
         val filtered = config.dashboardEntityFilterEnabled && config.dashboardEntityFilterIds.isNotEmpty()
         val effectiveFilter = when {
-            filter == "candidate" -> "active"
+            filter == "candidate" && query.isBlank() -> "candidate"
+            filter == "candidate" -> "unpinned"
             subscribed -> "all"
             else -> filter
         }
+        val currentIds = if (filtered) config.dashboardEntityFilterIds.toSet() else emptySet()
         val json = JSONObject(store.entitiesJson(
             instance(), dashboardPath(), query, effectiveFilter, limit, offset,
             includeIds = if ((subscribed || review) && filtered) config.dashboardEntityFilterIds.toSet() else null,
+            excludeIds = if (filter == "candidate") currentIds else emptySet(),
         ))
         if (subscribed) {
             val catalogCount = store.snapshot(instance(), dashboardPath()).catalogCount
@@ -248,6 +313,16 @@ class EntityLearningManager(
     }
 
     fun exportJson(): String = store.exportJson(instance(), dashboardPath())
+
+    private fun desiredIds(
+        now: Long,
+        instance: String = instance(),
+        path: String = dashboardPath(),
+    ): List<String> = store.activeIds(
+        instance, path, now,
+        includeStatic = config.dashboardEntityAutoStatic,
+        includeRuntime = config.dashboardEntityAutoRuntime,
+    )
 
     private fun instance(): String = EntityLearningProtocol.hash(normalizedOrigin(config.haUrl))
     private fun dashboardPath(): String = config.homeDashboard.ifBlank { "/" }
@@ -354,6 +429,10 @@ class EntityLearningManager(
         }
     }
 }
+
+/** An empty installation starts narrow; any stored manual list is preserved for explicit review. */
+internal fun shouldBootstrapEntityLearning(applied: Boolean, configuredIds: Collection<String>): Boolean =
+    !applied && configuredIds.isEmpty()
 
 /** Process-local rendezvous between the service-owned learner and DashboardActivity's JS bridge. */
 object EntityLearningRuntime {

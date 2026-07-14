@@ -97,11 +97,25 @@
         "requestBody": { "content": { "application/json": { "schema": { "type": "object", "required": ["confirm"], "properties": { "confirm": { "type": "boolean" } } } } } },
         "responses": { "200": { "description": "Candidate set applied" }, "409": { "description": "Explicit confirmation required" } } }
     },
+    "/api/v1/dashboard/entities/policy": {
+      "post": { "summary": "Choose which evidence sources may automatically change the live subscription", "tags": ["performance"],
+        "requestBody": { "content": { "application/json": { "schema": { "type": "object", "required": ["auto_static", "auto_runtime"], "properties": {
+          "auto_static": { "type": "boolean", "description": "Automatically subscribe dashboard configuration references" },
+          "auto_runtime": { "type": "boolean", "description": "Automatically subscribe missing entities read through hass.states" }
+        } } } } }, "responses": { "200": { "description": "Policy applied" }, "400": { "description": "Invalid or empty resulting subscription" } } }
+    },
     "/api/v1/dashboard/entities/override": {
       "post": { "summary": "Pin, force-exclude or return one entity to automatic membership", "tags": ["performance"],
         "requestBody": { "content": { "application/json": { "schema": { "type": "object", "required": ["entity_id", "override"], "properties": {
           "entity_id": { "type": "string" }, "override": { "type": "string", "enum": ["auto", "pinned", "forced_exclude"] }, "force": { "type": "boolean" }
         } } } } }, "responses": { "200": { "description": "Applied" }, "409": { "description": "Force confirmation required" } } }
+    },
+    "/api/v1/dashboard/entities/overrides": {
+      "post": { "summary": "Apply one override to a selected set or every suggested candidate", "tags": ["performance"],
+        "requestBody": { "content": { "application/json": { "schema": { "type": "object", "required": ["override"], "properties": {
+          "entity_ids": { "type": "array", "maxItems": 50000, "items": { "type": "string" } }, "all_candidates": { "type": "boolean" },
+          "override": { "type": "string", "enum": ["auto", "pinned", "forced_exclude"] }, "force": { "type": "boolean" }
+        } } } } }, "responses": { "200": { "description": "Bulk override applied" }, "409": { "description": "Force confirmation required" } } }
     },
     "/api/v1/dashboard/entities/reset": {
       "post": { "summary": "Discard rebuildable evidence and overrides for the current dashboard", "tags": ["performance"],

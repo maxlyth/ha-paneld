@@ -1,10 +1,25 @@
 package io.github.maxlyth.hapaneld.dashboard
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class EntityLearningProtocolTest {
+    @Test fun emptyInstallBootstrapsButExistingManualSetIsPreserved() {
+        assertTrue(shouldBootstrapEntityLearning(applied = false, configuredIds = emptyList()))
+        assertFalse(shouldBootstrapEntityLearning(applied = false, configuredIds = listOf("light.kitchen")))
+        assertFalse(shouldBootstrapEntityLearning(applied = true, configuredIds = emptyList()))
+    }
+
+    @Test fun observerAttributesInitialHydrationAndFlushesPromptly() {
+        val script = EntityLearningProtocol.documentStartScript("https://example.test")
+        assertTrue(script.contains("JSON.stringify(event.a[k]).length"))
+        assertTrue(script.contains("m.id!==entitySubscriptionId"))
+        assertTrue(script.contains("Array.isArray(decoded)?decoded:[decoded]"))
+        assertTrue(script.contains("},5000);"))
+    }
+
     @Test fun dashboardScannerFindsNestedLiteralsActionsTargetsAndUnresolvedCustomLogic() {
         val scan = EntityLearningProtocol.scanDashboard(
             """{"views":[{"cards":[

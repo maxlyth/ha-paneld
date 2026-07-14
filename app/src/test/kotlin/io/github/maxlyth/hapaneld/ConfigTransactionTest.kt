@@ -8,6 +8,17 @@ import org.junit.Test
 import java.lang.reflect.Proxy
 
 class ConfigTransactionTest {
+    @Test fun entityPromotionSourcesDefaultOnAndPersistIndependently() {
+        val prefs = fakePreferences()
+        val config = Config(prefs.instance)
+
+        assertTrue(config.dashboardEntityAutoStatic)
+        assertTrue(config.dashboardEntityAutoRuntime)
+        assertTrue(config.setDashboardEntityAutoPolicy(staticRefs = false, runtimeRefs = true))
+        assertFalse(config.dashboardEntityAutoStatic)
+        assertTrue(config.dashboardEntityAutoRuntime)
+    }
+
     @Test fun livePreferenceSettersRemainStagedUntilTheBatchCommits() {
         val prefs = fakePreferences()
         val config = Config(prefs.instance)

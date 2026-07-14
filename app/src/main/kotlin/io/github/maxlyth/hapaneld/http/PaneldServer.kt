@@ -394,6 +394,20 @@ class PaneldServer(
                         val status = if (JSONObject(response).optBoolean("confirmation_required")) HttpStatusCode.Conflict else HttpStatusCode.OK
                         call.respondText(response, ContentType.Application.Json, status)
                     }
+                    post("/dashboard/entities/policy") {
+                        val obj = runCatching { JSONObject(call.receiveText()) }.getOrElse {
+                            return@post call.respondText("invalid JSON\n", status = HttpStatusCode.BadRequest)
+                        }
+                        if (!obj.has("auto_static") || !obj.has("auto_runtime")) {
+                            return@post call.respondText("auto_static and auto_runtime are required\n", status = HttpStatusCode.BadRequest)
+                        }
+                        val response = runCatching {
+                            entityLearning.setPromotionPolicy(obj.optBoolean("auto_static"), obj.optBoolean("auto_runtime"))
+                        }.getOrElse {
+                            return@post call.respondText("invalid policy: ${it.message}\n", status = HttpStatusCode.BadRequest)
+                        }
+                        call.respondText(response, ContentType.Application.Json)
+                    }
                     post("/dashboard/entities/override") {
                         val body = call.receiveText()
                         val obj = runCatching { JSONObject(body) }.getOrElse {
@@ -405,6 +419,23 @@ class PaneldServer(
                             )
                         }.getOrElse {
                             return@post call.respondText("invalid override: ${it.message}\n", status = HttpStatusCode.BadRequest)
+                        }
+                        val status = if (JSONObject(response).optBoolean("confirmation_required")) HttpStatusCode.Conflict else HttpStatusCode.OK
+                        call.respondText(response, ContentType.Application.Json, status)
+                    }
+                    post("/dashboard/entities/overrides") {
+                        val obj = runCatching { JSONObject(call.receiveText()) }.getOrElse {
+                            return@post call.respondText("invalid JSON\n", status = HttpStatusCode.BadRequest)
+                        }
+                        val ids = obj.optJSONArray("entity_ids")?.let { array ->
+                            (0 until array.length()).map { array.optString(it) }
+                        }.orEmpty()
+                        val response = runCatching {
+                            entityLearning.setOverrides(
+                                ids, obj.optBoolean("all_candidates", false), obj.optString("override"), obj.optBoolean("force", false),
+                            )
+                        }.getOrElse {
+                            return@post call.respondText("invalid bulk override: ${it.message}\n", status = HttpStatusCode.BadRequest)
                         }
                         val status = if (JSONObject(response).optBoolean("confirmation_required")) HttpStatusCode.Conflict else HttpStatusCode.OK
                         call.respondText(response, ContentType.Application.Json, status)
@@ -982,10 +1013,15 @@ class PaneldServer(
               <button class="pbtn" id="entity-activate">Apply learned set</button>
               <a class="pbtn" href="/api/v1/dashboard/entities/export">Export details</a>
             </div>
-            <div style="margin-top:12px"><input id="entity-search" placeholder="Search all three tables by entity ID"></div>
+            <fieldset class="entity-policy"><legend>Automatic promotion</legend>
+              <label><input type="checkbox" id="entity-auto-static"> Add entities parsed from dashboard configuration</label>
+              <label><input type="checkbox" id="entity-auto-runtime"> Add missing entities accessed through <code>hass.states</code></label>
+              <p class="muted">Turn either source off to keep collecting its evidence without changing the live subscription.</p>
+            </fieldset>
+            <div style="margin-top:12px"><input id="entity-search" placeholder="Search the complete Home Assistant entity catalogue"></div>
           </div>
           ${entityTableHtml("current", "Current subscribed entities", "The entities in the live Home Assistant stream. An unfiltered stream contains the complete visible catalog.", "subscribed")}
-          ${entityTableHtml("detected", "Detected dashboard entities", "Dependencies found in dashboard configuration or direct runtime state lookups. Review these before applying the learned set.", "candidate")}
+          ${entityTableHtml("suggested", "Suggested dashboard entities", "Unpinned dashboard references and runtime lookups that are not currently subscribed. Excluded entities remain visible when the dashboard still uses them. While searching, this table also shows unpinned matches from the complete Home Assistant catalogue.", "candidate")}
           ${entityTableHtml("review", "Stale or noisy entities", "Current-stream entities missing from Home Assistant, or receiving updates without being observed as dashboard dependencies. Review only; nothing is removed automatically.", "review")}
         </div>
         <script src="/assets/entities.js"></script>
@@ -994,7 +1030,11 @@ class PaneldServer(
     private fun entityTableHtml(id: String, title: String, note: String, filter: String): String = """
       <div class="card entity-list" data-filter="$filter" data-table="$id"><h2>$title</h2>
         <p class="muted">$note</p>
-        <div class="tablewrap"><table class="entity-table"><thead><tr><th><button data-sort="entity_id">Entity</button></th><th><button data-sort="access_1h">Accesses <small>1m / 1h / 1d</small></button></th><th><button data-sort="rate_1h_bps">Data rate <small>1m / 1h / 1d</small></button></th><th><button data-sort="reasons">Reason</button></th><th><button data-sort="last_access">Last access</button></th><th><button data-sort="override">Override</button></th></tr></thead><tbody></tbody></table></div>
+        <div class="entity-bulk" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+          <button class="pbtn" data-bulk="pinned">Pin selected</button><button class="pbtn" data-bulk="auto">Auto selected</button><button class="pbtn" data-bulk="forced_exclude">Exclude selected</button>
+          ${if (filter == "candidate") "<button class=\"pbtn\" data-all-candidates=\"true\">Pin all suggested</button>" else ""}<span class="muted entity-selected">0 selected</span>
+        </div>
+        <div class="tablewrap"><table class="entity-table"><thead><tr><th class="col-select"><input type="checkbox" class="entity-select-page" aria-label="Select this page"></th><th class="col-entity"><button data-sort="entity_id">Entity</button></th><th class="col-access"><button data-sort="access_1h">Accesses <small>1m / 1h / 1d</small></button></th><th class="col-rate"><button data-sort="rate_1h_bps">Data rate <small>B/s · 1m / 1h / 1d</small></button></th><th class="col-reason"><button data-sort="reasons">Reason</button></th><th class="col-last"><button data-sort="last_access">Last access</button></th><th class="col-override"><button data-sort="override">Override</button></th></tr></thead><tbody></tbody></table></div>
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px">
           <button class="pbtn entity-prev">Previous</button><button class="pbtn entity-next">Next</button><span class="muted entity-msg">Loading…</span>
         </div>

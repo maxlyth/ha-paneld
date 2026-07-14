@@ -174,15 +174,21 @@ object EntityLearningProtocol {
           setInterval(()=>{
             if(!metrics.size)return;const out={};metrics.forEach((v,k)=>out[k]=v);metrics.clear();
             try{window.externalApp&&window.externalApp.entityLearningMetrics(JSON.stringify(out))}catch(e){}
-          },30000);
+          },5000);
           const Parent=window.WebSocket,target=$wsOrigin;
           function LearningWebSocket(url,protocols){
             const socket=protocols===undefined?new Parent(url):new Parent(url,protocols);
             try{const u=new URL(String(url),location.href);if(u.origin===target&&u.pathname.endsWith('/api/websocket')){
-              let hydrated=false;socket.addEventListener('message',ev=>{if(typeof ev.data!=='string')return;try{
-                const m=JSON.parse(ev.data),event=m&&m.type==='event'&&m.event;if(!event)return;
-                if(event.a&&!hydrated){hydrated=true;return}const changed=event.c||{};
-                Object.keys(changed).forEach(k=>{if(!id.test(k))return;const old=metrics.get(k)||[0,0];old[0]++;old[1]+=JSON.stringify(changed[k]).length;metrics.set(k,old)})
+              let hydrated=false,entitySubscriptionId=null;const send=socket.send;
+              Object.defineProperty(socket,'send',{configurable:true,writable:true,value:function(data){
+                if(typeof data==='string')try{const message=JSON.parse(data);if(message&&message.type==='subscribe_entities')entitySubscriptionId=message.id}catch(e){}
+                return send.call(this,data)
+              }});
+              socket.addEventListener('message',ev=>{if(typeof ev.data!=='string')return;try{
+                const decoded=JSON.parse(ev.data),messages=Array.isArray(decoded)?decoded:[decoded];messages.forEach(m=>{
+                if(m.id!==entitySubscriptionId)return;const event=m&&m.type==='event'&&m.event;if(!event)return;
+                if(event.a&&!hydrated){hydrated=true;Object.keys(event.a).forEach(k=>{if(!id.test(k))return;const old=metrics.get(k)||[0,0];old[0]++;old[1]+=JSON.stringify(event.a[k]).length;metrics.set(k,old)});return}const changed=event.c||{};
+                Object.keys(changed).forEach(k=>{if(!id.test(k))return;const old=metrics.get(k)||[0,0];old[0]++;old[1]+=JSON.stringify(changed[k]).length;metrics.set(k,old)})})
               }catch(e){}})
             }}catch(e){}return socket
           }
