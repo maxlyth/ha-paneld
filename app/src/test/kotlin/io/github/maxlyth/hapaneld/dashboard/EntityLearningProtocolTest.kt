@@ -191,6 +191,28 @@ class EntityLearningProtocolTest {
         }
     }
 
+    @Test fun frontendDefaultPanelMatchesBackendVisibleFrontendFallbackOrder() {
+        assertEquals(
+            "user-panel",
+            EntityLearningProtocol.frontendDefaultPanel("user-panel", "system-panel"),
+        )
+        assertEquals(
+            "system-panel",
+            EntityLearningProtocol.frontendDefaultPanel("", "system-panel"),
+        )
+        assertEquals(
+            "home",
+            EntityLearningProtocol.frontendDefaultPanel(null, null),
+        )
+        assertEquals(
+            "home",
+            EntityLearningProtocol.dashboardUrlPath(
+                "/",
+                EntityLearningProtocol.frontendDefaultPanel(null, null),
+            ),
+        )
+    }
+
     @Test fun missingInvalidOrOrdinaryFrontendDefaultFallsBackToLovelace() {
         val invalidDefaults = listOf(
             null,

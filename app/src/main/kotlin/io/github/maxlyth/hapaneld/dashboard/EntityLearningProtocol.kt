@@ -262,6 +262,17 @@ object EntityLearningProtocol {
         .isBlank()
 
     /**
+     * Mirror the backend-visible portion of the Home Assistant frontend's default-panel chain.
+     * A browser-local legacy default may still override [FRONTEND_FALLBACK_PANEL] in old profiles;
+     * selecting the built-in Home panel here is deliberately fail-closed because it has no Lovelace
+     * configuration for the static learner to scan.
+     */
+    fun frontendDefaultPanel(userDefault: String?, systemDefault: String?): String =
+        userDefault?.takeIf(String::isNotBlank)
+            ?: systemDefault?.takeIf(String::isNotBlank)
+            ?: FRONTEND_FALLBACK_PANEL
+
+    /**
      * Return the Lovelace WebSocket dashboard URL path, where an empty result selects ordinary
      * Lovelace. [defaultPanel] is considered only when [homeDashboard] is blank/root and is treated
      * as untrusted frontend user data.
@@ -281,6 +292,8 @@ object EntityLearningProtocol {
         val first = value.substringBefore('?').substringBefore('#').trim('/').substringBefore('/')
         return first.takeIf { it != "lovelace" && it != "null" && DASHBOARD_PATH_SEGMENT.matches(it) }.orEmpty()
     }
+
+    internal const val FRONTEND_FALLBACK_PANEL = "home"
 
     fun canonical(value: Any): String = when (value) {
         is JSONObject -> value.keys().asSequence().toList().sorted().joinToString(",", "{", "}") { key ->

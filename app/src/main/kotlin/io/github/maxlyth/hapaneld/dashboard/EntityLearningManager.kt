@@ -816,10 +816,15 @@ class EntityLearningManager(
                 entity.toString()
             }
             val defaultPanel = if (EntityLearningProtocol.usesFrontendDefaultPanel(homeDashboard)) {
-                runCatching {
+                val userDefault = runCatching {
                     request(JSONObject().put("type", "frontend/get_user_data").put("key", "core"))
                         .optJSONObject("result")?.optJSONObject("value")?.optString("default_panel")
                 }.getOrNull()
+                val systemDefault = if (userDefault.isNullOrBlank()) runCatching {
+                    request(JSONObject().put("type", "frontend/get_system_data").put("key", "core"))
+                        .optJSONObject("result")?.optJSONObject("value")?.optString("default_panel")
+                }.getOrNull() else null
+                EntityLearningProtocol.frontendDefaultPanel(userDefault, systemDefault)
             } else null
             val urlPath = EntityLearningProtocol.dashboardUrlPath(homeDashboard, defaultPanel)
             val command = JSONObject().put("type", "lovelace/config")
