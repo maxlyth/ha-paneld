@@ -224,16 +224,16 @@ class PaneldServer(
             (a is java.net.Inet6Address && (a.address[0].toInt() and 0xfe) == 0xfc))
     }.getOrDefault(false)
 
-    /** Appends a calculated diagonal to the Display row ("…dpi · 6.4″"), assuming square pixels
-     *  (diag_in = hypot(w,h)/dpi). The diagonal is clickable to toggle ″↔cm, with W×H in the hover title. */
+    /** Appends physical dimensions only when the device profile supplies independently verified PPI.
+     *  Logical density is a layout setting and must never be used to infer the panel's physical size. */
     private fun displayCell(v: String): String {
-        val n = Regex("\\d+").findAll(v).mapNotNull { it.value.toIntOrNull() }.toList()
-        if (n.size < 3 || n[2] == 0) return esc(v)
-        val (w, h, dpi) = Triple(n[0], n[1], n[2])
-        val inch = Math.hypot(w.toDouble(), h.toDouble()) / dpi
-        val inchS = "%.1f".format(inch)
-        val cmS = "%.1f".format(inch * 2.54)
-        val title = "W %.1f × H %.1f cm".format(w * 2.54 / dpi, h * 2.54 / dpi)
+        val resolution = Regex("^(\\d+)×(\\d+) px\\b").find(v) ?: return esc(v)
+        val widthPx = resolution.groupValues[1].toIntOrNull() ?: return esc(v)
+        val heightPx = resolution.groupValues[2].toIntOrNull() ?: return esc(v)
+        val size = PanelInfo.physicalDisplaySize(widthPx, heightPx, profile.physicalPpi) ?: return esc(v)
+        val inchS = "%.1f".format(size.diagonalInches)
+        val cmS = "%.1f".format(size.diagonalInches * 2.54)
+        val title = "W %.1f × H %.1f cm".format(size.widthCm, size.heightCm)
         return """${esc(v)} · <span class="diag" data-in="$inchS″" data-cm="$cmS cm" """ +
             """title="${esc(title)}" onclick="diagToggle(this)">$inchS″</span>"""
     }

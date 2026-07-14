@@ -25,6 +25,23 @@ import java.util.concurrent.atomic.AtomicReference
  * objects. Returns an ordered map rendered verbatim as a key/value table.
  */
 object PanelInfo {
+    internal data class PhysicalDisplaySize(
+        val diagonalInches: Double,
+        val widthCm: Double,
+        val heightCm: Double,
+    )
+
+    /** Physical dimensions are valid only when the profile supplies independently verified PPI.
+     *  Android's current/base logical density must never be used to infer panel dimensions. */
+    internal fun physicalDisplaySize(widthPx: Int, heightPx: Int, physicalPpi: Int?): PhysicalDisplaySize? {
+        if (widthPx <= 0 || heightPx <= 0 || physicalPpi == null || physicalPpi <= 0) return null
+        return PhysicalDisplaySize(
+            diagonalInches = Math.hypot(widthPx.toDouble(), heightPx.toDouble()) / physicalPpi,
+            widthCm = widthPx * 2.54 / physicalPpi,
+            heightCm = heightPx * 2.54 / physicalPpi,
+        )
+    }
+
     fun collect(
         context: Context,
         extras: Map<String, String>,
