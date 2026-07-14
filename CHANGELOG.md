@@ -2,23 +2,23 @@
 
 ## v0.9.2-rc3 - 2026-07-14
 
-**Automatic dashboard entity filtering is the headline feature in this release and potentially the most important improvement to ha-paneld so far.** A large Home Assistant installation can send thousands of entity states and updates to a wall panel even when its dashboard uses only a small fraction of them, making low-powered panels take seconds to respond to a touch. The built-in dashboard can now learn the entities its configured dashboard actually uses and ask Home Assistant to send only that optimized subset. The feature remains opt-in while pre-release testing continues, but it is designed to make many existing wall panels feel dramatically more responsive without requiring users to maintain entity lists by hand.
+**Home Assistant dashboards that seemed too demanding for a low-powered wall panel can now be made far more responsive.** A large Home Assistant installation may send thousands of entity states and updates to a panel even when its dashboard displays only a small fraction of them. Users experience delayed taps and sluggish navigation and may reasonably conclude that the panel itself is too weak. The built-in renderer can now learn what the dashboard uses and ask Home Assistant to send only those states. Filtering remains opt-in during pre-release testing, but it no longer requires a hand-maintained entity list. For the smaller group already using a second Home Assistant instance, a filtering proxy or a similar workaround solely to reduce the panel's load, the built-in filter may allow that extra infrastructure to be retired.
 
 ### Added
 
-- **Entity filtering now learns a dashboard's dependencies automatically** — ha-paneld inventories the Home Assistant entity catalog, scans the configured dashboard, understands bounded selectors such as entity IDs, areas, labels and friendly-name patterns, and observes direct state lookups while the dashboard runs. A dedicated Entities page shows the resulting subscription, suggestions, load evidence and manual overrides without requiring a hand-maintained starting list.
-- **The learned entity catalog survives upgrades safely** — the on-panel SQLite catalog has an explicit schema version, sequential forward migrations, bounded retention, and rebuildable derived data. Configuration backups retain the small set of manual overrides while credentials remain outside the catalog.
-- **Unsafe dashboard selectors are visible without trapping the panel** — selectors which could reopen a very large entity stream are called out with their source and suggested edit. Users can fix the dashboard, deliberately continue while omitting those potential entities, or disable automatic filtering; ignored checks remain visible and can be re-enabled.
+- **The built-in renderer can learn which entities its dashboard actually needs** — ha-paneld examines the configured dashboard and observes the states it uses while running. A dedicated Entities page shows what was found, explains why each entity is included and allows manual additions or exclusions before filtering is enabled.
+- **Learned results survive app updates without making backups unnecessarily large** — ha-paneld retains the user's manual choices, discards old observations automatically and can rebuild the rest of the catalog when needed.
+- **Recognized dashboard rules that could hide required entities are surfaced before filtering** — broad or dynamic rules that ha-paneld recognizes are shown with their source and a suggested correction. Users can fix the dashboard, deliberately continue without the uncertain entities or leave filtering disabled; ignored warnings remain visible and can be restored later. Custom cards and behavior that automatic learning has not observed may still require manual review.
 
 ### Changed
 
-- **Experimental entity filtering supports manual and automatic modes** — the existing API remains backward compatible with exact `entity_ids`, while automatic mode is available from the built-in dashboard configuration and the dashboard entity endpoints. The feature remains opt-in during pre-release testing.
+- **Existing exact entity lists continue to work alongside automatic learning** — testers can keep a manually chosen list or switch to the new guided workflow. Filtering remains opt-in during pre-release testing.
 
 ## v0.9.2-rc2 - 2026-07-14
 
 ### Added
 
-- **Experimental entity-stream filtering for built-in-renderer testers** — an API-only, disabled-by-default option asks Home Assistant to send a configured exact entity allow-list instead of the full state stream, reducing the WebView work caused by large instances. Automatic entity discovery and an HTML setting are not included yet; testers configure and verify it through `/api/v1/dashboard/entity-filter`. See [the tester instructions](docs/built-in-renderer.md#experimental-entity-filter-092).
+- **Early entity filtering for built-in-renderer testers** — panels made sluggish by a large Home Assistant installation can be given an exact list of dashboard entities, preventing unrelated state updates from reaching the renderer. This first version is disabled by default and configured through `/api/v1/dashboard/entity-filter`; it does not yet discover entities automatically or provide a web setting. See [the tester instructions](docs/built-in-renderer.md#experimental-entity-filter-092).
 
 ### Changed
 

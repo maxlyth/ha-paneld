@@ -7,18 +7,18 @@
 [![Release](https://img.shields.io/github/v/release/maxlyth/ha-paneld?include_prereleases&sort=semver&style=flat-square&color=blue)](https://github.com/maxlyth/ha-paneld/releases)
 [![License](https://img.shields.io/badge/license-Apache_2.0-blue?style=flat-square)](LICENSE)
 
-**ha-paneld is free, open-source, and exists to fix what's wrong with Home Assistant wall panels** — the per-vendor fragmentation, the sluggish dashboards, and the clunky manufacturer software you're otherwise stuck with. It gives one consistent, Home-Assistant-first way to run a panel: full control of its hardware — screen, LEDs, buttons, sensors, relays and audio — across panels from *different* makers; a built-in admin launcher and on-screen navigation bar so a key-less panel behaves like an appliance; and the tooling to make a dashboard actually feel fast on cheap hardware. It's growing from a single-panel agent toward managing a whole fleet, with zero-touch remote provisioning.
+**ha-paneld makes Home Assistant dashboards practical on Android wall panels that otherwise feel too slow or awkward to use.** Low-powered panels can become sluggish or take seconds to respond when connected to a large Home Assistant installation. One important cause is that the panel receives and processes updates for far more entities than its dashboard displays. ha-paneld's built-in renderer can learn what the dashboard uses and ask Home Assistant to send only those states, reducing the work on the panel without replacing the hardware.
 
-It's a small Android agent that exposes panel-side hardware to Home Assistant over HTTP + MQTT auto-discovery + mDNS, so a panel pairs itself with HA when you sideload the APK — no per-device YAML.
+It also replaces fragmented vendor software with one free, open-source way to operate different makes of panel. The Android app exposes the screen, LEDs, buttons, sensors, relays and audio to Home Assistant over HTTP, MQTT auto-discovery and mDNS; adds a built-in launcher and on-screen navigation for key-less hardware; and supports consistent provisioning across a whole fleet. Once provisioned, a panel pairs itself with Home Assistant without per-device YAML.
 
-It is built for panel-class Android — with explicit device profiles for Sonoff NSPanel Pro, Tuya TPA10, Electron WF1589T, ZHICAI SMT1019, Smatek S9E, the ZX-SMT156/RK3566_T, the LineageOS-based Echo Show 5 Gen 2, and (preliminary) the Shelly Wall Display family — **not** personal phones. Dashboard rendering is your choice: the official [HA Companion app](https://github.com/home-assistant/android) (today's default), or — new in 0.9 — ha-paneld's own **built-in renderer**.
+It is built for panel-class Android — with explicit device profiles for Sonoff NSPanel Pro, Tuya TPA10, Electron WF1589T, ZHICAI SMT1019, Smatek S9E, the ZX-SMT156/RK3566_T, the LineageOS-based Echo Show 5 Gen 2, and (preliminary) the Shelly Wall Display family — **not** personal phones. Use ha-paneld's **built-in renderer** for the integrated dashboard and entity filtering, or the official [HA Companion app](https://github.com/home-assistant/android) when the panel needs Assist voice control or native notifications.
 
 <picture>
   <source media="(prefers-color-scheme: light)" srcset="docs/img/config-ui-light.png">
   <img src="docs/img/config-ui-dark.png" alt="ha-paneld's on-panel configuration page — responsive cards for panel info, capabilities, live performance and configuration">
 </picture>
 
-**Performance is a first-class concern.** Cheap panel hardware can make a dashboard that flies on a phone crawl on the wall — usually with no visibility into *why*. So ha-paneld measures and tunes: on-device CPU / GPU / clock and thermal throttling, a dashboard responsiveness metric, the top CPU consumers, and a 1-click WebView DevTools relay. See [docs/performance.md](docs/performance.md) and the [performance comparison](docs/hardware/README.md#performance-comparison--practical-deployment).
+**A slow dashboard does not necessarily mean the panel is too weak.** ha-paneld can reduce the stream of Home Assistant state updates before they reach its built-in renderer, while its performance tools show dashboard response time, unexpected reloads, CPU, GPU, clock speed, temperature and the busiest processes. See [docs/performance.md](docs/performance.md) and the [performance comparison](docs/hardware/README.md#performance-comparison--practical-deployment).
 
 ## Install
 
@@ -43,7 +43,7 @@ For scripted/fleet installs use [`scripts/provision.sh`](scripts/provision.sh) d
 > **First-run gotcha — update the panel's system WebView.** Even modern panels ship with a WebView/Chromium far too old to render a current Home Assistant dashboard, so the HA Companion app might show a blank or broken UI. Fix it cleanly over adb: see [Updating the system WebView](docs/hardware/README.md#updating-the-system-webview). This trips up almost everyone; do it before judging anything else.
 
 > [!NOTE]
-> ha-paneld is the headless agent — your dashboard launcher is the [HA Companion app](https://github.com/home-assistant/android). On panels without Google Play, install its [**minimal** release APK](https://github.com/home-assistant/android/releases/latest/download/app-minimal-release.apk).
+> The built-in renderer is the integrated path for dashboard entity filtering. The [HA Companion app](https://github.com/home-assistant/android) remains supported for panels that need Assist or native notifications; on panels without Google Play, use its [**minimal** release APK](https://github.com/home-assistant/android/releases/latest/download/app-minimal-release.apk).
 
 > [!NOTE]
 > ha-paneld can only be sideloaded on a panel — it isn't on the Play Store, so even Play-capable panels (eg 2026 Android 14 models) should sideload it.
@@ -55,19 +55,19 @@ For scripted/fleet installs use [`scripts/provision.sh`](scripts/provision.sh) d
 
 ## Why not just the Home Assistant Companion app?
 
-The [HA Companion app](https://github.com/home-assistant/android) targets personal phones and tablets. Wall panels need different primitives: screen / LED / button control, hardware-button events back to HA, a built-in launcher and on-screen navigation bar for key-less hardware, fleet provisioning, and turnkey mDNS pairing. ha-paneld covers those regardless of what draws the dashboard.
+The [HA Companion app](https://github.com/home-assistant/android) targets personal phones and tablets. Wall panels need different primitives: screen, LED and button control; hardware-button events back to Home Assistant; a built-in launcher and on-screen navigation for key-less hardware; fleet provisioning; and automatic pairing. ha-paneld supplies those panel-specific capabilities.
 
-For the dashboard itself there are **two supported paths**. The Companion app is today's default and the right choice when using **Home Assistant's Voice Assistant (Assist)** or native notifications — ha-paneld doesn't replace either. Since 0.9 there is also ha-paneld's own **built-in renderer** (experimental): it turns the panel into a single-app appliance — one APK to install, sign-in provisioned from your admin machine (no typing on the panel, no OAuth flow on a stale WebView), and page-level resilience engineered for a dashboard that runs untouched for weeks — screen-off freezing, connection watchdogs, bounded memory, crash containment. It deliberately has **no Voice Assistant and no notifications**; if those matter on your panel, stay with the Companion. Both paths remain supported long-term.
+For the dashboard itself there are **two supported paths**. The built-in renderer is designed for a dedicated dashboard panel: it provides entity filtering, remote sign-in without typing on the panel, and recovery from screen-off freezes, connection failures, excessive memory use and renderer crashes. It remains experimental and deliberately omits **Home Assistant's Voice Assistant (Assist)** and native notifications. Use the Companion app when either of those is required. Both paths remain supported.
 
 ## Why not Fully Kiosk?
 
-[Fully Kiosk Browser](https://www.fully-kiosk.com/) is the usual answer for HA wall panels, and it's genuinely capable. But it is overly complicated, sits awkwardly against Home Assistant's own values, and on a small mixed fleet its wins are narrow for the friction it adds. ha-paneld is free, open, and Home-Assistant-first: it supports the official Companion app by default, or its own built-in renderer. It fills the *panel-hardware* gap without a per-device licence.
+[Fully Kiosk Browser](https://www.fully-kiosk.com/) is a capable general-purpose kiosk browser and a common choice for Home Assistant wall panels. ha-paneld offers a free, open-source stack built specifically for Home Assistant panels: its built-in renderer, entity filtering and panel-hardware controls work together in one app, without a per-device licence.
 
 <details>
 <summary>The three friction points in full</summary>
 
 - **Not free, not open source.** Fully Kiosk is closed-source commercial software. The free tier is limited and nags; the parts people actually want for a panel — the remote-admin REST/MQTT API, motion/screensaver controls, no watermark — need the paid **Plus** licence, **per device**. That cuts against HA's and ha-paneld's free, open, local-first ethos.
-- **The Companion app already serves dashboards better.** For day-to-day dashboard rendering, the Companion app is purpose-built for HA — native auth and sessions, push notifications, deep links, Home Assistant Voice Assistant (Assist), and it tracks the frontend. A general-purpose kiosk browser is a second rendering path to keep working.
+- **Entity filtering is integrated with the renderer.** ha-paneld can learn which entities its dashboard uses and reduce the state stream before it reaches the panel. A separate browser can still be the better fit when its particular kiosk or screensaver features are required.
 - **Per-device config doesn't scale on a non-homogeneous fleet.** Fully Kiosk is configured per device (its settings UI / per-device cloud), so a mixed fleet of different panels drifts and each unit is a bespoke setup. ha-paneld is config-as-code: MQTT auto-discovery, uniform entities across every panel, and one `update-fleet.sh` to roll them together.
 
 If Fully Kiosk's specific extras (e.g. its kiosk lockdown or its particular screensaver) are load-bearing for you, keep using it.
@@ -120,20 +120,20 @@ ha-paneld needs no system-signed install. Standard-Android capabilities (brightn
 
 ## Status & roadmap
 
-**Latest release candidate — 0.9.2-rc2:** screen state now remains accurate on helper-controlled panels, release downloads lead with the supported installer, and built-in-renderer testers can opt into an experimental exact entity allow-list. Reconfiguration, reconnect and shutdown handling has also been hardened across MQTT, dashboard, media, sensors, input, logging, updates and hardware controls so superseded work cannot affect the active runtime. Full notes for every release are in [CHANGELOG.md](CHANGELOG.md).
+**0.9.2 release line:** the built-in renderer can reduce the Home Assistant entity stream that makes some low-powered panels slow or unresponsive. An initial exact-list mode enabled controlled testing; the current work can learn a dashboard's dependencies and lets the user review them before enabling the filter. The release also improves recovery from network and MQTT interruptions and prevents old work from resurfacing after settings changes or restarts. Full notes for every release are in [CHANGELOG.md](CHANGELOG.md).
 
 **Where it's heading** — the near-term direction is **fleet-scale operation** and **full remote provisioning**: bringing a new or factory-wiped panel all the way up with zero typing on the panel, and pushing config/updates to a whole fleet from one place. Other planned work includes MQTT TLS for self-signed brokers, an on-device scheduler, deeper performance tooling, and continued iteration on the HTTP UI. The full curated list is in **[docs/roadmap.md](docs/roadmap.md)**.
 
 ## Documentation
 
 - **[docs/api.md](docs/api.md)** — the control API: uniform MQTT entities, the HTTP contract (`:8888`), and pairing. Browse and try every endpoint live at `http://<panel>:8888/api`; the machine-readable spec is at `/openapi.json`.
-- **[docs/provisioning.md](docs/provisioning.md)** — headless provisioning, whole-fleet updates, adb bootstrap, and the permission grants.
+- **[docs/provisioning.md](docs/provisioning.md)** — unattended provisioning, whole-fleet updates, adb bootstrap, and the permission grants.
 - **[docs/built-in-renderer.md](docs/built-in-renderer.md)** — the built-in dashboard renderer (experimental): what it is, turning it on (incl. the one-click Companion sign-in borrow), theming, and what it deliberately omits.
 - **[docs/building.md](docs/building.md)** — build from source (Docker or local toolchain) and the signing notes forkers need. See also [docs/local-builds.md](docs/local-builds.md) (devcontainer).
 - **[docs/roadmap.md](docs/roadmap.md)** — the full planned + stretch roadmap (shipped work is in [CHANGELOG.md](CHANGELOG.md)).
 - **[docs/hardware/](docs/hardware/)** — reverse-engineered hardware references for the supported panels (SoC, LED control path, sensors, radios), since these devices are otherwise undocumented: [NSPanel Pro](docs/hardware/nspanel-pro.md) (PX30), [TPA10](docs/hardware/tpa10.md) (rk3566), [WF1589T](docs/hardware/wf1589t.md) (rk3576), [SMT1019](docs/hardware/smt1019.md) (rk3576, community), [Smatek S9E](docs/hardware/s9e.md) (rk3566), [ZX-SMT156](docs/hardware/zx-smt156.md) (community), [Echo Show 5 Gen 2](docs/hardware/echo-show-5-gen2.md) (LineageOS, community), and [Shelly Wall Display](docs/hardware/shelly-wall-display.md) (preliminary) — plus a [performance comparison](docs/hardware/README.md#performance-comparison--practical-deployment).
 - **[docs/tts.md](docs/tts.md)** — server-side TTS recipe: render a phrase with any HA engine (Piper, Cloud) and send it to a panel via a small script (no add-on, no on-device TTS).
-- **[docs/performance.md](docs/performance.md)** — panel performance tuning: why dashboards lag on weak panels and how to fix it (the WebSocket-event-volume problem; the split-instance approach).
+- **[docs/performance.md](docs/performance.md)** — why a Home Assistant dashboard can overwhelm a low-powered panel, how to measure the problem, and how to reduce the work reaching the renderer.
 - **[docs/display-sizing.md](docs/display-sizing.md)** *(experimental / R&D)* — matching dashboard size to a desktop browser via display density + system font scale (Android panels often ship these mismatched to the physical screen).
 - **[helper/README.md](helper/README.md)** — the root LED/control helper daemon for sysfs-LED panels (build + boot-persistent install).
 - **`GET /diag`** on a panel — a copy-paste hardware/firmware/capability dump for bug reports.
