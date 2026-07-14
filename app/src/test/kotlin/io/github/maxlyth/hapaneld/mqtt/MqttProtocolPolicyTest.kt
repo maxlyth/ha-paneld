@@ -3,6 +3,7 @@ package io.github.maxlyth.hapaneld.mqtt
 import io.github.maxlyth.hapaneld.mqttAcceptsCommand
 import io.github.maxlyth.hapaneld.mqttDiscoveryRetain
 import io.github.maxlyth.hapaneld.mqttIsHaOnline
+import io.github.maxlyth.hapaneld.shouldRepublishDiscoveryAddress
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -25,5 +26,15 @@ class MqttProtocolPolicyTest {
     @Test fun onlyDiscoveryTombstonesAreRetained() {
         assertFalse(mqttDiscoveryRetain("{\"name\":\"Screen\"}"))
         assertTrue(mqttDiscoveryRetain(""))
+    }
+
+    @Test fun connectedPanelReannouncesOnlyWhenItsLiveConfigurationAddressChanges() {
+        val old = "http://192.0.2.10:8888/"
+        val replacement = "http://192.0.2.11:8888/"
+
+        assertFalse(shouldRepublishDiscoveryAddress(connected = true, old, old))
+        assertTrue(shouldRepublishDiscoveryAddress(connected = true, old, replacement))
+        assertTrue(shouldRepublishDiscoveryAddress(connected = true, old, null))
+        assertFalse(shouldRepublishDiscoveryAddress(connected = false, old, replacement))
     }
 }

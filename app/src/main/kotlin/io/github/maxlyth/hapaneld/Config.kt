@@ -12,6 +12,7 @@ import io.github.maxlyth.hapaneld.config.SettingType
 import io.github.maxlyth.hapaneld.config.SettingsRegistry
 import io.github.maxlyth.hapaneld.device.DeviceProfile
 import io.github.maxlyth.hapaneld.util.AndroidInput
+import io.github.maxlyth.hapaneld.util.HaLink
 import java.util.Locale
 
 /**
@@ -117,7 +118,7 @@ class Config private constructor(
         // would drop the link on every save.
         val changed = id != prefs.getString("panel_id", null)
         editor.putString("panel_id", id)
-        if (changed) editor.remove("ha_device_url")
+        if (changed) clearHaDeviceLink(editor)
     }
 
     /** Apply secondary-key semantics for a validated bundle import using the SAME transaction as its
@@ -158,15 +159,25 @@ class Config private constructor(
         }
     }
 
-    /** Cached HA device-settings URL (resolved once via HaLink when the MQTT creds are a valid HA user);
-     *  blank until/unless resolved. Shown as an "Open in Home Assistant" link on the info page. */
+    /** Cached HA device-settings URL. [haDeviceLinkTarget] records which configured HA endpoint and
+     *  panel identity produced the random device-registry id so a renderer/server change cannot leave
+     *  "Open in HA" pointing at a device which does not exist on the new server. */
     val haDeviceUrl: String get() = prefs.getString("ha_device_url", "")!!
+    val haDeviceLinkTarget: String get() = prefs.getString("ha_link_target", "")!!
     /** When [haDeviceUrl] was last resolved — drives a periodic re-resolve so a link left stale by an HA
      *  device delete+recreate (the id changes without a panel_id change) self-heals. */
     val haLinkResolvedAt: Long get() = prefs.getLong("ha_link_at", 0L)
-    fun setHaDeviceUrl(url: String) {
-        prefs.edit().putString("ha_device_url", url).putLong("ha_link_at", System.currentTimeMillis()).apply()
+    fun setHaDeviceUrl(url: String, target: String) {
+        prefs.edit()
+            .putString("ha_device_url", url)
+            .putString("ha_link_target", target)
+            .putLong("ha_link_at", System.currentTimeMillis())
+            .apply()
     }
+
+    /** A pre-ownership (legacy) cache is deliberately stale so the first rc3 start repairs it. */
+    fun haDeviceLinkIsFresh(target: String, nowMs: Long, ttlMs: Long): Boolean =
+        haDeviceUrl.isNotBlank() && haDeviceLinkTarget == target && nowMs - haLinkResolvedAt in 0 until ttlMs
 
     /** HA's frontend URL as the Companion knows it (its internal/external_url), resolved from the Companion
      *  DB + cached. The header "Open in HA" button falls back to this when [haDeviceUrl] (the panel's own
@@ -174,8 +185,15 @@ class Config private constructor(
     val haBaseUrl: String get() = prefs.getString("ha_base_url", "")!!
     fun setHaBaseUrl(url: String) { prefs.edit().putString("ha_base_url", url).apply() }
 
-    /** Best "Open in HA" target: the resolved device page if known, else the Companion's HA frontend URL. */
-    val haLinkUrl: String get() = haDeviceUrl.ifBlank { haBaseUrl }
+    /** Best "Open in HA" target. Never expose an unowned legacy cache or a device id resolved for a
+     * different native endpoint/panel while its asynchronous repair is still running. */
+    val haLinkUrl: String get() {
+        val nativeTarget = haUrl.takeIf(String::isNotBlank)?.let { HaLink.resolutionTarget(it, panelId) }
+        val ownedDeviceUrl = haDeviceUrl.takeIf {
+            haDeviceLinkTarget.isNotBlank() && (nativeTarget == null || haDeviceLinkTarget == nativeTarget)
+        }
+        return ownedDeviceUrl ?: haUrl.ifBlank { haBaseUrl }
+    }
 
     /** Update versions the user dismissed from the dashboard banner, label -> ignored latestVersion.
      *  Stored as newline-joined "label\tversion" rows (component labels + semver never contain \t or \n).
@@ -849,12 +867,19 @@ class Config private constructor(
     /** Immediately hide filter state when the configured endpoint changes. The URL-derived instance key
      *  is selected later by [prepareDashboardEntityInstance], once its legacy key has been calculated. */
     private fun stageDashboardEntityHaUrlChange(editor: SharedPreferences.Editor, nextUrl: String) {
+        val currentEndpoint = haUrl.trim().trimEnd('/')
+        val nextEndpoint = nextUrl.trim().trimEnd('/')
+        if (currentEndpoint != nextEndpoint) clearHaDeviceLink(editor)
         val current = canonicalHaOrigin(haUrl) ?: haUrl.trim().trimEnd('/')
         val next = canonicalHaOrigin(nextUrl) ?: nextUrl.trim().trimEnd('/')
         if (current == next) return
         editor.remove("dashboard_entity_instance")
             .remove("dashboard_entity_instance_uuid")
             .putString("dashboard_entity_instance_origin", next)
+    }
+
+    private fun clearHaDeviceLink(editor: SharedPreferences.Editor) {
+        editor.remove("ha_device_url").remove("ha_link_target").remove("ha_link_at")
     }
 
     // The screen-off timeout (ms) seen before we first raised it, so disabling preventIdleDim can restore

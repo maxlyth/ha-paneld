@@ -40,6 +40,7 @@ import io.github.maxlyth.hapaneld.mqtt.AuthRecovery
 import io.github.maxlyth.hapaneld.mqtt.isAuthRecoveryState
 import io.github.maxlyth.hapaneld.util.HelperClient
 import io.github.maxlyth.hapaneld.util.Json
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
@@ -133,7 +134,9 @@ class MqttBridge(
     private val hasRecents: Boolean,
     // Optional on-panel auto-brightness engine; HA-fed lux is routed to it, switch/bias persist in Config.
     private val autoBright: AutoBrightnessController,
-    private val configUrl: String? = null,
+    // Evaluated for every discovery announcement so DHCP/address changes never leave HA's device-page
+    // Visit link pinned to the address captured when the service process started.
+    private val configUrl: () -> String? = { null },
     // Resolves HA's LAN IP via mDNS to default the broker when none is configured (injected by the
     // service, wired to MdnsAdvertiser). Returns null if HA isn't found / mDNS unavailable.
     private val discoverHaIp: () -> String? = { null },
@@ -153,6 +156,7 @@ class MqttBridge(
     // connection, so cleanup cannot be lost when the old client is detached or the broker was offline.
     private val stalePanelId: String? = null,
 ) {
+    private val haLinkResolutionInFlight = AtomicBoolean(false)
     private val transport: MqttTransport = HiveMqTransport()
     // One value per channel-shaping capability per bridge generation. Discovery and the state-channel
     // registry must not make independent root probes and disagree about whether a channel exists.
@@ -198,6 +202,7 @@ class MqttBridge(
      *  liveness watchdog flips it via [reconnect] when a family won't hold, so the bridge lands on
      *  whichever family actually works and stays there. */
     @Volatile private var preferIpv4: Boolean = false
+    @Volatile private var lastPublishedConfigUrl: String? = null
 
     private val authRecovery = AuthRecovery(jitter = { base, _ ->
         // Bounded ±20% jitter prevents a fleet-wide broker restart becoming a synchronized retry storm.
@@ -588,7 +593,7 @@ class MqttBridge(
         stateConverger.reconcileAll()
         reconcileZigbeeOnConnect() // boot-restore: start the gateway if left ON and nothing else has
         Thread { runCatching { adb.reassert() } }.start() // re-assert network-adb if ha-paneld persists it (firmware may strip the prop)
-        maybeResolveHaLink() // best-effort "Open in HA" link via the MQTT creds; off-thread, silent on failure
+        maybeResolveHaLink() // native HA session first, MQTT credential fallback; off-thread, best-effort
         Log.i(TAG, "MQTT connected — (re)subscribed + discovery for $panel")
     }
 
@@ -601,31 +606,55 @@ class MqttBridge(
         Log.i(TAG, "HA online — re-announced discovery for $panel")
     }
 
+    /** Republish discovery only when the live panel URL changed. Called by Android network callbacks;
+     * reconnect and HA-birth paths already call [publishDiscovery] and evaluate the same supplier. */
+    internal fun refreshDiscoveryAddress() {
+        val current = configUrl()?.takeIf(String::isNotBlank)
+        if (!shouldRepublishDiscoveryAddress(isConnected(), lastPublishedConfigUrl, current)) return
+        reAnnounce()
+    }
+
     /**
-     * Resolve this panel's HA device-settings URL using the MQTT username/password (when those are also a
-     * valid HA user — typical with the built-in Mosquitto add-on) and cache it for the info page's
-     * "Open in Home Assistant" link. Off the MQTT thread; anonymous brokers and any failure no-op silently.
-     * Cached until stale (re-resolved at most every [HA_LINK_TTL_MS] so a device delete+recreate self-heals)
-     * and cleared on a panel_id change. A failed re-resolve keeps the existing link (never clobbers).
+     * Resolve this panel's HA device-settings URL. A configured built-in renderer is authoritative: use
+     * its exact endpoint and current access token, even when MQTT is disabled or its broker credentials
+     * belong to another HA instance. MQTT username/password remain a compatibility fallback only when no
+     * native renderer connection exists. Legacy cache entries have no [Config.haDeviceLinkTarget], so an
+     * upgrade immediately repairs them rather than trusting their old random registry id for another 6h.
      */
-    private fun maybeResolveHaLink() {
-        if (config.mqttUser.isBlank() || config.mqttPassword.isBlank()) return
-        // Re-resolve if never done OR the cached link is stale: HA's device id changes on a re-provision or
-        // a device delete+recreate (with no panel_id change), which left "Open in HA" pointing at a deleted
-        // device forever. TTL-gated so a flapping connection can't hammer HA's login.
-        if (config.haDeviceUrl.isNotBlank() &&
-            System.currentTimeMillis() - config.haLinkResolvedAt < HA_LINK_TTL_MS
-        ) {
-            return
-        }
+    internal fun maybeResolveHaLink() {
+        if (!haLinkResolutionInFlight.compareAndSet(false, true)) return
         Thread {
-            // Prefer mDNS (broker-matched). Else derive HA from the broker HOST: a working broker is very
-            // likely the HA server too, and reaching it by hostname works even across a tunnel where mDNS
-            // can't (e.g. a remote panel). HaLink then reads /api/config for the canonical link URL.
-            val base = discoverHaUrl() ?: brokerHttpsUrl() ?: return@Thread
-            HaLink.resolve(base, config.mqttUser, config.mqttPassword, config.friendlyName)
-                ?.let { config.setHaDeviceUrl(it) }
-        }.start()
+            try {
+                val nativeBase = config.haUrl.trim().trimEnd('/')
+                if (nativeBase.isNotBlank()) {
+                    val target = HaLink.resolutionTarget(nativeBase, panel)
+                    if (config.haDeviceLinkIsFresh(target, System.currentTimeMillis(), HA_LINK_TTL_MS)) return@Thread
+                    val stillCurrent = {
+                        config.haUrl.trim().trimEnd('/') == nativeBase && config.panelId == panel
+                    }
+                    val token = DashboardAuth.forConfig(config, stillCurrent = stillCurrent)
+                        .session?.accessToken ?: return@Thread
+                    val link = HaLink.resolveWithAccessToken(
+                        nativeBase, token, listOf(panel, config.friendlyName),
+                    ) ?: return@Thread
+                    if (stillCurrent()) config.setHaDeviceUrl(link, target)
+                    return@Thread
+                }
+
+                if (config.mqttUser.isBlank() || config.mqttPassword.isBlank()) return@Thread
+                // Prefer mDNS (broker-matched). Else derive HA from the broker HOST: a working broker is
+                // likely the HA server too. HaLink reads /api/config for its canonical browser link.
+                val base = discoverHaUrl() ?: brokerHttpsUrl() ?: return@Thread
+                val target = HaLink.resolutionTarget(base, panel)
+                if (config.haDeviceLinkIsFresh(target, System.currentTimeMillis(), HA_LINK_TTL_MS)) return@Thread
+                val link = HaLink.resolve(
+                    base, config.mqttUser, config.mqttPassword, listOf(panel, config.friendlyName),
+                ) ?: return@Thread
+                if (config.haUrl.isBlank() && config.panelId == panel) config.setHaDeviceUrl(link, target)
+            } finally {
+                haLinkResolutionInFlight.set(false)
+            }
+        }.apply { isDaemon = true; name = "ha-device-link" }.start()
     }
 
     /** `https://<broker-host>` when the broker is a hostname (wildcard/SAN certs make HTTPS verifiable);
@@ -1198,7 +1227,9 @@ class MqttBridge(
         // device.name = the configurable friendly name; entity names are the capability ONLY, so HA
         // composes a clean `<domain>.<panel>_<cap>` entity_id without doubling the panel id.
         // configuration_url -> HA renders a "Visit" link on the device page (the panel's info UI).
-        val cu = if (!configUrl.isNullOrBlank()) ""","configuration_url":"$configUrl"""" else ""
+        val currentConfigUrl = configUrl()?.takeIf(String::isNotBlank)
+        lastPublishedConfigUrl = currentConfigUrl
+        val cu = currentConfigUrl?.let { ""","configuration_url":"${jsonEsc(it)}"""" } ?: ""
         val name = jsonEsc(config.friendlyName)
         val mfr = jsonEsc(config.manufacturer)
         val mdl = jsonEsc(config.model)
@@ -1833,3 +1864,9 @@ internal fun mqttIsHaOnline(payload: ByteArray): Boolean =
     String(payload, Charsets.UTF_8).trim().equals("online", ignoreCase = true)
 
 internal fun mqttDiscoveryRetain(payload: String): Boolean = payload.isEmpty()
+
+internal fun shouldRepublishDiscoveryAddress(
+    connected: Boolean,
+    lastPublishedUrl: String?,
+    currentUrl: String?,
+): Boolean = connected && lastPublishedUrl != currentUrl

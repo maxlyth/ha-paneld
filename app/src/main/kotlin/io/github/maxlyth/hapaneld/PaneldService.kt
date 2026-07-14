@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
+import android.net.LinkProperties
 import android.net.Network
 import android.os.Build
 import android.os.IBinder
@@ -186,7 +187,6 @@ class PaneldService : Service() {
     private lateinit var adb: AdbController
     private lateinit var power: PowerController
     private lateinit var profile: DeviceProfile
-    private var configUrl: String? = null
     // One-time-start guard for onStartCommand (see there for why). Reset in onDestroy.
     @Volatile private var started = false
 
@@ -291,7 +291,6 @@ class PaneldService : Service() {
         cpu = CpuController(profile)
         adb = AdbController(config)
         power = PowerController(this)
-        configUrl = localIpv4()?.let { "http://$it:${config.httpPort}/" }
 
         runtime = ServiceRuntimeOwner(
             initial = NetworkRuntime(buildMqtt(), MdnsAdvertiser(this, config)),
@@ -380,7 +379,7 @@ class PaneldService : Service() {
         // SMT1019 also uses SocketLedController for RGB but has no button-backlight node.
         profile.hasButtonBacklight,
         profile.appCanSu, profile.hasRecents,
-        autoBright, configUrl,
+        autoBright, { localIpv4()?.let { "http://$it:${config.httpPort}/" } },
         // When no broker is configured, find HA on the LAN via mDNS and default to its :1883.
         discoverHaIp = { mdns.discoverHaIp() },
         // HA's advertised base URL (from zeroconf) for the "Open in HA" device link.
@@ -759,6 +758,9 @@ class PaneldService : Service() {
                 Log.e(TAG, "built-in renderer startup preparation did not commit; leaving it retryable")
             }
             if (rendererResult == RendererPreparationCoordinator.Result.CLOSED) return@runtimeStart
+            // Resolve "Open in HA" from the prepared built-in renderer session even when MQTT is disabled.
+            // MqttBridge owns the compatibility fallback, but native HA URL/token always win.
+            activeRuntime.mqtt.maybeResolveHaLink()
             // Keep the SoC + network awake (screen still free to sleep) so Doze/suspend can't freeze the
             // MQTT reactor + keepalive into a half-open, unreachable connection. On by default; see keep_awake.
             runCatching { power.apply(config.keepAwake) }
@@ -960,10 +962,15 @@ class PaneldService : Service() {
             override fun onAvailable(network: Network) {
                 val observed = runtime.observe() ?: return
                 val target = observed.value.mqtt
+                target.refreshDiscoveryAddress()
                 if (target.state != "connected" && target.state != "disabled" && !isAuthRecoveryState(target.state)) {
                     Log.i(TAG, "network available — nudging MQTT reconnect")
                     runtime.reconnect(observed) { it.mqtt.reconnect() }
                 }
+            }
+
+            override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) {
+                runtime.observe()?.value?.mqtt?.refreshDiscoveryAddress()
             }
         }
         runCatching { cm.registerDefaultNetworkCallback(cb) }.onSuccess { netCallback = cb }

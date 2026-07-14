@@ -1,6 +1,7 @@
 package io.github.maxlyth.hapaneld
 
 import android.content.SharedPreferences
+import io.github.maxlyth.hapaneld.util.HaLink
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -176,6 +177,107 @@ class ConfigTransactionTest {
         assertTrue(editor.commit())
         assertEquals("new_panel", prefs.values["panel_id"])
         assertFalse(prefs.values.containsKey("ha_device_url"))
+    }
+
+    @Test fun nativeHaTargetChangeInvalidatesDeviceLinkResolvedOnAnotherServer() {
+        val prefs = fakePreferences(
+            initial = mapOf(
+                "ha_url" to "https://renderer-a.example",
+                "ha_device_url" to "https://mqtt-b.example/config/devices/device/stale-id",
+                "ha_link_at" to 1234L,
+                "ha_link_target" to HaLink.resolutionTarget("https://mqtt-b.example", "panel-id"),
+            ),
+        )
+        val config = Config(prefs.instance)
+
+        config.setHaConnection("https://renderer-c.example/", "native-token")
+
+        assertEquals("https://renderer-c.example", prefs.values["ha_url"])
+        assertFalse("a device id belongs to one HA instance", prefs.values.containsKey("ha_device_url"))
+        assertFalse("the replacement target must resolve immediately", prefs.values.containsKey("ha_link_at"))
+        assertFalse("the stale cache owner must be discarded", prefs.values.containsKey("ha_link_target"))
+    }
+
+    @Test fun equivalentNativeHaUrlPreservesResolvedDeviceLink() {
+        val existing = "https://ha.example/config/devices/device/current-id"
+        val prefs = fakePreferences(
+            initial = mapOf(
+                "ha_url" to "https://ha.example",
+                "ha_device_url" to existing,
+                "ha_link_at" to 1234L,
+                "ha_link_target" to HaLink.resolutionTarget("https://ha.example", "panel-id"),
+            ),
+        )
+        val config = Config(prefs.instance)
+
+        config.setHaConnection("https://ha.example/", "replacement-token")
+
+        assertEquals(existing, prefs.values["ha_device_url"])
+        assertEquals(1234L, prefs.values["ha_link_at"])
+        assertEquals(HaLink.resolutionTarget("https://ha.example", "panel-id"), prefs.values["ha_link_target"])
+    }
+
+    @Test fun openInHaNeverExposesDeviceIdOwnedByAnotherNativeServer() {
+        val panel = "wall-panel"
+        val native = "https://native-a.example/ha"
+        val staleDevice = "https://mqtt-b.example/config/devices/device/stale-id"
+        val prefs = fakePreferences(
+            initial = mapOf(
+                "panel_id" to panel,
+                "ha_url" to native,
+                "ha_base_url" to "https://companion-c.example",
+                "ha_device_url" to staleDevice,
+                "ha_link_target" to HaLink.resolutionTarget("https://mqtt-b.example", panel),
+                "ha_link_at" to 1234L,
+            ),
+        )
+        val config = Config(prefs.instance)
+
+        assertEquals("the native renderer target is safe while its device id resolves", native, config.haLinkUrl)
+        assertFalse(config.haDeviceLinkIsFresh(
+            HaLink.resolutionTarget(native, panel),
+            nowMs = 2000L,
+            ttlMs = 10_000L,
+        ))
+    }
+
+    @Test fun openInHaUsesDeviceIdOnlyWhenItsNativeTargetOwnsIt() {
+        val panel = "wall-panel"
+        val native = "https://native-a.example/ha"
+        val device = "$native/config/devices/device/current-id"
+        val prefs = fakePreferences(
+            initial = mapOf(
+                "panel_id" to panel,
+                "ha_url" to native,
+                "ha_device_url" to device,
+                "ha_link_target" to HaLink.resolutionTarget(native, panel),
+                "ha_link_at" to 1234L,
+            ),
+        )
+        val config = Config(prefs.instance)
+
+        assertEquals(device, config.haLinkUrl)
+        assertTrue(config.haDeviceLinkIsFresh(
+            HaLink.resolutionTarget("$native/", panel),
+            nowMs = 2000L,
+            ttlMs = 10_000L,
+        ))
+    }
+
+    @Test fun legacyDeviceLinkWithoutTargetOwnershipIsNeverFresh() {
+        val prefs = fakePreferences(
+            initial = mapOf(
+                "ha_device_url" to "https://old.example/config/devices/device/legacy-id",
+                "ha_link_at" to 1999L,
+            ),
+        )
+        val config = Config(prefs.instance)
+
+        assertFalse(config.haDeviceLinkIsFresh(
+            HaLink.resolutionTarget("https://old.example", "panel"),
+            nowMs = 2000L,
+            ttlMs = 10_000L,
+        ))
     }
 
     @Test fun importClearingCredentialIdentitiesClearsDependentSecretsInTheSameCommit() {

@@ -19,11 +19,13 @@ import java.net.URLEncoder
  * a one-click "Open in Home Assistant". HA's device-registry id is random (not derivable) and never reported
  * back over MQTT, so it must be read from HA's API.
  *
- * We authenticate with the panel's **MQTT username/password** (with the built-in Mosquitto add-on these are
- * usually a real HA account). The device id then comes from the WebSocket command
+ * The built-in renderer path authenticates with its existing HA access token. Older/external-renderer
+ * installations can fall back to the panel's **MQTT username/password** when those credentials are also
+ * a real HA account. The device id then comes from the WebSocket command
  * `config/entity_registry/list_for_display` — the SAME command the frontend uses to render entities for
  * **every** user, so it works for **non-admin** accounts too (unlike the admin-only `/api/template`). We find
- * this panel's own entity by its entity_id prefix (the device-name slug) and take its `di` (device id).
+ * this panel's own entity by its stable panel-id prefix, with its historical friendly-name prefix as a
+ * compatibility fallback, and take the entry's `di` (device id).
  *
  * Anonymous brokers and any failure (bad creds, MFA, a non-HA broker login, API unreachable, no matching
  * entity) return null and the link is hidden.
@@ -34,18 +36,38 @@ object HaLink {
     private const val FORM = "application/x-www-form-urlencoded"
 
     /** @param base HA origin from zeroconf, e.g. "https://hass.example". @return device-page URL or null. */
-    fun resolve(base: String, user: String, pass: String, deviceName: String): String? {
+    fun resolve(base: String, user: String, pass: String, deviceNames: Collection<String>): String? {
         if (user.isBlank() || pass.isBlank()) return null // anonymous broker → can't auth
         return runCatching {
             val token = login(base, user, pass) ?: return null
-            val slug = slug(deviceName)
-            val devId = deviceIdViaWs(base, token, slug) ?: run { Log.i(TAG, "no HA entity matching '$slug'"); return null }
+            val slugs = deviceNames.map(::slug).filter(String::isNotBlank).distinct()
+            val devId = deviceIdViaWs(base, token, slugs)
+                ?: run { Log.i(TAG, "no HA entity matching ${slugs.joinToString()}"); return null }
             // Build the link off HA's canonical internal_url (so logging in via the broker host still yields a
             // tidy hass.example link), falling back to the URL we logged in at.
             val linkBase = internalUrl(base, token) ?: base
             "${linkBase.trimEnd('/')}/config/devices/device/$devId".also { Log.i(TAG, "HA device link resolved") }
         }.onFailure { Log.i(TAG, "resolve failed: ${it.message}") }.getOrNull()
     }
+
+    /** Resolve through the built-in renderer's already-authenticated HA connection. The returned link is
+     * deliberately based on [base], not an unrelated advertised internal/external URL: the same native
+     * endpoint which rendered the panel is the authoritative server and reverse-proxy base path. */
+    fun resolveWithAccessToken(base: String, token: String, deviceNames: Collection<String>): String? {
+        if (base.isBlank() || token.isBlank()) return null
+        return runCatching {
+            val normalized = base.trim().trimEnd('/')
+            val slugs = deviceNames.map(::slug).filter(String::isNotBlank).distinct()
+            val devId = deviceIdViaWs(normalized, token, slugs)
+                ?: run { Log.i(TAG, "no HA entity matching ${slugs.joinToString()}"); return null }
+            "$normalized/config/devices/device/$devId".also { Log.i(TAG, "native HA device link resolved") }
+        }.onFailure { Log.i(TAG, "native resolve failed: ${it.message}") }.getOrNull()
+    }
+
+    /** Cache owner for a resolution. It includes panel identity because the HA device can change without
+     * the renderer endpoint changing (for example after reprovisioning with another panel id). */
+    internal fun resolutionTarget(base: String, panelId: String): String =
+        "${base.trim().trimEnd('/')}\u0000${slug(panelId)}"
 
     /** An access token plus its remaining lifetime in seconds (as HA's /auth/token reports `expires_in`). */
     data class TokenSet(val accessToken: String, val expiresInSec: Long)
@@ -119,10 +141,10 @@ object HaLink {
 
     /**
      * Read `config/entity_registry/list_for_display` over the WebSocket API (non-admin-accessible) and return
-     * the device id of the first entity whose entity_id object-part starts with [deviceSlug]. Each entry is
+     * the device id of the first entity whose entity_id object-part starts with a requested slug. Each entry is
      * compact: `ei` = entity_id, `di` = device id.
      */
-    private fun deviceIdViaWs(base: String, token: String, deviceSlug: String): String? = runBlocking {
+    private fun deviceIdViaWs(base: String, token: String, deviceSlugs: Collection<String>): String? = runBlocking {
         val wsUrl = base.replaceFirst("https://", "wss://").replaceFirst("http://", "ws://") + "/api/websocket"
         val client = HttpClient(CIO) { install(WebSockets) { maxFrameSize = Long.MAX_VALUE } }
         try {
@@ -135,7 +157,7 @@ object HaLink {
                 // Read frames until the id:1 result (skip any interleaved events/pongs).
                 repeat(8) {
                     val msg = (incoming.receive() as? Frame.Text)?.readText() ?: return@repeat
-                    if (msg.contains("\"id\":1")) { devId = matchDeviceId(msg, deviceSlug); return@webSocket }
+                    if (msg.contains("\"id\":1")) { devId = matchDeviceId(msg, deviceSlugs); return@webSocket }
                 }
             }
             devId
@@ -144,19 +166,26 @@ object HaLink {
         }
     }
 
-    /** Find the `di` of the first entity whose entity_id object-part starts with [deviceSlug]. */
-    private fun matchDeviceId(resp: String, deviceSlug: String): String? {
+    /** Find the `di` of the first entity whose entity_id object-part starts with one of [deviceSlugs]. */
+    internal fun matchDeviceId(resp: String, deviceSlugs: Collection<String>): String? {
         val result = JSONObject(resp).opt("result")
         val arr: JSONArray = when (result) {
             is JSONArray -> result
             is JSONObject -> result.optJSONArray("entities") ?: return null
             else -> return null
         }
-        for (i in 0 until arr.length()) {
-            val e = arr.optJSONObject(i) ?: continue
-            val di = e.optString("di").takeIf { it.isNotBlank() } ?: continue
-            val obj = e.optString("ei").substringAfter('.', "")
-            if (obj == deviceSlug || obj.startsWith(deviceSlug + "_")) return di
+        val entities = buildList {
+            for (i in 0 until arr.length()) {
+                val e = arr.optJSONObject(i) ?: continue
+                val di = e.optString("di").takeIf { it.isNotBlank() } ?: continue
+                val obj = e.optString("ei").substringAfter('.', "")
+                add(obj to di)
+            }
+        }
+        // Candidate order is meaningful: stable panel_id first, historical friendly-name fallback second.
+        for (slug in deviceSlugs) {
+            entities.firstOrNull { (obj, _) -> obj == slug || obj.startsWith(slug + "_") }
+                ?.let { return it.second }
         }
         return null
     }
