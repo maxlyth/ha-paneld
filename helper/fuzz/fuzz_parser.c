@@ -1,4 +1,4 @@
-// Internally authored sanitizer smoke harness for the hapaneld-helper parser and handlers.
+// Sanitizer smoke harness for the hapaneld-helper parser and handlers.
 //
 // It links the REAL capability + transport modules (helper/src/*.c, the same set the daemon ships —
 // see the Makefile's CORE_SRCS) together with test/sysexec_stub.c, so every byte of the parsing path

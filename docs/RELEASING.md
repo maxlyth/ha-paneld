@@ -23,7 +23,7 @@ A release is cut by pushing a `vX.Y.Z` tag; the [Release workflow](../.github/wo
 3. **Version bump** — `app/build.gradle.kts` `versionName` matches the tag and `versionCode` is incremented. (A higher `versionCode` lets panels `install -r` in place.) The **static release badge** in `README.md` (`img.shields.io/badge/release-vX.Y.Z-blue`) is bumped **automatically by the release workflow on stable tags** (it commits the change back to `main`) — no manual edit needed. It's static on purpose — the dynamic GitHub badge proved unreliable. RC tags don't move the badge.
 4. **Docs** — any new capability has a matching `docs/` entry (hardware page, recipe, etc.).
 5. **Build + sanity-test** on at least one real panel (`scripts/update-fleet.sh --apk <built.apk> -- <ip>`).
-6. **No-attribution / no-secrets gate** — the published history must contain no AI/Claude attribution and no keystore/credentials. Scan the pending commits before pushing.
+6. **Authorship / no-secrets gate** — verify that commit authors and trailers are intentional and that the published history contains no keystore or credentials. Scan the pending commits before pushing.
 
 ## Tag + publish
 

@@ -1,5 +1,5 @@
-// Host-native unit tests for the hapaneld-helper daemon's pure logic. Fuzzing proves the parser doesn't
-// CRASH on hostile input; these assert it produces the CORRECT result — the validators reject what
+// Host-native unit tests for the hapaneld-helper daemon's pure logic. The sanitizer smoke exercises
+// hostile parser inputs; these assert it produces the CORRECT result — the validators reject what
 // they should, the byte clamp and /proc parser compute the right values, dispatch routes verbs by
 // EXACT match (so SCREEN/SCREENCAP and OFF/OFFOFF can't collide), and the line accumulator reassembles
 // split reads and drops overlong lines. Linked against the real src/*.c modules + the sysexec stub.

@@ -1,6 +1,6 @@
 # hapaneld-helper sanitizer smoke harness
 
-This internally authored harness feeds malformed and adversarial bytes through the daemon's real command parser and handlers under AddressSanitizer, UndefinedBehaviorSanitizer, and LeakSanitizer. It is a reproducible developer smoke test, not independent security validation, a coverage-guided fuzzer, or a semantic correctness oracle.
+This harness feeds malformed and adversarial bytes through the daemon's real command parser and handlers under AddressSanitizer, UndefinedBehaviorSanitizer, and LeakSanitizer. It is a reproducible developer smoke test, not independent security validation, a coverage-guided fuzzer, or a semantic correctness oracle.
 
 ## Run
 

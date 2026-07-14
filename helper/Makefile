@@ -44,7 +44,7 @@ test: $(BUILD)/unit
 $(BUILD)/unit: $(CORE_SRCS) $(STUB) test/unit.c | $(BUILD)
 	$(CC) $(CFLAGS) -DHAPANELD_TEST -I$(SRC_DIR) $(CORE_SRCS) $(STUB) test/unit.c $(LDLIBS) -Wl,--wrap=open -Wl,--wrap=ioctl -o $@
 
-# App<->daemon verb-contract cross-check: every verb the app sends must be handled by dispatch.c.
+# App<->daemon verb-contract cross-check: every verb the app sends must exist in commands.def.
 contract:
 	./test/contract-check.sh
 

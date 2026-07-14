@@ -16,6 +16,7 @@
 # …except the shared debug keystore (not a secret — keeps CI build signatures stable; lives in gradle/).
 !gradle/debug.keystore
 keystore.properties
+/.devcontainer/post-create.local.sh
 /app/release/
 # Compiled helper binaries (built on demand via helper/build.sh).
 /helper/dist/

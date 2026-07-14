@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Build + run the internally authored helper sanitizer smoke harness.
+# Build + run the helper sanitizer smoke harness.
 #
 #   ./helper/fuzz/run.sh [iterations]      # default 100,000 deterministic random iters (+ corpus/bounds)
 #
