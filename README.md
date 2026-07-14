@@ -120,7 +120,7 @@ ha-paneld needs no system-signed install. Standard-Android capabilities (brightn
 
 ## Status & roadmap
 
-**0.9.2 release line:** the built-in renderer can reduce the Home Assistant entity stream that makes some low-powered panels slow or unresponsive. An initial exact-list mode enabled controlled testing; the current work can learn a dashboard's dependencies and lets the user review them before enabling the filter. The release also improves recovery from network and MQTT interruptions and prevents old work from resurfacing after settings changes or restarts. Full notes for every release are in [CHANGELOG.md](CHANGELOG.md).
+**Latest release — 0.9.2:** the built-in renderer can now learn which entities a dashboard uses and subscribe only to those states, reducing a major source of touch latency on low-powered panels. The automatic filter remains experimental and opt-in; this release also improves recovery from network and MQTT interruptions and prevents old work from resurfacing after settings changes or restarts. Full notes for every release are in [CHANGELOG.md](CHANGELOG.md).
 
 **Where it's heading** — the near-term direction is **fleet-scale operation** and **full remote provisioning**: bringing a new or factory-wiped panel all the way up with zero typing on the panel, and pushing config/updates to a whole fleet from one place. Other planned work includes MQTT TLS for self-signed brokers, an on-device scheduler, deeper performance tooling, and continued iteration on the HTTP UI. The full curated list is in **[docs/roadmap.md](docs/roadmap.md)**.
 

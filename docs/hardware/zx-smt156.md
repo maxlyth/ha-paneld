@@ -27,6 +27,6 @@ True backlight-off, reboot, density changes and other privileged controls remain
 
 ## Characterising missing hardware
 
-Diagnostics from 0.9.2-rc1 and later include a bounded `[hardware]` block containing input-device names, bound I²C/IIO names, thermal-zone types and likely relay-class entries. A follow-up `/api/v1/diag` report should reveal whether the vendor climate and relay functions use standard kernel surfaces. If those lists remain empty, the next useful evidence is the package name of the vendor MQTT service and its logs while toggling a relay or reading climate data.
+Diagnostics from 0.9.2 and later include a bounded `[hardware]` block containing input-device names, bound I²C/IIO names, thermal-zone types and likely relay-class entries. A follow-up `/api/v1/diag` report should reveal whether the vendor climate and relay functions use standard kernel surfaces. If those lists remain empty, the next useful evidence is the package name of the vendor MQTT service and its logs while toggling a relay or reading climate data.
 
 No public firmware source has been found for this model. Preserve a firmware/recovery backup before modifying the vendor installation and share only hardware metadata—not firmware blobs—in a public issue.

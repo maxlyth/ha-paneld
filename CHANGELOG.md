@@ -1,47 +1,14 @@
 # Changelog
 
-## v0.9.2-rc3 - 2026-07-14
+## v0.9.2 - 2026-07-14
 
-**Home Assistant dashboards that seemed too demanding for a low-powered wall panel can now be made far more responsive.** A large Home Assistant installation may send thousands of entity states and updates to a panel even when its dashboard displays only a small fraction of them. Users experience delayed taps and sluggish navigation and may reasonably conclude that the panel itself is too weak. The built-in renderer can now learn what the dashboard uses and ask Home Assistant to send only those states. Filtering remains opt-in during pre-release testing, but it no longer requires a hand-maintained entity list. For the smaller group already using a second Home Assistant instance, a filtering proxy or a similar workaround solely to reduce the panel's load, the built-in filter may allow that extra infrastructure to be retired.
-
-### Added
-
-- **The built-in renderer can learn which entities its dashboard actually needs** — ha-paneld examines the configured dashboard and observes the states it uses while running. A dedicated Entities page shows what was found, explains why each entity is included and allows manual additions or exclusions before filtering is enabled.
-- **Learned results survive app updates without making backups unnecessarily large** — ha-paneld retains the user's manual choices, discards old observations automatically and can rebuild the rest of the catalog when needed.
-- **Recognized dashboard rules that could hide required entities are surfaced before filtering** — broad or dynamic rules that ha-paneld recognizes are shown with their source and a suggested correction. Users can fix the dashboard, deliberately continue without the uncertain entities or leave filtering disabled; ignored warnings remain visible and can be restored later. Custom cards and behavior that automatic learning has not observed may still require manual review.
-
-### Changed
-
-- **Existing exact entity lists continue to work alongside automatic learning** — testers can keep a manually chosen list or switch to the new guided workflow. Filtering remains opt-in during pre-release testing.
-- **The unfinished remote-control page is withheld** — the Test tab and its screenshot tap-control workflow are hidden while the feature is reviewed for reliability. Existing screenshot, action, input and audio APIs remain available, and old `/test` bookmarks return to Dashboard.
-
-### Fixed
-
-- **“Open in Home Assistant” follows the panel's current server and device** — changing the Home Assistant server or panel identity no longer leaves the button pointing at an obsolete device or a device on the previous server.
-- **Display information no longer presents Android's base logical density as native DPI** — the logical density used to size the interface is labelled separately from the screen's physical pixels per inch, which is shown only for device profiles where it is known reliably.
-- **Helper-backed panels no longer claim that working privileged controls are unavailable** — diagnostics now distinguish direct app access to `su` from actions routed through the helper daemon, such as reboot and reload on the TPA10.
-
-## v0.9.2-rc2 - 2026-07-14
+**Home Assistant dashboards that seemed too demanding for a low-powered wall panel can now be made far more responsive.** A large Home Assistant installation may send thousands of entity states and updates to a panel even when its dashboard displays only a small fraction of them, causing delayed taps and sluggish navigation. The built-in renderer can now learn what the dashboard uses and ask Home Assistant to send only those states. Automatic filtering remains experimental, opt-in and exclusive to the built-in renderer, but it no longer requires a hand-maintained entity list. For installations using a second Home Assistant instance, filtering proxy or similar workaround solely to reduce panel load, the built-in filter may allow that extra infrastructure to be retired.
 
 ### Added
 
-- **Early entity filtering for built-in-renderer testers** — panels made sluggish by a large Home Assistant installation can be given an exact list of dashboard entities, preventing unrelated state updates from reaching the renderer. This first version is disabled by default and configured through `/api/v1/dashboard/entity-filter`; it does not yet discover entities automatically or provide a web setting. See [the tester instructions](docs/built-in-renderer.md#experimental-entity-filter-092).
-
-### Changed
-
-- **Installing the APK alone leaves setup incomplete** — It does not complete ha-paneld's permissions, startup, configuration or verification. Releases now lead with an installer that performs those steps and clearly label the APK as requiring manual setup, while preserving on-device sideloading.
-
-### Fixed
-
-- **Home Assistant now shows the screen's real power state** — on panels such as the TPA10, switching off the backlight could leave Home Assistant showing the screen as on because the stored brightness remained non-zero. ha-paneld now reads whether the backlight itself is powered. The updated app and helper daemon must be installed together on affected panels.
-- **Settings changes and restarts no longer mix old and new behaviour** — work already underway during a settings change, MQTT reconnect or service restart could finish using the previous configuration, allowing an old connection, dashboard, audio request or status update to reappear after the change. ha-paneld now discards anything that belongs to the previous setup once its replacement begins.
-- **Home Assistant no longer shows hardware changes that did not happen** — if an LED, relay or display command failed or was overtaken by a newer command, Home Assistant could still show the requested state even though the panel had not applied it. ha-paneld now publishes changes only after the hardware confirms them and prevents older commands from replacing newer ones.
-- **Interrupted maintenance tasks no longer look successful** — an upload, download, software installation or uninstall that stopped part-way could still be reported as complete, while a failed update check could leave an old result looking current. ha-paneld now keeps these failures visible and reports success only when the full operation finishes.
-
-## v0.9.2-rc1 - 2026-07-12
-
-### Added
-
+- **Automatic dashboard entity filtering for the built-in renderer** — ha-paneld examines the configured dashboard, observes the states it uses while running and builds a focused Home Assistant subscription. A dedicated Entities page shows what was found, explains why each entity is included and allows manual additions or exclusions before filtering is enabled.
+- **Potentially unsafe dashboard rules are identified before filtering** — broad or dynamic rules that ha-paneld recognizes are shown with their source and a suggested correction. Users can fix the dashboard, deliberately continue without the uncertain entities or leave filtering disabled; ignored warnings remain visible and can be restored later. Custom cards and behavior that automatic learning has not observed may still require manual review.
+- **Learned entity choices persist without making backups unnecessarily large** — ha-paneld retains the user's manual choices, discards old observations automatically and can rebuild the rest of the catalog when needed. Existing exact entity lists remain supported through `/api/v1/dashboard/entity-filter` for controlled or externally managed setups.
 - **Built-in dashboard performance is now measurable on every panel** — the Performance page and `/api/v1/perf` show how long a cold or warm dashboard load takes to become usable and how often the renderer has reloaded unexpectedly in the past 24 hours. These measurements do not require root and make it easier to see whether a renderer or configuration change actually helped.
 - **Two newly reported panel types now identify correctly** — preliminary profiles give the Amazon Echo Show 5 Gen 2 running LineageOS and the unbranded ZX-SMT156/RK3566_T cautious defaults based on their submitted diagnostics. Follow-up diagnostic reports also collect the remaining hardware details needed to refine support without a long manual adb session.
 - **Dashboard startup now shows what the panel is waiting for** — if networking is still coming up after a reboot, the built-in dashboard shows whether it is waiting for network services, a link, an address or a connection instead of looking broken. It learns the panel's typical startup time to give more useful progress on later boots and disappears entirely when networking is already ready.
@@ -49,13 +16,22 @@
 ### Changed
 
 - **Changes made on the panel now stay in sync with Home Assistant** — screen power, brightness, volume, relays, LEDs and proximity could become stale or briefly jump back after a local or external change. ha-paneld now reports the latest confirmed panel state and keeps pending updates in order.
+- **Installing the APK alone is clearly identified as incomplete setup** — releases now lead with the installer that handles permissions, startup, configuration and verification. The APK remains available for on-device sideloading and manual setups.
+- **The unfinished remote-control page is withheld** — the Test tab and its screenshot tap-control workflow are hidden while the feature is reviewed for reliability. Existing screenshot, action, input and audio APIs remain available, and old `/test` bookmarks return to Dashboard.
 
 ### Fixed
 
 - **Panels recover automatically from a temporary MQTT login rejection** — a rejected connection could leave a panel offline or start overlapping reconnect attempts. ha-paneld now starts a fresh connection and retries at a controlled pace, while diagnostics show what happened and when the next attempt will run.
 - **Home Assistant entities no longer become stale after a failed MQTT update** — a missed state update could block later changes or trigger repeated retries. ha-paneld now keeps the latest panel state, limits the retry rate and continues sending pending updates.
+- **Home Assistant now shows the screen's real power state** — on panels such as the TPA10, switching off the backlight could leave Home Assistant showing the screen as on because the stored brightness remained non-zero. ha-paneld now reads whether the backlight itself is powered. The updated app and helper daemon must be installed together on affected panels.
+- **Settings changes and restarts no longer mix old and new behaviour** — work already underway during a settings change, MQTT reconnect or service restart could finish using the previous configuration, allowing an old connection, dashboard, audio request or status update to reappear after the change. ha-paneld now discards anything that belongs to the previous setup once its replacement begins.
+- **Home Assistant no longer shows hardware changes that did not happen** — if an LED, relay or display command failed or was overtaken by a newer command, Home Assistant could still show the requested state even though the panel had not applied it. ha-paneld now publishes changes only after the hardware confirms them and prevents older commands from replacing newer ones.
+- **Interrupted maintenance tasks no longer look successful** — an upload, download, software installation or uninstall that stopped part-way could still be reported as complete, while a failed update check could leave an old result looking current. ha-paneld now keeps these failures visible and reports success only when the full operation finishes.
 - **A reboot no longer shows two connection errors before the dashboard appears** — if networking was not ready, the built-in dashboard could first show Chromium's offline error and then Home Assistant's 60-second connection-failed countdown. It now waits for the network and opens the dashboard directly; genuine later failures still retry.
 - **“Silence boot chime” now also silences startup notification sounds** — on panels with separate ring and notification volumes, startup could still play a notification sound even when Silence boot chime was enabled. The setting now mutes both streams and uses a silent notification channel.
+- **“Open in Home Assistant” follows the panel's current server and device** — changing the Home Assistant server or panel identity no longer leaves the button pointing at an obsolete device or a device on the previous server.
+- **Display information no longer presents Android's base logical density as native DPI** — the logical density used to size the interface is labelled separately from the screen's physical pixels per inch, which is shown only for device profiles where it is known reliably.
+- **Helper-backed panels no longer claim that working privileged controls are unavailable** — diagnostics now distinguish direct app access to `su` from actions routed through the helper daemon, such as reboot and reload on the TPA10.
 
 ## v0.9.1 - 2026-07-12
 

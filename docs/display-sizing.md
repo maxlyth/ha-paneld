@@ -3,7 +3,7 @@
 A Home Assistant dashboard designed in a desktop browser often renders at the wrong size on an Android wall panel. ha-paneld exposes two controls — **density (DPI)** and **text size (font scale)** — on the on-device config page so you can bring a panel's layout and text back in line with the desktop. You usually need both, and good values are a per-install preference rather than a per-model constant.
 
 > [!WARNING]
-> **Experimental — pre-release.** The control works, but the *right* values for each panel aren't dialled in yet. Treat the density/text-size controls as something to experiment with, not a finished feature. Feedback on good per-panel values is welcome.
+> **Experimental.** The control works, but the *right* values for each panel aren't dialled in yet. Treat the density/text-size controls as something to experiment with, not a finished feature. Feedback on good per-panel values is welcome.
 
 ## Using it
 
