@@ -3029,6 +3029,13 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
                 return CompanionRestore.TargetInfo(uid, context)
             }
 
+            override fun prepare(plan: CompanionRestore.Plan): CompanionRestore.Preparation? {
+                if (plan.packageName !in CompanionInstaller.SUPPORTED_PACKAGES ||
+                    !AndroidInput.isPackage(plan.packageName)
+                ) return null
+                return io.github.maxlyth.hapaneld.backup.CompanionDatabasePreparation.prepare(plan, cacheDir)
+            }
+
             override fun forceStop(packageName: String): Boolean = Su.run("am force-stop $packageName")
 
             override fun stage(packageName: String, file: CompanionRestore.FilePayload): Boolean {
@@ -3047,43 +3054,10 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
                 }
             }
 
-            override fun prepare(plan: CompanionRestore.Plan): CompanionRestore.StagedPreparation? {
-                if (plan.packageName !in CompanionInstaller.SUPPORTED_PACKAGES ||
-                    !AndroidInput.isPackage(plan.packageName)
-                ) return null
-                val unchanged = CompanionRestore.StagedPreparation.unchanged(plan)
-                if (plan.files.none { it.relativePath == CompanionRestore.DATABASE_FILE }) return unchanged
-
-                val db = "/data/data/${plan.packageName}/${CompanionRestore.DATABASE_FILE}.hapaneld-restore"
-                val script = buildString {
-                    appendLine("set -eu")
-                    appendLine("db='$db'")
-                    // The update runs only against the staged copy. Checkpoint its WAL before removing
-                    // the staged sidecars, then prove both integrity and the repair postcondition.
-                    appendLine("out=\"\$(sqlite3 \"\$db\" \"${CompanionDb.INTERNAL_URL_REPAIR_SQL} SELECT changes(); PRAGMA wal_checkpoint(TRUNCATE);\")\"")
-                    appendLine("repaired=\"\$(printf '%s\\n' \"\$out\" | sed -n '1p')\"")
-                    appendLine("case \"\$repaired\" in ''|*[!0-9]*) exit 31;; esac")
-                    appendLine("remaining=\"\$(sqlite3 \"\$db\" \"${CompanionDb.INTERNAL_URL_REPAIR_REMAINING_SQL}\")\"")
-                    appendLine("[ \"\$remaining\" = 0 ]")
-                    appendLine("integrity=\"\$(sqlite3 \"\$db\" 'PRAGMA quick_check(1);')\"")
-                    appendLine("[ \"\$integrity\" = ok ]")
-                    appendLine("rm -f \"\$db-wal\" \"\$db-shm\"")
-                    appendLine("size=\"\$(stat -c %s \"\$db\")\"")
-                    appendLine("case \"\$size\" in ''|0|*[!0-9]*) exit 32;; esac")
-                    appendLine("printf 'repaired=%s\\nsize=%s\\n' \"\$repaired\" \"\$size\"")
-                }
-                val prepared = Su.runOutputLong(script, 60_000)?.let(CompanionRestore::parseStagedDatabaseResult)
-                    ?: return null
-                return unchanged.copy(
-                    fileSizes = unchanged.fileSizes + (CompanionRestore.DATABASE_FILE to prepared.finalSize),
-                    repairedInternalUrls = prepared.repairedInternalUrls,
-                )
-            }
-
             override fun commit(
                 plan: CompanionRestore.Plan,
                 target: CompanionRestore.TargetInfo,
-                preparation: CompanionRestore.StagedPreparation,
+                preparation: CompanionRestore.Preparation,
             ): Boolean {
                 val script = runCatching {
                     File.createTempFile("companion-commit-", ".sh", cacheDir).apply {
@@ -3124,7 +3098,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
     private fun companionCommitScript(
         plan: CompanionRestore.Plan,
         target: CompanionRestore.TargetInfo,
-        preparation: CompanionRestore.StagedPreparation,
+        preparation: CompanionRestore.Preparation,
     ): String {
         val base = "/data/data/${plan.packageName}"
         val livePaths = plan.files.map { it.relativePath }.toMutableList()

@@ -48,43 +48,28 @@ object CompanionRestore {
 
     data class TargetInfo(val uid: String, val selinuxContext: String)
 
-    /** Exact staged sizes after any approved preparation mutation. */
-    data class StagedPreparation(
-        val fileSizes: Map<String, Long>,
+    /** Payloads after bounded local SQLite validation and any approved preparation mutation. */
+    data class Preparation(
+        val files: List<FilePayload>,
         val repairedInternalUrls: Int = 0,
     ) {
+        val fileSizes: Map<String, Long>
+            get() = files.associate { it.relativePath to it.bytes.size.toLong() }
+
         companion object {
-            fun unchanged(plan: Plan) = StagedPreparation(
-                plan.files.associate { it.relativePath to it.bytes.size.toLong() },
-            )
+            fun unchanged(plan: Plan) = Preparation(plan.files)
         }
-    }
-
-    /** Result marker emitted only after the staged database repair and validation have succeeded. */
-    data class StagedDatabaseResult(val repairedInternalUrls: Int, val finalSize: Long)
-
-    fun parseStagedDatabaseResult(output: String): StagedDatabaseResult? {
-        val values = LinkedHashMap<String, String>()
-        for (line in output.lineSequence().map(String::trim).filter(String::isNotEmpty)) {
-            val key = line.substringBefore('=', missingDelimiterValue = "")
-            val value = line.substringAfter('=', missingDelimiterValue = "")
-            if (key !in setOf("repaired", "size") || value.isEmpty() || values.put(key, value) != null) return null
-        }
-        if (values.keys != setOf("repaired", "size")) return null
-        val repaired = values["repaired"]?.toIntOrNull()?.takeIf { it >= 0 } ?: return null
-        val size = values["size"]?.toLongOrNull()?.takeIf { it > 0 } ?: return null
-        return StagedDatabaseResult(repaired, size)
     }
 
     interface Executor {
         fun inspectTarget(packageName: String): TargetInfo?
+        /** Validate and, when safe, repair the decoded payloads before the target app is stopped. */
+        fun prepare(plan: Plan): Preparation?
         fun forceStop(packageName: String): Boolean
         /** Write one payload to a non-live staging path. False must leave the live destination untouched. */
         fun stage(packageName: String, file: FilePayload): Boolean
-        /** Validate and, when safe, repair staged data before the live transaction begins. */
-        fun prepare(plan: Plan): StagedPreparation?
         /** Commit all staged files. A false result means rollback was attempted before returning. */
-        fun commit(plan: Plan, target: TargetInfo, preparation: StagedPreparation): Boolean
+        fun commit(plan: Plan, target: TargetInfo, preparation: Preparation): Boolean
         fun discard(plan: Plan): Boolean
         fun relaunch(packageName: String): Boolean
     }
@@ -101,23 +86,22 @@ object CompanionRestore {
     fun execute(plan: Plan, executor: Executor): Result {
         val target = executor.inspectTarget(plan.packageName)
             ?: return Result(false, "could not read Companion owner or SELinux context")
+        val preparation = executor.prepare(plan)
+        val expectedFiles = plan.files.map { it.relativePath }
+        if (preparation == null || preparation.files.map { it.relativePath } != expectedFiles ||
+            preparation.files.any { it.bytes.isEmpty() } || preparation.repairedInternalUrls < 0
+        ) {
+            executor.discard(plan)
+            return Result(false, "failed to validate or prepare Companion files")
+        }
         if (!executor.forceStop(plan.packageName)) return Result(false, "could not stop Companion")
 
-        for (file in plan.files) {
+        for (file in preparation.files) {
             if (!executor.stage(plan.packageName, file)) {
                 executor.discard(plan)
                 val relaunched = executor.relaunch(plan.packageName)
                 return Result(false, "failed to stage ${file.relativePath}", relaunched = relaunched)
             }
-        }
-        val preparation = executor.prepare(plan)
-        val expectedFiles = plan.files.mapTo(linkedSetOf()) { it.relativePath }
-        if (preparation == null || preparation.fileSizes.keys != expectedFiles ||
-            preparation.fileSizes.values.any { it <= 0 } || preparation.repairedInternalUrls < 0
-        ) {
-            executor.discard(plan)
-            val relaunched = executor.relaunch(plan.packageName)
-            return Result(false, "failed to validate or prepare staged Companion files", relaunched = relaunched)
         }
         if (!executor.commit(plan, target, preparation)) {
             executor.discard(plan)

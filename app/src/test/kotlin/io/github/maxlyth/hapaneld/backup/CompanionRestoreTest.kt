@@ -43,21 +43,6 @@ class CompanionRestoreTest {
         assertTrue(CompanionRestore.plan(pkg, listOf(encoded("databases/HomeAssistantDB", "")), setOf(pkg)) is CompanionRestore.PlanResult.Invalid)
     }
 
-    @Test fun stagedDatabaseResultRequiresExactNonNegativeMarkers() {
-        assertEquals(
-            CompanionRestore.StagedDatabaseResult(2, 4096),
-            CompanionRestore.parseStagedDatabaseResult("repaired=2\nsize=4096\n"),
-        )
-        assertEquals(
-            CompanionRestore.StagedDatabaseResult(0, 1),
-            CompanionRestore.parseStagedDatabaseResult(" size=1 \n repaired=0 "),
-        )
-        listOf(
-            "", "repaired=-1\nsize=4096", "repaired=1\nsize=0", "repaired=x\nsize=1",
-            "repaired=1", "size=1", "repaired=1\nrepaired=1\nsize=1", "repaired=1\nsize=1\nextra=1",
-        ).forEach { assertEquals("must reject $it", null, CompanionRestore.parseStagedDatabaseResult(it)) }
-    }
-
     private class FakeExecutor(
         private val failStage: String? = null,
         private val prepareOk: Boolean = true,
@@ -67,27 +52,40 @@ class CompanionRestoreTest {
         private val relaunchOk: Boolean = true,
     ) : CompanionRestore.Executor {
         val events = mutableListOf<String>()
+        val stagedSizes = mutableMapOf<String, Int>()
         override fun inspectTarget(packageName: String): CompanionRestore.TargetInfo {
             events += "inspect"
             return CompanionRestore.TargetInfo("10042", "u:object_r:app_data_file:s0:c1,c2")
         }
+        override fun prepare(plan: CompanionRestore.Plan): CompanionRestore.Preparation? {
+            events += "prepare"
+            if (!prepareOk) return null
+            val files = plan.files.map { file ->
+                val size = preparedSizes?.get(file.relativePath) ?: file.bytes.size.toLong()
+                file.copy(bytes = ByteArray(size.toInt().coerceAtLeast(0)))
+            }
+            if (preparedSizes != null) {
+                for ((path, size) in preparedSizes) {
+                    if (path !in files.map { it.relativePath }) {
+                        return CompanionRestore.Preparation(
+                            files + CompanionRestore.FilePayload(path, ByteArray(size.toInt().coerceAtLeast(0))),
+                            repairedInternalUrls,
+                        )
+                    }
+                }
+            }
+            return CompanionRestore.Preparation(files, repairedInternalUrls)
+        }
         override fun forceStop(packageName: String): Boolean { events += "stop"; return true }
         override fun stage(packageName: String, file: CompanionRestore.FilePayload): Boolean {
             events += "stage:${file.relativePath}"
+            stagedSizes[file.relativePath] = file.bytes.size
             return file.relativePath != failStage
-        }
-        override fun prepare(plan: CompanionRestore.Plan): CompanionRestore.StagedPreparation? {
-            events += "prepare"
-            if (!prepareOk) return null
-            return CompanionRestore.StagedPreparation(
-                preparedSizes ?: plan.files.associate { it.relativePath to it.bytes.size.toLong() },
-                repairedInternalUrls,
-            )
         }
         override fun commit(
             plan: CompanionRestore.Plan,
             target: CompanionRestore.TargetInfo,
-            preparation: CompanionRestore.StagedPreparation,
+            preparation: CompanionRestore.Preparation,
         ): Boolean {
             events += "commit"
             return commitOk
@@ -107,12 +105,26 @@ class CompanionRestoreTest {
         assertEquals("relaunch", executor.events.last())
     }
 
+    @Test fun preparedDatabaseBytesAreStagedBeforeTheTargetIsCommitted() {
+        val original = encoded("databases/HomeAssistantDB", "tiny")
+        val executor = FakeExecutor(preparedSizes = mapOf("databases/HomeAssistantDB" to 8192))
+
+        val result = CompanionRestore.execute(validPlan(original), executor)
+
+        assertTrue(result.ok)
+        assertEquals(
+            listOf("inspect", "prepare", "stop", "stage:databases/HomeAssistantDB", "commit", "relaunch"),
+            executor.events,
+        )
+        assertEquals(8192, executor.stagedSizes["databases/HomeAssistantDB"])
+    }
+
     @Test fun commitFailureIsReportedAndRelaunchAttempted() {
         val executor = FakeExecutor(commitOk = false)
         val result = CompanionRestore.execute(validPlan(encoded("databases/HomeAssistantDB")), executor)
         assertFalse(result.ok)
         assertEquals(null, result.committedFiles)
-        assertEquals(listOf("inspect", "stop", "stage:databases/HomeAssistantDB", "prepare", "commit", "discard", "relaunch"), executor.events)
+        assertEquals(listOf("inspect", "prepare", "stop", "stage:databases/HomeAssistantDB", "commit", "discard", "relaunch"), executor.events)
     }
 
     @Test fun failedStagedDatabasePreparationCannotReachLiveCommit() {
@@ -122,7 +134,7 @@ class CompanionRestoreTest {
         assertEquals(0, result.committedFiles)
         assertFalse("commit must not run after staged validation fails", "commit" in executor.events)
         assertEquals(
-            listOf("inspect", "stop", "stage:databases/HomeAssistantDB", "prepare", "discard", "relaunch"),
+            listOf("inspect", "prepare", "discard"),
             executor.events,
         )
     }
