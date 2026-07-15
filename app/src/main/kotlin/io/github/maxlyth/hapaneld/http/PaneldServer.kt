@@ -2940,10 +2940,47 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
                 }
             }
 
-            override fun commit(plan: CompanionRestore.Plan, target: CompanionRestore.TargetInfo): Boolean {
+            override fun prepare(plan: CompanionRestore.Plan): CompanionRestore.StagedPreparation? {
+                if (plan.packageName !in CompanionInstaller.SUPPORTED_PACKAGES ||
+                    !AndroidInput.isPackage(plan.packageName)
+                ) return null
+                val unchanged = CompanionRestore.StagedPreparation.unchanged(plan)
+                if (plan.files.none { it.relativePath == CompanionRestore.DATABASE_FILE }) return unchanged
+
+                val db = "/data/data/${plan.packageName}/${CompanionRestore.DATABASE_FILE}.hapaneld-restore"
+                val script = buildString {
+                    appendLine("set -eu")
+                    appendLine("db='$db'")
+                    // The update runs only against the staged copy. Checkpoint its WAL before removing
+                    // the staged sidecars, then prove both integrity and the repair postcondition.
+                    appendLine("out=\"\$(sqlite3 \"\$db\" \"${CompanionDb.INTERNAL_URL_REPAIR_SQL} SELECT changes(); PRAGMA wal_checkpoint(TRUNCATE);\")\"")
+                    appendLine("repaired=\"\$(printf '%s\\n' \"\$out\" | sed -n '1p')\"")
+                    appendLine("case \"\$repaired\" in ''|*[!0-9]*) exit 31;; esac")
+                    appendLine("remaining=\"\$(sqlite3 \"\$db\" \"${CompanionDb.INTERNAL_URL_REPAIR_REMAINING_SQL}\")\"")
+                    appendLine("[ \"\$remaining\" = 0 ]")
+                    appendLine("integrity=\"\$(sqlite3 \"\$db\" 'PRAGMA quick_check(1);')\"")
+                    appendLine("[ \"\$integrity\" = ok ]")
+                    appendLine("rm -f \"\$db-wal\" \"\$db-shm\"")
+                    appendLine("size=\"\$(stat -c %s \"\$db\")\"")
+                    appendLine("case \"\$size\" in ''|0|*[!0-9]*) exit 32;; esac")
+                    appendLine("printf 'repaired=%s\\nsize=%s\\n' \"\$repaired\" \"\$size\"")
+                }
+                val prepared = Su.runOutputLong(script, 60_000)?.let(CompanionRestore::parseStagedDatabaseResult)
+                    ?: return null
+                return unchanged.copy(
+                    fileSizes = unchanged.fileSizes + (CompanionRestore.DATABASE_FILE to prepared.finalSize),
+                    repairedInternalUrls = prepared.repairedInternalUrls,
+                )
+            }
+
+            override fun commit(
+                plan: CompanionRestore.Plan,
+                target: CompanionRestore.TargetInfo,
+                preparation: CompanionRestore.StagedPreparation,
+            ): Boolean {
                 val script = runCatching {
                     File.createTempFile("companion-commit-", ".sh", cacheDir).apply {
-                        writeText(companionCommitScript(plan, target))
+                        writeText(companionCommitScript(plan, target, preparation))
                     }
                 }.getOrNull() ?: return false
                 return try {
@@ -2954,8 +2991,11 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             }
 
             override fun discard(plan: CompanionRestore.Plan): Boolean {
-                val paths = plan.files.joinToString(" ") {
-                    "/data/data/${plan.packageName}/${it.relativePath}.hapaneld-restore"
+                val paths = plan.files.flatMap {
+                    val staged = "/data/data/${plan.packageName}/${it.relativePath}.hapaneld-restore"
+                    listOf(staged, "$staged-wal", "$staged-shm")
+                }.joinToString(" ") {
+                    it
                 }
                 return Su.run("rm -f $paths")
             }
@@ -2964,17 +3004,24 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
                 Su.run("monkey -p $packageName -c android.intent.category.LAUNCHER 1")
         })
         return if (result.ok) {
-            "${result.message} (${result.committedFiles} files, owner/context restored)"
+            val repaired = if (result.repairedInternalUrls > 0) {
+                ", ${result.repairedInternalUrls} blank internal URL${if (result.repairedInternalUrls == 1) "" else "s"} repaired"
+            } else ""
+            "${result.message} (${result.committedFiles} files, owner/context restored$repaired)"
         } else {
             "error: ${result.message}; committed=${result.committedFiles ?: "unknown"}; relaunched=${result.relaunched}"
         }
     }
 
     /** Root-side commit script: keep old live files until every staged write exists, then roll back on any failed effect. */
-    private fun companionCommitScript(plan: CompanionRestore.Plan, target: CompanionRestore.TargetInfo): String {
+    private fun companionCommitScript(
+        plan: CompanionRestore.Plan,
+        target: CompanionRestore.TargetInfo,
+        preparation: CompanionRestore.StagedPreparation,
+    ): String {
         val base = "/data/data/${plan.packageName}"
         val livePaths = plan.files.map { it.relativePath }.toMutableList()
-        if ("databases/HomeAssistantDB" in livePaths) {
+        if (CompanionRestore.DATABASE_FILE in livePaths) {
             livePaths += "databases/HomeAssistantDB-wal"
             livePaths += "databases/HomeAssistantDB-shm"
         }
@@ -2989,7 +3036,10 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             livePaths.forEachIndexed { index, rel ->
                 appendLine("  if [ -f \"\$rollback/$index\" ]; then cp -p \"\$rollback/$index\" \"\$base/$rel\"; elif [ -f \"\$rollback/$index.missing\" ]; then rm -f \"\$base/$rel\"; fi")
             }
-            plan.files.forEach { file -> appendLine("  rm -f \"\$base/${file.relativePath}.hapaneld-restore\"") }
+            plan.files.forEach { file ->
+                val staged = "\$base/${file.relativePath}.hapaneld-restore"
+                appendLine("  rm -f \"$staged\" \"$staged-wal\" \"$staged-shm\"")
+            }
             appendLine("  rm -rf \"\$rollback\"")
             appendLine("  trap - EXIT")
             appendLine("  exit \"\$rc\"")
@@ -2999,10 +3049,13 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
                 appendLine("if [ -f \"\$base/$rel\" ]; then cp -p \"\$base/$rel\" \"\$rollback/$index\"; else : > \"\$rollback/$index.missing\"; fi")
             }
             plan.files.forEach { file ->
-                appendLine("[ \"\$(stat -c %s \"\$base/${file.relativePath}.hapaneld-restore\")\" = \"${file.bytes.size}\" ]")
+                val expected = preparation.fileSizes.getValue(file.relativePath)
+                val staged = "\$base/${file.relativePath}.hapaneld-restore"
+                appendLine("[ \"\$(stat -c %s \"$staged\")\" = \"$expected\" ]")
+                appendLine("[ ! -e \"$staged-wal\" ] && [ ! -e \"$staged-shm\" ]")
             }
             plan.files.forEach { file -> appendLine("mv \"\$base/${file.relativePath}.hapaneld-restore\" \"\$base/${file.relativePath}\"") }
-            if ("databases/HomeAssistantDB" in livePaths) {
+            if (CompanionRestore.DATABASE_FILE in livePaths) {
                 appendLine("rm -f \"\$base/databases/HomeAssistantDB-wal\" \"\$base/databases/HomeAssistantDB-shm\"")
             }
             val restored = plan.files.joinToString(" ") { "\"\$base/${it.relativePath}\"" }

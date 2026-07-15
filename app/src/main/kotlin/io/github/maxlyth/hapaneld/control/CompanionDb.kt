@@ -14,8 +14,8 @@ import kotlinx.coroutines.withContext
  * matched the panel's Wi-Fi) makes the Companion request a host-less URL, which HA 2026.7 (new aiohttp)
  * rejects with a full-screen **"Missing 'Host' header in request."** — blanking the dashboard on the
  * whole restored fleet. This detects that state (a panel-health warning) and offers a one-tap repair:
- * copy the row's `external_url` into the empty `internal_url`. The same repair is what the planned
- * backup/restore path should run after writing back a captured DB.
+ * copy the row's `external_url` into the empty `internal_url`. Backup restore applies the same policy
+ * to its staged database and verifies it before the live transaction begins.
  *
  * Root-only (the DB is app-private); a safe no-op on panels without su or without the Companion. The
  * parse + decision logic is pure ([parseServers] / [needsRepair]) and unit-tested; only the
@@ -33,8 +33,13 @@ object CompanionDb {
         "SELECT id||char(31)||coalesce(internal_url,'')||char(31)||coalesce(external_url,'') FROM servers;"
 
     // Copy external_url into every blank internal_url. Mirrors [needsRepair] so a re-read confirms zero left.
-    private const val REPAIR_SQL =
+    internal const val INTERNAL_URL_REPAIR_SQL =
         "UPDATE servers SET internal_url=external_url " +
+            "WHERE (internal_url IS NULL OR trim(internal_url)='') " +
+            "AND external_url IS NOT NULL AND trim(external_url)<>'';"
+
+    internal const val INTERNAL_URL_REPAIR_REMAINING_SQL =
+        "SELECT count(*) FROM servers " +
             "WHERE (internal_url IS NULL OR trim(internal_url)='') " +
             "AND external_url IS NOT NULL AND trim(external_url)<>'';"
 
@@ -178,7 +183,7 @@ object CompanionDb {
         val script = buildString {
             append("am force-stop $pkg; ")
             append("""U=$(stat -c %u "/data/data/$pkg" 2>/dev/null); """)
-            append("""sqlite3 "$db" "$REPAIR_SQL PRAGMA wal_checkpoint(TRUNCATE);" 2>&1; """)
+            append("""sqlite3 "$db" "$INTERNAL_URL_REPAIR_SQL PRAGMA wal_checkpoint(TRUNCATE);" 2>&1; """)
             append("""rm -f "$db-wal" "$db-shm" 2>/dev/null; """)
             append("""[ -n "${'$'}U" ] && { chown "${'$'}U:${'$'}U" "$db" 2>/dev/null; restorecon "$db" 2>/dev/null; }; """)
             append("monkey -p $pkg -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1; echo ok")
