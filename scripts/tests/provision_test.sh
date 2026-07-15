@@ -84,6 +84,13 @@ assert_not_contains() {
   else pass "$description"; fi
 }
 
+assert_log_contains() {
+  pattern="$1"
+  description="$2"
+  if grep -Eqi -- "$pattern" "$MOCK_CALL_LOG"; then pass "$description"
+  else fail_test "$description (missing call pattern: $pattern)"; fi
+}
+
 APK="$TMP/ha-paneld.apk"
 printf 'test apk\n' > "$APK"
 
@@ -115,16 +122,57 @@ if grep -Eq '^adb .* install( |$)' "$MOCK_CALL_LOG"; then pass "successful insta
 else fail_test "successful install invokes adb install"; fi
 assert_contains 'provisioned' "successful install reports completion"
 
+# A panel without the manager must receive the exact pinned APK, verify it before installation, and
+# start the official service script. The fake checksum tool makes this deterministic without network
+# access while the call log proves the security-sensitive ordering.
+run_provision "$MOCK_TARGET" --apk "$APK" --shizuku --no-tame
+assert_success "missing Shizuku manager is bootstrapped"
+assert_log_contains 'curl .*shizuku-v13\.6\.0\.r1086\.2650830c-release\.apk.*-o .*/shizuku\.apk' "Shizuku bootstrap downloads the curated manager"
+assert_log_contains '^sha256sum .*/shizuku\.apk$' "Shizuku bootstrap verifies the downloaded manager"
+assert_log_contains '^adb .* install -r .*/shizuku\.apk$' "Shizuku bootstrap installs the verified manager"
+download_line="$(grep -nE 'curl .*shizuku-v13\.6\.0\.r1086\.2650830c-release\.apk' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
+checksum_line="$(grep -nE '^sha256sum .*/shizuku\.apk$' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
+install_line="$(grep -nE '^adb .* install -r .*/shizuku\.apk$' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
+if [ -n "$download_line" ] && [ -n "$checksum_line" ] && [ -n "$install_line" ] && \
+   [ "$download_line" -lt "$checksum_line" ] && [ "$checksum_line" -lt "$install_line" ]; then
+  pass "Shizuku manager is downloaded, checksummed, then installed in order"
+else
+  fail_test "Shizuku manager is downloaded, checksummed, then installed in order"
+fi
+assert_log_contains '^adb .* shell monkey -p moe\.shizuku\.privileged\.api 1$' "Shizuku bootstrap launches the manager to materialise start.sh"
+assert_log_contains '^adb .* shell test -f .*/moe\.shizuku\.privileged\.api/start\.sh$' "Shizuku bootstrap waits for start.sh"
+assert_log_contains '^adb .* shell sh .*/moe\.shizuku\.privileged\.api/start\.sh$' "Shizuku bootstrap rearms the service through start.sh"
+assert_log_contains '^adb .* shell pm grant moe\.shizuku\.privileged\.api android\.permission\.WRITE_SECURE_SETTINGS$' "Shizuku bootstrap enables supported restart setup"
+
+# A corrupt or substituted download must stop before the manager package or service is touched.
+MOCK_SHIZUKU_DOWNLOAD_SHA=0000000000000000000000000000000000000000000000000000000000000000 \
+  run_provision "$MOCK_TARGET" --apk "$APK" --shizuku --no-tame
+assert_failure "Shizuku checksum mismatch returns nonzero"
+assert_contains 'Shizuku download checksum mismatch' "Shizuku checksum failure names the integrity problem"
+assert_contains 'Nothing was installed' "Shizuku checksum failure states the safe outcome"
+assert_not_contains '^adb .* install -r .*/shizuku\.apk$' "$MOCK_CALL_LOG" "checksum failure blocks Shizuku installation"
+assert_not_contains '^adb .* shell (monkey -p moe\.shizuku|sh .*/moe\.shizuku.*start\.sh|pm grant moe\.shizuku)' "$MOCK_CALL_LOG" "checksum failure blocks Shizuku launch and rearm"
+
 # Re-running --shizuku against the trusted curated manager (or a trusted newer manager) must not try
 # to downgrade it. The manager stays locally approved; provisioning only restarts its service.
 MOCK_SHIZUKU_VERSION_CODE=1086 MOCK_SHIZUKU_TRUSTED=1 run_provision "$MOCK_TARGET" --apk "$APK" --shizuku --no-tame
 assert_success "trusted current Shizuku provisioning is idempotent"
 assert_not_contains 'install -r .*shizuku\.apk' "$MOCK_CALL_LOG" "current Shizuku manager is not reinstalled"
+assert_log_contains '^adb .* shell sh .*/moe\.shizuku\.privileged\.api/start\.sh$' "current trusted Shizuku is rearmed through start.sh"
 assert_contains 'Configure.*toolbar overflow menu.*Enhanced access.*Enable' "Shizuku approval names the actual on-panel path"
 
 MOCK_SHIZUKU_VERSION_CODE=1087 MOCK_SHIZUKU_TRUSTED=1 run_provision "$MOCK_TARGET" --apk "$APK" --shizuku --no-tame
 assert_success "trusted newer Shizuku provisioning is idempotent"
 assert_not_contains 'install -r .*shizuku\.apk' "$MOCK_CALL_LOG" "newer Shizuku manager is not downgraded"
+
+# A same-or-newer manager with an unverifiable signer must fail closed and tell the operator how to
+# recover. In particular, it must not download over or start an untrusted package.
+MOCK_SHIZUKU_VERSION_CODE=1087 MOCK_SHIZUKU_TRUSTED=0 run_provision "$MOCK_TARGET" --apk "$APK" --shizuku --no-tame
+assert_failure "untrusted installed Shizuku manager fails closed"
+assert_contains 'installed Shizuku manager cannot be trusted' "untrusted Shizuku failure names the trust boundary"
+assert_contains 'remove the manager and re-run' "untrusted Shizuku failure gives a recovery path"
+assert_not_contains 'shizuku-v13\.6\.0\.r1086.*-o .*/shizuku\.apk' "$MOCK_CALL_LOG" "untrusted newer Shizuku is not overwritten by a download"
+assert_not_contains '^adb .* shell (monkey -p moe\.shizuku|sh .*/moe\.shizuku.*start\.sh|pm grant moe\.shizuku)' "$MOCK_CALL_LOG" "untrusted Shizuku is never launched or rearmed"
 
 # A launched app that never answers is not provisioned, even if adb install itself succeeded.
 MOCK_HEALTH=fail run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
@@ -264,6 +312,12 @@ bash "$ROOT/scripts/install.sh" --help > "$LAST_OUTPUT" 2>&1
 LAST_STATUS=$?
 assert_success "one-line installer exposes help without requiring a panel"
 assert_contains 'Usage:.*install\.sh' "one-line installer help shows the supported command"
+
+LAST_OUTPUT="$TMP/provision-help.txt"
+bash "$PROVISION" --help > "$LAST_OUTPUT" 2>&1
+LAST_STATUS=$?
+assert_success "provisioner exposes help without requiring a panel"
+assert_contains '^ *--shizuku +Install/start pinned Shizuku' "provisioner help advertises enhanced-access setup"
 
 printf '1..%d\n' "$((passes + failures))"
 if [ "$failures" -ne 0 ]; then

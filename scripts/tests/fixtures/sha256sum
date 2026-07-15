@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -u
+
+printf 'sha256sum %s\n' "$*" >> "${MOCK_CALL_LOG:?MOCK_CALL_LOG is required}"
+
+case "${1:-}" in
+  */shizuku.apk)
+    printf '%s  %s\n' \
+      "${MOCK_SHIZUKU_DOWNLOAD_SHA:-6e273ab0e991c4e79bc8b1bbb9b9dd739ccac1a8712a541a214078886b7b790f}" \
+      "$1"
+    ;;
+  *)
+    # Installed-manager fixtures are intentionally not byte-identical to the curated APK. Returning
+    # a deterministic non-match drives provisioning through its signing-certificate check without
+    # depending on whether the test host provides GNU sha256sum or macOS shasum.
+    printf '%064d  %s\n' 0 "${1:-mock.apk}"
+    ;;
+esac

@@ -19,6 +19,10 @@ for arg in "$@"; do
 done
 
 case "$url" in
+  https://github.com/RikkaApps/Shizuku/releases/download/v13.6.0/shizuku-v13.6.0.r1086.2650830c-release.apk)
+    [ -n "$output_file" ] || exit 2
+    printf 'mock pinned Shizuku manager apk\n' > "$output_file"
+    ;;
   https://api.github.com/repos/maxlyth/ha-paneld/releases\?per_page=100)
     [ "${MOCK_GITHUB_API:-fail}" = "pretty" ] || exit 22
     cat <<'JSON'
