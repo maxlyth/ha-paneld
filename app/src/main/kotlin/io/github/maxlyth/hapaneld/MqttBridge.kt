@@ -160,6 +160,9 @@ class MqttBridge(
     // stale-discovery pruning as a core upgrade. Empty preserves the pre-profile marker for callers
     // that have not opted into runtime profiles.
     private val profileIdentity: String = "",
+    // Event types declared by the active runtime profile. Discovery must advertise every value this
+    // bridge can publish, not only the historical built-in key list.
+    private val profileButtonEventTypes: Set<String> = emptySet(),
 ) {
     private val haLinkResolutionInFlight = AtomicBoolean(false)
     private val transport: MqttTransport = HiveMqTransport()
@@ -373,7 +376,7 @@ class MqttBridge(
         channel("navigate", stateNavigate) { known(config.lastNavigate.ifEmpty { "/" }) }
         channel("home_dashboard", stateHomeDashboard) { known(config.homeDashboard) }
         channel("volume", stateVolume) { known(volume.getPercent().toString()) }
-        channel("buttons", stateButtons) {
+        if (hasButtonBacklight) channel("buttons", stateButtons) {
             config.lastButtonBacklight.takeIf { it >= 0 }?.let {
                 known(if (it == 0) """{"state":"OFF"}""" else """{"state":"ON","brightness":$it}""")
             } ?: unknown
@@ -591,8 +594,13 @@ class MqttBridge(
         // publishDiscovery above populated publishedConfigTopics for the current capability set.
         val discoveryMarker = mqttDiscoveryCleanupMarker(Config.VERSION, profileIdentity)
         if (config.lastDiscoveryVersion != discoveryMarker) {
-            pruneStaleDiscovery()
-            config.setLastDiscoveryVersion(discoveryMarker)
+            pruneStaleDiscovery { acknowledged ->
+                if (acknowledged && !stopped && state == "connected") {
+                    config.setLastDiscoveryVersion(discoveryMarker)
+                } else {
+                    Log.w(TAG, "discovery prune was not fully acknowledged; retrying after reconnect")
+                }
+            }
         }
         publish(availabilityTopic, "online", retain = true)
         restoreAndPublishStates()
@@ -698,7 +706,9 @@ class MqttBridge(
             // OFF without driving it leaves HA and the physical LED disagreeing (seen on rk3576).
             ledEffect.setOff()
         }
-        config.lastButtonBacklight.takeIf { it >= 0 }?.let { HelperClient.send("BTN $it") }
+        if (hasButtonBacklight) {
+            config.lastButtonBacklight.takeIf { it >= 0 }?.let { HelperClient.send("BTN $it") }
+        }
     }
 
     // ---- command dispatch ----
@@ -748,7 +758,7 @@ class MqttBridge(
                     system.launchHome(config.dashboardPackage)
                 }
                 cmdAdminLauncher -> system.launchAdminLauncher()
-                cmdButtons -> handleButtons(payload)
+                cmdButtons -> if (hasButtonBacklight) handleButtons(payload)
                 cmdBack -> NavActions.back(appCanSu)        // root keyevent or a11y; on the MQTT thread (ok to block)
                 cmdRecents -> NavActions.recents(appCanSu)
                 cmdNavbar -> handleNavbar(payload)
@@ -1279,9 +1289,11 @@ class MqttBridge(
         // The button event entity surfaces a11y key capture AND daemon-instrumented evdev buttons
         // (e.g. the WF1589T power key), so publish it whenever either source exists.
         if (buttonsEnabled || hasEvdevButtons) {
+            val eventTypes = mqttButtonEventTypes(profileButtonEventTypes)
+                .joinToString(",") { "\"${jsonEsc(it)}\"" }
             publishConfig(
                 "event", "${panel}_button",
-                """{"name":"Button","object_id":"${panel}_button","unique_id":"${panel}_button","state_topic":"$eventButton","event_types":["KEYCODE_POWER","KEYCODE_MUTE","KEYCODE_F","KEYCODE_F1","KEYCODE_F2","KEYCODE_F3","KEYCODE_F4","KEYCODE_BACK","KEYCODE_HOME","KEYCODE_DPAD_CENTER","KEYCODE_VOLUME_UP","KEYCODE_VOLUME_DOWN"],$avail,$device}""",
+                """{"name":"Button","object_id":"${panel}_button","unique_id":"${panel}_button","state_topic":"$eventButton","event_types":[$eventTypes],$avail,$device}""",
             )
         }
         // Back is always advertised because profile metadata only orders the live root/accessibility
@@ -1532,11 +1544,22 @@ class MqttBridge(
      * profile-revision change. Empty retained payload also clears configs an older, retain=true version
      * left on the broker.
      */
-    private fun pruneStaleDiscovery() {
+    private fun pruneStaleDiscovery(onComplete: (Boolean) -> Unit) {
         val published = synchronized(publishedConfigTopics) { publishedConfigTopics.toSet() }
-        var n = 0
-        knownConfigTopics().forEach { if (it !in published) { publish(it, "", retain = true); n++ } }
-        Log.i(TAG, "discovery prune: cleared $n refactored-away/absent entities for $panel")
+        val stale = knownConfigTopics().filter { it !in published }
+        if (stale.isEmpty()) {
+            onComplete(true)
+            return
+        }
+        val remaining = java.util.concurrent.atomic.AtomicInteger(stale.size)
+        val allAcknowledged = AtomicBoolean(true)
+        stale.forEach { topic ->
+            publish(topic, "", retain = true) { acknowledged ->
+                if (!acknowledged) allAcknowledged.set(false)
+                if (remaining.decrementAndGet() == 0) onComplete(allAcknowledged.get())
+            }
+        }
+        Log.i(TAG, "discovery prune: submitted ${stale.size} refactored-away/absent entities for $panel")
     }
 
     private fun publish(
@@ -1841,6 +1864,13 @@ internal fun mqttKnownConfigTopics(panel: String): Set<String> = listOf(
     "button" to "${panel}_launcher", "button" to "${panel}_home",
     "button" to "${panel}_admin_launcher",
 ).mapTo(linkedSetOf()) { (comp, obj) -> "homeassistant/$comp/$obj/config" }
+
+internal fun mqttButtonEventTypes(profileEventTypes: Set<String>): List<String> =
+    (setOf(
+        "KEYCODE_POWER", "KEYCODE_MUTE", "KEYCODE_F", "KEYCODE_F1", "KEYCODE_F2", "KEYCODE_F3",
+        "KEYCODE_F4", "KEYCODE_BACK", "KEYCODE_HOME", "KEYCODE_DPAD_CENTER", "KEYCODE_VOLUME_UP",
+        "KEYCODE_VOLUME_DOWN",
+    ) + profileEventTypes).sorted()
 
 internal data class MqttCleanupPublication(val topic: String, val payload: String, val retain: Boolean)
 

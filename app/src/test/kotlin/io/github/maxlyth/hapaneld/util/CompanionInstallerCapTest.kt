@@ -42,8 +42,9 @@ class CompanionInstallerCapTest {
         assertTrue(CompanionInstaller.exactVersionRefusal("not-a-version", "2026.5.4")!!.startsWith("refused:"))
     }
 
-    @Test fun unsafeInstalledBuildIsDowngradedButOrdinaryOlderTargetIsNot() {
-        assertTrue(CompanionInstaller.shouldInstallTarget("2026.6.5-minimal", "2026.5.4", force = false, maxVersion = "2026.5.4"))
+    @Test fun unsafeInstalledBuildRequiresExplicitDowngradeButOrdinaryOlderTargetIsNotInstalled() {
+        assertFalse(CompanionInstaller.shouldInstallTarget("2026.6.5-minimal", "2026.5.4", force = false, maxVersion = "2026.5.4"))
+        assertTrue(CompanionInstaller.shouldInstallTarget("2026.6.5-minimal", "2026.5.4", force = true, maxVersion = "2026.5.4"))
         assertFalse(CompanionInstaller.shouldInstallTarget("2026.5.4-minimal", "2026.5.3", force = false, maxVersion = "2026.5.4"))
         assertTrue(CompanionInstaller.shouldInstallTarget("2026.5.4-minimal", "2026.5.3", force = true, maxVersion = "2026.5.4"))
     }
@@ -64,6 +65,21 @@ class CompanionInstallerCapTest {
     @Test fun uncappedHeadWithoutApkDoesNotSilentlySelectOlderRelease() {
         val versions = listOf(version("2026.6.5", null), version("2026.5.4", "u554"))
         assertNull(CompanionInstaller.chooseTarget(versions, null))
+    }
+
+    @Test fun agedOutSafetyCapResolvesItsExactRelease() {
+        val versions = listOf(version("2027.2.0", "u720"), version("2027.1.0", "u710"))
+        val lookedUp = mutableListOf<String>()
+        val target = CompanionInstaller.chooseTargetWithExact(versions, "2026.5.4") { tag ->
+            lookedUp += tag
+            if (tag == "2026.5.4") "u-exact-654" else null
+        }
+
+        assertEquals(listOf("2026.5.4"), lookedUp)
+        assertEquals("2026.5.4", target?.version)
+        assertEquals("u-exact-654", target?.apkUrl)
+        assertEquals("2027.2.0", target?.newestVersion)
+        assertTrue(target?.capped == true)
     }
 
     @Test fun pickerLeavesUnsafeReleaseVisibleButNotInstallable() {

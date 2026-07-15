@@ -5,4 +5,6 @@
     <!-- Imported profile files may migrate as inactive library content, but activation/LKG state is
          panel-local. A restored community profile must pass the normal preview + activation flow. -->
     <exclude domain="sharedpref" path="ha-paneld-device-profiles.xml" />
+    <!-- Physical sensor captures belong to one panel and must not migrate to another device. -->
+    <exclude domain="sharedpref" path="ha-paneld-profile-calibration.xml" />
 </full-backup-content>

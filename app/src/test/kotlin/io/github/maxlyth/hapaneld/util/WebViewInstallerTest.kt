@@ -115,6 +115,8 @@ class WebViewInstallerTest {
         assertFalse(WebViewInstaller.shouldRecordAutoAttempt("insufficient storage (need 300MB)"))
         assertFalse(WebViewInstaller.shouldRecordAutoAttempt("skipped: no root (su or helper daemon needed)"))
         assertFalse(WebViewInstaller.shouldRecordAutoAttempt("install failed: daemon unreachable"))
+        assertFalse(WebViewInstaller.shouldRecordAutoAttempt("install failed: daemon busy"))
+        assertFalse(WebViewInstaller.shouldRecordAutoAttempt("install failed: daemon stream staging failed"))
         assertFalse(WebViewInstaller.shouldRecordAutoAttempt("install outcome unknown: helper staging retained for safety"))
     }
 

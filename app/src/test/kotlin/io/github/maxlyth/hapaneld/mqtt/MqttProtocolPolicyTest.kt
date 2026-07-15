@@ -1,15 +1,24 @@
 package io.github.maxlyth.hapaneld.mqtt
 
 import io.github.maxlyth.hapaneld.mqttAcceptsCommand
+import io.github.maxlyth.hapaneld.mqttButtonEventTypes
 import io.github.maxlyth.hapaneld.mqttDiscoveryCleanupMarker
 import io.github.maxlyth.hapaneld.mqttDiscoveryRetain
 import io.github.maxlyth.hapaneld.mqttIsHaOnline
 import io.github.maxlyth.hapaneld.shouldRepublishDiscoveryAddress
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MqttProtocolPolicyTest {
+    @Test fun `profile button events extend the discovery event type set`() {
+        val types = mqttButtonEventTypes(setOf("KEYCODE_CUSTOM_PANEL", "KEYCODE_POWER"))
+        assertTrue("KEYCODE_CUSTOM_PANEL" in types)
+        assertEquals(1, types.count { it == "KEYCODE_POWER" })
+        assertEquals(types.sorted(), types)
+    }
+
     @Test fun onlyFreshCommandsReachHardware() {
         assertTrue(mqttAcceptsCommand(stopped = false, retained = false))
         assertFalse(mqttAcceptsCommand(stopped = false, retained = true))

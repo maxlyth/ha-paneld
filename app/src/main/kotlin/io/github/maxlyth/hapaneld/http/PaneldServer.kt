@@ -2695,7 +2695,17 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             if (spec.readOnly || spec.transient) { skipped.add(key); continue }
             if (fleet && (spec.scope != Scope.PORTABLE || spec.secret)) { skipped.add(key); continue }
             when (val v = SettingValue.validate(spec, raw)) {
-                is Validation.Ok -> accepted[key] = v.normalized
+                is Validation.Ok -> {
+                    // A blank portable HA URL means “renderer not configured” on the source panel. In
+                    // fleet mode it must not clear a target's URL and, through import dependencies, its
+                    // device-local OAuth credentials. A non-blank common endpoint remains portable.
+                    if (fleetImportPreservesTargetLocalValue(fleet, key, v.normalized)) {
+                        skipped.add(key)
+                        warn.add("blank ha_url skipped in fleet mode to preserve target-local Home Assistant login")
+                    } else {
+                        accepted[key] = v.normalized
+                    }
+                }
                 is Validation.Bad -> errors.add(v.reason)
             }
         }
@@ -3281,6 +3291,9 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
         private const val EXT_ICON = "M14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3m-2 16H5V5h7V3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2v-7h-2v7z"
     }
 }
+
+internal fun fleetImportPreservesTargetLocalValue(fleet: Boolean, key: String, normalized: String): Boolean =
+    fleet && key == "ha_url" && normalized.isEmpty()
 
 /** Package actions required to converge a vendor-taming blocklist after its preference commit. */
 internal data class TameDelta(val add: Set<String>, val remove: Set<String>) {

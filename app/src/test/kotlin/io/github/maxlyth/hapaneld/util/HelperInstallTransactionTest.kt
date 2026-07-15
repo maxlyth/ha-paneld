@@ -82,7 +82,8 @@ class HelperInstallTransactionTest {
     @Test fun streamTerminalFailureAndDefiniteNonSubmissionReleaseInput() {
         listOf(
             DaemonStreamResult.Reply("ERR") to "install failed: daemon install failed",
-            DaemonStreamResult.Reply("BUSY") to "install failed: daemon install failed",
+            DaemonStreamResult.Reply("BUSY") to "install failed: daemon busy",
+            DaemonStreamResult.Reply("STREAMERR") to "install failed: daemon stream staging failed",
             DaemonStreamResult.NotSubmitted to "install failed: daemon unreachable",
         ).forEachIndexed { index, (streamResult, expected) ->
             val source = apk("stream-failed-$index.apk", byteArrayOf(index.toByte(), 7))

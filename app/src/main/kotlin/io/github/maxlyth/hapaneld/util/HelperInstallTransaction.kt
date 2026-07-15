@@ -26,7 +26,7 @@ internal class HelperInstallTransaction(
         when (val streamed = daemon.sendFile("INSTALLSTREAM ${apk.length()}", apk, timeoutMs)) {
             is DaemonStreamResult.Reply -> {
                 apk.delete()
-                return if (streamed.value == "OK") "OK" else "install failed: daemon install failed"
+                return daemonInstallReply(streamed.value)
             }
             DaemonStreamResult.NotSubmitted -> {
                 apk.delete()
@@ -44,7 +44,7 @@ internal class HelperInstallTransaction(
         return when (val result = daemon.sendLong("INSTALL ${owned.absolutePath}", timeoutMs)) {
             is DaemonLongResult.Reply -> {
                 staging.release(owned, delete = true)
-                if (result.value == "OK") "OK" else "install failed: daemon install failed"
+                daemonInstallReply(result.value)
             }
             DaemonLongResult.NotSubmitted -> {
                 staging.release(owned, delete = true)
@@ -55,6 +55,15 @@ internal class HelperInstallTransaction(
                 "install outcome unknown: helper staging retained for safety"
             }
         }
+    }
+
+    /** Preserve retryable helper admission/staging failures instead of collapsing them into the durable
+     * package-manager rejection used by WebView's same-pin loop guard. */
+    private fun daemonInstallReply(reply: String): String = when (reply.trim()) {
+        "OK" -> "OK"
+        "BUSY" -> "install failed: daemon busy"
+        "STREAMERR" -> "install failed: daemon stream staging failed"
+        else -> "install failed: daemon install failed"
     }
 
     companion object {

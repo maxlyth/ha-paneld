@@ -82,8 +82,36 @@ object CompanionInstaller {
 
     /** Resolve the channel's installable target under [maxVersion]. One structured catalog object owns
      *  each tag, notes URL and APK URL, so selection cannot cross release boundaries. */
-    internal fun target(channel: String, maxVersion: String?): Target? =
-        chooseTarget(catalog(channel, 40), maxVersion)
+    internal fun chooseTargetWithExact(
+        versions: List<ReleaseCatalog.Version>,
+        maxVersion: String?,
+        exactApkUrl: (String) -> String?,
+    ): Target? {
+        chooseTarget(versions, maxVersion)?.let { return it }
+        val newest = versions.firstOrNull() ?: return null
+        if (maxVersion == null || withinCap(newest.version, maxVersion)) return null
+
+        // A safety ceiling is a durable known-good release, not a moving-window preference. Once the
+        // pinned version ages out of the recent catalog, resolve its exact release rather than making a
+        // missing or unsafe Companion permanently unrepairable.
+        val tags = listOf(maxVersion, "v$maxVersion")
+        val resolved = tags.firstNotNullOfOrNull { tag ->
+            exactApkUrl(tag)?.let { tag to it }
+        } ?: return null
+        return Target(
+            version = maxVersion,
+            apkUrl = resolved.second,
+            releaseUrl = "https://github.com/$REPO/releases/tag/${resolved.first}",
+            newestVersion = newest.version,
+            capped = true,
+        )
+    }
+
+    internal fun target(channel: String, maxVersion: String?): Target? = chooseTargetWithExact(
+        versions = catalog(channel, 40),
+        maxVersion = maxVersion,
+        exactApkUrl = { tag -> ReleaseCatalog.apkUrl(REPO, tag, APK_MATCH) },
+    )
 
     /** Install a specific Companion release by its [tag]. The exact-version picker obeys the same device
      *  cap as automatic and newest-version installs; the cap is a safety boundary, not a preference. */
@@ -119,17 +147,15 @@ object CompanionInstaller {
         else "refused: HA Companion $version exceeds this panel's $maxVersion safety cap"
     }
 
-    /** Pure install decision. An installed build above the profile ceiling must be remediated even though
-     *  the safe target is numerically older; ordinary automatic updates never downgrade. */
+    /** Pure install decision. Downgrades, including remediation to a newly activated profile ceiling,
+     *  require the explicit/manual [force] path; scheduled automatic updates never downgrade. */
     internal fun shouldInstallTarget(installed: String, targetVersion: String, force: Boolean, maxVersion: String?): Boolean =
         installed.isBlank() ||
             force ||
-            exceedsCap(installed, maxVersion) ||
             UpdateChecker.isNewer(targetVersion, UpdateChecker.stripVariant(installed))
 
-    /** Install the minimal Companion if missing, update it when newer, or downgrade an already-unsafe
-     *  installed build to the newest target inside the device cap. [force] skips only the up-to-date gate;
-     *  it never bypasses [maxVersion]. */
+    /** Install the minimal Companion if missing or update it when newer. An already-installed build above
+     *  the device cap is downgraded only through explicit [force]; [force] never bypasses [maxVersion]. */
     suspend fun installOrUpdate(
         context: Context,
         force: Boolean = false,
@@ -143,6 +169,10 @@ object CompanionInstaller {
         val missing = installed.isBlank()
         val target = target(channel, maxVersion) ?: return@withContext "no installable release found ($channel)"
         val installedAboveCap = !missing && exceedsCap(installed, maxVersion)
+
+        if (installedAboveCap && !force) {
+            return@withContext "refused: installed HA Companion $installed exceeds this panel's $maxVersion safety cap; use the manual reinstall action to approve a downgrade"
+        }
 
         if (!shouldInstallTarget(installed, target.version, force, maxVersion)) {
             return@withContext if (target.capped)
