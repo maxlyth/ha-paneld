@@ -61,6 +61,7 @@ class AdminLauncherActivity : AppCompatActivity() {
     }
 
     private fun buildUi(): View {
+        val dashboardTarget = dashboardTarget()
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(16), dp(16), dp(16), dp(16))
@@ -73,10 +74,10 @@ class AdminLauncherActivity : AppCompatActivity() {
         ))
 
         // Admin shortcuts — the things you open a drawer to reach but that aren't ordinary app icons.
-        root.addView(grid(adminTiles()))
+        root.addView(grid(adminTiles(dashboardTarget)))
 
         root.addView(text("Apps", 14f, subtle, bold = true, padTop = 18, padBottom = 8))
-        val apps = installedApps()
+        val apps = installedApps(dashboardTarget)
         if (apps.isEmpty()) {
             root.addView(text("No launchable apps found.", 13f, subtle))
         } else {
@@ -104,11 +105,15 @@ class AdminLauncherActivity : AppCompatActivity() {
         val onClick: () -> Unit,
     )
 
-    private fun adminTiles(): List<Tile> = buildList {
-        companionPackage()?.let { pkg ->
-            add(Tile("Dashboard", appIcon(pkg), "HA") {
-                packageManager.getLaunchIntentForPackage(pkg)?.let { startSafely(it) }
+    private fun adminTiles(dashboardTarget: AdminDashboardTarget?): List<Tile> = buildList {
+        when (dashboardTarget) {
+            AdminDashboardTarget.Builtin -> add(Tile("Dashboard", appIcon(packageName), "HA") {
+                startSafely(Intent(this@AdminLauncherActivity, DashboardActivity::class.java))
             })
+            is AdminDashboardTarget.Foreign -> add(Tile("Dashboard", appIcon(dashboardTarget.packageName), "HA") {
+                packageManager.getLaunchIntentForPackage(dashboardTarget.packageName)?.let(::startSafely)
+            })
+            null -> Unit
         }
         add(Tile("Settings", appIcon("com.android.settings"), "⚙") {
             startSafely(Intent(Settings.ACTION_SETTINGS))
@@ -178,11 +183,15 @@ class AdminLauncherActivity : AppCompatActivity() {
 
     /**
      * Launchable apps, sorted by label, minus the packages already surfaced as curated admin tiles
-     * (Companion, Settings, ourselves) so the grid doesn't duplicate them. The drawer itself has no
+     * (the selected dashboard renderer, Settings, ourselves) so the grid doesn't duplicate them. The drawer itself has no
      * LAUNCHER filter, so it's absent regardless.
      */
-    private fun installedApps(): List<ResolveInfo> {
-        val curated = setOfNotNull(packageName, "com.android.settings", companionPackage())
+    private fun installedApps(dashboardTarget: AdminDashboardTarget?): List<ResolveInfo> {
+        val curated = setOfNotNull(
+            packageName,
+            "com.android.settings",
+            (dashboardTarget as? AdminDashboardTarget.Foreign)?.packageName,
+        )
         val main = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
         return runCatching {
             packageManager.queryIntentActivities(main, 0)
@@ -207,9 +216,14 @@ class AdminLauncherActivity : AppCompatActivity() {
     private fun appIcon(pkg: String): android.graphics.drawable.Drawable? =
         runCatching { packageManager.getApplicationIcon(pkg) }.getOrNull()
 
-    private fun companionPackage(): String? =
-        listOf("io.homeassistant.companion.android.minimal", "io.homeassistant.companion.android")
-            .firstOrNull { packageManager.getLaunchIntentForPackage(it) != null }
+    private fun dashboardTarget(): AdminDashboardTarget? {
+        val config = Config(this)
+        return resolveAdminDashboardTarget(
+            configuredPackage = config.dashboardPackage,
+            builtinReady = config.haUrl.isNotBlank(),
+            isLaunchable = { packageManager.getLaunchIntentForPackage(it) != null },
+        )
+    }
 
     private fun text(
         s: String, size: Float, color: String,
