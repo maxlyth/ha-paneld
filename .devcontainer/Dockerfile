@@ -8,7 +8,7 @@
 # x86_64 SDK build-tools (aapt2/zipalign/aidl) and NDK clang run under OrbStack's Rosetta at
 # near-native speed; the JVM/Gradle/Kotlin half runs native arm64. The arm64-conditional multi-arch
 # block below installs the x86_64 runtime libs Rosetta needs. All tooling stays official.
-FROM eclipse-temurin:17-jdk-noble
+FROM eclipse-temurin:17-jdk-noble@sha256:0386aaf49d6756b4856119f8e037f40cc865c7c8fbdda7c81733cc806f462daf
 
 ENV ANDROID_HOME=/opt/android-sdk \
     ANDROID_SDK_ROOT=/opt/android-sdk \
@@ -48,8 +48,10 @@ RUN if [ "$(dpkg --print-architecture)" = "arm64" ]; then \
 
 # Android command-line tools (bumpable — see https://developer.android.com/studio#command-line-tools-only).
 ARG CMDLINE_TOOLS=11076708
+ARG CMDLINE_TOOLS_SHA256=2d2d50857e4eb553af5a6dc3ad507a17adf43d115264b1afc116f95c92e5e258
 RUN mkdir -p "$ANDROID_HOME/cmdline-tools" \
-    && curl -fsSL "https://dl.google.com/android/repository/commandlinetools-linux-${CMDLINE_TOOLS}_latest.zip" -o /tmp/clt.zip \
+    && curl -fsSL --proto '=https' --proto-redir '=https' "https://dl.google.com/android/repository/commandlinetools-linux-${CMDLINE_TOOLS}_latest.zip" -o /tmp/clt.zip \
+    && echo "$CMDLINE_TOOLS_SHA256  /tmp/clt.zip" | sha256sum -c - \
     && unzip -q /tmp/clt.zip -d "$ANDROID_HOME/cmdline-tools" \
     && mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest" \
     && rm /tmp/clt.zip
