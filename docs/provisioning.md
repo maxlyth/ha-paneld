@@ -29,15 +29,7 @@ scripts/provision.sh <panel-ip:5555> --verify
 
 When `--export FILE` is combined with install or configuration options, the verified backup is written **before** any panel mutation. Protect that file like a credential. Provisioning also offers the profile's known vendor overlays and factory-test apps for reversible disabling; pass `--no-tame` to leave them unchanged.
 
-Non-root panels can add `--shizuku`. See [Shizuku enhanced access](shizuku.md) first for the capability
-comparison, security model, lifecycle and guidance on when it is preferable to the normal rooted-vendor
-path. The provisioner installs the curated, checksum-pinned Shizuku
-manager and starts its ADB service; then, on the panel, open **ha-paneld Configure**, use the toolbar
-overflow menu, choose **Enhanced access → Enable**, and approve Shizuku's permission prompt. That local
-approval is intentionally not available over the web UI, MQTT, config import, backup/restore, or fleet
-push. It enables signer-pinned ha-paneld and Companion updates, screenshots and taps, and display
-sizing—not arbitrary LAN APK uploads, WebView replacement, logs, private app data, reboot, vendor taming,
-or a general shell. The manager itself is not auto-updated by ha-paneld in this release.
+Non-root panels can add `--shizuku`. See [Shizuku enhanced access](shizuku.md) first for the capability comparison, security model, lifecycle and guidance on when it is preferable to the normal rooted-vendor path. The provisioner installs the curated, checksum-pinned Shizuku manager and starts its ADB service; then, on the panel, open **ha-paneld Configure**, use the toolbar overflow menu, choose **Enhanced access → Enable**, and approve Shizuku's permission prompt. That local approval is intentionally not available over the web UI, MQTT, config import, backup/restore, or fleet push. It enables signer-pinned ha-paneld and Companion updates, screenshots and taps, and display sizing—not arbitrary LAN APK uploads, WebView replacement, logs, private app data, reboot, vendor taming, or a general shell. The manager itself is not auto-updated by ha-paneld in this release.
 
 Shizuku started through ADB may need rearming after a reboot. Shizuku 13.6 has a supported trusted-WLAN
 auto-start option on compatible Android 13+ devices; the provisioner grants the prerequisite permission,
