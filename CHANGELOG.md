@@ -12,6 +12,7 @@
 ### Fixed
 
 - **Release SBOMs now carry valid identities** — the Android inventory includes the document identifier required for attestation, while the embedded profile-editor inventory derives a stable identifier from its locked dependency graph. An external attestation outage remains advisory and no longer prevents an otherwise valid release from being published.
+- **Credential backup and HTTPS audio handling are safer** — Android's implicit app backup and device-transfer path is disabled and excludes credential preferences, while HTTPS audio downloads use Android's normal certificate and hostname verification. Embedded browser views also reject file and content-provider access, and release links accept only GitHub HTTPS destinations.
 
 ### Docs
 
