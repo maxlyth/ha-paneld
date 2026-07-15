@@ -3,7 +3,7 @@
 # Lets anyone build the APK with only Docker installed — no local JDK / Android SDK / NDK / CMake.
 # Versions are pinned to match .github/workflows/*.yml so a local build reproduces CI exactly.
 # Used by tools/build/build.sh.
-FROM eclipse-temurin:17-jdk-jammy
+FROM eclipse-temurin:17-jdk-jammy@sha256:723151f3fc88ca2060153ee08ab8dbbea7983d6ed6f2622fe440acf178737c94
 
 ENV ANDROID_SDK_ROOT=/opt/android-sdk \
     ANDROID_HOME=/opt/android-sdk \

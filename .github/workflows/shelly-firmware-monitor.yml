@@ -25,7 +25,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write       # commit new .dat entries to main
+  contents: read
 
 concurrency:
   group: shelly-firmware-monitor
@@ -39,6 +39,8 @@ jobs:
   monitor:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    permissions:
+      contents: write       # commit new .dat entries to main
     outputs:
       has_new: ${{ steps.probe.outputs.has_new }}
       has_pending: ${{ steps.probe.outputs.has_pending }}

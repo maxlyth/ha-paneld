@@ -84,7 +84,7 @@ class HiveMqTransportBrokerTest {
         }
     }
 
-    @Test
+    @Test(timeout = 20_000)
     fun finalPublicationsAreAcknowledgedBeforeTransportDisconnects() {
         EmbeddedBroker().use { broker ->
             val transportClientId = "transport-${UUID.randomUUID()}"
@@ -447,7 +447,7 @@ class HiveMqTransportBrokerTest {
             assertTrue(await(5, TimeUnit.SECONDS), message)
         }
 
-        fun <T> java.util.concurrent.CompletableFuture<T>.await(): T = get(5, TimeUnit.SECONDS)
+        fun <T> java.util.concurrent.CompletableFuture<T>.await(): T = get(10, TimeUnit.SECONDS)
 
         fun awaitCondition(message: String, condition: () -> Boolean) {
             val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)

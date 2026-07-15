@@ -21,7 +21,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write          # push the wayback-state history branch
+  contents: read
 
 concurrency:
   group: firmware-wayback
@@ -31,6 +31,8 @@ jobs:
   archive:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
+    permissions:
+      contents: write          # push the wayback-state history branch
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
