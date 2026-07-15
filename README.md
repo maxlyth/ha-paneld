@@ -155,9 +155,12 @@ ha-paneld needs no system-signed install. Standard-Android capabilities (brightn
 
 ## Stack
 
-- **HTTP** — Ktor CIO engine (coroutine I/O, no thread-per-connection).
-- **MQTT** — HiveMQ MQTT 5 client (NIO transport; ABI-agnostic).
-- **mDNS** — JmDNS (chosen over `NsdManager` for reliable TXT records across API levels).
+- **Application runtime** — [Kotlin](https://github.com/JetBrains/kotlin), [AndroidX](https://github.com/androidx/androidx) and [kotlinx.coroutines](https://github.com/Kotlin/kotlinx.coroutines).
+- **HTTP and Home Assistant WebSocket** — [Ktor](https://github.com/ktorio/ktor) CIO server, client and WebSocket modules provide coroutine I/O without a thread per connection.
+- **MQTT** — [HiveMQ MQTT Client](https://github.com/hivemq/hivemq-mqtt-client) supplies the MQTT 5 client and pure-Java NIO transport, keeping the APK ABI-agnostic.
+- **mDNS** — [JmDNS](https://github.com/jmdns/jmdns) advertises `_ha-paneld._tcp` with reliable TXT records across supported Android API levels.
+- **Enhanced access** — the official [Shizuku](https://github.com/RikkaApps/Shizuku) API/provider supplies the typed Binder boundary on unrooted panels.
+- **QR and logging** — [ZXing](https://github.com/zxing/zxing) generates on-panel setup QR codes, while [SLF4J](https://github.com/qos-ch/slf4j) routes Ktor and HiveMQ logs to Logcat.
 
 ## Want your panel supported?
 
