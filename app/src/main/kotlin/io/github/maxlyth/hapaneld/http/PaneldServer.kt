@@ -705,7 +705,14 @@ class PaneldServer(
                                 // The HTTP resource cache is per-application but only reachable through a
                                 // WebView instance — a throwaway one clears it for every WebView we host
                                 // (a corrupted cached asset is exactly what this heal exists for).
-                                runCatching { android.webkit.WebView(appContext).apply { clearCache(true); destroy() } }
+                                runCatching {
+                                    android.webkit.WebView(appContext).apply {
+                                        settings.allowContentAccess = false
+                                        settings.allowFileAccess = false
+                                        clearCache(true)
+                                        destroy()
+                                    }
+                                }
                                 if (config.dashboardPackage == "builtin") {
                                     // Privileged-first relaunch (BAL rules block a plain startActivity
                                     // from a service context) — off the main thread, it may shell out.

@@ -10,7 +10,7 @@
 import { chromium } from 'playwright-core';
 import http from 'node:http';
 import { readFile, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { extname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url)); // repo root
@@ -63,8 +63,10 @@ async function measure(browser, port, width, font) {
 }
 
 const server = http.createServer(async (req, res) => {
-  try { const p = decodeURIComponent(req.url.split('?')[0]); const body = await readFile(join(ROOT, p));
-    res.writeHead(200, { 'Content-Type': MIME[p.slice(p.lastIndexOf('.'))] || 'application/octet-stream' }); res.end(body);
+  try { const p = decodeURIComponent(req.url.split('?')[0]); const file = resolve(ROOT, '.' + p); const rel = relative(ROOT, file);
+    if (isAbsolute(rel) || rel === '..' || rel.startsWith('../')) throw new Error('path outside fixture root');
+    const body = await readFile(file);
+    res.writeHead(200, { 'Content-Type': MIME[extname(file)] || 'application/octet-stream' }); res.end(body);
   } catch { res.writeHead(404); res.end('not found'); }
 });
 await new Promise((r) => server.listen(0, '127.0.0.1', r));

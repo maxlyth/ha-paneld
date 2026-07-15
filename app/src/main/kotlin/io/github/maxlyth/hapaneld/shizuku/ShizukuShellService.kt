@@ -20,7 +20,7 @@ class ShizukuShellService : IShizukuShellService.Stub() {
         val pipe = runCatching { ParcelFileDescriptor.createPipe() }.getOrNull() ?: return null
         thread(name = "hapaneld-shizuku-screencap", isDaemon = true) {
             pipe[1].use { writeFd ->
-                val process = runCatching { ProcessBuilder("screencap", "-p").start() }.getOrNull()
+                val process = runCatching { ProcessBuilder(SCREENCAP, "-p").start() }.getOrNull()
                     ?: return@thread
                 ParcelFileDescriptor.AutoCloseOutputStream(writeFd).use { output ->
                     val pump = thread(name = "hapaneld-shizuku-screencap-output", isDaemon = true) {
@@ -35,27 +35,27 @@ class ShizukuShellService : IShizukuShellService.Stub() {
     }
 
     override fun inputKey(keyCode: Int): Boolean =
-        ShizukuPolicy.validKeyCode(keyCode) && runEffect("input", "keyevent", keyCode.toString())
+        ShizukuPolicy.validKeyCode(keyCode) && runEffect(INPUT, "keyevent", keyCode.toString())
 
     override fun inputTap(x: Int, y: Int): Boolean =
         ShizukuPolicy.validCoordinate(x) && ShizukuPolicy.validCoordinate(y) &&
-            runEffect("input", "tap", x.toString(), y.toString())
+            runEffect(INPUT, "tap", x.toString(), y.toString())
 
-    override fun readDensity(): String? = runText("wm", "density")
+    override fun readDensity(): String? = runText(WM, "density")
 
     override fun setDensity(dpi: Int): Boolean =
-        ShizukuPolicy.validDensity(dpi) && runEffect("wm", "density", dpi.toString())
+        ShizukuPolicy.validDensity(dpi) && runEffect(WM, "density", dpi.toString())
 
-    override fun resetDensity(): Boolean = runEffect("wm", "density", "reset")
+    override fun resetDensity(): Boolean = runEffect(WM, "density", "reset")
 
-    override fun readFontScale(): String? = runText("settings", "get", "system", "font_scale")
+    override fun readFontScale(): String? = runText(SETTINGS, "get", "system", "font_scale")
 
     override fun setFontScale(scale: Float): Boolean =
         ShizukuPolicy.validFontScale(scale) &&
-            runEffect("settings", "put", "system", "font_scale", scale.toString())
+            runEffect(SETTINGS, "put", "system", "font_scale", scale.toString())
 
     override fun resetFontScale(): Boolean =
-        runEffect("settings", "delete", "system", "font_scale")
+        runEffect(SETTINGS, "delete", "system", "font_scale")
 
     override fun installApk(
         source: ParcelFileDescriptor?,
@@ -67,7 +67,7 @@ class ShizukuShellService : IShizukuShellService.Stub() {
         ParcelFileDescriptor.AutoCloseInputStream(source).use { input ->
             val deadline = ShizukuPolicy.installServiceDeadline(timeoutMs)
             if (!ShizukuPolicy.validApkLength(length) || deadline == null) return null
-            val args = mutableListOf("pm", "install", "-S", length.toString(), "-r")
+            val args = mutableListOf(PM, "install", "-S", length.toString(), "-r")
             if (allowDowngrade) args += "-d"
             val process = runCatching { ProcessBuilder(args).redirectErrorStream(true).start() }.getOrNull()
                 ?: return null
@@ -128,6 +128,12 @@ class ShizukuShellService : IShizukuShellService.Stub() {
     }
 
     companion object {
+        private const val SYSTEM_BIN = "/system/bin"
+        private const val SCREENCAP = "$SYSTEM_BIN/screencap"
+        private const val INPUT = "$SYSTEM_BIN/input"
+        private const val WM = "$SYSTEM_BIN/wm"
+        private const val SETTINGS = "$SYSTEM_BIN/settings"
+        private const val PM = "$SYSTEM_BIN/pm"
         private const val SHORT_TIMEOUT_MS = 10_000L
         private const val MAX_REPLY_BYTES = 16 * 1024
         private const val DESTROY_TRANSACTION = 16_777_115

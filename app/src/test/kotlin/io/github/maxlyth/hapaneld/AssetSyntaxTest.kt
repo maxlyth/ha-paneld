@@ -60,6 +60,35 @@ class AssetSyntaxTest {
         }
     }
 
+    @Test fun installLinksRequireGithubHttps() {
+        val dir = assetsDir
+        assumeTrue("assets dir not found (skipping)", dir != null)
+        assumeTrue("node not available (skipping)", nodeAvailable())
+        val script = """
+            const fs=require('fs'),vm=require('vm');
+            const attrs={notes:'https://github.com/example/project/releases/tag/v1',apk:'https://github.com/example/project/releases/download/v1/app.apk',installable:'1'};
+            const option={getAttribute(k){return attrs[k.replace('data-','')]||''}};
+            function link(){return {href:'stale',style:{},removeAttribute(k){if(k==='href')this.href=''}}}
+            const notes=link(),download=link(),button={disabled:false,getAttribute(){return '1'}};
+            const row={querySelector(s){if(s==='.cvsel')return {selectedOptions:[option]};if(s==='.cnotes')return notes;if(s==='.cinstall')return button;if(s==='.cdl')return download;return null}};
+            global.window=global;
+            global.document={querySelector(){return row},querySelectorAll(){return []},getElementById(){return null},createElement(){return {}}};
+            global.fetch=()=>Promise.reject(new Error('unused'));
+            vm.runInThisContext(fs.readFileSync(process.argv[1],'utf8'));
+            function check(good){
+              global.verChanged('paneld');
+              if(good){if(!notes.href.startsWith('https://github.com/')||notes.style.visibility!=='visible')process.exit(2);if(!download.href.startsWith('https://github.com/')||download.style.display!=='')process.exit(3)}
+              else{if(notes.href||notes.style.visibility!=='hidden')process.exit(4);if(download.href||download.style.display!=='none')process.exit(5)}
+            }
+            check(true);
+            for(const bad of ['javascript:alert(1)','http://github.com/example/project','https://github.com.evil.example/project']){
+              attrs.notes=bad;attrs.apk=bad;notes.href='stale';download.href='stale';check(false);
+            }
+        """.trimIndent()
+        val (code, out) = run(listOf("node", "-e", script, File(dir, "install.js").absolutePath))
+        assertEquals("Install links accepted a non-GitHub HTTPS target:\n$out", 0, code)
+    }
+
     @Test fun dashboardIssuesAreRenderedEscapedWithReversibleSafetyControls() {
         val dir = assetsDir
         assumeTrue("assets dir not found (skipping)", dir != null)

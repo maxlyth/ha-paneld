@@ -233,7 +233,7 @@ object DiagReader {
         runCatching { ctx.packageManager.getPackageInfo(id, 0).versionName ?: "?" }.getOrElse { "not installed" }
 
     private fun exec(cmd: String): String = runCatching {
-        val p = Runtime.getRuntime().exec(arrayOf("sh", "-c", cmd))
+        val p = Runtime.getRuntime().exec(arrayOf("/system/bin/sh", "-c", cmd))
         (p.inputStream.bufferedReader().readText() + p.errorStream.bufferedReader().readText()).trim()
     }.getOrElse { "(exec failed)" }
 

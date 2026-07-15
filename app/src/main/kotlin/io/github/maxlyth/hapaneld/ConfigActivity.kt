@@ -29,6 +29,8 @@ class ConfigActivity : AppCompatActivity() {
         web = WebView(this).apply {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
+            settings.allowContentAccess = false
+            settings.allowFileAccess = false
             webViewClient = WebViewClient() // keep links + the config-form POST inside this WebView
         }
         // A top bar with a back arrow → return to the dashboard (finish this activity). Without it there

@@ -3,6 +3,27 @@
   var msg = function (t) { var e = document.getElementById('comp-msg'); if (e) e.textContent = t; };
   var row = function (name) { return document.querySelector('.comprow[data-name="' + name + '"]'); };
 
+  // Release metadata comes from the GitHub API. Keep link navigation on GitHub HTTPS even if an
+  // upstream response is malformed or replaced; package/signer checks remain the install boundary.
+  function safeGithubUrl(value) {
+    try {
+      var parsed = new URL(value);
+      return parsed.protocol === 'https:' && parsed.hostname.toLowerCase() === 'github.com' ? parsed.href : '';
+    } catch (_) { return ''; }
+  }
+
+  function setSafeLink(link, value, visibleProperty, visibleValue, hiddenValue) {
+    if (!link) return;
+    var safe = safeGithubUrl(value);
+    if (safe) {
+      link.href = safe;
+      link.style[visibleProperty] = visibleValue;
+    } else {
+      link.removeAttribute('href');
+      link.style[visibleProperty] = hiddenValue;
+    }
+  }
+
   // Populate a component's version <select> for the chosen channel, newest first. Pre-selects the option
   // matching the installed version, else the newest installable one, then syncs the notes link + button.
   window.loadVersions = function (name) {
@@ -35,13 +56,13 @@
     var o = r.querySelector('.cvsel').selectedOptions[0];
     var notes = r.querySelector('.cnotes'), btn = r.querySelector('.cinstall'), dl = r.querySelector('.cdl');
     var url = o ? o.getAttribute('data-notes') : '', installable = o && o.getAttribute('data-installable') === '1';
-    if (notes) { if (url) { notes.href = url; notes.style.visibility = 'visible'; } else { notes.style.visibility = 'hidden'; } }
+    setSafeLink(notes, url, 'visibility', 'visible', 'hidden');
     if (btn) btn.disabled = !(btn.getAttribute('data-root') === '1' && installable);
     // No-root panels render a Download link instead of the Install button (ha-paneld can't install
     // APKs without root): point it at the selected version's APK asset for a manual adb install -r.
     if (dl) {
       var apk = o ? o.getAttribute('data-apk') : '';
-      if (installable && apk) { dl.href = apk; dl.style.display = ''; } else { dl.style.display = 'none'; }
+      setSafeLink(dl, installable ? apk : '', 'display', '', 'none');
     }
   };
 

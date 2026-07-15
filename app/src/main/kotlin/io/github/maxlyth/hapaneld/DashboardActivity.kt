@@ -1409,6 +1409,8 @@ class DashboardActivity : AppCompatActivity() {
     private fun createWebView(config: Config, generation: Long): WebView = WebView(this).apply {
         settings.javaScriptEnabled = true
         settings.domStorageEnabled = true
+        settings.allowContentAccess = false
+        settings.allowFileAccess = false
         // Guard against a WebView bug that collapses fonts to unreadably small on some engines — the
         // HA Companion carries the same workaround (their PR #3353). 5px floors it without affecting
         // normal dashboard type.
