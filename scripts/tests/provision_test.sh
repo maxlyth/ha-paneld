@@ -393,11 +393,12 @@ LAST_STATUS=$?
 assert_success "one-line installer exposes help without requiring a panel"
 assert_contains 'Usage:.*install\.sh' "one-line installer help shows the supported command"
 
-# A release-generated installer must bind the immutable tag to its exact asset name before it asks
-# for a panel or contacts one. This mirrors the release workflow's two substitutions.
+# A release-generated installer must bind the immutable tag to its exact asset name and source commit
+# before it asks for a panel or contacts one. This mirrors the release workflow's three substitutions.
 BAD_INSTALLER="$TMP/install-bad-release.sh"
 sed -e 's/^RELEASE_TAG=""/RELEASE_TAG="v0.9.2-rc3"/' \
     -e 's/^RELEASE_APK_NAME=""/RELEASE_APK_NAME="ha-paneld-v0.9.1-manual-setup-required.apk"/' \
+    -e 's/^PROVISION_COMMIT=""/PROVISION_COMMIT="0123456789abcdef0123456789abcdef01234567"/' \
     "$ROOT/scripts/install.sh" > "$BAD_INSTALLER"
 LAST_OUTPUT="$TMP/install-bad-release-output.txt"
 : > "$MOCK_CALL_LOG"
@@ -410,13 +411,16 @@ assert_not_contains '^curl |^adb ' "$MOCK_CALL_LOG" "mismatched release installe
 RELEASE_INSTALLER="$TMP/install-release.sh"
 sed -e 's/^RELEASE_TAG=""/RELEASE_TAG="v0.9.2-rc3"/' \
     -e 's/^RELEASE_APK_NAME=""/RELEASE_APK_NAME="ha-paneld-v0.9.2-rc3-manual-setup-required.apk"/' \
+    -e 's/^PROVISION_COMMIT=""/PROVISION_COMMIT="0123456789abcdef0123456789abcdef01234567"/' \
     "$ROOT/scripts/install.sh" > "$RELEASE_INSTALLER"
 if bash -n "$RELEASE_INSTALLER" && \
    grep -Fq -- '--proto '\''=https'\'' --proto-redir '\''=https'\''' "$RELEASE_INSTALLER" && \
-   grep -Fq -- '--release-tag "$RELEASE_TAG"' "$RELEASE_INSTALLER"; then
-  pass "generated release installer preserves HTTPS redirects and release-tag verification"
+   grep -Fq -- '--release-tag "$RELEASE_TAG"' "$RELEASE_INSTALLER" && \
+   grep -Fq 'raw.githubusercontent.com/$REPO/$PROVISION_REF/scripts/provision.sh' "$RELEASE_INSTALLER" && \
+   grep -Fq 'PROVISION_COMMIT="0123456789abcdef0123456789abcdef01234567"' "$RELEASE_INSTALLER"; then
+  pass "generated release installer preserves HTTPS, release verification, and immutable provisioner source"
 else
-  fail_test "generated release installer preserves HTTPS redirects and release-tag verification"
+  fail_test "generated release installer preserves HTTPS, release verification, and immutable provisioner source"
 fi
 
 LAST_OUTPUT="$TMP/provision-help.txt"

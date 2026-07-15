@@ -8,12 +8,12 @@
 #
 # Preflights adb + curl (with per-OS fix-it hints), prompts for the panel IP (and optional id / MQTT
 # broker), downloads the release, and provisions the panel. No parameters required (except --prerelease).
-# The release workflow fills RELEASE_TAG and RELEASE_APK_NAME in its downloadable copy so an installer
-# attached to a historical release always installs that exact release using its matching provisioner.
+# The release workflow fills RELEASE_TAG, RELEASE_APK_NAME and PROVISION_COMMIT in its downloadable copy so an installer attached to a historical release always installs that exact release using its matching immutable provisioner.
 set -euo pipefail
 
 RELEASE_TAG=""
 RELEASE_APK_NAME=""
+PROVISION_COMMIT=""
 
 # --prerelease selects the newest release-candidate instead of the latest stable.
 CHANNEL_ARG="--latest"
@@ -29,15 +29,17 @@ esac; done
 if [ -t 1 ]; then B=$'\033[1m'; R=$'\033[31m'; G=$'\033[32m'; Y=$'\033[33m'; X=$'\033[0m'
 else B=; R=; G=; Y=; X=; fi
 REPO="maxlyth/ha-paneld"
-PROVISION_REF="${RELEASE_TAG:-main}"
+PROVISION_REF="${PROVISION_COMMIT:-${RELEASE_TAG:-main}}"
 PROVISION_URL=""
 RESOLVED_APK_URL=""
 valid_release_tag() { printf '%s\n' "$1" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$'; }
+valid_commit() { printf '%s\n' "$1" | grep -Eq '^[0-9a-f]{40}$'; }
 release_apk_name() { printf 'ha-paneld-%s-manual-setup-required.apk\n' "$1"; }
 release_apk_url() { printf 'https://github.com/%s/releases/download/%s/%s\n' "$REPO" "$1" "$(release_apk_name "$1")"; }
 if [ -n "$RELEASE_TAG" ]; then
   valid_release_tag "$RELEASE_TAG" || { echo "${R}Release installer has an invalid tag.${X}" >&2; exit 1; }
   [ "$RELEASE_APK_NAME" = "$(release_apk_name "$RELEASE_TAG")" ] || { echo "${R}Release installer does not pair its tag with the expected APK asset.${X}" >&2; exit 1; }
+  valid_commit "$PROVISION_COMMIT" || { echo "${R}Release installer is missing its immutable provisioner commit.${X}" >&2; exit 1; }
 fi
 
 if [ -n "$RELEASE_TAG" ]; then

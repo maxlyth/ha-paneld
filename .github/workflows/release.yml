@@ -107,11 +107,13 @@ jobs:
           sed \
             -e "s|^RELEASE_TAG=.*|RELEASE_TAG=\"$GITHUB_REF_NAME\"|" \
             -e "s|^RELEASE_APK_NAME=.*|RELEASE_APK_NAME=\"$APK_NAME\"|" \
+            -e "s|^PROVISION_COMMIT=.*|PROVISION_COMMIT=\"$GITHUB_SHA\"|" \
             scripts/install.sh > "$installer"
           chmod +x "$installer"
           bash -n "$installer"
           grep -Fq "RELEASE_TAG=\"$GITHUB_REF_NAME\"" "$installer"
           grep -Fq "RELEASE_APK_NAME=\"$APK_NAME\"" "$installer"
+          grep -Fq "PROVISION_COMMIT=\"$GITHUB_SHA\"" "$installer"
 
       - name: Attest release asset provenance
         uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
