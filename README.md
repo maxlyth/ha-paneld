@@ -96,11 +96,17 @@ Every panel publishes the **same** MQTT-discovery entities regardless of underly
 
 ## What needs root — and what doesn't
 
-A few of ha-paneld's features reach hardware that is only accessible to a privileged process, AKA **root**. Whether a panel permits root access is a property of the **panel's firmware**, not of ha-paneld. For most wall panels this is fine: purpose-built panels (Sonoff NSPanel Pro) ship with on-device root, and many others (Tuya TPA10, and the Shelly Wall Display family) expose `adb root` at setup, which lets ha-paneld's small helper run privileged from then on. Either way you get the full feature set. The reduced set is for the genuine hold-outs: locked-down consumer tablets and appliance firmware (corporate and EPOS devices) that grant neither. This limits some capability, and the root-gated features are **shown greyed with a 🔒 lock note** in the web UI. If you are not sure which camp your panel is in, the installer tells you at install time.
+A few of ha-paneld's features reach hardware that is only accessible to a privileged process, AKA **root**. Whether a panel permits root access is a property of the **panel's firmware**, not of ha-paneld. For most wall panels this is fine: purpose-built panels (Sonoff NSPanel Pro) ship with on-device root, and many others (Tuya TPA10, and the Shelly Wall Display family) expose `adb root` at setup, which lets ha-paneld's small helper run privileged from then on. Either way you get the full feature set.
+
+For a genuinely unrooted panel, ha-paneld can optionally use [Shizuku](https://shizuku.rikka.app/) as a middle tier. Shizuku grants the Android **shell** identity, not root: after its manager is installed and started, the user must explicitly enable Enhanced access and approve ha-paneld on the panel itself. The approval cannot be enabled through MQTT, the web API, config restore or a fleet push. An ADB-started Shizuku service normally needs rearming after a reboot.
+
+Unavailable features remain visible with a 🔒 explanation in the web UI, so a panel never has to pretend that shell access is equivalent to root. If you are not sure which tier a panel supports, the installer and diagnostics report it.
 
 **Works on every panel (no root):** Home Assistant pairing + all MQTT sensors, screen brightness and dim, audio announcements/TTS, both dashboard renderers (HA Companion and the built-in renderer), the full web UI and REST API, Back/Recents navigation, wake-on-wave, the soft navigation bar, and config backup/restore.
 
-**Needs a rooted panel:** true screen-off (backlight hard-off), RGB LED and relays, vendor-app taming, display sizing (density/text scale), self-update and Companion install/update from the panel, remote screenshot + tap control, full system logs, kiosk lock, CPU governor, and borrowing the Companion's sign-in when switching renderers.
+**Enhanced access with Shizuku or root:** display sizing (density/text scale), remote screenshot + tap control, and signature-pinned ha-paneld / Home Assistant Companion install or update.
+
+**Still needs a rooted panel or ha-paneld's root helper:** true screen-off (backlight hard-off), RGB LED and relays, vendor-app taming, reboot, full system logs, kiosk lock, CPU governor, private Companion backup/restore, and borrowing the Companion's sign-in when switching renderers.
 
 ## Supported hardware
 
