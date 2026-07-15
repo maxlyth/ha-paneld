@@ -56,11 +56,12 @@ object SettingsRegistry {
         ),
         SettingSpec(
             key = "mqtt_user", type = SettingType.STRING, group = "MQTT",
-            label = "Username", default = "", tier = Tier.BASIC,
+            label = "Username", default = "", tier = Tier.BASIC, scope = Scope.DEVICE,
+            help = "Per-panel broker identity; restoreable, but never copied by a fleet-mode import.",
         ),
         SettingSpec(
             key = "mqtt_password", type = SettingType.PASSWORD, group = "MQTT",
-            label = "Password", default = "", tier = Tier.BASIC, secret = true,
+            label = "Password", default = "", tier = Tier.BASIC, scope = Scope.DEVICE, secret = true,
             help = "Blank on save keeps the current password.",
         ),
 
@@ -128,7 +129,7 @@ object SettingsRegistry {
         // ---- Display -----------------------------------------------------------------------------
         SettingSpec(
             key = "auto_brightness", type = SettingType.BOOL, group = "Display",
-            label = "Auto-brightness", default = "false",
+            label = "Auto-brightness", default = "false", scope = Scope.DEVICE,
             help = "On-panel engine maps a lux stream to the backlight (off = HA drives the screen).",
             haExposedByDefault = true,
             ha = HaEntity(
@@ -139,6 +140,7 @@ object SettingsRegistry {
         SettingSpec(
             key = "brightness_bias", type = SettingType.INT, group = "Display",
             label = "Brightness bias", default = "0", min = -100.0, max = 100.0, step = 5.0,
+            scope = Scope.DEVICE,
             help = "Dimmer (−) ↔ brighter (+) offset added to the auto-brightness curve.",
             ha = HaEntity(
                 "number", "brightness_bias", "Brightness bias",
@@ -158,7 +160,7 @@ object SettingsRegistry {
         ),
         SettingSpec(
             key = "cpu_governor", type = SettingType.ENUM, group = "System",
-            label = "CPU profile", default = "Auto",
+            label = "CPU profile", default = "Auto", scope = Scope.DEVICE,
             // Mirrors CpuController.TIERS (kept literal — this package is pure/Android-free).
             options = listOf("Performance", "Efficiency", "Auto"),
             help = "CPU scaling intent; Auto = the SoC's dynamic governor.",
@@ -210,7 +212,7 @@ object SettingsRegistry {
         // Which app renders the dashboard + (for the skunk-works built-in renderer) how it connects to HA.
         SettingSpec(
             key = "dashboard_package", type = SettingType.STRING, group = "Dashboard",
-            label = "Dashboard app", default = "", picker = "renderer",
+            label = "Dashboard app", default = "", picker = "renderer", scope = Scope.DEVICE,
             help = "Which app renders the dashboard: the HA Companion, Fully Kiosk, or ha-paneld's built-in renderer (skunk-works). Blank = auto-detect the installed Companion.",
             validate = { value ->
                 if (AndroidInput.isDashboardTarget(value)) Validation.Ok(value)
@@ -219,12 +221,12 @@ object SettingsRegistry {
         ),
         SettingSpec(
             key = "dashboard_entity_learning", type = SettingType.BOOL, group = "Dashboard",
-            label = "Automatic dashboard entity filter", default = "false",
+            label = "Automatic dashboard entity filter", default = "false", scope = Scope.DEVICE,
             help = "Built-in renderer only: start with dashboard references, learn missing runtime dependencies, and avoid the full Home Assistant entity stream. Disabled by default. The Entities tab controls promotion sources, manual pins and diagnostics.",
         ),
         SettingSpec(
             key = "home_dashboard", type = SettingType.STRING, group = "Dashboard",
-            label = "Home dashboard", default = "",
+            label = "Home dashboard", default = "", scope = Scope.DEVICE,
             help = "Local dashboard path a reload returns to, e.g. /lovelace/0 (built-in renderer: the view it loads). Blank = wherever it was.",
         ),
         SettingSpec(
@@ -259,27 +261,28 @@ object SettingsRegistry {
         ),
         SettingSpec(
             key = "ha_token", type = SettingType.PASSWORD, group = "Dashboard",
-            label = "Home Assistant long-lived access token", default = "", secret = true,
+            label = "Home Assistant long-lived access token", default = "", scope = Scope.DEVICE,
+            secret = true,
             help = "Built-in renderer fallback when a Home Assistant Companion login cannot be borrowed. Create a long-lived access token from the Home Assistant user profile page. Blank on save keeps the current login; entering a new token replaces any borrowed or refresh-token login.",
         ),
         SettingSpec(
             key = "ha_refresh_token", type = SettingType.PASSWORD, group = "Dashboard",
-            label = "HA refresh token", default = "", secret = true, hidden = true,
+            label = "HA refresh token", default = "", scope = Scope.DEVICE, secret = true, hidden = true,
             help = "Internal token state retained for API/config import compatibility. Borrowed Companion and ha-paneld-issued OAuth logins manage it automatically.",
         ),
         SettingSpec(
             key = "ha_client_id", type = SettingType.STRING, group = "Dashboard",
-            label = "HA OAuth client_id", default = "", hidden = true,
+            label = "HA OAuth client_id", default = "", scope = Scope.DEVICE, hidden = true,
             help = "Internal token provenance retained for API/config import compatibility. Borrowed Companion tokens use the Android Companion client; ha-paneld-issued tokens use the HA origin. Not a user preference.",
         ),
         SettingSpec(
             key = "dashboard_entity_overrides", type = SettingType.STRING, group = "Dashboard",
-            label = "Entity filter overrides", default = "", hidden = true,
+            label = "Entity filter overrides", default = "", scope = Scope.DEVICE, hidden = true,
             help = "Backup-only storage for explicit entity pins and forced exclusions managed on the Entities tab.",
         ),
         SettingSpec(
             key = "dashboard_entity_learning_applied", type = SettingType.BOOL, group = "Dashboard",
-            label = "Apply learned entity filter", default = "false", hidden = true,
+            label = "Apply learned entity filter", default = "false", scope = Scope.DEVICE, hidden = true,
             help = "Backup-safe activation latch. Set after a safe empty-install bootstrap or an explicit apply from the Entities API or tab.",
         ),
         SettingSpec(
@@ -297,6 +300,7 @@ object SettingsRegistry {
         SettingSpec(
             key = "dashboard_zoom", type = SettingType.INT, group = "Dashboard",
             label = "Dashboard zoom (%)", default = "100", min = 50.0, max = 300.0, step = 10.0,
+            scope = Scope.DEVICE,
             help = "Built-in renderer page zoom % (100 = Companion default). Prefer Display sizing " +
                 "(density) for crisp scaling; this is a compatibility fallback.",
         ),
@@ -354,7 +358,7 @@ object SettingsRegistry {
         ),
         SettingSpec(
             key = "launcher_package", type = SettingType.STRING, group = "System",
-            label = "Launcher app", default = "", picker = "package",
+            label = "Launcher app", default = "", picker = "package", scope = Scope.DEVICE,
             help = "App the Launcher button brings forward (blank = auto-pick).",
         ),
         // Vendor taming is managed by the "Vendor packages" card (add/re-enable per app), so no free-text
