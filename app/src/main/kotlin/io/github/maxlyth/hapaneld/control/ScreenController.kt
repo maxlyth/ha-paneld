@@ -1,6 +1,8 @@
 package io.github.maxlyth.hapaneld.control
 
 import android.util.Log
+import io.github.maxlyth.hapaneld.device.DeviceProfile
+import io.github.maxlyth.hapaneld.device.ScreenOff
 import io.github.maxlyth.hapaneld.platform.Daemon
 import io.github.maxlyth.hapaneld.platform.NoWakeTap
 import io.github.maxlyth.hapaneld.platform.RootShell
@@ -11,11 +13,10 @@ import io.github.maxlyth.hapaneld.util.HelperClient
 /**
  * Screen on/off — vendor-free with one serialized transition owner.
  *
- * Tiers (first that works wins), all leaving the device Awake — no keyguard, no PIN on wake:
- *  1. Root helper daemon — powers the backlight via `bl_power` (sysfs-LED panels, e.g. TPA10).
- *  2. Direct `su` `bl_power` — for su-capable panels with no daemon (Sonoff PX30): a true
- *     hardware backlight-off. (brightness 0 on these only dims — the backlight stays powered.)
- *  3. Brightness 0 — last-resort dim for panels with neither daemon nor su.
+ * The active profile selects helper, direct `su`, or brightness-zero as the preferred route. The two
+ * privileged routes may fall through to each other and then brightness when unavailable; an explicit
+ * brightness-zero profile never probes a privileged actuator. All routes leave the device Awake — no
+ * keyguard and no PIN on wake.
  *
  * This deliberately avoids `DevicePolicyManager.lockNow()`, which turns the screen off via the
  * keyguard and therefore demands the device PIN on wake. Its collaborators are seamed ([Backlight],
@@ -33,6 +34,7 @@ class ScreenController(
     private val root: RootShell = Su,
     private val daemon: Daemon = HelperClient,
     private val wakeTap: WakeTap = NoWakeTap,
+    private val route: ScreenOff = DeviceProfile.detect().screenOff,
 ) {
     // Last known "on" level, used by the brightness fallback. Survives an off/on cycle.
     @Volatile private var savedLevel = DEFAULT_ON
@@ -44,6 +46,7 @@ class ScreenController(
     // tell a USER-intended dark screen (leave it) from an unintended one (re-light it) — so a stray/
     // stale screen-off can never strand the panel dark, but a deliberate "screen off" still stays off.
     @Volatile private var intendedOff = false
+    @Volatile private var appliedOffRoute: ScreenOff? = null
 
     fun isOn(): Boolean = power.isInteractive()
 
@@ -58,13 +61,17 @@ class ScreenController(
             // A powered backlight with an effective level of zero is still physically dark.
             return if (power == 0) effective() else true
         }
-        // The helper is the screen-power actuator on no-app-su/SELinux panels such as TPA10, so its
-        // kernel readback is authoritative. actual_brightness remains nonzero while bl_power=4.
-        val daemonPower = daemon.send("BLPOWER")?.trim()?.toIntOrNull()?.takeIf { it in 0..4 }
-        if (daemonPower != null) return fromPower(daemonPower)
-        val rootPower = root.runOutput("d=\$(ls -d /sys/class/backlight/*/ 2>/dev/null|head -1);cat \${d}bl_power 2>/dev/null")
-            ?.trim()?.toIntOrNull()?.takeIf { it in 0..4 }
-        return rootPower?.let(::fromPower) ?: effective()
+        return when (route) {
+            ScreenOff.DAEMON_BLPOWER -> daemon.send("BLPOWER")?.trim()?.toIntOrNull()
+                ?.takeIf { it in 0..4 }?.let(::fromPower)
+                ?: root.runOutput(blPowerRead())?.trim()?.toIntOrNull()
+                    ?.takeIf { it in 0..4 }?.let(::fromPower) ?: effective()
+            ScreenOff.SU_BLPOWER -> root.runOutput(blPowerRead())
+                ?.trim()?.toIntOrNull()?.takeIf { it in 0..4 }?.let(::fromPower)
+                ?: daemon.send("BLPOWER")?.trim()?.toIntOrNull()
+                    ?.takeIf { it in 0..4 }?.let(::fromPower) ?: effective()
+            ScreenOff.BRIGHTNESS_ZERO -> effective()
+        }
     }
 
     /** Cautious boolean used by the never-blank watchdog: unknown is not grounds to alter hardware. */
@@ -88,6 +95,7 @@ class ScreenController(
             val cur = backlight.getBrightness()
             if (cur > 0) savedLevel = cur
             backlight.setBrightness(NO_WAKE_DIM)
+            appliedOffRoute = null
             Log.w(TAG, "screen-off with no touch-to-wake — dimming to floor (never-blank; saved=$savedLevel)")
             return
         }
@@ -95,14 +103,23 @@ class ScreenController(
         // bl_power paths below take the panel *truly* dark — freeze the WebView there (no point rendering
         // behind a black backlight). The brightness fallback (0) is not guaranteed dark on panels that
         // clamp a minimum, so it does NOT freeze (correctness over the CPU saving on those rare panels).
-        if (daemon.send("SCREEN OFF") == "OK") {
-            BuiltinDashboard.onScreenAwake(false)
-            Log.d(TAG, "screen -> off (daemon bl_power)")
-            return
+        val poweredOffRoute = when (route) {
+            ScreenOff.DAEMON_BLPOWER -> when {
+                daemon.send("SCREEN OFF") == "OK" -> ScreenOff.DAEMON_BLPOWER
+                root.run(blPower(false)) -> ScreenOff.SU_BLPOWER
+                else -> null
+            }
+            ScreenOff.SU_BLPOWER -> when {
+                root.run(blPower(false)) -> ScreenOff.SU_BLPOWER
+                daemon.send("SCREEN OFF") == "OK" -> ScreenOff.DAEMON_BLPOWER
+                else -> null
+            }
+            ScreenOff.BRIGHTNESS_ZERO -> null
         }
-        if (root.run(blPower(false))) {
+        if (poweredOffRoute != null) {
+            appliedOffRoute = poweredOffRoute
             BuiltinDashboard.onScreenAwake(false)
-            Log.d(TAG, "screen -> off (su bl_power)")
+            Log.d(TAG, "screen -> off (${poweredOffRoute.name.lowercase()})")
             return
         }
         // Last resort: no daemon, no su — dim to 0 (only a dim on panels that clamp a minimum). Uses the
@@ -110,6 +127,7 @@ class ScreenController(
         val cur = backlight.getBrightness()
         if (cur > 0) savedLevel = cur
         backlight.setBrightnessRaw(0)
+        appliedOffRoute = ScreenOff.BRIGHTNESS_ZERO
         Log.d(TAG, "screen -> off (brightness fallback; saved=$savedLevel)")
     }
 
@@ -117,11 +135,13 @@ class ScreenController(
     fun wake() {
         intendedOff = false
         wakeTap.disarm()
-        if (daemon.send("SCREEN ON") == "OK") {
+        val wakingRoute = appliedOffRoute ?: route
+        appliedOffRoute = null
+        if (wakingRoute == ScreenOff.DAEMON_BLPOWER && daemon.send("SCREEN ON") == "OK") {
             completeWake("screen -> on (daemon bl_power)")
             return
         }
-        if (root.run(blPower(true))) {
+        if (wakingRoute == ScreenOff.SU_BLPOWER && root.run(blPower(true))) {
             completeWake("screen -> on (su bl_power)")
             return
         }
@@ -150,6 +170,9 @@ class ScreenController(
         return "d=\$(ls -d /sys/class/backlight/*/ 2>/dev/null|head -1);" +
             "[ -n \"\$d\" ]&&echo $v >\${d}bl_power"
     }
+
+    private fun blPowerRead(): String =
+        "d=\$(ls -d /sys/class/backlight/*/ 2>/dev/null|head -1);cat \${d}bl_power 2>/dev/null"
 
     companion object {
         private const val TAG = "ha-paneld/screen"

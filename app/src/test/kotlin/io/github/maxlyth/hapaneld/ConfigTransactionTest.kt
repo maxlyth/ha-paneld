@@ -11,21 +11,22 @@ import org.junit.Test
 import java.lang.reflect.Proxy
 
 class ConfigTransactionTest {
-    @Test fun proximityCalibrationIsScopedToTheActiveProfileId() {
+    @Test fun proximityCalibrationIsScopedToTheActiveProfileRevision() {
         val prefs = fakePreferences()
-        val config = Config(prefs.instance)
+        val calibration = fakePreferences()
+        val config = Config(prefs.instance, calibration.instance)
         config.attachProfile(profile("first-panel"))
         config.captureProximity("near", 2f)
         config.captureProximity("far", 10f)
         config.setProximitySensitivity("LOW")
 
-        config.attachProfile(profile("second-panel"))
+        config.attachProfile(profile("first-panel", "revision-b"))
         assertFalse(config.proximityCalibrated)
         assertEquals(Config.ProxSensitivity.MEDIUM, config.proximitySensitivity)
         config.captureProximity("near", 20f)
         config.captureProximity("far", 40f)
 
-        config.attachProfile(profile("first-panel"))
+        config.attachProfile(profile("first-panel", "revision-a"))
         assertEquals(2f, config.proximityNearRaw, 0f)
         assertEquals(10f, config.proximityFarRaw, 0f)
         assertEquals(6f, config.proximityThreshold, 0f)
@@ -40,7 +41,8 @@ class ConfigTransactionTest {
             "prox_near_below" to true,
             "prox_sensitivity" to "HIGH",
         ))
-        val config = Config(prefs.instance)
+        val calibration = fakePreferences()
+        val config = Config(prefs.instance, calibration.instance)
 
         config.attachProfile(profile("legacy-panel"))
         assertEquals(3f, config.proximityNearRaw, 0f)
@@ -50,8 +52,28 @@ class ConfigTransactionTest {
         config.attachProfile(profile("community.other-panel"))
         assertFalse(config.proximityCalibrated)
         assertEquals(Config.ProxSensitivity.MEDIUM, config.proximitySensitivity)
-        assertTrue(prefs.values.containsKey("profile_calibration.legacy-panel.prox_threshold"))
-        assertFalse(prefs.values.containsKey("profile_calibration.community.other-panel.prox_threshold"))
+        assertTrue(calibration.values.containsKey("profile_calibration.legacy-panel.revision-a.prox_threshold"))
+        assertFalse(calibration.values.containsKey("profile_calibration.community.other-panel.revision-a.prox_threshold"))
+        assertFalse("physical calibration must not be copied into backup-eligible config prefs",
+            prefs.values.keys.any { it.startsWith("profile_calibration.") })
+    }
+
+    @Test fun buttonBacklightReplayIsScopedToARevisionThatDeclaresTheCapability() {
+        val prefs = fakePreferences(initial = mapOf("last_button_backlight" to 41))
+        val calibration = fakePreferences()
+        val config = Config(prefs.instance, calibration.instance)
+        config.attachProfile(profile("panel", "revision-a", hasButtonBacklight = true))
+        assertEquals(41, config.lastButtonBacklight)
+        assertFalse(prefs.values.containsKey("last_button_backlight"))
+        config.lastButtonBacklight = 73
+        assertEquals(73, config.lastButtonBacklight)
+
+        config.attachProfile(profile("panel", "revision-b", hasButtonBacklight = false))
+        assertEquals(-1, config.lastButtonBacklight)
+        config.lastButtonBacklight = 200
+
+        config.attachProfile(profile("panel", "revision-a", hasButtonBacklight = true))
+        assertEquals(73, config.lastButtonBacklight)
     }
 
     @Test fun defaultResolverUpgradeInvalidatesOldAutomaticFilterButPreservesItsIds() {
@@ -1015,9 +1037,15 @@ class ConfigTransactionTest {
         val values: MutableMap<String, Any?>,
     )
 
-    private fun profile(id: String): DeviceProfile = object : DeviceProfile by Generic {
+    private fun profile(
+        id: String,
+        revision: String = "revision-a",
+        hasButtonBacklight: Boolean = false,
+    ): DeviceProfile = object : DeviceProfile by Generic {
         override val id = id
+        override val revision = revision
         override val displayName = id
+        override val hasButtonBacklight = hasButtonBacklight
     }
 
     private fun fakePreferences(

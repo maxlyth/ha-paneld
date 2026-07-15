@@ -10,7 +10,7 @@ import java.io.OutputStreamWriter
 
 /** The deterministic app side of the helper's WATCH/SUBSCRIBE line protocol. */
 internal object EvdevStreamSession {
-    enum class Mode { VERIFIED, LEGACY }
+    enum class Mode { RECONFIGURABLE, VERIFIED, LEGACY }
 
     private data class ParsedEvent(val valid: Boolean, val eventType: String?)
 
@@ -38,13 +38,27 @@ internal object EvdevStreamSession {
 
         val reader = BufferedReader(InputStreamReader(input, Charsets.US_ASCII))
         val writer = OutputStreamWriter(output, Charsets.US_ASCII)
-        writer.write("INPUTV2\n")
+        writer.write("INPUTV3\n")
         writer.flush()
         val mode = when (val reply = reader.readLine()) {
-            "OK" -> Mode.VERIFIED
-            "ERR" -> Mode.LEGACY
-            null -> throw IOException("helper closed before INPUTV2 acknowledgement")
-            else -> throw IOException("unexpected INPUTV2 acknowledgement: $reply")
+            "OK" -> Mode.RECONFIGURABLE
+            "ERR" -> {
+                writer.write("INPUTV2\n")
+                writer.flush()
+                when (val legacyReply = reader.readLine()) {
+                    "OK" -> Mode.VERIFIED
+                    "ERR" -> Mode.LEGACY
+                    null -> throw IOException("helper closed before INPUTV2 acknowledgement")
+                    else -> throw IOException("unexpected INPUTV2 acknowledgement: $legacyReply")
+                }
+            }
+            null -> throw IOException("helper closed before INPUTV3 acknowledgement")
+            else -> throw IOException("unexpected INPUTV3 acknowledgement: $reply")
+        }
+        if (mode == Mode.RECONFIGURABLE) {
+            writer.write("WATCHRESET\n")
+            writer.flush()
+            requireAck(reader, "WATCHRESET")
         }
         buttons.forEach { button ->
             writer.write("WATCH ${button.node} ${if (button.grab) 1 else 0}\n")

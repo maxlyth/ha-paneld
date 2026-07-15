@@ -106,6 +106,28 @@ class ProfileYamlSecurityTest {
         assertEquals(ProfileArtifacts.webViews["lineageos-150-arm64"], DataDeviceProfile(document, "").recommendedWebView)
     }
 
+    @Test fun `display recommendations stay within controller bounds`() {
+        val density = testProfileDocument().copy(
+            display = ProfileDisplay(recommendedDensity = ProfileDensity.Fixed(641), recommendedFontScale = 1.51f),
+        )
+
+        val issues = ProfileValidator.validate(density, "1.0.0", bundled = false)
+
+        assertTrue(issues.any { it.path == "display.recommended_density" })
+        assertTrue(issues.any { it.path == "display.recommended_font_scale" })
+    }
+
+    @Test fun `sandbox walled profile cannot declare su polled gpio proximity`() {
+        val document = testProfileDocument().copy(
+            requires = ProfileRequirements(drivers = setOf("screen.brightness-zero", "sensor.gpio-proximity")),
+            sensors = ProfileSensors(proximityGpio = 18),
+        )
+
+        val issues = ProfileValidator.validate(document, "1.0.0", bundled = false)
+
+        assertTrue(issues.any { it.path == "sensors.proximity_gpio" && "app_can_su" in it.message })
+    }
+
     @Test fun `project rc suffixes compare numerically and precede stable`() {
         assertTrue(ProfileValidator.compareVersions("0.9.3-rc10", "0.9.3-rc2") > 0)
         assertEquals(0, ProfileValidator.compareVersions("0.9.3-rc2", "0.9.3-rc2"))

@@ -19,6 +19,11 @@ interface DeviceProfile {
     /** Stable id, e.g. "nspanel-pro" / "tpa10" / "generic". */
     val id: String
 
+    /** Immutable identity of the loaded profile content. Runtime YAML profiles use their SHA-256
+     *  revision; compiled legacy profiles retain a stable built-in identity. Local sensor calibration
+     *  is scoped to this value so a different revision cannot inherit incompatible physical readings. */
+    val revision: String get() = "compiled"
+
     /** Human label for the info page / diagnostics. */
     val displayName: String
 

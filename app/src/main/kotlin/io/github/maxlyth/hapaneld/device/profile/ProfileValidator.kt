@@ -82,7 +82,10 @@ internal object ProfileValidator {
             reject("hardware.relay_base_fallbacks", "Relay class paths must be unique.")
         }
         document.hardware.buttonLedGpioBase?.let { if (it !in 0..4092) reject("hardware.button_led_gpio_base", "GPIO block base must be between 0 and 4092.") }
-        document.sensors.proximityGpio?.let { if (it !in 0..4095) reject("sensors.proximity_gpio", "GPIO must be between 0 and 4095.") }
+        document.sensors.proximityGpio?.let {
+            if (it !in 0..4095) reject("sensors.proximity_gpio", "GPIO must be between 0 and 4095.")
+            if (!document.platform.appCanSu) reject("sensors.proximity_gpio", "GPIO proximity polling requires app_can_su: true.")
+        }
         if ((document.sensors.proximityNearRaw == null) != (document.sensors.proximityFarRaw == null)) reject("sensors", "Near and far reference readings must be supplied together.")
         if (document.sensors.roomTempOffsetC !in -30f..30f) reject("sensors.room_temp_offset_c", "Offset must be between -30 and 30 °C.")
         if (document.sensors.proximityGradedStrategy !in setOf("observed", "nspanel-firmware-cutover")) reject("sensors.proximity_graded_strategy", "Unknown core strategy.")
@@ -92,11 +95,11 @@ internal object ProfileValidator {
         boundedText(document.identity.manufacturer, "identity.manufacturer")
         boundedText(document.identity.model, "identity.model")
         when (val density = document.display.recommendedDensity) {
-            is ProfileDensity.Fixed -> if (density.value !in 72..1000) reject("display.recommended_density", "Density must be between 72 and 1000 dpi.")
+            is ProfileDensity.Fixed -> if (density.value !in 80..640) reject("display.recommended_density", "Density must be between 80 and 640 dpi.")
             is ProfileDensity.Strategy -> if (density.id != "nspanel-variant") reject("display.recommended_density", "Unknown core strategy '${density.id}'.")
             null -> Unit
         }
-        document.display.recommendedFontScale?.let { if (it !in 0.5f..3f) reject("display.recommended_font_scale", "Font scale must be between 0.5 and 3.") }
+        document.display.recommendedFontScale?.let { if (it !in 0.5f..1.5f) reject("display.recommended_font_scale", "Font scale must be between 0.5 and 1.5.") }
         document.display.physicalPpi?.let { if (it !in 50..1000) reject("display.physical_ppi", "Physical PPI must be between 50 and 1000.") }
         if (document.input.evdevButtons.size > 32) reject("input.evdev_buttons", "At most 32 evdev mappings are allowed.")
         val evdevCodes = mutableSetOf<Pair<Boolean, Int>>()

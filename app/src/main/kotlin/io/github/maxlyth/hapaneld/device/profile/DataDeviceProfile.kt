@@ -8,11 +8,13 @@ import io.github.maxlyth.hapaneld.device.SuForm
 import io.github.maxlyth.hapaneld.device.TameCandidate
 import io.github.maxlyth.hapaneld.device.WebViewSpec
 import io.github.maxlyth.hapaneld.hardware.LedTransfer
+import java.security.MessageDigest
 
 /** DeviceProfile adapter for a validated declarative document. */
 class DataDeviceProfile internal constructor(
     val document: ProfileDocument,
     private val productVersion: String,
+    override val revision: String = canonicalRevision(document),
 ) : DeviceProfile {
     override val id = document.id
     override val displayName = document.displayName
@@ -120,6 +122,10 @@ class DataDeviceProfile internal constructor(
 
     private companion object {
         const val S6_VERSION_PREFIX = "s6_android_"
+
+        fun canonicalRevision(document: ProfileDocument): String = MessageDigest.getInstance("SHA-256")
+            .digest(ProfileYaml.serialize(document).toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
     }
 }
 

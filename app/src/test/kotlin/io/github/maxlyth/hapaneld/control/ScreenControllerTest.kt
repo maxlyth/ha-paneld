@@ -2,6 +2,7 @@ package io.github.maxlyth.hapaneld.control
 
 import io.github.maxlyth.hapaneld.platform.Daemon
 import io.github.maxlyth.hapaneld.platform.DaemonLongResult
+import io.github.maxlyth.hapaneld.device.ScreenOff
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -27,7 +28,7 @@ class ScreenControllerTest {
         daemon: Map<String, String> = emptyMap(),
     ): Pair<ScreenController, FakeRootShell> {
         val root = FakeRootShell(outputs = blPower?.let { mapOf("bl_power" to it) } ?: emptyMap(), runResult = suRuns)
-        return ScreenController(backlight, power, root, FakeDaemon(daemon), wakeTap) to root
+        return ScreenController(backlight, power, root, FakeDaemon(daemon), wakeTap, ScreenOff.DAEMON_BLPOWER) to root
     }
 
     private fun assertRendererWakeAfter(sc: ScreenController, physicalWakeComplete: () -> Boolean) {
@@ -129,6 +130,29 @@ class ScreenControllerTest {
         assertTrue("expected a raw dim to 0, got ${backlight.calls}", backlight.calls.contains("raw:0"))
     }
 
+    @Test fun brightnessRouteDoesNotProbePrivilegedActuators() {
+        val root = FakeRootShell(runResult = true)
+        val daemon = FakeDaemon(mapOf("SCREEN OFF" to "OK"))
+        val sc = ScreenController(backlight, power, root, daemon, wakeTap, ScreenOff.BRIGHTNESS_ZERO)
+
+        sc.sleep()
+
+        assertTrue(root.ran.isEmpty())
+        assertTrue(daemon.sent.isEmpty())
+        assertTrue(backlight.calls.contains("raw:0"))
+    }
+
+    @Test fun suRouteIsAttemptedBeforeDaemonFallback() {
+        val root = FakeRootShell(runResult = true)
+        val daemon = FakeDaemon(mapOf("SCREEN OFF" to "OK"))
+        val sc = ScreenController(backlight, power, root, daemon, wakeTap, ScreenOff.SU_BLPOWER)
+
+        sc.sleep()
+
+        assertTrue(root.ran.any { it.contains("bl_power") })
+        assertTrue(daemon.sent.isEmpty())
+    }
+
     // --- wake always pulses the wakelock ---
     @Test fun wakePulsesOnDaemonTier() {
         val (sc, _) = controller(daemon = mapOf("SCREEN ON" to "OK"))
@@ -145,18 +169,18 @@ class ScreenControllerTest {
 
     @Test fun rendererIsNotifiedAfterDaemonWakeAndWakelockPulse() {
         val daemon = FakeDaemon(mapOf("SCREEN ON" to "OK"))
-        val sc = ScreenController(backlight, power, FakeRootShell(), daemon, wakeTap)
+        val sc = ScreenController(backlight, power, FakeRootShell(), daemon, wakeTap, ScreenOff.DAEMON_BLPOWER)
         assertRendererWakeAfter(sc) { daemon.sent.contains("SCREEN ON") }
     }
 
     @Test fun rendererIsNotifiedAfterRootWakeAndWakelockPulse() {
         val root = FakeRootShell(runResult = true)
-        val sc = ScreenController(backlight, power, root, FakeDaemon(), wakeTap)
+        val sc = ScreenController(backlight, power, root, FakeDaemon(), wakeTap, ScreenOff.SU_BLPOWER)
         assertRendererWakeAfter(sc) { root.ran.any { it.contains("bl_power") } }
     }
 
     @Test fun rendererIsNotifiedAfterBrightnessWakeAndWakelockPulse() {
-        val sc = ScreenController(backlight, power, FakeRootShell(runResult = false), FakeDaemon(), wakeTap)
+        val sc = ScreenController(backlight, power, FakeRootShell(runResult = false), FakeDaemon(), wakeTap, ScreenOff.BRIGHTNESS_ZERO)
         assertRendererWakeAfter(sc) { backlight.calls.any { it.startsWith("set:") } }
     }
 
@@ -197,7 +221,7 @@ class ScreenControllerTest {
         wakeTap.armSucceeds = false
         val daemon = FakeDaemon(mapOf("SCREEN OFF" to "OK"))
         val root = FakeRootShell(runResult = true)
-        val sc = ScreenController(backlight, power, root, daemon, wakeTap)
+        val sc = ScreenController(backlight, power, root, daemon, wakeTap, ScreenOff.DAEMON_BLPOWER)
 
         sc.sleep()
 
@@ -221,7 +245,7 @@ class ScreenControllerTest {
 
     @Test fun concurrentWakeWaitsForTheInFlightSleepTransition() {
         val daemon = BlockingScreenDaemon()
-        val sc = ScreenController(backlight, power, FakeRootShell(), daemon, wakeTap)
+        val sc = ScreenController(backlight, power, FakeRootShell(), daemon, wakeTap, ScreenOff.DAEMON_BLPOWER)
         val sleep = Thread({ sc.sleep() }, "test-screen-sleep").apply { start() }
         assertTrue(daemon.offEntered.await(1, TimeUnit.SECONDS))
         val wakeStarted = CountDownLatch(1)

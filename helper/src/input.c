@@ -69,7 +69,8 @@ static void sub_broadcast(const char *line) {
 
 // --- evdev reader threads -------------------------------------------------------------------------
 // WATCHed nodes, deduped so a reconnecting app doesn't double-open (the second EVIOCGRAB would fail).
-struct watch_state { char path[128]; int grab; int fd; int ready; int grabbed; };
+struct watch_state { char path[128]; int grab; int fd; int ready; int grabbed; unsigned generation; };
+struct watch_thread { struct watch_state *state; char path[128]; int grab; unsigned generation; };
 #define MAX_WATCH 8
 static struct watch_state watched[MAX_WATCH];
 static int  watch_n = 0;
@@ -84,10 +85,10 @@ static int valid_evdev_path(const char *path) {
     return 1;
 }
 
-static int open_evdev(const struct watch_state *watch, int activate_grab, int verify_grab) {
-    int fd = open(watch->path, O_RDONLY);
+static int open_evdev(const char *path, int grab, int activate_grab, int verify_grab) {
+    int fd = open(path, O_RDONLY);
     if (fd < 0) return -1;
-    if (watch->grab && (activate_grab || verify_grab)) {
+    if (grab && (activate_grab || verify_grab)) {
         if (ioctl(fd, EVIOCGRAB, (void *)1) < 0) {
             close(fd);
             return -1;
@@ -159,8 +160,14 @@ void input_init(void) {
     // Production calls this once before any watcher starts. Closing unclaimed initial descriptors also
     // makes repeated host-test/fuzz resets deterministic when the spawn seam reports success.
     pthread_mutex_lock(&watch_lock);
-    for (int i = 0; i < watch_n; i++) if (watched[i].fd >= 0) close(watched[i].fd);
-    memset(watched, 0, sizeof watched);
+    for (int i = 0; i < watch_n; i++) {
+        if (watched[i].grabbed) release_grab(&watched[i]);
+        if (watched[i].fd >= 0) close(watched[i].fd);
+        __atomic_add_fetch(&watched[i].generation, 1, __ATOMIC_RELEASE);
+        watched[i].fd = -1;
+        watched[i].ready = 0;
+        watched[i].grabbed = 0;
+    }
     watch_n = 0;
     pthread_mutex_unlock(&watch_lock);
 }
@@ -168,18 +175,28 @@ void input_init(void) {
 // Open an evdev node, optionally grab it exclusively, stream EV_KEY/EV_SW events to subscribers.
 // Re-opens on error (node not ready at boot / device unplug) so it self-heals.
 static void *evdev_thread(void *arg) {
-    struct watch_state *watch = arg;
+    struct watch_thread *thread = arg;
+    struct watch_state *watch = thread->state;
     for (;;) {
         pthread_mutex_lock(&watch_lock);
+        if (watch->generation != thread->generation) {
+            pthread_mutex_unlock(&watch_lock);
+            break;
+        }
         int fd = watch->fd;
         pthread_mutex_unlock(&watch_lock);
         if (fd < 0) {
             int activate_grab = __atomic_load_n(&subscriber_count, __ATOMIC_SEQ_CST) > 0;
-            fd = open_evdev(watch, activate_grab, 0);
+            fd = open_evdev(thread->path, thread->grab, activate_grab, 0);
             if (fd < 0) { sleep(2); continue; }
             pthread_mutex_lock(&watch_lock);
+            if (watch->generation != thread->generation) {
+                pthread_mutex_unlock(&watch_lock);
+                close(fd);
+                break;
+            }
             int should_grab = __atomic_load_n(&subscriber_count, __ATOMIC_SEQ_CST) > 0;
-            if (watch->grab && should_grab != activate_grab &&
+            if (thread->grab && should_grab != activate_grab &&
                 ioctl(fd, EVIOCGRAB, (void *)(long)should_grab) < 0) {
                 pthread_mutex_unlock(&watch_lock);
                 close(fd);
@@ -188,12 +205,13 @@ static void *evdev_thread(void *arg) {
             }
             watch->fd = fd;
             watch->ready = 1;
-            watch->grabbed = watch->grab && should_grab;
+            watch->grabbed = thread->grab && should_grab;
             pthread_mutex_unlock(&watch_lock);
         }
         struct input_event ev;
         char line[48];
         while (read(fd, &ev, sizeof ev) == (ssize_t)sizeof ev) {
+            if (__atomic_load_n(&watch->generation, __ATOMIC_ACQUIRE) != thread->generation) break;
             // EV_KEY = momentary keys; EV_SW = latching switches (e.g. the TPA10 orange button reports
             // SW_MUTE_DEVICE on gpio-keys, not a key). Stream both; the app decides what each means.
             if (ev.type == EV_KEY || ev.type == EV_SW) {
@@ -203,7 +221,7 @@ static void *evdev_thread(void *arg) {
             }
         }
         pthread_mutex_lock(&watch_lock);
-        int owned = watch->fd == fd;
+        int owned = watch->generation == thread->generation && watch->fd == fd;
         if (owned) {
             watch->fd = -1;
             watch->ready = 0;
@@ -211,9 +229,39 @@ static void *evdev_thread(void *arg) {
         }
         pthread_mutex_unlock(&watch_lock);
         if (owned) close(fd); // device went away — close releases the grab, then reopen
+        else break;           // reset/reconfiguration invalidated this generation
         sleep(1);
     }
+    free(thread);
     return NULL;
+}
+
+// Clear the process-wide watch table between app runtimes. Refuse while another subscriber still owns
+// delivery; a reconnecting client retries rather than disrupting a live stream. Generation tokens let
+// old reader threads finish after descriptor close without mutating newly reused slots.
+int input_reset_watches(void) {
+    pthread_mutex_lock(&subs_lock);
+    if (subscriber_count != 0) {
+        pthread_mutex_unlock(&subs_lock);
+        return -1;
+    }
+    pthread_mutex_lock(&watch_lock);
+    for (int i = 0; i < watch_n; i++) {
+        struct watch_state *watch = &watched[i];
+        if (watch->grabbed) release_grab(watch);
+        if (watch->fd >= 0) close(watch->fd);
+        unsigned generation = __atomic_load_n(&watch->generation, __ATOMIC_ACQUIRE) + 1;
+        watch->path[0] = '\0';
+        watch->grab = 0;
+        watch->fd = -1;
+        watch->ready = 0;
+        watch->grabbed = 0;
+        __atomic_store_n(&watch->generation, generation, __ATOMIC_RELEASE);
+    }
+    watch_n = 0;
+    pthread_mutex_unlock(&watch_lock);
+    pthread_mutex_unlock(&subs_lock);
+    return 0;
 }
 
 // Start watching a node once. grab=1 takes exclusive ownership (suppresses the default Android action).
@@ -229,20 +277,30 @@ int input_watch(const char *path, int grab) {
     if (watch_n >= MAX_WATCH) { pthread_mutex_unlock(&watch_lock); return -1; }
 
     struct watch_state *watch = &watched[watch_n];
+    unsigned generation = __atomic_load_n(&watch->generation, __ATOMIC_ACQUIRE) + 1;
+    __atomic_store_n(&watch->generation, generation, __ATOMIC_RELEASE);
     snprintf(watch->path, sizeof watch->path, "%s", path);
     watch->grab = grab;
     int active_subscribers = __atomic_load_n(&subscriber_count, __ATOMIC_SEQ_CST) > 0;
-    watch->fd = open_evdev(watch, active_subscribers, 1);
+    watch->fd = open_evdev(path, grab, active_subscribers, 1);
     if (watch->fd < 0) {
-        memset(watch, 0, sizeof *watch);
         pthread_mutex_unlock(&watch_lock);
         return -1;
     }
     watch->ready = 1;
     watch->grabbed = watch->grab && active_subscribers;
-    if (sysexec_spawn(evdev_thread, watch) != 0) {
+    struct watch_thread *thread = calloc(1, sizeof *thread);
+    if (thread != NULL) {
+        thread->state = watch;
+        thread->generation = generation;
+        thread->grab = grab;
+        snprintf(thread->path, sizeof thread->path, "%s", path);
+    }
+    if (thread == NULL || sysexec_spawn(evdev_thread, thread) != 0) {
         close(watch->fd);
-        memset(watch, 0, sizeof *watch);
+        watch->fd = -1;
+        watch->ready = 0;
+        free(thread);
         pthread_mutex_unlock(&watch_lock);
         return -1;
     }
@@ -262,6 +320,16 @@ void cmd_watch(conn_ctx *ctx, const char *args) {
 void cmd_inputv2(conn_ctx *ctx, const char *args) {
     (void)args;
     reply(ctx->fd, "OK\n");
+}
+
+void cmd_inputv3(conn_ctx *ctx, const char *args) {
+    (void)args;
+    reply(ctx->fd, "OK\n");
+}
+
+void cmd_watchreset(conn_ctx *ctx, const char *args) {
+    (void)args;
+    reply(ctx->fd, input_reset_watches() == 0 ? "OK\n" : "ERR\n");
 }
 
 void cmd_subscribe(conn_ctx *ctx, const char *args) {

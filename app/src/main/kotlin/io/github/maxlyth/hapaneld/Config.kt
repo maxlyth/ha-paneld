@@ -23,14 +23,20 @@ import java.util.Locale
 class Config private constructor(
     private val prefs: SharedPreferences,
     private val contentResolver: ContentResolver?,
+    private val calibrationPrefs: SharedPreferences,
 ) {
     constructor(context: Context) : this(
         context.getSharedPreferences("ha-paneld", Context.MODE_PRIVATE),
         context.applicationContext.contentResolver,
+        context.getSharedPreferences(PROFILE_CALIBRATION_PREFS, Context.MODE_PRIVATE),
     )
 
     /** JVM-test seam; identity defaults that consult Android settings require the production constructor. */
-    internal constructor(prefs: SharedPreferences) : this(prefs, null)
+    internal constructor(prefs: SharedPreferences) : this(prefs, null, prefs)
+
+    /** JVM-test seam that keeps configuration and non-transferable sensor calibration separate. */
+    internal constructor(prefs: SharedPreferences, calibrationPrefs: SharedPreferences) :
+        this(prefs, null, calibrationPrefs)
 
     val httpPort: Int get() = prefs.getInt("http_port", DEFAULT_PORT)
 
@@ -987,29 +993,64 @@ class Config private constructor(
         // A calibration describes one physical sensor, not the daemon globally. Bind legacy values to
         // the profile active during this one-time migration; future profile switches get an independent
         // namespace and switching back restores the original captures.
-        proximityCalibrationPrefix = profileCalibrationPrefix(p.id)
+        proximityCalibrationPrefix = profileCalibrationPrefix(p.id, p.revision)
             .takeIf { migrateLegacyProximityCalibration(it) }
+        migrateLegacyButtonBacklight(p)
         profile = p
     }
 
-    private fun profileCalibrationPrefix(profileId: String): String =
-        "profile_calibration.${profileId.lowercase(Locale.ROOT).replace(Regex("[^a-z0-9._-]"), "-")}"
+    private fun profileCalibrationPrefix(profileId: String, revision: String): String =
+        "profile_calibration.${sanitizeProfileIdentity(profileId)}.${sanitizeProfileIdentity(revision)}"
+
+    private fun profileStateSuffix(profile: DeviceProfile): String =
+        "${sanitizeProfileIdentity(profile.id)}.${sanitizeProfileIdentity(profile.revision)}"
+
+    private fun sanitizeProfileIdentity(value: String): String =
+        value.lowercase(Locale.ROOT).replace(Regex("[^a-z0-9._-]"), "-")
 
     private fun proximityKey(key: String): String = proximityCalibrationPrefix?.let { "$it.$key" } ?: key
 
-    private fun migrateLegacyProximityCalibration(targetPrefix: String): Boolean {
-        if (prefs.getBoolean(PROXIMITY_PROFILE_MIGRATED, false)) return true
+    private fun buttonBacklightKey(profile: DeviceProfile): String =
+        "last_button_backlight.${profileStateSuffix(profile)}"
+
+    private fun migrateLegacyButtonBacklight(profile: DeviceProfile) {
+        if (!profile.hasButtonBacklight || !prefs.contains("last_button_backlight")) return
+        val target = buttonBacklightKey(profile)
         val editor = prefs.edit()
+        if (!prefs.contains(target)) editor.putInt(target, prefs.getInt("last_button_backlight", -1))
+        editor.remove("last_button_backlight").apply()
+    }
+
+    private fun migrateLegacyProximityCalibration(targetPrefix: String): Boolean {
+        if (calibrationPrefs.getBoolean(PROXIMITY_PROFILE_MIGRATED, false)) return true
+        val editor = calibrationPrefs.edit()
         PROXIMITY_KEYS.forEach { key ->
             val target = "$targetPrefix.$key"
-            if (prefs.contains(target) || !prefs.contains(key)) return@forEach
-            when (val value = prefs.all[key]) {
+            if (calibrationPrefs.contains(target)) return@forEach
+            val legacyProfileKey = targetPrefix.substringBeforeLast('.') + ".$key"
+            val source = when {
+                calibrationPrefs.contains(key) -> calibrationPrefs.all[key]
+                calibrationPrefs.contains(legacyProfileKey) -> calibrationPrefs.all[legacyProfileKey]
+                prefs.contains(legacyProfileKey) -> prefs.all[legacyProfileKey]
+                prefs.contains(key) -> prefs.all[key]
+                else -> null
+            }
+            when (val value = source) {
                 is Float -> editor.putFloat(target, value)
                 is Boolean -> editor.putBoolean(target, value)
                 is String -> editor.putString(target, value)
             }
         }
-        return editor.putBoolean(PROXIMITY_PROFILE_MIGRATED, true).commit()
+        val committed = editor.putBoolean(PROXIMITY_PROFILE_MIGRATED, true).commit()
+        if (!committed) return false
+        // These keys describe physical sensor readings and must not remain in the backup-eligible
+        // configuration file after migration to the explicitly excluded calibration preferences.
+        val legacyEditor = prefs.edit()
+        prefs.all.keys.filter {
+            it in PROXIMITY_KEYS || it == PROXIMITY_PROFILE_MIGRATED || it.startsWith("profile_calibration.")
+        }.forEach(legacyEditor::remove)
+        legacyEditor.commit()
+        return true
     }
 
     /** Raw user-set values (empty if unset) — for the Configure form's input value. */
@@ -1047,32 +1088,32 @@ class Config private constructor(
     // A user capture wins; otherwise fall back to the profile. A written profile is authoritative
     // knowledge — if it supplies near/far the panel is calibrated out of the box (no manual dance); the
     // two-point capture is the fallback for unprofiled sensors (and a user override).
-    private val userCalibrated: Boolean get() = !prefs.getFloat(proximityKey("prox_threshold"), Float.NaN).isNaN()
+    private val userCalibrated: Boolean get() = !calibrationPrefs.getFloat(proximityKey("prox_threshold"), Float.NaN).isNaN()
     val proximityNearRaw: Float get() {
-        val v = prefs.getFloat(proximityKey("prox_near_raw"), Float.NaN)
+        val v = calibrationPrefs.getFloat(proximityKey("prox_near_raw"), Float.NaN)
         return if (!v.isNaN()) v else profile?.proximityNearRaw ?: Float.NaN
     }
     val proximityFarRaw: Float get() {
-        val v = prefs.getFloat(proximityKey("prox_far_raw"), Float.NaN)
+        val v = calibrationPrefs.getFloat(proximityKey("prox_far_raw"), Float.NaN)
         return if (!v.isNaN()) v else profile?.proximityFarRaw ?: Float.NaN
     }
     val proximityThreshold: Float get() {
-        val v = prefs.getFloat(proximityKey("prox_threshold"), Float.NaN)
+        val v = calibrationPrefs.getFloat(proximityKey("prox_threshold"), Float.NaN)
         if (!v.isNaN()) return v
         val n = profile?.proximityNearRaw; val f = profile?.proximityFarRaw
         return if (n != null && f != null) (n + f) / 2f else Float.NaN
     }
     val proximityNearBelow: Boolean get() {
-        if (userCalibrated) return prefs.getBoolean(proximityKey("prox_near_below"), true) // user capture wins
+        if (userCalibrated) return calibrationPrefs.getBoolean(proximityKey("prox_near_below"), true) // user capture wins
         profile?.proximityNearBelow?.let { return it }                             // explicit profile polarity
         val n = profile?.proximityNearRaw; val f = profile?.proximityFarRaw
         if (n != null && f != null) return n < f                                   // derived from profile near/far
-        return prefs.getBoolean(proximityKey("prox_near_below"), true)              // legacy default
+        return calibrationPrefs.getBoolean(proximityKey("prox_near_below"), true)  // legacy default
     }
     val proximityCalibrated: Boolean
         get() = !proximityNearRaw.isNaN() && !proximityFarRaw.isNaN() && !proximityThreshold.isNaN()
     val proximitySensitivity: ProxSensitivity
-        get() = runCatching { ProxSensitivity.valueOf(prefs.getString(proximityKey("prox_sensitivity"), "MEDIUM")!!) }
+        get() = runCatching { ProxSensitivity.valueOf(calibrationPrefs.getString(proximityKey("prox_sensitivity"), "MEDIUM")!!) }
             .getOrDefault(ProxSensitivity.MEDIUM)
 
     /** Schmitt half-band in raw units = sensitivity × |near − far|. 0 when uncalibrated. */
@@ -1082,24 +1123,24 @@ class Config private constructor(
 
     /** Store one capture; when both exist, derive threshold (midpoint) + polarity (near = below?). */
     fun captureProximity(step: String, raw: Float) {
-        prefs.edit().putFloat(proximityKey(if (step == "near") "prox_near_raw" else "prox_far_raw"), raw).apply()
+        calibrationPrefs.edit().putFloat(proximityKey(if (step == "near") "prox_near_raw" else "prox_far_raw"), raw).apply()
         val n = proximityNearRaw; val f = proximityFarRaw
         if (!n.isNaN() && !f.isNaN()) {
-            prefs.edit()
+            calibrationPrefs.edit()
                 .putFloat(proximityKey("prox_threshold"), (n + f) / 2f)
                 .putBoolean(proximityKey("prox_near_below"), n < f)
                 .apply()
         }
     }
 
-    fun setProximityThreshold(v: Float) { prefs.edit().putFloat(proximityKey("prox_threshold"), v).apply() }
+    fun setProximityThreshold(v: Float) { calibrationPrefs.edit().putFloat(proximityKey("prox_threshold"), v).apply() }
     fun setProximitySensitivity(s: String) {
         runCatching { ProxSensitivity.valueOf(s) }.onSuccess {
-            prefs.edit().putString(proximityKey("prox_sensitivity"), it.name).apply()
+            calibrationPrefs.edit().putString(proximityKey("prox_sensitivity"), it.name).apply()
         }
     }
     fun resetProximityCalibration() {
-        prefs.edit()
+        calibrationPrefs.edit()
             .remove(proximityKey("prox_near_raw"))
             .remove(proximityKey("prox_far_raw"))
             .remove(proximityKey("prox_threshold"))
@@ -1145,8 +1186,19 @@ class Config private constructor(
 
     /** Last requested button-backlight level (0=off, 1..255=on, -1=never commanded/readable). */
     var lastButtonBacklight: Int
-        get() = prefs.getInt("last_button_backlight", -1)
-        set(v) { prefs.edit().putInt("last_button_backlight", v.coerceIn(-1, 255)).apply() }
+        get() = if (profile?.hasButtonBacklight == true) {
+            prefs.getInt(buttonBacklightKey(profile!!), -1)
+        } else {
+            -1
+        }
+        set(v) {
+            profile?.takeIf { it.hasButtonBacklight }?.let {
+                prefs.edit().putInt(
+                    buttonBacklightKey(it),
+                    v.coerceIn(-1, 255),
+                ).apply()
+            }
+        }
 
     // --- arrangeable dashboard layout (per-panel; serialized by the web UI, opaque to the backend) ---
     /** Gridstack layout JSON for the Dashboard tab, persisted per-panel (empty = default layout). */
@@ -1228,6 +1280,7 @@ class Config private constructor(
             "dashboard_entity_default_resolver_pending"
         private const val DASHBOARD_ENTITY_DEFAULT_RESOLVER_VERSION = 1
         private const val PROXIMITY_PROFILE_MIGRATED = "proximity_profile_calibration_migrated"
+        internal const val PROFILE_CALIBRATION_PREFS = "ha-paneld-profile-calibration"
         private val PROXIMITY_KEYS = listOf(
             "prox_near_raw",
             "prox_far_raw",

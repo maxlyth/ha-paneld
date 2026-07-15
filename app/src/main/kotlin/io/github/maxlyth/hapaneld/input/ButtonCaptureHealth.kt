@@ -11,7 +11,10 @@ internal object ButtonCaptureHealth {
         packageName: String,
     ): Result {
         val streamActive = evdev.state == EvdevButtonClient.State.ACTIVE
-        val verified = streamActive && evdev.mode == EvdevStreamSession.Mode.VERIFIED
+        val verified = streamActive && evdev.mode in setOf(
+            EvdevStreamSession.Mode.RECONFIGURABLE,
+            EvdevStreamSession.Mode.VERIFIED,
+        )
         val detail = when {
             streamActive && evdev.mode == EvdevStreamSession.Mode.LEGACY -> "legacy helper stream; update the helper to verify node/grab setup"
             streamActive -> "verified helper stream"

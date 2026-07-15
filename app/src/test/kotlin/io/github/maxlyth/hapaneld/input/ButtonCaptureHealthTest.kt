@@ -12,9 +12,11 @@ class ButtonCaptureHealthTest {
     ) = EvdevButtonClient.Snapshot(state, mode, error)
 
     @Test fun verifiedHelperAndAccessibilityAreFullyHealthy() {
-        val result = ButtonCaptureHealth.evaluate(true, 1, snapshot(EvdevButtonClient.State.ACTIVE, EvdevStreamSession.Mode.VERIFIED), "pkg")
-        assertEquals("ok", result.status)
-        assertTrue(result.note.contains("verified helper stream"))
+        listOf(EvdevStreamSession.Mode.VERIFIED, EvdevStreamSession.Mode.RECONFIGURABLE).forEach { mode ->
+            val result = ButtonCaptureHealth.evaluate(true, 1, snapshot(EvdevButtonClient.State.ACTIVE, mode), "pkg")
+            assertEquals("ok", result.status)
+            assertTrue(result.note.contains("verified helper stream"))
+        }
     }
 
     @Test fun legacyOrRetryingHelperCannotClaimProfiledButtonsAreVerified() {

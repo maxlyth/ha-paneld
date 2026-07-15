@@ -12,10 +12,13 @@
 
 void input_init(void);                  // reset the subscriber registry (call once at startup)
 int  input_watch(const char *path, int grab);  // start watching a node (also used for --grab/--watch argv)
+int  input_reset_watches(void);         // clear watches when no subscriber owns delivery
 void input_unsubscribe(int fd);         // drop a connection's fd from the registry (on disconnect)
 
 void cmd_watch(conn_ctx *ctx, const char *args);      // WATCH <evdev> <0|1>
 void cmd_inputv2(conn_ctx *ctx, const char *args);    // INPUTV2 capability acknowledgement
+void cmd_inputv3(conn_ctx *ctx, const char *args);    // INPUTV3 supports restart-safe watch reset
+void cmd_watchreset(conn_ctx *ctx, const char *args); // WATCHRESET
 void cmd_subscribe(conn_ctx *ctx, const char *args);  // SUBSCRIBE
 
 #endif

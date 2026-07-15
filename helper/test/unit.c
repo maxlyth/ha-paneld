@@ -551,6 +551,8 @@ static void test_input_watch_contract(void) {
     char reply[16];
     dispatch_reply("INPUTV2", reply, sizeof reply);
     CHECK(strcmp(reply, "OK\n") == 0, "INPUTV2 identifies truthful WATCH semantics (got '%s')\n", reply);
+    dispatch_reply("INPUTV3", reply, sizeof reply);
+    CHECK(strcmp(reply, "OK\n") == 0, "INPUTV3 identifies restart-safe watch reconfiguration (got '%s')\n", reply);
 
     sysexec_stub_reset();
     sysexec_stub_set_spawn_result(0);
@@ -574,6 +576,8 @@ static void test_input_watch_contract(void) {
     CHECK(input_watch("/dev/input/event1", 1) == 0, "same WATCH is idempotent\n");
     CHECK(evdev_open_count == 1, "idempotent WATCH does not reopen the node (got %d)\n", evdev_open_count);
     CHECK(input_watch("/dev/input/event1", 0) != 0, "same node with different grab policy is rejected\n");
+    CHECK(input_reset_watches() == 0, "WATCHRESET clears a previous runtime's watch table\n");
+    CHECK(input_watch("/dev/input/event1", 0) == 0, "WATCH accepts a changed grab policy after reset\n");
 
     input_init();
     evdev_grab_ok = 0;
@@ -673,6 +677,7 @@ static void test_grab_subscription_ownership(void) {
         CHECK(strcmp(out, "OK\n") == 0, "owned subscriber %d admitted (got '%s')\n", i + 1, out);
     }
     CHECK(evdev_grab_acquire_count == 2, "first subscriber acquires exactly one live grab (got %d)\n", evdev_grab_acquire_count);
+    CHECK(input_reset_watches() != 0, "WATCHRESET refuses to disrupt an active subscriber\n");
 
     input_unsubscribe(sockets[0][0]);
     CHECK(evdev_grab_release_count == 1, "one remaining subscriber keeps the grab owned\n");

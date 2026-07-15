@@ -13,23 +13,23 @@ class EvdevStreamSessionTest {
     private val switch = EvdevButton("/dev/input/event8", 14, grab = false, eventType = "KEYCODE_MUTE", sw = true)
 
     @Test fun everyWatchAndSubscriptionMustBeAcknowledgedBeforeStreaming() {
-        val input = ByteArrayInputStream("OK\nOK\nOK\nOK\nKEY 116 1\nKEY 116 0\nSW 14 1\nSW 14 0\n".toByteArray())
+        val input = ByteArrayInputStream("OK\nOK\nOK\nOK\nOK\nKEY 116 1\nKEY 116 0\nSW 14 1\nSW 14 0\n".toByteArray())
         val output = ByteArrayOutputStream()
         val events = mutableListOf<String>()
         var mode: EvdevStreamSession.Mode? = null
 
         EvdevStreamSession.run(listOf(key, switch), input, output, { mode = it }, events::add)
 
-        assertEquals("INPUTV2\nWATCH /dev/input/event1 1\nWATCH /dev/input/event8 0\nSUBSCRIBE\n", output.toString())
+        assertEquals("INPUTV3\nWATCHRESET\nWATCH /dev/input/event1 1\nWATCH /dev/input/event8 0\nSUBSCRIBE\n", output.toString())
         assertEquals(listOf("KEYCODE_POWER", "KEYCODE_MUTE", "KEYCODE_MUTE"), events)
-        assertEquals(EvdevStreamSession.Mode.VERIFIED, mode)
+        assertEquals(EvdevStreamSession.Mode.RECONFIGURABLE, mode)
     }
 
     @Test fun eventRacingAheadOfSubscribeAckIsNotLost() {
         val events = mutableListOf<String>()
         EvdevStreamSession.run(
             listOf(key),
-            ByteArrayInputStream("OK\nOK\nKEY 116 1\nOK\n".toByteArray()),
+            ByteArrayInputStream("OK\nOK\nOK\nKEY 116 1\nOK\n".toByteArray()),
             ByteArrayOutputStream(),
             emit = events::add,
         )
@@ -40,12 +40,24 @@ class EvdevStreamSessionTest {
         var mode: EvdevStreamSession.Mode? = null
         EvdevStreamSession.run(
             listOf(key),
-            ByteArrayInputStream("ERR\nOK\nOK\n".toByteArray()),
+            ByteArrayInputStream("ERR\nERR\nOK\nOK\n".toByteArray()),
             ByteArrayOutputStream(),
             onSubscribed = { mode = it },
             emit = {},
         )
         assertEquals(EvdevStreamSession.Mode.LEGACY, mode)
+    }
+
+    @Test fun versionTwoHelperRemainsUsableWithoutClaimingReconfiguration() {
+        var mode: EvdevStreamSession.Mode? = null
+        EvdevStreamSession.run(
+            listOf(key),
+            ByteArrayInputStream("ERR\nOK\nOK\nOK\n".toByteArray()),
+            ByteArrayOutputStream(),
+            onSubscribed = { mode = it },
+            emit = {},
+        )
+        assertEquals(EvdevStreamSession.Mode.VERIFIED, mode)
     }
 
     @Test fun failedOrMissingAcknowledgementRejectsTheSession() {
@@ -56,13 +68,13 @@ class EvdevStreamSessionTest {
             EvdevStreamSession.run(listOf(key), ByteArrayInputStream("OK\nOK\nERR\n".toByteArray()), ByteArrayOutputStream(), emit = {})
         }
         assertThrows(IOException::class.java) {
-            EvdevStreamSession.run(listOf(key), ByteArrayInputStream("OK\nOK\n".toByteArray()), ByteArrayOutputStream(), emit = {})
+            EvdevStreamSession.run(listOf(key), ByteArrayInputStream("OK\nOK\nOK\n".toByteArray()), ByteArrayOutputStream(), emit = {})
         }
     }
 
     @Test fun malformedUnknownReleaseAndRepeatLinesDoNotBecomeEvents() {
         val events = mutableListOf<String>()
-        val lines = "OK\nOK\nOK\nOK\nKEY 116 2\nKEY 116 0\nKEY 999 1\nSW 14 9\nKEY bad 1\nKEY 116 1 extra\nKEY 116 1\n"
+        val lines = "OK\nOK\nOK\nOK\nOK\nKEY 116 2\nKEY 116 0\nKEY 999 1\nSW 14 9\nKEY bad 1\nKEY 116 1 extra\nKEY 116 1\n"
         EvdevStreamSession.run(listOf(key, switch), ByteArrayInputStream(lines.toByteArray()), ByteArrayOutputStream(), emit = events::add)
         assertEquals(listOf("KEYCODE_POWER"), events)
     }
