@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.9.3-rc1 - Unreleased
+
+**Genuinely unrooted panels can opt into a useful middle ground between ordinary Android permissions and root.** With Shizuku installed and started, ha-paneld can use Android's shell identity for a deliberately limited set of actions. Enhanced access still requires approval on the panel itself and does not turn Shizuku into a general remote shell or claim the full rooted feature set.
+
+### Added
+
+- **Optional Shizuku enhanced access for unrooted panels** — after the Shizuku manager is installed and its service started, the user can approve ha-paneld locally to gain display sizing, remote screenshots and taps, and signature-pinned ha-paneld / Home Assistant Companion installs. The approval cannot be enabled by MQTT, the web API, a restored backup or a fleet push. A service started through ADB normally needs rearming after a reboot.
+- **Provisioning can prepare the Shizuku path without hiding the remaining on-panel step** — `provision.sh --shizuku` verifies or installs the pinned manager, starts its ADB service and then points to the exact local approval screen. A trusted same or newer manager is retained on a repeated run. Automatic manager replacement is deliberately not part of this release candidate because an update can stop the Shizuku service and require rearming.
+
+### Changed
+
+- **Fleet imports now fail closed for new settings** — a setting is copied between panels only after it has been explicitly classified as portable. Shared endpoints and common behaviour preferences remain portable, while MQTT credentials, renderer choices, dashboard state, Home Assistant login provenance, calibration, display tuning, update policy and logging stay with their original panel.
+
+### Fixed
+
+- **Restoring a Home Assistant Companion login repairs a blank internal server URL before it goes live** — ha-paneld applies the repair to the staged database, checkpoints it and verifies both database integrity and the repair result before entering the rollback-capable live transaction. A failed repair leaves the existing Companion data untouched instead of restoring a login that opens Home Assistant's “Missing Host header” error.
+
 ## v0.9.2 - 2026-07-15
 
 **Home Assistant dashboards that seemed too demanding for a low-powered wall panel can now be made far more responsive.** A large Home Assistant installation may send thousands of entity states and updates to a panel even when its dashboard displays only a small fraction of them, causing delayed taps and sluggish navigation. The built-in renderer can now learn what the dashboard uses and ask Home Assistant to send only those states. Automatic filtering remains experimental, opt-in and exclusive to the built-in renderer, but it no longer requires a hand-maintained entity list. For installations using a second Home Assistant instance, filtering proxy or similar workaround solely to reduce panel load, the built-in filter may allow that extra infrastructure to be retired.
