@@ -66,6 +66,7 @@ const firstSbom = await createProfileEditorSbom();
 const secondSbom = await createProfileEditorSbom();
 assert(JSON.stringify(firstSbom) === JSON.stringify(secondSbom), "profile-editor runtime SBOM is not reproducible");
 assert(firstSbom.bomFormat === "CycloneDX" && firstSbom.specVersion === "1.6", "profile-editor runtime SBOM identity is invalid");
+assert(/^urn:uuid:[0-9a-f-]{36}$/.test(firstSbom.serialNumber), "profile-editor runtime SBOM serial number is invalid");
 assert(firstSbom.components.length === runtimePackages.length, "profile-editor runtime SBOM does not match the locked runtime package count");
 assert(firstSbom.components.every((component) => component.hashes?.[0]?.alg === "SHA-512" && /^[0-9a-f]{128}$/.test(component.hashes[0].content)), "profile-editor runtime SBOM has an invalid package integrity hash");
 assert(!firstSbom.components.some((component) => component.name === "esbuild"), "profile-editor runtime SBOM includes a build-only dependency");

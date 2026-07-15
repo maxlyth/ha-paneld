@@ -188,7 +188,8 @@ tasks.named<CyclonedxDirectTask>("cyclonedxDirectBom") {
     componentGroup.set("io.github.maxlyth")
     componentName.set("ha-paneld")
     componentVersion.set(android.defaultConfig.versionName ?: "unspecified")
-    includeBomSerialNumber.set(false)
+    // GitHub's SBOM attestation parser requires a CycloneDX serialNumber.
+    includeBomSerialNumber.set(true)
     includeBuildSystem.set(false)
     jsonOutput.set(layout.buildDirectory.file("reports/cyclonedx-direct/bom.json"))
     xmlOutput.unsetConvention()

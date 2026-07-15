@@ -1,4 +1,5 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -50,7 +51,8 @@ function resolveLockedDependency(packages, sourcePath, dependencyName) {
 }
 
 export async function createProfileEditorSbom() {
-  const packageLock = JSON.parse(await readFile(packageLockPath, "utf8"));
+  const packageLockSource = await readFile(packageLockPath, "utf8");
+  const packageLock = JSON.parse(packageLockSource);
   const packages = packageLock.packages || {};
   const root = packages[""];
   assert(packageLock.lockfileVersion === 3, "package-lock.json must use lockfileVersion 3");
@@ -88,6 +90,11 @@ export async function createProfileEditorSbom() {
   }
 
   const rootReference = `urn:ha-paneld:embedded-profile-editor:${root.version}`;
+  const digest = createHash("sha256").update(packageLockSource).digest();
+  digest[6] = (digest[6] & 0x0f) | 0x50;
+  digest[8] = (digest[8] & 0x3f) | 0x80;
+  const uuid = digest.subarray(0, 16).toString("hex");
+  const serialNumber = `urn:uuid:${uuid.slice(0, 8)}-${uuid.slice(8, 12)}-${uuid.slice(12, 16)}-${uuid.slice(16, 20)}-${uuid.slice(20)}`;
   const dependencyMap = new Map([[rootReference, new Set()]]);
   for (const [name] of Object.entries(root.dependencies || {})) {
     const path = resolveLockedDependency(packages, "", name);
@@ -111,6 +118,7 @@ export async function createProfileEditorSbom() {
     $schema: "http://cyclonedx.org/schema/bom-1.6.schema.json",
     bomFormat: "CycloneDX",
     specVersion: "1.6",
+    serialNumber,
     version: 1,
     metadata: {
       component: {

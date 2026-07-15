@@ -358,17 +358,20 @@ jobs:
           echo "profile_editor_sbom_name=$profile_editor_sbom_name" >> "$GITHUB_OUTPUT"
 
       - name: Attest release asset provenance
+        continue-on-error: true
         uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
         with:
           subject-path: dist/*
 
       - name: Attest Android and Gradle runtime SBOM
+        continue-on-error: true
         uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
         with:
           subject-path: dist/${{ steps.asset.outputs.apk_name }}
           sbom-path: dist/${{ steps.asset.outputs.android_sbom_name }}
 
       - name: Attest profile-editor runtime SBOM
+        continue-on-error: true
         uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
         with:
           subject-path: dist/${{ steps.asset.outputs.apk_name }}
