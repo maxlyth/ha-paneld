@@ -1,6 +1,19 @@
 # Changelog
 
-## v0.9.3-rc1 - Unreleased
+## v0.9.3-rc2 - Unreleased
+
+**This release candidate updates the shipped MQTT networking stack to current security-patched releases and refreshes the tooling used to build, inspect and publish releases.**
+
+### Changed
+
+- **The MQTT client and its networking libraries have been updated** — the shipped HiveMQ client now uses the current Netty transport line, replacing older dependency versions affected by known security advisories while preserving the existing MQTT connection and recovery behaviour.
+- **Release and CI dependencies have been refreshed and pinned** — GitHub Actions use reviewed full-commit references, the container build image is pinned by digest, CodeQL provides advisory security analysis, and the CycloneDX build tooling no longer uses the affected Plexus Utils release.
+
+### Fixed
+
+- **Release SBOMs now carry valid identities** — the Android inventory includes the document identifier required for attestation, while the embedded profile-editor inventory derives a stable identifier from its locked dependency graph. An external attestation outage remains advisory and no longer prevents an otherwise valid release from being published.
+
+## v0.9.3-rc1 - 2026-07-15
 
 **Device support is no longer limited to profiles shipped by the ha-paneld project.** Owners and hardware vendors can create, edit, validate, import, activate, export and share panel profiles without rebuilding the app. Profiles remain declarative and constrained to capabilities already implemented by ha-paneld, so extending hardware support does not allow a profile to introduce executable code or arbitrary privileged operations.
 
@@ -13,7 +26,7 @@
 ### Changed
 
 - **Fleet imports now fail closed for new settings** — a setting is copied between panels only after it has been explicitly classified as portable. Shared endpoints and common behaviour preferences remain portable, while MQTT credentials, renderer choices, dashboard state, Home Assistant login provenance, calibration, display tuning, update policy and logging stay with their original panel.
-- **Dependency and release inputs now have stronger supply-chain controls** — Gradle artifacts are locked and checksum/signature verified, npm tools use exact lockfiles without dependency lifecycle scripts, GitHub Actions use full commit pins and publishing tools use hash-locked dependencies. Release APKs gain build provenance plus separately scoped CycloneDX inventories for the Android/Gradle runtime and the embedded profile editor's locked npm runtime graph, while curated Shizuku and WebView APKs require their recorded checksum as well as the expected package and signer. Automated updates can propose reviewed changes but cannot merge them.
+- **Dependency and release inputs now have stronger supply-chain controls** — Gradle artifacts are locked and checksum/signature verified, npm tools use exact lockfiles without dependency lifecycle scripts, GitHub Actions use full commit pins and publishing tools use hash-locked dependencies. Separately scoped CycloneDX inventories describe the Android/Gradle runtime and embedded profile editor runtime, while curated Shizuku and WebView APKs require their recorded checksum as well as the expected package and signer. Automated updates can propose reviewed changes but cannot merge them.
 
 ### Fixed
 
