@@ -92,6 +92,7 @@ jobs:
           test -s app/build/outputs/apk/release/ha-paneld-release-signed.apk
           apk_name="ha-paneld-${GITHUB_REF_NAME}-manual-setup-required.apk"
           cp app/build/outputs/apk/release/ha-paneld-release-signed.apk "dist/$apk_name"
+          (cd dist && sha256sum "$apk_name" > "$apk_name.sha256")
           sbom_name="ha-paneld-${GITHUB_REF_NAME}-dependencies.cdx.json"
           test -s app/build/reports/cyclonedx-direct/bom.json
           cp app/build/reports/cyclonedx-direct/bom.json "dist/$sbom_name"
