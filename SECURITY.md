@@ -30,7 +30,7 @@ Reports of genuine issues *within* that model are very welcome — e.g. an unaut
 
 ha-paneld treats every library, build plugin, GitHub Action and downloaded application as part of its attack surface. A new third-party component must have a clear project need, an active and identifiable upstream, a compatible licence, and a dependency footprint proportionate to the capability it adds. Official repositories and package registries are preferred. A copied binary or an untraceable package is not accepted as a shortcut.
 
-Dependencies are reproducibly selected rather than fetched from floating release channels:
+Project-controlled dependency inputs are reproducibly selected rather than fetched from floating release channels:
 
 - Gradle dependencies use explicit versions, dependency lock state and artifact verification metadata. The Gradle distribution is versioned and checksum-pinned.
 - npm dependencies use exact direct versions and a committed lockfile. Automated and release builds use the lockfile without resolving newer versions.
@@ -42,5 +42,7 @@ Automated tools may propose dependency updates, but they do not merge them. Each
 An accepted update must pass the same build, unit, lint, shell and UI checks as application code. Changes to generated bundles must be reproducible from their committed manifests and lockfiles. High-privilege workflow changes and release-tool updates receive additional scrutiny because they can access signing material or publish artifacts.
 
 Release APKs are signed with the project release key and published with a SHA-256 checksum. The release workflow also produces machine-verifiable provenance and a software bill of materials when the hosting platform supports those features. These controls improve traceability; they do not guarantee that upstream software is free of vulnerabilities or malicious behavior.
+
+Hosted CI runner images and operating-system package repositories remain external moving inputs. ha-paneld pins the higher-authority build and publishing components and records release provenance, but it does not claim that the complete hosted runner is bit-for-bit reproducible.
 
 Please use the private vulnerability-reporting route above if a dependency, build service, signing path or published artifact may have been compromised.
