@@ -13,6 +13,7 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Rule
@@ -24,10 +25,12 @@ import java.io.IOException
 import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.security.cert.Certificate
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.atomic.AtomicInteger
+import javax.net.ssl.HttpsURLConnection
 import kotlin.concurrent.thread
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -190,6 +193,32 @@ class AudioPlayerTest {
         assertTrue(undeclared.disconnected)
     }
 
+    @Test fun transferLeavesPlatformHttpsVerificationUntouched() {
+        val connection = FakeHttpsConnection(byteArrayOf(1, 2, 3), 3L)
+        val platformSocketFactory = connection.sslSocketFactory
+        val platformHostnameVerifier = connection.hostnameVerifier
+        val destination = temporary.newFile("https")
+
+        HttpAudioTransfer(4L, openConnection = { connection })
+            .download("https://example/audio", destination)
+
+        assertArrayEquals(byteArrayOf(1, 2, 3), destination.readBytes())
+        assertSame(platformSocketFactory, connection.sslSocketFactory)
+        assertSame(platformHostnameVerifier, connection.hostnameVerifier)
+        assertTrue(connection.disconnected)
+    }
+
+    @Test fun transferStillDownloadsOverPlainHttp() {
+        val connection = FakeConnection(byteArrayOf(4, 5, 6), 3L)
+        val destination = temporary.newFile("http")
+
+        HttpAudioTransfer(4L, openConnection = { connection })
+            .download("http://example/audio", destination)
+
+        assertArrayEquals(byteArrayOf(4, 5, 6), destination.readBytes())
+        assertTrue(connection.disconnected)
+    }
+
     @Test fun transferCancellationClosesABlockedStreamAndDisconnects() {
         val blocked = BlockingInputStream()
         val connection = FakeConnection(byteArrayOf(), -1L, blocked)
@@ -249,6 +278,21 @@ class AudioPlayerTest {
         override fun disconnect() { disconnected = true }
         override fun getContentLengthLong() = declaredLength
         override fun getInputStream(): InputStream = suppliedInput
+    }
+
+    private class FakeHttpsConnection(
+        private val bytes: ByteArray,
+        private val declaredLength: Long,
+    ) : HttpsURLConnection(URL("https://example/audio")) {
+        var disconnected = false
+        override fun connect() {}
+        override fun usingProxy() = false
+        override fun disconnect() { disconnected = true }
+        override fun getContentLengthLong() = declaredLength
+        override fun getInputStream(): InputStream = ByteArrayInputStream(bytes)
+        override fun getCipherSuite() = "TLS_FAKE_WITH_FAKE_FAKE"
+        override fun getLocalCertificates(): Array<Certificate>? = null
+        override fun getServerCertificates(): Array<Certificate> = emptyArray()
     }
 
     private class BlockingInputStream : InputStream() {

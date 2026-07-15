@@ -22,11 +22,6 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
-import javax.net.ssl.HostnameVerifier
-import javax.net.ssl.HttpsURLConnection
-import javax.net.ssl.SSLContext
-import javax.net.ssl.TrustManager
-import javax.net.ssl.X509TrustManager
 import kotlin.coroutines.coroutineContext
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -121,10 +116,6 @@ internal class HttpAudioTransfer(
             conn.connectTimeout = CONNECT_TIMEOUT_MS
             conn.readTimeout = READ_TIMEOUT_MS
             conn.instanceFollowRedirects = true
-            if (conn is HttpsURLConnection) {
-                conn.sslSocketFactory = trustAllFactory()
-                conn.hostnameVerifier = HostnameVerifier { _, _ -> true }
-            }
             if (cancelled.get()) throw CancellationException("audio transfer cancelled")
             val declared = conn.contentLengthLong
             if (declared > maxBytes) throw io.github.maxlyth.hapaneld.util.ByteLimitExceeded(maxBytes)
@@ -154,14 +145,6 @@ internal class HttpAudioTransfer(
         const val CONNECT_TIMEOUT_MS = 15_000
         const val READ_TIMEOUT_MS = 15_000
         const val DOWNLOAD_TIMEOUT_MS = 120_000L
-
-        fun trustAllFactory() = SSLContext.getInstance("TLS").apply {
-            init(null, arrayOf<TrustManager>(object : X509TrustManager {
-                override fun checkClientTrusted(c: Array<java.security.cert.X509Certificate>?, a: String?) {}
-                override fun checkServerTrusted(c: Array<java.security.cert.X509Certificate>?, a: String?) {}
-                override fun getAcceptedIssuers() = arrayOf<java.security.cert.X509Certificate>()
-            }), java.security.SecureRandom())
-        }.socketFactory
     }
 
     private class DeadlineInputStream(
