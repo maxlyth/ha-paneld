@@ -25,9 +25,11 @@
          native navbar. Not granted by default on the panels; NavbarController grants it via root appops. -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
+    <!-- Configuration contains MQTT and Home Assistant credentials. Backups are exported only
+         through ha-paneld's explicit sealed backup flow, never Android's implicit transport. -->
     <application
         android:name=".HaPaneldApp"
-        android:allowBackup="true"
+        android:allowBackup="false"
         android:fullBackupContent="@xml/backup_rules"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:icon="@mipmap/ic_launcher"

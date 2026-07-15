@@ -1,5 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <full-backup-content>
+    <!-- Defense in depth if implicit Android backup is ever re-enabled: the main preferences contain
+         MQTT and Home Assistant credentials and must only leave through the sealed backup flow. -->
+    <exclude domain="sharedpref" path="ha-paneld.xml" />
     <!-- Enhanced access is approved locally on each panel and must never migrate with app data. -->
     <exclude domain="sharedpref" path="ha-paneld-shizuku.xml" />
     <!-- Imported profile files may migrate as inactive library content, but activation/LKG state is
