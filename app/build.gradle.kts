@@ -167,7 +167,7 @@ dependencies {
     implementation(libs.shizuku.provider)
 
     // QR code for the on-device config URL (pure-Java encoder; no Android transitive deps).
-    implementation("com.google.zxing:core:3.5.3")
+    implementation("com.google.zxing:core:3.5.4")
 
     // JVM unit tests (no Android/emulator deps): pure-logic + coroutine serialization regression tests.
     testImplementation(libs.junit)
@@ -177,9 +177,9 @@ dependencies {
     testImplementation(libs.moquette.broker)
     // Real org.json — the android.jar stub's returnDefaultValues would silently no-op JSON code under test.
     testImplementation(libs.org.json)
-    androidTestImplementation("androidx.test:runner:1.6.2")
-    androidTestImplementation("androidx.test.ext:junit:1.2.1")
-    androidTestImplementation("androidx.test.uiautomator:uiautomator:2.3.0")
+    androidTestImplementation("androidx.test:runner:1.7.0")
+    androidTestImplementation("androidx.test.ext:junit:1.3.0")
+    androidTestImplementation("androidx.test.uiautomator:uiautomator:2.4.0")
 }
 
 tasks.named<CyclonedxDirectTask>("cyclonedxDirectBom") {
