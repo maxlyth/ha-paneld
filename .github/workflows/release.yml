@@ -94,8 +94,8 @@ jobs:
           grep -Fq "RELEASE_TAG=\"$GITHUB_REF_NAME\"" "$installer"
           grep -Fq "RELEASE_APK_NAME=\"$APK_NAME\"" "$installer"
 
-      # Human-readable notes come from the matching CHANGELOG.md section; the auto-generated commit
-      # list is appended below them by generate_release_notes. Keep CHANGELOG.md updated per release.
+      # Human-readable notes come from the matching CHANGELOG.md section. Prereleases also receive an
+      # auto-generated comparison; stable releases use only the self-contained curated body.
       #
       # Section lookup — exact match first, base-version fallback:
       #   v0.8.4-rc3  →  look for "## v0.8.4-rc3"  (per-RC incremental notes)
@@ -147,8 +147,9 @@ jobs:
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
+          name: ${{ github.ref_name }}
           files: dist/*
           body_path: release-body.md
-          generate_release_notes: true
+          generate_release_notes: ${{ contains(github.ref_name, '-') }}
           # Tags with a suffix (e.g. v0.5.0-rc1) publish as pre-releases.
           prerelease: ${{ contains(github.ref_name, '-') }}
