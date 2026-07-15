@@ -1,0 +1,113 @@
+schema: 1
+id: tpa10
+version: 1.0.0
+display_name: Tuya TPA10
+soc_class: rk3566
+metadata:
+  author: ha-paneld maintainers
+  source: https://github.com/maxlyth/ha-paneld/blob/main/docs/hardware/tpa10.md
+  license: Apache-2.0
+  maturity: verified
+  tested_firmware:
+    - TPA10 stock firmware (2026-06)
+  limitations:
+    - The CHT8305 baseline temperature offset is not yet characterised.
+requires:
+  min_core_version: 0.9.3-rc1
+  drivers:
+    - input.button-backlight
+    - input.evdev
+    - led.sysfs-daemon
+    - screen.daemon-blpower
+    - sensor.android
+    - sensor.cht8305-daemon
+    - update.webview
+match:
+  priority: 500
+  fallback: false
+  any:
+    - priority: 1000
+      all:
+        - field: model
+          op: equals
+          values:
+            - tpa10
+    - priority: 1000
+      all:
+        - field: device
+          op: equals
+          values:
+            - tpa10
+platform:
+  su_form: android
+  app_can_su: false
+  has_recents: false
+  shizuku: optional
+hardware:
+  led:
+    mechanism: sysfs-daemon
+    transfer: identity
+  screen_off: daemon-blpower
+  has_button_backlight: true
+sensors:
+  proximity_technology: Time-of-Flight
+  proximity_near_below: true
+  proximity_graded_strategy: observed
+  light_technology: Ambient light
+  cht8305: true
+  room_temp_offset_c: 0.0
+identity:
+  manufacturer: Tuya
+  model: TPA10
+  model_label_strategy: display-name
+input:
+  evdev_buttons:
+    - node: /dev/input/event8
+      code: 14
+      grab: false
+      event_type: KEYCODE_MUTE
+      sw: true
+cpu:
+  governors:
+    Performance: performance
+    Efficiency: powersave
+    Auto: schedutil
+display:
+  recommended_density: 212
+  recommended_font_scale: 1.0
+  physical_ppi: 226
+updates:
+  webview_artifact: lineageos-150-arm
+taming:
+  - package: com.smartos.xinch.smarthome
+    tags:
+      - vendor
+      - smarthome
+    note: Xinch (SmartOS/Tuya) smart-home control app. Redundant on a Home Assistant panel; safe to disable.
+    default_tame: false
+  - package: com.smartos.xinch.smartiot
+    tags:
+      - vendor
+      - smarthome
+    note: Xinch (SmartOS/Tuya) IoT control app. Redundant alongside Home Assistant; safe to disable.
+    default_tame: false
+  - package: com.smartos.xinch.communicate
+    tags:
+      - vendor
+      - test
+    note: 'Xinch "central-control interconnect" app (label "TEST-中控互联"). Vendor demo/test; not used in normal operation.'
+    default_tame: false
+  - package: com.smartos.xinch.monitor
+    tags:
+      - vendor
+      - test
+      - clutter
+    note: 'Xinch "PerformanceMonitor" diagnostic app. Not needed in normal operation.'
+    default_tame: false
+  - package: com.tuya.devicetest
+    tags:
+      - chipset
+      - test
+      - clutter
+    note: Tuya factory device-test app (in /odm, persists across factory reset). Diagnostic only.
+    default_tame: false

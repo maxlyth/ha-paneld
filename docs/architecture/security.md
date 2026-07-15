@@ -14,6 +14,7 @@ The panel and Home Assistant sit on a **trusted LAN**, and the app is built arou
 | Surface | Exposure | Notes |
 | --- | --- | --- |
 | **HTTP API `:8888`** | unauthenticated; binds dual-stack (`::`) | state-changing routes are the risk — see below |
+| **Runtime profile import/activation** | unauthenticated trusted-LAN HTTP workflow | untrusted YAML is previewed, validated, stored as immutable revisions and explicitly activated; it can select only compiled drivers and cannot grant authority |
 | **CDP / WebView DevTools relay `:9222`** | opt-in (started via `/inspect/start`), binds `0.0.0.0`, unauthenticated | full dashboard-session access if started |
 | **MQTT** | governed by the broker | the intended control plane; inherent to MQTT discovery |
 | **Root helper daemon** (abstract UNIX socket `@hapaneld-helper`) | peer-uid authenticated (`SO_PEERCRED`: ha-paneld/root/shell only), command-whitelisted, char-sanitised, bounded parsing, conn caps | Sound — was unauthenticated loopback TCP `:8889`; now no other local app can reach it |
@@ -27,6 +28,7 @@ The state-changing routes on `:8888` are where the exposure concentrates:
 - `POST /config` — sets MQTT broker + credentials + panel_id. Unauthenticated ⇒ a LAN actor can repoint the panel at a rogue broker and take over every entity. **Top risk.**
 - `POST /play` — downloads + plays an arbitrary URL with TLS verification disabled (LAN self-signed convenience) ⇒ audio injection / open fetch relay.
 - `POST /inspect/start` — starts the CDP relay (the `:9222` surface above).
+- Profile save/activate/rollback routes — can change which compiled hardware drivers and capability candidates the panel uses after a controlled service restart. Preview tokens bind save to the exact inspected YAML, activation pins an exact revision/hash, risky declarations are highlighted, and startup falls back to the last-known-good revision. These controls prevent confused or malformed activation; they do not authenticate a LAN caller.
 - `GET /diag` — device/capability info (recon). Intentionally a support tool (issue template).
 - `GET /api/v1/screenshot.png` and `POST /api/v1/input` — view and inject input on the panel. Root/helper routes already expose these; locally approved Shizuku makes the same trusted-LAN controls available on a non-root panel.
 - `POST /api/v1/install/component` — can install signer-pinned ha-paneld or minimal Companion builds. Shizuku enables those verified updates on a non-root panel, but does not enable arbitrary APK upload or WebView replacement.
@@ -36,6 +38,8 @@ The state-changing routes on `:8888` are where the exposure concentrates:
 - **DNS-rebinding** — the `Host` header must be an IP literal, `localhost`, `*.local` (mDNS), or an operator-configured name (`http_allowed_hosts`); any other hostname is refused (all methods), so an attacker who rebinds their own DNS name to the panel can't pose as same-origin to read secrets (`GET /config/export`) or drive the surface. Reaching a panel by IP — the norm — is always allowed and is inherently rebinding-immune.
 
 Neither authenticates the *caller*; a credentialled LAN actor is still trusted (decision 3 is the upgrade path).
+
+Runtime profile files are treated as untrusted data, not plugins. The closed schema can select only drivers compiled into ha-paneld; it carries no shell commands, helper verbs, native code or general scripting. Privileged paths are restricted to core allowlists, and WebView recommendations select only core-owned artifact IDs whose HTTPS URL, version and signer hash are compiled into the app. Security-sensitive driver parameters are validated by the owning driver, and declarations never substitute for live root/helper/Shizuku or hardware probes. A Shizuku recommendation cannot install the Manager, record local consent or approve ha-paneld.
 
 ## Decisions
 

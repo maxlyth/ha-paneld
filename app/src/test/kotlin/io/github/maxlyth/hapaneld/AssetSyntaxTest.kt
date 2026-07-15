@@ -39,7 +39,7 @@ class AssetSyntaxTest {
         val dir = assetsDir
         assumeTrue("assets dir not found (skipping)", dir != null)
         assumeTrue("node not available (skipping)", nodeAvailable())
-        val js = dir!!.listFiles { f -> f.isFile && f.name.endsWith(".js") }?.sortedBy { it.name } ?: emptyList()
+        val js = dir!!.walkTopDown().filter { it.isFile && it.name.endsWith(".js") }.sortedBy { it.path }.toList()
         assertTrue("no .js assets found under ${dir.path}", js.isNotEmpty())
         for (f in js) {
             val (code, out) = run(listOf("node", "--check", f.absolutePath))
@@ -51,7 +51,7 @@ class AssetSyntaxTest {
         val dir = assetsDir
         assumeTrue("assets dir not found (skipping)", dir != null)
         assumeTrue("node not available (skipping)", nodeAvailable())
-        val json = dir!!.listFiles { f -> f.isFile && f.name.endsWith(".json") }?.sortedBy { it.name } ?: emptyList()
+        val json = dir!!.walkTopDown().filter { it.isFile && it.name.endsWith(".json") }.sortedBy { it.path }.toList()
         for (f in json) {
             val (code, out) = run(
                 listOf("node", "-e", "JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'))", f.absolutePath),

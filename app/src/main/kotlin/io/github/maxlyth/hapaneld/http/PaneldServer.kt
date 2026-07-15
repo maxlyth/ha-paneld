@@ -29,6 +29,9 @@ import io.github.maxlyth.hapaneld.dashboard.EntityFilterTelemetry
 import io.github.maxlyth.hapaneld.dashboard.EntityLearningManager
 import io.github.maxlyth.hapaneld.device.DeviceProfile
 import io.github.maxlyth.hapaneld.device.TameCandidate
+import io.github.maxlyth.hapaneld.device.profile.PassiveProfileDraft
+import io.github.maxlyth.hapaneld.device.profile.PassiveProfileReport
+import io.github.maxlyth.hapaneld.device.profile.ProfileAdmin
 import io.github.maxlyth.hapaneld.logship.LogCapture
 import io.github.maxlyth.hapaneld.sensors.SensorReporter
 import io.github.maxlyth.hapaneld.shizuku.ShizukuBridge
@@ -193,6 +196,14 @@ class PaneldServer(
     // launch, and retries an interrupted built-in switch from its durable blank-URL state.
     private val rendererPreparation: RendererPreparationCoordinator,
     private val entityLearning: EntityLearningManager,
+    // Runtime-loadable profiles. Optional during staged integration so the existing service can keep
+    // constructing the HTTP server before its repository/restart wiring lands; the tab then reports 503.
+    private val profileAdmin: ProfileAdmin? = null,
+    private val profileTemplate: () -> String? = { null },
+    private val profileDeviceDraft: () -> PassiveProfileDraft? = { null },
+    private val profileReport: () -> PassiveProfileReport? = { null },
+    private val profileProbe: (String) -> PassiveProfileReport? = { null },
+    private val onProfileRestart: () -> Unit = {},
 ) {
     // Per-INSTALL build token (changes on every (re)install, not just a version bump) so an open info
     // page can auto-reload after the app is updated — even a same-version dev re-spin. /health carries it.
@@ -368,6 +379,7 @@ class PaneldServer(
                 // Tabbed multi-page shell. `/` stays the existing dashboard (now with a tab bar); the
                 // other tabs are dedicated pages that consume /api/v1.
                 get("/configure") { call.respondText(page("configure", "Configure", configureBody()), ContentType.Text.Html) }
+                get("/profiles") { call.respondText(page("profiles", "Profile", profilesBody()), ContentType.Text.Html) }
                 // The experimental remote-control page is withheld from 0.9.2. Keep old bookmarks
                 // useful while its tap-injection UX is reviewed for a later release.
                 get("/test") { call.respondRedirect("/") }
@@ -396,6 +408,20 @@ class PaneldServer(
                 // external "contract" endpoints called by plain curl (no -L) from HA automations and
                 // monitors. Human pages + static assets stay top-level. ----
                 route("/api/v1") {
+                    profileAdmin?.let { admin ->
+                        profileRoutes(
+                            ProfileRouteDependencies(
+                                admin = admin,
+                                requestRestart = onProfileRestart,
+                                readOnly = ProfileRouteReadOnlyProviders(
+                                    template = profileTemplate,
+                                    deviceDraft = profileDeviceDraft,
+                                    latestReport = profileReport,
+                                    probe = profileProbe,
+                                ),
+                            ),
+                        )
+                    } ?: unavailableProfileRoutes()
                     get("/health") {
                         call.respondText("ha-paneld ${Config.VERSION} panel=${config.panelId} build=${buildToken()} cfg=${io.github.maxlyth.hapaneld.config.ConfigHash.of(currentValues())}\n")
                     }
@@ -1066,6 +1092,7 @@ class PaneldServer(
         return "<div class=\"nav\">" +
             tab("dashboard", "/", "Dashboard") +
             tab("configure", "/configure", "Configure") +
+            tab("profiles", "/profiles", "Profile") +
             entityTab +
             tab("install", "/install", "Install") +
             tab("fleet", "/fleet", "Fleet") +
@@ -1168,6 +1195,65 @@ ${tameCardHtml()}
 <pre id="imp-result" class="muted" style="white-space:pre-wrap;margin-top:10px"></pre></div></div>
 <script src="/assets/configure.js"></script>
 <script src="/assets/prox.js"></script>"""
+
+    /** Runtime profile authoring. All content is hydrated through the guarded /api/v1/profile routes. */
+    private fun profilesBody(): String = """
+<link rel="stylesheet" href="/assets/profiles.css">
+<main class="profile-page">
+  <div class="profile-toolbar" aria-label="Profile actions">
+    <div class="profile-pickers">
+      <label for="profile-select" class="muted">Revision</label>
+      <select id="profile-select" aria-label="Profile revision"><option>Loading profiles…</option></select>
+    </div>
+    <div class="profile-actions">
+      <button class="pbtn" id="profile-new" type="button">New</button>
+      <button class="pbtn" id="profile-edit" type="button" disabled>Edit</button>
+      <button class="pbtn" id="profile-fork" type="button" disabled>Fork</button>
+      <label class="pbtn" for="profile-import">Import<input id="profile-import" type="file" accept=".yaml,.yml,application/yaml,text/yaml" hidden></label>
+      <button class="pbtn" id="profile-export" type="button">Export</button>
+      <button class="pbtn" id="profile-validate" type="button" disabled>Validate</button>
+      <button class="pbtn" id="profile-compare" type="button" disabled>Compare</button>
+      <button class="pbtn primary" id="savebtn" type="button" disabled>Save revision</button>
+      <button class="pbtn primary" id="profile-activate" type="button" disabled>Activate</button>
+      <button class="pbtn" id="profile-auto" type="button" disabled>Use automatic</button>
+      <button class="pbtn" id="profile-rollback" type="button" disabled>Rollback</button>
+      <button class="pbtn danger" id="profile-delete" type="button" disabled>Delete</button>
+    </div>
+  </div>
+  <div id="profile-badges" class="profile-badges" aria-label="Profile state"></div>
+  <div id="profile-status" class="profile-status" role="status" aria-live="polite">Loading profiles…</div>
+  <div class="profile-workspace">
+    <section class="profile-editor-pane" aria-labelledby="profile-editor-title">
+      <div class="profile-editor-head"><h2 id="profile-editor-title">Profile YAML</h2><span id="profile-editor-meta" class="profile-editor-meta"></span></div>
+      <div id="profile-editor"></div>
+    </section>
+    <aside class="profile-inspector" aria-labelledby="profile-inspector-title">
+      <div class="profile-inspector-head"><h2 id="profile-inspector-title">Review</h2></div>
+      <div class="profile-inspector-body">
+        <section><h3>Catalog and runtime</h3><div id="profile-catalog-issues" class="profile-issues"></div></section>
+        <section><h3>Validation</h3><div id="profile-issues" class="profile-issues"></div></section>
+        <div class="profile-guidance" id="profile-shizuku-guidance" hidden>
+          <p><b>Shizuku guidance</b></p>
+          <p>This profile can benefit from locally approved Shizuku enhanced access. The profile does not install, enable, or approve Shizuku; live readiness remains separate.</p>
+          <p><a href="$REPO_URL/blob/main/docs/shizuku.md" target="_blank" rel="noopener">Read the setup and capability guide</a></p>
+        </div>
+        <section><h3>Compared with active</h3><div id="profile-diff" class="profile-diff"></div></section>
+        <section><h3>Passive device evidence</h3><div id="profile-report" class="profile-report"></div></section>
+        <div class="profile-draft" id="profile-generic-draft" hidden>
+          <p><b>Starting from Generic?</b> Build a read-only draft from passive Android facts. Unknown hardware stays marked TODO; this does not run root, helper, Shizuku, input, or hardware commands.</p>
+          <p><button class="pbtn" id="profile-draft" type="button">Generate device draft</button> <button class="pbtn" id="profile-use-draft" type="button" hidden>Copy draft to edit</button></p>
+        </div>
+      </div>
+    </aside>
+  </div>
+</main>
+<div id="profile-modal" class="profile-modal" role="dialog" aria-modal="true" aria-labelledby="profile-modal-title" hidden>
+  <div class="profile-modal-card"><h2 id="profile-modal-title">Confirm</h2><pre id="profile-modal-detail"></pre>
+    <div class="profile-modal-actions"><button class="pbtn" id="profile-modal-cancel" type="button">Cancel</button><button class="pbtn primary" id="profile-modal-confirm" type="button">Confirm</button></div>
+  </div>
+</div>
+<script src="/assets/vendor/profile-editor/codemirror.js"></script>
+<script src="/assets/profiles.js"></script>"""
 
     /** Install tab — software-management hub: setup warnings, managed component versions, radio firmware,
      *  on-demand health audit, and config backup. (The Capabilities card lives on the Dashboard.) */

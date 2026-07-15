@@ -32,6 +32,10 @@ interface DeviceProfile {
      *  need the root helper daemon for privileged writes). */
     val appCanSu: Boolean
 
+    /** Author recommendation only; never a claim about live Shizuku installation or readiness. */
+    val shizukuRecommendation: io.github.maxlyth.hapaneld.device.profile.ShizukuRecommendation
+        get() = io.github.maxlyth.hapaneld.device.profile.ShizukuRecommendation.NONE
+
     /** Whether full profile behavior relies on `helper/hapaneld-helper`. Every sandbox-walled panel needs
      *  it for privileged controls, but app-su panels can need it too: WF1589T's evdev power button is the
      *  important counterexample. This is a diagnostic requirement, not a routing gate; live controllers

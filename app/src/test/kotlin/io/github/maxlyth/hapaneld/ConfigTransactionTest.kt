@@ -1,6 +1,8 @@
 package io.github.maxlyth.hapaneld
 
 import android.content.SharedPreferences
+import io.github.maxlyth.hapaneld.device.DeviceProfile
+import io.github.maxlyth.hapaneld.device.Generic
 import io.github.maxlyth.hapaneld.util.HaLink
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -9,6 +11,49 @@ import org.junit.Test
 import java.lang.reflect.Proxy
 
 class ConfigTransactionTest {
+    @Test fun proximityCalibrationIsScopedToTheActiveProfileId() {
+        val prefs = fakePreferences()
+        val config = Config(prefs.instance)
+        config.attachProfile(profile("first-panel"))
+        config.captureProximity("near", 2f)
+        config.captureProximity("far", 10f)
+        config.setProximitySensitivity("LOW")
+
+        config.attachProfile(profile("second-panel"))
+        assertFalse(config.proximityCalibrated)
+        assertEquals(Config.ProxSensitivity.MEDIUM, config.proximitySensitivity)
+        config.captureProximity("near", 20f)
+        config.captureProximity("far", 40f)
+
+        config.attachProfile(profile("first-panel"))
+        assertEquals(2f, config.proximityNearRaw, 0f)
+        assertEquals(10f, config.proximityFarRaw, 0f)
+        assertEquals(6f, config.proximityThreshold, 0f)
+        assertEquals(Config.ProxSensitivity.LOW, config.proximitySensitivity)
+    }
+
+    @Test fun legacyProximityCalibrationBindsOnlyToTheInitiallyAttachedProfile() {
+        val prefs = fakePreferences(initial = mapOf(
+            "prox_near_raw" to 3f,
+            "prox_far_raw" to 9f,
+            "prox_threshold" to 6f,
+            "prox_near_below" to true,
+            "prox_sensitivity" to "HIGH",
+        ))
+        val config = Config(prefs.instance)
+
+        config.attachProfile(profile("legacy-panel"))
+        assertEquals(3f, config.proximityNearRaw, 0f)
+        assertEquals(9f, config.proximityFarRaw, 0f)
+        assertEquals(Config.ProxSensitivity.HIGH, config.proximitySensitivity)
+
+        config.attachProfile(profile("community.other-panel"))
+        assertFalse(config.proximityCalibrated)
+        assertEquals(Config.ProxSensitivity.MEDIUM, config.proximitySensitivity)
+        assertTrue(prefs.values.containsKey("profile_calibration.legacy-panel.prox_threshold"))
+        assertFalse(prefs.values.containsKey("profile_calibration.community.other-panel.prox_threshold"))
+    }
+
     @Test fun defaultResolverUpgradeInvalidatesOldAutomaticFilterButPreservesItsIds() {
         val target = dashboardEntityTargetKey("url-key", "/")
         val prefs = fakePreferences(initial = mapOf(
@@ -969,6 +1014,11 @@ class ConfigTransactionTest {
         val instance: SharedPreferences,
         val values: MutableMap<String, Any?>,
     )
+
+    private fun profile(id: String): DeviceProfile = object : DeviceProfile by Generic {
+        override val id = id
+        override val displayName = id
+    }
 
     private fun fakePreferences(
         initial: Map<String, Any?> = emptyMap(),

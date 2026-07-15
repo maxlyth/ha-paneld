@@ -150,6 +150,10 @@ dependencies {
     // Ktor/HiveMQ log via SLF4J; route it to Logcat.
     implementation(libs.slf4j.android)
 
+    // Strict YAML 1.2 parser for runtime-loadable device profiles. ProfileYaml applies tighter
+    // byte/depth/alias/key bounds and maps only into the app's closed schema (never Java objects).
+    implementation(libs.snakeyaml.engine)
+
     // Optional shell-UID bridge for non-root panels. The manager APK remains a separate, explicit
     // user opt-in; these small API/provider libraries only expose its authenticated Binder boundary.
     implementation(libs.shizuku.api)

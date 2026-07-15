@@ -1,0 +1,90 @@
+schema: 1
+id: shelly-wall-display
+version: 1.0.0
+display_name: Shelly Wall Display (legacy)
+soc_class: MediaTek MT6580
+metadata:
+  author: ha-paneld maintainers
+  source: https://github.com/maxlyth/ha-paneld/blob/main/docs/hardware/README.md
+  license: Apache-2.0
+  maturity: experimental
+  tested_firmware:
+    - WallDisplay 1.2.1
+    - WallDisplay 2.7.1
+  limitations:
+    - Per-SKU relay, proximity, Recents, and display details still need live-hardware confirmation.
+    - On-board relays are not exposed because no safe supported local control path is known.
+requires:
+  min_core_version: 0.9.3-rc1
+  drivers:
+    - screen.brightness-zero
+    - sensor.android
+match:
+  priority: 500
+  fallback: false
+  any:
+    - priority: 960
+      all:
+        - field: model
+          op: equals
+          values:
+            - stargate
+            - pegasus
+            - atlantis
+    - priority: 960
+      all:
+        - field: device
+          op: equals
+          values:
+            - stargate
+            - pegasus
+            - atlantis
+    - priority: 960
+      all:
+        - field: model
+          op: starts_with
+          values:
+            - sawd-0
+            - sawd-1
+            - sawd-2
+    - priority: 960
+      all:
+        - field: device
+          op: starts_with
+          values:
+            - sawd-0
+            - sawd-1
+            - sawd-2
+    - priority: 960
+      all:
+        - field: device
+          op: contains
+          values:
+            - k400_mt6580
+            - e500_7731e
+platform:
+  su_form: none
+  app_can_su: false
+  has_recents: true
+  shizuku: recommended
+hardware:
+  led:
+    mechanism: none
+    transfer: identity
+  screen_off: brightness-zero
+  has_button_backlight: false
+sensors:
+  proximity_graded_strategy: observed
+  light_technology: Ambient light
+  cht8305: false
+  room_temp_offset_c: 0.0
+identity:
+  manufacturer: Shelly
+  model: Wall Display
+  model_label_strategy: display-name
+input:
+  evdev_buttons: []
+cpu: {}
+display: {}
+updates: {}
+taming: []

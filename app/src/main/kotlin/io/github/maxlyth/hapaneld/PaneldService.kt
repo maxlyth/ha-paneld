@@ -11,12 +11,17 @@ import android.net.ConnectivityManager
 import android.net.LinkProperties
 import android.net.Network
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.provider.Settings
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import io.github.maxlyth.hapaneld.control.AdbController
 import io.github.maxlyth.hapaneld.device.DeviceProfile
+import io.github.maxlyth.hapaneld.device.probe.AndroidPassiveProfileProbe
+import io.github.maxlyth.hapaneld.device.profile.ProfileDraftFactory
+import io.github.maxlyth.hapaneld.device.profile.RuntimeProfileRegistry
 import io.github.maxlyth.hapaneld.input.EvdevButtonClient
 import io.github.maxlyth.hapaneld.control.AutoBrightnessController
 import io.github.maxlyth.hapaneld.control.BootChimeController
@@ -63,6 +68,7 @@ import io.github.maxlyth.hapaneld.util.ServiceRuntimeOwner
 import io.github.maxlyth.hapaneld.util.BorrowedRendererSettings
 import io.github.maxlyth.hapaneld.util.RendererPreparationCoordinator
 import io.github.maxlyth.hapaneld.util.RendererPreparationState
+import io.github.maxlyth.hapaneld.util.ProfileRestartCoordinator
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -200,6 +206,11 @@ class PaneldService : Service() {
     private lateinit var adb: AdbController
     private lateinit var power: PowerController
     private lateinit var profile: DeviceProfile
+    private lateinit var profileRegistry: RuntimeProfileRegistry
+    private lateinit var passiveProfileProbe: AndroidPassiveProfileProbe
+    private lateinit var profileRestart: ProfileRestartCoordinator
+    private lateinit var activeProfileIdentity: String
+    private var profileActivationGeneration: Long? = null
     // One-time-start guard for onStartCommand (see there for why). Reset in onDestroy.
     @Volatile private var started = false
 
@@ -208,9 +219,27 @@ class PaneldService : Service() {
         config = Config(this)
         config.migrateLiveStore()   // carry persisted settings across a schema bump before anything reads them
         reconcileHelperInstallStaging()
-        // Detect the device profile once and hand it to the hardware-specific controllers (instead of
-        // each re-detecting). The canonical per-platform silo for paths/quirks; see device/.
-        profile = DeviceProfile.detect()
+        // Resolve one immutable profile revision before constructing any hardware owner. Activations are
+        // restart-bound, so every controller below observes this exact object for the service lifetime.
+        profileRegistry = RuntimeProfileRegistry(this)
+        val resolvedProfile = profileRegistry.resolveForStartup()
+        profile = resolvedProfile.profile
+        activeProfileIdentity = resolvedProfile.summary.ref.let { "${it.id}@${it.revision}" }
+        profileActivationGeneration = resolvedProfile.activationGeneration
+        resolvedProfile.issues.forEach { issue ->
+            Log.w(TAG, "profile ${issue.severity.name.lowercase()} ${issue.path}: ${issue.message}")
+        }
+        passiveProfileProbe = AndroidPassiveProfileProbe(this)
+        val mainHandler = Handler(Looper.getMainLooper())
+        profileRestart = ProfileRestartCoordinator(
+            schedule = { delayMs, action -> mainHandler.postDelayed(action, delayMs) },
+            restartProcess = {
+                // START_STICKY is already the field-established restart route used for WebView
+                // replacement. It avoids Android 12+'s background foreground-service start ban.
+                Log.i(TAG, "restarting process to activate staged profile")
+                kotlin.system.exitProcess(0)
+            },
+        )
         config.attachProfile(profile)   // supplies per-panel manufacturer/model defaults
         sensors = SensorReporter(this, config, profile)
         // Shared demand-driven logcat captures (one subprocess + one redaction pass each): the app
@@ -378,6 +407,18 @@ class PaneldService : Service() {
             peers = { mdns.browsePeers() },
             rendererPreparation = rendererPreparation,
             entityLearning = entityLearning,
+            profileAdmin = profileRegistry,
+            profileTemplate = {
+                val report = passiveProfileProbe.report()
+                ProfileDraftFactory.create(report.facts, report).rawYaml
+            },
+            profileDeviceDraft = {
+                passiveProfileProbe.report().takeIf { profile.id == "generic" }
+                    ?.let(ProfileDraftFactory::fromReport)
+            },
+            profileReport = passiveProfileProbe::report,
+            profileProbe = { passiveProfileProbe.report() },
+            onProfileRestart = { profileRestart.request() },
         )
     }
 
@@ -412,6 +453,7 @@ class PaneldService : Service() {
         },
         onDashboardTargetChanged = entityLearning::onTargetConfigurationChanged,
         stalePanelId = stalePanelId,
+        profileIdentity = activeProfileIdentity,
     )
 
     /**
@@ -891,6 +933,16 @@ class PaneldService : Service() {
                     mqtt.publishScreenOn()
                 }
             }
+            // The HTTP surface, network owner, sensors, evdev and periodic safety owners have all been
+            // constructed successfully. Only now may a pending profile replace the previous LKG target.
+            profileActivationGeneration?.let { generation ->
+                if (profileRegistry.markActivationHealthy(generation)) {
+                    Log.i(TAG, "profile activation generation $generation is healthy")
+                    profileActivationGeneration = null
+                } else {
+                    Log.w(TAG, "profile activation generation $generation could not be marked healthy")
+                }
+            }
         }
         registerNetworkCallback()
         return START_STICKY
@@ -1068,26 +1120,33 @@ class PaneldService : Service() {
             Log.w(TAG, "entity-learning store left open for process teardown because a producer did not drain")
         }
         val stopped = runtime.shutdown(RUNTIME_SHUTDOWN_MS) { activeRuntime ->
+            fun closeOwner(name: String, close: () -> Unit) {
+                runCatching(close).onFailure { error ->
+                    Log.w(TAG, "$name cleanup failed", error)
+                }
+            }
             val audioStopped = runCatching {
                 kotlinx.coroutines.runBlocking { audio.close(AUDIO_SHUTDOWN_MS) }
             }.getOrDefault(false)
-            if (!audioStopped) Log.w(TAG, "audio cleanup exceeded ${AUDIO_SHUTDOWN_MS}ms")
+            if (!audioStopped) {
+                Log.w(TAG, "audio cleanup exceeded ${AUDIO_SHUTDOWN_MS}ms")
+            }
             cancelKioskReassert()
             // Close and drain command ingress before producers and hardware owners. MqttBridge.stop()
             // also owns HTTP live-setting dispatch, so neither route can enter an owner during teardown.
-            runCatching { activeRuntime.mqtt.stop() }
-            runCatching { EvdevButtonClient.stop() }
-            runCatching { sensors.stop() }
-            runCatching { watchdog.stop() }
-            runCatching { ledEffect.close() }
-            runCatching { screen.close() } // restore a deliberate dark screen before releasing power
-            runCatching { navbar.cleanup() }
-            runCatching { power.apply(false) }
-            runCatching { logShipper.stop() }
-            runCatching { io.github.maxlyth.hapaneld.http.PerfReader.stop() }
-            runCatching { logCaptureApp.close() }
-            runCatching { logCaptureSystem.close() }
-            runCatching { activeRuntime.mdns.stop() }
+            closeOwner("MQTT") { activeRuntime.mqtt.stop() }
+            closeOwner("evdev") { EvdevButtonClient.stop() }
+            closeOwner("sensors") { sensors.stop() }
+            closeOwner("watchdog") { watchdog.stop() }
+            closeOwner("LED effect") { ledEffect.close() }
+            closeOwner("screen") { screen.close() } // restore a deliberate dark screen before releasing power
+            closeOwner("navbar") { navbar.cleanup() }
+            closeOwner("power") { power.apply(false) }
+            closeOwner("log shipper") { logShipper.stop() }
+            closeOwner("performance reader") { io.github.maxlyth.hapaneld.http.PerfReader.stop() }
+            closeOwner("app log capture") { logCaptureApp.close() }
+            closeOwner("system log capture") { logCaptureSystem.close() }
+            closeOwner("mDNS") { activeRuntime.mdns.stop() }
         }
         if (!stopped) Log.w(TAG, "runtime teardown exceeded ${RUNTIME_SHUTDOWN_MS}ms; cleanup continues on its owner thread")
         super.onDestroy()

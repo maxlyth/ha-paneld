@@ -14,6 +14,76 @@
         "responses": { "200": { "description": "playing" }, "400": { "description": "no-url" }, "503": { "description": "stopping" } } }
     },
     "/api/v1/status": { "get": { "summary": "Panel-health warnings + capability matrix as JSON", "tags": ["status"], "responses": { "200": { "description": "{warnings:[html], capabilities:[{name,note,color}]}" } } } },
+    "/api/v1/profiles": {
+      "get": { "summary": "List immutable bundled/local profile revisions and current activation state", "tags": ["profiles"], "responses": { "200": { "description": "Catalog revision, selection, activation/LKG state, issues and profile summaries" }, "503": { "description": "Profile repository not wired" } } }
+    },
+    "/api/v1/profiles/schema": {
+      "get": { "summary": "Profile schema metadata for authoring and validation", "tags": ["profiles"], "responses": { "200": { "description": "Schema version, YAML byte bound and typed field descriptors" } } }
+    },
+    "/api/v1/profiles/drivers": {
+      "get": { "summary": "Compiled driver catalogue available to declarative profiles", "tags": ["profiles"], "responses": { "200": { "description": "Typed driver descriptors including privileged classification" } } }
+    },
+    "/api/v1/profiles/template": {
+      "get": { "summary": "Download a new unsaved YAML profile template", "tags": ["profiles"], "responses": { "200": { "description": "application/yaml" }, "501": { "description": "Template provider unavailable" } } }
+    },
+    "/api/v1/profiles/device-draft": {
+      "get": { "summary": "Download a read-only Generic draft from passive Android facts; unknown hardware remains TODO", "tags": ["profiles"], "responses": { "200": { "description": "application/yaml" }, "501": { "description": "Generic is not active or the passive draft provider is unavailable" } } }
+    },
+    "/api/v1/profiles/report": {
+      "get": { "summary": "Latest sanitized passive profile report", "tags": ["profiles"], "responses": { "200": { "description": "Allowlisted device facts, observations and issues" }, "404": { "description": "No report available" } } }
+    },
+    "/api/v1/profiles/{id}/revisions/{revision}": {
+      "get": { "summary": "Export one exact immutable YAML revision", "tags": ["profiles"],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "revision", "in": "path", "required": true, "schema": { "type": "string", "pattern": "^[a-f0-9]{64}$" } }
+        ], "responses": { "200": { "description": "application/yaml attachment" }, "404": { "description": "Revision not found" } } }
+    },
+    "/api/v1/profiles/preview": {
+      "post": { "summary": "Parse, validate and semantically compare YAML without saving or activating", "tags": ["profiles"],
+        "requestBody": { "required": true, "content": { "application/yaml": { "schema": { "type": "string", "description": "UTF-8 YAML; request body limited to 131072 bytes" } } } },
+        "responses": { "200": { "description": "Compatibility, safe diagnostics, semantic diff, exact content hash and short-lived preview token" }, "413": { "description": "YAML too large" }, "415": { "description": "YAML content type required" } } }
+    },
+    "/api/v1/profiles/validate": {
+      "post": { "summary": "Alias of profile preview for validation clients", "tags": ["profiles"], "requestBody": { "required": true, "content": { "application/yaml": { "schema": { "type": "string", "description": "UTF-8 YAML; request body limited to 131072 bytes" } } } }, "responses": { "200": { "description": "Profile preview" } } }
+    },
+    "/api/v1/profiles/compare": {
+      "post": { "summary": "Alias of profile preview emphasizing its semantic diff from active", "tags": ["profiles"], "requestBody": { "required": true, "content": { "application/yaml": { "schema": { "type": "string", "description": "UTF-8 YAML; request body limited to 131072 bytes" } } } }, "responses": { "200": { "description": "Profile preview and semantic diff" } } }
+    },
+    "/api/v1/profiles/probe": {
+      "post": { "summary": "Preview YAML and attach a sanitized passive-only device report", "tags": ["profiles"], "requestBody": { "required": true, "content": { "application/yaml": { "schema": { "type": "string", "description": "UTF-8 YAML; request body limited to 131072 bytes" } } } }, "responses": { "200": { "description": "Profile preview, plus report when passive probing is available" } } }
+    },
+    "/api/v1/profiles/import": {
+      "post": { "summary": "Consume an exact preview token and save YAML as an immutable inactive local revision", "tags": ["profiles"],
+        "parameters": [{ "name": "X-Profile-Preview-Token", "in": "header", "required": true, "schema": { "type": "string" } }],
+        "requestBody": { "required": true, "content": { "application/yaml": { "schema": { "type": "string", "description": "UTF-8 YAML; request body limited to 131072 bytes" } } } },
+        "responses": { "200": { "description": "Saved immutable revision" }, "409": { "description": "Preview token stale, expired or bound to different bytes" }, "422": { "description": "Import rejected" } } }
+    },
+    "/api/v1/profiles/save": {
+      "post": { "summary": "Alias of profile import used by the editor Save revision action", "tags": ["profiles"],
+        "parameters": [{ "name": "X-Profile-Preview-Token", "in": "header", "required": true, "schema": { "type": "string" } }],
+        "requestBody": { "required": true, "content": { "application/yaml": { "schema": { "type": "string", "description": "UTF-8 YAML; request body limited to 131072 bytes" } } } }, "responses": { "200": { "description": "Saved immutable revision" }, "409": { "description": "Stale preview" } } }
+    },
+    "/api/v1/profiles/select": {
+      "post": { "summary": "Select one exact revision and schedule a controlled service restart", "tags": ["profiles"],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "oneOf": [
+          { "type": "object", "required": ["id", "revision", "expected_catalog_revision", "confirm"], "properties": {
+            "id": { "type": "string" }, "revision": { "type": "string", "pattern": "^[a-f0-9]{64}$" }, "expected_catalog_revision": { "type": "integer" }, "confirm": { "type": "boolean", "enum": [true] }
+          } },
+          { "type": "object", "required": ["auto", "expected_catalog_revision", "confirm"], "properties": {
+            "auto": { "type": "boolean", "enum": [true] }, "expected_catalog_revision": { "type": "integer" }, "confirm": { "type": "boolean", "enum": [true] }
+          } }
+        ] } } } }, "responses": { "202": { "description": "Selection staged; restart scheduled" }, "409": { "description": "Confirmation required or stale catalog" }, "422": { "description": "Selection rejected" } } }
+    },
+    "/api/v1/profiles/activate": {
+      "post": { "summary": "Alias of profile select used by explicit activation clients", "tags": ["profiles"], "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object" } } } }, "responses": { "202": { "description": "Activation staged" }, "409": { "description": "Confirmation required or stale catalog" } } }
+    },
+    "/api/v1/profiles/rollback": {
+      "post": { "summary": "Select only the server-recorded last-known-good selection and schedule a controlled restart", "tags": ["profiles"], "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["expected_catalog_revision", "confirm"] } } } }, "responses": { "202": { "description": "Rollback staged" }, "409": { "description": "Confirmation missing or catalog stale" }, "422": { "description": "No recorded rollback selection" } } }
+    },
+    "/api/v1/profiles/delete": {
+      "post": { "summary": "Delete an inactive unselected local revision", "tags": ["profiles"], "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["id", "revision", "expected_catalog_revision", "confirm"] } } } }, "responses": { "200": { "description": "Deleted" }, "409": { "description": "Confirmation required or stale catalog" }, "422": { "description": "Bundled, active, selected or protected revision" } } }
+    },
     "/api/v1/config": {
       "get": { "summary": "Read full config (MQTT password redacted) incl. registry `settings` + `ha_expose` flags", "tags": ["config"], "responses": { "200": { "description": "config JSON" } } },
       "post": {

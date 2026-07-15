@@ -1,0 +1,63 @@
+schema: 1
+id: echo-show-5-gen2
+version: 1.0.0
+display_name: Amazon Echo Show 5 (2nd Gen)
+soc_class: MediaTek MT8163
+metadata:
+  author: ha-paneld maintainers
+  source: https://github.com/maxlyth/ha-paneld/blob/main/docs/architecture/device-profiles.md
+  license: Apache-2.0
+  maturity: experimental
+  tested_firmware:
+    - LineageOS 18.1 / Android 11
+  limitations:
+    - Stock Fire OS is not a supported installation path.
+    - Hardware-specific control paths remain unknown.
+requires:
+  min_core_version: 0.9.3-rc1
+  drivers:
+    - access.android-su
+    - screen.brightness-zero
+    - sensor.android
+match:
+  priority: 500
+  fallback: false
+  any:
+    - priority: 990
+      all:
+        - field: device
+          op: equals
+          values:
+            - cronos
+    - priority: 990
+      all:
+        - field: model
+          op: equals
+          values:
+            - cronos
+platform:
+  su_form: android
+  app_can_su: true
+  has_recents: true
+  shizuku: optional
+hardware:
+  led:
+    mechanism: none
+    transfer: identity
+  screen_off: brightness-zero
+  has_button_backlight: false
+sensors:
+  proximity_graded_strategy: observed
+  light_technology: Ambient light
+  cht8305: false
+  room_temp_offset_c: 0.0
+identity:
+  manufacturer: Amazon
+  model: Echo Show 5 (2nd Gen)
+  model_label_strategy: display-name
+input:
+  evdev_buttons: []
+cpu: {}
+display: {}
+updates: {}
+taming: []

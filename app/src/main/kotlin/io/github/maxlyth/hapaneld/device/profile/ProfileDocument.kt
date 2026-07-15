@@ -1,0 +1,146 @@
+package io.github.maxlyth.hapaneld.device.profile
+
+/**
+ * Parsed form of the version-1 profile format. It contains data and named, core-owned strategies only:
+ * imported profiles cannot execute code, name arbitrary classes, use regular expressions, or add drivers.
+ */
+data class ProfileDocument(
+    val schema: Int,
+    val id: String,
+    val version: String,
+    val displayName: String,
+    val socClass: String,
+    val metadata: ProfileProvenance,
+    val requires: ProfileRequirements,
+    val match: ProfileMatch,
+    val platform: ProfilePlatform,
+    val hardware: ProfileHardware,
+    val sensors: ProfileSensors,
+    val identity: ProfileIdentity,
+    val input: ProfileInput,
+    val cpu: ProfileCpu,
+    val display: ProfileDisplay,
+    val updates: ProfileUpdates,
+    val taming: List<ProfileTameCandidate>,
+)
+
+data class ProfileProvenance(
+    val author: String,
+    val source: String? = null,
+    val license: String,
+    val maturity: ProfileMaturity,
+    val testedFirmware: List<String> = emptyList(),
+    val limitations: List<String> = emptyList(),
+)
+
+data class ProfileRequirements(
+    val minCoreVersion: String? = null,
+    val drivers: Set<String> = emptySet(),
+)
+
+data class ProfileMatch(
+    val priority: Int = 0,
+    val fallback: Boolean = false,
+    /** OR across groups, AND across predicates within one group. */
+    val any: List<ProfileMatchGroup> = emptyList(),
+)
+
+data class ProfileMatchGroup(
+    /** Specificity of this OR branch; exact product identities must outrank broad SoC fallbacks. */
+    val priority: Int,
+    val all: List<ProfilePredicate>,
+)
+
+enum class ProfileFact(val yamlName: String) {
+    MODEL("model"),
+    DEVICE("device"),
+    PRODUCT_VERSION("product_version"),
+}
+
+enum class ProfileMatchOp(val yamlName: String) {
+    EQUALS("equals"),
+    STARTS_WITH("starts_with"),
+    CONTAINS("contains"),
+}
+
+data class ProfilePredicate(
+    val field: ProfileFact,
+    val op: ProfileMatchOp,
+    val values: List<String>,
+)
+
+data class ProfilePlatform(
+    val suForm: String,
+    val appCanSu: Boolean,
+    val hasRecents: Boolean = true,
+    val shizuku: ShizukuRecommendation = ShizukuRecommendation.NONE,
+)
+
+data class ProfileHardware(
+    val led: ProfileLed,
+    val screenOff: String,
+    val hasButtonBacklight: Boolean = false,
+    val zigbeeGatewayDir: String? = null,
+    val relayBase: String? = null,
+    val relayBaseFallbacks: List<String> = emptyList(),
+    val buttonLedGpioBase: Int? = null,
+)
+
+data class ProfileLed(
+    val mechanism: String,
+    val transfer: String = "identity",
+)
+
+data class ProfileSensors(
+    val proximityTechnology: String? = null,
+    val proximityNearBelow: Boolean? = null,
+    val proximityNearRaw: Float? = null,
+    val proximityFarRaw: Float? = null,
+    val proximityGpio: Int? = null,
+    val proximityGradedStrategy: String = "observed",
+    val lightTechnology: String? = null,
+    val cht8305: Boolean = false,
+    val roomTempOffsetC: Float = 0f,
+)
+
+data class ProfileIdentity(
+    val manufacturer: String? = null,
+    val model: String? = null,
+    val modelLabelStrategy: String = "display-name",
+)
+
+data class ProfileInput(val evdevButtons: List<ProfileEvdevButton> = emptyList())
+
+data class ProfileEvdevButton(
+    val node: String,
+    val code: Int,
+    val grab: Boolean,
+    val eventType: String,
+    val sw: Boolean = false,
+)
+
+data class ProfileCpu(val governors: Map<String, String>? = null)
+
+data class ProfileDisplay(
+    val recommendedDensity: ProfileDensity? = null,
+    val recommendedFontScale: Float? = null,
+    val physicalPpi: Int? = null,
+)
+
+sealed interface ProfileDensity {
+    data class Fixed(val value: Int) : ProfileDensity
+    data class Strategy(val id: String) : ProfileDensity
+}
+
+data class ProfileUpdates(
+    /** Core-owned artifact id; profile files never define APK URLs or signer trust roots. */
+    val webViewArtifact: String? = null,
+    val companionMaxVersion: String? = null,
+)
+
+data class ProfileTameCandidate(
+    val packageName: String,
+    val tags: List<String> = emptyList(),
+    val note: String = "",
+    val defaultTame: Boolean = false,
+)

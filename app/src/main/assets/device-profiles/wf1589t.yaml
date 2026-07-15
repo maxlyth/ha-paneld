@@ -1,0 +1,107 @@
+schema: 1
+id: wf1589t
+version: 1.0.0
+display_name: Electron WF1589T
+soc_class: rk3576
+metadata:
+  author: ha-paneld maintainers
+  source: https://github.com/maxlyth/ha-paneld/blob/main/docs/hardware/wf1589t.md
+  license: Apache-2.0
+  maturity: verified
+  tested_firmware:
+    - WF1589T Android 14 userdebug (2026-07)
+  limitations:
+    - The LED uses a conservative transfer until its per-channel response is measured.
+requires:
+  min_core_version: 0.9.3-rc1
+  drivers:
+    - access.android-su
+    - input.evdev
+    - led.rk3576-ioctl
+    - screen.su-blpower
+match:
+  priority: 500
+  fallback: false
+  any:
+    - priority: 940
+      all:
+        - field: device
+          op: contains
+          values:
+            - wf1589
+    - priority: 900
+      all:
+        - field: model
+          op: equals
+          values:
+            - rk3576_u
+platform:
+  su_form: android
+  app_can_su: true
+  has_recents: true
+  shizuku: optional
+hardware:
+  led:
+    mechanism: rk3576-ioctl
+    transfer: rk3576-four-bit
+  screen_off: su-blpower
+  has_button_backlight: false
+sensors:
+  proximity_graded_strategy: observed
+  cht8305: false
+  room_temp_offset_c: 0.0
+identity:
+  manufacturer: Electron
+  model: WF1589T
+  model_label_strategy: display-name
+input:
+  evdev_buttons:
+    - node: /dev/input/event1
+      code: 116
+      grab: true
+      event_type: KEYCODE_POWER
+      sw: false
+cpu:
+  governors:
+    Performance: performance
+    Efficiency: powersave
+    Auto: schedutil
+display:
+  recommended_density: 212
+  physical_ppi: 226
+updates: {}
+taming:
+  - package: com.cghs.stresstest
+    tags:
+      - vendor
+      - test
+      - clutter
+    note: 'Factory hardware stress-test ("burn-in") tool (label "Stresstest", priv-app). Production-line QA; not used in normal operation.'
+    default_tame: false
+  - package: com.DeviceTest
+    tags:
+      - chipset
+      - test
+      - clutter
+    note: Generic factory device-test app left in the firmware image. Diagnostic only.
+    default_tame: false
+  - package: com.rockchip.devicetest
+    tags:
+      - chipset
+      - test
+      - clutter
+    note: Rockchip (rk3576 SoC) factory device-test suite. Diagnostic only; not used in normal operation.
+    default_tame: false
+  - package: com.gulukai.pwmlightdemo
+    tags:
+      - vendor
+      - demo
+      - clutter
+    note: 'Vendor PWM-backlight/LED demo app (label "PwmLightDemo"). A demo, not the LED driver; safe to disable.'
+    default_tame: false
+  - package: com.elclcd.otaupdater
+    tags:
+      - vendor
+      - ota
+    note: 'ELC "Firmware Upgrade" vendor OTA updater. Disable to stop the panel auto-applying vendor firmware updates that can re-add bloat.'
+    default_tame: false

@@ -11,7 +11,7 @@
 
 It also replaces fragmented vendor software with one free, open-source way to operate different makes of panel. The Android app exposes the screen, LEDs, buttons, sensors, relays and audio to Home Assistant over HTTP, MQTT auto-discovery and mDNS; adds a built-in launcher and on-screen navigation for key-less hardware; and supports consistent provisioning across a whole fleet. Once provisioned, a panel pairs itself with Home Assistant without per-device YAML.
 
-It is built for panel-class Android — with explicit device profiles for Sonoff NSPanel Pro, Tuya TPA10, Electron WF1589T, ZHICAI SMT1019, Smatek S9E, the ZX-SMT156/RK3566_T, the LineageOS-based Echo Show 5 Gen 2, and (preliminary) the Shelly Wall Display family — **not** personal phones. Use ha-paneld's **built-in renderer** for the integrated dashboard and entity filtering, or the official [HA Companion app](https://github.com/home-assistant/android) when the panel needs Assist voice control or native notifications.
+It is built for panel-class Android — with bundled device profiles for Sonoff NSPanel Pro, Tuya TPA10, Electron WF1589T, ZHICAI SMT1019, Smatek S9E, the ZX-SMT156/RK3566_T, the LineageOS-based Echo Show 5 Gen 2, and (preliminary) the Shelly Wall Display family — **not** personal phones. Human-readable [runtime panel profiles](docs/profiles/README.md) also let owners describe and exchange support for other panels without rebuilding the app. Use ha-paneld's **built-in renderer** for the integrated dashboard and entity filtering, or the official [HA Companion app](https://github.com/home-assistant/android) when the panel needs Assist voice control or native notifications.
 
 <picture>
   <source media="(prefers-color-scheme: light)" srcset="docs/img/config-ui-light.png">
@@ -92,7 +92,7 @@ If Fully Kiosk's specific extras (e.g. its kiosk lockdown or its particular scre
 | TTS / announce audio | `POST /play` + `number.<panel>_volume` (HA has no MQTT media_player platform) — server-side TTS recipe in [docs/tts.md](docs/tts.md) |
 | Panel info + config web page | `GET /` (the device "Visit" link) |
 
-Every panel publishes the **same** MQTT-discovery entities regardless of underlying hardware, so HA picks them up with no YAML. The full entity reference, the HTTP contract on `:8888`, and how pairing works are in **[docs/api.md](docs/api.md)** (or browse it live at `http://<panel>:8888/api`).
+Every panel uses the same MQTT naming and control contracts, while discovery publishes only entities supported by its active profile and live capabilities. Home Assistant still picks them up with no YAML. The full entity reference, the HTTP contract on `:8888`, and how pairing works are in **[docs/api.md](docs/api.md)** (or browse it live at `http://<panel>:8888/api`).
 
 ## What needs root — and what doesn't
 
@@ -135,6 +135,7 @@ ha-paneld needs no system-signed install. Standard-Android capabilities (brightn
 ## Documentation
 
 - **[docs/api.md](docs/api.md)** — the control API: uniform MQTT entities, the HTTP contract (`:8888`), and pairing. Browse and try every endpoint live at `http://<panel>:8888/api`; the machine-readable spec is at `/openapi.json`.
+- **[docs/profiles/](docs/profiles/)** — create, validate, test and exchange human-readable panel profiles at runtime, without Android Studio or a source build.
 - **[docs/provisioning.md](docs/provisioning.md)** — unattended provisioning, whole-fleet updates, adb bootstrap, and the permission grants.
 - **[docs/shizuku.md](docs/shizuku.md)** — what Shizuku is, ha-paneld's narrow enhanced-access model, setup/recovery, and the trade-offs compared with vendor-rooted wall panels.
 - **[docs/built-in-renderer.md](docs/built-in-renderer.md)** — the built-in dashboard renderer (experimental): what it is, turning it on (incl. the one-click Companion sign-in borrow), theming, and what it deliberately omits.
@@ -166,10 +167,12 @@ Dependency selection and updates follow the project's [dependency and supply-cha
 
 ## Want your panel supported?
 
-ha-paneld has no donate button. It's free, and the "payment" that actually moves it forward is **more panels supported** — which takes hardware to study. Every panel here was added by hands-on adb analysis: probing the device and watching how it responds to real button, LED and sensor interaction.
+ha-paneld has no donate button. It's free, and the "payment" that actually moves it forward is **more panels supported** — which takes hardware to study. Start with the [runtime profile authoring guide](docs/profiles/README.md): Generic can produce a passive draft that you can validate, test and share without building the app. Fully curated support still needs hands-on evidence from the device itself, especially for buttons, LEDs, relays and sensors.
 
 So if you'd like to help:
-- **Open an issue with your panel's diagnostics.** Visit `http://<panel-ip>:8888/diag` (or the diag link on the panel's config page) and paste the dump into a new issue — build, SELinux, `/dev` + `/sys` listings, capability probe. That's enough to start; from there we'll work out a short interactive workflow to map the buttons/LEDs/sensors that need a person at the panel.
+
+- **Create and share a profile.** Open `http://<panel-ip>:8888/profiles`, download the Generic device draft, and follow the staged [testing](docs/profiles/testing.md) and [sharing](docs/profiles/sharing.md) guides. A community profile can be useful before it is ready to ship as a bundled profile.
+- **Or open an issue with your panel's diagnostics.** Visit `http://<panel-ip>:8888/diag` (or the diag link on the panel's config page) and paste the redacted dump into a new issue. That's enough to start; from there we'll work out a short interactive workflow to map the buttons/LEDs/sensors that need a person at the panel.
 - **Or send me the panel.** I'm **UK-based** and happy to do the reverse-engineering directly — the fastest route to a fully-supported new model. You'll get it back (I have way too many already); open an issue first so we can sort the details.
 
 The result is always open: your panel becomes a profile everyone can use — a bit less per-vendor fragmentation for the next person. That's the donation.

@@ -1,0 +1,131 @@
+schema: 1
+id: nspanel-pro
+version: 1.0.0
+display_name: Sonoff NSPanel Pro
+soc_class: PX30 / rk3326
+metadata:
+  author: ha-paneld maintainers
+  source: https://github.com/maxlyth/ha-paneld/blob/main/docs/hardware/nspanel-pro.md
+  license: Apache-2.0
+  maturity: verified
+  tested_firmware:
+    - NSPanel 86P firmware before and after 3.0.0
+    - NSPanel 120P firmware before and after 3.5.0
+  limitations:
+    - The NSPanel Pro Gen2 relay layout is not represented by this profile.
+requires:
+  min_core_version: 0.9.3-rc1
+  drivers:
+    - access.toolbox-su
+    - radio.siliconlabs-host
+    - screen.su-blpower
+    - sensor.android
+    - update.webview
+match:
+  priority: 500
+  fallback: false
+  any:
+    - priority: 920
+      all:
+        - field: product_version
+          op: starts_with
+          values:
+            - nspanel
+            - s6_android_
+    - priority: 910
+      all:
+        - field: model
+          op: contains
+          values:
+            - px30
+            - rk3326
+    - priority: 910
+      all:
+        - field: device
+          op: contains
+          values:
+            - px30
+            - rk3326
+platform:
+  su_form: toolbox
+  app_can_su: true
+  has_recents: true
+  shizuku: optional
+hardware:
+  led:
+    mechanism: none
+    transfer: identity
+  screen_off: su-blpower
+  has_button_backlight: false
+  zigbee_gateway_dir: /vendor/bin/siliconlabs_host
+sensors:
+  proximity_technology: Infrared
+  proximity_graded_strategy: nspanel-firmware-cutover
+  light_technology: Ambient light
+  cht8305: false
+  room_temp_offset_c: 0.0
+identity:
+  manufacturer: Sonoff
+  model: NSPanel Pro
+  model_label_strategy: nspanel-product-version
+input:
+  evdev_buttons: []
+cpu:
+  governors:
+    Performance: performance
+    Efficiency: powersave
+    Auto: interactive
+display:
+  recommended_density: nspanel-variant
+  recommended_font_scale: 1.0
+updates:
+  webview_artifact: lineageos-138-arm
+  companion_max_version: 2026.5.4
+taming:
+  - package: com.eWeLinkControlPanel
+    tags:
+      - vendor
+      - overlay
+      - boot
+    note: eWeLink/Sonoff control-panel app. After some Sonoff firmware updates it starts on boot and draws a floating widget over the dashboard.
+    default_tame: true
+  - package: com.android.rk
+    tags:
+      - chipset
+      - test
+    note: Rockchip (PX30 SoC) factory/test app left in the firmware image. Not used by the panel in normal operation.
+    default_tame: true
+  - package: android.rk.RockVideoPlayer
+    tags:
+      - chipset
+      - demo
+    note: Rockchip demo video player bundled with the SoC image. Safe to disable unless you actually use it.
+    default_tame: false
+  - package: com.cghs.stresstest
+    tags:
+      - vendor
+      - test
+      - clutter
+    note: 'Factory hardware stress-test ("burn-in") tool (app label "Stresstest for 8.1"). Used on the production line to soak the panel; not needed in normal operation.'
+    default_tame: true
+  - package: com.smatek.test
+    tags:
+      - vendor
+      - test
+      - clutter
+    note: 'CoolKit (eWeLink/Sonoff) factory test tool (label "测试工具" = "Test Tool"), bundled in /oem so it survives a factory reset. Diagnostic only — not used in normal operation.'
+    default_tame: true
+  - package: com.rockchip.devicetest
+    tags:
+      - chipset
+      - test
+      - clutter
+    note: Rockchip (PX30 SoC) factory device-test suite. Diagnostic only; not used by the panel in normal operation.
+    default_tame: true
+  - package: com.DeviceTest
+    tags:
+      - vendor
+      - test
+      - clutter
+    note: 'Factory device-test app (privileged system, label "DeviceTest(android8.0)") left in the firmware image. Diagnostic only — not used in normal operation.'
+    default_tame: true

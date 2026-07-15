@@ -1,0 +1,61 @@
+schema: 1
+id: org.example.wallpanel-x1
+version: 0.1.0
+display_name: Example Wall Panel X1
+soc_class: Unknown
+metadata:
+  author: Example Community
+  source: https://example.org/wallpanel-x1
+  license: MIT
+  maturity: draft
+  tested_firmware:
+    - X1_1.0.0
+  limitations:
+    - Only identity, ordinary Android behavior, and screen brightness have been tested.
+    - TODO verify sensors and privileged hardware before declaring their drivers.
+requires:
+  min_core_version: 0.9.3-rc1
+  drivers:
+    - screen.brightness-zero
+match:
+  priority: 500
+  fallback: false
+  any:
+    - priority: 900
+      all:
+        - field: model
+          op: equals
+          values:
+            - example-wallpanel-x1
+        - field: device
+          op: equals
+          values:
+            - wallpanel-x1
+platform:
+  su_form: none
+  app_can_su: false
+  has_recents: true
+  shizuku: optional
+hardware:
+  led:
+    mechanism: none
+    transfer: identity
+  screen_off: brightness-zero
+  has_button_backlight: false
+sensors:
+  proximity_graded_strategy: observed
+  cht8305: false
+  room_temp_offset_c: 0.0
+identity:
+  manufacturer: Example
+  model: Wall Panel X1
+  model_label_strategy: display-name
+input:
+  evdev_buttons: []
+cpu: {}
+display:
+  recommended_density: 240
+  recommended_font_scale: 1.0
+  physical_ppi: 220
+updates: {}
+taming: []

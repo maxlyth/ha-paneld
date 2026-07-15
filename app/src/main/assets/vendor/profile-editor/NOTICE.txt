@@ -1,0 +1,22 @@
+This runtime bundle contains the following MIT-licensed packages:
+
+@codemirror/autocomplete 6.20.3
+@codemirror/commands 6.10.4
+@codemirror/lang-yaml 6.1.3
+@codemirror/language 6.12.4
+@codemirror/lint 6.9.7
+@codemirror/search 6.7.1
+@codemirror/state 6.7.1
+@codemirror/view 6.43.6
+@lezer/common 1.5.2
+@lezer/highlight 1.2.3
+@lezer/lr 1.4.10
+@lezer/yaml 1.0.4
+@marijn/find-cluster-break 1.0.3
+crelt 1.0.7
+style-mod 4.1.3
+w3c-keyname 2.2.8
+
+These packages are authored and maintained by Marijn Haverbeke and contributors. Their collected copyright notices and the complete MIT permission and warranty text are preserved in the adjacent LICENSE.txt, which is packaged with this bundle.
+
+The pinned package versions and reproducible browser-bundle recipe are in tools/profile-editor/package.json and package-lock.json. The generated codemirror.js is committed so Android/Gradle builds do not require Node.js or network access.

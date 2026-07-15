@@ -155,6 +155,11 @@ class MqttBridge(
     // A panel-id replaced by reconfiguration. Its discovery and availability are cleared by the NEW
     // connection, so cleanup cannot be lost when the old client is detached or the broker was offline.
     private val stalePanelId: String? = null,
+    // Immutable id of the active profile revision (for example "panel.example@<sha256>"). A profile
+    // switch can remove capabilities without changing the app version, so it must trigger the same
+    // stale-discovery pruning as a core upgrade. Empty preserves the pre-profile marker for callers
+    // that have not opted into runtime profiles.
+    private val profileIdentity: String = "",
 ) {
     private val haLinkResolutionInFlight = AtomicBoolean(false)
     private val transport: MqttTransport = HiveMqTransport()
@@ -580,13 +585,14 @@ class MqttBridge(
             publish(it.topic, it.payload, retain = it.retain)
         }
         publishDiscovery()
-        // On an upgrade (running version differs from the one that last announced), actively clear any
-        // entity a prior version published but this one no longer does — so a refactored-away entity is
-        // removed from HA, not left as a zombie. Runs once per upgrade; publishDiscovery above populated
-        // publishedConfigTopics for the current set.
-        if (config.lastDiscoveryVersion != Config.VERSION) {
+        // On a core upgrade or active-profile revision switch, actively clear any entity the previous
+        // runtime published but this one no longer does. A profile switch can remove hardware-backed
+        // entities without changing Config.VERSION, so both immutable identities belong in the marker.
+        // publishDiscovery above populated publishedConfigTopics for the current capability set.
+        val discoveryMarker = mqttDiscoveryCleanupMarker(Config.VERSION, profileIdentity)
+        if (config.lastDiscoveryVersion != discoveryMarker) {
             pruneStaleDiscovery()
-            config.setLastDiscoveryVersion(Config.VERSION)
+            config.setLastDiscoveryVersion(discoveryMarker)
         }
         publish(availabilityTopic, "online", retain = true)
         restoreAndPublishStates()
@@ -1521,9 +1527,10 @@ class MqttBridge(
 
     /**
      * Active upgrade migration: clear any KNOWN entity we did NOT publish this session — i.e. one a prior
-     * version announced but this version refactored away (or a now-absent capability) — so it's removed
-     * from HA instead of lingering as a zombie. Called once after an upgrade (version change). Empty
-     * retained payload also clears configs an older, retain=true version left on the broker.
+     * previous runtime announced but this runtime refactored away (or no longer has as a capability) —
+     * so it is removed from HA instead of lingering as a zombie. Called once after a core-version or
+     * profile-revision change. Empty retained payload also clears configs an older, retain=true version
+     * left on the broker.
      */
     private fun pruneStaleDiscovery() {
         val published = synchronized(publishedConfigTopics) { publishedConfigTopics.toSet() }
@@ -1836,6 +1843,14 @@ internal fun mqttKnownConfigTopics(panel: String): Set<String> = listOf(
 ).mapTo(linkedSetOf()) { (comp, obj) -> "homeassistant/$comp/$obj/config" }
 
 internal data class MqttCleanupPublication(val topic: String, val payload: String, val retain: Boolean)
+
+/**
+ * Durable identity for the discovery shape which last completed stale-topic pruning. A non-empty
+ * profile identity is length-prefixed so arbitrary profile ids cannot collide with the core version.
+ * Empty deliberately retains the historical version-only marker for callers without runtime profiles.
+ */
+internal fun mqttDiscoveryCleanupMarker(coreVersion: String, profileIdentity: String): String =
+    if (profileIdentity.isEmpty()) coreVersion else "$coreVersion|${profileIdentity.length}:$profileIdentity"
 
 /** Cleanup for a renamed panel is owned by the replacement connection and therefore retries with it. */
 internal fun mqttStalePanelCleanup(stalePanel: String?, currentPanel: String): List<MqttCleanupPublication> {

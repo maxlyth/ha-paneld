@@ -1,6 +1,7 @@
 package io.github.maxlyth.hapaneld.mqtt
 
 import io.github.maxlyth.hapaneld.mqttAcceptsCommand
+import io.github.maxlyth.hapaneld.mqttDiscoveryCleanupMarker
 import io.github.maxlyth.hapaneld.mqttDiscoveryRetain
 import io.github.maxlyth.hapaneld.mqttIsHaOnline
 import io.github.maxlyth.hapaneld.shouldRepublishDiscoveryAddress
@@ -26,6 +27,22 @@ class MqttProtocolPolicyTest {
     @Test fun onlyDiscoveryTombstonesAreRetained() {
         assertFalse(mqttDiscoveryRetain("{\"name\":\"Screen\"}"))
         assertTrue(mqttDiscoveryRetain(""))
+    }
+
+    @Test fun discoveryCleanupMarkerChangesAcrossCoreAndProfileRevisions() {
+        val first = mqttDiscoveryCleanupMarker("0.9.3", "panel.example@aaa")
+
+        assertTrue(first != mqttDiscoveryCleanupMarker("0.9.4", "panel.example@aaa"))
+        assertTrue(first != mqttDiscoveryCleanupMarker("0.9.3", "panel.example@bbb"))
+        assertTrue(first != mqttDiscoveryCleanupMarker("0.9.3", "other.panel@aaa"))
+    }
+
+    @Test fun discoveryCleanupMarkerIsStableAndKeepsLegacyDefault() {
+        assertTrue(
+            mqttDiscoveryCleanupMarker("0.9.3", "panel.example@aaa") ==
+                mqttDiscoveryCleanupMarker("0.9.3", "panel.example@aaa"),
+        )
+        assertTrue(mqttDiscoveryCleanupMarker("0.9.3", "") == "0.9.3")
     }
 
     @Test fun connectedPanelReannouncesOnlyWhenItsLiveConfigurationAddressChanges() {

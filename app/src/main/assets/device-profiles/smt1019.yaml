@@ -1,0 +1,95 @@
+schema: 1
+id: smt1019
+version: 1.0.0
+display_name: ZHICAI SMT1019
+soc_class: rk3576
+metadata:
+  author: ha-paneld maintainers
+  source: https://github.com/maxlyth/ha-paneld/blob/main/docs/hardware/smt1019.md
+  license: Apache-2.0
+  maturity: experimental
+  tested_firmware:
+    - SMT1019 Android 14 stock firmware (GitHub #8)
+  limitations:
+    - Stock firmware has no su; RGB LED control needs a separately installed root helper.
+    - The pinned WebView build still needs live-hardware verification.
+requires:
+  min_core_version: 0.9.3-rc1
+  drivers:
+    - led.rk3576-ioctl-daemon
+    - screen.brightness-zero
+    - update.webview
+match:
+  priority: 500
+  fallback: false
+  any:
+    - priority: 950
+      all:
+        - field: device
+          op: contains
+          values:
+            - wf2489
+platform:
+  su_form: none
+  app_can_su: false
+  has_recents: true
+  shizuku: recommended
+hardware:
+  led:
+    mechanism: rk3576-ioctl-daemon
+    transfer: identity
+  screen_off: brightness-zero
+  has_button_backlight: false
+sensors:
+  proximity_graded_strategy: observed
+  cht8305: false
+  room_temp_offset_c: 0.0
+identity:
+  manufacturer: ZHICAI
+  model: SMT1019
+  model_label_strategy: display-name
+input:
+  evdev_buttons: []
+cpu: {}
+display: {}
+updates:
+  webview_artifact: lineageos-150-arm64
+taming:
+  - package: com.elc.smt_test
+    tags:
+      - vendor
+      - test
+      - clutter
+    note: 'ELC "smt-test" factory app (in /odm persist, survives factory reset). Vendor QA/test tool; not used in normal operation.'
+    default_tame: false
+  - package: com.DeviceTest
+    tags:
+      - chipset
+      - test
+      - clutter
+    note: Generic factory device-test app (in /odm persist). Diagnostic only.
+    default_tame: false
+  - package: com.iiyama.webview.demo
+    tags:
+      - vendor
+      - demo
+      - clutter
+    note: Iiyama WebView demo bundled in the firmware. Not used in normal operation.
+    default_tame: false
+  - package: com.elclcd.commonkeepalive
+    tags:
+      - vendor
+      - service
+    note: 'ELC "CommonKeepAlive" background service that keeps vendor apps resident. Safe to disable on a Home Assistant panel.'
+    default_tame: false
+  - package: com.elclcd.otaupdater
+    tags:
+      - vendor
+      - ota
+    note: 'ELC "Firmware Upgrade" — the vendor OTA updater. Disable to stop the panel auto-applying vendor firmware updates that can re-add bloat.'
+    default_tame: false
+  - package: com.android.rockchip.camera2
+    tags:
+      - chipset
+    note: 'Rockchip Camera2 / HDMI-in app (label "HdmiIn"). Safe to disable unless you use the camera or HDMI input.'
+    default_tame: false

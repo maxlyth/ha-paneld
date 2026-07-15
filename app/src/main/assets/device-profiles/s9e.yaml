@@ -1,0 +1,88 @@
+schema: 1
+id: s9e
+version: 1.0.0
+display_name: Smatek S9E
+soc_class: rk3566
+metadata:
+  author: ha-paneld maintainers
+  source: https://github.com/maxlyth/ha-paneld/blob/main/docs/hardware/s9e.md
+  license: Apache-2.0
+  maturity: experimental
+  tested_firmware:
+    - S9_Android_1.0.2 firmware image
+    - S9_Android_1.1.0 firmware image
+  limitations:
+    - Relay and WebView behavior remain unverified on live hardware.
+    - Normal-app su access is inferred from vendor behavior, not confirmed.
+requires:
+  min_core_version: 0.9.3-rc1
+  drivers:
+    - access.android-su
+    - relay.gpio-button-led
+    - relay.sysfs
+    - screen.brightness-zero
+    - sensor.gpio-proximity
+    - update.webview
+match:
+  priority: 500
+  fallback: false
+  any:
+    - priority: 930
+      all:
+        - field: model
+          op: contains
+          values:
+            - s9e
+    - priority: 930
+      all:
+        - field: device
+          op: contains
+          values:
+            - s9e
+    - priority: 930
+      all:
+        - field: model
+          op: equals
+          values:
+            - s9
+    - priority: 930
+      all:
+        - field: product_version
+          op: starts_with
+          values:
+            - s9
+platform:
+  su_form: android
+  app_can_su: true
+  has_recents: true
+  shizuku: optional
+hardware:
+  led:
+    mechanism: none
+    transfer: identity
+  screen_off: brightness-zero
+  has_button_backlight: false
+  relay_base: /sys/class/strelay
+  relay_base_fallbacks:
+    - /sys/class/st_relay
+  button_led_gpio_base: 147
+sensors:
+  proximity_gpio: 18
+  proximity_graded_strategy: observed
+  cht8305: false
+  room_temp_offset_c: 0.0
+identity:
+  manufacturer: Smatek
+  model: S9E
+  model_label_strategy: display-name
+input:
+  evdev_buttons: []
+cpu:
+  governors:
+    Performance: performance
+    Efficiency: powersave
+    Auto: schedutil
+display: {}
+updates:
+  webview_artifact: lineageos-150-arm
+taming: []

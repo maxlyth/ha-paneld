@@ -11,7 +11,9 @@ class PanelNavigationSourceTest {
         val nav = source.substringAfter("private fun navBar(active: String)")
             .substringBefore("private fun entitiesBody()")
         val install = nav.indexOf("tab(\"install\", \"/install\", \"Install\")")
+        val profiles = nav.indexOf("tab(\"profiles\", \"/profiles\", \"Profile\")")
         assertTrue(install >= 0, "Install navigation entry is missing")
+        assertTrue(profiles >= 0, "Profile navigation entry is missing")
         assertTrue("tab(\"test\"" !in nav, "The unverified Test tab must not be public navigation")
         assertTrue(
             "get(\"/test\") { call.respondRedirect(\"/\") }" in source,

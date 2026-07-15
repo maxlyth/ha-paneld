@@ -1,0 +1,62 @@
+schema: 1
+id: zx-smt156
+version: 1.0.0
+display_name: ZX-SMT156 / RK3566_T
+soc_class: Rockchip rk3566
+metadata:
+  author: ha-paneld maintainers
+  source: https://github.com/maxlyth/ha-paneld/blob/main/docs/architecture/device-profiles.md
+  license: Apache-2.0
+  maturity: experimental
+  tested_firmware:
+    - ZX-SMT156-R128V1.2B
+  limitations:
+    - The LED uses a conservative transfer until its response is measured.
+    - Relay and vendor climate-sensor paths are not established.
+requires:
+  min_core_version: 0.9.3-rc1
+  drivers:
+    - led.rk3576-ioctl
+    - screen.brightness-zero
+    - sensor.android
+match:
+  priority: 500
+  fallback: false
+  any:
+    - priority: 980
+      all:
+        - field: device
+          op: equals
+          values:
+            - rk3566_t
+    - priority: 980
+      all:
+        - field: model
+          op: equals
+          values:
+            - rk3566_t
+platform:
+  su_form: none
+  app_can_su: false
+  has_recents: true
+  shizuku: recommended
+hardware:
+  led:
+    mechanism: rk3576-ioctl
+    transfer: rk3576-four-bit
+  screen_off: brightness-zero
+  has_button_backlight: false
+sensors:
+  proximity_graded_strategy: observed
+  light_technology: Ambient light
+  cht8305: false
+  room_temp_offset_c: 0.0
+identity:
+  model: ZX-SMT156
+  model_label_strategy: display-name
+input:
+  evdev_buttons: []
+cpu: {}
+display: {}
+updates: {}
+taming: []

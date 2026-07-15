@@ -982,7 +982,35 @@ class Config private constructor(
     // The active device profile, attached once at service startup; supplies per-panel manufacturer/
     // model defaults when the user hasn't set them. Null before attach (resolution falls back to Build).
     @Volatile private var profile: DeviceProfile? = null
-    fun attachProfile(p: DeviceProfile) { profile = p }
+    @Volatile private var proximityCalibrationPrefix: String? = null
+    fun attachProfile(p: DeviceProfile) {
+        // A calibration describes one physical sensor, not the daemon globally. Bind legacy values to
+        // the profile active during this one-time migration; future profile switches get an independent
+        // namespace and switching back restores the original captures.
+        proximityCalibrationPrefix = profileCalibrationPrefix(p.id)
+            .takeIf { migrateLegacyProximityCalibration(it) }
+        profile = p
+    }
+
+    private fun profileCalibrationPrefix(profileId: String): String =
+        "profile_calibration.${profileId.lowercase(Locale.ROOT).replace(Regex("[^a-z0-9._-]"), "-")}"
+
+    private fun proximityKey(key: String): String = proximityCalibrationPrefix?.let { "$it.$key" } ?: key
+
+    private fun migrateLegacyProximityCalibration(targetPrefix: String): Boolean {
+        if (prefs.getBoolean(PROXIMITY_PROFILE_MIGRATED, false)) return true
+        val editor = prefs.edit()
+        PROXIMITY_KEYS.forEach { key ->
+            val target = "$targetPrefix.$key"
+            if (prefs.contains(target) || !prefs.contains(key)) return@forEach
+            when (val value = prefs.all[key]) {
+                is Float -> editor.putFloat(target, value)
+                is Boolean -> editor.putBoolean(target, value)
+                is String -> editor.putString(target, value)
+            }
+        }
+        return editor.putBoolean(PROXIMITY_PROFILE_MIGRATED, true).commit()
+    }
 
     /** Raw user-set values (empty if unset) — for the Configure form's input value. */
     val manufacturerRaw: String get() = prefs.getString("manufacturer", "")!!
@@ -1019,32 +1047,32 @@ class Config private constructor(
     // A user capture wins; otherwise fall back to the profile. A written profile is authoritative
     // knowledge — if it supplies near/far the panel is calibrated out of the box (no manual dance); the
     // two-point capture is the fallback for unprofiled sensors (and a user override).
-    private val userCalibrated: Boolean get() = !prefs.getFloat("prox_threshold", Float.NaN).isNaN()
+    private val userCalibrated: Boolean get() = !prefs.getFloat(proximityKey("prox_threshold"), Float.NaN).isNaN()
     val proximityNearRaw: Float get() {
-        val v = prefs.getFloat("prox_near_raw", Float.NaN)
+        val v = prefs.getFloat(proximityKey("prox_near_raw"), Float.NaN)
         return if (!v.isNaN()) v else profile?.proximityNearRaw ?: Float.NaN
     }
     val proximityFarRaw: Float get() {
-        val v = prefs.getFloat("prox_far_raw", Float.NaN)
+        val v = prefs.getFloat(proximityKey("prox_far_raw"), Float.NaN)
         return if (!v.isNaN()) v else profile?.proximityFarRaw ?: Float.NaN
     }
     val proximityThreshold: Float get() {
-        val v = prefs.getFloat("prox_threshold", Float.NaN)
+        val v = prefs.getFloat(proximityKey("prox_threshold"), Float.NaN)
         if (!v.isNaN()) return v
         val n = profile?.proximityNearRaw; val f = profile?.proximityFarRaw
         return if (n != null && f != null) (n + f) / 2f else Float.NaN
     }
     val proximityNearBelow: Boolean get() {
-        if (userCalibrated) return prefs.getBoolean("prox_near_below", true)        // user capture wins
+        if (userCalibrated) return prefs.getBoolean(proximityKey("prox_near_below"), true) // user capture wins
         profile?.proximityNearBelow?.let { return it }                             // explicit profile polarity
         val n = profile?.proximityNearRaw; val f = profile?.proximityFarRaw
         if (n != null && f != null) return n < f                                   // derived from profile near/far
-        return prefs.getBoolean("prox_near_below", true)                           // legacy default
+        return prefs.getBoolean(proximityKey("prox_near_below"), true)              // legacy default
     }
     val proximityCalibrated: Boolean
         get() = !proximityNearRaw.isNaN() && !proximityFarRaw.isNaN() && !proximityThreshold.isNaN()
     val proximitySensitivity: ProxSensitivity
-        get() = runCatching { ProxSensitivity.valueOf(prefs.getString("prox_sensitivity", "MEDIUM")!!) }
+        get() = runCatching { ProxSensitivity.valueOf(prefs.getString(proximityKey("prox_sensitivity"), "MEDIUM")!!) }
             .getOrDefault(ProxSensitivity.MEDIUM)
 
     /** Schmitt half-band in raw units = sensitivity × |near − far|. 0 when uncalibrated. */
@@ -1054,21 +1082,29 @@ class Config private constructor(
 
     /** Store one capture; when both exist, derive threshold (midpoint) + polarity (near = below?). */
     fun captureProximity(step: String, raw: Float) {
-        prefs.edit().putFloat(if (step == "near") "prox_near_raw" else "prox_far_raw", raw).apply()
+        prefs.edit().putFloat(proximityKey(if (step == "near") "prox_near_raw" else "prox_far_raw"), raw).apply()
         val n = proximityNearRaw; val f = proximityFarRaw
         if (!n.isNaN() && !f.isNaN()) {
-            prefs.edit().putFloat("prox_threshold", (n + f) / 2f).putBoolean("prox_near_below", n < f).apply()
+            prefs.edit()
+                .putFloat(proximityKey("prox_threshold"), (n + f) / 2f)
+                .putBoolean(proximityKey("prox_near_below"), n < f)
+                .apply()
         }
     }
 
-    fun setProximityThreshold(v: Float) { prefs.edit().putFloat("prox_threshold", v).apply() }
+    fun setProximityThreshold(v: Float) { prefs.edit().putFloat(proximityKey("prox_threshold"), v).apply() }
     fun setProximitySensitivity(s: String) {
         runCatching { ProxSensitivity.valueOf(s) }.onSuccess {
-            prefs.edit().putString("prox_sensitivity", it.name).apply()
+            prefs.edit().putString(proximityKey("prox_sensitivity"), it.name).apply()
         }
     }
     fun resetProximityCalibration() {
-        prefs.edit().remove("prox_near_raw").remove("prox_far_raw").remove("prox_threshold").apply()
+        prefs.edit()
+            .remove(proximityKey("prox_near_raw"))
+            .remove(proximityKey("prox_far_raw"))
+            .remove(proximityKey("prox_threshold"))
+            .remove(proximityKey("prox_near_below"))
+            .apply()
     }
 
     /** Effective CHT8305 room-temperature calibration offset (°C): the profile's characterised self-heat
@@ -1191,6 +1227,14 @@ class Config private constructor(
         private const val DASHBOARD_ENTITY_DEFAULT_RESOLVER_PENDING_KEY =
             "dashboard_entity_default_resolver_pending"
         private const val DASHBOARD_ENTITY_DEFAULT_RESOLVER_VERSION = 1
+        private const val PROXIMITY_PROFILE_MIGRATED = "proximity_profile_calibration_migrated"
+        private val PROXIMITY_KEYS = listOf(
+            "prox_near_raw",
+            "prox_far_raw",
+            "prox_threshold",
+            "prox_near_below",
+            "prox_sensitivity",
+        )
         const val DEFAULT_PORT = 8888
         const val VERSION = BuildConfig.VERSION_NAME
         const val MDNS_SERVICE_TYPE = "_ha-paneld._tcp.local."

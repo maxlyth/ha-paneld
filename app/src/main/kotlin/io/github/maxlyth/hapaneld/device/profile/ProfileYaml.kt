@@ -1,0 +1,526 @@
+package io.github.maxlyth.hapaneld.device.profile
+
+import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
+import java.util.LinkedHashMap
+import org.snakeyaml.engine.v2.api.Dump
+import org.snakeyaml.engine.v2.api.DumpSettings
+import org.snakeyaml.engine.v2.api.Load
+import org.snakeyaml.engine.v2.api.LoadSettings
+import org.snakeyaml.engine.v2.api.lowlevel.Parse
+import org.snakeyaml.engine.v2.common.FlowStyle
+import org.snakeyaml.engine.v2.events.CollectionEndEvent
+import org.snakeyaml.engine.v2.events.CollectionStartEvent
+import org.snakeyaml.engine.v2.events.DocumentStartEvent
+import org.snakeyaml.engine.v2.schema.JsonSchema
+
+internal data class ProfileParseResult(
+    val document: ProfileDocument?,
+    val contentSha256: String,
+    val issues: List<ProfileIssue>,
+)
+
+/** Strict YAML codec. The generic object tree is audited before any schema conversion. */
+internal object ProfileYaml {
+    private val loadSettings = LoadSettings.builder()
+            .setLabel("panel profile")
+            .setSchema(JsonSchema())
+            .setAllowDuplicateKeys(false)
+            .setAllowRecursiveKeys(false)
+            .setMaxAliasesForCollections(0)
+            .setCodePointLimit(ProfileMetadata.MAX_BYTES)
+            .build()
+    private val parse = Parse(loadSettings)
+    private val load = Load(loadSettings)
+    private val dump = Dump(
+        DumpSettings.builder()
+            .setSchema(JsonSchema())
+            .setDefaultFlowStyle(FlowStyle.BLOCK)
+            .setIndent(2)
+            .setIndicatorIndent(2)
+            .setIndentWithIndicator(true)
+            .setSplitLines(false)
+            .setWidth(120)
+            .build(),
+    )
+
+    fun parse(raw: String): ProfileParseResult {
+        val hash = sha256(raw)
+        if (raw.toByteArray(StandardCharsets.UTF_8).size > ProfileMetadata.MAX_BYTES) {
+            return ProfileParseResult(null, hash, listOf(error("$", "Profile exceeds ${ProfileMetadata.MAX_BYTES} bytes.")))
+        }
+        preflight(raw)?.let { issue -> return ProfileParseResult(null, hash, listOf(issue)) }
+        val root = try {
+            val values = load.loadAllFromString(raw).iterator()
+            if (!values.hasNext()) return ProfileParseResult(null, hash, listOf(error("$", "Profile is empty.")))
+            val first = values.next()
+            if (values.hasNext()) return ProfileParseResult(null, hash, listOf(error("$", "Exactly one YAML document is allowed.")))
+            first
+        } catch (failure: RuntimeException) {
+            return ProfileParseResult(
+                null,
+                hash,
+                listOf(error("$", "Invalid YAML: ${safeMessage(failure)}")),
+            )
+        } catch (_: StackOverflowError) {
+            return ProfileParseResult(null, hash, listOf(error("$", "YAML nesting is too deep.")))
+        }
+        val issues = mutableListOf<ProfileIssue>()
+        audit(root, "$", 0, issues)
+        if (issues.any { it.severity == ProfileIssueSeverity.ERROR }) {
+            return ProfileParseResult(null, hash, issues)
+        }
+        val reader = SchemaReader(issues)
+        val map = reader.map(root, "$", ROOT_KEYS)
+        val document = if (map == null) null else reader.document(map)
+        return ProfileParseResult(
+            document = document.takeIf { issues.none { issue -> issue.severity == ProfileIssueSeverity.ERROR } },
+            contentSha256 = hash,
+            issues = issues,
+        )
+    }
+
+    fun serialize(document: ProfileDocument): String = dump.dumpToString(document.toYamlMap())
+
+    fun sha256(raw: String): String = MessageDigest.getInstance("SHA-256")
+        .digest(raw.toByteArray(StandardCharsets.UTF_8))
+        .joinToString("") { "%02x".format(it) }
+
+    private fun audit(value: Any?, path: String, depth: Int, issues: MutableList<ProfileIssue>) {
+        if (depth > ProfileMetadata.MAX_DEPTH) {
+            issues += error(path, "Nesting exceeds ${ProfileMetadata.MAX_DEPTH} levels.")
+            return
+        }
+        when (value) {
+            null, is Boolean, is Number -> Unit
+            is String -> if (value.length > ProfileMetadata.MAX_STRING_LENGTH) {
+                issues += error(path, "String exceeds ${ProfileMetadata.MAX_STRING_LENGTH} characters.")
+            }
+            is Map<*, *> -> {
+                if (value.size > ProfileMetadata.MAX_COLLECTION_SIZE) {
+                    issues += error(path, "Map exceeds ${ProfileMetadata.MAX_COLLECTION_SIZE} entries.")
+                }
+                value.forEach { (key, child) ->
+                    if (key !is String) issues += error(path, "Every mapping key must be a string.")
+                    audit(child, if (key is String) "$path.$key" else path, depth + 1, issues)
+                }
+            }
+            is List<*> -> {
+                if (value.size > ProfileMetadata.MAX_COLLECTION_SIZE) {
+                    issues += error(path, "List exceeds ${ProfileMetadata.MAX_COLLECTION_SIZE} entries.")
+                }
+                value.forEachIndexed { index, child -> audit(child, "$path[$index]", depth + 1, issues) }
+            }
+            else -> issues += error(path, "Unsupported YAML value type ${value::class.simpleName}.")
+        }
+    }
+
+    private fun preflight(raw: String): ProfileIssue? {
+        return try {
+            var depth = 0
+            var documents = 0
+            var events = 0
+            for (event in parse.parseString(raw)) {
+                events++
+                if (events > MAX_EVENTS) return error("$", "YAML contains too many parser events.")
+                when (event) {
+                    is DocumentStartEvent -> {
+                        documents++
+                        if (documents > 1) return error("$", "Exactly one YAML document is allowed.")
+                    }
+                    is CollectionStartEvent -> {
+                        depth++
+                        if (depth > ProfileMetadata.MAX_DEPTH) return error("$", "Nesting exceeds ${ProfileMetadata.MAX_DEPTH} levels.")
+                    }
+                    is CollectionEndEvent -> depth--
+                }
+            }
+            null
+        } catch (failure: RuntimeException) {
+            error("$", "Invalid YAML: ${safeMessage(failure)}")
+        } catch (_: StackOverflowError) {
+            error("$", "YAML nesting is too deep.")
+        }
+    }
+
+    private fun safeMessage(failure: Throwable): String =
+        failure.message?.lineSequence()?.firstOrNull()?.take(240) ?: failure::class.simpleName.orEmpty()
+
+    private val ROOT_KEYS = setOf(
+        "schema", "id", "version", "display_name", "soc_class", "metadata", "requires", "match", "platform", "hardware",
+        "sensors", "identity", "input", "cpu", "display", "updates", "taming",
+    )
+
+    private const val MAX_EVENTS = 20_000
+}
+
+private class SchemaReader(private val issues: MutableList<ProfileIssue>) {
+    fun document(root: Map<String, Any?>): ProfileDocument {
+        val metadata = map(root["metadata"], "metadata", setOf(
+            "author", "source", "license", "maturity", "tested_firmware", "limitations",
+        ), required = true).orEmpty()
+        val requires = map(root["requires"], "requires", setOf("min_core_version", "drivers"), required = true).orEmpty()
+        val match = map(root["match"], "match", setOf("priority", "fallback", "any"), required = true).orEmpty()
+        val platform = map(root["platform"], "platform", setOf("su_form", "app_can_su", "has_recents", "shizuku"), required = true).orEmpty()
+        val hardware = map(root["hardware"], "hardware", setOf(
+            "led", "screen_off", "has_button_backlight", "zigbee_gateway_dir", "relay_base",
+            "relay_base_fallbacks", "button_led_gpio_base",
+        ), required = true).orEmpty()
+        val led = map(hardware["led"], "hardware.led", setOf("mechanism", "transfer"), required = true).orEmpty()
+        val sensors = map(root["sensors"], "sensors", setOf(
+            "proximity_technology", "proximity_near_below", "proximity_near_raw", "proximity_far_raw",
+            "proximity_gpio", "proximity_graded_strategy", "light_technology", "cht8305", "room_temp_offset_c",
+        )).orEmpty()
+        val identity = map(root["identity"], "identity", setOf("manufacturer", "model", "model_label_strategy")).orEmpty()
+        val input = map(root["input"], "input", setOf("evdev_buttons")).orEmpty()
+        val cpu = map(root["cpu"], "cpu", setOf("governors")).orEmpty()
+        val display = map(root["display"], "display", setOf("recommended_density", "recommended_font_scale", "physical_ppi")).orEmpty()
+        val updates = map(root["updates"], "updates", setOf("webview_artifact", "companion_max_version")).orEmpty()
+        return ProfileDocument(
+            schema = integer(root, "schema", "$", required = true) ?: 0,
+            id = string(root, "id", "$", required = true).orEmpty(),
+            version = string(root, "version", "$", required = true).orEmpty(),
+            displayName = string(root, "display_name", "$", required = true).orEmpty(),
+            socClass = string(root, "soc_class", "$", required = true).orEmpty(),
+            metadata = ProfileProvenance(
+                author = string(metadata, "author", "metadata", required = true).orEmpty(),
+                source = string(metadata, "source", "metadata"),
+                license = string(metadata, "license", "metadata", required = true).orEmpty(),
+                maturity = enum(metadata, "maturity", "metadata", ProfileMaturity.entries, null) { it.name.lowercase() }
+                    ?: ProfileMaturity.DRAFT,
+                testedFirmware = stringList(metadata["tested_firmware"], "metadata.tested_firmware"),
+                limitations = stringList(metadata["limitations"], "metadata.limitations"),
+            ),
+            requires = ProfileRequirements(
+                minCoreVersion = string(requires, "min_core_version", "requires"),
+                drivers = stringList(requires["drivers"], "requires.drivers", required = true).toSet(),
+            ),
+            match = ProfileMatch(
+                priority = integer(match, "priority", "match", required = true) ?: 0,
+                fallback = boolean(match, "fallback", "match", required = true) ?: false,
+                any = matchGroups(match["any"]),
+            ),
+            platform = ProfilePlatform(
+                suForm = string(platform, "su_form", "platform", required = true).orEmpty(),
+                appCanSu = boolean(platform, "app_can_su", "platform", required = true) ?: false,
+                hasRecents = boolean(platform, "has_recents", "platform") ?: true,
+                shizuku = enum(platform, "shizuku", "platform", ShizukuRecommendation.entries, "none") { it.name.lowercase() }
+                    ?: ShizukuRecommendation.NONE,
+            ),
+            hardware = ProfileHardware(
+                led = ProfileLed(
+                    mechanism = string(led, "mechanism", "hardware.led", required = true).orEmpty(),
+                    transfer = string(led, "transfer", "hardware.led") ?: "identity",
+                ),
+                screenOff = string(hardware, "screen_off", "hardware", required = true).orEmpty(),
+                hasButtonBacklight = boolean(hardware, "has_button_backlight", "hardware") ?: false,
+                zigbeeGatewayDir = string(hardware, "zigbee_gateway_dir", "hardware"),
+                relayBase = string(hardware, "relay_base", "hardware"),
+                relayBaseFallbacks = stringList(hardware["relay_base_fallbacks"], "hardware.relay_base_fallbacks"),
+                buttonLedGpioBase = integer(hardware, "button_led_gpio_base", "hardware"),
+            ),
+            sensors = ProfileSensors(
+                proximityTechnology = string(sensors, "proximity_technology", "sensors"),
+                proximityNearBelow = boolean(sensors, "proximity_near_below", "sensors"),
+                proximityNearRaw = float(sensors, "proximity_near_raw", "sensors"),
+                proximityFarRaw = float(sensors, "proximity_far_raw", "sensors"),
+                proximityGpio = integer(sensors, "proximity_gpio", "sensors"),
+                proximityGradedStrategy = string(sensors, "proximity_graded_strategy", "sensors") ?: "observed",
+                lightTechnology = string(sensors, "light_technology", "sensors"),
+                cht8305 = boolean(sensors, "cht8305", "sensors") ?: false,
+                roomTempOffsetC = float(sensors, "room_temp_offset_c", "sensors") ?: 0f,
+            ),
+            identity = ProfileIdentity(
+                manufacturer = string(identity, "manufacturer", "identity"),
+                model = string(identity, "model", "identity"),
+                modelLabelStrategy = string(identity, "model_label_strategy", "identity") ?: "display-name",
+            ),
+            input = ProfileInput(evdevButtons(input["evdev_buttons"])),
+            cpu = ProfileCpu(governors(cpu["governors"])),
+            display = ProfileDisplay(
+                recommendedDensity = density(display["recommended_density"]),
+                recommendedFontScale = float(display, "recommended_font_scale", "display"),
+                physicalPpi = integer(display, "physical_ppi", "display"),
+            ),
+            updates = ProfileUpdates(
+                webViewArtifact = string(updates, "webview_artifact", "updates"),
+                companionMaxVersion = string(updates, "companion_max_version", "updates"),
+            ),
+            taming = tameCandidates(root["taming"]),
+        )
+    }
+
+    private fun matchGroups(value: Any?): List<ProfileMatchGroup> = list(value, "match.any", required = true).mapIndexed { groupIndex, item ->
+        val path = "match.any[$groupIndex]"
+        val group = map(item, path, setOf("priority", "all"), required = true).orEmpty()
+        val predicates = list(group["all"], "$path.all", required = true).mapIndexed { predicateIndex, predicateValue ->
+            val predicatePath = "$path.all[$predicateIndex]"
+            val predicate = map(predicateValue, predicatePath, setOf("field", "op", "values"), required = true).orEmpty()
+            ProfilePredicate(
+                field = enum(predicate, "field", predicatePath, ProfileFact.entries, null) { it.yamlName } ?: ProfileFact.MODEL,
+                op = enum(predicate, "op", predicatePath, ProfileMatchOp.entries, null) { it.yamlName } ?: ProfileMatchOp.EQUALS,
+                values = stringList(predicate["values"], "$predicatePath.values", required = true),
+            )
+        }
+        ProfileMatchGroup(
+            priority = integer(group, "priority", path, required = true) ?: 0,
+            all = predicates,
+        )
+    }
+
+    private fun evdevButtons(value: Any?): List<ProfileEvdevButton> = list(value, "input.evdev_buttons").mapIndexed { index, item ->
+        val path = "input.evdev_buttons[$index]"
+        val map = map(item, path, setOf("node", "code", "grab", "event_type", "sw"), required = true).orEmpty()
+        ProfileEvdevButton(
+            node = string(map, "node", path, required = true).orEmpty(),
+            code = integer(map, "code", path, required = true) ?: 0,
+            grab = boolean(map, "grab", path, required = true) ?: false,
+            eventType = string(map, "event_type", path, required = true).orEmpty(),
+            sw = boolean(map, "sw", path) ?: false,
+        )
+    }
+
+    private fun tameCandidates(value: Any?): List<ProfileTameCandidate> = list(value, "taming").mapIndexed { index, item ->
+        val path = "taming[$index]"
+        val map = map(item, path, setOf("package", "tags", "note", "default_tame"), required = true).orEmpty()
+        ProfileTameCandidate(
+            packageName = string(map, "package", path, required = true).orEmpty(),
+            tags = stringList(map["tags"], "$path.tags"),
+            note = string(map, "note", path) ?: "",
+            defaultTame = boolean(map, "default_tame", path) ?: false,
+        )
+    }
+
+    private fun governors(value: Any?): Map<String, String>? {
+        if (value == null) return null
+        val raw = map(value, "cpu.governors", emptySet(), allowAnyKeys = true) ?: return null
+        return raw.mapValues { (key, item) ->
+            if (item !is String) {
+                issues += error("cpu.governors.$key", "Expected a string.")
+                ""
+            } else item
+        }
+    }
+
+    private fun density(value: Any?): ProfileDensity? = when (value) {
+        null -> null
+        is Number -> if (value.toDouble().isFinite() && value.toDouble() % 1.0 == 0.0 && value.toLong() in Int.MIN_VALUE..Int.MAX_VALUE) {
+            ProfileDensity.Fixed(value.toInt())
+        } else {
+            issues += error("display.recommended_density", "Expected a 32-bit integer or named strategy.")
+            null
+        }
+        is String -> ProfileDensity.Strategy(value)
+        else -> {
+            issues += error("display.recommended_density", "Expected an integer or named strategy.")
+            null
+        }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    fun map(
+        value: Any?,
+        path: String,
+        allowed: Set<String>,
+        required: Boolean = false,
+        allowAnyKeys: Boolean = false,
+    ): Map<String, Any?>? {
+        if (value == null) {
+            if (required) issues += error(path, "Required mapping is missing.")
+            return null
+        }
+        if (value !is Map<*, *>) {
+            issues += error(path, "Expected a mapping.")
+            return null
+        }
+        val result = value as Map<String, Any?>
+        if (!allowAnyKeys) result.keys.filterNot { it in allowed }.forEach {
+            issues += error(if (path == "$") it else "$path.$it", "Unknown field.")
+        }
+        return result
+    }
+
+    private fun list(value: Any?, path: String, required: Boolean = false): List<Any?> {
+        if (value == null) {
+            if (required) issues += error(path, "Required list is missing.")
+            return emptyList()
+        }
+        if (value !is List<*>) {
+            issues += error(path, "Expected a list.")
+            return emptyList()
+        }
+        return value
+    }
+
+    private fun stringList(value: Any?, path: String, required: Boolean = false): List<String> =
+        list(value, path, required).mapIndexed { index, item ->
+            if (item !is String) {
+                issues += error("$path[$index]", "Expected a string.")
+                ""
+            } else item
+        }
+
+    private fun string(map: Map<String, Any?>, key: String, path: String, required: Boolean = false): String? {
+        val fullPath = if (path == "$") key else "$path.$key"
+        if (!map.containsKey(key) || map[key] == null) {
+            if (required) issues += error(fullPath, "Required string is missing.")
+            return null
+        }
+        return (map[key] as? String) ?: run {
+            issues += error(fullPath, "Expected a string.")
+            null
+        }
+    }
+
+    private fun integer(map: Map<String, Any?>, key: String, path: String, required: Boolean = false): Int? {
+        val fullPath = if (path == "$") key else "$path.$key"
+        if (!map.containsKey(key) || map[key] == null) {
+            if (required) issues += error(fullPath, "Required integer is missing.")
+            return null
+        }
+        val number = map[key] as? Number
+        if (number == null || number.toDouble() % 1.0 != 0.0 || number.toLong() !in Int.MIN_VALUE..Int.MAX_VALUE) {
+            issues += error(fullPath, "Expected a 32-bit integer.")
+            return null
+        }
+        return number.toInt()
+    }
+
+    private fun float(map: Map<String, Any?>, key: String, path: String): Float? {
+        val fullPath = "$path.$key"
+        if (!map.containsKey(key) || map[key] == null) return null
+        val number = map[key] as? Number
+        val converted = number?.toFloat()
+        if (number == null || !number.toDouble().isFinite() || converted == null || !converted.isFinite()) {
+            issues += error(fullPath, "Expected a finite number.")
+            return null
+        }
+        return converted
+    }
+
+    private fun boolean(map: Map<String, Any?>, key: String, path: String, required: Boolean = false): Boolean? {
+        val fullPath = "$path.$key"
+        if (!map.containsKey(key) || map[key] == null) {
+            if (required) issues += error(fullPath, "Required boolean is missing.")
+            return null
+        }
+        return (map[key] as? Boolean) ?: run {
+            issues += error(fullPath, "Expected a boolean.")
+            null
+        }
+    }
+
+    private fun <T> enum(
+        map: Map<String, Any?>,
+        key: String,
+        path: String,
+        values: Iterable<T>,
+        default: String?,
+        yamlName: (T) -> String,
+    ): T? {
+        val raw = if (map.containsKey(key)) string(map, key, path, required = true) else default
+        if (raw == null) return null
+        return values.firstOrNull { yamlName(it) == raw } ?: run {
+            issues += error("$path.$key", "Unknown value '$raw'.")
+            null
+        }
+    }
+}
+
+internal fun ProfileDocument.toYamlMap(): Map<String, Any?> = linkedMapOf(
+    "schema" to schema,
+    "id" to id,
+    "version" to version,
+    "display_name" to displayName,
+    "soc_class" to socClass,
+    "metadata" to linkedMapOf(
+        "author" to metadata.author,
+        "source" to metadata.source,
+        "license" to metadata.license,
+        "maturity" to metadata.maturity.name.lowercase(),
+        "tested_firmware" to metadata.testedFirmware,
+        "limitations" to metadata.limitations,
+    ).withoutNullValues(),
+    "requires" to linkedMapOf(
+        "min_core_version" to requires.minCoreVersion,
+        "drivers" to requires.drivers.toList().sorted(),
+    ).withoutNullValues(),
+    "match" to linkedMapOf(
+        "priority" to match.priority,
+        "fallback" to match.fallback,
+        "any" to match.any.map { group ->
+            linkedMapOf("priority" to group.priority, "all" to group.all.map { predicate ->
+                linkedMapOf(
+                    "field" to predicate.field.yamlName,
+                    "op" to predicate.op.yamlName,
+                    "values" to predicate.values,
+                )
+            })
+        },
+    ),
+    "platform" to linkedMapOf(
+        "su_form" to platform.suForm,
+        "app_can_su" to platform.appCanSu,
+        "has_recents" to platform.hasRecents,
+        "shizuku" to platform.shizuku.name.lowercase(),
+    ),
+    "hardware" to linkedMapOf(
+        "led" to linkedMapOf("mechanism" to hardware.led.mechanism, "transfer" to hardware.led.transfer),
+        "screen_off" to hardware.screenOff,
+        "has_button_backlight" to hardware.hasButtonBacklight,
+        "zigbee_gateway_dir" to hardware.zigbeeGatewayDir,
+        "relay_base" to hardware.relayBase,
+        "relay_base_fallbacks" to hardware.relayBaseFallbacks.takeIf { it.isNotEmpty() },
+        "button_led_gpio_base" to hardware.buttonLedGpioBase,
+    ).withoutNullValues(),
+    "sensors" to linkedMapOf(
+        "proximity_technology" to sensors.proximityTechnology,
+        "proximity_near_below" to sensors.proximityNearBelow,
+        "proximity_near_raw" to sensors.proximityNearRaw,
+        "proximity_far_raw" to sensors.proximityFarRaw,
+        "proximity_gpio" to sensors.proximityGpio,
+        "proximity_graded_strategy" to sensors.proximityGradedStrategy,
+        "light_technology" to sensors.lightTechnology,
+        "cht8305" to sensors.cht8305,
+        "room_temp_offset_c" to sensors.roomTempOffsetC,
+    ).withoutNullValues(),
+    "identity" to linkedMapOf(
+        "manufacturer" to identity.manufacturer,
+        "model" to identity.model,
+        "model_label_strategy" to identity.modelLabelStrategy,
+    ).withoutNullValues(),
+    "input" to linkedMapOf("evdev_buttons" to input.evdevButtons.map {
+        linkedMapOf("node" to it.node, "code" to it.code, "grab" to it.grab, "event_type" to it.eventType, "sw" to it.sw)
+    }),
+    "cpu" to linkedMapOf("governors" to cpu.governors).withoutNullValues(),
+    "display" to linkedMapOf(
+        "recommended_density" to when (val density = display.recommendedDensity) {
+            is ProfileDensity.Fixed -> density.value
+            is ProfileDensity.Strategy -> density.id
+            null -> null
+        },
+        "recommended_font_scale" to display.recommendedFontScale,
+        "physical_ppi" to display.physicalPpi,
+    ).withoutNullValues(),
+    "updates" to linkedMapOf(
+        "webview_artifact" to updates.webViewArtifact,
+        "companion_max_version" to updates.companionMaxVersion,
+    ).withoutNullValues(),
+    "taming" to taming.map {
+        linkedMapOf(
+            "package" to it.packageName,
+            "tags" to it.tags,
+            "note" to it.note,
+            "default_tame" to it.defaultTame,
+        )
+    },
+)
+
+private fun <K, V> LinkedHashMap<K, V?>.withoutNullValues(): LinkedHashMap<K, V> {
+    val result = LinkedHashMap<K, V>()
+    forEach { (key, value) -> if (value != null) result[key] = value }
+    return result
+}
+
+private fun error(path: String, message: String) =
+    ProfileIssue(ProfileIssueSeverity.ERROR, path.removePrefix("$."), message)

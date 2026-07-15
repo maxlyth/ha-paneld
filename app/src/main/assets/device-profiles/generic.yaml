@@ -1,0 +1,46 @@
+schema: 1
+id: generic
+version: 1.0.0
+display_name: Unknown panel
+soc_class: "?"
+metadata:
+  author: ha-paneld maintainers
+  source: https://github.com/maxlyth/ha-paneld/blob/main/docs/architecture/device-profiles.md
+  license: Apache-2.0
+  maturity: verified
+  tested_firmware: []
+  limitations:
+    - Unknown vendor hardware stays disabled until an exact profile is selected.
+requires:
+  min_core_version: 0.9.3-rc1
+  drivers:
+    - access.android-su
+    - led.autodetect
+    - screen.brightness-zero
+match:
+  priority: 0
+  fallback: true
+  any: []
+platform:
+  su_form: android
+  app_can_su: true
+  has_recents: true
+  shizuku: optional
+hardware:
+  led:
+    mechanism: autodetect
+    transfer: rk3576-four-bit
+  screen_off: brightness-zero
+  has_button_backlight: false
+sensors:
+  proximity_graded_strategy: observed
+  cht8305: false
+  room_temp_offset_c: 0.0
+identity:
+  model_label_strategy: display-name
+input:
+  evdev_buttons: []
+cpu: {}
+display: {}
+updates: {}
+taming: []
