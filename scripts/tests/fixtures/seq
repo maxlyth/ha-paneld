@@ -1,4 +1,3 @@
 #!/usr/bin/env bash
 echo "seq must not be required by provisioning" >&2
 exit 127
-

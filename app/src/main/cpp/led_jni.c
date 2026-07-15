@@ -1,4 +1,4 @@
-// Clean-room NDK driver for the rk3576 panel's front RGB LED (office_dash / Electron WF1589T).
+// Clean-room NDK driver for the Electron WF1589T rk3576 panel's front RGB LED.
 //
 // The RGB LED is reached only via the char device /dev/ledjni, which is world-rwx and labelled
 // app-accessible (SELinux `device` domain), so a sandboxed app can drive it WITHOUT root or a

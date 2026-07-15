@@ -3,7 +3,7 @@ package io.github.maxlyth.hapaneld.hardware
 import android.util.Log
 
 /**
- * LED adapter for the rk3576 panel (office_dash / Electron WF1589T). Drives `/dev/ledjni` directly
+ * LED adapter for the Electron WF1589T rk3576 panel. Drives `/dev/ledjni` directly
  * through ha-paneld's own NDK ([NativeLed]) — clean-room ioctl, NO vendor `libjnielc.so`, no root,
  * no helper. The char device is world-rwx + app-accessible (SELinux `device` label).
  *

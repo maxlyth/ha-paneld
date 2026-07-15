@@ -1,3 +1,2 @@
 #!/usr/bin/env bash
 printf "package: name='io.github.maxlyth.hapaneld' versionCode='220' versionName='0.9.2-rc3'\n"
-

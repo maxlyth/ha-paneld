@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.9.2 - 2026-07-14
+## v0.9.2 - 2026-07-15
 
 **Home Assistant dashboards that seemed too demanding for a low-powered wall panel can now be made far more responsive.** A large Home Assistant installation may send thousands of entity states and updates to a panel even when its dashboard displays only a small fraction of them, causing delayed taps and sluggish navigation. The built-in renderer can now learn what the dashboard uses and ask Home Assistant to send only those states. Automatic filtering remains experimental, opt-in and exclusive to the built-in renderer, but it no longer requires a hand-maintained entity list. For installations using a second Home Assistant instance, filtering proxy or similar workaround solely to reduce panel load, the built-in filter may allow that extra infrastructure to be retired.
 

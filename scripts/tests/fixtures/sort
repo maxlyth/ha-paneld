@@ -4,4 +4,3 @@ if [ "${1:-}" = "-V" ]; then
   exit 64
 fi
 exec /usr/bin/sort "$@"
-

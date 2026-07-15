@@ -51,7 +51,7 @@ class SettingValueTest {
 
     @Test fun panelIdSlugValidatorFromRegistry() {
         val s = SettingsRegistry.spec("panel_id")!!
-        assertEquals("bedroom_ml", ok(SettingValue.validate(s, "Bedroom-ML")))
+        assertEquals("bedroom_panel", ok(SettingValue.validate(s, "Bedroom-Panel")))
         assertTrue(SettingValue.validate(s, "  -- ") is Validation.Bad)
     }
 
