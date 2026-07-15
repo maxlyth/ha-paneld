@@ -1210,18 +1210,24 @@ ${tameCardHtml()}
       <select id="profile-select" aria-label="Profile revision"><option>Loading profiles…</option></select>
     </div>
     <div class="profile-actions">
-      <button class="pbtn" id="profile-new" type="button">New</button>
-      <button class="pbtn" id="profile-edit" type="button" disabled>Edit</button>
-      <button class="pbtn" id="profile-fork" type="button" disabled>Fork</button>
-      <label class="pbtn" for="profile-import">Import<input id="profile-import" type="file" accept=".yaml,.yml,application/yaml,text/yaml" hidden></label>
-      <button class="pbtn" id="profile-export" type="button">Export</button>
-      <button class="pbtn" id="profile-validate" type="button" disabled>Validate</button>
-      <button class="pbtn" id="profile-compare" type="button" disabled>Compare</button>
-      <button class="pbtn primary" id="savebtn" type="button" disabled>Save revision</button>
-      <button class="pbtn primary" id="profile-activate" type="button" disabled>Activate</button>
-      <button class="pbtn" id="profile-auto" type="button" disabled>Use automatic</button>
-      <button class="pbtn" id="profile-rollback" type="button" disabled>Rollback</button>
-      <button class="pbtn danger" id="profile-delete" type="button" disabled>Delete</button>
+      <div class="profile-action-group" aria-label="Profile editing">
+        <button class="pbtn" id="profile-new" type="button">New</button>
+        <button class="pbtn" id="profile-edit" type="button" disabled>Edit</button>
+        <button class="pbtn" id="profile-fork" type="button" disabled>Fork</button>
+        <label class="pbtn" for="profile-import">Import<input id="profile-import" type="file" accept=".yaml,.yml,application/yaml,text/yaml" hidden></label>
+        <button class="pbtn" id="profile-export" type="button">Export</button>
+      </div>
+      <div class="profile-action-group" aria-label="Profile review">
+        <button class="pbtn primary" id="profile-validate" type="button" disabled>Validate YAML</button>
+        <button class="pbtn" id="profile-compare" type="button" disabled>Compare</button>
+      </div>
+      <div class="profile-action-group" aria-label="Profile activation">
+        <button class="pbtn primary" id="savebtn" type="button" disabled>Save revision</button>
+        <button class="pbtn primary" id="profile-activate" type="button" disabled>Activate</button>
+        <button class="pbtn" id="profile-auto" type="button" disabled>Use automatic</button>
+        <button class="pbtn" id="profile-rollback" type="button" disabled>Rollback</button>
+        <button class="pbtn danger" id="profile-delete" type="button" disabled>Delete</button>
+      </div>
     </div>
   </div>
   <div id="profile-badges" class="profile-badges" aria-label="Profile state"></div>
@@ -1238,11 +1244,11 @@ ${tameCardHtml()}
         <section><h3>Validation</h3><div id="profile-issues" class="profile-issues"></div></section>
         <div class="profile-guidance" id="profile-shizuku-guidance" hidden>
           <p><b>Shizuku guidance</b></p>
-          <p>This profile can benefit from locally approved Shizuku enhanced access. The profile does not install, enable, or approve Shizuku; live readiness remains separate.</p>
+          <p>Direct access is the normal path. Shizuku is an optional enhancement for panels where it is already installed and approved; this profile does not install, enable, or approve it.</p>
           <p><a href="$REPO_URL/blob/main/docs/shizuku.md" target="_blank" rel="noopener">Read the setup and capability guide</a></p>
         </div>
         <section><h3>Compared with active</h3><div id="profile-diff" class="profile-diff"></div></section>
-        <section><h3>Passive device evidence</h3><div id="profile-report" class="profile-report"></div></section>
+        <section><h3>Observed device facts</h3><p class="profile-report-note">Runtime observations only — these are not YAML fields. Use them to choose matching predicates and supported profile fields.</p><div id="profile-report" class="profile-report"></div></section>
         <div class="profile-draft" id="profile-generic-draft" hidden>
           <p><b>Starting from Generic?</b> Build a read-only draft from passive Android facts. Unknown hardware stays marked TODO; this does not run root, helper, Shizuku, input, or hardware commands.</p>
           <p><button class="pbtn" id="profile-draft" type="button">Generate device draft</button> <button class="pbtn" id="profile-use-draft" type="button" hidden>Copy draft to edit</button></p>

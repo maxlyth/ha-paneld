@@ -28,8 +28,8 @@ class PassiveProfileProbeTest {
 
         assertEquals(123L, report.generatedAtEpochMs)
         assertEquals("Panel X", report.facts.model)
-        assertEquals("true", report.observations.single { it.path == "sensors.light" }.value)
-        assertEquals("false", report.observations.single { it.path == "sensors.temperature" }.value)
+        assertEquals("true", report.observations.single { it.path == "sensors.light_technology" }.value)
+        assertEquals("false", report.observations.single { it.path == "evidence.sensors.temperature" }.value)
         assertEquals(
             "schedutil,performance",
             report.observations.single { it.path == "evidence.cpu.available_governors" }.value,

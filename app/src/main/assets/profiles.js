@@ -170,17 +170,21 @@
     if (guidance) guidance.hidden = true;
     if (!summary) return;
     root.appendChild(badge(summary.origin === "bundled" ? "Bundled" : "Local", summary.origin === "bundled" ? "bundled" : ""));
-    if (summary.maturity) root.appendChild(badge(string(summary.maturity), "maturity"));
+    if (summary.maturity) {
+      var maturity = string(summary.maturity).toLowerCase();
+      root.appendChild(badge(maturity === "verified" ? "✓ Verified" : maturity, maturity === "verified" ? "maturity verified" : "maturity"));
+    }
     if (summary.compatible === false) root.appendChild(badge("Incompatible", "risk"));
     if (summary.active) root.appendChild(badge("Active", "active"));
     if (summary.selected && !summary.active) root.appendChild(badge("Selected", "pending"));
     if (summary.last_known_good) root.appendChild(badge("Last known good", "lkg"));
     var shizuku = string(summary.shizuku_recommendation).toLowerCase();
     if (shizuku === "optional" || shizuku === "recommended") {
-      root.appendChild(badge("Shizuku " + shizuku, "shizuku"));
+      root.appendChild(badge("Shizuku: " + shizuku, "shizuku"));
     }
-    if (guidance) guidance.hidden = !(shizuku === "optional" || shizuku === "recommended");
-    (summary.risks || []).forEach(function (risk) { root.appendChild(badge(string(risk).replace(/_/g, " "), "risk")); });
+    // Optional Shizuku support is informational only; reserve the callout for profiles that explicitly require it.
+    if (guidance) guidance.hidden = shizuku !== "recommended";
+    (summary.risks || []).forEach(function (risk) { root.appendChild(badge(string(risk).replace(/_/g, " "), "warning")); });
     var activation = model.status.activation || {};
     if (activation.state === "pending" || activation.state === "applying") root.appendChild(badge(activation.state, "pending"));
   }
@@ -256,9 +260,31 @@
     if (!entries.length) {
       var empty = document.createElement("div"); empty.className = "profile-empty"; empty.textContent = "No passive device report for this profile."; root.appendChild(empty); return;
     }
+    function reportLabel(path) {
+      var labels = {
+        "match.any[].all[].field = model": "Match field: model",
+        "match.any[].all[].field = device": "Match field: device",
+        "match.any[].all[].field = product_version": "Match field: product version",
+        "evidence.android_sdk": "Android SDK",
+        "evidence.abis": "Supported ABIs",
+        "evidence.board": "Board",
+        "evidence.hardware": "Hardware",
+        "evidence.display.width_px": "Display width",
+        "evidence.display.height_px": "Display height",
+        "evidence.display.current_density_dpi": "Current display density",
+        "evidence.led.dev_ledjni_readable": "LED device access",
+        "evidence.led.sysfs_rgb_readable": "LED sysfs access",
+        "evidence.cpu.available_governors": "Available CPU governors",
+        "sensors.light_technology": "Light sensor",
+        "sensors.proximity_technology": "Proximity sensor",
+        "evidence.sensors.temperature": "Temperature sensor",
+        "evidence.sensors.humidity": "Humidity sensor",
+      };
+      return labels[path] || string(path).replace(/^evidence\./, "").replace(/[._]+/g, " ").replace(/\b\w/g, function (c) { return c.toUpperCase(); });
+    }
     entries.forEach(function (fact) {
       var row = document.createElement("div"); row.className = "profile-diff-row";
-      var key = document.createElement("div"); key.className = "profile-diff-path"; key.textContent = string(fact.key || fact.path || "fact");
+      var key = document.createElement("div"); key.className = "profile-diff-path"; key.textContent = reportLabel(string(fact.key || fact.path || "fact"));
       var value = document.createElement("div"); value.className = "profile-diff-value"; value.textContent = string(fact.status || "unknown") + (fact.value == null ? "" : " · " + string(fact.value));
       row.appendChild(key); row.appendChild(value); root.appendChild(row);
     });

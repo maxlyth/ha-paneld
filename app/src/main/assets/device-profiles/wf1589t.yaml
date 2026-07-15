@@ -20,6 +20,7 @@ requires:
     - led.rk3576-ioctl
     - screen.su-blpower
 match:
+  # Match values are based on the WF1589T firmware and RK3576 identity.
   priority: 500
   fallback: false
   any:
@@ -36,6 +37,7 @@ match:
           values:
             - rk3576_u
 platform:
+  # Android su capability was confirmed on the supported WF1589T image.
   su_form: android
   app_can_su: true
   has_recents: true

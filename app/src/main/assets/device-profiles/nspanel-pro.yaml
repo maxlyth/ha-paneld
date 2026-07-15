@@ -25,6 +25,7 @@ match:
   priority: 500
   fallback: false
   any:
+    # Observed Build.PRODUCT on NSPanel 86P/120P firmware images.
     - priority: 920
       all:
         - field: product_version
@@ -34,6 +35,7 @@ match:
             - s6_android_
     - priority: 910
       all:
+        # PX30/rk3326 is the stable hardware-family fingerprint on these panels.
         - field: model
           op: contains
           values:
@@ -47,18 +49,21 @@ match:
             - px30
             - rk3326
 platform:
+  # Confirmed on the stock NSPanel firmware: ha-paneld can invoke the toolbox su form.
   su_form: toolbox
   app_can_su: true
   has_recents: true
   shizuku: optional
 hardware:
   led:
+    # NSPanel status LEDs are not exposed through the supported app-side LED routes.
     mechanism: none
     transfer: identity
   screen_off: su-blpower
   has_button_backlight: false
   zigbee_gateway_dir: /vendor/bin/siliconlabs_host
 sensors:
+  # These are the Android sensor/firmware capabilities observed on the NSPanel family.
   proximity_technology: Infrared
   proximity_graded_strategy: nspanel-firmware-cutover
   light_technology: Ambient light

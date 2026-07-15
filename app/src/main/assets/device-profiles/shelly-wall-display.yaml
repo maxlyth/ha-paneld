@@ -20,6 +20,7 @@ requires:
     - screen.brightness-zero
     - sensor.android
 match:
+  # Match values are derived from the legacy Shelly Wall Display firmware identity.
   priority: 500
   fallback: false
   any:
@@ -63,6 +64,7 @@ match:
             - k400_mt6580
             - e500_7731e
 platform:
+  # The application UID is sandboxed; privileged operations use the helper route.
   su_form: none
   app_can_su: false
   has_recents: true

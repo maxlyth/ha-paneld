@@ -18,10 +18,12 @@ requires:
     - led.autodetect
     - screen.brightness-zero
 match:
+  # Empty matching is intentional: this is the safe fallback for unknown panels.
   priority: 0
   fallback: true
   any: []
 platform:
+  # Conservative defaults; unknown hardware must not assume privileged access.
   su_form: android
   app_can_su: true
   has_recents: true

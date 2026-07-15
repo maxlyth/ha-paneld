@@ -23,6 +23,7 @@ requires:
     - sensor.cht8305-daemon
     - update.webview
 match:
+  # Match values come from observed TPA10/RK3566 build properties.
   priority: 500
   fallback: false
   any:
@@ -39,6 +40,7 @@ match:
           values:
             - tpa10
 platform:
+  # TPA10 is sandbox-walled; privileged routes use the helper daemon.
   su_form: android
   app_can_su: false
   has_recents: false

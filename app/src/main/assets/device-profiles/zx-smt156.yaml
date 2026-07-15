@@ -20,6 +20,7 @@ requires:
     - screen.brightness-zero
     - sensor.android
 match:
+  # Match values come from observed ZX-SMT156/RK3566_T build properties.
   priority: 500
   fallback: false
   any:
@@ -36,6 +37,7 @@ match:
           values:
             - rk3566_t
 platform:
+  # This panel is sandbox-walled; privileged routes use the helper daemon.
   su_form: none
   app_can_su: false
   has_recents: true

@@ -20,6 +20,7 @@ requires:
     - screen.brightness-zero
     - update.webview
 match:
+  # Match values come from observed SMT1019/RK3576 build properties.
   priority: 500
   fallback: false
   any:
@@ -30,6 +31,7 @@ match:
           values:
             - wf2489
 platform:
+  # This panel is sandbox-walled; privileged routes use the helper daemon.
   su_form: none
   app_can_su: false
   has_recents: true

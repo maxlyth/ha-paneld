@@ -24,6 +24,7 @@ requires:
     - sensor.gpio-proximity
     - update.webview
 match:
+  # Match values come from observed S9E/RK3566 build properties.
   priority: 500
   fallback: false
   any:
@@ -52,6 +53,7 @@ match:
           values:
             - s9
 platform:
+  # Privilege mode verified on the S9E production image.
   su_form: android
   app_can_su: true
   has_recents: true

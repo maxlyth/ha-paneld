@@ -29,18 +29,18 @@ data class PassiveProbeSnapshot(
 )
 
 enum class PassiveSensor(val schemaPath: String) {
-    LIGHT("sensors.light"),
-    PROXIMITY("sensors.proximity"),
-    TEMPERATURE("sensors.temperature"),
-    HUMIDITY("sensors.humidity"),
+    LIGHT("sensors.light_technology"),
+    PROXIMITY("sensors.proximity_technology"),
+    TEMPERATURE("evidence.sensors.temperature"),
+    HUMIDITY("evidence.sensors.humidity"),
 }
 
 object PassiveProfileReportFactory {
     fun create(snapshot: PassiveProbeSnapshot): PassiveProfileReport {
         val observations = buildList {
-            add(observed("match.model", snapshot.facts.model, "android.os.Build.MODEL"))
-            add(observed("match.device", snapshot.facts.device, "android.os.Build.DEVICE"))
-            add(observed("match.product_version", snapshot.facts.productVersion, "ro.product.version"))
+            add(observed("match.any[].all[].field = model", snapshot.facts.model, "android.os.Build.MODEL"))
+            add(observed("match.any[].all[].field = device", snapshot.facts.device, "android.os.Build.DEVICE"))
+            add(observed("match.any[].all[].field = product_version", snapshot.facts.productVersion, "ro.product.version"))
             add(observed("evidence.android_sdk", snapshot.androidSdk.toString(), "android.os.Build.VERSION.SDK_INT"))
             add(observed("evidence.abis", snapshot.abis.joinToString(","), "android.os.Build.SUPPORTED_ABIS"))
             add(observed("evidence.board", snapshot.board, "android.os.Build.BOARD"))

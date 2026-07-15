@@ -19,6 +19,7 @@ requires:
     - screen.brightness-zero
     - sensor.android
 match:
+  # Match values are derived from the modern Shelly Wall Display firmware identity.
   priority: 500
   fallback: false
   any:
@@ -61,6 +62,7 @@ match:
             - sawd-5
             - sawd-6
 platform:
+  # The application UID is sandboxed; privileged operations use the helper route.
   su_form: none
   app_can_su: false
   has_recents: true
