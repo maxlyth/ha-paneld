@@ -7,9 +7,9 @@ import org.junit.Test
 
 class ShizukuPolicyTest {
     @Test fun acceptsOnlyExpectedShellIdentityAndProtocol() {
-        assertTrue(ShizukuPolicy.usable(2000, 1))
-        assertFalse(ShizukuPolicy.usable(0, 1))
-        assertFalse(ShizukuPolicy.usable(2000, 2))
+        assertTrue(ShizukuPolicy.usable(2000, ShizukuPolicy.PROTOCOL_VERSION))
+        assertFalse(ShizukuPolicy.usable(0, ShizukuPolicy.PROTOCOL_VERSION))
+        assertFalse(ShizukuPolicy.usable(2000, ShizukuPolicy.PROTOCOL_VERSION - 1))
     }
 
     @Test fun typedArgumentsAreBoundedBeforeCrossingBinder() {
@@ -70,8 +70,18 @@ class ShizukuPolicyTest {
     }
 
     @Test fun outerIpcDeadlineExceedsServiceDeadlineAndReaderJoin() {
-        assertTrue(ShizukuPolicy.clientDeadline(10_000) > 11_000)
-        assertTrue(ShizukuPolicy.clientDeadline(180_000) > 181_000)
+        assertEquals(15_000L, ShizukuPolicy.clientDeadline(10_000))
+        assertEquals(185_000L, ShizukuPolicy.clientDeadline(180_000))
+        assertEquals(Long.MAX_VALUE, ShizukuPolicy.clientDeadline(Long.MAX_VALUE))
+    }
+
+    @Test fun installDeadlineIsPositiveAndCappedBeforeCrossingBinder() {
+        assertEquals(null, ShizukuPolicy.installServiceDeadline(0))
+        assertEquals(42L, ShizukuPolicy.installServiceDeadline(42))
+        assertEquals(
+            ShizukuPolicy.MAX_INSTALL_DEADLINE_MS,
+            ShizukuPolicy.installServiceDeadline(Long.MAX_VALUE),
+        )
     }
 
     @Test fun missingOrReplacedManagerNeverTrapsLocalConsent() {

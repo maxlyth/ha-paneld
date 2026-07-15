@@ -36,7 +36,7 @@ object ShizukuBridge : ShellPrivilege {
 
     private val args: Shizuku.UserServiceArgs
         get() = Shizuku.UserServiceArgs(ComponentName(appContext, ShizukuShellService::class.java))
-            .tag("hapaneld-shell-v1")
+            .tag("hapaneld-shell-v2")
             .version(BuildConfig.VERSION_CODE)
             .processNameSuffix("shell")
             .daemon(false)
@@ -238,9 +238,10 @@ object ShizukuBridge : ShellPrivilege {
 
     override fun installApk(apk: File, allowDowngrade: Boolean, timeoutMs: Long): String? {
         if (!ShizukuPolicy.validApkLength(apk.length())) return null
-        return call(timeoutMs) { service ->
+        val serviceDeadline = ShizukuPolicy.installServiceDeadline(timeoutMs) ?: return null
+        return call(serviceDeadline) { service ->
             ParcelFileDescriptor.open(apk, ParcelFileDescriptor.MODE_READ_ONLY).use { fd ->
-                service.installApk(fd, apk.length(), allowDowngrade)
+                service.installApk(fd, apk.length(), allowDowngrade, serviceDeadline)
             }
         }
     }

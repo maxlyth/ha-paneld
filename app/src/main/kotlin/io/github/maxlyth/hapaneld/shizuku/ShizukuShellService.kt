@@ -61,31 +61,21 @@ class ShizukuShellService : IShizukuShellService.Stub() {
         source: ParcelFileDescriptor?,
         length: Long,
         allowDowngrade: Boolean,
+        timeoutMs: Long,
     ): String? {
-        if (source == null || !ShizukuPolicy.validApkLength(length)) return null
-        val args = mutableListOf("pm", "install", "-S", length.toString(), "-r")
-        if (allowDowngrade) args += "-d"
-        val process = runCatching { ProcessBuilder(args).redirectErrorStream(true).start() }.getOrNull()
-            ?: return null
-        return try {
-            ParcelFileDescriptor.AutoCloseInputStream(source).use { input ->
-                process.outputStream.use { output -> copyExact(input, output, length) }
-            }
-            val reply = ByteArrayOutputStream()
-            val reader = thread(name = "hapaneld-shizuku-install-output", isDaemon = true) {
-                runCatching { copyBounded(process.inputStream, reply, MAX_REPLY_BYTES.toLong()) }
-            }
-            if (!process.waitFor(INSTALL_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
-                process.destroyForcibly()
-                reader.join(1_000)
-                null
-            } else {
-                reader.join(1_000)
-                reply.toString(Charsets.UTF_8.name()).trim().take(MAX_REPLY_BYTES)
-            }
-        } catch (_: Exception) {
-            process.destroyForcibly()
-            null
+        if (source == null) return null
+        ParcelFileDescriptor.AutoCloseInputStream(source).use { input ->
+            val deadline = ShizukuPolicy.installServiceDeadline(timeoutMs)
+            if (!ShizukuPolicy.validApkLength(length) || deadline == null) return null
+            val args = mutableListOf("pm", "install", "-S", length.toString(), "-r")
+            if (allowDowngrade) args += "-d"
+            val process = runCatching { ProcessBuilder(args).redirectErrorStream(true).start() }.getOrNull()
+                ?: return null
+            return ShizukuInstallRunner(deadline).run(
+                source = input,
+                expectedBytes = length,
+                process = RuntimeShizukuInstallProcess(process),
+            )
         }
     }
 
@@ -125,19 +115,6 @@ class ShizukuShellService : IShizukuShellService.Stub() {
         }
     }
 
-    private fun copyExact(input: java.io.InputStream, output: java.io.OutputStream, expected: Long) {
-        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-        var copied = 0L
-        while (copied < expected) {
-            val wanted = minOf(buffer.size.toLong(), expected - copied).toInt()
-            val read = input.read(buffer, 0, wanted)
-            if (read < 0) throw java.io.EOFException("short APK stream")
-            output.write(buffer, 0, read)
-            copied += read
-        }
-        if (input.read() != -1) throw java.io.IOException("extra APK bytes")
-    }
-
     private fun copyBounded(input: java.io.InputStream, output: java.io.OutputStream, max: Long) {
         val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
         var copied = 0L
@@ -152,8 +129,19 @@ class ShizukuShellService : IShizukuShellService.Stub() {
 
     companion object {
         private const val SHORT_TIMEOUT_MS = 10_000L
-        private const val INSTALL_TIMEOUT_MS = 180_000L
         private const val MAX_REPLY_BYTES = 16 * 1024
         private const val DESTROY_TRANSACTION = 16_777_115
+    }
+}
+
+private class RuntimeShizukuInstallProcess(
+    private val delegate: java.lang.Process,
+) : ShizukuInstallProcess {
+    override val input = delegate.outputStream
+    override val output = delegate.inputStream
+    override fun waitFor(timeoutMs: Long): Boolean =
+        delegate.waitFor(timeoutMs, TimeUnit.MILLISECONDS)
+    override fun destroyForcibly() {
+        delegate.destroyForcibly()
     }
 }
