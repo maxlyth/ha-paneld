@@ -50,9 +50,11 @@ jobs:
 
       - uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
       - uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
+        with:
+          cache-provider: basic
 
       - name: Install build SDK, NDK, and emulator image
-        run: sdkmanager "platform-tools" "platforms;android-35" "system-images;android-${{ matrix.api-level }};google_apis;x86_64" "ndk;27.0.12077973" "cmake;3.22.1"
+        run: sdkmanager "platform-tools" "platforms;android-35" "system-images;android-${{ matrix.api-level }};default;x86_64" "ndk;27.0.12077973" "cmake;3.22.1"
 
       - name: Download curated Shizuku manager
         run: |
@@ -64,26 +66,27 @@ jobs:
       - name: Build app and instrumentation APKs
         run: ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest --stacktrace
 
+      - name: Enable KVM group permissions
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
       - name: Exercise real Shizuku Binder and APK update path
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
         with:
           api-level: ${{ matrix.api-level }}
+          target: default
           arch: x86_64
           profile: pixel_2
           disable-animations: true
           script: |
             adb install "$RUNNER_TEMP/shizuku.apk"
             adb shell monkey -p moe.shizuku.privileged.api 1
-            for i in $(seq 1 20); do
-              adb shell test -f /storage/emulated/0/Android/data/moe.shizuku.privileged.api/start.sh && break
-              sleep 1
-            done
+            for i in $(seq 1 20); do adb shell test -f /storage/emulated/0/Android/data/moe.shizuku.privileged.api/start.sh && break; sleep 1; done
             adb shell sh /storage/emulated/0/Android/data/moe.shizuku.privileged.api/start.sh
             adb install app/build/outputs/apk/debug/app-debug.apk
             adb push "$RUNNER_TEMP/shizuku.apk" /data/local/tmp/shizuku.apk
             adb shell run-as io.github.maxlyth.hapaneld cp /data/local/tmp/shizuku.apk files/shizuku-test.apk
             adb install app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
-            adb shell am instrument -w \
-              -e managerApk /data/user/0/io.github.maxlyth.hapaneld/files/shizuku-test.apk \
-              -e class io.github.maxlyth.hapaneld.shizuku.ShizukuIntegrationTest \
-              io.github.maxlyth.hapaneld.test/androidx.test.runner.AndroidJUnitRunner
+            adb shell am instrument -w -e managerApk /data/user/0/io.github.maxlyth.hapaneld/files/shizuku-test.apk -e class io.github.maxlyth.hapaneld.shizuku.ShizukuIntegrationTest io.github.maxlyth.hapaneld.test/androidx.test.runner.AndroidJUnitRunner

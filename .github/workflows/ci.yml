@@ -20,7 +20,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Require immutable GitHub Action references
+      - name: Enforce GitHub Actions policy
         shell: bash
         run: |
           failed=0
@@ -31,6 +31,12 @@ jobs:
             echo "::error::GitHub Action reference is not a full commit SHA: $ref"
             failed=1
           done < <(sed -nE 's/^[[:space:]]*-?[[:space:]]*uses:[[:space:]]*([^[:space:]#]+).*/\1/p' .github/workflows/*.yml)
+          while IFS=: read -r file line _; do
+            if ! sed -n "${line},$((line + 2))p" "$file" | grep -Eq '^[[:space:]]+cache-provider:[[:space:]]+basic([[:space:]]*(#.*)?)?$'; then
+              echo "::error file=$file,line=$line::setup-gradle must select the open-source basic cache provider"
+              failed=1
+            fi
+          done < <(grep -nHE '^[[:space:]]*-?[[:space:]]*uses:[[:space:]]*gradle/actions/setup-gradle@' .github/workflows/*.yml)
           exit "$failed"
 
       # The info-page front-end is a static asset (not embedded in a Kotlin string), so its syntax
@@ -72,6 +78,8 @@ jobs:
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
+        with:
+          cache-provider: basic
 
       - name: Test, lint, and build debug APK
         run: ./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug --stacktrace
