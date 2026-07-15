@@ -50,6 +50,7 @@ jobs:
           test "$(npm --version)" = "$expected_npm"
           npm ci --ignore-scripts --audit=false --fund=false
           npm run check
+          npm run sbom -- --output ../../release-input/profile-editor-runtime.cdx.json
 
       - name: Set up JDK 17
         uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4.8.0
@@ -88,7 +89,7 @@ jobs:
           fi
           cp "${unsigned_apks[0]}" release-input/ha-paneld-unsigned.apk
           test -s app/build/reports/cyclonedx-direct/bom.json
-          cp app/build/reports/cyclonedx-direct/bom.json release-input/dependencies.cdx.json
+          cp app/build/reports/cyclonedx-direct/bom.json release-input/android-gradle-runtime.cdx.json
           apk_name="ha-paneld-${GITHUB_REF_NAME}-manual-setup-required.apk"
           echo "APK_NAME=$apk_name" >> "$GITHUB_ENV"
 
@@ -158,9 +159,10 @@ jobs:
         id: manifest
         run: |
           expected=$(printf '%s\n' \
-            dependencies.cdx.json \
+            android-gradle-runtime.cdx.json \
             "ha-paneld-installer-${GITHUB_REF_NAME}.sh" \
             ha-paneld-unsigned.apk \
+            profile-editor-runtime.cdx.json \
             release-body.md)
           actual=$(find release-input -maxdepth 1 -type f -printf '%f\n' | sort)
           if [ "$actual" != "$expected" ]; then
@@ -170,7 +172,7 @@ jobs:
           fi
           (
             cd release-input
-            sha256sum dependencies.cdx.json "ha-paneld-installer-${GITHUB_REF_NAME}.sh" ha-paneld-unsigned.apk release-body.md > MANIFEST.sha256
+            sha256sum android-gradle-runtime.cdx.json "ha-paneld-installer-${GITHUB_REF_NAME}.sh" ha-paneld-unsigned.apk profile-editor-runtime.cdx.json release-body.md > MANIFEST.sha256
           )
           sha256=$(sha256sum release-input/MANIFEST.sha256 | cut -d' ' -f1)
           echo "sha256=$sha256" >> "$GITHUB_OUTPUT"
@@ -217,9 +219,10 @@ jobs:
           fi
           expected=$(printf '%s\n' \
             MANIFEST.sha256 \
-            dependencies.cdx.json \
+            android-gradle-runtime.cdx.json \
             "ha-paneld-installer-${GITHUB_REF_NAME}.sh" \
             ha-paneld-unsigned.apk \
+            profile-editor-runtime.cdx.json \
             release-body.md)
           actual=$(find release-input -maxdepth 1 -type f -printf '%f\n' | sort)
           if [ "$actual" != "$expected" ]; then
@@ -274,7 +277,8 @@ jobs:
           build_tools="$ANDROID_HOME/build-tools/35.0.0"
           unsigned_apk=release-input/ha-paneld-unsigned.apk
           apk_name="ha-paneld-${GITHUB_REF_NAME}-manual-setup-required.apk"
-          sbom_name="ha-paneld-${GITHUB_REF_NAME}-dependencies.cdx.json"
+          android_sbom_name="ha-paneld-${GITHUB_REF_NAME}-android-gradle-runtime.cdx.json"
+          profile_editor_sbom_name="ha-paneld-${GITHUB_REF_NAME}-profile-editor-runtime.cdx.json"
           signed_apk="dist/$apk_name"
           mkdir -p dist
 
@@ -314,7 +318,8 @@ jobs:
             exit 1
           fi
 
-          cp release-input/dependencies.cdx.json "dist/$sbom_name"
+          cp release-input/android-gradle-runtime.cdx.json "dist/$android_sbom_name"
+          cp release-input/profile-editor-runtime.cdx.json "dist/$profile_editor_sbom_name"
           cp "release-input/ha-paneld-installer-${GITHUB_REF_NAME}.sh" "dist/ha-paneld-installer-${GITHUB_REF_NAME}.sh"
           chmod +x "dist/ha-paneld-installer-${GITHUB_REF_NAME}.sh"
           (cd dist && sha256sum "$apk_name" > "$apk_name.sha256")
@@ -337,18 +342,25 @@ jobs:
           openssl dgst -sha256 -verify "$public_key" -signature "dist/$apk_name.sha256.sig" "dist/$apk_name.sha256"
 
           echo "apk_name=$apk_name" >> "$GITHUB_OUTPUT"
-          echo "sbom_name=$sbom_name" >> "$GITHUB_OUTPUT"
+          echo "android_sbom_name=$android_sbom_name" >> "$GITHUB_OUTPUT"
+          echo "profile_editor_sbom_name=$profile_editor_sbom_name" >> "$GITHUB_OUTPUT"
 
       - name: Attest release asset provenance
         uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
         with:
           subject-path: dist/*
 
-      - name: Attest release dependency SBOM
+      - name: Attest Android and Gradle runtime SBOM
         uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
         with:
           subject-path: dist/${{ steps.asset.outputs.apk_name }}
-          sbom-path: dist/${{ steps.asset.outputs.sbom_name }}
+          sbom-path: dist/${{ steps.asset.outputs.android_sbom_name }}
+
+      - name: Attest profile-editor runtime SBOM
+        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
+        with:
+          subject-path: dist/${{ steps.asset.outputs.apk_name }}
+          sbom-path: dist/${{ steps.asset.outputs.profile_editor_sbom_name }}
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
