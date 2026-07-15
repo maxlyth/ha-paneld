@@ -67,5 +67,6 @@ object Tpa10 : DeviceProfile {
         url = "https://github.com/maxlyth/ha-paneld/releases/download/webview-mirror/lineageos-webview-150.0.7871.63-arm.apk",
         version = "150.0.7871.63",
         certSha256 = "32a2fc74d731105859e5a85df16d95f102d85b22099b8064c5d8915c61dad1e0",
+        apkSha256 = "7b35eee0823ddf68cf758d903aee724de4ab1326f458e283612caa682d496f7b",
     )
 }

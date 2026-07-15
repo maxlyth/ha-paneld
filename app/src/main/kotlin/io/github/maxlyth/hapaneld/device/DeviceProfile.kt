@@ -262,12 +262,14 @@ enum class SuForm { TOOLBOX, ANDROID, NONE }
  * is always `com.android.webview` — the id the Android framework requires to auto-select a WebView
  * provider — so only the source + version + pinned signer vary. [version] is the full Chromium version
  * the build provides (e.g. "138.0.7204.63"); its major gates the "is a newer one worth installing"
- * check. [certSha256] is the build's signing cert (LineageOS / Cromite / …), verified before install.
+ * check. [certSha256] is the build's signing cert (LineageOS / Cromite / …), and [apkSha256] pins the
+ * exact mirrored artifact; both are verified before install.
  */
 data class WebViewSpec(
     val url: String,
     val version: String,
     val certSha256: String,
+    val apkSha256: String,
 ) {
     /** Chromium major of [version] (e.g. 138), or 0 if unparseable. */
     val major: Int get() = version.substringBefore('.').toIntOrNull() ?: 0

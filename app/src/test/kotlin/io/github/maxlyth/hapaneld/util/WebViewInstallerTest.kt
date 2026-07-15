@@ -10,7 +10,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class WebViewInstallerTest {
-    private val rec = WebViewSpec("https://example/webview.apk", "138.0.7204.63", "abcd")
+    private val rec = WebViewSpec("https://example/webview.apk", "138.0.7204.63", "abcd", "1234")
     private val MIN = 110
 
     @Test fun installsWhenEngineTooOldAndRecommendedNewer() {
@@ -47,12 +47,12 @@ class WebViewInstallerTest {
 
     @Test fun specMajorParses() {
         assertEquals(138, rec.major)
-        assertEquals(0, WebViewSpec("u", "unknown", "c").major)
+        assertEquals(0, WebViewSpec("u", "unknown", "c", "a").major)
     }
 
     // --- auto-update path (Mechanism A): advance a WORKING engine to a newer pin ---
 
-    private val newer = WebViewSpec("https://example/lineageos-150.apk", "150.0.7871.63", "beef")
+    private val newer = WebViewSpec("https://example/lineageos-150.apk", "150.0.7871.63", "beef", "5678")
 
     @Test fun autoUpdateAdvancesAWorkingEngineToANewerPin() {
         // The Cromite-147 → LineageOS-150 swap: the engine renders HA (147 ≥ 110) so the heal path leaves

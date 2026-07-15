@@ -92,7 +92,7 @@ object WebViewInstaller {
                 val r = AppInstaller.install(
                     context,
                     d.spec.url,
-                    AppInstaller.Pin(WEBVIEW_PKG, d.spec.certSha256),
+                    AppInstaller.Pin(WEBVIEW_PKG, d.spec.certSha256, d.spec.apkSha256),
                     allowShizuku = false,
                 )
                 if (r == "OK") "OK: installed WebView ${d.spec.version} — reloading the dashboard" else r

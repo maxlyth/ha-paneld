@@ -94,6 +94,7 @@ class DeviceProfileCapabilityTest {
                 assertTrue("non-HTTPS WebView pin on ${profile.id}", webView.url.startsWith("https://"))
                 assertTrue("unparseable WebView version on ${profile.id}", webView.major > 0)
                 assertTrue("invalid WebView cert on ${profile.id}", cert.matches(webView.certSha256))
+                assertTrue("invalid WebView artifact hash on ${profile.id}", cert.matches(webView.apkSha256))
             }
             val tamePackages = profile.tameVendorCandidates.map { it.pkg }
             assertEquals("duplicate tame package on ${profile.id}", tamePackages.size, tamePackages.toSet().size)

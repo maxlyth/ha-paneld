@@ -102,6 +102,7 @@ object NSPanelPro : DeviceProfile {
         url = "https://github.com/maxlyth/ha-paneld/releases/download/webview-mirror/lineageos-webview-138.0.7204.63.apk",
         version = "138.0.7204.63",
         certSha256 = "518325ef7f96c0d1194c2e856b040d636166ffb846717d72fa87f4fae5be7bbb",
+        apkSha256 = "3fe65c631ce9b0f8e573198a783cf8ad1013aef02b83f04e7871952879b599cf",
     )
 
     private const val S6_VERSION_PREFIX = "s6_android_"
