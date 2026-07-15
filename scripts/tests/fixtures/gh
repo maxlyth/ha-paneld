@@ -9,6 +9,11 @@ if [ "${1:-}" = "release" ] && [ "${2:-}" = "list" ]; then
   exit 0
 fi
 
+if [ "${1:-}" = "release" ] && [ "${2:-}" = "view" ]; then
+  printf 'v0.9.1\n'
+  exit 0
+fi
+
 if [ "${1:-}" = "release" ] && [ "${2:-}" = "download" ]; then
   directory=""
   previous=""
@@ -17,7 +22,9 @@ if [ "${1:-}" = "release" ] && [ "${2:-}" = "download" ]; then
     previous="$argument"
   done
   [ -n "$directory" ] || exit 2
-  printf 'test apk\n' > "$directory/ha-paneld-v0.9.2-rc3.apk"
+  tag="v0.9.2-rc3"
+  for argument in "$@"; do case "$argument" in v*) tag="$argument" ;; esac; done
+  printf 'test apk\n' > "$directory/ha-paneld-$tag-manual-setup-required.apk"
   exit 0
 fi
 

@@ -69,8 +69,9 @@ shift
 REPO="maxlyth/ha-paneld"
 LOCAL_APK="app/build/outputs/apk/debug/app-debug.apk"
 PKG="io.github.maxlyth.hapaneld"
+RELEASE_CERT_SHA256="ac6193307fb0b70113aae205d7549406f96e063bc5491b67b1d5694a34b0e339"
 A11Y="$PKG/.input.PanelAccessibilityService"
-APK=""; PANEL_ID=""; MQTT=""; MQTT_USER=""; MQTT_PASS=""; VERIFY_ONLY=0; LATEST=0; PRERELEASE=0; FORCE=0; PERSIST_ADB=0; STRIP_VENDOR=0; NO_TAME=0; SHIZUKU=0; TOINSTALL_VER=""
+APK=""; APK_RELEASE_TAG=""; PANEL_ID=""; MQTT=""; MQTT_USER=""; MQTT_PASS=""; VERIFY_ONLY=0; LATEST=0; PRERELEASE=0; FORCE=0; PERSIST_ADB=0; STRIP_VENDOR=0; NO_TAME=0; SHIZUKU=0; TOINSTALL_VER=""
 LOG_HOST=""; LOG_PORT=""; LOG_PROTO=""; LOG_ENABLE=""
 EXPORT_FILE=""; RESTORE_FILE=""; RESTORE_MODE=""
 HA_URL=""; HA_TOKEN=""; HA_USER=""; HA_PASS=""; HA_REFRESH=""; HA_EXPIRY=""; BUILTIN=0
@@ -79,7 +80,7 @@ HA_LOGIN_FAILED=0
 if [ "${1:-}" ] && [ "${1#--}" = "${1:-}" ]; then APK="$1"; shift; fi
 while [ "${1:-}" ]; do
   case "$1" in
-    --apk|--id|--mqtt|--mqtt-user|--mqtt-pass|--log-host|--log-port|--log-proto|--ha-url|--ha-token|--ha-user|--ha-pass|--export|--restore|--restore-fleet)
+    --apk|--release-tag|--id|--mqtt|--mqtt-user|--mqtt-pass|--log-host|--log-port|--log-proto|--ha-url|--ha-token|--ha-user|--ha-pass|--export|--restore|--restore-fleet)
       if [ "$#" -lt 2 ] || [ -z "${2:-}" ] || [ "${2#--}" != "${2:-}" ]; then
         echo "${RED}✗ $1 needs a value.${X} Run with --help for examples." >&2
         exit 2
@@ -88,6 +89,7 @@ while [ "${1:-}" ]; do
   esac
   case "$1" in
     --apk) APK="$2"; shift 2 ;;
+    --release-tag) APK_RELEASE_TAG="$2"; shift 2 ;; # internal: marks --apk as an official release asset
     --id) PANEL_ID="$2"; shift 2 ;;
     --mqtt) MQTT="$2"; shift 2 ;;
     --mqtt-user) MQTT_USER="$2"; shift 2 ;;
@@ -116,6 +118,13 @@ while [ "${1:-}" ]; do
     *) echo "${RED}unknown arg: $1${X}" >&2; exit 2 ;;
   esac
 done
+valid_release_tag() { printf '%s\n' "$1" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$'; }
+release_apk_name() { printf 'ha-paneld-%s-manual-setup-required.apk\n' "$1"; }
+release_apk_url() { printf 'https://github.com/%s/releases/download/%s/%s\n' "$REPO" "$1" "$(release_apk_name "$1")"; }
+if [ -n "$APK_RELEASE_TAG" ]; then
+  valid_release_tag "$APK_RELEASE_TAG" || { echo "${RED}✗ invalid release tag: $APK_RELEASE_TAG${X}" >&2; exit 2; }
+  [ -n "$APK" ] || { echo "${RED}✗ --release-tag requires --apk.${X}" >&2; exit 2; }
+fi
 if { [ -n "$HA_USER" ] && [ -z "$HA_PASS" ]; } || { [ -z "$HA_USER" ] && [ -n "$HA_PASS" ]; }; then
   echo "${RED}✗ --ha-user and --ha-pass must be supplied together.${X}" >&2
   exit 2
@@ -336,32 +345,49 @@ check_webview() {
 
 # Fetch the newest signed release APK from GitHub (gh if present, else the API via curl). Sets APK + TOINSTALL_VER.
 download_latest() {
-  local dir tag url json api
+  local dir tag url json api record asset expected_url
   dir="$(mktemp -d)"
   # PRERELEASE=1 → newest release of ANY kind (incl. rc); else the newest STABLE. GitHub's
   # /releases/latest EXCLUDES prereleases, so the prerelease path lists all releases and takes the first.
   if command -v gh >/dev/null 2>&1; then
     if [ "$PRERELEASE" = 1 ]; then
-      tag="$(gh release list --repo "$REPO" --limit 1 --json tagName -q '.[0].tagName' 2>/dev/null || true)"
-      [ -n "$tag" ] && gh release download "$tag" --repo "$REPO" --pattern '*.apk' --dir "$dir" >/dev/null 2>&1 || true
+      tag="$(gh release list --repo "$REPO" --exclude-drafts --limit 100 --json tagName,isPrerelease --jq 'map(select(.isPrerelease))[0].tagName // empty' 2>/dev/null || true)"
     else
       tag="$(gh release view --repo "$REPO" --json tagName -q .tagName 2>/dev/null || true)"
-      gh release download --repo "$REPO" --pattern '*.apk' --dir "$dir" >/dev/null 2>&1 || true
+    fi
+    if [ -n "$tag" ] && valid_release_tag "$tag"; then
+      asset="$(release_apk_name "$tag")"
+      gh release download "$tag" --repo "$REPO" --pattern "$asset" --dir "$dir" >/dev/null 2>&1 || true
     fi
   fi
-  if ! ls "$dir"/*.apk >/dev/null 2>&1; then
+  [ -z "$tag" ] || valid_release_tag "$tag" || tag=""
+  asset="${tag:+$(release_apk_name "$tag")}"
+  if [ -z "$asset" ] || [ ! -s "$dir/$asset" ]; then
     if [ "$PRERELEASE" = 1 ]; then
-      api="https://api.github.com/repos/$REPO/releases?per_page=1"   # newest release, prerelease included
+      api="https://api.github.com/repos/$REPO/releases?per_page=100"
     else
-      api="https://api.github.com/repos/$REPO/releases/latest"        # newest stable only
+      api="https://api.github.com/repos/$REPO/releases/latest"
     fi
-    json="$(curl -fsSL "$api" 2>/dev/null || true)"
-    tag="$(printf '%s' "$json" | grep -o '"tag_name": *"[^"]*"' | head -1 | cut -d'"' -f4 || true)"
-    url="$(printf '%s' "$json" | grep -o '"browser_download_url": *"[^"]*\.apk"' | head -1 | cut -d'"' -f4 || true)"
-    [ -n "$url" ] && curl -fsSL "$url" -o "$dir/ha-paneld-latest.apk" || true
+    json="$(curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 15 --max-time 30 "$api" 2>/dev/null || true)"
+    if [ "$PRERELEASE" = 1 ]; then
+      record="$(printf '%s' "$json" | tr -d '\r\n' | \
+        sed 's#{[[:space:]]*"url":[[:space:]]*"https://api.github.com/repos/maxlyth/ha-paneld/releases/\([0-9][0-9]*\)"#\
+&#g' | \
+        awk '/"draft":[[:space:]]*false/ && /"prerelease":[[:space:]]*true/ { print; exit }')"
+    else
+      record="$json"
+    fi
+    tag="$(printf '%s' "$record" | grep -o '"tag_name": *"[^"]*"' | head -1 | cut -d'"' -f4 || true)"
+    url="$(printf '%s' "$record" | grep -o '"browser_download_url": *"[^"]*\.apk"' | head -1 | cut -d'"' -f4 || true)"
+    if [ -n "$tag" ] && valid_release_tag "$tag"; then
+      asset="$(release_apk_name "$tag")"
+      expected_url="$(release_apk_url "$tag")"
+      [ "$url" = "$expected_url" ] && curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 15 --max-time 300 "$url" -o "$dir/$asset" || true
+    fi
   fi
-  APK="$(ls "$dir"/*.apk 2>/dev/null | head -1 || true)"
-  [ -n "$APK" ] || { echo "${RED}could not fetch the latest release APK (need gh, or internet for the GitHub API)${X}" >&2; exit 1; }
+  [ -n "${asset:-}" ] && [ -s "$dir/$asset" ] && APK="$dir/$asset" || APK=""
+  [ -n "$APK" ] || { echo "${RED}could not fetch the latest release APK from the expected GitHub release path${X}" >&2; exit 1; }
+  APK_RELEASE_TAG="$tag"
   TOINSTALL_VER="${tag#v}"
   step "⬇️  downloaded" "${D}$(basename "$APK")${X} ${B}${tag:-latest}${X}"
 }
@@ -382,6 +408,43 @@ resolve_apk() {
     done
   fi
   return 0  # never let the (possibly non-zero) probe above abort the script under set -e
+}
+
+find_android_build_tool() {
+  local name="$1" found="" root candidate
+  found="$(command -v "$name" 2>/dev/null || true)"
+  if [ -n "$found" ]; then printf '%s\n' "$found"; return 0; fi
+  for root in "${ANDROID_HOME:-}" "${ANDROID_SDK_ROOT:-}"; do
+    [ -n "$root" ] && [ -d "$root/build-tools" ] || continue
+    for candidate in "$root"/build-tools/*/"$name"; do [ -x "$candidate" ] && found="$candidate"; done
+  done
+  [ -n "$found" ] && printf '%s\n' "$found"
+}
+
+verify_release_apk() {
+  [ -n "$APK_RELEASE_TAG" ] || return 0
+  local expected_name signer_tool signer_output signer package_tool package_name
+  expected_name="$(release_apk_name "$APK_RELEASE_TAG")"
+  [ "$(basename "$APK")" = "$expected_name" ] || fail "release APK filename does not match its tag" \
+    "Expected $expected_name for $APK_RELEASE_TAG; nothing was installed."
+  signer_tool="$(find_android_build_tool apksigner || true)"
+  if [ -z "$signer_tool" ]; then
+    warn "Android Build-Tools were not found, so this host cannot authenticate the ha-paneld release signer before a fresh install. Android still validates the APK signature and enforces signer continuity for upgrades. Install Android SDK Build-Tools (apksigner) for strong fresh-install verification."
+    return 0
+  fi
+  signer_output="$("$signer_tool" verify --print-certs "$APK" 2>/dev/null)" || fail "release APK signature verification failed" \
+    "The downloaded APK was not installed. Check GitHub access and retry."
+  signer="$(printf '%s\n' "$signer_output" | sed -nE 's/^Signer #[0-9]+ certificate SHA-256 digest: *//p' | head -1 | tr -d ':\r' | tr '[:upper:]' '[:lower:]')"
+  [ "$signer" = "$RELEASE_CERT_SHA256" ] || fail "release APK signer mismatch" \
+    "Expected $RELEASE_CERT_SHA256" "Got      ${signer:-unavailable}" "Nothing was installed, started, or privileged."
+  package_tool="$(find_android_build_tool aapt || true)"
+  [ -n "$package_tool" ] || package_tool="$(find_android_build_tool aapt2 || true)"
+  if [ -n "$package_tool" ]; then
+    package_name="$("$package_tool" dump badging "$APK" 2>/dev/null | sed -nE "s/^package: name='([^']+)'.*/\1/p" | head -1 || true)"
+    [ "$package_name" = "$PKG" ] || fail "release APK package mismatch" \
+      "Expected $PKG" "Got      ${package_name:-unavailable}" "Nothing was installed, started, or privileged."
+  fi
+  step "🛡️  verified" "${D}$APK_RELEASE_TAG · package ${package_name:-confirmed after install} · signer ${RELEASE_CERT_SHA256:0:12}…${X}"
 }
 
 # Give a useful version transition before install. Android's package manager remains the portable,
@@ -446,6 +509,8 @@ if [ "$NO_TAME" != 1 ] && [ "$PROVISION_FAILED" = 0 ]; then
 fi
 
 resolve_apk
+
+verify_release_apk
 
 version_guard
 

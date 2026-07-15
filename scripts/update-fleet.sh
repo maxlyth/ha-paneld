@@ -24,6 +24,9 @@ else B=; D=; X=; RED=; GRN=; YEL=; fi
 HERE="$(cd "$(dirname "$0")" && pwd)"
 PROVISION="$HERE/provision.sh"
 REPO="maxlyth/ha-paneld"
+valid_release_tag() { printf '%s\n' "$1" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$'; }
+release_apk_name() { printf 'ha-paneld-%s-manual-setup-required.apk\n' "$1"; }
+release_apk_url() { printf 'https://github.com/%s/releases/download/%s/%s\n' "$REPO" "$1" "$(release_apk_name "$1")"; }
 [ -f "$PROVISION" ] || { echo "${RED}provision.sh not found next to this script${X}" >&2; exit 1; }
 TEMP_PATHS=()
 cleanup() { local path; for path in "${TEMP_PATHS[@]}"; do rm -rf "$path"; done; }
@@ -67,21 +70,24 @@ if [ "$have_apk" = 0 ]; then
   dir="$(mktemp -d)"; TEMP_PATHS+=("$dir")
   if [ "$want_prerelease" = 1 ]; then channel="latest release, including pre-releases"; else channel="latest stable release"; fi
   echo "${B}⬇️  fetching $channel (once for the fleet)${X}"
-  tag=""
+  tag=""; asset=""; expected_url=""
   if command -v gh >/dev/null 2>&1; then
     if [ "$want_prerelease" = 1 ]; then
       # `--prerelease` means the newest published release candidate, not merely the newest
       # release of either channel and never a maintainer-visible draft.
       tag="$(gh release list --repo "$REPO" --exclude-drafts --limit 100 \
         --json tagName,isPrerelease --jq 'map(select(.isPrerelease))[0].tagName // empty' 2>/dev/null || true)"
-      [ -n "$tag" ] && gh release download "$tag" --repo "$REPO" --pattern '*.apk' --dir "$dir" >/dev/null 2>&1 || true
     else
-      gh release download --repo "$REPO" --pattern '*.apk' --dir "$dir" >/dev/null 2>&1 || true
+      tag="$(gh release view --repo "$REPO" --json tagName -q .tagName 2>/dev/null || true)"
+    fi
+    if [ -n "$tag" ] && valid_release_tag "$tag"; then
+      asset="$(release_apk_name "$tag")"
+      gh release download "$tag" --repo "$REPO" --pattern "$asset" --dir "$dir" >/dev/null 2>&1 || true
     fi
   fi
-  if ! ls "$dir"/*.apk >/dev/null 2>&1; then
+  if [ -z "$asset" ] || [ ! -s "$dir/$asset" ]; then
     if [ "$want_prerelease" = 1 ]; then api="https://api.github.com/repos/$REPO/releases?per_page=100"; else api="https://api.github.com/repos/$REPO/releases/latest"; fi
-    json="$(curl -fsSL "$api" 2>/dev/null || true)"
+    json="$(curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 15 --max-time 30 "$api" 2>/dev/null || true)"
     if [ "$want_prerelease" = 1 ]; then
       # Split the GitHub release array at each top-level release URL, retain the first published
       # prerelease record, then extract its tag and APK from that record only.
@@ -94,13 +100,17 @@ if [ "$have_apk" = 0 ]; then
     fi
     tag="$(printf '%s' "$record" | grep -o '"tag_name": *"[^"]*"' | head -1 | cut -d'"' -f4 || true)"
     url="$(printf '%s' "$record" | grep -o '"browser_download_url": *"[^"]*\.apk"' | head -1 | cut -d'"' -f4 || true)"
-    [ -n "$url" ] && curl -fsSL "$url" -o "$dir/ha-paneld-latest.apk" || true
+    if [ -n "$tag" ] && valid_release_tag "$tag"; then
+      asset="$(release_apk_name "$tag")"
+      expected_url="$(release_apk_url "$tag")"
+      [ "$url" = "$expected_url" ] && curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 15 --max-time 300 "$url" -o "$dir/$asset" || true
+    fi
   fi
-  APK="$(ls "$dir"/*.apk 2>/dev/null | head -1 || true)"
-  [ -n "$APK" ] || { echo "${RED}could not fetch the latest release APK (need gh, or internet for the GitHub API)${X}" >&2; exit 1; }
+  [ -n "$asset" ] && [ -s "$dir/$asset" ] && APK="$dir/$asset" || APK=""
+  [ -n "$APK" ] || { echo "${RED}could not fetch the latest release APK from the expected GitHub release path${X}" >&2; exit 1; }
   # Strip channel selectors, then pin every panel to the exact one downloaded APK.
   NEW=(); for a in "${PARGS[@]}"; do case "$a" in --latest|--prerelease|--pre) ;; *) NEW+=("$a") ;; esac; done
-  PARGS=("${NEW[@]}" --apk "$APK")
+  PARGS=("${NEW[@]}" --apk "$APK" --release-tag "$tag")
   echo "   ${GRN}✓${X} ${D}$(basename "$APK")${X}${tag:+ · $tag}"
 fi
 

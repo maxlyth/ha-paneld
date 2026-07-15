@@ -32,6 +32,13 @@ REPO="maxlyth/ha-paneld"
 PROVISION_REF="${RELEASE_TAG:-main}"
 PROVISION_URL=""
 RESOLVED_APK_URL=""
+valid_release_tag() { printf '%s\n' "$1" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$'; }
+release_apk_name() { printf 'ha-paneld-%s-manual-setup-required.apk\n' "$1"; }
+release_apk_url() { printf 'https://github.com/%s/releases/download/%s/%s\n' "$REPO" "$1" "$(release_apk_name "$1")"; }
+if [ -n "$RELEASE_TAG" ]; then
+  valid_release_tag "$RELEASE_TAG" || { echo "${R}Release installer has an invalid tag.${X}" >&2; exit 1; }
+  [ "$RELEASE_APK_NAME" = "$(release_apk_name "$RELEASE_TAG")" ] || { echo "${R}Release installer does not pair its tag with the expected APK asset.${X}" >&2; exit 1; }
+fi
 
 if [ -n "$RELEASE_TAG" ]; then
   echo "${B}ha-paneld installer${X} ${Y}· $RELEASE_TAG${X}"
@@ -63,7 +70,7 @@ echo "${G}✓ adb and curl present${X}"
 if [ -z "$RELEASE_TAG" ]; then
   if [ "$CHANNEL_ARG" = "--prerelease" ]; then api="https://api.github.com/repos/$REPO/releases?per_page=100";
   else api="https://api.github.com/repos/$REPO/releases/latest"; fi
-  release_json="$(curl -fsSL "$api" 2>/dev/null || true)"
+  release_json="$(curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 15 --max-time 30 "$api" 2>/dev/null || true)"
   if [ "$CHANNEL_ARG" = "--prerelease" ]; then
     release_record="$(printf '%s' "$release_json" | tr -d '\r\n' | \
       sed 's#{[[:space:]]*"url":[[:space:]]*"https://api.github.com/repos/maxlyth/ha-paneld/releases/\([0-9][0-9]*\)"#\
@@ -74,7 +81,7 @@ if [ -z "$RELEASE_TAG" ]; then
   fi
   PROVISION_REF="$(printf '%s' "$release_record" | grep -o '"tag_name": *"[^"]*"' | head -1 | cut -d'"' -f4 || true)"
   RESOLVED_APK_URL="$(printf '%s' "$release_record" | grep -o '"browser_download_url": *"[^"]*\.apk"' | head -1 | cut -d'"' -f4 || true)"
-  if [ -z "$PROVISION_REF" ] || [ -z "$RESOLVED_APK_URL" ]; then
+  if [ -z "$PROVISION_REF" ] || ! valid_release_tag "$PROVISION_REF" || [ "$RESOLVED_APK_URL" != "$(release_apk_url "$PROVISION_REF")" ]; then
     echo "${R}Could not resolve a complete signed ha-paneld release.${X} Check internet/GitHub access and try again; no panel changes were made." >&2
     exit 1
   fi
@@ -102,25 +109,26 @@ printf "Disable those recommended vendor apps? [Y/n]: " > "$TTY"; read -r TAME <
 echo "${B}→ provisioning $TARGET${X}"
 TMP_DIR="$(mktemp -d)"; trap 'rm -rf "$TMP_DIR"' EXIT
 SCRIPT="$TMP_DIR/provision.sh"
-if ! curl -fsSL "$PROVISION_URL" -o "$SCRIPT"; then
+if ! curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 15 --max-time 60 "$PROVISION_URL" -o "$SCRIPT"; then
   echo "${R}Could not download the ha-paneld provisioning script.${X} Check this computer's internet connection and GitHub access, then paste the installer command again." >&2
   exit 1
 fi
 if [ -n "$RELEASE_TAG" ]; then
   [ -n "$RELEASE_APK_NAME" ] || { echo "${R}Release installer is missing its APK name.${X}"; exit 1; }
   APK="$TMP_DIR/$RELEASE_APK_NAME"
-  if ! curl -fsSL "https://github.com/$REPO/releases/download/$RELEASE_TAG/$RELEASE_APK_NAME" -o "$APK"; then
+  if ! curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 15 --max-time 300 "$(release_apk_url "$RELEASE_TAG")" -o "$APK"; then
     echo "${R}Could not download the $RELEASE_TAG APK.${X} The release may be incomplete or GitHub may be unavailable; no panel changes were made." >&2
     exit 1
   fi
-  ARGS=("$TARGET" --apk "$APK")
+  ARGS=("$TARGET" --apk "$APK" --release-tag "$RELEASE_TAG")
 else
-  APK="$TMP_DIR/ha-paneld-$PROVISION_REF.apk"
-  if ! curl -fsSL "$RESOLVED_APK_URL" -o "$APK"; then
+  RELEASE_APK_NAME="$(release_apk_name "$PROVISION_REF")"
+  APK="$TMP_DIR/$RELEASE_APK_NAME"
+  if ! curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 15 --max-time 300 "$RESOLVED_APK_URL" -o "$APK"; then
     echo "${R}Could not download the $PROVISION_REF APK.${X} Check internet/GitHub access and try again; no panel changes were made." >&2
     exit 1
   fi
-  ARGS=("$TARGET" --apk "$APK")
+  ARGS=("$TARGET" --apk "$APK" --release-tag "$PROVISION_REF")
 fi
 [ -n "${PID:-}" ]    && ARGS+=(--id "$PID")
 [ -n "${BROKER:-}" ] && ARGS+=(--mqtt "$BROKER")

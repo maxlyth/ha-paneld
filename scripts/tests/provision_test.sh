@@ -32,6 +32,10 @@ run_provision() {
   MOCK_HA_LOGIN="${MOCK_HA_LOGIN:-ok}" \
   MOCK_HA_TOKEN="${MOCK_HA_TOKEN:-ok}" \
   MOCK_GH_FAIL="${MOCK_GH_FAIL:-0}" \
+  MOCK_GITHUB_API="${MOCK_GITHUB_API:-fail}" \
+  MOCK_RELEASE_CERT="${MOCK_RELEASE_CERT:-ac6193307fb0b70113aae205d7549406f96e063bc5491b67b1d5694a34b0e339}" \
+  MOCK_RELEASE_PACKAGE="${MOCK_RELEASE_PACKAGE:-io.github.maxlyth.hapaneld}" \
+  MOCK_RELEASE_VERIFY_FAIL="${MOCK_RELEASE_VERIFY_FAIL:-0}" \
   MOCK_STATE_DIR="$TMP" \
     bash "$PROVISION" "$@" > "$LAST_OUTPUT" 2>&1
   LAST_STATUS=$?
@@ -93,6 +97,13 @@ assert_log_contains() {
 
 APK="$TMP/ha-paneld.apk"
 printf 'test apk\n' > "$APK"
+RELEASE_APK="$TMP/ha-paneld-v0.9.2-rc3-manual-setup-required.apk"
+printf 'test release apk\n' > "$RELEASE_APK"
+NO_SIGNER_FIXTURES="$TMP/fixtures-without-apksigner"
+mkdir -p "$NO_SIGNER_FIXTURES"
+for fixture in "$FIXTURES"/*; do
+  [ "$(basename "$fixture")" = apksigner ] || ln -s "$fixture" "$NO_SIGNER_FIXTURES/$(basename "$fixture")"
+done
 
 # Export is a recovery operation. It must be possible before resolving or installing an APK.
 EXPORT="$TMP/panel-backup.json"
@@ -121,6 +132,52 @@ assert_success "successful install completes without seq or GNU sort -V"
 if grep -Eq '^adb .* install( |$)' "$MOCK_CALL_LOG"; then pass "successful install invokes adb install"
 else fail_test "successful install invokes adb install"; fi
 assert_contains 'provisioned' "successful install reports completion"
+
+# Official release assets are authenticated before the first install, launch, or privilege grant
+# whenever Android Build-Tools are present. The fixtures expose both apksigner and aapt.
+run_provision "$MOCK_TARGET" --apk "$RELEASE_APK" --release-tag v0.9.2-rc3 --no-tame
+assert_success "release APK with the pinned signer and package is accepted"
+assert_contains 'verified.*v0\.9\.2-rc3' "release verification reports the authenticated tag"
+assert_log_contains '^apksigner verify --print-certs .*ha-paneld-v0\.9\.2-rc3-manual-setup-required\.apk$' "release verification invokes apksigner"
+assert_log_contains '^aapt dump badging .*ha-paneld-v0\.9\.2-rc3-manual-setup-required\.apk$' "release verification inspects the package name"
+signer_line="$(grep -nE '^apksigner verify --print-certs ' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
+package_line="$(grep -nE '^aapt dump badging ' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
+app_install_line="$(grep -nE '^adb .* install( |$)' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
+if [ -n "$signer_line" ] && [ -n "$package_line" ] && [ -n "$app_install_line" ] && \
+   [ "$signer_line" -lt "$app_install_line" ] && [ "$package_line" -lt "$app_install_line" ]; then
+  pass "release signer and package are verified before adb install"
+else
+  fail_test "release signer and package are verified before adb install"
+fi
+
+# Platform Tools deliberately do not include apksigner. Preserve the novice zero-parameter path, but
+# state the exact fresh-install trust limit instead of implying that adb authenticates the publisher.
+PATH="$NO_SIGNER_FIXTURES:/usr/bin:/bin" ANDROID_HOME= ANDROID_SDK_ROOT= \
+  run_provision "$MOCK_TARGET" --apk "$RELEASE_APK" --release-tag v0.9.2-rc3 --no-tame
+assert_success "release install remains usable without optional Android Build-Tools"
+assert_contains 'cannot authenticate the ha-paneld release signer before a fresh install' "missing apksigner gives an honest trust warning"
+assert_contains 'Install Android SDK Build-Tools \(apksigner\)' "missing apksigner names the strong-verification path"
+assert_log_contains '^adb .* install( |$)' "warned no-apksigner path still installs for novice compatibility"
+
+MOCK_RELEASE_CERT=0000000000000000000000000000000000000000000000000000000000000000 \
+  run_provision "$MOCK_TARGET" --apk "$RELEASE_APK" --release-tag v0.9.2-rc3 --no-tame
+assert_failure "release APK with a foreign signer fails closed"
+assert_contains 'release APK signer mismatch' "foreign signer failure names the trust violation"
+assert_contains 'Nothing was installed, started, or privileged' "foreign signer failure states the safe outcome"
+assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "foreign signer is rejected before APK install"
+assert_not_contains '^adb .* shell (am start|settings put|appops set|pm grant)' "$MOCK_CALL_LOG" "foreign signer is rejected before launch or grants"
+
+MOCK_RELEASE_PACKAGE=example.foreign \
+  run_provision "$MOCK_TARGET" --apk "$RELEASE_APK" --release-tag v0.9.2-rc3 --no-tame
+assert_failure "release APK with a foreign package name fails closed"
+assert_contains 'release APK package mismatch' "foreign package failure names the trust violation"
+assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "foreign package is rejected before APK install"
+assert_not_contains '^adb .* shell (am start|settings put|appops set|pm grant)' "$MOCK_CALL_LOG" "foreign package is rejected before launch or grants"
+
+run_provision "$MOCK_TARGET" --apk "$RELEASE_APK" --release-tag '../../main' --no-tame
+assert_status 2 "invalid internal release tag is rejected as a usage error"
+assert_contains 'invalid release tag' "invalid internal release tag gives a direct correction"
+assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "invalid release tag is rejected before APK install"
 
 # A panel without the manager must receive the exact pinned APK, verify it before installation, and
 # start the official service script. The fake checksum tool makes this deterministic without network
@@ -262,6 +319,25 @@ assert_failure "release resolver failure returns nonzero"
 assert_contains 'could not fetch the latest release APK' "release resolver failure gives a product-level recovery message"
 unset MOCK_GH_FAIL
 
+# The unauthenticated fallback accepts only the exact HTTPS asset path implied by the release tag.
+MOCK_GH_FAIL=1 MOCK_GITHUB_API=pretty run_provision "$MOCK_TARGET" --prerelease --no-tame
+assert_success "provisioner prerelease REST fallback accepts a matching GitHub asset"
+assert_log_contains 'curl .*--proto =https --proto-redir =https .*https://api\.github\.com/repos/maxlyth/ha-paneld/releases\?per_page=100' "release metadata redirects remain HTTPS"
+assert_log_contains 'curl .*--proto =https --proto-redir =https .*https://github\.com/maxlyth/ha-paneld/releases/download/v0\.9\.2-rc3/ha-paneld-v0\.9\.2-rc3-manual-setup-required\.apk' "release APK download is constrained to the exact GitHub path"
+rest_signer_line="$(grep -nE '^apksigner verify --print-certs ' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
+rest_install_line="$(grep -nE '^adb .* install( |$)' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
+if [ -n "$rest_signer_line" ] && [ -n "$rest_install_line" ] && [ "$rest_signer_line" -lt "$rest_install_line" ]; then
+  pass "REST-downloaded release is signer-verified before install"
+else
+  fail_test "REST-downloaded release is signer-verified before install"
+fi
+
+MOCK_GH_FAIL=1 MOCK_GITHUB_API=foreign run_provision "$MOCK_TARGET" --prerelease --no-tame
+assert_failure "provisioner rejects a release asset hosted outside the canonical GitHub path"
+assert_contains 'could not fetch the latest release APK' "foreign release URL failure gives safe recovery guidance"
+assert_not_contains 'https://downloads\.test/' "$MOCK_CALL_LOG" "foreign release URL is never downloaded"
+assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "foreign release URL is rejected before APK install"
+
 # Fleet prerelease selection must resolve and pin the newest release including release candidates.
 : > "$MOCK_CALL_LOG"
 LAST_OUTPUT="$TMP/fleet-output.txt"
@@ -273,6 +349,8 @@ if grep -Fq 'gh release list' "$MOCK_CALL_LOG" && grep -Fq 'gh release download 
 else
   fail_test "fleet prerelease resolves an explicit release-candidate tag"
 fi
+assert_log_contains 'gh release download v0\.9\.2-rc3 .*--pattern ha-paneld-v0\.9\.2-rc3-manual-setup-required\.apk' "fleet gh download pins the exact release asset name"
+assert_contains 'verified.*v0\.9\.2-rc3' "fleet workers retain and verify the authenticated release tag"
 
 # The unauthenticated REST fallback receives GitHub's normal pretty multi-line JSON. It must skip a
 # newer stable release and bind the candidate tag to that candidate's APK.
@@ -281,12 +359,14 @@ LAST_OUTPUT="$TMP/fleet-rest-output.txt"
 MOCK_GH_FAIL=1 MOCK_GITHUB_API=pretty bash "$UPDATE_FLEET" --prerelease -- "$MOCK_TARGET" > "$LAST_OUTPUT" 2>&1
 LAST_STATUS=$?
 assert_success "fleet prerelease REST fallback accepts pretty GitHub JSON"
-if grep -Fq 'https://downloads.test/ha-paneld-v0.9.2-rc3.apk' "$MOCK_CALL_LOG" && \
-   ! grep -Fq 'https://downloads.test/ha-paneld-v0.9.1.apk' "$MOCK_CALL_LOG"; then
+if grep -Fq 'https://github.com/maxlyth/ha-paneld/releases/download/v0.9.2-rc3/ha-paneld-v0.9.2-rc3-manual-setup-required.apk' "$MOCK_CALL_LOG" && \
+   ! grep -Fq 'https://github.com/maxlyth/ha-paneld/releases/download/v0.9.1/ha-paneld-v0.9.1-manual-setup-required.apk' "$MOCK_CALL_LOG"; then
   pass "REST fallback selects the candidate APK rather than the newer stable channel"
 else
   fail_test "REST fallback selects the candidate APK rather than the newer stable channel"
 fi
+assert_log_contains 'curl .*--proto =https --proto-redir =https .*https://github\.com/maxlyth/ha-paneld/releases/download/v0\.9\.2-rc3/ha-paneld-v0\.9\.2-rc3-manual-setup-required\.apk' "fleet REST APK redirects remain HTTPS"
+assert_contains 'verified.*v0\.9\.2-rc3' "fleet REST workers retain and verify the authenticated release tag"
 
 # Parallel fleet execution must aggregate a mixed outcome and replay both panel sections.
 : > "$MOCK_CALL_LOG"
@@ -312,6 +392,32 @@ bash "$ROOT/scripts/install.sh" --help > "$LAST_OUTPUT" 2>&1
 LAST_STATUS=$?
 assert_success "one-line installer exposes help without requiring a panel"
 assert_contains 'Usage:.*install\.sh' "one-line installer help shows the supported command"
+
+# A release-generated installer must bind the immutable tag to its exact asset name before it asks
+# for a panel or contacts one. This mirrors the release workflow's two substitutions.
+BAD_INSTALLER="$TMP/install-bad-release.sh"
+sed -e 's/^RELEASE_TAG=""/RELEASE_TAG="v0.9.2-rc3"/' \
+    -e 's/^RELEASE_APK_NAME=""/RELEASE_APK_NAME="ha-paneld-v0.9.1-manual-setup-required.apk"/' \
+    "$ROOT/scripts/install.sh" > "$BAD_INSTALLER"
+LAST_OUTPUT="$TMP/install-bad-release-output.txt"
+: > "$MOCK_CALL_LOG"
+bash "$BAD_INSTALLER" > "$LAST_OUTPUT" 2>&1
+LAST_STATUS=$?
+assert_failure "release installer rejects a mismatched injected asset name"
+assert_contains 'does not pair its tag with the expected APK asset' "mismatched release installer names the packaging error"
+assert_not_contains '^curl |^adb ' "$MOCK_CALL_LOG" "mismatched release installer fails before network or panel access"
+
+RELEASE_INSTALLER="$TMP/install-release.sh"
+sed -e 's/^RELEASE_TAG=""/RELEASE_TAG="v0.9.2-rc3"/' \
+    -e 's/^RELEASE_APK_NAME=""/RELEASE_APK_NAME="ha-paneld-v0.9.2-rc3-manual-setup-required.apk"/' \
+    "$ROOT/scripts/install.sh" > "$RELEASE_INSTALLER"
+if bash -n "$RELEASE_INSTALLER" && \
+   grep -Fq -- '--proto '\''=https'\'' --proto-redir '\''=https'\''' "$RELEASE_INSTALLER" && \
+   grep -Fq -- '--release-tag "$RELEASE_TAG"' "$RELEASE_INSTALLER"; then
+  pass "generated release installer preserves HTTPS redirects and release-tag verification"
+else
+  fail_test "generated release installer preserves HTTPS redirects and release-tag verification"
+fi
 
 LAST_OUTPUT="$TMP/provision-help.txt"
 bash "$PROVISION" --help > "$LAST_OUTPUT" 2>&1

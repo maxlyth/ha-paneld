@@ -24,27 +24,42 @@ case "$url" in
     printf 'mock pinned Shizuku manager apk\n' > "$output_file"
     ;;
   https://api.github.com/repos/maxlyth/ha-paneld/releases\?per_page=100)
-    [ "${MOCK_GITHUB_API:-fail}" = "pretty" ] || exit 22
-    cat <<'JSON'
+    case "${MOCK_GITHUB_API:-fail}" in
+      pretty) cat <<'JSON'
 [
   {
     "url": "https://api.github.com/repos/maxlyth/ha-paneld/releases/200",
     "tag_name": "v0.9.1",
     "draft": false,
     "prerelease": false,
-    "assets": [{"url": "https://api.github.com/repos/maxlyth/ha-paneld/releases/assets/900", "browser_download_url": "https://downloads.test/ha-paneld-v0.9.1.apk"}]
+    "assets": [{"url": "https://api.github.com/repos/maxlyth/ha-paneld/releases/assets/900", "browser_download_url": "https://github.com/maxlyth/ha-paneld/releases/download/v0.9.1/ha-paneld-v0.9.1-manual-setup-required.apk"}]
   },
   {
     "url": "https://api.github.com/repos/maxlyth/ha-paneld/releases/201",
     "tag_name": "v0.9.2-rc3",
     "draft": false,
     "prerelease": true,
-    "assets": [{"url": "https://api.github.com/repos/maxlyth/ha-paneld/releases/assets/901", "browser_download_url": "https://downloads.test/ha-paneld-v0.9.2-rc3.apk"}]
+    "assets": [{"url": "https://api.github.com/repos/maxlyth/ha-paneld/releases/assets/901", "browser_download_url": "https://github.com/maxlyth/ha-paneld/releases/download/v0.9.2-rc3/ha-paneld-v0.9.2-rc3-manual-setup-required.apk"}]
   }
 ]
 JSON
+        ;;
+      foreign) cat <<'JSON'
+[
+  {
+    "url": "https://api.github.com/repos/maxlyth/ha-paneld/releases/201",
+    "tag_name": "v0.9.2-rc3",
+    "draft": false,
+    "prerelease": true,
+    "assets": [{"browser_download_url": "https://downloads.test/ha-paneld-v0.9.2-rc3-manual-setup-required.apk"}]
+  }
+]
+JSON
+        ;;
+      *) exit 22 ;;
+    esac
     ;;
-  https://downloads.test/*.apk)
+  https://github.com/maxlyth/ha-paneld/releases/download/v*/ha-paneld-v*-manual-setup-required.apk)
     [ -n "$output_file" ] || exit 2
     printf 'test apk\n' > "$output_file"
     ;;
