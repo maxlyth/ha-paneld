@@ -8,7 +8,7 @@
 # x86_64 SDK build-tools (aapt2/zipalign/aidl) and NDK clang run under OrbStack's Rosetta at
 # near-native speed; the JVM/Gradle/Kotlin half runs native arm64. The arm64-conditional multi-arch
 # block below installs the x86_64 runtime libs Rosetta needs. All tooling stays official.
-FROM eclipse-temurin:17-jdk-noble@sha256:0386aaf49d6756b4856119f8e037f40cc865c7c8fbdda7c81733cc806f462daf
+FROM eclipse-temurin:25-jdk-noble@sha256:3eb81ed94d8c1a34422f19f8188548bdf02cae69c91d0328afdbb7abed90f617
 
 ENV ANDROID_HOME=/opt/android-sdk \
     ANDROID_SDK_ROOT=/opt/android-sdk \
