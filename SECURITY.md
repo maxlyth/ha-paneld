@@ -35,7 +35,7 @@ Dependencies are reproducibly selected rather than fetched from floating release
 - Gradle dependencies use explicit versions, dependency lock state and artifact verification metadata. The Gradle distribution is versioned and checksum-pinned.
 - npm dependencies use exact direct versions and a committed lockfile. Automated and release builds use the lockfile without resolving newer versions.
 - GitHub Actions are pinned to full commit hashes. The workflow records the corresponding release tag in a comment so updates remain reviewable.
-- An external APK uses an exact version and download location, a recorded SHA-256 checksum, and an expected Android package name and signing certificate. ha-paneld does not silently follow a vendor's latest-release URL.
+- A curated external APK uses an exact version and download location, a recorded SHA-256 checksum, and an expected Android package name and signing certificate. Updaters that discover version-specific assets from a fixed upstream repository still require the expected package and signing certificate before installation; release discovery never overrides that identity check.
 
 Automated tools may propose dependency updates, but they do not merge them. Each update is reviewed as a code change, including its source, release notes, licence, changed transitive dependencies and unexpected build scripts. Routine updates normally remain open for at least seven days before merge so that upstream problems have time to surface. A security fix may use an accelerated review when delaying it presents the greater risk.
 
