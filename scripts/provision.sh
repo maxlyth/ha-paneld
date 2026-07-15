@@ -618,6 +618,50 @@ install_apk() {
   esac
 }
 
+# Run one host command behind a hard deadline. GNU timeout (also commonly installed as gtimeout on
+# macOS) manages a dedicated local process group. On hosts without coreutils, Bash job control gives
+# the command its own local process group so the fallback can terminate its direct worker and any
+# non-detached local descendants, then reap the worker before returning. This bounds the host adb
+# invocation; it does not claim to kill a device-side process after the adb transport is gone. Status
+# 124 is reserved for the deadline so callers can distinguish it from a normal command failure.
+run_with_deadline() {
+  local seconds="$1" timeout_bin="" command_pid status deadline
+  shift
+  for candidate in timeout gtimeout; do
+    if command -v "$candidate" >/dev/null 2>&1 && "$candidate" --version 2>/dev/null | grep -q 'GNU coreutils'; then
+      timeout_bin="$candidate"
+      break
+    fi
+  done
+  if [ -n "$timeout_bin" ]; then
+    "$timeout_bin" --signal=TERM --kill-after=2s "${seconds}s" "$@"
+    return $?
+  fi
+
+  (
+    set -m
+    "$@" &
+    command_pid=$!
+    deadline=$((SECONDS + seconds))
+    while kill -0 -- "-$command_pid" 2>/dev/null && [ "$SECONDS" -lt "$deadline" ]; do
+      sleep 1
+    done
+    if kill -0 -- "-$command_pid" 2>/dev/null; then
+      kill -TERM -- "-$command_pid" 2>/dev/null || true
+      deadline=$((SECONDS + 2))
+      while kill -0 -- "-$command_pid" 2>/dev/null && [ "$SECONDS" -lt "$deadline" ]; do
+        sleep 1
+      done
+      kill -KILL -- "-$command_pid" 2>/dev/null || true
+      wait "$command_pid" 2>/dev/null || true
+      return 124
+    fi
+    wait "$command_pid"
+    status=$?
+    return "$status"
+  )
+}
+
 # Optional non-root privilege bootstrap. Keep this dependency curated: never chase "latest" here.
 # The exact official APK blob is SHA-pinned, and ha-paneld independently checks the installed signing
 # certificate before binding. Shizuku still presents its own permission UI on the panel; provisioning
@@ -691,11 +735,21 @@ if [ "$SHIZUKU" = 1 ]; then
     sleep 1
   done
   SHIZUKU_START_SCRIPT="/storage/emulated/0/Android/data/$SHIZUKU_PKG/start.sh"
+  SHIZUKU_START_TIMEOUT_SECONDS="${SHIZUKU_START_TIMEOUT_SECONDS:-30}"
+  case "$SHIZUKU_START_TIMEOUT_SECONDS" in
+    ''|*[!0-9]*|0) SHIZUKU_START_TIMEOUT_SECONDS=30 ;;
+  esac
   if adb -s "$TARGET" shell test -f "$SHIZUKU_START_SCRIPT" >/dev/null 2>&1 && \
-      adb -s "$TARGET" shell sh "$SHIZUKU_START_SCRIPT" >/dev/null 2>&1; then
+      run_with_deadline "$SHIZUKU_START_TIMEOUT_SECONDS" \
+        adb -s "$TARGET" shell sh "$SHIZUKU_START_SCRIPT" >/dev/null 2>&1; then
     echo "   ${GRN}✓${X} Shizuku service started"
   else
-    warn "Shizuku installed, but its service did not start. Open Shizuku on the panel and follow its ADB start instructions."
+    SHIZUKU_START_STATUS=$?
+    if [ "$SHIZUKU_START_STATUS" -eq 124 ] || [ "$SHIZUKU_START_STATUS" -eq 137 ]; then
+      warn "Shizuku installed, but its service start timed out after ${SHIZUKU_START_TIMEOUT_SECONDS}s. Open Shizuku on the panel and follow its ADB start instructions."
+    else
+      warn "Shizuku installed, but its service did not start. Open Shizuku on the panel and follow its ADB start instructions."
+    fi
     PROVISION_FAILED=1
   fi
   # Enables Shizuku's supported Android 13+ trusted-WLAN auto-start option; the user still chooses

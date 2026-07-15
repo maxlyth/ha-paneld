@@ -297,6 +297,46 @@ assert_contains 'service did not start' "Shizuku start failure names the incompl
 assert_log_contains '^adb .* install -r -g .*ha-paneld\.apk$' "Shizuku start failure still installs the core agent"
 assert_log_contains '^adb .* shell am start -n io\.github\.maxlyth\.hapaneld/\.MainActivity$' "Shizuku start failure still launches the core agent"
 
+# A stuck device-side script must be terminated at a host deadline. It has the same recoverable
+# semantics as any other service-start failure: install and relaunch the core agent, then return
+# nonzero to both an individual caller and an enclosing fleet run.
+SHIZUKU_HANG_PID_FILE="$TMP/shizuku-hang.pid"
+MOCK_SHIZUKU_START=hang MOCK_SHIZUKU_HANG_PID_FILE="$SHIZUKU_HANG_PID_FILE" \
+  SHIZUKU_START_TIMEOUT_SECONDS=1 run_provision "$MOCK_TARGET" --apk "$APK" --shizuku --no-tame
+assert_failure "stuck Shizuku service start returns nonzero at its host deadline"
+assert_contains 'service start timed out after 1s' "Shizuku timeout reports the bounded failed step"
+assert_log_contains '^adb .* install -r -g .*ha-paneld\.apk$' "Shizuku timeout still installs the core agent"
+assert_log_contains '^adb .* shell am start -n io\.github\.maxlyth\.hapaneld/\.MainActivity$' "Shizuku timeout still launches the core agent"
+if [ -s "$SHIZUKU_HANG_PID_FILE" ] && ! kill -0 "$(cat "$SHIZUKU_HANG_PID_FILE")" 2>/dev/null; then
+  pass "Shizuku timeout leaves no service-start worker behind"
+else
+  fail_test "Shizuku timeout leaves no service-start worker behind"
+fi
+
+# Hosts without GNU coreutils use Bash job control to isolate the host invocation in a process
+# group. Force that fallback and retain a real child below the adb test double to prove both local
+# processes are gone when provisioning resumes.
+SHIZUKU_FALLBACK_PID_FILE="$TMP/shizuku-fallback-hang.pids"
+MOCK_TIMEOUT_NON_GNU=1 MOCK_SHIZUKU_START=hang_with_child \
+  MOCK_SHIZUKU_HANG_PID_FILE="$SHIZUKU_FALLBACK_PID_FILE" SHIZUKU_START_TIMEOUT_SECONDS=1 \
+  run_provision "$MOCK_TARGET" --apk "$APK" --shizuku --no-tame
+assert_failure "portable fallback bounds a stuck Shizuku service start"
+assert_contains 'service start timed out after 1s' "portable fallback reports the bounded failed step"
+if [ -s "$SHIZUKU_FALLBACK_PID_FILE" ]; then
+  read -r fallback_parent_pid fallback_child_pid < "$SHIZUKU_FALLBACK_PID_FILE"
+else
+  fallback_parent_pid=""
+  fallback_child_pid=""
+fi
+if [ -n "$fallback_parent_pid" ] && [ -n "$fallback_child_pid" ] && \
+   ! kill -0 "$fallback_parent_pid" 2>/dev/null && ! kill -0 "$fallback_child_pid" 2>/dev/null; then
+  pass "portable fallback leaves no service-start worker or child behind"
+else
+  fail_test "portable fallback leaves no service-start worker or child behind"
+fi
+assert_log_contains '^adb .* install -r -g .*ha-paneld\.apk$' "portable fallback timeout still installs the core agent"
+assert_log_contains '^adb .* shell am start -n io\.github\.maxlyth\.hapaneld/\.MainActivity$' "portable fallback timeout still launches the core agent"
+
 # Re-running --shizuku against the trusted curated manager (or a trusted newer manager) must not try
 # to downgrade it. The manager stays locally approved; provisioning only restarts its service.
 MOCK_SHIZUKU_VERSION_CODE=1086 MOCK_SHIZUKU_TRUSTED=1 run_provision "$MOCK_TARGET" --apk "$APK" --shizuku --no-tame
@@ -482,6 +522,15 @@ LAST_STATUS=$?
 assert_failure "fleet update fails when requested Shizuku service setup fails"
 assert_contains '0 OK, 1 failed' "fleet summary does not count incomplete Shizuku setup as success"
 assert_contains 'service did not start' "fleet output retains the Shizuku recovery reason"
+
+: > "$MOCK_CALL_LOG"
+LAST_OUTPUT="$TMP/fleet-shizuku-timeout-output.txt"
+MOCK_SHIZUKU_START=hang SHIZUKU_START_TIMEOUT_SECONDS=1 \
+  bash "$UPDATE_FLEET" --apk "$APK" --shizuku --no-tame -- "$MOCK_TARGET" > "$LAST_OUTPUT" 2>&1
+LAST_STATUS=$?
+assert_failure "fleet update fails when Shizuku service setup times out"
+assert_contains '0 OK, 1 failed' "fleet summary does not count timed-out Shizuku setup as success"
+assert_contains 'service start timed out after 1s' "fleet output retains the Shizuku timeout reason"
 
 : > "$MOCK_CALL_LOG"
 LAST_OUTPUT="$TMP/fleet-duplicate-output.txt"

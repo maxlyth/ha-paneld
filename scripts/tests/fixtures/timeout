@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -u
+
+if [ "${1:-}" = "--version" ] && [ "${MOCK_TIMEOUT_NON_GNU:-0}" = 1 ]; then
+  printf 'timeout test double (non-GNU)\n'
+  exit 0
+fi
+
+exec /usr/bin/timeout "$@"

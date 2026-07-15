@@ -47,6 +47,17 @@ case "${1:-}" in
         [ "${MOCK_SHIZUKU_START_SCRIPT:-ok}" = "ok" ]
         ;;
       "sh /storage/emulated/0/Android/data/moe.shizuku.privileged.api/start.sh")
+        if [ "${MOCK_SHIZUKU_START:-ok}" = "hang" ]; then
+          [ -z "${MOCK_SHIZUKU_HANG_PID_FILE:-}" ] || printf '%s\n' "$$" > "$MOCK_SHIZUKU_HANG_PID_FILE"
+          exec /bin/sleep 60
+        fi
+        if [ "${MOCK_SHIZUKU_START:-ok}" = "hang_with_child" ]; then
+          /bin/sleep 60 &
+          child_pid=$!
+          [ -z "${MOCK_SHIZUKU_HANG_PID_FILE:-}" ] || printf '%s %s\n' "$$" "$child_pid" > "$MOCK_SHIZUKU_HANG_PID_FILE"
+          trap 'kill -TERM "$child_pid" 2>/dev/null || true; wait "$child_pid" 2>/dev/null || true; exit 143' TERM INT
+          wait "$child_pid"
+        fi
         [ "${MOCK_SHIZUKU_START:-ok}" = "ok" ]
         ;;
       "dumpsys package "*)
