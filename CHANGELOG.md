@@ -13,7 +13,7 @@
 ### Changed
 
 - **Fleet imports now fail closed for new settings** — a setting is copied between panels only after it has been explicitly classified as portable. Shared endpoints and common behaviour preferences remain portable, while MQTT credentials, renderer choices, dashboard state, Home Assistant login provenance, calibration, display tuning, update policy and logging stay with their original panel.
-- **Dependency and release inputs now have stronger supply-chain controls** — Gradle artifacts are locked and checksum/signature verified, npm tools use exact lockfiles without dependency lifecycle scripts, GitHub Actions use full commit pins and publishing tools use hash-locked dependencies. Release APKs gain build provenance and a CycloneDX dependency inventory, while curated Shizuku and WebView APKs require their recorded checksum as well as the expected package and signer. Automated updates can propose reviewed changes but cannot merge them.
+- **Dependency and release inputs now have stronger supply-chain controls** — Gradle artifacts are locked and checksum/signature verified, npm tools use exact lockfiles without dependency lifecycle scripts, GitHub Actions use full commit pins and publishing tools use hash-locked dependencies. Release APKs gain build provenance plus separately scoped CycloneDX inventories for the Android/Gradle runtime and the embedded profile editor's locked npm runtime graph, while curated Shizuku and WebView APKs require their recorded checksum as well as the expected package and signer. Automated updates can propose reviewed changes but cannot merge them.
 
 ### Fixed
 

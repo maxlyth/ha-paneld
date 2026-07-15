@@ -6,7 +6,8 @@
   "packageManager": "npm@10.8.2",
   "scripts": {
     "build": "node build.mjs",
-    "check": "node check.mjs"
+    "check": "node check.mjs",
+    "sbom": "node sbom.mjs"
   },
   "dependencies": {
     "@codemirror/commands": "6.10.4",

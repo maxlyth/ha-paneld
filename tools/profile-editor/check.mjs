@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { buildProfileEditor, bundlePath, licensePath, noticePath, toolDirectory } from "./bundle.mjs";
+import { createProfileEditorSbom } from "./sbom.mjs";
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -61,4 +62,13 @@ assert(generatedBundle, "esbuild did not return the expected profile-editor bund
 const committedBundle = await readFile(bundlePath);
 assert(Buffer.compare(committedBundle, generatedBundle.contents) === 0, "committed codemirror.js is stale; run npm run build");
 
-console.log(`profile editor verified: ${Object.keys(directDependencies).length} exact direct pins, ${Object.keys(packageLock.packages).length - 1} integrity-locked packages, ${runtimePackages.length} licensed runtime packages, deterministic bundle`);
+const firstSbom = await createProfileEditorSbom();
+const secondSbom = await createProfileEditorSbom();
+assert(JSON.stringify(firstSbom) === JSON.stringify(secondSbom), "profile-editor runtime SBOM is not reproducible");
+assert(firstSbom.bomFormat === "CycloneDX" && firstSbom.specVersion === "1.6", "profile-editor runtime SBOM identity is invalid");
+assert(firstSbom.components.length === runtimePackages.length, "profile-editor runtime SBOM does not match the locked runtime package count");
+assert(firstSbom.components.every((component) => component.hashes?.[0]?.alg === "SHA-512" && /^[0-9a-f]{128}$/.test(component.hashes[0].content)), "profile-editor runtime SBOM has an invalid package integrity hash");
+assert(!firstSbom.components.some((component) => component.name === "esbuild"), "profile-editor runtime SBOM includes a build-only dependency");
+assert(firstSbom.dependencies.some((dependency) => dependency.ref === firstSbom.metadata.component["bom-ref"]), "profile-editor runtime SBOM is missing its root dependency graph");
+
+console.log(`profile editor verified: ${Object.keys(directDependencies).length} exact direct pins, ${Object.keys(packageLock.packages).length - 1} integrity-locked packages, ${runtimePackages.length} licensed runtime packages, deterministic bundle and runtime SBOM`);

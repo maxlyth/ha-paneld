@@ -41,6 +41,20 @@ jobs:
           find app/src/main/assets -type f -name '*.js' -print0 | xargs -0 -n1 node --check
           find app/src/main/assets -type f -name '*.json' -print0 | xargs -0 -n1 node -e 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))'
 
+      - name: Set up Node.js for the embedded profile editor
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '20.18.1'
+          cache: npm
+          cache-dependency-path: tools/profile-editor/package-lock.json
+
+      - name: Verify the embedded profile editor and runtime inventory
+        working-directory: tools/profile-editor
+        run: |
+          npm ci --ignore-scripts --audit=false --fund=false
+          npm run check
+          npm run sbom
+
       - name: Test installer and provisioning contracts
         run: scripts/tests/provision_test.sh
 
