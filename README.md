@@ -98,7 +98,7 @@ Every panel publishes the **same** MQTT-discovery entities regardless of underly
 
 A few of ha-paneld's features reach hardware that is only accessible to a privileged process, AKA **root**. Whether a panel permits root access is a property of the **panel's firmware**, not of ha-paneld. For most wall panels this is fine: purpose-built panels such as the Sonoff NSPanel Pro expose `su`, while some others let the installer place ha-paneld's small root helper during ADB setup. The helper covers privileged hardware and control operations, but it does not let ha-paneld read another app's private data.
 
-For a genuinely unrooted panel, ha-paneld can optionally use [Shizuku](https://shizuku.rikka.app/) as a middle tier. Shizuku grants the Android **shell** identity, not root: after its manager is installed and started, the user must explicitly enable Enhanced access and approve ha-paneld on the panel itself. The approval cannot be enabled through MQTT, the web API, config restore or a fleet push. An ADB-started Shizuku service normally needs rearming after a reboot.
+For a genuinely unrooted panel, ha-paneld can optionally use [Shizuku enhanced access](docs/shizuku.md) as a middle tier. Shizuku grants the Android **shell** identity, not root: after its manager is installed and started, the user must explicitly enable Enhanced access and approve ha-paneld on the panel itself. The approval cannot be enabled through MQTT, the web API, config restore or a fleet push. An ADB-started Shizuku service normally needs rearming after a reboot. The dedicated guide explains how this differs from the normal vendor-rooted wall-panel path and when it is worth using.
 
 Unavailable features remain visible with a 🔒 explanation in the web UI, so a panel never has to pretend that shell access is equivalent to root. If you are not sure which tier a panel supports, the installer and diagnostics report it.
 
@@ -136,6 +136,7 @@ ha-paneld needs no system-signed install. Standard-Android capabilities (brightn
 
 - **[docs/api.md](docs/api.md)** — the control API: uniform MQTT entities, the HTTP contract (`:8888`), and pairing. Browse and try every endpoint live at `http://<panel>:8888/api`; the machine-readable spec is at `/openapi.json`.
 - **[docs/provisioning.md](docs/provisioning.md)** — unattended provisioning, whole-fleet updates, adb bootstrap, and the permission grants.
+- **[docs/shizuku.md](docs/shizuku.md)** — what Shizuku is, ha-paneld's narrow enhanced-access model, setup/recovery, and the trade-offs compared with vendor-rooted wall panels.
 - **[docs/built-in-renderer.md](docs/built-in-renderer.md)** — the built-in dashboard renderer (experimental): what it is, turning it on (incl. the one-click Companion sign-in borrow), theming, and what it deliberately omits.
 - **[docs/building.md](docs/building.md)** — build from source (Docker or local toolchain) and the signing notes forkers need. See also [docs/local-builds.md](docs/local-builds.md) (devcontainer).
 - **[docs/roadmap.md](docs/roadmap.md)** — the full planned + stretch roadmap (shipped work is in [CHANGELOG.md](CHANGELOG.md)).
