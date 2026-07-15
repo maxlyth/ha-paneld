@@ -6,7 +6,7 @@
 
 ### Added
 
-- **Optional Shizuku enhanced access for unrooted panels** — after the Shizuku manager is installed and its service started, the user can approve ha-paneld locally to gain display sizing, remote screenshots and taps, and signature-pinned ha-paneld / Home Assistant Companion installs. The approval cannot be enabled by MQTT, the web API, a restored backup or a fleet push. A service started through ADB normally needs rearming after a reboot.
+- **Optional Shizuku enhanced access for genuinely unrooted panels** — after the checksum-pinned Shizuku manager is installed and its service started, the user can approve ha-paneld locally to gain display sizing, screenshots and key/tap input, and signer-verified ha-paneld / minimal Home Assistant Companion installs. It does not provide root, arbitrary APK uploads, System WebView replacement, private Companion data, system logs, reboot, backlight hard-off, LED/relay access, CPU governor, kiosk lock or vendor taming. The approval cannot be enabled by MQTT, the web API, a restored backup or a fleet push. A service started through ADB normally needs rearming after a reboot.
 - **Provisioning can prepare the Shizuku path without hiding the remaining on-panel step** — `provision.sh --shizuku` verifies or installs the pinned manager, starts its ADB service and then points to the exact local approval screen. A trusted same or newer manager is retained on a repeated run. Automatic manager replacement is deliberately not part of this release candidate because an update can stop the Shizuku service and require rearming.
 
 ### Changed
