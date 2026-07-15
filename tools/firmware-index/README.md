@@ -1,18 +1,13 @@
 # Firmware index, availability monitor, and Wayback archiver
 
-Source of truth for the **NSPanel Pro firmware OTA download index** published in
-[Discussion #7](https://github.com/maxlyth/ha-paneld/discussions/7), plus the
-2-hourly checker that annotates every download link with a 24-hour availability
-sparkline, and a weekly job that preserves every firmware file in the Internet
-Archive.
+Source of truth for the **NSPanel Pro firmware OTA download index** published in [Discussion #7](https://github.com/maxlyth/ha-paneld/discussions/7), plus the daily checker that annotates every download link with a 7-day availability sparkline, and a weekly job that preserves every firmware file in the Internet Archive.
 
 ## Files
 
 - `fw-120p.dat`, `fw-86p.dat` — the verified link data (one device per file).
 - `firmware_index.py` — generator (`render`) and prober (`probe`).
 - `wayback_archive.py` — submits the index page + every firmware URL to the Wayback Machine.
-- [`.github/workflows/firmware-url-monitor.yml`](../../.github/workflows/firmware-url-monitor.yml)
-  runs `probe` then `render` every 2 hours and rewrites the Discussion body.
+- [`.github/workflows/firmware-url-monitor.yml`](../../.github/workflows/firmware-url-monitor.yml) runs `probe` then `render` daily and rewrites the Discussion body, with a one-hour retry when any URL is unreachable.
 - [`.github/workflows/firmware-wayback.yml`](../../.github/workflows/firmware-wayback.yml)
   archives to the Internet Archive weekly and on any `fw-*.dat` change.
 
@@ -49,17 +44,11 @@ python tools/firmware-index/firmware_index.py probe --history history.json
 python tools/firmware-index/firmware_index.py render --history history.json --out body.md
 ```
 
-Stdlib only — no dependencies. Sparkline: 🟩 reachable · 🟥 unreachable · ⬜ no
-data yet (12 points = 24h at the 2-hourly cadence, newest on the right).
+Stdlib only — no dependencies. Sparkline: 🟩 reachable · 🟥 unreachable · ⬜ no data yet (7 points = 7 days at the daily cadence, newest on the right).
 
 ## Wayback archiving
 
-`wayback_archive.py` preserves the index against the CoolKit CDN going away. It
-saves the Discussion page (with `capture_outlinks=1`) and submits every firmware
-URL to Save Page Now *explicitly* — `capture_outlinks` caps at 100 links, far
-short of the ~196 files, so the page crawler alone is not relied on. Firmware
-URLs are immutable, so each is archived once and recorded in the state file;
-later runs only submit new ones.
+`wayback_archive.py` preserves the index against the CoolKit CDN going away. It saves the Discussion page (with `capture_outlinks=1`) and submits every firmware URL to Save Page Now *explicitly* — `capture_outlinks` caps at 100 links, far short of the more than 200 files, so the page crawler alone is not relied on. Firmware URLs are immutable, so each is archived once and recorded in the state file; later runs only submit new ones.
 
 Save Page Now rejects anonymous API calls, so a secret is required:
 

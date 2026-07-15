@@ -39,7 +39,7 @@ The most common Home-Assistant wall panel on the market: a small **480×480 squa
 Both share the EFR32 Zigbee radio, Android 8.1 (AOSP), arm64-v8a, and the root/recovery story below. Live-verified on a 120P (fw `NSPanel120P_3.7.1`): `wm size`=750×1334, density 240, `ro.board.platform=rk3326`.
 
 > [!NOTE]
-> Both models reach the current ROM (**4.6.0**, the June 2026 official *Stable*) via a 2-step path: 4.0.12 full ROM → 4.6.0 diff. (**4.5.2** was an APK-only layer on the now-superseded 4.5.1.) The CoolKit CDN scheme, every verified OTA URL, and the full flashing how-to are on the [firmware & flashing page](nspanel-pro-firmware.md); the live, community-maintained version index is the Discussion linked from there.
+> Both models reach the current ROM (**4.6.0**, the June 2026 official *Stable*) via a 2-step path: 4.0.12 full ROM → 4.6.0 diff. The intervening **4.5.3** release was a ROM diff on 120P but an APK-only update on 86P. The CoolKit CDN scheme, every verified OTA URL, and the full flashing how-to are on the [firmware & flashing page](nspanel-pro-firmware.md); the live, community-maintained version index is the Discussion linked from there.
 >
 > **⚠ 4.5.1 / 4.5.2 had widespread reboot-loop reports** (~10–60 min intervals on both models); **4.6.0** (June 2026) is the current official *Stable* that supersedes them. 4.6.0 is recent; verify it on one panel before deploying widely. **4.0.12** remains the conservative full-ROM checkpoint to pin for maximum stability. Check the firmware Discussion for the current consensus.
 
@@ -57,6 +57,7 @@ Behaviour that changes across eWeLink firmware versions, newest-relevant first. 
 | **v4.0.0** (roll-out 2025-09-19) | Stock firmware **bundles F-Droid** + promotes FOSS/HA app install; markedly faster UI | On-device install path opens — [Firmware v4.0.0](#firmware-v400--official-f-droid-app-install). Confirm **APP** *and* **OS** version both read ≥ 4.0.0. |
 | **v4.0.12** | Proximity **graded** restored on **86P**; **120P stays binary** (per-model kernel divergence) | Recommended stable pin for HA-only panels. Graded/binary is model-**and**-firmware specific — see [Sensors](#sensors--light--proximity-are-app-direct). |
 | **v4.5.1 / v4.5.2** | **Widespread reboot-loop reports** (~10–60 min, both models); 4.5.2 is an APK-only layer on 4.5.1 | **Superseded by v4.6.0.** Pin at **4.0.12** for maximum stability, or move to 4.6.0 (verify on one panel first). Check the firmware Discussion for current consensus. |
+| **v4.5.3** | Matter auto-discovery and screen-management optimizations; ROM diff on 120P but APK-only on 86P | No 4.5.3-specific restart-loop evidence found; superseded by v4.6.0. |
 | **v4.6.0** (Jun 2026) | Current official **Stable**; **Local Web Portal** (`nspanelpro.local` — LAN setup, MQTT→HA sync, Matter Bridge); diff-only off 4.0.12 / 4.4.0 / 4.5.1 | New — the stable successor to the reboot-loopy 4.5.x; verify on one panel before deploying widely. |
 
 > [!NOTE]

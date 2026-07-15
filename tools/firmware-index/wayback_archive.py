@@ -9,7 +9,7 @@ firmware with it. This preserves a copy in the Internet Archive:
   2. Every firmware URL is submitted to Save Page Now *explicitly*, newest-first,
      so the current builds (4.6.0, 4.5.1, 4.4.0, 4.0.12, recent APKs) are preserved
      before the long tail. capture_outlinks caps at 100 links per request — far
-     short of the ~196 files — so we don't rely on the page crawler to find them.
+     short of the more than 200 files — so we don't rely on the page crawler to find them.
 
 Save Page Now throttles to ~12 active captures per account and runs them
 asynchronously, so submissions are **paced into waves** (submit a batch, wait for
