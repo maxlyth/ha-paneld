@@ -9,14 +9,13 @@ object ShizukuSetupDialog {
     fun show(activity: AppCompatActivity) {
         ShizukuBridge.refresh()
         val consented = ShizukuConsent.enabled(activity)
-        val managed = ShizukuConsent.managed(activity)
         val state = ShizukuBridge.state
         val managerRunning = ShizukuBridge.managerRunning()
         val message = buildString {
             append(description(state))
-            append("\n\nThis grants only APK install/update, screenshots, key/tap input, density, and text-size operations. ")
-            append("It does not expose a general shell, root app data, reboot, logs, or vendor-app controls.")
-            if (managed) append("\n\nThis panel was provisioned as managed; verified manager updates are enabled by default.")
+            append("\n\nThis grants only signer-verified ha-paneld and minimal Companion updates, screenshots, key/tap input, density, and text-size operations. ")
+            append("It does not allow arbitrary APK uploads, WebView replacement, a general shell, root app data, reboot, logs, or vendor-app controls.")
+            append("\n\nOnce enabled, the supported operations can be invoked through ha-paneld's existing trusted-LAN controls on this panel.")
         }
         val dialog = AlertDialog.Builder(activity)
             .setTitle("Enhanced access (Shizuku)")
@@ -24,14 +23,18 @@ object ShizukuSetupDialog {
             .setNegativeButton("Close", null)
 
         when {
-            state == ShizukuState.MANAGER_MISSING || state == ShizukuState.MANAGER_UNTRUSTED -> Unit
+            state == ShizukuState.MANAGER_MISSING || state == ShizukuState.MANAGER_UNTRUSTED -> {
+                if (disableAvailable(consented, state)) {
+                    dialog.setNeutralButton("Disable") { _, _ -> ShizukuBridge.disable() }
+                }
+            }
             consented && state == ShizukuState.STOPPED && !managerRunning -> {
                 dialog.setPositiveButton("Open Shizuku") { _, _ -> launchManager(activity) }
                 dialog.setNeutralButton("Disable") { _, _ -> ShizukuBridge.disable() }
             }
             consented && state == ShizukuState.PERMISSION_REQUIRED -> {
                 dialog.setPositiveButton("Request permission") { _, _ ->
-                    ShizukuBridge.enable(activity, managed = managed)
+                    ShizukuBridge.enable(activity)
                 }
                 dialog.setNeutralButton("Disable") { _, _ -> ShizukuBridge.disable() }
             }
@@ -41,7 +44,6 @@ object ShizukuSetupDialog {
             }
             else -> {
                 dialog.setPositiveButton("Enable") { _, _ -> ShizukuBridge.enable(activity) }
-                dialog.setNeutralButton("Enable managed") { _, _ -> ShizukuBridge.enable(activity, managed = true) }
             }
         }
         dialog.show()
@@ -62,6 +64,9 @@ object ShizukuSetupDialog {
             "The Shizuku service returned an unexpected identity or protocol version. Access is blocked."
         ShizukuState.ERROR -> "Shizuku could not be connected. Close this dialog and try again."
     }
+
+    internal fun disableAvailable(consented: Boolean, state: ShizukuState): Boolean = consented &&
+        (state == ShizukuState.MANAGER_MISSING || state == ShizukuState.MANAGER_UNTRUSTED)
 
     private fun launchManager(activity: AppCompatActivity) {
         val intent: Intent = activity.packageManager.getLaunchIntentForPackage(ShizukuManagerIdentity.PACKAGE)

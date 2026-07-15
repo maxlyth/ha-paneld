@@ -30,7 +30,7 @@ object SelfUpdater {
     suspend fun installVersion(context: Context, tag: String): String = withContext(Dispatchers.IO) {
         val url = ReleaseCatalog.apkUrl(REPO, tag, APK_MATCH) ?: return@withContext "no APK asset for $tag"
         Log.i(TAG, "self-install ha-paneld tag $tag")
-        val result = AppInstaller.install(context, url, AppInstaller.HA_PANELD)
+        val result = AppInstaller.install(context, url, AppInstaller.HA_PANELD, allowShizuku = true)
         if (result == "OK") "installing ha-paneld $tag" else result
     }
 
@@ -46,7 +46,7 @@ object SelfUpdater {
             val current = BuildConfig.VERSION_NAME
             if (!force && !UpdateChecker.isNewer(latest, current)) return@withContext "up to date ($current, $channel)"
             Log.i(TAG, "self-update $current -> $latest ($channel)")
-            val result = AppInstaller.install(context, apkUrl, AppInstaller.HA_PANELD)
+            val result = AppInstaller.install(context, apkUrl, AppInstaller.HA_PANELD, allowShizuku = true)
             if (result == "OK") "updating ha-paneld -> $latest" else result
         }
 }

@@ -45,4 +45,26 @@ class AppInstallerTest {
             file.delete()
         }
     }
+
+    @Test fun shizukuRequiresExplicitCuratedInstallOptIn() {
+        assertEquals(
+            AppInstaller.InstallRoute.NONE,
+            AppInstaller.selectInstallRoute(false, false, true, allowShizuku = false),
+        )
+        assertEquals(
+            AppInstaller.InstallRoute.SHIZUKU,
+            AppInstaller.selectInstallRoute(false, false, true, allowShizuku = true),
+        )
+    }
+
+    @Test fun installRouteIsSelectedOnceInEstablishedPrecedenceOrder() {
+        assertEquals(
+            AppInstaller.InstallRoute.SU,
+            AppInstaller.selectInstallRoute(true, true, true, allowShizuku = true),
+        )
+        assertEquals(
+            AppInstaller.InstallRoute.DAEMON,
+            AppInstaller.selectInstallRoute(false, true, true, allowShizuku = true),
+        )
+    }
 }

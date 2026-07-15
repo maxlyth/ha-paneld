@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -u
+
+printf 'apksigner %s\n' "$*" >> "${MOCK_CALL_LOG:?MOCK_CALL_LOG is required}"
+[ "${MOCK_SHIZUKU_TRUSTED:-0}" = 1 ] || exit 1
+printf 'Signer #1 certificate SHA-256 digest: 268b5590e868fb08bae7e0ac413564cd1ff88f5ccff74af9dbd0dc918e30db30\n'

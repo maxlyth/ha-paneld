@@ -71,8 +71,8 @@ object DiagReader {
                     else -> "manager installed but not ready; start Shizuku and approve access locally"
                 })
             } else null,
-            Cap("APK install / screenshot / display", if (rootish || shizuku) "ok" else "none",
-                if (rootish || shizuku) "available through a privileged route"
+            Cap("Verified app update / screenshot / display", if (rootish || shizuku) "ok" else "none",
+                if (rootish || shizuku) "available through a privileged route; Shizuku covers only signer-verified app updates"
                 else "needs su, the helper daemon, or locally approved Shizuku access"),
             Cap("Brightness", if (canWrite) "ok" else "none",
                 if (canWrite) "WRITE_SETTINGS granted" else

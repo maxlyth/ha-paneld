@@ -32,4 +32,22 @@ internal object ShizukuPolicy {
     fun validFontScale(scale: Float): Boolean =
         scale.isFinite() && scale in MIN_FONT_SCALE..MAX_FONT_SCALE
     fun validApkLength(length: Long): Boolean = length in 1..MAX_APK_BYTES
+
+    /** The client deadline must outlive the UserService process deadline and its one-second reader join. */
+    fun clientDeadline(innerTimeoutMs: Long): Long =
+        if (innerTimeoutMs > Long.MAX_VALUE - 5_000L) Long.MAX_VALUE else innerTimeoutMs + 5_000L
+
+    fun canAcceptBinding(
+        callbackGeneration: Long,
+        currentGeneration: Long,
+        connectionIsCurrent: Boolean,
+        consentEnabled: Boolean,
+        managerTrusted: Boolean,
+        identityUsable: Boolean,
+    ): Boolean = callbackGeneration == currentGeneration && connectionIsCurrent && consentEnabled &&
+        managerTrusted && identityUsable
+
+    /** A local rationale button is itself the explanation; a prior denial must not make it a no-op. */
+    fun shouldRequestPermission(explicitRequest: Boolean, rationaleRequired: Boolean): Boolean =
+        explicitRequest
 }

@@ -30,14 +30,23 @@ scripts/provision.sh <panel-ip:5555> --verify
 When `--export FILE` is combined with install or configuration options, the verified backup is written **before** any panel mutation. Protect that file like a credential. Provisioning also offers the profile's known vendor overlays and factory-test apps for reversible disabling; pass `--no-tame` to leave them unchanged.
 
 Non-root panels can add `--shizuku`. The provisioner installs the curated, checksum-pinned Shizuku
-manager and starts its ADB service; then, on the panel, open **ha-paneld → Settings → Enhanced
-access → Enable managed** and approve Shizuku's permission prompt. That local approval is intentionally
-not available over the web UI, MQTT, config import, or fleet push. It enables APK/self/Companion updates,
-screenshots and taps, and display sizing—not logs, private app data, reboot, vendor taming, or a general shell.
+manager and starts its ADB service; then, on the panel, open **ha-paneld Configure**, use the toolbar
+overflow menu, choose **Enhanced access → Enable**, and approve Shizuku's permission prompt. That local
+approval is intentionally not available over the web UI, MQTT, config import, backup/restore, or fleet
+push. It enables signer-pinned ha-paneld and Companion updates, screenshots and taps, and display
+sizing—not arbitrary LAN APK uploads, WebView replacement, logs, private app data, reboot, vendor taming,
+or a general shell. The manager itself is not auto-updated by ha-paneld in this release.
 
 Shizuku started through ADB may need rearming after a reboot. Shizuku 13.6 has a supported trusted-WLAN
 auto-start option on compatible Android 13+ devices; the provisioner grants the prerequisite permission,
-but you choose whether to enable the option in Shizuku. Older panels retain the one-command ADB rearm.
+but you choose whether to enable the option in Shizuku. On older panels, reconnect ADB and run:
+
+```bash
+adb -s <panel-ip:5555> shell sh /storage/emulated/0/Android/data/moe.shizuku.privileged.api/start.sh
+```
+
+Then reopen **Configure → toolbar overflow → Enhanced access** and confirm it reports **Enhanced access
+is ready**. If it asks for permission again, approve the prompt locally on the panel.
 
 **Sandbox-walled panels (TPA10, SMT1019, … — the app itself can't exec `su`):** also install the [root helper daemon](../helper/README.md), which is the privileged control path there (screen-off, density, CPU governor, screenshot, perf, buttons, LED):
 

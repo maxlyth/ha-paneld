@@ -21,6 +21,9 @@ if [ "${1:-}" = "-s" ]; then
 fi
 
 case "${1:-}" in
+  pull)
+    printf 'mock installed apk\n' > "${3:?pull destination missing}"
+    ;;
   install)
     printf 'Success\n'
     ;;
@@ -30,6 +33,22 @@ case "${1:-}" in
     shift
     command_text="$*"
     case "$command_text" in
+      "dumpsys package moe.shizuku.privileged.api")
+        if [ -n "${MOCK_SHIZUKU_VERSION_CODE:-}" ]; then
+          printf 'versionName=13.6.0\nversionCode=%s minSdk=23\n' "$MOCK_SHIZUKU_VERSION_CODE"
+        fi
+        ;;
+      "pm path moe.shizuku.privileged.api")
+        if [ -n "${MOCK_SHIZUKU_VERSION_CODE:-}" ]; then
+          printf 'package:/data/app/moe.shizuku.privileged.api/base.apk\n'
+        fi
+        ;;
+      "test -f /storage/emulated/0/Android/data/moe.shizuku.privileged.api/start.sh")
+        exit 0
+        ;;
+      "sh /storage/emulated/0/Android/data/moe.shizuku.privileged.api/start.sh")
+        exit 0
+        ;;
       "dumpsys package "*)
         printf 'versionName=%s\n' "${MOCK_INSTALLED_VERSION:-0.9.1}"
         ;;

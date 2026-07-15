@@ -20,13 +20,17 @@ import java.security.MessageDigest
  * asset can't be installed even on a fresh (no-incumbent) install. Used by both the HA Companion app
  * updater and ha-paneld's own self-update.
  *
- * Install path: `su` directly, else the peer-uid-locked helper `INSTALL` verb, else the typed Shizuku
- * shell-UID service. `pm install -r -d` — the
+ * Install path is selected once from currently available authorities: `su` first, then the
+ * peer-uid-locked helper `INSTALL` verb, then (only for explicitly allowed curated packages) the typed
+ * Shizuku shell-UID service. An attempted install is never replayed through a second authority because
+ * a timed-out package-manager transaction can still have committed. Arbitrary uploads and the System
+ * WebView never allow Shizuku. `pm install -r -d` — the
  * `-d` (allow downgrade) is deliberate, so a stable<->pre-release channel switch can move either way.
- * Network + su — always call OFF the main / MQTT thread.
+ * Network + package installation — always call OFF the main / MQTT thread.
  */
 object AppInstaller {
     data class Pin(val pkg: String, val certSha256: String, val apkSha256: String? = null)
+    internal enum class InstallRoute { SU, DAEMON, SHIZUKU, NONE }
 
     // Pinned signers (public certificate fingerprints — NOT secrets).
     val HA_PANELD = Pin("io.github.maxlyth.hapaneld", "ac6193307fb0b70113aae205d7549406f96e063bc5491b67b1d5694a34b0e339")
@@ -42,12 +46,17 @@ object AppInstaller {
      * install over an available privileged route. Returns "OK" on success, else a short reason. The caller owns the
      * version/should-update decision.
      */
-    suspend fun install(context: Context, url: String, pin: Pin): String = withContext(Dispatchers.IO) {
+    suspend fun install(
+        context: Context,
+        url: String,
+        pin: Pin,
+        allowShizuku: Boolean = false,
+    ): String = withContext(Dispatchers.IO) {
         val hasSu = Su.available()
         val hasDaemon = HelperClient.available()
         val hasShizuku = ShizukuBridge.available()
-        if (!hasSu && !hasDaemon && !hasShizuku)
-            return@withContext "skipped: no privileged installer (root or Shizuku needed)"
+        if (selectInstallRoute(hasSu, hasDaemon, hasShizuku, allowShizuku) == InstallRoute.NONE)
+            return@withContext "skipped: no permitted installer"
 
         // Preflight free space BEFORE downloading, so a large APK (a WebView build is ~250 MB) can't
         // fill /data or fail half-written on a low-storage panel. We need room for the download only —
@@ -78,7 +87,7 @@ object AppInstaller {
                 Log.w(TAG, "refused install: $why")
                 return@withContext "refused ($why)"
             }
-            installLocalApk(context, apk)
+            installLocalApk(context, apk, allowShizuku)
         } finally {
             apk.delete()
         }
@@ -103,22 +112,29 @@ object AppInstaller {
     }
 
     /**
-     * Install an APK already on local disk over root, then delete it. Shared install tail used by both the
+     * Install an APK already on local disk through one permitted route, then delete it. Shared install tail used by both the
      * pinned-download path ([install]) and the Install-tab APK upload. **No signer pin is applied here** —
      * [install] verifies BEFORE calling this; the upload path installs whatever the user explicitly chose
      * (surfaced package/version/signer + confirmed first). Streams straight into `pm install -S` or over
      * the peer-uid-locked daemon socket; an older daemon falls back to its path-based `INSTALL` verb.
+     * Shizuku is considered only when [allowShizuku] is explicitly true; arbitrary upload callers keep
+     * the default false.
      * Returns "OK" or a short reason.
      */
-    suspend fun installLocalApk(context: Context, apk: File): String = withContext(Dispatchers.IO) {
+    suspend fun installLocalApk(
+        context: Context,
+        apk: File,
+        allowShizuku: Boolean = false,
+    ): String = withContext(Dispatchers.IO) {
         val hasSu = Su.available()
         val hasDaemon = HelperClient.available()
         val hasShizuku = ShizukuBridge.available()
-        if (!hasSu && !hasDaemon && !hasShizuku) {
+        val route = selectInstallRoute(hasSu, hasDaemon, hasShizuku, allowShizuku)
+        if (route == InstallRoute.NONE) {
             apk.delete()
-            return@withContext "skipped: no privileged installer (root or Shizuku needed)"
+            return@withContext "skipped: no permitted installer"
         }
-        if (hasSu) {
+        if (route == InstallRoute.SU) {
             val out = try {
                 // Stream the APK straight into `pm install -S <size>` — no intermediate /data/local/tmp copy
                 // (halves peak disk use). Long-timeout: staging a large stream far exceeds the 5s su bound.
@@ -135,12 +151,12 @@ object AppInstaller {
             return@withContext "install failed: ${out.take(120)}"
         }
 
-        val result = if (hasDaemon) {
+        val result = if (route == InstallRoute.DAEMON) {
             HelperInstallTransaction(HelperClient).install(
                 apk,
                 File(context.filesDir, HelperInstallTransaction.STAGING_DIR),
             )
-        } else {
+        } else if (route == InstallRoute.SHIZUKU) {
             val out = try {
                 ShizukuBridge.installApk(apk, allowDowngrade = true, HelperInstallTransaction.INSTALL_TIMEOUT_MS)
                     ?.trim().orEmpty()
@@ -149,6 +165,9 @@ object AppInstaller {
             }
             if (out.contains("Success", ignoreCase = true)) "OK"
             else "install failed: ${out.ifBlank { "Shizuku installer unavailable" }.take(120)}"
+        } else {
+            apk.delete()
+            "skipped: no permitted installer"
         }
         if (result != "OK") Log.w(TAG, result)
         result
@@ -187,6 +206,18 @@ object AppInstaller {
             }
         }
         return digest.digest().joinToString("") { byte -> "%02x".format(byte) }
+    }
+
+    internal fun selectInstallRoute(
+        hasSu: Boolean,
+        hasDaemon: Boolean,
+        hasShizuku: Boolean,
+        allowShizuku: Boolean,
+    ): InstallRoute = when {
+        hasSu -> InstallRoute.SU
+        hasDaemon -> InstallRoute.DAEMON
+        allowShizuku && hasShizuku -> InstallRoute.SHIZUKU
+        else -> InstallRoute.NONE
     }
 
     /**

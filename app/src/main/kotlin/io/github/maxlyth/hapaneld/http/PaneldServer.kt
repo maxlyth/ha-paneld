@@ -1199,7 +1199,7 @@ ${tameCardHtml()}
         return """$warnings
 <div class="cards">
 ${componentsCardHtml(wv, root, installer)}
-${apkCardHtml(installer)}
+${apkCardHtml(root)}
 ${uninstallCardHtml(su)}
 <div class="card" id="radiocard" style="display:none"><h2>Radio firmware</h2>
 <table><tr><th>EFR32 radio</th><td id="radio-status">…</td></tr></table>
@@ -1291,15 +1291,15 @@ $compRow
 <p class="note"><a href="/api/v1/config/export" style="color:#9cf">⭳ Config-only bundle (unencrypted)</a> — settings only, for cloning to another panel via Configure → Import.</p></div>"""
     }
 
-    /** "Install an APK" card (Install tab). ⚠ Privileged-installs an arbitrary user-supplied APK over the
+    /** "Install an APK" card (Install tab). ⚠ Root-installs an arbitrary user-supplied APK over the
      *  unauthenticated LAN-trust :8888 — carries a prominent in-card security warning, an enable toggle
-     *  (config.apkUploadAllowed), and a parse-then-confirm flow (see install.js). Installer-gated. */
-    private fun apkCardHtml(installer: Boolean): String {
-        val body = if (!installer) {
-            """<p class="note">⚠ Installing an APK needs root, the helper daemon, or locally approved Shizuku access — unavailable on this panel.</p>"""
+     *  (config.apkUploadAllowed), and a parse-then-confirm flow (see install.js). Root/helper-gated. */
+    private fun apkCardHtml(root: Boolean): String {
+        val body = if (!root) {
+            """<p class="note">⚠ Installing an arbitrary APK needs root or the helper daemon — unavailable on this panel.</p>"""
         } else {
             val allowed = config.apkUploadAllowed
-            """<div class="setup">⚠ <b>Security:</b> this privileged-installs <b>any</b> APK you choose, over the panel's """ +
+            """<div class="setup">⚠ <b>Security:</b> this root-installs <b>any</b> APK you choose, over the panel's """ +
                 """<b>unauthenticated</b> LAN web UI. Only upload APKs you trust. """ +
                 """<small>(Panel access is LAN-only today; authenticated access is planned for a later release.)</small></div>
 <label style="display:flex;flex-direction:row;gap:8px;align-items:center;margin:10px 0"><input type="checkbox" id="apk-allow" ${if (allowed) "checked" else ""} onchange="apkAllow(this)"> Enable APK install on this panel</label>

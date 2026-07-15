@@ -17,6 +17,7 @@ The panel and Home Assistant sit on a **trusted LAN**, and the app is built arou
 | **CDP / WebView DevTools relay `:9222`** | opt-in (started via `/inspect/start`), binds `0.0.0.0`, unauthenticated | full dashboard-session access if started |
 | **MQTT** | governed by the broker | the intended control plane; inherent to MQTT discovery |
 | **Root helper daemon** (abstract UNIX socket `@hapaneld-helper`) | peer-uid authenticated (`SO_PEERCRED`: ha-paneld/root/shell only), command-whitelisted, char-sanitised, bounded parsing, conn caps | Sound — was unauthenticated loopback TCP `:8889`; now no other local app can reach it |
+| **Shizuku enhanced access** | optional; enabled and approved only on the panel | Official manager signer is pinned; the UserService must report UID 2000 and protocol v1; methods and inputs are typed and bounded, with no generic command or filesystem access. Shell is not root. Consent is excluded from Android backup, config bundles, restore, and fleet push. ADB-started service may need rearming after reboot. |
 | **Network ADB** | opt-in switch; opens `5555` to the LAN when enabled | documented, off by default |
 | **Accessibility service** | key-capture only (no window-content retrieval) | Sound |
 | **su call-sites** | CPU governor regex-sanitised; relay/adb/cdp use constants; Zigbee role now allowlisted | the Zigbee role was the one un-validated interpolation; no remaining injection paths |
@@ -27,6 +28,8 @@ The state-changing routes on `:8888` are where the exposure concentrates:
 - `POST /play` — downloads + plays an arbitrary URL with TLS verification disabled (LAN self-signed convenience) ⇒ audio injection / open fetch relay.
 - `POST /inspect/start` — starts the CDP relay (the `:9222` surface above).
 - `GET /diag` — device/capability info (recon). Intentionally a support tool (issue template).
+- `GET /api/v1/screenshot.png` and `POST /api/v1/input` — view and inject input on the panel. Root/helper routes already expose these; locally approved Shizuku makes the same trusted-LAN controls available on a non-root panel.
+- `POST /api/v1/install/component` — can install signer-pinned ha-paneld or minimal Companion builds. Shizuku enables those verified updates on a non-root panel, but does not enable arbitrary APK upload or WebView replacement.
 
 **Browser-mediated attacks are guarded** ([`OriginGuard`](../../app/src/main/kotlin/io/github/maxlyth/hapaneld/http/OriginGuard.kt)):
 - **CSRF** — OriginGuard refuses a state-changing request (`POST`/`PUT`/`PATCH`/`DELETE`) whose `Origin`/`Referer` is present and doesn't match the request `Host`, so a malicious LAN web page can't silently drive these endpoints. Same-origin UI `fetch`es and header-less API clients (curl / HA `rest_command`) are unaffected.

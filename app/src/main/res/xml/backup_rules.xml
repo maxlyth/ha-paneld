@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <!-- Enhanced access is approved locally on each panel and must never migrate with app data. -->
+    <exclude domain="sharedpref" path="ha-paneld-shizuku.xml" />
+</full-backup-content>

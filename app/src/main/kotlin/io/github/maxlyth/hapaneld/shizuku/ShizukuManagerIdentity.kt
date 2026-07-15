@@ -5,7 +5,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import java.security.MessageDigest
 
-/** Verifies the separately installed manager before ha-paneld trusts or updates it. */
+/** Verifies the separately installed manager before ha-paneld binds to it. */
 object ShizukuManagerIdentity {
     const val PACKAGE = "moe.shizuku.privileged.api"
     const val CERT_SHA256 = "268b5590e868fb08bae7e0ac413564cd1ff88f5ccff74af9dbd0dc918e30db30"

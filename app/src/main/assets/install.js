@@ -116,7 +116,7 @@
     }).catch(function () { if (out) out.innerHTML = '<p class="note">Audit failed — try again.</p>'; btn.disabled = false; });
   };
 
-  // --- APK upload (⚠ privileged-installs an arbitrary APK; parse-then-confirm) ---
+  // --- APK upload (⚠ root/helper-installs an arbitrary APK; parse-then-confirm) ---
   var apkMsg = function (t) { var e = document.getElementById('apk-msg'); if (e) e.textContent = t; };
 
   window.apkAllow = function (cb) {

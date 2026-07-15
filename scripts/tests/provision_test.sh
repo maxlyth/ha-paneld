@@ -115,6 +115,17 @@ if grep -Eq '^adb .* install( |$)' "$MOCK_CALL_LOG"; then pass "successful insta
 else fail_test "successful install invokes adb install"; fi
 assert_contains 'provisioned' "successful install reports completion"
 
+# Re-running --shizuku against the trusted curated manager (or a trusted newer manager) must not try
+# to downgrade it. The manager stays locally approved; provisioning only restarts its service.
+MOCK_SHIZUKU_VERSION_CODE=1086 MOCK_SHIZUKU_TRUSTED=1 run_provision "$MOCK_TARGET" --apk "$APK" --shizuku --no-tame
+assert_success "trusted current Shizuku provisioning is idempotent"
+assert_not_contains 'install -r .*shizuku\.apk' "$MOCK_CALL_LOG" "current Shizuku manager is not reinstalled"
+assert_contains 'Configure.*toolbar overflow menu.*Enhanced access.*Enable' "Shizuku approval names the actual on-panel path"
+
+MOCK_SHIZUKU_VERSION_CODE=1087 MOCK_SHIZUKU_TRUSTED=1 run_provision "$MOCK_TARGET" --apk "$APK" --shizuku --no-tame
+assert_success "trusted newer Shizuku provisioning is idempotent"
+assert_not_contains 'install -r .*shizuku\.apk' "$MOCK_CALL_LOG" "newer Shizuku manager is not downgraded"
+
 # A launched app that never answers is not provisioned, even if adb install itself succeeded.
 MOCK_HEALTH=fail run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
 assert_failure "launch timeout returns nonzero"

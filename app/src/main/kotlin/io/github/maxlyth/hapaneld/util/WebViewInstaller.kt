@@ -89,7 +89,12 @@ object WebViewInstaller {
             is Decision.NotNewer -> "already current (${d.version})"
             is Decision.Install -> {
                 Log.i(TAG, "healing WebView → ${d.spec.version} (engine major was $engineMajor)")
-                val r = AppInstaller.install(context, d.spec.url, AppInstaller.Pin(WEBVIEW_PKG, d.spec.certSha256))
+                val r = AppInstaller.install(
+                    context,
+                    d.spec.url,
+                    AppInstaller.Pin(WEBVIEW_PKG, d.spec.certSha256),
+                    allowShizuku = false,
+                )
                 if (r == "OK") "OK: installed WebView ${d.spec.version} — reloading the dashboard" else r
             }
         }

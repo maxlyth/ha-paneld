@@ -98,7 +98,7 @@ object CompanionInstaller {
         exactVersionRefusal(tag, maxVersion)?.let { return@withContext it }
         val url = ReleaseCatalog.apkUrl(REPO, tag, APK_MATCH) ?: return@withContext "no minimal APK for $tag"
         Log.i(TAG, "install Companion tag $tag")
-        val result = AppInstaller.install(context, url, AppInstaller.COMPANION_MINIMAL)
+        val result = AppInstaller.install(context, url, AppInstaller.COMPANION_MINIMAL, allowShizuku = true)
         if (result != "OK") return@withContext result
         "installing HA Companion $version"
     }
@@ -150,7 +150,7 @@ object CompanionInstaller {
             else "up to date ($installed)"
         }
 
-        val result = AppInstaller.install(context, target.apkUrl, AppInstaller.COMPANION_MINIMAL)
+        val result = AppInstaller.install(context, target.apkUrl, AppInstaller.COMPANION_MINIMAL, allowShizuku = true)
         if (result != "OK") return@withContext result
         val now = AppInstaller.installedVersion(context, MINIMAL_PKG).ifBlank { target.version }
         val verb = when {

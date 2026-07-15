@@ -27,6 +27,8 @@ object ShizukuBridge : ShellPrivilege {
         private set
     @Volatile private var remote: IShizukuShellService? = null
     @Volatile private var initialized = false
+    @Volatile private var bindingGeneration = 0L
+    @Volatile private var activeConnection: ServiceConnection? = null
     private lateinit var appContext: Context
     private val executor = Executors.newCachedThreadPool { runnable ->
         Thread(runnable, "hapaneld-shizuku-client").apply { isDaemon = true }
@@ -39,38 +41,12 @@ object ShizukuBridge : ShellPrivilege {
             .processNameSuffix("shell")
             .daemon(false)
 
-    private val connection = object : ServiceConnection {
-        override fun onServiceConnected(name: ComponentName, service: IBinder) {
-            val candidate = IShizukuShellService.Stub.asInterface(service)
-            executor.execute {
-                val accepted = runCatching {
-                    ShizukuPolicy.usable(candidate.identityUid(), candidate.protocolVersion())
-                }.getOrDefault(false)
-                if (accepted) {
-                    remote = candidate
-                    state = ShizukuState.READY
-                } else {
-                    remote = null
-                    state = ShizukuState.INCOMPATIBLE
-                }
-            }
-        }
-
-        override fun onServiceDisconnected(name: ComponentName) {
-            remote = null
-            state = managerIdleState()
-        }
-    }
-
     private val binderReceived = Shizuku.OnBinderReceivedListener { refresh() }
-    private val binderDead = Shizuku.OnBinderDeadListener {
-        remote = null
-        state = managerIdleState()
-    }
+    private val binderDead = Shizuku.OnBinderDeadListener { clearBinding(managerIdleState()) }
     private val permissionResult = Shizuku.OnRequestPermissionResultListener { requestCode, grantResult ->
         if (requestCode != REQUEST_CODE) return@OnRequestPermissionResultListener
-        if (grantResult == PackageManager.PERMISSION_GRANTED) bind()
-        else state = ShizukuState.PERMISSION_REQUIRED
+        if (grantResult == PackageManager.PERMISSION_GRANTED) refresh()
+        else clearBinding(ShizukuState.PERMISSION_REQUIRED)
     }
 
     @Synchronized fun initialize(context: Context) {
@@ -83,48 +59,45 @@ object ShizukuBridge : ShellPrivilege {
         refresh()
     }
 
-    fun enable(context: Context, managed: Boolean = false) {
+    fun enable(context: Context) {
         initialize(context)
-        ShizukuConsent.enable(appContext, managed)
+        ShizukuConsent.enable(appContext)
         refresh(requestPermission = true)
     }
 
     fun disable() {
         if (!initialized) return
         ShizukuConsent.disable(appContext)
-        remote = null
-        runCatching { Shizuku.unbindUserService(args, connection, true) }
-        state = managerIdleState()
+        clearBinding(managerIdleState())
     }
 
     fun refresh(requestPermission: Boolean = false) {
         if (!initialized) return
         val managerStatus = ShizukuManagerIdentity.status(appContext)
         if (managerStatus != ShizukuManagerIdentity.Status.TRUSTED) {
-            state = if (managerStatus == ShizukuManagerIdentity.Status.UNTRUSTED) {
+            clearBinding(if (managerStatus == ShizukuManagerIdentity.Status.UNTRUSTED) {
                 ShizukuState.MANAGER_UNTRUSTED
             } else {
                 ShizukuState.MANAGER_MISSING
-            }
-            remote = null
+            })
             return
         }
         if (!ShizukuConsent.enabled(appContext)) {
-            state = ShizukuState.STOPPED
-            remote = null
+            clearBinding(ShizukuState.STOPPED)
             return
         }
         if (!runCatching { Shizuku.pingBinder() }.getOrDefault(false)) {
-            state = ShizukuState.STOPPED
-            remote = null
+            clearBinding(ShizukuState.STOPPED)
             return
         }
         val granted = runCatching { Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED }
             .getOrDefault(false)
         if (!granted) {
-            state = ShizukuState.PERMISSION_REQUIRED
-            if (requestPermission && !runCatching { Shizuku.shouldShowRequestPermissionRationale() }.getOrDefault(true)) {
+            clearBinding(ShizukuState.PERMISSION_REQUIRED)
+            val rationale = runCatching { Shizuku.shouldShowRequestPermissionRationale() }.getOrDefault(true)
+            if (ShizukuPolicy.shouldRequestPermission(requestPermission, rationale)) {
                 runCatching { Shizuku.requestPermission(REQUEST_CODE) }
+                    .onFailure { Log.w(TAG, "permission request failed", it) }
             }
             return
         }
@@ -132,13 +105,87 @@ object ShizukuBridge : ShellPrivilege {
     }
 
     private fun bind() {
-        if (remote != null) return
-        state = ShizukuState.BINDING
+        val generation: Long
+        val connection: ServiceConnection
+        synchronized(this) {
+            if (remote != null || activeConnection != null) return
+            generation = ++bindingGeneration
+            connection = connectionFor(generation)
+            activeConnection = connection
+            state = ShizukuState.BINDING
+        }
         runCatching { Shizuku.bindUserService(args, connection) }
             .onFailure {
                 Log.w(TAG, "bind failed", it)
-                state = ShizukuState.ERROR
+                rejectBinding(connection, generation, ShizukuState.ERROR)
             }
+    }
+
+    private fun connectionFor(generation: Long): ServiceConnection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName, service: IBinder) {
+            val candidate = IShizukuShellService.Stub.asInterface(service)
+            executor.execute {
+                val identityUsable = runCatching {
+                    ShizukuPolicy.usable(candidate.identityUid(), candidate.protocolVersion())
+                }.getOrDefault(false)
+                val managerTrusted = ShizukuManagerIdentity.status(appContext) ==
+                    ShizukuManagerIdentity.Status.TRUSTED
+                val accepted = synchronized(this@ShizukuBridge) {
+                    ShizukuPolicy.canAcceptBinding(
+                        callbackGeneration = generation,
+                        currentGeneration = bindingGeneration,
+                        connectionIsCurrent = activeConnection === this,
+                        consentEnabled = ShizukuConsent.enabled(appContext),
+                        managerTrusted = managerTrusted,
+                        identityUsable = identityUsable,
+                    ).also { allowed ->
+                        if (allowed) {
+                            remote = candidate
+                            state = ShizukuState.READY
+                        }
+                    }
+                }
+                if (!accepted) {
+                    rejectBinding(
+                        this,
+                        generation,
+                        if (identityUsable) managerIdleState() else ShizukuState.INCOMPATIBLE,
+                    )
+                }
+            }
+        }
+
+        override fun onServiceDisconnected(name: ComponentName) {
+            synchronized(this@ShizukuBridge) {
+                if (generation != bindingGeneration || activeConnection !== this) return
+                bindingGeneration++
+                activeConnection = null
+                remote = null
+                state = managerIdleState()
+            }
+        }
+    }
+
+    private fun clearBinding(nextState: ShizukuState) {
+        val connection = synchronized(this) {
+            bindingGeneration++
+            remote = null
+            state = nextState
+            activeConnection.also { activeConnection = null }
+        }
+        if (connection != null) runCatching { Shizuku.unbindUserService(args, connection, true) }
+    }
+
+    private fun rejectBinding(connection: ServiceConnection, generation: Long, nextState: ShizukuState) {
+        synchronized(this) {
+            if (generation == bindingGeneration && activeConnection === connection) {
+                bindingGeneration++
+                activeConnection = null
+                remote = null
+                state = nextState
+            }
+        }
+        runCatching { Shizuku.unbindUserService(args, connection, true) }
     }
 
     override fun available(): Boolean = remote != null && state == ShizukuState.READY
@@ -164,7 +211,7 @@ object ShizukuBridge : ShellPrivilege {
             }.getOrNull()
         })
         return try {
-            future.get(SHORT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            future.get(ShizukuPolicy.clientDeadline(SHORT_TIMEOUT_MS), TimeUnit.MILLISECONDS)
         } catch (e: Exception) {
             runCatching { fd.close() }
             future.cancel(true)
@@ -209,7 +256,7 @@ object ShizukuBridge : ShellPrivilege {
         val service = remote ?: return null
         val future = executor.submit(Callable { block(service) })
         return try {
-            future.get(timeoutMs, TimeUnit.MILLISECONDS)
+            future.get(ShizukuPolicy.clientDeadline(timeoutMs), TimeUnit.MILLISECONDS)
         } catch (e: Exception) {
             future.cancel(true)
             Log.w(TAG, "operation failed", e)

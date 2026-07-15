@@ -75,7 +75,7 @@ data class Capabilities(
     // Runtime-only privilege routes. These describe what the panel can do now; they are never config
     // switches and therefore cannot be imported or changed through MQTT/HTTP.
     val shizukuReady: Boolean = false,
-    val canInstallApk: Boolean = false,
+    val canInstallVerifiedApps: Boolean = false,
     val canCaptureAndInput: Boolean = false,
     val canSetDisplay: Boolean = false,
 )

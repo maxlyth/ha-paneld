@@ -84,9 +84,7 @@ import io.github.maxlyth.hapaneld.platform.AndroidSystemEnv
 import io.github.maxlyth.hapaneld.util.periodic
 import io.github.maxlyth.hapaneld.util.SystemProps
 import io.github.maxlyth.hapaneld.dashboard.shouldReloadBuiltinAfterEntityFilterChange
-import io.github.maxlyth.hapaneld.shizuku.ShizukuConsent
 import io.github.maxlyth.hapaneld.shizuku.ShizukuBridge
-import io.github.maxlyth.hapaneld.shizuku.ShizukuManagerUpdater
 import java.io.File
 
 internal fun commitBorrowedRendererTarget(
@@ -559,7 +557,7 @@ class PaneldService : Service() {
         },
         webViewManaged = profile.recommendedWebView != null,
         shizukuReady = ShizukuBridge.available(),
-        canInstallApk = Su.available() || HelperClient.available() || ShizukuBridge.available(),
+        canInstallVerifiedApps = Su.available() || HelperClient.available() || ShizukuBridge.available(),
         canCaptureAndInput = Su.available() || HelperClient.available() || ShizukuBridge.available(),
         canSetDisplay = Su.available() || HelperClient.available() || ShizukuBridge.available(),
     )
@@ -834,12 +832,6 @@ class PaneldService : Service() {
             ) {
                 // Each sub-step is isolated so one failing doesn't skip the others; the periodic boundary
                 // is the outer net that keeps the loop alive across an unexpected throw.
-                // A managed Shizuku dependency is updated first from a compiled, signer/checksum-pinned
-                // release tuple. Local consent owns this switch; it is not a remotely writable setting.
-                if (ShizukuConsent.managed(this@PaneldService) && ShizukuConsent.autoUpdate(this@PaneldService)) {
-                    runCatching { ShizukuManagerUpdater.checkAndUpdate(this@PaneldService) }
-                        .onFailure { Log.w(TAG, "Shizuku manager auto-update failed", it) }
-                }
                 runCatching {
                     UpdateChecker.check(
                         this@PaneldService,

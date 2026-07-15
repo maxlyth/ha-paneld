@@ -44,6 +44,7 @@ Common operations:
   --export FILE            Back up config only; never installs unless combined with install/config options
   --verify                 Check the existing installation only; never installs
   --no-tame                Leave vendor applications unchanged
+  --shizuku                Install/start pinned Shizuku for locally approved non-root access
   --help                   Show this help
 
 The script installs, starts, and verifies ha-paneld. It exits nonzero if a required step is incomplete.
@@ -482,27 +483,72 @@ install_apk
 # older Android versions, while Shizuku 13.6 can auto-start on supported Android 13+ trusted WLANs.
 if [ "$SHIZUKU" = 1 ]; then
   SHIZUKU_PKG="moe.shizuku.privileged.api"
+  SHIZUKU_VERSION_CODE=1086
   SHIZUKU_URL="https://github.com/RikkaApps/Shizuku/releases/download/v13.6.0/shizuku-v13.6.0.r1086.2650830c-release.apk"
   SHIZUKU_SHA256="6e273ab0e991c4e79bc8b1bbb9b9dd739ccac1a8712a541a214078886b7b790f"
+  SHIZUKU_CERT_SHA256="268b5590e868fb08bae7e0ac413564cd1ff88f5ccff74af9dbd0dc918e30db30"
   SHIZUKU_DIR="$(mktemp -d)"
   SHIZUKU_APK="$SHIZUKU_DIR/shizuku.apk"
   trap 'rm -rf "${SHIZUKU_DIR:-}"' EXIT
-  step "🪄 Shizuku" "${D}installing curated v13.6.0 manager${X}"
-  curl -fsSL --proto '=https' --proto-redir '=https' "$SHIZUKU_URL" -o "$SHIZUKU_APK"
-  if command -v sha256sum >/dev/null 2>&1; then
-    SHIZUKU_GOT="$(sha256sum "$SHIZUKU_APK" | awk '{print $1}')"
-  elif command -v shasum >/dev/null 2>&1; then
-    SHIZUKU_GOT="$(shasum -a 256 "$SHIZUKU_APK" | awk '{print $1}')"
-  else
-    fail "cannot verify the Shizuku download" "Install sha256sum (or shasum) and re-run."
+  SHIZUKU_CURRENT_CODE="$(adb -s "$TARGET" shell dumpsys package "$SHIZUKU_PKG" 2>/dev/null \
+    | sed -nE 's/.*versionCode=([0-9]+).*/\1/p' | head -1 | tr -d '\r' || true)"
+  SHIZUKU_CURRENT_PATH="$(adb -s "$TARGET" shell pm path "$SHIZUKU_PKG" 2>/dev/null \
+    | sed -n 's/^package://p' | head -1 | tr -d '\r' || true)"
+  SHIZUKU_CURRENT_TRUSTED=0
+  if [ -n "$SHIZUKU_CURRENT_PATH" ]; then
+    SHIZUKU_CURRENT_APK="$SHIZUKU_DIR/installed-shizuku.apk"
+    if adb -s "$TARGET" pull "$SHIZUKU_CURRENT_PATH" "$SHIZUKU_CURRENT_APK" >/dev/null 2>&1; then
+      if command -v sha256sum >/dev/null 2>&1; then
+        SHIZUKU_CURRENT_SHA="$(sha256sum "$SHIZUKU_CURRENT_APK" | awk '{print $1}')"
+      elif command -v shasum >/dev/null 2>&1; then
+        SHIZUKU_CURRENT_SHA="$(shasum -a 256 "$SHIZUKU_CURRENT_APK" | awk '{print $1}')"
+      else
+        SHIZUKU_CURRENT_SHA=""
+      fi
+      [ "$SHIZUKU_CURRENT_SHA" = "$SHIZUKU_SHA256" ] && SHIZUKU_CURRENT_TRUSTED=1
+      if [ "$SHIZUKU_CURRENT_TRUSTED" = 0 ]; then
+        APKSIGNER="$(command -v apksigner 2>/dev/null || true)"
+        if [ -z "$APKSIGNER" ] && [ -n "${ANDROID_HOME:-}" ]; then
+          for candidate in "$ANDROID_HOME"/build-tools/*/apksigner; do
+            [ -x "$candidate" ] && APKSIGNER="$candidate"
+          done
+        fi
+        if [ -n "$APKSIGNER" ]; then
+          SHIZUKU_CURRENT_CERT="$("$APKSIGNER" verify --print-certs "$SHIZUKU_CURRENT_APK" 2>/dev/null \
+            | sed -nE 's/^Signer #[0-9]+ certificate SHA-256 digest: *//p' | head -1 \
+            | tr -d ':\r' | tr '[:upper:]' '[:lower:]' || true)"
+          [ "$SHIZUKU_CURRENT_CERT" = "$SHIZUKU_CERT_SHA256" ] && SHIZUKU_CURRENT_TRUSTED=1
+        fi
+      fi
+    fi
   fi
-  [ "$SHIZUKU_GOT" = "$SHIZUKU_SHA256" ] || fail "Shizuku download checksum mismatch" \
-    "Expected $SHIZUKU_SHA256" "Got      $SHIZUKU_GOT" "Nothing was installed."
-  adb -s "$TARGET" install -r "$SHIZUKU_APK" >/dev/null
+  case "$SHIZUKU_CURRENT_CODE" in ''|*[!0-9]*) SHIZUKU_CURRENT_CODE=0 ;; esac
+  if [ "$SHIZUKU_CURRENT_CODE" -ge "$SHIZUKU_VERSION_CODE" ]; then
+    [ "$SHIZUKU_CURRENT_TRUSTED" = 1 ] || fail "the installed Shizuku manager cannot be trusted" \
+      "Its version is the same as or newer than ha-paneld's curated build, but its signer could not be verified." \
+      "Install Android SDK Build-Tools (apksigner), or remove the manager and re-run this command."
+    step "🪄 Shizuku" "${D}keeping trusted installed manager (versionCode $SHIZUKU_CURRENT_CODE)${X}"
+  else
+    step "🪄 Shizuku" "${D}installing curated v13.6.0 manager${X}"
+    curl -fsSL --proto '=https' --proto-redir '=https' "$SHIZUKU_URL" -o "$SHIZUKU_APK"
+    if command -v sha256sum >/dev/null 2>&1; then
+      SHIZUKU_GOT="$(sha256sum "$SHIZUKU_APK" | awk '{print $1}')"
+    elif command -v shasum >/dev/null 2>&1; then
+      SHIZUKU_GOT="$(shasum -a 256 "$SHIZUKU_APK" | awk '{print $1}')"
+    else
+      fail "cannot verify the Shizuku download" "Install sha256sum (or shasum) and re-run."
+    fi
+    [ "$SHIZUKU_GOT" = "$SHIZUKU_SHA256" ] || fail "Shizuku download checksum mismatch" \
+      "Expected $SHIZUKU_SHA256" "Got      $SHIZUKU_GOT" "Nothing was installed."
+    adb -s "$TARGET" install -r "$SHIZUKU_APK" >/dev/null || fail "Shizuku installation failed" \
+      "Fix the package-manager error above, then re-run this command."
+  fi
   # First launch materialises Shizuku's official external start script.
   adb -s "$TARGET" shell monkey -p "$SHIZUKU_PKG" 1 >/dev/null 2>&1 || true
-  for _ in $(seq 1 10); do
+  SHIZUKU_START_WAIT=0
+  while [ "$SHIZUKU_START_WAIT" -lt 10 ]; do
     if adb -s "$TARGET" shell test -f "/storage/emulated/0/Android/data/$SHIZUKU_PKG/start.sh"; then break; fi
+    SHIZUKU_START_WAIT=$((SHIZUKU_START_WAIT + 1))
     sleep 1
   done
   if adb -s "$TARGET" shell sh "/storage/emulated/0/Android/data/$SHIZUKU_PKG/start.sh" >/dev/null 2>&1; then
@@ -513,7 +559,7 @@ if [ "$SHIZUKU" = 1 ]; then
   # Enables Shizuku's supported Android 13+ trusted-WLAN auto-start option; the user still chooses
   # whether to turn that option on inside Shizuku. Harmless/ignored on versions that refuse the grant.
   adb -s "$TARGET" shell pm grant "$SHIZUKU_PKG" android.permission.WRITE_SECURE_SETTINGS >/dev/null 2>&1 || true
-  echo "   ${YEL}→${X} On the panel: ha-paneld → Settings → Enhanced access → Enable managed, then approve the Shizuku prompt."
+  echo "   ${YEL}→${X} On the panel: open ha-paneld Configure, use the toolbar overflow menu → Enhanced access → Enable, then approve the Shizuku prompt."
 fi
 
 step "🔑 permissions" "${D}notifications · WRITE_SETTINGS (brightness/screen) · SYSTEM_ALERT_WINDOW (navbar) · a11y (buttons)${X}"
