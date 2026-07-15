@@ -1,10 +1,17 @@
 import java.util.Properties
+import org.cyclonedx.gradle.CyclonedxDirectTask
+import org.cyclonedx.model.Component
 import org.gradle.api.tasks.Exec
 import org.gradle.api.tasks.testing.Test
 
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.cyclonedx.bom)
+}
+
+dependencyLocking {
+    lockAllConfigurations()
 }
 
 android {
@@ -173,6 +180,18 @@ dependencies {
     androidTestImplementation("androidx.test:runner:1.6.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test.uiautomator:uiautomator:2.3.0")
+}
+
+tasks.named<CyclonedxDirectTask>("cyclonedxDirectBom") {
+    includeConfigs.set(listOf("releaseRuntimeClasspath"))
+    projectType.set(Component.Type.APPLICATION)
+    componentGroup.set("io.github.maxlyth")
+    componentName.set("ha-paneld")
+    componentVersion.set(android.defaultConfig.versionName ?: "unspecified")
+    includeBomSerialNumber.set(false)
+    includeBuildSystem.set(false)
+    jsonOutput.set(layout.buildDirectory.file("reports/cyclonedx-direct/bom.json"))
+    xmlOutput.unsetConvention()
 }
 
 // Compile the CDP relay (helper/cdprelay.c) into assets at build time for the fleet ABIs, using the

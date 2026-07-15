@@ -26,6 +26,7 @@ junit = "4.13.2"
 orgJson = "20240303"
 snakeyamlEngine = "2.6"
 shizuku = "13.1.5"
+cyclonedx = "3.2.4"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -53,3 +54,4 @@ shizuku-provider = { group = "dev.rikka.shizuku", name = "provider", version.ref
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+cyclonedx-bom = { id = "org.cyclonedx.bom", version.ref = "cyclonedx" }
