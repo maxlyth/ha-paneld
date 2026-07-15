@@ -7,6 +7,8 @@ WebSite: https://github.com/maxlyth/ha-paneld
 SourceCode: https://github.com/maxlyth/ha-paneld
 IssueTracker: https://github.com/maxlyth/ha-paneld/issues
 Changelog: https://github.com/maxlyth/ha-paneld/blob/main/CHANGELOG.md
+AllowedAPKSigningKeys:
+  - ac6193307fb0b70113aae205d7549406f96e063bc5491b67b1d5694a34b0e339
 
 Name: ha-paneld
 Summary: Home Assistant agent for Android wall panels

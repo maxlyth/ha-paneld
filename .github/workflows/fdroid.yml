@@ -2,14 +2,15 @@ name: F-Droid repo
 run-name: F-Droid repo · ${{ github.event.workflow_run.head_branch || github.event_name }}
 
 # Republishes the release-signed APKs from GitHub Releases as a self-hosted F-Droid repository on
-# GitHub Pages. STATELESS: every run rebuilds the repo from the current set of *full* GitHub Releases,
-# so the served APK is byte-identical to the release asset (same signing key) and the F-Droid client can
-# update panels in place. Pre-releases (…-rcN) are intentionally excluded.
+# GitHub Pages. STATELESS: every run rebuilds the repo from the current set of release-key-signed *full*
+# GitHub Releases, so the served APK is byte-identical to the release asset and the F-Droid client can
+# update panels in place. Pre-releases (…-rcN) and legacy debug-key releases are intentionally excluded.
 #
 # ONE-TIME SETUP (maintainer):
 #   1. Settings -> Pages -> Source = "GitHub Actions".
-#   2. The ANDROID_KEYSTORE_* secrets that sign the release APKs (see release.yml) are reused here to
-#      sign the repo index, so the repo's identity == the app signing certificate. No new secrets.
+#   2. The ANDROID_KEYSTORE_* secrets that sign the release APKs (see release.yml) are currently reused
+#      to preserve the repository fingerprint already pinned by clients. The workflow refuses any
+#      unexpected key rather than silently rotating that public identity.
 #   3. After the first successful run, grab the repo fingerprint from the run log / landing page and
 #      share the add-repo URL:  https://maxlyth.github.io/ha-paneld/fdroid/repo?fingerprint=<FP>
 
@@ -85,14 +86,90 @@ jobs:
             --jq '.[] | select(.isPrerelease==false and .isDraft==false) | .tagName')
           echo "Full releases: ${tags[*]:-<none>}"
           for tag in "${tags[@]}"; do
+            if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "Skipping non-app release tag: $tag"
+              continue
+            fi
+            case "$tag" in
+              v0.3.0|v0.4.0|v0.4.1|v0.4.2)
+                echo "Skipping legacy debug-key app release: $tag"
+                continue
+                ;;
+            esac
+
+            asset_names="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" \
+              --json assets --jq '.assets[].name')"
+            canonical_assets=()
+            for candidate in \
+              "ha-paneld-${tag}-manual-setup-required.apk" \
+              "ha-paneld-${tag}.apk"; do
+              if grep -Fxq "$candidate" <<< "$asset_names"; then
+                canonical_assets+=("$candidate")
+              fi
+            done
+            if [ "${#canonical_assets[@]}" -ne 1 ]; then
+              echo "::error::Release $tag must contain exactly one canonical ha-paneld APK; found ${#canonical_assets[@]}."
+              exit 1
+            fi
+
+            apk_name="${canonical_assets[0]}"
             gh release download "$tag" --repo "$GITHUB_REPOSITORY" \
-              --pattern '*.apk' --dir fdroid/repo --skip-existing || true
+              --pattern "$apk_name" --dir fdroid/repo
+            test -s "fdroid/repo/$apk_name"
           done
           ls -la fdroid/repo
-          if [ -z "$(ls -A fdroid/repo/*.apk 2>/dev/null)" ]; then
+          shopt -s nullglob
+          apks=(fdroid/repo/*.apk)
+          if [ "${#apks[@]}" -eq 0 ]; then
             echo "::error::No full-release APKs found to publish."
             exit 1
           fi
+
+      - name: Authenticate every APK before indexing
+        env:
+          EXPECTED_PACKAGE: io.github.maxlyth.hapaneld
+          EXPECTED_SIGNER_SHA256: ac6193307fb0b70113aae205d7549406f96e063bc5491b67b1d5694a34b0e339
+        run: |
+          build_tools="$ANDROID_HOME/build-tools/34.0.0"
+          test -x "$build_tools/apksigner"
+          test -x "$build_tools/aapt"
+          shopt -s nullglob
+          apks=(fdroid/repo/*.apk)
+          if [ "${#apks[@]}" -eq 0 ]; then
+            echo "::error::No APKs are available for authentication."
+            exit 1
+          fi
+
+          for apk in "${apks[@]}"; do
+            apk_name="${apk##*/}"
+            tag="${apk_name#ha-paneld-}"
+            tag="${tag%-manual-setup-required.apk}"
+            tag="${tag%.apk}"
+            expected_version="${tag#v}"
+
+            signer_output="$("$build_tools/apksigner" verify --verbose --print-certs "$apk")"
+            mapfile -t signer_digests < <(
+              sed -nE 's/^Signer #[0-9]+ certificate SHA-256 digest: ([0-9A-Fa-f:]+)$/\1/p' \
+                <<< "$signer_output" | tr -d ':' | tr '[:upper:]' '[:lower:]'
+            )
+            if [ "${#signer_digests[@]}" -ne 1 ] || [ "${signer_digests[0]}" != "$EXPECTED_SIGNER_SHA256" ]; then
+              echo "::error file=$apk::Unexpected APK signing certificate."
+              exit 1
+            fi
+
+            badging="$("$build_tools/aapt" dump badging "$apk")"
+            package_name="$(sed -nE "s/^package: name='([^']+)'.*/\1/p" <<< "$badging" | head -n 1)"
+            version_name="$(sed -nE "s/^package: .* versionName='([^']+)'.*/\1/p" <<< "$badging" | head -n 1)"
+            if [ "$package_name" != "$EXPECTED_PACKAGE" ]; then
+              echo "::error file=$apk::Unexpected package name: ${package_name:-<missing>}"
+              exit 1
+            fi
+            if [ "$version_name" != "$expected_version" ]; then
+              echo "::error file=$apk::Version ${version_name:-<missing>} does not match release tag $tag."
+              exit 1
+            fi
+            echo "Authenticated $apk_name ($package_name $version_name; signer $EXPECTED_SIGNER_SHA256)."
+          done
 
       - name: Inject signing + SDK config (runtime only — never committed)
         working-directory: fdroid
@@ -101,12 +178,24 @@ jobs:
           KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          EXPECTED_REPO_FINGERPRINT: ac6193307fb0b70113aae205d7549406f96e063bc5491b67b1d5694a34b0e339
         run: |
-          echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/ks.jks"
+          umask 077
+          printf '%s' "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/ks.jks"
+          repo_fingerprint="$(
+            keytool -exportcert -keystore "$RUNNER_TEMP/ks.jks" -alias "$KEY_ALIAS" \
+              -storepass "$KEYSTORE_PASSWORD" 2>/dev/null |
+              openssl dgst -sha256 | awk '{print $NF}' | tr '[:upper:]' '[:lower:]'
+          )"
+          if [ "$repo_fingerprint" != "$EXPECTED_REPO_FINGERPRINT" ]; then
+            echo "::error::The configured repository key does not match the published F-Droid fingerprint; refusing to rotate clients silently."
+            exit 1
+          fi
           {
             echo "sdk_path: $ANDROID_HOME"
             echo "keystore: $RUNNER_TEMP/ks.jks"
             echo "repo_keyalias: $KEY_ALIAS"
+            echo "repo_key_sha256: $EXPECTED_REPO_FINGERPRINT"
             echo "keystorepass: $KEYSTORE_PASSWORD"
             echo "keypass: $KEY_PASSWORD"
           } >> config.yml
