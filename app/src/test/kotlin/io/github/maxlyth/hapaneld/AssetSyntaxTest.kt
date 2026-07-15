@@ -1,6 +1,7 @@
 package io.github.maxlyth.hapaneld
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Test
@@ -87,6 +88,20 @@ class AssetSyntaxTest {
         """.trimIndent()
         val (code, out) = run(listOf("node", "-e", script, File(dir, "install.js").absolutePath))
         assertEquals("Install links accepted a non-GitHub HTTPS target:\n$out", 0, code)
+    }
+
+    @Test fun navigationTargetsDoNotRoundTripThroughDomText() {
+        val dir = assetsDir
+        assumeTrue("assets dir not found (skipping)", dir != null)
+        val switcher = File(dir, "switcher.js").readText()
+        assertFalse("peer navigation target must not be stored in a DOM attribute", switcher.contains("data-base"))
+        assertTrue("peer navigation must use the validated in-memory target", switcher.contains("targets[sel.selectedIndex]"))
+        assertTrue("peer ports must be validated", switcher.contains("Number.isInteger(port)"))
+        assertTrue("peer IPv4 octets must be bounded", switcher.contains("Number(part) > 255"))
+
+        val info = File(dir, "info.js").readText()
+        assertFalse("screenshot URL must not be copied from DOM text", info.contains("im.src=im.getAttribute('data-src')"))
+        assertTrue("hydration must use the fixed same-origin screenshot endpoint", info.contains("im.src='/api/v1/screenshot.png'"))
     }
 
     @Test fun dashboardIssuesAreRenderedEscapedWithReversibleSafetyControls() {

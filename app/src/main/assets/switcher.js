@@ -18,9 +18,21 @@
     return x < y ? -1 : (x > y ? 1 : 0);
   }
 
+  function peerBase(ip, port) {
+    if (typeof ip !== 'string') return '';
+    var parts = ip.split('.');
+    if (parts.length !== 4 || parts.some(function (part) {
+      return !/^\d{1,3}$/.test(part) || Number(part) > 255;
+    })) return '';
+    port = Number(port);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) return '';
+    return 'http://' + parts.join('.') + ':' + port;
+  }
+
   function build(all) {
     all = all.slice().sort(byName);
     var sel = document.createElement('select');
+    var targets = [];
     sel.className = 'pswitch-sel';
     sel.title = 'Switch to another ha-paneld panel (keeps the current view)';
     sel.setAttribute('autocomplete', 'off');   // don't let the browser restore a stale selection
@@ -30,14 +42,15 @@
       if (isSelf(p)) {
         o.value = '';                           // this panel — selecting it does nothing
         o.selected = true;
+        targets.push('');
       } else {
         o.value = p.panel_id;
-        if (p.ip) o.setAttribute('data-base', 'http://' + p.ip + ':' + p.port);
+        targets.push(peerBase(p.ip, p.port));
       }
       sel.appendChild(o);
     });
     sel.onchange = function () {
-      var base = sel.options[sel.selectedIndex].getAttribute('data-base');
+      var base = targets[sel.selectedIndex] || '';
       sel.selectedIndex = selfIndex(sel);       // snap back to THIS panel so a later Back shows the right name
       if (!base) return;                        // "this panel" chosen — nothing to do
       // Same path/query/hash on the chosen peer: /configure on A -> /configure on B.

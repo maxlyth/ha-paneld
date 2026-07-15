@@ -213,7 +213,7 @@ function diagToggle(el){el.textContent=(el.textContent.indexOf('cm')<0)?el.datas
   var cz=document.getElementById('ctlzone');if(cz&&d.controls){cz.innerHTML=d.controls;fitControls();}
   var sc=document.getElementById('shotcard');
   if(sc){if(d.shot){var im=sc.querySelector('img');
-    if(im&&!im.getAttribute('src'))im.src=im.getAttribute('data-src');sc.style.display='';}
+    if(im&&!im.getAttribute('src'))im.src='/api/v1/screenshot.png';sc.style.display='';}
    else{sc.style.display='none';}}
  }
  function hydrate(tries){fetch('/api/v1/info').then(function(r){return r.json();}).then(apply)
