@@ -6,6 +6,14 @@ import androidx.appcompat.app.AppCompatActivity
 
 /** On-panel-only opt-in surface. ConfigActivity is not exported and there is no remote equivalent. */
 object ShizukuSetupDialog {
+    internal enum class PrimaryAction(val label: String) {
+        NONE(""),
+        ENABLE("Enable"),
+        REQUEST_PERMISSION("Request permission"),
+        OPEN_MANAGER("Open Shizuku"),
+        DISABLE("Disable"),
+    }
+
     fun show(activity: AppCompatActivity) {
         ShizukuBridge.refresh()
         val consented = ShizukuConsent.enabled(activity)
@@ -22,28 +30,30 @@ object ShizukuSetupDialog {
             .setMessage(message)
             .setNegativeButton("Close", null)
 
+        val primaryAction = primaryAction(consented, state, managerRunning)
         when {
             state == ShizukuState.MANAGER_MISSING || state == ShizukuState.MANAGER_UNTRUSTED -> {
                 if (disableAvailable(consented, state)) {
                     dialog.setNeutralButton("Disable") { _, _ -> ShizukuBridge.disable() }
                 }
             }
-            consented && state == ShizukuState.STOPPED && !managerRunning -> {
-                dialog.setPositiveButton("Open Shizuku") { _, _ -> launchManager(activity) }
-                dialog.setNeutralButton("Disable") { _, _ -> ShizukuBridge.disable() }
-            }
-            consented && state == ShizukuState.PERMISSION_REQUIRED -> {
-                dialog.setPositiveButton("Request permission") { _, _ ->
-                    ShizukuBridge.enable(activity)
-                }
-                dialog.setNeutralButton("Disable") { _, _ -> ShizukuBridge.disable() }
-            }
-            consented -> dialog.setPositiveButton("Disable") { _, _ -> ShizukuBridge.disable() }
-            state == ShizukuState.STOPPED && !managerRunning -> {
-                dialog.setPositiveButton("Open Shizuku") { _, _ -> launchManager(activity) }
-            }
             else -> {
-                dialog.setPositiveButton("Enable") { _, _ -> ShizukuBridge.enable(activity) }
+                when (primaryAction) {
+                    PrimaryAction.ENABLE,
+                    PrimaryAction.REQUEST_PERMISSION -> dialog.setPositiveButton(primaryAction.label) { _, _ ->
+                        ShizukuBridge.enable(activity)
+                    }
+                    PrimaryAction.OPEN_MANAGER -> dialog.setPositiveButton(primaryAction.label) { _, _ ->
+                        launchManager(activity)
+                    }
+                    PrimaryAction.DISABLE -> dialog.setPositiveButton(primaryAction.label) { _, _ ->
+                        ShizukuBridge.disable()
+                    }
+                    PrimaryAction.NONE -> Unit
+                }
+                if (consented && primaryAction != PrimaryAction.DISABLE) {
+                    dialog.setNeutralButton("Disable") { _, _ -> ShizukuBridge.disable() }
+                }
             }
         }
         dialog.show()
@@ -57,7 +67,9 @@ object ShizukuSetupDialog {
         ShizukuState.STOPPED ->
             "Shizuku is installed but its service is stopped, or enhanced access is not enabled. Start Shizuku, then return here."
         ShizukuState.PERMISSION_REQUIRED ->
-            "Shizuku is running. Enable enhanced access to show Shizuku's local permission prompt."
+            "Shizuku is running and ready to show its local permission prompt. Request permission to continue."
+        ShizukuState.MANUAL_GRANT_REQUIRED ->
+            "Shizuku access was denied, so another permission prompt cannot be shown. Open Shizuku, choose Authorized applications, select ha-paneld, and grant access manually. Then return here."
         ShizukuState.BINDING -> "Connecting to Shizuku…"
         ShizukuState.READY -> "Enhanced access is ready."
         ShizukuState.INCOMPATIBLE ->
@@ -67,6 +79,20 @@ object ShizukuSetupDialog {
 
     internal fun disableAvailable(consented: Boolean, state: ShizukuState): Boolean = consented &&
         (state == ShizukuState.MANAGER_MISSING || state == ShizukuState.MANAGER_UNTRUSTED)
+
+    internal fun primaryAction(
+        consented: Boolean,
+        state: ShizukuState,
+        managerRunning: Boolean,
+    ): PrimaryAction = when {
+        state == ShizukuState.MANAGER_MISSING || state == ShizukuState.MANAGER_UNTRUSTED ->
+            PrimaryAction.NONE
+        state == ShizukuState.MANUAL_GRANT_REQUIRED -> PrimaryAction.OPEN_MANAGER
+        state == ShizukuState.STOPPED && !managerRunning -> PrimaryAction.OPEN_MANAGER
+        consented && state == ShizukuState.PERMISSION_REQUIRED -> PrimaryAction.REQUEST_PERMISSION
+        consented -> PrimaryAction.DISABLE
+        else -> PrimaryAction.ENABLE
+    }
 
     private fun launchManager(activity: AppCompatActivity) {
         val intent: Intent = activity.packageManager.getLaunchIntentForPackage(ShizukuManagerIdentity.PACKAGE)

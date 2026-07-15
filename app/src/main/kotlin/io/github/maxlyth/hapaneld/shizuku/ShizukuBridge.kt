@@ -46,7 +46,7 @@ object ShizukuBridge : ShellPrivilege {
     private val permissionResult = Shizuku.OnRequestPermissionResultListener { requestCode, grantResult ->
         if (requestCode != REQUEST_CODE) return@OnRequestPermissionResultListener
         if (grantResult == PackageManager.PERMISSION_GRANTED) refresh()
-        else clearBinding(ShizukuState.PERMISSION_REQUIRED)
+        else refresh()
     }
 
     @Synchronized fun initialize(context: Context) {
@@ -93,8 +93,10 @@ object ShizukuBridge : ShellPrivilege {
         val granted = runCatching { Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED }
             .getOrDefault(false)
         if (!granted) {
-            clearBinding(ShizukuState.PERMISSION_REQUIRED)
             val rationale = runCatching { Shizuku.shouldShowRequestPermissionRationale() }.getOrDefault(true)
+            clearBinding(
+                if (rationale) ShizukuState.MANUAL_GRANT_REQUIRED else ShizukuState.PERMISSION_REQUIRED,
+            )
             if (ShizukuPolicy.shouldRequestPermission(requestPermission, rationale)) {
                 runCatching { Shizuku.requestPermission(REQUEST_CODE) }
                     .onFailure { Log.w(TAG, "permission request failed", it) }

@@ -37,10 +37,36 @@ class ShizukuPolicyTest {
         assertTrue(ShizukuPolicy.canAcceptBinding(2, 2, true, true, true, true))
     }
 
-    @Test fun explicitPermissionRetrySurvivesDenialRationale() {
-        assertTrue(ShizukuPolicy.shouldRequestPermission(true, rationaleRequired = true))
+    @Test fun deniedPermissionRequiresManualRecoveryInsteadOfAnotherPrompt() {
+        assertFalse(ShizukuPolicy.shouldRequestPermission(true, rationaleRequired = true))
         assertTrue(ShizukuPolicy.shouldRequestPermission(true, rationaleRequired = false))
         assertFalse(ShizukuPolicy.shouldRequestPermission(false, rationaleRequired = true))
+        assertFalse(ShizukuPolicy.shouldRequestPermission(false, rationaleRequired = false))
+    }
+
+    @Test fun deniedPermissionOffersActionableShizukuManagerRecovery() {
+        assertEquals(
+            ShizukuSetupDialog.PrimaryAction.OPEN_MANAGER,
+            ShizukuSetupDialog.primaryAction(
+                consented = true,
+                state = ShizukuState.MANUAL_GRANT_REQUIRED,
+                managerRunning = true,
+            ),
+        )
+        val text = ShizukuSetupDialog.description(ShizukuState.MANUAL_GRANT_REQUIRED)
+        assertTrue(text.contains("Authorized applications"))
+        assertTrue(text.contains("grant access manually"))
+    }
+
+    @Test fun freshPermissionRequestRemainsDistinctFromManualRecovery() {
+        assertEquals(
+            ShizukuSetupDialog.PrimaryAction.REQUEST_PERMISSION,
+            ShizukuSetupDialog.primaryAction(
+                consented = true,
+                state = ShizukuState.PERMISSION_REQUIRED,
+                managerRunning = true,
+            ),
+        )
     }
 
     @Test fun outerIpcDeadlineExceedsServiceDeadlineAndReaderJoin() {

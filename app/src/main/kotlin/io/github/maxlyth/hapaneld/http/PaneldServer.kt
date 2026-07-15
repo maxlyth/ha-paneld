@@ -1548,6 +1548,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         val fontScale: Float,
         val rootOk: Boolean,
         val captureOk: Boolean,
+        val shizukuReady: Boolean,
     )
 
     // The density trio is shared with the Configure tab's Display card (the bulk of ITS slow render).
@@ -1574,6 +1575,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
             densityCur = d.first, densityBase = d.second, fontScale = d.third,
             rootOk = rootOk(),
             captureOk = captureOk(),
+            shizukuReady = shellOk(),
         )
     }
 
@@ -1790,11 +1792,16 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
      *  hydration swaps in the capability-gated real state. */
     private fun controlsHtml(s: Snap?): String {
         // Controls buttons: render but DISABLE (not hide, not silently-broken) when the action's capability
-        // is missing — back/recents need the a11y service, launcher/reboot need root; volume always works.
+        // is missing — back/recents accept Accessibility or Shizuku input; launcher/reboot need root;
+        // volume always works.
         val a11yOk = s?.facts?.get("Nav actions (a11y)") == "yes"
+        val navigation = ControlAvailability.navigation(
+            accessibilityReady = a11yOk,
+            shizukuReady = s?.shizukuReady == true,
+            hasRecents = profile.hasRecents,
+        )
         // Recents is only real where the firmware has an overview screen — KEYCODE_APP_SWITCH no-ops on
-        // single-purpose panels (TPA10), so gate the button on the profile rather than show a dead one.
-        val hasRecents = profile.hasRecents
+        // single-purpose panels, so the policy gates it on the profile rather than show a dead one.
         val rootOk = s?.rootOk == true
         val checking = s == null
         fun pbtn(action: String, label: String, ok: Boolean, needs: String, style: String = "", disabledTitle: String? = null): String {
@@ -1812,12 +1819,12 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         // thing. resolvedLauncher() is a cheap PackageManager query (no root).
         val hasDistinctLauncher = !checking && system.resolvedLauncher(config.launcherPackage) != null
         // Launcher / Admin launcher / Reboot need root; a disabled button's tooltip is invisible on a
-        // touch panel, so add a visible note when root is absent (back/recents/volume still work).
+        // touch panel, so add a visible note that accurately reflects the remaining navigation routes.
         val rootNote = if (!checking && !rootOk)
-            """<div class="setup rootlock" style="margin:0 0 8px">🔒 Launcher, Admin launcher and Reboot need root — disabled on this panel. Back, Recents and volume still work.</div>""" else ""
+            """<div class="setup rootlock" style="margin:0 0 8px">🔒 Launcher, Admin launcher and Reboot need root — disabled on this panel. ${navigation.rootlessNote}</div>""" else ""
         return """$rootNote<div class="ctlrow" style="display:flex;gap:8px;flex-wrap:wrap">
- ${pbtn("back", "←<span class=\"lbl\"> Back</span>", a11yOk, "the accessibility service")}
- ${pbtn("recents", "▢<span class=\"lbl\"> Recents</span>", a11yOk && hasRecents, if (hasRecents) "the accessibility service" else "a Recents/overview screen (absent on this panel)")}
+ ${pbtn("back", "←<span class=\"lbl\"> Back</span>", navigation.backEnabled, ControlAvailability.INPUT_REQUIREMENT)}
+ ${pbtn("recents", "▢<span class=\"lbl\"> Recents</span>", navigation.recentsEnabled, navigation.recentsRequirement)}
  ${pbtn("launcher", "⊞<span class=\"lbl\"> Launcher</span>", rootOk, "a rooted panel", """ style="margin-left:auto"""", disabledTitle = if (hasDistinctLauncher) null else "No separate launcher on this panel — same as Admin launcher")}
  ${pbtn("admin_launcher", "⚙<span class=\"lbl\"> Admin launcher</span>", rootOk, "a rooted panel")}
 </div>

@@ -6,6 +6,7 @@ enum class ShizukuState {
     MANAGER_UNTRUSTED,
     STOPPED,
     PERMISSION_REQUIRED,
+    MANUAL_GRANT_REQUIRED,
     BINDING,
     READY,
     INCOMPATIBLE,
@@ -47,7 +48,11 @@ internal object ShizukuPolicy {
     ): Boolean = callbackGeneration == currentGeneration && connectionIsCurrent && consentEnabled &&
         managerTrusted && identityUsable
 
-    /** A local rationale button is itself the explanation; a prior denial must not make it a no-op. */
+    /**
+     * Shizuku reports a rationale after the user has denied access and its prompt cannot be used to
+     * recover the grant. Only a fresh explicit opt-in may open the prompt; denied access must send the
+     * user to Shizuku's Authorized applications screen instead of repeatedly requesting permission.
+     */
     fun shouldRequestPermission(explicitRequest: Boolean, rationaleRequired: Boolean): Boolean =
-        explicitRequest
+        explicitRequest && !rationaleRequired
 }

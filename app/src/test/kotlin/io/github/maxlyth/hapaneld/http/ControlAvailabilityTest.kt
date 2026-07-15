@@ -1,0 +1,57 @@
+package io.github.maxlyth.hapaneld.http
+
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class ControlAvailabilityTest {
+    @Test fun shizukuAloneEnablesBackAndRecents() {
+        val result = ControlAvailability.navigation(
+            accessibilityReady = false,
+            shizukuReady = true,
+            hasRecents = true,
+        )
+
+        assertTrue(result.backEnabled)
+        assertTrue(result.recentsEnabled)
+        assertTrue(result.rootlessNote.contains("Back, Recents, volume still work"))
+    }
+
+    @Test fun accessibilityAloneStillEnablesBackAndRecents() {
+        val result = ControlAvailability.navigation(
+            accessibilityReady = true,
+            shizukuReady = false,
+            hasRecents = true,
+        )
+
+        assertTrue(result.backEnabled)
+        assertTrue(result.recentsEnabled)
+    }
+
+    @Test fun missingInputRouteDisablesNavigationAndExplainsBothRecoveryPaths() {
+        val result = ControlAvailability.navigation(
+            accessibilityReady = false,
+            shizukuReady = false,
+            hasRecents = true,
+        )
+
+        assertFalse(result.backEnabled)
+        assertFalse(result.recentsEnabled)
+        assertTrue(result.recentsRequirement.contains("Accessibility"))
+        assertTrue(result.recentsRequirement.contains("Shizuku"))
+        assertTrue(result.rootlessNote.contains("Back and Recents need Accessibility or Shizuku"))
+    }
+
+    @Test fun firmwareWithoutOverviewKeepsRecentsDisabledWhenInputIsReady() {
+        val result = ControlAvailability.navigation(
+            accessibilityReady = false,
+            shizukuReady = true,
+            hasRecents = false,
+        )
+
+        assertTrue(result.backEnabled)
+        assertFalse(result.recentsEnabled)
+        assertTrue(result.recentsRequirement.contains("absent on this panel"))
+        assertFalse(result.rootlessNote.contains("Recents"))
+    }
+}
