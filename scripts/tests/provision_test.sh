@@ -36,6 +36,11 @@ run_provision() {
   MOCK_RELEASE_CERT="${MOCK_RELEASE_CERT:-ac6193307fb0b70113aae205d7549406f96e063bc5491b67b1d5694a34b0e339}" \
   MOCK_RELEASE_PACKAGE="${MOCK_RELEASE_PACKAGE:-io.github.maxlyth.hapaneld}" \
   MOCK_RELEASE_VERIFY_FAIL="${MOCK_RELEASE_VERIFY_FAIL:-0}" \
+  MOCK_RELEASE_PROOF_DOWNLOAD="${MOCK_RELEASE_PROOF_DOWNLOAD:-ok}" \
+  MOCK_RELEASE_CHECKSUM="${MOCK_RELEASE_CHECKSUM:-ok}" \
+  MOCK_RELEASE_SIGNATURE_FAIL="${MOCK_RELEASE_SIGNATURE_FAIL:-0}" \
+  MOCK_OPENSSL_MISSING="${MOCK_OPENSSL_MISSING:-0}" \
+  MOCK_OPENSSL_DIGEST_FAIL="${MOCK_OPENSSL_DIGEST_FAIL:-0}" \
   MOCK_STATE_DIR="$TMP" \
     bash "$PROVISION" "$@" > "$LAST_OUTPUT" 2>&1
   LAST_STATUS=$?
@@ -137,27 +142,85 @@ assert_contains 'provisioned' "successful install reports completion"
 # whenever Android Build-Tools are present. The fixtures expose both apksigner and aapt.
 run_provision "$MOCK_TARGET" --apk "$RELEASE_APK" --release-tag v0.9.2-rc3 --no-tame
 assert_success "release APK with the pinned signer and package is accepted"
+assert_contains 'authenticated.*v0\.9\.2-rc3' "release verification reports the signed checksum authentication"
 assert_contains 'verified.*v0\.9\.2-rc3' "release verification reports the authenticated tag"
+assert_log_contains '^curl .*https://github\.com/maxlyth/ha-paneld/releases/download/v0\.9\.2-rc3/ha-paneld-v0\.9\.2-rc3-manual-setup-required\.apk\.sha256 -o ' "release verification downloads the canonical checksum asset"
+assert_log_contains '^curl .*https://github\.com/maxlyth/ha-paneld/releases/download/v0\.9\.2-rc3/ha-paneld-v0\.9\.2-rc3-manual-setup-required\.apk\.sha256\.sig -o ' "release verification downloads the canonical detached signature"
+assert_log_contains '^openssl dgst -sha256 -verify .* -signature .*/release\.sha256\.sig .*/release\.sha256$' "release verification authenticates the checksum record"
+assert_log_contains '^openssl dgst -sha256 -r .*ha-paneld-v0\.9\.2-rc3-manual-setup-required\.apk$' "release verification hashes the downloaded APK"
 assert_log_contains '^apksigner verify --print-certs .*ha-paneld-v0\.9\.2-rc3-manual-setup-required\.apk$' "release verification invokes apksigner"
 assert_log_contains '^aapt dump badging .*ha-paneld-v0\.9\.2-rc3-manual-setup-required\.apk$' "release verification inspects the package name"
 signer_line="$(grep -nE '^apksigner verify --print-certs ' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
 package_line="$(grep -nE '^aapt dump badging ' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
+signature_line="$(grep -nE '^openssl dgst -sha256 -verify ' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
+checksum_line="$(grep -nE '^openssl dgst -sha256 -r ' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
 app_install_line="$(grep -nE '^adb .* install( |$)' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
-if [ -n "$signer_line" ] && [ -n "$package_line" ] && [ -n "$app_install_line" ] && \
+if [ -n "$signature_line" ] && [ -n "$checksum_line" ] && [ -n "$signer_line" ] && [ -n "$package_line" ] && [ -n "$app_install_line" ] && \
+   [ "$signature_line" -lt "$checksum_line" ] && [ "$checksum_line" -lt "$signer_line" ] && \
    [ "$signer_line" -lt "$app_install_line" ] && [ "$package_line" -lt "$app_install_line" ]; then
-  pass "release signer and package are verified before adb install"
+  pass "release proof, signer, and package are verified before adb install"
 else
-  fail_test "release signer and package are verified before adb install"
+  fail_test "release proof, signer, and package are verified before adb install"
 fi
 
-# Platform Tools deliberately do not include apksigner. Preserve the novice zero-parameter path, but
-# state the exact fresh-install trust limit instead of implying that adb authenticates the publisher.
+# Platform Tools deliberately do not include apksigner. The signed checksum remains the required
+# publisher-authentication path, while the additional APK structure inspection is optional.
 PATH="$NO_SIGNER_FIXTURES:/usr/bin:/bin" ANDROID_HOME= ANDROID_SDK_ROOT= \
   run_provision "$MOCK_TARGET" --apk "$RELEASE_APK" --release-tag v0.9.2-rc3 --no-tame
 assert_success "release install remains usable without optional Android Build-Tools"
-assert_contains 'cannot authenticate the ha-paneld release signer before a fresh install' "missing apksigner gives an honest trust warning"
-assert_contains 'Install Android SDK Build-Tools \(apksigner\)' "missing apksigner names the strong-verification path"
-assert_log_contains '^adb .* install( |$)' "warned no-apksigner path still installs for novice compatibility"
+assert_contains 'optional APK structure inspection was skipped' "missing apksigner accurately describes the skipped secondary check"
+assert_contains 'authenticated by the signed checksum' "missing apksigner still reports the authenticated release path"
+assert_log_contains '^openssl dgst -sha256 -verify ' "no-apksigner path still authenticates the checksum signature"
+assert_log_contains '^adb .* install( |$)' "authenticated no-apksigner path still installs"
+
+MOCK_OPENSSL_MISSING=1 \
+  run_provision "$MOCK_TARGET" --apk "$RELEASE_APK" --release-tag v0.9.2-rc3 --no-tame
+assert_failure "official release install fails closed when OpenSSL is unavailable"
+assert_contains 'OpenSSL is required to authenticate this official ha-paneld release' "missing OpenSSL names the required trust check"
+assert_contains 'Windows:.*Git Bash or WSL' "missing OpenSSL gives novice-friendly Windows guidance"
+assert_contains 'macOS:.*xcode-select' "missing OpenSSL gives novice-friendly macOS guidance"
+assert_contains 'Debian/Ubuntu:.*apt install openssl' "missing OpenSSL gives novice-friendly Linux guidance"
+assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "missing OpenSSL stops before APK install"
+assert_not_contains '^adb .* shell (am start|settings put|appops set|pm grant)' "$MOCK_CALL_LOG" "missing OpenSSL stops before launch or grants"
+
+MOCK_RELEASE_PROOF_DOWNLOAD=checksum_fail \
+  run_provision "$MOCK_TARGET" --apk "$RELEASE_APK" --release-tag v0.9.2-rc3 --no-tame
+assert_failure "missing release checksum asset fails closed"
+assert_contains 'could not download the signed checksum' "missing checksum asset names the incomplete release"
+assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "missing checksum asset stops before APK install"
+
+MOCK_RELEASE_PROOF_DOWNLOAD=signature_fail \
+  run_provision "$MOCK_TARGET" --apk "$RELEASE_APK" --release-tag v0.9.2-rc3 --no-tame
+assert_failure "missing release checksum signature fails closed"
+assert_contains 'could not download the checksum signature' "missing signature asset names the incomplete release"
+assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "missing signature asset stops before APK install"
+
+MOCK_RELEASE_SIGNATURE_FAIL=1 \
+  run_provision "$MOCK_TARGET" --apk "$RELEASE_APK" --release-tag v0.9.2-rc3 --no-tame
+assert_failure "invalid release checksum signature fails closed"
+assert_contains 'checksum signature is invalid' "invalid signature names the authentication failure"
+assert_contains 'Nothing was installed, started, or privileged' "invalid signature states the safe outcome"
+assert_not_contains '^openssl dgst -sha256 -r ' "$MOCK_CALL_LOG" "invalid signature is rejected before trusting or hashing the APK"
+assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "invalid signature stops before APK install"
+
+MOCK_RELEASE_CHECKSUM=malformed \
+  run_provision "$MOCK_TARGET" --apk "$RELEASE_APK" --release-tag v0.9.2-rc3 --no-tame
+assert_failure "malformed but signed checksum record fails closed"
+assert_contains 'signed checksum record.*is malformed' "malformed checksum names the release metadata error"
+assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "malformed checksum stops before APK install"
+
+MOCK_RELEASE_CHECKSUM=mismatch \
+  run_provision "$MOCK_TARGET" --apk "$RELEASE_APK" --release-tag v0.9.2-rc3 --no-tame
+assert_failure "APK checksum mismatch fails closed"
+assert_contains 'APK checksum does not match its signed record' "checksum mismatch names the integrity failure"
+assert_contains 'Nothing was installed, started, or privileged' "checksum mismatch states the safe outcome"
+assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "checksum mismatch stops before APK install"
+
+MOCK_OPENSSL_DIGEST_FAIL=1 \
+  run_provision "$MOCK_TARGET" --apk "$RELEASE_APK" --release-tag v0.9.2-rc3 --no-tame
+assert_failure "local APK digest failure stops release installation"
+assert_contains 'OpenSSL could not calculate the downloaded APK checksum' "digest failure gives a direct recovery path"
+assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "digest failure stops before APK install"
 
 MOCK_RELEASE_CERT=0000000000000000000000000000000000000000000000000000000000000000 \
   run_provision "$MOCK_TARGET" --apk "$RELEASE_APK" --release-tag v0.9.2-rc3 --no-tame
@@ -415,12 +478,14 @@ sed -e 's/^RELEASE_TAG=""/RELEASE_TAG="v0.9.2-rc3"/' \
     "$ROOT/scripts/install.sh" > "$RELEASE_INSTALLER"
 if bash -n "$RELEASE_INSTALLER" && \
    grep -Fq -- '--proto '\''=https'\'' --proto-redir '\''=https'\''' "$RELEASE_INSTALLER" && \
+   grep -Fq 'command -v openssl' "$RELEASE_INSTALLER" && \
+   grep -Fq 'It authenticates the release before anything is installed' "$RELEASE_INSTALLER" && \
    grep -Fq -- '--release-tag "$RELEASE_TAG"' "$RELEASE_INSTALLER" && \
    grep -Fq 'raw.githubusercontent.com/$REPO/$PROVISION_REF/scripts/provision.sh' "$RELEASE_INSTALLER" && \
    grep -Fq 'PROVISION_COMMIT="0123456789abcdef0123456789abcdef01234567"' "$RELEASE_INSTALLER"; then
-  pass "generated release installer preserves HTTPS, release verification, and immutable provisioner source"
+  pass "generated release installer preserves HTTPS, OpenSSL authentication, release verification, and immutable provisioner source"
 else
-  fail_test "generated release installer preserves HTTPS, release verification, and immutable provisioner source"
+  fail_test "generated release installer preserves HTTPS, OpenSSL authentication, release verification, and immutable provisioner source"
 fi
 
 LAST_OUTPUT="$TMP/provision-help.txt"

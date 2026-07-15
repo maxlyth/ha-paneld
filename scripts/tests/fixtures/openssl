@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -u
+
+printf 'openssl %s\n' "$*" >> "${MOCK_CALL_LOG:?MOCK_CALL_LOG is required}"
+
+[ "${MOCK_OPENSSL_MISSING:-0}" = 0 ] || exit 127
+
+case "${1:-}" in
+  version)
+    printf 'OpenSSL 3.0.0 mock\n'
+    ;;
+  dgst)
+    if [ "${2:-}" = -sha256 ] && [ "${3:-}" = -verify ]; then
+      [ "${MOCK_RELEASE_SIGNATURE_FAIL:-0}" = 0 ] || exit 1
+      printf 'Verified OK\n'
+    elif [ "${2:-}" = -sha256 ] && [ "${3:-}" = -r ]; then
+      [ "${MOCK_OPENSSL_DIGEST_FAIL:-0}" = 0 ] || exit 1
+      apk="${4:-}"
+      hash="$(/usr/bin/sha256sum "$apk" | awk '{print $1}')" || exit 1
+      printf '%s *%s\n' "$hash" "$apk"
+    else
+      exit 2
+    fi
+    ;;
+  *) exit 2 ;;
+esac

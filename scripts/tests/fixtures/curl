@@ -23,6 +23,24 @@ case "$url" in
     [ -n "$output_file" ] || exit 2
     printf 'mock pinned Shizuku manager apk\n' > "$output_file"
     ;;
+  https://github.com/maxlyth/ha-paneld/releases/download/v*/ha-paneld-v*-manual-setup-required.apk.sha256.sig)
+    [ -n "$output_file" ] || exit 2
+    [ "${MOCK_RELEASE_PROOF_DOWNLOAD:-ok}" = "signature_fail" ] && exit 22
+    printf 'mock detached release signature\n' > "$output_file"
+    ;;
+  https://github.com/maxlyth/ha-paneld/releases/download/v*/ha-paneld-v*-manual-setup-required.apk.sha256)
+    [ -n "$output_file" ] || exit 2
+    [ "${MOCK_RELEASE_PROOF_DOWNLOAD:-ok}" = "checksum_fail" ] && exit 22
+    apk="${RELEASE_APK_SOURCE:-}"
+    [ -n "$apk" ] && [ -f "$apk" ] || exit 2
+    asset="$(basename "$url" .sha256)"
+    case "${MOCK_RELEASE_CHECKSUM:-ok}" in
+      ok) hash="$(/usr/bin/sha256sum "$apk" | awk '{print $1}')"; printf '%s  %s\n' "$hash" "$asset" > "$output_file" ;;
+      mismatch) printf '%064d  %s\n' 0 "$asset" > "$output_file" ;;
+      malformed) printf 'this is not a checksum record\n' > "$output_file" ;;
+      *) exit 2 ;;
+    esac
+    ;;
   https://api.github.com/repos/maxlyth/ha-paneld/releases\?per_page=100)
     case "${MOCK_GITHUB_API:-fail}" in
       pretty) cat <<'JSON'

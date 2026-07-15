@@ -64,8 +64,18 @@ if ! command -v adb >/dev/null 2>&1; then
   echo "    …or download platform-tools: https://developer.android.com/tools/releases/platform-tools"
 fi
 if ! command -v curl >/dev/null 2>&1; then miss=1; echo "${R}✗ curl not found${X} — install curl, then re-run."; fi
+if ! command -v openssl >/dev/null 2>&1 || ! openssl version >/dev/null 2>&1; then
+  miss=1
+  echo "${R}✗ OpenSSL not found.${X} It authenticates the release before anything is installed. Install it, then re-run:"
+  case "$(uname -s 2>/dev/null)" in
+    Darwin) echo "    xcode-select --install   ·   or: brew install openssl" ;;
+    Linux)  echo "    Debian/Ubuntu: sudo apt install openssl   ·   Fedora: sudo dnf install openssl   ·   Arch: sudo pacman -S openssl" ;;
+    MINGW*|MSYS*|CYGWIN*) echo "    Update Git for Windows, then reopen Git Bash   ·   or run the installer in WSL" ;;
+    *) echo "    Windows: use a current Git Bash or WSL terminal   ·   macOS/Linux: install the openssl package" ;;
+  esac
+fi
 [ "$miss" = 0 ] || { echo "${Y}Resolve the above and paste the one-liner again.${X}"; exit 1; }
-echo "${G}✓ adb and curl present${X}"
+echo "${G}✓ adb, curl, and OpenSSL present${X}"
 
 # Pair the provisioner and APK from one immutable release. Pulling provision.sh from moving main
 # while installing an older stable APK can make a first-run script call APIs that APK does not have.

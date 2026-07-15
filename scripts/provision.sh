@@ -121,6 +121,21 @@ done
 valid_release_tag() { printf '%s\n' "$1" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$'; }
 release_apk_name() { printf 'ha-paneld-%s-manual-setup-required.apk\n' "$1"; }
 release_apk_url() { printf 'https://github.com/%s/releases/download/%s/%s\n' "$REPO" "$1" "$(release_apk_name "$1")"; }
+release_checksum_url() { printf '%s.sha256\n' "$(release_apk_url "$1")"; }
+release_signature_url() { printf '%s.sig\n' "$(release_checksum_url "$1")"; }
+write_release_public_key() {
+  cat > "$1" <<'EOF'
+-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA3LH+db6kzNld/ERP612x
+UOOG6TINFvuKJKinQAWi6Gfm2jCmW4plhw+w4vXgP8B8FpY0SLatUVo3EeAi+f1K
+EHj0syPi7Sx781o1oc9LicQG4LjWVZPe+m4AkPl9ByopobQwYTXOjaq6ZFpFgAZe
+NwQ44hg5o9iVKtxpnnjHEc/m6o9TBySQvxDWF3RxCDyPLNBqhrsgKsDlAyh+dtA8
+aJpQsDUJoX42xsRvA1hkRCpnWdEs1Bwfyv0ztlOxj7MxeFrFxWc3mnUyGhsn6rCT
+O+ygQ2m7FHp3D5t1+wFIendluEzUC+y9MpUHmoyq/lFrVuA8EOiy1U+z7Lr1vBWf
+LQIDAQAB
+-----END PUBLIC KEY-----
+EOF
+}
 if [ -n "$APK_RELEASE_TAG" ]; then
   valid_release_tag "$APK_RELEASE_TAG" || { echo "${RED}✗ invalid release tag: $APK_RELEASE_TAG${X}" >&2; exit 2; }
   [ -n "$APK" ] || { echo "${RED}✗ --release-tag requires --apk.${X}" >&2; exit 2; }
@@ -421,22 +436,86 @@ find_android_build_tool() {
   [ -n "$found" ] && printf '%s\n' "$found"
 }
 
+verify_release_checksum() {
+  local openssl_tool proof_dir checksum_file signature_file public_key expected_name record expected_hash actual_hash
+  openssl_tool="$(command -v openssl 2>/dev/null || true)"
+  if [ -z "$openssl_tool" ] || ! "$openssl_tool" version >/dev/null 2>&1; then
+    fail "OpenSSL is required to authenticate this official ha-paneld release" \
+      "No panel changes were made. Install OpenSSL, then re-run the same command." \
+      "Windows: use a current Git Bash or WSL terminal. macOS: run xcode-select --install, or brew install openssl." \
+      "Debian/Ubuntu: sudo apt install openssl · Fedora: sudo dnf install openssl · Arch: sudo pacman -S openssl"
+  fi
+
+  proof_dir="$(mktemp -d)" || fail "could not create a temporary directory for release verification" \
+    "Free some disk space, then re-run; no panel changes were made."
+  checksum_file="$proof_dir/release.sha256"
+  signature_file="$proof_dir/release.sha256.sig"
+  public_key="$proof_dir/release-public-key.pem"
+  if ! write_release_public_key "$public_key"; then
+    rm -rf "$proof_dir"
+    fail "could not prepare the trusted ha-paneld release key" "No panel changes were made. Check free disk space, then re-run."
+  fi
+  if ! RELEASE_APK_SOURCE="$APK" curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 15 --max-time 60 \
+      "$(release_checksum_url "$APK_RELEASE_TAG")" -o "$checksum_file"; then
+    rm -rf "$proof_dir"
+    fail "could not download the signed checksum for $APK_RELEASE_TAG" \
+      "The release may be incomplete or GitHub may be unavailable. No panel changes were made; check internet access and retry."
+  fi
+  if ! curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 15 --max-time 60 \
+      "$(release_signature_url "$APK_RELEASE_TAG")" -o "$signature_file"; then
+    rm -rf "$proof_dir"
+    fail "could not download the checksum signature for $APK_RELEASE_TAG" \
+      "The release may be incomplete or GitHub may be unavailable. No panel changes were made; check internet access and retry."
+  fi
+  if ! "$openssl_tool" dgst -sha256 -verify "$public_key" -signature "$signature_file" "$checksum_file" >/dev/null 2>&1; then
+    rm -rf "$proof_dir"
+    fail "the $APK_RELEASE_TAG checksum signature is invalid" \
+      "The release assets could be incomplete, damaged, or substituted. Nothing was installed, started, or privileged." \
+      "Delete the downloaded files and retry from the official GitHub release."
+  fi
+
+  expected_name="$(release_apk_name "$APK_RELEASE_TAG")"
+  record="$(cat "$checksum_file")"
+  expected_hash="${record%% *}"
+  if ! printf '%s\n' "$expected_hash" | grep -Eq '^[0-9A-Fa-f]{64}$' || [ "$record" != "$expected_hash  $expected_name" ]; then
+    rm -rf "$proof_dir"
+    fail "the signed checksum record for $APK_RELEASE_TAG is malformed" \
+      "Expected one SHA-256 record for $expected_name. Nothing was installed, started, or privileged."
+  fi
+  if ! actual_hash="$("$openssl_tool" dgst -sha256 -r "$APK" 2>/dev/null | awk '{print tolower($1)}')" || \
+      ! printf '%s\n' "$actual_hash" | grep -Eq '^[0-9a-f]{64}$'; then
+    rm -rf "$proof_dir"
+    fail "OpenSSL could not calculate the downloaded APK checksum" \
+      "No panel changes were made. Check that the APK is readable and re-run the installer."
+  fi
+  expected_hash="$(printf '%s' "$expected_hash" | tr '[:upper:]' '[:lower:]')"
+  if [ "$actual_hash" != "$expected_hash" ]; then
+    rm -rf "$proof_dir"
+    fail "the $APK_RELEASE_TAG APK checksum does not match its signed record" \
+      "The APK could be incomplete, damaged, or substituted. Nothing was installed, started, or privileged." \
+      "Delete the downloaded files and retry from the official GitHub release."
+  fi
+  rm -rf "$proof_dir"
+  step "🔐 authenticated" "${D}$APK_RELEASE_TAG · signed SHA-256 ${actual_hash:0:12}…${X}"
+}
+
 verify_release_apk() {
   [ -n "$APK_RELEASE_TAG" ] || return 0
   local expected_name signer_tool signer_output signer package_tool package_name
   expected_name="$(release_apk_name "$APK_RELEASE_TAG")"
   [ "$(basename "$APK")" = "$expected_name" ] || fail "release APK filename does not match its tag" \
     "Expected $expected_name for $APK_RELEASE_TAG; nothing was installed."
+  verify_release_checksum
   signer_tool="$(find_android_build_tool apksigner || true)"
   if [ -z "$signer_tool" ]; then
-    warn "Android Build-Tools were not found, so this host cannot authenticate the ha-paneld release signer before a fresh install. Android still validates the APK signature and enforces signer continuity for upgrades. Install Android SDK Build-Tools (apksigner) for strong fresh-install verification."
-    return 0
+    warn "Android Build-Tools were not found, so the optional APK structure inspection was skipped. The APK was still authenticated by the signed checksum above, and Android validates its APK signature during installation."
+  else
+    signer_output="$("$signer_tool" verify --print-certs "$APK" 2>/dev/null)" || fail "release APK signature verification failed" \
+      "The downloaded APK was not installed. Check GitHub access and retry."
+    signer="$(printf '%s\n' "$signer_output" | sed -nE 's/^Signer #[0-9]+ certificate SHA-256 digest: *//p' | head -1 | tr -d ':\r' | tr '[:upper:]' '[:lower:]')"
+    [ "$signer" = "$RELEASE_CERT_SHA256" ] || fail "release APK signer mismatch" \
+      "Expected $RELEASE_CERT_SHA256" "Got      ${signer:-unavailable}" "Nothing was installed, started, or privileged."
   fi
-  signer_output="$("$signer_tool" verify --print-certs "$APK" 2>/dev/null)" || fail "release APK signature verification failed" \
-    "The downloaded APK was not installed. Check GitHub access and retry."
-  signer="$(printf '%s\n' "$signer_output" | sed -nE 's/^Signer #[0-9]+ certificate SHA-256 digest: *//p' | head -1 | tr -d ':\r' | tr '[:upper:]' '[:lower:]')"
-  [ "$signer" = "$RELEASE_CERT_SHA256" ] || fail "release APK signer mismatch" \
-    "Expected $RELEASE_CERT_SHA256" "Got      ${signer:-unavailable}" "Nothing was installed, started, or privileged."
   package_tool="$(find_android_build_tool aapt || true)"
   [ -n "$package_tool" ] || package_tool="$(find_android_build_tool aapt2 || true)"
   if [ -n "$package_tool" ]; then
