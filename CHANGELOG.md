@@ -2,13 +2,13 @@
 
 ## v0.9.3-rc1 - Unreleased
 
-**Genuinely unrooted panels can opt into a useful middle ground between ordinary Android permissions and root.** With Shizuku installed and started, ha-paneld can use Android's shell identity for a deliberately limited set of actions. Enhanced access still requires approval on the panel itself and does not turn Shizuku into a general remote shell or claim the full rooted feature set.
+**Device support is no longer limited to profiles shipped by the ha-paneld project.** Owners and hardware vendors can create, edit, validate, import, activate, export and share panel profiles without rebuilding the app. Profiles remain declarative and constrained to capabilities already implemented by ha-paneld, so extending hardware support does not allow a profile to introduce executable code or arbitrary privileged operations.
 
 ### Added
 
+- **Panel support can be added or refined through validated YAML profiles** — the new Profile page can inspect the active bundled profile, edit or import a profile, preview validation, activate a revision, return to automatic selection and roll back to the last working revision. Profiles select bounded drivers and curated artifacts compiled into ha-paneld; they cannot introduce shell commands, arbitrary paths, credentials or executable code. An unknown panel can also create a conservative draft from passive diagnostics for refinement and sharing.
 - **Optional [Shizuku enhanced access](docs/shizuku.md) for genuinely unrooted panels** — after the checksum-pinned Shizuku manager is installed and its service started, the user can approve ha-paneld locally to gain display sizing, screenshots and key/tap input, and signer-verified ha-paneld / minimal Home Assistant Companion installs. It does not provide root, arbitrary APK uploads, System WebView replacement, private Companion data, system logs, reboot, backlight hard-off, LED/relay access, CPU governor, kiosk lock or vendor taming. The approval cannot be enabled by MQTT, the web API, a restored backup or a fleet push. A service started through ADB normally needs rearming after a reboot.
 - **Provisioning can prepare the Shizuku path without hiding the remaining on-panel step** — `provision.sh --shizuku` verifies or installs the pinned manager, starts its ADB service and then points to the exact local approval screen. A trusted same or newer manager is retained on a repeated run. Automatic manager replacement is deliberately not part of this release candidate because an update can stop the Shizuku service and require rearming.
-- **Panel support can be added or refined through validated YAML profiles** — the new Profile page can inspect the active bundled profile, edit or import a profile, preview validation, activate a revision, return to automatic selection and roll back to the last working revision. Profiles select bounded drivers and curated artifacts compiled into ha-paneld; they cannot introduce shell commands, arbitrary paths, credentials or executable code. An unknown panel can also create a conservative draft from passive diagnostics for refinement and sharing.
 
 ### Changed
 
