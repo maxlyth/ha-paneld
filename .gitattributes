@@ -1,16 +1,17 @@
-# GitHub's repository language bar should reflect only the languages that build the **runtime
-# executable** — the Android app, its native helpers, and the config UI it serves — NOT the build,
-# CI, or deploy process. Build-process languages (Shell scripts, Gradle/Kotlin build scripts, the CI
-# Docker image, NDK build glue, maintainer generators) are excluded from Linguist so the bar tells a
-# repo consumer what the product is made of, with no "Python" / "Shell" / "Other" build noise.
+# Keep GitHub's repository language bar focused on the primary implementation languages: Kotlin for
+# the Android app, C for native components, and JavaScript for the interactive web UI. Supporting
+# markup/styles and build, CI, deployment, and maintainer tooling are intentionally excluded.
 #
-# Kept (runtime): Kotlin (.kt — the app), C (.c/.h — native LED driver + helper daemon + CDP relay),
-# and the config-UI web assets the app serves (.js / .html / .css).
+# These overrides affect only GitHub Linguist's presentation. They do not remove files from release
+# archives or change how the project is built.
 
-# --- build / CI / deploy tooling — NOT the runtime, exclude from the language bar ---
+# --- supporting web assets and build / CI / deploy tooling ---
 *.sh                    linguist-detectable=false
 *.kts                   linguist-detectable=false
-scripts/*.py            linguist-detectable=false
-tools/build/Dockerfile  linguist-detectable=false
+*.py                    linguist-detectable=false
+*.html                  linguist-detectable=false
+*.css                   linguist-detectable=false
+**/Dockerfile           linguist-detectable=false
+**/Makefile             linguist-detectable=false
 CMakeLists.txt          linguist-detectable=false
 *.cmake                 linguist-detectable=false
