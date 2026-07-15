@@ -130,7 +130,9 @@ data class SettingSpec(
     val help: String = "",
     val default: String,
     val tier: Tier = Tier.ADVANCED,
-    val scope: Scope = Scope.PORTABLE,
+    // Fleet imports are intentionally fail-closed: a new setting stays local until its author
+    // explicitly confirms that copying it to every panel is safe.
+    val scope: Scope = Scope.DEVICE,
     val secret: Boolean = false,             // redacted from GET /config + excluded from export by default
     val min: Double? = null,
     val max: Double? = null,

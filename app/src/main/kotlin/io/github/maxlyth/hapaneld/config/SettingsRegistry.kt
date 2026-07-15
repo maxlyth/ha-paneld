@@ -51,13 +51,13 @@ object SettingsRegistry {
         // ---- MQTT --------------------------------------------------------------------------------
         SettingSpec(
             key = "mqtt_broker", type = SettingType.STRING, group = "MQTT",
-            label = "Broker URL", default = "", tier = Tier.BASIC,
+            label = "Broker URL", default = "", tier = Tier.BASIC, scope = Scope.PORTABLE,
             help = "e.g. tcp://homeassistant.local:1883 — blank auto-discovers HA over mDNS.",
         ),
         SettingSpec(
             key = "mqtt_user", type = SettingType.STRING, group = "MQTT",
             label = "Username", default = "", tier = Tier.BASIC, scope = Scope.DEVICE,
-            help = "Per-panel broker identity; restoreable, but never copied by a fleet-mode import.",
+            help = "Credential for this panel. Fleet imports keep the target panel's username because per-panel broker accounts and ACLs are common.",
         ),
         SettingSpec(
             key = "mqtt_password", type = SettingType.PASSWORD, group = "MQTT",
@@ -68,7 +68,7 @@ object SettingsRegistry {
         // ---- Behaviour ---------------------------------------------------------------------------
         SettingSpec(
             key = "wake_on_wave", type = SettingType.BOOL, group = "Behaviour",
-            label = "Wake on wave", default = "true", tier = Tier.BASIC,
+            label = "Wake on wave", default = "true", tier = Tier.BASIC, scope = Scope.PORTABLE,
             help = "Wake the screen locally the instant proximity reads near.",
             availableWhen = { it.hasProximity },
             haExposedByDefault = true,
@@ -79,7 +79,7 @@ object SettingsRegistry {
         ),
         SettingSpec(
             key = "prevent_idle_dim", type = SettingType.BOOL, group = "Behaviour",
-            label = "Prevent idle dim", default = "true",
+            label = "Prevent idle dim", default = "true", scope = Scope.PORTABLE,
             help = "Stop the vendor firmware dimming the backlight at the screen-off timeout.",
             haExposedByDefault = true,
             ha = HaEntity(
@@ -129,7 +129,7 @@ object SettingsRegistry {
         // ---- Display -----------------------------------------------------------------------------
         SettingSpec(
             key = "auto_brightness", type = SettingType.BOOL, group = "Display",
-            label = "Auto-brightness", default = "false", scope = Scope.DEVICE,
+            label = "Auto-brightness", default = "false", scope = Scope.PORTABLE,
             help = "On-panel engine maps a lux stream to the backlight (off = HA drives the screen).",
             haExposedByDefault = true,
             ha = HaEntity(
@@ -150,7 +150,7 @@ object SettingsRegistry {
 
         SettingSpec(
             key = "touch_sound", type = SettingType.BOOL, group = "Behaviour",
-            label = "Touch sound", default = "true",
+            label = "Touch sound", default = "true", scope = Scope.PORTABLE,
             help = "Audible tap feedback (system touch sounds).",
             haExposedByDefault = true,
             ha = HaEntity(
@@ -204,7 +204,7 @@ object SettingsRegistry {
         ),
         SettingSpec(
             key = "keep_awake", type = SettingType.BOOL, group = "Behaviour",
-            label = "Keep awake", default = "true",
+            label = "Keep awake", default = "true", scope = Scope.PORTABLE,
             help = "Hold a partial wakelock so the SoC/network never suspend (screen still sleeps freely).",
         ),
 
@@ -221,7 +221,7 @@ object SettingsRegistry {
         ),
         SettingSpec(
             key = "dashboard_entity_learning", type = SettingType.BOOL, group = "Dashboard",
-            label = "Automatic dashboard entity filter", default = "false", scope = Scope.DEVICE,
+            label = "Automatic dashboard entity filter", default = "false", scope = Scope.PORTABLE,
             help = "Built-in renderer only: start with dashboard references, learn missing runtime dependencies, and avoid the full Home Assistant entity stream. Disabled by default. The Entities tab controls promotion sources, manual pins and diagnostics.",
         ),
         SettingSpec(
@@ -231,12 +231,12 @@ object SettingsRegistry {
         ),
         SettingSpec(
             key = "dashboard_fullscreen", type = SettingType.BOOL, group = "Dashboard",
-            label = "Fullscreen dashboard", default = "true",
+            label = "Fullscreen dashboard", default = "true", scope = Scope.PORTABLE,
             help = "Built-in renderer: hide the Android status and navigation bars for an edge-to-edge dashboard (swipe from a screen edge to reveal them briefly). Turn off to keep the system bars visible.",
         ),
         SettingSpec(
             key = "dashboard_overscroll", type = SettingType.BOOL, group = "Dashboard",
-            label = "Dashboard overscroll effect", default = "false", hidden = true,
+            label = "Dashboard overscroll effect", default = "false", scope = Scope.PORTABLE, hidden = true,
             help = "Built-in renderer: allow Android's overscroll stretch/glow when a drag runs past " +
                 "the top or bottom of the dashboard. Off by default (a wall panel rarely scrolls, and " +
                 "the bounce looks out of place). API-only — set true to restore the native effect.",
@@ -244,16 +244,17 @@ object SettingsRegistry {
         SettingSpec(
             key = "dashboard_idle_return_min", type = SettingType.INT, group = "Dashboard",
             label = "Idle return to home (min)", default = "0", min = 0.0, max = 1440.0,
+            scope = Scope.PORTABLE,
             help = "Built-in renderer: minutes with no touch before the dashboard snaps back to the Home dashboard view (instant in-app navigation, not a reload). 0 = off; needs Home dashboard set.",
         ),
         SettingSpec(
             key = "ha_url", type = SettingType.STRING, group = "Dashboard",
-            label = "Home Assistant URL", default = "",
+            label = "Home Assistant URL", default = "", scope = Scope.PORTABLE,
             help = "Built-in renderer only (skunk-works): the HA base URL, e.g. http://homeassistant.local:8123. Blank disables the built-in renderer.",
         ),
         SettingSpec(
             key = "dark_mode", type = SettingType.BOOL, group = "Display",
-            label = "Dark mode", default = "true",
+            label = "Dark mode", default = "true", scope = Scope.PORTABLE,
             help = "Themes ha-paneld's own screens and sets the dashboard's default colour scheme on panels without a system dark-mode setting (Android 9 and older). A theme picked inside Home Assistant overrides the dashboard default; this web UI always follows the viewing browser's own preference.",
             // Panels with a native system dark/light control (Android 10+) follow the OS setting for
             // everything, so the toggle is hidden there.
@@ -287,12 +288,12 @@ object SettingsRegistry {
         ),
         SettingSpec(
             key = "dashboard_entity_auto_static", type = SettingType.BOOL, group = "Dashboard",
-            label = "Auto-subscribe dashboard references", default = "true", hidden = true,
+            label = "Auto-subscribe dashboard references", default = "true", scope = Scope.PORTABLE, hidden = true,
             help = "Entities found by parsing dashboard configuration may be added automatically. Evidence remains visible when disabled.",
         ),
         SettingSpec(
             key = "dashboard_entity_auto_runtime", type = SettingType.BOOL, group = "Dashboard",
-            label = "Auto-subscribe runtime accesses", default = "true", hidden = true,
+            label = "Auto-subscribe runtime accesses", default = "true", scope = Scope.PORTABLE, hidden = true,
             help = "Missing entities read through hass.states may be added automatically. Evidence remains visible when disabled.",
         ),
         // Last in the group on purpose: the display-density control is the preferred way to size a
