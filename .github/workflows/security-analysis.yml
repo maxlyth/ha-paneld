@@ -70,7 +70,6 @@ jobs:
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
-          queries: security-extended
 
       - name: Build Android sources for analysis
         if: matrix.language == 'java-kotlin'
