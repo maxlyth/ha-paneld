@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.9.3-rc2 - Unreleased
+## v0.9.3-rc2 - 2026-07-15
 
 **This release candidate updates the shipped MQTT networking stack to current security-patched releases and refreshes the tooling used to build, inspect and publish releases.**
 
@@ -12,6 +12,10 @@
 ### Fixed
 
 - **Release SBOMs now carry valid identities** — the Android inventory includes the document identifier required for attestation, while the embedded profile-editor inventory derives a stable identifier from its locked dependency graph. An external attestation outage remains advisory and no longer prevents an otherwise valid release from being published.
+
+### Docs
+
+- **The NSPanel Pro firmware index now includes the omitted 4.5.3 files** — the monitor also verifies each indexed download's size and its documentation now matches the daily seven-day availability history.
 
 ## v0.9.3-rc1 - 2026-07-15
 
