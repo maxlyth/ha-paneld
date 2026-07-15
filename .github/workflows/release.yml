@@ -10,34 +10,46 @@ on:
     tags:
       - 'v*'
 
-permissions:
-  contents: write
-  id-token: write
-  attestations: write
-  artifact-metadata: write
+permissions: {}
 
 jobs:
-  release:
+  prepare:
     runs-on: ubuntu-24.04
-    environment: release
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    outputs:
+      input-manifest-sha256: ${{ steps.manifest.outputs.sha256 }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
 
-      - name: Require release signing credentials
-        env:
-          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+      - name: Validate release tag and source commit
         run: |
-          for name in KEYSTORE_B64 KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
-            if [ -z "${!name}" ]; then
-              echo "::error::$name is required; refusing to publish a debug-signed release asset."
-              exit 1
-            fi
-          done
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
+            echo "::error::Release tag is not an accepted vX.Y.Z or vX.Y.Z-suffix version: $GITHUB_REF_NAME"
+            exit 1
+          fi
+          source_commit=$(git rev-parse HEAD)
+          if [[ ! "$source_commit" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Checked-out source did not resolve to one commit."
+            exit 1
+          fi
+          echo "SOURCE_COMMIT=$source_commit" >> "$GITHUB_ENV"
+
+      - name: Set up Node.js 20.18.1
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20.18.1
+
+      - name: Verify profile-editor dependency graph and bundle
+        working-directory: tools/profile-editor
+        run: |
+          expected_npm=$(node -p 'require("./package.json").packageManager.split("@").at(-1)')
+          test "$(npm --version)" = "$expected_npm"
+          npm ci --ignore-scripts --audit=false --fund=false
+          npm run check
 
       - name: Set up JDK 17
         uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4.8.0
@@ -66,65 +78,33 @@ jobs:
       - name: Generate release dependency SBOM
         run: ./gradlew :app:cyclonedxDirectBom --stacktrace
 
-      - name: Sign release APK
-        env:
-          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+      - name: Collect unsigned release inputs
         run: |
-          trap 'rm -f "$RUNNER_TEMP/keystore.jks"' EXIT
-          echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/keystore.jks"
-          BUILD_TOOLS=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
-          UNSIGNED=$(ls app/build/outputs/apk/release/*-unsigned.apk)
-          "$BUILD_TOOLS/apksigner" sign \
-            --ks "$RUNNER_TEMP/keystore.jks" \
-            --ks-pass "pass:$KEYSTORE_PASSWORD" \
-            --ks-key-alias "$KEY_ALIAS" \
-            --key-pass "pass:$KEY_PASSWORD" \
-            --out app/build/outputs/apk/release/ha-paneld-release-signed.apk \
-            "$UNSIGNED"
-
-      - name: Collect release asset
-        id: asset
-        run: |
-          mkdir -p dist
-          test -s app/build/outputs/apk/release/ha-paneld-release-signed.apk
-          apk_name="ha-paneld-${GITHUB_REF_NAME}-manual-setup-required.apk"
-          cp app/build/outputs/apk/release/ha-paneld-release-signed.apk "dist/$apk_name"
-          (cd dist && sha256sum "$apk_name" > "$apk_name.sha256")
-          sbom_name="ha-paneld-${GITHUB_REF_NAME}-dependencies.cdx.json"
+          mkdir -p release-input
+          mapfile -t unsigned_apks < <(find app/build/outputs/apk/release -maxdepth 1 -type f -name '*-unsigned.apk' -print)
+          if [ "${#unsigned_apks[@]}" -ne 1 ]; then
+            echo "::error::Expected exactly one unsigned release APK, found ${#unsigned_apks[@]}."
+            exit 1
+          fi
+          cp "${unsigned_apks[0]}" release-input/ha-paneld-unsigned.apk
           test -s app/build/reports/cyclonedx-direct/bom.json
-          cp app/build/reports/cyclonedx-direct/bom.json "dist/$sbom_name"
-          echo "apk_name=$apk_name" >> "$GITHUB_OUTPUT"
-          echo "sbom_name=$sbom_name" >> "$GITHUB_OUTPUT"
+          cp app/build/reports/cyclonedx-direct/bom.json release-input/dependencies.cdx.json
+          apk_name="ha-paneld-${GITHUB_REF_NAME}-manual-setup-required.apk"
+          echo "APK_NAME=$apk_name" >> "$GITHUB_ENV"
 
       - name: Build release-pinned installer asset
-        env:
-          APK_NAME: ${{ steps.asset.outputs.apk_name }}
         run: |
-          installer="dist/ha-paneld-installer-${GITHUB_REF_NAME}.sh"
+          installer="release-input/ha-paneld-installer-${GITHUB_REF_NAME}.sh"
           sed \
             -e "s|^RELEASE_TAG=.*|RELEASE_TAG=\"$GITHUB_REF_NAME\"|" \
             -e "s|^RELEASE_APK_NAME=.*|RELEASE_APK_NAME=\"$APK_NAME\"|" \
-            -e "s|^PROVISION_COMMIT=.*|PROVISION_COMMIT=\"$GITHUB_SHA\"|" \
+            -e "s|^PROVISION_COMMIT=.*|PROVISION_COMMIT=\"$SOURCE_COMMIT\"|" \
             scripts/install.sh > "$installer"
           chmod +x "$installer"
           bash -n "$installer"
           grep -Fq "RELEASE_TAG=\"$GITHUB_REF_NAME\"" "$installer"
           grep -Fq "RELEASE_APK_NAME=\"$APK_NAME\"" "$installer"
-          grep -Fq "PROVISION_COMMIT=\"$GITHUB_SHA\"" "$installer"
-
-      - name: Attest release asset provenance
-        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
-        with:
-          subject-path: dist/*
-
-      - name: Attest release dependency SBOM
-        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
-        with:
-          subject-path: dist/${{ steps.asset.outputs.apk_name }}
-          sbom-path: dist/${{ steps.asset.outputs.sbom_name }}
+          grep -Fq "PROVISION_COMMIT=\"$SOURCE_COMMIT\"" "$installer"
 
       # Human-readable notes come from the matching CHANGELOG.md section. Prereleases also receive an
       # auto-generated comparison; stable releases use only the self-contained curated body.
@@ -135,8 +115,6 @@ jobs:
       # Each RC must have its own CHANGELOG section describing only what changed since
       # the previous RC — repeating the prior section causes identical release notes.
       - name: Extract release notes from CHANGELOG
-        env:
-          APK_NAME: ${{ steps.asset.outputs.apk_name }}
         run: |
           tag="$GITHUB_REF_NAME"
           base="${tag%%-*}"     # v0.8.4-rc3 → v0.8.4 (used only as fallback for stable)
@@ -145,21 +123,21 @@ jobs:
             awk -v t="$1" '/^## /{ if(found) exit; if($2==t){ found=1; next } } found' CHANGELOG.md
           }
 
-          extract "$tag" > release-body.md
-          if [ ! -s release-body.md ] && [ "$tag" != "$base" ]; then
+          extract "$tag" > release-input/release-body.md
+          if [ ! -s release-input/release-body.md ] && [ "$tag" != "$base" ]; then
             echo "::error::No CHANGELOG.md section for $tag — each RC needs its own ## $tag entry describing what changed since the previous RC. Add it before tagging."
             exit 1
           fi
-          if [ ! -s release-body.md ]; then
-            extract "$base" > release-body.md
+          if [ ! -s release-input/release-body.md ]; then
+            extract "$base" > release-input/release-body.md
           fi
-          if [ ! -s release-body.md ]; then
+          if [ ! -s release-input/release-body.md ]; then
             echo "::warning::No CHANGELOG.md section for $tag — add one for human-readable notes."
-            echo "_No changelog entry for $GITHUB_REF_NAME._" > release-body.md
+            echo "_No changelog entry for $GITHUB_REF_NAME._" > release-input/release-body.md
           fi
           changelog_body="$(mktemp)"
-          mv release-body.md "$changelog_body"
-          cat > release-body.md <<EOF
+          mv release-input/release-body.md "$changelog_body"
+          cat > release-input/release-body.md <<EOF
           ## Recommended installation
 
           **Do not use \`adb install\` directly.** It installs the APK but does not complete ha-paneld's permissions, startup, configuration, and verification.
@@ -173,15 +151,211 @@ jobs:
           The \`$APK_NAME\` asset is for manual or on-device sideloading. After installing it, open ha-paneld and complete the on-panel setup.
 
           EOF
-          cat "$changelog_body" >> release-body.md
-          echo "----- release body -----"; cat release-body.md
+          cat "$changelog_body" >> release-input/release-body.md
+          echo "----- release body -----"; cat release-input/release-body.md
+
+      - name: Seal exact release inputs
+        id: manifest
+        run: |
+          expected=$(printf '%s\n' \
+            dependencies.cdx.json \
+            "ha-paneld-installer-${GITHUB_REF_NAME}.sh" \
+            ha-paneld-unsigned.apk \
+            release-body.md)
+          actual=$(find release-input -maxdepth 1 -type f -printf '%f\n' | sort)
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::Release input set is not exact."
+            diff -u <(printf '%s\n' "$expected") <(printf '%s\n' "$actual") || true
+            exit 1
+          fi
+          (
+            cd release-input
+            sha256sum dependencies.cdx.json "ha-paneld-installer-${GITHUB_REF_NAME}.sh" ha-paneld-unsigned.apk release-body.md > MANIFEST.sha256
+          )
+          sha256=$(sha256sum release-input/MANIFEST.sha256 | cut -d' ' -f1)
+          echo "sha256=$sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Upload sealed release inputs
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ha-paneld-release-input-${{ github.run_id }}
+          path: release-input/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+          include-hidden-files: false
+
+  sign-and-publish:
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: release
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - name: Download sealed release inputs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ha-paneld-release-input-${{ github.run_id }}
+          path: release-input
+
+      - name: Verify exact release inputs
+        env:
+          EXPECTED_MANIFEST_SHA256: ${{ needs.prepare.outputs.input-manifest-sha256 }}
+        run: |
+          if [[ ! "$EXPECTED_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::Build job did not provide a valid release-input manifest digest."
+            exit 1
+          fi
+          actual_manifest_sha256=$(sha256sum release-input/MANIFEST.sha256 | cut -d' ' -f1)
+          if [ "$actual_manifest_sha256" != "$EXPECTED_MANIFEST_SHA256" ]; then
+            echo "::error::Downloaded release-input manifest does not match the build job output."
+            exit 1
+          fi
+          expected=$(printf '%s\n' \
+            MANIFEST.sha256 \
+            dependencies.cdx.json \
+            "ha-paneld-installer-${GITHUB_REF_NAME}.sh" \
+            ha-paneld-unsigned.apk \
+            release-body.md)
+          actual=$(find release-input -maxdepth 1 -type f -printf '%f\n' | sort)
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::Downloaded release input set is not exact."
+            diff -u <(printf '%s\n' "$expected") <(printf '%s\n' "$actual") || true
+            exit 1
+          fi
+          (cd release-input && sha256sum --check MANIFEST.sha256)
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4.8.0
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3.2.2
+
+      - name: Install pinned Android Build-Tools
+        run: sdkmanager "build-tools;35.0.0"
+
+      - name: Reverify release inputs after tool setup
+        env:
+          EXPECTED_MANIFEST_SHA256: ${{ needs.prepare.outputs.input-manifest-sha256 }}
+        run: |
+          test "$(sha256sum release-input/MANIFEST.sha256 | cut -d' ' -f1)" = "$EXPECTED_MANIFEST_SHA256"
+          (cd release-input && sha256sum --check MANIFEST.sha256)
+
+      - name: Sign and authenticate release APK
+        id: asset
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          for name in KEYSTORE_B64 KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
+            if [ -z "${!name}" ]; then
+              echo "::error::$name is required; refusing to publish a debug-signed release asset."
+              exit 1
+            fi
+          done
+
+          keystore="$RUNNER_TEMP/release-keystore"
+          pkcs12="$RUNNER_TEMP/release-signing.p12"
+          private_key="$RUNNER_TEMP/release-signing-key.pem"
+          public_key="$RUNNER_TEMP/release-signing-public.pem"
+          trap 'rm -f "$keystore" "$pkcs12" "$private_key" "$public_key"' EXIT
+          printf '%s' "$KEYSTORE_B64" | base64 --decode > "$keystore"
+          chmod 600 "$keystore"
+
+          build_tools="$ANDROID_HOME/build-tools/35.0.0"
+          unsigned_apk=release-input/ha-paneld-unsigned.apk
+          apk_name="ha-paneld-${GITHUB_REF_NAME}-manual-setup-required.apk"
+          sbom_name="ha-paneld-${GITHUB_REF_NAME}-dependencies.cdx.json"
+          signed_apk="dist/$apk_name"
+          mkdir -p dist
+
+          "$build_tools/apksigner" sign \
+            --ks "$keystore" \
+            --ks-pass "pass:$KEYSTORE_PASSWORD" \
+            --ks-key-alias "$KEY_ALIAS" \
+            --key-pass "pass:$KEY_PASSWORD" \
+            --out "$signed_apk" \
+            "$unsigned_apk"
+          "$build_tools/apksigner" verify --verbose --print-certs "$signed_apk"
+          "$build_tools/zipalign" -c -P 16 4 "$signed_apk"
+
+          badging=$("$build_tools/aapt" dump badging "$signed_apk")
+          package_line=${badging%%$'\n'*}
+          package_name=$(printf '%s\n' "$package_line" | sed -n "s/.* name='\([^']*\)'.*/\1/p")
+          version_name=$(printf '%s\n' "$package_line" | sed -n "s/.* versionName='\([^']*\)'.*/\1/p")
+          expected_version_name="${GITHUB_REF_NAME#v}"
+          if [ "$package_name" != "io.github.maxlyth.hapaneld" ]; then
+            echo "::error::Signed APK package is '$package_name', expected 'io.github.maxlyth.hapaneld'."
+            exit 1
+          fi
+          if [ "$version_name" != "$expected_version_name" ]; then
+            echo "::error::Signed APK versionName is '$version_name', expected '$expected_version_name' from the tag."
+            exit 1
+          fi
+
+          mapfile -t signer_digests < <("$build_tools/apksigner" verify --print-certs "$signed_apk" | sed -n 's/^Signer #[0-9][0-9]* certificate SHA-256 digest: //p')
+          if [ "${#signer_digests[@]}" -ne 1 ]; then
+            echo "::error::Expected exactly one APK signer, found ${#signer_digests[@]}."
+            exit 1
+          fi
+          signer_digest=$(printf '%s' "${signer_digests[0]}" | tr '[:upper:]' '[:lower:]')
+          expected_signer_digest=ac6193307fb0b70113aae205d7549406f96e063bc5491b67b1d5694a34b0e339
+          if [ "$signer_digest" != "$expected_signer_digest" ]; then
+            echo "::error::Signed APK certificate SHA-256 is '$signer_digest', expected '$expected_signer_digest'."
+            exit 1
+          fi
+
+          cp release-input/dependencies.cdx.json "dist/$sbom_name"
+          cp "release-input/ha-paneld-installer-${GITHUB_REF_NAME}.sh" "dist/ha-paneld-installer-${GITHUB_REF_NAME}.sh"
+          chmod +x "dist/ha-paneld-installer-${GITHUB_REF_NAME}.sh"
+          (cd dist && sha256sum "$apk_name" > "$apk_name.sha256")
+
+          pkcs12_password=$(openssl rand -hex 32)
+          keytool -importkeystore \
+            -srckeystore "$keystore" \
+            -srcstorepass "$KEYSTORE_PASSWORD" \
+            -srcalias "$KEY_ALIAS" \
+            -srckeypass "$KEY_PASSWORD" \
+            -destkeystore "$pkcs12" \
+            -deststoretype PKCS12 \
+            -deststorepass "$pkcs12_password" \
+            -destkeypass "$pkcs12_password" \
+            -noprompt
+          openssl pkcs12 -in "$pkcs12" -passin "pass:$pkcs12_password" -nocerts -nodes -out "$private_key"
+          chmod 600 "$private_key"
+          openssl pkey -in "$private_key" -pubout -out "$public_key"
+          openssl dgst -sha256 -sign "$private_key" -out "dist/$apk_name.sha256.sig" "dist/$apk_name.sha256"
+          openssl dgst -sha256 -verify "$public_key" -signature "dist/$apk_name.sha256.sig" "dist/$apk_name.sha256"
+
+          echo "apk_name=$apk_name" >> "$GITHUB_OUTPUT"
+          echo "sbom_name=$sbom_name" >> "$GITHUB_OUTPUT"
+
+      - name: Attest release asset provenance
+        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
+        with:
+          subject-path: dist/*
+
+      - name: Attest release dependency SBOM
+        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
+        with:
+          subject-path: dist/${{ steps.asset.outputs.apk_name }}
+          sbom-path: dist/${{ steps.asset.outputs.sbom_name }}
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           name: ${{ github.ref_name }}
           files: dist/*
-          body_path: release-body.md
+          body_path: release-input/release-body.md
           generate_release_notes: ${{ contains(github.ref_name, '-') }}
           # Tags with a suffix (e.g. v0.5.0-rc1) publish as pre-releases.
           prerelease: ${{ contains(github.ref_name, '-') }}
