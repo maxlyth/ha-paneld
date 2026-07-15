@@ -13,7 +13,7 @@ metadata:
   limitations:
     - The CHT8305 baseline temperature offset is not yet characterised.
 requires:
-  min_core_version: 0.9.3-rc1
+  min_core_version: 0.9.3
   drivers:
     - input.button-backlight
     - input.evdev

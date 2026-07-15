@@ -130,7 +130,7 @@ ha-paneld needs no system-signed install. Standard-Android capabilities (brightn
 
 ## Status & roadmap
 
-**Latest release candidate — 0.9.3-rc2:** device owners and hardware vendors can add or refine Android wall-panel support through validated YAML profiles without rebuilding the app. The candidate also adds optional Shizuku enhanced access for genuinely unrooted panels and strengthens dependency, SBOM and release handling, including an updated MQTT runtime and advisory attestations that cannot prevent a signed and verified APK from being published. Full notes for every release are in [CHANGELOG.md](CHANGELOG.md).
+**Latest release — 0.9.3:** panel owners and hardware vendors can add or refine Android wall-panel support through validated YAML profiles without rebuilding the app. The release also strengthens dependency and release verification, updates the MQTT networking stack, and adds optional Shizuku enhanced access for genuinely unrooted panels. Full notes for every release are in [CHANGELOG.md](CHANGELOG.md).
 
 **Where it's heading** — the near-term direction is **fleet-scale operation** and **full remote provisioning**: bringing a new or factory-wiped panel all the way up with zero typing on the panel, and pushing config/updates to a whole fleet from one place. Other planned work includes MQTT TLS for self-signed brokers, an on-device scheduler, deeper performance tooling, and continued iteration on the HTTP UI. The full curated list is in **[docs/roadmap.md](docs/roadmap.md)**.
 

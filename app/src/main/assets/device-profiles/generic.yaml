@@ -12,7 +12,7 @@ metadata:
   limitations:
     - Unknown vendor hardware stays disabled until an exact profile is selected.
 requires:
-  min_core_version: 0.9.3-rc1
+  min_core_version: 0.9.3
   drivers:
     - access.android-su
     - led.autodetect

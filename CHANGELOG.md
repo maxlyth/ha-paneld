@@ -1,5 +1,36 @@
 # Changelog
 
+## v0.9.3 - 2026-07-15
+
+**Device support is no longer limited to profiles shipped by the ha-paneld project.** Panel owners and hardware vendors can create, edit, validate, import, activate, export and share panel profiles without rebuilding the app. Profiles remain declarative and limited to capabilities already implemented by ha-paneld, so extending hardware support cannot introduce executable code or arbitrary privileged operations.
+
+This release also strengthens dependency and release verification, updates the shipped MQTT networking stack to security-patched versions and adds optional enhanced access for genuinely unrooted panels.
+
+### Added
+
+- **Panel support can be added or refined through validated YAML profiles** — the new Profile page can inspect the active bundled profile, edit or import a profile, preview validation, activate a revision, return to automatic selection and roll back to the last working revision. Profiles select bounded drivers and curated artifacts supported by ha-paneld; they cannot introduce shell commands, arbitrary paths, credentials or executable code. An unknown panel can also create a conservative draft from passive diagnostics for refinement and sharing, while bundled profiles include comments explaining how important values were established.
+- **Optional [Shizuku enhanced access](docs/shizuku.md) is available for genuinely unrooted panels** — after the checksum-pinned Shizuku manager is installed and its service started, the user can approve ha-paneld locally to gain display sizing, screenshots, key and tap input, and signer-verified ha-paneld or minimal Home Assistant Companion installs. It does not provide root or the root-only hardware, system and private-data capabilities. The approval cannot be enabled remotely, and a service started through ADB normally needs rearming after a reboot.
+- **Provisioning can prepare the optional Shizuku path without hiding the remaining on-panel step** — `provision.sh --shizuku` verifies or installs the pinned manager, starts its ADB service and points to the local approval screen. A trusted same or newer manager is retained on a repeated run.
+
+### Changed
+
+- **Dependency and release inputs now have stronger supply-chain controls** — Gradle artifacts are locked and checksum or signature verified, npm tools use exact lockfiles without dependency lifecycle scripts, GitHub Actions use full commit pins and publishing tools use hash-locked dependencies. Separately scoped CycloneDX inventories describe the Android/Gradle and embedded profile-editor runtimes, while curated Shizuku and WebView APKs require their recorded checksum as well as the expected package and signer.
+- **The shipped MQTT networking stack has been updated to security-patched versions** — the HiveMQ client now uses the updated Netty transport line while retaining the existing MQTT connection and recovery model.
+- **Release validation is more resilient and precise** — software inventories carry stable document identities, security analysis uses high-precision queries, and an external attestation outage no longer prevents an otherwise signed and verified release from being published.
+- **Fleet imports now fail closed for new settings** — a setting is copied between panels only after it has been explicitly classified as portable. Shared endpoints and common behaviour preferences remain portable, while credentials, renderer and dashboard state, calibration, display tuning, update policy and logging stay with their original panel.
+
+### Fixed
+
+- **A configured dashboard returns to the foreground reliably after startup** — once Android's home-screen state has been reconciled, ha-paneld opens a ready built-in or explicitly selected external renderer instead of leaving the admin launcher visible. Interrupted built-in-renderer preparation remains retryable. (#31)
+- **The admin launcher's Dashboard tile opens the configured renderer** — it now selects a ready built-in renderer, an explicitly selected external renderer or the existing automatic Companion fallback without showing unusable or duplicate targets. (#32)
+- **Restoring a Home Assistant Companion login repairs a blank internal server URL before it goes live** — ha-paneld applies and verifies the repair in the staged database before entering the rollback-capable live transaction. A failed repair leaves the existing Companion data untouched instead of restoring a login that opens Home Assistant's “Missing Host header” error.
+- **Credential backup and HTTPS audio handling are safer** — Android's implicit app backup and device-transfer path is disabled and excludes credential preferences, while HTTPS audio downloads use Android's normal certificate and hostname verification.
+- **Embedded browser and local navigation targets are more tightly constrained** — embedded browser views reject file and content-provider access, release links accept only GitHub HTTPS destinations, peer navigation targets are validated before use and screenshot hydration stays on its fixed same-origin endpoint.
+
+### Docs
+
+- **The NSPanel Pro firmware index now includes the omitted 4.5.3 files** — the monitor also verifies each indexed download's size and its documentation now matches the daily seven-day availability history.
+
 ## v0.9.3-rc2 - 2026-07-15
 
 **This release candidate updates the shipped MQTT networking stack to current security-patched releases and refreshes the tooling used to build, inspect and publish releases.**

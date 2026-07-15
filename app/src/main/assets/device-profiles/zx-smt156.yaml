@@ -14,7 +14,7 @@ metadata:
     - The LED uses a conservative transfer until its response is measured.
     - Relay and vendor climate-sensor paths are not established.
 requires:
-  min_core_version: 0.9.3-rc1
+  min_core_version: 0.9.3
   drivers:
     - led.rk3576-ioctl
     - screen.brightness-zero

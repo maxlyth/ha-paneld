@@ -15,7 +15,7 @@ metadata:
     - Per-SKU relay, proximity, Recents, and display details still need live-hardware confirmation.
     - On-board relays are not exposed because no safe supported local control path is known.
 requires:
-  min_core_version: 0.9.3-rc1
+  min_core_version: 0.9.3
   drivers:
     - screen.brightness-zero
     - sensor.android

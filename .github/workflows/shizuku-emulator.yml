@@ -1,8 +1,7 @@
 name: Shizuku emulator
 run-name: Shizuku emulator · ${{ github.head_ref || github.ref_name }}
 
-# Slow, dependency-specific integration coverage. Kept separate from the normal CI/release gate so
-# work toward 0.9.3 cannot impede the current release-candidate initiative.
+# Slow, dependency-specific integration coverage. Kept separate from the normal CI and release gates.
 on:
   pull_request:
     paths:

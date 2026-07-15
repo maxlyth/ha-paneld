@@ -14,7 +14,7 @@ metadata:
     - Stock firmware has no su; RGB LED control needs a separately installed root helper.
     - The pinned WebView build still needs live-hardware verification.
 requires:
-  min_core_version: 0.9.3-rc1
+  min_core_version: 0.9.3
   drivers:
     - led.rk3576-ioctl-daemon
     - screen.brightness-zero

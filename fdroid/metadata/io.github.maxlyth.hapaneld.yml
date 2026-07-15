@@ -11,30 +11,23 @@ AllowedAPKSigningKeys:
   - ac6193307fb0b70113aae205d7549406f96e063bc5491b67b1d5694a34b0e339
 
 Name: ha-paneld
-Summary: Home Assistant agent for Android wall panels
+Summary: Universal Home Assistant dashboard app for Android wall panels
 
 Description: |-
-    ha-paneld turns an Android in-wall touch panel (Sonoff NSPanel Pro, Tuya TPA10,
-    Electron WF1589T, Smatek S9E and generic RK-class panels) into a first-class
-    Home Assistant device over MQTT auto-discovery.
+    ha-paneld turns an Android wall panel into a consistent, local Home Assistant dashboard and device across different hardware makes. It can display Home Assistant through its built-in renderer or the official Companion app, while MQTT auto-discovery exposes supported panel hardware without per-device YAML.
 
-    It exposes panel hardware and behaviour the Home Assistant Companion app can't:
+    Panel owners and hardware vendors can create, validate and share declarative YAML profiles for additional devices without rebuilding the app. Profiles can select only the drivers and capabilities already implemented by ha-paneld; they cannot add executable code or arbitrary privileged operations.
 
     * Screen control — brightness, true backlight-off, and wake-on-wave (proximity).
-    * An on-screen soft navigation bar (Back / Launcher / Recents plus brightness
-      and volume) for panels whose firmware hides the native Android navbar.
-    * On-board relays and button LEDs as Home Assistant switch / light entities,
-      where the panel has them.
+    * An on-screen soft navigation bar for panels whose firmware hides the native Android navigation controls.
+    * On-board relays and button LEDs as Home Assistant switch and light entities, where the panel has them.
     * Sensors (ambient light, proximity, temperature / humidity) as entities.
     * Zigbee gateway control on panels with an on-board radio.
-    * A local-only HTTP control / info surface and a per-panel Home Assistant
-      device identity.
+    * A local HTTP control and information surface with a per-panel Home Assistant device identity.
 
-    Some capabilities (relays, button LEDs, true screen-off, Zigbee, the overlay
-    navbar) require root / su on the panel; the MQTT, sensor and HTTP features do
-    not. See the project README for per-panel capabilities and setup.
+    Some capabilities require root access on the panel, while the dashboard renderers, MQTT, standard Android controls and HTTP features do not. Optional Shizuku enhanced access provides a smaller middle tier on genuinely unrooted panels. See the project README for per-panel capabilities and setup.
 
-    Free, open-source (Apache-2.0) and fully local — no cloud and no account.
+    Free, open source and fully local — no cloud and no account.
 
 # We push prebuilt, release-signed APKs into the repo; fdroid does not source-build or version-check.
 UpdateCheckMode: None

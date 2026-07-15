@@ -15,7 +15,7 @@ metadata:
     - Relay and WebView behavior remain unverified on live hardware.
     - Normal-app su access is inferred from vendor behavior, not confirmed.
 requires:
-  min_core_version: 0.9.3-rc1
+  min_core_version: 0.9.3
   drivers:
     - access.android-su
     - relay.gpio-button-led

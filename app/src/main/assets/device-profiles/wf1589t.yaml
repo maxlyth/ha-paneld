@@ -13,7 +13,7 @@ metadata:
   limitations:
     - The LED uses a conservative transfer until its per-channel response is measured.
 requires:
-  min_core_version: 0.9.3-rc1
+  min_core_version: 0.9.3
   drivers:
     - access.android-su
     - input.evdev

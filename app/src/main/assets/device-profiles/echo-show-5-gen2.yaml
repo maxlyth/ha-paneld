@@ -14,7 +14,7 @@ metadata:
     - Stock Fire OS is not a supported installation path.
     - Hardware-specific control paths remain unknown.
 requires:
-  min_core_version: 0.9.3-rc1
+  min_core_version: 0.9.3
   drivers:
     - access.android-su
     - screen.brightness-zero

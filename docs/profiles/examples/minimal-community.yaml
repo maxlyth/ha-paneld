@@ -14,7 +14,7 @@ metadata:
     - Only identity, ordinary Android behavior, and screen brightness have been tested.
     - TODO verify sensors and privileged hardware before declaring their drivers.
 requires:
-  min_core_version: 0.9.3-rc1
+  min_core_version: 0.9.3
   drivers:
     - screen.brightness-zero
 match:

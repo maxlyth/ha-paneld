@@ -14,7 +14,7 @@ metadata:
     - Only Jenna hardware has been confirmed from firmware; other modern SKUs remain inferred.
     - On-board relays are not exposed because no safe supported local control path is known.
 requires:
-  min_core_version: 0.9.3-rc1
+  min_core_version: 0.9.3
   drivers:
     - screen.brightness-zero
     - sensor.android

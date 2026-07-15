@@ -90,8 +90,8 @@ Trade-offs:
 - the Shizuku Manager is another application and trust dependency to maintain;
 - ADB-started services commonly need rearming after reboot, especially on older Android versions;
 - it offers fewer capabilities than root and cannot operate vendor hardware or private app data;
-- ha-paneld does not auto-update the Shizuku Manager in this release candidate;
-- behavior across the variety of unrooted wall-panel firmware is still being validated in the 0.9.3 release-candidate series.
+- ha-paneld does not auto-update the Shizuku Manager;
+- behavior varies across unrooted wall-panel firmware and should be verified on each panel.
 
 ### Standard Android only
 
@@ -134,6 +134,6 @@ Shizuku approval expands what ha-paneld can do through its existing local API: f
 
 The Shizuku boundary reduces authority compared with root, but it does not make an untrusted LAN safe. The exact project threat model is documented in [Security posture](architecture/security.md).
 
-## Release-candidate feedback
+## Hardware feedback
 
-The public 0.9.3 release candidates are intended to gather evidence from genuinely unrooted hardware. Useful reports include the panel model, Android version, Shizuku version/start method, whether the service survives reboot, and which enhanced operations work. Do not publish panel addresses, Home Assistant tokens, dashboard content or other private diagnostics.
+Reports from genuinely unrooted hardware help improve compatibility. Useful details include the panel model, Android version, Shizuku version and start method, whether the service survives reboot, and which enhanced operations work. Do not publish panel addresses, Home Assistant tokens, dashboard content or other private diagnostics.
