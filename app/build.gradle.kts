@@ -30,7 +30,7 @@ android {
         targetSdk = 35
         // versionCode bumps on EVERY internal build (it drives upgrades + the /health build token);
         // the -rcN suffix in versionName increments ONLY when an rc is published to GitHub.
-        versionCode = 225
+        versionCode = 226
         versionName = "0.9.3-rc1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
