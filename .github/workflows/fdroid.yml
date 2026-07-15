@@ -24,8 +24,6 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: fdroid-pages
@@ -33,47 +31,53 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    environment: release
     # Run after a successful Release for a FULL version tag (skip rc Release runs, e.g. v0.8.2-rc5);
     # always allow a manual dispatch. head_branch on a tag-push run is the tag name.
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' &&
        !contains(github.event.workflow_run.head_branch, '-'))
-    env:
-      KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-      KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-      KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-      KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-      GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
 
       - name: Guard — signing secrets present
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          if [ -z "$KEYSTORE_B64" ]; then
-            echo "::error::ANDROID_KEYSTORE_* secrets are required to sign the F-Droid index."
-            exit 1
-          fi
+          for name in KEYSTORE_B64 KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
+            if [ -z "${!name}" ]; then
+              echo "::error::ANDROID_KEYSTORE_* secrets are required to sign the F-Droid index."
+              exit 1
+            fi
+          done
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: '3.12'
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4.8.0
         with:
           distribution: temurin
           java-version: '17'
 
-      - uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3.2.2
 
       - name: Install build-tools + fdroidserver
         run: |
           sdkmanager "build-tools;34.0.0"
-          pip install --upgrade pip
-          pip install fdroidserver
+          python -m pip install --require-hashes -r fdroid/build-requirements.txt
+          python -m pip install --require-hashes --no-build-isolation -r fdroid/requirements.txt
 
       - name: Download released (non-prerelease) APKs
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p fdroid/repo
           mapfile -t tags < <(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 \
@@ -92,6 +96,11 @@ jobs:
 
       - name: Inject signing + SDK config (runtime only — never committed)
         working-directory: fdroid
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/ks.jks"
           {
@@ -108,6 +117,9 @@ jobs:
 
       - name: Assemble Pages site (+ inject repo fingerprint into landing page)
         working-directory: fdroid
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
         run: |
           # The F-Droid repo fingerprint is the SHA-256 of the signing certificate (DER), lowercase hex.
           FP=$(keytool -exportcert -keystore "$RUNNER_TEMP/ks.jks" -alias "$KEY_ALIAS" \
@@ -118,13 +130,17 @@ jobs:
           cp -r repo ../_site/fdroid/repo
           sed "s|@FINGERPRINT@|$FP|g" site-index.html > ../_site/index.html
 
-      - uses: actions/upload-pages-artifact@v3
+      - name: Remove signing material
+        if: always()
+        run: rm -f "$RUNNER_TEMP/ks.jks" fdroid/config.yml
+
+      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1
         with:
           path: _site
 
   deploy:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       pages: write
       id-token: write
@@ -133,4 +149,4 @@ jobs:
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - id: deploy
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5

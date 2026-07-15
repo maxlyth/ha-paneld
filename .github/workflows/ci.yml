@@ -8,12 +8,30 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Require immutable GitHub Action references
+        shell: bash
+        run: |
+          failed=0
+          while IFS= read -r ref; do
+            if [[ "$ref" == ./* || "$ref" =~ @[0-9a-f]{40}$ ]]; then
+              continue
+            fi
+            echo "::error::GitHub Action reference is not a full commit SHA: $ref"
+            failed=1
+          done < <(sed -nE 's/^[[:space:]]*-?[[:space:]]*uses:[[:space:]]*([^[:space:]#]+).*/\1/p' .github/workflows/*.yml)
+          exit "$failed"
 
       # The info-page front-end is a static asset (not embedded in a Kotlin string), so its syntax
       # is checkable. `node --check` catches JS syntax errors (e.g. an apostrophe in a single-quoted
@@ -27,25 +45,25 @@ jobs:
         run: scripts/tests/provision_test.sh
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4.8.0
         with:
           distribution: temurin
           java-version: '17'
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3.2.2
 
       - name: Install NDK + CMake
         run: sdkmanager "ndk;27.0.12077973" "cmake;3.22.1"
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@748248ddd2a24f49513d8f472f81c3a07d4d50e1 # v4.4.4
 
       - name: Test, lint, and build debug APK
         run: ./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug --stacktrace
 
       - name: Upload debug APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ha-paneld-debug
           path: app/build/outputs/apk/debug/*.apk
@@ -56,10 +74,12 @@ jobs:
   # sanitizer smoke (helper/fuzz/run.sh) is deliberately NOT run here: it is deterministic rather than
   # coverage-guided and is run locally when the parser, dispatch, or validators change.
   helper:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
 
       - name: Compile check (-Werror)
         run: make -C helper

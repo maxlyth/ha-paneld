@@ -26,7 +26,6 @@ on:
 
 permissions:
   contents: write       # commit new .dat entries to main
-  discussions: write    # update the firmware Discussion
 
 concurrency:
   group: shelly-firmware-monitor
@@ -38,7 +37,7 @@ env:
 
 jobs:
   monitor:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     outputs:
       has_new: ${{ steps.probe.outputs.has_new }}
@@ -46,12 +45,11 @@ jobs:
       new_versions: ${{ steps.probe.outputs.new_versions }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
-          # Use a token with contents:write so the push later works from Actions.
-          token: ${{ secrets.GITHUB_TOKEN }}
+          persist-credentials: false
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
 
@@ -109,7 +107,10 @@ jobs:
       # does not fire on a data-file-only commit.
       - name: Commit updated firmware index
         if: steps.diff.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
+          repo_url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add "$DAT"
@@ -119,5 +120,5 @@ jobs:
           fi
           git commit -m "${msg} [skip ci]"
           # Rebase in case a parallel run pushed first (rare but possible at hourly cadence).
-          git pull --rebase origin main
-          git push origin main
+          git pull --rebase "$repo_url" main
+          git push "$repo_url" HEAD:main

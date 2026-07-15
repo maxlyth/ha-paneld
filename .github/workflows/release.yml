@@ -12,20 +12,25 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
+  artifact-metadata: write
 
 jobs:
   release:
-    runs-on: ubuntu-latest
-    env:
-      # Public releases fail closed unless all established signing credentials are available.
-      KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-      KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-      KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-      KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+    runs-on: ubuntu-24.04
+    environment: release
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
 
       - name: Require release signing credentials
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           for name in KEYSTORE_B64 KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
             if [ -z "${!name}" ]; then
@@ -35,19 +40,19 @@ jobs:
           done
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4.8.0
         with:
           distribution: temurin
           java-version: '17'
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3.2.2
 
       - name: Install NDK + CMake
         run: sdkmanager "ndk;27.0.12077973" "cmake;3.22.1"
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@748248ddd2a24f49513d8f472f81c3a07d4d50e1 # v4.4.4
 
       - name: Test installer and provisioning contracts
         run: scripts/tests/provision_test.sh
@@ -58,8 +63,17 @@ jobs:
       - name: Build release APK
         run: ./gradlew :app:assembleRelease --stacktrace
 
+      - name: Generate release dependency SBOM
+        run: ./gradlew :app:cyclonedxDirectBom --stacktrace
+
       - name: Sign release APK
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
+          trap 'rm -f "$RUNNER_TEMP/keystore.jks"' EXIT
           echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/keystore.jks"
           BUILD_TOOLS=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
           UNSIGNED=$(ls app/build/outputs/apk/release/*-unsigned.apk)
@@ -78,7 +92,11 @@ jobs:
           test -s app/build/outputs/apk/release/ha-paneld-release-signed.apk
           apk_name="ha-paneld-${GITHUB_REF_NAME}-manual-setup-required.apk"
           cp app/build/outputs/apk/release/ha-paneld-release-signed.apk "dist/$apk_name"
+          sbom_name="ha-paneld-${GITHUB_REF_NAME}-dependencies.cdx.json"
+          test -s app/build/reports/cyclonedx-direct/bom.json
+          cp app/build/reports/cyclonedx-direct/bom.json "dist/$sbom_name"
           echo "apk_name=$apk_name" >> "$GITHUB_OUTPUT"
+          echo "sbom_name=$sbom_name" >> "$GITHUB_OUTPUT"
 
       - name: Build release-pinned installer asset
         env:
@@ -93,6 +111,17 @@ jobs:
           bash -n "$installer"
           grep -Fq "RELEASE_TAG=\"$GITHUB_REF_NAME\"" "$installer"
           grep -Fq "RELEASE_APK_NAME=\"$APK_NAME\"" "$installer"
+
+      - name: Attest release asset provenance
+        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
+        with:
+          subject-path: dist/*
+
+      - name: Attest release dependency SBOM
+        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
+        with:
+          subject-path: dist/${{ steps.asset.outputs.apk_name }}
+          sbom-path: dist/${{ steps.asset.outputs.sbom_name }}
 
       # Human-readable notes come from the matching CHANGELOG.md section. Prereleases also receive an
       # auto-generated comparison; stable releases use only the self-contained curated body.
@@ -145,7 +174,7 @@ jobs:
           echo "----- release body -----"; cat release-body.md
 
       - name: Publish GitHub release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           name: ${{ github.ref_name }}
           files: dist/*

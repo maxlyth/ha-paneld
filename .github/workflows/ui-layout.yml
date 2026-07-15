@@ -11,21 +11,24 @@ on:
     paths: ['app/src/main/assets/**', 'test/**']
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   cls:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     continue-on-error: true   # report-only — must never block development
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '20'
-      - name: Install chromium + playwright-core
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y chromium-browser || sudo apt-get install -y chromium
-          cd test && npm i
+      - name: Install playwright-core
+        run: cd test && npm ci --ignore-scripts
       - name: Run CLS matrix (report-only)
         run: |
-          CHROME="$(command -v chromium-browser || command -v chromium)" \
-            node test/layout-matrix.mjs | tee -a "$GITHUB_STEP_SUMMARY"
+          CHROME="$(command -v google-chrome || command -v chromium-browser || command -v chromium)"
+          test -x "$CHROME"
+          CHROME="$CHROME" node test/layout-matrix.mjs | tee -a "$GITHUB_STEP_SUMMARY"
