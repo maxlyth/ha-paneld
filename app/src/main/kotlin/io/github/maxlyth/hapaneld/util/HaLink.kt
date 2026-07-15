@@ -190,9 +190,10 @@ object HaLink {
      * prefix is unsafe because default panel ids are often room names: `sensor.kitchen_temperature`
      * must never make the Kitchen panel link to a temperature-sensor device.
      *
-     * HA appends `_2`, `_3`, … when a default entity id collides. Those forms are accepted as weaker
-     * evidence, but a device must match at least two known markers including one ha-paneld-specific
-     * marker. Ambiguous equal-scoring devices fail closed to the HA root page instead of guessing.
+     * HA appends `_2`, `_3`, … when a default entity id collides. Those forms are accepted alongside
+     * exact ids, but a device must match at least two known markers including one ha-paneld-specific
+     * marker. Multiple qualifying devices fail closed to the HA root page: an unsuffixed id belongs to
+     * the collision owner and is not stronger evidence that the owner is this panel.
      * Candidate order remains meaningful: stable panel id first, historical friendly-name fallback next.
      */
     internal fun matchDeviceId(resp: String, deviceSlugs: Collection<String>): String? {
@@ -213,30 +214,29 @@ object HaLink {
             }
         }
         for (slug in deviceSlugs) {
-            // device id -> marker index -> strongest evidence (exact=2, numeric collision suffix=1)
-            val evidence = linkedMapOf<String, MutableMap<Int, Int>>()
+            // device id -> distinct marker indexes. Exact and numeric-collision forms are intentionally
+            // equivalent: preferring the exact form would select the entity which forced HA to suffix
+            // this panel's new entity id.
+            val evidence = linkedMapOf<String, MutableSet<Int>>()
             entities.forEach { (domain, obj, deviceId) ->
                 DEVICE_ENTITY_MARKERS.forEachIndexed { markerIndex, marker ->
                     if (domain != marker.domain) return@forEachIndexed
                     val base = "${slug}_${marker.suffix}"
-                    val weight = when {
-                        obj == base -> 2
+                    val matches = when {
+                        obj == base -> true
                         obj.startsWith("${base}_") &&
-                            obj.removePrefix("${base}_").toIntOrNull()?.let { it >= 2 } == true -> 1
-                        else -> 0
+                            obj.removePrefix("${base}_").toIntOrNull()?.let { it >= 2 } == true -> true
+                        else -> false
                     }
-                    if (weight > 0) {
-                        val byMarker = evidence.getOrPut(deviceId) { linkedMapOf() }
-                        byMarker[markerIndex] = maxOf(byMarker[markerIndex] ?: 0, weight)
-                    }
+                    if (matches) evidence.getOrPut(deviceId) { linkedSetOf() }.add(markerIndex)
                 }
             }
-            val candidates = evidence.mapNotNull { (deviceId, byMarker) ->
-                val hasSignature = byMarker.keys.any { DEVICE_ENTITY_MARKERS[it].signature }
-                if (byMarker.size < 2 || !hasSignature) null else deviceId to byMarker.values.sum()
+            val candidates = evidence.mapNotNull { (deviceId, markers) ->
+                val hasSignature = markers.any { DEVICE_ENTITY_MARKERS[it].signature }
+                deviceId.takeIf { markers.size >= 2 && hasSignature }
             }
-            val bestScore = candidates.maxOfOrNull { it.second } ?: continue
-            candidates.filter { it.second == bestScore }.singleOrNull()?.let { return it.first }
+            if (candidates.size > 1) return null
+            candidates.singleOrNull()?.let { return it }
         }
         return null
     }

@@ -55,7 +55,7 @@ class HaLinkPolicyTest {
         assertEquals("panel-device", HaLink.matchDeviceId(response, listOf("kitchen")))
     }
 
-    @Test fun `numeric HA collision suffixes are weaker evidence than a complete panel identity`() {
+    @Test fun `numeric HA collision suffix combines with an exact panel marker`() {
         val response = """
             {"result":[
               {"ei":"light.kitchen_screen","di":"unrelated-screen"},
@@ -65,6 +65,34 @@ class HaLinkPolicyTest {
         """.trimIndent()
 
         assertEquals("panel-device", HaLink.matchDeviceId(response, listOf("kitchen")))
+    }
+
+    @Test fun `qualified exact collision owner cannot outrank the suffixed panel device`() {
+        val response = """
+            {"result":[
+              {"ei":"text.kitchen_home_dashboard","di":"collision-owner"},
+              {"ei":"light.kitchen_screen","di":"collision-owner"},
+              {"ei":"text.kitchen_home_dashboard_2","di":"panel-device"},
+              {"ei":"light.kitchen_screen_2","di":"panel-device"}
+            ]}
+        """.trimIndent()
+
+        assertNull(HaLink.matchDeviceId(response, listOf("kitchen")))
+    }
+
+    @Test fun `historical friendly name remains a fallback when stable identity has no candidate`() {
+        val response = """
+            {"result":{"entities":[
+              {"ei":"light.wall_panel_screen","di":"incomplete-stable-device"},
+              {"ei":"text.kitchen_display_home_dashboard","di":"legacy-device"},
+              {"ei":"light.kitchen_display_screen","di":"legacy-device"}
+            ]}}
+        """.trimIndent()
+
+        assertEquals(
+            "legacy-device",
+            HaLink.matchDeviceId(response, listOf("wall_panel", "kitchen_display")),
+        )
     }
 
     @Test fun `one same-prefix known-looking entity is insufficient evidence`() {
