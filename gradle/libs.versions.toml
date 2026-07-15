@@ -26,7 +26,7 @@ junit = "4.13.2"
 orgJson = "20240303"
 snakeyamlEngine = "2.6"
 shizuku = "13.1.5"
-cyclonedx = "3.2.4"
+cyclonedx = "3.3.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
