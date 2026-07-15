@@ -89,10 +89,9 @@ class RendererPreparationCoordinatorTest {
         assertFalse(borrowed)
     }
 
-    @Test fun startupReconciliationIsIdempotentForReadyRenderer() {
+    @Test fun startupForegroundsReadyBuiltinAfterHomeReconciliation() {
         val state = RendererPreparationState("builtin", "http://explicit:8123")
-        val ensured = mutableListOf<Pair<String, Boolean>>()
-        var launches = 0
+        val events = mutableListOf<String>()
         val coordinator = RendererPreparationCoordinator(
             builtinPackage = "builtin",
             state = { state },
@@ -100,15 +99,93 @@ class RendererPreparationCoordinatorTest {
             persist = { error("must not persist") },
         )
 
-        repeat(2) {
+        assertEquals(
+            RendererPreparationCoordinator.Result.ALREADY_READY,
+            coordinator.reconcileStartup(
+                { pkg, ready -> events += "ensure:$pkg:$ready" },
+                { events += "launch:$it" },
+            ),
+        )
+
+        assertEquals(listOf("ensure:builtin:true", "launch:builtin"), events)
+    }
+
+    @Test fun startupForegroundsReadyForeignRendererAfterHomeReconciliation() {
+        val state = RendererPreparationState("foreign.renderer", "")
+        val events = mutableListOf<String>()
+        val coordinator = RendererPreparationCoordinator(
+            builtinPackage = "builtin",
+            state = { state },
+            borrow = { error("foreign renderer must not borrow") },
+            persist = { error("foreign renderer must not persist") },
+        )
+
+        assertEquals(
+            RendererPreparationCoordinator.Result.NOT_BUILTIN,
+            coordinator.reconcileStartup(
+                { pkg, ready -> events += "ensure:$pkg:$ready" },
+                { events += "launch:$it" },
+            ),
+        )
+
+        assertEquals(listOf("ensure:foreign.renderer:false", "launch:foreign.renderer"), events)
+    }
+
+    @Test fun startupWithoutConfiguredRendererOrPendingHandoffDoesNotLaunch() {
+        val state = RendererPreparationState("", "")
+        val ensured = mutableListOf<Pair<String, Boolean>>()
+        var launches = 0
+        val coordinator = RendererPreparationCoordinator(
+            builtinPackage = "builtin",
+            state = { state },
+            borrow = { error("unconfigured renderer must not borrow") },
+            persist = { error("unconfigured renderer must not persist") },
+        )
+
+        assertEquals(
+            RendererPreparationCoordinator.Result.NOT_BUILTIN,
+            coordinator.reconcileStartup({ pkg, ready -> ensured += pkg to ready }, { launches++ }),
+        )
+
+        assertEquals(listOf("" to false), ensured)
+        assertEquals(0, launches)
+    }
+
+    @Test fun startupClosingAfterHomeReconciliationDoesNotLaunchReadyRenderer() {
+        val state = RendererPreparationState("builtin", "http://explicit:8123")
+        val ensureEntered = java.util.concurrent.CountDownLatch(1)
+        val releaseEnsure = java.util.concurrent.CountDownLatch(1)
+        var launched = false
+        val coordinator = RendererPreparationCoordinator(
+            builtinPackage = "builtin",
+            state = { state },
+            borrow = { error("ready state must not borrow") },
+            persist = { error("ready state must not persist") },
+        )
+        val pool = java.util.concurrent.Executors.newSingleThreadExecutor()
+        try {
+            val running = pool.submit<RendererPreparationCoordinator.Result> {
+                coordinator.reconcileStartup(
+                    ensureHome = { _, _ ->
+                        ensureEntered.countDown()
+                        releaseEnsure.await()
+                    },
+                    launchHome = { launched = true },
+                )
+            }
+            assertTrue(ensureEntered.await(1, java.util.concurrent.TimeUnit.SECONDS))
+            assertFalse(coordinator.close(100))
+            releaseEnsure.countDown()
+
             assertEquals(
                 RendererPreparationCoordinator.Result.ALREADY_READY,
-                coordinator.reconcileStartup({ pkg, ready -> ensured += pkg to ready }, { launches++ }),
+                running.get(1, java.util.concurrent.TimeUnit.SECONDS),
             )
+            assertFalse(launched)
+        } finally {
+            releaseEnsure.countDown()
+            pool.shutdownNow()
         }
-
-        assertEquals(listOf("builtin" to true, "builtin" to true), ensured)
-        assertEquals(0, launches)
     }
 
     @Test fun startupCompletesLaunchPendingAfterProcessDiesBeyondBorrowCommit() {

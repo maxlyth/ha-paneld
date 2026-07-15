@@ -90,8 +90,8 @@ class RendererPreparationCoordinator(
     }
 
     /**
-     * Retry interrupted preparation at startup. Existing ready renderers are only re-anchored; a launch
-     * is needed when this call repaired the blank built-in state that previously fell back to admin UI.
+     * Retry interrupted preparation at startup, then foreground an explicitly configured ready renderer.
+     * A blank built-in renderer remains on its safe fallback until connection settings can be borrowed.
      */
     fun reconcileStartup(
         ensureHome: (dashboardPackage: String, builtinReady: Boolean) -> Unit,
@@ -103,7 +103,9 @@ class RendererPreparationCoordinator(
         ensureHome(current.dashboardPackage, current.haUrl.isNotBlank())
         val blankBuiltinWithoutLogin = result == Result.NO_BORROWABLE_LOGIN &&
             current.dashboardPackage == builtinPackage && current.haUrl.isBlank()
-        if (!closing && !blankBuiltinWithoutLogin && (result == Result.PREPARED || current.launchPending)) {
+        val configuredRendererReady = current.dashboardPackage.isNotBlank() &&
+            (current.dashboardPackage != builtinPackage || current.haUrl.isNotBlank())
+        if (!closing && !blankBuiltinWithoutLogin && (configuredRendererReady || current.launchPending)) {
             launchHome(current.dashboardPackage)
             return@transaction completePendingLaunch(result)
         }
