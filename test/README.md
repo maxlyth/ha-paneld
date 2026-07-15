@@ -21,7 +21,7 @@ not a gate.
 ## Run it
 
 ```bash
-cd test && npm i                 # playwright-core (no browser download)
+cd test && npm ci                # exact playwright-core version from package-lock.json (no browser download)
 # needs a chromium: apk add chromium / apt-get install chromium ; or set CHROME=
 CHROME=/usr/bin/chromium node layout-matrix.mjs              # report
 CHROME=/usr/bin/chromium node layout-matrix.mjs --update-baseline   # rewrite baseline.json
