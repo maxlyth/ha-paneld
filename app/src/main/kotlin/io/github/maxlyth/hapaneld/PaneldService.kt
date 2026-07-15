@@ -255,7 +255,12 @@ class PaneldService : Service() {
         brightness = BrightnessController(this)
         brightness.applyPreventIdleDim(config.preventIdleDim, config)
         autoBright = AutoBrightnessController(brightness, config)
-        screen = ScreenController(brightness, AndroidScreenPower(this), wakeTap = OverlayWakeTap(this))
+        screen = ScreenController(
+            brightness,
+            AndroidScreenPower(this),
+            wakeTap = OverlayWakeTap(this),
+            route = profile.screenOff,
+        )
         // After a LOCAL touch-wake, tell HA the screen is on so `light.<panel>_screen` tracks reality.
         screen.onWakeByTap = { runCatching { mqtt.publishScreenOn() } }
         led = LedFactory.detect(profile)
@@ -457,6 +462,7 @@ class PaneldService : Service() {
         onDashboardTargetChanged = entityLearning::onTargetConfigurationChanged,
         stalePanelId = stalePanelId,
         profileIdentity = activeProfileIdentity,
+        profileButtonEventTypes = profile.evdevButtons.mapTo(linkedSetOf()) { it.eventType },
     )
 
     /**

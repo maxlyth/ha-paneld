@@ -379,7 +379,11 @@ class RuntimeProfileRegistry internal constructor(
             )
         }
         return ResolvedProfile(
-            profile = DataDeviceProfile(requireNotNull(entry.document), facts.productVersion),
+            profile = DataDeviceProfile(
+                requireNotNull(entry.document),
+                facts.productVersion,
+                revision = entry.ref.revision,
+            ),
             summary = summary(entry, active = true, selected = true),
             activationGeneration = generation,
             issues = catalogIssues + resolution.issues + extraIssues,
