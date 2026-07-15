@@ -53,5 +53,16 @@ class ControlAvailabilityTest {
         assertFalse(result.recentsEnabled)
         assertTrue(result.recentsRequirement.contains("absent on this panel"))
         assertFalse(result.rootlessNote.contains("Recents"))
+        assertTrue(result.rootlessNote.contains("Back, volume still work"))
+    }
+
+    @Test fun missingInputOnFirmwareWithoutOverviewUsesSingularBackGuidance() {
+        val result = ControlAvailability.navigation(
+            accessibilityReady = false,
+            shizukuReady = false,
+            hasRecents = false,
+        )
+
+        assertTrue(result.rootlessNote.contains("Back needs Accessibility or Shizuku"))
     }
 }

@@ -27,7 +27,8 @@ internal object ControlAvailability {
         val note = if (inputReady) {
             "${supportedActions.joinToString(", ")} still work."
         } else {
-            "Volume still works. Back${if (hasRecents) " and Recents" else ""} need $INPUT_REQUIREMENT."
+            val unavailable = if (hasRecents) "Back and Recents need" else "Back needs"
+            "Volume still works. $unavailable $INPUT_REQUIREMENT."
         }
         return Navigation(
             backEnabled = inputReady,
