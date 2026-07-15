@@ -37,6 +37,12 @@ class ShizukuPolicyTest {
         assertTrue(ShizukuPolicy.canAcceptBinding(2, 2, true, true, true, true))
     }
 
+    @Test fun staleRejectedBindingCannotRemoveNewerUserService() {
+        assertFalse(ShizukuPolicy.canRemoveRejectedBinding(1, 2, false))
+        assertFalse(ShizukuPolicy.canRemoveRejectedBinding(2, 2, false))
+        assertTrue(ShizukuPolicy.canRemoveRejectedBinding(2, 2, true))
+    }
+
     @Test fun deniedPermissionRequiresManualRecoveryInsteadOfAnotherPrompt() {
         assertFalse(ShizukuPolicy.shouldRequestPermission(true, rationaleRequired = true))
         assertTrue(ShizukuPolicy.shouldRequestPermission(true, rationaleRequired = false))

@@ -564,7 +564,7 @@ export_config() {
 export_is_only_operation() {
   [ -n "$EXPORT_FILE" ] && [ -z "$APK$PANEL_ID$MQTT$MQTT_USER$MQTT_PASS$LOG_HOST$LOG_PORT$LOG_PROTO$LOG_ENABLE" ] &&
     [ -z "$HA_URL$HA_TOKEN$HA_USER$HA_PASS$RESTORE_FILE" ] && [ "$LATEST" = 0 ] && [ "$PERSIST_ADB" = 0 ] &&
-    [ "$STRIP_VENDOR" = 0 ] && [ "$BUILTIN" = 0 ]
+    [ "$STRIP_VENDOR" = 0 ] && [ "$BUILTIN" = 0 ] && [ "$SHIZUKU" = 0 ]
 }
 
 echo "${MAG}${B}🛠  ha-paneld provisioning${X} ${D}→ $TARGET${X}"
@@ -593,7 +593,6 @@ verify_release_apk
 
 version_guard
 
-step "📦 installing" "${D}$APK${X}"
 # Try with -g (grant-all) first — some vendor builds reject the flag, so retry plain. Capture the
 # output: adb's raw INSTALL_FAILED_* codes are cryptic, so classify the common ones into recovery steps.
 install_apk() {
@@ -618,7 +617,6 @@ install_apk() {
         "Fix the cause shown above, then re-run the SAME command — provisioning is idempotent." ;;
   esac
 }
-install_apk
 
 # Optional non-root privilege bootstrap. Keep this dependency curated: never chase "latest" here.
 # The exact official APK blob is SHA-pinned, and ha-paneld independently checks the installed signing
@@ -651,12 +649,7 @@ if [ "$SHIZUKU" = 1 ]; then
       fi
       [ "$SHIZUKU_CURRENT_SHA" = "$SHIZUKU_SHA256" ] && SHIZUKU_CURRENT_TRUSTED=1
       if [ "$SHIZUKU_CURRENT_TRUSTED" = 0 ]; then
-        APKSIGNER="$(command -v apksigner 2>/dev/null || true)"
-        if [ -z "$APKSIGNER" ] && [ -n "${ANDROID_HOME:-}" ]; then
-          for candidate in "$ANDROID_HOME"/build-tools/*/apksigner; do
-            [ -x "$candidate" ] && APKSIGNER="$candidate"
-          done
-        fi
+        APKSIGNER="$(find_android_build_tool apksigner || true)"
         if [ -n "$APKSIGNER" ]; then
           SHIZUKU_CURRENT_CERT="$("$APKSIGNER" verify --print-certs "$SHIZUKU_CURRENT_APK" 2>/dev/null \
             | sed -nE 's/^Signer #[0-9]+ certificate SHA-256 digest: *//p' | head -1 \
@@ -674,7 +667,9 @@ if [ "$SHIZUKU" = 1 ]; then
     step "🪄 Shizuku" "${D}keeping trusted installed manager (versionCode $SHIZUKU_CURRENT_CODE)${X}"
   else
     step "🪄 Shizuku" "${D}installing curated v13.6.0 manager${X}"
-    curl -fsSL --proto '=https' --proto-redir '=https' "$SHIZUKU_URL" -o "$SHIZUKU_APK"
+    curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 15 --max-time 300 \
+      "$SHIZUKU_URL" -o "$SHIZUKU_APK" || fail "Shizuku download failed" \
+      "Check internet access to github.com, then re-run. ha-paneld was not replaced or stopped."
     if command -v sha256sum >/dev/null 2>&1; then
       SHIZUKU_GOT="$(sha256sum "$SHIZUKU_APK" | awk '{print $1}')"
     elif command -v shasum >/dev/null 2>&1; then
@@ -695,16 +690,26 @@ if [ "$SHIZUKU" = 1 ]; then
     SHIZUKU_START_WAIT=$((SHIZUKU_START_WAIT + 1))
     sleep 1
   done
-  if adb -s "$TARGET" shell sh "/storage/emulated/0/Android/data/$SHIZUKU_PKG/start.sh" >/dev/null 2>&1; then
+  SHIZUKU_START_SCRIPT="/storage/emulated/0/Android/data/$SHIZUKU_PKG/start.sh"
+  if adb -s "$TARGET" shell test -f "$SHIZUKU_START_SCRIPT" >/dev/null 2>&1 && \
+      adb -s "$TARGET" shell sh "$SHIZUKU_START_SCRIPT" >/dev/null 2>&1; then
     echo "   ${GRN}✓${X} Shizuku service started"
   else
     warn "Shizuku installed, but its service did not start. Open Shizuku on the panel and follow its ADB start instructions."
+    PROVISION_FAILED=1
   fi
   # Enables Shizuku's supported Android 13+ trusted-WLAN auto-start option; the user still chooses
   # whether to turn that option on inside Shizuku. Harmless/ignored on versions that refuse the grant.
   adb -s "$TARGET" shell pm grant "$SHIZUKU_PKG" android.permission.WRITE_SECURE_SETTINGS >/dev/null 2>&1 || true
   echo "   ${YEL}→${X} On the panel: open ha-paneld Configure, use the toolbar overflow menu → Enhanced access → Enable, then approve the Shizuku prompt."
 fi
+
+# Bootstrap Shizuku before replacing ha-paneld. A fatal manager download/signature/install failure
+# therefore cannot leave a previously working agent in Android's post-install stopped state. A service
+# start failure is non-fatal to the core install: finish and launch ha-paneld, but return nonzero so an
+# individual or fleet run cannot report enhanced-access setup as successful.
+step "📦 installing" "${D}$APK${X}"
+install_apk
 
 step "🔑 permissions" "${D}notifications · WRITE_SETTINGS (brightness/screen) · SYSTEM_ALERT_WINDOW (navbar) · a11y (buttons)${X}"
 # Grants degrade gracefully: some vendor builds refuse appops/settings writes from the adb shell.

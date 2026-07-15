@@ -36,7 +36,11 @@ internal class InteractiveController(
         val shizuku = ValueAttempt(PrivilegeRoute.SHIZUKU) {
             shell.screenshot()?.takeUnless { it.isEmpty() }
         }
-        val attempts = if (canSu) arrayOf(su, helper, shizuku) else arrayOf(helper, su, shizuku)
+        val attempts = when {
+            canSu -> arrayOf(su, helper, shizuku)
+            shell.available() -> arrayOf(helper, shizuku, su)
+            else -> arrayOf(helper, su, shizuku)
+        }
         return ShortOperationRouter.value(*attempts)?.value
     }
 
@@ -80,8 +84,11 @@ internal class InteractiveController(
         val suAttempt = EffectAttempt(PrivilegeRoute.SU, su)
         val accessibilityAttempt = EffectAttempt(PrivilegeRoute.ACCESSIBILITY, accessibility)
         val shizukuAttempt = EffectAttempt(PrivilegeRoute.SHIZUKU, shizuku)
-        val attempts = if (canSu) arrayOf(suAttempt, accessibilityAttempt, shizukuAttempt)
-            else arrayOf(accessibilityAttempt, suAttempt, shizukuAttempt)
+        val attempts = when {
+            canSu -> arrayOf(suAttempt, accessibilityAttempt, shizukuAttempt)
+            shell.available() -> arrayOf(accessibilityAttempt, shizukuAttempt, suAttempt)
+            else -> arrayOf(accessibilityAttempt, suAttempt, shizukuAttempt)
+        }
         return ShortOperationRouter.effect(*attempts) != null
     }
 }

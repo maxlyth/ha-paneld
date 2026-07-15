@@ -219,4 +219,17 @@ class DensityControllerTest {
         assertTrue(density.set(240))
         assertEquals(listOf("density", "set-density:240"), shell.calls)
     }
+
+    @Test fun readyShizukuPrecedesSpeculativeSuOnSandboxedProfile() {
+        val shell = Shell()
+        val root = FakeRootShell(outputs = mapOf("wm density" to "Physical density: 480"), runResult = true)
+        val daemon = FakeDaemon(replies = mapOf("DENSITY" to "ERR", "DENSITY 240" to "ERR"))
+        val density = DensityController(canSu = false, root = root, daemon = daemon, shell = shell)
+
+        assertEquals(240, density.current())
+        assertTrue(density.set(240))
+        assertTrue(root.outputRan.isEmpty())
+        assertTrue(root.ran.isEmpty())
+        assertEquals(listOf("density", "set-density:240"), shell.calls)
+    }
 }

@@ -39,6 +39,8 @@ run_provision() {
   MOCK_RELEASE_PROOF_DOWNLOAD="${MOCK_RELEASE_PROOF_DOWNLOAD:-ok}" \
   MOCK_RELEASE_CHECKSUM="${MOCK_RELEASE_CHECKSUM:-ok}" \
   MOCK_RELEASE_SIGNATURE_FAIL="${MOCK_RELEASE_SIGNATURE_FAIL:-0}" \
+  MOCK_SHIZUKU_START="${MOCK_SHIZUKU_START:-ok}" \
+  MOCK_SHIZUKU_START_SCRIPT="${MOCK_SHIZUKU_START_SCRIPT:-ok}" \
   MOCK_OPENSSL_MISSING="${MOCK_OPENSSL_MISSING:-0}" \
   MOCK_OPENSSL_DIGEST_FAIL="${MOCK_OPENSSL_DIGEST_FAIL:-0}" \
   MOCK_STATE_DIR="$TMP" \
@@ -272,6 +274,28 @@ assert_contains 'Shizuku download checksum mismatch' "Shizuku checksum failure n
 assert_contains 'Nothing was installed' "Shizuku checksum failure states the safe outcome"
 assert_not_contains '^adb .* install -r .*/shizuku\.apk$' "$MOCK_CALL_LOG" "checksum failure blocks Shizuku installation"
 assert_not_contains '^adb .* shell (monkey -p moe\.shizuku|sh .*/moe\.shizuku.*start\.sh|pm grant moe\.shizuku)' "$MOCK_CALL_LOG" "checksum failure blocks Shizuku launch and rearm"
+assert_not_contains '^adb .* install -r -g .*ha-paneld\.apk$' "$MOCK_CALL_LOG" "fatal Shizuku bootstrap failure happens before replacing ha-paneld"
+
+# Export composes with Shizuku setup: the verified backup must finish before any package mutation.
+COMBINED_EXPORT="$TMP/panel-backup-with-shizuku.json"
+run_provision "$MOCK_TARGET" --export "$COMBINED_EXPORT" --apk "$APK" --shizuku --no-tame
+assert_success "export and Shizuku setup compose in one provisioning run"
+assert_log_contains '^adb .* install -r .*/shizuku\.apk$' "combined export continues into Shizuku bootstrap"
+export_line="$(grep -nE 'config/export' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
+combined_install_line="$(grep -nE '^adb .* install( |$)' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
+if [ -n "$export_line" ] && [ -n "$combined_install_line" ] && [ "$export_line" -lt "$combined_install_line" ]; then
+  pass "combined export completes before package installation"
+else
+  fail_test "combined export completes before package installation"
+fi
+
+# A manager service-start failure must complete and launch the core agent for recovery, but the
+# requested enhanced-access setup and any enclosing fleet operation must still fail truthfully.
+MOCK_SHIZUKU_START=fail run_provision "$MOCK_TARGET" --apk "$APK" --shizuku --no-tame
+assert_failure "Shizuku service-start failure returns nonzero"
+assert_contains 'service did not start' "Shizuku start failure names the incomplete step"
+assert_log_contains '^adb .* install -r -g .*ha-paneld\.apk$' "Shizuku start failure still installs the core agent"
+assert_log_contains '^adb .* shell am start -n io\.github\.maxlyth\.hapaneld/\.MainActivity$' "Shizuku start failure still launches the core agent"
 
 # Re-running --shizuku against the trusted curated manager (or a trusted newer manager) must not try
 # to downgrade it. The manager stays locally approved; provisioning only restarts its service.
@@ -284,6 +308,15 @@ assert_contains 'Configure.*toolbar overflow menu.*Enhanced access.*Enable' "Shi
 MOCK_SHIZUKU_VERSION_CODE=1087 MOCK_SHIZUKU_TRUSTED=1 run_provision "$MOCK_TARGET" --apk "$APK" --shizuku --no-tame
 assert_success "trusted newer Shizuku provisioning is idempotent"
 assert_not_contains 'install -r .*shizuku\.apk' "$MOCK_CALL_LOG" "newer Shizuku manager is not downgraded"
+
+SDK_ROOT="$TMP/android-sdk"
+mkdir -p "$SDK_ROOT/build-tools/35.0.0"
+ln -s "$FIXTURES/apksigner" "$SDK_ROOT/build-tools/35.0.0/apksigner"
+PATH="$NO_SIGNER_FIXTURES:/usr/bin:/bin" ANDROID_HOME= ANDROID_SDK_ROOT="$SDK_ROOT" \
+  MOCK_SHIZUKU_VERSION_CODE=1087 MOCK_SHIZUKU_TRUSTED=1 \
+  run_provision "$MOCK_TARGET" --apk "$APK" --shizuku --no-tame
+assert_success "Shizuku signer verification discovers apksigner through ANDROID_SDK_ROOT"
+assert_log_contains '^apksigner verify --print-certs .*/installed-shizuku\.apk$' "ANDROID_SDK_ROOT apksigner verifies an installed newer manager"
 
 # A same-or-newer manager with an unverifiable signer must fail closed and tell the operator how to
 # recover. In particular, it must not download over or start an untrusted package.
@@ -441,6 +474,14 @@ assert_failure "parallel fleet reports nonzero for a mixed panel outcome"
 assert_contains 'panel-a\.test:5555' "parallel fleet replays the successful panel section"
 assert_contains 'panel-b\.test:5555' "parallel fleet replays the failed panel section"
 assert_contains '1 OK, 1 failed' "parallel fleet aggregates mixed results"
+
+: > "$MOCK_CALL_LOG"
+LAST_OUTPUT="$TMP/fleet-shizuku-failure-output.txt"
+MOCK_SHIZUKU_START=fail bash "$UPDATE_FLEET" --apk "$APK" --shizuku --no-tame -- "$MOCK_TARGET" > "$LAST_OUTPUT" 2>&1
+LAST_STATUS=$?
+assert_failure "fleet update fails when requested Shizuku service setup fails"
+assert_contains '0 OK, 1 failed' "fleet summary does not count incomplete Shizuku setup as success"
+assert_contains 'service did not start' "fleet output retains the Shizuku recovery reason"
 
 : > "$MOCK_CALL_LOG"
 LAST_OUTPUT="$TMP/fleet-duplicate-output.txt"

@@ -223,7 +223,7 @@ class InteractiveControllerTest {
         assertEquals(listOf("su-bytes:screencap -p", "helper-bytes:SCREENCAP", "shizuku:screenshot"), calls)
     }
 
-    @Test fun inputFallsThroughExistingRoutesToTypedShizukuOperation() {
+    @Test fun readyShizukuPrecedesSpeculativeSuOnSandboxedProfile() {
         val calls = mutableListOf<String>()
         val controller = InteractiveController(
             canSu = false,
@@ -233,6 +233,19 @@ class InteractiveControllerTest {
             shell = Shell(calls, inputResult = true),
         )
         assertTrue(controller.tap(12f, 34f))
-        assertEquals(listOf("a11y:tap:12:34", "su:input tap 12 34", "shizuku:tap:12:34"), calls)
+        assertEquals(listOf("a11y:tap:12:34", "shizuku:tap:12:34"), calls)
+    }
+
+    @Test fun failedReadyShizukuStillFallsThroughToSpeculativeSu() {
+        val calls = mutableListOf<String>()
+        val controller = InteractiveController(
+            canSu = false,
+            root = Root(calls, runResults = listOf(true)),
+            daemon = Helper(calls),
+            accessibility = Accessibility(calls),
+            shell = Shell(calls, inputResult = false),
+        )
+        assertTrue(controller.back())
+        assertEquals(listOf("a11y:back", "shizuku:key:4", "su:input keyevent 4"), calls)
     }
 }

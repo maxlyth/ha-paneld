@@ -44,10 +44,10 @@ case "${1:-}" in
         fi
         ;;
       "test -f /storage/emulated/0/Android/data/moe.shizuku.privileged.api/start.sh")
-        exit 0
+        [ "${MOCK_SHIZUKU_START_SCRIPT:-ok}" = "ok" ]
         ;;
       "sh /storage/emulated/0/Android/data/moe.shizuku.privileged.api/start.sh")
-        exit 0
+        [ "${MOCK_SHIZUKU_START:-ok}" = "ok" ]
         ;;
       "dumpsys package "*)
         printf 'versionName=%s\n' "${MOCK_INSTALLED_VERSION:-0.9.1}"

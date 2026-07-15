@@ -129,8 +129,11 @@ class DensityController(
         val suAttempt = EffectAttempt(PrivilegeRoute.SU, su)
         val helperAttempt = EffectAttempt(PrivilegeRoute.DAEMON, helper)
         val shizukuAttempt = EffectAttempt(PrivilegeRoute.SHIZUKU, shizuku)
-        val attempts = if (canSu) arrayOf(suAttempt, helperAttempt, shizukuAttempt)
-            else arrayOf(helperAttempt, suAttempt, shizukuAttempt)
+        val attempts = when {
+            canSu -> arrayOf(suAttempt, helperAttempt, shizukuAttempt)
+            shell.available() -> arrayOf(helperAttempt, shizukuAttempt, suAttempt)
+            else -> arrayOf(helperAttempt, suAttempt, shizukuAttempt)
+        }
         return ShortOperationRouter.effect(*attempts) != null
     }
 
@@ -142,8 +145,11 @@ class DensityController(
         val suAttempt = ValueAttempt(PrivilegeRoute.SU, su)
         val helperAttempt = ValueAttempt(PrivilegeRoute.DAEMON, helper)
         val shizukuAttempt = ValueAttempt(PrivilegeRoute.SHIZUKU, shizuku)
-        val attempts = if (canSu) arrayOf(suAttempt, helperAttempt, shizukuAttempt)
-            else arrayOf(helperAttempt, suAttempt, shizukuAttempt)
+        val attempts = when {
+            canSu -> arrayOf(suAttempt, helperAttempt, shizukuAttempt)
+            shell.available() -> arrayOf(helperAttempt, shizukuAttempt, suAttempt)
+            else -> arrayOf(helperAttempt, suAttempt, shizukuAttempt)
+        }
         return ShortOperationRouter.value(*attempts)?.value
     }
 

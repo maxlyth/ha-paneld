@@ -53,6 +53,12 @@ internal object ShizukuPolicy {
     ): Boolean = callbackGeneration == currentGeneration && connectionIsCurrent && consentEnabled &&
         managerTrusted && identityUsable
 
+    fun canRemoveRejectedBinding(
+        callbackGeneration: Long,
+        currentGeneration: Long,
+        connectionIsCurrent: Boolean,
+    ): Boolean = callbackGeneration == currentGeneration && connectionIsCurrent
+
     /**
      * Shizuku reports a rationale after the user has denied access and its prompt cannot be used to
      * recover the grant. Only a fresh explicit opt-in may open the prompt; denied access must send the

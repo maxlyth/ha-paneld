@@ -179,15 +179,24 @@ object ShizukuBridge : ShellPrivilege {
     }
 
     private fun rejectBinding(connection: ServiceConnection, generation: Long, nextState: ShizukuState) {
-        synchronized(this) {
-            if (generation == bindingGeneration && activeConnection === connection) {
+        val removeService = synchronized(this) {
+            if (ShizukuPolicy.canRemoveRejectedBinding(
+                    callbackGeneration = generation,
+                    currentGeneration = bindingGeneration,
+                    connectionIsCurrent = activeConnection === connection,
+                )) {
                 bindingGeneration++
                 activeConnection = null
                 remote = null
                 state = nextState
+                true
+            } else {
+                false
             }
         }
-        runCatching { Shizuku.unbindUserService(args, connection, true) }
+        // A stale callback belongs to an older binding. Detach that connection, but never remove the
+        // user service: the same UserServiceArgs may already back a newer accepted connection.
+        runCatching { Shizuku.unbindUserService(args, connection, removeService) }
     }
 
     override fun available(): Boolean = remote != null && state == ShizukuState.READY
