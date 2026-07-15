@@ -96,6 +96,10 @@ jobs:
       - name: Build release-pinned installer asset
         run: |
           installer="release-input/ha-paneld-installer-${GITHUB_REF_NAME}.sh"
+          provisioner="release-input/ha-paneld-provision-${GITHUB_REF_NAME}.sh"
+          cp scripts/provision.sh "$provisioner"
+          chmod +x "$provisioner"
+          bash -n "$provisioner"
           sed \
             -e "s|^RELEASE_TAG=.*|RELEASE_TAG=\"$GITHUB_REF_NAME\"|" \
             -e "s|^RELEASE_APK_NAME=.*|RELEASE_APK_NAME=\"$APK_NAME\"|" \
@@ -161,6 +165,7 @@ jobs:
           expected=$(printf '%s\n' \
             android-gradle-runtime.cdx.json \
             "ha-paneld-installer-${GITHUB_REF_NAME}.sh" \
+            "ha-paneld-provision-${GITHUB_REF_NAME}.sh" \
             ha-paneld-unsigned.apk \
             profile-editor-runtime.cdx.json \
             release-body.md)
@@ -172,7 +177,7 @@ jobs:
           fi
           (
             cd release-input
-            sha256sum android-gradle-runtime.cdx.json "ha-paneld-installer-${GITHUB_REF_NAME}.sh" ha-paneld-unsigned.apk profile-editor-runtime.cdx.json release-body.md > MANIFEST.sha256
+            sha256sum android-gradle-runtime.cdx.json "ha-paneld-installer-${GITHUB_REF_NAME}.sh" "ha-paneld-provision-${GITHUB_REF_NAME}.sh" ha-paneld-unsigned.apk profile-editor-runtime.cdx.json release-body.md > MANIFEST.sha256
           )
           sha256=$(sha256sum release-input/MANIFEST.sha256 | cut -d' ' -f1)
           echo "sha256=$sha256" >> "$GITHUB_OUTPUT"
@@ -221,6 +226,7 @@ jobs:
             MANIFEST.sha256 \
             android-gradle-runtime.cdx.json \
             "ha-paneld-installer-${GITHUB_REF_NAME}.sh" \
+            "ha-paneld-provision-${GITHUB_REF_NAME}.sh" \
             ha-paneld-unsigned.apk \
             profile-editor-runtime.cdx.json \
             release-body.md)
@@ -279,6 +285,7 @@ jobs:
           apk_name="ha-paneld-${GITHUB_REF_NAME}-manual-setup-required.apk"
           android_sbom_name="ha-paneld-${GITHUB_REF_NAME}-android-gradle-runtime.cdx.json"
           profile_editor_sbom_name="ha-paneld-${GITHUB_REF_NAME}-profile-editor-runtime.cdx.json"
+          provisioner_name="ha-paneld-provision-${GITHUB_REF_NAME}.sh"
           signed_apk="dist/$apk_name"
           mkdir -p dist
 
@@ -321,8 +328,11 @@ jobs:
           cp release-input/android-gradle-runtime.cdx.json "dist/$android_sbom_name"
           cp release-input/profile-editor-runtime.cdx.json "dist/$profile_editor_sbom_name"
           cp "release-input/ha-paneld-installer-${GITHUB_REF_NAME}.sh" "dist/ha-paneld-installer-${GITHUB_REF_NAME}.sh"
+          cp "release-input/$provisioner_name" "dist/$provisioner_name"
           chmod +x "dist/ha-paneld-installer-${GITHUB_REF_NAME}.sh"
+          chmod +x "dist/$provisioner_name"
           (cd dist && sha256sum "$apk_name" > "$apk_name.sha256")
+          (cd dist && sha256sum "$provisioner_name" > "$provisioner_name.sha256")
 
           pkcs12_password=$(openssl rand -hex 32)
           keytool -importkeystore \
@@ -340,6 +350,8 @@ jobs:
           openssl pkey -in "$private_key" -pubout -out "$public_key"
           openssl dgst -sha256 -sign "$private_key" -out "dist/$apk_name.sha256.sig" "dist/$apk_name.sha256"
           openssl dgst -sha256 -verify "$public_key" -signature "dist/$apk_name.sha256.sig" "dist/$apk_name.sha256"
+          openssl dgst -sha256 -sign "$private_key" -out "dist/$provisioner_name.sha256.sig" "dist/$provisioner_name.sha256"
+          openssl dgst -sha256 -verify "$public_key" -signature "dist/$provisioner_name.sha256.sig" "dist/$provisioner_name.sha256"
 
           echo "apk_name=$apk_name" >> "$GITHUB_OUTPUT"
           echo "android_sbom_name=$android_sbom_name" >> "$GITHUB_OUTPUT"

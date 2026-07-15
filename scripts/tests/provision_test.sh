@@ -522,12 +522,85 @@ if bash -n "$RELEASE_INSTALLER" && \
    grep -Fq 'command -v openssl' "$RELEASE_INSTALLER" && \
    grep -Fq 'It authenticates the release before anything is installed' "$RELEASE_INSTALLER" && \
    grep -Fq -- '--release-tag "$RELEASE_TAG"' "$RELEASE_INSTALLER" && \
-   grep -Fq 'raw.githubusercontent.com/$REPO/$PROVISION_REF/scripts/provision.sh' "$RELEASE_INSTALLER" && \
+   grep -Fq 'PROVISION_URL="$(provision_asset_url "$PROVISION_REF")"' "$RELEASE_INSTALLER" && \
+   grep -Fq 'openssl dgst -sha256 -verify "$PROVISION_PUBLIC_KEY"' "$RELEASE_INSTALLER" && \
    grep -Fq 'PROVISION_COMMIT="0123456789abcdef0123456789abcdef01234567"' "$RELEASE_INSTALLER"; then
   pass "generated release installer preserves HTTPS, OpenSSL authentication, release verification, and immutable provisioner source"
 else
   fail_test "generated release installer preserves HTTPS, OpenSSL authentication, release verification, and immutable provisioner source"
 fi
+
+# Downloaded executable code must be independently authenticated with the release key. These runs
+# stop at the no-terminal prompt gate, after authentication but before any panel contact.
+LAST_OUTPUT="$TMP/install-release-auth-output.txt"
+: > "$MOCK_CALL_LOG"
+bash "$RELEASE_INSTALLER" > "$LAST_OUTPUT" 2>&1
+LAST_STATUS=$?
+assert_failure "release installer without a terminal stops safely after provisioner authentication"
+assert_contains 'authenticated v0\.9\.2-rc3 provisioner' "release installer authenticates its provisioner before prompting"
+assert_log_contains '^curl .*releases/download/v0\.9\.2-rc3/ha-paneld-provision-v0\.9\.2-rc3\.sh -o ' "release installer downloads the versioned provisioner asset"
+assert_log_contains '^curl .*ha-paneld-provision-v0\.9\.2-rc3\.sh\.sha256 -o ' "release installer downloads the provisioner checksum"
+assert_log_contains '^curl .*ha-paneld-provision-v0\.9\.2-rc3\.sh\.sha256\.sig -o ' "release installer downloads the provisioner checksum signature"
+assert_log_contains '^openssl dgst -sha256 -verify .* -signature .*/provision\.sha256\.sig .*/provision\.sha256$' "release installer verifies the provisioner checksum signature"
+assert_log_contains '^openssl dgst -sha256 -r .*/provision\.sh$' "release installer hashes the downloaded provisioner"
+assert_not_contains '^adb ' "$MOCK_CALL_LOG" "provisioner authentication completes before panel contact"
+
+LAST_OUTPUT="$TMP/install-release-invalid-signature-output.txt"
+: > "$MOCK_CALL_LOG"
+MOCK_RELEASE_SIGNATURE_FAIL=1 bash "$RELEASE_INSTALLER" > "$LAST_OUTPUT" 2>&1
+LAST_STATUS=$?
+assert_failure "release installer rejects an invalid provisioner checksum signature"
+assert_contains 'provisioner checksum signature is invalid' "invalid provisioner signature names the authentication failure"
+assert_contains 'Nothing was installed, started, or privileged' "invalid provisioner signature states the safe outcome"
+assert_not_contains '^openssl dgst -sha256 -r ' "$MOCK_CALL_LOG" "invalid provisioner signature is rejected before hashing or trusting its checksum"
+assert_not_contains '^adb ' "$MOCK_CALL_LOG" "invalid provisioner signature stops before panel contact"
+
+LAST_OUTPUT="$TMP/install-release-missing-proof-output.txt"
+: > "$MOCK_CALL_LOG"
+MOCK_INSTALLER_PROOF_DOWNLOAD=checksum_fail bash "$RELEASE_INSTALLER" > "$LAST_OUTPUT" 2>&1
+LAST_STATUS=$?
+assert_failure "release installer fails closed when the provisioner checksum asset is missing"
+assert_contains 'Could not download the signed provisioner checksum' "missing provisioner proof names the incomplete release"
+assert_not_contains '^openssl dgst -sha256 -verify ' "$MOCK_CALL_LOG" "missing provisioner proof is never verified as if it were complete"
+assert_not_contains '^adb ' "$MOCK_CALL_LOG" "missing provisioner proof stops before panel contact"
+
+LAST_OUTPUT="$TMP/install-release-malformed-proof-output.txt"
+: > "$MOCK_CALL_LOG"
+MOCK_INSTALLER_CHECKSUM=malformed bash "$RELEASE_INSTALLER" > "$LAST_OUTPUT" 2>&1
+LAST_STATUS=$?
+assert_failure "release installer rejects a malformed signed provisioner record"
+assert_contains 'signed provisioner checksum record.*is malformed' "malformed provisioner record names the metadata failure"
+assert_not_contains '^openssl dgst -sha256 -r ' "$MOCK_CALL_LOG" "malformed provisioner record is rejected before hashing executable bytes"
+assert_not_contains '^adb ' "$MOCK_CALL_LOG" "malformed provisioner record stops before panel contact"
+
+LAST_OUTPUT="$TMP/install-release-mismatched-provisioner-output.txt"
+: > "$MOCK_CALL_LOG"
+MOCK_INSTALLER_CHECKSUM=mismatch bash "$RELEASE_INSTALLER" > "$LAST_OUTPUT" 2>&1
+LAST_STATUS=$?
+assert_failure "release installer rejects provisioner bytes that do not match the signed checksum"
+assert_contains 'provisioner does not match its signed checksum' "provisioner checksum mismatch names the integrity failure"
+assert_not_contains '^adb ' "$MOCK_CALL_LOG" "provisioner checksum mismatch stops before panel contact"
+
+# The main-channel bootstrap must remain usable while latest stable is v0.9.2, which predates proof
+# assets. Once it resolves v0.9.3 or newer, absence or failure of proof must never trigger downgrade.
+LAST_OUTPUT="$TMP/install-legacy-channel-output.txt"
+: > "$MOCK_CALL_LOG"
+MOCK_INSTALLER_RELEASE_API=legacy bash "$ROOT/scripts/install.sh" > "$LAST_OUTPUT" 2>&1
+LAST_STATUS=$?
+assert_failure "pre-v0.9.3 channel installer reaches the prompt gate through its compatibility path"
+assert_log_contains '^curl .*raw\.githubusercontent\.com/maxlyth/ha-paneld/v0\.9\.2/scripts/provision\.sh -o ' "pre-v0.9.3 channel install retains immutable-tag compatibility"
+assert_not_contains 'ha-paneld-provision-v0\.9\.2\.sh\.sha256' "$MOCK_CALL_LOG" "legacy channel compatibility does not expect assets that were never published"
+assert_not_contains '^adb ' "$MOCK_CALL_LOG" "legacy channel resolution still occurs before panel contact"
+
+LAST_OUTPUT="$TMP/install-authenticated-channel-output.txt"
+: > "$MOCK_CALL_LOG"
+MOCK_INSTALLER_RELEASE_API=authenticated bash "$ROOT/scripts/install.sh" > "$LAST_OUTPUT" 2>&1
+LAST_STATUS=$?
+assert_failure "v0.9.3 channel installer reaches the prompt gate only after authentication"
+assert_contains 'authenticated v0\.9\.3 provisioner' "v0.9.3 channel resolution requires the authenticated provisioner asset"
+assert_log_contains '^curl .*releases/download/v0\.9\.3/ha-paneld-provision-v0\.9\.3\.sh\.sha256\.sig -o ' "v0.9.3 channel resolution fetches signed proof"
+assert_not_contains 'raw\.githubusercontent\.com/.*/v0\.9\.3/scripts/provision\.sh' "$MOCK_CALL_LOG" "v0.9.3 channel resolution cannot downgrade to the legacy provisioner path"
+assert_not_contains '^adb ' "$MOCK_CALL_LOG" "authenticated channel resolution completes before panel contact"
 
 LAST_OUTPUT="$TMP/provision-help.txt"
 bash "$PROVISION" --help > "$LAST_OUTPUT" 2>&1

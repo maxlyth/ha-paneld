@@ -19,6 +19,30 @@ for arg in "$@"; do
 done
 
 case "$url" in
+  https://github.com/maxlyth/ha-paneld/releases/download/v*/ha-paneld-provision-v*.sh.sha256.sig)
+    [ -n "$output_file" ] || exit 2
+    [ "${MOCK_INSTALLER_PROOF_DOWNLOAD:-ok}" = "signature_fail" ] && exit 22
+    printf 'mock detached provisioner signature\n' > "$output_file"
+    ;;
+  https://github.com/maxlyth/ha-paneld/releases/download/v*/ha-paneld-provision-v*.sh.sha256)
+    [ -n "$output_file" ] || exit 2
+    [ "${MOCK_INSTALLER_PROOF_DOWNLOAD:-ok}" = "checksum_fail" ] && exit 22
+    asset="$(basename "$url" .sha256)"
+    case "${MOCK_INSTALLER_CHECKSUM:-ok}" in
+      ok) hash="$(printf 'mock authenticated provisioner\n' | /usr/bin/sha256sum | awk '{print $1}')"; printf '%s  %s\n' "$hash" "$asset" > "$output_file" ;;
+      mismatch) printf '%064d  %s\n' 0 "$asset" > "$output_file" ;;
+      malformed) printf 'this is not a provisioner checksum record\n' > "$output_file" ;;
+      *) exit 2 ;;
+    esac
+    ;;
+  https://github.com/maxlyth/ha-paneld/releases/download/v*/ha-paneld-provision-v*.sh)
+    [ -n "$output_file" ] || exit 2
+    printf 'mock authenticated provisioner\n' > "$output_file"
+    ;;
+  https://raw.githubusercontent.com/maxlyth/ha-paneld/v0.9.2/scripts/provision.sh)
+    [ -n "$output_file" ] || exit 2
+    printf 'mock legacy provisioner\n' > "$output_file"
+    ;;
   https://github.com/RikkaApps/Shizuku/releases/download/v13.6.0/shizuku-v13.6.0.r1086.2650830c-release.apk)
     [ -n "$output_file" ] || exit 2
     printf 'mock pinned Shizuku manager apk\n' > "$output_file"
@@ -76,6 +100,14 @@ JSON
         ;;
       *) exit 22 ;;
     esac
+    ;;
+  https://api.github.com/repos/maxlyth/ha-paneld/releases/latest)
+    case "${MOCK_INSTALLER_RELEASE_API:-fail}" in
+      legacy) tag=v0.9.2 ;;
+      authenticated) tag=v0.9.3 ;;
+      *) exit 22 ;;
+    esac
+    printf '{"tag_name":"%s","assets":[{"browser_download_url":"https://github.com/maxlyth/ha-paneld/releases/download/%s/ha-paneld-%s-manual-setup-required.apk"}]}\n' "$tag" "$tag" "$tag"
     ;;
   https://github.com/maxlyth/ha-paneld/releases/download/v*/ha-paneld-v*-manual-setup-required.apk)
     [ -n "$output_file" ] || exit 2
