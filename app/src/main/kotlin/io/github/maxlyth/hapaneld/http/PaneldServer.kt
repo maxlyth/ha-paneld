@@ -203,7 +203,9 @@ class PaneldServer(
     private val profileDeviceDraft: () -> PassiveProfileDraft? = { null },
     private val profileReport: () -> PassiveProfileReport? = { null },
     private val profileProbe: (String) -> PassiveProfileReport? = { null },
-    private val onProfileRestart: () -> Unit = {},
+    private val onProfileRestart: () -> Boolean = { false },
+    private val profileRestartAllowed: () -> Boolean = { true },
+    private val onProfileRestartAbort: (String) -> Boolean = { false },
 ) {
     // Per-INSTALL build token (changes on every (re)install, not just a version bump) so an open info
     // page can auto-reload after the app is updated — even a same-version dev re-spin. /health carries it.
@@ -413,6 +415,8 @@ class PaneldServer(
                             ProfileRouteDependencies(
                                 admin = admin,
                                 requestRestart = onProfileRestart,
+                                restartAllowed = profileRestartAllowed,
+                                abortPendingRestart = onProfileRestartAbort,
                                 readOnly = ProfileRouteReadOnlyProviders(
                                     template = profileTemplate,
                                     deviceDraft = profileDeviceDraft,

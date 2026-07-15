@@ -30,11 +30,13 @@ class RuntimeProfileRegistry internal constructor(
         val rawYaml: String,
         val document: ProfileDocument?,
         val issues: List<ProfileIssue> = emptyList(),
+        val rollbackOnly: Boolean = false,
     ) {
         val compatible: Boolean get() = document != null && issues.none { it.severity == ProfileIssueSeverity.ERROR }
     }
 
     private val importedDir = File(filesDir, "device-profiles/imported")
+    private val rollbackDir = File(filesDir, "device-profiles/rollback")
     private val previewTokens = PreviewTokenStore(clock)
     private var entries: Map<ProfileRef, StoredProfile> = emptyMap()
     private var catalogIssues: List<ProfileIssue> = emptyList()
@@ -246,6 +248,26 @@ class RuntimeProfileRegistry internal constructor(
                 val resolution = resolveSelection(selection)
                 if (selection is ProfileSelection.Pinned && resolution.entry == null) {
                     recoverInvalidActive(selection, resolution.issues)
+                } else if (selection == ProfileSelection.Auto) {
+                    val current = resolution.entry
+                    val previous = readActiveRef()
+                    if (current != null && previous != null && previous != current.ref && entries[previous]?.compatible == true) {
+                        val generation = maxOf(state.generation, preferences.getLong(KEY_GENERATION, 0L)) + 1
+                        if (preferences.put(
+                                KEY_PHASE to ProfileActivationPhase.APPLYING.name,
+                                KEY_GENERATION to generation,
+                                KEY_PREVIOUS to encode(ProfileSelection.Pinned(previous)),
+                                KEY_DESIRED to encode(ProfileSelection.Auto),
+                                KEY_MESSAGE to "Applying updated automatically matched profile.",
+                                KEY_CATALOG_REVISION to catalogRevision() + 1,
+                            )) {
+                            resolved(selection, generation)
+                        } else {
+                            resolved(ProfileSelection.Pinned(previous), null, listOf(ProfileIssue(ProfileIssueSeverity.ERROR, "activation", "Could not stage the automatically updated profile; retained the previous revision.")))
+                        }
+                    } else {
+                        resolved(selection, null)
+                    }
                 } else {
                     resolved(selection, null)
                 }
@@ -257,14 +279,30 @@ class RuntimeProfileRegistry internal constructor(
     override fun markActivationHealthy(generation: Long): Boolean {
         val state = readActivation()
         if (state.phase != ProfileActivationPhase.APPLYING || state.generation != generation) return false
-        return preferences.put(
+        val activeRef = resolveSelection(readSelection()).entry?.ref ?: return false
+        if (!writeRollbackSnapshot(activeRef)) return false
+        val persisted = preferences.put(
             KEY_PHASE to ProfileActivationPhase.ACTIVE.name,
+            KEY_ACTIVE_REF to encode(ProfileSelection.Pinned(activeRef)),
             KEY_LAST_KNOWN_GOOD to (state.previous ?: readLastKnownGood())?.let(::encode),
             KEY_PREVIOUS to null,
             KEY_DESIRED to null,
             KEY_MESSAGE to null,
             KEY_CATALOG_REVISION to catalogRevision() + 1,
         )
+        if (persisted) pruneRollbackSnapshots(activeRef)
+        return persisted
+    }
+
+    /** Records the proven runtime revision after an ordinary (non-activation) startup. */
+    @Synchronized
+    fun markStartupHealthy(ref: ProfileRef): Boolean {
+        val state = readActivation()
+        if (state.phase == ProfileActivationPhase.PENDING || state.phase == ProfileActivationPhase.APPLYING) return false
+        if (!writeRollbackSnapshot(ref)) return false
+        val persisted = preferences.put(KEY_ACTIVE_REF to encode(ProfileSelection.Pinned(ref)))
+        if (persisted) pruneRollbackSnapshots(ref)
+        return persisted
     }
 
     /** Cancels a staged restart when teardown could not release every restart-critical owner. */
@@ -301,7 +339,7 @@ class RuntimeProfileRegistry internal constructor(
     }
 
     private fun autoResolve(): SelectionResolution {
-        val bundled = entries.values.filter { it.origin == ProfileOrigin.BUNDLED }
+        val bundled = entries.values.filter { it.origin == ProfileOrigin.BUNDLED && !it.rollbackOnly }
         val generic = bundled.singleOrNull { it.document?.match?.fallback == true && it.compatible }
         val bundledMatches = bundled.filter { it.compatible && it.document?.matches(facts) == true }
         val chosenBundled = highestUnique(bundledMatches)
@@ -326,7 +364,7 @@ class RuntimeProfileRegistry internal constructor(
     private fun resolved(selection: ProfileSelection, generation: Long?, extraIssues: List<ProfileIssue> = emptyList()): ResolvedProfile {
         val resolution = resolveSelection(selection)
         val entry = resolution.entry ?: entries.values.firstOrNull {
-            it.origin == ProfileOrigin.BUNDLED && it.compatible && it.document?.match?.fallback == true
+            it.origin == ProfileOrigin.BUNDLED && !it.rollbackOnly && it.compatible && it.document?.match?.fallback == true
         }
         if (entry == null) {
             return ResolvedProfile(
@@ -428,9 +466,10 @@ class RuntimeProfileRegistry internal constructor(
         val activeSelection = if (activation.phase == ProfileActivationPhase.PENDING) activation.previous ?: ProfileSelection.Auto else selection
         val resolution = resolveSelection(activeSelection)
         val activeEntry = resolution.entry ?: entries.values.firstOrNull {
-            it.origin == ProfileOrigin.BUNDLED && it.compatible && it.document?.match?.fallback == true
+            it.origin == ProfileOrigin.BUNDLED && !it.rollbackOnly && it.compatible && it.document?.match?.fallback == true
         }
-        val active = activeEntry?.let { summary(it, active = true, selected = true) }
+        val requestedRef = resolveSelection(selection).entry?.ref
+        val active = activeEntry?.let { summary(it, active = true, selected = it.ref == requestedRef) }
             ?: emergencySummary(active = true)
         return ProfileStatus(
             catalogRevision = catalogRevision(),
@@ -464,6 +503,14 @@ class RuntimeProfileRegistry internal constructor(
         val loaded = linkedMapOf<ProfileRef, StoredProfile>()
         val issues = mutableListOf<ProfileIssue>()
         bundledLoader().forEach { (name, raw) -> loadEntry(raw, ProfileOrigin.BUNDLED, "assets/$BUNDLED_DIR/$name", loaded, issues) }
+        rollbackDir.listFiles().orEmpty().filter { it.isDirectory }.flatMap { directory ->
+            directory.listFiles().orEmpty().filter { it.isFile && it.extension == "yaml" }
+        }.forEach { file ->
+            val expected = expectedRef(file) ?: return@forEach
+            if (expected in loaded) return@forEach
+            val raw = runCatching { readBounded(file) }.getOrNull() ?: return@forEach
+            loadEntry(raw, ProfileOrigin.BUNDLED, file.path, loaded, issues, expectedRef = expected, rollbackOnly = true)
+        }
         val importedFiles = importedDir.listFiles().orEmpty().filter { it.isDirectory }.flatMap { idDir ->
             idDir.listFiles().orEmpty().filter { it.isFile && it.extension == "yaml" }
         }
@@ -512,7 +559,7 @@ class RuntimeProfileRegistry internal constructor(
             loadEntry(raw, ProfileOrigin.IMPORTED, file.path, loaded, issues, expectedRef = expected)
         }
         entries = loaded
-        if (loaded.values.none { it.origin == ProfileOrigin.BUNDLED && it.compatible && it.document?.match?.fallback == true }) {
+        if (loaded.values.none { it.origin == ProfileOrigin.BUNDLED && !it.rollbackOnly && it.compatible && it.document?.match?.fallback == true }) {
             issues += ProfileIssue(ProfileIssueSeverity.ERROR, "catalog", "Bundled generic fallback is missing or invalid; compiled emergency fallback will be used.")
         }
         catalogIssues = issues
@@ -541,6 +588,7 @@ class RuntimeProfileRegistry internal constructor(
         loaded: MutableMap<ProfileRef, StoredProfile>,
         issues: MutableList<ProfileIssue>,
         expectedRef: ProfileRef? = null,
+        rollbackOnly: Boolean = false,
     ) {
         val parsed = ProfileYaml.parse(raw)
         val document = parsed.document
@@ -564,29 +612,11 @@ class RuntimeProfileRegistry internal constructor(
             issues += storedIssues.map { it.copy(path = "catalog[$source].${it.path}") }
         }
         val storedDocument = document?.takeIf { identityIssue == null }
-        val previous = loaded.putIfAbsent(ref, StoredProfile(ref, origin, raw, storedDocument, storedIssues))
+        val previous = loaded.putIfAbsent(ref, StoredProfile(ref, origin, raw, storedDocument, storedIssues, rollbackOnly))
         if (previous != null) issues += ProfileIssue(ProfileIssueSeverity.WARNING, "catalog[$source]", "Duplicate immutable revision ignored.")
     }
 
-    private fun writeImported(ref: ProfileRef, raw: String): Boolean = runCatching {
-        val target = importedFile(ref)
-        target.parentFile?.mkdirs()
-        if (target.exists()) return@runCatching readBounded(target) == raw
-        val staging = File(target.parentFile, ".${target.name}.${System.nanoTime()}.tmp")
-        try {
-            val bytes = raw.toByteArray(Charsets.UTF_8)
-            require(bytes.size <= ProfileMetadata.MAX_BYTES)
-            FileOutputStream(staging).use { output ->
-                output.write(bytes)
-                output.flush()
-                output.fd.sync()
-            }
-            if (!staging.renameTo(target)) error("atomic rename failed")
-        } finally {
-            if (staging.exists()) staging.delete()
-        }
-        true
-    }.getOrDefault(false)
+    private fun writeImported(ref: ProfileRef, raw: String): Boolean = writeImmutable(importedFile(ref), raw)
 
     private fun readBounded(file: File): String {
         if (file.length() > ProfileMetadata.MAX_BYTES) error("profile is too large")
@@ -607,6 +637,52 @@ class RuntimeProfileRegistry internal constructor(
 
     private fun importedFile(ref: ProfileRef) = File(File(importedDir, ref.id), "${ref.revision}.yaml")
 
+    private fun rollbackFile(ref: ProfileRef) = File(File(rollbackDir, ref.id), "${ref.revision}.yaml")
+
+    private fun writeRollbackSnapshot(ref: ProfileRef): Boolean {
+        val entry = entries[ref] ?: return false
+        // Imported revisions already have durable immutable storage and must retain their untrusted
+        // origin on reload. Only bundled assets need a private snapshot before an app update removes them.
+        if (entry.origin == ProfileOrigin.IMPORTED) return true
+        return writeImmutable(rollbackFile(ref), entry.rawYaml)
+    }
+
+    private fun pruneRollbackSnapshots(activeRef: ProfileRef) {
+        val state = readActivation()
+        val keep = listOfNotNull(
+            activeRef,
+            readActiveRef(),
+            (readLastKnownGood() as? ProfileSelection.Pinned)?.ref,
+            (state.previous as? ProfileSelection.Pinned)?.ref,
+            (state.desired as? ProfileSelection.Pinned)?.ref,
+        ).toSet()
+        rollbackDir.listFiles().orEmpty().filter { it.isDirectory }.forEach { directory ->
+            directory.listFiles().orEmpty().filter { it.isFile && it.extension == "yaml" }.forEach { file ->
+                if (expectedRef(file) !in keep) file.delete()
+            }
+            if (directory.list().isNullOrEmpty()) directory.delete()
+        }
+    }
+
+    private fun writeImmutable(target: File, raw: String): Boolean = runCatching {
+        target.parentFile?.mkdirs()
+        if (target.exists()) return@runCatching readBounded(target) == raw
+        val staging = File(target.parentFile, ".${target.name}.${System.nanoTime()}.tmp")
+        try {
+            val bytes = raw.toByteArray(Charsets.UTF_8)
+            require(bytes.size <= ProfileMetadata.MAX_BYTES)
+            FileOutputStream(staging).use { output ->
+                output.write(bytes)
+                output.flush()
+                output.fd.sync()
+            }
+            if (!staging.renameTo(target)) error("atomic rename failed")
+        } finally {
+            if (staging.exists()) staging.delete()
+        }
+        true
+    }.getOrDefault(false)
+
     private fun expectedRef(file: File): ProfileRef? {
         val id = file.parentFile?.name ?: return null
         val revision = file.name.removeSuffix(".yaml")
@@ -618,6 +694,9 @@ class RuntimeProfileRegistry internal constructor(
     private fun readSelection(): ProfileSelection = decode(preferences.getString(KEY_SELECTION, AUTO)) ?: ProfileSelection.Auto
 
     private fun readLastKnownGood(): ProfileSelection? = decode(preferences.getString(KEY_LAST_KNOWN_GOOD, ""))
+
+    private fun readActiveRef(): ProfileRef? =
+        (decode(preferences.getString(KEY_ACTIVE_REF, "")) as? ProfileSelection.Pinned)?.ref
 
     private fun readActivation(): ProfileActivationState {
         val phase = runCatching { ProfileActivationPhase.valueOf(preferences.getString(KEY_PHASE, ProfileActivationPhase.ACTIVE.name)) }
@@ -669,6 +748,7 @@ class RuntimeProfileRegistry internal constructor(
         private const val KEY_MESSAGE = "activation_message"
         private const val KEY_CATALOG_REVISION = "catalog_revision"
         private const val KEY_LAST_KNOWN_GOOD = "last_known_good"
+        private const val KEY_ACTIVE_REF = "active_ref"
         private const val MAX_DIFFS = 256
         private val EMERGENCY_GENERIC_REF = ProfileRef("generic", ProfileYaml.sha256("compiled-emergency-generic"))
     }

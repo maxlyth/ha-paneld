@@ -44,7 +44,11 @@ internal data class ProfileRouteReadOnlyProviders(
 internal data class ProfileRouteDependencies(
     val admin: ProfileAdmin,
     /** Must schedule a delayed controlled restart; it must never stop the service inline. */
-    val requestRestart: () -> Unit = {},
+    val requestRestart: () -> Boolean = { true },
+    /** Prevent process exit while an install, restore, or other destructive transaction owns its lane. */
+    val restartAllowed: () -> Boolean = { true },
+    /** Restore the previous selection when restart admission fails after durable staging. */
+    val abortPendingRestart: (String) -> Boolean = { false },
     val readOnly: ProfileRouteReadOnlyProviders = ProfileRouteReadOnlyProviders(),
     val hardMaxYamlBytes: Long = MAX_PROFILE_YAML_BYTES,
 )
@@ -187,14 +191,31 @@ private suspend fun handleSelection(
     } else {
         dependencies.admin.select(requireNotNull(selection), expectedRevision)
     }
-    val restart = call.respondMutation(
+    if (mutation is ProfileMutation.Success && mutation.restartRequired) {
+        val restartAllowed = dependencies.restartAllowed()
+        val rejection = when {
+            !restartAllowed -> "A destructive install or restore operation is in progress. Try profile activation again when it finishes."
+            !runCatching(dependencies.requestRestart).getOrDefault(false) -> "The profile restart could not be scheduled. Try again."
+            else -> null
+        }
+        if (rejection != null) {
+            dependencies.abortPendingRestart(rejection)
+            call.respondProfileJson(
+                JSONObject()
+                    .put("ok", false)
+                    .put("error", if (restartAllowed) "profile-restart-unavailable" else "destructive-operation-in-progress")
+                    .put("message", rejection)
+                    .put("status", statusJson(dependencies.admin.status())),
+                HttpStatusCode.ServiceUnavailable,
+            )
+            return
+        }
+    }
+    call.respondMutation(
         mutation,
         expectedCatalogRevision = expectedRevision,
         selectedRef = (selection as? ProfileSelection.Pinned)?.ref,
     )
-    // The callback only schedules the START_STICKY process restart. Invoking it after respond lets the
-    // accepted response queue first; the coordinator then supplies a short flush grace period.
-    if (restart) runCatching(dependencies.requestRestart)
 }
 
 private suspend fun handleDelete(call: ApplicationCall, dependencies: ProfileRouteDependencies) {

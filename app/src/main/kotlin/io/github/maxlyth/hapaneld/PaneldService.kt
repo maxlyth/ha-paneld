@@ -239,6 +239,7 @@ class PaneldService : Service() {
                 Log.i(TAG, "restarting process to activate staged profile")
                 kotlin.system.exitProcess(0)
             },
+            safeToRestart = { !InstallProgress.running },
         )
         config.attachProfile(profile)   // supplies per-panel manufacturer/model defaults
         sensors = SensorReporter(this, config, profile)
@@ -419,6 +420,8 @@ class PaneldService : Service() {
             profileReport = passiveProfileProbe::report,
             profileProbe = { passiveProfileProbe.report() },
             onProfileRestart = { profileRestart.request() },
+            profileRestartAllowed = { !InstallProgress.running },
+            onProfileRestartAbort = profileRegistry::abortPendingActivation,
         )
     }
 
@@ -800,7 +803,8 @@ class PaneldService : Service() {
                 io.github.maxlyth.hapaneld.control.CompanionDb.serverUrl(this@PaneldService, io.github.maxlyth.hapaneld.control.Su)
             }.getOrNull()?.let { config.setHaBaseUrl(it) }
         }
-        runtime.start runtimeStart@{ activeRuntime ->
+        val startupActivationGeneration = profileActivationGeneration
+        val startup = runtime.start runtimeStart@{ activeRuntime ->
             // Learning resolves the HA instance identity through this runtime. Start mDNS before either
             // the initial learner sync or a borrowed renderer commit can notify the learner of a target.
             val rendererResult = prepareEntityLearningStartup(
@@ -941,8 +945,25 @@ class PaneldService : Service() {
                     profileActivationGeneration = null
                 } else {
                     Log.w(TAG, "profile activation generation $generation could not be marked healthy")
+                    throw IllegalStateException("profile activation health state could not be persisted")
                 }
             }
+            if (profileActivationGeneration == null) {
+                profileRegistry.status().active?.ref?.let { ref ->
+                    if (!profileRegistry.markStartupHealthy(ref)) {
+                        Log.w(TAG, "could not persist the healthy profile revision snapshot")
+                    }
+                }
+            }
+        }
+        if (startupActivationGeneration != null) {
+            Thread({
+                val healthy = runCatching { startup.get() }.getOrDefault(false)
+                if (!healthy) {
+                    Log.e(TAG, "profile activation startup failed; scheduling rollback restart")
+                    profileRestart.request()
+                }
+            }, "profile-activation-health").apply { isDaemon = true; start() }
         }
         registerNetworkCallback()
         return START_STICKY

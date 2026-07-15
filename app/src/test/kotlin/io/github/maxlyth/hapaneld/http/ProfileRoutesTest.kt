@@ -146,7 +146,7 @@ class ProfileRoutesTest {
         application {
             routing {
                 route("/api/v1") {
-                    profileRoutes(ProfileRouteDependencies(admin, requestRestart = { restarts++ }))
+                    profileRoutes(ProfileRouteDependencies(admin, requestRestart = { restarts++; true }))
                 }
             }
         }
@@ -181,6 +181,41 @@ class ProfileRoutesTest {
         val delete = deleteWithoutConfirmation.dropLast(1) + ",\"confirm\":true}"
         assertEquals(HttpStatusCode.OK, postJson("/api/v1/profiles/delete", delete).status)
         assertEquals(admin.local.ref, admin.deleted)
+    }
+
+    @Test
+    fun activationIsAbortedWhenDestructiveLaneIsBusyOrRestartSchedulingFails() = testApplication {
+        val admin = FakeProfileAdmin()
+        var aborts = 0
+        var restartAllowed = false
+        var scheduleAccepted = true
+        application {
+            routing {
+                route("/api/v1") {
+                    profileRoutes(
+                        ProfileRouteDependencies(
+                            admin = admin,
+                            requestRestart = { scheduleAccepted },
+                            restartAllowed = { restartAllowed },
+                            abortPendingRestart = { aborts++; true },
+                        ),
+                    )
+                }
+            }
+        }
+        val request = """{"id":"${admin.local.ref.id}","revision":"${admin.local.ref.revision}","expected_catalog_revision":3,"confirm":true}"""
+
+        val busy = postJson("/api/v1/profiles/activate", request)
+        assertEquals(HttpStatusCode.ServiceUnavailable, busy.status)
+        assertEquals("destructive-operation-in-progress", JSONObject(busy.bodyAsText()).getString("error"))
+        assertEquals(1, aborts)
+
+        restartAllowed = true
+        scheduleAccepted = false
+        val unavailable = postJson("/api/v1/profiles/activate", request)
+        assertEquals(HttpStatusCode.ServiceUnavailable, unavailable.status)
+        assertEquals("profile-restart-unavailable", JSONObject(unavailable.bodyAsText()).getString("error"))
+        assertEquals(2, aborts)
     }
 
     @Test

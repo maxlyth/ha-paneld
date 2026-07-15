@@ -13,7 +13,9 @@
     editable: false,
     loading: false,
     editor: null,
+    sourceLoaded: false,
     maxBytes: 128 * 1024,
+    viewGeneration: 0,
   };
   var suppressEditorChange = false;
 
@@ -105,9 +107,12 @@
   function editorChanged(value) {
     model.source = string(value);
     if (suppressEditorChange) return;
+    model.viewGeneration++;
+    model.loading = false;
     model.preview = null;
-    renderIssues([]);
-    renderDiff([]);
+    renderIssues([{ severity: "info", message: "YAML changed; validate it to refresh issues and comparison." }]);
+    renderDiff(null);
+    setStatus("YAML changed. Validate before saving or activating.");
     updateActions();
   }
   function setEditor(value, editable) {
@@ -115,6 +120,8 @@
     model.originalSource = string(value);
     model.editable = !!editable;
     model.preview = null;
+    model.sourceLoaded = true;
+    model.viewGeneration++;
     suppressEditorChange = true;
     model.editor.setValue(model.source);
     model.editor.setReadOnly(!model.editable);
@@ -225,6 +232,9 @@
     var root = byId("profile-diff");
     if (!root) return;
     root.textContent = "";
+    if (diff == null) {
+      var pending = document.createElement("div"); pending.className = "profile-empty"; pending.textContent = "Validate the current YAML to compare it with the active profile."; root.appendChild(pending); return;
+    }
     if (!diff || !diff.length) {
       var empty = document.createElement("div"); empty.className = "profile-empty"; empty.textContent = "No semantic changes from the active profile."; root.appendChild(empty); return;
     }
@@ -258,13 +268,14 @@
     var review = reviewedSummary();
     var active = model.profiles.find(function (item) { return item.active; }) || null;
     var dirty = isDirty();
+    var select = byId("profile-select"); if (select) select.disabled = model.loading;
     var save = byId("savebtn");
     if (save) save.disabled = !model.editable || !dirty || !(model.preview && model.preview.compatible && model.preview.source === model.source);
     var validate = byId("profile-validate"); if (validate) validate.disabled = !model.source || model.loading;
     var compare = byId("profile-compare"); if (compare) compare.disabled = !model.source || model.loading;
-    var edit = byId("profile-edit"); if (edit) edit.disabled = !summary || model.editable;
-    var fork = byId("profile-fork"); if (fork) fork.disabled = !summary || model.editable;
-    var activate = byId("profile-activate"); if (activate) activate.disabled = !summary || summary.compatible === false || summary.active || dirty || model.loading;
+    var edit = byId("profile-edit"); if (edit) edit.disabled = !summary || !model.sourceLoaded || model.editable;
+    var fork = byId("profile-fork"); if (fork) fork.disabled = !summary || !model.sourceLoaded || model.editable;
+    var activate = byId("profile-activate"); if (activate) activate.disabled = !summary || !model.sourceLoaded || summary.compatible === false || summary.active || dirty || model.loading;
     var automatic = byId("profile-auto"); if (automatic) automatic.disabled = dirty || model.loading || model.status.selection && model.status.selection.mode === "auto";
     var remove = byId("profile-delete"); if (remove) remove.disabled = !summary || summary.origin === "bundled" || summary.active || summary.selected || summary.last_known_good || dirty || model.loading;
     var rollback = byId("profile-rollback"); if (rollback) rollback.disabled = !(model.status.rollback_ref || model.status.rollback_auto) || dirty || model.loading;
@@ -277,8 +288,10 @@
   }
 
   function loadCatalog(preferredRef) {
+    var generation = ++model.viewGeneration;
     setStatus("Loading profiles…");
     return jsonFetch(API).then(function (data) {
+      if (generation !== model.viewGeneration) return;
       model.catalogRevision = Number(data.catalog_revision) || 0;
       model.profiles = data.profiles || [];
       model.status = data.status || data;
@@ -295,12 +308,18 @@
   function loadSelected() {
     if (!model.selected) return Promise.resolve();
     var ref = model.selected;
+    var generation = ++model.viewGeneration;
     setStatus("Loading " + ref.id + "…");
     return yamlFetch(API + "/" + encodeURIComponent(ref.id) + "/revisions/" + encodeURIComponent(ref.revision)).then(function (yaml) {
+      if (generation !== model.viewGeneration || refKey(model.selected) !== refKey(ref)) return;
       setEditor(yaml, false);
       var summary = selectedSummary(); renderIssues(summary && summary.issues || []); renderDiff([]);
       setStatus("Viewing immutable revision " + string(ref.revision).slice(0, 12) + ".");
-    }).catch(function (error) { setStatus("Could not load profile: " + error.message, "error"); });
+    }).catch(function (error) {
+      if (generation !== model.viewGeneration || refKey(model.selected) !== refKey(ref)) return;
+      setEditor("", false); model.sourceLoaded = false; renderIssues([{ severity: "error", message: error.message }]); renderDiff(null); updateActions();
+      setStatus("Could not load profile: " + error.message, "error");
+    });
   }
 
   function loadReport() {
@@ -309,9 +328,12 @@
 
   function preview(openCompare) {
     if (!model.source) return Promise.resolve(null);
+    var source = model.source;
+    var generation = model.viewGeneration;
     model.loading = true; updateActions(); setStatus("Validating YAML…");
-    return postYaml("/probe", model.source).then(function (result) {
-      result.source = model.source;
+    return postYaml("/probe", source).then(function (result) {
+      if (generation !== model.viewGeneration || source !== model.source) return null;
+      result.source = source;
       model.preview = result;
       renderIssues(result.issues || []);
       renderDiff(result.diff_from_active || []);
@@ -320,9 +342,12 @@
       if (openCompare) openModal("Compare with active profile", diffText(result.diff_from_active || []), null);
       return result;
     }).catch(function (error) {
+      if (generation !== model.viewGeneration || source !== model.source) return null;
       var issues = error.body && error.body.issues || [{ severity: "error", message: error.message }];
       model.preview = null; renderIssues(issues); setStatus("Validation failed: " + error.message, "error"); return null;
-    }).finally(function () { model.loading = false; updateActions(); });
+    }).finally(function () {
+      if (generation === model.viewGeneration) { model.loading = false; updateActions(); }
+    });
   }
   function diffText(diff) {
     if (!diff || !diff.length) return "No semantic changes from the active profile.";
@@ -335,14 +360,21 @@
     return preview(false).then(function (result) { if (!result || !result.compatible) throw new Error("Profile must validate before it can be saved"); return result; });
   }
   function saveProfile() {
+    var requestedSource = model.source;
     ensurePreview().then(function (result) {
+      var source = model.source;
       model.loading = true; updateActions(); setStatus("Saving immutable revision…");
-      return postYaml("/import", model.source, result.preview_token);
-    }).then(function (mutation) {
+      return postYaml("/import", source, result.preview_token).then(function (mutation) {
+        return { mutation: mutation, source: source };
+      });
+    }).then(function (saved) {
+      if (!saved || saved.source !== model.source) return;
+      var mutation = saved.mutation;
       setStatus(mutation.message || "Profile revision saved.", "ok");
       var ref = mutation.ref || mutation.imported_ref || null;
       return loadCatalog(ref);
     }).catch(function (error) {
+      if (requestedSource !== model.source) return;
       // Import consumes its one-shot token even when persistence/quota checks reject the mutation.
       // Force a fresh validation so Retry can never loop on a dead token.
       model.preview = null;
@@ -363,16 +395,20 @@
     model.editor.focus(); updateActions();
   }
   function loadTemplate() {
+    var generation = ++model.viewGeneration;
     yamlFetch(API + "/template").then(function (yaml) {
+      if (generation !== model.viewGeneration) return;
       model.selected = null; setEditor(yaml, true); model.originalSource = ""; renderIssues([]); renderDiff([]); setStatus("New unsaved profile. Validate it before saving."); model.editor.focus(); updateActions();
-    }).catch(function (error) { setStatus("Could not create a template: " + error.message, "error"); });
+    }).catch(function (error) { if (generation === model.viewGeneration) setStatus("Could not create a template: " + error.message, "error"); });
   }
   function loadDeviceDraft() {
+    var generation = ++model.viewGeneration;
     yamlFetch(API + "/device-draft").then(function (yaml) {
+      if (generation !== model.viewGeneration) return;
       model.selected = null; setEditor(yaml, false); renderIssues([]); renderDiff([]);
       setStatus("Passive Generic draft · read-only · unknown hardware remains marked TODO.");
       var use = byId("profile-use-draft"); if (use) use.hidden = false;
-    }).catch(function (error) { setStatus("Could not build the passive draft: " + error.message, "error"); });
+    }).catch(function (error) { if (generation === model.viewGeneration) setStatus("Could not build the passive draft: " + error.message, "error"); });
   }
   function useDraft() {
     model.editable = true; model.editor.setReadOnly(false); model.originalSource = ""; model.preview = null;
@@ -387,9 +423,11 @@
       input.value = "";
       return;
     }
+    var generation = ++model.viewGeneration;
     file.text().then(function (yaml) {
+      if (generation !== model.viewGeneration) return;
       model.selected = null; setEditor(yaml, true); model.originalSource = ""; renderIssues([]); renderDiff([]); setStatus("Imported locally for preview; nothing has been saved or activated."); model.editor.focus(); return preview(false);
-    }).catch(function (error) { setStatus("Could not read profile: " + error.message, "error"); });
+    }).catch(function (error) { if (generation === model.viewGeneration) setStatus("Could not read profile: " + error.message, "error"); });
     input.value = "";
   }
   function exportSource() {
@@ -449,7 +487,8 @@
         var active = model.profiles.find(function (item) { return item.active; });
         var activation = model.status.activation || {};
         var automaticHealthy = !ref && model.status.selection && model.status.selection.mode === "auto" && activation.state === "active";
-        if (automaticHealthy || active && refKey(active.ref) === refKey(ref)) { setStatus("Profile is active and healthy.", "ok"); loadCatalog(ref); return; }
+        var pinnedHealthy = active && refKey(active.ref) === refKey(ref) && activation.state === "active";
+        if (automaticHealthy || pinnedHealthy) { setStatus("Profile is active and healthy.", "ok"); loadCatalog(ref); return; }
         if (activation.state === "rolled_back" || activation.state === "auto_rolled_back") { setStatus("The candidate did not become healthy; ha-paneld automatically restored the last-known-good profile.", "error"); loadCatalog(active && active.ref); return; }
         pollAfterRestart(ref, attempt + 1);
       }).catch(function () { pollAfterRestart(ref, attempt + 1); });

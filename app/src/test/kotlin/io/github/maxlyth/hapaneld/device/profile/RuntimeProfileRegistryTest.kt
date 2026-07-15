@@ -99,6 +99,49 @@ class RuntimeProfileRegistryTest {
         assertEquals(ProfileSelection.Auto, registry.status().selection)
     }
 
+    @Test fun `automatic bundled revision change uses health gate and retained rollback snapshot`() {
+        val oldRaw = ProfileYaml.serialize(testProfileDocument(id = "vendor.test-panel", version = "1.0.0", facts = facts))
+        val newRaw = ProfileYaml.serialize(testProfileDocument(id = "vendor.test-panel", version = "1.0.1", facts = facts))
+        val oldRef = ProfileRef("vendor.test-panel", ProfileYaml.sha256(oldRaw))
+        val newRef = ProfileRef("vendor.test-panel", ProfileYaml.sha256(newRaw))
+        val first = registry(mapOf("generic.yaml" to genericYaml(), "panel.yaml" to oldRaw))
+
+        val initiallyActive = first.resolveForStartup()
+        assertEquals(oldRef, initiallyActive.summary.ref)
+        assertTrue(first.markStartupHealthy(oldRef))
+
+        val upgraded = registry(mapOf("generic.yaml" to genericYaml(), "panel.yaml" to newRaw))
+        val applying = upgraded.resolveForStartup()
+        assertEquals(newRef, applying.summary.ref)
+        assertNotNull(applying.activationGeneration)
+        assertEquals(ProfileActivationPhase.APPLYING, upgraded.status().activation.phase)
+
+        val afterFailedStartup = registry(mapOf("generic.yaml" to genericYaml(), "panel.yaml" to newRaw)).resolveForStartup()
+        assertEquals(oldRef, afterFailedStartup.summary.ref)
+        assertEquals(ProfileActivationPhase.ROLLED_BACK, registry(mapOf("generic.yaml" to genericYaml(), "panel.yaml" to newRaw)).status().activation.phase)
+    }
+
+    @Test fun `pending status does not mark previous active revision selected`() {
+        val registry = registry(mapOf("generic.yaml" to genericYaml()))
+        val ref = import(registry, ProfileYaml.serialize(testProfileDocument(facts = facts)))
+
+        registry.select(ProfileSelection.Pinned(ref), registry.status().catalogRevision)
+
+        assertFalse(registry.status().active!!.selected)
+        assertTrue(registry.list().single { it.ref == ref }.selected)
+    }
+
+    @Test fun `healthy imported revision is not copied into trusted bundled rollback storage`() {
+        val registry = registry(mapOf("generic.yaml" to genericYaml()))
+        val ref = import(registry, ProfileYaml.serialize(testProfileDocument(facts = facts)))
+        registry.select(ProfileSelection.Pinned(ref), registry.status().catalogRevision)
+        val applying = registry.resolveForStartup()
+
+        assertTrue(registry.markActivationHealthy(applying.activationGeneration!!))
+        assertFalse(File(directory, "device-profiles/rollback/${ref.id}/${ref.revision}.yaml").exists())
+        assertEquals(ProfileOrigin.IMPORTED, registry(mapOf("generic.yaml" to genericYaml())).list().single { it.ref == ref }.origin)
+    }
+
     @Test fun `failed teardown can abort only a pending activation`() {
         val registry = registry(mapOf("generic.yaml" to genericYaml()))
         val ref = import(registry, ProfileYaml.serialize(testProfileDocument(facts = facts)))

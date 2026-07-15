@@ -11,20 +11,34 @@ import java.util.concurrent.atomic.AtomicBoolean
  * owners impossible.
  */
 class ProfileRestartCoordinator(
-    private val schedule: (Long, () -> Unit) -> Unit,
+    private val schedule: (Long, () -> Unit) -> Boolean,
     private val restartProcess: () -> Unit,
+    private val safeToRestart: () -> Boolean = { true },
     private val responseGraceMs: Long = RESPONSE_GRACE_MS,
+    private val busyRetryMs: Long = BUSY_RETRY_MS,
 ) {
     private val requested = AtomicBoolean(false)
 
     /** Returns false when an activation has already scheduled this process's one restart. */
     fun request(): Boolean {
         if (!requested.compareAndSet(false, true)) return false
-        schedule(responseGraceMs, restartProcess)
-        return true
+        if (schedule(responseGraceMs, ::restartWhenSafe)) return true
+        requested.set(false)
+        return false
+    }
+
+    private fun restartWhenSafe() {
+        if (safeToRestart()) {
+            restartProcess()
+        } else if (!schedule(busyRetryMs, ::restartWhenSafe)) {
+            // Keep the process alive if its scheduler is shutting down. The durable PENDING state is
+            // recovered on the next ordinary process start, so never force an unsafe exit here.
+            requested.set(false)
+        }
     }
 
     companion object {
         const val RESPONSE_GRACE_MS = 350L
+        const val BUSY_RETRY_MS = 500L
     }
 }
