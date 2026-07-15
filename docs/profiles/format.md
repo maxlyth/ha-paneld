@@ -237,7 +237,7 @@ Create separate profiles when no named strategy covers the difference, or when t
 
 ## Capabilities and compiled drivers
 
-A capability declaration contains hardware facts and, where needed, a driver ID with typed parameters. Driver IDs name implementations compiled into ha-paneld. The driver owns validation of paths, ranges, event codes, package names and other security-sensitive input. Privileged paths are selected from core allowlists. System WebView updates use `updates.webview_artifact`, whose enum names a URL, version and signer hash compiled into and audited with the core; a profile cannot redefine that trust root.
+A capability declaration contains hardware facts and, where needed, a driver ID with typed parameters. Driver IDs name implementations compiled into ha-paneld. The driver owns validation of paths, ranges, event codes, package names and other security-sensitive input. Privileged paths are selected from core allowlists. System WebView updates use `updates.webview_artifact`, whose enum names a URL, version, artifact checksum and signer hash compiled into and audited with the core; a profile cannot redefine that trust root.
 
 Profiles cannot supply:
 

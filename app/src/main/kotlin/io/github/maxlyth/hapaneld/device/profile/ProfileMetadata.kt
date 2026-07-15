@@ -84,7 +84,7 @@ object ProfileMetadata {
             field("display.recommended_density", "integer|strategy", false, "Fixed dpi or nspanel-variant strategy."),
             field("display.recommended_font_scale", "number", false, "Recommended WebView text scale."),
             field("display.physical_ppi", "integer", false, "Author-evidenced physical pixel density."),
-            field("updates.webview_artifact", "enum", false, "Core-owned APK and signer trust root.", ProfileArtifacts.webViews.keys.sorted()),
+            field("updates.webview_artifact", "enum", false, "Core-owned APK artifact and signer trust root.", ProfileArtifacts.webViews.keys.sorted()),
             field("updates.companion_max_version", "version", false, "Newest known-good Companion version."),
             field("taming[]", "object[]", false, "Annotated suggestions; never automatically executed by import."),
         ),
