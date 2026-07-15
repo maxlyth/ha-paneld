@@ -162,6 +162,8 @@ ha-paneld needs no system-signed install. Standard-Android capabilities (brightn
 - **Enhanced access** — the official [Shizuku](https://github.com/RikkaApps/Shizuku) API/provider supplies the typed Binder boundary on unrooted panels.
 - **QR and logging** — [ZXing](https://github.com/zxing/zxing) generates on-panel setup QR codes, while [SLF4J](https://github.com/qos-ch/slf4j) routes Ktor and HiveMQ logs to Logcat.
 
+Dependency selection and updates follow the project's [dependency and supply-chain policy](SECURITY.md#dependency-and-supply-chain-policy).
+
 ## Want your panel supported?
 
 ha-paneld has no donate button. It's free, and the "payment" that actually moves it forward is **more panels supported** — which takes hardware to study. Every panel here was added by hands-on adb analysis: probing the device and watching how it responds to real button, LED and sensor interaction.
