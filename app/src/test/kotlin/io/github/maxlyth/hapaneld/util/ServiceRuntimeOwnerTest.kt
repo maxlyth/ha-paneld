@@ -119,7 +119,7 @@ class ServiceRuntimeOwnerTest {
             assertFalse(owner.reconnect(replacementObservation) { events += "post-stop-reconnect-ran" }.get(2, TimeUnit.SECONDS))
 
             releaseReconnect.countDown()
-            assertTrue(reconnect.get(2, TimeUnit.SECONDS))
+            assertFalse("terminal shutdown cancels an accepted recovery worker", reconnect.get(2, TimeUnit.SECONDS))
             assertEquals(
                 listOf(
                     "service-start",
@@ -136,7 +136,6 @@ class ServiceRuntimeOwnerTest {
                     "replacement-stop-enter",
                     "replacement-stop-exit",
                     "service-stop-exit",
-                    "replacement-reconnect-terminal",
                 ),
                 events.toList(),
             )
@@ -197,6 +196,47 @@ class ServiceRuntimeOwnerTest {
             if (owner.snapshot().state != RuntimeLifecycleCoordinator.State.STOPPED) {
                 owner.shutdown(2_000) { it.stop() }
             }
+        }
+    }
+
+    @Test fun shutdownWaitsForInFlightStartupThenClosesResourcesStartupOpened() {
+        val events = Collections.synchronizedList(mutableListOf<String>())
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val owner = ServiceRuntimeOwner("network", "startup-shutdown-test")
+        val worker = Executors.newSingleThreadExecutor()
+
+        try {
+            val startup = owner.start {
+                events += "startup-enter"
+                entered.countDown()
+                assertTrue(release.await(2, TimeUnit.SECONDS))
+                events += "http-start"
+            }
+            assertTrue(entered.await(2, TimeUnit.SECONDS))
+
+            val shutdown = worker.submit<Boolean> {
+                owner.shutdown(2_000) {
+                    events += "http-stop"
+                    events += "runtime-stop"
+                }
+            }
+            Thread.yield()
+            assertFalse("cleanup must remain queued behind startup", events.contains("http-stop"))
+
+            release.countDown()
+            assertTrue(startup.get(2, TimeUnit.SECONDS))
+            assertTrue(shutdown.get(2, TimeUnit.SECONDS))
+            assertEquals(
+                listOf("startup-enter", "http-start", "http-stop", "runtime-stop"),
+                events.toList(),
+            )
+        } finally {
+            release.countDown()
+            if (owner.snapshot().state != RuntimeLifecycleCoordinator.State.STOPPED) {
+                owner.shutdown(2_000) {}
+            }
+            worker.shutdownNow()
         }
     }
 

@@ -21,10 +21,10 @@ import io.github.maxlyth.hapaneld.util.HelperClient
  *
  * Everything is **privileged** (root), so it routes through the helper daemon (`STOP`/`DISABLE`/`OVERLAY`)
  * — which covers sandbox-walled panels — and falls back to `su` where the app can reach it. Everything is
- * **reversible** ([untame] re-enables + restores the overlay permission), and **critical system packages
- * are never touched**: a brick-guard here AND in the daemon refuses the system UI, Settings, telephony,
- * the framework, and ha-paneld itself. Only installed packages are acted on. The feature is **off by
- * default** — the blocklist is empty unless the user deliberately populates it.
+ * **reversible** ([untame] re-enables + restores the exact prior overlay app-op), and **critical system
+ * packages are never touched**: a brick-guard here AND in the daemon refuses the system UI, Settings,
+ * telephony, the framework, and ha-paneld itself. Only installed packages are acted on. The feature is
+ * **off by default** — the blocklist is empty unless the user deliberately populates it.
  */
 class TameController(
     private val context: Context,
@@ -35,6 +35,7 @@ class TameController(
     // seen on boot). Default no-op so plain construction (tests / non-boot use) is unaffected.
     private val onDefaultHomeDisabled: () -> Unit = {},
 ) {
+    private val state = context.applicationContext.getSharedPreferences(STATE_PREFS, Context.MODE_PRIVATE)
 
     /** Tame every blocklisted package that's installed and safe. Returns the packages actually tamed. */
     fun applyBlocklist(packages: List<String>): List<String> =
@@ -283,6 +284,7 @@ class TameController(
     }.getOrNull()
 
     /** force-stop + disable boot-relaunch + deny the overlay permission for [pkg]. */
+    @Synchronized
     fun tame(pkg: String): Boolean {
         if (!actOn(pkg)) return false
         // If we're disabling the CURRENT default home (e.g. a vendor kiosk like eWeLink left as home),
@@ -291,8 +293,17 @@ class TameController(
         val wasDefaultHome = pkg == currentDefaultHome()
         if (wasDefaultHome) {
             val comp = "${context.packageName}/.AdminLauncherActivity"
-            privileged("SETHOME $comp", "cmd package set-home-activity $comp")
-            Log.i(TAG, "tame $pkg: was default home → set ha-paneld admin launcher as home first")
+            val set = privileged("SETHOME $comp", "cmd package set-home-activity $comp")
+            val observed = currentDefaultHome()
+            if (!TameStatePolicy.homeHandoffSecured(set, observed, context.packageName)) {
+                Log.w(TAG, "tame $pkg: replacement home was not confirmed; leaving current home enabled")
+                return false
+            }
+            Log.i(TAG, "tame $pkg: was default home → confirmed ha-paneld admin launcher as home first")
+        }
+        if (!captureOverlayMode(pkg)) {
+            Log.w(TAG, "tame $pkg: refusing mutation because prior overlay mode was not persisted")
+            return false
         }
         val stopped = privileged("STOP $pkg", "am force-stop $pkg")
         val disabled = privileged("DISABLE $pkg", "pm disable-user --user 0 $pkg")
@@ -308,13 +319,34 @@ class TameController(
         return ok
     }
 
-    /** Reverse [tame]: re-enable the package and restore its overlay permission (for a future UI / undo). */
+    /** Reverse [tame]: re-enable the package and restore the exact overlay app-op captured before tame.
+     *  Legacy/unknown state restores the platform default, never a blind grant. */
+    @Synchronized
     fun untame(pkg: String): Boolean {
         if (!isInstalled(pkg)) return false
         val enabled = privileged("ENABLE $pkg", "pm enable $pkg")
-        val overlay = privileged("OVERLAY $pkg allow", "appops set $pkg SYSTEM_ALERT_WINDOW allow")
-        Log.i(TAG, "untame $pkg: enable=$enabled overlay=$overlay")
-        return enabled && overlay
+        val mode = state.getString(overlayStateKey(pkg), null)
+            ?.takeIf(TameStatePolicy::validOverlayMode)
+            ?: "default"
+        val overlay = privileged("OVERLAY $pkg $mode", "appops set $pkg SYSTEM_ALERT_WINDOW $mode")
+        val cleared = !overlay || state.edit().remove(overlayStateKey(pkg)).commit()
+        Log.i(TAG, "untame $pkg: enable=$enabled overlay=$overlay restoreMode=$mode stateCleared=$cleared")
+        return enabled && overlay && cleared
+    }
+
+    /** Persist once: repeated boot-time tame must not overwrite the original mode with our own deny. */
+    private fun captureOverlayMode(pkg: String): Boolean {
+        val key = overlayStateKey(pkg)
+        if (state.contains(key)) return true
+        val helperMode = HelperClient.send("OVERLAY $pkg")?.let(TameStatePolicy::overlayMode)
+        val rootMode = if (helperMode == null) {
+            Su.runOutput("appops get $pkg SYSTEM_ALERT_WINDOW 2>/dev/null")
+                ?.let(TameStatePolicy::overlayMode)
+        } else null
+        // Query failure is an unknown legacy state. Restoring `default` later is conservative and does
+        // not grant an app-op the package may never have held.
+        val mode = helperMode ?: rootMode ?: "default"
+        return state.edit().putString(key, mode).commit()
     }
 
     /** Run a privileged op via the daemon (trusting only an explicit OK), falling back to su. */
@@ -337,6 +369,9 @@ class TameController(
 
     companion object {
         private const val TAG = "ha-paneld/tame"
+        private const val STATE_PREFS = "ha-paneld-controller-state"
+
+        private fun overlayStateKey(pkg: String) = "tame_overlay.$pkg"
 
         // The HA Companion dashboard apps — never offered as tame candidates (this is an HA project; the
         // dashboard is the whole point). Excluded from enumeration/suggestions, not the brick-guard.
@@ -357,4 +392,22 @@ class TameController(
 
         fun isCritical(pkg: String): Boolean = pkg in CRITICAL
     }
+}
+
+/** Android-free policy kept explicit so destructive home/app-op transitions have deterministic tests. */
+internal object TameStatePolicy {
+    private val MODES = setOf("allow", "deny", "ignore", "default", "foreground")
+    private val APP_OP = Regex("""SYSTEM_ALERT_WINDOW(?:\s*\([^)]*\))?\s*:\s*(allow|deny|ignore|default|foreground)\b""")
+
+    fun validOverlayMode(mode: String): Boolean = mode in MODES
+
+    fun overlayMode(output: String): String? {
+        val helper = output.trim().removePrefix("MODE=").takeIf { output.trim().startsWith("MODE=") }
+        if (helper != null) return helper.takeIf(::validOverlayMode)
+        return APP_OP.find(output)?.groupValues?.get(1)
+            ?: "default".takeIf { output.contains("No operations", ignoreCase = true) }
+    }
+
+    fun homeHandoffSecured(setSucceeded: Boolean, observedHome: String?, ownPackage: String): Boolean =
+        setSucceeded && observedHome == ownPackage
 }

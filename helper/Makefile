@@ -24,11 +24,11 @@ BUILD   := build
 # the unit tests, so coverage can never silently drop a module. main.c (accept loop) and sysexec.c
 # (real exec/pipe/thread/reboot) are deliberately NOT here: the fuzz and test builds swap in a stub
 # sysexec and never run main, so a valid REBOOT/RELOAD/WATCH can't exec or spawn on the build host.
-CORE_SRCS := $(addprefix $(SRC_DIR)/, util.c led.c screen.c input.c sysctl.c perf.c cht8305.c version.c server.c dispatch.c)
+CORE_SRCS := $(addprefix $(SRC_DIR)/, util.c led.c screen.c input.c sysctl.c perf.c cht8305.c version.c companion.c server.c dispatch.c)
 DAEMON_SRCS := $(CORE_SRCS) $(SRC_DIR)/main.c $(SRC_DIR)/sysexec.c
 STUB := test/sysexec_stub.c
 
-.PHONY: all daemon test socket-test-server fuzz contract clean print-core
+.PHONY: all daemon test peer-auth-test install-security-test cdprelay-resource-test socket-test-server fuzz contract clean print-core
 all: daemon
 
 # Host build of the real daemon — a compile sanity check (-Werror); the shipped binary is build.sh.
@@ -37,13 +37,42 @@ $(BUILD)/hapaneld-helper: $(DAEMON_SRCS) | $(BUILD)
 	$(CC) $(CFLAGS) -I$(SRC_DIR) $(DAEMON_SRCS) $(LDLIBS) -o $@
 
 # Unit tests: CORE modules + the sysexec stub (no real exec) + the test driver.
-test: $(BUILD)/unit $(BUILD)/hapaneld-helper
+test: $(BUILD)/unit $(BUILD)/hapaneld-helper $(BUILD)/companion-boundary $(BUILD)/peer-auth $(BUILD)/cdprelay-resource-test $(BUILD)/cdprelay-test
 	$(BUILD)/unit
 	test "$$($(BUILD)/hapaneld-helper --version)" = "HELPER version=1.0.0 proto=1.0"
+	$(BUILD)/companion-boundary
+	$(BUILD)/peer-auth
+	$(BUILD)/cdprelay-resource-test $(BUILD)/cdprelay-test
+	bash ./test/install_daemon_security_test.sh
 # --wrap=open/ioctl lets tests provide a fake evdev node and capture requested exclusive grabs while
 # preserving the existing ledjni ioctl assertions without touching host hardware.
 $(BUILD)/unit: $(CORE_SRCS) $(STUB) test/unit.c | $(BUILD)
 	$(CC) $(CFLAGS) -DHAPANELD_TEST -I$(SRC_DIR) $(CORE_SRCS) $(STUB) test/unit.c $(LDLIBS) -Wl,--wrap=open -Wl,--wrap=ioctl -o $@
+
+$(BUILD)/companion-boundary: $(CORE_SRCS) $(STUB) test/companion_boundary.c | $(BUILD)
+	$(CC) $(CFLAGS) -DHAPANELD_TEST -I$(SRC_DIR) -Itest $(CORE_SRCS) $(STUB) \
+		test/companion_boundary.c $(LDLIBS) -Wl,--wrap=renameat -o $@
+
+# Peer-credential policy is owned by main.c rather than CORE_SRCS. The white-box test includes that
+# production implementation and supplies inert module stubs; it never opens a socket or executes a verb.
+peer-auth-test: $(BUILD)/peer-auth
+	$(BUILD)/peer-auth
+$(BUILD)/peer-auth: test/peer_auth.c $(SRC_DIR)/main.c $(SRC_DIR)/version.c $(SRC_DIR)/util.c | $(BUILD)
+	$(CC) $(CFLAGS) -I$(SRC_DIR) test/peer_auth.c $(SRC_DIR)/version.c $(SRC_DIR)/util.c $(LDLIBS) -o $@
+
+install-security-test:
+	bash ./test/install_daemon_security_test.sh
+
+# CDP relay resource regression. Tight test-only deadlines keep saturation/reaping/idle coverage fast;
+# production uses the conservative defaults compiled into cdprelay.c by Gradle.
+cdprelay-resource-test: $(BUILD)/cdprelay-resource-test $(BUILD)/cdprelay-test
+	$(BUILD)/cdprelay-resource-test $(BUILD)/cdprelay-test
+$(BUILD)/cdprelay-resource-test: test/cdprelay_resource.c | $(BUILD)
+	$(CC) $(CFLAGS) test/cdprelay_resource.c -o $@
+$(BUILD)/cdprelay-test: cdprelay.c | $(BUILD)
+	$(CC) $(CFLAGS) -DCDPRELAY_MAX_CHILDREN=2 -DCDPRELAY_CONNECT_TIMEOUT_MS=200 \
+		-DCDPRELAY_WRITE_TIMEOUT_MS=200 -DCDPRELAY_IDLE_TIMEOUT_MS=300 \
+		-DCDPRELAY_MAX_LIFETIME_MS=2000 cdprelay.c -o $@
 
 # Real UNIX-socket composition fixture: production server/dispatch core with the no-exec host stub.
 socket-test-server: $(BUILD)/socket-test-server

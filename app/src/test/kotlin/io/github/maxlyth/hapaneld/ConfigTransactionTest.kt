@@ -1,6 +1,7 @@
 package io.github.maxlyth.hapaneld
 
 import android.content.SharedPreferences
+import io.github.maxlyth.hapaneld.config.SettingsRegistry
 import io.github.maxlyth.hapaneld.device.DeviceProfile
 import io.github.maxlyth.hapaneld.device.Generic
 import io.github.maxlyth.hapaneld.util.HaLink
@@ -9,6 +10,8 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.lang.reflect.Proxy
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 class ConfigTransactionTest {
     @Test fun proximityCalibrationIsScopedToTheActiveProfileRevision() {
@@ -1030,6 +1033,125 @@ class ConfigTransactionTest {
         assertFalse(config.dashboardEntityAutoRuntime)
         assertTrue(config.dashboardEntityLearningApplied)
         assertEquals(listOf("light.old"), config.dashboardEntityFilterIds)
+    }
+
+    @Test fun credentialGroupsAreReadFromOneImmutablePreferenceSnapshot() {
+        val prefs = fakePreferences(initial = mapOf(
+            "mqtt_broker" to "ssl://broker.local:8883",
+            "mqtt_user" to "panel",
+            "mqtt_password" to "secret",
+            "ha_url" to "https://ha.local",
+            "ha_token" to "access",
+            "ha_refresh_token" to "refresh",
+            "ha_token_expiry" to 1234L,
+            "ha_client_id" to "client",
+        ))
+        val config = Config(prefs.instance)
+
+        assertEquals(
+            MqttCredentialsSnapshot("ssl://broker.local:8883", "panel", "secret"),
+            config.mqttCredentialsSnapshot(),
+        )
+        assertEquals(
+            HaAuthSnapshot("https://ha.local", "access", "refresh", 1234L, "client"),
+            config.haAuthSnapshot(),
+        )
+    }
+
+    @Test fun refreshedHaTokenCommitsOnlyWhileTheBorrowedAuthGenerationIsStillOwned() {
+        val prefs = fakePreferences(initial = mapOf(
+            "ha_url" to "https://ha.local",
+            "ha_token" to "old-access",
+            "ha_refresh_token" to "refresh",
+            "ha_token_expiry" to 1234L,
+            "ha_client_id" to "client",
+        ))
+        val config = Config(prefs.instance)
+        val borrowed = config.haAuthSnapshot()
+
+        assertTrue(config.setHaRefreshedTokenIfOwned(borrowed, "new-access", 5678L))
+        assertEquals("new-access", prefs.values["ha_token"])
+        assertEquals(5678L, prefs.values["ha_token_expiry"])
+
+        config.setHaConnection("https://other.local", "admin-access")
+        assertFalse(config.setHaRefreshedTokenIfOwned(borrowed, "late-access", 9999L))
+        assertEquals("admin-access", prefs.values["ha_token"])
+        assertEquals("https://other.local", prefs.values["ha_url"])
+        assertEquals(5678L, prefs.values["ha_token_expiry"])
+    }
+
+    @Test fun separateConfigWrappersShareOneProcessWideTransactionLock() {
+        val prefs = fakePreferences(initial = mapOf("ha_url" to "https://ha.local"))
+        val first = Config(prefs.instance)
+        val second = Config(prefs.instance)
+        val writerStarted = CountDownLatch(1)
+        val writerFinished = CountDownLatch(1)
+        lateinit var writer: Thread
+
+        first.synchronizedTransaction {
+            writer = Thread {
+                writerStarted.countDown()
+                second.setHaConnection("https://other.local", "new-access")
+                writerFinished.countDown()
+            }.also(Thread::start)
+            assertTrue(writerStarted.await(2, TimeUnit.SECONDS))
+            assertFalse("a second wrapper must not enter during the transaction", writerFinished.await(100, TimeUnit.MILLISECONDS))
+            assertEquals("https://ha.local", first.haAuthSnapshot().url)
+        }
+
+        assertTrue(writerFinished.await(2, TimeUnit.SECONDS))
+        writer.join(2_000)
+        assertEquals("https://other.local", first.haAuthSnapshot().url)
+    }
+
+    @Test fun ownerScopedEntityBackupStateRoundTripsInOneEditorCommit() {
+        val prefs = fakePreferences()
+        val config = Config(prefs.instance)
+        val state = DashboardEntityBackupState(
+            instanceKey = "uuid-key",
+            instanceOrigin = "https://ha.local",
+            instanceUuid = "core-uuid",
+            dashboardPath = "/lovelace/wall",
+            filterIds = "light.one\nsensor.two",
+            filterEnabled = true,
+            filterOwner = "uuid-key|/lovelace/wall",
+            learningApplied = true,
+            appliedOwner = "uuid-key|/lovelace/wall",
+            overrides = "+light.one\n-sensor.two",
+            overrideOwner = "uuid-key|/lovelace/wall",
+        )
+        val editor = config.editor()
+        config.stageDashboardEntityBackupState(editor, state)
+        assertTrue(editor.commit())
+
+        assertEquals(state, config.dashboardEntityBackupState())
+    }
+
+    @Test fun rawRegistryCommitValidatesAndDurablyPersistsOneValue() {
+        val prefs = fakePreferences()
+        val config = Config(prefs.instance)
+        val zoom = requireNotNull(SettingsRegistry.spec("dashboard_zoom"))
+
+        assertTrue(config.commitRaw(zoom, "125"))
+        assertEquals(125, prefs.values["dashboard_zoom"])
+        assertFalse(config.commitRaw(zoom, "not-a-number"))
+        assertEquals(125, prefs.values["dashboard_zoom"])
+    }
+
+    @Test fun rawHomeDashboardCommitPreservesItsOwnerScopedPathDependency() {
+        val prefs = fakePreferences(
+            mutableMapOf(
+                "home_dashboard" to "/lovelace/old",
+                "dashboard_entity_dashboard_path" to "/lovelace/old",
+            ),
+        )
+        val config = Config(prefs.instance)
+        val home = requireNotNull(SettingsRegistry.spec("home_dashboard"))
+
+        assertTrue(config.commitRaw(home, "/lovelace/new"))
+
+        assertEquals("/lovelace/new", prefs.values["home_dashboard"])
+        assertEquals("/lovelace/new", prefs.values["dashboard_entity_dashboard_path"])
     }
 
     private data class FakePreferences(

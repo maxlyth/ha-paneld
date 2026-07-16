@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -u
+
+printf 'helper-probe %s\n' "$*" >> "${MOCK_CALL_LOG:?MOCK_CALL_LOG is required}"
+
+case "${1:-}" in
+  COMPANIONCAPS)
+    [ "${MOCK_HELPER_START:-ok}" = ok ] || exit 1
+    [ "${MOCK_HELPER_CAPABILITY:-ok}" = ok ] || { printf 'ERR\n'; exit 0; }
+    printf 'COMPANIONCAPS 1 BACKUP RESTORE STATUS JOURNAL\n'
+    ;;
+  PING)
+    [ "${MOCK_ROLLBACK_PING:-ok}" = ok ] || exit 1
+    printf 'OK\n'
+    ;;
+  BUILDID)
+    [ "${MOCK_HELPER_BUILD_ID_MATCH:-ok}" = ok ] || { printf 'BUILDID mismatch\n'; exit 0; }
+    printf 'BUILDID %s\n' "${MOCK_HELPER_BUILD_ID:?MOCK_HELPER_BUILD_ID is required}"
+    ;;
+  *) exit 2 ;;
+esac

@@ -18,10 +18,11 @@ internal object HelperSocketProtocol {
         input: InputStream,
         output: OutputStream,
         shutdownOutput: () -> Unit,
+        maxBytes: Long = Long.MAX_VALUE - 1L,
     ): ByteArray? {
         output.apply { write((command + "\n").toByteArray()); flush() }
         shutdownOutput()
-        return input.readBytes().takeIf { it.isNotEmpty() }
+        return BoundedStreams.readBytes(input, maxBytes).takeIf { it.isNotEmpty() }
     }
 
     fun sendFile(

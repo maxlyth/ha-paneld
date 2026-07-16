@@ -90,6 +90,37 @@ class AssetSyntaxTest {
         assertEquals("Install links accepted a non-GitHub HTTPS target:\n$out", 0, code)
     }
 
+    @Test fun installPickerPrefersNewestInstallableVersion() {
+        val dir = assetsDir
+        assumeTrue("assets dir not found (skipping)", dir != null)
+        assumeTrue("node not available (skipping)", nodeAvailable())
+        val script = """
+            const fs=require('fs'),vm=require('vm');
+            const fallback=process.argv[2]==='fallback';
+            function option(){return {attrs:{},value:'',textContent:'',setAttribute(k,v){this.attrs[k]=v},getAttribute(k){return this.attrs[k]||''}}}
+            const vsel={children:[],selectedIndex:-1,_html:'',appendChild(o){this.children.push(o)},
+              set innerHTML(v){this._html=v;this.children=[];this.selectedIndex=-1},get innerHTML(){return this._html},
+              get selectedOptions(){return this.selectedIndex>=0?[this.children[this.selectedIndex]]:[]}};
+            const chan={value:'stable'},current={textContent:'1.0.0'};
+            const link={href:'',style:{},removeAttribute(k){if(k==='href')this.href=''}};
+            const button={disabled:true,getAttribute(){return '1'}};
+            const row={querySelector(s){if(s==='.cchan')return chan;if(s==='.cvsel')return vsel;if(s==='.cver')return current;if(s==='.cnotes')return link;if(s==='.cinstall')return button;if(s==='.cdl')return null;return null}};
+            const versions=fallback?
+              [{tag:'v3',version:'3.0.0',installable:false},{tag:'v2',version:'2.0.0',installable:false},{tag:'v1',version:'1.0.0',installable:false}]:
+              [{tag:'v3',version:'3.0.0',installable:false},{tag:'v2',version:'2.0.0',installable:true},{tag:'v1',version:'1.0.0',installable:true}];
+            global.window=global;
+            global.document={querySelector(){return row},querySelectorAll(){return []},getElementById(){return null},createElement(){return option()}};
+            global.fetch=()=>Promise.resolve({json:()=>Promise.resolve({versions})});
+            vm.runInThisContext(fs.readFileSync(process.argv[1],'utf8'));
+            global.loadVersions('paneld');
+            setImmediate(()=>setImmediate(()=>{const expected=fallback?2:1;if(vsel.selectedIndex!==expected)process.exit(2)}));
+        """.trimIndent()
+        for (mode in listOf("recommended", "fallback")) {
+            val (code, out) = run(listOf("node", "-e", script, File(dir, "install.js").absolutePath, mode))
+            assertEquals("Install picker did not select the expected version ($mode):\n$out", 0, code)
+        }
+    }
+
     @Test fun navigationTargetsDoNotRoundTripThroughDomText() {
         val dir = assetsDir
         assumeTrue("assets dir not found (skipping)", dir != null)
@@ -157,8 +188,8 @@ class AssetSyntaxTest {
             global.location={hash:'',reload(){reloads++}};
             global.window=global;
             const schema=[
-              {key:'dashboard_package',type:'STRING',group:'Dashboard',label:'Dashboard app',available:true,picker:'renderer'},
-              {key:'dashboard_entity_learning',type:'BOOL',group:'Dashboard',label:'Automatic dashboard entity filter',available:true}
+              {key:'dashboard_package',type:'STRING',group:'Dashboard',label:'Dashboard app',available:true,picker:'renderer',ha:true},
+              {key:'dashboard_entity_learning',type:'BOOL',group:'Dashboard',label:'Automatic dashboard entity filter',available:true,ha:true}
             ];
             global.fetch=(url,opts)=>{
               if(opts&&opts.method==='POST'){posted=String(opts.body||'');return Promise.resolve({ok:true,json:()=>Promise.resolve({})})}
@@ -175,8 +206,11 @@ class AssetSyntaxTest {
               global.cfgSave();
               setImmediate(()=>setImmediate(()=>{
                 const expected=initiallyEnabled?'false':'true';
-                if(!posted.includes('dashboard_entity_learning='+expected))process.exit(3);
+                const params=new URLSearchParams(posted);
+                if(params.get('dashboard_entity_learning')!==expected)process.exit(3);
                 if(reloads!==1)process.exit(4);
+                if(params.has('dashboard_package')||params.has('ha_expose_dashboard_package')||params.has('ha_expose_dashboard_entity_learning'))process.exit(5);
+                if(Array.from(params.keys()).length!==1)process.exit(6);
               }));
             }));
         """.trimIndent()

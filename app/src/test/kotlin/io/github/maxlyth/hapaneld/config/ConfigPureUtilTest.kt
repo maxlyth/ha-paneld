@@ -31,6 +31,7 @@ class ConfigBundleTest {
     @Test fun malformedReturnsNull() {
         assertNull(ConfigBundle.parse("not json"))
         assertNull(ConfigBundle.parse("{\"kind\":"))
+        assertNull(ConfigBundle.parse(ConfigBundle.fromValues(mapOf("a" to "1")).serialize() + " trailing"))
     }
 }
 

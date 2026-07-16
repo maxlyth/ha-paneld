@@ -11,21 +11,16 @@ import io.github.maxlyth.hapaneld.device.profile.ProfileRef
 import io.github.maxlyth.hapaneld.device.profile.ProfileSelection
 import io.github.maxlyth.hapaneld.device.profile.ProfileStatus
 import io.github.maxlyth.hapaneld.device.profile.ProfileSummary
-import io.github.maxlyth.hapaneld.util.BoundedStreams
-import io.github.maxlyth.hapaneld.util.ByteLimitExceeded
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.application.call
-import io.ktor.server.request.receiveStream
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.route
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.nio.ByteBuffer
@@ -264,16 +259,16 @@ private suspend fun ApplicationCall.receiveProfileAction(): JSONObject? {
 }
 
 private suspend fun ApplicationCall.receiveBoundedUtf8(maxBytes: Long, tooLarge: String): String? {
-    val declared = request.headers[HttpHeaders.ContentLength]?.toLongOrNull()
-    if (declared != null && declared > maxBytes) {
-        respondProfileError(HttpStatusCode.PayloadTooLarge, tooLarge)
-        return null
-    }
-    val bytes = try {
-        withContext(Dispatchers.IO) { receiveStream().use { BoundedStreams.readBytes(it, maxBytes) } }
-    } catch (_: ByteLimitExceeded) {
-        respondProfileError(HttpStatusCode.PayloadTooLarge, tooLarge)
-        return null
+    val bytes = when (val receipt = receiveBoundedBody(this, maxBytes)) {
+        is BoundedBodyReceipt.Received -> receipt.bytes
+        BoundedBodyReceipt.TooLarge -> {
+            respondProfileError(HttpStatusCode.PayloadTooLarge, tooLarge)
+            return null
+        }
+        BoundedBodyReceipt.TimedOut -> {
+            respondProfileError(HttpStatusCode.RequestTimeout, "profile-body-timeout")
+            return null
+        }
     }
     return try {
         Charsets.UTF_8.newDecoder()

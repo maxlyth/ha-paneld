@@ -46,6 +46,67 @@ function paintTop(top,msg){
 var pseen={};
 function opt(k,label,ok,val,suf){if(ok)pseen[k]=true;if(!pseen[k])return null;
  return {label:label,val:ok?val:'–',suf:ok?(suf||''):'',col:ok?'':'#888'};}
+function featureCostRows(fc){
+ var table=document.getElementById('featurecost'),note=table&&table.parentNode.querySelector('.note');
+ if(note)note.textContent='Resource volume, sampled same-thread CPU, and inclusive operation latency. Nested elapsed totals overlap and are not an additive ranking.';
+ if(!fc)return [{label:'Feature costs',val:'waiting for activity',col:'#888'}];
+ if(fc.enabled===false)return [{label:'Feature costs',val:'disabled in this build',col:'#888'}];
+ if(!fc.operations)return [{label:'Feature costs',val:'unavailable',col:'#888'}];
+ function ms(ns){var n=(ns||0)/1000000;return n<10?n.toFixed(2):Math.round(n).toString();}
+ function volume(n){if(n>=1048576)return (n/1048576).toFixed(1)+' MiB';
+  if(n>=1024)return (n/1024).toFixed(1)+' KiB';return n+' B';}
+ var names={'entity_learning.sync':'Entity learning sync','entity_learning.states_fetch_parse':'HA state fetch and parse',
+  'entity_learning.dashboard_fetch_parse':'Dashboard and registry fetch','entity_learning.static_scan':'Dashboard static scan',
+  'entity_learning.browser_observer':'Browser entity observer','entity_learning.access_parse':'Entity access parsing',
+  'entity_learning.metric_parse':'Entity metric parsing','entity_learning.membership_lookup':'Entity membership lookup',
+  'entity_learning.access_write':'Entity access database','entity_learning.metric_write':'Entity metric database',
+  'entity_learning.telemetry_flush':'Entity telemetry queue','entity_learning.db_maintenance':'Entity database maintenance',
+  'entity_learning.status_read':'Entity status projection','entity_learning.list':'Entity catalog listing',
+  'entity_learning.export':'Entity catalog export','profiles.catalog_load':'Profile catalog loading',
+  'profiles.yaml_parse':'Profile YAML parsing','profiles.validate':'Profile validation',
+  'profiles.startup_resolve':'Profile startup resolution','shizuku.bind':'Shizuku binding',
+  'shizuku.call':'Shizuku control calls','shizuku.screenshot':'Shizuku screenshots','shizuku.install':'Shizuku installs',
+  'sensors.gpio_proximity_poll':'GPIO proximity polling','kiosk.state_poll':'Kiosk state polling',
+  'capabilities.snapshot':'Capability snapshot',
+  'mdns.peer_refresh':'mDNS peer refresh',
+  'hardware.relay_topology_discovery':'Relay and button LED discovery',
+  'hardware.relay_state_read':'Relay and button LED state reads',
+  'display.auto_brightness_apply':'Auto-brightness samples',
+  'mqtt.teardown':'MQTT client teardown',
+  'mqtt.state_outbox':'MQTT state outbox',
+  'mqtt.command_dispatch':'MQTT command dispatch',
+  'mqtt.discovery_reannounce':'MQTT discovery reannouncement',
+  'performance.root_diagnostics':'Performance root diagnostics',
+  'vendor.tame_mutation':'Vendor package changes',
+  'control.remote_input':'Remote input controls','dashboard.storage_clear':'Dashboard storage clearing',
+  'log.capture_batch':'Log capture batches','log.ship_batch':'Log shipping batches',
+  'zigbee.reconcile':'Zigbee gateway reconciliation','network.reconfigure':'Network runtime reconfiguration',
+  'config.live_refresh':'Configuration live refresh',
+  'navbar.mode_apply':'Navigation bar mode apply','navbar.action':'Navigation bar actions'};
+ var active=fc.operations.filter(function(o){return o.calls||o.dropped||o.rejected||o.backlog;});
+ var age=(fc.since_elapsed_ns||0)/1000000000,windowRow={label:'Measurement window',
+  val:age<120?Math.round(age)+' seconds':(age<7200?Math.round(age/60)+' minutes':(age/3600).toFixed(1)+' hours'),
+  suf:'· process generation '+fc.generation,col:'#888'};
+ var semantics={label:'How to read these metrics',val:'resource volume + sampled CPU',
+  suf:'· elapsed is inclusive latency; parent and child totals overlap',col:'#888'};
+ return [windowRow,semantics].concat(active.map(function(o){
+  var alerts=[];
+  if(o.backlog)alerts.push('backlog '+o.backlog+(o.peak_backlog?' (peak '+o.peak_backlog+')':''));
+  if(o.coalesced)alerts.push(o.coalesced+' coalesced');
+  if(o.dropped)alerts.push(o.dropped+' dropped');
+  if(o.rejected)alerts.push(o.rejected+' rejected');
+  var avg=o.calls?(o.wall_ns_total||0)/o.calls:0;
+  var burden=o.thread_cpu_samples?ms(o.thread_cpu_ns_total)+' ms sampled CPU':
+   (o.work_bytes?volume(o.work_bytes):(o.work_units?o.work_units+' work units':o.calls+' calls'));
+  var label=(o.parent_id?'↳ ':'')+(names[o.id]||o.id);
+  var work=o.thread_cpu_samples?(o.work_bytes?' · '+volume(o.work_bytes)+' processed':
+   (o.work_units?' · '+o.work_units+' work units':'')):'';
+  var cpu=o.thread_cpu_samples?' · '+o.thread_cpu_samples+' same-thread CPU samples':'';
+  return {label:label,val:burden,
+   suf:'· '+o.calls+' calls · inclusive elapsed '+ms(o.wall_ns_total)+' ms total / '+ms(avg)+' ms avg / '+ms(o.wall_ns_max)+' ms max'+cpu+work+(alerts.length?' · '+alerts.join(', '):''),
+   col:(o.dropped||o.rejected)?'#d04a3b':''};
+ }));
+}
 function draw(){
  var c=document.getElementById('perfchart'),x=c.getContext('2d'),W=c.width,H=c.height;
  x.clearRect(0,0,W,H);
@@ -91,6 +152,7 @@ async function perf(){
    opt('load','Load avg',!!(d.load&&d.load.length),d.load?d.load.join('  '):''),
    opt('temp','Temperature',d.tempC!=null,d.tempC!=null?d.tempC.toFixed(1)+' °C':'')];
   paint('perf',rows.filter(Boolean));
+  paint('featurecost',featureCostRows(d.featureCosts));
   paintTop(d.top);
   var r=d.render,smh=document.getElementById('smhdr');
   // Built-in renderer self-measurement (time-to-interactive + involuntary-reload churn). It runs

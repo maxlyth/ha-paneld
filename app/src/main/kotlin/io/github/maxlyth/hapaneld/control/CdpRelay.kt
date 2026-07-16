@@ -3,6 +3,8 @@ package io.github.maxlyth.hapaneld.control
 import android.content.Context
 import android.os.Build
 import android.util.Log
+import io.github.maxlyth.hapaneld.Config
+import io.github.maxlyth.hapaneld.util.AndroidInput
 import java.io.File
 
 /** Truthful lifecycle state for the native relay: command acceptance is not process liveness. */
@@ -47,7 +49,8 @@ internal class RelayProcessState(private val probe: () -> Boolean) {
 object CdpRelay {
     private const val TAG = "ha-paneld/cdp"
     const val PORT = 9222
-    private const val BIN = "/data/local/tmp/cdprelay"
+    private const val ROOT_DIR = "/data/local/.hapaneld-cdp"
+    private const val BIN = "$ROOT_DIR/cdprelay"
 
     private val process = RelayProcessState {
         Su.runOutput("pidof cdprelay 2>/dev/null")?.trim()?.isNotEmpty() == true
@@ -55,10 +58,22 @@ object CdpRelay {
 
     val running: Boolean get() = process.running()
 
-    /** Resolve the WebView CDP abstract socket name (null if debugging isn't enabled / no root). */
-    private fun socketName(): String? =
-        Su.runOutput("cat /proc/net/unix | grep -o 'webview_devtools_remote_[0-9]*' | head -1")
-            ?.trim()?.ifEmpty { null }
+    /** Resolve only the configured renderer's WebView socket. Picking the first global socket can
+     * expose another app's DevTools endpoint when multiple debuggable WebViews are running. */
+    private fun socketName(ctx: Context): String? {
+        val configured = Config(ctx).dashboardPackage
+        val pkg = if (configured == SystemController.BUILTIN_DASHBOARD) ctx.packageName else configured
+        if (!AndroidInput.isPackage(pkg)) return null
+        val pids = Su.runOutput("pidof $pkg")
+            ?.trim()
+            ?.split(Regex("\\s+"))
+            ?.mapNotNull { it.toIntOrNull()?.takeIf { pid -> pid > 0 } }
+            ?.toSet()
+            .orEmpty()
+        if (pids.isEmpty()) return null
+        val sockets = Su.runOutput("cat /proc/net/unix") ?: return null
+        return selectDevToolsSocket(sockets, pids)
+    }
 
     private fun extractBinary(ctx: Context): File? {
         val abi = if (Build.SUPPORTED_ABIS.any { it == "arm64-v8a" }) "cdprelay-arm64" else "cdprelay-arm"
@@ -72,17 +87,35 @@ object CdpRelay {
     /** Status codes the HTTP layer maps to UI text. */
     fun start(ctx: Context): String {
         if (!Su.available()) return "needs-root"
-        val name = socketName() ?: return "no-socket" // WebView debugging not enabled
+        val name = socketName(ctx) ?: return "no-socket" // WebView debugging not enabled
         val bin = extractBinary(ctx) ?: return "no-binary"
         stop() // clear any stale instance first
         val ok = process.start {
             // Give the child a short chance to bind and fail before probing; a successful background
             // shell launch alone cannot prove that the socket name or TCP port was usable.
-            Su.run("cp ${bin.absolutePath} $BIN && chmod 755 $BIN && ( $BIN $PORT $name >/dev/null 2>&1 & ) && sleep 1")
+            Su.run(startCommand(bin.absolutePath, name))
         }
         Log.i(TAG, "start relay ($name) -> $ok")
         return if (ok) "started" else "failed"
     }
 
     fun stop(): Boolean = process.stop { Su.run("pkill -f $BIN") }
+
+    /** Atomically stage below root-controlled /data/local. `/data/local/tmp` is shell-owned, so even a
+     * root-owned child there could be renamed and replaced by a Shizuku-capable shell peer. */
+    internal fun startCommand(source: String, socketName: String): String =
+        "rm -rf $ROOT_DIR && mkdir -m 700 $ROOT_DIR && chown 0:0 $ROOT_DIR && " +
+            "cp $source $BIN.new && chown 0:0 $BIN.new && chmod 755 $BIN.new && mv -f $BIN.new $BIN && " +
+            "( $BIN $PORT $socketName >/dev/null 2>&1 & ) && sleep 1"
+
+    internal fun selectDevToolsSocket(unixSockets: String, rendererPids: Set<Int>): String? =
+        Regex("(?:^|[^A-Za-z0-9_])(webview_devtools_remote_([0-9]+))(?:$|[^0-9])")
+            .findAll(unixSockets)
+            .mapNotNull { match ->
+                match.groupValues[2].toIntOrNull()
+                    ?.takeIf(rendererPids::contains)
+                    ?.let { match.groupValues[1] }
+            }
+            .distinct()
+            .singleOrNull()
 }

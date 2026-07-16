@@ -61,6 +61,7 @@ data class ConfigBundle(
                 }
                 if (!p.commaOrEnd('}')) break
             }
+            p.requireEnd()
             ConfigBundle(kind, schema, at, by, values)
         }.getOrNull()
 
@@ -122,6 +123,7 @@ data class ConfigBundle(
             }
             return m
         }
+        fun requireEnd() { ws(); require(i == s.length) { "trailing input" } }
         fun skipValue() {
             ws()
             when {

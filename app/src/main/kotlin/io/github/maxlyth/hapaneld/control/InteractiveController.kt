@@ -8,7 +8,9 @@ import io.github.maxlyth.hapaneld.platform.Daemon
 import io.github.maxlyth.hapaneld.platform.RootShell
 import io.github.maxlyth.hapaneld.platform.ShellPrivilege
 import io.github.maxlyth.hapaneld.shizuku.ShizukuBridge
+import io.github.maxlyth.hapaneld.shizuku.ShizukuPolicy
 import io.github.maxlyth.hapaneld.util.HelperClient
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Live routing for interactive operations whose usable transport can differ from profile metadata.
@@ -26,22 +28,31 @@ internal class InteractiveController(
     private val accessibility: AccessibilityActions = PanelAccessibilityService,
     private val shell: ShellPrivilege = ShizukuBridge,
 ) {
+    private val screenshotInFlight = AtomicBoolean(false)
+
     fun screenshot(): ByteArray? {
-        val su = ValueAttempt(PrivilegeRoute.SU) {
-            root.runBytes("screencap -p")?.takeUnless { it.isEmpty() }
+        if (!screenshotInFlight.compareAndSet(false, true)) return null
+        try {
+            val su = ValueAttempt(PrivilegeRoute.SU) {
+                root.runBytesBounded("screencap -p", ShizukuPolicy.MAX_SCREENSHOT_BYTES.toLong())
+                    ?.takeUnless { it.isEmpty() }
+            }
+            val helper = ValueAttempt(PrivilegeRoute.DAEMON) {
+                daemon.sendBytesBounded("SCREENCAP", ShizukuPolicy.MAX_SCREENSHOT_BYTES.toLong())
+                    ?.takeUnless { it.isEmpty() }
+            }
+            val shizuku = ValueAttempt(PrivilegeRoute.SHIZUKU) {
+                shell.screenshot()?.takeUnless { it.isEmpty() }
+            }
+            val attempts = when {
+                canSu -> arrayOf(su, helper, shizuku)
+                shell.available() -> arrayOf(helper, shizuku, su)
+                else -> arrayOf(helper, su, shizuku)
+            }
+            return ShortOperationRouter.value(*attempts)?.value
+        } finally {
+            screenshotInFlight.set(false)
         }
-        val helper = ValueAttempt(PrivilegeRoute.DAEMON) {
-            daemon.sendBytes("SCREENCAP")?.takeUnless { it.isEmpty() }
-        }
-        val shizuku = ValueAttempt(PrivilegeRoute.SHIZUKU) {
-            shell.screenshot()?.takeUnless { it.isEmpty() }
-        }
-        val attempts = when {
-            canSu -> arrayOf(su, helper, shizuku)
-            shell.available() -> arrayOf(helper, shizuku, su)
-            else -> arrayOf(helper, su, shizuku)
-        }
-        return ShortOperationRouter.value(*attempts)?.value
     }
 
     fun back(): Boolean = navigate(

@@ -10,11 +10,12 @@ class SettingValueTest {
         type: SettingType,
         min: Double? = null,
         max: Double? = null,
+        maxChars: Int = 16 * 1024,
         options: List<String> = emptyList(),
         validate: (String) -> Validation = { Validation.Ok(it) },
     ) = SettingSpec(
         key = "k", type = type, group = "g", label = "l", default = "",
-        min = min, max = max, options = options, validate = validate,
+        min = min, max = max, maxChars = maxChars, options = options, validate = validate,
     )
 
     private fun ok(v: Validation): String = (v as Validation.Ok).normalized
@@ -55,6 +56,14 @@ class SettingValueTest {
         assertTrue(SettingValue.validate(s, "  -- ") is Validation.Bad)
     }
 
+    @Test fun panelIdHonoursDnsSafeLengthBoundary() {
+        val s = SettingsRegistry.spec("panel_id")!!
+        assertEquals("a".repeat(63), ok(SettingValue.validate(s, "a".repeat(63))))
+        val rejected = SettingValue.validate(s, "a".repeat(64))
+        assertTrue(rejected is Validation.Bad)
+        assertTrue((rejected as Validation.Bad).reason.contains("63"))
+    }
+
     @Test fun dashboardPackageRejectsShellInput() {
         val s = SettingsRegistry.spec("dashboard_package")!!
         listOf("", "builtin", "io.homeassistant.companion.android.minimal").forEach {
@@ -63,5 +72,16 @@ class SettingValueTest {
         listOf("com.example;reboot", "com.example dashboard", "com/example").forEach {
             assertTrue(SettingValue.validate(s, it) is Validation.Bad)
         }
+    }
+
+    @Test fun stringAndPasswordLengthsAreBoundedBeforeCustomValidation() {
+        val string = spec(SettingType.STRING, maxChars = 4)
+        assertEquals("four", ok(SettingValue.validate(string, " four ")))
+        val rejected = SettingValue.validate(string, "12345")
+        assertTrue(rejected is Validation.Bad)
+        assertTrue((rejected as Validation.Bad).reason.contains("4"))
+
+        val password = spec(SettingType.PASSWORD, maxChars = 3)
+        assertTrue(SettingValue.validate(password, "1234") is Validation.Bad)
     }
 }

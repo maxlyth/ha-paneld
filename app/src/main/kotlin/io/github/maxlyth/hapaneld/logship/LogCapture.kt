@@ -1,13 +1,23 @@
 package io.github.maxlyth.hapaneld.logship
 
 import android.util.Log
+import io.github.maxlyth.hapaneld.metrics.FeatureCostOperation
+import io.github.maxlyth.hapaneld.metrics.FeatureCostOutcome
+import io.github.maxlyth.hapaneld.metrics.FeatureCostRegistry
+import io.github.maxlyth.hapaneld.metrics.FeatureCosts
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.io.ByteArrayOutputStream
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.concurrent.thread
+import kotlin.math.min
 
 /**
  * Shared, demand-driven logcat capture. ONE subprocess and ONE redaction pass feed every consumer —
@@ -30,10 +40,25 @@ class LogCapture(
     private val streamCmd: List<String>,
     /** One-shot dump argv for [dump] — backlog prefill when the stream isn't already running. */
     private val dumpCmd: (Int) -> List<String>,
+    private val maxViewers: Int = MAX_VIEWERS,
+    private val dumpTimeoutMs: Long = DUMP_TIMEOUT_MS,
+    private val dumpMaxBytes: Int = DUMP_MAX_BYTES,
+    private val processStarter: (List<String>) -> Process = { command ->
+        ProcessBuilder(command).redirectErrorStream(true).start()
+    },
+    private val featureCosts: FeatureCostRegistry = FeatureCosts.registry,
 ) {
+    init {
+        require(maxViewers > 0) { "maxViewers must be positive" }
+        require(dumpTimeoutMs > 0) { "dumpTimeoutMs must be positive" }
+        require(dumpMaxBytes > 0) { "dumpMaxBytes must be positive" }
+    }
+
     private val listeners = CopyOnWriteArrayList<(String) -> Unit>()
     private val ring = ArrayDeque<String>(RING_CAP)
-    private val dumps = mutableSetOf<Process>()
+    private var dumpFlight: DumpFlight? = null
+    private var dumpProcess: Process? = null
+    private var activeViewers = 0
 
     // Each start() gets its own Run so a stop→start race can never orphan the new subprocess.
     internal class Run {
@@ -65,7 +90,51 @@ class LogCapture(
     private var run: Run? = null
     @Volatile private var closed = false
 
+    /** Admission is separate from [subscribe]: remote shipping is not a browser viewer and must not
+     * consume the small interactive-stream budget. */
+    sealed class ViewerAdmission {
+        class Accepted internal constructor(val lease: AutoCloseable) : ViewerAdmission()
+        data object CapacityExceeded : ViewerAdmission()
+        data object Unavailable : ViewerAdmission()
+    }
+
+    private class DumpFlight {
+        private val done = CountDownLatch(1)
+        private val completed = AtomicBoolean(false)
+        @Volatile private var value: List<String> = emptyList()
+
+        fun complete(result: List<String>) {
+            if (completed.compareAndSet(false, true)) {
+                value = result
+                done.countDown()
+            }
+        }
+
+        fun await(timeoutMs: Long): List<String> =
+            if (done.await(timeoutMs, TimeUnit.MILLISECONDS)) value else emptyList()
+
+        fun isDone(): Boolean = done.count == 0L
+    }
+
     internal fun activeRun(): Run? = synchronized(this) { run }
+
+    /** Reserve one live-viewer slot. The returned lease is idempotent so every route exit path can
+     * release it defensively. */
+    fun admitViewer(): ViewerAdmission = synchronized(this) {
+        if (closed) return ViewerAdmission.Unavailable
+        if (activeViewers >= maxViewers) return ViewerAdmission.CapacityExceeded
+        activeViewers++
+        val released = AtomicBoolean(false)
+        ViewerAdmission.Accepted(AutoCloseable {
+            if (released.compareAndSet(false, true)) {
+                synchronized(this) {
+                    check(activeViewers > 0) { "viewer admission underflow" }
+                    activeViewers--
+                    if (activeViewers == 0 && dumpFlight?.isDone() == true) dumpFlight = null
+                }
+            }
+        })
+    }
 
     /** Register [listener] for every future (redacted) line; starts the capture if it's the first
      *  consumer. Close the returned handle to detach — the last detach stops the subprocess. */
@@ -86,35 +155,123 @@ class LogCapture(
     /** The buffered recent lines (already redacted) — instant backlog while capture is running. */
     fun snapshot(): List<String> = synchronized(ring) { ring.toList() }
 
-    /** One-shot dump of the last [lines] log lines (redacted) — backlog prefill for a fresh viewer
-     *  when the stream has only just started. Blocking; call off the request thread's fast path. */
-    fun dump(lines: Int = DUMP_LINES): List<String> = runCatching {
-        if (closed) return@runCatching emptyList()
-        val p = ProcessBuilder(dumpCmd(lines)).redirectErrorStream(true).start()
+    /** Backlog for a new viewer. Concurrent viewers that all observe an empty ring share one bounded
+     * process rather than launching a dump apiece. */
+    fun initialBacklog(lines: Int = DUMP_LINES): List<String> = snapshot().ifEmpty { dump(lines) }
+
+    /** One-shot dump of the last [lines] log lines (redacted). A single flight is shared by all
+     * callers, output is capped before decoding, and a wedged command is forcibly terminated. */
+    fun dump(lines: Int = DUMP_LINES): List<String> {
+        if (lines <= 0) return emptyList()
+        val (flight, owner) = synchronized(this) {
+            if (closed) return emptyList()
+            val current = dumpFlight
+            if (current != null) current to false
+            else DumpFlight().also { dumpFlight = it } to true
+        }
+        if (!owner) return flight.await(dumpTimeoutMs + DUMP_CLEANUP_GRACE_MS)
+
+        val cost = featureCosts.beginSynchronous(FeatureCostOperation.LOG_CAPTURE_BATCH)
+        var outcome = FeatureCostOutcome.SUCCESS
+        var result: List<String> = emptyList()
+        try {
+            result = runDump(lines)
+        } catch (_: Exception) {
+            outcome = FeatureCostOutcome.FAILURE
+        } finally {
+            featureCosts.finishSynchronous(
+                FeatureCostOperation.LOG_CAPTURE_BATCH,
+                cost,
+                outcome = outcome,
+                workUnits = result.size.toLong(),
+                workBytes = if (featureCosts.recordingEnabled) {
+                    boundedUtf8Bytes(result, CAPTURE_WORK_BYTES_MAX)
+                } else {
+                    0L
+                },
+            )
+        }
+        flight.complete(result)
+        synchronized(this) {
+            // Retain the completed flight while this cohort still has admitted viewers and the live
+            // ring is empty. A viewer scheduled just after process exit still receives the same dump
+            // instead of launching a second command in the response-before-subscribe gap.
+            if (dumpFlight === flight && (activeViewers == 0 || synchronized(ring) { ring.isNotEmpty() })) {
+                dumpFlight = null
+            }
+        }
+        return result
+    }
+
+    private fun runDump(lines: Int): List<String> {
+        val p = processStarter(dumpCmd(lines))
         val admitted = synchronized(this) {
-            if (closed) false else dumps.add(p)
+            if (closed) false else {
+                dumpProcess = p
+                true
+            }
         }
         if (!admitted) {
-            p.destroy()
-            return@runCatching emptyList()
+            runCatching { p.destroyForcibly() }
+            return emptyList()
         }
+
+        val output = ByteArrayOutputStream(min(dumpMaxBytes, 8 * 1024))
+        val readerDone = CountDownLatch(1)
+        val reader = thread(name = "ha-paneld-log-dump", isDaemon = true) {
+            try {
+                p.inputStream.use { input ->
+                    val buffer = ByteArray(4 * 1024)
+                    var remaining = dumpMaxBytes
+                    while (remaining > 0) {
+                        val read = input.read(buffer, 0, min(buffer.size, remaining))
+                        if (read < 0) break
+                        output.write(buffer, 0, read)
+                        remaining -= read
+                    }
+                    // Stop a producer as soon as the output budget is exhausted; otherwise it can
+                    // block forever on a full pipe while the caller waits for process exit.
+                    if (remaining == 0) runCatching { p.destroyForcibly() }
+                }
+            } finally {
+                readerDone.countDown()
+            }
+        }
+
         try {
-            val out = p.inputStream.bufferedReader().readLines().map { redact(it) }.takeLast(lines)
-            p.waitFor()
-            out
+            if (!p.waitFor(dumpTimeoutMs, TimeUnit.MILLISECONDS)) {
+                runCatching { p.destroy() }
+                if (!p.waitFor(DUMP_DESTROY_GRACE_MS, TimeUnit.MILLISECONDS)) {
+                    runCatching { p.destroyForcibly() }
+                }
+            }
+            if (!readerDone.await(DUMP_READER_GRACE_MS, TimeUnit.MILLISECONDS)) {
+                runCatching { p.inputStream.close() }
+                reader.interrupt()
+                readerDone.await(DUMP_READER_GRACE_MS, TimeUnit.MILLISECONDS)
+            }
+            return output.toByteArray().toString(Charsets.UTF_8)
+                .lineSequence()
+                .map(::redact)
+                .toList()
+                .dropLastWhile(String::isEmpty)
+                .takeLast(lines)
         } finally {
-            synchronized(this) { dumps.remove(p) }
-            runCatching { p.destroy() }
+            synchronized(this) {
+                if (dumpProcess === p) dumpProcess = null
+            }
+            runCatching { p.destroyForcibly() }
         }
-    }.getOrDefault(emptyList())
+    }
 
     /** Permanently close this service-owned capture and destroy a blocked streaming subprocess. */
     fun close() = synchronized(this) {
         if (closed) return@synchronized
         closed = true
         listeners.clear()
-        dumps.forEach { runCatching { it.destroy() } }
-        dumps.clear()
+        dumpFlight?.complete(emptyList())
+        runCatching { dumpProcess?.destroyForcibly() }
+        dumpProcess = null
         stop()
     }
 
@@ -124,13 +281,17 @@ class LogCapture(
         r.job = scope.launch(Dispatchers.IO) {
             while (isActive) {
                 try {
-                    val p = ProcessBuilder(streamCmd).redirectErrorStream(true).start()
+                    val p = processStarter(streamCmd)
                     if (!r.attach(p)) break
                     try {
                         p.inputStream.bufferedReader().use { reader ->
                             while (isActive) {
                                 val line = reader.readLine() ?: break
-                                emit(r, redact(line))
+                                if (featureCosts.recordingEnabled) {
+                                    captureAvailableBatch(r, reader, line)
+                                } else {
+                                    emit(r, redact(line))
+                                }
                             }
                         }
                     } finally {
@@ -150,6 +311,45 @@ class LogCapture(
         synchronized(ring) { ring.clear() }
     }
 
+    /**
+     * Redact and fan out one bounded batch. The first blocking read happens before this method, then
+     * only already-buffered lines are drained so the measurement never counts idle logcat wait time.
+     */
+    private fun captureAvailableBatch(source: Run, reader: java.io.BufferedReader, firstLine: String) {
+        val cost = featureCosts.beginSynchronous(FeatureCostOperation.LOG_CAPTURE_BATCH)
+        var outcome = FeatureCostOutcome.SUCCESS
+        var workUnits = 0L
+        var workBytes = 0L
+        try {
+            var line = firstLine
+            while (true) {
+                val redacted = redact(line)
+                emit(source, redacted)
+                workUnits++
+                if (featureCosts.recordingEnabled) {
+                    workBytes = boundedAdd(
+                        workBytes,
+                        boundedUtf8Bytes(redacted, CAPTURE_WORK_BYTES_MAX - workBytes),
+                        CAPTURE_WORK_BYTES_MAX,
+                    )
+                }
+                if (workUnits >= CAPTURE_BATCH_MAX || !reader.ready()) break
+                line = reader.readLine() ?: break
+            }
+        } catch (failure: Exception) {
+            outcome = FeatureCostOutcome.FAILURE
+            throw failure
+        } finally {
+            featureCosts.finishSynchronous(
+                FeatureCostOperation.LOG_CAPTURE_BATCH,
+                cost,
+                outcome = outcome,
+                workUnits = workUnits,
+                workBytes = workBytes,
+            )
+        }
+    }
+
     internal fun emit(source: Run, line: String) {
         val targets = synchronized(this) {
             // A process can produce one final buffered line after destroy(). Never let that line cross a
@@ -159,6 +359,7 @@ class LogCapture(
                 if (ring.size >= RING_CAP) ring.removeFirst()
                 ring.addLast(line)
             }
+            if (dumpFlight?.isDone() == true) dumpFlight = null
             listeners.toList()
         }
         for (listener in targets) runCatching { listener(line) }
@@ -169,6 +370,14 @@ class LogCapture(
         private const val RING_CAP = 400
         private const val DUMP_LINES = 300
         private const val BACKOFF_MS = 2_000L
+        private const val MAX_VIEWERS = 4
+        private const val DUMP_TIMEOUT_MS = 3_000L
+        private const val DUMP_MAX_BYTES = 256 * 1024
+        private const val DUMP_DESTROY_GRACE_MS = 100L
+        private const val DUMP_READER_GRACE_MS = 250L
+        private const val DUMP_CLEANUP_GRACE_MS = 1_000L
+        private const val CAPTURE_BATCH_MAX = 64L
+        private const val CAPTURE_WORK_BYTES_MAX = 4L * 1024 * 1024
 
         /** Own-process logcat — no `READ_LOGS` / root. `-T 1` starts at "now" so a restart doesn't
          *  replay the whole ring buffer into the shipper. */
@@ -208,3 +417,38 @@ class LogCapture(
         }
     }
 }
+
+/** Exact UTF-8 length without allocating an encoded copy; stops once [limit] bytes are reached. */
+internal fun boundedUtf8Bytes(value: String, limit: Long): Long {
+    if (limit <= 0L) return 0L
+    var bytes = 0L
+    var index = 0
+    while (index < value.length && bytes < limit) {
+        val ch = value[index]
+        val width = when {
+            ch.code < 0x80 -> 1
+            ch.code < 0x800 -> 2
+            ch.isHighSurrogate() && index + 1 < value.length && value[index + 1].isLowSurrogate() -> {
+                index++
+                4
+            }
+            ch.isSurrogate() -> 1
+            else -> 3
+        }
+        bytes = boundedAdd(bytes, width.toLong(), limit)
+        index++
+    }
+    return bytes
+}
+
+internal fun boundedUtf8Bytes(values: Iterable<String>, limit: Long): Long {
+    var bytes = 0L
+    for (value in values) {
+        bytes = boundedAdd(bytes, boundedUtf8Bytes(value, limit - bytes), limit)
+        if (bytes >= limit) break
+    }
+    return bytes
+}
+
+internal fun boundedAdd(current: Long, delta: Long, limit: Long): Long =
+    if (current >= limit || delta >= limit - current) limit else current + delta

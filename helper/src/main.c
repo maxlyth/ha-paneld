@@ -11,7 +11,9 @@
 // Security model (this file owns the transport + auth; see each module for its own validation):
 //   * Transport is an ABSTRACT-namespace UNIX socket (SOCK_NAME), so peer credentials are available
 //     via SO_PEERCRED. Every connection is authenticated: we accept ONLY ha-paneld's own uid (resolved
-//     at runtime from /data/data/<pkg>, which changes per reinstall), plus root and shell for adb.
+//     at runtime from /data/data/<pkg>, which changes per reinstall), plus root. ADB operators can
+//     still connect through a root shell; accepting Android's generic shell uid would let any app with
+//     Shizuku access cross the documented shell-only boundary into this root daemon.
 //   * Concurrent connections are capped (MAX_CONN) and idle non-subscribers time out (server.c), so a
 //     connection flood can't exhaust the thread-per-conn model.
 //   * The command parser is bounded and exact-match (dispatch.c / server.c); every verb's arguments
@@ -48,14 +50,14 @@
 
 // --- peer authentication --------------------------------------------------------------------------
 // ha-paneld's uid changes on every (re)install, so resolve it live by stat'ing its data dir rather
-// than hardcoding it. Accept that uid, plus root (0) and shell (2000) so adb debugging still works.
-static uid_t app_uid = (uid_t)-1;   // last resolved ha-paneld uid (cached across stat failures)
+// than hardcoding it. Resolve the directory on every connection and fail closed when it is absent:
+// this daemon can outlive an app uninstall, and Android may later reuse the former numeric app uid.
 
 static int uid_allowed(uid_t uid) {
-    if (uid == 0 || uid == 2000) return 1;                 // root, shell
+    if (uid == 0) return 1;
     struct stat st;
-    if (stat(APP_DATA, &st) == 0) app_uid = st.st_uid;     // refresh (data dir may be absent pre-install)
-    return app_uid != (uid_t)-1 && uid == app_uid;
+    if (stat(APP_DATA, &st) != 0) return 0;                 // absent pre-install/after uninstall
+    return uid == st.st_uid;
 }
 
 // One thread per connection, so a long-lived SUBSCRIBE stream doesn't block other commands. Removes
@@ -109,7 +111,7 @@ int main(int argc, char **argv) {
         if (cfd < 0) { if (errno == EINTR) continue; perror("accept"); break; }
 
         // Authenticate the peer by uid — only possible because this is a UNIX socket. Reject (and
-        // close) anything that isn't ha-paneld / root / shell before it can issue a single command.
+        // close) anything that isn't ha-paneld / root before it can issue a single command.
         struct ucred cred; socklen_t cl = sizeof cred;
         if (getsockopt(cfd, SOL_SOCKET, SO_PEERCRED, &cred, &cl) < 0 || !uid_allowed(cred.uid)) {
             close(cfd); continue;

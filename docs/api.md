@@ -49,7 +49,7 @@ POST /play          body contains an audio URL (raw or {"url":"…"})
 
 The web page at `/` is how a user sets the **MQTT broker** without adb — find the panel's IP (mDNS `_ha-paneld._tcp`, or the router), open `http://<ip>:8888/`, fill in the broker + credentials, Save.
 
-The agent listens on **:8888**. Self-signed HTTPS sources are accepted (panels live on a trusted LAN). This is the same contract as the reference shell receiver it replaces, so HA-side automation needs no change when a panel migrates from the shell receiver to ha-paneld.
+The agent listens on **:8888**. Audio fetched over HTTPS uses Android's platform trust store and hostname verification, so an untrusted self-signed certificate is rejected unless its CA is installed on the panel. Plain HTTP sources remain available for trusted LAN use. This is the same request contract as the reference shell receiver it replaces, so HA-side automation needs no change when a panel migrates from the shell receiver to ha-paneld.
 
 ## The `/api/v1` namespace (0.8.5)
 
@@ -60,10 +60,13 @@ The machine API lives under **`/api/v1`** as of 0.8.5. The pre-0.8.5 flat paths 
 | `/api/v1/config` | GET / POST | Config as JSON incl. registry `settings` + `ha_expose` flags; partial-merge POST accepts **every** setting (including the formerly MQTT-only ones) and per-entity `ha_expose_<key>` toggles |
 | `/api/v1/config/schema` | GET | Settings-registry metadata (type, group, tier, range/options, HA-capable, exposed) — drives the Configure form |
 | `/api/v1/config/export` | GET | Versioned config bundle (secrets excluded unless `?include_secrets=1`) |
-| `/api/v1/config/import` | POST | Transactional bundle apply — validate-all-or-reject; `?dry_run=1` previews the diff; `?mode=fleet` applies only portable, non-secret keys |
+| `/api/v1/config/import` | POST | Best-effort bundle apply by default: valid known keys are applied while invalid or unknown keys are skipped and reported; `?strict=1` validates all keys before applying any; `?dry_run=1` previews the diff and returns an `expected_cfg` hash; send that hash on the apply request to receive `409 stale-preview` if panel settings changed meanwhile; `?mode=fleet` applies only portable, non-secret keys |
 | `/api/v1/config/revisions` | GET | On-panel config history (ring buffer); `POST …/{id}/restore` rolls back |
+| `/api/v1/backup` / `/api/v1/restore` | POST | Download or restore a complete panel backup, including imported device-profile revisions and their selected identity; restore claims the shared destructive-operation lane before reading the bundle, supports a non-writing `?dry_run=1` preview, and reports config, profile-catalog, Companion, and rollback outcomes separately through `/api/v1/install/status` |
+| `/api/v1/install/status` | GET | Shared install/backup/restore progress; preserves the human-readable `message` and includes a structured `result` object for completed multi-component restores |
+| `/api/v1/install/component` | POST | Start a managed component update or reinstall; an exact version older than the installed version is rejected unless the caller explicitly sends `allow_downgrade=true` |
 | `/api/v1/status` | GET | Panel-health warnings + capability matrix as JSON |
-| `/api/v1/input` | POST | Inject a tap at device pixel `x`,`y` through root, the helper daemon, Accessibility, or locally approved Shizuku access. The experimental web remote-control UI is withheld pending review; the API remains available for automation and testing. |
+| `/api/v1/input` | POST | Queue a tap at device pixel `x`,`y` through a bounded latest-value control lane, then root, the helper daemon, Accessibility, or locally approved Shizuku access. Returns `202` on admission and `409` when the bounded lane is busy. The experimental web remote-control UI is withheld pending review; the API remains available for automation and testing. |
 | `/api/v1/ui/layout` | GET / POST | Per-panel dashboard layout blob (groundwork for customisable card layout) |
 | `/api/v1/dashboard/entity-filter` | GET / POST | Advanced exact-list control for the built-in renderer's experimental entity filter; replace or disable a manual set and inspect count, hash and runtime proof |
 | `/api/v1/dashboard/entities` | GET | Automatic-learning catalog with current, suggested and excluded entities plus the evidence for each choice; query, sort and paginate it as used by the Entities page |

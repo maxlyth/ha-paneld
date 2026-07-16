@@ -1,8 +1,12 @@
 package io.github.maxlyth.hapaneld.control
 
+import io.github.maxlyth.hapaneld.util.SuccessStickyProbe
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.CopyOnWriteArrayList
 
 class BrightnessHardwareWriterTest {
     @Test fun successfulSuWriteShortCircuitsHelper() {
@@ -56,5 +60,57 @@ class BrightnessHardwareWriterTest {
         assertEquals(null, parseBacklightReading("-1 100"))
         assertEquals(null, parseBacklightReading("100 99"))
         assertEquals(null, parseBacklightReading("10 100 trailing"))
+    }
+
+    @Test fun completeBrightnessTransactionsAreSerialized() {
+        val firstEntered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val applied = CopyOnWriteArrayList<Int>()
+        val sequencer = BrightnessWriteSequencer { level ->
+            applied += level
+            if (level == 10) {
+                firstEntered.countDown()
+                release.await(2, TimeUnit.SECONDS)
+            }
+        }
+        val first = Thread { sequencer.write(10) }.apply { start() }
+        assertTrue(firstEntered.await(1, TimeUnit.SECONDS))
+        val second = Thread { sequencer.write(200) }.apply { start() }
+        Thread.sleep(30)
+        assertEquals(listOf(10), applied)
+        release.countDown()
+        first.join(2_000)
+        second.join(2_000)
+        assertEquals(listOf(10, 200), applied)
+    }
+
+    @Test fun unavailableBacklightDiscoveryRetriesWithBoundedBackoffThenSticksOnSuccess() {
+        var now = 10_000L
+        var calls = 0
+        val probe = SuccessStickyProbe(
+            probe = {
+                calls++
+                if (calls < 3) null else BacklightNode("/sys/class/backlight/panel/", 255)
+            },
+            nowMs = { now },
+            initialBackoffMs = 100L,
+            maxBackoffMs = 200L,
+        )
+
+        assertEquals(null, probe.get())
+        now += 99
+        assertEquals(null, probe.get())
+        assertEquals(1, calls)
+        now += 1
+        assertEquals(null, probe.get())
+        assertEquals(2, calls)
+        now += 199
+        assertEquals(null, probe.get())
+        assertEquals(2, calls)
+        now += 1
+        assertEquals(BacklightNode("/sys/class/backlight/panel/", 255), probe.get())
+        now += 60_000
+        assertEquals(BacklightNode("/sys/class/backlight/panel/", 255), probe.get())
+        assertEquals(3, calls)
     }
 }

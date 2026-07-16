@@ -9,6 +9,48 @@ import org.junit.Test
  * now unit-testable via the ConnectionSupervisor extraction. Times are in the same units the service uses.
  */
 class ConnectionSupervisorTest {
+    @Test fun `live heartbeat for current generation suppresses another`() {
+        assertEquals(
+            HeartbeatAdmission.Decision.CurrentHeartbeatAlive,
+            HeartbeatAdmission.decide(currentGeneration = 7L, liveTrackedGenerations = listOf(7L)),
+        )
+    }
+
+    @Test fun `first stranded generation admits replacement`() {
+        assertEquals(
+            HeartbeatAdmission.Decision.Admit(generation = 8L, replacingStranded = true),
+            HeartbeatAdmission.decide(currentGeneration = 8L, liveTrackedGenerations = listOf(7L)),
+        )
+    }
+
+    @Test fun `second stranded generation still admits replacement`() {
+        assertEquals(
+            HeartbeatAdmission.Decision.Admit(generation = 9L, replacingStranded = true),
+            HeartbeatAdmission.decide(currentGeneration = 9L, liveTrackedGenerations = listOf(7L, 8L)),
+        )
+    }
+
+    @Test fun `third stranded generation escalates without admitting another thread`() {
+        assertEquals(
+            HeartbeatAdmission.Decision.EscalateRecovery(strandedGenerations = 3),
+            HeartbeatAdmission.decide(currentGeneration = 10L, liveTrackedGenerations = listOf(7L, 8L, 9L)),
+        )
+    }
+
+    @Test fun `missing current runtime suppresses heartbeat admission`() {
+        assertEquals(
+            HeartbeatAdmission.Decision.NoCurrentRuntime,
+            HeartbeatAdmission.decide(currentGeneration = null, liveTrackedGenerations = emptyList()),
+        )
+    }
+
+    @Test fun `completed heartbeat admits another probe in the same generation`() {
+        assertEquals(
+            HeartbeatAdmission.Decision.Admit(generation = 7L, replacingStranded = false),
+            HeartbeatAdmission.decide(currentGeneration = 7L, liveTrackedGenerations = emptyList()),
+        )
+    }
+
     @Test fun `authentication recovery is not rebuilt or family-flipped by generic watchdog`() {
         val s = ConnectionSupervisor(staleMs = 100, rebuildAbandonMs = 1_000)
         assertEquals(ConnectionSupervisor.Action.None, s.tick("auth-retrying", 1, 10_000, 10_001, false))
@@ -42,6 +84,13 @@ class ConnectionSupervisorTest {
         assertEquals(ConnectionSupervisor.Action.None, s.tick("reconnecting", 0L, 0L, 1_000L, false))
         val a = s.tick("reconnecting", 0L, 0L, 2_000L, false)
         assertTrue("$a", a is ConnectionSupervisor.Action.Rebuild && a.reason == "state")
+    }
+
+    @Test fun autoDiscoveryWaitIsRetriedByTheWatchdog() {
+        val s = supervisor()
+        assertEquals(ConnectionSupervisor.Action.None, s.tick("discovering", 0L, 0L, 1_000L, false))
+        val action = s.tick("discovering", 0L, 0L, 2_000L, false)
+        assertTrue("$action", action is ConnectionSupervisor.Action.Rebuild && action.reason == "state")
     }
 
     @Test fun connectedResetsTheStuckCounter() {

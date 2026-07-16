@@ -124,14 +124,138 @@ class EntityFilterProtocolTest {
 
     @Test fun documentScriptTargetsOnlyTheHaApiSocketAndPreservesNativeShape() {
         val script = EntityFilterProtocol.documentStartScript("https://ha.example", ids)
-        assertTrue(script.contains("targetWsOrigin=\"wss://ha.example\""))
-        assertTrue(script.contains("u.origin===targetWsOrigin"))
+        assertTrue(script.contains("if(window.top&&window.top!==window)return"))
+        assertTrue(script.contains("targetWsOrigins=[\"wss://ha.example\"]"))
+        assertTrue(script.contains("targetWsOrigins.includes(u.origin)"))
         assertTrue(script.contains("targetWsPath=\"/api/websocket\""))
         assertTrue(script.contains("u.pathname===targetWsPath"))
         assertTrue(script.contains("entityIds=[\"light.alpha\",\"sensor.temperature\"]"))
         assertTrue(script.contains("emptySubscriptionEntityId=\"${EntityFilterProtocol.EMPTY_SUBSCRIPTION_ENTITY_ID}\""))
         assertFalse(script.contains("127.0.0.1"))
         assertTrue(script.contains("FilteredWebSocket.prototype=Native.prototype"))
+    }
+
+    @Test fun documentScriptAcceptsThePermittedUpgradedSocketOrigin() {
+        val script = EntityFilterProtocol.documentStartScript(
+            "http://ha.example",
+            ids,
+            linkedSetOf("http://ha.example", "https://ha.example"),
+        )
+
+        assertTrue(script.contains("targetWsOrigins=[\"ws://ha.example\",\"wss://ha.example\"]"))
+        assertTrue(script.contains("targetWsOrigins.includes(u.origin)"))
+    }
+
+    @Test fun trafficObserverTargetsTheSameExactSocketWithoutEmbeddingEntityContent() {
+        val script = EntityFilterProtocol.trafficObserverDocumentStartScript(
+            "http://ha.example/prefix",
+            linkedSetOf("http://ha.example", "https://ha.example"),
+        )
+
+        assertTrue(script.contains("targetWsOrigins=[\"ws://ha.example\",\"wss://ha.example\"]"))
+        assertTrue(script.contains("targetWsPath=\"/prefix/api/websocket\""))
+        assertTrue(script.contains("entityFilterTrafficMetrics(payload)"))
+        assertTrue(script.contains("frames=0,frameChars=0,entityUpdates=0"))
+        assertFalse(script.contains("light.alpha"))
+        assertFalse(script.contains("sensor.temperature"))
+    }
+
+    @Test fun trafficObserverCountsOnlyFixedCardinalityStateTrafficWithFilterEnabled() {
+        val node = runCatching { ProcessBuilder("node", "--version").start().let { it.waitFor() == 0 } }
+            .getOrDefault(false)
+        assumeTrue("node unavailable", node)
+        val filterScript = EntityFilterProtocol.documentStartScript("https://ha.example", ids)
+        val trafficScript = EntityFilterProtocol.trafficObserverDocumentStartScript("https://ha.example")
+        val harness = """
+            global.window=globalThis;global.location={href:'https://ha.example/dashboard'};
+            let clock=0;global.performance={now(){clock+=0.25;return clock;}};
+            const intervals=[];global.setInterval=(fn,ms)=>{intervals.push([fn,ms]);return intervals.length;};
+            let payload=null,modified=0;
+            global.externalApp={
+              entityFilterSubscriptionModified(){modified++;},
+              entityFilterTrafficMetrics(value){payload=value;}
+            };
+            function Native(url,protocols){this.url=String(url);this.protocols=protocols;this.sent=[];this.listeners={};}
+            Native.prototype.send=function(data){this.sent.push(data);};
+            Native.prototype.addEventListener=function(kind,fn){this.listeners[kind]=fn;};
+            Native.prototype.emit=function(kind,data){this.listeners[kind]({data});};
+            Native.CONNECTING=0;Native.OPEN=1;Native.CLOSING=2;Native.CLOSED=3;
+            global.WebSocket=Native;
+            $filterScript
+            $trafficScript
+            const socket=new WebSocket('wss://ha.example/api/websocket');
+            socket.send('{"id":7,"type":"subscribe_entities"}');
+            socket.emit('message','{"id":7,"type":"event","event":{"a":{"light.one":{},"sensor.two":{}}}}');
+            socket.emit('message','{"id":7,"type":"event","event":{"c":{"light.one":{},"sensor.two":{},"switch.three":{}}}}');
+            socket.emit('message','{"id":99,"type":"event","event":{"c":{"ignored.entity":{}}}}');
+            if(intervals.length!==1||intervals[0][1]!==5000)throw Error('observer interval is not fixed');
+            intervals[0][0]();
+            if(modified!==1)throw Error('filter did not run');
+            if(!payload||!/^\d+(,\d+){5}$/.test(payload))throw Error('non-fixed payload: '+payload);
+            const values=payload.split(',').map(Number);
+            if(values[1]!==3)throw Error('wrong frame count: '+values[1]);
+            if(values[2]<=0)throw Error('missing character count');
+            if(values[3]!==5)throw Error('wrong entity update count: '+values[3]);
+            if(values[4]<=0)throw Error('missing processing time');
+            if(values[5]!==0)throw Error('unexpected dropped frames');
+            if(payload.includes('light.')||payload.includes('sensor.'))throw Error('content leaked into payload');
+        """.trimIndent()
+        val process = ProcessBuilder("node").redirectErrorStream(true).start()
+        process.outputStream.bufferedWriter().use { it.write(harness) }
+        val output = process.inputStream.bufferedReader().readText()
+        assertEquals(output, 0, process.waitFor())
+    }
+
+    @Test fun trafficObserverWorksWithoutFilterOrLearningWrappers() {
+        val node = runCatching { ProcessBuilder("node", "--version").start().let { it.waitFor() == 0 } }
+            .getOrDefault(false)
+        assumeTrue("node unavailable", node)
+        val script = EntityFilterProtocol.trafficObserverDocumentStartScript("https://ha.example")
+        val harness = """
+            global.window=globalThis;global.location={href:'https://ha.example/dashboard'};
+            let clock=0;global.performance={now(){clock+=0.1;return clock;}};
+            let flush=null,payload=null;global.setInterval=(fn)=>{flush=fn;};
+            global.externalApp={entityFilterTrafficMetrics(value){payload=value;}};
+            function Native(){this.listeners={};}
+            Native.prototype.send=function(){};
+            Native.prototype.addEventListener=function(kind,fn){this.listeners[kind]=fn;};
+            Native.prototype.emit=function(data){this.listeners.message({data});};
+            Native.CONNECTING=0;Native.OPEN=1;Native.CLOSING=2;Native.CLOSED=3;
+            global.WebSocket=Native;
+            $script
+            const socket=new WebSocket('wss://ha.example/api/websocket');
+            socket.send('{"id":4,"type":"subscribe_entities"}');
+            socket.emit('{"id":4,"type":"event","event":{"c":{"light.one":{},"sensor.two":{}}}}');
+            flush();
+            const values=payload.split(',').map(Number);
+            if(values[1]!==1||values[3]!==2)throw Error('filter-off arm was not observed: '+payload);
+        """.trimIndent()
+        val process = ProcessBuilder("node").redirectErrorStream(true).start()
+        process.outputStream.bufferedWriter().use { it.write(harness) }
+        val output = process.inputStream.bufferedReader().readText()
+        assertEquals(output, 0, process.waitFor())
+    }
+
+    @Test fun trafficBatchParserIsStrictBoundedAndLabelFree() {
+        assertEquals(
+            EntityFilterProtocol.TrafficBatch(
+                sampleMs = 5_000,
+                frames = 12,
+                frameChars = 34_567,
+                entityUpdates = 89,
+                processingMicros = 1_234,
+                droppedFrames = 2,
+            ),
+            EntityFilterProtocol.parseTrafficBatch("5000,12,34567,89,1234,2"),
+        )
+        assertTrue(runCatching { EntityFilterProtocol.parseTrafficBatch("") }.isFailure)
+        assertTrue(runCatching { EntityFilterProtocol.parseTrafficBatch("1,2,3,4,5") }.isFailure)
+        assertTrue(runCatching { EntityFilterProtocol.parseTrafficBatch("1,2,3,4,5,6,7") }.isFailure)
+        assertTrue(runCatching { EntityFilterProtocol.parseTrafficBatch("1,,3,4,5,6") }.isFailure)
+        assertTrue(runCatching { EntityFilterProtocol.parseTrafficBatch("1,2,3,4,5,") }.isFailure)
+        assertTrue(runCatching { EntityFilterProtocol.parseTrafficBatch("1,2,entity,4,5,6") }.isFailure)
+        val saturated = EntityFilterProtocol.parseTrafficBatch("${"9".repeat(100)},0,0,0,0,0")
+        assertEquals(EntityFilterProtocol.MAX_TRAFFIC_COUNT, saturated.sampleMs)
     }
 
     @Test fun documentScriptExecutesAndFiltersOnlyThePrimarySocket() {
@@ -182,12 +306,27 @@ class EntityFilterProtocolTest {
     @Test fun telemetryResetsAndEmitsValidCounterJson() {
         val lease = EntityFilterTelemetry.started(ids)
         EntityFilterTelemetry.subscriptionModified(lease)
+        EntityFilterTelemetry.trafficObserverInstalled(lease)
+        EntityFilterTelemetry.traffic(
+            lease,
+            EntityFilterProtocol.TrafficBatch(5_000, 12, 34_567, 89, 1_234, 2),
+        )
 
         val json = JSONObject(EntityFilterTelemetry.json())
         assertTrue(json.getBoolean("active"))
         assertEquals("native_socket", json.getString("mode"))
         assertEquals(ids.size, json.getInt("entityCount"))
         assertEquals(1, json.getInt("modifiedSubscriptions"))
+        json.getJSONObject("traffic").also { traffic ->
+            assertTrue(traffic.getBoolean("installed"))
+            assertEquals(1, traffic.getLong("batches"))
+            assertEquals(5_000, traffic.getLong("sampleMs"))
+            assertEquals(12, traffic.getLong("frames"))
+            assertEquals(34_567, traffic.getLong("frameChars"))
+            assertEquals(89, traffic.getLong("entityUpdates"))
+            assertEquals(1_234, traffic.getLong("processingMicros"))
+            assertEquals(2, traffic.getLong("droppedFrames"))
+        }
 
         EntityFilterTelemetry.stop(lease)
         val stopped = JSONObject(EntityFilterTelemetry.json())
@@ -195,6 +334,28 @@ class EntityFilterProtocolTest {
         assertEquals(0, stopped.getInt("entityCount"))
         assertEquals("", stopped.getString("filterHash"))
         assertEquals(0, stopped.getLong("modifiedSubscriptions"))
+        assertFalse(stopped.getJSONObject("traffic").getBoolean("installed"))
+        assertEquals(0, stopped.getJSONObject("traffic").getLong("frames"))
+    }
+
+    @Test fun disabledFilterStillOwnsComparableTrafficTelemetry() {
+        val lease = EntityFilterTelemetry.stopped()
+        EntityFilterTelemetry.trafficObserverInstalled(lease)
+        EntityFilterTelemetry.traffic(
+            lease,
+            EntityFilterProtocol.TrafficBatch(5_010, 7, 8_192, 11, 900, 0),
+        )
+
+        val json = JSONObject(EntityFilterTelemetry.json())
+        assertFalse(json.getBoolean("active"))
+        assertEquals(0, json.getInt("entityCount"))
+        json.getJSONObject("traffic").also { traffic ->
+            assertTrue(traffic.getBoolean("installed"))
+            assertEquals(5_010, traffic.getLong("sampleMs"))
+            assertEquals(7, traffic.getLong("frames"))
+            assertEquals(11, traffic.getLong("entityUpdates"))
+        }
+        EntityFilterTelemetry.stop(lease)
     }
 
     @Test fun staleTelemetryLeaseCannotMutateOrStopReplacementState() {
@@ -205,6 +366,11 @@ class EntityFilterProtocolTest {
         EntityFilterTelemetry.failed(old, "stale")
         EntityFilterTelemetry.held(old, "stale-held")
         EntityFilterTelemetry.directFallback(old)
+        EntityFilterTelemetry.trafficObserverInstalled(old)
+        EntityFilterTelemetry.traffic(
+            old,
+            EntityFilterProtocol.TrafficBatch(5_000, 1, 100, 1, 10, 0),
+        )
         EntityFilterTelemetry.stop(old)
 
         val live = JSONObject(EntityFilterTelemetry.json())
@@ -213,6 +379,8 @@ class EntityFilterProtocolTest {
         assertEquals(0, live.getLong("modifiedSubscriptions"))
         assertEquals(0, live.getLong("failures"))
         assertEquals("", live.getString("lastError"))
+        assertFalse(live.getJSONObject("traffic").getBoolean("installed"))
+        assertEquals(0, live.getJSONObject("traffic").getLong("frames"))
         EntityFilterTelemetry.stop(current)
     }
 

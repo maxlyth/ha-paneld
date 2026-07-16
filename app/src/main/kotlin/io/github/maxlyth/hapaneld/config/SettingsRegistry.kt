@@ -19,32 +19,43 @@ object SettingsRegistry {
 
     /** Bump whenever the persisted shape changes; drives bundle migration. */
     const val SCHEMA = 1
+    const val MAX_PANEL_ID_CHARS = 63
+    private const val MAX_PANEL_ID_INPUT_CHARS = 255
 
     val SPECS: List<SettingSpec> = listOf(
         // ---- Identity ----------------------------------------------------------------------------
         SettingSpec(
             key = "panel_id", type = SettingType.STRING, group = "Identity",
             label = "Panel ID", default = "", tier = Tier.BASIC, scope = Scope.IDENTITY,
-            help = "Stable id used in entity IDs and MQTT topics (lowercase, digits, underscores).",
+            help = "Stable id used in entity IDs and MQTT topics (lowercase, digits, underscores; 63 characters maximum).",
             validate = { raw ->
-                val slug = raw.lowercase(Locale.ROOT).replace(Regex("[^a-z0-9]+"), "_").trim('_')
-                if (slug.isEmpty()) Validation.Bad("panel_id: must contain a letter or digit")
-                else Validation.Ok(slug)
+                if (raw.length > MAX_PANEL_ID_INPUT_CHARS) {
+                    Validation.Bad("panel_id: must be at most $MAX_PANEL_ID_CHARS characters")
+                } else {
+                    val slug = raw.lowercase(Locale.ROOT).replace(Regex("[^a-z0-9]+"), "_").trim('_')
+                    if (slug.isEmpty()) Validation.Bad("panel_id: must contain a letter or digit")
+                    else if (slug.length > MAX_PANEL_ID_CHARS) {
+                        Validation.Bad("panel_id: must be at most $MAX_PANEL_ID_CHARS characters")
+                    } else Validation.Ok(slug)
+                }
             },
         ),
         SettingSpec(
             key = "friendly_name", type = SettingType.STRING, group = "Identity",
             label = "Friendly name", default = "", tier = Tier.BASIC, scope = Scope.IDENTITY,
+            maxChars = 128,
             help = "HA device display name.",
         ),
         SettingSpec(
             key = "manufacturer", type = SettingType.STRING, group = "Identity",
             label = "Manufacturer", default = "", scope = Scope.DEVICE,
+            maxChars = 128,
             help = "HA device-card manufacturer override (blank = profile/auto).",
         ),
         SettingSpec(
             key = "model", type = SettingType.STRING, group = "Identity",
             label = "Model", default = "", scope = Scope.DEVICE,
+            maxChars = 128,
             help = "HA device-card model override (blank = profile/auto).",
         ),
 
@@ -52,16 +63,19 @@ object SettingsRegistry {
         SettingSpec(
             key = "mqtt_broker", type = SettingType.STRING, group = "MQTT",
             label = "Broker URL", default = "", tier = Tier.BASIC, scope = Scope.PORTABLE,
+            maxChars = 2_048,
             help = "e.g. tcp://homeassistant.local:1883 — blank auto-discovers HA over mDNS.",
         ),
         SettingSpec(
             key = "mqtt_user", type = SettingType.STRING, group = "MQTT",
             label = "Username", default = "", tier = Tier.BASIC, scope = Scope.DEVICE,
+            maxChars = 256,
             help = "Credential for this panel. Fleet imports keep the target panel's username because per-panel broker accounts and ACLs are common.",
         ),
         SettingSpec(
             key = "mqtt_password", type = SettingType.PASSWORD, group = "MQTT",
             label = "Password", default = "", tier = Tier.BASIC, scope = Scope.DEVICE, secret = true,
+            maxChars = 4_096,
             help = "Blank on save keeps the current password.",
         ),
 
@@ -213,6 +227,7 @@ object SettingsRegistry {
         SettingSpec(
             key = "dashboard_package", type = SettingType.STRING, group = "Dashboard",
             label = "Dashboard app", default = "", picker = "renderer", scope = Scope.DEVICE,
+            maxChars = 255,
             help = "Which app renders the dashboard: the HA Companion, Fully Kiosk, or ha-paneld's built-in renderer (skunk-works). Blank = auto-detect the installed Companion.",
             validate = { value ->
                 if (AndroidInput.isDashboardTarget(value)) Validation.Ok(value)
@@ -227,6 +242,7 @@ object SettingsRegistry {
         SettingSpec(
             key = "home_dashboard", type = SettingType.STRING, group = "Dashboard",
             label = "Home dashboard", default = "", scope = Scope.DEVICE,
+            maxChars = 2_048,
             help = "Local dashboard path a reload returns to, e.g. /lovelace/0 (built-in renderer: the view it loads). Blank = wherever it was.",
         ),
         SettingSpec(
@@ -250,6 +266,7 @@ object SettingsRegistry {
         SettingSpec(
             key = "ha_url", type = SettingType.STRING, group = "Dashboard",
             label = "Home Assistant URL", default = "", scope = Scope.PORTABLE,
+            maxChars = 2_048,
             help = "Built-in renderer only (skunk-works): the HA base URL, e.g. http://homeassistant.local:8123. Blank disables the built-in renderer.",
         ),
         SettingSpec(
@@ -274,11 +291,15 @@ object SettingsRegistry {
         SettingSpec(
             key = "ha_client_id", type = SettingType.STRING, group = "Dashboard",
             label = "HA OAuth client_id", default = "", scope = Scope.DEVICE, hidden = true,
+            maxChars = 2_048,
             help = "Internal token provenance retained for API/config import compatibility. Borrowed Companion tokens use the Android Companion client; ha-paneld-issued tokens use the HA origin. Not a user preference.",
         ),
         SettingSpec(
             key = "dashboard_entity_overrides", type = SettingType.STRING, group = "Dashboard",
             label = "Entity filter overrides", default = "", scope = Scope.DEVICE, hidden = true,
+            // Explicit pins/exclusions may legitimately cover a large installation. This remains
+            // bounded by the config/import envelope, but must not inherit the ordinary text limit.
+            maxChars = 1_048_576,
             help = "Backup-only storage for explicit entity pins and forced exclusions managed on the Entities tab.",
         ),
         SettingSpec(
@@ -360,6 +381,7 @@ object SettingsRegistry {
         SettingSpec(
             key = "launcher_package", type = SettingType.STRING, group = "System",
             label = "Launcher app", default = "", picker = "package", scope = Scope.DEVICE,
+            maxChars = 255,
             help = "App the Launcher button brings forward (blank = auto-pick).",
         ),
         // Vendor taming is managed by the "Vendor packages" card (add/re-enable per app), so no free-text
@@ -374,6 +396,7 @@ object SettingsRegistry {
         SettingSpec(
             key = "log_ship_host", type = SettingType.STRING, group = "Logging",
             label = "Sink host", default = "", scope = Scope.DEVICE,
+            maxChars = 253,
             help = "Log-collector host; blank keeps shipping inert.",
         ),
         SettingSpec(

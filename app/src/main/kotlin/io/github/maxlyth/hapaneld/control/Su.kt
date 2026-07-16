@@ -2,7 +2,9 @@ package io.github.maxlyth.hapaneld.control
 
 import android.util.Log
 import io.github.maxlyth.hapaneld.platform.RootShell
+import io.github.maxlyth.hapaneld.util.BoundedStreams
 import java.io.BufferedReader
+import java.io.File
 import java.io.IOException
 import java.io.Writer
 import java.util.concurrent.Callable
@@ -91,11 +93,15 @@ object Su : RootShell {
      *  protocol is text-only, so binary output like `screencap -p` needs a dedicated exec). Not
      *  synchronized: it doesn't touch the shared shell, so a screenshot won't stall navbar root actions.
      *  Null on failure / no su. */
-    override fun runBytes(cmd: String): ByteArray? {
+    override fun runBytes(cmd: String): ByteArray? = runBytesBounded(cmd, Long.MAX_VALUE - 1L)
+
+    override fun runBytesBounded(cmd: String, maxBytes: Long): ByteArray? {
         val forms = SuFormPolicy.candidates(form)
         for (f in forms) {
             val bytes = runBounded("bytes", argvOneShot(f, cmd)) { p ->
-                val b = p.inputStream.readBytes() // binary-safe; read before waitFor (avoid deadlock)
+                // binary-safe; drain before waitFor to avoid a full pipe deadlock. The bounded reader
+                // probes one byte beyond the ceiling, then runBounded kills the producer on overflow.
+                val b = BoundedStreams.readBytes(p.inputStream, maxBytes)
                 if (p.waitFor() == 0) b else null
             }
             if (bytes != null) { form = f; return bytes }
@@ -103,6 +109,50 @@ object Su : RootShell {
         if (form == SuFormPolicy.UNPROBED) form = SuFormPolicy.NONE_LAST_PROBE
         return null
     }
+
+    /** Stream binary stdout directly to [target] under a hard byte ceiling. This is for larger root
+     * artifacts such as Companion databases where a ByteArray would double peak heap before staging.
+     * A failed/non-zero/oversized command leaves no partial file. */
+    fun runToFileBounded(cmd: String, target: File, maxBytes: Long, timeoutMs: Long = 30_000L): Long? {
+        val forms = SuFormPolicy.candidates(form)
+        for (f in forms) {
+            val written = runBounded("file", argvOneShot(f, cmd), timeoutMs) { p ->
+                val count = target.outputStream().use { output ->
+                    BoundedStreams.copy(p.inputStream, output, maxBytes)
+                }
+                if (p.waitFor() == 0) count else null
+            }
+            if (written != null) {
+                form = f
+                return written
+            }
+            target.delete()
+        }
+        if (form == SuFormPolicy.UNPROBED) form = SuFormPolicy.NONE_LAST_PROBE
+        target.delete()
+        return null
+    }
+
+    /** One-shot, bounded text command for diagnostics. Unlike [runOutput], this never waits behind the
+     * synchronized persistent control shell, so a slow perf probe cannot add seconds of latency to a
+     * navbar/screen/hardware command. */
+    fun runOutputIsolatedBounded(cmd: String, maxBytes: Long, timeoutMs: Long = CMD_TIMEOUT_MS): String? {
+        val forms = SuFormPolicy.candidates(form)
+        for (f in forms) {
+            val out = runBounded("isolated-out", argvOneShot(f, cmd), timeoutMs) { p ->
+                val bytes = BoundedStreams.readBytes(p.inputStream, maxBytes)
+                if (p.waitFor() == 0) String(bytes, Charsets.UTF_8) else null
+            }
+            if (out != null) {
+                form = f
+                return out
+            }
+        }
+        if (form == SuFormPolicy.UNPROBED) form = SuFormPolicy.NONE_LAST_PROBE
+        return null
+    }
+
+    fun availableIsolated(): Boolean = runOutputIsolatedBounded("true", 1L) != null
 
     override fun available(): Boolean = run("true")
 

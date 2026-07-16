@@ -80,6 +80,32 @@ class RuntimeLifecycleCoordinatorTest {
         assertTrue(coordinator.shutdown(2_000) {})
     }
 
+    @Test fun wedgedReconnectsAreBoundedAndFurtherRecoveryEscalates() {
+        var saturated = 0
+        val coordinator = RuntimeLifecycleCoordinator(
+            "bounded-recovery-test",
+            onRecoverySaturated = { saturated++ },
+        )
+        assertTrue(coordinator.start {}.get(2, TimeUnit.SECONDS))
+        val generation = coordinator.currentGeneration()!!
+        val entered = CountDownLatch(RuntimeLifecycleCoordinator.MAX_RECOVERY_WORKERS)
+        val release = CountDownLatch(1)
+        val reconnects = (0 until RuntimeLifecycleCoordinator.MAX_RECOVERY_WORKERS).map {
+            coordinator.reconnect(generation) {
+                entered.countDown()
+                release.await()
+            }
+        }
+        assertTrue(entered.await(2, TimeUnit.SECONDS))
+
+        assertFalse(coordinator.reconnect(generation) { error("bounded pool grew") }.get(2, TimeUnit.SECONDS))
+        assertEquals(1, saturated)
+
+        release.countDown()
+        reconnects.forEach { assertTrue(it.get(2, TimeUnit.SECONDS)) }
+        assertTrue(coordinator.shutdown(2_000) {})
+    }
+
     @Test fun shutdownClosesAdmissionAndDrainsOnlyTheActiveTransition() {
         val coordinator = RuntimeLifecycleCoordinator("lifecycle-test")
         assertTrue(coordinator.start {}.get(2, TimeUnit.SECONDS))

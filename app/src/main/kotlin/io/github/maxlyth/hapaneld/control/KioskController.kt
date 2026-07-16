@@ -12,7 +12,11 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import io.github.maxlyth.hapaneld.Config
+import io.github.maxlyth.hapaneld.metrics.FeatureCostOperation
+import io.github.maxlyth.hapaneld.metrics.FeatureCostOutcome
+import io.github.maxlyth.hapaneld.metrics.FeatureCosts
 import io.github.maxlyth.hapaneld.platform.RootShell
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * **Experimental kiosk lock.** Stops a NON-admin from ACCIDENTALLY navigating away from the dashboard on
@@ -50,7 +54,9 @@ class KioskController(
     private var taps = 0
     private var lastTapAt = 0L
     @Volatile private var locked = false
-    private var returnThread: Thread? = null
+    @Volatile private var returnThread: Thread? = null
+    private val returnGeneration = AtomicLong()
+    private val applyLock = Any()
 
     /** Fired when the on-device unlock gesture completes. The service wires this to persist OFF + publish
      *  to HA + call [apply]`(false)` — all off the main thread. */
@@ -59,18 +65,24 @@ class KioskController(
     /** Apply or clear the lock. Runs the root commands on the CALLING thread (blocking) — call it off the
      *  main thread (the MQTT thread, a boot coroutine, or the service's unlock thread); the overlay work is
      *  posted to the main thread internally. */
-    fun apply(on: Boolean) {
-        locked = on
+    fun apply(on: Boolean) = synchronized(applyLock) {
         if (on) {
             root.run("cmd statusbar disable-for-setup true")
             root.run("settings put global policy_control 'immersive.full=*'")
+            // apply() is explicitly off-main; grant before posting view-only overlay work so a slow or
+            // wedged root shell can never block the Android UI looper.
+            ensureOverlayPerm()
             showUnlockCorner()
+            locked = true
             startReturnLoop()
             Log.i(TAG, "kiosk lock ON")
         } else {
+            // Revoke the poll generation before any blocking root cleanup. A dashboard-state call
+            // already in flight must not observe a later ON and revive itself or launch stale work.
+            locked = false
+            stopReturnLoop()
             root.run("cmd statusbar disable-for-setup false")
             root.run("settings delete global policy_control")
-            stopReturnLoop()
             hideUnlockCorner()
             Log.i(TAG, "kiosk lock OFF")
         }
@@ -80,27 +92,62 @@ class KioskController(
      *  (Recents / another app). This is the mechanism that actually enforces the lock on OEMs that ignore
      *  the nav-button disable. Reuses the watchdog's foreground probe; a no-op when it reads UNKNOWN
      *  (no root/daemon). Leaves ha-paneld's own admin UI alone so the unlock paths aren't fought. */
-    private fun startReturnLoop() {
-        if (returnThread?.isAlive == true) return
-        val t = Thread {
-            while (locked) {
-                runCatching {
-                    val pkg = config.dashboardPackage
-                    if (system.dashboardState(pkg) == AppState.BG) {
-                        Log.i(TAG, "left the dashboard while locked -> returning to it")
-                        system.launchHome(pkg)
+    private fun startReturnLoop(): Unit = synchronized(this) {
+        if (!locked || returnThread?.isAlive == true) return
+        val generation = returnGeneration.incrementAndGet()
+        lateinit var worker: Thread
+        worker = Thread {
+            try {
+                while (returnGeneration.isCurrent(generation, locked)) {
+                    val cost = FeatureCosts.registry.beginSynchronous(FeatureCostOperation.KIOSK_STATE_POLL)
+                    var outcome = FeatureCostOutcome.SUCCESS
+                    try {
+                        val pkg = config.dashboardPackage
+                        val state = system.dashboardState(pkg)
+                        if (!returnGeneration.isCurrent(generation, locked)) {
+                            outcome = FeatureCostOutcome.CANCELLED
+                            break
+                        }
+                        if (state == AppState.BG) {
+                            Log.i(TAG, "left the dashboard while locked -> returning to it")
+                            system.launchHome(pkg)
+                        }
+                    } catch (e: Exception) {
+                        outcome = FeatureCostOutcome.FAILURE
+                    } finally {
+                        FeatureCosts.registry.finishSynchronous(
+                            FeatureCostOperation.KIOSK_STATE_POLL,
+                            cost,
+                            outcome = outcome,
+                            workUnits = 1,
+                        )
+                    }
+                    if (!returnGeneration.isCurrent(generation, locked)) break
+                    try { Thread.sleep(RETURN_POLL_MS) } catch (e: InterruptedException) { break }
+                }
+            } finally {
+                synchronized(this@KioskController) {
+                    if (returnThread === worker) {
+                        returnThread = null
+                        // If OFF→ON happened while an old blocking probe was unwinding, restore one
+                        // current poller only after the obsolete thread has fully terminated.
+                        if (locked) startReturnLoop()
                     }
                 }
-                try { Thread.sleep(RETURN_POLL_MS) } catch (e: InterruptedException) { break }
             }
         }.apply { isDaemon = true; name = "kiosk-return" }
-        returnThread = t
-        t.start()
+        returnThread = worker
+        worker.start()
     }
 
     private fun stopReturnLoop() {
-        returnThread?.interrupt()
-        returnThread = null
+        val old = synchronized(this) {
+            returnGeneration.incrementAndGet()
+            returnThread?.also(Thread::interrupt)
+        }
+        if (old != null && old !== Thread.currentThread()) {
+            runCatching { old.join(RETURN_STOP_JOIN_MS) }
+        }
     }
 
     /** Ensure SYSTEM_ALERT_WINDOW (root-granted; already held for the navbar/touch-sound, granted here
@@ -114,7 +161,6 @@ class KioskController(
     @Suppress("ClickableViewAccessibility")
     private fun showUnlockCorner() = main.post {
         if (unlockView != null) return@post
-        ensureOverlayPerm()
         val v = View(ctx)
         v.setOnTouchListener { _, e ->
             if (e.actionMasked == MotionEvent.ACTION_DOWN) countTap()
@@ -159,6 +205,10 @@ class KioskController(
         private const val UNLOCK_TAPS = 7    // rapid taps in the corner to release (casual-proof)
         private const val TAP_GAP_MS = 1_500L // max gap between taps before the count resets
         private const val UNLOCK_DP = 48     // corner unlock-zone size (a small dead zone while locked)
-        private const val RETURN_POLL_MS = 1_200L // how fast to snap back to the dashboard after a nav-away
+        internal const val RETURN_POLL_MS = 3_000L // experimental return loop; bounds steady privileged probes
+        internal const val RETURN_STOP_JOIN_MS = 6_000L
     }
 }
+
+internal fun AtomicLong.isCurrent(generation: Long, enabled: Boolean): Boolean =
+    enabled && get() == generation

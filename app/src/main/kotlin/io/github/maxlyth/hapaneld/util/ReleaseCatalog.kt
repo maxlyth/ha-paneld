@@ -3,6 +3,7 @@ package io.github.maxlyth.hapaneld.util
 import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
 
@@ -15,6 +16,7 @@ import java.net.URL
  */
 object ReleaseCatalog {
     private const val TAG = "ha-paneld/releases"
+    internal const val MAX_API_RESPONSE_BYTES = 2L * 1024L * 1024L
 
     /** A raw release as read from the API, before channel filtering. */
     data class Raw(val tag: String, val prerelease: Boolean, val notesUrl: String, val apkUrl: String?)
@@ -121,9 +123,21 @@ object ReleaseCatalog {
         conn.connectTimeout = 8_000; conn.readTimeout = 8_000
         conn.setRequestProperty("Accept", "application/vnd.github+json")
         return try {
-            if (conn.responseCode == 200) conn.inputStream.bufferedReader().use { it.readText() } else null
+            if (conn.responseCode == 200) {
+                conn.inputStream.use { readResponse(it, conn.contentLengthLong) }
+            } else null
         } finally {
             conn.disconnect()
         }
+    }
+
+    /** Read a GitHub API response under a semantic cap even when Content-Length is absent or false. */
+    internal fun readResponse(
+        input: InputStream,
+        declaredBytes: Long = -1L,
+        maxBytes: Long = MAX_API_RESPONSE_BYTES,
+    ): String {
+        if (declaredBytes > maxBytes) throw ByteLimitExceeded(maxBytes)
+        return String(BoundedStreams.readBytes(input, maxBytes), Charsets.UTF_8)
     }
 }

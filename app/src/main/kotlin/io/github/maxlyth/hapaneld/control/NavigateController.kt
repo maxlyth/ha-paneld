@@ -17,6 +17,10 @@ import android.util.Log
 class NavigateController(private val context: Context) {
 
     fun navigate(url: String, companionPackage: String? = DEFAULT_COMPANION) {
+        if (CompanionDataOperationGate.blocksImplicitNavigation()) {
+            Log.i(TAG, "navigate suppressed while Companion data operation is active")
+            return
+        }
         val targeted = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             if (companionPackage != null) setPackage(companionPackage)

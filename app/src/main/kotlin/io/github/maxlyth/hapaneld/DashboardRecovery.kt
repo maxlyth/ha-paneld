@@ -1,5 +1,6 @@
 package io.github.maxlyth.hapaneld
 
+import io.github.maxlyth.hapaneld.dashboard.EntityFilterProtocol
 import java.net.URI
 
 /**
@@ -162,9 +163,9 @@ internal fun javascriptIntResult(result: String?): Int? =
     result?.trim()?.removeSurrounding("\"")?.toIntOrNull()
 
 /**
- * Keep top-level navigation on the configured HA authority. HTTP↔HTTPS redirects remain allowed when
- * both URLs use their scheme default or preserve the same explicit port; a different explicit port is
- * a different service and must not inherit the renderer's external-auth bridge.
+ * Keep top-level navigation on the configured HA authority. An HTTP configuration may upgrade to HTTPS
+ * when both URLs use scheme defaults or preserve the same explicit port. An HTTPS configuration never
+ * downgrades to HTTP: cleartext content must not inherit the renderer's external-auth bridge.
  */
 internal fun dashboardNavigationAllowed(configuredUrl: String, candidateUrl: String): Boolean = runCatching {
     val configured = URI(configuredUrl.trim())
@@ -173,6 +174,7 @@ internal fun dashboardNavigationAllowed(configuredUrl: String, candidateUrl: Str
     val candidateScheme = candidate.scheme?.lowercase() ?: return@runCatching false
     if (configuredScheme !in setOf("http", "https") || candidateScheme !in setOf("http", "https")) return@runCatching false
     if (!configured.host.equals(candidate.host, ignoreCase = true)) return@runCatching false
+    if (configuredScheme == "https" && candidateScheme != "https") return@runCatching false
     if (configuredScheme == candidateScheme) {
         fun effectivePort(uri: URI, scheme: String): Int =
             if (uri.port >= 0) uri.port else if (scheme == "https") 443 else 80
@@ -182,6 +184,27 @@ internal fun dashboardNavigationAllowed(configuredUrl: String, candidateUrl: Str
             (configured.port >= 0 && configured.port == candidate.port)
     }
 }.getOrDefault(false)
+
+/**
+ * Exact document origins that may inherit panel startup scripts. This mirrors [dashboardNavigationAllowed]:
+ * HTTPS is restricted to its configured origin, while an HTTP configuration also admits only the same-host
+ * HTTPS upgrade using the same explicit port (or the HTTPS default when neither URL has one).
+ */
+internal fun dashboardDocumentStartOrigins(configuredUrl: String): Set<String> {
+    val configured = URI(configuredUrl.trim())
+    val configuredOrigin = EntityFilterProtocol.origin(configuredUrl)
+    if (!configured.scheme.equals("http", ignoreCase = true)) return setOf(configuredOrigin)
+    val https = URI(
+        "https",
+        null,
+        configured.host?.lowercase() ?: throw IllegalArgumentException("ha_url must contain a host"),
+        configured.port,
+        null,
+        null,
+        null,
+    )
+    return linkedSetOf(configuredOrigin, EntityFilterProtocol.origin(https.toString()))
+}
 
 /** Distinguishes the registration-time [android.net.ConnectivityManager.NetworkCallback.onAvailable]
  * from a network that genuinely became available after the renderer started offline. */

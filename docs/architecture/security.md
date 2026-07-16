@@ -17,7 +17,7 @@ The panel and Home Assistant sit on a **trusted LAN**, and the app is built arou
 | **Runtime profile import/activation** | unauthenticated trusted-LAN HTTP workflow | untrusted YAML is previewed, validated, stored as immutable revisions and explicitly activated; it can select only compiled drivers and cannot grant authority |
 | **CDP / WebView DevTools relay `:9222`** | opt-in (started via `/inspect/start`), binds `0.0.0.0`, unauthenticated | full dashboard-session access if started |
 | **MQTT** | governed by the broker | the intended control plane; inherent to MQTT discovery |
-| **Root helper daemon** (abstract UNIX socket `@hapaneld-helper`) | peer-uid authenticated (`SO_PEERCRED`: ha-paneld/root/shell only), command-whitelisted, char-sanitised, bounded parsing, conn caps | Sound — was unauthenticated loopback TCP `:8889`; now no other local app can reach it |
+| **Root helper daemon** (abstract UNIX socket `@hapaneld-helper`) | mutually peer-uid authenticated (`SO_PEERCRED`: server must be root; client must be the current ha-paneld uid or root), command-whitelisted, char-sanitised, bounded parsing, conn caps | Sound — was unauthenticated loopback TCP `:8889`; the app rejects a non-root process that claims the abstract name, and generic Android shell uid is excluded so Shizuku's shell-only boundary cannot become root |
 | **[Shizuku enhanced access](../shizuku.md)** | optional; enabled and approved only on the panel | Official manager signer is pinned; the UserService must report UID 2000 and protocol v2; methods and inputs are typed and bounded, with no generic command or filesystem access. Shell is not root. Consent is excluded from Android backup, config bundles, restore, and fleet push. ADB-started service may need rearming after reboot. |
 | **Network ADB** | opt-in switch; opens `5555` to the LAN when enabled | documented, off by default |
 | **Accessibility service** | key-capture only (no window-content retrieval) | Sound |
@@ -26,7 +26,7 @@ The panel and Home Assistant sit on a **trusted LAN**, and the app is built arou
 The state-changing routes on `:8888` are where the exposure concentrates:
 
 - `POST /config` — sets MQTT broker + credentials + panel_id. Unauthenticated ⇒ a LAN actor can repoint the panel at a rogue broker and take over every entity. **Top risk.**
-- `POST /play` — downloads + plays an arbitrary URL with TLS verification disabled (LAN self-signed convenience) ⇒ audio injection / open fetch relay.
+- `POST /play` — downloads + plays an arbitrary HTTP(S) URL; HTTPS uses the platform trust store and normal hostname verification, while cleartext HTTP remains available for LAN sources ⇒ audio injection / open fetch relay.
 - `POST /inspect/start` — starts the CDP relay (the `:9222` surface above).
 - Profile save/activate/rollback routes — can change which compiled hardware drivers and capability candidates the panel uses after a controlled service restart. Preview tokens bind save to the exact inspected YAML, activation pins an exact revision/hash, risky declarations are highlighted, and startup falls back to the last-known-good revision. These controls prevent confused or malformed activation; they do not authenticate a LAN caller.
 - `GET /diag` — device/capability info (recon). Intentionally a support tool (issue template).
@@ -47,7 +47,7 @@ Runtime profile files are treated as untrusted data, not plugins. The closed sch
 2. **No in-app network allowlist.** Restricting *who* can reach `:8888` is delegated to the network/infrastructure layer (router / VLAN / firewall segmentation) rather than reinvented in the app — consistent with leaning on existing platform/infra capabilities. The in-app upgrade path, when warranted, is the HA-auth model (decision 3).[^ha-ipban]
 3. **Future auth: integrate with HA's auth model**, not a custom scheme. When real auth is warranted, require `Authorization: Bearer <token>` on state-changing endpoints and **validate the token against the configured HA instance** (cached `GET /api/`). This reuses HA's token lifecycle (issue/revoke in the HA UI), works with HA `rest_command` bearer headers, and **maps directly onto a future custom integration** (which would authenticate via HA natively) — so it survives a possible MQTT→custom migration instead of being discarded.
 4. **Credential-at-rest encryption descoped.** MQTT creds live in app SharedPreferences; encrypting them only defends against a root/file attacker who already owns the device, at the cost of a deprecated `security-crypto` dependency and a credential migration across deployed panels; low value for the cost.
-5. **TLS-disabled `/play`** stays (LAN self-signed convenience) under the LAN-trust model; revisit if HA-auth (decision 3) lands.
+5. **`/play` keeps standard HTTPS verification while allowing cleartext HTTP** for LAN audio sources under the LAN-trust model; revisit cleartext support if HA-auth (decision 3) lands.
 
 ## Done
 

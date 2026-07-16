@@ -108,12 +108,13 @@ object DashboardAuth {
         stillCurrent: () -> Boolean = { true },
     ): Result {
         if (!stillCurrent()) return Result(null)
+        val snapshot = config.haAuthSnapshot()
         val owner = CredentialOwner(
-            config.haUrl,
-            config.haToken,
-            config.haRefreshToken,
-            config.haTokenExpiry,
-            config.haClientId,
+            snapshot.url,
+            snapshot.accessToken,
+            snapshot.refreshToken,
+            snapshot.tokenExpiry,
+            snapshot.clientId,
         )
         val r = resolve(
             owner.url, owner.accessToken, owner.refreshToken, owner.expiryEpochSec, nowSec, force,
@@ -121,15 +122,16 @@ object DashboardAuth {
         )
         // A refresh is blocking. If this renderer was replaced or any credential changed while the HTTP
         // request was in flight, neither return nor persist the old result into the new configuration.
+        val currentSnapshot = config.haAuthSnapshot()
         val current = CredentialOwner(
-            config.haUrl,
-            config.haToken,
-            config.haRefreshToken,
-            config.haTokenExpiry,
-            config.haClientId,
+            currentSnapshot.url,
+            currentSnapshot.accessToken,
+            currentSnapshot.refreshToken,
+            currentSnapshot.tokenExpiry,
+            currentSnapshot.clientId,
         )
         val owned = retainIfOwned(owner, current, stillCurrent(), r)
-        owned.persist?.let { (access, expiry) -> config.setHaRefreshedToken(access, expiry) }
-        return owned
+        val refresh = owned.persist ?: return owned
+        return if (config.setHaRefreshedTokenIfOwned(snapshot, refresh.first, refresh.second)) owned else Result(null)
     }
 }

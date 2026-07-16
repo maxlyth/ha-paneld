@@ -2,4 +2,9 @@
 <resources>
     <string name="app_name">ha-paneld</string>
     <string name="a11y_description">Reports panel hardware-button presses to Home Assistant and enables tap injection from the panel control UI. Does not read screen content.</string>
+    <string name="config_service_starting">Starting the configuration service…</string>
+    <string name="config_service_not_ready">The configuration service is not ready yet.</string>
+    <string name="retry">Retry</string>
+    <string name="wordmark_description">ha-paneld</string>
+    <string name="config_qr_description">QR code for %1$s</string>
 </resources>

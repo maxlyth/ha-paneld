@@ -5,9 +5,17 @@ import android.net.wifi.WifiManager
 import android.util.Log
 import io.github.maxlyth.hapaneld.util.Json
 import io.github.maxlyth.hapaneld.util.localIpv4
+import io.github.maxlyth.hapaneld.metrics.FeatureCostOperation
+import io.github.maxlyth.hapaneld.metrics.FeatureCostOutcome
+import io.github.maxlyth.hapaneld.metrics.FeatureCosts
 import java.net.InetAddress
 import java.net.URI
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 import javax.jmdns.JmDNS
 import javax.jmdns.ServiceEvent
 import javax.jmdns.ServiceInfo
@@ -19,10 +27,27 @@ import javax.jmdns.ServiceListener
  * handling is unreliable across the API 26→30 range the fleet spans. A WifiManager.MulticastLock
  * is held for the lifetime of the advertisement (panels otherwise drop multicast in doze).
  */
-class MdnsAdvertiser(private val context: Context, private val config: Config) {
+class MdnsAdvertiser(
+    private val context: Context,
+    private val config: Config,
+    private val runtimePanelId: String = config.panelId,
+    private val runtimeFriendlyName: String = config.friendlyName,
+    private val runtimeHttpPort: Int = config.httpPort,
+) {
+    private val ownerGate = RestartableOwnerGate()
     private var jmdns: JmDNS? = null
     private var lock: WifiManager.MulticastLock? = null
     @Volatile private var browsing = false
+    @Volatile private var refreshThread: Thread? = null
+    @Volatile private var resolver: ThreadPoolExecutor? = null
+    private val browseGeneration = AtomicLong()
+
+    private fun newResolver() = ThreadPoolExecutor(
+        RESOLVE_WORKERS, RESOLVE_WORKERS, 0L, TimeUnit.MILLISECONDS,
+        ArrayBlockingQueue(RESOLVE_QUEUE),
+        { task -> Thread(task, "mdns-resolve").apply { isDaemon = true } },
+        ThreadPoolExecutor.AbortPolicy(),
+    )
 
     // Live roster of discovered ha-paneld panels (keyed by mDNS instance name = panel_id), maintained by a
     // persistent [peerListener]. Reads are cheap + non-blocking and — unlike a one-shot dns.list, which
@@ -36,9 +61,16 @@ class MdnsAdvertiser(private val context: Context, private val config: Config) {
             val dns = jmdns ?: return
             val type = event.type
             val name = event.name
-            Thread {
-                runCatching { dns.getServiceInfo(type, name, RESOLVE_MS) }.getOrNull()?.let { record(it, name) }
-            }.apply { isDaemon = true; this.name = "mdns-resolve" }.start()
+            val executor = resolver ?: return
+            try {
+                executor.execute {
+                    runCatching { dns.getServiceInfo(type, name, RESOLVE_MS) }.getOrNull()?.let {
+                        if (browsing && jmdns === dns) record(it, name)
+                    }
+                }
+            } catch (_: RejectedExecutionException) {
+                Log.w(TAG, "mDNS resolve queue saturated; dropping $name")
+            }
         }
 
         override fun serviceResolved(event: ServiceEvent) {
@@ -52,19 +84,21 @@ class MdnsAdvertiser(private val context: Context, private val config: Config) {
 
     /** Fold a resolved mDNS record into the roster (needs a resolved IPv4 to be navigable). */
     private fun record(info: ServiceInfo, fallbackName: String) {
+        if (!browsing) return
         val p = toPeer(
             instanceName = info.name ?: fallbackName,
             txtName = info.getPropertyString("name"),
             txtVer = info.getPropertyString("ver"),
             ipv4 = info.inet4Addresses?.firstOrNull()?.hostAddress,
             port = info.port,
-            selfId = config.panelId,
+            selfId = runtimePanelId,
             selfIp = localIpv4(),
         )
         if (p.panelId.isBlank() || p.ip == null) return
         // Don't DOWNGRADE a resolved friendly name back to the panel_id fallback: a later TXT-less resolve
         // (common right after a whole-fleet restart floods mDNS) must not clobber a good name. Otherwise store.
         val existing = peerMap[p.panelId]
+        if (existing == null && peerMap.size >= MAX_PEERS) return
         val newHasName = p.name != p.panelId
         val oldHasName = existing != null && existing.name != existing.panelId
         if (existing == null || newHasName || !oldHasName) peerMap[p.panelId] = p
@@ -72,54 +106,89 @@ class MdnsAdvertiser(private val context: Context, private val config: Config) {
 
     /** Blocking network setup — call off the main thread. */
     fun start() {
-        try {
-            val wifi = context.applicationContext
-                .getSystemService(Context.WIFI_SERVICE) as WifiManager
-            lock = wifi.createMulticastLock("ha-paneld-mdns").apply {
-                setReferenceCounted(true)
-                acquire()
-            }
-            val addr = localAddress()
-            val dns = JmDNS.create(addr, config.panelId)
-            val props = mapOf(
-                "ver" to Config.VERSION,
-                "caps" to "tts",
-                "path" to "/play",
-                // Friendly name so a peer's fleet switcher can label this panel nicely (falls back to the
-                // instance name = panel_id on older panels that don't advertise it). Additive TXT key.
-                "name" to config.friendlyName.ifBlank { config.panelId },
-            )
-            val info = ServiceInfo.create(
-                Config.MDNS_SERVICE_TYPE,
-                config.panelId,
-                config.httpPort,
-                0,
-                0,
-                props,
-            )
-            dns.registerService(info)
-            jmdns = dns
-            // Start the persistent peer browse (powers the header switcher) — begins querying immediately
-            // and keeps the roster fresh in the background, so a UI read is instant + complete.
-            runCatching { dns.addServiceListener(Config.MDNS_SERVICE_TYPE, peerListener) }
-            // Periodic re-browse: dns.list resolves each service fully (incl. TXT), so this refreshes names
-            // and fills any TXT missed during a congested (whole-fleet-restart) window. Merges with the
-            // don't-downgrade rule in record(), so it only closes gaps and never flaps a good name.
-            browsing = true
-            Thread {
-                while (browsing) {
-                    try { Thread.sleep(REFRESH_MS) } catch (e: InterruptedException) { break }
-                    jmdns?.let { d -> runCatching { d.list(Config.MDNS_SERVICE_TYPE, LIST_MS)?.forEach { record(it, it.name ?: "") } } }
+        ownerGate.start {
+            if (jmdns != null) return@start
+            if (resolver?.isShutdown != false) resolver = newResolver()
+            try {
+                val wifi = context.applicationContext
+                    .getSystemService(Context.WIFI_SERVICE) as WifiManager
+                lock = wifi.createMulticastLock("ha-paneld-mdns").apply {
+                    setReferenceCounted(true)
+                    acquire()
                 }
-            }.apply { isDaemon = true; name = "mdns-peer-refresh" }.start()
-            Log.i(TAG, "advertising ${Config.MDNS_SERVICE_TYPE} as ${config.panelId} @ $addr:${config.httpPort}")
-        } catch (e: Exception) {
-            Log.w(TAG, "mDNS advertise failed", e)
+                val addr = localAddress()
+                val dns = JmDNS.create(addr, runtimePanelId)
+                val props = mapOf(
+                    "ver" to Config.VERSION,
+                    "caps" to "tts",
+                    "path" to "/play",
+                    // Friendly name so a peer's fleet switcher can label this panel nicely (falls back to the
+                    // instance name = panel_id on older panels that don't advertise it). Additive TXT key.
+                    "name" to runtimeFriendlyName.ifBlank { runtimePanelId },
+                )
+                val info = ServiceInfo.create(
+                    Config.MDNS_SERVICE_TYPE,
+                    runtimePanelId,
+                    runtimeHttpPort,
+                    0,
+                    0,
+                    props,
+                )
+                jmdns = dns
+                dns.registerService(info)
+                // Start the persistent peer browse (powers the header switcher) — begins querying immediately
+                // and keeps the roster fresh in the background, so a UI read is instant + complete.
+                browsing = true
+                runCatching { dns.addServiceListener(Config.MDNS_SERVICE_TYPE, peerListener) }
+                // Periodic re-browse: dns.list resolves each service fully (incl. TXT), so this refreshes names
+                // and fills any TXT missed during a congested (whole-fleet-restart) window. Merges with the
+                // don't-downgrade rule in record(), so it only closes gaps and never flaps a good name.
+                val generation = browseGeneration.incrementAndGet()
+                lateinit var worker: Thread
+                worker = Thread {
+                    while (mdnsRunCurrent(browseGeneration, generation, browsing, jmdns === dns)) {
+                        try { Thread.sleep(REFRESH_MS) } catch (e: InterruptedException) { break }
+                        if (!mdnsRunCurrent(browseGeneration, generation, browsing, jmdns === dns)) break
+                        val cost = FeatureCosts.registry.span(FeatureCostOperation.MDNS_PEER_REFRESH)
+                        try {
+                            val services = dns.list(Config.MDNS_SERVICE_TYPE, LIST_MS)?.toList().orEmpty()
+                            cost.work(units = services.size.toLong())
+                            if (!mdnsRunCurrent(browseGeneration, generation, browsing, jmdns === dns)) {
+                                cost.outcome(FeatureCostOutcome.CANCELLED)
+                                break
+                            }
+                            services.forEach { record(it, it.name ?: "") }
+                        } catch (failure: Exception) {
+                            cost.outcome(FeatureCostOutcome.FAILURE)
+                        } finally {
+                            cost.close()
+                        }
+                    }
+                    if (refreshThread === worker) refreshThread = null
+                }.apply { isDaemon = true; name = "mdns-peer-refresh" }
+                refreshThread = worker
+                worker.start()
+                Log.i(TAG, "advertising ${Config.MDNS_SERVICE_TYPE} as $runtimePanelId @ $addr:$runtimeHttpPort")
+            } catch (e: Exception) {
+                Log.w(TAG, "mDNS advertise failed", e)
+                stopResources()
+            }
         }
     }
 
-    fun stop() {
+    /** Stop the current advertisement while still allowing a later network-recovery restart. */
+    fun stop() = ownerGate.stop(::stopResources)
+
+    /** Permanently close this runtime generation so a late recovery callback cannot resurrect it. */
+    fun retire() = ownerGate.retire(::stopResources)
+
+    private fun stopResources() {
         browsing = false
+        browseGeneration.incrementAndGet()
+        refreshThread?.interrupt()
+        refreshThread = null
+        resolver?.shutdownNow()
+        resolver = null
         runCatching { jmdns?.removeServiceListener(Config.MDNS_SERVICE_TYPE, peerListener) }
         peerMap.clear()
         runCatching { jmdns?.unregisterAllServices() }
@@ -153,9 +222,9 @@ class MdnsAdvertiser(private val context: Context, private val config: Config) {
      * (e.g. HA Core terminating TLS on :443, or behind a reverse proxy), so callers never have to guess a
      * port/scheme. Null if no HA service is found or it advertises no URL. Blocking; call off the main thread.
      */
-    fun discoverHaBaseUrl(timeoutMs: Long = 4000): String? {
+    fun discoverHaBaseUrl(configuredBroker: String, timeoutMs: Long = 4000): String? {
         val dns = jmdns ?: return null
-        val brokerIps = brokerHostIps() // all of the broker host's addresses (v4 AND v6) — see below
+        val brokerIps = brokerHostIps(configuredBroker) // all of the broker host's addresses (v4 AND v6) — see below
         val url = runCatching {
             val svcs = dns.list("_home-assistant._tcp.local.", timeoutMs)?.toList() ?: emptyList()
             // The panel's HA is the one hosting its MQTT broker. Match the configured broker by IP — against
@@ -164,7 +233,7 @@ class MdnsAdvertiser(private val context: Context, private val config: Config) {
             // wrong one. Else fall back to whichever HA has :1883 open; else give up rather than guess.
             val pick = svcs.firstOrNull { s ->
                 s.inetAddresses?.any { (it.hostAddress?.substringBefore('%')) in brokerIps } == true
-            } ?: if (config.mqttBroker.isBlank()) {
+            } ?: if (configuredBroker.isBlank()) {
                 // No explicit broker → auto-discover: the local HA that runs the broker (:1883 open).
                 svcs.firstOrNull { s -> s.inet4Addresses?.firstOrNull()?.hostAddress?.let { mqttPortOpen(it) } == true }
             } else {
@@ -220,13 +289,13 @@ class MdnsAdvertiser(private val context: Context, private val config: Config) {
     /**
      * The LAN ha-paneld roster (`_ha-paneld._tcp.local.`) for the header panel switcher — a cheap,
      * non-blocking snapshot of [peerMap], which [peerListener] keeps converged + fresh in the background.
-     * This panel's own advertised service is included and [Peer.self]-marked; self is re-evaluated against
-     * the CURRENT identity so a reconfigure between resolve and read can't mis-mark it. Never throws.
+     * This panel's own advertised service is included and [Peer.self]-marked against this advertiser's
+     * immutable runtime identity, so a newer config cannot relabel the retiring generation. Never throws.
      */
     fun browsePeers(): List<Peer> {
-        val selfId = config.panelId
+        val selfId = runtimePanelId
         val selfIp = localIpv4()
-        val selfName = config.friendlyName.ifBlank { selfId }
+        val selfName = runtimeFriendlyName.ifBlank { selfId }
         return dedupePeers(
             peerMap.values.map {
                 val self = it.panelId == selfId || (it.ip != null && it.ip == selfIp)
@@ -239,8 +308,8 @@ class MdnsAdvertiser(private val context: Context, private val config: Config) {
     }
 
     /** All of the configured MQTT broker host's IP addresses (v4 + v6), to match against HA mDNS records. */
-    private fun brokerHostIps(): Set<String> = runCatching {
-        val host = config.mqttBroker.substringAfter("://").substringBefore(":").substringBefore("/").trim()
+    private fun brokerHostIps(configuredBroker: String): Set<String> = runCatching {
+        val host = configuredBroker.substringAfter("://").substringBefore(":").substringBefore("/").trim()
         if (host.isBlank()) emptySet()
         else java.net.InetAddress.getAllByName(host).mapNotNull { it.hostAddress?.substringBefore('%') }.toSet()
     }.getOrDefault(emptySet())
@@ -259,6 +328,9 @@ class MdnsAdvertiser(private val context: Context, private val config: Config) {
     companion object {
         private const val TAG = "ha-paneld/mdns"
         private const val RESOLVE_MS = 2500L // per-peer mDNS resolve budget (off the JmDNS thread)
+        private const val RESOLVE_WORKERS = 2
+        private const val RESOLVE_QUEUE = 32
+        private const val MAX_PEERS = 64
         private const val REFRESH_MS = 60_000L // periodic re-browse interval (name refresh / gap fill)
         private const val LIST_MS = 3000L // dns.list resolve budget per refresh sweep
         private const val HA_SERVICE_TYPE = "_home-assistant._tcp.local."
@@ -266,6 +338,37 @@ class MdnsAdvertiser(private val context: Context, private val config: Config) {
         private const val MAX_HA_RECORDS = 16
     }
 }
+
+/**
+ * Serializes a restartable resource's start/stop boundary and adds a terminal retirement fence.
+ * A start already in progress finishes before retirement cleans it up; starts arriving after retirement
+ * are rejected. This is deliberately independent of thread interruption, which blocking network code may
+ * ignore, and prevents an obsolete runtime callback from recreating resources after replacement teardown.
+ */
+internal class RestartableOwnerGate {
+    private val lock = Any()
+    private var retired = false
+
+    fun start(block: () -> Unit): Boolean = synchronized(lock) {
+        if (retired) return@synchronized false
+        block()
+        true
+    }
+
+    fun stop(block: () -> Unit) = synchronized(lock) { block() }
+
+    fun retire(block: () -> Unit) = synchronized(lock) {
+        retired = true
+        block()
+    }
+}
+
+internal fun mdnsRunCurrent(
+    generation: AtomicLong,
+    expected: Long,
+    browsing: Boolean,
+    ownsResolver: Boolean,
+): Boolean = browsing && ownsResolver && generation.get() == expected
 
 /** Validated identity-bearing subset of one resolved Home Assistant zeroconf record. */
 internal data class HaTxtRecord(

@@ -10,30 +10,33 @@ package io.github.maxlyth.hapaneld.util
  */
 class Cached<T : Any>(
     private val ttlMs: Long,
+    private val nowMs: () -> Long = { System.nanoTime() / 1_000_000L },
     private val supplier: () -> T,
 ) {
     @Volatile private var value: T? = null
-    @Volatile private var builtAt = 0L
+    @Volatile private var builtAt = Long.MIN_VALUE
     private val lock = Any()
+
+    init { require(ttlMs >= 0L) }
 
     fun peek(): T? = value
 
     /** Age of the cached value; MAX_VALUE when never built. Lets callers do stale-while-revalidate. */
-    fun ageMs(): Long = if (value == null) Long.MAX_VALUE else System.currentTimeMillis() - builtAt
+    fun ageMs(): Long = ageAt(nowMs())
 
     fun get(): T {
-        value?.let { if (System.currentTimeMillis() - builtAt < ttlMs) return it }
+        value?.let { if (ageAt(nowMs()) < ttlMs) return it }
         synchronized(lock) {
-            value?.let { if (System.currentTimeMillis() - builtAt < ttlMs) return it }
+            value?.let { if (ageAt(nowMs()) < ttlMs) return it }
             val built = supplier()
             value = built
-            builtAt = System.currentTimeMillis()
+            builtAt = nowMs()
             return built
         }
     }
 
     fun invalidate() {
-        builtAt = 0L
+        builtAt = Long.MIN_VALUE
     }
 
     /** Prime the cache with a known value (fresh). Use after a write whose result is known, so the UI
@@ -41,7 +44,13 @@ class Cached<T : Any>(
     fun set(v: T) {
         synchronized(lock) {
             value = v
-            builtAt = System.currentTimeMillis()
+            builtAt = nowMs()
         }
+    }
+
+    private fun ageAt(now: Long): Long {
+        val built = builtAt
+        if (value == null || built == Long.MIN_VALUE || now < built) return Long.MAX_VALUE
+        return now - built
     }
 }

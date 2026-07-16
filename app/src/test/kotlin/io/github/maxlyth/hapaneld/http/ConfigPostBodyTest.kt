@@ -7,6 +7,7 @@ import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.Parameters
 import io.ktor.http.content.OutgoingContent
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.post
@@ -79,8 +80,44 @@ class ConfigPostBodyTest {
             source.indexOf("private suspend fun handleConfigPost(call: ApplicationCall)"),
             source.indexOf("private fun configSchemaJson()"),
         )
-        assertTrue(handler.contains("val p = receiveBoundedConfigParameters(call) ?: return"))
+        val receive = handler.indexOf("receiveBoundedConfigParameters(call) ?: return")
+        val validation = handler.indexOf("normalizeConfigPostParameters(received)")
         assertFalse(handler.contains("call.receiveParameters()"))
+        val mutation = handler.indexOf("config.applyBatch")
+        assertTrue(receive >= 0)
+        assertTrue(validation > receive)
+        assertTrue(mutation > validation)
+    }
+
+    @Test fun `direct config admission normalizes every registered value before mutation`() {
+        val result = normalizeConfigPostParameters(Parameters.build {
+            append("friendly_name", "  Hall Panel  ")
+            append("dashboard_zoom", "125")
+            append("dashboard_fullscreen", "on")
+            append("ha_expose_wake_on_wave", "0")
+            append("tame_vendor_packages", "com.vendor.one, com.vendor.two com.vendor.one")
+            append("ha_token_expiry", "42")
+        }) as ConfigPostParameters.Ok
+        assertEquals("Hall Panel", result.values["friendly_name"])
+        assertEquals("true", result.values["dashboard_fullscreen"])
+        assertEquals("false", result.values["ha_expose_wake_on_wave"])
+        assertEquals("com.vendor.one com.vendor.two", result.values["tame_vendor_packages"])
+        assertEquals("42", result.values["ha_token_expiry"])
+    }
+
+    @Test fun `direct config admission rejects invalid or amplifying values atomically`() {
+        listOf(
+            Parameters.build { append("friendly_name", "x".repeat(129)) },
+            Parameters.build { append("dashboard_zoom", "301") },
+            Parameters.build { append("dashboard_fullscreen", "maybe") },
+            Parameters.build { append("ha_expose_missing", "true") },
+            Parameters.build { append("tame_vendor_packages", "com.good;reboot") },
+            Parameters.build { append("ha_token_expiry", "-1") },
+            Parameters.build { append("typo_setting", "true") },
+            Parameters.build { append("friendly_name", "one"); append("friendly_name", "two") },
+        ).forEach { parameters ->
+            assertTrue(normalizeConfigPostParameters(parameters) is ConfigPostParameters.Bad)
+        }
     }
 
     private fun io.ktor.server.routing.Route.installConfigReader(path: String) {

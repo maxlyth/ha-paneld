@@ -3,9 +3,25 @@ package io.github.maxlyth.hapaneld.util
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.ByteArrayInputStream
+import org.junit.Assert.assertThrows
 
 class HaLinkPolicyTest {
+    @Test fun websocketResolutionIsBoundedForUntrustedConfiguredEndpoints() {
+        assertTrue(HaLink.MAX_WS_FRAME_BYTES in 1L..(32L * 1024L * 1024L))
+        assertTrue(HaLink.WS_RESOLUTION_DEADLINE_MS in 1_000L..30_000L)
+    }
+
+    @Test fun httpResolutionResponsesAreBoundedBeforeTextDecoding() {
+        assertTrue(HaLink.MAX_HTTP_RESPONSE_BYTES in 1L..(4L * 1024L * 1024L))
+        assertEquals("{}", HaLink.readHttpBody(ByteArrayInputStream("{}".toByteArray())))
+        assertThrows(ByteLimitExceeded::class.java) {
+            HaLink.readHttpBody(ByteArrayInputStream(ByteArray(HaLink.MAX_HTTP_RESPONSE_BYTES.toInt() + 1)))
+        }
+    }
+
     @Test fun `resolution target retains the exact native base path and normalizes identity`() {
         assertEquals(
             "v1:25:https://native.example/ha:wall_panel",

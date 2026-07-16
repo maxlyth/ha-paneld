@@ -143,6 +143,10 @@ data class SettingSpec(
     val min: Double? = null,
     val max: Double? = null,
     val step: Double? = null,
+    // Bound persisted text independently of the enclosing request. A single short identity value is
+    // repeated across many MQTT discovery documents, so the HTTP body limit alone is not a useful
+    // amplification bound. Individual specs may tighten this conservative default.
+    val maxChars: Int = 16 * 1024,
     val options: List<String> = emptyList(), // ENUM choices
     val picker: String? = null,              // dynamic picker for a STRING field ("package" → installed-apps dropdown)
     val ha: HaEntity? = null,                // discovery descriptor, or null if never an HA entity

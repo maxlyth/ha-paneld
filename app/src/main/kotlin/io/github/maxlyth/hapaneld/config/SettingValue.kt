@@ -30,7 +30,12 @@ object SettingValue {
                     ?: return Validation.Bad("${spec.key}: must be one of ${spec.options.joinToString(", ")}")
                 Validation.Ok(match)
             }
-            SettingType.STRING, SettingType.PASSWORD -> Validation.Ok(v)
+            SettingType.STRING, SettingType.PASSWORD -> {
+                if (v.length > spec.maxChars) {
+                    return Validation.Bad("${spec.key}: must be at most ${spec.maxChars} characters")
+                }
+                Validation.Ok(v)
+            }
         }
         if (typed is Validation.Bad) return typed
         // Layer the spec's own validator on the type-normalized value.

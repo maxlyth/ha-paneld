@@ -71,6 +71,32 @@ class EntityLearningManagerSafetyTest {
         }
     }
 
+    @Test fun stateResponseByteCountingDoesNotRetainAnotherPayloadCopy() {
+        val payload = """[{"entity_id":"sensor.room","state":"21","attributes":{}}]""".toByteArray()
+        val counted = CountingInputStream(ByteArrayInputStream(payload))
+        assertEquals(1, readHaStates(counted).size)
+        assertEquals(payload.size.toLong(), counted.bytesRead)
+    }
+
+    @Test fun streamingStateReaderHandlesEscapesNumbersAndNestedSkippedValues() {
+        val payload = """[{"ignored":{"nested":[1,true,null,{"value":"discard"}]},"attributes":{"unit":"C","friendly_name":"Room \u2603"},"state":21.5,"entity_id":"sensor.room"}]"""
+
+        assertEquals(
+            listOf(EntityCatalogStore.StateRow("sensor.room", "21.5", "Room ☃")),
+            readHaStates(ByteArrayInputStream(payload.toByteArray())),
+        )
+    }
+
+    @Test fun streamingStateReaderRejectsOversizeFieldsAndTrailingDocuments() {
+        val limits = HaStatesReadLimits(maxEntityIdChars = 8)
+        assertThrows(IllegalStateException::class.java) {
+            readHaStates(ByteArrayInputStream("""[{"entity_id":"sensor.identifier_too_long","state":"on"}]""".toByteArray()), limits)
+        }
+        assertThrows(IllegalStateException::class.java) {
+            readHaStates(ByteArrayInputStream("[]{}".toByteArray()))
+        }
+    }
+
     private fun state(
         origin: String = "https://ha.example",
         instanceKey: String = "instance-a",

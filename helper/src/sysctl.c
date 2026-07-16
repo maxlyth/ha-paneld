@@ -1,4 +1,5 @@
 #include "sysctl.h"
+#include "companion.h"
 #include "sysexec.h"
 #include "util.h"
 
@@ -127,17 +128,51 @@ static int set_pkg_enabled(const char *pkg, int enabled) {
     return command_ok(sysexec_run(cmd)) ? 0 : -1;
 }
 
-// Grant/deny a package the SYSTEM_ALERT_WINDOW (floating-overlay) app-op. `deny` strips a vendor
-// app's ability to draw a widget over the dashboard; `allow` restores it. Deny refused for critical
-// packages; any mode other than deny/allow is rejected.
+// Read or set a package's SYSTEM_ALERT_WINDOW (floating-overlay) app-op. Taming records the exact
+// prior mode before denying it, so undo can restore default/ignore/foreground rather than blindly
+// granting a permission the package did not have. Restrictive modes remain refused for critical apps.
+static int valid_overlay_mode(const char *mode) {
+    return strcmp(mode, "allow") == 0 || strcmp(mode, "deny") == 0 ||
+           strcmp(mode, "ignore") == 0 || strcmp(mode, "default") == 0 ||
+           strcmp(mode, "foreground") == 0;
+}
+
 static int set_overlay(const char *pkg, const char *mode) {
-    if (!valid_pkg(pkg)) return -1;
-    int deny = strcmp(mode, "deny") == 0;
-    if (!deny && strcmp(mode, "allow") != 0) return -1;
-    if (deny && is_critical_pkg(pkg)) return -1;
+    if (!valid_pkg(pkg) || !valid_overlay_mode(mode)) return -1;
+    if (is_critical_pkg(pkg) && strcmp(mode, "allow") != 0 && strcmp(mode, "default") != 0) return -1;
     char cmd[256];
     snprintf(cmd, sizeof cmd, "appops set %s SYSTEM_ALERT_WINDOW %s >/dev/null 2>&1", pkg, mode);
     return command_ok(sysexec_run(cmd)) ? 0 : -1;
+}
+
+static int get_overlay(const char *pkg, char *out, size_t outsz) {
+    if (!valid_pkg(pkg)) return -1;
+    char cmd[256];
+    snprintf(cmd, sizeof cmd, "appops get %s SYSTEM_ALERT_WINDOW 2>/dev/null", pkg);
+    FILE *p = sysexec_popen_r(cmd);
+    if (!p) return -1;
+    char mode[16] = "";
+    char line[256];
+    while (fgets(line, sizeof line, p)) {
+        char *op = strstr(line, "SYSTEM_ALERT_WINDOW");
+        if (!op) continue;
+        char *colon = strchr(op, ':');
+        if (!colon) continue;
+        colon++;
+        while (*colon == ' ' || *colon == '\t') colon++;
+        size_t n = strcspn(colon, " ;\t\r\n");
+        if (n == 0 || n >= sizeof mode) continue;
+        memcpy(mode, colon, n);
+        mode[n] = '\0';
+        if (!valid_overlay_mode(mode)) mode[0] = '\0';
+        else break;
+    }
+    int status = sysexec_pclose(p);
+    if (!command_ok(status)) return -1;
+    // A successful query with no explicit entry means the package is using the platform default.
+    if (mode[0] == '\0') strcpy(mode, "default");
+    snprintf(out, outsz, "MODE=%s\n", mode);
+    return 0;
 }
 
 // Set the default HOME (launcher) to [comp] (pkg/cls). ha-paneld re-asserts the dashboard app as the
@@ -191,15 +226,35 @@ static void screencap_to(int fd) {
 }
 
 void cmd_reload(conn_ctx *ctx, const char *args) {
-    char pkg[128] = "";
-    sscanf(args, "%127s", pkg);
-    reply(ctx->fd, reload_pkg(pkg) == 0 ? "OK\n" : "ERR\n");
+    char pkg[128] = "", extra[2] = "";
+    if (sscanf(args, "%127s %1s", pkg, extra) != 1) {
+        reply(ctx->fd, "ERR\n");
+        return;
+    }
+    int guard = companion_guard_package_launch(pkg);
+    if (guard == COMPANION_GUARD_BUSY) {
+        reply(ctx->fd, "BUSY\n");
+        return;
+    }
+    int result = reload_pkg(pkg);
+    companion_guard_release(guard);
+    reply(ctx->fd, result == 0 ? "OK\n" : "ERR\n");
 }
 
 void cmd_start(conn_ctx *ctx, const char *args) {
-    char comp[160] = "";
-    sscanf(args, "%159s", comp);
-    reply(ctx->fd, start_component(comp) == 0 ? "OK\n" : "ERR\n");
+    char comp[160] = "", extra[2] = "";
+    if (sscanf(args, "%159s %1s", comp, extra) != 1) {
+        reply(ctx->fd, "ERR\n");
+        return;
+    }
+    int guard = companion_guard_component_launch(comp);
+    if (guard == COMPANION_GUARD_BUSY) {
+        reply(ctx->fd, "BUSY\n");
+        return;
+    }
+    int result = start_component(comp);
+    companion_guard_release(guard);
+    reply(ctx->fd, result == 0 ? "OK\n" : "ERR\n");
 }
 
 void cmd_sethome(conn_ctx *ctx, const char *args) {
@@ -272,9 +327,16 @@ void cmd_enable(conn_ctx *ctx, const char *args) {
 }
 
 void cmd_overlay(conn_ctx *ctx, const char *args) {
-    char pkg[128] = "", mode[8] = "";
-    sscanf(args, "%127s %7s", pkg, mode);
-    reply(ctx->fd, set_overlay(pkg, mode) == 0 ? "OK\n" : "ERR\n");
+    char pkg[128] = "", mode[16] = "", extra[2] = "";
+    int fields = sscanf(args, "%127s %15s %1s", pkg, mode, extra);
+    if (fields == 1) {
+        char out[32];
+        reply(ctx->fd, get_overlay(pkg, out, sizeof out) == 0 ? out : "ERR\n");
+    } else if (fields == 2) {
+        reply(ctx->fd, set_overlay(pkg, mode) == 0 ? "OK\n" : "ERR\n");
+    } else {
+        reply(ctx->fd, "ERR\n");
+    }
 }
 
 // Root install of an APK that ha-paneld has ALREADY downloaded to its own data dir AND verified (the
@@ -292,11 +354,69 @@ static char cancelled_installs[MAX_CANCELLED_INSTALLS][256];
 static size_t cancelled_install_count;
 
 #ifdef HAPANELD_TEST
-#define INSTALL_STREAM_STAGE "/tmp/hapaneld-helper-install-stream-test.apk"
+#define INSTALL_STAGE_PARENT "/tmp"
+#define INSTALL_STAGE_NAME   ".hapaneld-helper-test"
 #else
-#define INSTALL_STREAM_STAGE "/data/local/tmp/hapaneld-install.apk"
+#define INSTALL_STAGE_PARENT "/data/local"
+#define INSTALL_STAGE_NAME   ".hapaneld-helper"
 #endif
+#define INSTALL_STAGE_DIR INSTALL_STAGE_PARENT "/" INSTALL_STAGE_NAME
+#define INSTALL_APK_NAME "hapaneld-install.apk"
+#define INSTALL_STREAM_STAGE INSTALL_STAGE_DIR "/" INSTALL_APK_NAME
 #define MAX_INSTALL_STREAM_BYTES (1024ULL * 1024ULL * 1024ULL)
+
+/* Build a root-owned 0700 compartment below root-controlled /data/local (production). Opening the
+ * directory itself with O_NOFOLLOW rejects a preplanted link. Do not put this below /data/local/tmp:
+ * Android's shell user owns that parent and could rename even a root-owned child. Both streaming and
+ * legacy cp may safely reopen the stage pathname inside this protected directory. */
+static int open_install_dir(void) {
+    int parent = open(INSTALL_STAGE_PARENT, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    if (parent < 0) return -1;
+    struct stat parent_st;
+    if (fstat(parent, &parent_st) != 0 || !S_ISDIR(parent_st.st_mode) ||
+        (parent_st.st_uid != 0 && parent_st.st_uid != geteuid()) ||
+        ((parent_st.st_mode & (S_IWGRP | S_IWOTH)) != 0 && (parent_st.st_mode & S_ISVTX) == 0)) {
+        close(parent);
+        return -1;
+    }
+    if (mkdirat(parent, INSTALL_STAGE_NAME, 0700) != 0 && errno != EEXIST) {
+        close(parent);
+        return -1;
+    }
+    int fd = openat(parent, INSTALL_STAGE_NAME, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    close(parent);
+    if (fd < 0) return -1;
+    struct stat st;
+    if (fstat(fd, &st) != 0 || !S_ISDIR(st.st_mode) || st.st_uid != geteuid() || fchmod(fd, 0700) != 0) {
+        close(fd);
+        return -1;
+    }
+    return fd;
+}
+
+static int open_install_stage(void) {
+    int dir = open_install_dir();
+    if (dir < 0) return -1;
+    if (unlinkat(dir, INSTALL_APK_NAME, 0) != 0 && errno != ENOENT) {
+        close(dir);
+        return -1;
+    }
+    int fd = openat(
+        dir,
+        INSTALL_APK_NAME,
+        O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
+        0644
+    );
+    close(dir);
+    if (fd < 0) return -1;
+    struct stat st;
+    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) || st.st_uid != geteuid() || st.st_nlink != 1) {
+        close(fd);
+        unlink(INSTALL_STREAM_STAGE);
+        return -1;
+    }
+    return fd;
+}
 
 static int install_cancelled(const char *src) {
     for (size_t i = 0; i < cancelled_install_count; i++)
@@ -321,16 +441,22 @@ static int install_apk(const char *src) {
         pthread_mutex_unlock(&install_lock);
         return -1;
     }
+    int stage = open_install_stage();
+    if (stage < 0) {
+        pthread_mutex_unlock(&install_lock);
+        return -1;
+    }
+    close(stage);
     char cmd[600];
     snprintf(cmd, sizeof cmd,
-        "cp '%s' /data/local/tmp/hapaneld-install.apk 2>/dev/null && chmod 644 /data/local/tmp/hapaneld-install.apk", src);
+        "cp '%s' " INSTALL_STREAM_STAGE " 2>/dev/null && chmod 644 " INSTALL_STREAM_STAGE, src);
     int result = -1;
     if (sysexec_run(cmd) == 0) {
-        int rc = sysexec_run("pm install -r -d /data/local/tmp/hapaneld-install.apk 2>&1 | grep -q Success");
+        int rc = sysexec_run("pm install -r -d " INSTALL_STREAM_STAGE " 2>&1 | grep -q Success");
         result = rc == 0 ? 0 : -1;
     }
     // Also remove a partial/stale destination when copy or chmod failed after creating it.
-    sysexec_run("rm -f /data/local/tmp/hapaneld-install.apk");
+    unlink(INSTALL_STREAM_STAGE);
     pthread_mutex_unlock(&install_lock);
     return result;
 }
@@ -396,7 +522,7 @@ void cmd_installstream(conn_ctx *ctx, const char *args) {
         return;
     }
 
-    int output = open(INSTALL_STREAM_STAGE, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+    int output = open_install_stage();
     if (output < 0 || fchmod(output, 0644) != 0) {
         if (output >= 0) close(output);
         unlink(INSTALL_STREAM_STAGE);

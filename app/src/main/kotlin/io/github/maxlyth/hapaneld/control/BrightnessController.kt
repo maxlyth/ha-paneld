@@ -8,6 +8,7 @@ import io.github.maxlyth.hapaneld.platform.Daemon
 import io.github.maxlyth.hapaneld.platform.RootShell
 import io.github.maxlyth.hapaneld.util.Cached
 import io.github.maxlyth.hapaneld.util.HelperClient
+import io.github.maxlyth.hapaneld.util.SuccessStickyProbe
 import java.io.File
 
 /**
@@ -29,18 +30,20 @@ class BrightnessController(
 ) : Backlight {
 
     private val hardwareWriter = BrightnessHardwareWriter(root, daemon)
+    private val writeSequencer = BrightnessWriteSequencer(::applyBrightnessUnserialized)
 
     fun canWrite(): Boolean = Settings.System.canWrite(context)
 
     // The hardware backlight node (path, max). Sonoff firmware idle-dims this sysfs node directly and does
     // NOT honour SCREEN_BRIGHTNESS, so we read + drive it to keep HA in sync with the real backlight (and
-    // to actually move it). Null → no node or no root → fall back to the Android setting. Discovered once.
-    private val backlight: BacklightNode? by lazy {
+    // to actually move it). Null → no node or no root → fall back to the Android setting. A successful
+    // discovery is sticky, while a transient boot/root failure retries under bounded backoff.
+    private val backlight = SuccessStickyProbe(probe = {
         val dir = root.runOutput("ls -d /sys/class/backlight/*/ 2>/dev/null | head -1")?.trim()
-        if (dir.isNullOrEmpty()) return@lazy null
-        val max = root.runOutput("cat ${dir}max_brightness 2>/dev/null")?.trim()?.toIntOrNull()
-        if (max == null || max <= 0) null else BacklightNode(dir, max)
-    }
+        val max = dir?.takeIf(String::isNotEmpty)
+            ?.let { root.runOutput("cat ${it}max_brightness 2>/dev/null")?.trim()?.toIntOrNull() }
+        if (dir.isNullOrEmpty() || max == null || max <= 0) null else BacklightNode(dir, max)
+    })
 
     /**
      * @param level 0–255. Switches the panel to manual brightness mode and applies [level], floored at
@@ -48,13 +51,13 @@ class BrightnessController(
      * blank + touch-dead. A deliberate screen-off is a separate operation via [ScreenController], which
      * uses [setBrightnessRaw] for its last-resort dim-to-0.
      */
-    override fun setBrightness(level: Int) = applyBrightness(level.coerceIn(MIN_VISIBLE, 255))
+    override fun setBrightness(level: Int) = writeSequencer.write(level.coerceIn(MIN_VISIBLE, 255))
 
     /** Apply a raw level with NO minimum floor (0 allowed). For [ScreenController]'s screen-off fallback
      *  only — every other caller must use [setBrightness] to preserve the never-blank guarantee. */
-    override fun setBrightnessRaw(level: Int) = applyBrightness(level.coerceIn(0, 255))
+    override fun setBrightnessRaw(level: Int) = writeSequencer.write(level.coerceIn(0, 255))
 
-    private fun applyBrightness(v: Int) {
+    private fun applyBrightnessUnserialized(v: Int) {
         try {
             Settings.System.putInt(
                 context.contentResolver,
@@ -72,7 +75,7 @@ class BrightnessController(
         }
         // Also drive the real hardware node. A discovered su path is only a candidate: its write must
         // succeed, otherwise the helper gets the same operation rather than being masked by stale metadata.
-        when (hardwareWriter.write(v, backlight)) {
+        when (hardwareWriter.write(v, backlight.get())) {
             BrightnessWriteRoute.SU -> Log.d(TAG, "hardware brightness -> $v (su)")
             BrightnessWriteRoute.HELPER -> Log.d(TAG, "hardware brightness -> $v (helper)")
             BrightnessWriteRoute.NONE -> Unit // Android setting is the legitimate actuator on many panels.
@@ -85,7 +88,7 @@ class BrightnessController(
     // makes effective reporting work on daemon-only panels (TPA10) whose firmware also moves the
     // backlight behind SCREEN_BRIGHTNESS's back. Verified by actually reading during discovery
     // (canRead() only checks DAC; SELinux denials surface as the read throwing).
-    private val readNode: Pair<File, Int>? by lazy {
+    private val readNode = SuccessStickyProbe(probe = {
         runCatching {
             File("/sys/class/backlight").listFiles()?.sortedBy { it.name }?.firstNotNullOfOrNull { d ->
                 val max = runCatching { File(d, "max_brightness").readText().trim().toIntOrNull() }.getOrNull()
@@ -94,7 +97,7 @@ class BrightnessController(
                 if (max != null && max > 0 && probe != null) f to max else null
             }
         }.getOrNull()
-    }
+    })
 
     // Effective reads are cheap as plain files but an su round-trip on the fallback path, and callers
     // include per-tick reconciles and UI polls — cache briefly; writes invalidate so a fresh set reads back.
@@ -102,7 +105,7 @@ class BrightnessController(
 
     /** Sysfs actual_brightness scaled to 0–255 (plain file read, else su), or -1 when unavailable. */
     private fun readEffective(): Int {
-        readNode?.let { (f, max) ->
+        readNode.get()?.let { (f, max) ->
             runCatching { f.readText().trim().toIntOrNull() }.getOrNull()?.let {
                 return (it.toLong() * 255 / max).toInt().coerceIn(0, 255)
             }
@@ -111,7 +114,7 @@ class BrightnessController(
         parseBacklightReading(daemon.send("BLREAD"))?.let {
             return (it.actual.toLong() * 255 / it.maximum).toInt().coerceIn(0, 255)
         }
-        backlight?.let { node ->
+        backlight.get()?.let { node ->
             root.runOutput("cat ${node.directory}actual_brightness 2>/dev/null")?.trim()?.toIntOrNull()?.let {
                 return (it.toLong() * 255 / node.maximum).toInt().coerceIn(0, 255)
             }
@@ -173,4 +176,9 @@ class BrightnessController(
         private const val EFFECTIVE_TTL_MS = 5_000L // effective-backlight read cache (UI polls + reconcile ticks)
         private const val NEVER = Int.MAX_VALUE // ~24.8 days; the conventional "never auto-off" sentinel
     }
+}
+
+/** One ordering boundary around the complete framework + hardware brightness transaction. */
+internal class BrightnessWriteSequencer(private val actuator: (Int) -> Unit) {
+    @Synchronized fun write(level: Int) = actuator(level)
 }

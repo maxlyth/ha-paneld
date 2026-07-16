@@ -11,6 +11,9 @@ import android.util.Log
 import io.github.maxlyth.hapaneld.Config
 import io.github.maxlyth.hapaneld.control.Su
 import io.github.maxlyth.hapaneld.device.DeviceProfile
+import io.github.maxlyth.hapaneld.metrics.FeatureCostOperation
+import io.github.maxlyth.hapaneld.metrics.FeatureCostOutcome
+import io.github.maxlyth.hapaneld.metrics.FeatureCosts
 import io.github.maxlyth.hapaneld.util.SystemProps
 import kotlin.math.abs
 
@@ -214,10 +217,27 @@ class SensorReporter(
         val node = "/sys/class/gpio/gpio$gpio/value"
         proxPoller = Thread {
             while (run.isOpen()) {
-                val raw = when (Su.runOutput("cat $node 2>/dev/null")?.trim()) {
-                    "1" -> 1f
-                    "0" -> 0f
-                    else -> Float.NaN
+                val cost = FeatureCosts.registry.beginSynchronous(FeatureCostOperation.GPIO_PROXIMITY_POLL)
+                var outcome = FeatureCostOutcome.SUCCESS
+                val raw = try {
+                    when (Su.runOutput("cat $node 2>/dev/null")?.trim()) {
+                        "1" -> 1f
+                        "0" -> 0f
+                        else -> {
+                            outcome = FeatureCostOutcome.FAILURE
+                            Float.NaN
+                        }
+                    }
+                } catch (e: Exception) {
+                    outcome = FeatureCostOutcome.FAILURE
+                    Float.NaN
+                } finally {
+                    FeatureCosts.registry.finishSynchronous(
+                        FeatureCostOperation.GPIO_PROXIMITY_POLL,
+                        cost,
+                        outcome = outcome,
+                        workUnits = 1,
+                    )
                 }
                 // The root read can outlive stop(). Reject its result before it mutates replacement state.
                 if (!run.isOpen() || activeRun !== run) break
@@ -305,6 +325,6 @@ class SensorReporter(
 
     companion object {
         private const val TAG = "ha-paneld/sensors"
-        private const val PROX_POLL_MS = 500L // root-GPIO proximity poll cadence (wake-on-wave latency)
+        internal const val PROX_POLL_MS = 500L // root-GPIO proximity poll cadence (wake-on-wave latency)
     }
 }

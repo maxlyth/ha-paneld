@@ -256,6 +256,9 @@ static void test_dispatch_exact_match(void) {
 
     dispatch_reply("PING", out, sizeof out);
     CHECK(strcmp(out, "OK\n") == 0, "PING -> OK (got '%s')\n", out);
+    dispatch_reply("BUILDID", out, sizeof out);
+    CHECK(strcmp(out, "BUILDID development\n") == 0,
+          "host helper exposes its compile identity (got '%s')\n", out);
 
     // Case-sensitive, exact verb: lowercase and unknown verbs are ERR.
     dispatch_reply("ping", out, sizeof out);
@@ -285,6 +288,23 @@ static void test_dispatch_exact_match(void) {
     CHECK(strcmp(out, "ERR\n") == 0, "SETHOME metachar arg -> ERR (got '%s')\n", out);
     dispatch_reply("SETHOME", out, sizeof out);
     CHECK(strcmp(out, "ERR\n") == 0, "SETHOME no arg -> ERR (got '%s')\n", out);
+
+    // OVERLAY without a mode reads the exact app-op for durable tame/untame restoration.
+    sysexec_stub_reset();
+    sysexec_stub_add_popen("appops get", "SYSTEM_ALERT_WINDOW: ignore; time=+2h1m\n", 0);
+    dispatch_reply("OVERLAY com.example.app", out, sizeof out);
+    CHECK(strcmp(out, "MODE=ignore\n") == 0, "OVERLAY reads an explicit prior mode (got '%s')\n", out);
+    sysexec_stub_reset();
+    sysexec_stub_add_popen("appops get", "No operations.\n", 0);
+    dispatch_reply("OVERLAY com.example.app", out, sizeof out);
+    CHECK(strcmp(out, "MODE=default\n") == 0, "OVERLAY maps an absent op to platform default (got '%s')\n", out);
+    sysexec_stub_reset();
+    dispatch_reply("OVERLAY com.example.app", out, sizeof out);
+    CHECK(strcmp(out, "ERR\n") == 0, "OVERLAY reports query failure (got '%s')\n", out);
+    dispatch_reply("OVERLAY com.example.app allow trailing", out, sizeof out);
+    CHECK(strcmp(out, "ERR\n") == 0, "OVERLAY rejects trailing arguments (got '%s')\n", out);
+    dispatch_reply("OVERLAY com.android.systemui ignore", out, sizeof out);
+    CHECK(strcmp(out, "ERR\n") == 0, "OVERLAY refuses restrictive modes for critical packages (got '%s')\n", out);
 
     // APPSTATE: a missing probe is an execution failure, not proof that the process is dead.
     dispatch_reply("APPSTATE io.homeassistant.companion.android", out, sizeof out);
@@ -316,6 +336,9 @@ static void test_sysctl_execution_results(void) {
         { "DISABLE com.example.app", "pm disable-user" },
         { "ENABLE com.example.app", "pm enable" },
         { "OVERLAY com.example.app deny", "appops set" },
+        { "OVERLAY com.example.app default", "appops set" },
+        { "OVERLAY com.example.app ignore", "appops set" },
+        { "OVERLAY com.example.app foreground", "appops set" },
         { "SETHOME com.example/.Home", "set-home-activity" },
     };
     for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
@@ -396,21 +419,36 @@ static void test_sysctl_execution_results(void) {
 
     // INSTALL already had a two-stage result boundary; pin it to the same injectable seam.
     const char *install = "INSTALL /data/user/0/io.github.maxlyth.hapaneld/cache/update.apk";
+    const char *install_dir = "/tmp/.hapaneld-helper-test";
+    const char *install_dir_target = "/tmp/.hapaneld-helper-dir-target";
+    const char *install_stage = "/tmp/.hapaneld-helper-test/hapaneld-install.apk";
+    unlink(install_stage);
+    rmdir(install_dir);
+    rmdir(install_dir_target);
+    CHECK(mkdir(install_dir_target, 0700) == 0, "create install-directory symlink target\n");
+    CHECK(symlink(install_dir_target, install_dir) == 0, "preplant install-directory symlink\n");
+    sysexec_stub_reset();
+    dispatch_reply(install, out, sizeof out);
+    CHECK(strcmp(out, "ERR\n") == 0, "INSTALL rejects a preplanted root-stage directory symlink\n");
+    CHECK(sysexec_stub_count_run("cp '") == 0, "rejected directory symlink never reaches legacy cp\n");
+    unlink(install_dir);
+    rmdir(install_dir_target);
+
     sysexec_stub_reset();
     dispatch_reply(install, out, sizeof out);
     CHECK(strcmp(out, "OK\n") == 0, "INSTALL succeeds when staging and package install succeed (got '%s')\n", out);
-    CHECK(sysexec_stub_count_run("rm -f /data/local/tmp/hapaneld-install.apk") == 1,
+    CHECK(access(install_stage, F_OK) != 0,
           "INSTALL removes root staging after success\n");
     sysexec_stub_fail_run("cp '", 256);
     dispatch_reply(install, out, sizeof out);
     CHECK(strcmp(out, "ERR\n") == 0, "INSTALL reports staging failure (got '%s')\n", out);
-    CHECK(sysexec_stub_count_run("rm -f /data/local/tmp/hapaneld-install.apk") == 2,
+    CHECK(access(install_stage, F_OK) != 0,
           "INSTALL removes partial root staging after copy failure\n");
     sysexec_stub_reset();
     sysexec_stub_fail_run("pm install", 256);
     dispatch_reply(install, out, sizeof out);
     CHECK(strcmp(out, "ERR\n") == 0, "INSTALL reports package-manager failure (got '%s')\n", out);
-    CHECK(sysexec_stub_count_run("rm -f /data/local/tmp/hapaneld-install.apk") == 1,
+    CHECK(access(install_stage, F_OK) != 0,
           "INSTALL removes root staging after package-manager failure\n");
     sysexec_stub_reset();
 
@@ -428,7 +466,8 @@ static void test_sysctl_execution_results(void) {
     // INSTALLSTREAM waits for READY before the client sends binary bytes, then installs only after the
     // exact declared length reaches root-owned staging. Block pm install so the staged bytes can be
     // inspected before terminal cleanup.
-    const char *stream_stage = "/tmp/hapaneld-helper-install-stream-test.apk";
+    const char *stream_stage = install_stage;
+    const char *symlink_target = "/tmp/hapaneld-helper-install-stream-target";
     const char payload[] = { 0x50, 0x4b, 0x03, 0x04, 0x7f };
     unlink(stream_stage);
     sysexec_stub_reset();
@@ -471,6 +510,30 @@ static void test_sysctl_execution_results(void) {
     pthread_join(stream_thread, NULL);
     close(stream_sv[1]);
     CHECK(access(stream_stage, F_OK) != 0, "INSTALLSTREAM removes root staging after package-manager failure\n");
+
+    // A shell/Shizuku peer can preplant names in local/tmp. The helper replaces the link itself and
+    // must never truncate or write the target while staging a legitimate app request.
+    int target = open(symlink_target, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    CHECK(target >= 0 && write(target, "sentinel", 8) == 8, "create symlink target fixture\n");
+    close(target);
+    CHECK(symlink(symlink_target, stream_stage) == 0, "preplant install-stage symlink\n");
+    sysexec_stub_reset();
+    socketpair(AF_UNIX, SOCK_STREAM, 0, stream_sv);
+    stream = (stream_dispatch_job){ .fd = stream_sv[0], .line = "INSTALLSTREAM 5" };
+    pthread_create(&stream_thread, NULL, stream_dispatch_worker, &stream);
+    read_reply_line(stream_sv[1], out, sizeof out);
+    CHECK(strcmp(out, "READY\n") == 0, "safe staging replaces a preplanted symlink (got '%s')\n", out);
+    CHECK(write_all_fd(stream_sv[1], payload, sizeof payload) == 0, "symlink test writes full payload\n");
+    shutdown(stream_sv[1], SHUT_WR);
+    read_reply_line(stream_sv[1], out, sizeof out);
+    pthread_join(stream_thread, NULL);
+    close(stream_sv[1]);
+    char sentinel[9] = {0};
+    target = open(symlink_target, O_RDONLY);
+    CHECK(target >= 0 && read(target, sentinel, 8) == 8, "read symlink target fixture\n");
+    close(target);
+    CHECK(strcmp(sentinel, "sentinel") == 0, "INSTALLSTREAM never follows preplanted stage symlink\n");
+    unlink(symlink_target);
 
     // EOF before the declared length is terminal failure: no package install and no stale root file.
     sysexec_stub_reset();

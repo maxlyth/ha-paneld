@@ -5,11 +5,13 @@
         <exclude domain="sharedpref" path="ha-paneld-shizuku.xml" />
         <exclude domain="sharedpref" path="ha-paneld-device-profiles.xml" />
         <exclude domain="sharedpref" path="ha-paneld-profile-calibration.xml" />
+        <exclude domain="sharedpref" path="ha-paneld-controller-state.xml" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="sharedpref" path="ha-paneld.xml" />
         <exclude domain="sharedpref" path="ha-paneld-shizuku.xml" />
         <exclude domain="sharedpref" path="ha-paneld-device-profiles.xml" />
         <exclude domain="sharedpref" path="ha-paneld-profile-calibration.xml" />
+        <exclude domain="sharedpref" path="ha-paneld-controller-state.xml" />
     </device-transfer>
 </data-extraction-rules>

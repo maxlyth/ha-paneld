@@ -18,6 +18,11 @@ interface RootShell {
     /** Run [cmd] as root and return its raw stdout bytes (e.g. a screenshot), or null. */
     fun runBytes(cmd: String): ByteArray?
 
+    /** Bounded raw-byte variant. Implementations that can enforce the ceiling while streaming should
+     * override it; the default still prevents oversized data from escaping test/legacy fakes. */
+    fun runBytesBounded(cmd: String, maxBytes: Long): ByteArray? =
+        runBytes(cmd)?.takeIf { it.size.toLong() <= maxBytes }
+
     /** Submit [cmd] as root without waiting (for commands like `reboot` that kill the process).
      *  Returns true only when a root process was successfully started. */
     fun fireAndForget(cmd: String): Boolean

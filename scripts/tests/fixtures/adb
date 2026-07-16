@@ -2,6 +2,8 @@
 set -u
 
 printf 'adb %s\n' "$*" >> "${MOCK_CALL_LOG:?MOCK_CALL_LOG is required}"
+STATE_DIR="${MOCK_STATE_DIR:-$(dirname "$MOCK_CALL_LOG")}"
+[ -f "$STATE_DIR/installed-apk" ] || printf 'previous installed apk\n' > "$STATE_DIR/installed-apk"
 
 if [ "${1:-}" = "connect" ]; then
   exit 0
@@ -21,11 +23,27 @@ if [ "${1:-}" = "-s" ]; then
 fi
 
 case "${1:-}" in
+  root)
+    [ "${MOCK_ROOT:-1}" = 1 ]
+    ;;
+  push)
+    ;;
   pull)
-    printf 'mock installed apk\n' > "${3:?pull destination missing}"
+    [ "${MOCK_APK_QUERY:-ok}" = ok ] || exit 1
+    cp "$STATE_DIR/installed-apk" "${3:?pull destination missing}"
     ;;
   install)
-    printf 'Success\n'
+    if [ "${MOCK_APK_INSTALL:-ok}" = ok ]; then
+      cp "${!#}" "$STATE_DIR/installed-apk"
+      printf 'Success\n'
+    elif [ "${MOCK_APK_INSTALL:-ok}" = ambiguous_commit ]; then
+      cp "${!#}" "$STATE_DIR/installed-apk"
+      printf 'error: transport closed after install request\n' >&2
+      exit 1
+    else
+      printf '%s\n' "${MOCK_APK_INSTALL_OUTPUT:-Failure [INSTALL_FAILED_INSUFFICIENT_STORAGE]}"
+      exit 1
+    fi
     ;;
   disconnect)
     ;;
@@ -42,6 +60,10 @@ case "${1:-}" in
         if [ -n "${MOCK_SHIZUKU_VERSION_CODE:-}" ]; then
           printf 'package:/data/app/moe.shizuku.privileged.api/base.apk\n'
         fi
+        ;;
+      "pm path io.github.maxlyth.hapaneld")
+        [ "${MOCK_APK_QUERY:-ok}" = ok ] || exit 1
+        [ -f "$STATE_DIR/installed-apk" ] && printf 'package:/data/app/io.github.maxlyth.hapaneld/base.apk\n'
         ;;
       "test -f /storage/emulated/0/Android/data/moe.shizuku.privileged.api/start.sh")
         [ "${MOCK_SHIZUKU_START_SCRIPT:-ok}" = "ok" ]
@@ -62,6 +84,9 @@ case "${1:-}" in
         ;;
       "dumpsys package "*)
         printf 'versionName=%s\n' "${MOCK_INSTALLED_VERSION:-0.9.1}"
+        ;;
+      "getprop ro.product.cpu.abi")
+        printf '%s\n' "${MOCK_ABI:-arm64-v8a}"
         ;;
       "settings get secure enabled_accessibility_services")
         printf 'null\n'
@@ -92,6 +117,70 @@ case "${1:-}" in
           printf 'uid=0(root) gid=0(root)\n'
         else
           printf 'uid=2000(shell) gid=2000(shell)\n'
+        fi
+        ;;
+      'su 0 "'*'"')
+        if printf '%s' "$command_text" | grep -Fq 'id; id' && [ "${MOCK_SU_DIALECT:-join}" = join ]; then
+          [ "${MOCK_ROOT:-1}" = 1 ] && printf 'uid=0(root) gid=0(root)\n'
+        elif printf '%s' "$command_text" | grep -Fq '.hapaneld-helper-manual-upgrade' && \
+             printf '%s' "$command_text" | grep -Fq '[ ! -f'; then
+          [ "${MOCK_MANUAL_STALE:-0}" != 1 ]
+        elif printf '%s' "$command_text" | grep -Fq 'touch /system/.rw_probe'; then
+          if [ "${MOCK_SYSTEM_WRITABLE:-1}" = 1 ]; then
+            printf 'SYSTEM_RW\n'
+          else
+            printf 'SYSTEM_RO\n'
+            if [ "${MOCK_SYSTEMLESS_RUNNER:-1}" = 1 ]; then printf 'SYSTEMLESS_RUNNER\n'; else printf 'NO_SYSTEMLESS_RUNNER\n'; fi
+          fi
+        elif printf '%s' "$command_text" | grep -Eq 'hapaneld-helper\.txn install-(system|systemless)'; then
+          if [ -f "$STATE_DIR/stale-helper-transaction" ]; then
+            printf 'STALE_TRANSACTION\n'
+          else
+            [ "${MOCK_HELPER_INSTALL:-ok}" = ok ] && printf 'INSTALL_OK\n'
+            [ "${MOCK_HELPER_INSTALL:-ok}" != ok ] || : > "$STATE_DIR/active-helper-transaction"
+          fi
+        elif printf '%s' "$command_text" | grep -Eq 'hapaneld-helper\.txn rollback-(system|systemless)'; then
+          [ "${MOCK_ROLLBACK_RESULT:-ok}" = ok ] && printf 'ROLLBACK_RESTARTED\n'
+          rm -f "$STATE_DIR/stale-helper-transaction" "$STATE_DIR/active-helper-transaction"
+        elif printf '%s' "$command_text" | grep -Eq 'hapaneld-helper\.txn commit-(system|systemless)'; then
+          rm -f "$STATE_DIR/stale-helper-transaction" "$STATE_DIR/active-helper-transaction"
+        elif printf '%s' "$command_text" | grep -Eq 'hapaneld-helper\.txn status-(system|systemless)'; then
+          printf 'JOURNAL_VERSION=1\nJOURNAL_SCOPE=%s\nTARGET_APK_SHA256=%s\nTARGET_BUILD_ID=%s\nTARGET_HELPER_SHA256=%s\n' \
+            "${MOCK_STALE_SCOPE:-APK_HELPER}" "${MOCK_STALE_APK_SHA256:?}" \
+            "${MOCK_STALE_BUILD_ID:-${MOCK_HELPER_BUILD_ID:?}}" "${MOCK_STALE_HELPER_SHA256:-$(printf '%064d' 0)}"
+        elif printf '%s' "$command_text" | grep -Fq 'pidof hapaneld-helper'; then
+          [ "${MOCK_HELPER_START:-ok}" = ok ] && printf '4242\n'
+        fi
+        ;;
+      'su 0 sh -c "'*'"')
+        if printf '%s' "$command_text" | grep -Fq 'id; id' && [ "${MOCK_SU_DIALECT:-join}" = shc ]; then
+          [ "${MOCK_ROOT:-1}" = 1 ] && printf 'uid=0(root) gid=0(root)\n'
+        elif printf '%s' "$command_text" | grep -Fq '.hapaneld-helper-manual-upgrade' && \
+             printf '%s' "$command_text" | grep -Fq '[ ! -f'; then
+          [ "${MOCK_MANUAL_STALE:-0}" != 1 ]
+        elif printf '%s' "$command_text" | grep -Fq 'touch /system/.rw_probe'; then
+          if [ "${MOCK_SYSTEM_WRITABLE:-1}" = 1 ]; then
+            printf 'SYSTEM_RW\n'
+          else
+            printf 'SYSTEM_RO\n'
+            if [ "${MOCK_SYSTEMLESS_RUNNER:-1}" = 1 ]; then printf 'SYSTEMLESS_RUNNER\n'; else printf 'NO_SYSTEMLESS_RUNNER\n'; fi
+          fi
+        elif printf '%s' "$command_text" | grep -Eq 'hapaneld-helper\.txn install-(system|systemless)'; then
+          if [ -f "$STATE_DIR/stale-helper-transaction" ]; then
+            printf 'STALE_TRANSACTION\n'
+          else
+            [ "${MOCK_HELPER_INSTALL:-ok}" = ok ] && printf 'INSTALL_OK\n'
+            [ "${MOCK_HELPER_INSTALL:-ok}" != ok ] || : > "$STATE_DIR/active-helper-transaction"
+          fi
+        elif printf '%s' "$command_text" | grep -Eq 'hapaneld-helper\.txn rollback-(system|systemless)'; then
+          [ "${MOCK_ROLLBACK_RESULT:-ok}" = ok ] && printf 'ROLLBACK_RESTARTED\n'
+          rm -f "$STATE_DIR/stale-helper-transaction" "$STATE_DIR/active-helper-transaction"
+        elif printf '%s' "$command_text" | grep -Eq 'hapaneld-helper\.txn commit-(system|systemless)'; then
+          rm -f "$STATE_DIR/stale-helper-transaction" "$STATE_DIR/active-helper-transaction"
+        elif printf '%s' "$command_text" | grep -Eq 'hapaneld-helper\.txn status-(system|systemless)'; then
+          printf 'JOURNAL_VERSION=1\nJOURNAL_SCOPE=%s\nTARGET_APK_SHA256=%s\nTARGET_BUILD_ID=%s\nTARGET_HELPER_SHA256=%s\n' \
+            "${MOCK_STALE_SCOPE:-APK_HELPER}" "${MOCK_STALE_APK_SHA256:?}" \
+            "${MOCK_STALE_BUILD_ID:-${MOCK_HELPER_BUILD_ID:?}}" "${MOCK_STALE_HELPER_SHA256:-$(printf '%064d' 0)}"
         fi
         ;;
     esac

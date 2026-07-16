@@ -11,6 +11,10 @@ object EntityFilterProtocol {
     const val MAX_ENTITY_IDS = 50_000
     const val MAX_TEXT_FRAME_CHARS = 1_000_000
     const val MAX_API_BODY_BYTES = 4_000_000
+    internal const val TRAFFIC_SAMPLE_MS = 5_000
+    internal const val MAX_TRAFFIC_COUNT = 50_000_000L
+    internal const val MAX_TRAFFIC_CHARS = 1_000_000_000L
+    internal const val MAX_TRAFFIC_MICROS = 300_000_000L
     /** Home Assistant treats an empty entity_ids array as no filter. A syntactically valid sentinel
      * keeps its exact-ID filter active on every HA version which supports subscribe_entities, while
      * using a domain reserved to ha-paneld makes a real-state collision impractical. */
@@ -27,6 +31,14 @@ object EntityFilterProtocol {
 
     data class Mutation(val text: String, val modified: Boolean)
     data class Update(val enabled: Boolean?, val entityIds: List<String>?, val mode: String? = null)
+    data class TrafficBatch(
+        val sampleMs: Long,
+        val frames: Long,
+        val frameChars: Long,
+        val entityUpdates: Long,
+        val processingMicros: Long,
+        val droppedFrames: Long,
+    )
 
     /** Strict JSON body for the experimental runtime API; null fields mean "leave unchanged". */
     fun parseUpdate(text: String): Update {
@@ -110,33 +122,41 @@ object EntityFilterProtocol {
      * prototype are preserved so the frontend observes a normal WebSocket; auth and inbound frames never
      * cross a proxy or JavaScript parser.
      */
-    fun documentStartScript(haUrl: String, entityIds: Collection<String>): String {
+    fun documentStartScript(
+        haUrl: String,
+        entityIds: Collection<String>,
+        documentOrigins: Collection<String> = setOf(origin(haUrl)),
+    ): String {
         val upstream = URI(upstreamWebSocketUrl(haUrl))
-        val targetWsOrigin = JSONObject.quote(
-            origin(haUrl).replaceFirst("https://", "wss://").replaceFirst("http://", "ws://"),
-        )
+        val targetWsOrigins = JSONArray(documentOrigins.map(::origin).distinct().sorted().map {
+            it.replaceFirst("https://", "wss://").replaceFirst("http://", "ws://")
+        }).toString()
         val targetWsPath = JSONObject.quote(upstream.rawPath)
         val ids = JSONArray(normalize(entityIds)).toString()
         val emptySubscriptionEntityId = JSONObject.quote(EMPTY_SUBSCRIPTION_ENTITY_ID)
         val filterKeys = JSONArray(FILTER_KEYS.sorted()).toString()
         return """
             (()=>{
+              if(window.top&&window.top!==window)return;
               const Native=window.WebSocket;
               if(!Native||Native.__haPaneldEntityFilter)return;
-              const targetWsOrigin=$targetWsOrigin,targetWsPath=$targetWsPath,entityIds=$ids,emptySubscriptionEntityId=$emptySubscriptionEntityId,filterKeys=$filterKeys;
+              const targetWsOrigins=$targetWsOrigins,targetWsPath=$targetWsPath,entityIds=$ids,emptySubscriptionEntityId=$emptySubscriptionEntityId,filterKeys=$filterKeys;
               function FilteredWebSocket(url,protocols){
                 const socket=protocols===undefined?new Native(url):new Native(url,protocols);
                 try{
                   const u=new URL(String(url),location.href);
-                  if(u.origin===targetWsOrigin&&u.pathname===targetWsPath){
+                  if(targetWsOrigins.includes(u.origin)&&u.pathname===targetWsPath){
                     Object.defineProperty(socket,'send',{configurable:true,writable:true,value:function(data){
                       let outgoing=data;
                       if(typeof data==='string')try{
                         const message=JSON.parse(data);
-                        if(message&&message.type==='subscribe_entities'&&!filterKeys.some(key=>Object.prototype.hasOwnProperty.call(message,key))){
-                          message.entity_ids=entityIds.length?entityIds:[emptySubscriptionEntityId];
-                          outgoing=JSON.stringify(message);
-                          try{if(window.externalApp&&typeof window.externalApp.entityFilterSubscriptionModified==='function')window.externalApp.entityFilterSubscriptionModified();}catch(e){}
+                        if(message&&message.type==='subscribe_entities'){
+                          window.__haPaneldEntitySubscriptionId=message.id;
+                          if(!filterKeys.some(key=>Object.prototype.hasOwnProperty.call(message,key))){
+                            message.entity_ids=entityIds.length?entityIds:[emptySubscriptionEntityId];
+                            outgoing=JSON.stringify(message);
+                            try{if(window.externalApp&&typeof window.externalApp.entityFilterSubscriptionModified==='function')window.externalApp.entityFilterSubscriptionModified();}catch(e){}
+                          }
                         }
                       }catch(e){}
                       return Native.prototype.send.call(this,outgoing);
@@ -152,5 +172,126 @@ object EntityFilterProtocol {
               window.WebSocket=FilteredWebSocket;
             })();
         """.trimIndent()
+    }
+
+    /**
+     * Fixed-cardinality traffic observer for paired filter-on/filter-off measurements. It observes only
+     * the configured HA entity socket, retains no entity ids or message content, and crosses the native
+     * bridge once per bounded sample rather than once per frame. The script must be registered after the
+     * filter wrapper so it sees the effective outbound subscribe_entities command in either test arm.
+     */
+    fun trafficObserverDocumentStartScript(
+        haUrl: String,
+        documentOrigins: Collection<String> = setOf(origin(haUrl)),
+    ): String {
+        val upstream = URI(upstreamWebSocketUrl(haUrl))
+        val targetWsOrigins = JSONArray(documentOrigins.map(::origin).distinct().sorted().map {
+            it.replaceFirst("https://", "wss://").replaceFirst("http://", "ws://")
+        }).toString()
+        val targetWsPath = JSONObject.quote(upstream.rawPath)
+        return """
+            (()=>{
+              if(window.top&&window.top!==window)return;
+              if(window.__haPaneldEntityTraffic)return;
+              window.__haPaneldEntityTraffic=true;
+              const Parent=window.WebSocket,targetWsOrigins=$targetWsOrigins,targetWsPath=$targetWsPath,
+                maxFrameChars=$MAX_TEXT_FRAME_CHARS,maxCount=$MAX_TRAFFIC_COUNT,maxChars=$MAX_TRAFFIC_CHARS,
+                maxMicros=$MAX_TRAFFIC_MICROS,sampleMs=$TRAFFIC_SAMPLE_MS;
+              if(!Parent)return;
+              const now=()=>window.performance&&typeof window.performance.now==='function'?window.performance.now():0;
+              const sat=(left,right,limit)=>Math.min(limit,left+Math.max(0,right));
+              let frames=0,frameChars=0,entityUpdates=0,processingMs=0,droppedFrames=0,lastFlush=now();
+              function countOwn(value){
+                if(!value||typeof value!=='object')return;
+                for(const key in value)if(Object.prototype.hasOwnProperty.call(value,key))entityUpdates=sat(entityUpdates,1,maxCount);
+              }
+              function inspect(message,subscriptionId){
+                const effectiveId=subscriptionId===null||subscriptionId===undefined?window.__haPaneldEntitySubscriptionId:subscriptionId;
+                if(!message||message.id!==effectiveId||message.type!=='event'||!message.event)return;
+                countOwn(message.event.a);countOwn(message.event.c);
+              }
+              function TrafficWebSocket(url,protocols){
+                const socket=protocols===undefined?new Parent(url):new Parent(url,protocols);
+                try{
+                  const u=new URL(String(url),location.href);
+                  if(targetWsOrigins.includes(u.origin)&&u.pathname===targetWsPath){
+                    let entitySubscriptionId=null;
+                    const send=socket.send;
+                    Object.defineProperty(socket,'send',{configurable:true,writable:true,value:function(data){
+                      const started=now();
+                      try{
+                        if(typeof data==='string'&&data.length<=maxFrameChars){
+                          try{const message=JSON.parse(data);if(message&&message.type==='subscribe_entities')entitySubscriptionId=message.id}catch(e){}
+                        }
+                      }finally{processingMs=sat(processingMs,Math.max(0,now()-started),maxMicros/1000)}
+                      return send.call(this,data);
+                    }});
+                    socket.addEventListener('message',event=>{
+                      const started=now();
+                      try{
+                        if(typeof event.data!=='string')return;
+                        frames=sat(frames,1,maxCount);frameChars=sat(frameChars,event.data.length,maxChars);
+                        if(event.data.length>maxFrameChars){droppedFrames=sat(droppedFrames,1,maxCount);return}
+                        try{
+                          const decoded=JSON.parse(event.data);
+                          if(Array.isArray(decoded)){for(let i=0;i<decoded.length;i++)inspect(decoded[i],entitySubscriptionId)}
+                          else inspect(decoded,entitySubscriptionId);
+                        }catch(e){droppedFrames=sat(droppedFrames,1,maxCount)}
+                      }finally{processingMs=sat(processingMs,Math.max(0,now()-started),maxMicros/1000)}
+                    });
+                  }
+                }catch(e){}
+                return socket;
+              }
+              Object.setPrototypeOf(TrafficWebSocket,Parent);TrafficWebSocket.prototype=Parent.prototype;
+              for(const key of ['CONNECTING','OPEN','CLOSING','CLOSED'])Object.defineProperty(TrafficWebSocket,key,{value:Parent[key]});
+              window.WebSocket=TrafficWebSocket;
+              setInterval(()=>{
+                const current=now(),elapsed=Math.max(0,current-lastFlush);lastFlush=current;
+                const payload=[Math.min(maxCount,Math.round(elapsed)),frames,frameChars,entityUpdates,
+                  Math.min(maxMicros,Math.round(processingMs*1000)),droppedFrames].join(',');
+                frames=frameChars=entityUpdates=processingMs=droppedFrames=0;
+                try{if(window.externalApp&&typeof window.externalApp.entityFilterTrafficMetrics==='function')window.externalApp.entityFilterTrafficMetrics(payload)}catch(e){}
+              },sampleMs);
+            })();
+        """.trimIndent()
+    }
+
+    /** Parse the observer's numeric, label-free fixed-cardinality bridge envelope. */
+    fun parseTrafficBatch(text: String): TrafficBatch {
+        val values = LongArray(6)
+        var valueIndex = 0
+        var value = 0L
+        var hasDigit = false
+        require(text.isNotEmpty()) { "traffic batch is empty" }
+        for (char in text) {
+            if (char == ',') {
+                require(hasDigit) { "empty traffic field" }
+                require(valueIndex < values.lastIndex) { "too many traffic fields" }
+                values[valueIndex++] = value
+                value = 0L
+                hasDigit = false
+            } else {
+                require(char in '0'..'9') { "invalid traffic field" }
+                hasDigit = true
+                val digit = (char - '0').toLong()
+                value = if (value > (MAX_TRAFFIC_CHARS - digit) / 10L) {
+                    MAX_TRAFFIC_CHARS
+                } else {
+                    value * 10L + digit
+                }
+            }
+        }
+        require(hasDigit) { "empty traffic field" }
+        require(valueIndex == values.lastIndex) { "traffic batch must contain six fields" }
+        values[valueIndex] = value
+        return TrafficBatch(
+            sampleMs = values[0].coerceIn(0L, MAX_TRAFFIC_COUNT),
+            frames = values[1].coerceIn(0L, MAX_TRAFFIC_COUNT),
+            frameChars = values[2].coerceIn(0L, MAX_TRAFFIC_CHARS),
+            entityUpdates = values[3].coerceIn(0L, MAX_TRAFFIC_COUNT),
+            processingMicros = values[4].coerceIn(0L, MAX_TRAFFIC_MICROS),
+            droppedFrames = values[5].coerceIn(0L, MAX_TRAFFIC_COUNT),
+        )
     }
 }

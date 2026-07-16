@@ -8,6 +8,9 @@ import io.github.maxlyth.hapaneld.metrics.MetricSample
 import io.github.maxlyth.hapaneld.metrics.PanelMetrics
 import io.github.maxlyth.hapaneld.metrics.PerfDump
 import io.github.maxlyth.hapaneld.metrics.RamRingSink
+import io.github.maxlyth.hapaneld.metrics.FeatureCosts
+import io.github.maxlyth.hapaneld.metrics.FeatureCostOperation
+import io.github.maxlyth.hapaneld.metrics.FeatureCostOutcome
 import io.github.maxlyth.hapaneld.util.AndroidInput
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -90,7 +93,7 @@ object PerfReader {
             (++nextGeneration).also { generation = it }
         }
         val candidate = scope.launch {
-            val available = runCatching { Su.available() }.getOrDefault(false)
+            val available = runCatching { Su.availableIsolated() }.getOrDefault(false)
             ifCurrent(runGeneration) { rootOk = available } ?: return@launch
             while (isActive && isCurrent(runGeneration)) {
                 val now = android.os.SystemClock.elapsedRealtime()
@@ -161,7 +164,7 @@ object PerfReader {
 
     /** Latest sample + history FIFO + top-5 procs + render jank, as JSON, for `GET /perf`. */
     fun json(): String = synchronized(lock) {
-        """{"enabled":$enabled,$latestFields,"top":$topJson,"render":$renderJson,"builtin":${builtinJson()},"network":${networkJson()},"entityFilter":${EntityFilterTelemetry.json()},"hist":{"cpu":${histInts(CPU_KEY)},"ram":${histInts(RAM_KEY)},"gpu":${histInts(GPU_KEY)}}}"""
+        """{"enabled":$enabled,$latestFields,"top":$topJson,"render":$renderJson,"builtin":${builtinJson()},"network":${networkJson()},"entityFilter":${EntityFilterTelemetry.json()},"featureCosts":${FeatureCosts.json()},"hist":{"cpu":${histInts(CPU_KEY)},"ram":${histInts(RAM_KEY)},"gpu":${histInts(GPU_KEY)}}}"""
     }
 
     /** Absolute host-UID counters; harvesters take arm start/end deltas. -1 means unsupported. */
@@ -203,7 +206,7 @@ object PerfReader {
         val cmd = "ps -A -o PID,NAME 2>/dev/null | grep -i sandboxe | while read pid name; do " +
             "for t in /proc/\$pid/task/*; do IFS= read -r c < \$t/comm 2>/dev/null || continue; " +
             "if [ \"\$c\" = CrRendererMain ]; then IFS= read -r s < \$t/stat 2>/dev/null && echo \"\$pid \$s\"; fi; done; done; true"
-        val out = Su.runOutput(cmd)
+        val out = rootDiagnostic(cmd, 2L * 1024L * 1024L)
         val now = android.os.SystemClock.elapsedRealtime()
         val cur = HashMap<Int, Long>()
         var mainPct = -1.0
@@ -243,7 +246,10 @@ object PerfReader {
         var jankFields = ""
         val pkg = dashboardPkg.takeIf(AndroidInput::isPackage).orEmpty()
         if (pkg.isNotEmpty()) {
-            val g = Su.runOutput("dumpsys gfxinfo $pkg; dumpsys gfxinfo $pkg reset >/dev/null 2>&1; true")
+            val g = rootDiagnostic(
+                "dumpsys gfxinfo $pkg; dumpsys gfxinfo $pkg reset >/dev/null 2>&1; true",
+                1L * 1024L * 1024L,
+            )
             if (g != null) {
                 val tot = Regex("""Total frames rendered:\s*(\d+)""").find(g)?.groupValues?.get(1)?.toLongOrNull() ?: 0
                 if (tot > 0) {
@@ -271,7 +277,10 @@ object PerfReader {
      */
     private fun sampleTop(runGeneration: Long) {
         // `; true` so a vanished-pid `cat` (non-zero) doesn't null the whole capture.
-        val out = Su.runOutput("cat /proc/stat; echo @@; cat /proc/[0-9]*/stat 2>/dev/null; true") ?: return
+        val out = rootDiagnostic(
+            "cat /proc/stat; echo @@; cat /proc/[0-9]*/stat 2>/dev/null; true",
+            4L * 1024L * 1024L,
+        ) ?: return
         val parts = out.split("@@")
         if (parts.size < 2) return
         val cpuLine = parts[0].lineSequence().firstOrNull { it.startsWith("cpu ") } ?: return
@@ -362,7 +371,7 @@ object PerfReader {
         if (pids.isEmpty()) return emptyMap()
         val cmd = "for p in ${pids.joinToString(" ")}; do printf '%s\\t' \"\$p\"; " +
             "cat /proc/\$p/cmdline 2>/dev/null; printf '\\n'; done; true"
-        val out = Su.runOutput(cmd) ?: return emptyMap()
+        val out = rootDiagnostic(cmd, 256L * 1024L) ?: return emptyMap()
         val map = HashMap<Int, String>()
         for (line in out.lineSequence()) {
             val tab = line.indexOf('\t'); if (tab <= 0) continue
@@ -371,6 +380,22 @@ object PerfReader {
             if (name.isNotEmpty()) map[pid] = name
         }
         return map
+    }
+
+    private fun rootDiagnostic(command: String, maxBytes: Long): String? {
+        val cost = FeatureCosts.registry.span(FeatureCostOperation.PERF_ROOT_DIAGNOSTICS)
+        return try {
+            val output = Su.runOutputIsolatedBounded(command, maxBytes)
+            // Proc/dumpsys output is ASCII; character count is the byte workload without another array.
+            cost.work(units = 1, bytes = output?.length?.toLong() ?: 0L)
+            if (output == null) cost.outcome(FeatureCostOutcome.FAILURE)
+            output
+        } catch (error: Exception) {
+            cost.outcome(FeatureCostOutcome.FAILURE)
+            null
+        } finally {
+            cost.close()
+        }
     }
 
     /** Shorten Android "package:process:classname" cmdlines to just the package component — the extra

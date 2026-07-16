@@ -12,6 +12,7 @@ import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import org.json.JSONObject
 
 class RuntimeProfileRegistryTest {
     private lateinit var directory: File
@@ -59,6 +60,20 @@ class RuntimeProfileRegistryTest {
         assertNotNull(registry.exportProfile(second))
     }
 
+    @Test fun `failed catalog revision reservation cannot publish an imported file`() {
+        val registry = registry(mapOf("generic.yaml" to genericYaml()))
+        val raw = ProfileYaml.serialize(testProfileDocument(facts = facts))
+        val preview = registry.preview(raw)
+        val ref = preview.summary!!.ref
+        preferences.failNextPut()
+
+        val result = registry.importProfile(raw, preview.previewToken!!)
+
+        assertTrue(result is ProfileMutation.Rejected)
+        assertFalse(importedFile(ref).exists())
+        assertTrue(registry.list().none { it.ref == ref })
+    }
+
     @Test fun `activation preserves one step last known good and supports explicit rollback`() {
         val registry = registry(mapOf("generic.yaml" to genericYaml()))
         val ref = import(registry, ProfileYaml.serialize(testProfileDocument(facts = facts)))
@@ -97,6 +112,20 @@ class RuntimeProfileRegistryTest {
         assertEquals("generic", recovered.summary.ref.id)
         assertEquals(ProfileActivationPhase.ROLLED_BACK, registry.status().activation.phase)
         assertEquals(ProfileSelection.Auto, registry.status().selection)
+    }
+
+    @Test fun `failed unhealthy rollback remains safe and reports that recovery is not durable`() {
+        val registry = registry(mapOf("generic.yaml" to genericYaml()))
+        val ref = import(registry, ProfileYaml.serialize(testProfileDocument(facts = facts)))
+        registry.select(ProfileSelection.Pinned(ref), registry.status().catalogRevision)
+        assertEquals(ref, registry.resolveForStartup().summary.ref)
+        preferences.failNextPut()
+
+        val recovered = registry.resolveForStartup()
+
+        assertEquals("generic", recovered.summary.ref.id)
+        assertTrue(recovered.issues.any { it.severity == ProfileIssueSeverity.ERROR && "could not be persisted" in it.message })
+        assertEquals(ProfileActivationPhase.APPLYING, registry.status().activation.phase)
     }
 
     @Test fun `automatic bundled revision change uses health gate and retained rollback snapshot`() {
@@ -272,6 +301,88 @@ class RuntimeProfileRegistryTest {
         assertTrue(corrupt.status().issues.any { "compiled emergency" in it.message })
     }
 
+    @Test fun `startup does not read inactive imported revisions and admin list hydrates their issues`() {
+        val inactive = (0 until 20).map { index ->
+            val raw = "schema: [ # inactive-$index"
+            val ref = ProfileRef("community.example.inactive-$index", ProfileYaml.sha256(raw))
+            importedFile(ref).apply { parentFile!!.mkdirs() }.writeText(raw)
+            ref
+        }
+        val reads = mutableListOf<File>()
+        val registry = registry(mapOf("generic.yaml" to genericYaml())) { file ->
+            reads += file
+            file.readText()
+        }
+
+        val resolved = registry.resolveForStartup()
+
+        assertEquals("generic", resolved.summary.ref.id)
+        assertTrue(registry.markResolvedStartupHealthy())
+        assertTrue("inactive revisions read during startup: $reads", reads.isEmpty())
+
+        val listed = registry.list()
+
+        assertEquals(inactive.size, reads.size)
+        assertEquals(inactive.toSet(), reads.mapNotNull { expectedRefForTest(it) }.toSet())
+        assertEquals(inactive.size, listed.count { it.origin == ProfileOrigin.IMPORTED })
+        assertTrue(registry.status().issues.any { "catalog[" in it.path })
+    }
+
+    @Test fun `startup reads the pinned revision but leaves unrelated imports cold`() {
+        val selectedRaw = ProfileYaml.serialize(
+            testProfileDocument(id = "community.example.selected", facts = facts),
+        )
+        val selected = restore(selectedRaw)
+        repeat(12) { index ->
+            val raw = "schema: [ # unrelated-$index"
+            val ref = ProfileRef("community.example.unrelated-$index", ProfileYaml.sha256(raw))
+            importedFile(ref).apply { parentFile!!.mkdirs() }.writeText(raw)
+        }
+        preferences.put(
+            "selection" to "${selected.id}@${selected.revision}",
+            "activation_phase" to ProfileActivationPhase.ACTIVE.name,
+        )
+        val reads = mutableListOf<File>()
+        val registry = registry(mapOf("generic.yaml" to genericYaml())) { file ->
+            reads += file
+            file.readText()
+        }
+
+        val resolved = registry.resolveForStartup()
+
+        assertEquals(selected, resolved.summary.ref)
+        assertEquals(listOf(selected), reads.mapNotNull(::expectedRefForTest))
+    }
+
+    @Test fun `startup preloads last known good revision needed to recover an invalid active pin`() {
+        val invalid = restore(incompatibleImportedYaml())
+        val lkg = restore(
+            ProfileYaml.serialize(
+                testProfileDocument(id = "community.example.startup-lkg", facts = facts),
+            ),
+        )
+        val unrelatedRaw = "schema: [ # unrelated"
+        val unrelated = ProfileRef("community.example.unrelated", ProfileYaml.sha256(unrelatedRaw))
+        importedFile(unrelated).apply { parentFile!!.mkdirs() }.writeText(unrelatedRaw)
+        preferences.put(
+            "selection" to "${invalid.id}@${invalid.revision}",
+            "last_known_good" to "${lkg.id}@${lkg.revision}",
+            "activation_phase" to ProfileActivationPhase.ACTIVE.name,
+        )
+        val reads = mutableListOf<File>()
+        val registry = registry(mapOf("generic.yaml" to genericYaml())) { file ->
+            reads += file
+            file.readText()
+        }
+
+        val recovered = registry.resolveForStartup()
+
+        assertEquals(lkg, recovered.summary.ref)
+        assertEquals(setOf(invalid, lkg), reads.mapNotNull(::expectedRefForTest).toSet())
+        assertFalse(reads.any { expectedRefForTest(it) == unrelated })
+        assertTrue(recovered.issues.any { "incompatible" in it.message })
+    }
+
     @Test fun `incompatible imported revision remains listable exportable and deletable but cannot activate`() {
         val raw = incompatibleImportedYaml()
         val ref = restore(raw)
@@ -287,6 +398,18 @@ class RuntimeProfileRegistryTest {
         assertTrue(deleted is ProfileMutation.Success)
         assertNull(registry.exportProfile(ref))
         assertFalse(importedFile(ref).exists())
+    }
+
+    @Test fun `failed catalog revision reservation cannot delete an imported file`() {
+        val registry = registry(mapOf("generic.yaml" to genericYaml()))
+        val ref = import(registry, ProfileYaml.serialize(testProfileDocument(facts = facts)))
+        preferences.failNextPut()
+
+        val result = registry.deleteProfile(ref, registry.status().catalogRevision)
+
+        assertTrue(result is ProfileMutation.Rejected)
+        assertTrue(importedFile(ref).isFile)
+        assertNotNull(registry.exportProfile(ref))
     }
 
     @Test fun `active pin invalidated by core upgrade restores durable last known good`() {
@@ -337,13 +460,189 @@ class RuntimeProfileRegistryTest {
         assertNull(registry.exportProfile(ref))
     }
 
-    private fun registry(bundled: Map<String, String>) = RuntimeProfileRegistry(
+    @Test fun `full backup exports imported revisions deterministically with coherent identities`() {
+        val registry = registry(mapOf("generic.yaml" to genericYaml()))
+        val second = import(
+            registry,
+            ProfileYaml.serialize(testProfileDocument(id = "community.example.z", version = "1.0.0", facts = facts)),
+        )
+        val first = import(
+            registry,
+            ProfileYaml.serialize(testProfileDocument(id = "community.example.a", version = "1.0.0", facts = facts)),
+        )
+        registry.select(ProfileSelection.Pinned(second), registry.status().catalogRevision)
+        registry.resolveForStartup().activationGeneration!!.let(registry::markActivationHealthy)
+        registry.select(ProfileSelection.Pinned(first), registry.status().catalogRevision)
+        registry.resolveForStartup().activationGeneration!!.let(registry::markActivationHealthy)
+
+        val backup = registry.exportBackup()
+        val encoded = backup.toJson().toString()
+        val decoded = ProfileBackup.fromJson(JSONObject(encoded))
+
+        assertEquals(listOf(first, second), backup.revisions.map { it.ref })
+        assertEquals(ProfileSelection.Pinned(first), backup.selection)
+        assertEquals(first, backup.active)
+        assertEquals(ProfileSelection.Pinned(second), backup.lastKnownGood)
+        assertEquals(encoded, backup.toJson().toString())
+        assertTrue(decoded.issues.toString(), decoded.payload != null)
+        assertEquals(backup, decoded.payload)
+    }
+
+    @Test fun `restore imports revisions inertly before staging selection with current rollback target`() {
+        val target = registry(mapOf("generic.yaml" to genericYaml()))
+        val current = import(
+            target,
+            ProfileYaml.serialize(testProfileDocument(id = "community.example.current", facts = facts)),
+        )
+        target.select(ProfileSelection.Pinned(current), target.status().catalogRevision)
+        target.resolveForStartup().activationGeneration!!.let(target::markActivationHealthy)
+        val restoredRaw = ProfileYaml.serialize(
+            testProfileDocument(id = "community.example.restored", version = "2.0.0", facts = facts),
+        )
+        val restoredRef = ProfileRef("community.example.restored", ProfileYaml.sha256(restoredRaw))
+        val backup = ProfileBackup(
+            revisions = listOf(ProfileBackupRevision(restoredRef, restoredRaw)),
+            selection = ProfileSelection.Pinned(restoredRef),
+            active = restoredRef,
+            lastKnownGood = ProfileSelection.Pinned(restoredRef),
+        )
+
+        val plan = target.planBackupRestore(backup)
+        val result = target.restoreBackup(backup, plan.expectedCatalogRevision)
+
+        assertTrue(plan.valid)
+        assertEquals(ProfileBackupRestoreOutcome.SUCCEEDED, result.outcome)
+        assertEquals(listOf(restoredRef), result.imported)
+        assertTrue(result.selectionStaged)
+        assertTrue(result.restartRequired)
+        assertEquals(ProfileActivationPhase.PENDING, target.status().activation.phase)
+        assertEquals(ProfileSelection.Pinned(current), target.status().activation.previous)
+        assertEquals(ProfileSelection.Pinned(restoredRef), target.status().activation.desired)
+        assertEquals(ProfileSelection.Auto, target.status().lastKnownGood)
+        assertEquals(restoredRaw, target.exportProfile(restoredRef))
+    }
+
+    @Test fun `missing source rollback snapshot is advisory because destination rollback is preserved`() {
+        val target = registry(mapOf("generic.yaml" to genericYaml()))
+        val oldBundled = ProfileRef("vendor.old-bundled", "1".repeat(64))
+        val backup = target.exportBackup().copy(lastKnownGood = ProfileSelection.Pinned(oldBundled))
+
+        val plan = target.planBackupRestore(backup)
+        val result = target.restoreBackup(backup, plan.expectedCatalogRevision)
+
+        assertTrue(plan.valid)
+        assertTrue(plan.issues.any {
+            it.path == "profiles.last_known_good" && it.severity == ProfileIssueSeverity.WARNING
+        })
+        assertEquals(ProfileBackupRestoreOutcome.SUCCEEDED, result.outcome)
+        assertFalse(result.restartRequired)
+        assertEquals(ProfileSelection.Auto, target.status().selection)
+    }
+
+    @Test fun `invalid backup revision fails closed before any catalog mutation`() {
+        val target = registry(mapOf("generic.yaml" to genericYaml()))
+        val raw = ProfileYaml.serialize(testProfileDocument(id = "community.example.invalid", facts = facts))
+        val wrongRef = ProfileRef("community.example.invalid", "0".repeat(64))
+        val backup = ProfileBackup(
+            revisions = listOf(ProfileBackupRevision(wrongRef, raw)),
+            selection = ProfileSelection.Pinned(wrongRef),
+            active = wrongRef,
+            lastKnownGood = null,
+        )
+        val beforeRevision = target.status().catalogRevision
+
+        val plan = target.planBackupRestore(backup)
+        val result = target.restoreBackup(backup, plan.expectedCatalogRevision)
+
+        assertFalse(plan.valid)
+        assertEquals(ProfileBackupRestoreOutcome.REJECTED, result.outcome)
+        assertTrue(result.imported.isEmpty())
+        assertEquals(beforeRevision, target.status().catalogRevision)
+        assertFalse(importedFile(wrongRef).exists())
+        assertEquals(ProfileSelection.Auto, target.status().selection)
+    }
+
+    @Test fun `core incompatible backup revision is rejected before filesystem mutation`() {
+        val target = registry(mapOf("generic.yaml" to genericYaml()))
+        val raw = incompatibleImportedYaml()
+        val ref = ProfileRef("community.example.removed-driver", ProfileYaml.sha256(raw))
+        val backup = ProfileBackup(
+            revisions = listOf(ProfileBackupRevision(ref, raw)),
+            selection = ProfileSelection.Pinned(ref),
+            active = ref,
+            lastKnownGood = ProfileSelection.Pinned(ref),
+        )
+
+        val plan = target.planBackupRestore(backup)
+        val result = target.restoreBackup(backup, plan.expectedCatalogRevision)
+
+        assertFalse(plan.valid)
+        assertTrue(plan.issues.any { "Unknown core driver" in it.message })
+        assertEquals(ProfileBackupRestoreOutcome.REJECTED, result.outcome)
+        assertFalse(importedFile(ref).exists())
+        assertEquals(ProfileSelection.Auto, target.status().selection)
+    }
+
+    @Test fun `partial file restore remains inert and reports every stored revision`() {
+        val target = registry(mapOf("generic.yaml" to genericYaml()))
+        val goodRaw = ProfileYaml.serialize(testProfileDocument(id = "community.example.a", facts = facts))
+        val blockedRaw = ProfileYaml.serialize(testProfileDocument(id = "community.example.z", facts = facts))
+        val good = ProfileRef("community.example.a", ProfileYaml.sha256(goodRaw))
+        val blocked = ProfileRef("community.example.z", ProfileYaml.sha256(blockedRaw))
+        File(directory, "device-profiles/imported/${blocked.id}").apply {
+            parentFile!!.mkdirs()
+            writeText("blocks the id directory")
+        }
+        val backup = ProfileBackup(
+            revisions = listOf(ProfileBackupRevision(good, goodRaw), ProfileBackupRevision(blocked, blockedRaw)),
+            selection = ProfileSelection.Pinned(good),
+            active = good,
+            lastKnownGood = null,
+        )
+
+        val plan = target.planBackupRestore(backup)
+        val result = target.restoreBackup(backup, plan.expectedCatalogRevision)
+
+        assertTrue(plan.valid)
+        assertEquals(ProfileBackupRestoreOutcome.PARTIAL, result.outcome)
+        assertEquals(listOf(good), result.imported)
+        assertTrue(result.issues.any { "Could not store" in it.message })
+        assertFalse(result.selectionStaged)
+        assertFalse(result.restartRequired)
+        assertEquals(ProfileSelection.Auto, target.status().selection)
+        assertEquals(goodRaw, target.exportProfile(good))
+    }
+
+    @Test fun `backup json decoder enforces revision and aggregate identity bounds`() {
+        val raw = ProfileYaml.serialize(testProfileDocument(facts = facts))
+        val malformed = JSONObject()
+            .put("schema", ProfileBackup.SCHEMA)
+            .put("selection", JSONObject().put("mode", "pinned").put("id", "../escape").put("revision", "ABC"))
+            .put("active", JSONObject.NULL)
+            .put("last_known_good", JSONObject.NULL)
+            .put("revisions", org.json.JSONArray().put(JSONObject()
+                .put("id", "community.example.test")
+                .put("revision", "0".repeat(64))
+                .put("yaml", raw)))
+
+        val decoded = ProfileBackup.fromJson(malformed)
+
+        assertNull(decoded.payload)
+        assertTrue(decoded.issues.any { it.path == "profiles.selection.id" })
+        assertTrue(decoded.issues.any { it.path == "profiles.selection.revision" })
+    }
+
+    private fun registry(
+        bundled: Map<String, String>,
+        catalogFileReader: ((File) -> String)? = null,
+    ) = RuntimeProfileRegistry(
         filesDir = directory,
         preferences = preferences,
         bundledLoader = { bundled },
         facts = facts,
         coreVersion = "1.0.0",
         clock = { 1000L },
+        catalogFileReader = catalogFileReader,
     )
 
     private fun genericYaml() = ProfileYaml.serialize(testProfileDocument(id = "generic", fallback = true))
@@ -356,6 +655,13 @@ class RuntimeProfileRegistryTest {
     }
 
     private fun importedFile(ref: ProfileRef) = File(directory, "device-profiles/imported/${ref.id}/${ref.revision}.yaml")
+
+    private fun expectedRefForTest(file: File): ProfileRef? {
+        if (file.extension != "yaml") return null
+        val id = file.parentFile?.name ?: return null
+        val revision = file.nameWithoutExtension
+        return ProfileRef(id, revision)
+    }
 
     private fun incompatibleImportedYaml(): String = ProfileYaml.serialize(
         testProfileDocument(id = "community.example.removed-driver", facts = facts).copy(
@@ -409,9 +715,15 @@ class RuntimeProfileRegistryTest {
 
 private class MemoryProfilePreferences : ProfilePreferences {
     private val values = linkedMapOf<String, Any>()
+    private var rejectNextPut = false
+    fun failNextPut() { rejectNextPut = true }
     override fun getString(key: String, default: String) = values[key] as? String ?: default
     override fun getLong(key: String, default: Long) = values[key] as? Long ?: default
     override fun put(vararg values: Pair<String, Any?>): Boolean {
+        if (rejectNextPut) {
+            rejectNextPut = false
+            return false
+        }
         val next = LinkedHashMap(this.values)
         values.forEach { (key, value) -> if (value == null) next.remove(key) else next[key] = value }
         this.values.clear()

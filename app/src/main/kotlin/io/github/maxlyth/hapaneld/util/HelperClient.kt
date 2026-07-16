@@ -1,8 +1,8 @@
 package io.github.maxlyth.hapaneld.util
 
 import android.net.LocalSocket
-import android.net.LocalSocketAddress
 import android.util.Log
+import io.github.maxlyth.hapaneld.BuildConfig
 import io.github.maxlyth.hapaneld.platform.Daemon
 import io.github.maxlyth.hapaneld.platform.DaemonLongResult
 import io.github.maxlyth.hapaneld.platform.DaemonStreamResult
@@ -94,9 +94,7 @@ object HelperClient : Daemon {
 
     // Abstract local sockets have no connect timeout (no network round-trip): connect returns at once
     // if the daemon is listening, else throws — caught by the callers below.
-    private fun open(): LocalSocket = LocalSocket().apply {
-        connect(LocalSocketAddress(SOCK, LocalSocketAddress.Namespace.ABSTRACT))
-    }
+    private fun open(): LocalSocket = openRootAbstractSocket(SOCK)
 
     /** True when the daemon answers `PING`. */
     override fun available(): Boolean = send("PING") == "OK"
@@ -106,6 +104,16 @@ object HelperClient : Daemon {
      * remains reachable but unverified; ordinary [Daemon] calls retain their existing behavior.
      */
     fun identityStatus(): HelperIdentityStatus = probeHelperIdentity(::requestRaw)
+
+    /** Exact Companion-data protocol admission; a generic PING is not sufficient for older helpers. */
+    internal fun supportsCompanionData(): Boolean = companionCapabilitySupported(send("COMPANIONCAPS"))
+
+    /** Exact source identity of the helper carried by this APK. */
+    internal fun matchesBundledHelper(): Boolean = helperBuildIdentitySupported(send("BUILDID"), BuildConfig.HELPER_BUILD_ID)
+
+    /** Non-blocking transaction state used to retain app-side launch suppression after a client timeout. */
+    internal fun companionOperationStatus(): CompanionOperationStatus =
+        parseCompanionOperationStatus(send("COMPANIONSTATUS"))
 
     /** Send one command; return the daemon's reply line (trimmed), or null if unreachable. */
     override fun send(cmd: String): String? = requestRaw(cmd)
@@ -195,4 +203,95 @@ object HelperClient : Daemon {
         Log.d(TAG, "daemon bytes failed (${e.message})")
         null
     }
+
+    override fun sendBytesBounded(cmd: String, maxBytes: Long): ByteArray? = try {
+        open().use { s ->
+            s.soTimeout = 5000
+            HelperSocketProtocol.sendBytes(cmd, s.inputStream, s.outputStream, s::shutdownOutput, maxBytes)
+        }
+    } catch (e: Exception) {
+        Log.d(TAG, "daemon bounded bytes failed (${e.message})")
+        null
+    }
+
+    /** Descriptor-confined raw Companion capture. The helper owns stop/open/relaunch as one operation. */
+    internal fun backupCompanion(
+        packageName: String,
+        cacheDir: File,
+        timeoutMs: Long = COMPANION_OPERATION_TIMEOUT_MS,
+    ): CompanionHelperProtocol.BackupResult {
+        val socket = try {
+            open()
+        } catch (e: Exception) {
+            Log.d(TAG, "Companion backup not submitted (${e.message})")
+            return CompanionHelperProtocol.BackupResult.NotSubmitted
+        }
+        val deadline = StreamDeadline(timeoutMs) { runCatching { socket.close() } }
+        return try {
+            socket.use { s ->
+                s.soTimeout = timeoutMs.coerceIn(1L, Int.MAX_VALUE.toLong()).toInt()
+                CompanionHelperProtocol.backup(packageName, cacheDir, s.inputStream, s.outputStream)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Companion backup exchange failed", e)
+            CompanionHelperProtocol.BackupResult.Indeterminate
+        } finally {
+            deadline.close()
+        }
+    }
+
+    /** Atomic descriptor-confined Companion restore. No shell or pathname fallback is permitted. */
+    internal fun restoreCompanion(
+        packageName: String,
+        files: Map<String, File>,
+        timeoutMs: Long = COMPANION_OPERATION_TIMEOUT_MS,
+    ): CompanionHelperProtocol.RestoreResult {
+        val socket = try {
+            open()
+        } catch (e: Exception) {
+            Log.d(TAG, "Companion restore not submitted (${e.message})")
+            return CompanionHelperProtocol.RestoreResult.NOT_SUBMITTED
+        }
+        val deadline = StreamDeadline(timeoutMs) { runCatching { socket.close() } }
+        return try {
+            socket.use { s ->
+                s.soTimeout = timeoutMs.coerceIn(1L, Int.MAX_VALUE.toLong()).toInt()
+                CompanionHelperProtocol.restore(
+                    packageName,
+                    files,
+                    s.inputStream,
+                    s.outputStream,
+                    s::shutdownOutput,
+                )
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Companion restore exchange failed", e)
+            CompanionHelperProtocol.RestoreResult.INDETERMINATE
+        } finally {
+            deadline.close()
+        }
+    }
+
+    private const val COMPANION_OPERATION_TIMEOUT_MS = 120_000L
+}
+
+private const val COMPANION_CAPABILITY_VERSION = "COMPANIONCAPS 1 BACKUP RESTORE STATUS JOURNAL"
+
+internal fun companionCapabilitySupported(reply: String?): Boolean = reply == COMPANION_CAPABILITY_VERSION
+
+internal fun helperBuildIdentitySupported(reply: String?, expectedBuildId: String): Boolean =
+    expectedBuildId.matches(Regex("[0-9a-f]{64}")) && reply == "BUILDID $expectedBuildId"
+
+internal fun parseCompanionOperationStatus(reply: String?): CompanionOperationStatus = when (reply) {
+    "IDLE" -> CompanionOperationStatus.IDLE
+    "BUSY" -> CompanionOperationStatus.BUSY
+    "ERR" -> CompanionOperationStatus.UNSUPPORTED
+    else -> CompanionOperationStatus.UNAVAILABLE
+}
+
+internal enum class CompanionOperationStatus {
+    IDLE,
+    BUSY,
+    UNSUPPORTED,
+    UNAVAILABLE,
 }

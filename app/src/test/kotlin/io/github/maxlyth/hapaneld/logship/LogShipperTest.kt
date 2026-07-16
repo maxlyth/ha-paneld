@@ -1,9 +1,12 @@
 package io.github.maxlyth.hapaneld.logship
 
+import io.github.maxlyth.hapaneld.metrics.FeatureCostOperation
+import io.github.maxlyth.hapaneld.metrics.FeatureCostRegistry
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.cancel
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -15,6 +18,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
 class LogShipperTest {
@@ -69,13 +73,19 @@ class LogShipperTest {
     )
 
     @Test fun runOwnsItsQueueCountersAndTerminalBoundary() {
-        val run = LogShipRun(snapshot().targetOrNull()!!, queueCapacity = 2)
+        val instrumentedDrops = AtomicLong()
+        val run = LogShipRun(
+            snapshot().targetOrNull()!!,
+            queueCapacity = 2,
+            onDropped = { instrumentedDrops.addAndGet(it) },
+        )
         run.offer("one")
         run.offer("two")
         run.offer("three")
 
         assertEquals(listOf("two", "three"), run.takeBatch(2, 0))
         assertEquals(1L, run.status().dropped)
+        assertEquals(1L, instrumentedDrops.get())
 
         run.close()
         run.offer("after-close")
@@ -160,6 +170,64 @@ class LogShipperTest {
         }
     }
 
+    @Test fun queuedLinesShipAsOneMeasuredBoundedBatch() {
+        val executor = Executors.newSingleThreadExecutor()
+        val dispatcher = executor.asCoroutineDispatcher()
+        val scope = CoroutineScope(SupervisorJob() + dispatcher)
+        val capture = FakeCapture()
+        val connectStarted = CountDownLatch(1)
+        val releaseConnect = CountDownLatch(1)
+        val sent = CopyOnWriteArrayList<String>()
+        val wall = AtomicLong()
+        val costs = FeatureCostRegistry(
+            wallNanos = { wall.getAndAdd(100L) },
+            threadCpuNanos = { -1L },
+            threadId = { 1L },
+        )
+        val shipper = LogShipper(
+            configSnapshot = { snapshot() },
+            scope = scope,
+            subscribeCapture = capture::subscribe,
+            sinkFactory = LogSinkFactory { _, _ ->
+                object : LogSink {
+                    override fun connect() {
+                        connectStarted.countDown()
+                        releaseConnect.await(2, TimeUnit.SECONDS)
+                    }
+
+                    override fun send(lines: List<String>) {
+                        sent.addAll(lines)
+                    }
+
+                    override fun close() {
+                        releaseConnect.countDown()
+                    }
+                }
+            },
+            featureCosts = costs,
+        )
+        try {
+            shipper.start()
+            assertTrue(connectStarted.await(2, TimeUnit.SECONDS))
+            capture.emit("one")
+            capture.emit("two")
+            capture.emit("three")
+            releaseConnect.countDown()
+            await { sent == listOf("one", "two", "three") }
+
+            val operation = operation(costs, FeatureCostOperation.LOG_SHIP_BATCH)
+            assertEquals(1L, operation.getLong("calls"))
+            assertEquals(1L, operation.getLong("succeeded"))
+            assertEquals(3L, operation.getLong("work_units"))
+            assertEquals(11L, operation.getLong("work_bytes"))
+        } finally {
+            shipper.stop()
+            scope.cancel()
+            dispatcher.close()
+            executor.shutdownNow()
+        }
+    }
+
     @Test fun stopClosesTransportWhileConnectIsBlocked() {
         val executor = Executors.newSingleThreadExecutor()
         val dispatcher = executor.asCoroutineDispatcher()
@@ -196,5 +264,15 @@ class LogShipperTest {
             dispatcher.close()
             executor.shutdownNow()
         }
+    }
+
+    private fun operation(
+        registry: FeatureCostRegistry,
+        expected: FeatureCostOperation,
+    ): JSONObject {
+        val operations = JSONObject(registry.json()).getJSONArray("operations")
+        return (0 until operations.length()).asSequence()
+            .map(operations::getJSONObject)
+            .first { it.getString("id") == expected.id }
     }
 }

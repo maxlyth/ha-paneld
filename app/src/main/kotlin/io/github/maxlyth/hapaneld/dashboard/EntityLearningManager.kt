@@ -1,13 +1,15 @@
 package io.github.maxlyth.hapaneld.dashboard
 
 import android.content.Context
-import android.util.JsonReader
-import android.util.JsonToken
 import android.util.Log
 import io.github.maxlyth.hapaneld.Config
 import io.github.maxlyth.hapaneld.DashboardEntityDefaultResolverMigration
 import io.github.maxlyth.hapaneld.DashboardAuth
 import io.github.maxlyth.hapaneld.control.BuiltinDashboard
+import io.github.maxlyth.hapaneld.metrics.FeatureCostOperation
+import io.github.maxlyth.hapaneld.metrics.FeatureCostOutcome
+import io.github.maxlyth.hapaneld.metrics.FeatureCostRegistry
+import io.github.maxlyth.hapaneld.metrics.FeatureCosts
 import io.github.maxlyth.hapaneld.util.BoundedStreams
 import io.github.maxlyth.hapaneld.util.ByteLimitExceeded
 import io.ktor.client.HttpClient
@@ -37,6 +39,7 @@ import java.io.FilterInputStream
 import java.io.InputStream
 import java.io.InputStreamReader
 import java.io.InterruptedIOException
+import java.io.Reader
 import java.util.concurrent.atomic.AtomicLong
 
 /** Owns catalog synchronization, automatic set promotion and the HTTP/UI query surface. */
@@ -58,6 +61,12 @@ class EntityLearningManager(
     @Volatile private var dynamicExpressionsJson = "[]"
     private var promotionWindowStart = 0L
     private var promotionsInWindow = 0
+    private val telemetryPending = EntityTelemetryAccumulator(MAX_TELEMETRY_IDS)
+    private val telemetryStoreGate = EntityTelemetryStoreGate()
+    private val telemetryWorkerLock = Any()
+    private var telemetryWorkerActive = false
+    private var telemetryClosed = false
+    @Volatile private var telemetryJob: Job? = null
 
     fun start() {
         prepareCurrentTarget()
@@ -123,7 +132,20 @@ class EntityLearningManager(
             syncJob?.cancel()
             syncJob = null
         }
-        store.close()
+        synchronized(telemetryWorkerLock) {
+            telemetryClosed = true
+            telemetryWorkerActive = false
+            telemetryJob?.cancel()
+            telemetryJob = null
+            val dropped = telemetryPending.discard()
+            if (dropped > 0) {
+                FeatureCosts.registry.recordDropped(FeatureCostOperation.ENTITY_TELEMETRY_FLUSH, dropped.toLong())
+            }
+            FeatureCosts.registry.setBacklog(FeatureCostOperation.ENTITY_TELEMETRY_FLUSH, 0)
+        }
+        // Cancellation cannot interrupt a synchronous SQLite transaction. The generation check keeps
+        // a not-yet-started flush out, while this gate waits for an already-started bounded flush.
+        telemetryStoreGate.withStore { store.close() }
     }
 
     /** Rebind owner-scoped state before a renderer is relaunched for a new HA URL/dashboard. */
@@ -240,8 +262,12 @@ class EntityLearningManager(
     }
 
     private suspend fun synchronize() = withContext(Dispatchers.IO) {
+        val syncCost = FeatureCosts.registry.span(FeatureCostOperation.ENTITY_SYNC)
+        var syncWork = 0L
+        try {
         val target = captureAuthenticatedTarget()
         val states = fetchStates(target.baseUrl, target.authToken)
+        syncWork += states.size
         require(states.isNotEmpty()) { "Home Assistant returned no visible states" }
 
         val identityCandidates = haInstanceCandidateUrls(
@@ -253,8 +279,37 @@ class EntityLearningManager(
         val snapshot = captureSyncSnapshot(adoptedTarget)
         require(snapshot.matchesCurrent(effectGeneration.get(), currentEffectState())) { "entity-learning target or policy changed" }
 
-        val ws = fetchDashboardAndRegistry(snapshot.baseUrl, snapshot.authToken, snapshot.dashboardPath)
-        val scan = EntityLearningProtocol.scanDashboard(ws.configJson)
+        val dashboardCost = FeatureCosts.registry.span(FeatureCostOperation.ENTITY_DASHBOARD_FETCH_PARSE)
+        val ws = try {
+            fetchDashboardAndRegistry(snapshot.baseUrl, snapshot.authToken, snapshot.dashboardPath).also {
+                dashboardCost.work(
+                    units = it.metadata.size.toLong(),
+                    // String length is the allocation-free work-size proxy used by the other browser
+                    // parsers. Encoding a dashboard admitted up to MAX_WS_FRAME solely for telemetry can
+                    // otherwise create a second tens-of-megabytes buffer on memory-constrained panels.
+                    bytes = it.configJson.length.toLong(),
+                )
+            }
+        } catch (failure: Throwable) {
+            dashboardCost.outcome(failure.featureCostOutcome())
+            throw failure
+        } finally {
+            dashboardCost.close()
+        }
+        val scanCost = FeatureCosts.registry.span(FeatureCostOperation.ENTITY_STATIC_SCAN)
+        val scan = try {
+            EntityLearningProtocol.scanDashboard(ws.configJson).also {
+                scanCost.work(
+                    units = (it.entityIds.size + it.targets.size + it.unresolved.size).toLong(),
+                    bytes = ws.configJson.length.toLong(),
+                )
+            }
+        } catch (failure: Throwable) {
+            scanCost.outcome(failure.featureCostOutcome())
+            throw failure
+        } finally {
+            scanCost.close()
+        }
         val expanded = expandTargets(snapshot.baseUrl, snapshot.authToken, scan.targets)
         val catalogIds = states.asSequence().map { it.entityId }.toHashSet()
         val friendlyNames = states.asSequence().filter { it.friendlyName.isNotBlank() }
@@ -266,6 +321,7 @@ class EntityLearningManager(
         }
         val lintIds = if (ignoredSelectorBudget) emptySet() else lint.safeEntityIds
         val derived = (scan.entityIds + expanded + lintIds).filterTo(sortedSetOf()) { it in catalogIds }
+        syncWork += derived.size
         val effectiveIssuesJson = EntityCatalogIssuePersistence.applyIgnores(
             JSONArray(lint.issues.map(DashboardConfigurationLint.Issue::toJson)), ignoredFingerprints,
         )
@@ -333,37 +389,165 @@ class EntityLearningManager(
             }
             if (snapshot.forceBootstrap) resetBootstrapPending = false
         }
+        } catch (failure: Throwable) {
+            syncCost.outcome(failure.featureCostOutcome())
+            throw failure
+        } finally {
+            syncCost.work(units = syncWork).close()
+        }
     }
 
     fun recordAccessBatch(text: String) {
         if (!config.dashboardEntityLearningEnabled) return
-        val admittedGeneration = effectGeneration.get()
-        val (accessed, missing) = runCatching { EntityLearningProtocol.parseAccessBatch(text) }.getOrElse { return }
-        val instance = instance(); val path = dashboardPath(); val now = System.currentTimeMillis()
-        scope.launch(Dispatchers.IO) {
-            val knownAccessed = accessed.filterKeys { store.hasEntity(instance, it) }
-            val knownMissing = missing.filterTo(mutableSetOf()) { store.hasEntity(instance, it) }
-            telemetryWriteBarrier.writeIfCurrent(admittedGeneration) {
-                store.recordAccess(instance, path, knownAccessed + knownMissing.associateWith { 1L }, now)
-                if (knownMissing.isNotEmpty() && config.dashboardEntityLearningApplied && config.dashboardEntityAutoRuntime) {
-                    runCatching { capturePromotionSnapshot(instance, path) }.getOrNull()?.let(::queuePromotion)
+        val span = FeatureCosts.registry.span(FeatureCostOperation.ENTITY_ACCESS_PARSE)
+        val parsed = runCatching { EntityLearningProtocol.parseAccessBatch(text) }.getOrElse {
+            span.outcome(FeatureCostOutcome.FAILURE).work(bytes = text.length.toLong()).close()
+            return
+        }
+        span.work(units = (parsed.first.size + parsed.second.size).toLong(), bytes = text.length.toLong()).close()
+        admitTelemetry(accessed = parsed.first, missing = parsed.second)
+    }
+
+    fun recordMetricBatch(text: String) {
+        if (!config.dashboardEntityLearningEnabled) return
+        val span = FeatureCosts.registry.span(FeatureCostOperation.ENTITY_METRIC_PARSE)
+        val envelope = runCatching { EntityLearningProtocol.parseMetricEnvelope(text) }.getOrElse {
+            span.outcome(FeatureCostOutcome.FAILURE).work(bytes = text.length.toLong()).close()
+            return
+        }
+        span.work(units = envelope.metrics.size.toLong(), bytes = text.length.toLong()).close()
+        envelope.observer?.let { observer ->
+            recordBrowserObserverCosts(FeatureCosts.registry, observer)
+        }
+        if (envelope.metrics.isNotEmpty()) admitTelemetry(metrics = envelope.metrics)
+    }
+
+    /** Merge renderer batches into one fixed-size generation-bound accumulator and own one IO worker. */
+    private fun admitTelemetry(
+        accessed: Map<String, Long> = emptyMap(),
+        missing: Set<String> = emptySet(),
+        metrics: Map<String, Pair<Long, Long>> = emptyMap(),
+    ) {
+        val target = EntityTelemetryTarget(effectGeneration.get(), instance(), dashboardPath())
+        synchronized(telemetryWorkerLock) {
+            if (telemetryClosed) {
+                FeatureCosts.registry.recordDropped(
+                    FeatureCostOperation.ENTITY_TELEMETRY_FLUSH,
+                    (accessed.keys + missing + metrics.keys).size.toLong(),
+                )
+                return
+            }
+            val admission = telemetryPending.admit(target, accessed, missing, metrics)
+            if (admission.coalesced > 0) {
+                FeatureCosts.registry.recordCoalesced(FeatureCostOperation.ENTITY_TELEMETRY_FLUSH, admission.coalesced)
+            }
+            if (admission.dropped > 0) {
+                FeatureCosts.registry.recordDropped(FeatureCostOperation.ENTITY_TELEMETRY_FLUSH, admission.dropped)
+            }
+            FeatureCosts.registry.setBacklog(FeatureCostOperation.ENTITY_TELEMETRY_FLUSH, admission.backlog)
+            if (!telemetryWorkerActive) {
+                telemetryWorkerActive = true
+                telemetryJob = scope.launch(Dispatchers.IO) { drainTelemetry() }
+            }
+        }
+    }
+
+    private suspend fun drainTelemetry() {
+        try {
+            while (true) {
+                val batch = telemetryPending.drain() ?: synchronized(telemetryWorkerLock) {
+                    // Serialize the empty observation with admission. If a producer arrived after drain(),
+                    // it sees the worker active; re-check before relinquishing ownership.
+                    telemetryPending.drain()
+                } ?: return
+                FeatureCosts.registry.setBacklog(FeatureCostOperation.ENTITY_TELEMETRY_FLUSH, telemetryPending.size())
+                val flush = FeatureCosts.registry.span(FeatureCostOperation.ENTITY_TELEMETRY_FLUSH)
+                    .work(units = batch.uniqueIds.toLong())
+                try {
+                    flushTelemetry(batch)
+                } catch (error: CancellationException) {
+                    flush.outcome(FeatureCostOutcome.CANCELLED)
+                    throw error
+                } catch (error: Exception) {
+                    flush.outcome(FeatureCostOutcome.FAILURE)
+                    Log.w(TAG, "entity telemetry flush failed: ${error.message}")
+                } finally {
+                    flush.close()
+                }
+            }
+        } finally {
+            synchronized(telemetryWorkerLock) {
+                telemetryWorkerActive = false
+                telemetryJob = null
+                val hasPending = !telemetryClosed && telemetryPending.size() > 0
+                if (hasPending) {
+                    telemetryWorkerActive = true
+                    telemetryJob = scope.launch(Dispatchers.IO) { drainTelemetry() }
                 }
             }
         }
     }
 
-    fun recordMetricBatch(text: String) {
-        if (!config.dashboardEntityLearningEnabled) return
-        val admittedGeneration = effectGeneration.get()
-        val metrics = runCatching { EntityLearningProtocol.parseMetricBatch(text) }.getOrElse { return }
-        // Bind telemetry to the dashboard that admitted the batch. A URL/dashboard change may occur
-        // before this IO coroutine is scheduled; resolving the target inside it would then contaminate
-        // the new dashboard's evidence with late metrics from the old WebView generation.
-        val instance = instance(); val path = dashboardPath(); val now = System.currentTimeMillis()
-        scope.launch(Dispatchers.IO) {
-            telemetryWriteBarrier.writeIfCurrent(admittedGeneration) {
-                store.recordMetrics(instance, path, metrics, now)
+    private fun flushTelemetry(batch: EntityTelemetryBatch) = telemetryStoreGate.withStore {
+        if (batch.target.generation != effectGeneration.get()) {
+            FeatureCosts.registry.recordDropped(FeatureCostOperation.ENTITY_TELEMETRY_FLUSH, batch.uniqueIds.toLong())
+            return@withStore
+        }
+        val accessIds = batch.accessed.keys + batch.missing
+        val lookup = FeatureCosts.registry.span(FeatureCostOperation.ENTITY_MEMBERSHIP_LOOKUP)
+            .work(units = accessIds.size.toLong())
+        val known = try {
+            store.existingEntityIds(batch.target.instance, accessIds)
+        } catch (error: Exception) {
+            lookup.outcome(FeatureCostOutcome.FAILURE)
+            throw error
+        } finally {
+            lookup.close()
+        }
+        val knownAccessed = batch.accessed.filterKeys(known::contains)
+        val knownMissing = batch.missing.filterTo(mutableSetOf(), known::contains)
+        val admitted = telemetryWriteBarrier.writeIfCurrent(batch.target.generation) {
+            if (knownAccessed.isNotEmpty() || knownMissing.isNotEmpty()) {
+                val access = FeatureCosts.registry.span(FeatureCostOperation.ENTITY_ACCESS_WRITE)
+                    .work(units = (knownAccessed.size + knownMissing.size).toLong())
+                try {
+                    val counts = LinkedHashMap(knownAccessed)
+                    knownMissing.forEach { id -> counts.putIfAbsent(id, 1L) }
+                    store.recordAccess(
+                        batch.target.instance,
+                        batch.target.path,
+                        counts,
+                        batch.now,
+                    )
+                } catch (error: Exception) {
+                    access.outcome(FeatureCostOutcome.FAILURE)
+                    throw error
+                } finally {
+                    access.close()
+                }
+                if (knownMissing.isNotEmpty() && config.dashboardEntityLearningApplied && config.dashboardEntityAutoRuntime) {
+                    runCatching { capturePromotionSnapshot(batch.target.instance, batch.target.path) }
+                        .getOrNull()?.let(::queuePromotion)
+                }
             }
+            if (batch.metrics.isNotEmpty()) {
+                val metric = FeatureCosts.registry.span(FeatureCostOperation.ENTITY_METRIC_WRITE)
+                    .work(
+                        units = batch.metrics.values.sumOf { it.first.coerceAtLeast(0L) },
+                        bytes = batch.metrics.values.sumOf { it.second.coerceAtLeast(0L) },
+                    )
+                try {
+                    store.recordMetrics(batch.target.instance, batch.target.path, batch.metrics, batch.now)
+                } catch (error: Exception) {
+                    metric.outcome(FeatureCostOutcome.FAILURE)
+                    throw error
+                } finally {
+                    metric.close()
+                }
+            }
+        }
+        if (!admitted) {
+            FeatureCosts.registry.recordDropped(FeatureCostOperation.ENTITY_TELEMETRY_FLUSH, batch.uniqueIds.toLong())
         }
     }
 
@@ -503,47 +687,65 @@ class EntityLearningManager(
     }
 
     fun statusJson(): String {
-        val s = store.snapshot(instance(), dashboardPath())
-        bootstrapBlockingIssues = s.blockingIssueCount
-        val suggestions = store.suggestedIds(instance(), dashboardPath())
-        val candidates = suggestions.count { it !in config.dashboardEntityFilterIds.toSet() }
-        val filtered = config.dashboardEntityFilterEnabled
-        val held = shouldHoldRendererForEntityBootstrap(
-            config.dashboardEntityLearningEnabled,
-            config.dashboardEntityFilterEnabled,
-        )
-        val desired = desiredIds(System.currentTimeMillis())
-        val preview = subscriptionPreview(desired, s.catalogCount)
-        return JSONObject()
-            .put("requested_enabled", config.dashboardEntityLearningEnabled)
-            .put("mode", if (config.dashboardEntityLearningEnabled) "automatic" else "manual")
-            .put("state", when {
-                !config.dashboardEntityLearningEnabled -> "disabled"
-                s.blockingIssueCount > 0 -> "blocked"
-                else -> s.state
-            })
-            .put("applied", config.dashboardEntityLearningApplied)
-            .put("auto_static", config.dashboardEntityAutoStatic)
-            .put("auto_runtime", config.dashboardEntityAutoRuntime)
-            .put("last_sync_at", s.lastSyncAt).put("catalog_count", s.catalogCount)
-            .put("active_count", config.dashboardEntityFilterIds.size)
-            .put("candidate_count", candidates).put("suggested_count", candidates)
-            .put("desired_count", desired.size)
-            .put("pending_additions", if (s.blockingIssueCount > 0) 0 else preview.additions)
-            .put("pending_removals", if (s.blockingIssueCount > 0) 0 else preview.removals)
-            .put("stream_change_required", s.blockingIssueCount == 0 && preview.streamChange)
-            .put("activation_required", !config.dashboardEntityLearningApplied)
-            .put("apply_required", s.blockingIssueCount == 0 && (preview.streamChange || !config.dashboardEntityLearningApplied))
-            .put("dashboard_issue_count", s.issueCount)
-            .put("blocking_issue_count", s.blockingIssueCount)
-            .put("ignored_issue_count", s.ignoredIssueCount)
-            .put("automatic_activation_blocked", s.blockingIssueCount > 0)
-            .put("stream_mode", when { held -> "held"; filtered -> "filtered"; else -> "unfiltered" })
-            .put("stream_entity_count", when { held -> 0; filtered -> config.dashboardEntityFilterIds.size; else -> s.catalogCount })
-            .put("stream_filter_hash", if (filtered) EntityFilterProtocol.hash(config.dashboardEntityFilterIds) else "")
-            .put("unresolved_count", s.unresolvedCount)
-            .put("error", s.error).put("db_bytes", s.dbBytes).put("sync_running", syncJob?.isActive == true)
-            .toString()
+        val span = FeatureCosts.registry.span(FeatureCostOperation.ENTITY_STATUS_READ)
+        try {
+            val currentInstance = instance()
+            val currentPath = dashboardPath()
+            val s = store.snapshot(currentInstance, currentPath)
+            bootstrapBlockingIssues = s.blockingIssueCount
+            val suggestions = store.suggestedIds(currentInstance, currentPath)
+            val filterIds = config.dashboardEntityFilterIds
+            val filterSet = filterIds.toSet()
+            val candidates = suggestions.count { it !in filterSet }
+            val learningEnabled = config.dashboardEntityLearningEnabled
+            val filtered = config.dashboardEntityFilterEnabled
+            val applied = config.dashboardEntityLearningApplied
+            val autoStatic = config.dashboardEntityAutoStatic
+            val autoRuntime = config.dashboardEntityAutoRuntime
+            val held = shouldHoldRendererForEntityBootstrap(learningEnabled, filtered)
+            val desired = desiredIds(
+                System.currentTimeMillis(), currentInstance, currentPath,
+                includeStatic = autoStatic,
+                includeRuntime = autoRuntime,
+            )
+            val preview = previewEntitySubscription(filtered, filterIds, s.catalogCount, desired)
+            span.work(units = (s.catalogCount + suggestions.size).toLong())
+            return JSONObject()
+                .put("requested_enabled", learningEnabled)
+                .put("mode", if (learningEnabled) "automatic" else "manual")
+                .put("state", when {
+                    !learningEnabled -> "disabled"
+                    s.blockingIssueCount > 0 -> "blocked"
+                    else -> s.state
+                })
+                .put("applied", applied)
+                .put("auto_static", autoStatic)
+                .put("auto_runtime", autoRuntime)
+                .put("last_sync_at", s.lastSyncAt).put("catalog_count", s.catalogCount)
+                .put("active_count", filterIds.size)
+                .put("candidate_count", candidates).put("suggested_count", candidates)
+                .put("desired_count", desired.size)
+                .put("pending_additions", if (s.blockingIssueCount > 0) 0 else preview.additions)
+                .put("pending_removals", if (s.blockingIssueCount > 0) 0 else preview.removals)
+                .put("stream_change_required", s.blockingIssueCount == 0 && preview.streamChange)
+                .put("activation_required", !applied)
+                .put("apply_required", s.blockingIssueCount == 0 && (preview.streamChange || !applied))
+                .put("dashboard_issue_count", s.issueCount)
+                .put("blocking_issue_count", s.blockingIssueCount)
+                .put("ignored_issue_count", s.ignoredIssueCount)
+                .put("automatic_activation_blocked", s.blockingIssueCount > 0)
+                .put("stream_mode", when { held -> "held"; filtered -> "filtered"; else -> "unfiltered" })
+                .put("stream_entity_count", when { held -> 0; filtered -> filterIds.size; else -> s.catalogCount })
+                .put("stream_filter_hash", if (filtered) EntityFilterProtocol.hash(filterIds) else "")
+                .put("unresolved_count", s.unresolvedCount)
+                .put("error", s.error).put("db_bytes", s.dbBytes).put("sync_running", syncJob?.isActive == true)
+                .toString()
+        } catch (error: Exception) {
+            span.outcome(FeatureCostOutcome.FAILURE)
+            throw error
+        } finally {
+            span.close()
+        }
     }
 
     fun issuesJson(): String {
@@ -633,7 +835,9 @@ class EntityLearningManager(
         return json.toString()
     }
 
-    fun exportJson(): String = store.exportJson(instance(), dashboardPath())
+    fun writeExportJson(writer: java.io.Writer) {
+        store.writeExportJson(instance(), dashboardPath(), writer)
+    }
 
     private fun desiredIds(
         now: Long,
@@ -787,6 +991,7 @@ class EntityLearningManager(
 
     private suspend fun fetchStates(base: String, token: String): List<EntityCatalogStore.StateRow> =
         runInterruptible(Dispatchers.IO) {
+            val cost = FeatureCosts.registry.span(FeatureCostOperation.ENTITY_STATES_FETCH_PARSE)
             val c = (URL(base.trimEnd('/') + "/api/states").openConnection() as HttpURLConnection).apply {
                 connectTimeout = HTTP_TIMEOUT_MS; readTimeout = HTTP_TIMEOUT_MS
                 setRequestProperty("Authorization", "Bearer $token"); setRequestProperty("Accept", "application/json")
@@ -797,8 +1002,17 @@ class EntityLearningManager(
                 // attributes, but reject a response that exceeds any resource or wall-clock bound.
                 val limits = HaStatesReadLimits()
                 if (c.contentLengthLong > limits.maxBytes) throw ByteLimitExceeded(limits.maxBytes)
-                readHaStates(c.inputStream, limits)
-            } finally { c.disconnect() }
+                val counted = CountingInputStream(c.inputStream)
+                readHaStates(counted, limits).also {
+                    cost.work(units = it.size.toLong(), bytes = counted.bytesRead)
+                }
+            } catch (failure: Throwable) {
+                cost.outcome(failure.featureCostOutcome())
+                throw failure
+            } finally {
+                cost.close()
+                c.disconnect()
+            }
         }
 
     private fun fetchHaConfig(base: String, token: String): String {
@@ -966,6 +1180,7 @@ class EntityLearningManager(
         private const val PROMOTION_WINDOW_MS = 10L * 60_000
         private const val MAX_PROMOTIONS = 2
         private const val MAX_DYNAMIC_EXPRESSIONS = 128
+        private const val MAX_TELEMETRY_IDS = EntityFilterProtocol.MAX_ENTITY_IDS
         private const val UNCONFIGURED_INSTANCE = "unconfigured"
 
         private fun normalizedOrigin(raw: String): String = EntityFilterProtocol.origin(raw)
@@ -988,6 +1203,20 @@ internal data class HaStatesReadLimits(
     }
 }
 
+/** Counts bytes consumed by the streaming parser without retaining a second copy. */
+internal class CountingInputStream(input: InputStream) : FilterInputStream(input) {
+    var bytesRead: Long = 0L
+        private set
+
+    override fun read(): Int = super.read().also { if (it >= 0) bytesRead++ }
+
+    override fun read(buffer: ByteArray, offset: Int, length: Int): Int =
+        super.read(buffer, offset, length).also { if (it > 0) bytesRead += it }
+}
+
+private fun Throwable.featureCostOutcome(): FeatureCostOutcome =
+    if (this is CancellationException) FeatureCostOutcome.CANCELLED else FeatureCostOutcome.FAILURE
+
 /** Parse only the state projection needed by the learner while retaining hard transport-independent
  * bounds. The monotonic clock seam keeps elapsed-time enforcement deterministic in unit tests. */
 internal fun readHaStates(
@@ -996,7 +1225,7 @@ internal fun readHaStates(
     nanoTime: () -> Long = System::nanoTime,
 ): List<EntityCatalogStore.StateRow> {
     val bounded = DeadlineBoundedInputStream(input, limits.maxBytes, limits.deadlineMs, nanoTime)
-    return JsonReader(InputStreamReader(bounded, Charsets.UTF_8)).use { reader ->
+    return StreamingJsonReader(InputStreamReader(bounded, Charsets.UTF_8)).use { reader ->
         buildList {
             var rows = 0
             reader.beginArray()
@@ -1017,6 +1246,7 @@ internal fun readHaStates(
                 validateHaStateRow(entityId, state, rows, limits, friendlyName)?.let(::add)
             }
             reader.endArray()
+            reader.requireEndDocument()
         }
     }
 }
@@ -1041,8 +1271,8 @@ internal fun validateHaStateRow(
 
 /** Selectively project the one state attribute used by static dashboard selectors. All other
  * attributes remain streaming skips and are neither hydrated nor persisted. */
-private fun JsonReader.readFriendlyName(maxChars: Int): String {
-    if (peek() != JsonToken.BEGIN_OBJECT) {
+private fun StreamingJsonReader.readFriendlyName(maxChars: Int): String {
+    if (peek() != StreamJsonToken.BEGIN_OBJECT) {
         skipValue()
         return ""
     }
@@ -1056,18 +1286,190 @@ private fun JsonReader.readFriendlyName(maxChars: Int): String {
     return friendlyName
 }
 
-private fun JsonReader.readBoundedScalar(maxChars: Int, field: String): String {
+private fun StreamingJsonReader.readBoundedScalar(maxChars: Int, field: String): String {
     val value = when (peek()) {
-        JsonToken.NULL -> { nextNull(); "" }
-        JsonToken.STRING, JsonToken.NUMBER -> nextString()
-        JsonToken.BOOLEAN -> nextBoolean().toString()
+        StreamJsonToken.NULL -> { nextNull(); "" }
+        StreamJsonToken.STRING, StreamJsonToken.NUMBER -> nextString(maxChars, field)
+        StreamJsonToken.BOOLEAN -> nextBoolean().toString()
         else -> { skipValue(); "" }
     }
     check(value.length <= maxChars) { "states $field exceeds $maxChars characters" }
     return value
 }
 
-/** Bounds bytes before JsonReader can allocate them. Cancellation interrupts the blocking read through
+internal enum class StreamJsonToken { BEGIN_OBJECT, BEGIN_ARRAY, STRING, NUMBER, BOOLEAN, NULL, END_DOCUMENT }
+
+/** Small dependency-free streaming JSON reader for the HA state projection. Android's JsonReader is
+ * unavailable as real code in local JVM tests, while a tree parser would reintroduce the payload-copy
+ * regression this path exists to avoid. */
+internal class StreamingJsonReader(private val input: Reader) : AutoCloseable {
+    private data class Scope(val closing: Char, var first: Boolean = true)
+    private val scopes = ArrayDeque<Scope>()
+    private var lookahead = UNSET
+
+    fun beginArray() { expect('['); pushScope(']') }
+    fun endArray() { expect(']'); popScope(']') }
+    fun beginObject() { expect('{'); pushScope('}') }
+    fun endObject() { expect('}'); popScope('}') }
+
+    fun hasNext(): Boolean {
+        val scope = scopes.lastOrNull() ?: error("JSON scope is empty")
+        skipWhitespace()
+        if (peekChar() == scope.closing.code) return false
+        if (scope.first) {
+            scope.first = false
+        } else {
+            expect(',')
+            skipWhitespace()
+            check(peekChar() != scope.closing.code) { "trailing comma in JSON" }
+        }
+        return true
+    }
+
+    fun nextName(): String {
+        val name = readString(MAX_NAME_CHARS, "field name")
+        skipWhitespace(); expect(':')
+        return name
+    }
+
+    fun peek(): StreamJsonToken {
+        skipWhitespace()
+        return when (val char = peekChar()) {
+            '{'.code -> StreamJsonToken.BEGIN_OBJECT
+            '['.code -> StreamJsonToken.BEGIN_ARRAY
+            '"'.code -> StreamJsonToken.STRING
+            't'.code, 'f'.code -> StreamJsonToken.BOOLEAN
+            'n'.code -> StreamJsonToken.NULL
+            -1 -> StreamJsonToken.END_DOCUMENT
+            else -> if (char == '-'.code || char in '0'.code..'9'.code) StreamJsonToken.NUMBER
+                else error("invalid JSON value")
+        }
+    }
+
+    fun nextNull() { expectLiteral("null") }
+    fun nextBoolean(): Boolean = when (peekChar()) {
+        't'.code -> { expectLiteral("true"); true }
+        'f'.code -> { expectLiteral("false"); false }
+        else -> error("expected JSON boolean")
+    }
+
+    fun nextString(maxChars: Int, field: String): String = when (peek()) {
+        StreamJsonToken.STRING -> readString(maxChars, field)
+        StreamJsonToken.NUMBER -> readNumber(maxChars, field)
+        else -> error("expected JSON scalar")
+    }
+
+    fun skipValue(depth: Int = 0) {
+        check(depth < MAX_DEPTH) { "JSON nesting exceeds $MAX_DEPTH" }
+        when (peek()) {
+            StreamJsonToken.BEGIN_OBJECT -> {
+                beginObject()
+                while (hasNext()) { nextName(); skipValue(depth + 1) }
+                endObject()
+            }
+            StreamJsonToken.BEGIN_ARRAY -> {
+                beginArray()
+                while (hasNext()) skipValue(depth + 1)
+                endArray()
+            }
+            StreamJsonToken.STRING -> { readString(null, "skipped value") }
+            StreamJsonToken.NUMBER -> { readNumber(MAX_SKIPPED_NUMBER_CHARS, "skipped number") }
+            StreamJsonToken.BOOLEAN -> { nextBoolean() }
+            StreamJsonToken.NULL -> nextNull()
+            StreamJsonToken.END_DOCUMENT -> error("unexpected end of JSON")
+        }
+    }
+
+    fun requireEndDocument() {
+        check(scopes.isEmpty()) { "JSON scope is still open" }
+        skipWhitespace()
+        check(peekChar() == -1) { "trailing data after JSON document" }
+    }
+
+    override fun close() = input.close()
+
+    private fun readString(maxChars: Int?, field: String): String {
+        skipWhitespace(); expect('"')
+        val value = if (maxChars == null) null else StringBuilder(minOf(maxChars, 64))
+        var count = 0
+        while (true) {
+            val char = takeChar()
+            check(char >= 0) { "unterminated JSON string" }
+            if (char == '"'.code) break
+            val decoded = if (char == '\\'.code) readEscape() else {
+                check(char >= 0x20) { "control character in JSON string" }
+                char.toChar()
+            }
+            count++
+            if (maxChars != null) check(count <= maxChars) { "states $field exceeds $maxChars characters" }
+            value?.append(decoded)
+        }
+        return value?.toString().orEmpty()
+    }
+
+    private fun readEscape(): Char = when (val escaped = takeChar().toChar()) {
+        '"', '\\', '/' -> escaped
+        'b' -> '\b'; 'f' -> '\u000c'; 'n' -> '\n'; 'r' -> '\r'; 't' -> '\t'
+        'u' -> {
+            var value = 0
+            repeat(4) {
+                val digit = takeChar()
+                val hex = Character.digit(digit.toChar(), 16)
+                check(hex >= 0) { "invalid JSON unicode escape" }
+                value = value * 16 + hex
+            }
+            value.toChar()
+        }
+        else -> error("invalid JSON escape")
+    }
+
+    private fun readNumber(maxChars: Int, field: String): String {
+        skipWhitespace()
+        val value = StringBuilder()
+        while (true) {
+            val char = peekChar()
+            if (char < 0 || char.toChar().isWhitespace() || char == ','.code || char == ']'.code || char == '}'.code) break
+            value.append(takeChar().toChar())
+            check(value.length <= maxChars) { "states $field exceeds $maxChars characters" }
+        }
+        return value.toString().also { check(JSON_NUMBER.matches(it)) { "invalid JSON number" } }
+    }
+
+    private fun expectLiteral(literal: String) = literal.forEach { expected ->
+        check(takeChar() == expected.code) { "invalid JSON literal" }
+    }
+
+    private fun expect(expected: Char) {
+        skipWhitespace()
+        check(takeChar() == expected.code) { "expected '$expected' in JSON" }
+    }
+
+    private fun pushScope(closing: Char) {
+        check(scopes.size < MAX_DEPTH) { "JSON nesting exceeds $MAX_DEPTH" }
+        scopes.addLast(Scope(closing))
+    }
+
+    private fun popScope(closing: Char) {
+        check(scopes.removeLastOrNull()?.closing == closing) { "mismatched JSON scope" }
+    }
+
+    private fun skipWhitespace() { while (peekChar() >= 0 && peekChar().toChar().isWhitespace()) takeChar() }
+    private fun peekChar(): Int {
+        if (lookahead == UNSET) lookahead = input.read()
+        return lookahead
+    }
+    private fun takeChar(): Int = peekChar().also { lookahead = UNSET }
+
+    private companion object {
+        const val UNSET = -2
+        const val MAX_DEPTH = 64
+        const val MAX_NAME_CHARS = 1_024
+        const val MAX_SKIPPED_NUMBER_CHARS = 1_024
+        val JSON_NUMBER = Regex("-?(0|[1-9][0-9]*)(\\.[0-9]+)?([eE][+-]?[0-9]+)?")
+    }
+}
+
+/** Bounds bytes before the streaming reader can allocate field values. Cancellation interrupts the blocking read through
  * runInterruptible; this stream also notices interruption and elapsed time between transport reads. */
 internal class DeadlineBoundedInputStream(
     input: InputStream,
@@ -1238,6 +1640,120 @@ private const val MAX_HA_CANDIDATE_URL_CHARS = 2_048
 
 internal fun canActivateLearnedEntitySet(defaultResolverRebootstrapPending: Boolean): Boolean =
     !defaultResolverRebootstrapPending
+
+internal fun recordBrowserObserverCosts(
+    registry: FeatureCostRegistry,
+    observer: EntityLearningProtocol.BrowserObserverCosts,
+) {
+    registry.recordExternal(
+        FeatureCostOperation.ENTITY_BROWSER_OBSERVER,
+        wallElapsedNanos = (observer.parseMicros + observer.stringifyMicros) * 1_000L,
+        events = observer.frames,
+        inputChars = observer.frameChars,
+        workUnits = observer.entities,
+    )
+    registry.recordDropped(FeatureCostOperation.ENTITY_BROWSER_OBSERVER, observer.dropped)
+    registry.recordCoalesced(FeatureCostOperation.ENTITY_BROWSER_OBSERVER, observer.coalesced)
+}
+
+internal data class EntityTelemetryTarget(val generation: Long, val instance: String, val path: String)
+
+internal data class EntityTelemetryBatch(
+    val target: EntityTelemetryTarget,
+    val accessed: Map<String, Long>,
+    val missing: Set<String>,
+    val metrics: Map<String, Pair<Long, Long>>,
+    val now: Long = System.currentTimeMillis(),
+) {
+    val uniqueIds: Int get() = (accessed.keys + missing + metrics.keys).size
+}
+
+internal data class EntityTelemetryAdmission(val backlog: Int, val coalesced: Long, val dropped: Long)
+
+/** Serializes synchronous SQLite telemetry with close; cancellation alone cannot stop a transaction. */
+internal class EntityTelemetryStoreGate {
+    private val lock = Any()
+    fun <T> withStore(block: () -> T): T = synchronized(lock) { block() }
+}
+
+/** Fixed-size accumulator used by the renderer bridge. It merges repeated batches without queuing jobs. */
+internal class EntityTelemetryAccumulator(private val maxIds: Int) {
+    init { require(maxIds > 0) }
+
+    private var target: EntityTelemetryTarget? = null
+    private val ids = linkedSetOf<String>()
+    private val accessed = linkedMapOf<String, Long>()
+    private val missing = linkedSetOf<String>()
+    private val metrics = linkedMapOf<String, Pair<Long, Long>>()
+
+    @Synchronized
+    fun admit(
+        admittedTarget: EntityTelemetryTarget,
+        newAccessed: Map<String, Long>,
+        newMissing: Set<String>,
+        newMetrics: Map<String, Pair<Long, Long>>,
+    ): EntityTelemetryAdmission {
+        var dropped = 0L
+        if (target != null && target != admittedTarget) {
+            dropped += ids.size
+            clear()
+        }
+        target = admittedTarget
+        val coalesced = if (ids.isNotEmpty() &&
+            (newAccessed.isNotEmpty() || newMissing.isNotEmpty() || newMetrics.isNotEmpty())) 1L else 0L
+
+        fun admitId(id: String): Boolean {
+            if (id in ids) return true
+            if (ids.size >= maxIds) {
+                dropped++
+                return false
+            }
+            ids += id
+            return true
+        }
+        newAccessed.forEach { (id, count) ->
+            if (admitId(id)) accessed[id] = saturatingAdd(accessed[id] ?: 0L, count.coerceAtLeast(0L))
+        }
+        newMissing.forEach { id -> if (admitId(id)) missing += id }
+        newMetrics.forEach { (id, value) ->
+            if (admitId(id)) {
+                val previous = metrics[id] ?: (0L to 0L)
+                metrics[id] = saturatingAdd(previous.first, value.first.coerceAtLeast(0L)) to
+                    saturatingAdd(previous.second, value.second.coerceAtLeast(0L))
+            }
+        }
+        return EntityTelemetryAdmission(ids.size, coalesced, dropped)
+    }
+
+    @Synchronized fun drain(): EntityTelemetryBatch? {
+        val admittedTarget = target ?: return null
+        if (ids.isEmpty()) {
+            target = null
+            return null
+        }
+        return EntityTelemetryBatch(
+            admittedTarget,
+            LinkedHashMap(accessed),
+            LinkedHashSet(missing),
+            LinkedHashMap(metrics),
+        ).also { clear() }
+    }
+
+    @Synchronized fun size(): Int = ids.size
+
+    @Synchronized fun discard(): Int = ids.size.also { clear() }
+
+    private fun clear() {
+        target = null
+        ids.clear()
+        accessed.clear()
+        missing.clear()
+        metrics.clear()
+    }
+
+    private fun saturatingAdd(left: Long, right: Long): Long =
+        if (right > 0L && left > Long.MAX_VALUE - right) Long.MAX_VALUE else left + right
+}
 
 /** A resolver-policy upgrade must rescan even when the old, potentially wrong catalog has synced. */
 internal fun shouldSyncEntityLearningOnStartup(

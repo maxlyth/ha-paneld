@@ -1,5 +1,8 @@
 package io.github.maxlyth.hapaneld.mqtt
 
+import io.github.maxlyth.hapaneld.metrics.FeatureCostOperation
+import io.github.maxlyth.hapaneld.metrics.FeatureCostRegistry
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -80,11 +83,38 @@ class StateConvergerTest {
         c.reconcile("screen")
         value = "OFF"
         c.reconcile("screen")
+        assertEquals(listOf("ON"), sent.map { it.payload })
         sent[0].done(true)
+        assertEquals(listOf("ON", "OFF"), sent.map { it.payload })
         sent[1].done(true)
         c.reconcile("screen")
 
         assertEquals(listOf("ON", "OFF"), sent.map { it.payload })
+    }
+
+    @Test fun alternatingFloodConflatesToOnePhysicalPublishPerChannel() {
+        var value = "ON"
+        val sent = mutableListOf<Sent>()
+        val c = converger(sent)
+        c.register(StateConverger.Channel("screen", "screen/state", observe = {
+            StateConverger.Observation.Known(value)
+        }))
+
+        c.reconcile("screen")
+        repeat(1_000) {
+            value = if (it % 2 == 0) "OFF" else "ON"
+            c.reconcile("screen", force = true)
+        }
+        value = "OFF"
+        c.reconcile("screen", force = true)
+        assertEquals(1, sent.size)
+        assertEquals(1, c.status().inFlight)
+
+        sent.single().done(true)
+        assertEquals(listOf("ON", "OFF"), sent.map { it.payload })
+        assertEquals(1, c.status().inFlight)
+        sent.last().done(true)
+        assertEquals(0, c.status().inFlight)
     }
 
     @Test fun connectionInvalidationRejectsOldAckAndRepublishesStableState() {
@@ -106,6 +136,36 @@ class StateConvergerTest {
         sent.last().done(true)
         assertEquals(0, c.status().dirty)
         assertEquals(1, c.status().successes)
+    }
+
+    @Test fun connectionInvalidationCancelsTheOrphanedPublishCostSpan() {
+        var wall = 0L
+        val costs = FeatureCostRegistry(
+            wallNanos = { wall },
+            threadCpuNanos = { -1L },
+            threadId = { 1L },
+        )
+        val sent = mutableListOf<Sent>()
+        val c = StateConverger(
+            sender = { topic, payload, _, done -> sent += Sent(topic, payload, done) },
+            schedule = { it() },
+            featureCosts = costs,
+        )
+        c.register(StateConverger.Channel("screen", "screen/state", observe = {
+            StateConverger.Observation.Known("ON")
+        }))
+
+        c.reconcile("screen")
+        assertEquals(1, costOperation(costs).getInt("in_flight"))
+        wall += 5_000_000L
+        c.markAllDirty()
+
+        val cancelled = costOperation(costs)
+        assertEquals(0, cancelled.getInt("in_flight"))
+        assertEquals(1L, cancelled.getLong("cancelled"))
+        assertEquals(5_000_000L, cancelled.getLong("wall_ns_total"))
+        sent.single().done(true)
+        assertEquals(0L, costOperation(costs).getLong("succeeded"))
     }
 
     @Test fun unknownObservationCannotReuseAcknowledgementFromOldConnection() {
@@ -190,6 +250,32 @@ class StateConvergerTest {
         assertEquals(0, c.status().successes)
     }
 
+    @Test fun closeCancelsTheOrphanedPublishCostSpan() {
+        val costs = FeatureCostRegistry(
+            wallNanos = { 0L },
+            threadCpuNanos = { -1L },
+            threadId = { 1L },
+        )
+        val sent = mutableListOf<Sent>()
+        val c = StateConverger(
+            sender = { topic, payload, _, done -> sent += Sent(topic, payload, done) },
+            schedule = { it() },
+            featureCosts = costs,
+        )
+        c.register(StateConverger.Channel("screen", "screen/state", observe = {
+            StateConverger.Observation.Known("ON")
+        }))
+
+        c.reconcile("screen")
+        c.close()
+        sent.single().done(false)
+
+        val operation = costOperation(costs)
+        assertEquals(0, operation.getInt("in_flight"))
+        assertEquals(1L, operation.getLong("cancelled"))
+        assertEquals(0L, operation.getLong("failed"))
+    }
+
     @Test fun boundedOutboxPumpsAfterAcknowledgement() {
         val sent = mutableListOf<Sent>()
         val c = StateConverger(
@@ -227,5 +313,12 @@ class StateConvergerTest {
         assertTrue(equivalent("50", "53"))
         assertEquals(false, equivalent("50", "OFF"))
         assertEquals(false, equivalent("unknown", "50"))
+    }
+
+    private fun costOperation(costs: FeatureCostRegistry): JSONObject {
+        val operations = JSONObject(costs.json()).getJSONArray("operations")
+        return (0 until operations.length()).asSequence()
+            .map(operations::getJSONObject)
+            .first { it.getString("id") == FeatureCostOperation.MQTT_STATE_OUTBOX.id }
     }
 }

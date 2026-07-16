@@ -51,6 +51,8 @@ import io.github.maxlyth.hapaneld.dashboard.shouldHoldRendererForEntityBootstrap
 import io.github.maxlyth.hapaneld.dashboard.EntityLearningProtocol
 import io.github.maxlyth.hapaneld.dashboard.EntityLearningRuntime
 import io.github.maxlyth.hapaneld.dashboard.EntityBootstrapProblem
+import io.github.maxlyth.hapaneld.metrics.FeatureCostOperation
+import io.github.maxlyth.hapaneld.metrics.FeatureCosts
 import org.json.JSONObject
 import java.io.File
 import java.net.NetworkInterface
@@ -1407,6 +1409,7 @@ class DashboardActivity : AppCompatActivity() {
 
     @SuppressLint("SetJavaScriptEnabled")
     private fun createWebView(config: Config, generation: Long): WebView = WebView(this).apply {
+        val documentStartOrigins = dashboardDocumentStartOrigins(config.haUrl)
         settings.javaScriptEnabled = true
         settings.domStorageEnabled = true
         settings.allowContentAccess = false
@@ -1431,7 +1434,9 @@ class DashboardActivity : AppCompatActivity() {
         if (android.os.Build.VERSION.SDK_INT < 29) runCatching {
             if (androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.DOCUMENT_START_SCRIPT)) {
                 androidx.webkit.WebViewCompat.addDocumentStartJavaScript(
-                    this, ExternalAuthProtocol.selectedThemeJs(config.darkMode, onlyIfAbsent = true), setOf("*"),
+                    this,
+                    ExternalAuthProtocol.selectedThemeJs(config.darkMode, onlyIfAbsent = true),
+                    documentStartOrigins,
                 )
             }
         }
@@ -1442,7 +1447,9 @@ class DashboardActivity : AppCompatActivity() {
         runCatching {
             if (androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.DOCUMENT_START_SCRIPT)) {
                 androidx.webkit.WebViewCompat.addDocumentStartJavaScript(
-                    this, ExternalAuthProtocol.panelDefaultsJs(), setOf("*"),
+                    this,
+                    ExternalAuthProtocol.panelDefaultsJs(),
+                    documentStartOrigins,
                 )
             }
         }
@@ -1453,8 +1460,12 @@ class DashboardActivity : AppCompatActivity() {
             try {
                 androidx.webkit.WebViewCompat.addDocumentStartJavaScript(
                     this,
-                    EntityFilterProtocol.documentStartScript(config.haUrl, config.dashboardEntityFilterIds),
-                    setOf("*"),
+                    EntityFilterProtocol.documentStartScript(
+                        config.haUrl,
+                        config.dashboardEntityFilterIds,
+                        documentStartOrigins,
+                    ),
+                    documentStartOrigins,
                 )
                 entityFilterRetryPolicy.reset()
             } catch (error: Throwable) {
@@ -1464,12 +1475,25 @@ class DashboardActivity : AppCompatActivity() {
                 }
             }
         }
+        // Always observe the exact HA entity socket so filter-on and filter-off runs have the same
+        // privacy-safe denominator even when automatic learning is disabled. Register after the filter
+        // wrapper so subscription-id tracking sees the effective send chain in both arms.
+        if (filterLease != null) runCatching {
+            if (androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.DOCUMENT_START_SCRIPT)) {
+                androidx.webkit.WebViewCompat.addDocumentStartJavaScript(
+                    this,
+                    EntityFilterProtocol.trafficObserverDocumentStartScript(config.haUrl, documentStartOrigins),
+                    documentStartOrigins,
+                )
+                EntityFilterTelemetry.trafficObserverInstalled(filterLease)
+            }
+        }.onFailure { Log.w(TAG, "entity-filter traffic observer unavailable", it) }
         if (config.dashboardEntityLearningEnabled) runCatching {
             if (androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.DOCUMENT_START_SCRIPT)) {
                 androidx.webkit.WebViewCompat.addDocumentStartJavaScript(
                     this,
-                    EntityLearningProtocol.documentStartScript(config.haUrl),
-                    setOf("*"),
+                    EntityLearningProtocol.documentStartScript(config.haUrl, documentStartOrigins),
+                    documentStartOrigins,
                 )
             }
         }.onFailure { Log.w(TAG, "entity-learning access observer unavailable", it) }
@@ -1509,9 +1533,9 @@ class DashboardActivity : AppCompatActivity() {
                 return true
             }
 
-            // Keep navigation on the dashboard host (the panel has no browser). Allow same-host
-            // redirects across schemes (http↔https behind a proxy/HSTS); only a different HOST is
-            // treated as an external link and blocked.
+            // Keep navigation on the dashboard authority (the panel has no browser). A same-host HTTP
+            // dashboard may upgrade to HTTPS behind a proxy/HSTS, but an HTTPS dashboard may never
+            // downgrade and hand its external-auth bridge to cleartext content.
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 if (!rendererCurrent(generation, view)) return true
                 return !dashboardNavigationAllowed(config.haUrl, request.url.toString())
@@ -1659,19 +1683,30 @@ class DashboardActivity : AppCompatActivity() {
             }
         }
 
+        /** Fixed-shape, content-free traffic counters from the document-start entity socket observer. */
+        @JavascriptInterface
+        fun entityFilterTrafficMetrics(payload: String) {
+            val lease = filterLease ?: return
+            if (!rendererCurrent(generation) || payload.length > 256) return
+            runCatching { EntityFilterProtocol.parseTrafficBatch(payload) }
+                .onSuccess { EntityFilterTelemetry.traffic(lease, it) }
+        }
+
         /** Batched dependency evidence from the document-start `hass.states` observer. */
         @JavascriptInterface
         fun entityLearningAccesses(payload: String) {
-            if (rendererCurrent(generation) && config.dashboardEntityLearningEnabled && payload.length <= 1_000_000) {
+            if (!rendererCurrent(generation) || !config.dashboardEntityLearningEnabled) return
+            if (payload.length < EntityLearningProtocol.MAX_NATIVE_BRIDGE_PAYLOAD_CHARS) {
                 EntityLearningRuntime.recordAccessBatch(payload)
-            }
+            } else FeatureCosts.registry.recordDropped(FeatureCostOperation.ENTITY_BROWSER_OBSERVER)
         }
 
         @JavascriptInterface
         fun entityLearningMetrics(payload: String) {
-            if (rendererCurrent(generation) && config.dashboardEntityLearningEnabled && payload.length <= 1_000_000) {
+            if (!rendererCurrent(generation) || !config.dashboardEntityLearningEnabled) return
+            if (payload.length < EntityLearningProtocol.MAX_NATIVE_BRIDGE_PAYLOAD_CHARS) {
                 EntityLearningRuntime.recordMetricBatch(payload)
-            }
+            } else FeatureCosts.registry.recordDropped(FeatureCostOperation.ENTITY_BROWSER_OBSERVER)
         }
 
         @JavascriptInterface
@@ -1830,8 +1865,9 @@ object ExternalAuthProtocol {
      */
     fun selectedThemeJs(dark: Boolean, onlyIfAbsent: Boolean): String {
         val write = """localStorage.setItem('selectedTheme', JSON.stringify({dark:$dark}))"""
-        return if (onlyIfAbsent) "try{if(!localStorage.getItem('selectedTheme')){$write}}catch(e){}"
+        val body = if (onlyIfAbsent) "try{if(!localStorage.getItem('selectedTheme')){$write}}catch(e){}"
         else "try{$write}catch(e){}"
+        return "(()=>{if(window.top&&window.top!==window)return;$body})();"
     }
 
     /** The frontend's `force` flag (set after a 401 to demand a fresh token), false if absent/malformed. */
@@ -1897,6 +1933,7 @@ object ExternalAuthProtocol {
      *  and re-applies after a renderer-storage wipe (a fresh first run). */
     fun panelDefaultsJs(): String =
         """(function(){try{
+            if(window.top&&window.top!==window)return;
             if(localStorage.getItem('__hapaneld_panel_defaults'))return;
             localStorage.setItem('dockedSidebar',JSON.stringify('always_hidden'));
             localStorage.setItem('suspendWhenHidden',JSON.stringify(false));

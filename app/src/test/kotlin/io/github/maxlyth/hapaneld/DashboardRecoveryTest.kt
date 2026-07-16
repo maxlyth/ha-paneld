@@ -271,9 +271,31 @@ class DashboardRecoveryTest {
         assertTrue(dashboardNavigationAllowed("https://ha.example", "https://HA.EXAMPLE/lovelace/0"))
         assertTrue(dashboardNavigationAllowed("http://ha.example", "https://ha.example/lovelace/0"))
         assertTrue(dashboardNavigationAllowed("http://ha.example:8123", "https://ha.example:8123/lovelace/0"))
+        assertFalse(dashboardNavigationAllowed("https://ha.example", "http://ha.example/lovelace/0"))
+        assertFalse(dashboardNavigationAllowed("https://ha.example:8123", "http://ha.example:8123/lovelace/0"))
         assertFalse(dashboardNavigationAllowed("https://ha.example", "https://ha.example:8443/lovelace/0"))
         assertFalse(dashboardNavigationAllowed("https://ha.example", "file://ha.example/data/local/tmp/page"))
         assertFalse(dashboardNavigationAllowed("https://ha.example", "https://other.example/lovelace/0"))
         assertFalse(dashboardNavigationAllowed("not a url", "https://ha.example/lovelace/0"))
+    }
+
+    @Test fun `document start origins mirror allowed scheme upgrades without broadening authority`() {
+        assertEquals(setOf("https://ha.example"), dashboardDocumentStartOrigins("https://HA.EXAMPLE/lovelace"))
+        assertEquals(
+            linkedSetOf("http://ha.example", "https://ha.example"),
+            dashboardDocumentStartOrigins("http://HA.EXAMPLE/lovelace"),
+        )
+        assertEquals(
+            linkedSetOf("http://ha.example:8123", "https://ha.example:8123"),
+            dashboardDocumentStartOrigins("http://ha.example:8123/lovelace"),
+        )
+        assertEquals(
+            linkedSetOf("http://ha.example", "https://ha.example:80"),
+            dashboardDocumentStartOrigins("http://ha.example:80/lovelace"),
+        )
+        assertEquals(
+            setOf("https://ha.example:8443"),
+            dashboardDocumentStartOrigins("https://ha.example:8443/lovelace"),
+        )
     }
 }

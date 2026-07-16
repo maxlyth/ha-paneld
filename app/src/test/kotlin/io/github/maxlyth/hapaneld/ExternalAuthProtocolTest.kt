@@ -95,6 +95,7 @@ class ExternalAuthProtocolTest {
     @Test
     fun `panel defaults seed forces the panel-appropriate prefs behind a sentinel`() {
         val js = ExternalAuthProtocol.panelDefaultsJs()
+        assertTrue("only the top HA document should receive panel defaults", js.contains("if(window.top&&window.top!==window)return"))
         assertTrue("self-gated so it runs once", js.contains("__hapaneld_panel_defaults"))
         assertTrue("hide the sidebar", js.contains("dockedSidebar") && js.contains("always_hidden"))
         assertTrue("keep the background connection", js.contains("suspendWhenHidden"))
@@ -193,9 +194,10 @@ class ExternalAuthProtocolTest {
 
     @Test fun themeSeedOnlyWritesWhenAbsent() {
         val js = ExternalAuthProtocol.selectedThemeJs(dark = true, onlyIfAbsent = true)
+        assertTrue("only the top HA document should receive the theme seed", js.contains("if(window.top&&window.top!==window)return"))
         assertTrue("guarded on absence — must not stomp a user-picked HA theme", js.contains("if(!localStorage.getItem('selectedTheme'))"))
         assertTrue(js.contains("""JSON.stringify({dark:true})"""))
-        assertTrue("localStorage can throw on data: URLs — must be try/caught", js.startsWith("try{"))
+        assertTrue("localStorage can throw on data: URLs — must be try/caught", js.contains("try{"))
     }
 
     @Test fun themeToggleOverridesUnconditionally() {

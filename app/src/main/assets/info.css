@@ -233,10 +233,19 @@ body.hdr-hide-brand .hdr .brand{display:none}
 .toggle.on{background:#2557a7;border-color:#2557a7}
 .toggle::after{content:"";position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:var(--knob);transition:.15s}
 .toggle.on::after{left:20px}
+.toggle:focus-visible,.pip:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
 .savebar{position:sticky;bottom:0;background:var(--bg);padding:12px 0;margin-top:16px;border-top:1px solid var(--card-border);display:flex;gap:14px;align-items:center;z-index:5}
 .savebar button{background:#2557a7;border:1px solid #2557a7;color:#fff;padding:9px 24px;border-radius:8px;cursor:pointer;font-size:.95rem}
 .savebar button:disabled{background:var(--disabled-bg);border-color:var(--border);color:var(--disabled-fg);cursor:default}
 .muted{color:var(--dim)}
+
+@media(max-width:600px){
+  .frow{flex-direction:column;align-items:stretch;gap:8px}
+  .frow .fctl{width:100%;max-width:none;justify-content:flex-end}
+  .frow .fctl input[type=text],.frow .fctl input[type=password],.frow .fctl input[type=number],.frow .fctl select{
+    flex:1 1 auto;width:100%;min-width:0;box-sizing:border-box
+  }
+}
 
 /* ---- configurable-value marker (Dashboard) + anchor flash (Configure) ---- */
 /* A small pencil after a value marks it CONFIGURABLE (vs a static fact) and deep-links to the

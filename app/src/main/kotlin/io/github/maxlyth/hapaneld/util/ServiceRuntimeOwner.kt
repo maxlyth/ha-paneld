@@ -12,10 +12,11 @@ internal class ServiceRuntimeOwner<T : Any>(
     initial: T,
     threadName: String,
     onError: (operation: String, error: Throwable) -> Unit = { _, _ -> },
+    onRecoverySaturated: () -> Unit = {},
 ) {
     data class Observation<T : Any>(val generation: Long, val value: T)
 
-    private val lifecycle = RuntimeLifecycleCoordinator(threadName, onError)
+    private val lifecycle = RuntimeLifecycleCoordinator(threadName, onError, onRecoverySaturated)
     @Volatile private var current = initial
 
     fun current(): T = current

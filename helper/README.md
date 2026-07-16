@@ -27,10 +27,15 @@ Newline-terminated ASCII on the abstract UNIX socket `@hapaneld-helper`. One or 
 | `BLREAD` | read effective and maximum backlight brightness | `<actual> <max>` / `ERR` |
 | `BLSET <n>` | set hardware backlight brightness, clamped to its maximum | `OK` / `ERR` |
 | `SCREENCAP` | capture the screen as PNG | raw PNG bytes, then EOF |
-| `RELOAD <pkg>` | force-stop + relaunch an app (dashboard reload) | `OK` / `ERR` |
-| `START <pkg/cls>` | launch an activity by component (root, bypasses BAL limits) | `OK` / `ERR` |
+| `RELOAD <pkg>` | force-stop + relaunch an app (dashboard reload); serialized with supported Companion data transactions | `OK` / `ERR` / `BUSY` |
+| `START <pkg/cls>` | launch an activity by component (root, bypasses BAL limits); serialized with supported Companion data transactions | `OK` / `ERR` / `BUSY` |
 | `SETHOME <pkg/cls>` | set the default home (launcher) to a component — re-asserts the dashboard app as home after a HOME-app install clears it | `OK` / `ERR` |
+| `OVERLAY <pkg> [mode]` | read or set the package's `SYSTEM_ALERT_WINDOW` app-op; omit `mode` to query, or use `allow`, `deny`, `ignore`, `default`, or `foreground` to restore an exact prior state | `MODE=<mode>` / `OK` / `ERR` |
 | `APPSTATE <pkg>` | app-watchdog probe: is the package alive and focused? (`pidof` + focused window) | `FG` / `BG` / `DEAD` / `ERR` |
+| `COMPANIONCAPS` | exact Companion data-protocol compatibility probe | `COMPANIONCAPS 1 BACKUP RESTORE STATUS JOURNAL` |
+| `COMPANIONSTATUS` | report whether the daemon-wide Companion transaction lane is available | `IDLE` / `BUSY` |
+| `COMPANIONBACKUP <pkg>` | recover any interrupted transaction, force-stop a supported HA Companion package, descriptor-open and validate its fixed login files, stream a bounded raw snapshot including optional DB WAL/SHM, then relaunch only from a proven-safe state | `BACKUP <count> <bytes>` + framed `FILE <relative> <bytes>` payloads + `DONE [RELAUNCH_ERR]`, or `BUSY` / `ERR [RELAUNCH_ERR]` |
+| `COMPANIONRESTORE <pkg> <db-bytes\|-> <session-bytes\|-> <integration-bytes\|->` | receive the fixed restore set into root-owned staging, recover any interrupted transaction, force-stop, replace the allowlisted files through descriptor-relative staging/rename with durable rollback/commit markers, remove stale DB WAL/SHM, then relaunch only after commit or confirmed rollback | `READY`, then `OK` / `COMMITTED RELAUNCH_ERR` / `ROLLED_BACK [RELAUNCH_ERR]` / `ROLLBACK_FAILED RELAUNCH_SUPPRESSED`; `BUSY` / `STREAMERR` before upload |
 | `INPUTV2` | advertise truthful initial evdev open/grab acknowledgement semantics; older helpers return their normal unknown-verb `ERR` | `OK` |
 | `WATCH <evdev> <0\|1>` | open a `/dev/input/eventN` node; `1` requires `EVIOCGRAB` (suppress the default Android action). Idempotent only for the same node and grab policy | `OK` only after the initial open, requested grab, and reader start succeed; otherwise `ERR` |
 | `SUBSCRIBE` | acquire requested grabs and stream async `KEY <code> <value>` / `SW <code> <value>` lines from every `WATCH`ed node until disconnect | `OK` only after required grabs are active; `ERR` on grab failure or subscriber overflow |
@@ -51,9 +56,10 @@ Newline-terminated ASCII on the abstract UNIX socket `@hapaneld-helper`. One or 
 
 ## Safety
 
-- **Peer-uid authentication.** The transport is an abstract-namespace UNIX socket, so the daemon reads the connecting process's credentials (`SO_PEERCRED`) and accepts **only** ha-paneld's own uid, plus root and shell (for adb debugging). The app's uid is resolved live by `stat`-ing `/data/data/io.github.maxlyth.hapaneld`, because it changes on every reinstall. Every other local app is rejected and the connection closed before a single command runs. (The earlier `127.0.0.1:8889` TCP listener had no auth — any app with `INTERNET` could `REBOOT`/`SCREENCAP` it.)
+- **Peer-uid authentication.** The transport is an abstract-namespace UNIX socket, so the daemon reads the connecting process's credentials (`SO_PEERCRED`) and accepts **only** ha-paneld's current live uid plus root. ADB operators use a root shell; generic Android shell uid 2000 is rejected because Shizuku also runs authorized applications under that identity. The app's uid is resolved live by `stat`-ing `/data/data/io.github.maxlyth.hapaneld`, because it changes on every reinstall. Every other local app is rejected and the connection closed before a single command runs. (The earlier `127.0.0.1:8889` TCP listener had no auth — any app with `INTERNET` could `REBOOT`/`SCREENCAP` it.)
 - **Airtight parsing.** A bounded per-connection line buffer (commands split across reads still parse; overlong lines are dropped, not mis-split or overflowed); every argument `sscanf` is width-bounded; unknown verbs return `ERR`.
 - **Resource limits.** Concurrent connections are capped, and an idle connection is dropped after a timeout — except long-lived `SUBSCRIBE` streams, which are meant to sit idle reading events. So a connection flood can't exhaust the thread-per-connection model.
+- **Descriptor-anchored Companion files.** Backup and restore accept only the full/minimal HA Companion package names and the fixed login-file set; no caller pathname reaches the filesystem. Package, parent and file components are opened relative to trusted directory descriptors with `O_NOFOLLOW`, and live files must be app-owned, regular, single-link inodes within strict per-file and aggregate bounds. Restore uploads first enter a root-owned compartment, then a single helper-owned transaction stages replacement inodes, preserves owner and SELinux label, and fsyncs a fixed-format prepared marker before moving old live files. Old-to-rollback renames are directory-fsynced before new live files are installed; a separately named committed marker is atomically renamed and fsynced before rollback cleanup. After a daemon or power interruption, the next Companion data command rolls a prepared transaction back or finishes a committed transaction, and unexplained rollback artifacts fail closed rather than being deleted. Supported Companion `START`/`RELOAD` requests return `BUSY` while the mutex is held and while any durable marker or unexplained rollback remains after a daemon restart.
 - The commands that shell out (`RELOAD`, `START`, `REBOOT` via `am`/`svc`) sanitise their argument against a strict char-whitelist; the LED/backlight writes touch **only** the whitelisted nodes (`avs-pwm-led/avsux_animation`, `button-backlight/brightness`).
 
 > [!CAUTION]
@@ -110,6 +116,7 @@ The daemon is split by capability under `helper/src/` (the binary, `@hapaneld-he
 | `version.c` | stable helper and protocol identity exposed by `VERSION` and `--version` |
 | `led.c` / `screen.c` / `input.c` | LED (sysfs + ledjni), backlight power, evdev buttons |
 | `sysctl.c` | density / governor / reload / start / reboot / screencap (the shell-out verbs) |
+| `companion.c` | descriptor-anchored, bounded HA Companion backup/restore transaction |
 | `perf.c` | `PERFDUMP` `/proc` snapshot |
 | `cht8305.c` | `CHT8305` room temp/humidity read (input-subsystem `EVIOCGABS`, no exec) |
 | `util.c` | clamp, node IO, the argument validators |
@@ -120,7 +127,7 @@ Isolating `sysexec` keeps the entire privilege/injection surface in one auditabl
 ## Build and test
 
 ```bash
-./helper/build.sh        # cross-compile both ABIs -> helper/dist/<abi>/hapaneld-helper (Docker; reuses tools/build)
+./helper/build.sh        # cross-compile both ABIs at Android API 26 -> helper/dist/<abi>/hapaneld-helper
 
 make -C helper           # host -Werror compile check (the same src/*.c set)
 make -C helper test      # host-native unit tests (validators, clamp, /proc parser, dispatch, accumulator)
@@ -131,31 +138,20 @@ Or compile by hand with any Android NDK: `*-clang -O2 -s -Ihelper/src -o hapanel
 
 ## Provision (per panel, root/adb)
 
-Install the daemon on **every sandbox-walled panel** (any profile with `appCanSu = false`, e.g. TPA10, SMT1019), not just ones whose LED is daemon-driven. On those panels the app can't exec `su`, so the daemon is the privileged path for screen-off, display density, CPU governor, screenshot, perf sampling, hardware buttons *and* the LED; without it those controls are present but silently empty (and `/diag` flags "Helper daemon = NEEDED but not running"). Panels that can `su` directly don't need it.
+Install or upgrade the daemon on every rooted supported panel. Sandbox-walled panels need it for their privileged controls, while direct-`su` panels also use the current helper for the descriptor-confined Companion backup/restore protocol. The app and helper therefore form one compatibility unit even when older releases could route some controls through `su`.
 
 ```bash
-ABI=$(adb shell getprop ro.product.cpu.abi | tr -d '\r')      # e.g. armeabi-v7a
-adb push helper/dist/$ABI/hapaneld-helper /data/local/tmp/
-adb shell su 0 'chmod 755 /data/local/tmp/hapaneld-helper'
-adb shell su 0 '/data/local/tmp/hapaneld-helper &'             # run in the su domain (can write sysfs_lights)
+./helper/build.sh
+./helper/install-daemon.sh <ip:5555>
 ```
 
-ha-paneld auto-detects the daemon (a `PING` on the abstract socket `@hapaneld-helper`) and routes its root-only controls through it — screen-off, display density, CPU governor, screenshot, perf sampling, hardware buttons, and (where present) the LED entity — enabling each as the daemon answers.
+Do not execute the adb/shell-owned staging copy from `/data/local/tmp` as root. The installer hashes the staged input, selects a verified boot-persistence runner before stopping the previous helper, publishes only a root-owned copy, verifies the exact Companion protocol response, and rolls back to the prior binary/service if the replacement does not start correctly. The main provisioner performs the same helper migration automatically when installing a current app release.
 
 ## Boot persistence (init service)
 
-The daemon must (re)start in a root domain after every reboot, and the app can't start it (no `su` from `untrusted_app`). On a userdebug panel this is an `init` service with `seclabel u:r:su:s0` so it runs in the `su` domain (the only one that can write the root-only nodes). `helper/install-daemon.sh` installs the binary to `/system/bin` and `helper/hapaneld-helper.rc` to `/system/etc/init/`.
+The daemon must (re)start in a root domain after every reboot, and the app cannot bootstrap that service itself. `helper/install-daemon.sh` probes the panel and chooses one of two authenticated, rollback-capable paths:
 
-`/system` is read-only (dm-verity), so make it writable once first:
+- A writable-system/userdebug panel receives `/system/bin/hapaneld-helper` plus the init service in `/system/etc/init`.
+- A read-only-system panel is accepted only when a supported Magisk, KernelSU, or APatch service runner is detected; it receives a root-owned binary under `/data/adb/hapaneld` and a `service.d` launcher.
 
-```bash
-adb -s <ip:5555> root
-adb -s <ip:5555> disable-verity   # enables overlayfs
-adb -s <ip:5555> reboot
-# after boot:
-adb -s <ip:5555> remount
-./helper/install-daemon.sh <ip:5555>
-adb -s <ip:5555> reboot           # confirm the init service auto-starts the daemon
-```
-
-Verified on a WF1589T (rk3576, Android 14): after a cold boot the daemon runs with SELinux context `u:r:su:s0` and answers `PING`. Trade-off: this disables dm-verity and writes `/system` (an OTA/factory-reset would remove it) — acceptable on an already-rooted panel.
+If neither persistence path is verified, installation stops without replacing or stopping the existing helper. Reboot the panel when convenient after installation to confirm boot persistence.

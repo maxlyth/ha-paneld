@@ -12,6 +12,9 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 
 class InteractiveControllerTest {
     private class Shell(
@@ -144,6 +147,39 @@ class InteractiveControllerTest {
         val calls = mutableListOf<String>()
         assertNull(controller(canSu = false, calls = calls).screenshot())
         assertEquals(listOf("helper-bytes:SCREENCAP", "su-bytes:screencap -p"), calls)
+    }
+
+    @Test fun concurrentScreenshotsAreSingleFlight() {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val invocations = AtomicInteger()
+        val root = object : RootShell {
+            override fun available() = true
+            override fun run(cmd: String) = false
+            override fun runOutput(cmd: String): String? = null
+            override fun runBytes(cmd: String): ByteArray? {
+                invocations.incrementAndGet()
+                entered.countDown()
+                release.await(2, TimeUnit.SECONDS)
+                return byteArrayOf(1, 2, 3)
+            }
+            override fun fireAndForget(cmd: String) = false
+        }
+        val controller = InteractiveController(
+            canSu = true,
+            root = root,
+            daemon = Helper(mutableListOf()),
+            accessibility = Accessibility(mutableListOf()),
+            shell = Shell(mutableListOf()),
+        )
+        var first: ByteArray? = null
+        val worker = Thread { first = controller.screenshot() }.apply { start() }
+        assertTrue(entered.await(1, TimeUnit.SECONDS))
+        assertNull(controller.screenshot())
+        assertEquals(1, invocations.get())
+        release.countDown()
+        worker.join(2_000)
+        assertArrayEquals(byteArrayOf(1, 2, 3), first)
     }
 
     @Test fun backFallsFromPreferredSuToAccessibility() {

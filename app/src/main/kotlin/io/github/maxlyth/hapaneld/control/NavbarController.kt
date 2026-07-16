@@ -27,6 +27,15 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import io.github.maxlyth.hapaneld.R
+import io.github.maxlyth.hapaneld.metrics.FeatureCostOperation
+import io.github.maxlyth.hapaneld.metrics.FeatureCostOutcome
+import io.github.maxlyth.hapaneld.metrics.FeatureCosts
+import io.github.maxlyth.hapaneld.util.BoundedLatestDispatcher
+import io.github.maxlyth.hapaneld.util.DurableRecoveryMarker
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.locks.ReentrantReadWriteLock
 
 /**
  * Soft on-screen navigation bar drawn as a system overlay (`TYPE_APPLICATION_OVERLAY`). For panels
@@ -72,6 +81,14 @@ class NavbarController(
 ) {
     private val wm = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
     private val main = Handler(Looper.getMainLooper())
+    private val lifecycleLock = Any()
+    private var generation = 0L
+    private var navGeneration = 0L
+    private var closed = false
+    private val navActionGate = ReentrantReadWriteLock()
+    private val overscanRecovery = DurableRecoveryMarker(
+        context.noBackupFilesDir.resolve(OVERSCAN_RECOVERY_FILE),
+    )
 
     private var bar: View? = null      // the visible button row
     private var strip: View? = null    // the swipe-reveal edge trigger (Swipe-reveal mode only)
@@ -79,6 +96,7 @@ class NavbarController(
     private var volLabel: TextView? = null     // live volume % (wide panels only)
     private var volReceiver: BroadcastReceiver? = null  // refreshes volLabel on external volume changes
     private val hideRunnable = Runnable { animateBarOut() }
+    private val repeaters = mutableSetOf<Runnable>()
 
     // Narrow-panel pop-up slider (brightness/volume): a small separate overlay above the bar. Only one open
     // at a time; [sliderKind] tracks which control owns it so re-tapping the same icon toggles it shut.
@@ -88,9 +106,39 @@ class NavbarController(
 
     private enum class Slider { BRIGHTNESS, VOLUME }
 
+    private data class ModeWork(
+        val generation: Long,
+        val mode: String,
+        val cleanup: Boolean = false,
+        val completion: CompletableFuture<NavbarModeApplyOutcome>? = null,
+    )
+    private data class NavWork(val generation: Long, val action: () -> Unit, val finish: () -> Unit)
+
+    private val modeDispatcher = BoundedLatestDispatcher<ModeWork>(
+        threadName = "navbar-mode",
+        consume = ::consumeModeWork,
+        onDiscard = { work ->
+            work.completion?.complete(
+                NavbarModeApplyOutcome(
+                    work.mode,
+                    if (isClosed()) NavbarModeApplyStatus.CLOSED else NavbarModeApplyStatus.SUPERSEDED,
+                ),
+            )
+        },
+    )
+    private val navDispatcher = BoundedLatestDispatcher<NavWork>(
+        threadName = "navbar-action",
+        consume = ::consumeNavWork,
+        onDiscard = { it.finish() },
+    )
+
     @Volatile
     var mode: String = MODE_OFF
         private set
+
+    /** Last complete physical mode. [mode] is the latest desired value and may remain pending after a
+     * failed actuation; callbacks that mutate overlays must follow this applied value instead. */
+    @Volatile private var appliedMode: String = MODE_OFF
 
     init {
         // While the built-in renderer is foreground it detects the reveal swipe in-activity, so the
@@ -101,69 +149,310 @@ class NavbarController(
     }
 
     /**
-     * Idempotent: tear down the current overlay state and rebuild for [newMode]. Called off the main
-     * thread (MQTT / startup coroutine), so the one potentially-blocking step — granting the overlay
-     * appop via root su — happens here, before the view work is posted to the UI thread.
+     * Idempotent: enqueue a rebuild of the overlay state for [newMode]. Calls from MQTT, startup, or the
+     * settings UI conflate into one latest-value slot; blocking permission and overscan work runs on the
+     * controller's single mode worker, while every [WindowManager] mutation remains on the main thread.
      */
     fun apply(newMode: String) {
         val m = normalise(newMode)
-        mode = m
-        if (m != MODE_OFF) {
-            ensureOverlayPermission()
-            if (volReceiver == null) {
-                val r = object : BroadcastReceiver() {
-                    override fun onReceive(ctx: Context, intent: Intent) {
-                        main.post { updateVolLabel() }
-                    }
+        submitMode(m)
+    }
+
+    /** Return an acknowledgement that completes only after both privileged display state and the
+     * main-thread overlay mutation have completed. */
+    internal fun applyAsync(newMode: String): CompletableFuture<NavbarModeApplyOutcome> {
+        val m = normalise(newMode)
+        val completion = CompletableFuture<NavbarModeApplyOutcome>()
+        submitMode(m, completion)
+        return completion
+    }
+
+    /** Restore [previousMode] only while [expectedMode] is still the latest desired request. This makes
+     * persistence/timeout compensation unable to overwrite a newer authoritative navbar transition. */
+    internal fun rollbackAsync(
+        expectedMode: String,
+        previousMode: String,
+    ): CompletableFuture<NavbarModeApplyOutcome> {
+        val expected = normalise(expectedMode)
+        val previous = normalise(previousMode)
+        val completion = CompletableFuture<NavbarModeApplyOutcome>()
+        val admission = synchronized(lifecycleLock) {
+            when {
+                closed -> {
+                    completion.complete(NavbarModeApplyOutcome(previous, NavbarModeApplyStatus.CLOSED))
+                    BoundedLatestDispatcher.Admission.CLOSED
                 }
-                // "android.media.VOLUME_CHANGED_ACTION" is an @hide constant — use the string literal.
-                // RECEIVER_EXPORTED is required from API 33 for receiving system broadcasts.
-                @Suppress("UnspecifiedRegisterReceiverFlag")
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    context.registerReceiver(r, IntentFilter(VOLUME_CHANGED_ACTION), Context.RECEIVER_EXPORTED)
-                } else {
-                    context.registerReceiver(r, IntentFilter(VOLUME_CHANGED_ACTION))
+                mode != expected -> {
+                    completion.complete(NavbarModeApplyOutcome(previous, NavbarModeApplyStatus.SUPERSEDED))
+                    BoundedLatestDispatcher.Admission.COALESCED
                 }
-                volReceiver = r
+                else -> {
+                    generation += 1
+                    mode = previous
+                    modeDispatcher.submit(ModeWork(generation, previous, completion = completion))
+                }
             }
-        } else {
-            volReceiver?.let { runCatching { context.unregisterReceiver(it) }; volReceiver = null }
         }
-        // Publish/withdraw the built-in renderer's in-activity reveal trigger: set only in Swipe-reveal
-        // mode AND only when a bar can actually be drawn — canDraw() is checked HERE, after
-        // ensureOverlayPermission() above, so a freshly root-granted overlay counts. Without the canDraw()
-        // gate a panel that can't hold SYSTEM_ALERT_WINDOW would let BottomSwipeFrame steal a bottom-edge
-        // swipe while reveal()→addBar() can never show a bar — eating the swipe with nothing shown (a
-        // regression vs the canDraw()-gated strip). reveal() is main-thread view work; the mode re-check
-        // inside the post guards a live mode-flip race (mode changed to Off between the swipe and the post).
-        BuiltinDashboard.setNavbarRevealHandler(
-            if (m == MODE_SWIPE && canDraw()) { { main.post { if (mode == MODE_SWIPE) reveal() } } } else null,
+        recordAdmission(FeatureCostOperation.NAVBAR_MODE_APPLY, admission, modeDispatcher.pendingCount())
+        return completion
+    }
+
+    private fun submitMode(
+        mode: String,
+        completion: CompletableFuture<NavbarModeApplyOutcome>? = null,
+    ) {
+        val admission = synchronized(lifecycleLock) {
+            if (closed) {
+                completion?.complete(NavbarModeApplyOutcome(mode, NavbarModeApplyStatus.CLOSED))
+                return@synchronized BoundedLatestDispatcher.Admission.CLOSED
+            }
+            generation += 1
+            this.mode = mode
+            modeDispatcher.submit(ModeWork(generation, mode, completion = completion))
+        }
+        recordAdmission(FeatureCostOperation.NAVBAR_MODE_APPLY, admission, modeDispatcher.pendingCount())
+    }
+
+    private fun consumeModeWork(work: ModeWork) {
+        FeatureCosts.registry.setBacklog(FeatureCostOperation.NAVBAR_MODE_APPLY, 0)
+        val cost = FeatureCosts.registry.span(FeatureCostOperation.NAVBAR_MODE_APPLY).work(units = 1)
+        try {
+            if (work.cleanup) {
+                performCleanup()
+                work.completion?.complete(NavbarModeApplyOutcome(work.mode, NavbarModeApplyStatus.APPLIED))
+                cost.close()
+                modeDispatcher.close()
+            } else if (!isCurrent(work)) {
+                cost.outcome(FeatureCostOutcome.CANCELLED)
+                work.completion?.complete(NavbarModeApplyOutcome(work.mode, NavbarModeApplyStatus.SUPERSEDED))
+                cost.close()
+            } else {
+                // Keep the mode worker occupied until the main-thread mutation acknowledges. Otherwise
+                // a conflated successor can start its platform transition while this one is still pending.
+                val succeeded = performApply(work)
+                val status = when {
+                    succeeded -> NavbarModeApplyStatus.APPLIED
+                    !isCurrent(work) -> NavbarModeApplyStatus.SUPERSEDED
+                    else -> NavbarModeApplyStatus.FAILED
+                }
+                if (status != NavbarModeApplyStatus.APPLIED) cost.outcome(
+                    if (status == NavbarModeApplyStatus.SUPERSEDED) FeatureCostOutcome.CANCELLED
+                    else FeatureCostOutcome.FAILURE,
+                )
+                work.completion?.complete(NavbarModeApplyOutcome(work.mode, status))
+                cost.close()
+            }
+        } catch (e: Exception) {
+            cost.outcome(FeatureCostOutcome.FAILURE)
+            Log.w(TAG, "navbar mode apply failed", e)
+            work.completion?.complete(NavbarModeApplyOutcome(work.mode, NavbarModeApplyStatus.FAILED))
+            cost.close()
+        }
+    }
+
+    private fun performApply(work: ModeWork): Boolean {
+        val target = work.mode
+        val previous = appliedMode
+        // Permission failure must be side-effect free: in particular, never create a persistent crop that
+        // cannot be accompanied by the bar which explains and controls it.
+        val permissionReady = target == MODE_OFF || ensureOverlayPermission()
+        if (!permissionReady || !isCurrent(work)) return false
+
+        val transaction = transactNavbarMode(
+            previousMode = previous,
+            targetMode = target,
+            permissionReady = true,
+            applyOverscanFor = ::applyOverscanForMode,
+            applyOverlayFor = ::applyOverlayMode,
         )
-        if (appCanSu && m == MODE_ALWAYS) {
-            // Always-on: apply the display overscan (blocking) before posting the bar so the content
-            // visibly shifts up before the bar appears, not after. Su contention is acceptable here
-            // since the user just toggled a setting.
-            applyOverscan(BAR_HEIGHT_DP)
-            main.post {
-                main.removeCallbacks(hideRunnable)
-                removeBar(); removeStrip()
-                addBar(autoHide = false)
+        if (!transaction.applied) {
+            if (!transaction.rollbackSucceeded) {
+                Log.e(TAG, "navbar transition failed and prior physical mode could not be restored")
             }
-        } else {
-            // Swipe-reveal / Off: post the view work immediately so the strip appears without waiting
-            // on the su call. Clear any leftover overscan in the background — it shouldn't block the
-            // strip from being available (overscan clear contends with startup tame su calls and can
-            // take 5–10 s on a cold start, which previously delayed the strip by that long).
-            main.post {
-                main.removeCallbacks(hideRunnable)
-                removeBar(); removeStrip()
-                // Don't arm the strip while the built-in renderer is foreground — it handles the reveal
-                // swipe in-activity (onBuiltinForeground re-arms when it backgrounds). Read inside the
-                // post so a service restarted while the renderer is foreground sees the fresh state.
-                if (m == MODE_SWIPE && !BuiltinDashboard.foreground) addStrip()
-            }
-            if (appCanSu) Thread { runCatching { applyOverscan(0) } }.start()
+            return false
         }
+        if (!isCurrent(work)) {
+            val rolledBack = restorePhysicalMode(previous)
+            if (!rolledBack) Log.e(TAG, "superseded navbar transition could not restore prior mode")
+            return false
+        }
+
+        return try {
+            updateModeBindings(target)
+            val committed = synchronized(lifecycleLock) {
+                if (!isCurrentLocked(work)) return@synchronized false
+                appliedMode = target
+                true
+            }
+            if (!committed) {
+                val rolledBack = restorePhysicalMode(previous)
+                runCatching { updateModeBindings(previous) }
+                if (!rolledBack) Log.e(TAG, "superseded navbar binding update could not restore prior mode")
+            }
+            committed
+        } catch (failure: Exception) {
+            Log.w(TAG, "navbar binding update failed; restoring prior mode", failure)
+            val rolledBack = restorePhysicalMode(previous)
+            runCatching { updateModeBindings(previous) }
+            if (!rolledBack) Log.e(TAG, "navbar binding failure could not restore prior physical mode")
+            false
+        }
+    }
+
+    private fun restorePhysicalMode(mode: String): Boolean =
+        applyOverscanForMode(mode) &&
+            applyOverlayMode(mode)
+
+    private fun applyOverscanForMode(target: String): Boolean {
+        if (!appCanSu) return true
+        if (target == MODE_ALWAYS) return applyOwnedOverscan(BAR_HEIGHT_DP)
+        // Avoid making ordinary Off/Swipe startup depend on transient su readiness when this process has
+        // never applied a crop and no crash-recovery marker says an older process left one behind.
+        if (appliedMode != MODE_ALWAYS && !overscanRecovery.isArmed()) return true
+        return applyOwnedOverscan(0)
+    }
+
+    private fun applyOverlayMode(target: String): Boolean = postOnMain {
+        main.removeCallbacks(hideRunnable)
+        removeBar(); removeStrip()
+        when (target) {
+            MODE_ALWAYS -> addBar(autoHide = false)
+            MODE_SWIPE -> BuiltinDashboard.foreground || addStrip()
+            else -> true
+        }
+    }
+
+    private fun updateModeBindings(target: String) {
+        setVolumeReceiver(target != MODE_OFF)
+        synchronized(lifecycleLock) {
+            BuiltinDashboard.setNavbarRevealHandler(
+                if (target == MODE_SWIPE && canDraw()) {
+                    {
+                        main.post {
+                            if (!isClosed() && appliedMode == MODE_SWIPE) reveal()
+                        }
+                    }
+                } else null,
+            )
+        }
+    }
+
+    private fun setVolumeReceiver(enabled: Boolean) {
+        synchronized(lifecycleLock) {
+            if (!enabled) {
+                unregisterVolumeReceiverLocked()
+                return
+            }
+            if (volReceiver != null) return
+            val receiver = object : BroadcastReceiver() {
+                override fun onReceive(ctx: Context, intent: Intent) {
+                    main.post { if (!isClosed()) updateVolLabel() }
+                }
+            }
+            // "android.media.VOLUME_CHANGED_ACTION" is an @hide constant — use the string literal.
+            // RECEIVER_EXPORTED is required from API 33 for receiving system broadcasts.
+            @Suppress("UnspecifiedRegisterReceiverFlag")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                context.registerReceiver(receiver, IntentFilter(VOLUME_CHANGED_ACTION), Context.RECEIVER_EXPORTED)
+            } else {
+                context.registerReceiver(receiver, IntentFilter(VOLUME_CHANGED_ACTION))
+            }
+            volReceiver = receiver
+        }
+    }
+
+    private fun unregisterVolumeReceiverLocked() {
+        volReceiver?.let { runCatching { context.unregisterReceiver(it) } }
+        volReceiver = null
+    }
+
+    private fun postOnMain(action: () -> Boolean): Boolean {
+        val completion = CompletableFuture<Boolean>()
+        val valid = java.util.concurrent.atomic.AtomicBoolean(true)
+        val admitted = main.post {
+            if (valid.compareAndSet(true, false)) {
+                completion.complete(runCatching(action).getOrDefault(false))
+            }
+        }
+        if (!admitted) completion.complete(false)
+        return try {
+            completion.get(MAIN_ACK_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        } catch (failure: Exception) {
+            // If the runnable has not started, invalidate it so a late main-looper recovery cannot apply
+            // the stale target after this worker has compensated/advanced to a newer generation. If it is
+            // already executing, the queued rollback follows it on the same looper and restores ordering.
+            valid.set(false)
+            Log.w(TAG, "navbar main-thread acknowledgement timed out", failure)
+            false
+        }
+    }
+
+    private fun isCurrent(work: ModeWork): Boolean =
+        synchronized(lifecycleLock) { isCurrentLocked(work) }
+
+    private fun isCurrentLocked(work: ModeWork): Boolean =
+        !closed && generation == work.generation && mode == work.mode
+
+    private fun isClosed(): Boolean = synchronized(lifecycleLock) { closed }
+
+    private fun performCleanup() {
+        synchronized(lifecycleLock) {
+            BuiltinDashboard.setNavbarRevealHandler(null)
+            BuiltinDashboard.setForegroundListener(null)
+            unregisterVolumeReceiverLocked()
+        }
+        main.post { tearDownViews() }
+        if (appCanSu) resetOverscanForCleanup()
+    }
+
+    private fun consumeNavWork(work: NavWork) {
+        FeatureCosts.registry.setBacklog(FeatureCostOperation.NAVBAR_ACTION, 0)
+        val cost = FeatureCosts.registry.span(FeatureCostOperation.NAVBAR_ACTION).work(units = 1)
+        val gate = navActionGate.readLock()
+        gate.lock()
+        try {
+            val current = synchronized(lifecycleLock) {
+                !closed && navGeneration == work.generation
+            }
+            if (!current) {
+                cost.outcome(FeatureCostOutcome.CANCELLED)
+            } else {
+                runCatching { work.action() }
+                    .onFailure { cost.outcome(FeatureCostOutcome.FAILURE) }
+            }
+        } finally {
+            gate.unlock()
+            work.finish()
+            cost.close()
+        }
+    }
+
+    private fun submitNavWork(action: () -> Unit, finish: () -> Unit) {
+        val work = synchronized(lifecycleLock) {
+            if (closed) null else NavWork(navGeneration, action, finish)
+        }
+        if (work == null) {
+            finish()
+            recordAdmission(FeatureCostOperation.NAVBAR_ACTION, BoundedLatestDispatcher.Admission.CLOSED, 0)
+            return
+        }
+        val admission = navDispatcher.submit(work)
+        recordAdmission(FeatureCostOperation.NAVBAR_ACTION, admission, navDispatcher.pendingCount())
+    }
+
+    private fun recordAdmission(
+        operation: FeatureCostOperation,
+        admission: BoundedLatestDispatcher.Admission,
+        backlog: Int,
+    ) {
+        when (admission) {
+            BoundedLatestDispatcher.Admission.ACCEPTED -> Unit
+            BoundedLatestDispatcher.Admission.COALESCED ->
+                FeatureCosts.registry.recordCoalesced(operation)
+            BoundedLatestDispatcher.Admission.CLOSED ->
+                FeatureCosts.registry.recordDropped(operation)
+        }
+        FeatureCosts.registry.setBacklog(operation, backlog)
     }
 
     /** The built-in renderer took ([fg]=true) or left the foreground. In Swipe-reveal mode, suppress the
@@ -171,18 +460,18 @@ class NavbarController(
      *  No-op in Off / Always-on. addStrip/removeStrip are idempotent + canDraw()-gated. */
     private fun onBuiltinForeground(fg: Boolean) {
         main.post {
-            if (mode != MODE_SWIPE) return@post
+            if (isClosed() || appliedMode != MODE_SWIPE) return@post
             if (fg) removeStrip() else addStrip()
         }
     }
 
     // --- overlay construction (main thread only) ---
 
-    private fun addBar(autoHide: Boolean) {
-        if (bar != null) return
+    private fun addBar(autoHide: Boolean): Boolean {
+        if (bar != null) return true
         if (!canDraw()) {
             Log.w(TAG, "SYSTEM_ALERT_WINDOW not held (no root to grant it); navbar suppressed")
-            return
+            return false
         }
         val row = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -211,8 +500,10 @@ class NavbarController(
             row.animate().translationY(0f).setDuration(ANIM_MS).start()
             bar = row
             if (autoHide) scheduleHide()
+            return true
         } catch (e: Exception) {
             Log.w(TAG, "addView(bar) failed", e)
+            return false
         }
     }
 
@@ -385,11 +676,11 @@ class NavbarController(
         }
     }
 
-    private fun addStrip() {
-        if (strip != null) return
+    private fun addStrip(): Boolean {
+        if (strip != null) return true
         if (!canDraw()) {
             Log.w(TAG, "SYSTEM_ALERT_WINDOW not held (no root to grant it); navbar suppressed")
-            return
+            return false
         }
         val edge = View(context)
         // lp is declared before the touch listener so the listener can capture it for the
@@ -412,6 +703,7 @@ class NavbarController(
         // strip is briefly flagged FLAG_NOT_TOUCHABLE so the tap reaches the app behind it rather than
         // looping back to the strip itself.
         var downX = 0f; var downY = 0f; var swiped = false
+        val tapToken = AtomicLong()
         edge.setOnTouchListener { _, e ->
             when (e.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
@@ -425,17 +717,24 @@ class NavbarController(
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     if (!swiped) {
                         val x = downX.toInt(); val y = downY.toInt()
+                        val token = tapToken.incrementAndGet()
                         // Pause strip touchability so the re-injected tap routes to the window behind
                         // instead of back to the strip. Restored after the routed tap completes.
                         lp.flags = lp.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
                         runCatching { wm.updateViewLayout(edge, lp) }
-                        Thread {
-                            runCatching { NavActions.tap(appCanSu, x.toFloat(), y.toFloat()) }
-                            main.post {
-                                lp.flags = lp.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
-                                runCatching { wm.updateViewLayout(edge, lp) }
-                            }
-                        }.start()
+                        submitNavWork(
+                            action = { NavActions.tap(appCanSu, x.toFloat(), y.toFloat()) },
+                            finish = {
+                                if (!isClosed() && tapToken.get() == token) {
+                                    main.post {
+                                        if (!isClosed() && tapToken.get() == token && strip === edge && mode == MODE_SWIPE) {
+                                            lp.flags = lp.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+                                            runCatching { wm.updateViewLayout(edge, lp) }
+                                        }
+                                    }
+                                }
+                            },
+                        )
                     }
                     true
                 }
@@ -445,8 +744,10 @@ class NavbarController(
         try {
             wm.addView(edge, lp)
             strip = edge
+            return true
         } catch (e: Exception) {
             Log.w(TAG, "addView(strip) failed", e)
+            return false
         }
     }
 
@@ -539,17 +840,26 @@ class NavbarController(
      *  thread) completes, with a [FEEDBACK_MIN_MS] floor, so the tap stays acknowledged during the lag. */
     private fun navButton(icon: Int, autoHide: Boolean, action: () -> Unit): View {
         val iv = iconCell(icon, 1f)
+        val pressToken = AtomicLong()
         iv.setOnTouchListener { _, e ->
             when (e.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     iv.isPressed = true
                     if (autoHide) scheduleHide()
+                    val token = pressToken.incrementAndGet()
                     val t0 = SystemClock.uptimeMillis()
-                    Thread {
-                        runCatching { action() }
-                        val hold = (FEEDBACK_MIN_MS - (SystemClock.uptimeMillis() - t0)).coerceAtLeast(0L)
-                        main.postDelayed({ iv.isPressed = false }, hold)
-                    }.start()
+                    submitNavWork(
+                        action = action,
+                        finish = finish@{
+                            if (isClosed() || pressToken.get() != token) return@finish
+                            val hold = (FEEDBACK_MIN_MS - (SystemClock.uptimeMillis() - t0)).coerceAtLeast(0L)
+                            main.postDelayed({
+                                if (!isClosed() && pressToken.get() == token && iv.isAttachedToWindow) {
+                                    iv.isPressed = false
+                                }
+                            }, hold)
+                        },
+                    )
                     true
                 }
                 else -> true // consume UP/MOVE/CANCEL — the action's completion clears the highlight
@@ -563,7 +873,14 @@ class NavbarController(
     private fun repeatButton(icon: Int, autoHide: Boolean, step: () -> Unit): View {
         val iv = iconCell(icon, TIGHTEN)
         val repeater = object : Runnable {
-            override fun run() { step(); main.postDelayed(this, REPEAT_INTERVAL_MS) }
+            override fun run() {
+                if (isClosed() || !iv.isPressed || !iv.isAttachedToWindow) {
+                    repeaters.remove(this)
+                    return
+                }
+                step()
+                main.postDelayed(this, REPEAT_INTERVAL_MS)
+            }
         }
         iv.setOnTouchListener { _, e ->
             when (e.actionMasked) {
@@ -571,12 +888,14 @@ class NavbarController(
                     iv.isPressed = true   // show the press highlight (we consume the event below)
                     if (autoHide) main.removeCallbacks(hideRunnable) // don't hide mid-hold
                     step()
+                    repeaters.add(repeater)
                     main.postDelayed(repeater, REPEAT_DELAY_MS)
                     true
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     iv.isPressed = false
                     main.removeCallbacks(repeater)
+                    repeaters.remove(repeater)
                     if (autoHide) scheduleHide()
                     true
                 }
@@ -615,20 +934,74 @@ class NavbarController(
         return canDraw()
     }
 
-    private fun applyOverscan(heightDp: Int) {
-        Su.run("wm overscan 0,0,0,${dp(heightDp)}")
+    private fun applyOwnedOverscan(heightDp: Int): Boolean {
+        // Positive overscan is persistent platform state. Arm recovery before mutating it so even a
+        // force-killed process leaves enough durable evidence for the next startup's apply(Off/Swipe)
+        // to restore the full display. Fail closed if that evidence cannot be made durable.
+        if (heightDp > 0 && !overscanRecovery.arm()) {
+            Log.e(TAG, "refusing persistent navbar overscan without a recovery marker")
+            return false
+        }
+        val applied = Su.run("wm overscan 0,0,0,${dp(heightDp)}")
+        if (applied && heightDp == 0 && !overscanRecovery.clear()) {
+            Log.w(TAG, "could not clear the navbar overscan recovery marker")
+        }
+        return applied
+    }
+
+    private fun resetOverscanForCleanup(): Boolean {
+        if (!overscanRecovery.isArmed()) return applyOwnedOverscan(0)
+        val recovered = overscanRecovery.recoverIfArmed {
+            Su.run("wm overscan 0,0,0,0")
+        }
+        if (!recovered) Log.w(TAG, "navbar overscan reset remains pending for the next process")
+        return recovered
     }
 
     /** Reset any display overscan set by this controller. Call from the service's onDestroy so the
      *  reserved bottom margin doesn't persist after ha-paneld stops. */
     fun cleanup() {
-        BuiltinDashboard.setNavbarRevealHandler(null)
-        BuiltinDashboard.setForegroundListener(null)
-        volReceiver?.let { runCatching { context.unregisterReceiver(it) }; volReceiver = null }
-        main.post { dismissSlider() }
-        if (appCanSu && mode == MODE_ALWAYS) {
-            Thread { runCatching { Su.run("wm overscan 0,0,0,0") } }.start()
+        val admission = synchronized(lifecycleLock) {
+            if (closed) return
+            closed = true
+            generation += 1
+            navGeneration += 1
+            mode = MODE_OFF
+            if (appCanSu && !overscanRecovery.arm()) {
+                Log.e(TAG, "could not persist the navbar overscan recovery marker")
+            }
+            BuiltinDashboard.setNavbarRevealHandler(null)
+            BuiltinDashboard.setForegroundListener(null)
+            unregisterVolumeReceiverLocked()
+            navDispatcher.close()
+            modeDispatcher.submit(ModeWork(generation, MODE_OFF, cleanup = true))
         }
+        recordAdmission(FeatureCostOperation.NAVBAR_MODE_APPLY, admission, modeDispatcher.pendingCount())
+        main.post { tearDownViews() }
+        val deadline = SystemClock.uptimeMillis() + CLEANUP_DRAIN_MS
+        val actionGate = navActionGate.writeLock()
+        val actionDrained = runCatching {
+            actionGate.tryLock(remainingCleanupMs(deadline), TimeUnit.MILLISECONDS)
+        }.getOrDefault(false)
+        if (actionDrained) actionGate.unlock()
+        else Log.w(TAG, "navbar action did not drain within ${CLEANUP_DRAIN_MS}ms")
+        val navDrained = navDispatcher.awaitTermination(remainingCleanupMs(deadline))
+        if (!navDrained) Log.w(TAG, "navbar action worker did not terminate before cleanup deadline")
+        val modeDrained = modeDispatcher.awaitTermination(remainingCleanupMs(deadline))
+        if (!modeDrained) Log.w(TAG, "navbar mode cleanup did not finish before cleanup deadline")
+    }
+
+    private fun remainingCleanupMs(deadline: Long): Long =
+        (deadline - SystemClock.uptimeMillis()).coerceAtLeast(0L)
+
+    private fun tearDownViews() {
+        main.removeCallbacks(hideRunnable)
+        main.removeCallbacks(sliderHide)
+        repeaters.forEach(main::removeCallbacks)
+        repeaters.clear()
+        dismissSlider()
+        removeBar()
+        removeStrip()
     }
 
     private fun overlayType(): Int =
@@ -663,6 +1036,9 @@ class NavbarController(
         private const val STRIP_HEIGHT_DP = BottomSwipeDetector.BAND_DP
         private const val SWIPE_MIN_DP = BottomSwipeDetector.MIN_TRAVEL_DP
         private const val FEEDBACK_MIN_MS = 350L  // min press-highlight visible time (bridges su latency)
+        private const val CLEANUP_DRAIN_MS = 4_000L
+        private const val MAIN_ACK_TIMEOUT_MS = 2_000L
+        private const val OVERSCAN_RECOVERY_FILE = "navbar-overscan-reset-pending"
         private const val ICON_SIZE_DP = 30    // fixed icon size, centred in its cell (uniform across all buttons)
         private const val TIGHTEN = 0.65f      // triple-member cell weight vs nav's 1.0 → ~35% tighter spacing
         private val BAR_BG = 0xC2282C34.toInt() // charcoal @ ~76% — translucent but still reads solid

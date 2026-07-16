@@ -35,13 +35,21 @@ class SystemController(
     private val builtinForeground: () -> Boolean = { BuiltinDashboard.foreground },
 ) {
 
-    /** Launch an activity [component] ("pkg/cls") via the privileged path (daemon START, else su). */
-    private fun privilegedStart(component: String): Boolean {
-        if (!AndroidInput.isComponent(component)) return false
-        return ShortOperationRouter.effect(
-            EffectAttempt(PrivilegeRoute.DAEMON) { daemon.send("START $component") == "OK" },
-            EffectAttempt(PrivilegeRoute.SU) { root.run("am start -n $component") },
-        ) != null
+    private enum class PrivilegedStartResult { STARTED, BLOCKED, FAILED }
+
+    /** Launch an activity [component] ("pkg/cls") via the privileged path. BUSY is an explicit helper
+     * safety boundary: never bypass it through su or an in-process background activity start. */
+    private fun privilegedStart(component: String): PrivilegedStartResult {
+        if (!AndroidInput.isComponent(component)) return PrivilegedStartResult.FAILED
+        return when (daemon.send("START $component")) {
+            "OK" -> PrivilegedStartResult.STARTED
+            "BUSY" -> PrivilegedStartResult.BLOCKED
+            else -> if (root.run("am start -n $component")) {
+                PrivilegedStartResult.STARTED
+            } else {
+                PrivilegedStartResult.FAILED
+            }
+        }
     }
 
     /** True when [pkg] selects ha-paneld's own built-in WebView renderer rather than a foreign app.
@@ -60,7 +68,7 @@ class SystemController(
             return
         }
         val comp = "${env.ownPackage}/.DashboardActivity"
-        if (!privilegedStart(comp)) env.directStart(comp)
+        if (privilegedStart(comp) == PrivilegedStartResult.FAILED) env.directStart(comp)
         Log.i(TAG, "builtin dashboard -> $comp")
     }
 
@@ -78,6 +86,10 @@ class SystemController(
     /** Force-stop the dashboard and relaunch it. */
     fun reloadDashboard(dashboardPkg: String) {
         val pkg = resolveDashboard(dashboardPkg)
+        if (CompanionDataOperationGate.blocks(pkg)) {
+            Log.i(TAG, "dashboard reload suppressed while Companion data operation owns $pkg")
+            return
+        }
         // Built-in renderer: an explicit reload clears any crash latch (deliberate retry consent), flags
         // the relaunch as reload-intent, and reaches onNewIntent → fresh page load.
         if (isBuiltin(pkg)) {
@@ -87,12 +99,22 @@ class SystemController(
             return
         }
         if (!AndroidInput.isPackage(pkg)) { Log.w(TAG, "reload: invalid or missing dashboard package"); return }
+        val daemonReply = daemon.send("RELOAD $pkg")
+        if (daemonReply == "BUSY") {
+            Log.i(TAG, "dashboard reload refused while helper owns Companion data")
+            return
+        }
         val route = ShortOperationRouter.effect(
-            EffectAttempt(PrivilegeRoute.DAEMON) { daemon.send("RELOAD $pkg") == "OK" },
+            EffectAttempt(PrivilegeRoute.DAEMON) { daemonReply == "OK" },
             EffectAttempt(PrivilegeRoute.SU) {
                 if (!root.run("am force-stop $pkg")) return@EffectAttempt false
                 val comp = env.launchComponent(pkg)
-                if (comp != null && privilegedStart(comp)) true else root.run("monkey -p $pkg 1")
+                if (comp == null) return@EffectAttempt root.run("monkey -p $pkg 1")
+                when (privilegedStart(comp)) {
+                    PrivilegedStartResult.STARTED,
+                    PrivilegedStartResult.BLOCKED -> true
+                    PrivilegedStartResult.FAILED -> root.run("monkey -p $pkg 1")
+                }
             },
         )
         when (route) {
@@ -118,7 +140,7 @@ class SystemController(
             return
         }
         val comp = ri.component
-        if (!privilegedStart(comp)) env.directStart(comp)
+        if (privilegedStart(comp) == PrivilegedStartResult.FAILED) env.directStart(comp)
         Log.i(TAG, "launcher -> $comp")
     }
 
@@ -156,7 +178,7 @@ class SystemController(
      */
     fun launchAdminLauncher() {
         val comp = "${env.ownPackage}/.AdminLauncherActivity"
-        if (!privilegedStart(comp)) env.directStart(comp)
+        if (privilegedStart(comp) == PrivilegedStartResult.FAILED) env.directStart(comp)
         Log.i(TAG, "admin launcher -> $comp")
     }
 
@@ -216,10 +238,14 @@ class SystemController(
     /** Bring the dashboard (or the default home app) to the foreground. */
     fun launchHome(dashboardPkg: String) {
         val pkg = resolveDashboard(dashboardPkg)
+        if (CompanionDataOperationGate.blocks(pkg)) {
+            Log.i(TAG, "home launch suppressed while Companion data operation owns $pkg")
+            return
+        }
         if (isBuiltin(pkg)) { startBuiltin(); return }
         val comp = if (pkg.isNotBlank()) env.launchComponent(pkg) else env.defaultHome()?.component
         if (comp == null) { Log.w(TAG, "home: no target resolved"); return }
-        if (!privilegedStart(comp)) env.directStart(comp)
+        if (privilegedStart(comp) == PrivilegedStartResult.FAILED) env.directStart(comp)
         Log.i(TAG, "home -> $comp")
     }
 

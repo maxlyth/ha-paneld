@@ -22,10 +22,11 @@ class RevisionStore(filesDir: File) {
 
     /** Write [bundle] as a new revision (id = now, monotonic) and evict the oldest past the cap. */
     fun snapshot(bundle: ConfigBundle): Long {
-        val id = maxOf(System.currentTimeMillis(), (ids().maxOrNull() ?: 0L) + 1)
+        val existing = ids()
+        val id = maxOf(System.currentTimeMillis(), (existing.maxOrNull() ?: 0L) + 1)
         runCatching {
             File(dir, "$id.json").writeText(bundle.serialize())
-            RevisionRing.toEvict(ids()).forEach { File(dir, "$it.json").delete() }
+            RevisionRing.toEvict(existing).forEach { File(dir, "$it.json").delete() }
         }
         return id
     }

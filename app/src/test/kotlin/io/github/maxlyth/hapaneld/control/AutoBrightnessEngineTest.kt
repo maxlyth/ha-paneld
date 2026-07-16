@@ -4,6 +4,9 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.CopyOnWriteArrayList
 
 class AutoBrightnessEngineTest {
     @Test fun firstSampleSnapsAndUsesTheActuatorVisibleFloor() {
@@ -60,5 +63,48 @@ class AutoBrightnessEngineTest {
 
         assertEquals(BrightnessController.MIN_VISIBLE, low.toSet)
         assertEquals(255, high.toSet)
+    }
+
+    @Test fun computeAndHardwareActuationRemainOrderedAcrossConcurrentSources() {
+        val firstEntered = CountDownLatch(1)
+        val releaseFirst = CountDownLatch(1)
+        val writes = CopyOnWriteArrayList<Int>()
+        val actuator = AutoBrightnessActuator(
+            enabled = { true }, writable = { true }, bias = { 0 },
+            actuationGate = { action -> action(); true },
+            applyBrightness = { value ->
+                writes += value
+                if (writes.size == 1) {
+                    firstEntered.countDown()
+                    releaseFirst.await(2, TimeUnit.SECONDS)
+                }
+            },
+        )
+        val first = Thread { actuator.submitLux(10f) }.apply { start() }
+        assertTrue(firstEntered.await(1, TimeUnit.SECONDS))
+        val second = Thread { actuator.submitLux(100f) }.apply { start() }
+        Thread.sleep(30)
+        assertEquals(1, writes.size)
+        releaseFirst.countDown()
+        first.join(2_000)
+        second.join(2_000)
+
+        val reference = AutoBrightnessEngine()
+        val expected = listOf(
+            reference.submit(10f, true, true, 0)!!.toSet,
+            reference.submit(100f, true, true, 0)!!.toSet,
+        )
+        assertEquals(expected, writes)
+    }
+
+    @Test fun screenIntentGateSuppressesActuationButRetainsLatestLux() {
+        val writes = mutableListOf<Int>()
+        val actuator = AutoBrightnessActuator(
+            enabled = { true }, writable = { true }, bias = { 0 },
+            actuationGate = { false }, applyBrightness = writes::add,
+        )
+        assertEquals(AutoBrightnessSample(), actuator.submitLux(321f))
+        assertTrue(writes.isEmpty())
+        assertEquals(321f, actuator.latestLux())
     }
 }

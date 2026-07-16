@@ -13,6 +13,14 @@ object EntityFilterTelemetry {
     private var modifiedSubscriptions = 0L
     private var failures = 0L
     private var directFallbacks = 0L
+    private var trafficInstalled = false
+    private var trafficBatches = 0L
+    private var trafficSampleMs = 0L
+    private var trafficFrames = 0L
+    private var trafficFrameChars = 0L
+    private var trafficEntityUpdates = 0L
+    private var trafficProcessingMicros = 0L
+    private var trafficDroppedFrames = 0L
 
     @Synchronized fun started(entityIds: List<String>): Lease {
         val lease = Lease(++nextLease)
@@ -22,6 +30,7 @@ object EntityFilterTelemetry {
         configuredHash = EntityFilterProtocol.hash(entityIds)
         lastError = ""
         modifiedSubscriptions = 0; failures = 0; directFallbacks = 0
+        resetTraffic()
         return lease
     }
 
@@ -48,6 +57,18 @@ object EntityFilterTelemetry {
         modifiedSubscriptions = 0
         failures = 0
         directFallbacks = 0
+        resetTraffic()
+    }
+
+    private fun resetTraffic() {
+        trafficInstalled = false
+        trafficBatches = 0
+        trafficSampleMs = 0
+        trafficFrames = 0
+        trafficFrameChars = 0
+        trafficEntityUpdates = 0
+        trafficProcessingMicros = 0
+        trafficDroppedFrames = 0
     }
 
     @Synchronized fun isActive(lease: Lease): Boolean = owner == lease.id && active
@@ -70,6 +91,31 @@ object EntityFilterTelemetry {
     @Synchronized fun directFallback(lease: Lease) {
         if (owner == lease.id) { directFallbacks++; active = false }
     }
+    @Synchronized fun trafficObserverInstalled(lease: Lease) {
+        if (owner == lease.id) trafficInstalled = true
+    }
+    @Synchronized fun traffic(lease: Lease, batch: EntityFilterProtocol.TrafficBatch) {
+        if (owner != lease.id || !trafficInstalled) return
+        trafficBatches = saturatedAdd(trafficBatches, 1)
+        trafficSampleMs = saturatedAdd(trafficSampleMs, batch.sampleMs)
+        trafficFrames = saturatedAdd(trafficFrames, batch.frames)
+        trafficFrameChars = saturatedAdd(
+            trafficFrameChars,
+            batch.frameChars,
+        )
+        trafficEntityUpdates = saturatedAdd(
+            trafficEntityUpdates,
+            batch.entityUpdates,
+        )
+        trafficProcessingMicros = saturatedAdd(
+            trafficProcessingMicros,
+            batch.processingMicros,
+        )
+        trafficDroppedFrames = saturatedAdd(
+            trafficDroppedFrames,
+            batch.droppedFrames,
+        )
+    }
 
     @Synchronized fun json(): String = "{" +
         "\"active\":$active," +
@@ -78,5 +124,12 @@ object EntityFilterTelemetry {
         "\"filterHash\":\"$configuredHash\"," +
         "\"modifiedSubscriptions\":$modifiedSubscriptions," +
         "\"failures\":$failures,\"directFallbacks\":$directFallbacks," +
-        "\"lastError\":\"$lastError\"}"
+        "\"lastError\":\"$lastError\"," +
+        "\"traffic\":{\"installed\":$trafficInstalled,\"batches\":$trafficBatches," +
+        "\"sampleMs\":$trafficSampleMs,\"frames\":$trafficFrames," +
+        "\"frameChars\":$trafficFrameChars,\"entityUpdates\":$trafficEntityUpdates," +
+        "\"processingMicros\":$trafficProcessingMicros,\"droppedFrames\":$trafficDroppedFrames}}"
+
+    private fun saturatedAdd(left: Long, right: Long): Long =
+        if (right >= Long.MAX_VALUE - left) Long.MAX_VALUE else left + right
 }

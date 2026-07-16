@@ -54,4 +54,26 @@ class CachedTest {
         assertTrue(results.all { it == 1 })
         assertEquals(1, builds.get())
     }
+
+    @Test fun backwardClockMovementExpiresInsteadOfPinningAStaleValue() {
+        var now = 10_000L
+        val builds = AtomicInteger()
+        val c = Cached(60_000, nowMs = { now }) { builds.incrementAndGet() }
+        assertEquals(1, c.get())
+        now = 1_000L
+        assertEquals(Long.MAX_VALUE, c.ageMs())
+        assertEquals(2, c.get())
+    }
+
+    @Test fun setAndInvalidateUseTheInjectedMonotonicClock() {
+        var now = 100L
+        val c = Cached(10, nowMs = { now }) { "built" }
+        c.set("known")
+        now = 105L
+        assertEquals(5L, c.ageMs())
+        assertEquals("known", c.get())
+        c.invalidate()
+        assertEquals(Long.MAX_VALUE, c.ageMs())
+        assertEquals("built", c.get())
+    }
 }

@@ -109,6 +109,20 @@ class ScreenControllerTest {
         sc.wake(); assertFalse(sc.isIntendedOff())
     }
 
+    @Test fun intendedOffOwnsBrightnessAgainstAutoActuation() {
+        val sc = ScreenController(
+            backlight, power, FakeRootShell(), FakeDaemon(), wakeTap, ScreenOff.BRIGHTNESS_ZERO,
+        )
+        backlight.level = 120
+        sc.sleep()
+        assertEquals(0, backlight.level)
+        assertFalse(sc.actuateBrightnessIfOn { backlight.setBrightness(220) })
+        assertEquals(0, backlight.level)
+        sc.wake()
+        assertTrue(sc.actuateBrightnessIfOn { backlight.setBrightness(220) })
+        assertEquals(220, backlight.level)
+    }
+
     // --- screen-off tier selection ---
     @Test fun sleepUsesDaemonTierWhenAvailable() {
         val (sc, root) = controller(daemon = mapOf("SCREEN OFF" to "OK"))

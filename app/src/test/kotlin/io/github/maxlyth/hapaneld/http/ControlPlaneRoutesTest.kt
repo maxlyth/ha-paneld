@@ -1,6 +1,8 @@
 package io.github.maxlyth.hapaneld.http
 
+import io.github.maxlyth.hapaneld.backup.PanelBackup
 import io.github.maxlyth.hapaneld.util.ByteLimitExceeded
+import io.github.maxlyth.hapaneld.util.BoundedStreams
 import io.github.maxlyth.hapaneld.util.InstallProgress
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
@@ -11,15 +13,19 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
 import io.ktor.server.routing.routing
+import io.ktor.server.routing.post
+import io.ktor.server.response.respondText
 import io.ktor.server.testing.testApplication
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import java.io.ByteArrayInputStream
 
 class ControlPlaneRoutesTest {
     @get:Rule val temporary = TemporaryFolder()
@@ -70,6 +76,7 @@ class ControlPlaneRoutesTest {
             routing {
                 controlPlaneRoutes(
                     dependencies(
+                        installedComponentVersion = { name -> if (name == "paneld") "0.9.3" else null },
                         installComponent = { name, action, version ->
                             admitted += Triple(name, action, version)
                             admitting
@@ -83,6 +90,21 @@ class ControlPlaneRoutesTest {
         assertJsonPost("name=paneld&action=remove", HttpStatusCode.BadRequest, """{"status":"bad-action"}""")
         assertJsonPost("name=paneld&version=bad%2Ftag", HttpStatusCode.BadRequest, """{"status":"bad-version"}""")
         assertEquals(emptyList<Triple<String, String, String>>(), admitted)
+
+        assertJsonPost(
+            "name=paneld&version=v0.9.2",
+            HttpStatusCode.Conflict,
+            """{"status":"downgrade-refused"}""",
+        )
+        assertEquals(emptyList<Triple<String, String, String>>(), admitted)
+
+        assertJsonPost(
+            "name=paneld&version=v0.9.2&allow_downgrade=true",
+            HttpStatusCode.OK,
+            """{"status":"started"}""",
+        )
+        assertEquals(Triple("paneld", "update", "v0.9.2"), admitted.last())
+        admitted.clear()
 
         assertJsonPost("name=paneld", HttpStatusCode.OK, """{"status":"started"}""")
         assertEquals(listOf(Triple("paneld", "update", "")), admitted)
@@ -98,7 +120,11 @@ class ControlPlaneRoutesTest {
 
     @Test
     fun backupRouteComposesSharedAdmissionBoundedFailuresAndDownloadMetadata() = testApplication {
-        var build: suspend (Boolean, String) -> ByteArray = { _, _ -> byteArrayOf(1, 2, 3) }
+        var artifactId = 0
+        fun artifact(bytes: ByteArray): PanelBackup.Artifact = PanelBackup.Artifact(
+            temporary.newFile("backup-${++artifactId}.hpb").apply { writeBytes(bytes) },
+        )
+        var build: suspend (Boolean, String) -> PanelBackup.Artifact = { _, _ -> artifact(byteArrayOf(1, 2, 3)) }
         val buildCalls = mutableListOf<Pair<Boolean, String>>()
         application {
             routing {
@@ -117,6 +143,12 @@ class ControlPlaneRoutesTest {
         try {
             assertJsonPost(
                 "include_companion=true",
+                HttpStatusCode.Conflict,
+                """{"ok":false,"error":"busy"}""",
+                path = "/api/v1/backup",
+            )
+            assertJsonPost(
+                "include_companion=false&passphrase=expensive",
                 HttpStatusCode.Conflict,
                 """{"ok":false,"error":"busy"}""",
                 path = "/api/v1/backup",
@@ -144,10 +176,20 @@ class ControlPlaneRoutesTest {
         )
         assertOperationLaneReleased()
 
+        var laneHeldWhenArtifactDeleted = false
+        var deliveryHeldWhenArtifactDeleted = false
         build = { includeCompanion, passphrase ->
             assertEquals(true, includeCompanion)
             assertEquals("secret", passphrase)
-            byteArrayOf(7, 8, 9)
+            val source = temporary.newFile("tracked-backup.hpb").apply { writeBytes(byteArrayOf(7, 8, 9)) }
+            val tracked = object : java.io.File(source.path) {
+                override fun delete(): Boolean {
+                    laneHeldWhenArtifactDeleted = InstallProgress.running
+                    deliveryHeldWhenArtifactDeleted = BackupDeliveryGate.occupied()
+                    return super.delete()
+                }
+            }
+            PanelBackup.Artifact(tracked)
         }
         val success = client.post("/api/v1/backup") {
             contentType(ContentType.Application.FormUrlEncoded)
@@ -157,6 +199,8 @@ class ControlPlaneRoutesTest {
         assertEquals(ContentType.Application.OctetStream, success.contentType())
         assertEquals("attachment; filename=\"test-panel-backup.hpb\"", success.headers[HttpHeaders.ContentDisposition])
         assertArrayEquals(byteArrayOf(7, 8, 9), success.bodyAsBytes())
+        assertFalse("slow delivery does not monopolize the destructive operation lane", laneHeldWhenArtifactDeleted)
+        assertTrue("artifact lifetime remains inside the single-delivery gate", deliveryHeldWhenArtifactDeleted)
         assertOperationLaneReleased()
     }
 
@@ -167,6 +211,8 @@ class ControlPlaneRoutesTest {
         var stagingFails = false
         var identity: UploadedApkIdentity? = UploadedApkIdentity("example.panel", "1.2.3", null)
         var closeDuringInspection = false
+        var usableSpace = Long.MAX_VALUE
+        var timeOutReceipt = false
         var installed: PendingUploadStore.Entry? = null
         var fileId = 0
         val stagedFiles = mutableListOf<java.io.File>()
@@ -188,6 +234,11 @@ class ControlPlaneRoutesTest {
                 InstallProgress.finish(progress, "installed")
             },
             maxBytes = 4,
+            usableSpace = { usableSpace },
+            receiveBody = { input, output, maxBytes ->
+                if (timeOutReceipt) throw BodyReceiptTimeout()
+                BoundedStreams.copy(input, output, maxBytes)
+            },
         )
         application { routing { controlPlaneRoutes(dependencies(apkUpload = upload)) } }
 
@@ -206,8 +257,19 @@ class ControlPlaneRoutesTest {
         assertUpload("apk", HttpStatusCode.InternalServerError, """{"ok":false,"error":"upload-staging-failed"}""")
 
         stagingFails = false
+        val beforeOversized = stagedFiles.size
         assertUpload("12345", HttpStatusCode.PayloadTooLarge, """{"ok":false,"error":"upload-too-large"}""")
+        assertEquals(beforeOversized, stagedFiles.size)
+
+        usableSpace = 64L * 1024L * 1024L + 2L
+        assertUpload("apk", HttpStatusCode.InsufficientStorage, """{"ok":false,"error":"insufficient-storage"}""")
         assertFalse(stagedFiles.last().exists())
+
+        usableSpace = Long.MAX_VALUE
+        timeOutReceipt = true
+        assertUpload("apk", HttpStatusCode.RequestTimeout, """{"ok":false,"error":"upload-timeout"}""")
+        assertFalse(stagedFiles.last().exists())
+        timeOutReceipt = false
 
         assertUpload("", HttpStatusCode.BadRequest, """{"ok":false,"error":"upload-failed"}""")
         assertFalse(stagedFiles.last().exists())
@@ -228,6 +290,7 @@ class ControlPlaneRoutesTest {
             HttpStatusCode.OK,
             """{"ok":true,"token":"upload-token","package":"example.panel","version":"1.2.3","signer":"unsigned"}""",
         )
+        assertUpload("next", HttpStatusCode.Conflict, """{"ok":false,"error":"upload-busy"}""")
         assertCommit("wrong-token", HttpStatusCode.Conflict, """{"status":"stale-or-missing"}""")
 
         val held = assertNotNullTicket(InstallProgress.start("held"))
@@ -245,14 +308,75 @@ class ControlPlaneRoutesTest {
         assertFalse(InstallProgress.running)
     }
 
+    @Test fun bodyReaderEnforcesAbsoluteElapsedDeadlineWithoutSleeping() {
+        var now = 0L
+        val source = object : ByteArrayInputStream("payload".toByteArray()) {
+            override fun read(buffer: ByteArray, offset: Int, length: Int): Int =
+                super.read(buffer, offset, length).also { now = 2_000_000L }
+        }
+
+        assertThrows(BodyReceiptTimeout::class.java) {
+            DeadlineBoundedBody.readBytes(
+                source,
+                maxBytes = 64,
+                timeoutMs = 1,
+                nanoTime = { now },
+                deadlineFactory = { _, _ -> AutoCloseable {} },
+            )
+        }
+    }
+
+    @Test fun sharedMaterializedBodyReaderMapsTheDeadlineWithoutWaiting() = testApplication {
+        application {
+            routing {
+                post("/bounded") {
+                    val receipt = receiveBoundedBody(
+                        call,
+                        maxBytes = 64,
+                        timeoutMs = 7,
+                        reader = { _, maxBytes, timeoutMs ->
+                            assertEquals(64L, maxBytes)
+                            assertEquals(7L, timeoutMs)
+                            throw BodyReceiptTimeout()
+                        },
+                    )
+                    when (receipt) {
+                        BoundedBodyReceipt.TimedOut ->
+                            call.respondText("timeout", status = HttpStatusCode.RequestTimeout)
+                        BoundedBodyReceipt.TooLarge ->
+                            call.respondText("too-large", status = HttpStatusCode.PayloadTooLarge)
+                        is BoundedBodyReceipt.Received ->
+                            call.respondText("received")
+                    }
+                }
+            }
+        }
+
+        val response = client.post("/bounded") { setBody("payload") }
+        assertEquals(HttpStatusCode.RequestTimeout, response.status)
+        assertEquals("timeout", response.bodyAsText())
+    }
+
+    @Test fun uploadCapacityKeepsSafetyMarginAndBudgetsUnknownBodiesAtTheMaximum() {
+        val margin = 64L * 1024L * 1024L
+        assertEquals(0L, uploadStagingLimit(margin, maxPayloadBytes = 4L))
+        assertEquals(3L, uploadStagingLimit(margin + 3L, maxPayloadBytes = 4L))
+        assertEquals(4L, uploadStagingLimit(margin + 5L, maxPayloadBytes = 4L))
+        assertEquals(0L, uploadStagingLimit(Long.MAX_VALUE, maxPayloadBytes = -1L))
+    }
+
     private fun dependencies(
         playAudio: (String) -> Boolean = { true },
         installComponent: (String, String, String) -> Boolean = { _, _, _ -> true },
-        buildBackup: suspend (Boolean, String) -> ByteArray = { _, _ -> byteArrayOf() },
+        installedComponentVersion: (String) -> String? = { null },
+        buildBackup: suspend (Boolean, String) -> PanelBackup.Artifact = { _, _ ->
+            PanelBackup.Artifact(temporary.newFile("unused-backup.hpb"))
+        },
         apkUpload: ApkUploadRouteDependencies = unusedApkUpload(),
     ) = ControlPlaneRouteDependencies(
         playAudio = playAudio,
         installComponent = installComponent,
+        installedComponentVersion = installedComponentVersion,
         buildBackup = buildBackup,
         backupFileStem = { "test-panel" },
         apkUpload = apkUpload,

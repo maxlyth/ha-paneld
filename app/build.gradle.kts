@@ -1,4 +1,5 @@
 import java.util.Properties
+import java.security.MessageDigest
 import org.cyclonedx.gradle.CyclonedxDirectTask
 import org.cyclonedx.model.Component
 import org.gradle.api.tasks.Exec
@@ -8,6 +9,27 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.cyclonedx.bom)
+}
+
+val featureCostsEnabled = providers.gradleProperty("featureCosts").orNull
+    ?.toBooleanStrictOrNull() ?: true
+
+val helperIdentityFiles = rootProject.fileTree("helper/src") {
+    include("*.c", "*.h", "*.def")
+}.files.sortedBy { it.relativeTo(rootProject.projectDir).invariantSeparatorsPath }
+val helperCompileContract = "contract:android-api=26;optimization=O2;strip=true"
+val helperBuildId = MessageDigest.getInstance("SHA-256").let { digest ->
+    digest.update(helperCompileContract.toByteArray())
+    digest.update(0)
+    helperIdentityFiles.forEach { file ->
+        digest.update(file.relativeTo(rootProject.projectDir).invariantSeparatorsPath.toByteArray())
+        digest.update(0)
+        digest.update(file.length().toString().toByteArray())
+        digest.update(0)
+        digest.update(file.readBytes())
+        digest.update(0)
+    }
+    digest.digest().joinToString("") { "%02x".format(it) }
 }
 
 dependencyLocking {
@@ -33,6 +55,10 @@ android {
         versionCode = 231
         versionName = "0.9.4-rc1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        // Local paired performance runs can build an otherwise identical no-op arm with
+        // `-PfeatureCosts=false`; release/default builds retain the fixed-key event counters.
+        buildConfigField("boolean", "FEATURE_COSTS_ENABLED", featureCostsEnabled.toString())
+        buildConfigField("String", "HELPER_BUILD_ID", "\"$helperBuildId\"")
 
         // Only the fleet's ARM ABIs — bounds the native LED lib (libhapaneld_led.so) + APK size.
         ndk {
@@ -129,6 +155,14 @@ android {
     }
 }
 
+// Treat the paired-build switch as an explicit generated-source input. This prevents a locally
+// cached BuildConfig from the enabled arm being reused by a disabled performance comparison.
+tasks.matching { it.name.startsWith("generate") && it.name.endsWith("BuildConfig") }.configureEach {
+    inputs.property("featureCostsEnabled", featureCostsEnabled)
+    inputs.files(helperIdentityFiles)
+    inputs.property("helperBuildId", helperBuildId)
+}
+
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)
@@ -201,9 +235,10 @@ tasks.named<CyclonedxDirectTask>("cyclonedxDirectBom") {
 val compileCdpRelay by tasks.registering {
     val ndkDir = android.ndkDirectory
     val src = rootProject.file("helper/cdprelay.c")
+    val policy = rootProject.file("helper/cdprelay_policy.h")
     val out64 = file("src/main/assets/cdprelay-arm64")
     val out32 = file("src/main/assets/cdprelay-arm")
-    inputs.file(src)
+    inputs.files(src, policy)
     inputs.property("ndk", ndkDir.toString())
     outputs.files(out64, out32)
     doLast {
@@ -213,7 +248,41 @@ val compileCdpRelay by tasks.registering {
         exec { commandLine("$bin/armv7a-linux-androideabi26-clang", "-O2", "-s", "-o", out32.path, src.path) }
     }
 }
-tasks.named("preBuild") { dependsOn(compileCdpRelay) }
+
+// Carry the matching root-helper protocol inside the APK as a migration backstop. Provisioning remains
+// the durable installation path; after an in-app self-update, direct-su panels can atomically launch the
+// new helper before exposing helper-versioned features. API 26 matches the app's supported floor.
+val compileBundledRootHelper by tasks.registering {
+    val ndkDir = android.ndkDirectory
+    val sources = rootProject.fileTree("helper/src") { include("*.c") }
+    val out64 = file("src/main/assets/hapaneld-helper-arm64")
+    val out32 = file("src/main/assets/hapaneld-helper-arm")
+    inputs.files(helperIdentityFiles)
+    inputs.file(rootProject.file("helper/source-id.sh"))
+    inputs.property("helperBuildId", helperBuildId)
+    inputs.property("ndk", ndkDir.toString())
+    outputs.files(out64, out32)
+    doLast {
+        val bin = "$ndkDir/toolchains/llvm/prebuilt/linux-x86_64/bin"
+        val sourcePaths = sources.files.sortedBy(File::getName).map(File::getPath)
+        out64.parentFile.mkdirs()
+        exec {
+            commandLine(
+                "$bin/aarch64-linux-android26-clang", "-O2", "-s", "-I${rootProject.file("helper/src").path}",
+                "-DHAPANELD_BUILD_ID=\"$helperBuildId\"",
+                "-o", out64.path, *sourcePaths.toTypedArray(),
+            )
+        }
+        exec {
+            commandLine(
+                "$bin/armv7a-linux-androideabi26-clang", "-O2", "-s", "-I${rootProject.file("helper/src").path}",
+                "-DHAPANELD_BUILD_ID=\"$helperBuildId\"",
+                "-o", out32.path, *sourcePaths.toTypedArray(),
+            )
+        }
+    }
+}
+tasks.named("preBuild") { dependsOn(compileCdpRelay, compileBundledRootHelper) }
 
 val helperSocketTestServer = rootProject.file("helper/build/socket-test-server")
 val buildHelperSocketTestServer by tasks.registering(Exec::class) {

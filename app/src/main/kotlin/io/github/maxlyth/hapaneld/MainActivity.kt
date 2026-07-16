@@ -24,7 +24,9 @@ import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import io.github.maxlyth.hapaneld.util.LocalAdminEndpoint
 import io.github.maxlyth.hapaneld.util.localIpv4
+import io.github.maxlyth.hapaneld.util.localIpv6
 
 /**
  * Launcher Activity. Requests the notification permission (Android 13+) and starts [PaneldService],
@@ -41,9 +43,9 @@ class MainActivity : AppCompatActivity() {
         ) { PaneldService.start(this) }
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
-    private val url: String get() = "http://${localIpv4() ?: "127.0.0.1"}:${Config.DEFAULT_PORT}/"
-
     private val config by lazy { Config(this) }
+    private val url: String
+        get() = LocalAdminEndpoint.externalUrl(localIpv4(), localIpv6(), config.httpPort)
     private val handler = Handler(Looper.getMainLooper())
     private var autoReturn: Runnable? = null
 
@@ -76,15 +78,16 @@ class MainActivity : AppCompatActivity() {
         maybeArmAutoReturn()
     }
 
-    // After an app update the launcher lands on this UI; if the panel is configured (MQTT connected)
-    // and the Companion is installed, bounce back to the dashboard so it doesn't linger. Cancelled by any
+    // After an app update the launcher lands on this UI; once the configured renderer is launchable,
+    // bounce back to the dashboard so it doesn't linger. Cancelled by any
     // touch (so someone who opened it on purpose isn't yanked away). Gated on a recent app update, so a
     // deliberate open long afterwards just stays put.
     //
     // POLL rather than check once: after a restart (worst case a whole-fleet restart flooding the broker)
-    // MQTT can take well over 8s to reconnect. The old one-shot at 8s silently skipped the redirect and
-    // never retried, leaving the panel stranded on this UI. Now we re-check every [AUTO_RETURN_POLL_MS]
-    // until connected or the [AUTO_RETURN_WINDOW_MS] window elapses, redirecting as soon as it's up.
+    // The built-in renderer is ready once its HA URL and launch target exist. A launchable external
+    // renderer owns its own HA readiness; MQTT is optional for both. Re-check every
+    // [AUTO_RETURN_POLL_MS] until the renderer-specific gate opens or the [AUTO_RETURN_WINDOW_MS]
+    // window elapses.
     private fun maybeArmAutoReturn() {
         if (!config.autoReturnDashboard || dashboardIntent() == null) return
         val updated = runCatching { packageManager.getPackageInfo(packageName, 0).lastUpdateTime }.getOrDefault(0L)
@@ -92,7 +95,18 @@ class MainActivity : AppCompatActivity() {
         val deadline = System.currentTimeMillis() + AUTO_RETURN_WINDOW_MS
         val r = object : Runnable {
             override fun run() {
-                if (PanelStatus.mqttConnected) { autoReturn = null; openDashboard(); return }
+                val launchAvailable = dashboardIntent() != null
+                if (PostUpdateReturnPolicy.dashboardReady(
+                        configuredRenderer = config.dashboardPackage,
+                        builtInUrlConfigured = config.haUrl.isNotBlank(),
+                        dashboardLaunchAvailable = launchAvailable,
+                        dashboardCrashLooping = PanelStatus.dashboardCrashLooping,
+                    )
+                ) {
+                    autoReturn = null
+                    openDashboard()
+                    return
+                }
                 if (System.currentTimeMillis() >= deadline) { autoReturn = null; return } // give up (unconfigured)
                 handler.postDelayed(this, AUTO_RETURN_POLL_MS)
             }
@@ -139,6 +153,7 @@ class MainActivity : AppCompatActivity() {
         val logoH = when { hDp < 560 -> 52; hDp < 900 -> 72; else -> 96 }
         root.addView(ImageView(this).apply {
             setImageResource(R.drawable.wordmark)
+            contentDescription = getString(R.string.wordmark_description)
             adjustViewBounds = true
             scaleType = ImageView.ScaleType.FIT_CENTER
             layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(logoH))
@@ -168,6 +183,7 @@ class MainActivity : AppCompatActivity() {
         qrBitmap(url, dp(qrDp))?.let { qr ->
             root.addView(ImageView(this).apply {
                 setImageBitmap(qr)
+                contentDescription = getString(R.string.config_qr_description, url)
                 layoutParams = LinearLayout.LayoutParams(dp(qrDp), dp(qrDp)).apply { topMargin = dp(6); bottomMargin = dp(4) }
             })
             if (!compact) root.addView(text("Scan to open the config page on your phone", 12f, pal.subtle, padBottom = 24))

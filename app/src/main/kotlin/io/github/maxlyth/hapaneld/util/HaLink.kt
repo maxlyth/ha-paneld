@@ -8,11 +8,13 @@ import io.ktor.client.plugins.websocket.webSocket
 import io.ktor.websocket.Frame
 import io.ktor.websocket.readText
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
+import java.io.InputStream
 
 /**
  * Best-effort resolution of this panel's Home Assistant **device-settings URL**, so the info page can offer
@@ -34,6 +36,9 @@ object HaLink {
     private const val TAG = "HaLink"
     private const val JSON = "application/json"
     private const val FORM = "application/x-www-form-urlencoded"
+    internal const val MAX_WS_FRAME_BYTES = 16L * 1024L * 1024L
+    internal const val WS_RESOLUTION_DEADLINE_MS = 15_000L
+    internal const val MAX_HTTP_RESPONSE_BYTES = 2L * 1024L * 1024L
 
     /** @param base HA origin from zeroconf, e.g. "https://hass.example". @return device-page URL or null. */
     fun resolve(base: String, user: String, pass: String, deviceNames: Collection<String>): String? {
@@ -150,21 +155,25 @@ object HaLink {
      */
     private fun deviceIdViaWs(base: String, token: String, deviceSlugs: Collection<String>): String? = runBlocking {
         val wsUrl = base.replaceFirst("https://", "wss://").replaceFirst("http://", "ws://") + "/api/websocket"
-        val client = HttpClient(CIO) { install(WebSockets) { maxFrameSize = Long.MAX_VALUE } }
+        val client = HttpClient(CIO) { install(WebSockets) { maxFrameSize = MAX_WS_FRAME_BYTES } }
         try {
-            var devId: String? = null
-            client.webSocket(wsUrl) {
-                (incoming.receive() as? Frame.Text)?.readText() // auth_required
-                send(Frame.Text(JSONObject().put("type", "auth").put("access_token", token).toString()))
-                if (!(incoming.receive() as Frame.Text).readText().contains("auth_ok")) return@webSocket
-                send(Frame.Text("""{"id":1,"type":"config/entity_registry/list_for_display"}"""))
-                // Read frames until the id:1 result (skip any interleaved events/pongs).
-                repeat(8) {
-                    val msg = (incoming.receive() as? Frame.Text)?.readText() ?: return@repeat
-                    if (msg.contains("\"id\":1")) { devId = matchDeviceId(msg, deviceSlugs); return@webSocket }
+            withTimeoutOrNull(WS_RESOLUTION_DEADLINE_MS) {
+                var devId: String? = null
+                client.webSocket(wsUrl) {
+                    (incoming.receive() as? Frame.Text)?.readText() // auth_required
+                    send(Frame.Text(JSONObject().put("type", "auth").put("access_token", token).toString()))
+                    if (!(incoming.receive() as? Frame.Text)?.readText().orEmpty().contains("auth_ok")) return@webSocket
+                    send(Frame.Text("""{"id":1,"type":"config/entity_registry/list_for_display"}"""))
+                    // Read frames until the id:1 result (skip any interleaved events/pongs). The whole
+                    // connect/auth/query exchange has one deadline, so a silent endpoint cannot strand
+                    // the service's resolver thread indefinitely.
+                    repeat(8) {
+                        val msg = (incoming.receive() as? Frame.Text)?.readText() ?: return@repeat
+                        if (msg.contains("\"id\":1")) { devId = matchDeviceId(msg, deviceSlugs); return@webSocket }
+                    }
                 }
+                devId
             }
-            devId
         } finally {
             client.close()
         }
@@ -263,11 +272,17 @@ object HaLink {
             token?.let { setRequestProperty("Authorization", "Bearer $it") }
             if (body != null) { doOutput = true; ctype?.let { setRequestProperty("Content-Type", it) } }
         }
-        body?.let { c.outputStream.use { os -> os.write(it.toByteArray()) } }
-        val code = c.responseCode
-        val text = (if (code in 200..299) c.inputStream else c.errorStream)?.bufferedReader()?.readText().orEmpty()
-        c.disconnect()
-        if (code !in 200..299) throw HttpError(code, method)
-        return text
+        try {
+            body?.let { c.outputStream.use { os -> os.write(it.toByteArray()) } }
+            val code = c.responseCode
+            val text = (if (code in 200..299) c.inputStream else c.errorStream)?.use(::readHttpBody).orEmpty()
+            if (code !in 200..299) throw HttpError(code, method)
+            return text
+        } finally {
+            c.disconnect()
+        }
     }
+
+    internal fun readHttpBody(input: InputStream): String =
+        String(BoundedStreams.readBytes(input, MAX_HTTP_RESPONSE_BYTES), Charsets.UTF_8)
 }

@@ -1,0 +1,84 @@
+package io.github.maxlyth.hapaneld.http
+
+import java.io.File
+import org.json.JSONObject
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class ApiRouteSpecContractTest {
+    @Test fun activeLiteralMachineRoutesMatchOpenApiMethods() {
+        val working = File(requireNotNull(System.getProperty("user.dir")))
+        val root = listOf(File(working, "app"), working).first {
+            File(it, "src/main/kotlin/io/github/maxlyth/hapaneld/http/PaneldServer.kt").isFile
+        }
+        val panel = File(root, "src/main/kotlin/io/github/maxlyth/hapaneld/http/PaneldServer.kt").readText()
+        val apiStart = panel.indexOf("route(\"/api/v1\")")
+        val apiBlock = panel.substring(apiStart, panel.indexOf("startOwnedHttpServer(", apiStart))
+        val active = literalRoutes(apiBlock).mapTo(linkedSetOf()) { (method, path) ->
+            "$method /api/v1$path"
+        }
+
+        val profiles = File(root, "src/main/kotlin/io/github/maxlyth/hapaneld/http/ProfileRoutes.kt").readText()
+        val activeProfiles = profiles.substring(
+            profiles.indexOf("fun Route.profileRoutes"),
+            profiles.indexOf("fun Route.unavailableProfileRoutes"),
+        )
+        literalRoutes(activeProfiles).mapTo(active) { (method, path) -> "$method /api/v1/profiles$path" }
+        active += "GET /api/v1/profiles" // route("/profiles") { get { … } }
+
+        val control = File(root, "src/main/kotlin/io/github/maxlyth/hapaneld/http/ControlPlaneRoutes.kt").readText()
+        active += "POST /play"
+        active += "POST /api/v1/play"
+        literalRoutes(control).filter { it.second != "/play" }.mapTo(active) { (method, path) ->
+            "$method /api/v1$path"
+        }
+        active += "GET /health"
+
+        val spec = JSONObject(File(root, "src/main/assets/openapi.json").readText()).getJSONObject("paths")
+        val documented = linkedSetOf<String>()
+        for (path in spec.keys()) {
+            val operations = spec.getJSONObject(path)
+            for (method in operations.keys()) {
+                if (method in setOf("get", "post")) {
+                    documented += "${method.uppercase()} $path"
+                }
+            }
+        }
+
+        assertEquals(
+            "OpenAPI must describe every active literal machine route and no removed route",
+            active.sorted(),
+            documented.sorted(),
+        )
+    }
+
+    @Test fun explorerSupportsParametersAndStructuredOrBinaryBodies() {
+        val source = asset("api.html").readText()
+        assertTrue("path parameters must be substituted", "where==='path'" in source)
+        assertTrue("query parameters must be encoded", "where==='query'" in source)
+        assertTrue("header parameters must be sent", "where==='header'" in source)
+        assertTrue("JSON bodies must be selectable", "'application/json'" in source)
+        assertTrue("YAML bodies must be selectable", "'application/yaml'" in source)
+        assertTrue("binary restore/APK bodies must use a file input", "file.type='file'" in source)
+    }
+
+    @Test fun configImportPreservesDirtyEditsAndConsumesPreviewHash() {
+        val source = asset("configure.js").readText()
+        assertTrue("dirty form import must require discard confirmation", "if (dirty && !confirm(" in source)
+        assertTrue("apply must carry the preview config hash", "expected_cfg=" in source && "dry.expected_cfg" in source)
+        assertTrue("stale apply must require a fresh preview", "response.status === 409" in source)
+    }
+
+    private fun literalRoutes(source: String): List<Pair<String, String>> =
+        Regex("(?m)^\\s*(get|post)\\(\"([^\"]+)\"")
+            .findAll(source)
+            .map { it.groupValues[1].uppercase() to it.groupValues[2] }
+            .toList()
+
+    private fun asset(name: String): File {
+        val working = File(requireNotNull(System.getProperty("user.dir")))
+        return listOf(File(working, "app/src/main/assets/$name"), File(working, "src/main/assets/$name"))
+            .first { it.isFile }
+    }
+}

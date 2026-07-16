@@ -4,6 +4,9 @@ import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.SynchronousQueue
+import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicInteger
@@ -25,6 +28,7 @@ import java.util.concurrent.atomic.AtomicInteger
 class RuntimeLifecycleCoordinator(
     threadName: String,
     private val onError: (operation: String, error: Throwable) -> Unit = { _, _ -> },
+    private val onRecoverySaturated: () -> Unit = {},
 ) {
     enum class State { NEW, STARTING, RUNNING, RECONFIGURING, FAILED, STOPPING, STOPPED }
 
@@ -35,9 +39,15 @@ class RuntimeLifecycleCoordinator(
         Thread(task, threadName).apply { isDaemon = true }
     }
     private val recoverySequence = AtomicInteger()
-    private val recovery: ExecutorService = Executors.newCachedThreadPool { task ->
-        Thread(task, "$threadName-reconnect-${recoverySequence.incrementAndGet()}").apply { isDaemon = true }
-    }
+    private val recovery: ExecutorService = ThreadPoolExecutor(
+        MAX_RECOVERY_WORKERS,
+        MAX_RECOVERY_WORKERS,
+        0L,
+        TimeUnit.MILLISECONDS,
+        SynchronousQueue(),
+        { task -> Thread(task, "$threadName-reconnect-${recoverySequence.incrementAndGet()}").apply { isDaemon = true } },
+        ThreadPoolExecutor.AbortPolicy(),
+    )
 
     @Volatile private var view = Snapshot(State.NEW, 0L)
     private var stopping = false
@@ -73,14 +83,19 @@ class RuntimeLifecycleCoordinator(
                 if (!accepted) {
                     result.complete(false)
                 } else {
-                    recovery.execute {
-                        try {
-                            block()
-                            result.complete(true)
-                        } catch (error: Throwable) {
-                            onError("reconnect", error)
-                            result.complete(false)
+                    try {
+                        recovery.execute {
+                            try {
+                                block()
+                                result.complete(true)
+                            } catch (error: Throwable) {
+                                onError("reconnect", error)
+                                result.complete(false)
+                            }
                         }
+                    } catch (_: RejectedExecutionException) {
+                        onRecoverySaturated()
+                        result.complete(false)
                     }
                 }
             }
@@ -105,7 +120,7 @@ class RuntimeLifecycleCoordinator(
                     success = false
                     onError("shutdown", error)
                 } finally {
-                    recovery.shutdown()
+                    recovery.shutdownNow()
                     synchronized(lock) { view = Snapshot(State.STOPPED, view.generation) }
                 }
                 success
@@ -153,5 +168,9 @@ class RuntimeLifecycleCoordinator(
             }
         }
         return success
+    }
+
+    companion object {
+        internal const val MAX_RECOVERY_WORKERS = 2
     }
 }

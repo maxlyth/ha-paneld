@@ -3,6 +3,7 @@ package io.github.maxlyth.hapaneld.http
 import android.content.Context
 import android.util.Log
 import io.github.maxlyth.hapaneld.Config
+import io.github.maxlyth.hapaneld.DashboardEntityBackupState
 import io.github.maxlyth.hapaneld.normalizeDashboardEntityPath
 import io.github.maxlyth.hapaneld.peersJson
 import io.github.maxlyth.hapaneld.config.Capabilities
@@ -18,6 +19,7 @@ import io.github.maxlyth.hapaneld.config.SettingsRegistry
 import io.github.maxlyth.hapaneld.config.Validation
 import io.github.maxlyth.hapaneld.control.CdpRelay
 import io.github.maxlyth.hapaneld.control.CompanionDb
+import io.github.maxlyth.hapaneld.control.CompanionDataOperationGate
 import io.github.maxlyth.hapaneld.control.DensityController
 import io.github.maxlyth.hapaneld.control.InteractiveController
 import io.github.maxlyth.hapaneld.control.Su
@@ -32,7 +34,14 @@ import io.github.maxlyth.hapaneld.device.TameCandidate
 import io.github.maxlyth.hapaneld.device.profile.PassiveProfileDraft
 import io.github.maxlyth.hapaneld.device.profile.PassiveProfileReport
 import io.github.maxlyth.hapaneld.device.profile.ProfileAdmin
+import io.github.maxlyth.hapaneld.device.profile.ProfileBackup
+import io.github.maxlyth.hapaneld.device.profile.ProfileBackupRestoreOutcome
+import io.github.maxlyth.hapaneld.device.profile.ProfileBackupRestorePlan
+import io.github.maxlyth.hapaneld.device.profile.ProfileBackupRestoreResult
 import io.github.maxlyth.hapaneld.logship.LogCapture
+import io.github.maxlyth.hapaneld.metrics.FeatureCosts
+import io.github.maxlyth.hapaneld.metrics.FeatureCostOperation
+import io.github.maxlyth.hapaneld.metrics.FeatureCostOutcome
 import io.github.maxlyth.hapaneld.provisioning.ProvisioningActivationSnapshot
 import io.github.maxlyth.hapaneld.provisioning.ProvisioningReader
 import io.github.maxlyth.hapaneld.sensors.SensorReporter
@@ -41,11 +50,16 @@ import io.github.maxlyth.hapaneld.util.Cached
 import io.github.maxlyth.hapaneld.util.AppInstaller
 import io.github.maxlyth.hapaneld.util.AndroidInput
 import io.github.maxlyth.hapaneld.util.BoundedStreams
+import io.github.maxlyth.hapaneld.util.BundledHelperInstaller
 import io.github.maxlyth.hapaneld.util.CompanionInstaller
+import io.github.maxlyth.hapaneld.util.CompanionHelperProtocol
+import io.github.maxlyth.hapaneld.util.CompanionOperationStatus
 import io.github.maxlyth.hapaneld.util.HelperClient
 import io.github.maxlyth.hapaneld.util.ByteLimitExceeded
 import io.github.maxlyth.hapaneld.util.InstallProgress
 import io.github.maxlyth.hapaneld.util.Json
+import io.github.maxlyth.hapaneld.util.KeyedLatestDispatcher
+import io.github.maxlyth.hapaneld.util.GenerationSingleFlight
 import io.github.maxlyth.hapaneld.util.RendererPreparationCoordinator
 import io.github.maxlyth.hapaneld.util.SelfUpdater
 import io.github.maxlyth.hapaneld.util.UpdateChecker
@@ -59,7 +73,6 @@ import io.ktor.server.application.call
 import io.ktor.server.cio.CIO
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.plugins.origin
-import io.ktor.server.request.receiveParameters
 import io.ktor.server.request.receiveStream
 import io.ktor.server.request.receiveText
 import io.ktor.server.request.uri
@@ -76,12 +89,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
-import java.io.ByteArrayOutputStream
 import java.io.File
-import java.io.InputStream
 
 internal fun panelBrowserTitle(friendlyName: String, section: String? = null): String {
     val panel = friendlyName.trim().ifBlank { "ha-paneld" }
@@ -94,18 +106,16 @@ internal suspend fun receiveBoundedConfigParameters(
     call: ApplicationCall,
     maxBytes: Long = PaneldServer.MAX_CONFIG_POST_BODY_BYTES,
 ): Parameters? {
-    val declared = call.request.headers["Content-Length"]?.toLongOrNull()
-    if (declared != null && declared > maxBytes) {
-        call.respondText("request too large\n", status = HttpStatusCode.PayloadTooLarge)
-        return null
-    }
-    val body = try {
-        withContext(Dispatchers.IO) {
-            call.receiveStream().use { String(BoundedStreams.readBytes(it, maxBytes), Charsets.UTF_8) }
+    val body = when (val receipt = receiveBoundedBody(call, maxBytes)) {
+        is BoundedBodyReceipt.Received -> String(receipt.bytes, Charsets.UTF_8)
+        BoundedBodyReceipt.TooLarge -> {
+            call.respondText("request too large\n", status = HttpStatusCode.PayloadTooLarge)
+            return null
         }
-    } catch (_: ByteLimitExceeded) {
-        call.respondText("request too large\n", status = HttpStatusCode.PayloadTooLarge)
-        return null
+        BoundedBodyReceipt.TimedOut -> {
+            call.respondText("request timeout\n", status = HttpStatusCode.RequestTimeout)
+            return null
+        }
     }
     return try {
         if (call.request.headers["Content-Type"].orEmpty().substringBefore(';').trim()
@@ -126,6 +136,109 @@ internal suspend fun receiveBoundedConfigParameters(
         call.respondText("invalid config body\n", status = HttpStatusCode.BadRequest)
         null
     }
+}
+
+/** Materialize the many small form-only control posts under one total-body limit. Ktor's default
+ * receiveParameters limit is 50 MiB per field, which is disproportionate on low-memory wall panels. */
+internal suspend fun receiveBoundedFormParameters(
+    call: ApplicationCall,
+    maxBytes: Long = PaneldServer.MAX_SMALL_FORM_POST_BODY_BYTES,
+): Parameters? {
+    val body = when (val receipt = receiveBoundedBody(call, maxBytes)) {
+        is BoundedBodyReceipt.Received -> String(receipt.bytes, Charsets.UTF_8)
+        BoundedBodyReceipt.TooLarge -> {
+            call.respondText("request too large\n", status = HttpStatusCode.PayloadTooLarge)
+            return null
+        }
+        BoundedBodyReceipt.TimedOut -> {
+            call.respondText("request timeout\n", status = HttpStatusCode.RequestTimeout)
+            return null
+        }
+    }
+    return parseQueryString(body)
+}
+
+/** Result of validating a direct config POST before any preference or controller mutation. */
+internal sealed class ConfigPostParameters {
+    data class Ok(val values: Parameters) : ConfigPostParameters()
+    data class Bad(val reason: String) : ConfigPostParameters()
+}
+
+/**
+ * Validate and normalize every direct-config value in one pass. Historically the bespoke route
+ * normalized only panel_id while malformed booleans became false, numeric values were silently
+ * clamped/ignored, and large identity strings could be repeated into every MQTT discovery payload.
+ * Keeping this admission step ahead of applyBatch gives form, JSON and registry command paths the
+ * same schema semantics and ensures a bad field cannot produce a partial commit.
+ */
+internal fun normalizeConfigPostParameters(raw: Parameters): ConfigPostParameters {
+    val normalized = Parameters.build {
+        for (name in raw.names()) {
+            val all = raw.getAll(name).orEmpty()
+            if (all.size != 1) return ConfigPostParameters.Bad("$name: expected one value")
+            val value = all.single()
+            val spec = SettingsRegistry.spec(name)
+            val accepted = when {
+                spec != null -> {
+                    if (spec.readOnly) return ConfigPostParameters.Bad("$name: read-only")
+                    when (val result = SettingValue.validate(spec, value)) {
+                        is Validation.Ok -> result.normalized
+                        is Validation.Bad -> return ConfigPostParameters.Bad(result.reason)
+                    }
+                }
+                name.startsWith("ha_expose_") -> {
+                    val target = name.removePrefix("ha_expose_")
+                    val targetSpec = SettingsRegistry.spec(target)
+                    if (targetSpec?.ha == null) return ConfigPostParameters.Bad("$name: unknown exposure setting")
+                    SettingValue.parseBool(value)?.toString()
+                        ?: return ConfigPostParameters.Bad("$name: expected a boolean")
+                }
+                name == "ha_token_expiry" -> {
+                    val expiry = value.trim().toLongOrNull()
+                        ?: return ConfigPostParameters.Bad("ha_token_expiry: expected an integer")
+                    if (expiry < 0L) return ConfigPostParameters.Bad("ha_token_expiry: must be ≥ 0")
+                    expiry.toString()
+                }
+                name == "tame_vendor_packages" -> {
+                    val trimmed = value.trim()
+                    if (trimmed.length > 8_192) {
+                        return ConfigPostParameters.Bad("tame_vendor_packages: must be at most 8192 characters")
+                    }
+                    val packages = trimmed.split(Regex("[\\s,]+")).filter(String::isNotEmpty)
+                    if (packages.size > 128 || packages.any { it.length > 255 || !AndroidInput.isPackage(it) }) {
+                        return ConfigPostParameters.Bad("tame_vendor_packages: expected at most 128 Android package names")
+                    }
+                    packages.distinct().joinToString(" ")
+                }
+                name == "http_allowed_hosts" -> {
+                    val trimmed = value.trim()
+                    if (trimmed.length > 4_096) {
+                        return ConfigPostParameters.Bad("http_allowed_hosts: must be at most 4096 characters")
+                    }
+                    val hosts = trimmed.split(Regex("[\\s,]+")).filter(String::isNotEmpty)
+                    if (hosts.size > 128 || hosts.any { it.length > 253 || it.any(Char::isWhitespace) }) {
+                        return ConfigPostParameters.Bad("http_allowed_hosts: expected at most 128 host names")
+                    }
+                    hosts.distinct().joinToString(" ")
+                }
+                else -> return ConfigPostParameters.Bad("$name: unknown setting")
+            }
+            append(name, accepted)
+        }
+    }
+    return ConfigPostParameters.Ok(normalized)
+}
+
+/** Conservative disk peak while source entries, archive plaintext and optional ciphertext overlap. */
+internal fun backupStagingRequirement(includeCompanion: Boolean, encrypted: Boolean): Long {
+    val sources = PaneldServer.MAX_BACKUP_MANIFEST_BYTES +
+        2L * PaneldServer.MAX_ENTITY_BACKUP_TEXT_BYTES +
+        PaneldServer.MAX_PROFILE_BACKUP_ENTRY_BYTES +
+        if (includeCompanion) PaneldServer.MAX_COMPANION_BACKUP_BYTES else 0L
+    val archives = PaneldServer.MAX_RESTORE_BYTES * if (encrypted) 2L else 1L
+    val archivePeak = sources + archives
+    val rawCapturePeak = if (includeCompanion) CompanionHelperProtocol.MAX_BACKUP_STREAM_BYTES else 0L
+    return PaneldServer.BACKUP_STORAGE_MARGIN_BYTES + maxOf(archivePeak, rawCapturePeak)
 }
 
 /**
@@ -268,6 +381,70 @@ class PaneldServer internal constructor(
     private var stopServer: (() -> Unit)? = null
     private val inspectLock = Any()
     @Volatile private var stopping = true
+    private enum class TameMutation { TAME, UNTAME, RECOMMENDED }
+    private val tameMutations: KeyedLatestDispatcher<String, TameMutation> = KeyedLatestDispatcher(
+        threadName = "ha-paneld-tame",
+        maxPendingKeys = 256,
+        consume = ::executeTameMutation,
+    )
+
+    private fun executeTameMutation(pkg: String, mutation: TameMutation) {
+        FeatureCosts.registry.setBacklog(FeatureCostOperation.TAME_MUTATION, tameMutations.pendingCount())
+        val cost = FeatureCosts.registry.span(FeatureCostOperation.TAME_MUTATION).work(units = 1)
+        try {
+            when (mutation) {
+                TameMutation.TAME -> if (!tame.tame(pkg)) cost.outcome(FeatureCostOutcome.FAILURE)
+                TameMutation.UNTAME -> if (!tame.untame(pkg)) cost.outcome(FeatureCostOutcome.FAILURE)
+                TameMutation.RECOMMENDED -> {
+                    val tamed = tame.applyRecommended(tameProfileCandidates)
+                    if (tamed.isNotEmpty()) {
+                        config.setTameVendorPackages(
+                            (config.tameVendorPackages.toSet() + tamed).joinToString(" "),
+                        )
+                        snapInvalidate()
+                    }
+                    cost.work(units = tamed.size.toLong())
+                }
+            }
+        } catch (error: Exception) {
+            cost.outcome(FeatureCostOutcome.FAILURE)
+            Log.w(TAG, "vendor package mutation failed", error)
+        } finally {
+            cost.close()
+        }
+    }
+    private sealed class RemoteControl(val key: String) {
+        class Tap(val x: Float, val y: Float) : RemoteControl("tap")
+        class Action(val name: String) : RemoteControl(name)
+    }
+    private val remoteControls: KeyedLatestDispatcher<String, RemoteControl> = KeyedLatestDispatcher(
+        threadName = "ha-paneld-remote-control",
+        maxPendingKeys = 8,
+        consume = { _, command -> executeRemoteControl(command) },
+    )
+    private val clearStorageGate = GenerationSingleFlight()
+
+    private fun executeRemoteControl(command: RemoteControl) {
+        FeatureCosts.registry.setBacklog(FeatureCostOperation.REMOTE_INPUT, remoteControls.pendingCount())
+        val cost = FeatureCosts.registry.span(FeatureCostOperation.REMOTE_INPUT).work(units = 1)
+        val ok = runCatching {
+            when (command) {
+                is RemoteControl.Tap -> interactive.tap(command.x, command.y)
+                is RemoteControl.Action -> when (command.name) {
+                    "back" -> interactive.back()
+                    "recents" -> interactive.recents()
+                    "launcher" -> { system.launchLauncher(config.launcherPackage); true }
+                    "admin_launcher" -> { system.launchAdminLauncher(); true }
+                    "reboot" -> { system.reboot(); true }
+                    "volup" -> { volume.step(up = true); true }
+                    "voldn" -> { volume.step(up = false); true }
+                    else -> false
+                }
+            }
+        }.getOrDefault(false)
+        if (!ok) cost.outcome(FeatureCostOutcome.FAILURE)
+        cost.close()
+    }
     private val pendingApks = PendingUploadStore()
 
     fun start() {
@@ -317,10 +494,21 @@ class PaneldServer internal constructor(
                     ControlPlaneRouteDependencies(
                         playAudio = playAudio,
                         installComponent = onInstallComponent,
+                        installedComponentVersion = { name ->
+                            when (name) {
+                                "paneld" -> Config.VERSION
+                                "companion" -> CompanionInstaller.installedPkg(appContext)?.let { pkg ->
+                                    AppInstaller.installedVersion(appContext, pkg).takeIf { it.isNotBlank() }
+                                }
+                                "webview" -> runCatching {
+                                    android.webkit.WebView.getCurrentWebViewPackage()?.versionName
+                                }.getOrNull()
+                                else -> null
+                            }
+                        },
                         buildBackup = { includeCompanion, passphrase ->
                             withContext(Dispatchers.IO) {
-                                val json = backupJson(includeCompanion).toByteArray()
-                                if (passphrase.isEmpty()) json else PanelBackup.seal(json, passphrase)
+                                buildBackupArtifact(includeCompanion, passphrase)
                             }
                         },
                         backupFileStem = { config.panelId },
@@ -464,6 +652,11 @@ class PaneldServer internal constructor(
                         PerfReader.touch()
                         call.respondText(PerfReader.json(), ContentType.Application.Json)
                     }
+                    // Sparse A/B harvesters use this projection without activating the 2 s sampler whose
+                    // own CPU and process probes would perturb the feature burden being measured.
+                    get("/perf/costs") {
+                        call.respondText(FeatureCosts.json(), ContentType.Application.Json)
+                    }
                     // Experimental built-in-renderer entity filter. The exact ids are accepted at runtime
                     // but never echoed, logged, or included in config exports; status is count+hash.
                     get("/dashboard/entity-filter") {
@@ -568,7 +761,9 @@ class PaneldServer internal constructor(
                     }
                     get("/dashboard/entities/export") {
                         call.response.headers.append("Content-Disposition", "attachment; filename=ha-paneld-entities.json")
-                        call.respondText(entityLearning.exportJson(), ContentType.Application.Json)
+                        call.respondTextWriter(ContentType.Application.Json) {
+                            entityLearning.writeExportJson(this)
+                        }
                     }
                     get("/proximity") { call.respondText(sensors.proximityJson(), ContentType.Application.Json) }
                     // Live Sensors card: last-published values + live extras. Volume is the current
@@ -623,7 +818,7 @@ class PaneldServer internal constructor(
                     // Dismiss a component update from the DASHBOARD banner only (per-version; re-surfaces when
                     // a newer release ships). The Install tab still lists it. See Config.ignoreUpdate.
                     post("/updates/ignore") {
-                        val p = call.receiveParameters()
+                        val p = receiveBoundedFormParameters(call) ?: return@post
                         val label = p["label"]?.trim().orEmpty()
                         val version = p["version"]?.trim().orEmpty()
                         if (label.isEmpty() || version.isEmpty())
@@ -653,7 +848,8 @@ class PaneldServer internal constructor(
                     get("/install/status") { call.respondText(InstallProgress.json(), ContentType.Application.Json) }
                     // Enable/disable the APK-upload capability (the card's toggle).
                     post("/install/apk/allow") {
-                        val on = call.receiveParameters()["on"]?.let { it == "true" || it == "1" } ?: true
+                        val on = (receiveBoundedFormParameters(call) ?: return@post)["on"]
+                            ?.let { it == "true" || it == "1" } ?: true
                         config.setApkUploadAllowed(on)
                         if (!on) pendingApks.clear()
                         call.respondText("""{"ok":true,"allowed":$on}""", ContentType.Application.Json)
@@ -670,7 +866,7 @@ class PaneldServer internal constructor(
                     post("/uninstall") {
                         if (!suCache.get()) return@post call.respondText(
                             """{"ok":false,"error":"no-root"}""", ContentType.Application.Json, HttpStatusCode.ServiceUnavailable)
-                        val pkg = call.receiveParameters()["pkg"]?.trim().orEmpty()
+                        val pkg = (receiveBoundedFormParameters(call) ?: return@post)["pkg"]?.trim().orEmpty()
                         val protected = pkg == appContext.packageName || pkg == io.github.maxlyth.hapaneld.util.WebViewInstaller.WEBVIEW_PKG
                         if (pkg.isEmpty() || protected || !AndroidInput.isPackage(pkg))
                             return@post call.respondText("""{"ok":false,"error":"bad-package"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
@@ -712,8 +908,22 @@ class PaneldServer internal constructor(
                     // so this never logs the panel out. Relaunches the built-in renderer when it's the
                     // active dashboard so it comes back on a clean slate. WebView APIs are UI-thread-only.
                     post("/dashboard/clear-storage") {
-                        android.os.Handler(android.os.Looper.getMainLooper()).post {
-                            runCatching {
+                        val token = clearStorageGate.claim()
+                        if (token == null) {
+                            call.respondText(
+                                """{"status":"busy"}""",
+                                ContentType.Application.Json,
+                                if (stopping) HttpStatusCode.ServiceUnavailable else HttpStatusCode.Conflict,
+                            )
+                            return@post
+                        }
+                        val posted = android.os.Handler(android.os.Looper.getMainLooper()).post storage@{
+                            val cost = FeatureCosts.registry.span(FeatureCostOperation.DASHBOARD_STORAGE_CLEAR)
+                            try {
+                                if (!clearStorageGate.isCurrent(token) || stopping) {
+                                    cost.outcome(FeatureCostOutcome.CANCELLED)
+                                    return@storage
+                                }
                                 android.webkit.WebStorage.getInstance().deleteAllData()
                                 android.webkit.CookieManager.getInstance().removeAllCookies(null)
                                 // The HTTP resource cache is per-application but only reachable through a
@@ -727,14 +937,34 @@ class PaneldServer internal constructor(
                                         destroy()
                                     }
                                 }
-                                if (config.dashboardPackage == "builtin") {
+                                if (config.dashboardPackage == "builtin" && !stopping) {
                                     // Privileged-first relaunch (BAL rules block a plain startActivity
                                     // from a service context) — off the main thread, it may shell out.
                                     scope.launch { runCatching { system.reloadDashboard(SystemController.BUILTIN_DASHBOARD) } }
                                 }
+                            } catch (error: Exception) {
+                                cost.outcome(FeatureCostOutcome.FAILURE)
+                                Log.w(TAG, "dashboard storage clear failed", error)
+                            } finally {
+                                clearStorageGate.finish(token)
+                                cost.close()
                             }
                         }
-                        call.respondText("""{"status":"started"}""", ContentType.Application.Json)
+                        if (!posted) {
+                            clearStorageGate.finish(token)
+                            FeatureCosts.registry.recordDropped(FeatureCostOperation.DASHBOARD_STORAGE_CLEAR)
+                            call.respondText(
+                                """{"status":"stopping"}""",
+                                ContentType.Application.Json,
+                                HttpStatusCode.ServiceUnavailable,
+                            )
+                            return@post
+                        }
+                        call.respondText(
+                            """{"status":"started"}""",
+                            ContentType.Application.Json,
+                            HttpStatusCode.Accepted,
+                        )
                     }
                     // Repair a Companion server row with an empty internal_url (HA 2026.7 "Missing Host
                     // header" incident). Fire-and-forget: the repair force-stops + relaunches the Companion
@@ -749,51 +979,29 @@ class PaneldServer internal constructor(
                         call.respondText("""{"layout":${jsonStr(config.uiDashboardLayout)}}""", ContentType.Application.Json)
                     }
                     post("/ui/layout") {
-                        config.uiDashboardLayout = call.receiveParameters()["layout"].orEmpty()
+                        config.uiDashboardLayout = (receiveBoundedFormParameters(
+                            call,
+                            MAX_CONFIG_POST_BODY_BYTES,
+                        ) ?: return@post)["layout"].orEmpty()
                         call.respondText("""{"ok":true}""", ContentType.Application.Json)
                     }
                     // Inject a tap at device pixel (x,y). The UI is withheld pending a remote-control
                     // review, but the API remains available for established automation and testing.
                     post("/input") {
-                        val q = call.receiveParameters()
+                        val q = receiveBoundedFormParameters(call) ?: return@post
                         val x = q["x"]?.trim()?.toFloatOrNull()
                         val y = q["y"]?.trim()?.toFloatOrNull()
                         if (x == null || y == null || !x.isFinite() || !y.isFinite() || x < 0f || y < 0f) {
                             call.respondText("bad-coords\n", status = HttpStatusCode.BadRequest)
                         } else {
-                            val ok = injectTap(x, y)
-                            if (ok) call.respondText("ok\n")
-                            else call.respondText("no-input-capability\n", status = HttpStatusCode.ServiceUnavailable)
+                            respondRemoteAdmission(call, RemoteControl.Tap(x, y))
                         }
                     }
                     // On-screen Controls card (software navbar) for panels with no physical nav bar.
                     post("/action") {
-                        val a = call.receiveParameters()["a"]
-                        val outcome: Boolean? = when (a) {
-                            "back" -> interactive.back()
-                            "recents" -> interactive.recents()
-                            // Launcher, not Home: the HA Companion IS the home/launcher on these panels, so the
-                            // hard, useful action is escaping TO a launcher to reach Settings/config apps.
-                            // launchLauncher itself falls back to the admin launcher when nothing resolves
-                            // (stale configured pkg, or no launcher app at all) — same path as the navbar key.
-                            "launcher" -> { system.launchLauncher(config.launcherPackage); true }
-                            "admin_launcher" -> { system.launchAdminLauncher(); true }
-                            "reboot" -> { scope.launch { system.reboot() }; true }
-                            // step() (adjustStreamVolume) not setPercent: on a coarse stream (e.g. the TPA10's
-                            // 7-step STREAM_MUSIC) the current→percent→raw round-trip truncates back to the same
-                            // index, so +10% was a no-op. step() always moves one real notch and flashes the slider.
-                            "volup" -> { volume.step(up = true); true }
-                            "voldn" -> { volume.step(up = false); true }
-                            else -> null
-                        }
-                        when (outcome) {
-                            true -> call.respondText("ok\n")
-                            false -> call.respondText(
-                                "no-action-capability\n",
-                                status = HttpStatusCode.ServiceUnavailable,
-                            )
-                            null -> call.respondText("bad-action\n", status = HttpStatusCode.BadRequest)
-                        }
+                        val a = (receiveBoundedFormParameters(call) ?: return@post)["a"]
+                        if (a !in REMOTE_ACTIONS) call.respondText("bad-action\n", status = HttpStatusCode.BadRequest)
+                        else respondRemoteAdmission(call, RemoteControl.Action(a!!))
                     }
                     // Debug-only sensor trace (RAM ring buffer, on by default) for fit-testing the
                     // auto-brightness + proximity filters. CSV by default (drop into a plot); ?format=json
@@ -809,7 +1017,7 @@ class PaneldServer internal constructor(
                     // Embedded scaled in the info page + linkable full-size; also usable as an HA camera
                     // still_image_url. Captured on demand — no background polling.
                     get("/screenshot.png") {
-                        val png = interactive.screenshot()
+                        val png = withContext(Dispatchers.IO) { interactive.screenshot() }
                         if (png != null && png.isNotEmpty()) {
                             call.respondBytes(png, ContentType.Image.PNG)
                         } else {
@@ -825,7 +1033,7 @@ class PaneldServer internal constructor(
                     }
                     // step=near|far -> snapshot the current raw into that calibration slot.
                     post("/proximity/capture") {
-                        val step = call.receiveParameters()["step"]
+                        val step = (receiveBoundedFormParameters(call) ?: return@post)["step"]
                         val raw = sensors.lastRaw
                         when {
                             step != "near" && step != "far" ->
@@ -841,18 +1049,20 @@ class PaneldServer internal constructor(
                     }
                     // v=<float> -> manual threshold fine-tune (overrides the captured midpoint).
                     post("/proximity/threshold") {
-                        val v = call.receiveParameters()["v"]?.toFloatOrNull()
-                        if (v == null) {
+                        val v = (receiveBoundedFormParameters(call) ?: return@post)["v"]?.toFloatOrNull()
+                        if (!validProximityThreshold(v)) {
                             call.respondText("bad-value\n", status = HttpStatusCode.BadRequest)
                         } else {
-                            config.setProximityThreshold(v)
+                            config.setProximityThreshold(v!!)
                             sensors.reevaluate()
                             call.respondText(sensors.proximityJson(), ContentType.Application.Json)
                         }
                     }
                     // s=HIGH|MEDIUM|LOW -> hysteresis band width (flap resistance).
                     post("/proximity/sensitivity") {
-                        config.setProximitySensitivity(call.receiveParameters()["s"].orEmpty())
+                        config.setProximitySensitivity(
+                            (receiveBoundedFormParameters(call) ?: return@post)["s"].orEmpty(),
+                        )
                         sensors.reevaluate()
                         call.respondText(sensors.proximityJson(), ContentType.Application.Json)
                     }
@@ -866,17 +1076,14 @@ class PaneldServer internal constructor(
                     // privileged + slow, so it runs off-thread and the browser gets a short auto-reload back to
                     // the info page (the row's new state shows on reload).
                     post("/tame") {
-                        val p = call.receiveParameters()
+                        val p = receiveBoundedFormParameters(call) ?: return@post
                         // One-click "Tame all recommended" (the profile's defaultTame set) — no pkg needed.
                         // Persists the actually-tamed packages so they re-apply on boot; tame() is guarded
                         // (hands over the home role + refuses to strand), so this never leaves the panel homeless.
                         if (p["action"]?.trim() == "recommended") {
-                            scope.launch {
-                                val tamed = tame.applyRecommended(tameProfileCandidates)
-                                if (tamed.isNotEmpty()) {
-                                    config.setTameVendorPackages((config.tameVendorPackages.toSet() + tamed).joinToString(" "))
-                                    snapInvalidate()
-                                }
+                            if (!submitTameMutation(RECOMMENDED_TAME_KEY, TameMutation.RECOMMENDED)) {
+                                call.respondText("vendor mutation queue busy\n", status = HttpStatusCode.ServiceUnavailable)
+                                return@post
                             }
                             call.respondText(
                                 "<!doctype html><meta charset=utf-8><meta http-equiv=refresh content='2;url=/configure'>" +
@@ -891,13 +1098,19 @@ class PaneldServer internal constructor(
                         // Re-enable is always allowed; taming is refused for protected packages (the brick-guard
                         // — critical AOSP names, vendor-renamed persistent system services, launchers, the IME)
                         // so a hand-typed package name can't disable something the panel needs.
-                        if (pkg.isNotEmpty() && (untame || !tame.isProtected(pkg))) {
-                            val next = config.tameVendorPackages.toMutableSet()
-                            if (untame) next.remove(pkg) else next.add(pkg)
-                            config.setTameVendorPackages(next.joinToString(" "))
-                            snapInvalidate()
-                            scope.launch { if (untame) tame.untame(pkg) else tame.tame(pkg) }
+                        if (!AndroidInput.isPackage(pkg) || (!untame && tame.isProtected(pkg))) {
+                            call.respondText("invalid or protected package\n", status = HttpStatusCode.BadRequest)
+                            return@post
                         }
+                        val mutation = if (untame) TameMutation.UNTAME else TameMutation.TAME
+                        if (!submitTameMutation(pkg, mutation)) {
+                            call.respondText("vendor mutation queue busy\n", status = HttpStatusCode.ServiceUnavailable)
+                            return@post
+                        }
+                        val next = config.tameVendorPackages.toMutableSet()
+                        if (untame) next.remove(pkg) else next.add(pkg)
+                        config.setTameVendorPackages(next.joinToString(" "))
+                        snapInvalidate()
                         val verb = if (untame) "re-enabling" else "taming"
                         call.respondText(
                             "<!doctype html><meta charset=utf-8><meta http-equiv=refresh content='2;url=/configure'>" +
@@ -931,7 +1144,7 @@ class PaneldServer internal constructor(
                         call.respondText(recBtn + frag, ContentType.Text.Html)
                     }
                     post("/display/density") {
-                        val p = call.receiveParameters()
+                        val p = receiveBoundedFormParameters(call) ?: return@post
                         val action = p["action"]                          // "reset" | "rec" (buttons)
                         val d = p["density"]?.trim()?.toIntOrNull()       // custom density (Apply)
                         val f = p["font"]?.trim()?.toFloatOrNull()        // custom font scale (Apply)
@@ -992,14 +1205,23 @@ class PaneldServer internal constructor(
                 }
             }
         }
-        // Guard the bind: a double am-start can race two instances onto :httpPort; a BindException
-        // here must not crash the foreground service (START_STICKY would just relaunch into the same).
+        // Treat the bind as required startup, not a best-effort sidecar. A failure must close this
+        // generation's admission and reach the service runtime owner, which records FAILED and prevents
+        // a staged profile from being marked healthy without its management/control surface.
         try {
-            server.start(wait = false)
+            startOwnedHttpServer(
+                start = { server.start(wait = false) },
+                stop = { server.stop(500, 1500) },
+                closeIngress = pendingApks::close,
+            )
             stopServer = { server.stop(500, 1500) }
             Log.i(TAG, "HTTP listening on :${config.httpPort}")
         } catch (e: Exception) {
-            Log.e(TAG, "HTTP bind on :${config.httpPort} failed (already running?) — continuing", e)
+            // HTTP is part of the service's required control plane. Propagate a bind/start failure to the
+            // runtime owner so this generation becomes FAILED and a staged profile cannot be marked healthy.
+            stopping = true
+            Log.e(TAG, "HTTP bind on :${config.httpPort} failed", e)
+            throw e
         }
         // Pre-warm the probe snapshot so even the first dashboard visit usually renders complete.
         scope.launch(Dispatchers.IO) { runCatching { snapCache.get() } }
@@ -1007,11 +1229,18 @@ class PaneldServer internal constructor(
 
     fun stop() {
         stopping = true
+        clearStorageGate.close()
         stopServer?.invoke()
         stopServer = null
         // Serialize against an admitted start: teardown either prevents it or waits and then kills it.
         synchronized(inspectLock) { if (CdpRelay.running) CdpRelay.stop() }
         pendingApks.close()
+        if (!tameMutations.closeAndJoin(TAME_SHUTDOWN_MS)) {
+            Log.w(TAG, "vendor mutation did not drain within ${TAME_SHUTDOWN_MS}ms")
+        }
+        if (!remoteControls.closeAndJoin(REMOTE_CONTROL_SHUTDOWN_MS)) {
+            Log.w(TAG, "remote control did not drain within ${REMOTE_CONTROL_SHUTDOWN_MS}ms")
+        }
     }
 
     // The panel's physical resolution as a CSS aspect-ratio (e.g. "750/1334") so the Screenshot card can
@@ -1083,25 +1312,41 @@ class PaneldServer internal constructor(
             call.respondText("log viewer unavailable\n", status = HttpStatusCode.NotFound)
             return
         }
-        // Backlog BEFORE subscribing: a few ms of lines can fall in the gap, which beats the visible
-        // duplicates the opposite order produces (the dump overlaps the live stream's first lines).
-        val backlog = withContext(Dispatchers.IO) { cap.snapshot().ifEmpty { cap.dump() } }
-        val chan = Channel<String>(capacity = 512, onBufferOverflow = BufferOverflow.DROP_OLDEST)
-        val sub = cap.subscribe { chan.trySend(it) }
+        val viewer = when (val admission = cap.admitViewer()) {
+            is LogCapture.ViewerAdmission.Accepted -> admission.lease
+            LogCapture.ViewerAdmission.CapacityExceeded -> {
+                call.response.headers.append("Retry-After", "5")
+                call.respondText("too many live log viewers\n", status = HttpStatusCode.TooManyRequests)
+                return
+            }
+            LogCapture.ViewerAdmission.Unavailable -> {
+                call.respondText("log viewer unavailable\n", status = HttpStatusCode.ServiceUnavailable)
+                return
+            }
+        }
         try {
-            call.response.headers.append("Cache-Control", "no-cache")
-            call.respondTextWriter(ContentType.Text.EventStream) {
-                for (line in backlog) write("data: $line\n\n")
-                flush()
-                while (true) {
-                    val line = withTimeoutOrNull(15_000) { chan.receive() }
-                    write(if (line == null) ": ping\n\n" else "data: $line\n\n")
+            // Backlog BEFORE subscribing: a few ms of lines can fall in the gap, which beats the visible
+            // duplicates the opposite order produces (the dump overlaps the live stream's first lines).
+            val backlog = withContext(Dispatchers.IO) { cap.initialBacklog() }
+            val chan = Channel<String>(capacity = 512, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+            val sub = cap.subscribe { chan.trySend(it) }
+            try {
+                call.response.headers.append("Cache-Control", "no-cache")
+                call.respondTextWriter(ContentType.Text.EventStream) {
+                    for (line in backlog) write("data: $line\n\n")
                     flush()
+                    while (true) {
+                        val line = withTimeoutOrNull(15_000) { chan.receive() }
+                        write(if (line == null) ": ping\n\n" else "data: $line\n\n")
+                        flush()
+                    }
                 }
+            } finally {
+                runCatching { sub.close() }
+                chan.close()
             }
         } finally {
-            runCatching { sub.close() }
-            chan.close()
+            runCatching { viewer.close() }
         }
     }
 
@@ -1294,6 +1539,7 @@ ${tameCardHtml()}
         val root = rootOk()
         val installer = installOk()
         val su = suCache.get()
+        val companionHelper = companionHelperCache.get()
         // Same finding set as the dashboard banner (HealthAudit). Update findings are surfaced by the
         // Managed-components card below, so the top warnings show only the render-blocking states.
         val problems = HealthAudit.evaluate(
@@ -1326,7 +1572,7 @@ ${uninstallCardHtml(su)}
 <button class="pbtn" onclick="healthAudit(this)">Run health audit</button>
 <div id="audit-out" style="margin-top:10px"></div>
 <p class="note"><a href="/api/v1/diag" target="_blank" style="color:#9cf">⭳ Diagnostics dump</a> — full hardware/firmware/SELinux/su report for bug reports.</p></div>
-${backupCardHtml(su)}
+${backupCardHtml(companionHelper)}
 $allGood</div>
 <script src="/assets/install.js"></script>"""
     }
@@ -1385,13 +1631,13 @@ $installNote
     /** Backup & restore card: an ENCRYPTED device-state bundle (ha-paneld config + optionally the HA
      *  Companion login) with a passphrase; restore shows a decrypt preview before the destructive apply.
      *  Also links the plain config-only bundle (for cloning settings between panels). */
-    private fun backupCardHtml(root: Boolean): String {
-        val compRow = if (root)
+    private fun backupCardHtml(companionHelper: Boolean): String {
+        val compRow = if (companionHelper)
             """<label style="display:flex;flex-direction:row;gap:8px;align-items:center;font-size:.85rem"><input type="checkbox" id="bk-comp" checked> Include HA Companion login</label>"""
-        else """<p class="note">The HA Companion login can only be captured on a rooted panel.</p>"""
-        val restoreWarn = if (root) " and rewrites the HA Companion login (force-stops it)" else ""
+        else """<p class="note">HA Companion login backup needs the current ha-paneld helper. Update or reprovision this rooted panel to enable it.</p>"""
+        val restoreWarn = if (companionHelper) " and rewrites the HA Companion login (force-stops it)" else ""
         return """<div class="card"><h2>Backup &amp; restore</h2>
-<p class="note">A bundle of this panel's ha-paneld config${if (root) " + the HA Companion login" else ""}. A passphrase is optional — add one to <b>encrypt</b> the bundle (worth it if you'll store it off the panel, since it holds HA tokens); it can't be recovered if lost.</p>
+<p class="note">A bundle of this panel's ha-paneld config${if (companionHelper) " + the HA Companion login" else ""}. A passphrase is optional — add one to <b>encrypt</b> the bundle (worth it if you'll store it off the panel, since it holds HA tokens); it can't be recovered if lost.</p>
 <div style="display:flex;flex-direction:column;gap:8px;max-width:440px">
 $compRow
 <input type="password" id="bk-pw" placeholder="Passphrase (optional — encrypts the bundle)">
@@ -1672,6 +1918,16 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
     private val densityCache = Cached(DENSITY_TTL_MS) { Triple(density.current(), density.base(), density.fontScale()) }
     // su presence doesn't flap — cache the probe gating screenshot / controls / system logs / taming.
     private val suCache = Cached(SU_TTL_MS) { Su.available() }
+    private val companionHelperCache = Cached(SU_TTL_MS) { HelperClient.supportsCompanionData() }
+    private fun ensureCompanionHelper(): Boolean {
+        if (HelperClient.supportsCompanionData()) return true
+        val ready = BundledHelperInstaller.ensureCurrent(appContext, profile.appCanSu) in setOf(
+            BundledHelperInstaller.Result.ALREADY_CURRENT,
+            BundledHelperInstaller.Result.INSTALLED,
+        )
+        if (ready) companionHelperCache.invalidate()
+        return ready
+    }
     private fun rootOk(): Boolean = suCache.get() || HelperClient.available()
     private fun shellOk(): Boolean = ShizukuBridge.available()
     private fun installOk(): Boolean = rootOk() || shellOk()
@@ -2035,6 +2291,9 @@ ${tcard("captbl", "Capabilities", if (s == null) null else capRowsHtml(), post =
 <canvas id="perfchart" width="600" height="96" style="height:96px"></canvas>
 <div class="leg"><span style="color:#4a9eff">■</span> CPU&nbsp;&nbsp;<span style="color:#48c774">■</span> RAM&nbsp;&nbsp;<span style="color:#f5a623">■</span> GPU (% used) · ~4&nbsp;min</div>
 <table id="perf"><tr><td style="color:#888">sampling…</td></tr></table></div>
+<div class="card"><h2>Feature costs <small>· since process start</small></h2>
+<p class="note">Cumulative wall time, same-thread CPU and work volume for recent feature families. Event-driven counters run independently of this page; highest wall-time operations are shown first.</p>
+<table id="featurecost"><tr><td style="color:#888">waiting for activity…</td></tr></table></div>
 <div class="card"><h2>Top processes <small>· by CPU</small></h2>
 <table class="dt" id="topproc"><tr><td style="color:#888">top processes…</td></tr></table></div>
 <div class="card"><h2>WebView debugging <small id="insthdr"></small></h2>
@@ -2202,23 +2461,19 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             "\"runtime\":${EntityFilterTelemetry.json()},\"learning\":${entityLearning.statusJson()}}"
     }
 
-    private class EntityFilterBodyTooLarge : RuntimeException()
-
     /** Entity administration requests are tiny control messages. Bound both declared and chunked bodies
      *  before materializing JSON so a LAN client cannot exhaust a panel's heap. */
     private suspend fun receiveEntityAdminJson(call: ApplicationCall, allowBlank: Boolean = false): JSONObject? {
-        val declared = call.request.headers["Content-Length"]?.toLongOrNull()
-        if (declared != null && declared > MAX_ENTITY_ADMIN_BODY_BYTES) {
-            call.respondText("request too large\n", status = HttpStatusCode.PayloadTooLarge)
-            return null
-        }
-        val bytes = try {
-            withContext(Dispatchers.IO) {
-                call.receiveStream().use { BoundedStreams.readBytes(it, MAX_ENTITY_ADMIN_BODY_BYTES) }
+        val bytes = when (val receipt = receiveBoundedBody(call, MAX_ENTITY_ADMIN_BODY_BYTES)) {
+            is BoundedBodyReceipt.Received -> receipt.bytes
+            BoundedBodyReceipt.TooLarge -> {
+                call.respondText("request too large\n", status = HttpStatusCode.PayloadTooLarge)
+                return null
             }
-        } catch (_: ByteLimitExceeded) {
-            call.respondText("request too large\n", status = HttpStatusCode.PayloadTooLarge)
-            return null
+            BoundedBodyReceipt.TimedOut -> {
+                call.respondText("request timeout\n", status = HttpStatusCode.RequestTimeout)
+                return null
+            }
         }
         val text = String(bytes, Charsets.UTF_8)
         return try {
@@ -2229,35 +2484,19 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
         }
     }
 
-    /** Bound chunked as well as Content-Length requests before JSON parsing or persistence. */
-    private fun readEntityFilterBody(input: InputStream): String {
-        val out = ByteArrayOutputStream()
-        val buffer = ByteArray(16 * 1024)
-        var total = 0
-        while (true) {
-            val read = input.read(buffer)
-            if (read < 0) break
-            total += read
-            if (total > EntityFilterProtocol.MAX_API_BODY_BYTES) throw EntityFilterBodyTooLarge()
-            out.write(buffer, 0, read)
-        }
-        return out.toString(Charsets.UTF_8.name())
-    }
-
     /** Replace/toggle the complete experimental allow-list. Existing state supplies omitted fields,
      *  making `{\"enabled\":false}` a cheap A/B switch while the list remains stored on the panel. */
     private suspend fun handleEntityFilterPost(call: ApplicationCall) {
-        val declared = call.request.headers["Content-Length"]?.toLongOrNull()
-        if (declared != null && declared > EntityFilterProtocol.MAX_API_BODY_BYTES) {
-            call.respondText("request too large\n", status = HttpStatusCode.PayloadTooLarge)
-            return
-        }
-        val body = try {
-            val input = call.receiveStream()
-            withContext(Dispatchers.IO) { input.use(::readEntityFilterBody) }
-        } catch (_: EntityFilterBodyTooLarge) {
-            call.respondText("request too large\n", status = HttpStatusCode.PayloadTooLarge)
-            return
+        val body = when (val receipt = receiveBoundedBody(call, EntityFilterProtocol.MAX_API_BODY_BYTES.toLong())) {
+            is BoundedBodyReceipt.Received -> String(receipt.bytes, Charsets.UTF_8)
+            BoundedBodyReceipt.TooLarge -> {
+                call.respondText("request too large\n", status = HttpStatusCode.PayloadTooLarge)
+                return
+            }
+            BoundedBodyReceipt.TimedOut -> {
+                call.respondText("request timeout\n", status = HttpStatusCode.RequestTimeout)
+                return
+            }
         }
         val update = runCatching { EntityFilterProtocol.parseUpdate(body) }
             .getOrElse {
@@ -2310,24 +2549,18 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
      * through [applySetting] (same path as an HA command), and per-row HA-exposure toggles are stored.
      */
     private suspend fun handleConfigPost(call: ApplicationCall) {
-        val p = receiveBoundedConfigParameters(call) ?: return
+        val received = receiveBoundedConfigParameters(call) ?: return
+        val p = when (val result = normalizeConfigPostParameters(received)) {
+            is ConfigPostParameters.Ok -> result.values
+            is ConfigPostParameters.Bad -> {
+                call.respondText("${result.reason}\n", status = HttpStatusCode.BadRequest)
+                return
+            }
+        }
         // Partial-merge: apply ONLY keys present, so a fleet tool can set one field without clobbering
         // the rest. The UI form sends every key (blank = clear), preserving its full-replace behaviour.
-        // Validate panel_id up front so an invalid value is rejected before any write begins.
-        val panelId = p["panel_id"]?.let {
-            val slug = it.lowercase().replace(Regex("[^a-z0-9]+"), "_").trim('_')
-            if (slug.isEmpty()) {
-                call.respondText("invalid panel_id\n", status = HttpStatusCode.BadRequest)
-                return
-            }
-            slug
-        }
-        val dashboardPackage = p["dashboard_package"]?.trim()?.also {
-            if (!AndroidInput.isDashboardTarget(it)) {
-                call.respondText("invalid dashboard_package\n", status = HttpStatusCode.BadRequest)
-                return
-            }
-        }
+        val panelId = p["panel_id"]
+        val dashboardPackage = p["dashboard_package"]
         // Persisted fields are staged into one editor and committed atomically, so a power loss mid-apply
         // can't leave a half-written config (e.g. broker set but credentials not). Live side-effects
         // (behaviour keys, reconfigure) run after the commit so they read freshly-committed state.
@@ -2349,7 +2582,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
         val committed = withContext(Dispatchers.IO) {
             rendererPreparation.transaction {
                 val previous = ConfigBundle.fromValues(
-                    currentValues(), kind = ConfigBundle.KIND_REVISION,
+                    revisionValues(), kind = ConfigBundle.KIND_REVISION,
                     exportedAt = System.currentTimeMillis().toString(), exportedBy = config.panelId,
                 )
                 val saved = config.applyBatch {
@@ -2366,7 +2599,8 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
                         if (!tameDelta.isEmpty) config.setTameVendorPackages(next.joinToString(" "))
                     }
                     p["http_allowed_hosts"]?.let { config.setHttpAllowedHosts(it) }
-                    p["silence_boot_chime"]?.let { config.setSilenceBootChime(it.trim().equals("true", ignoreCase = true) || it.trim() == "1") }
+                    // Live keys are deliberately excluded from this batch. Their handlers must observe
+                    // the previous value before the live-setting authority persists the applied value.
                     // Keep-awake (partial wakelock so SoC/network never suspend). Applied live by reconfigure().
                     p["keep_awake"]?.let { config.setKeepAwake(it.trim().equals("true", ignoreCase = true) || it.trim() == "1") }
                     // Room-temperature calibration trim (°C) — a plain local pref with no MQTT command, so it
@@ -2504,7 +2738,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
                         // is rebound (or hidden) before a relaunched WebView can observe it.
                         p["home_dashboard"]?.let { posted ->
                             val previousHome = config.homeDashboard
-                            applySetting("home_dashboard", posted)
+                            check(applySetting("home_dashboard", posted)) { "home_dashboard live apply refused" }
                             homeDashboardAppliedEarly = true
                             homeDashboardChangedEarly = config.homeDashboard != previousHome
                         }
@@ -2532,12 +2766,13 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             call.respondText("configuration commit failed\n", status = HttpStatusCode.InternalServerError)
             return
         }
-        if (!tameDelta.isEmpty) scope.launch {
-            tameDelta.add.forEach { tame.tame(it) }
-            tameDelta.remove.forEach { tame.untame(it) }
+        if (!tameDelta.isEmpty) {
+            tameDelta.add.forEach { submitTameMutation(it, TameMutation.TAME) }
+            tameDelta.remove.forEach { submitTameMutation(it, TameMutation.UNTAME) }
         }
         // Formerly MQTT-only behaviour settings — applied through the bridge's command path so HTTP
         // and HA behave identically. Registry-validated where the key is registered; invalid skipped.
+        val liveApplyFailures = ArrayList<String>()
         for (key in HTTP_LIVE_KEYS) {
             if (key == "home_dashboard" && homeDashboardAppliedEarly) continue
             val raw = p[key] ?: continue
@@ -2550,7 +2785,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             } else {
                 raw.trim()
             }
-            applySetting(key, value)
+            if (!applySetting(key, value)) liveApplyFailures += key
         }
         snapInvalidate()
         onReconfigure()
@@ -2563,6 +2798,11 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             )
             return
         }
+        if (liveApplyFailures.isNotEmpty()) {
+            val body = "{\"ok\":false,\"status\":\"committed-apply-failed\",\"keys\":${jarr(liveApplyFailures)}}"
+            call.respondText(body, ContentType.Application.Json, HttpStatusCode.InternalServerError)
+            return
+        }
         if (call.request.headers["Accept"]?.contains("application/json") == true) {
             call.respondText(configJson(), ContentType.Application.Json)
         } else {
@@ -2572,6 +2812,48 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
                     "<body style='font-family:system-ui;background:#111;color:#eee;padding:20px'>" +
                     "settings saved — reconnecting…</body>",
                 ContentType.Text.Html,
+            )
+        }
+    }
+
+    /** Admit vendor mutations without creating one coroutine/thread per HTTP request. */
+    private fun submitTameMutation(key: String, mutation: TameMutation): Boolean {
+        val admission = tameMutations.submit(key, mutation)
+        when (admission) {
+            KeyedLatestDispatcher.Admission.ACCEPTED -> Unit
+            KeyedLatestDispatcher.Admission.COALESCED ->
+                FeatureCosts.registry.recordCoalesced(FeatureCostOperation.TAME_MUTATION)
+            KeyedLatestDispatcher.Admission.REJECTED,
+            KeyedLatestDispatcher.Admission.CLOSED ->
+                FeatureCosts.registry.recordDropped(FeatureCostOperation.TAME_MUTATION)
+        }
+        FeatureCosts.registry.setBacklog(
+            FeatureCostOperation.TAME_MUTATION,
+            tameMutations.pendingCount(),
+        )
+        return admission == KeyedLatestDispatcher.Admission.ACCEPTED ||
+            admission == KeyedLatestDispatcher.Admission.COALESCED
+    }
+
+    private suspend fun respondRemoteAdmission(call: ApplicationCall, command: RemoteControl) {
+        val admission = remoteControls.submit(command.key, command)
+        when (admission) {
+            KeyedLatestDispatcher.Admission.ACCEPTED -> Unit
+            KeyedLatestDispatcher.Admission.COALESCED ->
+                FeatureCosts.registry.recordCoalesced(FeatureCostOperation.REMOTE_INPUT)
+            KeyedLatestDispatcher.Admission.REJECTED,
+            KeyedLatestDispatcher.Admission.CLOSED ->
+                FeatureCosts.registry.recordDropped(FeatureCostOperation.REMOTE_INPUT)
+        }
+        FeatureCosts.registry.setBacklog(FeatureCostOperation.REMOTE_INPUT, remoteControls.pendingCount())
+        if (admission == KeyedLatestDispatcher.Admission.ACCEPTED ||
+            admission == KeyedLatestDispatcher.Admission.COALESCED
+        ) {
+            call.respondText("accepted\n", status = HttpStatusCode.Accepted)
+        } else {
+            call.respondText(
+                "control queue busy\n",
+                status = if (stopping) HttpStatusCode.ServiceUnavailable else HttpStatusCode.Conflict,
             )
         }
     }
@@ -2609,6 +2891,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
                 "\"min\":${spec.min?.toString() ?: "null"}," +
                 "\"max\":${spec.max?.toString() ?: "null"}," +
                 "\"step\":${spec.step?.toString() ?: "null"}," +
+                "\"maxLength\":${if (spec.type == SettingType.STRING || spec.type == SettingType.PASSWORD) spec.maxChars else "null"}," +
                 "\"ha\":$isHa," +
                 "\"exposed\":${if (isHa) config.haExposed(spec.key, spec.haExposedByDefault) else false}," +
                 "\"placeholder\":${placeholder?.let { s(it) } ?: "null"}" +
@@ -2655,6 +2938,11 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
     /** Inject a tap at device pixel (x,y) for the interactive screenshot. */
     private fun injectTap(x: Float, y: Float): Boolean = interactive.tap(x, y)
 
+    private fun exposureSpec(key: String) = key.takeIf { it.startsWith("ha_expose_") }
+        ?.removePrefix("ha_expose_")
+        ?.let(SettingsRegistry::spec)
+        ?.takeIf { it.ha != null }
+
     // ---- config bundles (export / validated import) + on-panel revision history ----------------
 
     /** Current registry values as a flat map (skips transient inputs; controller-sourced settings
@@ -2666,7 +2954,40 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             if (spec.transient) continue
             m[spec.key] = effectiveValue(spec, live)
         }
+        SettingsRegistry.SPECS.filter { it.ha != null }.forEach { spec ->
+            m["ha_expose_${spec.key}"] = config.haExposed(spec.key, spec.haExposedByDefault).toString()
+        }
         return m
+    }
+
+    private fun revisionValues(
+        values: Map<String, String> = currentValues(),
+        state: DashboardEntityBackupState = config.dashboardEntityBackupState(),
+    ): Map<String, String> = LinkedHashMap(values).apply {
+        put("$ENTITY_REVISION_PREFIX.instance_key", state.instanceKey)
+        put("$ENTITY_REVISION_PREFIX.instance_origin", state.instanceOrigin)
+        put("$ENTITY_REVISION_PREFIX.instance_uuid", state.instanceUuid)
+        put("$ENTITY_REVISION_PREFIX.dashboard_path", state.dashboardPath)
+        put("$ENTITY_REVISION_PREFIX.filter_ids", state.filterIds)
+        put("$ENTITY_REVISION_PREFIX.filter_enabled", state.filterEnabled.toString())
+        put("$ENTITY_REVISION_PREFIX.filter_owner", state.filterOwner)
+        put("$ENTITY_REVISION_PREFIX.learning_applied", state.learningApplied.toString())
+        put("$ENTITY_REVISION_PREFIX.applied_owner", state.appliedOwner)
+        put("$ENTITY_REVISION_PREFIX.overrides", state.overrides)
+        put("$ENTITY_REVISION_PREFIX.override_owner", state.overrideOwner)
+    }
+
+    private fun revisionEntityState(values: Map<String, String>): DashboardEntityBackupState? {
+        val fields = values.filterKeys { it.startsWith("$ENTITY_REVISION_PREFIX.") }
+        if (fields.isEmpty()) return null
+        val obj = org.json.JSONObject()
+        for ((key, value) in fields) {
+            val name = key.removePrefix("$ENTITY_REVISION_PREFIX.")
+            obj.put(name, if (name == "filter_enabled" || name == "learning_applied") {
+                SettingValue.parseBool(value) ?: return null
+            } else value)
+        }
+        return runCatching { planEntityBackup(obj) }.getOrNull()
     }
 
     /** Export a versioned config bundle. Secrets are excluded unless `?include_secrets=1`. */
@@ -2678,6 +2999,9 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             if (spec.transient) continue
             if (spec.secret && !includeSecrets) continue
             values[spec.key] = effectiveValue(spec, live)
+        }
+        SettingsRegistry.SPECS.filter { it.ha != null }.forEach { spec ->
+            values["ha_expose_${spec.key}"] = config.haExposed(spec.key, spec.haExposedByDefault).toString()
         }
         val bundle = ConfigBundle.fromValues(
             values, exportedAt = System.currentTimeMillis().toString(), exportedBy = config.panelId,
@@ -2700,28 +3024,50 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
      * or strict mode with any error).
      */
     private suspend fun handleConfigImport(call: ApplicationCall) {
-        val body = try {
-            withContext(Dispatchers.IO) {
-                call.receiveStream().use { String(BoundedStreams.readBytes(it, MAX_CONFIG_IMPORT_BYTES), Charsets.UTF_8) }
+        val body = when (val receipt = receiveBoundedBody(call, MAX_CONFIG_IMPORT_BYTES)) {
+            is BoundedBodyReceipt.Received -> String(receipt.bytes, Charsets.UTF_8)
+            BoundedBodyReceipt.TooLarge -> {
+                call.respondText("""{"status":"too-large"}""", ContentType.Application.Json, HttpStatusCode.PayloadTooLarge)
+                return
             }
-        } catch (_: ByteLimitExceeded) {
-            call.respondText("""{"status":"too-large"}""", ContentType.Application.Json, HttpStatusCode.PayloadTooLarge)
-            return
+            BoundedBodyReceipt.TimedOut -> {
+                call.respondText("""{"status":"timeout"}""", ContentType.Application.Json, HttpStatusCode.RequestTimeout)
+                return
+            }
         }
         val bundle = ConfigBundle.parse(body)
         if (bundle == null) {
             call.respondText("""{"status":"bad-bundle"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
             return
         }
+        if (bundle.kind != ConfigBundle.KIND_CONFIG || bundle.schema < 1) {
+            call.respondText("""{"status":"wrong-kind-or-schema"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+            return
+        }
         val (migrated, warnings) = Migrations.migrate(bundle.schema, bundle.values)
         val fleet = call.request.queryParameters["mode"] == "fleet"
         val dryRun = call.request.queryParameters["dry_run"] == "1"
+        val expectedConfig = call.request.queryParameters["expected_cfg"]?.trim().orEmpty()
+        if (expectedConfig.isNotEmpty() && !expectedConfig.matches(Regex("^[a-f0-9]{8}$"))) {
+            call.respondText(
+                """{"status":"bad-expected-cfg"}""",
+                ContentType.Application.Json,
+                HttpStatusCode.BadRequest,
+            )
+            return
+        }
         val accepted = LinkedHashMap<String, String>()
         val skipped = ArrayList<String>()
         val errors = ArrayList<String>()
         val warn = warnings.toMutableList()
         for ((key, raw) in migrated) {
             val spec = SettingsRegistry.spec(key)
+            val exposedSpec = exposureSpec(key)
+            if (exposedSpec != null) {
+                val normalized = SettingValue.parseBool(raw)?.toString()
+                if (normalized == null) errors.add("$key: expected a boolean") else accepted[key] = normalized
+                continue
+            }
             if (spec == null) { warn.add("unknown key skipped: $key"); continue }
             if (spec.readOnly || spec.transient) { skipped.add(key); continue }
             if (fleet && (spec.scope != Scope.PORTABLE || spec.secret)) { skipped.add(key); continue }
@@ -2746,16 +3092,41 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             return
         }
         if (dryRun) {
-            call.respondText(dryRunJson(ConfigDiff.diff(currentValues(), accepted), skipped, warn + errors.map { "would skip (invalid): $it" }), ContentType.Application.Json)
-            return
-        }
-        if (!applyAccepted(accepted)) {
+            val current = currentValues()
             call.respondText(
-                importJson("error", emptyList(), skipped, warn, listOf("configuration commit failed")),
+                dryRunJson(
+                    ConfigDiff.diff(current, accepted),
+                    skipped,
+                    warn + errors.map { "would skip (invalid): $it" },
+                    io.github.maxlyth.hapaneld.config.ConfigHash.of(current),
+                ),
                 ContentType.Application.Json,
-                HttpStatusCode.InternalServerError,
             )
             return
+        }
+        if (accepted.isEmpty()) {
+            call.respondText(importJson("no-op", emptyList(), skipped, warn, errors), ContentType.Application.Json)
+            return
+        }
+        when (applyAccepted(accepted, expectedConfig.ifEmpty { null })) {
+            ApplyAcceptedResult.STALE -> {
+                val actual = io.github.maxlyth.hapaneld.config.ConfigHash.of(currentValues())
+                call.respondText(
+                    """{"status":"stale-preview","expected_cfg":${jsonStr(expectedConfig)},"actual_cfg":${jsonStr(actual)}}""",
+                    ContentType.Application.Json,
+                    HttpStatusCode.Conflict,
+                )
+                return
+            }
+            ApplyAcceptedResult.COMMIT_FAILED -> {
+                call.respondText(
+                    importJson("error", emptyList(), skipped, warn, listOf("configuration commit failed")),
+                    ContentType.Application.Json,
+                    HttpStatusCode.InternalServerError,
+                )
+                return
+            }
+            ApplyAcceptedResult.APPLIED -> Unit
         }
         val status = if (errors.isEmpty()) "applied" else "partial"
         call.respondText(importJson(status, accepted.keys.toList(), skipped, warn, errors), ContentType.Application.Json)
@@ -2765,40 +3136,85 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
      *  preference fields → run live controller/hardware persistence and side-effects → reconfigure.
      *  External state cannot be rolled back and only starts after a successful preference commit.
      *  Returns false without starting side-effects when the preference commit fails. */
+    private enum class ApplyAcceptedResult { APPLIED, STALE, COMMIT_FAILED }
+
     private suspend fun applyAccepted(
         accepted: Map<String, String>,
-        afterCommitBeforeRenderer: (RendererConfigEffects) -> Unit = {},
-    ): Boolean = withContext(Dispatchers.IO) {
+        expectedConfig: String? = null,
+        expectedRevision: String? = null,
+        entityState: DashboardEntityBackupState? = null,
+        onDurableRevision: (String) -> Unit = {},
+        afterCommitBeforeRenderer: (RendererConfigEffects, String) -> Unit = { _, _ -> },
+        afterApply: () -> Unit = {},
+    ): ApplyAcceptedResult = withContext(Dispatchers.IO) {
         rendererPreparation.transaction {
-            val previous = ConfigBundle.fromValues(
-                currentValues(), kind = ConfigBundle.KIND_REVISION,
-                exportedAt = System.currentTimeMillis().toString(), exportedBy = config.panelId,
-            )
-            val editor = config.editor()
-            val live = ArrayList<Pair<String, String>>()
-            for ((key, value) in accepted) {
-                when {
-                    key == "panel_id" -> config.stagePanelId(editor, value)
-                    // EntityLearningManager owns enable/disable transition semantics and commits this
-                    // preference after the ordinary bundle transaction succeeds.
-                    key == "dashboard_entity_learning" -> Unit
-                    key in HTTP_LIVE_KEYS -> live.add(key to value)
-                    else -> SettingsRegistry.spec(key)?.let { config.stage(editor, it, value) }
+            var earlyResult: ApplyAcceptedResult? = null
+            var committed: AcceptedCommit? = null
+            config.synchronizedTransaction {
+                if (expectedConfig != null &&
+                    io.github.maxlyth.hapaneld.config.ConfigHash.of(currentValues()) != expectedConfig
+                ) {
+                    earlyResult = ApplyAcceptedResult.STALE
+                    return@synchronizedTransaction
                 }
+                if (expectedRevision != null &&
+                    io.github.maxlyth.hapaneld.config.ConfigHash.of(revisionValues()) != expectedRevision
+                ) {
+                    earlyResult = ApplyAcceptedResult.STALE
+                    return@synchronizedTransaction
+                }
+                val previous = ConfigBundle.fromValues(
+                    revisionValues(), kind = ConfigBundle.KIND_REVISION,
+                    exportedAt = System.currentTimeMillis().toString(), exportedBy = config.panelId,
+                )
+                val editor = config.editor()
+                val live = ArrayList<Pair<String, String>>()
+                for ((key, value) in accepted) {
+                    when {
+                        key == "panel_id" -> config.stagePanelId(editor, value)
+                        exposureSpec(key) != null -> editor.putBoolean(key, SettingValue.parseBool(value) == true)
+                        // EntityLearningManager owns enable/disable transition semantics and commits this
+                        // preference after the ordinary bundle transaction succeeds.
+                        key == "dashboard_entity_learning" -> Unit
+                        key in HTTP_LIVE_KEYS -> live.add(key to value)
+                        else -> SettingsRegistry.spec(key)?.let { config.stage(editor, it, value) }
+                    }
+                }
+                config.stageImportDependencies(editor, accepted)
+                entityState?.let { config.stageDashboardEntityBackupState(editor, it) }
+                if (!config.commit(editor)) {
+                    earlyResult = ApplyAcceptedResult.COMMIT_FAILED
+                    return@synchronizedTransaction
+                }
+                committed = AcceptedCommit(
+                    previous = previous,
+                    live = live,
+                    effects = RendererConfigEffects.between(previous.values, accepted),
+                )
             }
-            config.stageImportDependencies(editor, accepted)
-            if (!editor.commit()) return@transaction false
-            revisions.snapshot(previous)
-            val effects = RendererConfigEffects.between(previous.values, accepted)
+            earlyResult?.let { return@transaction it }
+            val phase = requireNotNull(committed)
+            revisions.snapshot(phase.previous)
             var rendererFailure: Throwable? = null
             runCatching {
-                val previousHome = previous.values["home_dashboard"].orEmpty()
-                live.firstOrNull { it.first == "home_dashboard" }?.let { (_, value) ->
-                    applySetting("home_dashboard", value)
+                // The base transaction deliberately excludes live keys. Publish every actually durable
+                // generation to rollback ownership, then converge all live values before any external
+                // Companion/profile work can fail.
+                onDurableRevision(io.github.maxlyth.hapaneld.config.ConfigHash.of(revisionValues()))
+                val previousHome = phase.previous.values["home_dashboard"].orEmpty()
+                phase.live.firstOrNull { it.first == "home_dashboard" }?.let { (_, value) ->
+                    val applied = applySetting("home_dashboard", value)
+                    onDurableRevision(io.github.maxlyth.hapaneld.config.ConfigHash.of(revisionValues()))
+                    check(applied) { "home_dashboard live apply refused" }
+                }
+                for ((k, v) in phase.live) if (k != "home_dashboard") {
+                    val applied = applySetting(k, v)
+                    onDurableRevision(io.github.maxlyth.hapaneld.config.ConfigHash.of(revisionValues()))
+                    check(applied) { "$k live apply refused" }
                 }
                 val homeChanged = normalizeDashboardEntityPath(config.homeDashboard) !=
                     normalizeDashboardEntityPath(previousHome)
-                val credentialsChanged = RendererConfigEffects.credentialsChanged(previous.values, accepted)
+                val credentialsChanged = RendererConfigEffects.credentialsChanged(phase.previous.values, accepted)
                 if (homeChanged || credentialsChanged) entityLearning.onTargetConfigurationChanged()
                 accepted["dashboard_entity_learning"]?.let { raw ->
                     val enabled = SettingValue.parseBool(raw)
@@ -2806,17 +3222,29 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
                     if (enabled != config.dashboardEntityLearningEnabled && !entityLearning.setEnabled(enabled)) {
                         error("entity-learning transition failed")
                     }
+                    onDurableRevision(io.github.maxlyth.hapaneld.config.ConfigHash.of(revisionValues()))
                 }
-                afterCommitBeforeRenderer(effects)
-                applyRendererEffects(effects)
+                // All accepted values are now durable. This same fence remains exact if either the
+                // Companion/renderer callback or the later profile callback fails.
+                afterCommitBeforeRenderer(
+                    phase.effects,
+                    io.github.maxlyth.hapaneld.config.ConfigHash.of(revisionValues()),
+                )
+                applyRendererEffects(phase.effects)
             }.onFailure { rendererFailure = it }
-            for ((k, v) in live) if (k != "home_dashboard") applySetting(k, v)
             snapInvalidate()
             onReconfigure()
             rendererFailure?.let { throw it }
-            true
+            afterApply()
+            ApplyAcceptedResult.APPLIED
         }
     }
+
+    private data class AcceptedCommit(
+        val previous: ConfigBundle,
+        val live: List<Pair<String, String>>,
+        val effects: RendererConfigEffects,
+    )
 
     /** Apply renderer changes only after their preferences commit. A dashboard switch dominates all
      *  reloads; otherwise a reload dominates a foreground relaunch, so one request schedules at most
@@ -2864,55 +3292,209 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
     // ---- Full panel backup / restore (device-state bundle) ------------------------------------------
     //
     // A backup bundle = ha-paneld config (all settable keys incl. secrets) + optionally the HA Companion's
-    // login files (its HomeAssistantDB carries HA access/refresh tokens). Always encrypted (PanelBackup).
+    // login files (its HomeAssistantDB carries HA access/refresh tokens). Sealed when a passphrase is
+    // supplied; an explicit, prominently warned plaintext export remains supported for local recovery.
     // Companion capture/restore needs su; the SELinux context matters (per-app MLS categories), so restore
     // reapplies the LIVE dir's owner uid + context rather than trusting restorecon.
 
     // Deliberately NOT the -wal/-shm sidecars: capture checkpoints the WAL into the main DB first, so the
     // single HomeAssistantDB file is complete. Writing back a STALE -wal/-shm makes SQLite discard it and
     // lose the login (the `servers` row lives in the WAL until a checkpoint) — validated the hard way.
-    private val companionBackupFiles = CompanionRestore.ALLOWED_FILES
+    private data class CapturedCompanionFile(val relativePath: String, val file: File)
+    private data class CapturedCompanion(
+        val packageName: String,
+        val files: List<CapturedCompanionFile>,
+        val owner: java.io.Closeable,
+    )
+    private data class BackupArchiveParts(
+        val manifest: String,
+        val sources: List<PanelBackup.ArchiveSource>,
+        val ownedFiles: List<File>,
+    )
 
-    /** Build the backup plaintext. A requested Companion capture is all-or-error, never silently omitted. */
-    private fun backupJson(includeCompanion: Boolean): String {
+    /** Build a file-backed v2 container. Companion bytes are raw ZIP entries, not base64 JSON. */
+    private fun buildBackupArtifact(includeCompanion: Boolean, passphrase: String): PanelBackup.Artifact {
+        if (cacheDir.usableSpace < backupStagingRequirement(includeCompanion, passphrase.isNotEmpty())) {
+            throw CompanionBackupUnavailable("Insufficient storage to stage a backup safely")
+        }
+        val capture = if (includeCompanion) captureCompanion() else null
+        val plain = File.createTempFile("panel-backup-", ".zip", cacheDir)
+        var sealed: File? = null
+        var parts: BackupArchiveParts? = null
+        try {
+            parts = backupArchiveParts(capture)
+            plain.outputStream().use { output ->
+                PanelBackup.writeArchive(
+                    output,
+                    parts.manifest,
+                    parts.sources,
+                    MAX_BACKUP_MANIFEST_BYTES,
+                )
+            }
+            val plaintextLimit = if (passphrase.isEmpty()) MAX_RESTORE_BYTES
+                else PanelBackup.maxSealablePlaintextBytes(MAX_RESTORE_BYTES)
+            if (plain.length() !in 1..plaintextLimit) throw ByteLimitExceeded(plaintextLimit)
+            if (passphrase.isEmpty()) return PanelBackup.Artifact(plain)
+            sealed = File.createTempFile("panel-backup-", ".hpb", cacheDir)
+            plain.inputStream().use { input ->
+                sealed.outputStream().use { output -> PanelBackup.seal(input, output, passphrase) }
+            }
+            if (sealed.length() !in 1..MAX_RESTORE_BYTES) throw ByteLimitExceeded(MAX_RESTORE_BYTES)
+            plain.delete()
+            return PanelBackup.Artifact(sealed)
+        } catch (error: Exception) {
+            plain.delete()
+            sealed?.delete()
+            throw error
+        } finally {
+            parts?.ownedFiles?.forEach(File::delete)
+            capture?.owner?.close()
+        }
+    }
+
+    /** Keep the v2 manifest small: large profile and owner-scoped entity strings are bounded ZIP entries. */
+    private fun backupArchiveParts(companion: CapturedCompanion?): BackupArchiveParts {
+        val owned = ArrayList<File>(3)
+        return try {
+            fun textEntry(name: String, prefix: String, text: String, maxBytes: Long): PanelBackup.ArchiveSource {
+                val file = File.createTempFile(prefix, ".payload", cacheDir).also(owned::add)
+                file.writer(Charsets.UTF_8).use { it.write(text) }
+                if (file.length() > maxBytes) throw ByteLimitExceeded(maxBytes)
+                return PanelBackup.ArchiveSource(name, file)
+            }
+            val entity = config.dashboardEntityBackupState()
+            val filter = textEntry(ENTITY_FILTER_BACKUP_ENTRY, "entity-filter-backup-", entity.filterIds, MAX_ENTITY_BACKUP_TEXT_BYTES)
+            val overrides = textEntry(ENTITY_OVERRIDES_BACKUP_ENTRY, "entity-overrides-backup-", entity.overrides, MAX_ENTITY_BACKUP_TEXT_BYTES)
+            val profile = profileAdmin?.exportBackup()?.let {
+                textEntry(PROFILE_BACKUP_ENTRY, "profile-backup-", it.toJson().toString(), MAX_PROFILE_BACKUP_ENTRY_BYTES)
+            }
+            val sources = ArrayList<PanelBackup.ArchiveSource>(6)
+            sources += filter
+            sources += overrides
+            profile?.let(sources::add)
+            sources += companion?.files.orEmpty().mapIndexed { index, file ->
+                PanelBackup.ArchiveSource("companion/$index", file.file)
+            }
+            BackupArchiveParts(
+                manifest = backupManifest(companion, entity, filter.file.length(), overrides.file.length(), profile?.file?.length()),
+                sources = sources,
+                ownedFiles = owned,
+            )
+        } catch (error: Exception) {
+            owned.forEach(File::delete)
+            throw error
+        }
+    }
+
+    /** Build bounded metadata only. A requested Companion capture is all-or-error. */
+    private fun backupManifest(
+        companion: CapturedCompanion?,
+        entity: DashboardEntityBackupState,
+        filterBytes: Long,
+        overrideBytes: Long,
+        profileBytes: Long?,
+    ): String {
         val live = liveValues()
-        val cfg = SettingsRegistry.settable().filterNot { it.transient }
+        val cfg = SettingsRegistry.settable()
+            .filterNot { it.transient || it.key in ENTITY_STATE_CONFIG_KEYS }
             .joinToString(",") { s -> "${jsonStr(s.key)}:${jsonStr(effectiveValue(s, live))}" }
+        val exposures = SettingsRegistry.SPECS.filter { it.ha != null }
+            .joinToString(",") { spec ->
+                "${jsonStr("ha_expose_${spec.key}")}:${jsonStr(config.haExposed(spec.key, spec.haExposedByDefault).toString())}"
+            }
         val sb = StringBuilder("{\"kind\":\"ha-paneld-backup\",\"schema\":${SettingsRegistry.SCHEMA}")
         sb.append(",\"panel_id\":${jsonStr(config.panelId)},\"created\":${jsonStr(System.currentTimeMillis().toString())}")
-        sb.append(",\"config\":{").append(cfg).append("}")
-        if (includeCompanion) {
-            val pkg = CompanionInstaller.installedPkg(appContext)
-                ?: throw CompanionBackupUnavailable("HA Companion is not installed")
-            if (!io.github.maxlyth.hapaneld.control.Su.available()) {
-                throw CompanionBackupUnavailable("Companion backup needs su")
-            }
-            val files = captureCompanion(pkg)
-            if (files.none { it.first == "databases/HomeAssistantDB" }) {
-                throw CompanionBackupUnavailable("Companion login database could not be captured")
-            }
-            val enc = java.util.Base64.getEncoder()
-            val arr = files.joinToString(",") { (rel, b) -> "{\"rel\":${jsonStr(rel)},\"b64\":${jsonStr(enc.encodeToString(b))}}" }
-            sb.append(",\"companion\":{\"pkg\":${jsonStr(pkg)},\"files\":[").append(arr).append("]}")
+        sb.append(",\"config\":{").append(listOf(cfg, exposures).filter { it.isNotEmpty() }.joinToString(",")).append("}")
+        sb.append(",\"entity_state\":").append(entityBackupArchiveJson(entity, filterBytes, overrideBytes))
+        if (profileBytes != null) {
+            sb.append(",\"profiles\":{\"entry\":").append(jsonStr(PROFILE_BACKUP_ENTRY))
+                .append(",\"size\":").append(profileBytes).append('}')
+        }
+        if (companion != null) {
+            val files = companion.files.mapIndexed { index, file ->
+                "{\"rel\":${jsonStr(file.relativePath)},\"entry\":${jsonStr("companion/$index")},\"size\":${file.file.length()}}"
+            }.joinToString(",")
+            sb.append(",\"companion\":{\"pkg\":${jsonStr(companion.packageName)},\"files\":[")
+                .append(files).append("]}")
         }
         return sb.append("}").toString()
     }
 
-    /** Read the Companion login files over su (raw bytes; skips absent/empty ones). Checkpoints the WAL
-     *  into the main DB first so the single-file capture is complete (see companionBackupFiles). */
-    private fun captureCompanion(pkg: String): List<Pair<String, ByteArray>> {
-        if (pkg !in CompanionInstaller.SUPPORTED_PACKAGES || !AndroidInput.isPackage(pkg)) return emptyList()
-        val base = "/data/data/$pkg"
-        // Merge any pending WAL frames into HomeAssistantDB so the captured file holds the whole login.
-        // Safe while the app is running (SQLite WAL is multi-connection); a no-op if sqlite3 is absent.
-        io.github.maxlyth.hapaneld.control.Su.run("sqlite3 $base/databases/HomeAssistantDB 'PRAGMA wal_checkpoint(TRUNCATE)'")
-        val budget = BoundedStreams.Budget(MAX_COMPANION_BACKUP_BYTES)
-        return companionBackupFiles.mapNotNull { rel ->
-            // Read at most one byte beyond the aggregate budget so a growing/corrupt DB cannot exhaust RAM.
-            val bytes = io.github.maxlyth.hapaneld.control.Su.runBytes(
-                "head -c ${budget.remaining + 1L} $base/$rel 2>/dev/null",
-            )?.takeIf { it.isNotEmpty() } ?: return@mapNotNull null
-            rel to budget.accept(bytes)
+    /** Capture descriptor-opened raw files, then checkpoint only the private-cache SQLite copy. */
+    private fun captureCompanion(): CapturedCompanion {
+        val pkg = CompanionInstaller.installedPkg(appContext)
+            ?: throw CompanionBackupUnavailable("HA Companion is not installed")
+        if (pkg !in CompanionInstaller.SUPPORTED_PACKAGES || !AndroidInput.isPackage(pkg)) {
+            throw CompanionBackupUnavailable("HA Companion package is not supported")
+        }
+        if (!ensureCompanionHelper()) {
+            throw CompanionBackupUnavailable("HA Companion backup needs the current ha-paneld helper")
+        }
+        val lease = CompanionDataOperationGate.acquire(pkg)
+            ?: throw CompanionBackupUnavailable("Another Companion data operation is running")
+        var helperCapture: CompanionHelperProtocol.Capture? = null
+        var needsCompanionRecovery = false
+        var leaseTransferred = false
+        try {
+            val result = HelperClient.backupCompanion(pkg, cacheDir)
+            val capture = when (result) {
+                is CompanionHelperProtocol.BackupResult.Success -> result.capture.also {
+                    needsCompanionRecovery = !it.relaunched
+                }
+                CompanionHelperProtocol.BackupResult.Busy ->
+                    throw CompanionBackupUnavailable("Companion helper is busy")
+                CompanionHelperProtocol.BackupResult.NotSubmitted ->
+                    throw CompanionBackupUnavailable("Companion helper is unavailable")
+                is CompanionHelperProtocol.BackupResult.Failed -> {
+                    needsCompanionRecovery = result.relaunchFailed
+                    throw CompanionBackupUnavailable(
+                        if (result.relaunchFailed) "Companion capture failed and relaunch was not confirmed"
+                        else "Companion capture failed",
+                    )
+                }
+                CompanionHelperProtocol.BackupResult.Indeterminate -> {
+                    leaseTransferred = true
+                    retainCompanionLeaseUntilHelperIdle(lease) {
+                        system.launchHome(pkg)
+                        if (system.resolveDashboard(config.dashboardPackage) != pkg) {
+                            system.launchHome(config.dashboardPackage)
+                        }
+                    }
+                    throw CompanionBackupUnavailable("Companion capture result was indeterminate")
+                }
+            }
+            helperCapture = capture
+            val database = capture.files[CompanionRestore.DATABASE_FILE]
+                ?: throw CompanionBackupUnavailable("Companion login database was not captured")
+            if (!io.github.maxlyth.hapaneld.backup.CompanionDatabasePreparation.checkpointCapturedDatabase(
+                    database,
+                    capture.files[CompanionHelperProtocol.DATABASE_WAL_FILE],
+                    capture.files[CompanionHelperProtocol.DATABASE_SHM_FILE],
+                )
+            ) throw CompanionBackupUnavailable("Companion login database could not be checkpointed safely")
+
+            val captured = CompanionRestore.ALLOWED_FILES.mapNotNull { relative ->
+                capture.files[relative]?.let { CapturedCompanionFile(relative, it) }
+            }
+            val total = captured.sumOf { it.file.length() }
+            if (captured.none { it.relativePath == CompanionRestore.DATABASE_FILE } ||
+                captured.any { it.file.length() !in 1..CompanionRestore.maxBytes(it.relativePath) } ||
+                total > MAX_COMPANION_BACKUP_BYTES
+            ) throw CompanionBackupUnavailable("Companion capture exceeded portable backup bounds")
+            if (!capture.relaunched) {
+                throw CompanionBackupUnavailable("Companion was captured but helper relaunch failed")
+            }
+            helperCapture = null
+            return CapturedCompanion(pkg, captured, capture)
+        } finally {
+            if (!leaseTransferred) {
+                lease.close()
+                // The helper always launches Companion to clear Android's stopped state. Restore the panel's
+                // configured dashboard after releasing the suppression lease when Companion is not it.
+                if (needsCompanionRecovery) system.launchHome(pkg)
+                if (system.resolveDashboard(config.dashboardPackage) != pkg) system.launchHome(config.dashboardPackage)
+            }
+            helperCapture?.close()
         }
     }
 
@@ -2921,82 +3503,561 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
     private suspend fun handleRestore(call: ApplicationCall) {
         val pw = call.request.headers["X-Backup-Passphrase"].orEmpty()
         val dryRun = call.request.queryParameters["dry_run"] == "1"
-        val bundle = try {
-            withContext(Dispatchers.IO) {
-                call.receiveStream().use { BoundedStreams.readBytes(it, MAX_RESTORE_BYTES) }
+        // Claim the shared destructive-operation lane before buffering, decrypting, or parsing a bundle.
+        // Otherwise several losing requests can each consume 64 MiB and expensive KDF/JSON work before
+        // discovering that another restore/install already owns admission.
+        val progress = InstallProgress.start(if (dryRun) "Restore preview" else "Restore")
+            ?: return call.respondText(
+                """{"status":"busy"}""",
+                ContentType.Application.Json,
+                HttpStatusCode.Conflict,
+            )
+        var transferredToJob = false
+        var requestAccepted = false
+        val restoreFiles = ArrayList<File>(4)
+        var retainedCompanionPlan: CompanionRestore.Plan? = null
+        try {
+            val receivedFile = File.createTempFile("panel-restore-", ".upload", cacheDir).also(restoreFiles::add)
+            val stagingLimit = restoreBodyStagingLimit(cacheDir.usableSpace)
+            val declaredBytes = call.request.headers["Content-Length"]?.toLongOrNull()
+            if (stagingLimit <= 0L || (declaredBytes != null && declaredBytes > stagingLimit)) {
+                return call.respondText(
+                    """{"ok":false,"error":"insufficient-storage"}""",
+                    ContentType.Application.Json,
+                    HttpStatusCode.InsufficientStorage,
+                )
             }
-        } catch (_: ByteLimitExceeded) {
-            return call.respondText(
-                """{"ok":false,"error":"bundle-too-large"}""",
-                ContentType.Application.Json,
-                HttpStatusCode.PayloadTooLarge,
-            )
-        }
-        // Encrypted (needs the passphrase) vs plain bundle — auto-detected from the magic.
-        val plain = if (PanelBackup.isSealed(bundle)) {
-            if (pw.isEmpty()) return call.respondText(
-                """{"ok":false,"error":"this bundle is encrypted — enter its passphrase"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
-            PanelBackup.open(bundle, pw)
-        } else bundle
-        if (plain == null) return call.respondText(
-            """{"ok":false,"error":"wrong passphrase or corrupt bundle"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
-        val obj = runCatching { org.json.JSONObject(String(plain, Charsets.UTF_8)) }.getOrNull()
-        if (obj == null || obj.optString("kind") != "ha-paneld-backup")
-            return call.respondText("""{"ok":false,"error":"not a ha-paneld backup"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
-        val cfgObj = obj.optJSONObject("config")
-        val comp = obj.optJSONObject("companion")
-        if (obj.has("companion") && comp == null) {
-            return call.respondText(
-                """{"ok":false,"error":"Invalid Companion restore section"}""",
+            try {
+                withContext(Dispatchers.IO) {
+                    call.receiveStream().use { input ->
+                        receivedFile.outputStream().use { output ->
+                            DeadlineBoundedBody.copy(
+                                input,
+                                output,
+                                stagingLimit,
+                                RESTORE_BODY_RECEIPT_DEADLINE_MS,
+                            )
+                        }
+                    }
+                }
+            } catch (_: ByteLimitExceeded) {
+                val storageBound = stagingLimit < MAX_RESTORE_BYTES
+                return call.respondText(
+                    if (storageBound) """{"ok":false,"error":"insufficient-storage"}"""
+                    else """{"ok":false,"error":"bundle-too-large"}""",
+                    ContentType.Application.Json,
+                    if (storageBound) HttpStatusCode.InsufficientStorage else HttpStatusCode.PayloadTooLarge,
+                )
+            } catch (_: BodyReceiptTimeout) {
+                return call.respondText(
+                    """{"ok":false,"error":"bundle-timeout"}""",
+                    ContentType.Application.Json,
+                    HttpStatusCode.RequestTimeout,
+                )
+            }
+            if (receivedFile.length() <= 0L) return call.respondText(
+                """{"ok":false,"error":"not a ha-paneld backup"}""",
                 ContentType.Application.Json,
                 HttpStatusCode.BadRequest,
             )
-        }
-        val plannedCompanion = comp?.let(::planCompanionRestore)
-        if (plannedCompanion is CompanionRestore.PlanResult.Invalid) {
-            return call.respondText(
-                """{"ok":false,"error":${jsonStr(plannedCompanion.reason)}}""",
+            // GCM decryption writes to a private temporary file and the tag must authenticate fully before
+            // any JSON is parsed or a restore plan can be applied.
+            val plainFile = if (PanelBackup.isSealed(receivedFile)) {
+                if (pw.isEmpty()) return call.respondText(
+                    """{"ok":false,"error":"this bundle is encrypted — enter its passphrase"}""",
+                    ContentType.Application.Json,
+                    HttpStatusCode.BadRequest,
+                )
+                val decrypted = File.createTempFile("panel-restore-", ".plain", cacheDir).also(restoreFiles::add)
+                val opened = try {
+                    withContext(Dispatchers.IO) {
+                        receivedFile.inputStream().use { input ->
+                            decrypted.outputStream().use { output ->
+                                PanelBackup.open(input, output, pw, MAX_RESTORE_BYTES)
+                            }
+                        }
+                    }
+                } catch (_: ByteLimitExceeded) {
+                    return call.respondText(
+                        """{"ok":false,"error":"bundle-too-large"}""",
+                        ContentType.Application.Json,
+                        HttpStatusCode.PayloadTooLarge,
+                    )
+                }
+                if (!opened) return call.respondText(
+                    """{"ok":false,"error":"wrong passphrase or corrupt bundle"}""",
+                    ContentType.Application.Json,
+                    HttpStatusCode.BadRequest,
+                )
+                decrypted
+            } else receivedFile
+            val archiveManifest = PanelBackup.readManifest(plainFile, MAX_BACKUP_MANIFEST_BYTES)
+            // Legacy v1 embeds Companion files as base64 inside one JSON object. JSONObject necessarily
+            // holds both the source text and parsed strings, so keep that compatibility path under a
+            // much smaller semantic ceiling. v2 archives carry large payloads as streamed ZIP entries.
+            if (archiveManifest == null && plainFile.length() > MAX_LEGACY_BACKUP_JSON_BYTES) {
+                return call.respondText(
+                    """{"ok":false,"error":"legacy backup is too large; create a new backup before restoring"}""",
+                    ContentType.Application.Json,
+                    HttpStatusCode.PayloadTooLarge,
+                )
+            }
+            val obj = runCatching {
+                val json = archiveManifest ?: String(
+                    plainFile.inputStream().use { BoundedStreams.readBytes(it, MAX_LEGACY_BACKUP_JSON_BYTES) },
+                    Charsets.UTF_8,
+                )
+                org.json.JSONObject(json)
+            }.getOrNull()
+            if (obj == null || obj.optString("kind") != "ha-paneld-backup") {
+                return call.respondText(
+                    """{"ok":false,"error":"not a ha-paneld backup"}""",
+                    ContentType.Application.Json,
+                    HttpStatusCode.BadRequest,
+                )
+            }
+            val cfgObj = obj.optJSONObject("config")
+                ?: return call.respondText(
+                    """{"ok":false,"error":"backup contains no config object"}""",
+                    ContentType.Application.Json,
+                    HttpStatusCode.BadRequest,
+                )
+            val backupSchema = obj.optInt("schema", -1)
+            if (backupSchema < 1) return call.respondText(
+                """{"ok":false,"error":"backup contains no valid schema"}""",
                 ContentType.Application.Json,
                 HttpStatusCode.BadRequest,
             )
-        }
-        val companionPlan = (plannedCompanion as? CompanionRestore.PlanResult.Valid)?.plan
-        val compFiles = companionPlan?.files?.size ?: 0
-        if (dryRun) return call.respondText(
-            """{"ok":true,"dry_run":true,"panel_id":${jsonStr(obj.optString("panel_id"))},""" +
-                """"config_keys":${cfgObj?.length() ?: 0},"companion_pkg":${jsonStr(companionPlan?.packageName ?: "")},"companion_files":$compFiles}""",
-            ContentType.Application.Json)
-        if (companionPlan != null && !withContext(Dispatchers.IO) { Su.available() }) {
-            return call.respondText(
-                """{"ok":false,"error":"Companion restore needs su"}""",
+            val configPlan = planRestoreConfig(cfgObj, backupSchema)
+            if (configPlan.errors.isNotEmpty()) {
+                return call.respondText(
+                    """{"ok":false,"error":"invalid backup config","errors":${jarr(configPlan.errors)}}""",
+                    ContentType.Application.Json,
+                    HttpStatusCode.UnprocessableEntity,
+                )
+            }
+            val entityObj = obj.optJSONObject("entity_state")
+            if (obj.has("entity_state") && entityObj == null) return call.respondText(
+                """{"ok":false,"error":"invalid entity_state object"}""",
+                ContentType.Application.Json,
+                HttpStatusCode.BadRequest,
+            )
+            val profilesObj = obj.optJSONObject("profiles")
+            if (obj.has("profiles") && profilesObj == null) return call.respondText(
+                """{"ok":false,"error":"invalid profiles object"}""",
+                ContentType.Application.Json,
+                HttpStatusCode.BadRequest,
+            )
+            val comp = obj.optJSONObject("companion")
+            if (obj.has("companion") && comp == null) {
+                return call.respondText(
+                    """{"ok":false,"error":"Invalid Companion restore section"}""",
+                    ContentType.Application.Json,
+                    HttpStatusCode.BadRequest,
+                )
+            }
+            val archiveEntries = if (archiveManifest != null) {
+                runCatching { declaredArchiveEntries(entityObj, profilesObj, comp) }.getOrNull()
+                    ?: return call.respondText(
+                        """{"ok":false,"error":"invalid backup archive metadata"}""",
+                        ContentType.Application.Json,
+                        HttpStatusCode.BadRequest,
+                    )
+            } else emptySet()
+            if (archiveManifest != null && !PanelBackup.extractArchive(plainFile, emptyList(), archiveEntries)) {
+                return call.respondText(
+                    """{"ok":false,"error":"backup archive contains missing or unexpected files"}""",
+                    ContentType.Application.Json,
+                    HttpStatusCode.BadRequest,
+                )
+            }
+            val entityState = entityObj?.let {
+                runCatching {
+                    if (archiveManifest != null && it.has("filter_ids_entry")) {
+                        planEntityArchive(it, plainFile, archiveEntries)
+                    } else {
+                        planEntityBackup(it)
+                    }
+                }.getOrNull()
+            }
+            if (entityObj != null && entityState == null) return call.respondText(
+                """{"ok":false,"error":"invalid owner-scoped entity state"}""",
+                ContentType.Application.Json,
+                HttpStatusCode.UnprocessableEntity,
+            )
+            if (entityState == null && (
+                    configPlan.values["dashboard_entity_overrides"].orEmpty().isNotBlank() ||
+                        configPlan.values["dashboard_entity_learning_applied"] == "true"
+                    )
+            ) return call.respondText(
+                """{"ok":false,"error":"entity state is missing its owner namespace"}""",
+                ContentType.Application.Json,
+                HttpStatusCode.UnprocessableEntity,
+            )
+            val profilePayload = profilesObj?.let {
+                if (archiveManifest != null && it.has("entry")) {
+                    readProfileArchive(it, plainFile, archiveEntries)
+                } else {
+                    ProfileBackup.fromJson(it)
+                }
+            }
+            if (profilesObj != null && profilePayload == null) return call.respondText(
+                """{"ok":false,"error":"invalid profile archive entry"}""",
+                ContentType.Application.Json,
+                HttpStatusCode.BadRequest,
+            )
+            if (profilePayload != null && profilePayload.payload == null) return call.respondText(
+                """{"ok":false,"error":"invalid profile catalog","errors":${jarr(profilePayload.issues.map(::profileIssueText))}}""",
+                ContentType.Application.Json,
+                HttpStatusCode.UnprocessableEntity,
+            )
+            if (profilePayload?.payload != null && profileAdmin == null) return call.respondText(
+                """{"ok":false,"error":"profile catalog restore is unavailable"}""",
                 ContentType.Application.Json,
                 HttpStatusCode.ServiceUnavailable,
             )
-        }
-        val progress = InstallProgress.start("Restore") ?: return call.respondText(
-            """{"status":"busy"}""", ContentType.Application.Json)
-        val job = scope.launch {
-            val r = runCatching {
-                var c = "no companion in bundle"
-                val n = if (cfgObj != null) {
-                    applyRestoreConfig(cfgObj) { effects ->
-                        c = companionPlan?.let(::restoreCompanion) ?: c
-                        reconcileAfterCompanionRestore(effects)
-                    }
-                } else {
-                    rendererPreparation.transaction {
-                        c = companionPlan?.let(::restoreCompanion) ?: c
-                        reconcileAfterCompanionRestore(null)
-                    }
-                    0
+            val profilePlan = profilePayload?.payload?.let { requireNotNull(profileAdmin).planBackupRestore(it) }
+            if (profilePlan != null && !profilePlan.valid) return call.respondText(
+                """{"ok":false,"error":"profile catalog is not restorable","errors":${jarr(profilePlan.issues.map(::profileIssueText))}}""",
+                ContentType.Application.Json,
+                HttpStatusCode.UnprocessableEntity,
+            )
+            val plannedCompanion = when {
+                comp != null && archiveManifest != null -> planCompanionArchive(comp, plainFile, archiveEntries)
+                comp != null -> planCompanionRestore(comp)
+                else -> null
+            }
+            if (plannedCompanion is CompanionRestore.PlanResult.Invalid) {
+                return call.respondText(
+                    """{"ok":false,"error":${jsonStr(plannedCompanion.reason)}}""",
+                    ContentType.Application.Json,
+                    HttpStatusCode.BadRequest,
+                )
+            }
+            val companionPlan = (plannedCompanion as? CompanionRestore.PlanResult.Valid)?.plan
+            retainedCompanionPlan = companionPlan
+            val compFiles = companionPlan?.files?.size ?: 0
+            if (dryRun) {
+                requestAccepted = true
+                return call.respondText(
+                    """{"ok":true,"dry_run":true,"panel_id":${jsonStr(obj.optString("panel_id"))},""" +
+                        """"config_keys":${configPlan.values.size},"config_warnings":${jarr(configPlan.warnings)},"profile_revisions":${profilePlan?.toImport?.size ?: 0},"profile_restart_required":${profilePlan?.restartRequired ?: false},"companion_pkg":${jsonStr(companionPlan?.packageName ?: "")},"companion_files":$compFiles}""",
+                    ContentType.Application.Json,
+                )
+            }
+            if (companionPlan != null && !withContext(Dispatchers.IO) { ensureCompanionHelper() }) {
+                return call.respondText(
+                    """{"ok":false,"error":"Companion restore needs the current ha-paneld helper"}""",
+                    ContentType.Application.Json,
+                    HttpStatusCode.ServiceUnavailable,
+                )
+            }
+            val job = scope.launch {
+                val before = currentValues()
+                val beforeEntityState = config.dashboardEntityBackupState()
+                val beforeRevisionHash = io.github.maxlyth.hapaneld.config.ConfigHash.of(
+                    revisionValues(before, beforeEntityState),
+                )
+                var configCommitted = false
+                var configItems = 0
+                var companionResult: CompanionApplyResult? = null
+                var profileResult: ProfileBackupRestoreResult? = null
+                var appliedRevisionHash: String? = null
+                val operation = runCatching {
+                    configItems = applyRestoreConfig(
+                        configPlan.values,
+                        entityState,
+                        beforeRevisionHash,
+                        onDurableRevision = { appliedHash ->
+                            configCommitted = true
+                            appliedRevisionHash = appliedHash
+                        },
+                        afterCommitBeforeRenderer = { effects, acceptedCount, appliedHash ->
+                            configItems = acceptedCount
+                            appliedRevisionHash = appliedHash
+                            companionResult = companionPlan?.let(::restoreCompanion)
+                            if (companionResult?.ok == false) throw CompanionApplyFailed()
+                            reconcileAfterCompanionRestore(effects)
+                        },
+                        afterApply = afterApply@{
+                            val payload = profilePayload?.payload ?: return@afterApply
+                            profileResult = requireNotNull(profileAdmin).restoreBackup(
+                                payload,
+                                requireNotNull(profilePlan).expectedCatalogRevision,
+                            )
+                            if (profileResult?.outcome != ProfileBackupRestoreOutcome.SUCCEEDED) {
+                                throw ProfileApplyFailed()
+                            }
+                            if (profileResult?.restartRequired == true &&
+                                !runCatching(onProfileRestart).getOrDefault(false)
+                            ) {
+                                onProfileRestartAbort("The restored profile selection could not schedule its required restart.")
+                                throw ProfileApplyFailed()
+                            }
+                        },
+                    )
+                    RestoreOperationResult(
+                        message = "Restore completed",
+                        structured = InstallProgress.OperationResult(
+                            status = InstallProgress.Outcome.SUCCEEDED,
+                            config = succeededComponent(configItems),
+                            profiles = profileComponent(profileResult),
+                            companion = companionResult?.component
+                                ?: skippedComponent("not present"),
+                        ),
+                    )
+                }.getOrElse { error ->
+                    Log.w(TAG, "restore failed", error)
+                    val rollback = if (configCommitted) {
+                        val expected = appliedRevisionHash
+                        val restored = expected != null && runCatching {
+                            applyAccepted(before, expectedRevision = expected, entityState = beforeEntityState) ==
+                                ApplyAcceptedResult.APPLIED
+                        }
+                            .getOrDefault(false)
+                        if (restored) InstallProgress.ComponentResult(InstallProgress.Outcome.ROLLED_BACK)
+                        else InstallProgress.ComponentResult(InstallProgress.Outcome.ROLLBACK_FAILED)
+                    } else null
+                    val partial = companionResult?.ok == true ||
+                        companionResult?.component?.status == InstallProgress.Outcome.PARTIAL ||
+                        profileResult?.outcome == ProfileBackupRestoreOutcome.SUCCEEDED ||
+                        profileResult?.outcome == ProfileBackupRestoreOutcome.PARTIAL ||
+                        rollback?.status == InstallProgress.Outcome.ROLLBACK_FAILED
+                    RestoreOperationResult(
+                        message = if (partial) "Restore partially completed" else "Restore failed",
+                        structured = InstallProgress.OperationResult(
+                            status = if (partial) InstallProgress.Outcome.PARTIAL else InstallProgress.Outcome.FAILED,
+                            config = when {
+                                rollback?.status == InstallProgress.Outcome.ROLLED_BACK ->
+                                    InstallProgress.ComponentResult(InstallProgress.Outcome.ROLLED_BACK, configItems)
+                                rollback?.status == InstallProgress.Outcome.ROLLBACK_FAILED ->
+                                    InstallProgress.ComponentResult(InstallProgress.Outcome.ROLLBACK_FAILED, configItems)
+                                configCommitted -> InstallProgress.ComponentResult(InstallProgress.Outcome.PARTIAL, configItems)
+                                else -> InstallProgress.ComponentResult(InstallProgress.Outcome.FAILED, 0)
+                            },
+                            profiles = profileComponent(profileResult, profilePlan != null),
+                            companion = companionResult?.component
+                                ?: if (companionPlan == null) skippedComponent("not present")
+                                else InstallProgress.ComponentResult(InstallProgress.Outcome.FAILED, 0),
+                            rollback = rollback,
+                        ),
+                    )
                 }
-                "restored $n config keys; $c"
-            }.getOrElse { Log.w(TAG, "restore failed", it); "error: ${it.message}" }
-            Log.i(TAG, "restore: $r")
-            InstallProgress.finish(progress, r)
+                Log.i(TAG, "restore: ${operation.message}")
+                InstallProgress.finish(progress, operation.message, operation.structured)
+            }
+            job.invokeOnCompletion {
+                retainedCompanionPlan?.close()
+                restoreFiles.forEach(File::delete)
+            }
+            transferredToJob = true
+            requestAccepted = true
+            InstallProgress.finishOnFailure(progress, job)
+            call.respondText("""{"status":"started"}""", ContentType.Application.Json)
+        } finally {
+            if (!transferredToJob) {
+                retainedCompanionPlan?.close()
+                restoreFiles.forEach(File::delete)
+                val result = if (requestAccepted) {
+                    InstallProgress.OperationResult(InstallProgress.Outcome.SUCCEEDED)
+                } else {
+                    InstallProgress.OperationResult(InstallProgress.Outcome.FAILED)
+                }
+                InstallProgress.finish(
+                    progress,
+                    if (requestAccepted) "Restore preview complete" else "Restore request rejected",
+                    result,
+                )
+            }
         }
-        InstallProgress.finishOnFailure(progress, job)
-        call.respondText("""{"status":"started"}""", ContentType.Application.Json)
+    }
+
+    private data class RestoreOperationResult(
+        val message: String,
+        val structured: InstallProgress.OperationResult,
+    )
+
+    private data class CompanionApplyResult(
+        val ok: Boolean,
+        val component: InstallProgress.ComponentResult,
+    )
+
+    private class CompanionApplyFailed : IllegalStateException("Companion restore failed")
+    private class ProfileApplyFailed : IllegalStateException("Profile catalog restore failed")
+
+    private fun succeededComponent(items: Int) = InstallProgress.ComponentResult(
+        InstallProgress.Outcome.SUCCEEDED,
+        items,
+    )
+
+    private fun skippedComponent(detail: String) = InstallProgress.ComponentResult(
+        InstallProgress.Outcome.SKIPPED,
+        detail = detail,
+    )
+
+    private fun profileComponent(
+        result: ProfileBackupRestoreResult?,
+        present: Boolean = result != null,
+    ): InstallProgress.ComponentResult = when {
+        result == null && !present -> skippedComponent("not present")
+        result == null -> InstallProgress.ComponentResult(InstallProgress.Outcome.FAILED, 0)
+        else -> InstallProgress.ComponentResult(
+            status = when (result.outcome) {
+                ProfileBackupRestoreOutcome.SUCCEEDED -> InstallProgress.Outcome.SUCCEEDED
+                ProfileBackupRestoreOutcome.PARTIAL -> InstallProgress.Outcome.PARTIAL
+                ProfileBackupRestoreOutcome.REJECTED -> InstallProgress.Outcome.FAILED
+            },
+            items = result.imported.size,
+            detail = result.message,
+        )
+    }
+
+    private fun profileIssueText(issue: io.github.maxlyth.hapaneld.device.profile.ProfileIssue): String =
+        "${issue.path}: ${issue.message}"
+
+    private data class ArchiveTextRef(
+        val entry: String,
+        val size: Long,
+        val maxBytes: Long,
+        val allowEmpty: Boolean,
+    )
+
+    private fun archiveTextRef(
+        obj: org.json.JSONObject,
+        entryKey: String,
+        sizeKey: String,
+        expectedEntry: String,
+        maxBytes: Long,
+        allowEmpty: Boolean,
+    ): ArchiveTextRef {
+        val entry = obj.opt(entryKey) as? String ?: throw IllegalArgumentException("missing $entryKey")
+        require(entry == expectedEntry) { "unexpected $entryKey" }
+        val rawSize = obj.opt(sizeKey) as? Number ?: throw IllegalArgumentException("missing $sizeKey")
+        val size = rawSize.toLong()
+        require(rawSize.toDouble() == size.toDouble())
+        val minimum = if (allowEmpty) 0L else 1L
+        require(size in minimum..maxBytes)
+        return ArchiveTextRef(entry, size, maxBytes, allowEmpty)
+    }
+
+    private fun declaredArchiveEntries(
+        entity: org.json.JSONObject?,
+        profiles: org.json.JSONObject?,
+        companion: org.json.JSONObject?,
+    ): Set<String> {
+        val entries = ArrayList<String>(6)
+        if (entity?.has("filter_ids_entry") == true || entity?.has("overrides_entry") == true) {
+            entries += archiveTextRef(
+                entity,
+                "filter_ids_entry",
+                "filter_ids_size",
+                ENTITY_FILTER_BACKUP_ENTRY,
+                MAX_ENTITY_BACKUP_TEXT_BYTES,
+                allowEmpty = true,
+            ).entry
+            entries += archiveTextRef(
+                entity,
+                "overrides_entry",
+                "overrides_size",
+                ENTITY_OVERRIDES_BACKUP_ENTRY,
+                MAX_ENTITY_BACKUP_TEXT_BYTES,
+                allowEmpty = true,
+            ).entry
+        }
+        if (profiles?.has("entry") == true) {
+            entries += archiveTextRef(
+                profiles,
+                "entry",
+                "size",
+                PROFILE_BACKUP_ENTRY,
+                MAX_PROFILE_BACKUP_ENTRY_BYTES,
+                allowEmpty = false,
+            ).entry
+        }
+        companion?.optJSONArray("files")?.let { files ->
+            for (index in 0 until files.length()) {
+                val file = files.optJSONObject(index)
+                    ?: throw IllegalArgumentException("invalid Companion file metadata")
+                entries += (file.opt("entry") as? String)
+                    ?: throw IllegalArgumentException("missing Companion entry")
+            }
+        }
+        require(entries.size < PanelBackup.MAX_ARCHIVE_ENTRIES)
+        require(entries.toSet().size == entries.size)
+        return entries.toSet()
+    }
+
+    private fun readArchiveText(
+        archive: File,
+        ref: ArchiveTextRef,
+        allowedEntries: Set<String>,
+        prefix: String,
+    ): String {
+        val target = File.createTempFile(prefix, ".payload", cacheDir)
+        try {
+            require(
+                PanelBackup.extractArchive(
+                    archive,
+                    listOf(PanelBackup.ArchiveTarget(ref.entry, target, ref.maxBytes, ref.allowEmpty)),
+                    allowedEntries,
+                ),
+            )
+            require(target.length() == ref.size)
+            val bytes = target.inputStream().use { BoundedStreams.readBytes(it, ref.maxBytes) }
+            return Charsets.UTF_8.newDecoder()
+                .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+                .decode(java.nio.ByteBuffer.wrap(bytes))
+                .toString()
+        } finally {
+            target.delete()
+        }
+    }
+
+    private fun readProfileArchive(
+        metadata: org.json.JSONObject,
+        archive: File,
+        allowedEntries: Set<String>,
+    ): io.github.maxlyth.hapaneld.device.profile.ProfileBackupDecodeResult? = runCatching {
+        val ref = archiveTextRef(
+            metadata,
+            "entry",
+            "size",
+            PROFILE_BACKUP_ENTRY,
+            MAX_PROFILE_BACKUP_ENTRY_BYTES,
+            allowEmpty = false,
+        )
+        ProfileBackup.fromJson(org.json.JSONObject(readArchiveText(archive, ref, allowedEntries, "profile-restore-")))
+    }.getOrNull()
+
+    private fun planEntityArchive(
+        metadata: org.json.JSONObject,
+        archive: File,
+        allowedEntries: Set<String>,
+    ): DashboardEntityBackupState {
+        val filterRef = archiveTextRef(
+            metadata,
+            "filter_ids_entry",
+            "filter_ids_size",
+            ENTITY_FILTER_BACKUP_ENTRY,
+            MAX_ENTITY_BACKUP_TEXT_BYTES,
+            allowEmpty = true,
+        )
+        val overridesRef = archiveTextRef(
+            metadata,
+            "overrides_entry",
+            "overrides_size",
+            ENTITY_OVERRIDES_BACKUP_ENTRY,
+            MAX_ENTITY_BACKUP_TEXT_BYTES,
+            allowEmpty = true,
+        )
+        val filterIds = readArchiveText(archive, filterRef, allowedEntries, "entity-filter-restore-")
+        val overrides = readArchiveText(archive, overridesRef, allowedEntries, "entity-overrides-restore-")
+        return planEntityBackup(
+            org.json.JSONObject(metadata.toString())
+                .put("filter_ids", filterIds)
+                .put("overrides", overrides),
+        )
     }
 
     /** Convert untrusted JSON to a completely validated and decoded plan before any config commit or app stop. */
@@ -3013,21 +4074,196 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             packageName = comp.optString("pkg"),
             files = encoded,
             installedPackages = CompanionInstaller.installedPackages(appContext),
+            stagingDir = cacheDir,
         )
     }
 
-    /** Validate + apply the config half of a backup (reuses the import apply path). Returns keys applied. */
-    private suspend fun applyRestoreConfig(
-        cfgObj: org.json.JSONObject,
-        afterCommitBeforeRenderer: (RendererConfigEffects) -> Unit,
-    ): Int {
-        val accepted = LinkedHashMap<String, String>()
-        for (key in cfgObj.keys()) {
-            val spec = SettingsRegistry.spec(key) ?: continue
-            if (spec.readOnly || spec.transient) continue
-            (SettingValue.validate(spec, cfgObj.getString(key)) as? Validation.Ok)?.let { accepted[key] = it.normalized }
+    /** Extract a v2 archive's raw Companion entries under per-file and aggregate decoded limits. */
+    private fun planCompanionArchive(
+        comp: org.json.JSONObject,
+        archive: File,
+        allowedEntries: Set<String>,
+    ): CompanionRestore.PlanResult {
+        val files = comp.optJSONArray("files")
+            ?: return CompanionRestore.PlanResult.Invalid("Companion restore contains no files")
+        if (files.length() !in 1..CompanionRestore.ALLOWED_FILES.size) {
+            return CompanionRestore.PlanResult.Invalid("Companion restore contains an invalid file count")
         }
-        check(applyAccepted(accepted, afterCommitBeforeRenderer)) { "configuration commit failed" }
+        data class Pending(val relativePath: String, val entry: String, val size: Long, val target: File)
+        val pending = ArrayList<Pending>(files.length())
+        var ownershipTransferred = false
+        try {
+            for (index in 0 until files.length()) {
+                val file = files.optJSONObject(index)
+                    ?: return CompanionRestore.PlanResult.Invalid("Invalid Companion file entry at index $index")
+                val relativePath = file.optString("rel")
+                val entry = file.optString("entry")
+                val declaredSize = file.optLong("size", -1L)
+                if (relativePath !in CompanionRestore.ALLOWED_FILES ||
+                    declaredSize !in 1..CompanionRestore.maxBytes(relativePath)
+                ) return CompanionRestore.PlanResult.Invalid("Invalid Companion file metadata at index $index")
+                pending += Pending(
+                    relativePath,
+                    entry,
+                    declaredSize,
+                    File.createTempFile("companion-restore-", ".payload", cacheDir),
+                )
+            }
+            if (pending.map { it.relativePath }.toSet().size != pending.size ||
+                pending.map { it.entry }.toSet().size != pending.size ||
+                pending.sumOf { it.size } > CompanionRestore.MAX_AGGREGATE_BYTES
+            ) return CompanionRestore.PlanResult.Invalid("Duplicate or oversized Companion archive metadata")
+            val extracted = PanelBackup.extractArchive(
+                archive,
+                pending.map { PanelBackup.ArchiveTarget(it.entry, it.target, CompanionRestore.maxBytes(it.relativePath)) },
+                allowedEntries,
+            )
+            if (!extracted || pending.any { it.target.length() != it.size }) {
+                return CompanionRestore.PlanResult.Invalid("Companion archive files are missing, corrupt, or too large")
+            }
+            val result = CompanionRestore.planFiles(
+                packageName = comp.optString("pkg"),
+                files = pending.map { CompanionRestore.FilePayload(it.relativePath, it.target) },
+                installedPackages = CompanionInstaller.installedPackages(appContext),
+            )
+            ownershipTransferred = result is CompanionRestore.PlanResult.Valid
+            return result
+        } finally {
+            if (!ownershipTransferred) pending.forEach { it.target.delete() }
+        }
+    }
+
+    /** Validate + apply the config half of a backup (reuses the import apply path). Returns keys applied. */
+    private data class RestoreConfigPlan(
+        val values: Map<String, String>,
+        val warnings: List<String>,
+        val errors: List<String>,
+    )
+
+    private fun entityBackupJson(state: DashboardEntityBackupState): String = buildString {
+        append("{\"instance_key\":").append(jsonStr(state.instanceKey))
+        append(",\"instance_origin\":").append(jsonStr(state.instanceOrigin))
+        append(",\"instance_uuid\":").append(jsonStr(state.instanceUuid))
+        append(",\"dashboard_path\":").append(jsonStr(state.dashboardPath))
+        append(",\"filter_ids\":").append(jsonStr(state.filterIds))
+        append(",\"filter_enabled\":").append(state.filterEnabled)
+        append(",\"filter_owner\":").append(jsonStr(state.filterOwner))
+        append(",\"learning_applied\":").append(state.learningApplied)
+        append(",\"applied_owner\":").append(jsonStr(state.appliedOwner))
+        append(",\"overrides\":").append(jsonStr(state.overrides))
+        append(",\"override_owner\":").append(jsonStr(state.overrideOwner))
+        append('}')
+    }
+
+    private fun entityBackupArchiveJson(
+        state: DashboardEntityBackupState,
+        filterBytes: Long,
+        overrideBytes: Long,
+    ): String = buildString {
+        append("{\"instance_key\":").append(jsonStr(state.instanceKey))
+        append(",\"instance_origin\":").append(jsonStr(state.instanceOrigin))
+        append(",\"instance_uuid\":").append(jsonStr(state.instanceUuid))
+        append(",\"dashboard_path\":").append(jsonStr(state.dashboardPath))
+        append(",\"filter_ids_entry\":").append(jsonStr(ENTITY_FILTER_BACKUP_ENTRY))
+        append(",\"filter_ids_size\":").append(filterBytes)
+        append(",\"filter_enabled\":").append(state.filterEnabled)
+        append(",\"filter_owner\":").append(jsonStr(state.filterOwner))
+        append(",\"learning_applied\":").append(state.learningApplied)
+        append(",\"applied_owner\":").append(jsonStr(state.appliedOwner))
+        append(",\"overrides_entry\":").append(jsonStr(ENTITY_OVERRIDES_BACKUP_ENTRY))
+        append(",\"overrides_size\":").append(overrideBytes)
+        append(",\"override_owner\":").append(jsonStr(state.overrideOwner))
+        append('}')
+    }
+
+    private fun planEntityBackup(obj: org.json.JSONObject): DashboardEntityBackupState {
+        fun string(key: String, max: Int, allowNewline: Boolean = false): String {
+            val value = obj.opt(key) as? String ?: throw IllegalArgumentException("$key must be a string")
+            require(value.length <= max && value.none {
+                it.code < 0x20 && !(allowNewline && it == '\n')
+            }) { "$key is invalid" }
+            return value
+        }
+        fun bool(key: String): Boolean = obj.opt(key) as? Boolean
+            ?: throw IllegalArgumentException("$key must be boolean")
+        val ids = EntityFilterProtocol.normalize(
+            string("filter_ids", 13_000_000, allowNewline = true).lineSequence().toList(),
+        )
+            .joinToString("\n")
+        val overrideLines = string("overrides", 13_000_000, allowNewline = true)
+            .lineSequence().filter(String::isNotBlank).toList()
+        val overrideIds = overrideLines.map { line ->
+            require(line.firstOrNull() == '+' || line.firstOrNull() == '-') { "invalid override marker" }
+            line.drop(1).trim()
+        }
+        EntityFilterProtocol.normalize(overrideIds)
+        return DashboardEntityBackupState(
+            instanceKey = string("instance_key", 256),
+            instanceOrigin = string("instance_origin", 2_048),
+            instanceUuid = string("instance_uuid", 256),
+            dashboardPath = string("dashboard_path", 2_048),
+            filterIds = ids,
+            filterEnabled = bool("filter_enabled"),
+            filterOwner = string("filter_owner", 2_560),
+            learningApplied = bool("learning_applied"),
+            appliedOwner = string("applied_owner", 2_560),
+            overrides = overrideLines.sorted().joinToString("\n"),
+            overrideOwner = string("override_owner", 2_560),
+        )
+    }
+
+    private fun planRestoreConfig(cfgObj: org.json.JSONObject, schema: Int): RestoreConfigPlan {
+        val raw = LinkedHashMap<String, String>()
+        for (key in cfgObj.keys()) {
+            val value = cfgObj.opt(key)
+            if (value == null || value == org.json.JSONObject.NULL || value is org.json.JSONObject || value is org.json.JSONArray) {
+                return RestoreConfigPlan(emptyMap(), emptyList(), listOf("$key: expected a scalar setting value"))
+            }
+            raw[key] = value.toString()
+        }
+        val (migrated, warnings) = Migrations.migrate(schema, raw)
+        val accepted = LinkedHashMap<String, String>()
+        val errors = ArrayList<String>()
+        for ((key, value) in migrated) {
+            val spec = SettingsRegistry.spec(key)
+            val exposedSpec = exposureSpec(key)
+            when {
+                exposedSpec != null -> {
+                    val normalized = SettingValue.parseBool(value)?.toString()
+                    if (normalized == null) errors += "$key: expected a boolean" else accepted[key] = normalized
+                }
+                spec == null -> errors += "$key: unknown setting"
+                spec.readOnly || spec.transient -> errors += "$key: setting cannot be restored"
+                else -> when (val validated = SettingValue.validate(spec, value)) {
+                    is Validation.Ok -> accepted[key] = validated.normalized
+                    is Validation.Bad -> errors += "$key: ${validated.reason}"
+                }
+            }
+        }
+        if (accepted.isEmpty() && errors.isEmpty()) errors += "config object contains no restorable settings"
+        return RestoreConfigPlan(accepted, warnings, errors)
+    }
+
+    private suspend fun applyRestoreConfig(
+        accepted: Map<String, String>,
+        entityState: DashboardEntityBackupState?,
+        expectedRevision: String,
+        onDurableRevision: (String) -> Unit,
+        afterCommitBeforeRenderer: (RendererConfigEffects, Int, String) -> Unit,
+        afterApply: () -> Unit = {},
+    ): Int {
+        check(applyAccepted(
+            accepted,
+            expectedRevision = expectedRevision,
+            entityState = entityState,
+            onDurableRevision = onDurableRevision,
+            afterCommitBeforeRenderer = { effects, appliedHash ->
+                afterCommitBeforeRenderer(effects, accepted.size, appliedHash)
+            },
+            afterApply = afterApply,
+        ) == ApplyAcceptedResult.APPLIED) {
+            "configuration commit failed"
+        }
         return accepted.size
     }
 
@@ -3042,135 +4278,138 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
         requireRendererResult(result)
     }
 
-    /** Execute a prevalidated Companion restore through staged writes and a rollback-capable commit. */
-    private fun restoreCompanion(plan: CompanionRestore.Plan): String {
-        val Su = io.github.maxlyth.hapaneld.control.Su
-        if (!Su.available()) return "companion restore needs su"
-        val result = CompanionRestore.execute(plan, object : CompanionRestore.Executor {
-            override fun inspectTarget(packageName: String): CompanionRestore.TargetInfo? {
-                val base = "/data/data/$packageName"
-                val uid = Su.runOutput("stat -c %u $base 2>/dev/null")?.trim()
-                    ?.takeIf { it.matches(Regex("^[0-9]+$")) } ?: return null
-                val context = Su.runOutput("ls -Zd $base 2>/dev/null")?.trim()?.substringBefore(' ')
-                    ?.takeIf { it.matches(Regex("^[A-Za-z0-9_:,.]+$")) && it.startsWith("u:") } ?: return null
-                return CompanionRestore.TargetInfo(uid, context)
-            }
-
-            override fun prepare(plan: CompanionRestore.Plan): CompanionRestore.Preparation? {
-                if (plan.packageName !in CompanionInstaller.SUPPORTED_PACKAGES ||
-                    !AndroidInput.isPackage(plan.packageName)
-                ) return null
-                return io.github.maxlyth.hapaneld.backup.CompanionDatabasePreparation.prepare(plan, cacheDir)
-            }
-
-            override fun forceStop(packageName: String): Boolean = Su.run("am force-stop $packageName")
-
-            override fun stage(packageName: String, file: CompanionRestore.FilePayload): Boolean {
-                val tmp = runCatching {
-                    File.createTempFile("companion-restore-", ".tmp", cacheDir).apply { writeBytes(file.bytes) }
-                }.getOrNull() ?: return false
-                return try {
-                    val staged = "/data/data/$packageName/${file.relativePath}.hapaneld-restore"
-                    Su.runWithStdinLongChecked(
-                        "cat > $staged && [ \"\$(stat -c %s $staged)\" = \"${file.bytes.size}\" ]",
-                        tmp,
-                        60_000,
-                    ) != null
-                } finally {
-                    tmp.delete()
-                }
-            }
-
-            override fun commit(
-                plan: CompanionRestore.Plan,
-                target: CompanionRestore.TargetInfo,
-                preparation: CompanionRestore.Preparation,
-            ): Boolean {
-                val script = runCatching {
-                    File.createTempFile("companion-commit-", ".sh", cacheDir).apply {
-                        writeText(companionCommitScript(plan, target, preparation))
+    /** Execute a prevalidated Companion restore through the descriptor-confined helper transaction. */
+    private fun restoreCompanion(plan: CompanionRestore.Plan): CompanionApplyResult {
+        if (plan.packageName !in CompanionInstaller.SUPPORTED_PACKAGES || !AndroidInput.isPackage(plan.packageName)) {
+            return CompanionApplyResult(
+                false,
+                InstallProgress.ComponentResult(InstallProgress.Outcome.FAILED, 0, "unsupported Companion package"),
+            )
+        }
+        val preparation = io.github.maxlyth.hapaneld.backup.CompanionDatabasePreparation.prepare(plan, cacheDir)
+            ?: return CompanionApplyResult(
+                false,
+                InstallProgress.ComponentResult(InstallProgress.Outcome.FAILED, 0, "Companion payload validation failed"),
+            )
+        preparation.use { prepared ->
+            val lease = CompanionDataOperationGate.acquire(plan.packageName)
+                ?: return CompanionApplyResult(
+                    false,
+                    InstallProgress.ComponentResult(InstallProgress.Outcome.FAILED, 0, "Companion helper is busy"),
+                )
+            var result = CompanionHelperProtocol.RestoreResult.INDETERMINATE
+            var leaseTransferred = false
+            try {
+                result = HelperClient.restoreCompanion(
+                    plan.packageName,
+                    prepared.files.associate { it.relativePath to it.file },
+                )
+                if (result == CompanionHelperProtocol.RestoreResult.INDETERMINATE) {
+                    leaseTransferred = true
+                    retainCompanionLeaseUntilHelperIdle(lease) {
+                        if (system.resolveDashboard(config.dashboardPackage) != plan.packageName) {
+                            system.launchHome(config.dashboardPackage)
+                        }
                     }
-                }.getOrNull() ?: return false
-                return try {
-                    Su.runWithStdinLongChecked("sh", script, 60_000) != null
-                } finally {
-                    script.delete()
+                }
+            } finally {
+                if (!leaseTransferred) lease.close()
+                if (result in setOf(
+                        CompanionHelperProtocol.RestoreResult.COMMITTED_RELAUNCH_FAILED,
+                        CompanionHelperProtocol.RestoreResult.ROLLED_BACK_RELAUNCH_FAILED,
+                    )
+                ) system.launchHome(plan.packageName)
+                if (!leaseTransferred && system.resolveDashboard(config.dashboardPackage) != plan.packageName) {
+                    system.launchHome(config.dashboardPackage)
                 }
             }
-
-            override fun discard(plan: CompanionRestore.Plan): Boolean {
-                val paths = plan.files.flatMap {
-                    val staged = "/data/data/${plan.packageName}/${it.relativePath}.hapaneld-restore"
-                    listOf(staged, "$staged-wal", "$staged-shm")
-                }.joinToString(" ") {
-                    it
-                }
-                return Su.run("rm -f $paths")
+            val repaired = prepared.repairedInternalUrls
+            return when (result) {
+                CompanionHelperProtocol.RestoreResult.COMMITTED -> CompanionApplyResult(
+                    true,
+                    InstallProgress.ComponentResult(
+                        InstallProgress.Outcome.SUCCEEDED,
+                        plan.files.size,
+                        if (repaired > 0) "$repaired blank internal URL(s) repaired" else "owner/context restored",
+                    ),
+                )
+                CompanionHelperProtocol.RestoreResult.COMMITTED_RELAUNCH_FAILED -> CompanionApplyResult(
+                    false,
+                    InstallProgress.ComponentResult(
+                        InstallProgress.Outcome.PARTIAL,
+                        plan.files.size,
+                        "files restored but Companion relaunch was not confirmed",
+                    ),
+                )
+                CompanionHelperProtocol.RestoreResult.ROLLED_BACK,
+                CompanionHelperProtocol.RestoreResult.ROLLED_BACK_RELAUNCH_FAILED -> CompanionApplyResult(
+                    false,
+                    InstallProgress.ComponentResult(
+                        InstallProgress.Outcome.ROLLED_BACK,
+                        0,
+                        "restore failed; prior Companion files retained",
+                    ),
+                )
+                CompanionHelperProtocol.RestoreResult.ROLLBACK_FAILED,
+                CompanionHelperProtocol.RestoreResult.ROLLBACK_FAILED_RELAUNCH_FAILED,
+                CompanionHelperProtocol.RestoreResult.ROLLBACK_FAILED_RELAUNCH_SUPPRESSED -> CompanionApplyResult(
+                    false,
+                    InstallProgress.ComponentResult(
+                        InstallProgress.Outcome.ROLLBACK_FAILED,
+                        null,
+                        "restore and rollback failed; Companion state may be partial",
+                    ),
+                )
+                CompanionHelperProtocol.RestoreResult.BUSY -> CompanionApplyResult(
+                    false,
+                    InstallProgress.ComponentResult(InstallProgress.Outcome.FAILED, 0, "Companion helper is busy"),
+                )
+                CompanionHelperProtocol.RestoreResult.NOT_SUBMITTED -> CompanionApplyResult(
+                    false,
+                    InstallProgress.ComponentResult(InstallProgress.Outcome.FAILED, 0, "Companion helper is unavailable"),
+                )
+                CompanionHelperProtocol.RestoreResult.FAILED -> CompanionApplyResult(
+                    false,
+                    InstallProgress.ComponentResult(InstallProgress.Outcome.FAILED, 0, "restore rejected before commit"),
+                )
+                CompanionHelperProtocol.RestoreResult.INDETERMINATE -> CompanionApplyResult(
+                    false,
+                    InstallProgress.ComponentResult(
+                        InstallProgress.Outcome.PARTIAL,
+                        null,
+                        "restore terminal status was indeterminate",
+                    ),
+                )
             }
-
-            override fun relaunch(packageName: String): Boolean =
-                Su.run("monkey -p $packageName -c android.intent.category.LAUNCHER 1")
-        })
-        return if (result.ok) {
-            val repaired = if (result.repairedInternalUrls > 0) {
-                ", ${result.repairedInternalUrls} blank internal URL${if (result.repairedInternalUrls == 1) "" else "s"} repaired"
-            } else ""
-            "${result.message} (${result.committedFiles} files, owner/context restored$repaired)"
-        } else {
-            "error: ${result.message}; committed=${result.committedFiles ?: "unknown"}; relaunched=${result.relaunched}"
         }
     }
 
-    /** Root-side commit script: keep old live files until every staged write exists, then roll back on any failed effect. */
-    private fun companionCommitScript(
-        plan: CompanionRestore.Plan,
-        target: CompanionRestore.TargetInfo,
-        preparation: CompanionRestore.Preparation,
-    ): String {
-        val base = "/data/data/${plan.packageName}"
-        val livePaths = plan.files.map { it.relativePath }.toMutableList()
-        if (CompanionRestore.DATABASE_FILE in livePaths) {
-            livePaths += "databases/HomeAssistantDB-wal"
-            livePaths += "databases/HomeAssistantDB-shm"
-        }
-        return buildString {
-            appendLine("set -eu")
-            appendLine("base='$base'")
-            appendLine("rollback=\"\$base/.hapaneld-restore-rollback-\$\$\"")
-            appendLine("mkdir \"\$rollback\"")
-            appendLine("restore_old() {")
-            appendLine("  rc=\$?")
-            appendLine("  set +e")
-            livePaths.forEachIndexed { index, rel ->
-                appendLine("  if [ -f \"\$rollback/$index\" ]; then cp -p \"\$rollback/$index\" \"\$base/$rel\"; elif [ -f \"\$rollback/$index.missing\" ]; then rm -f \"\$base/$rel\"; fi")
+    /** A timed-out socket does not cancel the helper worker. Keep every automatic launch path blocked
+     * until the helper reports the transaction idle. Three consecutive connection failures mean the
+     * daemon process is gone, so no worker remains capable of touching Companion data. */
+    private fun retainCompanionLeaseUntilHelperIdle(
+        lease: CompanionDataOperationGate.Lease,
+        afterRelease: () -> Unit,
+    ) {
+        scope.launch(Dispatchers.IO) {
+            var consecutiveUnavailable = 0
+            try {
+                while (true) {
+                    when (HelperClient.companionOperationStatus()) {
+                        CompanionOperationStatus.BUSY -> consecutiveUnavailable = 0
+                        CompanionOperationStatus.IDLE,
+                        CompanionOperationStatus.UNSUPPORTED -> break
+                        CompanionOperationStatus.UNAVAILABLE -> {
+                            consecutiveUnavailable++
+                            if (consecutiveUnavailable >= COMPANION_STATUS_UNAVAILABLE_LIMIT) break
+                        }
+                    }
+                    delay(COMPANION_STATUS_POLL_MS)
+                }
+            } finally {
+                lease.close()
             }
-            plan.files.forEach { file ->
-                val staged = "\$base/${file.relativePath}.hapaneld-restore"
-                appendLine("  rm -f \"$staged\" \"$staged-wal\" \"$staged-shm\"")
-            }
-            appendLine("  rm -rf \"\$rollback\"")
-            appendLine("  trap - EXIT")
-            appendLine("  exit \"\$rc\"")
-            appendLine("}")
-            appendLine("trap restore_old EXIT")
-            livePaths.forEachIndexed { index, rel ->
-                appendLine("if [ -f \"\$base/$rel\" ]; then cp -p \"\$base/$rel\" \"\$rollback/$index\"; else : > \"\$rollback/$index.missing\"; fi")
-            }
-            plan.files.forEach { file ->
-                val expected = preparation.fileSizes.getValue(file.relativePath)
-                val staged = "\$base/${file.relativePath}.hapaneld-restore"
-                appendLine("[ \"\$(stat -c %s \"$staged\")\" = \"$expected\" ]")
-                appendLine("[ ! -e \"$staged-wal\" ] && [ ! -e \"$staged-shm\" ]")
-            }
-            plan.files.forEach { file -> appendLine("mv \"\$base/${file.relativePath}.hapaneld-restore\" \"\$base/${file.relativePath}\"") }
-            if (CompanionRestore.DATABASE_FILE in livePaths) {
-                appendLine("rm -f \"\$base/databases/HomeAssistantDB-wal\" \"\$base/databases/HomeAssistantDB-shm\"")
-            }
-            val restored = plan.files.joinToString(" ") { "\"\$base/${it.relativePath}\"" }
-            appendLine("chown ${target.uid}:${target.uid} $restored")
-            appendLine("chcon ${target.selinuxContext} $restored")
-            appendLine("rm -rf \"\$rollback\"")
-            appendLine("trap - EXIT")
+            afterRelease()
         }
     }
 
@@ -3187,14 +4426,32 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             call.respondText("""{"status":"not-found"}""", ContentType.Application.Json, HttpStatusCode.NotFound)
             return
         }
-        val (migrated, _) = Migrations.migrate(bundle.schema, bundle.values)
+        val entityState = revisionEntityState(bundle.values)
+        val ordinaryValues = bundle.values.filterKeys { !it.startsWith("$ENTITY_REVISION_PREFIX.") }
+        val (migrated, _) = Migrations.migrate(bundle.schema, ordinaryValues)
         val accepted = LinkedHashMap<String, String>()
         for ((key, raw) in migrated) {
+            if (exposureSpec(key) != null) {
+                SettingValue.parseBool(raw)?.let { accepted[key] = it.toString() }
+                continue
+            }
             val spec = SettingsRegistry.spec(key) ?: continue
             if (spec.readOnly || spec.transient) continue
             (SettingValue.validate(spec, raw) as? Validation.Ok)?.let { accepted[key] = it.normalized }
         }
-        if (!applyAccepted(accepted)) {
+        if (entityState == null && (
+                accepted["dashboard_entity_overrides"].orEmpty().isNotBlank() ||
+                    accepted["dashboard_entity_learning_applied"] == "true"
+                )
+        ) {
+            call.respondText(
+                importJson("rejected", emptyList(), emptyList(), emptyList(), listOf("revision lacks entity owner metadata")),
+                ContentType.Application.Json,
+                HttpStatusCode.UnprocessableEntity,
+            )
+            return
+        }
+        if (applyAccepted(accepted, entityState = entityState) != ApplyAcceptedResult.APPLIED) {
             call.respondText(
                 importJson("error", emptyList(), emptyList(), emptyList(), listOf("configuration commit failed")),
                 ContentType.Application.Json,
@@ -3211,12 +4468,17 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
     private fun importJson(status: String, applied: List<String>, skipped: List<String>, warnings: List<String>, errors: List<String>): String =
         "{\"status\":\"$status\",\"applied\":${jarr(applied)},\"skipped\":${jarr(skipped)},\"warnings\":${jarr(warnings)},\"errors\":${jarr(errors)}}"
 
-    private fun dryRunJson(diff: List<ConfigDiff.Change>, skipped: List<String>, warnings: List<String>): String {
+    private fun dryRunJson(
+        diff: List<ConfigDiff.Change>,
+        skipped: List<String>,
+        warnings: List<String>,
+        expectedConfig: String,
+    ): String {
         fun q(v: String) = Json.str(v)
         val changes = diff.joinToString(",") { c ->
             "{\"key\":${q(c.key)},\"from\":${c.from?.let { q(it) } ?: "null"},\"to\":${q(c.to)}}"
         }
-        return "{\"status\":\"dry_run\",\"changes\":[$changes],\"skipped\":${jarr(skipped)},\"warnings\":${jarr(warnings)}}"
+        return "{\"status\":\"dry_run\",\"expected_cfg\":${q(expectedConfig)},\"changes\":[$changes],\"skipped\":${jarr(skipped)},\"warnings\":${jarr(warnings)}}"
     }
 
     /** Full config as JSON for fleet management. The MQTT password is never emitted — only a boolean
@@ -3251,15 +4513,21 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
 
     companion object {
         private const val TAG = "ha-paneld/http"
+        private const val ENTITY_REVISION_PREFIX = "_local.entity_state"
+        private const val RECOMMENDED_TAME_KEY = "@recommended"
+        private const val TAME_SHUTDOWN_MS = 5_000L
+        private const val REMOTE_CONTROL_SHUTDOWN_MS = 5_000L
+        private val REMOTE_ACTIONS = setOf(
+            "back", "recents", "launcher", "admin_launcher", "reboot", "volup", "voldn",
+        )
 
-        /** Behaviour keys routed through [applySetting] after an HTTP persistence commit. Boot-chime
-         *  silence is the one dispatcher key applied by the ordinary config/reconfigure path. */
+        /** Behaviour keys routed through [applySetting] after an HTTP persistence commit. */
         internal val HTTP_LIVE_KEYS = listOf(
             "wake_on_wave", "prevent_idle_dim", "watchdog_enabled", "kiosk_lock", "auto_brightness",
             "brightness_bias", "navbar_mode", "touch_sound", "cpu_governor",
             "network_adb", "zigbee_router", "ambient_lux",
             "companion_auto_update", "companion_update_channel", "self_update", "webview_auto_update",
-            "update_channel", "home_dashboard",
+            "update_channel", "home_dashboard", "silence_boot_chime",
         )
 
         // Probe-cache TTLs: the dashboard renders from the snapshot, so these bound both staleness
@@ -3268,13 +4536,32 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
         private const val DENSITY_TTL_MS = 30_000L
         private const val SU_TTL_MS = 60_000L
         private const val COMPANION_URL_TTL_MS = 60_000L
+        private const val COMPANION_STATUS_POLL_MS = 1_000L
+        private const val COMPANION_STATUS_UNAVAILABLE_LIMIT = 3
         internal const val MAX_PLAY_BODY_BYTES = 16L * 1024L
         internal const val MAX_CONFIG_POST_BODY_BYTES = 256L * 1024L
+        internal const val MAX_SMALL_FORM_POST_BODY_BYTES = 16L * 1024L
         internal const val MAX_ENTITY_ADMIN_BODY_BYTES = 256L * 1024L
         internal const val MAX_CONFIG_IMPORT_BYTES = 1L * 1024L * 1024L
         internal const val MAX_RESTORE_BYTES = 64L * 1024L * 1024L
         internal const val MAX_APK_UPLOAD_BYTES = 256L * 1024L * 1024L
-        internal const val MAX_COMPANION_BACKUP_BYTES = 32L * 1024L * 1024L
+        internal const val MAX_COMPANION_BACKUP_BYTES = CompanionRestore.MAX_AGGREGATE_BYTES
+        // v2 keeps large profile/entity payloads in separately bounded entries, leaving only config and
+        // small ownership metadata here. This avoids one multi-tens-of-MiB String + JSONObject allocation.
+        internal const val MAX_BACKUP_MANIFEST_BYTES = 1L * 1024L * 1024L
+        internal const val MAX_PROFILE_BACKUP_ENTRY_BYTES = 9L * 1024L * 1024L
+        internal const val MAX_ENTITY_BACKUP_TEXT_BYTES = 13_000_000L
+        // Compatibility-only v1 JSON is multiply materialized by JSONObject; keep its heap exposure much
+        // smaller than the streamed/file-backed v2 manifest. New backups are always v2.
+        internal const val MAX_LEGACY_BACKUP_JSON_BYTES = 6L * 1024L * 1024L
+        internal const val BACKUP_STORAGE_MARGIN_BYTES = 64L * 1024L * 1024L
+        private const val PROFILE_BACKUP_ENTRY = "profiles/catalog.json"
+        private const val ENTITY_FILTER_BACKUP_ENTRY = "entity/filter-ids.txt"
+        private const val ENTITY_OVERRIDES_BACKUP_ENTRY = "entity/overrides.txt"
+        private val ENTITY_STATE_CONFIG_KEYS = setOf(
+            "dashboard_entity_overrides",
+            "dashboard_entity_learning_applied",
+        )
 
         // Dashboard fact rows that are BACKED BY A SETTING → the Configure anchor the ✎ marker
         // deep-links to. Facts absent here are static (hardware/runtime) and get no marker.
@@ -3297,8 +4584,39 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
     }
 }
 
+/** Keep room for the received envelope, authenticated plaintext, and extracted Companion payloads. */
+internal fun restoreBodyStagingLimit(
+    usableBytes: Long,
+    maxPayloadBytes: Long = PaneldServer.MAX_RESTORE_BYTES,
+    safetyMarginBytes: Long = 64L * 1024L * 1024L,
+): Long {
+    if (usableBytes <= safetyMarginBytes || maxPayloadBytes <= 0L) return 0L
+    return minOf(maxPayloadBytes, (usableBytes - safetyMarginBytes) / 3L)
+}
+
+/** Start one HTTP-engine generation. A failed start must release any partially acquired engine resources
+ * and close request admission without replacing the original failure that the service lifecycle observes. */
+internal fun startOwnedHttpServer(
+    start: () -> Unit,
+    stop: () -> Unit,
+    closeIngress: () -> Unit,
+) {
+    try {
+        start()
+    } catch (error: Exception) {
+        runCatching(stop)
+        runCatching(closeIngress)
+        throw error
+    }
+}
+
 internal fun fleetImportPreservesTargetLocalValue(fleet: Boolean, key: String, normalized: String): Boolean =
     fleet && key == "ha_url" && normalized.isEmpty()
+
+internal fun validProximityThreshold(value: Float?): Boolean =
+    value != null && value.isFinite() && value in 0f..MAX_PROXIMITY_THRESHOLD
+
+private const val MAX_PROXIMITY_THRESHOLD = 1_000_000f
 
 /** Package actions required to converge a vendor-taming blocklist after its preference commit. */
 internal data class TameDelta(val add: Set<String>, val remove: Set<String>) {

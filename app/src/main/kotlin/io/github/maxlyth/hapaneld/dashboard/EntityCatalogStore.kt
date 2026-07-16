@@ -1,14 +1,24 @@
 package io.github.maxlyth.hapaneld.dashboard
 
 import android.content.Context
+import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import android.database.sqlite.SQLiteException
+import io.github.maxlyth.hapaneld.metrics.FeatureCostOperation
+import io.github.maxlyth.hapaneld.metrics.FeatureCostOutcome
+import io.github.maxlyth.hapaneld.metrics.FeatureCosts
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.Writer
 
 /** Bounded, derived entity/catalog evidence. Credentials are never stored here. */
 class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, "entity-learning.db", null, VERSION) {
+    private val maintenanceGate = MaintenanceIntervalGate(MAINTENANCE_INTERVAL_MS)
+    private val databaseBytesCacheLock = Any()
+    private var databaseBytesCachedAt = Long.MIN_VALUE
+    private var databaseBytesCachedValue = 0L
+
     init {
         // Use the helper-level API so WAL is enabled before the database is opened. Calling
         // SQLiteDatabase.enableWriteAheadLogging() from onConfigure is not supported consistently on
@@ -57,17 +67,13 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, "entity-l
             rate_window_start INTEGER NOT NULL DEFAULT 0, rate_update_bytes INTEGER NOT NULL DEFAULT 0,
             last_update_at INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY(instance,path,entity_id))""")
-        db.execSQL("""CREATE TABLE hourly(
-            instance TEXT NOT NULL, path TEXT NOT NULL, entity_id TEXT NOT NULL, hour INTEGER NOT NULL,
-            access_count INTEGER NOT NULL DEFAULT 0, update_count INTEGER NOT NULL DEFAULT 0,
-            update_bytes INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(instance,path,entity_id,hour))""")
         db.execSQL("""CREATE TABLE minute_rollup(
             instance TEXT NOT NULL, path TEXT NOT NULL, entity_id TEXT NOT NULL, minute INTEGER NOT NULL,
             access_count INTEGER NOT NULL DEFAULT 0, update_count INTEGER NOT NULL DEFAULT 0,
-            update_bytes INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(instance,path,entity_id,minute))""")
+            update_bytes INTEGER NOT NULL DEFAULT 0, span_start INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY(instance,path,entity_id,minute))""")
         db.execSQL("CREATE INDEX entity_missing ON entity(instance,missing_streak)")
         db.execSQL("CREATE INDEX membership_load ON membership(instance,path,update_bytes DESC)")
-        db.execSQL("CREATE INDEX hourly_age ON hourly(hour)")
         db.execSQL("CREATE INDEX minute_rollup_age ON minute_rollup(instance,path,minute)")
         db.execSQL("""CREATE TABLE dashboard_issue_ignore(
             instance TEXT NOT NULL, path TEXT NOT NULL, fingerprint TEXT NOT NULL, ignored_at INTEGER NOT NULL,
@@ -171,8 +177,7 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, "entity-l
             }
             val cutoff = now - TOMBSTONE_RETENTION_MS
             db.execSQL("DELETE FROM entity WHERE instance=? AND tombstone_at>0 AND tombstone_at<?", arrayOf(instance, cutoff))
-            db.execSQL("DELETE FROM hourly WHERE hour<?", arrayOf((now - ROLLUP_RETENTION_MS) / HOUR_MS))
-            db.execSQL("DELETE FROM minute_rollup WHERE minute<?", arrayOf((now - MINUTE_RETENTION_MS) / MINUTE_MS))
+            db.execSQL("DELETE FROM minute_rollup WHERE minute<?", arrayOf((now - DAY_MS) / MINUTE_MS))
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
         maintainSoftLimit(now)
@@ -192,11 +197,6 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, "entity-l
                        reasons=CASE WHEN instr(reasons,'runtime')=0 THEN trim(reasons||',runtime',',') ELSE reasons END
                        WHERE instance=? AND path=? AND entity_id=?""",
                     arrayOf(now, count, now, instance, path, id),
-                )
-                db.execSQL("INSERT OR IGNORE INTO hourly(instance,path,entity_id,hour) VALUES(?,?,?,?)", arrayOf(instance, path, id, now / HOUR_MS))
-                db.execSQL(
-                    "UPDATE hourly SET access_count=access_count+? WHERE instance=? AND path=? AND entity_id=? AND hour=?",
-                    arrayOf(count, instance, path, id, now / HOUR_MS),
                 )
                 db.execSQL("INSERT OR IGNORE INTO minute_rollup(instance,path,entity_id,minute) VALUES(?,?,?,?)", arrayOf(instance, path, id, now / MINUTE_MS))
                 db.execSQL(
@@ -230,9 +230,6 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, "entity-l
                         instance, path, id,
                     ),
                 )
-                db.execSQL("INSERT OR IGNORE INTO hourly(instance,path,entity_id,hour) VALUES(?,?,?,?)", arrayOf(instance, path, id, now / HOUR_MS))
-                db.execSQL("UPDATE hourly SET update_count=update_count+?,update_bytes=update_bytes+? WHERE instance=? AND path=? AND entity_id=? AND hour=?",
-                    arrayOf(metric.first, metric.second, instance, path, id, now / HOUR_MS))
                 db.execSQL("INSERT OR IGNORE INTO minute_rollup(instance,path,entity_id,minute) VALUES(?,?,?,?)", arrayOf(instance, path, id, now / MINUTE_MS))
                 db.execSQL(
                     "UPDATE minute_rollup SET update_count=update_count+?,update_bytes=update_bytes+? WHERE instance=? AND path=? AND entity_id=? AND minute=?",
@@ -269,7 +266,6 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, "entity-l
         db.beginTransaction()
         try {
             db.delete("minute_rollup", "instance=? AND path=?", arrayOf(instance, path))
-            db.delete("hourly", "instance=? AND path=?", arrayOf(instance, path))
             db.delete("membership", "instance=? AND path=?", arrayOf(instance, path))
             db.delete("dashboard", "instance=? AND path=?", arrayOf(instance, path))
             db.setTransactionSuccessful()
@@ -309,9 +305,19 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, "entity-l
         arrayOf(instance, path),
     ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
 
-    fun hasEntity(instance: String, entityId: String): Boolean = readableDatabase.rawQuery(
-        "SELECT 1 FROM entity WHERE instance=? AND entity_id=? AND missing_streak<3", arrayOf(instance, entityId),
-    ).use { it.moveToFirst() }
+    /** Resolve renderer evidence against the current catalog in bounded SQLite-parameter chunks. */
+    fun existingEntityIds(instance: String, entityIds: Collection<String>): Set<String> {
+        if (entityIds.isEmpty()) return emptySet()
+        val result = mutableSetOf<String>()
+        entityIds.distinct().chunked(MAX_SQL_ID_FILTER).forEach { chunk ->
+            val placeholders = List(chunk.size) { "?" }.joinToString(",")
+            readableDatabase.rawQuery(
+                "SELECT entity_id FROM entity WHERE instance=? AND missing_streak<3 AND entity_id IN ($placeholders)",
+                (listOf(instance) + chunk).toTypedArray(),
+            ).use { cursor -> while (cursor.moveToNext()) result += cursor.getString(0) }
+        }
+        return result
+    }
 
     fun snapshot(instance: String, path: String): Snapshot {
         val dashboard = readableDatabase.rawQuery(
@@ -333,7 +339,7 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, "entity-l
             issueCounts.second,
             EntityCatalogIssuePersistence.ignoredCount(dashboard?.issuesJson ?: "[]"),
             dashboard?.error ?: "",
-            databaseBytes(),
+            cachedDatabaseBytes(),
         )
     }
 
@@ -409,8 +415,12 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, "entity-l
         includeIds: Set<String>? = null,
         excludeIds: Set<String> = emptySet(),
     ): String {
+        val span = FeatureCosts.registry.span(FeatureCostOperation.ENTITY_LIST)
+        var outputBytes = 0L
+        var outputRows = 0L
+        try {
         val where = mutableListOf("e.instance=?")
-        val args = mutableListOf(path, instance)
+        val args = mutableListOf(instance)
         if (query.isNotBlank()) {
             val raw = query.trim().take(100)
             val slug = raw.lowercase().replace('-', '_').replace(' ', '_')
@@ -430,99 +440,215 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, "entity-l
             "unpinned" -> where += "coalesce(m.pinned,0)=0"
             else -> Unit
         }
-        // Keep the common UI path inside SQLite: the three tables normally sort by entity id and
-        // subscribed/review sets are bounded allow-lists. Only recent-rollup columns require the
-        // in-memory global comparator. This avoids materializing and sorting the whole HA catalog
-        // three times on every refresh.
-        var sqlPageable = EntityCatalogSorting.sqlOrder(sortKey, sortDirection) != null
+        // Every displayed ordering is executed by SQLite with LIMIT/OFFSET. In particular, recent
+        // access/rate ordering must never materialize and sort the complete HA catalog in the app.
         val sqlIdFiltersFit = (includeIds?.size ?: 0) + excludeIds.size <= MAX_SQL_ID_FILTER
+        val boundedIdFallback = !sqlIdFiltersFit
         if (includeIds != null) {
             if (includeIds.isEmpty()) {
                 where += "0"
             } else if (sqlIdFiltersFit) {
                 where += "e.entity_id IN (${includeIds.joinToString(",") { "?" }})"
                 args += includeIds.sorted()
-            } else sqlPageable = false
+            }
         }
         if (excludeIds.isNotEmpty()) {
             if (sqlIdFiltersFit) {
                 where += "e.entity_id NOT IN (${excludeIds.joinToString(",") { "?" }})"
                 args += excludeIds.sorted()
-            } else sqlPageable = false
+            }
         }
         val join = "LEFT JOIN membership m ON m.instance=e.instance AND m.entity_id=e.entity_id AND m.path=?"
+        val now = System.currentTimeMillis()
+        val normalizedSort = EntityCatalogSorting.key(sortKey)
+        val requiresRecentOrdering = normalizedSort == "access_1h" || normalizedSort == "rate_1h_bps"
+        val recentJoin = if (requiresRecentOrdering) {
+            "LEFT JOIN (${recentAggregateSql(now)}) r ON r.entity_id=e.entity_id"
+        } else ""
+        val observedMs = "max($METRIC_BATCH_MS,min($HOUR_MS,$now-max(coalesce(r.first_minute,0)*$MINUTE_MS,${now - HOUR_MS})))"
+        val recentProjection = if (requiresRecentOrdering) {
+            """coalesce(r.access_1m,0),coalesce(r.access_1h,0) AS recent_access_1h,coalesce(r.access_1d,0),
+               coalesce(r.bytes_1m,0),coalesce(r.bytes_1h,0),coalesce(r.bytes_1d,0),coalesce(r.first_minute,0),
+               (coalesce(r.bytes_1h,0)*1000.0/$observedMs) AS recent_rate_1h"""
+        } else "0,0 AS recent_access_1h,0,0,0,0,0,0.0 AS recent_rate_1h"
         val baseSql = """SELECT e.entity_id,e.state,e.metadata_json,e.first_seen,e.last_seen,e.missing_streak,
             coalesce(m.static_ref,0),coalesce(m.runtime_ref,0),coalesce(m.pinned,0),coalesce(m.excluded,0),
             coalesce(m.reasons,''),coalesce(m.last_access,0),coalesce(m.access_count,0),coalesce(m.update_count,0),coalesce(m.update_bytes,0),
-            coalesce(m.rate_window_start,0),coalesce(m.rate_update_bytes,0),coalesce(m.last_update_at,0)
-            FROM entity e $join WHERE ${where.joinToString(" AND ")}"""
-        val effectiveLimit = limit.coerceIn(1, maxLimit)
+            coalesce(m.rate_window_start,0),coalesce(m.rate_update_bytes,0),coalesce(m.last_update_at,0),
+            $recentProjection
+            FROM entity e $join $recentJoin WHERE ${where.joinToString(" AND ")}"""
+        val effectiveLimit = limit.coerceIn(1, maxLimit.coerceIn(1, MAX_SQL_ID_FILTER))
         val effectiveOffset = offset.coerceAtLeast(0)
-        val total = if (sqlPageable) readableDatabase.rawQuery(
-            "SELECT count(*) FROM entity e $join WHERE ${where.joinToString(" AND ")}", args.toTypedArray(),
-        ).use { c -> c.moveToFirst(); c.getInt(0) } else -1
-        val sql = if (sqlPageable) {
-            "$baseSql ORDER BY ${EntityCatalogSorting.sqlOrder(sortKey, sortDirection)} LIMIT $effectiveLimit OFFSET $effectiveOffset"
-        } else baseSql
-        val now = System.currentTimeMillis()
         val recentSnapshot = recentSnapshot(instance, path, now)
-        val recent = recentSnapshot.rows
         val ranks = recentSnapshot.ranks
-        val matched = ArrayList<CatalogRow>()
-        readableDatabase.rawQuery(sql, args.toTypedArray()).use { c ->
-            while (c.moveToNext()) {
-                val entityId = c.getString(0)
-                if (!sqlPageable && (includeIds != null && entityId !in includeIds || entityId in excludeIds)) continue
-                val stats = recent[entityId]
-                matched += CatalogRow(
-                    entityId, c.getString(1), c.getString(2), c.getLong(3), c.getLong(4), c.getInt(5),
-                    c.getInt(6) != 0, c.getInt(7) != 0, c.getInt(8) != 0, c.getInt(9) != 0,
-                    c.getString(10), c.getLong(11), c.getLong(12), c.getLong(13), c.getLong(14),
-                    c.getLong(15), c.getLong(16), c.getLong(17), stats,
-                    stats?.let { it.bytes1h / observedSeconds(recentSnapshot.generatedAt, it.firstMinute, HOUR_MS) } ?: 0.0,
-                )
+        val pageArgs = if (requiresRecentOrdering) listOf(path, instance, path) + args else listOf(path) + args
+        val orderBy = requireNotNull(EntityCatalogSorting.sqlOrder(sortKey, sortDirection))
+        val total: Int
+        val selected: List<CatalogRow>
+        if (boundedIdFallback) {
+            // SQLite cannot accept an arbitrary 50k-id IN/NOT IN predicate. Stream only globally
+            // ordered IDs, apply the existing bounded sets in-process, and retain the requested page.
+            val collector = BoundedEntityIdPageCollector(effectiveLimit, effectiveOffset, includeIds, excludeIds)
+            val idProjection = if (requiresRecentOrdering) {
+                """e.entity_id,coalesce(r.access_1h,0) AS recent_access_1h,
+                   (coalesce(r.bytes_1h,0)*1000.0/$observedMs) AS recent_rate_1h"""
+            } else "e.entity_id"
+            val idSql = """SELECT $idProjection FROM entity e $join $recentJoin
+                WHERE ${where.joinToString(" AND ")} ORDER BY $orderBy"""
+            readableDatabase.rawQuery(idSql, pageArgs.toTypedArray()).use { cursor ->
+                while (cursor.moveToNext()) collector.offer(cursor.getString(0))
             }
-        }
-        if (!sqlPageable) matched.sortWith(EntityCatalogSorting.comparator(sortKey, sortDirection) { it.sortProjection })
-        val rows = JSONArray()
-        val selected = if (sqlPageable) matched.asSequence()
-            else matched.asSequence().drop(effectiveOffset).take(effectiveLimit)
-        selected.forEach { row ->
-            val r = row.recent
-            rows.put(JSONObject().apply {
-                put("entity_id", row.entityId); put("state", row.state); put("metadata", JSONObject(row.metadataJson))
-                put("first_seen", row.firstSeen); put("last_seen", row.lastSeen); put("missing_streak", row.missingStreak)
-                put("static", row.staticRef); put("runtime", row.runtimeRef); put("pinned", row.pinned)
-                put("excluded", row.excluded); put("reasons", row.reasons); put("last_access", row.lastAccess)
-                put("access_count", row.accessCount); put("update_count", row.updateCount); put("update_bytes", row.updateBytes)
-                val rate = if (row.rateWindowStart == 0L || row.lastUpdateAt == 0L || now - row.lastUpdateAt > RATE_STALE_MS) 0.0
-                    else row.rateUpdateBytes * 1000.0 / (now - row.rateWindowStart).coerceAtLeast(1000L)
-                put("data_rate_bps", rate)
-                if (r != null) {
-                    put("access_1m", r.access1m); put("access_1h", r.access1h); put("access_1d", r.access1d)
-                    put("rate_1m_bps", r.bytes1m / observedSeconds(recentSnapshot.generatedAt, r.firstMinute, MINUTE_MS))
-                    put("rate_1h_bps", row.rate1h); put("rate_1d_bps", r.bytes1d / observedSeconds(recentSnapshot.generatedAt, r.firstMinute, 24L * HOUR_MS))
-                    put("access_1m_rank", ranks.rank(r.access1m, ranks.access1m)); put("access_1h_rank", ranks.rank(r.access1h, ranks.access1h))
-                    put("access_1d_rank", ranks.rank(r.access1d, ranks.access1d)); put("rate_1m_rank", ranks.rank(r.bytes1m, ranks.bytes1m))
-                    put("rate_1h_rank", ranks.rank(r.bytes1h, ranks.bytes1h)); put("rate_1d_rank", ranks.rank(r.bytes1d, ranks.bytes1d))
-                } else {
-                    put("access_1m", 0); put("access_1h", 0); put("access_1d", 0)
-                    put("rate_1m_bps", 0); put("rate_1h_bps", 0); put("rate_1d_bps", 0)
-                    put("access_1m_rank", 0); put("access_1h_rank", 0); put("access_1d_rank", 0)
-                    put("rate_1m_rank", 0); put("rate_1h_rank", 0); put("rate_1d_rank", 0)
+            total = collector.total
+            val selectedIds = collector.pageIds
+            if (selectedIds.isEmpty()) {
+                selected = emptyList()
+            } else {
+                val placeholders = List(selectedIds.size) { "?" }.joinToString(",")
+                val fetchSql = "$baseSql AND e.entity_id IN ($placeholders)"
+                val fetched = HashMap<String, CatalogRow>(selectedIds.size)
+                readableDatabase.rawQuery(fetchSql, (pageArgs + selectedIds).toTypedArray()).use { cursor ->
+                    while (cursor.moveToNext()) {
+                        cursor.catalogRow(recentSnapshot)?.let { fetched[it.entityId] = it }
+                    }
                 }
-            })
+                selected = selectedIds.mapNotNull(fetched::get)
+            }
+        } else {
+            total = readableDatabase.rawQuery(
+                "SELECT count(*) FROM entity e $join WHERE ${where.joinToString(" AND ")}",
+                (listOf(path) + args).toTypedArray(),
+            ).use { c -> c.moveToFirst(); c.getInt(0) }
+            val matched = ArrayList<CatalogRow>(effectiveLimit)
+            val sql = "$baseSql ORDER BY $orderBy LIMIT $effectiveLimit OFFSET $effectiveOffset"
+            readableDatabase.rawQuery(sql, pageArgs.toTypedArray()).use { cursor ->
+                while (cursor.moveToNext()) cursor.catalogRow(recentSnapshot)?.let(matched::add)
+            }
+            selected = matched
+        }
+        val rows = JSONArray()
+        val selectedRecent = if (requiresRecentOrdering) emptyMap() else recentStatsForIds(
+            instance, path, now, selected.map { it.entityId },
+        )
+        selected.forEach { rawRow ->
+            outputRows++
+            val r = rawRow.recent ?: selectedRecent[rawRow.entityId]
+            val row = if (r == null || rawRow.recent != null) rawRow else rawRow.copy(
+                recent = r,
+                rate1h = r.bytes1h / observedSeconds(recentSnapshot.generatedAt, r.firstMinute, HOUR_MS),
+            )
+            rows.put(catalogRowJson(row, now, recentSnapshot, ranks))
         }
         return JSONObject().put("items", rows).put("limit", effectiveLimit).put("offset", effectiveOffset)
-            .put("total", if (sqlPageable) total else matched.size).put("sort", EntityCatalogSorting.key(sortKey))
-            .put("direction", EntityCatalogSorting.direction(sortDirection)).toString()
+            .put("total", total).put("sort", EntityCatalogSorting.key(sortKey))
+            .put("direction", EntityCatalogSorting.direction(sortDirection)).toString().also {
+                outputBytes = it.toByteArray(Charsets.UTF_8).size.toLong()
+            }
+        } catch (error: Exception) {
+            span.outcome(FeatureCostOutcome.FAILURE)
+            throw error
+        } finally {
+            span.work(units = outputRows, bytes = outputBytes).close()
+        }
     }
 
-    fun exportJson(instance: String, path: String): String = JSONObject()
-        .put("kind", "ha-paneld-entity-catalog").put("exported_at", System.currentTimeMillis())
-        .put("instance_hash", EntityLearningProtocol.hash(instance)).put("dashboard", path)
-        .put("entities", JSONObject(entitiesJson(instance, path, "", "all", 50_000, 0, maxLimit = 50_000)).getJSONArray("items"))
-        .toString()
+    private fun catalogRowJson(
+        row: CatalogRow,
+        now: Long,
+        recentSnapshot: RecentSnapshot,
+        ranks: RecentRanks = recentSnapshot.ranks,
+    ): JSONObject = JSONObject().apply {
+        put("entity_id", row.entityId); put("state", row.state); put("metadata", JSONObject(row.metadataJson))
+        put("first_seen", row.firstSeen); put("last_seen", row.lastSeen); put("missing_streak", row.missingStreak)
+        put("static", row.staticRef); put("runtime", row.runtimeRef); put("pinned", row.pinned)
+        put("excluded", row.excluded); put("reasons", row.reasons); put("last_access", row.lastAccess)
+        put("access_count", row.accessCount); put("update_count", row.updateCount); put("update_bytes", row.updateBytes)
+        val rate = if (row.rateWindowStart == 0L || row.lastUpdateAt == 0L || now - row.lastUpdateAt > RATE_STALE_MS) 0.0
+            else row.rateUpdateBytes * 1000.0 / (now - row.rateWindowStart).coerceAtLeast(1000L)
+        put("data_rate_bps", rate)
+        val r = row.recent
+        if (r != null) {
+            put("access_1m", r.access1m); put("access_1h", r.access1h); put("access_1d", r.access1d)
+            put("rate_1m_bps", r.bytes1m / observedSeconds(recentSnapshot.generatedAt, r.firstMinute, MINUTE_MS))
+            put("rate_1h_bps", row.rate1h); put("rate_1d_bps", r.bytes1d / observedSeconds(recentSnapshot.generatedAt, r.firstMinute, 24L * HOUR_MS))
+            put("access_1m_rank", ranks.rank(r.access1m, ranks.access1m)); put("access_1h_rank", ranks.rank(r.access1h, ranks.access1h))
+            put("access_1d_rank", ranks.rank(r.access1d, ranks.access1d)); put("rate_1m_rank", ranks.rank(r.bytes1m, ranks.bytes1m))
+            put("rate_1h_rank", ranks.rank(r.bytes1h, ranks.bytes1h)); put("rate_1d_rank", ranks.rank(r.bytes1d, ranks.bytes1d))
+        } else {
+            put("access_1m", 0); put("access_1h", 0); put("access_1d", 0)
+            put("rate_1m_bps", 0); put("rate_1h_bps", 0); put("rate_1d_bps", 0)
+            put("access_1m_rank", 0); put("access_1h_rank", 0); put("access_1d_rank", 0)
+            put("rate_1m_rank", 0); put("rate_1h_rank", 0); put("rate_1d_rank", 0)
+        }
+    }
+
+    /** Stream a valid, self-describing export under hard row, UTF-8 byte, and elapsed-time limits. */
+    internal fun writeExportJson(
+        instance: String,
+        path: String,
+        writer: Writer,
+        policy: EntityExportPolicy = EntityExportPolicy(),
+        now: Long = System.currentTimeMillis(),
+        monotonicNanos: () -> Long = System::nanoTime,
+    ): EntityExportResult {
+        val span = FeatureCosts.registry.span(FeatureCostOperation.ENTITY_EXPORT)
+        val startedAt = monotonicNanos()
+        var bytes = 0L
+        var rows = 0
+        var reason: String? = null
+        try {
+            val header = entityExportHeader(EntityLearningProtocol.hash(instance), path, now)
+            writer.write(header)
+            bytes += header.utf8Size()
+            val recentSnapshot = recentSnapshot(instance, path, now)
+            val recentJoin = "LEFT JOIN (${recentAggregateSql(now)}) r ON r.entity_id=e.entity_id"
+            val sql = """SELECT e.entity_id,e.state,e.metadata_json,e.first_seen,e.last_seen,e.missing_streak,
+                coalesce(m.static_ref,0),coalesce(m.runtime_ref,0),coalesce(m.pinned,0),coalesce(m.excluded,0),
+                coalesce(m.reasons,''),coalesce(m.last_access,0),coalesce(m.access_count,0),coalesce(m.update_count,0),coalesce(m.update_bytes,0),
+                coalesce(m.rate_window_start,0),coalesce(m.rate_update_bytes,0),coalesce(m.last_update_at,0),
+                coalesce(r.access_1m,0),coalesce(r.access_1h,0),coalesce(r.access_1d,0),
+                coalesce(r.bytes_1m,0),coalesce(r.bytes_1h,0),coalesce(r.bytes_1d,0),coalesce(r.first_minute,0)
+                FROM entity e LEFT JOIN membership m ON m.instance=e.instance AND m.entity_id=e.entity_id AND m.path=?
+                $recentJoin WHERE e.instance=? ORDER BY e.entity_id COLLATE NOCASE,e.entity_id LIMIT ${policy.maxRows + 1}"""
+            readableDatabase.rawQuery(sql, arrayOf(path, instance, path, instance)).use { cursor ->
+                while (cursor.moveToNext()) {
+                    val admissionReason = exportTruncationReason(
+                        policy, rows, bytes, nextRowBytes = 0L,
+                        elapsedNanos = forwardElapsedNanos(monotonicNanos(), startedAt),
+                    )
+                    if (admissionReason != null) { reason = admissionReason; break }
+                    val recent = cursor.recentAt(18).takeIf { it.firstMinute > 0L }
+                    val row = CatalogRow(
+                        cursor.getString(0), cursor.getString(1), cursor.getString(2), cursor.getLong(3),
+                        cursor.getLong(4), cursor.getInt(5), cursor.getInt(6) != 0, cursor.getInt(7) != 0,
+                        cursor.getInt(8) != 0, cursor.getInt(9) != 0, cursor.getString(10), cursor.getLong(11),
+                        cursor.getLong(12), cursor.getLong(13), cursor.getLong(14), cursor.getLong(15),
+                        cursor.getLong(16), cursor.getLong(17), recent,
+                        recent?.let { it.bytes1h / observedSeconds(recentSnapshot.generatedAt, it.firstMinute, HOUR_MS) } ?: 0.0,
+                    )
+                    val encoded = catalogRowJson(row, now, recentSnapshot).toString()
+                    val separatorBytes = if (rows == 0) 0L else 1L
+                    val sizeReason = exportTruncationReason(
+                        policy, rows, bytes, separatorBytes + encoded.utf8Size(), elapsedNanos = 0L,
+                    )
+                    if (sizeReason != null) { reason = sizeReason; break }
+                    if (rows > 0) { writer.write(','.code); bytes++ }
+                    writer.write(encoded)
+                    bytes += encoded.utf8Size()
+                    rows++
+                }
+            }
+            val footer = entityExportFooter(rows, reason)
+            writer.write(footer)
+            bytes += footer.utf8Size()
+            if (reason != null) FeatureCosts.registry.recordDropped(FeatureCostOperation.ENTITY_EXPORT)
+            return EntityExportResult(rows, bytes, reason)
+        } catch (error: Exception) {
+            span.outcome(FeatureCostOutcome.FAILURE)
+            throw error
+        } finally {
+            span.work(units = rows.toLong(), bytes = bytes).close()
+        }
+    }
 
     /**
      * Retention is evidence-first: old rollups and tombstones go before inactive entity detail. The
@@ -530,22 +656,85 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, "entity-l
      * pages for reuse, so status reports live pages rather than the physical high-water mark.
      */
     private fun maintainSoftLimit(now: Long) {
-        val db = writableDatabase
-        if (databaseBytes(db) <= SOFT_LIMIT_BYTES) return
-        db.execSQL("DELETE FROM hourly WHERE hour<?", arrayOf((now - 7L * 24 * HOUR_MS) / HOUR_MS))
-        db.execSQL("DELETE FROM minute_rollup WHERE minute<?", arrayOf((now - MINUTE_RETENTION_MS) / MINUTE_MS))
-        db.execSQL("DELETE FROM entity WHERE tombstone_at>0")
-        db.execSQL(
-            """UPDATE entity SET attributes_json='{}',metadata_json='{}' WHERE (instance,entity_id) NOT IN
-               (SELECT instance,entity_id FROM membership WHERE pinned=1 OR static_ref=1 OR runtime_ref=1)""",
-        )
-        if (databaseBytes(db) > SOFT_LIMIT_BYTES) {
-            db.execSQL("DELETE FROM hourly")
+        if (!maintenanceGate.admit(now)) return
+        val span = FeatureCosts.registry.span(FeatureCostOperation.ENTITY_DB_MAINTENANCE)
+        var observedBytes = 0L
+        var appliedTiers = 0
+        try {
+            val db = writableDatabase
+            observedBytes = measureDatabaseBytes(db)
+            updateDatabaseBytesCache(now, observedBytes)
+            if (observedBytes <= SOFT_LIMIT_BYTES) return
+            db.execSQL("DELETE FROM minute_rollup WHERE minute<?", arrayOf((now - DAY_MS) / MINUTE_MS))
+            db.execSQL("DELETE FROM entity WHERE tombstone_at>0")
             db.execSQL(
-                """UPDATE entity SET attributes_json='{}' WHERE (instance,entity_id) NOT IN
-                   (SELECT instance,entity_id FROM membership WHERE pinned=1 OR static_ref=1 OR last_access>=?)""",
-                arrayOf(now - RUNTIME_RETENTION_MS),
+                """UPDATE entity SET attributes_json='{}',metadata_json='{}' WHERE (instance,entity_id) NOT IN
+                   (SELECT instance,entity_id FROM membership WHERE pinned=1 OR static_ref=1 OR runtime_ref=1)""",
             )
+            observedBytes = measureDatabaseBytes(db)
+            updateDatabaseBytesCache(now, observedBytes)
+            if (observedBytes > SOFT_LIMIT_BYTES) {
+                db.execSQL(
+                    """UPDATE entity SET attributes_json='{}' WHERE (instance,entity_id) NOT IN
+                       (SELECT instance,entity_id FROM membership WHERE pinned=1 OR static_ref=1 OR last_access>=?)""",
+                    arrayOf(now - RUNTIME_RETENTION_MS),
+                )
+                observedBytes = measureDatabaseBytes(db)
+                updateDatabaseBytesCache(now, observedBytes)
+            }
+            while (true) {
+                val tier = RollupRetentionPolicy.nextTier(observedBytes, SOFT_LIMIT_BYTES, appliedTiers) ?: break
+                applyRollupPressureTier(db, tier, now)
+                appliedTiers++
+                observedBytes = measureDatabaseBytes(db)
+                updateDatabaseBytesCache(now, observedBytes)
+            }
+        } catch (error: Exception) {
+            span.outcome(FeatureCostOutcome.FAILURE)
+            throw error
+        } finally {
+            span.work(units = appliedTiers.toLong(), bytes = observedBytes).close()
+        }
+    }
+
+    /** Rewrite only derived telemetry rows. Each tier is transactionally replace-or-delete so a
+     * process death cannot leave a partially compacted window. */
+    private fun applyRollupPressureTier(db: SQLiteDatabase, tier: RollupPressureTier, now: Long) {
+        val window = RollupRetentionPolicy.window(tier, now)
+        db.beginTransaction()
+        try {
+            if (window.drop) {
+                db.delete("minute_rollup", window.whereSql, window.whereArgs)
+            } else {
+                db.execSQL("DROP TABLE IF EXISTS temp.entity_rollup_compact")
+                db.execSQL(
+                    """CREATE TEMP TABLE entity_rollup_compact(
+                       instance TEXT NOT NULL,path TEXT NOT NULL,entity_id TEXT NOT NULL,minute INTEGER NOT NULL,
+                       access_count INTEGER NOT NULL,update_count INTEGER NOT NULL,update_bytes INTEGER NOT NULL,
+                       span_start INTEGER NOT NULL,
+                       PRIMARY KEY(instance,path,entity_id,minute))""",
+                )
+                val minuteExpression = window.targetMinute?.toString() ?: "(minute/60)*60"
+                db.execSQL(
+                    """INSERT INTO entity_rollup_compact
+                       SELECT instance,path,entity_id,$minuteExpression,sum(access_count),sum(update_count),sum(update_bytes),
+                              min(CASE WHEN span_start=0 THEN minute ELSE span_start END)
+                       FROM minute_rollup WHERE ${window.whereSql}
+                       GROUP BY instance,path,entity_id,$minuteExpression""",
+                    window.whereArgs,
+                )
+                db.delete("minute_rollup", window.whereSql, window.whereArgs)
+                db.execSQL(
+                    """INSERT OR REPLACE INTO minute_rollup(instance,path,entity_id,minute,access_count,update_count,update_bytes,span_start)
+                       SELECT instance,path,entity_id,minute,access_count,update_count,update_bytes,span_start
+                       FROM entity_rollup_compact""",
+                )
+                db.execSQL("DROP TABLE entity_rollup_compact")
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+            runCatching { db.execSQL("DROP TABLE IF EXISTS temp.entity_rollup_compact") }
         }
     }
 
@@ -561,7 +750,6 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, "entity-l
 
     private data class RecentSnapshot(
         val generatedAt: Long,
-        val rows: Map<String, Recent>,
         val ranks: RecentRanks,
     )
 
@@ -605,54 +793,85 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, "entity-l
         val issuesJson: String,
     )
 
-    /** Percentile ranks across every entity with evidence, independently for each time window. */
-    private class RecentRanks(rows: Collection<Recent>) {
-        val access1m = rows.map { it.access1m }.filter { it > 0 }.sorted()
-        val access1h = rows.map { it.access1h }.filter { it > 0 }.sorted()
-        val access1d = rows.map { it.access1d }.filter { it > 0 }.sorted()
-        val bytes1m = rows.map { it.bytes1m }.filter { it > 0 }.sorted()
-        val bytes1h = rows.map { it.bytes1h }.filter { it > 0 }.sorted()
-        val bytes1d = rows.map { it.bytes1d }.filter { it > 0 }.sorted()
+    /** Constant-space approximate percentile ranks. Exact values do not justify six boxed/sorted
+     * full-catalog arrays on memory-constrained panels; four buckets per power-of-two range preserve
+     * useful heat-map ordering while bounding the snapshot to a few hundred counters. */
+    private class RecentRanks {
+        val access1m = LogRankHistogram()
+        val access1h = LogRankHistogram()
+        val access1d = LogRankHistogram()
+        val bytes1m = LogRankHistogram()
+        val bytes1h = LogRankHistogram()
+        val bytes1d = LogRankHistogram()
 
-        fun rank(value: Long, sorted: List<Long>): Double {
-            if (value <= 0 || sorted.isEmpty()) return 0.0
-            var low = 0; var high = sorted.size
-            while (low < high) {
-                val mid = (low + high) ushr 1
-                if (sorted[mid] <= value) low = mid + 1 else high = mid
-            }
-            return low.toDouble() / sorted.size
+        fun add(row: Recent) {
+            access1m.add(row.access1m); access1h.add(row.access1h); access1d.add(row.access1d)
+            bytes1m.add(row.bytes1m); bytes1h.add(row.bytes1h); bytes1d.add(row.bytes1d)
         }
+
+        fun rank(value: Long, histogram: LogRankHistogram): Double = histogram.rank(value)
     }
 
-    private fun recentStats(instance: String, path: String, now: Long): Map<String, Recent> {
-        val minute = now / MINUTE_MS
+    private fun recentAggregateSql(now: Long, entityIdCount: Int = 0): String {
         val oneMinute = (now - MINUTE_MS) / MINUTE_MS
         val oneHour = (now - HOUR_MS) / MINUTE_MS
         val oneDay = (now - 24L * HOUR_MS) / MINUTE_MS
+        // All interpolated values originate from the local clock; request data remains bound separately.
+        val entityFilter = if (entityIdCount > 0) " AND entity_id IN (${List(entityIdCount) { "?" }.joinToString(",")})" else ""
+        return """SELECT entity_id,
+               sum(CASE WHEN minute>=$oneMinute THEN access_count ELSE 0 END) AS access_1m,
+               sum(CASE WHEN minute>=$oneHour THEN access_count ELSE 0 END) AS access_1h,
+               sum(access_count) AS access_1d,
+               sum(CASE WHEN minute>=$oneMinute THEN update_bytes ELSE 0 END) AS bytes_1m,
+               sum(CASE WHEN minute>=$oneHour THEN update_bytes ELSE 0 END) AS bytes_1h,
+               sum(update_bytes) AS bytes_1d,min(CASE WHEN span_start=0 THEN minute ELSE span_start END) AS first_minute
+               FROM minute_rollup WHERE instance=? AND path=? AND minute>=$oneDay$entityFilter GROUP BY entity_id"""
+    }
+
+    private fun recentStatsForIds(
+        instance: String,
+        path: String,
+        now: Long,
+        entityIds: List<String>,
+    ): Map<String, Recent> {
+        if (entityIds.isEmpty()) return emptyMap()
         return readableDatabase.rawQuery(
-            """SELECT entity_id,
-               sum(CASE WHEN minute>=? THEN access_count ELSE 0 END),
-               sum(CASE WHEN minute>=? THEN access_count ELSE 0 END),sum(access_count),
-               sum(CASE WHEN minute>=? THEN update_bytes ELSE 0 END),
-               sum(CASE WHEN minute>=? THEN update_bytes ELSE 0 END),sum(update_bytes),min(minute)
-               FROM minute_rollup WHERE instance=? AND path=? AND minute>=? GROUP BY entity_id""",
-            arrayOf(oneMinute.toString(), oneHour.toString(), oneMinute.toString(), oneHour.toString(), instance, path, oneDay.toString()),
-        ).use { c -> buildMap {
-            while (c.moveToNext()) put(c.getString(0), Recent(c.getLong(1), c.getLong(2), c.getLong(3), c.getLong(4), c.getLong(5), c.getLong(6), c.getLong(7)))
+            recentAggregateSql(now, entityIds.size),
+            (listOf(instance, path) + entityIds).toTypedArray(),
+        ).use { cursor -> buildMap {
+            while (cursor.moveToNext()) put(cursor.getString(0), cursor.recentAt(1))
         } }
     }
 
+    private fun Cursor.recentAt(index: Int): Recent = Recent(
+        getLong(index), getLong(index + 1), getLong(index + 2), getLong(index + 3),
+        getLong(index + 4), getLong(index + 5), getLong(index + 6),
+    )
+
+    private fun Cursor.catalogRow(recentSnapshot: RecentSnapshot): CatalogRow {
+        val stats = recentAt(18).takeIf { it.firstMinute > 0L }
+        return CatalogRow(
+            getString(0), getString(1), getString(2), getLong(3), getLong(4), getInt(5),
+            getInt(6) != 0, getInt(7) != 0, getInt(8) != 0, getInt(9) != 0,
+            getString(10), getLong(11), getLong(12), getLong(13), getLong(14),
+            getLong(15), getLong(16), getLong(17), stats,
+            stats?.let { it.bytes1h / observedSeconds(recentSnapshot.generatedAt, it.firstMinute, HOUR_MS) } ?: 0.0,
+        )
+    }
+
     private val recentCache = BoundedSnapshotCache<Pair<String, String>, RecentSnapshot>(
-        windowMs = RANKING_CACHE_MS,
+        windowMs = ENTITY_RANKING_REFRESH_MS,
         maxEntries = MAX_RANKING_CACHE_ENTRIES,
     )
 
-    /** One immutable rollup/ranking snapshot serves all entity tables within the UI refresh window. */
+    /** One immutable rollup/ranking snapshot serves all entity tables across the diagnostic refresh interval. */
     private fun recentSnapshot(instance: String, path: String, now: Long): RecentSnapshot =
         recentCache.get(instance to path, now) {
-            val rows = recentStats(instance, path, now).toMap()
-            RecentSnapshot(now, rows, RecentRanks(rows.values))
+            val ranks = RecentRanks()
+            readableDatabase.rawQuery(recentAggregateSql(now), arrayOf(instance, path)).use { cursor ->
+                while (cursor.moveToNext()) ranks.add(cursor.recentAt(1))
+            }
+            RecentSnapshot(now, ranks)
         }
 
     private fun observedSeconds(now: Long, firstMinute: Long, windowMs: Long): Double {
@@ -660,7 +879,22 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, "entity-l
         return (now - start).coerceIn(METRIC_BATCH_MS, windowMs) / 1000.0
     }
 
-    private fun databaseBytes(db: SQLiteDatabase = readableDatabase): Long {
+    private fun cachedDatabaseBytes(now: Long = System.currentTimeMillis()): Long {
+        synchronized(databaseBytesCacheLock) {
+            if (databaseBytesCachedAt != Long.MIN_VALUE && now >= databaseBytesCachedAt &&
+                now - databaseBytesCachedAt < DATABASE_BYTES_CACHE_MS) {
+                return databaseBytesCachedValue
+            }
+        }
+        return measureDatabaseBytes().also { updateDatabaseBytesCache(now, it) }
+    }
+
+    private fun updateDatabaseBytesCache(now: Long, bytes: Long) = synchronized(databaseBytesCacheLock) {
+        databaseBytesCachedAt = now
+        databaseBytesCachedValue = bytes
+    }
+
+    private fun measureDatabaseBytes(db: SQLiteDatabase = readableDatabase): Long {
         fun pragma(name: String): Long = db.rawQuery("PRAGMA $name", null).use { c ->
             if (c.moveToFirst()) c.getLong(0) else 0L
         }
@@ -671,18 +905,178 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, "entity-l
         private const val VERSION = EntityCatalogSchema.CURRENT_VERSION
         private const val HOUR_MS = 3_600_000L
         private const val MINUTE_MS = 60_000L
-        private const val ROLLUP_RETENTION_MS = 30L * 24 * HOUR_MS
         private const val RUNTIME_RETENTION_MS = 30L * 24 * HOUR_MS
         private const val TOMBSTONE_RETENTION_MS = 30L * 24 * HOUR_MS
         private const val SOFT_LIMIT_BYTES = 128L * 1024 * 1024
         private const val RATE_WINDOW_MS = 5L * 60_000
         private const val RATE_STALE_MS = 90_000L
         private const val METRIC_BATCH_MS = 5_000L
-        private const val MINUTE_RETENTION_MS = 2L * 24 * HOUR_MS
-        private const val RANKING_CACHE_MS = 10_000L
-        private const val MAX_RANKING_CACHE_ENTRIES = 16
+        private const val DAY_MS = 24L * HOUR_MS
+        private const val MAX_RANKING_CACHE_ENTRIES = 4
+        private const val DATABASE_BYTES_CACHE_MS = 10_000L
+        private const val MAINTENANCE_INTERVAL_MS = 10L * 60_000
         private const val MAX_SQL_ID_FILTER = 800
         private val FINGERPRINT = Regex("^[a-f0-9]{16}$")
+    }
+}
+
+/** Heat-map percentiles are diagnostic context, not control state. Recompute them at most once per
+ * five minutes while the Entities tab is open; exact per-page values remain current. */
+internal const val ENTITY_RANKING_REFRESH_MS = 5L * 60_000
+
+internal data class EntityExportPolicy(
+    val maxRows: Int = 50_000,
+    val maxBytes: Long = 16L * 1024 * 1024,
+    val maxDurationNanos: Long = 30_000_000_000L,
+    val footerReserveBytes: Long = 256L,
+) {
+    init {
+        require(maxRows in 1..50_000)
+        require(maxBytes in 1_024L..64L * 1024 * 1024)
+        require(maxDurationNanos > 0L)
+        require(footerReserveBytes in 64L until maxBytes)
+    }
+}
+
+internal data class EntityExportResult(val rows: Int, val bytes: Long, val truncationReason: String?)
+
+/** Retains only one requested page while scanning a globally ordered ID cursor. The caller-owned
+ * include/exclude sets are referenced rather than copied, so heap growth is O(existing sets + page). */
+internal class BoundedEntityIdPageCollector(
+    private val limit: Int,
+    private val offset: Int,
+    private val includeIds: Set<String>?,
+    private val excludeIds: Set<String>,
+) {
+    init { require(limit > 0); require(offset >= 0) }
+    private val retained = ArrayList<String>(limit)
+    var total: Int = 0
+        private set
+
+    val pageIds: List<String> get() = retained.toList()
+    internal fun retainedCountForTest(): Int = retained.size
+
+    fun offer(entityId: String) {
+        if ((includeIds != null && entityId !in includeIds) || entityId in excludeIds) return
+        if (total >= offset && retained.size < limit) retained += entityId
+        total++
+    }
+}
+
+internal fun entityExportHeader(instanceHash: String, path: String, now: Long): String =
+    """{"kind":"ha-paneld-entity-catalog","exported_at":$now,"instance_hash":${JSONObject.quote(instanceHash)},"dashboard":${JSONObject.quote(path)},"entities":["""
+
+internal fun entityExportFooter(rows: Int, truncationReason: String?): String =
+    """],"exported_count":$rows,"truncated":${truncationReason != null},"truncation_reason":${truncationReason?.let(JSONObject::quote) ?: "null"}}"""
+
+internal fun exportTruncationReason(
+    policy: EntityExportPolicy,
+    rows: Int,
+    bytesWritten: Long,
+    nextRowBytes: Long,
+    elapsedNanos: Long,
+): String? = when {
+    rows >= policy.maxRows -> "row_limit"
+    elapsedNanos > policy.maxDurationNanos -> "time_limit"
+    bytesWritten + nextRowBytes + policy.footerReserveBytes > policy.maxBytes -> "byte_limit"
+    else -> null
+}
+
+private fun String.utf8Size(): Long = toByteArray(Charsets.UTF_8).size.toLong()
+
+private fun forwardElapsedNanos(now: Long, started: Long): Long =
+    if (now >= started) now - started else Long.MAX_VALUE
+
+internal enum class RollupPressureTier {
+    HOURLY_DETAIL,
+    DAY_SUMMARY,
+    HOUR_SUMMARY,
+    DROP_DAY_HISTORY,
+    DROP_HOUR_HISTORY,
+}
+
+internal data class RollupRewriteWindow(
+    val whereSql: String,
+    val whereArgs: Array<String>,
+    val targetMinute: Long? = null,
+    val drop: Boolean = false,
+)
+
+/** Deterministic degradation order for derived telemetry. Recent precision is surrendered before a
+ * longer window is discarded, and 1-minute evidence is the last tier retained. */
+internal object RollupRetentionPolicy {
+    private const val MINUTE_MS = 60_000L
+    private const val HOUR_MS = 60L * MINUTE_MS
+
+    fun nextTier(observedBytes: Long, softLimitBytes: Long, appliedTiers: Int): RollupPressureTier? =
+        if (observedBytes > softLimitBytes) RollupPressureTier.entries.getOrNull(appliedTiers) else null
+
+    fun window(tier: RollupPressureTier, now: Long): RollupRewriteWindow {
+        val oneMinute = ((now - MINUTE_MS) / MINUTE_MS).coerceAtLeast(0L)
+        val oneHour = ((now - HOUR_MS) / MINUTE_MS).coerceAtLeast(0L)
+        return when (tier) {
+            RollupPressureTier.HOURLY_DETAIL -> RollupRewriteWindow("minute<?", arrayOf(oneHour.toString()))
+            RollupPressureTier.DAY_SUMMARY -> RollupRewriteWindow(
+                "minute<?", arrayOf(oneHour.toString()), targetMinute = (oneHour - 1L).coerceAtLeast(0L),
+            )
+            RollupPressureTier.HOUR_SUMMARY -> RollupRewriteWindow(
+                "minute>=? AND minute<?", arrayOf(oneHour.toString(), oneMinute.toString()),
+                targetMinute = (oneMinute - 1L).coerceAtLeast(0L),
+            )
+            RollupPressureTier.DROP_DAY_HISTORY -> RollupRewriteWindow(
+                "minute<?", arrayOf(oneHour.toString()), drop = true,
+            )
+            RollupPressureTier.DROP_HOUR_HISTORY -> RollupRewriteWindow(
+                "minute<?", arrayOf(oneMinute.toString()), drop = true,
+            )
+        }
+    }
+}
+
+/** A bounded cumulative distribution over positive Long values. */
+internal class LogRankHistogram {
+    private val buckets = LongArray(Long.SIZE_BITS * BUCKETS_PER_OCTAVE)
+    private var total = 0L
+
+    fun add(value: Long) {
+        if (value <= 0L) return
+        buckets[bucket(value)]++
+        total++
+    }
+
+    fun rank(value: Long): Double {
+        if (value <= 0L || total == 0L) return 0.0
+        var cumulative = 0L
+        for (index in 0..bucket(value)) cumulative += buckets[index]
+        return cumulative.toDouble() / total
+    }
+
+    internal fun sampleCountForTest(): Long = total
+    internal fun storageSlotsForTest(): Int = buckets.size
+
+    private fun bucket(value: Long): Int {
+        val exponent = Long.SIZE_BITS - 1 - java.lang.Long.numberOfLeadingZeros(value)
+        val base = 1L shl exponent
+        val step = (base / BUCKETS_PER_OCTAVE).coerceAtLeast(1L)
+        val subBucket = ((value - base) / step).coerceAtMost((BUCKETS_PER_OCTAVE - 1).toLong()).toInt()
+        return exponent * BUCKETS_PER_OCTAVE + subBucket
+    }
+
+    private companion object { const val BUCKETS_PER_OCTAVE = 4 }
+}
+
+/** Wall-clock maintenance admission. Clock rollback is treated as due rather than suppressing work. */
+internal class MaintenanceIntervalGate(private val intervalMs: Long) {
+    init { require(intervalMs > 0L) }
+
+    private var lastAdmittedAt = Long.MIN_VALUE
+
+    @Synchronized fun admit(now: Long): Boolean {
+        if (lastAdmittedAt != Long.MIN_VALUE && now >= lastAdmittedAt && now - lastAdmittedAt < intervalMs) {
+            return false
+        }
+        lastAdmittedAt = now
+        return true
     }
 }
 
@@ -701,8 +1095,8 @@ internal object EntityCatalogSorting {
     fun key(raw: String): String = raw.takeIf(keys::contains) ?: "entity_id"
     fun direction(raw: String): String = raw.lowercase().takeIf { it == "asc" || it == "desc" } ?: "asc"
 
-    /** Validated SQL order for columns backed directly by the catalog/membership tables. Recent
-     * rollup columns intentionally return null and use the global in-memory comparator. */
+    /** Validated SQL order. Recent aliases are produced by the bounded aggregate join in the list
+     * query, so every ordering is globally ranked before LIMIT/OFFSET. */
     fun sqlOrder(rawKey: String, rawDirection: String): String? {
         val normalizedKey = key(rawKey)
         val dir = direction(rawDirection).uppercase()
@@ -711,6 +1105,8 @@ internal object EntityCatalogSorting {
             "reasons" -> "coalesce(m.reasons,'') COLLATE NOCASE"
             "last_access" -> "coalesce(m.last_access,0)"
             "override" -> "CASE WHEN coalesce(m.excluded,0)=1 THEN 'excluded' WHEN coalesce(m.pinned,0)=1 THEN 'pinned' ELSE 'auto' END COLLATE NOCASE"
+            "access_1h" -> "recent_access_1h"
+            "rate_1h_bps" -> "recent_rate_1h"
             else -> return null
         }
         return "$expression $dir, e.entity_id COLLATE NOCASE ASC, e.entity_id ASC"
@@ -744,6 +1140,11 @@ internal class BoundedSnapshotCache<K, V>(private val windowMs: Long, private va
     private val entries = LinkedHashMap<K, Entry<V>>(16, 0.75f, true)
 
     @Synchronized fun get(key: K, now: Long, loader: () -> V): V {
+        // A dashboard switch must not retain every other dashboard's full-catalog rollup/rank arrays
+        // after their 10-second window. Clock rollback also expires rather than pinning stale entries.
+        entries.entries.removeAll { (_, entry) ->
+            now < entry.createdAt || now - entry.createdAt >= windowMs
+        }
         entries[key]?.takeIf { now >= it.createdAt && now - it.createdAt < windowMs }?.let { return it.value }
         val value = loader()
         entries[key] = Entry(now, value)
@@ -757,7 +1158,7 @@ internal class BoundedSnapshotCache<K, V>(private val windowMs: Long, private va
 
 /** Sequential forward-only schema contract. Never add an ad-hoc conditional to [onUpgrade]. */
 object EntityCatalogSchema {
-    const val CURRENT_VERSION = 6
+    const val CURRENT_VERSION = 7
     data class Step(val from: Int, val to: Int, val sql: List<String>)
 
     private val steps = mapOf(
@@ -794,6 +1195,13 @@ object EntityCatalogSchema {
                     instance TEXT NOT NULL, path TEXT NOT NULL, fingerprint TEXT NOT NULL, ignored_at INTEGER NOT NULL,
                     PRIMARY KEY(instance,path,fingerprint),
                     FOREIGN KEY(instance,path) REFERENCES dashboard(instance,path) ON DELETE CASCADE)""",
+            ),
+        ),
+        6 to Step(
+            6, 7,
+            listOf(
+                "DROP TABLE IF EXISTS hourly",
+                "ALTER TABLE minute_rollup ADD COLUMN span_start INTEGER NOT NULL DEFAULT 0",
             ),
         ),
     )

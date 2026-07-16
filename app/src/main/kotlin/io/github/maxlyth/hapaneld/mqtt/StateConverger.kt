@@ -1,5 +1,10 @@
 package io.github.maxlyth.hapaneld.mqtt
 
+import io.github.maxlyth.hapaneld.metrics.FeatureCostOperation
+import io.github.maxlyth.hapaneld.metrics.FeatureCostOutcome
+import io.github.maxlyth.hapaneld.metrics.FeatureCostRegistry
+import io.github.maxlyth.hapaneld.metrics.FeatureCosts
+
 /**
  * Registry-driven state convergence. Every state-bearing MQTT entity supplies one authoritative
  * observation; commands, reconnects, local events and periodic audits all flow through this class.
@@ -8,6 +13,7 @@ package io.github.maxlyth.hapaneld.mqtt
 class StateConverger(
     private val sender: (topic: String, payload: String, retain: Boolean, done: (Boolean) -> Unit) -> Unit,
     private val schedule: (() -> Unit) -> Unit = ::dispatch,
+    private val featureCosts: FeatureCostRegistry = FeatureCosts.registry,
 ) {
     sealed interface Observation {
         data class Known(val payload: String) : Observation
@@ -29,9 +35,11 @@ class StateConverger(
         var sent: String? = null,
         var generation: Long = 0,
         var inFlight: Boolean = false,
+        var queuedLatest: Boolean = false,
         var dirty: Boolean = true,
         var unknown: Boolean = false,
         var sentAtMs: Long = 0,
+        var cost: FeatureCostRegistry.Span? = null,
     )
 
     private val channels = linkedMapOf<String, Runtime>()
@@ -69,34 +77,61 @@ class StateConverger(
         }
 
         val generation: Long
+        var admittedCost: FeatureCostRegistry.Span? = null
         synchronized(this) {
             if (closed) return
             if (runtime.inFlight && runtime.sent == payload) return
+            if (runtime.inFlight) {
+                // Exactly one physical publish per channel. The observer remains the latest-value
+                // authority; one dirty bit conflates any alternating flood until the ACK frees its slot.
+                runtime.queuedLatest = true
+                runtime.dirty = true
+                featureCosts.recordCoalesced(FeatureCostOperation.MQTT_STATE_OUTBOX)
+                updateBacklog()
+                return
+            }
             if (!force && !runtime.dirty && runtime.acknowledged?.let { runtime.channel.equivalent(it, payload) } == true) return
             if (channels.values.count { it.inFlight } >= MAX_IN_FLIGHT) return
             generation = ++runtime.generation
             runtime.sent = payload
             runtime.inFlight = true
+            runtime.queuedLatest = false
             runtime.dirty = true
             runtime.sentAtMs = System.currentTimeMillis()
+            admittedCost = featureCosts.span(FeatureCostOperation.MQTT_STATE_OUTBOX)
+                .work(units = 1, bytes = payload.toByteArray(Charsets.UTF_8).size.toLong())
+            runtime.cost = admittedCost
+            updateBacklog()
         }
 
-        sender(runtime.channel.topic, payload, runtime.channel.retain) { success ->
+        val cost = requireNotNull(admittedCost)
+        val completion: (Boolean) -> Unit = { success ->
             var pump = false
             synchronized(this) {
+                if (runtime.cost === cost) runtime.cost = null
                 if (closed || generation != runtime.generation) return@synchronized
                 runtime.inFlight = false
                 if (success) {
                     successes++
                     runtime.acknowledged = payload
-                    runtime.dirty = false
-                    pump = true
                 } else {
                     failures++
-                    runtime.dirty = true
                 }
+                val queued = runtime.queuedLatest
+                runtime.queuedLatest = false
+                runtime.dirty = queued || !success
+                // A success frees capacity for other dirty channels; a queued latest value also pumps
+                // after failure, while a lone failed value waits for the ordinary retry/audit cadence.
+                pump = success || queued
+                updateBacklog()
             }
+            cost.outcome(if (success) FeatureCostOutcome.SUCCESS else FeatureCostOutcome.FAILURE).close()
             if (pump) schedule { reconcileDirty() }
+        }
+        try {
+            sender(runtime.channel.topic, payload, runtime.channel.retain, completion)
+        } catch (_: Exception) {
+            completion(false)
         }
     }
 
@@ -123,12 +158,16 @@ class StateConverger(
     fun markAllDirty() {
         if (closed) return
         channels.values.forEach {
+            it.cost?.outcome(FeatureCostOutcome.CANCELLED)?.close()
+            it.cost = null
             it.generation++
             it.acknowledged = null
             it.sent = null
             it.dirty = true
             it.inFlight = false
+            it.queuedLatest = false
         }
+        updateBacklog()
     }
 
     /** Terminal owner boundary: reject queued audits and invalidate every late completion. */
@@ -137,10 +176,14 @@ class StateConverger(
         if (closed) return
         closed = true
         channels.values.forEach {
+            it.cost?.outcome(FeatureCostOutcome.CANCELLED)?.close()
+            it.cost = null
             it.generation++
             it.inFlight = false
+            it.queuedLatest = false
             it.dirty = false
         }
+        featureCosts.setBacklog(FeatureCostOperation.MQTT_STATE_OUTBOX, 0)
     }
 
     @Synchronized
@@ -168,6 +211,14 @@ class StateConverger(
             "${it.channel.key}:${((System.currentTimeMillis() - it.sentAtMs).coerceAtLeast(0) / 1000)}s"
         },
     )
+
+    /** Must be called under this monitor. */
+    private fun updateBacklog() {
+        featureCosts.setBacklog(
+            FeatureCostOperation.MQTT_STATE_OUTBOX,
+            channels.values.count { it.queuedLatest || it.dirty && !it.inFlight },
+        )
+    }
 
     companion object {
         private const val MAX_IN_FLIGHT = 4

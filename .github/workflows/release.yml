@@ -78,6 +78,29 @@ jobs:
       - name: Install NDK + CMake
         run: sdkmanager "ndk;27.0.12077973" "cmake;3.22.1"
 
+      - name: Test privileged helper boundaries and app contract
+        run: make -C helper clean test contract
+
+      - name: Build root helper release assets
+        run: |
+          set -euo pipefail
+          mkdir -p release-input
+          toolchain="$ANDROID_HOME/ndk/27.0.12077973/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          sources=(helper/src/*.c)
+          helper_build_id="$(helper/source-id.sh)"
+          [[ "$helper_build_id" =~ ^[0-9a-f]{64}$ ]]
+          echo "HELPER_BUILD_ID=$helper_build_id" >> "$GITHUB_ENV"
+          "$toolchain/armv7a-linux-androideabi26-clang" -O2 -s -Ihelper/src \
+            -DHAPANELD_BUILD_ID="\"$helper_build_id\"" \
+            -o release-input/hapaneld-helper-armeabi-v7a "${sources[@]}"
+          "$toolchain/aarch64-linux-android26-clang" -O2 -s -Ihelper/src \
+            -DHAPANELD_BUILD_ID="\"$helper_build_id\"" \
+            -o release-input/hapaneld-helper-arm64-v8a "${sources[@]}"
+          test -s release-input/hapaneld-helper-armeabi-v7a
+          test -s release-input/hapaneld-helper-arm64-v8a
+          file release-input/hapaneld-helper-armeabi-v7a | grep -Fq 'ELF 32-bit'
+          file release-input/hapaneld-helper-arm64-v8a | grep -Fq 'ELF 64-bit'
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
         with:
@@ -91,6 +114,11 @@ jobs:
 
       - name: Build release APK
         run: ./gradlew :app:assembleRelease --stacktrace
+
+      - name: Verify standalone helpers match APK-bundled helpers
+        run: |
+          cmp release-input/hapaneld-helper-armeabi-v7a app/src/main/assets/hapaneld-helper-arm
+          cmp release-input/hapaneld-helper-arm64-v8a app/src/main/assets/hapaneld-helper-arm64
 
       - name: Generate release dependency SBOM
         run: ./gradlew :app:cyclonedxDirectBom --stacktrace
@@ -126,7 +154,9 @@ jobs:
         run: |
           installer="release-input/ha-paneld-installer-${RELEASE_TAG}.sh"
           provisioner="release-input/ha-paneld-provision-${RELEASE_TAG}.sh"
-          cp scripts/provision.sh "$provisioner"
+          sed \
+            -e "s|^RELEASE_HELPER_BUILD_ID=.*|RELEASE_HELPER_BUILD_ID=\"$HELPER_BUILD_ID\"|" \
+            scripts/provision.sh > "$provisioner"
           chmod +x "$provisioner"
           bash -n "$provisioner"
           sed \
@@ -139,6 +169,7 @@ jobs:
           grep -Fq "RELEASE_TAG=\"$RELEASE_TAG\"" "$installer"
           grep -Fq "RELEASE_APK_NAME=\"$APK_NAME\"" "$installer"
           grep -Fq "PROVISION_COMMIT=\"$SOURCE_COMMIT\"" "$installer"
+          grep -Fq "RELEASE_HELPER_BUILD_ID=\"$HELPER_BUILD_ID\"" "$provisioner"
 
       # Human-readable notes come from the matching CHANGELOG.md section. Prereleases also receive an
       # auto-generated comparison; stable releases use only the self-contained curated body.
@@ -196,6 +227,8 @@ jobs:
             "ha-paneld-installer-${RELEASE_TAG}.sh" \
             "ha-paneld-provision-${RELEASE_TAG}.sh" \
             ha-paneld-unsigned.apk \
+            hapaneld-helper-arm64-v8a \
+            hapaneld-helper-armeabi-v7a \
             profile-editor-runtime.cdx.json \
             release-body.md)
           actual=$(find release-input -maxdepth 1 -type f -printf '%f\n' | sort)
@@ -206,7 +239,7 @@ jobs:
           fi
           (
             cd release-input
-            sha256sum android-gradle-runtime.cdx.json "ha-paneld-installer-${RELEASE_TAG}.sh" "ha-paneld-provision-${RELEASE_TAG}.sh" ha-paneld-unsigned.apk profile-editor-runtime.cdx.json release-body.md > MANIFEST.sha256
+            sha256sum android-gradle-runtime.cdx.json "ha-paneld-installer-${RELEASE_TAG}.sh" "ha-paneld-provision-${RELEASE_TAG}.sh" ha-paneld-unsigned.apk hapaneld-helper-arm64-v8a hapaneld-helper-armeabi-v7a profile-editor-runtime.cdx.json release-body.md > MANIFEST.sha256
           )
           sha256=$(sha256sum release-input/MANIFEST.sha256 | cut -d' ' -f1)
           echo "sha256=$sha256" >> "$GITHUB_OUTPUT"
@@ -258,6 +291,8 @@ jobs:
             "ha-paneld-installer-${RELEASE_TAG}.sh" \
             "ha-paneld-provision-${RELEASE_TAG}.sh" \
             ha-paneld-unsigned.apk \
+            hapaneld-helper-arm64-v8a \
+            hapaneld-helper-armeabi-v7a \
             profile-editor-runtime.cdx.json \
             release-body.md)
           actual=$(find release-input -maxdepth 1 -type f -printf '%f\n' | sort)
@@ -316,6 +351,8 @@ jobs:
           android_sbom_name="ha-paneld-${RELEASE_TAG}-android-gradle-runtime.cdx.json"
           profile_editor_sbom_name="ha-paneld-${RELEASE_TAG}-profile-editor-runtime.cdx.json"
           provisioner_name="ha-paneld-provision-${RELEASE_TAG}.sh"
+          helper_arm_name="ha-paneld-helper-${RELEASE_TAG}-armeabi-v7a"
+          helper_arm64_name="ha-paneld-helper-${RELEASE_TAG}-arm64-v8a"
           signed_apk="dist/$apk_name"
           mkdir -p dist
 
@@ -359,10 +396,15 @@ jobs:
           cp release-input/profile-editor-runtime.cdx.json "dist/$profile_editor_sbom_name"
           cp "release-input/ha-paneld-installer-${RELEASE_TAG}.sh" "dist/ha-paneld-installer-${RELEASE_TAG}.sh"
           cp "release-input/$provisioner_name" "dist/$provisioner_name"
+          cp release-input/hapaneld-helper-armeabi-v7a "dist/$helper_arm_name"
+          cp release-input/hapaneld-helper-arm64-v8a "dist/$helper_arm64_name"
           chmod +x "dist/ha-paneld-installer-${RELEASE_TAG}.sh"
           chmod +x "dist/$provisioner_name"
+          chmod +x "dist/$helper_arm_name" "dist/$helper_arm64_name"
           (cd dist && sha256sum "$apk_name" > "$apk_name.sha256")
           (cd dist && sha256sum "$provisioner_name" > "$provisioner_name.sha256")
+          (cd dist && sha256sum "$helper_arm_name" > "$helper_arm_name.sha256")
+          (cd dist && sha256sum "$helper_arm64_name" > "$helper_arm64_name.sha256")
 
           pkcs12_password=$(openssl rand -hex 32)
           keytool -importkeystore \
@@ -378,10 +420,27 @@ jobs:
           openssl pkcs12 -in "$pkcs12" -passin "pass:$pkcs12_password" -nocerts -nodes -out "$private_key"
           chmod 600 "$private_key"
           openssl pkey -in "$private_key" -pubout -out "$public_key"
+          release_key_digest=$(openssl pkey -pubin -in "$public_key" -outform DER | sha256sum | cut -d' ' -f1)
+          for trust_asset in \
+            "release-input/ha-paneld-installer-${RELEASE_TAG}.sh" \
+            "release-input/$provisioner_name"; do
+            embedded_key="$RUNNER_TEMP/$(basename "$trust_asset").public.pem"
+            awk '/^-----BEGIN PUBLIC KEY-----$/{copy=1} copy{print} /^-----END PUBLIC KEY-----$/{exit}' \
+              "$trust_asset" > "$embedded_key"
+            embedded_key_digest=$(openssl pkey -pubin -in "$embedded_key" -outform DER | sha256sum | cut -d' ' -f1)
+            if [ "$embedded_key_digest" != "$release_key_digest" ]; then
+              echo "::error::Embedded release key in $(basename "$trust_asset") does not match the signing keystore."
+              exit 1
+            fi
+          done
           openssl dgst -sha256 -sign "$private_key" -out "dist/$apk_name.sha256.sig" "dist/$apk_name.sha256"
           openssl dgst -sha256 -verify "$public_key" -signature "dist/$apk_name.sha256.sig" "dist/$apk_name.sha256"
           openssl dgst -sha256 -sign "$private_key" -out "dist/$provisioner_name.sha256.sig" "dist/$provisioner_name.sha256"
           openssl dgst -sha256 -verify "$public_key" -signature "dist/$provisioner_name.sha256.sig" "dist/$provisioner_name.sha256"
+          for helper_name in "$helper_arm_name" "$helper_arm64_name"; do
+            openssl dgst -sha256 -sign "$private_key" -out "dist/$helper_name.sha256.sig" "dist/$helper_name.sha256"
+            openssl dgst -sha256 -verify "$public_key" -signature "dist/$helper_name.sha256.sig" "dist/$helper_name.sha256"
+          done
 
           echo "apk_name=$apk_name" >> "$GITHUB_OUTPUT"
           echo "android_sbom_name=$android_sbom_name" >> "$GITHUB_OUTPUT"

@@ -46,6 +46,7 @@ class ProfileBackupPolicyTest {
             "ha-paneld-shizuku.xml",
             "ha-paneld-device-profiles.xml",
             "ha-paneld-profile-calibration.xml",
+            "ha-paneld-controller-state.xml",
         )
     }
 }

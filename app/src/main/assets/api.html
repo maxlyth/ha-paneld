@@ -43,9 +43,15 @@ fetch('/api/v1/openapi.json').then(function(r){return r.json();}).then(render).c
  document.getElementById('root').innerHTML='<p class="desc">Could not load /api/v1/openapi.json: '+e+'</p>';});
 
 function el(t,c,h){var e=document.createElement(t);if(c)e.className=c;if(h!=null)e.innerHTML=h;return e;}
-function formProps(op){var b=op.requestBody&&op.requestBody.content;if(!b)return null;
- var f=b['application/x-www-form-urlencoded'];return f&&f.schema?f.schema:null;}
-function isText(op){var b=op.requestBody&&op.requestBody.content;return !!(b&&b['text/plain']);}
+function requestBody(op){var c=op.requestBody&&op.requestBody.content;if(!c)return null;
+ var preferred=['application/x-www-form-urlencoded','application/json','application/yaml','text/yaml','text/plain','application/octet-stream'];
+ for(var i=0;i<preferred.length;i++)if(c[preferred[i]])return {type:preferred[i],schema:c[preferred[i]].schema||{}};
+ var types=Object.keys(c);return types.length?{type:types[0],schema:c[types[0]].schema||{}}:null;}
+
+function addInput(body,label,pr){body.appendChild(el('label',null,label+(pr.description?' <span style="color:#667;font-weight:400">— '+pr.description+'</span>':'')));
+ var inp;if(pr.enum){inp=el('select');pr.enum.forEach(function(v){var o=el('option',null,v);o.value=v;inp.appendChild(o);});}
+ else{inp=el('input');inp.type=(pr.format==='password'?'password':(pr.type==='number'||pr.type==='integer'?'number':'text'));inp.step='any';}
+ body.appendChild(inp);return inp;}
 
 function render(spec){
  var paths=spec.paths,groups={};
@@ -64,29 +70,39 @@ function endpoint(path,method,op){
    '<span class="path">'+path+'</span><span class="sum">'+(op.summary||'')+'</span>');
  d.appendChild(s);
  var body=el('div','body');
- var fields={},sch=formProps(op),text=isText(op);
- if(sch&&sch.properties){Object.keys(sch.properties).forEach(function(k){
-  var pr=sch.properties[k],req=(sch.required||[]).indexOf(k)>=0;
-  body.appendChild(el('label',null,k+(req?' *':'')+(pr.description?' <span style="color:#667;font-weight:400">— '+pr.description+'</span>':'')));
-  var inp;
-  if(pr.enum){inp=el('select');pr.enum.forEach(function(v){var o=el('option',null,v);o.value=v;inp.appendChild(o);});}
-  else{inp=el('input');inp.type=(pr.type==='number'?'number':'text');inp.step='any';}
-  fields[k]=inp;body.appendChild(inp);});}
- if(text){body.appendChild(el('label',null,'request body — a raw URL'));var ta=el('textarea');fields.__text=ta;body.appendChild(ta);}
+ var fields={},parameters=[],request=requestBody(op);
+ (op.parameters||[]).forEach(function(p){var pr=p.schema||{},req=p.required?' *':'';parameters.push({spec:p,input:addInput(body,p.name+req+' ('+p.in+')',{type:pr.type,format:pr.format,enum:pr.enum,description:p.description})});});
+ if(request&&request.type==='application/x-www-form-urlencoded'&&request.schema.properties){Object.keys(request.schema.properties).forEach(function(k){
+  var pr=request.schema.properties[k],req=(request.schema.required||[]).indexOf(k)>=0;
+  fields[k]=addInput(body,k+(req?' *':''),pr);});}
+ else if(request){
+  body.appendChild(el('label',null,'request body ('+request.type+')'));
+  if(request.type==='application/octet-stream'){var file=el('input');file.type='file';fields.__body=file;body.appendChild(file);}
+  else{var ta=el('textarea');if(request.type==='application/json'&&request.schema.type==='object')ta.value='{}';fields.__body=ta;body.appendChild(ta);}
+ }
  var btn=el('button',null,'Send '+method.toUpperCase());
  var st=el('div','st'),out=el('pre');out.style.display='none';
  body.appendChild(btn);body.appendChild(st);body.appendChild(out);
- btn.onclick=function(){send(path,method,fields,text,st,out,btn);};
+ btn.onclick=function(){send(path,method,fields,parameters,request,st,out,btn);};
  d.appendChild(body);return d;
 }
 
-function send(path,method,fields,text,st,out,btn){
+function send(path,method,fields,parameters,request,st,out,btn){
  btn.disabled=true;st.textContent='…';out.style.display='none';
- var opts={method:method.toUpperCase()};
- if(text){opts.body=fields.__text.value;opts.headers={'Content-Type':'text/plain'};}
- else if(Object.keys(fields).length){
+ var opts={method:method.toUpperCase(),headers:{}},query=[];
+ parameters.forEach(function(p){var v=p.input.value;if(v==='')return;var where=p.spec.in,name=p.spec.name;
+  if(where==='path')path=path.replace('{'+name+'}',encodeURIComponent(v));
+  else if(where==='query')query.push(encodeURIComponent(name)+'='+encodeURIComponent(v));
+  else if(where==='header')opts.headers[name]=v;});
+ if(query.length)path+=(path.indexOf('?')>=0?'&':'?')+query.join('&');
+ if(request&&request.type==='application/x-www-form-urlencoded'){
   var params=[];Object.keys(fields).forEach(function(k){var v=fields[k].value;if(v!=='')params.push(encodeURIComponent(k)+'='+encodeURIComponent(v));});
-  if(params.length){opts.body=params.join('&');opts.headers={'Content-Type':'application/x-www-form-urlencoded'};}}
+  if(params.length)opts.body=params.join('&');opts.headers['Content-Type']=request.type;}
+ else if(request&&fields.__body){
+  if(request.type==='application/octet-stream'){if(fields.__body.files&&fields.__body.files[0])opts.body=fields.__body.files[0];}
+  else opts.body=fields.__body.value;
+  opts.headers['Content-Type']=request.type;
+ }
  var t0=Date.now();
  fetch(path,opts).then(function(r){return r.text().then(function(tx){
   st.innerHTML='<b style="color:'+(r.ok?'#5ad18a':'#d9534f')+'">'+r.status+'</b> '+(r.headers.get('content-type')||'')+' · '+(Date.now()-t0)+' ms';

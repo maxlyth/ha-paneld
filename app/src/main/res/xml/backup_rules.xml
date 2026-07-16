@@ -10,4 +10,6 @@
     <exclude domain="sharedpref" path="ha-paneld-device-profiles.xml" />
     <!-- Physical sensor captures belong to one panel and must not migrate to another device. -->
     <exclude domain="sharedpref" path="ha-paneld-profile-calibration.xml" />
+    <!-- Exact pre-mutation HOME, app-op and audio state belongs to the source Android install. -->
+    <exclude domain="sharedpref" path="ha-paneld-controller-state.xml" />
 </full-backup-content>

@@ -111,14 +111,15 @@ jobs:
         if: steps.diff.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          NEW_VERSIONS: ${{ steps.probe.outputs.new_versions }}
         run: |
           repo_url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add "$DAT"
           msg="data: Shelly Wall Display firmware index update"
-          if [ -n "${{ steps.probe.outputs.new_versions }}" ]; then
-            msg="data: Shelly Wall Display ${{ steps.probe.outputs.new_versions }} discovered"
+          if [ -n "$NEW_VERSIONS" ]; then
+            msg="data: Shelly Wall Display $NEW_VERSIONS discovered"
           fi
           git commit -m "${msg} [skip ci]"
           # Rebase in case a parallel run pushed first (rare but possible at hourly cadence).

@@ -24,8 +24,8 @@
     }
   }
 
-  // Populate a component's version <select> for the chosen channel, newest first. Pre-selects the option
-  // matching the installed version, else the newest installable one, then syncs the notes link + button.
+  // Populate a component's version <select> for the chosen channel, newest first. Pre-select the newest
+  // installable release; fall back to the installed release only when the channel has no installable APK.
   window.loadVersions = function (name) {
     var r = row(name); if (!r) return;
     var chan = r.querySelector('.cchan').value, vsel = r.querySelector('.cvsel');
@@ -36,16 +36,17 @@
         var vs = (d && d.versions) || [];
         if (!vs.length) { vsel.innerHTML = '<option value="">no versions found</option>'; verChanged(name); return; }
         vsel.innerHTML = '';
-        var pick = 0;
+        var firstInstallable = -1, installedIndex = -1;
         vs.forEach(function (v, i) {
           var o = document.createElement('option');
           o.value = v.tag; o.textContent = v.version + (v.installable ? '' : ' (no APK)');
           o.setAttribute('data-notes', v.notes || ''); o.setAttribute('data-installable', v.installable ? '1' : '0');
           o.setAttribute('data-apk', v.apk || '');
-          if (v.version === installed) pick = i;
+          if (firstInstallable < 0 && v.installable) firstInstallable = i;
+          if (v.version === installed) installedIndex = i;
           vsel.appendChild(o);
         });
-        vsel.selectedIndex = pick;
+        vsel.selectedIndex = firstInstallable >= 0 ? firstInstallable : (installedIndex >= 0 ? installedIndex : 0);
         verChanged(name);
       }).catch(function () { vsel.innerHTML = '<option value="">check failed</option>'; verChanged(name); });
   };

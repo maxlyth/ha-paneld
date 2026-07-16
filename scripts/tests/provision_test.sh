@@ -13,6 +13,13 @@ trap 'rm -rf "$TMP"' EXIT
 export PATH="$FIXTURES:/usr/bin:/bin"
 export MOCK_TARGET="panel.test:5555"
 export MOCK_CALL_LOG="$TMP/calls.log"
+export HAPANELD_HELPER_PROBE="$FIXTURES/helper-probe"
+export MOCK_HELPER_BUILD_ID="$(PATH=/usr/bin:/bin "$ROOT/helper/source-id.sh")"
+MOCK_HELPER_DIST="$TMP/helper-dist"
+mkdir -p "$MOCK_HELPER_DIST/armeabi-v7a" "$MOCK_HELPER_DIST/arm64-v8a"
+printf 'mock arm helper\n' > "$MOCK_HELPER_DIST/armeabi-v7a/hapaneld-helper"
+printf 'mock arm64 helper\n' > "$MOCK_HELPER_DIST/arm64-v8a/hapaneld-helper"
+export HAPANELD_HELPER_DIST_DIR="$MOCK_HELPER_DIST"
 
 passes=0
 failures=0
@@ -23,6 +30,13 @@ run_provision() {
   : > "$MOCK_CALL_LOG"
   rm -f "$TMP/diag-attempts"
   rm -f "$TMP/plan-attempts"
+  rm -f "$TMP/stale-helper-transaction" "$TMP/active-helper-transaction"
+  if [ "${MOCK_STALE_TRANSACTION:-0}" = 1 ]; then : > "$TMP/stale-helper-transaction"; fi
+  if [ -n "${MOCK_INSTALLED_APK_SOURCE:-}" ]; then
+    cp "$MOCK_INSTALLED_APK_SOURCE" "$TMP/installed-apk"
+  else
+    printf 'previous installed apk\n' > "$TMP/installed-apk"
+  fi
   LAST_OUTPUT="$TMP/output.txt"
   MOCK_HEALTH="${MOCK_HEALTH:-ok}" \
   MOCK_VERIFY="${MOCK_VERIFY:-ok}" \
@@ -46,10 +60,32 @@ run_provision() {
   MOCK_LATE_ADB_PHASE="${MOCK_LATE_ADB_PHASE:-identity}" \
   MOCK_PRODUCT_IDENTITY="${MOCK_PRODUCT_IDENTITY:-}" \
   MOCK_ADB_ROOT="${MOCK_ADB_ROOT:-0}" \
+  MOCK_HELPER_PROOF_DOWNLOAD="${MOCK_HELPER_PROOF_DOWNLOAD:-ok}" \
+  MOCK_HELPER_CHECKSUM="${MOCK_HELPER_CHECKSUM:-ok}" \
+  MOCK_HELPER_SIGNATURE_FAIL="${MOCK_HELPER_SIGNATURE_FAIL:-0}" \
+  MOCK_ROOT="${MOCK_ROOT:-1}" \
+  MOCK_ABI="${MOCK_ABI:-arm64-v8a}" \
+  MOCK_SYSTEM_WRITABLE="${MOCK_SYSTEM_WRITABLE:-1}" \
+  MOCK_SYSTEMLESS_RUNNER="${MOCK_SYSTEMLESS_RUNNER:-1}" \
+  MOCK_HELPER_INSTALL="${MOCK_HELPER_INSTALL:-ok}" \
+  MOCK_HELPER_START="${MOCK_HELPER_START:-ok}" \
+  MOCK_HELPER_CAPABILITY="${MOCK_HELPER_CAPABILITY:-ok}" \
+  MOCK_ROLLBACK_PING="${MOCK_ROLLBACK_PING:-ok}" \
+  MOCK_ROLLBACK_RESULT="${MOCK_ROLLBACK_RESULT:-ok}" \
+  MOCK_HELPER_BUILD_ID="${MOCK_HELPER_BUILD_ID}" \
+  MOCK_HELPER_BUILD_ID_MATCH="${MOCK_HELPER_BUILD_ID_MATCH:-ok}" \
+  MOCK_RELEASE_PROVISION_BUILD_ID="${MOCK_RELEASE_PROVISION_BUILD_ID:-$MOCK_HELPER_BUILD_ID}" \
+  MOCK_APK_INSTALL="${MOCK_APK_INSTALL:-ok}" \
+  MOCK_APK_QUERY="${MOCK_APK_QUERY:-ok}" \
+  MOCK_MANUAL_STALE="${MOCK_MANUAL_STALE:-0}" \
+  MOCK_STALE_APK_SHA256="${MOCK_STALE_APK_SHA256:-$(/usr/bin/sha256sum "$TMP/installed-apk" | awk '{print $1}')}" \
+  MOCK_STALE_BUILD_ID="${MOCK_STALE_BUILD_ID:-$MOCK_HELPER_BUILD_ID}" \
+  MOCK_SU_DIALECT="${MOCK_SU_DIALECT:-join}" \
   MOCK_SHIZUKU_START="${MOCK_SHIZUKU_START:-ok}" \
   MOCK_SHIZUKU_START_SCRIPT="${MOCK_SHIZUKU_START_SCRIPT:-ok}" \
   MOCK_OPENSSL_MISSING="${MOCK_OPENSSL_MISSING:-0}" \
   MOCK_OPENSSL_DIGEST_FAIL="${MOCK_OPENSSL_DIGEST_FAIL:-0}" \
+  HAPANELD_HELPER_DIST_DIR="${HAPANELD_HELPER_DIST_DIR:-$MOCK_HELPER_DIST}" \
   MOCK_STATE_DIR="$TMP" \
   PROVISIONING_PLAN_TIMEOUT_SECONDS="${PROVISIONING_PLAN_TIMEOUT_SECONDS:-2}" \
     bash "$PROVISION" "$@" > "$LAST_OUTPUT" 2>&1
@@ -114,6 +150,8 @@ APK="$TMP/ha-paneld.apk"
 printf 'test apk\n' > "$APK"
 RELEASE_APK="$TMP/ha-paneld-v0.9.2-rc3-manual-setup-required.apk"
 printf 'test release apk\n' > "$RELEASE_APK"
+HELPER_RELEASE_APK="$TMP/ha-paneld-v0.9.4-rc1-manual-setup-required.apk"
+printf 'test helper release apk\n' > "$HELPER_RELEASE_APK"
 NO_SIGNER_FIXTURES="$TMP/fixtures-without-apksigner"
 mkdir -p "$NO_SIGNER_FIXTURES"
 for fixture in "$FIXTURES"/*; do
@@ -251,6 +289,243 @@ MOCK_LATE_ADB_STATUS=255 MOCK_LATE_ADB_PHASE=persistence MOCK_PRODUCT_IDENTITY=T
   run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
 assert_success "late vendor-strip safety probe cannot turn a verified install into exit 255"
 assert_contains 'vendor-strip skipped' "failed persistence probe keeps vendor stripping fail-closed"
+assert_log_contains '^adb .* push .*/arm64-v8a/hapaneld-helper /data/local/tmp/hapaneld-helper$' "local rooted provisioning stages the matching helper"
+assert_log_contains '^adb .* push .* /data/local/tmp/hapaneld-helper\.txn$' "local rooted provisioning stages its authenticated transaction"
+helper_push_line="$(grep -nE '^adb .* push .*/arm64-v8a/hapaneld-helper /data/local/tmp/hapaneld-helper$' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
+local_app_install_line="$(grep -nE '^adb .* install( |$)' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
+if [ -n "$helper_push_line" ] && [ -n "$local_app_install_line" ] && [ "$helper_push_line" -lt "$local_app_install_line" ]; then
+  pass "root helper is installed before the APK is replaced"
+else
+  fail_test "root helper is installed before the APK is replaced"
+fi
+
+MOCK_ROOT=0 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "non-root provisioning continues without a root helper"
+assert_contains 'no root path available.*continuing without the root helper' "non-root helper skip is explicit"
+assert_not_contains '/data/local/tmp/hapaneld-helper' "$MOCK_CALL_LOG" "non-root provisioning never stages a privileged binary"
+
+MOCK_ROOT=0 MOCK_ABI=x86_64 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "unsupported ABI is harmless on a genuinely unrooted panel"
+assert_contains 'no root path available.*continuing without the root helper' "unrooted unsupported ABI remains on the reduced-capability path"
+
+MOCK_ABI=x86_64 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_failure "unsupported ABI fails before changing a rooted panel"
+assert_contains 'rooted panel reports unsupported ABI.*x86_64' "unsupported rooted ABI gives the supported asset set"
+assert_not_contains '/data/local/tmp/hapaneld-helper|^adb .* install( |$)' "$MOCK_CALL_LOG" "unsupported rooted ABI stops before helper staging or APK replacement"
+
+EMPTY_HELPER_DIST="$TMP/empty-helper-dist"
+mkdir -p "$EMPTY_HELPER_DIST"
+HAPANELD_HELPER_DIST_DIR="$EMPTY_HELPER_DIST" run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_failure "rooted local provisioning fails before APK replacement when its helper was not built"
+assert_contains 'local arm64-v8a root helper has not been built' "missing local helper gives the exact build recovery"
+assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "missing local helper leaves the existing APK untouched"
+
+MOCK_SYSTEM_WRITABLE=0 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "rooted systemless provisioning installs the helper through service.d"
+assert_log_contains 'hapaneld-helper\.txn install-systemless' "systemless helper path uses the same transactional installer"
+if grep -Fq '/system/bin/stop hapaneld_ledd' "$PROVISION" && grep -Fq '/system/bin/pkill -x hapaneld-ledd' "$PROVISION"; then
+  pass "systemless boot service retires the legacy daemon before binding the helper socket"
+else
+  fail_test "systemless boot service retires the legacy daemon before binding the helper socket"
+fi
+
+MOCK_SYSTEM_WRITABLE=0 MOCK_SYSTEMLESS_RUNNER=0 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_failure "read-only system without a verified service.d runner fails closed"
+assert_contains 'read-only /system and no verified systemless boot-service runner' "missing persistence mechanism names the migration blocker"
+assert_contains 'Magisk, KernelSU, or APatch' "missing persistence mechanism gives supported recovery choices"
+assert_not_contains '/data/adb/service\.d/hapaneld-helper\.sh\.new|^adb .* install( |$)' "$MOCK_CALL_LOG" "unverified service.d path never installs a helper or replaces the APK"
+
+MOCK_MANUAL_STALE=1 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_failure "provisioning routes an interrupted standalone helper journal back to its owning installer"
+assert_contains 'incomplete standalone root-helper installation must be recovered first' "manual-to-provision handoff names the cross-tool boundary"
+assert_contains 'helper/install-daemon\.sh' "manual-to-provision handoff gives the exact recovery command"
+assert_not_contains '^adb .* push .* /data/local/tmp/hapaneld-helper|^adb .* install( |$)' "$MOCK_CALL_LOG" "manual-to-provision handoff stops before privileged staging or APK replacement"
+
+# Starting with v0.9.4, official releases carry ABI-specific helper assets authenticated by the same
+# release key as the APK and provisioner. The helper proof and device-side staging must complete
+# before the APK is replaced.
+run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_success "current release installs its sealed root-helper asset"
+assert_log_contains '^curl .*releases/download/v0\.9\.4-rc1/ha-paneld-helper-v0\.9\.4-rc1-arm64-v8a -o ' "release provisioning downloads the exact ABI helper asset"
+assert_log_contains '^curl .*ha-paneld-helper-v0\.9\.4-rc1-arm64-v8a\.sha256 -o ' "release provisioning downloads the helper checksum"
+assert_log_contains '^curl .*ha-paneld-helper-v0\.9\.4-rc1-arm64-v8a\.sha256\.sig -o ' "release provisioning downloads the helper checksum signature"
+assert_log_contains '^openssl dgst -sha256 -verify .* -signature .*/helper\.sha256\.sig .*/helper\.sha256$' "release provisioning authenticates the helper checksum"
+assert_contains 'authenticated.*v0\.9\.4-rc1 helper.*arm64-v8a' "release provisioning reports helper authentication"
+release_helper_signature_line="$(grep -nE '^openssl dgst -sha256 -verify .*helper\.sha256' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
+release_helper_push_line="$(grep -nE '^adb .* push .*ha-paneld-helper-v0\.9\.4-rc1-arm64-v8a /data/local/tmp/hapaneld-helper$' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
+release_app_install_line="$(grep -nE '^adb .* install( |$)' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
+if [ -n "$release_helper_signature_line" ] && [ -n "$release_helper_push_line" ] && [ -n "$release_app_install_line" ] && \
+   [ "$release_helper_signature_line" -lt "$release_helper_push_line" ] && [ "$release_helper_push_line" -lt "$release_app_install_line" ]; then
+  pass "release helper is authenticated, staged, then followed by APK installation"
+else
+  fail_test "release helper is authenticated, staged, then followed by APK installation"
+fi
+
+MOCK_ABI=armeabi-v7a \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_success "current release selects the 32-bit helper on armeabi-v7a panels"
+assert_log_contains '^curl .*releases/download/v0\.9\.4-rc1/ha-paneld-helper-v0\.9\.4-rc1-armeabi-v7a -o ' "32-bit provisioning downloads only the matching helper asset"
+assert_not_contains 'ha-paneld-helper-v0\.9\.4-rc1-arm64-v8a' "$MOCK_CALL_LOG" "32-bit provisioning does not fetch the arm64 helper"
+
+MOCK_HELPER_PROOF_DOWNLOAD=checksum_fail \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_failure "missing helper checksum fails closed"
+assert_contains 'could not download the signed helper checksum' "missing helper proof names the incomplete release"
+assert_not_contains '/data/local/tmp/hapaneld-helper|^adb .* install( |$)' "$MOCK_CALL_LOG" "missing helper proof stops before helper staging or APK replacement"
+
+MOCK_HELPER_SIGNATURE_FAIL=1 \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_failure "invalid helper checksum signature fails closed"
+assert_contains 'helper checksum signature is invalid' "invalid helper signature names the authentication failure"
+assert_not_contains '/data/local/tmp/hapaneld-helper|^adb .* install( |$)' "$MOCK_CALL_LOG" "invalid helper signature stops before helper staging or APK replacement"
+
+MOCK_HELPER_CHECKSUM=mismatch \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_failure "helper checksum mismatch fails closed"
+assert_contains 'helper checksum does not match its signed record' "helper checksum mismatch names the integrity failure"
+assert_not_contains '/data/local/tmp/hapaneld-helper|^adb .* install( |$)' "$MOCK_CALL_LOG" "helper mismatch stops before helper staging or APK replacement"
+
+MOCK_HELPER_START=fail \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_failure "helper start failure leaves the previous APK installed"
+assert_contains 'new root helper failed its capability check; the prior helper was restored' "helper start failure names the rollback outcome"
+assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "helper start failure stops before APK replacement"
+assert_log_contains 'hapaneld-helper\.txn rollback-system' "system helper capability failure invokes its rollback journal"
+
+MOCK_HELPER_INSTALL=fail \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_failure "helper staging failure leaves the previous APK installed"
+assert_contains 'root-helper install failed' "helper staging failure names the incomplete migration"
+assert_log_contains 'hapaneld-helper\.txn rollback-system' "failed system transaction preserves or restores the prior helper"
+assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "failed helper staging does not replace the APK"
+
+MOCK_SYSTEM_WRITABLE=0 MOCK_HELPER_CAPABILITY=fail \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_failure "systemless helper capability failure leaves the previous APK installed"
+assert_contains 'new root helper failed its capability check; the prior helper was restored' "systemless capability failure reports verified rollback"
+assert_log_contains 'hapaneld-helper\.txn rollback-systemless' "systemless capability failure invokes its rollback journal"
+assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "systemless capability failure stops before APK replacement"
+
+MOCK_SYSTEM_WRITABLE=0 MOCK_HELPER_INSTALL=fail \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_failure "systemless helper install failure leaves the previous APK installed"
+assert_contains 'systemless root-helper install failed; the prior helper was preserved or restored' "systemless install failure reports its rollback outcome"
+assert_log_contains 'hapaneld-helper\.txn rollback-systemless' "failed systemless transaction invokes its rollback journal"
+assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "failed systemless transaction does not replace the APK"
+
+MOCK_HELPER_BUILD_ID_MATCH=fail \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_failure "helper build-identity mismatch leaves the previous APK installed"
+assert_contains 'failed its exact build-identity check; the prior helper was restored' "helper identity mismatch reports verified rollback"
+assert_log_contains 'helper-probe BUILDID' "provisioning probes the running daemon build identity"
+assert_log_contains 'hapaneld-helper\.txn rollback-system' "helper identity mismatch invokes the rollback journal"
+assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "helper identity mismatch stops before APK replacement"
+
+MOCK_HELPER_CAPABILITY=fail MOCK_ROLLBACK_RESULT=fail \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_failure "missing or invalid recovery snapshot fails closed"
+assert_contains 'rollback could not be verified' "unverifiable recovery is reported without claiming restoration"
+assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "unverifiable recovery still stops before APK replacement"
+
+MOCK_APK_INSTALL=fail \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_failure "APK package-manager failure rolls back the already-verified new helper"
+assert_contains 'prior root helper was restored and verified' "APK failure reports helper rollback"
+assert_log_contains 'hapaneld-helper\.txn rollback-system' "APK failure invokes the retained helper rollback journal"
+assert_not_contains 'hapaneld-helper\.txn commit-system' "$MOCK_CALL_LOG" "APK failure never commits helper recovery"
+
+MOCK_SYSTEM_WRITABLE=0 MOCK_APK_INSTALL=fail \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_failure "APK failure also rolls back a systemless helper upgrade"
+assert_contains 'prior root helper was restored and verified' "systemless APK failure reports helper rollback"
+assert_log_contains 'hapaneld-helper\.txn rollback-systemless' "systemless APK failure invokes the retained rollback journal"
+assert_not_contains 'hapaneld-helper\.txn commit-systemless' "$MOCK_CALL_LOG" "systemless APK failure never commits helper recovery"
+
+MOCK_APK_INSTALL=ambiguous_commit \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_success "transport loss after package-manager commit is reconciled from exact installed APK bytes"
+assert_contains 'exact target APK bytes are installed; completing the helper transaction' "ambiguous install success explains the exact-byte reconciliation"
+assert_log_contains '^adb .* shell pm path io\.github\.maxlyth\.hapaneld$' "ambiguous install outcome queries the installed package path"
+assert_log_contains '^adb .* pull /data/app/io\.github\.maxlyth\.hapaneld/base\.apk ' "ambiguous install outcome authenticates the installed base APK"
+assert_log_contains 'hapaneld-helper\.txn commit-system' "confirmed package-manager commit also commits helper recovery"
+assert_not_contains 'hapaneld-helper\.txn rollback-system' "$MOCK_CALL_LOG" "confirmed package-manager commit never rolls the matching helper back"
+
+MOCK_APK_INSTALL=fail MOCK_APK_QUERY=fail \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_failure "unqueryable package-manager outcome retains helper recovery without rollback"
+assert_contains 'adb install outcome is ambiguous; helper recovery was retained without rollback' "unqueryable install outcome gives the safe retry path"
+assert_not_contains 'hapaneld-helper\.txn (rollback|commit)-system' "$MOCK_CALL_LOG" "unqueryable install outcome neither rolls back nor commits the helper journal"
+
+helper_release_apk_sha="$(/usr/bin/sha256sum "$HELPER_RELEASE_APK" | awk '{print $1}')"
+MOCK_STALE_TRANSACTION=1 \
+MOCK_INSTALLED_APK_SOURCE="$HELPER_RELEASE_APK" \
+MOCK_STALE_APK_SHA256="$helper_release_apk_sha" \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_success "rerun commits a stale helper journal when the exact target APK is already installed"
+assert_log_contains 'hapaneld-helper\.txn status-system' "stale transaction reads its durable target identity"
+assert_log_contains '^adb .* pull /data/app/io\.github\.maxlyth\.hapaneld/base\.apk ' "stale transaction authenticates the installed APK bytes"
+assert_log_contains 'helper-probe COMPANIONCAPS' "stale committed transaction rechecks the privileged protocol"
+assert_log_contains 'helper-probe BUILDID' "stale committed transaction rechecks the recorded helper build"
+assert_log_contains 'hapaneld-helper\.txn commit-system' "stale committed transaction discards obsolete recovery"
+assert_not_contains 'hapaneld-helper\.txn rollback-system' "$MOCK_CALL_LOG" "stale committed transaction does not restore the superseded helper"
+
+MOCK_STALE_TRANSACTION=1 \
+MOCK_INSTALLED_APK_SOURCE="$RELEASE_APK" \
+MOCK_STALE_APK_SHA256="$helper_release_apk_sha" \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_success "rerun rolls back a stale helper journal when the target APK was never installed"
+assert_log_contains 'hapaneld-helper\.txn rollback-system' "stale pre-APK transaction restores the prior helper before retrying"
+rollback_line="$(grep -n 'hapaneld-helper\.txn rollback-system' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
+retry_install_line="$(grep -nE '^adb .* install( |$)' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
+if [ -n "$rollback_line" ] && [ -n "$retry_install_line" ] && [ "$rollback_line" -lt "$retry_install_line" ]; then
+  pass "stale pre-APK recovery completes before the new package install"
+else
+  fail_test "stale pre-APK recovery completes before the new package install"
+fi
+
+MOCK_STALE_TRANSACTION=1 \
+MOCK_INSTALLED_APK_SOURCE="$RELEASE_APK" \
+MOCK_STALE_APK_SHA256="$helper_release_apk_sha" \
+MOCK_STALE_BUILD_ID=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_failure "stale journal with a superseded running helper fails without destructive rollback"
+assert_contains 'could not be reconciled safely' "superseded stale helper reports the ambiguous compatibility state"
+assert_contains 'No rollback was attempted' "superseded stale helper states the non-destructive outcome"
+assert_not_contains 'hapaneld-helper\.txn (rollback|commit)-system' "$MOCK_CALL_LOG" "superseded stale helper leaves recovery evidence intact"
+assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "superseded stale helper stops before another APK replacement"
+
+release_metadata_build_id=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+MOCK_HELPER_BUILD_ID="$release_metadata_build_id" \
+MOCK_RELEASE_PROVISION_BUILD_ID="$release_metadata_build_id" \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_success "moving-checkout provisioning uses the authenticated release helper identity"
+assert_log_contains 'ha-paneld-provision-v0\.9\.4-rc1\.sh -o ' "moving-checkout provisioning downloads the matching versioned provisioner"
+assert_log_contains 'ha-paneld-provision-v0\.9\.4-rc1\.sh\.sha256 -o ' "moving-checkout provisioning downloads the provisioner checksum"
+assert_log_contains 'ha-paneld-provision-v0\.9\.4-rc1\.sh\.sha256\.sig -o ' "moving-checkout provisioning downloads the provisioner signature"
+assert_log_contains "helper-probe BUILDID" "moving-checkout provisioning checks the release-recorded build identity"
+assert_not_contains "$release_metadata_build_id" "$ROOT/helper/source-id.sh" "release metadata test identity differs from the current checkout identity"
+
+MOCK_RELEASE_PROVISION_BUILD_ID=missing \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_failure "signed provisioner without an exact helper identity fails closed"
+assert_contains 'expected root-helper build identity is unavailable' "missing release helper identity names the packaging failure"
+assert_not_contains '/data/local/tmp/hapaneld-helper|^adb .* install( |$)' "$MOCK_CALL_LOG" "missing release helper identity stops before privileged staging or APK replacement"
+
+MOCK_SU_DIALECT=shc \
+  run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "root-helper transaction works through an exec-style vendor su dialect"
+assert_log_contains 'su 0 sh -c .*hapaneld-helper\.txn install-system' "vendor su executes only the staged transaction path"
+
+caps_line="$(grep -n '^helper-probe COMPANIONCAPS$' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
+build_id_line="$(grep -n '^helper-probe BUILDID$' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
+app_line="$(grep -nE '^adb .* install( |$)' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
+commit_line="$(grep -n 'hapaneld-helper\.txn commit-system' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
+if [ -n "$caps_line" ] && [ -n "$build_id_line" ] && [ -n "$app_line" ] && [ -n "$commit_line" ] && \
+   [ "$caps_line" -lt "$build_id_line" ] && [ "$build_id_line" -lt "$app_line" ] && [ "$app_line" -lt "$commit_line" ]; then
+  pass "exact helper capability and build identity succeed before APK replacement and recovery commits afterward"
+else
+  fail_test "exact helper capability and build identity succeed before APK replacement and recovery commits afterward"
+fi
 
 # Official release assets are authenticated before the first install, launch, or privilege grant
 # whenever Android Build-Tools are present. The fixtures expose both apksigner and aapt.
@@ -769,6 +1044,100 @@ bash "$PROVISION" --help > "$LAST_OUTPUT" 2>&1
 LAST_STATUS=$?
 assert_success "provisioner exposes help without requiring a panel"
 assert_contains '^ *--shizuku +Install/start pinned Shizuku' "provisioner help advertises enhanced-access setup"
+
+RELEASE_WORKFLOW="$ROOT/.github/workflows/release.yml"
+LAST_OUTPUT="$TMP/release-workflow-contract.txt"
+cp "$RELEASE_WORKFLOW" "$LAST_OUTPUT"
+if grep -Fq 'release-input/hapaneld-helper-armeabi-v7a' "$RELEASE_WORKFLOW" && \
+   grep -Fq 'release-input/hapaneld-helper-arm64-v8a' "$RELEASE_WORKFLOW"; then
+  pass "release workflow builds both supported helper ABIs"
+else
+  fail_test "release workflow builds both supported helper ABIs"
+fi
+if grep -Fq 'armv7a-linux-androideabi26-clang' "$RELEASE_WORKFLOW" && \
+   grep -Fq 'aarch64-linux-android26-clang' "$RELEASE_WORKFLOW" && \
+   ! grep -Fq 'android27-clang' "$RELEASE_WORKFLOW"; then
+  pass "release workflow aligns both helper assets with the app API 26 floor"
+else
+  fail_test "release workflow aligns both helper assets with the app API 26 floor"
+fi
+if grep -Fq 'make -C helper clean test contract' "$RELEASE_WORKFLOW"; then
+  pass "release tags rerun privileged helper boundary and app-contract gates before asset build"
+else
+  fail_test "release tags rerun privileged helper boundary and app-contract gates before asset build"
+fi
+snapshot_line="$(grep -n 'old_bin_record=.*snapshot /system/bin/hapaneld-helper ' "$PROVISION" | head -1 | cut -d: -f1)"
+marker_line="$(grep -n '} > "\$marker.new"' "$PROVISION" | head -1 | cut -d: -f1)"
+pre_marker_sync_line="$(awk -v after="$marker_line" 'NR > after && /sync \|\| return 1/{print NR; exit}' "$PROVISION")"
+marker_move_line="$(grep -n 'mv -f "\$marker.new" "\$marker"' "$PROVISION" | head -1 | cut -d: -f1)"
+post_marker_sync_line="$(awk -v after="$marker_move_line" 'NR > after && /sync \|\| return 1/{print NR; exit}' "$PROVISION")"
+retire_alt_line="$(grep -n '/data/adb/hapaneld/hapaneld-helper /data/adb/service.d/hapaneld-helper.sh' "$PROVISION" | head -1 | cut -d: -f1)"
+if [ -n "$snapshot_line" ] && [ -n "$marker_line" ] && [ -n "$retire_alt_line" ] && \
+   [ -n "$pre_marker_sync_line" ] && [ -n "$marker_move_line" ] && [ -n "$post_marker_sync_line" ] && \
+   [ "$snapshot_line" -lt "$marker_line" ] && [ "$marker_line" -lt "$pre_marker_sync_line" ] && \
+   [ "$pre_marker_sync_line" -lt "$marker_move_line" ] && [ "$marker_move_line" -lt "$post_marker_sync_line" ] && \
+   [ "$post_marker_sync_line" -lt "$retire_alt_line" ] && \
+   grep -Fq 'root_owned "$recovery"' "$PROVISION" && \
+   grep -Fq 'OLD_BIN_SHA256=$old_bin_sha' "$PROVISION" && \
+   grep -Fq '[ "$(file_sha256 "$recovery")" = "$expected" ]' "$PROVISION"; then
+  pass "system migration durably verifies hashed root-owned recovery before journaling and retirement"
+else
+  fail_test "system migration durably verifies hashed root-owned recovery before journaling and retirement"
+fi
+if grep -Fq 'echo JOURNAL_VERSION=1' "$PROVISION" && \
+   grep -Fq 'echo JOURNAL_SCOPE=APK_HELPER' "$PROVISION" && \
+   grep -Fq 'echo TARGET_HELPER_SHA256=@BIN_SHA256@' "$PROVISION" && \
+   grep -Fq '[ ! -f /system/bin/.hapaneld-helper-manual-upgrade ]' "$PROVISION" && \
+   grep -Fq 'incomplete standalone root-helper installation must be recovered first' "$PROVISION"; then
+  pass "provisioning uses a versioned APK-coupled journal and rejects the separate standalone journal"
+else
+  fail_test "provisioning uses a versioned APK-coupled journal and rejects the separate standalone journal"
+fi
+commit_marker_line="$(grep -n 'rm -f "\$marker" || return 1' "$PROVISION" | tail -2 | head -1 | cut -d: -f1)"
+commit_sync_line="$(awk -v after="$commit_marker_line" 'NR > after && /sync \|\| return 1/{print NR; exit}' "$PROVISION")"
+commit_recovery_line="$(awk -v after="$commit_sync_line" 'NR > after && index($0, "rm -f /system/bin/hapaneld-helper.hapaneld-recovery"){print NR; exit}' "$PROVISION")"
+if [ -n "$commit_marker_line" ] && [ -n "$commit_sync_line" ] && [ -n "$commit_recovery_line" ] && \
+   [ "$commit_marker_line" -lt "$commit_sync_line" ] && [ "$commit_sync_line" -lt "$commit_recovery_line" ]; then
+  pass "helper commit durably removes the journal before deleting recovery snapshots"
+else
+  fail_test "helper commit durably removes the journal before deleting recovery snapshots"
+fi
+if grep -Fq 'helper_build_id="$(helper/source-id.sh)"' "$RELEASE_WORKFLOW" && \
+   grep -Fq -- '-DHAPANELD_BUILD_ID=' "$RELEASE_WORKFLOW" && \
+   grep -Fq 'RELEASE_HELPER_BUILD_ID=' "$RELEASE_WORKFLOW" && \
+   grep -Fq 'HELPER_BUILD_ID' "$RELEASE_WORKFLOW"; then
+  pass "release helpers and provisioner share one deterministic full-source build identity"
+else
+  fail_test "release helpers and provisioner share one deterministic full-source build identity"
+fi
+if grep -Fq 'cmp release-input/hapaneld-helper-armeabi-v7a app/src/main/assets/hapaneld-helper-arm' "$RELEASE_WORKFLOW" && \
+   grep -Fq 'cmp release-input/hapaneld-helper-arm64-v8a app/src/main/assets/hapaneld-helper-arm64' "$RELEASE_WORKFLOW"; then
+  pass "release workflow proves standalone privileged assets are byte-identical to the APK bundle"
+else
+  fail_test "release workflow proves standalone privileged assets are byte-identical to the APK bundle"
+fi
+if grep -Fq 'hapaneld-helper-arm64-v8a \' "$RELEASE_WORKFLOW" && \
+   grep -Fq 'hapaneld-helper-armeabi-v7a \' "$RELEASE_WORKFLOW" && \
+   grep -Fq 'sha256sum "$helper_arm_name"' "$RELEASE_WORKFLOW" && \
+   grep -Fq 'sha256sum "$helper_arm64_name"' "$RELEASE_WORKFLOW"; then
+  pass "release workflow seals both helper inputs and publishes checksums"
+else
+  fail_test "release workflow seals both helper inputs and publishes checksums"
+fi
+if grep -Fq 'for helper_name in "$helper_arm_name" "$helper_arm64_name"' "$RELEASE_WORKFLOW" && \
+   grep -Fq '"dist/$helper_name.sha256.sig"' "$RELEASE_WORKFLOW"; then
+  pass "release workflow signs both helper checksum records"
+else
+  fail_test "release workflow signs both helper checksum records"
+fi
+if grep -Fq 'release_key_digest=$(openssl pkey -pubin -in "$public_key" -outform DER | sha256sum' "$RELEASE_WORKFLOW" && \
+   grep -Fq "awk '/^-----BEGIN PUBLIC KEY-----$/{copy=1}" "$RELEASE_WORKFLOW" && \
+   grep -Fq 'embedded_key_digest=$(openssl pkey -pubin -in "$embedded_key" -outform DER | sha256sum' "$RELEASE_WORKFLOW" && \
+   grep -Fq 'if [ "$embedded_key_digest" != "$release_key_digest" ]; then' "$RELEASE_WORKFLOW"; then
+  pass "release signing fails before publication when installer trust keys drift from the keystore"
+else
+  fail_test "release signing fails before publication when installer trust keys drift from the keystore"
+fi
 
 printf '1..%d\n' "$((passes + failures))"
 if [ "$failures" -ne 0 ]; then

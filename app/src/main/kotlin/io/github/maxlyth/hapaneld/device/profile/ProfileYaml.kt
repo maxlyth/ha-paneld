@@ -17,6 +17,7 @@ import org.snakeyaml.engine.v2.schema.JsonSchema
 internal data class ProfileParseResult(
     val document: ProfileDocument?,
     val contentSha256: String,
+    val sourceBytes: Int,
     val issues: List<ProfileIssue>,
 )
 
@@ -45,30 +46,34 @@ internal object ProfileYaml {
     )
 
     fun parse(raw: String): ProfileParseResult {
-        val hash = sha256(raw)
-        if (raw.toByteArray(StandardCharsets.UTF_8).size > ProfileMetadata.MAX_BYTES) {
-            return ProfileParseResult(null, hash, listOf(error("$", "Profile exceeds ${ProfileMetadata.MAX_BYTES} bytes.")))
+        // Encode once: the old parse path allocated the complete UTF-8 document separately for hashing
+        // and the size bound. The byte count also lets feature-cost telemetry avoid a third allocation.
+        val encoded = raw.toByteArray(StandardCharsets.UTF_8)
+        val hash = sha256(encoded)
+        if (encoded.size > ProfileMetadata.MAX_BYTES) {
+            return ProfileParseResult(null, hash, encoded.size, listOf(error("$", "Profile exceeds ${ProfileMetadata.MAX_BYTES} bytes.")))
         }
-        preflight(raw)?.let { issue -> return ProfileParseResult(null, hash, listOf(issue)) }
+        preflight(raw)?.let { issue -> return ProfileParseResult(null, hash, encoded.size, listOf(issue)) }
         val root = try {
             val values = load.loadAllFromString(raw).iterator()
-            if (!values.hasNext()) return ProfileParseResult(null, hash, listOf(error("$", "Profile is empty.")))
+            if (!values.hasNext()) return ProfileParseResult(null, hash, encoded.size, listOf(error("$", "Profile is empty.")))
             val first = values.next()
-            if (values.hasNext()) return ProfileParseResult(null, hash, listOf(error("$", "Exactly one YAML document is allowed.")))
+            if (values.hasNext()) return ProfileParseResult(null, hash, encoded.size, listOf(error("$", "Exactly one YAML document is allowed.")))
             first
         } catch (failure: RuntimeException) {
             return ProfileParseResult(
                 null,
                 hash,
+                encoded.size,
                 listOf(error("$", "Invalid YAML: ${safeMessage(failure)}")),
             )
         } catch (_: StackOverflowError) {
-            return ProfileParseResult(null, hash, listOf(error("$", "YAML nesting is too deep.")))
+            return ProfileParseResult(null, hash, encoded.size, listOf(error("$", "YAML nesting is too deep.")))
         }
         val issues = mutableListOf<ProfileIssue>()
         audit(root, "$", 0, issues)
         if (issues.any { it.severity == ProfileIssueSeverity.ERROR }) {
-            return ProfileParseResult(null, hash, issues)
+            return ProfileParseResult(null, hash, encoded.size, issues)
         }
         val reader = SchemaReader(issues)
         val map = reader.map(root, "$", ROOT_KEYS)
@@ -76,14 +81,17 @@ internal object ProfileYaml {
         return ProfileParseResult(
             document = document.takeIf { issues.none { issue -> issue.severity == ProfileIssueSeverity.ERROR } },
             contentSha256 = hash,
+            sourceBytes = encoded.size,
             issues = issues,
         )
     }
 
     fun serialize(document: ProfileDocument): String = dump.dumpToString(document.toYamlMap())
 
-    fun sha256(raw: String): String = MessageDigest.getInstance("SHA-256")
-        .digest(raw.toByteArray(StandardCharsets.UTF_8))
+    fun sha256(raw: String): String = sha256(raw.toByteArray(StandardCharsets.UTF_8))
+
+    private fun sha256(bytes: ByteArray): String = MessageDigest.getInstance("SHA-256")
+        .digest(bytes)
         .joinToString("") { "%02x".format(it) }
 
     private fun audit(value: Any?, path: String, depth: Int, issues: MutableList<ProfileIssue>) {

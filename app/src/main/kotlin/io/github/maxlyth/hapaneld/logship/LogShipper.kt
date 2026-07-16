@@ -2,6 +2,10 @@ package io.github.maxlyth.hapaneld.logship
 
 import android.util.Log
 import io.github.maxlyth.hapaneld.Config
+import io.github.maxlyth.hapaneld.metrics.FeatureCostOperation
+import io.github.maxlyth.hapaneld.metrics.FeatureCostOutcome
+import io.github.maxlyth.hapaneld.metrics.FeatureCostRegistry
+import io.github.maxlyth.hapaneld.metrics.FeatureCosts
 import io.github.maxlyth.hapaneld.util.Json
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -56,6 +60,7 @@ internal fun interface LogSinkFactory {
 internal class LogShipRun(
     val target: LogShipTarget,
     queueCapacity: Int,
+    private val onDropped: ((Long) -> Unit)? = null,
 ) : AutoCloseable {
     data class Status(val connected: Boolean, val sent: Long, val dropped: Long, val lastError: String?)
 
@@ -96,6 +101,7 @@ internal class LogShipRun(
         if (!queue.offer(line)) {
             queue.poll()
             dropped.incrementAndGet()
+            onDropped?.invoke(1)
             queue.offer(line)
         }
     }
@@ -129,7 +135,10 @@ internal class LogShipRun(
     }
 
     fun recordDropped(count: Int) {
-        if (count > 0) dropped.addAndGet(count.toLong())
+        if (count > 0) {
+            dropped.addAndGet(count.toLong())
+            onDropped?.invoke(count.toLong())
+        }
     }
 
     fun status(): Status = Status(connected, sent.get(), dropped.get(), lastError)
@@ -170,6 +179,7 @@ class LogShipper internal constructor(
     private val scope: CoroutineScope,
     private val subscribeCapture: ((String) -> Unit) -> AutoCloseable,
     private val sinkFactory: LogSinkFactory,
+    private val featureCosts: FeatureCostRegistry = FeatureCosts.registry,
 ) {
     constructor(config: Config, scope: CoroutineScope, capture: LogCapture) : this(
         configSnapshot = {
@@ -231,7 +241,12 @@ class LogShipper internal constructor(
     }
 
     private fun startLocked(target: LogShipTarget) {
-        val candidate = LogShipRun(target, QUEUE_CAP)
+        val onDropped: ((Long) -> Unit)? = if (featureCosts.recordingEnabled) {
+            { dropped -> featureCosts.recordDropped(FeatureCostOperation.LOG_SHIP_BATCH, dropped) }
+        } else {
+            null
+        }
+        val candidate = LogShipRun(target, QUEUE_CAP, onDropped)
         run = candidate
         try {
             candidate.bindSubscription(subscribeCapture(candidate::offer))
@@ -246,7 +261,8 @@ class LogShipper internal constructor(
 
     private suspend fun CoroutineScope.shipLoop(run: LogShipRun) {
         val target = run.target
-        val batchMax = if (target.protocol == "http") BATCH_MAX else 1
+        val batchMax =
+            if (featureCosts.recordingEnabled || target.protocol == "http") BATCH_MAX else 1
         val encode: (String) -> String = if (target.protocol == "http") {
             { line -> jsonEvent(line, target.panelId) }
         } else {
@@ -266,14 +282,29 @@ class LogShipper internal constructor(
                 while (isActive && run.isOpen()) {
                     val batch = run.takeBatch(batchMax, POLL_SECONDS)
                     if (batch.isEmpty()) continue
+                    val cost = featureCosts.beginSynchronous(FeatureCostOperation.LOG_SHIP_BATCH)
+                    var outcome = FeatureCostOutcome.SUCCESS
                     try {
                         candidate.send(batch)
                         run.recordSent(batch.size)
                         run.markConnected()
                     } catch (e: Exception) {
+                        outcome = FeatureCostOutcome.FAILURE
                         // The batch left the bounded queue and will not be retried, so account for its loss.
                         run.recordDropped(batch.size)
                         throw e
+                    } finally {
+                        featureCosts.finishSynchronous(
+                            FeatureCostOperation.LOG_SHIP_BATCH,
+                            cost,
+                            outcome = outcome,
+                            workUnits = batch.size.toLong(),
+                            workBytes = if (featureCosts.recordingEnabled) {
+                                boundedUtf8Bytes(batch, SHIP_WORK_BYTES_MAX)
+                            } else {
+                                0L
+                            },
+                        )
                     }
                 }
             } catch (e: Exception) {
@@ -322,6 +353,7 @@ class LogShipper internal constructor(
         private const val APP = "ha-paneld"
         private const val QUEUE_CAP = 4000
         private const val BATCH_MAX = 200
+        private const val SHIP_WORK_BYTES_MAX = 4L * 1024 * 1024
         private const val POLL_SECONDS = 5L
         private const val SINK_BACKOFF_MS = 5_000L
         internal const val NETWORK_TIMEOUT_MS = 5_000

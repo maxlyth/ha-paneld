@@ -3,6 +3,9 @@ package io.github.maxlyth.hapaneld.control
 import android.util.Log
 import io.github.maxlyth.hapaneld.Config
 import io.github.maxlyth.hapaneld.sensors.SensorTrace
+import io.github.maxlyth.hapaneld.metrics.FeatureCostOperation
+import io.github.maxlyth.hapaneld.metrics.FeatureCostOutcome
+import io.github.maxlyth.hapaneld.metrics.FeatureCosts
 import kotlin.math.abs
 import kotlin.math.ln
 import kotlin.math.max
@@ -31,29 +34,86 @@ import kotlin.math.roundToInt
 class AutoBrightnessController(
     private val brightness: BrightnessController,
     private val config: Config,
+    actuationGate: ((() -> Unit) -> Boolean) = { action -> action(); true },
 ) {
-    private val engine = AutoBrightnessEngine()
+    private val actuator = AutoBrightnessActuator(
+        enabled = { config.autoBrightness },
+        writable = brightness::canWrite,
+        bias = { config.brightnessBias },
+        actuationGate = actuationGate,
+        applyBrightness = brightness::setBrightness,
+    )
 
     /** Feed one lux sample (ALS or HA-fed). Drives the backlight only when enabled + writable; always
      *  records to [SensorTrace] (raw lux always; smoothed/target/applied when the engine is active). */
     fun submitLux(lux: Float) {
-        val enabled = config.autoBrightness
-        val sample = engine.submit(
-            lux = lux,
-            enabled = enabled,
-            writable = enabled && brightness.canWrite(),
-            bias = config.brightnessBias,
-        ) ?: return
-        sample.toSet?.let {
-            brightness.setBrightness(it)
-            Log.d(TAG, "lux≈${sample.smoothed?.roundToInt()} -> brightness $it (bias ${config.brightnessBias})")
+        val cost = FeatureCosts.registry.beginSynchronous(FeatureCostOperation.AUTO_BRIGHTNESS_APPLY)
+        var outcome = FeatureCostOutcome.SUCCESS
+        var workUnits = 0L
+        var sample: AutoBrightnessSample? = null
+        try {
+            sample = actuator.submitLux(lux)
+            if (sample == null) {
+                outcome = FeatureCostOutcome.REJECTED
+            } else {
+                workUnits = if (sample.toSet != null) 1 else 0
+            }
+        } catch (failure: Exception) {
+            outcome = FeatureCostOutcome.FAILURE
+            throw failure
+        } finally {
+            FeatureCosts.registry.finishSynchronous(
+                FeatureCostOperation.AUTO_BRIGHTNESS_APPLY,
+                cost,
+                outcome = outcome,
+                workUnits = workUnits,
+            )
         }
-        SensorTrace.recordLux(lux, sample.smoothed, sample.target, sample.applied)
+        val accepted = sample ?: return
+        accepted.toSet?.let {
+            Log.d(TAG, "lux≈${accepted.smoothed?.roundToInt()} -> brightness $it (bias ${config.brightnessBias})")
+        }
+        SensorTrace.recordLux(lux, accepted.smoothed, accepted.target, accepted.applied)
+    }
+
+    /** Reconcile the most recent valid lux after a physical wake. */
+    fun reapplyLatest() {
+        actuator.latestLux()?.let(::submitLux)
     }
 
     companion object {
         private const val TAG = "ha-paneld/autobright"
     }
+}
+
+/** One serialized compute+actuate authority shared by ALS and HA-fed samples. */
+internal class AutoBrightnessActuator(
+    private val enabled: () -> Boolean,
+    private val writable: () -> Boolean,
+    private val bias: () -> Int,
+    private val actuationGate: ((() -> Unit) -> Boolean),
+    private val applyBrightness: (Int) -> Unit,
+    private val engine: AutoBrightnessEngine = AutoBrightnessEngine(),
+) {
+    private var latest = Float.NaN
+
+    @Synchronized
+    fun submitLux(lux: Float): AutoBrightnessSample? {
+        if (!lux.isFinite() || lux < 0f) return null
+        latest = lux
+        val isEnabled = enabled()
+        if (!isEnabled) return engine.submit(lux, enabled = false, writable = false, bias = bias())
+        if (!writable()) return engine.submit(lux, enabled = true, writable = false, bias = bias())
+
+        var sample: AutoBrightnessSample? = null
+        val admitted = actuationGate {
+            sample = engine.submit(lux, enabled = true, writable = true, bias = bias())
+            sample?.toSet?.let(applyBrightness)
+        }
+        return if (admitted) sample else AutoBrightnessSample()
+    }
+
+    @Synchronized fun latestLux(): Float? = latest.takeIf { it.isFinite() && it >= 0f }
 }
 
 /** Pure, serialized auto-brightness policy; Android/config access stays in [AutoBrightnessController]. */

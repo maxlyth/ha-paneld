@@ -96,6 +96,11 @@
   var burger = document.getElementById('navburger');
   var hdr = document.querySelector('.hdr');
 
+  function setMenuOpen(open) {
+    body.classList.toggle('nav-open', !!open);
+    if (burger) burger.setAttribute('aria-expanded', open ? 'true' : 'false');
+  }
+
   // Collapse the tab bar into the hamburger when it can't fit one line.
   function fitNav() {
     if (!nav || !burger) return;
@@ -104,7 +109,7 @@
     var overflow = nav.scrollWidth > nav.clientWidth + 1;
     nav.classList.remove('nav-measure');
     body.classList.toggle('nav-collapsed', overflow);
-    if (!overflow) body.classList.remove('nav-open');   // fits again -> ensure the menu is closed
+    if (!overflow) setMenuOpen(false);                 // fits again -> ensure the menu is closed
   }
 
   // Prevent horizontal overflow of the (nowrap) header by dropping items in priority order until it
@@ -123,11 +128,19 @@
   function fitAll() { fitNav(); fitHeader(); }   // nav first — the hamburger changes the header's width
 
   if (burger) {
+    burger.setAttribute('aria-expanded', 'false');
+    if (nav && !nav.id) nav.id = 'primary-navigation';
+    burger.setAttribute('aria-controls', nav && nav.id ? nav.id : 'primary-navigation');
     burger.addEventListener('click', function (e) {
       e.stopPropagation();                       // don't let the document handler immediately re-close it
-      body.classList.toggle('nav-open');
+      setMenuOpen(!body.classList.contains('nav-open'));
     });
-    document.addEventListener('click', function () { body.classList.remove('nav-open'); }); // outside tap closes
+    document.addEventListener('click', function () { setMenuOpen(false); }); // outside tap closes
+    document.addEventListener('keydown', function (event) {
+      if (event.key !== 'Escape' || !body.classList.contains('nav-open')) return;
+      setMenuOpen(false);
+      burger.focus();
+    });
   }
   var t;
   window.addEventListener('resize', function () { clearTimeout(t); t = setTimeout(fitAll, 120); });

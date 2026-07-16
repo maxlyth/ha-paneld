@@ -30,6 +30,10 @@ interface Daemon {
 
     /** Send one command and read the full binary reply (e.g. a `SCREENCAP` PNG), or null. */
     fun sendBytes(cmd: String): ByteArray?
+
+    /** Bounded binary reply variant; production transports enforce this while streaming. */
+    fun sendBytesBounded(cmd: String, maxBytes: Long): ByteArray? =
+        sendBytes(cmd)?.takeIf { it.size.toLong() <= maxBytes }
 }
 
 sealed interface DaemonLongResult {

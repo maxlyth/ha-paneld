@@ -7,8 +7,11 @@
 #   curl -fsSL https://raw.githubusercontent.com/maxlyth/ha-paneld/main/scripts/install.sh | bash -s -- --prerelease
 #
 # Preflights adb + curl (with per-OS fix-it hints), prompts for the panel IP (and optional id / MQTT
-# broker), downloads the release, and provisions the panel. No parameters required (except --prerelease).
-# The release workflow fills RELEASE_TAG, RELEASE_APK_NAME and PROVISION_COMMIT in its downloadable copy so an installer attached to a historical release always installs that exact release using its matching authenticated provisioner asset.
+# broker), downloads the release, and provisions the panel. On rooted panels the authenticated
+# provisioner also installs or upgrades the matching sealed root-helper asset. No parameters required
+# (except --prerelease). The release workflow fills RELEASE_TAG, RELEASE_APK_NAME and PROVISION_COMMIT
+# in its downloadable copy so an installer attached to a historical release always installs that exact
+# release using its matching authenticated provisioner asset.
 set -euo pipefail
 
 RELEASE_TAG=""

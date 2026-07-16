@@ -7,7 +7,7 @@ import org.junit.Test
 class PaneldServerConfigWiringTest {
     @Test fun httpRoutesEveryApplicableLiveSettingThroughTheSharedDispatcher() {
         assertEquals(
-            MqttBridge.APPLY_SETTING_KEYS - "silence_boot_chime",
+            MqttBridge.APPLY_SETTING_KEYS,
             PaneldServer.HTTP_LIVE_KEYS.toSet(),
         )
     }

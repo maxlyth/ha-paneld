@@ -6,6 +6,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 
 class PerfProjectionTest {
     private fun snapshot(
@@ -56,5 +57,14 @@ class PerfProjectionTest {
         assertFalse(PerfReader.withinActiveWindow(now = 10_000, lastAccess = 0))
         assertTrue(PerfReader.withinActiveWindow(now = 10_500, lastAccess = 10_000))
         assertFalse(PerfReader.withinActiveWindow(now = 9_000, lastAccess = 10_000))
+    }
+
+    @Test fun performanceProbesUseTheIsolatedBoundedRootLane() {
+        val source = listOf(
+            File("src/main/kotlin/io/github/maxlyth/hapaneld/http/PerfReader.kt"),
+            File("app/src/main/kotlin/io/github/maxlyth/hapaneld/http/PerfReader.kt"),
+        ).first(File::isFile).readText()
+        assertTrue(source.contains("Su.runOutputIsolatedBounded"))
+        assertFalse(source.contains("Su.runOutput("))
     }
 }

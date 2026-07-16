@@ -94,10 +94,33 @@ class EntityLearningProtocolTest {
 
     @Test fun observerAttributesInitialHydrationAndFlushesPromptly() {
         val script = EntityLearningProtocol.documentStartScript("https://example.test")
-        assertTrue(script.contains("JSON.stringify(event.a[k]).length"))
+        assertTrue(script.contains("if(window.top&&window.top!==window)return"))
+        assertTrue(script.contains("recordMetric(k,event.a[k])"))
+        assertTrue(script.contains("__ha_paneld_observer"))
         assertTrue(script.contains("m.id!==entitySubscriptionId"))
         assertTrue(script.contains("Array.isArray(decoded)?decoded:[decoded]"))
         assertTrue(script.contains("},5000);"))
+    }
+
+    @Test fun observerAcceptsThePermittedUpgradedSocketOrigin() {
+        val script = EntityLearningProtocol.documentStartScript(
+            "http://ha.example",
+            linkedSetOf("http://ha.example", "https://ha.example"),
+        )
+
+        assertTrue(script.contains("targetWsOrigins=[\"ws://ha.example\",\"wss://ha.example\"]"))
+        assertTrue(script.contains("targetWsOrigins.includes(u.origin)"))
+    }
+
+    @Test fun browserObserverEnvelopeBoundsPressureCounters() {
+        val envelope = EntityLearningProtocol.parseMetricEnvelope(
+            """{"sensor.room":[3,120],"__ha_paneld_observer":{"frames":4,"entities":7,"frame_chars":8192,"parse_us":2100,"stringify_us":900,"dropped":11,"coalesced":13}}""",
+        )
+
+        assertEquals(mapOf("sensor.room" to (3L to 120L)), envelope.metrics)
+        assertEquals(4L, envelope.observer?.frames)
+        assertEquals(11L, envelope.observer?.dropped)
+        assertEquals(13L, envelope.observer?.coalesced)
     }
 
     @Test fun dashboardScannerFindsNestedLiteralsActionsTargetsAndUnresolvedCustomLogic() {

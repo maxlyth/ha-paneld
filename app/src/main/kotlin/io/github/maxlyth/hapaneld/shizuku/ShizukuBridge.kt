@@ -9,12 +9,13 @@ import android.os.IBinder
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import io.github.maxlyth.hapaneld.BuildConfig
+import io.github.maxlyth.hapaneld.metrics.FeatureCostOperation
+import io.github.maxlyth.hapaneld.metrics.FeatureCostOutcome
+import io.github.maxlyth.hapaneld.metrics.FeatureCosts
 import io.github.maxlyth.hapaneld.platform.ShellPrivilege
 import rikka.shizuku.Shizuku
 import java.io.ByteArrayOutputStream
 import java.io.File
-import java.util.concurrent.Callable
-import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 /** Official Shizuku client adapter. No Shizuku type escapes this package. */
@@ -22,6 +23,7 @@ object ShizukuBridge : ShellPrivilege {
     private const val TAG = "ha-paneld/shizuku"
     private const val REQUEST_CODE = 41_907
     private const val SHORT_TIMEOUT_MS = 10_000L
+    private const val MAX_CLIENT_WORKERS = 2
 
     @Volatile var state: ShizukuState = ShizukuState.STOPPED
         private set
@@ -30,7 +32,7 @@ object ShizukuBridge : ShellPrivilege {
     @Volatile private var bindingGeneration = 0L
     @Volatile private var activeConnection: ServiceConnection? = null
     private lateinit var appContext: Context
-    private val executor = Executors.newCachedThreadPool { runnable ->
+    private val executor = BoundedCallExecutor(MAX_CLIENT_WORKERS) { runnable ->
         Thread(runnable, "hapaneld-shizuku-client").apply { isDaemon = true }
     }
 
@@ -126,34 +128,48 @@ object ShizukuBridge : ShellPrivilege {
     private fun connectionFor(generation: Long): ServiceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName, service: IBinder) {
             val candidate = IShizukuShellService.Stub.asInterface(service)
-            executor.execute {
-                val identityUsable = runCatching {
-                    ShizukuPolicy.usable(candidate.identityUid(), candidate.protocolVersion())
-                }.getOrDefault(false)
-                val managerTrusted = ShizukuManagerIdentity.status(appContext) ==
-                    ShizukuManagerIdentity.Status.TRUSTED
-                val accepted = synchronized(this@ShizukuBridge) {
-                    ShizukuPolicy.canAcceptBinding(
-                        callbackGeneration = generation,
-                        currentGeneration = bindingGeneration,
-                        connectionIsCurrent = activeConnection === this,
-                        consentEnabled = ShizukuConsent.enabled(appContext),
-                        managerTrusted = managerTrusted,
-                        identityUsable = identityUsable,
-                    ).also { allowed ->
-                        if (allowed) {
-                            remote = candidate
-                            state = ShizukuState.READY
+            val cost = FeatureCosts.registry.span(FeatureCostOperation.SHIZUKU_BIND)
+            val admitted = executor.execute {
+                try {
+                    val identityUsable = runCatching {
+                        ShizukuPolicy.usable(candidate.identityUid(), candidate.protocolVersion())
+                    }.getOrDefault(false)
+                    val managerTrusted = ShizukuManagerIdentity.status(appContext) ==
+                        ShizukuManagerIdentity.Status.TRUSTED
+                    val accepted = synchronized(this@ShizukuBridge) {
+                        ShizukuPolicy.canAcceptBinding(
+                            callbackGeneration = generation,
+                            currentGeneration = bindingGeneration,
+                            connectionIsCurrent = activeConnection === this,
+                            consentEnabled = ShizukuConsent.enabled(appContext),
+                            managerTrusted = managerTrusted,
+                            identityUsable = identityUsable,
+                        ).also { allowed ->
+                            if (allowed) {
+                                remote = candidate
+                                state = ShizukuState.READY
+                            }
                         }
                     }
+                    if (!accepted) {
+                        cost.outcome(FeatureCostOutcome.FAILURE)
+                        rejectBinding(
+                            this,
+                            generation,
+                            if (identityUsable) managerIdleState() else ShizukuState.INCOMPATIBLE,
+                        )
+                    }
+                } catch (error: Throwable) {
+                    cost.outcome(FeatureCostOutcome.FAILURE)
+                    throw error
+                } finally {
+                    cost.close()
                 }
-                if (!accepted) {
-                    rejectBinding(
-                        this,
-                        generation,
-                        if (identityUsable) managerIdleState() else ShizukuState.INCOMPATIBLE,
-                    )
-                }
+            }
+            if (!admitted) {
+                cost.outcome(FeatureCostOutcome.REJECTED).close()
+                Log.w(TAG, "binding identity check rejected: client executor saturated")
+                rejectBinding(this, generation, ShizukuState.ERROR)
             }
         }
 
@@ -203,10 +219,14 @@ object ShizukuBridge : ShellPrivilege {
     fun managerRunning(): Boolean = initialized &&
         ShizukuManagerIdentity.status(appContext) == ShizukuManagerIdentity.Status.TRUSTED &&
         runCatching { Shizuku.pingBinder() }.getOrDefault(false)
-    override fun uid(): Int? = call(SHORT_TIMEOUT_MS) { it.identityUid() }
+    override fun uid(): Int? = call(FeatureCostOperation.SHIZUKU_CALL, SHORT_TIMEOUT_MS) { it.identityUid() }
     override fun screenshot(): ByteArray? {
-        val fd = call(SHORT_TIMEOUT_MS) { it.captureScreenshot() } ?: return null
-        val future = executor.submit(Callable {
+        val cost = FeatureCosts.registry.span(FeatureCostOperation.SHIZUKU_SCREENSHOT)
+        val fd = call(FeatureCostOperation.SHIZUKU_CALL, SHORT_TIMEOUT_MS) { it.captureScreenshot() } ?: run {
+            cost.outcome(FeatureCostOutcome.FAILURE).close()
+            return null
+        }
+        val future = executor.submit {
             runCatching {
                 ParcelFileDescriptor.AutoCloseInputStream(fd).use { input ->
                     val out = ByteArrayOutputStream()
@@ -214,41 +234,52 @@ object ShizukuBridge : ShellPrivilege {
                     while (true) {
                         val read = input.read(buffer)
                         if (read < 0) break
-                        if (out.size() + read > ShizukuPolicy.MAX_SCREENSHOT_BYTES) return@Callable null
+                        if (out.size() + read > ShizukuPolicy.MAX_SCREENSHOT_BYTES) return@submit null
                         out.write(buffer, 0, read)
                     }
                     out.toByteArray().takeUnless { it.isEmpty() }
                 }
             }.getOrNull()
-        })
+        } ?: run {
+            runCatching { fd.close() }
+            cost.outcome(FeatureCostOutcome.REJECTED).close()
+            Log.w(TAG, "screenshot read rejected: client executor saturated")
+            return null
+        }
         return try {
-            future.get(ShizukuPolicy.clientDeadline(SHORT_TIMEOUT_MS), TimeUnit.MILLISECONDS)
+            future.get(ShizukuPolicy.clientDeadline(SHORT_TIMEOUT_MS), TimeUnit.MILLISECONDS).also { bytes ->
+                if (bytes == null) cost.outcome(FeatureCostOutcome.FAILURE)
+                else cost.work(units = 1L, bytes = bytes.size.toLong())
+            }
         } catch (e: Exception) {
+            cost.outcome(FeatureCostOutcome.FAILURE)
             runCatching { fd.close() }
             future.cancel(true)
             Log.w(TAG, "screenshot read failed", e)
             null
+        } finally {
+            cost.close()
         }
     }
 
     override fun inputKey(keyCode: Int): Boolean =
-        ShizukuPolicy.validKeyCode(keyCode) && call(SHORT_TIMEOUT_MS) { it.inputKey(keyCode) } == true
+        ShizukuPolicy.validKeyCode(keyCode) && call(FeatureCostOperation.SHIZUKU_CALL, SHORT_TIMEOUT_MS) { it.inputKey(keyCode) } == true
     override fun tap(x: Int, y: Int): Boolean =
         ShizukuPolicy.validCoordinate(x) && ShizukuPolicy.validCoordinate(y) &&
-            call(SHORT_TIMEOUT_MS) { it.inputTap(x, y) } == true
-    override fun density(): String? = call(SHORT_TIMEOUT_MS) { it.readDensity() }
+            call(FeatureCostOperation.SHIZUKU_CALL, SHORT_TIMEOUT_MS) { it.inputTap(x, y) } == true
+    override fun density(): String? = call(FeatureCostOperation.SHIZUKU_CALL, SHORT_TIMEOUT_MS) { it.readDensity() }
     override fun setDensity(dpi: Int): Boolean =
-        ShizukuPolicy.validDensity(dpi) && call(SHORT_TIMEOUT_MS) { it.setDensity(dpi) } == true
-    override fun resetDensity(): Boolean = call(SHORT_TIMEOUT_MS) { it.resetDensity() } == true
-    override fun fontScale(): String? = call(SHORT_TIMEOUT_MS) { it.readFontScale() }
+        ShizukuPolicy.validDensity(dpi) && call(FeatureCostOperation.SHIZUKU_CALL, SHORT_TIMEOUT_MS) { it.setDensity(dpi) } == true
+    override fun resetDensity(): Boolean = call(FeatureCostOperation.SHIZUKU_CALL, SHORT_TIMEOUT_MS) { it.resetDensity() } == true
+    override fun fontScale(): String? = call(FeatureCostOperation.SHIZUKU_CALL, SHORT_TIMEOUT_MS) { it.readFontScale() }
     override fun setFontScale(scale: Float): Boolean =
-        ShizukuPolicy.validFontScale(scale) && call(SHORT_TIMEOUT_MS) { it.setFontScale(scale) } == true
-    override fun resetFontScale(): Boolean = call(SHORT_TIMEOUT_MS) { it.resetFontScale() } == true
+        ShizukuPolicy.validFontScale(scale) && call(FeatureCostOperation.SHIZUKU_CALL, SHORT_TIMEOUT_MS) { it.setFontScale(scale) } == true
+    override fun resetFontScale(): Boolean = call(FeatureCostOperation.SHIZUKU_CALL, SHORT_TIMEOUT_MS) { it.resetFontScale() } == true
 
     override fun installApk(apk: File, allowDowngrade: Boolean, timeoutMs: Long): String? {
         if (!ShizukuPolicy.validApkLength(apk.length())) return null
         val serviceDeadline = ShizukuPolicy.installServiceDeadline(timeoutMs) ?: return null
-        return call(serviceDeadline) { service ->
+        return call(FeatureCostOperation.SHIZUKU_INSTALL, serviceDeadline, workBytes = apk.length()) { service ->
             ParcelFileDescriptor.open(apk, ParcelFileDescriptor.MODE_READ_ONLY).use { fd ->
                 service.installApk(fd, apk.length(), allowDowngrade, serviceDeadline)
             }
@@ -264,11 +295,40 @@ object ShizukuBridge : ShellPrivilege {
         }
     }
 
-    private fun <T> call(timeoutMs: Long, block: (IShizukuShellService) -> T): T? {
-        val service = remote ?: return null
-        val future = executor.submit(Callable { block(service) })
+    private fun <T> call(
+        operation: FeatureCostOperation,
+        timeoutMs: Long,
+        workBytes: Long = 0L,
+        block: (IShizukuShellService) -> T,
+    ): T? {
+        val service = remote ?: run {
+            FeatureCosts.registry.span(operation).work(bytes = workBytes)
+                .outcome(FeatureCostOutcome.REJECTED).close()
+            return null
+        }
+        val callGeneration = bindingGeneration
+        // Measure inside the bounded worker. Caller-side timing mostly records a blocked Future wait
+        // and cannot observe Binder worker CPU; worker ownership captures actual active time/CPU and
+        // remains open until a timed-out Binder transaction really returns.
+        val future = executor.submit {
+            val cost = FeatureCosts.registry.span(operation).work(bytes = workBytes)
+            try {
+                block(service)
+            } catch (error: Throwable) {
+                cost.outcome(FeatureCostOutcome.FAILURE)
+                throw error
+            } finally {
+                cost.close()
+            }
+        } ?: run {
+            FeatureCosts.registry.span(operation).work(bytes = workBytes)
+                .outcome(FeatureCostOutcome.REJECTED).close()
+            Log.w(TAG, "operation rejected: client executor saturated")
+            return null
+        }
         return try {
-            future.get(ShizukuPolicy.clientDeadline(timeoutMs), TimeUnit.MILLISECONDS)
+            val result = future.get(ShizukuPolicy.clientDeadline(timeoutMs), TimeUnit.MILLISECONDS)
+            if (bindingGeneration == callGeneration && remote === service) result else null
         } catch (e: Exception) {
             future.cancel(true)
             Log.w(TAG, "operation failed", e)

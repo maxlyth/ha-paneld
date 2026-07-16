@@ -14,6 +14,7 @@ class ProfileRestartCoordinator(
     private val schedule: (Long, () -> Unit) -> Boolean,
     private val restartProcess: () -> Unit,
     private val safeToRestart: () -> Boolean = { true },
+    private val shouldAbandon: () -> Boolean = { false },
     private val responseGraceMs: Long = RESPONSE_GRACE_MS,
     private val busyRetryMs: Long = BUSY_RETRY_MS,
 ) {
@@ -28,7 +29,9 @@ class ProfileRestartCoordinator(
     }
 
     private fun restartWhenSafe() {
-        if (safeToRestart()) {
+        if (shouldAbandon()) {
+            requested.set(false)
+        } else if (safeToRestart()) {
             restartProcess()
         } else if (!schedule(busyRetryMs, ::restartWhenSafe)) {
             // Keep the process alive if its scheduler is shutting down. The durable PENDING state is

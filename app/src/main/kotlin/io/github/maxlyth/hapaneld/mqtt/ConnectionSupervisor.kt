@@ -65,3 +65,40 @@ class ConnectionSupervisor(
         private const val DISABLED = "disabled"
     }
 }
+
+/**
+ * Generation-aware admission for sacrificial MQTT heartbeat threads.
+ *
+ * A live heartbeat suppresses another probe only while it belongs to the current runtime. Once runtime
+ * replacement advances the generation, that old client may remain wedged forever; the replacement still
+ * needs exactly one heartbeat thread of its own so its broker liveness can be established.
+ */
+internal object HeartbeatAdmission {
+    sealed interface Decision {
+        data object NoCurrentRuntime : Decision
+        data object CurrentHeartbeatAlive : Decision
+        data class Admit(val generation: Long, val replacingStranded: Boolean) : Decision
+        data class EscalateRecovery(val strandedGenerations: Int) : Decision
+    }
+
+    fun decide(
+        currentGeneration: Long?,
+        liveTrackedGenerations: Collection<Long>,
+        maxStrandedGenerations: Int = MAX_STRANDED_GENERATIONS,
+    ): Decision {
+        currentGeneration ?: return Decision.NoCurrentRuntime
+        if (currentGeneration in liveTrackedGenerations) {
+            return Decision.CurrentHeartbeatAlive
+        }
+        val stranded = liveTrackedGenerations.count { it != currentGeneration }
+        if (stranded > maxStrandedGenerations) {
+            return Decision.EscalateRecovery(stranded)
+        }
+        return Decision.Admit(
+            generation = currentGeneration,
+            replacingStranded = stranded > 0,
+        )
+    }
+
+    const val MAX_STRANDED_GENERATIONS = 2
+}

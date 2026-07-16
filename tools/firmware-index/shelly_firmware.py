@@ -22,6 +22,7 @@ Commands:
 import argparse
 import json
 import os
+import re
 import ssl
 import sys
 import time
@@ -59,6 +60,64 @@ WAVE_SIZE = 3          # keep waves small — firmware ZIPs are 30–40 MB each
 DRAIN_WAIT = 90        # seconds between SPN waves
 CONFIRM_WAIT = 180     # seconds to let captures settle before confirming
 
+_VERSION_RE = re.compile(r"[0-9A-Za-z][0-9A-Za-z._+-]{0,63}\Z")
+_BUILD_ID_RE = re.compile(r"(?:[0-9A-Za-z][0-9A-Za-z._/+:-]{0,127})?\Z")
+_CDN_PATH_RE = re.compile(r"/[0-9A-Za-z._~/%+-]+\Z")
+_DATE_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}\Z")
+_WAYBACK_TS_RE = re.compile(r"(?:[0-9]{14})?\Z")
+_CDN_HOST = "fwcdn.shelly.cloud"
+
+
+def validate_cdn_url(track, value):
+    """Accept only the HTTPS Shelly CDN namespace expected for this fixed OTA track."""
+    if not isinstance(value, str) or len(value) > 1024:
+        raise ValueError("url must be a bounded string")
+    try:
+        parsed = urllib.parse.urlsplit(value)
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("url authority is invalid") from exc
+    if (parsed.scheme != "https" or parsed.hostname != _CDN_HOST or
+            parsed.username is not None or parsed.password is not None or
+            port is not None or parsed.query or parsed.fragment):
+        raise ValueError("url must use the pinned Shelly HTTPS CDN authority")
+    prefix = f"/gen2-ntest/{track}/"
+    if not parsed.path.startswith(prefix) or not _CDN_PATH_RE.fullmatch(parsed.path):
+        raise ValueError("url path is outside the expected OTA track")
+    return value
+
+
+def validate_release(track, stable):
+    """Validate untrusted manifest fields before network requests, files, outputs, or Markdown."""
+    if not isinstance(stable, dict):
+        raise ValueError("stable release must be an object")
+    version = stable.get("version", "")
+    build_id = stable.get("build_id", "")
+    cdn_url = stable.get("url", "")
+    if not isinstance(version, str) or not _VERSION_RE.fullmatch(version):
+        raise ValueError("version has an invalid format")
+    if not isinstance(build_id, str) or not _BUILD_ID_RE.fullmatch(build_id):
+        raise ValueError("build_id has an invalid format")
+    validate_cdn_url(track, cdn_url)
+    return version, build_id, cdn_url
+
+
+def validate_entry(entry):
+    track = entry.get("track")
+    if track not in MANIFESTS:
+        raise ValueError("unknown OTA track")
+    if not _VERSION_RE.fullmatch(entry.get("version", "")):
+        raise ValueError("version has an invalid format")
+    if not _BUILD_ID_RE.fullmatch(entry.get("build_id", "")):
+        raise ValueError("build_id has an invalid format")
+    if not isinstance(entry.get("bytes"), int) or not 0 <= entry["bytes"] <= 2 ** 31:
+        raise ValueError("byte count is invalid")
+    if not _DATE_RE.fullmatch(entry.get("discovered", "")):
+        raise ValueError("discovery date is invalid")
+    validate_cdn_url(track, entry.get("cdn_url", ""))
+    if not _WAYBACK_TS_RE.fullmatch(entry.get("wayback_ts", "")):
+        raise ValueError("Wayback timestamp is invalid")
+
 
 # --------------------------------------------------------------------------- #
 # data file
@@ -68,7 +127,7 @@ def load_dat(path):
     entries = []
     try:
         with open(path) as fh:
-            for raw in fh:
+            for line_number, raw in enumerate(fh, 1):
                 line = raw.strip()
                 if not line or line.startswith("#"):
                     continue
@@ -76,7 +135,7 @@ def load_dat(path):
                 if len(parts) != 7:
                     continue
                 track, version, build_id, bytes_str, discovered, cdn_url, wayback_ts = parts
-                entries.append({
+                entry = {
                     "track": track,
                     "version": version,
                     "build_id": build_id,
@@ -84,7 +143,12 @@ def load_dat(path):
                     "discovered": discovered,
                     "cdn_url": cdn_url,
                     "wayback_ts": wayback_ts,
-                })
+                }
+                try:
+                    validate_entry(entry)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(f"invalid data row {line_number}: {exc}") from exc
+                entries.append(entry)
     except FileNotFoundError:
         pass
     return entries
@@ -105,6 +169,7 @@ def save_dat(path, entries):
         "#             Empty = archival pending. Use the Wayback URL for durable access to old versions.",
     ]
     for e in entries:
+        validate_entry(e)
         lines.append("|".join([
             e["track"], e["version"], e["build_id"],
             str(e["bytes"]), e["discovered"], e["cdn_url"], e["wayback_ts"],
@@ -114,6 +179,8 @@ def save_dat(path, entries):
 
 
 def gha_output(name, value):
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) or "\r" in value or "\n" in value:
+        raise ValueError("GitHub Actions output must be a single safe assignment")
     path = os.environ.get("GITHUB_OUTPUT")
     if path:
         with open(path, "a") as fh:
@@ -132,11 +199,13 @@ def fetch_manifest(url):
         return json.load(r)
 
 
-def head_size(url):
+def head_size(track, url):
+    validate_cdn_url(track, url)
     req = urllib.request.Request(
         url, method="HEAD", headers={"User-Agent": "ha-paneld-shelly-monitor"})
     try:
         with urllib.request.urlopen(req, timeout=PROBE_TIMEOUT, context=_SSL_CONTEXT) as r:
+            validate_cdn_url(track, r.geturl())
             return int(r.headers.get("Content-Length") or 0)
     except Exception:
         return 0
@@ -146,6 +215,8 @@ def cmd_probe(args):
     entries = load_dat(args.dat)
     known = {(e["track"], e["version"]) for e in entries}
     new_entries = []
+    releases = []
+    invalid_manifest = False
 
     for track, manifest_url in MANIFESTS.items():
         try:
@@ -153,17 +224,24 @@ def cmd_probe(args):
         except Exception as exc:
             print(f"ERROR: could not fetch {track} manifest: {exc}", file=sys.stderr)
             continue
-        stable = data.get("stable", {})
-        version = stable.get("version", "")
-        build_id = stable.get("build_id", "")
-        cdn_url = stable.get("url", "")
-        if not version or not cdn_url:
-            print(f"WARN: {track} manifest missing version or url", file=sys.stderr)
+        try:
+            version, build_id, cdn_url = validate_release(track, data.get("stable"))
+        except (AttributeError, TypeError, ValueError) as exc:
+            print(f"ERROR: rejected invalid {track} manifest: {exc}", file=sys.stderr)
+            invalid_manifest = True
             continue
+        releases.append((track, version, build_id, cdn_url))
+
+    # Do not make attacker-directed HEAD requests or partially persist another track when any fetched
+    # manifest violates the fixed schema. A vendor format change must be reviewed explicitly.
+    if invalid_manifest:
+        return 1
+
+    for track, version, build_id, cdn_url in releases:
         if (track, version) in known:
             print(f"known:  {track} {version}")
         else:
-            size = head_size(cdn_url)
+            size = head_size(track, cdn_url)
             today = time.strftime("%Y-%m-%d", time.gmtime())
             entry = {
                 "track": track, "version": version, "build_id": build_id,
@@ -238,7 +316,8 @@ def spn_available(url):
     except Exception:
         return None
     snap = d.get("archived_snapshots", {}).get("closest")
-    return snap.get("timestamp") if snap else None
+    timestamp = snap.get("timestamp") if snap else None
+    return timestamp if isinstance(timestamp, str) and _WAYBACK_TS_RE.fullmatch(timestamp) and timestamp else None
 
 
 def cmd_archive(args):

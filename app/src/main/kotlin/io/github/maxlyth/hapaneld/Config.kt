@@ -9,11 +9,41 @@ import android.util.Log
 import io.github.maxlyth.hapaneld.config.Migrations
 import io.github.maxlyth.hapaneld.config.SettingSpec
 import io.github.maxlyth.hapaneld.config.SettingType
+import io.github.maxlyth.hapaneld.config.SettingValue
 import io.github.maxlyth.hapaneld.config.SettingsRegistry
+import io.github.maxlyth.hapaneld.config.Validation
 import io.github.maxlyth.hapaneld.device.DeviceProfile
 import io.github.maxlyth.hapaneld.util.AndroidInput
 import io.github.maxlyth.hapaneld.util.HaLink
 import java.util.Locale
+
+internal data class MqttCredentialsSnapshot(
+    val broker: String,
+    val user: String,
+    val password: String,
+)
+
+internal data class HaAuthSnapshot(
+    val url: String,
+    val accessToken: String,
+    val refreshToken: String,
+    val tokenExpiry: Long,
+    val clientId: String,
+)
+
+internal data class DashboardEntityBackupState(
+    val instanceKey: String,
+    val instanceOrigin: String,
+    val instanceUuid: String,
+    val dashboardPath: String,
+    val filterIds: String,
+    val filterEnabled: Boolean,
+    val filterOwner: String,
+    val learningApplied: Boolean,
+    val appliedOwner: String,
+    val overrides: String,
+    val overrideOwner: String,
+)
 
 /**
  * Runtime configuration. v0.1.0 reads from SharedPreferences with sensible defaults; a Web UI
@@ -45,6 +75,17 @@ class Config private constructor(
     val mqttUser: String get() = prefs.getString("mqtt_user", "")!!
     val mqttPassword: String get() = prefs.getString("mqtt_password", "")!!
 
+    /** One immutable SharedPreferences generation for connection setup; consumers must not combine
+     * three independent getters across a concurrent credential commit. */
+    internal fun mqttCredentialsSnapshot(): MqttCredentialsSnapshot = synchronized(CONFIG_LOCK) {
+        val all = prefs.all
+        MqttCredentialsSnapshot(
+            broker = all["mqtt_broker"] as? String ?: "",
+            user = all["mqtt_user"] as? String ?: "",
+            password = all["mqtt_password"] as? String ?: "",
+        )
+    }
+
     /** Stable per-panel id used in entity_ids / MQTT topics. Defaults to a slug of the device name,
      *  but the SoC model is identical across a fleet (e.g. `px30_evb`), so when no real device name
      *  is set we append a short stable per-device suffix to avoid collisions out of the box. */
@@ -73,8 +114,7 @@ class Config private constructor(
      *  when it returns. Confined to the calling thread: a setter fired on another thread during the batch
      *  takes its normal immediate-apply path (SharedPreferences.Editor isn't thread-safe). Non-nesting;
      *  the /config apply that uses it is single-threaded per request. */
-    @Synchronized
-    fun applyBatch(block: () -> Unit): Boolean {
+    fun applyBatch(block: () -> Unit): Boolean = synchronized(CONFIG_LOCK) {
         val ed = prefs.edit()
         batchEditor = ed
         batchThread = Thread.currentThread()
@@ -84,31 +124,38 @@ class Config private constructor(
             batchEditor = null
             batchThread = null
         }
-        return ed.commit()
+        ed.commit()
     }
+
+    /** Serialize a compound config operation across every Config wrapper in this process. */
+    internal fun <T> synchronizedTransaction(block: () -> T): T = synchronized(CONFIG_LOCK, block)
 
     /** Write helper: stage into the active [applyBatch] editor (same thread) or, outside a batch, apply
      *  immediately exactly as before. Setters call this instead of prefs.edit()…apply() so they compose. */
-    private inline fun edit(block: SharedPreferences.Editor.() -> Unit) {
-        val b = batchEditor
-        if (b != null && batchThread === Thread.currentThread()) {
-            b.block()
-        } else {
-            val e = prefs.edit()
-            e.block()
-            e.apply()
+    private fun edit(block: SharedPreferences.Editor.() -> Unit) {
+        synchronized(CONFIG_LOCK) {
+            val b = batchEditor
+            if (b != null && batchThread === Thread.currentThread()) {
+                b.block()
+            } else {
+                val e = prefs.edit()
+                e.block()
+                e.apply()
+            }
         }
     }
 
     /** Synchronous variant for writes that must survive an immediate reboot. Still composes into a batch. */
-    private inline fun editCommit(block: SharedPreferences.Editor.() -> Unit) {
-        val b = batchEditor
-        if (b != null && batchThread === Thread.currentThread()) {
-            b.block()
-        } else {
-            val e = prefs.edit()
-            e.block()
-            e.commit()
+    private fun editCommit(block: SharedPreferences.Editor.() -> Unit) {
+        synchronized(CONFIG_LOCK) {
+            val b = batchEditor
+            if (b != null && batchThread === Thread.currentThread()) {
+                b.block()
+            } else {
+                val e = prefs.edit()
+                e.block()
+                e.commit()
+            }
         }
     }
 
@@ -301,6 +348,18 @@ class Config private constructor(
      *  `https://home-assistant.io/android` to reuse an HA Companion refresh token. */
     val haClientId: String get() = prefs.getString("ha_client_id", "")!!
 
+    /** One immutable SharedPreferences generation for renderer authentication and refresh. */
+    internal fun haAuthSnapshot(): HaAuthSnapshot = synchronized(CONFIG_LOCK) {
+        val all = prefs.all
+        HaAuthSnapshot(
+            url = all["ha_url"] as? String ?: "",
+            accessToken = all["ha_token"] as? String ?: "",
+            refreshToken = all["ha_refresh_token"] as? String ?: "",
+            tokenExpiry = (all["ha_token_expiry"] as? Number)?.toLong() ?: 0L,
+            clientId = all["ha_client_id"] as? String ?: "",
+        )
+    }
+
     /** Persist the built-in renderer connection (HTTP config page / provisioning). A null token leaves
      *  it unchanged, mirroring [setMqtt]'s password semantics. */
     fun setHaConnection(url: String, token: String?) {
@@ -315,6 +374,20 @@ class Config private constructor(
     /** Persist a refreshed access token + its expiry (called by the on-demand refresh in the renderer). */
     fun setHaRefreshedToken(access: String, expiryEpochSec: Long) {
         edit { putString("ha_token", access); putLong("ha_token_expiry", expiryEpochSec) }
+    }
+
+    /** Persist a refresh result only while the complete auth generation used to obtain it is still
+     * current. This prevents a late OAuth response from overwriting credentials replaced by an admin. */
+    internal fun setHaRefreshedTokenIfOwned(
+        expected: HaAuthSnapshot,
+        access: String,
+        expiryEpochSec: Long,
+    ): Boolean = synchronized(CONFIG_LOCK) {
+        if (haAuthSnapshot() != expected) return false
+        prefs.edit()
+            .putString("ha_token", access)
+            .putLong("ha_token_expiry", expiryEpochSec)
+            .commit()
     }
 
     /** Set (or clear, with "") the OAuth refresh token — provisioning path. */
@@ -498,11 +571,15 @@ class Config private constructor(
     fun setHomeDashboard(p: String) {
         edit {
             val normalized = p.trim()
-            putString("home_dashboard", normalized)
-            val nextPath = normalizeDashboardEntityPath(normalized)
-            if (nextPath != normalizeDashboardEntityPath(homeDashboard)) {
-                putString("dashboard_entity_dashboard_path", nextPath)
-            }
+            stageHomeDashboard(this, normalized, homeDashboard)
+        }
+    }
+
+    private fun stageHomeDashboard(editor: SharedPreferences.Editor, normalized: String, previous: String) {
+        editor.putString("home_dashboard", normalized)
+        val nextPath = normalizeDashboardEntityPath(normalized)
+        if (nextPath != normalizeDashboardEntityPath(previous)) {
+            editor.putString("dashboard_entity_dashboard_path", nextPath)
         }
     }
 
@@ -542,6 +619,44 @@ class Config private constructor(
         get() = prefs.getString("dashboard_entity_filter_ids", "").orEmpty()
             .lineSequence().map(String::trim).filter(String::isNotEmpty).distinct().sorted().toList()
 
+    /** Exact owner-scoped filter state for full backup and local config revisions. Derived SQLite
+     * evidence remains rebuildable and is intentionally excluded. */
+    internal fun dashboardEntityBackupState(): DashboardEntityBackupState {
+        val all = prefs.all
+        fun string(key: String) = all[key] as? String ?: ""
+        return DashboardEntityBackupState(
+            instanceKey = string("dashboard_entity_instance"),
+            instanceOrigin = string("dashboard_entity_instance_origin"),
+            instanceUuid = string("dashboard_entity_instance_uuid"),
+            dashboardPath = string("dashboard_entity_dashboard_path"),
+            filterIds = string("dashboard_entity_filter_ids"),
+            filterEnabled = all["dashboard_entity_filter_enabled"] as? Boolean ?: false,
+            filterOwner = string("dashboard_entity_filter_instance"),
+            learningApplied = all["dashboard_entity_learning_applied"] as? Boolean ?: false,
+            appliedOwner = string("dashboard_entity_applied_instance"),
+            overrides = string("dashboard_entity_overrides"),
+            overrideOwner = string("dashboard_entity_override_instance"),
+        )
+    }
+
+    /** Stage a prevalidated backup snapshot into the caller's existing config transaction. */
+    internal fun stageDashboardEntityBackupState(
+        editor: SharedPreferences.Editor,
+        state: DashboardEntityBackupState,
+    ) {
+        editor.putString("dashboard_entity_instance", state.instanceKey)
+            .putString("dashboard_entity_instance_origin", state.instanceOrigin)
+            .putString("dashboard_entity_instance_uuid", state.instanceUuid)
+            .putString("dashboard_entity_dashboard_path", state.dashboardPath)
+            .putString("dashboard_entity_filter_ids", state.filterIds)
+            .putBoolean("dashboard_entity_filter_enabled", state.filterEnabled)
+            .putString("dashboard_entity_filter_instance", state.filterOwner)
+            .putBoolean("dashboard_entity_learning_applied", state.learningApplied)
+            .putString("dashboard_entity_applied_instance", state.appliedOwner)
+            .putString("dashboard_entity_overrides", state.overrides)
+            .putString("dashboard_entity_override_instance", state.overrideOwner)
+    }
+
     /** The evidence namespace currently selected for the configured HA endpoint. A URL-derived key is
      *  used until mDNS can tie the authenticated endpoint to HA's stable core.uuid. */
     val dashboardEntityInstanceKey: String get() = prefs.getString("dashboard_entity_instance", "").orEmpty()
@@ -571,11 +686,11 @@ class Config private constructor(
     /** Select the URL-keyed namespace and dashboard after a target change. Existing ownership is left
      *  behind, so a different/unverified HA or dashboard cannot inherit filter state. Null means the
      *  durable preference transaction failed and callers must not proceed with the selected target. */
-    @Synchronized fun prepareDashboardEntityInstance(
+    fun prepareDashboardEntityInstance(
         origin: String,
         dashboardPath: String,
         legacyKey: String,
-    ): String? {
+    ): String? = synchronized(CONFIG_LOCK) {
         if (legacyKey.isBlank()) return null
         val canonicalOrigin = canonicalHaOrigin(origin) ?: return null
         val normalizedPath = normalizeDashboardEntityPath(dashboardPath)
@@ -614,13 +729,13 @@ class Config private constructor(
     /** Adopt a UUID namespace only if the endpoint is still the one that was authenticated/discovered.
      *  First adoption moves legacy ownership without altering a known-good list; later URL aliases for
      *  the same UUID simply select the already-owned stable key. */
-    @Synchronized fun adoptDashboardEntityInstance(
+    fun adoptDashboardEntityInstance(
         expectedOrigin: String,
         expectedDashboardPath: String,
         uuid: String,
         legacyKey: String,
         stableKey: String,
-    ): Boolean {
+    ): Boolean = synchronized(CONFIG_LOCK) {
         if (uuid.isBlank() || legacyKey.isBlank() || stableKey.isBlank()) return false
         val canonicalOrigin = canonicalHaOrigin(expectedOrigin) ?: return false
         val normalizedPath = normalizeDashboardEntityPath(expectedDashboardPath)
@@ -682,7 +797,8 @@ class Config private constructor(
      * [dashboardEntityFilterEnabled] also checks this migration latch, so a failed preference commit
      * cannot briefly reactivate the suspect allow-list.
      */
-    @Synchronized internal fun migrateDashboardEntityDefaultResolver(): DashboardEntityDefaultResolverMigration {
+    internal fun migrateDashboardEntityDefaultResolver(): DashboardEntityDefaultResolverMigration =
+        synchronized(CONFIG_LOCK) {
         if (!dashboardEntityDefaultResolverMigrationRequired) return DashboardEntityDefaultResolverMigration.NOT_NEEDED
         val committed = applyBatch { edit {
             putInt(DASHBOARD_ENTITY_DEFAULT_RESOLVER_VERSION_KEY, DASHBOARD_ENTITY_DEFAULT_RESOLVER_VERSION)
@@ -716,7 +832,7 @@ class Config private constructor(
         }
 
     /** Clear the durable hold only after the replacement subscription has committed successfully. */
-    @Synchronized internal fun clearDashboardEntityDefaultResolverRebootstrapPending(): Boolean {
+    internal fun clearDashboardEntityDefaultResolverRebootstrapPending(): Boolean = synchronized(CONFIG_LOCK) {
         if (!dashboardEntityDefaultResolverRebootstrapPending) return true
         return applyBatch { edit { remove(DASHBOARD_ENTITY_DEFAULT_RESOLVER_PENDING_KEY) } }
     }
@@ -904,8 +1020,8 @@ class Config private constructor(
         edit { putString("navbar_mode", mode) }
     }
 
-    // After an app update the launcher shows the App UI; when configured + MQTT-connected, bounce back
-    // to the dashboard so it doesn't linger. Default on.
+    // After an app update the launcher shows the App UI; when the configured renderer is ready, bounce
+    // back to the dashboard so it does not linger. MQTT is optional. Default on.
     val autoReturnDashboard: Boolean get() = prefs.getBoolean("auto_return_dashboard", true)
     fun setAutoReturnDashboard(on: Boolean) {
         edit { putBoolean("auto_return_dashboard", on) }
@@ -1229,8 +1345,23 @@ class Config private constructor(
         }
     }
 
+    /** Synchronously persist one validated registry value before a low-frequency live actuator is
+     * acknowledged. Transient inputs and publish-only sensors have no durable configuration value. */
+    internal fun commitRaw(spec: SettingSpec, normalized: String): Boolean = synchronized(CONFIG_LOCK) {
+        if (spec.transient || spec.readOnly) return false
+        val value = (SettingValue.validate(spec, normalized) as? Validation.Ok)?.normalized ?: return false
+        prefs.edit().also { editor ->
+            if (spec.key == "home_dashboard") stageHomeDashboard(editor, value, homeDashboard)
+            else stage(editor, spec, value)
+        }.commit()
+    }
+
     /** A new editor for staging a batch of registry writes (commit with [SharedPreferences.Editor.commit]). */
     fun editor(): SharedPreferences.Editor = prefs.edit()
+
+    /** Commit a caller-staged transaction under the same lock as grouped credential mutation and OAuth
+     * refresh ownership checks. */
+    internal fun commit(editor: SharedPreferences.Editor): Boolean = synchronized(CONFIG_LOCK) { editor.commit() }
 
     /** Schema the live store was last written at. Absent → 1 (the original shape, before this tracking),
      *  so an app upgrade that bumps [SettingsRegistry.SCHEMA] triggers a one-time on-device migration. */
@@ -1271,6 +1402,9 @@ class Config private constructor(
             .ifEmpty { "ha_paneld_panel" }
 
     companion object {
+        /** SharedPreferences returns one process-wide store even when activities construct separate
+         * Config wrappers, so transaction ownership must be process-wide as well. */
+        private val CONFIG_LOCK = Any()
         private const val TAG = "ha-paneld/config"
         private const val DASHBOARD_ENTITY_DEFAULT_RESOLVER_VERSION_KEY =
             "dashboard_entity_default_resolver_version"

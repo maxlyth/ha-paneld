@@ -57,4 +57,23 @@ class ProfileRestartCoordinatorTest {
         accepts = true
         assertTrue(coordinator.request())
     }
+
+    @Test
+    fun `terminal owner teardown abandons a delayed restart`() {
+        val scheduled = mutableListOf<() -> Unit>()
+        var stopping = false
+        var restarted = false
+        val coordinator = ProfileRestartCoordinator(
+            schedule = { _, action -> scheduled += action; true },
+            restartProcess = { restarted = true },
+            shouldAbandon = { stopping },
+        )
+
+        assertTrue(coordinator.request())
+        stopping = true
+        scheduled.removeAt(0).invoke()
+        assertFalse(restarted)
+        stopping = false
+        assertTrue("abandoned admission can be requested by a later healthy owner", coordinator.request())
+    }
 }

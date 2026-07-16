@@ -1,8 +1,8 @@
 package io.github.maxlyth.hapaneld.input
 
 import android.net.LocalSocket
-import android.net.LocalSocketAddress
 import android.util.Log
+import io.github.maxlyth.hapaneld.util.openRootAbstractSocket
 import io.github.maxlyth.hapaneld.device.EvdevButton
 
 /**
@@ -94,10 +94,9 @@ object EvdevButtonClient {
                 var candidate: LocalSocket? = null
                 try {
                     update(run, State.CONNECTING)
-                    candidate = LocalSocket()
+                    candidate = openRootAbstractSocket(SOCK)
                     if (!run.attach(candidate)) break
                     candidate.use { s ->
-                        s.connect(LocalSocketAddress(SOCK, LocalSocketAddress.Namespace.ABSTRACT))
                         s.soTimeout = HANDSHAKE_TIMEOUT_MS
                         EvdevStreamSession.run(
                             buttons = run.buttons,

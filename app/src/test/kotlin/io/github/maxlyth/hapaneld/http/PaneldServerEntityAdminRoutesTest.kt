@@ -88,16 +88,19 @@ class PaneldServerEntityAdminRoutesTest {
             assertTrue("$route bypasses bounded reader", window.contains(reader))
             assertFalse("$route directly materializes receiveText", window.contains("receiveText("))
         }
-        val helper = source.substring(source.indexOf("private suspend fun receiveEntityAdminJson"), source.indexOf("private fun readEntityFilterBody"))
-        assertTrue(helper.indexOf("Content-Length") < helper.indexOf("JSONObject("))
-        assertTrue(helper.indexOf("BoundedStreams.readBytes") < helper.indexOf("JSONObject("))
+        val helper = source.substring(
+            source.indexOf("private suspend fun receiveEntityAdminJson"),
+            source.indexOf("private suspend fun handleEntityFilterPost"),
+        )
+        assertTrue(helper.indexOf("receiveBoundedBody") < helper.indexOf("JSONObject("))
         assertTrue(helper.contains("HttpStatusCode.PayloadTooLarge"))
+        assertTrue(helper.contains("HttpStatusCode.RequestTimeout"))
     }
 
     @Test fun `filter status preserves enabled empty allow list semantics`() {
         val source = paneldServerSource()
         val start = source.indexOf("private fun entityFilterStatusJson")
-        val end = source.indexOf("private class EntityFilterBodyTooLarge", start)
+        val end = source.indexOf("private suspend fun receiveEntityAdminJson", start)
         val status = source.substring(start, end)
 
         assertTrue(status.contains("val hash = EntityFilterProtocol.hash(ids)"))

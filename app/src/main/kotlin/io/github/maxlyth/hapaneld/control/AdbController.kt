@@ -39,11 +39,11 @@ class AdbController(private val config: Config) {
             config.setNetworkAdbEnabled(true)
             return apply()
         }
-        val weOwnedIt = config.networkAdbEnabled
-        config.setNetworkAdbEnabled(false)
-        return if (weOwnedIt)
-            Su.run("setprop persist.adb.tcp.port \"\"; setprop service.adb.tcp.port \"\"; setprop ctl.restart adbd")
-        else true // externally-active adb — don't kill it
+        return disableOwnedNetworkAdb(
+            owned = config.networkAdbEnabled,
+            teardown = { Su.run(networkAdbDisableCommand()) },
+            clearOwnership = { config.setNetworkAdbEnabled(false) },
+        )
     }
 
     /**
@@ -57,7 +57,7 @@ class AdbController(private val config: Config) {
     }
 
     private fun apply(): Boolean =
-        Su.run("setprop persist.adb.tcp.port $PORT; setprop service.adb.tcp.port $PORT; setprop ctl.restart adbd")
+        Su.run(networkAdbEnableCommand())
 
     /** UI status — ha-paneld-persisted vs merely externally-active vs off. */
     fun statusText(): String = when {
@@ -67,6 +67,36 @@ class AdbController(private val config: Config) {
     }
 
     companion object {
-        private const val PORT = "5555"
+        internal const val PORT = "5555"
     }
+}
+
+internal fun networkAdbEnableCommand(): String = adbTransitionCommand(
+    "setprop persist.adb.tcp.port ${AdbController.PORT}",
+    "setprop service.adb.tcp.port ${AdbController.PORT}",
+    "setprop ctl.restart adbd",
+)
+
+internal fun networkAdbDisableCommand(): String = adbTransitionCommand(
+    "setprop persist.adb.tcp.port \"\"",
+    "setprop service.adb.tcp.port \"\"",
+    "setprop ctl.restart adbd",
+)
+
+/**
+ * RootShell reports the exit status of the complete shell expression. A semicolon-separated sequence
+ * would therefore report only the final command and could mask an earlier failed property write.
+ */
+private fun adbTransitionCommand(vararg commands: String): String = commands.joinToString(" && ")
+
+/** An OFF failure must retain ownership intent so the next command/reconnect retries the teardown. */
+internal fun disableOwnedNetworkAdb(
+    owned: Boolean,
+    teardown: () -> Boolean,
+    clearOwnership: () -> Unit,
+): Boolean {
+    if (!owned) return true // externally-active adb — don't kill it
+    if (!teardown()) return false
+    clearOwnership()
+    return true
 }

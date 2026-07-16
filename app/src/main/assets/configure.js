@@ -5,6 +5,7 @@
   "use strict";
   // Advanced is the DEFAULT view until the reduced Basic set is settled (user, 2026-07-01).
   var schema = [], values = {}, expose = {}, advanced = true, dirty = false, apps = [];
+  var dirtyValues = Object.create(null), dirtyExpose = Object.create(null);
 
   function el(tag, attrs, kids) {
     var e = document.createElement(tag);
@@ -18,16 +19,38 @@
     (kids || []).forEach(function (c) { if (c) e.appendChild(c); });
     return e;
   }
-  function setDirty() { dirty = true; document.getElementById("savebtn").disabled = false; }
+  function setDirty(key, exposure) {
+    dirty = true;
+    (exposure ? dirtyExpose : dirtyValues)[key] = true;
+    document.getElementById("savebtn").disabled = false;
+  }
+  function clearDirty() {
+    dirty = false;
+    dirtyValues = Object.create(null);
+    dirtyExpose = Object.create(null);
+    document.getElementById("savebtn").disabled = true;
+  }
 
   // One input control bound to values[f.key]; flips Save on when touched.
   function control(f) {
     var v = values[f.key];
     if (f.type === "BOOL") {
-      var t = el("div", { class: "toggle" + (v === "true" ? " on" : ""), role: "switch", tabindex: "0" });
-      t.addEventListener("click", function () {
+      var t = el("div", {
+        class: "toggle" + (v === "true" ? " on" : ""), role: "switch", tabindex: "0",
+        "aria-label": f.label, "aria-checked": v === "true" ? "true" : "false"
+      });
+      function toggleValue() {
         v = (values[f.key] === "true") ? "false" : "true";
-        values[f.key] = v; t.classList.toggle("on", v === "true"); setDirty();
+        values[f.key] = v;
+        t.classList.toggle("on", v === "true");
+        t.setAttribute("aria-checked", v === "true" ? "true" : "false");
+        setDirty(f.key);
+      }
+      t.addEventListener("click", toggleValue);
+      t.addEventListener("keydown", function (event) {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        toggleValue();
       });
       return t;
     }
@@ -36,7 +59,7 @@
       f.options.forEach(function (o) {
         var op = el("option", { value: o, text: o }); if (o === v) op.selected = true; s.appendChild(op);
       });
-      s.addEventListener("change", function () { values[f.key] = s.value; setDirty(); });
+      s.addEventListener("change", function () { values[f.key] = s.value; setDirty(f.key); });
       return s;
     }
     // Dashboard-app picker: strictly the KNOWN renderers (not every installed app) — the built-in
@@ -66,7 +89,7 @@
         var o2 = el("option", { value: cur, text: cur + " · (not a known renderer)" });
         o2.selected = true; sel.appendChild(o2);
       }
-      sel.addEventListener("change", function () { values[f.key] = sel.value; setDirty(); });
+      sel.addEventListener("change", function () { values[f.key] = sel.value; setDirty(f.key); });
       return sel;
     }
     // Package picker: a dropdown of installed apps. Blank = "Auto-detect"; a currently-set package that
@@ -87,7 +110,7 @@
         var o2 = el("option", { value: cur, text: cur + " · (not installed)" });
         o2.selected = true; sel.appendChild(o2);
       }
-      sel.addEventListener("change", function () { values[f.key] = sel.value; setDirty(); });
+      sel.addEventListener("change", function () { values[f.key] = sel.value; setDirty(f.key); });
       return sel;
     }
     var type = f.type === "PASSWORD" ? "password" : (f.type === "INT" || f.type === "FLOAT") ? "number" : "text";
@@ -96,9 +119,10 @@
     else if (f.placeholder) inp.placeholder = f.placeholder;   // e.g. "auto (io.homeassistant…)" on package fields
     if (f.min != null) inp.min = f.min;
     if (f.max != null) inp.max = f.max;
+    if (f.maxLength != null) inp.maxLength = f.maxLength;
     if (f.step != null) inp.step = f.step;
     if (f.type === "FLOAT" && f.step == null) inp.step = "any";
-    inp.addEventListener("input", function () { values[f.key] = inp.value; setDirty(); });
+    inp.addEventListener("input", function () { values[f.key] = inp.value; setDirty(f.key); });
     return inp;
   }
 
@@ -121,7 +145,7 @@
       btn.setAttribute("aria-label", on ? "Exposed to Home Assistant" : "Hidden from Home Assistant");
       btn.setAttribute("aria-pressed", on ? "true" : "false");
     }
-    btn.addEventListener("click", function () { on = !on; expose[f.key] = on; render(); setDirty(); });
+    btn.addEventListener("click", function () { on = !on; expose[f.key] = on; render(); setDirty(f.key, true); });
     render();
     return btn;
   }
@@ -206,9 +230,11 @@
     var body = new URLSearchParams();
     schema.forEach(function (f) {
       var v = values[f.key];
-      if (f.secret) { if (v) body.set(f.key, v); }       // blank password = keep current
-      else if (v != null) body.set(f.key, v);
-      if (f.ha) body.set("ha_expose_" + f.key, expose[f.key] !== false ? "true" : "false");
+      if (dirtyValues[f.key]) {
+        if (f.secret) { if (v) body.set(f.key, v); }     // blank password = keep current
+        else if (v != null) body.set(f.key, v);
+      }
+      if (f.ha && dirtyExpose[f.key]) body.set("ha_expose_" + f.key, expose[f.key] !== false ? "true" : "false");
     });
     var msg = document.getElementById("cfg-msg");
     msg.textContent = "Saving…";
@@ -217,7 +243,7 @@
       body: body.toString(),
     }).then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
       .then(function () {
-        msg.textContent = "Saving…"; dirty = false; document.getElementById("savebtn").disabled = true;
+        msg.textContent = "Saving…"; clearDirty();
         // Re-render the server-owned navigation when its eligibility changed. This is deliberately
         // symmetric so the tab cannot remain incorrectly disabled OR enabled after a successful save.
         if (reloadShellAfterSave) { location.reload(); return; }
@@ -241,17 +267,28 @@
   window.cfgImport = function (input) {
     var file = input.files && input.files[0]; if (!file) return;
     var out = document.getElementById("imp-result");
+    if (dirty && !confirm("Importing replaces the current unsaved form edits. Discard those edits and preview the import?")) {
+      out.textContent = "Import cancelled; unsaved edits kept.";
+      input.value = "";
+      return;
+    }
     file.text().then(function (text) {
       // Dry-run first so the user sees the diff before anything is written.
       return fetch("/api/v1/config/import?dry_run=1", { method: "POST", body: text })
-        .then(function (r) { return r.json(); })
+        .then(function (r) { return r.json().then(function (body) { if (!r.ok) throw (body.status || r.status); return body; }); })
         .then(function (dry) {
           var n = (dry.changes || []).length;
           var summary = n ? dry.changes.map(function (c) { return "  " + c.key + ": " + (c.from == null ? "(unset)" : c.from) + " → " + c.to; }).join("\n") : "  (no changes)";
           if (!confirm("Import will change " + n + " setting(s):\n\n" + summary + "\n\nApply now?")) { out.textContent = "Import cancelled."; return; }
-          return fetch("/api/v1/config/import", { method: "POST", body: text })
-            .then(function (r) { return r.json(); })
-            .then(function (res) {
+          return fetch("/api/v1/config/import?expected_cfg=" + encodeURIComponent(dry.expected_cfg || ""), { method: "POST", body: text })
+            .then(function (r) { return r.json().then(function (body) { return { ok: r.ok, status: r.status, body: body }; }); })
+            .then(function (response) {
+              if (response.status === 409) {
+                out.textContent = "Import not applied: panel settings changed after the preview. Preview the file again.";
+                return;
+              }
+              if (!response.ok) throw (response.body.status || response.status);
+              var res = response.body;
               out.textContent = "Import " + res.status + " · applied " + (res.applied || []).length +
                 ", skipped " + (res.skipped || []).length +
                 ((res.warnings || []).length ? "\nwarnings:\n  " + res.warnings.join("\n  ") : "") +
@@ -279,6 +316,8 @@
         if (f.type === "BOOL" && typeof values[f.key] === "boolean") values[f.key] = values[f.key] ? "true" : "false";
         if (values[f.key] != null && typeof values[f.key] !== "string") values[f.key] = String(values[f.key]);
       });
+      // A successful full reload replaces the form's local snapshot, so no previously tracked edit remains.
+      clearDirty();
       render();
       // Deep-link support: /configure#cfg-<key> scrolls to and flashes the target setting/card.
       if (location.hash) {

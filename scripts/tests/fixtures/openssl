@@ -12,6 +12,7 @@ case "${1:-}" in
   dgst)
     if [ "${2:-}" = -sha256 ] && [ "${3:-}" = -verify ]; then
       [ "${MOCK_RELEASE_SIGNATURE_FAIL:-0}" = 0 ] || exit 1
+      case "${7:-}" in */helper.sha256) [ "${MOCK_HELPER_SIGNATURE_FAIL:-0}" = 0 ] || exit 1 ;; esac
       printf 'Verified OK\n'
     elif [ "${2:-}" = -sha256 ] && [ "${3:-}" = -r ]; then
       [ "${MOCK_OPENSSL_DIGEST_FAIL:-0}" = 0 ] || exit 1

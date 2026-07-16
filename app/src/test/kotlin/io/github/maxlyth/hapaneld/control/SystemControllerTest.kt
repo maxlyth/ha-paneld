@@ -133,6 +133,15 @@ class SystemControllerTest {
         assertTrue(root.ran.contains("am start -n $MIN/.Main"))
     }
 
+    @Test fun reloadBusyNeverFallsThroughTheHelperTransactionBoundary() {
+        val env = FakeSystemEnv(installed = setOf(MIN), launchers = mapOf(MIN to "$MIN/.Main"))
+        val (c, root, d) = sc(env, daemon = mapOf("RELOAD $MIN" to "BUSY"), su = true)
+        c.reloadDashboard(MIN)
+        assertEquals(listOf("RELOAD $MIN"), d.sent)
+        assertTrue(root.ran.isEmpty())
+        assertTrue(env.directStarts.isEmpty())
+    }
+
     @Test fun reloadViaSuForceStopThenPrivilegedStart() {
         val env = FakeSystemEnv(installed = setOf(MIN), launchers = mapOf(MIN to "$MIN/.Main"))
         val (c, root, _) = sc(env, daemon = null, su = true)
@@ -152,6 +161,20 @@ class SystemControllerTest {
         val (c, root, d) = sc(FakeSystemEnv(), daemon = null)
         c.reloadDashboard("")
         assertTrue(root.ran.isEmpty() && d.sent.isEmpty())
+    }
+
+    @Test fun companionDataLeaseSuppressesReloadAndHomeLaunchUntilReleased() {
+        val env = FakeSystemEnv(installed = setOf(MIN), launchers = mapOf(MIN to "$MIN/.Main"))
+        val (c, root, d) = sc(env, daemon = mapOf("RELOAD $MIN" to "OK", "START $MIN/.Main" to "OK"))
+        CompanionDataOperationGate.acquire(MIN)!!.use {
+            c.reloadDashboard(MIN)
+            c.launchHome(MIN)
+            assertTrue(root.ran.isEmpty())
+            assertTrue(d.sent.isEmpty())
+        }
+
+        c.launchHome(MIN)
+        assertEquals(listOf("START $MIN/.Main"), d.sent)
     }
 
     @Test fun invalidStoredDashboardNeverCrossesPrivilegeBoundary() {
@@ -322,6 +345,16 @@ class SystemControllerTest {
         val (c, root, _) = sc(env, daemon = null, su = true)
         c.launchHome(MIN)
         assertTrue(root.ran.contains("am start -n $MIN/.Main"))
+    }
+
+    @Test fun launchHomeBusyNeverFallsBackToSuOrDirectStart() {
+        val component = "$MIN/.Main"
+        val env = FakeSystemEnv(installed = setOf(MIN), launchers = mapOf(MIN to component))
+        val (c, root, d) = sc(env, daemon = mapOf("START $component" to "BUSY"), su = true)
+        c.launchHome(MIN)
+        assertEquals(listOf("START $component"), d.sent)
+        assertTrue(root.ran.isEmpty())
+        assertTrue(env.directStarts.isEmpty())
     }
 
     @Test fun launchHomeUsesDefaultHomeWhenNoDashboard() {

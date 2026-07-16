@@ -5,6 +5,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Pure mDNS peer mapping/dedupe that backs the header panel switcher — the logic that's testable without
@@ -12,6 +13,16 @@ import org.junit.Test
  * duplicate records and orders the roster.
  */
 class MdnsPeerTest {
+
+    @Test fun obsoleteRefreshGenerationCannotUseReplacementResolver() {
+        val generation = AtomicLong(4)
+        val old = generation.get()
+        assertTrue(mdnsRunCurrent(generation, old, browsing = true, ownsResolver = true))
+        generation.incrementAndGet()
+        assertFalse(mdnsRunCurrent(generation, old, browsing = true, ownsResolver = true))
+        assertFalse(mdnsRunCurrent(generation, generation.get(), browsing = false, ownsResolver = true))
+        assertFalse(mdnsRunCurrent(generation, generation.get(), browsing = true, ownsResolver = false))
+    }
 
     private fun peer(id: String, name: String? = null, ip: String? = "10.0.0.9", ver: String? = "1.2.3", self: Boolean = false) =
         toPeer(id, name, ver, ip, 8888, selfId = if (self) id else "someone_else", selfIp = null)

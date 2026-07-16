@@ -7,8 +7,8 @@
 
 #include "cmd.h"
 
-void cmd_reload(conn_ctx *ctx, const char *args);     // RELOAD <pkg>      force-stop + relaunch
-void cmd_start(conn_ctx *ctx, const char *args);      // START <pkg/cls>   launch an activity
+void cmd_reload(conn_ctx *ctx, const char *args);     // RELOAD <pkg>      force-stop + relaunch; BUSY for Companion transaction
+void cmd_start(conn_ctx *ctx, const char *args);      // START <pkg/cls>   launch; BUSY for Companion transaction
 void cmd_sethome(conn_ctx *ctx, const char *args);    // SETHOME <pkg/cls> set default home (launcher)
 void cmd_reboot(conn_ctx *ctx, const char *args);     // REBOOT
 void cmd_density(conn_ctx *ctx, const char *args);    // DENSITY [<n>|reset]   get/set display density

@@ -41,6 +41,9 @@ class ScreenController(
 
     /** Invoked after a LOCAL touch-wake so callers can publish screen=ON to HA. Set by the service. */
     @Volatile var onWakeByTap: (() -> Unit)? = null
+    /** Invoked after every completed physical wake. Keep callbacks non-blocking; the service schedules
+     * auto-brightness reconciliation away from this serialized screen transition. */
+    @Volatile var onWakeCompleted: (() -> Unit)? = null
 
     // True only between a genuine screen-off and the next wake. The never-blank watchdog uses this to
     // tell a USER-intended dark screen (leave it) from an unintended one (re-light it) — so a stray/
@@ -52,6 +55,15 @@ class ScreenController(
 
     /** Whether the last screen state ha-paneld set was a deliberate off (vs. never-asked / woken). */
     fun isIntendedOff(): Boolean = intendedOff
+
+    /** Serialize a brightness write with screen transitions. Either the write completes before a later
+     * sleep (which then wins), or an already-intended off rejects it; ALS can never relight an OFF panel. */
+    @Synchronized
+    fun actuateBrightnessIfOn(action: () -> Unit): Boolean {
+        if (intendedOff) return false
+        action()
+        return true
+    }
 
     /** Best-effort: is the backlight actually dark? bl_power 4=off/0=on (root/daemon panels); else the
      *  brightness-fallback path where 0 == off. Unknown → false (never re-light on a guess). */
@@ -153,6 +165,7 @@ class ScreenController(
     private fun completeWake(message: String) {
         power.pulseWake()
         BuiltinDashboard.onScreenAwake(true)
+        onWakeCompleted?.invoke()
         Log.d(TAG, message)
     }
 
@@ -160,6 +173,7 @@ class ScreenController(
     @Synchronized
     fun close() {
         onWakeByTap = null
+        onWakeCompleted = null
         if (intendedOff) wake() else wakeTap.disarm()
     }
 

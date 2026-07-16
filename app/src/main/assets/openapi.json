@@ -2,8 +2,8 @@
   "openapi": "3.0.3",
   "info": {
     "title": "ha-paneld",
-    "version": "0.8.5",
-    "description": "Local HTTP control API for a Home Assistant wall-panel agent. Plain HTTP on the LAN, no auth. The canonical machine API lives under /api/v1; the pre-0.8.5 flat paths respond 308 Permanent Redirect to their /api/v1 homes (method + body preserved). Exceptions: GET /health and POST /play are also served directly at the root — they are the external contract endpoints called by plain curl from automations and monitors."
+    "version": "0.9.3",
+    "description": "Local HTTP control API for the ha-paneld Home Assistant dashboard app. Plain HTTP on the LAN, no auth. The canonical machine API lives under /api/v1; the pre-0.8.5 flat paths respond 308 Permanent Redirect to their /api/v1 homes (method + body preserved). Exceptions: GET /health and POST /play are also served directly at the root for plain-curl automations and monitors."
   },
   "servers": [{ "url": "/" }],
   "paths": {
@@ -13,6 +13,13 @@
         "requestBody": { "content": { "text/plain": { "schema": { "type": "string", "description": "a raw URL, or {\"url\":\"https://…\"}" } } } },
         "responses": { "200": { "description": "playing" }, "400": { "description": "no-url" }, "503": { "description": "stopping" } } }
     },
+    "/api/v1/health": { "get": { "summary": "Versioned liveness probe", "tags": ["status"], "responses": { "200": { "description": "Version, panel id, build token and config hash" } } } },
+    "/api/v1/play": {
+      "post": { "summary": "Versioned audio/TTS playback endpoint", "tags": ["media"],
+        "requestBody": { "content": { "text/plain": { "schema": { "type": "string", "description": "a raw URL, or {\"url\":\"https://…\"}" } } } },
+        "responses": { "200": { "description": "playing" }, "400": { "description": "no-url" }, "503": { "description": "stopping" } } }
+    },
+    "/api/v1/openapi.json": { "get": { "summary": "This OpenAPI document", "tags": ["status"], "responses": { "200": { "description": "OpenAPI 3 JSON" } } } },
     "/api/v1/status": { "get": { "summary": "Panel-health warnings + capability matrix as JSON", "tags": ["status"], "responses": { "200": { "description": "{warnings:[html], capabilities:[{name,note,color}]}" } } } },
     "/api/v1/provisioning/plan": {
       "get": {
@@ -171,13 +178,24 @@
         "responses": { "200": { "description": "{kind, schema, exported_at, exported_by, values}" } } }
     },
     "/api/v1/config/import": {
-      "post": { "summary": "Transactional bundle import: migrate → scope/secret filter → validate ALL (reject whole bundle on any failure) → snapshot revision → apply", "tags": ["config"],
+      "post": { "summary": "Bundle import: migrate → scope/secret filter → validate → snapshot revision → apply valid keys (or validate all with strict=1)", "tags": ["config"],
         "parameters": [
           { "name": "dry_run", "in": "query", "schema": { "type": "string", "enum": ["1"] }, "description": "preview the diff without writing" },
-          { "name": "mode", "in": "query", "schema": { "type": "string", "enum": ["restore", "fleet"] }, "description": "fleet = apply only portable, non-secret keys" }
+          { "name": "mode", "in": "query", "schema": { "type": "string", "enum": ["restore", "fleet"] }, "description": "fleet = apply only portable, non-secret keys" },
+          { "name": "strict", "in": "query", "schema": { "type": "string", "enum": ["1"] }, "description": "reject the complete bundle when any value is invalid" },
+          { "name": "expected_cfg", "in": "query", "schema": { "type": "string", "pattern": "^[a-f0-9]{8}$" }, "description": "config hash returned by dry_run; mismatch rejects a stale preview" }
         ],
         "requestBody": { "content": { "application/json": { "schema": { "type": "object", "description": "a bundle from /api/v1/config/export" } } } },
-        "responses": { "200": { "description": "{status, applied, skipped, warnings, errors} or the dry-run diff" }, "400": { "description": "bad-bundle" }, "422": { "description": "rejected (validation)" } } }
+        "responses": { "200": { "description": "{status, applied, skipped, warnings, errors} or dry-run {expected_cfg,changes,…}" }, "400": { "description": "bad bundle or expected_cfg" }, "409": { "description": "stale-preview" }, "422": { "description": "rejected (strict validation or no usable keys)" } } }
+    },
+    "/api/v1/restore": {
+      "post": { "summary": "Preview or asynchronously restore a complete panel backup", "tags": ["config"],
+        "parameters": [
+          { "name": "dry_run", "in": "query", "schema": { "type": "string", "enum": ["1"] }, "description": "decrypt and validate without writing" },
+          { "name": "X-Backup-Passphrase", "in": "header", "schema": { "type": "string", "format": "password" }, "description": "passphrase for a sealed backup; never put it in the URL" }
+        ],
+        "requestBody": { "required": true, "content": { "application/octet-stream": { "schema": { "type": "string", "format": "binary", "description": "backup bundle; request body limited to 67108864 bytes" } } } },
+        "responses": { "200": { "description": "dry-run preview or {status:started}; completion status separates config, profile-catalog, Companion and rollback outcomes" }, "400": { "description": "invalid/corrupt bundle" }, "409": { "description": "another destructive operation owns admission" }, "413": { "description": "bundle-too-large" }, "422": { "description": "config or profile catalog is not restorable" }, "503": { "description": "Companion section needs su or profile restore is unavailable" } } }
     },
     "/api/v1/config/revisions": { "get": { "summary": "On-panel config history (ring buffer, newest first)", "tags": ["config"], "responses": { "200": { "description": "[{id, exported_at, keys}]" } } } },
     "/api/v1/config/revisions/{id}/restore": {
@@ -191,7 +209,8 @@
         "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "properties": { "layout": { "type": "string" } } } } } },
         "responses": { "200": { "description": "{ok:true}" } } }
     },
-    "/api/v1/perf": { "get": { "summary": "Live CPU/GPU/RAM, CPU clock, temperature, top processes, responsiveness + history", "tags": ["performance"], "responses": { "200": { "description": "perf JSON" } } } },
+    "/api/v1/perf": { "get": { "summary": "Live CPU/GPU/RAM, responsiveness, history and fixed-key cumulative feature costs", "tags": ["performance"], "responses": { "200": { "description": "perf JSON" } } } },
+    "/api/v1/perf/costs": { "get": { "summary": "Non-sampling fixed-key cumulative feature costs for sparse A/B harvesting", "tags": ["performance"], "responses": { "200": { "description": "feature-cost JSON" } } } },
     "/api/v1/dashboard/entity-filter": {
       "get": { "summary": "Built-in-renderer entity-filter and automatic-learning status", "tags": ["performance"], "responses": { "200": { "description": "{enabled,entity_count,filter_hash,runtime,learning}" } } },
       "post": {
@@ -266,6 +285,21 @@
         "parameters": [{ "name": "source", "in": "query", "schema": { "type": "string", "enum": ["app", "system"], "default": "app" }, "description": "app = ha-paneld's own process log (no root); system = full device logcat (root panels only)" }],
         "responses": { "200": { "description": "text/event-stream of log lines" }, "503": { "description": "system source requested but the panel has no root" } } }
     },
+    "/api/v1/updates/ignore": { "post": { "summary": "Dismiss one component update banner for one version", "tags": ["install"], "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "required": ["label", "version"], "properties": { "label": { "type": "string" }, "version": { "type": "string" } } } } } }, "responses": { "200": { "description": "dismissed" }, "400": { "description": "missing label/version" } } } },
+    "/api/v1/install/versions": { "get": { "summary": "Available managed-component versions for a channel", "tags": ["install"], "parameters": [ { "name": "name", "in": "query", "required": true, "schema": { "type": "string", "enum": ["paneld", "companion", "webview"] } }, { "name": "channel", "in": "query", "schema": { "type": "string", "enum": ["stable", "prerelease"] } } ], "responses": { "200": { "description": "version catalogue" } } } },
+    "/api/v1/install/status": { "get": { "summary": "Shared destructive-operation progress and optional structured component result", "tags": ["install"], "responses": { "200": { "description": "{running,component,message,result?}" } } } },
+    "/api/v1/install/component": { "post": { "summary": "Start a managed component install/update; exact-version downgrades are refused unless explicitly allowed", "tags": ["install"], "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "required": ["name"], "properties": { "name": { "type": "string", "enum": ["paneld", "companion", "webview"] }, "action": { "type": "string", "enum": ["update", "reinstall"] }, "version": { "type": "string" }, "allow_downgrade": { "type": "boolean", "default": false } } } } } }, "responses": { "200": { "description": "{status:started|busy}" }, "400": { "description": "bad or uncomparable component/action/version" }, "409": { "description": "downgrade-refused" } } } },
+    "/api/v1/install/apk/allow": { "post": { "summary": "Enable or disable arbitrary APK upload capability", "tags": ["install"], "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "required": ["on"], "properties": { "on": { "type": "boolean" } } } } } }, "responses": { "200": { "description": "{ok,allowed}" } } } },
+    "/api/v1/install/apk": { "post": { "summary": "Stage and inspect an APK before explicit commit", "tags": ["install"], "requestBody": { "required": true, "content": { "application/octet-stream": { "schema": { "type": "string", "format": "binary" } } } }, "responses": { "200": { "description": "preview token and APK identity" }, "403": { "description": "capability disabled" }, "413": { "description": "upload too large" } } } },
+    "/api/v1/install/apk/commit": { "post": { "summary": "Consume an APK preview token and start installation", "tags": ["install"], "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "required": ["token"], "properties": { "token": { "type": "string" } } } } } }, "responses": { "200": { "description": "{status:started|busy}" }, "409": { "description": "stale-or-missing token" } } } },
+    "/api/v1/backup": { "post": { "summary": "Download a full config and profile-catalog backup, optionally with Companion login", "tags": ["install"], "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "properties": { "include_companion": { "type": "boolean" }, "passphrase": { "type": "string", "format": "password" } } } } } }, "responses": { "200": { "description": "backup attachment" }, "409": { "description": "busy" }, "413": { "description": "Companion backup too large" }, "422": { "description": "Companion capture unavailable" } } } },
+    "/api/v1/packages": { "get": { "summary": "Installed package inventory used by admin pickers", "tags": ["install"], "responses": { "200": { "description": "package JSON" } } } },
+    "/api/v1/apps": { "get": { "summary": "Launchable app inventory", "tags": ["install"], "responses": { "200": { "description": "app JSON" } } } },
+    "/api/v1/uninstall": { "post": { "summary": "Uninstall an allowed third-party package", "tags": ["install"], "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "required": ["pkg"], "properties": { "pkg": { "type": "string" } } } } } }, "responses": { "200": { "description": "started" }, "400": { "description": "bad/protected package" }, "503": { "description": "no root" } } } },
+    "/api/v1/radio": { "get": { "summary": "EFR32 radio presence and status", "tags": ["status"], "responses": { "200": { "description": "radio JSON" } } } },
+    "/api/v1/webview/heal": { "post": { "summary": "Repair the configured WebView provider", "tags": ["install"], "responses": { "200": { "description": "started" }, "409": { "description": "busy" }, "503": { "description": "no installer capability" } } } },
+    "/api/v1/dashboard/clear-storage": { "post": { "summary": "Start a single-flight clear of the built-in dashboard's local data", "tags": ["control"], "responses": { "202": { "description": "started" }, "409": { "description": "already running" }, "503": { "description": "control plane stopping" } } } },
+    "/api/v1/companion/repair-url": { "post": { "summary": "Repair blank internal Companion server URLs", "tags": ["control"], "responses": { "200": { "description": "repair result" }, "503": { "description": "no root" } } } },
     "/api/v1/sensortrace": {
       "get": { "summary": "Debug sensor-trace ring buffer", "tags": ["sensors"],
         "parameters": [{ "name": "format", "in": "query", "schema": { "type": "string", "enum": ["csv", "json"] } }],
@@ -275,12 +309,12 @@
     "/api/v1/action": {
       "post": { "summary": "On-screen nav action", "tags": ["control"],
         "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "required": ["a"], "properties": { "a": { "type": "string", "enum": ["back", "recents", "launcher", "admin_launcher", "reboot", "volup", "voldn"] } } } } } },
-        "responses": { "200": { "description": "ok" }, "400": { "description": "bad-action" } } }
+        "responses": { "202": { "description": "accepted into the bounded control lane" }, "400": { "description": "bad-action" }, "409": { "description": "control queue busy" }, "503": { "description": "control plane stopping" } } }
     },
     "/api/v1/input": {
       "post": { "summary": "Inject a tap at device pixel (x,y) — the interactive screenshot's control mode (needs root)", "tags": ["control"],
         "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "required": ["x", "y"], "properties": { "x": { "type": "number" }, "y": { "type": "number" } } } } } },
-        "responses": { "200": { "description": "ok" }, "400": { "description": "bad-coords" }, "503": { "description": "no-input-capability" } } }
+        "responses": { "202": { "description": "accepted into the bounded control lane" }, "400": { "description": "bad-coords" }, "409": { "description": "control queue busy" }, "503": { "description": "control plane stopping" } } }
     },
     "/api/v1/proximity": { "get": { "summary": "Live proximity raw + calibration (raw stays local; only the derived binary goes to HA)", "tags": ["proximity"], "responses": { "200": { "description": "proximity JSON" } } } },
     "/api/v1/proximity/capture": {
@@ -290,7 +324,7 @@
     },
     "/api/v1/proximity/threshold": {
       "post": { "summary": "Manual threshold fine-tune (overrides the captured midpoint)", "tags": ["proximity"],
-        "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "required": ["v"], "properties": { "v": { "type": "number" } } } } } },
+        "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "required": ["v"], "properties": { "v": { "type": "number", "minimum": 0, "maximum": 1000000 } } } } } },
         "responses": { "200": { "description": "proximity JSON" }, "400": { "description": "bad-value" } } }
     },
     "/api/v1/proximity/sensitivity": {

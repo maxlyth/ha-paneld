@@ -1,13 +1,23 @@
 package io.github.maxlyth.hapaneld.logship
 
+import io.github.maxlyth.hapaneld.metrics.FeatureCostOperation
+import io.github.maxlyth.hapaneld.metrics.FeatureCostRegistry
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
+import java.io.OutputStream
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * [LogCapture.redact] is the last line of defence before a log line reaches ANY consumer — the
@@ -16,6 +26,40 @@ import java.util.concurrent.TimeUnit
  * creds, HA tokens, and URLs with query secrets — none of which should escape verbatim.
  */
 class LogCaptureTest {
+    private class GateProcess(
+        output: String,
+        private val terminateOnDestroy: Boolean = true,
+    ) : Process() {
+        private val finished = CountDownLatch(1)
+        private val input = ByteArrayInputStream(output.toByteArray())
+        val forcedDestroys = AtomicInteger()
+        @Volatile private var exitCode: Int? = null
+
+        fun finish(code: Int = 0) {
+            exitCode = code
+            finished.countDown()
+        }
+
+        override fun getOutputStream(): OutputStream = ByteArrayOutputStream()
+        override fun getInputStream(): InputStream = input
+        override fun getErrorStream(): InputStream = ByteArrayInputStream(ByteArray(0))
+        override fun waitFor(): Int {
+            finished.await()
+            return exitCode ?: 0
+        }
+        override fun waitFor(timeout: Long, unit: TimeUnit): Boolean = finished.await(timeout, unit)
+        override fun exitValue(): Int = exitCode ?: throw IllegalThreadStateException("still running")
+        override fun destroy() {
+            if (terminateOnDestroy) finish(143)
+        }
+        override fun destroyForcibly(): Process {
+            forcedDestroys.incrementAndGet()
+            finish(137)
+            return this
+        }
+        override fun isAlive(): Boolean = finished.count > 0
+    }
+
     private fun redact(s: String) = LogCapture.redact(s)
 
     @Test fun stripsBearerAuthorizationHeader() {
@@ -52,6 +96,15 @@ class LogCaptureTest {
         assertEquals(line, redact(line))
     }
 
+    @Test fun boundedUtf8AccountingIsExactWithoutEncodedCopies() {
+        assertEquals(5L, boundedUtf8Bytes("plain", 100))
+        assertEquals(6L, boundedUtf8Bytes("é😀", 100))
+        assertEquals(5L, boundedUtf8Bytes("é😀", 5))
+        assertEquals(1L, boundedUtf8Bytes("\uD800", 100))
+        assertEquals(6L, boundedUtf8Bytes(listOf("é", "😀"), 100))
+        assertEquals(3L, boundedUtf8Bytes(listOf("é", "😀"), 3))
+    }
+
     // ---- streaming behaviour (shell subprocess stands in for logcat) ----------------------------
 
     private fun capture(script: String, dump: String = "true") = LogCapture(
@@ -85,6 +138,36 @@ class LogCaptureTest {
         }
     }
 
+    @Test fun streamingCaptureRecordsOneBoundedBufferedBatch() {
+        val wall = AtomicLong()
+        val costs = FeatureCostRegistry(
+            wallNanos = { wall.getAndAdd(100L) },
+            threadCpuNanos = { -1L },
+            threadId = { 1L },
+        )
+        val process = GateProcess("one\ntwo\nthree\n")
+        val cap = LogCapture(
+            CoroutineScope(Dispatchers.IO),
+            listOf("stream"),
+            { listOf("dump") },
+            processStarter = { process },
+            featureCosts = costs,
+        )
+        val got = java.util.concurrent.CopyOnWriteArrayList<String>()
+        val sub = cap.subscribe(got::add)
+        try {
+            await { got.size == 3 }
+            val operation = operation(costs, FeatureCostOperation.LOG_CAPTURE_BATCH)
+            assertEquals(1L, operation.getLong("calls"))
+            assertEquals(1L, operation.getLong("succeeded"))
+            assertEquals(3L, operation.getLong("work_units"))
+            assertEquals(11L, operation.getLong("work_bytes"))
+        } finally {
+            sub.close()
+            cap.close()
+        }
+    }
+
     @Test fun fanOutReachesEverySubscriberAndIdleStopClearsRing() {
         val cap = capture("echo shared; sleep 30")
         val a = java.util.concurrent.CopyOnWriteArrayList<String>()
@@ -107,6 +190,103 @@ class LogCaptureTest {
         val out = cap.dump(10)
         assertEquals("ok", out[0])
         assertFalse(out[1].contains("ZZZZ9999ZZZZ"))
+    }
+
+    @Test fun concurrentFirstViewersShareOneDumpProcess() {
+        val starts = AtomicInteger()
+        val process = GateProcess("one\ntwo\n")
+        val cap = LogCapture(
+            CoroutineScope(Dispatchers.IO),
+            listOf("unused"),
+            { listOf("dump") },
+            maxViewers = 8,
+            processStarter = {
+                starts.incrementAndGet()
+                process
+            },
+        )
+        val workers = 8
+        val viewers = (1..workers).map {
+            (cap.admitViewer() as LogCapture.ViewerAdmission.Accepted).lease
+        }
+        val ready = CountDownLatch(workers)
+        val go = CountDownLatch(1)
+        val executor = Executors.newFixedThreadPool(workers)
+        try {
+            val results = (1..workers).map {
+                executor.submit<List<String>> {
+                    ready.countDown()
+                    go.await()
+                    cap.initialBacklog()
+                }
+            }
+            assertTrue(ready.await(2, TimeUnit.SECONDS))
+            go.countDown()
+            await { starts.get() == 1 }
+            process.finish()
+            results.forEach { assertEquals(listOf("one", "two"), it.get(2, TimeUnit.SECONDS)) }
+            // The completed result remains shared until this admitted cohort drains, covering the
+            // narrow response-before-live-subscribe scheduling gap.
+            assertEquals(listOf("one", "two"), cap.initialBacklog())
+            assertEquals(1, starts.get())
+        } finally {
+            viewers.forEach(AutoCloseable::close)
+            cap.close()
+            executor.shutdownNow()
+        }
+    }
+
+    @Test fun viewerCapRejectsAndCleanupRestoresCapacity() {
+        val cap = LogCapture(
+            CoroutineScope(Dispatchers.IO),
+            listOf("unused"),
+            { listOf("unused") },
+            maxViewers = 2,
+        )
+        val first = cap.admitViewer() as LogCapture.ViewerAdmission.Accepted
+        val second = cap.admitViewer() as LogCapture.ViewerAdmission.Accepted
+        assertEquals(LogCapture.ViewerAdmission.CapacityExceeded, cap.admitViewer())
+
+        first.lease.close()
+        first.lease.close() // cleanup is deliberately idempotent
+        val replacement = cap.admitViewer() as LogCapture.ViewerAdmission.Accepted
+        second.lease.close()
+        replacement.lease.close()
+        cap.close()
+        assertEquals(LogCapture.ViewerAdmission.Unavailable, cap.admitViewer())
+    }
+
+    @Test fun dumpOutputIsBoundedBeforeDecoding() {
+        val process = GateProcess("one\ntwo\nsecret-third-line\n").also { it.finish() }
+        val cap = LogCapture(
+            CoroutineScope(Dispatchers.IO),
+            listOf("unused"),
+            { listOf("dump") },
+            dumpMaxBytes = 7,
+            processStarter = { process },
+        )
+        try {
+            assertEquals(listOf("one", "two"), cap.dump(10))
+        } finally {
+            cap.close()
+        }
+    }
+
+    @Test fun timedOutDumpIsForciblyDestroyed() {
+        val process = GateProcess("", terminateOnDestroy = false)
+        val cap = LogCapture(
+            CoroutineScope(Dispatchers.IO),
+            listOf("unused"),
+            { listOf("dump") },
+            dumpTimeoutMs = 50,
+            processStarter = { process },
+        )
+        try {
+            assertTrue(cap.dump().isEmpty())
+            assertTrue("timeout must escalate to forced destruction", process.forcedDestroys.get() > 0)
+        } finally {
+            cap.close()
+        }
     }
 
     @Test fun terminalCloseClearsStateAndRejectsNewSubscribers() {
@@ -159,5 +339,15 @@ class LogCaptureTest {
             replacement.close()
             cap.close()
         }
+    }
+
+    private fun operation(
+        registry: FeatureCostRegistry,
+        expected: FeatureCostOperation,
+    ): JSONObject {
+        val operations = JSONObject(registry.json()).getJSONArray("operations")
+        return (0 until operations.length()).asSequence()
+            .map(operations::getJSONObject)
+            .first { it.getString("id") == expected.id }
     }
 }

@@ -27,6 +27,28 @@ for arg in "$@"; do
 done
 
 case "$url" in
+  https://github.com/maxlyth/ha-paneld/releases/download/v*/ha-paneld-helper-v*-*.sha256.sig)
+    [ -n "$output_file" ] || exit 2
+    [ "${MOCK_HELPER_PROOF_DOWNLOAD:-ok}" = "signature_fail" ] && exit 22
+    printf 'mock detached helper signature\n' > "$output_file"
+    ;;
+  https://github.com/maxlyth/ha-paneld/releases/download/v*/ha-paneld-helper-v*-*.sha256)
+    [ -n "$output_file" ] || exit 2
+    [ "${MOCK_HELPER_PROOF_DOWNLOAD:-ok}" = "checksum_fail" ] && exit 22
+    helper="${RELEASE_HELPER_SOURCE:-}"
+    [ -n "$helper" ] && [ -f "$helper" ] || exit 2
+    asset="$(basename "$url" .sha256)"
+    case "${MOCK_HELPER_CHECKSUM:-ok}" in
+      ok) hash="$(/usr/bin/sha256sum "$helper" | awk '{print $1}')"; printf '%s  %s\n' "$hash" "$asset" > "$output_file" ;;
+      mismatch) printf '%064d  %s\n' 0 "$asset" > "$output_file" ;;
+      malformed) printf 'this is not a helper checksum record\n' > "$output_file" ;;
+      *) exit 2 ;;
+    esac
+    ;;
+  https://github.com/maxlyth/ha-paneld/releases/download/v*/ha-paneld-helper-v*-*)
+    [ -n "$output_file" ] || exit 2
+    printf 'mock release helper\n' > "$output_file"
+    ;;
   https://github.com/maxlyth/ha-paneld/releases/download/v*/ha-paneld-provision-v*.sh.sha256.sig)
     [ -n "$output_file" ] || exit 2
     [ "${MOCK_INSTALLER_PROOF_DOWNLOAD:-ok}" = "signature_fail" ] && exit 22
@@ -37,7 +59,19 @@ case "$url" in
     [ "${MOCK_INSTALLER_PROOF_DOWNLOAD:-ok}" = "checksum_fail" ] && exit 22
     asset="$(basename "$url" .sha256)"
     case "${MOCK_INSTALLER_CHECKSUM:-ok}" in
-      ok) hash="$(printf 'mock authenticated provisioner\n' | /usr/bin/sha256sum | awk '{print $1}')"; printf '%s  %s\n' "$hash" "$asset" > "$output_file" ;;
+      ok)
+        if [ -n "${RELEASE_PROVISION_SOURCE:-}" ]; then
+          hash="$(/usr/bin/sha256sum "$RELEASE_PROVISION_SOURCE" | awk '{print $1}')"
+        else
+          case "${MOCK_RELEASE_PROVISION_BUILD_ID:-${MOCK_HELPER_BUILD_ID:?}}" in
+            missing) provision_body='mock authenticated provisioner' ;;
+            *) provision_body="$(printf 'mock authenticated provisioner\nRELEASE_HELPER_BUILD_ID=\"%s\"' \
+              "${MOCK_RELEASE_PROVISION_BUILD_ID:-${MOCK_HELPER_BUILD_ID:?}}")" ;;
+          esac
+          hash="$(printf '%s\n' "$provision_body" | /usr/bin/sha256sum | awk '{print $1}')"
+        fi
+        printf '%s  %s\n' "$hash" "$asset" > "$output_file"
+        ;;
       mismatch) printf '%064d  %s\n' 0 "$asset" > "$output_file" ;;
       malformed) printf 'this is not a provisioner checksum record\n' > "$output_file" ;;
       *) exit 2 ;;
@@ -45,7 +79,11 @@ case "$url" in
     ;;
   https://github.com/maxlyth/ha-paneld/releases/download/v*/ha-paneld-provision-v*.sh)
     [ -n "$output_file" ] || exit 2
-    printf 'mock authenticated provisioner\n' > "$output_file"
+    case "${MOCK_RELEASE_PROVISION_BUILD_ID:-${MOCK_HELPER_BUILD_ID:?}}" in
+      missing) printf 'mock authenticated provisioner\n' > "$output_file" ;;
+      *) printf 'mock authenticated provisioner\nRELEASE_HELPER_BUILD_ID="%s"\n' \
+        "${MOCK_RELEASE_PROVISION_BUILD_ID:-${MOCK_HELPER_BUILD_ID:?}}" > "$output_file" ;;
+    esac
     ;;
   https://raw.githubusercontent.com/maxlyth/ha-paneld/v0.9.2/scripts/provision.sh)
     [ -n "$output_file" ] || exit 2

@@ -6,6 +6,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.ByteArrayInputStream
 
 class ReleaseCatalogTest {
     // newest-first, as the GitHub releases list returns them
@@ -58,5 +59,28 @@ class ReleaseCatalogTest {
         )
         assertNull(ReleaseCatalog.newest(missingHead, "prerelease")?.apkUrl)
         assertEquals("v0.8.6", ReleaseCatalog.newest(missingHead, "stable")?.tag)
+    }
+
+    @Test fun apiResponseReaderEnforcesDeclaredAndStreamingBounds() {
+        val payload = "{\"ok\":true}".toByteArray()
+        assertEquals(
+            "{\"ok\":true}",
+            ReleaseCatalog.readResponse(ByteArrayInputStream(payload), payload.size.toLong(), 64L),
+        )
+        assertThrowsByteLimit {
+            ReleaseCatalog.readResponse(ByteArrayInputStream(payload), 65L, 64L)
+        }
+        assertThrowsByteLimit {
+            ReleaseCatalog.readResponse(ByteArrayInputStream(ByteArray(65)), -1L, 64L)
+        }
+    }
+
+    private fun assertThrowsByteLimit(block: () -> Unit) {
+        try {
+            block()
+            throw AssertionError("expected ByteLimitExceeded")
+        } catch (_: ByteLimitExceeded) {
+            // Expected.
+        }
     }
 }

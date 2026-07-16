@@ -69,12 +69,18 @@ REPO="maxlyth/ha-paneld"
 LOCAL_APK="app/build/outputs/apk/debug/app-debug.apk"
 PKG="io.github.maxlyth.hapaneld"
 RELEASE_CERT_SHA256="ac6193307fb0b70113aae205d7549406f96e063bc5491b67b1d5694a34b0e339"
+RELEASE_HELPER_BUILD_ID=""
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+HELPER_DIST_DIR="${HAPANELD_HELPER_DIST_DIR:-$SCRIPT_DIR/../helper/dist}"
 A11Y="$PKG/.input.PanelAccessibilityService"
 APK=""; APK_RELEASE_TAG=""; PANEL_ID=""; MQTT=""; MQTT_USER=""; MQTT_PASS=""; VERIFY_ONLY=0; LATEST=0; PRERELEASE=0; FORCE=0; PERSIST_ADB=0; STRIP_VENDOR=0; SHIZUKU=0; TOINSTALL_VER=""
 LOG_HOST=""; LOG_PORT=""; LOG_PROTO=""; LOG_ENABLE=""
 EXPORT_FILE=""; RESTORE_FILE=""; RESTORE_MODE=""
 HA_URL=""; HA_TOKEN=""; HA_USER=""; HA_PASS=""; HA_REFRESH=""; HA_EXPIRY=""; BUILTIN=0
 HA_LOGIN_FAILED=0
+HELPER_REQUIRED=0
+ROOT_HELPER_TRANSACTION_KIND=""
+TARGET_APK_SHA256=""
 
 if [ "${1:-}" ] && [ "${1#--}" = "${1:-}" ]; then APK="$1"; shift; fi
 while [ "${1:-}" ]; do
@@ -122,6 +128,14 @@ release_apk_name() { printf 'ha-paneld-%s-manual-setup-required.apk\n' "$1"; }
 release_apk_url() { printf 'https://github.com/%s/releases/download/%s/%s\n' "$REPO" "$1" "$(release_apk_name "$1")"; }
 release_checksum_url() { printf '%s.sha256\n' "$(release_apk_url "$1")"; }
 release_signature_url() { printf '%s.sig\n' "$(release_checksum_url "$1")"; }
+release_helper_name() { printf 'ha-paneld-helper-%s-%s\n' "$1" "$2"; }
+release_helper_url() { printf 'https://github.com/%s/releases/download/%s/%s\n' "$REPO" "$1" "$(release_helper_name "$1" "$2")"; }
+release_has_helper_assets() {
+  local version major minor patch
+  version="${1#v}"; version="${version%%-*}"
+  IFS=. read -r major minor patch <<< "$version"
+  [ "$major" -gt 0 ] || [ "$minor" -gt 9 ] || { [ "$minor" -eq 9 ] && [ "$patch" -ge 4 ]; }
+}
 write_release_public_key() {
   cat > "$1" <<'EOF'
 -----BEGIN PUBLIC KEY-----
@@ -236,12 +250,14 @@ verify() {
   chk "HTTP server reachable"  "$health" "ha-paneld"
   chk "WRITE_SETTINGS granted" "$diag" "write_settings=true"
   chk "accessibility enabled"  "$diag" "a11y=true"
-  # Until every supported app has the plan endpoint, retain the broad legacy helper hint as fallback.
-  # A current app's plan is profile-specific, so repeating this blanket message would be misleading.
-  if [ "$PROVISIONING_PLAN_AVAILABLE" != 1 ]; then
-    if printf '%s' "$diag" | grep -q "daemon=true"; then
-      echo "   ${GRN}✓${X} root helper daemon: running"
-    elif [ -n "$diag" ]; then
+  # Root helper daemon — installed automatically on every rooted panel by current provisioners.
+  if printf '%s' "$diag" | grep -q "daemon=true"; then
+    echo "   ${GRN}✓${X} root helper daemon: running"
+  elif [ -n "$diag" ]; then
+    if [ "$HELPER_REQUIRED" = 1 ]; then
+      echo "   ${RED}✗ root helper daemon: not detected after installation${X}"
+      rc=1
+    elif [ "$PROVISIONING_PLAN_AVAILABLE" != 1 ]; then
       echo "   ${YEL}ℹ${X} root helper daemon: ${YEL}not detected${X} ${D}(needed on sandbox-walled panels — helper/install-daemon.sh)${X}"
     fi
   fi
@@ -589,6 +605,763 @@ verify_release_apk() {
   step "🛡️  verified" "${D}$APK_RELEASE_TAG · package ${package_name:-confirmed after install} · signer ${RELEASE_CERT_SHA256:0:12}…${X}"
 }
 
+verify_release_helper() {
+  local helper="$1" tag="$2" abi="$3"
+  local proof_dir checksum_file signature_file public_key expected_name record expected_hash actual_hash
+  expected_name="$(release_helper_name "$tag" "$abi")"
+  proof_dir="$(mktemp -d)" || fail "could not create a temporary directory for helper verification" \
+    "Free some disk space, then re-run; no panel changes were made."
+  checksum_file="$proof_dir/helper.sha256"
+  signature_file="$proof_dir/helper.sha256.sig"
+  public_key="$proof_dir/release-public-key.pem"
+  if ! write_release_public_key "$public_key"; then
+    rm -rf "$proof_dir"
+    fail "could not prepare the trusted ha-paneld release key" "No panel changes were made. Check free disk space, then re-run."
+  fi
+  if ! RELEASE_HELPER_SOURCE="$helper" curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 15 --max-time 60 \
+      "$(release_helper_url "$tag" "$abi").sha256" -o "$checksum_file"; then
+    rm -rf "$proof_dir"
+    fail "could not download the signed helper checksum for $tag ($abi)" \
+      "The release may be incomplete or GitHub may be unavailable. No panel changes were made; check internet access and retry."
+  fi
+  if ! curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 15 --max-time 60 \
+      "$(release_helper_url "$tag" "$abi").sha256.sig" -o "$signature_file"; then
+    rm -rf "$proof_dir"
+    fail "could not download the helper checksum signature for $tag ($abi)" \
+      "The release may be incomplete or GitHub may be unavailable. No panel changes were made; check internet access and retry."
+  fi
+  if ! openssl dgst -sha256 -verify "$public_key" -signature "$signature_file" "$checksum_file" >/dev/null 2>&1; then
+    rm -rf "$proof_dir"
+    fail "the $tag helper checksum signature is invalid" \
+      "The release assets could be incomplete, damaged, or substituted. Nothing was installed, started, or privileged."
+  fi
+  record="$(cat "$checksum_file")"
+  expected_hash="${record%% *}"
+  if ! printf '%s\n' "$expected_hash" | grep -Eq '^[0-9A-Fa-f]{64}$' || [ "$record" != "$expected_hash  $expected_name" ]; then
+    rm -rf "$proof_dir"
+    fail "the signed helper checksum record for $tag is malformed" \
+      "Expected one SHA-256 record for $expected_name. Nothing was installed, started, or privileged."
+  fi
+  if ! actual_hash="$(openssl dgst -sha256 -r "$helper" 2>/dev/null | awk '{print tolower($1)}')" || \
+      ! printf '%s\n' "$actual_hash" | grep -Eq '^[0-9a-f]{64}$'; then
+    rm -rf "$proof_dir"
+    fail "OpenSSL could not calculate the downloaded helper checksum" \
+      "No panel changes were made. Check that the helper asset is readable and re-run the installer."
+  fi
+  expected_hash="$(printf '%s' "$expected_hash" | tr '[:upper:]' '[:lower:]')"
+  if [ "$actual_hash" != "$expected_hash" ]; then
+    rm -rf "$proof_dir"
+    fail "the $tag helper checksum does not match its signed record" \
+      "The helper could be incomplete, damaged, or substituted. Nothing was installed, started, or privileged."
+  fi
+  rm -rf "$proof_dir"
+  step "🔐 authenticated" "${D}$tag helper · $abi · signed SHA-256 ${actual_hash:0:12}…${X}"
+}
+
+fetch_release_helper_build_id() {
+  local tag="$1" proof_dir provisioner checksum_file signature_file public_key expected_name
+  local record expected_hash actual_hash build_id
+  expected_name="ha-paneld-provision-$tag.sh"
+  proof_dir="$(mktemp -d)" || return 1
+  provisioner="$proof_dir/$expected_name"
+  checksum_file="$proof_dir/$expected_name.sha256"
+  signature_file="$checksum_file.sig"
+  public_key="$proof_dir/release-public-key.pem"
+  write_release_public_key "$public_key" || { rm -rf "$proof_dir"; return 1; }
+  curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 15 --max-time 60 \
+    "https://github.com/$REPO/releases/download/$tag/$expected_name" -o "$provisioner" || { rm -rf "$proof_dir"; return 1; }
+  RELEASE_PROVISION_SOURCE="$provisioner" curl -fsSL --proto '=https' --proto-redir '=https' \
+    --connect-timeout 15 --max-time 60 \
+    "https://github.com/$REPO/releases/download/$tag/$expected_name.sha256" -o "$checksum_file" || {
+      rm -rf "$proof_dir"; return 1;
+    }
+  curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 15 --max-time 60 \
+    "https://github.com/$REPO/releases/download/$tag/$expected_name.sha256.sig" -o "$signature_file" || {
+      rm -rf "$proof_dir"; return 1;
+    }
+  openssl dgst -sha256 -verify "$public_key" -signature "$signature_file" "$checksum_file" >/dev/null 2>&1 || {
+    rm -rf "$proof_dir"; return 1;
+  }
+  record="$(cat "$checksum_file")"
+  expected_hash="${record%% *}"
+  if ! printf '%s\n' "$expected_hash" | grep -Eq '^[0-9A-Fa-f]{64}$' || \
+     [ "$record" != "$expected_hash  $expected_name" ]; then
+    rm -rf "$proof_dir"; return 1
+  fi
+  actual_hash="$(openssl dgst -sha256 -r "$provisioner" 2>/dev/null | awk '{print tolower($1)}')" || {
+    rm -rf "$proof_dir"; return 1;
+  }
+  expected_hash="$(printf '%s' "$expected_hash" | tr '[:upper:]' '[:lower:]')"
+  [ "$actual_hash" = "$expected_hash" ] || { rm -rf "$proof_dir"; return 1; }
+  build_id="$(sed -nE 's/^RELEASE_HELPER_BUILD_ID="([0-9a-f]{64})"$/\1/p' "$provisioner")"
+  rm -rf "$proof_dir"
+  printf '%s\n' "$build_id" | grep -Eq '^[0-9a-f]{64}$' || return 1
+  printf '%s\n' "$build_id"
+}
+
+host_sha256() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | awk '{print $1}'
+  else fail "cannot authenticate helper staging" "Install sha256sum (or shasum), then re-run."
+  fi
+}
+
+ensure_root_path() {
+  probe_su && return 0
+
+  # Userdebug panels may expose root only after `adb root`. Unsupported production builds reject this
+  # harmlessly; a successful restart briefly drops the transport, so reconnect before probing again.
+  adb -s "$TARGET" root >/dev/null 2>&1 || true
+  sleep 1
+  adb connect "$TARGET" >/dev/null 2>&1 || true
+  local state="" attempt=0
+  while [ "$attempt" -lt 8 ]; do
+    attempt=$((attempt + 1))
+    state="$(adb devices 2>/dev/null | awk -v t="$TARGET" '$1==t {print $2}')"
+    [ "$state" = device ] && break
+    sleep 1
+  done
+  SU_FORM=""
+  probe_su
+}
+
+helper_daemon_reply() {
+  local command="$1" port="" reply=""
+  if [ -n "${HAPANELD_HELPER_PROBE:-}" ]; then
+    "$HAPANELD_HELPER_PROBE" "$command"
+    return $?
+  fi
+  port="$(adb -s "$TARGET" forward tcp:0 localabstract:hapaneld-helper 2>/dev/null | tr -d '\r' || true)"
+  case "$port" in ''|*[!0-9]*) return 1 ;; esac
+  if exec 9<>"/dev/tcp/127.0.0.1/$port" 2>/dev/null; then
+    printf '%s\n' "$command" >&9
+    IFS= read -r -t 3 reply <&9 || reply=""
+    exec 9>&-
+  fi
+  adb -s "$TARGET" forward --remove "tcp:$port" >/dev/null 2>&1 || true
+  [ -n "$reply" ] || return 1
+  printf '%s\n' "$reply"
+}
+
+wait_for_helper_reply() {
+  local command="$1" expected="$2" reply="" attempt=0
+  while [ "$attempt" -lt 10 ]; do
+    attempt=$((attempt + 1))
+    reply="$(helper_daemon_reply "$command" 2>/dev/null || true)"
+    [ "$reply" = "$expected" ] && return 0
+    sleep 1
+  done
+  return 1
+}
+
+rollback_root_helper() {
+  local install_kind="$1" restored
+  case "$install_kind" in
+    system)
+      restored="$(run_root 'sh /data/local/tmp/hapaneld-helper.txn rollback-system' 2>&1)" || true
+      ;;
+    systemless)
+      restored="$(run_root 'sh /data/local/tmp/hapaneld-helper.txn rollback-systemless' 2>&1)" || true
+      ;;
+    *) return 1 ;;
+  esac
+  if printf '%s\n' "$restored" | grep -qx ROLLBACK_RESTARTED; then
+    wait_for_helper_reply PING OK
+  else
+    printf '%s\n' "$restored" | grep -Eqx 'ROLLBACK_(EMPTY|LEGACY|UNNEEDED)'
+  fi
+}
+
+commit_root_helper_upgrade() {
+  local committed
+  case "$1" in
+    system) committed="$(run_root 'sh /data/local/tmp/hapaneld-helper.txn commit-system' 2>&1)" || true ;;
+    systemless) committed="$(run_root 'sh /data/local/tmp/hapaneld-helper.txn commit-systemless' 2>&1)" || true ;;
+    *) return 1 ;;
+  esac
+  printf '%s\n' "$committed" | grep -qx COMMIT_OK
+}
+
+cleanup_root_helper_staging() {
+  run_root 'rm -f /data/local/tmp/hapaneld-helper /data/local/tmp/hapaneld-helper.rc /data/local/tmp/hapaneld-helper.svc /data/local/tmp/hapaneld-helper.txn' \
+    >/dev/null 2>&1 || true
+}
+
+root_helper_transaction_record() {
+  case "$1" in
+    system) run_root 'sh /data/local/tmp/hapaneld-helper.txn status-system' 2>/dev/null ;;
+    systemless) run_root 'sh /data/local/tmp/hapaneld-helper.txn status-systemless' 2>/dev/null ;;
+    *) return 1 ;;
+  esac
+}
+
+# Return 0 only when the exact APK bytes are installed, 1 for a definitive different/missing package,
+# and 2 when adb transport or pulling the installed base APK is inconclusive.
+installed_apk_matches_hash() {
+  local expected="$1" path_output path dir pulled actual
+  path_output="$(adb -s "$TARGET" shell pm path "$PKG" 2>/dev/null)" || return 2
+  path="$(printf '%s\n' "$path_output" | tr -d '\r' | sed -n 's/^package://p' | head -1)"
+  [ -n "$path" ] || return 1
+  dir="$(mktemp -d)" || return 2
+  pulled="$dir/installed.apk"
+  if ! adb -s "$TARGET" pull "$path" "$pulled" >/dev/null 2>&1 || [ ! -s "$pulled" ]; then
+    rm -rf "$dir"
+    return 2
+  fi
+  actual="$(host_sha256 "$pulled" 2>/dev/null || true)"
+  rm -rf "$dir"
+  [ "$actual" = "$expected" ]
+}
+
+reconcile_stale_root_helper() {
+  local install_kind="$1" record journal_version journal_scope target_apk target_build outcome
+  record="$(root_helper_transaction_record "$install_kind" || true)"
+  journal_version="$(printf '%s\n' "$record" | sed -n 's/^JOURNAL_VERSION=//p')"
+  journal_scope="$(printf '%s\n' "$record" | sed -n 's/^JOURNAL_SCOPE=//p')"
+  target_apk="$(printf '%s\n' "$record" | sed -nE 's/^TARGET_APK_SHA256=([0-9a-f]{64})$/\1/p')"
+  target_build="$(printf '%s\n' "$record" | sed -nE 's/^TARGET_BUILD_ID=([0-9a-f]{64})$/\1/p')"
+  if [ "$journal_version" != 1 ] || [ "$journal_scope" != APK_HELPER ] || \
+     ! printf '%s\n' "$target_apk" | grep -Eq '^[0-9a-f]{64}$' || \
+     ! printf '%s\n' "$target_build" | grep -Eq '^[0-9a-f]{64}$'; then
+    return 2
+  fi
+  if installed_apk_matches_hash "$target_apk"; then
+    wait_for_helper_reply COMPANIONCAPS "COMPANIONCAPS 1 BACKUP RESTORE STATUS JOURNAL" || return 2
+    wait_for_helper_reply BUILDID "BUILDID $target_build" || return 2
+    commit_root_helper_upgrade "$install_kind" || return 2
+    return 0
+  else
+    outcome=$?
+  fi
+  [ "$outcome" -eq 1 ] || return 2
+  wait_for_helper_reply BUILDID "BUILDID $target_build" || return 2
+  rollback_root_helper "$install_kind"
+}
+
+install_root_helper() {
+  local abi helper_dir="" helper="" helper_name="" rc_file="" service_file="" transaction_file=""
+  local bin_sha256 rc_sha256 service_sha256 transaction_sha256 expected_build_id="" out out2 root_ready=0 install_kind=""
+
+  abi="$(adb -s "$TARGET" shell getprop ro.product.cpu.abi 2>/dev/null | tr -d '\r')"
+
+  # A working in-app su route is a read-only probe. If that is absent, authenticate official helper
+  # bytes before attempting `adb root`, so no downloaded privileged payload is trusted after a panel
+  # privilege transition. Local builds are already operator-controlled and are resolved only if the
+  # root-ADB attempt succeeds.
+  probe_su && root_ready=1
+  case "$abi" in
+    armeabi-v7a|arm64-v8a) ;;
+    *)
+      if [ "$root_ready" = 0 ] && ensure_root_path; then root_ready=1; fi
+      if [ "$root_ready" = 0 ]; then
+        echo "   ${YEL}ℹ${X} no root path available — continuing without the root helper"
+        return 0
+      fi
+      fail "this rooted panel reports unsupported ABI '${abi:-unknown}'" \
+        "Official helper assets are available for armeabi-v7a and arm64-v8a. Nothing was installed." ;;
+  esac
+  if [ -n "$APK_RELEASE_TAG" ] && release_has_helper_assets "$APK_RELEASE_TAG"; then
+    helper_dir="$(mktemp -d)" || fail "could not create a temporary directory for the root helper" \
+      "Free some disk space, then re-run; no panel changes were made."
+    helper_name="$(release_helper_name "$APK_RELEASE_TAG" "$abi")"
+    helper="$helper_dir/$helper_name"
+    if ! curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 15 --max-time 300 \
+        "$(release_helper_url "$APK_RELEASE_TAG" "$abi")" -o "$helper"; then
+      rm -rf "$helper_dir"
+      fail "could not download the $APK_RELEASE_TAG root helper for $abi" \
+        "The release may be incomplete or GitHub may be unavailable. No panel changes were made."
+    fi
+    verify_release_helper "$helper" "$APK_RELEASE_TAG" "$abi"
+    if [ "$root_ready" = 0 ] && ensure_root_path; then root_ready=1; fi
+  elif [ -n "$APK_RELEASE_TAG" ]; then
+    # Releases before the helper became a sealed release asset retain their historical direct-su
+    # behaviour. Current releases always enter the authenticated branch above.
+    echo "   ${YEL}ℹ${X} $APK_RELEASE_TAG predates automatic root-helper assets"
+    return 0
+  else
+    if [ "$root_ready" = 0 ] && ensure_root_path; then root_ready=1; fi
+    if [ "$root_ready" = 0 ]; then
+      echo "   ${YEL}ℹ${X} no root path available — continuing without the root helper"
+      return 0
+    fi
+    helper="$HELPER_DIST_DIR/$abi/hapaneld-helper"
+    [ -s "$helper" ] || fail "the local $abi root helper has not been built" \
+      "Run ./helper/build.sh, then re-run this provisioning command." \
+      "The APK was not replaced, so the panel remains on its previous working version."
+  fi
+  if [ "$root_ready" = 0 ]; then
+    [ -z "$helper_dir" ] || rm -rf "$helper_dir"
+    echo "   ${YEL}ℹ${X} no root path available — continuing without the root helper"
+    return 0
+  fi
+  HELPER_REQUIRED=1
+  expected_build_id="$RELEASE_HELPER_BUILD_ID"
+  if [ -z "$expected_build_id" ] && [ -n "$APK_RELEASE_TAG" ]; then
+    expected_build_id="$(fetch_release_helper_build_id "$APK_RELEASE_TAG" || true)"
+  elif [ -z "$expected_build_id" ] && [ -x "$SCRIPT_DIR/../helper/source-id.sh" ]; then
+    expected_build_id="$("$SCRIPT_DIR/../helper/source-id.sh" 2>/dev/null || true)"
+  fi
+  if ! printf '%s\n' "$expected_build_id" | grep -Eq '^[0-9a-f]{64}$'; then
+    if [ -n "$APK_RELEASE_TAG" ]; then
+      fail "the expected root-helper build identity is unavailable" \
+        "The signed versioned provisioner did not provide a valid helper identity. No APK or helper was replaced."
+    fi
+    fail "the expected root-helper build identity is unavailable" \
+      "Run ./helper/build.sh from a complete checkout, then retry. No APK or helper was replaced."
+  fi
+
+  rc_file="$(mktemp)"
+  service_file="$(mktemp)"
+  cat > "$rc_file" <<'EOF'
+service hapaneld_helper /system/bin/hapaneld-helper
+    class main
+    user root
+    group root
+    seclabel u:r:su:s0
+EOF
+  cat > "$service_file" <<'EOF'
+#!/system/bin/sh
+while [ "$(getprop sys.boot_completed)" != "1" ]; do sleep 3; done
+/system/bin/stop hapaneld_helper 2>/dev/null
+/system/bin/stop hapaneld_ledd 2>/dev/null
+/system/bin/pkill -x hapaneld-helper 2>/dev/null
+/system/bin/pkill -x hapaneld-ledd 2>/dev/null
+/data/adb/hapaneld/hapaneld-helper >/dev/null 2>&1 &
+EOF
+  transaction_file="$(mktemp)"
+  cat > "$transaction_file" <<'EOF'
+#!/system/bin/sh
+set -u
+
+hash_matches() {
+  [ "$(file_sha256 "$2")" = "$1" ]
+}
+
+file_sha256() {
+  actual=$(sha256sum "$1" 2>/dev/null || toybox sha256sum "$1" 2>/dev/null) || return 1
+  printf '%s\n' "${actual%% *}"
+}
+
+root_owned() {
+  owner=$(stat -c %u:%g "$1" 2>/dev/null || toybox stat -c %u:%g "$1" 2>/dev/null) || return 1
+  [ "$owner" = 0:0 ]
+}
+
+snapshot() {
+  live=$1 recovery=$2 mode=$3
+  rm -f "$recovery" || return 1
+  if [ ! -f "$live" ]; then
+    echo "0 -"
+    return 0
+  fi
+  cp -p "$live" "$recovery" || return 1
+  chown 0:0 "$recovery" || return 1
+  chmod "$mode" "$recovery" || return 1
+  cmp -s "$live" "$recovery" || return 1
+  root_owned "$recovery" || return 1
+  recovery_sha=$(file_sha256 "$recovery") || return 1
+  echo "1 $recovery_sha"
+}
+
+flag() {
+  grep -q "^$1=1$" "$2"
+}
+
+valid_recovery() {
+  name=$1 recovery=$2 marker=$3
+  expected=$(sed -n "s/^${name}_SHA256=//p" "$marker")
+  case "$expected" in ''|*[!0-9a-f]*) return 1 ;; esac
+  [ "${#expected}" -eq 64 ] || return 1
+  [ -f "$recovery" ] && root_owned "$recovery" && [ "$(file_sha256 "$recovery")" = "$expected" ]
+}
+
+restore_or_remove() {
+  name=$1 recovery=$2 live=$3 mode=$4 marker=$5
+  if flag "$name" "$marker"; then
+    cp -p "$recovery" "$live" || return 1
+    chown 0:0 "$live" || return 1
+    chmod "$mode" "$live" || return 1
+    cmp -s "$recovery" "$live" || return 1
+  else
+    rm -f "$live" || return 1
+  fi
+}
+
+install_system() {
+  mount -o rw,remount / 2>/dev/null
+  mount -o rw,remount /system 2>/dev/null
+  marker=/system/bin/.hapaneld-helper-upgrade
+  [ ! -f "$marker" ] || { echo STALE_TRANSACTION; return 2; }
+  rm -f /system/bin/hapaneld-helper.hapaneld-recovery \
+    /system/etc/init/hapaneld-helper.rc.hapaneld-recovery \
+    /system/bin/hapaneld-ledd.hapaneld-recovery \
+    /system/etc/init/hapaneld-ledd.rc.hapaneld-recovery \
+    /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery \
+    /data/adb/service.d/hapaneld-helper.sh.hapaneld-recovery
+
+  cp /data/local/tmp/hapaneld-helper /system/bin/hapaneld-helper.new || return 1
+  hash_matches @BIN_SHA256@ /system/bin/hapaneld-helper.new || return 1
+  chown 0:0 /system/bin/hapaneld-helper.new || return 1
+  chmod 755 /system/bin/hapaneld-helper.new || return 1
+  chcon u:object_r:system_file:s0 /system/bin/hapaneld-helper.new 2>/dev/null
+  cp /data/local/tmp/hapaneld-helper.rc /system/etc/init/hapaneld-helper.rc.new || return 1
+  hash_matches @RC_SHA256@ /system/etc/init/hapaneld-helper.rc.new || return 1
+  chown 0:0 /system/etc/init/hapaneld-helper.rc.new || return 1
+  chmod 644 /system/etc/init/hapaneld-helper.rc.new || return 1
+  chcon u:object_r:system_file:s0 /system/etc/init/hapaneld-helper.rc.new 2>/dev/null
+
+  old_bin_record=$(snapshot /system/bin/hapaneld-helper /system/bin/hapaneld-helper.hapaneld-recovery 755) || return 1
+  old_service_record=$(snapshot /system/etc/init/hapaneld-helper.rc /system/etc/init/hapaneld-helper.rc.hapaneld-recovery 644) || return 1
+  legacy_bin_record=$(snapshot /system/bin/hapaneld-ledd /system/bin/hapaneld-ledd.hapaneld-recovery 755) || return 1
+  legacy_service_record=$(snapshot /system/etc/init/hapaneld-ledd.rc /system/etc/init/hapaneld-ledd.rc.hapaneld-recovery 644) || return 1
+  alt_bin_record=$(snapshot /data/adb/hapaneld/hapaneld-helper /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery 755) || return 1
+  alt_service_record=$(snapshot /data/adb/service.d/hapaneld-helper.sh /data/adb/service.d/hapaneld-helper.sh.hapaneld-recovery 755) || return 1
+  old_bin=${old_bin_record%% *}; old_bin_sha=${old_bin_record#* }
+  old_service=${old_service_record%% *}; old_service_sha=${old_service_record#* }
+  legacy_bin=${legacy_bin_record%% *}; legacy_bin_sha=${legacy_bin_record#* }
+  legacy_service=${legacy_service_record%% *}; legacy_service_sha=${legacy_service_record#* }
+  alt_bin=${alt_bin_record%% *}; alt_bin_sha=${alt_bin_record#* }
+  alt_service=${alt_service_record%% *}; alt_service_sha=${alt_service_record#* }
+
+  {
+    echo JOURNAL_VERSION=1
+    echo JOURNAL_SCOPE=APK_HELPER
+    echo TARGET_APK_SHA256=@APK_SHA256@
+    echo TARGET_BUILD_ID=@BUILD_ID@
+    echo TARGET_HELPER_SHA256=@BIN_SHA256@
+    echo OLD_BIN=$old_bin
+    echo OLD_BIN_SHA256=$old_bin_sha
+    echo OLD_SERVICE=$old_service
+    echo OLD_SERVICE_SHA256=$old_service_sha
+    echo LEGACY_BIN=$legacy_bin
+    echo LEGACY_BIN_SHA256=$legacy_bin_sha
+    echo LEGACY_SERVICE=$legacy_service
+    echo LEGACY_SERVICE_SHA256=$legacy_service_sha
+    echo ALT_BIN=$alt_bin
+    echo ALT_BIN_SHA256=$alt_bin_sha
+    echo ALT_SERVICE=$alt_service
+    echo ALT_SERVICE_SHA256=$alt_service_sha
+  } > "$marker.new" || return 1
+  chown 0:0 "$marker.new" || return 1
+  chmod 600 "$marker.new" || return 1
+  sync || return 1
+  mv -f "$marker.new" "$marker" || return 1
+  sync || return 1
+
+  stop hapaneld_helper 2>/dev/null
+  stop hapaneld_ledd 2>/dev/null
+  pkill -x hapaneld-helper 2>/dev/null
+  pkill -x hapaneld-ledd 2>/dev/null
+  rm -f /system/bin/hapaneld-helper /system/etc/init/hapaneld-helper.rc \
+    /system/bin/hapaneld-ledd /system/etc/init/hapaneld-ledd.rc \
+    /data/adb/hapaneld/hapaneld-helper /data/adb/service.d/hapaneld-helper.sh
+  mv -f /system/bin/hapaneld-helper.new /system/bin/hapaneld-helper || return 1
+  mv -f /system/etc/init/hapaneld-helper.rc.new /system/etc/init/hapaneld-helper.rc || return 1
+  sync || return 1
+  echo INSTALL_OK
+}
+
+install_systemless() {
+  mkdir -p /data/adb/service.d /data/adb/hapaneld || return 1
+  chown 0:0 /data/adb/hapaneld || return 1
+  chmod 700 /data/adb/hapaneld || return 1
+  marker=/data/adb/hapaneld/.helper-upgrade.marker
+  [ ! -f "$marker" ] || { echo STALE_TRANSACTION; return 2; }
+  rm -f /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery \
+    /data/adb/service.d/hapaneld-helper.sh.hapaneld-recovery
+
+  cp /data/local/tmp/hapaneld-helper /data/adb/hapaneld/hapaneld-helper.new || return 1
+  hash_matches @BIN_SHA256@ /data/adb/hapaneld/hapaneld-helper.new || return 1
+  chown 0:0 /data/adb/hapaneld/hapaneld-helper.new || return 1
+  chmod 755 /data/adb/hapaneld/hapaneld-helper.new || return 1
+  cp /data/local/tmp/hapaneld-helper.svc /data/adb/service.d/hapaneld-helper.sh.new || return 1
+  hash_matches @SERVICE_SHA256@ /data/adb/service.d/hapaneld-helper.sh.new || return 1
+  chown 0:0 /data/adb/service.d/hapaneld-helper.sh.new || return 1
+  chmod 755 /data/adb/service.d/hapaneld-helper.sh.new || return 1
+
+  old_bin_record=$(snapshot /data/adb/hapaneld/hapaneld-helper /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery 755) || return 1
+  old_service_record=$(snapshot /data/adb/service.d/hapaneld-helper.sh /data/adb/service.d/hapaneld-helper.sh.hapaneld-recovery 755) || return 1
+  old_bin=${old_bin_record%% *}; old_bin_sha=${old_bin_record#* }
+  old_service=${old_service_record%% *}; old_service_sha=${old_service_record#* }
+  {
+    echo JOURNAL_VERSION=1
+    echo JOURNAL_SCOPE=APK_HELPER
+    echo TARGET_APK_SHA256=@APK_SHA256@
+    echo TARGET_BUILD_ID=@BUILD_ID@
+    echo TARGET_HELPER_SHA256=@BIN_SHA256@
+    echo OLD_BIN=$old_bin
+    echo OLD_BIN_SHA256=$old_bin_sha
+    echo OLD_SERVICE=$old_service
+    echo OLD_SERVICE_SHA256=$old_service_sha
+  } > "$marker.new" || return 1
+  chown 0:0 "$marker.new" || return 1
+  chmod 600 "$marker.new" || return 1
+  sync || return 1
+  mv -f "$marker.new" "$marker" || return 1
+  sync || return 1
+
+  stop hapaneld_helper 2>/dev/null
+  stop hapaneld_ledd 2>/dev/null
+  pkill -x hapaneld-helper 2>/dev/null
+  pkill -x hapaneld-ledd 2>/dev/null
+  rm -f /data/adb/hapaneld/hapaneld-helper /data/adb/service.d/hapaneld-helper.sh
+  mv -f /data/adb/hapaneld/hapaneld-helper.new /data/adb/hapaneld/hapaneld-helper || return 1
+  mv -f /data/adb/service.d/hapaneld-helper.sh.new /data/adb/service.d/hapaneld-helper.sh || return 1
+  sync || return 1
+  echo INSTALL_OK
+}
+
+rollback_system() {
+  mount -o rw,remount / 2>/dev/null
+  mount -o rw,remount /system 2>/dev/null
+  marker=/system/bin/.hapaneld-helper-upgrade
+  [ -f "$marker" ] || { echo ROLLBACK_UNNEEDED; return 0; }
+  grep -q ^JOURNAL_VERSION=1$ "$marker" || return 1
+  grep -q ^JOURNAL_SCOPE=APK_HELPER$ "$marker" || return 1
+  flag OLD_BIN "$marker" && valid_recovery OLD_BIN /system/bin/hapaneld-helper.hapaneld-recovery "$marker" || ! flag OLD_BIN "$marker" || return 1
+  flag OLD_SERVICE "$marker" && valid_recovery OLD_SERVICE /system/etc/init/hapaneld-helper.rc.hapaneld-recovery "$marker" || ! flag OLD_SERVICE "$marker" || return 1
+  flag LEGACY_BIN "$marker" && valid_recovery LEGACY_BIN /system/bin/hapaneld-ledd.hapaneld-recovery "$marker" || ! flag LEGACY_BIN "$marker" || return 1
+  flag LEGACY_SERVICE "$marker" && valid_recovery LEGACY_SERVICE /system/etc/init/hapaneld-ledd.rc.hapaneld-recovery "$marker" || ! flag LEGACY_SERVICE "$marker" || return 1
+  flag ALT_BIN "$marker" && valid_recovery ALT_BIN /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery "$marker" || ! flag ALT_BIN "$marker" || return 1
+  flag ALT_SERVICE "$marker" && valid_recovery ALT_SERVICE /data/adb/service.d/hapaneld-helper.sh.hapaneld-recovery "$marker" || ! flag ALT_SERVICE "$marker" || return 1
+
+  stop hapaneld_helper 2>/dev/null
+  stop hapaneld_ledd 2>/dev/null
+  pkill -x hapaneld-helper 2>/dev/null
+  pkill -x hapaneld-ledd 2>/dev/null
+  restore_or_remove OLD_BIN /system/bin/hapaneld-helper.hapaneld-recovery /system/bin/hapaneld-helper 755 "$marker" || return 1
+  restore_or_remove OLD_SERVICE /system/etc/init/hapaneld-helper.rc.hapaneld-recovery /system/etc/init/hapaneld-helper.rc 644 "$marker" || return 1
+  restore_or_remove LEGACY_BIN /system/bin/hapaneld-ledd.hapaneld-recovery /system/bin/hapaneld-ledd 755 "$marker" || return 1
+  restore_or_remove LEGACY_SERVICE /system/etc/init/hapaneld-ledd.rc.hapaneld-recovery /system/etc/init/hapaneld-ledd.rc 644 "$marker" || return 1
+  restore_or_remove ALT_BIN /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery /data/adb/hapaneld/hapaneld-helper 755 "$marker" || return 1
+  restore_or_remove ALT_SERVICE /data/adb/service.d/hapaneld-helper.sh.hapaneld-recovery /data/adb/service.d/hapaneld-helper.sh 755 "$marker" || return 1
+  sync || return 1
+  rm -f "$marker" || return 1
+  sync || return 1
+
+  if [ -x /system/bin/hapaneld-helper ] && [ -f /system/bin/hapaneld-helper.hapaneld-recovery ]; then
+    start hapaneld_helper 2>/dev/null || /system/bin/hapaneld-helper >/dev/null 2>&1 &
+    result=ROLLBACK_RESTARTED
+  elif [ -x /data/adb/hapaneld/hapaneld-helper ] && [ -f /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery ]; then
+    /data/adb/hapaneld/hapaneld-helper >/dev/null 2>&1 &
+    result=ROLLBACK_RESTARTED
+  elif [ -x /system/bin/hapaneld-ledd ]; then
+    start hapaneld_ledd 2>/dev/null || /system/bin/hapaneld-ledd >/dev/null 2>&1 &
+    result=ROLLBACK_LEGACY
+  else
+    result=ROLLBACK_EMPTY
+  fi
+  rm -f /system/bin/hapaneld-helper.hapaneld-recovery \
+    /system/etc/init/hapaneld-helper.rc.hapaneld-recovery \
+    /system/bin/hapaneld-ledd.hapaneld-recovery \
+    /system/etc/init/hapaneld-ledd.rc.hapaneld-recovery \
+    /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery \
+    /data/adb/service.d/hapaneld-helper.sh.hapaneld-recovery
+  sync || return 1
+  echo "$result"
+}
+
+rollback_systemless() {
+  marker=/data/adb/hapaneld/.helper-upgrade.marker
+  [ -f "$marker" ] || { echo ROLLBACK_UNNEEDED; return 0; }
+  grep -q ^JOURNAL_VERSION=1$ "$marker" || return 1
+  grep -q ^JOURNAL_SCOPE=APK_HELPER$ "$marker" || return 1
+  flag OLD_BIN "$marker" && valid_recovery OLD_BIN /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery "$marker" || ! flag OLD_BIN "$marker" || return 1
+  flag OLD_SERVICE "$marker" && valid_recovery OLD_SERVICE /data/adb/service.d/hapaneld-helper.sh.hapaneld-recovery "$marker" || ! flag OLD_SERVICE "$marker" || return 1
+  stop hapaneld_helper 2>/dev/null
+  stop hapaneld_ledd 2>/dev/null
+  pkill -x hapaneld-helper 2>/dev/null
+  pkill -x hapaneld-ledd 2>/dev/null
+  restore_or_remove OLD_BIN /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery /data/adb/hapaneld/hapaneld-helper 755 "$marker" || return 1
+  restore_or_remove OLD_SERVICE /data/adb/service.d/hapaneld-helper.sh.hapaneld-recovery /data/adb/service.d/hapaneld-helper.sh 755 "$marker" || return 1
+  sync || return 1
+  rm -f "$marker" || return 1
+  sync || return 1
+  if [ -x /data/adb/hapaneld/hapaneld-helper ] && [ -f /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery ]; then
+    /data/adb/hapaneld/hapaneld-helper >/dev/null 2>&1 &
+    result=ROLLBACK_RESTARTED
+  elif [ -x /system/bin/hapaneld-helper ]; then
+    start hapaneld_helper 2>/dev/null || /system/bin/hapaneld-helper >/dev/null 2>&1 &
+    result=ROLLBACK_RESTARTED
+  elif [ -x /system/bin/hapaneld-ledd ]; then
+    start hapaneld_ledd 2>/dev/null || /system/bin/hapaneld-ledd >/dev/null 2>&1 &
+    result=ROLLBACK_LEGACY
+  else
+    result=ROLLBACK_EMPTY
+  fi
+  rm -f /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery \
+    /data/adb/service.d/hapaneld-helper.sh.hapaneld-recovery
+  sync || return 1
+  echo "$result"
+}
+
+commit_system() {
+  marker=/system/bin/.hapaneld-helper-upgrade
+  mount -o rw,remount / 2>/dev/null
+  mount -o rw,remount /system 2>/dev/null
+  rm -f "$marker" || return 1
+  sync || return 1
+  rm -f /system/bin/hapaneld-helper.hapaneld-recovery \
+    /system/etc/init/hapaneld-helper.rc.hapaneld-recovery \
+    /system/bin/hapaneld-ledd.hapaneld-recovery \
+    /system/etc/init/hapaneld-ledd.rc.hapaneld-recovery \
+    /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery \
+    /data/adb/service.d/hapaneld-helper.sh.hapaneld-recovery 2>/dev/null || true
+  sync 2>/dev/null || true
+  echo COMMIT_OK
+}
+
+commit_systemless() {
+  marker=/data/adb/hapaneld/.helper-upgrade.marker
+  rm -f "$marker" || return 1
+  sync || return 1
+  rm -f /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery \
+    /data/adb/service.d/hapaneld-helper.sh.hapaneld-recovery 2>/dev/null || true
+  sync 2>/dev/null || true
+  echo COMMIT_OK
+}
+
+status_system() {
+  cat /system/bin/.hapaneld-helper-upgrade
+}
+
+status_systemless() {
+  cat /data/adb/hapaneld/.helper-upgrade.marker
+}
+
+case "${1:-}" in
+  install-system) install_system ;;
+  install-systemless) install_systemless ;;
+  rollback-system) rollback_system ;;
+  rollback-systemless) rollback_systemless ;;
+  commit-system) commit_system ;;
+  commit-systemless) commit_systemless ;;
+  status-system) status_system ;;
+  status-systemless) status_systemless ;;
+  *) exit 2 ;;
+esac
+EOF
+  bin_sha256="$(host_sha256 "$helper")"
+  rc_sha256="$(host_sha256 "$rc_file")"
+  service_sha256="$(host_sha256 "$service_file")"
+  sed -e "s/@BIN_SHA256@/$bin_sha256/g" \
+      -e "s/@RC_SHA256@/$rc_sha256/g" \
+      -e "s/@SERVICE_SHA256@/$service_sha256/g" \
+      -e "s/@APK_SHA256@/$TARGET_APK_SHA256/g" \
+      -e "s/@BUILD_ID@/$expected_build_id/g" \
+      "$transaction_file" > "$transaction_file.ready"
+  mv "$transaction_file.ready" "$transaction_file"
+  transaction_sha256="$(host_sha256 "$transaction_file")"
+
+  if run_root '[ ! -f /system/bin/.hapaneld-helper-manual-upgrade ] && [ ! -f /data/adb/hapaneld/.helper-manual-upgrade.marker ]' \
+      >/dev/null 2>&1; then
+    :
+  else
+    [ -z "$helper_dir" ] || rm -rf "$helper_dir"
+    rm -f "$rc_file" "$service_file" "$transaction_file"
+    fail "an incomplete standalone root-helper installation must be recovered first" \
+      "Re-run ./helper/install-daemon.sh $TARGET $abi from the same checkout; it will verify and recover its separate journal." \
+      "Then re-run this provisioning command. No APK or helper files were changed by this attempt."
+  fi
+
+  step "🧰 root helper" "${D}installing or upgrading $abi privileged service${X}"
+  adb -s "$TARGET" push "$helper" /data/local/tmp/hapaneld-helper >/dev/null
+  adb -s "$TARGET" push "$rc_file" /data/local/tmp/hapaneld-helper.rc >/dev/null
+  adb -s "$TARGET" push "$service_file" /data/local/tmp/hapaneld-helper.svc >/dev/null
+  adb -s "$TARGET" push "$transaction_file" /data/local/tmp/hapaneld-helper.txn >/dev/null
+  rm -f "$rc_file" "$service_file" "$transaction_file"
+
+  out="$(run_root '
+    mount -o rw,remount / 2>/dev/null; mount -o rw,remount /system 2>/dev/null
+    if touch /system/.rw_probe 2>/dev/null && rm /system/.rw_probe 2>/dev/null; then
+      echo SYSTEM_RW
+    else
+      echo SYSTEM_RO
+      if command -v magisk >/dev/null 2>&1 || [ -x /data/adb/magisk/busybox ] || [ -x /data/adb/ksu/bin/busybox ] || [ -x /data/adb/ap/bin/busybox ]; then
+        echo SYSTEMLESS_RUNNER
+      else
+        echo NO_SYSTEMLESS_RUNNER
+      fi
+    fi
+  ' 2>&1)" || true
+
+  if printf '%s\n' "$out" | grep -qx SYSTEM_RW; then
+    install_kind=system
+    out2="$(run_root "( sha256sum /data/local/tmp/hapaneld-helper.txn 2>/dev/null || toybox sha256sum /data/local/tmp/hapaneld-helper.txn 2>/dev/null ) | grep -q ^$transaction_sha256 || exit 1; chown 0:0 /data/local/tmp/hapaneld-helper.txn || exit 1; chmod 700 /data/local/tmp/hapaneld-helper.txn || exit 1; sh /data/local/tmp/hapaneld-helper.txn install-system" 2>&1)" || true
+    if printf '%s\n' "$out2" | grep -qx STALE_TRANSACTION; then
+      reconcile_stale_root_helper "$install_kind" || fail "an incomplete prior /system helper and APK upgrade could not be reconciled safely" \
+        "No rollback was attempted because the installed APK and running helper identity could not both be established." \
+        "Restore adb connectivity, then re-run this command to reconcile the retained recovery journal."
+      out2="$(run_root 'sh /data/local/tmp/hapaneld-helper.txn install-system' 2>&1)" || true
+    fi
+    if ! printf '%s\n' "$out2" | grep -qx INSTALL_OK; then
+      if rollback_root_helper "$install_kind"; then
+        fail "/system root-helper install failed; the prior helper was preserved or restored" \
+          "The previous APK and helper remain active. Re-run after checking writable-system capacity and permissions."
+      fi
+      fail "/system root-helper install failed and rollback could not be verified" \
+        "The APK was not replaced. Restore the helper manually before relying on privileged operations."
+    fi
+    run_root '
+      stop hapaneld_ledd 2>/dev/null; stop hapaneld_helper 2>/dev/null
+      pkill -x hapaneld-ledd 2>/dev/null; pkill -x hapaneld-helper 2>/dev/null
+      start hapaneld_helper 2>/dev/null || ( /system/bin/hapaneld-helper >/dev/null 2>&1 & )
+    ' >/dev/null 2>&1 || true
+  elif printf '%s\n' "$out" | grep -qx SYSTEMLESS_RUNNER; then
+    install_kind=systemless
+    out2="$(run_root "( sha256sum /data/local/tmp/hapaneld-helper.txn 2>/dev/null || toybox sha256sum /data/local/tmp/hapaneld-helper.txn 2>/dev/null ) | grep -q ^$transaction_sha256 || exit 1; chown 0:0 /data/local/tmp/hapaneld-helper.txn || exit 1; chmod 700 /data/local/tmp/hapaneld-helper.txn || exit 1; sh /data/local/tmp/hapaneld-helper.txn install-systemless" 2>&1)" || true
+    if printf '%s\n' "$out2" | grep -qx STALE_TRANSACTION; then
+      reconcile_stale_root_helper "$install_kind" || fail "an incomplete prior systemless helper and APK upgrade could not be reconciled safely" \
+        "No rollback was attempted because the installed APK and running helper identity could not both be established." \
+        "Restore adb connectivity, then re-run this command to reconcile the retained recovery journal."
+      out2="$(run_root 'sh /data/local/tmp/hapaneld-helper.txn install-systemless' 2>&1)" || true
+    fi
+    if ! printf '%s\n' "$out2" | grep -qx INSTALL_OK; then
+      if rollback_root_helper "$install_kind"; then
+        fail "systemless root-helper install failed; the prior helper was preserved or restored" \
+          "The previous APK and helper remain active. Re-run after checking /data capacity and service.d permissions."
+      fi
+      fail "systemless root-helper install failed and rollback could not be verified" \
+        "The APK was not replaced. Restore the helper manually before relying on privileged operations."
+    fi
+    run_root '
+      stop hapaneld_helper 2>/dev/null
+      pkill -x hapaneld-helper 2>/dev/null
+      /data/adb/hapaneld/hapaneld-helper >/dev/null 2>&1 &
+    ' >/dev/null 2>&1 || true
+  else
+    run_root 'rm -f /data/local/tmp/hapaneld-helper /data/local/tmp/hapaneld-helper.rc /data/local/tmp/hapaneld-helper.svc' >/dev/null 2>&1 || true
+    [ -z "$helper_dir" ] || rm -rf "$helper_dir"
+    fail "the panel has read-only /system and no verified systemless boot-service runner" \
+      "The helper was not installed and the previous APK was left in place." \
+      "Install a supported Magisk, KernelSU, or APatch service.d environment, or use firmware with a writable /system init path, then re-run."
+  fi
+
+  if ! wait_for_helper_reply COMPANIONCAPS "COMPANIONCAPS 1 BACKUP RESTORE STATUS JOURNAL"; then
+    if rollback_root_helper "$install_kind"; then
+      [ -z "$helper_dir" ] || rm -rf "$helper_dir"
+      fail "new root helper failed its capability check; the prior helper was restored" \
+        "The previous APK and helper remain active. Re-run after checking the helper logs."
+    fi
+    [ -z "$helper_dir" ] || rm -rf "$helper_dir"
+    fail "new root helper failed its capability check and rollback could not be verified" \
+      "The APK was not replaced. Restore the helper manually before relying on privileged operations."
+  fi
+  if ! wait_for_helper_reply BUILDID "BUILDID $expected_build_id"; then
+    if rollback_root_helper "$install_kind"; then
+      [ -z "$helper_dir" ] || rm -rf "$helper_dir"
+      fail "new root helper failed its exact build-identity check; the prior helper was restored" \
+        "The previous APK and helper remain active. Rebuild or re-download the matching helper, then retry."
+    fi
+    [ -z "$helper_dir" ] || rm -rf "$helper_dir"
+    fail "new root helper failed its exact build-identity check and rollback could not be verified" \
+      "The APK was not replaced. Restore the helper manually before relying on privileged operations."
+  fi
+  ROOT_HELPER_TRANSACTION_KIND="$install_kind"
+  [ -z "$helper_dir" ] || rm -rf "$helper_dir"
+  echo "   ${GRN}✓${X} root helper running with Companion-data protocol 1; recovery retained until APK installation succeeds"
+}
+
 # Give a useful version transition before install. Android's package manager remains the portable,
 # authoritative downgrade guard; avoiding GNU `sort -V` keeps the supported macOS path working.
 version_guard() {
@@ -655,27 +1428,60 @@ verify_release_apk
 
 version_guard
 
+TARGET_APK_SHA256="$(host_sha256 "$APK")"
+printf '%s\n' "$TARGET_APK_SHA256" | grep -Eq '^[0-9a-f]{64}$' || fail "could not identify the target APK bytes" \
+  "The helper and APK transaction was not started. Check that the APK is readable, then retry."
+
+# Current app releases and the root helper are one compatibility unit. On every panel where a root
+# path is available, install or upgrade the matching helper before replacing the APK. A helper
+# failure therefore leaves the previous app/helper pair running rather than stranding new features.
+install_root_helper
+
 # Try with -g (grant-all) first — some vendor builds reject the flag, so retry plain. Capture the
 # output: adb's raw INSTALL_FAILED_* codes are cryptic, so classify the common ones into recovery steps.
 install_apk() {
-  local out
+  local out helper_recovery="" outcome
   out="$(adb -s "$TARGET" install -r -g "$APK" 2>&1)" && return 0
   out="$(adb -s "$TARGET" install -r "$APK" 2>&1)" && return 0
+  if [ -n "$ROOT_HELPER_TRANSACTION_KIND" ]; then
+    if installed_apk_matches_hash "$TARGET_APK_SHA256"; then
+      warn "adb install returned an error, but the exact target APK bytes are installed; completing the helper transaction"
+      return 0
+    else
+      outcome=$?
+    fi
+    if [ "$outcome" -eq 2 ]; then
+      echo "$out" | sed 's/^/   /' >&2
+      fail "adb install outcome is ambiguous; helper recovery was retained without rollback" \
+        "The transport failed before the installed APK bytes could be verified." \
+        "Restore adb connectivity and re-run the same command; it will reconcile the APK/helper journal safely."
+    fi
+    if rollback_root_helper "$ROOT_HELPER_TRANSACTION_KIND"; then
+      helper_recovery="The prior root helper was restored and verified; the previous APK remains installed."
+    else
+      helper_recovery="The previous APK remains installed, but root-helper rollback could not be verified; restore the prior helper manually."
+    fi
+    ROOT_HELPER_TRANSACTION_KIND=""
+  fi
   echo "$out" | sed 's/^/   /' >&2
   case "$out" in
     *INSTALL_FAILED_UPDATE_INCOMPATIBLE*|*"signatures do not match"*)
       fail "install failed: signature mismatch — the ha-paneld already on the panel was signed with a different key (e.g. a local debug build vs a GitHub release)" \
+        "$helper_recovery" \
         "1. If the panel is reachable, back up its config first: re-run with --export FILE (or on the panel's :8888 page → Install → Backup)." \
         "2. adb -s $TARGET uninstall $PKG    (removes the app AND its on-panel config)" \
         "3. Re-run this command; restore the config with --restore FILE." ;;
     *INSTALL_FAILED_VERSION_DOWNGRADE*)
       fail "install failed: the panel already runs a NEWER version than this APK" \
+        "$helper_recovery" \
         "Install the newest release instead (--latest), or to force this older build: adb -s $TARGET uninstall $PKG (loses on-panel config), then re-run." ;;
     *INSTALL_FAILED_INSUFFICIENT_STORAGE*)
       fail "install failed: the panel is out of storage" \
+        "$helper_recovery" \
         "Free space on the panel (Settings → Storage; or clear app caches: adb -s $TARGET shell pm trim-caches 999G), then re-run." ;;
     *)
       fail "adb install failed (output above)" \
+        "$helper_recovery" \
         "Fix the cause shown above, then re-run the SAME command — provisioning is idempotent." ;;
   esac
 }
@@ -826,6 +1632,15 @@ fi
 # individual or fleet run cannot report enhanced-access setup as successful.
 step "📦 installing" "${D}$APK${X}"
 install_apk
+if [ -n "$ROOT_HELPER_TRANSACTION_KIND" ]; then
+  if ! commit_root_helper_upgrade "$ROOT_HELPER_TRANSACTION_KIND" && \
+     ! commit_root_helper_upgrade "$ROOT_HELPER_TRANSACTION_KIND"; then
+    fail "the APK and root helper were installed, but the helper recovery journal could not be committed" \
+      "Do not reboot yet. Check panel storage and permissions, then re-run this command to complete recovery cleanup."
+  fi
+  cleanup_root_helper_staging
+  ROOT_HELPER_TRANSACTION_KIND=""
+fi
 
 step "🔑 permissions" "${D}notifications · WRITE_SETTINGS (brightness/screen) · SYSTEM_ALERT_WINDOW (navbar) · a11y (buttons)${X}"
 # Grants degrade gracefully: some vendor builds refuse appops/settings writes from the adb shell.
