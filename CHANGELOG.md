@@ -25,7 +25,7 @@ This release candidate also replaces the preview profile schema with its intende
 ### Fixed
 
 - **Successful provisioning is no longer reported as failed because a later optional step could not complete** — the installer preserves the primary app result while still reporting best-effort follow-up failures separately.
-- **WF1589T LED ownership is explicit and truthful** — the bundled profile reports that its boot-started `PwmLightDemo` service conflicts with ha-paneld's `/dev/ledjni` control, while leaving the reversible package decision to the operator.
+- **WF1589T LED ownership is explicit and truthful** — the bundled profile marks its boot-started `PwmLightDemo` service as a recommended Vendor packages action because it conflicts with ha-paneld's `/dev/ledjni` control, while leaving the reversible decision to the operator.
 
 ### Safety
 
