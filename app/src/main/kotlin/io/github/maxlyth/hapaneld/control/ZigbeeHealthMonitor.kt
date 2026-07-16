@@ -159,6 +159,11 @@ internal fun normalizeGatewayCpu(rawPercent: Double?, cpuCount: Int, wholeMachin
     return (if (wholeMachineScale) raw * cpuCount.coerceAtLeast(1) else raw).coerceIn(0.0, 1000.0)
 }
 
+internal fun gatewayCpuFromJiffyDelta(processDelta: Long, totalDelta: Long, cpuCount: Int): Double? {
+    if (processDelta < 0L || totalDelta <= 0L) return null
+    return normalizeGatewayCpu(processDelta * 100.0 / totalDelta, cpuCount, true)
+}
+
 class ZigbeeHealthPolicy(
     private val startupGraceMs: Long = STARTUP_GRACE_MS,
     private val highCpuThreshold: Double = HIGH_CPU_PERCENT,
@@ -285,6 +290,9 @@ class AndroidZigbeeGatewayHealthSource(
     private val daemon: Daemon = HelperClient,
     private val productVersion: () -> String? = { SystemProps.get("ro.product.version").ifBlank { null } },
 ) : ZigbeeGatewayHealthSource {
+    private var previousTotalJiffies: Long? = null
+    private var previousProcessJiffies = emptyMap<Int, Long>()
+
     override fun observe(): ZigbeeGatewayObservation {
         val gatewayDir = dir ?: return absent()
         val files = root.runOutput(
@@ -298,7 +306,8 @@ class AndroidZigbeeGatewayHealthSource(
             "zgateway" in files -> ZigbeeGatewayLayout.UNKNOWN
             else -> ZigbeeGatewayLayout.UNKNOWN
         }
-        val processes = parseProcesses(root.runOutput("ps -A -o PID=,PCPU=,ARGS= 2>/dev/null").orEmpty(), gatewayDir)
+        val processes = parseProcesses(root.runOutput("ps -A -o PID=,ARGS= 2>/dev/null").orEmpty(), gatewayDir)
+        val cpu = sampleCpu(processes.gatewayPid, processes.guardPid)
         val packageVersion = root.runOutput("cat $gatewayDir/package_version 2>/dev/null")
             ?.trim()?.takeIf { it.isNotEmpty() && it.length <= 120 }
         val netInfoRaw = root.runOutput(
@@ -315,9 +324,9 @@ class AndroidZigbeeGatewayHealthSource(
             packageVersion = packageVersion,
             productVersion = productVersion(),
             gatewayPid = processes.gatewayPid,
-            gatewayCpu = processes.gatewayCpu,
+            gatewayCpu = processes.gatewayPid?.let(cpu::get),
             guardPid = processes.guardPid,
-            guardCpu = processes.guardCpu,
+            guardCpu = processes.guardPid?.let(cpu::get),
             role = controller.role(),
             netInfo = ZigbeeNetInfoParser.parse(netInfoRaw),
             recursiveWatchdogAssignment = recursive,
@@ -346,34 +355,61 @@ class AndroidZigbeeGatewayHealthSource(
 
     private data class Processes(
         val gatewayPid: Int? = null,
-        val gatewayCpu: Double? = null,
         val guardPid: Int? = null,
-        val guardCpu: Double? = null,
     )
 
     private fun parseProcesses(raw: String, gatewayDir: String): Processes {
         var gatewayPid: Int? = null
-        var gatewayCpu: Double? = null
         var guardPid: Int? = null
-        var guardCpu: Double? = null
         raw.lineSequence().forEach { line ->
-            val match = Regex("""^\s*(\d+)\s+([0-9.]+)\s+(.+)$""").find(line) ?: return@forEach
+            val match = Regex("""^\s*(\d+)\s+(.+)$""").find(line) ?: return@forEach
             val pid = match.groupValues[1].toIntOrNull() ?: return@forEach
-            val cpu = normalizeGatewayCpu(match.groupValues[2].toDoubleOrNull(), Runtime.getRuntime().availableProcessors(), false)
-            val args = match.groupValues[3]
+            val args = match.groupValues[2]
             when {
                 args == "$gatewayDir/zgateway" || args.startsWith("$gatewayDir/zgateway ") ||
-                    args == "zgateway" -> if (gatewayCpu == null || (cpu ?: -1.0) > gatewayCpu!!) {
-                    gatewayPid = pid; gatewayCpu = cpu
-                }
+                    args == "zgateway" -> gatewayPid = pid
                 args == "sh $gatewayDir/guard_process.sh" ||
-                    args == "/system/bin/sh $gatewayDir/guard_process.sh" ->
-                    if (guardCpu == null || (cpu ?: -1.0) > guardCpu!!) {
-                        guardPid = pid; guardCpu = cpu
-                    }
+                    args == "/system/bin/sh $gatewayDir/guard_process.sh" -> guardPid = pid
             }
         }
-        return Processes(gatewayPid, gatewayCpu, guardPid, guardCpu)
+        return Processes(gatewayPid, guardPid)
+    }
+
+    private fun sampleCpu(vararg candidatePids: Int?): Map<Int, Double> {
+        val pids = candidatePids.filterNotNull().distinct()
+        if (pids.isEmpty()) {
+            previousTotalJiffies = null
+            previousProcessJiffies = emptyMap()
+            return emptyMap()
+        }
+        val command = buildString {
+            append("head -n 1 /proc/stat 2>/dev/null")
+            pids.forEach { append("; cat /proc/$it/stat 2>/dev/null") }
+        }
+        val lines = root.runOutput(command)?.lineSequence()?.filter(String::isNotBlank)?.toList()
+            ?: return emptyMap()
+        val total = lines.firstOrNull()?.takeIf { it.startsWith("cpu ") }
+            ?.trim()?.split(Regex("\\s+"))?.drop(1)?.mapNotNull(String::toLongOrNull)?.sum()
+            ?: return emptyMap()
+        val current = linkedMapOf<Int, Long>()
+        lines.drop(1).forEach { line ->
+            val pid = line.substringBefore(' ').toIntOrNull() ?: return@forEach
+            val afterComm = line.substringAfterLast(") ", "")
+            val fields = afterComm.split(' ')
+            val user = fields.getOrNull(11)?.toLongOrNull() ?: return@forEach
+            val system = fields.getOrNull(12)?.toLongOrNull() ?: return@forEach
+            current[pid] = user + system
+        }
+        val previousTotal = previousTotalJiffies
+        val previous = previousProcessJiffies
+        previousTotalJiffies = total
+        previousProcessJiffies = current
+        val totalDelta = previousTotal?.let { total - it }?.takeIf { it > 0L } ?: return emptyMap()
+        val cores = Runtime.getRuntime().availableProcessors().coerceAtLeast(1)
+        return current.mapNotNull { (pid, jiffies) ->
+            val processDelta = previous[pid]?.let { jiffies - it }?.takeIf { it >= 0L } ?: return@mapNotNull null
+            pid to requireNotNull(gatewayCpuFromJiffyDelta(processDelta, totalDelta, cores))
+        }.toMap()
     }
 }
 

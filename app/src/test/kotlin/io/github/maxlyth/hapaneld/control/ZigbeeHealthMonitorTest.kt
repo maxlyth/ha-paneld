@@ -31,7 +31,9 @@ class ZigbeeHealthMonitorTest {
     @Test fun cpuNormalizationSupportsWholeMachineAndOneCoreScales() {
         assertEquals(86.0, normalizeGatewayCpu(86.0, 4, false)!!, 0.01)
         assertEquals(86.0, normalizeGatewayCpu(21.5, 4, true)!!, 0.01)
+        assertEquals(80.0, gatewayCpuFromJiffyDelta(20, 100, 4)!!, 0.01)
         assertNull(normalizeGatewayCpu(-1.0, 4, false))
+        assertNull(gatewayCpuFromJiffyDelta(1, 0, 4))
     }
 
     @Test fun netInfoParserIsBoundedAndReturnsOnlyHealthFields() {
