@@ -3,6 +3,8 @@ package io.github.maxlyth.hapaneld.http
 import io.github.maxlyth.hapaneld.control.BuiltinDashboard
 import io.github.maxlyth.hapaneld.control.Su
 import io.github.maxlyth.hapaneld.dashboard.EntityFilterTelemetry
+import io.github.maxlyth.hapaneld.dashboard.DashboardTelemetry
+import io.github.maxlyth.hapaneld.dashboard.EntityLearningRuntime
 import io.github.maxlyth.hapaneld.metrics.MetricRegistry
 import io.github.maxlyth.hapaneld.metrics.MetricSample
 import io.github.maxlyth.hapaneld.metrics.PanelMetrics
@@ -17,6 +19,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import org.json.JSONArray
+import org.json.JSONObject
 
 /**
  * Background performance sampler for the info page. A coroutine ticks every [INTERVAL_MS], reads the
@@ -48,6 +52,7 @@ object PerfReader {
     // History retention behind the MetricSink seam (a durable store swaps in without touching this class).
     private val sink = RamRingSink(MAX)
     @Volatile private var latestFields = EMPTY_FIELDS
+    @Volatile private var latestCpu: Int? = null
 
     // Top-5 processes by CPU (from `dumpsys cpuinfo`) — needs root, so probed once and sampled on a
     // slower cadence than the 2s chart. Lets a user confirm the dashboard app dominates and spot
@@ -137,6 +142,7 @@ object PerfReader {
         synchronized(lock) {
             sink.clear()
             latestFields = EMPTY_FIELDS
+            latestCpu = null
             topJson = "null"
             renderJson = "null"
             stutterHist.clear()
@@ -165,12 +171,32 @@ object PerfReader {
     /** Latest sample + history FIFO + top-5 procs + render jank, as JSON, for `GET /perf`. */
     fun json(): String {
         val sampled = synchronized(lock) {
-            """{"enabled":$enabled,$latestFields,"top":$topJson,"render":$renderJson,"builtin":${builtinJson()},"network":${networkJson()},"entityFilter":${EntityFilterTelemetry.json()},"""
-                .plus(""""hist":{"cpu":${histInts(CPU_KEY)},"ram":${histInts(RAM_KEY)},"gpu":${histInts(GPU_KEY)}}}""")
+            """{"enabled":$enabled,$latestFields,"top":$topJson,"render":$renderJson,"builtin":${builtinJson()},"network":${networkJson()},"entityFilter":${EntityFilterTelemetry.json()},"hist":{"cpu":${histInts(CPU_KEY)},"ram":${histInts(RAM_KEY)},"gpu":${histInts(GPU_KEY)}}}"""
         }
-        // Feature-cost projection allocates JSON for a fixed vocabulary. Keep it outside the sampler lock
-        // so a diagnostics reader cannot delay history publication on low-end panels.
-        return sampled.dropLast(1) + ""","featureCosts":${FeatureCosts.json()}}"""
+        // The dashboard and fixed-vocabulary feature-cost projections allocate JSON. Keep both outside
+        // the sampler lock so diagnostics readers cannot delay history publication on low-end panels.
+        return sampled.dropLast(1) +
+            ""","dashboard":${dashboardJson()},"featureCosts":${FeatureCosts.json()}}"""
+    }
+
+    private fun dashboardJson(): String {
+        val (filterActive, entityCount) = EntityFilterTelemetry.dashboardFilterState()
+        val rendererPct = synchronized(lock) {
+            runCatching { JSONObject(renderJson).optDouble("mainPct").takeUnless(Double::isNaN) }.getOrNull()
+        }
+        val reloads = if (builtinActive) {
+            BuiltinDashboard.rendererPerf(android.os.SystemClock.elapsedRealtime()).reloads24h
+        } else 0
+        val top = runCatching { JSONArray(EntityLearningRuntime.performanceSummaryJson()) }.getOrDefault(JSONArray())
+        return DashboardTelemetry.json(
+            builtinActive = builtinActive,
+            filterActive = filterActive,
+            entityCount = entityCount,
+            reloads24h = reloads,
+            systemCpuPct = latestCpu,
+            rendererMainPct = rendererPct,
+            topEntities = top,
+        )
     }
 
     /** Absolute host-UID counters; harvesters take arm start/end deltas. -1 means unsupported. */
@@ -484,6 +510,7 @@ object PerfReader {
             synchronized(lock) {
                 projection.samples.forEach(sink::record)
                 latestFields = projection.fields
+                latestCpu = snap.cpuOverall
             }
         }
     }

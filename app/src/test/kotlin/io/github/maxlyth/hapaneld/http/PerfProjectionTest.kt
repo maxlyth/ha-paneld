@@ -81,4 +81,16 @@ class PerfProjectionTest {
         assertTrue(sampledReturn > jsonFunction)
         assertTrue(featureProjection > sampledReturn)
     }
+
+    @Test fun performanceProjectionAddsDashboardDiagnosticsWithoutRemovingLegacyFields() {
+        val source = listOf(
+            File("src/main/kotlin/io/github/maxlyth/hapaneld/http/PerfReader.kt"),
+            File("app/src/main/kotlin/io/github/maxlyth/hapaneld/http/PerfReader.kt"),
+        ).first(File::isFile).readText()
+        listOf("\"render\"", "\"builtin\"", "\"entityFilter\"", "\"featureCosts\"", "\"dashboard\"").forEach {
+            assertTrue("missing /perf field $it", source.contains(it))
+        }
+        assertTrue(source.contains("DashboardTelemetry.json("))
+        assertTrue(source.contains("EntityLearningRuntime.performanceSummaryJson()"))
+    }
 }

@@ -155,7 +155,9 @@ class EntityFilterProtocolTest {
         assertTrue(script.contains("targetWsOrigins=[\"ws://ha.example\",\"wss://ha.example\"]"))
         assertTrue(script.contains("targetWsPath=\"/prefix/api/websocket\""))
         assertTrue(script.contains("entityFilterTrafficMetrics(payload)"))
-        assertTrue(script.contains("frames=0,frameChars=0,entityUpdates=0"))
+        assertTrue(script.contains("frames=0,payloadBytes=0,entityUpdates=0"))
+        assertTrue(script.contains("PerformanceObserver"))
+        assertTrue(script.contains("message.event.r"))
         assertFalse(script.contains("light.alpha"))
         assertFalse(script.contains("sensor.temperature"))
     }
@@ -170,6 +172,7 @@ class EntityFilterProtocolTest {
             global.window=globalThis;global.location={href:'https://ha.example/dashboard'};
             let clock=0;global.performance={now(){clock+=0.25;return clock;}};
             const intervals=[];global.setInterval=(fn,ms)=>{intervals.push([fn,ms]);return intervals.length;};
+            global.MessageChannel=function(){this.port1={onmessage:null};this.port2={postMessage:()=>this.port1.onmessage&&this.port1.onmessage()};};
             let payload=null,modified=0;
             global.externalApp={
               entityFilterSubscriptionModified(){modified++;},
@@ -186,18 +189,20 @@ class EntityFilterProtocolTest {
             const socket=new WebSocket('wss://ha.example/api/websocket');
             socket.send('{"id":7,"type":"subscribe_entities"}');
             socket.emit('message','{"id":7,"type":"event","event":{"a":{"light.one":{},"sensor.two":{}}}}');
-            socket.emit('message','{"id":7,"type":"event","event":{"c":{"light.one":{},"sensor.two":{},"switch.three":{}}}}');
+            socket.emit('message','{"id":7,"type":"event","event":{"c":{"light.one":{},"sensor.two":{},"switch.three":{}},"r":["sensor.gone"]}}');
             socket.emit('message','{"id":99,"type":"event","event":{"c":{"ignored.entity":{}}}}');
             if(intervals.length!==1||intervals[0][1]!==5000)throw Error('observer interval is not fixed');
             intervals[0][0]();
             if(modified!==1)throw Error('filter did not run');
-            if(!payload||!/^\d+(,\d+){5}$/.test(payload))throw Error('non-fixed payload: '+payload);
+            if(!payload||!/^\d+(,\d+){28}$/.test(payload))throw Error('non-fixed payload: '+payload);
             const values=payload.split(',').map(Number);
-            if(values[1]!==3)throw Error('wrong frame count: '+values[1]);
-            if(values[2]<=0)throw Error('missing character count');
-            if(values[3]!==5)throw Error('wrong entity update count: '+values[3]);
-            if(values[4]<=0)throw Error('missing processing time');
-            if(values[5]!==0)throw Error('unexpected dropped frames');
+            if(values[1]!==2)throw Error('wrong state frame count: '+values[1]);
+            if(values[2]<=0)throw Error('missing payload byte count');
+            if(values[3]!==6)throw Error('wrong entity update count: '+values[3]);
+            if(values[4]!==2)throw Error('wrong hydration count: '+values[4]);
+            if(values[5]<=0)throw Error('missing observer overhead');
+            if(values[6]!==0)throw Error('unexpected dropped frames');
+            if(values[7]<=0||values[8]<=0)throw Error('missing main-thread occupancy');
             if(payload.includes('light.')||payload.includes('sensor.'))throw Error('content leaked into payload');
         """.trimIndent()
         val process = ProcessBuilder("node").redirectErrorStream(true).start()
@@ -215,6 +220,7 @@ class EntityFilterProtocolTest {
             global.window=globalThis;global.location={href:'https://ha.example/dashboard'};
             let clock=0;global.performance={now(){clock+=0.1;return clock;}};
             let flush=null,payload=null;global.setInterval=(fn)=>{flush=fn;};
+            global.MessageChannel=function(){this.port1={onmessage:null};this.port2={postMessage:()=>this.port1.onmessage&&this.port1.onmessage()};};
             global.externalApp={entityFilterTrafficMetrics(value){payload=value;}};
             function Native(){this.listeners={};}
             Native.prototype.send=function(){};
@@ -236,25 +242,61 @@ class EntityFilterProtocolTest {
         assertEquals(output, 0, process.waitFor())
     }
 
+    @Test fun trafficObserverAggregatesEventTimingAndLongAnimationFramesWithoutContent() {
+        val node = runCatching { ProcessBuilder("node", "--version").start().let { it.waitFor() == 0 } }
+            .getOrDefault(false)
+        assumeTrue("node unavailable", node)
+        val script = EntityFilterProtocol.trafficObserverDocumentStartScript("https://ha.example")
+        val harness = """
+            global.window=globalThis;global.location={href:'https://ha.example/dashboard'};
+            let clock=0;global.performance={now(){clock+=1;return clock;}};
+            let flush=null,payload=null;global.setInterval=(fn)=>{flush=fn;};
+            global.MessageChannel=function(){this.port1={onmessage:null};this.port2={postMessage:()=>this.port1.onmessage()};};
+            const observers={};global.PerformanceObserver=function(cb){this.observe=o=>{observers[o.type]=cb};};
+            global.PerformanceObserver.supportedEntryTypes=['event','long-animation-frame'];
+            global.externalApp={entityFilterTrafficMetrics(value){payload=value;}};
+            function Native(){this.listeners={};}Native.prototype.send=function(){};
+            Native.prototype.addEventListener=function(kind,fn){this.listeners[kind]=fn;};
+            Native.CONNECTING=0;Native.OPEN=1;Native.CLOSING=2;Native.CLOSED=3;global.WebSocket=Native;
+            $script
+            observers.event({getEntries:()=>[{interactionId:9,startTime:100,duration:650,processingStart:220,processingEnd:500,target:{id:'must-not-leak'}}]});
+            observers['long-animation-frame']({getEntries:()=>[{duration:120,blockingDuration:70,scripts:[{duration:40,sourceURL:'private'}]}]});
+            flush();const v=payload.split(',').map(Number);
+            if(v.length!==29||v[15]!==1||v[19]!==650000)throw Error('interaction aggregate wrong: '+payload);
+            if(v[20]!==120000||v[21]!==280000||v[22]!==250000)throw Error('interaction decomposition wrong');
+            if(v[23]!==1||v[24]!==70000||v[25]!==120000||v[26]!==40000||v[27]!==80000)throw Error('LoAF aggregate wrong');
+            if(payload.includes('must-not-leak')||payload.includes('private'))throw Error('browser content leaked');
+        """.trimIndent()
+        val process = ProcessBuilder("node").redirectErrorStream(true).start()
+        process.outputStream.bufferedWriter().use { it.write(harness) }
+        val output = process.inputStream.bufferedReader().readText()
+        assertEquals(output, 0, process.waitFor())
+    }
+
     @Test fun trafficBatchParserIsStrictBoundedAndLabelFree() {
-        assertEquals(
-            EntityFilterProtocol.TrafficBatch(
-                sampleMs = 5_000,
-                frames = 12,
-                frameChars = 34_567,
-                entityUpdates = 89,
-                processingMicros = 1_234,
-                droppedFrames = 2,
-            ),
-            EntityFilterProtocol.parseTrafficBatch("5000,12,34567,89,1234,2"),
-        )
+        val encoded = listOf(
+            5_000, 12, 34_567, 89, 20, 1_234, 2, 45_000, 12_000,
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9,
+            800_000, 100_000, 300_000, 400_000, 4, 50_000, 90_000, 30_000, 20_000, 1,
+        ).joinToString(",")
+        val parsed = EntityFilterProtocol.parseTrafficBatch(encoded)
+        assertEquals(5_000, parsed.sampleMs)
+        assertEquals(34_567, parsed.payloadBytes)
+        assertEquals(20, parsed.hydrationUpdates)
+        assertEquals(45_000, parsed.stateTaskMicros)
+        assertEquals(10, parsed.interactionBins.size)
+        assertEquals(800_000, parsed.interactionMaxMicros)
+        assertEquals(4, parsed.loafCount)
+        assertEquals(1, parsed.longTaskCount)
         assertTrue(runCatching { EntityFilterProtocol.parseTrafficBatch("") }.isFailure)
         assertTrue(runCatching { EntityFilterProtocol.parseTrafficBatch("1,2,3,4,5") }.isFailure)
         assertTrue(runCatching { EntityFilterProtocol.parseTrafficBatch("1,2,3,4,5,6,7") }.isFailure)
         assertTrue(runCatching { EntityFilterProtocol.parseTrafficBatch("1,,3,4,5,6") }.isFailure)
         assertTrue(runCatching { EntityFilterProtocol.parseTrafficBatch("1,2,3,4,5,") }.isFailure)
         assertTrue(runCatching { EntityFilterProtocol.parseTrafficBatch("1,2,entity,4,5,6") }.isFailure)
-        val saturated = EntityFilterProtocol.parseTrafficBatch("${"9".repeat(100)},0,0,0,0,0")
+        val saturated = EntityFilterProtocol.parseTrafficBatch(
+            listOf("${"9".repeat(100)}").plus(List(28) { "0" }).joinToString(","),
+        )
         assertEquals(EntityFilterProtocol.MAX_TRAFFIC_COUNT, saturated.sampleMs)
     }
 

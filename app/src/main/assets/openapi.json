@@ -209,7 +209,7 @@
         "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "properties": { "layout": { "type": "string" } } } } } },
         "responses": { "200": { "description": "{ok:true}" } } }
     },
-    "/api/v1/perf": { "get": { "summary": "Live CPU/GPU/RAM, responsiveness, history and fixed-key cumulative feature costs", "tags": ["performance"], "responses": { "200": { "description": "perf JSON" } } } },
+    "/api/v1/perf": { "get": { "summary": "Live system metrics plus built-in interaction, state-stream and main-thread diagnostics", "tags": ["performance"], "responses": { "200": { "description": "Includes backward-compatible render, builtin, entityFilter and featureCosts fields plus dashboard direct/proxy diagnostics" } } } },
     "/api/v1/perf/costs": { "get": { "summary": "Non-sampling fixed-key cumulative feature costs for sparse A/B harvesting", "tags": ["performance"], "responses": { "200": { "description": "feature-cost JSON" } } } },
     "/api/v1/dashboard/entity-filter": {
       "get": { "summary": "Built-in-renderer entity-filter and automatic-learning status", "tags": ["performance"], "responses": { "200": { "description": "{enabled,entity_count,filter_hash,runtime,learning}" } } },

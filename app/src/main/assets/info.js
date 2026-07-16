@@ -1,7 +1,7 @@
 // ha-paneld info page — live perf/responsiveness/proximity polling.
 // Served as a static asset (linted by CI: `node --check`) rather than embedded in a Kotlin
 // string, so syntax errors (e.g. an apostrophe in a single-quoted string) are caught at build.
-var cpuH=[],ramH=[],gpuH=[],MAX=120;  // ~4 min at 2s
+var cpuH=[],ramH=[],gpuH=[],MAX=120,perfMode='';  // ~4 min at 2s
 // Reconcile a key/value table IN PLACE — stable DOM + textContent, never innerHTML. Rebuilding innerHTML
 // each poll destroyed the scroll-anchor nodes (the page jumped) and thrashed layout; updating text on
 // persistent nodes lets the browser hold scroll position and skips reflow. rows=[{label,val,suf,col,bold}].
@@ -129,18 +129,30 @@ function draw(){
  }
  line(gpuH,'#f5a623');line(ramH,'#48c774');line(cpuH,'#4a9eff');
 }
-function drawSm(hist){
- var c=document.getElementById('smchart'),x=c.getContext('2d'),W=c.width,H=c.height;
+function drawResp(hist){
+ var c=document.getElementById('respchart'),x=c.getContext('2d'),W=c.width,H=c.height;
  x.clearRect(0,0,W,H);
- x.font='11px system-ui,sans-serif';x.textBaseline='middle';x.lineWidth=1;
- [[50,'#3a5a42'],[85,'#6a5526']].forEach(function(t){var y=H-(t[0]/100)*H;x.strokeStyle=t[1];x.beginPath();x.moveTo(0,y);x.lineTo(W,y);x.stroke();x.fillStyle='#0d0d0d';x.fillRect(0,y-7,26,14);x.fillStyle='#888';x.fillText(t[0]+'%',2,y);});
- if(!hist||hist.length<2)return;
- var n=hist.length,sx=W/(MAX-1),last=hist[n-1];
- var col=last<5?'#48c774':(last<15?'#d9a528':'#d04a3b');
- function PX(i){return W-(n-1-i)*sx;}function PY(i){return H-(Math.min(100,hist[i])/100)*H;}
- x.beginPath();x.moveTo(PX(0),H);for(var i=0;i<n;i++)x.lineTo(PX(i),PY(i));x.lineTo(PX(n-1),H);x.closePath();x.fillStyle=col+'22';x.fill();
- x.beginPath();for(var i=0;i<n;i++){i?x.lineTo(PX(i),PY(i)):x.moveTo(PX(i),PY(i));}x.lineWidth=2;x.strokeStyle=col;x.stroke();
+ x.font='10px system-ui,sans-serif';x.textBaseline='top';x.lineWidth=1;
+ var lanes=[
+  {name:'interaction',values:hist&&hist.interactionMs||[],max:1000,col:'#d04a3b',unit:'ms'},
+  {name:'state updates',values:hist&&hist.updatesPerSec||[],max:Math.max(50,Math.max.apply(null,hist&&hist.updatesPerSec||[0])),col:'#4a9eff',unit:'/s'},
+  {name:'main blocked',values:hist&&hist.blockedMsPerSec||[],max:1000,col:'#f5a623',unit:'ms/s'}];
+ var lh=H/lanes.length;
+ lanes.forEach(function(lane,index){
+  var top=index*lh,bottom=top+lh-1;x.strokeStyle='#383838';x.beginPath();x.moveTo(0,bottom);x.lineTo(W,bottom);x.stroke();
+  x.fillStyle='#0d0d0d';x.fillRect(0,top,116,14);x.fillStyle='#888';
+  x.fillText(lane.name+' · '+Math.round(lane.max)+' '+lane.unit,3,top+2);
+  var a=lane.values,n=a.length;if(n<2)return;var sx=W/47;
+  x.beginPath();for(var i=0;i<n;i++){var px=W-(n-1-i)*sx,py=bottom-Math.min(1,a[i]/lane.max)*(lh-17);
+   i?x.lineTo(px,py):x.moveTo(px,py);}x.strokeStyle=lane.col;x.lineWidth=2;x.stroke();
+ });
 }
+function fmtRate(n,unit){return n<10?n.toFixed(1)+' '+unit:Math.round(n)+' '+unit;}
+function fmtBytes(n){if(n>=1048576)return (n/1048576).toFixed(1)+' MiB/s';if(n>=1024)return (n/1024).toFixed(1)+' KiB/s';return Math.round(n)+' B/s';}
+function causeLabel(c){return ({state_stream:'State stream pressure',dashboard_script:'Dashboard/card JavaScript',
+ rendering_or_media:'Rendering, layout, or media',system_contention:'System process contention',
+ memory_or_renderer_instability:'Renderer or memory instability',dashboard_or_state_proxy:'Dashboard or state load (proxy)',
+ no_clear_dominant_cause:'No clear dominant cause'})[c]||'Collecting evidence';}
 async function perf(){
  if(document.hidden)return;   // a hidden/background tab must not keep the sampler (or panel) busy
  try{
@@ -160,7 +172,8 @@ async function perf(){
   paint('perf',rows.filter(Boolean));
   paint('featurecost',featureCostRows(d.featureCosts));
   paintTop(d.top);
-  var r=d.render,smh=document.getElementById('smhdr');
+  var r=d.render,smh=document.getElementById('smhdr'),dash=d.dashboard;
+  perfMode=dash&&dash.mode||'';var direct=perfMode==='builtin_direct';
   // Built-in renderer self-measurement (time-to-interactive + involuntary-reload churn). It runs
   // in-process, so — unlike the root/daemon main-thread metric below — it shows even with no root.
   var bRows=[],b=d.builtin;
@@ -168,20 +181,43 @@ async function perf(){
    if(b.ttiColdMs>=0)bRows.push({label:'Time to interactive',val:(b.ttiColdMs/1000).toFixed(1)+'s cold',suf:b.ttiWarmMedianMs>=0?'· reload '+(b.ttiWarmMedianMs/1000).toFixed(1)+'s':'· launch → dashboard ready'});
    bRows.push({label:'Renderer reloads (24h)',val:''+b.reloads24h,col:b.reloads24h>0?'#d9a528':'#888',suf:b.reloads24h>0?'· heap/OOM churn':'· stable'});
   }
-  if(r==null){smh.textContent='· needs root';paint('smtbl',[{label:'Responsiveness',val:'needs root to measure',col:'#888'}].concat(bRows));drawSm([]);}
-  else if(r.status==='no-renderer'){smh.textContent='· waiting';drawSm(r.hist||[]);paint('smtbl',[{label:'Responsiveness',val:'no dashboard WebView detected yet',col:'#888'}].concat(bRows));}
-  else{
-   drawSm(r.hist);
-   var col=r.verdict==='smooth'?'#48c774':(r.verdict==='occasional'?'#d9a528':'#d04a3b');
-   var vv=r.verdict==='smooth'?'Snappy':(r.verdict==='occasional'?'Sluggish':'Laggy');
-   smh.textContent='· '+(/maxlyth\.hapaneld/.test(r.pkg)?'built-in dashboard':(/homeassistant|companion/i.test(r.pkg)?'HA Companion App UI':r.pkg.split('.').pop()));smh.title='measuring '+r.pkg;
-   var sm=[{label:'How it feels',val:'● '+vv,col:col,bold:true},
-    {label:'Dashboard main-thread',val:r.mainPct+'% of one core',suf:'(100% = event processing maxed out)',bold:true}];
-   if(r.jankPct!=null){pseen.jank=true;sm.push({label:'Rendering load',val:r.jankPct+'% janky',suf:'· only counts when actively drawing (e.g. video) — worst frame '+r.p99+' ms'});}
-   else if(pseen.jank)sm.push({label:'Rendering load',val:'idle — not drawing',col:'#888'});
-   paint('smtbl',sm.concat(bRows));
+  if(direct&&dash){
+   smh.textContent='· built-in live instrumentation';var it=dash.interaction||{},bl=dash.blocking||{};
+   var causeCol=dash.confidence==='high'?'#d04a3b':(dash.confidence==='medium'?'#d9a528':'#888');
+   var sm=[{label:'Likely cause',val:causeLabel(dash.likelyCause),suf:'· '+dash.confidence+' confidence',col:causeCol,bold:true}];
+   if(it.count)sm.push({label:'Tap response',val:'~p50 '+it.p50Ms+' ms · ~p95 '+it.p95Ms+' ms',
+    suf:'· worst '+it.worstMs+' ms = input '+it.inputDelayMs+' + handler '+it.processingMs+' + presentation '+it.presentationMs});
+   else sm.push({label:'Tap response',val:'interact with the dashboard to measure',col:'#888'});
+   sm.push({label:'Main-thread blocking',val:fmtRate(bl.blockedMsPerSec||0,'ms/s'),
+    suf:'· p95 '+Math.round(bl.blockedP95MsPerSec||0)+' ms/s · longest frame '+Math.round(bl.longestFrameMs||0)+' ms'});
+   paint('smtbl',sm.concat(bRows));drawResp(dash.history||{});
+  }else{
+   drawResp({});
+   if(r&&r.status!=='no-renderer'){
+    smh.textContent='· Companion proxy';smh.title='measuring '+r.pkg;
+    var proxy=[{label:'Measurement mode',val:'renderer CPU proxy',suf:'· not actual tap latency',col:'#888'},
+     {label:'Dashboard main-thread',val:r.mainPct+'% of one core',suf:'· 100% means the renderer thread is saturated',bold:true}];
+    if(r.jankPct!=null)proxy.push({label:'Rendering proxy',val:r.jankPct+'% janky',suf:'· worst frame '+r.p99+' ms'});
+    paint('smtbl',proxy.concat(bRows));
+   }else paint('smtbl',[{label:'Measurement mode',val:'Companion proxy needs root/helper access',col:'#888'}].concat(bRows));
   }
-  hwm('smtbl');hwm('topproc');
+  var stream=dash&&dash.stateStream||{},filter=dash&&dash.filter||{},sr=[];
+  if(direct&&dash.sampleCount){
+   sr.push({label:'State updates',val:fmtRate(stream.updatesPerSec||0,'/s'),suf:'· p95 '+fmtRate(stream.updatesP95PerSec||0,'/s')});
+   sr.push({label:'State payload',val:fmtBytes(stream.payloadBytesPerSec||0),suf:'· p95 '+fmtBytes(stream.payloadP95BytesPerSec||0)+' · uncompressed JSON'});
+   sr.push({label:'State-event main thread',val:fmtRate(stream.mainThreadMsPerSec||0,'ms/s'),
+    suf:'· p95 '+Math.round(stream.mainThreadP95MsPerSec||0)+' ms/s · longest '+Math.round(stream.longestStateTaskMs||0)+' ms'});
+   sr.push({label:'Initial hydration',val:(stream.hydrationUpdates||0)+' entities'});
+   sr.push({label:'Subscription',val:filter.active?'filtered to '+filter.entityCount+' entities':'unfiltered',
+    col:filter.active?'#48c774':'#d9a528'});
+   (dash.topEntities||[]).forEach(function(e){sr.push({label:'Noisy entity',val:e.entityId,
+    suf:'· '+e.updates1m+' updates/min · '+fmtBytes(e.payloadBps1m||0)});});
+   if(!(dash.topEntities||[]).length)sr.push({label:'Noisy entities',val:'aggregate only',
+    suf:'· enable automatic entity learning to identify contributors',col:'#888'});
+   if(stream.droppedFrames)sr.push({label:'Measurement drops',val:''+stream.droppedFrames,col:'#d9a528'});
+  }else sr.push({label:'State stream',val:direct?'waiting for Home Assistant state traffic':'available with the built-in renderer',col:'#888'});
+  paint('streamtbl',sr);
+  hwm('smtbl');hwm('streamtbl');hwm('topproc');
   document.getElementById('perfage').textContent='· live';
  }catch(e){document.getElementById('perfage').textContent='· unavailable';}
 }
@@ -214,7 +250,7 @@ sensorsCard('senstbl','sensage');
 // between 2s polls; grow occasionally, then settle. Reset on resize (column width changes re-wrap content,
 // voiding the old max). Other cards keep wrapping freely — only these two opted in.
 function hwm(id){var t=document.getElementById(id);if(!t)return;var c=t.parentNode,h=c.offsetHeight;if(h>(c._hwm||0)){c._hwm=h;c.style.minHeight=h+'px';}}
-window.addEventListener('resize',function(){['smtbl','topproc'].forEach(function(id){var t=document.getElementById(id),c=t&&t.parentNode;if(c){c._hwm=0;c.style.minHeight='';}});});
+window.addEventListener('resize',function(){['smtbl','streamtbl','topproc'].forEach(function(id){var t=document.getElementById(id),c=t&&t.parentNode;if(c){c._hwm=0;c.style.minHeight='';}});});
 
 // Controls panel: collapse the labelled action buttons (Back/Recents/Launcher/Admin) to icons-only when
 // the row would wrap to 2 lines. Force one line, check overflow, toggle .collapsed. Runs on load, resize,
@@ -238,7 +274,7 @@ function inspApply(d){
  else if(d.status==='needs-root')hint.textContent='Needs root (su) on this panel.';
  else if(d.status==='failed'||d.status==='no-binary')hint.textContent='Could not start the relay.';
  else if(d.running)hint.innerHTML='Relay on. In <b>chrome://inspect</b> the dashboard now appears under Remote Target — click <b>inspect</b>. If it does not show, the host must be added <i>before</i> enabling — add '+hp+' in Configure…, then refresh chrome://inspect. Exposes DevTools to the LAN while on; press Stop when done.';
- else hint.innerHTML='Opens this panel’s dashboard DevTools in your browser — no adb. <b>Step 1:</b> on your computer open <b>chrome://inspect</b> → <b>Configure…</b> and add '+hp+' (chrome only polls hosts already in its list). <b>Step 2:</b> press <b>Enable</b>. Needs WebView debugging enabled + root.';
+ else hint.innerHTML=(perfMode==='builtin_direct'?'The performance cards above use direct built-in instrumentation without DevTools. ':'')+'For deeper inspection, open <b>chrome://inspect</b> → <b>Configure…</b>, add '+hp+', then press <b>Enable</b>. Companion also requires Settings → Troubleshooting → <b>WebView remote debugging</b> and a dashboard relaunch. The relay needs root.';
 }
 async function insp(){try{var d=await (await fetch('/api/v1/inspect')).json();inspApply(d);}catch(e){}}
 function inspStart(){fetch('/api/v1/inspect/start',{method:'POST'}).then(function(r){return r.json();}).then(inspApply).catch(function(){});}

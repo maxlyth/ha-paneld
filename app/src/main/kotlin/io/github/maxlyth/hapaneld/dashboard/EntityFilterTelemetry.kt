@@ -17,9 +17,9 @@ object EntityFilterTelemetry {
     private var trafficBatches = 0L
     private var trafficSampleMs = 0L
     private var trafficFrames = 0L
-    private var trafficFrameChars = 0L
+    private var trafficPayloadBytes = 0L
     private var trafficEntityUpdates = 0L
-    private var trafficProcessingMicros = 0L
+    private var trafficObserverMicros = 0L
     private var trafficDroppedFrames = 0L
 
     @Synchronized fun started(entityIds: List<String>): Lease {
@@ -61,17 +61,19 @@ object EntityFilterTelemetry {
     }
 
     private fun resetTraffic() {
+        DashboardTelemetry.reset()
         trafficInstalled = false
         trafficBatches = 0
         trafficSampleMs = 0
         trafficFrames = 0
-        trafficFrameChars = 0
+        trafficPayloadBytes = 0
         trafficEntityUpdates = 0
-        trafficProcessingMicros = 0
+        trafficObserverMicros = 0
         trafficDroppedFrames = 0
     }
 
     @Synchronized fun isActive(lease: Lease): Boolean = owner == lease.id && active
+    @Synchronized fun dashboardFilterState(): Pair<Boolean, Int> = active to configuredCount
     @Synchronized fun subscriptionModified(lease: Lease) {
         if (owner == lease.id) modifiedSubscriptions++
     }
@@ -92,29 +94,33 @@ object EntityFilterTelemetry {
         if (owner == lease.id) { directFallbacks++; active = false }
     }
     @Synchronized fun trafficObserverInstalled(lease: Lease) {
-        if (owner == lease.id) trafficInstalled = true
+        if (owner == lease.id) {
+            trafficInstalled = true
+            DashboardTelemetry.installed()
+        }
     }
     @Synchronized fun traffic(lease: Lease, batch: EntityFilterProtocol.TrafficBatch) {
         if (owner != lease.id || !trafficInstalled) return
         trafficBatches = saturatedAdd(trafficBatches, 1)
         trafficSampleMs = saturatedAdd(trafficSampleMs, batch.sampleMs)
         trafficFrames = saturatedAdd(trafficFrames, batch.frames)
-        trafficFrameChars = saturatedAdd(
-            trafficFrameChars,
-            batch.frameChars,
+        trafficPayloadBytes = saturatedAdd(
+            trafficPayloadBytes,
+            batch.payloadBytes,
         )
         trafficEntityUpdates = saturatedAdd(
             trafficEntityUpdates,
             batch.entityUpdates,
         )
-        trafficProcessingMicros = saturatedAdd(
-            trafficProcessingMicros,
-            batch.processingMicros,
+        trafficObserverMicros = saturatedAdd(
+            trafficObserverMicros,
+            batch.observerMicros,
         )
         trafficDroppedFrames = saturatedAdd(
             trafficDroppedFrames,
             batch.droppedFrames,
         )
+        DashboardTelemetry.record(batch)
     }
 
     @Synchronized fun json(): String = "{" +
@@ -127,8 +133,10 @@ object EntityFilterTelemetry {
         "\"lastError\":\"$lastError\"," +
         "\"traffic\":{\"installed\":$trafficInstalled,\"batches\":$trafficBatches," +
         "\"sampleMs\":$trafficSampleMs,\"frames\":$trafficFrames," +
-        "\"frameChars\":$trafficFrameChars,\"entityUpdates\":$trafficEntityUpdates," +
-        "\"processingMicros\":$trafficProcessingMicros,\"droppedFrames\":$trafficDroppedFrames}}"
+        "\"frameChars\":$trafficPayloadBytes,\"payloadBytes\":$trafficPayloadBytes," +
+        "\"entityUpdates\":$trafficEntityUpdates," +
+        "\"processingMicros\":$trafficObserverMicros,\"observerMicros\":$trafficObserverMicros," +
+        "\"droppedFrames\":$trafficDroppedFrames}}"
 
     private fun saturatedAdd(left: Long, right: Long): Long =
         if (right >= Long.MAX_VALUE - left) Long.MAX_VALUE else left + right

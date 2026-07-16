@@ -45,7 +45,23 @@ function perfPayload() {
     gpu: 5 + (n % 4), gpuMhz: 400, freqMhz: [1512], freqMaxMhz: 1512, load: [1.2 + (n % 2), 1.0, 0.8], tempC: 41 + (n % 3),
     hist: { cpu: [10, 12, 11], ram: [45, 46], gpu: [5, 6] }, top: PROCS[n % PROCS.length],
     render: { status: 'ok', pkg: 'io.homeassistant.companion.android.minimal', verdict: drawing ? 'occasional' : 'smooth',
-      mainPct: 30 + (n % 20), jankPct: drawing ? 5 + (n % 10) : null, p99: 18, hist: [3, 5, 4] } };
+      mainPct: 30 + (n % 20), jankPct: drawing ? 5 + (n % 10) : null, p99: 18, hist: [3, 5, 4] },
+    builtin: { ttiColdMs: 12400, ttiWarmMedianMs: 4300, reloads24h: n % 3 ? 0 : 2 },
+    dashboard: { mode: 'builtin_direct', sampleCount: 30, likelyCause: n % 2 ? 'state_stream' : 'rendering_or_media',
+      confidence: 'medium', interaction: { count: 8, p50Ms: 200, p95Ms: 500, worstMs: 1830,
+        inputDelayMs: 420, processingMs: 710, presentationMs: 700 },
+      blocking: { blockedMsPerSec: 190, blockedP95MsPerSec: 460, longestFrameMs: 820 },
+      stateStream: { updatesPerSec: 87.4, updatesP95PerSec: 174.9, payloadBytesPerSec: 164000,
+        payloadP95BytesPerSec: 910000, mainThreadMsPerSec: 250, mainThreadP95MsPerSec: 620,
+        longestStateTaskMs: 930, hydrationUpdates: 3410, droppedFrames: 1 },
+      filter: { active: true, entityCount: 317 },
+      topEntities: [
+        { entityId: 'sensor.extremely_long_energy_monitoring_entity_identifier', updates1m: 845, payloadBps1m: 82400 },
+        { entityId: 'sensor.second_noisy_diagnostic_measurement', updates1m: 320, payloadBps1m: 41200 },
+        { entityId: 'binary_sensor.third_frequently_changing_entity', updates1m: 110, payloadBps1m: 12800 }],
+      history: { interactionMs: [120, 220, 700, 140, 1830], updatesPerSec: [20, 80, 175, 45, 87],
+        payloadBytesPerSec: [40000, 120000, 910000, 80000, 164000],
+        mainThreadMsPerSec: [30, 180, 620, 90, 250], blockedMsPerSec: [20, 90, 460, 80, 190] } } };
 }
 function proxPayload() { const raw = RAWS[cyc % RAWS.length];
   return { present: true, raw, near: raw < 40, max: 9, calibrated: false, threshold: null, nearRaw: null, farRaw: null,

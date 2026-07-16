@@ -32,8 +32,8 @@ GET  /api           interactive REST API explorer (renders the OpenAPI spec)
 GET  /openapi.json  OpenAPI 3 spec of this API (import into Swagger / Postman)
 POST /config        form-encoded settings from the page; persists + live-reconfigures
 GET  /config        full config as JSON (MQTT password redacted) for fleet tooling
-GET  /perf          live performance JSON (CPU %/clock, GPU, RAM, temp, top procs,
-                    responsiveness) — polled by the page; sampled only while viewed
+GET  /perf          live system metrics plus built-in interaction, state-stream and
+                    main-thread diagnostics; Companion rendering remains a proxy
 GET  /proximity     live proximity raw + calibration (raw stays on the panel)
 POST /proximity/{capture,threshold,sensitivity,reset}   tune the cutoff
 GET  /inspect · POST /inspect/{start,stop}              WebView DevTools relay (:9222)

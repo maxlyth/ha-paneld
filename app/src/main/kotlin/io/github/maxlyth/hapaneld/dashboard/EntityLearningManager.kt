@@ -67,6 +67,9 @@ class EntityLearningManager(
     private var telemetryWorkerActive = false
     private var telemetryClosed = false
     @Volatile private var telemetryJob: Job? = null
+    @Volatile private var performanceSummaryAt = 0L
+    @Volatile private var performanceSummary = "[]"
+    @Volatile private var performanceSummaryTarget = ""
 
     fun start() {
         prepareCurrentTarget()
@@ -835,6 +838,31 @@ class EntityLearningManager(
         return json.toString()
     }
 
+    fun performanceSummaryJson(): String {
+        if (!config.dashboardEntityLearningEnabled) return "[]"
+        val now = System.currentTimeMillis()
+        val targetInstance = instance()
+        val targetPath = dashboardPath()
+        val target = "$targetInstance\n$targetPath"
+        if (target == performanceSummaryTarget &&
+            now >= performanceSummaryAt && now - performanceSummaryAt < PERFORMANCE_SUMMARY_CACHE_MS
+        ) {
+            return performanceSummary
+        }
+        return synchronized(this) {
+            val lockedNow = System.currentTimeMillis()
+            if (target == performanceSummaryTarget && lockedNow >= performanceSummaryAt &&
+                lockedNow - performanceSummaryAt < PERFORMANCE_SUMMARY_CACHE_MS
+            ) performanceSummary else runCatching {
+                store.performanceSummaryJson(targetInstance, targetPath, lockedNow)
+            }.getOrDefault("[]").also {
+                performanceSummary = it
+                performanceSummaryAt = lockedNow
+                performanceSummaryTarget = target
+            }
+        }
+    }
+
     fun writeExportJson(writer: java.io.Writer) {
         store.writeExportJson(instance(), dashboardPath(), writer)
     }
@@ -1181,6 +1209,7 @@ class EntityLearningManager(
         private const val MAX_PROMOTIONS = 2
         private const val MAX_DYNAMIC_EXPRESSIONS = 128
         private const val MAX_TELEMETRY_IDS = EntityFilterProtocol.MAX_ENTITY_IDS
+        private const val PERFORMANCE_SUMMARY_CACHE_MS = 10_000L
         private const val UNCONFIGURED_INSTANCE = "unconfigured"
 
         private fun normalizedOrigin(raw: String): String = EntityFilterProtocol.origin(raw)
@@ -1827,6 +1856,7 @@ object EntityLearningRuntime {
     fun detach(manager: EntityLearningManager) { if (current === manager) current = null }
     fun recordAccessBatch(text: String) { current?.recordAccessBatch(text) }
     fun recordMetricBatch(text: String) { current?.recordMetricBatch(text) }
+    fun performanceSummaryJson(): String = current?.performanceSummaryJson() ?: "[]"
     fun blockingIssueCount(): Int = current?.blockingIssueCount() ?: 0
     fun bootstrapProblem(): EntityBootstrapProblem? = current?.bootstrapProblem()
     /** Explicit user retry only. syncNow rejects the request while an existing scan is active. */

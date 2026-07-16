@@ -1691,7 +1691,7 @@ class DashboardActivity : AppCompatActivity() {
         @JavascriptInterface
         fun entityFilterTrafficMetrics(payload: String) {
             val lease = filterLease ?: return
-            if (!rendererCurrent(generation) || payload.length > 256) return
+            if (!rendererCurrent(generation) || payload.length > 512) return
             runCatching { EntityFilterProtocol.parseTrafficBatch(payload) }
                 .onSuccess { EntityFilterTelemetry.traffic(lease, it) }
         }

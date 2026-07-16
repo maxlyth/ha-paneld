@@ -551,6 +551,26 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, "entity-l
         }
     }
 
+    /** Small diagnostics projection for the performance card; SQLite ranks before the fixed LIMIT. */
+    fun performanceSummaryJson(instance: String, path: String, now: Long = System.currentTimeMillis()): String {
+        val oneMinute = (now - MINUTE_MS) / MINUTE_MS
+        val rows = JSONArray()
+        val sql = """SELECT entity_id,sum(update_count),sum(update_bytes),
+            min(CASE WHEN span_start=0 THEN minute ELSE span_start END) AS first_minute
+            FROM minute_rollup WHERE instance=? AND path=? AND minute>=?
+            GROUP BY entity_id ORDER BY sum(update_bytes) DESC,entity_id COLLATE NOCASE LIMIT 3"""
+        readableDatabase.rawQuery(sql, arrayOf(instance, path, oneMinute.toString())).use { cursor ->
+            while (cursor.moveToNext()) {
+                val observed = observedSeconds(now, cursor.getLong(3), MINUTE_MS)
+                rows.put(JSONObject()
+                    .put("entityId", cursor.getString(0))
+                    .put("updates1m", cursor.getLong(1))
+                    .put("payloadBps1m", cursor.getLong(2) / observed))
+            }
+        }
+        return rows.toString()
+    }
+
     private fun catalogRowJson(
         row: CatalogRow,
         now: Long,

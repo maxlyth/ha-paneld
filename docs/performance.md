@@ -9,12 +9,25 @@ This guide explains why an inexpensive Android wall panel can feel sluggish, stu
 
 Open the panel's web page at `http://<panel-ip>:8888/` or use the Home Assistant device page's **Visit** link. Record the same dashboard view for a similar period before and after each change so the comparison is meaningful.
 
-- **Performance page** — dashboard response time, unexpected reloads, CPU, GPU, RAM, clock speed, temperature and the busiest processes.
-- **Rendering metrics** — frame rate, jank, main-thread long tasks and JavaScript heap use from the WebView.
+- **Dashboard responsiveness** — real interaction latency, the slowest interaction's input/handler/presentation breakdown, main-thread blocking, time to interactive and unexpected renderer reloads.
+- **Home Assistant state stream** — state updates per second, uncompressed JSON payload rate, initial hydration size, time until the main thread yields and the noisiest learned entities.
+- **Performance** — CPU, GPU, RAM, clock speed, temperature and the busiest processes.
 - **Entities page** — what the built-in renderer currently subscribes to, what automatic learning found and which dashboard rules still need a decision.
 - **Diagnostics dump** (`/diag`) — a copy-paste report for a bug report when the cause is still unclear.
 
-High renderer CPU with a large unfiltered subscription is a strong reason to test filtering. High JavaScript heap use, repeated reloads or one unusually expensive dashboard view points toward card and layout work as well. Treat the measurements together; a single CPU snapshot cannot identify the cause by itself.
+The built-in renderer collects these browser measurements directly and does not need root or WebView debugging. The Companion app remains a compatibility mode: ha-paneld can show renderer CPU and Android rendering proxies when root or the helper is available, but it cannot claim actual Companion interaction latency.
+
+The state-event main-thread value begins when a relevant Home Assistant message is dispatched and ends when the browser yields after all handlers and microtasks. It includes ha-paneld's small observer cost and any other work in that message task, so it is deliberately not labelled as Home Assistant-only processing time. Payload rate is the uncompressed application JSON handled by the frontend, not compressed network traffic.
+
+Use the aligned chart to look for correlation. Interaction spikes that coincide with high state traffic and state-event occupancy point toward the firehose. Slow handler time with a quiet stream points toward dashboard JavaScript. Presentation delay and long rendering frames point toward layout, animation, camera or media work. Repeated renderer reloads point toward memory or renderer instability. Treat the measurements together; a single CPU snapshot cannot identify the cause by itself.
+
+The **Likely cause** row applies these conservative rules automatically and reports its confidence. It intentionally says that there is no clear dominant cause when the evidence does not support one.
+
+### Optional WebView debugging
+
+The normal built-in performance cards do not require DevTools. Use the **WebView debugging** card only when deeper source-level inspection is needed.
+
+For the Companion app, first enable **Companion → Settings → Troubleshooting → WebView remote debugging**, then relaunch the dashboard. This setting is easy to miss: without it, the relay cannot discover the Companion WebView. The LAN relay itself also requires root.
 
 ### Rule out the legacy stock NSPanel Pro Zigbee-watchdog defect
 
@@ -51,7 +64,7 @@ Advanced testers can supply and inspect an exact list through the API. The UI wo
 
 - Split a dense dashboard into focused views and avoid mounting cards the panel never needs.
 - Prefer built-in cards when a custom card continuously animates, creates a large document tree or performs frequent JavaScript work.
-- Watch JavaScript heap use. If one view repeatedly approaches the ceiling, simplify it or use `button.<panel>_reload` as a temporary recovery path while finding the expensive card.
+- Watch interaction processing, long animation frames and renderer reloads. If one view repeatedly dominates them, simplify it or use `button.<panel>_reload` as a temporary recovery path while finding the expensive card.
 - Test camera and graph cards separately. Their decoding, history queries and rendering cost can dominate even after entity filtering is working correctly.
 
 ### 3. Reduce unnecessary updates at the source

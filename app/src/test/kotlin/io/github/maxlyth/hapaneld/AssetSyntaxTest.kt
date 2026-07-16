@@ -135,6 +135,18 @@ class AssetSyntaxTest {
         assertTrue("hydration must use the fixed same-origin screenshot endpoint", info.contains("im.src='/api/v1/screenshot.png'"))
     }
 
+    @Test fun performanceCardUsesDirectEvidenceAndLabelsCompanionAsAProxy() {
+        val dir = assetsDir
+        assumeTrue("assets dir not found (skipping)", dir != null)
+        val info = File(dir, "info.js").readText()
+        assertTrue(info.contains("built-in live instrumentation"))
+        assertTrue(info.contains("State-event main thread"))
+        assertTrue(info.contains("renderer CPU proxy"))
+        assertTrue(info.contains("not actual tap latency"))
+        assertTrue(info.contains("WebView remote debugging"))
+        assertFalse(info.contains("label:'How it feels'"))
+    }
+
     @Test fun dashboardIssuesAreRenderedEscapedWithReversibleSafetyControls() {
         val dir = assetsDir
         assumeTrue("assets dir not found (skipping)", dir != null)

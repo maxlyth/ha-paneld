@@ -2338,11 +2338,13 @@ ${tcard("infotbl", "Panel information", s?.let { factRowsHtml(it, infoKeys(it)) 
 ${tcard("nettbl", "Networking", s?.let { factRowsHtml(it, NET_KEYS) })}
 ${tcard("proftbl", "ha-paneld profile", s?.let { factRowsHtml(it, PROF_KEYS) }, post = profNote)}
 ${tcard("captbl", "Capabilities", if (s == null) null else capRowsHtml(), post = capNote)}
-<div class="card"><h2>Responsiveness <small id="smhdr"></small></h2>
-<canvas id="smchart" width="600" height="130" style="height:130px"></canvas>
-<div class="leg">dashboard main-thread CPU (% of one core) ·
- <span style="color:#48c774">▬</span> snappy &lt;50% · <span style="color:#d9a528">▬</span> maxed &gt;85%</div>
+<div class="card"><h2>Dashboard responsiveness <small id="smhdr"></small></h2>
+<canvas id="respchart" width="600" height="150" style="height:150px"></canvas>
+<div class="leg"><span style="color:#d04a3b">▬</span> interaction latency&nbsp;&nbsp;<span style="color:#4a9eff">▬</span> state updates&nbsp;&nbsp;<span style="color:#f5a623">▬</span> main-thread blocking · ~4 min</div>
 <table id="smtbl"><tr><td style="color:#888">measuring…</td></tr></table></div>
+<div class="card"><h2>Home Assistant state stream <small>· built-in renderer</small></h2>
+<table id="streamtbl"><tr><td style="color:#888">waiting for state traffic…</td></tr></table>
+<p class="note">Payload is uncompressed application JSON. Main-thread time measures dispatch until the browser yields; it is not claimed as Home Assistant-only CPU. <a href="/entities">Open entity diagnostics</a>.</p></div>
 <div class="card"><h2>Sensors <small id="sensage"></small></h2>
 <table id="senstbl"><tr><td style="color:#888">reading…</td></tr></table>
 <p class="note">Live readings from this panel’s sensors — shown even when a value is hidden from Home Assistant.</p></div>
