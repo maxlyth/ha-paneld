@@ -1,5 +1,5 @@
 name: Release
-run-name: Release ${{ github.ref_name }}
+run-name: ${{ github.event_name == 'workflow_dispatch' && format('Release dry run · {0}', inputs.release_tag) || format('Release {0}', github.ref_name) }}
 
 # Before tagging, run the pre-tag checklist in docs/RELEASING.md. Editorial release docs are manual:
 # write the CHANGELOG.md section, refresh the README "Latest release" line, and move shipped items out
@@ -9,9 +9,18 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Candidate vX.Y.Z or vX.Y.Z-suffix used to validate release inputs without publishing
+        required: true
+        type: string
 
 permissions:
   contents: read
+
+env:
+  RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
 
 jobs:
   prepare:
@@ -28,8 +37,12 @@ jobs:
 
       - name: Validate release tag and source commit
         run: |
-          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
-            echo "::error::Release tag is not an accepted vX.Y.Z or vX.Y.Z-suffix version: $GITHUB_REF_NAME"
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
+            echo "::error::Release tag is not an accepted vX.Y.Z or vX.Y.Z-suffix version: $RELEASE_TAG"
+            exit 1
+          fi
+          if ! git check-ref-format "refs/tags/$RELEASE_TAG"; then
+            echo "::error::Candidate release tag is not a valid Git tag ref: $RELEASE_TAG"
             exit 1
           fi
           source_commit=$(git rev-parse HEAD)
@@ -91,26 +104,39 @@ jobs:
             exit 1
           fi
           cp "${unsigned_apks[0]}" release-input/ha-paneld-unsigned.apk
+          metadata=app/build/outputs/apk/release/output-metadata.json
+          test -s "$metadata"
+          application_id=$(node -e 'const m=require("./"+process.argv[1]); process.stdout.write(m.applicationId || "")' "$metadata")
+          version_name=$(node -e 'const m=require("./"+process.argv[1]); const e=m.elements || []; process.stdout.write(e.length === 1 ? (e[0].versionName || "") : "")' "$metadata")
+          expected_version_name="${RELEASE_TAG#v}"
+          if [ "$application_id" != "io.github.maxlyth.hapaneld" ]; then
+            echo "::error::Unsigned APK package is '$application_id', expected 'io.github.maxlyth.hapaneld'."
+            exit 1
+          fi
+          if [ "$version_name" != "$expected_version_name" ]; then
+            echo "::error::Unsigned APK versionName is '$version_name', expected '$expected_version_name' from the candidate release tag."
+            exit 1
+          fi
           test -s app/build/reports/cyclonedx-direct/bom.json
           cp app/build/reports/cyclonedx-direct/bom.json release-input/android-gradle-runtime.cdx.json
-          apk_name="ha-paneld-${GITHUB_REF_NAME}-manual-setup-required.apk"
+          apk_name="ha-paneld-${RELEASE_TAG}-manual-setup-required.apk"
           echo "APK_NAME=$apk_name" >> "$GITHUB_ENV"
 
       - name: Build release-pinned installer asset
         run: |
-          installer="release-input/ha-paneld-installer-${GITHUB_REF_NAME}.sh"
-          provisioner="release-input/ha-paneld-provision-${GITHUB_REF_NAME}.sh"
+          installer="release-input/ha-paneld-installer-${RELEASE_TAG}.sh"
+          provisioner="release-input/ha-paneld-provision-${RELEASE_TAG}.sh"
           cp scripts/provision.sh "$provisioner"
           chmod +x "$provisioner"
           bash -n "$provisioner"
           sed \
-            -e "s|^RELEASE_TAG=.*|RELEASE_TAG=\"$GITHUB_REF_NAME\"|" \
+            -e "s|^RELEASE_TAG=.*|RELEASE_TAG=\"$RELEASE_TAG\"|" \
             -e "s|^RELEASE_APK_NAME=.*|RELEASE_APK_NAME=\"$APK_NAME\"|" \
             -e "s|^PROVISION_COMMIT=.*|PROVISION_COMMIT=\"$SOURCE_COMMIT\"|" \
             scripts/install.sh > "$installer"
           chmod +x "$installer"
           bash -n "$installer"
-          grep -Fq "RELEASE_TAG=\"$GITHUB_REF_NAME\"" "$installer"
+          grep -Fq "RELEASE_TAG=\"$RELEASE_TAG\"" "$installer"
           grep -Fq "RELEASE_APK_NAME=\"$APK_NAME\"" "$installer"
           grep -Fq "PROVISION_COMMIT=\"$SOURCE_COMMIT\"" "$installer"
 
@@ -124,7 +150,7 @@ jobs:
       # the previous RC — repeating the prior section causes identical release notes.
       - name: Extract release notes from CHANGELOG
         run: |
-          tag="$GITHUB_REF_NAME"
+          tag="$RELEASE_TAG"
           base="${tag%%-*}"     # v0.8.4-rc3 → v0.8.4 (used only as fallback for stable)
 
           extract() {
@@ -141,7 +167,7 @@ jobs:
           fi
           if [ ! -s release-input/release-body.md ]; then
             echo "::warning::No CHANGELOG.md section for $tag — add one for human-readable notes."
-            echo "_No changelog entry for $GITHUB_REF_NAME._" > release-input/release-body.md
+            echo "_No changelog entry for $RELEASE_TAG._" > release-input/release-body.md
           fi
           changelog_body="$(mktemp)"
           mv release-input/release-body.md "$changelog_body"
@@ -153,7 +179,7 @@ jobs:
           From macOS, Linux, Git Bash, or WSL, run:
 
           \`\`\`sh
-          curl -fsSL https://github.com/maxlyth/ha-paneld/releases/download/$GITHUB_REF_NAME/ha-paneld-installer-$GITHUB_REF_NAME.sh | bash
+          curl -fsSL https://github.com/maxlyth/ha-paneld/releases/download/$RELEASE_TAG/ha-paneld-installer-$RELEASE_TAG.sh | bash
           \`\`\`
 
           The \`$APK_NAME\` asset is for manual or on-device sideloading. After installing it, open ha-paneld and complete the on-panel setup.
@@ -167,8 +193,8 @@ jobs:
         run: |
           expected=$(printf '%s\n' \
             android-gradle-runtime.cdx.json \
-            "ha-paneld-installer-${GITHUB_REF_NAME}.sh" \
-            "ha-paneld-provision-${GITHUB_REF_NAME}.sh" \
+            "ha-paneld-installer-${RELEASE_TAG}.sh" \
+            "ha-paneld-provision-${RELEASE_TAG}.sh" \
             ha-paneld-unsigned.apk \
             profile-editor-runtime.cdx.json \
             release-body.md)
@@ -180,7 +206,7 @@ jobs:
           fi
           (
             cd release-input
-            sha256sum android-gradle-runtime.cdx.json "ha-paneld-installer-${GITHUB_REF_NAME}.sh" "ha-paneld-provision-${GITHUB_REF_NAME}.sh" ha-paneld-unsigned.apk profile-editor-runtime.cdx.json release-body.md > MANIFEST.sha256
+            sha256sum android-gradle-runtime.cdx.json "ha-paneld-installer-${RELEASE_TAG}.sh" "ha-paneld-provision-${RELEASE_TAG}.sh" ha-paneld-unsigned.apk profile-editor-runtime.cdx.json release-body.md > MANIFEST.sha256
           )
           sha256=$(sha256sum release-input/MANIFEST.sha256 | cut -d' ' -f1)
           echo "sha256=$sha256" >> "$GITHUB_OUTPUT"
@@ -196,6 +222,7 @@ jobs:
           include-hidden-files: false
 
   sign-and-publish:
+    if: github.event_name == 'push'
     needs: prepare
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -228,8 +255,8 @@ jobs:
           expected=$(printf '%s\n' \
             MANIFEST.sha256 \
             android-gradle-runtime.cdx.json \
-            "ha-paneld-installer-${GITHUB_REF_NAME}.sh" \
-            "ha-paneld-provision-${GITHUB_REF_NAME}.sh" \
+            "ha-paneld-installer-${RELEASE_TAG}.sh" \
+            "ha-paneld-provision-${RELEASE_TAG}.sh" \
             ha-paneld-unsigned.apk \
             profile-editor-runtime.cdx.json \
             release-body.md)
@@ -285,10 +312,10 @@ jobs:
 
           build_tools="$ANDROID_HOME/build-tools/35.0.0"
           unsigned_apk=release-input/ha-paneld-unsigned.apk
-          apk_name="ha-paneld-${GITHUB_REF_NAME}-manual-setup-required.apk"
-          android_sbom_name="ha-paneld-${GITHUB_REF_NAME}-android-gradle-runtime.cdx.json"
-          profile_editor_sbom_name="ha-paneld-${GITHUB_REF_NAME}-profile-editor-runtime.cdx.json"
-          provisioner_name="ha-paneld-provision-${GITHUB_REF_NAME}.sh"
+          apk_name="ha-paneld-${RELEASE_TAG}-manual-setup-required.apk"
+          android_sbom_name="ha-paneld-${RELEASE_TAG}-android-gradle-runtime.cdx.json"
+          profile_editor_sbom_name="ha-paneld-${RELEASE_TAG}-profile-editor-runtime.cdx.json"
+          provisioner_name="ha-paneld-provision-${RELEASE_TAG}.sh"
           signed_apk="dist/$apk_name"
           mkdir -p dist
 
@@ -306,7 +333,7 @@ jobs:
           package_line=${badging%%$'\n'*}
           package_name=$(printf '%s\n' "$package_line" | sed -n "s/.* name='\([^']*\)'.*/\1/p")
           version_name=$(printf '%s\n' "$package_line" | sed -n "s/.* versionName='\([^']*\)'.*/\1/p")
-          expected_version_name="${GITHUB_REF_NAME#v}"
+          expected_version_name="${RELEASE_TAG#v}"
           if [ "$package_name" != "io.github.maxlyth.hapaneld" ]; then
             echo "::error::Signed APK package is '$package_name', expected 'io.github.maxlyth.hapaneld'."
             exit 1
@@ -330,9 +357,9 @@ jobs:
 
           cp release-input/android-gradle-runtime.cdx.json "dist/$android_sbom_name"
           cp release-input/profile-editor-runtime.cdx.json "dist/$profile_editor_sbom_name"
-          cp "release-input/ha-paneld-installer-${GITHUB_REF_NAME}.sh" "dist/ha-paneld-installer-${GITHUB_REF_NAME}.sh"
+          cp "release-input/ha-paneld-installer-${RELEASE_TAG}.sh" "dist/ha-paneld-installer-${RELEASE_TAG}.sh"
           cp "release-input/$provisioner_name" "dist/$provisioner_name"
-          chmod +x "dist/ha-paneld-installer-${GITHUB_REF_NAME}.sh"
+          chmod +x "dist/ha-paneld-installer-${RELEASE_TAG}.sh"
           chmod +x "dist/$provisioner_name"
           (cd dist && sha256sum "$apk_name" > "$apk_name.sha256")
           (cd dist && sha256sum "$provisioner_name" > "$provisioner_name.sha256")
@@ -383,9 +410,9 @@ jobs:
       - name: Publish GitHub release
         uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
         with:
-          name: ${{ github.ref_name }}
+          name: ${{ env.RELEASE_TAG }}
           files: dist/*
           body_path: release-input/release-body.md
-          generate_release_notes: ${{ contains(github.ref_name, '-') }}
+          generate_release_notes: ${{ contains(env.RELEASE_TAG, '-') }}
           # Tags with a suffix (e.g. v0.5.0-rc1) publish as pre-releases.
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          prerelease: ${{ contains(env.RELEASE_TAG, '-') }}

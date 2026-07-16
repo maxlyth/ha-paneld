@@ -21,14 +21,23 @@ on:
   workflow_run:
     workflows: ["Release"]
     types: [completed]
-  workflow_dispatch: {}      # manual rebuild / first population
+  # Manual runs preserve the historical rebuild+deploy default, but can now stop after constructing
+  # and uploading the exact Pages artifact for a non-publishing validation run.
+  workflow_dispatch:
+    inputs:
+      publish_pages:
+        description: Deploy the rebuilt repository to Pages (clear for a build-only dry run)
+        required: true
+        default: true
+        type: boolean
 
 permissions:
   contents: read
 
 concurrency:
-  group: fdroid-pages
-  cancel-in-progress: true
+  # A build-only validation must never cancel or queue behind the one production Pages lane.
+  group: ${{ github.event_name == 'workflow_dispatch' && !inputs.publish_pages && format('fdroid-build-only-{0}', github.run_id) || 'fdroid-pages' }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' || inputs.publish_pages }}
 
 jobs:
   build:
@@ -38,7 +47,9 @@ jobs:
     # always allow a manual dispatch. head_branch on a tag-push run is the tag name.
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.conclusion == 'success' &&
+      (github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       startsWith(github.event.workflow_run.head_branch, 'v') &&
        !contains(github.event.workflow_run.head_branch, '-'))
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -229,6 +240,7 @@ jobs:
 
   deploy:
     needs: build
+    if: github.event_name != 'workflow_dispatch' || inputs.publish_pages
     runs-on: ubuntu-24.04
     permissions:
       pages: write
