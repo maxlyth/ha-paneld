@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.9.4-rc1 - 2026-07-16
+
+**Hardware investigation and release checks are safer to run, preserve more useful evidence and no longer disturb a successful panel installation with a later best-effort failure.** This candidate also resolves conflicting LED ownership on the WF1589T.
+
+### Added
+
+- **A bounded hardware-evidence collector supports incomplete panel profiles** — `scripts/collect-panel-hardware.sh` gathers a read-only, size-limited report for the ZX-SMT156 and Echo Show 5 Gen 2 characterization paths. Its command allowlist, failure classification and serial redaction are covered by host-side tests. (#24, #28)
+
+### Changed
+
+- **Release validation can run without publishing** — the same release checks used by the publishing workflow can now validate a candidate independently, without creating or uploading a release.
+- **Firmware availability failures retain actionable evidence** — the daily monitor preserves outage details, treats status within one UTC day consistently and continues recording the seven-day history needed to distinguish a transient host failure from a missing artifact.
+- **Layout-shift reporting is less sensitive to measurement noise** — repeated samples use robust statistics and refreshed baselines across the supported viewport matrix, while the documentation records the current stability limits.
+
+### Fixed
+
+- **Successful provisioning is no longer reported as failed because a later optional step could not complete** — the installer preserves the primary app result while still reporting best-effort follow-up failures separately.
+- **WF1589T LED commands are no longer immediately overwritten by the factory demo** — the bundled profile recommends reversibly disabling the boot-started `PwmLightDemo` service so ha-paneld remains the single owner of `/dev/ledjni`.
+
+### Docs
+
+- **The NSPanel Pro Zigbee watchdog limitation is documented explicitly** — the hardware guide distinguishes ha-paneld's repaired duplicate-guard behavior from the separate legacy stock-firmware watchdog defect. (#34)
+
 ## v0.9.3 - 2026-07-15
 
 **Device support is no longer limited to profiles shipped by the ha-paneld project.** Panel owners and hardware vendors can create, edit, validate, import, activate, export and share panel profiles without rebuilding the app. Profiles remain declarative and limited to capabilities already implemented by ha-paneld, so extending hardware support cannot introduce executable code or arbitrary privileged operations.
