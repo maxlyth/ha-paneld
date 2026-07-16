@@ -6,14 +6,22 @@ printf 'curl %s\n' "$*" >> "${MOCK_CALL_LOG:?MOCK_CALL_LOG is required}"
 url=""
 output_file=""
 want_output_file=0
+write_format=""
+want_write_format=0
 for arg in "$@"; do
   if [ "$want_output_file" = 1 ]; then
     output_file="$arg"
     want_output_file=0
     continue
   fi
+  if [ "$want_write_format" = 1 ]; then
+    write_format="$arg"
+    want_write_format=0
+    continue
+  fi
   case "$arg" in
     -o|--output) want_output_file=1 ;;
+    -w|--write-out) want_write_format=1 ;;
     http://*|https://*) url="$arg" ;;
   esac
 done
@@ -131,6 +139,31 @@ JSON
   */health)
     [ "${MOCK_HEALTH:-ok}" = "ok" ] || exit 22
     printf 'ha-paneld test health\n'
+    ;;
+  */api/v1/provisioning/plan.txt)
+    plan_status=200
+    case "${MOCK_PLAN:-ok}" in
+      ok|recommendations) ;;
+      missing) plan_status=404 ;;
+      transient)
+        attempts="${MOCK_STATE_DIR:?}/plan-attempts"
+        if [ ! -f "$attempts" ]; then : > "$attempts"; plan_status=503; fi
+        ;;
+      unstable) plan_status=503 ;;
+      *) plan_status=500 ;;
+    esac
+    if [ "$plan_status" = 200 ] && [ -n "$output_file" ]; then
+      if [ "${MOCK_PLAN:-ok}" = "recommendations" ]; then
+        printf 'Detected panel: Test Panel\nRecommended: install the root helper\nRecommended: update System WebView\n' > "$output_file"
+      else
+        printf 'Detected panel: Test Panel\nProvisioning guidance: no required changes\n' > "$output_file"
+      fi
+    fi
+    if [ -n "$write_format" ]; then
+      printf '%s' "$plan_status"
+    elif [ "$plan_status" = 200 ]; then
+      printf 'Detected panel: Test Panel\nProvisioning guidance: no required changes\n'
+    fi
     ;;
   */api/v1/diag)
     if [ "${MOCK_VERIFY:-ok}" = "transient" ]; then

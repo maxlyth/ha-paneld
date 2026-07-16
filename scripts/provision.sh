@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # ha-paneld provisioning — install + grant all permissions over adb, no device UI, and (optionally)
-# set the panel id + MQTT broker in one shot. Requires adb access and su/adb-root on the panel.
+# set the panel id + MQTT broker in one shot. Requires adb access; privileged features additionally
+# need a route reported by the app's active hardware profile and live provisioning plan.
 # For non-root panels, --shizuku installs and starts the pinned manager; approval remains on-panel.
 #
 # Usage:
@@ -13,8 +14,6 @@
 #       [--ha-token <LLAT>]              # simple: a long-lived access token (a standing credential), OR
 #       [--ha-user U --ha-pass P]        # preferred: log in HERE to mint a REFRESH token; the password
 #                                        # never reaches the panel, and no 10-year token lives on it.
-#   By default provisioning also TAMES the panel profile's recommended vendor apps (eWeLink overlay +
-#   factory test tools) — reversible + never strands the panel; pass --no-tame to skip.
 #   scripts/provision.sh <panel-ip:5555> --verify        # check end-state only, make no changes
 #
 # IDEMPOTENCY (safe to re-run after a cancel/failure — re-running converges to the full state):
@@ -43,7 +42,7 @@ Common operations:
   --apk FILE               Install a specific APK
   --export FILE            Back up config only; never installs unless combined with install/config options
   --verify                 Check the existing installation only; never installs
-  --no-tame                Leave vendor applications unchanged
+  --no-tame                Deprecated compatibility no-op; guidance is never auto-applied
   --shizuku                Install/start pinned Shizuku for locally approved non-root access
   --help                   Show this help
 
@@ -161,6 +160,61 @@ HOST="${TARGET%:*}"
 [ "$HOST" != "$TARGET" ] || HOST="$TARGET"
 URL="http://$HOST:8888"
 PROVISION_FAILED=0
+PROVISIONING_PLAN_AVAILABLE=0
+
+# The app, not Bash, owns profile parsing, hardware matching and provisioning policy. Bash only waits
+# for and renders the app's terminal-safe view. HTTP 503 means profile activation is still settling;
+# a paired install must not silently succeed without the endpoint promised by that release. `--verify`
+# remains useful against pre-0.9.4 panels: a legacy 404 is advisory and all established GET checks run.
+show_provisioning_plan() {
+  local required="$1" label="$2"
+  local timeout="${PROVISIONING_PLAN_TIMEOUT_SECONDS:-40}" elapsed=0 code="" body plan_text="" status=unavailable
+  case "$timeout" in ''|*[!0-9]*|0) timeout=40 ;; esac
+  body="$(mktemp)"
+  step "🧭 panel profile" "$label"
+  while [ "$elapsed" -lt "$timeout" ]; do
+    : > "$body"
+    if code="$(curl -sS --max-time 4 -o "$body" -w '%{http_code}' \
+        "$URL/api/v1/provisioning/plan.txt" 2>/dev/null)"; then
+      case "$code" in
+        200)
+          if [ -s "$body" ]; then
+            plan_text="$(tr -d '\r' < "$body")"
+            if [ -n "$plan_text" ]; then
+              printf '%s\n' "$plan_text"
+              PROVISIONING_PLAN_AVAILABLE=1
+              rm -f "$body"
+              return 0
+            fi
+          fi
+          status=empty
+          ;;
+        404)
+          rm -f "$body"
+          if [ "$required" = 1 ]; then
+            warn "the installed app does not provide its paired provisioning-plan endpoint; the install cannot be verified as complete"
+            return 1
+          fi
+          warn "this older ha-paneld does not provide profile-guided provisioning; using the legacy verification checks"
+          return 0
+          ;;
+        503) status=starting ;;
+        *) status="HTTP ${code:-unknown}" ;;
+      esac
+    else
+      status=unreachable
+    fi
+    elapsed=$((elapsed + 1))
+    [ "$elapsed" -lt "$timeout" ] && sleep 1
+  done
+  rm -f "$body"
+  if [ "$required" = 1 ]; then
+    warn "the provisioning plan stayed ${status:-unavailable} for ${timeout}s; the paired app did not finish profile activation"
+    return 1
+  fi
+  warn "profile-guided provisioning is ${status:-unavailable}; continuing with the legacy verification checks"
+  return 0
+}
 
 verify() {
   step "🔎 verifying" "${D}$URL${X}"
@@ -179,11 +233,14 @@ verify() {
   chk "HTTP server reachable"  "$health" "ha-paneld"
   chk "WRITE_SETTINGS granted" "$diag" "write_settings=true"
   chk "accessibility enabled"  "$diag" "a11y=true"
-  # Root helper daemon — informational (only sandbox-walled panels need it; see the closing note).
-  if printf '%s' "$diag" | grep -q "daemon=true"; then
-    echo "   ${GRN}✓${X} root helper daemon: running"
-  elif [ -n "$diag" ]; then
-    echo "   ${YEL}ℹ${X} root helper daemon: ${YEL}not detected${X} ${D}(needed on sandbox-walled panels — helper/install-daemon.sh)${X}"
+  # Until every supported app has the plan endpoint, retain the broad legacy helper hint as fallback.
+  # A current app's plan is profile-specific, so repeating this blanket message would be misleading.
+  if [ "$PROVISIONING_PLAN_AVAILABLE" != 1 ]; then
+    if printf '%s' "$diag" | grep -q "daemon=true"; then
+      echo "   ${GRN}✓${X} root helper daemon: running"
+    elif [ -n "$diag" ]; then
+      echo "   ${YEL}ℹ${X} root helper daemon: ${YEL}not detected${X} ${D}(needed on sandbox-walled panels — helper/install-daemon.sh)${X}"
+    fi
   fi
   # Root — the single biggest capability divider. Say it PLAINLY at install time so a no-root user
   # knows from the outset they're getting a subset (a panel-permissions shortfall, not ha-paneld bugs).
@@ -579,15 +636,14 @@ adb_preflight
 # A backup must happen before any install or configuration mutation. With no other requested
 # operation, --export is deliberately read-only and exits here.
 if [ -n "$EXPORT_FILE" ]; then export_config "$EXPORT_FILE"; fi
-if [ "$VERIFY_ONLY" = 1 ]; then verify; exit $?; fi
+if [ "$VERIFY_ONLY" = 1 ]; then
+  show_provisioning_plan 0 "${D}reading installed guidance${X}"
+  verify
+  exit $?
+fi
 if export_is_only_operation; then
   echo "${GRN}${B}✅ backup complete${X} — no app, setting, or panel state was changed."
   exit 0
-fi
-
-if [ "$NO_TAME" != 1 ] && [ "$PROVISION_FAILED" = 0 ]; then
-  echo "${YEL}ℹ after installation, ha-paneld will reversibly disable this profile's known vendor overlays and factory-test apps.${X}"
-  echo "   ${D}Use --no-tame to leave every vendor application unchanged.${X}"
 fi
 
 resolve_apk
@@ -834,6 +890,10 @@ if ! launch_and_wait; then
                        echo "   ${D}Open $URL in a browser. If it loads there, this computer cannot reach the panel's :8888 port (firewall/VLAN).${X}"
                        PROVISION_FAILED=1; }
 fi
+if [ "$PROVISION_FAILED" = 0 ]; then
+  show_provisioning_plan 1 "${D}waiting for the installed app to resolve this panel${X}" \
+    || PROVISION_FAILED=1
+fi
 
 # Built-in-renderer login (optional): when --ha-user/--ha-pass are given, log in to HA *here on this
 # machine* (the password never reaches the panel) to mint a refresh token, so the panel holds a
@@ -914,7 +974,9 @@ fi
 [ -n "$LOG_HOST" ]   && ARGS+=(--data-urlencode "log_ship_host=$LOG_HOST")
 [ -n "$LOG_PORT" ]   && ARGS+=(--data-urlencode "log_ship_port=$LOG_PORT")
 [ -n "$LOG_PROTO" ]  && ARGS+=(--data-urlencode "log_ship_protocol=$LOG_PROTO")
+PLAN_REFRESH_NEEDED=0
 if [ ${#ARGS[@]} -gt 0 ]; then
+  PLAN_REFRESH_NEEDED=1
   step "⚙️  configuring" "${D}panel_id / MQTT / renderer / log shipping${X}"
   if CFG_ERR="$(curl -fsS -H 'Accept: application/json' -X POST "${ARGS[@]}" "$URL/api/v1/config" 2>&1 >/dev/null)"; then
     echo "   ${GRN}✓${X} applied"
@@ -930,6 +992,7 @@ fi
 # everything incl. device-scoped keys (same-panel recovery / like-for-like replacement); --restore-fleet
 # applies only PORTABLE non-secret keys (cross-panel deployment).
 if [ -n "$RESTORE_FILE" ]; then
+  PLAN_REFRESH_NEEDED=1
   [ -f "$RESTORE_FILE" ] || { echo "${RED}✗ bundle not found: $RESTORE_FILE${X}" >&2; exit 2; }
   MODE_Q=""; [ "$RESTORE_MODE" = "fleet" ] && MODE_Q="?mode=fleet"
   step "📦 restoring config" "${D}$RESTORE_FILE (${RESTORE_MODE})${X}"
@@ -941,16 +1004,11 @@ if [ -n "$RESTORE_FILE" ]; then
   fi
 fi
 
-# Recommended vendor-app taming — tame the panel profile's `defaultTame` set (eWeLink's over-the-dashboard
-# overlay + factory burn-in/test tools) in one call. Guarded app-side: tame() hands the home role to
-# ha-paneld's admin launcher and refuses to strand the panel, and it's reversible from the :8888 picker.
-# Default ON during provisioning; --no-tame skips. Runs after any restore so it isn't clobbered. Best-effort
-# — a profile with no recommendations, or a panel with no privileged path, is a harmless no-op.
-if [ "$NO_TAME" != 1 ] && [ "$PROVISION_FAILED" = 0 ]; then
-  step "🧹 taming" "${D}recommended vendor apps (eWeLink, factory test tools)${X}"
-  curl -fsS --data-urlencode "action=recommended" "$URL/api/v1/tame" >/dev/null 2>&1 \
-    && echo "   ${GRN}✓${X} recommended set applied (where present + safe)" \
-    || echo "   ${D}(nothing to tame / no privileged path)${X}"
+# Configuration can change live observations used by the planner. Re-render the app-owned plan after
+# all config/import work; it remains guidance only and never authorises Bash to mutate panel state.
+if [ "$PLAN_REFRESH_NEEDED" = 1 ]; then
+  show_provisioning_plan 1 "${D}refreshing guidance after configuration${X}" \
+    || PROVISION_FAILED=1
 fi
 
 echo
@@ -962,11 +1020,13 @@ fi
 if [ "$PROVISION_FAILED" != 0 ]; then
   echo "${RED}${B}✗ provisioning incomplete${X} — correct the failed item above, then re-run the same command."
 fi
-echo "${D}   Root daemon: required on EVERY sandbox-walled panel (appCanSu=false — TPA10, SMT1019, …), not just LED panels. It's the privileged path for screen-off, density, governor, screenshot, perf and buttons even when ledMechanism=NONE. rk3576/PX30 panels can exec su directly and don't need it.${X}"
-echo "${D}   Install it with:  ./helper/build.sh && ./helper/install-daemon.sh $TARGET${X}"
+if [ "$PROVISIONING_PLAN_AVAILABLE" != 1 ]; then
+  echo "${D}   Root daemon: required on EVERY sandbox-walled panel (appCanSu=false — TPA10, SMT1019, …), not just LED panels. It's the privileged path for screen-off, density, governor, screenshot, perf and buttons even when ledMechanism=NONE. rk3576/PX30 panels can exec su directly and don't need it.${X}"
+  echo "${D}   Install it with:  ./helper/build.sh && ./helper/install-daemon.sh $TARGET${X}"
 
-# Flag a too-old system WebView (informational; the dashboard won't render on ancient Chrome).
-check_webview
+  # Flag a too-old system WebView only for older apps. Current apps own this profile-aware guidance.
+  check_webview
+fi
 
 # Tuya/TPA10 only: offer to disable the closed vendor app stack for a faster, minimal HA panel (guarded
 # on root + persistent adb + a replacement launcher; prompts unless --strip-vendor was passed).

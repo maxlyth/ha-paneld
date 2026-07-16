@@ -22,6 +22,7 @@ LAST_STATUS=0
 run_provision() {
   : > "$MOCK_CALL_LOG"
   rm -f "$TMP/diag-attempts"
+  rm -f "$TMP/plan-attempts"
   LAST_OUTPUT="$TMP/output.txt"
   MOCK_HEALTH="${MOCK_HEALTH:-ok}" \
   MOCK_VERIFY="${MOCK_VERIFY:-ok}" \
@@ -31,6 +32,8 @@ run_provision() {
   MOCK_ADB_STATE="${MOCK_ADB_STATE:-device}" \
   MOCK_HA_LOGIN="${MOCK_HA_LOGIN:-ok}" \
   MOCK_HA_TOKEN="${MOCK_HA_TOKEN:-ok}" \
+  MOCK_PLAN="${MOCK_PLAN:-ok}" \
+  MOCK_WEBVIEW_VERSION="${MOCK_WEBVIEW_VERSION:-150.0.0.0}" \
   MOCK_GH_FAIL="${MOCK_GH_FAIL:-0}" \
   MOCK_GITHUB_API="${MOCK_GITHUB_API:-fail}" \
   MOCK_RELEASE_CERT="${MOCK_RELEASE_CERT:-ac6193307fb0b70113aae205d7549406f96e063bc5491b67b1d5694a34b0e339}" \
@@ -48,6 +51,7 @@ run_provision() {
   MOCK_OPENSSL_MISSING="${MOCK_OPENSSL_MISSING:-0}" \
   MOCK_OPENSSL_DIGEST_FAIL="${MOCK_OPENSSL_DIGEST_FAIL:-0}" \
   MOCK_STATE_DIR="$TMP" \
+  PROVISIONING_PLAN_TIMEOUT_SECONDS="${PROVISIONING_PLAN_TIMEOUT_SECONDS:-2}" \
     bash "$PROVISION" "$@" > "$LAST_OUTPUT" 2>&1
   LAST_STATUS=$?
 }
@@ -133,16 +137,101 @@ if [ ! -e "$FAILED_EXPORT" ]; then pass "failed backup leaves no misleading outp
 # Verification is explicitly read-only and must not even attempt installation.
 run_provision "$MOCK_TARGET" --verify
 assert_success "verify-only succeeds for a healthy panel"
+assert_contains 'Detected panel: Test Panel' "verify-only displays the app-owned hardware profile guidance"
+assert_log_contains '^curl .* /api/v1/provisioning/plan\.txt$|^curl .*http://panel\.test:8888/api/v1/provisioning/plan\.txt$' "verify-only reads the provisioning plan"
 assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "verify-only never installs an APK"
 assert_not_contains '^adb .* (install|shell (settings put|appops set|pm grant|am start))|^curl .* (-X POST|--data|--data-urlencode)' "$MOCK_CALL_LOG" "verify-only performs no panel mutation"
 
+# Pre-plan releases remain verifiable. A 404 is an explicit compatibility result, not a reason to
+# discard the established health, permissions and diagnostics checks.
+MOCK_PLAN=missing run_provision "$MOCK_TARGET" --verify
+assert_success "verify-only accepts a legacy panel without the provisioning-plan endpoint"
+assert_contains 'older ha-paneld.*legacy verification checks' "legacy verify explains why profile guidance is unavailable"
+assert_contains 'root helper daemon: running' "legacy verify retains the broad helper status"
+assert_not_contains '^curl .* (-X POST|--data|--data-urlencode)' "$MOCK_CALL_LOG" "legacy verify remains GET-only"
+unset MOCK_PLAN
+
 # A normal local install must work with only portable shell facilities. The fixture PATH deliberately
 # supplies failing seq and GNU sort -V implementations; invoking either makes this test fail.
-run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+run_provision "$MOCK_TARGET" --apk "$APK"
 assert_success "successful install completes without seq or GNU sort -V"
 if grep -Eq '^adb .* install( |$)' "$MOCK_CALL_LOG"; then pass "successful install invokes adb install"
 else fail_test "successful install invokes adb install"; fi
 assert_contains 'provisioned' "successful install reports completion"
+assert_contains 'Detected panel: Test Panel' "successful install identifies the resolved panel profile"
+assert_not_contains '/api/v1/tame' "$MOCK_CALL_LOG" "ordinary install never auto-applies profile recommendations"
+start_line="$(grep -nE '^adb .* shell am start -n ' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
+plan_line="$(grep -nE '^curl .*api/v1/provisioning/plan\.txt' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
+if [ -n "$start_line" ] && [ -n "$plan_line" ] && [ "$start_line" -lt "$plan_line" ]; then
+  pass "profile guidance is read only after the newly installed app is launched"
+else
+  fail_test "profile guidance is read only after the newly installed app is launched"
+fi
+
+# A settling profile returns 503. The portable client retries it and then displays the final plan.
+MOCK_PLAN=transient run_provision "$MOCK_TARGET" --apk "$APK"
+assert_success "install waits through a transient provisioning-plan 503"
+assert_contains 'Detected panel: Test Panel' "transient plan readiness eventually renders guidance"
+plan_calls="$(grep -Ec '^curl .*api/v1/provisioning/plan\.txt' "$MOCK_CALL_LOG" || true)"
+if [ "$plan_calls" -ge 2 ]; then pass "transient plan readiness is retried"
+else fail_test "transient plan readiness is retried"; fi
+unset MOCK_PLAN
+
+# A release-paired provisioner cannot claim completion if the just-installed app lacks or never
+# stabilises the endpoint that owns profile interpretation.
+MOCK_PLAN=missing MOCK_WEBVIEW_VERSION=80.0.0.0 run_provision "$MOCK_TARGET" --apk "$APK"
+assert_failure "new install fails when its paired provisioning-plan endpoint is missing"
+assert_contains 'does not provide.*paired provisioning-plan endpoint|cannot be verified as complete' "missing paired endpoint explains the release contract"
+assert_contains 'Root daemon: required' "missing plan retains the legacy helper guidance"
+assert_contains 'system WebView is very old' "missing plan retains the legacy WebView guidance"
+assert_not_contains '/api/v1/tame' "$MOCK_CALL_LOG" "missing plan never falls back to automatic taming"
+unset MOCK_PLAN MOCK_WEBVIEW_VERSION
+
+MOCK_PLAN=unstable PROVISIONING_PLAN_TIMEOUT_SECONDS=1 run_provision "$MOCK_TARGET" --apk "$APK"
+assert_failure "new install fails when profile activation remains 503"
+assert_contains 'stayed.*starting|did not finish profile activation' "permanently unstable plan gives a retryable recovery reason"
+unset MOCK_PLAN PROVISIONING_PLAN_TIMEOUT_SECONDS
+
+# Recommendations are information, not exit-status gates or implicit consent. The plan replaces the
+# blanket helper/WebView messages while it is available.
+MOCK_PLAN=recommendations MOCK_WEBVIEW_VERSION=80.0.0.0 run_provision "$MOCK_TARGET" --apk "$APK"
+assert_success "unsatisfied profile recommendations do not fail an ordinary install"
+assert_contains 'Recommended: install the root helper' "app-owned helper recommendation is displayed"
+assert_contains 'Recommended: update System WebView' "app-owned WebView recommendation is displayed"
+helper_lines="$(grep -Eic 'root helper' "$LAST_OUTPUT" || true)"
+webview_lines="$(grep -Eic 'System WebView' "$LAST_OUTPUT" || true)"
+if [ "$helper_lines" -eq 1 ] && [ "$webview_lines" -eq 1 ]; then
+  pass "available plan suppresses duplicate blanket helper and WebView guidance"
+else
+  fail_test "available plan suppresses duplicate blanket helper and WebView guidance"
+fi
+assert_not_contains '/api/v1/tame|action=recommended' "$MOCK_CALL_LOG" "recommendations cause no hidden mutation"
+unset MOCK_PLAN MOCK_WEBVIEW_VERSION
+
+# Config/import may change observations. The core-rendered plan is fetched again only after those
+# mutations complete, so its final guidance reflects the resulting panel state.
+run_provision "$MOCK_TARGET" --apk "$APK" --id refreshed-panel
+assert_success "configured install refreshes profile guidance"
+config_line="$(grep -nE '^curl .* -X POST .*api/v1/config$' "$MOCK_CALL_LOG" | tail -1 | cut -d: -f1)"
+last_plan_line="$(grep -nE '^curl .*api/v1/provisioning/plan\.txt' "$MOCK_CALL_LOG" | tail -1 | cut -d: -f1)"
+plan_calls="$(grep -Ec '^curl .*api/v1/provisioning/plan\.txt' "$MOCK_CALL_LOG" || true)"
+if [ "$plan_calls" -ge 2 ] && [ -n "$config_line" ] && [ -n "$last_plan_line" ] && [ "$config_line" -lt "$last_plan_line" ]; then
+  pass "profile guidance is rendered again after configuration"
+else
+  fail_test "profile guidance is rendered again after configuration"
+fi
+
+RESTORE_REFRESH="$TMP/restore-refresh.json"
+printf '{"kind":"ha-paneld-config","schema":1,"values":{}}\n' > "$RESTORE_REFRESH"
+run_provision "$MOCK_TARGET" --apk "$APK" --restore "$RESTORE_REFRESH"
+assert_success "restored install refreshes profile guidance"
+restore_line="$(grep -nE '^curl .*api/v1/config/import' "$MOCK_CALL_LOG" | tail -1 | cut -d: -f1)"
+last_plan_line="$(grep -nE '^curl .*api/v1/provisioning/plan\.txt' "$MOCK_CALL_LOG" | tail -1 | cut -d: -f1)"
+if [ -n "$restore_line" ] && [ -n "$last_plan_line" ] && [ "$restore_line" -lt "$last_plan_line" ]; then
+  pass "profile guidance is rendered again after restore"
+else
+  fail_test "profile guidance is rendered again after restore"
+fi
 
 # Vendor-strip detection is advisory and runs after verification. A transient late adb failure must not
 # overwrite a genuinely successful result (the field report returned adb's 255 after printing success).
@@ -561,6 +650,7 @@ bash "$ROOT/scripts/install.sh" --help > "$LAST_OUTPUT" 2>&1
 LAST_STATUS=$?
 assert_success "one-line installer exposes help without requiring a panel"
 assert_contains 'Usage:.*install\.sh' "one-line installer help shows the supported command"
+assert_not_contains 'Disable those recommended vendor apps|TAME=' "$ROOT/scripts/install.sh" "one-line installer has no broad pre-profile taming prompt"
 
 # A release-generated installer must bind the immutable tag to its exact asset name and source commit
 # before it asks for a panel or contacts one. This mirrors the release workflow's three substitutions.

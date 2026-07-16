@@ -85,7 +85,7 @@ case "${1:-}" in
         printf '%s\n' "${MOCK_ADB_TCP_PORT:-5555}"
         ;;
       "dumpsys webviewupdate")
-        printf 'Current WebView package (name, version): (com.android.webview, 150.0.0.0)\n'
+        printf 'Current WebView package (name, version): (com.android.webview, %s)\n' "${MOCK_WEBVIEW_VERSION:-150.0.0.0}"
         ;;
       "id")
         if [ "${MOCK_ADB_ROOT:-0}" = 1 ]; then

@@ -187,9 +187,6 @@ esac
 case "$IP" in *:*) TARGET="$IP" ;; *) TARGET="$IP:5555" ;; esac
 printf "Panel id [blank = auto from device name]: " > "$TTY"; read -r PID < "$TTY" || PID=""
 printf "MQTT broker tcp://host:1883 [blank = auto-discover Home Assistant]: " > "$TTY"; read -r BROKER < "$TTY" || BROKER=""
-echo "ha-paneld can disable known vendor overlays and factory-test apps which interfere with a wall panel." > "$TTY"
-echo "This is reversible from the ha-paneld web UI." > "$TTY"
-printf "Disable those recommended vendor apps? [Y/n]: " > "$TTY"; read -r TAME < "$TTY" || TAME=""
 
 # --- fetch the APK and run the already-authenticated provisioner ---
 echo "${B}→ provisioning $TARGET${X}"
@@ -212,7 +209,6 @@ else
 fi
 [ -n "${PID:-}" ]    && ARGS+=(--id "$PID")
 [ -n "${BROKER:-}" ] && ARGS+=(--mqtt "$BROKER")
-case "${TAME:-}" in n|N|no|NO|No) ARGS+=(--no-tame) ;; esac
 # Give provision.sh the terminal as stdin so its own prompts (e.g. downgrade confirm) work.
 if ! bash "$SCRIPT" "${ARGS[@]}" < "$TTY"; then
   echo "${R}${B}ha-paneld installation did not complete.${X}" >&2
