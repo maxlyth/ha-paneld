@@ -68,18 +68,18 @@ class PerfProjectionTest {
         assertFalse(source.contains("Su.runOutput("))
     }
 
-    @Test fun featureCostProjectionRunsAfterReleasingTheSamplerLock() {
+    @Test fun regularlyPolledPerformanceProjectionDoesNotBuildFeatureCosts() {
         val source = listOf(
             File("src/main/kotlin/io/github/maxlyth/hapaneld/http/PerfReader.kt"),
             File("app/src/main/kotlin/io/github/maxlyth/hapaneld/http/PerfReader.kt"),
         ).first(File::isFile).readText()
         val jsonFunction = source.indexOf("fun json(): String")
         val sampledReturn = source.indexOf("return sampled", jsonFunction)
-        val featureProjection = source.indexOf("FeatureCosts.json()", jsonFunction)
 
         assertTrue(jsonFunction >= 0)
         assertTrue(sampledReturn > jsonFunction)
-        assertTrue(featureProjection > sampledReturn)
+        assertFalse(source.substring(jsonFunction, source.indexOf("private fun dashboardJson", jsonFunction))
+            .contains("FeatureCosts.json()"))
     }
 
     @Test fun performanceProjectionAddsDashboardDiagnosticsWithoutRemovingLegacyFields() {
@@ -87,9 +87,10 @@ class PerfProjectionTest {
             File("src/main/kotlin/io/github/maxlyth/hapaneld/http/PerfReader.kt"),
             File("app/src/main/kotlin/io/github/maxlyth/hapaneld/http/PerfReader.kt"),
         ).first(File::isFile).readText()
-        listOf("\"render\"", "\"builtin\"", "\"entityFilter\"", "\"featureCosts\"", "\"dashboard\"").forEach {
+        listOf("\"render\"", "\"builtin\"", "\"entityFilter\"", "\"dashboard\"").forEach {
             assertTrue("missing /perf field $it", source.contains(it))
         }
+        assertFalse(source.contains("\"featureCosts\":"))
         assertTrue(source.contains("DashboardTelemetry.json("))
         assertTrue(source.contains("EntityLearningRuntime.performanceSummaryJson()"))
     }

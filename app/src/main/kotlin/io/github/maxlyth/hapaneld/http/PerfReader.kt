@@ -10,9 +10,9 @@ import io.github.maxlyth.hapaneld.metrics.MetricSample
 import io.github.maxlyth.hapaneld.metrics.PanelMetrics
 import io.github.maxlyth.hapaneld.metrics.PerfDump
 import io.github.maxlyth.hapaneld.metrics.RamRingSink
-import io.github.maxlyth.hapaneld.metrics.FeatureCosts
 import io.github.maxlyth.hapaneld.metrics.FeatureCostOperation
 import io.github.maxlyth.hapaneld.metrics.FeatureCostOutcome
+import io.github.maxlyth.hapaneld.metrics.FeatureCosts
 import io.github.maxlyth.hapaneld.util.AndroidInput
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -200,10 +200,11 @@ object PerfReader {
         val sampled = synchronized(lock) {
             """{"enabled":$enabled,$latestFields,"top":$topJson,"render":$renderJson,"builtin":${builtinJson()},"network":${networkJson()},"entityFilter":${EntityFilterTelemetry.json()},"hist":{"cpu":${histInts(CPU_KEY)},"ram":${histInts(RAM_KEY)},"gpu":${histInts(GPU_KEY)}}}"""
         }
-        // The dashboard and fixed-vocabulary feature-cost projections allocate JSON. Keep both outside
-        // the sampler lock so diagnostics readers cannot delay history publication on low-end panels.
-        return sampled.dropLast(1) +
-            ""","dashboard":${dashboardJson()},"featureCosts":${FeatureCosts.json()}}"""
+        // Dashboard diagnostics allocate JSON. Keep the projection outside the sampler lock so
+        // diagnostics readers cannot delay history publication on low-end panels. Feature costs are
+        // intentionally available only through /perf/costs; the regularly polled Info payload must not
+        // serialize and transfer the full engineering operation table on every refresh.
+        return sampled.dropLast(1) + ""","dashboard":${dashboardJson()}}"""
     }
 
     private fun dashboardJson(): String {

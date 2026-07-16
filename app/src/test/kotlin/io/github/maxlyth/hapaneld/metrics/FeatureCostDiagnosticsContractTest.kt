@@ -36,7 +36,8 @@ class FeatureCostDiagnosticsContractTest {
         assertTrue(serverSource.contains("call.respondText(FeatureCosts.json()"))
         assertTrue(serverSource.contains("get(\"/perf/history\")"))
         assertTrue(serverSource.contains("entityLearning.performanceHistoryJson(hours)"))
-        assertTrue(perfSource.contains("\"featureCosts\":\${FeatureCosts.json()}"))
+        assertFalse(perfSource.contains("\"featureCosts\":"))
+        assertFalse(perfSource.contains("FeatureCosts.json()"))
         assertTrue(registrySource.contains("Process-local registry. Deliberately reset only by process death"))
     }
 }
