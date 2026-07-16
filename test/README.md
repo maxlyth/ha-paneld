@@ -39,8 +39,9 @@ Env: `CHROME` (chromium path), `SECS` (poll window per cell), `EPS` (regression 
 
 - **CLS is noisy run-to-run** (timing of polls vs scroll/masonry) — `EPS` is wide (0.2) so only gross
   regressions flag. TODO: average N runs per cell to tighten the baseline.
-- **High-CLS cells to drive down** (the harness's first findings): single-column + **large text** shift
-  badly — the masonry **load-settle** (fix: server-render cards in a `.col` + skip masonry at n=1) and
-  large-text paragraph-wrap reflow. These are acknowledged backlog, not regressions.
+- **Current baseline is below the 0.1 target in every cell.** A 2026-07-16 local rerun covered all 12
+  width/text-size combinations with zero regressions and a maximum CLS of 0.0247. Reopen layout work
+  only when the report identifies a reproducible regression; do not preserve the harness's obsolete
+  first-run masonry/large-text findings as active backlog.
 - **Fixture vs real page**: absolute numbers may over-state vs the device (the fixture's card heights /
   scroll differ) — calibrate against a live panel when convenient.
