@@ -97,7 +97,7 @@ class ProvisioningPlannerTest {
     }
 
     @Test
-    fun directRootProfileSuppressesRedundantShizukuGuidance() {
+    fun profileDeclaredRootDoesNotSuppressOptionalShizukuWithoutObservedPrivilege() {
         val plan = plan(
             profile(
                 directRootExpected = true,
@@ -105,8 +105,35 @@ class ProvisioningPlannerTest {
             ),
         )
 
-        assertTrue(plan.items.isEmpty())
-        assertEquals(ProvisioningPlanState.SATISFIED, plan.state)
+        assertEquals(listOf("access.shizuku"), plan.items.map { it.id })
+        assertItem(
+            plan,
+            "access.shizuku",
+            ProvisioningItemStatus.MANUAL,
+            "manager_missing",
+            "profile_recommended",
+        )
+    }
+
+    @Test
+    fun rootedTpa10PostureSuppressesShizukuAfterItsHelperIsObservedCompatible() {
+        val plan = plan(
+            profile(
+                directRootExpected = false,
+                helperImportance = ProvisioningImportance.REQUIRED,
+                shizuku = ShizukuRecommendation.OPTIONAL,
+            ),
+            observations().copy(helper = known(ProvisioningHelperState.COMPATIBLE)),
+        )
+
+        assertEquals(listOf("access.helper"), plan.items.map { it.id })
+        assertItem(
+            plan,
+            "access.helper",
+            ProvisioningItemStatus.SATISFIED,
+            "compatible",
+            "helper_compatible",
+        )
     }
 
     @Test

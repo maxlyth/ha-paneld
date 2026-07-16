@@ -2464,17 +2464,21 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         val profNote = """<p class="note">Values declared by this panel's <a href="$REPO_URL/blob/main/docs/architecture/device-profiles.md" target="_blank" rel="noopener" style="color:#9cf">device profile</a> — if one looks wrong, that's where to correct it.</p>"""
         val capNote = """<p class="note"><a href="/api/v1/diag" target="_blank" style="color:#9cf">⭳ Diagnostics dump</a> — a copy-paste
 report of this panel's hardware, firmware, SELinux, su and node probes for bug reports.</p>"""
-        // Screenshot card: needs a privileged capture route, which the cold shell doesn't know yet — render it hidden with
-        // the img src deferred (data-src) so a rootless panel never fires a doomed screencap request.
-        val shotInner = { src: Boolean ->
-            val cached = screenshotPlaceholderUrl()
-            val source = if (src && cached != null) """src="${esc(cached)}"""" else ""
+        // A cold shell can safely show the app-private last-successful capture before the capability
+        // probes finish. It must not request a new capture until hydration confirms a privileged route.
+        val cachedShot = screenshotPlaceholderUrl()
+        val shotInner = { src: String? ->
+            val source = src?.let { """src="${esc(it)}"""" } ?: ""
             """<a class="shot" href="/api/v1/screenshot.png" target="_blank" rel="noopener" title="Open full size in a new window" style="aspect-ratio:${screenAspectRatio()}"><img $source alt="panel screenshot" onload="this.parentElement.classList.add('loaded')" onerror="this.parentElement.classList.add('failed')"></a>
 <p class="note"><a href="#" onclick="refreshScreenshot(this.closest('.card'));return false" style="color:#9cf">↻ Refresh</a> · the last successful capture stays visible while a fresh image is requested. Captured on demand through the available privileged route; local-network only.</p>"""
         }
         val shotCard = when {
-            s == null -> """<div class="card" id="shotcard" style="display:none"><h2>Screenshot <small>· live panel</small></h2>${shotInner(false)}</div>"""
-            s.captureOk -> """<div class="card" id="shotcard"><h2>Screenshot <small>· live panel</small></h2>${shotInner(true)}</div>"""
+            s == null && cachedShot != null ->
+                """<div class="card" id="shotcard" data-capture-ok="0"><h2>Screenshot <small>· live panel</small></h2>${shotInner(cachedShot)}</div>"""
+            s == null ->
+                """<div class="card" id="shotcard" data-capture-ok="0" style="display:none"><h2>Screenshot <small>· live panel</small></h2>${shotInner(null)}</div>"""
+            s.captureOk ->
+                """<div class="card" id="shotcard" data-capture-ok="1"><h2>Screenshot <small>· live panel</small></h2>${shotInner(cachedShot)}</div>"""
             else -> ""
         }
         return """<!doctype html><html lang="en"><head><meta charset="utf-8">

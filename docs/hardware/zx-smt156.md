@@ -27,22 +27,14 @@ True backlight-off, reboot, density changes and other privileged controls remain
 
 ## Characterising missing hardware
 
-Diagnostics from 0.9.2 and later include a bounded `[hardware]` block containing input-device names,
-bound I²C/IIO names, thermal-zone types and likely relay-class entries. That report identified the
-`sun-ths` and `sun-hum` input devices; the relay path remains unknown. The next useful relay evidence
-is the package name of the vendor MQTT service and its narrowly scoped traffic while an attended test
-toggles one relay.
+Diagnostics from 0.9.2 and later include a bounded `[hardware]` block containing input-device names, bound I²C/IIO names, thermal-zone types and likely relay-class entries. That report identified the `sun-ths` and `sun-hum` input devices; the relay path remains unknown. The next useful relay evidence is the package name of the vendor MQTT service and its narrowly scoped traffic while an attended test toggles one relay.
 
-For the already identified `sun-ths` and `sun-hum` input devices, the repository also includes a
-read-only host collector that handles Git Bash path conversion and changing `eventN` assignments:
+For the already identified `sun-ths` and `sun-hum` input devices, the repository also includes a read-only host collector that handles Git Bash path conversion and changing `eventN` assignments:
 
 ```bash
 scripts/collect-panel-hardware.sh --serial <panel-ip:5555> --observe climate
 ```
 
-The live observation is explicitly bounded to 10 seconds and 32 events per exact sensor name. Review
-the stdout report before sharing it. Raw values still need comparison with the vendor display or an
-external thermometer/hygrometer at more than one point before they can be interpreted as °C or %RH.
-ADB-shell readability also does not prove that ha-paneld's app process can read the node.
+The live observation is explicitly bounded to 10 seconds and 32 events per exact sensor name. Review the stdout report before sharing it. Raw values still need comparison with the vendor display or an external thermometer/hygrometer at more than one point before they can be interpreted as °C or %RH. ADB-shell readability also does not prove that ha-paneld's app process can read the node.
 
 No public firmware source has been found for this model. Preserve a firmware/recovery backup before modifying the vendor installation and share only hardware metadata—not firmware blobs—in a public issue.

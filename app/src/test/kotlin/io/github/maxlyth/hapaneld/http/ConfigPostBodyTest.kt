@@ -43,17 +43,17 @@ class ConfigPostBodyTest {
 
         val form = client.post("/config") {
             header(HttpHeaders.ContentType, ContentType.Application.FormUrlEncoded.toString())
-            setBody("friendly_name=Kitchen+Panel&dashboard_zoom=125")
+            setBody("friendly_name=Example+Panel&dashboard_zoom=125")
         }
         assertEquals(HttpStatusCode.OK, form.status)
-        assertEquals("Kitchen Panel|125", form.bodyAsText())
+        assertEquals("Example Panel|125", form.bodyAsText())
 
         val json = client.post("/config") {
             header(HttpHeaders.ContentType, ContentType.Application.Json.toString())
-            setBody("""{"friendly_name":"Kitchen Panel","dashboard_zoom":125}""")
+            setBody("""{"friendly_name":"Example Panel","dashboard_zoom":125}""")
         }
         assertEquals(HttpStatusCode.OK, json.status)
-        assertEquals("Kitchen Panel|125", json.bodyAsText())
+        assertEquals("Example Panel|125", json.bodyAsText())
     }
 
     @Test fun `invalid or structured JSON is rejected without reaching config mutation`() = testApplication {
@@ -91,7 +91,7 @@ class ConfigPostBodyTest {
 
     @Test fun `direct config admission normalizes every registered value before mutation`() {
         val result = normalizeConfigPostParameters(Parameters.build {
-            append("friendly_name", "  Hall Panel  ")
+            append("friendly_name", "  Example Panel  ")
             append("dashboard_zoom", "125")
             append("dashboard_fullscreen", "on")
             append("ha_expose_wake_on_wave", "0")
@@ -99,7 +99,7 @@ class ConfigPostBodyTest {
             append("ha_token_expiry", "42")
             append("mqtt_password", "  exact password  ")
         }) as ConfigPostParameters.Ok
-        assertEquals("Hall Panel", result.values["friendly_name"])
+        assertEquals("Example Panel", result.values["friendly_name"])
         assertEquals("true", result.values["dashboard_fullscreen"])
         assertEquals("false", result.values["ha_expose_wake_on_wave"])
         assertEquals("com.vendor.one com.vendor.two", result.values["tame_vendor_packages"])

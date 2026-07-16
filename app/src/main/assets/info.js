@@ -286,8 +286,11 @@ function showAndRefreshScreenshot(card,cachedUrl){
   .catch(function(){if(tries>0)setTimeout(function(){hydrate(tries-1);},3000);});}
  hydrate(10);
 })();
-// A warm server render does not run hydration, so explicitly start its background refresh too.
-(function(){var sc=document.getElementById('shotcard');if(sc&&sc.style.display!=='none')showAndRefreshScreenshot(sc,'');})();
+// A warm server render does not run hydration, so explicitly start its background refresh too. A
+// cold shell may already show its disk-persisted placeholder, but hydration must confirm capture
+// access before that shell starts a privileged request.
+(function(){var sc=document.getElementById('shotcard');
+ if(sc&&sc.style.display!=='none'&&sc.getAttribute('data-capture-ok')==='1')showAndRefreshScreenshot(sc,'');})();
 // Dismiss a component-update banner for its current version (POST the label+version; the server keeps
 // it hidden until a newer release ships — see Config.ignoreUpdate). Removes the banner on success.
 function ignoreUpdate(btn){var b=btn.closest('.setup');if(!b)return;

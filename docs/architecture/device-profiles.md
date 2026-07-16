@@ -68,7 +68,7 @@ The draft deliberately contains unknown/TODO values. Its purpose is to give a co
 
 ## Schema and compatibility
 
-The profile schema descriptor and driver catalog are runtime-owned, typed contracts used by the parser, Profiles UI and public reference. Normal unknown fields fail validation, required driver and recipe IDs must exist in the running core, and schema 2 is the sole accepted preview language. Stored schema-1 proof-of-concept revisions can still be identified, exported and deleted, but cannot activate or serve as rollback targets.
+The profile schema descriptor and driver catalog are runtime-owned, typed contracts used by the parser, Profiles UI and public reference. Normal unknown fields fail validation, required driver and recipe IDs must exist in the running core, and schema 2 is the sole accepted document format. Stored schema-1 proof-of-concept revisions can still be identified, exported and deleted, but cannot activate or serve as rollback targets.
 
 The profile's own content version is independent of the document schema. Installed profiles are revalidated after an app update, and an incompatible local revision cannot replace a healthy active profile.
 

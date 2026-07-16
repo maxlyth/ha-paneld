@@ -4,7 +4,7 @@
 
 **ha-paneld can now help explain why a built-in Home Assistant dashboard feels slow.** The Performance page measures interaction delay, main-thread blocking, Home Assistant state traffic and renderer instability, then reports a conservative likely cause. This helps distinguish an overloaded dashboard from excessive entity updates, memory pressure or another busy process on the panel.
 
-**NSPanel Pro users also gain continuous Zigbee gateway health reporting and bounded runaway protection.** ha-paneld monitors whether the vendor gateway is joined, its CPU use and repeated restarts. A configured but unjoined gateway that consumes sustained CPU, or repeatedly restarts, can be switched off automatically after a startup grace period. Joined Zigbee networks are never stopped merely for high CPU use.
+**NSPanel Pro users also gain continuous Zigbee gateway health reporting and bounded runaway protection.** ha-paneld monitors whether the vendor gateway is joined, its CPU use and repeated restarts. An unjoined gateway with sustained high CPU, or a configured gateway on a supported layout that repeatedly restarts, can be switched off automatically after a startup grace period. A joined gateway is never stopped merely for high CPU use.
 
 Installation is now profile-aware. After starting the app, the provisioner checks the active hardware profile and reports any remaining helper, Shizuku or System WebView setup relevant to that particular panel. Recommendations are shown without silently applying optional system changes.
 
@@ -17,17 +17,19 @@ Installation is now profile-aware. After starting the app, the provisioner check
 
 ### Changed
 
-- **Custom profiles now use schema 2** — provisioning recommendations are separated from hardware capabilities and runtime configuration. Existing schema 1 revisions remain available for inspection and export but cannot be activated; ha-paneld falls back to a compatible bundled profile or Generic until the profile is updated.
-- **Profile recommendations no longer make optional system changes automatically** — ordinary and fleet installation report recommended vendor-package changes instead. Existing package controls explicitly selected by the user continue to work and reapply at boot.
 - **Full panel backups now preserve more recoverable state** — backups include configuration, custom profiles and entity-filter choices, with optional Home Assistant Companion login data. Supplying a passphrase creates an encrypted `.hpb` backup; creating an unencrypted `.zip` requires explicit acknowledgement.
 - **Persistent application state is consolidated into a local database** — existing settings and learned entity data migrate automatically on first start, providing a common durable store for configuration, profiles and performance history.
 - **Root-helper upgrades are authenticated and recoverable** — the installer verifies that the helper matches the release and retains the previous working installation until the app and replacement helper have both been verified.
+- **Custom profiles now use schema 2** — provisioning recommendations are separated from hardware capabilities and runtime configuration. Existing schema 1 revisions remain available for inspection and export but cannot be activated; ha-paneld falls back to a compatible bundled profile or Generic until the profile is updated.
+- **Profile recommendations no longer make optional system changes automatically** — ordinary and fleet installation report recommended vendor-package changes instead. Existing package controls explicitly selected by the user continue to work and reapply at boot.
 
 ### Fixed
 
 - **Large backups and Companion login restores use bounded file-backed processing** — backup, encryption, upload, validation and restore no longer need to hold the complete archive in memory.
 - **Successful installation is no longer reported as failed because a later optional recommendation could not be completed** — required installation and startup failures still fail the run, while optional actions are reported separately.
-- **Background work is more tightly bounded during configuration changes and shutdown** — duplicate or stale operations are collapsed or cancelled instead of continuing to consume resources after their result is no longer relevant.
+- **Configuration changes and shutdown no longer leave duplicate or stale background operations running** — superseded work is collapsed or cancelled once its result is no longer relevant.
+- **Dashboard screenshots remain visible while refreshing** — returning to Dashboard shows the last successful capture immediately and replaces it only after a fresh screenshot has loaded; a slow or failed capture no longer blanks the card.
+- **Panel capability reporting is easier to interpret** — the effective WebView rendering engine leads over stale package-reported versions, helper-backed root capability is not presented as a failure, and operational details such as state convergence, MQTT authentication timing and audio playback are separated from core panel information.
 - **WF1589T LED ownership is reported accurately** — the conflicting vendor LED service is presented as an optional, reversible package-control recommendation rather than being changed automatically.
 
 ### Upgrade notes

@@ -87,7 +87,7 @@ scripts/update-fleet.sh --latest -- 192.168.1.10 192.168.1.11:5555
 # or pipe a host list:  printf '%s\n' 192.168.1.10 192.168.1.11 | scripts/update-fleet.sh --latest
 ```
 
-Fleet runs print each panel's provisioning guidance but never accept profile recommendations automatically. A later writable reconciliation protocol will require approval bound to each panel's exact profile revision rather than one broad fleet flag.
+Fleet runs print each panel's provisioning guidance but never accept profile recommendations automatically.
 
 ## Bootstrapping adb (Tuya TPA10 / Smatek panels)
 

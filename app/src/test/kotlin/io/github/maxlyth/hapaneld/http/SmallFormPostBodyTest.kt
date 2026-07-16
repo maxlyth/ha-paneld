@@ -55,10 +55,10 @@ class SmallFormPostBodyTest {
         }
         val response = client.post("/form") {
             header(HttpHeaders.ContentType, ContentType.Application.FormUrlEncoded.toString())
-            setBody("value=Kitchen+Panel&mode=one%2Ftwo")
+            setBody("value=Sample+Panel&mode=one%2Ftwo")
         }
         assertEquals(HttpStatusCode.OK, response.status)
-        assertEquals("Kitchen Panel|one/two", response.bodyAsText())
+        assertEquals("Sample Panel|one/two", response.bodyAsText())
     }
 
     @Test fun `production HTTP control routes do not use the Ktor 50 MiB form default`() {

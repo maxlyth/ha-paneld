@@ -132,7 +132,9 @@ ha-paneld needs no system-signed install. Standard-Android capabilities (brightn
 
 **Latest release — 0.9.3:** panel owners and hardware vendors can add or refine Android wall-panel support through validated YAML profiles without rebuilding the app. The release also strengthens dependency and release verification, updates the MQTT networking stack, and adds optional Shizuku enhanced access for genuinely unrooted panels. Full notes for every release are in [CHANGELOG.md](CHANGELOG.md).
 
-**Where it's heading** — the near-term direction is **fleet-scale operation** and **full remote provisioning**: bringing a new or factory-wiped panel all the way up with zero typing on the panel, and pushing config/updates to a whole fleet from one place. Other planned work includes MQTT TLS for self-signed brokers, an on-device scheduler, deeper performance tooling, and continued iteration on the HTTP UI. The full curated list is in **[docs/roadmap.md](docs/roadmap.md)**.
+**Release candidate — 0.9.4-rc1:** built-in dashboard diagnostics now break interaction delay into input, handler and presentation time, correlate it with Home Assistant state traffic, main-thread blocking and renderer instability, retain seven days of content-free history, and report a conservative likely cause. NSPanel Pro users also gain continuous Zigbee gateway health and bounded runaway protection. Full notes are in [CHANGELOG.md](CHANGELOG.md).
+
+**Where it's heading** — the near-term direction is **fleet-scale operation** and **full remote provisioning**: bringing a new or factory-wiped panel all the way up with zero typing on the panel, and pushing config/updates to a whole fleet from one place. Other planned work includes MQTT TLS for self-signed brokers, an on-device scheduler, deeper per-card performance attribution, and continued iteration on the HTTP UI. The full curated list is in **[docs/roadmap.md](docs/roadmap.md)**.
 
 ## Documentation
 

@@ -136,6 +136,10 @@ class AssetSyntaxTest {
         assertTrue("every dashboard visit must request a fresh screenshot", info.contains("url='/api/v1/screenshot.png?t='+Date.now()"))
         assertTrue("the current screenshot must remain visible until the fresh image loads", info.contains("URL.createObjectURL(fresh.blob)"))
         assertTrue("a fresh capture must seed its immutable placeholder URL for the next tab visit", info.contains("seed.src='/api/v1/screenshot.png?cached='+fresh.id"))
+        assertTrue(
+            "a cold shell must not refresh until hydration confirms screenshot access",
+            info.contains("sc.getAttribute('data-capture-ok')==='1'"),
+        )
     }
 
     @Test fun performanceCardUsesDirectEvidenceAndLabelsCompanionAsAProxy() {

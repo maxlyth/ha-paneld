@@ -14,7 +14,9 @@ internal object ProvisioningPlanner {
 
         val items = buildList {
             profile.helperImportance?.let { add(helperItem(it, observations.helper)) }
-            val preferredPrivilegeReady = profile.directRootExpected ||
+            // Profile-declared appCanSu only orders runtime attempts; it does not prove that this
+            // installation currently has root. A compatible helper is observed privileged readiness.
+            val preferredPrivilegeReady =
                 (observations.helper as? ProvisioningObservation.Known)?.value ==
                 ProvisioningHelperState.COMPATIBLE
             if (!preferredPrivilegeReady && profile.shizuku != ShizukuRecommendation.NONE) {

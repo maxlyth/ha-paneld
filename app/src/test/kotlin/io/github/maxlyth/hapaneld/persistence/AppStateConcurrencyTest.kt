@@ -291,20 +291,12 @@ class AppStateConcurrencyTest {
         }
     }
 
-    @Test fun quiesceMakesRacingApplySynchronousDurableBeforePublishing() {
-        val persistenceStarted = CountDownLatch(1)
-        val releasePersistence = CountDownLatch(1)
-        val persistence = RecordingPersistence(
-            persistBlock = { mutation ->
-                if ("racing_apply" in mutation.changes) {
-                    persistenceStarted.countDown()
-                    releasePersistence.await(5, TimeUnit.SECONDS)
-                }
-            },
-        )
+    @Test fun quiesceDefersRacingApplyUntilFailedInstallReopensAdmission() {
+        val persistence = RecordingPersistence()
         val writer = Executors.newSingleThreadExecutor()
         val caller = Executors.newSingleThreadExecutor()
         val admission = StateMutationAdmission()
+        val applyStarted = CountDownLatch(1)
         try {
             val preferences = SqliteStatePreferences(persistence, writer, admission)
             val changed = Collections.synchronizedList(mutableListOf<String>())
@@ -315,25 +307,69 @@ class AppStateConcurrencyTest {
             assertTrue(quiescence != null)
 
             val applying = caller.submit<Unit> {
+                applyStarted.countDown()
                 preferences.edit().putString("racing_apply", "durable").apply()
             }
-            assertTrue(persistenceStarted.await(5, TimeUnit.SECONDS))
+            assertTrue(applyStarted.await(5, TimeUnit.SECONDS))
+            Thread.sleep(100)
             assertFalse(applying.isDone)
             assertFalse(preferences.contains("racing_apply"))
             assertTrue(changed.isEmpty())
 
-            releasePersistence.countDown()
+            quiescence!!.close()
             applying.get(5, TimeUnit.SECONDS)
+            assertTrue(preferences.flush(5_000))
             assertEquals("durable", preferences.getString("racing_apply", null))
             assertEquals(listOf("racing_apply"), changed)
+            assertEquals(listOf("persist:racing_apply", "replace:racing_apply"), persistence.events)
         } finally {
-            releasePersistence.countDown()
             caller.shutdownNow()
             writer.shutdownNow()
         }
     }
 
-    @Test fun concurrentFrozenAppliesSerializeCandidatePersistenceAndPublication() {
+    @Test fun quiesceFlushSerializesAgainstFrozenWrites() {
+        val admission = StateMutationAdmission()
+        val flushEntered = CountDownLatch(1)
+        val releaseFlush = CountDownLatch(1)
+        val frozenWriteEntered = CountDownLatch(1)
+        val quiescer = Executors.newSingleThreadExecutor()
+        val writer = Executors.newSingleThreadExecutor()
+        try {
+            val quiescence = quiescer.submit<StateQuiescence?> {
+                quiesceStateWrites(admission) {
+                    flushEntered.countDown()
+                    releaseFlush.await(5, TimeUnit.SECONDS)
+                }
+            }
+            assertTrue(flushEntered.await(5, TimeUnit.SECONDS))
+
+            val racingWrite = writer.submit<Unit> {
+                admission.admit { synchronousDurability ->
+                    assertFalse(synchronousDurability)
+                    admission.serializeFrozenWrite {
+                        frozenWriteEntered.countDown()
+                    }
+                }
+            }
+            assertFalse(frozenWriteEntered.await(100, TimeUnit.MILLISECONDS))
+
+            releaseFlush.countDown()
+            val activeQuiescence = quiescence.get(5, TimeUnit.SECONDS)
+            assertTrue(activeQuiescence != null)
+            assertFalse(frozenWriteEntered.await(100, TimeUnit.MILLISECONDS))
+
+            activeQuiescence!!.close()
+            racingWrite.get(5, TimeUnit.SECONDS)
+            assertTrue(frozenWriteEntered.await(5, TimeUnit.SECONDS))
+        } finally {
+            releaseFlush.countDown()
+            quiescer.shutdownNow()
+            writer.shutdownNow()
+        }
+    }
+
+    @Test fun concurrentAppliesWaitForQuiescenceThenPreserveCandidatePersistenceAndPublication() {
         val persistence = SnapshotPersistence()
         val writer = Executors.newSingleThreadExecutor()
         val callers = Executors.newFixedThreadPool(2)
@@ -341,7 +377,8 @@ class AppStateConcurrencyTest {
         val start = CountDownLatch(1)
         try {
             val preferences = SqliteStatePreferences(persistence, writer, admission)
-            assertTrue(quiesceStateWrites(admission) { true } != null)
+            val quiescence = quiesceStateWrites(admission) { true }
+            assertTrue(quiescence != null)
 
             val first = callers.submit<Unit> {
                 start.await()
@@ -352,8 +389,15 @@ class AppStateConcurrencyTest {
                 preferences.edit().putString("second", "two").apply()
             }
             start.countDown()
+            Thread.sleep(100)
+            assertFalse(first.isDone)
+            assertFalse(second.isDone)
+            assertTrue(preferences.all.isEmpty())
+
+            quiescence!!.close()
             first.get(5, TimeUnit.SECONDS)
             second.get(5, TimeUnit.SECONDS)
+            assertTrue(preferences.flush(5_000))
 
             assertEquals(
                 mapOf("first" to "one", "second" to "two"),
@@ -396,6 +440,22 @@ class AppStateConcurrencyTest {
             val preferences = SqliteStatePreferences(persistence, writer, admission)
 
             assertTrue(quiesceStateWrites(admission) { false } == null)
+            assertTrue(preferences.edit().putString("retry", "accepted").commit())
+            assertEquals("accepted", preferences.getString("retry", null))
+            assertEquals(listOf("persist:retry"), persistence.events)
+        } finally {
+            writer.shutdownNow()
+        }
+    }
+
+    @Test fun throwingQuiesceDrainReopensMutationAdmission() {
+        val persistence = RecordingPersistence()
+        val writer = Executors.newSingleThreadExecutor()
+        val admission = StateMutationAdmission()
+        try {
+            val preferences = SqliteStatePreferences(persistence, writer, admission)
+
+            assertTrue(quiesceStateWrites(admission) { error("unexpected flush failure") } == null)
             assertTrue(preferences.edit().putString("retry", "accepted").commit())
             assertEquals("accepted", preferences.getString("retry", null))
             assertEquals(listOf("persist:retry"), persistence.events)

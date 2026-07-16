@@ -188,8 +188,8 @@ object AppInstaller {
             installSucceeded = result == "OK"
             result
         } finally {
-            // Package-manager success may return before process replacement. Keep synchronous-durable
-            // admission active across that lag; only a failed install reopens ordinary async writes.
+            // Package-manager success may return before process replacement. Keep state mutation
+            // admission quiesced across that lag; only a failed install reopens writes.
             finishSelfReplaceQuiescence(stateQuiescence, installSucceeded)
         }
     }

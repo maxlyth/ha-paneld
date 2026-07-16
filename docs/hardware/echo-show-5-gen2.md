@@ -28,22 +28,14 @@ Network ADB can be enabled through LineageOS developer options. The report confi
 
 - The community LineageOS build is unofficial and replacing Fire OS requires unlocking and reflashing the device.
 - This profile does not match the first-generation Echo Show 5 (`checkers`) or first-generation Echo Show 8 (`crown`). Those need separate diagnostic reports and profiles.
-- No `/sys/class/backlight` device was reported. The candidate `/sys/class/leds/lcd-backlight`
-  node is not used by the current hardware writer, so screen control still uses Android brightness
-  and the general rooted fallbacks.
+- No `/sys/class/backlight` device was reported. The candidate `/sys/class/leds/lcd-backlight` node is not used by the current hardware writer, so screen control still uses Android brightness and the general rooted fallbacks.
 
 ## Characterising the remaining candidates
 
-The repository's read-only host collector records the fixed `lcd-backlight` files and the exact
-`m_alsps_input` capability metadata without changing the device:
+The repository's read-only host collector records the fixed `lcd-backlight` files and the exact `m_alsps_input` capability metadata without changing the device:
 
 ```bash
 scripts/collect-panel-hardware.sh --serial <panel-ip:5555> --observe light
 ```
 
-The observed minimum of 10 is not yet evidence of a hardware floor: ha-paneld itself uses 10 as its
-global never-blank command floor. The reported node is also under `/sys/class/leds`, while the current
-hardware backlight writer discovers `/sys/class/backlight`. Compare passive reports before and after
-manually moving Android's brightness slider to establish correlation. Light and proximity meanings
-need separate attended observations; zero-brightness, touch-wake and recovery behavior cannot be
-certified by this read-only collector.
+The observed minimum of 10 is not yet evidence of a hardware floor: ha-paneld itself uses 10 as its global never-blank command floor. The reported node is also under `/sys/class/leds`, while the current hardware backlight writer discovers `/sys/class/backlight`. Compare passive reports before and after manually moving Android's brightness slider to establish correlation. Light and proximity meanings need separate attended observations; zero-brightness, touch-wake and recovery behavior cannot be certified by this read-only collector.

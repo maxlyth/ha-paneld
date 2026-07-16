@@ -15,6 +15,8 @@ import java.util.concurrent.Executors
 import java.util.concurrent.Future
 import java.util.concurrent.ThreadFactory
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 
 /**
  * Durable application state, partitioned into explicit namespaces inside ha-paneld.db.
@@ -30,13 +32,7 @@ object AppState {
     // should have crossed a 0.9.x release which performs this bridge before SQLite-only startup is strict.
     fun preferences(context: Context, namespace: String, legacyName: String): SharedPreferences {
         val appContext = context.applicationContext
-        val process = processes.getOrCreate(appContext.packageName) {
-            ProcessState(
-                helper = EntityCatalogStore(appContext),
-                executor = Executors.newSingleThreadExecutor(StateWriterThreadFactory()),
-                admission = StateMutationAdmission(),
-            )
-        }
+        val process = process(appContext)
         return process.stores.getOrCreate(namespace) {
             val legacy = appContext.getSharedPreferences(legacyName, Context.MODE_PRIVATE)
             SqliteStatePreferences(
@@ -65,8 +61,16 @@ object AppState {
         } ?: true
 
     fun quiesceForSelfReplace(context: Context, timeoutMs: Long): StateQuiescence? =
-        processes[context.applicationContext.packageName]?.quiesce(timeoutMs)
-            ?: StateQuiescence {}
+        process(context.applicationContext).quiesce(timeoutMs)
+
+    private fun process(appContext: Context): ProcessState =
+        processes.getOrCreate(appContext.packageName) {
+            ProcessState(
+                helper = EntityCatalogStore(appContext),
+                executor = Executors.newSingleThreadExecutor(StateWriterThreadFactory()),
+                admission = StateMutationAdmission(),
+            )
+        }
 
     private data class ProcessState(
         val helper: EntityCatalogStore,
@@ -289,24 +293,28 @@ class StateQuiescence internal constructor(
 }
 
 internal class StateMutationAdmission {
-    private val lock = Any()
+    private val lock = ReentrantLock()
+    private val unfrozen = lock.newCondition()
     private val frozenWriteLock = Any()
     private var frozen = false
 
-    fun <T> admit(block: (synchronousDurability: Boolean) -> T): T =
-        synchronized(lock) { block(frozen) }
+    fun <T> admit(block: (synchronousDurability: Boolean) -> T): T = lock.withLock {
+        while (frozen) unfrozen.awaitUninterruptibly()
+        block(false)
+    }
 
     fun <T> serializeFrozenWrite(block: () -> T): T = synchronized(frozenWriteLock) { block() }
 
-    fun freeze(): Boolean = synchronized(lock) {
+    fun freeze(): Boolean = lock.withLock {
         if (frozen) false else {
             frozen = true
             true
         }
     }
 
-    fun unfreeze() = synchronized(lock) {
+    fun unfreeze() = lock.withLock {
         frozen = false
+        unfrozen.signalAll()
     }
 }
 
@@ -315,7 +323,10 @@ internal fun quiesceStateWrites(
     flush: () -> Boolean,
 ): StateQuiescence? {
     if (!admission.freeze()) return null
-    if (!flush()) {
+    val flushed = runCatching {
+        admission.serializeFrozenWrite(flush)
+    }.getOrDefault(false)
+    if (!flushed) {
         admission.unfreeze()
         return null
     }

@@ -8,8 +8,15 @@ import io.github.maxlyth.hapaneld.device.Wf1589t
 import io.github.maxlyth.hapaneld.device.ZxSmt156
 import io.github.maxlyth.hapaneld.device.profile.DataDeviceProfile
 import io.github.maxlyth.hapaneld.device.profile.ProfileMetadata
+import io.github.maxlyth.hapaneld.device.profile.ProfileMaturity
+import io.github.maxlyth.hapaneld.device.profile.ProfileOrigin
+import io.github.maxlyth.hapaneld.device.profile.ProfileRef
+import io.github.maxlyth.hapaneld.device.profile.ProfileSummary
 import io.github.maxlyth.hapaneld.device.profile.ProfileYaml
+import io.github.maxlyth.hapaneld.device.profile.ResolvedProfile
+import io.github.maxlyth.hapaneld.device.profile.ShizukuRecommendation
 import io.github.maxlyth.hapaneld.provisioning.requiresProvisioningHelper
+import io.github.maxlyth.hapaneld.provisioning.toProvisioningProfile
 import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -44,5 +51,31 @@ class ProvisioningServiceAdapterTest {
         val profile = DataDeviceProfile(parsed.document!!, productVersion = "")
         assertFalse(profile.appCanSu)
         assertTrue(profile.requiresProvisioningHelper())
+    }
+
+    @Test fun optimisticAppCanSuHintIsNotAdaptedAsObservedRootReadiness() {
+        assertTrue(Generic.appCanSu)
+        val adapted = ResolvedProfile(
+            profile = Generic,
+            summary = ProfileSummary(
+                ref = ProfileRef("generic", REVISION),
+                displayName = "Generic Android panel",
+                origin = ProfileOrigin.BUNDLED,
+                schema = 2,
+                minCoreVersion = null,
+                matchesThisDevice = true,
+                active = true,
+                selected = true,
+                shizukuRecommendation = ShizukuRecommendation.NONE,
+                contentVersion = "1.0.0",
+                maturity = ProfileMaturity.VERIFIED,
+            ),
+        ).toProvisioningProfile()
+
+        assertFalse(adapted.directRootExpected)
+    }
+
+    private companion object {
+        const val REVISION = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     }
 }

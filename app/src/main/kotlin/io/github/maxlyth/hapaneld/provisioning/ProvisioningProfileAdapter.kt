@@ -27,7 +27,9 @@ internal fun ResolvedProfile.toProvisioningProfile(): ProvisioningProfile {
         displayName = summary.displayName,
         origin = summary.origin,
         contentVersion = summary.contentVersion,
-        directRootExpected = profile.appCanSu,
+        // appCanSu is an attempt-order hint, not an observation that this installation currently has
+        // root. Privilege guidance is suppressed only after the planner sees a compatible root helper.
+        directRootExpected = false,
         helperImportance = if (profile.requiresProvisioningHelper()) ProvisioningImportance.REQUIRED else null,
         shizuku = profile.provisioning.shizuku,
         webView = target,

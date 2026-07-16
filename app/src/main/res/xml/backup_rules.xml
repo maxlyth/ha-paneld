@@ -18,4 +18,7 @@
     <exclude domain="database" path="ha-paneld.db" />
     <!-- Compatibility fallback while the one-time filename migration remains supported. -->
     <exclude domain="database" path="entity-learning.db" />
+    <!-- Screenshots are transient panel observations, not portable application state. -->
+    <exclude domain="file" path="panel-screenshots/" />
+    <exclude domain="file" path="last-panel-screenshot.png" />
 </full-backup-content>

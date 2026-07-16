@@ -22,18 +22,28 @@ class ProfileBackupPolicyTest {
         val modern = exclusions("src/main/res/xml/data_extraction_rules.xml")
 
         for (preferences in NON_TRANSFERABLE_PREFS) {
-            assertEquals("legacy exclusion for $preferences", 1, legacy.count { it == preferences })
-            assertEquals("modern exclusions for $preferences", 2, modern.count { it == preferences })
+            val exclusion = Exclusion("sharedpref", preferences)
+            assertEquals("legacy exclusion for $preferences", 1, legacy.count { it == exclusion })
+            assertEquals("modern exclusions for $preferences", 2, modern.count { it == exclusion })
+        }
+        for (path in NON_TRANSFERABLE_FILES) {
+            val exclusion = Exclusion("file", path)
+            assertEquals("legacy exclusion for $path", 1, legacy.count { it == exclusion })
+            assertEquals("modern exclusions for $path", 2, modern.count { it == exclusion })
         }
     }
 
-    private fun exclusions(path: String): List<String> {
+    private fun exclusions(path: String): List<Exclusion> {
         val document = document(path)
         return (0 until document.getElementsByTagName("exclude").length).mapNotNull { index ->
-            document.getElementsByTagName("exclude").item(index).attributes
-                ?.getNamedItem("path")?.nodeValue
+            val attributes = document.getElementsByTagName("exclude").item(index).attributes ?: return@mapNotNull null
+            val domain = attributes.getNamedItem("domain")?.nodeValue ?: return@mapNotNull null
+            val excludedPath = attributes.getNamedItem("path")?.nodeValue ?: return@mapNotNull null
+            Exclusion(domain, excludedPath)
         }
     }
+
+    private data class Exclusion(val domain: String, val path: String)
 
     private fun document(path: String): Document =
         DocumentBuilderFactory.newInstance().apply { isNamespaceAware = true }
@@ -47,6 +57,10 @@ class ProfileBackupPolicyTest {
             "ha-paneld-device-profiles.xml",
             "ha-paneld-profile-calibration.xml",
             "ha-paneld-controller-state.xml",
+        )
+        val NON_TRANSFERABLE_FILES = listOf(
+            "panel-screenshots/",
+            "last-panel-screenshot.png",
         )
     }
 }
