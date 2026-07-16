@@ -36,6 +36,7 @@
 #include "screen.h"
 #include "input.h"
 #include "server.h"
+#include "version.h"
 
 // Abstract-namespace UNIX socket name (leading NUL added at bind time). Must match the app's
 // LocalSocketAddress("hapaneld-helper", ABSTRACT) in HelperClient/EvdevButtonClient.
@@ -70,6 +71,11 @@ static void *conn_thread(void *arg) {
 }
 
 int main(int argc, char **argv) {
+    if (argc == 2 && strcmp(argv[1], "--version") == 0) {
+        puts(helper_identity());
+        return 0;
+    }
+
     signal(SIGPIPE, SIG_IGN);   // a dead subscriber's socket must not kill the daemon
     input_init();
     screen_init();

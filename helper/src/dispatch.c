@@ -9,6 +9,7 @@
 #include "perf.h"
 #include "cht8305.h"
 #include "util.h"
+#include "version.h"
 
 static void cmd_ping(conn_ctx *ctx, const char *args) { (void)args; reply(ctx->fd, "OK\n"); }
 

@@ -8,6 +8,78 @@ import io.github.maxlyth.hapaneld.platform.DaemonLongResult
 import io.github.maxlyth.hapaneld.platform.DaemonStreamResult
 import java.io.File
 
+const val SUPPORTED_HELPER_PROTOCOL_MAJOR = 1
+const val SUPPORTED_HELPER_PROTOCOL_MINOR = 0
+
+data class HelperIdentity(
+    val version: String,
+    val protocolMajor: Int,
+    val protocolMinor: Int,
+)
+
+enum class HelperIdentityIssue {
+    MALFORMED_IDENTITY,
+    UNSUPPORTED_PROTOCOL,
+}
+
+sealed interface HelperIdentityStatus {
+    data class Compatible(val identity: HelperIdentity) : HelperIdentityStatus
+    data object ReachableUnverified : HelperIdentityStatus
+    data object Missing : HelperIdentityStatus
+    data class Incompatible(
+        val identity: HelperIdentity?,
+        val issue: HelperIdentityIssue,
+    ) : HelperIdentityStatus
+}
+
+private const val MAX_IDENTITY_REPLY_CHARS = 128
+private val HELPER_SEMVER = Regex("""(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)""")
+private val HELPER_PROTOCOL = Regex("""(0|[1-9]\d*)\.(0|[1-9]\d*)""")
+private val IDENTITY_KEY = Regex("""[a-z][a-z0-9_]*""")
+
+internal fun parseHelperIdentity(reply: String): HelperIdentity? {
+    if (reply.isEmpty() || reply.length > MAX_IDENTITY_REPLY_CHARS) return null
+    if (reply.any { it.code !in 0x20..0x7e }) return null
+    val tokens = reply.split(' ')
+    if (tokens.firstOrNull() != "HELPER" || tokens.any(String::isEmpty)) return null
+
+    val fields = linkedMapOf<String, String>()
+    for (token in tokens.drop(1)) {
+        val separator = token.indexOf('=')
+        if (separator <= 0 || separator == token.lastIndex) return null
+        val key = token.substring(0, separator)
+        val value = token.substring(separator + 1)
+        if (!IDENTITY_KEY.matches(key) || fields.put(key, value) != null) return null
+    }
+
+    val version = fields["version"] ?: return null
+    if (!HELPER_SEMVER.matches(version)) return null
+    val protocol = HELPER_PROTOCOL.matchEntire(fields["proto"] ?: return null) ?: return null
+    val major = protocol.groupValues[1].toIntOrNull() ?: return null
+    val minor = protocol.groupValues[2].toIntOrNull() ?: return null
+    return HelperIdentity(version, major, minor)
+}
+
+internal fun probeHelperIdentity(request: (String) -> String?): HelperIdentityStatus {
+    val reply = runCatching { request("VERSION") }.getOrNull()
+        ?: return HelperIdentityStatus.Missing
+    if (reply == "ERR") {
+        return if (runCatching { request("PING") }.getOrNull() == "OK") {
+            HelperIdentityStatus.ReachableUnverified
+        } else {
+            HelperIdentityStatus.Missing
+        }
+    }
+
+    val identity = parseHelperIdentity(reply)
+        ?: return HelperIdentityStatus.Incompatible(null, HelperIdentityIssue.MALFORMED_IDENTITY)
+    return if (identity.protocolMajor == SUPPORTED_HELPER_PROTOCOL_MAJOR) {
+        HelperIdentityStatus.Compatible(identity)
+    } else {
+        HelperIdentityStatus.Incompatible(identity, HelperIdentityIssue.UNSUPPORTED_PROTOCOL)
+    }
+}
+
 /**
  * Client for the root helper daemon (`helper/hapaneld-helper`) over an **abstract-namespace UNIX
  * socket** (`@hapaneld-helper`). The app (`untrusted_app`) cannot write the root-only sysfs nodes the
@@ -30,8 +102,16 @@ object HelperClient : Daemon {
     /** True when the daemon answers `PING`. */
     override fun available(): Boolean = send("PING") == "OK"
 
+    /**
+     * Read-only bootstrap probe for provisioning and diagnostics. A deployed pre-VERSION helper
+     * remains reachable but unverified; ordinary [Daemon] calls retain their existing behavior.
+     */
+    fun identityStatus(): HelperIdentityStatus = probeHelperIdentity(::requestRaw)
+
     /** Send one command; return the daemon's reply line (trimmed), or null if unreachable. */
-    override fun send(cmd: String): String? = try {
+    override fun send(cmd: String): String? = requestRaw(cmd)
+
+    private fun requestRaw(cmd: String): String? = try {
         open().use { s ->
             s.soTimeout = TIMEOUT_MS
             HelperSocketProtocol.sendLine(cmd, s.inputStream, s.outputStream)

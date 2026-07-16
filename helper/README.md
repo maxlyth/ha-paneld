@@ -17,6 +17,7 @@ Newline-terminated ASCII on the abstract UNIX socket `@hapaneld-helper`. One or 
 
 | Command | Effect | Reply |
 | --- | --- | --- |
+| `VERSION` | read the helper identity without touching hardware | `HELPER version=1.0.0 proto=1.0` / `ERR` when arguments are supplied |
 | `RGB <r> <g> <b>` | set LED colour (each 0..255) | `OK` / `ERR` |
 | `OFF` | LED off | `OK` / `ERR` |
 | `BTN <0..255>` | button-backlight brightness | `OK` / `ERR` |
@@ -41,6 +42,8 @@ Newline-terminated ASCII on the abstract UNIX socket `@hapaneld-helper`. One or 
 | `REBOOT` | reboot the panel | `OK` (then down) |
 | `PING` | liveness probe | `OK` |
 | anything else | — | `ERR` |
+
+`VERSION` is the stable compatibility bootstrap. `version` is the helper release version and `proto` is the wire protocol version; clients accept the same protocol major and treat later minor versions as additive. Helpers from before this command return the ordinary unknown-command `ERR`, so the app verifies them with `PING` and reports them as reachable but compatibility-unverified. Run `hapaneld-helper --version` to print the same identity without initializing hardware or binding the socket.
 
 `WATCH`/`SUBSCRIBE` instrument physical buttons the Android input pipeline doesn't deliver to a sandboxed app — e.g. the WF1589T power key (grabbed so it no longer sleeps the panel) and the TPA10 orange button (an `EV_SW` switch, not a key). The **app** chooses which node to watch and whether to grab it, from its `DeviceProfile`; the daemon streams raw events and the app decides what each means. The app first probes `INPUTV2`, requires each `WATCH` acknowledgement before subscribing, and treats an older helper's stream as usable but diagnostically unverified. A current daemon never degrades a requested exclusive grab into a non-exclusive reader, holds a grab only while at least one subscriber owns delivery, and releases it when the last subscriber disconnects. If a node disappears after setup, its reader retries until it can reopen and, where requested, re-establish the grab.
 
@@ -104,6 +107,7 @@ The daemon is split by capability under `helper/src/` (the binary, `@hapaneld-he
 | `main.c` | accept loop, abstract-socket bind, `SO_PEERCRED` peer-auth, connection cap |
 | `server.c` | the bounded line accumulator (`server_serve`) + idle timeout |
 | `commands.def` / `dispatch.c` | the shared verb→handler manifest + exact-match `dispatch()` |
+| `version.c` | stable helper and protocol identity exposed by `VERSION` and `--version` |
 | `led.c` / `screen.c` / `input.c` | LED (sysfs + ledjni), backlight power, evdev buttons |
 | `sysctl.c` | density / governor / reload / start / reboot / screencap (the shell-out verbs) |
 | `perf.c` | `PERFDUMP` `/proc` snapshot |

@@ -26,6 +26,7 @@
 #include "perf.h"
 #include "sysexec_stub.h"
 #include "util.h"
+#include "version.h"
 
 static int failures = 0;
 #define CHECK(cond, ...) do { if (!(cond)) { \
@@ -245,6 +246,14 @@ static void test_stat_jiffies(void) {
 
 static void test_dispatch_exact_match(void) {
     char out[64];
+    CHECK(strcmp(helper_identity(), "HELPER version=1.0.0 proto=1.0") == 0,
+          "helper identity is stable (got '%s')\n", helper_identity());
+    dispatch_reply("VERSION", out, sizeof out);
+    CHECK(strcmp(out, "HELPER version=1.0.0 proto=1.0\n") == 0,
+          "VERSION -> machine-readable identity (got '%s')\n", out);
+    dispatch_reply("VERSION extra", out, sizeof out);
+    CHECK(strcmp(out, "ERR\n") == 0, "VERSION rejects arguments (got '%s')\n", out);
+
     dispatch_reply("PING", out, sizeof out);
     CHECK(strcmp(out, "OK\n") == 0, "PING -> OK (got '%s')\n", out);
 
