@@ -719,6 +719,10 @@ class PaneldServer internal constructor(
                     get("/perf/costs") {
                         call.respondText(FeatureCosts.json(), ContentType.Application.Json)
                     }
+                    get("/perf/history") {
+                        val hours = call.request.queryParameters["hours"]?.toIntOrNull() ?: 24
+                        call.respondText(entityLearning.performanceHistoryJson(hours), ContentType.Application.Json)
+                    }
                     // Experimental built-in-renderer entity filter. The exact ids are accepted at runtime
                     // but never echoed, logged, or included in config exports; status is count+hash.
                     get("/dashboard/entity-filter") {
@@ -2410,9 +2414,6 @@ ${tcard("captbl", "Capabilities", if (s == null) null else capRowsHtml(), post =
 <canvas id="perfchart" width="600" height="96" style="height:96px"></canvas>
 <div class="leg"><span style="color:#4a9eff">■</span> CPU&nbsp;&nbsp;<span style="color:#48c774">■</span> RAM&nbsp;&nbsp;<span style="color:#f5a623">■</span> GPU (% used) · ~4&nbsp;min</div>
 <table id="perf"><tr><td style="color:#888">sampling…</td></tr></table></div>
-<div class="card"><h2>Feature costs <small>· comparison epoch</small></h2>
-<p class="note">Epoch wall time, same-thread CPU and work volume for recent feature families. Event-driven counters run independently of this page; highest wall-time operations are shown first. Lifetime maxima remain labelled per row.</p>
-<table id="featurecost"><tr><td style="color:#888">waiting for activity…</td></tr></table></div>
 <div class="card"><h2>Top processes <small>· by CPU</small></h2>
 <table class="dt" id="topproc"><tr><td style="color:#888">top processes…</td></tr></table></div>
 <div class="card"><h2>WebView debugging <small id="insthdr"></small></h2>

@@ -9,7 +9,51 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DashboardTelemetryTest {
-    @After fun reset() = DashboardTelemetry.reset()
+    @After fun reset() {
+        DashboardTelemetry.setHistorySink(null)
+        DashboardTelemetry.reset()
+    }
+
+    @Test fun acceptedBatchesAreForwardedToDurableHistoryWithoutPayloadContent() {
+        val recorded = mutableListOf<EntityFilterProtocol.TrafficBatch>()
+        DashboardTelemetry.setHistorySink(DashboardPerformanceHistorySink(recorded::add))
+        DashboardTelemetry.installed()
+        val batch = batch(updates = 12, payloadBytes = 34_567)
+
+        DashboardTelemetry.record(batch)
+
+        assertEquals(listOf(batch), recorded)
+        val minute = DashboardPerformanceMinute(
+            minute = 123,
+            filterActive = true,
+            entityCount = 42,
+            sampleMs = batch.sampleMs,
+            frames = batch.frames,
+            payloadBytes = batch.payloadBytes,
+            updates = batch.entityUpdates,
+            hydrationUpdates = batch.hydrationUpdates,
+            observerMicros = batch.observerMicros,
+            droppedFrames = batch.droppedFrames,
+            stateTaskMicros = batch.stateTaskMicros,
+            stateTaskMaxMicros = batch.stateTaskMaxMicros,
+            interactionCount = batch.interactionBins.sum(),
+            interactionMaxMicros = batch.interactionMaxMicros,
+            inputDelayMicros = batch.inputDelayMicros,
+            interactionProcessingMicros = batch.interactionProcessingMicros,
+            presentationMicros = batch.presentationMicros,
+            loafCount = batch.loafCount,
+            blockingMicros = batch.blockingMicros,
+            loafMaxMicros = batch.loafMaxMicros,
+            scriptMicros = batch.scriptMicros,
+            renderMicros = batch.renderMicros,
+            longTaskCount = batch.longTaskCount,
+        )
+        val json = dashboardPerformanceHistoryJson(listOf(minute), 7)
+        assertTrue(json.contains("\"updatesPerSec\":2.4"))
+        assertTrue(json.contains("\"payloadBytesPerSec\":6913.4"))
+        assertFalse(json.contains("entity_id"))
+        assertFalse(json.contains("payload\""))
+    }
 
     @Test fun projectsBoundedRatesInteractionBreakdownAndStateCause() {
         DashboardTelemetry.reset()

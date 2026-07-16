@@ -11,25 +11,32 @@ class FeatureCostDiagnosticsContractTest {
         File("app/src/main/assets/info.js"),
         File("../app/src/main/assets/info.js"),
     ).first(File::isFile).readText()
+    private val serverSource = listOf(
+        File("src/main/kotlin/io/github/maxlyth/hapaneld/http/PaneldServer.kt"),
+        File("app/src/main/kotlin/io/github/maxlyth/hapaneld/http/PaneldServer.kt"),
+    ).first(File::isFile).readText()
+    private val perfSource = listOf(
+        File("src/main/kotlin/io/github/maxlyth/hapaneld/http/PerfReader.kt"),
+        File("app/src/main/kotlin/io/github/maxlyth/hapaneld/http/PerfReader.kt"),
+    ).first(File::isFile).readText()
+    private val registrySource = listOf(
+        File("src/main/kotlin/io/github/maxlyth/hapaneld/metrics/FeatureCosts.kt"),
+        File("app/src/main/kotlin/io/github/maxlyth/hapaneld/metrics/FeatureCosts.kt"),
+    ).first(File::isFile).readText()
 
-    @Test fun diagnosticsDoNotPresentInclusiveElapsedTimeAsAFlatCostRanking() {
-        assertFalse(
-            "inclusive elapsed totals must not be sorted into a misleading flat cost ranking",
-            infoScript.contains("active.sort(function(a,b){return (b.wall_ns_total||0)-(a.wall_ns_total||0);}"),
-        )
-        assertTrue(infoScript.contains("elapsed is inclusive latency; parent and child totals overlap"))
-        assertTrue(infoScript.contains("Nested elapsed totals overlap and are not an additive ranking."))
-        assertTrue(infoScript.contains("o.parent_id?'↳ '"))
+    @Test fun internalFeatureCostsAreNotRenderedAsAUserFacingCard() {
+        assertFalse(infoScript.contains("featureCostRows"))
+        assertFalse(infoScript.contains("featurecost"))
+        assertFalse(serverSource.contains("<h2>Feature costs"))
+        assertFalse(serverSource.contains("id=\"featurecost\""))
     }
 
-    @Test fun disabledProjectionHasAnExplicitDiagnosticsState() {
-        assertTrue(infoScript.contains("fc.enabled===false"))
-        assertTrue(infoScript.contains("disabled in this build"))
-    }
-
-    @Test fun diagnosticsUseEpochDeltasAndKeepExternalExecutionSeparateFromLatency() {
-        assertTrue(infoScript.contains("var e=o.epoch||o"))
-        assertTrue(infoScript.contains("external_execution_ns_total"))
-        assertFalse(infoScript.contains("external_cpu_ns_total"))
+    @Test fun engineeringInstrumentationAndHarvestEndpointsRemainAvailable() {
+        assertTrue(serverSource.contains("get(\"/perf/costs\")"))
+        assertTrue(serverSource.contains("call.respondText(FeatureCosts.json()"))
+        assertTrue(serverSource.contains("get(\"/perf/history\")"))
+        assertTrue(serverSource.contains("entityLearning.performanceHistoryJson(hours)"))
+        assertTrue(perfSource.contains("\"featureCosts\":\${FeatureCosts.json()}"))
+        assertTrue(registrySource.contains("Process-local registry. Deliberately reset only by process death"))
     }
 }

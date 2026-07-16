@@ -15,6 +15,7 @@ import java.io.Writer
 /** Bounded, derived entity/catalog evidence. Credentials are never stored here. */
 class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, "entity-learning.db", null, VERSION) {
     private val maintenanceGate = MaintenanceIntervalGate(MAINTENANCE_INTERVAL_MS)
+    private val performanceMaintenanceGate = MaintenanceIntervalGate(PERFORMANCE_MAINTENANCE_INTERVAL_MS)
     private val databaseBytesCacheLock = Any()
     private var databaseBytesCachedAt = Long.MIN_VALUE
     private var databaseBytesCachedValue = 0L
@@ -79,6 +80,8 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, "entity-l
             instance TEXT NOT NULL, path TEXT NOT NULL, fingerprint TEXT NOT NULL, ignored_at INTEGER NOT NULL,
             PRIMARY KEY(instance,path,fingerprint),
             FOREIGN KEY(instance,path) REFERENCES dashboard(instance,path) ON DELETE CASCADE)""")
+        db.execSQL(PERFORMANCE_HISTORY_TABLE_SQL)
+        db.execSQL("CREATE INDEX dashboard_performance_age ON dashboard_performance(minute)")
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -239,6 +242,103 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, "entity-l
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
         maintainSoftLimit(now)
+    }
+
+    internal fun recordDashboardPerformance(sample: DashboardPerformanceSample) {
+        val batch = sample.batch
+        val slowest = batch.interactionMaxMicros
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            db.execSQL(
+                """INSERT OR IGNORE INTO dashboard_performance(
+                   instance,path,minute,filter_active,entity_count
+                   ) VALUES(?,?,?,?,?)""",
+                arrayOf(sample.instance, sample.path, sample.minute, if (sample.filterActive) 1 else 0, sample.entityCount),
+            )
+            db.execSQL(
+                """UPDATE dashboard_performance SET
+                   filter_active=?,entity_count=?,sample_ms=sample_ms+?,frames=frames+?,
+                   payload_bytes=payload_bytes+?,updates=updates+?,hydration_updates=hydration_updates+?,
+                   observer_micros=observer_micros+?,dropped_frames=dropped_frames+?,
+                   state_task_micros=state_task_micros+?,
+                   state_task_max_micros=max(state_task_max_micros,?),
+                   interaction_count=interaction_count+?,
+                   interaction_max_micros=max(interaction_max_micros,?),
+                   input_delay_micros=CASE WHEN ?>interaction_max_micros THEN ? ELSE input_delay_micros END,
+                   interaction_processing_micros=CASE WHEN ?>interaction_max_micros THEN ? ELSE interaction_processing_micros END,
+                   presentation_micros=CASE WHEN ?>interaction_max_micros THEN ? ELSE presentation_micros END,
+                   loaf_count=loaf_count+?,blocking_micros=blocking_micros+?,
+                   loaf_max_micros=max(loaf_max_micros,?),script_micros=script_micros+?,
+                   render_micros=render_micros+?,long_task_count=long_task_count+?
+                   WHERE instance=? AND path=? AND minute=?""",
+                arrayOf(
+                    if (sample.filterActive) 1 else 0, sample.entityCount, batch.sampleMs, batch.frames,
+                    batch.payloadBytes, batch.entityUpdates, batch.hydrationUpdates,
+                    batch.observerMicros, batch.droppedFrames, batch.stateTaskMicros,
+                    batch.stateTaskMaxMicros, batch.interactionBins.sum(), slowest,
+                    slowest, batch.inputDelayMicros,
+                    slowest, batch.interactionProcessingMicros,
+                    slowest, batch.presentationMicros,
+                    batch.loafCount, batch.blockingMicros, batch.loafMaxMicros, batch.scriptMicros,
+                    batch.renderMicros, batch.longTaskCount,
+                    sample.instance, sample.path, sample.minute,
+                ),
+            )
+            if (performanceMaintenanceGate.admit(sample.minute * MINUTE_MS)) {
+                db.execSQL(
+                    "DELETE FROM dashboard_performance WHERE minute<?",
+                    arrayOf(sample.minute - PERFORMANCE_RETENTION_MINUTES),
+                )
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    internal fun dashboardPerformanceHistory(
+        instance: String,
+        path: String,
+        sinceMinute: Long,
+    ): List<DashboardPerformanceMinute> = readableDatabase.rawQuery(
+        """SELECT minute,filter_active,entity_count,sample_ms,frames,payload_bytes,updates,
+           hydration_updates,observer_micros,dropped_frames,state_task_micros,state_task_max_micros,
+           interaction_count,interaction_max_micros,input_delay_micros,interaction_processing_micros,
+           presentation_micros,loaf_count,blocking_micros,loaf_max_micros,script_micros,render_micros,
+           long_task_count
+           FROM dashboard_performance WHERE instance=? AND path=? AND minute>=? ORDER BY minute""",
+        arrayOf(instance, path, sinceMinute.toString()),
+    ).use { cursor ->
+        buildList {
+            while (cursor.moveToNext()) {
+                add(DashboardPerformanceMinute(
+                    minute = cursor.getLong(0),
+                    filterActive = cursor.getInt(1) != 0,
+                    entityCount = cursor.getInt(2),
+                    sampleMs = cursor.getLong(3),
+                    frames = cursor.getLong(4),
+                    payloadBytes = cursor.getLong(5),
+                    updates = cursor.getLong(6),
+                    hydrationUpdates = cursor.getLong(7),
+                    observerMicros = cursor.getLong(8),
+                    droppedFrames = cursor.getLong(9),
+                    stateTaskMicros = cursor.getLong(10),
+                    stateTaskMaxMicros = cursor.getLong(11),
+                    interactionCount = cursor.getLong(12),
+                    interactionMaxMicros = cursor.getLong(13),
+                    inputDelayMicros = cursor.getLong(14),
+                    interactionProcessingMicros = cursor.getLong(15),
+                    presentationMicros = cursor.getLong(16),
+                    loafCount = cursor.getLong(17),
+                    blockingMicros = cursor.getLong(18),
+                    loafMaxMicros = cursor.getLong(19),
+                    scriptMicros = cursor.getLong(20),
+                    renderMicros = cursor.getLong(21),
+                    longTaskCount = cursor.getLong(22),
+                ))
+            }
+        }
     }
 
     fun setOverride(instance: String, path: String, entityId: String, override: String) {
@@ -936,6 +1036,23 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, "entity-l
         private const val DATABASE_BYTES_CACHE_MS = 10_000L
         private const val MAINTENANCE_INTERVAL_MS = 10L * 60_000
         private const val MAX_SQL_ID_FILTER = 800
+        internal const val PERFORMANCE_RETENTION_DAYS = 7
+        private const val PERFORMANCE_RETENTION_MINUTES = PERFORMANCE_RETENTION_DAYS * 24L * 60L
+        private const val PERFORMANCE_MAINTENANCE_INTERVAL_MS = HOUR_MS
+        internal val PERFORMANCE_HISTORY_TABLE_SQL = """CREATE TABLE dashboard_performance(
+            instance TEXT NOT NULL,path TEXT NOT NULL,minute INTEGER NOT NULL,
+            filter_active INTEGER NOT NULL DEFAULT 0,entity_count INTEGER NOT NULL DEFAULT 0,
+            sample_ms INTEGER NOT NULL DEFAULT 0,frames INTEGER NOT NULL DEFAULT 0,
+            payload_bytes INTEGER NOT NULL DEFAULT 0,updates INTEGER NOT NULL DEFAULT 0,
+            hydration_updates INTEGER NOT NULL DEFAULT 0,observer_micros INTEGER NOT NULL DEFAULT 0,
+            dropped_frames INTEGER NOT NULL DEFAULT 0,state_task_micros INTEGER NOT NULL DEFAULT 0,
+            state_task_max_micros INTEGER NOT NULL DEFAULT 0,interaction_count INTEGER NOT NULL DEFAULT 0,
+            interaction_max_micros INTEGER NOT NULL DEFAULT 0,input_delay_micros INTEGER NOT NULL DEFAULT 0,
+            interaction_processing_micros INTEGER NOT NULL DEFAULT 0,presentation_micros INTEGER NOT NULL DEFAULT 0,
+            loaf_count INTEGER NOT NULL DEFAULT 0,blocking_micros INTEGER NOT NULL DEFAULT 0,
+            loaf_max_micros INTEGER NOT NULL DEFAULT 0,script_micros INTEGER NOT NULL DEFAULT 0,
+            render_micros INTEGER NOT NULL DEFAULT 0,long_task_count INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY(instance,path,minute))"""
         private val FINGERPRINT = Regex("^[a-f0-9]{16}$")
     }
 }
@@ -1178,7 +1295,7 @@ internal class BoundedSnapshotCache<K, V>(private val windowMs: Long, private va
 
 /** Sequential forward-only schema contract. Never add an ad-hoc conditional to [onUpgrade]. */
 object EntityCatalogSchema {
-    const val CURRENT_VERSION = 7
+    const val CURRENT_VERSION = 8
     data class Step(val from: Int, val to: Int, val sql: List<String>)
 
     private val steps = mapOf(
@@ -1222,6 +1339,13 @@ object EntityCatalogSchema {
             listOf(
                 "DROP TABLE IF EXISTS hourly",
                 "ALTER TABLE minute_rollup ADD COLUMN span_start INTEGER NOT NULL DEFAULT 0",
+            ),
+        ),
+        7 to Step(
+            7, 8,
+            listOf(
+                EntityCatalogStore.PERFORMANCE_HISTORY_TABLE_SQL,
+                "CREATE INDEX dashboard_performance_age ON dashboard_performance(minute)",
             ),
         ),
     )

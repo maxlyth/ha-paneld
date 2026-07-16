@@ -15,6 +15,11 @@ object DashboardTelemetry {
     private val buckets = ArrayDeque<Bucket>(MAX_BUCKETS)
     private var generation = 0L
     private var installed = false
+    @Volatile private var historySink: DashboardPerformanceHistorySink? = null
+
+    internal fun setHistorySink(sink: DashboardPerformanceHistorySink?) {
+        historySink = sink
+    }
 
     fun reset(installed: Boolean = false) = synchronized(lock) {
         generation++
@@ -30,10 +35,15 @@ object DashboardTelemetry {
         }
     }
 
-    fun record(batch: EntityFilterProtocol.TrafficBatch) = synchronized(lock) {
-        if (!installed || batch.sampleMs <= 0L) return
-        if (buckets.size == MAX_BUCKETS) buckets.removeFirst()
-        buckets.addLast(Bucket(batch))
+    fun record(batch: EntityFilterProtocol.TrafficBatch) {
+        val accepted = synchronized(lock) {
+            if (!installed || batch.sampleMs <= 0L) false else {
+                if (buckets.size == MAX_BUCKETS) buckets.removeFirst()
+                buckets.addLast(Bucket(batch))
+                true
+            }
+        }
+        if (accepted) historySink?.record(batch)
     }
 
     fun json(
