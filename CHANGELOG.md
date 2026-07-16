@@ -2,39 +2,40 @@
 
 ## v0.9.4-rc1 - 2026-07-16
 
-**Hardware profiles can now explain what a detected panel needs after installation.** ha-paneld resolves the exact active immutable profile, combines it with live access and software observations, and exposes a provisioning plan that the release-paired installer can present without duplicating profile matching or parsing YAML in Bash.
+**ha-paneld can now help explain why a built-in Home Assistant dashboard feels slow.** The Performance page measures interaction delay, main-thread blocking, Home Assistant state traffic and renderer instability, then reports a conservative likely cause. This helps distinguish an overloaded dashboard from excessive entity updates, memory pressure or another busy process on the panel.
 
-This release candidate also replaces the preview profile schema with its intended long-term shape, adds a bounded hardware-evidence collector and strengthens release, firmware and layout validation. Runtime hardware facts remain separate from provisioning recommendations, and profile activation never counts as permission to make a privileged or destructive change.
+**NSPanel Pro users also gain continuous Zigbee gateway health reporting and bounded runaway protection.** ha-paneld monitors whether the vendor gateway is joined, its CPU use and repeated restarts. A configured but unjoined gateway that consumes sustained CPU, or repeatedly restarts, can be switched off automatically after a startup grace period. Joined Zigbee networks are never stopped merely for high CPU use.
+
+Installation is now profile-aware. After starting the app, the provisioner checks the active hardware profile and reports any remaining helper, Shizuku or System WebView setup relevant to that particular panel. Recommendations are shown without silently applying optional system changes.
 
 ### Added
 
-- **Profile-aware post-install guidance** — after starting the newly installed app, `provision.sh` waits for the exact profile activation to become healthy and prints a core-rendered plan for helper requirements, optional Shizuku access and the selected System WebView. The canonical JSON plan is also available for future UI and fleet tooling.
-- **A dedicated provisioning namespace in profile schema 2** — Shizuku guidance, managed software, display recommendations, desired package state and bounded core-owned recipe IDs now live under `provisioning`, separate from hardware facts and runtime routes.
-- **A versioned root-helper identity handshake** — current helpers report their release and protocol version without touching hardware, allowing the plan to distinguish a compatible helper from an older reachable-but-unverified daemon or an incompatible protocol.
-- **A bounded hardware-evidence collector supports incomplete panel profiles** — `scripts/collect-panel-hardware.sh` gathers a read-only, size-limited report for the ZX-SMT156 and Echo Show 5 Gen 2 characterization paths. Its command allowlist, failure classification and serial redaction are covered by host-side tests. (#24, #28)
+- **Built-in dashboard performance diagnostics** — interaction timing is separated into input delay, event handling and presentation alongside state-update rate, payload volume, main-thread occupancy, long frames and renderer reloads. These measurements do not require root or WebView debugging when using the built-in renderer.
+- **Persistent performance history** — content-free, minute-level dashboard measurements are retained for up to seven days and available through the API for before-and-after comparisons across page reloads and app restarts.
+- **Zigbee gateway health reporting and runaway protection** — supported panels report gateway state, join status, CPU use, restart history and containment results in Home Assistant and panel diagnostics without exposing Zigbee keys, credentials or radio identity.
+- **Profile-aware post-install guidance** — installation now identifies the active panel profile and reports the access, helper and software setup still needed for that hardware.
 
 ### Changed
 
-- **The preview schema 1 proof of concept has been replaced instead of preserved as a permanent compatibility language** — all bundled profiles, examples, authoring tools and validation now use schema 2. Stored schema 1 imports remain inert recovery data that can be inspected, exported or removed, while activation safely falls back to a compatible bundled profile or Generic.
-- **Provisioning recommendations are report-only by default** — ordinary and fleet installs no longer automatically apply a profile's recommended vendor-package taming. Existing explicitly configured package blocklists still reapply at boot, and deliberate package controls remain available in the panel UI.
-- **Installer guidance comes from the running core** — Bash remains responsible for authenticated release installation, ADB setup, grants and explicit operator options, but it does not interpret profiles or execute profile-supplied commands, paths, URLs or arguments.
-- **Release validation can run without publishing** — the same release checks used by the publishing workflow can validate a candidate independently, without creating or uploading a release.
-- **Firmware availability failures retain actionable evidence** — the daily monitor preserves outage details, treats status within one UTC day consistently and continues recording the seven-day history needed to distinguish a transient host failure from a missing artifact.
-- **Layout-shift reporting is less sensitive to measurement noise** — repeated samples use robust statistics and refreshed baselines across the supported viewport matrix, while the documentation records the current stability limits.
+- **Custom profiles now use schema 2** — provisioning recommendations are separated from hardware capabilities and runtime configuration. Existing schema 1 revisions remain available for inspection and export but cannot be activated; ha-paneld falls back to a compatible bundled profile or Generic until the profile is updated.
+- **Profile recommendations no longer make optional system changes automatically** — ordinary and fleet installation report recommended vendor-package changes instead. Existing package controls explicitly selected by the user continue to work and reapply at boot.
+- **Full panel backups now preserve more recoverable state** — backups include configuration, custom profiles and entity-filter choices, with optional Home Assistant Companion login data. Supplying a passphrase creates an encrypted `.hpb` backup; creating an unencrypted `.zip` requires explicit acknowledgement.
+- **Persistent application state is consolidated into a local database** — existing settings and learned entity data migrate automatically on first start, providing a common durable store for configuration, profiles and performance history.
+- **Root-helper upgrades are authenticated and recoverable** — the installer verifies that the helper matches the release and retains the previous working installation until the app and replacement helper have both been verified.
 
 ### Fixed
 
-- **Successful provisioning is no longer reported as failed because a later optional step could not complete** — the installer preserves the primary app result while still reporting best-effort follow-up failures separately.
-- **WF1589T LED ownership is explicit and truthful** — the bundled profile marks its boot-started `PwmLightDemo` service as a recommended Vendor packages action because it conflicts with ha-paneld's `/dev/ledjni` control, while leaving the reversible decision to the operator.
+- **Large backups and Companion login restores use bounded file-backed processing** — backup, encryption, upload, validation and restore no longer need to hold the complete archive in memory.
+- **Successful installation is no longer reported as failed because a later optional recommendation could not be completed** — required installation and startup failures still fail the run, while optional actions are reported separately.
+- **Background work is more tightly bounded during configuration changes and shutdown** — duplicate or stale operations are collapsed or cancelled instead of continuing to consume resources after their result is no longer relevant.
+- **WF1589T LED ownership is reported accurately** — the conflicting vendor LED service is presented as an optional, reversible package-control recommendation rather than being changed automatically.
 
-### Safety
+### Upgrade notes
 
-- **Provisioning output is bounded and terminal-safe** — installer text uses core-owned templates and stable validated identifiers rather than rendering untrusted profile prose.
-- **Unresolved recommendations do not turn a successful installation into a failure** — activation instability or a missing release-paired plan endpoint fails the new installation, while optional, manual or blocked recommendations remain visible without silently changing the panel.
-
-### Docs
-
-- **The NSPanel Pro Zigbee watchdog limitation is documented explicitly** — the hardware guide distinguishes ha-paneld's repaired duplicate-guard behavior from the separate legacy stock-firmware watchdog defect. (#34)
+- Custom profiles created for schema 1 must be updated to schema 2 before they can be activated.
+- Existing settings and learned entity data should migrate automatically, but an explicit panel backup is recommended before installing this release candidate.
+- Unencrypted backups now use `.zip`; encrypted backups continue to use `.hpb`.
+- Profile-recommended vendor-package changes are no longer applied automatically. Review the post-install guidance if a hardware feature depends on one.
 
 ## v0.9.3 - 2026-07-15
 

@@ -1742,7 +1742,7 @@ $compRow
 <p class="note"><b>Restore</b> overwrites this panel's config$restoreWarn — you'll see a preview of the bundle's contents before it applies.</p>
 <div style="display:flex;flex-direction:column;gap:8px;max-width:440px">
 <input type="password" id="rs-pw" placeholder="Bundle passphrase">
-<label class="pbtn" style="cursor:pointer">⭱ Choose backup (.hpb)…<input type="file" id="rs-file" accept=".hpb,application/octet-stream" style="display:none" onchange="restorePick(this)"></label>
+<label class="pbtn" style="cursor:pointer">⭱ Choose backup (.hpb or .zip)…<input type="file" id="rs-file" accept=".hpb,.zip,application/octet-stream,application/zip" style="display:none" onchange="restorePick(this)"></label>
 <div id="rs-preview"></div>
 </div>
 <p class="note" id="bk-msg"></p>
@@ -2417,7 +2417,7 @@ ${tcard("captbl", "Capabilities", if (s == null) null else capRowsHtml(), post =
 <table id="perf"><tr><td style="color:#888">sampling…</td></tr></table></div>
 <div class="card"><h2>Top processes <small>· by CPU</small></h2>
 <table class="dt" id="topproc"><tr><td style="color:#888">top processes…</td></tr></table></div>
-<div class="card"><h2>WebView debugging <small id="insthdr"></small></h2>
+<div class="card"><h2>Remote WebView debugging <small id="insthdr"></small></h2>
 <div style="display:flex;gap:8px;margin-bottom:4px">
  <button type="button" class="pbtn" onclick="inspStart()">Enable</button>
  <button type="button" class="pbtn" onclick="inspStop()">Stop</button></div>

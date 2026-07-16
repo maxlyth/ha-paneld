@@ -23,9 +23,9 @@ Use the aligned chart to look for correlation. Interaction spikes that coincide 
 
 The **Likely cause** row applies these conservative rules automatically and reports its confidence. It intentionally says that there is no clear dominant cause when the evidence does not support one.
 
-### Optional WebView debugging
+### Optional remote WebView debugging
 
-The normal built-in performance cards do not require DevTools. Use the **WebView debugging** card only when deeper source-level inspection is needed.
+The normal built-in performance cards do not require DevTools. Use the **Remote WebView debugging** card only when deeper source-level inspection is needed.
 
 For the Companion app, first enable **Companion → Settings → Troubleshooting → WebView remote debugging**, then relaunch the dashboard. This setting is easy to miss: without it, the relay cannot discover the Companion WebView. The LAN relay itself also requires root.
 

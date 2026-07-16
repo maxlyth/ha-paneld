@@ -126,6 +126,284 @@ class AppStateConcurrencyTest {
         }
     }
 
+    @Test fun upgradeMutationAndDowngradeEditSurviveBothDirections() {
+        val legacy = RecordingLegacyMirror(
+            linkedMapOf(
+                "dashboard_url" to "http://old.example",
+                "removed_later" to true,
+            ),
+        )
+        val primary = ImportingPersistence(legacy.snapshot())
+        val metadata = RecordingBridgeMetadata()
+        val writer = Executors.newSingleThreadExecutor()
+        try {
+            val preferences = SqliteStatePreferences(
+                DowngradeCompatibleStatePersistence(primary, legacy, metadata),
+                writer,
+            )
+
+            assertTrue(
+                preferences.edit()
+                    .putString("dashboard_url", "https://current.example")
+                    .remove("removed_later")
+                    .putStringSet("entities", setOf("light.kitchen", "sensor.hall"))
+                    .commit(),
+            )
+
+            // Simulate the old 0.9.x APK opening and then editing its XML after a deliberate downgrade.
+            assertEquals(
+                mapOf(
+                    "dashboard_url" to "https://current.example",
+                    "entities" to setOf("light.kitchen", "sensor.hall"),
+                ),
+                legacy.snapshot(),
+            )
+            legacy.persist(
+                StateMutation(
+                    clear = false,
+                    changes = mapOf("dashboard_url" to "http://edited-by-old-build.example"),
+                ),
+            )
+
+            val returnedPreferences = SqliteStatePreferences(
+                DowngradeCompatibleStatePersistence(primary, legacy, metadata),
+                writer,
+            )
+            assertEquals(
+                "http://edited-by-old-build.example",
+                returnedPreferences.getString("dashboard_url", null),
+            )
+        } finally {
+            writer.shutdownNow()
+        }
+    }
+
+    @Test fun markerlessDivergenceKeepsSqliteActiveAndLegacyUntouched() {
+        val legacy = RecordingLegacyMirror(
+            mapOf("dashboard_url" to "http://stale.example"),
+        )
+        val primary = ImportingPersistence(
+            mapOf("dashboard_url" to "https://vc236-current.example"),
+        )
+        val metadata = RecordingBridgeMetadata()
+        val writer = Executors.newSingleThreadExecutor()
+        try {
+            val preferences = SqliteStatePreferences(
+                DowngradeCompatibleStatePersistence(primary, legacy, metadata),
+                writer,
+            )
+
+            assertEquals(
+                "https://vc236-current.example",
+                preferences.getString("dashboard_url", null),
+            )
+            assertEquals(
+                mapOf("dashboard_url" to "http://stale.example"),
+                legacy.snapshot(),
+            )
+            assertTrue(metadata.readHash() == null)
+            assertEquals(
+                stateSnapshotHash(primary.snapshot()) to stateSnapshotHash(legacy.snapshot()),
+                metadata.conflict,
+            )
+        } finally {
+            writer.shutdownNow()
+        }
+    }
+
+    @Test fun firstPublicUpgradeWithEqualStatesEstablishesNormalMarker() {
+        val state = mapOf("dashboard_url" to "https://public-093.example")
+        val legacy = RecordingLegacyMirror(state)
+        val primary = ImportingPersistence(state)
+        val metadata = RecordingBridgeMetadata()
+        val writer = Executors.newSingleThreadExecutor()
+        try {
+            val preferences = SqliteStatePreferences(
+                DowngradeCompatibleStatePersistence(primary, legacy, metadata),
+                writer,
+            )
+
+            assertEquals(
+                "https://public-093.example",
+                preferences.getString("dashboard_url", null),
+            )
+            assertEquals(stateSnapshotHash(legacy.snapshot()), metadata.readHash())
+            assertTrue(metadata.conflict == null)
+        } finally {
+            writer.shutdownNow()
+        }
+    }
+
+    @Test fun firstMutationAfterMarkerlessConflictReconcilesFullSqliteCandidate() {
+        val legacy = RecordingLegacyMirror(mapOf("url" to "stale"))
+        val primary = ImportingPersistence(mapOf("url" to "current", "newKey" to "x"))
+        val metadata = RecordingBridgeMetadata()
+        val writer = Executors.newSingleThreadExecutor()
+        try {
+            val preferences = SqliteStatePreferences(
+                DowngradeCompatibleStatePersistence(primary, legacy, metadata),
+                writer,
+            )
+            assertTrue(preferences.edit().putString("theme", "dark").commit())
+
+            val expected = mapOf("url" to "current", "newKey" to "x", "theme" to "dark")
+            assertEquals(expected, preferences.all)
+            assertEquals(expected, primary.snapshot())
+            assertEquals(expected, legacy.snapshot())
+            assertEquals(stateSnapshotHash(expected), metadata.readHash())
+
+            val reopened = SqliteStatePreferences(
+                DowngradeCompatibleStatePersistence(primary, legacy, metadata),
+                writer,
+            )
+            assertEquals(expected, reopened.all)
+        } finally {
+            writer.shutdownNow()
+        }
+    }
+
+    @Test fun shutdownDrainWaitsForBlockedApplyToBecomeDurable() {
+        val persistenceStarted = CountDownLatch(1)
+        val releasePersistence = CountDownLatch(1)
+        val persistence = RecordingPersistence(
+            persistBlock = {
+                persistenceStarted.countDown()
+                releasePersistence.await(5, TimeUnit.SECONDS)
+            },
+        )
+        val writer = Executors.newSingleThreadExecutor()
+        val shutdown = Executors.newSingleThreadExecutor()
+        try {
+            val preferences = SqliteStatePreferences(persistence, writer)
+            preferences.edit().putString("mode", "saved-before-replace").apply()
+            assertTrue(persistenceStarted.await(5, TimeUnit.SECONDS))
+
+            val drained = shutdown.submit<Boolean> { preferences.flush(5_000) }
+            assertFalse(drained.isDone)
+
+            releasePersistence.countDown()
+            assertTrue(drained.get(5, TimeUnit.SECONDS))
+            assertEquals(listOf("persist:mode", "replace:mode"), persistence.events)
+        } finally {
+            releasePersistence.countDown()
+            shutdown.shutdownNow()
+            writer.shutdownNow()
+        }
+    }
+
+    @Test fun quiesceMakesRacingApplySynchronousDurableBeforePublishing() {
+        val persistenceStarted = CountDownLatch(1)
+        val releasePersistence = CountDownLatch(1)
+        val persistence = RecordingPersistence(
+            persistBlock = { mutation ->
+                if ("racing_apply" in mutation.changes) {
+                    persistenceStarted.countDown()
+                    releasePersistence.await(5, TimeUnit.SECONDS)
+                }
+            },
+        )
+        val writer = Executors.newSingleThreadExecutor()
+        val caller = Executors.newSingleThreadExecutor()
+        val admission = StateMutationAdmission()
+        try {
+            val preferences = SqliteStatePreferences(persistence, writer, admission)
+            val changed = Collections.synchronizedList(mutableListOf<String>())
+            preferences.registerOnSharedPreferenceChangeListener(
+                SharedPreferences.OnSharedPreferenceChangeListener { _, key -> changed += key },
+            )
+            val quiescence = quiesceStateWrites(admission) { true }
+            assertTrue(quiescence != null)
+
+            val applying = caller.submit<Unit> {
+                preferences.edit().putString("racing_apply", "durable").apply()
+            }
+            assertTrue(persistenceStarted.await(5, TimeUnit.SECONDS))
+            assertFalse(applying.isDone)
+            assertFalse(preferences.contains("racing_apply"))
+            assertTrue(changed.isEmpty())
+
+            releasePersistence.countDown()
+            applying.get(5, TimeUnit.SECONDS)
+            assertEquals("durable", preferences.getString("racing_apply", null))
+            assertEquals(listOf("racing_apply"), changed)
+        } finally {
+            releasePersistence.countDown()
+            caller.shutdownNow()
+            writer.shutdownNow()
+        }
+    }
+
+    @Test fun concurrentFrozenAppliesSerializeCandidatePersistenceAndPublication() {
+        val persistence = SnapshotPersistence()
+        val writer = Executors.newSingleThreadExecutor()
+        val callers = Executors.newFixedThreadPool(2)
+        val admission = StateMutationAdmission()
+        val start = CountDownLatch(1)
+        try {
+            val preferences = SqliteStatePreferences(persistence, writer, admission)
+            assertTrue(quiesceStateWrites(admission) { true } != null)
+
+            val first = callers.submit<Unit> {
+                start.await()
+                preferences.edit().putString("first", "one").apply()
+            }
+            val second = callers.submit<Unit> {
+                start.await()
+                preferences.edit().putString("second", "two").apply()
+            }
+            start.countDown()
+            first.get(5, TimeUnit.SECONDS)
+            second.get(5, TimeUnit.SECONDS)
+
+            assertEquals(
+                mapOf("first" to "one", "second" to "two"),
+                preferences.all,
+            )
+            assertEquals(
+                mapOf("first" to "one", "second" to "two"),
+                persistence.snapshot(),
+            )
+        } finally {
+            callers.shutdownNow()
+            writer.shutdownNow()
+        }
+    }
+
+    @Test fun failedInstallCanCloseQuiescenceAndRestoreAsyncAdmission() {
+        val persistence = RecordingPersistence()
+        val writer = Executors.newSingleThreadExecutor()
+        val admission = StateMutationAdmission()
+        try {
+            val preferences = SqliteStatePreferences(persistence, writer, admission)
+            assertTrue(preferences.edit().putString("before", "durable").commit())
+
+            val quiescence = quiesceStateWrites(admission) { true }
+            assertTrue(quiescence != null)
+            quiescence!!.close()
+            assertTrue(preferences.edit().putString("after", "accepted").commit())
+            assertEquals("accepted", preferences.getString("after", null))
+            assertEquals(listOf("persist:before", "persist:after"), persistence.events)
+        } finally {
+            writer.shutdownNow()
+        }
+    }
+
+    @Test fun failedQuiesceDrainReopensMutationAdmission() {
+        val persistence = RecordingPersistence()
+        val writer = Executors.newSingleThreadExecutor()
+        val admission = StateMutationAdmission()
+        try {
+            val preferences = SqliteStatePreferences(persistence, writer, admission)
+
+            assertTrue(quiesceStateWrites(admission) { false } == null)
+            assertTrue(preferences.edit().putString("retry", "accepted").commit())
+            assertEquals("accepted", preferences.getString("retry", null))
+            assertEquals(listOf("persist:retry"), persistence.events)
+        } finally {
+            writer.shutdownNow()
+        }
+    }
+
     private class RecordingPersistence(
         private val persistBlock: (StateMutation) -> Unit = {},
         private val failFirstPersist: Boolean = false,
@@ -145,6 +423,96 @@ class AppStateConcurrencyTest {
         override fun replace(snapshot: Map<String, Any>): Boolean {
             replacedSnapshot = snapshot
             events += "replace:${snapshot.keys.joinToString(",")}"
+            return true
+        }
+    }
+
+    private class SnapshotPersistence : StateNamespacePersistence {
+        private val values = linkedMapOf<String, Any>()
+
+        override fun initialize(): Map<String, Any> = emptyMap()
+
+        @Synchronized
+        override fun persist(mutation: StateMutation): Boolean {
+            if (mutation.clear) values.clear()
+            mutation.changes.forEach { (key, value) ->
+                if (value == null) values.remove(key) else values[key] = value
+            }
+            return true
+        }
+
+        @Synchronized
+        override fun replace(snapshot: Map<String, Any>): Boolean {
+            values.clear()
+            values.putAll(snapshot)
+            return true
+        }
+
+        @Synchronized
+        fun snapshot(): Map<String, Any> = values.toMap()
+    }
+
+    private class ImportingPersistence(
+        imported: Map<String, Any>,
+    ) : StateNamespacePersistence {
+        private val values = imported.toMutableMap()
+
+        override fun initialize(): Map<String, Any> = values.toMap()
+
+        override fun persist(mutation: StateMutation): Boolean {
+            if (mutation.clear) values.clear()
+            mutation.changes.forEach { (key, value) ->
+                if (value == null) values.remove(key) else values[key] = value
+            }
+            return true
+        }
+
+        override fun replace(snapshot: Map<String, Any>): Boolean {
+            values.clear()
+            values.putAll(snapshot)
+            return true
+        }
+
+        fun snapshot(): Map<String, Any> = values.toMap()
+    }
+
+    private class RecordingLegacyMirror(
+        initial: Map<String, Any>,
+    ) : LegacyStateMirror {
+        private val values = initial.toMutableMap()
+
+        override fun snapshot(): Map<String, Any> = values.toMap()
+
+        override fun persist(mutation: StateMutation): Boolean {
+            if (mutation.clear) values.clear()
+            mutation.changes.forEach { (key, value) ->
+                if (value == null) values.remove(key) else values[key] = value
+            }
+            return true
+        }
+
+        override fun replace(snapshot: Map<String, Any>): Boolean {
+            values.clear()
+            values.putAll(snapshot)
+            return true
+        }
+    }
+
+    private class RecordingBridgeMetadata : BridgeMetadata {
+        private var hash: String? = null
+        var conflict: Pair<String, String>? = null
+            private set
+
+        override fun readHash(): String? = hash
+
+        override fun writeHash(hash: String): Boolean {
+            this.hash = hash
+            conflict = null
+            return true
+        }
+
+        override fun writeConflict(sqliteHash: String, legacyHash: String): Boolean {
+            conflict = sqliteHash to legacyHash
             return true
         }
     }

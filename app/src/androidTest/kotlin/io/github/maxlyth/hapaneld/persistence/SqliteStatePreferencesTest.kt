@@ -16,12 +16,13 @@ import org.junit.runner.RunWith
 class SqliteStatePreferencesTest {
     private val context = ApplicationProvider.getApplicationContext<Context>()
     private val legacyName = "sqlite-state-test-legacy"
+    private val bridgeName = "sqlite-state-test-bridge"
     private val namespace = "sqlite-state-test"
 
     @Before fun cleanBefore() = clean()
     @After fun cleanAfter() = clean()
 
-    @Test fun legacyImportIsAtomicTypedAndNeverOverwritesNewerSqliteState() {
+    @Test fun legacyJournalPreservesTypedStateAcrossDowngradeAndReturnUpgrade() {
         val legacy = context.getSharedPreferences(legacyName, Context.MODE_PRIVATE)
         assertTrue(
             legacy.edit()
@@ -33,9 +34,10 @@ class SqliteStatePreferencesTest {
                 .putStringSet("labels", setOf("one", "two"))
                 .commit(),
         )
+        val bridge = context.getSharedPreferences(bridgeName, Context.MODE_PRIVATE)
 
         EntityCatalogStore(context).use { helper ->
-            val state = SqliteStatePreferences(helper, namespace, legacyName, legacy)
+            val state = SqliteStatePreferences(helper, namespace, legacyName, legacy, bridge)
             assertEquals("legacy", state.getString("name", null))
             assertEquals(7, state.getInt("count", 0))
             assertEquals(123L, state.getLong("time", 0))
@@ -45,12 +47,15 @@ class SqliteStatePreferencesTest {
 
             assertTrue(state.edit().putString("name", "sqlite").remove("enabled").commit())
             assertFalse(state.contains("enabled"))
+            assertEquals("sqlite", legacy.getString("name", null))
+            assertFalse(legacy.contains("enabled"))
         }
 
-        assertTrue(legacy.edit().putString("name", "stale-legacy").commit())
+        // Simulate a supported 0.9.x downgrade changing the XML journal.
+        assertTrue(legacy.edit().putString("name", "edited-during-downgrade").commit())
         EntityCatalogStore(context).use { helper ->
-            val reopened = SqliteStatePreferences(helper, namespace, legacyName, legacy)
-            assertEquals("sqlite", reopened.getString("name", null))
+            val reopened = SqliteStatePreferences(helper, namespace, legacyName, legacy, bridge)
+            assertEquals("edited-during-downgrade", reopened.getString("name", null))
             assertFalse(reopened.contains("enabled"))
             val revisions = helper.readableDatabase.rawQuery(
                 "SELECT COUNT(*) FROM app_state_revision WHERE namespace=?",
@@ -59,12 +64,13 @@ class SqliteStatePreferencesTest {
                 assertTrue(it.moveToFirst())
                 it.getInt(0)
             }
-            assertEquals(2, revisions)
+            assertEquals(3, revisions)
         }
     }
 
     private fun clean() {
         context.getSharedPreferences(legacyName, Context.MODE_PRIVATE).edit().clear().commit()
+        context.getSharedPreferences(bridgeName, Context.MODE_PRIVATE).edit().clear().commit()
         context.deleteDatabase(EntityCatalogStore.DATABASE_NAME)
         context.deleteDatabase(EntityCatalogStore.LEGACY_DATABASE_NAME)
     }

@@ -1,9 +1,13 @@
 package io.github.maxlyth.hapaneld.util
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
+import io.github.maxlyth.hapaneld.persistence.StateQuiescence
 import java.net.URL
 
 /**
@@ -12,6 +16,18 @@ import java.net.URL
  * JVM class, so this needs no device.
  */
 class AppInstallerTest {
+    @Test fun successfulSelfInstallKeepsStateQuiescedWhileFailedInstallReopensIt() {
+        val successReopened = AtomicBoolean()
+        val successful = StateQuiescence { successReopened.set(true) }
+        AppInstaller.finishSelfReplaceQuiescence(successful, installSucceeded = true)
+        assertFalse(successReopened.get())
+
+        val failureReopened = AtomicBoolean()
+        val failed = StateQuiescence { failureReopened.set(true) }
+        AppInstaller.finishSelfReplaceQuiescence(failed, installSucceeded = false)
+        assertTrue(failureReopened.get())
+    }
+
     private val github = URL("https://github.com/maxlyth/ha-paneld/releases/download/v1/app.apk")
 
     @Test fun followsAbsoluteHttpsRedirect() {

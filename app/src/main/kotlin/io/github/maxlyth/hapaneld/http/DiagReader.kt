@@ -64,7 +64,7 @@ object DiagReader {
                 if (daemon) daemonRequirement(profile, running = true)
                 else daemonRequirement(profile, running = false))
             else null,
-            if (ShizukuConsent.enabled(ctx) || manager != ShizukuManagerIdentity.Status.MISSING) {
+            if (showShizukuCapability(rootish, ShizukuConsent.enabled(ctx), manager)) {
                 Cap("Shizuku enhanced access", if (shizuku) "ok" else "none", when {
                     shizuku -> "ready as shell UID; local typed operations only"
                     manager == ShizukuManagerIdentity.Status.UNTRUSTED -> "blocked: installed manager signer is not trusted"
@@ -105,13 +105,23 @@ object DiagReader {
      */
     internal fun rootSuCapability(su: Boolean, daemon: Boolean): Cap = Cap(
         name = "Root (su)",
-        status = if (su) "ok" else "none",
+        status = when {
+            su -> "ok"
+            daemon -> "degraded"
+            else -> "none"
+        },
         note = when {
             su -> "available directly to ha-paneld"
             daemon -> "not available directly to ha-paneld — privileged actions are routed through the helper daemon"
             else -> "not available directly to ha-paneld — see the individual capability rows below"
         },
     )
+
+    internal fun showShizukuCapability(
+        rootish: Boolean,
+        consentEnabled: Boolean,
+        manager: ShizukuManagerIdentity.Status,
+    ): Boolean = !rootish && (consentEnabled || manager != ShizukuManagerIdentity.Status.MISSING)
 
     private fun daemonRequirement(profile: DeviceProfile, running: Boolean): String {
         val state = if (running) "running" else "NEEDED but not running"

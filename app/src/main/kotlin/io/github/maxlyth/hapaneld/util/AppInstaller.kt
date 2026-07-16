@@ -5,6 +5,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.util.Log
 import io.github.maxlyth.hapaneld.control.Su
+import io.github.maxlyth.hapaneld.persistence.AppState
 import io.github.maxlyth.hapaneld.shizuku.ShizukuBridge
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -38,6 +39,7 @@ object AppInstaller {
 
     private const val TAG = "ha-paneld/install"
     private const val MAX_APK_DOWNLOAD_BYTES = 512L * 1024L * 1024L
+    private const val SELF_REPLACE_STATE_FLUSH_MS = 10_000L
     fun installedVersion(context: Context, pkg: String): String =
         runCatching { context.packageManager.getPackageInfo(pkg, 0).versionName ?: "" }.getOrElse { "" }
 
@@ -134,43 +136,69 @@ object AppInstaller {
             apk.delete()
             return@withContext "skipped: no permitted installer"
         }
-        if (route == InstallRoute.SU) {
-            val out = try {
-                // Stream the APK straight into `pm install -S <size>` — no intermediate /data/local/tmp copy
-                // (halves peak disk use). Long-timeout: staging a large stream far exceeds the 5s su bound.
-                Su.runWithStdinLong(
-                    "pm install -S ${apk.length()} -r -d 2>&1",
-                    apk,
-                    HelperInstallTransaction.INSTALL_TIMEOUT_MS,
-                )?.trim() ?: ""
-            } finally {
-                apk.delete()
-            }
-            if (out.contains("Success", ignoreCase = true)) return@withContext "OK"
-            Log.w(TAG, "install failed: $out")
-            return@withContext "install failed: ${out.take(120)}"
-        }
-
-        val result = if (route == InstallRoute.DAEMON) {
-            HelperInstallTransaction(HelperClient).install(
-                apk,
-                File(context.filesDir, HelperInstallTransaction.STAGING_DIR),
-            )
-        } else if (route == InstallRoute.SHIZUKU) {
-            val out = try {
-                ShizukuBridge.installApk(apk, allowDowngrade = true, HelperInstallTransaction.INSTALL_TIMEOUT_MS)
-                    ?.trim().orEmpty()
-            } finally {
-                apk.delete()
-            }
-            if (out.contains("Success", ignoreCase = true)) "OK"
-            else "install failed: ${out.ifBlank { "Shizuku installer unavailable" }.take(120)}"
-        } else {
+        val replacingSelf = inspect(context, apk.absolutePath)?.pkg == context.packageName
+        val stateQuiescence = if (replacingSelf) {
+            AppState.quiesceForSelfReplace(context, SELF_REPLACE_STATE_FLUSH_MS)
+        } else null
+        if (replacingSelf && stateQuiescence == null) {
             apk.delete()
-            "skipped: no permitted installer"
+            return@withContext "install deferred: application state is still being saved"
         }
-        if (result != "OK") Log.w(TAG, result)
-        result
+        var installSucceeded = false
+        try {
+            if (route == InstallRoute.SU) {
+                val out = try {
+                    // Stream the APK straight into `pm install -S <size>` — no intermediate /data/local/tmp copy
+                    // (halves peak disk use). Long-timeout: staging a large stream far exceeds the 5s su bound.
+                    Su.runWithStdinLong(
+                        "pm install -S ${apk.length()} -r -d 2>&1",
+                        apk,
+                        HelperInstallTransaction.INSTALL_TIMEOUT_MS,
+                    )?.trim() ?: ""
+                } finally {
+                    apk.delete()
+                }
+                if (out.contains("Success", ignoreCase = true)) {
+                    installSucceeded = true
+                    return@withContext "OK"
+                }
+                Log.w(TAG, "install failed: $out")
+                return@withContext "install failed: ${out.take(120)}"
+            }
+
+            val result = if (route == InstallRoute.DAEMON) {
+                HelperInstallTransaction(HelperClient).install(
+                    apk,
+                    File(context.filesDir, HelperInstallTransaction.STAGING_DIR),
+                )
+            } else if (route == InstallRoute.SHIZUKU) {
+                val out = try {
+                    ShizukuBridge.installApk(apk, allowDowngrade = true, HelperInstallTransaction.INSTALL_TIMEOUT_MS)
+                        ?.trim().orEmpty()
+                } finally {
+                    apk.delete()
+                }
+                if (out.contains("Success", ignoreCase = true)) "OK"
+                else "install failed: ${out.ifBlank { "Shizuku installer unavailable" }.take(120)}"
+            } else {
+                apk.delete()
+                "skipped: no permitted installer"
+            }
+            if (result != "OK") Log.w(TAG, result)
+            installSucceeded = result == "OK"
+            result
+        } finally {
+            // Package-manager success may return before process replacement. Keep synchronous-durable
+            // admission active across that lag; only a failed install reopens ordinary async writes.
+            finishSelfReplaceQuiescence(stateQuiescence, installSucceeded)
+        }
+    }
+
+    internal fun finishSelfReplaceQuiescence(
+        quiescence: io.github.maxlyth.hapaneld.persistence.StateQuiescence?,
+        installSucceeded: Boolean,
+    ) {
+        if (!installSucceeded) quiescence?.close()
     }
 
     /** Null = APK declares [pin].pkg AND is signed by the pinned cert; else a short reason. */

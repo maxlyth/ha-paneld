@@ -2,6 +2,7 @@ package io.github.maxlyth.hapaneld.http
 
 import io.github.maxlyth.hapaneld.control.fakeProfile
 import io.github.maxlyth.hapaneld.device.EvdevButton
+import io.github.maxlyth.hapaneld.shizuku.ShizukuManagerIdentity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -9,6 +10,12 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DiagCapabilityPolicyTest {
+    @Test fun performanceUiNamesTheDevtoolsRelayAsRemoteDebugging() {
+        val source = java.io.File("src/main/kotlin/io/github/maxlyth/hapaneld/http/PaneldServer.kt").readText()
+        assertTrue(source.contains("<h2>Remote WebView debugging "))
+        assertFalse(source.contains("<h2>WebView debugging "))
+    }
+
     @Test fun diagnosticButtonRequestUsesTheInjectedProfile() {
         val profile = fakeProfile(
             evdevButtons = listOf(
@@ -30,7 +37,7 @@ class DiagCapabilityPolicyTest {
         val cap = DiagReader.rootSuCapability(su = false, daemon = true)
 
         assertEquals("Root (su)", cap.name)
-        assertEquals("none", cap.status)
+        assertEquals("degraded", cap.status)
         assertTrue(cap.note.contains("routed through the helper daemon"))
         assertFalse(cap.note.contains("unavailable"))
         assertFalse(cap.note.contains("no su on this firmware"))
@@ -49,5 +56,36 @@ class DiagCapabilityPolicyTest {
 
         assertEquals("ok", cap.status)
         assertEquals("available directly to ha-paneld", cap.note)
+    }
+
+    @Test fun rootedOrHelperBackedPanelsDoNotShowShizukuAsAParallelCapability() {
+        for (manager in ShizukuManagerIdentity.Status.entries) {
+            assertFalse(DiagReader.showShizukuCapability(rootish = true, consentEnabled = true, manager))
+            assertFalse(DiagReader.showShizukuCapability(rootish = true, consentEnabled = false, manager))
+        }
+    }
+
+    @Test fun genuinelyUnrootedPanelsShowShizukuOnlyWhenConfiguredOrInstalled() {
+        assertFalse(
+            DiagReader.showShizukuCapability(
+                rootish = false,
+                consentEnabled = false,
+                ShizukuManagerIdentity.Status.MISSING,
+            ),
+        )
+        assertTrue(
+            DiagReader.showShizukuCapability(
+                rootish = false,
+                consentEnabled = true,
+                ShizukuManagerIdentity.Status.MISSING,
+            ),
+        )
+        assertTrue(
+            DiagReader.showShizukuCapability(
+                rootish = false,
+                consentEnabled = false,
+                ShizukuManagerIdentity.Status.TRUSTED,
+            ),
+        )
     }
 }

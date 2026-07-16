@@ -1765,6 +1765,9 @@ class PaneldService : Service() {
         } else if (::entityLearning.isInitialized) {
             Log.w(TAG, "entity-learning store left open for process teardown because a producer did not drain")
         }
+        if (!AppState.flush(this, APP_STATE_SHUTDOWN_MS)) {
+            Log.w(TAG, "application-state writes did not drain within ${APP_STATE_SHUTDOWN_MS}ms")
+        }
         super.onDestroy()
     }
 
@@ -1845,6 +1848,7 @@ class PaneldService : Service() {
         private const val WAKE_WORKER_JOIN_MS = 500L
         private const val RENDERER_SHUTDOWN_MS = 1_000L
         private const val SCOPE_SHUTDOWN_MS = 2_000L
+        private const val APP_STATE_SHUTDOWN_MS = 5_000L
         private const val AUDIO_SHUTDOWN_MS = 2_000L
         private const val RUNTIME_SHUTDOWN_MS = 5_000L
 

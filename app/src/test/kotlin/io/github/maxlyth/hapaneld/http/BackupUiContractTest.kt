@@ -29,6 +29,8 @@ class BackupUiContractTest {
         assertTrue("empty passphrase must not silently download credentials", "if (!pw && !plain)" in script)
         assertTrue("plaintext v2 archive must download as ZIP", "'zip'" in script)
         assertTrue("server artifact must advertise ZIP", "PanelBackup.Artifact(plain, \"zip\")" in serverSource)
+        assertTrue("restore picker must identify encrypted and plaintext backup extensions", "Choose backup (.hpb or .zip)" in serverSource)
+        assertTrue("restore picker must accept encrypted and plaintext backup extensions", """accept=".hpb,.zip,application/octet-stream,application/zip"""" in serverSource)
         assertTrue("OpenAPI must document plaintext acknowledgement", "\"allow_plaintext\"" in openApi)
         assertTrue("legacy JSON filename must not remain", "'json'" !in script.substring(
             script.indexOf("window.doBackup"),
