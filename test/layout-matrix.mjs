@@ -3,21 +3,31 @@
 // Serves the real info.css/info.js (via test/fixtures/info-fixture.html), mocks /perf + /proximity +
 // /inspect with worst-case CYCLING data (process names long↔short, render drawing↔idle, raw sweeping),
 // then measures Cumulative Layout Shift across a matrix of viewport WIDTHS × TEXT SIZES (the myopic
-// axis) while the live cards are scrolled OFF-SCREEN. Diffs a committed baseline:
+// axis) while the live cards are scrolled OFF-SCREEN. Each cell reports the median of repeated page
+// loads, preserving the representative run's offender attribution. Diffs a committed baseline:
 //   - worse than baseline (+epsilon)  -> REGRESSION (flagged, but exit 0 — never blocks a build)
 //   - within baseline                 -> ok / known-backlog
-// `--update-baseline` rewrites test/baseline.json. Local: `node test/layout-matrix.mjs`.
+// `--update-baseline` rewrites test/baseline.json; use RUNS=5 or greater for baseline refreshes.
+// Local: `node test/layout-matrix.mjs`.
 import { chromium } from 'playwright-core';
 import http from 'node:http';
 import { readFile, writeFile } from 'node:fs/promises';
 import { extname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  parseRunCount,
+  requireBaselineRunCount,
+  summarizeSamples,
+} from './layout-statistics.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url)); // repo root
 const CHROME = process.env.CHROME || '/usr/bin/chromium';
 const SECS = +(process.env.SECS || 7);
-const EPS = +(process.env.EPS || 0.2);  // regression slack — wide for now: CLS is noisy run-to-run
-                                        // (timing of polls vs scroll/masonry). TODO: average N runs to tighten.
+const RUNS = parseRunCount(process.env.RUNS);
+const UPDATE_BASELINE = process.argv.includes('--update-baseline');
+if (UPDATE_BASELINE) requireBaselineRunCount(RUNS);
+const EPS = +(process.env.EPS || 0.06); // repeated sampling rejects timing outliers, allowing this to
+                                        // flag material movement while remaining report-only.
 const WIDTHS = [480, 1280, 1920, 2560]; // 480 = smallest real panel (NSPanel Pro 480×480; below that the
                                         // hardware can't run an HA dashboard); 1920 ≈ 10", 2560 ≈ 15" → up to 4 cols
 const FONTS = [16, 20, 24];             // normal → large → x-large (myopic)
@@ -75,33 +85,36 @@ const browser = await chromium.launch({ executablePath: CHROME, headless: true, 
 
 const results = {};
 for (const w of WIDTHS) for (const f of FONTS) {
-  const key = `${w}x${f}`; const r = await measure(browser, port, w, f); results[key] = r;
+  const key = `${w}x${f}`; const samples = [];
+  for (let run = 0; run < RUNS; run++) samples.push(await measure(browser, port, w, f));
+  results[key] = summarizeSamples(samples);
 }
 await browser.close(); server.close();
 
 let baseline = {};
 try { baseline = JSON.parse(await readFile(join(ROOT, 'test/baseline.json'), 'utf8')); } catch { /* none yet */ }
 
-if (process.argv.includes('--update-baseline')) {
+if (UPDATE_BASELINE) {
   const out = {}; for (const k of Object.keys(results)) out[k] = results[k].cls;
   await writeFile(join(ROOT, 'test/baseline.json'), JSON.stringify(out, null, 2) + '\n');
   console.log('baseline updated:', JSON.stringify(out));
   process.exit(0);
 }
 
-console.log('## CLS layout matrix (width × text-px) — non-blocking, good < 0.10\n');
-console.log('| cell | CLS | baseline | status | top offender |');
-console.log('| --- | --- | --- | --- | --- |');
+console.log(`## CLS layout matrix (width × text-px) — median of ${RUNS}, non-blocking, good < 0.10\n`);
+console.log('| cell | median CLS | run range | baseline | status | top offender |');
+console.log('| --- | --- | --- | --- | --- | --- |');
 let regressions = 0;
 for (const w of WIDTHS) for (const f of FONTS) {
   const k = `${w}x${f}`; const cls = results[k].cls; const base = baseline[k];
+  const range = RUNS === 1 ? '—' : `${results[k].minCls.toFixed(4)}–${results[k].maxCls.toFixed(4)}`;
   const top = Object.entries(results[k].by).sort((a, b) => b[1] - a[1])[0];
   const offender = top ? `${top[0]} (${top[1].toFixed(3)})` : '—';
   let status = 'ok';
   if (base == null) status = 'new (no baseline)';
   else if (cls > base + EPS) { status = '⚠ REGRESSION'; regressions++; }
   else if (cls > 0.1) status = 'known-backlog';
-  console.log(`| ${k} | ${cls.toFixed(4)} | ${base ?? '—'} | ${status} | ${offender} |`);
+  console.log(`| ${k} | ${cls.toFixed(4)} | ${range} | ${base ?? '—'} | ${status} | ${offender} |`);
 }
-console.log(`\n${regressions} regression(s). (Report-only — exit 0 regardless.)`);
+console.log(`\n${regressions} regression(s) with EPS=${EPS}. (Report-only — exit 0 regardless.)`);
 process.exit(0);

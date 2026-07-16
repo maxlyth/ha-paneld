@@ -8,7 +8,7 @@ on:
     branches: [main]
     paths: ['app/src/main/assets/**', 'test/**', '.github/workflows/ui-layout.yml']
   pull_request:
-    paths: ['app/src/main/assets/**', 'test/**']
+    paths: ['app/src/main/assets/**', 'test/**', '.github/workflows/ui-layout.yml']
   workflow_dispatch:
 
 permissions:
@@ -17,7 +17,6 @@ permissions:
 jobs:
   cls:
     runs-on: ubuntu-24.04
-    continue-on-error: true   # report-only — must never block development
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -27,6 +26,8 @@ jobs:
           node-version: '20'
       - name: Install playwright-core
         run: cd test && npm ci --ignore-scripts
+      - name: Test CLS sampling policy
+        run: cd test && npm test
       - name: Run CLS matrix (report-only)
         run: |
           CHROME="$(command -v google-chrome || command -v chromium-browser || command -v chromium)"

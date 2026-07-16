@@ -16,7 +16,8 @@ not a gate.
   then real panel sizes (1920 ≈ 10″, 2560 ≈ 15″; masonry expands to up to 4 columns), and
 - **text sizes** `16 / 20 / 24 px` root font (the *myopic-user* axis — larger text wraps to more lines).
 
-…while the live cards are scrolled **off-screen**, then diffs `baseline.json`.
+…while the live cards are scrolled **off-screen**. Each cell is the median of repeated independent
+page loads and includes the observed range, then the median is diffed against `baseline.json`.
 
 ## Run it
 
@@ -27,7 +28,9 @@ CHROME=/usr/bin/chromium node layout-matrix.mjs              # report
 CHROME=/usr/bin/chromium node layout-matrix.mjs --update-baseline   # rewrite baseline.json
 ```
 
-Env: `CHROME` (chromium path), `SECS` (poll window per cell), `EPS` (regression slack).
+Env: `CHROME` (chromium path), `SECS` (poll window per run), `RUNS` (odd page-load count per cell,
+default `3`, maximum `21`), `EPS` (regression slack, default `0.06`). Use at least `RUNS=5` when
+refreshing the committed baseline.
 
 ## CI
 
@@ -37,8 +40,11 @@ Env: `CHROME` (chromium path), `SECS` (poll window per cell), `EPS` (regression 
 
 ## Known limitations / backlog
 
-- **CLS is noisy run-to-run** (timing of polls vs scroll/masonry) — `EPS` is wide (0.2) so only gross
-  regressions flag. TODO: average N runs per cell to tighten the baseline.
+- **CLS varies run-to-run** because poll, scroll and masonry timing can align differently. The harness
+  reports the median of three loads and their range; the median rejects isolated timing outliers while
+  retaining one real run's offender attribution. `EPS=0.06` remains report-only and deliberately
+  tolerant. A mean would be pulled by outliers and would not have one matching offender breakdown;
+  worst-of-N would over-report one-off timing noise.
 - **Current baseline is below the 0.1 target in every cell.** A 2026-07-16 local rerun covered all 12
   width/text-size combinations with zero regressions and a maximum CLS of 0.0247. Reopen layout work
   only when the report identifies a reproducible regression; do not preserve the harness's obsolete
