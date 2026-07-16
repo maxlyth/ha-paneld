@@ -1,6 +1,6 @@
-schema: 1
+schema: 2
 id: tpa10
-version: 1.0.0
+version: 2.0.0
 display_name: Tuya TPA10
 soc_class: rk3566
 metadata:
@@ -44,7 +44,6 @@ platform:
   su_form: android
   app_can_su: false
   has_recents: false
-  shizuku: optional
 hardware:
   led:
     mechanism: sysfs-daemon
@@ -75,41 +74,53 @@ cpu:
     Efficiency: powersave
     Auto: schedutil
 display:
-  recommended_density: 212
-  recommended_font_scale: 1.0
   physical_ppi: 226
-updates:
-  webview_artifact: lineageos-150-arm
-taming:
+provisioning:
+  access:
+    shizuku: optional
+  software:
+    webview:
+      artifact: lineageos-150-arm
+  display:
+    density: 212
+    font_scale: 1.0
+  packages:
   - package: com.smartos.xinch.smarthome
+    desired_state: disabled
+    importance: optional
     tags:
       - vendor
       - smarthome
     note: Xinch (SmartOS/Tuya) smart-home control app. Redundant on a Home Assistant panel; safe to disable.
-    default_tame: false
   - package: com.smartos.xinch.smartiot
+    desired_state: disabled
+    importance: optional
     tags:
       - vendor
       - smarthome
     note: Xinch (SmartOS/Tuya) IoT control app. Redundant alongside Home Assistant; safe to disable.
-    default_tame: false
   - package: com.smartos.xinch.communicate
+    desired_state: disabled
+    importance: optional
     tags:
       - vendor
       - test
     note: 'Xinch "central-control interconnect" app (label "TEST-中控互联"). Vendor demo/test; not used in normal operation.'
-    default_tame: false
   - package: com.smartos.xinch.monitor
+    desired_state: disabled
+    importance: optional
     tags:
       - vendor
       - test
       - clutter
     note: 'Xinch "PerformanceMonitor" diagnostic app. Not needed in normal operation.'
-    default_tame: false
   - package: com.tuya.devicetest
+    desired_state: disabled
+    importance: optional
     tags:
       - chipset
       - test
       - clutter
     note: Tuya factory device-test app (in /odm, persists across factory reset). Diagnostic only.
-    default_tame: false
+  recipes:
+    - id: tpa10.vendor-stack-minimize

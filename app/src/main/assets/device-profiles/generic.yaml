@@ -1,6 +1,6 @@
-schema: 1
+schema: 2
 id: generic
-version: 1.0.0
+version: 2.0.0
 display_name: Unknown panel
 soc_class: "?"
 metadata:
@@ -27,7 +27,6 @@ platform:
   su_form: android
   app_can_su: true
   has_recents: true
-  shizuku: optional
 hardware:
   led:
     mechanism: autodetect
@@ -44,5 +43,10 @@ input:
   evdev_buttons: []
 cpu: {}
 display: {}
-updates: {}
-taming: []
+provisioning:
+  access:
+    shizuku: optional
+  software: {}
+  display: {}
+  packages: []
+  recipes: []

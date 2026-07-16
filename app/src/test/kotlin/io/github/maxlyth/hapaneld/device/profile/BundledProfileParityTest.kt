@@ -132,12 +132,12 @@ class BundledProfileParityTest {
     @Test fun shizukuRecommendationsAreExplicitAndMatchPanelAuthorityPolicy() {
         val recommended = setOf("smt1019", "shelly-wall-display", "shelly-wall-display-v2", "zx-smt156")
         assertEquals(recommended, documents.values.filter {
-            it.platform.shizuku == ShizukuRecommendation.RECOMMENDED
+            it.provisioning.access.shizuku == ShizukuRecommendation.RECOMMENDED
         }.map { it.id }.toSet())
         assertEquals(legacyById.keys - recommended, documents.values.filter {
-            it.platform.shizuku == ShizukuRecommendation.OPTIONAL
+            it.provisioning.access.shizuku == ShizukuRecommendation.OPTIONAL
         }.map { it.id }.toSet())
-        assertFalse(documents.values.any { it.platform.shizuku == ShizukuRecommendation.NONE })
+        assertFalse(documents.values.any { it.provisioning.access.shizuku == ShizukuRecommendation.NONE })
     }
 
     @Test fun bundledMatchingIsLosslessForLegacyFixturesAndBranchCollisions() {

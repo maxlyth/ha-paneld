@@ -45,7 +45,7 @@ Automatic matching is pure and limited to immutable build facts: Android build m
 
 Exact bundled product identities are evaluated before bundled reference-platform fallbacks such as `px30`, `rk3326`, `rk3566` and `rk3576`, because unrelated vendors can ship the same SoC. The resolver compares the highest matched group priority, then the profile priority; an exact tie fails closed to Generic. This two-level order lets one profile carry both an exact identity and a lower-priority compatibility fallback without its broad branch defeating another product's exact rule. Local/community match rules are preview evidence only and never enter automatic selection. A local revision can override bundled detection only through explicit activation; once pinned, the panel keeps that exact revision rather than being reinterpreted by a later import.
 
-Named core-owned strategies can derive a small set of bounded values from those same facts, for example a firmware threshold that changes proximity behavior or a model suffix that changes recommended density. The v1 document has no general scripting, arbitrary expressions or conditional patch section.
+Named core-owned strategies can derive a small set of bounded values from those same facts, for example a firmware threshold that changes proximity behavior or a model suffix that changes recommended density. The schema has no general scripting, arbitrary expressions or conditional patch section.
 
 ## The rule that keeps profiles from being brittle
 
@@ -68,13 +68,13 @@ The draft deliberately contains unknown/TODO values. Its purpose is to give a co
 
 ## Schema and compatibility
 
-The profile schema descriptor and driver catalog are runtime-owned, typed contracts used by the parser, Profiles UI and public reference. Normal unknown fields fail validation, required driver IDs must exist in the running core, and v1 accepts schema `1` only. An older or future schema is rejected rather than guessed at or silently reinterpreted.
+The profile schema descriptor and driver catalog are runtime-owned, typed contracts used by the parser, Profiles UI and public reference. Normal unknown fields fail validation, required driver and recipe IDs must exist in the running core, and schema 2 is the sole accepted preview language. Stored schema-1 proof-of-concept revisions can still be identified, exported and deleted, but cannot activate or serve as rollback targets.
 
 The profile's own content version is independent of the document schema. Installed profiles are revalidated after an app update, and an incompatible local revision cannot replace a healthy active profile.
 
 ## Risks highlighted before import
 
-Validation identifies unusually consequential behavior separately from ordinary metadata. The preview calls out root-controlled paths, relay or GPIO writes, evdev reads and grabs, default package taming, WebView installation recommendations, and a local profile that overrides a bundled match. These are review prompts, not permissions; activation still requires an exact confirmed revision and every driver still enforces its own parameter validation and live checks.
+Validation identifies unusually consequential behavior separately from ordinary metadata. The preview calls out root-controlled paths, relay or GPIO writes, evdev reads and grabs, recommended package-disable intents, WebView installation recommendations, and a local profile that overrides a bundled match. These are review prompts, not permissions; activation still requires an exact confirmed revision and every driver still enforces its own parameter validation and live checks.
 
 ## Background
 

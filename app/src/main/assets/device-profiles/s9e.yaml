@@ -1,6 +1,6 @@
-schema: 1
+schema: 2
 id: s9e
-version: 1.0.0
+version: 2.0.0
 display_name: Smatek S9E
 soc_class: rk3566
 metadata:
@@ -57,7 +57,6 @@ platform:
   su_form: android
   app_can_su: true
   has_recents: true
-  shizuku: optional
 hardware:
   led:
     mechanism: none
@@ -85,6 +84,12 @@ cpu:
     Efficiency: powersave
     Auto: schedutil
 display: {}
-updates:
-  webview_artifact: lineageos-150-arm
-taming: []
+provisioning:
+  access:
+    shizuku: optional
+  software:
+    webview:
+      artifact: lineageos-150-arm
+  display: {}
+  packages: []
+  recipes: []

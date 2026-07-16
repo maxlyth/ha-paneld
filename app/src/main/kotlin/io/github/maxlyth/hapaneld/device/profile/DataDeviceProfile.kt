@@ -3,10 +3,12 @@ package io.github.maxlyth.hapaneld.device.profile
 import io.github.maxlyth.hapaneld.device.DeviceProfile
 import io.github.maxlyth.hapaneld.device.EvdevButton
 import io.github.maxlyth.hapaneld.device.LedMechanism
+import io.github.maxlyth.hapaneld.device.PackageDesiredState
+import io.github.maxlyth.hapaneld.device.PackageIntent
+import io.github.maxlyth.hapaneld.device.ProvisioningImportance
+import io.github.maxlyth.hapaneld.device.ProvisioningIntent
 import io.github.maxlyth.hapaneld.device.ScreenOff
 import io.github.maxlyth.hapaneld.device.SuForm
-import io.github.maxlyth.hapaneld.device.TameCandidate
-import io.github.maxlyth.hapaneld.device.WebViewSpec
 import io.github.maxlyth.hapaneld.hardware.LedTransfer
 import java.security.MessageDigest
 
@@ -25,7 +27,6 @@ class DataDeviceProfile internal constructor(
         else -> SuForm.NONE
     }
     override val appCanSu = document.platform.appCanSu
-    override val shizukuRecommendation = document.platform.shizuku
     override val hasRecents = document.platform.hasRecents
     override val ledMechanism = when (document.hardware.led.mechanism) {
         "rk3576-ioctl" -> LedMechanism.RK3576_IOCTL
@@ -62,21 +63,36 @@ class DataDeviceProfile internal constructor(
         EvdevButton(it.node, it.code, it.grab, it.eventType, it.sw)
     }
     override val cpuGovernors = document.cpu.governors
-    override val recommendedDensity: Int? = when (val density = document.display.recommendedDensity) {
-        is ProfileDensity.Fixed -> density.value
-        is ProfileDensity.Strategy -> when (density.id) {
-            "nspanel-variant" -> if ("120" in productVersion.substringBefore('_')) 250 else 160
-            else -> null
-        }
-        null -> null
-    }
-    override val recommendedFontScale = document.display.recommendedFontScale
     override val physicalPpi = document.display.physicalPpi
-    override val recommendedWebView: WebViewSpec? = document.updates.webViewArtifact?.let(ProfileArtifacts.webViews::get)
-    override val companionMaxVersion = document.updates.companionMaxVersion
-    override val tameVendorCandidates = document.taming.map {
-        TameCandidate(it.packageName, it.tags, it.note, it.defaultTame)
-    }
+    override val provisioning = ProvisioningIntent(
+        shizuku = document.provisioning.access.shizuku,
+        webViewArtifactId = document.provisioning.software.webView?.artifact,
+        companionMaxVersion = document.provisioning.software.companion?.maxVersion,
+        density = when (val density = document.provisioning.display.density) {
+            is ProfileDensity.Fixed -> density.value
+            is ProfileDensity.Strategy -> when (density.id) {
+                "nspanel-variant" -> if ("120" in productVersion.substringBefore('_')) 250 else 160
+                else -> null
+            }
+            null -> null
+        },
+        fontScale = document.provisioning.display.fontScale,
+        packages = document.provisioning.packages.map {
+            PackageIntent(
+                packageName = it.packageName,
+                desiredState = when (it.desiredState) {
+                    ProfilePackageDesiredState.DISABLED -> PackageDesiredState.DISABLED
+                },
+                importance = when (it.importance) {
+                    ProfileProvisioningImportance.RECOMMENDED -> ProvisioningImportance.RECOMMENDED
+                    ProfileProvisioningImportance.OPTIONAL -> ProvisioningImportance.OPTIONAL
+                },
+                tags = it.tags,
+                note = it.note,
+            )
+        },
+        recipeIds = document.provisioning.recipes.mapTo(linkedSetOf()) { it.id },
+    )
 
     override fun proximityGradedForFirmware(productVersion: String): Boolean? =
         if (document.sensors.proximityGradedStrategy == "nspanel-firmware-cutover") {

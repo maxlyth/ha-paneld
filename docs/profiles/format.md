@@ -15,15 +15,15 @@ Every profile contains these conceptual sections:
 | Match | Bounded rules over the panel fingerprint. |
 | Capabilities and drivers | Hardware facts plus compiled driver selections and typed parameters. |
 | Named strategies | Optional core-owned rules for the small set of supported firmware/model-dependent values. |
-| Access guidance | Optional recommendation for standard Android, Shizuku or root/helper setup; never a permission grant. |
+| Provisioning intent | Access guidance, software/display recommendations, package desired state and selected core-owned recipes; never a permission grant. |
 
-Schema 1 has the closed root fields `schema`, `id`, `version`, `display_name`, `soc_class`, `metadata`, `requires`, `match`, `platform`, `hardware`, `sensors`, `identity`, `input`, `cpu`, `display`, `updates` and `taming`. Field names are lowercase `snake_case`; values are case-sensitive unless their field description says otherwise. See the [minimal community example](examples/minimal-community.yaml).
+Schema 2 has the closed root fields `schema`, `id`, `version`, `display_name`, `soc_class`, `metadata`, `requires`, `match`, `platform`, `hardware`, `sensors`, `identity`, `input`, `cpu`, `display` and `provisioning`. Field names are lowercase `snake_case`; values are case-sensitive unless their field description says otherwise. See the [minimal community example](examples/minimal-community.yaml).
 
 The exact allowed enum values and driver/artifact vocabulary are defined by the schema and driver catalog served by the running version. Validate against the same release that will activate the profile.
 
 ## Closed schema
 
-Unknown fields are errors. This catches misspellings that would otherwise silently remove a safety property or leave a capability unconfigured. Schema 1 has no free-form extension area. Put author, HTTPS source, SPDX-style license, `draft`/`experimental`/`verified` maturity, tested firmware and limitations in `metadata`; those values cannot define matching, drivers, access or runtime behavior.
+Unknown fields are errors. This catches misspellings that would otherwise silently remove a safety property or leave a capability unconfigured. Schema 2 is a preview and has no free-form extension area. Put author, HTTPS source, SPDX-style license, `draft`/`experimental`/`verified` maturity, tested firmware and limitations in `metadata`; those values cannot define matching, drivers, access or runtime behavior.
 
 Duplicate YAML keys, aliases and recursive keys are errors. Exactly one YAML document is allowed. YAML tags cannot construct application or Java objects, and profiles cannot contain regular-expression predicates. The loader accepts at most 20 nesting levels, 20,000 parser events, 512 entries in any one map or list, and 16,384 characters in any one string. Keep documents simple and explicit even when a YAML editor supports more elaborate syntax.
 
@@ -43,7 +43,7 @@ The profile content version belongs to the author and changes when the profile's
 
 The schema version belongs to ha-paneld. Authors must not increment it to version their own profile.
 
-## Complete schema-1 field reference
+## Complete schema-2 field reference
 
 “Required” means the key must be present with the stated type. “Optional; default …” means omission—or null for an optional field—produces that value. Unknown keys at every level are errors. All integers must fit a signed 32-bit value before the narrower field range is checked, and all numbers must remain finite when converted to a 32-bit float where the field uses a number.
 
@@ -51,7 +51,7 @@ The schema version belongs to ha-paneld. Authors must not increment it to versio
 
 | Field | Presence | Type and validation |
 | --- | --- | --- |
-| `schema` | Required | Integer; exactly `1`. |
+| `schema` | Required | Integer; exactly `2`. Schema 1 was a proof of concept and is not accepted. |
 | `id` | Required | String, 1–128 characters; lowercase ASCII letters/digits, with `.` or `-` only in the interior; `..` is forbidden. |
 | `version` | Required | Profile content version: exactly three dot-separated components, each `0` or 1–9 digits without a leading zero; optional dot-separated prerelease identifiers made from ASCII letters, digits and `-`; no build-metadata suffix. |
 | `display_name` | Required | Non-blank string, 1–100 characters. |
@@ -65,9 +65,8 @@ The schema version belongs to ha-paneld. Authors must not increment it to versio
 | `identity` | Optional; default `{}` | Mapping; fields below. |
 | `input` | Optional; default `{}` | Mapping; fields below. |
 | `cpu` | Optional; default `{}` | Mapping; fields below. |
-| `display` | Optional; default `{}` | Mapping; fields below. |
-| `updates` | Optional; default `{}` | Mapping; fields below. |
-| `taming` | Optional; default `[]` | List of 0–128 taming objects; fields below. |
+| `display` | Optional; default `{}` | Physical display facts; fields below. |
+| `provisioning` | Required | Provisioning intent mapping; fields below. |
 
 ### `metadata` and `requires`
 
@@ -104,7 +103,6 @@ The schema version belongs to ha-paneld. Authors must not increment it to versio
 | `platform.su_form` | Required | `none`, `android` or `toolbox`. |
 | `platform.app_can_su` | Required | Boolean. Must be `false` when `su_form` is `none`; an `android` or `toolbox` form may still be declared with `false` for a sandbox-walled app. |
 | `platform.has_recents` | Optional; default `true` | Boolean. |
-| `platform.shizuku` | Optional; default `none` | `none`, `optional` or `recommended`; author guidance only, never live readiness or consent. |
 | `hardware.led` | Required | Mapping containing the LED fields below. |
 | `hardware.led.mechanism` | Required | `none`, `autodetect`, `rk3576-ioctl`, `rk3576-ioctl-daemon` or `sysfs-daemon`. Daemon-only mechanisms are rejected when `platform.app_can_su` is `true`. |
 | `hardware.led.transfer` | Optional; default `identity` | `identity` or `rk3576-four-bit`. |
@@ -143,20 +141,27 @@ The schema version belongs to ha-paneld. Authors must not increment it to versio
 | `input.evdev_buttons[].event_type` | Required per item | String of at most 64 characters matching `KEYCODE_[A-Z0-9_]+`. |
 | `input.evdev_buttons[].sw` | Optional; default `false` | Boolean; false selects `EV_KEY`, true selects `EV_SW`. |
 | `cpu.governors` | Optional; default absent | Mapping whose only allowed keys are `Performance`, `Efficiency` and `Auto`. Each value is a 1–32 character governor name matching `[a-z][a-z0-9_-]*`. |
-| `display.recommended_density` | Optional; default absent | Integer 72–1000 dpi, or the named strategy `nspanel-variant`. |
-| `display.recommended_font_scale` | Optional; default absent | Finite number from 0.5 through 3.0. |
 | `display.physical_ppi` | Optional; default absent | Integer 50–1000. |
 
-### `updates` and `taming`
+### `provisioning`
 
 | Field | Presence | Type and validation |
 | --- | --- | --- |
-| `updates.webview_artifact` | Optional; default absent | Core-owned ID `lineageos-138-arm`, `lineageos-150-arm` or `lineageos-150-arm64`. A profile cannot provide the URL, version or signer hash. |
-| `updates.companion_max_version` | Optional; default absent | Dotted release version using the same syntax and 64-character bound as `requires.min_core_version`. |
-| `taming[].package` | Required per item | Unique Android package name matching `[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)+`. |
-| `taming[].tags` | Optional; default `[]` | List of at most eight tags. Each is 1–24 characters, starts with a lowercase ASCII letter and then contains only lowercase letters, digits or `-`. |
-| `taming[].note` | Optional; default empty string | String at most 500 characters. |
-| `taming[].default_tame` | Optional; default `false` | Boolean. It remains a visible suggestion; importing YAML never executes package actions. |
+| `provisioning.access` | Optional; default `{}` | Access recommendation mapping. |
+| `provisioning.access.shizuku` | Optional; default `none` | `none`, `optional` or `recommended`; author guidance only, never live readiness or consent. |
+| `provisioning.software` | Optional; default `{}` | Core-owned software policy mapping. |
+| `provisioning.software.webview.artifact` | Optional; default absent | Core-owned ID `lineageos-138-arm`, `lineageos-150-arm` or `lineageos-150-arm64`. A profile cannot provide the URL, version or signer hash. |
+| `provisioning.software.companion.max_version` | Optional; default absent | Dotted release version using the same syntax and 64-character bound as `requires.min_core_version`. |
+| `provisioning.display.density` | Optional; default absent | Integer 80–640 dpi, or the named strategy `nspanel-variant`. |
+| `provisioning.display.font_scale` | Optional; default absent | Finite number from 0.5 through 1.5. |
+| `provisioning.packages` | Optional; default `[]` | List of 0–128 package desired-state objects. |
+| `provisioning.packages[].package` | Required per item | Unique Android package name matching `[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)+`. |
+| `provisioning.packages[].desired_state` | Required per item | `disabled`. This describes the target state and is not execution consent. |
+| `provisioning.packages[].importance` | Required per item | `recommended` or `optional`. Importance controls presentation only and never means apply by default. |
+| `provisioning.packages[].tags` | Optional; default `[]` | List of at most eight tags. Each is 1–24 characters, starts with a lowercase ASCII letter and then contains only lowercase letters, digits or `-`. |
+| `provisioning.packages[].note` | Optional; default empty string | String at most 500 characters. Notes are supplementary explanations, not procedures. |
+| `provisioning.recipes` | Optional; default `[]` | List of at most 32 core-owned recipe selections. |
+| `provisioning.recipes[].id` | Required per item | Unique registered ID. Schema 2 initially knows `nspanel-pro.watchdog-e2big-repair` and `tpa10.vendor-stack-minimize`. Recipe entries cannot contain arguments, commands, URLs or workflow definitions. |
 
 The three WebView IDs currently resolve inside the core as follows:
 
@@ -168,7 +173,7 @@ The three WebView IDs currently resolve inside the core as follows:
 
 ### Conditional driver requirements
 
-Every driver selected by populated fields must appear in `requires.drivers`. All listed drivers except `screen.brightness-zero` and `sensor.android` are classified as privileged in schema 1.
+Every driver selected by populated fields must appear in `requires.drivers`. All listed drivers except `screen.brightness-zero` and `sensor.android` are classified as privileged in schema 2.
 
 | Profile condition | Required driver |
 | --- | --- |
@@ -189,7 +194,7 @@ Every driver selected by populated fields must appear in `requires.drivers`. All
 | `sensors.proximity_gpio` is present | `sensor.gpio-proximity` |
 | `sensors.cht8305: true` | `sensor.cht8305-daemon` |
 | `input.evdev_buttons` is non-empty | `input.evdev` |
-| `updates.webview_artifact` is present | `update.webview` |
+| `provisioning.software.webview.artifact` is present | `update.webview` |
 
 ### Syntax and storage quotas
 
@@ -222,11 +227,11 @@ Matching chooses a candidate profile; it does not prove a capability. Drivers st
 
 ## Named firmware and model strategies
 
-The v1 schema has no generic expression language or arbitrary conditional patch section. Its named strategies are deliberately small and core-owned:
+The schema has no generic expression language or arbitrary conditional patch section. Its named strategies are deliberately small and core-owned:
 
 - `sensors.proximity_graded_strategy: nspanel-firmware-cutover` applies the documented NSPanel 86P/120P firmware threshold;
 - `identity.model_label_strategy: nspanel-product-version` decodes the NSPanel variant and firmware label;
-- `display.recommended_density: nspanel-variant` selects the documented 86P/120P density;
+- `provisioning.display.density: nspanel-variant` selects the documented 86P/120P density;
 - the default `observed`, `display-name` and fixed integer values avoid those transforms.
 
 `hardware.relay_base_fallbacks` is ordinary bounded data for known supported relay-class renames, not an expression or arbitrary path search.
@@ -237,7 +242,7 @@ Create separate profiles when no named strategy covers the difference, or when t
 
 ## Capabilities and compiled drivers
 
-A capability declaration contains hardware facts and, where needed, a driver ID with typed parameters. Driver IDs name implementations compiled into ha-paneld. The driver owns validation of paths, ranges, event codes, package names and other security-sensitive input. Privileged paths are selected from core allowlists. System WebView updates use `updates.webview_artifact`, whose enum names a URL, version, artifact checksum and signer hash compiled into and audited with the core; a profile cannot redefine that trust root.
+A capability declaration contains hardware facts and, where needed, a driver ID with typed parameters. Driver IDs name implementations compiled into ha-paneld. The driver owns validation of paths, ranges, event codes, package names and other security-sensitive input. Privileged paths are selected from core allowlists. System WebView updates use `provisioning.software.webview.artifact`, whose enum names a URL, version, artifact checksum and signer hash compiled into and audited with the core; a profile cannot redefine that trust root.
 
 Profiles cannot supply:
 
@@ -261,7 +266,7 @@ See [Shizuku enhanced access](../shizuku.md) for the fixed shell-identity subset
 
 ha-paneld treats compatibility failures as inactive profile problems, not panel-startup failures:
 
-- Schema `1` is the only v1 document language. An older or future schema is rejected with the required core/schema information; it is never guessed at or silently reinterpreted.
+- Schema `2` is the only accepted document language. Stored schema-1 proof-of-concept revisions remain listable, exportable and deletable but cannot activate; a selected incompatible revision falls back to a compatible schema-2 last-known-good, matching bundled profile or Generic.
 - An unknown required driver or transform prevents activation.
 - Installed local revisions are revalidated after an app update.
 - The original YAML and its content hash remain identifiable after validation and normalization.

@@ -314,6 +314,29 @@ class RuntimeProfileRegistryTest {
         assertTrue(registry.deleteProfile(ref, registry.status().catalogRevision) is ProfileMutation.Success)
     }
 
+    @Test fun `stored schema 1 pin falls back but remains exportable and deletable`() {
+        val raw = legacySchemaOneYaml()
+        val ref = ProfileRef("community.example.legacy-v1", ProfileYaml.sha256(raw))
+        importedFile(ref).apply { parentFile!!.mkdirs() }.writeText(raw)
+        preferences.put(
+            "selection" to "${ref.id}@${ref.revision}",
+            "activation_phase" to ProfileActivationPhase.ACTIVE.name,
+        )
+        val registry = registry(mapOf("generic.yaml" to genericYaml()))
+
+        val stored = registry.list().single { it.ref == ref }
+        assertFalse(stored.compatible)
+        assertEquals(raw, registry.exportProfile(ref))
+
+        val recovered = registry.resolveForStartup()
+        assertEquals("generic", recovered.profile.id)
+        assertEquals(ProfileSelection.Auto, registry.status().selection)
+        assertEquals(ProfileActivationPhase.ROLLED_BACK, registry.status().activation.phase)
+
+        assertTrue(registry.deleteProfile(ref, registry.status().catalogRevision) is ProfileMutation.Success)
+        assertNull(registry.exportProfile(ref))
+    }
+
     private fun registry(bundled: Map<String, String>) = RuntimeProfileRegistry(
         filesDir = directory,
         preferences = preferences,
@@ -339,6 +362,42 @@ class RuntimeProfileRegistryTest {
             requires = ProfileRequirements(drivers = setOf("screen.brightness-zero", "led.removed-driver")),
         ),
     )
+
+    private fun legacySchemaOneYaml(): String = """
+        schema: 1
+        id: community.example.legacy-v1
+        version: 1.0.0
+        display_name: Legacy proof of concept
+        soc_class: Unknown
+        metadata:
+          author: Test author
+          license: MIT
+          maturity: draft
+        requires:
+          drivers:
+            - screen.brightness-zero
+        match:
+          priority: 500
+          fallback: false
+          any:
+            - priority: 900
+              all:
+                - field: model
+                  op: equals
+                  values:
+                    - test-panel
+        platform:
+          su_form: none
+          app_can_su: false
+          has_recents: true
+          shizuku: optional
+        hardware:
+          led:
+            mechanism: none
+          screen_off: brightness-zero
+        updates: {}
+        taming: []
+    """.trimIndent() + "\n"
 
     private fun restore(raw: String): ProfileRef {
         val parsed = ProfileYaml.parse(raw).document!!

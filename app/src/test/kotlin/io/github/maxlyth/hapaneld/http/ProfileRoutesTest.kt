@@ -101,7 +101,7 @@ class ProfileRoutesTest {
             }.status,
         )
 
-        val yaml = "schema: 1\nid: imported.test\n"
+        val yaml = "schema: 2\nid: imported.test\n"
         val previewResponse = client.post("/api/v1/profiles/preview") {
             contentType(ContentType.parse("application/yaml"))
             setBody(yaml)
@@ -236,8 +236,8 @@ class ProfileRoutesTest {
                         ProfileRouteDependencies(
                             admin,
                             readOnly = ProfileRouteReadOnlyProviders(
-                                template = { "schema: 1\n" },
-                                deviceDraft = { PassiveProfileDraft("schema: 1\n# TODO\n", report, emptyList()) },
+                                template = { "schema: 2\n" },
+                                deviceDraft = { PassiveProfileDraft("schema: 2\n# TODO\n", report, emptyList()) },
                                 latestReport = { report },
                                 probe = { probes++; report },
                             ),
@@ -247,12 +247,12 @@ class ProfileRoutesTest {
             }
         }
 
-        assertEquals("schema: 1\n", client.get("/api/v1/profiles/template").bodyAsText())
-        assertEquals("schema: 1\n# TODO\n", client.get("/api/v1/profiles/device-draft").bodyAsText())
+        assertEquals("schema: 2\n", client.get("/api/v1/profiles/template").bodyAsText())
+        assertEquals("schema: 2\n# TODO\n", client.get("/api/v1/profiles/device-draft").bodyAsText())
         val latest = JSONObject(client.get("/api/v1/profiles/report").bodyAsText())
         assertEquals("observed", latest.getJSONArray("items").getJSONObject(0).getString("status"))
         val probe = client.post("/api/v1/profiles/probe") {
-            contentType(ContentType.parse("application/yaml")); setBody("schema: 1\n")
+            contentType(ContentType.parse("application/yaml")); setBody("schema: 2\n")
         }
         assertEquals(HttpStatusCode.OK, probe.status)
         assertNotNull(JSONObject(probe.bodyAsText()).getJSONObject("report"))
@@ -265,7 +265,7 @@ class ProfileRoutesTest {
     private class FakeProfileAdmin : ProfileAdmin {
         val bundled = summary("generic", "b".repeat(64), ProfileOrigin.BUNDLED, active = true)
         var local = summary("local.test", "a".repeat(64), ProfileOrigin.IMPORTED, selected = true)
-        val bundledYaml = "schema: 1\nid: generic\n"
+        val bundledYaml = "schema: 2\nid: generic\n"
         var importedYaml: String? = null
         val selections = mutableListOf<ProfileSelection>()
         var deleted: ProfileRef? = null

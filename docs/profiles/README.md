@@ -76,7 +76,7 @@ Assign each exact group a higher branch priority than its broad fallback. ha-pan
 
 Community/imported revisions never participate in automatic selection, even when their match is exact. Matching is preview evidence that helps the administrator decide whether the file describes this panel. A local revision can override bundled detection only through an explicit activation, after which the panel pins its exact profile ID, revision and hash. A later import therefore cannot change the running result implicitly.
 
-Use a named core-owned strategy field for a supported difference within one hardware family, such as the documented NSPanel firmware proximity cutover, product label or density rule. The v1 format does not contain a general expression language or arbitrary variant patching. Use separate profiles when the available named strategies cannot describe the difference, or when products select materially different hardware drivers, privilege boundaries or recovery behavior.
+Use a named core-owned strategy field for a supported difference within one hardware family, such as the documented NSPanel firmware proximity cutover, product label or density rule. The format does not contain a general expression language or arbitrary variant patching. Use separate profiles when the available named strategies cannot describe the difference, or when products select materially different hardware drivers, privilege boundaries or recovery behavior.
 
 ## Authority: standard Android, Shizuku and root
 
@@ -104,7 +104,7 @@ Profile content versions and document schema versions solve different problems. 
 
 Before saving an update, compare it with the active revision and read the compatibility report. A ha-paneld update also revalidates installed profiles before use. A file that requires a newer core, an unavailable driver or an unsupported future schema remains installed but cannot become active; the current last-known-good profile continues to run.
 
-Treat a change to matching, a privileged driver, a path, firmware variant, package recommendation, core-owned update artifact or default as behaviorally significant even when the YAML diff is small. Repeat the relevant testing stages and bump the profile version.
+Treat a change to matching, a privileged driver, a path, firmware variant, package desired state, recipe selection or core-owned update artifact as behaviorally significant even when the YAML diff is small. Repeat the relevant testing stages and bump the profile version.
 
 ## Next steps
 

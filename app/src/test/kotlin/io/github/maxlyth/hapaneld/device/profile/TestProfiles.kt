@@ -6,7 +6,7 @@ internal fun testProfileDocument(
     facts: DeviceFacts = DeviceFacts("test-panel", "test-device", "fw-1"),
     fallback: Boolean = false,
 ) = ProfileDocument(
-    schema = 1,
+    schema = ProfileMetadata.SCHEMA,
     id = id,
     version = version,
     displayName = "Test panel",
@@ -30,13 +30,14 @@ internal fun testProfileDocument(
             ),
         ),
     ),
-    platform = ProfilePlatform("none", appCanSu = false, shizuku = ShizukuRecommendation.OPTIONAL),
+    platform = ProfilePlatform("none", appCanSu = false),
     hardware = ProfileHardware(ProfileLed("none"), "brightness-zero"),
     sensors = ProfileSensors(),
     identity = ProfileIdentity(),
     input = ProfileInput(),
     cpu = ProfileCpu(),
     display = ProfileDisplay(),
-    updates = ProfileUpdates(),
-    taming = emptyList(),
+    provisioning = ProfileProvisioning(
+        access = ProfileProvisioningAccess(shizuku = ShizukuRecommendation.OPTIONAL),
+    ),
 )

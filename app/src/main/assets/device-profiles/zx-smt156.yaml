@@ -1,6 +1,6 @@
-schema: 1
+schema: 2
 id: zx-smt156
-version: 1.0.0
+version: 2.0.0
 display_name: ZX-SMT156 / RK3566_T
 soc_class: Rockchip rk3566
 metadata:
@@ -41,7 +41,6 @@ platform:
   su_form: none
   app_can_su: false
   has_recents: true
-  shizuku: recommended
 hardware:
   led:
     mechanism: rk3576-ioctl
@@ -60,5 +59,10 @@ input:
   evdev_buttons: []
 cpu: {}
 display: {}
-updates: {}
-taming: []
+provisioning:
+  access:
+    shizuku: recommended
+  software: {}
+  display: {}
+  packages: []
+  recipes: []

@@ -17,7 +17,7 @@ class ProfileYamlSecurityTest {
     }
 
     @Test fun `duplicate keys are rejected`() {
-        val raw = ProfileYaml.serialize(testProfileDocument()).replaceFirst("schema: 1", "schema: 1\nschema: 1")
+        val raw = ProfileYaml.serialize(testProfileDocument()).replaceFirst("schema: 2", "schema: 2\nschema: 2")
         assertRejected(raw)
     }
 
@@ -86,21 +86,31 @@ class ProfileYamlSecurityTest {
 
     @Test fun `profile cannot supply an apk trust root`() {
         val raw = ProfileYaml.serialize(testProfileDocument()).replace(
-            "updates: {}",
-            "updates:\n  webview:\n    url: https://evil.example/app.apk\n    version: 1.0.0\n    cert_sha256: ${"0".repeat(64)}",
+            "software: {}",
+            "software:\n    webview:\n      artifact: lineageos-150-arm64\n      url: https://evil.example/app.apk\n      cert_sha256: ${"0".repeat(64)}",
         )
         assertRejected(raw)
         val unknown = testProfileDocument().copy(
             requires = ProfileRequirements(drivers = setOf("screen.brightness-zero", "update.webview")),
-            updates = ProfileUpdates(webViewArtifact = "third-party-apk"),
+            provisioning = testProfileDocument().provisioning.copy(
+                software = ProfileProvisioningSoftware(
+                    webView = ProfileWebViewProvisioning("third-party-apk"),
+                ),
+            ),
         )
-        assertTrue(ProfileValidator.validate(unknown, "1.0.0", bundled = false).any { it.path == "updates.webview_artifact" })
+        assertTrue(ProfileValidator.validate(unknown, "1.0.0", bundled = false).any {
+            it.path == "provisioning.software.webview.artifact"
+        })
     }
 
     @Test fun `known core webview artifact resolves compiled trust data`() {
         val document = testProfileDocument().copy(
             requires = ProfileRequirements(drivers = setOf("screen.brightness-zero", "update.webview")),
-            updates = ProfileUpdates(webViewArtifact = "lineageos-150-arm64"),
+            provisioning = testProfileDocument().provisioning.copy(
+                software = ProfileProvisioningSoftware(
+                    webView = ProfileWebViewProvisioning("lineageos-150-arm64"),
+                ),
+            ),
         )
         assertTrue(ProfileValidator.validate(document, "1.0.0", bundled = false).isEmpty())
         assertEquals(ProfileArtifacts.webViews["lineageos-150-arm64"], DataDeviceProfile(document, "").recommendedWebView)
@@ -108,13 +118,53 @@ class ProfileYamlSecurityTest {
 
     @Test fun `display recommendations stay within controller bounds`() {
         val density = testProfileDocument().copy(
-            display = ProfileDisplay(recommendedDensity = ProfileDensity.Fixed(641), recommendedFontScale = 1.51f),
+            provisioning = testProfileDocument().provisioning.copy(
+                display = ProfileProvisioningDisplay(
+                    density = ProfileDensity.Fixed(641),
+                    fontScale = 1.51f,
+                ),
+            ),
         )
 
         val issues = ProfileValidator.validate(density, "1.0.0", bundled = false)
 
-        assertTrue(issues.any { it.path == "display.recommended_density" })
-        assertTrue(issues.any { it.path == "display.recommended_font_scale" })
+        assertTrue(issues.any { it.path == "provisioning.display.density" })
+        assertTrue(issues.any { it.path == "provisioning.display.font_scale" })
+    }
+
+    @Test fun `schema 1 locations are not interpreted by schema 2`() {
+        val serialized = ProfileYaml.serialize(testProfileDocument())
+        assertRejected(serialized.replace("schema: 2", "schema: 1"))
+        assertRejected(serialized.replace(
+            "has_recents: true",
+            "has_recents: true\n  shizuku: recommended",
+        ))
+        assertRejected(serialized + "updates: {}\n")
+        assertRejected(serialized + "taming: []\n")
+    }
+
+    @Test fun `recipes are core owned argument free and unique`() {
+        val known = testProfileDocument().copy(
+            provisioning = testProfileDocument().provisioning.copy(
+                recipes = listOf(ProfileRecipeSelection("tpa10.vendor-stack-minimize")),
+            ),
+        )
+        assertTrue(ProfileValidator.validate(known, "1.0.0", bundled = false).isEmpty())
+
+        val unknown = known.copy(
+            provisioning = known.provisioning.copy(
+                recipes = listOf(ProfileRecipeSelection("community.shell-command")),
+            ),
+        )
+        assertTrue(ProfileValidator.validate(unknown, "1.0.0", bundled = false).any {
+            it.path == "provisioning.recipes[0].id"
+        })
+
+        val raw = ProfileYaml.serialize(known).replace(
+            "id: tpa10.vendor-stack-minimize",
+            "id: tpa10.vendor-stack-minimize\n      command: reboot",
+        )
+        assertRejected(raw)
     }
 
     @Test fun `sandbox walled profile cannot declare su polled gpio proximity`() {

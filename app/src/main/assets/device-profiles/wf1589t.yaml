@@ -1,6 +1,6 @@
-schema: 1
+schema: 2
 id: wf1589t
-version: 1.0.0
+version: 2.0.0
 display_name: Electron WF1589T
 soc_class: rk3576
 metadata:
@@ -41,7 +41,6 @@ platform:
   su_form: android
   app_can_su: true
   has_recents: true
-  shizuku: optional
 hardware:
   led:
     mechanism: rk3576-ioctl
@@ -69,41 +68,51 @@ cpu:
     Efficiency: powersave
     Auto: schedutil
 display:
-  recommended_density: 212
   physical_ppi: 226
-updates: {}
-taming:
+provisioning:
+  access:
+    shizuku: optional
+  software: {}
+  display:
+    density: 212
+  packages:
   - package: com.cghs.stresstest
+    desired_state: disabled
+    importance: optional
     tags:
       - vendor
       - test
       - clutter
     note: 'Factory hardware stress-test ("burn-in") tool (label "Stresstest", priv-app). Production-line QA; not used in normal operation.'
-    default_tame: false
   - package: com.DeviceTest
+    desired_state: disabled
+    importance: optional
     tags:
       - chipset
       - test
       - clutter
     note: Generic factory device-test app left in the firmware image. Diagnostic only.
-    default_tame: false
   - package: com.rockchip.devicetest
+    desired_state: disabled
+    importance: optional
     tags:
       - chipset
       - test
       - clutter
     note: Rockchip (rk3576 SoC) factory device-test suite. Diagnostic only; not used in normal operation.
-    default_tame: false
   - package: com.gulukai.pwmlightdemo
+    desired_state: disabled
+    importance: recommended
     tags:
       - vendor
       - demo
       - clutter
     note: 'Vendor RGB LED demo app (label "PwmLightDemo"). Its boot-started foreground service continuously cycles colours through /dev/ledjni, conflicting with ha-paneld LED control; safe to disable.'
-    default_tame: true
   - package: com.elclcd.otaupdater
+    desired_state: disabled
+    importance: optional
     tags:
       - vendor
       - ota
     note: 'ELC "Firmware Upgrade" vendor OTA updater. Disable to stop the panel auto-applying vendor firmware updates that can re-add bloat.'
-    default_tame: false
+  recipes: []

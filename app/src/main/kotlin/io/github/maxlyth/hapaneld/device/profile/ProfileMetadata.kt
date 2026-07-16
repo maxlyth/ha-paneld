@@ -2,7 +2,7 @@ package io.github.maxlyth.hapaneld.device.profile
 
 /** Core-owned vocabulary available to untrusted profile files. */
 object ProfileMetadata {
-    const val SCHEMA = 1
+    const val SCHEMA = 2
     const val MAX_BYTES = 128 * 1024
     const val MAX_DEPTH = 20
     const val MAX_COLLECTION_SIZE = 512
@@ -32,11 +32,17 @@ object ProfileMetadata {
         ProfileDriverDescriptor("update.webview", ProfileDriverKind.UPDATE, "Core-owned System WebView artifacts: ${ProfileArtifacts.webViews.keys.sorted().joinToString()}", true),
     )
 
+    /** Core-owned workflow identifiers selectable by schema 2. Profiles cannot define recipe behavior. */
+    val recipes: Set<String> = setOf(
+        "nspanel-pro.watchdog-e2big-repair",
+        "tpa10.vendor-stack-minimize",
+    )
+
     val schema: ProfileSchemaDescriptor = ProfileSchemaDescriptor(
         schema = SCHEMA,
         maxBytes = MAX_BYTES,
         fields = listOf(
-            field("schema", "integer", true, "Profile schema version; currently 1."),
+            field("schema", "integer", true, "Profile schema version; schema 2 is the current preview."),
             field("id", "slug", true, "Stable lowercase letters/digits with interior dots or hyphens."),
             field("version", "version", true, "Semantic version of this profile's content."),
             field("display_name", "string", true, "Human-readable panel name."),
@@ -58,7 +64,6 @@ object ProfileMetadata {
             field("platform.su_form", "enum", true, "Supported su calling convention.", listOf("none", "android", "toolbox")),
             field("platform.app_can_su", "boolean", true, "Whether an ordinary app can attempt su."),
             field("platform.has_recents", "boolean", false, "Whether Android Recents is functional."),
-            field("platform.shizuku", "enum", false, "Author recommendation only, never live readiness.", listOf("none", "optional", "recommended")),
             field("hardware.led.mechanism", "enum", true, "Built-in LED route.", listOf("none", "autodetect", "rk3576-ioctl", "rk3576-ioctl-daemon", "sysfs-daemon")),
             field("hardware.led.transfer", "enum", true, "Core-owned LED transfer function.", listOf("identity", "rk3576-four-bit")),
             field("hardware.screen_off", "enum", true, "Preferred screen-off route.", listOf("brightness-zero", "su-blpower", "daemon-blpower")),
@@ -81,12 +86,18 @@ object ProfileMetadata {
             field("identity.model_label_strategy", "enum", false, "Core-owned local label strategy.", listOf("display-name", "nspanel-product-version")),
             field("input.evdev_buttons[]", "object[]", false, "Supported helper-backed evdev mappings."),
             field("cpu.governors", "map<string,string>", false, "HA CPU tier to Linux governor mapping."),
-            field("display.recommended_density", "integer|strategy", false, "Fixed dpi or nspanel-variant strategy."),
-            field("display.recommended_font_scale", "number", false, "Recommended WebView text scale."),
             field("display.physical_ppi", "integer", false, "Author-evidenced physical pixel density."),
-            field("updates.webview_artifact", "enum", false, "Core-owned APK artifact and signer trust root.", ProfileArtifacts.webViews.keys.sorted()),
-            field("updates.companion_max_version", "version", false, "Newest known-good Companion version."),
-            field("taming[]", "object[]", false, "Annotated suggestions; never automatically executed by import."),
+            field("provisioning.access.shizuku", "enum", false, "Author recommendation only, never live readiness or consent.", listOf("none", "optional", "recommended")),
+            field("provisioning.software.webview.artifact", "enum", false, "Core-owned APK artifact and signer trust root.", ProfileArtifacts.webViews.keys.sorted()),
+            field("provisioning.software.companion.max_version", "version", false, "Newest known-good Companion version."),
+            field("provisioning.display.density", "integer|strategy", false, "Recommended fixed dpi or nspanel-variant strategy."),
+            field("provisioning.display.font_scale", "number", false, "Recommended WebView text scale."),
+            field("provisioning.packages[].package", "package-name", true, "Android package whose desired state is declared."),
+            field("provisioning.packages[].desired_state", "enum", true, "Desired package state; never implicit consent.", listOf("disabled")),
+            field("provisioning.packages[].importance", "enum", true, "Presentation priority only.", listOf("recommended", "optional")),
+            field("provisioning.packages[].tags", "string[]", false, "Bounded classifier labels."),
+            field("provisioning.packages[].note", "string", false, "Bounded explanatory note; never procedure text."),
+            field("provisioning.recipes[].id", "enum", true, "Core-owned provisioning recipe id; no arguments or commands.", recipes.sorted()),
         ),
     )
 

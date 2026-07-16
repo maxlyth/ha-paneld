@@ -148,7 +148,7 @@ internal object ProfileYaml {
 
     private val ROOT_KEYS = setOf(
         "schema", "id", "version", "display_name", "soc_class", "metadata", "requires", "match", "platform", "hardware",
-        "sensors", "identity", "input", "cpu", "display", "updates", "taming",
+        "sensors", "identity", "input", "cpu", "display", "provisioning",
     )
 
     private const val MAX_EVENTS = 20_000
@@ -161,7 +161,7 @@ private class SchemaReader(private val issues: MutableList<ProfileIssue>) {
         ), required = true).orEmpty()
         val requires = map(root["requires"], "requires", setOf("min_core_version", "drivers"), required = true).orEmpty()
         val match = map(root["match"], "match", setOf("priority", "fallback", "any"), required = true).orEmpty()
-        val platform = map(root["platform"], "platform", setOf("su_form", "app_can_su", "has_recents", "shizuku"), required = true).orEmpty()
+        val platform = map(root["platform"], "platform", setOf("su_form", "app_can_su", "has_recents"), required = true).orEmpty()
         val hardware = map(root["hardware"], "hardware", setOf(
             "led", "screen_off", "has_button_backlight", "zigbee_gateway_dir", "relay_base",
             "relay_base_fallbacks", "button_led_gpio_base",
@@ -174,10 +174,44 @@ private class SchemaReader(private val issues: MutableList<ProfileIssue>) {
         val identity = map(root["identity"], "identity", setOf("manufacturer", "model", "model_label_strategy")).orEmpty()
         val input = map(root["input"], "input", setOf("evdev_buttons")).orEmpty()
         val cpu = map(root["cpu"], "cpu", setOf("governors")).orEmpty()
-        val display = map(root["display"], "display", setOf("recommended_density", "recommended_font_scale", "physical_ppi")).orEmpty()
-        val updates = map(root["updates"], "updates", setOf("webview_artifact", "companion_max_version")).orEmpty()
+        val display = map(root["display"], "display", setOf("physical_ppi")).orEmpty()
+        val provisioning = map(
+            root["provisioning"],
+            "provisioning",
+            setOf("access", "software", "display", "packages", "recipes"),
+            required = true,
+        ).orEmpty()
+        val provisioningAccess = map(
+            provisioning["access"],
+            "provisioning.access",
+            setOf("shizuku"),
+        ).orEmpty()
+        val provisioningSoftware = map(
+            provisioning["software"],
+            "provisioning.software",
+            setOf("webview", "companion"),
+        ).orEmpty()
+        val provisioningWebView = map(
+            provisioningSoftware["webview"],
+            "provisioning.software.webview",
+            setOf("artifact"),
+        )
+        val provisioningCompanion = map(
+            provisioningSoftware["companion"],
+            "provisioning.software.companion",
+            setOf("max_version"),
+        )
+        val provisioningDisplay = map(
+            provisioning["display"],
+            "provisioning.display",
+            setOf("density", "font_scale"),
+        ).orEmpty()
+        val schema = integer(root, "schema", "$", required = true) ?: 0
+        if (schema != ProfileMetadata.SCHEMA) {
+            issues += error("schema", "Unsupported schema $schema; expected ${ProfileMetadata.SCHEMA}.")
+        }
         return ProfileDocument(
-            schema = integer(root, "schema", "$", required = true) ?: 0,
+            schema = schema,
             id = string(root, "id", "$", required = true).orEmpty(),
             version = string(root, "version", "$", required = true).orEmpty(),
             displayName = string(root, "display_name", "$", required = true).orEmpty(),
@@ -204,8 +238,6 @@ private class SchemaReader(private val issues: MutableList<ProfileIssue>) {
                 suForm = string(platform, "su_form", "platform", required = true).orEmpty(),
                 appCanSu = boolean(platform, "app_can_su", "platform", required = true) ?: false,
                 hasRecents = boolean(platform, "has_recents", "platform") ?: true,
-                shizuku = enum(platform, "shizuku", "platform", ShizukuRecommendation.entries, "none") { it.name.lowercase() }
-                    ?: ShizukuRecommendation.NONE,
             ),
             hardware = ProfileHardware(
                 led = ProfileLed(
@@ -237,16 +269,46 @@ private class SchemaReader(private val issues: MutableList<ProfileIssue>) {
             ),
             input = ProfileInput(evdevButtons(input["evdev_buttons"])),
             cpu = ProfileCpu(governors(cpu["governors"])),
-            display = ProfileDisplay(
-                recommendedDensity = density(display["recommended_density"]),
-                recommendedFontScale = float(display, "recommended_font_scale", "display"),
-                physicalPpi = integer(display, "physical_ppi", "display"),
+            display = ProfileDisplay(physicalPpi = integer(display, "physical_ppi", "display")),
+            provisioning = ProfileProvisioning(
+                access = ProfileProvisioningAccess(
+                    shizuku = enum(
+                        provisioningAccess,
+                        "shizuku",
+                        "provisioning.access",
+                        ShizukuRecommendation.entries,
+                        "none",
+                    ) { it.name.lowercase() } ?: ShizukuRecommendation.NONE,
+                ),
+                software = ProfileProvisioningSoftware(
+                    webView = provisioningWebView?.let {
+                        ProfileWebViewProvisioning(
+                            artifact = string(
+                                it,
+                                "artifact",
+                                "provisioning.software.webview",
+                                required = true,
+                            ).orEmpty(),
+                        )
+                    },
+                    companion = provisioningCompanion?.let {
+                        ProfileCompanionProvisioning(
+                            maxVersion = string(
+                                it,
+                                "max_version",
+                                "provisioning.software.companion",
+                                required = true,
+                            ).orEmpty(),
+                        )
+                    },
+                ),
+                display = ProfileProvisioningDisplay(
+                    density = density(provisioningDisplay["density"]),
+                    fontScale = float(provisioningDisplay, "font_scale", "provisioning.display"),
+                ),
+                packages = packageIntents(provisioning["packages"]),
+                recipes = recipeSelections(provisioning["recipes"]),
             ),
-            updates = ProfileUpdates(
-                webViewArtifact = string(updates, "webview_artifact", "updates"),
-                companionMaxVersion = string(updates, "companion_max_version", "updates"),
-            ),
-            taming = tameCandidates(root["taming"]),
         )
     }
 
@@ -280,16 +342,44 @@ private class SchemaReader(private val issues: MutableList<ProfileIssue>) {
         )
     }
 
-    private fun tameCandidates(value: Any?): List<ProfileTameCandidate> = list(value, "taming").mapIndexed { index, item ->
-        val path = "taming[$index]"
-        val map = map(item, path, setOf("package", "tags", "note", "default_tame"), required = true).orEmpty()
-        ProfileTameCandidate(
+    private fun packageIntents(value: Any?): List<ProfilePackageIntent> =
+        list(value, "provisioning.packages").mapIndexed { index, item ->
+        val path = "provisioning.packages[$index]"
+        val map = map(
+            item,
+            path,
+            setOf("package", "desired_state", "importance", "tags", "note"),
+            required = true,
+        ).orEmpty()
+        ProfilePackageIntent(
             packageName = string(map, "package", path, required = true).orEmpty(),
+            desiredState = enum(
+                map,
+                "desired_state",
+                path,
+                ProfilePackageDesiredState.entries,
+                null,
+                ProfilePackageDesiredState::yamlName,
+            ) ?: ProfilePackageDesiredState.DISABLED,
+            importance = enum(
+                map,
+                "importance",
+                path,
+                ProfileProvisioningImportance.entries,
+                null,
+                ProfileProvisioningImportance::yamlName,
+            ) ?: ProfileProvisioningImportance.OPTIONAL,
             tags = stringList(map["tags"], "$path.tags"),
             note = string(map, "note", path) ?: "",
-            defaultTame = boolean(map, "default_tame", path) ?: false,
         )
     }
+
+    private fun recipeSelections(value: Any?): List<ProfileRecipeSelection> =
+        list(value, "provisioning.recipes").mapIndexed { index, item ->
+            val path = "provisioning.recipes[$index]"
+            val map = map(item, path, setOf("id"), required = true).orEmpty()
+            ProfileRecipeSelection(id = string(map, "id", path, required = true).orEmpty())
+        }
 
     private fun governors(value: Any?): Map<String, String>? {
         if (value == null) return null
@@ -307,12 +397,12 @@ private class SchemaReader(private val issues: MutableList<ProfileIssue>) {
         is Number -> if (value.toDouble().isFinite() && value.toDouble() % 1.0 == 0.0 && value.toLong() in Int.MIN_VALUE..Int.MAX_VALUE) {
             ProfileDensity.Fixed(value.toInt())
         } else {
-            issues += error("display.recommended_density", "Expected a 32-bit integer or named strategy.")
+            issues += error("provisioning.display.density", "Expected a 32-bit integer or named strategy.")
             null
         }
         is String -> ProfileDensity.Strategy(value)
         else -> {
-            issues += error("display.recommended_density", "Expected an integer or named strategy.")
+            issues += error("provisioning.display.density", "Expected an integer or named strategy.")
             null
         }
     }
@@ -462,7 +552,6 @@ internal fun ProfileDocument.toYamlMap(): Map<String, Any?> = linkedMapOf(
         "su_form" to platform.suForm,
         "app_can_su" to platform.appCanSu,
         "has_recents" to platform.hasRecents,
-        "shizuku" to platform.shizuku.name.lowercase(),
     ),
     "hardware" to linkedMapOf(
         "led" to linkedMapOf("mechanism" to hardware.led.mechanism, "transfer" to hardware.led.transfer),
@@ -493,27 +582,38 @@ internal fun ProfileDocument.toYamlMap(): Map<String, Any?> = linkedMapOf(
         linkedMapOf("node" to it.node, "code" to it.code, "grab" to it.grab, "event_type" to it.eventType, "sw" to it.sw)
     }),
     "cpu" to linkedMapOf("governors" to cpu.governors).withoutNullValues(),
-    "display" to linkedMapOf(
-        "recommended_density" to when (val density = display.recommendedDensity) {
-            is ProfileDensity.Fixed -> density.value
-            is ProfileDensity.Strategy -> density.id
-            null -> null
+    "display" to linkedMapOf("physical_ppi" to display.physicalPpi).withoutNullValues(),
+    "provisioning" to linkedMapOf(
+        "access" to linkedMapOf(
+            "shizuku" to provisioning.access.shizuku.name.lowercase(),
+        ),
+        "software" to linkedMapOf(
+            "webview" to provisioning.software.webView?.let {
+                linkedMapOf("artifact" to it.artifact)
+            },
+            "companion" to provisioning.software.companion?.let {
+                linkedMapOf("max_version" to it.maxVersion)
+            },
+        ).withoutNullValues(),
+        "display" to linkedMapOf(
+            "density" to when (val density = provisioning.display.density) {
+                is ProfileDensity.Fixed -> density.value
+                is ProfileDensity.Strategy -> density.id
+                null -> null
+            },
+            "font_scale" to provisioning.display.fontScale,
+        ).withoutNullValues(),
+        "packages" to provisioning.packages.map {
+            linkedMapOf(
+                "package" to it.packageName,
+                "desired_state" to it.desiredState.yamlName,
+                "importance" to it.importance.yamlName,
+                "tags" to it.tags,
+                "note" to it.note,
+            )
         },
-        "recommended_font_scale" to display.recommendedFontScale,
-        "physical_ppi" to display.physicalPpi,
-    ).withoutNullValues(),
-    "updates" to linkedMapOf(
-        "webview_artifact" to updates.webViewArtifact,
-        "companion_max_version" to updates.companionMaxVersion,
-    ).withoutNullValues(),
-    "taming" to taming.map {
-        linkedMapOf(
-            "package" to it.packageName,
-            "tags" to it.tags,
-            "note" to it.note,
-            "default_tame" to it.defaultTame,
-        )
-    },
+        "recipes" to provisioning.recipes.map { linkedMapOf("id" to it.id) },
+    ),
 )
 
 private fun <K, V> LinkedHashMap<K, V?>.withoutNullValues(): LinkedHashMap<K, V> {

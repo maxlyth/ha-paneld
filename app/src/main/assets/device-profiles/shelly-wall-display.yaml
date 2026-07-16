@@ -1,6 +1,6 @@
-schema: 1
+schema: 2
 id: shelly-wall-display
-version: 1.0.0
+version: 2.0.0
 display_name: Shelly Wall Display (legacy)
 soc_class: MediaTek MT6580
 metadata:
@@ -68,7 +68,6 @@ platform:
   su_form: none
   app_can_su: false
   has_recents: true
-  shizuku: recommended
 hardware:
   led:
     mechanism: none
@@ -88,5 +87,10 @@ input:
   evdev_buttons: []
 cpu: {}
 display: {}
-updates: {}
-taming: []
+provisioning:
+  access:
+    shizuku: recommended
+  software: {}
+  display: {}
+  packages: []
+  recipes: []

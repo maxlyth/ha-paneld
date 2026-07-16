@@ -94,12 +94,14 @@ internal object ProfileValidator {
         if (document.identity.modelLabelStrategy !in setOf("display-name", "nspanel-product-version")) reject("identity.model_label_strategy", "Unknown core strategy.")
         boundedText(document.identity.manufacturer, "identity.manufacturer")
         boundedText(document.identity.model, "identity.model")
-        when (val density = document.display.recommendedDensity) {
-            is ProfileDensity.Fixed -> if (density.value !in 80..640) reject("display.recommended_density", "Density must be between 80 and 640 dpi.")
-            is ProfileDensity.Strategy -> if (density.id != "nspanel-variant") reject("display.recommended_density", "Unknown core strategy '${density.id}'.")
+        when (val density = document.provisioning.display.density) {
+            is ProfileDensity.Fixed -> if (density.value !in 80..640) reject("provisioning.display.density", "Density must be between 80 and 640 dpi.")
+            is ProfileDensity.Strategy -> if (density.id != "nspanel-variant") reject("provisioning.display.density", "Unknown core strategy '${density.id}'.")
             null -> Unit
         }
-        document.display.recommendedFontScale?.let { if (it !in 0.5f..1.5f) reject("display.recommended_font_scale", "Font scale must be between 0.5 and 1.5.") }
+        document.provisioning.display.fontScale?.let {
+            if (it !in 0.5f..1.5f) reject("provisioning.display.font_scale", "Font scale must be between 0.5 and 1.5.")
+        }
         document.display.physicalPpi?.let { if (it !in 50..1000) reject("display.physical_ppi", "Physical PPI must be between 50 and 1000.") }
         if (document.input.evdevButtons.size > 32) reject("input.evdev_buttons", "At most 32 evdev mappings are allowed.")
         val evdevCodes = mutableSetOf<Pair<Boolean, Int>>()
@@ -116,20 +118,33 @@ internal object ProfileValidator {
             if (tier !in setOf("Performance", "Efficiency", "Auto")) reject("cpu.governors.$tier", "Unknown HA CPU tier.")
             if (!Regex("^[a-z][a-z0-9_-]{0,31}$").matches(governor)) reject("cpu.governors.$tier", "Invalid Linux governor name.")
         }
-        document.updates.webViewArtifact?.let { artifact ->
-            if (artifact !in ProfileArtifacts.webViews) reject("updates.webview_artifact", "Unknown core-owned WebView artifact '$artifact'.")
+        document.provisioning.software.webView?.artifact?.let { artifact ->
+            if (artifact !in ProfileArtifacts.webViews) {
+                reject("provisioning.software.webview.artifact", "Unknown core-owned WebView artifact '$artifact'.")
+            }
         }
-        document.updates.companionMaxVersion?.let { version ->
-            if (version.length > 64 || !versionPattern.matches(version)) reject("updates.companion_max_version", "Expected a bounded dotted release version.")
+        document.provisioning.software.companion?.maxVersion?.let { version ->
+            if (version.length > 64 || !versionPattern.matches(version)) {
+                reject("provisioning.software.companion.max_version", "Expected a bounded dotted release version.")
+            }
         }
-        if (document.taming.size > 128) reject("taming", "At most 128 package suggestions are allowed.")
+        if (document.provisioning.packages.size > 128) {
+            reject("provisioning.packages", "At most 128 package desired-state entries are allowed.")
+        }
         val seenPackages = mutableSetOf<String>()
-        document.taming.forEachIndexed { index, candidate ->
-            val path = "taming[$index]"
+        document.provisioning.packages.forEachIndexed { index, candidate ->
+            val path = "provisioning.packages[$index]"
             if (!packagePattern.matches(candidate.packageName)) reject("$path.package", "Invalid Android package name.")
-            if (!seenPackages.add(candidate.packageName)) reject("$path.package", "Duplicate package suggestion.")
+            if (!seenPackages.add(candidate.packageName)) reject("$path.package", "Duplicate package desired state.")
             if (candidate.tags.size > 8 || candidate.tags.any { !Regex("^[a-z][a-z0-9-]{0,23}$").matches(it) }) reject("$path.tags", "Use at most 8 lowercase tags of at most 24 characters.")
             if (candidate.note.length > 500) reject("$path.note", "Note must not exceed 500 characters.")
+        }
+        if (document.provisioning.recipes.size > 32) reject("provisioning.recipes", "At most 32 recipes are allowed.")
+        val seenRecipes = mutableSetOf<String>()
+        document.provisioning.recipes.forEachIndexed { index, recipe ->
+            val path = "provisioning.recipes[$index].id"
+            if (!seenRecipes.add(recipe.id)) reject(path, "Duplicate recipe selection.")
+            if (recipe.id !in ProfileMetadata.recipes) reject(path, "Unknown core-owned recipe '${recipe.id}'.")
         }
         expectedDrivers(document).forEach { driver ->
             if (driver !in document.requires.drivers) reject("requires.drivers", "Capability requires core driver '$driver'.")
@@ -145,8 +160,10 @@ internal object ProfileValidator {
         if (document.hardware.relayBase != null || document.hardware.relayBaseFallbacks.isNotEmpty() || document.hardware.buttonLedGpioBase != null || document.sensors.proximityGpio != null) add(ProfileRisk.RELAY_OR_GPIO_WRITES)
         if (document.input.evdevButtons.isNotEmpty()) add(ProfileRisk.EVDEV_READ)
         if (document.input.evdevButtons.any { it.grab }) add(ProfileRisk.EVDEV_GRAB)
-        if (document.taming.any { it.defaultTame }) add(ProfileRisk.DEFAULT_TAMING)
-        if (document.updates.webViewArtifact != null) add(ProfileRisk.WEBVIEW_INSTALL)
+        if (document.provisioning.packages.any { it.importance == ProfileProvisioningImportance.RECOMMENDED }) {
+            add(ProfileRisk.PACKAGE_DISABLE_RECOMMENDATIONS)
+        }
+        if (document.provisioning.software.webView != null) add(ProfileRisk.WEBVIEW_INSTALL)
         if (overridesBundled) add(ProfileRisk.OVERRIDES_BUNDLED)
     }
 
@@ -165,7 +182,7 @@ internal object ProfileValidator {
         if (document.sensors.proximityGpio != null) add("sensor.gpio-proximity")
         if (document.sensors.cht8305) add("sensor.cht8305-daemon")
         if (document.input.evdevButtons.isNotEmpty()) add("input.evdev")
-        if (document.updates.webViewArtifact != null) add("update.webview")
+        if (document.provisioning.software.webView != null) add("update.webview")
     }
 
     private fun validateAllowedPath(

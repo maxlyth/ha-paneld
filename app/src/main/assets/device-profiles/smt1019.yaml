@@ -1,6 +1,6 @@
-schema: 1
+schema: 2
 id: smt1019
-version: 1.0.0
+version: 2.0.0
 display_name: ZHICAI SMT1019
 soc_class: rk3576
 metadata:
@@ -35,7 +35,6 @@ platform:
   su_form: none
   app_can_su: false
   has_recents: true
-  shizuku: recommended
 hardware:
   led:
     mechanism: rk3576-ioctl-daemon
@@ -54,44 +53,56 @@ input:
   evdev_buttons: []
 cpu: {}
 display: {}
-updates:
-  webview_artifact: lineageos-150-arm64
-taming:
+provisioning:
+  access:
+    shizuku: recommended
+  software:
+    webview:
+      artifact: lineageos-150-arm64
+  display: {}
+  packages:
   - package: com.elc.smt_test
+    desired_state: disabled
+    importance: optional
     tags:
       - vendor
       - test
       - clutter
     note: 'ELC "smt-test" factory app (in /odm persist, survives factory reset). Vendor QA/test tool; not used in normal operation.'
-    default_tame: false
   - package: com.DeviceTest
+    desired_state: disabled
+    importance: optional
     tags:
       - chipset
       - test
       - clutter
     note: Generic factory device-test app (in /odm persist). Diagnostic only.
-    default_tame: false
   - package: com.iiyama.webview.demo
+    desired_state: disabled
+    importance: optional
     tags:
       - vendor
       - demo
       - clutter
     note: Iiyama WebView demo bundled in the firmware. Not used in normal operation.
-    default_tame: false
   - package: com.elclcd.commonkeepalive
+    desired_state: disabled
+    importance: optional
     tags:
       - vendor
       - service
     note: 'ELC "CommonKeepAlive" background service that keeps vendor apps resident. Safe to disable on a Home Assistant panel.'
-    default_tame: false
   - package: com.elclcd.otaupdater
+    desired_state: disabled
+    importance: optional
     tags:
       - vendor
       - ota
     note: 'ELC "Firmware Upgrade" — the vendor OTA updater. Disable to stop the panel auto-applying vendor firmware updates that can re-add bloat.'
-    default_tame: false
   - package: com.android.rockchip.camera2
+    desired_state: disabled
+    importance: optional
     tags:
       - chipset
     note: 'Rockchip Camera2 / HDMI-in app (label "HdmiIn"). Safe to disable unless you use the camera or HDMI input.'
-    default_tame: false
+  recipes: []

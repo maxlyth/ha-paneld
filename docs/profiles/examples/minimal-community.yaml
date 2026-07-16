@@ -1,4 +1,4 @@
-schema: 1
+schema: 2
 id: org.example.wallpanel-x1
 version: 0.1.0
 display_name: Example Wall Panel X1
@@ -35,7 +35,6 @@ platform:
   su_form: none
   app_can_su: false
   has_recents: true
-  shizuku: optional
 hardware:
   led:
     mechanism: none
@@ -54,8 +53,13 @@ input:
   evdev_buttons: []
 cpu: {}
 display:
-  recommended_density: 240
-  recommended_font_scale: 1.0
   physical_ppi: 220
-updates: {}
-taming: []
+provisioning:
+  access:
+    shizuku: optional
+  software: {}
+  display:
+    density: 240
+    font_scale: 1.0
+  packages: []
+  recipes: []

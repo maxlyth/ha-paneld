@@ -58,7 +58,6 @@ object ProfileDraftFactory {
                 suForm = "none",
                 appCanSu = false,
                 hasRecents = true,
-                shizuku = ShizukuRecommendation.OPTIONAL,
             ),
             hardware = ProfileHardware(
                 led = ProfileLed("none", "identity"),
@@ -72,8 +71,9 @@ object ProfileDraftFactory {
             input = ProfileInput(),
             cpu = ProfileCpu(),
             display = ProfileDisplay(physicalPpi = physicalPpi),
-            updates = ProfileUpdates(),
-            taming = emptyList(),
+            provisioning = ProfileProvisioning(
+                access = ProfileProvisioningAccess(shizuku = ShizukuRecommendation.OPTIONAL),
+            ),
         )
         val issues = buildList {
             addAll(report?.issues.orEmpty())

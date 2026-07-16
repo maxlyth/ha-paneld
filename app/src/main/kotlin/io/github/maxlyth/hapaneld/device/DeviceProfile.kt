@@ -1,6 +1,8 @@
 package io.github.maxlyth.hapaneld.device
 
 import android.os.Build
+import io.github.maxlyth.hapaneld.device.profile.ProfileArtifacts
+import io.github.maxlyth.hapaneld.device.profile.ShizukuRecommendation
 import io.github.maxlyth.hapaneld.util.SystemProps
 
 /**
@@ -37,9 +39,11 @@ interface DeviceProfile {
      *  need the root helper daemon for privileged writes). */
     val appCanSu: Boolean
 
+    /** Desired provisioning state normalized from the active profile document. */
+    val provisioning: ProvisioningIntent get() = ProvisioningIntent.EMPTY
+
     /** Author recommendation only; never a claim about live Shizuku installation or readiness. */
-    val shizukuRecommendation: io.github.maxlyth.hapaneld.device.profile.ShizukuRecommendation
-        get() = io.github.maxlyth.hapaneld.device.profile.ShizukuRecommendation.NONE
+    val shizukuRecommendation: ShizukuRecommendation get() = provisioning.shizuku
 
     /** Whether full profile behavior relies on `helper/hapaneld-helper`. Every sandbox-walled panel needs
      *  it for privileged controls, but app-su panels can need it too: WF1589T's evdev power button is the
@@ -58,7 +62,14 @@ interface DeviceProfile {
      *  the profile author explaining what it is and why it's flagged, so a non-engineer gets real context.
      *  *Suggestions only*, never auto-acted. Packages absent from this firmware are dropped silently, so list
      *  the union across firmware versions — no per-release sets needed. Default empty. */
-    val tameVendorCandidates: List<TameCandidate> get() = emptyList()
+    val tameVendorCandidates: List<TameCandidate> get() = provisioning.packages.map {
+        TameCandidate(
+            pkg = it.packageName,
+            tags = it.tags,
+            note = it.note,
+            defaultTame = it.importance == ProvisioningImportance.RECOMMENDED,
+        )
+    }
 
     /** Whether the firmware provides a working Recents/Overview screen. Single-purpose panel images often
      *  ship none (verified 2026-06-10: KEYCODE_APP_SWITCH is a no-op on the Tuya TPA10), so the navbar's
@@ -169,8 +180,8 @@ interface DeviceProfile {
      *  one-click preset in the display-sizing control. The genuinely-right values are a per-install
      *  preference (room, dashboard design), so these are starting suggestions to be calibrated — null =
      *  offer only factory-base reset + custom. Density is the layout scale; font scale is the WebView text. */
-    val recommendedDensity: Int?
-    val recommendedFontScale: Float?
+    val recommendedDensity: Int? get() = provisioning.density
+    val recommendedFontScale: Float? get() = provisioning.fontScale
 
     /** Trustworthy physical display pixel density. This is profile evidence, not Android's misleading
      *  `wm density` "Physical density" field (which is only a base logical DPI). Null when unknown. */
@@ -181,13 +192,13 @@ interface DeviceProfile {
      *  from the `webview-mirror` release (pinned signer). null = no known-good build for this panel (leave
      *  the WebView alone). Pick the newest the panel's Android version supports (NSPanel Pro's 8.1 caps at
      *  138). See [WebViewInstaller] and docs/hardware/README.md. */
-    val recommendedWebView: WebViewSpec? get() = null
+    val recommendedWebView: WebViewSpec? get() = provisioning.webViewArtifactId?.let(ProfileArtifacts.webViews::get)
 
     /** The newest HA Companion version known-good on this platform, or null = no cap. The Companion
      *  auto-updater refuses to install a release NEWER than this. 2026.6.5-minimal crash-loops on
      *  PX30/Android 8.1 (missing `CarUxRestrictionsManager` class), so the NSPanel Pro pins to 2026.5.4.
      *  Compared with `UpdateChecker.isNewer` (dotted numeric). */
-    val companionMaxVersion: String? get() = null
+    val companionMaxVersion: String? get() = provisioning.companionMaxVersion
 
     companion object {
         /** Every production profile, including [Generic]. Cross-profile contract tests iterate this list;
@@ -262,6 +273,33 @@ interface DeviceProfile {
     }
 }
 
+/** Provisioning policy normalized from the profile schema for runtime consumers. */
+data class ProvisioningIntent(
+    val shizuku: ShizukuRecommendation = ShizukuRecommendation.NONE,
+    val webViewArtifactId: String? = null,
+    val companionMaxVersion: String? = null,
+    val density: Int? = null,
+    val fontScale: Float? = null,
+    val packages: List<PackageIntent> = emptyList(),
+    val recipeIds: Set<String> = emptySet(),
+) {
+    companion object {
+        val EMPTY = ProvisioningIntent()
+    }
+}
+
+data class PackageIntent(
+    val packageName: String,
+    val desiredState: PackageDesiredState,
+    val importance: ProvisioningImportance,
+    val tags: List<String> = emptyList(),
+    val note: String = "",
+)
+
+enum class PackageDesiredState { DISABLED }
+
+enum class ProvisioningImportance { RECOMMENDED, OPTIONAL }
+
 /** `su` invocation form: toolbox `su -c '<cmd>'` (Sonoff PX30) vs Android `su 0 sh -c '<cmd>'` (Tuya
  *  userdebug); NONE = su is not reachable from the app sandbox (use the helper daemon instead). */
 enum class SuForm { TOOLBOX, ANDROID, NONE }
@@ -327,12 +365,9 @@ data class EvdevButton(
  *              over the screen), "boot" (auto-starts). Free-form; the UI just renders them.
  * @param note  a one-line rationale from the profile author, shown under the row so the user understands
  *              why it's flagged and whether they want it gone. Empty = no note.
- * @param defaultTame  true for genuinely-intrusive firmware clutter (an overlay-drawing vendor kiosk, a
- *              factory burn-in/test tool) that a panel-as-HA-dashboard almost always wants gone. Marks the
- *              candidate as a **recommended default**: badged + one-click "Tame all recommended" in the
- *              `:8888` picker, and auto-applied at provision time (`provision.sh`, guarded — `tame()` never
- *              strands the panel). Off for merely-optional apps (demos, an OTA updater) — those stay a
- *              deliberate per-package choice. Never modifies a stock, un-provisioned panel on its own.
+ * @param defaultTame  compatibility projection for a profile recommendation. It badges the candidate and
+ *              includes it in the explicit "Tame all recommended" UI action; it is not installation consent
+ *              and does not modify a panel on its own.
  */
 data class TameCandidate(
     val pkg: String,

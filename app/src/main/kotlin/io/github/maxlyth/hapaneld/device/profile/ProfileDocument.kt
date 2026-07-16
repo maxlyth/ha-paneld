@@ -1,7 +1,7 @@
 package io.github.maxlyth.hapaneld.device.profile
 
 /**
- * Parsed form of the version-1 profile format. It contains data and named, core-owned strategies only:
+ * Parsed form of the version-2 profile format. It contains data and named, core-owned strategies only:
  * imported profiles cannot execute code, name arbitrary classes, use regular expressions, or add drivers.
  */
 data class ProfileDocument(
@@ -20,8 +20,7 @@ data class ProfileDocument(
     val input: ProfileInput,
     val cpu: ProfileCpu,
     val display: ProfileDisplay,
-    val updates: ProfileUpdates,
-    val taming: List<ProfileTameCandidate>,
+    val provisioning: ProfileProvisioning,
 )
 
 data class ProfileProvenance(
@@ -73,7 +72,6 @@ data class ProfilePlatform(
     val suForm: String,
     val appCanSu: Boolean,
     val hasRecents: Boolean = true,
-    val shizuku: ShizukuRecommendation = ShizukuRecommendation.NONE,
 )
 
 data class ProfileHardware(
@@ -122,8 +120,6 @@ data class ProfileEvdevButton(
 data class ProfileCpu(val governors: Map<String, String>? = null)
 
 data class ProfileDisplay(
-    val recommendedDensity: ProfileDensity? = null,
-    val recommendedFontScale: Float? = null,
     val physicalPpi: Int? = null,
 )
 
@@ -132,15 +128,52 @@ sealed interface ProfileDensity {
     data class Strategy(val id: String) : ProfileDensity
 }
 
-data class ProfileUpdates(
-    /** Core-owned artifact id; profile files never define APK URLs or signer trust roots. */
-    val webViewArtifact: String? = null,
-    val companionMaxVersion: String? = null,
+data class ProfileProvisioning(
+    val access: ProfileProvisioningAccess = ProfileProvisioningAccess(),
+    val software: ProfileProvisioningSoftware = ProfileProvisioningSoftware(),
+    val display: ProfileProvisioningDisplay = ProfileProvisioningDisplay(),
+    val packages: List<ProfilePackageIntent> = emptyList(),
+    val recipes: List<ProfileRecipeSelection> = emptyList(),
 )
 
-data class ProfileTameCandidate(
+data class ProfileProvisioningAccess(
+    val shizuku: ShizukuRecommendation = ShizukuRecommendation.NONE,
+)
+
+data class ProfileProvisioningSoftware(
+    val webView: ProfileWebViewProvisioning? = null,
+    val companion: ProfileCompanionProvisioning? = null,
+)
+
+data class ProfileWebViewProvisioning(
+    /** Core-owned artifact id; profile files never define APK URLs or signer trust roots. */
+    val artifact: String,
+)
+
+data class ProfileCompanionProvisioning(
+    val maxVersion: String,
+)
+
+data class ProfileProvisioningDisplay(
+    val density: ProfileDensity? = null,
+    val fontScale: Float? = null,
+)
+
+data class ProfilePackageIntent(
     val packageName: String,
+    val desiredState: ProfilePackageDesiredState,
+    val importance: ProfileProvisioningImportance,
     val tags: List<String> = emptyList(),
     val note: String = "",
-    val defaultTame: Boolean = false,
 )
+
+enum class ProfilePackageDesiredState(val yamlName: String) {
+    DISABLED("disabled"),
+}
+
+enum class ProfileProvisioningImportance(val yamlName: String) {
+    RECOMMENDED("recommended"),
+    OPTIONAL("optional"),
+}
+
+data class ProfileRecipeSelection(val id: String)
