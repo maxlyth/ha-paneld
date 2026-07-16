@@ -1,19 +1,17 @@
 # Changelog
 
-## v0.9.4-rc1 - 2026-07-16
+## v0.9.4 - 2026-07-16
 
-**ha-paneld can now help explain why a built-in Home Assistant dashboard feels slow.** The Performance page measures interaction delay, main-thread blocking, Home Assistant state traffic and renderer instability, then reports a conservative likely cause. This helps distinguish an overloaded dashboard from excessive entity updates, memory pressure or another busy process on the panel.
+**ha-paneld can now help explain why a built-in Home Assistant dashboard feels slow.** New and updated cards on the Dashboard tab measure interaction delay, main-thread blocking, Home Assistant state traffic and renderer instability, then report a conservative likely cause. This helps distinguish an overloaded dashboard from excessive entity updates, memory pressure or another busy process on the panel.
 
-**NSPanel Pro users also gain continuous Zigbee gateway health reporting and bounded runaway protection.** ha-paneld monitors whether the vendor gateway is joined, its CPU use and repeated restarts. An unjoined gateway with sustained high CPU, or a configured gateway on a supported layout that repeatedly restarts, can be switched off automatically after a startup grace period. A joined gateway is never stopped merely for high CPU use.
-
-Installation is now profile-aware. After starting the app, the provisioner checks the active hardware profile and reports any remaining helper, Shizuku or System WebView setup relevant to that particular panel. Recommendations are shown without silently applying optional system changes.
+**Installation now uses the panel's active hardware profile in a single pass.** The one-line installer starts ha-paneld during the installation run so the app can identify the panel before setup finishes. It then verifies the profile-specific access, helper and software requirements, while clearly reporting any optional or on-panel steps instead of silently applying them.
 
 ### Added
 
 - **Built-in dashboard performance diagnostics** — interaction timing is separated into input delay, event handling and presentation alongside state-update rate, payload volume, main-thread occupancy, long frames and renderer reloads. These measurements do not require root or WebView debugging when using the built-in renderer.
 - **Persistent performance history** — content-free, minute-level dashboard measurements are retained for up to seven days and available through the API for before-and-after comparisons across page reloads and app restarts.
-- **Zigbee gateway health reporting and runaway protection** — supported panels report gateway state, join status, CPU use, restart history and containment results in Home Assistant and panel diagnostics without exposing Zigbee keys, credentials or radio identity.
-- **Profile-aware post-install guidance** — installation now identifies the active panel profile and reports the access, helper and software setup still needed for that hardware.
+- **NSPanel Pro Zigbee gateway health reporting and runaway protection** — ha-paneld reports gateway state, join status, CPU use, restart history and containment results. An unjoined gateway with sustained high CPU, or a configured gateway on a supported layout that repeatedly restarts, can be switched off automatically after a startup grace period; a joined gateway is never stopped merely for high CPU use.
+- **Profile-aware installation in one pass** — the one-line installer starts the app, waits for it to identify the panel profile, then verifies the access, helper and software requirements for that hardware before reporting the installation complete.
 
 ### Changed
 
@@ -25,17 +23,17 @@ Installation is now profile-aware. After starting the app, the provisioner check
 
 ### Fixed
 
-- **Large backups and Companion login restores use bounded file-backed processing** — backup, encryption, upload, validation and restore no longer need to hold the complete archive in memory.
-- **Successful installation is no longer reported as failed because a later optional recommendation could not be completed** — required installation and startup failures still fail the run, while optional actions are reported separately.
-- **Configuration changes and shutdown no longer leave duplicate or stale background operations running** — superseded work is collapsed or cancelled once its result is no longer relevant.
 - **Dashboard screenshots remain visible while refreshing** — returning to Dashboard shows the last successful capture immediately and replaces it only after a fresh screenshot has loaded; a slow or failed capture no longer blanks the card.
 - **Panel capability reporting is easier to interpret** — the effective WebView rendering engine leads over stale package-reported versions, helper-backed root capability is not presented as a failure, and operational details such as state convergence, MQTT authentication timing and audio playback are separated from core panel information.
+- **Successful installation is no longer reported as failed because a later optional recommendation could not be completed** — required installation and startup failures still fail the run, while optional actions are reported separately.
+- **Configuration changes and shutdown no longer leave duplicate or stale background operations running** — superseded work is collapsed or cancelled once its result is no longer relevant.
 - **WF1589T LED ownership is reported accurately** — the conflicting vendor LED service is presented as an optional, reversible package-control recommendation rather than being changed automatically.
+- **Large backups and Companion login restores use bounded file-backed processing** — backup, encryption, upload, validation and restore no longer need to hold the complete archive in memory.
 
 ### Upgrade notes
 
 - Custom profiles created for schema 1 must be updated to schema 2 before they can be activated.
-- Existing settings and learned entity data should migrate automatically, but an explicit panel backup is recommended before installing this release candidate.
+- Existing settings and learned entity data should migrate automatically, but an explicit panel backup is recommended before installing this release.
 - Unencrypted backups now use `.zip`; encrypted backups continue to use `.hpb`.
 - Profile-recommended vendor-package changes are no longer applied automatically. Review the post-install guidance if a hardware feature depends on one.
 
@@ -116,7 +114,7 @@ This release also strengthens dependency and release verification, updates the s
 - **Automatic dashboard entity filtering for the built-in renderer** — ha-paneld examines the configured dashboard, observes the states it uses while running and builds a focused Home Assistant subscription. A dedicated Entities page shows what was found, explains why each entity is included and allows manual additions or exclusions before filtering is enabled.
 - **Potentially unsafe dashboard rules are identified before filtering** — broad or dynamic rules that ha-paneld recognizes are shown with their source and a suggested correction. Users can fix the dashboard, deliberately continue without the uncertain entities or leave filtering disabled; ignored warnings remain visible and can be restored later. Custom cards and behavior that automatic learning has not observed may still require manual review.
 - **Learned entity choices persist without making backups unnecessarily large** — ha-paneld retains the user's manual choices, discards old observations automatically and can rebuild the rest of the catalog when needed. Existing exact entity lists remain supported through `/api/v1/dashboard/entity-filter` for controlled or externally managed setups.
-- **Built-in dashboard performance is now measurable on every panel** — the Performance page and `/api/v1/perf` show how long a cold or warm dashboard load takes to become usable and how often the renderer has reloaded unexpectedly in the past 24 hours. These measurements do not require root and make it easier to see whether a renderer or configuration change actually helped.
+- **Built-in dashboard performance is now measurable on every panel** — performance cards on the Dashboard tab and `/api/v1/perf` show how long a cold or warm dashboard load takes to become usable and how often the renderer has reloaded unexpectedly in the past 24 hours. These measurements do not require root and make it easier to see whether a renderer or configuration change actually helped.
 - **Two newly reported panel types now identify correctly** — preliminary profiles give the Amazon Echo Show 5 Gen 2 running LineageOS and the unbranded ZX-SMT156/RK3566_T cautious defaults based on their submitted diagnostics. Follow-up diagnostic reports also collect the remaining hardware details needed to refine support without a long manual adb session.
 - **Dashboard startup now shows what the panel is waiting for** — if networking is still coming up after a reboot, the built-in dashboard shows whether it is waiting for network services, a link, an address or a connection instead of looking broken. It learns the panel's typical startup time to give more useful progress on later boots and disappears entirely when networking is already ready.
 
@@ -180,7 +178,7 @@ This release also strengthens dependency and release verification, updates the s
 ### Changed
 
 - **Dashboard options are easier to find and experimental features are clearly marked** — dashboard settings now have their own Configure card and renderer picker, while maturity badges identify unfinished or experimental controls.
-- **The Performance page separates dashboard cost from measurement overhead** — sampling uses fewer resources, its own cost appears separately, and the work of hosting the built-in dashboard is labelled clearly.
+- **Dashboard performance cards separate dashboard cost from measurement overhead** — sampling uses fewer resources, its own cost appears separately, and the work of hosting the built-in dashboard is labelled clearly.
 - **Companion-only settings no longer clutter panels without the Companion app** — those controls are hidden and their unused Home Assistant entities are retired when no Companion installation is present.
 
 ### Fixed

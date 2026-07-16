@@ -211,7 +211,7 @@ The NSPanel Pro is **CPU- and RAM-constrained** for rich dashboards:
 - **2 GB RAM is the binding constraint** — the dashboard WebView, Android and background apps compete for it; large dashboards with many cards, big images, long history graphs or expensive custom cards cause WebView reloads and jank.
 - The A35 cores make page transitions and animations visibly slower than on A55/A72 panels.
 
-When using ha-paneld's built-in renderer, start with the [automatic dashboard entity filter](../performance.md#1-filter-the-built-in-renderers-entity-subscription) so the panel does not process states its dashboard never displays. Then use the Performance page to identify remaining heavy views, memory pressure or thermal limits before simplifying the dashboard. The filter is not available to the Companion renderer, where source-side update tuning and a leaner dashboard remain the supported options.
+When using ha-paneld's built-in renderer, start with the [automatic dashboard entity filter](../performance.md#1-filter-the-built-in-renderers-entity-subscription) so the panel does not process states its dashboard never displays. Then use the performance cards on the Dashboard tab to identify remaining heavy views, memory pressure or thermal limits before simplifying the dashboard. The filter is not available to the Companion renderer, where source-side update tuning and a leaner dashboard remain the supported options.
 
 ---
 

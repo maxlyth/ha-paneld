@@ -56,7 +56,7 @@ The automatic filter is opt-in and applies only to the built-in renderer:
 3. Visit every dashboard tab and exercise controls, pop-ups and conditional content so runtime dependencies have a chance to be observed.
 4. Review the current, suggested and excluded entities. Pin anything required indirectly by a custom card or template.
 5. Resolve any entity-filter checks. Narrow a broad or dynamic dashboard rule where practical, or make an explicit choice while accepting the warning shown by the panel.
-6. Apply the policy-selected set, let the dashboard reload and compare the same views on the Performance page.
+6. Apply the policy-selected set, let the dashboard reload and compare the same views using the performance cards on the Dashboard tab.
 
 Automatic learning cannot prove every custom card or dynamic template dependency. A missing entity may leave a card stale or unavailable, so review the result on a non-critical panel first and keep filtering disabled until the candidate is credible. The previous subscription remains available as the safe rollback: turn off **Automatic dashboard entity filter** and reload the dashboard.
 
@@ -86,7 +86,7 @@ PX30 and rk3566 panels can run a focused dashboard well, but they still have lim
 - [ ] Every dashboard tab, pop-up and conditional path has been exercised during learning
 - [ ] Custom-card and template dependencies are pinned or otherwise accounted for
 - [ ] Entity-filter checks have been resolved deliberately rather than ignored accidentally
-- [ ] The same views have been compared before and after filtering on the Performance page
+- [ ] The same views have been compared before and after filtering using the performance cards on the Dashboard tab
 - [ ] Heavy cards, camera streams and graphs have been tested separately
 - [ ] Required high-frequency entities have been tuned at the source where appropriate
 - [ ] If the panel uses a legacy stock NSPanel Pro Zigbee stack, its `guard_process.sh` has been checked
