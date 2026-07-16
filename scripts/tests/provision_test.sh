@@ -17,8 +17,8 @@ export HAPANELD_HELPER_PROBE="$FIXTURES/helper-probe"
 export MOCK_HELPER_BUILD_ID="$(PATH=/usr/bin:/bin "$ROOT/helper/source-id.sh")"
 MOCK_HELPER_DIST="$TMP/helper-dist"
 mkdir -p "$MOCK_HELPER_DIST/armeabi-v7a" "$MOCK_HELPER_DIST/arm64-v8a"
-printf 'mock arm helper\n' > "$MOCK_HELPER_DIST/armeabi-v7a/hapaneld-helper"
-printf 'mock arm64 helper\n' > "$MOCK_HELPER_DIST/arm64-v8a/hapaneld-helper"
+printf 'mock arm helper\nBUILDID %s\n' "$MOCK_HELPER_BUILD_ID" > "$MOCK_HELPER_DIST/armeabi-v7a/hapaneld-helper"
+printf 'mock arm64 helper\nBUILDID %s\n' "$MOCK_HELPER_BUILD_ID" > "$MOCK_HELPER_DIST/arm64-v8a/hapaneld-helper"
 export HAPANELD_HELPER_DIST_DIR="$MOCK_HELPER_DIST"
 
 passes=0
@@ -159,8 +159,26 @@ assert_log_contains() {
   else fail_test "$description (missing call pattern: $pattern)"; fi
 }
 
+make_local_apk() {
+  apk_path="$1"
+  arm_helper="$2"
+  arm64_helper="$3"
+  /usr/bin/python3 - "$apk_path" "$arm_helper" "$arm64_helper" <<'PY'
+import sys
+import zipfile
+
+apk, arm, arm64 = sys.argv[1:]
+with zipfile.ZipFile(apk, "w") as archive:
+    archive.writestr("AndroidManifest.xml", b"test manifest\n")
+    archive.write(arm, "assets/hapaneld-helper-arm")
+    archive.write(arm64, "assets/hapaneld-helper-arm64")
+PY
+}
+
 APK="$TMP/ha-paneld.apk"
-printf 'test apk\n' > "$APK"
+make_local_apk "$APK" \
+  "$MOCK_HELPER_DIST/armeabi-v7a/hapaneld-helper" \
+  "$MOCK_HELPER_DIST/arm64-v8a/hapaneld-helper"
 RELEASE_APK="$TMP/ha-paneld-v0.9.2-rc3-manual-setup-required.apk"
 printf 'test release apk\n' > "$RELEASE_APK"
 HELPER_RELEASE_APK="$TMP/ha-paneld-v0.9.4-rc1-manual-setup-required.apk"
@@ -297,9 +315,9 @@ MOCK_LATE_ADB_STATUS=255 MOCK_LATE_ADB_PHASE=persistence MOCK_PRODUCT_IDENTITY=T
   run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
 assert_success "late vendor-strip safety probe cannot turn a verified install into exit 255"
 assert_contains 'vendor-strip skipped' "failed persistence probe keeps vendor stripping fail-closed"
-assert_log_contains '^adb .* push .*/arm64-v8a/hapaneld-helper /data/local/tmp/hapaneld-helper-[0-9a-f]{32}$' "local rooted provisioning stages the matching helper under its transaction nonce"
+assert_log_contains '^adb .* push .*/hapaneld-helper /data/local/tmp/hapaneld-helper-[0-9a-f]{32}$' "local rooted provisioning stages the helper extracted from the APK under its transaction nonce"
 assert_log_contains '^adb .* push .* /data/local/tmp/hapaneld-helper-[0-9a-f]{32}\.txn$' "local rooted provisioning stages its authenticated transaction under the same nonce"
-helper_push_line="$(grep -nE '^adb .* push .*/arm64-v8a/hapaneld-helper /data/local/tmp/hapaneld-helper-[0-9a-f]{32}$' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
+helper_push_line="$(grep -nE '^adb .* push .*/hapaneld-helper /data/local/tmp/hapaneld-helper-[0-9a-f]{32}$' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
 local_app_install_line="$(grep -nE '^adb .* install( |$)' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
 if [ -n "$helper_push_line" ] && [ -n "$local_app_install_line" ] && [ "$helper_push_line" -lt "$local_app_install_line" ]; then
   pass "root helper is installed before the APK is replaced"
@@ -327,12 +345,47 @@ assert_failure "unsupported ABI fails before changing a rooted panel"
 assert_contains 'rooted panel reports unsupported ABI.*x86_64' "unsupported rooted ABI gives the supported asset set"
 assert_not_contains '/data/local/tmp/hapaneld-helper|^adb .* install( |$)' "$MOCK_CALL_LOG" "unsupported rooted ABI stops before helper staging or APK replacement"
 
-EMPTY_HELPER_DIST="$TMP/empty-helper-dist"
-mkdir -p "$EMPTY_HELPER_DIST"
-HAPANELD_HELPER_DIST_DIR="$EMPTY_HELPER_DIST" run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
-assert_failure "rooted local provisioning fails before APK replacement when its helper was not built"
-assert_contains 'local arm64-v8a root helper has not been built' "missing local helper gives the exact build recovery"
-assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "missing local helper leaves the existing APK untouched"
+STALE_HELPER_DIST="$TMP/stale-helper-dist"
+mkdir -p "$STALE_HELPER_DIST/arm64-v8a"
+printf 'stale helper that must never be staged\nBUILDID %064d\n' 0 > "$STALE_HELPER_DIST/arm64-v8a/hapaneld-helper"
+HAPANELD_HELPER_DIST_DIR="$STALE_HELPER_DIST" run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "stale helper dist cannot override the helper embedded in a local APK"
+assert_not_contains "$STALE_HELPER_DIST" "$MOCK_CALL_LOG" "local provisioning never stages stale helper dist bytes"
+
+ARM64_ONLY_HELPER="$TMP/arm64-only-helper"
+printf 'exact APK arm64 selection\nBUILDID %s\n' "$MOCK_HELPER_BUILD_ID" > "$ARM64_ONLY_HELPER"
+WRONG_ABI_HELPER="$TMP/wrong-abi-helper"
+printf 'wrong ABI helper with invalid identity\n' > "$WRONG_ABI_HELPER"
+ABI_APK="$TMP/abi-specific.apk"
+make_local_apk "$ABI_APK" \
+  "$WRONG_ABI_HELPER" \
+  "$ARM64_ONLY_HELPER"
+run_provision "$MOCK_TARGET" --apk "$ABI_APK" --no-tame
+assert_success "local provisioning selects the exact embedded helper for the panel ABI"
+assert_log_contains '^adb .* push .*/hapaneld-helper /data/local/tmp/hapaneld-helper-[0-9a-f]{32}$' "arm64 panel stages the selected APK helper bytes"
+
+MISSING_HELPER_APK="$TMP/missing-helper.apk"
+/usr/bin/python3 - "$MISSING_HELPER_APK" <<'PY'
+import sys
+import zipfile
+with zipfile.ZipFile(sys.argv[1], "w") as archive:
+    archive.writestr("AndroidManifest.xml", b"test manifest\n")
+PY
+run_provision "$MOCK_TARGET" --apk "$MISSING_HELPER_APK" --no-tame
+assert_failure "rooted local provisioning fails before mutation when the APK helper is missing"
+assert_contains 'local APK does not contain its arm64-v8a root helper' "missing embedded helper gives exact build recovery"
+assert_not_contains '/data/local/tmp/hapaneld-helper|^adb .* install( |$)' "$MOCK_CALL_LOG" "missing embedded helper leaves the panel untouched"
+
+INVALID_ID_HELPER="$TMP/invalid-id-helper"
+printf 'helper without a valid build identity\n' > "$INVALID_ID_HELPER"
+INVALID_ID_APK="$TMP/invalid-id.apk"
+make_local_apk "$INVALID_ID_APK" \
+  "$MOCK_HELPER_DIST/armeabi-v7a/hapaneld-helper" \
+  "$INVALID_ID_HELPER"
+run_provision "$MOCK_TARGET" --apk "$INVALID_ID_APK" --no-tame
+assert_failure "rooted local provisioning rejects an embedded helper with invalid identity"
+assert_contains 'embedded in the local APK has an invalid build identity' "invalid embedded identity gives exact recovery"
+assert_not_contains '/data/local/tmp/hapaneld-helper|^adb .* install( |$)' "$MOCK_CALL_LOG" "invalid embedded identity fails before panel mutation"
 
 MOCK_SYSTEM_WRITABLE=0 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
 assert_success "rooted systemless provisioning installs the helper through service.d"

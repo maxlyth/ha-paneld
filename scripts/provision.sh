@@ -1088,7 +1088,7 @@ resolve_root_helper_install_state() {
 }
 
 install_root_helper() {
-  local abi helper_dir="" helper="" helper_name="" rc_file="" service_file="" transaction_file=""
+  local abi helper_dir="" helper="" helper_name="" helper_asset="" build_records="" rc_file="" service_file="" transaction_file=""
   local bin_sha256 rc_sha256 service_sha256 transaction_sha256 transaction_ready="" expected_build_id="" out out2 root_ready=0 install_kind=""
 
   abi="$(adb -s "$TARGET" shell getprop ro.product.cpu.abi 2>/dev/null | tr -d '\r')"
@@ -1128,15 +1128,38 @@ install_root_helper() {
     echo "   ${YEL}ℹ${X} $APK_RELEASE_TAG predates automatic root-helper assets"
     return 0
   else
+    helper_dir="$(mktemp -d)" || fail "could not create a temporary directory for the root helper" \
+      "Free some disk space, then re-run; no panel changes were made."
+    case "$abi" in
+      armeabi-v7a) helper_asset="assets/hapaneld-helper-arm" ;;
+      arm64-v8a) helper_asset="assets/hapaneld-helper-arm64" ;;
+    esac
+    helper="$helper_dir/hapaneld-helper"
+    if ! command -v unzip >/dev/null 2>&1; then
+      rm -rf "$helper_dir"
+      fail "unzip is required to read the root helper embedded in a local APK" \
+        "Install unzip, then re-run this provisioning command." \
+        "No helper or APK was replaced, so the panel remains on its previous working version."
+    fi
+    if ! unzip -p "$APK" "$helper_asset" > "$helper" 2>/dev/null || [ ! -s "$helper" ]; then
+      rm -rf "$helper_dir"
+      fail "the local APK does not contain its $abi root helper" \
+        "Build the complete APK again, then re-run this provisioning command." \
+        "No helper or APK was replaced, so the panel remains on its previous working version."
+    fi
+    build_records="$(grep -aoE 'BUILDID [0-9a-f]{64}' "$helper" 2>/dev/null || true)"
+    expected_build_id="$(printf '%s\n' "$build_records" | sed -nE 's/^BUILDID ([0-9a-f]{64})$/\1/p')"
+    if [ "$(printf '%s\n' "$expected_build_id" | grep -Ec '^[0-9a-f]{64}$')" -ne 1 ]; then
+      rm -rf "$helper_dir"
+      fail "the root helper embedded in the local APK has an invalid build identity" \
+        "Build the complete APK again, then re-run. No helper or APK was replaced."
+    fi
     if [ "$root_ready" = 0 ] && ensure_root_path; then root_ready=1; fi
     if [ "$root_ready" = 0 ]; then
+      rm -rf "$helper_dir"
       echo "   ${YEL}ℹ${X} no root path available — continuing without the root helper"
       return 0
     fi
-    helper="$HELPER_DIST_DIR/$abi/hapaneld-helper"
-    [ -s "$helper" ] || fail "the local $abi root helper has not been built" \
-      "Run ./helper/build.sh, then re-run this provisioning command." \
-      "The APK was not replaced, so the panel remains on its previous working version."
   fi
   if [ "$root_ready" = 0 ]; then
     [ -z "$helper_dir" ] || rm -rf "$helper_dir"
