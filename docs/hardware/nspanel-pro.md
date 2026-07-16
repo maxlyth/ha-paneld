@@ -149,6 +149,9 @@ ha-paneld manages it directly (v0.6.1+): `switch.<panel>_zigbee_router` turns th
 >
 > **4.x reworked the Zigbee stack** — Sonoff shipped a forked Zigbee2MQTT (herdsman 23.53 vs upstream ~25.x), decommissioned the old NCP client, changed the on-device MQTT password, and altered the boot sequence. ha-paneld's `zigbee_router` was built against ≤3.x and **may need adapting on 4.x** — and Sonoff disabled coordinator↔router switching on stock 4.x firmware. (Sources: seaky tools #244/#241/#255, roottool#3.)
 
+> [!WARNING]
+> **A legacy vendor-native Zigbee-watchdog defect is confirmed by the reporter on NSPanel Pro 120 stock 3.8.0.** Firmware containing the recursive `LD_LIBRARY_PATH` assignment described in [Issue #34](https://github.com/maxlyth/ha-paneld/issues/34) can eventually make every external command launched by the watchdog fail with `E2BIG`, consume one CPU core and stop recovering a dead `zgateway`. A reboot resets the problem only temporarily. See [Performance tuning](../performance.md#rule-out-the-legacy-stock-nspanel-pro-zigbee-watchdog-defect) for the evidence boundary and repair-safety requirements. The reporter-provided workaround has not yet been independently validated by the project. Community inspection of 4.0.12 and 4.6.0 did not find the vulnerable assignment.
+
 ### Requirements — firmware ≥ v2.2.0
 
 The host stack is the **manufacturer's own** (eWeLink/Sonoff) gateway, versioned to match the panel firmware (e.g. `sonoff-v3.5.4`). Zigbee **router mode** was added in **NSPanel Pro firmware v2.2.0** (2023 — eWeLink app → *Device Settings → Pilot Features → Zigbee Mode*); local host-stack repeater support landed in gateway package v1.1.9. In practice:
@@ -171,7 +174,7 @@ ha-paneld **drives** the gateway; it doesn't ship or install it (it's eWeLink's 
 <details>
 <summary>EZSP host stack internals (broker topics, supervisor, role persistence)</summary>
 
-The radio runs **EZSP NCP firmware** (EFR32MG21, EZSP v8); `zgateway` is an EZSP *host* binary in `/vendor/bin/siliconlabs_host/`, kept alive by its own `guard_process.sh` supervisor (a 5-second loop, boot-started) and controlled over a **local mosquitto broker** on `127.0.0.1:1883` (anonymous — the `password_file` line is commented out in `mosquitto.conf`):
+On the legacy vendor-native ≤3.x stack, the radio runs **EZSP NCP firmware** (EFR32MG21, EZSP v8); `zgateway` is an EZSP *host* binary in `/vendor/bin/siliconlabs_host/`, kept alive by its own `guard_process.sh` supervisor (a 5-second loop, boot-started) and controlled over a **local mosquitto broker** on `127.0.0.1:1883` (anonymous — the `password_file` line is commented out in `mosquitto.conf`). The 4.x stack differs as described above.
 
 - role status: `zigbee/system/network-role/information` → `{"role":"Repeater"|"Coordinator"}`
 - role switch: `zigbee/system/network-role/switch` ← `{"role":"Repeater"}`

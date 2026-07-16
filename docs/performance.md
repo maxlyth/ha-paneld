@@ -16,6 +16,18 @@ Open the panel's web page at `http://<panel-ip>:8888/` or use the Home Assistant
 
 High renderer CPU with a large unfiltered subscription is a strong reason to test filtering. High JavaScript heap use, repeated reloads or one unusually expensive dashboard view points toward card and layout work as well. Treat the measurements together; a single CPU snapshot cannot identify the cause by itself.
 
+### Rule out the legacy stock NSPanel Pro Zigbee-watchdog defect
+
+Legacy stock firmware containing a recursive `export LD_LIBRARY_PATH=/vendor/bin/siliconlabs_host/:${LD_LIBRARY_PATH}` assignment can make the vendor's `guard_process.sh` the performance problem itself. A [community investigation](https://github.com/maxlyth/ha-paneld/issues/34) confirmed the defect on an NSPanel Pro 120 running stock 3.8.0 and reported the condition across all 16 panels in that fleet. The script prepends its directory every five seconds; after roughly ten hours in that setup the environment string crosses Linux's per-string execution limit, external commands start failing with `E2BIG`, `sleep` stops delaying the loop and the watchdog can pin one CPU core. At that point it can also fail to restart a dead `zgateway`, leaving Zigbee unavailable. Broader exposure across legacy 1.x–3.x firmware is plausible where the same line exists, but has not been independently verified by the ha-paneld project.
+
+Look for this pattern when ha-paneld reports periodic system load on an otherwise idle stock NSPanel Pro:
+
+- `guard_process.sh` stays near 100% of one CPU core and its process size grows far above the reported healthy value of about 9 MB;
+- `zgateway` is absent or no longer recovers; and
+- rebooting helps, but the load returns around ten hours later in the reported stock setup.
+
+A reboot only resets the accumulating environment temporarily. Issue #34 contains a reporter-provided root/ADB workaround, but the project has not yet independently validated that mutation and recovery sequence. Do not apply it unless the exact recursive assignment is present once in the vendor-native script. Any repair must first verify a non-empty backup and preserve ownership, mode and SELinux metadata. Abort before mutation on an unexpected match; after mutation, roll back if restart or verification fails, return `/vendor` to read-only, and verify both `zgateway` and its availability topic. A firmware update that rewrites `/vendor` removes the local patch; the defect returns only if the target firmware still contains the vulnerable assignment. Community inspection of firmware 4.0.12 and 4.6.0 did not find it.
+
 ## Fixes, in order of impact
 
 ### 1. Filter the built-in renderer's entity subscription
@@ -62,6 +74,7 @@ PX30 and rk3566 panels can run a focused dashboard well, but they still have lim
 - [ ] The same views have been compared before and after filtering on the Performance page
 - [ ] Heavy cards, camera streams and graphs have been tested separately
 - [ ] Required high-frequency entities have been tuned at the source where appropriate
+- [ ] If the panel uses a legacy stock NSPanel Pro Zigbee stack, its `guard_process.sh` has been checked
 - [ ] A reload and filter-disable recovery path has been verified
 
 ## What the built-in filter replaced
@@ -90,5 +103,6 @@ Low-cost panels are especially sensitive because JavaScript execution, layout an
 | Dashboard gradually degrades over days | heap growth, memory fragmentation or a card that accumulates work |
 | Entities stop updating and later arrive in a burst | WebSocket interruption, reconnect or a renderer unable to keep up |
 | Similar panels behave differently | different dashboard content, entity subscription, WebView version, uptime or thermal state |
+| Legacy stock NSPanel Pro becomes janky around ten hours after boot and `guard_process.sh` uses one core | check for the recursive vendor Zigbee-watchdog assignment leading to `E2BIG` |
 
 Garbage collection periodically pauses JavaScript to reclaim unused memory. Near the heap ceiling those pauses become longer and more frequent, which can starve rendering even when the Android process itself has not crashed.
