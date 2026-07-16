@@ -107,12 +107,22 @@ ssize_t __wrap_write(int fd, const void *buf, size_t count) {
 }
 
 int __wrap_open(const char *path, int flags, ...) {
+    const char *selected = path;
     if (strncmp(path, "/dev/input/event", 16) == 0) {
         evdev_open_count++;
         if (!evdev_open_ok) { errno = ENOENT; return -1; }
-        return __real_open("/dev/null", flags);
+        selected = "/dev/null";
     }
-    return __real_open(path, flags);
+    int needs_mode = (flags & O_CREAT) != 0;
+#ifdef O_TMPFILE
+    needs_mode = needs_mode || (flags & O_TMPFILE) == O_TMPFILE;
+#endif
+    if (!needs_mode) return __real_open(selected, flags);
+    va_list ap;
+    va_start(ap, flags);
+    mode_t mode = (mode_t)va_arg(ap, int);
+    va_end(ap);
+    return __real_open(selected, flags, mode);
 }
 int __wrap_ioctl(int fd, unsigned long req, ...) {
     va_list ap; va_start(ap, req);
