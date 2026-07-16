@@ -6,11 +6,8 @@
 # archives or change how the project is built.
 
 # --- supporting web assets and build / CI / deploy tooling ---
-*.sh                    linguist-detectable=false
 *.kts                   linguist-detectable=false
 *.py                    linguist-detectable=false
-*.html                  linguist-detectable=false
-*.css                   linguist-detectable=false
 **/Dockerfile           linguist-detectable=false
 **/Makefile             linguist-detectable=false
 CMakeLists.txt          linguist-detectable=false
