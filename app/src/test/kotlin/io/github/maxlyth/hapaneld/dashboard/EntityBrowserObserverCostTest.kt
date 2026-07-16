@@ -28,7 +28,9 @@ class EntityBrowserObserverCostTest {
             .map(operations::getJSONObject)
             .first { it.getString("id") == FeatureCostOperation.ENTITY_BROWSER_OBSERVER.id }
         assertEquals(1L, observer.getLong("calls"))
-        assertEquals(3_000_000L, observer.getLong("wall_ns_total"))
+        assertEquals(0L, observer.getLong("wall_ns_total"))
+        assertEquals(3_000_000L, observer.getLong("external_execution_ns_total"))
+        assertEquals(1L, observer.getLong("external_execution_samples"))
         assertEquals(4L, observer.getLong("external_events"))
         assertEquals(8_192L, observer.getLong("external_input_chars"))
         assertEquals(7L, observer.getLong("work_units"))

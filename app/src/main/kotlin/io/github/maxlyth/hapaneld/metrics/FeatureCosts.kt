@@ -60,6 +60,9 @@ enum class FeatureCostOperation(
     MQTT_HEARTBEAT_ADMISSION("mqtt.heartbeat_admission"),
     MQTT_HEARTBEAT_RECOVERY("mqtt.heartbeat_recovery"),
     PERF_ROOT_DIAGNOSTICS("performance.root_diagnostics"),
+    PERF_FEATURE_COST_PROJECTION("performance.feature_cost_projection"),
+    PROVISIONING_PLAN("provisioning.plan"),
+    PROVISIONING_OBSERVATION_REFRESH("provisioning.observation_refresh", parentId = "provisioning.plan"),
     TAME_MUTATION("vendor.tame_mutation"),
     REMOTE_INPUT("control.remote_input"),
     DASHBOARD_STORAGE_CLEAR("dashboard.storage_clear"),
@@ -95,6 +98,8 @@ class FeatureCostRegistry internal constructor(
     // an empty map so construction cannot allocate an array/map proportional to the vocabulary.
     private val records: Array<MutableRecord>? =
         if (enabled) Array(FeatureCostOperation.entries.size) { MutableRecord() } else null
+    @Volatile
+    private var epoch = if (enabled) captureEpoch(1L, startedWallNanos) else EpochState.DISABLED
 
     fun span(operation: FeatureCostOperation): Span {
         if (!enabled) return Span.NOOP
@@ -166,7 +171,7 @@ class FeatureCostRegistry internal constructor(
     /** Import one bounded aggregate measured in another runtime (currently the dashboard browser). */
     fun recordExternal(
         operation: FeatureCostOperation,
-        wallElapsedNanos: Long,
+        externalExecutionNanos: Long,
         events: Long = 0L,
         inputChars: Long = 0L,
         workUnits: Long = 0L,
@@ -174,15 +179,41 @@ class FeatureCostRegistry internal constructor(
     ) {
         if (!enabled) return
         val record = record(operation)
-        val elapsed = wallElapsedNanos.coerceAtLeast(0L)
         record.calls.incrementAndGet()
         record.succeeded.incrementAndGet()
         saturatingAdd(record.externalEvents, events.coerceAtLeast(0L))
         saturatingAdd(record.externalInputChars, inputChars.coerceAtLeast(0L))
+        saturatingAdd(record.externalExecutionNanosTotal, externalExecutionNanos.coerceAtLeast(0L))
+        record.externalExecutionSamples.incrementAndGet()
+        saturatingAdd(record.workUnits, workUnits.coerceAtLeast(0L))
+        saturatingAdd(record.workBytes, workBytes.coerceAtLeast(0L))
+    }
+
+    /**
+     * Begin a new bounded comparison epoch without discarding process-lifetime startup evidence.
+     * Baselines are fixed-cardinality snapshots; concurrent completions can land on either side of the
+     * boundary, but counters never go negative and no active span changes ownership.
+     */
+    fun beginEpoch() {
+        if (!enabled) return
+        val previous = epoch
+        epoch = captureEpoch(previous.generation + 1L, wallNanos.read())
+    }
+
+    /** Record already-measured synchronous projection overhead without allocating a span. */
+    internal fun recordSynchronousElapsed(
+        operation: FeatureCostOperation,
+        elapsedNanos: Long,
+        workBytes: Long = 0L,
+    ) {
+        if (!enabled) return
+        val record = record(operation)
+        val elapsed = elapsedNanos.coerceAtLeast(0L)
+        record.calls.incrementAndGet()
+        record.succeeded.incrementAndGet()
         saturatingAdd(record.wallNanosTotal, elapsed)
         updateMax(record.wallNanosMax, elapsed)
         record.wallHistogram.incrementAndGet(histogramIndex(elapsed))
-        saturatingAdd(record.workUnits, workUnits.coerceAtLeast(0L))
         saturatingAdd(record.workBytes, workBytes.coerceAtLeast(0L))
     }
 
@@ -223,9 +254,31 @@ class FeatureCostRegistry internal constructor(
 
     fun json(): String {
         if (!enabled) return DISABLED_JSON
+        val epochSnapshot = epoch
         val operations = JSONArray()
         FeatureCostOperation.entries.forEach { operation ->
             val r = record(operation)
+            val baseline = epochSnapshot.records[operation.ordinal]
+            val epochRecord = JSONObject()
+                .put("calls", delta(r.calls.get(), baseline.calls))
+                .put("succeeded", delta(r.succeeded.get(), baseline.succeeded))
+                .put("failed", delta(r.failed.get(), baseline.failed))
+                .put("cancelled", delta(r.cancelled.get(), baseline.cancelled))
+                .put("rejected", delta(r.rejected.get(), baseline.rejected))
+                .put("dropped", delta(r.dropped.get(), baseline.dropped))
+                .put("coalesced", delta(r.coalesced.get(), baseline.coalesced))
+                .put("wall_ns_total", delta(r.wallNanosTotal.get(), baseline.wallNanosTotal))
+                .put("thread_cpu_ns_total", delta(r.threadCpuNanosTotal.get(), baseline.threadCpuNanosTotal))
+                .put("thread_cpu_samples", delta(r.threadCpuSamples.get(), baseline.threadCpuSamples))
+                .put("external_events", delta(r.externalEvents.get(), baseline.externalEvents))
+                .put("external_input_chars", delta(r.externalInputChars.get(), baseline.externalInputChars))
+                .put("external_execution_ns_total", delta(r.externalExecutionNanosTotal.get(), baseline.externalExecutionNanosTotal))
+                .put("external_execution_samples", delta(r.externalExecutionSamples.get(), baseline.externalExecutionSamples))
+                .put("work_units", delta(r.workUnits.get(), baseline.workUnits))
+                .put("work_bytes", delta(r.workBytes.get(), baseline.workBytes))
+                .put("wall_histogram", JSONArray((0 until HISTOGRAM_UPPER_NANOS.size + 1).map {
+                    delta(r.wallHistogram.get(it), baseline.wallHistogram[it])
+                }))
             operations.put(JSONObject()
                 .put("id", operation.id)
                 .put("family", operation.family)
@@ -248,11 +301,14 @@ class FeatureCostRegistry internal constructor(
                 .put("thread_cpu_samples", r.threadCpuSamples.get())
                 .put("external_events", r.externalEvents.get())
                 .put("external_input_chars", r.externalInputChars.get())
+                .put("external_execution_ns_total", r.externalExecutionNanosTotal.get())
+                .put("external_execution_samples", r.externalExecutionSamples.get())
                 .put("work_units", r.workUnits.get())
                 .put("work_bytes", r.workBytes.get())
                 .put("wall_histogram", JSONArray((0 until HISTOGRAM_UPPER_NANOS.size + 1).map {
                     r.wallHistogram.get(it)
-                })))
+                }))
+                .put("epoch", epochRecord))
         }
         val now = wallNanos.read()
         return JSONObject()
@@ -260,9 +316,12 @@ class FeatureCostRegistry internal constructor(
             .put("enabled", true)
             .put("generation", generation)
             .put("since_elapsed_ns", forwardDelta(now, startedWallNanos))
+            .put("epoch_generation", epochSnapshot.generation)
+            .put("epoch_elapsed_ns", forwardDelta(now, epochSnapshot.startedWallNanos))
             .put("metric_semantics", JSONObject()
                 .put("wall_ns", "inclusive_elapsed_latency_not_additive")
                 .put("thread_cpu_ns", "same_thread_cpu_subset")
+                .put("external_execution_ns", "external_runtime_execution_aggregate_not_latency")
                 .put("work", "operation_specific_resource_volume"))
             .put("wall_histogram_upper_ns", JSONArray(HISTOGRAM_UPPER_NANOS))
             .put("operations", operations)
@@ -333,6 +392,8 @@ class FeatureCostRegistry internal constructor(
         val threadCpuSamples = AtomicLong()
         val externalEvents = AtomicLong()
         val externalInputChars = AtomicLong()
+        val externalExecutionNanosTotal = AtomicLong()
+        val externalExecutionSamples = AtomicLong()
         val workUnits = AtomicLong()
         val workBytes = AtomicLong()
         val wallHistogram = AtomicLongArray(HISTOGRAM_UPPER_NANOS.size + 1)
@@ -365,6 +426,66 @@ class FeatureCostRegistry internal constructor(
     private fun forwardDelta(now: Long, then: Long): Long =
         if (now >= then) now - then else 0L
 
+    private fun delta(current: Long, baseline: Long): Long =
+        if (current >= baseline) current - baseline else 0L
+
+    private fun captureEpoch(generation: Long, startedWallNanos: Long): EpochState = EpochState(
+        generation = generation,
+        startedWallNanos = startedWallNanos,
+        records = FeatureCostOperation.entries.map { operation ->
+            val r = record(operation)
+            BaselineRecord(
+                calls = r.calls.get(),
+                succeeded = r.succeeded.get(),
+                failed = r.failed.get(),
+                cancelled = r.cancelled.get(),
+                rejected = r.rejected.get(),
+                dropped = r.dropped.get(),
+                coalesced = r.coalesced.get(),
+                wallNanosTotal = r.wallNanosTotal.get(),
+                threadCpuNanosTotal = r.threadCpuNanosTotal.get(),
+                threadCpuSamples = r.threadCpuSamples.get(),
+                externalEvents = r.externalEvents.get(),
+                externalInputChars = r.externalInputChars.get(),
+                externalExecutionNanosTotal = r.externalExecutionNanosTotal.get(),
+                externalExecutionSamples = r.externalExecutionSamples.get(),
+                workUnits = r.workUnits.get(),
+                workBytes = r.workBytes.get(),
+                wallHistogram = LongArray(HISTOGRAM_UPPER_NANOS.size + 1) { r.wallHistogram.get(it) },
+            )
+        }.toTypedArray(),
+    )
+
+    private data class EpochState(
+        val generation: Long,
+        val startedWallNanos: Long,
+        val records: Array<BaselineRecord>,
+    ) {
+        companion object {
+            val DISABLED = EpochState(0L, 0L, emptyArray())
+        }
+    }
+
+    private data class BaselineRecord(
+        val calls: Long,
+        val succeeded: Long,
+        val failed: Long,
+        val cancelled: Long,
+        val rejected: Long,
+        val dropped: Long,
+        val coalesced: Long,
+        val wallNanosTotal: Long,
+        val threadCpuNanosTotal: Long,
+        val threadCpuSamples: Long,
+        val externalEvents: Long,
+        val externalInputChars: Long,
+        val externalExecutionNanosTotal: Long,
+        val externalExecutionSamples: Long,
+        val workUnits: Long,
+        val workBytes: Long,
+        val wallHistogram: LongArray,
+    )
+
     companion object {
         private const val DISABLED_START = 0L
         private const val DISABLED_JSON = """{"schema":2,"enabled":false}"""
@@ -382,5 +503,37 @@ class FeatureCostRegistry internal constructor(
 /** Process-local registry. Deliberately reset only by process death so startup work remains visible. */
 object FeatureCosts {
     val registry = FeatureCostRegistry(enabled = BuildConfig.FEATURE_COSTS_ENABLED)
-    fun json(): String = registry.json()
+    private const val PROJECTION_CACHE_NANOS = 1_000_000_000L
+    private val projectionLock = Any()
+    @Volatile private var cachedAtNanos = Long.MIN_VALUE
+    @Volatile private var cachedJson: String? = null
+
+    fun beginEpoch() {
+        registry.beginEpoch()
+        cachedJson = null
+    }
+
+    fun json(): String {
+        if (!registry.recordingEnabled) return registry.json()
+        val now = System.nanoTime()
+        cachedJson?.takeIf { now >= cachedAtNanos && now - cachedAtNanos < PROJECTION_CACHE_NANOS }
+            ?.let { return it }
+        return synchronized(projectionLock) {
+            val lockedNow = System.nanoTime()
+            cachedJson?.takeIf {
+                lockedNow >= cachedAtNanos && lockedNow - cachedAtNanos < PROJECTION_CACHE_NANOS
+            } ?: run {
+                val started = System.nanoTime()
+                registry.json().also { projection ->
+                    registry.recordSynchronousElapsed(
+                        FeatureCostOperation.PERF_FEATURE_COST_PROJECTION,
+                        System.nanoTime() - started,
+                        projection.length.toLong(),
+                    )
+                    cachedAtNanos = lockedNow
+                    cachedJson = projection
+                }
+            }
+        }
+    }
 }

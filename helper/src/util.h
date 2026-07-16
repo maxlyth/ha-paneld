@@ -12,14 +12,19 @@ int  clamp(int v);                                  // clamp to 0..255
 // Write a NUL-terminated string to a (sysfs) node. Returns 0 on success, -1 on any failure.
 int  write_node(const char *path, const char *val);
 
-// Write a NUL-terminated string to a socket fd (errors ignored — a dead peer is the caller's worry).
-void reply(int fd, const char *s);
+// Write all bytes unless the peer fails/stalls. Returns 0 on success, -1 on failure.
+int write_complete(int fd, const void *bytes, size_t size);
+
+// Write a NUL-terminated string to a socket fd. A failed reply shuts down that connection so its
+// server worker exits instead of parsing further commands for a peer that can no longer receive.
+int reply(int fd, const char *s);
 
 // First line of [path] into [dst] (NUL-terminated, newline stripped). dst[0]='\0' on failure.
 void first_line(const char *path, char *dst, size_t dstsz);
 
-// Copy the whole contents of [path] to fd [out] (best-effort; silent on open failure).
-void cat_to(int out, const char *path);
+// Copy the whole contents of [path] to fd [out]. Returns 0 on success, -1 on read/write/open failure;
+// a failed socket write shuts down the connection.
+int cat_to(int out, const char *path);
 
 // Argument validators — every value passed to a sysexec_run() shell string must clear one of these.
 int  valid_pkg(const char *s);        // Android package: [A-Za-z0-9._]+

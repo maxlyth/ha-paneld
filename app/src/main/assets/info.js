@@ -77,34 +77,40 @@ function featureCostRows(fc){
   'mqtt.command_dispatch':'MQTT command dispatch',
   'mqtt.discovery_reannounce':'MQTT discovery reannouncement',
   'performance.root_diagnostics':'Performance root diagnostics',
+  'performance.feature_cost_projection':'Feature-cost diagnostics projection',
+  'provisioning.plan':'Provisioning plan reads',
+  'provisioning.observation_refresh':'Provisioning device observations',
   'vendor.tame_mutation':'Vendor package changes',
   'control.remote_input':'Remote input controls','dashboard.storage_clear':'Dashboard storage clearing',
   'log.capture_batch':'Log capture batches','log.ship_batch':'Log shipping batches',
   'zigbee.reconcile':'Zigbee gateway reconciliation','network.reconfigure':'Network runtime reconfiguration',
   'config.live_refresh':'Configuration live refresh',
   'navbar.mode_apply':'Navigation bar mode apply','navbar.action':'Navigation bar actions'};
- var active=fc.operations.filter(function(o){return o.calls||o.dropped||o.rejected||o.backlog;});
- var age=(fc.since_elapsed_ns||0)/1000000000,windowRow={label:'Measurement window',
+ var active=fc.operations.filter(function(o){var e=o.epoch||o;return e.calls||e.dropped||e.rejected||o.backlog;});
+ var age=(fc.epoch_elapsed_ns==null?fc.since_elapsed_ns:fc.epoch_elapsed_ns||0)/1000000000,windowRow={label:'Comparison epoch',
   val:age<120?Math.round(age)+' seconds':(age<7200?Math.round(age/60)+' minutes':(age/3600).toFixed(1)+' hours'),
-  suf:'· process generation '+fc.generation,col:'#888'};
+  suf:'· epoch '+(fc.epoch_generation||1)+' · process generation '+fc.generation,col:'#888'};
  var semantics={label:'How to read these metrics',val:'resource volume + sampled CPU',
   suf:'· elapsed is inclusive latency; parent and child totals overlap',col:'#888'};
- return [windowRow,semantics].concat(active.map(function(o){
+ return [windowRow,semantics].concat(active.map(function(o){var e=o.epoch||o;
   var alerts=[];
   if(o.backlog)alerts.push('backlog '+o.backlog+(o.peak_backlog?' (peak '+o.peak_backlog+')':''));
-  if(o.coalesced)alerts.push(o.coalesced+' coalesced');
-  if(o.dropped)alerts.push(o.dropped+' dropped');
-  if(o.rejected)alerts.push(o.rejected+' rejected');
-  var avg=o.calls?(o.wall_ns_total||0)/o.calls:0;
-  var burden=o.thread_cpu_samples?ms(o.thread_cpu_ns_total)+' ms sampled CPU':
-   (o.work_bytes?volume(o.work_bytes):(o.work_units?o.work_units+' work units':o.calls+' calls'));
+  if(e.coalesced)alerts.push(e.coalesced+' coalesced');
+  if(e.dropped)alerts.push(e.dropped+' dropped');
+  if(e.rejected)alerts.push(e.rejected+' rejected');
+  var avg=e.calls?(e.wall_ns_total||0)/e.calls:0;
+  var burden=e.external_execution_samples?ms(e.external_execution_ns_total)+' ms browser parse/encode time':
+   (e.thread_cpu_samples?ms(e.thread_cpu_ns_total)+' ms sampled CPU':
+   (e.work_bytes?volume(e.work_bytes):(e.work_units?e.work_units+' work units':e.calls+' calls')));
   var label=(o.parent_id?'↳ ':'')+(names[o.id]||o.id);
-  var work=o.thread_cpu_samples?(o.work_bytes?' · '+volume(o.work_bytes)+' processed':
-   (o.work_units?' · '+o.work_units+' work units':'')):'';
-  var cpu=o.thread_cpu_samples?' · '+o.thread_cpu_samples+' same-thread CPU samples':'';
+  var work=(e.thread_cpu_samples||e.external_execution_samples)?(e.work_bytes?' · '+volume(e.work_bytes)+' processed':
+   (e.work_units?' · '+e.work_units+' work units':'')):'';
+  var cpu=e.external_execution_samples?' · '+e.external_execution_samples+' browser aggregate samples':
+   (e.thread_cpu_samples?' · '+e.thread_cpu_samples+' same-thread CPU samples':'');
+  var elapsed=e.wall_ns_total?' · inclusive elapsed '+ms(e.wall_ns_total)+' ms total / '+ms(avg)+' ms avg / '+ms(o.wall_ns_max)+' ms lifetime max':'';
   return {label:label,val:burden,
-   suf:'· '+o.calls+' calls · inclusive elapsed '+ms(o.wall_ns_total)+' ms total / '+ms(avg)+' ms avg / '+ms(o.wall_ns_max)+' ms max'+cpu+work+(alerts.length?' · '+alerts.join(', '):''),
-   col:(o.dropped||o.rejected)?'#d04a3b':''};
+   suf:'· '+e.calls+' calls'+elapsed+cpu+work+(alerts.length?' · '+alerts.join(', '):''),
+   col:(e.dropped||e.rejected)?'#d04a3b':''};
  }));
 }
 function draw(){

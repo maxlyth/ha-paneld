@@ -1647,7 +1647,7 @@ internal fun recordBrowserObserverCosts(
 ) {
     registry.recordExternal(
         FeatureCostOperation.ENTITY_BROWSER_OBSERVER,
-        wallElapsedNanos = (observer.parseMicros + observer.stringifyMicros) * 1_000L,
+        externalExecutionNanos = (observer.parseMicros + observer.stringifyMicros) * 1_000L,
         events = observer.frames,
         inputChars = observer.frameChars,
         workUnits = observer.entities,

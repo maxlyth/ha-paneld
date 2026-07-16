@@ -26,7 +26,21 @@ grep -Fq 'TARGET_HELPER_SHA256=' "$SCRIPT"
 for recovery_field in OLD_BIN OLD_SERVICE LEGACY_BIN LEGACY_SERVICE ALT_BIN ALT_SERVICE; do
   grep -Fq "${recovery_field}_SHA256=" "$SCRIPT"
 done
-grep -Fq 'cmp -s /data/local/tmp/hapaneld-helper.expected /data/local/tmp/hapaneld-helper.actual' "$SCRIPT"
+grep -Fq '[ "${actual%% *}" = "$expected" ] || exit 1' "$SCRIPT"
+if grep -Eq '/data/local/tmp/hapaneld-helper\.(expected|actual)' "$SCRIPT"; then
+  echo "installer uses predictable root temporary paths for recovery verification" >&2
+  exit 1
+fi
+grep -Fq 'echo $$ > "$lock/pid"' "$SCRIPT"
+grep -Fq "''|*[!0-9]*) echo TRANSACTION_BUSY; exit 75" "$SCRIPT"
+state_line="$(grep -nF 'manual_journal_state="$(run_root_locked' "$SCRIPT" | head -1 | cut -d: -f1)"
+selection_line="$(grep -nF "out=\"\$(run_root '" "$SCRIPT" | tail -1 | cut -d: -f1)"
+[ "$state_line" -lt "$selection_line" ]
+grep -Fq 'STALE_SYSTEM_TRANSACTION)' "$SCRIPT"
+grep -Fq 'rollback_root_helper system || fail' "$SCRIPT"
+grep -Fq 'STALE_SYSTEMLESS_TRANSACTION)' "$SCRIPT"
+grep -Fq 'rollback_root_helper systemless || fail' "$SCRIPT"
+grep -Fq 'both standalone root-helper recovery journals are present' "$SCRIPT"
 grep -Fq 'COMPANIONCAPS 1 BACKUP RESTORE STATUS JOURNAL' "$SCRIPT"
 grep -Fq 'wait_for_helper_reply COMPANIONCAPS' "$SCRIPT"
 grep -Fq 'wait_for_helper_reply BUILDID "BUILDID $BUILD_ID"' "$SCRIPT"
@@ -96,13 +110,13 @@ rollback_body="$(sed -n '/^rollback_root_helper()/,/^commit_root_helper_upgrade(
 rollback_system_body="$(sed -n '/^    system)$/,/^    systemless)$/p' <<<"$rollback_body")"
 rollback_systemless_body="$(sed -n '/^    systemless)$/,/^    \*)/p' <<<"$rollback_body")"
 assert_text_order "$rollback_system_body" \
-  'cmp -s /data/local/tmp/hapaneld-helper.expected /data/local/tmp/hapaneld-helper.actual' \
+  '[ "${actual%% *}" = "$expected" ] || exit 1' \
   'rm -f /system/bin/.hapaneld-helper-manual-upgrade || exit 1'
 assert_text_order "$rollback_system_body" \
   'rm -f /system/bin/.hapaneld-helper-manual-upgrade || exit 1' \
   'rm -f /system/bin/hapaneld-helper.hapaneld-manual-recovery /system/etc/init/hapaneld-helper.rc.hapaneld-manual-recovery'
 assert_text_order "$rollback_systemless_body" \
-  'cmp -s /data/local/tmp/hapaneld-helper.expected /data/local/tmp/hapaneld-helper.actual' \
+  '[ "${actual%% *}" = "$expected" ] || exit 1' \
   'rm -f /data/adb/hapaneld/.helper-manual-upgrade.marker || exit 1'
 assert_text_order "$rollback_systemless_body" \
   'rm -f /data/adb/hapaneld/.helper-manual-upgrade.marker || exit 1' \

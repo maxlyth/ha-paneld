@@ -28,6 +28,8 @@ import io.github.maxlyth.hapaneld.control.BootChimeController
 import io.github.maxlyth.hapaneld.control.BrightnessController
 import io.github.maxlyth.hapaneld.control.CpuController
 import io.github.maxlyth.hapaneld.control.CompanionDb
+import io.github.maxlyth.hapaneld.control.CompanionDataOperationGate
+import io.github.maxlyth.hapaneld.control.CompanionDataOperationState
 import io.github.maxlyth.hapaneld.control.NavbarController
 import io.github.maxlyth.hapaneld.control.PowerController
 import io.github.maxlyth.hapaneld.control.NavigateController
@@ -54,6 +56,7 @@ import io.github.maxlyth.hapaneld.dashboard.EntityLearningManager
 import io.github.maxlyth.hapaneld.dashboard.EntityLearningRuntime
 import io.github.maxlyth.hapaneld.http.PaneldServer
 import io.github.maxlyth.hapaneld.http.PanelInfo
+import io.github.maxlyth.hapaneld.http.retainCompanionLeaseUntilHelperIdle
 import io.github.maxlyth.hapaneld.logship.LogCapture
 import io.github.maxlyth.hapaneld.logship.LogShipper
 import io.github.maxlyth.hapaneld.media.AudioPlaybackCoordinator
@@ -90,6 +93,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 import io.github.maxlyth.hapaneld.util.UpdateChecker
 import io.github.maxlyth.hapaneld.util.CompanionInstaller
+import io.github.maxlyth.hapaneld.util.CompanionOperationStatus
 import io.github.maxlyth.hapaneld.util.InstallProgress
 import io.github.maxlyth.hapaneld.util.HelperClient
 import io.github.maxlyth.hapaneld.util.HelperInstallReconciler
@@ -192,6 +196,38 @@ internal fun prepareEntityLearningStartup(
     return reconcileRenderer().also { result ->
         if (result != RendererPreparationCoordinator.Result.CLOSED) startLearning()
     }
+}
+
+/**
+ * Reconstruct the process-local Companion launch gate only when the app-private marker proves that
+ * this app may have submitted a helper transaction before process death. Ordinary helper absence
+ * without that marker is not a launch block. A retained lease is released only after an affirmative
+ * IDLE status also clears the marker durably.
+ */
+internal fun restoreCompanionLaunchSuppression(
+    packageName: String,
+    operationState: CompanionDataOperationState,
+    operationStatus: () -> CompanionOperationStatus,
+    retain: (CompanionDataOperationGate.Lease) -> Unit,
+): CompanionOperationStatus {
+    if (!operationState.isPending()) {
+        return CompanionOperationStatus.IDLE
+    }
+    val status = runCatching(operationStatus).getOrDefault(CompanionOperationStatus.UNAVAILABLE)
+    val resolvedPackage = packageName.takeIf(CompanionDataOperationGate::isCompanionPackage)
+        ?: CompanionInstaller.MINIMAL_PKG
+    when (status) {
+        CompanionOperationStatus.IDLE -> {
+            if (!operationState.clear()) {
+                CompanionDataOperationGate.acquire(resolvedPackage)?.let(retain)
+            }
+        }
+        CompanionOperationStatus.BUSY,
+        CompanionOperationStatus.UNSUPPORTED,
+        CompanionOperationStatus.UNAVAILABLE ->
+            CompanionDataOperationGate.acquire(resolvedPackage)?.let(retain)
+    }
+    return status
 }
 
 /** Start a replacement network runtime without making native HA link resolution depend on MQTT reaching
@@ -334,6 +370,7 @@ class PaneldService : Service() {
     private lateinit var server: PaneldServer
     private lateinit var rendererPreparation: RendererPreparationCoordinator
     private lateinit var entityLearning: EntityLearningManager
+    private lateinit var companionDataOperationState: CompanionDataOperationState
     private val mqtt: MqttBridge get() = runtime.current().mqtt
     private val mdns: MdnsAdvertiser get() = runtime.current().mdns
     // Default-network callback that nudges an MQTT reconnect when the network returns (see registerNetworkCallback).
@@ -468,6 +505,7 @@ class PaneldService : Service() {
             onFailure = { error -> Log.w(TAG, "audio playback failed: ${error.javaClass.simpleName}") },
         )
         system = SystemController(AndroidSystemEnv(this))
+        companionDataOperationState = CompanionDataOperationState.from(this)
         entityLearning = EntityLearningManager(
             context = this,
             config = config,
@@ -622,6 +660,7 @@ class PaneldService : Service() {
             peers = { mdns.browsePeers() },
             rendererPreparation = rendererPreparation,
             entityLearning = entityLearning,
+            companionDataOperationState = companionDataOperationState,
             profileAdmin = profileRegistry,
             profileTemplate = {
                 val report = passiveProfileProbe.report()
@@ -743,6 +782,9 @@ class PaneldService : Service() {
     }
 
     private fun performNetworkReconfigure() {
+        // A committed configuration application starts a fresh comparison epoch while process-lifetime
+        // startup evidence remains available in the same fixed-cardinality diagnostics projection.
+        FeatureCosts.beginEpoch()
         FeatureCosts.registry.setBacklog(FeatureCostOperation.NETWORK_RECONFIGURE, 0)
         val desired = currentNetworkConfigurationSnapshot()
         val replacementRequired = desired.runtime != activeNetworkIdentity ||
@@ -1226,6 +1268,35 @@ class PaneldService : Service() {
                 BundledHelperInstaller.Result.ALREADY_CURRENT,
                 BundledHelperInstaller.Result.SKIPPED -> Unit
             }
+            val startupCompanionPackage = CompanionInstaller.installedPkg(this)
+                ?: system.resolveDashboard(config.dashboardPackage)
+            restoreCompanionLaunchSuppression(
+                packageName = startupCompanionPackage,
+                operationState = companionDataOperationState,
+                operationStatus = HelperClient::companionOperationStatus,
+                retain = { lease ->
+                    scope.launch(Dispatchers.IO) {
+                        retainCompanionLeaseUntilHelperIdle(
+                            lease = lease,
+                            operationState = companionDataOperationState,
+                            operationStatus = HelperClient::companionOperationStatus,
+                            pollMs = COMPANION_STARTUP_STATUS_POLL_MS,
+                            afterRelease = {
+                                if (!serviceStopping) {
+                                    runCatching {
+                                        rendererPreparation.reconcileStartup(
+                                            ensureHome = { pkg, ready -> system.ensureDashboardHome(pkg, ready) },
+                                            launchHome = system::launchHome,
+                                        )
+                                    }.onFailure {
+                                        Log.w(TAG, "Companion-safe startup renderer retry failed", it)
+                                    }
+                                }
+                            },
+                        )
+                    }
+                },
+            )
             // Learning resolves the HA instance identity through this runtime. Start mDNS before either
             // the initial learner sync or a borrowed renderer commit can notify the learner of a target.
             val rendererResult = prepareEntityLearningStartup(
@@ -1733,6 +1804,7 @@ class PaneldService : Service() {
         // workers may be stranded; saturation escalates to a controlled START_STICKY process restart.
         private const val REBUILD_ABANDON_MS = 300_000L
         private const val RECOVERY_RESTART_GRACE_MS = 1_000L
+        private const val COMPANION_STARTUP_STATUS_POLL_MS = 2_000L
         // An auth-rejected state younger than this (vs the last broker-ACKed activity) renders as
         // "reconnecting…" — only a PERSISTENT rejection surfaces the check-your-credentials warning.
         private const val AUTH_PERSIST_MS = 300_000L

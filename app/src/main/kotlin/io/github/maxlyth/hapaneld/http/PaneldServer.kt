@@ -20,6 +20,7 @@ import io.github.maxlyth.hapaneld.config.Validation
 import io.github.maxlyth.hapaneld.control.CdpRelay
 import io.github.maxlyth.hapaneld.control.CompanionDb
 import io.github.maxlyth.hapaneld.control.CompanionDataOperationGate
+import io.github.maxlyth.hapaneld.control.CompanionDataOperationState
 import io.github.maxlyth.hapaneld.control.DensityController
 import io.github.maxlyth.hapaneld.control.InteractiveController
 import io.github.maxlyth.hapaneld.control.Su
@@ -99,6 +100,63 @@ internal fun panelBrowserTitle(friendlyName: String, section: String? = null): S
     val panel = friendlyName.trim().ifBlank { "ha-paneld" }
     val suffix = section?.trim().orEmpty()
     return if (suffix.isBlank()) panel else "$panel · $suffix"
+}
+
+/**
+ * Keep app-side launch suppression until the helper affirmatively reports that no Companion-data
+ * worker can still be mutating files. An unreachable status socket is not evidence that a worker
+ * from an earlier, timed-out connection has stopped; the daemon may merely be temporarily unable to
+ * accept or answer the probe. The global Companion gate admits only one lease, so retaining it and
+ * one low-frequency polling coroutine is resource-bounded even across a prolonged outage.
+ *
+ * A legacy `UNSUPPORTED` reply is not affirmative while the app marker is armed: a newer helper may
+ * have published a durable journal and then died before an older init-managed helper restarted.
+ */
+internal suspend fun retainCompanionLeaseUntilHelperIdle(
+    lease: CompanionDataOperationGate.Lease,
+    operationState: CompanionDataOperationState,
+    afterRelease: () -> Unit,
+    operationStatus: () -> CompanionOperationStatus,
+    pollMs: Long,
+) {
+    try {
+        while (true) {
+            val status = runCatching(operationStatus).getOrDefault(CompanionOperationStatus.UNAVAILABLE)
+            when (status) {
+                CompanionOperationStatus.IDLE -> if (operationState.clear()) break
+                CompanionOperationStatus.BUSY,
+                CompanionOperationStatus.UNSUPPORTED,
+                CompanionOperationStatus.UNAVAILABLE -> delay(pollMs.coerceAtLeast(1L))
+            }
+            if (status == CompanionOperationStatus.IDLE) delay(pollMs.coerceAtLeast(1L))
+        }
+    } finally {
+        lease.close()
+    }
+    afterRelease()
+}
+
+/**
+ * Resolve one app-side Companion lease. A BUSY/indeterminate exchange retains durable suppression;
+ * every terminal or explicit never-submitted outcome clears it immediately. If clearing cannot be
+ * made durable, retain the lease and let status reconciliation retry rather than launching partially.
+ *
+ * Returns true when ownership was transferred to asynchronous retention.
+ */
+internal fun settleCompanionOperationLease(
+    lease: CompanionDataOperationGate.Lease,
+    operationState: CompanionDataOperationState,
+    possiblyInFlight: Boolean,
+    retain: (CompanionDataOperationGate.Lease, () -> Unit) -> Unit,
+    afterRelease: () -> Unit,
+): Boolean {
+    if (possiblyInFlight || !operationState.clear()) {
+        retain(lease, afterRelease)
+        return true
+    }
+    lease.close()
+    afterRelease()
+    return false
 }
 
 /** Bound config mutations before Ktor or JSONObject materializes attacker-controlled form/JSON data. */
@@ -311,6 +369,8 @@ class PaneldServer internal constructor(
     // launch, and retries an interrupted built-in switch from its durable blank-URL state.
     private val rendererPreparation: RendererPreparationCoordinator,
     private val entityLearning: EntityLearningManager,
+    private val companionDataOperationState: CompanionDataOperationState =
+        CompanionDataOperationState.from(appContext),
     // Runtime-loadable profiles. Optional during staged integration so the existing service can keep
     // constructing the HTTP server before its repository/restart wiring lands; the tab then reports 503.
     private val profileAdmin: ProfileAdmin? = null,
@@ -3432,6 +3492,10 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
         }
         val lease = CompanionDataOperationGate.acquire(pkg)
             ?: throw CompanionBackupUnavailable("Another Companion data operation is running")
+        if (!companionDataOperationState.arm()) {
+            lease.close()
+            throw CompanionBackupUnavailable("Companion operation safety marker could not be persisted")
+        }
         var helperCapture: CompanionHelperProtocol.Capture? = null
         var needsCompanionRecovery = false
         var leaseTransferred = false
@@ -3441,8 +3505,16 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
                 is CompanionHelperProtocol.BackupResult.Success -> result.capture.also {
                     needsCompanionRecovery = !it.relaunched
                 }
-                CompanionHelperProtocol.BackupResult.Busy ->
+                CompanionHelperProtocol.BackupResult.Busy -> {
+                    leaseTransferred = settleCompanionOperationLease(
+                        lease,
+                        companionDataOperationState,
+                        possiblyInFlight = true,
+                        retain = { retained, after -> retainCompanionLeaseUntilHelperIdle(retained, after) },
+                        afterRelease = {},
+                    )
                     throw CompanionBackupUnavailable("Companion helper is busy")
+                }
                 CompanionHelperProtocol.BackupResult.NotSubmitted ->
                     throw CompanionBackupUnavailable("Companion helper is unavailable")
                 is CompanionHelperProtocol.BackupResult.Failed -> {
@@ -3453,13 +3525,18 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
                     )
                 }
                 CompanionHelperProtocol.BackupResult.Indeterminate -> {
-                    leaseTransferred = true
-                    retainCompanionLeaseUntilHelperIdle(lease) {
-                        system.launchHome(pkg)
-                        if (system.resolveDashboard(config.dashboardPackage) != pkg) {
-                            system.launchHome(config.dashboardPackage)
-                        }
-                    }
+                    leaseTransferred = settleCompanionOperationLease(
+                        lease,
+                        companionDataOperationState,
+                        possiblyInFlight = true,
+                        retain = { retained, after -> retainCompanionLeaseUntilHelperIdle(retained, after) },
+                        afterRelease = {
+                            system.launchHome(pkg)
+                            if (system.resolveDashboard(config.dashboardPackage) != pkg) {
+                                system.launchHome(config.dashboardPackage)
+                            }
+                        },
+                    )
                     throw CompanionBackupUnavailable("Companion capture result was indeterminate")
                 }
             }
@@ -3488,11 +3565,20 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             return CapturedCompanion(pkg, captured, capture)
         } finally {
             if (!leaseTransferred) {
-                lease.close()
-                // The helper always launches Companion to clear Android's stopped state. Restore the panel's
-                // configured dashboard after releasing the suppression lease when Companion is not it.
-                if (needsCompanionRecovery) system.launchHome(pkg)
-                if (system.resolveDashboard(config.dashboardPackage) != pkg) system.launchHome(config.dashboardPackage)
+                settleCompanionOperationLease(
+                    lease,
+                    companionDataOperationState,
+                    possiblyInFlight = false,
+                    retain = { retained, after -> retainCompanionLeaseUntilHelperIdle(retained, after) },
+                    afterRelease = {
+                        // The helper always launches Companion to clear Android's stopped state. Restore the
+                        // configured dashboard after releasing suppression when Companion is not it.
+                        if (needsCompanionRecovery) system.launchHome(pkg)
+                        if (system.resolveDashboard(config.dashboardPackage) != pkg) {
+                            system.launchHome(config.dashboardPackage)
+                        }
+                    },
+                )
             }
             helperCapture?.close()
         }
@@ -4297,6 +4383,17 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
                     false,
                     InstallProgress.ComponentResult(InstallProgress.Outcome.FAILED, 0, "Companion helper is busy"),
                 )
+            if (!companionDataOperationState.arm()) {
+                lease.close()
+                return CompanionApplyResult(
+                    false,
+                    InstallProgress.ComponentResult(
+                        InstallProgress.Outcome.FAILED,
+                        0,
+                        "Companion operation safety marker could not be persisted",
+                    ),
+                )
+            }
             var result = CompanionHelperProtocol.RestoreResult.INDETERMINATE
             var leaseTransferred = false
             try {
@@ -4304,23 +4401,39 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
                     plan.packageName,
                     prepared.files.associate { it.relativePath to it.file },
                 )
-                if (result == CompanionHelperProtocol.RestoreResult.INDETERMINATE) {
-                    leaseTransferred = true
-                    retainCompanionLeaseUntilHelperIdle(lease) {
-                        if (system.resolveDashboard(config.dashboardPackage) != plan.packageName) {
-                            system.launchHome(config.dashboardPackage)
-                        }
-                    }
+                if (result == CompanionHelperProtocol.RestoreResult.INDETERMINATE ||
+                    result == CompanionHelperProtocol.RestoreResult.BUSY
+                ) {
+                    leaseTransferred = settleCompanionOperationLease(
+                        lease,
+                        companionDataOperationState,
+                        possiblyInFlight = true,
+                        retain = { retained, after -> retainCompanionLeaseUntilHelperIdle(retained, after) },
+                        afterRelease = {
+                            if (system.resolveDashboard(config.dashboardPackage) != plan.packageName) {
+                                system.launchHome(config.dashboardPackage)
+                            }
+                        },
+                    )
                 }
             } finally {
-                if (!leaseTransferred) lease.close()
-                if (result in setOf(
-                        CompanionHelperProtocol.RestoreResult.COMMITTED_RELAUNCH_FAILED,
-                        CompanionHelperProtocol.RestoreResult.ROLLED_BACK_RELAUNCH_FAILED,
+                if (!leaseTransferred) {
+                    settleCompanionOperationLease(
+                        lease,
+                        companionDataOperationState,
+                        possiblyInFlight = false,
+                        retain = { retained, after -> retainCompanionLeaseUntilHelperIdle(retained, after) },
+                        afterRelease = {
+                            if (result in setOf(
+                                CompanionHelperProtocol.RestoreResult.COMMITTED_RELAUNCH_FAILED,
+                                CompanionHelperProtocol.RestoreResult.ROLLED_BACK_RELAUNCH_FAILED,
+                            )
+                            ) system.launchHome(plan.packageName)
+                            if (system.resolveDashboard(config.dashboardPackage) != plan.packageName) {
+                                system.launchHome(config.dashboardPackage)
+                            }
+                        },
                     )
-                ) system.launchHome(plan.packageName)
-                if (!leaseTransferred && system.resolveDashboard(config.dashboardPackage) != plan.packageName) {
-                    system.launchHome(config.dashboardPackage)
                 }
             }
             val repaired = prepared.repairedInternalUrls
@@ -4385,31 +4498,19 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
     }
 
     /** A timed-out socket does not cancel the helper worker. Keep every automatic launch path blocked
-     * until the helper reports the transaction idle. Three consecutive connection failures mean the
-     * daemon process is gone, so no worker remains capable of touching Companion data. */
+     * until a reachable helper affirmatively reports that the transaction can no longer be active. */
     private fun retainCompanionLeaseUntilHelperIdle(
         lease: CompanionDataOperationGate.Lease,
         afterRelease: () -> Unit,
     ) {
         scope.launch(Dispatchers.IO) {
-            var consecutiveUnavailable = 0
-            try {
-                while (true) {
-                    when (HelperClient.companionOperationStatus()) {
-                        CompanionOperationStatus.BUSY -> consecutiveUnavailable = 0
-                        CompanionOperationStatus.IDLE,
-                        CompanionOperationStatus.UNSUPPORTED -> break
-                        CompanionOperationStatus.UNAVAILABLE -> {
-                            consecutiveUnavailable++
-                            if (consecutiveUnavailable >= COMPANION_STATUS_UNAVAILABLE_LIMIT) break
-                        }
-                    }
-                    delay(COMPANION_STATUS_POLL_MS)
-                }
-            } finally {
-                lease.close()
-            }
-            afterRelease()
+            retainCompanionLeaseUntilHelperIdle(
+                lease = lease,
+                operationState = companionDataOperationState,
+                afterRelease = afterRelease,
+                operationStatus = HelperClient::companionOperationStatus,
+                pollMs = COMPANION_STATUS_POLL_MS,
+            )
         }
     }
 
@@ -4537,7 +4638,6 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
         private const val SU_TTL_MS = 60_000L
         private const val COMPANION_URL_TTL_MS = 60_000L
         private const val COMPANION_STATUS_POLL_MS = 1_000L
-        private const val COMPANION_STATUS_UNAVAILABLE_LIMIT = 3
         internal const val MAX_PLAY_BODY_BYTES = 16L * 1024L
         internal const val MAX_CONFIG_POST_BODY_BYTES = 256L * 1024L
         internal const val MAX_SMALL_FORM_POST_BODY_BYTES = 16L * 1024L

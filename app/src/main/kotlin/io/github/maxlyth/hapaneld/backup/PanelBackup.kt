@@ -11,7 +11,6 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
 import java.util.zip.ZipOutputStream
 import javax.crypto.Cipher
-import javax.crypto.CipherInputStream
 import javax.crypto.CipherOutputStream
 import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.GCMParameterSpec
@@ -24,9 +23,10 @@ object PanelBackup {
     private const val SALT_LEN = 16
     private const val IV_LEN = 12
     private const val TAG_BITS = 128
+    private const val TAG_BYTES = TAG_BITS / 8
     private const val ITERATIONS = 210_000
     private const val KEY_BITS = 256
-    internal const val SEALED_OVERHEAD_BYTES = 4L + SALT_LEN + IV_LEN + TAG_BITS / 8L
+    internal const val SEALED_OVERHEAD_BYTES = 4L + SALT_LEN + IV_LEN + TAG_BYTES
     const val MANIFEST_ENTRY = "manifest.json"
     /** One manifest plus a deliberately small allowance for current and future file-backed payloads. */
     internal const val MAX_ARCHIVE_ENTRIES = 8
@@ -101,9 +101,27 @@ object PanelBackup {
             val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply {
                 init(Cipher.DECRYPT_MODE, deriveKey(passphrase, salt), GCMParameterSpec(TAG_BITS, iv))
             }
-            CipherInputStream(bundle, cipher).use { decrypted ->
-                BoundedStreams.copy(decrypted, output, maxPlaintextBytes)
+            require(maxPlaintextBytes in 0 until Long.MAX_VALUE - TAG_BYTES)
+            val ciphertextLimit = maxPlaintextBytes + TAG_BYTES
+            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+            var ciphertextBytes = 0L
+            var plaintextBytes = 0L
+            while (true) {
+                val remainingWithProbe = (ciphertextLimit - ciphertextBytes) + 1L
+                val wanted = minOf(buffer.size.toLong(), remainingWithProbe).toInt()
+                val read = bundle.read(buffer, 0, wanted)
+                if (read < 0) break
+                if (read == 0) continue
+                if (ciphertextBytes + read > ciphertextLimit) throw ByteLimitExceeded(maxPlaintextBytes)
+                ciphertextBytes += read
+                plaintextBytes = writeBounded(
+                    output,
+                    cipher.update(buffer, 0, read),
+                    plaintextBytes,
+                    maxPlaintextBytes,
+                )
             }
+            writeBounded(output, cipher.doFinal(), plaintextBytes, maxPlaintextBytes)
             true
         } catch (error: ByteLimitExceeded) {
             throw error
@@ -221,6 +239,18 @@ object PanelBackup {
             offset += read
         }
         return true
+    }
+
+    private fun writeBounded(
+        output: OutputStream,
+        bytes: ByteArray?,
+        written: Long,
+        maxBytes: Long,
+    ): Long {
+        if (bytes == null || bytes.isEmpty()) return written
+        if (bytes.size.toLong() > maxBytes - written) throw ByteLimitExceeded(maxBytes)
+        output.write(bytes)
+        return written + bytes.size
     }
 
     private fun deriveKey(passphrase: String, salt: ByteArray): SecretKeySpec {

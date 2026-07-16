@@ -68,6 +68,11 @@ run_provision() {
   MOCK_SYSTEM_WRITABLE="${MOCK_SYSTEM_WRITABLE:-1}" \
   MOCK_SYSTEMLESS_RUNNER="${MOCK_SYSTEMLESS_RUNNER:-1}" \
   MOCK_HELPER_INSTALL="${MOCK_HELPER_INSTALL:-ok}" \
+  MOCK_HELPER_COMMIT="${MOCK_HELPER_COMMIT:-ok}" \
+  MOCK_TRANSACTION_BUSY="${MOCK_TRANSACTION_BUSY:-0}" \
+  MOCK_TRANSACTION_TAMPER="${MOCK_TRANSACTION_TAMPER:-0}" \
+  MOCK_TRANSACTION_TOKEN_MISMATCH="${MOCK_TRANSACTION_TOKEN_MISMATCH:-0}" \
+  MOCK_TOKEN_MISMATCH_ACTION="${MOCK_TOKEN_MISMATCH_ACTION:-}" \
   MOCK_HELPER_START="${MOCK_HELPER_START:-ok}" \
   MOCK_HELPER_CAPABILITY="${MOCK_HELPER_CAPABILITY:-ok}" \
   MOCK_ROLLBACK_PING="${MOCK_ROLLBACK_PING:-ok}" \
@@ -78,6 +83,9 @@ run_provision() {
   MOCK_APK_INSTALL="${MOCK_APK_INSTALL:-ok}" \
   MOCK_APK_QUERY="${MOCK_APK_QUERY:-ok}" \
   MOCK_MANUAL_STALE="${MOCK_MANUAL_STALE:-0}" \
+  MOCK_STALE_TRANSACTION_KIND="${MOCK_STALE_TRANSACTION_KIND:-system}" \
+  MOCK_ACTIVE_TRANSACTION="${MOCK_ACTIVE_TRANSACTION:-0}" \
+  MOCK_STALE_LIVE_STATE="${MOCK_STALE_LIVE_STATE:-TARGET}" \
   MOCK_STALE_APK_SHA256="${MOCK_STALE_APK_SHA256:-$(/usr/bin/sha256sum "$TMP/installed-apk" | awk '{print $1}')}" \
   MOCK_STALE_BUILD_ID="${MOCK_STALE_BUILD_ID:-$MOCK_HELPER_BUILD_ID}" \
   MOCK_SU_DIALECT="${MOCK_SU_DIALECT:-join}" \
@@ -243,13 +251,8 @@ MOCK_PLAN=recommendations MOCK_WEBVIEW_VERSION=80.0.0.0 run_provision "$MOCK_TAR
 assert_success "unsatisfied profile recommendations do not fail an ordinary install"
 assert_contains 'Recommended: install the root helper' "app-owned helper recommendation is displayed"
 assert_contains 'Recommended: update System WebView' "app-owned WebView recommendation is displayed"
-helper_lines="$(grep -Eic 'root helper' "$LAST_OUTPUT" || true)"
-webview_lines="$(grep -Eic 'System WebView' "$LAST_OUTPUT" || true)"
-if [ "$helper_lines" -eq 1 ] && [ "$webview_lines" -eq 1 ]; then
-  pass "available plan suppresses duplicate blanket helper and WebView guidance"
-else
-  fail_test "available plan suppresses duplicate blanket helper and WebView guidance"
-fi
+assert_not_contains 'Root daemon: required|system WebView is very old' "$LAST_OUTPUT" \
+  "available plan suppresses duplicate blanket helper and WebView guidance"
 assert_not_contains '/api/v1/tame|action=recommended' "$MOCK_CALL_LOG" "recommendations cause no hidden mutation"
 unset MOCK_PLAN MOCK_WEBVIEW_VERSION
 
@@ -322,7 +325,7 @@ assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "missing local helpe
 
 MOCK_SYSTEM_WRITABLE=0 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
 assert_success "rooted systemless provisioning installs the helper through service.d"
-assert_log_contains 'hapaneld-helper\.txn install-systemless' "systemless helper path uses the same transactional installer"
+assert_log_contains 'helper-transaction-[0-9a-f]+.*install-systemless' "systemless helper path uses the same transactional installer"
 if grep -Fq '/system/bin/stop hapaneld_ledd' "$PROVISION" && grep -Fq '/system/bin/pkill -x hapaneld-ledd' "$PROVISION"; then
   pass "systemless boot service retires the legacy daemon before binding the helper socket"
 else
@@ -340,6 +343,22 @@ assert_failure "provisioning routes an interrupted standalone helper journal bac
 assert_contains 'incomplete standalone root-helper installation must be recovered first' "manual-to-provision handoff names the cross-tool boundary"
 assert_contains 'helper/install-daemon\.sh' "manual-to-provision handoff gives the exact recovery command"
 assert_not_contains '^adb .* push .* /data/local/tmp/hapaneld-helper|^adb .* install( |$)' "$MOCK_CALL_LOG" "manual-to-provision handoff stops before privileged staging or APK replacement"
+
+MOCK_TRANSACTION_TAMPER=1 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_failure "a transaction substituted after adb staging fails before root execution"
+assert_contains 'could not be promoted into protected storage' "substituted transaction names the protected-storage boundary"
+assert_not_contains 'helper-transaction-[0-9a-f]+.*install-(system|systemless)|^adb .* install( |$)' "$MOCK_CALL_LOG" "substituted transaction executes no privileged installer and replaces no APK"
+
+MOCK_TRANSACTION_BUSY=1 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_failure "a live standalone-installer lock blocks provisioner mutation"
+assert_contains 'another root-helper transaction is active' "cross-tool lock contention fails closed"
+assert_not_contains 'helper-transaction-[0-9a-f]+.*rollback-(system|systemless)|^adb .* install( |$)' "$MOCK_CALL_LOG" "cross-tool contention performs no rollback or APK replacement"
+
+MOCK_STALE_TRANSACTION=1 MOCK_ACTIVE_TRANSACTION=1 \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_failure "provisioner B cannot recover provisioner A while A's durable lease is active"
+assert_contains 'another provisioner still owns the active root-helper transaction' "interleaved provisioner reports the live owner"
+assert_not_contains 'helper-transaction-[0-9a-f]+.*(status|rollback|commit)-(system|systemless)|^adb .* install( |$)' "$MOCK_CALL_LOG" "interleaved provisioner cannot inspect destructively, roll back, commit, or replace A's APK"
 
 # Starting with v0.9.4, official releases carry ABI-specific helper assets authenticated by the same
 # release key as the APK and provisioner. The helper proof and device-side staging must complete
@@ -390,27 +409,27 @@ MOCK_HELPER_START=fail \
 assert_failure "helper start failure leaves the previous APK installed"
 assert_contains 'new root helper failed its capability check; the prior helper was restored' "helper start failure names the rollback outcome"
 assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "helper start failure stops before APK replacement"
-assert_log_contains 'hapaneld-helper\.txn rollback-system' "system helper capability failure invokes its rollback journal"
+assert_log_contains 'helper-transaction-[0-9a-f]+.*rollback-system' "system helper capability failure invokes its rollback journal"
 
 MOCK_HELPER_INSTALL=fail \
   run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
 assert_failure "helper staging failure leaves the previous APK installed"
 assert_contains 'root-helper install failed' "helper staging failure names the incomplete migration"
-assert_log_contains 'hapaneld-helper\.txn rollback-system' "failed system transaction preserves or restores the prior helper"
+assert_log_contains 'helper-transaction-[0-9a-f]+.*rollback-system' "failed system transaction preserves or restores the prior helper"
 assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "failed helper staging does not replace the APK"
 
 MOCK_SYSTEM_WRITABLE=0 MOCK_HELPER_CAPABILITY=fail \
   run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
 assert_failure "systemless helper capability failure leaves the previous APK installed"
 assert_contains 'new root helper failed its capability check; the prior helper was restored' "systemless capability failure reports verified rollback"
-assert_log_contains 'hapaneld-helper\.txn rollback-systemless' "systemless capability failure invokes its rollback journal"
+assert_log_contains 'helper-transaction-[0-9a-f]+.*rollback-systemless' "systemless capability failure invokes its rollback journal"
 assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "systemless capability failure stops before APK replacement"
 
 MOCK_SYSTEM_WRITABLE=0 MOCK_HELPER_INSTALL=fail \
   run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
 assert_failure "systemless helper install failure leaves the previous APK installed"
 assert_contains 'systemless root-helper install failed; the prior helper was preserved or restored' "systemless install failure reports its rollback outcome"
-assert_log_contains 'hapaneld-helper\.txn rollback-systemless' "failed systemless transaction invokes its rollback journal"
+assert_log_contains 'helper-transaction-[0-9a-f]+.*rollback-systemless' "failed systemless transaction invokes its rollback journal"
 assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "failed systemless transaction does not replace the APK"
 
 MOCK_HELPER_BUILD_ID_MATCH=fail \
@@ -418,7 +437,7 @@ MOCK_HELPER_BUILD_ID_MATCH=fail \
 assert_failure "helper build-identity mismatch leaves the previous APK installed"
 assert_contains 'failed its exact build-identity check; the prior helper was restored' "helper identity mismatch reports verified rollback"
 assert_log_contains 'helper-probe BUILDID' "provisioning probes the running daemon build identity"
-assert_log_contains 'hapaneld-helper\.txn rollback-system' "helper identity mismatch invokes the rollback journal"
+assert_log_contains 'helper-transaction-[0-9a-f]+.*rollback-system' "helper identity mismatch invokes the rollback journal"
 assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "helper identity mismatch stops before APK replacement"
 
 MOCK_HELPER_CAPABILITY=fail MOCK_ROLLBACK_RESULT=fail \
@@ -431,15 +450,15 @@ MOCK_APK_INSTALL=fail \
   run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
 assert_failure "APK package-manager failure rolls back the already-verified new helper"
 assert_contains 'prior root helper was restored and verified' "APK failure reports helper rollback"
-assert_log_contains 'hapaneld-helper\.txn rollback-system' "APK failure invokes the retained helper rollback journal"
-assert_not_contains 'hapaneld-helper\.txn commit-system' "$MOCK_CALL_LOG" "APK failure never commits helper recovery"
+assert_log_contains 'helper-transaction-[0-9a-f]+.*rollback-system' "APK failure invokes the retained helper rollback journal"
+assert_not_contains 'helper-transaction-[0-9a-f]+.*commit-system' "$MOCK_CALL_LOG" "APK failure never commits helper recovery"
 
 MOCK_SYSTEM_WRITABLE=0 MOCK_APK_INSTALL=fail \
   run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
 assert_failure "APK failure also rolls back a systemless helper upgrade"
 assert_contains 'prior root helper was restored and verified' "systemless APK failure reports helper rollback"
-assert_log_contains 'hapaneld-helper\.txn rollback-systemless' "systemless APK failure invokes the retained rollback journal"
-assert_not_contains 'hapaneld-helper\.txn commit-systemless' "$MOCK_CALL_LOG" "systemless APK failure never commits helper recovery"
+assert_log_contains 'helper-transaction-[0-9a-f]+.*rollback-systemless' "systemless APK failure invokes the retained rollback journal"
+assert_not_contains 'helper-transaction-[0-9a-f]+.*commit-systemless' "$MOCK_CALL_LOG" "systemless APK failure never commits helper recovery"
 
 MOCK_APK_INSTALL=ambiguous_commit \
   run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
@@ -447,8 +466,32 @@ assert_success "transport loss after package-manager commit is reconciled from e
 assert_contains 'exact target APK bytes are installed; completing the helper transaction' "ambiguous install success explains the exact-byte reconciliation"
 assert_log_contains '^adb .* shell pm path io\.github\.maxlyth\.hapaneld$' "ambiguous install outcome queries the installed package path"
 assert_log_contains '^adb .* pull /data/app/io\.github\.maxlyth\.hapaneld/base\.apk ' "ambiguous install outcome authenticates the installed base APK"
-assert_log_contains 'hapaneld-helper\.txn commit-system' "confirmed package-manager commit also commits helper recovery"
-assert_not_contains 'hapaneld-helper\.txn rollback-system' "$MOCK_CALL_LOG" "confirmed package-manager commit never rolls the matching helper back"
+assert_log_contains 'helper-transaction-[0-9a-f]+.*commit-system' "confirmed package-manager commit also commits helper recovery"
+assert_not_contains 'helper-transaction-[0-9a-f]+.*rollback-system' "$MOCK_CALL_LOG" "confirmed package-manager commit never rolls the matching helper back"
+
+MOCK_HELPER_COMMIT=fail \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_failure "unconfirmed helper journal commit fails without an unsafe rollback"
+assert_contains 'helper recovery journal could not be committed' "unconfirmed commit names the retained recovery state"
+assert_not_contains 'helper-transaction-[0-9a-f]+.*rollback-system' "$MOCK_CALL_LOG" "unconfirmed post-APK commit never claims or attempts rollback"
+commit_attempts="$(grep -Ec 'helper-transaction-[0-9a-f]+.*commit-system' "$MOCK_CALL_LOG" || true)"
+if [ "$commit_attempts" -eq 2 ]; then
+  pass "helper commit is retried idempotently before failing"
+else
+  fail_test "helper commit is retried idempotently before failing"
+fi
+
+MOCK_TOKEN_MISMATCH_ACTION=commit \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_failure "a mismatched transaction token cannot commit another provisioner's journal"
+assert_contains 'helper recovery journal could not be committed' "commit token mismatch retains the recovery journal"
+assert_not_contains 'helper-transaction-[0-9a-f]+.*rollback-system' "$MOCK_CALL_LOG" "commit token mismatch never falls back to another owner's rollback"
+
+MOCK_HELPER_START=fail MOCK_TOKEN_MISMATCH_ACTION=rollback \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_failure "a mismatched transaction token cannot roll back another provisioner's journal"
+assert_contains 'rollback could not be verified' "rollback token mismatch is reported without claiming restoration"
+assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "rollback token mismatch leaves the APK untouched"
 
 MOCK_APK_INSTALL=fail MOCK_APK_QUERY=fail \
   run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
@@ -456,26 +499,98 @@ assert_failure "unqueryable package-manager outcome retains helper recovery with
 assert_contains 'adb install outcome is ambiguous; helper recovery was retained without rollback' "unqueryable install outcome gives the safe retry path"
 assert_not_contains 'hapaneld-helper\.txn (rollback|commit)-system' "$MOCK_CALL_LOG" "unqueryable install outcome neither rolls back nor commits the helper journal"
 
+# TERM must interrupt the shell's wait for package-manager completion, stop and reap both local
+# subprocesses, and prevent the detached lease heartbeat from extending ownership indefinitely.
+: > "$MOCK_CALL_LOG"
+rm -f "$TMP/stale-helper-transaction" "$TMP/active-helper-transaction"
+printf 'previous installed apk\n' > "$TMP/installed-apk"
+blocked_install_pid_file="$TMP/blocked-install.pid"
+blocked_guard_pid_file="$TMP/blocked-guard.pid"
+blocked_guard_sleep_pid_file="$TMP/blocked-guard-sleep.pid"
+blocked_output="$TMP/blocked-provision-output.txt"
+lease_guard_tmp="$TMP/lease-guard-tmp"
+mkdir -p "$lease_guard_tmp"
+MOCK_APK_INSTALL=block \
+MOCK_APK_INSTALL_PID_FILE="$blocked_install_pid_file" \
+MOCK_STATE_DIR="$TMP" \
+ROOT_HELPER_LEASE_GUARD_INTERVAL_SECONDS=0.05 \
+ROOT_HELPER_LEASE_GUARD_PID_FILE="$blocked_guard_pid_file" \
+ROOT_HELPER_LEASE_GUARD_SLEEP_PID_FILE="$blocked_guard_sleep_pid_file" \
+TMPDIR="$lease_guard_tmp" \
+  bash "$PROVISION" "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame \
+    > "$blocked_output" 2>&1 &
+blocked_provision_pid=$!
+blocked_ready=0
+blocked_wait_attempt=0
+while [ "$blocked_wait_attempt" -lt 100 ]; do
+  if [ -s "$blocked_install_pid_file" ]; then blocked_ready=1; break; fi
+  /bin/sleep 0.05
+  blocked_wait_attempt=$((blocked_wait_attempt + 1))
+done
+if [ "$blocked_ready" -eq 1 ]; then
+  pass "blocked package install exposes its exact subprocess lifecycle"
+else
+  LAST_OUTPUT="$blocked_output"
+  fail_test "blocked package install exposes its exact subprocess lifecycle"
+fi
+/bin/sleep 0.2
+lease_count_before_term="$(grep -Ec 'helper-transaction-[0-9a-f]+.*lease-system' "$MOCK_CALL_LOG" || true)"
+kill -TERM "$blocked_provision_pid" 2>/dev/null || true
+if wait "$blocked_provision_pid"; then blocked_status=0; else blocked_status=$?; fi
+if [ "$blocked_status" -eq 143 ]; then
+  pass "TERM exits a provisioner blocked in adb install with signal status"
+else
+  LAST_OUTPUT="$blocked_output"
+  fail_test "TERM exits a provisioner blocked in adb install with signal status (got $blocked_status)"
+fi
+blocked_install_pid="$(cat "$blocked_install_pid_file" 2>/dev/null || true)"
+if [ -n "$blocked_install_pid" ] && ! kill -0 "$blocked_install_pid" 2>/dev/null; then
+  pass "TERM reaps the blocked adb install subprocess"
+else
+  fail_test "TERM reaps the blocked adb install subprocess"
+fi
+blocked_guard_pid="$(cat "$blocked_guard_pid_file" 2>/dev/null || true)"
+blocked_guard_sleep_pid="$(cat "$blocked_guard_sleep_pid_file" 2>/dev/null || true)"
+if [ -n "$blocked_guard_pid" ] && [ -n "$blocked_guard_sleep_pid" ] && \
+   ! kill -0 "$blocked_guard_pid" 2>/dev/null && ! kill -0 "$blocked_guard_sleep_pid" 2>/dev/null; then
+  pass "TERM reaps the lease guard and its current sleep child"
+else
+  fail_test "TERM reaps the lease guard and its current sleep child"
+fi
+lease_count_at_exit="$(grep -Ec 'helper-transaction-[0-9a-f]+.*lease-system' "$MOCK_CALL_LOG" || true)"
+/bin/sleep 0.2
+lease_count_after_term="$(grep -Ec 'helper-transaction-[0-9a-f]+.*lease-system' "$MOCK_CALL_LOG" || true)"
+if [ "$lease_count_before_term" -ge 2 ] && [ "$lease_count_after_term" -eq "$lease_count_at_exit" ]; then
+  pass "TERM leaves no orphan lease guard renewing after parent exit"
+else
+  fail_test "TERM leaves no orphan lease guard renewing after parent exit ($lease_count_at_exit at exit, $lease_count_after_term later)"
+fi
+if [ -z "$(find "$lease_guard_tmp" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
+  pass "TERM removes lease-guard and adb-capture temporary files"
+else
+  fail_test "TERM removes lease-guard and adb-capture temporary files"
+fi
+
 helper_release_apk_sha="$(/usr/bin/sha256sum "$HELPER_RELEASE_APK" | awk '{print $1}')"
 MOCK_STALE_TRANSACTION=1 \
 MOCK_INSTALLED_APK_SOURCE="$HELPER_RELEASE_APK" \
 MOCK_STALE_APK_SHA256="$helper_release_apk_sha" \
   run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
 assert_success "rerun commits a stale helper journal when the exact target APK is already installed"
-assert_log_contains 'hapaneld-helper\.txn status-system' "stale transaction reads its durable target identity"
+assert_log_contains 'helper-transaction-[0-9a-f]+.*status-system' "stale transaction reads its durable target identity"
 assert_log_contains '^adb .* pull /data/app/io\.github\.maxlyth\.hapaneld/base\.apk ' "stale transaction authenticates the installed APK bytes"
 assert_log_contains 'helper-probe COMPANIONCAPS' "stale committed transaction rechecks the privileged protocol"
 assert_log_contains 'helper-probe BUILDID' "stale committed transaction rechecks the recorded helper build"
-assert_log_contains 'hapaneld-helper\.txn commit-system' "stale committed transaction discards obsolete recovery"
-assert_not_contains 'hapaneld-helper\.txn rollback-system' "$MOCK_CALL_LOG" "stale committed transaction does not restore the superseded helper"
+assert_log_contains 'helper-transaction-[0-9a-f]+.*commit-system' "stale committed transaction discards obsolete recovery"
+assert_not_contains 'helper-transaction-[0-9a-f]+.*rollback-system' "$MOCK_CALL_LOG" "stale committed transaction does not restore the superseded helper"
 
 MOCK_STALE_TRANSACTION=1 \
 MOCK_INSTALLED_APK_SOURCE="$RELEASE_APK" \
 MOCK_STALE_APK_SHA256="$helper_release_apk_sha" \
   run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
 assert_success "rerun rolls back a stale helper journal when the target APK was never installed"
-assert_log_contains 'hapaneld-helper\.txn rollback-system' "stale pre-APK transaction restores the prior helper before retrying"
-rollback_line="$(grep -n 'hapaneld-helper\.txn rollback-system' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
+assert_log_contains 'helper-transaction-[0-9a-f]+.*rollback-system' "stale pre-APK transaction restores the prior helper before retrying"
+rollback_line="$(grep -nE 'helper-transaction-[0-9a-f]+.*rollback-system' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
 retry_install_line="$(grep -nE '^adb .* install( |$)' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
 if [ -n "$rollback_line" ] && [ -n "$retry_install_line" ] && [ "$rollback_line" -lt "$retry_install_line" ]; then
   pass "stale pre-APK recovery completes before the new package install"
@@ -484,8 +599,47 @@ else
 fi
 
 MOCK_STALE_TRANSACTION=1 \
+MOCK_STALE_TRANSACTION_KIND=systemless \
 MOCK_INSTALLED_APK_SOURCE="$RELEASE_APK" \
 MOCK_STALE_APK_SHA256="$helper_release_apk_sha" \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_success "writable-system provisioning recovers a stale systemless journal before changing paths"
+assert_log_contains 'helper-transaction-[0-9a-f]+.*status-systemless' "systemless-to-system transition reads the retained systemless journal"
+assert_log_contains 'helper-transaction-[0-9a-f]+.*rollback-systemless' "systemless-to-system transition restores the owning transaction"
+assert_log_contains 'helper-transaction-[0-9a-f]+.*install-system' "systemless-to-system transition installs only after recovery"
+
+MOCK_STALE_TRANSACTION=1 \
+MOCK_STALE_TRANSACTION_KIND=system \
+MOCK_SYSTEM_WRITABLE=0 \
+MOCK_INSTALLED_APK_SOURCE="$RELEASE_APK" \
+MOCK_STALE_APK_SHA256="$helper_release_apk_sha" \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_success "systemless provisioning recovers a stale /system journal before changing paths"
+assert_log_contains 'helper-transaction-[0-9a-f]+.*status-system' "system-to-systemless transition reads the retained /system journal"
+assert_log_contains 'helper-transaction-[0-9a-f]+.*rollback-system' "system-to-systemless transition restores the owning transaction"
+assert_log_contains 'helper-transaction-[0-9a-f]+.*install-systemless' "system-to-systemless transition installs only after recovery"
+
+MOCK_STALE_TRANSACTION=1 \
+MOCK_STALE_TRANSACTION_KIND=both \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_failure "simultaneous system and systemless journals fail closed"
+assert_contains 'both root-helper recovery journals are present' "dual-journal failure explains the ambiguity"
+assert_not_contains 'hapaneld-helper\.txn (rollback|commit)-(system|systemless)' "$MOCK_CALL_LOG" "dual-journal ambiguity preserves both recovery records"
+assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "dual-journal ambiguity stops before APK replacement"
+
+MOCK_STALE_TRANSACTION=1 \
+MOCK_INSTALLED_APK_SOURCE="$RELEASE_APK" \
+MOCK_STALE_APK_SHA256="$helper_release_apk_sha" \
+MOCK_STALE_LIVE_STATE=PRE_SWAP \
+MOCK_STALE_BUILD_ID=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_success "power loss after journal publication but before helper swap is recoverable"
+assert_log_contains 'helper-transaction-[0-9a-f]+.*rollback-system' "pre-swap crash recovery restores idempotently without requiring the target helper to be running"
+
+MOCK_STALE_TRANSACTION=1 \
+MOCK_INSTALLED_APK_SOURCE="$RELEASE_APK" \
+MOCK_STALE_APK_SHA256="$helper_release_apk_sha" \
+MOCK_STALE_LIVE_STATE=UNKNOWN \
 MOCK_STALE_BUILD_ID=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
   run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
 assert_failure "stale journal with a superseded running helper fails without destructive rollback"
@@ -514,12 +668,12 @@ assert_not_contains '/data/local/tmp/hapaneld-helper|^adb .* install( |$)' "$MOC
 MOCK_SU_DIALECT=shc \
   run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
 assert_success "root-helper transaction works through an exec-style vendor su dialect"
-assert_log_contains 'su 0 sh -c .*hapaneld-helper\.txn install-system' "vendor su executes only the staged transaction path"
+assert_log_contains 'su 0 sh -c .*helper-transaction-[0-9a-f]+.*install-system' "vendor su executes only the staged transaction path"
 
 caps_line="$(grep -n '^helper-probe COMPANIONCAPS$' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
 build_id_line="$(grep -n '^helper-probe BUILDID$' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
 app_line="$(grep -nE '^adb .* install( |$)' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
-commit_line="$(grep -n 'hapaneld-helper\.txn commit-system' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
+commit_line="$(grep -nE 'helper-transaction-[0-9a-f]+.*commit-system' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
 if [ -n "$caps_line" ] && [ -n "$build_id_line" ] && [ -n "$app_line" ] && [ -n "$commit_line" ] && \
    [ "$caps_line" -lt "$build_id_line" ] && [ "$build_id_line" -lt "$app_line" ] && [ "$app_line" -lt "$commit_line" ]; then
   pass "exact helper capability and build identity succeed before APK replacement and recovery commits afterward"
@@ -1086,12 +1240,24 @@ else
 fi
 if grep -Fq 'echo JOURNAL_VERSION=1' "$PROVISION" && \
    grep -Fq 'echo JOURNAL_SCOPE=APK_HELPER' "$PROVISION" && \
+   grep -Fq 'echo TRANSACTION_ID=@TRANSACTION_ID@' "$PROVISION" && \
+   grep -Fq 'echo LEASE_BOOT_ID=$current_boot' "$PROVISION" && \
+   grep -Fq 'echo LEASE_UNTIL_UPTIME=$lease_until' "$PROVISION" && \
    grep -Fq 'echo TARGET_HELPER_SHA256=@BIN_SHA256@' "$PROVISION" && \
    grep -Fq '[ ! -f /system/bin/.hapaneld-helper-manual-upgrade ]' "$PROVISION" && \
    grep -Fq 'incomplete standalone root-helper installation must be recovered first' "$PROVISION"; then
   pass "provisioning uses a versioned APK-coupled journal and rejects the separate standalone journal"
 else
   fail_test "provisioning uses a versioned APK-coupled journal and rejects the separate standalone journal"
+fi
+if grep -Fq 'valid_transaction_identity "$marker" "$transaction_id" "$target_apk" "$target_build" "$target_helper"' "$PROVISION" && \
+   grep -Fq 'ACTIVE_SYSTEM_TRANSACTION' "$PROVISION" && \
+   grep -Fq 'ACTIVE_SYSTEMLESS_TRANSACTION' "$PROVISION" && \
+   grep -Fq 'renew_root_helper_lease "$install_kind"' "$PROVISION" && \
+   grep -Fq 'start_root_helper_lease_guard' "$PROVISION"; then
+  pass "transaction nonce and monotonic lease protect validation through APK install and matching commit"
+else
+  fail_test "transaction nonce and monotonic lease protect validation through APK install and matching commit"
 fi
 commit_marker_line="$(grep -n 'rm -f "\$marker" || return 1' "$PROVISION" | tail -2 | head -1 | cut -d: -f1)"
 commit_sync_line="$(awk -v after="$commit_marker_line" 'NR > after && /sync \|\| return 1/{print NR; exit}' "$PROVISION")"

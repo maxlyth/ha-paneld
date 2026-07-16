@@ -1492,7 +1492,11 @@ class DashboardActivity : AppCompatActivity() {
             if (androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.DOCUMENT_START_SCRIPT)) {
                 androidx.webkit.WebViewCompat.addDocumentStartJavaScript(
                     this,
-                    EntityLearningProtocol.documentStartScript(config.haUrl, documentStartOrigins),
+                    EntityLearningProtocol.documentStartScript(
+                        config.haUrl,
+                        documentStartOrigins,
+                        BuildConfig.FEATURE_COSTS_ENABLED,
+                    ),
                     documentStartOrigins,
                 )
             }

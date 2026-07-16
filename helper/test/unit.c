@@ -13,14 +13,17 @@
 #include <sched.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 #include "cmd.h"
 #include "dispatch.h"
 #include "server.h"
+#include "sysctl.h"
 #include "input.h"
 #include "led.h"
 #include "perf.h"
@@ -43,6 +46,66 @@ static int evdev_open_count;
 static int evdev_grab_acquire_count;
 static int evdev_grab_release_count;
 int __real_open(const char *path, int flags, ...);
+ssize_t __real_write(int fd, const void *buf, size_t count);
+
+enum write_step {
+    WRITE_STEP_ALL = -1,
+    WRITE_STEP_EINTR = -2,
+    WRITE_STEP_ZERO = -3,
+    WRITE_STEP_ERROR = -4,
+    WRITE_STEP_STALLED = -5,
+};
+
+static int wrapped_write_fd = -1;
+static int wrapped_write_steps[8];
+static size_t wrapped_write_step_count;
+static size_t wrapped_write_call_count;
+static char wrapped_write_bytes[16384];
+static size_t wrapped_write_size;
+
+static void wrapped_write_reset(int fd, const int *steps, size_t count) {
+    wrapped_write_fd = fd;
+    wrapped_write_call_count = 0;
+    wrapped_write_size = 0;
+    memset(wrapped_write_steps, 0, sizeof wrapped_write_steps);
+    if (count > sizeof wrapped_write_steps / sizeof wrapped_write_steps[0])
+        count = sizeof wrapped_write_steps / sizeof wrapped_write_steps[0];
+    wrapped_write_step_count = count;
+    memcpy(wrapped_write_steps, steps, count * sizeof steps[0]);
+}
+
+static void wrapped_write_disable(void) {
+    wrapped_write_fd = -1;
+}
+
+ssize_t __wrap_write(int fd, const void *buf, size_t count) {
+    if (fd != wrapped_write_fd) return __real_write(fd, buf, count);
+
+    size_t call = wrapped_write_call_count++;
+    int step = call < wrapped_write_step_count ? wrapped_write_steps[call] : WRITE_STEP_ALL;
+    if (step == WRITE_STEP_EINTR) {
+        errno = EINTR;
+        return -1;
+    }
+    if (step == WRITE_STEP_ZERO) return 0;
+    if (step == WRITE_STEP_ERROR) {
+        errno = EPIPE;
+        return -1;
+    }
+    if (step == WRITE_STEP_STALLED) {
+        errno = EAGAIN;
+        return -1;
+    }
+
+    size_t accepted = step == WRITE_STEP_ALL ? count : (size_t)step;
+    if (accepted > count) accepted = count;
+    if (accepted > sizeof wrapped_write_bytes - wrapped_write_size)
+        accepted = sizeof wrapped_write_bytes - wrapped_write_size;
+    memcpy(wrapped_write_bytes + wrapped_write_size, buf, accepted);
+    wrapped_write_size += accepted;
+    return (ssize_t)accepted;
+}
+
 int __wrap_open(const char *path, int flags, ...) {
     if (strncmp(path, "/dev/input/event", 16) == 0) {
         evdev_open_count++;
@@ -596,6 +659,55 @@ static void test_sysctl_execution_results(void) {
     sysexec_stub_reset();
 }
 
+static void test_screencap_stream_writes(void) {
+    const char payload[] = "PNG-fixture-payload";
+    const int test_fd = 4242;
+    conn_ctx ctx = { .fd = test_fd, .subscribed = 0 };
+
+    sysexec_stub_reset();
+    sysexec_stub_add_popen("screencap -p", payload, 0);
+    const int recoverable_steps[] = { 3, WRITE_STEP_EINTR, 4, WRITE_STEP_ALL };
+    wrapped_write_reset(test_fd, recoverable_steps,
+                        sizeof recoverable_steps / sizeof recoverable_steps[0]);
+    cmd_screencap(&ctx, "");
+    wrapped_write_disable();
+    CHECK(wrapped_write_call_count == 4,
+          "SCREENCAP retries short writes and EINTR (calls %zu, want 4)\n",
+          wrapped_write_call_count);
+    CHECK(wrapped_write_size == strlen(payload) &&
+          memcmp(wrapped_write_bytes, payload, strlen(payload)) == 0,
+          "SCREENCAP preserves the full byte stream across partial writes\n");
+
+    char large_payload[12289];
+    memset(large_payload, 'A', sizeof large_payload - 1);
+    large_payload[sizeof large_payload - 1] = '\0';
+    sysexec_stub_reset();
+    sysexec_stub_add_popen("screencap -p", large_payload, 0);
+    const int error_steps[] = { 5, WRITE_STEP_ERROR, WRITE_STEP_ALL };
+    wrapped_write_reset(test_fd, error_steps, sizeof error_steps / sizeof error_steps[0]);
+    cmd_screencap(&ctx, "");
+    wrapped_write_disable();
+    CHECK(wrapped_write_call_count == 2,
+          "SCREENCAP stops writing after terminal peer error (calls %zu, want 2)\n",
+          wrapped_write_call_count);
+    CHECK(wrapped_write_size == 5 && memcmp(wrapped_write_bytes, large_payload, 5) == 0,
+          "SCREENCAP emits only the accepted prefix after terminal peer error\n");
+    CHECK(sysexec_stub_last_pclose_offset() == 8192,
+          "SCREENCAP stops draining its source after terminal peer error (offset %ld, want 8192)\n",
+          sysexec_stub_last_pclose_offset());
+
+    sysexec_stub_reset();
+    sysexec_stub_add_popen("screencap -p", payload, 0);
+    const int zero_steps[] = { WRITE_STEP_ZERO, WRITE_STEP_ALL };
+    wrapped_write_reset(test_fd, zero_steps, sizeof zero_steps / sizeof zero_steps[0]);
+    cmd_screencap(&ctx, "");
+    wrapped_write_disable();
+    CHECK(wrapped_write_call_count == 1,
+          "SCREENCAP treats a zero write as terminal (calls %zu, want 1)\n",
+          wrapped_write_call_count);
+    CHECK(wrapped_write_size == 0, "SCREENCAP emits no bytes after a zero write\n");
+}
+
 static void test_line_accumulator(void) {
     char out[256];
 
@@ -617,6 +729,78 @@ static void test_line_accumulator(void) {
     memcpy(big + MAX_LINE + 10, "\nPING\n", 6);
     serve_reply(big, MAX_LINE + 16, out, sizeof out);
     CHECK(strcmp(out, "OK\n") == 0, "overlong line dropped, next line parses (got '%s')\n", out);
+}
+
+static void test_reply_stream_writes(void) {
+    const int complete_steps[] = { 2, WRITE_STEP_EINTR, 1, WRITE_STEP_ALL };
+    wrapped_write_reset(701, complete_steps, sizeof complete_steps / sizeof complete_steps[0]);
+    CHECK(reply(701, "abcdef") == 0, "reply retries EINTR and completes short writes\n");
+    wrapped_write_disable();
+    CHECK(wrapped_write_call_count == 4,
+          "reply uses four writes for deterministic short/EINTR sequence (got %zu)\n",
+          wrapped_write_call_count);
+    CHECK(wrapped_write_size == 6 && memcmp(wrapped_write_bytes, "abcdef", 6) == 0,
+          "reply preserves all bytes across short writes\n");
+
+    const int error_steps[] = { 2, WRITE_STEP_ERROR, WRITE_STEP_ALL };
+    wrapped_write_reset(702, error_steps, sizeof error_steps / sizeof error_steps[0]);
+    CHECK(reply(702, "abcdef") == -1, "reply propagates a terminal peer error\n");
+    wrapped_write_disable();
+    CHECK(wrapped_write_call_count == 2,
+          "reply stops after a terminal peer error (calls %zu, want 2)\n",
+          wrapped_write_call_count);
+    CHECK(wrapped_write_size == 2 && memcmp(wrapped_write_bytes, "ab", 2) == 0,
+          "reply emits only the accepted prefix after a terminal peer error\n");
+
+    const int stalled_steps[] = { WRITE_STEP_STALLED, WRITE_STEP_ALL };
+    wrapped_write_reset(705, stalled_steps, sizeof stalled_steps / sizeof stalled_steps[0]);
+    CHECK(reply(705, "abcdef") == -1, "reply aborts when the send deadline expires\n");
+    wrapped_write_disable();
+    CHECK(wrapped_write_call_count == 1 && wrapped_write_size == 0,
+          "reply does not spin or retry a stalled peer after EAGAIN\n");
+
+    char path[] = "/tmp/hapaneld-cat-to-XXXXXX";
+    int input = mkstemp(path);
+    CHECK(input >= 0, "cat_to fixture created\n");
+    if (input >= 0) {
+        CHECK(write_all_fd(input, "0123456789", 10) == 0, "cat_to fixture populated\n");
+        close(input);
+
+        const int cat_steps[] = { 3, WRITE_STEP_EINTR, 2, WRITE_STEP_ALL };
+        wrapped_write_reset(703, cat_steps, sizeof cat_steps / sizeof cat_steps[0]);
+        CHECK(cat_to(703, path) == 0, "cat_to retries EINTR and completes short writes\n");
+        wrapped_write_disable();
+        CHECK(wrapped_write_size == 10 && memcmp(wrapped_write_bytes, "0123456789", 10) == 0,
+              "cat_to preserves all file bytes across short writes\n");
+
+        const int cat_error_steps[] = { 4, WRITE_STEP_ERROR };
+        wrapped_write_reset(704, cat_error_steps,
+                            sizeof cat_error_steps / sizeof cat_error_steps[0]);
+        CHECK(cat_to(704, path) == -1, "cat_to propagates a terminal peer error\n");
+        wrapped_write_disable();
+        CHECK(wrapped_write_call_count == 2 && wrapped_write_size == 4,
+              "cat_to aborts at the first terminal peer error\n");
+        unlink(path);
+    }
+}
+
+static void test_server_send_deadline(void) {
+    int sv[2];
+    int created = socketpair(AF_UNIX, SOCK_STREAM, 0, sv);
+    CHECK(created == 0, "send-deadline socketpair created\n");
+    if (created != 0) return;
+    shutdown(sv[1], SHUT_WR);
+    server_serve(sv[0]);
+
+    struct timeval timeout = { 0 };
+    socklen_t timeout_size = sizeof timeout;
+    CHECK(getsockopt(sv[0], SOL_SOCKET, SO_SNDTIMEO, &timeout, &timeout_size) == 0,
+          "server send deadline is readable\n");
+    CHECK(timeout.tv_sec == SEND_SEC,
+          "server applies a %d-second send deadline (got %ld.%06ld)\n",
+          SEND_SEC, (long)timeout.tv_sec, (long)timeout.tv_usec);
+    close(sv[0]);
+    close(sv[1]);
 }
 
 static void test_input_watch_contract(void) {
@@ -879,7 +1063,10 @@ int main(void) {
     test_stat_jiffies();
     test_dispatch_exact_match();
     test_sysctl_execution_results();
+    test_screencap_stream_writes();
     test_line_accumulator();
+    test_reply_stream_writes();
+    test_server_send_deadline();
     test_input_watch_contract();
     test_subscriber_admission();
     test_grab_subscription_ownership();

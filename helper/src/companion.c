@@ -140,7 +140,13 @@ void companion_test_set_fault(enum companion_test_fault fault) {
 
 static int capture_label(int fd, char *label, size_t capacity, size_t *length);
 static int companion_pending_transaction(void);
+static int open_stage_dir(void);
 static int rollback_artifacts_absent(const target_dirs *target);
+static int recover_pending_transaction(
+    int stage_dir,
+    const char *keep_stopped_pkg,
+    int *kept_stopped
+);
 
 static int supported_pkg(const char *pkg) {
     return strcmp(pkg, COMPANION_FULL) == 0 || strcmp(pkg, COMPANION_MINIMAL) == 0;
@@ -192,6 +198,15 @@ void cmd_companionstatus(conn_ctx *ctx, const char *args) {
     }
     int idle = pthread_mutex_trylock(&companion_lock) == 0;
     if (idle) {
+        // A daemon restart loses the process-local mutex but not the transaction marker. STATUS is
+        // the app's startup reconciliation path, so repair any valid journal before deciding whether
+        // Companion may launch. Malformed markers and unexplained rollback artifacts remain BUSY.
+        int stage_dir = open_stage_dir();
+        if (stage_dir >= 0) {
+            int kept_stopped = 0;
+            (void)recover_pending_transaction(stage_dir, "", &kept_stopped);
+            close(stage_dir);
+        }
         idle = !companion_pending_transaction();
         pthread_mutex_unlock(&companion_lock);
     }

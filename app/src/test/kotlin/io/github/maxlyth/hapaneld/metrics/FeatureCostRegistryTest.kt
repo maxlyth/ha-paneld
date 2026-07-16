@@ -37,7 +37,7 @@ class FeatureCostRegistryTest {
             workUnits = 9,
         )
         registry.recordDropped(FeatureCostOperation.ENTITY_ACCESS_PARSE)
-        registry.recordExternal(FeatureCostOperation.ENTITY_BROWSER_OBSERVER, wallElapsedNanos = 100L)
+        registry.recordExternal(FeatureCostOperation.ENTITY_BROWSER_OBSERVER, externalExecutionNanos = 100L)
 
         val firstJson = registry.json()
         val secondJson = registry.json()
@@ -160,7 +160,7 @@ class FeatureCostRegistryTest {
         val registry = FeatureCostRegistry({ 0L }, { 0L }, { 1L })
         registry.recordExternal(
             FeatureCostOperation.ENTITY_BROWSER_OBSERVER,
-            wallElapsedNanos = 4_600_000L,
+            externalExecutionNanos = 4_600_000L,
             events = 4L,
             inputChars = 8192L,
             workUnits = 7L,
@@ -168,11 +168,40 @@ class FeatureCostRegistryTest {
 
         val operation = operation(JSONObject(registry.json()), FeatureCostOperation.ENTITY_BROWSER_OBSERVER)
         assertEquals(1L, operation.getLong("calls"))
-        assertEquals(4_600_000L, operation.getLong("wall_ns_total"))
+        assertEquals(0L, operation.getLong("wall_ns_total"))
         assertEquals(0L, operation.getLong("thread_cpu_samples"))
+        assertEquals(4_600_000L, operation.getLong("external_execution_ns_total"))
+        assertEquals(1L, operation.getLong("external_execution_samples"))
         assertEquals(4L, operation.getLong("external_events"))
         assertEquals(8192L, operation.getLong("external_input_chars"))
         assertEquals(7L, operation.getLong("work_units"))
+    }
+
+    @Test fun epochKeepsLifetimeCountersWhileExposingBoundedPostBoundaryDeltas() {
+        var wall = 1_000L
+        val registry = FeatureCostRegistry({ wall }, { -1L }, { 1L })
+        registry.beginSynchronous(FeatureCostOperation.PROFILE_VALIDATE).also {
+            wall += 100L
+            registry.finishSynchronous(FeatureCostOperation.PROFILE_VALIDATE, it, workUnits = 2)
+        }
+
+        registry.beginEpoch()
+        registry.beginSynchronous(FeatureCostOperation.PROFILE_VALIDATE).also {
+            wall += 250L
+            registry.finishSynchronous(FeatureCostOperation.PROFILE_VALIDATE, it, workUnits = 3)
+        }
+
+        val root = JSONObject(registry.json())
+        val lifetime = operation(root, FeatureCostOperation.PROFILE_VALIDATE)
+        val epoch = lifetime.getJSONObject("epoch")
+        assertEquals(2L, lifetime.getLong("calls"))
+        assertEquals(350L, lifetime.getLong("wall_ns_total"))
+        assertEquals(5L, lifetime.getLong("work_units"))
+        assertEquals(1L, epoch.getLong("calls"))
+        assertEquals(250L, epoch.getLong("wall_ns_total"))
+        assertEquals(3L, epoch.getLong("work_units"))
+        assertEquals(2L, root.getLong("epoch_generation"))
+        assertEquals(250L, root.getLong("epoch_elapsed_ns"))
     }
 
     @Test fun projectionDefinesInclusiveLatencyAndKnownParentHierarchy() {

@@ -9,6 +9,7 @@ class CompanionDataOperationGateTest {
     @Test fun leaseBlocksOnlyItsPackageAndReleasesExactlyOnce() {
         val lease = CompanionDataOperationGate.acquire("io.homeassistant.companion.android")!!
         assertTrue(CompanionDataOperationGate.blocks("io.homeassistant.companion.android"))
+        assertTrue(CompanionDataOperationGate.blocks("io.homeassistant.companion.android.minimal"))
         assertTrue(CompanionDataOperationGate.blocksImplicitNavigation())
         assertFalse(CompanionDataOperationGate.blocks("io.github.maxlyth.hapaneld"))
         assertNull(CompanionDataOperationGate.acquire("io.homeassistant.companion.android.minimal"))

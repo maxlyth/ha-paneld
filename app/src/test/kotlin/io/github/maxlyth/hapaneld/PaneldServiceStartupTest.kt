@@ -1,8 +1,13 @@
 package io.github.maxlyth.hapaneld
 
+import io.github.maxlyth.hapaneld.control.CompanionDataOperationGate
+import io.github.maxlyth.hapaneld.control.CompanionDataOperationState
+import io.github.maxlyth.hapaneld.util.CompanionOperationStatus
 import io.github.maxlyth.hapaneld.util.ConflatedWorker
+import io.github.maxlyth.hapaneld.util.DurableRecoveryMarker
 import io.github.maxlyth.hapaneld.util.RendererPreparationCoordinator
 import java.util.Collections
+import java.nio.file.Files
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -183,6 +188,61 @@ class PaneldServiceStartupTest {
 
         assertEquals(RendererPreparationCoordinator.Result.CLOSED, result)
         assertFalse(learningStarted)
+    }
+
+    @Test fun processRestartReconstructsCompanionGateUntilStatusIsAffirmativelySafe() {
+        val pkg = "io.homeassistant.companion.android.minimal"
+        for (status in CompanionOperationStatus.entries) {
+            val dir = Files.createTempDirectory("companion-startup-test").toFile()
+            val operationState = CompanionDataOperationState.forTest(
+                DurableRecoveryMarker(dir.resolve("pending")),
+            )
+            assertTrue(operationState.arm())
+            var retained: CompanionDataOperationGate.Lease? = null
+
+            assertEquals(
+                status,
+                restoreCompanionLaunchSuppression(
+                    packageName = pkg,
+                    operationState = operationState,
+                    operationStatus = { status },
+                    retain = { retained = it },
+                ),
+            )
+
+            val unsafe = status == CompanionOperationStatus.BUSY ||
+                status == CompanionOperationStatus.UNSUPPORTED ||
+                status == CompanionOperationStatus.UNAVAILABLE
+            assertEquals("$status gate state", unsafe, CompanionDataOperationGate.blocks(pkg))
+            assertEquals("$status retention", unsafe, retained != null)
+            assertEquals("$status marker state", unsafe, operationState.isPending())
+            retained?.close()
+            assertFalse(CompanionDataOperationGate.blocks(pkg))
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test fun ordinaryNoMarkerNoHelperStartupDoesNotAcquireCompanionGate() {
+        val pkg = "io.homeassistant.companion.android"
+        val dir = Files.createTempDirectory("companion-startup-test").toFile()
+        val operationState = CompanionDataOperationState.forTest(
+            DurableRecoveryMarker(dir.resolve("pending")),
+        )
+        var statusProbed = false
+        var retained: CompanionDataOperationGate.Lease? = null
+        assertEquals(
+            CompanionOperationStatus.IDLE,
+            restoreCompanionLaunchSuppression(
+                pkg,
+                operationState,
+                { statusProbed = true; CompanionOperationStatus.UNAVAILABLE },
+                { retained = it },
+            ),
+        )
+        assertFalse(statusProbed)
+        assertFalse(CompanionDataOperationGate.blocks(pkg))
+        assertEquals(null, retained)
+        dir.deleteRecursively()
     }
 
     @Test fun successfulBorrowCommitNotifiesLearnerAfterPersistence() {

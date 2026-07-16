@@ -14,7 +14,7 @@
 
 typedef struct {
     char needle[128];
-    char output[1024];
+    char output[16384];
     int close_status;
 } popen_rule;
 
@@ -36,6 +36,7 @@ static popen_rule popen_rules[MAX_POPEN_RULES];
 static int popen_rule_count;
 static open_pipe open_pipes[MAX_OPEN_PIPES];
 static int spawn_status = -1;
+static long last_pclose_offset = -1;
 
 void sysexec_stub_reset(void) {
     for (int i = 0; i < MAX_OPEN_PIPES; i++) {
@@ -54,6 +55,7 @@ void sysexec_stub_reset(void) {
     popen_rule_count = 0;
     memset(open_pipes, 0, sizeof open_pipes);
     spawn_status = -1;
+    last_pclose_offset = -1;
 }
 
 void sysexec_stub_set_spawn_result(int status) { spawn_status = status; }
@@ -147,6 +149,7 @@ int sysexec_pclose(FILE *p) {
     for (int i = 0; i < MAX_OPEN_PIPES; i++) {
         if (open_pipes[i].pipe == p) {
             int status = open_pipes[i].close_status;
+            last_pclose_offset = ftell(p);
             fclose(p);
             open_pipes[i].pipe = NULL;
             return status;
@@ -154,6 +157,8 @@ int sysexec_pclose(FILE *p) {
     }
     return -1;
 }
+
+long sysexec_stub_last_pclose_offset(void) { return last_pclose_offset; }
 
 // No thread is spawned on the host. input.c keeps watcher state in a bounded static registry, so a
 // configured success is safe for unit tests and the default failure stays leak-free for fuzzing.

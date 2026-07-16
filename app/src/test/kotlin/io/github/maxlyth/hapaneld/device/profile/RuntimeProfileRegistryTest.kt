@@ -74,6 +74,40 @@ class RuntimeProfileRegistryTest {
         assertTrue(registry.list().none { it.ref == ref })
     }
 
+    @Test fun `immutable publish syncs content before rename and parent directory after rename`() {
+        val persistence = RecordingProfileRevisionPersistence()
+        val registry = registry(mapOf("generic.yaml" to genericYaml()), revisionPersistence = persistence)
+        val raw = ProfileYaml.serialize(testProfileDocument(facts = facts))
+
+        val result = registry.preview(raw).let { registry.importProfile(raw, it.previewToken!!) }
+
+        assertTrue(result is ProfileMutation.Success)
+        assertEquals(
+            listOf("write-sync:tmp", "rename:tmp->yaml", "sync-dir:community.example.test-panel"),
+            persistence.events
+                .filter { it.startsWith("write-sync:") || it.startsWith("rename:") || it.startsWith("sync-dir:") }
+                .takeLast(3),
+        )
+    }
+
+    @Test fun `publish rejects a revision when parent directory sync fails after rename`() {
+        val persistence = RecordingProfileRevisionPersistence(failDirectorySync = { it.name == "community.example.test-panel" })
+        val registry = registry(mapOf("generic.yaml" to genericYaml()), revisionPersistence = persistence)
+        val raw = ProfileYaml.serialize(testProfileDocument(facts = facts))
+        val preview = registry.preview(raw)
+
+        val result = registry.importProfile(raw, preview.previewToken!!)
+
+        assertTrue(result is ProfileMutation.Rejected)
+        assertTrue(importedFile(preview.summary!!.ref).isFile)
+        assertEquals(
+            listOf("write-sync:tmp", "rename:tmp->yaml", "sync-dir:community.example.test-panel"),
+            persistence.events
+                .filter { it.startsWith("write-sync:") || it.startsWith("rename:") || it.startsWith("sync-dir:") }
+                .takeLast(3),
+        )
+    }
+
     @Test fun `activation preserves one step last known good and supports explicit rollback`() {
         val registry = registry(mapOf("generic.yaml" to genericYaml()))
         val ref = import(registry, ProfileYaml.serialize(testProfileDocument(facts = facts)))
@@ -148,6 +182,42 @@ class RuntimeProfileRegistryTest {
         val afterFailedStartup = registry(mapOf("generic.yaml" to genericYaml(), "panel.yaml" to newRaw)).resolveForStartup()
         assertEquals(oldRef, afterFailedStartup.summary.ref)
         assertEquals(ProfileActivationPhase.ROLLED_BACK, registry(mapOf("generic.yaml" to genericYaml(), "panel.yaml" to newRaw)).status().activation.phase)
+    }
+
+    @Test fun `rollback revision pruning durably unlinks superseded immutable snapshot`() {
+        val persistence = RecordingProfileRevisionPersistence()
+        val raws = (0..2).map { patch ->
+            ProfileYaml.serialize(testProfileDocument(id = "vendor.test-panel", version = "1.0.$patch", facts = facts))
+        }
+        val refs = raws.map { ProfileRef("vendor.test-panel", ProfileYaml.sha256(it)) }
+        fun bundled(raw: String) = mapOf("generic.yaml" to genericYaml(), "panel.yaml" to raw)
+
+        registry(bundled(raws[0]), revisionPersistence = persistence).let { first ->
+            assertTrue(first.markStartupHealthy(first.resolveForStartup().summary.ref))
+        }
+        registry(bundled(raws[1]), revisionPersistence = persistence).resolveForStartup().let { applying ->
+            assertTrue(registry(bundled(raws[1]), revisionPersistence = persistence)
+                .markActivationHealthy(applying.activationGeneration!!))
+        }
+        val third = registry(bundled(raws[2]), revisionPersistence = persistence)
+        val applying = third.resolveForStartup()
+        persistence.events.clear()
+
+        assertTrue(third.markActivationHealthy(applying.activationGeneration!!))
+
+        assertFalse(rollbackFile(refs[0]).exists())
+        assertTrue(rollbackFile(refs[1]).isFile)
+        assertTrue(rollbackFile(refs[2]).isFile)
+        assertEquals(
+            listOf(
+                "write-sync:tmp",
+                "rename:tmp->yaml",
+                "sync-dir:vendor.test-panel",
+                "delete:yaml",
+                "sync-dir:vendor.test-panel",
+            ),
+            persistence.events,
+        )
     }
 
     @Test fun `pending status does not mark previous active revision selected`() {
@@ -412,6 +482,41 @@ class RuntimeProfileRegistryTest {
         assertNotNull(registry.exportProfile(ref))
     }
 
+    @Test fun `immutable delete syncs each directory after its entry is removed`() {
+        val persistence = RecordingProfileRevisionPersistence()
+        val registry = registry(mapOf("generic.yaml" to genericYaml()), revisionPersistence = persistence)
+        val ref = import(registry, ProfileYaml.serialize(testProfileDocument(facts = facts)))
+        persistence.events.clear()
+
+        val result = registry.deleteProfile(ref, registry.status().catalogRevision)
+
+        assertTrue(result is ProfileMutation.Success)
+        assertEquals(
+            listOf(
+                "delete:yaml",
+                "sync-dir:community.example.test-panel",
+                "delete:community.example.test-panel",
+                "sync-dir:imported",
+            ),
+            persistence.events,
+        )
+    }
+
+    @Test fun `delete failure after unlink reloads the catalog and stops before directory cleanup`() {
+        val persistence = RecordingProfileRevisionPersistence()
+        val registry = registry(mapOf("generic.yaml" to genericYaml()), revisionPersistence = persistence)
+        val ref = import(registry, ProfileYaml.serialize(testProfileDocument(facts = facts)))
+        persistence.events.clear()
+        persistence.failDirectorySync = { it.name == ref.id }
+
+        val result = registry.deleteProfile(ref, registry.status().catalogRevision)
+
+        assertTrue(result is ProfileMutation.Rejected)
+        assertFalse(importedFile(ref).exists())
+        assertNull(registry.exportProfile(ref))
+        assertEquals(listOf("delete:yaml", "sync-dir:${ref.id}"), persistence.events)
+    }
+
     @Test fun `active pin invalidated by core upgrade restores durable last known good`() {
         // `led.removed-driver` represents a driver accepted by an earlier core but removed by this one.
         val ref = restore(incompatibleImportedYaml())
@@ -634,6 +739,7 @@ class RuntimeProfileRegistryTest {
 
     private fun registry(
         bundled: Map<String, String>,
+        revisionPersistence: ProfileRevisionPersistence = FileProfileRevisionPersistence,
         catalogFileReader: ((File) -> String)? = null,
     ) = RuntimeProfileRegistry(
         filesDir = directory,
@@ -643,6 +749,7 @@ class RuntimeProfileRegistryTest {
         coreVersion = "1.0.0",
         clock = { 1000L },
         catalogFileReader = catalogFileReader,
+        revisionPersistence = revisionPersistence,
     )
 
     private fun genericYaml() = ProfileYaml.serialize(testProfileDocument(id = "generic", fallback = true))
@@ -655,6 +762,8 @@ class RuntimeProfileRegistryTest {
     }
 
     private fun importedFile(ref: ProfileRef) = File(directory, "device-profiles/imported/${ref.id}/${ref.revision}.yaml")
+
+    private fun rollbackFile(ref: ProfileRef) = File(directory, "device-profiles/rollback/${ref.id}/${ref.revision}.yaml")
 
     private fun expectedRefForTest(file: File): ProfileRef? {
         if (file.extension != "yaml") return null
@@ -710,6 +819,36 @@ class RuntimeProfileRegistryTest {
         val ref = ProfileRef(parsed.id, ProfileYaml.sha256(raw))
         importedFile(ref).apply { parentFile!!.mkdirs() }.writeText(raw)
         return ref
+    }
+}
+
+private class RecordingProfileRevisionPersistence(
+    var failDirectorySync: (File) -> Boolean = { false },
+) : ProfileRevisionPersistence {
+    val events = mutableListOf<String>()
+
+    override fun createDirectory(directory: File): Boolean =
+        FileProfileRevisionPersistence.createDirectory(directory)
+
+    override fun writeAndSync(file: File, bytes: ByteArray) {
+        events += "write-sync:${if (file.name.endsWith(".tmp")) "tmp" else file.extension}"
+        FileProfileRevisionPersistence.writeAndSync(file, bytes)
+    }
+
+    override fun atomicRename(source: File, target: File): Boolean {
+        events += "rename:${if (source.name.endsWith(".tmp")) "tmp" else source.extension}->${target.extension}"
+        return FileProfileRevisionPersistence.atomicRename(source, target)
+    }
+
+    override fun delete(file: File): Boolean {
+        events += "delete:${if (file.isDirectory) file.name else file.extension}"
+        return FileProfileRevisionPersistence.delete(file)
+    }
+
+    override fun syncDirectory(directory: File) {
+        events += "sync-dir:${directory.name}"
+        if (failDirectorySync(directory)) error("injected directory sync failure")
+        FileProfileRevisionPersistence.syncDirectory(directory)
     }
 }
 

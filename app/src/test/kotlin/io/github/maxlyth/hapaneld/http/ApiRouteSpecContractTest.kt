@@ -27,6 +27,9 @@ class ApiRouteSpecContractTest {
         literalRoutes(activeProfiles).mapTo(active) { (method, path) -> "$method /api/v1/profiles$path" }
         active += "GET /api/v1/profiles" // route("/profiles") { get { … } }
 
+        val provisioning = File(root, "src/main/kotlin/io/github/maxlyth/hapaneld/http/ProvisioningRoutes.kt").readText()
+        literalRoutes(provisioning).mapTo(active) { (method, path) -> "$method /api/v1/provisioning$path" }
+
         val control = File(root, "src/main/kotlin/io/github/maxlyth/hapaneld/http/ControlPlaneRoutes.kt").readText()
         active += "POST /play"
         active += "POST /api/v1/play"

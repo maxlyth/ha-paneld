@@ -21,6 +21,7 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
 import io.ktor.server.testing.testApplication
+import kotlinx.coroutines.CancellationException
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -143,6 +144,60 @@ class ProvisioningRoutesTest {
             JSONObject(response.bodyAsText()).getString("error"),
         )
         assertEquals(1, reader.reads)
+    }
+
+    @Test
+    fun readerCancellationCrossesTheRouteBoundary() = testApplication {
+        val reader = object : ProvisioningReader {
+            override val expectedProfileRef = REF
+
+            override suspend fun plan(
+                activation: ProvisioningActivationSnapshot,
+                forceRefresh: Boolean,
+            ): ProvisioningReadResult {
+                throw CancellationException("reader cancelled")
+            }
+        }
+        application {
+            routing {
+                route("/api/v1") {
+                    provisioningRoutes(ProvisioningRouteDependencies(reader) { ACTIVE })
+                }
+            }
+        }
+
+        val failure = runCatching { client.get("/api/v1/provisioning/plan") }.exceptionOrNull()
+
+        assertTrue(failure is CancellationException)
+    }
+
+    @Test
+    fun ordinaryReaderFailureRemainsRetryable() = testApplication {
+        val reader = object : ProvisioningReader {
+            override val expectedProfileRef = REF
+
+            override suspend fun plan(
+                activation: ProvisioningActivationSnapshot,
+                forceRefresh: Boolean,
+            ): ProvisioningReadResult {
+                throw IllegalStateException("reader unavailable")
+            }
+        }
+        application {
+            routing {
+                route("/api/v1") {
+                    provisioningRoutes(ProvisioningRouteDependencies(reader) { ACTIVE })
+                }
+            }
+        }
+
+        val response = client.get("/api/v1/provisioning/plan")
+
+        assertEquals(HttpStatusCode.ServiceUnavailable, response.status)
+        assertEquals(
+            "provisioning_plan_unavailable",
+            JSONObject(response.bodyAsText()).getString("error"),
+        )
     }
 
     private class FakeReader(

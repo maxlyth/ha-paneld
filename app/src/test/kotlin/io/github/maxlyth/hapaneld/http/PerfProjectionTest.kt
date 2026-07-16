@@ -67,4 +67,18 @@ class PerfProjectionTest {
         assertTrue(source.contains("Su.runOutputIsolatedBounded"))
         assertFalse(source.contains("Su.runOutput("))
     }
+
+    @Test fun featureCostProjectionRunsAfterReleasingTheSamplerLock() {
+        val source = listOf(
+            File("src/main/kotlin/io/github/maxlyth/hapaneld/http/PerfReader.kt"),
+            File("app/src/main/kotlin/io/github/maxlyth/hapaneld/http/PerfReader.kt"),
+        ).first(File::isFile).readText()
+        val jsonFunction = source.indexOf("fun json(): String")
+        val sampledReturn = source.indexOf("return sampled", jsonFunction)
+        val featureProjection = source.indexOf("FeatureCosts.json()", jsonFunction)
+
+        assertTrue(jsonFunction >= 0)
+        assertTrue(sampledReturn > jsonFunction)
+        assertTrue(featureProjection > sampledReturn)
+    }
 }

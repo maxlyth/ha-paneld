@@ -15,7 +15,12 @@ import io.github.maxlyth.hapaneld.metrics.FeatureCostOperation
 import io.github.maxlyth.hapaneld.metrics.FeatureCostOutcome
 import io.github.maxlyth.hapaneld.metrics.FeatureCosts
 import io.github.maxlyth.hapaneld.util.SystemProps
+import java.util.Locale
 import kotlin.math.abs
+
+internal fun formatSensorValue(value: Float): String =
+    if (value == value.toLong().toFloat()) value.toLong().toString()
+    else String.format(Locale.ROOT, "%.1f", value)
 
 /**
  * Reports the panel's standard Android light + proximity sensors to HA. Both are plain
@@ -130,8 +135,7 @@ class SensorReporter(
         }
     }
 
-    private fun fmtV(f: Float): String =
-        if (f == f.toLong().toFloat()) f.toLong().toString() else "%.1f".format(f)
+    private fun fmtV(f: Float): String = formatSensorValue(f)
 
     @Synchronized
     fun start(

@@ -177,6 +177,20 @@ class SystemControllerTest {
         assertEquals(listOf("START $MIN/.Main"), d.sent)
     }
 
+    @Test fun companionHomeLaunchWithoutOperationMarkerKeepsNoHelperSuFallback() {
+        val env = FakeSystemEnv(installed = setOf(MIN), launchers = mapOf(MIN to "$MIN/.Main"))
+        val (c, root, d) = sc(
+            env,
+            daemon = mapOf("START $MIN/.Main" to "ERR"),
+        )
+
+        c.launchHome(MIN)
+
+        assertEquals(listOf("START $MIN/.Main"), d.sent)
+        assertEquals(listOf("am start -n $MIN/.Main"), root.ran)
+        assertTrue(env.directStarts.isEmpty())
+    }
+
     @Test fun invalidStoredDashboardNeverCrossesPrivilegeBoundary() {
         val injected = "com.example;reboot"
         val (c, root, d) = sc(FakeSystemEnv(), daemon = emptyMap())

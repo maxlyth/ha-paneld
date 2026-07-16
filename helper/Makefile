@@ -45,9 +45,9 @@ test: $(BUILD)/unit $(BUILD)/hapaneld-helper $(BUILD)/companion-boundary $(BUILD
 	$(BUILD)/cdprelay-resource-test $(BUILD)/cdprelay-test
 	bash ./test/install_daemon_security_test.sh
 # --wrap=open/ioctl lets tests provide a fake evdev node and capture requested exclusive grabs while
-# preserving the existing ledjni ioctl assertions without touching host hardware.
+# preserving the existing ledjni ioctl assertions; --wrap=write forces deterministic stream edge cases.
 $(BUILD)/unit: $(CORE_SRCS) $(STUB) test/unit.c | $(BUILD)
-	$(CC) $(CFLAGS) -DHAPANELD_TEST -I$(SRC_DIR) $(CORE_SRCS) $(STUB) test/unit.c $(LDLIBS) -Wl,--wrap=open -Wl,--wrap=ioctl -o $@
+	$(CC) $(CFLAGS) -DHAPANELD_TEST -I$(SRC_DIR) $(CORE_SRCS) $(STUB) test/unit.c $(LDLIBS) -Wl,--wrap=open -Wl,--wrap=ioctl -Wl,--wrap=write -o $@
 
 $(BUILD)/companion-boundary: $(CORE_SRCS) $(STUB) test/companion_boundary.c | $(BUILD)
 	$(CC) $(CFLAGS) -DHAPANELD_TEST -I$(SRC_DIR) -Itest $(CORE_SRCS) $(STUB) \

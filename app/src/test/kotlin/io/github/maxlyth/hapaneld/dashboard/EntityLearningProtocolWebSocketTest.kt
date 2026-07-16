@@ -6,6 +6,18 @@ import org.junit.Assume.assumeTrue
 import org.junit.Test
 
 class EntityLearningProtocolWebSocketTest {
+    @Test fun disabledFeatureCostArmOmitsBrowserTimingAndCostEnvelope() {
+        val script = EntityLearningProtocol.documentStartScript(
+            "https://ha.example",
+            featureCostsEnabled = false,
+        )
+
+        assertTrue(!script.contains("performance.now"))
+        assertTrue(!script.contains("__ha_paneld_observer"))
+        assertTrue(!script.contains("parse_us"))
+        assertTrue(script.contains("function measuredParse(value){return JSON.parse(value)}"))
+    }
+
     @Test fun learningScriptTargetsTheExactReverseProxyWebsocket() {
         val script = EntityLearningProtocol.documentStartScript("https://HA.EXAMPLE:443/ha/")
 

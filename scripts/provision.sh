@@ -50,11 +50,29 @@ The script installs, starts, and verifies ha-paneld. It exits nonzero if a requi
 EOF
 }
 
+cleanup_provision_resources() {
+  if type stop_root_helper_apk_install >/dev/null 2>&1; then stop_root_helper_apk_install; fi
+  if type cleanup_root_helper_lease_guard >/dev/null 2>&1; then cleanup_root_helper_lease_guard; fi
+  [ -z "${SHIZUKU_DIR:-}" ] || rm -rf "$SHIZUKU_DIR"
+  SHIZUKU_DIR=""
+}
+
+handle_provision_signal() {
+  local status="$1"
+  trap - EXIT INT TERM
+  cleanup_provision_resources
+  exit "$status"
+}
+
 trap 'echo "${RED}${B}✗ provisioning incomplete${X} — re-run the SAME command to finish (it is idempotent)." >&2' ERR
+trap 'cleanup_provision_resources' EXIT
+trap 'handle_provision_signal 130' INT
+trap 'handle_provision_signal 143' TERM
 
 # Fatal with SPECIFIC recovery steps. Disarms the generic re-run trap first: these are the failures
 # re-running cannot fix, so the trap's blanket advice would mislead.
 fail() {
+  if type cleanup_root_helper_lease_guard >/dev/null 2>&1; then cleanup_root_helper_lease_guard; fi
   trap - ERR
   echo "${RED}${B}✗ $1${X}" >&2; shift
   local l; for l in "$@"; do echo "   $l" >&2; done
@@ -80,6 +98,17 @@ HA_URL=""; HA_TOKEN=""; HA_USER=""; HA_PASS=""; HA_REFRESH=""; HA_EXPIRY=""; BUI
 HA_LOGIN_FAILED=0
 HELPER_REQUIRED=0
 ROOT_HELPER_TRANSACTION_KIND=""
+ROOT_HELPER_TRANSACTION_SHA256=""
+ROOT_HELPER_TRANSACTION_PATH=""
+ROOT_HELPER_TRANSACTION_ID=""
+ROOT_HELPER_TARGET_BUILD_ID=""
+ROOT_HELPER_TARGET_SHA256=""
+ROOT_HELPER_LEASE_GUARD_PID=""
+ROOT_HELPER_LEASE_GUARD_FAILURE=""
+ROOT_HELPER_APK_INSTALL_PID=""
+ROOT_HELPER_APK_INSTALL_OUTPUT_FILE=""
+ADB_INSTALL_OUTPUT=""
+SHIZUKU_DIR=""
 TARGET_APK_SHA256=""
 
 if [ "${1:-}" ] && [ "${1#--}" = "${1:-}" ]; then APK="$1"; shift; fi
@@ -706,6 +735,13 @@ host_sha256() {
   fi
 }
 
+host_transaction_id() {
+  local id
+  id="$(od -An -N16 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')"
+  printf '%s\n' "$id" | grep -Eq '^[0-9a-f]{32}$' || return 1
+  printf '%s\n' "$id"
+}
+
 ensure_root_path() {
   probe_su && return 0
 
@@ -755,13 +791,14 @@ wait_for_helper_reply() {
 }
 
 rollback_root_helper() {
-  local install_kind="$1" restored
+  local install_kind="$1" transaction_id="${2:-$ROOT_HELPER_TRANSACTION_ID}" target_apk="${3:-$TARGET_APK_SHA256}"
+  local target_build="${4:-$ROOT_HELPER_TARGET_BUILD_ID}" target_helper="${5:-$ROOT_HELPER_TARGET_SHA256}" restored
   case "$install_kind" in
     system)
-      restored="$(run_root 'sh /data/local/tmp/hapaneld-helper.txn rollback-system' 2>&1)" || true
+      restored="$(run_root_helper_transaction rollback-system "$transaction_id" "$target_apk" "$target_build" "$target_helper" 2>&1)" || true
       ;;
     systemless)
-      restored="$(run_root 'sh /data/local/tmp/hapaneld-helper.txn rollback-systemless' 2>&1)" || true
+      restored="$(run_root_helper_transaction rollback-systemless "$transaction_id" "$target_apk" "$target_build" "$target_helper" 2>&1)" || true
       ;;
     *) return 1 ;;
   esac
@@ -773,24 +810,119 @@ rollback_root_helper() {
 }
 
 commit_root_helper_upgrade() {
-  local committed
-  case "$1" in
-    system) committed="$(run_root 'sh /data/local/tmp/hapaneld-helper.txn commit-system' 2>&1)" || true ;;
-    systemless) committed="$(run_root 'sh /data/local/tmp/hapaneld-helper.txn commit-systemless' 2>&1)" || true ;;
+  local install_kind="$1" transaction_id="${2:-$ROOT_HELPER_TRANSACTION_ID}" target_apk="${3:-$TARGET_APK_SHA256}"
+  local target_build="${4:-$ROOT_HELPER_TARGET_BUILD_ID}" target_helper="${5:-$ROOT_HELPER_TARGET_SHA256}" committed
+  case "$install_kind" in
+    system) committed="$(run_root_helper_transaction commit-system "$transaction_id" "$target_apk" "$target_build" "$target_helper" 2>&1)" || true ;;
+    systemless) committed="$(run_root_helper_transaction commit-systemless "$transaction_id" "$target_apk" "$target_build" "$target_helper" 2>&1)" || true ;;
     *) return 1 ;;
   esac
   printf '%s\n' "$committed" | grep -qx COMMIT_OK
 }
 
+renew_root_helper_lease() {
+  local install_kind="$1" renewed
+  case "$install_kind" in
+    system) renewed="$(run_root_helper_transaction lease-system 2>&1)" || true ;;
+    systemless) renewed="$(run_root_helper_transaction lease-systemless 2>&1)" || true ;;
+    *) return 1 ;;
+  esac
+  printf '%s\n' "$renewed" | grep -qx LEASE_OK
+}
+
+start_root_helper_lease_guard() {
+  [ -n "$ROOT_HELPER_TRANSACTION_KIND" ] || return 0
+  local owner_pid="$$" interval="${ROOT_HELPER_LEASE_GUARD_INTERVAL_SECONDS:-30}"
+  printf '%s\n' "$interval" | grep -Eq '^[0-9]+([.][0-9]+)?$' || interval=30
+  ROOT_HELPER_LEASE_GUARD_FAILURE="$(mktemp)"
+  (
+    sleep_pid=""
+    stop_lease_guard_sleep() {
+      [ -z "$sleep_pid" ] || kill "$sleep_pid" >/dev/null 2>&1 || true
+      [ -z "$sleep_pid" ] || wait "$sleep_pid" >/dev/null 2>&1 || true
+      exit 0
+    }
+    trap 'stop_lease_guard_sleep' INT TERM
+    while :; do
+      /bin/sleep "$interval" &
+      sleep_pid=$!
+      [ -z "${ROOT_HELPER_LEASE_GUARD_SLEEP_PID_FILE:-}" ] || printf '%s\n' "$sleep_pid" > "$ROOT_HELPER_LEASE_GUARD_SLEEP_PID_FILE"
+      wait "$sleep_pid" || exit 0
+      sleep_pid=""
+      kill -0 "$owner_pid" >/dev/null 2>&1 || exit 0
+      renew_root_helper_lease "$ROOT_HELPER_TRANSACTION_KIND" || {
+        printf 'failed\n' > "$ROOT_HELPER_LEASE_GUARD_FAILURE"
+        exit 1
+      }
+    done
+  ) &
+  ROOT_HELPER_LEASE_GUARD_PID=$!
+  [ -z "${ROOT_HELPER_LEASE_GUARD_PID_FILE:-}" ] || printf '%s\n' "$ROOT_HELPER_LEASE_GUARD_PID" > "$ROOT_HELPER_LEASE_GUARD_PID_FILE"
+}
+
+stop_root_helper_lease_guard() {
+  if [ -n "${ROOT_HELPER_LEASE_GUARD_PID:-}" ]; then
+    kill "$ROOT_HELPER_LEASE_GUARD_PID" >/dev/null 2>&1 || true
+    wait "$ROOT_HELPER_LEASE_GUARD_PID" >/dev/null 2>&1 || true
+    ROOT_HELPER_LEASE_GUARD_PID=""
+  fi
+}
+
+lease_guard_succeeded() {
+  [ -z "${ROOT_HELPER_LEASE_GUARD_FAILURE:-}" ] || [ ! -s "$ROOT_HELPER_LEASE_GUARD_FAILURE" ]
+}
+
+cleanup_root_helper_lease_guard() {
+  stop_root_helper_lease_guard
+  [ -z "${ROOT_HELPER_LEASE_GUARD_FAILURE:-}" ] || rm -f "$ROOT_HELPER_LEASE_GUARD_FAILURE"
+  ROOT_HELPER_LEASE_GUARD_FAILURE=""
+}
+
+stop_root_helper_apk_install() {
+  if [ -n "${ROOT_HELPER_APK_INSTALL_PID:-}" ]; then
+    kill "$ROOT_HELPER_APK_INSTALL_PID" >/dev/null 2>&1 || true
+    wait "$ROOT_HELPER_APK_INSTALL_PID" >/dev/null 2>&1 || true
+    ROOT_HELPER_APK_INSTALL_PID=""
+  fi
+  [ -z "${ROOT_HELPER_APK_INSTALL_OUTPUT_FILE:-}" ] || rm -f "$ROOT_HELPER_APK_INSTALL_OUTPUT_FILE"
+  ROOT_HELPER_APK_INSTALL_OUTPUT_FILE=""
+}
+
+run_adb_install_attempt() {
+  local status
+  ROOT_HELPER_APK_INSTALL_OUTPUT_FILE="$(mktemp)"
+  adb -s "$TARGET" install "$@" "$APK" > "$ROOT_HELPER_APK_INSTALL_OUTPUT_FILE" 2>&1 &
+  ROOT_HELPER_APK_INSTALL_PID=$!
+  if wait "$ROOT_HELPER_APK_INSTALL_PID"; then status=0; else status=$?; fi
+  ROOT_HELPER_APK_INSTALL_PID=""
+  ADB_INSTALL_OUTPUT="$(cat "$ROOT_HELPER_APK_INSTALL_OUTPUT_FILE")"
+  rm -f "$ROOT_HELPER_APK_INSTALL_OUTPUT_FILE"
+  ROOT_HELPER_APK_INSTALL_OUTPUT_FILE=""
+  return "$status"
+}
+
+run_root_helper_transaction() {
+  local action="$1" transaction_id="${2:-$ROOT_HELPER_TRANSACTION_ID}" target_apk="${3:-$TARGET_APK_SHA256}"
+  local target_build="${4:-$ROOT_HELPER_TARGET_BUILD_ID}" target_helper="${5:-$ROOT_HELPER_TARGET_SHA256}"
+  case "$action" in
+    install-system|install-systemless|discover-system|discover-systemless|status-system|status-systemless|lease-system|lease-systemless|rollback-system|rollback-systemless|commit-system|commit-systemless) ;;
+    *) return 1 ;;
+  esac
+  printf '%s\n' "$ROOT_HELPER_TRANSACTION_SHA256" | grep -Eq '^[0-9a-f]{64}$' || return 1
+  printf '%s\n' "$ROOT_HELPER_TRANSACTION_ID" | grep -Eq '^[0-9a-f]{32}$' || return 1
+  [ "$ROOT_HELPER_TRANSACTION_PATH" = "/data/adb/hapaneld/.helper-transaction-$ROOT_HELPER_TRANSACTION_ID-$ROOT_HELPER_TRANSACTION_SHA256" ] || return 1
+  run_root 'txn='"$ROOT_HELPER_TRANSACTION_PATH"'; expected='"$ROOT_HELPER_TRANSACTION_SHA256"'; owner=$(stat -c %u:%g "$txn" 2>/dev/null || toybox stat -c %u:%g "$txn" 2>/dev/null) || exit 1; [ "$owner" = 0:0 ] || exit 1; actual=$(sha256sum "$txn" 2>/dev/null || toybox sha256sum "$txn" 2>/dev/null) || exit 1; [ "${actual%% *}" = "$expected" ] || exit 1; sh "$txn" '"$action $transaction_id $target_apk $target_build $target_helper"
+}
+
 cleanup_root_helper_staging() {
-  run_root 'rm -f /data/local/tmp/hapaneld-helper /data/local/tmp/hapaneld-helper.rc /data/local/tmp/hapaneld-helper.svc /data/local/tmp/hapaneld-helper.txn' \
+  run_root 'rm -f /data/local/tmp/hapaneld-helper /data/local/tmp/hapaneld-helper.rc /data/local/tmp/hapaneld-helper.svc /data/local/tmp/hapaneld-helper.txn '"$ROOT_HELPER_TRANSACTION_PATH" \
     >/dev/null 2>&1 || true
 }
 
 root_helper_transaction_record() {
   case "$1" in
-    system) run_root 'sh /data/local/tmp/hapaneld-helper.txn status-system' 2>/dev/null ;;
-    systemless) run_root 'sh /data/local/tmp/hapaneld-helper.txn status-systemless' 2>/dev/null ;;
+    system) run_root_helper_transaction discover-system 2>/dev/null ;;
+    systemless) run_root_helper_transaction discover-systemless 2>/dev/null ;;
     *) return 1 ;;
   esac
 }
@@ -814,33 +946,77 @@ installed_apk_matches_hash() {
 }
 
 reconcile_stale_root_helper() {
-  local install_kind="$1" record journal_version journal_scope target_apk target_build outcome
+  local install_kind="$1" record authenticated journal_version journal_scope transaction_id target_apk target_build target_helper live_state outcome
   record="$(root_helper_transaction_record "$install_kind" || true)"
   journal_version="$(printf '%s\n' "$record" | sed -n 's/^JOURNAL_VERSION=//p')"
   journal_scope="$(printf '%s\n' "$record" | sed -n 's/^JOURNAL_SCOPE=//p')"
+  transaction_id="$(printf '%s\n' "$record" | sed -nE 's/^TRANSACTION_ID=([0-9a-f]{32})$/\1/p')"
   target_apk="$(printf '%s\n' "$record" | sed -nE 's/^TARGET_APK_SHA256=([0-9a-f]{64})$/\1/p')"
   target_build="$(printf '%s\n' "$record" | sed -nE 's/^TARGET_BUILD_ID=([0-9a-f]{64})$/\1/p')"
+  target_helper="$(printf '%s\n' "$record" | sed -nE 's/^TARGET_HELPER_SHA256=([0-9a-f]{64})$/\1/p')"
+  live_state="$(printf '%s\n' "$record" | sed -n 's/^LIVE_STATE=//p')"
   if [ "$journal_version" != 1 ] || [ "$journal_scope" != APK_HELPER ] || \
+     ! printf '%s\n' "$transaction_id" | grep -Eq '^[0-9a-f]{32}$' || \
      ! printf '%s\n' "$target_apk" | grep -Eq '^[0-9a-f]{64}$' || \
-     ! printf '%s\n' "$target_build" | grep -Eq '^[0-9a-f]{64}$'; then
+     ! printf '%s\n' "$target_build" | grep -Eq '^[0-9a-f]{64}$' || \
+     ! printf '%s\n' "$target_helper" | grep -Eq '^[0-9a-f]{64}$'; then
     return 2
   fi
+  case "$install_kind" in
+    system) authenticated="$(run_root_helper_transaction status-system "$transaction_id" "$target_apk" "$target_build" "$target_helper" 2>/dev/null || true)" ;;
+    systemless) authenticated="$(run_root_helper_transaction status-systemless "$transaction_id" "$target_apk" "$target_build" "$target_helper" 2>/dev/null || true)" ;;
+  esac
+  [ "$authenticated" = "$record" ] || return 2
   if installed_apk_matches_hash "$target_apk"; then
     wait_for_helper_reply COMPANIONCAPS "COMPANIONCAPS 1 BACKUP RESTORE STATUS JOURNAL" || return 2
     wait_for_helper_reply BUILDID "BUILDID $target_build" || return 2
-    commit_root_helper_upgrade "$install_kind" || return 2
+    commit_root_helper_upgrade "$install_kind" "$transaction_id" "$target_apk" "$target_build" "$target_helper" || return 2
     return 0
   else
     outcome=$?
   fi
   [ "$outcome" -eq 1 ] || return 2
-  wait_for_helper_reply BUILDID "BUILDID $target_build" || return 2
-  rollback_root_helper "$install_kind"
+  case "$live_state" in PRE_SWAP|TARGET) ;; *) return 2 ;; esac
+  rollback_root_helper "$install_kind" "$transaction_id" "$target_apk" "$target_build" "$target_helper"
+}
+
+resolve_root_helper_install_state() {
+  local selected_kind="$1" stale_kind=""
+  case "$out2" in
+    STALE_SYSTEM_TRANSACTION) stale_kind=system ;;
+    STALE_SYSTEMLESS_TRANSACTION) stale_kind=systemless ;;
+    MULTIPLE_STALE_TRANSACTIONS)
+      fail "both root-helper recovery journals are present" \
+        "No rollback was attempted because the authoritative prior install location is ambiguous." \
+        "Inspect and recover the retained /system and systemless journals before provisioning again." ;;
+    FOREIGN_MANUAL_TRANSACTION)
+      fail "an incomplete standalone root-helper installation must be recovered first" \
+        "Re-run ./helper/install-daemon.sh $TARGET from the same checkout; it owns the separate helper-only journal." \
+        "Then re-run this provisioning command. No APK or helper files were changed by this attempt." ;;
+    TRANSACTION_BUSY)
+      fail "another root-helper transaction is active on the panel" \
+        "Wait for the other installer or provisioner to finish, then re-run this command." ;;
+    ACTIVE_SYSTEM_TRANSACTION|ACTIVE_SYSTEMLESS_TRANSACTION)
+      fail "another provisioner still owns the active root-helper transaction" \
+        "Wait up to ten minutes for the owning run to finish or its recovery lease to expire, then re-run." ;;
+  esac
+  if [ -n "$stale_kind" ]; then
+    reconcile_stale_root_helper "$stale_kind" || fail "an incomplete prior root-helper and APK upgrade could not be reconciled safely" \
+      "No rollback was attempted because the installed APK and running helper identity could not both be established." \
+      "Restore adb connectivity, then re-run this command to reconcile the retained $stale_kind recovery journal."
+    out2="$(run_root_helper_transaction "install-$selected_kind" 2>&1)" || true
+  fi
+  case "$out2" in
+    STALE_SYSTEM_TRANSACTION|STALE_SYSTEMLESS_TRANSACTION|MULTIPLE_STALE_TRANSACTIONS|FOREIGN_MANUAL_TRANSACTION|TRANSACTION_BUSY|ACTIVE_SYSTEM_TRANSACTION|ACTIVE_SYSTEMLESS_TRANSACTION)
+      fail "root-helper journal state changed while provisioning" \
+        "No helper files were replaced by the conflicting transaction attempt." \
+        "Wait for any other installer to finish, then re-run this command to reconcile the retained journal." ;;
+  esac
 }
 
 install_root_helper() {
   local abi helper_dir="" helper="" helper_name="" rc_file="" service_file="" transaction_file=""
-  local bin_sha256 rc_sha256 service_sha256 transaction_sha256 expected_build_id="" out out2 root_ready=0 install_kind=""
+  local bin_sha256 rc_sha256 service_sha256 transaction_sha256 transaction_ready="" expected_build_id="" out out2 root_ready=0 install_kind=""
 
   abi="$(adb -s "$TARGET" shell getprop ro.product.cpu.abi 2>/dev/null | tr -d '\r')"
 
@@ -909,6 +1085,9 @@ install_root_helper() {
     fail "the expected root-helper build identity is unavailable" \
       "Run ./helper/build.sh from a complete checkout, then retry. No APK or helper was replaced."
   fi
+  ROOT_HELPER_TRANSACTION_ID="$(host_transaction_id)" || fail "could not create a unique root-helper transaction identity" \
+    "No helper or APK files were changed. Check host access to /dev/urandom, then retry."
+  ROOT_HELPER_TARGET_BUILD_ID="$expected_build_id"
 
   rc_file="$(mktemp)"
   service_file="$(mktemp)"
@@ -947,6 +1126,50 @@ root_owned() {
   [ "$owner" = 0:0 ]
 }
 
+boot_id() {
+  cat /proc/sys/kernel/random/boot_id 2>/dev/null
+}
+
+uptime_seconds() {
+  value=$(cat /proc/uptime 2>/dev/null) || return 1
+  value=${value%%.*}
+  case "$value" in ''|*[!0-9]*) return 1 ;; esac
+  printf '%s\n' "$value"
+}
+
+lease_active() {
+  marker=$1
+  recorded_boot=$(sed -n 's/^LEASE_BOOT_ID=//p' "$marker")
+  lease_until=$(sed -n 's/^LEASE_UNTIL_UPTIME=//p' "$marker")
+  current_boot=$(boot_id) || return 1
+  now=$(uptime_seconds) || return 1
+  case "$lease_until" in ''|*[!0-9]*) return 1 ;; esac
+  [ -n "$recorded_boot" ] && [ "$recorded_boot" = "$current_boot" ] && [ "$now" -lt "$lease_until" ]
+}
+
+valid_transaction_identity() {
+  marker=$1 transaction_id=$2 target_apk=$3 target_build=$4 target_helper=$5
+  grep -qx "TRANSACTION_ID=$transaction_id" "$marker" &&
+    grep -qx "TARGET_APK_SHA256=$target_apk" "$marker" &&
+    grep -qx "TARGET_BUILD_ID=$target_build" "$marker" &&
+    grep -qx "TARGET_HELPER_SHA256=$target_helper" "$marker"
+}
+
+refresh_lease() {
+  marker=$1
+  current_boot=$(boot_id) || return 1
+  now=$(uptime_seconds) || return 1
+  lease_until=$((now + 600))
+  sed '/^LEASE_BOOT_ID=/d; /^LEASE_UNTIL_UPTIME=/d' "$marker" > "$marker.lease-new" || return 1
+  echo LEASE_BOOT_ID=$current_boot >> "$marker.lease-new"
+  echo LEASE_UNTIL_UPTIME=$lease_until >> "$marker.lease-new"
+  chown 0:0 "$marker.lease-new" || return 1
+  chmod 600 "$marker.lease-new" || return 1
+  sync || return 1
+  mv -f "$marker.lease-new" "$marker" || return 1
+  sync || return 1
+}
+
 snapshot() {
   live=$1 recovery=$2 mode=$3
   rm -f "$recovery" || return 1
@@ -975,6 +1198,48 @@ valid_recovery() {
   [ -f "$recovery" ] && root_owned "$recovery" && [ "$(file_sha256 "$recovery")" = "$expected" ]
 }
 
+live_matches_recorded() {
+  name=$1 live=$2 marker=$3
+  if flag "$name" "$marker"; then
+    expected=$(sed -n "s/^${name}_SHA256=//p" "$marker")
+    [ -f "$live" ] && root_owned "$live" && [ "$(file_sha256 "$live")" = "$expected" ]
+  else
+    [ ! -e "$live" ]
+  fi
+}
+
+classify_system() {
+  marker=/system/bin/.hapaneld-helper-upgrade
+  if live_matches_recorded OLD_BIN /system/bin/hapaneld-helper "$marker" &&
+     live_matches_recorded OLD_SERVICE /system/etc/init/hapaneld-helper.rc "$marker" &&
+     live_matches_recorded LEGACY_BIN /system/bin/hapaneld-ledd "$marker" &&
+     live_matches_recorded LEGACY_SERVICE /system/etc/init/hapaneld-ledd.rc "$marker" &&
+     live_matches_recorded ALT_BIN /data/adb/hapaneld/hapaneld-helper "$marker" &&
+     live_matches_recorded ALT_SERVICE /data/adb/service.d/hapaneld-helper.sh "$marker"; then
+    echo PRE_SWAP
+  elif hash_matches @BIN_SHA256@ /system/bin/hapaneld-helper &&
+       hash_matches @RC_SHA256@ /system/etc/init/hapaneld-helper.rc &&
+       [ ! -e /system/bin/hapaneld-ledd ] && [ ! -e /system/etc/init/hapaneld-ledd.rc ] &&
+       [ ! -e /data/adb/hapaneld/hapaneld-helper ] && [ ! -e /data/adb/service.d/hapaneld-helper.sh ]; then
+    echo TARGET
+  else
+    echo UNKNOWN
+  fi
+}
+
+classify_systemless() {
+  marker=/data/adb/hapaneld/.helper-upgrade.marker
+  if live_matches_recorded OLD_BIN /data/adb/hapaneld/hapaneld-helper "$marker" &&
+     live_matches_recorded OLD_SERVICE /data/adb/service.d/hapaneld-helper.sh "$marker"; then
+    echo PRE_SWAP
+  elif hash_matches @BIN_SHA256@ /data/adb/hapaneld/hapaneld-helper &&
+       hash_matches @SERVICE_SHA256@ /data/adb/service.d/hapaneld-helper.sh; then
+    echo TARGET
+  else
+    echo UNKNOWN
+  fi
+}
+
 restore_or_remove() {
   name=$1 recovery=$2 live=$3 mode=$4 marker=$5
   if flag "$name" "$marker"; then
@@ -987,11 +1252,46 @@ restore_or_remove() {
   fi
 }
 
+acquire_helper_lock() {
+  lock=/dev/.hapaneld-helper-transaction.lock
+  if ! mkdir "$lock" 2>/dev/null; then
+    holder=$(cat "$lock/pid" 2>/dev/null || true)
+    case "$holder" in
+      ''|*[!0-9]*) return 1 ;;
+      *) [ ! -d "/proc/$holder" ] || return 1 ;;
+    esac
+    rm -rf "$lock" 2>/dev/null || return 1
+    mkdir "$lock" 2>/dev/null || return 1
+  fi
+  echo $$ > "$lock/pid" || { rm -rf "$lock"; return 1; }
+  trap 'rm -rf /dev/.hapaneld-helper-transaction.lock' 0 1 2 3 15
+}
+
+helper_journal_state() {
+  system=0
+  systemless=0
+  [ ! -f /system/bin/.hapaneld-helper-upgrade ] || system=1
+  [ ! -f /data/adb/hapaneld/.helper-upgrade.marker ] || systemless=1
+  if [ -f /system/bin/.hapaneld-helper-manual-upgrade ] || \
+     [ -f /data/adb/hapaneld/.helper-manual-upgrade.marker ]; then
+    echo FOREIGN_MANUAL_TRANSACTION
+  elif [ "$system" = 1 ] && [ "$systemless" = 1 ]; then
+    echo MULTIPLE_STALE_TRANSACTIONS
+  elif [ "$system" = 1 ]; then
+    if lease_active /system/bin/.hapaneld-helper-upgrade; then echo ACTIVE_SYSTEM_TRANSACTION; else echo STALE_SYSTEM_TRANSACTION; fi
+  elif [ "$systemless" = 1 ]; then
+    if lease_active /data/adb/hapaneld/.helper-upgrade.marker; then echo ACTIVE_SYSTEMLESS_TRANSACTION; else echo STALE_SYSTEMLESS_TRANSACTION; fi
+  else
+    echo NO_STALE_TRANSACTION
+  fi
+}
+
 install_system() {
   mount -o rw,remount / 2>/dev/null
   mount -o rw,remount /system 2>/dev/null
   marker=/system/bin/.hapaneld-helper-upgrade
-  [ ! -f "$marker" ] || { echo STALE_TRANSACTION; return 2; }
+  state=$(helper_journal_state)
+  [ "$state" = NO_STALE_TRANSACTION ] || { echo "$state"; return 2; }
   rm -f /system/bin/hapaneld-helper.hapaneld-recovery \
     /system/etc/init/hapaneld-helper.rc.hapaneld-recovery \
     /system/bin/hapaneld-ledd.hapaneld-recovery \
@@ -1022,10 +1322,14 @@ install_system() {
   legacy_service=${legacy_service_record%% *}; legacy_service_sha=${legacy_service_record#* }
   alt_bin=${alt_bin_record%% *}; alt_bin_sha=${alt_bin_record#* }
   alt_service=${alt_service_record%% *}; alt_service_sha=${alt_service_record#* }
+  current_boot=$(boot_id) || return 1
+  now=$(uptime_seconds) || return 1
+  lease_until=$((now + 600))
 
   {
     echo JOURNAL_VERSION=1
     echo JOURNAL_SCOPE=APK_HELPER
+    echo TRANSACTION_ID=@TRANSACTION_ID@
     echo TARGET_APK_SHA256=@APK_SHA256@
     echo TARGET_BUILD_ID=@BUILD_ID@
     echo TARGET_HELPER_SHA256=@BIN_SHA256@
@@ -1041,6 +1345,8 @@ install_system() {
     echo ALT_BIN_SHA256=$alt_bin_sha
     echo ALT_SERVICE=$alt_service
     echo ALT_SERVICE_SHA256=$alt_service_sha
+    echo LEASE_BOOT_ID=$current_boot
+    echo LEASE_UNTIL_UPTIME=$lease_until
   } > "$marker.new" || return 1
   chown 0:0 "$marker.new" || return 1
   chmod 600 "$marker.new" || return 1
@@ -1066,7 +1372,8 @@ install_systemless() {
   chown 0:0 /data/adb/hapaneld || return 1
   chmod 700 /data/adb/hapaneld || return 1
   marker=/data/adb/hapaneld/.helper-upgrade.marker
-  [ ! -f "$marker" ] || { echo STALE_TRANSACTION; return 2; }
+  state=$(helper_journal_state)
+  [ "$state" = NO_STALE_TRANSACTION ] || { echo "$state"; return 2; }
   rm -f /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery \
     /data/adb/service.d/hapaneld-helper.sh.hapaneld-recovery
 
@@ -1083,9 +1390,13 @@ install_systemless() {
   old_service_record=$(snapshot /data/adb/service.d/hapaneld-helper.sh /data/adb/service.d/hapaneld-helper.sh.hapaneld-recovery 755) || return 1
   old_bin=${old_bin_record%% *}; old_bin_sha=${old_bin_record#* }
   old_service=${old_service_record%% *}; old_service_sha=${old_service_record#* }
+  current_boot=$(boot_id) || return 1
+  now=$(uptime_seconds) || return 1
+  lease_until=$((now + 600))
   {
     echo JOURNAL_VERSION=1
     echo JOURNAL_SCOPE=APK_HELPER
+    echo TRANSACTION_ID=@TRANSACTION_ID@
     echo TARGET_APK_SHA256=@APK_SHA256@
     echo TARGET_BUILD_ID=@BUILD_ID@
     echo TARGET_HELPER_SHA256=@BIN_SHA256@
@@ -1093,6 +1404,8 @@ install_systemless() {
     echo OLD_BIN_SHA256=$old_bin_sha
     echo OLD_SERVICE=$old_service
     echo OLD_SERVICE_SHA256=$old_service_sha
+    echo LEASE_BOOT_ID=$current_boot
+    echo LEASE_UNTIL_UPTIME=$lease_until
   } > "$marker.new" || return 1
   chown 0:0 "$marker.new" || return 1
   chmod 600 "$marker.new" || return 1
@@ -1118,6 +1431,9 @@ rollback_system() {
   [ -f "$marker" ] || { echo ROLLBACK_UNNEEDED; return 0; }
   grep -q ^JOURNAL_VERSION=1$ "$marker" || return 1
   grep -q ^JOURNAL_SCOPE=APK_HELPER$ "$marker" || return 1
+  valid_transaction_identity "$marker" "$transaction_id" "$target_apk" "$target_build" "$target_helper" || return 1
+  state=$(classify_system)
+  [ "$state" = PRE_SWAP ] || [ "$state" = TARGET ] || return 1
   flag OLD_BIN "$marker" && valid_recovery OLD_BIN /system/bin/hapaneld-helper.hapaneld-recovery "$marker" || ! flag OLD_BIN "$marker" || return 1
   flag OLD_SERVICE "$marker" && valid_recovery OLD_SERVICE /system/etc/init/hapaneld-helper.rc.hapaneld-recovery "$marker" || ! flag OLD_SERVICE "$marker" || return 1
   flag LEGACY_BIN "$marker" && valid_recovery LEGACY_BIN /system/bin/hapaneld-ledd.hapaneld-recovery "$marker" || ! flag LEGACY_BIN "$marker" || return 1
@@ -1166,6 +1482,9 @@ rollback_systemless() {
   [ -f "$marker" ] || { echo ROLLBACK_UNNEEDED; return 0; }
   grep -q ^JOURNAL_VERSION=1$ "$marker" || return 1
   grep -q ^JOURNAL_SCOPE=APK_HELPER$ "$marker" || return 1
+  valid_transaction_identity "$marker" "$transaction_id" "$target_apk" "$target_build" "$target_helper" || return 1
+  state=$(classify_systemless)
+  [ "$state" = PRE_SWAP ] || [ "$state" = TARGET ] || return 1
   flag OLD_BIN "$marker" && valid_recovery OLD_BIN /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery "$marker" || ! flag OLD_BIN "$marker" || return 1
   flag OLD_SERVICE "$marker" && valid_recovery OLD_SERVICE /data/adb/service.d/hapaneld-helper.sh.hapaneld-recovery "$marker" || ! flag OLD_SERVICE "$marker" || return 1
   stop hapaneld_helper 2>/dev/null
@@ -1199,6 +1518,7 @@ commit_system() {
   marker=/system/bin/.hapaneld-helper-upgrade
   mount -o rw,remount / 2>/dev/null
   mount -o rw,remount /system 2>/dev/null
+  valid_transaction_identity "$marker" "$transaction_id" "$target_apk" "$target_build" "$target_helper" || return 1
   rm -f "$marker" || return 1
   sync || return 1
   rm -f /system/bin/hapaneld-helper.hapaneld-recovery \
@@ -1213,6 +1533,7 @@ commit_system() {
 
 commit_systemless() {
   marker=/data/adb/hapaneld/.helper-upgrade.marker
+  valid_transaction_identity "$marker" "$transaction_id" "$target_apk" "$target_build" "$target_helper" || return 1
   rm -f "$marker" || return 1
   sync || return 1
   rm -f /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery \
@@ -1221,13 +1542,50 @@ commit_systemless() {
   echo COMMIT_OK
 }
 
-status_system() {
+discover_system() {
   cat /system/bin/.hapaneld-helper-upgrade
+  echo LIVE_STATE=$(classify_system)
+}
+
+discover_systemless() {
+  cat /data/adb/hapaneld/.helper-upgrade.marker
+  echo LIVE_STATE=$(classify_systemless)
+}
+
+status_system() {
+  marker=/system/bin/.hapaneld-helper-upgrade
+  valid_transaction_identity "$marker" "$transaction_id" "$target_apk" "$target_build" "$target_helper" || return 1
+  discover_system
 }
 
 status_systemless() {
-  cat /data/adb/hapaneld/.helper-upgrade.marker
+  marker=/data/adb/hapaneld/.helper-upgrade.marker
+  valid_transaction_identity "$marker" "$transaction_id" "$target_apk" "$target_build" "$target_helper" || return 1
+  discover_systemless
 }
+
+lease_system() {
+  marker=/system/bin/.hapaneld-helper-upgrade
+  mount -o rw,remount / 2>/dev/null
+  mount -o rw,remount /system 2>/dev/null
+  valid_transaction_identity "$marker" "$transaction_id" "$target_apk" "$target_build" "$target_helper" || return 1
+  refresh_lease "$marker" || return 1
+  echo LEASE_OK
+}
+
+lease_systemless() {
+  marker=/data/adb/hapaneld/.helper-upgrade.marker
+  valid_transaction_identity "$marker" "$transaction_id" "$target_apk" "$target_build" "$target_helper" || return 1
+  refresh_lease "$marker" || return 1
+  echo LEASE_OK
+}
+
+acquire_helper_lock || { echo TRANSACTION_BUSY; exit 75; }
+
+transaction_id=${2:-}
+target_apk=${3:-}
+target_build=${4:-}
+target_helper=${5:-}
 
 case "${1:-}" in
   install-system) install_system ;;
@@ -1236,8 +1594,12 @@ case "${1:-}" in
   rollback-systemless) rollback_systemless ;;
   commit-system) commit_system ;;
   commit-systemless) commit_systemless ;;
+  discover-system) discover_system ;;
+  discover-systemless) discover_systemless ;;
   status-system) status_system ;;
   status-systemless) status_systemless ;;
+  lease-system) lease_system ;;
+  lease-systemless) lease_systemless ;;
   *) exit 2 ;;
 esac
 EOF
@@ -1249,9 +1611,13 @@ EOF
       -e "s/@SERVICE_SHA256@/$service_sha256/g" \
       -e "s/@APK_SHA256@/$TARGET_APK_SHA256/g" \
       -e "s/@BUILD_ID@/$expected_build_id/g" \
+      -e "s/@TRANSACTION_ID@/$ROOT_HELPER_TRANSACTION_ID/g" \
       "$transaction_file" > "$transaction_file.ready"
   mv "$transaction_file.ready" "$transaction_file"
   transaction_sha256="$(host_sha256 "$transaction_file")"
+  ROOT_HELPER_TARGET_SHA256="$bin_sha256"
+  ROOT_HELPER_TRANSACTION_SHA256="$transaction_sha256"
+  ROOT_HELPER_TRANSACTION_PATH="/data/adb/hapaneld/.helper-transaction-$ROOT_HELPER_TRANSACTION_ID-$transaction_sha256"
 
   if run_root '[ ! -f /system/bin/.hapaneld-helper-manual-upgrade ] && [ ! -f /data/adb/hapaneld/.helper-manual-upgrade.marker ]' \
       >/dev/null 2>&1; then
@@ -1270,6 +1636,31 @@ EOF
   adb -s "$TARGET" push "$service_file" /data/local/tmp/hapaneld-helper.svc >/dev/null
   adb -s "$TARGET" push "$transaction_file" /data/local/tmp/hapaneld-helper.txn >/dev/null
   rm -f "$rc_file" "$service_file" "$transaction_file"
+  transaction_ready="$(run_root '
+    mkdir -p /data/adb/hapaneld || exit 1
+    chown 0:0 /data/adb/hapaneld || exit 1
+    chmod 700 /data/adb/hapaneld || exit 1
+    expected='"$ROOT_HELPER_TRANSACTION_SHA256"'
+    source=/data/local/tmp/hapaneld-helper.txn
+    destination='"$ROOT_HELPER_TRANSACTION_PATH"'
+    source_hash=$(sha256sum "$source" 2>/dev/null || toybox sha256sum "$source" 2>/dev/null) || exit 1
+    [ "${source_hash%% *}" = "$expected" ] || exit 1
+    cp "$source" "$destination.new" || exit 1
+    chown 0:0 "$destination.new" || exit 1
+    chmod 700 "$destination.new" || exit 1
+    destination_hash=$(sha256sum "$destination.new" 2>/dev/null || toybox sha256sum "$destination.new" 2>/dev/null) || exit 1
+    [ "${destination_hash%% *}" = "$expected" ] || exit 1
+    mv -f "$destination.new" "$destination" || exit 1
+    sync || exit 1
+    echo TRANSACTION_READY
+  ' 2>&1)" || true
+  if ! printf '%s\n' "$transaction_ready" | grep -qx TRANSACTION_READY; then
+    run_root 'rm -f /data/local/tmp/hapaneld-helper /data/local/tmp/hapaneld-helper.rc /data/local/tmp/hapaneld-helper.svc /data/local/tmp/hapaneld-helper.txn '"$ROOT_HELPER_TRANSACTION_PATH"'.new' \
+      >/dev/null 2>&1 || true
+    [ -z "$helper_dir" ] || rm -rf "$helper_dir"
+    fail "the root-helper transaction could not be promoted into protected storage" \
+      "No privileged transaction script was executed and the APK was not replaced."
+  fi
 
   out="$(run_root '
     mount -o rw,remount / 2>/dev/null; mount -o rw,remount /system 2>/dev/null
@@ -1287,13 +1678,8 @@ EOF
 
   if printf '%s\n' "$out" | grep -qx SYSTEM_RW; then
     install_kind=system
-    out2="$(run_root "( sha256sum /data/local/tmp/hapaneld-helper.txn 2>/dev/null || toybox sha256sum /data/local/tmp/hapaneld-helper.txn 2>/dev/null ) | grep -q ^$transaction_sha256 || exit 1; chown 0:0 /data/local/tmp/hapaneld-helper.txn || exit 1; chmod 700 /data/local/tmp/hapaneld-helper.txn || exit 1; sh /data/local/tmp/hapaneld-helper.txn install-system" 2>&1)" || true
-    if printf '%s\n' "$out2" | grep -qx STALE_TRANSACTION; then
-      reconcile_stale_root_helper "$install_kind" || fail "an incomplete prior /system helper and APK upgrade could not be reconciled safely" \
-        "No rollback was attempted because the installed APK and running helper identity could not both be established." \
-        "Restore adb connectivity, then re-run this command to reconcile the retained recovery journal."
-      out2="$(run_root 'sh /data/local/tmp/hapaneld-helper.txn install-system' 2>&1)" || true
-    fi
+    out2="$(run_root_helper_transaction install-system 2>&1)" || true
+    resolve_root_helper_install_state "$install_kind"
     if ! printf '%s\n' "$out2" | grep -qx INSTALL_OK; then
       if rollback_root_helper "$install_kind"; then
         fail "/system root-helper install failed; the prior helper was preserved or restored" \
@@ -1309,13 +1695,8 @@ EOF
     ' >/dev/null 2>&1 || true
   elif printf '%s\n' "$out" | grep -qx SYSTEMLESS_RUNNER; then
     install_kind=systemless
-    out2="$(run_root "( sha256sum /data/local/tmp/hapaneld-helper.txn 2>/dev/null || toybox sha256sum /data/local/tmp/hapaneld-helper.txn 2>/dev/null ) | grep -q ^$transaction_sha256 || exit 1; chown 0:0 /data/local/tmp/hapaneld-helper.txn || exit 1; chmod 700 /data/local/tmp/hapaneld-helper.txn || exit 1; sh /data/local/tmp/hapaneld-helper.txn install-systemless" 2>&1)" || true
-    if printf '%s\n' "$out2" | grep -qx STALE_TRANSACTION; then
-      reconcile_stale_root_helper "$install_kind" || fail "an incomplete prior systemless helper and APK upgrade could not be reconciled safely" \
-        "No rollback was attempted because the installed APK and running helper identity could not both be established." \
-        "Restore adb connectivity, then re-run this command to reconcile the retained recovery journal."
-      out2="$(run_root 'sh /data/local/tmp/hapaneld-helper.txn install-systemless' 2>&1)" || true
-    fi
+    out2="$(run_root_helper_transaction install-systemless 2>&1)" || true
+    resolve_root_helper_install_state "$install_kind"
     if ! printf '%s\n' "$out2" | grep -qx INSTALL_OK; then
       if rollback_root_helper "$install_kind"; then
         fail "systemless root-helper install failed; the prior helper was preserved or restored" \
@@ -1357,6 +1738,8 @@ EOF
     fail "new root helper failed its exact build-identity check and rollback could not be verified" \
       "The APK was not replaced. Restore the helper manually before relying on privileged operations."
   fi
+  renew_root_helper_lease "$install_kind" || fail "the root-helper transaction lease could not be renewed after validation" \
+    "The APK was not replaced. Re-run after any competing provisioner finishes; this journal remains recoverable."
   ROOT_HELPER_TRANSACTION_KIND="$install_kind"
   [ -z "$helper_dir" ] || rm -rf "$helper_dir"
   echo "   ${GRN}✓${X} root helper running with Companion-data protocol 1; recovery retained until APK installation succeeds"
@@ -1440,9 +1823,27 @@ install_root_helper
 # Try with -g (grant-all) first — some vendor builds reject the flag, so retry plain. Capture the
 # output: adb's raw INSTALL_FAILED_* codes are cryptic, so classify the common ones into recovery steps.
 install_apk() {
-  local out helper_recovery="" outcome
-  out="$(adb -s "$TARGET" install -r -g "$APK" 2>&1)" && return 0
-  out="$(adb -s "$TARGET" install -r "$APK" 2>&1)" && return 0
+  local out helper_recovery="" outcome install_status
+  if [ -n "$ROOT_HELPER_TRANSACTION_KIND" ] && ! renew_root_helper_lease "$ROOT_HELPER_TRANSACTION_KIND"; then
+    fail "the root-helper transaction is no longer owned by this provisioning run" \
+      "The APK was not replaced and no other transaction was committed or rolled back." \
+      "Wait for the owning provisioner to finish or its ten-minute lease to expire, then re-run."
+  fi
+  start_root_helper_lease_guard
+  if run_adb_install_attempt -r -g; then install_status=0; else install_status=$?; fi
+  out="$ADB_INSTALL_OUTPUT"
+  if [ "$install_status" -ne 0 ]; then
+    if run_adb_install_attempt -r; then install_status=0; else install_status=$?; fi
+    out="$ADB_INSTALL_OUTPUT"
+  fi
+  stop_root_helper_lease_guard
+  if ! lease_guard_succeeded; then
+    cleanup_root_helper_lease_guard
+    fail "the root-helper transaction lease was lost while Android installed the APK" \
+      "The package-manager outcome will be reconciled from exact APK bytes on the next run; no foreign journal was changed."
+  fi
+  cleanup_root_helper_lease_guard
+  [ "$install_status" -ne 0 ] || return 0
   if [ -n "$ROOT_HELPER_TRANSACTION_KIND" ]; then
     if installed_apk_matches_hash "$TARGET_APK_SHA256"; then
       warn "adb install returned an error, but the exact target APK bytes are installed; completing the helper transaction"
@@ -1543,7 +1944,6 @@ if [ "$SHIZUKU" = 1 ]; then
   SHIZUKU_CERT_SHA256="268b5590e868fb08bae7e0ac413564cd1ff88f5ccff74af9dbd0dc918e30db30"
   SHIZUKU_DIR="$(mktemp -d)"
   SHIZUKU_APK="$SHIZUKU_DIR/shizuku.apk"
-  trap 'rm -rf "${SHIZUKU_DIR:-}"' EXIT
   SHIZUKU_CURRENT_CODE="$(adb -s "$TARGET" shell dumpsys package "$SHIZUKU_PKG" 2>/dev/null \
     | sed -nE 's/.*versionCode=([0-9]+).*/\1/p' | head -1 | tr -d '\r' || true)"
   SHIZUKU_CURRENT_PATH="$(adb -s "$TARGET" shell pm path "$SHIZUKU_PKG" 2>/dev/null \

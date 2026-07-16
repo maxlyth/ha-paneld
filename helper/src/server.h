@@ -6,6 +6,7 @@
 
 #define MAX_LINE 512   // longest accepted command line; longer lines are dropped, not mis-split
 #define IDLE_SEC 30    // drop a non-SUBSCRIBE connection that sends nothing for this long
+#define SEND_SEC 5     // bound a stalled client's ability to hold a worker in a reply write
 #define MAX_CONN 16    // max concurrent client connections; the (MAX_CONN+1)th is refused
 
 // Serve a connected socket fd until the client (half-)closes or an idle non-subscriber times out.

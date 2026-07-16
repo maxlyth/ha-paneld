@@ -1,5 +1,10 @@
 package io.github.maxlyth.hapaneld.provisioning
 
+import io.github.maxlyth.hapaneld.metrics.FeatureCostOperation
+import io.github.maxlyth.hapaneld.metrics.FeatureCostOutcome
+import io.github.maxlyth.hapaneld.metrics.FeatureCostRegistry
+import io.github.maxlyth.hapaneld.metrics.FeatureCosts
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 
 /**
@@ -12,6 +17,7 @@ internal class ProvisioningCoordinator(
     private val collector: ProvisioningObservationCollector,
     private val monotonicMs: () -> Long,
     private val cacheTtlMs: Long = DEFAULT_CACHE_TTL_MS,
+    private val featureCosts: FeatureCostRegistry = FeatureCosts.registry,
 ) : ProvisioningReader {
     override val expectedProfileRef = profile.ref
 
@@ -28,17 +34,25 @@ internal class ProvisioningCoordinator(
         activation: ProvisioningActivationSnapshot,
         forceRefresh: Boolean,
     ): ProvisioningReadResult {
+        val cost = featureCosts.span(FeatureCostOperation.PROVISIONING_PLAN)
         if (!activation.isStableFor(profile.ref)) {
+            cost.outcome(FeatureCostOutcome.REJECTED).close()
             return ProvisioningReadResult.Unavailable("profile_activation_unstable")
         }
-        val observations = try {
-            observations(forceRefresh)
+        return try {
+            val observations = observations(forceRefresh)
+            val plan = ProvisioningPlanner.plan(core, profile, activation, observations)
+            cost.work(units = plan.items.size.toLong())
+            ProvisioningReadResult.Ready(plan)
+        } catch (cancelled: CancellationException) {
+            cost.outcome(FeatureCostOutcome.CANCELLED)
+            throw cancelled
         } catch (_: Throwable) {
-            return ProvisioningReadResult.Unavailable("observation_snapshot_unavailable")
+            cost.outcome(FeatureCostOutcome.FAILURE)
+            ProvisioningReadResult.Unavailable("observation_snapshot_unavailable")
+        } finally {
+            cost.close()
         }
-        return ProvisioningReadResult.Ready(
-            ProvisioningPlanner.plan(core, profile, activation, observations),
-        )
     }
 
     private suspend fun observations(forceRefresh: Boolean): ProvisioningObservationSnapshot {
@@ -51,8 +65,20 @@ internal class ProvisioningCoordinator(
             cached?.takeIf { !forceRefresh && lockedNow - it.collectedAtMs <= cacheTtlMs }?.let {
                 return it.snapshot
             }
-            return collector.collect().also {
-                cached = CachedSnapshot(monotonicMs(), it)
+            val cost = featureCosts.span(FeatureCostOperation.PROVISIONING_OBSERVATION_REFRESH)
+                .work(units = OBSERVATION_PROBE_COUNT)
+            return try {
+                collector.collect().also {
+                    cached = CachedSnapshot(monotonicMs(), it)
+                }
+            } catch (cancelled: CancellationException) {
+                cost.outcome(FeatureCostOutcome.CANCELLED)
+                throw cancelled
+            } catch (failure: Throwable) {
+                cost.outcome(FeatureCostOutcome.FAILURE)
+                throw failure
+            } finally {
+                cost.close()
             }
         } finally {
             refreshMutex.unlock()
@@ -66,5 +92,6 @@ internal class ProvisioningCoordinator(
 
     private companion object {
         const val DEFAULT_CACHE_TTL_MS = 5_000L
+        const val OBSERVATION_PROBE_COUNT = 3L
     }
 }

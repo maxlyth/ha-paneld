@@ -26,4 +26,10 @@ class FeatureCostDiagnosticsContractTest {
         assertTrue(infoScript.contains("fc.enabled===false"))
         assertTrue(infoScript.contains("disabled in this build"))
     }
+
+    @Test fun diagnosticsUseEpochDeltasAndKeepExternalExecutionSeparateFromLatency() {
+        assertTrue(infoScript.contains("var e=o.epoch||o"))
+        assertTrue(infoScript.contains("external_execution_ns_total"))
+        assertFalse(infoScript.contains("external_cpu_ns_total"))
+    }
 }

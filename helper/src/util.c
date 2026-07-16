@@ -1,7 +1,9 @@
 #include "util.h"
 
+#include <errno.h>
 #include <fcntl.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <unistd.h>
 
 int clamp(int v) { return v < 0 ? 0 : (v > 255 ? 255 : v); }
@@ -14,7 +16,28 @@ int write_node(const char *path, const char *val) {
     return n < 0 ? -1 : 0;
 }
 
-void reply(int fd, const char *s) { (void)!write(fd, s, strlen(s)); }
+int write_complete(int fd, const void *bytes, size_t size) {
+    const char *p = bytes;
+    while (size > 0) {
+        ssize_t n = write(fd, p, size);
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) return -1;
+        p += (size_t)n;
+        size -= (size_t)n;
+    }
+    return 0;
+}
+
+static int abort_failed_socket(int fd) {
+    // ENOTSOCK is expected when tests or a non-socket caller reuse this primitive; the original write
+    // failure remains the useful result. For a connection, SHUT_RDWR wakes server_serve's read loop.
+    (void)shutdown(fd, SHUT_RDWR);
+    return -1;
+}
+
+int reply(int fd, const char *s) {
+    return write_complete(fd, s, strlen(s)) == 0 ? 0 : abort_failed_socket(fd);
+}
 
 void first_line(const char *path, char *dst, size_t dstsz) {
     dst[0] = '\0';
@@ -27,12 +50,23 @@ void first_line(const char *path, char *dst, size_t dstsz) {
     char *nl = strchr(dst, '\n'); if (nl) *nl = '\0';
 }
 
-void cat_to(int out, const char *path) {
+int cat_to(int out, const char *path) {
     int fd = open(path, O_RDONLY);
-    if (fd < 0) return;
-    char b[4096]; ssize_t n;
-    while ((n = read(fd, b, sizeof b)) > 0) (void)!write(out, b, n);
+    if (fd < 0) return -1;
+    char b[4096];
+    int result = 0;
+    for (;;) {
+        ssize_t n = read(fd, b, sizeof b);
+        if (n < 0 && errno == EINTR) continue;
+        if (n < 0) { result = -1; break; }
+        if (n == 0) break;
+        if (write_complete(out, b, (size_t)n) != 0) {
+            result = abort_failed_socket(out);
+            break;
+        }
+    }
     close(fd);
+    return result;
 }
 
 // Android package name chars only — defends the sysexec_run() command strings against injection.

@@ -163,8 +163,14 @@ object PerfReader {
     }
 
     /** Latest sample + history FIFO + top-5 procs + render jank, as JSON, for `GET /perf`. */
-    fun json(): String = synchronized(lock) {
-        """{"enabled":$enabled,$latestFields,"top":$topJson,"render":$renderJson,"builtin":${builtinJson()},"network":${networkJson()},"entityFilter":${EntityFilterTelemetry.json()},"featureCosts":${FeatureCosts.json()},"hist":{"cpu":${histInts(CPU_KEY)},"ram":${histInts(RAM_KEY)},"gpu":${histInts(GPU_KEY)}}}"""
+    fun json(): String {
+        val sampled = synchronized(lock) {
+            """{"enabled":$enabled,$latestFields,"top":$topJson,"render":$renderJson,"builtin":${builtinJson()},"network":${networkJson()},"entityFilter":${EntityFilterTelemetry.json()},"""
+                .plus(""""hist":{"cpu":${histInts(CPU_KEY)},"ram":${histInts(RAM_KEY)},"gpu":${histInts(GPU_KEY)}}}""")
+        }
+        // Feature-cost projection allocates JSON for a fixed vocabulary. Keep it outside the sampler lock
+        // so a diagnostics reader cannot delay history publication on low-end panels.
+        return sampled.dropLast(1) + ""","featureCosts":${FeatureCosts.json()}}"""
     }
 
     /** Absolute host-UID counters; harvesters take arm start/end deltas. -1 means unsupported. */

@@ -14,6 +14,7 @@ import io.ktor.server.response.respondText
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
 import io.ktor.server.routing.route
+import kotlinx.coroutines.CancellationException
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -51,8 +52,13 @@ private suspend fun io.ktor.server.application.ApplicationCall.readStablePlan(
     val initialResult = if (snapshot == null || !snapshot.isStableFor(dependencies.reader.expectedProfileRef)) {
         ProvisioningReadResult.Unavailable("profile_activation_unstable")
     } else {
-        runCatching { dependencies.reader.plan(snapshot) }
-            .getOrElse { ProvisioningReadResult.Unavailable("provisioning_plan_unavailable") }
+        try {
+            dependencies.reader.plan(snapshot)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Throwable) {
+            ProvisioningReadResult.Unavailable("provisioning_plan_unavailable")
+        }
     }
     // Observation can take seconds on old WebView providers. Recheck immediately before responding so
     // a concurrently staged activation cannot receive one last 200 from an earlier registry snapshot.

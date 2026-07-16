@@ -76,6 +76,42 @@ class PanelBackupTest {
 
         val tampered = sealed.toByteArray().also { it[it.lastIndex] = (it.last().toInt() xor 1).toByte() }
         assertFalse(PanelBackup.open(ByteArrayInputStream(tampered), ByteArrayOutputStream(), "pw", 1024))
+        assertFalse(
+            PanelBackup.open(
+                ByteArrayInputStream(sealed.toByteArray()),
+                ByteArrayOutputStream(),
+                "wrong password",
+                1024,
+            ),
+        )
+    }
+
+    @Test fun streamingOpenRejectsCiphertextTamperingAndEveryTruncatedTag() {
+        val sealed = PanelBackup.seal(ByteArray(32 * 1024) { (it % 251).toByte() }, "pw")
+        val ciphertextOffset = 4 + 16 + 12
+        val tampered = sealed.copyOf().also {
+            it[ciphertextOffset + 123] = (it[ciphertextOffset + 123].toInt() xor 0x40).toByte()
+        }
+        assertFalse(PanelBackup.open(ByteArrayInputStream(tampered), ByteArrayOutputStream(), "pw", 64 * 1024L))
+
+        repeat(16) { removedTagBytes ->
+            val truncated = sealed.copyOf(sealed.size - removedTagBytes - 1)
+            assertFalse(
+                "accepted a bundle missing ${removedTagBytes + 1} authentication-tag bytes",
+                PanelBackup.open(ByteArrayInputStream(truncated), ByteArrayOutputStream(), "pw", 64 * 1024L),
+            )
+        }
+    }
+
+    @Test fun streamingOpenEnforcesPlaintextLimitBeforeAuthenticationCanSucceed() {
+        val sealed = PanelBackup.seal(ByteArray(1025), "pw")
+        assertThrows(ByteLimitExceeded::class.java) {
+            PanelBackup.open(ByteArrayInputStream(sealed), ByteArrayOutputStream(), "pw", 1024)
+        }
+
+        val exact = ByteArrayOutputStream()
+        assertTrue(PanelBackup.open(ByteArrayInputStream(sealed), exact, "pw", 1025))
+        assertEquals(1025, exact.size())
     }
 
     @Test fun archiveRoundTripIsExactBoundedAndCleansFailedExtractions() {

@@ -4,16 +4,25 @@ import io.github.maxlyth.hapaneld.device.profile.ProfileActivationPhase
 import io.github.maxlyth.hapaneld.device.profile.ProfileOrigin
 import io.github.maxlyth.hapaneld.device.profile.ProfileRef
 import io.github.maxlyth.hapaneld.device.profile.ShizukuRecommendation
+import io.github.maxlyth.hapaneld.metrics.FeatureCostOperation
+import io.github.maxlyth.hapaneld.metrics.FeatureCostRegistry
 import io.github.maxlyth.hapaneld.shizuku.ShizukuState
 import io.github.maxlyth.hapaneld.util.HelperIdentity
 import io.github.maxlyth.hapaneld.util.HelperIdentityIssue
 import io.github.maxlyth.hapaneld.util.HelperIdentityStatus
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.json.JSONObject
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class ProvisioningPlannerTest {
     @Test
     fun genericProfileProducesSatisfiedEmptyPlan() {
@@ -146,6 +155,8 @@ class ProvisioningPlannerTest {
     fun coordinatorRequiresExactStableRefAndCachesSnapshots() = runTest {
         var now = 100L
         var collections = 0
+        var nanos = 1_000L
+        val costs = FeatureCostRegistry({ nanos.also { nanos += 100L } }, { -1L }, { 1L })
         val coordinator = ProvisioningCoordinator(
             core = CORE,
             profile = profile(helperImportance = ProvisioningImportance.REQUIRED),
@@ -155,6 +166,7 @@ class ProvisioningPlannerTest {
             },
             monotonicMs = { now },
             cacheTtlMs = 50,
+            featureCosts = costs,
         )
 
         assertTrue(coordinator.plan(ACTIVE.copy(phase = ProfileActivationPhase.APPLYING)) is ProvisioningReadResult.Unavailable)
@@ -171,6 +183,90 @@ class ProvisioningPlannerTest {
 
         assertTrue(coordinator.plan(ACTIVE, forceRefresh = true) is ProvisioningReadResult.Ready)
         assertEquals(3, collections)
+
+        val operations = JSONObject(costs.json()).getJSONArray("operations")
+        fun operation(id: FeatureCostOperation) = (0 until operations.length()).asSequence()
+            .map(operations::getJSONObject)
+            .first { it.getString("id") == id.id }
+        assertEquals(6L, operation(FeatureCostOperation.PROVISIONING_PLAN).getLong("calls"))
+        assertEquals(3L, operation(FeatureCostOperation.PROVISIONING_OBSERVATION_REFRESH).getLong("calls"))
+        assertEquals(9L, operation(FeatureCostOperation.PROVISIONING_OBSERVATION_REFRESH).getLong("work_units"))
+    }
+
+    @Test
+    fun coordinatorRethrowsCollectorCancellationAndRecordsCancelledSpans() = runTest {
+        var nanos = 1_000L
+        val costs = FeatureCostRegistry({ nanos.also { nanos += 100L } }, { -1L }, { 1L })
+        val coordinator = ProvisioningCoordinator(
+            core = CORE,
+            profile = profile(),
+            collector = ProvisioningObservationCollector {
+                throw CancellationException("probe cancelled")
+            },
+            monotonicMs = { 100L },
+            featureCosts = costs,
+        )
+
+        val failure = runCatching { coordinator.plan(ACTIVE) }.exceptionOrNull()
+
+        assertTrue(failure is CancellationException)
+        assertOutcome(costs, FeatureCostOperation.PROVISIONING_PLAN, cancelled = 1L)
+        assertOutcome(costs, FeatureCostOperation.PROVISIONING_OBSERVATION_REFRESH, cancelled = 1L)
+    }
+
+    @Test
+    fun cancellationWhileWaitingForRefreshMutexIsNotReportedAsFailure() = runTest {
+        var nanos = 1_000L
+        val costs = FeatureCostRegistry({ nanos.also { nanos += 100L } }, { -1L }, { 1L })
+        val collectorStarted = CompletableDeferred<Unit>()
+        val releaseCollector = CompletableDeferred<Unit>()
+        val coordinator = ProvisioningCoordinator(
+            core = CORE,
+            profile = profile(),
+            collector = ProvisioningObservationCollector {
+                collectorStarted.complete(Unit)
+                releaseCollector.await()
+                observations()
+            },
+            monotonicMs = { 100L },
+            featureCosts = costs,
+        )
+        val first = async { coordinator.plan(ACTIVE, forceRefresh = true) }
+        collectorStarted.await()
+        val waiting = async { coordinator.plan(ACTIVE, forceRefresh = true) }
+        runCurrent()
+
+        waiting.cancel(CancellationException("request cancelled"))
+        runCurrent()
+
+        assertTrue(waiting.isCancelled)
+        assertOutcome(costs, FeatureCostOperation.PROVISIONING_PLAN, cancelled = 1L)
+        assertOutcome(costs, FeatureCostOperation.PROVISIONING_OBSERVATION_REFRESH, cancelled = 0L)
+
+        releaseCollector.complete(Unit)
+        assertTrue(first.await() is ProvisioningReadResult.Ready)
+    }
+
+    @Test
+    fun ordinaryCollectorFailureRemainsUnavailableAndRecordsFailure() = runTest {
+        var nanos = 1_000L
+        val costs = FeatureCostRegistry({ nanos.also { nanos += 100L } }, { -1L }, { 1L })
+        val coordinator = ProvisioningCoordinator(
+            core = CORE,
+            profile = profile(),
+            collector = ProvisioningObservationCollector {
+                throw IllegalStateException("probe unavailable")
+            },
+            monotonicMs = { 100L },
+            featureCosts = costs,
+        )
+
+        assertEquals(
+            ProvisioningReadResult.Unavailable("observation_snapshot_unavailable"),
+            coordinator.plan(ACTIVE),
+        )
+        assertOutcome(costs, FeatureCostOperation.PROVISIONING_PLAN, failed = 1L)
+        assertOutcome(costs, FeatureCostOperation.PROVISIONING_OBSERVATION_REFRESH, failed = 1L)
     }
 
     @Test
@@ -260,6 +356,20 @@ class ProvisioningPlannerTest {
         assertEquals(status, item.status)
         assertEquals(observed, item.observedState)
         assertEquals(reason, item.reasonCode)
+    }
+
+    private fun assertOutcome(
+        costs: FeatureCostRegistry,
+        operation: FeatureCostOperation,
+        failed: Long = 0L,
+        cancelled: Long = 0L,
+    ) {
+        val operations = JSONObject(costs.json()).getJSONArray("operations")
+        val record = (0 until operations.length()).asSequence()
+            .map(operations::getJSONObject)
+            .first { it.getString("id") == operation.id }
+        assertEquals(failed, record.getLong("failed"))
+        assertEquals(cancelled, record.getLong("cancelled"))
     }
 
     private companion object {

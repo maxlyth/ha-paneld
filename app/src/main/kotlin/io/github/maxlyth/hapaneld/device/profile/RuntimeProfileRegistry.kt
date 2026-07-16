@@ -13,7 +13,39 @@ import java.io.File
 import java.io.ByteArrayOutputStream
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.nio.channels.FileChannel
+import java.nio.file.StandardOpenOption
 import java.security.SecureRandom
+
+internal interface ProfileRevisionPersistence {
+    fun createDirectory(directory: File): Boolean
+    fun writeAndSync(file: File, bytes: ByteArray)
+    fun atomicRename(source: File, target: File): Boolean
+    fun delete(file: File): Boolean
+    fun syncDirectory(directory: File)
+}
+
+internal object FileProfileRevisionPersistence : ProfileRevisionPersistence {
+    override fun createDirectory(directory: File): Boolean = directory.isDirectory || directory.mkdir()
+
+    override fun writeAndSync(file: File, bytes: ByteArray) {
+        FileOutputStream(file).use { output ->
+            output.write(bytes)
+            output.flush()
+            output.fd.sync()
+        }
+    }
+
+    override fun atomicRename(source: File, target: File): Boolean = source.renameTo(target)
+
+    override fun delete(file: File): Boolean = file.delete()
+
+    override fun syncDirectory(directory: File) {
+        FileChannel.open(directory.toPath(), StandardOpenOption.READ).use { channel ->
+            channel.force(true)
+        }
+    }
+}
 
 /**
  * Local immutable-revision profile registry. Imports are inert until explicitly selected; selection is
@@ -26,6 +58,7 @@ class RuntimeProfileRegistry internal constructor(
     private val facts: DeviceFacts,
     private val coreVersion: String,
     private val clock: () -> Long,
+    private val revisionPersistence: ProfileRevisionPersistence = FileProfileRevisionPersistence,
     private val catalogFileReader: ((File) -> String)? = null,
 ) : ProfileAdmin, ProfileResolver {
     private data class StoredProfile(
@@ -363,8 +396,10 @@ class RuntimeProfileRegistry internal constructor(
         // As with import, advance the CAS token first. A failed delete can cause only a harmless extra
         // refresh; a successful delete can never be published under the old catalog revision.
         if (!bumpCatalogRevision()) return rejected("catalog_revision", "Could not reserve the catalog change.")
-        if (!file.isFile || !file.delete()) return rejected("profile", "Could not delete the imported revision.")
-        file.parentFile?.takeIf { it.list().isNullOrEmpty() }?.delete()
+        if (!deleteImmutable(file)) {
+            reload()
+            return rejected("profile", "Could not durably delete the imported revision.")
+        }
         reload()
         return ProfileMutation.Success(statusLocked(), false, "Deleted imported profile revision.")
     }
@@ -1128,27 +1163,51 @@ class RuntimeProfileRegistry internal constructor(
         ).toSet()
         rollbackDir.listFiles().orEmpty().filter { it.isDirectory }.forEach { directory ->
             directory.listFiles().orEmpty().filter { it.isFile && it.extension == "yaml" }.forEach { file ->
-                if (expectedRef(file) !in keep) file.delete()
+                if (expectedRef(file) !in keep) deleteImmutable(file)
             }
-            if (directory.list().isNullOrEmpty()) directory.delete()
         }
     }
 
     private fun writeImmutable(target: File, raw: String): Boolean = runCatching {
-        target.parentFile?.mkdirs()
-        if (target.exists()) return@runCatching readBounded(target) == raw
-        val staging = File(target.parentFile, ".${target.name}.${System.nanoTime()}.tmp")
+        val parent = target.parentFile ?: error("revision has no parent directory")
+        if (!createDirectoriesDurably(parent)) error("could not create revision directory")
+        if (target.exists()) {
+            if (readBounded(target) != raw) return@runCatching false
+            revisionPersistence.syncDirectory(parent)
+            return@runCatching true
+        }
+        val staging = File(parent, ".${target.name}.${System.nanoTime()}.tmp")
         try {
             val bytes = raw.toByteArray(Charsets.UTF_8)
             require(bytes.size <= ProfileMetadata.MAX_BYTES)
-            FileOutputStream(staging).use { output ->
-                output.write(bytes)
-                output.flush()
-                output.fd.sync()
-            }
-            if (!staging.renameTo(target)) error("atomic rename failed")
+            revisionPersistence.writeAndSync(staging, bytes)
+            if (!revisionPersistence.atomicRename(staging, target)) error("atomic rename failed")
+            revisionPersistence.syncDirectory(parent)
         } finally {
-            if (staging.exists()) staging.delete()
+            if (staging.exists()) revisionPersistence.delete(staging)
+        }
+        true
+    }.getOrDefault(false)
+
+    private fun createDirectoriesDurably(directory: File): Boolean {
+        if (directory.isDirectory) return true
+        val missing = generateSequence(directory) { it.parentFile }
+            .takeWhile { !it.exists() }
+            .toList()
+        missing.asReversed().forEach { candidate ->
+            val parent = candidate.parentFile ?: return false
+            if (!revisionPersistence.createDirectory(candidate)) return false
+            revisionPersistence.syncDirectory(parent)
+        }
+        return directory.isDirectory
+    }
+
+    private fun deleteImmutable(file: File): Boolean = runCatching {
+        val parent = file.parentFile ?: error("revision has no parent directory")
+        if (!file.isFile || !revisionPersistence.delete(file)) error("revision unlink failed")
+        revisionPersistence.syncDirectory(parent)
+        if (parent.list().isNullOrEmpty() && revisionPersistence.delete(parent)) {
+            parent.parentFile?.let(revisionPersistence::syncDirectory)
         }
         true
     }.getOrDefault(false)

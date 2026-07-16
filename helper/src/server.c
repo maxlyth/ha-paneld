@@ -31,11 +31,13 @@ int conn_active(void) {
 }
 
 void server_serve(int cfd) {
-    // Idle timeout: a connection that sends nothing for IDLE_SEC is dropped — unless it SUBSCRIBEs,
-    // where sitting idle (only reading the KEY stream) is the whole point. SO_RCVTIMEO affects reads
-    // only; the evdev thread's writes to a subscriber keep flowing regardless.
-    struct timeval tv = { .tv_sec = IDLE_SEC, .tv_usec = 0 };
-    setsockopt(cfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+    // A connection that sends nothing for IDLE_SEC is dropped — unless it SUBSCRIBEs, where sitting
+    // idle (only reading the KEY stream) is the whole point. Bound writes separately so a client that
+    // stops reading cannot pin one of the finite worker slots forever.
+    struct timeval receive_timeout = { .tv_sec = IDLE_SEC, .tv_usec = 0 };
+    struct timeval send_timeout = { .tv_sec = SEND_SEC, .tv_usec = 0 };
+    setsockopt(cfd, SOL_SOCKET, SO_RCVTIMEO, &receive_timeout, sizeof receive_timeout);
+    setsockopt(cfd, SOL_SOCKET, SO_SNDTIMEO, &send_timeout, sizeof send_timeout);
 
     conn_ctx ctx = { .fd = cfd, .subscribed = 0 };
     char line[MAX_LINE + 1];

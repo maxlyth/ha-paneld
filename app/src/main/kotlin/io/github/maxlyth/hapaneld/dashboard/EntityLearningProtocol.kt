@@ -338,12 +338,43 @@ object EntityLearningProtocol {
     fun documentStartScript(
         haUrl: String,
         documentOrigins: Collection<String> = setOf(EntityFilterProtocol.origin(haUrl)),
+        featureCostsEnabled: Boolean = true,
     ): String {
         val upstream = URI(EntityFilterProtocol.upstreamWebSocketUrl(haUrl))
         val targetWsOrigins = JSONArray(documentOrigins.map(EntityFilterProtocol::origin).distinct().sorted().map {
             it.replaceFirst("https://", "wss://").replaceFirst("http://", "ws://")
         }).toString()
         val targetWsPath = JSONObject.quote(upstream.rawPath)
+        val observerSetup = if (featureCostsEnabled) """
+          const now=()=>window.performance&&typeof window.performance.now==='function'?window.performance.now():0;
+          let observerFrames=0,observerEntities=0,observerFrameChars=0,observerParseMs=0,observerStringifyMs=0,
+            observerDropped=0,observerCoalesced=0;
+          function measuredParse(value){const started=now();try{return JSON.parse(value)}finally{observerParseMs+=Math.max(0,now()-started)}}
+          function measuredStringify(value){const started=now(),encoded=JSON.stringify(value);observerStringifyMs+=Math.max(0,now()-started);return typeof encoded==='string'?encoded:''}
+        """.trimIndent() else """
+          function measuredParse(value){return JSON.parse(value)}
+          function measuredStringify(value){const encoded=JSON.stringify(value);return typeof encoded==='string'?encoded:''}
+        """.trimIndent()
+        val accessCoalesced = if (featureCostsEnabled) "observerCoalesced=sat(observerCoalesced,1);" else ""
+        val accessDropped = if (featureCostsEnabled) "observerDropped=sat(observerDropped,1);" else ""
+        val observerMetricGuard = if (featureCostsEnabled) "&&!observerFrames&&!observerDropped&&!observerCoalesced" else ""
+        val observerEnvelope = if (featureCostsEnabled) """
+            out.__ha_paneld_observer={frames:observerFrames,entities:observerEntities,frame_chars:observerFrameChars,
+              parse_us:Math.round(observerParseMs*1000),stringify_us:Math.round(observerStringifyMs*1000),
+              dropped:observerDropped,coalesced:observerCoalesced};
+        """.trimIndent() else ""
+        val observerReset = if (featureCostsEnabled) """
+            observerFrames=observerEntities=observerFrameChars=observerParseMs=observerStringifyMs=
+              observerDropped=observerCoalesced=0;
+        """.trimIndent() else ""
+        val recordFrame = if (featureCostsEnabled) {
+            "observerFrames=sat(observerFrames,1);observerFrameChars=sat(observerFrameChars,ev.data.length);"
+        } else ""
+        val recordEntity = if (featureCostsEnabled) "observerEntities=sat(observerEntities,1);" else ""
+        val oversizedFrameDrop = if (featureCostsEnabled) "observerDropped=sat(observerDropped,1);" else ""
+        val oversizedPayloadDrop = if (featureCostsEnabled) {
+            "else observerDropped=sat(observerDropped,Math.max(1,discarded));"
+        } else ""
         return """
         (()=>{
           if(window.top&&window.top!==window)return;
@@ -354,23 +385,19 @@ object EntityLearningProtocol {
           const maxBridgeChars=$MAX_NATIVE_BRIDGE_PAYLOAD_CHARS,maxFrameChars=$MAX_OBSERVER_WS_FRAME_CHARS,
             maxIdChars=$MAX_OBSERVER_ENTITY_ID_CHARS,maxAccessIds=$MAX_OBSERVER_ACCESS_IDS,
             maxMissingIds=$MAX_OBSERVER_MISSING_IDS,maxMetricIds=$MAX_OBSERVER_METRIC_IDS,maxCount=$MAX_OBSERVER_COUNT;
-          const now=()=>window.performance&&typeof window.performance.now==='function'?window.performance.now():0;
           const sat=(left,right)=>Math.min(maxCount,left+Math.max(0,right));
-          let observerFrames=0,observerEntities=0,observerFrameChars=0,observerParseMs=0,observerStringifyMs=0,
-            observerDropped=0,observerCoalesced=0;
-          function measuredParse(value){const started=now();try{return JSON.parse(value)}finally{observerParseMs+=Math.max(0,now()-started)}}
-          function measuredStringify(value){const started=now(),encoded=JSON.stringify(value);observerStringifyMs+=Math.max(0,now()-started);return typeof encoded==='string'?encoded:''}
+          $observerSetup
           function validId(value){return typeof value==='string'&&value.length<=maxIdChars&&id.test(value)}
           function recordAccess(entityId,present){
-            if(present){const count=seen.get(entityId);if(count!==undefined){seen.set(entityId,sat(count,1));observerCoalesced=sat(observerCoalesced,1);return}
-              if(seen.size>=maxAccessIds){observerDropped=sat(observerDropped,1);return}seen.set(entityId,1);return}
-            if(missing.has(entityId)){observerCoalesced=sat(observerCoalesced,1);return}
-            if(missing.size>=maxMissingIds){observerDropped=sat(observerDropped,1);return}missing.add(entityId)
+            if(present){const count=seen.get(entityId);if(count!==undefined){seen.set(entityId,sat(count,1));$accessCoalesced return}
+              if(seen.size>=maxAccessIds){$accessDropped return}seen.set(entityId,1);return}
+            if(missing.has(entityId)){$accessCoalesced return}
+            if(missing.size>=maxMissingIds){$accessDropped return}missing.add(entityId)
           }
           function recordMetric(entityId,value){
             if(!validId(entityId))return;
-            const old=metrics.get(entityId);if(old){old[0]=sat(old[0],1);old[1]=sat(old[1],measuredStringify(value).length);observerCoalesced=sat(observerCoalesced,1);return}
-            if(metrics.size>=maxMetricIds){observerDropped=sat(observerDropped,1);return}
+            const old=metrics.get(entityId);if(old){old[0]=sat(old[0],1);old[1]=sat(old[1],measuredStringify(value).length);$accessCoalesced return}
+            if(metrics.size>=maxMetricIds){$accessDropped return}
             metrics.set(entityId,[1,measuredStringify(value).length]);
           }
           function flush(){
@@ -379,20 +406,17 @@ object EntityLearningProtocol {
             const payload=JSON.stringify({accessed:accessed,missing:Array.from(missing)}),discarded=seen.size+missing.size;
             seen.clear();missing.clear();
             if(payload.length<maxBridgeChars){try{window.externalApp&&window.externalApp.entityLearningAccesses(payload)}catch(e){}}
-            else observerDropped=sat(observerDropped,discarded);
+            ${if (featureCostsEnabled) "else observerDropped=sat(observerDropped,discarded);" else ""}
           }
           setInterval(flush,2000);
           setInterval(()=>{
-            if(!metrics.size&&!observerFrames&&!observerDropped&&!observerCoalesced)return;
+            if(!metrics.size$observerMetricGuard)return;
             const out={},discarded=metrics.size;metrics.forEach((v,k)=>out[k]=v);metrics.clear();
-            out.__ha_paneld_observer={frames:observerFrames,entities:observerEntities,frame_chars:observerFrameChars,
-              parse_us:Math.round(observerParseMs*1000),stringify_us:Math.round(observerStringifyMs*1000),
-              dropped:observerDropped,coalesced:observerCoalesced};
+            $observerEnvelope
             const payload=JSON.stringify(out);
-            observerFrames=observerEntities=observerFrameChars=observerParseMs=observerStringifyMs=
-              observerDropped=observerCoalesced=0;
+            $observerReset
             if(payload.length<maxBridgeChars){try{window.externalApp&&window.externalApp.entityLearningMetrics(payload)}catch(e){}}
-            else observerDropped=sat(observerDropped,Math.max(1,discarded));
+            $oversizedPayloadDrop
           },5000);
           const Parent=window.WebSocket,targetWsOrigins=$targetWsOrigins,targetWsPath=$targetWsPath;
           function LearningWebSocket(url,protocols){
@@ -400,16 +424,16 @@ object EntityLearningProtocol {
             try{const u=new URL(String(url),location.href);if(targetWsOrigins.includes(u.origin)&&u.pathname===targetWsPath){
               let hydrated=false,entitySubscriptionId=null;const send=socket.send;
               Object.defineProperty(socket,'send',{configurable:true,writable:true,value:function(data){
-                if(typeof data==='string'){if(data.length>maxFrameChars)observerDropped=sat(observerDropped,1);else try{const message=measuredParse(data);if(message&&message.type==='subscribe_entities')entitySubscriptionId=message.id}catch(e){}}
+                if(typeof data==='string'){if(data.length>maxFrameChars){$oversizedFrameDrop}else try{const message=measuredParse(data);if(message&&message.type==='subscribe_entities')entitySubscriptionId=message.id}catch(e){}}
                 return send.call(this,data)
               }});
-              socket.addEventListener('message',ev=>{if(typeof ev.data!=='string')return;observerFrames=sat(observerFrames,1);observerFrameChars=sat(observerFrameChars,ev.data.length);
-                if(ev.data.length>maxFrameChars){observerDropped=sat(observerDropped,1);return}try{
+              socket.addEventListener('message',ev=>{if(typeof ev.data!=='string')return;$recordFrame
+                if(ev.data.length>maxFrameChars){$oversizedFrameDrop return}try{
                 const decoded=measuredParse(ev.data);
                 const messages=Array.isArray(decoded)?decoded:[decoded];messages.forEach(m=>{
                 if(m.id!==entitySubscriptionId)return;const event=m&&m.type==='event'&&m.event;if(!event)return;
-                if(event.a&&!hydrated){hydrated=true;for(const k in event.a)if(Object.prototype.hasOwnProperty.call(event.a,k)){observerEntities=sat(observerEntities,1);recordMetric(k,event.a[k])}return}const changed=event.c||{};
-                for(const k in changed)if(Object.prototype.hasOwnProperty.call(changed,k)){observerEntities=sat(observerEntities,1);recordMetric(k,changed[k])}})
+                if(event.a&&!hydrated){hydrated=true;for(const k in event.a)if(Object.prototype.hasOwnProperty.call(event.a,k)){$recordEntity recordMetric(k,event.a[k])}return}const changed=event.c||{};
+                for(const k in changed)if(Object.prototype.hasOwnProperty.call(changed,k)){$recordEntity recordMetric(k,changed[k])}})
               }catch(e){}})
             }}catch(e){}return socket
           }

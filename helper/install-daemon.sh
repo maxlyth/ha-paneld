@@ -103,6 +103,25 @@ run_root() {
   esac
 }
 
+run_root_locked() {
+  local block="$1"
+  run_root '
+    lock=/dev/.hapaneld-helper-transaction.lock
+    if ! mkdir "$lock" 2>/dev/null; then
+      holder=$(cat "$lock/pid" 2>/dev/null || true)
+      case "$holder" in
+        ''|*[!0-9]*) echo TRANSACTION_BUSY; exit 75 ;;
+        *) [ ! -d "/proc/$holder" ] || { echo TRANSACTION_BUSY; exit 75; } ;;
+      esac
+      rm -rf "$lock" 2>/dev/null || { echo TRANSACTION_BUSY; exit 75; }
+      mkdir "$lock" 2>/dev/null || { echo TRANSACTION_BUSY; exit 75; }
+    fi
+    echo $$ > "$lock/pid" || { rm -rf "$lock"; echo TRANSACTION_BUSY; exit 75; }
+    cleanup_helper_lock() { rm -rf /dev/.hapaneld-helper-transaction.lock; }
+    trap cleanup_helper_lock 0 1 2 3 15
+  '"$block"
+}
+
 adb_preflight
 # Try for a root adbd (userdebug builds) — harmless where unsupported. adbd restarts on success and
 # can drop the TCP session, so quietly re-verify the connection either way.
@@ -176,7 +195,7 @@ rollback_root_helper() {
   local install_kind="$1" restored
   case "$install_kind" in
     system)
-      restored="$(run_root '
+      restored="$(run_root_locked '
         mount -o rw,remount / 2>/dev/null; mount -o rw,remount /system 2>/dev/null
         [ -f /system/bin/.hapaneld-helper-manual-upgrade ] || { echo ROLLBACK_UNNEEDED; exit 0; }
         grep -q ^OLD_BIN=0$ /system/bin/.hapaneld-helper-manual-upgrade || [ -f /system/bin/hapaneld-helper.hapaneld-manual-recovery ] || exit 1
@@ -188,36 +207,35 @@ rollback_root_helper() {
         grep -q ^JOURNAL_VERSION=1$ /system/bin/.hapaneld-helper-manual-upgrade || exit 1
         grep -q ^JOURNAL_SCOPE=HELPER_ONLY$ /system/bin/.hapaneld-helper-manual-upgrade || exit 1
         if grep -q ^OLD_BIN=1$ /system/bin/.hapaneld-helper-manual-upgrade; then
-          grep ^OLD_BIN_SHA256= /system/bin/.hapaneld-helper-manual-upgrade > /data/local/tmp/hapaneld-helper.expected
-          ( sha256sum /system/bin/hapaneld-helper.hapaneld-manual-recovery 2>/dev/null || toybox sha256sum /system/bin/hapaneld-helper.hapaneld-manual-recovery 2>/dev/null ) | cut -d\  -f1 | sed s/^/OLD_BIN_SHA256=/ > /data/local/tmp/hapaneld-helper.actual
-          cmp -s /data/local/tmp/hapaneld-helper.expected /data/local/tmp/hapaneld-helper.actual || exit 1
+          expected=$(sed -n s/^OLD_BIN_SHA256=//p /system/bin/.hapaneld-helper-manual-upgrade)
+          actual=$(sha256sum /system/bin/hapaneld-helper.hapaneld-manual-recovery 2>/dev/null || toybox sha256sum /system/bin/hapaneld-helper.hapaneld-manual-recovery 2>/dev/null) || exit 1
+          [ "${actual%% *}" = "$expected" ] || exit 1
         fi
         if grep -q ^OLD_SERVICE=1$ /system/bin/.hapaneld-helper-manual-upgrade; then
-          grep ^OLD_SERVICE_SHA256= /system/bin/.hapaneld-helper-manual-upgrade > /data/local/tmp/hapaneld-helper.expected
-          ( sha256sum /system/etc/init/hapaneld-helper.rc.hapaneld-manual-recovery 2>/dev/null || toybox sha256sum /system/etc/init/hapaneld-helper.rc.hapaneld-manual-recovery 2>/dev/null ) | cut -d\  -f1 | sed s/^/OLD_SERVICE_SHA256=/ > /data/local/tmp/hapaneld-helper.actual
-          cmp -s /data/local/tmp/hapaneld-helper.expected /data/local/tmp/hapaneld-helper.actual || exit 1
+          expected=$(sed -n s/^OLD_SERVICE_SHA256=//p /system/bin/.hapaneld-helper-manual-upgrade)
+          actual=$(sha256sum /system/etc/init/hapaneld-helper.rc.hapaneld-manual-recovery 2>/dev/null || toybox sha256sum /system/etc/init/hapaneld-helper.rc.hapaneld-manual-recovery 2>/dev/null) || exit 1
+          [ "${actual%% *}" = "$expected" ] || exit 1
         fi
         if grep -q ^LEGACY_BIN=1$ /system/bin/.hapaneld-helper-manual-upgrade; then
-          grep ^LEGACY_BIN_SHA256= /system/bin/.hapaneld-helper-manual-upgrade > /data/local/tmp/hapaneld-helper.expected
-          ( sha256sum /system/bin/hapaneld-ledd.hapaneld-manual-recovery 2>/dev/null || toybox sha256sum /system/bin/hapaneld-ledd.hapaneld-manual-recovery 2>/dev/null ) | cut -d\  -f1 | sed s/^/LEGACY_BIN_SHA256=/ > /data/local/tmp/hapaneld-helper.actual
-          cmp -s /data/local/tmp/hapaneld-helper.expected /data/local/tmp/hapaneld-helper.actual || exit 1
+          expected=$(sed -n s/^LEGACY_BIN_SHA256=//p /system/bin/.hapaneld-helper-manual-upgrade)
+          actual=$(sha256sum /system/bin/hapaneld-ledd.hapaneld-manual-recovery 2>/dev/null || toybox sha256sum /system/bin/hapaneld-ledd.hapaneld-manual-recovery 2>/dev/null) || exit 1
+          [ "${actual%% *}" = "$expected" ] || exit 1
         fi
         if grep -q ^LEGACY_SERVICE=1$ /system/bin/.hapaneld-helper-manual-upgrade; then
-          grep ^LEGACY_SERVICE_SHA256= /system/bin/.hapaneld-helper-manual-upgrade > /data/local/tmp/hapaneld-helper.expected
-          ( sha256sum /system/etc/init/hapaneld-ledd.rc.hapaneld-manual-recovery 2>/dev/null || toybox sha256sum /system/etc/init/hapaneld-ledd.rc.hapaneld-manual-recovery 2>/dev/null ) | cut -d\  -f1 | sed s/^/LEGACY_SERVICE_SHA256=/ > /data/local/tmp/hapaneld-helper.actual
-          cmp -s /data/local/tmp/hapaneld-helper.expected /data/local/tmp/hapaneld-helper.actual || exit 1
+          expected=$(sed -n s/^LEGACY_SERVICE_SHA256=//p /system/bin/.hapaneld-helper-manual-upgrade)
+          actual=$(sha256sum /system/etc/init/hapaneld-ledd.rc.hapaneld-manual-recovery 2>/dev/null || toybox sha256sum /system/etc/init/hapaneld-ledd.rc.hapaneld-manual-recovery 2>/dev/null) || exit 1
+          [ "${actual%% *}" = "$expected" ] || exit 1
         fi
         if grep -q ^ALT_BIN=1$ /system/bin/.hapaneld-helper-manual-upgrade; then
-          grep ^ALT_BIN_SHA256= /system/bin/.hapaneld-helper-manual-upgrade > /data/local/tmp/hapaneld-helper.expected
-          ( sha256sum /data/adb/hapaneld/hapaneld-helper.hapaneld-manual-recovery 2>/dev/null || toybox sha256sum /data/adb/hapaneld/hapaneld-helper.hapaneld-manual-recovery 2>/dev/null ) | cut -d\  -f1 | sed s/^/ALT_BIN_SHA256=/ > /data/local/tmp/hapaneld-helper.actual
-          cmp -s /data/local/tmp/hapaneld-helper.expected /data/local/tmp/hapaneld-helper.actual || exit 1
+          expected=$(sed -n s/^ALT_BIN_SHA256=//p /system/bin/.hapaneld-helper-manual-upgrade)
+          actual=$(sha256sum /data/adb/hapaneld/hapaneld-helper.hapaneld-manual-recovery 2>/dev/null || toybox sha256sum /data/adb/hapaneld/hapaneld-helper.hapaneld-manual-recovery 2>/dev/null) || exit 1
+          [ "${actual%% *}" = "$expected" ] || exit 1
         fi
         if grep -q ^ALT_SERVICE=1$ /system/bin/.hapaneld-helper-manual-upgrade; then
-          grep ^ALT_SERVICE_SHA256= /system/bin/.hapaneld-helper-manual-upgrade > /data/local/tmp/hapaneld-helper.expected
-          ( sha256sum /data/adb/service.d/hapaneld-helper.sh.hapaneld-manual-recovery 2>/dev/null || toybox sha256sum /data/adb/service.d/hapaneld-helper.sh.hapaneld-manual-recovery 2>/dev/null ) | cut -d\  -f1 | sed s/^/ALT_SERVICE_SHA256=/ > /data/local/tmp/hapaneld-helper.actual
-          cmp -s /data/local/tmp/hapaneld-helper.expected /data/local/tmp/hapaneld-helper.actual || exit 1
+          expected=$(sed -n s/^ALT_SERVICE_SHA256=//p /system/bin/.hapaneld-helper-manual-upgrade)
+          actual=$(sha256sum /data/adb/service.d/hapaneld-helper.sh.hapaneld-manual-recovery 2>/dev/null || toybox sha256sum /data/adb/service.d/hapaneld-helper.sh.hapaneld-manual-recovery 2>/dev/null) || exit 1
+          [ "${actual%% *}" = "$expected" ] || exit 1
         fi
-        rm -f /data/local/tmp/hapaneld-helper.expected /data/local/tmp/hapaneld-helper.actual
         stop hapaneld_helper 2>/dev/null
         stop hapaneld_ledd 2>/dev/null
         pkill -x hapaneld-helper 2>/dev/null
@@ -282,23 +300,22 @@ rollback_root_helper() {
       ' 2>&1)" || true
       ;;
     systemless)
-      restored="$(run_root '
+      restored="$(run_root_locked '
         [ -f /data/adb/hapaneld/.helper-manual-upgrade.marker ] || { echo ROLLBACK_UNNEEDED; exit 0; }
         grep -q ^OLD_BIN=0$ /data/adb/hapaneld/.helper-manual-upgrade.marker || [ -f /data/adb/hapaneld/hapaneld-helper.hapaneld-manual-recovery ] || exit 1
         grep -q ^OLD_SERVICE=0$ /data/adb/hapaneld/.helper-manual-upgrade.marker || [ -f /data/adb/service.d/hapaneld-helper.sh.hapaneld-manual-recovery ] || exit 1
         grep -q ^JOURNAL_VERSION=1$ /data/adb/hapaneld/.helper-manual-upgrade.marker || exit 1
         grep -q ^JOURNAL_SCOPE=HELPER_ONLY$ /data/adb/hapaneld/.helper-manual-upgrade.marker || exit 1
         if grep -q ^OLD_BIN=1$ /data/adb/hapaneld/.helper-manual-upgrade.marker; then
-          grep ^OLD_BIN_SHA256= /data/adb/hapaneld/.helper-manual-upgrade.marker > /data/local/tmp/hapaneld-helper.expected
-          ( sha256sum /data/adb/hapaneld/hapaneld-helper.hapaneld-manual-recovery 2>/dev/null || toybox sha256sum /data/adb/hapaneld/hapaneld-helper.hapaneld-manual-recovery 2>/dev/null ) | cut -d\  -f1 | sed s/^/OLD_BIN_SHA256=/ > /data/local/tmp/hapaneld-helper.actual
-          cmp -s /data/local/tmp/hapaneld-helper.expected /data/local/tmp/hapaneld-helper.actual || exit 1
+          expected=$(sed -n s/^OLD_BIN_SHA256=//p /data/adb/hapaneld/.helper-manual-upgrade.marker)
+          actual=$(sha256sum /data/adb/hapaneld/hapaneld-helper.hapaneld-manual-recovery 2>/dev/null || toybox sha256sum /data/adb/hapaneld/hapaneld-helper.hapaneld-manual-recovery 2>/dev/null) || exit 1
+          [ "${actual%% *}" = "$expected" ] || exit 1
         fi
         if grep -q ^OLD_SERVICE=1$ /data/adb/hapaneld/.helper-manual-upgrade.marker; then
-          grep ^OLD_SERVICE_SHA256= /data/adb/hapaneld/.helper-manual-upgrade.marker > /data/local/tmp/hapaneld-helper.expected
-          ( sha256sum /data/adb/service.d/hapaneld-helper.sh.hapaneld-manual-recovery 2>/dev/null || toybox sha256sum /data/adb/service.d/hapaneld-helper.sh.hapaneld-manual-recovery 2>/dev/null ) | cut -d\  -f1 | sed s/^/OLD_SERVICE_SHA256=/ > /data/local/tmp/hapaneld-helper.actual
-          cmp -s /data/local/tmp/hapaneld-helper.expected /data/local/tmp/hapaneld-helper.actual || exit 1
+          expected=$(sed -n s/^OLD_SERVICE_SHA256=//p /data/adb/hapaneld/.helper-manual-upgrade.marker)
+          actual=$(sha256sum /data/adb/service.d/hapaneld-helper.sh.hapaneld-manual-recovery 2>/dev/null || toybox sha256sum /data/adb/service.d/hapaneld-helper.sh.hapaneld-manual-recovery 2>/dev/null) || exit 1
+          [ "${actual%% *}" = "$expected" ] || exit 1
         fi
-        rm -f /data/local/tmp/hapaneld-helper.expected /data/local/tmp/hapaneld-helper.actual
         stop hapaneld_helper 2>/dev/null
         pkill -x hapaneld-helper 2>/dev/null
         if grep -q ^OLD_BIN=1$ /data/adb/hapaneld/.helper-manual-upgrade.marker; then
@@ -347,7 +364,7 @@ commit_root_helper_upgrade() {
   local committed
   case "$1" in
     system)
-      committed="$(run_root '
+      committed="$(run_root_locked '
         mount -o rw,remount / 2>/dev/null; mount -o rw,remount /system 2>/dev/null
         rm -f /system/bin/.hapaneld-helper-manual-upgrade || exit 1
         sync || exit 1
@@ -363,7 +380,7 @@ commit_root_helper_upgrade() {
       ' 2>&1)" || true
       ;;
     systemless)
-      committed="$(run_root '
+      committed="$(run_root_locked '
         rm -f /data/adb/hapaneld/.helper-manual-upgrade.marker || exit 1
         sync || exit 1
         rm -f /data/adb/hapaneld/hapaneld-helper.hapaneld-manual-recovery \
@@ -376,6 +393,41 @@ commit_root_helper_upgrade() {
   esac
   printf '%s\n' "$committed" | grep -qx COMMIT_OK
 }
+
+manual_journal_state="$(run_root_locked '
+  if [ -f /system/bin/.hapaneld-helper-upgrade ] || [ -f /data/adb/hapaneld/.helper-upgrade.marker ]; then
+    echo FOREIGN_PROVISION_TRANSACTION
+  elif [ -f /system/bin/.hapaneld-helper-manual-upgrade ] && [ -f /data/adb/hapaneld/.helper-manual-upgrade.marker ]; then
+    echo MULTIPLE_STALE_TRANSACTIONS
+  elif [ -f /system/bin/.hapaneld-helper-manual-upgrade ]; then
+    echo STALE_SYSTEM_TRANSACTION
+  elif [ -f /data/adb/hapaneld/.helper-manual-upgrade.marker ]; then
+    echo STALE_SYSTEMLESS_TRANSACTION
+  else
+    echo NO_STALE_TRANSACTION
+  fi
+' 2>&1)" || true
+case "$manual_journal_state" in
+  STALE_SYSTEM_TRANSACTION)
+    rollback_root_helper system || fail "the retained /system helper-only journal could not be recovered safely" \
+      "No new helper files were staged. Inspect the authenticated recovery snapshots before retrying." ;;
+  STALE_SYSTEMLESS_TRANSACTION)
+    rollback_root_helper systemless || fail "the retained systemless helper-only journal could not be recovered safely" \
+      "No new helper files were staged. Inspect the authenticated recovery snapshots before retrying." ;;
+  MULTIPLE_STALE_TRANSACTIONS)
+    fail "both standalone root-helper recovery journals are present" \
+      "No rollback was attempted because the authoritative prior install location is ambiguous." ;;
+  FOREIGN_PROVISION_TRANSACTION)
+    fail "an incomplete APK-coupled helper upgrade must be recovered by the provisioner first" \
+      "Re-run the same scripts/provision.sh or scripts/update-fleet.sh command that started the upgrade." \
+      "This standalone installer did not change helper files." ;;
+  TRANSACTION_BUSY)
+    fail "another root-helper transaction is active on the panel" \
+      "Wait for the other installer or provisioner to finish, then re-run." ;;
+  NO_STALE_TRANSACTION) ;;
+  *) fail "could not determine the root-helper recovery state" \
+    "No helper files were staged. Restore adb/root access and re-run." ;;
+esac
 
 # Stage the binary only for this installation transaction. The systemless path must never execute this
 # adb/shell-owned copy as root; it atomically installs a root-owned copy under /data/adb first.
@@ -404,9 +456,17 @@ if printf '%s\n' "$out" | grep -qx SYSTEM_RW; then
   # ── Vendor root / userdebug path ───────────────────────────────────────────────────────────────
   adb -s "$TARGET" push "$HERE/hapaneld-helper.rc" /data/local/tmp/hapaneld-helper.rc >/dev/null
   echo "==> /system is writable — installing to /system/bin ($ABI)"
-  out2="$(run_root '
+  out2="$(run_root_locked '
     mount -o rw,remount / 2>/dev/null; mount -o rw,remount /system 2>/dev/null
-    [ ! -f /system/bin/.hapaneld-helper-manual-upgrade ] || { echo STALE_TRANSACTION; exit 1; }
+    if [ -f /system/bin/.hapaneld-helper-upgrade ] || [ -f /data/adb/hapaneld/.helper-upgrade.marker ]; then
+      echo FOREIGN_PROVISION_TRANSACTION; exit 75
+    elif [ -f /system/bin/.hapaneld-helper-manual-upgrade ] && [ -f /data/adb/hapaneld/.helper-manual-upgrade.marker ]; then
+      echo MULTIPLE_STALE_TRANSACTIONS; exit 75
+    elif [ -f /system/bin/.hapaneld-helper-manual-upgrade ]; then
+      echo STALE_SYSTEM_TRANSACTION; exit 75
+    elif [ -f /data/adb/hapaneld/.helper-manual-upgrade.marker ]; then
+      echo STALE_SYSTEMLESS_TRANSACTION; exit 75
+    fi
     cp /data/local/tmp/hapaneld-helper /system/bin/hapaneld-helper.new || { echo CP_FAIL; exit 1; }
     ( sha256sum /system/bin/hapaneld-helper.new 2>/dev/null || toybox sha256sum /system/bin/hapaneld-helper.new 2>/dev/null ) | grep -q ^'"$BIN_SHA256"' || { echo HASH_FAIL; exit 1; }
     chmod 755 /system/bin/hapaneld-helper.new
@@ -516,6 +576,11 @@ if printf '%s\n' "$out" | grep -qx SYSTEM_RW; then
     echo INSTALL_OK
   ' 2>&1)" || true
   echo "$out2" | sed 's/^/   /'
+  case "$out2" in
+    *STALE_SYSTEM_TRANSACTION*|*STALE_SYSTEMLESS_TRANSACTION*|*MULTIPLE_STALE_TRANSACTIONS*|*FOREIGN_PROVISION_TRANSACTION*|*TRANSACTION_BUSY*)
+      fail "root-helper journal state changed while the standalone installer was running" \
+        "No live helper files were replaced by this attempt. Re-run to recover the retained journal." ;;
+  esac
   if ! printf '%s\n' "$out2" | grep -qx INSTALL_OK; then
     if rollback_root_helper "$INSTALL_KIND"; then
       fail "/system install failed; the prior helper was restored" \
@@ -551,11 +616,19 @@ SVCEOF
   SVC_SHA256="$(host_sha256 "$SVC")"
   adb -s "$TARGET" push "$SVC" /data/local/tmp/hapaneld-helper.svc >/dev/null
   rm -f "$SVC"
-  out2="$(run_root '
+  out2="$(run_root_locked '
     mkdir -p /data/adb/service.d /data/adb/hapaneld
     chown 0:0 /data/adb/hapaneld
     chmod 700 /data/adb/hapaneld
-    [ ! -f /data/adb/hapaneld/.helper-manual-upgrade.marker ] || { echo STALE_TRANSACTION; exit 1; }
+    if [ -f /system/bin/.hapaneld-helper-upgrade ] || [ -f /data/adb/hapaneld/.helper-upgrade.marker ]; then
+      echo FOREIGN_PROVISION_TRANSACTION; exit 75
+    elif [ -f /system/bin/.hapaneld-helper-manual-upgrade ] && [ -f /data/adb/hapaneld/.helper-manual-upgrade.marker ]; then
+      echo MULTIPLE_STALE_TRANSACTIONS; exit 75
+    elif [ -f /system/bin/.hapaneld-helper-manual-upgrade ]; then
+      echo STALE_SYSTEM_TRANSACTION; exit 75
+    elif [ -f /data/adb/hapaneld/.helper-manual-upgrade.marker ]; then
+      echo STALE_SYSTEMLESS_TRANSACTION; exit 75
+    fi
     cp /data/local/tmp/hapaneld-helper /data/adb/hapaneld/hapaneld-helper.new || { echo CP_FAIL; exit 1; }
     ( sha256sum /data/adb/hapaneld/hapaneld-helper.new 2>/dev/null || toybox sha256sum /data/adb/hapaneld/hapaneld-helper.new 2>/dev/null ) | grep -q ^'"$BIN_SHA256"' || { echo HASH_FAIL; exit 1; }
     chown 0:0 /data/adb/hapaneld/hapaneld-helper.new
@@ -611,6 +684,11 @@ SVCEOF
     echo INSTALL_OK
   ' 2>&1)" || true
   echo "$out2" | sed 's/^/   /'
+  case "$out2" in
+    *STALE_SYSTEM_TRANSACTION*|*STALE_SYSTEMLESS_TRANSACTION*|*MULTIPLE_STALE_TRANSACTIONS*|*FOREIGN_PROVISION_TRANSACTION*|*TRANSACTION_BUSY*)
+      fail "root-helper journal state changed while the standalone installer was running" \
+        "No live helper files were replaced by this attempt. Re-run to recover the retained journal." ;;
+  esac
   if ! printf '%s\n' "$out2" | grep -qx INSTALL_OK; then
     if rollback_root_helper "$INSTALL_KIND"; then
       fail "systemless install failed; the prior helper was restored" \

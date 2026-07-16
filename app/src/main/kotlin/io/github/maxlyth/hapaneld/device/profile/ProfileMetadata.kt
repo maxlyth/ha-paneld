@@ -32,6 +32,32 @@ object ProfileMetadata {
         ProfileDriverDescriptor("update.webview", ProfileDriverKind.UPDATE, "Core-owned System WebView artifacts: ${ProfileArtifacts.webViews.keys.sorted().joinToString()}", true),
     )
 
+    /**
+     * Root-helper authority demand for each core driver. This is deliberately separate from
+     * [ProfileDriverDescriptor.privileged]: a privileged driver may use app `su`, a trusted-host
+     * operation, or the root helper, and only the last one belongs in `access.helper`.
+     */
+    internal val helperAuthorityDemand: Map<String, ProfileHelperAuthorityDemand> = mapOf(
+        "access.android-su" to ProfileHelperAuthorityDemand.NONE,
+        "access.toolbox-su" to ProfileHelperAuthorityDemand.NONE,
+        "input.button-backlight" to ProfileHelperAuthorityDemand.REQUIRED,
+        "input.evdev" to ProfileHelperAuthorityDemand.REQUIRED,
+        "led.autodetect" to ProfileHelperAuthorityDemand.SANDBOX_FALLBACK,
+        "led.rk3576-ioctl" to ProfileHelperAuthorityDemand.SANDBOX_FALLBACK,
+        "led.rk3576-ioctl-daemon" to ProfileHelperAuthorityDemand.REQUIRED,
+        "led.sysfs-daemon" to ProfileHelperAuthorityDemand.REQUIRED,
+        "radio.siliconlabs-host" to ProfileHelperAuthorityDemand.NONE,
+        "relay.sysfs" to ProfileHelperAuthorityDemand.NONE,
+        "relay.gpio-button-led" to ProfileHelperAuthorityDemand.NONE,
+        "screen.brightness-zero" to ProfileHelperAuthorityDemand.NONE,
+        "screen.daemon-blpower" to ProfileHelperAuthorityDemand.REQUIRED,
+        "screen.su-blpower" to ProfileHelperAuthorityDemand.SANDBOX_FALLBACK,
+        "sensor.android" to ProfileHelperAuthorityDemand.NONE,
+        "sensor.cht8305-daemon" to ProfileHelperAuthorityDemand.REQUIRED,
+        "sensor.gpio-proximity" to ProfileHelperAuthorityDemand.NONE,
+        "update.webview" to ProfileHelperAuthorityDemand.NONE,
+    )
+
     /** Core-owned workflow identifiers selectable by schema 2. Profiles cannot define recipe behavior. */
     val recipes: Set<String> = setOf(
         "nspanel-pro.watchdog-e2big-repair",
@@ -108,4 +134,17 @@ object ProfileMetadata {
         description: String,
         values: List<String> = emptyList(),
     ) = ProfileFieldDescriptor(path, type, required, values, description)
+}
+
+/**
+ * Whether selecting a driver makes the root helper part of the core provisioning contract.
+ *
+ * [SANDBOX_FALLBACK] mirrors controllers that prefer an app-side privileged route and then fall back
+ * to the helper. The helper becomes required when the active profile marks the app sandbox as walled;
+ * it remains a resilience fallback rather than a required install on app-su profiles.
+ */
+internal enum class ProfileHelperAuthorityDemand {
+    NONE,
+    SANDBOX_FALLBACK,
+    REQUIRED,
 }

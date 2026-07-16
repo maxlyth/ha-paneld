@@ -185,34 +185,6 @@ static char *slurp(const char *path, char *out, size_t capacity) {
     return out;
 }
 
-static void read_backup_db(int peer, char *out, size_t capacity) {
-    char line[256];
-    read_line(peer, line, sizeof line);
-    int count = 0;
-    unsigned long long total = 0;
-    CHECK(sscanf(line, "BACKUP %d %llu", &count, &total) == 2,
-          "recovery backup has a valid header (got %s)\n", line);
-    (void)total;
-    out[0] = '\0';
-    for (int i = 0; i < count; i++) {
-        char path[128] = "";
-        unsigned long long size = 0;
-        read_line(peer, line, sizeof line);
-        CHECK(sscanf(line, "FILE %127s %llu", path, &size) == 2,
-              "recovery backup has a valid frame (got %s)\n", line);
-        char bytes[64];
-        CHECK(size < sizeof bytes, "test backup frame remains small\n");
-        if (size >= sizeof bytes || read_exact(peer, bytes, (size_t)size) < 0) return;
-        if (strcmp(path, "databases/HomeAssistantDB") == 0) {
-            size_t copied = (size_t)size < capacity - 1 ? (size_t)size : capacity - 1;
-            memcpy(out, bytes, copied);
-            out[copied] = '\0';
-        }
-    }
-    read_line(peer, line, sizeof line);
-    CHECK(strcmp(line, "DONE\n") == 0, "recovery backup completes (got %s)\n", line);
-}
-
 static void test_capability_status_and_launch_guards(void) {
     setup_fixture();
     char line[128];
@@ -466,15 +438,6 @@ static void run_interrupted_restore(enum companion_test_fault fault) {
     companion_test_set_fault(COMPANION_TEST_FAULT_NONE);
 }
 
-static void recover_through_backup(char *db, size_t capacity) {
-    int peer[2];
-    job work;
-    pthread_t thread;
-    start(&work, &thread, peer, "COMPANIONBACKUP " PKG);
-    read_backup_db(peer[1], db, capacity);
-    finish(thread, peer[1]);
-}
-
 static void test_restore_recovers_prepared_and_committed_markers(void) {
     char content[32];
 
@@ -484,33 +447,45 @@ static void test_restore_recovers_prepared_and_committed_markers(void) {
           "move-phase interruption retains prepared marker\n");
     CHECK(access(BASE "/databases/.HomeAssistantDB.hapaneld-rollback", F_OK) == 0,
           "move-phase interruption retains old DB rollback\n");
+    sysexec_stub_fail_run("am force-stop " PKG, 1);
     dispatch_once("COMPANIONSTATUS", content, sizeof content);
     CHECK(strcmp(content, "BUSY\n") == 0,
-          "durable prepared marker remains BUSY after worker exits\n");
-    dispatch_once("START " PKG "/.Home", content, sizeof content);
-    CHECK(strcmp(content, "BUSY\n") == 0,
-          "durable prepared marker blocks Companion launch after worker exits\n");
-    recover_through_backup(content, sizeof content);
-    CHECK(strcmp(content, "database") == 0, "prepared move-phase recovery restores old DB\n");
+          "status stays BUSY when journal recovery cannot stop Companion\n");
+    CHECK(access(ROOT_STAGE "/.companion-restore.prepared", F_OK) == 0,
+          "failed status recovery retains prepared marker\n");
+    sysexec_stub_fail_run("", 0);
+    dispatch_once("COMPANIONSTATUS", content, sizeof content);
+    CHECK(strcmp(content, "IDLE\n") == 0,
+          "status repairs a durable prepared marker after worker exit\n");
+    CHECK(strcmp(slurp(DB, content, sizeof content), "database") == 0,
+          "status recovery restores old DB after move-phase interruption\n");
     CHECK(access(ROOT_STAGE "/.companion-restore.prepared", F_OK) != 0,
-          "successful prepared recovery clears marker\n");
+          "status recovery clears prepared marker\n");
     CHECK(access(BASE "/databases/.HomeAssistantDB.hapaneld-rollback", F_OK) != 0,
-          "successful prepared recovery consumes rollback\n");
+          "status recovery consumes prepared rollback\n");
+    dispatch_once("START " PKG "/.Home", content, sizeof content);
+    CHECK(strcmp(content, "OK\n") == 0,
+          "Companion launch is admitted after status recovery\n");
 
     setup_fixture();
     run_interrupted_restore(COMPANION_TEST_FAULT_AFTER_INSTALLS);
     CHECK(strcmp(slurp(DB, content, sizeof content), "newdb") == 0,
           "install-phase interruption leaves new live DB before recovery\n");
-    recover_through_backup(content, sizeof content);
-    CHECK(strcmp(content, "database") == 0,
-          "prepared install-phase recovery replaces new live DB with rollback\n");
+    dispatch_once("COMPANIONSTATUS", content, sizeof content);
+    CHECK(strcmp(content, "IDLE\n") == 0,
+          "status repairs an install-phase prepared marker\n");
+    CHECK(strcmp(slurp(DB, content, sizeof content), "database") == 0,
+          "status recovery replaces new live DB with rollback\n");
 
     setup_fixture();
     run_interrupted_restore(COMPANION_TEST_FAULT_AFTER_COMMIT_MARKER);
     CHECK(access(ROOT_STAGE "/.companion-restore.committed", F_OK) == 0,
           "post-commit interruption retains committed marker\n");
-    recover_through_backup(content, sizeof content);
-    CHECK(strcmp(content, "newdb") == 0, "committed recovery preserves new DB\n");
+    dispatch_once("COMPANIONSTATUS", content, sizeof content);
+    CHECK(strcmp(content, "IDLE\n") == 0,
+          "status completes committed-marker cleanup\n");
+    CHECK(strcmp(slurp(DB, content, sizeof content), "newdb") == 0,
+          "committed status recovery preserves new DB\n");
     CHECK(access(ROOT_STAGE "/.companion-restore.committed", F_OK) != 0,
           "committed recovery clears marker after rollback cleanup\n");
     CHECK(access(BASE "/databases/.HomeAssistantDB.hapaneld-rollback", F_OK) != 0,

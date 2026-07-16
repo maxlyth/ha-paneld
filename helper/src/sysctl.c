@@ -216,12 +216,30 @@ static int app_state(const char *pkg, char *out, size_t outsz) {
     return 0;
 }
 
+// Write a complete stream chunk, retrying only interrupted calls. A zero return cannot make progress
+// and any other error means the peer is terminally unavailable.
+static int write_stream_chunk(int fd, const char *buf, size_t size) {
+    size_t offset = 0;
+    while (offset < size) {
+        ssize_t n = write(fd, buf + offset, size - offset);
+        if (n > 0) {
+            offset += (size_t)n;
+            continue;
+        }
+        if (n < 0 && errno == EINTR) continue;
+        return -1;
+    }
+    return 0;
+}
+
 // Capture the screen as PNG and stream the raw bytes to [fd]. Client half-closes then reads to EOF.
 static void screencap_to(int fd) {
     FILE *p = sysexec_popen_r("screencap -p");
     if (!p) return;
     char buf[8192]; size_t n;
-    while ((n = fread(buf, 1, sizeof buf, p)) > 0) (void)!write(fd, buf, n);
+    while ((n = fread(buf, 1, sizeof buf, p)) > 0) {
+        if (write_stream_chunk(fd, buf, n) != 0) break;
+    }
     sysexec_pclose(p);
 }
 
