@@ -98,6 +98,13 @@ else
   fail_test "stable tag with an exact changelog entry remains publishable"
 fi
 
+if grep -Fq "body_path: release-input/release-body.md" "$WORKFLOW" && \
+   ! grep -Eq '^[[:space:]]*generate_release_notes:' "$WORKFLOW"; then
+  pass "curated changelog remains the sole release prose source"
+else
+  fail_test "curated changelog remains the sole release prose source"
+fi
+
 printf '1..%d\n' "$((passes + failures))"
 if [ "$failures" -ne 0 ]; then
   printf '%d assertion(s) failed\n' "$failures" >&2

@@ -183,8 +183,8 @@ jobs:
           grep -Fq "PROVISION_COMMIT=\"$SOURCE_COMMIT\"" "$installer"
           grep -Fq "RELEASE_HELPER_BUILD_ID=\"$HELPER_BUILD_ID\"" "$provisioner"
 
-      # Human-readable notes come from the matching CHANGELOG.md section. Prereleases also receive an
-      # auto-generated comparison; stable releases use only the self-contained curated body.
+      # Human-readable notes come only from the matching CHANGELOG.md section, keeping the approved
+      # consumer-facing body exact for both prereleases and stable releases.
       #
       # Section lookup — exact match first, base-version fallback:
       #   v0.8.4-rc3  →  look for "## v0.8.4-rc3"  (per-RC incremental notes)
@@ -488,6 +488,5 @@ jobs:
           name: ${{ env.RELEASE_TAG }}
           files: dist/*
           body_path: release-input/release-body.md
-          generate_release_notes: ${{ contains(env.RELEASE_TAG, '-') }}
           # Tags with a suffix (e.g. v0.5.0-rc1) publish as pre-releases.
           prerelease: ${{ contains(env.RELEASE_TAG, '-') }}
