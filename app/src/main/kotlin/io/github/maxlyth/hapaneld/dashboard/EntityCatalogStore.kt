@@ -1081,6 +1081,9 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
         private val FINGERPRINT = Regex("^[a-f0-9]{16}$")
         private val DATABASE_MIGRATION_LOCK = Any()
 
+        // TODO(v1.0): Remove LEGACY_DATABASE_NAME, databaseName(), checkpointLegacyDatabase(),
+        // migrateDatabaseFiles() and their tests. The 0.9.x line is the supported rename runway;
+        // 1.0 should open ha-paneld.db directly and treat a missing database as a fresh install.
         private fun databaseName(context: Context): String = synchronized(DATABASE_MIGRATION_LOCK) {
             val target = context.getDatabasePath(DATABASE_NAME)
             if (target.exists()) return@synchronized DATABASE_NAME

@@ -15,6 +15,9 @@ import java.util.concurrent.CopyOnWriteArraySet
  * XML preferences are read only for the first transactional import of each namespace.
  */
 object AppState {
+    // TODO(v1.0): Remove legacyName, getSharedPreferences(), importLegacyOnce(), app_state_namespace
+    // and the legacy shared-preference backup exclusions. Every supported upgrade should have crossed
+    // a 0.9.x release which performs this one-time import before 1.0 makes SQLite-only startup strict.
     fun preferences(context: Context, namespace: String, legacyName: String): SharedPreferences {
         val appContext = context.applicationContext
         val cacheKey = "${appContext.packageName}:$namespace"
