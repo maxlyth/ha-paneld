@@ -32,7 +32,8 @@ object Wf1589t : DeviceProfile {
         TameCandidate("com.rockchip.devicetest", listOf("chipset", "test", "clutter"),
             "Rockchip (rk3576 SoC) factory device-test suite. Diagnostic only; not used in normal operation."),
         TameCandidate("com.gulukai.pwmlightdemo", listOf("vendor", "demo", "clutter"),
-            "Vendor PWM-backlight/LED demo app (label \"PwmLightDemo\"). A demo, not the LED driver; safe to disable."),
+            "Vendor RGB LED demo app (label \"PwmLightDemo\"). Its boot-started foreground service continuously cycles colours through /dev/ledjni, conflicting with ha-paneld LED control; safe to disable.",
+            defaultTame = true),
         TameCandidate("com.elclcd.otaupdater", listOf("vendor", "ota"),
             "ELC \"Firmware Upgrade\" vendor OTA updater. Disable to stop the panel auto-applying vendor firmware updates that can re-add bloat."),
     )

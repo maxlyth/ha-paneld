@@ -15,6 +15,12 @@ import org.junit.Test
  * that silently does nothing), so failing here is the point.
  */
 class DeviceProfileCapabilityTest {
+    @Test fun wf1589tTamesTheCompetingBootLedDemoByDefault() {
+        val demo = Wf1589t.tameVendorCandidates.single { it.pkg == "com.gulukai.pwmlightdemo" }
+        assertTrue(demo.defaultTame)
+        assertTrue(demo.note.contains("continuously cycles colours"))
+    }
+
     private val all = DeviceProfile.knownProfiles
 
     @Test fun idsArePresentAndUnique() {

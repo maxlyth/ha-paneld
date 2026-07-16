@@ -99,8 +99,8 @@ taming:
       - vendor
       - demo
       - clutter
-    note: 'Vendor PWM-backlight/LED demo app (label "PwmLightDemo"). A demo, not the LED driver; safe to disable.'
-    default_tame: false
+    note: 'Vendor RGB LED demo app (label "PwmLightDemo"). Its boot-started foreground service continuously cycles colours through /dev/ledjni, conflicting with ha-paneld LED control; safe to disable.'
+    default_tame: true
   - package: com.elclcd.otaupdater
     tags:
       - vendor
