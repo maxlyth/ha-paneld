@@ -346,50 +346,50 @@ def availability_banner(h):
             f"Last check **{ts}**: **{up}/{total}** URLs reachable.\n")
 
 
-def fulls_table(d, h):
+def fulls_table(d, h, now):
     out = ["| Version | Size | Download | 7d |", "| --- | --- | --- | --- |"]
     for ver, idx, fn, sz in sorted(d["fulls"], key=lambda x: vkey(x[0]), reverse=True):
         url = full_url(d, idx, fn)
-        out.append(f"| **{ver}** | {human(sz)} | [{fn}]({url}) | {sparkline(url, h)} |")
+        out.append(f"| **{ver}** | {human(sz)} | [{fn}]({url}) | {sparkline(url, h, now)} |")
     return "\n".join(out)
 
 
-def diffs_table(d, h):
+def diffs_table(d, h, now):
     out = ["| To (target) | From | Size | Download | 7d |", "| --- | --- | --- | --- | --- |"]
     for to, frm, idx, sz in sorted(d["diffs"], key=lambda x: (vkey(x[0]), vkey(x[1])), reverse=True):
         url = diff_url(d, idx, frm, to)
         fn = f"CK_{frm}_{to}{d['suffix']}-diff.zip"
-        out.append(f"| **{to}** | {frm} | {human(sz)} | [{fn}]({url}) | {sparkline(url, h)} |")
+        out.append(f"| **{to}** | {frm} | {human(sz)} | [{fn}]({url}) | {sparkline(url, h, now)} |")
     return "\n".join(out)
 
 
-def apks_table(d, h):
+def apks_table(d, h, now):
     out = ["| Version | Size | Download | 7d |", "| --- | --- | --- | --- |"]
     for ver, idx, sz in sorted(d["apks"], key=lambda x: vkey(x[0]), reverse=True):
         url = apk_url(d, idx, ver)
         fn = f"{d['apkfmt']}{ver}.apk"
-        out.append(f"| {ver} | {human(sz)} | [{fn}]({url}) | {sparkline(url, h)} |")
+        out.append(f"| {ver} | {human(sz)} | [{fn}]({url}) | {sparkline(url, h, now)} |")
     return "\n".join(out)
 
 
-def device_block(name, sub, d, h):
+def device_block(name, sub, d, h, now):
     return f"""## {name} ({sub}) — channel `{d['channel']}`
 
 ### Full ROMs
 
-{fulls_table(d, h)}
+{fulls_table(d, h, now)}
 
 <details open>
 <summary><b>Incremental diffs ({len(d['diffs'])})</b> — patch an existing version up to a target</summary>
 
-{diffs_table(d, h)}
+{diffs_table(d, h, now)}
 
 </details>
 
 <details open>
 <summary><b>eWeLink app APKs ({len(d['apks'])})</b></summary>
 
-{apks_table(d, h)}
+{apks_table(d, h, now)}
 
 </details>
 """
@@ -399,10 +399,11 @@ def cmd_render(args):
     devices = load_devices()
     parsed = {fn: d for (_, _, fn), d in zip(DEVICES, devices)}
     h = load_history(args.history) if args.history else {"samples": []}
+    render_time = int(time.time())
 
     blocks = [INTRO, availability_banner(h), CHANGES, RELEASE_NOTES]
     for name, sub, fn in DEVICES:
-        blocks.append(device_block(name, sub, parsed[fn], h))
+        blocks.append(device_block(name, sub, parsed[fn], h, render_time))
     blocks += [SCHEME, FOOTER]
     body = "\n".join(blocks) + "\n"
 

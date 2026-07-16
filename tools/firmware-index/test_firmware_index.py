@@ -2,6 +2,7 @@
 
 import unittest
 from types import SimpleNamespace
+from unittest import mock
 
 import firmware_index
 
@@ -88,6 +89,35 @@ class SparklineTest(unittest.TestCase):
         line = firmware_index.sparkline(url, history, now=day * 86400 + 10 * 3600)
 
         self.assertEqual(line, "⬜⬜⬜⬜⬜⬜🟩")
+
+    def test_device_render_uses_one_utc_window_anchor_for_every_row(self):
+        device = {
+            "channel": "test-channel",
+            "suffix": "",
+            "apkfmt": "app",
+            "fulls": [("1.0.0", "1", "full.zip", 10)],
+            "diffs": [("1.0.0", "0.9.0", "2", 5)],
+            "apks": [("1.0.0", "3", 2)],
+        }
+        render_time = 20000 * 86400 + 23 * 3600 + 59 * 60 + 59
+
+        with mock.patch.object(
+            firmware_index,
+            "sparkline",
+            return_value="⬜⬜⬜⬜⬜⬜⬜",
+        ) as sparkline:
+            firmware_index.device_block(
+                "Test",
+                "fixture",
+                device,
+                {"samples": []},
+                render_time,
+            )
+
+        self.assertEqual(sparkline.call_count, 3)
+        self.assertTrue(
+            all(call.args[2] == render_time for call in sparkline.call_args_list),
+        )
 
 
 if __name__ == "__main__":
