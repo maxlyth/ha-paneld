@@ -1,0 +1,268 @@
+package io.github.maxlyth.hapaneld.provisioning
+
+import io.github.maxlyth.hapaneld.device.profile.ProfileActivationPhase
+import io.github.maxlyth.hapaneld.device.profile.ProfileOrigin
+import io.github.maxlyth.hapaneld.device.profile.ProfileRef
+import io.github.maxlyth.hapaneld.device.profile.ShizukuRecommendation
+import io.github.maxlyth.hapaneld.shizuku.ShizukuState
+import kotlinx.coroutines.test.runTest
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class ProvisioningPlannerTest {
+    @Test
+    fun genericProfileProducesSatisfiedEmptyPlan() {
+        val plan = plan(profile())
+
+        assertEquals(ProvisioningPlanState.SATISFIED, plan.state)
+        assertTrue(plan.items.isEmpty())
+    }
+
+    @Test
+    fun missingHelperAndOptionalShizukuRemainIndependentFromSatisfiedWebView() {
+        val profile = profile(
+            helperImportance = ProvisioningImportance.REQUIRED,
+            shizuku = ShizukuRecommendation.OPTIONAL,
+            webView = ProvisioningWebViewTarget("lineageos-150-arm64", "150.0.1"),
+        )
+        val plan = plan(
+            profile,
+            ProvisioningObservationSnapshot(
+                helper = known(ProvisioningHelperState.MISSING),
+                shizuku = known(ProvisioningShizukuState.MANAGER_MISSING),
+                webView = known(ProvisioningWebViewState.Active("150.0.2")),
+            ),
+        )
+
+        assertEquals(ProvisioningPlanState.ATTENTION, plan.state)
+        assertEquals(
+            listOf("access.helper", "access.shizuku", "software.webview"),
+            plan.items.map { it.id },
+        )
+        assertItem(
+            plan,
+            "access.helper",
+            ProvisioningItemStatus.MANUAL,
+            "missing",
+            "daemon_driver_without_helper",
+        )
+        assertItem(
+            plan,
+            "access.shizuku",
+            ProvisioningItemStatus.MANUAL,
+            "manager_missing",
+            "profile_optional",
+        )
+        assertItem(
+            plan,
+            "software.webview",
+            ProvisioningItemStatus.SATISFIED,
+            "current",
+            "webview_recommendation_satisfied",
+        )
+    }
+
+    @Test
+    fun partialProbeFailuresAreBlockedWithoutSuppressingKnownItems() {
+        val plan = plan(
+            profile(
+                helperImportance = ProvisioningImportance.REQUIRED,
+                shizuku = ShizukuRecommendation.RECOMMENDED,
+                webView = ProvisioningWebViewTarget("lineageos-138-armv7", "138.0.7204.63"),
+            ),
+            ProvisioningObservationSnapshot(
+                helper = unknown(ProvisioningUnknownReason.PROBE_FAILED),
+                shizuku = known(ProvisioningShizukuState.READY),
+                webView = unknown(ProvisioningUnknownReason.PROBE_FAILED),
+            ),
+        )
+
+        assertItem(plan, "access.helper", ProvisioningItemStatus.BLOCKED, "unknown", "helper_probe_failed")
+        assertItem(plan, "access.shizuku", ProvisioningItemStatus.SATISFIED, "ready", "shizuku_ready")
+        assertItem(plan, "software.webview", ProvisioningItemStatus.BLOCKED, "unknown", "webview_probe_failed")
+    }
+
+    @Test
+    fun helperPingDoesNotClaimCompatibilityAndOlderWebViewIsActionable() {
+        val plan = plan(
+            profile(
+                helperImportance = ProvisioningImportance.REQUIRED,
+                webView = ProvisioningWebViewTarget("lineageos-150-arm64", "150.0.7871.63"),
+            ),
+            observations().copy(
+                helper = known(ProvisioningHelperState.REACHABLE_UNVERIFIED),
+                webView = known(ProvisioningWebViewState.Active("149.9.9")),
+            ),
+        )
+
+        assertItem(
+            plan,
+            "access.helper",
+            ProvisioningItemStatus.BLOCKED,
+            "reachable_unverified",
+            "helper_identity_unavailable",
+        )
+        assertItem(
+            plan,
+            "software.webview",
+            ProvisioningItemStatus.ACTIONABLE,
+            "outdated",
+            "webview_outdated",
+        )
+    }
+
+    @Test
+    fun malformedObservedWebViewVersionNeverBecomesSatisfied() {
+        val plan = plan(
+            profile(webView = ProvisioningWebViewTarget("lineageos-150-arm64", "150.0.1")),
+            observations().copy(webView = known(ProvisioningWebViewState.Active("150-beta"))),
+        )
+
+        assertItem(
+            plan,
+            "software.webview",
+            ProvisioningItemStatus.BLOCKED,
+            "unknown",
+            "webview_version_unreadable",
+        )
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun plannerRejectsMismatchedActivationRef() {
+        ProvisioningPlanner.plan(
+            CORE,
+            profile(),
+            ACTIVE.copy(activeRef = ProfileRef("other", REVISION)),
+            observations(),
+        )
+    }
+
+    @Test
+    fun coordinatorRequiresExactStableRefAndCachesSnapshots() = runTest {
+        var now = 100L
+        var collections = 0
+        val coordinator = ProvisioningCoordinator(
+            core = CORE,
+            profile = profile(helperImportance = ProvisioningImportance.REQUIRED),
+            collector = ProvisioningObservationCollector {
+                collections++
+                observations()
+            },
+            monotonicMs = { now },
+            cacheTtlMs = 50,
+        )
+
+        assertTrue(coordinator.plan(ACTIVE.copy(phase = ProfileActivationPhase.APPLYING)) is ProvisioningReadResult.Unavailable)
+        assertTrue(coordinator.plan(ACTIVE.copy(activeRef = ProfileRef("other", REVISION))) is ProvisioningReadResult.Unavailable)
+        assertEquals(0, collections)
+
+        assertTrue(coordinator.plan(ACTIVE) is ProvisioningReadResult.Ready)
+        assertTrue(coordinator.plan(ACTIVE) is ProvisioningReadResult.Ready)
+        assertEquals(1, collections)
+
+        now += 51
+        assertTrue(coordinator.plan(ACTIVE) is ProvisioningReadResult.Ready)
+        assertEquals(2, collections)
+
+        assertTrue(coordinator.plan(ACTIVE, forceRefresh = true) is ProvisioningReadResult.Ready)
+        assertEquals(3, collections)
+    }
+
+    @Test
+    fun rendererStripsTerminalControlsAndUsesOnlyStaticGuidance() {
+        val hostileName = "\u001B[31mTPA10\u001B[0m\nspoof\u202Etxt\u2066"
+        val plan = plan(
+            profile(
+                displayName = hostileName,
+                helperImportance = ProvisioningImportance.REQUIRED,
+            ),
+            observations().copy(helper = known(ProvisioningHelperState.MISSING)),
+        )
+
+        val text = ProvisioningTextRenderer.render(plan)
+
+        assertTrue(text.startsWith("ha-paneld provisioning plan\nPanel: TPA10spoof"))
+        assertFalse(text.contains('\u001B'))
+        assertFalse(text.contains('\u202E'))
+        assertFalse(text.contains('\u2066'))
+        assertFalse(text.contains("\nspoof"))
+        assertTrue(text.endsWith('\n'))
+        assertTrue(text.contains("trusted host"))
+    }
+
+    @Test
+    fun androidCollectorContainsProbeFailuresAndDoesNotPromotePingToCompatibility() = runTest {
+        val collector = AndroidProvisioningObservationCollector(
+            helperAvailable = { true },
+            shizukuState = { ShizukuState.MANUAL_GRANT_REQUIRED },
+            webViewEngineMajor = { throw IllegalStateException("provider unavailable") },
+        )
+
+        val snapshot = collector.collect()
+
+        assertEquals(
+            ProvisioningObservation.Known(ProvisioningHelperState.REACHABLE_UNVERIFIED),
+            snapshot.helper,
+        )
+        assertEquals(
+            ProvisioningObservation.Known(ProvisioningShizukuState.PERMISSION_REQUIRED),
+            snapshot.shizuku,
+        )
+        assertEquals(
+            ProvisioningObservation.Unknown(ProvisioningUnknownReason.PROBE_FAILED),
+            snapshot.webView,
+        )
+    }
+
+    private fun plan(
+        profile: ProvisioningProfile,
+        observations: ProvisioningObservationSnapshot = observations(),
+    ): ProvisioningPlan = ProvisioningPlanner.plan(CORE, profile, ACTIVE, observations)
+
+    private fun assertItem(
+        plan: ProvisioningPlan,
+        id: String,
+        status: ProvisioningItemStatus,
+        observed: String,
+        reason: String,
+    ) {
+        val item = plan.items.single { it.id == id }
+        assertEquals(status, item.status)
+        assertEquals(observed, item.observedState)
+        assertEquals(reason, item.reasonCode)
+    }
+
+    private companion object {
+        const val REVISION = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        val REF = ProfileRef("test.panel", REVISION)
+        val CORE = ProvisioningCoreIdentity("0.9.4-rc1", 194)
+        val ACTIVE = ProvisioningActivationSnapshot(ProfileActivationPhase.ACTIVE, REF, 4)
+
+        fun profile(
+            displayName: String = "Test panel",
+            helperImportance: ProvisioningImportance? = null,
+            shizuku: ShizukuRecommendation = ShizukuRecommendation.NONE,
+            webView: ProvisioningWebViewTarget? = null,
+        ) = ProvisioningProfile(
+            ref = REF,
+            displayName = displayName,
+            origin = ProfileOrigin.BUNDLED,
+            contentVersion = "2.0.0",
+            helperImportance = helperImportance,
+            shizuku = shizuku,
+            webView = webView,
+        )
+
+        fun observations() = ProvisioningObservationSnapshot(
+            helper = known(ProvisioningHelperState.MISSING),
+            shizuku = known(ProvisioningShizukuState.MANAGER_MISSING),
+            webView = known(ProvisioningWebViewState.Missing),
+        )
+
+        fun <T> known(value: T): ProvisioningObservation<T> = ProvisioningObservation.Known(value)
+        fun unknown(reason: ProvisioningUnknownReason): ProvisioningObservation<Nothing> =
+            ProvisioningObservation.Unknown(reason)
+    }
+}
