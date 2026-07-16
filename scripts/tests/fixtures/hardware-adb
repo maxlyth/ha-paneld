@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+set -u
+
+printf 'MSYS_NO_PATHCONV=%s MSYS2_ARG_CONV_EXCL=%s adb %s\n' \
+  "${MSYS_NO_PATHCONV:-}" "${MSYS2_ARG_CONV_EXCL:-}" "$*" >> "${MOCK_CALL_LOG:?}"
+
+if [ "${1:-}" = "-s" ]; then shift 2; fi
+
+case "$*" in
+  "get-state")
+    if [ -f "${MOCK_STATE_DIR:-/nonexistent}/transport-failed" ]; then
+      printf "adb: device '%s' not found\n" "${MOCK_SERIAL:-private:5555}" >&2
+      exit 1
+    fi
+    printf 'device\n'
+    ;;
+  "shell getprop ro.product.model") printf '%b\n' "${MOCK_MODEL:-rk3566_t}" ;;
+  "shell getprop ro.product.device")
+    if [ "${MOCK_IDENTITY_FAIL:-none}" = "device" ]; then
+      mkdir -p "${MOCK_STATE_DIR:?}"
+      : > "$MOCK_STATE_DIR/transport-failed"
+      printf "adb: device '%s' not found\n" "${MOCK_SERIAL:-private:5555}" >&2
+      exit 1
+    fi
+    printf '%s\n' "${MOCK_DEVICE:-rk3566_t}"
+    ;;
+  "shell getprop ro.build.version.release") printf '%s\n' "${MOCK_ANDROID:-13}" ;;
+  "shell getprop ro.build.version.sdk") printf '%s\n' "${MOCK_SDK:-33}" ;;
+  "shell cat /proc/bus/input/devices")
+    if [ "${MOCK_INPUT_FAIL:-none}" != "none" ]; then
+      printf '%s\n' "${MOCK_INPUT_FAIL}" >&2
+      exit 1
+    fi
+    if [ "${MOCK_DEVICE:-rk3566_t}" = "cronos" ]; then
+      cat <<EOF
+N: Name="m_alsps_input"
+H: Handlers=event${MOCK_LIGHT_EVENT:-5}
+
+N: Name="goodix-ts"
+H: Handlers=event2
+EOF
+    elif [ "${MOCK_AMBIGUOUS:-0}" = 1 ]; then
+      cat <<EOF
+N: Name="sun-ths"
+H: Handlers=event7 event9
+EOF
+    else
+      cat <<EOF
+N: Name="sun-ths"
+H: Handlers=event${MOCK_THS_EVENT:-7}
+
+N: Name="sun-hum"
+H: Handlers=event${MOCK_HUM_EVENT:-8}
+
+N: Name="goodix-ts"
+H: Handlers=event2
+EOF
+    fi
+    ;;
+  "shell getevent -lp /dev/input/"event*)
+    if [ "${MOCK_FAIL_GETEVENT:-none}" = "transport" ]; then
+      mkdir -p "${MOCK_STATE_DIR:?}"
+      : > "$MOCK_STATE_DIR/transport-failed"
+      printf "adb: device '%s' not found\n" "${MOCK_SERIAL:-private:5555}" >&2
+      exit 1
+    fi
+    if [ "${MOCK_FAIL_GETEVENT:-none}" = "denied" ]; then
+      printf 'Permission denied\n' >&2
+      exit 1
+    fi
+    if [ "${MOCK_LONG_CAPABILITY:-0}" = 1 ]; then
+      awk 'BEGIN { for (i=0; i<500; i++) print "capability-line-" i " xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" }'
+      exit 0
+    fi
+    printf 'add device 1: %s\n  events: ABS (0003): 0000 : value 12, min 0, max 65535\n' "${*: -1}"
+    ;;
+  "shell timeout 10 getevent -lt -c 32 /dev/input/"event*)
+    if [ "${MOCK_SAMPLE_DENIED:-0}" = 1 ]; then
+      printf 'Permission denied\n' >&2
+      exit 1
+    fi
+    printf '[ 1.000000] EV_ABS ABS_X 0000000c\n'
+    [ "${MOCK_SAMPLE_STATUS:-ok}" != "timeout" ] || exit 124
+    ;;
+  "shell cat /sys/class/leds/lcd-backlight/brightness")
+    if [ "${MOCK_BACKLIGHT_DENIED:-0}" = 1 ]; then
+      printf 'Permission denied\n' >&2
+      exit 1
+    fi
+    printf '102\n'
+    ;;
+  "shell cat /sys/class/leds/lcd-backlight/max_brightness") printf '255\n' ;;
+  "shell cat /sys/class/leds/lcd-backlight/"*) exit 1 ;;
+  "shell test -e /proc/bus/input/devices") exit 0 ;;
+  "shell test -r /proc/bus/input/devices")
+    [ "${MOCK_INPUT_FAIL:-none}" != "denied" ]
+    ;;
+  "shell test -e /dev/input/"event*) exit 0 ;;
+  "shell test -r /dev/input/"event*)
+    [ "${MOCK_FAIL_GETEVENT:-none}" != "denied" ] && [ "${MOCK_SAMPLE_DENIED:-0}" != 1 ]
+    ;;
+  "shell test -e /sys/class/leds/lcd-backlight/brightness") exit 0 ;;
+  "shell test -e /sys/class/leds/lcd-backlight/max_brightness") exit 0 ;;
+  "shell test -e /sys/class/leds/lcd-backlight/"*) exit 1 ;;
+  "shell test -r /sys/class/leds/lcd-backlight/brightness")
+    [ "${MOCK_BACKLIGHT_DENIED:-0}" != 1 ]
+    ;;
+  "shell test -w /sys/class/leds/lcd-backlight/brightness") exit 0 ;;
+  "shell settings get system screen_brightness") printf '102\n' ;;
+  "shell cat /data/local/tmp/../nonexistent") exit 1 ;;
+  *) ;;
+esac
