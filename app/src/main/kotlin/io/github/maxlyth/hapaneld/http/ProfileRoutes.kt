@@ -48,6 +48,38 @@ internal data class ProfileRouteDependencies(
     val hardMaxYamlBytes: Long = MAX_PROFILE_YAML_BYTES,
 )
 
+internal data class ProfileRestartRejection(
+    val error: String,
+    val message: String,
+    val abortPersisted: Boolean,
+)
+
+/** Records whether a staged activation was durably rolled back when restart admission fails. */
+internal fun rejectFailedProfileRestart(
+    restartAllowed: Boolean,
+    requestRestart: () -> Boolean,
+    abortPendingRestart: (String) -> Boolean,
+): ProfileRestartRejection? {
+    val rejection = when {
+        !restartAllowed ->
+            "destructive-operation-in-progress" to
+                "A destructive install or restore operation is in progress. Try profile activation again when it finishes."
+        !runCatching(requestRestart).getOrDefault(false) ->
+            "profile-restart-unavailable" to "The profile restart could not be scheduled. Try again."
+        else -> return null
+    }
+    val abortPersisted = runCatching { abortPendingRestart(rejection.second) }.getOrDefault(false)
+    return if (abortPersisted) {
+        ProfileRestartRejection(rejection.first, rejection.second, true)
+    } else {
+        ProfileRestartRejection(
+            error = "profile-activation-abort-persist-failed",
+            message = "The profile restart could not be scheduled, and its pending activation could not be rolled back durably. The activation remains pending and may apply on the next process restart.",
+            abortPersisted = false,
+        )
+    }
+}
+
 internal const val MAX_PROFILE_YAML_BYTES = 256L * 1024L
 private const val MAX_PROFILE_ACTION_BYTES = 16L * 1024L
 private val PROFILE_ID = Regex("^[a-z0-9](?:[a-z0-9.-]{0,126}[a-z0-9])?$")
@@ -188,18 +220,18 @@ private suspend fun handleSelection(
     }
     if (mutation is ProfileMutation.Success && mutation.restartRequired) {
         val restartAllowed = dependencies.restartAllowed()
-        val rejection = when {
-            !restartAllowed -> "A destructive install or restore operation is in progress. Try profile activation again when it finishes."
-            !runCatching(dependencies.requestRestart).getOrDefault(false) -> "The profile restart could not be scheduled. Try again."
-            else -> null
-        }
+        val rejection = rejectFailedProfileRestart(
+            restartAllowed,
+            dependencies.requestRestart,
+            dependencies.abortPendingRestart,
+        )
         if (rejection != null) {
-            dependencies.abortPendingRestart(rejection)
             call.respondProfileJson(
                 JSONObject()
                     .put("ok", false)
-                    .put("error", if (restartAllowed) "profile-restart-unavailable" else "destructive-operation-in-progress")
-                    .put("message", rejection)
+                    .put("error", rejection.error)
+                    .put("message", rejection.message)
+                    .put("activation_pending", !rejection.abortPersisted)
                     .put("status", statusJson(dependencies.admin.status())),
                 HttpStatusCode.ServiceUnavailable,
             )

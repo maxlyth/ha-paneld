@@ -61,6 +61,11 @@ object DashboardTelemetry {
         val slowest = values.maxByOrNull { it.interactionMaxMicros }
         val interactionP50 = histogramPercentile(interactionBins, 0.50)
         val interactionP95 = histogramPercentile(interactionBins, 0.95)
+        val mode = when {
+            builtinActive && installed -> "builtin_direct"
+            builtinActive -> "builtin_unavailable"
+            else -> "foreign_proxy"
+        }
         val cause = classify(
             interactionP95 = interactionP95,
             updateP95 = percentile(updateRates, 0.95),
@@ -70,11 +75,11 @@ object DashboardTelemetry {
             slowest = slowest,
             reloads24h = reloads24h,
             systemCpuPct = systemCpuPct,
-            rendererMainPct = rendererMainPct,
+            rendererMainPct = rendererMainPct.takeIf { !builtinActive },
         )
         JSONObject()
             .put("schema", 1)
-            .put("mode", if (builtinActive && installed) "builtin_direct" else "foreign_proxy")
+            .put("mode", mode)
             .put("generation", generation)
             .put("windowMs", values.sumOf { it.sampleMs })
             .put("sampleCount", values.size)
@@ -131,7 +136,6 @@ object DashboardTelemetry {
         systemCpuPct: Int?,
         rendererMainPct: Double?,
     ): Pair<String, String> {
-        if (reloads24h > 0) return "memory_or_renderer_instability" to if (reloads24h > 2) "high" else "medium"
         if (interactionP95 >= 200.0 && occupancyP95 >= 100.0 &&
             (updateP95 >= 50.0 || payloadP95 >= 64.0 * 1024.0)
         ) return "state_stream" to if (occupancyP95 >= 250.0) "high" else "medium"
@@ -148,6 +152,11 @@ object DashboardTelemetry {
         }
         if ((rendererMainPct ?: 0.0) >= 85.0 && interactionP95 <= 0.0) {
             return "dashboard_or_state_proxy" to "low"
+        }
+        // A reload is retained for diagnosis, but it is historical evidence spanning 24 hours. Let
+        // decisive evidence from the current live window identify the active burden first.
+        if (reloads24h > 0) {
+            return "memory_or_renderer_instability" to if (reloads24h > 2) "high" else "medium"
         }
         return "no_clear_dominant_cause" to if (interactionP95 > 0.0 && interactionP95 < 200.0) "medium" else "low"
     }

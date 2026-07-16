@@ -1,6 +1,7 @@
 package io.github.maxlyth.hapaneld.config
 
 import io.github.maxlyth.hapaneld.util.AndroidInput
+import io.github.maxlyth.hapaneld.util.BrokerEndpoint
 import java.util.Locale
 
 /**
@@ -65,6 +66,11 @@ object SettingsRegistry {
             label = "Broker URL", default = "", tier = Tier.BASIC, scope = Scope.PORTABLE,
             maxChars = 2_048,
             help = "e.g. tcp://homeassistant.local:1883 — blank auto-discovers HA over mDNS.",
+            validate = { raw ->
+                if (raw.isBlank()) Validation.Ok(raw)
+                else BrokerEndpoint.normalize(raw)?.let(Validation::Ok)
+                    ?: Validation.Bad("mqtt_broker: expected a tcp://, mqtt://, ssl://, mqtts://, or tls:// broker URL")
+            },
         ),
         SettingSpec(
             key = "mqtt_user", type = SettingType.STRING, group = "MQTT",
@@ -287,6 +293,12 @@ object SettingsRegistry {
             key = "ha_refresh_token", type = SettingType.PASSWORD, group = "Dashboard",
             label = "HA refresh token", default = "", scope = Scope.DEVICE, secret = true, hidden = true,
             help = "Internal token state retained for API/config import compatibility. Borrowed Companion and ha-paneld-issued OAuth logins manage it automatically.",
+        ),
+        SettingSpec(
+            key = "ha_token_expiry", type = SettingType.LONG, group = "Dashboard",
+            label = "HA access-token expiry", default = "0", scope = Scope.DEVICE, secret = true, hidden = true,
+            min = 0.0,
+            help = "Internal OAuth access-token expiry retained with its matching access and refresh tokens during private backup and restore.",
         ),
         SettingSpec(
             key = "ha_client_id", type = SettingType.STRING, group = "Dashboard",

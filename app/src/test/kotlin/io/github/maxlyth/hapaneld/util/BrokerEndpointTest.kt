@@ -19,6 +19,10 @@ class BrokerEndpointTest {
 
     @Test fun parsesSchemes() {
         assertEquals("broker.example" to 1883, BrokerEndpoint.parse("tcp://broker.example:1883"))
+        assertEquals(
+            "broker.example" to 1883,
+            BrokerEndpoint.parse("tcp://broker.example:1883/"),
+        )
         assertEquals("host" to 8883, BrokerEndpoint.parse("mqtts://host"))   // TLS scheme → default 8883
         assertEquals("192.0.2.8" to 8883, BrokerEndpoint.parse("ssl://192.0.2.8:8883"))
     }
@@ -27,6 +31,7 @@ class BrokerEndpointTest {
         // plain / no-scheme → TCP on 1883
         assertEquals(BrokerEndpoint.Endpoint("host", 1883, false, "tcp"), BrokerEndpoint.endpoint("host"))
         assertEquals(BrokerEndpoint.Endpoint("host", 1883, false, "tcp"), BrokerEndpoint.endpoint("tcp://host"))
+        assertEquals(BrokerEndpoint.Endpoint("host", 1883, false, "tcp"), BrokerEndpoint.endpoint("tcp://host/"))
         // TLS schemes → tls flag + default 8883 when no explicit port
         assertEquals(BrokerEndpoint.Endpoint("host", 8883, true, "ssl"), BrokerEndpoint.endpoint("ssl://host"))
         assertEquals(BrokerEndpoint.Endpoint("host", 8883, true, "mqtts"), BrokerEndpoint.endpoint("mqtts://host"))
@@ -47,6 +52,31 @@ class BrokerEndpointTest {
     @Test fun rejectsEmpty() {
         assertNull(BrokerEndpoint.parse(""))
         assertNull(BrokerEndpoint.parse("   "))
+    }
+
+    @Test fun normalizesOnlyTheHarmlessRootPath() {
+        assertEquals("tcp://broker.example:1883", BrokerEndpoint.normalize(" tcp://broker.example:1883/ "))
+        assertEquals("broker.example", BrokerEndpoint.normalize("broker.example/"))
+        assertNull(BrokerEndpoint.normalize("tcp://broker.example:1883/mqtt"))
+    }
+
+    @Test fun rejectsUnsupportedSchemesInsteadOfDowngradingThemToPlaintextMqtt() {
+        assertNull(BrokerEndpoint.endpoint("wss://broker.example:1883"))
+        assertNull(BrokerEndpoint.endpoint("https://broker.example:1883"))
+        assertNull(BrokerEndpoint.endpoint("ws://broker.example"))
+    }
+
+    @Test fun rejectsInvalidExplicitPortsAndNonEndpointUrlComponents() {
+        listOf(
+            "tcp://broker.example:0",
+            "tcp://broker.example:65536",
+            "mqtts://broker.example:",
+            "tcp://user:password@broker.example:1883",
+            "tcp://broker.example:1883/mqtt",
+            "tcp://broker.example:1883//",
+            "tcp://broker.example:1883?client=panel",
+            "tcp://broker.example:1883#fragment",
+        ).forEach { assertNull(it, BrokerEndpoint.endpoint(it)) }
     }
 
     @Test fun defaultsPortWhenAbsentOrBad() {

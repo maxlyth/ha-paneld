@@ -10,7 +10,10 @@ import java.util.Locale
 object SettingValue {
 
     fun validate(spec: SettingSpec, raw: String): Validation {
-        val v = raw.trim()
+        // Passwords are opaque credential bytes represented as a String. Leading/trailing spaces are
+        // valid MQTT password content and must survive export/import/restore exactly; all other setting
+        // types retain their historical whitespace normalization.
+        val v = if (spec.type == SettingType.PASSWORD) raw else raw.trim()
         val typed: Validation = when (spec.type) {
             SettingType.BOOL -> {
                 val b = parseBool(v) ?: return Validation.Bad("${spec.key}: expected a boolean")
@@ -20,8 +23,13 @@ object SettingValue {
                 val n = v.toLongOrNull() ?: return Validation.Bad("${spec.key}: expected an integer")
                 rangeCheck(spec, n.toDouble()) ?: Validation.Ok(n.toString())
             }
+            SettingType.LONG -> {
+                val n = v.toLongOrNull() ?: return Validation.Bad("${spec.key}: expected an integer")
+                rangeCheck(spec, n.toDouble()) ?: Validation.Ok(n.toString())
+            }
             SettingType.FLOAT -> {
                 val f = v.toDoubleOrNull() ?: return Validation.Bad("${spec.key}: expected a number")
+                if (!f.isFinite()) return Validation.Bad("${spec.key}: expected a finite number")
                 rangeCheck(spec, f) ?: Validation.Ok(trimFloat(f))
             }
             SettingType.ENUM -> {

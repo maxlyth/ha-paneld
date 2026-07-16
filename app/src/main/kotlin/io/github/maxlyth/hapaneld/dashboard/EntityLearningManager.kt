@@ -25,6 +25,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.sync.Mutex
@@ -70,12 +71,27 @@ class EntityLearningManager(
     @Volatile private var performanceSummaryAt = 0L
     @Volatile private var performanceSummary = "[]"
     @Volatile private var performanceSummaryTarget = ""
+    @Volatile private var initialized = false
+    @Volatile private var closed = false
+    private var periodicJob: Job? = null
 
     fun start() {
+        if (!shouldInitializeEntityLearningOnStart(config.dashboardEntityLearningEnabled)) return
+        ensureInitialized()
+    }
+
+    /** Lazily open and inspect the rebuildable catalog only when learning or an admin surface needs it. */
+    private fun ensureInitialized(): Boolean = synchronized(this) {
+        check(!closed) { "entity-learning manager is closed" }
+        if (initialized) {
+            ensurePeriodicSyncLocked()
+            return@synchronized false
+        }
         prepareCurrentTarget()
         val resolverMigration = applyDefaultResolverMigration()
         refreshTargetDiagnostics()
-        schedulePeriodicSync()
+        initialized = true
+        ensurePeriodicSyncLocked()
         val snapshot = store.snapshot(instance(), dashboardPath())
         if (shouldSyncEntityLearningOnStartup(
                 config.dashboardEntityLearningEnabled,
@@ -89,6 +105,7 @@ class EntityLearningManager(
                 "startup"
             })
         }
+        true
     }
 
     private fun applyDefaultResolverMigration(): DashboardEntityDefaultResolverMigration {
@@ -116,19 +133,28 @@ class EntityLearningManager(
         }.getOrDefault("[]")
     }
 
-    private fun schedulePeriodicSync() {
-        scope.launch {
+    private fun ensurePeriodicSyncLocked() {
+        if (!config.dashboardEntityLearningEnabled || periodicJob?.isActive == true) return
+        periodicJob = scope.launch {
             while (true) {
                 delay(HOURLY_CHECK_MS)
                 if (!config.dashboardEntityLearningEnabled || BuiltinDashboard.screenAwakeNow) continue
                 val s = store.snapshot(instance(), dashboardPath())
+                if (!isActive || !config.dashboardEntityLearningEnabled) continue
                 if (System.currentTimeMillis() - s.lastSyncAt >= DAILY_SYNC_MS) syncNow("daily")
             }
         }
     }
 
+    private fun cancelPeriodicSyncLocked() {
+        periodicJob?.cancel()
+        periodicJob = null
+    }
+
     fun close() {
         synchronized(this) {
+            closed = true
+            cancelPeriodicSyncLocked()
             effectGeneration.incrementAndGet()
             promotionJob?.cancel()
             promotionJob = null
@@ -148,12 +174,14 @@ class EntityLearningManager(
         }
         // Cancellation cannot interrupt a synchronous SQLite transaction. The generation check keeps
         // a not-yet-started flush out, while this gate waits for an already-started bounded flush.
-        telemetryStoreGate.withStore { store.close() }
+        if (initialized) telemetryStoreGate.withStore { store.close() }
     }
 
     /** Rebind owner-scoped state before a renderer is relaunched for a new HA URL/dashboard. */
     fun onTargetConfigurationChanged() {
         synchronized(this) {
+            if (!initialized && !config.dashboardEntityLearningEnabled) return
+            ensureInitialized()
             invalidateEffects(cancelSync = true)
             runCatching { prepareCurrentTarget() }
                 .onFailure { Log.w(TAG, "entity-learning target preparation failed: ${it.message}") }
@@ -175,10 +203,12 @@ class EntityLearningManager(
     /** Safe native-screen summary. Never return the stored exception text: it can contain target
      * details, while the renderer hold only needs to distinguish credential repair from retry. */
     fun bootstrapProblem(): EntityBootstrapProblem? = runCatching {
+        if (config.dashboardEntityLearningEnabled) ensureInitialized()
+        if (!initialized) return@runCatching null
         store.snapshot(instance(), dashboardPath()).let { classifyEntityBootstrapProblem(it.state, it.error) }
     }.getOrNull()
 
-    fun setEnabled(enabled: Boolean): Boolean {
+    fun setEnabled(enabled: Boolean): Boolean = withEntityLearningMutationLock(this) {
         val wasEnabled = config.dashboardEntityLearningEnabled
         // A new opt-in clears a stale activation latch. Synchronization may bootstrap an empty
         // installation narrowly, but it never silently replaces a stored manual list. Disable mode
@@ -188,10 +218,21 @@ class EntityLearningManager(
             clearApplied = !enabled || !wasEnabled,
         )
         if (!committed) return false
-        invalidateEffects()
+        val newlyInitialized = if (enabled) {
+            initializeEntityLearningAfterEffectInvalidation(
+                invalidate = { invalidateEffects() },
+                initialize = { ensureInitialized() },
+            )
+        } else {
+            cancelPeriodicSyncLocked()
+            invalidateEffects()
+            false
+        }
         if (enabled) {
-            val resolverMigration = applyDefaultResolverMigration()
-            if (resolverMigration != DashboardEntityDefaultResolverMigration.PERSIST_FAILED) {
+            val resolverMigration = if (newlyInitialized) null else applyDefaultResolverMigration()
+            if (resolverMigration != DashboardEntityDefaultResolverMigration.PERSIST_FAILED &&
+                !newlyInitialized
+            ) {
                 syncNow(if (resolverMigration == DashboardEntityDefaultResolverMigration.REBOOTSTRAP) {
                     "default-resolver-enable"
                 } else {
@@ -204,14 +245,15 @@ class EntityLearningManager(
             onFilterChanged()
         } else {
             resetBootstrapPending = false
-            store.markStatus(instance(), dashboardPath(), "disabled")
+            if (initialized) store.markStatus(instance(), dashboardPath(), "disabled")
             onFilterChanged()
         }
-        return true
+        true
     }
 
     /** Explicitly promote the policy-selected evidence set, primarily for existing manual filters. */
     @Synchronized fun activate(confirm: Boolean): String {
+        ensureInitialized()
         require(config.dashboardEntityLearningEnabled) { "automatic learning is not enabled" }
         require(canActivateLearnedEntitySet(config.dashboardEntityDefaultResolverRebootstrapPending)) {
             "a fresh default-dashboard scan must complete before activation"
@@ -238,6 +280,7 @@ class EntityLearningManager(
     }
 
     fun syncNow(reason: String = "manual"): Boolean = synchronized(this) {
+        ensureInitialized()
         if (syncJob?.isActive == true) return@synchronized false
         val requestGeneration = effectGeneration.get()
         syncJob = scope.launch {
@@ -615,6 +658,7 @@ class EntityLearningManager(
     }
 
     private fun applyOverrides(ids: List<String>, override: String, force: Boolean) = synchronized(this) {
+        ensureInitialized()
         require(override in setOf("auto", "pinned", "forced_exclude")) { "invalid override" }
         require(override != "forced_exclude" || force) { "force confirmation required" }
         val previousOverrides = config.dashboardEntityOverrides
@@ -645,6 +689,7 @@ class EntityLearningManager(
     /** Tester recovery/reset: discard derived dashboard evidence, never credentials or the HA catalog. */
     fun resetEvidence(confirm: Boolean, clearFilter: Boolean = false): String {
         if (!confirm) return JSONObject().put("ok", false).put("confirmation_required", true).toString()
+        ensureInitialized()
         check(syncJob?.isActive != true) { "synchronization is running" }
         check(config.commitDashboardEntityEvidenceReset(clearFilter)) { "failed to reset entity-learning preferences" }
         telemetryWriteBarrier.invalidateAndWrite(
@@ -670,6 +715,7 @@ class EntityLearningManager(
 
     /** Change which evidence sources may promote entities. Collection and review continue regardless. */
     @Synchronized fun setPromotionPolicy(staticRefs: Boolean, runtimeRefs: Boolean): String {
+        ensureInitialized()
         val applied = config.dashboardEntityLearningApplied
         val active = desiredIds(
             System.currentTimeMillis(),
@@ -690,6 +736,7 @@ class EntityLearningManager(
     }
 
     fun statusJson(): String {
+        ensureInitialized()
         val span = FeatureCosts.registry.span(FeatureCostOperation.ENTITY_STATUS_READ)
         try {
             val currentInstance = instance()
@@ -752,6 +799,7 @@ class EntityLearningManager(
     }
 
     fun issuesJson(): String {
+        ensureInitialized()
         val s = store.snapshot(instance(), dashboardPath())
         return JSONObject()
             .put("items", JSONArray(store.issuesJson(instance(), dashboardPath())))
@@ -763,6 +811,7 @@ class EntityLearningManager(
     }
 
     @Synchronized fun setIssueIgnored(fingerprint: String, ignored: Boolean): String {
+        ensureInitialized()
         val targetInstance = instance()
         val targetPath = dashboardPath()
         invalidateEffects()
@@ -776,6 +825,7 @@ class EntityLearningManager(
     }
 
     @Synchronized fun ignoreAllBlockingIssues(): Boolean {
+        ensureInitialized()
         val targetInstance = instance()
         val targetPath = dashboardPath()
         val issues = JSONArray(store.issuesJson(targetInstance, targetPath))
@@ -804,6 +854,7 @@ class EntityLearningManager(
         sort: String = "entity_id",
         direction: String = "asc",
     ): String {
+        ensureInitialized()
         val subscribed = filter == "subscribed"
         val review = filter == "review"
         val filtered = config.dashboardEntityFilterEnabled
@@ -840,6 +891,7 @@ class EntityLearningManager(
 
     fun performanceSummaryJson(): String {
         if (!config.dashboardEntityLearningEnabled) return "[]"
+        ensureInitialized()
         val now = System.currentTimeMillis()
         val targetInstance = instance()
         val targetPath = dashboardPath()
@@ -864,6 +916,7 @@ class EntityLearningManager(
     }
 
     fun writeExportJson(writer: java.io.Writer) {
+        ensureInitialized()
         store.writeExportJson(instance(), dashboardPath(), writer)
     }
 
@@ -1535,6 +1588,27 @@ internal class DeadlineBoundedInputStream(
         if (Thread.currentThread().isInterrupted) throw InterruptedIOException("states response read cancelled")
         if (nanoTime() - startedAt >= deadlineNanos) throw SocketTimeoutException("states response read deadline exceeded")
     }
+}
+
+/** Serialize compound entity-learning preference mutations on the manager's intrinsic monitor. */
+internal inline fun <T> withEntityLearningMutationLock(owner: Any, mutation: () -> T): T =
+    synchronized(owner, mutation)
+
+internal fun shouldInitializeEntityLearningOnStart(enabled: Boolean): Boolean = enabled
+
+/**
+ * Retire an old effect generation before lazy initialization can start its owned bootstrap sync.
+ *
+ * Reversing this order cancels the fresh sync immediately and leaves a first-time opt-in held until
+ * the hourly maintenance loop. Keep the ordering behind a small pure seam so the lifecycle contract
+ * remains deterministic without opening the SQLite-backed manager in a unit test.
+ */
+internal inline fun initializeEntityLearningAfterEffectInvalidation(
+    invalidate: () -> Unit,
+    initialize: () -> Boolean,
+): Boolean {
+    invalidate()
+    return initialize()
 }
 
 internal data class EntityLearningEffectState(

@@ -1,5 +1,9 @@
 package io.github.maxlyth.hapaneld.control
 
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -119,6 +123,35 @@ class ZigbeeHealthMonitorTest {
         }
     }
 
+    @Test fun sampledDownTransitionsStillCountDifferentPidRestarts() {
+        val policy = ZigbeeHealthPolicy(startupGraceMs = 0)
+        policy.resetGrace(1)
+        var now = 2L
+        var decision = policy.evaluate(now++, true, observation(pid = 10, cpu = 2.0))
+        listOf(11, 12, 13).forEach { pid ->
+            decision = policy.evaluate(now++, true, observation(pid = null, cpu = null))
+            assertFalse(decision.shouldContain)
+            decision = policy.evaluate(now++, true, observation(pid = pid, cpu = 2.0))
+        }
+        assertEquals(3, decision.restartCount)
+        assertTrue(decision.shouldContain)
+    }
+
+    @Test fun startupAndConfiguredOffPidChangesDoNotCountAsRestarts() {
+        val policy = ZigbeeHealthPolicy(startupGraceMs = 100)
+        policy.resetGrace(1)
+        policy.evaluate(2, true, observation(pid = 10))
+        policy.evaluate(3, true, observation(pid = null))
+        assertEquals(0, policy.evaluate(4, true, observation(pid = 11)).restartCount)
+        assertEquals(0, policy.evaluate(101, true, observation(pid = 11)).restartCount)
+
+        policy.evaluate(102, false, observation(pid = 12))
+        policy.evaluate(103, false, observation(pid = null))
+        assertEquals(0, policy.evaluate(104, false, observation(pid = 13)).restartCount)
+        policy.resetGrace(104)
+        assertEquals(0, policy.evaluate(205, true, observation(pid = 13)).restartCount)
+    }
+
     @Test fun joinedHighCpuWarnsWithoutContainment() {
         val policy = ZigbeeHealthPolicy(startupGraceMs = 0)
         policy.resetGrace(1)
@@ -182,9 +215,150 @@ class ZigbeeHealthMonitorTest {
         repeat(6) { monitor.sample() }
         assertEquals(1, contains)
         monitor.explicitRetry()
+        assertTrue(monitor.awaitIdleForTest())
         repeat(6) { monitor.sample() }
         assertEquals(2, contains)
         monitor.stop()
+    }
+
+    @Test fun explicitRetryWaitsBehindActiveSampleAndCannotRacePolicyState() {
+        val sampleEntered = CountDownLatch(1)
+        val releaseSample = CountDownLatch(1)
+        val retryPublished = CountDownLatch(1)
+        val source = object : ZigbeeGatewayHealthSource {
+            override fun observe(): ZigbeeGatewayObservation {
+                sampleEntered.countDown()
+                assertTrue(releaseSample.await(2, TimeUnit.SECONDS))
+                return observation()
+            }
+
+            override fun contain(layout: ZigbeeGatewayLayout) = ZigbeeContainmentResult.FAILED
+        }
+        val monitor = ZigbeeHealthMonitor(
+            configuredOn = { true },
+            source = source,
+            onContain = {},
+            onSnapshot = { snapshot, _ ->
+                if (snapshot.state == ZigbeeHealthState.STARTING && snapshot.observedAtMs > 0L) {
+                    retryPublished.countDown()
+                }
+            },
+            nowMs = generateSequence(1L) { it + 1L }.iterator()::next,
+            policy = ZigbeeHealthPolicy(startupGraceMs = 0),
+        )
+        try {
+            monitor.start()
+            assertTrue(sampleEntered.await(2, TimeUnit.SECONDS))
+            monitor.explicitRetry()
+            assertFalse(retryPublished.await(100, TimeUnit.MILLISECONDS))
+            releaseSample.countDown()
+            assertTrue(retryPublished.await(2, TimeUnit.SECONDS))
+            assertTrue(monitor.awaitIdleForTest())
+            assertEquals(ZigbeeHealthState.STARTING, monitor.snapshot().state)
+        } finally {
+            releaseSample.countDown()
+            monitor.stop()
+        }
+    }
+
+    @Test fun stoppedMonitorSuppressesBlockedSampleContainmentAndPublication() {
+        val sampleEntered = CountDownLatch(1)
+        val releaseSample = CountDownLatch(1)
+        var contains = 0
+        var snapshots = 0
+        val source = object : ZigbeeGatewayHealthSource {
+            override fun observe(): ZigbeeGatewayObservation {
+                sampleEntered.countDown()
+                while (true) {
+                    try {
+                        releaseSample.await()
+                        break
+                    } catch (_: InterruptedException) {
+                        // Model a root probe which does not honour executor interruption.
+                    }
+                }
+                return observation(
+                    cpu = 90.0,
+                    role = null,
+                    netInfo = ZigbeeNetInfo(0, 0, 0xffff),
+                )
+            }
+
+            override fun contain(layout: ZigbeeGatewayLayout): ZigbeeContainmentResult {
+                contains++
+                return ZigbeeContainmentResult.COMPLETE
+            }
+        }
+        val monitor = ZigbeeHealthMonitor(
+            configuredOn = { true },
+            source = source,
+            onContain = { contains++ },
+            onSnapshot = { _, _ -> snapshots++ },
+            nowMs = { 1L },
+            policy = ZigbeeHealthPolicy(startupGraceMs = 0, requiredHighCpuSamples = 1),
+        )
+        monitor.start()
+        assertTrue(sampleEntered.await(2, TimeUnit.SECONDS))
+
+        val stopThread = Thread(monitor::stop).apply { start() }
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2)
+        while (monitor.lifecycleGeneration() == 1L && System.nanoTime() < deadline) Thread.yield()
+        assertTrue(monitor.lifecycleGeneration() > 1L)
+        releaseSample.countDown()
+        stopThread.join(2_000)
+
+        assertFalse(stopThread.isAlive)
+        assertEquals(0, contains)
+        assertEquals(0, snapshots)
+        assertEquals(ZigbeeHealthState.UNKNOWN, monitor.snapshot().state)
+    }
+
+    @Test fun slowObservationIsFollowedByAFullDelayInsteadOfACatchUpBurst() {
+        val calls = AtomicInteger()
+        val firstEntered = CountDownLatch(1)
+        val releaseFirst = CountDownLatch(1)
+        val secondEntered = CountDownLatch(1)
+        val firstCompletedAt = AtomicLong()
+        val secondStartedAt = AtomicLong()
+        val intervalMs = 100L
+        val source = object : ZigbeeGatewayHealthSource {
+            override fun observe(): ZigbeeGatewayObservation {
+                when (calls.incrementAndGet()) {
+                    1 -> {
+                        firstEntered.countDown()
+                        assertTrue(releaseFirst.await(2, TimeUnit.SECONDS))
+                        firstCompletedAt.set(System.nanoTime())
+                    }
+                    2 -> {
+                        secondStartedAt.set(System.nanoTime())
+                        secondEntered.countDown()
+                    }
+                }
+                return observation()
+            }
+
+            override fun contain(layout: ZigbeeGatewayLayout) = ZigbeeContainmentResult.FAILED
+        }
+        val monitor = ZigbeeHealthMonitor(
+            configuredOn = { true },
+            source = source,
+            onContain = {},
+            onSnapshot = { _, _ -> },
+            sampleIntervalMs = intervalMs,
+        )
+        try {
+            monitor.start()
+            assertTrue(firstEntered.await(2, TimeUnit.SECONDS))
+            Thread.sleep(intervalMs * 2)
+            releaseFirst.countDown()
+            assertTrue(secondEntered.await(2, TimeUnit.SECONDS))
+
+            val quietMs = TimeUnit.NANOSECONDS.toMillis(secondStartedAt.get() - firstCompletedAt.get())
+            assertTrue("slow sample must still be followed by the full quiet interval: ${quietMs}ms", quietMs >= 75L)
+        } finally {
+            releaseFirst.countDown()
+            monitor.stop()
+        }
     }
 
     @Test fun startIsIdempotentAcrossDuplicateServiceCommands() {

@@ -97,12 +97,14 @@ class ConfigPostBodyTest {
             append("ha_expose_wake_on_wave", "0")
             append("tame_vendor_packages", "com.vendor.one, com.vendor.two com.vendor.one")
             append("ha_token_expiry", "42")
+            append("mqtt_password", "  exact password  ")
         }) as ConfigPostParameters.Ok
         assertEquals("Hall Panel", result.values["friendly_name"])
         assertEquals("true", result.values["dashboard_fullscreen"])
         assertEquals("false", result.values["ha_expose_wake_on_wave"])
         assertEquals("com.vendor.one com.vendor.two", result.values["tame_vendor_packages"])
         assertEquals("42", result.values["ha_token_expiry"])
+        assertEquals("  exact password  ", result.values["mqtt_password"])
     }
 
     @Test fun `direct config admission rejects invalid or amplifying values atomically`() {

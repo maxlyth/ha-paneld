@@ -4,9 +4,45 @@ import io.github.maxlyth.hapaneld.metrics.FeatureCostOperation
 import io.github.maxlyth.hapaneld.metrics.FeatureCostRegistry
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 
 class EntityBrowserObserverCostTest {
+    @Test fun disabledMeasurementArmDoesNotInstallDashboardTrafficObserver() {
+        assertFalse(shouldInstallDashboardTrafficObserver(
+            featureCostsEnabled = false,
+            filterLeasePresent = true,
+        ))
+        assertFalse(shouldInstallDashboardTrafficObserver(
+            featureCostsEnabled = true,
+            filterLeasePresent = false,
+        ))
+        assertTrue(shouldInstallDashboardTrafficObserver(
+            featureCostsEnabled = true,
+            filterLeasePresent = true,
+        ))
+    }
+
+    @Test fun dashboardInstallSiteUsesTheBuildArmBeforeConstructingObserverScript() {
+        val source = listOf(
+            File("src/main/kotlin/io/github/maxlyth/hapaneld/DashboardActivity.kt"),
+            File("app/src/main/kotlin/io/github/maxlyth/hapaneld/DashboardActivity.kt"),
+        ).first(File::isFile).readText()
+        val observer = source.substring(
+            source.indexOf("shouldInstallDashboardTrafficObserver("),
+            source.indexOf("if (config.dashboardEntityLearningEnabled)"),
+        )
+
+        assertTrue("build flag must gate the observer install", "BuildConfig.FEATURE_COSTS_ENABLED" in observer)
+        assertTrue(
+            "observer script construction must remain behind the build-arm guard",
+            observer.indexOf("BuildConfig.FEATURE_COSTS_ENABLED") <
+                observer.indexOf("trafficObserverDocumentStartScript"),
+        )
+    }
+
     @Test fun browserPressureIsReportedThroughFixedFeatureCostOperation() {
         val registry = FeatureCostRegistry({ 0L }, { -1L }, { 1L })
 

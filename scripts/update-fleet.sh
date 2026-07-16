@@ -30,7 +30,22 @@ release_apk_url() { printf 'https://github.com/%s/releases/download/%s/%s\n' "$R
 [ -f "$PROVISION" ] || { echo "${RED}provision.sh not found next to this script${X}" >&2; exit 1; }
 TEMP_PATHS=()
 cleanup() { local path; for path in "${TEMP_PATHS[@]}"; do rm -rf "$path"; done; }
+pids=()
+stop_workers() {
+  local pid
+  for pid in "${pids[@]}"; do kill -TERM "$pid" >/dev/null 2>&1 || true; done
+  for pid in "${pids[@]}"; do wait "$pid" >/dev/null 2>&1 || true; done
+  pids=()
+}
+handle_signal() {
+  local status="$1"
+  trap - INT TERM
+  stop_workers
+  exit "$status"
+}
 trap cleanup EXIT
+trap 'handle_signal 130' INT
+trap 'handle_signal 143' TERM
 
 # Split args at `--` into pass-through provision args and the panel list.
 PARGS=(); PANELS=(); seen_dd=0
@@ -115,15 +130,49 @@ if [ "$have_apk" = 0 ]; then
 fi
 
 run_dir="$(mktemp -d)"; TEMP_PATHS+=("$run_dir")
-targets=(); pids=()
+targets=()
 for p in "${PANELS[@]}"; do
   t="$p"
   targets+=("$t")
   index=$((${#targets[@]} - 1))
   # One process per panel keeps an eight-panel home fleet fast while every panel still gets the full
   # install/start/verify transaction. Output is isolated and replayed per panel below.
-  ( if bash "$PROVISION" "$t" "${PARGS[@]}" --force </dev/null; then echo 0 > "$run_dir/$index.status";
-    else echo 1 > "$run_dir/$index.status"; fi ) > "$run_dir/$index.log" 2>&1 &
+  (
+    provision_pid=""
+    provision_pgid=""
+    terminate_provision_group() {
+      local deadline
+      [ -z "$provision_pgid" ] || kill -TERM -- "-$provision_pgid" >/dev/null 2>&1 || true
+      deadline=$((SECONDS + 3))
+      while [ -n "$provision_pgid" ] && kill -0 -- "-$provision_pgid" >/dev/null 2>&1 &&
+            [ "$SECONDS" -lt "$deadline" ]; do
+        sleep 0.1
+      done
+      [ -z "$provision_pgid" ] || kill -KILL -- "-$provision_pgid" >/dev/null 2>&1 || true
+      [ -z "$provision_pid" ] || wait "$provision_pid" >/dev/null 2>&1 || true
+      provision_pid=""
+      provision_pgid=""
+    }
+    stop_provisioner() {
+      local status="$1"
+      trap - INT TERM
+      terminate_provision_group
+      exit "$status"
+    }
+    trap 'stop_provisioner 130' INT
+    trap 'stop_provisioner 143' TERM
+    # Job control assigns the provisioner its own process group even in this non-interactive worker.
+    # Signalling that group owns synchronous adb/curl children as well as the subprocesses provision.sh
+    # tracks explicitly, so interruption cannot wait indefinitely on or orphan a foreground mutation.
+    set -m
+    bash "$PROVISION" "$t" "${PARGS[@]}" --force </dev/null &
+    provision_pid=$!
+    provision_pgid=$provision_pid
+    if wait "$provision_pid"; then status=0; else status=$?; fi
+    provision_pid=""
+    provision_pgid=""
+    echo "$status" > "$run_dir/$index.status"
+  ) > "$run_dir/$index.log" 2>&1 &
   pids+=("$!")
 done
 

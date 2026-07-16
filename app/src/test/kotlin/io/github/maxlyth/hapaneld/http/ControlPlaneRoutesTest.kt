@@ -139,10 +139,18 @@ class ControlPlaneRoutesTest {
             }
         }
 
+        assertJsonPost(
+            "include_companion=true",
+            HttpStatusCode.BadRequest,
+            """{"ok":false,"error":"passphrase-required","message":"A backup contains credentials. Supply a passphrase, or explicitly acknowledge plaintext export with allow_plaintext=1."}""",
+            path = "/api/v1/backup",
+        )
+        assertEquals(emptyList<Pair<Boolean, String>>(), buildCalls)
+
         val held = assertNotNullTicket(InstallProgress.start("held"))
         try {
             assertJsonPost(
-                "include_companion=true",
+                "include_companion=true&passphrase=protected",
                 HttpStatusCode.Conflict,
                 """{"ok":false,"error":"busy"}""",
                 path = "/api/v1/backup",
@@ -160,7 +168,7 @@ class ControlPlaneRoutesTest {
 
         build = { _, _ -> throw ByteLimitExceeded(32) }
         assertJsonPost(
-            "include_companion=1",
+            "include_companion=1&allow_plaintext=1",
             HttpStatusCode.PayloadTooLarge,
             """{"ok":false,"error":"companion-backup-too-large"}""",
             path = "/api/v1/backup",
@@ -169,7 +177,7 @@ class ControlPlaneRoutesTest {
 
         build = { _, _ -> throw CompanionBackupUnavailable("Companion needs \"su\"") }
         assertJsonPost(
-            "include_companion=true",
+            "include_companion=true&allow_plaintext=true",
             HttpStatusCode.UnprocessableEntity,
             """{"ok":false,"error":"Companion needs \"su\""}""",
             path = "/api/v1/backup",
@@ -201,6 +209,23 @@ class ControlPlaneRoutesTest {
         assertArrayEquals(byteArrayOf(7, 8, 9), success.bodyAsBytes())
         assertFalse("slow delivery does not monopolize the destructive operation lane", laneHeldWhenArtifactDeleted)
         assertTrue("artifact lifetime remains inside the single-delivery gate", deliveryHeldWhenArtifactDeleted)
+        assertOperationLaneReleased()
+
+        build = { includeCompanion, passphrase ->
+            assertFalse(includeCompanion)
+            assertEquals("", passphrase)
+            PanelBackup.Artifact(
+                temporary.newFile("plaintext-backup.zip").apply { writeBytes(byteArrayOf(4, 5, 6)) },
+                "zip",
+            )
+        }
+        val plaintext = client.post("/api/v1/backup") {
+            contentType(ContentType.Application.FormUrlEncoded)
+            setBody("include_companion=false&allow_plaintext=1")
+        }
+        assertEquals(HttpStatusCode.OK, plaintext.status)
+        assertEquals("attachment; filename=\"test-panel-backup.zip\"", plaintext.headers[HttpHeaders.ContentDisposition])
+        assertArrayEquals(byteArrayOf(4, 5, 6), plaintext.bodyAsBytes())
         assertOperationLaneReleased()
     }
 

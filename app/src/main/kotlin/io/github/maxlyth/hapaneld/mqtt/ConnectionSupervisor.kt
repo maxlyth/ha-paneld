@@ -45,8 +45,12 @@ class ConnectionSupervisor(
             // AuthRecovery owns this failure class with a bounded fresh-client schedule. The generic
             // watchdog must neither stack retries nor flip address families for credential rejection.
             isAuthRecoveryState(state) -> { staleTicks = 0; return Action.None }
+            state == DISABLED || state == CONFIG_ERROR -> {
+                staleTicks = 0
+                return Action.None
+            }
             state != DISABLED && lastOkMs != 0L && sinceOkMs > staleMs -> { staleTicks = 0; "liveness" }
-            state == CONNECTED || state == DISABLED -> { staleTicks = 0; return Action.None }
+            state == CONNECTED -> { staleTicks = 0; return Action.None }
             else -> {
                 staleTicks++
                 if (staleTicks >= STUCK_TICKS) { staleTicks = 0; "state" } else return Action.None
@@ -63,19 +67,20 @@ class ConnectionSupervisor(
         const val STUCK_TICKS = 2
         private const val CONNECTED = "connected"
         private const val DISABLED = "disabled"
+        private const val CONFIG_ERROR = "config-error"
     }
 }
 
 /**
- * Generation-aware admission for sacrificial MQTT heartbeat threads.
+ * Connection-generation-aware admission for sacrificial MQTT heartbeat threads.
  *
- * A live heartbeat suppresses another probe only while it belongs to the current runtime. Once runtime
- * replacement advances the generation, that old client may remain wedged forever; the replacement still
- * needs exactly one heartbeat thread of its own so its broker liveness can be established.
+ * A live heartbeat suppresses another probe only while it belongs to the current transport connection.
+ * Once an in-place reconnect or runtime replacement advances the connection generation, the old client
+ * may remain wedged forever; the replacement still needs exactly one heartbeat thread of its own.
  */
 internal object HeartbeatAdmission {
     sealed interface Decision {
-        data object NoCurrentRuntime : Decision
+        data object NoCurrentConnection : Decision
         data object CurrentHeartbeatAlive : Decision
         data class Admit(val generation: Long, val replacingStranded: Boolean) : Decision
         data class EscalateRecovery(val strandedGenerations: Int) : Decision
@@ -86,7 +91,7 @@ internal object HeartbeatAdmission {
         liveTrackedGenerations: Collection<Long>,
         maxStrandedGenerations: Int = MAX_STRANDED_GENERATIONS,
     ): Decision {
-        currentGeneration ?: return Decision.NoCurrentRuntime
+        currentGeneration ?: return Decision.NoCurrentConnection
         if (currentGeneration in liveTrackedGenerations) {
             return Decision.CurrentHeartbeatAlive
         }
@@ -101,4 +106,27 @@ internal object HeartbeatAdmission {
     }
 
     const val MAX_STRANDED_GENERATIONS = 2
+}
+
+/**
+ * Process-unique identity for one concrete MQTT transport connection attempt.
+ *
+ * A service runtime can rebuild its HiveMQ client in place, so the service runtime generation is too
+ * coarse for sacrificial heartbeat ownership: a heartbeat wedged on the retired client must not suppress
+ * a probe on its replacement. Every successful broker connection advances this identity, including
+ * HiveMQ-managed automatic reconnects that reuse the same transport client.
+ */
+internal class MqttConnectionGeneration {
+    @Volatile private var current = 0L
+
+    fun advance(): Long = NEXT.incrementAndGet().also { current = it }
+    fun currentOrNull(): Long? = current.takeIf { it > 0L }
+    fun isCurrent(generation: Long): Boolean = generation > 0L && current == generation
+    fun clear() {
+        current = 0L
+    }
+
+    private companion object {
+        val NEXT = java.util.concurrent.atomic.AtomicLong()
+    }
 }

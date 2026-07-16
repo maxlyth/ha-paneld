@@ -91,23 +91,50 @@ object PerfReader {
     fun touch() { lastAccessAt = android.os.SystemClock.elapsedRealtime() }
 
     /** Start one owned sampling generation on [scope]. */
-    fun start(scope: CoroutineScope) {
+    fun start(scope: CoroutineScope) = startOwned(
+        scope = scope,
+        rootAvailable = { Su.availableIsolated() },
+        elapsedRealtime = { android.os.SystemClock.elapsedRealtime() },
+        pause = { delay(it) },
+    )
+
+    internal fun startForTest(
+        scope: CoroutineScope,
+        rootAvailable: () -> Boolean,
+        elapsedRealtime: () -> Long,
+        pause: suspend (Long) -> Unit,
+    ) = startOwned(scope, rootAvailable, elapsedRealtime, pause)
+
+    internal fun touchForTest(atMs: Long) {
+        lastAccessAt = atMs
+    }
+
+    private fun startOwned(
+        scope: CoroutineScope,
+        rootAvailable: () -> Boolean,
+        elapsedRealtime: () -> Long,
+        pause: suspend (Long) -> Unit,
+    ) {
         val runGeneration = synchronized(lifecycleLock) {
             if (generation != 0L) return
             resetStateLocked()
             (++nextGeneration).also { generation = it }
         }
         val candidate = scope.launch {
-            val available = runCatching { Su.availableIsolated() }.getOrDefault(false)
-            ifCurrent(runGeneration) { rootOk = available } ?: return@launch
+            var rootProbed = false
             while (isActive && isCurrent(runGeneration)) {
-                val now = android.os.SystemClock.elapsedRealtime()
+                val now = elapsedRealtime()
                 if (enabled && withinActiveWindow(now, lastAccessAt)) {
+                    if (!rootProbed) {
+                        val available = runCatching(rootAvailable).getOrDefault(false)
+                        ifCurrent(runGeneration) { rootOk = available } ?: return@launch
+                        rootProbed = true
+                    }
                     runCatching { tick(runGeneration) }
                 } else {
                     ifCurrent(runGeneration) { resetLocalBaselines() }
                 }
-                delay(INTERVAL_MS)
+                pause(INTERVAL_MS)
             }
         }
         synchronized(lifecycleLock) {

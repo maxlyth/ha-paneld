@@ -20,9 +20,10 @@ package io.github.maxlyth.hapaneld.http
  *
  * Scope note: [allowed] stops classic CSRF (a page POSTing to the panel's address) but not active
  * DNS-rebinding (which makes the request genuinely same-origin); [hostAllowed] covers rebinding via a
- * `Host` allowlist. GETs aren't origin-guarded (idempotent + cross-origin reads are CORS-blocked), but
- * they *are* host-guarded, since rebinding also enables reads. The higher-assurance path for an
- * untrusted network remains HA-token auth (security decision 3), deferred under the LAN-trust model.
+ * `Host` allowlist. Ordinary GETs aren't origin-guarded (idempotent + cross-origin reads are CORS-blocked),
+ * but active GETs that start privileged capture, subprocesses, sampling, or network refreshes additionally
+ * use [activeReadAllowed]. The higher-assurance path for an untrusted network remains HA-token auth
+ * (security decision 3), deferred under the LAN-trust model.
  */
 object OriginGuard {
     private val MUTATING = setOf("POST", "PUT", "PATCH", "DELETE")
@@ -40,6 +41,42 @@ object OriginGuard {
         val srcAuthority = authorityOf(src) ?: return false // present-but-unparseable origin → refuse
         val hostAuthority = host?.trim()?.ifEmpty { null } ?: return false // mutation with no Host → refuse
         return srcAuthority.equals(hostAuthority, ignoreCase = true)
+    }
+
+    /**
+     * Admission for GET routes whose response generation itself has a material side effect or cost.
+     * Browser Fetch Metadata fails closed for cross-site/same-site embedding, while same-origin UI
+     * requests and header-less LAN automation remain compatible. If a browser supplies Origin or
+     * Referer, it must name this request's Host.
+     */
+    fun activeReadAllowed(
+        origin: String?,
+        referer: String?,
+        host: String?,
+        fetchSite: String?,
+        userAgent: String? = null,
+    ): Boolean {
+        when (fetchSite?.trim()?.lowercase()) {
+            "cross-site", "same-site" -> return false
+            "same-origin", "none", null -> Unit
+            else -> return false
+        }
+        val src = origin?.takeIf { it.isNotBlank() } ?: referer?.takeIf { it.isNotBlank() }
+        if (src == null) {
+            // Older/privacy-configured browsers can suppress Referer and predate Fetch Metadata.
+            // Header-less automation remains supported, but a browser-shaped request must provide
+            // positive same-origin/explicit-navigation metadata before it may start active work.
+            return fetchSite != null || !looksLikeBrowser(userAgent)
+        }
+        val srcAuthority = authorityOf(src) ?: return false
+        val hostAuthority = host?.trim()?.ifEmpty { null } ?: return false
+        return srcAuthority.equals(hostAuthority, ignoreCase = true)
+    }
+
+    private fun looksLikeBrowser(userAgent: String?): Boolean {
+        val ua = userAgent?.lowercase().orEmpty()
+        return ua.contains("mozilla/") || ua.contains("chrome/") || ua.contains("chromium/") ||
+            ua.contains("safari/") || ua.contains("firefox/")
     }
 
     /** Extract `host[:port]` from an Origin (`scheme://host[:port]`) or a Referer (full URL). */

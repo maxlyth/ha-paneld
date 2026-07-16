@@ -8,9 +8,42 @@ import org.junit.Test
 class OriginGuardTest {
     private val host = "192.168.1.50:8888"
 
-    // --- reads are never guarded ---
+    // --- ordinary reads remain outside the CSRF gate ---
     @Test fun getIsAlwaysAllowedEvenCrossOrigin() =
         assertTrue(OriginGuard.allowed("GET", "http://evil.example", null, host))
+
+    @Test fun activeReadAllowsSameOriginBrowserAndHeaderlessLanClients() {
+        assertTrue(
+            OriginGuard.activeReadAllowed(
+                null,
+                "http://192.168.1.50:8888/configure",
+                host,
+                "same-origin",
+            ),
+        )
+        assertTrue(OriginGuard.activeReadAllowed(null, null, host, null))
+        assertTrue(OriginGuard.activeReadAllowed(null, null, host, "none"))
+    }
+
+    @Test fun activeReadRefusesOpaqueCrossOriginBrowserLoads() {
+        assertFalse(OriginGuard.activeReadAllowed(null, "http://evil.example/page", host, "cross-site"))
+        assertFalse(OriginGuard.activeReadAllowed(null, null, host, "same-site"))
+        assertFalse(OriginGuard.activeReadAllowed("http://evil.example", null, host, null))
+        assertFalse(
+            OriginGuard.activeReadAllowed(
+                null,
+                null,
+                host,
+                null,
+                "Mozilla/5.0 Chrome/120.0",
+            ),
+        )
+    }
+
+    @Test fun activeReadFailsClosedForMalformedBrowserMetadata() {
+        assertFalse(OriginGuard.activeReadAllowed("garbage", null, host, "same-origin"))
+        assertFalse(OriginGuard.activeReadAllowed("http://192.168.1.50:8888", null, null, "same-origin"))
+    }
 
     // --- non-browser API clients (curl, HA rest_command) send no Origin/Referer ---
     @Test fun writeWithNoOriginOrRefererAllowed() =

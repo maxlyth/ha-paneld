@@ -210,19 +210,25 @@
 
   window.doBackup = function (btn) {
     var pw = (document.getElementById('bk-pw') || {}).value || '';
+    var plain = !!((document.getElementById('bk-plain') || {}).checked);
     var comp = document.getElementById('bk-comp');
-    btn.disabled = true; bkMsg(pw ? 'Building encrypted backup…' : 'Building backup…');
+    if (!pw && !plain) {
+      bkMsg('Enter a passphrase, or explicitly acknowledge the unencrypted plaintext ZIP.');
+      return;
+    }
+    btn.disabled = true; bkMsg(pw ? 'Building encrypted backup…' : 'Building unencrypted ZIP…');
     fetch('/api/v1/backup', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: 'passphrase=' + encodeURIComponent(pw) + '&include_companion=' + (comp && comp.checked ? '1' : '0') })
+      body: 'passphrase=' + encodeURIComponent(pw) + '&allow_plaintext=' + (plain ? '1' : '0') +
+        '&include_companion=' + (comp && comp.checked ? '1' : '0') })
       .then(function (r) {
         if (r.ok) return r.blob();
-        return r.json().then(function (d) { throw new Error(d.error || 'request failed'); });
+        return r.json().then(function (d) { throw new Error(d.message || d.error || 'request failed'); });
       }).then(function (b) {
         var a = document.createElement('a'), url = URL.createObjectURL(b);
         var switcher = document.getElementById('pswitch'), panelName = switcher && switcher.dataset && switcher.dataset.selfName;
-        a.href = url; a.download = (panelName || document.title.split('·')[0] || 'panel').trim() + '-backup.' + (pw ? 'hpb' : 'json');
+        a.href = url; a.download = (panelName || document.title.split('·')[0] || 'panel').trim() + '-backup.' + (pw ? 'hpb' : 'zip');
         document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
-        bkMsg('Backup downloaded' + (pw ? ' (encrypted) — keep the passphrase.' : '.')); btn.disabled = false;
+        bkMsg('Backup downloaded' + (pw ? ' (encrypted) — keep the passphrase.' : ' (unencrypted ZIP).')); btn.disabled = false;
       }).catch(function (e) { bkMsg('Backup failed: ' + (e.message || 'request failed')); btn.disabled = false; });
   };
 

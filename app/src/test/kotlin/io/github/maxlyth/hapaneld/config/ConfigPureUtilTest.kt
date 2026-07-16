@@ -28,6 +28,24 @@ class ConfigBundleTest {
         assertEquals("a\\b\"c\nd", parsed.values["k"])
     }
 
+    @Test fun credentialBundlePreservesPasswordWhitespaceAndOauthExpiry() {
+        val values = mapOf(
+            "mqtt_password" to "  exact password bytes  ",
+            "ha_token_expiry" to "2345678901",
+        )
+        val parsed = ConfigBundle.parse(ConfigBundle.fromValues(values).serialize())!!
+
+        assertEquals("  exact password bytes  ", parsed.values["mqtt_password"])
+        assertEquals("2345678901", parsed.values["ha_token_expiry"])
+        assertEquals(
+            "  exact password bytes  ",
+            (SettingValue.validate(
+                SettingsRegistry.spec("mqtt_password")!!,
+                parsed.values.getValue("mqtt_password"),
+            ) as Validation.Ok).normalized,
+        )
+    }
+
     @Test fun malformedReturnsNull() {
         assertNull(ConfigBundle.parse("not json"))
         assertNull(ConfigBundle.parse("{\"kind\":"))

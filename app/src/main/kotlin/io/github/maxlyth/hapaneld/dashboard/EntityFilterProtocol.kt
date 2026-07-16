@@ -5,6 +5,11 @@ import org.json.JSONObject
 import java.net.URI
 import java.security.MessageDigest
 
+internal fun shouldInstallDashboardTrafficObserver(
+    featureCostsEnabled: Boolean,
+    filterLeasePresent: Boolean,
+): Boolean = featureCostsEnabled && filterLeasePresent
+
 /** Pure protocol helpers for the experimental panel-side Home Assistant entity subscription filter. */
 object EntityFilterProtocol {
     const val PATH = "/api/websocket"

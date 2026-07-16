@@ -43,6 +43,7 @@ import io.github.maxlyth.hapaneld.mqtt.MqttConnectConfig
 import io.github.maxlyth.hapaneld.mqtt.MqttFinalPublish
 import io.github.maxlyth.hapaneld.control.Diagnostics
 import io.github.maxlyth.hapaneld.mqtt.MqttTransport
+import io.github.maxlyth.hapaneld.mqtt.MqttConnectionGeneration
 import io.github.maxlyth.hapaneld.mqtt.classifyDisconnect
 import io.github.maxlyth.hapaneld.mqtt.AuthRecovery
 import io.github.maxlyth.hapaneld.mqtt.isAuthRecoveryState
@@ -245,11 +246,16 @@ class MqttBridge(
     @Volatile private var stopped = false
     private val stopLock = Any()
     private val lifecycleGeneration = AtomicLong()
+    private val connectionGeneration = MqttConnectionGeneration()
     private val commandDispatcher = MqttCommandDispatcher()
     private val discoveryAnnouncementLock = Any()
     private var buttonSubscription: ButtonBus.Subscription? = null
 
     fun isConnected(): Boolean = state == "connected"
+    internal fun heartbeatConnectionGeneration(): Long? =
+        if (stopped) null else connectionGeneration.currentOrNull()
+    internal fun isCurrentHeartbeatConnection(generation: Long): Boolean =
+        !stopped && connectionGeneration.isCurrent(generation)
 
     /** Monotonic timestamp (elapsedRealtime) of the last publish that the broker actually ACKed, plus
      *  every (re)connect. This is a TRUE liveness signal — unlike [state]/[isConnected], which reflect
@@ -285,6 +291,7 @@ class MqttBridge(
      *  omits). This is the row a /diag dump needs to answer "is this panel broker-connected?". */
     fun statusPublic(): String {
         if (state == "disabled") return "disabled"
+        if (state == "config-error") return "config-error · invalid or unsupported broker URL"
         val age = if (lastOkMs == 0L) "never" else "${msSinceLastOk() / 1000}s ago"
         val transport = if (tlsActive) "TLS" else "TCP"
         val a = authRecovery.snapshot(SystemClock.elapsedRealtime())
@@ -580,7 +587,13 @@ class MqttBridge(
         activeBroker = broker
         state = "connecting"
         try {
-            val ep = BrokerEndpoint.endpoint(broker) ?: return
+            val ep = BrokerEndpoint.endpoint(broker)
+            if (ep == null) {
+                connectionGeneration.clear()
+                state = "config-error"
+                Log.e(TAG, "invalid or unsupported MQTT broker URL")
+                return
+            }
             val (host, port) = ep.host to ep.port
             tlsActive = ep.tls
             // Happy-eyeballs: resolve the host and connect to a chosen address family, so a flaky family
@@ -603,6 +616,9 @@ class MqttBridge(
                 buttonSubscription = null
                 return
             }
+            // There is no heartbeat authority until this attempt reaches onConnected. HiveMQ can also
+            // reconnect this client internally, so successful connection callbacks own generation changes.
+            connectionGeneration.clear()
             transport.connect(
                 MqttConnectConfig(
                     host = connectHost,
@@ -619,6 +635,7 @@ class MqttBridge(
                     override fun onConnected() = this@MqttBridge.onConnected()
                     override fun onDisconnected(causeMessage: String?): Boolean {
                         if (stopped) return false
+                        connectionGeneration.clear()
                         // Classify so the UI can say "auth rejected" vs "unreachable" rather than "down".
                         val classified = classifyDisconnect(causeMessage)
                         if (classified == "auth-failed") {
@@ -676,7 +693,7 @@ class MqttBridge(
     @Synchronized
     fun reconnect(flipFamily: Boolean = false) {
         if (stopped) return
-        if (state == "disabled") return // terminal service stop; a blank broker waits in "discovering"
+        if (state == "disabled" || state == "config-error") return
         // A liveness-triggered reconnect flips the address family — if the current family (e.g. IPv6 on
         // the PX panels) won't hold, the next connect tries the other and lands on whatever works.
         if (flipFamily) preferIpv4 = !preferIpv4
@@ -692,6 +709,7 @@ class MqttBridge(
     /** Runs on every (re)connect: (re)subscribe to commands and (re)publish discovery + online. */
     private fun onConnected() {
         if (stopped) return
+        connectionGeneration.advance()
         authRetryGeneration++
         authRecovery.authenticated(SystemClock.elapsedRealtime())
         state = "connected"
@@ -1916,7 +1934,7 @@ class MqttBridge(
      */
     fun heartbeat() {
         if (stopped) return
-        if (state == "disabled") return
+        if (state == "disabled" || state == "config-error") return
         runCatching { publish("ha-paneld/$panel/last_seen", (System.currentTimeMillis() / 1000).toString()) }
         if (stopped) return
         runCatching { syncLocalState() }
@@ -2091,6 +2109,7 @@ class MqttBridge(
             if (stopped) return
             stopped = true
             lifecycleGeneration.incrementAndGet()
+            connectionGeneration.clear()
         }
         // Invalidate this bridge before draining command work. An old privileged call may ignore
         // interruption, but the process-wide coordinator serializes it ahead of the replacement's

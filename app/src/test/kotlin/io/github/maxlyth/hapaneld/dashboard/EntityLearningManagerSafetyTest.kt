@@ -12,6 +12,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.ByteArrayInputStream
 import java.io.InterruptedIOException
+import java.io.File
 import java.net.SocketTimeoutException
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -19,6 +20,34 @@ import java.util.concurrent.atomic.AtomicLong
 import kotlin.concurrent.thread
 
 class EntityLearningManagerSafetyTest {
+    @Test fun disabledAutomaticLearningIsStartupInertUntilExplicitDemand() {
+        assertFalse(shouldInitializeEntityLearningOnStart(enabled = false))
+        assertTrue(shouldInitializeEntityLearningOnStart(enabled = true))
+
+        val source = listOf(
+            File("src/main/kotlin/io/github/maxlyth/hapaneld/dashboard/EntityLearningManager.kt"),
+            File("app/src/main/kotlin/io/github/maxlyth/hapaneld/dashboard/EntityLearningManager.kt"),
+        ).first(File::isFile).readText()
+        val start = source.substring(
+            source.indexOf("fun start()"),
+            source.indexOf("private fun applyDefaultResolverMigration"),
+        )
+        assertTrue(
+            "disabled startup must return before catalog preparation, migration, diagnostics, or queries",
+            start.indexOf("shouldInitializeEntityLearningOnStart") < start.indexOf("ensureInitialized()"),
+        )
+        assertTrue("periodic work must have explicit owned cancellation", "cancelPeriodicSyncLocked()" in source)
+        assertTrue(
+            "a cancelled periodic read must recheck admission before it can launch a new sync",
+            "if (!isActive || !config.dashboardEntityLearningEnabled) continue" in source,
+        )
+        val disable = source.substring(source.indexOf("fun setEnabled"), source.indexOf("/** Explicitly promote"))
+        assertTrue(
+            "disable must cancel periodic work before returning",
+            disable.indexOf("cancelPeriodicSyncLocked()") < disable.lastIndexOf("onFilterChanged()"),
+        )
+    }
+
     @Test fun stateProjectionBoundsFriendlyName() {
         val limits = HaStatesReadLimits(maxFriendlyNameChars = 18)
         assertEquals(
@@ -142,6 +171,36 @@ class EntityLearningManagerSafetyTest {
         assertEquals(null, replacementSlot)
     }
 
+    @Test fun firstEnableInvalidatesOldEffectsBeforeStartingExactlyOneBootstrapSync() {
+        val events = mutableListOf<String>()
+        val obsolete = Job()
+        var ownedSync: Job? = obsolete
+        var initializationCalls = 0
+        var bootstrapStarts = 0
+
+        val newlyInitialized = initializeEntityLearningAfterEffectInvalidation(
+            invalidate = {
+                events += "invalidate"
+                ownedSync = supersedeEntityLearningSync(ownedSync)
+            },
+            initialize = {
+                initializationCalls++
+                events += "initialize"
+                ownedSync = Job()
+                bootstrapStarts++
+                true
+            },
+        )
+        if (!newlyInitialized) bootstrapStarts++
+
+        assertTrue(newlyInitialized)
+        assertEquals(1, initializationCalls)
+        assertEquals("lazy initialization owns the only required bootstrap start", 1, bootstrapStarts)
+        assertEquals(listOf("invalidate", "initialize"), events)
+        assertTrue(obsolete.isCancelled)
+        assertTrue("the initialization-owned bootstrap sync must remain active", ownedSync?.isActive == true)
+    }
+
     @Test fun supersededScanCannotPersistFailureOntoCurrentGeneration() {
         assertTrue(shouldPersistEntityLearningFailure(7, 7, "instance-a", "/dash", "instance-a", "/dash"))
         assertFalse(shouldPersistEntityLearningFailure(7, 8, "instance-a", "/dash", "instance-a", "/dash"))
@@ -196,6 +255,52 @@ class EntityLearningManagerSafetyTest {
         assertFalse(writer.isAlive)
         assertFalse(resetter.isAlive)
         assertTrue(evidence.isEmpty())
+    }
+
+    @Test fun concurrentDisableCannotBeOvertakenByAnAlreadyRunningActivation() {
+        data class DurableState(
+            var learningEnabled: Boolean = true,
+            var filterEnabled: Boolean = false,
+            var applied: Boolean = false,
+        )
+
+        val owner = Any()
+        val state = DurableState()
+        val activationEntered = CountDownLatch(1)
+        val releaseActivation = CountDownLatch(1)
+        val disableAttempted = CountDownLatch(1)
+        val disableFinished = CountDownLatch(1)
+
+        val activation = thread(start = true) {
+            withEntityLearningMutationLock(owner) {
+                activationEntered.countDown()
+                releaseActivation.await()
+                state.filterEnabled = true
+                state.applied = true
+            }
+        }
+        assertTrue(activationEntered.await(2, TimeUnit.SECONDS))
+        val disable = thread(start = true) {
+            disableAttempted.countDown()
+            withEntityLearningMutationLock(owner) {
+                state.learningEnabled = false
+                state.filterEnabled = false
+                state.applied = false
+            }
+            disableFinished.countDown()
+        }
+
+        assertTrue(disableAttempted.await(2, TimeUnit.SECONDS))
+        assertFalse("disable must wait for the active mutation", disableFinished.await(50, TimeUnit.MILLISECONDS))
+        releaseActivation.countDown()
+        activation.join(2_000)
+        disable.join(2_000)
+
+        assertFalse(activation.isAlive)
+        assertFalse(disable.isAlive)
+        assertFalse(state.learningEnabled)
+        assertFalse(state.filterEnabled)
+        assertFalse(state.applied)
     }
 
     @Test fun queuedPromotionRequiresUnchangedEligiblePolicyAndNoBlockers() {

@@ -28,7 +28,7 @@ CORE_SRCS := $(addprefix $(SRC_DIR)/, util.c led.c screen.c input.c sysctl.c per
 DAEMON_SRCS := $(CORE_SRCS) $(SRC_DIR)/main.c $(SRC_DIR)/sysexec.c
 STUB := test/sysexec_stub.c
 
-.PHONY: all daemon test peer-auth-test install-security-test cdprelay-resource-test socket-test-server fuzz contract clean print-core
+.PHONY: all daemon test peer-auth-test request-timeout-test install-security-test cdprelay-resource-test socket-test-server fuzz contract clean print-core
 all: daemon
 
 # Host build of the real daemon — a compile sanity check (-Werror); the shipped binary is build.sh.
@@ -37,12 +37,15 @@ $(BUILD)/hapaneld-helper: $(DAEMON_SRCS) | $(BUILD)
 	$(CC) $(CFLAGS) -I$(SRC_DIR) $(DAEMON_SRCS) $(LDLIBS) -o $@
 
 # Unit tests: CORE modules + the sysexec stub (no real exec) + the test driver.
-test: $(BUILD)/unit $(BUILD)/hapaneld-helper $(BUILD)/companion-boundary $(BUILD)/peer-auth $(BUILD)/cdprelay-resource-test $(BUILD)/cdprelay-test
+test: $(BUILD)/unit $(BUILD)/hapaneld-helper $(BUILD)/companion-boundary $(BUILD)/peer-auth $(BUILD)/request-timeout $(BUILD)/cdprelay-resource-test $(BUILD)/cdprelay-test
 	$(BUILD)/unit
 	test "$$($(BUILD)/hapaneld-helper --version)" = "HELPER version=1.0.0 proto=1.0"
 	$(BUILD)/companion-boundary
 	$(BUILD)/peer-auth
+	$(BUILD)/request-timeout
 	$(BUILD)/cdprelay-resource-test $(BUILD)/cdprelay-test
+	bash ./test/root_command_quote_test.sh
+	bash ./test/standalone_installer_transaction_test.sh
 	bash ./test/install_daemon_security_test.sh
 # --wrap=open/ioctl lets tests provide a fake evdev node and capture requested exclusive grabs while
 # preserving the existing ledjni ioctl assertions; --wrap=write forces deterministic stream edge cases.
@@ -59,6 +62,11 @@ peer-auth-test: $(BUILD)/peer-auth
 	$(BUILD)/peer-auth
 $(BUILD)/peer-auth: test/peer_auth.c $(SRC_DIR)/main.c $(SRC_DIR)/version.c $(SRC_DIR)/util.c | $(BUILD)
 	$(CC) $(CFLAGS) -I$(SRC_DIR) test/peer_auth.c $(SRC_DIR)/version.c $(SRC_DIR)/util.c $(LDLIBS) -o $@
+
+request-timeout-test: $(BUILD)/request-timeout
+	$(BUILD)/request-timeout
+$(BUILD)/request-timeout: test/request_timeout.c $(SRC_DIR)/main.c $(SRC_DIR)/version.c $(SRC_DIR)/util.c | $(BUILD)
+	$(CC) $(CFLAGS) -I$(SRC_DIR) test/request_timeout.c $(SRC_DIR)/version.c $(SRC_DIR)/util.c $(LDLIBS) -o $@
 
 install-security-test:
 	bash ./test/install_daemon_security_test.sh

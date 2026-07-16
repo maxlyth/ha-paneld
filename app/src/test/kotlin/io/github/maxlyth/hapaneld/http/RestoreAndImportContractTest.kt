@@ -38,6 +38,14 @@ class RestoreAndImportContractTest {
         assertTrue("official backups must carry config", "backup contains no config object" in handler)
         assertTrue("restore must migrate from the declared schema", "planRestoreConfig(cfgObj, backupSchema)" in handler)
         assertTrue("invalid config must be rejected before launch", "invalid backup config" in handler)
+        assertTrue(
+            "profile restart rejection must record whether the staged activation rollback persisted",
+            "rejectFailedProfileRestart(" in handler,
+        )
+        assertTrue(
+            "a latent pending activation must surface as a rollback failure",
+            "profileRestartFailureComponent" in handler && "profileRestartRejection" in handler,
+        )
     }
 
     @Test fun configImportDryRunHashCanRejectAStaleApply() {
@@ -45,15 +53,15 @@ class RestoreAndImportContractTest {
             source.indexOf("private suspend fun handleConfigImport"),
             source.indexOf("private suspend fun applyAccepted"),
         )
-        assertTrue("dry run must expose a baseline hash", "ConfigHash.of(current)" in handler)
+        assertTrue("dry run must expose a secret-free baseline hash", "configConcurrencyHash(current)" in handler)
         val apply = source.substring(
             source.indexOf("private suspend fun applyAccepted"),
             source.indexOf("private fun applyRendererEffects"),
         )
-        assertTrue("apply must compare expected_cfg", "ConfigHash.of(currentValues()) != expectedConfig" in apply)
+        assertTrue("apply must compare expected_cfg", "configConcurrencyHash() != expectedConfig" in apply)
         assertTrue(
             "expected_cfg comparison must be inside the serialized renderer/config transaction",
-            apply.indexOf("rendererPreparation.transaction") < apply.indexOf("ConfigHash.of(currentValues())"),
+            apply.indexOf("rendererPreparation.transaction") < apply.indexOf("configConcurrencyHash()"),
         )
         assertTrue("stale preview must be a conflict", "\"status\":\"stale-preview\"" in handler)
         assertTrue("stale preview must be HTTP 409", "HttpStatusCode.Conflict" in handler)

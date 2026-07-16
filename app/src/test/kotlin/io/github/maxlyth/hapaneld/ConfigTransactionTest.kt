@@ -14,6 +14,16 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 class ConfigTransactionTest {
+    @Test fun roomTemperatureOffsetRejectsNonFiniteFormValues() {
+        val prefs = fakePreferences(initial = mapOf("room_temp_offset" to 1.5f))
+        val config = Config(prefs.instance)
+
+        listOf("NaN", "Infinity", "+Infinity", "-Infinity").forEach(config::setRoomTempOffset)
+
+        assertEquals(1.5f, config.roomTempOffsetC, 0f)
+        assertEquals(1.5f, prefs.values["room_temp_offset"])
+    }
+
     @Test fun proximityCalibrationIsScopedToTheActiveProfileRevision() {
         val prefs = fakePreferences()
         val calibration = fakePreferences()
@@ -231,6 +241,64 @@ class ConfigTransactionTest {
         assertFalse(committed)
         assertFalse(prefs.values.containsKey("panel_id"))
         assertFalse(prefs.values.containsKey("mqtt_broker"))
+    }
+
+    @Test fun registryStagesOauthExpiryAsLongWithoutTruncation() {
+        val prefs = fakePreferences()
+        val config = Config(prefs.instance)
+        val spec = SettingsRegistry.spec("ha_token_expiry")!!
+        val expiry = Int.MAX_VALUE.toLong() + 86_400L
+        val editor = config.editor()
+
+        config.stage(editor, spec, expiry.toString())
+
+        assertTrue(editor.commit())
+        assertEquals(expiry, config.haTokenExpiry)
+        assertEquals(expiry.toString(), config.getRaw(spec))
+    }
+
+    @Test fun legacyCredentialRestoreClearsUnrelatedTargetExpiry() {
+        val prefs = fakePreferences(initial = mapOf(
+            "ha_token" to "target-access",
+            "ha_refresh_token" to "target-refresh",
+            "ha_token_expiry" to 9_999_999_999L,
+        ))
+        val config = Config(prefs.instance)
+        val accepted = mapOf(
+            "ha_token" to "restored-access",
+            "ha_refresh_token" to "restored-refresh",
+        )
+        val editor = config.editor()
+            .putString("ha_token", accepted.getValue("ha_token"))
+            .putString("ha_refresh_token", accepted.getValue("ha_refresh_token"))
+
+        config.stageImportDependencies(editor, accepted)
+
+        assertTrue(editor.commit())
+        assertEquals("restored-access", config.haToken)
+        assertEquals("restored-refresh", config.haRefreshToken)
+        assertEquals(0L, config.haTokenExpiry)
+    }
+
+    @Test fun credentialRestorePreservesItsMatchingExplicitExpiryAtomically() {
+        val prefs = fakePreferences(initial = mapOf("ha_token_expiry" to 111L))
+        val config = Config(prefs.instance)
+        val expiry = 2_345_678_901L
+        val accepted = mapOf(
+            "ha_token" to " restored access ",
+            "ha_refresh_token" to " restored refresh ",
+            "ha_token_expiry" to expiry.toString(),
+        )
+        val editor = config.editor()
+        accepted.forEach { (key, value) ->
+            config.stage(editor, SettingsRegistry.spec(key)!!, value)
+        }
+        config.stageImportDependencies(editor, accepted)
+
+        assertTrue(editor.commit())
+        assertEquals(" restored access ", config.haToken)
+        assertEquals(" restored refresh ", config.haRefreshToken)
+        assertEquals(expiry, config.haTokenExpiry)
     }
 
     @Test fun panelIdentityAndDependentLinkInvalidationShareOneCommit() {

@@ -58,6 +58,7 @@ class FleetScopeSpecTest {
             "home_dashboard",
             "ha_token",
             "ha_refresh_token",
+            "ha_token_expiry",
             "ha_client_id",
             "dashboard_entity_overrides",
             "dashboard_entity_learning_applied",

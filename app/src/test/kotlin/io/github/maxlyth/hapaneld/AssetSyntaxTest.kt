@@ -143,8 +143,36 @@ class AssetSyntaxTest {
         assertTrue(info.contains("State-event main thread"))
         assertTrue(info.contains("renderer CPU proxy"))
         assertTrue(info.contains("not actual tap latency"))
+        assertTrue(info.contains("built-in observer unavailable"))
+        assertTrue(info.contains("built-in live observer unavailable"))
+        assertTrue(info.contains("reload the built-in dashboard to retry"))
+        assertTrue(info.contains("if this persists, update the panel WebView"))
         assertTrue(info.contains("WebView remote debugging"))
         assertFalse(info.contains("label:'How it feels'"))
+    }
+
+    @Test fun performanceCardDistinguishesUnavailableBuiltinObserverFromCompanionProxy() {
+        val dir = assetsDir
+        assumeTrue("assets dir not found (skipping)", dir != null)
+        assumeTrue("node not available (skipping)", nodeAvailable())
+        val script = """
+            const fs=require('fs'),vm=require('vm'),source=fs.readFileSync(process.argv[1],'utf8');
+            const start=source.indexOf('function rendererMeasurement('),end=source.indexOf('async function perf(){');
+            if(start<0||end<=start)process.exit(2);
+            vm.runInThisContext(source.slice(start,end));
+            const builtin=rendererMeasurement('builtin_unavailable',{status:'ok',pkg:'builtin',mainPct:99});
+            if(builtin.header!=='· built-in observer unavailable')process.exit(3);
+            if(!builtin.rows.some(row=>row.val==='reload the built-in dashboard to retry'))process.exit(4);
+            if(JSON.stringify(builtin).includes('Companion proxy'))process.exit(5);
+            const external=rendererMeasurement('foreign_proxy',{status:'ok',pkg:'com.example.wallpanel',mainPct:17});
+            if(external.header!=='· external renderer proxy'||!external.title.includes('com.example.wallpanel'))process.exit(6);
+            if(JSON.stringify(external).includes('Companion'))process.exit(7);
+            if(!external.rows.some(row=>row.val==='renderer CPU proxy'))process.exit(8);
+            const unavailable=rendererMeasurement('foreign_proxy',{status:'no-renderer'});
+            if(!unavailable.rows.some(row=>row.val==='External renderer proxy needs root/helper access'))process.exit(9);
+        """.trimIndent()
+        val (code, out) = run(listOf("node", "-e", script, File(dir, "info.js").absolutePath))
+        assertEquals("renderer measurement presentation contract failed:\n$out", 0, code)
     }
 
     @Test fun dashboardIssuesAreRenderedEscapedWithReversibleSafetyControls() {

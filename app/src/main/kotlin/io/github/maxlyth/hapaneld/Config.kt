@@ -205,6 +205,14 @@ class Config private constructor(
         } else {
             val access = accepted["ha_token"]
             val explicitAccess = access != null && access.isNotEmpty()
+            if ("ha_token_expiry" !in accepted &&
+                ("ha_token" in accepted || "ha_refresh_token" in accepted)
+            ) {
+                // Compatibility with backups/config bundles written before expiry joined the registry:
+                // never retain an unrelated target panel's expiry beside restored credential material.
+                // Unknown expiry forces DashboardAuth to refresh before trusting the restored access token.
+                editor.putLong("ha_token_expiry", 0L)
+            }
             if (explicitAccess && "ha_refresh_token" !in accepted && haRefreshToken.isNotEmpty()) {
                 editor.putString("ha_refresh_token", "")
                 editor.putLong("ha_token_expiry", 0L)
@@ -1275,7 +1283,7 @@ class Config private constructor(
      *  composes with the /config POST batch — without this the key had a [SettingSpec] and rendered a form
      *  field but no persistence path, so a posted value was silently dropped. */
     fun setRoomTempOffset(raw: String) {
-        val v = raw.trim().toFloatOrNull() ?: return   // non-numeric → keep current
+        val v = raw.trim().toFloatOrNull()?.takeIf { it.isFinite() } ?: return
         val spec = SettingsRegistry.spec("room_temp_offset")
         val lo = spec?.min?.toFloat() ?: -20f
         val hi = spec?.max?.toFloat() ?: 20f
@@ -1331,6 +1339,7 @@ class Config private constructor(
     fun getRaw(spec: SettingSpec): String = when (spec.type) {
         SettingType.BOOL -> prefs.getBoolean(spec.key, spec.default.toBoolean()).toString()
         SettingType.INT -> prefs.getInt(spec.key, spec.default.toIntOrNull() ?: 0).toString()
+        SettingType.LONG -> prefs.getLong(spec.key, spec.default.toLongOrNull() ?: 0L).toString()
         SettingType.FLOAT -> prefs.getFloat(spec.key, spec.default.toFloatOrNull() ?: 0f).toString()
         else -> prefs.getString(spec.key, spec.default) ?: spec.default
     }
@@ -1340,6 +1349,7 @@ class Config private constructor(
         when (spec.type) {
             SettingType.BOOL -> editor.putBoolean(spec.key, normalized.toBoolean())
             SettingType.INT -> editor.putInt(spec.key, normalized.toIntOrNull() ?: 0)
+            SettingType.LONG -> editor.putLong(spec.key, normalized.toLongOrNull() ?: 0L)
             SettingType.FLOAT -> editor.putFloat(spec.key, normalized.toFloatOrNull() ?: 0f)
             else -> editor.putString(spec.key, normalized)
         }

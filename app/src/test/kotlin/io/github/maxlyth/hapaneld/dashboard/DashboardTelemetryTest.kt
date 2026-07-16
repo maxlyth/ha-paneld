@@ -77,6 +77,69 @@ class DashboardTelemetryTest {
         assertEquals("low", json.getString("confidence"))
     }
 
+    @Test fun builtinWithoutObserverIsNotMisreportedAsCompanionProxy() {
+        DashboardTelemetry.reset()
+        val json = JSONObject(DashboardTelemetry.json(
+            builtinActive = true,
+            filterActive = false,
+            entityCount = 0,
+            reloads24h = 0,
+            rendererMainPct = 92.0,
+        ))
+        assertEquals("builtin_unavailable", json.getString("mode"))
+        assertEquals("no_clear_dominant_cause", json.getString("likelyCause"))
+        assertEquals("low", json.getString("confidence"))
+    }
+
+    @Test fun currentStatePressureOutranksOneHistoricalReload() {
+        DashboardTelemetry.reset()
+        DashboardTelemetry.installed()
+        val bins = LongArray(10).also { it[5] = 1 }
+        DashboardTelemetry.record(batch(
+            updates = 500,
+            payloadBytes = 512_000,
+            stateTaskMicros = 1_500_000,
+            bins = bins,
+            interactionMaxMicros = 700_000,
+        ))
+
+        val json = JSONObject(DashboardTelemetry.json(
+            builtinActive = true,
+            filterActive = false,
+            entityCount = 0,
+            reloads24h = 1,
+        ))
+        assertEquals("state_stream", json.getString("likelyCause"))
+        assertEquals("high", json.getString("confidence"))
+    }
+
+    @Test fun historicalReloadRemainsFallbackWithoutDecisiveLiveEvidence() {
+        DashboardTelemetry.reset()
+        DashboardTelemetry.installed()
+
+        val json = JSONObject(DashboardTelemetry.json(
+            builtinActive = true,
+            filterActive = false,
+            entityCount = 0,
+            reloads24h = 1,
+        ))
+        assertEquals("memory_or_renderer_instability", json.getString("likelyCause"))
+        assertEquals("medium", json.getString("confidence"))
+    }
+
+    @Test fun currentExternalRendererPressureOutranksHistoricalReload() {
+        DashboardTelemetry.reset()
+        val json = JSONObject(DashboardTelemetry.json(
+            builtinActive = false,
+            filterActive = false,
+            entityCount = 0,
+            reloads24h = 1,
+            rendererMainPct = 92.0,
+        ))
+        assertEquals("dashboard_or_state_proxy", json.getString("likelyCause"))
+        assertEquals("low", json.getString("confidence"))
+    }
+
     private fun batch(
         updates: Long = 1,
         payloadBytes: Long = 100,

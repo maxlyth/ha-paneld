@@ -154,6 +154,20 @@ function causeLabel(c){return ({state_stream:'State stream pressure',dashboard_s
  rendering_or_media:'Rendering, layout, or media',system_contention:'System process contention',
  memory_or_renderer_instability:'Renderer or memory instability',dashboard_or_state_proxy:'Dashboard or state load (proxy)',
  no_clear_dominant_cause:'No clear dominant cause'})[c]||'Collecting evidence';}
+function rendererMeasurement(mode,r){
+ if(mode==='builtin_unavailable')return {header:'· built-in observer unavailable',
+  title:'The built-in renderer is active without its live browser observer',
+  rows:[{label:'Measurement mode',val:'built-in live observer unavailable',col:'#888'},
+   {label:'How to restore it',val:'reload the built-in dashboard to retry',
+    suf:'· if this persists, update the panel WebView'}]};
+ if(r&&r.status!=='no-renderer'){
+  var rows=[{label:'Measurement mode',val:'renderer CPU proxy',suf:'· not actual tap latency',col:'#888'},
+   {label:'Dashboard main-thread',val:r.mainPct+'% of one core',suf:'· 100% means the renderer thread is saturated',bold:true}];
+  if(r.jankPct!=null)rows.push({label:'Rendering proxy',val:r.jankPct+'% janky',suf:'· worst frame '+r.p99+' ms'});
+  return {header:'· external renderer proxy',title:'measuring '+r.pkg,rows:rows};
+ }
+ return {header:'',title:'',rows:[{label:'Measurement mode',val:'External renderer proxy needs root/helper access',col:'#888'}]};
+}
 async function perf(){
  if(document.hidden)return;   // a hidden/background tab must not keep the sampler (or panel) busy
  try{
@@ -194,13 +208,9 @@ async function perf(){
    paint('smtbl',sm.concat(bRows));drawResp(dash.history||{});
   }else{
    drawResp({});
-   if(r&&r.status!=='no-renderer'){
-    smh.textContent='· Companion proxy';smh.title='measuring '+r.pkg;
-    var proxy=[{label:'Measurement mode',val:'renderer CPU proxy',suf:'· not actual tap latency',col:'#888'},
-     {label:'Dashboard main-thread',val:r.mainPct+'% of one core',suf:'· 100% means the renderer thread is saturated',bold:true}];
-    if(r.jankPct!=null)proxy.push({label:'Rendering proxy',val:r.jankPct+'% janky',suf:'· worst frame '+r.p99+' ms'});
-    paint('smtbl',proxy.concat(bRows));
-   }else paint('smtbl',[{label:'Measurement mode',val:'Companion proxy needs root/helper access',col:'#888'}].concat(bRows));
+   var measurement=rendererMeasurement(perfMode,r);
+   smh.textContent=measurement.header;smh.title=measurement.title;
+   paint('smtbl',measurement.rows.concat(bRows));
   }
   var stream=dash&&dash.stateStream||{},filter=dash&&dash.filter||{},sr=[];
   if(direct&&dash.sampleCount){

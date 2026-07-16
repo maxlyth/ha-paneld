@@ -14,6 +14,7 @@ import org.json.JSONObject
 import java.util.ArrayDeque
 import java.util.Locale
 import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.roundToInt
@@ -180,29 +181,45 @@ class ZigbeeHealthPolicy(
 
     private var graceStartedAt = 0L
     private var highCpuSamples = 0
-    private var previousPid: Int? = null
+    private var lastRunningPid: Int? = null
     private val pidChanges = ArrayDeque<Long>()
 
     fun resetGrace(nowMs: Long) {
         graceStartedAt = nowMs
         highCpuSamples = 0
-        previousPid = null
-        pidChanges.clear()
+        resetPidChurn()
     }
 
     fun evaluate(nowMs: Long, configuredOn: Boolean, observation: ZigbeeGatewayObservation): Decision {
         if (graceStartedAt == 0L) graceStartedAt = nowMs
-        if (!observation.present) return Decision(ZigbeeHealthState.UNKNOWN, null, 0, false)
+        if (!observation.present) {
+            highCpuSamples = 0
+            resetPidChurn()
+            return Decision(ZigbeeHealthState.UNKNOWN, null, 0, false)
+        }
 
         val running = observation.gatewayPid != null || observation.guardPid != null
         if (!configuredOn && !running) {
             highCpuSamples = 0
-            return Decision(ZigbeeHealthState.OFF, null, restartCount(nowMs), false)
+            resetPidChurn()
+            return Decision(ZigbeeHealthState.OFF, null, 0, false)
         }
 
-        updatePidChurn(nowMs, observation.gatewayPid)
-        val restarts = restartCount(nowMs)
         val inGrace = nowMs - graceStartedAt < startupGraceMs
+        val restarts = when {
+            !configuredOn -> {
+                resetPidChurn()
+                0
+            }
+            inGrace -> {
+                seedPidTracking(observation.gatewayPid)
+                0
+            }
+            else -> {
+                updatePidChurn(nowMs, observation.gatewayPid)
+                restartCount(nowMs)
+            }
+        }
         val joined = joinedEvidence(observation)
         val maxCpu = listOfNotNull(observation.gatewayCpu, observation.guardCpu).maxOrNull()
         val highCpu = maxCpu != null && maxCpu > highCpuThreshold
@@ -223,7 +240,6 @@ class ZigbeeHealthPolicy(
         }
         if (inGrace) {
             highCpuSamples = 0
-            pidChanges.clear()
             return Decision(ZigbeeHealthState.STARTING, joined, 0, false)
         }
         if (observation.layout == ZigbeeGatewayLayout.UNKNOWN ||
@@ -259,9 +275,29 @@ class ZigbeeHealthPolicy(
     }
 
     private fun updatePidChurn(nowMs: Long, pid: Int?) {
-        if (pid != null && previousPid != null && pid != previousPid) pidChanges.addLast(nowMs)
-        previousPid = pid
+        if (pid == null) {
+            restartCount(nowMs)
+            return
+        }
+        val previous = lastRunningPid
+        if (previous != null && pid != previous) {
+            // Retaining the last running PID across a down sample counts the common A -> down -> B
+            // sequence. The PID difference prevents A -> down -> A from creating a false event.
+            pidChanges.addLast(nowMs)
+        }
+        lastRunningPid = pid
         restartCount(nowMs)
+    }
+
+    /** Establish a grace-period baseline without carrying startup churn into containment decisions. */
+    private fun seedPidTracking(pid: Int?) {
+        lastRunningPid = pid
+        pidChanges.clear()
+    }
+
+    private fun resetPidChurn() {
+        lastRunningPid = null
+        pidChanges.clear()
     }
 
     private fun restartCount(nowMs: Long): Int {
@@ -420,6 +456,7 @@ class ZigbeeHealthMonitor(
     private val onSnapshot: (ZigbeeHealthSnapshot, Boolean) -> Unit,
     private val nowMs: () -> Long = SystemClock::elapsedRealtime,
     private val policy: ZigbeeHealthPolicy = ZigbeeHealthPolicy(),
+    private val sampleIntervalMs: Long = SAMPLE_INTERVAL_MS,
 ) {
     private val executor = Executors.newSingleThreadScheduledExecutor { r ->
         Thread(r, "zigbee-health").apply { isDaemon = true }
@@ -433,15 +470,23 @@ class ZigbeeHealthMonitor(
         if (!generation.compareAndSet(0L, 1L)) return
         val runGeneration = 1L
         policy.resetGrace(nowMs())
-        executor.scheduleAtFixedRate({
-            if (generation.get() == runGeneration) sample()
-        }, 0L, SAMPLE_INTERVAL_MS, TimeUnit.MILLISECONDS)
+        executor.scheduleWithFixedDelay({
+            if (generation.get() == runGeneration) sample(runGeneration)
+        }, 0L, sampleIntervalMs.coerceAtLeast(1L), TimeUnit.MILLISECONDS)
     }
 
     fun explicitRetry() {
-        containmentAttempted = false
-        policy.resetGrace(nowMs())
-        transition(current.copy(state = ZigbeeHealthState.STARTING, containment = ZigbeeContainmentResult.NONE), true)
+        val runGeneration = generation.get()
+        try {
+            executor.execute {
+                if (generation.get() != runGeneration) return@execute
+                containmentAttempted = false
+                policy.resetGrace(nowMs())
+                transition(current.copy(state = ZigbeeHealthState.STARTING, containment = ZigbeeContainmentResult.NONE), true)
+            }
+        } catch (_: RejectedExecutionException) {
+            // A terminal monitor has already closed its lane; retry must not resurrect its state.
+        }
     }
 
     fun snapshot(): ZigbeeHealthSnapshot = current
@@ -452,16 +497,28 @@ class ZigbeeHealthMonitor(
         runCatching { executor.awaitTermination(STOP_JOIN_MS, TimeUnit.MILLISECONDS) }
     }
 
-    internal fun sample() {
+    internal fun sample() = sample(null)
+
+    private fun sample(runGeneration: Long?) {
+        fun isCurrentRun(): Boolean = runGeneration == null || generation.get() == runGeneration
         val started = FeatureCosts.registry.beginSynchronous(FeatureCostOperation.ZIGBEE_HEALTH_SAMPLE)
         var outcome = FeatureCostOutcome.SUCCESS
+        fun continueIfCurrent(): Boolean {
+            if (isCurrentRun()) return true
+            outcome = FeatureCostOutcome.CANCELLED
+            return false
+        }
         try {
             val now = nowMs()
             val observation = source.observe()
+            // A root observation may ignore interruption and outlive stop(). Once this monitor has
+            // retired, the obsolete sample must not contain hardware or publish into its replacement.
+            if (!continueIfCurrent()) return
             if (observation.recursiveWatchdogAssignment && !current.recursiveWatchdogAssignment) {
                 Log.w(TAG, "legacy Zigbee watchdog contains the recursive LD_LIBRARY_PATH assignment")
             }
             val decision = policy.evaluate(now, configuredOn(), observation)
+            if (!continueIfCurrent()) return
             var containment = current.containment
             var state = decision.state
             if (containmentAttempted && !configuredOn() && containment != ZigbeeContainmentResult.NONE) {
@@ -472,9 +529,12 @@ class ZigbeeHealthMonitor(
                 }
             }
             if (decision.shouldContain && !containmentAttempted) {
+                if (!continueIfCurrent()) return
                 containmentAttempted = true
                 onContain()
+                if (!continueIfCurrent()) return
                 containment = source.contain(observation.layout)
+                if (!continueIfCurrent()) return
                 state = if (containment == ZigbeeContainmentResult.COMPLETE) {
                     ZigbeeHealthState.CONTAINED
                 } else {
@@ -497,11 +557,14 @@ class ZigbeeHealthMonitor(
                 recursiveWatchdogAssignment = observation.recursiveWatchdogAssignment,
             )
             val heartbeat = lastHeartbeatAt == 0L || now - lastHeartbeatAt >= HEARTBEAT_MS
+            if (!continueIfCurrent()) return
             transition(next, heartbeat)
             if (heartbeat) lastHeartbeatAt = now
         } catch (_: Exception) {
             outcome = FeatureCostOutcome.FAILURE
-            transition(current.copy(state = ZigbeeHealthState.UNKNOWN, observedAtMs = nowMs()), true)
+            if (isCurrentRun()) {
+                transition(current.copy(state = ZigbeeHealthState.UNKNOWN, observedAtMs = nowMs()), true)
+            }
         } finally {
             FeatureCosts.registry.finishSynchronous(
                 FeatureCostOperation.ZIGBEE_HEALTH_SAMPLE,
@@ -513,6 +576,13 @@ class ZigbeeHealthMonitor(
     }
 
     internal fun lifecycleGeneration(): Long = generation.get()
+
+    internal fun awaitIdleForTest(timeoutMs: Long = STOP_JOIN_MS): Boolean = try {
+        executor.submit {}.get(timeoutMs, TimeUnit.MILLISECONDS)
+        true
+    } catch (_: Exception) {
+        false
+    }
 
     private fun transition(next: ZigbeeHealthSnapshot, heartbeat: Boolean) {
         val previous = current

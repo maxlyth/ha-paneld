@@ -291,6 +291,7 @@ class PaneldServiceStartupTest {
         )
         assertEquals(NetworkAvailableAction.NONE, networkAvailableAction("connected", ""))
         assertEquals(NetworkAvailableAction.NONE, networkAvailableAction("disabled", ""))
+        assertEquals(NetworkAvailableAction.NONE, networkAvailableAction("config-error", "wss://ha:1883"))
         assertEquals(NetworkAvailableAction.NONE, networkAvailableAction("auth-retrying", "tcp://ha:1883"))
     }
 

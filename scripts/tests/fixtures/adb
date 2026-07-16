@@ -33,7 +33,11 @@ case "${1:-}" in
     cp "$STATE_DIR/installed-apk" "${3:?pull destination missing}"
     ;;
   install)
-    if [ "${MOCK_APK_INSTALL:-ok}" = block ]; then
+    if [[ "${!#}" == */shizuku.apk ]] && [ "${MOCK_SHIZUKU_INSTALL:-ok}" = block ]; then
+      [ -z "${MOCK_SHIZUKU_INSTALL_PID_FILE:-}" ] || printf '%s\n' "$$" > "$MOCK_SHIZUKU_INSTALL_PID_FILE"
+      trap 'exit 143' TERM INT
+      while :; do /bin/sleep 1; done
+    elif [ "${MOCK_APK_INSTALL:-ok}" = block ]; then
       [ -z "${MOCK_APK_INSTALL_PID_FILE:-}" ] || printf '%s\n' "$$" > "$MOCK_APK_INSTALL_PID_FILE"
       trap 'exit 143' TERM INT
       while :; do /bin/sleep 1; done
@@ -56,6 +60,11 @@ case "${1:-}" in
     command_text="$*"
     case "$command_text" in
       "dumpsys package moe.shizuku.privileged.api")
+        if [ "${MOCK_SHIZUKU_INSPECT:-ok}" = block ]; then
+          [ -z "${MOCK_SHIZUKU_INSPECT_PID_FILE:-}" ] || printf '%s\n' "$$" > "$MOCK_SHIZUKU_INSPECT_PID_FILE"
+          trap 'exit 143' TERM INT
+          while :; do /bin/sleep 1; done
+        fi
         if [ -n "${MOCK_SHIZUKU_VERSION_CODE:-}" ]; then
           printf 'versionName=13.6.0\nversionCode=%s minSdk=23\n' "$MOCK_SHIZUKU_VERSION_CODE"
         fi
@@ -124,8 +133,27 @@ case "${1:-}" in
         fi
         ;;
       'su 0 "'*'"')
+        inner_command="${command_text#su 0 \"}"
+        inner_command="${inner_command%\"}"
+        if [ "${MOCK_SU_DIALECT:-join}" = join ] &&
+           printf '%s' "$inner_command" | grep -Eq 'helper-transaction-|TRANSACTION_READY|PROBE_READY|--request'; then
+          if [[ "$inner_command" =~ (^|[^\\])[\$\`] ]] ||
+             [[ "$inner_command" =~ (^|[^\\])\" ]]; then
+            printf 'join-style su received shell-active metacharacters before privilege elevation\n' >&2
+            exit 1
+          fi
+        fi
         if printf '%s' "$command_text" | grep -Fq 'id; id' && [ "${MOCK_SU_DIALECT:-join}" = join ]; then
           [ "${MOCK_ROOT:-1}" = 1 ] && printf 'uid=0(root) gid=0(root)\n'
+        elif printf '%s' "$command_text" | grep -Fq 'echo LEASE_OK' &&
+             printf '%s' "$command_text" | grep -Fq '.hapaneld-helper-manual-upgrade'; then
+          [ "${MOCK_MANUAL_LEASE_RENEW:-ok}" = ok ] && printf 'LEASE_OK\n'
+        elif printf '%s' "$command_text" | grep -Fq 'inspect_manual_journal'; then
+          if [ -f "$STATE_DIR/manual-helper-transaction" ]; then
+            printf 'ACTIVE_SYSTEM_TRANSACTION\n'
+          else
+            printf 'NO_STALE_TRANSACTION\n'
+          fi
         elif printf '%s' "$command_text" | grep -Fq '.hapaneld-helper-manual-upgrade' && \
              printf '%s' "$command_text" | grep -Fq '[ ! -f'; then
           [ "${MOCK_MANUAL_STALE:-0}" != 1 ]
@@ -138,6 +166,24 @@ case "${1:-}" in
           fi
         elif printf '%s' "$command_text" | grep -Fq 'echo TRANSACTION_READY'; then
           [ "${MOCK_TRANSACTION_TAMPER:-0}" != 1 ] && printf 'TRANSACTION_READY\n'
+        elif printf '%s' "$command_text" | grep -Fq 'echo PROBE_READY'; then
+          [ "${MOCK_TRANSACTION_TAMPER:-0}" != 1 ] && printf 'PROBE_READY\n'
+        elif printf '%s' "$command_text" | grep -Fq 'echo INSTALL_OK' &&
+             printf '%s' "$command_text" | grep -Fq '.hapaneld-helper-manual-upgrade'; then
+          : > "$STATE_DIR/manual-helper-transaction"
+          [ "${MOCK_MANUAL_INSTALL_DELAY:-0}" = 0 ] || /bin/sleep "$MOCK_MANUAL_INSTALL_DELAY"
+          printf 'INSTALL_OK\n'
+        elif printf '%s' "$command_text" | grep -Fq 'echo COMMIT_OK' &&
+             printf '%s' "$command_text" | grep -Fq '.hapaneld-helper-manual-upgrade'; then
+          rm -f "$STATE_DIR/manual-helper-transaction"
+          printf 'COMMIT_OK\n'
+        elif printf '%s' "$command_text" | grep -Fq 'ROLLBACK_RESTARTED' &&
+             printf '%s' "$command_text" | grep -Fq '.hapaneld-helper-manual-upgrade'; then
+          printf 'ROLLBACK_RESTARTED\n'
+        elif printf '%s' "$command_text" | grep -Fq 'ROLLBACK_FINALIZED' &&
+             printf '%s' "$command_text" | grep -Fq '.hapaneld-helper-manual-upgrade'; then
+          rm -f "$STATE_DIR/manual-helper-transaction"
+          printf 'ROLLBACK_FINALIZED\n'
         elif printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*install-(system|systemless)'; then
           if [ "${MOCK_TRANSACTION_BUSY:-0}" = 1 ]; then
             printf 'TRANSACTION_BUSY\n'
@@ -151,15 +197,21 @@ case "${1:-}" in
             [ "${MOCK_HELPER_INSTALL:-ok}" = ok ] && printf 'INSTALL_OK\n'
             [ "${MOCK_HELPER_INSTALL:-ok}" != ok ] || : > "$STATE_DIR/active-helper-transaction"
           fi
+        elif printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*finalize-rollback-(system|systemless)'; then
+          if [ "${MOCK_TRANSACTION_TOKEN_MISMATCH:-0}" != 1 ] && [ "${MOCK_TOKEN_MISMATCH_ACTION:-}" != finalize ]; then
+            printf 'ROLLBACK_FINALIZED\n'
+            rm -f "$STATE_DIR/stale-helper-transaction" "$STATE_DIR/active-helper-transaction"
+          fi
         elif printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*rollback-(system|systemless)'; then
           if [ "${MOCK_TRANSACTION_TOKEN_MISMATCH:-0}" != 1 ] && [ "${MOCK_TOKEN_MISMATCH_ACTION:-}" != rollback ]; then
             [ "${MOCK_ROLLBACK_RESULT:-ok}" = ok ] && printf 'ROLLBACK_RESTARTED\n'
-            rm -f "$STATE_DIR/stale-helper-transaction" "$STATE_DIR/active-helper-transaction"
           fi
         elif printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*commit-(system|systemless)'; then
           if [ "${MOCK_TRANSACTION_TOKEN_MISMATCH:-0}" != 1 ] && [ "${MOCK_TOKEN_MISMATCH_ACTION:-}" != commit ]; then
-            [ "${MOCK_HELPER_COMMIT:-ok}" = ok ] && printf 'COMMIT_OK\n'
-            rm -f "$STATE_DIR/stale-helper-transaction" "$STATE_DIR/active-helper-transaction"
+            if [ "${MOCK_HELPER_COMMIT:-ok}" = ok ] && [ "${MOCK_COMMIT_LIVE_STATE:-TARGET}" = TARGET ]; then
+              printf 'COMMIT_OK\n'
+              rm -f "$STATE_DIR/stale-helper-transaction" "$STATE_DIR/active-helper-transaction"
+            fi
           fi
         elif printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*lease-(system|systemless)'; then
           [ "${MOCK_TRANSACTION_TOKEN_MISMATCH:-0}" != 1 ] && [ "${MOCK_TOKEN_MISMATCH_ACTION:-}" != lease ] && printf 'LEASE_OK\n'
@@ -171,6 +223,19 @@ case "${1:-}" in
             "${MOCK_STALE_LIVE_STATE:-TARGET}"
         elif printf '%s' "$command_text" | grep -Fq 'pidof hapaneld-helper'; then
           [ "${MOCK_HELPER_START:-ok}" = ok ] && printf '4242\n'
+        elif printf '%s' "$command_text" | grep -Fq ' --request '; then
+          case "$command_text" in
+            *' --request PING'*) [ "${MOCK_ROLLBACK_PING:-ok}" = ok ] && printf 'OK\n' ;;
+            *' --request COMPANIONCAPS'*)
+              [ "${MOCK_HELPER_REQUEST_DELAY:-0}" = 0 ] || /bin/sleep "$MOCK_HELPER_REQUEST_DELAY"
+              [ "${MOCK_HELPER_START:-ok}" = ok ] && [ "${MOCK_HELPER_CAPABILITY:-ok}" = ok ] &&
+                printf 'COMPANIONCAPS 1 BACKUP RESTORE STATUS JOURNAL\n'
+              ;;
+            *' --request BUILDID'*)
+              [ "${MOCK_HELPER_REQUEST_DELAY:-0}" = 0 ] || /bin/sleep "$MOCK_HELPER_REQUEST_DELAY"
+              [ "${MOCK_HELPER_BUILD_ID_MATCH:-ok}" = ok ] && printf 'BUILDID %s\n' "${MOCK_HELPER_BUILD_ID:?}"
+              ;;
+          esac
         fi
         ;;
       'su 0 sh -c "'*'"')
@@ -188,6 +253,8 @@ case "${1:-}" in
           fi
         elif printf '%s' "$command_text" | grep -Fq 'echo TRANSACTION_READY'; then
           [ "${MOCK_TRANSACTION_TAMPER:-0}" != 1 ] && printf 'TRANSACTION_READY\n'
+        elif printf '%s' "$command_text" | grep -Fq 'echo PROBE_READY'; then
+          [ "${MOCK_TRANSACTION_TAMPER:-0}" != 1 ] && printf 'PROBE_READY\n'
         elif printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*install-(system|systemless)'; then
           if [ "${MOCK_TRANSACTION_BUSY:-0}" = 1 ]; then
             printf 'TRANSACTION_BUSY\n'
@@ -201,15 +268,21 @@ case "${1:-}" in
             [ "${MOCK_HELPER_INSTALL:-ok}" = ok ] && printf 'INSTALL_OK\n'
             [ "${MOCK_HELPER_INSTALL:-ok}" != ok ] || : > "$STATE_DIR/active-helper-transaction"
           fi
+        elif printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*finalize-rollback-(system|systemless)'; then
+          if [ "${MOCK_TRANSACTION_TOKEN_MISMATCH:-0}" != 1 ] && [ "${MOCK_TOKEN_MISMATCH_ACTION:-}" != finalize ]; then
+            printf 'ROLLBACK_FINALIZED\n'
+            rm -f "$STATE_DIR/stale-helper-transaction" "$STATE_DIR/active-helper-transaction"
+          fi
         elif printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*rollback-(system|systemless)'; then
           if [ "${MOCK_TRANSACTION_TOKEN_MISMATCH:-0}" != 1 ] && [ "${MOCK_TOKEN_MISMATCH_ACTION:-}" != rollback ]; then
             [ "${MOCK_ROLLBACK_RESULT:-ok}" = ok ] && printf 'ROLLBACK_RESTARTED\n'
-            rm -f "$STATE_DIR/stale-helper-transaction" "$STATE_DIR/active-helper-transaction"
           fi
         elif printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*commit-(system|systemless)'; then
           if [ "${MOCK_TRANSACTION_TOKEN_MISMATCH:-0}" != 1 ] && [ "${MOCK_TOKEN_MISMATCH_ACTION:-}" != commit ]; then
-            [ "${MOCK_HELPER_COMMIT:-ok}" = ok ] && printf 'COMMIT_OK\n'
-            rm -f "$STATE_DIR/stale-helper-transaction" "$STATE_DIR/active-helper-transaction"
+            if [ "${MOCK_HELPER_COMMIT:-ok}" = ok ] && [ "${MOCK_COMMIT_LIVE_STATE:-TARGET}" = TARGET ]; then
+              printf 'COMMIT_OK\n'
+              rm -f "$STATE_DIR/stale-helper-transaction" "$STATE_DIR/active-helper-transaction"
+            fi
           fi
         elif printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*lease-(system|systemless)'; then
           [ "${MOCK_TRANSACTION_TOKEN_MISMATCH:-0}" != 1 ] && [ "${MOCK_TOKEN_MISMATCH_ACTION:-}" != lease ] && printf 'LEASE_OK\n'
@@ -231,10 +304,13 @@ case "${1:-}" in
           fi
         elif [ "${MOCK_ADB_ROOT:-0}" = 1 ] && printf '%s' "$command_text" | grep -Fq 'echo TRANSACTION_READY'; then
           [ "${MOCK_TRANSACTION_TAMPER:-0}" != 1 ] && printf 'TRANSACTION_READY\n'
+        elif [ "${MOCK_ADB_ROOT:-0}" = 1 ] && printf '%s' "$command_text" | grep -Fq 'echo PROBE_READY'; then
+          [ "${MOCK_TRANSACTION_TAMPER:-0}" != 1 ] && printf 'PROBE_READY\n'
         elif [ "${MOCK_ADB_ROOT:-0}" = 1 ] && printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*install-(system|systemless)'; then
           [ "${MOCK_TRANSACTION_BUSY:-0}" = 1 ] && printf 'TRANSACTION_BUSY\n' || printf 'INSTALL_OK\n'
         elif [ "${MOCK_ADB_ROOT:-0}" = 1 ] && printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*commit-(system|systemless)'; then
-          [ "${MOCK_HELPER_COMMIT:-ok}" = ok ] && printf 'COMMIT_OK\n'
+          [ "${MOCK_HELPER_COMMIT:-ok}" = ok ] &&
+            [ "${MOCK_COMMIT_LIVE_STATE:-TARGET}" = TARGET ] && printf 'COMMIT_OK\n'
         elif [ "${MOCK_ADB_ROOT:-0}" = 1 ] && printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*lease-(system|systemless)'; then
           [ "${MOCK_TRANSACTION_TOKEN_MISMATCH:-0}" != 1 ] && [ "${MOCK_TOKEN_MISMATCH_ACTION:-}" != lease ] && printf 'LEASE_OK\n'
         fi

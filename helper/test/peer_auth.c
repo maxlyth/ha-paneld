@@ -57,6 +57,11 @@ int main(void) {
     fake_app_uid = 23456;
     CHECK(!uid_allowed(12345), "old uid must stay rejected after reinstall with a new uid");
     CHECK(uid_allowed(fake_app_uid), "newly resolved app uid must be allowed after reinstall");
+    CHECK(probe_command_allowed("PING"), "root probe mode must allow PING");
+    CHECK(probe_command_allowed("COMPANIONCAPS"), "root probe mode must allow capability discovery");
+    CHECK(probe_command_allowed("BUILDID"), "root probe mode must allow build identity");
+    CHECK(!probe_command_allowed("REBOOT"), "root probe mode must not expose mutating verbs");
+    CHECK(!probe_command_allowed("PING extra"), "root probe mode must require an exact verb");
 
     puts("peer auth tests passed");
     return 0;

@@ -249,7 +249,8 @@ internal enum class NetworkAvailableAction { NONE, RECONNECT, RETRY_DISCOVERY }
 /** Blank-broker discovery is a recoverable waiting state, while explicit auth rejection and a stopped
  * bridge retain their own lifecycle policies. */
 internal fun networkAvailableAction(state: String, configuredBroker: String): NetworkAvailableAction = when {
-    state == "connected" || state == "disabled" || isAuthRecoveryState(state) -> NetworkAvailableAction.NONE
+    state == "connected" || state == "disabled" || state == "config-error" ||
+        isAuthRecoveryState(state) -> NetworkAvailableAction.NONE
     state == "discovering" && configuredBroker.isBlank() -> NetworkAvailableAction.RETRY_DISCOVERY
     else -> NetworkAvailableAction.RECONNECT
 }
@@ -963,6 +964,7 @@ class PaneldService : Service() {
             "auth-failed" -> "$host · reachable, auth rejected — check username/password"
             "unreachable" -> "$host · unreachable"
             "connecting" -> "$host · connecting…"
+            "config-error" -> "$host · invalid or unsupported broker URL"
             else -> "disabled"
         }
         val pv = SystemProps.get("ro.product.version")
@@ -1564,11 +1566,13 @@ class PaneldService : Service() {
                     // generation's sacrificial thread. A replacement runtime must not be suppressed by a
                     // heartbeat stranded on the obsolete client.
                     val observed = runtime.observe()
+                    val currentConnectionGeneration =
+                        observed?.value?.mqtt?.heartbeatConnectionGeneration()
                     when (val admission = HeartbeatAdmission.decide(
-                        currentGeneration = observed?.generation,
+                        currentGeneration = currentConnectionGeneration,
                         liveTrackedGenerations = heartbeats.map { it.generation },
                     )) {
-                        HeartbeatAdmission.Decision.NoCurrentRuntime,
+                        HeartbeatAdmission.Decision.NoCurrentConnection,
                         HeartbeatAdmission.Decision.CurrentHeartbeatAlive -> Unit
                         is HeartbeatAdmission.Decision.Admit -> {
                             if (admission.replacingStranded) {
@@ -1577,7 +1581,9 @@ class PaneldService : Service() {
                             }
                             val target = observed ?: continue
                             val thread = Thread({
-                                if (runtime.isCurrent(target)) {
+                                if (runtime.isCurrent(target) &&
+                                    target.value.mqtt.isCurrentHeartbeatConnection(admission.generation)
+                                ) {
                                     runCatching { target.value.mqtt.heartbeat() }
                                 }
                             }, "mqtt-heartbeat").apply { isDaemon = true; start() }

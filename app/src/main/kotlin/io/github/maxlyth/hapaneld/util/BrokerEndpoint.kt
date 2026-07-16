@@ -25,6 +25,8 @@ object BrokerEndpoint {
     /** Broker URL schemes that mean "MQTT over TLS". (`ws://`/`wss://` WebSocket transport is not yet
      *  supported — the HiveMQ websocket module breaks the AGP build; see gradle/libs.versions.toml.) */
     private val TLS_SCHEMES = setOf("ssl", "mqtts", "tls")
+    private val PLAIN_SCHEMES = setOf("tcp", "mqtt")
+    private val SUPPORTED_SCHEMES = PLAIN_SCHEMES + TLS_SCHEMES
 
     /** A parsed broker spec: bare [host] (IPv6 brackets/zone stripped), resolved [port], whether the
      *  scheme selects TLS, and the normalised [scheme]. */
@@ -37,19 +39,45 @@ object BrokerEndpoint {
         val s = raw.trim()
         if (s.isEmpty()) return null
         val uri = runCatching { URI(if (s.contains("://")) s else "tcp://$s") }.getOrNull() ?: return null
+        // Older releases accepted a conventional trailing slash and persisted it verbatim. Preserve
+        // that harmless spelling across upgrade, but reject every meaningful transport path because
+        // this client supports raw MQTT only (not WebSocket/topic-path endpoints).
+        if (uri.userInfo != null || uri.rawPath !in setOf(null, "", "/") ||
+            uri.rawQuery != null || uri.rawFragment != null
+        ) {
+            return null
+        }
         var host = uri.host ?: return null
         if (host.length >= 2 && host.startsWith("[") && host.endsWith("]")) host = host.substring(1, host.length - 1)
         host = host.substringBefore('%')          // drop any IPv6 scope/zone id
         if (host.isEmpty()) return null
         val scheme = (uri.scheme ?: "tcp").lowercase()
+        if (scheme !in SUPPORTED_SCHEMES) return null
         val tls = scheme in TLS_SCHEMES
-        val port = if (uri.port in 1..65535) uri.port else if (tls) TLS_PORT else DEFAULT_PORT
+        val explicitPort = uri.rawAuthority?.let { authority ->
+            if (authority.startsWith("[")) {
+                val closingBracket = authority.indexOf(']')
+                closingBracket >= 0 && closingBracket + 1 < authority.length
+            } else {
+                ':' in authority
+            }
+        } == true
+        if (explicitPort && uri.port !in 1..65535) return null
+        val port = if (explicitPort) uri.port else if (tls) TLS_PORT else DEFAULT_PORT
         return Endpoint(host, port, tls, scheme)
     }
 
     /** Parse a broker spec into (host, port), or null if unusable — the host/port projection of
      *  [endpoint]. Kept for callers that don't need the TLS flag. */
     fun parse(raw: String): Pair<String, Int>? = endpoint(raw)?.let { it.host to it.port }
+
+    /** Canonical persisted spelling. Validation has already established that a final slash is only the
+     * accepted root path, so removing it cannot change the selected raw-MQTT endpoint. */
+    fun normalize(raw: String): String? {
+        val value = raw.trim()
+        if (endpoint(value) == null) return null
+        return value.removeSuffix("/")
+    }
 
     /** Happy-eyeballs family selection: return the first address of the preferred family, else the first
      *  of the other family, else null. Deterministic (first-of-family) so reconnect behaviour is stable. */

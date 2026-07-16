@@ -34,6 +34,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
+          fetch-depth: 0
 
       - name: Validate release tag and source commit
         run: |
@@ -49,6 +50,14 @@ jobs:
           if [[ ! "$source_commit" =~ ^[0-9a-f]{40}$ ]]; then
             echo "::error::Checked-out source did not resolve to one commit."
             exit 1
+          fi
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            git fetch --no-tags origin \
+              '+refs/heads/main:refs/remotes/origin/main'
+            if ! git merge-base --is-ancestor "$source_commit" refs/remotes/origin/main; then
+              echo "::error::Release tag $RELEASE_TAG points to $source_commit, which is not on origin/main."
+              exit 1
+            fi
           fi
           echo "SOURCE_COMMIT=$source_commit" >> "$GITHUB_ENV"
 
@@ -108,6 +117,9 @@ jobs:
 
       - name: Test installer and provisioning contracts
         run: scripts/tests/provision_test.sh
+
+      - name: Test release workflow contracts
+        run: scripts/tests/release_workflow_test.sh
 
       - name: Run JVM tests and Android lint
         run: ./gradlew :app:testDebugUnitTest :app:lintDebug --stacktrace
@@ -197,7 +209,11 @@ jobs:
             extract "$base" > release-input/release-body.md
           fi
           if [ ! -s release-input/release-body.md ]; then
-            echo "::warning::No CHANGELOG.md section for $tag — add one for human-readable notes."
+            if [ "$GITHUB_EVENT_NAME" = push ]; then
+              echo "::error::No CHANGELOG.md section for stable release $tag. Add an exact ## $tag entry before tagging."
+              exit 1
+            fi
+            echo "::warning::Dry run has no CHANGELOG.md section for stable candidate $tag."
             echo "_No changelog entry for $RELEASE_TAG._" > release-input/release-body.md
           fi
           changelog_body="$(mktemp)"

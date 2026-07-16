@@ -189,6 +189,7 @@ class ProfileRoutesTest {
         var aborts = 0
         var restartAllowed = false
         var scheduleAccepted = true
+        var abortPersisted = true
         application {
             routing {
                 route("/api/v1") {
@@ -197,7 +198,7 @@ class ProfileRoutesTest {
                             admin = admin,
                             requestRestart = { scheduleAccepted },
                             restartAllowed = { restartAllowed },
-                            abortPendingRestart = { aborts++; true },
+                            abortPendingRestart = { aborts++; abortPersisted },
                         ),
                     )
                 }
@@ -216,6 +217,34 @@ class ProfileRoutesTest {
         assertEquals(HttpStatusCode.ServiceUnavailable, unavailable.status)
         assertEquals("profile-restart-unavailable", JSONObject(unavailable.bodyAsText()).getString("error"))
         assertEquals(2, aborts)
+
+        abortPersisted = false
+        val latent = postJson("/api/v1/profiles/activate", request)
+        assertEquals(HttpStatusCode.ServiceUnavailable, latent.status)
+        val latentBody = JSONObject(latent.bodyAsText())
+        assertEquals("profile-activation-abort-persist-failed", latentBody.getString("error"))
+        assertTrue(latentBody.getBoolean("activation_pending"))
+        assertTrue(latentBody.getString("message").contains("remains pending"))
+        assertEquals(3, aborts)
+    }
+
+    @Test fun restartRejectionDistinguishesDurableAbortFailureForRestoreCallers() {
+        val recovered = rejectFailedProfileRestart(
+            restartAllowed = true,
+            requestRestart = { false },
+            abortPendingRestart = { true },
+        )
+        assertEquals("profile-restart-unavailable", recovered?.error)
+        assertTrue(recovered!!.abortPersisted)
+
+        val latent = rejectFailedProfileRestart(
+            restartAllowed = true,
+            requestRestart = { false },
+            abortPendingRestart = { false },
+        )
+        assertEquals("profile-activation-abort-persist-failed", latent?.error)
+        assertFalse(latent!!.abortPersisted)
+        assertTrue(latent.message.contains("remains pending"))
     }
 
     @Test

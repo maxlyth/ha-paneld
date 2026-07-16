@@ -441,7 +441,16 @@ private suspend fun handleComponentInstall(
 private suspend fun handleBackup(call: ApplicationCall, dependencies: ControlPlaneRouteDependencies) {
     val parameters = receiveBoundedFormParameters(call) ?: return
     val passphrase = parameters["passphrase"].orEmpty()
+    val allowPlaintext = parameters["allow_plaintext"]?.let { it == "true" || it == "1" } ?: false
     val includeCompanion = parameters["include_companion"]?.let { it == "true" || it == "1" } ?: true
+    if (passphrase.isEmpty() && !allowPlaintext) {
+        call.respondText(
+            """{"ok":false,"error":"passphrase-required","message":"A backup contains credentials. Supply a passphrase, or explicitly acknowledge plaintext export with allow_plaintext=1."}""",
+            ContentType.Application.Json,
+            HttpStatusCode.BadRequest,
+        )
+        return
+    }
     val delivery = BackupDeliveryGate.acquire()
     if (delivery == null) {
         call.respondText(

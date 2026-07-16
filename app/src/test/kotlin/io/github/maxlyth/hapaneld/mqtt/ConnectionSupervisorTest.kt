@@ -37,9 +37,9 @@ class ConnectionSupervisorTest {
         )
     }
 
-    @Test fun `missing current runtime suppresses heartbeat admission`() {
+    @Test fun `missing current connection suppresses heartbeat admission`() {
         assertEquals(
-            HeartbeatAdmission.Decision.NoCurrentRuntime,
+            HeartbeatAdmission.Decision.NoCurrentConnection,
             HeartbeatAdmission.decide(currentGeneration = null, liveTrackedGenerations = emptyList()),
         )
     }
@@ -48,6 +48,26 @@ class ConnectionSupervisorTest {
         assertEquals(
             HeartbeatAdmission.Decision.Admit(generation = 7L, replacingStranded = false),
             HeartbeatAdmission.decide(currentGeneration = 7L, liveTrackedGenerations = emptyList()),
+        )
+    }
+
+    @Test fun `successful reconnect admits a heartbeat while the retired connection probe is stuck`() {
+        val connection = MqttConnectionGeneration()
+        val retired = connection.advance()
+        connection.clear()
+        assertEquals(null, connection.currentOrNull())
+        // Models either an explicit replacement connect or HiveMQ's automatic reconnect callback.
+        val replacement = connection.advance()
+
+        assertTrue(replacement > retired)
+        assertEquals(false, connection.isCurrent(retired))
+        assertTrue(connection.isCurrent(replacement))
+        assertEquals(
+            HeartbeatAdmission.Decision.Admit(generation = replacement, replacingStranded = true),
+            HeartbeatAdmission.decide(
+                currentGeneration = connection.currentOrNull(),
+                liveTrackedGenerations = listOf(retired),
+            ),
         )
     }
 
@@ -67,6 +87,12 @@ class ConnectionSupervisorTest {
 
     @Test fun disabledIsNoneEvenWhenApparentlyStale() {
         assertEquals(ConnectionSupervisor.Action.None, supervisor().tick("disabled", 1_000L, stale + 1, 10_000L, false))
+    }
+
+    @Test fun invalidBrokerConfigurationIsTerminalUntilConfigurationChanges() {
+        val s = supervisor()
+        assertEquals(ConnectionSupervisor.Action.None, s.tick("config-error", 0L, 0L, 1_000L, false))
+        assertEquals(ConnectionSupervisor.Action.None, s.tick("config-error", 0L, 0L, 2_000L, false))
     }
 
     @Test fun livenessStaleForcesRebuild() {

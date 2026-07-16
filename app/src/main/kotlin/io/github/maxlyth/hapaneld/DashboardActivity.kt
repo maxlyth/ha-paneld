@@ -47,6 +47,7 @@ import io.github.maxlyth.hapaneld.control.BottomSwipeDetector
 import io.github.maxlyth.hapaneld.control.BuiltinDashboard
 import io.github.maxlyth.hapaneld.dashboard.EntityFilterProtocol
 import io.github.maxlyth.hapaneld.dashboard.EntityFilterTelemetry
+import io.github.maxlyth.hapaneld.dashboard.shouldInstallDashboardTrafficObserver
 import io.github.maxlyth.hapaneld.dashboard.shouldHoldRendererForEntityBootstrap
 import io.github.maxlyth.hapaneld.dashboard.EntityLearningProtocol
 import io.github.maxlyth.hapaneld.dashboard.EntityLearningRuntime
@@ -1475,17 +1476,21 @@ class DashboardActivity : AppCompatActivity() {
                 }
             }
         }
-        // Always observe the exact HA entity socket so filter-on and filter-off runs have the same
-        // privacy-safe denominator even when automatic learning is disabled. Register after the filter
-        // wrapper so subscription-id tracking sees the effective send chain in both arms.
-        if (filterLease != null) runCatching {
+        // The enabled measurement arm observes the exact HA entity socket in both filter-on and
+        // filter-off runs. The paired -PfeatureCosts=false arm must install no observer at all, otherwise
+        // its JSON parsing, PerformanceObservers and five-second bridge contaminate the baseline.
+        if (shouldInstallDashboardTrafficObserver(
+                featureCostsEnabled = BuildConfig.FEATURE_COSTS_ENABLED,
+                filterLeasePresent = filterLease != null,
+            )
+        ) runCatching {
             if (androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.DOCUMENT_START_SCRIPT)) {
                 androidx.webkit.WebViewCompat.addDocumentStartJavaScript(
                     this,
                     EntityFilterProtocol.trafficObserverDocumentStartScript(config.haUrl, documentStartOrigins),
                     documentStartOrigins,
                 )
-                EntityFilterTelemetry.trafficObserverInstalled(filterLease)
+                EntityFilterTelemetry.trafficObserverInstalled(requireNotNull(filterLease))
             }
         }.onFailure { Log.w(TAG, "entity-filter traffic observer unavailable", it) }
         if (config.dashboardEntityLearningEnabled) runCatching {

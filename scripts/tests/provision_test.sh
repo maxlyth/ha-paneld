@@ -69,6 +69,7 @@ run_provision() {
   MOCK_SYSTEMLESS_RUNNER="${MOCK_SYSTEMLESS_RUNNER:-1}" \
   MOCK_HELPER_INSTALL="${MOCK_HELPER_INSTALL:-ok}" \
   MOCK_HELPER_COMMIT="${MOCK_HELPER_COMMIT:-ok}" \
+  MOCK_COMMIT_LIVE_STATE="${MOCK_COMMIT_LIVE_STATE:-TARGET}" \
   MOCK_TRANSACTION_BUSY="${MOCK_TRANSACTION_BUSY:-0}" \
   MOCK_TRANSACTION_TAMPER="${MOCK_TRANSACTION_TAMPER:-0}" \
   MOCK_TRANSACTION_TOKEN_MISMATCH="${MOCK_TRANSACTION_TOKEN_MISMATCH:-0}" \
@@ -91,6 +92,10 @@ run_provision() {
   MOCK_SU_DIALECT="${MOCK_SU_DIALECT:-join}" \
   MOCK_SHIZUKU_START="${MOCK_SHIZUKU_START:-ok}" \
   MOCK_SHIZUKU_START_SCRIPT="${MOCK_SHIZUKU_START_SCRIPT:-ok}" \
+  MOCK_SHIZUKU_INSTALL="${MOCK_SHIZUKU_INSTALL:-ok}" \
+  MOCK_SHIZUKU_INSTALL_PID_FILE="${MOCK_SHIZUKU_INSTALL_PID_FILE:-}" \
+  SHIZUKU_INSTALL_TIMEOUT_SECONDS="${SHIZUKU_INSTALL_TIMEOUT_SECONDS:-180}" \
+  ROOT_HELPER_LEASE_GUARD_INTERVAL_SECONDS="${ROOT_HELPER_LEASE_GUARD_INTERVAL_SECONDS:-60}" \
   MOCK_OPENSSL_MISSING="${MOCK_OPENSSL_MISSING:-0}" \
   MOCK_OPENSSL_DIGEST_FAIL="${MOCK_OPENSSL_DIGEST_FAIL:-0}" \
   HAPANELD_HELPER_DIST_DIR="${HAPANELD_HELPER_DIST_DIR:-$MOCK_HELPER_DIST}" \
@@ -292,15 +297,21 @@ MOCK_LATE_ADB_STATUS=255 MOCK_LATE_ADB_PHASE=persistence MOCK_PRODUCT_IDENTITY=T
   run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
 assert_success "late vendor-strip safety probe cannot turn a verified install into exit 255"
 assert_contains 'vendor-strip skipped' "failed persistence probe keeps vendor stripping fail-closed"
-assert_log_contains '^adb .* push .*/arm64-v8a/hapaneld-helper /data/local/tmp/hapaneld-helper$' "local rooted provisioning stages the matching helper"
-assert_log_contains '^adb .* push .* /data/local/tmp/hapaneld-helper\.txn$' "local rooted provisioning stages its authenticated transaction"
-helper_push_line="$(grep -nE '^adb .* push .*/arm64-v8a/hapaneld-helper /data/local/tmp/hapaneld-helper$' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
+assert_log_contains '^adb .* push .*/arm64-v8a/hapaneld-helper /data/local/tmp/hapaneld-helper-[0-9a-f]{32}$' "local rooted provisioning stages the matching helper under its transaction nonce"
+assert_log_contains '^adb .* push .* /data/local/tmp/hapaneld-helper-[0-9a-f]{32}\.txn$' "local rooted provisioning stages its authenticated transaction under the same nonce"
+helper_push_line="$(grep -nE '^adb .* push .*/arm64-v8a/hapaneld-helper /data/local/tmp/hapaneld-helper-[0-9a-f]{32}$' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
 local_app_install_line="$(grep -nE '^adb .* install( |$)' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
 if [ -n "$helper_push_line" ] && [ -n "$local_app_install_line" ] && [ "$helper_push_line" -lt "$local_app_install_line" ]; then
   pass "root helper is installed before the APK is replaced"
 else
   fail_test "root helper is installed before the APK is replaced"
 fi
+
+HAPANELD_HELPER_PROBE= run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "join-style su validates the daemon through an authenticated root-side client"
+assert_log_contains '/system/bin/hapaneld-helper --request COMPANIONCAPS' "capability validation runs as root instead of Android shell uid"
+assert_log_contains '/system/bin/hapaneld-helper --request BUILDID' "build validation uses the same authenticated root-side client"
+assert_not_contains ' forward |/dev/tcp/' "$MOCK_CALL_LOG" "daemon validation does not weaken peer authentication with adb forwarding"
 
 MOCK_ROOT=0 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
 assert_success "non-root provisioning continues without a root helper"
@@ -331,6 +342,11 @@ if grep -Fq '/system/bin/stop hapaneld_ledd' "$PROVISION" && grep -Fq '/system/b
 else
   fail_test "systemless boot service retires the legacy daemon before binding the helper socket"
 fi
+
+HAPANELD_HELPER_PROBE= MOCK_SYSTEM_WRITABLE=0 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "systemless validation invokes the exact newly installed helper path"
+assert_log_contains 'exec /data/adb/hapaneld/hapaneld-helper --request COMPANIONCAPS' "systemless validation cannot select a stale /system helper"
+assert_not_contains 'exec /system/bin/hapaneld-helper --request' "$MOCK_CALL_LOG" "systemless validation never probes the alternate install location"
 
 MOCK_SYSTEM_WRITABLE=0 MOCK_SYSTEMLESS_RUNNER=0 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
 assert_failure "read-only system without a verified service.d runner fails closed"
@@ -371,7 +387,7 @@ assert_log_contains '^curl .*ha-paneld-helper-v0\.9\.4-rc1-arm64-v8a\.sha256\.si
 assert_log_contains '^openssl dgst -sha256 -verify .* -signature .*/helper\.sha256\.sig .*/helper\.sha256$' "release provisioning authenticates the helper checksum"
 assert_contains 'authenticated.*v0\.9\.4-rc1 helper.*arm64-v8a' "release provisioning reports helper authentication"
 release_helper_signature_line="$(grep -nE '^openssl dgst -sha256 -verify .*helper\.sha256' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
-release_helper_push_line="$(grep -nE '^adb .* push .*ha-paneld-helper-v0\.9\.4-rc1-arm64-v8a /data/local/tmp/hapaneld-helper$' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
+release_helper_push_line="$(grep -nE '^adb .* push .*ha-paneld-helper-v0\.9\.4-rc1-arm64-v8a /data/local/tmp/hapaneld-helper-[0-9a-f]{32}$' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
 release_app_install_line="$(grep -nE '^adb .* install( |$)' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
 if [ -n "$release_helper_signature_line" ] && [ -n "$release_helper_push_line" ] && [ -n "$release_app_install_line" ] && \
    [ "$release_helper_signature_line" -lt "$release_helper_push_line" ] && [ "$release_helper_push_line" -lt "$release_app_install_line" ]; then
@@ -410,6 +426,30 @@ assert_failure "helper start failure leaves the previous APK installed"
 assert_contains 'new root helper failed its capability check; the prior helper was restored' "helper start failure names the rollback outcome"
 assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "helper start failure stops before APK replacement"
 assert_log_contains 'helper-transaction-[0-9a-f]+.*rollback-system' "system helper capability failure invokes its rollback journal"
+assert_log_contains 'helper-transaction-[0-9a-f]+.*finalize-rollback-system' "verified rollback reaches its identity-gated cleanup point"
+if [ ! -f "$TMP/active-helper-transaction" ]; then
+  pass "verified provisioner rollback removes its retained recovery state"
+else
+  fail_test "verified provisioner rollback removes its retained recovery state"
+fi
+
+MOCK_HELPER_CAPABILITY=fail MOCK_ROLLBACK_PING=fail \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_failure "failed restored-helper PING leaves rollback unverified"
+assert_contains 'rollback could not be verified' "failed rollback PING does not claim restoration"
+if [ -f "$TMP/active-helper-transaction" ]; then
+  pass "failed provisioner rollback verification retains its durable recovery state"
+else
+  fail_test "failed provisioner rollback verification retains its durable recovery state"
+fi
+assert_not_contains 'finalize-rollback-system' "$MOCK_CALL_LOG" "unverified rollback never reaches destructive finalization"
+rm -f "$TMP/active-helper-transaction"
+
+HAPANELD_HELPER_PROBE= MOCK_HELPER_CAPABILITY=fail \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_failure "rollback verification does not require the restored legacy helper to implement client mode"
+assert_log_contains '/data/adb/hapaneld/\.helper-probe-[0-9a-f]+ --request PING' "rollback PING uses the retained authenticated new client"
+assert_not_contains 'exec /system/bin/hapaneld-helper --request PING' "$MOCK_CALL_LOG" "rollback never executes the restored legacy daemon as a client"
 
 MOCK_HELPER_INSTALL=fail \
   run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
@@ -480,6 +520,17 @@ if [ "$commit_attempts" -eq 2 ]; then
 else
   fail_test "helper commit is retried idempotently before failing"
 fi
+
+MOCK_COMMIT_LIVE_STATE=UNKNOWN \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_failure "commit-time persistence mutation retains the active helper recovery journal"
+assert_contains 'helper recovery journal could not be committed' "commit-time UNKNOWN state fails closed after APK installation"
+if [ -f "$TMP/active-helper-transaction" ]; then
+  pass "commit-time UNKNOWN state preserves active recovery evidence"
+else
+  fail_test "commit-time UNKNOWN state preserves active recovery evidence"
+fi
+assert_not_contains 'helper-transaction-[0-9a-f]+.*rollback-system' "$MOCK_CALL_LOG" "commit-time UNKNOWN state never performs an unsafe post-APK rollback"
 
 MOCK_TOKEN_MISMATCH_ACTION=commit \
   run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
@@ -583,6 +634,20 @@ assert_log_contains 'helper-probe COMPANIONCAPS' "stale committed transaction re
 assert_log_contains 'helper-probe BUILDID' "stale committed transaction rechecks the recorded helper build"
 assert_log_contains 'helper-transaction-[0-9a-f]+.*commit-system' "stale committed transaction discards obsolete recovery"
 assert_not_contains 'helper-transaction-[0-9a-f]+.*rollback-system' "$MOCK_CALL_LOG" "stale committed transaction does not restore the superseded helper"
+
+MOCK_STALE_TRANSACTION=1 \
+MOCK_INSTALLED_APK_SOURCE="$HELPER_RELEASE_APK" \
+MOCK_STALE_APK_SHA256="$helper_release_apk_sha" \
+MOCK_COMMIT_LIVE_STATE=UNKNOWN \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_failure "stale reconciliation refuses to discard recovery after persistence changes before commit"
+assert_contains 'incomplete prior root-helper and APK upgrade could not be reconciled safely' "stale commit-time UNKNOWN state names the retained reconciliation"
+if [ -f "$TMP/stale-helper-transaction" ]; then
+  pass "stale commit-time UNKNOWN state preserves its durable journal"
+else
+  fail_test "stale commit-time UNKNOWN state preserves its durable journal"
+fi
+assert_not_contains 'helper-transaction-[0-9a-f]+.*rollback-system' "$MOCK_CALL_LOG" "stale exact-APK UNKNOWN state is not rolled back destructively"
 
 MOCK_STALE_TRANSACTION=1 \
 MOCK_INSTALLED_APK_SOURCE="$RELEASE_APK" \
@@ -806,6 +871,67 @@ assert_log_contains '^adb .* shell monkey -p moe\.shizuku\.privileged\.api 1$' "
 assert_log_contains '^adb .* shell test -f .*/moe\.shizuku\.privileged\.api/start\.sh$' "Shizuku bootstrap waits for start.sh"
 assert_log_contains '^adb .* shell sh .*/moe\.shizuku\.privileged\.api/start\.sh$' "Shizuku bootstrap rearms the service through start.sh"
 assert_log_contains '^adb .* shell pm grant moe\.shizuku\.privileged\.api android\.permission\.WRITE_SECURE_SETTINGS$' "Shizuku bootstrap enables supported restart setup"
+
+# A stuck Shizuku package-manager operation must remain inside the root-helper ownership window,
+# reject a competing provisioner, then be killed and reaped at its host deadline without replacing
+# ha-paneld or leaving a lease heartbeat behind.
+: > "$MOCK_CALL_LOG"
+rm -f "$TMP/stale-helper-transaction" "$TMP/active-helper-transaction"
+printf 'previous installed apk\n' > "$TMP/installed-apk"
+SHIZUKU_INSTALL_PID_FILE="$TMP/shizuku-install-hang.pid"
+SHIZUKU_INSTALL_OUTPUT="$TMP/shizuku-install-hang.out"
+MOCK_SHIZUKU_INSTALL=block \
+MOCK_SHIZUKU_INSTALL_PID_FILE="$SHIZUKU_INSTALL_PID_FILE" \
+MOCK_STATE_DIR="$TMP" \
+SHIZUKU_INSTALL_TIMEOUT_SECONDS=4 \
+ROOT_HELPER_LEASE_GUARD_INTERVAL_SECONDS=0.05 \
+  bash "$PROVISION" "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --shizuku --no-tame \
+    > "$SHIZUKU_INSTALL_OUTPUT" 2>&1 &
+shizuku_owner_pid=$!
+shizuku_install_ready=0
+for _ in {1..100}; do
+  if [ -s "$SHIZUKU_INSTALL_PID_FILE" ]; then shizuku_install_ready=1; break; fi
+  /bin/sleep 0.05
+done
+if [ "$shizuku_install_ready" -eq 1 ]; then
+  pass "blocked Shizuku package install exposes its subprocess lifecycle"
+else
+  LAST_OUTPUT="$SHIZUKU_INSTALL_OUTPUT"
+  fail_test "blocked Shizuku package install exposes its subprocess lifecycle"
+fi
+touch "$TMP/stale-helper-transaction"
+COMPETING_OUTPUT="$TMP/shizuku-competing-provision.out"
+MOCK_ACTIVE_TRANSACTION=1 MOCK_STATE_DIR="$TMP" \
+  bash "$PROVISION" "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame \
+    > "$COMPETING_OUTPUT" 2>&1
+competing_status=$?
+if [ "$competing_status" -ne 0 ] && grep -Eq 'active root-helper transaction|still owns' "$COMPETING_OUTPUT"; then
+  pass "competing provisioner cannot recover a helper transaction during Shizuku installation"
+else
+  LAST_OUTPUT="$COMPETING_OUTPUT"
+  fail_test "competing provisioner cannot recover a helper transaction during Shizuku installation"
+fi
+if wait "$shizuku_owner_pid"; then shizuku_owner_status=0; else shizuku_owner_status=$?; fi
+LAST_OUTPUT="$SHIZUKU_INSTALL_OUTPUT"
+if [ "$shizuku_owner_status" -ne 0 ]; then
+  pass "stuck Shizuku package install returns nonzero at its host deadline"
+else
+  fail_test "stuck Shizuku package install returns nonzero at its host deadline"
+fi
+assert_contains 'Shizuku installation timed out after 4s' "Shizuku package timeout names the bounded failed step"
+shizuku_install_pid="$(cat "$SHIZUKU_INSTALL_PID_FILE" 2>/dev/null || true)"
+if [ -n "$shizuku_install_pid" ] && ! kill -0 "$shizuku_install_pid" 2>/dev/null; then
+  pass "Shizuku package timeout reaps the blocked adb install"
+else
+  fail_test "Shizuku package timeout reaps the blocked adb install"
+fi
+if [ "$(grep -Ec 'helper-transaction-[0-9a-f]+.*lease-system' "$MOCK_CALL_LOG" || true)" -ge 2 ]; then
+  pass "root-helper lease remains renewed throughout Shizuku package installation"
+else
+  fail_test "root-helper lease remains renewed throughout Shizuku package installation"
+fi
+assert_not_contains '^adb .* install -r -g .*ha-paneld.*\.apk$' "$MOCK_CALL_LOG" "timed-out Shizuku package install leaves ha-paneld untouched"
+rm -f "$TMP/stale-helper-transaction" "$TMP/active-helper-transaction"
 
 # A corrupt or substituted download must stop before the manager package or service is touched.
 MOCK_SHIZUKU_DOWNLOAD_SHA=0000000000000000000000000000000000000000000000000000000000000000 \
@@ -1056,6 +1182,119 @@ assert_contains 'panel-a\.test:5555' "parallel fleet replays the successful pane
 assert_contains 'panel-b\.test:5555' "parallel fleet replays the failed panel section"
 assert_contains '1 OK, 1 failed' "parallel fleet aggregates mixed results"
 
+# The fleet wrapper owns every provisioner it launches. TERM must be forwarded through the worker
+# wrapper to the blocked package install, then all descendants must be reaped before shared temp/log
+# state is removed.
+: > "$MOCK_CALL_LOG"
+FLEET_BLOCKED_PID_FILE="$TMP/fleet-blocked-install.pid"
+FLEET_BLOCKED_OUTPUT="$TMP/fleet-blocked-output.txt"
+MOCK_APK_INSTALL=block MOCK_APK_INSTALL_PID_FILE="$FLEET_BLOCKED_PID_FILE" \
+  bash "$UPDATE_FLEET" --apk "$APK" --no-tame -- "$MOCK_TARGET" > "$FLEET_BLOCKED_OUTPUT" 2>&1 &
+fleet_owner_pid=$!
+fleet_blocked_ready=0
+for _ in {1..100}; do
+  if [ -s "$FLEET_BLOCKED_PID_FILE" ]; then fleet_blocked_ready=1; break; fi
+  /bin/sleep 0.05
+done
+if [ "$fleet_blocked_ready" -eq 1 ]; then
+  pass "blocked fleet worker exposes its package-install subprocess"
+else
+  LAST_OUTPUT="$FLEET_BLOCKED_OUTPUT"
+  fail_test "blocked fleet worker exposes its package-install subprocess"
+fi
+kill -TERM "$fleet_owner_pid" 2>/dev/null || true
+if wait "$fleet_owner_pid"; then fleet_signal_status=0; else fleet_signal_status=$?; fi
+if [ "$fleet_signal_status" -eq 143 ]; then
+  pass "TERM exits the fleet wrapper with signal status"
+else
+  LAST_OUTPUT="$FLEET_BLOCKED_OUTPUT"
+  fail_test "TERM exits the fleet wrapper with signal status (got $fleet_signal_status)"
+fi
+fleet_blocked_pid="$(cat "$FLEET_BLOCKED_PID_FILE" 2>/dev/null || true)"
+if [ -n "$fleet_blocked_pid" ] && ! kill -0 "$fleet_blocked_pid" 2>/dev/null; then
+  pass "TERM reaps blocked fleet provisioning descendants"
+else
+  fail_test "TERM reaps blocked fleet provisioning descendants"
+fi
+/bin/sleep 0.2
+if [ -n "$fleet_blocked_pid" ] && ! kill -0 "$fleet_blocked_pid" 2>/dev/null; then
+  pass "fleet interruption leaves no orphan panel mutation"
+else
+  fail_test "fleet interruption leaves no orphan panel mutation"
+fi
+
+# A foreground adb inspection is not one of provision.sh's explicitly tracked subprocesses. Fleet
+# ownership must still terminate it through the provisioner's dedicated process group.
+: > "$MOCK_CALL_LOG"
+FLEET_SHIZUKU_INSPECT_PID_FILE="$TMP/fleet-shizuku-inspect.pid"
+FLEET_SHIZUKU_INSPECT_OUTPUT="$TMP/fleet-shizuku-inspect-output.txt"
+MOCK_SHIZUKU_INSPECT=block MOCK_SHIZUKU_INSPECT_PID_FILE="$FLEET_SHIZUKU_INSPECT_PID_FILE" \
+  bash "$UPDATE_FLEET" --apk "$APK" --shizuku --no-tame -- "$MOCK_TARGET" \
+    > "$FLEET_SHIZUKU_INSPECT_OUTPUT" 2>&1 &
+fleet_owner_pid=$!
+fleet_blocked_ready=0
+for _ in {1..100}; do
+  if [ -s "$FLEET_SHIZUKU_INSPECT_PID_FILE" ]; then fleet_blocked_ready=1; break; fi
+  /bin/sleep 0.05
+done
+if [ "$fleet_blocked_ready" -eq 1 ]; then
+  pass "blocked foreground Shizuku inspection exposes its adb process"
+else
+  LAST_OUTPUT="$FLEET_SHIZUKU_INSPECT_OUTPUT"
+  fail_test "blocked foreground Shizuku inspection exposes its adb process"
+fi
+kill -TERM "$fleet_owner_pid" 2>/dev/null || true
+if wait "$fleet_owner_pid"; then fleet_signal_status=0; else fleet_signal_status=$?; fi
+if [ "$fleet_signal_status" -eq 143 ]; then
+  pass "TERM preserves fleet signal status while foreground adb is blocked"
+else
+  LAST_OUTPUT="$FLEET_SHIZUKU_INSPECT_OUTPUT"
+  fail_test "TERM preserves fleet signal status while foreground adb is blocked (got $fleet_signal_status)"
+fi
+fleet_blocked_pid="$(cat "$FLEET_SHIZUKU_INSPECT_PID_FILE" 2>/dev/null || true)"
+if [ -n "$fleet_blocked_pid" ] && ! kill -0 "$fleet_blocked_pid" 2>/dev/null; then
+  pass "fleet process-group shutdown reaps untracked foreground adb"
+else
+  fail_test "fleet process-group shutdown reaps untracked foreground adb"
+fi
+
+# Deadline-wrapped commands intentionally run in a nested process group so their local timeout can
+# kill every descendant. Fleet cancellation must compose with that ownership and signal the deadline
+# supervisor, which in turn terminates and reaps the nested adb group before the fleet wrapper exits.
+: > "$MOCK_CALL_LOG"
+FLEET_SHIZUKU_INSTALL_PID_FILE="$TMP/fleet-shizuku-install.pid"
+FLEET_SHIZUKU_INSTALL_OUTPUT="$TMP/fleet-shizuku-install-output.txt"
+MOCK_SHIZUKU_INSTALL=block MOCK_SHIZUKU_INSTALL_PID_FILE="$FLEET_SHIZUKU_INSTALL_PID_FILE" \
+SHIZUKU_INSTALL_TIMEOUT_SECONDS=180 ROOT_HELPER_LEASE_GUARD_INTERVAL_SECONDS=0.05 \
+  bash "$UPDATE_FLEET" --apk "$APK" --shizuku --no-tame -- "$MOCK_TARGET" \
+    > "$FLEET_SHIZUKU_INSTALL_OUTPUT" 2>&1 &
+fleet_owner_pid=$!
+fleet_blocked_ready=0
+for _ in {1..100}; do
+  if [ -s "$FLEET_SHIZUKU_INSTALL_PID_FILE" ]; then fleet_blocked_ready=1; break; fi
+  /bin/sleep 0.05
+done
+if [ "$fleet_blocked_ready" -eq 1 ]; then
+  pass "blocked deadline-wrapped Shizuku install exposes its nested adb process"
+else
+  LAST_OUTPUT="$FLEET_SHIZUKU_INSTALL_OUTPUT"
+  fail_test "blocked deadline-wrapped Shizuku install exposes its nested adb process"
+fi
+kill -TERM "$fleet_owner_pid" 2>/dev/null || true
+if wait "$fleet_owner_pid"; then fleet_signal_status=0; else fleet_signal_status=$?; fi
+if [ "$fleet_signal_status" -eq 143 ]; then
+  pass "TERM preserves fleet signal status while a nested deadline command is blocked"
+else
+  LAST_OUTPUT="$FLEET_SHIZUKU_INSTALL_OUTPUT"
+  fail_test "TERM preserves fleet signal status for a nested deadline command (got $fleet_signal_status)"
+fi
+fleet_blocked_pid="$(cat "$FLEET_SHIZUKU_INSTALL_PID_FILE" 2>/dev/null || true)"
+if [ -n "$fleet_blocked_pid" ] && ! kill -0 "$fleet_blocked_pid" 2>/dev/null; then
+  pass "fleet cancellation reaps the deadline wrapper's nested adb process group"
+else
+  fail_test "fleet cancellation reaps the deadline wrapper's nested adb process group"
+fi
+
 : > "$MOCK_CALL_LOG"
 LAST_OUTPUT="$TMP/fleet-shizuku-failure-output.txt"
 MOCK_SHIZUKU_START=fail bash "$UPDATE_FLEET" --apk "$APK" --shizuku --no-tame -- "$MOCK_TARGET" > "$LAST_OUTPUT" 2>&1
@@ -1220,6 +1459,14 @@ if grep -Fq 'make -C helper clean test contract' "$RELEASE_WORKFLOW"; then
 else
   fail_test "release tags rerun privileged helper boundary and app-contract gates before asset build"
 fi
+if grep -Fq 'fetch-depth: 0' "$RELEASE_WORKFLOW" && \
+   grep -Fq "'+refs/heads/main:refs/remotes/origin/main'" "$RELEASE_WORKFLOW" && \
+   grep -Fq 'git merge-base --is-ancestor "$source_commit" refs/remotes/origin/main' "$RELEASE_WORKFLOW" && \
+   grep -Fq 'if [ "$GITHUB_EVENT_NAME" = push ]; then' "$RELEASE_WORKFLOW"; then
+  pass "release tags must resolve to commits already merged on origin main"
+else
+  fail_test "release tags must resolve to commits already merged on origin main"
+fi
 snapshot_line="$(grep -n 'old_bin_record=.*snapshot /system/bin/hapaneld-helper ' "$PROVISION" | head -1 | cut -d: -f1)"
 marker_line="$(grep -n '} > "\$marker.new"' "$PROVISION" | head -1 | cut -d: -f1)"
 pre_marker_sync_line="$(awk -v after="$marker_line" 'NR > after && /sync \|\| return 1/{print NR; exit}' "$PROVISION")"
@@ -1260,13 +1507,16 @@ else
   fail_test "transaction nonce and monotonic lease protect validation through APK install and matching commit"
 fi
 commit_marker_line="$(grep -n 'rm -f "\$marker" || return 1' "$PROVISION" | tail -2 | head -1 | cut -d: -f1)"
+commit_target_line="$(grep -n '\[ "$(classify_system)" = TARGET \] || return 1' "$PROVISION" | head -1 | cut -d: -f1)"
 commit_sync_line="$(awk -v after="$commit_marker_line" 'NR > after && /sync \|\| return 1/{print NR; exit}' "$PROVISION")"
 commit_recovery_line="$(awk -v after="$commit_sync_line" 'NR > after && index($0, "rm -f /system/bin/hapaneld-helper.hapaneld-recovery"){print NR; exit}' "$PROVISION")"
-if [ -n "$commit_marker_line" ] && [ -n "$commit_sync_line" ] && [ -n "$commit_recovery_line" ] && \
-   [ "$commit_marker_line" -lt "$commit_sync_line" ] && [ "$commit_sync_line" -lt "$commit_recovery_line" ]; then
-  pass "helper commit durably removes the journal before deleting recovery snapshots"
+if [ -n "$commit_target_line" ] && [ -n "$commit_marker_line" ] && [ -n "$commit_sync_line" ] && [ -n "$commit_recovery_line" ] && \
+   [ "$commit_target_line" -lt "$commit_marker_line" ] && [ "$commit_marker_line" -lt "$commit_sync_line" ] && \
+   [ "$commit_sync_line" -lt "$commit_recovery_line" ] && \
+   grep -Fq '[ "$(classify_systemless)" = TARGET ] || return 1' "$PROVISION"; then
+  pass "helper commit rechecks exact target state before durably removing recovery"
 else
-  fail_test "helper commit durably removes the journal before deleting recovery snapshots"
+  fail_test "helper commit rechecks exact target state before durably removing recovery"
 fi
 if grep -Fq 'helper_build_id="$(helper/source-id.sh)"' "$RELEASE_WORKFLOW" && \
    grep -Fq -- '-DHAPANELD_BUILD_ID=' "$RELEASE_WORKFLOW" && \

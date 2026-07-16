@@ -654,7 +654,7 @@ class PaneldServer internal constructor(
                     call.respondText(html, ContentType.Text.Html)
                 }
                 get("/health") {
-                    call.respondText("ha-paneld ${Config.VERSION} panel=${config.panelId} build=${buildToken()} cfg=${io.github.maxlyth.hapaneld.config.ConfigHash.of(currentValues())}\n")
+                    call.respondText("ha-paneld ${Config.VERSION} panel=${config.panelId} build=${buildToken()} cfg=${configConcurrencyHash()}\n")
                 }
                 // Pre-0.8.5 flat machine endpoints → 308 to their /api/v1 homes.
                 legacyRedirects()
@@ -690,7 +690,7 @@ class PaneldServer internal constructor(
                         )
                     } ?: unavailableProfileRoutes()
                     get("/health") {
-                        call.respondText("ha-paneld ${Config.VERSION} panel=${config.panelId} build=${buildToken()} cfg=${io.github.maxlyth.hapaneld.config.ConfigHash.of(currentValues())}\n")
+                        call.respondText("ha-paneld ${Config.VERSION} panel=${config.panelId} build=${buildToken()} cfg=${configConcurrencyHash()}\n")
                     }
                     get("/config") { call.respondText(configJson(), ContentType.Application.Json) }
                     post("/config") { handleConfigPost(call) }
@@ -710,6 +710,7 @@ class PaneldServer internal constructor(
                         else handleRevisionRestore(call, id)
                     }
                     get("/perf") {
+                        if (!admitActiveRead(call)) return@get
                         PerfReader.touch()
                         call.respondText(PerfReader.json(), ContentType.Application.Json)
                     }
@@ -861,12 +862,15 @@ class PaneldServer internal constructor(
                     }
                     // Live log tail as Server-Sent Events (?source=app|system). Feeds the Logs tab;
                     // also curl-able (`curl -N .../api/v1/logs/stream`). Lines are pre-redacted.
-                    get("/logs/stream") { handleLogStream(call) }
+                    get("/logs/stream") {
+                        if (admitActiveRead(call)) handleLogStream(call)
+                    }
                     // Health + capabilities as JSON (warnings as ready-to-render HTML) — feeds every
                     // variant's Install/health section client-side. ?refresh=1 forces a fresh GitHub
                     // update check first (the "Run health audit" button), else the cached result is used.
                     get("/status") {
-                        if (call.request.queryParameters["refresh"] == "1")
+                        if (call.request.queryParameters["refresh"] == "1") {
+                            if (!admitActiveRead(call)) return@get
                             withContext(Dispatchers.IO) {
                                 runCatching {
                                     UpdateChecker.check(
@@ -877,6 +881,7 @@ class PaneldServer internal constructor(
                                     )
                                 }
                             }
+                        }
                         call.respondText(statusJson(), ContentType.Application.Json)
                     }
                     // Dismiss a component update from the DASHBOARD banner only (per-version; re-surfaces when
@@ -1084,6 +1089,7 @@ class PaneldServer internal constructor(
                     // Embedded scaled in the info page + linkable full-size; also usable as an HA camera
                     // still_image_url. Captured on demand — no background polling.
                     get("/screenshot.png") {
+                        if (!admitActiveRead(call)) return@get
                         val png = withContext(Dispatchers.IO) { interactive.screenshot() }
                         if (png != null && png.isNotEmpty()) {
                             call.respondBytes(png, ContentType.Image.PNG)
@@ -1190,6 +1196,7 @@ class PaneldServer internal constructor(
                     // non-expert might want to control — Recommended (profile) / Other apps / Using the most
                     // CPU. Lazy (only built when the dialog opens) and excludes what's already tamed (the card).
                     get("/tame/suggest") {
+                        if (!admitActiveRead(call)) return@get
                         PerfReader.touch()   // keep the CPU sampler warm so the "most CPU" group can populate
                         val groups = runCatching {
                             tame.suggestionGroups(tameProfileCandidates, config.tameVendorPackages.toSet(), PerfReader.topNames())
@@ -1417,6 +1424,20 @@ class PaneldServer internal constructor(
         }
     }
 
+    /** Protect GET routes whose generation starts material work from opaque cross-origin browser loads. */
+    private suspend fun admitActiveRead(call: ApplicationCall): Boolean {
+        if (OriginGuard.activeReadAllowed(
+                call.request.headers["Origin"],
+                call.request.headers["Referer"],
+                call.request.headers["Host"],
+                call.request.headers["Sec-Fetch-Site"],
+                call.request.headers["User-Agent"],
+            )
+        ) return true
+        call.respondText("cross-origin active read refused\n", status = HttpStatusCode.Forbidden)
+        return false
+    }
+
     // ---- tabbed multi-page shell ----
 
     /** The shared tab bar; [active] highlights the current page. */
@@ -1498,7 +1519,7 @@ class PaneldServer internal constructor(
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(panelBrowserTitle(config.friendlyName, title))}</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-<link rel="stylesheet" href="/info.css"></head><body data-build="${buildToken()}" data-cfg="${io.github.maxlyth.hapaneld.config.ConfigHash.of(currentValues())}"><div class="wrap">
+<link rel="stylesheet" href="/info.css"></head><body data-build="${buildToken()}" data-cfg="${configConcurrencyHash()}"><div class="wrap">
 <div class="topbar"><div class="hdr"><button id="navburger" class="navburger pbtn" aria-label="Menu">☰</button><h1><img src="/icon.svg" class="logo" alt=""><span class="brand">ha-paneld</span> <small id="pswitch" data-self-id="${esc(config.panelId)}" data-self-name="${esc(config.friendlyName)}"><span class="sep">·</span>${esc(config.friendlyName)}</small></h1>
  <span style="display:flex;gap:10px;align-items:center">$haLink<a class="gh" href="$REPO_URL" target="_blank" rel="noopener" title="ha-paneld on GitHub" aria-label="GitHub"><svg viewBox="0 0 24 24"><path d="$GH_ICON"/></svg></a></span></div>
 ${navBar(active)}</div>
@@ -1705,10 +1726,11 @@ $installNote
         else """<p class="note">HA Companion login backup needs the current ha-paneld helper. Update or reprovision this rooted panel to enable it.</p>"""
         val restoreWarn = if (companionHelper) " and rewrites the HA Companion login (force-stops it)" else ""
         return """<div class="card"><h2>Backup &amp; restore</h2>
-<p class="note">A bundle of this panel's ha-paneld config${if (companionHelper) " + the HA Companion login" else ""}. A passphrase is optional — add one to <b>encrypt</b> the bundle (worth it if you'll store it off the panel, since it holds HA tokens); it can't be recovered if lost.</p>
+<p class="note">A bundle of this panel's ha-paneld config${if (companionHelper) " + the HA Companion login" else ""}. Backups contain credentials and are encrypted with your passphrase by default; it can't be recovered if lost.</p>
 <div style="display:flex;flex-direction:column;gap:8px;max-width:440px">
 $compRow
-<input type="password" id="bk-pw" placeholder="Passphrase (optional — encrypts the bundle)">
+<input type="password" id="bk-pw" placeholder="Passphrase (required for encrypted backup)">
+<label style="display:flex;flex-direction:row;gap:8px;align-items:flex-start;font-size:.85rem;color:#c88"><input type="checkbox" id="bk-plain"> Create an unencrypted plaintext ZIP instead (contains credentials)</label>
 <button class="pbtn" onclick="doBackup(this)">⭳ Download backup</button>
 </div>
 <hr style="border:0;border-top:1px solid #2a2a2a;margin:14px 0">
@@ -2357,7 +2379,7 @@ report of this panel's hardware, firmware, SELinux, su and node probes for bug r
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>$browserTitle</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-<link rel="stylesheet" href="/info.css"></head><body data-ver="${Config.VERSION}" data-build="${buildToken()}" data-cfg="${io.github.maxlyth.hapaneld.config.ConfigHash.of(currentValues())}" data-hydrate="${if (hydrate) "1" else "0"}"><div class="wrap">
+<link rel="stylesheet" href="/info.css"></head><body data-ver="${Config.VERSION}" data-build="${buildToken()}" data-cfg="${configConcurrencyHash()}" data-hydrate="${if (hydrate) "1" else "0"}"><div class="wrap">
 <div class="topbar"><div class="hdr"><button id="navburger" class="navburger pbtn" aria-label="Menu">☰</button><h1><img src="/icon.svg" class="logo" alt=""><span class="brand">ha-paneld</span> <small id="pswitch" data-self-id="$pid" data-self-name="$fname"><span class="sep">·</span>$fname</small></h1>
  <span style="display:flex;gap:10px;align-items:center">${if (config.haLinkUrl.isNotBlank()) """<a class="pbtn" href="${esc(config.haLinkUrl)}" target="_blank" rel="noopener" title="Open Home Assistant (this panel's device page when known)">Open in HA</a>""" else ""}<button id="revbtn" class="pbtn" onclick="toggleReveal()" title="Show/hide blurred values for editing — they're blurred by default so screenshots don't leak them">Reveal</button>
  <a class="gh" href="$REPO_URL" target="_blank" rel="noopener" title="ha-paneld on GitHub" aria-label="GitHub"><svg viewBox="0 0 24 24"><path d="$GH_ICON"/></svg></a></span></div>
@@ -3015,7 +3037,8 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             val v = when {
                 spec.secret -> "\"\""
                 spec.type == SettingType.BOOL -> if (raw.toBoolean()) "true" else "false"
-                spec.type == SettingType.INT -> raw.toLongOrNull()?.toString() ?: s(raw)
+                spec.type == SettingType.INT || spec.type == SettingType.LONG ->
+                    raw.toLongOrNull()?.toString() ?: s(raw)
                 spec.type == SettingType.FLOAT -> raw.toDoubleOrNull()?.toString() ?: s(raw)
                 else -> s(raw)
             }
@@ -3056,6 +3079,9 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
         }
         return m
     }
+
+    private fun configConcurrencyHash(values: Map<String, String> = currentValues()): String =
+        io.github.maxlyth.hapaneld.config.ConfigHash.of(configConcurrencyValues(values))
 
     private fun revisionValues(
         values: Map<String, String> = currentValues(),
@@ -3191,11 +3217,11 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
         if (dryRun) {
             val current = currentValues()
             call.respondText(
-                dryRunJson(
-                    ConfigDiff.diff(current, accepted),
+                configDryRunJson(
+                    configPreviewDiff(current, accepted),
                     skipped,
                     warn + errors.map { "would skip (invalid): $it" },
-                    io.github.maxlyth.hapaneld.config.ConfigHash.of(current),
+                    configConcurrencyHash(current),
                 ),
                 ContentType.Application.Json,
             )
@@ -3207,7 +3233,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
         }
         when (applyAccepted(accepted, expectedConfig.ifEmpty { null })) {
             ApplyAcceptedResult.STALE -> {
-                val actual = io.github.maxlyth.hapaneld.config.ConfigHash.of(currentValues())
+                val actual = configConcurrencyHash()
                 call.respondText(
                     """{"status":"stale-preview","expected_cfg":${jsonStr(expectedConfig)},"actual_cfg":${jsonStr(actual)}}""",
                     ContentType.Application.Json,
@@ -3249,7 +3275,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             var committed: AcceptedCommit? = null
             config.synchronizedTransaction {
                 if (expectedConfig != null &&
-                    io.github.maxlyth.hapaneld.config.ConfigHash.of(currentValues()) != expectedConfig
+                    configConcurrencyHash() != expectedConfig
                 ) {
                     earlyResult = ApplyAcceptedResult.STALE
                     return@synchronizedTransaction
@@ -3431,7 +3457,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             val plaintextLimit = if (passphrase.isEmpty()) MAX_RESTORE_BYTES
                 else PanelBackup.maxSealablePlaintextBytes(MAX_RESTORE_BYTES)
             if (plain.length() !in 1..plaintextLimit) throw ByteLimitExceeded(plaintextLimit)
-            if (passphrase.isEmpty()) return PanelBackup.Artifact(plain)
+            if (passphrase.isEmpty()) return PanelBackup.Artifact(plain, "zip")
             sealed = File.createTempFile("panel-backup-", ".hpb", cacheDir)
             plain.inputStream().use { input ->
                 sealed.outputStream().use { output -> PanelBackup.seal(input, output, passphrase) }
@@ -3911,11 +3937,12 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
                             if (profileResult?.outcome != ProfileBackupRestoreOutcome.SUCCEEDED) {
                                 throw ProfileApplyFailed()
                             }
-                            if (profileResult?.restartRequired == true &&
-                                !runCatching(onProfileRestart).getOrDefault(false)
-                            ) {
-                                onProfileRestartAbort("The restored profile selection could not schedule its required restart.")
-                                throw ProfileApplyFailed()
+                            if (profileResult?.restartRequired == true) {
+                                rejectFailedProfileRestart(
+                                    restartAllowed = true,
+                                    requestRestart = onProfileRestart,
+                                    abortPendingRestart = onProfileRestartAbort,
+                                )?.let { throw ProfileApplyFailed(it) }
                             }
                         },
                     )
@@ -3931,6 +3958,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
                     )
                 }.getOrElse { error ->
                     Log.w(TAG, "restore failed", error)
+                    val profileRestartRejection = (error as? ProfileApplyFailed)?.restartRejection
                     val rollback = if (configCommitted) {
                         val expected = appliedRevisionHash
                         val restored = expected != null && runCatching {
@@ -3958,7 +3986,9 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
                                 configCommitted -> InstallProgress.ComponentResult(InstallProgress.Outcome.PARTIAL, configItems)
                                 else -> InstallProgress.ComponentResult(InstallProgress.Outcome.FAILED, 0)
                             },
-                            profiles = profileComponent(profileResult, profilePlan != null),
+                            profiles = profileRestartRejection?.let {
+                                profileRestartFailureComponent(it, profileResult?.imported?.size ?: 0)
+                            } ?: profileComponent(profileResult, profilePlan != null),
                             companion = companionResult?.component
                                 ?: if (companionPlan == null) skippedComponent("not present")
                                 else InstallProgress.ComponentResult(InstallProgress.Outcome.FAILED, 0),
@@ -4006,7 +4036,9 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
     )
 
     private class CompanionApplyFailed : IllegalStateException("Companion restore failed")
-    private class ProfileApplyFailed : IllegalStateException("Profile catalog restore failed")
+    private class ProfileApplyFailed(
+        val restartRejection: ProfileRestartRejection? = null,
+    ) : IllegalStateException(restartRejection?.message ?: "Profile catalog restore failed")
 
     private fun succeededComponent(items: Int) = InstallProgress.ComponentResult(
         InstallProgress.Outcome.SUCCEEDED,
@@ -4034,6 +4066,19 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             detail = result.message,
         )
     }
+
+    private fun profileRestartFailureComponent(
+        rejection: ProfileRestartRejection,
+        imported: Int,
+    ) = InstallProgress.ComponentResult(
+        status = if (rejection.abortPersisted) {
+            InstallProgress.Outcome.ROLLED_BACK
+        } else {
+            InstallProgress.Outcome.ROLLBACK_FAILED
+        },
+        items = imported,
+        detail = rejection.message,
+    )
 
     private fun profileIssueText(issue: io.github.maxlyth.hapaneld.device.profile.ProfileIssue): String =
         "${issue.path}: ${issue.message}"
@@ -4606,19 +4651,6 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
     private fun importJson(status: String, applied: List<String>, skipped: List<String>, warnings: List<String>, errors: List<String>): String =
         "{\"status\":\"$status\",\"applied\":${jarr(applied)},\"skipped\":${jarr(skipped)},\"warnings\":${jarr(warnings)},\"errors\":${jarr(errors)}}"
 
-    private fun dryRunJson(
-        diff: List<ConfigDiff.Change>,
-        skipped: List<String>,
-        warnings: List<String>,
-        expectedConfig: String,
-    ): String {
-        fun q(v: String) = Json.str(v)
-        val changes = diff.joinToString(",") { c ->
-            "{\"key\":${q(c.key)},\"from\":${c.from?.let { q(it) } ?: "null"},\"to\":${q(c.to)}}"
-        }
-        return "{\"status\":\"dry_run\",\"expected_cfg\":${q(expectedConfig)},\"changes\":[$changes],\"skipped\":${jarr(skipped)},\"warnings\":${jarr(warnings)}}"
-    }
-
     /** Full config as JSON for fleet management. The MQTT password is never emitted — only a boolean
      *  saying whether one is set. `http_port` is read-only (changing it needs a restart). */
     private fun configJson(): String {
@@ -4719,6 +4751,55 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
         private const val GH_ICON = "M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"
         private const val EXT_ICON = "M14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3m-2 16H5V5h7V3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2v-7h-2v7z"
     }
+}
+
+/**
+ * Project a config-import preview without turning the dry-run endpoint into a secret read oracle.
+ *
+ * Every submitted secret is represented as the same redacted change regardless of whether it equals the
+ * current value. The key remains visible so the preview can confirm its scope, but neither credential
+ * content nor equality is exposed.
+ */
+internal fun configDryRunJson(
+    diff: List<ConfigDiff.Change>,
+    skipped: List<String>,
+    warnings: List<String>,
+    expectedConfig: String,
+): String {
+    fun q(value: String) = Json.str(value)
+    fun array(items: List<String>) = "[" + items.joinToString(",") { q(it) } + "]"
+    val changes = diff.joinToString(",") { change ->
+        val secret = SettingsRegistry.spec(change.key)?.secret == true
+        val from = if (secret) q(REDACTED_CONFIG_VALUE) else change.from?.let(::q) ?: "null"
+        val to = if (secret) q(REDACTED_CONFIG_VALUE) else q(change.to)
+        "{\"key\":${q(change.key)},\"from\":$from,\"to\":$to}"
+    }
+    return "{\"status\":\"dry_run\",\"expected_cfg\":${q(expectedConfig)}," +
+        "\"changes\":[$changes],\"skipped\":${array(skipped)},\"warnings\":${array(warnings)}}"
+}
+
+private const val REDACTED_CONFIG_VALUE = "[redacted]"
+
+/** Public/UI concurrency hashes deliberately exclude credential-bearing settings. */
+internal fun configConcurrencyValues(values: Map<String, String>): Map<String, String> =
+    values.filterKeys { key -> SettingsRegistry.spec(key)?.secret != true }
+
+/**
+ * Secret submissions always produce the same projected entry, including when the guess equals the
+ * stored value. This preserves acknowledgement that a secret was submitted without an equality oracle.
+ */
+internal fun configPreviewDiff(
+    current: Map<String, String>,
+    candidate: Map<String, String>,
+): List<ConfigDiff.Change> {
+    val ordinary = ConfigDiff.diff(
+        current,
+        candidate.filterKeys { key -> SettingsRegistry.spec(key)?.secret != true },
+    )
+    val secrets = candidate.keys
+        .filter { key -> SettingsRegistry.spec(key)?.secret == true }
+        .map { key -> ConfigDiff.Change(key, null, REDACTED_CONFIG_VALUE) }
+    return (ordinary + secrets).sortedBy { it.key }
 }
 
 /** Keep room for the received envelope, authenticated plaintext, and extracted Companion payloads. */

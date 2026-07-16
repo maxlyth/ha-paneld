@@ -18,7 +18,7 @@ import io.github.maxlyth.hapaneld.util.Json
  */
 
 /** Value type of a setting; drives coercion, validation, and the generated form control. */
-enum class SettingType { BOOL, INT, FLOAT, ENUM, STRING, PASSWORD }
+enum class SettingType { BOOL, INT, LONG, FLOAT, ENUM, STRING, PASSWORD }
 
 /** UI disclosure tier. BASIC settings show on the short Configure page; ADVANCED behind a reveal. */
 enum class Tier { BASIC, ADVANCED }
