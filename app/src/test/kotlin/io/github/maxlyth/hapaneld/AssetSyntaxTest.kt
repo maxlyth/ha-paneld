@@ -132,7 +132,10 @@ class AssetSyntaxTest {
 
         val info = File(dir, "info.js").readText()
         assertFalse("screenshot URL must not be copied from DOM text", info.contains("im.src=im.getAttribute('data-src')"))
-        assertTrue("hydration must use the fixed same-origin screenshot endpoint", info.contains("im.src='/api/v1/screenshot.png'"))
+        assertTrue("hydration must use the server-provided fixed same-origin cached screenshot URL", info.contains("showAndRefreshScreenshot(sc,d.shotCached)"))
+        assertTrue("every dashboard visit must request a fresh screenshot", info.contains("url='/api/v1/screenshot.png?t='+Date.now()"))
+        assertTrue("the current screenshot must remain visible until the fresh image loads", info.contains("URL.createObjectURL(fresh.blob)"))
+        assertTrue("a fresh capture must seed its immutable placeholder URL for the next tab visit", info.contains("seed.src='/api/v1/screenshot.png?cached='+fresh.id"))
     }
 
     @Test fun performanceCardUsesDirectEvidenceAndLabelsCompanionAsAProxy() {

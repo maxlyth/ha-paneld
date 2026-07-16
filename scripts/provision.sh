@@ -1287,18 +1287,20 @@ live_matches_recorded() {
 
 classify_system() {
   marker=/system/bin/.hapaneld-helper-upgrade
-  if live_matches_recorded OLD_BIN /system/bin/hapaneld-helper "$marker" &&
+  # A no-op helper upgrade can match both the recorded old state and the desired target. Prefer
+  # TARGET so a successful APK install can commit instead of stranding its recovery journal.
+  if hash_matches @BIN_SHA256@ /system/bin/hapaneld-helper &&
+       hash_matches @RC_SHA256@ /system/etc/init/hapaneld-helper.rc &&
+       [ ! -e /system/bin/hapaneld-ledd ] && [ ! -e /system/etc/init/hapaneld-ledd.rc ] &&
+       [ ! -e /data/adb/hapaneld/hapaneld-helper ] && [ ! -e /data/adb/service.d/hapaneld-helper.sh ]; then
+    echo TARGET
+  elif live_matches_recorded OLD_BIN /system/bin/hapaneld-helper "$marker" &&
      live_matches_recorded OLD_SERVICE /system/etc/init/hapaneld-helper.rc "$marker" &&
      live_matches_recorded LEGACY_BIN /system/bin/hapaneld-ledd "$marker" &&
      live_matches_recorded LEGACY_SERVICE /system/etc/init/hapaneld-ledd.rc "$marker" &&
      live_matches_recorded ALT_BIN /data/adb/hapaneld/hapaneld-helper "$marker" &&
      live_matches_recorded ALT_SERVICE /data/adb/service.d/hapaneld-helper.sh "$marker"; then
     echo PRE_SWAP
-  elif hash_matches @BIN_SHA256@ /system/bin/hapaneld-helper &&
-       hash_matches @RC_SHA256@ /system/etc/init/hapaneld-helper.rc &&
-       [ ! -e /system/bin/hapaneld-ledd ] && [ ! -e /system/etc/init/hapaneld-ledd.rc ] &&
-       [ ! -e /data/adb/hapaneld/hapaneld-helper ] && [ ! -e /data/adb/service.d/hapaneld-helper.sh ]; then
-    echo TARGET
   else
     echo UNKNOWN
   fi
@@ -1306,12 +1308,12 @@ classify_system() {
 
 classify_systemless() {
   marker=/data/adb/hapaneld/.helper-upgrade.marker
-  if live_matches_recorded OLD_BIN /data/adb/hapaneld/hapaneld-helper "$marker" &&
-     live_matches_recorded OLD_SERVICE /data/adb/service.d/hapaneld-helper.sh "$marker"; then
-    echo PRE_SWAP
-  elif hash_matches @BIN_SHA256@ /data/adb/hapaneld/hapaneld-helper &&
+  if hash_matches @BIN_SHA256@ /data/adb/hapaneld/hapaneld-helper &&
        hash_matches @SERVICE_SHA256@ /data/adb/service.d/hapaneld-helper.sh; then
     echo TARGET
+  elif live_matches_recorded OLD_BIN /data/adb/hapaneld/hapaneld-helper "$marker" &&
+     live_matches_recorded OLD_SERVICE /data/adb/service.d/hapaneld-helper.sh "$marker"; then
+    echo PRE_SWAP
   else
     echo UNKNOWN
   fi

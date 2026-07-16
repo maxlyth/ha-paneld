@@ -73,8 +73,11 @@ object DiagReader {
                 })
             } else null,
             Cap("Verified app update / screenshot / display", if (rootish || shizuku) "ok" else "none",
-                if (rootish || shizuku) "available through a privileged route; Shizuku covers only signer-verified app updates"
-                else "needs su, the helper daemon, or locally approved Shizuku access"),
+                when {
+                    rootish -> "available through root or the helper daemon"
+                    shizuku -> "available through locally approved Shizuku access; app updates remain signer-verified"
+                    else -> "needs su, the helper daemon, or locally approved Shizuku access"
+                }),
             Cap("Brightness", if (canWrite) "ok" else "none",
                 if (canWrite) "WRITE_SETTINGS granted" else
                     "grant it (no root needed): adb shell appops set $pkg WRITE_SETTINGS allow"),

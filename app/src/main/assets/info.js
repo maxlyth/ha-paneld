@@ -244,6 +244,27 @@ document.addEventListener('click',function(e){var s=e.target.closest&&e.target.c
 // Display-card diagonal: click to toggle inches <-> cm (W×H is in the title tooltip).
 function diagToggle(el){el.textContent=(el.textContent.indexOf('cm')<0)?el.dataset.cm:el.dataset['in'];}
 
+// Screenshot card: render the app-private last-successful capture immediately, then refresh in the
+// background. Only swap after the new PNG has fully loaded, so a slow or failed capture never blanks
+// the useful placeholder. The timestamp makes every Dashboard visit a genuinely fresh request.
+function refreshScreenshot(card){
+ var sc=card&&card.querySelector('.shot'),im=sc&&sc.querySelector('img');if(!im||im.dataset.refreshing==='1')return;
+ im.dataset.refreshing='1';var url='/api/v1/screenshot.png?t='+Date.now();
+ fetch(url,{cache:'no-store'}).then(function(r){if(!r.ok)throw new Error('capture failed');
+  var id=r.headers.get('X-ha-paneld-Screenshot-Id');return r.blob().then(function(blob){return{id:id,blob:blob};});})
+ .then(function(fresh){var objectUrl=URL.createObjectURL(fresh.blob);
+  im.onload=function(){sc.classList.remove('failed');sc.classList.add('loaded');URL.revokeObjectURL(objectUrl);
+   if(fresh.id&&/^[0-9a-f]{64}$/.test(fresh.id)){var seed=new Image();
+    seed.src='/api/v1/screenshot.png?cached='+fresh.id;}};
+  im.src=objectUrl;im.dataset.refreshing='0';})
+ .catch(function(){im.dataset.refreshing='0';});
+}
+function showAndRefreshScreenshot(card,cachedUrl){
+ var im=card&&card.querySelector('img');if(!im)return;
+ if(!im.getAttribute('src')&&cachedUrl)im.src=cachedUrl;
+ card.style.display='';refreshScreenshot(card);
+}
+
 // Dashboard hydration: the shell now renders instantly (the probe-backed values used to block the
 // whole page ~12s on PX30). When the server marked the page stale/cold (body data-hydrate="1"),
 // fetch /api/v1/info — ready-to-inject HTML fragments rendered by the same Kotlin as the warm
@@ -258,14 +279,15 @@ function diagToggle(el){el.textContent=(el.textContent.indexOf('cm')<0)?el.datas
    else if(card){card.style.display='none';}});          // probe says this card has nothing to show
   var cz=document.getElementById('ctlzone');if(cz&&d.controls){cz.innerHTML=d.controls;fitControls();}
   var sc=document.getElementById('shotcard');
-  if(sc){if(d.shot){var im=sc.querySelector('img');
-    if(im&&!im.getAttribute('src'))im.src='/api/v1/screenshot.png';sc.style.display='';}
+  if(sc){if(d.shot){showAndRefreshScreenshot(sc,d.shotCached);}
    else{sc.style.display='none';}}
  }
  function hydrate(tries){fetch('/api/v1/info').then(function(r){return r.json();}).then(apply)
   .catch(function(){if(tries>0)setTimeout(function(){hydrate(tries-1);},3000);});}
  hydrate(10);
 })();
+// A warm server render does not run hydration, so explicitly start its background refresh too.
+(function(){var sc=document.getElementById('shotcard');if(sc&&sc.style.display!=='none')showAndRefreshScreenshot(sc,'');})();
 // Dismiss a component-update banner for its current version (POST the label+version; the server keeps
 // it hidden until a newer release ships — see Config.ignoreUpdate). Removes the banner on success.
 function ignoreUpdate(btn){var b=btn.closest('.setup');if(!b)return;

@@ -136,7 +136,12 @@ object PanelInfo {
     /** Package + real-engine WebView status for the info row and the health banner. */
     // [engineMajor] = the real Chromium major (from the WebView UA when the package version looked old),
     // or the package major on the fast path, or null. The WebView auto-heal keys its install on this.
-    class WebViewStatus(val display: String, val tooOld: Boolean, val engineMajor: Int? = null)
+    class WebViewStatus(
+        val display: String,
+        val tooOld: Boolean,
+        val engineMajor: Int? = null,
+        val reportingQuirk: String? = null,
+    )
 
     /**
      * WebView status, disambiguating the Cromite/LineageOS version spoof. The package versionName
@@ -155,9 +160,30 @@ object PanelInfo {
         // version. The UA carries the true engine version — use it.
         val engine = engineVersion(context)
         val engineMajor = engine?.substringBefore('.')?.toIntOrNull()
-        val display = if (engineMajor != null && engineMajor != pkgMajor) "$pkg · engine Chromium $engine" else pkg
-        return WebViewStatus(display, PanelHealth.webViewTooOld(pkg, engineMajor), engineMajor ?: pkgMajor)
+        val presentation = webViewPresentation(pkg, pkgMajor, engine, engineMajor)
+        return WebViewStatus(
+            display = presentation.first,
+            tooOld = PanelHealth.webViewTooOld(pkg, engineMajor),
+            engineMajor = engineMajor ?: pkgMajor,
+            reportingQuirk = presentation.second,
+        )
     }
+
+    /** Keep effective rendering capability in Panel information and return any deliberately retained
+     *  package-version stamp separately for the diagnostic-context card. */
+    internal fun webViewPresentation(
+        packageSummary: String,
+        packageMajor: Int?,
+        engineVersion: String?,
+        engineMajor: Int?,
+    ): Pair<String, String?> =
+        if (engineVersion != null && engineMajor != null && engineMajor != packageMajor) {
+            val reportedVersion = packageSummary.substringAfterLast(' ', packageSummary)
+            "Chromium $engineVersion rendering engine" to
+                "System reports $reportedVersion · provider compatibility quirk"
+        } else {
+            packageSummary to null
+        }
 
     private fun webViewPackage(): String = try {
         WebView.getCurrentWebViewPackage()?.let { "${it.packageName} ${it.versionName}" } ?: "unknown"

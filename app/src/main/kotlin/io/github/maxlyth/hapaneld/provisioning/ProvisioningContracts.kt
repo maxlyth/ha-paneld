@@ -44,6 +44,7 @@ internal data class ProvisioningProfile(
     val displayName: String,
     val origin: ProfileOrigin,
     val contentVersion: String,
+    val directRootExpected: Boolean = false,
     val helperImportance: ProvisioningImportance? = null,
     val shizuku: ShizukuRecommendation = ShizukuRecommendation.NONE,
     val webView: ProvisioningWebViewTarget? = null,

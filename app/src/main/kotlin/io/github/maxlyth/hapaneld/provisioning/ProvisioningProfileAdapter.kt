@@ -27,6 +27,7 @@ internal fun ResolvedProfile.toProvisioningProfile(): ProvisioningProfile {
         displayName = summary.displayName,
         origin = summary.origin,
         contentVersion = summary.contentVersion,
+        directRootExpected = profile.appCanSu,
         helperImportance = if (profile.requiresProvisioningHelper()) ProvisioningImportance.REQUIRED else null,
         shizuku = profile.provisioning.shizuku,
         webView = target,

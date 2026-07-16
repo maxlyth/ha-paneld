@@ -97,6 +97,9 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
+import java.security.MessageDigest
 
 internal fun panelBrowserTitle(friendlyName: String, section: String? = null): String {
     val panel = friendlyName.trim().ifBlank { "ha-paneld" }
@@ -1092,11 +1095,25 @@ class PaneldServer internal constructor(
                     }
                     // Live panel screenshot via root `screencap` (LAN-only like the rest of this surface).
                     // Embedded scaled in the info page + linkable full-size; also usable as an HA camera
-                    // still_image_url. Captured on demand — no background polling.
+                    // still_image_url. The card asks for ?cached=1 first so it can show the last successful
+                    // capture immediately, then requests a fresh image in the background. A successful live
+                    // capture atomically replaces the app-private placeholder; failed captures leave it intact.
                     get("/screenshot.png") {
                         if (!admitActiveRead(call)) return@get
+                        val cachedId = call.request.queryParameters["cached"]
+                        if (cachedId != null) {
+                            call.response.headers.append("Cache-Control", "private, max-age=31536000, immutable")
+                            val cached = withContext(Dispatchers.IO) { readCachedScreenshot(cachedId) }
+                            if (cached != null) call.respondBytes(cached, ContentType.Image.PNG)
+                            else call.respondText("screenshot-unavailable\n", status = HttpStatusCode.ServiceUnavailable)
+                            return@get
+                        }
+                        call.response.headers.append("Cache-Control", "no-store")
                         val png = withContext(Dispatchers.IO) { interactive.screenshot() }
                         if (png != null && png.isNotEmpty()) {
+                            withContext(Dispatchers.IO) { cacheScreenshot(png) }?.let {
+                                call.response.headers.append("X-ha-paneld-Screenshot-Id", it)
+                            }
                             call.respondBytes(png, ContentType.Image.PNG)
                         } else {
                             call.respondText("screenshot-unavailable\n", status = HttpStatusCode.ServiceUnavailable)
@@ -2033,6 +2050,70 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
     private fun shellOk(): Boolean = ShizukuBridge.available()
     private fun installOk(): Boolean = rootOk() || shellOk()
     private fun captureOk(): Boolean = rootOk() || shellOk()
+
+    private val screenshotCacheDir: File
+        get() = File(appContext.filesDir, "panel-screenshots")
+
+    private val screenshotCachePointer: File
+        get() = File(screenshotCacheDir, "current")
+
+    private fun storedScreenshotCacheId(): String? = runCatching {
+        screenshotCachePointer.readText().trim().takeIf {
+            it.matches(Regex("[0-9a-f]{64}")) && File(screenshotCacheDir, "$it.png").isFile
+        }
+    }.getOrNull()
+
+    private fun screenshotCacheId(): String? {
+        storedScreenshotCacheId()?.let { return it }
+        val legacy = File(appContext.filesDir, "last-panel-screenshot.png")
+        val bytes = runCatching { legacy.takeIf { it.isFile && it.length() > 0 }?.readBytes() }.getOrNull()
+            ?: return null
+        cacheScreenshot(bytes)
+        legacy.delete()
+        return storedScreenshotCacheId()
+    }
+
+    private fun screenshotPlaceholderUrl(): String? =
+        screenshotCacheId()?.let { "/api/v1/screenshot.png?cached=$it" }
+
+    private fun readCachedScreenshot(id: String): ByteArray? = runCatching {
+        if (!id.matches(Regex("[0-9a-f]{64}"))) return@runCatching null
+        File(screenshotCacheDir, "$id.png").takeIf { it.isFile && it.length() > 0 }?.readBytes()
+    }.getOrNull()
+
+    @Synchronized
+    private fun cacheScreenshot(png: ByteArray): String? =
+        runCatching {
+            val dir = screenshotCacheDir.apply { mkdirs() }
+            val id = MessageDigest.getInstance("SHA-256")
+                .digest(png)
+                .joinToString("") { "%02x".format(it) }
+            val target = File(dir, "$id.png")
+            if (!target.isFile) {
+                atomicReplace(File(dir, "$id.png.new"), target, png)
+            }
+            val previous = storedScreenshotCacheId()
+            atomicReplace(File(dir, "current.new"), screenshotCachePointer, "$id\n".toByteArray())
+            dir.listFiles()
+                ?.filter { it.extension == "png" && it.nameWithoutExtension !in setOf(id, previous) }
+                ?.forEach { it.delete() }
+            id
+        }.getOrNull()
+
+    private fun atomicReplace(staged: File, target: File, bytes: ByteArray) {
+        staged.writeBytes(bytes)
+        try {
+            Files.move(
+                staged.toPath(),
+                target.toPath(),
+                StandardCopyOption.ATOMIC_MOVE,
+                StandardCopyOption.REPLACE_EXISTING,
+            )
+        } catch (_: Throwable) {
+            target.writeBytes(bytes)
+            staged.delete()
+        }
+    }
     private fun displayOk(): Boolean = rootOk() || shellOk()
 
     // Companion internal_url health (root sqlite3 read). Cached so the polled /status endpoint doesn't
@@ -2070,11 +2151,26 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
     }
 
     private val NET_KEYS = listOf("Local IP", "Local IPv6", "HTTP port", "MQTT", "mDNS", "Network ADB")
+    private val CONTEXT_KEYS = listOf("MQTT state", "State convergence", "Audio playback")
     // Rows whose values are DECLARED by the DeviceProfile, so wrong data points a contributor straight
     // at the fix: Platform=displayName/socClass, LED=ledMechanism, sensor tech=proximityTech/lightTech,
     // Zigbee=zigbeeGatewayDir, Relays=relayBase, CPU profile=cpuGovernors.
     private val PROF_KEYS = listOf("Platform", "LED", "Light sensor", "Proximity", "Zigbee", "Relays", "CPU profile")
-    private fun infoKeys(s: Snap): List<String> = s.facts.keys.filter { it !in NET_KEYS && it !in PROF_KEYS }
+    private fun infoKeys(s: Snap): List<String> =
+        s.facts.keys.filter { it !in NET_KEYS && it !in PROF_KEYS && it !in CONTEXT_KEYS }
+
+    private fun contextRowsHtml(s: Snap): String {
+        val rows = CONTEXT_KEYS.mapNotNull { key ->
+            s.facts[key]?.let { value ->
+                val label = if (key == "MQTT state") "MQTT connection / auth timing" else key
+                "<tr><th>${esc(label)}</th><td>${esc(value)}</td></tr>"
+            }
+        }.toMutableList()
+        PanelInfo.webViewStatus(appContext).reportingQuirk?.let {
+            rows += "<tr><th>System WebView reporting</th><td>${esc(it)}</td></tr>"
+        }
+        return rows.joinToString("\n")
+    }
 
     /** The setup / health / update banners — everything above the cards. Needs the facts map (MQTT
      *  state), so on a cold start it hydrates with the rest. */
@@ -2343,9 +2439,10 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
             "infotbl" to factRowsHtml(s, infoKeys(s)),
             "nettbl" to factRowsHtml(s, NET_KEYS),
             "proftbl" to factRowsHtml(s, PROF_KEYS),
+            "contexttbl" to contextRowsHtml(s),
             "captbl" to capRowsHtml(),
         ).joinToString(",") { (k, v) -> "\"$k\":${jsonStr(v)}" }
-        return """{"banners":${jsonStr(bannersHtml(s))},"shot":${s.captureOk},"controls":${jsonStr(controlsHtml(s))},"cards":{$cards}}"""
+        return """{"banners":${jsonStr(bannersHtml(s))},"shot":${s.captureOk},"shotCached":${jsonStr(screenshotPlaceholderUrl() ?: "")},"controls":${jsonStr(controlsHtml(s))},"cards":{$cards}}"""
     }
 
     private fun infoHtml(): String {
@@ -2370,8 +2467,10 @@ report of this panel's hardware, firmware, SELinux, su and node probes for bug r
         // Screenshot card: needs a privileged capture route, which the cold shell doesn't know yet — render it hidden with
         // the img src deferred (data-src) so a rootless panel never fires a doomed screencap request.
         val shotInner = { src: Boolean ->
-            """<a class="shot" href="/api/v1/screenshot.png" target="_blank" rel="noopener" title="Open full size in a new window" style="aspect-ratio:${screenAspectRatio()}"><img ${if (src) "src=\"/api/v1/screenshot.png\"" else "data-src=\"/api/v1/screenshot.png\""} alt="panel screenshot" onload="this.parentElement.classList.add('loaded')" onerror="this.parentElement.classList.add('failed')"></a>
-<p class="note"><a href="#" onclick="var s=this.closest('.card').querySelector('.shot');s.classList.remove('loaded','failed');s.querySelector('img').src='/api/v1/screenshot.png?t='+Date.now();return false" style="color:#9cf">↻ Refresh</a> · click the image to open it full size. Captured on demand through the available privileged route; local-network only.</p>"""
+            val cached = screenshotPlaceholderUrl()
+            val source = if (src && cached != null) """src="${esc(cached)}"""" else ""
+            """<a class="shot" href="/api/v1/screenshot.png" target="_blank" rel="noopener" title="Open full size in a new window" style="aspect-ratio:${screenAspectRatio()}"><img $source alt="panel screenshot" onload="this.parentElement.classList.add('loaded')" onerror="this.parentElement.classList.add('failed')"></a>
+<p class="note"><a href="#" onclick="refreshScreenshot(this.closest('.card'));return false" style="color:#9cf">↻ Refresh</a> · the last successful capture stays visible while a fresh image is requested. Captured on demand through the available privileged route; local-network only.</p>"""
         }
         val shotCard = when {
             s == null -> """<div class="card" id="shotcard" style="display:none"><h2>Screenshot <small>· live panel</small></h2>${shotInner(false)}</div>"""
@@ -2399,6 +2498,7 @@ $shotCard
 ${tcard("infotbl", "Panel information", s?.let { factRowsHtml(it, infoKeys(it)) })}
 ${tcard("nettbl", "Networking", s?.let { factRowsHtml(it, NET_KEYS) })}
 ${tcard("proftbl", "ha-paneld profile", s?.let { factRowsHtml(it, PROF_KEYS) }, post = profNote)}
+${tcard("contexttbl", "Runtime diagnostics", s?.let { contextRowsHtml(it) })}
 ${tcard("captbl", "Capabilities", if (s == null) null else capRowsHtml(), post = capNote)}
 <div class="card"><h2>Dashboard responsiveness <small id="smhdr"></small></h2>
 <canvas id="respchart" width="600" height="150" style="height:150px"></canvas>

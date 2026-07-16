@@ -30,4 +30,28 @@ class PanelInfoDisplayTest {
         assertNull(PanelInfo.physicalDisplaySize(1920, 1200, null))
         assertNull(PanelInfo.physicalDisplaySize(1920, 1200, 0))
     }
+
+    @Test fun effectiveWebViewEngineLeadsWhenPackageRetainsOldCompatibilityStamp() {
+        val presentation = PanelInfo.webViewPresentation(
+            packageSummary = "com.android.webview 83.0.4103.120",
+            packageMajor = 83,
+            engineVersion = "150.0.7871.63",
+            engineMajor = 150,
+        )
+
+        assertEquals("Chromium 150.0.7871.63 rendering engine", presentation.first)
+        assertEquals("System reports 83.0.4103.120 · provider compatibility quirk", presentation.second)
+    }
+
+    @Test fun ordinaryWebViewPackageDisplayIsUnchanged() {
+        val presentation = PanelInfo.webViewPresentation(
+            packageSummary = "com.android.webview 150.0.7871.63",
+            packageMajor = 150,
+            engineVersion = null,
+            engineMajor = null,
+        )
+
+        assertEquals("com.android.webview 150.0.7871.63", presentation.first)
+        assertNull(presentation.second)
+    }
 }

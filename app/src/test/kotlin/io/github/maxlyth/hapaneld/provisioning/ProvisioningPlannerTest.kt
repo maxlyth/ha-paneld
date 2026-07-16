@@ -77,6 +77,39 @@ class ProvisioningPlannerTest {
     }
 
     @Test
+    fun compatibleHelperSuppressesRedundantShizukuGuidance() {
+        val plan = plan(
+            profile(
+                helperImportance = ProvisioningImportance.REQUIRED,
+                shizuku = ShizukuRecommendation.OPTIONAL,
+            ),
+            observations().copy(helper = known(ProvisioningHelperState.COMPATIBLE)),
+        )
+
+        assertEquals(listOf("access.helper"), plan.items.map { it.id })
+        assertItem(
+            plan,
+            "access.helper",
+            ProvisioningItemStatus.SATISFIED,
+            "compatible",
+            "helper_compatible",
+        )
+    }
+
+    @Test
+    fun directRootProfileSuppressesRedundantShizukuGuidance() {
+        val plan = plan(
+            profile(
+                directRootExpected = true,
+                shizuku = ShizukuRecommendation.RECOMMENDED,
+            ),
+        )
+
+        assertTrue(plan.items.isEmpty())
+        assertEquals(ProvisioningPlanState.SATISFIED, plan.state)
+    }
+
+    @Test
     fun partialProbeFailuresAreBlockedWithoutSuppressingKnownItems() {
         val plan = plan(
             profile(
@@ -380,6 +413,7 @@ class ProvisioningPlannerTest {
 
         fun profile(
             displayName: String = "Test panel",
+            directRootExpected: Boolean = false,
             helperImportance: ProvisioningImportance? = null,
             shizuku: ShizukuRecommendation = ShizukuRecommendation.NONE,
             webView: ProvisioningWebViewTarget? = null,
@@ -388,6 +422,7 @@ class ProvisioningPlannerTest {
             displayName = displayName,
             origin = ProfileOrigin.BUNDLED,
             contentVersion = "2.0.0",
+            directRootExpected = directRootExpected,
             helperImportance = helperImportance,
             shizuku = shizuku,
             webView = webView,

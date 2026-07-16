@@ -14,7 +14,10 @@ internal object ProvisioningPlanner {
 
         val items = buildList {
             profile.helperImportance?.let { add(helperItem(it, observations.helper)) }
-            if (profile.shizuku != ShizukuRecommendation.NONE) {
+            val preferredPrivilegeReady = profile.directRootExpected ||
+                (observations.helper as? ProvisioningObservation.Known)?.value ==
+                ProvisioningHelperState.COMPATIBLE
+            if (!preferredPrivilegeReady && profile.shizuku != ShizukuRecommendation.NONE) {
                 add(shizukuItem(profile.shizuku, observations.shizuku))
             }
             profile.webView?.let { add(webViewItem(it, observations.webView)) }
