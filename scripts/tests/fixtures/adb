@@ -66,14 +66,33 @@ case "${1:-}" in
       "settings get secure enabled_accessibility_services")
         printf 'null\n'
         ;;
+      "settings get global adb_enabled")
+        if [ "${MOCK_LATE_ADB_PHASE:-identity}" = "persistence" ] && [ "${MOCK_LATE_ADB_STATUS:-0}" -ne 0 ]; then
+          exit "$MOCK_LATE_ADB_STATUS"
+        fi
+        printf '%s\n' "${MOCK_ADB_ENABLED:-1}"
+        ;;
       "getprop ro.product.brand"|"getprop ro.product.model")
-        printf '\n'
+        if [ "${MOCK_LATE_ADB_PHASE:-identity}" = "identity" ] && [ "${MOCK_LATE_ADB_STATUS:-0}" -ne 0 ]; then
+          exit "$MOCK_LATE_ADB_STATUS"
+        fi
+        printf '%s\n' "${MOCK_PRODUCT_IDENTITY:-}"
+        ;;
+      "getprop persist.adb.tcp.port")
+        if [ "${MOCK_LATE_ADB_PHASE:-identity}" = "persistence" ] && [ "${MOCK_LATE_ADB_STATUS:-0}" -ne 0 ]; then
+          exit "$MOCK_LATE_ADB_STATUS"
+        fi
+        printf '%s\n' "${MOCK_ADB_TCP_PORT:-5555}"
         ;;
       "dumpsys webviewupdate")
         printf 'Current WebView package (name, version): (com.android.webview, 150.0.0.0)\n'
         ;;
       "id")
-        printf 'uid=2000(shell) gid=2000(shell)\n'
+        if [ "${MOCK_ADB_ROOT:-0}" = 1 ]; then
+          printf 'uid=0(root) gid=0(root)\n'
+        else
+          printf 'uid=2000(shell) gid=2000(shell)\n'
+        fi
         ;;
     esac
     ;;

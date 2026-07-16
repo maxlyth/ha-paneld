@@ -291,8 +291,11 @@ run_root() {
 # run without it. Reversible: re-enable any package with `adb shell pm enable <pkg>`.
 offer_strip_vendor() {
   local brand model
-  brand="$(adb -s "$TARGET" shell getprop ro.product.brand 2>/dev/null | tr -d '\r')"
-  model="$(adb -s "$TARGET" shell getprop ro.product.model 2>/dev/null | tr -d '\r')"
+  # This is an optional post-verification offer. A panel can disappear after a fully successful install
+  # (or adb can transiently return 255), so every advisory probe must degrade to "not detected" rather
+  # than trip the global ERR trap and turn a verified run into a false failure.
+  brand="$(adb -s "$TARGET" shell getprop ro.product.brand 2>/dev/null | tr -d '\r' || true)"
+  model="$(adb -s "$TARGET" shell getprop ro.product.model 2>/dev/null | tr -d '\r' || true)"
   case "$brand $model" in *[Tt]uya*|*TPA10*) ;; *) return 0 ;; esac   # Tuya/TPA10 only
 
   # Guard 1 — root (vendor apps are system apps; pm disable-user needs root on the userdebug build).
@@ -302,8 +305,8 @@ offer_strip_vendor() {
   fi
   # Guard 2 — persistent adb, else disabling the diagnostics-app adb backdoor can lock you out.
   local adben tcp
-  adben="$(adb -s "$TARGET" shell settings get global adb_enabled 2>/dev/null | tr -d '\r')"
-  tcp="$(adb -s "$TARGET" shell getprop persist.adb.tcp.port 2>/dev/null | tr -d '\r')"
+  adben="$(adb -s "$TARGET" shell settings get global adb_enabled 2>/dev/null | tr -d '\r' || true)"
+  tcp="$(adb -s "$TARGET" shell getprop persist.adb.tcp.port 2>/dev/null | tr -d '\r' || true)"
   if [ "$adben" != "1" ] || [ -z "$tcp" ]; then
     echo "   ${YEL}⚠ vendor-strip skipped: re-run with --persist-adb first (persistent adb is required so disabling the Tuya diagnostics backdoor can't lock you out).${X}"
     return 0

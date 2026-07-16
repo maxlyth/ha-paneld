@@ -39,6 +39,10 @@ run_provision() {
   MOCK_RELEASE_PROOF_DOWNLOAD="${MOCK_RELEASE_PROOF_DOWNLOAD:-ok}" \
   MOCK_RELEASE_CHECKSUM="${MOCK_RELEASE_CHECKSUM:-ok}" \
   MOCK_RELEASE_SIGNATURE_FAIL="${MOCK_RELEASE_SIGNATURE_FAIL:-0}" \
+  MOCK_LATE_ADB_STATUS="${MOCK_LATE_ADB_STATUS:-0}" \
+  MOCK_LATE_ADB_PHASE="${MOCK_LATE_ADB_PHASE:-identity}" \
+  MOCK_PRODUCT_IDENTITY="${MOCK_PRODUCT_IDENTITY:-}" \
+  MOCK_ADB_ROOT="${MOCK_ADB_ROOT:-0}" \
   MOCK_SHIZUKU_START="${MOCK_SHIZUKU_START:-ok}" \
   MOCK_SHIZUKU_START_SCRIPT="${MOCK_SHIZUKU_START_SCRIPT:-ok}" \
   MOCK_OPENSSL_MISSING="${MOCK_OPENSSL_MISSING:-0}" \
@@ -139,6 +143,18 @@ assert_success "successful install completes without seq or GNU sort -V"
 if grep -Eq '^adb .* install( |$)' "$MOCK_CALL_LOG"; then pass "successful install invokes adb install"
 else fail_test "successful install invokes adb install"; fi
 assert_contains 'provisioned' "successful install reports completion"
+
+# Vendor-strip detection is advisory and runs after verification. A transient late adb failure must not
+# overwrite a genuinely successful result (the field report returned adb's 255 after printing success).
+MOCK_LATE_ADB_STATUS=255 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "late optional vendor probe cannot turn a verified install into exit 255"
+assert_contains 'provisioned and verified' "late optional vendor probe preserves the successful result"
+assert_log_contains 'shell getprop ro\.product\.brand$' "late optional vendor probe failure was exercised"
+
+MOCK_LATE_ADB_STATUS=255 MOCK_LATE_ADB_PHASE=persistence MOCK_PRODUCT_IDENTITY=Tuya MOCK_ADB_ROOT=1 \
+  run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "late vendor-strip safety probe cannot turn a verified install into exit 255"
+assert_contains 'vendor-strip skipped' "failed persistence probe keeps vendor stripping fail-closed"
 
 # Official release assets are authenticated before the first install, launch, or privilege grant
 # whenever Android Build-Tools are present. The fixtures expose both apksigner and aapt.
