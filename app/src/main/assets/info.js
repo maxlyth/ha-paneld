@@ -83,7 +83,8 @@ function featureCostRows(fc){
   'vendor.tame_mutation':'Vendor package changes',
   'control.remote_input':'Remote input controls','dashboard.storage_clear':'Dashboard storage clearing',
   'log.capture_batch':'Log capture batches','log.ship_batch':'Log shipping batches',
-  'zigbee.reconcile':'Zigbee gateway reconciliation','network.reconfigure':'Network runtime reconfiguration',
+  'zigbee.reconcile':'Zigbee gateway reconciliation','zigbee.health_sample':'Zigbee gateway health sampling',
+  'network.reconfigure':'Network runtime reconfiguration',
   'config.live_refresh':'Configuration live refresh',
   'navbar.mode_apply':'Navigation bar mode apply','navbar.action':'Navigation bar actions'};
  var active=fc.operations.filter(function(o){var e=o.epoch||o;return e.calls||e.dropped||e.rejected||o.backlog;});

@@ -2388,8 +2388,8 @@ ${tcard("captbl", "Capabilities", if (s == null) null else capRowsHtml(), post =
 <canvas id="perfchart" width="600" height="96" style="height:96px"></canvas>
 <div class="leg"><span style="color:#4a9eff">■</span> CPU&nbsp;&nbsp;<span style="color:#48c774">■</span> RAM&nbsp;&nbsp;<span style="color:#f5a623">■</span> GPU (% used) · ~4&nbsp;min</div>
 <table id="perf"><tr><td style="color:#888">sampling…</td></tr></table></div>
-<div class="card"><h2>Feature costs <small>· since process start</small></h2>
-<p class="note">Cumulative wall time, same-thread CPU and work volume for recent feature families. Event-driven counters run independently of this page; highest wall-time operations are shown first.</p>
+<div class="card"><h2>Feature costs <small>· comparison epoch</small></h2>
+<p class="note">Epoch wall time, same-thread CPU and work volume for recent feature families. Event-driven counters run independently of this page; highest wall-time operations are shown first. Lifetime maxima remain labelled per row.</p>
 <table id="featurecost"><tr><td style="color:#888">waiting for activity…</td></tr></table></div>
 <div class="card"><h2>Top processes <small>· by CPU</small></h2>
 <table class="dt" id="topproc"><tr><td style="color:#888">top processes…</td></tr></table></div>
@@ -3466,8 +3466,8 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
                 textEntry(PROFILE_BACKUP_ENTRY, "profile-backup-", it.toJson().toString(), MAX_PROFILE_BACKUP_ENTRY_BYTES)
             }
             val sources = ArrayList<PanelBackup.ArchiveSource>(6)
-            sources += filter
-            sources += overrides
+            sources.add(filter)
+            sources.add(overrides)
             profile?.let(sources::add)
             sources += companion?.files.orEmpty().mapIndexed { index, file ->
                 PanelBackup.ArchiveSource("companion/$index", file.file)
