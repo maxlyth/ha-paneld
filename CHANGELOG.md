@@ -2,22 +2,35 @@
 
 ## v0.9.4-rc1 - 2026-07-16
 
-**Hardware investigation and release checks are safer to run, preserve more useful evidence and no longer disturb a successful panel installation with a later best-effort failure.** This candidate also resolves conflicting LED ownership on the WF1589T.
+**Hardware profiles can now explain what a detected panel needs after installation.** ha-paneld resolves the exact active immutable profile, combines it with live access and software observations, and exposes a provisioning plan that the release-paired installer can present without duplicating profile matching or parsing YAML in Bash.
+
+This release candidate also replaces the preview profile schema with its intended long-term shape, adds a bounded hardware-evidence collector and strengthens release, firmware and layout validation. Runtime hardware facts remain separate from provisioning recommendations, and profile activation never counts as permission to make a privileged or destructive change.
 
 ### Added
 
+- **Profile-aware post-install guidance** — after starting the newly installed app, `provision.sh` waits for the exact profile activation to become healthy and prints a core-rendered plan for helper requirements, optional Shizuku access and the selected System WebView. The canonical JSON plan is also available for future UI and fleet tooling.
+- **A dedicated provisioning namespace in profile schema 2** — Shizuku guidance, managed software, display recommendations, desired package state and bounded core-owned recipe IDs now live under `provisioning`, separate from hardware facts and runtime routes.
+- **A versioned root-helper identity handshake** — current helpers report their release and protocol version without touching hardware, allowing the plan to distinguish a compatible helper from an older reachable-but-unverified daemon or an incompatible protocol.
 - **A bounded hardware-evidence collector supports incomplete panel profiles** — `scripts/collect-panel-hardware.sh` gathers a read-only, size-limited report for the ZX-SMT156 and Echo Show 5 Gen 2 characterization paths. Its command allowlist, failure classification and serial redaction are covered by host-side tests. (#24, #28)
 
 ### Changed
 
-- **Release validation can run without publishing** — the same release checks used by the publishing workflow can now validate a candidate independently, without creating or uploading a release.
+- **The preview schema 1 proof of concept has been replaced instead of preserved as a permanent compatibility language** — all bundled profiles, examples, authoring tools and validation now use schema 2. Stored schema 1 imports remain inert recovery data that can be inspected, exported or removed, while activation safely falls back to a compatible bundled profile or Generic.
+- **Provisioning recommendations are report-only by default** — ordinary and fleet installs no longer automatically apply a profile's recommended vendor-package taming. Existing explicitly configured package blocklists still reapply at boot, and deliberate package controls remain available in the panel UI.
+- **Installer guidance comes from the running core** — Bash remains responsible for authenticated release installation, ADB setup, grants and explicit operator options, but it does not interpret profiles or execute profile-supplied commands, paths, URLs or arguments.
+- **Release validation can run without publishing** — the same release checks used by the publishing workflow can validate a candidate independently, without creating or uploading a release.
 - **Firmware availability failures retain actionable evidence** — the daily monitor preserves outage details, treats status within one UTC day consistently and continues recording the seven-day history needed to distinguish a transient host failure from a missing artifact.
 - **Layout-shift reporting is less sensitive to measurement noise** — repeated samples use robust statistics and refreshed baselines across the supported viewport matrix, while the documentation records the current stability limits.
 
 ### Fixed
 
 - **Successful provisioning is no longer reported as failed because a later optional step could not complete** — the installer preserves the primary app result while still reporting best-effort follow-up failures separately.
-- **WF1589T LED commands are no longer immediately overwritten by the factory demo** — the bundled profile recommends reversibly disabling the boot-started `PwmLightDemo` service so ha-paneld remains the single owner of `/dev/ledjni`.
+- **WF1589T LED ownership is explicit and truthful** — the bundled profile reports that its boot-started `PwmLightDemo` service conflicts with ha-paneld's `/dev/ledjni` control, while leaving the reversible package decision to the operator.
+
+### Safety
+
+- **Provisioning output is bounded and terminal-safe** — installer text uses core-owned templates and stable validated identifiers rather than rendering untrusted profile prose.
+- **Unresolved recommendations do not turn a successful installation into a failure** — activation instability or a missing release-paired plan endpoint fails the new installation, while optional, manual or blocked recommendations remain visible without silently changing the panel.
 
 ### Docs
 

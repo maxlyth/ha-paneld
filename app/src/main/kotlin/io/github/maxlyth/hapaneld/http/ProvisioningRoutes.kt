@@ -48,11 +48,25 @@ private suspend fun io.ktor.server.application.ApplicationCall.readStablePlan(
     json: Boolean,
 ): ProvisioningPlan? {
     val snapshot = runCatching(dependencies.activation).getOrNull()
-    val result = if (snapshot == null || !snapshot.isStableFor(dependencies.reader.expectedProfileRef)) {
+    val initialResult = if (snapshot == null || !snapshot.isStableFor(dependencies.reader.expectedProfileRef)) {
         ProvisioningReadResult.Unavailable("profile_activation_unstable")
     } else {
         runCatching { dependencies.reader.plan(snapshot) }
             .getOrElse { ProvisioningReadResult.Unavailable("provisioning_plan_unavailable") }
+    }
+    // Observation can take seconds on old WebView providers. Recheck immediately before responding so
+    // a concurrently staged activation cannot receive one last 200 from an earlier registry snapshot.
+    val result = if (initialResult is ProvisioningReadResult.Ready) {
+        val finalSnapshot = runCatching(dependencies.activation).getOrNull()
+        if (finalSnapshot == snapshot &&
+            finalSnapshot?.isStableFor(dependencies.reader.expectedProfileRef) == true
+        ) {
+            initialResult
+        } else {
+            ProvisioningReadResult.Unavailable("profile_activation_unstable")
+        }
+    } else {
+        initialResult
     }
     return when (result) {
         is ProvisioningReadResult.Ready -> result.plan

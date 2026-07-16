@@ -14,6 +14,61 @@
         "responses": { "200": { "description": "playing" }, "400": { "description": "no-url" }, "503": { "description": "stopping" } } }
     },
     "/api/v1/status": { "get": { "summary": "Panel-health warnings + capability matrix as JSON", "tags": ["status"], "responses": { "200": { "description": "{warnings:[html], capabilities:[{name,note,color}]}" } } } },
+    "/api/v1/provisioning/plan": {
+      "get": {
+        "summary": "Read the active profile's idempotent provisioning guidance combined with live observations",
+        "tags": ["provisioning"],
+        "responses": {
+          "200": {
+            "description": "Read-only plan bound to the exact healthy profile revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["plan_schema", "core", "profile", "activation", "state", "items", "issues"],
+                  "properties": {
+                    "plan_schema": { "type": "integer", "enum": [1] },
+                    "core": { "type": "object", "required": ["version", "version_code"], "properties": {
+                      "version": { "type": "string" }, "version_code": { "type": "integer" }
+                    } },
+                    "profile": { "type": "object", "required": ["id", "display_name", "revision", "origin", "content_version"], "properties": {
+                      "id": { "type": "string" }, "display_name": { "type": "string" },
+                      "revision": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+                      "origin": { "type": "string", "enum": ["bundled", "imported"] },
+                      "content_version": { "type": "string" }
+                    } },
+                    "activation": { "type": "object", "required": ["state", "generation"], "properties": {
+                      "state": { "type": "string", "enum": ["active", "rolled_back"] },
+                      "generation": { "type": "integer" }
+                    } },
+                    "state": { "type": "string", "enum": ["satisfied", "attention"] },
+                    "items": { "type": "array", "items": { "type": "object", "required": ["id", "importance", "status", "executor", "desired_state", "observed_state", "reason_code"], "properties": {
+                      "id": { "type": "string" },
+                      "importance": { "type": "string", "enum": ["required", "recommended", "optional"] },
+                      "status": { "type": "string", "enum": ["satisfied", "actionable", "manual", "blocked", "degraded", "not_applicable"] },
+                      "executor": { "type": "string", "enum": ["app", "host", "local_user", "none"] },
+                      "desired_state": { "type": "string" }, "observed_state": { "type": "string" }, "reason_code": { "type": "string" }
+                    } } },
+                    "issues": { "type": "array", "items": { "type": "object", "required": ["code"], "properties": { "code": { "type": "string" } } } }
+                  }
+                }
+              }
+            }
+          },
+          "503": { "description": "Profile activation or observation snapshot is not stable yet; retry after one second" }
+        }
+      }
+    },
+    "/api/v1/provisioning/plan.txt": {
+      "get": {
+        "summary": "Render the same provisioning plan as bounded terminal-safe text for release-paired installers",
+        "tags": ["provisioning"],
+        "responses": {
+          "200": { "description": "text/plain guidance; recommendations are report-only" },
+          "503": { "description": "Profile activation or observation snapshot is not stable yet; retry after one second" }
+        }
+      }
+    },
     "/api/v1/profiles": {
       "get": { "summary": "List immutable bundled/local profile revisions and current activation state", "tags": ["profiles"], "responses": { "200": { "description": "Catalog revision, selection, activation/LKG state, issues and profile summaries" }, "503": { "description": "Profile repository not wired" } } }
     },

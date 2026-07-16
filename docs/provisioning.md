@@ -15,7 +15,9 @@ scripts/provision.sh <panel-ip:5555> \
     [--builtin --ha-url URL {--ha-token LLAT | --ha-user U --ha-pass P}] [--shizuku]
 ```
 
-It downloads the **latest signed release** from GitHub when no `--apk` is given and no local build exists. `--latest` forces the stable download even when a local build exists; `--prerelease` fetches the newest release candidate instead. It connects, installs, grants the permissions below, starts the agent, optionally sets the panel id / MQTT, and ends with a self-verify checklist. It is **idempotent**, so re-run the same command to finish after any interruption. Required startup, configuration, restore, and verification failures return a nonzero result and are never counted as a successful fleet update. Run `scripts/provision.sh --help` for the concise command reference.
+It downloads the **latest signed release** from GitHub when no `--apk` is given and no local build exists. `--latest` forces the stable download even when a local build exists; `--prerelease` fetches the newest release candidate instead. It connects, installs, grants the permissions below, starts the agent, optionally sets the panel id / MQTT, and ends with a self-verify checklist. Once the new app is running, the provisioner asks it for a plan derived from the exact active hardware profile and live panel state. That plan identifies the panel profile and reports panel-specific helper, Shizuku and System WebView guidance without making Bash parse profile YAML.
+
+Provisioning is **idempotent**, so re-run the same command to finish after any interruption. Required startup, profile activation, configuration, restore, and verification failures return a nonzero result and are never counted as a successful fleet update. An optional or manual recommendation remains visible but does not turn an otherwise successful installation into a failure. Run `scripts/provision.sh --help` for the concise command reference.
 
 Two read-only operations are safe to run independently:
 
@@ -27,7 +29,9 @@ scripts/provision.sh <panel-ip:5555> --export panel-config.json
 scripts/provision.sh <panel-ip:5555> --verify
 ```
 
-When `--export FILE` is combined with install or configuration options, the verified backup is written **before** any panel mutation. Protect that file like a credential. Provisioning also offers the profile's known vendor overlays and factory-test apps for reversible disabling; pass `--no-tame` to leave them unchanged.
+When `--export FILE` is combined with install or configuration options, the verified backup is written **before** any panel mutation. Protect that file like a credential.
+
+Profile recommendations are report-only. Activating a hardware profile is not consent to disable packages, persist ADB, install privileged software or change display settings. The former `--no-tame` option remains accepted as a compatibility no-op, but recommendation-driven package taming is no longer automatic. Packages already present in the explicitly configured tame blocklist still reapply at boot.
 
 Non-root panels can add `--shizuku`. See [Shizuku enhanced access](shizuku.md) first for the capability comparison, security model, lifecycle and guidance on when it is preferable to the normal rooted-vendor path. The provisioner installs the curated, checksum-pinned Shizuku manager and starts its ADB service; then, on the panel, open **ha-paneld Configure**, use the toolbar overflow menu, choose **Enhanced access → Enable**, and approve Shizuku's permission prompt. That local approval is intentionally not available over the web UI, MQTT, config import, backup/restore, or fleet push. It enables signer-pinned ha-paneld and Companion updates, screenshots and taps, and display sizing—not arbitrary LAN APK uploads, WebView replacement, logs, private app data, reboot, vendor taming, or a general shell. The manager itself is not auto-updated by ha-paneld in this release.
 
@@ -42,13 +46,13 @@ adb -s <panel-ip:5555> shell sh /storage/emulated/0/Android/data/moe.shizuku.pri
 Then reopen **Configure → toolbar overflow → Enhanced access** and confirm it reports **Enhanced access
 is ready**. If it asks for permission again, approve the prompt locally on the panel.
 
-**Sandbox-walled panels (TPA10, SMT1019, … — the app itself can't exec `su`):** also install the [root helper daemon](../helper/README.md), which is the privileged control path there (screen-off, density, CPU governor, screenshot, perf, buttons, LED):
+**Sandbox-walled panels (TPA10, SMT1019, … — the app itself can't exec `su`):** the profile-aware plan reports when selected drivers require the [root helper daemon](../helper/README.md), which is the privileged control path there (screen-off, density, CPU governor, screenshot, perf, buttons, LED):
 
 ```bash
 ./helper/build.sh && ./helper/install-daemon.sh <panel-ip:5555>
 ```
 
-rk3576 / PX30 panels run `su` in-app and don't need it. The installer probes the panel's root path (vendor `su` variants or a root adbd) and picks a `/system` or systemless (Magisk-style `service.d`) install automatically; it is idempotent and safe to re-run.
+Many rk3576 / PX30 panels run `su` in-app and do not require it, although a profile can still select a helper-backed input or hardware driver. The helper installer probes the panel's root path (vendor `su` variants or a root adbd) and picks a `/system` or systemless (Magisk-style `service.d`) install automatically; it is idempotent and safe to re-run.
 
 ## Provisioning the built-in dashboard renderer
 
@@ -77,6 +81,8 @@ scripts/update-fleet.sh --latest -- 192.168.1.10 192.168.1.11:5555
 # --prerelease rolls the newest release-candidate instead of the latest stable.
 # or pipe a host list:  printf '%s\n' 192.168.1.10 192.168.1.11 | scripts/update-fleet.sh --latest
 ```
+
+Fleet runs print each panel's provisioning guidance but never accept profile recommendations automatically. A later writable reconciliation protocol will require approval bound to each panel's exact profile revision rather than one broad fleet flag.
 
 ## Bootstrapping adb (Tuya TPA10 / Smatek panels)
 

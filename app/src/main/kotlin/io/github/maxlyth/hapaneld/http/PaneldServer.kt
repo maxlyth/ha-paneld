@@ -33,6 +33,8 @@ import io.github.maxlyth.hapaneld.device.profile.PassiveProfileDraft
 import io.github.maxlyth.hapaneld.device.profile.PassiveProfileReport
 import io.github.maxlyth.hapaneld.device.profile.ProfileAdmin
 import io.github.maxlyth.hapaneld.logship.LogCapture
+import io.github.maxlyth.hapaneld.provisioning.ProvisioningActivationSnapshot
+import io.github.maxlyth.hapaneld.provisioning.ProvisioningReader
 import io.github.maxlyth.hapaneld.sensors.SensorReporter
 import io.github.maxlyth.hapaneld.shizuku.ShizukuBridge
 import io.github.maxlyth.hapaneld.util.Cached
@@ -140,7 +142,7 @@ internal suspend fun receiveBoundedConfigParameters(
  * [info] returns the ordered key/value facts to render; [onConfig] applies new settings (panel id
  * + MQTT broker/user/password). Both are supplied by the service, which owns the runtime objects.
  */
-class PaneldServer(
+class PaneldServer internal constructor(
     private val config: Config,
     private val cacheDir: File,
     private val scope: CoroutineScope,
@@ -206,6 +208,10 @@ class PaneldServer(
     private val onProfileRestart: () -> Boolean = { false },
     private val profileRestartAllowed: () -> Boolean = { true },
     private val onProfileRestartAbort: (String) -> Boolean = { false },
+    private val provisioningReader: ProvisioningReader? = null,
+    private val provisioningActivation: () -> ProvisioningActivationSnapshot = {
+        error("provisioning activation provider is unavailable")
+    },
 ) {
     // Per-INSTALL build token (changes on every (re)install, not just a version bump) so an open info
     // page can auto-reload after the app is updated — even a same-version dev re-spin. /health carries it.
@@ -410,6 +416,14 @@ class PaneldServer(
                 // external "contract" endpoints called by plain curl (no -L) from HA automations and
                 // monitors. Human pages + static assets stay top-level. ----
                 route("/api/v1") {
+                    provisioningReader?.let { reader ->
+                        provisioningRoutes(
+                            ProvisioningRouteDependencies(
+                                reader = reader,
+                                activation = provisioningActivation,
+                            ),
+                        )
+                    }
                     profileAdmin?.let { admin ->
                         profileRoutes(
                             ProfileRouteDependencies(

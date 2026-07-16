@@ -9,7 +9,6 @@ import io.github.maxlyth.hapaneld.platform.DaemonStreamResult
 import java.io.File
 
 const val SUPPORTED_HELPER_PROTOCOL_MAJOR = 1
-const val SUPPORTED_HELPER_PROTOCOL_MINOR = 0
 
 data class HelperIdentity(
     val version: String,

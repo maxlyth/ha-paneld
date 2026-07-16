@@ -56,6 +56,11 @@ import io.github.maxlyth.hapaneld.http.PanelInfo
 import io.github.maxlyth.hapaneld.logship.LogCapture
 import io.github.maxlyth.hapaneld.logship.LogShipper
 import io.github.maxlyth.hapaneld.media.AudioPlaybackCoordinator
+import io.github.maxlyth.hapaneld.provisioning.AndroidProvisioningObservationCollector
+import io.github.maxlyth.hapaneld.provisioning.ProvisioningActivationSnapshot
+import io.github.maxlyth.hapaneld.provisioning.ProvisioningCoordinator
+import io.github.maxlyth.hapaneld.provisioning.ProvisioningCoreIdentity
+import io.github.maxlyth.hapaneld.provisioning.toProvisioningProfile
 import io.github.maxlyth.hapaneld.sensors.SensorReporter
 import io.github.maxlyth.hapaneld.util.localIpv4
 import io.github.maxlyth.hapaneld.util.localIpv6
@@ -226,6 +231,15 @@ class PaneldService : Service() {
         profile = resolvedProfile.profile
         activeProfileIdentity = resolvedProfile.summary.ref.let { "${it.id}@${it.revision}" }
         profileActivationGeneration = resolvedProfile.activationGeneration
+        val provisioningReader = ProvisioningCoordinator(
+            core = ProvisioningCoreIdentity(
+                version = BuildConfig.VERSION_NAME,
+                versionCode = BuildConfig.VERSION_CODE,
+            ),
+            profile = resolvedProfile.toProvisioningProfile(),
+            collector = AndroidProvisioningObservationCollector(this),
+            monotonicMs = { android.os.SystemClock.elapsedRealtime() },
+        )
         resolvedProfile.issues.forEach { issue ->
             Log.w(TAG, "profile ${issue.severity.name.lowercase()} ${issue.path}: ${issue.message}")
         }
@@ -427,6 +441,15 @@ class PaneldService : Service() {
             onProfileRestart = { profileRestart.request() },
             profileRestartAllowed = { !InstallProgress.running },
             onProfileRestartAbort = profileRegistry::abortPendingActivation,
+            provisioningReader = provisioningReader,
+            provisioningActivation = {
+                val status = profileRegistry.status()
+                ProvisioningActivationSnapshot(
+                    phase = status.activation.phase,
+                    activeRef = status.active?.ref,
+                    generation = status.activation.generation,
+                )
+            },
         )
     }
 

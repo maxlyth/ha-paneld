@@ -120,8 +120,34 @@ class ProvisioningRoutesTest {
         assertEquals(1, reader.reads)
     }
 
+    @Test
+    fun activationTransitionDuringObservationReturns503InsteadOfAStalePlan() = testApplication {
+        var activation = ACTIVE
+        val reader = FakeReader(onRead = {
+            activation = ACTIVE.copy(phase = ProfileActivationPhase.PENDING)
+        })
+        application {
+            routing {
+                route("/api/v1") {
+                    provisioningRoutes(ProvisioningRouteDependencies(reader) { activation })
+                }
+            }
+        }
+
+        val response = client.get("/api/v1/provisioning/plan")
+
+        assertEquals(HttpStatusCode.ServiceUnavailable, response.status)
+        assertEquals("1", response.headers[HttpHeaders.RetryAfter])
+        assertEquals(
+            "profile_activation_unstable",
+            JSONObject(response.bodyAsText()).getString("error"),
+        )
+        assertEquals(1, reader.reads)
+    }
+
     private class FakeReader(
         private val result: ProvisioningReadResult = ProvisioningReadResult.Ready(PLAN),
+        private val onRead: () -> Unit = {},
     ) : ProvisioningReader {
         override val expectedProfileRef = REF
         var reads = 0
@@ -131,6 +157,7 @@ class ProvisioningRoutesTest {
             forceRefresh: Boolean,
         ): ProvisioningReadResult {
             reads++
+            onRead()
             return result
         }
     }

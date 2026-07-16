@@ -5,6 +5,9 @@ import io.github.maxlyth.hapaneld.device.profile.ProfileOrigin
 import io.github.maxlyth.hapaneld.device.profile.ProfileRef
 import io.github.maxlyth.hapaneld.device.profile.ShizukuRecommendation
 import io.github.maxlyth.hapaneld.shizuku.ShizukuState
+import io.github.maxlyth.hapaneld.util.HelperIdentity
+import io.github.maxlyth.hapaneld.util.HelperIdentityIssue
+import io.github.maxlyth.hapaneld.util.HelperIdentityStatus
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -193,9 +196,9 @@ class ProvisioningPlannerTest {
     }
 
     @Test
-    fun androidCollectorContainsProbeFailuresAndDoesNotPromotePingToCompatibility() = runTest {
+    fun androidCollectorContainsProbeFailuresAndPreservesLegacyHelperUncertainty() = runTest {
         val collector = AndroidProvisioningObservationCollector(
-            helperAvailable = { true },
+            helperIdentity = { HelperIdentityStatus.ReachableUnverified },
             shizukuState = { ShizukuState.MANUAL_GRANT_REQUIRED },
             webViewEngineMajor = { throw IllegalStateException("provider unavailable") },
         )
@@ -213,6 +216,31 @@ class ProvisioningPlannerTest {
         assertEquals(
             ProvisioningObservation.Unknown(ProvisioningUnknownReason.PROBE_FAILED),
             snapshot.webView,
+        )
+    }
+
+    @Test
+    fun androidCollectorMapsVersionedHelperCompatibility() = runTest {
+        suspend fun helper(status: HelperIdentityStatus) =
+            AndroidProvisioningObservationCollector(
+                helperIdentity = { status },
+                shizukuState = { ShizukuState.MANAGER_MISSING },
+                webViewEngineMajor = { null },
+            ).collect().helper
+
+        val identity = HelperIdentity("1.0.0", 1, 0)
+        assertEquals(
+            ProvisioningObservation.Known(ProvisioningHelperState.COMPATIBLE),
+            helper(HelperIdentityStatus.Compatible(identity)),
+        )
+        assertEquals(
+            ProvisioningObservation.Known(ProvisioningHelperState.INCOMPATIBLE),
+            helper(
+                HelperIdentityStatus.Incompatible(
+                    identity,
+                    HelperIdentityIssue.UNSUPPORTED_PROTOCOL,
+                ),
+            ),
         )
     }
 

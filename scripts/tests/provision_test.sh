@@ -151,6 +151,13 @@ assert_contains 'root helper daemon: running' "legacy verify retains the broad h
 assert_not_contains '^curl .* (-X POST|--data|--data-urlencode)' "$MOCK_CALL_LOG" "legacy verify remains GET-only"
 unset MOCK_PLAN
 
+# A current app that owns the endpoint but remains in 503 is not a legacy compatibility case.
+MOCK_PLAN=unstable PROVISIONING_PLAN_TIMEOUT_SECONDS=1 run_provision "$MOCK_TARGET" --verify
+assert_failure "verify-only fails while current profile activation remains unstable"
+assert_contains 'could not complete profile verification' "unstable verify explains that profile verification is incomplete"
+assert_not_contains '^curl .* (-X POST|--data|--data-urlencode)' "$MOCK_CALL_LOG" "unstable verify remains GET-only"
+unset MOCK_PLAN PROVISIONING_PLAN_TIMEOUT_SECONDS
+
 # A normal local install must work with only portable shell facilities. The fixture PATH deliberately
 # supplies failing seq and GNU sort -V implementations; invoking either makes this test fail.
 run_provision "$MOCK_TARGET" --apk "$APK"

@@ -70,7 +70,7 @@ LOCAL_APK="app/build/outputs/apk/debug/app-debug.apk"
 PKG="io.github.maxlyth.hapaneld"
 RELEASE_CERT_SHA256="ac6193307fb0b70113aae205d7549406f96e063bc5491b67b1d5694a34b0e339"
 A11Y="$PKG/.input.PanelAccessibilityService"
-APK=""; APK_RELEASE_TAG=""; PANEL_ID=""; MQTT=""; MQTT_USER=""; MQTT_PASS=""; VERIFY_ONLY=0; LATEST=0; PRERELEASE=0; FORCE=0; PERSIST_ADB=0; STRIP_VENDOR=0; NO_TAME=0; SHIZUKU=0; TOINSTALL_VER=""
+APK=""; APK_RELEASE_TAG=""; PANEL_ID=""; MQTT=""; MQTT_USER=""; MQTT_PASS=""; VERIFY_ONLY=0; LATEST=0; PRERELEASE=0; FORCE=0; PERSIST_ADB=0; STRIP_VENDOR=0; SHIZUKU=0; TOINSTALL_VER=""
 LOG_HOST=""; LOG_PORT=""; LOG_PROTO=""; LOG_ENABLE=""
 EXPORT_FILE=""; RESTORE_FILE=""; RESTORE_MODE=""
 HA_URL=""; HA_TOKEN=""; HA_USER=""; HA_PASS=""; HA_REFRESH=""; HA_EXPIRY=""; BUILTIN=0
@@ -98,7 +98,7 @@ while [ "${1:-}" ]; do
     --force) FORCE=1; shift ;;       # skip the same/older-version prompt
     --persist-adb) PERSIST_ADB=1; shift ;;  # keep network adb (tcp 5555) across reboots (opt-in; standing LAN port)
     --strip-vendor) STRIP_VENDOR=1; shift ;; # disable the Tuya vendor apps (TPA10) non-interactively (skips the prompt)
-    --no-tame) NO_TAME=1; shift ;;   # skip the default "tame recommended vendor apps" step (eWeLink + factory test tools)
+    --no-tame) shift ;;   # deprecated compatibility no-op; profile recommendations are report-only
     --shizuku) SHIZUKU=1; shift ;;   # install/start pinned Shizuku on a non-root panel; permission stays local
     --log-host) LOG_HOST="$2"; LOG_ENABLE=true; shift 2 ;;  # ship logcat to this aggregator (host enables shipping)
     --log-port) LOG_PORT="$2"; shift 2 ;;     # log sink port (default 514 for syslog)
@@ -168,13 +168,17 @@ PROVISIONING_PLAN_AVAILABLE=0
 # remains useful against pre-0.9.4 panels: a legacy 404 is advisory and all established GET checks run.
 show_provisioning_plan() {
   local required="$1" label="$2"
-  local timeout="${PROVISIONING_PLAN_TIMEOUT_SECONDS:-40}" elapsed=0 code="" body plan_text="" status=unavailable
+  local timeout="${PROVISIONING_PLAN_TIMEOUT_SECONDS:-40}" deadline remaining request_timeout code="" body plan_text="" status=unavailable
   case "$timeout" in ''|*[!0-9]*|0) timeout=40 ;; esac
+  deadline=$((SECONDS + timeout))
   body="$(mktemp)"
   step "🧭 panel profile" "$label"
-  while [ "$elapsed" -lt "$timeout" ]; do
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    remaining=$((deadline - SECONDS))
+    request_timeout=4
+    [ "$remaining" -lt "$request_timeout" ] && request_timeout="$remaining"
     : > "$body"
-    if code="$(curl -sS --max-time 4 -o "$body" -w '%{http_code}' \
+    if code="$(curl -sS --max-time "$request_timeout" -o "$body" -w '%{http_code}' \
         "$URL/api/v1/provisioning/plan.txt" 2>/dev/null)"; then
       case "$code" in
         200)
@@ -204,16 +208,15 @@ show_provisioning_plan() {
     else
       status=unreachable
     fi
-    elapsed=$((elapsed + 1))
-    [ "$elapsed" -lt "$timeout" ] && sleep 1
+    [ "$SECONDS" -lt "$deadline" ] && sleep 1
   done
   rm -f "$body"
   if [ "$required" = 1 ]; then
     warn "the provisioning plan stayed ${status:-unavailable} for ${timeout}s; the paired app did not finish profile activation"
     return 1
   fi
-  warn "profile-guided provisioning is ${status:-unavailable}; continuing with the legacy verification checks"
-  return 0
+  warn "profile-guided provisioning stayed ${status:-unavailable}; the installed app could not complete profile verification"
+  return 1
 }
 
 verify() {

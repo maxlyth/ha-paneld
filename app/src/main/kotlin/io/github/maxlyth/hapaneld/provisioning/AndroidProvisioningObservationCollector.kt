@@ -5,6 +5,7 @@ import io.github.maxlyth.hapaneld.http.PanelInfo
 import io.github.maxlyth.hapaneld.shizuku.ShizukuBridge
 import io.github.maxlyth.hapaneld.shizuku.ShizukuState
 import io.github.maxlyth.hapaneld.util.HelperClient
+import io.github.maxlyth.hapaneld.util.HelperIdentityStatus
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -14,12 +15,12 @@ import kotlinx.coroutines.coroutineScope
  * mutation. Probe failures are contained to their own item.
  */
 internal class AndroidProvisioningObservationCollector(
-    private val helperAvailable: () -> Boolean,
+    private val helperIdentity: () -> HelperIdentityStatus,
     private val shizukuState: () -> ShizukuState,
     private val webViewEngineMajor: () -> Int?,
 ) : ProvisioningObservationCollector {
     constructor(context: Context) : this(
-        helperAvailable = HelperClient::available,
+        helperIdentity = HelperClient::identityStatus,
         shizukuState = { ShizukuBridge.state },
         webViewEngineMajor = { PanelInfo.webViewStatus(context.applicationContext).engineMajor },
     )
@@ -37,10 +38,15 @@ internal class AndroidProvisioningObservationCollector(
 
     private fun observeHelper(): ProvisioningObservation<ProvisioningHelperState> =
         runCatching {
-            if (helperAvailable()) {
-                ProvisioningObservation.Known(ProvisioningHelperState.REACHABLE_UNVERIFIED)
-            } else {
-                ProvisioningObservation.Known(ProvisioningHelperState.MISSING)
+            when (helperIdentity()) {
+                is HelperIdentityStatus.Compatible ->
+                    ProvisioningObservation.Known(ProvisioningHelperState.COMPATIBLE)
+                HelperIdentityStatus.ReachableUnverified ->
+                    ProvisioningObservation.Known(ProvisioningHelperState.REACHABLE_UNVERIFIED)
+                HelperIdentityStatus.Missing ->
+                    ProvisioningObservation.Known(ProvisioningHelperState.MISSING)
+                is HelperIdentityStatus.Incompatible ->
+                    ProvisioningObservation.Known(ProvisioningHelperState.INCOMPATIBLE)
             }
         }.getOrElse {
             ProvisioningObservation.Unknown(ProvisioningUnknownReason.PROBE_FAILED)
