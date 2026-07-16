@@ -61,6 +61,9 @@ jobs:
           npm run check
           npm run sbom
 
+      - name: Test firmware index tooling
+        run: python3 -m unittest discover -s tools/firmware-index -p 'test_*.py' -v
+
       - name: Test installer and provisioning contracts
         run: scripts/tests/provision_test.sh
 

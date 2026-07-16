@@ -153,6 +153,12 @@ def priority_urls(devices):
     return res
 
 
+def archive_progress(urls, files):
+    """Return current-index archived and pending counts, ignoring stale state entries."""
+    archived = sum(1 for url in urls if url in files)
+    return archived, len(urls) - archived
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--state", required=True)
@@ -185,7 +191,8 @@ def main():
 
     # Pass A — confirm anything already archived (catches prior runs' async completions).
     got = confirm_batch(state, args.state, [u for u in urls if u not in files])
-    print(f"confirmed {got} already-archived; {len(files)}/{len(urls)} done")
+    archived, _remaining = archive_progress(urls, files)
+    print(f"confirmed {got} already-archived; {archived}/{len(urls)} done")
 
     # Pass B — fire captures newest-first, paced into waves to respect SPN's active cap.
     todo = [u for u in urls if u not in files]
@@ -219,8 +226,8 @@ def main():
         print(f"confirmed {got}/{len(submitted)} of this run's submissions")
 
     save_state(args.state, state)
-    remaining = len(urls) - len(files)
-    print(f"TOTAL: {len(files)}/{len(urls)} firmware URLs archived"
+    archived, remaining = archive_progress(urls, files)
+    print(f"TOTAL: {archived}/{len(urls)} firmware URLs archived"
           + (f"; {remaining} still pending (will confirm next run)" if remaining else " — complete"))
     return 0
 

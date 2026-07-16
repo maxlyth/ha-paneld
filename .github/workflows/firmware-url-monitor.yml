@@ -58,6 +58,8 @@ jobs:
         run: python tools/firmware-index/firmware_index.py probe --history history.json
 
       - name: Render Discussion body
+        id: render
+        continue-on-error: true
         run: python tools/firmware-index/firmware_index.py render --history history.json --out body.md
 
       # The built-in GITHUB_TOKEN is a GitHub App integration token, which GitHub
@@ -66,6 +68,8 @@ jobs:
       # permission. Discussion writes need a user PAT — set a fine-grained token
       # (Discussions: Read and write on this repo) as the DISCUSSIONS_TOKEN secret.
       - name: Update Discussion body
+        id: discussion
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.DISCUSSIONS_TOKEN }}
         run: |
@@ -88,6 +92,9 @@ jobs:
       # Append the new sample to the data branch. Never force-pushes: it commits
       # onto the existing tip (or creates the branch on first run).
       - name: Persist history
+        id: persist
+        if: always() && hashFiles('history.json') != ''
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -105,12 +112,43 @@ jobs:
           git -C "$work" commit -q -m "data: firmware URL availability $(date -u +%FT%TZ)" || { echo "no change"; exit 0; }
           git -C "$work" push -q "$repo_url" HEAD:firmware-status
 
+      # A failed URL probe is retried below, so that job owns the final status.
+      # If the URLs were healthy, any failed side effect is immediately fatal.
+      - name: Report initial failures
+        if: always()
+        env:
+          PROBE_OUTCOME: ${{ steps.probe.outcome }}
+          RENDER_OUTCOME: ${{ steps.render.outcome }}
+          DISCUSSION_OUTCOME: ${{ steps.discussion.outcome }}
+          PERSIST_OUTCOME: ${{ steps.persist.outcome }}
+        run: |
+          failed=0
+          if [ "$RENDER_OUTCOME" = "failure" ]; then
+            echo "::error::The firmware Discussion body could not be rendered."
+            failed=1
+          fi
+          if [ "$DISCUSSION_OUTCOME" = "failure" ]; then
+            echo "::error::Discussion #${DISCUSSION_NUMBER} could not be updated."
+            failed=1
+          fi
+          if [ "$PERSIST_OUTCOME" = "failure" ]; then
+            echo "::error::The firmware availability sample could not be preserved."
+            failed=1
+          fi
+          if [ "$PROBE_OUTCOME" = "failure" ]; then
+            if [ "$failed" -ne 0 ]; then
+              echo "::notice::Initial side-effect failures will be retried with the URL probe."
+            fi
+            exit 0
+          fi
+          exit "$failed"
+
   # If any URLs were unreachable, wait 1 hour and re-probe. This distinguishes a
   # transient CDN blip (back up on retry) from a real outage (still down). The
-  # retry re-renders and updates the Discussion with the fresh sparkline point.
+  # retry becomes that UTC day's final sparkline point, then updates the Discussion.
   retry:
     needs: check
-    if: needs.check.outputs.has_failures == 'true'
+    if: always() && needs.check.outputs.has_failures == 'true'
     runs-on: ubuntu-24.04
     permissions:
       contents: write       # push the retry sample to firmware-status
@@ -139,12 +177,18 @@ jobs:
           fi
 
       - name: Probe firmware URLs (retry)
+        id: retry_probe
+        continue-on-error: true
         run: python tools/firmware-index/firmware_index.py probe --history history.json
 
       - name: Render Discussion body
+        id: retry_render
+        continue-on-error: true
         run: python tools/firmware-index/firmware_index.py render --history history.json --out body.md
 
       - name: Update Discussion body
+        id: retry_discussion
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.DISCUSSIONS_TOKEN }}
         run: |
@@ -163,6 +207,9 @@ jobs:
             -f id="$did" -F b=@body.md
 
       - name: Persist history
+        id: retry_persist
+        if: always() && hashFiles('history.json') != ''
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -179,3 +226,30 @@ jobs:
           git -C "$work" add history.json
           git -C "$work" commit -q -m "data: firmware URL availability $(date -u +%FT%TZ) (retry)" || { echo "no change"; exit 0; }
           git -C "$work" push -q "$repo_url" HEAD:firmware-status
+
+      - name: Report retry failures
+        if: always()
+        env:
+          PROBE_OUTCOME: ${{ steps.retry_probe.outcome }}
+          RENDER_OUTCOME: ${{ steps.retry_render.outcome }}
+          DISCUSSION_OUTCOME: ${{ steps.retry_discussion.outcome }}
+          PERSIST_OUTCOME: ${{ steps.retry_persist.outcome }}
+        run: |
+          failed=0
+          if [ "$PROBE_OUTCOME" != "success" ]; then
+            echo "::error::One or more firmware URLs remained unavailable after the one-hour retry."
+            failed=1
+          fi
+          if [ "$RENDER_OUTCOME" = "failure" ]; then
+            echo "::error::The retry Discussion body could not be rendered."
+            failed=1
+          fi
+          if [ "$DISCUSSION_OUTCOME" = "failure" ]; then
+            echo "::error::The retry sample was preserved, but Discussion #${DISCUSSION_NUMBER} could not be updated."
+            failed=1
+          fi
+          if [ "$PERSIST_OUTCOME" = "failure" ]; then
+            echo "::error::The retry availability sample could not be preserved."
+            failed=1
+          fi
+          exit "$failed"

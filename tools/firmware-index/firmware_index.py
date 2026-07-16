@@ -147,16 +147,36 @@ def save_history(path, h):
 
 def trim(h, now):
     cutoff = now - WINDOW_HOURS * 3600 - 1800   # 30 min grace for scheduler jitter
-    h["samples"] = [s for s in h["samples"] if s.get("t", 0) >= cutoff][-MAX_POINTS:]
+    latest_by_day = {}
+    for sample in h["samples"]:
+        timestamp = sample.get("t", 0)
+        if timestamp < cutoff:
+            continue
+        day = timestamp // 86400
+        previous = latest_by_day.get(day)
+        if previous is None or timestamp >= previous.get("t", 0):
+            latest_by_day[day] = sample
+    h["samples"] = [latest_by_day[day] for day in sorted(latest_by_day)][-MAX_POINTS:]
 
 
-def sparkline(url, h):
-    """Seven squares, oldest→newest, left-padded with grey when data is missing."""
+def sparkline(url, h, now=None):
+    """Seven UTC-day squares, oldest→newest, with grey for every missing day."""
+    if now is None:
+        now = int(time.time())
+    current_day = now // 86400
+    latest_by_day = {}
+    for sample in h["samples"]:
+        timestamp = sample.get("t", 0)
+        day = timestamp // 86400
+        previous = latest_by_day.get(day)
+        if previous is None or timestamp >= previous.get("t", 0):
+            latest_by_day[day] = sample
+
     cells = []
-    for s in h["samples"][-MAX_POINTS:]:
-        v = s.get("r", {}).get(url)
-        cells.append(UP if v == 1 else DOWN if v == 0 else NODATA)
-    cells = [NODATA] * (MAX_POINTS - len(cells)) + cells
+    for day in range(current_day - MAX_POINTS + 1, current_day + 1):
+        sample = latest_by_day.get(day, {})
+        value = sample.get("r", {}).get(url)
+        cells.append(UP if value == 1 else DOWN if value == 0 else NODATA)
     return "".join(cells)
 
 
