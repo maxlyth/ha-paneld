@@ -10,10 +10,11 @@ import io.github.maxlyth.hapaneld.metrics.FeatureCostOutcome
 import io.github.maxlyth.hapaneld.metrics.FeatureCosts
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 import java.io.Writer
 
 /** Bounded, derived entity/catalog evidence. Credentials are never stored here. */
-class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, "entity-learning.db", null, VERSION) {
+class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseName(context), null, VERSION) {
     private val maintenanceGate = MaintenanceIntervalGate(MAINTENANCE_INTERVAL_MS)
     private val performanceMaintenanceGate = MaintenanceIntervalGate(PERFORMANCE_MAINTENANCE_INTERVAL_MS)
     private val databaseBytesCacheLock = Any()
@@ -1022,6 +1023,8 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, "entity-l
     }
 
     companion object {
+        internal const val DATABASE_NAME = "ha-paneld.db"
+        internal const val LEGACY_DATABASE_NAME = "entity-learning.db"
         private const val VERSION = EntityCatalogSchema.CURRENT_VERSION
         private const val HOUR_MS = 3_600_000L
         private const val MINUTE_MS = 60_000L
@@ -1054,7 +1057,55 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, "entity-l
             render_micros INTEGER NOT NULL DEFAULT 0,long_task_count INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY(instance,path,minute))"""
         private val FINGERPRINT = Regex("^[a-f0-9]{16}$")
+        private val DATABASE_MIGRATION_LOCK = Any()
+
+        private fun databaseName(context: Context): String = synchronized(DATABASE_MIGRATION_LOCK) {
+            val target = context.getDatabasePath(DATABASE_NAME)
+            if (target.exists()) return@synchronized DATABASE_NAME
+            val legacy = context.getDatabasePath(LEGACY_DATABASE_NAME)
+            if (!legacy.exists()) return@synchronized DATABASE_NAME
+            if (checkpointLegacyDatabase(legacy) && migrateDatabaseFiles(legacy, target)) {
+                DATABASE_NAME
+            } else {
+                LEGACY_DATABASE_NAME
+            }
+        }
+
+        private fun checkpointLegacyDatabase(database: File): Boolean = runCatching {
+            SQLiteDatabase.openDatabase(
+                database.path,
+                null,
+                SQLiteDatabase.OPEN_READWRITE or SQLiteDatabase.NO_LOCALIZED_COLLATORS,
+            ).use { opened ->
+                opened.rawQuery("PRAGMA wal_checkpoint(TRUNCATE)", null).use { cursor ->
+                    cursor.moveToFirst() && cursor.getInt(0) == 0
+                }
+            }
+        }.getOrDefault(false)
     }
+}
+
+/**
+ * Rename a closed SQLite database and all live sidecars as one best-effort file set. A failed move
+ * rolls completed renames back and leaves callers on the legacy name rather than creating an empty DB.
+ */
+internal fun migrateDatabaseFiles(legacy: File, target: File): Boolean {
+    val suffixes = listOf("", "-wal", "-shm", "-journal")
+    val moves = suffixes.mapNotNull { suffix ->
+        val source = File(legacy.path + suffix)
+        if (source.exists()) source to File(target.path + suffix) else null
+    }
+    if (moves.isEmpty() || moves.any { (_, destination) -> destination.exists() }) return false
+    if (target.parentFile?.let { it.isDirectory || it.mkdirs() } == false) return false
+    val completed = ArrayList<Pair<File, File>>(moves.size)
+    for ((source, destination) in moves) {
+        if (!source.renameTo(destination)) {
+            completed.asReversed().forEach { (old, renamed) -> renamed.renameTo(old) }
+            return false
+        }
+        completed += source to destination
+    }
+    return true
 }
 
 /** Heat-map percentiles are diagnostic context, not control state. Recompute them at most once per

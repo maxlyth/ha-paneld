@@ -14,11 +14,13 @@ class DashboardPerformanceHistoryStoreTest {
     private val context = ApplicationProvider.getApplicationContext<android.content.Context>()
 
     @Before fun cleanBefore() {
-        context.deleteDatabase("entity-learning.db")
+        context.deleteDatabase(EntityCatalogStore.DATABASE_NAME)
+        context.deleteDatabase(EntityCatalogStore.LEGACY_DATABASE_NAME)
     }
 
     @After fun cleanAfter() {
-        context.deleteDatabase("entity-learning.db")
+        context.deleteDatabase(EntityCatalogStore.DATABASE_NAME)
+        context.deleteDatabase(EntityCatalogStore.LEGACY_DATABASE_NAME)
     }
 
     @Test fun minuteRollupsSurviveStoreReopenAndAggregateBatches() {
