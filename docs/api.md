@@ -15,6 +15,7 @@ Every panel publishes the **same** Home Assistant MQTT-discovery entities, regar
 | `number.<panel>_volume` | TTS/announce volume | 0–100% → `STREAM_MUSIC`; playback is the HTTP `/play` contract below |
 | `sensor.<panel>_illuminance` | ambient lux | standard `SensorManager` `TYPE_LIGHT`; published only if present |
 | `binary_sensor.<panel>_proximity` | proximity (occupancy) | standard `SensorManager` `TYPE_PROXIMITY`; published only if present |
+| `sensor.<panel>_zigbee_gateway_health` | Sonoff gateway health | always present on Zigbee-capable panels; states include `off`, `starting`, `healthy`, degraded states, `runaway`, and containment results; attributes are bounded and exclude radio identity, network keys and broker credentials |
 | `button.<panel>_reload` | reload dashboard | foreign renderer: force-stop + relaunch (root helper, else `su`); built-in renderer: reloads its own WebView in-process (no root needed) |
 | `button.<panel>_reboot` | reboot panel | root helper, else `su` |
 | `button.<panel>_launcher` | bring a launcher to the foreground | fires `CATEGORY_HOME` at a non-default launcher (or configured `launcher_package`), leaving the boot/default home app unchanged |
@@ -65,7 +66,8 @@ The machine API lives under **`/api/v1`** as of 0.8.5. The pre-0.8.5 flat paths 
 | `/api/v1/backup` / `/api/v1/restore` | POST | Download or restore a complete panel backup, including imported device-profile revisions and their selected identity; restore claims the shared destructive-operation lane before reading the bundle, supports a non-writing `?dry_run=1` preview, and reports config, profile-catalog, Companion, and rollback outcomes separately through `/api/v1/install/status` |
 | `/api/v1/install/status` | GET | Shared install/backup/restore progress; preserves the human-readable `message` and includes a structured `result` object for completed multi-component restores |
 | `/api/v1/install/component` | POST | Start a managed component update or reinstall; an exact version older than the installed version is rejected unless the caller explicitly sends `allow_downgrade=true` |
-| `/api/v1/status` | GET | Panel-health warnings + capability matrix as JSON |
+| `/api/v1/status` | GET | Panel-health warnings + capability matrix and the bounded Zigbee gateway health snapshot as JSON |
+| `/api/v1/radio` | GET | EFR32 gateway presence, health state and redacted health attributes |
 | `/api/v1/input` | POST | Queue a tap at device pixel `x`,`y` through a bounded latest-value control lane, then root, the helper daemon, Accessibility, or locally approved Shizuku access. Returns `202` on admission and `409` when the bounded lane is busy. The experimental web remote-control UI is withheld pending review; the API remains available for automation and testing. |
 | `/api/v1/ui/layout` | GET / POST | Per-panel dashboard layout blob (groundwork for customisable card layout) |
 | `/api/v1/dashboard/entity-filter` | GET / POST | Advanced exact-list control for the built-in renderer's experimental entity filter; replace or disable a manual set and inspect count, hash and runtime proof |

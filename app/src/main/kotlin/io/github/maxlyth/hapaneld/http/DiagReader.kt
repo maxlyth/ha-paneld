@@ -6,6 +6,7 @@ import android.provider.Settings
 import io.github.maxlyth.hapaneld.BuildConfig
 import io.github.maxlyth.hapaneld.control.Su
 import io.github.maxlyth.hapaneld.control.TameController
+import io.github.maxlyth.hapaneld.control.ZigbeeHealthSnapshot
 import io.github.maxlyth.hapaneld.device.DeviceProfile
 import io.github.maxlyth.hapaneld.hardware.NativeLed
 import io.github.maxlyth.hapaneld.input.ButtonCaptureHealth
@@ -133,6 +134,7 @@ object DiagReader {
         ctx: Context,
         profile: DeviceProfile,
         facts: Map<String, String> = emptyMap(),
+        zigbee: ZigbeeHealthSnapshot? = null,
     ): String = buildString {
         appendLine("ha-paneld diagnostics — ${BuildConfig.VERSION_NAME} (build ${BuildConfig.VERSION_CODE})")
         // Capture metadata — a normalise-me line for the regression harness: when this dump was taken +
@@ -148,6 +150,14 @@ object DiagReader {
         appendLine("board=${Build.BOARD} product=${Build.PRODUCT} hardware=${Build.HARDWARE} abis=${Build.SUPPORTED_ABIS.joinToString(",")}")
         val evdev = EvdevButtonClient.snapshot()
         appendLine("[env] selinux=${PanelMetrics.shared.selinuxEnforce() ?: "?"} su=${Su.available()} write_settings=${Settings.System.canWrite(ctx)} a11y=${a11yEnabled(ctx)} daemon=${HelperClient.available()} shizuku=${ShizukuBridge.state.name.lowercase()} evdev=${evdev.state.name.lowercase()}/${evdev.mode?.name?.lowercase() ?: "none"} ledjni=${NativeLed.available()}")
+        zigbee?.let {
+            appendLine(
+                "[zigbee-health] state=${it.state.wireValue} layout=${it.layout} package=${it.packageVersion ?: "-"} " +
+                    "joined=${it.joined ?: "unknown"} role=${it.role ?: "-"} gateway_cpu=${it.gatewayCpu ?: -1} " +
+                    "guard_cpu=${it.guardCpu ?: -1} restarts_10m=${it.restartCount} " +
+                    "containment=${it.containment.wireValue} recursive_watchdog=${it.recursiveWatchdogAssignment}",
+            )
+        }
         evdevRequestDescription(profile)?.let { requested ->
             appendLine("[evdev] requested=$requested state=${evdev.state.name.lowercase()} mode=${evdev.mode?.name?.lowercase() ?: "none"} error=${evdev.lastError ?: "-"}")
         }

@@ -268,8 +268,10 @@
   // Radio card: show it only when this panel actually has an EFR32 radio gateway.
   fetch('/api/v1/radio').then(function (r) { return r.json(); }).then(function (d) {
     if (!d || !d.present) return;
-    var card = document.getElementById('radiocard'), st = document.getElementById('radio-status');
+    var card = document.getElementById('radiocard'), st = document.getElementById('radio-status'),
+        health = document.getElementById('radio-health');
     if (st) st.textContent = d.status || '';
+    if (health) health.textContent = d.state || 'unknown';
     if (card) card.style.display = '';
   }).catch(function () {});
 

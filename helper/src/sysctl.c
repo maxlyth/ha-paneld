@@ -321,6 +321,55 @@ void cmd_gov(conn_ctx *ctx, const char *args) {
     reply(ctx->fd, set_governor(gov) == 0 ? "OK\n" : "ERR\n");
 }
 
+void cmd_zigbeecontain(conn_ctx *ctx, const char *args) {
+    if (args[0] != '\0') {
+        reply(ctx->fd, "ERR\n");
+        return;
+    }
+    /*
+     * Argument-free by design. Admission is the exact vendor-native Sonoff layout and the process
+     * allowlist is path/cmdline exact: its guard, zgateway, and the broker launched from the same
+     * directory with that directory's config. No caller-controlled bytes reach this shell.
+     *
+     * Exit 0 = every targeted process disappeared. Exit 2 = at least one survived signalling; the
+     * respawner was removed where possible and surviving gateway/broker work was demoted to nice 19
+     * plus Android's background cpuset. Any other result means admission/probing failed.
+     */
+    const char *cmd =
+        "d=/vendor/bin/siliconlabs_host; "
+        "[ -f \"$d/guard_process.sh\" ] && [ -x \"$d/zgateway\" ] || exit 3; "
+        "targets=''; gateways=''; "
+        "for p in /proc/[0-9]*; do "
+          "pid=${p#/proc/}; exe=$(readlink \"$p/exe\" 2>/dev/null || true); "
+          "args=$(tr '\\000' ' ' < \"$p/cmdline\" 2>/dev/null | sed 's/ $//'); "
+          "case \"$exe|$args\" in "
+            "\"$d/zgateway|$d/zgateway\"|\"$d/zgateway|$d/zgateway \"*) "
+              "targets=\"$targets $pid\"; gateways=\"$gateways $pid\" ;; "
+            "\"/system/bin/sh|sh $d/guard_process.sh\"|"
+            "\"/system/bin/sh|/system/bin/sh $d/guard_process.sh\") "
+              "targets=\"$targets $pid\" ;; "
+            "\"$d/mosquitto|$d/mosquitto -c $d/mosquitto.conf\"|"
+            "\"$d/mosquitto|$d/mosquitto -c $d/mosquitto.conf \"*) "
+              "targets=\"$targets $pid\" ;; "
+          "esac; "
+        "done; "
+        "[ -n \"$targets\" ] || exit 0; "
+        "kill -TERM $targets 2>/dev/null || true; sleep 1; "
+        "alive=''; for pid in $targets; do [ -d /proc/$pid ] && alive=\"$alive $pid\"; done; "
+        "[ -z \"$alive\" ] || { kill -KILL $alive 2>/dev/null || true; sleep 1; }; "
+        "alive=''; for pid in $targets; do [ -d /proc/$pid ] && alive=\"$alive $pid\"; done; "
+        "[ -z \"$alive\" ] && exit 0; "
+        "for pid in $gateways; do if [ -d /proc/$pid ]; then "
+          "renice 19 -p $pid >/dev/null 2>&1 || true; "
+          "[ -w /dev/cpuset/background/tasks ] && echo $pid > /dev/cpuset/background/tasks 2>/dev/null || true; "
+        "fi; done; "
+        "exit 2";
+    int status = sysexec_run(cmd);
+    if (command_ok(status)) reply(ctx->fd, "OK\n");
+    else if (command_exited_with(status, 2)) reply(ctx->fd, "PARTIAL\n");
+    else reply(ctx->fd, "ERR\n");
+}
+
 void cmd_screencap(conn_ctx *ctx, const char *args) {
     (void)args;
     screencap_to(ctx->fd);   // raw PNG bytes; server closes on the client half-close → client gets EOF

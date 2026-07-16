@@ -51,6 +51,7 @@ enum class FeatureCostOperation(
     MQTT_TEARDOWN("mqtt.teardown"),
     MQTT_STATE_OUTBOX("mqtt.state_outbox"),
     ZIGBEE_RECONCILE("zigbee.reconcile"),
+    ZIGBEE_HEALTH_SAMPLE("zigbee.health_sample"),
     NETWORK_RECONFIGURE("network.reconfigure"),
     CONFIG_LIVE_REFRESH("config.live_refresh"),
     NAVBAR_MODE_APPLY("navbar.mode_apply"),

@@ -20,7 +20,7 @@
         "responses": { "200": { "description": "playing" }, "400": { "description": "no-url" }, "503": { "description": "stopping" } } }
     },
     "/api/v1/openapi.json": { "get": { "summary": "This OpenAPI document", "tags": ["status"], "responses": { "200": { "description": "OpenAPI 3 JSON" } } } },
-    "/api/v1/status": { "get": { "summary": "Panel-health warnings + capability matrix as JSON", "tags": ["status"], "responses": { "200": { "description": "{warnings:[html], capabilities:[{name,note,color}]}" } } } },
+    "/api/v1/status": { "get": { "summary": "Panel-health warnings, capability matrix and Zigbee gateway health as JSON", "tags": ["status"], "responses": { "200": { "description": "{warnings:[html], capabilities:[{name,note,color}], zigbee_gateway:{state,...}|null}" } } } },
     "/api/v1/provisioning/plan": {
       "get": {
         "summary": "Read the active profile's idempotent provisioning guidance combined with live observations",
@@ -296,7 +296,7 @@
     "/api/v1/packages": { "get": { "summary": "Installed package inventory used by admin pickers", "tags": ["install"], "responses": { "200": { "description": "package JSON" } } } },
     "/api/v1/apps": { "get": { "summary": "Launchable app inventory", "tags": ["install"], "responses": { "200": { "description": "app JSON" } } } },
     "/api/v1/uninstall": { "post": { "summary": "Uninstall an allowed third-party package", "tags": ["install"], "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "required": ["pkg"], "properties": { "pkg": { "type": "string" } } } } } }, "responses": { "200": { "description": "started" }, "400": { "description": "bad/protected package" }, "503": { "description": "no root" } } } },
-    "/api/v1/radio": { "get": { "summary": "EFR32 radio presence and status", "tags": ["status"], "responses": { "200": { "description": "radio JSON" } } } },
+    "/api/v1/radio": { "get": { "summary": "EFR32 radio presence and redacted gateway health", "tags": ["status"], "responses": { "200": { "description": "{present,status,state,attributes}; attributes exclude keys, credentials, radio MAC and raw netinfo" } } } },
     "/api/v1/webview/heal": { "post": { "summary": "Repair the configured WebView provider", "tags": ["install"], "responses": { "200": { "description": "started" }, "409": { "description": "busy" }, "503": { "description": "no installer capability" } } } },
     "/api/v1/dashboard/clear-storage": { "post": { "summary": "Start a single-flight clear of the built-in dashboard's local data", "tags": ["control"], "responses": { "202": { "description": "started" }, "409": { "description": "already running" }, "503": { "description": "control plane stopping" } } } },
     "/api/v1/companion/repair-url": { "post": { "summary": "Repair blank internal Companion server URLs", "tags": ["control"], "responses": { "200": { "description": "repair result" }, "503": { "description": "no root" } } } },

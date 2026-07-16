@@ -319,6 +319,25 @@ static void test_dispatch_exact_match(void) {
 
     dispatch_reply("PING", out, sizeof out);
     CHECK(strcmp(out, "OK\n") == 0, "PING -> OK (got '%s')\n", out);
+    sysexec_stub_reset();
+    dispatch_reply("ZIGBEECONTAIN extra", out, sizeof out);
+    CHECK(strcmp(out, "ERR\n") == 0, "ZIGBEECONTAIN rejects arguments (got '%s')\n", out);
+    dispatch_reply("ZIGBEECONTAIN", out, sizeof out);
+    CHECK(strcmp(out, "OK\n") == 0, "ZIGBEECONTAIN accepts the exact argument-free verb (got '%s')\n", out);
+    CHECK(sysexec_stub_count_run("/vendor/bin/siliconlabs_host") == 1,
+          "ZIGBEECONTAIN uses the fixed Sonoff vendor directory\n");
+    CHECK(sysexec_stub_count_run("com.android") == 0,
+          "ZIGBEECONTAIN does not target unrelated Android packages\n");
+    CHECK(sysexec_stub_count_run("killall") == 0,
+          "ZIGBEECONTAIN never uses broad process-name signalling\n");
+    sysexec_stub_reset();
+    sysexec_stub_fail_run("/vendor/bin/siliconlabs_host", 2 << 8);
+    dispatch_reply("ZIGBEECONTAIN", out, sizeof out);
+    CHECK(strcmp(out, "PARTIAL\n") == 0, "ZIGBEECONTAIN reports demoted survivors (got '%s')\n", out);
+    sysexec_stub_reset();
+    sysexec_stub_fail_run("/vendor/bin/siliconlabs_host", 3 << 8);
+    dispatch_reply("ZIGBEECONTAIN", out, sizeof out);
+    CHECK(strcmp(out, "ERR\n") == 0, "ZIGBEECONTAIN reports failed admission (got '%s')\n", out);
     dispatch_reply("BUILDID", out, sizeof out);
     CHECK(strcmp(out, "BUILDID development\n") == 0,
           "host helper exposes its compile identity (got '%s')\n", out);

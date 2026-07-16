@@ -45,6 +45,8 @@ import io.github.maxlyth.hapaneld.control.WatchdogController
 import io.github.maxlyth.hapaneld.control.TouchSoundController
 import io.github.maxlyth.hapaneld.control.VolumeController
 import io.github.maxlyth.hapaneld.control.ZigbeeController
+import io.github.maxlyth.hapaneld.control.AndroidZigbeeGatewayHealthSource
+import io.github.maxlyth.hapaneld.control.ZigbeeHealthMonitor
 import io.github.maxlyth.hapaneld.device.LedMechanism
 import io.github.maxlyth.hapaneld.hardware.LedController
 import io.github.maxlyth.hapaneld.hardware.LedFactory
@@ -404,6 +406,7 @@ class PaneldService : Service() {
     private lateinit var touchSound: TouchSoundController
     private lateinit var bootChime: BootChimeController
     private lateinit var zigbee: ZigbeeController
+    private lateinit var zigbeeHealth: ZigbeeHealthMonitor
     private lateinit var relay: RelayController
     private lateinit var cpu: CpuController
     private lateinit var adb: AdbController
@@ -569,6 +572,17 @@ class PaneldService : Service() {
         bootChime = BootChimeController(this, config)
         bootChime.applyPersisted()
         zigbee = ZigbeeController(profile)
+        zigbeeHealth = ZigbeeHealthMonitor(
+            configuredOn = { config.zigbeeRouterConfigured && config.zigbeeRouterEnabled },
+            source = AndroidZigbeeGatewayHealthSource(profile.zigbeeGatewayDir, zigbee),
+            onContain = {
+                config.setZigbeeRouterEnabled(false)
+                runCatching { mqtt.publishZigbeeRouterState() }
+            },
+            onSnapshot = { snapshot, _ ->
+                runCatching { mqtt.publishZigbeeHealth(snapshot) }
+            },
+        )
         relay = RelayController(profile)
         cpu = CpuController(profile)
         adb = AdbController(config)
@@ -654,7 +668,7 @@ class PaneldService : Service() {
             onRepairCompanionUrl = { repairCompanionUrl() },
             onInstallComponent = { name, action, version -> installComponent(name, action, version) },
             // One-line EFR32 radio status for the Install-tab Radio card; null when this panel has no radio.
-            radioStatus = { if (profile.zigbeeGatewayDir != null) zigbee.status() else null },
+            radioStatus = { if (profile.zigbeeGatewayDir != null) zigbeeHealth.snapshot() else null },
             // LAN ha-paneld peers over mDNS for the header panel switcher. Captures the `mdns` FIELD (not a
             // snapshot) so it follows reconfigure()'s reassignment; browsePeers null-guards the swap window.
             peers = { mdns.browsePeers() },
@@ -722,6 +736,8 @@ class PaneldService : Service() {
                 }
             },
             onDashboardTargetChanged = entityLearning::onTargetConfigurationChanged,
+            zigbeeHealth = zigbeeHealth::snapshot,
+            onZigbeeExplicitRetry = zigbeeHealth::explicitRetry,
             stalePanelId = stalePanelId,
             profileIdentity = activeProfileIdentity,
             profileButtonEventTypes = profile.evdevButtons.mapTo(linkedSetOf()) { it.eventType },
@@ -1327,6 +1343,7 @@ class PaneldService : Service() {
             io.github.maxlyth.hapaneld.http.PerfReader.start(scope)
             server.start()
             activeRuntime.mqtt.start()
+            if (profile.zigbeeGatewayDir != null) zigbeeHealth.start()
             liveSettingAuthority.replay { key, value, previous ->
                 applyLiveSetting(activeRuntime.mqtt, key, value, previous)
             }
@@ -1705,8 +1722,9 @@ class PaneldService : Service() {
                 Log.w(TAG, "audio cleanup exceeded ${AUDIO_SHUTDOWN_MS}ms")
             }
             cancelKioskReassert()
-            // Close and drain command ingress before producers and hardware owners. MqttBridge.stop()
-            // also owns HTTP live-setting dispatch, so neither route can enter an owner during teardown.
+            // Stop the Zigbee sampler before its MQTT publication target, then close and drain command
+            // ingress before the remaining producers and hardware owners.
+            if (::zigbeeHealth.isInitialized) closeOwner("Zigbee health") { zigbeeHealth.stop() }
             closeOwner("MQTT") { activeRuntime.mqtt.stop() }
             closeOwner("evdev") { EvdevButtonClient.stop() }
             closeOwner("sensors") { sensors.stop() }

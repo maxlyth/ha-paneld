@@ -27,6 +27,8 @@ import io.github.maxlyth.hapaneld.control.Su
 import io.github.maxlyth.hapaneld.control.SystemController
 import io.github.maxlyth.hapaneld.control.TameController
 import io.github.maxlyth.hapaneld.control.VolumeController
+import io.github.maxlyth.hapaneld.control.ZigbeeHealthSnapshot
+import io.github.maxlyth.hapaneld.control.ZigbeeHealthState
 import io.github.maxlyth.hapaneld.dashboard.EntityFilterProtocol
 import io.github.maxlyth.hapaneld.dashboard.EntityFilterTelemetry
 import io.github.maxlyth.hapaneld.dashboard.EntityLearningManager
@@ -359,9 +361,8 @@ class PaneldServer internal constructor(
     // action ∈ {update, reinstall}; version = a specific release tag to install (blank = channel newest).
     // Runs off-thread; progress is reported via InstallProgress. Injected by the service.
     private val onInstallComponent: (String, String, String) -> Boolean = { _, _, _ -> false },
-    // One-line EFR32 radio status ("sonoff 3.5.0 · running · Repeater"), or null when this panel has no
-    // radio gateway — drives the Install-tab Radio card. Injected by the service (ZigbeeController, su).
-    private val radioStatus: () -> String? = { null },
+    // Bounded EFR32 health snapshot, or null when this panel has no radio gateway.
+    private val radioStatus: () -> ZigbeeHealthSnapshot? = { null },
     // LAN ha-paneld peers discovered over mDNS — powers the header panel switcher. Injected by the service
     // (captures the live MdnsAdvertiser field). Blocking browse; called only through [peersCache] off-thread.
     private val peers: () -> List<io.github.maxlyth.hapaneld.Peer> = { emptyList() },
@@ -853,7 +854,10 @@ class PaneldServer internal constructor(
                         // ancillary context, and a blocking snapCache.get() re-ran the FULL probe suite
                         // whenever the snapshot was stale (>12s on a PX30 for a "simple" text page).
                         val facts = withContext(Dispatchers.IO) { snapStaleOk().facts }
-                        call.respondText(DiagReader.dump(appContext, profile, facts), ContentType.Text.Plain)
+                        call.respondText(
+                            DiagReader.dump(appContext, profile, facts, radioStatus()),
+                            ContentType.Text.Plain,
+                        )
                     }
                     // Live log tail as Server-Sent Events (?source=app|system). Feeds the Logs tab;
                     // also curl-able (`curl -N .../api/v1/logs/stream`). Lines are pre-redacted.
@@ -951,10 +955,13 @@ class PaneldServer internal constructor(
                     // EFR32 radio status (Install-tab Radio card). {present, status}. present=false → no radio.
                     get("/radio") {
                         val st = withContext(Dispatchers.IO) { radioStatus() }
-                        call.respondText(
-                            """{"present":${st != null},"status":${jsonStr(st ?: "none")}}""",
-                            ContentType.Application.Json,
-                        )
+                        val body = if (st == null) """{"present":false,"status":"none"}""" else JSONObject()
+                            .put("present", true)
+                            .put("status", st.publicSummary())
+                            .put("state", st.state.wireValue)
+                            .put("attributes", JSONObject(st.mqttAttributes()))
+                            .toString()
+                        call.respondText(body, ContentType.Application.Json)
                     }
                     // Auto-heal the System WebView (download + install the profile's recommended build).
                     // Fire-and-forget: the install runs off-thread (large download); the client refreshes.
@@ -1625,7 +1632,8 @@ ${componentsCardHtml(wv, root, installer)}
 ${apkCardHtml(root)}
 ${uninstallCardHtml(su)}
 <div class="card" id="radiocard" style="display:none"><h2>Radio firmware</h2>
-<table><tr><th>EFR32 radio</th><td id="radio-status">…</td></tr></table>
+<table><tr><th>EFR32 radio</th><td id="radio-status">…</td></tr>
+<tr><th>Gateway health</th><td id="radio-health">…</td></tr></table>
 <p class="note">Zigbee gateway on this panel's Silicon Labs EFR32. Toggle the <b>Zigbee router</b> role on the <a href="/configure#cfg-zigbee_router">Configure</a> tab. <span class="muted">Thread NCP flashing is planned (experimental) — not yet available.</span></p></div>
 <div class="card"><h2>Health audit</h2>
 <p class="note">Re-check this panel for problems that stop the dashboard rendering — old WebView, no dashboard app, available updates.</p>
@@ -1872,12 +1880,18 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
                     "the dashboard can fail with \"Missing 'Host' header\". Repair it on the Install tab.",
             )
         }
+        radioStatus()?.let { z ->
+            zigbeeWarning(z)?.let(warns::add)
+        }
         warns.addAll(findings.map { statusWarning(it) })
         val capColor = mapOf("ok" to "#48c774", "degraded" to "#d9a528", "none" to "#d04a3b")
         val caps = DiagReader.capabilities(appContext, profile).joinToString(",") { c ->
             "{\"name\":${jsonStr(c.name)},\"note\":${jsonStr(c.note)},\"color\":${jsonStr(capColor[c.status] ?: "#888")}}"
         }
-        return "{\"warnings\":[${warns.joinToString(",") { jsonStr(it) }}],\"capabilities\":[$caps]}"
+        val zigbee = radioStatus()?.let {
+            JSONObject(it.mqttAttributes()).put("state", it.state.wireValue).toString()
+        } ?: "null"
+        return "{\"warnings\":[${warns.joinToString(",") { jsonStr(it) }}],\"capabilities\":[$caps],\"zigbee_gateway\":$zigbee}"
     }
 
     /** A health finding as a one-line HTML warning for GET /api/v1/status (no Ignore button; updates keep
@@ -2067,6 +2081,11 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
      *  banner and the Install tab as high-severity (`crit`). [inlineRepair] adds the one-tap repair button
      *  (Install tab, where install.js is loaded); the dashboard links to the Install tab for the action. */
     private fun adHocWarnings(inlineRepair: Boolean): String = buildString {
+        radioStatus()?.let { z ->
+            zigbeeWarning(z)?.let { warning ->
+                append("""<div class="setup${if (z.state in setOf(ZigbeeHealthState.RUNAWAY, ZigbeeHealthState.CONTAINMENT_FAILED)) " crit" else ""}">$warning</div>""")
+            }
+        }
         if (io.github.maxlyth.hapaneld.control.BuiltinDashboard.authLatched) append(
             """<div class="setup crit">⛔ <b>Built-in renderer: Home Assistant sign-in rejected</b> — the """ +
                 """saved login settings were rejected, so the dashboard stopped retrying (it shows fix """ +
@@ -2111,6 +2130,22 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
                     """<button class="pbtn" type="submit">Reset zoom to 100%</button></form></div>""",
             )
         }
+    }
+
+    private fun zigbeeWarning(snapshot: ZigbeeHealthSnapshot): String? = when {
+        snapshot.state == ZigbeeHealthState.CONTAINED ->
+            "⛔ <b>Zigbee gateway runaway was contained</b> — the router switch was turned OFF after sustained unjoined high CPU or repeated restarts."
+        snapshot.state == ZigbeeHealthState.CONTAINMENT_FAILED ->
+            "⛔ <b>Zigbee gateway containment was incomplete</b> — the respawner was stopped where possible and surviving work was demoted. Review diagnostics before retrying."
+        snapshot.state == ZigbeeHealthState.RUNAWAY ->
+            "⛔ <b>Zigbee gateway is runaway</b> — automatic containment is in progress."
+        snapshot.state == ZigbeeHealthState.DEGRADED_HIGH_CPU ->
+            "⚠ <b>Joined Zigbee gateway has sustained high CPU</b> — it remains running because joined routers are warn-only."
+        snapshot.state == ZigbeeHealthState.DEGRADED_UNJOINED ->
+            "⚠ <b>Zigbee gateway is running but not joined</b> — pair it or turn the router switch OFF."
+        snapshot.recursiveWatchdogAssignment ->
+            "⚠ <b>Legacy Zigbee watchdog defect detected</b> — the exact recursive LD_LIBRARY_PATH assignment is present. ha-paneld will not edit the vendor script automatically."
+        else -> null
     }
 
     /** One dashboard banner for a health finding. Update findings link to the Install tab (where the user

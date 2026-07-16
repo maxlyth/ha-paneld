@@ -15,6 +15,7 @@ class PollingFeatureCostContractTest {
     @Test fun recurringPollersHaveDistinctFixedCostKeys() {
         assertEquals("sensors.gpio_proximity_poll", FeatureCostOperation.GPIO_PROXIMITY_POLL.id)
         assertEquals("kiosk.state_poll", FeatureCostOperation.KIOSK_STATE_POLL.id)
+        assertEquals("zigbee.health_sample", FeatureCostOperation.ZIGBEE_HEALTH_SAMPLE.id)
         assertNotEquals(FeatureCostOperation.GPIO_PROXIMITY_POLL.id, FeatureCostOperation.KIOSK_STATE_POLL.id)
     }
 
@@ -39,6 +40,7 @@ class PollingFeatureCostContractTest {
             "control/AutoBrightnessController.kt" to "AUTO_BRIGHTNESS_APPLY",
             "control/KioskController.kt" to "KIOSK_STATE_POLL",
             "control/RelayController.kt" to "RELAY_STATE_READ",
+            "control/ZigbeeHealthMonitor.kt" to "ZIGBEE_HEALTH_SAMPLE",
         )
         for ((relative, operation) in operationsByFile) {
             val source = sequenceOf(

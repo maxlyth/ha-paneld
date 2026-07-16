@@ -28,6 +28,7 @@ import io.github.maxlyth.hapaneld.control.WatchdogController
 import io.github.maxlyth.hapaneld.control.TouchSoundController
 import io.github.maxlyth.hapaneld.control.VolumeController
 import io.github.maxlyth.hapaneld.control.ZigbeeController
+import io.github.maxlyth.hapaneld.control.ZigbeeHealthSnapshot
 import io.github.maxlyth.hapaneld.config.Capabilities
 import io.github.maxlyth.hapaneld.config.SettingValue
 import io.github.maxlyth.hapaneld.config.SettingsRegistry
@@ -187,6 +188,8 @@ class MqttBridge(
     // Home-dashboard commands change the automatic entity-learning ownership target. Notify only after
     // the normalized path is durably visible so the manager can hide/rebuild the correct subscription.
     private val onDashboardTargetChanged: () -> Unit = {},
+    private val zigbeeHealth: () -> ZigbeeHealthSnapshot = { ZigbeeHealthSnapshot() },
+    private val onZigbeeExplicitRetry: () -> Unit = {},
     // A panel-id replaced by reconfiguration. Its discovery and availability are cleared by the NEW
     // connection, so cleanup cannot be lost when the old client is detached or the broker was offline.
     private val stalePanelId: String? = null,
@@ -367,6 +370,8 @@ class MqttBridge(
     private val stateProximity = "ha-paneld/$panel/proximity/state"
     private val stateTemperature = "ha-paneld/$panel/temperature/state"
     private val stateHumidity = "ha-paneld/$panel/humidity/state"
+    private val stateZigbeeHealth = "ha-paneld/$panel/zigbee_gateway_health/state"
+    private val attrZigbeeHealth = "ha-paneld/$panel/zigbee_gateway_health/attributes"
     private val cmdAutoBright = "ha-paneld/$panel/auto_brightness/set"
     private val stateAutoBright = "ha-paneld/$panel/auto_brightness/state"
     private val cmdBrightnessBias = "ha-paneld/$panel/brightness_bias/set"
@@ -530,6 +535,7 @@ class MqttBridge(
             }
             if (observation.possible.zigbee) register("zigbee_router", stateZigbee) {
                 if (!capabilityShape.current().live.zigbee) known("unknown")
+                else if (config.zigbeeRouterConfigured && !config.zigbeeRouterEnabled) known("OFF")
                 else known(if (zigbee.running()) "ON" else "OFF")
             }
             if (observation.possible.cpu) register("cpu_governor", stateCpuGov) {
@@ -1206,8 +1212,19 @@ class MqttBridge(
     // on a background thread (polling for the slow ON) so HA ends up correct without stalling MQTT.
     private fun handleZigbee(payload: String) {
         val on = payload.trim().equals("ON", ignoreCase = true)
+        if (on) onZigbeeExplicitRetry()
         config.setZigbeeRouterEnabled(on) // persist desired state so it survives a reboot (boot-restore)
         admitZigbee(on)
+    }
+
+    fun publishZigbeeRouterState() {
+        if (stateConvergerOwner.isInitialized()) stateConverger.reconcile("zigbee_router", force = true)
+    }
+
+    fun publishZigbeeHealth(snapshot: ZigbeeHealthSnapshot = zigbeeHealth()) {
+        if (stopped || state != "connected") return
+        publish(stateZigbeeHealth, snapshot.state.wireValue, retain = true)
+        publish(attrZigbeeHealth, snapshot.mqttAttributes(), retain = true)
     }
 
     // Boot/connect RECONCILE for the Zigbee router. Vendor firmware boot-starts the NSPanel Pro gateway
@@ -1736,6 +1753,11 @@ class MqttBridge(
             exposable("zigbee_router", "switch", "${panel}_zigbee_router", {
                 """{"name":"Zigbee router","object_id":"${panel}_zigbee_router","unique_id":"${panel}_zigbee_router","command_topic":"$cmdZigbee","state_topic":"$stateZigbee","icon":"mdi:zigbee","entity_category":"config",$avail,$device}"""
             }, availableOverride = true) { stateConverger.reconcile("zigbee_router", force = true) }
+            publishConfig(
+                "sensor", "${panel}_zigbee_gateway_health",
+                """{"name":"Zigbee gateway health","object_id":"${panel}_zigbee_gateway_health","unique_id":"${panel}_zigbee_gateway_health","state_topic":"$stateZigbeeHealth","json_attributes_topic":"$attrZigbeeHealth","icon":"mdi:zigbee","entity_category":"diagnostic",$avail,$device}""",
+            )
+            publishZigbeeHealth()
         }
 
         // On-board relays (Smatek S9E `st_relay`). count() probes sysfs via su — off-main-thread here.
