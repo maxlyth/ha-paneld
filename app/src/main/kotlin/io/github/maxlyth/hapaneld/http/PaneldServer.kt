@@ -720,6 +720,7 @@ class PaneldServer internal constructor(
                         call.respondText(FeatureCosts.json(), ContentType.Application.Json)
                     }
                     get("/perf/history") {
+                        if (!admitActiveRead(call)) return@get
                         val hours = call.request.queryParameters["hours"]?.toIntOrNull() ?: 24
                         call.respondText(entityLearning.performanceHistoryJson(hours), ContentType.Application.Json)
                     }

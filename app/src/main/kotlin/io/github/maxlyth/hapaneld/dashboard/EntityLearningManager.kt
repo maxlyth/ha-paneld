@@ -70,7 +70,7 @@ class EntityLearningManager(
     @Volatile private var telemetryJob: Job? = null
     private val performanceHistorySink = DashboardPerformanceHistorySink(::admitDashboardPerformance)
     private val performanceWorkerLock = Any()
-    private val performancePending = ArrayDeque<DashboardPerformanceSample>()
+    private val performancePending = DashboardPerformanceAccumulator(MAX_PERFORMANCE_PENDING)
     private var performanceWorkerActive = false
     private var performanceClosed = false
     @Volatile private var performanceJob: Job? = null
@@ -180,12 +180,15 @@ class EntityLearningManager(
             }
             FeatureCosts.registry.setBacklog(FeatureCostOperation.ENTITY_TELEMETRY_FLUSH, 0)
         }
-        synchronized(performanceWorkerLock) {
+        val pendingPerformance = synchronized(performanceWorkerLock) {
             performanceClosed = true
             performanceWorkerActive = false
             performanceJob?.cancel()
             performanceJob = null
-            performancePending.clear()
+            performancePending.drain()
+        }
+        if (pendingPerformance.isNotEmpty()) {
+            telemetryStoreGate.withStore { store.recordDashboardPerformance(pendingPerformance) }
         }
         // Cancellation cannot interrupt a synchronous SQLite transaction. The generation check keeps
         // a not-yet-started flush out, while this gate waits for an already-started bounded telemetry
@@ -207,8 +210,9 @@ class EntityLearningManager(
         )
         synchronized(performanceWorkerLock) {
             if (performanceClosed) return
-            if (performancePending.size == MAX_PERFORMANCE_PENDING) performancePending.removeFirst()
-            performancePending.addLast(sample)
+            if (performancePending.add(sample) != null) {
+                Log.w(TAG, "dashboard performance queue full; dropped oldest minute aggregate")
+            }
             if (!performanceWorkerActive) {
                 performanceWorkerActive = true
                 performanceJob = scope.launch(Dispatchers.IO) { drainDashboardPerformance() }
@@ -218,14 +222,8 @@ class EntityLearningManager(
 
     private suspend fun drainDashboardPerformance() {
         try {
-            while (true) {
-                val sample = synchronized(performanceWorkerLock) {
-                    performancePending.removeFirstOrNull()
-                } ?: return
-                runCatching {
-                    telemetryStoreGate.withStore { store.recordDashboardPerformance(sample) }
-                }.onFailure { Log.w(TAG, "dashboard performance history write failed: ${it.message}") }
-            }
+            delay(PERFORMANCE_FLUSH_MS)
+            flushDashboardPerformance()
         } finally {
             synchronized(performanceWorkerLock) {
                 performanceWorkerActive = false
@@ -238,7 +236,16 @@ class EntityLearningManager(
         }
     }
 
+    private fun flushDashboardPerformance() {
+        val pending = synchronized(performanceWorkerLock) { performancePending.drain() }
+        if (pending.isEmpty()) return
+        runCatching {
+            telemetryStoreGate.withStore { store.recordDashboardPerformance(pending) }
+        }.onFailure { Log.w(TAG, "dashboard performance history write failed: ${it.message}") }
+    }
+
     fun performanceHistoryJson(hours: Int): String {
+        flushDashboardPerformance()
         val boundedHours = hours.coerceIn(1, EntityCatalogStore.PERFORMANCE_RETENTION_DAYS * 24)
         val sinceMinute = System.currentTimeMillis() / 60_000L - boundedHours * 60L
         return dashboardPerformanceHistoryJson(
@@ -1320,6 +1327,7 @@ class EntityLearningManager(
         private const val HA_CONFIG_TIMEOUT_MS = 10_000
         private const val MAX_HA_CONFIG_BYTES = 256L * 1024
         private const val MAX_PERFORMANCE_PENDING = 24
+        private const val PERFORMANCE_FLUSH_MS = 60_000L
         private const val SYNC_TIMEOUT_MS = 120_000L
         private const val WS_CONNECT_TIMEOUT_MS = 15_000L
         private const val WS_AUTH_TIMEOUT_MS = 15_000L

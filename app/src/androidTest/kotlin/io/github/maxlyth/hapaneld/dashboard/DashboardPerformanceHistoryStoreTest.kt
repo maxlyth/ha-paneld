@@ -49,8 +49,11 @@ class DashboardPerformanceHistoryStoreTest {
         )
 
         EntityCatalogStore(context).use { store ->
-            store.recordDashboardPerformance(sample(10, 20_000, 200_000))
-            store.recordDashboardPerformance(sample(15, 30_000, 500_000))
+            val pending = DashboardPerformanceAccumulator(4).apply {
+                add(sample(10, 20_000, 200_000))
+                add(sample(15, 30_000, 500_000))
+            }
+            store.recordDashboardPerformance(pending.drain())
         }
 
         EntityCatalogStore(context).use { reopened ->

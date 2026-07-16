@@ -21,20 +21,22 @@ class CompanionDatabasePreparationTest {
         val plan = CompanionRestore.Plan(
             "io.homeassistant.companion.android.minimal",
             listOf(
-                CompanionRestore.FilePayload(CompanionRestore.DATABASE_FILE, source.readBytes()),
-                CompanionRestore.FilePayload("shared_prefs/session_0.xml", "session".toByteArray()),
+                CompanionRestore.FilePayload(CompanionRestore.DATABASE_FILE, source, deleteOnClose = false),
+                payload("shared_prefs/session_0.xml", "session".toByteArray()),
             ),
         )
 
         val preparation = CompanionDatabasePreparation.prepare(plan, cacheDir)!!
 
-        assertEquals(1, preparation.repairedInternalUrls)
-        assertEquals(plan.files.map { it.relativePath }, preparation.files.map { it.relativePath })
-        assertTrue(preparation.files[1].bytes.contentEquals("session".toByteArray()))
-        val verified = File.createTempFile("companion-verified-", ".db", cacheDir)
         try {
-            verified.writeBytes(preparation.files.first().bytes)
-            SQLiteDatabase.openDatabase(verified.path, null, SQLiteDatabase.OPEN_READONLY).use { db ->
+            assertEquals(1, preparation.repairedInternalUrls)
+            assertEquals(plan.files.map { it.relativePath }, preparation.files.map { it.relativePath })
+            assertTrue(preparation.files[1].file.readBytes().contentEquals("session".toByteArray()))
+            SQLiteDatabase.openDatabase(
+                preparation.files.first().file.path,
+                null,
+                SQLiteDatabase.OPEN_READONLY,
+            ).use { db ->
                 assertEquals(
                     "https://ha.example",
                     DatabaseUtils.stringForQuery(db, "SELECT internal_url FROM servers WHERE id=1", null),
@@ -42,7 +44,8 @@ class CompanionDatabasePreparationTest {
                 assertEquals("ok", scalar(db, "PRAGMA quick_check(1)"))
             }
         } finally {
-            verified.delete()
+            preparation.close()
+            plan.close()
             source.delete()
         }
     }
@@ -50,11 +53,21 @@ class CompanionDatabasePreparationTest {
     @Test fun rejectsBytesThatAreNotAValidCompanionDatabase() {
         val plan = CompanionRestore.Plan(
             "io.homeassistant.companion.android.minimal",
-            listOf(CompanionRestore.FilePayload(CompanionRestore.DATABASE_FILE, "not sqlite".toByteArray())),
+            listOf(payload(CompanionRestore.DATABASE_FILE, "not sqlite".toByteArray())),
         )
 
-        assertNull(CompanionDatabasePreparation.prepare(plan, cacheDir))
+        try {
+            assertNull(CompanionDatabasePreparation.prepare(plan, cacheDir))
+        } finally {
+            plan.close()
+        }
     }
+
+    private fun payload(relativePath: String, bytes: ByteArray): CompanionRestore.FilePayload =
+        CompanionRestore.FilePayload(
+            relativePath,
+            File.createTempFile("companion-payload-", ".bin", cacheDir).apply { writeBytes(bytes) },
+        )
 
     private fun createDatabase(): File {
         val file = File.createTempFile("companion-source-", ".db", cacheDir)

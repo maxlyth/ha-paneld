@@ -7,6 +7,7 @@
         <exclude domain="sharedpref" path="ha-paneld-profile-calibration.xml" />
         <exclude domain="sharedpref" path="ha-paneld-controller-state.xml" />
         <exclude domain="database" path="ha-paneld.db" />
+        <exclude domain="database" path="entity-learning.db" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="sharedpref" path="ha-paneld.xml" />
@@ -15,5 +16,6 @@
         <exclude domain="sharedpref" path="ha-paneld-profile-calibration.xml" />
         <exclude domain="sharedpref" path="ha-paneld-controller-state.xml" />
         <exclude domain="database" path="ha-paneld.db" />
+        <exclude domain="database" path="entity-learning.db" />
     </device-transfer>
 </data-extraction-rules>

@@ -249,51 +249,54 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
         maintainSoftLimit(now)
     }
 
-    internal fun recordDashboardPerformance(sample: DashboardPerformanceSample) {
-        val batch = sample.batch
-        val slowest = batch.interactionMaxMicros
+    internal fun recordDashboardPerformance(samples: List<DashboardPerformanceAggregate>) {
+        if (samples.isEmpty()) return
         val db = writableDatabase
         db.beginTransaction()
         try {
-            db.execSQL(
-                """INSERT OR IGNORE INTO dashboard_performance(
-                   instance,path,minute,filter_active,entity_count
-                   ) VALUES(?,?,?,?,?)""",
-                arrayOf(sample.instance, sample.path, sample.minute, if (sample.filterActive) 1 else 0, sample.entityCount),
-            )
-            db.execSQL(
-                """UPDATE dashboard_performance SET
-                   filter_active=?,entity_count=?,sample_ms=sample_ms+?,frames=frames+?,
-                   payload_bytes=payload_bytes+?,updates=updates+?,hydration_updates=hydration_updates+?,
-                   observer_micros=observer_micros+?,dropped_frames=dropped_frames+?,
-                   state_task_micros=state_task_micros+?,
-                   state_task_max_micros=max(state_task_max_micros,?),
-                   interaction_count=interaction_count+?,
-                   interaction_max_micros=max(interaction_max_micros,?),
-                   input_delay_micros=CASE WHEN ?>interaction_max_micros THEN ? ELSE input_delay_micros END,
-                   interaction_processing_micros=CASE WHEN ?>interaction_max_micros THEN ? ELSE interaction_processing_micros END,
-                   presentation_micros=CASE WHEN ?>interaction_max_micros THEN ? ELSE presentation_micros END,
-                   loaf_count=loaf_count+?,blocking_micros=blocking_micros+?,
-                   loaf_max_micros=max(loaf_max_micros,?),script_micros=script_micros+?,
-                   render_micros=render_micros+?,long_task_count=long_task_count+?
-                   WHERE instance=? AND path=? AND minute=?""",
-                arrayOf(
-                    if (sample.filterActive) 1 else 0, sample.entityCount, batch.sampleMs, batch.frames,
-                    batch.payloadBytes, batch.entityUpdates, batch.hydrationUpdates,
-                    batch.observerMicros, batch.droppedFrames, batch.stateTaskMicros,
-                    batch.stateTaskMaxMicros, batch.interactionBins.sum(), slowest,
-                    slowest, batch.inputDelayMicros,
-                    slowest, batch.interactionProcessingMicros,
-                    slowest, batch.presentationMicros,
-                    batch.loafCount, batch.blockingMicros, batch.loafMaxMicros, batch.scriptMicros,
-                    batch.renderMicros, batch.longTaskCount,
-                    sample.instance, sample.path, sample.minute,
-                ),
-            )
-            if (performanceMaintenanceGate.admit(sample.minute * MINUTE_MS)) {
+            samples.forEach { sample ->
+                val key = sample.key
+                db.execSQL(
+                    """INSERT OR IGNORE INTO dashboard_performance(
+                       instance,path,minute,filter_active,entity_count
+                       ) VALUES(?,?,?,?,?)""",
+                    arrayOf(key.instance, key.path, key.minute, if (sample.filterActive) 1 else 0, sample.entityCount),
+                )
+                db.execSQL(
+                    """UPDATE dashboard_performance SET
+                       filter_active=?,entity_count=?,sample_ms=sample_ms+?,frames=frames+?,
+                       payload_bytes=payload_bytes+?,updates=updates+?,hydration_updates=hydration_updates+?,
+                       observer_micros=observer_micros+?,dropped_frames=dropped_frames+?,
+                       state_task_micros=state_task_micros+?,
+                       state_task_max_micros=max(state_task_max_micros,?),
+                       interaction_count=interaction_count+?,
+                       interaction_max_micros=max(interaction_max_micros,?),
+                       input_delay_micros=CASE WHEN ?>interaction_max_micros THEN ? ELSE input_delay_micros END,
+                       interaction_processing_micros=CASE WHEN ?>interaction_max_micros THEN ? ELSE interaction_processing_micros END,
+                       presentation_micros=CASE WHEN ?>interaction_max_micros THEN ? ELSE presentation_micros END,
+                       loaf_count=loaf_count+?,blocking_micros=blocking_micros+?,
+                       loaf_max_micros=max(loaf_max_micros,?),script_micros=script_micros+?,
+                       render_micros=render_micros+?,long_task_count=long_task_count+?
+                       WHERE instance=? AND path=? AND minute=?""",
+                    arrayOf(
+                        if (sample.filterActive) 1 else 0, sample.entityCount, sample.sampleMs, sample.frames,
+                        sample.payloadBytes, sample.updates, sample.hydrationUpdates,
+                        sample.observerMicros, sample.droppedFrames, sample.stateTaskMicros,
+                        sample.stateTaskMaxMicros, sample.interactionCount, sample.interactionMaxMicros,
+                        sample.interactionMaxMicros, sample.inputDelayMicros,
+                        sample.interactionMaxMicros, sample.interactionProcessingMicros,
+                        sample.interactionMaxMicros, sample.presentationMicros,
+                        sample.loafCount, sample.blockingMicros, sample.loafMaxMicros, sample.scriptMicros,
+                        sample.renderMicros, sample.longTaskCount,
+                        key.instance, key.path, key.minute,
+                    ),
+                )
+            }
+            val latestMinute = samples.maxOf { it.key.minute }
+            if (performanceMaintenanceGate.admit(latestMinute * MINUTE_MS)) {
                 db.execSQL(
                     "DELETE FROM dashboard_performance WHERE minute<?",
-                    arrayOf(sample.minute - PERFORMANCE_RETENTION_MINUTES),
+                    arrayOf(latestMinute - PERFORMANCE_RETENTION_MINUTES),
                 )
             }
             db.setTransactionSuccessful()
