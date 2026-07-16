@@ -1,6 +1,7 @@
 package io.github.maxlyth.hapaneld.shizuku
 
 import android.content.Context
+import io.github.maxlyth.hapaneld.persistence.AppState
 
 /** Local-only consent. It is intentionally absent from HTTP, MQTT, config bundles, and fleet push. */
 object ShizukuConsent {
@@ -14,5 +15,5 @@ object ShizukuConsent {
     fun disable(context: Context) = prefs(context).edit().clear().apply()
 
     private fun prefs(context: Context) =
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        AppState.preferences(context, "shizuku-consent", PREFS)
 }

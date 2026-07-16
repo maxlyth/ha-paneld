@@ -8,6 +8,7 @@ import io.github.maxlyth.hapaneld.device.Generic
 import io.github.maxlyth.hapaneld.metrics.FeatureCostOperation
 import io.github.maxlyth.hapaneld.metrics.FeatureCostOutcome
 import io.github.maxlyth.hapaneld.metrics.FeatureCosts
+import io.github.maxlyth.hapaneld.persistence.AppState
 import io.github.maxlyth.hapaneld.util.SystemProps
 import java.io.File
 import java.io.ByteArrayOutputStream
@@ -99,7 +100,7 @@ class RuntimeProfileRegistry internal constructor(
     ) : this(
         filesDir = context.applicationContext.filesDir,
         preferences = AndroidProfilePreferences(
-            context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE),
+            AppState.preferences(context, "device-profiles", PREFS_NAME),
         ),
         bundledLoader = {
             context.applicationContext.assets.list(BUNDLED_DIR).orEmpty()

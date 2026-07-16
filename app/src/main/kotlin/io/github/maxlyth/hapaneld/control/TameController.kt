@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.provider.Settings
 import android.util.Log
 import io.github.maxlyth.hapaneld.device.TameCandidate
+import io.github.maxlyth.hapaneld.persistence.AppState
 import io.github.maxlyth.hapaneld.util.HelperClient
 
 /**
@@ -35,7 +36,7 @@ class TameController(
     // seen on boot). Default no-op so plain construction (tests / non-boot use) is unaffected.
     private val onDefaultHomeDisabled: () -> Unit = {},
 ) {
-    private val state = context.applicationContext.getSharedPreferences(STATE_PREFS, Context.MODE_PRIVATE)
+    private val state = AppState.preferences(context, "controller-state", STATE_PREFS)
 
     /** Tame every blocklisted package that's installed and safe. Returns the packages actually tamed. */
     fun applyBlocklist(packages: List<String>): List<String> =

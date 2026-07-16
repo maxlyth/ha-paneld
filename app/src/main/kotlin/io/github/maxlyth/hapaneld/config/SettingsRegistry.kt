@@ -10,7 +10,7 @@ import java.util.Locale
  * panel exposes it) as a Home Assistant entity — with no per-key wiring in three places.
  *
  * Coverage note: this first pass registers the settings whose current value is **Config-backed**
- * (read directly from SharedPreferences). Controller-sourced entities (touch sound, CPU profile,
+ * (read directly from durable config state). Controller-sourced entities (touch sound, CPU profile,
  * network ADB, zigbee), option-driven selects (navbar/cpu), the core controls (screen/led/volume/
  * navigate), publish-only sensors, dynamic relay/button-LED entities, and the action buttons are
  * published by a separate discovery pass (they are not "settings" or need a runtime value provider);

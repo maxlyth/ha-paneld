@@ -15,6 +15,7 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
+import io.github.maxlyth.hapaneld.persistence.AppState
 import java.io.File
 
 /**
@@ -39,7 +40,7 @@ class TouchSoundController(context: Context) {
     private val wm = ctx.getSystemService(Context.WINDOW_SERVICE) as WindowManager
     private val main = Handler(Looper.getMainLooper())
     private val statePolicy = TouchSoundStatePolicy(
-        AndroidTouchSoundStateStore(ctx.getSharedPreferences(STATE_PREFS, Context.MODE_PRIVATE)),
+        AndroidTouchSoundStateStore(AppState.preferences(ctx, "controller-state", STATE_PREFS)),
         AndroidTouchSoundHardware(ctx, am),
     )
 

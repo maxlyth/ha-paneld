@@ -9,7 +9,7 @@ import org.junit.Test
 class EntityCatalogSchemaTest {
     @Test fun schemaUpgradePlanIsSequentialAndComplete() {
         val plan = EntityCatalogSchema.plan(1, EntityCatalogSchema.CURRENT_VERSION)
-        assertEquals(listOf(1, 2, 3, 4, 5, 6, 7), plan.map { it.from })
+        assertEquals(listOf(1, 2, 3, 4, 5, 6, 7, 8), plan.map { it.from })
         assertEquals(EntityCatalogSchema.CURRENT_VERSION, plan.last().to)
         assertTrue(plan.first().sql.single().contains("sync_generation"))
         assertTrue(plan[1].sql.any { it.contains("rate_window_start") })
@@ -18,13 +18,14 @@ class EntityCatalogSchemaTest {
         assertTrue(plan[4].sql.single().contains("dashboard_issue_ignore"))
         assertTrue(plan[5].sql.contains("DROP TABLE IF EXISTS hourly"))
         assertTrue(plan[5].sql.any { it.contains("span_start") })
-        assertTrue(plan.last().sql.any { it.contains("dashboard_performance") })
+        assertTrue(plan[6].sql.any { it.contains("dashboard_performance") })
+        assertTrue(plan.last().sql.any { it.contains("app_state") })
     }
 
     @Test fun sameVersionIsANoOpAndDowngradeIsRejected() {
-        assertTrue(EntityCatalogSchema.plan(8, 8).isEmpty())
-        assertTrue(runCatching { EntityCatalogSchema.plan(8, 7) }.isFailure)
-        assertTrue(runCatching { EntityCatalogSchema.plan(1, 9) }.isFailure)
+        assertTrue(EntityCatalogSchema.plan(9, 9).isEmpty())
+        assertTrue(runCatching { EntityCatalogSchema.plan(9, 8) }.isFailure)
+        assertTrue(runCatching { EntityCatalogSchema.plan(1, 10) }.isFailure)
     }
 
     @Test fun retiredHourlyRollupCannotReturnToTheWritePath() {

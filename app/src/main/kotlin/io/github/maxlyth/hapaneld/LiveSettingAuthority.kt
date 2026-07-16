@@ -1,6 +1,7 @@
 package io.github.maxlyth.hapaneld
 
 import android.content.Context
+import io.github.maxlyth.hapaneld.persistence.AppState
 import org.json.JSONObject
 
 internal enum class LiveSettingApplyResult { APPLIED, DEFERRED, FAILED }
@@ -104,7 +105,7 @@ internal class LiveSettingAuthority(
         private const val JOURNAL = "ha-paneld-live-setting-journal"
 
         fun persistent(context: Context, supportedKeys: Set<String>): LiveSettingAuthority {
-            val preferences = context.getSharedPreferences(JOURNAL, Context.MODE_PRIVATE)
+            val preferences = AppState.preferences(context, "live-setting-journal", JOURNAL)
             val store = object : Journal {
                 override fun load(): Map<String, Pending> = preferences.all.mapNotNull { (key, raw) ->
                     (raw as? String)?.let { encoded ->

@@ -13,6 +13,7 @@ import io.github.maxlyth.hapaneld.config.SettingValue
 import io.github.maxlyth.hapaneld.config.SettingsRegistry
 import io.github.maxlyth.hapaneld.config.Validation
 import io.github.maxlyth.hapaneld.device.DeviceProfile
+import io.github.maxlyth.hapaneld.persistence.AppState
 import io.github.maxlyth.hapaneld.util.AndroidInput
 import io.github.maxlyth.hapaneld.util.HaLink
 import java.util.Locale
@@ -46,8 +47,9 @@ internal data class DashboardEntityBackupState(
 )
 
 /**
- * Runtime configuration. v0.1.0 reads from SharedPreferences with sensible defaults; a Web UI
- * (Phase >=2) will write these. The MQTT broker defaults to empty, which disables MQTT — the
+ * Runtime configuration. Production state is transactional SQLite; the SharedPreferences-shaped
+ * interface remains as a test and typed-caller compatibility boundary. The MQTT broker defaults to
+ * empty, which disables MQTT — the
  * /play HTTP contract works standalone without a broker, so first-run never blocks on MQTT.
  */
 class Config private constructor(
@@ -56,9 +58,9 @@ class Config private constructor(
     private val calibrationPrefs: SharedPreferences,
 ) {
     constructor(context: Context) : this(
-        context.getSharedPreferences("ha-paneld", Context.MODE_PRIVATE),
+        AppState.preferences(context, "config", "ha-paneld"),
         context.applicationContext.contentResolver,
-        context.getSharedPreferences(PROFILE_CALIBRATION_PREFS, Context.MODE_PRIVATE),
+        AppState.preferences(context, "profile-calibration", PROFILE_CALIBRATION_PREFS),
     )
 
     /** JVM-test seam; identity defaults that consult Android settings require the production constructor. */
@@ -75,7 +77,7 @@ class Config private constructor(
     val mqttUser: String get() = prefs.getString("mqtt_user", "")!!
     val mqttPassword: String get() = prefs.getString("mqtt_password", "")!!
 
-    /** One immutable SharedPreferences generation for connection setup; consumers must not combine
+    /** One immutable durable-state generation for connection setup; consumers must not combine
      * three independent getters across a concurrent credential commit. */
     internal fun mqttCredentialsSnapshot(): MqttCredentialsSnapshot = synchronized(CONFIG_LOCK) {
         val all = prefs.all
@@ -356,7 +358,7 @@ class Config private constructor(
      *  `https://home-assistant.io/android` to reuse an HA Companion refresh token. */
     val haClientId: String get() = prefs.getString("ha_client_id", "")!!
 
-    /** One immutable SharedPreferences generation for renderer authentication and refresh. */
+    /** One immutable durable-state generation for renderer authentication and refresh. */
     internal fun haAuthSnapshot(): HaAuthSnapshot = synchronized(CONFIG_LOCK) {
         val all = prefs.all
         HaAuthSnapshot(
@@ -1333,7 +1335,7 @@ class Config private constructor(
     // --- registry-driven generic access (HTTP config API + bundles + revisions) -----------------
     // These read/write a setting by its [SettingSpec] so the config API, form generation, export and
     // import all go through one typed path instead of ~35 bespoke getters. Typed convenience getters
-    // above remain for callers; they read the same SharedPreferences keys.
+    // above remain for callers; they read the same durable keys.
 
     /** Current raw string value for a registry key (the spec default if unset). */
     fun getRaw(spec: SettingSpec): String = when (spec.type) {
@@ -1378,7 +1380,7 @@ class Config private constructor(
     private val storedSchema: Int get() = prefs.getInt("config_schema", 1)
 
     /**
-     * Migrate the live SharedPreferences store to the current [SettingsRegistry.SCHEMA] when it was
+     * Migrate the live config store to the current [SettingsRegistry.SCHEMA] when it was
      * written by an older shape, using the same [Migrations] chain as bundle import. A fleet self-updates
      * unattended, so the first time a key is renamed or retyped the persisted value must be carried
      * forward, not silently reset to its default. No-op (and cheap) while already current; call once at
@@ -1412,8 +1414,8 @@ class Config private constructor(
             .ifEmpty { "ha_paneld_panel" }
 
     companion object {
-        /** SharedPreferences returns one process-wide store even when activities construct separate
-         * Config wrappers, so transaction ownership must be process-wide as well. */
+        /** Every Config wrapper addresses one process-wide SQLite namespace, so transaction ownership
+         * must be process-wide as well. */
         private val CONFIG_LOCK = Any()
         private const val TAG = "ha-paneld/config"
         private const val DASHBOARD_ENTITY_DEFAULT_RESOLVER_VERSION_KEY =

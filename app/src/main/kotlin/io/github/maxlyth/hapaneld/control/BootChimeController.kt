@@ -6,6 +6,7 @@ import android.media.AudioManager
 import android.provider.Settings
 import android.util.Log
 import io.github.maxlyth.hapaneld.Config
+import io.github.maxlyth.hapaneld.persistence.AppState
 import io.github.maxlyth.hapaneld.platform.RootShell
 
 /**
@@ -30,7 +31,7 @@ class BootChimeController internal constructor(
         configured = { config.silenceBootChime },
         setConfigured = config::setSilenceBootChime,
         stateStore = AndroidBootChimeStateStore(
-            context.applicationContext.getSharedPreferences(STATE_PREFS, Context.MODE_PRIVATE),
+            AppState.preferences(context, "controller-state", STATE_PREFS),
         ),
         hardware = AndroidBootChimeHardware(context.applicationContext, root),
     )

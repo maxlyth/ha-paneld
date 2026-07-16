@@ -334,7 +334,7 @@ class PaneldServer internal constructor(
     // to an HA command. Returns true if the key was a recognised live setting.
     private val applySetting: (String, String) -> Boolean,
     // Current values of the CONTROLLER-sourced settings (touch_sound, cpu_governor, network_adb,
-    // zigbee_router) — their state lives in controllers, not SharedPreferences, so the config
+    // zigbee_router) — their state lives in controllers, not the config namespace, so the config
     // form/schema/dashboard read them through this instead of Config.getRaw.
     private val liveValues: () -> Map<String, String> = { emptyMap() },
     // This panel's capability snapshot (sensors + cpu/adb/zigbee probes) for availableWhen gating.

@@ -22,6 +22,7 @@ import io.github.maxlyth.hapaneld.device.DeviceProfile
 import io.github.maxlyth.hapaneld.device.probe.AndroidPassiveProfileProbe
 import io.github.maxlyth.hapaneld.device.profile.ProfileDraftFactory
 import io.github.maxlyth.hapaneld.device.profile.RuntimeProfileRegistry
+import io.github.maxlyth.hapaneld.persistence.AppState
 import io.github.maxlyth.hapaneld.input.EvdevButtonClient
 import io.github.maxlyth.hapaneld.control.AutoBrightnessController
 import io.github.maxlyth.hapaneld.control.BootChimeController
@@ -422,7 +423,7 @@ class PaneldService : Service() {
     // One-time-start guard for onStartCommand (see there for why). Reset in onDestroy.
     @Volatile private var started = false
     private val startupRecoveryPrefs by lazy {
-        getSharedPreferences("ha-paneld-startup-recovery", Context.MODE_PRIVATE)
+        AppState.preferences(this, "startup-recovery", "ha-paneld-startup-recovery")
     }
 
     override fun onCreate() {
@@ -647,7 +648,7 @@ class PaneldService : Service() {
                     applyLiveSetting(mqtt, key, value, previous)
                 }
             },
-            // Controller-sourced setting values (their state isn't in SharedPreferences) so the
+            // Controller-sourced setting values (their state isn't in the config namespace) so the
             // config form/schema/dashboard show live truth. Called on Ktor IO threads (su-safe).
             liveValues = {
                 mapOf(

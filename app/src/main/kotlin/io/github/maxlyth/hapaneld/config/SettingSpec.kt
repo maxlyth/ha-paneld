@@ -125,7 +125,7 @@ data class HaEntity(
 }
 
 /**
- * One configuration setting. [key] is the SharedPreferences key, the `/api/v1/config` field name,
+ * One configuration setting. [key] is the durable-state key, the `/api/v1/config` field name,
  * and the bundle key. [default] is the canonical string form (typed reads coerce it).
  */
 data class SettingSpec(

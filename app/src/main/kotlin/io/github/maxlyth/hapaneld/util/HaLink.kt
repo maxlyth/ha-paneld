@@ -73,7 +73,7 @@ object HaLink {
      * the renderer endpoint changing (for example after reprovisioning with another panel id). */
     internal fun resolutionTarget(base: String, panelId: String): String {
         val normalizedBase = base.trim().trimEnd('/')
-        // This value is persisted in SharedPreferences' XML file. Keep the encoding XML-safe and
+        // Keep this persisted value text-safe for migration/export compatibility and
         // unambiguous without relying on a delimiter which could occur in a URL.
         return "v1:${normalizedBase.length}:$normalizedBase:${slug(panelId)}"
     }

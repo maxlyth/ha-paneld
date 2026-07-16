@@ -83,6 +83,10 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
             FOREIGN KEY(instance,path) REFERENCES dashboard(instance,path) ON DELETE CASCADE)""")
         db.execSQL(PERFORMANCE_HISTORY_TABLE_SQL)
         db.execSQL("CREATE INDEX dashboard_performance_age ON dashboard_performance(minute)")
+        db.execSQL(APP_STATE_REVISION_TABLE_SQL)
+        db.execSQL(APP_STATE_NAMESPACE_TABLE_SQL)
+        db.execSQL(APP_STATE_TABLE_SQL)
+        db.execSQL("CREATE INDEX app_state_updated ON app_state(namespace,updated_at)")
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -1056,6 +1060,24 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
             loaf_max_micros INTEGER NOT NULL DEFAULT 0,script_micros INTEGER NOT NULL DEFAULT 0,
             render_micros INTEGER NOT NULL DEFAULT 0,long_task_count INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY(instance,path,minute))"""
+        internal val APP_STATE_REVISION_TABLE_SQL = """CREATE TABLE app_state_revision(
+            revision INTEGER PRIMARY KEY AUTOINCREMENT,
+            committed_at INTEGER NOT NULL,
+            namespace TEXT NOT NULL,
+            source TEXT NOT NULL DEFAULT 'app')"""
+        internal val APP_STATE_NAMESPACE_TABLE_SQL = """CREATE TABLE app_state_namespace(
+            namespace TEXT PRIMARY KEY,
+            imported_at INTEGER NOT NULL,
+            legacy_name TEXT NOT NULL DEFAULT '')"""
+        internal val APP_STATE_TABLE_SQL = """CREATE TABLE app_state(
+            namespace TEXT NOT NULL,
+            state_key TEXT NOT NULL,
+            value_type TEXT NOT NULL,
+            value_text TEXT,
+            updated_at INTEGER NOT NULL,
+            revision INTEGER NOT NULL,
+            PRIMARY KEY(namespace,state_key),
+            FOREIGN KEY(revision) REFERENCES app_state_revision(revision))"""
         private val FINGERPRINT = Regex("^[a-f0-9]{16}$")
         private val DATABASE_MIGRATION_LOCK = Any()
 
@@ -1346,7 +1368,7 @@ internal class BoundedSnapshotCache<K, V>(private val windowMs: Long, private va
 
 /** Sequential forward-only schema contract. Never add an ad-hoc conditional to [onUpgrade]. */
 object EntityCatalogSchema {
-    const val CURRENT_VERSION = 8
+    const val CURRENT_VERSION = 9
     data class Step(val from: Int, val to: Int, val sql: List<String>)
 
     private val steps = mapOf(
@@ -1397,6 +1419,15 @@ object EntityCatalogSchema {
             listOf(
                 EntityCatalogStore.PERFORMANCE_HISTORY_TABLE_SQL,
                 "CREATE INDEX dashboard_performance_age ON dashboard_performance(minute)",
+            ),
+        ),
+        8 to Step(
+            8, 9,
+            listOf(
+                EntityCatalogStore.APP_STATE_REVISION_TABLE_SQL,
+                EntityCatalogStore.APP_STATE_NAMESPACE_TABLE_SQL,
+                EntityCatalogStore.APP_STATE_TABLE_SQL,
+                "CREATE INDEX app_state_updated ON app_state(namespace,updated_at)",
             ),
         ),
     )
