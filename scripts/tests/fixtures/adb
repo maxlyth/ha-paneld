@@ -160,6 +160,8 @@ case "${1:-}" in
         elif printf '%s' "$command_text" | grep -Fq 'touch /system/.rw_probe'; then
           if [ "${MOCK_SYSTEM_WRITABLE:-1}" = 1 ]; then
             printf 'SYSTEM_RW\n'
+            printf 'SYSTEM_AVAIL_KB=%s\n' "${MOCK_SYSTEM_AVAIL_KB:-1048576}"
+            if [ "${MOCK_VENDOR_INIT_RW:-1}" = 1 ]; then printf 'VENDOR_INIT_RW\n'; fi
           else
             printf 'SYSTEM_RO\n'
             if [ "${MOCK_SYSTEMLESS_RUNNER:-1}" = 1 ]; then printf 'SYSTEMLESS_RUNNER\n'; else printf 'NO_SYSTEMLESS_RUNNER\n'; fi
@@ -184,38 +186,39 @@ case "${1:-}" in
              printf '%s' "$command_text" | grep -Fq '.hapaneld-helper-manual-upgrade'; then
           rm -f "$STATE_DIR/manual-helper-transaction"
           printf 'ROLLBACK_FINALIZED\n'
-        elif printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*install-(system|systemless)'; then
+        elif printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*install-(system|systemless|hybrid)'; then
           if [ "${MOCK_TRANSACTION_BUSY:-0}" = 1 ]; then
             printf 'TRANSACTION_BUSY\n'
           elif [ -f "$STATE_DIR/stale-helper-transaction" ]; then
             case "${MOCK_ACTIVE_TRANSACTION_KIND:-${MOCK_STALE_TRANSACTION_KIND:-system}}" in
               system) [ "${MOCK_ACTIVE_TRANSACTION:-0}" = 1 ] && printf 'ACTIVE_SYSTEM_TRANSACTION\n' || printf 'STALE_SYSTEM_TRANSACTION\n' ;;
               systemless) [ "${MOCK_ACTIVE_TRANSACTION:-0}" = 1 ] && printf 'ACTIVE_SYSTEMLESS_TRANSACTION\n' || printf 'STALE_SYSTEMLESS_TRANSACTION\n' ;;
+              hybrid) [ "${MOCK_ACTIVE_TRANSACTION:-0}" = 1 ] && printf 'ACTIVE_HYBRID_TRANSACTION\n' || printf 'STALE_HYBRID_TRANSACTION\n' ;;
               both) printf 'MULTIPLE_STALE_TRANSACTIONS\n' ;;
             esac
           else
             [ "${MOCK_HELPER_INSTALL:-ok}" = ok ] && printf 'INSTALL_OK\n'
             [ "${MOCK_HELPER_INSTALL:-ok}" != ok ] || : > "$STATE_DIR/active-helper-transaction"
           fi
-        elif printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*finalize-rollback-(system|systemless)'; then
+        elif printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*finalize-rollback-(system|systemless|hybrid)'; then
           if [ "${MOCK_TRANSACTION_TOKEN_MISMATCH:-0}" != 1 ] && [ "${MOCK_TOKEN_MISMATCH_ACTION:-}" != finalize ]; then
             printf 'ROLLBACK_FINALIZED\n'
             rm -f "$STATE_DIR/stale-helper-transaction" "$STATE_DIR/active-helper-transaction"
           fi
-        elif printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*rollback-(system|systemless)'; then
+        elif printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*rollback-(system|systemless|hybrid)'; then
           if [ "${MOCK_TRANSACTION_TOKEN_MISMATCH:-0}" != 1 ] && [ "${MOCK_TOKEN_MISMATCH_ACTION:-}" != rollback ]; then
             [ "${MOCK_ROLLBACK_RESULT:-ok}" = ok ] && printf 'ROLLBACK_RESTARTED\n'
           fi
-        elif printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*commit-(system|systemless)'; then
+        elif printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*commit-(system|systemless|hybrid)'; then
           if [ "${MOCK_TRANSACTION_TOKEN_MISMATCH:-0}" != 1 ] && [ "${MOCK_TOKEN_MISMATCH_ACTION:-}" != commit ]; then
             if [ "${MOCK_HELPER_COMMIT:-ok}" = ok ] && [ "${MOCK_COMMIT_LIVE_STATE:-TARGET}" = TARGET ]; then
               printf 'COMMIT_OK\n'
               rm -f "$STATE_DIR/stale-helper-transaction" "$STATE_DIR/active-helper-transaction"
             fi
           fi
-        elif printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*lease-(system|systemless)'; then
+        elif printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*lease-(system|systemless|hybrid)'; then
           [ "${MOCK_TRANSACTION_TOKEN_MISMATCH:-0}" != 1 ] && [ "${MOCK_TOKEN_MISMATCH_ACTION:-}" != lease ] && printf 'LEASE_OK\n'
-        elif printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*(discover|status)-(system|systemless)'; then
+        elif printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*(discover|status)-(system|systemless|hybrid)'; then
           printf 'JOURNAL_VERSION=1\nJOURNAL_SCOPE=%s\nTRANSACTION_ID=%s\nTARGET_APK_SHA256=%s\nTARGET_BUILD_ID=%s\nTARGET_HELPER_SHA256=%s\nLEASE_BOOT_ID=fixture-boot\nLEASE_UNTIL_UPTIME=999999\nLIVE_STATE=%s\n' \
             "${MOCK_STALE_SCOPE:-APK_HELPER}" "${MOCK_STALE_TRANSACTION_ID:-0123456789abcdef0123456789abcdef}" \
             "${MOCK_STALE_APK_SHA256:?}" \
@@ -247,6 +250,8 @@ case "${1:-}" in
         elif printf '%s' "$command_text" | grep -Fq 'touch /system/.rw_probe'; then
           if [ "${MOCK_SYSTEM_WRITABLE:-1}" = 1 ]; then
             printf 'SYSTEM_RW\n'
+            printf 'SYSTEM_AVAIL_KB=%s\n' "${MOCK_SYSTEM_AVAIL_KB:-1048576}"
+            if [ "${MOCK_VENDOR_INIT_RW:-1}" = 1 ]; then printf 'VENDOR_INIT_RW\n'; fi
           else
             printf 'SYSTEM_RO\n'
             if [ "${MOCK_SYSTEMLESS_RUNNER:-1}" = 1 ]; then printf 'SYSTEMLESS_RUNNER\n'; else printf 'NO_SYSTEMLESS_RUNNER\n'; fi
@@ -255,38 +260,39 @@ case "${1:-}" in
           [ "${MOCK_TRANSACTION_TAMPER:-0}" != 1 ] && printf 'TRANSACTION_READY\n'
         elif printf '%s' "$command_text" | grep -Fq 'echo PROBE_READY'; then
           [ "${MOCK_TRANSACTION_TAMPER:-0}" != 1 ] && printf 'PROBE_READY\n'
-        elif printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*install-(system|systemless)'; then
+        elif printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*install-(system|systemless|hybrid)'; then
           if [ "${MOCK_TRANSACTION_BUSY:-0}" = 1 ]; then
             printf 'TRANSACTION_BUSY\n'
           elif [ -f "$STATE_DIR/stale-helper-transaction" ]; then
             case "${MOCK_ACTIVE_TRANSACTION_KIND:-${MOCK_STALE_TRANSACTION_KIND:-system}}" in
               system) [ "${MOCK_ACTIVE_TRANSACTION:-0}" = 1 ] && printf 'ACTIVE_SYSTEM_TRANSACTION\n' || printf 'STALE_SYSTEM_TRANSACTION\n' ;;
               systemless) [ "${MOCK_ACTIVE_TRANSACTION:-0}" = 1 ] && printf 'ACTIVE_SYSTEMLESS_TRANSACTION\n' || printf 'STALE_SYSTEMLESS_TRANSACTION\n' ;;
+              hybrid) [ "${MOCK_ACTIVE_TRANSACTION:-0}" = 1 ] && printf 'ACTIVE_HYBRID_TRANSACTION\n' || printf 'STALE_HYBRID_TRANSACTION\n' ;;
               both) printf 'MULTIPLE_STALE_TRANSACTIONS\n' ;;
             esac
           else
             [ "${MOCK_HELPER_INSTALL:-ok}" = ok ] && printf 'INSTALL_OK\n'
             [ "${MOCK_HELPER_INSTALL:-ok}" != ok ] || : > "$STATE_DIR/active-helper-transaction"
           fi
-        elif printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*finalize-rollback-(system|systemless)'; then
+        elif printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*finalize-rollback-(system|systemless|hybrid)'; then
           if [ "${MOCK_TRANSACTION_TOKEN_MISMATCH:-0}" != 1 ] && [ "${MOCK_TOKEN_MISMATCH_ACTION:-}" != finalize ]; then
             printf 'ROLLBACK_FINALIZED\n'
             rm -f "$STATE_DIR/stale-helper-transaction" "$STATE_DIR/active-helper-transaction"
           fi
-        elif printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*rollback-(system|systemless)'; then
+        elif printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*rollback-(system|systemless|hybrid)'; then
           if [ "${MOCK_TRANSACTION_TOKEN_MISMATCH:-0}" != 1 ] && [ "${MOCK_TOKEN_MISMATCH_ACTION:-}" != rollback ]; then
             [ "${MOCK_ROLLBACK_RESULT:-ok}" = ok ] && printf 'ROLLBACK_RESTARTED\n'
           fi
-        elif printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*commit-(system|systemless)'; then
+        elif printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*commit-(system|systemless|hybrid)'; then
           if [ "${MOCK_TRANSACTION_TOKEN_MISMATCH:-0}" != 1 ] && [ "${MOCK_TOKEN_MISMATCH_ACTION:-}" != commit ]; then
             if [ "${MOCK_HELPER_COMMIT:-ok}" = ok ] && [ "${MOCK_COMMIT_LIVE_STATE:-TARGET}" = TARGET ]; then
               printf 'COMMIT_OK\n'
               rm -f "$STATE_DIR/stale-helper-transaction" "$STATE_DIR/active-helper-transaction"
             fi
           fi
-        elif printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*lease-(system|systemless)'; then
+        elif printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*lease-(system|systemless|hybrid)'; then
           [ "${MOCK_TRANSACTION_TOKEN_MISMATCH:-0}" != 1 ] && [ "${MOCK_TOKEN_MISMATCH_ACTION:-}" != lease ] && printf 'LEASE_OK\n'
-        elif printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*(discover|status)-(system|systemless)'; then
+        elif printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*(discover|status)-(system|systemless|hybrid)'; then
           printf 'JOURNAL_VERSION=1\nJOURNAL_SCOPE=%s\nTRANSACTION_ID=%s\nTARGET_APK_SHA256=%s\nTARGET_BUILD_ID=%s\nTARGET_HELPER_SHA256=%s\nLEASE_BOOT_ID=fixture-boot\nLEASE_UNTIL_UPTIME=999999\nLIVE_STATE=%s\n' \
             "${MOCK_STALE_SCOPE:-APK_HELPER}" "${MOCK_STALE_TRANSACTION_ID:-0123456789abcdef0123456789abcdef}" \
             "${MOCK_STALE_APK_SHA256:?}" \
@@ -298,6 +304,8 @@ case "${1:-}" in
         if [ "${MOCK_ADB_ROOT:-0}" = 1 ] && printf '%s' "$command_text" | grep -Fq 'touch /system/.rw_probe'; then
           if [ "${MOCK_SYSTEM_WRITABLE:-1}" = 1 ]; then
             printf 'SYSTEM_RW\n'
+            printf 'SYSTEM_AVAIL_KB=%s\n' "${MOCK_SYSTEM_AVAIL_KB:-1048576}"
+            if [ "${MOCK_VENDOR_INIT_RW:-1}" = 1 ]; then printf 'VENDOR_INIT_RW\n'; fi
           else
             printf 'SYSTEM_RO\n'
             if [ "${MOCK_SYSTEMLESS_RUNNER:-1}" = 1 ]; then printf 'SYSTEMLESS_RUNNER\n'; else printf 'NO_SYSTEMLESS_RUNNER\n'; fi
@@ -306,12 +314,12 @@ case "${1:-}" in
           [ "${MOCK_TRANSACTION_TAMPER:-0}" != 1 ] && printf 'TRANSACTION_READY\n'
         elif [ "${MOCK_ADB_ROOT:-0}" = 1 ] && printf '%s' "$command_text" | grep -Fq 'echo PROBE_READY'; then
           [ "${MOCK_TRANSACTION_TAMPER:-0}" != 1 ] && printf 'PROBE_READY\n'
-        elif [ "${MOCK_ADB_ROOT:-0}" = 1 ] && printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*install-(system|systemless)'; then
+        elif [ "${MOCK_ADB_ROOT:-0}" = 1 ] && printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*install-(system|systemless|hybrid)'; then
           [ "${MOCK_TRANSACTION_BUSY:-0}" = 1 ] && printf 'TRANSACTION_BUSY\n' || printf 'INSTALL_OK\n'
-        elif [ "${MOCK_ADB_ROOT:-0}" = 1 ] && printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*commit-(system|systemless)'; then
+        elif [ "${MOCK_ADB_ROOT:-0}" = 1 ] && printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*commit-(system|systemless|hybrid)'; then
           [ "${MOCK_HELPER_COMMIT:-ok}" = ok ] &&
             [ "${MOCK_COMMIT_LIVE_STATE:-TARGET}" = TARGET ] && printf 'COMMIT_OK\n'
-        elif [ "${MOCK_ADB_ROOT:-0}" = 1 ] && printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*lease-(system|systemless)'; then
+        elif [ "${MOCK_ADB_ROOT:-0}" = 1 ] && printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*lease-(system|systemless|hybrid)'; then
           [ "${MOCK_TRANSACTION_TOKEN_MISMATCH:-0}" != 1 ] && [ "${MOCK_TOKEN_MISMATCH_ACTION:-}" != lease ] && printf 'LEASE_OK\n'
         fi
         ;;

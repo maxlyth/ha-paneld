@@ -407,6 +407,48 @@ assert_contains 'read-only /system and no verified systemless boot-service runne
 assert_contains 'Magisk, KernelSU, or APatch' "missing persistence mechanism gives supported recovery choices"
 assert_not_contains '/data/adb/service\.d/hapaneld-helper\.sh\.new|^adb .* install( |$)' "$MOCK_CALL_LOG" "unverified service.d path never installs a helper or replaces the APK"
 
+# Stock NSPanel Pro firmware ships /system 100% full (12KB free of 1.4GB): the 0-byte rw probe
+# passes while a full /system helper copy would ENOSPC mid-transaction, and the residual headroom
+# cannot allocate even one data block. A writable-but-full /system must select the hybrid layout
+# (binary in /data/adb, init .rc on the verified-writable vendor partition) instead of failing.
+MOCK_SYSTEM_AVAIL_KB=12 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "writable /system without room for the helper binary installs through the hybrid layout"
+assert_log_contains 'helper-transaction-[0-9a-f]+.*install-hybrid' "nearly-full /system routes through the hybrid transactional installer"
+assert_contains 'writable but nearly full' "hybrid selection names the space condition it detected"
+assert_not_contains 'helper-transaction-[0-9a-f]+.*install-system([^l]|$)' "$MOCK_CALL_LOG" "nearly-full /system never attempts the full /system helper copy"
+
+MOCK_SYSTEM_AVAIL_KB=12 MOCK_VENDOR_INIT_RW=0 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_failure "nearly-full /system without a writable vendor init directory fails closed"
+assert_contains 'too full for the helper' "vendor-blocked hybrid names the space condition"
+assert_contains '/vendor/etc/init is not writable' "vendor-blocked hybrid names the missing boot-vector location"
+assert_not_contains 'helper-transaction-[0-9a-f]+.*install-(system|systemless|hybrid)|^adb .* install( |$)' "$MOCK_CALL_LOG" "vendor-blocked hybrid never installs a helper or replaces the APK"
+
+MOCK_SYSTEM_AVAIL_KB=1048576 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "writable /system with ample space keeps the historical /system install path"
+assert_log_contains 'helper-transaction-[0-9a-f]+.*install-system' "ample space still selects the /system installer"
+assert_not_contains 'helper-transaction-[0-9a-f]+.*install-hybrid' "$MOCK_CALL_LOG" "ample space never selects the hybrid layout"
+
+HAPANELD_HELPER_PROBE= MOCK_SYSTEM_AVAIL_KB=12 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "hybrid validation invokes the exact newly installed helper path"
+assert_log_contains 'exec /data/adb/hapaneld/hapaneld-helper --request COMPANIONCAPS' "hybrid validation probes the /data/adb helper"
+assert_not_contains 'exec /system/bin/hapaneld-helper --request' "$MOCK_CALL_LOG" "hybrid validation never probes the /system binary location"
+
+MOCK_SYSTEM_AVAIL_KB=12 MOCK_HELPER_INSTALL=fail run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_failure "a failed hybrid helper install preserves the prior helper"
+assert_log_contains 'helper-transaction-[0-9a-f]+.*rollback-hybrid' "hybrid install failure rolls back through the hybrid journal"
+assert_contains 'hybrid root-helper install failed' "hybrid install failure names its install kind"
+assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "hybrid install failure never replaces the APK"
+
+MOCK_SYSTEM_AVAIL_KB=12 MOCK_HELPER_CAPABILITY=fail run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_failure "a hybrid helper failing its capability check is rolled back"
+assert_log_contains 'helper-transaction-[0-9a-f]+.*rollback-hybrid' "hybrid capability failure restores the prior helper pair"
+
+MOCK_SYSTEM_AVAIL_KB=12 MOCK_APK_INSTALL=fail run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_failure "a failed APK install after a verified hybrid helper rolls the helper back"
+assert_log_contains 'helper-transaction-[0-9a-f]+.*rollback-hybrid' "hybrid helper retires with the failed APK it was paired to"
+assert_not_contains 'helper-transaction-[0-9a-f]+.*commit-hybrid' "$MOCK_CALL_LOG" "failed APK install never commits the hybrid journal"
+
+
 MOCK_MANUAL_STALE=1 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
 assert_failure "provisioning routes an interrupted standalone helper journal back to its owning installer"
 assert_contains 'incomplete standalone root-helper installation must be recovered first' "manual-to-provision handoff names the cross-tool boundary"
@@ -725,6 +767,17 @@ assert_success "writable-system provisioning recovers a stale systemless journal
 assert_log_contains 'helper-transaction-[0-9a-f]+.*status-systemless' "systemless-to-system transition reads the retained systemless journal"
 assert_log_contains 'helper-transaction-[0-9a-f]+.*rollback-systemless' "systemless-to-system transition restores the owning transaction"
 assert_log_contains 'helper-transaction-[0-9a-f]+.*install-system' "systemless-to-system transition installs only after recovery"
+
+MOCK_STALE_TRANSACTION=1 \
+MOCK_STALE_TRANSACTION_KIND=hybrid \
+MOCK_SYSTEM_AVAIL_KB=12 \
+MOCK_INSTALLED_APK_SOURCE="$RELEASE_APK" \
+MOCK_STALE_APK_SHA256="$helper_release_apk_sha" \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_success "nearly-full writable-system provisioning recovers a stale hybrid journal before retrying"
+assert_log_contains 'helper-transaction-[0-9a-f]+.*status-hybrid' "hybrid reconciliation reads the retained hybrid journal"
+assert_log_contains 'helper-transaction-[0-9a-f]+.*rollback-hybrid' "hybrid reconciliation restores the owning transaction"
+assert_log_contains 'helper-transaction-[0-9a-f]+.*install-hybrid' "hybrid reconciliation reinstalls only after recovery"
 
 MOCK_STALE_TRANSACTION=1 \
 MOCK_STALE_TRANSACTION_KIND=system \
@@ -1559,7 +1612,8 @@ if grep -Fq 'valid_transaction_identity "$marker" "$transaction_id" "$target_apk
 else
   fail_test "transaction nonce and monotonic lease protect validation through APK install and matching commit"
 fi
-commit_marker_line="$(grep -n 'rm -f "\$marker" || return 1' "$PROVISION" | tail -2 | head -1 | cut -d: -f1)"
+commit_fn_line="$(grep -n '^commit_system() {' "$PROVISION" | head -1 | cut -d: -f1)"
+commit_marker_line="$(awk -v after="$commit_fn_line" 'NR > after && /rm -f "\$marker" \|\| return 1/{print NR; exit}' "$PROVISION")"
 commit_target_line="$(grep -n '\[ "$(classify_system)" = TARGET \] || return 1' "$PROVISION" | head -1 | cut -d: -f1)"
 commit_sync_line="$(awk -v after="$commit_marker_line" 'NR > after && /sync \|\| return 1/{print NR; exit}' "$PROVISION")"
 commit_recovery_line="$(awk -v after="$commit_sync_line" 'NR > after && index($0, "rm -f /system/bin/hapaneld-helper.hapaneld-recovery"){print NR; exit}' "$PROVISION")"

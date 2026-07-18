@@ -155,7 +155,7 @@ case "$SU_FORM" in
   suc)        echo "==> root path: su -c \"<cmd>\"" ;;
 esac
 
-if ! run_root '[ ! -f /system/bin/.hapaneld-helper-upgrade ] && [ ! -f /data/adb/hapaneld/.helper-upgrade.marker ]' \
+if ! run_root '[ ! -f /system/bin/.hapaneld-helper-upgrade ] && [ ! -f /data/adb/hapaneld/.helper-upgrade.marker ] && [ ! -f /data/adb/hapaneld/.helper-hybrid-upgrade.marker ]' \
     >/dev/null 2>&1; then
   fail "an incomplete APK-coupled helper upgrade must be recovered by the provisioner first" \
     "Re-run the same scripts/provision.sh or scripts/update-fleet.sh command that started the upgrade." \
