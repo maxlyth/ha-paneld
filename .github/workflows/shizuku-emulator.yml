@@ -90,16 +90,7 @@ jobs:
           disable-animations: true
           script: |
             adb install "$RUNNER_TEMP/shizuku.apk"
-            adb shell monkey -p moe.shizuku.privileged.api 1
-            found=0
-            for i in $(seq 1 60); do adb shell test -f /storage/emulated/0/Android/data/moe.shizuku.privileged.api/start.sh && found=1 && break; sleep 1; done
-            if [ "$found" != 1 ]; then
-              echo '::error::Shizuku manager never exported start.sh'
-              adb shell ls -la /storage/emulated/0/Android/data/moe.shizuku.privileged.api || true
-              adb logcat -d | grep -iE 'shizuku|AndroidRuntime' | tail -n 100 || true
-              exit 1
-            fi
-            adb shell sh /storage/emulated/0/Android/data/moe.shizuku.privileged.api/start.sh
+            sh .github/scripts/shizuku-adb-start.sh
             adb install app/build/outputs/apk/debug/app-debug.apk
             adb push "$RUNNER_TEMP/shizuku.apk" /data/local/tmp/shizuku.apk
             adb shell run-as io.github.maxlyth.hapaneld cp /data/local/tmp/shizuku.apk files/shizuku-test.apk
