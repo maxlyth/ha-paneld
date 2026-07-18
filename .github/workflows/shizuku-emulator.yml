@@ -36,7 +36,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        api-level: [27, 35]
+        # android-27 google_apis was never published for x86_64, and the default
+        # (AOSP) images never export Shizuku's start.sh, so each API level pins
+        # the google_apis arch that Google actually ships.
+        include:
+          - api-level: 27
+            target: google_apis
+            arch: x86
+          - api-level: 35
+            target: google_apis
+            arch: x86_64
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -53,7 +62,7 @@ jobs:
           cache-provider: basic
 
       - name: Install build SDK, NDK, and emulator image
-        run: sdkmanager "platform-tools" "platforms;android-35" "system-images;android-${{ matrix.api-level }};default;x86_64" "ndk;27.0.12077973" "cmake;3.22.1"
+        run: sdkmanager "platform-tools" "platforms;android-35" "system-images;android-${{ matrix.api-level }};${{ matrix.target }};${{ matrix.arch }}" "ndk;27.0.12077973" "cmake;3.22.1"
 
       - name: Download curated Shizuku manager
         run: |
@@ -75,14 +84,21 @@ jobs:
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
         with:
           api-level: ${{ matrix.api-level }}
-          target: default
-          arch: x86_64
+          target: ${{ matrix.target }}
+          arch: ${{ matrix.arch }}
           profile: pixel_2
           disable-animations: true
           script: |
             adb install "$RUNNER_TEMP/shizuku.apk"
             adb shell monkey -p moe.shizuku.privileged.api 1
-            for i in $(seq 1 20); do adb shell test -f /storage/emulated/0/Android/data/moe.shizuku.privileged.api/start.sh && break; sleep 1; done
+            found=0
+            for i in $(seq 1 60); do adb shell test -f /storage/emulated/0/Android/data/moe.shizuku.privileged.api/start.sh && found=1 && break; sleep 1; done
+            if [ "$found" != 1 ]; then
+              echo '::error::Shizuku manager never exported start.sh'
+              adb shell ls -la /storage/emulated/0/Android/data/moe.shizuku.privileged.api || true
+              adb logcat -d | grep -iE 'shizuku|AndroidRuntime' | tail -n 100 || true
+              exit 1
+            fi
             adb shell sh /storage/emulated/0/Android/data/moe.shizuku.privileged.api/start.sh
             adb install app/build/outputs/apk/debug/app-debug.apk
             adb push "$RUNNER_TEMP/shizuku.apk" /data/local/tmp/shizuku.apk
