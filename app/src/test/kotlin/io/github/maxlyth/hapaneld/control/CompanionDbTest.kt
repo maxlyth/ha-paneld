@@ -44,6 +44,16 @@ class CompanionDbTest {
         assertFalse(CompanionDb.needsRepair(CompanionDb.ServerRow("1", "http://10.0.0.5:8123", "https://ha")))
     }
 
+    @Test fun internalUrlWarningOnlyWhenCompanionRendersTheDashboard() {
+        // Blank dashboard_package = auto-detect, which prefers the Companion when installed.
+        assertTrue(CompanionDb.warningApplies(""))
+        assertTrue(CompanionDb.warningApplies(io.github.maxlyth.hapaneld.util.CompanionInstaller.FULL_PKG))
+        assertTrue(CompanionDb.warningApplies(io.github.maxlyth.hapaneld.util.CompanionInstaller.MINIMAL_PKG))
+        // Built-in renderer or another explicit dashboard app: the Companion doesn't draw, so no banner.
+        assertFalse(CompanionDb.warningApplies(SystemController.BUILTIN_DASHBOARD))
+        assertFalse(CompanionDb.warningApplies("de.ozerov.fully"))
+    }
+
     @Test fun urlsWithPipesSurviveParsing() {
         // The default sqlite3 '|' separator would corrupt this; the Unit-Separator dump doesn't.
         val out = line("1", "http://h/a|b", "https://ha/x|y")

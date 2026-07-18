@@ -1919,7 +1919,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
                 "Reinstall or downgrade the dashboard/Companion app, or reboot the panel.",
         )
         companionUrlCache.get().let { u ->
-            if (u.needsRepair) warns.add(
+            if (u.needsRepair && CompanionDb.warningApplies(config.dashboardPackage)) warns.add(
                 "⚠ <b>Home Assistant Companion has no internal URL</b> (${u.affected} server${if (u.affected == 1) "" else "s"}) — " +
                     "the dashboard can fail with \"Missing 'Host' header\". Repair it on the Install tab.",
             )
@@ -2200,7 +2200,8 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
     }
 
     /** Render-blocking warnings not modelled by HealthAudit: a crash-looping dashboard app, and a Companion
-     *  server row with a blank internal_url (HA 2026.7 "Missing 'Host' header"). Shown on BOTH the dashboard
+     *  server row with a blank internal_url (HA 2026.7 "Missing 'Host' header") — the latter only when the
+     *  Companion is the active renderer ([CompanionDb.warningApplies]). Shown on BOTH the dashboard
      *  banner and the Install tab as high-severity (`crit`). [inlineRepair] adds the one-tap repair button
      *  (Install tab, where install.js is loaded); the dashboard links to the Install tab for the action. */
     private fun adHocWarnings(inlineRepair: Boolean): String = buildString {
@@ -2224,7 +2225,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
                 """downgrade the dashboard/Companion app (see <a href="/install">updates</a>), or reboot the panel.</div>""",
         )
         companionUrlCache.get().let { u ->
-            if (u.needsRepair) {
+            if (u.needsRepair && CompanionDb.warningApplies(config.dashboardPackage)) {
                 val action = if (inlineRepair)
                     """<div style="margin-top:10px"><button class="pbtn" onclick="repairCompUrl(this)">⚙ Repair internal URL</button> <span id="cu-fix" class="muted"></span></div>"""
                 else """ <a href="/install">Repair on the Install tab →</a>"""

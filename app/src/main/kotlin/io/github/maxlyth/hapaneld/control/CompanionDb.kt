@@ -53,6 +53,14 @@ object CompanionDb {
     /** A row needs repair when its internal URL is blank but a usable external URL exists to copy. */
     fun needsRepair(r: ServerRow): Boolean = isBlank(r.internalUrl) && !isBlank(r.externalUrl)
 
+    /** Whether the internal-URL health warning applies: only when the Companion is the app that will
+     *  actually render the dashboard — an explicitly configured Companion `dashboard_package`, or a
+     *  blank one (auto-detect prefers the Companion when installed). With the built-in renderer or
+     *  another explicit dashboard app a blank `internal_url` can't blank the panel (the built-in
+     *  renderer's login borrow already falls back to `external_url`), so the warning stays quiet. */
+    fun warningApplies(dashboardPackage: String): Boolean =
+        dashboardPackage.isBlank() || dashboardPackage in CompanionInstaller.SUPPORTED_PACKAGES
+
     /** Parse the `id US internal US external` lines emitted by [DUMP_SQL]. Tolerant of blank lines and
      *  short rows (a missing trailing field → ""). A line with no id is skipped. */
     fun parseServers(output: String): List<ServerRow> =
