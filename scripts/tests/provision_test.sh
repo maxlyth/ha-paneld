@@ -794,7 +794,7 @@ MOCK_STALE_TRANSACTION=1 \
 MOCK_STALE_TRANSACTION_KIND=both \
   run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
 assert_failure "simultaneous system and systemless journals fail closed"
-assert_contains 'both root-helper recovery journals are present' "dual-journal failure explains the ambiguity"
+assert_contains 'more than one root-helper recovery journal is present' "dual-journal failure explains the ambiguity"
 assert_not_contains 'hapaneld-helper\.txn (rollback|commit)-(system|systemless)' "$MOCK_CALL_LOG" "dual-journal ambiguity preserves both recovery records"
 assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "dual-journal ambiguity stops before APK replacement"
 
