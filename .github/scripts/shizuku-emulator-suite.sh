@@ -8,17 +8,30 @@ set -eu
 SHIZUKU_APK="${1:?usage: shizuku-emulator-suite.sh <shizuku.apk>}"
 APP_PKG=io.github.maxlyth.hapaneld
 
-# adb install can wedge indefinitely on emulators (observed on API 27 right
-# after the Shizuku server start); bound it and retry once across an adb
-# server restart.
+# Streamed adb install reliably wedges on the API 27 image from the second
+# install onward (the first always succeeds, later ones hang until the job
+# timeout, surviving adb server restarts). Bypass the streamed path: push
+# the APK and run pm install on-device, bounded and retried once.
 adb_install() {
-  if ! timeout 300 adb install -r "$1"; then
-    echo "adb install $1 failed or timed out; restarting adb and retrying"
+  base=$(basename "$1")
+  timeout 120 adb push "$1" "/data/local/tmp/$base" < /dev/null
+  if ! pm_install_once "$base"; then
+    echo "pm install $base failed or timed out; restarting adb and retrying"
     adb kill-server || true
     adb start-server
     adb wait-for-device
-    timeout 300 adb install -r "$1"
+    pm_install_once "$base"
   fi
+  adb shell rm -f "/data/local/tmp/$base" < /dev/null || true
+}
+
+pm_install_once() {
+  out=$(timeout 300 adb shell pm install -r -t "/data/local/tmp/$1" < /dev/null) || return 1
+  printf '%s\n' "$out"
+  case "$out" in
+    *Success*) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 # Install everything before starting the Shizuku server: on API 27 the
