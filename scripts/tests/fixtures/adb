@@ -199,6 +199,7 @@ case "${1:-}" in
           else
             [ "${MOCK_HELPER_INSTALL:-ok}" = ok ] && printf 'INSTALL_OK\n'
             [ "${MOCK_HELPER_INSTALL:-ok}" != ok ] || : > "$STATE_DIR/active-helper-transaction"
+            [ "${MOCK_HELPER_INSTALL:-ok}" != vendor-rc-retained ] || printf 'VENDOR_RC_RETAINED\n'
           fi
         elif printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*finalize-rollback-(system|systemless|hybrid)'; then
           if [ "${MOCK_TRANSACTION_TOKEN_MISMATCH:-0}" != 1 ] && [ "${MOCK_TOKEN_MISMATCH_ACTION:-}" != finalize ]; then
@@ -273,6 +274,7 @@ case "${1:-}" in
           else
             [ "${MOCK_HELPER_INSTALL:-ok}" = ok ] && printf 'INSTALL_OK\n'
             [ "${MOCK_HELPER_INSTALL:-ok}" != ok ] || : > "$STATE_DIR/active-helper-transaction"
+            [ "${MOCK_HELPER_INSTALL:-ok}" != vendor-rc-retained ] || printf 'VENDOR_RC_RETAINED\n'
           fi
         elif printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*finalize-rollback-(system|systemless|hybrid)'; then
           if [ "${MOCK_TRANSACTION_TOKEN_MISMATCH:-0}" != 1 ] && [ "${MOCK_TOKEN_MISMATCH_ACTION:-}" != finalize ]; then

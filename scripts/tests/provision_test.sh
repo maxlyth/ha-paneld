@@ -428,6 +428,20 @@ assert_success "writable /system with ample space keeps the historical /system i
 assert_log_contains 'helper-transaction-[0-9a-f]+.*install-system' "ample space still selects the /system installer"
 assert_not_contains 'helper-transaction-[0-9a-f]+.*install-hybrid' "$MOCK_CALL_LOG" "ample space never selects the hybrid layout"
 
+# The full-/system hazard the hybrid layout guards against also applies when the free-space
+# reading itself is unusable: installing blindly onto a writable /system risks the same
+# mid-transaction ENOSPC, so an unparseable df must stop provisioning before any install.
+MOCK_SYSTEM_AVAIL_KB=unknown run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_failure "an unparseable /system free-space reading fails closed"
+assert_contains 'free space on the panel.s writable /system could not be determined' "unreliable free space names the missing measurement"
+assert_contains 'previous APK was left in place' "unreliable free space states the safe outcome"
+assert_not_contains 'helper-transaction-[0-9a-f]+.*install-(system|systemless|hybrid)|^adb .* install( |$)' "$MOCK_CALL_LOG" "unreliable free space never installs a helper or replaces the APK"
+
+MOCK_SYSTEM_AVAIL_KB=1.4G run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_failure "a human-formatted df value is rejected instead of being misread"
+assert_contains "df reported '1\.4G'" "human-formatted df failure echoes the rejected value"
+assert_not_contains 'helper-transaction-[0-9a-f]+.*install-' "$MOCK_CALL_LOG" "human-formatted df value never reaches a helper installer"
+
 HAPANELD_HELPER_PROBE= MOCK_SYSTEM_AVAIL_KB=12 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
 assert_success "hybrid validation invokes the exact newly installed helper path"
 assert_log_contains 'exec /data/adb/hapaneld/hapaneld-helper --request COMPANIONCAPS' "hybrid validation probes the /data/adb helper"
@@ -552,6 +566,18 @@ assert_failure "helper staging failure leaves the previous APK installed"
 assert_contains 'root-helper install failed' "helper staging failure names the incomplete migration"
 assert_log_contains 'helper-transaction-[0-9a-f]+.*rollback-system' "failed system transaction preserves or restores the prior helper"
 assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "failed helper staging does not replace the APK"
+
+# A hybrid panel returning to a /system install must retire its vendor boot vector; if the
+# rm survives a silently failed /vendor remount, the install has to abort and roll back
+# instead of leaving two init entries racing after the next reboot.
+MOCK_HELPER_INSTALL=vendor-rc-retained \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_failure "a retained vendor startup entry aborts the /system install"
+assert_contains 'old vendor startup entry could not be removed' "retained vendor rc names the exact failure"
+assert_contains '/vendor/etc/init/hapaneld-helper\.rc is still present' "retained vendor rc names the surviving boot vector"
+assert_contains 'previous APK and helper were preserved or restored' "retained vendor rc reports the rollback outcome"
+assert_log_contains 'helper-transaction-[0-9a-f]+.*rollback-system' "retained vendor rc rolls back through the system journal"
+assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "retained vendor rc stops before APK replacement"
 
 MOCK_SYSTEM_WRITABLE=0 MOCK_HELPER_CAPABILITY=fail \
   run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
@@ -1624,6 +1650,17 @@ if [ -n "$commit_target_line" ] && [ -n "$commit_marker_line" ] && [ -n "$commit
   pass "helper commit rechecks exact target state before durably removing recovery"
 else
   fail_test "helper commit rechecks exact target state before durably removing recovery"
+fi
+swap_rm_line="$(grep -n 'rm -f /system/bin/hapaneld-helper /system/etc/init/hapaneld-helper\.rc' "$PROVISION" | head -1 | cut -d: -f1)"
+vendor_verify_line="$(grep -Fn '[ ! -e /vendor/etc/init/hapaneld-helper.rc ] || { echo VENDOR_RC_RETAINED; return 1; }' "$PROVISION" | head -1 | cut -d: -f1)"
+swap_mv_line="$(awk -v after="$swap_rm_line" 'NR > after && index($0, "mv -f /system/bin/hapaneld-helper.new /system/bin/hapaneld-helper"){print NR; exit}' "$PROVISION")"
+if [ -n "$swap_rm_line" ] && [ -n "$vendor_verify_line" ] && [ -n "$swap_mv_line" ] && \
+   [ "$swap_rm_line" -lt "$vendor_verify_line" ] && [ "$vendor_verify_line" -lt "$swap_mv_line" ] && \
+   grep -Fq 'grep -qx VENDOR_RC_RETAINED' "$PROVISION" && \
+   grep -Fq '[ ! -e /vendor/etc/init/hapaneld-helper.rc ] &&' "$PROVISION"; then
+  pass "system install verifies vendor boot-vector retirement before swapping in the new helper"
+else
+  fail_test "system install verifies vendor boot-vector retirement before swapping in the new helper"
 fi
 if grep -Fq 'helper_build_id="$(helper/source-id.sh)"' "$RELEASE_WORKFLOW" && \
    grep -Fq -- '-DHAPANELD_BUILD_ID=' "$RELEASE_WORKFLOW" && \

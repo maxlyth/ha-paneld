@@ -1523,6 +1523,10 @@ install_system() {
     /system/bin/hapaneld-ledd /system/etc/init/hapaneld-ledd.rc \
     /vendor/etc/init/hapaneld-helper.rc \
     /data/adb/hapaneld/hapaneld-helper /data/adb/service.d/hapaneld-helper.sh
+  # A silently failed /vendor remount leaves the hybrid boot vector alive next to the new
+  # /system entry; verify its removal here so the failure rolls back before the APK swap
+  # instead of surfacing later as an opaque commit refusal.
+  [ ! -e /vendor/etc/init/hapaneld-helper.rc ] || { echo VENDOR_RC_RETAINED; return 1; }
   mv -f /system/bin/hapaneld-helper.new /system/bin/hapaneld-helper || return 1
   mv -f /system/etc/init/hapaneld-helper.rc.new /system/etc/init/hapaneld-helper.rc || return 1
   sync || return 1
@@ -2108,9 +2112,18 @@ EOF
   # mid-transaction (its residual df headroom cannot allocate even one data block). Budget the new
   # binary plus its retained recovery snapshot (plus rc/journal slack); below that, place the init
   # .rc boot vector on the roomy vendor partition — verified by a real byte write, not a 0-byte
-  # touch — and hold the binary in /data/adb. An unparseable df keeps the historical /system path.
+  # touch — and hold the binary in /data/adb. An unparseable df fails closed: installing blindly
+  # onto a possibly-full /system risks exactly the mid-transaction ENOSPC this path exists to avoid.
   system_avail_kb="$(printf '%s\n' "$out" | sed -n 's/^SYSTEM_AVAIL_KB=//p' | head -1)"
   system_need_kb=$(( ( $(wc -c < "$helper") * 2 ) / 1024 + 64 ))
+  if printf '%s\n' "$out" | grep -qx SYSTEM_RW && \
+     ! printf '%s\n' "$system_avail_kb" | grep -Eq '^[0-9]+$'; then
+    cleanup_root_helper_staging
+    [ -z "$helper_dir" ] || rm -rf "$helper_dir"
+    fail "the free space on the panel's writable /system could not be determined (df reported '${system_avail_kb:-nothing}')" \
+      "The helper was not installed and the previous APK was left in place; installing without a reliable reading risks failing out of space mid-transaction." \
+      "Check 'df -k /system' on the panel, then re-run this command."
+  fi
   if printf '%s\n' "$out" | grep -qx SYSTEM_RW && \
      printf '%s\n' "$system_avail_kb" | grep -Eq '^[0-9]+$' && \
      [ "$system_avail_kb" -lt "$system_need_kb" ]; then
@@ -2147,6 +2160,15 @@ EOF
     out2="$(run_root_helper_transaction install-system 2>&1)" || true
     resolve_root_helper_install_state "$install_kind"
     if ! printf '%s\n' "$out2" | grep -qx INSTALL_OK; then
+      if printf '%s\n' "$out2" | grep -qx VENDOR_RC_RETAINED; then
+        if rollback_root_helper "$install_kind"; then
+          fail "the old vendor startup entry could not be removed during the /system install" \
+            "/vendor/etc/init/hapaneld-helper.rc is still present, so the hybrid boot path was not retired." \
+            "The previous APK and helper were preserved or restored. Check /vendor writability, then re-run this command."
+        fi
+        fail "the old vendor startup entry could not be removed and rollback could not be verified" \
+          "The APK was not replaced. Restore the helper manually before relying on privileged operations."
+      fi
       if rollback_root_helper "$install_kind"; then
         fail "/system root-helper install failed; the prior helper was preserved or restored" \
           "The previous APK and helper remain active. Re-run after checking writable-system capacity and permissions."
