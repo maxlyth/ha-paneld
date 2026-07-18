@@ -36,13 +36,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # android-27 google_apis was never published for x86_64, and the default
-        # (AOSP) images never export Shizuku's start.sh, so each API level pins
-        # the google_apis arch that Google actually ships.
+        # The app APK only ships 64-bit native libraries, so every image must
+        # be x86_64. android-27 google_apis was never published for x86_64,
+        # which forces the default (AOSP) image there; that is fine because
+        # Shizuku is started via its libshizuku.so starter binary directly and
+        # no longer depends on the manager exporting start.sh.
         include:
           - api-level: 27
-            target: google_apis
-            arch: x86
+            target: default
+            arch: x86_64
           - api-level: 35
             target: google_apis
             arch: x86_64
