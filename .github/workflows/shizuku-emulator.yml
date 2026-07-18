@@ -36,7 +36,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        api-level: [27, 35]
+        # The app APK only ships 64-bit native libraries, so every image must
+        # be x86_64. android-27 google_apis was never published for x86_64,
+        # which forces the default (AOSP) image there; that is fine because
+        # Shizuku is started via its libshizuku.so starter binary directly and
+        # no longer depends on the manager exporting start.sh.
+        include:
+          - api-level: 27
+            target: default
+            arch: x86_64
+          - api-level: 35
+            target: google_apis
+            arch: x86_64
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -53,7 +64,7 @@ jobs:
           cache-provider: basic
 
       - name: Install build SDK, NDK, and emulator image
-        run: sdkmanager "platform-tools" "platforms;android-35" "system-images;android-${{ matrix.api-level }};default;x86_64" "ndk;27.0.12077973" "cmake;3.22.1"
+        run: sdkmanager "platform-tools" "platforms;android-35" "system-images;android-${{ matrix.api-level }};${{ matrix.target }};${{ matrix.arch }}" "ndk;27.0.12077973" "cmake;3.22.1"
 
       - name: Download curated Shizuku manager
         run: |
@@ -75,17 +86,8 @@ jobs:
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
         with:
           api-level: ${{ matrix.api-level }}
-          target: default
-          arch: x86_64
+          target: ${{ matrix.target }}
+          arch: ${{ matrix.arch }}
           profile: pixel_2
           disable-animations: true
-          script: |
-            adb install "$RUNNER_TEMP/shizuku.apk"
-            adb shell monkey -p moe.shizuku.privileged.api 1
-            for i in $(seq 1 20); do adb shell test -f /storage/emulated/0/Android/data/moe.shizuku.privileged.api/start.sh && break; sleep 1; done
-            adb shell sh /storage/emulated/0/Android/data/moe.shizuku.privileged.api/start.sh
-            adb install app/build/outputs/apk/debug/app-debug.apk
-            adb push "$RUNNER_TEMP/shizuku.apk" /data/local/tmp/shizuku.apk
-            adb shell run-as io.github.maxlyth.hapaneld cp /data/local/tmp/shizuku.apk files/shizuku-test.apk
-            adb install app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
-            adb shell am instrument -w -e managerApk /data/user/0/io.github.maxlyth.hapaneld/files/shizuku-test.apk -e class io.github.maxlyth.hapaneld.shizuku.ShizukuIntegrationTest io.github.maxlyth.hapaneld.test/androidx.test.runner.AndroidJUnitRunner
+          script: sh .github/scripts/shizuku-emulator-suite.sh "$RUNNER_TEMP/shizuku.apk"
