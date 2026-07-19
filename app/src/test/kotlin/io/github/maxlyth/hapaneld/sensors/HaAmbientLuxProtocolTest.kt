@@ -98,5 +98,5 @@ class HaAmbientLuxProtocolTest {
         .put("entity_id", entityId)
         .put("state", value)
         .put("last_updated", updated)
-        .put("attributes", JSONObject())
+        .put("attributes", JSONObject().put("device_class", "illuminance").put("unit_of_measurement", "lx"))
 }

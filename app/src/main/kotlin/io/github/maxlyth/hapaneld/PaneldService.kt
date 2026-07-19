@@ -74,6 +74,7 @@ import io.github.maxlyth.hapaneld.http.ManagementProjection
 import io.github.maxlyth.hapaneld.http.DiagReader
 import io.github.maxlyth.hapaneld.http.AutoBrightnessHttpAction
 import io.github.maxlyth.hapaneld.http.AutoBrightnessHttpApi
+import io.github.maxlyth.hapaneld.http.AutoBrightnessHttpValidation
 import io.github.maxlyth.hapaneld.http.retainCompanionLeaseUntilHelperIdle
 import io.github.maxlyth.hapaneld.logship.LogCapture
 import io.github.maxlyth.hapaneld.logship.LogShipper
@@ -87,6 +88,7 @@ import io.github.maxlyth.hapaneld.sensors.SensorReporter
 import io.github.maxlyth.hapaneld.sensors.SensorLightPublisher
 import io.github.maxlyth.hapaneld.sensors.submitIlluminanceIfExposed
 import io.github.maxlyth.hapaneld.sensors.HaAmbientLuxSubscriber
+import io.github.maxlyth.hapaneld.sensors.HaAmbientSourceValidation
 import io.github.maxlyth.hapaneld.sensors.HaAmbientSourcePhase
 import io.github.maxlyth.hapaneld.sensors.HaSiteMetadataClient
 import io.github.maxlyth.hapaneld.util.localIpv4
@@ -140,6 +142,8 @@ import io.github.maxlyth.hapaneld.util.SystemProps
 import io.github.maxlyth.hapaneld.dashboard.shouldReloadBuiltinAfterEntityFilterChange
 import io.github.maxlyth.hapaneld.shizuku.ShizukuBridge
 import java.io.File
+import java.util.Calendar
+import java.util.Locale
 import java.util.concurrent.Callable
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Executors
@@ -1086,23 +1090,74 @@ class PaneldService : Service() {
                 put("expectedLux", runtime.expectedLux ?: JSONObject.NULL)
                 put("automaticTarget", runtime.automaticTarget ?: JSONObject.NULL)
                 put("appliedTarget", runtime.appliedTarget ?: JSONObject.NULL)
+                put("minimumPercent", config.autoBrightnessMinimumPercent)
+                put(
+                    "minimumBrightness",
+                    io.github.maxlyth.hapaneld.control.AdaptiveLuxCurve.percentToBrightness(
+                        config.autoBrightnessMinimumPercent,
+                    ),
+                )
                 put("autoAuthority", runtime.manualPreference.autoAuthority)
                 put("manualRemainingMs", runtime.manualPreference.remainingMs)
                 if (selected != null) put("detail", haStatus.detail)
             }.toString()
         }
 
-        override fun historyJson(hours: Int, sensitivity: Int?): String {
-            val cutoffMinute = (System.currentTimeMillis() - hours * 3_600_000L) / 60_000L
-            val points = autoBright.chartPoints(sensitivity ?: config.autoBrightnessSensitivity)
+        override fun historyJson(hours: Int, sensitivity: Int?, minimumPercent: Int?): String {
+            val nowEpochMinute = System.currentTimeMillis() / 60_000L
+            val cutoffMinute = nowEpochMinute - hours * 60L
+            val previewMinimum = minimumPercent ?: config.autoBrightnessMinimumPercent
+            val points = autoBright.chartPoints(
+                sensitivity ?: config.autoBrightnessSensitivity,
+                previewMinimum,
+            )
                 .filter { it.epochMinute >= cutoffMinute }
+            val zone = autoBright.timeZone()
+            val today = Calendar.getInstance(zone).apply {
+                set(Calendar.HOUR_OF_DAY, 0)
+                set(Calendar.MINUTE, 0)
+                set(Calendar.SECOND, 0)
+                set(Calendar.MILLISECOND, 0)
+            }
+            val dayMetadata = mutableMapOf<Int, Pair<String, Int>>()
             return JSONObject().apply {
                 put("available", true)
                 put("hours", hours)
                 put("bucket_minutes", 5)
+                put("minimum_percent", previewMinimum)
+                put("minimum_brightness", io.github.maxlyth.hapaneld.control.AdaptiveLuxCurve.percentToBrightness(previewMinimum))
+                put("now_epoch_minute", nowEpochMinute)
+                put("time_zone", zone.id)
                 put("points", JSONArray().apply {
                     points.forEach { point -> put(JSONObject().apply {
+                        val local = Calendar.getInstance(zone).apply {
+                            timeInMillis = point.epochMinute * 60_000L
+                        }
+                        val dayKey = local.get(Calendar.YEAR) * 400 + local.get(Calendar.DAY_OF_YEAR)
+                        val (localDay, dayAge) = dayMetadata.getOrPut(dayKey) {
+                            val day = String.format(
+                                Locale.US,
+                                "%04d-%02d-%02d",
+                                local.get(Calendar.YEAR),
+                                local.get(Calendar.MONTH) + 1,
+                                local.get(Calendar.DAY_OF_MONTH),
+                            )
+                            val localMidnight = local.clone() as Calendar
+                            localMidnight.set(Calendar.HOUR_OF_DAY, 0)
+                            localMidnight.set(Calendar.MINUTE, 0)
+                            localMidnight.set(Calendar.SECOND, 0)
+                            localMidnight.set(Calendar.MILLISECOND, 0)
+                            var age = 0
+                            while (localMidnight.before(today) && age <= 7) {
+                                localMidnight.add(Calendar.DAY_OF_MONTH, 1)
+                                age += 1
+                            }
+                            day to age
+                        }
                         put("epochMinute", point.epochMinute)
+                        put("localDay", localDay)
+                        put("minuteOfDay", local.get(Calendar.HOUR_OF_DAY) * 60 + local.get(Calendar.MINUTE))
+                        put("dayAge", dayAge)
                         put("observedMeanLux", point.observedMeanLux)
                         put("minLux", point.minLux)
                         put("maxLux", point.maxLux)
@@ -1135,8 +1190,38 @@ class PaneldService : Service() {
             }.toString()
         }
 
-        override fun selectHaSource(entityId: String?): AutoBrightnessHttpAction {
-            config.setAutoBrightnessHaEntity(entityId.orEmpty())
+        override suspend fun validateHaSource(entityId: String): AutoBrightnessHttpValidation =
+            when (val result = haAmbientLux.validateSource(entityId)) {
+                is HaAmbientSourceValidation.Ready -> AutoBrightnessHttpValidation(
+                    AutoBrightnessHttpAction.ok(),
+                    result.authOwner,
+                )
+                is HaAmbientSourceValidation.Rejected -> AutoBrightnessHttpValidation(
+                    AutoBrightnessHttpAction(
+                        statusCode = result.statusCode,
+                        json = JSONObject().put("ok", false).put("error", result.error)
+                            .put("message", result.message).toString(),
+                    ),
+                )
+            }
+
+        override suspend fun selectHaSource(entityId: String?): AutoBrightnessHttpAction {
+            if (entityId != null) {
+                val previous = config.autoBrightnessHaEntity
+                val validation = validateHaSource(entityId)
+                if (validation.action.statusCode !in 200..299) return validation.action
+                val committed = config.synchronizedTransaction {
+                    if (validation.authOwner == null || config.haAuthSnapshot().stableOwner() != validation.authOwner ||
+                        config.autoBrightnessHaEntity != previous
+                    ) false else config.applyBatch { config.setAutoBrightnessHaEntity(entityId) }
+                }
+                if (!committed) return AutoBrightnessHttpAction(
+                    409,
+                    """{"ok":false,"error":"ha-source-validation-stale","message":"Home Assistant settings changed during the check. Try again."}""",
+                )
+            } else {
+                config.setAutoBrightnessHaEntity("")
+            }
             refreshAdaptiveBrightnessInputs()
             autoBright.reapplyLatest()
             return AutoBrightnessHttpAction.ok()

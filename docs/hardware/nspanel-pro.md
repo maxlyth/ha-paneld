@@ -1,6 +1,6 @@
 # Sonoff NSPanel Pro (Rockchip PX30 / rk3326)
 
-The most common Home-Assistant wall panel on the market: a small **480×480 square** PX30 panel with a built-in **Zigbee 3.0 coordinator**, no NFC/IR, and the lowest-power CPU of the panels documented here. It ships in two physically different sizes — the **86P** (the unit specced below) and the larger **120P**, which is a *different panel* (RK3326-S, 750×1334 portrait) — see [Variants](#variants--86p-vs-120p). Reverse-engineered on a live **86P** (Android 8.1, rooted, toolbox `su`).
+The original NSPanel Pro is a small **480×480 square** PX30 panel with a built-in **Zigbee 3.0 coordinator**, no NFC/IR, and the lowest-power CPU of the panels documented here. Its **86P** and **120P** variants use different displays and boards — see [Variants](#variants--86p-vs-120p). This page was reverse-engineered primarily on a live **86P** (Android 8.1, rooted, toolbox `su`) and covers those original variants unless it explicitly says otherwise.
 
 > [!TIP]
 > Most-needed facts: ships **`userdebug` with no adb password** (`adb root` just works); **LED is not characterised** (no controllable RGB node found); light + proximity are **app-direct**; the on-board **EFR32 Zigbee radio** is managed over a local broker, not by reflashing. Update the **WebView first** — see [WebView — update this first](#webview--update-this-first).
@@ -25,7 +25,7 @@ The most common Home-Assistant wall panel on the market: a small **480×480 squa
 
 ## Variants — 86P vs 120P
 
-"NSPanel Pro" ships in two physically different panels, named for the EU **86 mm** vs **120 mm** wall box. The spec table above and most of this page were captured on an **86P**; the **120P** is a different board:
+The original NSPanel Pro line ships in two physically different panels, named for the EU **86 mm** vs **120 mm** wall box. The spec table above and most of this page were captured on an **86P**; the **120P** is a different board:
 
 | | NSPanel Pro **86P** | NSPanel Pro **120P** |
 |---|---|---|
@@ -33,15 +33,15 @@ The most common Home-Assistant wall panel on the market: a small **480×480 squa
 | Display | **480×480** square, ~160 dpi, portrait-only | **750×1334** portrait, **240 dpi** (override 250); landscape available; ~1 cm narrower + longer than the 86P |
 | Build ids | both report `ro.product.model/device/name = px30_evb` (shared Rockchip board name — *not* a reliable variant discriminator) | as 86P |
 | `ro.product.version` | `s6_android_x.y.z`-class | `NSPanelXXXP_x.y.z` (OTA channel `nspanel-pro-ver120`, full ROM `SN_3326S_750X1334_…`) |
-| OTA latest | **4.0.12** (full) → **4.6.0** (diff, current Stable) | **4.0.12** (full) → **4.6.0** (diff, current Stable) |
+| OTA latest | **4.0.12** (full) → **4.6.0** (CDN-verified diff, not live-flash verified here) | **4.0.12** (full) → **4.6.0** (CDN-verified diff, not live-flash verified here) |
 | Proximity firmware | **4.0.12 restored ranged** readings | stayed **binary** at 4.x (per-model kernel divergence — see [Sensors](#sensors--light--proximity-are-app-direct)) |
 
 Both share the EFR32 Zigbee radio, Android 8.1 (AOSP), arm64-v8a, and the root/recovery story below. Live-verified on a 120P (fw `NSPanel120P_3.7.1`): `wm size`=750×1334, density 240, `ro.board.platform=rk3326`.
 
 > [!NOTE]
-> Both models reach the current ROM (**4.6.0**, the June 2026 official *Stable*) via a 2-step path: 4.0.12 full ROM → 4.6.0 diff. The intervening **4.5.3** release was a ROM diff on 120P but an APK-only update on 86P. The CoolKit CDN scheme, every verified OTA URL, and the full flashing how-to are on the [firmware & flashing page](nspanel-pro-firmware.md); the live, community-maintained version index is the Discussion linked from there.
+> Sonoff's public changelog currently lists **4.6.0** (June 2026) as its newest release. Project CDN inspection found a 4.0.12→4.6.0 diff for each original model, but this candidate extension has not been live-flash verified here. The intervening **4.5.3** release was a ROM diff on 120P but an APK-only update on 86P. The CoolKit CDN scheme, every verified OTA URL, and the full flashing how-to are on the [firmware & flashing page](nspanel-pro-firmware.md); the live, community-maintained version index is the Discussion linked from there.
 >
-> **⚠ 4.5.1 / 4.5.2 had widespread reboot-loop reports** (~10–60 min intervals on both models); **4.6.0** (June 2026) is the current official *Stable* that supersedes them. 4.6.0 is recent; verify it on one panel before deploying widely. **4.0.12** remains the conservative full-ROM checkpoint to pin for maximum stability. Check the firmware Discussion for the current consensus.
+> **⚠ Community reports describe restart loops on 4.5.1 / 4.5.2** (~10–60 min intervals on both models). Sonoff's changelog now lists 4.6.0 after those releases, but does not label 4.6.0 “Stable”. Verify it on one panel before deploying widely; **4.0.12** remains the conservative full-ROM checkpoint to pin. Check the firmware Discussion for current community evidence.
 
 ### Firmware quirks by version
 
@@ -49,19 +49,19 @@ Behaviour that changes across eWeLink firmware versions, newest-relevant first. 
 
 | Firmware | Quirk / behaviour | Impact — what to do |
 |---|---|---|
-| **all shipping** | Stock system WebView is **Chromium 107.0.5304.105** (verified on fw 3.5.1) — far too old to render a modern HA dashboard | Update the WebView **first** — [WebView — update this first](#webview--update-this-first). ha-paneld's panel-health banner also flags this (min Chromium 110). |
+| **3.5.1 (86P, verified)** | Stock system WebView is **Chromium 107.0.5304.105** — far too old to render a modern HA dashboard; other firmware may differ | Check and update the WebView **first** — [WebView — update this first](#webview--update-this-first). ha-paneld's panel-health banner also flags outdated versions (min Chromium 110). |
 | **older (pre-1.3.2)** | No in-app adb toggle; developer options unreachable from the UI | Enable adb via the internal **OTG port** (open the case) — [Gaining adb + root](#gaining-adb--root-access). |
 | **v1.3.2+** | adb enable moved into the eWeLink app | eWeLink → *Device Settings* → tap **Device ID ×8** → developer mode → adb. |
 | **v1.4+** | Developer mode **removed** from the UI | Enable adb via the **5× power-cycle** at the Sonoff boot animation — [Gaining adb + root](#gaining-adb--root-access). |
 | **v3.7.1** (120P, live) | Baseline reference build | `wm size`=750×1334, density 240, `ro.board.platform=rk3326`. |
 | **v4.0.0** (roll-out 2025-09-19) | Stock firmware **bundles F-Droid** + promotes FOSS/HA app install; markedly faster UI | On-device install path opens — [Firmware v4.0.0](#firmware-v400--official-f-droid-app-install). Confirm **APP** *and* **OS** version both read ≥ 4.0.0. |
 | **v4.0.12** | Proximity **ranged readings** restored on **86P**; **120P stays binary** (per-model kernel divergence) | Recommended stable pin for HA-only panels. The panel's raw input shape is model- and firmware-specific, but ha-paneld learns and normalizes either form — see [Sensors](#sensors--light--proximity-are-app-direct). |
-| **v4.5.1 / v4.5.2** | **Widespread reboot-loop reports** (~10–60 min, both models); 4.5.2 is an APK-only layer on 4.5.1 | **Superseded by v4.6.0.** Pin at **4.0.12** for maximum stability, or move to 4.6.0 (verify on one panel first). Check the firmware Discussion for current consensus. |
+| **v4.5.1 / v4.5.2** | **Widespread community restart-loop reports** (~10–60 min, both models); 4.5.2 is an APK-only layer on 4.5.1 | **Followed by v4.6.0.** Pin at **4.0.12** for maximum stability, or test 4.6.0 on one panel first. Check the firmware Discussion for current evidence. |
 | **v4.5.3** | Matter auto-discovery and screen-management optimizations; ROM diff on 120P but APK-only on 86P | No 4.5.3-specific restart-loop evidence found; superseded by v4.6.0. |
-| **v4.6.0** (Jun 2026) | Current official **Stable**; **Local Web Portal** (`nspanelpro.local` — LAN setup, MQTT→HA sync, Matter Bridge); diff-only off 4.0.12 / 4.4.0 / 4.5.1 | New — the stable successor to the reboot-loopy 4.5.x; verify on one panel before deploying widely. |
+| **v4.6.0** (Jun 2026) | Latest release in Sonoff's public changelog; **Local Web Portal** (`nspanelpro.local` — LAN setup, MQTT Discovery export to HA, Matter Bridge); project CDN inspection found diffs from 4.0.12 / 4.4.0 / 4.5.1 | New — verify on one panel before deploying widely. |
 
 > [!NOTE]
-> These are **Gen1** (86P/120P) quirks. The NSPanel Pro **Gen2** (RK3326-**S**, dual relays, EFR32**MG24**) is a different target with its own firmware line — do not assume Gen1 firmware notes carry over.
+> These are original 86P/120P quirks. The NSPanel Pro **Gen2** (RK3326-**S**, dual relays, EFR32**MG24**) is a different hardware target. Sonoff's shared changelog includes Gen2 changes, so do not infer a separate firmware line or assume every original-model note carries over.
 
 Sibling Tuya-family boards — **S6E/T6E** (relay variants; S6E = T6E + 2 relays), [**S9E**](s9e.md) (Smatek), [**TPA10**](tpa10.md) (RK3566, Cortex-A55, Android 11) — are separate targets, not NSPanel Pro firmware.
 
@@ -109,7 +109,7 @@ From **v4.0.0** (phased roll-out from 19 September 2025) the stock eWeLink firmw
 
 ## WebView — update this first
 
-The NSPanel Pro ships with a WebView/Chromium far too old to render a current Home Assistant dashboard in either ha-paneld's built-in renderer or the HA Companion app. **Stock version: `com.android.webview` `107.0.5304.105`** (Chromium 107), confirmed via `adb shell dumpsys webviewupdate | grep "Current WebView"` on a unit freshly flashed to firmware `3.5.1` (build `164637`). The archived OTA diff packages do not include a WebView APK, so the version had to be read after a factory firmware install. Chromium 107 is old enough that the Home Assistant frontend renders blank, so update it first. Update it cleanly over adb — no root, no F-Droid; this unit runs Chromium **138** afterwards. See [Updating the system WebView](README.md#updating-the-system-webview).
+An 86P freshly flashed to firmware `3.5.1` (build `164637`) was verified with `com.android.webview` **107.0.5304.105** (Chromium 107), which is too old to render a current Home Assistant dashboard. Other firmware and models may differ, so check the installed provider before deciding whether to update. The archived OTA diff packages do not include a WebView APK, so this version was read from the live unit with `dumpsys webviewupdate`. That unit runs Chromium **138** after a clean adb update. See [Updating the system WebView](README.md#updating-the-system-webview).
 
 ## LED
 
@@ -145,9 +145,9 @@ ha-paneld manages it directly (v0.6.1+): `switch.<panel>_zigbee_router` turns th
 > Switching role is **not a reflash** — there is no `.gbl`/bootloader step; it just sets the EZSP node type. For partition-level firmware work see [Firmware backup & restore](../firmware-backup-restore.md).
 
 > [!NOTE]
-> **Zigbee-only — no Thread.** The EFR32 (EZSP v8, stack 6.10.1) is a Zigbee radio; RK3326 (2018) has no 802.15.4 Thread radio, so despite 4.x firmware's "Matter Bridge" marketing there is **no native Thread border router** on these panels.
+> **No Thread Border Router is documented or characterised.** The installed vendor stack uses the EFR32 as a Zigbee NCP. Although the EFR32MG21 silicon is multiprotocol-capable, that does not establish Thread firmware or a border-router implementation on the panel; Sonoff documents a Matter Bridge instead.
 >
-> **4.x reworked the Zigbee stack** — Sonoff shipped a forked Zigbee2MQTT (herdsman 23.53 vs upstream ~25.x), decommissioned the old NCP client, changed the on-device MQTT password, and altered the boot sequence. ha-paneld's `zigbee_router` was built against ≤3.x and **may need adapting on 4.x** — and Sonoff disabled coordinator↔router switching on stock 4.x firmware. (Sources: seaky tools #244/#241/#255, roottool#3.)
+> **4.x reworked the Zigbee stack** — community inspection found a forked Zigbee2MQTT, a changed on-device MQTT password and a different boot sequence. [Sonoff documents coordinator↔router switching](https://sonoff.tech/blogs/news/nspanel-pro-v4-3-0-central-heating-redefining-whole-home-temperature-automation) in current firmware, but ha-paneld's private local-broker control path was built against ≤3.x and **may need adapting on 4.x**. (Community sources: seaky tools #244/#241/#255 and roottool#3.)
 
 > [!WARNING]
 > **A legacy vendor-native Zigbee-watchdog defect is confirmed by the reporter on NSPanel Pro 120 stock 3.8.0.** Firmware containing the recursive `LD_LIBRARY_PATH` assignment described in [Issue #34](https://github.com/maxlyth/ha-paneld/issues/34) can eventually make every external command launched by the watchdog fail with `E2BIG`, consume one CPU core and stop recovering a dead `zgateway`. A reboot resets the problem only temporarily. See [Performance tuning](../performance.md#rule-out-the-legacy-stock-nspanel-pro-zigbee-watchdog-defect) for the evidence boundary and repair-safety requirements. The reporter-provided workaround has not yet been independently validated by the project. Community inspection of 4.0.12 and 4.6.0 did not find the vulnerable assignment.
@@ -159,7 +159,7 @@ The host stack is the **manufacturer's own** (eWeLink/Sonoff) gateway, versioned
 - **Gateway present** (firmware ≥ v2.2.0, or side-loaded) → ha-paneld detects it and publishes `switch.<panel>_zigbee_router`. Toggle ON and the panel joins your coordinator as a router.
 - **No gateway** (very old firmware, never provisioned) → the switch **doesn't appear** — it's gated on the gateway's launch script existing. Update firmware (≥ v2.2.0), or see migration below.
 
-ha-paneld **drives** the gateway; it doesn't ship or install it (it's eWeLink's binary). Recent firmware (4.x) adds a Matter bridge + a direct HA Zigbee integration — alternatives to the router role.
+ha-paneld **drives** the gateway; it doesn't ship or install it (it's eWeLink's binary). Recent firmware (4.x) adds a Matter bridge and can export Zigbee devices to Home Assistant through MQTT Discovery — alternatives to the router role.
 
 ### Gateway health and automatic containment
 

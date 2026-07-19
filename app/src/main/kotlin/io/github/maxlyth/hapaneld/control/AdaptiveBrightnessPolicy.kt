@@ -51,7 +51,70 @@ internal data class BaselineEstimate(
     val madLogLux: Double,
     val coveredDays: Int,
     val matchedMinutes: Int,
+    val brightnessRange: AdaptiveBrightnessRange = AdaptiveBrightnessRange.FIXED,
 )
+
+internal data class AdaptiveRangeEvidence(
+    val logLux: Double,
+    val coverageMs: Long,
+    val dayKey: Int,
+)
+
+/** Robust room-scale anchors compiled with the retained baseline evidence. */
+internal data class AdaptiveBrightnessRange(
+    val lowLogLux: Double,
+    val highLogLux: Double,
+    val learnedWeight: Double,
+) {
+    val lowLux: Double get() = exp(lowLogLux) - 1.0
+    val highLux: Double get() = exp(highLogLux) - 1.0
+
+    companion object {
+        val FIXED = AdaptiveBrightnessRange(0.0, 0.0, 0.0)
+
+        fun estimate(evidence: List<AdaptiveRangeEvidence>): AdaptiveBrightnessRange {
+            if (evidence.isEmpty()) return FIXED
+            val sorted = evidence.asSequence()
+                .filter { it.logLux.isFinite() && it.logLux >= 0.0 && it.coverageMs > 0L }
+                .sortedBy(AdaptiveRangeEvidence::logLux)
+                .toList()
+            val totalCoverageMs = sorted.sumOf(AdaptiveRangeEvidence::coverageMs)
+            if (totalCoverageMs <= 0L) return FIXED
+            val low = weightedQuantile(sorted, LOW_QUANTILE, totalCoverageMs)
+            val high = weightedQuantile(sorted, HIGH_QUANTILE, totalCoverageMs)
+            if (!low.isFinite() || !high.isFinite() || high - low < MIN_LOG_SPAN) return FIXED
+
+            val coveredDays = sorted.groupBy(AdaptiveRangeEvidence::dayKey)
+                .count { (_, day) -> day.sumOf(AdaptiveRangeEvidence::coverageMs) >= MIN_COVERED_DAY_MS }
+            val coverageWeight = ((totalCoverageMs - PARTIAL_COVERAGE_MS).toDouble() /
+                (FULL_COVERAGE_MS - PARTIAL_COVERAGE_MS)).coerceIn(0.0, 1.0)
+            val dayWeight = ((coveredDays - 1) / 2.0).coerceIn(0.0, 1.0)
+            val learnedWeight = coverageWeight * dayWeight
+            return if (learnedWeight <= 0.0) FIXED else AdaptiveBrightnessRange(low, high, learnedWeight)
+        }
+
+        private fun weightedQuantile(
+            sorted: List<AdaptiveRangeEvidence>,
+            quantile: Double,
+            totalCoverageMs: Long,
+        ): Double {
+            val target = totalCoverageMs * quantile
+            var cumulative = 0L
+            sorted.forEach { sample ->
+                cumulative += sample.coverageMs
+                if (cumulative >= target) return sample.logLux
+            }
+            return sorted.last().logLux
+        }
+
+        private const val LOW_QUANTILE = 0.05
+        private const val HIGH_QUANTILE = 0.95
+        private const val MIN_LOG_SPAN = 1.0
+        private const val MIN_COVERED_DAY_MS = 30L * 60_000L
+        private const val PARTIAL_COVERAGE_MS = 2L * 60L * 60_000L
+        private const val FULL_COVERAGE_MS = 18L * 60L * 60_000L
+    }
+}
 
 /** Keeps the full seven-day fit off the real-time path. A rebuild is an intentional short burst. */
 internal class AdaptiveBaselineCache(
@@ -110,6 +173,13 @@ internal object AdaptiveAmbientModel {
             .filter { it.baselineCoverageMs >= MIN_BASELINE_COVERAGE_MS }
             .mapNotNull { row -> row.baselineMeanLogLux?.let { row to it } }
             .toList()
+        val brightnessRange = AdaptiveBrightnessRange.estimate(eligible.map { (row, logLux) ->
+            AdaptiveRangeEvidence(
+                logLux = logLux,
+                coverageMs = row.baselineCoverageMs,
+                dayKey = localDayKey(row.key.minute * AMBIENT_MINUTE_MS, zone),
+            )
+        })
         val timeCandidates = eligible.filter { (row, _) ->
             val rowMs = row.key.minute * AMBIENT_MINUTE_MS
             circularMinuteDistance(localMinuteOfDay(rowMs, zone), currentMinuteOfDay) <= NIGHT_BIN_MINUTES
@@ -135,7 +205,7 @@ internal object AdaptiveAmbientModel {
         }
         val days = candidates.groupBy { localDay(it.first.key.minute * AMBIENT_MINUTE_MS, zone) }
             .count { (_, dayRows) -> dayRows.sumOf { it.first.baselineCoverageMs } >= MIN_COVERED_DAY_MS }
-        return BaselineEstimate(expected, mad.coerceAtLeast(MIN_MAD), days, candidates.size)
+        return BaselineEstimate(expected, mad.coerceAtLeast(MIN_MAD), days, candidates.size, brightnessRange)
     }
 
     fun mode(sessionCoverageMs: Long, coveredDays: Int): AdaptiveModelMode = when {
@@ -168,6 +238,11 @@ internal object AdaptiveAmbientModel {
         "${get(Calendar.YEAR)}-${get(Calendar.DAY_OF_YEAR)}"
     }
 
+    private fun localDayKey(epochMs: Long, zone: TimeZone): Int = Calendar.getInstance(zone).run {
+        timeInMillis = epochMs
+        get(Calendar.YEAR) * 400 + get(Calendar.DAY_OF_YEAR)
+    }
+
     private fun circularMinuteDistance(a: Int, b: Int): Int = abs(a - b).let { minOf(it, 1440 - it) }
 
     private const val MIN_BASELINE_COVERAGE_MS = 15_000L
@@ -188,6 +263,7 @@ internal class AdaptiveChartBaselineLookup private constructor(
     private val zone: TimeZone,
     private val location: SolarLocation?,
     private val fallbackLogLux: Double,
+    val brightnessRange: AdaptiveBrightnessRange,
 ) {
     fun expectedLogLux(epochMs: Long): Double {
         val time = timeBins[localSlot(epochMs, zone)]
@@ -210,11 +286,13 @@ internal class AdaptiveChartBaselineLookup private constructor(
             val timeEvidence = arrayOfNulls<MutableList<Evidence>>(SLOTS_PER_DAY)
             val risingEvidence = if (location == null) null else arrayOfNulls<MutableList<Evidence>>(181)
             val settingEvidence = if (location == null) null else arrayOfNulls<MutableList<Evidence>>(181)
+            val rangeEvidence = mutableListOf<AdaptiveRangeEvidence>()
             rows.forEach { row ->
                 val logLux = row.baselineMeanLogLux ?: return@forEach
                 if (row.baselineCoverageMs < MIN_BASELINE_COVERAGE_MS) return@forEach
                 val epochMs = row.key.minute * AMBIENT_MINUTE_MS
                 val evidence = Evidence(logLux, localDayKey(epochMs, zone), row.baselineCoverageMs)
+                rangeEvidence += AdaptiveRangeEvidence(logLux, row.baselineCoverageMs, evidence.dayKey)
                 val slot = localSlot(epochMs, zone)
                 (timeEvidence[slot] ?: mutableListOf<Evidence>().also { timeEvidence[slot] = it }).add(evidence)
                 if (location != null) {
@@ -238,6 +316,7 @@ internal class AdaptiveChartBaselineLookup private constructor(
                 zone,
                 location,
                 fallbackLogLux,
+                AdaptiveBrightnessRange.estimate(rangeEvidence),
             )
         }
 
@@ -297,7 +376,7 @@ internal class AdaptiveChartBaselineLookup private constructor(
 }
 
 internal object AdaptiveLuxCurve {
-    const val VERSION = 1
+    const val VERSION = 3
     private val points = listOf(
         0.0 to 0.04,
         1.0 to 0.06,
@@ -307,7 +386,30 @@ internal object AdaptiveLuxCurve {
         10_000.0 to 1.0,
     )
 
-    fun rawBrightness(lux: Double): Int {
+    fun rawBrightness(
+        lux: Double,
+        range: AdaptiveBrightnessRange = AdaptiveBrightnessRange.FIXED,
+        minimumBrightness: Int = BrightnessController.MIN_VISIBLE,
+    ): Int {
+        val minimum = minimumBrightness.coerceIn(BrightnessController.MIN_VISIBLE, 255)
+        val fixedNative = fixedBrightness(lux)
+        val fixedFraction = (fixedNative - BrightnessController.MIN_VISIBLE).toDouble() /
+            (255 - BrightnessController.MIN_VISIBLE)
+        val fixed = (minimum + fixedFraction * (255 - minimum)).roundToInt()
+        if (range.learnedWeight <= 0.0) return fixed
+        val logLux = ln1p(lux.coerceAtLeast(0.0))
+        val learnedFraction = ((logLux - range.lowLogLux) /
+            (range.highLogLux - range.lowLogLux)).coerceIn(0.0, 1.0)
+        val learned = (minimum + learnedFraction * (255 - minimum)).roundToInt()
+        return (fixed + range.learnedWeight * (learned - fixed)).roundToInt()
+            .coerceIn(minimum, 255)
+    }
+
+    fun percentToBrightness(percent: Int): Int = (percent.coerceIn(0, 100) * 255 / 100.0)
+        .roundToInt()
+        .coerceIn(BrightnessController.MIN_VISIBLE, 255)
+
+    private fun fixedBrightness(lux: Double): Int {
         val safe = lux.coerceIn(0.0, points.last().first)
         val upperIndex = points.indexOfFirst { safe <= it.first }.let { if (it < 0) points.lastIndex else it }
         val fraction = when (upperIndex) {
@@ -320,7 +422,7 @@ internal object AdaptiveLuxCurve {
                 lower.second + t.coerceIn(0.0, 1.0) * (upper.second - lower.second)
             }
         }
-        return (fraction * 255.0).roundToInt().coerceIn(10, 255)
+        return (fraction * 255.0).roundToInt().coerceIn(BrightnessController.MIN_VISIBLE, 255)
     }
 }
 
@@ -356,11 +458,12 @@ internal class AdaptiveBrightnessPolicy {
         sensitivity: Int,
         zone: TimeZone = TimeZone.getDefault(),
         location: SolarLocation? = null,
+        minimumBrightness: Int = BrightnessController.MIN_VISIBLE,
     ): AdaptiveBrightnessResult? {
         if (nowMs < 0L || elapsedMs <= 0L || !lux.isFinite() || lux < 0.0) return null
         val fallback = if (smoothedDirectLog.isFinite()) smoothedDirectLog else ln1p(lux.coerceAtLeast(0.0))
         val estimate = AdaptiveAmbientModel.estimate(nowMs, history, zone, location, fallback)
-        return evaluate(nowMs, elapsedMs, lux, estimate, sensitivity)
+        return evaluate(nowMs, elapsedMs, lux, estimate, sensitivity, minimumBrightness = minimumBrightness)
     }
 
     /** O(1) real-time path using a baseline built by [AdaptiveBaselineCache]. */
@@ -371,6 +474,7 @@ internal class AdaptiveBrightnessPolicy {
         baseline: BaselineEstimate,
         sensitivity: Int,
         conditionElapsedMs: Long = elapsedMs,
+        minimumBrightness: Int = BrightnessController.MIN_VISIBLE,
     ): AdaptiveBrightnessResult? {
         if (nowMs < 0L || elapsedMs <= 0L || !lux.isFinite() || lux < 0.0) return null
         val elapsed = elapsedMs.coerceAtMost(MAX_EVALUATION_GAP_MS)
@@ -382,7 +486,7 @@ internal class AdaptiveBrightnessPolicy {
             smoothedDirectLog + alpha * (observedLog - smoothedDirectLog)
         }
         val estimate = if (baseline.matchedMinutes == 0) {
-            BaselineEstimate(smoothedDirectLog, baseline.madLogLux, baseline.coveredDays, 0)
+            baseline.copy(expectedLogLux = smoothedDirectLog, matchedMinutes = 0)
         } else baseline
         val mode = AdaptiveAmbientModel.mode(sessionCoverageMs, estimate.coveredDays)
         val expectedLog = when (mode) {
@@ -443,7 +547,7 @@ internal class AdaptiveBrightnessPolicy {
         }
         val effectiveLux = expm1Safe(effectiveLog)
         return AdaptiveBrightnessResult(
-            brightness = AdaptiveLuxCurve.rawBrightness(effectiveLux),
+            brightness = AdaptiveLuxCurve.rawBrightness(effectiveLux, estimate.brightnessRange, minimumBrightness),
             effectiveLux = effectiveLux,
             expectedLux = expm1Safe(expectedLog),
             brighterThanExpected = boost,
@@ -481,6 +585,8 @@ internal object AdaptiveChartProjection {
     fun fiveMinute(
         rows: List<AmbientHistoryMinute>,
         sensitivity: Int = 50,
+        brightnessRange: AdaptiveBrightnessRange = AdaptiveBrightnessRange.FIXED,
+        minimumBrightness: Int = BrightnessController.MIN_VISIBLE,
         expectedLogLux: (Long) -> Double,
     ): List<AdaptiveChartPoint> =
         rows.groupBy { floor(it.key.minute / 5.0).toLong() * 5L }
@@ -499,7 +605,11 @@ internal object AdaptiveChartProjection {
                     minLux = bucket.minOf { it.minLux },
                     maxLux = bucket.maxOf { it.maxLux },
                     expectedLux = expected.coerceAtLeast(0.0),
-                    proposedBrightness = AdaptiveLuxCurve.rawBrightness(projectedLux),
+                    proposedBrightness = AdaptiveLuxCurve.rawBrightness(
+                        projectedLux,
+                        brightnessRange,
+                        minimumBrightness,
+                    ),
                 )
             }
 }

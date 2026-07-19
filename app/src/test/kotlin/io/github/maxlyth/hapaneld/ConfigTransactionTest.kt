@@ -15,6 +15,20 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 class ConfigTransactionTest {
+    @Test fun automaticBrightnessMinimumDefaultsAndPersistsWithinPublicBounds() {
+        val prefs = fakePreferences()
+        val config = Config(prefs.instance)
+
+        assertEquals(4, config.autoBrightnessMinimumPercent)
+        config.setAutoBrightnessMinimumPercent(30)
+        assertEquals(30, config.autoBrightnessMinimumPercent)
+        assertEquals(30, prefs.values["auto_brightness_minimum_percent"])
+        config.setAutoBrightnessMinimumPercent(0)
+        assertEquals(4, config.autoBrightnessMinimumPercent)
+        config.setAutoBrightnessMinimumPercent(100)
+        assertEquals(95, config.autoBrightnessMinimumPercent)
+    }
+
     @Test fun hardenedSecurityAndOwnedNetworkAdbAreDurablyMutuallyExclusive() {
         val prefs = fakePreferences()
         val config = Config(prefs.instance)

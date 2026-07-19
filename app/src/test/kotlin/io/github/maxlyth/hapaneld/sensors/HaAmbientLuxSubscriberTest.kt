@@ -1,5 +1,7 @@
 package io.github.maxlyth.hapaneld.sensors
 
+import io.github.maxlyth.hapaneld.HaAuthSnapshot
+import io.github.maxlyth.hapaneld.stableOwner
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.channels.Channel
@@ -15,6 +17,90 @@ import org.junit.Test
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class HaAmbientLuxSubscriberTest {
+    @Test fun `source validation reads only the exact state without disturbing the live source`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val connection = FakeConnection()
+        val transport = FakeTransport(connection)
+        val samples = mutableListOf<HaAmbientLuxSample>()
+        val subscriber = subscriber(dispatcher, transport, samples, mutableListOf())
+
+        val result = subscriber.validateSource(ENTITY)
+
+        assertTrue(result is HaAmbientSourceValidation.Ready)
+        assertEquals(1, transport.stateCount)
+        assertEquals(0, transport.statesCount)
+        assertEquals(0, transport.subscribeCount)
+        assertTrue(samples.isEmpty())
+        assertEquals(HaAmbientSourcePhase.DISABLED, subscriber.latestStatus().phase)
+        subscriber.close()
+    }
+
+    @Test fun `source validation distinguishes missing and nonnumeric state`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val transport = FakeTransport(FakeConnection()).apply {
+            stateResult = CompletableDeferred<JSONObject?>().also { it.complete(null) }
+        }
+        val subscriber = subscriber(dispatcher, transport, mutableListOf(), mutableListOf())
+
+        val missing = subscriber.validateSource(ENTITY) as HaAmbientSourceValidation.Rejected
+        assertEquals("ha-source-missing", missing.error)
+
+        transport.stateResult = CompletableDeferred<JSONObject?>().also {
+            it.complete(state("unavailable", "2026-07-17T10:00:00Z"))
+        }
+        val unavailable = subscriber.validateSource(ENTITY) as HaAmbientSourceValidation.Rejected
+        assertEquals("ha-source-unavailable", unavailable.error)
+        subscriber.close()
+    }
+
+    @Test fun `source validation retries one authentication rejection with a forced session`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val transport = FakeTransport(FakeConnection()).apply { rejectStates = 1 }
+        val forces = mutableListOf<Boolean>()
+        val subscriber = HaAmbientLuxSubscriber(
+            scope = this,
+            auth = HaApiSessionProvider { force ->
+                forces += force
+                HaApiSession("https://ha.example", "token-${forces.size}", owner = OWNER)
+            },
+            transport = transport,
+            onSample = {},
+            onStatus = {},
+            onCandidates = {},
+            workerDispatcher = dispatcher,
+        )
+
+        assertTrue(subscriber.validateSource(ENTITY) is HaAmbientSourceValidation.Ready)
+        assertEquals(listOf(false, true), forces)
+        assertEquals(2, transport.stateCount)
+        subscriber.close()
+    }
+
+    @Test fun `source validation rejects numeric sensors that are not illuminance`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val transport = FakeTransport(FakeConnection()).apply {
+            stateResult = CompletableDeferred<JSONObject?>().also {
+                it.complete(state("21.5", "2026-07-17T10:00:00Z", deviceClass = "temperature", unit = "°C"))
+            }
+        }
+        val subscriber = subscriber(dispatcher, transport, mutableListOf(), mutableListOf())
+
+        val rejected = subscriber.validateSource(ENTITY) as HaAmbientSourceValidation.Rejected
+        assertEquals("ha-source-unavailable", rejected.error)
+        subscriber.close()
+    }
+
+    @Test fun `credential owner ignores access refresh but detects credential replacement`() {
+        val refreshedAccess = OWNER_SNAPSHOT.copy(accessToken = "access-2", tokenExpiry = 9999)
+        assertEquals(OWNER, refreshedAccess.stableOwner())
+        assertTrue(OWNER != OWNER_SNAPSHOT.copy(refreshToken = "refresh-2").stableOwner())
+        assertTrue(OWNER != OWNER_SNAPSHOT.copy(clientId = "client-2").stableOwner())
+        assertTrue(
+            OWNER_SNAPSHOT.copy(refreshToken = "", accessToken = "static-1").stableOwner() !=
+                OWNER_SNAPSHOT.copy(refreshToken = "", accessToken = "static-2").stableOwner(),
+        )
+    }
+
     @Test fun `candidate discovery is lazy single flight and ttl cached`() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val transport = FakeTransport(FakeConnection())
@@ -159,7 +245,7 @@ class HaAmbientLuxSubscriberTest {
         statuses: MutableList<HaAmbientSourceStatus>,
     ) = HaAmbientLuxSubscriber(
         scope = this,
-        auth = HaApiSessionProvider { HaApiSession("https://ha.example", "token") },
+        auth = HaApiSessionProvider { HaApiSession("https://ha.example", "token", owner = OWNER) },
         transport = transport,
         onSample = samples::add,
         onStatus = statuses::add,
@@ -183,6 +269,8 @@ class HaAmbientLuxSubscriberTest {
         var rejectSubscriptions = 0
         var subscribeCount = 0
         var statesCount = 0
+        var stateCount = 0
+        var rejectStates = 0
         var stateResult: CompletableDeferred<JSONObject?> =
             CompletableDeferred(state("1", "2026-07-17T09:00:00Z"))
 
@@ -192,17 +280,28 @@ class HaAmbientLuxSubscriberTest {
             return connections.removeFirst()
         }
 
-        override suspend fun state(baseUrl: String, accessToken: String, entityId: String): JSONObject? = stateResult.await()
+        override suspend fun state(baseUrl: String, accessToken: String, entityId: String): JSONObject? {
+            stateCount++
+            if (rejectStates-- > 0) throw HaAuthenticationException("rejected")
+            return stateResult.await()
+        }
         override suspend fun states(baseUrl: String, accessToken: String): JSONArray = JSONArray().also { statesCount++ }
         override suspend fun config(baseUrl: String, accessToken: String): JSONObject = JSONObject()
     }
 
     private companion object {
         const val ENTITY = "sensor.room_illuminance"
-        fun state(value: String, updated: String) = JSONObject()
+        val OWNER_SNAPSHOT = HaAuthSnapshot("https://ha.example", "access-1", "refresh-1", 1234, "client-1")
+        val OWNER = OWNER_SNAPSHOT.stableOwner()
+        fun state(
+            value: String,
+            updated: String,
+            deviceClass: String = "illuminance",
+            unit: String = "lx",
+        ) = JSONObject()
             .put("entity_id", ENTITY)
             .put("state", value)
             .put("last_updated", updated)
-            .put("attributes", JSONObject())
+            .put("attributes", JSONObject().put("device_class", deviceClass).put("unit_of_measurement", unit))
     }
 }

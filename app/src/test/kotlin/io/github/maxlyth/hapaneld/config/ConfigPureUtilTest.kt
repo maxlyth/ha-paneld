@@ -111,12 +111,22 @@ class MigrationsTest {
         assertTrue(w.any { it.contains("newer") })
     }
 
-    @Test fun olderWithoutRegisteredMigrationWarns() {
-        // Only meaningful once SCHEMA > 1; with an empty chain a gap is reported, not thrown.
-        if (SettingsRegistry.SCHEMA > 1) {
-            val (_, w) = Migrations.migrate(1, mapOf("a" to "1"))
-            assertTrue(w.isNotEmpty())
-        }
+    @Test fun schemaOneAddsTheBackwardCompatibleAutomaticBrightnessFloor() {
+        val (migrated, warnings) = Migrations.migrate(1, mapOf("a" to "1"))
+
+        assertEquals("1", migrated["a"])
+        assertEquals("4", migrated["auto_brightness_minimum_percent"])
+        assertTrue(warnings.isEmpty())
+    }
+
+    @Test fun schemaOnePreservesAnExplicitAutomaticBrightnessFloor() {
+        val (migrated, warnings) = Migrations.migrate(
+            1,
+            mapOf("auto_brightness_minimum_percent" to "25"),
+        )
+
+        assertEquals("25", migrated["auto_brightness_minimum_percent"])
+        assertTrue(warnings.isEmpty())
     }
 }
 

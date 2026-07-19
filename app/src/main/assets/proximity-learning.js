@@ -18,6 +18,7 @@
   var card = node("section", "card prox-learning");
   card.id = "cfg-proximity-learning";
   var heading = node("h2", "", "Presence & wake");
+  heading.appendChild(node("span", "cardbadge exp", "experimental"));
   var state = node("p", "prox-learning-state", "Waiting for sensor status…");
   var detail = node("p", "note", "Learning runs locally. Touch-to-wake remains available while it learns.");
   var evidence = node("p", "muted prox-learning-evidence", "");

@@ -2,6 +2,7 @@ package io.github.maxlyth.hapaneld.sensors
 
 import android.util.Log
 import io.github.maxlyth.hapaneld.Config
+import io.github.maxlyth.hapaneld.HaAuthOwner
 import io.github.maxlyth.hapaneld.dashboard.EntityFilterProtocol
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
@@ -50,6 +51,11 @@ data class HaAmbientCandidateProjection(
     val refreshedAtEpochMs: Long = 0L,
     val error: String = "",
 )
+
+internal sealed interface HaAmbientSourceValidation {
+    data class Ready(val authOwner: HaAuthOwner) : HaAmbientSourceValidation
+    data class Rejected(val statusCode: Int, val error: String, val message: String) : HaAmbientSourceValidation
+}
 
 enum class HaAmbientSourcePhase {
     DISABLED,
@@ -181,6 +187,54 @@ class HaAmbientLuxSubscriber internal constructor(
         }
     }
 
+    /**
+     * Read one exact entity before a configuration save commits it as the active source. This shares
+     * the renderer's refresh-safe credential owner, retries one rejected access token through that
+     * owner, and never disturbs the currently subscribed source.
+     */
+    internal suspend fun validateSource(entityId: String): HaAmbientSourceValidation {
+        validateEntityId(entityId)
+        return try {
+            val (state, owner) = try {
+                readSourceState(entityId, forceAuth = false)
+            } catch (_: HaAuthenticationException) {
+                readSourceState(entityId, forceAuth = true)
+            }
+            when {
+                state == null -> HaAmbientSourceValidation.Rejected(
+                    422,
+                    "ha-source-missing",
+                    "Home Assistant cannot find that entity. Check the entity id and try again.",
+                )
+                !HaAmbientLuxProtocol.hasUsableLux(state, entityId) -> HaAmbientSourceValidation.Rejected(
+                    422,
+                    "ha-source-unavailable",
+                    "The selected entity is not currently reporting a numeric light level.",
+                )
+                owner == null -> HaAmbientSourceValidation.Rejected(
+                    409,
+                    "ha-source-validation-stale",
+                    "Home Assistant settings changed during the check. Try again.",
+                )
+                else -> HaAmbientSourceValidation.Ready(owner)
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: HaAuthenticationException) {
+            HaAmbientSourceValidation.Rejected(
+                422,
+                "ha-authentication-failed",
+                "Home Assistant rejected the panel sign-in. Reconnect Home Assistant and try again.",
+            )
+        } catch (_: Throwable) {
+            HaAmbientSourceValidation.Rejected(
+                503,
+                "ha-source-check-failed",
+                "The panel could not read that entity from Home Assistant. Check the connection and try again.",
+            )
+        }
+    }
+
     override fun close() {
         synchronized(lock) {
             if (stopped) return
@@ -213,6 +267,14 @@ class HaAmbientLuxSubscriber internal constructor(
             transport.states(session.baseUrl, checkNotNull(session.accessToken))
         }
         return HaAmbientLuxProtocol.candidates(states)
+    }
+
+    private suspend fun readSourceState(entityId: String, forceAuth: Boolean): Pair<JSONObject?, HaAuthOwner?> {
+        val session = resolveSession(forceAuth)
+        val state = withContext(workerDispatcher) {
+            transport.state(session.baseUrl, checkNotNull(session.accessToken), entityId)
+        }
+        return state to session.owner
     }
 
     private suspend fun runSource(run: Long, entityId: String) {
@@ -460,8 +522,7 @@ internal object HaAmbientLuxProtocol {
             if (!entityId.startsWith("sensor.") || !isValidEntityId(entityId)) continue
             val attributes = state.optJSONObject("attributes") ?: JSONObject()
             val unit = attributes.optString("unit_of_measurement").trim()
-            val deviceClass = attributes.optString("device_class").lowercase(Locale.ROOT)
-            if (deviceClass != "illuminance" && unit.lowercase(Locale.ROOT) !in LUX_UNITS) continue
+            if (!isIlluminance(state)) continue
             val lux = finiteNonNegative(state.optString("state"))
             projected += HaAmbientLuxCandidate(
                 entityId = entityId,
@@ -480,12 +541,21 @@ internal object HaAmbientLuxProtocol {
 
     fun sample(state: JSONObject, expectedEntityId: String): Pair<Double, Long>? {
         if (state.optString("entity_id") != expectedEntityId) return null
+        if (!isIlluminance(state)) return null
         val lux = finiteNonNegative(state.optString("state")) ?: return null
         return lux to (timestamp(state) ?: return null)
     }
 
     fun hasUsableLux(state: JSONObject, expectedEntityId: String): Boolean =
-        state.optString("entity_id") == expectedEntityId && finiteNonNegative(state.optString("state")) != null
+        state.optString("entity_id") == expectedEntityId && isIlluminance(state) &&
+            finiteNonNegative(state.optString("state")) != null
+
+    private fun isIlluminance(state: JSONObject): Boolean {
+        val attributes = state.optJSONObject("attributes") ?: return false
+        val unit = attributes.optString("unit_of_measurement").trim().lowercase(Locale.ROOT)
+        val deviceClass = attributes.optString("device_class").trim().lowercase(Locale.ROOT)
+        return deviceClass == "illuminance" || unit in LUX_UNITS
+    }
 
     private fun timestamp(state: JSONObject): Long? {
         val raw = state.optString("last_updated").ifBlank { state.optString("last_changed") }

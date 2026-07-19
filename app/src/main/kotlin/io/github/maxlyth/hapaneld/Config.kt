@@ -33,6 +33,21 @@ internal data class HaAuthSnapshot(
     val clientId: String,
 )
 
+/** Credential ownership that remains stable while a refresh token rotates its current access token. */
+internal data class HaAuthOwner(
+    val url: String,
+    val refreshToken: String,
+    val clientId: String,
+    val staticAccessToken: String,
+)
+
+internal fun HaAuthSnapshot.stableOwner(): HaAuthOwner = HaAuthOwner(
+    url = url.trim().trimEnd('/'),
+    refreshToken = refreshToken,
+    clientId = clientId,
+    staticAccessToken = accessToken.takeIf { refreshToken.isBlank() }.orEmpty(),
+)
+
 internal data class DashboardEntityBackupState(
     val instanceKey: String,
     val instanceOrigin: String,
@@ -1201,6 +1216,13 @@ class Config private constructor(
         get() = prefs.getInt("auto_brightness_sensitivity", 50).coerceIn(0, 100)
     fun setAutoBrightnessSensitivity(value: Int) {
         edit { putInt("auto_brightness_sensitivity", value.coerceIn(0, 100)) }
+    }
+
+    /** Lowest automatic target in user-facing percent; the actuator's visible floor remains absolute. */
+    val autoBrightnessMinimumPercent: Int
+        get() = prefs.getInt("auto_brightness_minimum_percent", 4).coerceIn(4, 95)
+    fun setAutoBrightnessMinimumPercent(value: Int) {
+        edit { putInt("auto_brightness_minimum_percent", value.coerceIn(4, 95)) }
     }
 
     /** Exact HA illuminance entity selected instead of the local ALS; blank uses the panel sensor. */

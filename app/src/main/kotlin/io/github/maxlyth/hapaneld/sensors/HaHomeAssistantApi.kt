@@ -2,6 +2,8 @@ package io.github.maxlyth.hapaneld.sensors
 
 import io.github.maxlyth.hapaneld.Config
 import io.github.maxlyth.hapaneld.DashboardAuth
+import io.github.maxlyth.hapaneld.HaAuthOwner
+import io.github.maxlyth.hapaneld.stableOwner
 import io.github.maxlyth.hapaneld.dashboard.EntityFilterProtocol
 import io.github.maxlyth.hapaneld.util.BoundedStreams
 import io.ktor.client.HttpClient
@@ -24,6 +26,7 @@ internal data class HaApiSession(
     val baseUrl: String,
     val accessToken: String?,
     val rejected: Boolean = false,
+    val owner: HaAuthOwner? = null,
 )
 
 internal fun interface HaApiSessionProvider {
@@ -39,7 +42,15 @@ internal class DashboardHaApiSessionProvider(private val config: Config) : HaApi
             force = force,
             stillCurrent = { config.haUrl.trim().trimEnd('/') == expectedUrl },
         )
-        return HaApiSession(expectedUrl, result.session?.accessToken, result.rejected)
+        val current = config.haAuthSnapshot()
+        val ownsSession = result.session?.accessToken != null &&
+            current.url.trim().trimEnd('/') == expectedUrl && current.accessToken == result.session.accessToken
+        return HaApiSession(
+            expectedUrl,
+            result.session?.accessToken,
+            result.rejected,
+            current.takeIf { ownsSession }?.stableOwner(),
+        )
     }
 }
 

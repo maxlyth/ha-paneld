@@ -233,7 +233,10 @@ internal class AutoBrightnessController(
     }
 
     internal fun historyRows(): List<AmbientHistoryMinute> = history.history()
-    @Synchronized internal fun chartPoints(sensitivity: Int = config.autoBrightnessSensitivity): List<AdaptiveChartPoint> {
+    @Synchronized internal fun chartPoints(
+        sensitivity: Int = config.autoBrightnessSensitivity,
+        minimumPercent: Int = config.autoBrightnessMinimumPercent,
+    ): List<AdaptiveChartPoint> {
         val rows = history.history()
         val fallback = rows.lastOrNull()?.meanLux?.let(::ln1p) ?: 0.0
         if (chartLookup == null || rows !== chartRowsIdentity || chartZoneId != zone.id || chartLocation != location) {
@@ -243,7 +246,13 @@ internal class AutoBrightnessController(
             chartLocation = location
         }
         val lookup = checkNotNull(chartLookup)
-        return AdaptiveChartProjection.fiveMinute(rows, sensitivity, lookup::expectedLogLux)
+        return AdaptiveChartProjection.fiveMinute(
+            rows = rows,
+            sensitivity = sensitivity,
+            brightnessRange = lookup.brightnessRange,
+            minimumBrightness = AdaptiveLuxCurve.percentToBrightness(minimumPercent),
+            expectedLogLux = lookup::expectedLogLux,
+        )
     }
     internal fun solarLocation(): SolarLocation? = location
     internal fun timeZone(): TimeZone = zone
@@ -321,6 +330,7 @@ internal class AutoBrightnessController(
             baseline = estimate,
             sensitivity = config.autoBrightnessSensitivity,
             conditionElapsedMs = conditionElapsed,
+            minimumBrightness = AdaptiveLuxCurve.percentToBrightness(config.autoBrightnessMinimumPercent),
         ) ?: return CALM_EVALUATION_MS
         lastResult = result
         lastEvaluatedLux = lux

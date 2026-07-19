@@ -16,10 +16,12 @@ object Migrations {
     }
 
     /**
-     * CHAIN[i] migrates schema (i+1) → (i+2). Empty while SCHEMA == 1 (current shape). When the
-     * persisted shape next changes, bump [SettingsRegistry.SCHEMA] and append the transform here.
+     * CHAIN[i] migrates schema (i+1) → (i+2). When the persisted shape next changes, bump
+     * [SettingsRegistry.SCHEMA] and append the transform here.
      */
-    val CHAIN: List<Migration> = emptyList()
+    val CHAIN: List<Migration> = listOf(
+        Migration { values -> values.putIfAbsent("auto_brightness_minimum_percent", "4") },
+    )
 
     /**
      * Upgrade [values] from [fromSchema] to [SettingsRegistry.SCHEMA]. Returns the migrated map plus

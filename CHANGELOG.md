@@ -6,7 +6,7 @@
 
 ### Added
 
-- **Auto-brightness adapts to each room** — it learns from light readings collected over the past seven days, follows the normal daylight pattern and reacts to changes such as a room light switching on. It can use the panel's own sensor or a light-level sensor in Home Assistant, provides a sensitivity preview and pauses after a manual brightness change until automatic control is resumed.
+- **Auto-brightness adapts to each room** — it learns from light readings collected over the past seven days, follows the normal daylight pattern and reacts to changes such as a room light switching on. It can use the panel's own sensor or a light-level sensor in Home Assistant, lets you set the minimum automatic level and preview sensitivity changes, and pauses after a manual brightness change until automatic control is resumed.
 - **Proximity sensors now set themselves up automatically** — ha-paneld learns what the sensor reports when the room is empty and when someone approaches, including whether the reading rises or falls. Once it has enough reliable readings, Home Assistant receives occupancy and a simple 0–100 proximity level. A guided three-wave setup can teach it immediately, while brief sensor fluctuations are ignored instead of causing false presence.
 - **Optional Hardened mode requires approval on the panel for sensitive remote actions** — software changes, credential export or restore, profile activation, reboot and other sensitive maintenance require a one-time approval from the Android app's Configure toolbar. They cannot be approved remotely. A subtle shield identifies affected web actions even before Hardened mode is enabled. Existing installations remain in Relaxed mode unless Hardened mode is deliberately enabled on the panel.
 - **The software navigation bar has a dedicated Dashboard action** — it opens the configured dashboard without reloading it. Reload remains available separately if the dashboard needs recovery.[^issue-43]
@@ -28,6 +28,7 @@
 
 ### Fixed
 
+- **Selecting a Home Assistant light sensor now checks it before saving** — an unreadable, missing or non-numeric entity leaves the current ambient-light source and all other pending settings unchanged and explains what needs attention.
 - **Panels are less likely to become unavailable after settings, network or helper changes** — replaced tasks and MQTT connections now shut down cleanly, and losing privileged screen control no longer leaves ha-paneld permanently unresponsive.
 - **LED and button-backlight controls no longer return to off while brightness is changing** — commands from Home Assistant now reach the hardware reliably, and button-backlight entities use Home Assistant's normal light icon.
 - **CPU and temperature sensors now explain when the installed helper is too old** instead of silently disappearing.[^issue-21]

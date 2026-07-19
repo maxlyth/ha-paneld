@@ -2113,6 +2113,12 @@ internal class MqttBridge(
         onAutoBrightnessConfigChanged()
     }
 
+    private fun handleAutoBrightnessMinimum(payload: String) {
+        val value = payload.trim().trim('"').toIntOrNull() ?: return
+        config.setAutoBrightnessMinimumPercent(value)
+        autoBright.reapplyLatest()
+    }
+
     private fun handleAutoBrightnessHaEntity(payload: String) {
         config.setAutoBrightnessHaEntity(payload.trim().trim('"'))
         onAutoBrightnessConfigChanged()
@@ -2538,6 +2544,7 @@ internal class MqttBridge(
             "touch_sound" -> handleTouchSound(onOff)
             "network_adb" -> handleNetAdb(onOff)
             "zigbee_router" -> handleZigbee(onOff)
+            "auto_brightness_minimum_percent" -> handleAutoBrightnessMinimum(value)
             "auto_brightness_sensitivity" -> handleAutoBrightnessSensitivity(value)
             "auto_brightness_ha_entity" -> handleAutoBrightnessHaEntity(value)
             "cpu_governor" -> handleCpuGov(value)
@@ -3283,7 +3290,7 @@ internal class MqttBridge(
         internal val APPLY_SETTING_KEYS = setOf(
             "wake_on_wave", "prevent_idle_dim", "watchdog_enabled", "kiosk_lock",
             "silence_boot_chime", "auto_brightness", "touch_sound", "network_adb",
-            "zigbee_router", "auto_brightness_sensitivity", "auto_brightness_ha_entity",
+            "zigbee_router", "auto_brightness_minimum_percent", "auto_brightness_sensitivity", "auto_brightness_ha_entity",
             "cpu_governor", "navbar_mode",
             "companion_auto_update", "companion_update_channel", "self_update", "webview_auto_update",
             "update_channel", "home_dashboard",

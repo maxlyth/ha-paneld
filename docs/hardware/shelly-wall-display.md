@@ -1,38 +1,29 @@
 # Shelly Wall Display
 
 > [!NOTE]
-> **Research-only — no physical unit tested here.** Facts are sourced from firmware OTA analysis (including a device-tree parse of the modern partition image), the official [ShellyGroup/Wall-Display-Changelog](https://github.com/ShellyGroup/Wall-Display-Changelog), Shelly KB articles, the HA frontend issue tracker, and Pen Test Partners' security disclosure. The bundled [`shelly-wall-display.yaml`](../../app/src/main/assets/device-profiles/shelly-wall-display.yaml) legacy and [`shelly-wall-display-v2.yaml`](../../app/src/main/assets/device-profiles/shelly-wall-display-v2.yaml) modern profiles are implemented but remain **speculative** until verified on hardware.
+> **Research-only — no physical unit tested here.** Product specifications below come from Shelly's current product and knowledge-base pages; firmware behaviour comes from OTA analysis and the official [Wall Display changelog](https://github.com/ShellyGroup/Wall-Display-Changelog). The two bundled profiles predate the current model-specific specifications and remain **speculative** until they can be split and verified on hardware.
 
 ---
 
 ## Product family
 
-Shelly's wall-panel range uses the **`SAWD-*`** model prefix (Smart Android Wall Display). Seven SKUs across two hardware generations:
+Shelly's current range spans several distinct Android platforms. Firmware codenames are useful when inspecting an OTA, but should not be treated as a substitute for the retail model name.
 
-### Legacy (Android 7, armeabi-v7a)
-
-| SKU | Codename | Market name | Screen | Relays | Proximity |
-|---|---|---|---|---|---|
-| SAWD-0A1XX10EU1 | Stargate | Wall Display | 3.97" / 4" LCD colour touch | 1 | none |
-| SAWD-2A1XX10EU1 | Pegasus | Wall Display X2 | 6.9" | 2 | IR (gpio-keys) |
+| Firmware codename | Market name | Display | Platform | Relay hardware |
+|---|---|---|---|---|
+| Stargate | Wall Display (original) | 4", 480×480 | MT6580, Android 7 | 1 output |
+| Pegasus | [Wall Display X2](https://kb.shelly.cloud/knowledge-base/shelly-wall-display-x2) | 6.9", 1440×720 | SC7731E / Cortex-A7, Android 8.1 | 1 output |
+| Cally | [Wall Display X1i](https://kb.shelly.cloud/knowledge-base/shelly-wall-display-x1i) | 4", 720×720 | RK3326-S / Cortex-A35, Android 11 | interchangeable base: 1 output standard; optional 2-output base |
+| Jenna | [Wall Display X2i](https://kb.shelly.cloud/knowledge-base/shelly-wall-display-x2i) | 6.9", 1440×720 | RK3326-S / Cortex-A35, Android 11 | interchangeable base: 1 output standard; optional 2-output base |
+| Blake | [Wall Display XL](https://kb.shelly.cloud/knowledge-base/shelly-wall-display-xl) | 10.1" | RK3566 / Cortex-A55, Android 11 | 1 output |
+| Maverick | Wall Display U1 (US) | — | not established | — |
+| Dayna | Wall Display D1 | — | not established | — |
 
 > [!NOTE]
-> A third legacy variant, **"Atlantis"** (SAWD-1A1XX10EU1), is reported by the community project [ShellyElevate](https://github.com/RapierXbox/ShellyElevate) with 1 relay and IR proximity. It does not appear in Shelly's official SKU table or changelog and has not been independently confirmed; treat it as an undocumented variant rather than an official product.
-
-Legacy devices do not have AppStore support and will eventually stop receiving firmware updates. Firmware downgrading is **not supported** on modern devices.
-
-### Modern (Android 11, arm64-v8a)
-
-| Codename | Market name | Screen | Relays | Proximity |
-|---|---|---|---|---|
-| Jenna | Wall Display X2i | 720×1440 ~5.5" (firmware-confirmed) | 2 | STK3A5x (combo, like NSPanel Pro) |
-| Blake | Wall Display XL | 10.1" | 2 | reported LD2410 mmWave radar (unconfirmed) |
-| Cally | Wall Display X1i / XLi | compact | 2 | IR |
-| Maverick | Wall Display U1 (US) | — | 1 | IR |
-| Dayna | Wall Display D1 | display-only | 0 | IR |
+> A variant called **Atlantis** is reported by the community project [ShellyElevate](https://github.com/RapierXbox/ShellyElevate), but it has not been matched to a current official product page. Treat it as undocumented until it can be identified from a live unit.
 
 > [!CAUTION]
-> The `SAWD-*` SKU ↔ codename ↔ screen-size mapping circulating in community notes is **unreliable**. A partition OTA filed under SKU `SAWD-3A1XE10EU2` (claimed to be Blake/XL/10.1") actually asserts `ro.product.device == "Jenna"` and flashes a **5.5" Rockchip PX30** image. Match on the **codename** (`ro.product.device`), not the SKU prefix. Only **Jenna** has been confirmed from firmware so far; the other modern models' SoC and proximity hardware are inferred, and a 10.1" XL may well be a different SoC.
+> An archived partition image filed under an XL-like SKU identifies itself as `Jenna` and describes a different display platform. It is useful evidence about that image, but not reliable evidence for current retail product specifications. The official model pages above take precedence; use runtime identifiers when matching an actual device.
 
 ---
 
@@ -40,19 +31,9 @@ Legacy devices do not have AppStore support and will eventually stop receiving f
 
 The Wall Display is an **Android device**, not an ESP-based embedded product like Shelly Gen1/Gen2 switches. It runs a custom Android launcher app called "Stargate".
 
-| | Legacy (Stargate / Pegasus) | Modern (Jenna confirmed; others inferred) |
-|---|---|---|
-| SoC | MediaTek **MT6580** (`k400_mt6580_32_n`) | **Rockchip PX30** (Jenna — same SoC as the Sonoff NSPanel Pro) |
-| ABI | **armeabi-v7a** | **arm64-v8a** (64-bit userspace on PX30's Cortex-A35 cores) |
-| Android | 7.0 (`NRD90M`) | 11 (API 30, `RD2A.211001.002`); kernel Linux 4.19.232 |
-| Build type | userdebug / test-keys | userdebug / release-keys |
-| Wi-Fi | — | Wi-Fi 6 (XL) |
-| BT | BLE | BLE |
-| ODM | — | **Smatek** (DTB `smatek-keep-relay`; same maker as the [S9E](s9e.md)) |
+The original Wall Display, X2, X1i/X2i and XL are not one interchangeable hardware class: they use MT6580, SC7731E, RK3326-S and RK3566 respectively. The shared OTA channels describe package compatibility, not a shared SoC. Available firmware images are `userdebug` builds, so `adb root` may be possible *if* an ADB connection can be established, but no user-facing route has been verified.
 
-The "arm64" modern track is **not** an exotic SoC — at least the **Jenna (Wall Display X2i)** is a Rockchip PX30, the same chip as the NSPanel Pro, just running a 64-bit Android 11 userspace. Both legacy and modern firmware are **userdebug** builds, so `adb root` is likely available *if* an `adb` connection can be obtained (Developer options are not user-exposed — see *Access model*).
-
-Built-in sensors (Jenna, confirmed from the device tree): **STK3A5x** ambient-light + proximity combo (i2c 0x46 — the same sensor family as the NSPanel Pro), Goodix **GT9xx** touch, two GPIO relays via the Smatek latching driver, and a camera. The Blake/XL's "Motion" component (added 2.6.0) is **reported** to be an LD2410 mmWave radar. That is not hardware-confirmed, and no `ld2410` kernel driver appears in the firmware — so if the radar is present, it is a **UART-attached** module driven by the Stargate app (`libserial_port.so`), not an Android sensor.
+Shelly documents temperature and humidity sensing on the original and X2, and ambient-light sensing on the original, X2, X1i, X2i and XL. X2, X1i and X2i have documented proximity sensing; the XL has a motion sensor. Their exact components and app-independent Android access paths have not been established. Relay count is model- and base-dependent, and no app-accessible standard Android relay interface has been established.
 
 ---
 
@@ -81,9 +62,9 @@ The built-in browser WebView on the Wall Display XL had rendering/layout problem
 
 ### WebView
 
-**Legacy (MT6580, Android 7 — Stargate, Pegasus, Atlantis):** The stock system WebView is not included in the standard Shelly OTA packages — it comes from the base factory ROM and its exact version has not been established from available firmware. For the **Stargate** model (`SAWD-0A1XX10EU1`), Shelly publishes a separate WebView update package on the static CDN (`SAWD-0A1XX10EU1-WebViewUpdate.zip`, 107 MB) that installs `com.google.android.webview` **119.0.6045.194** (Chrome 119, ~Oct 2023, armeabi-v7a, minSDK 24/Android 7.0). Inspection of this ZIP: package installs to `system/app/GoogleWebView/GoogleWebView.apk`. There is no equivalent WebView update ZIP established for Atlantis or Pegasus — users on those models are limited to whatever the factory ROM ships.
+**Original Wall Display (`SAWD-0A1XX10EU1`, Android 7):** The stock system WebView is not included in the standard OTA package. Shelly publishes a separate update ZIP that installs `com.google.android.webview` **119.0.6045.194**. No equivalent package has been established for the other models.
 
-**Modern V2 (arm64, Android 11 — Jenna confirmed; Blake/Cally/Maverick/Dayna):** The standard Shelly OTA does not include a WebView package (the 2.7.1 OTA contains only app updates — Stargate.apk, Camera2.apk, ShellyPlaceholder.apk). The stock WebView version from the base image has not been extracted. (Note: the Stargate APK is *built against* the Android 13 SDK — `platformBuildVersion=13` — but the device OS is Android 11, per the partition OTA's build fingerprint.)
+**WallDisplayV2 track (arm64, Android 11):** The standard OTA does not include a WebView package. Its stock WebView version has not been established from the available firmware.
 
 ---
 
@@ -110,12 +91,12 @@ Sensor and relay details vary by model. From firmware and product pages:
 
 | Component | Notes |
 |---|---|
-| Temperature + humidity | Present on Stargate (4"), X2, and reportedly others |
-| Ambient light | STK3A5x ALS (Jenna, confirmed). Declared as `android.hardware.sensor.light` → readable via Android `SensorManager`. |
-| Proximity | **Jenna**: STK3A5x proximity (i2c 0x46), **enabled in the kernel** — the same sensor the NSPanel Pro exposes through `SensorManager`. The Stargate manifest doesn't declare the `sensor.proximity` *feature*, but feature tags are advisory, so the `SensorManager` proximity path likely still works — i.e. wake-on-wave may be possible **without** root (unverified on hardware). **Blake/XL**: reported LD2410 mmWave radar (see above) — UART-attached, app-only, not reachable. |
-| Relay | GPIO relays via Smatek's `smatek-keep-relay` latching driver (Jenna: GPIO 18/19 + a detect line on GPIO 20), 1–2 per model. Driven by Stargate internally over Gen2 RPC — no exported broadcast intents, no standard `/sys/class` path. |
+| Temperature + humidity | Documented on the original and X2. X1i, X2i and XL do not have built-in temperature/humidity sensors. Android API visibility is unverified. |
+| Ambient light | Documented on the original, X2, X1i, X2i and XL; Android `SensorManager` visibility is unverified on hardware. |
+| Motion / proximity | Proximity is documented on X2, X1i and X2i; the XL has an official motion sensor. Exact technology and Android API visibility remain unverified. |
+| Relay | One output on the original, X2 and XL. X1i/X2i ship with a one-output base and support a separately sold two-output base. No app-accessible standard control path has been established. |
 
-The relays and the radar are managed entirely by the Stargate launcher via Shelly's own RPC API — they surface to HA as **Shelly Gen2 entities** (use HA's Shelly integration), not via ha-paneld. Without root, ha-paneld can reach only what Android's own APIs report: ambient light, and **probably** proximity, via `SensorManager`.
+Relay entities should be handled through Home Assistant's Shelly integration rather than assumed to be directly controllable by ha-paneld. Sensor visibility to ordinary Android apps remains unverified.
 
 ---
 
@@ -139,9 +120,9 @@ An hourly check (added 2.6.0) and a startup check trigger automatically. The 2.7
 
 ### Update manifest endpoints (verified)
 
-There are **two firmware tracks** — one per hardware generation:
+There are **two firmware tracks**, divided by package ABI rather than one uniform hardware generation:
 
-#### Track 1 — Legacy (armeabi-v7a, Android 7: Stargate + Pegasus)
+#### Track 1 — WallDisplay (armeabi-v7a: original + X2)
 
 ```
 GET https://updates.shelly.cloud/update/WallDisplay
@@ -151,7 +132,7 @@ Covers SAWD-0A1XX10EU1 (Stargate) and SAWD-2A1XX10EU1 (Pegasus). The OTA updater
 
 Response (`stable.version`: `2.7.1`, `build_id`: `20260609-205046/2.7.1-857d7175`; CDN URL is a SHA-256-named blob — see note below).
 
-#### Track 2 — Modern (arm64-v8a, Android 11+: all five modern SKUs)
+#### Track 2 — WallDisplayV2 (arm64-v8a, Android 11 models)
 
 ```
 GET https://updates.shelly.cloud/update/WallDisplayV2
@@ -217,8 +198,8 @@ Firmware 2.6.0 disclosed that RPC-over-BLE was open to any BLE connection withou
 | 2.7.1 | 2026-06-10 | Automatic BT stack management (BLE on only when needed); aggressive BLE scan match; external sensor + BLE Gateway coupling |
 | 2.7.0 | 2026-06-03 | Multi-dashboard (XL: 5, X2i/Pegasus: 3, others: 1); HA WebView un-deprecated + cache clear; `Ui.OpenCameraFullscreen` RPC; OTA hardware sanity check; GATT non-connectable when RPC-over-BLE off |
 | 2.6.2 | 2026-05-20 | Shelly Camera tiles (live video stream); screensaver/brightness/thermostat fixes; auto-brightness fix X2i |
-| 2.6.1 | 2026-05-14 | Legacy SW-input-in-screensaver fix; language-change infinite loading fix |
-| 2.6.0 | 2026-05-12 | AppStore (modern only); Scripts (QuickJS); Virtual Components; Motion/Occupancy (XL radar); BLE auth dialog; Fahrenheit; hourly OTA check; HA WebView deprecated for AppStore models |
+| 2.6.1 | 2026-05-15 | Legacy SW-input-in-screensaver fix; language-change infinite loading fix |
+| 2.6.0 | 2026-05-12 | AppStore (modern only); Scripts (QuickJS); Virtual Components; Motion/Occupancy (XL); BLE auth dialog; Fahrenheit; hourly OTA check; HA WebView deprecated for AppStore models |
 | 2.5.8 | ~2026-02 | Thermostat schedule regression fix |
 | 2.5.7 | ~2026-01 | Layout/alarm/thermostat fixes; BLE RPC permission popup |
 | 2.5.6 | 2026-02-04 | Home page symmetry; WebView background pause on heavy HA dashboards (crash avoidance; also causes WebRTC reload) |
@@ -246,28 +227,28 @@ Full changelog: [ShellyGroup/Wall-Display-Changelog](https://github.com/ShellyGr
 
 ## Device profiles — what is known / what is unknown
 
-Two bundled YAML profiles are implemented: [`shelly-wall-display.yaml`](../../app/src/main/assets/device-profiles/shelly-wall-display.yaml) for the legacy MT6580 family and [`shelly-wall-display-v2.yaml`](../../app/src/main/assets/device-profiles/shelly-wall-display-v2.yaml) for the modern family. This section records what they declare from firmware analysis and what still needs a live unit.
+Two bundled YAML profiles currently follow the two OTA tracks: [`shelly-wall-display.yaml`](../../app/src/main/assets/device-profiles/shelly-wall-display.yaml) and [`shelly-wall-display-v2.yaml`](../../app/src/main/assets/device-profiles/shelly-wall-display-v2.yaml). The current product specifications show that an OTA track is too broad to represent model-specific SoC, display and relay facts. Treat those profile fields as preliminary until the profiles are split or made deliberately generic.
 
 ### Known / derivable from firmware
 
 | Field | `shelly-wall-display` (legacy) | `shelly-wall-display-v2` (modern) | Source |
 |---|---|---|---|
-| `soc_class` | `MediaTek MT6580` | `PX30 / rk3326 (Jenna confirmed; others unverified)` | OTA build fingerprint; modern DTB |
+| `soc_class` | currently MT6580, but the X2 is SC7731E | currently PX30/rk3326, but X1i/X2i are RK3326-S and XL is RK3566 | official model pages; OTA fingerprints |
 | `platform.su_form` / `app_can_su` | `none` / `false` | `none` / `false` | no user-exposed root (but userdebug — see *Access model*) |
-| `hardware.led.mechanism` | `none` | `none` | DTB: pwm-backlight only, no RGB LED node |
+| `hardware.led.mechanism` | `none` | `none` | current profile declaration; not verified across every model |
 | `hardware.screen_off` | `brightness-zero` | `brightness-zero` | no privileged screen-off path |
-| `hardware.relay_base` | absent | absent | GPIO relays driven by Stargate via Gen2 RPC — no app-reachable sysfs |
+| `hardware.relay_base` | absent | absent | relay operation is routed through the HA Shelly integration; no app-accessible standard path established |
 | `hardware.zigbee_gateway_dir` | absent | absent | no Zigbee/Thread radio |
-| `sensors.proximity_technology` | absent (IR via gpio-keys, root-gated) | `Infrared` (Jenna STK3A5x combo) | manifest declares only `sensor.light`; modern DTB enables STK3A5x proximity |
-| `sensors.light_technology` | `Ambient light` | `Ambient light` (STK3A5x ALS) | `android.hardware.sensor.light` declared |
+| `sensors.proximity_technology` | unverified per model | unverified per model | requires live hardware evidence |
+| `sensors.light_technology` | `Ambient light` | `Ambient light` | official model pages; Android API exposure unverified |
 | App package | `cloud.shelly.stargate` (Device Owner + home launcher) | same | Stargate APK manifest + `device_owner_2.xml` |
 
 ### Unknown — requires a live unit
 
-- Whether `SensorManager` proximity actually delivers on a modern unit (Jenna) — the high-value check: it would enable wake-on-wave without root, since the STK3A5x is enabled in the kernel.
-- SoC of the **non-Jenna** modern models — a 10.1" XL (Blake) may not be a PX30; only Jenna is parsed.
+- Exact runtime identifiers needed to split X2, X1i, X2i and XL without false-positive profile matches.
+- Whether Android `SensorManager` exposes each documented ambient-light or motion/proximity sensor.
 - `platform.has_recents` per model (the Stargate home image may suppress overview).
-- Display density defaults and an appropriate `provisioning.display.density` per model (Jenna 720×1440 ~5.5" ≈ 320 native).
+- Display density defaults and an appropriate `provisioning.display.density` per model.
 - Whether an `adb` foothold + `adb root` is reachable on the userdebug build (would unlock the daemon).
 - Whether ha-paneld's HTTP service (`:8888`) is reachable from the LAN (depends on the device's firewall).
 
@@ -277,6 +258,9 @@ Two bundled YAML profiles are implemented: [`shelly-wall-display.yaml`](../../ap
 
 - [ShellyGroup/Wall-Display-Changelog](https://github.com/ShellyGroup/Wall-Display-Changelog) — official firmware changelog
 - [Shelly Wall Display KB](https://kb.shelly.cloud/knowledge-base/shelly-wall-display) — original (4") KB
+- [Shelly Wall Display X2 KB](https://kb.shelly.cloud/knowledge-base/shelly-wall-display-x2)
+- [Shelly Wall Display X1i KB](https://kb.shelly.cloud/knowledge-base/shelly-wall-display-x1i)
+- [Shelly Wall Display X2i KB](https://kb.shelly.cloud/knowledge-base/shelly-wall-display-x2i)
 - [Shelly Wall Display XL KB](https://kb.shelly.cloud/knowledge-base/shelly-wall-display-xl) — XL KB
 - [Shelly Gen2 RPC API](https://shelly-api-docs.shelly.cloud/gen2/ComponentsAndServices/Shelly/) — `Shelly.CheckForUpdate` / `Shelly.Update`
 - [home-assistant/frontend#28755](https://github.com/home-assistant/frontend/issues/28755) — built-in browser WebView rendering issue (XL)

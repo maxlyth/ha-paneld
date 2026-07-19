@@ -7,6 +7,7 @@ import io.github.maxlyth.hapaneld.BuildConfig
 import io.github.maxlyth.hapaneld.DashboardEntityBackupState
 import io.github.maxlyth.hapaneld.normalizeDashboardEntityPath
 import io.github.maxlyth.hapaneld.peersJson
+import io.github.maxlyth.hapaneld.stableOwner
 import io.github.maxlyth.hapaneld.config.Capabilities
 import io.github.maxlyth.hapaneld.config.ConfigBundle
 import io.github.maxlyth.hapaneld.config.ConfigDiff
@@ -171,6 +172,7 @@ internal val PERFORMANCE_WORKLOAD_KEYS = listOf(
     "dashboard_zoom",
     "dark_mode",
     "auto_brightness",
+    "auto_brightness_minimum_percent",
     "auto_brightness_sensitivity",
     "auto_brightness_ha_entity",
     "cpu_governor",
@@ -367,9 +369,10 @@ internal sealed class ConfigPostParameters {
  * wired into the service. JSON is produced by the owner to avoid copying its snapshots here. */
 internal interface AutoBrightnessHttpApi {
     fun statusJson(): String
-    fun historyJson(hours: Int = 168, sensitivity: Int? = null): String
+    fun historyJson(hours: Int = 168, sensitivity: Int? = null, minimumPercent: Int? = null): String
     fun haSourcesJson(query: String, limit: Int): String
-    fun selectHaSource(entityId: String?): AutoBrightnessHttpAction
+    suspend fun validateHaSource(entityId: String): AutoBrightnessHttpValidation
+    suspend fun selectHaSource(entityId: String?): AutoBrightnessHttpAction
     fun resetHistory(): AutoBrightnessHttpAction
     fun resumeFullAuto(): AutoBrightnessHttpAction
 
@@ -378,13 +381,16 @@ internal interface AutoBrightnessHttpApi {
             override fun statusJson(): String =
                 """{"available":false,"state":"unavailable","detail":"Adaptive brightness runtime is not connected."}"""
 
-            override fun historyJson(hours: Int, sensitivity: Int?): String =
+            override fun historyJson(hours: Int, sensitivity: Int?, minimumPercent: Int?): String =
                 """{"available":false,"hours":$hours,"bucket_minutes":0,"points":[]}"""
 
             override fun haSourcesJson(query: String, limit: Int): String =
                 """{"available":false,"items":[]}"""
 
-            override fun selectHaSource(entityId: String?): AutoBrightnessHttpAction =
+            override suspend fun validateHaSource(entityId: String): AutoBrightnessHttpValidation =
+                AutoBrightnessHttpValidation(AutoBrightnessHttpAction.unavailable())
+
+            override suspend fun selectHaSource(entityId: String?): AutoBrightnessHttpAction =
                 AutoBrightnessHttpAction.unavailable()
 
             override fun resetHistory(): AutoBrightnessHttpAction = AutoBrightnessHttpAction.unavailable()
@@ -392,6 +398,11 @@ internal interface AutoBrightnessHttpApi {
         }
     }
 }
+
+internal data class AutoBrightnessHttpValidation(
+    val action: AutoBrightnessHttpAction,
+    val authOwner: io.github.maxlyth.hapaneld.HaAuthOwner? = null,
+)
 
 internal data class AutoBrightnessHttpAction(val statusCode: Int, val json: String) {
     init { require(statusCode in 200..599); require(json.isNotBlank()) }
@@ -405,11 +416,16 @@ internal data class AutoBrightnessHttpAction(val statusCode: Int, val json: Stri
     }
 }
 
-internal data class AutoBrightnessHistoryParameters(val hours: Int, val sensitivity: Int?)
+internal data class AutoBrightnessHistoryParameters(
+    val hours: Int,
+    val sensitivity: Int?,
+    val minimumPercent: Int?,
+)
 
 internal fun autoBrightnessHistoryParameters(
     hours: String?,
     sensitivity: String?,
+    minimumPercent: String? = null,
 ): AutoBrightnessHistoryParameters {
     val boundedHours = if (hours == null) 168 else hours.toIntOrNull()
         ?: throw IllegalArgumentException("hours must be between 1 and 168")
@@ -418,7 +434,11 @@ internal fun autoBrightnessHistoryParameters(
         it.toIntOrNull()?.takeIf { value -> value in 0..100 }
             ?: throw IllegalArgumentException("sensitivity must be between 0 and 100")
     }
-    return AutoBrightnessHistoryParameters(boundedHours, boundedSensitivity)
+    val boundedMinimum = minimumPercent?.let {
+        it.toIntOrNull()?.takeIf { value -> value in 4..95 }
+            ?: throw IllegalArgumentException("minimum_percent must be between 4 and 95")
+    }
+    return AutoBrightnessHistoryParameters(boundedHours, boundedSensitivity, boundedMinimum)
 }
 
 /**
@@ -1067,6 +1087,7 @@ class PaneldServer internal constructor(
                             autoBrightnessHistoryParameters(
                                 call.request.queryParameters["hours"],
                                 call.request.queryParameters["sensitivity"],
+                                call.request.queryParameters["minimum_percent"],
                             )
                         }.getOrElse {
                             return@get call.respondText(
@@ -1075,7 +1096,11 @@ class PaneldServer internal constructor(
                             )
                         }
                         call.respondText(
-                            autoBrightnessHttpApi.historyJson(request.hours, request.sensitivity),
+                            autoBrightnessHttpApi.historyJson(
+                                request.hours,
+                                request.sensitivity,
+                                request.minimumPercent,
+                            ),
                             ContentType.Application.Json,
                         )
                     }
@@ -3125,7 +3150,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
     // Display and install-backed values, each deep-linking to its owning surface.
     private fun displayRowsHtml(s: Snap): String {
         return listOf(
-            "auto_brightness", "auto_brightness_sensitivity", "auto_brightness_ha_entity",
+            "auto_brightness", "auto_brightness_minimum_percent", "auto_brightness_sensitivity", "auto_brightness_ha_entity",
         ).mapNotNull { settingRowHtml(it, s.live, liveCapabilities(s.caps)) }
             .joinToString("\n") + "\n" + listOfNotNull(
             s.densityCur?.let { """<tr><th>Logical density</th><td>$it dpi (factory base ${s.densityBase ?: "?"})${installIcon("cfg-display")}</td></tr>""" },
@@ -3585,6 +3610,33 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
             }
         }
         if (rejectHardenedNetworkAdb(call, p["network_adb"])) return
+        val previousAmbientSource = config.autoBrightnessHaEntity
+        var ambientSourceOwner: io.github.maxlyth.hapaneld.HaAuthOwner? = null
+        p["auto_brightness_ha_entity"]?.takeIf { it.isNotBlank() && it != previousAmbientSource }?.let { entityId ->
+            val connectionChangesBesideSource = p["ha_url"]?.trimEnd('/')?.let { it != config.haUrl.trimEnd('/') } == true ||
+                listOf("ha_token", "ha_refresh_token", "ha_token_expiry", "ha_client_id").any { p[it] != null }
+            if (connectionChangesBesideSource) {
+                call.respondText(
+                    """{"ok":false,"error":"ha-source-connection-change","message":"Save the Home Assistant connection first, then select the ambient light entity."}""",
+                    ContentType.Application.Json,
+                    HttpStatusCode.Conflict,
+                )
+                return
+            }
+            val validation = autoBrightnessHttpApi.validateHaSource(entityId)
+            if (validation.action.statusCode !in 200..299) {
+                respondAutoBrightnessAction(call, validation.action)
+                return
+            }
+            ambientSourceOwner = validation.authOwner ?: run {
+                call.respondText(
+                    """{"ok":false,"error":"ha-source-validation-stale","message":"Home Assistant settings changed during the check. Try again."}""",
+                    ContentType.Application.Json,
+                    HttpStatusCode.Conflict,
+                )
+                return
+            }
+        }
         val dashboardPackage = p["dashboard_package"]
         if (p["dashboard_idle_return_min"] != null &&
             (dashboardPackage ?: config.dashboardPackage) != SystemController.BUILTIN_DASHBOARD
@@ -3636,9 +3688,17 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
         var homeDashboardAppliedEarly = false
         var homeDashboardChangedEarly = false
         var rendererFailure: Throwable? = null
+        var ambientSourceValidationStale = false
         val committed = withContext(Dispatchers.IO) {
             rendererPreparation.transaction {
-                val previous = ConfigBundle.fromValues(
+                config.synchronizedTransaction {
+                    if (ambientSourceOwner != null &&
+                        (config.haAuthSnapshot().stableOwner() != ambientSourceOwner || config.autoBrightnessHaEntity != previousAmbientSource)
+                    ) {
+                        ambientSourceValidationStale = true
+                        return@synchronizedTransaction false
+                    }
+                    val previous = ConfigBundle.fromValues(
                     revisionValues(), kind = ConfigBundle.KIND_REVISION,
                     exportedAt = System.currentTimeMillis().toString(), exportedBy = config.panelId,
                 )
@@ -3836,7 +3896,16 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                     }.onFailure { rendererFailure = it }
                 }
                 saved
+                }
             }
+        }
+        if (ambientSourceValidationStale) {
+            call.respondText(
+                """{"ok":false,"error":"ha-source-validation-stale","message":"Home Assistant settings changed during the check. Try again."}""",
+                ContentType.Application.Json,
+                HttpStatusCode.Conflict,
+            )
+            return
         }
         if (!committed) {
             call.respondText("configuration commit failed\n", status = HttpStatusCode.InternalServerError)
@@ -5794,7 +5863,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
         /** Behaviour keys routed through [applySetting] after an HTTP persistence commit. */
         internal val HTTP_LIVE_KEYS = listOf(
             "wake_on_wave", "prevent_idle_dim", "watchdog_enabled", "kiosk_lock", "auto_brightness",
-            "auto_brightness_sensitivity", "auto_brightness_ha_entity",
+            "auto_brightness_minimum_percent", "auto_brightness_sensitivity", "auto_brightness_ha_entity",
             "navbar_mode", "touch_sound", "cpu_governor", "network_adb", "zigbee_router",
             "companion_auto_update", "companion_update_channel", "self_update", "webview_auto_update",
             "update_channel", "home_dashboard", "silence_boot_chime",

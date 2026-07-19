@@ -11,7 +11,8 @@
   var haSourceItems = [], haSourceRequest = 0, haSourceTimer = null;
   var haPickerCleanup = null;
   var autoBrightStatus = null, autoBrightHistory = null, autoBrightLoading = false, autoBrightMessage = "";
-  var autoBrightHistoryTimer = null, autoBrightRequest = 0;
+  var autoBrightHistoryTimer = null, autoBrightRefreshTimer = null, autoBrightRequest = 0;
+  var AUTO_BRIGHTNESS_REFRESH_MS = 5 * 60 * 1000;
   var HARDENED_APPROVAL_SETTING_KEYS = {
     self_update: true, update_channel: true, companion_auto_update: true,
     companion_update_channel: true, webview_auto_update: true
@@ -416,13 +417,13 @@
     if (f.maxLength != null) inp.maxLength = f.maxLength;
     if (f.step != null) inp.step = f.step;
     if (f.type === "FLOAT" && f.step == null) inp.step = "any";
-    if (f.key === "auto_brightness_sensitivity" && !ambientLightSourceReady()) {
+    if ((f.key === "auto_brightness_minimum_percent" || f.key === "auto_brightness_sensitivity") && !ambientLightSourceReady()) {
       inp.disabled = true;
       inp.title = "Select an ambient light source first.";
     }
     inp.addEventListener("input", function () {
       values[f.key] = inp.value; setDirty(f.key);
-      if (f.key === "auto_brightness_sensitivity") queueAutoBrightnessHistory();
+      if (f.key === "auto_brightness_minimum_percent" || f.key === "auto_brightness_sensitivity") queueAutoBrightnessHistory();
     });
     return inp;
   }
@@ -440,13 +441,31 @@
     return raw.map(function (point) {
       return {
         minute: pointValue(point, ["minute", "epoch_minute", "epochMinute"]),
+        localDay: point.local_day || point.localDay || "",
+        minuteOfDay: pointValue(point, ["minute_of_day", "minuteOfDay"]),
+        dayAge: pointValue(point, ["day_age", "dayAge"]),
         mean: pointValue(point, ["mean_lux", "observed_mean_lux", "observedMeanLux", "lux"]),
         min: pointValue(point, ["min_lux", "minLux"]),
         max: pointValue(point, ["max_lux", "maxLux"]),
         expected: pointValue(point, ["baseline_lux", "expected_lux", "expectedLux"]),
         brightness: pointValue(point, ["proposed_brightness", "proposedBrightness"])
       };
-    }).filter(function (point) { return point.minute != null && point.mean != null; });
+    }).filter(function (point) {
+      return point.minute != null && point.mean != null && point.localDay &&
+        point.minuteOfDay != null && point.dayAge != null && point.dayAge >= 0 && point.dayAge < 7;
+    });
+  }
+
+  function autoBrightnessChartDays(points) {
+    var grouped = {};
+    points.forEach(function (point) {
+      if (!grouped[point.localDay]) grouped[point.localDay] = { key: point.localDay, age: point.dayAge, points: [] };
+      grouped[point.localDay].points.push(point);
+    });
+    return Object.keys(grouped).map(function (key) {
+      grouped[key].points.sort(function (a, b) { return a.minute - b.minute; });
+      return grouped[key];
+    }).sort(function (a, b) { return b.age - a.age; });
   }
 
   function drawAutoBrightnessChart() {
@@ -463,45 +482,76 @@
       ctx.fillText("No ambient-light history yet", width / 2, height / 2);
       return;
     }
-    var pad = { left: 42, right: 34, top: 10, bottom: 24 };
+    var days = autoBrightnessChartDays(points);
+    var bucketMinutes = autoBrightHistory && (autoBrightHistory.bucket_minutes || autoBrightHistory.bucketMinutes) || 5;
+    var pad = { left: 0, right: 0, top: 10, bottom: 24 };
     var plotW = width - pad.left - pad.right, plotH = height - pad.top - pad.bottom;
-    var first = points[0].minute, last = points[points.length - 1].minute;
     var maxLux = 1;
     points.forEach(function (p) { maxLux = Math.max(maxLux, p.max == null ? p.mean : p.max, p.expected || 0); });
     var maxLog = Math.log(maxLux + 1);
-    function x(p) { return pad.left + (last === first ? .5 : (p.minute - first) / (last - first)) * plotW; }
+    function x(p) { return pad.left + p.minuteOfDay / 1440 * plotW; }
     function y(value) { return pad.top + plotH - Math.log(Math.max(0, value) + 1) / maxLog * plotH; }
     function yBrightness(value) { return pad.top + plotH - Math.max(0, Math.min(255, value)) / 255 * plotH; }
     ctx.strokeStyle = "#343a44"; ctx.lineWidth = 1;
     [0, .5, 1].forEach(function (f) {
       var yy = pad.top + plotH * f; ctx.beginPath(); ctx.moveTo(pad.left, yy); ctx.lineTo(width - pad.right, yy); ctx.stroke();
     });
-    // Preserve short artificial-light spikes as a translucent min/max envelope.
-    ctx.fillStyle = "rgba(74,158,255,.16)"; ctx.beginPath();
-    points.forEach(function (p, i) { var yy = y(p.max == null ? p.mean : p.max); if (!i) ctx.moveTo(x(p), yy); else ctx.lineTo(x(p), yy); });
-    points.slice().reverse().forEach(function (p) { ctx.lineTo(x(p), y(p.min == null ? p.mean : p.min)); });
-    ctx.closePath(); ctx.fill();
-    function line(field, color, widthPx) {
-      var started = false; ctx.beginPath();
-      points.forEach(function (p) {
-        var value = p[field]; if (value == null) return;
-        if (!started) { ctx.moveTo(x(p), y(value)); started = true; } else ctx.lineTo(x(p), y(value));
-      });
-      if (started) { ctx.strokeStyle = color; ctx.lineWidth = widthPx; ctx.stroke(); }
-    }
-    line("mean", "#4a9eff", 1.6); line("expected", "#f1bd52", 1.4);
-    var brightnessStarted = false; ctx.beginPath();
-    points.forEach(function (p) {
-      if (p.brightness == null) return;
-      if (!brightnessStarted) { ctx.moveTo(x(p), yBrightness(p.brightness)); brightnessStarted = true; }
-      else ctx.lineTo(x(p), yBrightness(p.brightness));
+    [0, 360, 720, 1080, 1440].forEach(function (minute) {
+      var xx = pad.left + minute / 1440 * plotW;
+      ctx.beginPath(); ctx.moveTo(xx, pad.top); ctx.lineTo(xx, pad.top + plotH); ctx.stroke();
     });
-    if (brightnessStarted) { ctx.strokeStyle = "#b77cff"; ctx.lineWidth = 1.4; ctx.stroke(); }
+    function runs(dayPoints, field) {
+      var result = [], run = [];
+      dayPoints.forEach(function (point) {
+        var previous = run.length ? run[run.length - 1] : null;
+        var discontinuous = previous && (
+          point.minute - previous.minute !== bucketMinutes ||
+          point.minuteOfDay - previous.minuteOfDay !== bucketMinutes
+        );
+        if (point[field] == null || discontinuous) {
+          if (run.length) result.push(run);
+          run = [];
+        }
+        if (point[field] != null) run.push(point);
+      });
+      if (run.length) result.push(run);
+      return result;
+    }
+    function line(day, field, color, widthPx, projectY) {
+      runs(day.points, field).forEach(function (run) {
+        ctx.beginPath();
+        run.forEach(function (point, index) {
+          if (!index) ctx.moveTo(x(point), projectY(point[field])); else ctx.lineTo(x(point), projectY(point[field]));
+        });
+        ctx.strokeStyle = color; ctx.lineWidth = widthPx; ctx.stroke();
+      });
+    }
+    days.forEach(function (day) {
+      var ageAlpha = Math.max(0, 1 - Math.sqrt(day.age / 7));
+      ctx.save(); ctx.globalAlpha = ageAlpha;
+      if ("filter" in ctx) ctx.filter = "blur(" + (Math.sqrt(day.age) * 1.5).toFixed(2) + "px)";
+      runs(day.points, "mean").forEach(function (run) {
+        ctx.fillStyle = "rgba(74,158,255,.16)"; ctx.beginPath();
+        run.forEach(function (point, index) {
+          var yy = y(point.max == null ? point.mean : point.max);
+          if (!index) ctx.moveTo(x(point), yy); else ctx.lineTo(x(point), yy);
+        });
+        run.slice().reverse().forEach(function (point) { ctx.lineTo(x(point), y(point.min == null ? point.mean : point.min)); });
+        ctx.closePath(); ctx.fill();
+      });
+      line(day, "mean", "#4a9eff", 1.6, y);
+      line(day, "expected", "#f1bd52", 1.4, y);
+      line(day, "brightness", "#b77cff", 1.4, yBrightness);
+      ctx.restore();
+    });
     ctx.fillStyle = "#888"; ctx.font = "11px sans-serif";
-    ctx.textAlign = "right"; ctx.fillText(Math.round(maxLux) + " lx", pad.left - 5, pad.top + 4); ctx.fillText("0", pad.left - 5, pad.top + plotH);
-    ctx.textAlign = "left"; ctx.fillText("255", width - pad.right + 5, pad.top + 4); ctx.fillText("0", width - pad.right + 5, pad.top + plotH);
-    ctx.textAlign = "left"; ctx.fillText("7 days ago", pad.left, height - 6);
-    ctx.textAlign = "right"; ctx.fillText("now", width - pad.right, height - 6);
+    ctx.textAlign = "left"; ctx.fillText(Math.round(maxLux) + " lx", pad.left + 5, pad.top + 12); ctx.fillText("0", pad.left + 5, pad.top + plotH - 4);
+    ctx.textAlign = "right"; ctx.fillText("100%", width - pad.right - 5, pad.top + 12); ctx.fillText("0%", width - pad.right - 5, pad.top + plotH - 4);
+    [0, 360, 720, 1080, 1440].forEach(function (minute, index) {
+      var xx = pad.left + minute / 1440 * plotW;
+      ctx.textAlign = index === 0 ? "left" : index === 4 ? "right" : "center";
+      ctx.fillText(index === 4 ? "24:00" : ("0" + Math.floor(minute / 60)).slice(-2) + ":00", xx, height - 6);
+    });
   }
 
   function autoBrightnessSummary() {
@@ -519,11 +569,14 @@
     autoBrightLoading = true;
     var request = ++autoBrightRequest;
     var sensitivity = parseInt(values.auto_brightness_sensitivity, 10);
-    var suffix = isFinite(sensitivity) && sensitivity >= 0 && sensitivity <= 100
+    var sensitivitySuffix = isFinite(sensitivity) && sensitivity >= 0 && sensitivity <= 100
       ? "&sensitivity=" + encodeURIComponent(sensitivity) : "";
+    var minimum = parseInt(values.auto_brightness_minimum_percent, 10);
+    var minimumSuffix = isFinite(minimum) && minimum >= 4 && minimum <= 95
+      ? "&minimum_percent=" + encodeURIComponent(minimum) : "";
     Promise.all([
       fetch("/api/v1/auto-brightness").then(function (r) { if (!r.ok) throw r.status; return r.json(); }),
-      fetch("/api/v1/auto-brightness/history?hours=168" + suffix).then(function (r) { if (!r.ok) throw r.status; return r.json(); })
+      fetch("/api/v1/auto-brightness/history?hours=168" + sensitivitySuffix + minimumSuffix).then(function (r) { if (!r.ok) throw r.status; return r.json(); })
     ]).then(function (result) {
       if (request !== autoBrightRequest) return;
       autoBrightStatus = result[0]; autoBrightHistory = result[1]; autoBrightMessage = "";
@@ -533,13 +586,43 @@
       autoBrightHistory = { points: [] };
     }).then(function () {
       if (request !== autoBrightRequest) return;
-      autoBrightLoading = false; render();
+      autoBrightLoading = false; render(); scheduleAutoBrightnessRefresh();
+    });
+  }
+
+  function scheduleAutoBrightnessRefresh() {
+    if (autoBrightRefreshTimer) clearTimeout(autoBrightRefreshTimer);
+    autoBrightRefreshTimer = null;
+    if (values.auto_brightness !== "true" || document.hidden) return;
+    autoBrightRefreshTimer = setTimeout(function () {
+      autoBrightRefreshTimer = null;
+      if (document.hidden) return;
+      loadAutoBrightnessData(false);
+    }, AUTO_BRIGHTNESS_REFRESH_MS);
+  }
+
+  if (document.addEventListener) {
+    document.addEventListener("visibilitychange", function () {
+      if (document.hidden) {
+        if (autoBrightRefreshTimer) clearTimeout(autoBrightRefreshTimer);
+        autoBrightRefreshTimer = null;
+      } else if (values.auto_brightness === "true") {
+        loadAutoBrightnessData(false);
+      }
     });
   }
 
   function queueAutoBrightnessHistory() {
     if (autoBrightHistoryTimer) clearTimeout(autoBrightHistoryTimer);
     autoBrightHistoryTimer = setTimeout(function () { loadAutoBrightnessData(true); }, 300);
+  }
+
+  var autoBrightnessResizeTimer = null;
+  if (window.addEventListener) {
+    window.addEventListener("resize", function () {
+      if (autoBrightnessResizeTimer) clearTimeout(autoBrightnessResizeTimer);
+      autoBrightnessResizeTimer = setTimeout(drawAutoBrightnessChart, 100);
+    });
   }
 
   function runAutoBrightnessAction(path, button) {
@@ -564,13 +647,15 @@
     };
     resume.onclick = function () { runAutoBrightnessAction("/api/v1/auto-brightness/resume", resume); };
     var bucket = autoBrightHistory && (autoBrightHistory.bucket_minutes || autoBrightHistory.bucketMinutes);
-    var detail = bucket ? "Observed mean and min/max envelope · " + bucket + " minute buckets" : "Observed mean and min/max envelope";
+    var dayCount = autoBrightnessChartDays(normalizedChartPoints()).length;
+    var detail = dayCount + (dayCount === 1 ? " day" : " days") + " overlaid · older days fade";
+    if (bucket) detail += " · " + bucket + " minute buckets";
     var panel = el("div", { class: "autobright-panel", id: "auto-brightness-learning" }, [
       el("div", { class: "autobright-head" }, [
-        el("div", {}, [el("strong", { text: "Seven-day ambient learning" }), el("small", { text: autoBrightnessSummary() })]),
+        el("div", {}, [el("strong", { text: "Daily ambient learning" }), el("small", { text: autoBrightnessSummary() })]),
         el("div", { class: "autobright-actions" }, [reset, resume])
       ]),
-      el("canvas", { id: "auto-brightness-chart", class: "autobright-chart", role: "img", "aria-label": "Seven-day ambient illuminance history" }),
+      el("canvas", { id: "auto-brightness-chart", class: "autobright-chart", role: "img", "aria-label": "24-hour ambient pattern with up to seven days overlaid" }),
       el("div", { class: "autobright-legend" }, [
         el("span", { class: "observed", text: "Observed" }),
         el("span", { class: "expected", text: "Learned baseline" }),
@@ -642,7 +727,7 @@
     }
     var ctl = el("div", { class: "fctl" }, f.readOnly ? [pip(f)] : [pip(f), valueControl]);
     // Anchor id so dashboard "edit" icons can deep-link straight to this setting.
-    var dependencyDisabled = (f.key === "auto_brightness" || f.key === "auto_brightness_sensitivity") && !ambientLightSourceReady();
+    var dependencyDisabled = (f.key === "auto_brightness" || f.key === "auto_brightness_minimum_percent" || f.key === "auto_brightness_sensitivity") && !ambientLightSourceReady();
     return el("div", {
       class: "frow" + (f.available ? "" : " muted") + (dependencyDisabled ? " dependency-disabled" : ""),
       id: "cfg-" + f.key
@@ -916,6 +1001,7 @@
         load(function (ok) {
           msg.textContent = ok ? "Saved." : "Saved (reload failed — refresh the page).";
           if (ok && (Object.prototype.hasOwnProperty.call(submittedValues, "auto_brightness") ||
+              Object.prototype.hasOwnProperty.call(submittedValues, "auto_brightness_minimum_percent") ||
               Object.prototype.hasOwnProperty.call(submittedValues, "auto_brightness_sensitivity") ||
               Object.prototype.hasOwnProperty.call(submittedValues, "auto_brightness_ha_entity"))) {
             loadAutoBrightnessData(true);
@@ -925,7 +1011,7 @@
       })
       .catch(function (e) {
         saving = false;
-        msg.textContent = e && e.approvalRequired ? e.message : "Save failed (" + e + ")";
+        msg.textContent = e && e.message ? e.message : "Save failed.";
         updateSaveUi();
       });
   };

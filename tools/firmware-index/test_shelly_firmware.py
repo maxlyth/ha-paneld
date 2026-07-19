@@ -80,6 +80,35 @@ class ShellyFirmwareValidationTest(unittest.TestCase):
         self.assertIn("has_new=true", outputs)
         self.assertTrue(next(line for line in outputs if line.startswith("new_versions=")))
 
+    def test_saved_and_rendered_track_descriptions_match_current_model_facts(self):
+        entries = [
+            {
+                "track": track,
+                "version": "2.7.1",
+                "build_id": "20260609-205046/2.7.1-857d7175",
+                "bytes": 123,
+                "discovered": "2026-06-26",
+                "cdn_url": f"https://fwcdn.shelly.cloud/gen2-ntest/{track}/" + "a" * 64,
+                "wayback_ts": "",
+            }
+            for track in shelly.MANIFESTS
+        ]
+        shelly.save_dat(self.dat, entries)
+
+        saved = self.dat.read_text()
+        output = io.StringIO()
+        with mock.patch("sys.stdout", output):
+            shelly.cmd_render(SimpleNamespace(dat=str(self.dat), out=None))
+        body = output.getvalue()
+
+        for text in ("SC7731E", "RK3326-S", "RK3566", "U1/D1 hardware not established"):
+            self.assertIn(text, saved)
+            self.assertIn(text, body)
+        self.assertNotIn("Atlantis", saved)
+        self.assertNotIn("Atlantis", body)
+        self.assertNotIn("Legacy", body)
+        self.assertNotIn("legacy devices (MT6580: Stargate, Pegasus)", body)
+
     def test_hostile_manifest_fields_fail_before_head_or_persistence(self):
         hostile = (
             self.manifest(version='2.8.0$(touch /tmp/pwned)'),

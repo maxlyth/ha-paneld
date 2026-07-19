@@ -125,8 +125,8 @@ ha-paneld needs no system-signed install. Standard-Android capabilities (brightn
 | ZHICAI SMT1019 | Rockchip rk3576 | 14 (API 34) | arm64-v8a | no root; RGB LED firmware-locked (ioctl denied) — community-reported ([#8](https://github.com/maxlyth/ha-paneld/issues/8)) |
 | ZX-SMT156 / RK3566_T | Rockchip rk3566 | 13 (API 33) | arm64-v8a | **preliminary OEM/generic-market wall panel** — app-direct RGB LED and light/proximity; climate is optional enhanced capability, while relay and root/unlock paths remain under characterisation ([#24](https://github.com/maxlyth/ha-paneld/issues/24)) |
 | Smatek S9E | Rockchip rk3566 | 11 (API 30) | arm64-v8a | onboard relays + button LEDs; proximity via root GPIO (not SensorManager) |
-| Shelly Wall Display — Stargate / Atlantis / Pegasus | MediaTek MT6580 | 7.0 (API 24) | armeabi-v7a | **research-only profile** — no confirmed ha-paneld installation path; relay via HA Shelly integration (not sysfs) |
-| Shelly Wall Display — Blake XL / Jenna / Cally / Maverick / Dayna | Arm64 (Jenna confirmed PX30; other SoCs TBC) | 11 (API 30) | arm64-v8a | **research-only profile** — no confirmed ha-paneld installation path; Shelly's AppStore does not currently establish ha-paneld availability |
+| Shelly Wall Display / X2 | MT6580 / SC7731E (model-dependent) | 7.0 / 8.1 | armeabi-v7a | **research-only profile** — current profile metadata needs a model-specific split; no confirmed ha-paneld installation path |
+| Shelly Wall Display X1i / X2i / XL | RK3326-S / RK3566 (model-dependent) | 11 (API 30) | arm64-v8a | **research-only profile** — current profile metadata needs a model-specific split; no confirmed ha-paneld installation path |
 
 ## Status & roadmap
 

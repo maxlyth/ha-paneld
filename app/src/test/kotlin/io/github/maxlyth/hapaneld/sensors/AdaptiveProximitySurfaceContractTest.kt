@@ -32,6 +32,7 @@ class AdaptiveProximitySurfaceContractTest {
         assertTrue(runtime.contains("waiting_for_reading"))
         assertTrue(runtime.contains("put(\"canTeach\""))
         assertTrue(script.contains("Waiting for the sensor’s first reading"))
+        assertTrue(script.contains("heading.appendChild(node(\"span\", \"cardbadge exp\", \"experimental\"))"))
         assertTrue(script.contains("teach.disabled"))
         assertTrue(script.indexOf("active = !!") < script.indexOf("teach.hidden ="))
         assertTrue(help.contains("far-to-near-to-far"))

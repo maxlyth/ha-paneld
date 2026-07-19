@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import io
 import unittest
 from types import SimpleNamespace
 from unittest import mock
@@ -118,6 +119,22 @@ class SparklineTest(unittest.TestCase):
         self.assertTrue(
             all(call.args[2] == render_time for call in sparkline.call_args_list),
         )
+
+
+class RenderEvidenceBoundaryTest(unittest.TestCase):
+    def test_render_does_not_overstate_460_release_or_flash_evidence(self):
+        output = io.StringIO()
+        with mock.patch("sys.stdout", output):
+            firmware_index.cmd_render(SimpleNamespace(history=None, out=None))
+
+        body = output.getvalue()
+        self.assertIn("hardware-verified the procedure only through 4.4.0", body)
+        self.assertIn("Sonoff does not label it “Stable”", body)
+        self.assertIn("newest listed release", body)
+        self.assertNotIn("official *Stable*", body)
+        self.assertNotIn("official **Stable**", body)
+        self.assertNotIn("current Stable", body)
+        self.assertNotIn("latest verified ROM (4.6.0)", body)
 
 
 if __name__ == "__main__":

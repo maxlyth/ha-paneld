@@ -15,7 +15,9 @@ The Home Assistant source uses one exact authenticated entity subscription rathe
 
 Enable **Auto-brightness** in the same Display card. The controller retains up to seven days of bounded, on-panel ambient history and learns the normal pattern for the time of day. Short positive deviations, such as a room light being switched on, can raise the proposed level above that baseline.
 
-**Sensitivity** controls how strongly the screen follows those deviations. The default 50 is the balanced starting point; lower values make the response steadier and higher values make it more reactive. The seven-day chart previews the observed range, learned baseline and proposed level before or while the controller is active.
+**Minimum level** sets the lowest level proposed by automatic control and rescales the learned range from that floor to full brightness. Its 4% default preserves the existing visible floor. It does not limit manual brightness, which can still be set lower.
+
+**Sensitivity** controls how strongly the screen follows deviations from the learned pattern. The default 50 is the balanced starting point; lower values make the response steadier and higher values make it more reactive. The seven-day chart previews the observed range, learned baseline and proposed level before or while the controller is active. Unsaved Minimum level and Sensitivity changes are reflected in the preview without rewriting stored ambient history.
 
 The history is tied to the selected source and a coarse room/time context derived from the configured Home Assistant location and timezone. A material location, timezone or source change starts a separate history rather than silently applying evidence learned for another room context.
 

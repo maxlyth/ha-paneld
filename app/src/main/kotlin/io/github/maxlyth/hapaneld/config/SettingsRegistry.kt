@@ -19,7 +19,7 @@ import java.util.Locale
 object SettingsRegistry {
 
     /** Bump whenever the persisted shape changes; drives bundle migration. */
-    const val SCHEMA = 1
+    const val SCHEMA = 2
     const val MAX_PANEL_ID_CHARS = 63
     const val DEFAULT_SILENCE_BOOT_CHIME = false
     private const val MAX_PANEL_ID_INPUT_CHARS = 255
@@ -181,6 +181,12 @@ object SettingsRegistry {
                 "switch", "auto_brightness", "Auto-brightness",
                 """"command_topic":"ha-paneld/{panel}/auto_brightness/set","state_topic":"ha-paneld/{panel}/auto_brightness/state","icon":"mdi:brightness-auto","entity_category":"config"""",
             ),
+        ),
+        SettingSpec(
+            key = "auto_brightness_minimum_percent", type = SettingType.INT, group = "Display",
+            label = "Minimum level", default = "4", min = 4.0, max = 95.0, step = 1.0,
+            scope = Scope.DEVICE,
+            help = "Lowest automatic screen level as a percentage. Proposals scale from this floor to full brightness; manual brightness can still go lower.",
         ),
         SettingSpec(
             key = "auto_brightness_sensitivity", type = SettingType.INT, group = "Display",

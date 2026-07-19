@@ -2,8 +2,8 @@
 # Source of truth: track|version|build_id|bytes|discovered|cdn_url|wayback_ts
 #
 # Tracks:
-#   WallDisplay    — legacy armeabi-v7a (Stargate 4", Atlantis, Pegasus X2)
-#   WallDisplayV2  — modern arm64-v8a  (Blake/XL, Jenna/X2i, Cally/X1i, Maverick/U1, Dayna/D1)
+#   WallDisplay    — armeabi-v7a (original: MT6580/Android 7; X2: SC7731E/Android 8.1)
+#   WallDisplayV2  — arm64-v8a (X1i/X2i: RK3326-S; XL: RK3566; U1/D1 hardware not established)
 #
 # cdn_url:   the opaque hash-addressed CDN URL from the manifest at time of discovery.
 #            Valid only while this version is current; Shelly replaces in-place on each release.

@@ -13,8 +13,28 @@ class AdaptiveBrightnessSettingTest {
             displayKeys.indexOf("auto_brightness_ha_entity") < displayKeys.indexOf("auto_brightness"),
         )
         assertTrue(
-            displayKeys.indexOf("auto_brightness") < displayKeys.indexOf("auto_brightness_sensitivity"),
+            displayKeys.indexOf("auto_brightness") < displayKeys.indexOf("auto_brightness_minimum_percent"),
         )
+        assertTrue(
+            displayKeys.indexOf("auto_brightness_minimum_percent") < displayKeys.indexOf("auto_brightness_sensitivity"),
+        )
+    }
+
+    @Test fun `minimum automatic level preserves the existing floor by default`() {
+        val spec = SettingsRegistry.spec("auto_brightness_minimum_percent")!!
+
+        assertEquals(SettingType.INT, spec.type)
+        assertEquals("Minimum level", spec.label)
+        assertEquals("4", spec.default)
+        assertEquals(4.0, spec.min)
+        assertEquals(95.0, spec.max)
+        assertEquals(1.0, spec.step)
+        assertEquals(Scope.DEVICE, spec.scope)
+        assertNull(spec.ha)
+        assertEquals("4", (SettingValue.validate(spec, "4") as Validation.Ok).normalized)
+        assertEquals("95", (SettingValue.validate(spec, "95") as Validation.Ok).normalized)
+        assertTrue(SettingValue.validate(spec, "3") is Validation.Bad)
+        assertTrue(SettingValue.validate(spec, "96") is Validation.Bad)
     }
 
     @Test fun `sensitivity is bounded with a neutral default`() {

@@ -108,7 +108,7 @@ class HardenedApprovalAssetContractTest {
         assertTrue(configure.contains("response.status === 202 && body && body.error === \"approval-required\""))
         assertTrue(configure.contains("fetch(\"/api/v1/config\""))
         assertTrue(configure.contains("fetch(\"/api/v1/dashboard/clear-storage\""))
-        assertTrue(configure.contains("e && e.approvalRequired ? e.message"))
+        assertTrue(configure.contains("e && e.message ? e.message"))
 
         val profiles = asset("profiles.js")
         val fetch = profiles.substringAfter("function jsonFetch").substringBefore("function yamlFetch")

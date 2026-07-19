@@ -45,7 +45,44 @@ class AdaptiveBrightnessPolicyTest {
         assertEquals((0.06 * 255).toInt(), AdaptiveLuxCurve.rawBrightness(1.0))
         assertEquals(77, AdaptiveLuxCurve.rawBrightness(100.0))
         assertEquals(255, AdaptiveLuxCurve.rawBrightness(10_000.0))
-        assertEquals(1, AdaptiveLuxCurve.VERSION)
+        assertEquals(3, AdaptiveLuxCurve.VERSION)
+    }
+
+    @Test fun minimumLevelAffinelyRescalesTheWholeAutomaticRange() {
+        val minimum = AdaptiveLuxCurve.percentToBrightness(25)
+
+        assertEquals(64, minimum)
+        assertEquals(minimum, AdaptiveLuxCurve.rawBrightness(0.0, minimumBrightness = minimum))
+        assertEquals(255, AdaptiveLuxCurve.rawBrightness(10_000.0, minimumBrightness = minimum))
+        val native = AdaptiveLuxCurve.rawBrightness(100.0)
+        val expected = (minimum + (native - BrightnessController.MIN_VISIBLE).toDouble() /
+            (255 - BrightnessController.MIN_VISIBLE) * (255 - minimum)).toInt()
+        assertTrue(kotlin.math.abs(expected - AdaptiveLuxCurve.rawBrightness(100.0, minimumBrightness = minimum)) <= 1)
+    }
+
+    @Test fun configuredMinimumPreservesLearnedEndpointsAndDoesNotChangeSensitivityMath() {
+        val range = estimateRange(learnedRangeHistory())
+        val lowMinimum = AdaptiveLuxCurve.percentToBrightness(4)
+        val highMinimum = AdaptiveLuxCurve.percentToBrightness(40)
+
+        assertEquals(lowMinimum, AdaptiveLuxCurve.rawBrightness(range.lowLux, range, lowMinimum))
+        assertEquals(highMinimum, AdaptiveLuxCurve.rawBrightness(range.lowLux, range, highMinimum))
+        assertEquals(255, AdaptiveLuxCurve.rawBrightness(range.highLux, range, lowMinimum))
+        assertEquals(255, AdaptiveLuxCurve.rawBrightness(range.highLux, range, highMinimum))
+
+        fun result(minimum: Int) = AdaptiveBrightnessPolicy().evaluate(
+            NOW,
+            60_000L,
+            25.0,
+            BaselineEstimate(ln1p(100.0), 0.05, 4, 100, range),
+            80,
+            minimumBrightness = minimum,
+        )!!
+        val low = result(lowMinimum)
+        val high = result(highMinimum)
+        assertEquals(low.effectiveLux, high.effectiveLux, 0.0)
+        assertEquals(low.brighterThanExpected, high.brighterThanExpected)
+        assertTrue(high.brightness >= low.brightness)
     }
 
     @Test fun sensitivityScalesOnlyDeviationFromExpectation() {
@@ -123,7 +160,7 @@ class AdaptiveBrightnessPolicyTest {
 
     @Test fun chartProjectionIsFiveMinuteAndPartitionAgnostic() {
         val rows = (0 until 12).map { historyRow(NOW / AMBIENT_MINUTE_MS + it, (it + 1).toDouble()) }
-        val points = AdaptiveChartProjection.fiveMinute(rows) { ln1p(20.0) }
+        val points = AdaptiveChartProjection.fiveMinute(rows, expectedLogLux = { ln1p(20.0) })
         assertEquals(3, points.size)
         assertEquals(20.0, points.first().expectedLux, 0.0001)
         assertTrue(points.first().maxLux >= points.first().minLux)
@@ -137,14 +174,126 @@ class AdaptiveBrightnessPolicyTest {
         }
     }
 
+    @Test fun wellCoveredRoomRangeMapsRobustAnchorsToFullPanelRange() {
+        val rows = learnedRangeHistory()
+        val range = estimateRange(rows)
+
+        assertEquals(1.0, range.learnedWeight, 0.0)
+        assertEquals(1.0, range.lowLux, 0.0001)
+        assertEquals(100.0, range.highLux, 0.0001)
+        assertEquals(BrightnessController.MIN_VISIBLE, AdaptiveLuxCurve.rawBrightness(range.lowLux, range))
+        assertEquals(255, AdaptiveLuxCurve.rawBrightness(range.highLux, range))
+    }
+
+    @Test fun learnedRangeRejectsSingleSpikesAndNonBaselineValues() {
+        val normal = learnedRangeHistory()
+        val withOutliers = normal + listOf(
+            historyRow(NOW / AMBIENT_MINUTE_MS - 10, 100_000.0),
+            historyRow(NOW / AMBIENT_MINUTE_MS - 11, 100_000.0, baselineEligible = false),
+        )
+
+        val range = estimateRange(withOutliers)
+        assertEquals(100.0, range.highLux, 0.0001)
+        assertEquals(255, AdaptiveLuxCurve.rawBrightness(100.0, range))
+    }
+
+    @Test fun insufficientOrNarrowHistoryFallsBackToFixedCurve() {
+        val insufficient = (0 until 360).map { offset ->
+            historyRow(NOW / AMBIENT_MINUTE_MS - offset - 2, if (offset % 2 == 0) 1.0 else 100.0)
+        }
+        val narrow = learnedRangeHistory(lowLux = 20.0, middleLux = 21.0, highLux = 22.0)
+
+        listOf(estimateRange(insufficient), estimateRange(narrow)).forEach { range ->
+            assertEquals(0.0, range.learnedWeight, 0.0)
+            assertEquals(AdaptiveLuxCurve.rawBrightness(50.0), AdaptiveLuxCurve.rawBrightness(50.0, range))
+        }
+    }
+
+    @Test fun provisionalHistoryBlendsWithRatherThanReplacesFixedCurve() {
+        val rows = learnedRangeHistory(days = 2, minutesPerDay = 540)
+        val range = estimateRange(rows)
+        val fixed = AdaptiveLuxCurve.rawBrightness(range.highLux)
+        val blended = AdaptiveLuxCurve.rawBrightness(range.highLux, range)
+
+        assertTrue(range.learnedWeight in 0.0..1.0)
+        assertTrue(range.learnedWeight > 0.0)
+        assertTrue(blended > fixed)
+        assertTrue(blended < 255)
+    }
+
+    @Test fun learnedRangeUsesOnlyAmbientEvidenceNotStartupBrightness() {
+        val rows = learnedRangeHistory()
+        val first = estimateRange(rows)
+        val second = estimateRange(rows.map { row ->
+            row.copy(minLux = 0.0, maxLux = 100_000.0, lastLux = 100_000.0)
+        })
+
+        assertEquals(first, second)
+    }
+
+    @Test fun runtimeAndChartUseTheSameLearnedRangeAndMinimumMapping() {
+        val rows = learnedRangeHistory()
+        val range = estimateRange(rows)
+        val baseline = BaselineEstimate(ln1p(1.0), 0.05, 4, 100, range)
+        val minimum = AdaptiveLuxCurve.percentToBrightness(30)
+        val policy = AdaptiveBrightnessPolicy()
+        var runtime: AdaptiveBrightnessResult? = null
+        repeat(31) { tick ->
+            runtime = policy.evaluate(
+                NOW + tick * 60_000L,
+                60_000L,
+                1.0,
+                baseline,
+                50,
+                minimumBrightness = minimum,
+            )
+        }
+        val chart = AdaptiveChartProjection.fiveMinute(
+            rows = listOf(historyRow(NOW / AMBIENT_MINUTE_MS, 1.0)),
+            sensitivity = 50,
+            brightnessRange = range,
+            minimumBrightness = minimum,
+            expectedLogLux = { ln1p(1.0) },
+        ).single()
+
+        assertEquals(runtime!!.brightness, chart.proposedBrightness)
+        assertEquals(minimum, chart.proposedBrightness)
+    }
+
     private fun repeatedHistory(expectedLux: Double, days: Int): List<AmbientHistoryMinute> =
         (1..days).flatMap { day -> (-2..2).map { offset ->
             historyRow(NOW / AMBIENT_MINUTE_MS - day * 1440L + offset, expectedLux)
         } }
 
-    private fun historyRow(minute: Long, lux: Double): AmbientHistoryMinute = AmbientHistoryMinute(
+    private fun learnedRangeHistory(
+        days: Int = 3,
+        minutesPerDay: Int = 400,
+        lowLux: Double = 1.0,
+        middleLux: Double = 25.0,
+        highLux: Double = 100.0,
+    ): List<AmbientHistoryMinute> = (1..days).flatMap { day ->
+        (0 until minutesPerDay).map { offset ->
+            val lux = when {
+                offset < minutesPerDay / 10 -> lowLux
+                offset >= minutesPerDay * 9 / 10 -> highLux
+                else -> middleLux
+            }
+            historyRow(NOW / AMBIENT_MINUTE_MS - day * 1440L + offset, lux)
+        }
+    }
+
+    private fun estimateRange(rows: List<AmbientHistoryMinute>): AdaptiveBrightnessRange =
+        AdaptiveAmbientModel.estimate(NOW, rows, UTC, null, 0.0).brightnessRange
+
+    private fun historyRow(
+        minute: Long,
+        lux: Double,
+        baselineEligible: Boolean = true,
+    ): AmbientHistoryMinute = AmbientHistoryMinute(
         AmbientHistoryKey("location", "source", minute), lux * 60_000, 60_000,
-        lux, lux, lux, 60, ln1p(lux) * 60_000, 60_000,
+        lux, lux, lux, 60,
+        if (baselineEligible) ln1p(lux) * 60_000 else 0.0,
+        if (baselineEligible) 60_000 else 0L,
     )
 
     companion object {

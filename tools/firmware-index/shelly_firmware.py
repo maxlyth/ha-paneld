@@ -49,12 +49,12 @@ MANIFESTS = {
 
 TRACK_LABELS = {
     "WallDisplay": (
-        "Legacy — armeabi-v7a",
-        "Stargate (4\"), Atlantis, Pegasus (X2)",
+        "WallDisplay — armeabi-v7a",
+        "original Wall Display (MT6580/Android 7), X2 (SC7731E/Android 8.1)",
     ),
     "WallDisplayV2": (
-        "Modern — arm64-v8a",
-        "Blake (XL), Jenna (X2i), Cally (X1i), Maverick (U1), Dayna (D1)",
+        "WallDisplayV2 — arm64-v8a",
+        "X1i/X2i (RK3326-S), XL (RK3566); U1/D1 hardware not established",
     ),
 }
 
@@ -165,8 +165,8 @@ def save_dat(path, entries):
         "# Source of truth: track|version|build_id|bytes|discovered|cdn_url|wayback_ts",
         "#",
         "# Tracks:",
-        "#   WallDisplay    — legacy armeabi-v7a (Stargate 4\", Atlantis, Pegasus X2)",
-        "#   WallDisplayV2  — modern arm64-v8a  (Blake/XL, Jenna/X2i, Cally/X1i, Maverick/U1, Dayna/D1)",
+        "#   WallDisplay    — armeabi-v7a (original: MT6580/Android 7; X2: SC7731E/Android 8.1)",
+        "#   WallDisplayV2  — arm64-v8a (X1i/X2i: RK3326-S; XL: RK3566; U1/D1 hardware not established)",
         "#",
         "# cdn_url:   the opaque hash-addressed CDN URL from the manifest at time of discovery.",
         "#            Valid only while this version is current; Shelly replaces in-place on each release.",
@@ -415,9 +415,9 @@ _INTRO = """\
 
 Direct download links for every recorded Shelly Wall Display firmware version, with Wayback Machine backups for versions that have since been replaced on the CDN.
 
-Covers both generations:
-- **Legacy (armeabi-v7a):** Stargate (4"), Atlantis, Pegasus (X2 6.9") — `WallDisplay` OTA track
-- **Modern (arm64-v8a):** Blake (XL 10.1"), Jenna (X2i), Cally (X1i/XLi), Maverick (U1), Dayna (D1) — `WallDisplayV2` OTA track
+Covers both OTA tracks. A track is a package-compatibility boundary, not one uniform hardware generation:
+- **WallDisplay (armeabi-v7a):** original Wall Display (MT6580/Android 7) and X2 (SC7731E/Android 8.1)
+- **WallDisplayV2 (arm64-v8a):** X1i/X2i (RK3326-S) and XL (RK3566); U1/D1 hardware not established
 
 > [!NOTE]
 > **Why this archive exists:** Shelly's CDN (`fwcdn.shelly.cloud`) keeps only the *current* build per product and replaces it in-place when a new version ships — the previous firmware URL goes 404 immediately. This archive captures each version on discovery so older builds remain accessible even after a Shelly update.
@@ -432,14 +432,14 @@ The normal path (no PC needed):
 1. Open the **Shelly app** → tap your Wall Display → **Settings → Device Information → Firmware**. If an update is available, tap **Update**.
 2. Alternatively, open the local WebUI at `http://<device-ip>` → **Settings → Firmware** → **Update**.
 
-Shelly rolls firmware out to the fleet gradually over several days, so your device may not see a new version immediately after release. If you need to apply a specific version manually, download the ZIP from the table below and flash it via the WebUI's **Firmware → Custom firmware** field (`http://<device-ip>/#/settings/firmware` on modern devices).
+Shelly rolls firmware out to the fleet gradually over several days, so your device may not see a new version immediately after release. If you need to apply a specific version manually, download the ZIP from the table below and flash it via the WebUI's **Firmware → Custom firmware** field (`http://<device-ip>/#/settings/firmware` on WallDisplayV2 devices).
 
 > [!IMPORTANT]
-> Modern devices (arm64-v8a: Blake/XL, Jenna, Cally, Maverick, Dayna) and legacy devices (MT6580: Stargate, Pegasus) use **separate OTA tracks** and **incompatible firmware ZIPs** — do not flash WallDisplay firmware onto a WallDisplayV2 device or vice versa.
+> `WallDisplay` and `WallDisplayV2` are **separate OTA tracks with incompatible firmware ZIPs**. Do not flash firmware from one track onto a device assigned to the other. Identify the live device and its vendor update track rather than inferring compatibility from a codename or assumed SoC.
 
 ## Which version should I run?
 
-The latest stable build is always the recommended choice — Shelly does not remove features between releases and has a good track record of fixing regressions quickly. Check the [official changelog](https://github.com/ShellyGroup/Wall-Display-Changelog) for what changed between versions.
+Use the version offered for the device's exact OTA track and check the [official changelog](https://github.com/ShellyGroup/Wall-Display-Changelog) for known changes. This archive records packages; it does not establish that a release is suitable for every model or installation.
 """
 
 _FOOTER = """\
