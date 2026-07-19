@@ -16,11 +16,15 @@ import io.github.maxlyth.hapaneld.util.SingleFlightExecutor
  * (the long-unexplained NOT_AUTHORIZED-while-connected incident).
  */
 class HiveMqTransport : MqttTransport {
-    @Volatile private var client: Mqtt5AsyncClient? = null
-    @Volatile private var callbacks: MqttCallbacks? = null
+    private data class Session(
+        val client: Mqtt5AsyncClient?,
+        val connection: MqttConnectionLease?,
+    )
+
+    private val sessionLock = Any()
+    private var session = Session(null, null)
 
     override fun connect(config: MqttConnectConfig, callbacks: MqttCallbacks) {
-        this.callbacks = callbacks
         var self: Mqtt5AsyncClient? = null
         var builder = MqttClient.builder()
             .useMqttVersion5()
@@ -30,21 +34,38 @@ class HiveMqTransport : MqttTransport {
             // Auto-reconnect so a network blip / broker restart never permanently orphans the panel;
             // re-subscribe + re-publish discovery happen in onConnected on every connect.
             .automaticReconnectWithDefaultConfig()
-            .addConnectedListener { if (client === self) callbacks.onConnected() }
-            .addDisconnectedListener { ctx ->
-                if (client !== self) {
-                    runCatching { ctx.reconnector.reconnect(false) } // zombie: kill its auto-reconnect
-                    return@addDisconnectedListener
+            .addConnectedListener {
+                synchronized(sessionLock) {
+                    if (session.client === self) {
+                        val lease = MqttConnectionLease()
+                        session = Session(checkNotNull(self), lease)
+                        // Production callbacks perform one fixed-cardinality enqueue. Keeping that enqueue
+                        // in the tuple lock preserves transition order against a replacement client.
+                        callbacks.onConnected(lease)
+                    }
                 }
-                if (!callbacks.onDisconnected(ctx.cause?.message ?: ctx.cause?.toString())) {
-                    runCatching { ctx.reconnector.reconnect(false) }
+            }
+            .addDisconnectedListener { ctx ->
+                val (current, reconnectAllowed) = synchronized(sessionLock) {
+                    if (session.client !== self) false to false
+                    else {
+                        val lease = session.connection
+                        session = Session(checkNotNull(self), null)
+                        true to callbacks.onDisconnected(
+                            lease,
+                            ctx.cause?.message ?: ctx.cause?.toString(),
+                        )
+                    }
+                }
+                if (!current || !reconnectAllowed) {
+                    runCatching { ctx.reconnector.reconnect(false) } // zombie: kill its auto-reconnect
                 }
             }
         // ssl:///mqtts:// broker → TLS with the default JVM trust store (CA-signed cert validates).
         if (config.tls) builder = builder.sslWithDefaultConfig()
         val c = builder.buildAsync()
         self = c
-        client = c
+        synchronized(sessionLock) { session = Session(c, null) }
         val connect = c.connectWith()
             .keepAlive(config.keepAliveSeconds)
             // Advertise an application-sized inbound ceiling in CONNECT. HiveMQ enforces it while
@@ -68,19 +89,31 @@ class HiveMqTransport : MqttTransport {
         connect.send() // async; onConnected does subscribe + discovery on success
     }
 
-    override fun disconnectDetached() {
-        val old = client
-        client = null
-        old?.let { disconnectBounded(it) }
+    override fun disconnectDetached(): java.util.concurrent.CompletableFuture<Unit> {
+        val old = synchronized(sessionLock) {
+            session.client.also { session = Session(null, null) }
+        }
+        return old?.let { disconnectBounded(it) }
+            ?: java.util.concurrent.CompletableFuture.completedFuture(Unit)
     }
 
-    override fun publishThenDisconnect(publications: List<MqttFinalPublish>, timeoutMs: Long) {
-        val c = client ?: return
+    override fun publishThenDisconnect(
+        publications: List<MqttFinalPublish>,
+        timeoutMs: Long,
+    ): java.util.concurrent.CompletableFuture<Unit> {
+        val c = synchronized(sessionLock) { session.client }
+            ?: return java.util.concurrent.CompletableFuture.completedFuture(Unit)
+        val completion = java.util.concurrent.CompletableFuture<Unit>()
         val finished = java.util.concurrent.atomic.AtomicBoolean(false)
         val detach = {
             if (finished.compareAndSet(false, true)) {
-                if (client === c) client = null
-                disconnectBounded(c)
+                synchronized(sessionLock) {
+                    if (session.client === c) session = Session(null, null)
+                }
+                disconnectBounded(c).whenComplete { _, failure ->
+                    if (failure == null) completion.complete(Unit)
+                    else completion.completeExceptionally(failure)
+                }
             }
         }
         // HiveMQ's send admission can itself wedge. One process-wide zero-queue slot and one shared
@@ -109,10 +142,22 @@ class HiveMqTransport : MqttTransport {
             FinalPublishAdmission.REJECTED ->
                 FeatureCosts.registry.recordDropped(FeatureCostOperation.MQTT_TEARDOWN)
         }
+        return completion
     }
 
-    override fun publish(topic: String, payload: ByteArray, retain: Boolean, onComplete: ((Boolean) -> Unit)?) {
-        val c = client ?: run { onComplete?.invoke(false); return }
+    override fun publish(
+        topic: String,
+        payload: ByteArray,
+        retain: Boolean,
+        expectedConnection: MqttConnectionLease?,
+        onComplete: ((Boolean) -> Unit)?,
+    ) {
+        val selected = synchronized(sessionLock) { session }
+        val c = selected.client ?: run { onComplete?.invoke(false); return }
+        if (expectedConnection != null && selected.connection !== expectedConnection) {
+            onComplete?.invoke(false)
+            return
+        }
         c.publishWith()
             .topic(topic)
             .payload(payload)
@@ -124,15 +169,22 @@ class HiveMqTransport : MqttTransport {
             .whenComplete { _, ex ->
                 // A superseded client's future can complete after a watchdog rebuild. It must not refresh
                 // the replacement connection's liveness or complete state work owned by that connection.
-                if (client !== c) return@whenComplete
-                val success = ex == null
-                if (success) callbacks?.onPublishAck()
+                val success = ex == null && synchronized(sessionLock) {
+                    session.client === c &&
+                        (expectedConnection == null || session.connection === expectedConnection)
+                }
                 onComplete?.invoke(success)
             }
     }
 
-    override fun subscribe(topicFilter: String, onMessage: (String, ByteArray, Boolean) -> Unit) {
-        val c = client ?: return
+    override fun subscribe(
+        topicFilter: String,
+        expectedConnection: MqttConnectionLease?,
+        onMessage: (String, ByteArray, Boolean) -> Unit,
+    ) {
+        val selected = synchronized(sessionLock) { session }
+        val c = selected.client ?: return
+        if (expectedConnection != null && selected.connection !== expectedConnection) return
         c.subscribeWith()
             .topicFilter(topicFilter)
             .qos(MqttQos.AT_LEAST_ONCE)
@@ -140,12 +192,19 @@ class HiveMqTransport : MqttTransport {
                 // A watchdog rebuild can leave the old reactor alive briefly. Commands and HA-birth
                 // messages from that superseded client must not cross into the replacement generation.
                 val payloadSize = p.payload.map { it.remaining() }.orElse(0)
-                if (client === c && payloadSize <= MAX_INBOUND_PACKET_BYTES) {
+                val current = synchronized(sessionLock) {
+                    session.client === c &&
+                        (expectedConnection == null || session.connection === expectedConnection)
+                }
+                if (current && payloadSize <= MAX_INBOUND_PACKET_BYTES) {
                     onMessage(p.topic.toString(), p.payloadAsBytes, p.isRetain)
                 }
             }
             .send()
     }
+
+    override fun isCurrent(connection: MqttConnectionLease): Boolean =
+        synchronized(sessionLock) { session.client != null && session.connection === connection }
 
     internal companion object {
         const val MAX_INBOUND_PACKET_BYTES = 64 * 1024
@@ -153,15 +212,19 @@ class HiveMqTransport : MqttTransport {
         private val TEARDOWN = MqttTeardownGate()
         private val FINAL_PUBLISH = MqttFinalPublishGate()
 
-        private fun disconnectBounded(client: Mqtt5AsyncClient) {
-            val accepted = TEARDOWN.execute {
+        private fun disconnectBounded(
+            client: Mqtt5AsyncClient,
+        ): java.util.concurrent.CompletableFuture<Unit> = TEARDOWN.submit {
                 val cost = FeatureCosts.registry.span(FeatureCostOperation.MQTT_TEARDOWN)
-                runCatching { client.disconnect() }
-                    .onFailure { cost.outcome(FeatureCostOutcome.FAILURE) }
+                val result = runCatching {
+                    client.disconnect().get(DISCONNECT_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
+                }
+                result.onFailure { cost.outcome(FeatureCostOutcome.FAILURE) }
                 cost.close()
+                result.getOrThrow()
             }
-            if (!accepted) FeatureCosts.registry.recordDropped(FeatureCostOperation.MQTT_TEARDOWN)
-        }
+
+        private const val DISCONNECT_TIMEOUT_MS = 2_000L
     }
 }
 
@@ -216,5 +279,25 @@ internal class MqttTeardownGate(
     private val executor: SingleFlightExecutor = SingleFlightExecutor("mqtt-teardown"),
 ) : AutoCloseable {
     fun execute(action: () -> Unit): Boolean = executor.execute(action)
+
+    fun submit(action: () -> Unit): java.util.concurrent.CompletableFuture<Unit> {
+        val completion = java.util.concurrent.CompletableFuture<Unit>()
+        if (!executor.execute {
+                try {
+                    action()
+                    completion.complete(Unit)
+                } catch (failure: Throwable) {
+                    completion.completeExceptionally(failure)
+                }
+            }
+        ) {
+            FeatureCosts.registry.recordDropped(FeatureCostOperation.MQTT_TEARDOWN)
+            completion.completeExceptionally(
+                java.util.concurrent.RejectedExecutionException("MQTT teardown owner is busy"),
+            )
+        }
+        return completion
+    }
+
     override fun close() = executor.close(500L)
 }

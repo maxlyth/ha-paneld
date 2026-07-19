@@ -40,6 +40,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
 from firmware_index import apk_url, diff_url, full_url, load_devices, vkey
+from secure_urlopen import urlopen
 
 SAVE = "https://web.archive.org/save"
 AVAIL = "https://archive.org/wayback/available"
@@ -58,7 +59,7 @@ def auth_header():
 
 def _read(req):
     try:
-        with urllib.request.urlopen(req, timeout=60) as r:
+        with urlopen(req, timeout=60) as r:
             raw = r.read().decode("utf-8", "replace")
     except urllib.error.HTTPError as e:
         raw = e.read().decode("utf-8", "replace") if e.fp else ""
@@ -93,7 +94,7 @@ def available(url):
     """Return the snapshot timestamp if the URL is in the Wayback Machine, else None."""
     q = f"{AVAIL}?url=" + urllib.parse.quote(url, safe="")
     try:
-        with urllib.request.urlopen(q, timeout=30) as r:
+        with urlopen(q, timeout=30) as r:
             d = json.load(r)
     except Exception:  # noqa: BLE001
         return None

@@ -1,0 +1,74 @@
+package io.github.maxlyth.hapaneld.dashboard
+
+import androidx.test.core.app.ApplicationProvider
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import io.github.maxlyth.hapaneld.control.AmbientHistoryKey
+import io.github.maxlyth.hapaneld.control.AmbientMinuteAggregate
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.Test
+import org.junit.runner.RunWith
+
+@RunWith(AndroidJUnit4::class)
+class AmbientHistoryStoreTest {
+    private val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+
+    @Before fun cleanBefore() {
+        context.deleteDatabase(EntityCatalogStore.DATABASE_NAME)
+        context.deleteDatabase(EntityCatalogStore.LEGACY_DATABASE_NAME)
+    }
+
+    @After fun cleanAfter() {
+        context.deleteDatabase(EntityCatalogStore.DATABASE_NAME)
+        context.deleteDatabase(EntityCatalogStore.LEGACY_DATABASE_NAME)
+    }
+
+    @Test fun rowsAggregateAndRemainPartitionedBySourceAndContext() {
+        val now = System.currentTimeMillis()
+        val minute = now / 60_000L
+        fun aggregate(contextId: String, sourceId: String, lux: Double) = AmbientMinuteAggregate(
+            AmbientHistoryKey(contextId, sourceId, minute),
+        ).also { it.add(lux, 1_000, baselineEligible = true) }
+
+        EntityCatalogStore(context).use { store ->
+            store.recordAmbientHistory(listOf(
+                aggregate("location-a", "panel", 10.0),
+                aggregate("location-a", "panel", 30.0),
+                aggregate("location-a", "sensor.room", 100.0),
+                aggregate("location-b", "panel", 200.0),
+            ), now)
+            val local = store.ambientHistory("location-a", "panel", minute - 1)
+            assertEquals(1, local.size)
+            assertEquals(20.0, local.single().meanLux, 0.001)
+            assertEquals(10.0, local.single().minLux, 0.001)
+            assertEquals(30.0, local.single().maxLux, 0.001)
+            assertEquals(2L, local.single().sampleCount)
+            assertEquals(1, store.ambientHistory("location-a", "sensor.room", minute - 1).size)
+            assertEquals(1, store.ambientHistory("location-b", "panel", minute - 1).size)
+        }
+    }
+
+    @Test fun clockInvalidAndExpiredRowsAreRejectedAndResetIsScoped() {
+        val now = System.currentTimeMillis()
+        val minute = now / 60_000L
+        fun aggregate(contextId: String, sourceId: String, targetMinute: Long) = AmbientMinuteAggregate(
+            AmbientHistoryKey(contextId, sourceId, targetMinute),
+        ).also { it.add(10.0, 1_000, baselineEligible = false) }
+
+        EntityCatalogStore(context).use { store ->
+            store.recordAmbientHistory(listOf(
+                aggregate("a", "panel", minute),
+                aggregate("a", "future", minute + 20),
+                aggregate("a", "expired", minute - 8L * 24L * 60L),
+                aggregate("b", "panel", minute),
+            ), now)
+            assertTrue(store.ambientHistory("a", "future", 0).isEmpty())
+            assertTrue(store.ambientHistory("a", "expired", 0).isEmpty())
+            assertEquals(1, store.resetAmbientHistory("a"))
+            assertTrue(store.ambientHistory("a", "panel", 0).isEmpty())
+            assertEquals(1, store.ambientHistory("b", "panel", 0).size)
+        }
+    }
+}

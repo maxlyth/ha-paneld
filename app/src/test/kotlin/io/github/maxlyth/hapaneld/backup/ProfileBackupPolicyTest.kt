@@ -31,6 +31,11 @@ class ProfileBackupPolicyTest {
             assertEquals("legacy exclusion for $path", 1, legacy.count { it == exclusion })
             assertEquals("modern exclusions for $path", 2, modern.count { it == exclusion })
         }
+        for (path in NON_TRANSFERABLE_DATABASES) {
+            val exclusion = Exclusion("database", path)
+            assertEquals("legacy exclusion for $path", 1, legacy.count { it == exclusion })
+            assertEquals("modern exclusions for $path", 2, modern.count { it == exclusion })
+        }
     }
 
     private fun exclusions(path: String): List<Exclusion> {
@@ -54,13 +59,17 @@ class ProfileBackupPolicyTest {
         val NON_TRANSFERABLE_PREFS = listOf(
             "ha-paneld.xml",
             "ha-paneld-shizuku.xml",
+            "ha-paneld-performance-binding.xml",
             "ha-paneld-device-profiles.xml",
             "ha-paneld-profile-calibration.xml",
             "ha-paneld-controller-state.xml",
+            "ha-paneld-state-bridge.xml",
         )
         val NON_TRANSFERABLE_FILES = listOf(
             "panel-screenshots/",
             "last-panel-screenshot.png",
+            "config-revisions/",
         )
+        val NON_TRANSFERABLE_DATABASES = listOf("ha-paneld.db", "entity-learning.db")
     }
 }

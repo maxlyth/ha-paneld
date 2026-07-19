@@ -119,7 +119,7 @@ internal class AudioPlaybackCoordinator(
                 if (previous != null) {
                     previous.cancel()
                     previous.job.cancelAndJoin()
-                    if (active === previous) active = null
+                    clearActive(previous)
                 }
                 if (isClosed()) break
 
@@ -140,17 +140,21 @@ internal class AudioPlaybackCoordinator(
                     }
                 }
                 val current = Active(run, job)
-                active = current
-                activate(request.generation)
+                if (!publishActive(request.generation, current)) {
+                    current.cancel()
+                    current.job.cancel()
+                    break
+                }
                 job.invokeOnCompletion {
-                    if (active === current) active = null
+                    clearActive(current)
                 }
                 job.start()
             }
         } finally {
             withContext(NonCancellable) {
-                val current = active
-                active = null
+                val current = synchronized(this@AudioPlaybackCoordinator) {
+                    active.also { active = null }
+                }
                 if (current != null) {
                     current.cancel()
                     current.job.cancelAndJoin()
@@ -163,8 +167,16 @@ internal class AudioPlaybackCoordinator(
     private fun isClosed(): Boolean = closed
 
     @Synchronized
-    private fun activate(requestGeneration: Long) {
-        if (!closed && snapshot.generation == requestGeneration) snapshot = Snapshot(State.ACTIVE, requestGeneration)
+    private fun publishActive(requestGeneration: Long, current: Active): Boolean {
+        if (closed || snapshot.generation != requestGeneration) return false
+        active = current
+        snapshot = Snapshot(State.ACTIVE, requestGeneration)
+        return true
+    }
+
+    @Synchronized
+    private fun clearActive(expected: Active) {
+        if (active === expected) active = null
     }
 
     @Synchronized

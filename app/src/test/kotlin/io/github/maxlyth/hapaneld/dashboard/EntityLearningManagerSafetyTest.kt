@@ -257,6 +257,50 @@ class EntityLearningManagerSafetyTest {
         assertTrue(evidence.isEmpty())
     }
 
+    @Test fun telemetryFollowUpReleasesItsBarrierBeforeEnteringTheManagerMonitor() {
+        val generation = AtomicLong(5)
+        val barrier = EntityTelemetryWriteBarrier(generation::get)
+        val managerMonitor = Any()
+        val writeEntered = CountDownLatch(1)
+        val releaseWrite = CountDownLatch(1)
+        val resetHasManagerMonitor = CountDownLatch(1)
+        val resetFinished = CountDownLatch(1)
+        val followUpFinished = CountDownLatch(1)
+
+        val telemetry = thread(start = true, isDaemon = true) {
+            writeEntityTelemetryThen(
+                barrier = barrier,
+                admittedGeneration = generation.get(),
+                write = {
+                    writeEntered.countDown()
+                    releaseWrite.await()
+                },
+                afterWrite = {
+                    synchronized(managerMonitor) { followUpFinished.countDown() }
+                },
+            )
+        }
+        assertTrue(writeEntered.await(2, TimeUnit.SECONDS))
+        val reset = thread(start = true, isDaemon = true) {
+            synchronized(managerMonitor) {
+                resetHasManagerMonitor.countDown()
+                barrier.invalidateAndWrite(invalidate = { generation.incrementAndGet() }) {}
+            }
+            resetFinished.countDown()
+        }
+
+        assertTrue(resetHasManagerMonitor.await(2, TimeUnit.SECONDS))
+        releaseWrite.countDown()
+        assertTrue("reset must acquire the released barrier instead of deadlocking",
+            resetFinished.await(2, TimeUnit.SECONDS))
+        assertTrue("telemetry follow-up must enter the manager only after reset releases it",
+            followUpFinished.await(2, TimeUnit.SECONDS))
+        telemetry.join(2_000)
+        reset.join(2_000)
+        assertFalse(telemetry.isAlive)
+        assertFalse(reset.isAlive)
+    }
+
     @Test fun concurrentDisableCannotBeOvertakenByAnAlreadyRunningActivation() {
         data class DurableState(
             var learningEnabled: Boolean = true,
@@ -301,6 +345,129 @@ class EntityLearningManagerSafetyTest {
         assertFalse(state.learningEnabled)
         assertFalse(state.filterEnabled)
         assertFalse(state.applied)
+    }
+
+    @Test fun resetAndScanAdmissionShareTheManagerMonitorInBothDirections() {
+        val source = listOf(
+            File("src/main/kotlin/io/github/maxlyth/hapaneld/dashboard/EntityLearningManager.kt"),
+            File("app/src/main/kotlin/io/github/maxlyth/hapaneld/dashboard/EntityLearningManager.kt"),
+        ).first(File::isFile).readText()
+        val reset = source.substring(
+            source.indexOf("fun resetEvidence(confirm: Boolean, clearFilter: Boolean = false)"),
+            source.indexOf("private fun applyStoredOverrides"),
+        )
+        val sync = source.substring(
+            source.indexOf("fun syncNow(reason: String = \"manual\")"),
+            source.indexOf("private suspend fun synchronize()"),
+        )
+        assertTrue("reset must own the manager monitor for its complete transaction",
+            "withEntityLearningMutationLock(this)" in reset)
+        assertTrue("scan admission must use that same manager monitor", "synchronized(this)" in sync)
+        assertTrue(
+            "reset diagnostic caches must clear only through the durable transaction success callback",
+            reset.indexOf("afterSuccess = {") < reset.indexOf("bootstrapBlockingIssues = 0") &&
+                reset.indexOf("bootstrapBlockingIssues = 0") < reset.indexOf("dynamicExpressionsJson = \"[]\""),
+        )
+
+        val flush = source.substring(
+            source.indexOf("private fun flushTelemetry"),
+            source.indexOf("private fun queuePromotion"),
+        )
+        assertTrue("telemetry writes must release their barrier before promotion enters the manager",
+            "writeEntityTelemetryThen(" in flush)
+        assertTrue("promotion capture must be follow-up work outside the barrier",
+            flush.indexOf("afterWrite = {") < flush.indexOf("capturePromotionSnapshot"))
+
+        val owner = Any()
+        val resetEntered = CountDownLatch(1)
+        val releaseReset = CountDownLatch(1)
+        val scanAttempted = CountDownLatch(1)
+        val scanEntered = CountDownLatch(1)
+        val resetter = thread(start = true) {
+            withEntityLearningMutationLock(owner) {
+                resetEntered.countDown()
+                releaseReset.await()
+            }
+        }
+        assertTrue(resetEntered.await(2, TimeUnit.SECONDS))
+        val scanner = thread(start = true) {
+            scanAttempted.countDown()
+            synchronized(owner) { scanEntered.countDown() }
+        }
+        assertTrue(scanAttempted.await(2, TimeUnit.SECONDS))
+        assertFalse("a scan cannot be admitted during reset", scanEntered.await(50, TimeUnit.MILLISECONDS))
+        releaseReset.countDown()
+        resetter.join(2_000)
+        scanner.join(2_000)
+        assertFalse(resetter.isAlive)
+        assertFalse(scanner.isAlive)
+        assertEquals(0L, scanEntered.count)
+
+        val scanHolding = CountDownLatch(1)
+        val releaseScan = CountDownLatch(1)
+        val resetAttempted = CountDownLatch(1)
+        val queuedResetEntered = CountDownLatch(1)
+        val holdingScanner = thread(start = true) {
+            synchronized(owner) {
+                scanHolding.countDown()
+                releaseScan.await()
+            }
+        }
+        assertTrue(scanHolding.await(2, TimeUnit.SECONDS))
+        val queuedReset = thread(start = true) {
+            resetAttempted.countDown()
+            withEntityLearningMutationLock(owner) { queuedResetEntered.countDown() }
+        }
+        assertTrue(resetAttempted.await(2, TimeUnit.SECONDS))
+        assertFalse("reset cannot inspect admission while a scan is being admitted",
+            queuedResetEntered.await(50, TimeUnit.MILLISECONDS))
+        releaseScan.countDown()
+        holdingScanner.join(2_000)
+        queuedReset.join(2_000)
+        assertFalse(holdingScanner.isAlive)
+        assertFalse(queuedReset.isAlive)
+        assertEquals(0L, queuedResetEntered.count)
+    }
+
+    @Test fun cancelledScanCannotRepopulateOverridesAfterResetClearsEvidence() {
+        val owner = Any()
+        val evidence = mutableListOf<String>()
+        val scanCommitted = CountDownLatch(1)
+        val releaseScanCommit = CountDownLatch(1)
+        val resetAttempted = CountDownLatch(1)
+        val resetFinished = CountDownLatch(1)
+
+        val cancelledScan = thread(start = true, isDaemon = true) {
+            commitEntityLearningSyncEvidence(
+                owner = owner,
+                ensureCurrent = {},
+                commitSync = {
+                    evidence += "scan"
+                    scanCommitted.countDown()
+                    releaseScanCommit.await()
+                },
+                applyStoredOverrides = { evidence += "override" },
+                publishDiagnostics = {},
+            )
+        }
+        assertTrue(scanCommitted.await(2, TimeUnit.SECONDS))
+        val reset = thread(start = true, isDaemon = true) {
+            resetAttempted.countDown()
+            withEntityLearningMutationLock(owner) { evidence.clear() }
+            resetFinished.countDown()
+        }
+        assertTrue(resetAttempted.await(2, TimeUnit.SECONDS))
+        assertFalse(
+            "reset must not split scan evidence from its stored overrides",
+            resetFinished.await(50, TimeUnit.MILLISECONDS),
+        )
+
+        releaseScanCommit.countDown()
+        cancelledScan.join(2_000)
+        reset.join(2_000)
+        assertFalse(cancelledScan.isAlive)
+        assertFalse(reset.isAlive)
+        assertTrue("the later reset must win over every scan evidence write", evidence.isEmpty())
     }
 
     @Test fun queuedPromotionRequiresUnchangedEligiblePolicyAndNoBlockers() {
@@ -371,6 +538,87 @@ class EntityLearningManagerSafetyTest {
             restoreOverridePreferences = { events += "prefs-rollback"; true },
         )
         assertEquals(listOf("prefs", "store", "filter"), events)
+    }
+
+    @Test fun failedResetPreferenceCommitNeverTouchesTheCatalog() {
+        val events = mutableListOf<String>()
+        val failed = runCatching {
+            runEntityEvidenceResetTransaction(
+                commitPreferences = { events += "prefs-failed"; false },
+                resetStore = { events += "store" },
+                restorePreferences = { events += "prefs-rollback"; true },
+                afterSuccess = { events += "cache-clear" },
+            )
+        }.isFailure
+
+        assertTrue(failed)
+        assertEquals(listOf("prefs-failed"), events)
+    }
+
+    @Test fun failedCatalogResetRestoresPreferencesBeforeReturningTheStoreFailure() {
+        val events = mutableListOf<String>()
+        var publishedState = "original"
+        var blockingIssues = 3
+        var dynamicExpressions = "[\"template\"]"
+        val storeFailure = IllegalStateException("store failed")
+
+        val failure = runCatching {
+            runEntityEvidenceResetTransaction(
+                commitPreferences = { events += "prefs-reset"; publishedState = "reset"; true },
+                resetStore = { events += "store-failed"; throw storeFailure },
+                restorePreferences = { events += "prefs-rollback"; publishedState = "original"; true },
+                afterSuccess = {
+                    events += "cache-clear"
+                    blockingIssues = 0
+                    dynamicExpressions = "[]"
+                },
+            )
+        }.exceptionOrNull()
+
+        assertTrue(failure === storeFailure)
+        assertEquals("original", publishedState)
+        assertEquals(3, blockingIssues)
+        assertEquals("[\"template\"]", dynamicExpressions)
+        assertEquals(listOf("prefs-reset", "store-failed", "prefs-rollback"), events)
+        assertTrue(storeFailure.suppressed.isEmpty())
+    }
+
+    @Test fun failedResetRollbackIsAttachedWithoutMaskingTheStoreFailure() {
+        val storeFailure = IllegalStateException("store failed")
+
+        val failure = runCatching {
+            runEntityEvidenceResetTransaction(
+                commitPreferences = { true },
+                resetStore = { throw storeFailure },
+                restorePreferences = { false },
+                afterSuccess = {},
+            )
+        }.exceptionOrNull()
+
+        assertTrue(failure === storeFailure)
+        assertEquals(1, storeFailure.suppressed.size)
+        assertEquals("entity evidence reset preference rollback failed", storeFailure.suppressed.single().message)
+    }
+
+    @Test fun successfulResetTransactionDoesNotRunRollback() {
+        val events = mutableListOf<String>()
+        var blockingIssues = 3
+        var dynamicExpressions = "[\"template\"]"
+
+        runEntityEvidenceResetTransaction(
+            commitPreferences = { events += "prefs-reset"; true },
+            resetStore = { events += "store-reset" },
+            restorePreferences = { events += "prefs-rollback"; true },
+            afterSuccess = {
+                events += "cache-clear"
+                blockingIssues = 0
+                dynamicExpressions = "[]"
+            },
+        )
+
+        assertEquals(listOf("prefs-reset", "store-reset", "cache-clear"), events)
+        assertEquals(0, blockingIssues)
+        assertEquals("[]", dynamicExpressions)
     }
 
     @Test fun authenticatedHaConfigAddsBoundedValidIdentityAliases() {

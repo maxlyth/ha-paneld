@@ -21,6 +21,30 @@ class MqttTeardownGateTest {
         }
     }
 
+    @Test fun `disconnect completion stays pending for its owner and fails on gate rejection`() {
+        val gate = MqttTeardownGate()
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        try {
+            val active = gate.submit {
+                entered.countDown()
+                release.await()
+            }
+            assertTrue(entered.await(1, TimeUnit.SECONDS))
+            assertFalse(active.isDone)
+
+            val rejected = gate.submit { error("rejected teardown ran") }
+            assertTrue(rejected.isCompletedExceptionally)
+
+            release.countDown()
+            active.get(1, TimeUnit.SECONDS)
+            assertTrue(active.isDone)
+        } finally {
+            release.countDown()
+            gate.close()
+        }
+    }
+
     @Test fun `final publication retains one bounded slot through ack or timeout`() {
         val gate = MqttFinalPublishGate()
         val entered = CountDownLatch(1)

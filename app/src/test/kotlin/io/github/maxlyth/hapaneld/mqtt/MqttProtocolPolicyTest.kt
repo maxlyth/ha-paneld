@@ -46,12 +46,27 @@ class MqttProtocolPolicyTest {
         assertTrue(first != mqttDiscoveryCleanupMarker("0.9.3", "other.panel@aaa"))
     }
 
-    @Test fun discoveryCleanupMarkerIsStableAndKeepsLegacyDefault() {
+    @Test fun discoveryCleanupMarkerChangesWhenTheEntityShapeChangesAtTheSameVersion() {
+        val beforeRetirement = mqttDiscoveryCleanupMarker(
+            "0.9.5-rc1",
+            "panel.example@aaa",
+            discoveryShapeRevision = 1,
+        )
+        val afterRetirement = mqttDiscoveryCleanupMarker(
+            "0.9.5-rc1",
+            "panel.example@aaa",
+            discoveryShapeRevision = 2,
+        )
+
+        assertTrue(beforeRetirement != afterRetirement)
+    }
+
+    @Test fun discoveryCleanupMarkerIsStableAndAlwaysIncludesTheShapeRevision() {
         assertTrue(
             mqttDiscoveryCleanupMarker("0.9.3", "panel.example@aaa") ==
                 mqttDiscoveryCleanupMarker("0.9.3", "panel.example@aaa"),
         )
-        assertTrue(mqttDiscoveryCleanupMarker("0.9.3", "") == "0.9.3")
+        assertTrue(mqttDiscoveryCleanupMarker("0.9.3", "") == "0.9.3|d2")
     }
 
     @Test fun connectedPanelReannouncesOnlyWhenItsLiveConfigurationAddressChanges() {

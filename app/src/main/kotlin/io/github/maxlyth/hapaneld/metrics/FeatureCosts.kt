@@ -41,13 +41,17 @@ enum class FeatureCostOperation(
     SHIZUKU_CALL("shizuku.call"),
     SHIZUKU_SCREENSHOT("shizuku.screenshot"),
     SHIZUKU_INSTALL("shizuku.install"),
-    GPIO_PROXIMITY_POLL("sensors.gpio_proximity_poll"),
     KIOSK_STATE_POLL("kiosk.state_poll"),
     CAPABILITY_SNAPSHOT("capabilities.snapshot"),
     MDNS_PEER_REFRESH("mdns.peer_refresh"),
     RELAY_TOPOLOGY_DISCOVERY("hardware.relay_topology_discovery"),
     RELAY_STATE_READ("hardware.relay_state_read"),
     AUTO_BRIGHTNESS_APPLY("display.auto_brightness_apply"),
+    // Retired with the app-side shell poller. Keep the shipped ID in the fixed vocabulary so
+    // projections remain comparable; the helper-side fallback runs in another process.
+    GPIO_PROXIMITY_POLL("sensors.gpio_proximity_poll"),
+    PROXIMITY_SAMPLE("sensors.proximity_sample"),
+    PROXIMITY_PERSIST_BATCH("sensors.proximity_persist_batch"),
     MQTT_TEARDOWN("mqtt.teardown"),
     MQTT_STATE_OUTBOX("mqtt.state_outbox"),
     ZIGBEE_RECONCILE("zigbee.reconcile"),

@@ -71,9 +71,7 @@ object ProfileDraftFactory {
             input = ProfileInput(),
             cpu = ProfileCpu(),
             display = ProfileDisplay(physicalPpi = physicalPpi),
-            provisioning = ProfileProvisioning(
-                access = ProfileProvisioningAccess(shizuku = ShizukuRecommendation.OPTIONAL),
-            ),
+            provisioning = ProfileProvisioning(),
         )
         val issues = buildList {
             addAll(report?.issues.orEmpty())

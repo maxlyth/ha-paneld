@@ -188,7 +188,7 @@ int main(int argc, char **argv) {
 
     if (!cdprelay_peer_allowed(inet_addr("127.0.0.1")) ||
             !cdprelay_peer_allowed(inet_addr("10.20.30.40")) ||
-            !cdprelay_peer_allowed(inet_addr("172.31.255.1")) ||
+            !cdprelay_peer_allowed(inet_addr("172.16.0.1")) ||
             !cdprelay_peer_allowed(inet_addr("192.168.1.2")) ||
             !cdprelay_peer_allowed(inet_addr("169.254.2.3")) ||
             cdprelay_peer_allowed(inet_addr("172.32.0.1")) ||
@@ -198,7 +198,7 @@ int main(int argc, char **argv) {
     }
 
     char backend_name[80];
-    snprintf(backend_name, sizeof(backend_name), "hapaneld_cdp_test_%ld", (long)getpid());
+    snprintf(backend_name, sizeof(backend_name), "webview_devtools_remote_%ld", (long)getpid());
     pid_t backend = start_backend(backend_name);
     unsigned short port = reserve_port();
     pid_t relay = start_relay(argv[1], port, backend_name);

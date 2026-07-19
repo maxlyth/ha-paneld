@@ -5,6 +5,8 @@
     <exclude domain="sharedpref" path="ha-paneld.xml" />
     <!-- Enhanced access is approved locally on each panel and must never migrate with app data. -->
     <exclude domain="sharedpref" path="ha-paneld-shizuku.xml" />
+    <!-- Performance binding contains an installation-local secret and must never migrate. -->
+    <exclude domain="sharedpref" path="ha-paneld-performance-binding.xml" />
     <!-- Imported profile files may migrate as inactive library content, but activation/LKG state is
          panel-local. A restored community profile must pass the normal preview + activation flow. -->
     <exclude domain="sharedpref" path="ha-paneld-device-profiles.xml" />
@@ -21,4 +23,6 @@
     <!-- Screenshots are transient panel observations, not portable application state. -->
     <exclude domain="file" path="panel-screenshots/" />
     <exclude domain="file" path="last-panel-screenshot.png" />
+    <!-- Revision snapshots contain historical credentials as well as ordinary settings. -->
+    <exclude domain="file" path="config-revisions/" />
 </full-backup-content>

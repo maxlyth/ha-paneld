@@ -136,7 +136,8 @@ class PaneldServerEntityAdminRoutesTest {
 
         val managerSource = entityLearningManagerSource()
         val resetStart = managerSource.indexOf("fun resetEvidence(confirm: Boolean, clearFilter: Boolean = false)")
-        val reset = managerSource.substring(resetStart, minOf(managerSource.length, resetStart + 1_500))
+        val resetEnd = managerSource.indexOf("private fun applyStoredOverrides", resetStart)
+        val reset = managerSource.substring(resetStart, resetEnd)
         assertFalse(reset.contains("clear_filter requires automatic learning"))
         assertTrue(reset.contains("if (config.dashboardEntityLearningEnabled) syncNow(\"reset\") else false"))
     }

@@ -14,6 +14,11 @@ object ShizukuSetupDialog {
         DISABLE("Disable"),
     }
 
+    internal fun entryVisible(
+        consented: Boolean,
+        managerStatus: ShizukuManagerIdentity.Status,
+    ): Boolean = consented || managerStatus != ShizukuManagerIdentity.Status.MISSING
+
     fun show(activity: AppCompatActivity) {
         ShizukuBridge.refresh()
         val consented = ShizukuConsent.enabled(activity)
@@ -64,8 +69,10 @@ object ShizukuSetupDialog {
             "Shizuku is not installed. Use the ha-paneld provisioning script once over ADB, then approve access here on the panel."
         ShizukuState.MANAGER_UNTRUSTED ->
             "A package named Shizuku is installed, but its signing certificate is not trusted. ha-paneld will not connect to it."
+        ShizukuState.DISABLED ->
+            "Enhanced access is disabled in ha-paneld. Choose Enable here on this panel to begin local approval."
         ShizukuState.STOPPED ->
-            "Shizuku is installed but its service is stopped, or enhanced access is not enabled. Start Shizuku, then return here."
+            "Enhanced access is enabled in ha-paneld, but the Shizuku service is stopped. Open Shizuku, start its service, then return here."
         ShizukuState.PERMISSION_REQUIRED ->
             "Shizuku is running and ready to show its local permission prompt. Request permission to continue."
         ShizukuState.MANUAL_GRANT_REQUIRED ->

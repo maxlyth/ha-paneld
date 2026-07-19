@@ -34,10 +34,16 @@
  pre{background:#0d0d0d;border:1px solid var(--border);border-radius:7px;padding:10px;margin-top:10px;white-space:pre-wrap;word-break:break-word;font-size:.82rem;color:#cdd;max-height:300px;overflow:auto}
  .st{font-size:.78rem;margin-top:8px}
  .desc{color:var(--ok-dim);font-size:.82rem;margin:2px 0 0}
+ [data-hardened-approval]::after{content:"";display:inline-block;width:.81rem;height:.95rem;margin-left:.42rem;background:currentColor;clip-path:polygon(50% 0,95% 18%,82% 72%,50% 100%,18% 72%,5% 18%);opacity:.72;vertical-align:-.18rem}
+ .approval-key{color:var(--icon);font-size:.72rem;line-height:1.4;margin:18px 0 4px;padding-top:10px;border-top:1px solid var(--border);display:flex;align-items:center;gap:.42rem}.approval-key::before{content:"";display:inline-block;flex:0 0 auto;width:.81rem;height:.95rem;background:currentColor;clip-path:polygon(50% 0,95% 18%,82% 72%,50% 100%,18% 72%,5% 18%);opacity:.72}
+ .sr-only{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}
 </style></head><body><div class="wrap">
 <div class="hdr"><h1>ha-paneld <small>· REST API</small></h1><a href="/">← back to panel</a></div>
 <p class="desc">Live, on-panel API explorer. <a href="/api/v1/openapi.json" target="_blank">openapi.json</a> — import into Swagger/Postman for fleet tooling. No auth; LAN only.</p>
+<span id="hardened-approval-description" class="sr-only">Requires physical on-panel approval for this action when Hardened mode is enabled.</span>
+<span id="hardened-approval-conditional-description" class="sr-only">Some request values require physical on-panel approval when Hardened mode is enabled; other values may be ordinary or unavailable.</span>
 <div id="root"></div>
+<p class="approval-key">Shielded actions need physical approval on this panel in Hardened mode; they cannot be approved remotely.</p>
 <script>
 fetch('/api/v1/openapi.json').then(function(r){return r.json();}).then(render).catch(function(e){
  document.getElementById('root').innerHTML='<p class="desc">Could not load /api/v1/openapi.json: '+e+'</p>';});
@@ -81,6 +87,17 @@ function endpoint(path,method,op){
   else{var ta=el('textarea');if(request.type==='application/json'&&request.schema.type==='object')ta.value='{}';fields.__body=ta;body.appendChild(ta);}
  }
  var btn=el('button',null,'Send '+method.toUpperCase());
+ var approvalKind=JSON.stringify(op.responses||{}).indexOf('ApprovalRequired')>=0?'required':null;
+ if(approvalKind&&[
+  '/api/v1/config','/api/v1/config/export','/api/v1/config/import','/api/v1/restore','/api/v1/action'
+ ].indexOf(path)>=0)approvalKind='conditional';
+ if(approvalKind){
+  btn.setAttribute('data-hardened-approval',approvalKind==='conditional'?'conditional':'');
+  btn.setAttribute('aria-describedby',approvalKind==='conditional'?'hardened-approval-conditional-description':'hardened-approval-description');
+  btn.title=approvalKind==='conditional'
+   ?'Some request values require physical on-panel approval in Hardened mode; other values may be ordinary or unavailable.'
+   :'Requires physical on-panel approval for this action when Hardened mode is enabled.';
+ }
  var st=el('div','st'),out=el('pre');out.style.display='none';
  body.appendChild(btn);body.appendChild(st);body.appendChild(out);
  btn.onclick=function(){send(path,method,fields,parameters,request,st,out,btn);};

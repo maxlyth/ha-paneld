@@ -27,7 +27,7 @@ object ProfileMetadata {
         ProfileDriverDescriptor("screen.daemon-blpower", ProfileDriverKind.SCREEN, "Helper-backed kernel bl_power screen off", true),
         ProfileDriverDescriptor("screen.su-blpower", ProfileDriverKind.SCREEN, "su-backed kernel bl_power screen off", true),
         ProfileDriverDescriptor("sensor.android", ProfileDriverKind.SENSOR, "Android SensorManager light/proximity inputs", false),
-        ProfileDriverDescriptor("sensor.cht8305-daemon", ProfileDriverKind.SENSOR, "Helper-backed CHT8305 temperature/humidity input", true),
+        ProfileDriverDescriptor("sensor.cht8305-daemon", ProfileDriverKind.SENSOR, "Authenticated helper/Shizuku allowlisted room-climate input", true),
         ProfileDriverDescriptor("sensor.gpio-proximity", ProfileDriverKind.SENSOR, "Root-backed binary proximity GPIO", true),
         ProfileDriverDescriptor("update.webview", ProfileDriverKind.UPDATE, "Core-owned System WebView artifacts: ${ProfileArtifacts.webViews.keys.sorted().joinToString()}", true),
     )
@@ -53,8 +53,10 @@ object ProfileMetadata {
         "screen.daemon-blpower" to ProfileHelperAuthorityDemand.REQUIRED,
         "screen.su-blpower" to ProfileHelperAuthorityDemand.SANDBOX_FALLBACK,
         "sensor.android" to ProfileHelperAuthorityDemand.NONE,
-        "sensor.cht8305-daemon" to ProfileHelperAuthorityDemand.REQUIRED,
-        "sensor.gpio-proximity" to ProfileHelperAuthorityDemand.NONE,
+        // The established helper is preferred, but an exact shell-readable input layout can use the
+        // fixed Shizuku reader when the profile declares that provisioning route.
+        "sensor.cht8305-daemon" to ProfileHelperAuthorityDemand.SHIZUKU_ALTERNATE,
+        "sensor.gpio-proximity" to ProfileHelperAuthorityDemand.REQUIRED,
         "update.webview" to ProfileHelperAuthorityDemand.NONE,
     )
 
@@ -73,10 +75,16 @@ object ProfileMetadata {
             field("version", "version", true, "Semantic version of this profile's content."),
             field("display_name", "string", true, "Human-readable panel name."),
             field("soc_class", "string", true, "Human-readable SoC family."),
+            field("soc.model", "string", false, "Profile-evidenced SoC model; never runtime-fetched."),
+            field("soc.introduced_year", "integer", false, "Public introduction year when evidenced."),
+            field("soc.cpu_cores[].architecture", "string", true, "CPU core architecture, for example Arm Cortex-A55."),
+            field("soc.cpu_cores[].count", "integer", true, "Number of cores using this architecture."),
             field("metadata.author", "string", true, "Profile author or organization."),
             field("metadata.source", "https-url", false, "Canonical source page for this profile."),
+            field("metadata.links[].label", "string", true, "Short display label for a product or reference page."),
+            field("metadata.links[].url", "https-url", true, "Display-only external HTTPS link; never fetched by ha-paneld."),
             field("metadata.license", "spdx-expression", true, "SPDX-style license expression."),
-            field("metadata.maturity", "enum", true, "Evidence maturity.", listOf("draft", "experimental", "verified")),
+            field("metadata.maturity", "enum", true, "Author-declared evidence maturity; not a provenance or trust signal.", listOf("draft", "experimental", "verified")),
             field("metadata.tested_firmware", "string[]", false, "Firmware builds against which this revision was tested."),
             field("metadata.limitations", "string[]", false, "Known profile limitations shown during review."),
             field("requires.min_core_version", "version", false, "Oldest compatible ha-paneld core."),
@@ -91,7 +99,7 @@ object ProfileMetadata {
             field("platform.app_can_su", "boolean", true, "Whether an ordinary app can attempt su."),
             field("platform.has_recents", "boolean", false, "Whether Android Recents is functional."),
             field("hardware.led.mechanism", "enum", true, "Built-in LED route.", listOf("none", "autodetect", "rk3576-ioctl", "rk3576-ioctl-daemon", "sysfs-daemon")),
-            field("hardware.led.transfer", "enum", true, "Core-owned LED transfer function.", listOf("identity", "rk3576-four-bit")),
+            field("hardware.led.transfer", "enum", false, "Core-owned LED transfer function; defaults to identity.", listOf("identity", "rk3576-four-bit")),
             field("hardware.screen_off", "enum", true, "Preferred screen-off route.", listOf("brightness-zero", "su-blpower", "daemon-blpower")),
             field("hardware.has_button_backlight", "boolean", false, "Helper-backed button backlight capability."),
             field("hardware.zigbee_gateway_dir", "path", false, "Supported Sonoff gateway directory."),
@@ -99,13 +107,9 @@ object ProfileMetadata {
             field("hardware.relay_base_fallbacks", "path[]", false, "Alternative relay sysfs classes."),
             field("hardware.button_led_gpio_base", "integer", false, "First GPIO in a button LED block."),
             field("sensors.proximity_technology", "string", false, "Author-declared proximity technology."),
-            field("sensors.proximity_near_below", "boolean", false, "Whether lower raw values mean nearer."),
-            field("sensors.proximity_near_raw", "number", false, "Profiled near reference reading."),
-            field("sensors.proximity_far_raw", "number", false, "Profiled far reference reading."),
             field("sensors.proximity_gpio", "integer", false, "Supported raw binary proximity GPIO."),
-            field("sensors.proximity_graded_strategy", "enum", false, "Core-owned firmware rule.", listOf("observed", "nspanel-firmware-cutover")),
             field("sensors.light_technology", "string", false, "Author-declared ambient light technology."),
-            field("sensors.cht8305", "boolean", false, "Expose the supported helper-backed CHT8305 input."),
+            field("sensors.cht8305", "boolean", false, "Expose a supported authenticated room-climate input layout."),
             field("sensors.room_temp_offset_c", "number", false, "Profile baseline temperature correction."),
             field("identity.manufacturer", "string", false, "Default HA manufacturer; null means infer."),
             field("identity.model", "string", false, "Default HA model; null means infer."),
@@ -140,11 +144,12 @@ object ProfileMetadata {
  * Whether selecting a driver makes the root helper part of the core provisioning contract.
  *
  * [SANDBOX_FALLBACK] mirrors controllers that prefer an app-side privileged route and then fall back
- * to the helper. The helper becomes required when the active profile marks the app sandbox as walled;
- * it remains a resilience fallback rather than a required install on app-su profiles.
+ * to the helper. [SHIZUKU_ALTERNATE] requires the helper unless the profile explicitly includes Shizuku
+ * provisioning guidance for the same fixed core operation.
  */
 internal enum class ProfileHelperAuthorityDemand {
     NONE,
     SANDBOX_FALLBACK,
+    SHIZUKU_ALTERNATE,
     REQUIRED,
 }

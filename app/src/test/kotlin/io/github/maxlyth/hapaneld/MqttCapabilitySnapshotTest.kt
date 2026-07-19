@@ -9,6 +9,41 @@ import org.junit.Test
 
 class MqttCapabilitySnapshotTest {
     @Test
+    fun `ranged notification is truthless and replacement re-reads service authority`() {
+        class FakeDiscoveryTransport {
+            var clears = 0
+            var announcements = 0
+            fun refresh(admitted: Boolean, authority: () -> Boolean) =
+                refreshRangedProximityFromAuthority(
+                    admitted = admitted,
+                    eligible = authority,
+                    clearIneligibleState = { clears++ },
+                    reannounce = { announcements++ },
+                )
+        }
+
+        var eligible = false
+        val old = FakeDiscoveryTransport()
+        val successor = FakeDiscoveryTransport()
+
+        // A queued notification reaching the retired generation must not clear or announce anything.
+        assertEquals(RangedProximityRefresh.SKIPPED, old.refresh(admitted = false) { eligible })
+        assertEquals(0, old.clears)
+        assertEquals(0, old.announcements)
+
+        // No Boolean crossed the handover: the admitted successor samples the newer service truth.
+        eligible = true
+        assertEquals(RangedProximityRefresh.ELIGIBLE, successor.refresh(admitted = true) { eligible })
+        assertEquals(0, successor.clears)
+        assertEquals(1, successor.announcements)
+
+        eligible = false
+        assertEquals(RangedProximityRefresh.INELIGIBLE, successor.refresh(admitted = true) { eligible })
+        assertEquals(1, successor.clears)
+        assertEquals(2, successor.announcements)
+    }
+
+    @Test
     fun `connect and reannounce each invoke the capability supplier exactly once`() {
         var calls = 0
         val source = MqttDiscoveryCapabilitySource(supplier = {
@@ -156,6 +191,25 @@ class MqttCapabilitySnapshotTest {
     }
 
     @Test
+    fun `explicit invalidation bypasses a still-fresh bounded snapshot`() {
+        var now = 1_000L
+        var ranged = false
+        var calls = 0
+        val source = MqttDiscoveryCapabilitySource(
+            supplier = { calls++; Capabilities(hasRangedProximity = ranged) },
+            nowMs = { now },
+        )
+
+        assertFalse(source.snapshot(maxAgeMs = 30_000L)!!.hasRangedProximity)
+        ranged = true
+        now += 1L
+        assertFalse(source.snapshot(maxAgeMs = 30_000L)!!.hasRangedProximity)
+        source.invalidate()
+        assertTrue(source.snapshot(maxAgeMs = 30_000L)!!.hasRangedProximity)
+        assertEquals(2, calls)
+    }
+
+    @Test
     fun `clock rollback expires rather than extending a capability snapshot`() {
         var now = 1_000L
         var calls = 0
@@ -172,45 +226,4 @@ class MqttCapabilitySnapshotTest {
         assertEquals(2, calls)
     }
 
-    @Test
-    fun `privilege snapshot probes each needed authority at most once`() {
-        var suCalls = 0
-        var helperCalls = 0
-        var shizukuCalls = 0
-
-        val snapshot = probePrivilegedCapabilities(
-            suProbe = { suCalls += 1; false },
-            helperProbe = { helperCalls += 1; true },
-            shizukuProbe = { shizukuCalls += 1; false },
-        )
-
-        assertFalse(snapshot.suAvailable)
-        assertFalse(snapshot.shizukuAvailable)
-        assertTrue(snapshot.anyAvailable)
-        assertEquals(1, suCalls)
-        assertEquals(1, helperCalls)
-        assertEquals(1, shizukuCalls)
-    }
-
-    @Test
-    fun `known root or Shizuku route avoids an unnecessary helper probe`() {
-        for ((su, shizuku) in listOf(true to false, false to true, true to true)) {
-            var suCalls = 0
-            var helperCalls = 0
-            var shizukuCalls = 0
-
-            val snapshot = probePrivilegedCapabilities(
-                suProbe = { suCalls += 1; su },
-                helperProbe = { helperCalls += 1; true },
-                shizukuProbe = { shizukuCalls += 1; shizuku },
-            )
-
-            assertEquals(su, snapshot.suAvailable)
-            assertEquals(shizuku, snapshot.shizukuAvailable)
-            assertTrue(snapshot.anyAvailable)
-            assertEquals(1, suCalls)
-            assertEquals(0, helperCalls)
-            assertEquals(1, shizukuCalls)
-        }
-    }
 }

@@ -1,11 +1,22 @@
 schema: 2
 id: org.example.wallpanel-x1
-version: 0.1.0
+version: 0.1.1
 display_name: Example Wall Panel X1
-soc_class: Unknown
+soc_class: ExampleChip EC1000
+soc:
+  model: ExampleChip EC1000
+  introduced_year: 2024
+  cpu_cores:
+    - architecture: Arm Cortex-A55
+      count: 4
 metadata:
   author: Example Community
   source: https://example.org/wallpanel-x1
+  links:
+    - label: Product page
+      url: https://vendor.example/products/wallpanel-x1
+    - label: Community notes
+      url: https://example.org/community/wallpanel-x1
   license: MIT
   maturity: draft
   tested_firmware:
@@ -14,7 +25,7 @@ metadata:
     - Only identity, ordinary Android behavior, and screen brightness have been tested.
     - TODO verify sensors and privileged hardware before declaring their drivers.
 requires:
-  min_core_version: 0.9.3
+  min_core_version: 0.9.5-rc1
   drivers:
     - screen.brightness-zero
 match:
@@ -42,7 +53,6 @@ hardware:
   screen_off: brightness-zero
   has_button_backlight: false
 sensors:
-  proximity_graded_strategy: observed
   cht8305: false
   room_temp_offset_c: 0.0
 identity:
@@ -55,8 +65,6 @@ cpu: {}
 display:
   physical_ppi: 220
 provisioning:
-  access:
-    shizuku: optional
   software: {}
   display:
     density: 240

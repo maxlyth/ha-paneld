@@ -207,4 +207,30 @@ class AudioPlaybackCoordinatorTest {
         release.complete(Unit)
         runCurrent()
     }
+
+    @Test fun closeDuringFactoryCreationCannotPublishAStartAfterCancel() = runTest {
+        val events = mutableListOf<String>()
+        val active = AtomicInteger()
+        val maximum = AtomicInteger()
+        lateinit var coordinator: AudioPlaybackCoordinator
+        lateinit var created: FakeRun
+        coordinator = AudioPlaybackCoordinator(
+            AudioPlaybackRunFactory { url ->
+                coordinator.closeAdmission()
+                created = FakeRun(url, events, active, maximum)
+                created
+            },
+            StandardTestDispatcher(testScheduler),
+        )
+
+        assertTrue(coordinator.submit("racing"))
+        runCurrent()
+
+        assertEquals(AudioPlaybackCoordinator.State.CLOSED, coordinator.snapshot().state)
+        assertEquals(1, created.cancelCalls)
+        assertFalse(created.started.isCompleted)
+        assertEquals(0, active.get())
+        assertTrue(coordinator.close(1_000L))
+        assertEquals(1, created.cancelCalls)
+    }
 }

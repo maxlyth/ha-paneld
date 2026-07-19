@@ -3,9 +3,10 @@ package io.github.maxlyth.hapaneld
 import io.github.maxlyth.hapaneld.control.CompanionDataOperationGate
 import io.github.maxlyth.hapaneld.control.CompanionDataOperationState
 import io.github.maxlyth.hapaneld.util.CompanionOperationStatus
-import io.github.maxlyth.hapaneld.util.ConflatedWorker
 import io.github.maxlyth.hapaneld.util.DurableRecoveryMarker
+import io.github.maxlyth.hapaneld.util.LatestOperationPolicy
 import io.github.maxlyth.hapaneld.util.RendererPreparationCoordinator
+import io.github.maxlyth.hapaneld.util.ServiceRuntimeOwner
 import java.util.Collections
 import java.nio.file.Files
 import java.util.concurrent.CompletableFuture
@@ -18,6 +19,13 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PaneldServiceStartupTest {
+    @Test fun permanentPolicyRecoveryFailureForcesFreshProcessAfterBoundedAttempts() {
+        assertFalse(shouldForceFreshProcessAfterExternalRecovery(4, 5, false, true, true, true))
+        assertTrue(shouldForceFreshProcessAfterExternalRecovery(5, 5, false, true, true, true))
+        assertFalse(shouldForceFreshProcessAfterExternalRecovery(5, 5, false, true, false, true))
+        assertFalse(shouldForceFreshProcessAfterExternalRecovery(5, 5, true, true, true, true))
+    }
+
     @Test fun blockedReplacementPublishesItsOwnSnapshotThenConflatedNewerConfigReplacesAgain() {
         fun snapshot(name: String) = NetworkConfigurationSnapshot(
             runtime = NetworkRuntimeIdentity(
@@ -36,39 +44,49 @@ class PaneldServiceStartupTest {
         val replacementA = snapshot("a")
         val replacementB = snapshot("b")
         val desired = AtomicReference(replacementA)
-        val active = AtomicReference(initial)
         val replacements = Collections.synchronizedList(mutableListOf<NetworkConfigurationSnapshot>())
         val replacementAStarted = CountDownLatch(1)
         val releaseReplacementA = CountDownLatch(1)
         val replacementBCompleted = CountDownLatch(1)
-        val worker = ConflatedWorker<Unit>("network-identity-race-test") {
-            val target = desired.get()
-            if (target.runtime == active.get().runtime) return@ConflatedWorker
-            // Model constructors consuming the immutable target rather than rereading desired config.
-            val concreteReplacement = target
-            replacements += concreteReplacement
-            if (concreteReplacement == replacementA) {
-                replacementAStarted.countDown()
-                assertTrue(releaseReplacementA.await(2, TimeUnit.SECONDS))
-            }
-            // Completion must publish the snapshot carried by this concrete replacement. Reading
-            // desired.get() here would incorrectly publish B for replacement A and skip the rerun.
-            active.set(concreteReplacement)
-            if (concreteReplacement == replacementB) replacementBCompleted.countDown()
-        }
+        val owner = ServiceRuntimeOwner(
+            initial = initial,
+            threadName = "network-identity-race-test",
+            latestOperation = LatestOperationPolicy(operation = {
+                val target = desired.get()
+                if (target.runtime != current.runtime) {
+                    // Model constructors consuming the immutable target rather than rereading desired config.
+                    val concreteReplacement = target
+                    replacements += concreteReplacement
+                    replace(
+                        retire = {},
+                        build = { concreteReplacement },
+                        start = {
+                            if (concreteReplacement == replacementA) {
+                                replacementAStarted.countDown()
+                                assertTrue(releaseReplacementA.await(2, TimeUnit.SECONDS))
+                            }
+                        },
+                        complete = {
+                            if (concreteReplacement == replacementB) replacementBCompleted.countDown()
+                        },
+                    )
+                }
+            }),
+        )
 
         try {
-            assertEquals(ConflatedWorker.Admission.ACCEPTED, worker.submit(Unit))
+            assertTrue(owner.start {}.get(1, TimeUnit.SECONDS))
+            assertEquals(ServiceRuntimeOwner.LatestAdmission.ACCEPTED, owner.requestLatest())
             assertTrue(replacementAStarted.await(1, TimeUnit.SECONDS))
             desired.set(replacementB)
-            assertEquals(ConflatedWorker.Admission.ACCEPTED, worker.submit(Unit))
+            assertEquals(ServiceRuntimeOwner.LatestAdmission.ACCEPTED, owner.requestLatest())
             releaseReplacementA.countDown()
             assertTrue(replacementBCompleted.await(1, TimeUnit.SECONDS))
             assertEquals(listOf(replacementA, replacementB), replacements.toList())
-            assertEquals(replacementB, active.get())
+            assertEquals(replacementB, owner.current())
         } finally {
             releaseReplacementA.countDown()
-            worker.close()
+            owner.shutdown(1_000L) {}
         }
     }
 
@@ -326,5 +344,126 @@ class PaneldServiceStartupTest {
 
         assertFalse(result.storeClosed)
         assertEquals(listOf("http-stop", "renderer-timeout", "runtime-detach", "scope-drain"), events)
+    }
+
+    @Test fun pendingKioskRecoveryRetriesAfterEscapeWindowBeforeEnabling() {
+        val pauses = mutableListOf<Long>()
+        var attempts = 0
+        var enables = 0
+
+        val recovered = recoverAndMaybeEnableKiosk(
+            escapeDelayMs = 60_000L,
+            retryDelayMs = 1_000L,
+            maxAttempts = 3,
+            shouldContinue = { true },
+            recover = { ++attempts == 3 },
+            enabled = { true },
+            enable = { ++enables; true },
+            pause = { pauses += it },
+        )
+
+        assertTrue(recovered)
+        assertEquals(3, attempts)
+        assertEquals(1, enables)
+        assertEquals(listOf(60_000L, 1_000L, 1_000L), pauses)
+    }
+
+    @Test fun pendingKioskRecoveryDrainsWhileDisabledWithoutEnabling() {
+        var attempts = 0
+        var enables = 0
+
+        val recovered = recoverAndMaybeEnableKiosk(
+            escapeDelayMs = 60_000L,
+            retryDelayMs = 1_000L,
+            maxAttempts = 3,
+            shouldContinue = { true },
+            recover = { ++attempts == 2 },
+            enabled = { false },
+            enable = { ++enables; true },
+            pause = {},
+        )
+
+        assertTrue(recovered)
+        assertEquals(2, attempts)
+        assertEquals(0, enables)
+    }
+
+    @Test fun ordinaryCleanStopReleasesWhileExplicitOrIncompleteTeardownExits() {
+        assertEquals(
+            ServiceTeardownDisposition.RELEASE,
+            serviceTeardownDisposition(completed = true, explicitProcessBoundary = false),
+        )
+        assertEquals(
+            ServiceTeardownDisposition.EXIT,
+            serviceTeardownDisposition(completed = true, explicitProcessBoundary = true),
+        )
+        assertEquals(
+            ServiceTeardownDisposition.EXIT,
+            serviceTeardownDisposition(completed = false, explicitProcessBoundary = false),
+        )
+    }
+
+    @Test fun teardownBoundaryMakesReleaseAndDelayedRestartOneTerminalClaim() {
+        val clean = ServiceTeardownBoundary()
+        assertTrue(clean.recordCompletionAndClaimRecovery(completed = true))
+        assertEquals(ServiceTeardownDisposition.RELEASE, clean.claim())
+        assertFalse(clean.requestExplicitBoundary())
+        assertFalse(clean.recordCompletionAndClaimRecovery(completed = true))
+        assertEquals(null, clean.claim())
+
+        val requested = ServiceTeardownBoundary()
+        assertTrue(requested.requestExplicitBoundary())
+        assertTrue(requested.recordCompletionAndClaimRecovery(completed = true))
+        assertEquals(ServiceTeardownDisposition.EXIT, requested.claim())
+        assertFalse(requested.requestExplicitBoundary())
+
+        val incomplete = ServiceTeardownBoundary()
+        assertTrue(incomplete.recordCompletionAndClaimRecovery(completed = true))
+        assertFalse(incomplete.recordCompletionAndClaimRecovery(completed = false))
+        assertEquals(ServiceTeardownDisposition.EXIT, incomplete.claim())
+    }
+
+    @Test fun audioAdmissionClosesAndActivePlaybackCancelsBeforeLaterTeardownCanBlock() {
+        val events = mutableListOf<String>()
+
+        beginAudioTeardown(
+            closeAdmission = { events += "admission-closed" },
+            cancelCurrent = { events += "playback-cancelled" },
+        )
+        events += "runtime-cleanup"
+
+        assertEquals(listOf("admission-closed", "playback-cancelled", "runtime-cleanup"), events)
+    }
+
+    @Test fun ownerCleanupFailureIsStickyWhileTheRemainingSweepContinues() {
+        val tracker = ServiceOwnerCleanupTracker()
+        val events = mutableListOf<String>()
+
+        assertEquals(null, tracker.run { events += "first" })
+        assertTrue(tracker.run {
+            events += "failed"
+            error("owner cleanup failed")
+        } is IllegalStateException)
+        tracker.record(false)
+        assertEquals(null, tracker.run { events += "last" })
+
+        assertEquals(listOf("first", "failed", "last"), events)
+        assertFalse(tracker.isComplete())
+        assertEquals(
+            ServiceTeardownDisposition.EXIT,
+            serviceTeardownDisposition(
+                completed = tracker.isComplete(),
+                explicitProcessBoundary = false,
+            ),
+        )
+    }
+
+    @Test fun existingScreenRecoveryOwnerPreventsASecondHardwareMutator() {
+        val pending = CompletableFuture<Boolean>()
+
+        assertFalse(proveScreenSafeForBoundary(pending))
+
+        pending.complete(true)
+        assertTrue(proveScreenSafeForBoundary(pending))
     }
 }

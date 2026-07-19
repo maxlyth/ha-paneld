@@ -34,7 +34,7 @@ The most common Home-Assistant wall panel on the market: a small **480×480 squa
 | Build ids | both report `ro.product.model/device/name = px30_evb` (shared Rockchip board name — *not* a reliable variant discriminator) | as 86P |
 | `ro.product.version` | `s6_android_x.y.z`-class | `NSPanelXXXP_x.y.z` (OTA channel `nspanel-pro-ver120`, full ROM `SN_3326S_750X1334_…`) |
 | OTA latest | **4.0.12** (full) → **4.6.0** (diff, current Stable) | **4.0.12** (full) → **4.6.0** (diff, current Stable) |
-| Proximity firmware | **4.0.12 restored graded** proximity | stayed **binary** at 4.x (per-model kernel divergence — see [Sensors](#sensors--light--proximity-are-app-direct)) |
+| Proximity firmware | **4.0.12 restored ranged** readings | stayed **binary** at 4.x (per-model kernel divergence — see [Sensors](#sensors--light--proximity-are-app-direct)) |
 
 Both share the EFR32 Zigbee radio, Android 8.1 (AOSP), arm64-v8a, and the root/recovery story below. Live-verified on a 120P (fw `NSPanel120P_3.7.1`): `wm size`=750×1334, density 240, `ro.board.platform=rk3326`.
 
@@ -55,7 +55,7 @@ Behaviour that changes across eWeLink firmware versions, newest-relevant first. 
 | **v1.4+** | Developer mode **removed** from the UI | Enable adb via the **5× power-cycle** at the Sonoff boot animation — [Gaining adb + root](#gaining-adb--root-access). |
 | **v3.7.1** (120P, live) | Baseline reference build | `wm size`=750×1334, density 240, `ro.board.platform=rk3326`. |
 | **v4.0.0** (roll-out 2025-09-19) | Stock firmware **bundles F-Droid** + promotes FOSS/HA app install; markedly faster UI | On-device install path opens — [Firmware v4.0.0](#firmware-v400--official-f-droid-app-install). Confirm **APP** *and* **OS** version both read ≥ 4.0.0. |
-| **v4.0.12** | Proximity **graded** restored on **86P**; **120P stays binary** (per-model kernel divergence) | Recommended stable pin for HA-only panels. Graded/binary is model-**and**-firmware specific — see [Sensors](#sensors--light--proximity-are-app-direct). |
+| **v4.0.12** | Proximity **ranged readings** restored on **86P**; **120P stays binary** (per-model kernel divergence) | Recommended stable pin for HA-only panels. The panel's raw input shape is model- and firmware-specific, but ha-paneld learns and normalizes either form — see [Sensors](#sensors--light--proximity-are-app-direct). |
 | **v4.5.1 / v4.5.2** | **Widespread reboot-loop reports** (~10–60 min, both models); 4.5.2 is an APK-only layer on 4.5.1 | **Superseded by v4.6.0.** Pin at **4.0.12** for maximum stability, or move to 4.6.0 (verify on one panel first). Check the firmware Discussion for current consensus. |
 | **v4.5.3** | Matter auto-discovery and screen-management optimizations; ROM diff on 120P but APK-only on 86P | No 4.5.3-specific restart-loop evidence found; superseded by v4.6.0. |
 | **v4.6.0** (Jun 2026) | Current official **Stable**; **Local Web Portal** (`nspanelpro.local` — LAN setup, MQTT→HA sync, Matter Bridge); diff-only off 4.0.12 / 4.4.0 / 4.5.1 | New — the stable successor to the reboot-loopy 4.5.x; verify on one panel before deploying widely. |
@@ -63,10 +63,10 @@ Behaviour that changes across eWeLink firmware versions, newest-relevant first. 
 > [!NOTE]
 > These are **Gen1** (86P/120P) quirks. The NSPanel Pro **Gen2** (RK3326-**S**, dual relays, EFR32**MG24**) is a different target with its own firmware line — do not assume Gen1 firmware notes carry over.
 
-Sibling Tuya-family boards — **S6E/T6E** (relay variants; S6E = T6E + 2 relays), [**S9E**](s9e.md) (Smatek), [**TPA10**](tpa10.md) (rk3326-class, A53, Android 11) — are separate targets, not NSPanel Pro firmware.
+Sibling Tuya-family boards — **S6E/T6E** (relay variants; S6E = T6E + 2 relays), [**S9E**](s9e.md) (Smatek), [**TPA10**](tpa10.md) (RK3566, Cortex-A55, Android 11) — are separate targets, not NSPanel Pro firmware.
 
 > [!CAUTION]
-> Detection can't rely on `ro.product.model` (both are `px30_evb`). Use `ro.product.version` / display metrics / `ro.board.platform` to tell 86P from 120P. The **proximity graded-vs-binary rule is per-model AND per-firmware** — a single global cutover is wrong (see Sensors).
+> Detection can't rely on `ro.product.model` (both are `px30_evb`). Use `ro.product.version` / display metrics / `ro.board.platform` to tell 86P from 120P. Proximity behavior also differs between models and firmware, so ha-paneld learns from the live readings instead of selecting a firmware-specific classifier.
 
 ## Gaining adb + root access
 
@@ -120,7 +120,7 @@ No `/sys/class/leds` RGB node and no `/dev/ledjni` were found on this unit, so t
 Unlike the TPA10 (where light/temp are root-only), the NSPanel Pro exposes its Sensortek combo through standard `SensorManager`: `android.sensor.light`, `android.sensor.proximity`, and `android.sensor.accelerometer` — all readable by a normal app, no root. ha-paneld reads light + proximity here directly. No temperature/humidity sensor is fitted.
 
 > [!NOTE]
-> **Proximity is firmware- AND model-dependent.** The sensor is a Sensortek STK3A5x ToF in a top-PCB cutout behind the cover glass. The per-unit rest baseline varies widely (one unit ~1000, another ~4000); only the *relative* change matters, so a high idle baseline is normal, not a fault. Up to ~fw **3.3** it reports a **graded** raw distance (~50 ms cadence); from ~**3.3–3.4** the kernel driver switched it to **binary 0/1** (the distance/threshold control is greyed out, not overridable). **4.0.12 restored graded on the 86P only** — the **120P stayed binary**. So a graded-vs-binary decision must be **per-model and per-firmware**, not a single global cutover. (Sources: seaky tools #142/#144/#171/#262.)
+> **Proximity readings are firmware- AND model-dependent.** The sensor is a Sensortek STK3A5x ToF in a top-PCB cutout behind the cover glass. The per-unit rest baseline varies widely (one unit ~1000, another ~4000); only the *relative* change matters, so a high idle baseline is normal, not a fault. Up to ~fw **3.3** it reports a ranged reading (~50 ms cadence); from ~**3.3–3.4** the kernel driver switched it to binary 0/1. **4.0.12 restored ranged readings on the 86P only** — the **120P stayed binary**. ha-paneld handles both from live behavior and normalizes the useful range across the fleet; profiles no longer encode per-firmware thresholds or ranged/binary classifiers. (Sources: seaky tools #142/#144/#171/#262.)
 
 <details>
 <summary>Bound i2c devices (real hardware)</summary>
@@ -166,6 +166,12 @@ ha-paneld **drives** the gateway; it doesn't ship or install it (it's eWeLink's 
 On a Zigbee-capable panel, `sensor.<panel>_zigbee_gateway_health` reports the vendor stack independently of the router switch. This means an unconfigured stock gateway is still visible without granting ha-paneld permission to stop it.
 
 When the router switch has explicitly been turned ON, ha-paneld allows a 15-minute startup and pairing grace, then watches once per minute for two runaway signatures: an explicitly invalid/unjoined network combined with more than 50% of one CPU core for five consecutive samples, or at least three gateway PID changes within ten minutes. A joined router with sustained high CPU is warning-only and remains running. Unknown 4.x layouts or missing firmware-specific join evidence fail safe to `unknown`.
+
+Turning the Zigbee router switch ON explicitly requests Repeater mode even when the vendor gateway process is already running, so an ON command sent while your ZHA/Zigbee2MQTT coordinator permits joining acts as a fresh join retry without spawning a second gateway supervisor.
+
+The Configure tab shows a **Request join** action directly beneath the Zigbee router switch. The existing switch remains the only on/off control. Enable permit-join on ZHA/Zigbee2MQTT, then request joining and confirm that permit-join is open. The action reasserts Repeater mode, starts a fresh 15-minute grace and polls the bounded health status; it does not reboot or restart the panel. The button is unavailable while the router is disabled, already joined or cooling down after a recent request.
+
+After the pairing grace, an enabled gateway that is still unjoined produces a persistent dashboard, Install-tab and status-API warning linked to that Configure action. Do not leave it in that state: repeated join retries can consume substantial CPU. Either join the panel as a router or turn off the Zigbee router switch.
 
 If a configured legacy gateway meets a runaway rule, ha-paneld persists the router switch OFF and attempts one bounded containment. Vendor-native containment can target only the Sonoff guard, `zgateway`, and the matching local broker. If a process cannot be stopped, the respawner is removed where possible and surviving gateway work is demoted to nice 19 and Android's background cpuset. Turning the router switch ON later explicitly starts one fresh grace period and retry.
 

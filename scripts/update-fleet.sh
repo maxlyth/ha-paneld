@@ -8,15 +8,16 @@
 # per panel.
 #
 # Usage:
-#   scripts/update-fleet.sh [provision-args...] -- <ip|ip:port> [<ip> ...]
-#   scripts/update-fleet.sh --latest -- 192.168.1.10 192.168.1.11:5555
+#   scripts/update-fleet.sh [--jobs N] [provision-args...] -- <ip|ip:port> [<ip> ...]
+#   scripts/update-fleet.sh --jobs 2 --latest -- 192.168.1.10 192.168.1.11:5555
 #   scripts/update-fleet.sh --apk path/to.apk -- 192.168.1.10 192.168.1.11
 #   printf '%s\n' 192.168.1.10 192.168.1.11 | scripts/update-fleet.sh --latest
 #
-# Panels are listed after `--` and/or on stdin (one per line). Args before `--` pass through to every
-# provision.sh call (e.g. --apk PATH, --mqtt ...). Per-panel ids are NOT set here — a fleet update
-# keeps each panel's existing id/config; use provision.sh directly to (re)set an individual id.
+# Panels are listed after `--` and/or on stdin (one per line). Except for this wrapper's `--jobs N`,
+# args before `--` pass through to every provision.sh call (e.g. --apk PATH, --mqtt ...). At most four
+# panels run concurrently by default; HAPANELD_FLEET_JOBS or --jobs can select 1..32 workers.
 set -euo pipefail
+umask 077
 
 if [ -t 1 ]; then B=$'\033[1m'; D=$'\033[2m'; X=$'\033[0m'; RED=$'\033[31m'; GRN=$'\033[32m'; YEL=$'\033[33m'
 else B=; D=; X=; RED=; GRN=; YEL=; fi
@@ -47,18 +48,75 @@ trap cleanup EXIT
 trap 'handle_signal 130' INT
 trap 'handle_signal 143' TERM
 
-# Split args at `--` into pass-through provision args and the panel list.
+# Split args at `--` into pass-through provision args and the panel list. Consume the fleet-only jobs
+# option here so provision.sh never sees it.
 PARGS=(); PANELS=(); seen_dd=0
-for a in "$@"; do
-  if [ "$seen_dd" = 0 ] && [ "$a" = "--" ]; then seen_dd=1; continue; fi
-  if [ "$seen_dd" = 1 ]; then PANELS+=("$a"); else PARGS+=("$a"); fi
+JOBS="${HAPANELD_FLEET_JOBS:-4}"
+while [ "$#" -gt 0 ]; do
+  if [ "$seen_dd" = 0 ]; then
+    case "$1" in
+      --) seen_dd=1; shift; continue ;;
+      --jobs)
+        [ "$#" -ge 2 ] || { echo "${RED}--jobs needs a value from 1 to 32${X}" >&2; exit 2; }
+        JOBS="$2"; shift 2; continue
+        ;;
+      --jobs=*) JOBS="${1#--jobs=}"; shift; continue ;;
+    esac
+    PARGS+=("$1")
+  else
+    PANELS+=("$1")
+  fi
+  shift
 done
+case "$JOBS" in
+  ''|*[!0-9]*|0) echo "${RED}--jobs must be a whole number from 1 to 32${X}" >&2; exit 2 ;;
+esac
+[ "$JOBS" -le 32 ] || { echo "${RED}--jobs must be a whole number from 1 to 32${X}" >&2; exit 2; }
 # Panels may also arrive on stdin (one per line) — but ONLY when none were given as args, so a
 # non-tty stdin (pipelines, CI) can't clobber an explicit `-- <ip> …` list.
 if [ "${#PANELS[@]}" -eq 0 ] && [ ! -t 0 ]; then
   while IFS= read -r line; do line="${line%%#*}"; line="$(echo "$line" | tr -d '[:space:]')"; [ -n "$line" ] && PANELS+=("$line"); done
 fi
 [ "${#PANELS[@]}" -gt 0 ] || { echo "${RED}no panels given${X} (after -- or on stdin)" >&2; exit 2; }
+
+# Legacy literal credential flags are visible in this wrapper's original argv, but must not be
+# multiplied into every worker. Normalize them once into owner-only files; provision.sh accepts the
+# same file options directly for callers that avoid literal argv exposure altogether.
+NORMALIZED_PARGS=()
+FLEET_SECRET_DIR=""
+seen_mqtt_pass=0; seen_ha_token=0; seen_ha_pass=0
+for ((i=0; i<${#PARGS[@]}; i++)); do
+  option="${PARGS[$i]}"
+  case "$option" in
+    --mqtt-pass|--mqtt-pass-file|--ha-token|--ha-token-file|--ha-pass|--ha-pass-file)
+      [ $((i + 1)) -lt ${#PARGS[@]} ] || { echo "${RED}$option needs a value${X}" >&2; exit 2; }
+      value="${PARGS[$((i + 1))]}"
+      [ -n "$value" ] && [ "${value#--}" = "$value" ] || { echo "${RED}$option needs a value${X}" >&2; exit 2; }
+      case "$option" in
+        --mqtt-pass|--mqtt-pass-file) seen_var=seen_mqtt_pass; file_option=--mqtt-pass-file; filename=mqtt-password ;;
+        --ha-token|--ha-token-file) seen_var=seen_ha_token; file_option=--ha-token-file; filename=ha-token ;;
+        *) seen_var=seen_ha_pass; file_option=--ha-pass-file; filename=ha-password ;;
+      esac
+      [ "${!seen_var}" = 0 ] || { echo "${RED}credential source supplied more than once: $file_option${X}" >&2; exit 2; }
+      printf -v "$seen_var" '%s' 1
+      case "$option" in
+        *-file) NORMALIZED_PARGS+=("$file_option" "$value") ;;
+        *)
+          if [ -z "$FLEET_SECRET_DIR" ]; then
+            FLEET_SECRET_DIR="$(mktemp -d)"; chmod 700 "$FLEET_SECRET_DIR"; TEMP_PATHS+=("$FLEET_SECRET_DIR")
+          fi
+          secret_path="$FLEET_SECRET_DIR/$filename"
+          printf '%s' "$value" > "$secret_path"; chmod 600 "$secret_path"
+          NORMALIZED_PARGS+=("$file_option" "$secret_path")
+          ;;
+      esac
+      value=""
+      i=$((i + 1))
+      ;;
+    *) NORMALIZED_PARGS+=("$option") ;;
+  esac
+done
+PARGS=("${NORMALIZED_PARGS[@]}")
 
 # Normalize before parallel work starts. `panel` and `panel:5555` name the same adb endpoint; running
 # both concurrently would race two install/config transactions against one device.
@@ -86,40 +144,24 @@ if [ "$have_apk" = 0 ]; then
   if [ "$want_prerelease" = 1 ]; then channel="latest release, including pre-releases"; else channel="latest stable release"; fi
   echo "${B}⬇️  fetching $channel (once for the fleet)${X}"
   tag=""; asset=""; expected_url=""
-  if command -v gh >/dev/null 2>&1; then
-    if [ "$want_prerelease" = 1 ]; then
-      # `--prerelease` means the newest published release candidate, not merely the newest
-      # release of either channel and never a maintainer-visible draft.
-      tag="$(gh release list --repo "$REPO" --exclude-drafts --limit 100 \
-        --json tagName,isPrerelease --jq 'map(select(.isPrerelease))[0].tagName // empty' 2>/dev/null || true)"
-    else
-      tag="$(gh release view --repo "$REPO" --json tagName -q .tagName 2>/dev/null || true)"
-    fi
-    if [ -n "$tag" ] && valid_release_tag "$tag"; then
-      asset="$(release_apk_name "$tag")"
-      gh release download "$tag" --repo "$REPO" --pattern "$asset" --dir "$dir" >/dev/null 2>&1 || true
-    fi
-  fi
-  if [ -z "$asset" ] || [ ! -s "$dir/$asset" ]; then
-    if [ "$want_prerelease" = 1 ]; then api="https://api.github.com/repos/$REPO/releases?per_page=100"; else api="https://api.github.com/repos/$REPO/releases/latest"; fi
-    json="$(curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 15 --max-time 30 "$api" 2>/dev/null || true)"
-    if [ "$want_prerelease" = 1 ]; then
-      # Split the GitHub release array at each top-level release URL, retain the first published
-      # prerelease record, then extract its tag and APK from that record only.
-      record="$(printf '%s' "$json" | tr -d '\r\n' | \
-        sed 's#{[[:space:]]*"url":[[:space:]]*"https://api.github.com/repos/maxlyth/ha-paneld/releases/\([0-9][0-9]*\)"#\
+  if [ "$want_prerelease" = 1 ]; then api="https://api.github.com/repos/$REPO/releases?per_page=100"; else api="https://api.github.com/repos/$REPO/releases/latest"; fi
+  json="$(curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 15 --max-time 30 "$api" 2>/dev/null || true)"
+  if [ "$want_prerelease" = 1 ]; then
+    # Split the GitHub release array at each top-level release URL, retain the first published
+    # prerelease record, then extract its tag and APK from that record only.
+    record="$(printf '%s' "$json" | tr -d '\r\n' | \
+      sed 's#{[[:space:]]*"url":[[:space:]]*"https://api.github.com/repos/maxlyth/ha-paneld/releases/\([0-9][0-9]*\)"#\
 &#g' | \
-        awk '/"draft":[[:space:]]*false/ && /"prerelease":[[:space:]]*true/ { print; exit }')"
-    else
-      record="$json"
-    fi
-    tag="$(printf '%s' "$record" | grep -o '"tag_name": *"[^"]*"' | head -1 | cut -d'"' -f4 || true)"
-    url="$(printf '%s' "$record" | grep -o '"browser_download_url": *"[^"]*\.apk"' | head -1 | cut -d'"' -f4 || true)"
-    if [ -n "$tag" ] && valid_release_tag "$tag"; then
-      asset="$(release_apk_name "$tag")"
-      expected_url="$(release_apk_url "$tag")"
-      [ "$url" = "$expected_url" ] && curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 15 --max-time 300 "$url" -o "$dir/$asset" || true
-    fi
+      awk '/"draft":[[:space:]]*false/ && /"prerelease":[[:space:]]*true/ { print; exit }')"
+  else
+    record="$json"
+  fi
+  tag="$(printf '%s' "$record" | grep -o '"tag_name": *"[^"]*"' | head -1 | cut -d'"' -f4 || true)"
+  url="$(printf '%s' "$record" | grep -o '"browser_download_url": *"[^"]*\.apk"' | head -1 | cut -d'"' -f4 || true)"
+  if [ -n "$tag" ] && valid_release_tag "$tag"; then
+    asset="$(release_apk_name "$tag")"
+    expected_url="$(release_apk_url "$tag")"
+    [ "$url" = "$expected_url" ] && curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 15 --max-time 300 "$url" -o "$dir/$asset" || true
   fi
   [ -n "$asset" ] && [ -s "$dir/$asset" ] && APK="$dir/$asset" || APK=""
   [ -n "$APK" ] || { echo "${RED}could not fetch the latest release APK from the expected GitHub release path${X}" >&2; exit 1; }
@@ -135,8 +177,8 @@ for p in "${PANELS[@]}"; do
   t="$p"
   targets+=("$t")
   index=$((${#targets[@]} - 1))
-  # One process per panel keeps an eight-panel home fleet fast while every panel still gets the full
-  # install/start/verify transaction. Output is isolated and replayed per panel below.
+  # Output is isolated and replayed per panel below. Completed batches release their worker slots;
+  # this deliberately simple scheduler bounds adb/install pressure without requiring wait -n support.
   (
     provision_pid=""
     provision_pgid=""
@@ -174,9 +216,14 @@ for p in "${PANELS[@]}"; do
     echo "$status" > "$run_dir/$index.status"
   ) > "$run_dir/$index.log" 2>&1 &
   pids+=("$!")
+  if [ "${#pids[@]}" -ge "$JOBS" ]; then
+    for pid in "${pids[@]}"; do wait "$pid" || true; done
+    pids=()
+  fi
 done
 
 for pid in "${pids[@]}"; do wait "$pid" || true; done
+pids=()
 
 ok=0; fail=0; failed=()
 for index in "${!targets[@]}"; do

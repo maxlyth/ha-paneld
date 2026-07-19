@@ -21,6 +21,7 @@ data class ProfileDocument(
     val cpu: ProfileCpu,
     val display: ProfileDisplay,
     val provisioning: ProfileProvisioning,
+    val soc: ProfileSoc? = null,
 )
 
 data class ProfileProvenance(
@@ -30,6 +31,33 @@ data class ProfileProvenance(
     val maturity: ProfileMaturity,
     val testedFirmware: List<String> = emptyList(),
     val limitations: List<String> = emptyList(),
+    val links: List<ProfileLink> = emptyList(),
+)
+
+/** Offline, author-evidenced SoC facts. These values are descriptive and never runtime-probed. */
+data class ProfileSoc(
+    val model: String,
+    val introducedYear: Int? = null,
+    val cpuCores: List<ProfileCpuCoreCluster> = emptyList(),
+) {
+    fun displayText(): String = buildList {
+        add(model)
+        cpuCores.takeIf { it.isNotEmpty() }?.let { clusters ->
+            add(clusters.joinToString(" + ") { "${it.count}× ${it.architecture}" })
+        }
+        introducedYear?.let { add("introduced $it") }
+    }.joinToString(" · ")
+}
+
+data class ProfileCpuCoreCluster(
+    val architecture: String,
+    val count: Int,
+)
+
+/** Display-only reference. Profile links are never fetched by the service or used for provisioning. */
+data class ProfileLink(
+    val label: String,
+    val url: String,
 )
 
 data class ProfileRequirements(
@@ -82,6 +110,7 @@ data class ProfileHardware(
     val relayBase: String? = null,
     val relayBaseFallbacks: List<String> = emptyList(),
     val buttonLedGpioBase: Int? = null,
+    val touchClickGain: Float? = null,
 )
 
 data class ProfileLed(
@@ -91,11 +120,7 @@ data class ProfileLed(
 
 data class ProfileSensors(
     val proximityTechnology: String? = null,
-    val proximityNearBelow: Boolean? = null,
-    val proximityNearRaw: Float? = null,
-    val proximityFarRaw: Float? = null,
     val proximityGpio: Int? = null,
-    val proximityGradedStrategy: String = "observed",
     val lightTechnology: String? = null,
     val cht8305: Boolean = false,
     val roomTempOffsetC: Float = 0f,

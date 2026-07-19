@@ -155,30 +155,42 @@ internal object ProfileYaml {
         failure.message?.lineSequence()?.firstOrNull()?.take(240) ?: failure::class.simpleName.orEmpty()
 
     private val ROOT_KEYS = setOf(
-        "schema", "id", "version", "display_name", "soc_class", "metadata", "requires", "match", "platform", "hardware",
+        "schema", "id", "version", "display_name", "soc_class", "soc", "metadata", "requires", "match", "platform", "hardware",
         "sensors", "identity", "input", "cpu", "display", "provisioning",
     )
 
     private const val MAX_EVENTS = 20_000
 }
 
+/** Accepted only so immutable schema-2 revisions written by older cores remain loadable. */
+private val LEGACY_PROXIMITY_CLASSIFIER_KEYS = setOf(
+    "proximity_near_below",
+    "proximity_near_raw",
+    "proximity_far_raw",
+    "proximity_graded_strategy",
+)
+
 private class SchemaReader(private val issues: MutableList<ProfileIssue>) {
     fun document(root: Map<String, Any?>): ProfileDocument {
         val metadata = map(root["metadata"], "metadata", setOf(
-            "author", "source", "license", "maturity", "tested_firmware", "limitations",
+            "author", "source", "license", "maturity", "tested_firmware", "limitations", "links",
         ), required = true).orEmpty()
+        val soc = map(root["soc"], "soc", setOf("model", "introduced_year", "cpu_cores"))
         val requires = map(root["requires"], "requires", setOf("min_core_version", "drivers"), required = true).orEmpty()
         val match = map(root["match"], "match", setOf("priority", "fallback", "any"), required = true).orEmpty()
         val platform = map(root["platform"], "platform", setOf("su_form", "app_can_su", "has_recents"), required = true).orEmpty()
         val hardware = map(root["hardware"], "hardware", setOf(
             "led", "screen_off", "has_button_backlight", "zigbee_gateway_dir", "relay_base",
-            "relay_base_fallbacks", "button_led_gpio_base",
+            "relay_base_fallbacks", "button_led_gpio_base", "touch_click_gain",
         ), required = true).orEmpty()
         val led = map(hardware["led"], "hardware.led", setOf("mechanism", "transfer"), required = true).orEmpty()
-        val sensors = map(root["sensors"], "sensors", setOf(
-            "proximity_technology", "proximity_near_below", "proximity_near_raw", "proximity_far_raw",
-            "proximity_gpio", "proximity_graded_strategy", "light_technology", "cht8305", "room_temp_offset_c",
-        )).orEmpty()
+        val sensors = map(
+            root["sensors"],
+            "sensors",
+            setOf(
+                "proximity_technology", "proximity_gpio", "light_technology", "cht8305", "room_temp_offset_c",
+            ) + LEGACY_PROXIMITY_CLASSIFIER_KEYS,
+        ).orEmpty()
         val identity = map(root["identity"], "identity", setOf("manufacturer", "model", "model_label_strategy")).orEmpty()
         val input = map(root["input"], "input", setOf("evdev_buttons")).orEmpty()
         val cpu = map(root["cpu"], "cpu", setOf("governors")).orEmpty()
@@ -224,6 +236,13 @@ private class SchemaReader(private val issues: MutableList<ProfileIssue>) {
             version = string(root, "version", "$", required = true).orEmpty(),
             displayName = string(root, "display_name", "$", required = true).orEmpty(),
             socClass = string(root, "soc_class", "$", required = true).orEmpty(),
+            soc = soc?.let {
+                ProfileSoc(
+                    model = string(it, "model", "soc", required = true).orEmpty(),
+                    introducedYear = integer(it, "introduced_year", "soc"),
+                    cpuCores = cpuCoreClusters(it["cpu_cores"]),
+                )
+            },
             metadata = ProfileProvenance(
                 author = string(metadata, "author", "metadata", required = true).orEmpty(),
                 source = string(metadata, "source", "metadata"),
@@ -232,6 +251,7 @@ private class SchemaReader(private val issues: MutableList<ProfileIssue>) {
                     ?: ProfileMaturity.DRAFT,
                 testedFirmware = stringList(metadata["tested_firmware"], "metadata.tested_firmware"),
                 limitations = stringList(metadata["limitations"], "metadata.limitations"),
+                links = profileLinks(metadata["links"]),
             ),
             requires = ProfileRequirements(
                 minCoreVersion = string(requires, "min_core_version", "requires"),
@@ -258,14 +278,11 @@ private class SchemaReader(private val issues: MutableList<ProfileIssue>) {
                 relayBase = string(hardware, "relay_base", "hardware"),
                 relayBaseFallbacks = stringList(hardware["relay_base_fallbacks"], "hardware.relay_base_fallbacks"),
                 buttonLedGpioBase = integer(hardware, "button_led_gpio_base", "hardware"),
+                touchClickGain = float(hardware, "touch_click_gain", "hardware"),
             ),
             sensors = ProfileSensors(
                 proximityTechnology = string(sensors, "proximity_technology", "sensors"),
-                proximityNearBelow = boolean(sensors, "proximity_near_below", "sensors"),
-                proximityNearRaw = float(sensors, "proximity_near_raw", "sensors"),
-                proximityFarRaw = float(sensors, "proximity_far_raw", "sensors"),
                 proximityGpio = integer(sensors, "proximity_gpio", "sensors"),
-                proximityGradedStrategy = string(sensors, "proximity_graded_strategy", "sensors") ?: "observed",
                 lightTechnology = string(sensors, "light_technology", "sensors"),
                 cht8305 = boolean(sensors, "cht8305", "sensors") ?: false,
                 roomTempOffsetC = float(sensors, "room_temp_offset_c", "sensors") ?: 0f,
@@ -349,6 +366,26 @@ private class SchemaReader(private val issues: MutableList<ProfileIssue>) {
             sw = boolean(map, "sw", path) ?: false,
         )
     }
+
+    private fun cpuCoreClusters(value: Any?): List<ProfileCpuCoreCluster> =
+        list(value, "soc.cpu_cores").mapIndexed { index, item ->
+            val path = "soc.cpu_cores[$index]"
+            val cluster = map(item, path, setOf("architecture", "count"), required = true).orEmpty()
+            ProfileCpuCoreCluster(
+                architecture = string(cluster, "architecture", path, required = true).orEmpty(),
+                count = integer(cluster, "count", path, required = true) ?: 0,
+            )
+        }
+
+    private fun profileLinks(value: Any?): List<ProfileLink> =
+        list(value, "metadata.links").mapIndexed { index, item ->
+            val path = "metadata.links[$index]"
+            val link = map(item, path, setOf("label", "url"), required = true).orEmpty()
+            ProfileLink(
+                label = string(link, "label", path, required = true).orEmpty(),
+                url = string(link, "url", path, required = true).orEmpty(),
+            )
+        }
 
     private fun packageIntents(value: Any?): List<ProfilePackageIntent> =
         list(value, "provisioning.packages").mapIndexed { index, item ->
@@ -531,6 +568,15 @@ internal fun ProfileDocument.toYamlMap(): Map<String, Any?> = linkedMapOf(
     "version" to version,
     "display_name" to displayName,
     "soc_class" to socClass,
+    "soc" to soc?.let {
+        linkedMapOf(
+            "model" to it.model,
+            "introduced_year" to it.introducedYear,
+            "cpu_cores" to it.cpuCores.map { cluster ->
+                linkedMapOf("architecture" to cluster.architecture, "count" to cluster.count)
+            }.takeIf { clusters -> clusters.isNotEmpty() },
+        ).withoutNullValues()
+    },
     "metadata" to linkedMapOf(
         "author" to metadata.author,
         "source" to metadata.source,
@@ -538,6 +584,8 @@ internal fun ProfileDocument.toYamlMap(): Map<String, Any?> = linkedMapOf(
         "maturity" to metadata.maturity.name.lowercase(),
         "tested_firmware" to metadata.testedFirmware,
         "limitations" to metadata.limitations,
+        "links" to metadata.links.map { linkedMapOf("label" to it.label, "url" to it.url) }
+            .takeIf { it.isNotEmpty() },
     ).withoutNullValues(),
     "requires" to linkedMapOf(
         "min_core_version" to requires.minCoreVersion,
@@ -569,14 +617,11 @@ internal fun ProfileDocument.toYamlMap(): Map<String, Any?> = linkedMapOf(
         "relay_base" to hardware.relayBase,
         "relay_base_fallbacks" to hardware.relayBaseFallbacks.takeIf { it.isNotEmpty() },
         "button_led_gpio_base" to hardware.buttonLedGpioBase,
+        "touch_click_gain" to hardware.touchClickGain,
     ).withoutNullValues(),
     "sensors" to linkedMapOf(
         "proximity_technology" to sensors.proximityTechnology,
-        "proximity_near_below" to sensors.proximityNearBelow,
-        "proximity_near_raw" to sensors.proximityNearRaw,
-        "proximity_far_raw" to sensors.proximityFarRaw,
         "proximity_gpio" to sensors.proximityGpio,
-        "proximity_graded_strategy" to sensors.proximityGradedStrategy,
         "light_technology" to sensors.lightTechnology,
         "cht8305" to sensors.cht8305,
         "room_temp_offset_c" to sensors.roomTempOffsetC,
@@ -592,9 +637,9 @@ internal fun ProfileDocument.toYamlMap(): Map<String, Any?> = linkedMapOf(
     "cpu" to linkedMapOf("governors" to cpu.governors).withoutNullValues(),
     "display" to linkedMapOf("physical_ppi" to display.physicalPpi).withoutNullValues(),
     "provisioning" to linkedMapOf(
-        "access" to linkedMapOf(
-            "shizuku" to provisioning.access.shizuku.name.lowercase(),
-        ),
+        "access" to provisioning.access.shizuku
+            .takeUnless { it == ShizukuRecommendation.NONE }
+            ?.let { linkedMapOf("shizuku" to it.name.lowercase()) },
         "software" to linkedMapOf(
             "webview" to provisioning.software.webView?.let {
                 linkedMapOf("artifact" to it.artifact)
@@ -621,8 +666,8 @@ internal fun ProfileDocument.toYamlMap(): Map<String, Any?> = linkedMapOf(
             )
         },
         "recipes" to provisioning.recipes.map { linkedMapOf("id" to it.id) },
-    ),
-)
+    ).withoutNullValues(),
+).withoutNullValues()
 
 private fun <K, V> LinkedHashMap<K, V?>.withoutNullValues(): LinkedHashMap<K, V> {
     val result = LinkedHashMap<K, V>()

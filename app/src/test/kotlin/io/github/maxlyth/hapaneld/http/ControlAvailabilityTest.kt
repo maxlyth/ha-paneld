@@ -28,7 +28,7 @@ class ControlAvailabilityTest {
         assertTrue(result.recentsEnabled)
     }
 
-    @Test fun missingInputRouteDisablesNavigationAndExplainsBothRecoveryPaths() {
+    @Test fun missingInputRouteDisablesNavigationWithoutPromotingAnOptionalProvider() {
         val result = ControlAvailability.navigation(
             accessibilityReady = false,
             shizukuReady = false,
@@ -38,8 +38,8 @@ class ControlAvailabilityTest {
         assertFalse(result.backEnabled)
         assertFalse(result.recentsEnabled)
         assertTrue(result.recentsRequirement.contains("Accessibility"))
-        assertTrue(result.recentsRequirement.contains("Shizuku"))
-        assertTrue(result.rootlessNote.contains("Back and Recents need Accessibility or Shizuku"))
+        assertFalse(result.recentsRequirement.contains("Shizuku"))
+        assertTrue(result.rootlessNote.contains("Back and Recents need Accessibility or privileged input access"))
     }
 
     @Test fun firmwareWithoutOverviewKeepsRecentsDisabledWhenInputIsReady() {
@@ -63,6 +63,6 @@ class ControlAvailabilityTest {
             hasRecents = false,
         )
 
-        assertTrue(result.rootlessNote.contains("Back needs Accessibility or Shizuku"))
+        assertTrue(result.rootlessNote.contains("Back needs Accessibility or privileged input access"))
     }
 }

@@ -1,5 +1,6 @@
 package io.github.maxlyth.hapaneld.shizuku
 
+import java.util.concurrent.atomic.AtomicInteger
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -7,9 +8,18 @@ import org.junit.Test
 
 class ShizukuPolicyTest {
     @Test fun acceptsOnlyExpectedShellIdentityAndProtocol() {
+        assertEquals(3, ShizukuPolicy.PROTOCOL_VERSION)
         assertTrue(ShizukuPolicy.usable(2000, ShizukuPolicy.PROTOCOL_VERSION))
         assertFalse(ShizukuPolicy.usable(0, ShizukuPolicy.PROTOCOL_VERSION))
         assertFalse(ShizukuPolicy.usable(2000, ShizukuPolicy.PROTOCOL_VERSION - 1))
+    }
+
+    @Test fun protocolUpgradeChangesTheRetainedUserServiceCacheIdentity() {
+        val retainedV2Tag = ShizukuPolicy.userServiceTag(2)
+
+        assertEquals("hapaneld-shell-v2", retainedV2Tag)
+        assertEquals("hapaneld-shell-v3", ShizukuPolicy.USER_SERVICE_TAG)
+        assertFalse(retainedV2Tag == ShizukuPolicy.USER_SERVICE_TAG)
     }
 
     @Test fun typedArgumentsAreBoundedBeforeCrossingBinder() {
@@ -29,6 +39,55 @@ class ShizukuPolicyTest {
         assertEquals(ShizukuManagerIdentity.PACKAGE, ShizukuPolicy.MANAGER_PACKAGE)
     }
 
+    @Test fun setupEntryIsHiddenUntilTheEscapeHatchIsInstalledOrConsented() {
+        assertFalse(ShizukuSetupDialog.entryVisible(false, ShizukuManagerIdentity.Status.MISSING))
+        assertTrue(ShizukuSetupDialog.entryVisible(false, ShizukuManagerIdentity.Status.TRUSTED))
+        assertTrue(ShizukuSetupDialog.entryVisible(false, ShizukuManagerIdentity.Status.UNTRUSTED))
+        assertTrue(ShizukuSetupDialog.entryVisible(true, ShizukuManagerIdentity.Status.MISSING))
+    }
+
+    @Test fun localConsentDisabledIsDistinctFromAStoppedShizukuService() {
+        assertEquals(
+            ShizukuState.DISABLED,
+            ShizukuPolicy.idleState(ShizukuManagerIdentity.Status.TRUSTED, consentEnabled = false),
+        )
+        assertEquals(
+            ShizukuState.STOPPED,
+            ShizukuPolicy.idleState(ShizukuManagerIdentity.Status.TRUSTED, consentEnabled = true),
+        )
+        assertEquals(
+            ShizukuState.MANAGER_MISSING,
+            ShizukuPolicy.idleState(ShizukuManagerIdentity.Status.MISSING, consentEnabled = false),
+        )
+        assertEquals(
+            ShizukuState.ERROR,
+            ShizukuPolicy.disconnectedState(
+                ShizukuManagerIdentity.Status.TRUSTED,
+                consentEnabled = true,
+                managerRunning = true,
+            ),
+        )
+        assertEquals(
+            ShizukuState.STOPPED,
+            ShizukuPolicy.disconnectedState(
+                ShizukuManagerIdentity.Status.TRUSTED,
+                consentEnabled = true,
+                managerRunning = false,
+            ),
+        )
+
+        assertTrue(ShizukuSetupDialog.description(ShizukuState.DISABLED).contains("Choose Enable"))
+        assertTrue(ShizukuSetupDialog.description(ShizukuState.STOPPED).contains("service is stopped"))
+        assertEquals(
+            ShizukuSetupDialog.PrimaryAction.ENABLE,
+            ShizukuSetupDialog.primaryAction(false, ShizukuState.DISABLED, managerRunning = true),
+        )
+        assertEquals(
+            ShizukuSetupDialog.PrimaryAction.OPEN_MANAGER,
+            ShizukuSetupDialog.primaryAction(true, ShizukuState.STOPPED, managerRunning = false),
+        )
+    }
+
     @Test fun staleDisabledOrUntrustedBindingCannotBecomeReady() {
         assertFalse(ShizukuPolicy.canAcceptBinding(1, 2, true, true, true, true))
         assertFalse(ShizukuPolicy.canAcceptBinding(2, 2, true, false, true, true))
@@ -38,9 +97,22 @@ class ShizukuPolicyTest {
     }
 
     @Test fun staleRejectedBindingCannotRemoveNewerUserService() {
-        assertFalse(ShizukuPolicy.canRemoveRejectedBinding(1, 2, false))
-        assertFalse(ShizukuPolicy.canRemoveRejectedBinding(2, 2, false))
-        assertTrue(ShizukuPolicy.canRemoveRejectedBinding(2, 2, true))
+        assertEquals(
+            ShizukuPolicy.RejectedBindingDisposition.IGNORE_STALE,
+            ShizukuPolicy.rejectedBindingDisposition(1, 2, true, ShizukuState.ERROR),
+        )
+        assertEquals(
+            ShizukuPolicy.RejectedBindingDisposition.IGNORE_STALE,
+            ShizukuPolicy.rejectedBindingDisposition(2, 2, false, ShizukuState.ERROR),
+        )
+        assertEquals(
+            ShizukuPolicy.RejectedBindingDisposition.REMOVE_CURRENT_AND_RECONNECT,
+            ShizukuPolicy.rejectedBindingDisposition(2, 2, true, ShizukuState.ERROR),
+        )
+        assertEquals(
+            ShizukuPolicy.RejectedBindingDisposition.REMOVE_CURRENT,
+            ShizukuPolicy.rejectedBindingDisposition(2, 2, true, ShizukuState.INCOMPATIBLE),
+        )
     }
 
     @Test fun deniedPermissionRequiresManualRecoveryInsteadOfAnotherPrompt() {
@@ -94,5 +166,106 @@ class ShizukuPolicyTest {
         assertTrue(ShizukuSetupDialog.disableAvailable(true, ShizukuState.MANAGER_MISSING))
         assertTrue(ShizukuSetupDialog.disableAvailable(true, ShizukuState.MANAGER_UNTRUSTED))
         assertFalse(ShizukuSetupDialog.disableAvailable(false, ShizukuState.MANAGER_MISSING))
+    }
+
+    @Test fun reconnectIsDeferredSinglePendingGenerationWithBoundedBackoff() {
+        val scheduler = FakeScheduler()
+        val coordinator = ShizukuReconnectCoordinator(scheduler, longArrayOf(50L, 100L, 200L))
+        val runs = mutableListOf<Long>()
+
+        assertTrue(coordinator.schedule(7) { runs += 7 })
+        assertFalse(coordinator.schedule(7) { runs += -1 })
+        assertEquals(50L, scheduler.tasks.single().delayMs)
+        scheduler.run(0)
+        assertEquals(listOf(7L), runs)
+
+        assertTrue(coordinator.schedule(8) { runs += 8 })
+        assertEquals(100L, scheduler.tasks[1].delayMs)
+        scheduler.run(1)
+        assertTrue(coordinator.schedule(9) { runs += 9 })
+        assertEquals(200L, scheduler.tasks[2].delayMs)
+        scheduler.run(2)
+        assertTrue(coordinator.schedule(10) { runs += 10 })
+        assertEquals(200L, scheduler.tasks[3].delayMs)
+    }
+
+    @Test fun cancelledReconnectRejectsStaleGenerationAndCanResetBackoff() {
+        val scheduler = FakeScheduler()
+        val coordinator = ShizukuReconnectCoordinator(scheduler, longArrayOf(50L, 100L))
+        val runs = AtomicInteger()
+
+        assertTrue(coordinator.schedule(1) { runs.incrementAndGet() })
+        coordinator.cancel(resetBackoff = false)
+        scheduler.run(0)
+        assertEquals(0, runs.get())
+        assertTrue(coordinator.schedule(2) { runs.incrementAndGet() })
+        assertEquals(100L, scheduler.tasks[1].delayMs)
+        coordinator.cancel(resetBackoff = true)
+        assertTrue(coordinator.schedule(3) { runs.incrementAndGet() })
+        assertEquals(50L, scheduler.tasks[2].delayMs)
+    }
+
+    @Test fun synchronousSchedulerCannotStrandReconnectPublication() {
+        val runs = AtomicInteger()
+        val coordinator = ShizukuReconnectCoordinator(
+            ShizukuScheduler { _, action ->
+                action()
+                ShizukuScheduledHandle {}
+            },
+            longArrayOf(50L),
+        )
+
+        assertTrue(coordinator.schedule(1) { runs.incrementAndGet() })
+        assertTrue(coordinator.schedule(2) { runs.incrementAndGet() })
+        assertEquals(2, runs.get())
+    }
+
+    @Test fun rejectedScheduleDoesNotStrandReconnectPublication() {
+        val calls = AtomicInteger()
+        val scheduler = ShizukuScheduler { _, _ ->
+            if (calls.getAndIncrement() == 0) error("scheduler rejected task")
+            ShizukuScheduledHandle {}
+        }
+        val coordinator = ShizukuReconnectCoordinator(scheduler, longArrayOf(50L))
+
+        assertFalse(coordinator.schedule(1) {})
+        assertTrue(coordinator.schedule(2) {})
+    }
+
+    @Test fun rejectedBindingMutationCrossesCallbackBarrierThenLeavesMain() {
+        val callbackQueue = mutableListOf<Runnable>()
+        val workerQueue = mutableListOf<Runnable>()
+        val mutations = AtomicInteger()
+        val dispatcher = ShizukuCallbackMutationDispatcher(
+            postBarrier = { callbackQueue.add(it) },
+            dispatchOffMain = { workerQueue.add(it) },
+        )
+
+        assertTrue(dispatcher.dispatch(Runnable { mutations.incrementAndGet() }))
+        assertEquals(0, mutations.get())
+        assertTrue(workerQueue.isEmpty())
+
+        callbackQueue.single().run()
+        assertEquals(0, mutations.get())
+        assertEquals(1, workerQueue.size)
+
+        workerQueue.single().run()
+        assertEquals(1, mutations.get())
+    }
+
+    private class FakeScheduler : ShizukuScheduler {
+        data class Task(val delayMs: Long, val action: () -> Unit, var cancelled: Boolean = false)
+
+        val tasks = mutableListOf<Task>()
+
+        override fun schedule(delayMs: Long, action: () -> Unit): ShizukuScheduledHandle {
+            val task = Task(delayMs, action)
+            tasks += task
+            return ShizukuScheduledHandle { task.cancelled = true }
+        }
+
+        fun run(index: Int) {
+            tasks[index].takeUnless { it.cancelled }?.action?.invoke()
+        }
     }
 }

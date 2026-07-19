@@ -1,171 +1,452 @@
 package io.github.maxlyth.hapaneld.control
 
+import android.content.Context
+import android.os.SystemClock
 import android.util.Log
 import io.github.maxlyth.hapaneld.Config
-import io.github.maxlyth.hapaneld.sensors.SensorTrace
 import io.github.maxlyth.hapaneld.metrics.FeatureCostOperation
 import io.github.maxlyth.hapaneld.metrics.FeatureCostOutcome
 import io.github.maxlyth.hapaneld.metrics.FeatureCosts
+import io.github.maxlyth.hapaneld.sensors.SensorTrace
+import java.security.MessageDigest
+import java.util.TimeZone
+import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.TimeUnit
 import kotlin.math.abs
-import kotlin.math.ln
-import kotlin.math.max
-import kotlin.math.min
-import kotlin.math.roundToInt
+import kotlin.math.ln1p
 
-/**
- * Optional on-panel auto-brightness engine. Consumes a lux stream — from the panel's own ambient-light
- * sensor where present, or **HA-fed room lux** for panels without one (e.g. the WF1589T) — and drives
- * the screen backlight via [BrightnessController].
- *
- * **Why this exists despite ha-paneld being otherwise actuator-only:** the most reliable, responsive
- * trigger is *room lights switching on* — the panel's own sensor sees a sudden step, with a latency and
- * robustness no HA automation (which has to be wired up, and inevitably breaks) can match. So this is a
- * deliberate, **opt-in** exception behind `switch.<panel>_auto_brightness` (default off → behaviour is
- * exactly the pure actuator). HA remains the lux *authority*: on sensor-less panels it feeds lux in.
- *
- * **Asymmetric response** (the key behaviour): the smoothing time-constant scales with the *magnitude*
- * of the change. A large, sudden jump (lights on/off) tracks **fast** so it feels snappy; small or slow
- * drift (sunrise) and sensor noise are **heavily** averaged, with a deadband, so the panel never
- * flickers or hunts. One EMA whose `alpha` is chosen per sample gives both.
- *
- * Fed from two sources (latest sample wins): the un-throttled ALS tap in `SensorReporter`, and the
- * HA-fed `number.<panel>_ambient_lux`. Thread-safe (both arrive on different threads).
- */
-class AutoBrightnessController(
+internal enum class AmbientLuxSourceKind { PANEL, HOME_ASSISTANT }
+
+internal data class AutoBrightnessRuntimeStatus(
+    val enabled: Boolean,
+    val sourceKind: AmbientLuxSourceKind,
+    val sourceId: String,
+    val sourceAvailable: Boolean,
+    val latestLux: Double?,
+    val expectedLux: Double?,
+    val automaticTarget: Int?,
+    val appliedTarget: Int?,
+    val mode: AdaptiveModelMode?,
+    val brighterThanExpected: Boolean,
+    val manualPreference: ManualBrightnessPreferenceSnapshot,
+)
+
+/** Service-owned adaptive brightness loop. Sensor and HA callbacks only replace the latest level. */
+internal class AutoBrightnessController(
+    context: Context,
     private val brightness: BrightnessController,
     private val config: Config,
-    actuationGate: ((() -> Unit) -> Boolean) = { action -> action(); true },
-) {
-    private val actuator = AutoBrightnessActuator(
-        enabled = { config.autoBrightness },
-        writable = brightness::canWrite,
-        bias = { config.brightnessBias },
-        actuationGate = actuationGate,
-        applyBrightness = brightness::setBrightness,
-    )
+    private val actuationGate: ((() -> Unit) -> Boolean) = { action -> action(); true },
+    private val wallClockMs: () -> Long = System::currentTimeMillis,
+    private val elapsedRealtimeMs: () -> Long = SystemClock::elapsedRealtime,
+    private val history: AmbientHistoryRuntime = AmbientHistoryRuntime(context),
+    private val preference: ManualBrightnessAuthority = ManualBrightnessAuthority(
+        AndroidManualBrightnessPreferenceStore(context),
+        wallClockMs = wallClockMs,
+        elapsedRealtimeMs = elapsedRealtimeMs,
+        bootCount = { AndroidManualBrightnessPreferenceStore.bootCount(context) },
+    ),
+) : AutoCloseable {
+    private val scheduler = Executors.newSingleThreadScheduledExecutor { runnable ->
+        Thread(runnable, "ha-paneld-auto-brightness").apply { isDaemon = true }
+    }
+    private var persistenceFuture: ScheduledFuture<*>? = null
+    private var evaluationFuture: ScheduledFuture<*>? = null
+    private var evaluationDeadlineElapsed = Long.MAX_VALUE
+    private var forceNextEvaluation = false
+    private var policy = AdaptiveBrightnessPolicy()
+    private val baselineCache = AdaptiveBaselineCache()
+    private var latestPanelLux = Double.NaN
+    private var latestHaLux = Double.NaN
+    private var latestPanelChangeElapsed = Long.MIN_VALUE
+    private var latestHaChangeElapsed = Long.MIN_VALUE
+    private var haAvailable = false
+    private var enabledLastTick = false
+    private var lastTickElapsed = Long.MIN_VALUE
+    private var lastWallMs = Long.MIN_VALUE
+    private var lastAutomaticTarget = -1
+    private var lastAppliedTarget = -1
+    private var lastResult: AdaptiveBrightnessResult? = null
+    private var lastEvaluatedLux = Double.NaN
+    private var location: SolarLocation? = null
+    private var zone: TimeZone = TimeZone.getDefault()
+    private var locationContext = contextKey(null, zone.id)
+    private var activeSourceKind = AmbientLuxSourceKind.PANEL
+    private var activeSourceKey = "panel"
+    private var cachedHaEntity = ""
+    private var cachedHaUrl = ""
+    private var chartRowsIdentity: List<AmbientHistoryMinute>? = null
+    private var chartZoneId = ""
+    private var chartLocation: SolarLocation? = null
+    private var chartLookup: AdaptiveChartBaselineLookup? = null
+    @Volatile private var closed = false
 
-    /** Feed one lux sample (ALS or HA-fed). Drives the backlight only when enabled + writable; always
-     *  records to [SensorTrace] (raw lux always; smoothed/target/applied when the engine is active). */
-    fun submitLux(lux: Float) {
-        val cost = FeatureCosts.registry.beginSynchronous(FeatureCostOperation.AUTO_BRIGHTNESS_APPLY)
-        var outcome = FeatureCostOutcome.SUCCESS
-        var workUnits = 0L
-        var sample: AutoBrightnessSample? = null
-        try {
-            sample = actuator.submitLux(lux)
-            if (sample == null) {
-                outcome = FeatureCostOutcome.REJECTED
-            } else {
-                workUnits = if (sample.toSet != null) 1 else 0
+    /** Activate only after the service-generation lease has admitted active owners. */
+    @Synchronized fun activate() {
+        if (closed || !config.autoBrightness) return
+        refreshSourceIdentity()
+        configureHistorySource()
+        requestEvaluationLocked(0L)
+    }
+
+    /** Local SensorManager/helper input. Ignored while an HA entity is explicitly selected. */
+    @Synchronized fun submitLux(lux: Float) = submitPanelLux(lux.toDouble())
+
+    @Synchronized fun submitPanelLux(lux: Double) {
+        if (lux.isFinite() && lux in 0.0..MAX_LUX) {
+            latestPanelLux = lux
+            refreshSourceIdentity()
+            if (config.autoBrightness && activeSourceKind == AmbientLuxSourceKind.PANEL && meaningfulChange(lux)) {
+                latestPanelChangeElapsed = elapsedRealtimeMs()
+                requestEvaluationLocked(0L)
             }
-        } catch (failure: Exception) {
+        }
+    }
+
+    /** Native selected-entity input. The subscriber owns entity validation and connection liveness. */
+    @Synchronized fun submitHaLux(lux: Double) {
+        if (!config.autoBrightness) return
+        if (lux.isFinite() && lux in 0.0..MAX_LUX) {
+            latestHaLux = lux
+            haAvailable = true
+            refreshSourceIdentity()
+            if (config.autoBrightness && activeSourceKind == AmbientLuxSourceKind.HOME_ASSISTANT && meaningfulChange(lux)) {
+                latestHaChangeElapsed = elapsedRealtimeMs()
+                requestEvaluationLocked(0L)
+            }
+        }
+    }
+
+    @Synchronized fun setHaSourceAvailable(available: Boolean) {
+        haAvailable = available
+        if (available && config.autoBrightness) requestEvaluationLocked(0L)
+    }
+
+    /** Rounded HA site metadata; a material context change starts a separate learned partition. */
+    @Synchronized
+    fun updateSite(latitude: Double?, longitude: Double?, timeZoneId: String?) {
+        if (closed) return
+        val nextZone = timeZoneId?.takeIf { it in TimeZone.getAvailableIDs().toSet() }
+            ?.let(TimeZone::getTimeZone) ?: TimeZone.getDefault()
+        val nextLocation = if (latitude != null && longitude != null &&
+            latitude.isFinite() && longitude.isFinite() && latitude in -90.0..90.0 && longitude in -180.0..180.0
+        ) SolarLocation(roundCoordinate(latitude), roundCoordinate(longitude)) else null
+        val nextContext = contextKey(nextLocation, nextZone.id)
+        zone = nextZone
+        location = nextLocation
+        if (nextContext != locationContext) {
+            locationContext = nextContext
+            resetTransientPolicy(clearPreference = true)
+            baselineCache.invalidate()
+            if (config.autoBrightness) {
+                configureHistorySource()
+                requestEvaluationLocked(0L, force = true)
+            }
+        }
+    }
+
+    /** Capture explicit local/HA/system intent before a wake callback can reapply automatic brightness. */
+    @Synchronized
+    internal fun noteExternalBrightness(
+        level: Int,
+        origin: BrightnessPreferenceOrigin,
+        priorAppliedLevel: Int? = null,
+    ): Boolean {
+        if (!config.autoBrightness) return false
+        val automatic = lastAutomaticTarget.takeIf { it >= BrightnessController.MIN_VISIBLE }
+            ?: brightness.getCommanded().takeIf { it >= BrightnessController.MIN_VISIBLE }
+            ?: level.coerceIn(BrightnessController.MIN_VISIBLE, 255)
+        val applied = priorAppliedBrightness(
+            origin = origin,
+            commandedLevel = brightness.getCommanded().takeIf { it >= BrightnessController.MIN_VISIBLE },
+            lastAutomaticApplied = priorAppliedLevel?.takeIf { it >= BrightnessController.MIN_VISIBLE }
+                ?: lastAppliedTarget.takeIf { it >= BrightnessController.MIN_VISIBLE },
+            automaticTarget = automatic,
+        )
+        val captured = preference.capture(
+            requestedLevel = level,
+            automaticTarget = automatic,
+            currentApplied = applied,
+            origin = origin,
+            modelContextKey = locationContext,
+            ambientSourceKey = activeSourceId(),
+            persist = false,
+        )
+        if (captured) {
+            persistenceFuture?.cancel(false)
+            persistenceFuture = scheduler.schedule(preference::persistCurrent, COMMAND_SETTLE_MS, TimeUnit.MILLISECONDS)
+            lastAppliedTarget = level.coerceIn(BrightnessController.MIN_VISIBLE, 255)
+            Log.i(TAG, "temporary brightness preference started (${origin.name.lowercase()})")
+        }
+        return captured
+    }
+
+    @Synchronized fun resumeFullAuto() {
+        preference.clear()
+        requestEvaluationLocked(0L, force = true)
+    }
+
+    @Synchronized fun resetHistory() {
+        history.reset()
+        baselineCache.invalidate()
+        resetTransientPolicy(clearPreference = true)
+        requestEvaluationLocked(0L, force = true)
+    }
+
+    /** Reconcile through current preference authority after physical wake or a policy change. */
+    @Synchronized fun reapplyLatest() {
+        if (!config.autoBrightness) {
+            evaluationFuture?.cancel(false)
+            evaluationFuture = null
+            evaluationDeadlineElapsed = Long.MAX_VALUE
+            forceNextEvaluation = false
+            if (enabledLastTick) resetTransientPolicy(clearPreference = true)
+            enabledLastTick = false
+            return
+        }
+        refreshSourceIdentity()
+        requestEvaluationLocked(0L, force = true)
+    }
+
+    @Synchronized fun status(): AutoBrightnessRuntimeStatus {
+        refreshSourceIdentity()
+        val automatic = lastAutomaticTarget.takeIf { it >= 0 }
+        val manual = preference.snapshot(
+            automaticTarget = automatic ?: BrightnessController.MIN_VISIBLE,
+            modelContextKey = locationContext,
+            ambientSourceKey = activeSourceKey,
+        )
+        return AutoBrightnessRuntimeStatus(
+            enabled = config.autoBrightness,
+            sourceKind = activeSourceKind,
+            sourceId = activeSourceKey,
+            sourceAvailable = activeSourceAvailable(),
+            latestLux = activeLux().takeIf(Double::isFinite),
+            expectedLux = lastResult?.expectedLux,
+            automaticTarget = automatic,
+            appliedTarget = lastAppliedTarget.takeIf { it >= 0 },
+            mode = lastResult?.mode,
+            brighterThanExpected = lastResult?.brighterThanExpected == true,
+            manualPreference = manual,
+        )
+    }
+
+    internal fun historyRows(): List<AmbientHistoryMinute> = history.history()
+    @Synchronized internal fun chartPoints(sensitivity: Int = config.autoBrightnessSensitivity): List<AdaptiveChartPoint> {
+        val rows = history.history()
+        val fallback = rows.lastOrNull()?.meanLux?.let(::ln1p) ?: 0.0
+        if (chartLookup == null || rows !== chartRowsIdentity || chartZoneId != zone.id || chartLocation != location) {
+            chartLookup = AdaptiveChartBaselineLookup.compile(rows, zone, location, fallback)
+            chartRowsIdentity = rows
+            chartZoneId = zone.id
+            chartLocation = location
+        }
+        val lookup = checkNotNull(chartLookup)
+        return AdaptiveChartProjection.fiveMinute(rows, sensitivity, lookup::expectedLogLux)
+    }
+    internal fun solarLocation(): SolarLocation? = location
+    internal fun timeZone(): TimeZone = zone
+
+    private fun tickSafely() {
+        val started = FeatureCosts.registry.beginSynchronous(FeatureCostOperation.AUTO_BRIGHTNESS_APPLY)
+        var outcome = FeatureCostOutcome.SUCCESS
+        try {
+            synchronized(this) {
+                evaluationFuture = null
+                evaluationDeadlineElapsed = Long.MAX_VALUE
+                val force = forceNextEvaluation
+                forceNextEvaluation = false
+                tick(force)?.let(::requestEvaluationLocked)
+            }
+        } catch (error: Throwable) {
             outcome = FeatureCostOutcome.FAILURE
-            throw failure
+            Log.w(TAG, "adaptive brightness tick failed", error)
+            synchronized(this) {
+                if (!closed) requestEvaluationLocked(CALM_EVALUATION_MS)
+            }
         } finally {
             FeatureCosts.registry.finishSynchronous(
                 FeatureCostOperation.AUTO_BRIGHTNESS_APPLY,
-                cost,
+                started,
                 outcome = outcome,
-                workUnits = workUnits,
+                workUnits = 1,
             )
         }
-        val accepted = sample ?: return
-        accepted.toSet?.let {
-            Log.d(TAG, "lux≈${accepted.smoothed?.roundToInt()} -> brightness $it (bias ${config.brightnessBias})")
-        }
-        SensorTrace.recordLux(lux, accepted.smoothed, accepted.target, accepted.applied)
     }
 
-    /** Reconcile the most recent valid lux after a physical wake. */
-    fun reapplyLatest() {
-        actuator.latestLux()?.let(::submitLux)
+    private fun tick(force: Boolean): Long? {
+        if (closed) return null
+        val enabled = config.autoBrightness
+        if (!enabled) {
+            if (enabledLastTick) resetTransientPolicy(clearPreference = true)
+            enabledLastTick = false
+            return null
+        }
+        if (!enabledLastTick) {
+            enabledLastTick = true
+            lastTickElapsed = Long.MIN_VALUE
+            configureHistorySource()
+        }
+        val nowElapsed = elapsedRealtimeMs()
+        val nowWall = wallClockMs()
+        val elapsed = when {
+            lastTickElapsed == Long.MIN_VALUE -> FIRST_EVALUATION_MS
+            nowElapsed < lastTickElapsed -> FIRST_EVALUATION_MS
+            else -> (nowElapsed - lastTickElapsed).coerceIn(1L, MAX_TICK_GAP_MS)
+        }
+        if (!force && lastTickElapsed != Long.MIN_VALUE && nowElapsed - lastTickElapsed < MIN_EVALUATION_INTERVAL_MS) {
+            return MIN_EVALUATION_INTERVAL_MS - (nowElapsed - lastTickElapsed)
+        }
+        lastTickElapsed = nowElapsed
+        if (refreshSourceIdentity() || activeSourceKey != history.currentSourceId() || locationContext != history.currentContextId()) {
+            resetTransientPolicy(clearPreference = true)
+            baselineCache.invalidate()
+            configureHistorySource()
+        }
+        val available = activeSourceAvailable()
+        val lux = activeLux()
+        if (!available || !lux.isFinite()) return null
+        val rows = history.history()
+        val estimate = baselineCache.estimate(nowWall, rows, zone, location, ln1p(lux))
+        val changedAt = if (activeSourceKind == AmbientLuxSourceKind.HOME_ASSISTANT) {
+            latestHaChangeElapsed
+        } else latestPanelChangeElapsed
+        val conditionElapsed = if (changedAt == Long.MIN_VALUE || nowElapsed < changedAt) elapsed
+            else minOf(elapsed, nowElapsed - changedAt)
+        val result = policy.evaluate(
+            nowMs = nowWall,
+            elapsedMs = elapsed,
+            lux = lux,
+            baseline = estimate,
+            sensitivity = config.autoBrightnessSensitivity,
+            conditionElapsedMs = conditionElapsed,
+        ) ?: return CALM_EVALUATION_MS
+        lastResult = result
+        lastEvaluatedLux = lux
+        lastAutomaticTarget = result.brightness
+        val manual = preference.evaluate(result.brightness, locationContext, activeSourceKey)
+        val finalTarget = manual.finalTarget ?: result.brightness
+        val lastBacklightWriteElapsed = brightness.lastSuccessfulWriteElapsed()
+        val baselineEligible = result.baselineEligible &&
+            (lastBacklightWriteElapsed == Long.MIN_VALUE || nowElapsed - lastBacklightWriteElapsed >= BACKLIGHT_QUARANTINE_MS)
+        if (lastWallMs == Long.MIN_VALUE || nowWall >= lastWallMs) {
+            history.record(
+                epochMs = (nowWall - elapsed).coerceAtLeast(0L),
+                lux = lux,
+                durationMs = elapsed,
+                baselineEligible = baselineEligible,
+            )
+        }
+        lastWallMs = nowWall
+        val shouldWrite = force || lastAppliedTarget < 0 || abs(finalTarget - lastAppliedTarget) >= MOVEMENT_DEADBAND
+        var applied: Int? = null
+        if (shouldWrite && brightness.canWrite()) {
+            val admitted = actuationGate {
+                brightness.setBrightness(finalTarget)
+                applied = finalTarget
+            }
+            if (admitted && applied != null) lastAppliedTarget = finalTarget
+        }
+        SensorTrace.recordLux(
+            lux.toFloat(),
+            result.effectiveLux.toFloat(),
+            result.brightness,
+            lastAppliedTarget.takeIf { it >= 0 },
+        )
+        return if (policy.needsFastFollowUp()) FAST_EVALUATION_MS else CALM_EVALUATION_MS
     }
+
+    private fun resetTransientPolicy(clearPreference: Boolean) {
+        policy = AdaptiveBrightnessPolicy()
+        lastResult = null
+        lastAutomaticTarget = -1
+        lastTickElapsed = Long.MIN_VALUE
+        lastWallMs = Long.MIN_VALUE
+        lastEvaluatedLux = Double.NaN
+        chartLookup = null
+        chartRowsIdentity = null
+        if (clearPreference) preference.clear()
+    }
+
+    private fun configureHistorySource() = history.configure(locationContext, activeSourceId())
+
+    /** Re-hash only when the configured HA identity changes, never on the evaluation path. */
+    private fun refreshSourceIdentity(): Boolean {
+        val entity = config.autoBrightnessHaEntity.trim()
+        val url = if (entity.isBlank()) "" else config.haUrl.trim()
+        if (entity == cachedHaEntity && url == cachedHaUrl) return false
+        cachedHaEntity = entity
+        cachedHaUrl = url
+        if (entity.isBlank()) {
+            activeSourceKind = AmbientLuxSourceKind.PANEL
+            activeSourceKey = "panel"
+        } else {
+            activeSourceKind = AmbientLuxSourceKind.HOME_ASSISTANT
+            activeSourceKey = "ha:${hash("$url|$entity")}"
+        }
+        return true
+    }
+
+    private fun activeSourceId(): String = activeSourceKey
+    private fun activeLux(): Double =
+        if (activeSourceKind == AmbientLuxSourceKind.HOME_ASSISTANT) latestHaLux else latestPanelLux
+    private fun activeSourceAvailable(): Boolean =
+        if (activeSourceKind == AmbientLuxSourceKind.HOME_ASSISTANT) haAvailable else latestPanelLux.isFinite()
+
+    private fun meaningfulChange(lux: Double): Boolean = !lastEvaluatedLux.isFinite() ||
+        abs(ln1p(lux) - ln1p(lastEvaluatedLux)) >= MEANINGFUL_LOG_DELTA
+
+    private fun requestEvaluationLocked(delayMs: Long, force: Boolean = false) {
+        if (closed || !config.autoBrightness) return
+        forceNextEvaluation = forceNextEvaluation || force
+        val now = elapsedRealtimeMs()
+        val earliest = if (lastTickElapsed == Long.MIN_VALUE) now else lastTickElapsed + MIN_EVALUATION_INTERVAL_MS
+        val deadline = maxOf(now + delayMs.coerceAtLeast(0L), earliest)
+        if (evaluationFuture?.isDone == false && evaluationDeadlineElapsed <= deadline) return
+        evaluationFuture?.cancel(false)
+        evaluationDeadlineElapsed = deadline
+        evaluationFuture = scheduler.schedule(::tickSafely, (deadline - now).coerceAtLeast(0L), TimeUnit.MILLISECONDS)
+    }
+
+    fun closeAndJoin(timeoutMs: Long = CLOSE_TIMEOUT_MS): Boolean {
+        synchronized(this) {
+            if (closed) return scheduler.isTerminated
+            closed = true
+            persistenceFuture?.cancel(false)
+            evaluationFuture?.cancel(false)
+            preference.persistCurrent()
+            scheduler.shutdownNow()
+        }
+        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs.coerceAtLeast(0L))
+        val schedulerDrained = runCatching {
+            scheduler.awaitTermination(timeoutMs.coerceAtLeast(0L), TimeUnit.MILLISECONDS)
+        }.getOrDefault(false)
+        val remainingMs = TimeUnit.NANOSECONDS.toMillis((deadline - System.nanoTime()).coerceAtLeast(0L))
+        return schedulerDrained && history.closeAndJoin(remainingMs)
+    }
+
+    override fun close() { closeAndJoin() }
 
     companion object {
         private const val TAG = "ha-paneld/autobright"
+        private const val FIRST_EVALUATION_MS = 1_000L
+        private const val MIN_EVALUATION_INTERVAL_MS = 250L
+        private const val FAST_EVALUATION_MS = 1_000L
+        private const val CALM_EVALUATION_MS = 60_000L
+        private const val MAX_TICK_GAP_MS = CALM_EVALUATION_MS
+        private const val BACKLIGHT_QUARANTINE_MS = 5_000L
+        private const val COMMAND_SETTLE_MS = 2_000L
+        private const val MOVEMENT_DEADBAND = 4
+        private const val MAX_LUX = 100_000.0
+        private const val CLOSE_TIMEOUT_MS = 3_000L
+        private const val MEANINGFUL_LOG_DELTA = 0.05
+
+        private fun roundCoordinate(value: Double): Double = kotlin.math.round(value * 10.0) / 10.0
+        private fun contextKey(location: SolarLocation?, zoneId: String): String = hash(
+            location?.let { "solar:${it.latitude},${it.longitude};time:$zoneId" } ?: "time:$zoneId",
+        )
+        private fun hash(value: String): String = MessageDigest.getInstance("SHA-256")
+            .digest(value.toByteArray(Charsets.UTF_8)).take(16).joinToString("") { "%02x".format(it) }
     }
 }
-
-/** One serialized compute+actuate authority shared by ALS and HA-fed samples. */
-internal class AutoBrightnessActuator(
-    private val enabled: () -> Boolean,
-    private val writable: () -> Boolean,
-    private val bias: () -> Int,
-    private val actuationGate: ((() -> Unit) -> Boolean),
-    private val applyBrightness: (Int) -> Unit,
-    private val engine: AutoBrightnessEngine = AutoBrightnessEngine(),
-) {
-    private var latest = Float.NaN
-
-    @Synchronized
-    fun submitLux(lux: Float): AutoBrightnessSample? {
-        if (!lux.isFinite() || lux < 0f) return null
-        latest = lux
-        val isEnabled = enabled()
-        if (!isEnabled) return engine.submit(lux, enabled = false, writable = false, bias = bias())
-        if (!writable()) return engine.submit(lux, enabled = true, writable = false, bias = bias())
-
-        var sample: AutoBrightnessSample? = null
-        val admitted = actuationGate {
-            sample = engine.submit(lux, enabled = true, writable = true, bias = bias())
-            sample?.toSet?.let(applyBrightness)
-        }
-        return if (admitted) sample else AutoBrightnessSample()
-    }
-
-    @Synchronized fun latestLux(): Float? = latest.takeIf { it.isFinite() && it >= 0f }
-}
-
-/** Pure, serialized auto-brightness policy; Android/config access stays in [AutoBrightnessController]. */
-internal class AutoBrightnessEngine {
-    private var smoothed = -1f   // EMA of lux; <0 = uninitialised (snap on first sample)
-    private var applied = -1     // last brightness command (deadband reference)
-
-    @Synchronized
-    fun submit(lux: Float, enabled: Boolean, writable: Boolean, bias: Int): AutoBrightnessSample? {
-        if (!lux.isFinite() || lux < 0f) return null
-        if (!enabled) {
-            smoothed = -1f
-            applied = -1
-            return AutoBrightnessSample()
-        }
-        if (!writable) return AutoBrightnessSample()
-
-        if (smoothed < 0f) {
-            smoothed = lux
-        } else {
-            // Ratio of change (perception is logarithmic): a big ratio = a real step (lights on)
-            // → fast attack; a small ratio = drift/noise → heavy smoothing.
-            val hi = max(lux, smoothed)
-            val lo = max(min(lux, smoothed), 1f)
-            val alpha = if (hi / lo >= FAST_RATIO) FAST_ALPHA else SLOW_ALPHA
-            smoothed += alpha * (lux - smoothed)
-        }
-        val target = curve(smoothed, bias)
-        val toSet = if (applied < 0 || abs(target - applied) >= DEADBAND) target else null
-        if (toSet != null) applied = toSet
-        return AutoBrightnessSample(smoothed, target, applied, toSet)
-    }
-
-    /** Perceptual lux→brightness: log curve over 0..[REF_LUX], shifted by bias. */
-    private fun curve(lux: Float, bias: Int): Int {
-        val frac = (ln(lux + 1f) / ln(REF_LUX + 1f)).coerceIn(0f, 1f)
-        val base = BrightnessController.MIN_VISIBLE + frac * (255 - BrightnessController.MIN_VISIBLE)
-        return (base + bias).roundToInt().coerceIn(BrightnessController.MIN_VISIBLE, 255)
-    }
-
-    companion object {
-        private const val FAST_RATIO = 2.0f   // ≥2× change vs the running average → lights-on style step
-        private const val FAST_ALPHA = 0.6f   // fast attack on big steps (snappy)
-        private const val SLOW_ALPHA = 0.05f  // heavy smoothing on drift / sensor noise (calm)
-        private const val DEADBAND = 4        // ignore <4/255 target moves (flicker guard)
-        private const val REF_LUX = 1000f     // lux at which the curve reaches full brightness
-    }
-}
-
-internal data class AutoBrightnessSample(
-    val smoothed: Float? = null,
-    val target: Int? = null,
-    val applied: Int? = null,
-    val toSet: Int? = null,
-)

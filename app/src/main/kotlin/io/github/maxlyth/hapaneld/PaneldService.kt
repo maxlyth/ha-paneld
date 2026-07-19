@@ -6,7 +6,9 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.database.ContentObserver
 import android.net.ConnectivityManager
 import android.net.LinkProperties
 import android.net.Network
@@ -27,16 +29,22 @@ import io.github.maxlyth.hapaneld.input.EvdevButtonClient
 import io.github.maxlyth.hapaneld.control.AutoBrightnessController
 import io.github.maxlyth.hapaneld.control.BootChimeController
 import io.github.maxlyth.hapaneld.control.BrightnessController
+import io.github.maxlyth.hapaneld.control.BrightnessPreferenceOrigin
 import io.github.maxlyth.hapaneld.control.CpuController
 import io.github.maxlyth.hapaneld.control.CompanionDb
 import io.github.maxlyth.hapaneld.control.CompanionDataOperationGate
 import io.github.maxlyth.hapaneld.control.CompanionDataOperationState
+import io.github.maxlyth.hapaneld.control.CdpRelay
 import io.github.maxlyth.hapaneld.control.NavbarController
 import io.github.maxlyth.hapaneld.control.PowerController
+import io.github.maxlyth.hapaneld.control.PrivilegeRoute
+import io.github.maxlyth.hapaneld.control.PrivilegedRouteObservation
 import io.github.maxlyth.hapaneld.control.NavigateController
 import io.github.maxlyth.hapaneld.control.RelayController
 import io.github.maxlyth.hapaneld.control.OverlayWakeTap
 import io.github.maxlyth.hapaneld.control.ScreenController
+import io.github.maxlyth.hapaneld.control.WakeOutcome
+import io.github.maxlyth.hapaneld.control.AndroidWifiDiagnostics
 import io.github.maxlyth.hapaneld.control.Su
 import io.github.maxlyth.hapaneld.control.SystemController
 import io.github.maxlyth.hapaneld.control.TameController
@@ -48,17 +56,24 @@ import io.github.maxlyth.hapaneld.control.VolumeController
 import io.github.maxlyth.hapaneld.control.ZigbeeController
 import io.github.maxlyth.hapaneld.control.AndroidZigbeeGatewayHealthSource
 import io.github.maxlyth.hapaneld.control.ZigbeeHealthMonitor
+import io.github.maxlyth.hapaneld.control.ZigbeeObservation
+import io.github.maxlyth.hapaneld.control.observeTypedShellCapability
 import io.github.maxlyth.hapaneld.device.LedMechanism
 import io.github.maxlyth.hapaneld.hardware.LedController
 import io.github.maxlyth.hapaneld.hardware.LedFactory
 import io.github.maxlyth.hapaneld.hardware.Rk3576LedController
 import io.github.maxlyth.hapaneld.hardware.SocketLedController
 import io.github.maxlyth.hapaneld.config.Capabilities
+import io.github.maxlyth.hapaneld.config.SettingValue
 import io.github.maxlyth.hapaneld.config.SettingsRegistry
 import io.github.maxlyth.hapaneld.dashboard.EntityLearningManager
 import io.github.maxlyth.hapaneld.dashboard.EntityLearningRuntime
 import io.github.maxlyth.hapaneld.http.PaneldServer
 import io.github.maxlyth.hapaneld.http.PanelInfo
+import io.github.maxlyth.hapaneld.http.ManagementProjection
+import io.github.maxlyth.hapaneld.http.DiagReader
+import io.github.maxlyth.hapaneld.http.AutoBrightnessHttpAction
+import io.github.maxlyth.hapaneld.http.AutoBrightnessHttpApi
 import io.github.maxlyth.hapaneld.http.retainCompanionLeaseUntilHelperIdle
 import io.github.maxlyth.hapaneld.logship.LogCapture
 import io.github.maxlyth.hapaneld.logship.LogShipper
@@ -69,6 +84,11 @@ import io.github.maxlyth.hapaneld.provisioning.ProvisioningCoordinator
 import io.github.maxlyth.hapaneld.provisioning.ProvisioningCoreIdentity
 import io.github.maxlyth.hapaneld.provisioning.toProvisioningProfile
 import io.github.maxlyth.hapaneld.sensors.SensorReporter
+import io.github.maxlyth.hapaneld.sensors.SensorLightPublisher
+import io.github.maxlyth.hapaneld.sensors.submitIlluminanceIfExposed
+import io.github.maxlyth.hapaneld.sensors.HaAmbientLuxSubscriber
+import io.github.maxlyth.hapaneld.sensors.HaAmbientSourcePhase
+import io.github.maxlyth.hapaneld.sensors.HaSiteMetadataClient
 import io.github.maxlyth.hapaneld.util.localIpv4
 import io.github.maxlyth.hapaneld.util.localIpv6
 import kotlinx.coroutines.CancellationException
@@ -76,10 +96,11 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import io.github.maxlyth.hapaneld.util.LatestOperationPolicy
+import io.github.maxlyth.hapaneld.util.LatestOperationTimeoutPolicy
 import io.github.maxlyth.hapaneld.util.ServiceRuntimeOwner
 import io.github.maxlyth.hapaneld.util.SingleFlightExecutor
 import io.github.maxlyth.hapaneld.util.SuccessStickyProbe
-import io.github.maxlyth.hapaneld.util.ConflatedWorker
 import io.github.maxlyth.hapaneld.metrics.FeatureCostOperation
 import io.github.maxlyth.hapaneld.metrics.FeatureCostOutcome
 import io.github.maxlyth.hapaneld.metrics.FeatureCosts
@@ -87,13 +108,19 @@ import io.github.maxlyth.hapaneld.util.BorrowedRendererSettings
 import io.github.maxlyth.hapaneld.util.BundledHelperInstaller
 import io.github.maxlyth.hapaneld.util.RendererPreparationCoordinator
 import io.github.maxlyth.hapaneld.util.RendererPreparationState
+import io.github.maxlyth.hapaneld.util.MonotonicDeadline
+import io.github.maxlyth.hapaneld.util.awaitSuccessful
+import io.github.maxlyth.hapaneld.util.awaitTrue
 import io.github.maxlyth.hapaneld.util.ProfileRestartCoordinator
+import io.github.maxlyth.hapaneld.util.ServiceRestartBarrier
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
+import org.json.JSONArray
+import org.json.JSONObject
 import io.github.maxlyth.hapaneld.util.UpdateChecker
 import io.github.maxlyth.hapaneld.util.CompanionInstaller
 import io.github.maxlyth.hapaneld.util.CompanionOperationStatus
@@ -113,7 +140,44 @@ import io.github.maxlyth.hapaneld.util.SystemProps
 import io.github.maxlyth.hapaneld.dashboard.shouldReloadBuiltinAfterEntityFilterChange
 import io.github.maxlyth.hapaneld.shizuku.ShizukuBridge
 import java.io.File
+import java.util.concurrent.Callable
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.Executors
 import java.util.concurrent.Future
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
+
+internal fun shouldDisableAutoBrightnessForMissingSource(
+    enabled: Boolean,
+    haEntity: String,
+    hasLocalSensor: Boolean,
+): Boolean = enabled && haEntity.isBlank() && !hasLocalSensor
+
+internal fun preferredAdminHomeRepairRoute(
+    privilege: PrivilegedRouteObservation,
+): PrivilegeRoute? = preferredAdminHomeRepairRoute(
+    helperRootReady = privilege.helperRootReady,
+    directSuReady = privilege.directSuReady,
+)
+
+internal fun preferredAdminHomeRepairRoute(
+    helperRootReady: Boolean,
+    directSuReady: Boolean,
+): PrivilegeRoute? = when {
+    helperRootReady -> PrivilegeRoute.DAEMON
+    directSuReady -> PrivilegeRoute.SU
+    else -> null
+}
+
+internal fun shouldAttemptPeriodicAdminHomeRepair(
+    serviceStopping: Boolean,
+    adminHomeSelected: Boolean,
+    admittedRoute: PrivilegeRoute?,
+    policyGeneration: Long,
+    failedGeneration: Long,
+): Boolean = !serviceStopping && adminHomeSelected && admittedRoute != null &&
+    failedGeneration != policyGeneration
 
 internal enum class ServiceStartupDisposition {
     RUNNING,
@@ -122,6 +186,80 @@ internal enum class ServiceStartupDisposition {
 }
 
 internal data class StartupRecoveryDecision(val restart: Boolean, val nextAttempt: Int)
+
+internal fun shouldForceFreshProcessAfterExternalRecovery(
+    attempt: Int,
+    maxAttempts: Int,
+    kioskSafe: Boolean,
+    navbarSafe: Boolean,
+    screenSafe: Boolean,
+    relaySafe: Boolean,
+): Boolean = attempt >= maxAttempts && screenSafe && !(kioskSafe && navbarSafe && relaySafe)
+
+/** Main-safe phase zero for both Android destruction and explicit process replacement. */
+internal fun beginAudioTeardown(
+    closeAdmission: () -> Unit,
+    cancelCurrent: () -> Unit,
+) {
+    closeAdmission()
+    cancelCurrent()
+}
+
+/** Continue the complete owner sweep while retaining any ambiguous cleanup result for the final gate. */
+internal class ServiceOwnerCleanupTracker {
+    private val complete = AtomicBoolean(true)
+
+    fun run(block: () -> Unit): Throwable? = try {
+        block()
+        null
+    } catch (error: Throwable) {
+        complete.set(false)
+        error
+    }
+
+    fun record(result: Boolean) {
+        if (!result) complete.set(false)
+    }
+
+    fun isComplete(): Boolean = complete.get()
+}
+
+/** Reuse the onDestroy screen owner; a second mutator could wake a successor after barrier release. */
+internal fun proveScreenSafeForBoundary(
+    existingOwner: CompletableFuture<Boolean>,
+): Boolean = existingOwner.getNow(false)
+
+/** Retry pending durable kiosk cleanup after the boot escape window without blocking unrelated service
+ * startup. The retry count is finite so permanently unavailable root never creates steady background
+ * load; retained recovery markers make the next service start retry again. */
+internal fun recoverAndMaybeEnableKiosk(
+    escapeDelayMs: Long,
+    retryDelayMs: Long,
+    maxAttempts: Int,
+    shouldContinue: () -> Boolean,
+    recover: () -> Boolean,
+    enabled: () -> Boolean,
+    enable: () -> Boolean,
+    pause: (Long) -> Unit = Thread::sleep,
+): Boolean {
+    require(escapeDelayMs >= 0L)
+    require(retryDelayMs >= 0L)
+    require(maxAttempts > 0)
+    return try {
+        pause(escapeDelayMs)
+        repeat(maxAttempts) { attempt ->
+            if (!shouldContinue()) return false
+            if (recover()) {
+                if (!shouldContinue()) return false
+                return !enabled() || enable()
+            }
+            if (attempt + 1 < maxAttempts) pause(retryDelayMs)
+        }
+        false
+    } catch (_: InterruptedException) {
+        false
+    }
+}
 
 /** Bound process-level recovery for transient startup failures; clock rollback/reboot opens a new window. */
 internal fun startupRecoveryDecision(
@@ -148,30 +286,11 @@ internal fun awaitServiceStartup(
     }
 }
 
-internal data class PrivilegedCapabilitySnapshot(
-    val suAvailable: Boolean,
-    val shizukuAvailable: Boolean,
-    val anyAvailable: Boolean,
-)
-
-/**
- * Probe each relevant privilege authority no more than once. The helper socket is unnecessary when a
- * root or ready Shizuku route already proves all three aggregate operations available.
- */
-internal fun probePrivilegedCapabilities(
-    suProbe: () -> Boolean,
-    helperProbe: () -> Boolean,
-    shizukuProbe: () -> Boolean,
-): PrivilegedCapabilitySnapshot {
-    val shizuku = shizukuProbe()
-    val su = suProbe()
-    val any = su || shizuku || helperProbe()
-    return PrivilegedCapabilitySnapshot(
-        suAvailable = su,
-        shizukuAvailable = shizuku,
-        anyAvailable = any,
-    )
-}
+/** Confirm declared Zigbee hardware when readable; preserve declared capability across probe failure. */
+internal fun zigbeeCapabilityPresent(
+    declaredGateway: Boolean,
+    observation: ZigbeeObservation,
+): Boolean = declaredGateway && (!observation.probeSucceeded || observation.present)
 
 internal fun commitBorrowedRendererTarget(
     commit: () -> Boolean,
@@ -189,6 +308,9 @@ internal fun replayThenRefreshLiveConfiguration(
     replay()
     refresh()
 }
+
+internal fun adaptiveHaSource(enabled: Boolean, configuredEntity: String): String? =
+    configuredEntity.trim().takeIf { enabled && it.isNotEmpty() }
 
 internal fun prepareEntityLearningStartup(
     startMdns: () -> Unit,
@@ -250,7 +372,7 @@ internal enum class NetworkAvailableAction { NONE, RECONNECT, RETRY_DISCOVERY }
 /** Blank-broker discovery is a recoverable waiting state, while explicit auth rejection and a stopped
  * bridge retain their own lifecycle policies. */
 internal fun networkAvailableAction(state: String, configuredBroker: String): NetworkAvailableAction = when {
-    state == "connected" || state == "disabled" || state == "config-error" ||
+    state == "connected" || state == "announcing" || state == "disabled" || state == "config-error" ||
         isAuthRecoveryState(state) -> NetworkAvailableAction.NONE
     state == "discovering" && configuredBroker.isBlank() -> NetworkAvailableAction.RETRY_DISCOVERY
     else -> NetworkAvailableAction.RECONNECT
@@ -365,12 +487,11 @@ class PaneldService : Service() {
     // Observations capture the generation and concrete MQTT/mDNS pair together, so watchdog/network work cannot read a generation from one runtime and then reach a replacement through a mutable field.
     private data class NetworkRuntime(val mqtt: MqttBridge, val mdns: MdnsAdvertiser)
     private lateinit var runtime: ServiceRuntimeOwner<NetworkRuntime>
-    private lateinit var networkReconfigureWorker: ConflatedWorker<Unit>
+    private lateinit var restartLease: ServiceRestartBarrier.Lease
+    private lateinit var mainHandler: Handler
     private lateinit var liveSettingAuthority: LiveSettingAuthority
     private lateinit var config: Config
-    private lateinit var activeNetworkIdentity: NetworkRuntimeIdentity
-    private lateinit var activeMqttProjection: MqttProjectionIdentity
-    private lateinit var activeHaLinkIdentity: HaLinkIdentity
+    private lateinit var appliedNetworkConfiguration: NetworkConfigurationSnapshot
     private lateinit var server: PaneldServer
     private lateinit var rendererPreparation: RendererPreparationCoordinator
     private lateinit var entityLearning: EntityLearningManager
@@ -383,9 +504,20 @@ class PaneldService : Service() {
     @Volatile private var mqttWatchdogAlive = false
     @Volatile private var mqttWatchdogThread: Thread? = null
     @Volatile private var serviceStopping = false
+    private val launcherHomePolicyGeneration = java.util.concurrent.atomic.AtomicLong()
+    private val launcherHomeFailedGeneration = java.util.concurrent.atomic.AtomicLong(Long.MIN_VALUE)
     @Volatile private var kioskReassertThread: Thread? = null
     private val wakeOnWaveWorker = SingleFlightExecutor("ha-paneld-wake-on-wave")
+    private val lightMqttPublisher = SensorLightPublisher(
+        publish = { lux ->
+            if (!serviceStopping) {
+                runCatching { mqtt.publishLight(lux) }
+                    .onFailure { Log.w(TAG, "light MQTT publication failed", it) }
+            }
+        },
+    )
     private lateinit var sensors: SensorReporter
+    private lateinit var wifiDiagnostics: AndroidWifiDiagnostics
     private lateinit var logShipper: LogShipper
     private lateinit var logCaptureApp: LogCapture
     private lateinit var logCaptureSystem: LogCapture
@@ -393,6 +525,12 @@ class PaneldService : Service() {
     // Controllers are fields so the MQTT bridge can be rebuilt on a panel_id change.
     private lateinit var brightness: BrightnessController
     private lateinit var autoBright: AutoBrightnessController
+    private lateinit var haAmbientLux: HaAmbientLuxSubscriber
+    private lateinit var haSiteMetadata: HaSiteMetadataClient
+    private var brightnessObserver: ContentObserver? = null
+    private var haCandidateIdentity = ""
+    private val adaptiveSiteGeneration = java.util.concurrent.atomic.AtomicLong()
+    @Volatile private var lastObservedCommandedBrightness = -1
     private lateinit var screen: ScreenController
     private lateinit var led: LedController
     // Effect loop for the LED — owned here (not the MQTT bridge) so a bridge rebuild never orphans it.
@@ -405,6 +543,7 @@ class PaneldService : Service() {
     private lateinit var navbar: NavbarController
     private lateinit var watchdog: WatchdogController
     private lateinit var kiosk: KioskController
+    private lateinit var kioskSettings: KioskSettingCoordinator
     private lateinit var touchSound: TouchSoundController
     private lateinit var bootChime: BootChimeController
     private lateinit var zigbee: ZigbeeController
@@ -422,17 +561,18 @@ class PaneldService : Service() {
     private var profileActivationGeneration: Long? = null
     // One-time-start guard for onStartCommand (see there for why). Reset in onDestroy.
     @Volatile private var started = false
+    private val teardownBoundary = ServiceTeardownBoundary()
+    private val screenExitRecoveryOwner = AtomicReference<CompletableFuture<Boolean>?>(null)
     private val startupRecoveryPrefs by lazy {
         AppState.preferences(this, "startup-recovery", "ha-paneld-startup-recovery")
     }
 
     override fun onCreate() {
         super.onCreate()
+        restartLease = SERVICE_RESTART_BARRIER.enter()
         config = Config(this)
         config.migrateLiveStore()   // carry persisted settings across a schema bump before anything reads them
-        activeNetworkIdentity = currentNetworkIdentity()
         liveSettingAuthority = LiveSettingAuthority.persistent(this, MqttBridge.APPLY_SETTING_KEYS)
-        reconcileHelperInstallStaging()
         // Resolve one immutable profile revision before constructing any hardware owner. Activations are
         // restart-bound, so every controller below observes this exact object for the service lifetime.
         profileRegistry = RuntimeProfileRegistry(this)
@@ -453,31 +593,36 @@ class PaneldService : Service() {
             Log.w(TAG, "profile ${issue.severity.name.lowercase()} ${issue.path}: ${issue.message}")
         }
         passiveProfileProbe = AndroidPassiveProfileProbe(this)
-        val mainHandler = Handler(Looper.getMainLooper())
+        mainHandler = Handler(Looper.getMainLooper())
         profileRestart = ProfileRestartCoordinator(
             schedule = { delayMs, action -> mainHandler.postDelayed(action, delayMs) },
             restartProcess = {
                 // START_STICKY is already the field-established restart route used for WebView
                 // replacement. It avoids Android 12+'s background foreground-service start ban.
-                Log.i(TAG, "restarting process to activate staged profile")
-                kotlin.system.exitProcess(0)
+                requestSafeProcessBoundary("activating staged profile")
             },
             safeToRestart = { !InstallProgress.running },
+            shouldAbandon = { serviceStopping },
         )
         recoveryRestart = ProfileRestartCoordinator(
             schedule = { delayMs, action -> mainHandler.postDelayed(action, delayMs) },
             restartProcess = {
-                Log.e(TAG, "bounded runtime recovery requested; restarting process for a clean service generation")
-                kotlin.system.exitProcess(0)
+                requestSafeProcessBoundary("bounded runtime recovery")
             },
             safeToRestart = { !InstallProgress.running },
             shouldAbandon = { serviceStopping },
             responseGraceMs = RECOVERY_RESTART_GRACE_MS,
         )
         config.attachProfile(profile)   // supplies per-panel manufacturer/model defaults
-        activeMqttProjection = currentMqttProjection()
-        activeHaLinkIdentity = currentHaLinkIdentity()
+        appliedNetworkConfiguration = currentNetworkConfigurationSnapshot()
         sensors = SensorReporter(this, config, profile)
+        wifiDiagnostics = AndroidWifiDiagnostics(this) {
+            Su.runOutputIsolatedBounded(
+                "cmd wifi status 2>/dev/null || dumpsys wifi",
+                maxBytes = 128 * 1024L,
+                timeoutMs = 2_000L,
+            )
+        }
         // Shared demand-driven logcat captures (one subprocess + one redaction pass each): the app
         // source feeds both remote shipping and the :8888 live log viewer; the system source (su)
         // only the viewer. Idle-stopped — no subprocess runs until something subscribes.
@@ -488,14 +633,22 @@ class PaneldService : Service() {
         logShipper = LogShipper(config, scope, logCaptureApp)
 
         brightness = BrightnessController(this)
-        brightness.applyPreventIdleDim(config.preventIdleDim, config)
         screen = ScreenController(
             brightness,
             AndroidScreenPower(this),
             wakeTap = OverlayWakeTap(this),
             route = profile.screenOff,
         )
-        autoBright = AutoBrightnessController(brightness, config, screen::actuateBrightnessIfOn)
+        autoBright = AutoBrightnessController(this, brightness, config, screen::actuateBrightnessIfOn)
+        haSiteMetadata = HaSiteMetadataClient(config)
+        haAmbientLux = HaAmbientLuxSubscriber(
+            scope = scope,
+            config = config,
+            onSample = { sample -> autoBright.submitHaLux(sample.lux) },
+            onStatus = { status ->
+                autoBright.setHaSourceAvailable(status.phase == HaAmbientSourcePhase.LIVE)
+            },
+        )
         screen.onWakeCompleted = {
             scope.launch(Dispatchers.Default) { autoBright.reapplyLatest() }
         }
@@ -530,33 +683,34 @@ class PaneldService : Service() {
                 }
             },
         )
-        EntityLearningRuntime.attach(entityLearning)
         watchdog = WatchdogController(system, config)
-        kiosk = KioskController(this, system, config)
+        kiosk = KioskController(this, system, config, profile.appCanSu)
+        kioskSettings = KioskSettingCoordinator(
+            canEnable = kiosk::canEnablePersistentPolicy,
+            actuate = kiosk::apply,
+            persist = config::commitKioskLock,
+        )
         // On-device unlock gesture (7 corner taps): persist OFF + clear the lock + tell HA — off the main
         // thread (the gesture fires on the overlay's touch listener; root + HiveMQ must not run there).
         kiosk.onUnlockRequested = {
             Thread {
                 if (serviceStopping) return@Thread
-                config.setKioskLock(false)
-                runCatching { kiosk.apply(false) }
-                if (!serviceStopping) runCatching { mqtt.publishKioskState() }
+                kioskSettings.apply(false) {
+                    if (!serviceStopping) mqtt.publishKioskState()
+                }
             }.apply { isDaemon = true; name = "kiosk-unlock" }.start()
         }
         // When taming disables a vendor home launcher (e.g. eWeLink), immediately re-assert the dashboard
         // as home and foreground it — otherwise the panel sits on our admin launcher until the 300s
-        // watchdog returns to the dashboard (a ~5-minute gap on boot). Off-main is already guaranteed:
-        // tame() only ever runs inside a scope.launch / worker thread.
+        // watchdog returns to the dashboard (a ~5-minute gap on boot). Activation is deferred until the
+        // predecessor service has left the process; tame() itself runs in the service scope off-main.
         tame = TameController(this) {
-            system.ensureDashboardHome(config.dashboardPackage, config.haUrl.isNotBlank())
+            system.applyLauncherHomePolicy(
+                config.launcherPackage,
+                config.dashboardPackage,
+                config.haUrl.isNotBlank(),
+            )
             system.launchHome(config.dashboardPackage)
-        }
-        // Tame opt-in: neutralise the vendor packages the user listed (force-stop + disable boot-relaunch
-        // + strip the overlay permission). No-op when the blocklist is empty (the default — a stock panel
-        // is never touched); run off-main since pm/am are slow and this is a boot-time one-shot. Critical
-        // packages are refused by TameController and the daemon backstop.
-        config.tameVendorPackages.takeIf { it.isNotEmpty() }?.let { pkgs ->
-            scope.launch { tame.applyBlocklist(pkgs) }
         }
         // The navbar gets the CONFIGURED dashboard value (may be the "builtin" sentinel), never
         // dashboardTarget(): that resolves builtin to our own package name (for perf attribution), and
@@ -564,15 +718,14 @@ class PaneldService : Service() {
         navbar = NavbarController(
             this, system, volume, brightness, { config.launcherPackage }, { config.dashboardPackage },
             profile.appCanSu, profile.hasRecents,
-            onBrightnessChanged = { mqtt.publishScreenOn() },
+            onBrightnessChanged = { level ->
+                autoBright.noteExternalBrightness(level, BrightnessPreferenceOrigin.PANEL_CONTROLS)
+            },
+            onBrightnessApplied = { mqtt.publishScreenOn() },
             onVolumeChanged = { mqtt.publishVolume() },
         )
-        touchSound = TouchSoundController(this)
-        // Re-apply at boot: the switch raises the system-stream volume only when toggled, so a panel that
-        // booted with touch-sound already on would otherwise stay silent (volume left at 0).
-        if (touchSound.isEnabled()) touchSound.set(true)
+        touchSound = TouchSoundController(this, profile.touchClickGain)
         bootChime = BootChimeController(this, config)
-        bootChime.applyPersisted()
         zigbee = ZigbeeController(profile)
         zigbeeHealth = ZigbeeHealthMonitor(
             configuredOn = { config.zigbeeRouterConfigured && config.zigbeeRouterEnabled },
@@ -592,8 +745,8 @@ class PaneldService : Service() {
 
         runtime = ServiceRuntimeOwner(
             initial = NetworkRuntime(
-                buildMqtt(identity = activeNetworkIdentity),
-                buildMdns(activeNetworkIdentity),
+                buildMqtt(appliedNetworkConfiguration.runtime),
+                buildMdns(appliedNetworkConfiguration.runtime),
             ),
             threadName = "ha-paneld-runtime",
             onError = { operation, error -> Log.e(TAG, "runtime $operation failed", error) },
@@ -602,8 +755,17 @@ class PaneldService : Service() {
                     Log.w(TAG, "runtime recovery restart is already scheduled")
                 }
             },
+            latestOperation = LatestOperationPolicy(
+                name = "network-reconfigure",
+                timeout = LatestOperationTimeoutPolicy(
+                    budgetMs = NETWORK_RECONFIGURE_BUDGET_MS,
+                    schedule = { task, delayMs -> mainHandler.postDelayed(task, delayMs) },
+                    cancel = mainHandler::removeCallbacks,
+                    onTimeout = ::onNetworkReconfigureTimeout,
+                ),
+                operation = { performNetworkReconfigure(this) },
+            ),
         )
-        networkReconfigureWorker = ConflatedWorker("network-reconfigure") { performNetworkReconfigure() }
         rendererPreparation = RendererPreparationCoordinator(
             builtinPackage = SystemController.BUILTIN_DASHBOARD,
             state = { RendererPreparationState(
@@ -644,22 +806,22 @@ class PaneldService : Service() {
             // The bridge is replaceable. If its command admission is already draining, retain the
             // persisted setting and replay it against the replacement before reconfigure completes.
             { k, v ->
-                liveSettingAuthority.applyOrQueue(k, v, previousLiveSettingValue(k)) { key, value, previous ->
-                    applyLiveSetting(mqtt, key, value, previous)
+                if (k == "kiosk_lock") {
+                    SettingValue.parseBool(v)?.let { on ->
+                        kioskSettings.apply(on) { mqtt.publishKioskState() }
+                    } ?: false
+                } else {
+                    liveSettingAuthority.applyOrQueue(
+                        key = k,
+                        value = v,
+                        previousValue = previousLiveSettingValue(k),
+                    ) { key, value, previous -> applyLiveSetting(mqtt, key, value, previous) }
                 }
             },
             // Controller-sourced setting values (their state isn't in the config namespace) so the
             // config form/schema/dashboard show live truth. Called on Ktor IO threads (su-safe).
-            liveValues = {
-                mapOf(
-                    "touch_sound" to touchSound.isEnabled().toString(),
-                    "cpu_governor" to (cpu.currentTier() ?: "Auto"),
-                    "network_adb" to adb.isPersisted().toString(),
-                    "zigbee_router" to config.zigbeeRouterEnabled.toString(),
-                )
-            },
-            capabilities = ::capabilitiesSnapshot,
-            info = ::panelInfo,
+            configLiveValues = ::currentConfigLiveValues,
+            managementProjection = ::managementProjection,
             recommendedDensity = profile.recommendedDensity,
             recommendedFontScale = profile.recommendedFontScale,
             // Vendor taming: the controller and this panel's curated recommendations (picker group 1).
@@ -671,11 +833,13 @@ class PaneldService : Service() {
             onInstallComponent = { name, action, version -> installComponent(name, action, version) },
             // One-line EFR32 radio status for the Install-tab Radio card; null when this panel has no radio.
             radioStatus = { if (profile.zigbeeGatewayDir != null) zigbeeHealth.snapshot() else null },
+            onZigbeeJoinRetry = { mqtt.requestZigbeeJoin() },
             // LAN ha-paneld peers over mDNS for the header panel switcher. Captures the `mdns` FIELD (not a
             // snapshot) so it follows reconfigure()'s reassignment; browsePeers null-guards the swap window.
             peers = { mdns.browsePeers() },
             rendererPreparation = rendererPreparation,
             entityLearning = entityLearning,
+            autoBrightnessHttpApi = adaptiveBrightnessHttpApi(),
             companionDataOperationState = companionDataOperationState,
             profileAdmin = profileRegistry,
             profileTemplate = {
@@ -701,11 +865,15 @@ class PaneldService : Service() {
                 )
             },
         )
+        sensors.setRangedProximityListener {
+            server.invalidateCapabilitySnapshot()
+            runtime.observe()?.value?.mqtt?.notifyRangedProximityChanged()
+        }
     }
 
     private fun buildMqtt(
+        identity: NetworkRuntimeIdentity,
         stalePanelId: String? = null,
-        identity: NetworkRuntimeIdentity = currentNetworkIdentity(),
     ): MqttBridge {
         val credentials = identity.mqttCredentials()
         return MqttBridge(
@@ -719,7 +887,9 @@ class PaneldService : Service() {
             // SMT1019 also uses SocketLedController for RGB but has no button-backlight node.
             profile.hasButtonBacklight,
             profile.appCanSu, profile.hasRecents,
-            autoBright, { localIpv4()?.let { "http://$it:${identity.httpPort}/" } },
+            autoBright,
+            onAutoBrightnessConfigChanged = { refreshAdaptiveBrightnessInputs() },
+            configUrl = { localIpv4()?.let { "http://$it:${identity.httpPort}/" } },
             // When no broker is configured, find HA on the LAN via mDNS and default to its :1883.
             discoverHaIp = { mdns.discoverHaIp() },
             // HA's advertised base URL (from zeroconf) for the "Open in HA" device link.
@@ -738,6 +908,9 @@ class PaneldService : Service() {
                 }
             },
             onDashboardTargetChanged = entityLearning::onTargetConfigurationChanged,
+            onDirectKioskSetting = { on ->
+                kioskSettings.apply(on)
+            },
             zigbeeHealth = zigbeeHealth::snapshot,
             onZigbeeExplicitRetry = zigbeeHealth::explicitRetry,
             stalePanelId = stalePanelId,
@@ -748,6 +921,8 @@ class PaneldService : Service() {
             runtimeBroker = credentials.broker,
             runtimeMqttUser = credentials.user,
             runtimeMqttPassword = credentials.password,
+            wifiDiagnostics = wifiDiagnostics::snapshot,
+            rangedProximityEligibility = sensors::hasRangedProximity,
         )
     }
 
@@ -775,7 +950,7 @@ class PaneldService : Service() {
             transient = spec.transient,
             // Navbar persistence is owned by its acknowledged command handler: committing the desired
             // mode here would report durable success before asynchronous overlay actuation finishes.
-            actuationOwnsPersistence = key == "navbar_mode",
+            actuationOwnsPersistence = key == "navbar_mode" || key == "kiosk_lock",
             persist = { config.commitRaw(spec, value) },
             apply = { previous -> bridge.applySetting(key, value, previous) },
         )
@@ -786,33 +961,223 @@ class PaneldService : Service() {
      * panel's discovery cleanup is handed to the replacement bridge so it runs on a live connection.
      */
     private fun reconfigure() {
-        when (networkReconfigureWorker.submit(Unit)) {
-            ConflatedWorker.Admission.COALESCED ->
+        launcherHomePolicyGeneration.incrementAndGet()
+        launcherHomeFailedGeneration.set(Long.MIN_VALUE)
+        scope.launch(Dispatchers.IO) {
+            runCatching {
+                system.applyLauncherHomePolicy(
+                    config.launcherPackage,
+                    config.dashboardPackage,
+                    config.haUrl.isNotBlank(),
+                )
+            }.onFailure { Log.w(TAG, "launcher HOME policy apply failed", it) }
+        }
+        when (runtime.requestLatest()) {
+            ServiceRuntimeOwner.LatestAdmission.COALESCED ->
                 FeatureCosts.registry.recordCoalesced(FeatureCostOperation.NETWORK_RECONFIGURE)
-            ConflatedWorker.Admission.CLOSED ->
+            ServiceRuntimeOwner.LatestAdmission.CLOSED ->
                 FeatureCosts.registry.recordDropped(FeatureCostOperation.NETWORK_RECONFIGURE)
-            ConflatedWorker.Admission.ACCEPTED -> Unit
+            ServiceRuntimeOwner.LatestAdmission.ACCEPTED -> Unit
         }
         FeatureCosts.registry.setBacklog(
             FeatureCostOperation.NETWORK_RECONFIGURE,
-            networkReconfigureWorker.pendingCount(),
+            runtime.pendingLatestCount(),
         )
     }
 
-    private fun performNetworkReconfigure() {
+    /** Borrow the last management proof and the existing never-blank cadence. One failed periodic
+     * mutation stays suppressed until the next explicit config generation; startup/config apply already
+     * owns an immediate unrestricted attempt. */
+    private fun repairAdminHomeFromCapturedRoute() {
+        val generation = launcherHomePolicyGeneration.get()
+        val route = server.lastPrivilegeObservation()?.let(::preferredAdminHomeRepairRoute)
+        if (!shouldAttemptPeriodicAdminHomeRepair(
+                serviceStopping = serviceStopping,
+                adminHomeSelected = system.isAdminLauncherSelection(config.launcherPackage),
+                admittedRoute = route,
+                policyGeneration = generation,
+                failedGeneration = launcherHomeFailedGeneration.get(),
+            )
+        ) return
+        val repaired = runCatching { system.ensureAdminLauncherHome(checkNotNull(route)) }
+            .onFailure { Log.w(TAG, "could not reassert Panel admin as HOME", it) }
+            .getOrDefault(false)
+        if (!repaired && launcherHomePolicyGeneration.get() == generation) {
+            launcherHomeFailedGeneration.set(generation)
+        }
+    }
+
+    private fun registerBrightnessPreferenceObserver() {
+        lastObservedCommandedBrightness = brightness.getCommanded()
+        val observer = object : ContentObserver(Handler(Looper.getMainLooper())) {
+            override fun onChange(selfChange: Boolean) {
+                val level = runCatching {
+                    Settings.System.getInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS)
+                }.getOrNull() ?: return
+                val prior = lastObservedCommandedBrightness
+                lastObservedCommandedBrightness = level
+                if (brightness.consumeOwnedSettingChange(level) || screen.observedDark() == true) return
+                autoBright.noteExternalBrightness(level, BrightnessPreferenceOrigin.ANDROID_SYSTEM, prior)
+            }
+        }
+        contentResolver.registerContentObserver(
+            Settings.System.getUriFor(Settings.System.SCREEN_BRIGHTNESS),
+            false,
+            observer,
+        )
+        brightnessObserver = observer
+    }
+
+    private fun refreshAdaptiveBrightnessInputs(restartSource: Boolean = true) {
+        if (shouldDisableAutoBrightnessForMissingSource(
+                enabled = config.autoBrightness,
+                haEntity = config.autoBrightnessHaEntity,
+                hasLocalSensor = sensors.hasLight(),
+            )
+        ) {
+            Log.w(TAG, "Disabling auto-brightness: no local light sensor or HA illuminance source is configured")
+            config.setAutoBrightness(false)
+        }
+        val enabled = config.autoBrightness
+        val selected = adaptiveHaSource(enabled, config.autoBrightnessHaEntity)
+        val candidateIdentity = config.haUrl.trim()
+        if (candidateIdentity != haCandidateIdentity) {
+            haCandidateIdentity = candidateIdentity
+            haAmbientLux.invalidateCandidates()
+        }
+        autoBright.setHaSourceAvailable(false)
+        if (restartSource) haAmbientLux.setSource(null)
+        haAmbientLux.setSource(selected)
+        val generation = adaptiveSiteGeneration.incrementAndGet()
+        if (enabled) {
+            scope.launch {
+                val site = haSiteMetadata.fetch().metadata
+                if (site != null && !serviceStopping && adaptiveSiteGeneration.get() == generation) {
+                    autoBright.updateSite(site.latitude, site.longitude, site.timeZone)
+                }
+            }
+        }
+        autoBright.reapplyLatest()
+    }
+
+    private fun adaptiveBrightnessHttpApi(): AutoBrightnessHttpApi = object : AutoBrightnessHttpApi {
+        override fun statusJson(): String {
+            val runtime = autoBright.status()
+            val haStatus = haAmbientLux.latestStatus()
+            val selected = config.autoBrightnessHaEntity.trim().takeIf(String::isNotBlank)
+            val candidate = selected?.let { id ->
+                haAmbientLux.latestCandidates().items.firstOrNull { it.entityId == id }
+            }
+            return JSONObject().apply {
+                put("available", true)
+                put("state", if (runtime.enabled) "enabled" else "disabled")
+                put("mode", runtime.mode?.name?.lowercase() ?: "waiting")
+                put("paused", runtime.manualPreference.active)
+                put("preferenceActive", runtime.manualPreference.active)
+                put("localSourcePresent", sensors.hasLight())
+                put("sourceLabel", candidate?.friendlyName ?: selected ?: if (sensors.hasLight()) {
+                    "Panel ambient sensor"
+                } else {
+                    "No ambient light source"
+                })
+                put("entityId", selected ?: JSONObject.NULL)
+                put("sourceAvailable", runtime.sourceAvailable)
+                put("latestLux", runtime.latestLux ?: JSONObject.NULL)
+                put("expectedLux", runtime.expectedLux ?: JSONObject.NULL)
+                put("automaticTarget", runtime.automaticTarget ?: JSONObject.NULL)
+                put("appliedTarget", runtime.appliedTarget ?: JSONObject.NULL)
+                put("autoAuthority", runtime.manualPreference.autoAuthority)
+                put("manualRemainingMs", runtime.manualPreference.remainingMs)
+                if (selected != null) put("detail", haStatus.detail)
+            }.toString()
+        }
+
+        override fun historyJson(hours: Int, sensitivity: Int?): String {
+            val cutoffMinute = (System.currentTimeMillis() - hours * 3_600_000L) / 60_000L
+            val points = autoBright.chartPoints(sensitivity ?: config.autoBrightnessSensitivity)
+                .filter { it.epochMinute >= cutoffMinute }
+            return JSONObject().apply {
+                put("available", true)
+                put("hours", hours)
+                put("bucket_minutes", 5)
+                put("points", JSONArray().apply {
+                    points.forEach { point -> put(JSONObject().apply {
+                        put("epochMinute", point.epochMinute)
+                        put("observedMeanLux", point.observedMeanLux)
+                        put("minLux", point.minLux)
+                        put("maxLux", point.maxLux)
+                        put("expectedLux", point.expectedLux)
+                        put("proposedBrightness", point.proposedBrightness)
+                    }) }
+                })
+            }.toString()
+        }
+
+        override fun haSourcesJson(query: String, limit: Int): String {
+            haAmbientLux.refreshCandidates()
+            val projection = haAmbientLux.latestCandidates()
+            val needle = query.lowercase()
+            val items = projection.items.asSequence()
+                .filter { needle.isBlank() || it.entityId.lowercase().contains(needle) || it.friendlyName.lowercase().contains(needle) }
+                .take(limit)
+            return JSONObject().apply {
+                put("available", projection.error.isBlank())
+                put("refreshing", haAmbientLux.candidateRefreshInFlight())
+                if (projection.error.isNotBlank()) put("detail", projection.error)
+                put("items", JSONArray().apply { items.forEach { source -> put(JSONObject().apply {
+                    put("entityId", source.entityId)
+                    put("friendlyName", source.friendlyName)
+                    put("unit", source.unit)
+                    put("currentLux", source.currentLux ?: JSONObject.NULL)
+                    put("available", source.available)
+                    put("lastUpdatedEpochMs", source.lastUpdatedEpochMs ?: JSONObject.NULL)
+                }) } })
+            }.toString()
+        }
+
+        override fun selectHaSource(entityId: String?): AutoBrightnessHttpAction {
+            config.setAutoBrightnessHaEntity(entityId.orEmpty())
+            refreshAdaptiveBrightnessInputs()
+            autoBright.reapplyLatest()
+            return AutoBrightnessHttpAction.ok()
+        }
+
+        override fun resetHistory(): AutoBrightnessHttpAction {
+            autoBright.resetHistory()
+            return AutoBrightnessHttpAction.ok()
+        }
+
+        override fun resumeFullAuto(): AutoBrightnessHttpAction {
+            autoBright.resumeFullAuto()
+            return AutoBrightnessHttpAction.ok()
+        }
+    }
+
+    private fun performNetworkReconfigure(
+        mutation: ServiceRuntimeOwner<NetworkRuntime>.LatestMutation,
+    ) {
+        val executionDeadline = mutation.deadline
+        if (executionDeadline.remainingMs() <= 0L) return
         // A committed configuration application starts a fresh comparison epoch while process-lifetime
         // startup evidence remains available in the same fixed-cardinality diagnostics projection.
         FeatureCosts.beginEpoch()
-        FeatureCosts.registry.setBacklog(FeatureCostOperation.NETWORK_RECONFIGURE, 0)
-        val desired = currentNetworkConfigurationSnapshot()
-        val replacementRequired = desired.runtime != activeNetworkIdentity ||
-            runtime.snapshot().state != io.github.maxlyth.hapaneld.util.RuntimeLifecycleCoordinator.State.RUNNING
-        val operation = if (replacementRequired) FeatureCostOperation.NETWORK_RECONFIGURE
-            else FeatureCostOperation.CONFIG_LIVE_REFRESH
-        val cost = FeatureCosts.registry.span(operation).work(units = if (replacementRequired) 1 else 0)
+        FeatureCosts.registry.setBacklog(
+            FeatureCostOperation.NETWORK_RECONFIGURE,
+            runtime.pendingLatestCount(),
+        )
+        var cost: io.github.maxlyth.hapaneld.metrics.FeatureCostRegistry.Span? = null
         try {
+            val desired = currentNetworkConfigurationSnapshot()
+            val replacementRequired =
+                desired.runtime != appliedNetworkConfiguration.runtime || !mutation.isRunning
+            val operation = if (replacementRequired) FeatureCostOperation.NETWORK_RECONFIGURE
+                else FeatureCostOperation.CONFIG_LIVE_REFRESH
+            val operationCost = FeatureCosts.registry.span(operation)
+                .work(units = if (replacementRequired) 1 else 0)
+            cost = operationCost
+            refreshAdaptiveBrightnessInputs()
             if (!replacementRequired) {
-                val active = runtime.current().mqtt
+                val active = mutation.current.mqtt
                 replayThenRefreshLiveConfiguration(
                     replay = {
                         liveSettingAuthority.replay { key, value, previous ->
@@ -820,69 +1185,108 @@ class PaneldService : Service() {
                         }
                     },
                     refresh = {
-                        refreshLiveConfiguration(active, evaluateMqttEffects = true, cost = cost)
+                        refreshLiveConfiguration(
+                            active,
+                            desired,
+                            evaluateMqttEffects = true,
+                            cost = operationCost,
+                        )
                     },
                 )
                 return
             }
-            val completed = runtime.reconfigure(
-            stop = { previous ->
-                // The replacement uses the same availability topic unless the panel id changed. Do not race
-                // its retained online with a late offline from the retiring client. A genuinely different
-                // broker still needs an explicit offline because the replacement cannot clean that broker.
-                val publishOffline = mqttReconfigurePublishesOffline(
-                    previous.mqtt.panelId,
-                    desired.runtime.panelId,
-                    previous.mqtt.configuredBroker,
-                    desired.runtime.broker,
-                )
-                runCatching {
-                    previous.mqtt.stop(publishOffline = publishOffline, clearDiscovery = publishOffline)
-                }
-                runCatching { previous.mdns.retire() }
-            },
-            build = { previous ->
-                val stalePanelId = previous.mqtt.panelId.takeIf { it != desired.runtime.panelId }
-                NetworkRuntime(
-                    buildMqtt(stalePanelId, desired.runtime),
-                    buildMdns(desired.runtime),
-                )
-            },
-            start = { replacement ->
-                startReconfiguredNetworkRuntime(
-                    startMdns = replacement.mdns::start,
-                    resolveHaLink = replacement.mqtt::maybeResolveHaLink,
-                    startMqtt = replacement.mqtt::start,
-                )
-            },
-            complete = { replacement ->
-                liveSettingAuthority.replay { key, value, previous ->
-                    applyLiveSetting(replacement.mqtt, key, value, previous)
-                }
-                // Publish only the configuration generation this concrete replacement consumed. A newer
-                // config can arrive while start() is blocked; retaining these older markers makes the
-                // conflated rerun replace/re-project again instead of mistaking that newer config for live.
-                activeNetworkIdentity = desired.runtime
-                activeMqttProjection = desired.projection
-                activeHaLinkIdentity = desired.haLink
-                refreshLiveConfiguration(replacement.mqtt, evaluateMqttEffects = false, cost = cost)
-                Log.i(
-                    TAG,
-                    "reconfigured: panel=${desired.runtime.panelId} " +
-                        "broker=${desired.runtime.broker.ifEmpty { "(disabled)" }}",
-                )
-            },
-            ).get()
-            if (!completed) cost.outcome(FeatureCostOutcome.REJECTED)
+            val completed = mutation.replace(
+                retire = { previous ->
+                    // The replacement uses the same availability topic unless the panel id changed. Do not race
+                    // its retained online with a late offline from the retiring client. A genuinely different
+                    // broker still needs an explicit offline because the replacement cannot clean that broker.
+                    val publishOffline = mqttReconfigurePublishesOffline(
+                        previous.mqtt.panelId,
+                        desired.runtime.panelId,
+                        previous.mqtt.configuredBroker,
+                        desired.runtime.broker,
+                    )
+                    // Start both independent retirement fences before awaiting either result. They share one
+                    // monotonic budget; no locally reset phase timeout can accumulate beyond it.
+                    val mdnsRetirement = previous.mdns.retire(executionDeadline)
+                    val mqttRetirement = previous.mqtt.stop(
+                        deadline = executionDeadline,
+                        publishOffline = publishOffline,
+                        clearDiscovery = publishOffline,
+                    )
+                    val mqttOwnersDrained = mqttRetirement.ownersDrained.awaitTrue(executionDeadline)
+                    val mqttFinalized = mqttRetirement.finalization.awaitSuccessful(executionDeadline)
+                    val mdnsStopped = mdnsRetirement.awaitTrue(executionDeadline)
+                    val withinDeadline = executionDeadline.remainingMs() > 0L
+                    check(mqttOwnersDrained && mqttFinalized && mdnsStopped && withinDeadline) {
+                        "retiring network runtime did not prove cleanup " +
+                            "(mqttOwners=$mqttOwnersDrained mqttFinal=$mqttFinalized " +
+                            "mdns=$mdnsStopped withinDeadline=$withinDeadline)"
+                    }
+                },
+                build = { previous ->
+                    val stalePanelId = previous.mqtt.panelId.takeIf { it != desired.runtime.panelId }
+                    NetworkRuntime(
+                        buildMqtt(desired.runtime, stalePanelId),
+                        buildMdns(desired.runtime),
+                    )
+                },
+                start = { replacement ->
+                    startReconfiguredNetworkRuntime(
+                        startMdns = replacement.mdns::start,
+                        resolveHaLink = replacement.mqtt::maybeResolveHaLink,
+                        startMqtt = replacement.mqtt::start,
+                    )
+                },
+                complete = { replacement ->
+                    liveSettingAuthority.replay { key, value, previous ->
+                        applyLiveSetting(replacement.mqtt, key, value, previous)
+                    }
+                    // Publish only the immutable configuration this concrete replacement consumed. A newer
+                    // config can arrive while start() is blocked; retaining this older snapshot makes the
+                    // conflated rerun replace/re-project again instead of mistaking that newer config for live.
+                    refreshLiveConfiguration(
+                        replacement.mqtt,
+                        desired,
+                        evaluateMqttEffects = false,
+                        cost = operationCost,
+                    )
+                    Log.i(
+                        TAG,
+                        "reconfigured: panel=${desired.runtime.panelId} " +
+                            "broker=${desired.runtime.broker.ifEmpty { "(disabled)" }}",
+                    )
+                },
+            )
+            if (!completed) {
+                operationCost.outcome(FeatureCostOutcome.REJECTED)
+                if (executionDeadline.remainingMs() > 0L) requestNetworkRecovery()
+            }
         } catch (e: InterruptedException) {
-            cost.outcome(FeatureCostOutcome.CANCELLED)
+            cost?.outcome(FeatureCostOutcome.CANCELLED)
             Thread.currentThread().interrupt()
         } catch (e: Exception) {
-            cost.outcome(FeatureCostOutcome.FAILURE)
+            cost?.outcome(FeatureCostOutcome.FAILURE)
             Log.w(TAG, "network reconfigure failed", e)
+            if (executionDeadline.remainingMs() > 0L) requestNetworkRecovery()
         } finally {
-            cost.close()
+            if (executionDeadline.remainingMs() <= 0L && !Thread.currentThread().isInterrupted) {
+                cost?.outcome(FeatureCostOutcome.REJECTED)
+            }
+            cost?.close()
         }
+    }
+
+    private fun requestNetworkRecovery() {
+        if (!serviceStopping) recoveryRestart.request()
+    }
+
+    private fun onNetworkReconfigureTimeout() {
+        FeatureCosts.registry.setBacklog(
+            FeatureCostOperation.NETWORK_RECONFIGURE,
+            runtime.pendingLatestCount(),
+        )
+        requestNetworkRecovery()
     }
 
     private fun currentNetworkIdentity(): NetworkRuntimeIdentity {
@@ -925,26 +1329,24 @@ class PaneldService : Service() {
 
     private fun refreshLiveConfiguration(
         bridge: MqttBridge,
+        desired: NetworkConfigurationSnapshot,
         evaluateMqttEffects: Boolean,
         cost: io.github.maxlyth.hapaneld.metrics.FeatureCostRegistry.Span,
     ) {
         if (evaluateMqttEffects) {
-            val projection = currentMqttProjection()
-            val haLink = currentHaLinkIdentity()
             val effects = configRefreshEffects(
-                activeMqttProjection,
-                projection,
-                activeHaLinkIdentity,
-                haLink,
+                appliedNetworkConfiguration.projection,
+                desired.projection,
+                appliedNetworkConfiguration.haLink,
+                desired.haLink,
             )
             bridge.refreshConfiguration(effects.reannounceMqtt, effects.resolveHaLink)
-            activeMqttProjection = projection
-            activeHaLinkIdentity = haLink
             cost.work(
                 units = (if (effects.reannounceMqtt) 1L else 0L) +
                     (if (effects.resolveHaLink) 1L else 0L),
             )
         }
+        appliedNetworkConfiguration = desired
         // These owners already change-gate internally; they do not require broker/mDNS replacement.
         runCatching { logShipper.reconfigure() }
         runCatching { power.apply(config.keepAwake) }
@@ -953,14 +1355,77 @@ class PaneldService : Service() {
             config.dashboardPackage == SystemController.BUILTIN_DASHBOARD
     }
 
+    /** Controller reads shared by the dashboard facts, live values and capability projection. */
+    private data class ManagementControllerObservation(
+        val touchSoundEnabled: Boolean,
+        val cpuTier: String?,
+        val cpuGovernorsAvailable: Boolean,
+        val networkAdbPersisted: Boolean,
+        val networkAdbActive: Boolean,
+        val zigbee: ZigbeeObservation,
+        val relayCount: Int,
+        val buttonLedCount: Int,
+    )
+
+    private fun observeManagementControllers(privilege: PrivilegedRouteObservation): ManagementControllerObservation {
+        val persistedAdb = adb.isPersisted()
+        return ManagementControllerObservation(
+            touchSoundEnabled = touchSound.isEnabled(),
+            cpuTier = cpu.currentTier(allowRootFallback = privilege.directSuReady),
+            cpuGovernorsAvailable = cpu.available(allowRootFallback = privilege.directSuReady),
+            networkAdbPersisted = persistedAdb,
+            // A persisted ha-paneld intent already determines the displayed state; avoid five property
+            // reads merely to rediscover that its boot reassertion is owned here.
+            networkAdbActive = !persistedAdb && adb.isActive(allowRootCrossCheck = privilege.directSuReady),
+            zigbee = zigbee.observe(includeRole = true, directSuReady = privilege.directSuReady),
+            relayCount = relay.count(allowRootProbe = privilege.directSuReady),
+            buttonLedCount = relay.ledCount(),
+        )
+    }
+
+    private fun projectLiveValues(cpuTier: String?, networkAdbPersisted: Boolean, touchEnabled: Boolean): Map<String, String> =
+        mapOf(
+            "touch_sound" to touchEnabled.toString(),
+            "cpu_governor" to (cpuTier ?: "Auto"),
+            "network_adb" to networkAdbPersisted.toString(),
+            "zigbee_router" to config.zigbeeRouterEnabled.toString(),
+        )
+
+    /** Fresh non-transient controller values for config export and concurrency checks. CPU governor is
+     * reboot-transient and projectConfigSnapshot omits it, so probing it here would be pure wasted work. */
+    private fun currentConfigLiveValues(): Map<String, String> = mapOf(
+        "touch_sound" to touchSound.isEnabled().toString(),
+        "network_adb" to adb.isPersisted().toString(),
+        "zigbee_router" to config.zigbeeRouterEnabled.toString(),
+    )
+
+    private fun managementProjection(privilege: PrivilegedRouteObservation): ManagementProjection {
+        val controllers = observeManagementControllers(privilege)
+        val diagnostic = DiagReader.capabilities(this, profile, privilege)
+        return ManagementProjection(
+            facts = panelInfo(controllers, diagnostic.rgbLedReady),
+            live = projectLiveValues(
+                cpuTier = controllers.cpuTier,
+                networkAdbPersisted = controllers.networkAdbPersisted,
+                touchEnabled = controllers.touchSoundEnabled,
+            ),
+            capabilities = capabilitiesSnapshot(privilege, controllers),
+            capabilityRows = diagnostic.rows,
+        )
+    }
+
     /** Ordered facts for the info page (`GET /`). */
-    private fun panelInfo(): Map<String, String> {
+    private fun panelInfo(
+        controllers: ManagementControllerObservation,
+        rgbLedReady: Boolean,
+    ): Map<String, String> {
         // activeBroker reflects auto-discovery (tcp://<ha-ip>:1883) when no broker is configured.
         val broker = mqtt.activeBroker.ifBlank { config.mqttBroker }
         val host = broker.substringAfter("://").substringBefore(":").ifBlank { "?" }
         val auto = config.mqttBroker.isBlank() && mqtt.activeBroker.isNotBlank()
         val mqttStatus = when (mqtt.state) {
             "connected" -> "$host · connected" + (if (auto) " (auto)" else "")
+            "announcing" -> "$host · connected, announcing…" + (if (auto) " (auto)" else "")
             "auth-retrying" -> "$host · auth retrying…"
             "auth-failed" -> "$host · reachable, auth rejected — check username/password"
             "unreachable" -> "$host · unreachable"
@@ -969,6 +1434,7 @@ class PaneldService : Service() {
             else -> "disabled"
         }
         val pv = SystemProps.get("ro.product.version")
+        val appDatabase = runCatching { PanelInfo.databaseSummary(entityLearning.databaseUsage()) }.getOrNull()
         val extras = linkedMapOf(
             "panel_id" to config.panelId,
             "Friendly name" to config.friendlyName,
@@ -980,32 +1446,38 @@ class PaneldService : Service() {
             // (which carries the broker host and is omitted from /diag): this row IS included in a
             // /diag dump, so a pasted report finally answers "is this panel broker-connected?".
             "MQTT state" to mqtt.statusPublic(),
+            "Security mode" to if (config.hardenedSecurityEnabled) {
+                "Hardened · high-impact remote actions need physical on-panel approval"
+            } else {
+                "Relaxed"
+            },
             // Wakelock/Wi-Fi-lock intent vs reality — a panel that should be keep-awake but isn't
             // holding the lock is a strong hint for stalled-idle-connection reports.
             "Keep awake" to if (config.keepAwake) (if (power.isHeld()) "on · wakelock held" else "on · wakelock NOT held") else "off",
+            "Kiosk lock" to if (config.kioskLock) "on" else "off",
             "mDNS" to "${config.panelId} ${Config.MDNS_SERVICE_TYPE}",
-            "Platform" to "${profile.displayName} · ${profile.socClass}",
+            "Platform" to profile.displayName,
+            "SoC" to (profile.soc?.displayText() ?: profile.socClass),
             "Model" to profile.panelModelLabel(pv),
-            "LED" to ledLabel(),
+            "LED" to ledLabel(rgbLedReady),
             "Light sensor" to sensorRow(sensors.hasLight(), profile.lightTech, sensors.lightDesc()),
             "Proximity" to sensorRow(sensors.hasProximity(), profile.proximityTech, sensors.proximityDesc()),
             // a11y service = software back/recents nav, NOT physical buttons (NSPanel Pro has none).
             "Nav actions (a11y)" to yesNo(accessibilityEnabled()),
             // Soft navbar overlay mode + whether the overlay can actually be drawn (SYSTEM_ALERT_WINDOW).
             "Navbar" to (config.navbarMode + if (config.navbarMode != "Off" && !canDrawOverlays()) " · no overlay permission" else ""),
-            // Zigbee EFR32 state (NSPanel Pro only; "none" elsewhere). Calls su — fine here because
-            // the info page is served off the main thread.
-            "Zigbee" to zigbee.status(),
-            "Relays" to relay.count().let { if (it > 0) it.toString() else "none" },
-            "CPU profile" to (cpu.currentTier() ?: "n/a"),
+            "Zigbee" to controllers.zigbee.status,
+            "Relays" to controllers.relayCount.let { if (it > 0) it.toString() else "none" },
+            "CPU profile" to (controllers.cpuTier ?: "n/a"),
             "Network ADB" to when {
-                adb.isPersisted() -> "persistent (5555) · re-asserted by ha-paneld at boot"
-                adb.isActive() -> "active (5555) · external — not persisted by ha-paneld"
+                controllers.networkAdbPersisted -> "persistent (5555) · re-asserted by ha-paneld at boot"
+                controllers.networkAdbActive -> "active (5555) · external — not persisted by ha-paneld"
                 else -> "off"
             },
             "Log shipping" to logShipper.statusText(),
             "Audio playback" to audio.snapshot().statusText(),
         )
+        appDatabase?.let { extras["App database"] = it }
         if (pv.isNotEmpty()) extras["Product version"] = pv
         // Recent "changed outside MQTT" events (brightness/volume/backlight/governor) — shown only when
         // something has actually synced, so it doesn't clutter a steady panel. Flows to /diag too.
@@ -1014,14 +1486,16 @@ class PaneldService : Service() {
         return PanelInfo.collect(this, extras, profile)
     }
 
-    private fun ledLabel(): String = when {
-        !led.available() -> "none"
+    private fun ledLabel(rgbLedReady: Boolean): String {
+        if (!rgbLedReady) return "none"
+        return when {
         led is Rk3576LedController -> "Rockchip /dev/ledjni (RGB)"
         led is SocketLedController && profile.ledMechanism == LedMechanism.RK3576_IOCTL_DAEMON -> "Rockchip /dev/ledjni helper daemon (RGB)"
         led is SocketLedController && profile.ledMechanism == LedMechanism.SYSFS_DAEMON -> "sysfs helper daemon (RGB)"
         led is SocketLedController -> "helper daemon (RGB)"
         led.colorCapable() -> "RGB"
         else -> "brightness"
+        }
     }
 
     private fun yesNo(b: Boolean) = if (b) "yes" else "no"
@@ -1031,10 +1505,14 @@ class PaneldService : Service() {
     private fun sensorRow(present: Boolean, tech: String?, desc: String?): String =
         if (!present) "no" else "yes" + listOfNotNull(tech, desc).joinToString("") { " · $it" }
 
-    // A positive Zigbee presence result is immutable for this profile revision. A negative result can be
-    // only "root was not ready yet", so keep it retryable under bounded monotonic backoff.
+    // MQTT recovery runs each heartbeat. Preserve the established positive-sticky/backoff contract so
+    // a declared gateway is discovered after late root startup without spawning a root process forever.
     private val zigbeePresence = SuccessStickyProbe(
-        probe = { zigbee.present().takeIf { it } },
+        probe = {
+            zigbee.observe(includeRole = false)
+                .takeIf { it.probeSucceeded && it.present }
+                ?.let { true }
+        },
         initialBackoffMs = 5_000L,
         maxBackoffMs = 300_000L,
     )
@@ -1042,37 +1520,70 @@ class PaneldService : Service() {
     /** This panel's capability snapshot for the settings registry's availableWhen gates
      *  (the Configure form/schema + the dashboard's read-only values card). */
     private fun capabilitiesSnapshot(): Capabilities {
+        val privilege = observeTypedShellCapability(
+            directSuProbe = Su::available,
+            helperRootProbe = HelperClient::available,
+            shizukuSnapshot = ShizukuBridge::snapshot,
+        )
+        return capabilitiesSnapshot(
+            directSuReady = privilege.directSuReady,
+            shizukuReady = privilege.shizuku.ready,
+            typedShellControlReady = privilege.typedShellControlReady,
+            controllers = null,
+        )
+    }
+
+    private fun capabilitiesSnapshot(
+        privilege: PrivilegedRouteObservation,
+        controllers: ManagementControllerObservation,
+    ): Capabilities = capabilitiesSnapshot(
+        directSuReady = privilege.directSuReady,
+        shizukuReady = privilege.shizuku.ready,
+        typedShellControlReady = privilege.typedShellControlReady,
+        controllers = controllers,
+    )
+
+    private fun capabilitiesSnapshot(
+        directSuReady: Boolean,
+        shizukuReady: Boolean,
+        typedShellControlReady: Boolean,
+        controllers: ManagementControllerObservation?,
+    ): Capabilities {
         val cost = FeatureCosts.registry.span(FeatureCostOperation.CAPABILITY_SNAPSHOT)
         return try {
-            val privilege = probePrivilegedCapabilities(
-                suProbe = Su::available,
-                helperProbe = HelperClient::available,
-                shizukuProbe = ShizukuBridge::available,
-            )
             Capabilities(
                 hasProximity = sensors.hasProximity(),
+                hasRangedProximity = sensors.hasRangedProximity(),
                 hasLight = sensors.hasLight(),
                 hasTemperature = sensors.hasTemperature(),
                 hasHumidity = sensors.hasHumidity(),
+                hasWifi = packageManager.hasSystemFeature(PackageManager.FEATURE_WIFI),
+                hasWifiSsid = packageManager.hasSystemFeature(PackageManager.FEATURE_WIFI) &&
+                    wifiDiagnostics.ssidRouteAvailable(directSuReady),
                 hasCht8305 = profile.hasCht8305,
                 appCanSu = profile.appCanSu,
                 hasRecents = profile.hasRecents,
-                cpuGovernors = cpu.available(),
+                cpuGovernors = controllers?.cpuGovernorsAvailable ?: cpu.available(),
                 // AdbController.available() is exactly Su.available(); reuse this snapshot's one root
                 // authority probe rather than opening another shell transaction.
-                networkAdb = privilege.suAvailable,
-                zigbeePresent = profile.zigbeeGatewayDir != null && zigbeePresence.get() == true,
-                relays = relay.count(),
-                buttonLeds = relay.ledCount(),
+                networkAdb = directSuReady,
+                zigbeePresent = controllers?.let {
+                    zigbeeCapabilityPresent(
+                        declaredGateway = profile.zigbeeGatewayDir != null,
+                        observation = it.zigbee,
+                    )
+                } ?: (profile.zigbeeGatewayDir != null && zigbeePresence.get() == true),
+                relays = controllers?.relayCount ?: relay.count(),
+                buttonLeds = controllers?.buttonLedCount ?: relay.ledCount(),
                 hasSystemDarkMode = Build.VERSION.SDK_INT >= 29,   // Android 10+ has the system dark/light setting
                 companionInstalled = UpdateChecker.COMPANION_PKGS.any {
                     runCatching { packageManager.getPackageInfo(it, 0) }.isSuccess
                 },
                 webViewManaged = profile.recommendedWebView != null,
-                shizukuReady = privilege.shizukuAvailable,
-                canInstallVerifiedApps = privilege.anyAvailable,
-                canCaptureAndInput = privilege.anyAvailable,
-                canSetDisplay = privilege.anyAvailable,
+                shizukuReady = shizukuReady,
+                canInstallVerifiedApps = typedShellControlReady,
+                canCaptureAndInput = typedShellControlReady,
+                canSetDisplay = typedShellControlReady,
             ).also { cost.work(units = 1) }
         } catch (e: Exception) {
             cost.outcome(FeatureCostOutcome.FAILURE)
@@ -1146,7 +1657,8 @@ class PaneldService : Service() {
             // time to flush before START_STICKY restarts the service and HOME on the new provider.
             Log.i(TAG, "WebView $verb — restarting process so the built-in renderer binds the new provider")
             kotlinx.coroutines.delay(1_000)
-            kotlin.system.exitProcess(0)
+            requestSafeProcessBoundary("binding the $verb WebView provider")
+            return
         }
         system.reloadDashboard(config.dashboardPackage)
     }
@@ -1270,16 +1782,43 @@ class PaneldService : Service() {
         if (started) return START_STICKY
         startForegroundCompat("Starting…")
         started = true
-        // Cache HA's frontend URL from the Companion (its internal/external_url) so the header "Open in HA"
-        // button always has a target — even when the panel's own device-page URL hasn't resolved (e.g. a
-        // remote panel over a tunnel). Root sqlite read, off the main thread; best-effort.
-        scope.launch(kotlinx.coroutines.Dispatchers.IO) {
-            runCatching {
-                io.github.maxlyth.hapaneld.control.CompanionDb.serverUrl(this@PaneldService, io.github.maxlyth.hapaneld.control.Su)
-            }.getOrNull()?.let { config.setHaBaseUrl(it) }
-        }
         val startupActivationGeneration = profileActivationGeneration
         val startup = runtime.start runtimeStart@{ activeRuntime ->
+            // A prior START_STICKY instance may still be draining after its bounded main-thread wait. It
+            // never releases this in-process fence: completed teardown exits the process, guaranteeing
+            // that no old hardware owner can overlap the replacement generation.
+            restartLease.awaitPredecessor()
+            if (serviceStopping) return@runtimeStart
+
+            // Everything below can start work, write hardware state, attach a process-global owner, or
+            // create an overlay. Keep all of it behind the predecessor fence, not merely HTTP/MQTT start.
+            reconcileHelperInstallStaging()
+            registerBrightnessPreferenceObserver()
+            refreshAdaptiveBrightnessInputs(restartSource = false)
+            autoBright.activate()
+            brightness.applyPreventIdleDim(config.preventIdleDim, config)
+            EntityLearningRuntime.attach(entityLearning)
+            // Kiosk is config-owned across boots so every restart retains its deliberate unlocked
+            // window. Never let a stale/in-flight HTTP journal bypass that delay or override a newer OFF.
+            if (!liveSettingAuthority.discard("kiosk_lock")) {
+                Log.w(TAG, "could not discard stale kiosk live-setting journal")
+            }
+            if (config.kioskLock && !kiosk.isPersistentPolicyEligible()) {
+                Log.w(TAG, "kiosk lock is unavailable on this profile; clearing stale desired state")
+                if (!config.commitKioskLock(false)) {
+                    Log.w(TAG, "could not durably clear unsupported kiosk setting")
+                }
+            }
+            val kioskRecoveredAtStartup = kiosk.recoverPersistentState(config.kioskLock)
+            if (!kioskRecoveredAtStartup) {
+                Log.w(TAG, "pending kiosk platform state could not be recovered; continuing unlocked")
+            }
+            if (serviceStopping) return@runtimeStart
+            // Re-apply at boot so a persisted enabled state loads the owned click sample and reconciles
+            // Android's sound-effects setting for this process; touch sound never changes stream volume.
+            if (touchSound.isEnabled()) touchSound.set(true)
+            bootChime.applyPersisted()
+            sensors.prepare()
             when (BundledHelperInstaller.ensureCurrent(this@PaneldService, profile.appCanSu)) {
                 BundledHelperInstaller.Result.INSTALLED -> Log.i(TAG, "migrated bundled root helper for this release")
                 BundledHelperInstaller.Result.FAILED ->
@@ -1304,7 +1843,9 @@ class PaneldService : Service() {
                                 if (!serviceStopping) {
                                     runCatching {
                                         rendererPreparation.reconcileStartup(
-                                            ensureHome = { pkg, ready -> system.ensureDashboardHome(pkg, ready) },
+                                            ensureHome = { pkg, ready ->
+                                                system.applyLauncherHomePolicy(config.launcherPackage, pkg, ready)
+                                            },
                                             launchHome = system::launchHome,
                                         )
                                     }.onFailure {
@@ -1325,7 +1866,9 @@ class PaneldService : Service() {
                     // before the HTTP surface can accept another configuration transaction. The durable retry
                     // condition is built-in + blank URL; borrowed connection and zoom commit atomically.
                     rendererPreparation.reconcileStartup(
-                        ensureHome = { pkg, ready -> system.ensureDashboardHome(pkg, ready) },
+                        ensureHome = { pkg, ready ->
+                            system.applyLauncherHomePolicy(config.launcherPackage, pkg, ready)
+                        },
                         launchHome = { pkg -> system.launchHome(pkg) },
                     )
                 },
@@ -1345,6 +1888,9 @@ class PaneldService : Service() {
             io.github.maxlyth.hapaneld.http.PerfReader.builtinActive = config.dashboardPackage == SystemController.BUILTIN_DASHBOARD
             io.github.maxlyth.hapaneld.http.PerfReader.start(scope)
             server.start()
+            // Startup always reconciles both additions and removals from durable desired state against
+            // the write-ahead overlay ownership markers. This completes work handed off by profile restart.
+            server.requestTameReconcile()
             activeRuntime.mqtt.start()
             if (profile.zigbeeGatewayDir != null) zigbeeHealth.start()
             liveSettingAuthority.replay { key, value, previous ->
@@ -1359,25 +1905,37 @@ class PaneldService : Service() {
             // Experimental kiosk lock: a reboot CLEARS the runtime lock (by design — the anti-brick net), so
             // re-assert it after a delay if it was enabled. The delay leaves an unlocked window each boot so
             // an admin is never stranded; skipped if it was turned off (corner gesture / :8888 / HA) meanwhile.
-            if (config.kioskLock) scheduleKioskReassert()
+            if (config.kioskLock || !kioskRecoveredAtStartup) scheduleKioskReassert()
             // Boot re-assert of network adb — some firmwares strip persist.adb.tcp.port at boot, so
             // re-apply it when ha-paneld is persisting it (no-op otherwise). See AdbController.reassert.
             runCatching { adb.reassert() }
             sensors.start(
-                onLux = { lux -> mqtt.publishLight(lux) },
-                onLuxRaw = { lux -> autoBright.submitLux(lux) },
-                onProximity = { near ->
-                    mqtt.publishProximity(near)
-                    // Wake-on-wave: local, instant, wake-only. onProximity fires only on far->near
-                    // transitions (natural debounce); sleep stays HA's job. Publish the ON state so the
-                    // HA screen entity tracks the local wake (GitHub #6 — was staying OFF in HA).
-                    // screen.wake() calls Su.run() — must NOT run on the main thread (ANR risk when
-                    // su is under load during the proximity callback, which delivers on the main looper).
-                    if (near && config.wakeOnWave) {
-                        wakeOnWaveWorker.execute {
-                            if (serviceStopping) return@execute
-                            screen.wake()
-                            if (!serviceStopping) mqtt.publishScreenOn()
+                onLux = { lux ->
+                    submitIlluminanceIfExposed(
+                        exposed = config.haExposed("illuminance", true),
+                        lux = lux,
+                        submit = lightMqttPublisher::submit,
+                    )
+                },
+                onLuxRaw = autoBright::submitLux,
+                onProximity = { near, level, reportMask ->
+                    mqtt.publishProximity(near, level, reportMask)
+                },
+                onGesture = gesture@{
+                    if (!config.wakeOnWave || !sensors.hasRangedProximity()) return@gesture
+                    val generation = screen.currentOffGeneration() ?: return@gesture
+                    val settingGeneration = config.wakeOnWaveGeneration
+                    wakeOnWaveWorker.execute {
+                        if (
+                            serviceStopping || !config.wakeOnWave || !sensors.hasRangedProximity() ||
+                            config.wakeOnWaveGeneration != settingGeneration
+                        ) return@execute
+                        if (screen.wakeIfStillDark(generation) {
+                                !serviceStopping && config.wakeOnWave && sensors.hasRangedProximity() &&
+                                    config.wakeOnWaveGeneration == settingGeneration
+                            } == WakeOutcome.WOKEN && !serviceStopping
+                        ) {
+                            mqtt.publishScreenOn()
                         }
                     }
                 },
@@ -1453,6 +2011,7 @@ class PaneldService : Service() {
                     screen.wake()
                     mqtt.publishScreenOn()
                 }
+                repairAdminHomeFromCapturedRoute()
             }
             // The HTTP surface, network owner, sensors, evdev and periodic safety owners have all been
             // constructed successfully. Only now may a pending profile replace the previous LKG target.
@@ -1469,6 +2028,12 @@ class PaneldService : Service() {
                 if (!profileRegistry.markResolvedStartupHealthy()) {
                     Log.w(TAG, "could not persist the healthy profile revision snapshot")
                 }
+            }
+            // Best-effort observation belongs after the required control plane and every active owner.
+            // It must not contend with helper migration, live-setting replay, ADB reassertion or profile
+            // activation proof. This uses the existing service scope and owns no retry/lifecycle.
+            scope.launch(Dispatchers.IO) {
+                server.prewarm()
             }
         }
         Thread({
@@ -1513,24 +2078,32 @@ class PaneldService : Service() {
      * stops ticking (observed in the field: MQTT "connected" but zero watchdog ticks, so a
      * half-open connection never self-healed). A plain thread ticks regardless of dispatcher pressure.
      *
-     * Two stall modes, both healed by a full client rebuild:
+     * Two stall modes, both given one fresh-client fallback before a previously-live process may cross
+     * the process boundary:
      *   (1) STATE-stuck — HiveMQ's auto-reconnect stalls (transient auth reject on an HA/broker restart,
      *       or its reconnect thread is power-management-deferred); rebuild after 2 non-connected checks.
      *   (2) LIVENESS-stale — the broker dropped the link but HiveMQ never noticed the half-open
      *       (CLOSE-WAIT) socket, so it still reports "connected" while publishing into the void.
      *       isConnected() lies, so key on TRUE liveness: each tick send a heartbeat (a QoS-1 publish the
-     *       broker must ACK) and, if nothing has been ACKed for MQTT_STALE_MS, force a rebuild.
+     *       broker must ACK). The fresh client's exact online + state acknowledgement, not CONNACK,
+     *       heartbeat, or completion of the reconnect submission, proves recovery.
      *
      * CRITICAL INVARIANT: the loop thread makes NO potentially-blocking MQTT call. A HiveMQ publish —
      * and even disconnect/rebuild — can block on an internal client monitor exactly when the connection
      * is wedged (the same trap as the sensor-callback ANR), which is precisely when the watchdog is
-     * needed. rc10 called heartbeat() inline and the watchdog froze inside its own probe (observed in
-     * the field: thread parked on a futex, liveness 44 min stale, no rebuild). Heartbeat therefore uses
-     * a sacrificial side-thread. Rebuild admission is generation-checked on the lifecycle coordinator,
+     * needed. An earlier implementation called heartbeat() inline; the watchdog then froze inside its own
+     * probe (observed in the field: thread parked on a futex, liveness 44 min stale, no rebuild). Heartbeat uses
+     * a sacrificial side-thread. Rebuild admission is generation-checked by the runtime owner,
      * then the accepted reconnect runs on a recovery worker so neither the watchdog nor the serialized
-     * transition lane can be trapped by it. If the previous operation is still in flight, skip; the guard
-     * re-arms via a timeout so a hung rebuild cannot permanently disable healing. The rebuild DECISION
-     * lives in [ConnectionSupervisor]; this thread owns only tick cadence and off-thread dispatch.
+     * transition lane can be trapped by it. The alternate address family is staged durably BEFORE that
+     * potentially wedged owner work is submitted, so a later process boundary cannot restart onto the
+     * same route merely because the reconnect callback never entered. One rebuild then retains that client
+     * for the existing five-minute progress bound. This prevents the observed 60-second IPv4/IPv6 loop;
+     * only exact application readiness starts a new epoch. A previously-live runtime retains its existing
+     * process-boundary policy. An announcement wedge gets one durable process escape; its replacement can
+     * still alternate once, but cannot inherit an unbounded restart loop.
+     * The recovery DECISION lives in [ConnectionSupervisor]; this thread owns only tick cadence and
+     * off-thread dispatch.
      */
     private fun startMqttWatchdog() {
         if (mqttWatchdogAlive) return
@@ -1539,70 +2112,194 @@ class PaneldService : Service() {
         val worker = Thread {
             try {
                 data class HeartbeatProbe(val generation: Long, val thread: Thread)
+                data class RebuildAttempt(
+                    val runtimeGeneration: Long,
+                    val completion: java.util.concurrent.Future<Boolean>,
+                    val outcome: java.util.concurrent.atomic.AtomicReference<MqttRecoveryOutcome>,
+                    val ticket: MqttRecoveryTicket,
+                )
                 val heartbeats = mutableListOf<HeartbeatProbe>()
-                var heartbeatRecoveryRequested = false
-                var rebuild: java.util.concurrent.Future<Boolean>? = null
+                var terminalRecoveryNeeded = false
+                var rebuild: RebuildAttempt? = null
                 while (mqttWatchdogAlive) {
                     try { Thread.sleep(MQTT_WATCHDOG_MS) } catch (e: InterruptedException) { break }
                     if (!mqttWatchdogAlive) break
                     heartbeats.removeAll { !it.thread.isAlive }
-                    val sinceOk = mqtt.msSinceLastOk()
-                    val now = android.os.SystemClock.elapsedRealtime()
-                    Log.i(TAG, "mqtt watchdog tick: state=${mqtt.state} sinceOk=${sinceOk}ms hb=${heartbeats.map { it.generation }} rebuild=${rebuild?.isDone == false}")
-                    when (val action = supervisor.tick(mqtt.state, mqtt.lastOkMs, sinceOk, now, rebuild?.isDone == false)) {
-                        is ConnectionSupervisor.Action.Rebuild -> {
-                            Log.w(TAG, "MQTT ${action.reason} stall (${sinceOk}ms, state=${mqtt.state}) — forcing reconnect (flip family)")
-                            runtime.observe()?.let { observed ->
-                                rebuild = runtime.reconnect(observed) { target ->
-                                    if (target.mqtt.state == "discovering") target.mdns.start()
-                                    target.mqtt.reconnect(flipFamily = true)
-                                }
-                            }
+                    if (terminalRecoveryNeeded) {
+                        if (!serviceStopping && recoveryRestart.request()) break
+                        if (!serviceStopping) {
+                            Log.w(TAG, "MQTT watchdog terminal recovery was not admitted; retrying next tick")
                         }
-                        is ConnectionSupervisor.Action.SkipRebuild ->
-                            Log.w(TAG, "mqtt ${action.reason} rebuild wanted but one in flight ${action.inFlightMs}ms — skipping")
-                        ConnectionSupervisor.Action.None -> {}
+                        continue
                     }
-                    // Heartbeat LAST and OFF-THREAD: a wedged client blocks the publish, but only its
-                    // generation's sacrificial thread. A replacement runtime must not be suppressed by a
-                    // heartbeat stranded on the obsolete client.
-                    val observed = runtime.observe()
-                    val currentConnectionGeneration =
-                        observed?.value?.mqtt?.heartbeatConnectionGeneration()
-                    when (val admission = HeartbeatAdmission.decide(
-                        currentGeneration = currentConnectionGeneration,
-                        liveTrackedGenerations = heartbeats.map { it.generation },
-                    )) {
-                        HeartbeatAdmission.Decision.NoCurrentConnection,
-                        HeartbeatAdmission.Decision.CurrentHeartbeatAlive -> Unit
-                        is HeartbeatAdmission.Decision.Admit -> {
-                            if (admission.replacingStranded) {
-                                FeatureCosts.registry.recordDropped(FeatureCostOperation.MQTT_HEARTBEAT_ADMISSION)
-                                Log.w(TAG, "obsolete mqtt heartbeat is stranded; admitting generation ${admission.generation}")
-                            }
-                            val target = observed ?: continue
-                            val thread = Thread({
-                                if (runtime.isCurrent(target) &&
-                                    target.value.mqtt.isCurrentHeartbeatConnection(admission.generation)
-                                ) {
-                                    runCatching { target.value.mqtt.heartbeat() }
+                    try {
+                        val watchedRuntime = runtime.observe()
+                        rebuild?.let { attempt ->
+                            when {
+                                attempt.runtimeGeneration != watchedRuntime?.generation -> rebuild = null
+                                attempt.completion.isDone -> {
+                                    rebuild = null
+                                    val ownerAccepted = runCatching { attempt.completion.get() }.getOrDefault(false)
+                                    when {
+                                        !ownerAccepted -> {
+                                            supervisor.rebuildNotAdmitted()
+                                            if (watchedRuntime.value.mqtt.reconcileRejectedRecovery(attempt.ticket)) {
+                                                Log.i(TAG, "MQTT fallback stage reconciled after owner rejection")
+                                            } else {
+                                                Log.w(TAG, "MQTT fallback rejection could not durably restore its route")
+                                            }
+                                        }
+                                        attempt.outcome.get() == MqttRecoveryOutcome.REBUILT ->
+                                            supervisor.rebuildAdmitted()
+                                        attempt.outcome.get() == MqttRecoveryOutcome.NO_LONGER_NEEDED -> {
+                                            supervisor.recoveryNoLongerNeeded()
+                                            Log.i(TAG, "MQTT recovered before queued fallback entered; preserving the live client")
+                                        }
+                                        else -> {
+                                            supervisor.rebuildNotAdmitted()
+                                            Log.w(TAG, "MQTT fallback entered without a transport mutation")
+                                        }
+                                    }
                                 }
-                            }, "mqtt-heartbeat").apply { isDaemon = true; start() }
-                            heartbeats += HeartbeatProbe(admission.generation, thread)
+                            }
                         }
-                        is HeartbeatAdmission.Decision.EscalateRecovery -> {
-                            if (!heartbeatRecoveryRequested) {
-                                heartbeatRecoveryRequested = true
+                        if (watchedRuntime == null) {
+                            rebuild = null
+                            supervisor.runtimeUnavailable()
+                            continue
+                        }
+                        val watched = watchedRuntime.value.mqtt
+                        val watchdogObservation = watched.watchdogObservation()
+                        val progress = watchdogObservation.progress
+                        val now = android.os.SystemClock.elapsedRealtime()
+                        val sinceOk = if (progress.lastOkMs == 0L) 0L
+                        else (now - progress.lastOkMs).coerceAtLeast(0L)
+                        val watchedState = watchdogObservation.state
+                        Log.i(TAG, "mqtt watchdog tick: state=$watchedState sinceOk=${sinceOk}ms hb=${heartbeats.map { it.generation }} rebuild=${rebuild != null}")
+                        when (val action = supervisor.tick(
+                            watchedState,
+                            progress.lastOkMs,
+                            sinceOk,
+                            now,
+                            rebuild != null,
+                            runtimeGeneration = watchedRuntime.generation,
+                            connectionGeneration = progress.connectionGeneration,
+                            holdSelectedFamily = watchdogObservation.holdSelectedFamily,
+                            applicationReadyEver = watchdogObservation.applicationReadyEver,
+                            announcementBoundaryAvailable =
+                                watchdogObservation.announcementProcessRecoveryAvailable,
+                        )) {
+                            is ConnectionSupervisor.Action.Rebuild -> {
+                                Log.w(TAG, "MQTT ${action.reason} stall (${sinceOk}ms, state=$watchedState) — forcing one fresh client (flip family=${action.flipFamily})")
+                                val observedTicket = watchdogObservation.recoveryTicket
+                                val recoveryTicket = if (action.flipFamily) {
+                                    watched.stageAlternateFamilyForReconnect(observedTicket)
+                                } else {
+                                    watched.recoveryTicketForReconnect(observedTicket)
+                                }
+                                if (recoveryTicket == null) {
+                                    supervisor.rebuildNotAdmitted()
+                                    Log.w(TAG, "MQTT fallback could not prepare a durable current-runtime ticket")
+                                    continue
+                                }
+                                val outcome = java.util.concurrent.atomic.AtomicReference(
+                                    MqttRecoveryOutcome.NOT_ADMITTED,
+                                )
+                                rebuild = RebuildAttempt(
+                                    runtimeGeneration = watchedRuntime.generation,
+                                    completion = runtime.reconnect(watchedRuntime) { target ->
+                                        if (target.mqtt.state == "discovering") target.mdns.start()
+                                        // Family selection already belongs to the watchdog admission above.
+                                        // The worker owns transport replacement only and must never flip twice.
+                                        outcome.set(target.mqtt.reconnect(recoveryTicket))
+                                    },
+                                    outcome = outcome,
+                                    ticket = recoveryTicket,
+                                )
+                            }
+                            is ConnectionSupervisor.Action.SkipRebuild -> {
+                                if (action.reason == "discovery") {
+                                    Log.w(TAG, "mqtt discovery retry already in flight — not stacking another")
+                                } else {
+                                    Log.w(TAG, "mqtt ${action.reason} fallback awaiting broker progress ${action.elapsedMs}ms — retaining client")
+                                }
+                            }
+                            is ConnectionSupervisor.Action.ProcessRecovery -> {
+                                Log.e(TAG, "MQTT ${action.reason} failure exceeded the fresh-client progress bound")
+                                if (action.consumeAnnouncementBudget) {
+                                    if (!watched.consumeAnnouncementProcessRecovery(
+                                            watchdogObservation.recoveryTicket,
+                                        )
+                                    ) {
+                                        supervisor.recoveryNoLongerNeeded()
+                                        Log.i(TAG, "MQTT announcement recovery changed before boundary consumption")
+                                        continue
+                                    }
+                                    // The durable token is already spent. If process admission is
+                                    // temporarily rejected, retry the same request without consuming again.
+                                    terminalRecoveryNeeded = true
+                                }
+                                if (recoveryRestart.request()) break
+                                Log.w(TAG, "MQTT process recovery request was not admitted; retrying next tick")
+                                continue
+                            }
+                            ConnectionSupervisor.Action.None -> {}
+                        }
+                        // Do not publish through the old client after deciding to replace it. Ordinary
+                        // in-flight publishes are still harmless because replacement proof is scoped to
+                        // the new connection generation.
+                        if (rebuild != null) continue
+                        // Heartbeat LAST and OFF-THREAD: a wedged client blocks the publish, but only its
+                        // generation's sacrificial thread. A replacement runtime must not be suppressed by a
+                        // heartbeat stranded on the obsolete client.
+                        val observed = runtime.observe()
+                        val currentConnectionGeneration =
+                            observed?.value?.mqtt?.heartbeatConnectionGeneration()
+                        when (val admission = HeartbeatAdmission.decide(
+                            currentGeneration = currentConnectionGeneration,
+                            liveTrackedGenerations = heartbeats.map { it.generation },
+                        )) {
+                            HeartbeatAdmission.Decision.NoCurrentConnection,
+                            HeartbeatAdmission.Decision.CurrentHeartbeatAlive -> Unit
+                            is HeartbeatAdmission.Decision.Admit -> {
+                                if (admission.replacingStranded) {
+                                    FeatureCosts.registry.recordDropped(FeatureCostOperation.MQTT_HEARTBEAT_ADMISSION)
+                                    Log.w(TAG, "obsolete mqtt heartbeat is stranded; admitting generation ${admission.generation}")
+                                }
+                                val target = observed ?: continue
+                                val thread = Thread({
+                                    if (runtime.isCurrent(target) &&
+                                        target.value.mqtt.isCurrentHeartbeatConnection(admission.generation)
+                                    ) {
+                                        runCatching { target.value.mqtt.heartbeat() }
+                                    }
+                                }, "mqtt-heartbeat").apply { isDaemon = true; start() }
+                                heartbeats += HeartbeatProbe(admission.generation, thread)
+                            }
+                            is HeartbeatAdmission.Decision.EscalateRecovery -> {
                                 FeatureCosts.registry.recordDropped(FeatureCostOperation.MQTT_HEARTBEAT_RECOVERY)
                                 Log.e(TAG, "${admission.strandedGenerations} obsolete mqtt heartbeat threads are stranded; requesting bounded process recovery")
-                                recoveryRestart.request()
+                                if (recoveryRestart.request()) break
+                                Log.w(TAG, "MQTT heartbeat recovery request was not admitted; retrying next tick")
                             }
+                        }
+                    } catch (failure: Exception) {
+                        terminalRecoveryNeeded = true
+                        rebuild = null
+                        supervisor.runtimeUnavailable()
+                        Log.e(TAG, "MQTT watchdog failed; requesting bounded process recovery", failure)
+                        if (!serviceStopping) {
+                            if (recoveryRestart.request()) break
+                            Log.w(TAG, "MQTT watchdog terminal recovery was not admitted; retrying next tick")
                         }
                     }
                 }
             } finally {
                 synchronized(this@PaneldService) {
-                    if (mqttWatchdogThread === Thread.currentThread()) mqttWatchdogThread = null
+                    if (mqttWatchdogThread === Thread.currentThread()) {
+                        mqttWatchdogAlive = false
+                        mqttWatchdogThread = null
+                    }
                 }
             }
         }.apply { isDaemon = true; name = "mqtt-watchdog" }
@@ -1691,93 +2388,489 @@ class PaneldService : Service() {
             .build()
 
     override fun onDestroy() {
+        // Android invokes this on the main thread. All deliberate waits below consume one deadline so
+        // individually safe phase timeouts cannot accumulate into an input-dispatch ANR.
+        val teardownDeadline = MonotonicDeadline(SERVICE_DESTROY_BUDGET_MS)
+        // App-local completion may continue off-main, but every subsidiary owner shares this one budget.
+        // External display/system-policy recovery remains mandatory even after this deadline expires.
+        val asyncTeardownDeadline = MonotonicDeadline(ASYNC_TEARDOWN_BUDGET_MS)
         serviceStopping = true
-        audio.closeAdmission()
-        audio.cancelCurrent()
+        lightMqttPublisher.close()
+        adaptiveSiteGeneration.incrementAndGet()
+        brightnessObserver?.let { observer ->
+            runCatching { contentResolver.unregisterContentObserver(observer) }
+            brightnessObserver = null
+        }
+        beginAudioTeardown(audio::closeAdmission, audio::cancelCurrent)
+        kiosk.closeAdmission()
+        navbar.closeAdmission()
+        screen.closeAdmission()
+        // A deliberately dark panel is the only external state that becomes unrecoverable if Android
+        // kills this process after onDestroy returns (the touch-wake overlay dies with it). Give its
+        // dedicated recovery owner first use of the aggregate deadline, then let it keep retrying while
+        // all slower server/network teardown proceeds off-main.
+        val screenExitRecovery = ensureScreenExitRecovery()
+        val screenRecoveryWaitMs = teardownDeadline.remainingMs()
+        if (screenRecoveryWaitMs > 0L) {
+            runCatching { screenExitRecovery.get(screenRecoveryWaitMs, TimeUnit.MILLISECONDS) }
+        }
         started = false
         netCallback?.let { cb ->
             runCatching { (getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager)?.unregisterNetworkCallback(cb) }
             netCallback = null
         }
-        stopMqttWatchdog()
-        if (::networkReconfigureWorker.isInitialized) networkReconfigureWorker.close()
+        stopMqttWatchdog(teardownDeadline.remainingMs())
+        // The existing runtime lane owns latest configuration work. Close its one admission point now;
+        // the sticky shutdown queued below becomes the sole proof that any active mutation drained.
+        runtime.closeAdmission()
+        FeatureCosts.registry.setBacklog(FeatureCostOperation.NETWORK_RECONFIGURE, 0)
         // Close renderer transaction admission before waiting for the runtime lane. If startup has not
         // reconciled yet it exits early; if it has progressed further, final runtime cleanup below owns
         // every resource it may still open, including HTTP.
         val rendererDrained = if (!::rendererPreparation.isInitialized) true
-            else rendererPreparation.close(RENDERER_SHUTDOWN_MS)
+            else rendererPreparation.close(teardownDeadline.remainingMs())
         if (!rendererDrained) {
-            Log.w(TAG, "renderer transaction did not become idle within ${RENDERER_SHUTDOWN_MS}ms")
+            Log.w(TAG, "renderer transaction did not become idle before the service teardown deadline")
         }
-        var ingressStopped = !::server.isInitialized
-        val stopped = runtime.shutdown(RUNTIME_SHUTDOWN_MS) { activeRuntime ->
+        val httpOwnersStopped = AtomicBoolean(!::server.isInitialized)
+        val audioDrained = AtomicBoolean(false)
+        val ownerCleanup = ServiceOwnerCleanupTracker()
+        val mqttFinalization = AtomicReference<Future<Unit>?>(null)
+        val sensorPersistenceClosed = AtomicReference<Future<Unit>?>(null)
+        val stopped = runtime.shutdown(teardownDeadline.remainingMs()) { activeRuntime ->
             fun closeOwner(name: String, close: () -> Unit) {
-                runCatching(close).onFailure { error ->
+                ownerCleanup.run(close)?.let { error ->
                     Log.w(TAG, "$name cleanup failed", error)
                 }
             }
+            fun closeOwnerResult(name: String, close: () -> Boolean) {
+                val result = runCatching(close).onFailure { error ->
+                    Log.w(TAG, "$name cleanup failed", error)
+                }.getOrDefault(false)
+                ownerCleanup.record(result)
+                if (!result) Log.w(TAG, "$name cleanup did not complete")
+            }
             // This cleanup is queued behind any in-flight startup/reconfigure. Closing HTTP here means
             // startup cannot bind a fresh listener after an earlier out-of-band stop has already run.
-            ingressStopped = if (!::server.isInitialized) true else runCatching { server.stop() }
-                .onFailure { Log.w(TAG, "HTTP cleanup failed", it) }
-                .isSuccess
+            // It is deliberately first: the LAN CDP relay is root-owned and survives app process death.
+            httpOwnersStopped.set(
+                if (!::server.isInitialized) true else runCatching { server.stop() }
+                    .onFailure { Log.w(TAG, "HTTP cleanup failed", it) }
+                    .getOrDefault(false),
+            )
+            // MQTT commands and convergence observers can use the service-owned hardware controllers.
+            // Latest live refresh/replacement work has already drained on this runtime lane. Prove the
+            // remaining mutation owners terminal before dismantling any dependent controller. mDNS is
+            // fenced at the same time and both consume the one asynchronous teardown deadline.
+            val mdnsRetirement = activeRuntime.mdns.retire(asyncTeardownDeadline)
+            val mqttRetirement = activeRuntime.mqtt.stop(asyncTeardownDeadline)
+            mqttFinalization.set(mqttRetirement.finalization)
+            val mqttOwnersDrained = mqttRetirement.ownersDrained.awaitTrue(asyncTeardownDeadline)
+            val mdnsStopped = mdnsRetirement.awaitTrue(asyncTeardownDeadline)
+            val lightPublisherDrained = lightMqttPublisher.awaitTermination(asyncTeardownDeadline.remainingMs())
+            if (!mqttOwnersDrained || !mdnsStopped || !lightPublisherDrained) {
+                ownerCleanup.record(false)
+                error(
+                    "network mutation owners did not drain before hardware teardown " +
+                        "(mqtt=$mqttOwnersDrained mdns=$mdnsStopped light=$lightPublisherDrained)",
+                )
+            }
+
+            // Kiosk writes persistent system policy. Serialize OFF behind any admitted delayed reassert
+            // before a forced process boundary; the persisted user preference itself remains unchanged.
+            cancelKioskReassert()
+            closeOwner("kiosk") { kiosk.apply(false) }
+            closeOwner("navbar") { navbar.cleanup() }
             if (::entityLearning.isInitialized) EntityLearningRuntime.detach(entityLearning)
+            val audioWaitMs = minOf(asyncTeardownDeadline.remainingMs(), AUDIO_SHUTDOWN_MS)
             val audioStopped = runCatching {
-                kotlinx.coroutines.runBlocking { audio.close(AUDIO_SHUTDOWN_MS) }
+                audioWaitMs > 0L && kotlinx.coroutines.runBlocking { audio.close(audioWaitMs) }
             }.getOrDefault(false)
+            audioDrained.set(audioStopped)
             if (!audioStopped) {
                 Log.w(TAG, "audio cleanup exceeded ${AUDIO_SHUTDOWN_MS}ms")
             }
-            cancelKioskReassert()
-            // Stop the Zigbee sampler before its MQTT publication target, then close and drain command
-            // ingress before the remaining producers and hardware owners.
-            if (::zigbeeHealth.isInitialized) closeOwner("Zigbee health") { zigbeeHealth.stop() }
-            closeOwner("MQTT") { activeRuntime.mqtt.stop() }
+            // The MQTT publication target and command ingress are now terminal; drain the remaining
+            // producers and hardware owners in dependency order.
+            if (::zigbeeHealth.isInitialized) closeOwnerResult("Zigbee health") { zigbeeHealth.stop() }
             closeOwner("evdev") { EvdevButtonClient.stop() }
-            closeOwner("sensors") { sensors.stop() }
+            if (::haAmbientLux.isInitialized) closeOwner("HA ambient light") { haAmbientLux.close() }
+            closeOwner("sensors") { sensorPersistenceClosed.set(sensors.stop()) }
+            if (::autoBright.isInitialized) {
+                closeOwnerResult("adaptive brightness") {
+                    autoBright.closeAndJoin(asyncTeardownDeadline.remainingMs())
+                }
+            }
             closeOwner("watchdog") { watchdog.stop() }
             closeOwner("LED effect") { ledEffect.close() }
-            closeOwner("wake-on-wave worker") { wakeOnWaveWorker.close(WAKE_WORKER_JOIN_MS) }
-            closeOwner("screen") { screen.close() } // restore a deliberate dark screen before releasing power
-            closeOwner("navbar") { navbar.cleanup() }
-            closeOwner("power") { power.apply(false) }
+            closeOwnerResult("wake-on-wave worker") {
+                wakeOnWaveWorker.closeAndJoin(
+                    minOf(asyncTeardownDeadline.remainingMs(), WAKE_WORKER_JOIN_MS),
+                )
+            }
+            closeOwnerResult("power") { power.releaseAndVerify() }
             closeOwner("log shipper") { logShipper.stop() }
             closeOwner("performance reader") { io.github.maxlyth.hapaneld.http.PerfReader.stop() }
             closeOwner("app log capture") { logCaptureApp.close() }
             closeOwner("system log capture") { logCaptureSystem.close() }
-            closeOwner("mDNS") { activeRuntime.mdns.retire() }
         }
-        if (!stopped) Log.w(TAG, "runtime teardown exceeded ${RUNTIME_SHUTDOWN_MS}ms; cleanup continues on its owner thread")
-        if (!ingressStopped) Log.w(TAG, "HTTP ingress did not stop cleanly before learner teardown")
+        if (!stopped) Log.w(TAG, "runtime teardown exceeded the service deadline; cleanup continues on its owner thread")
+        if (!httpOwnersStopped.get()) Log.w(TAG, "HTTP owners did not stop cleanly before learner teardown")
 
         // Startup and all runtime producers are now terminal before their shared coroutine scope and
         // SQLite-backed learner disappear. On a timeout, deliberately leave the store open for process
         // teardown rather than racing late runtime cleanup.
         val root = scope.coroutineContext[Job]
         scope.cancel()
-        val scopeDrained = if (root == null) true else runBlocking {
-            withTimeoutOrNull(SCOPE_SHUTDOWN_MS) { root.join(); true } ?: false
+        val scopeWaitMs = teardownDeadline.remainingMs()
+        val scopeDrained = when {
+            root == null -> true
+            scopeWaitMs <= 0L -> root.isCompleted
+            else -> runBlocking {
+                withTimeoutOrNull(scopeWaitMs) { root.join(); true } ?: false
+            }
         }
-        if (!scopeDrained) Log.w(TAG, "service jobs did not drain within ${SCOPE_SHUTDOWN_MS}ms")
-        val storeSafe = stopped && ingressStopped && rendererDrained && scopeDrained
-        if (::entityLearning.isInitialized && storeSafe) {
-            entityLearning.close()
-        } else if (::entityLearning.isInitialized) {
-            Log.w(TAG, "entity-learning store left open for process teardown because a producer did not drain")
+        if (!scopeDrained) Log.w(TAG, "service jobs did not drain before the service teardown deadline")
+        if (::entityLearning.isInitialized && !(stopped && httpOwnersStopped.get() && rendererDrained && scopeDrained)) {
+            Log.w(TAG, "entity-learning store remains open until asynchronous teardown drains its producers")
         }
-        if (!AppState.flush(this, APP_STATE_SHUTDOWN_MS)) {
-            Log.w(TAG, "application-state writes did not drain within ${APP_STATE_SHUTDOWN_MS}ms")
+        val stateFlushMs = teardownDeadline.remainingMs()
+        if (stateFlushMs <= 0L || !AppState.flush(this, stateFlushMs)) {
+            Log.w(TAG, "application-state writes did not drain before the service teardown deadline")
         }
+        // The main-thread flush is best effort only: timed-out runtime cleanup can admit sensor writes
+        // later. The finalizer always flushes again after every producer and its persistence future drain.
+        finishTeardownAsync(
+            asyncTeardownDeadline,
+            root,
+            httpOwnersStopped,
+            rendererDrained,
+            audioDrained,
+            ownerCleanup,
+            mqttFinalization,
+            sensorPersistenceClosed,
+        )
         super.onDestroy()
+    }
+
+    /**
+     * Finish work that exceeded Android's main-thread lifecycle budget. A completely proved ordinary
+     * stop opens the next same-process lease; an explicit or incomplete teardown restores external state
+     * and exits so a replacement cannot inherit ambiguous owners.
+     */
+    private fun finishTeardownAsync(
+        finalizerDeadline: MonotonicDeadline,
+        root: Job?,
+        httpOwnersStopped: AtomicBoolean,
+        rendererAlreadyDrained: Boolean,
+        audioDrained: AtomicBoolean,
+        ownerCleanup: ServiceOwnerCleanupTracker,
+        mqttFinalization: AtomicReference<Future<Unit>?>,
+        sensorPersistenceClosed: AtomicReference<Future<Unit>?>,
+    ) {
+        Thread {
+            try {
+                var rendererDrained = rendererAlreadyDrained
+                while (!rendererDrained) {
+                    val waitMs = minOf(finalizerDeadline.remainingMs(), ASYNC_TEARDOWN_WAIT_MS)
+                    if (waitMs <= 0L) return@Thread finishTeardownAfterExternalStateIsSafe(
+                        completed = false,
+                        reason = "renderer transaction remained active",
+                    )
+                    rendererDrained = rendererPreparation.close(waitMs)
+                }
+                while (!runtime.isStopped()) {
+                    val waitMs = minOf(finalizerDeadline.remainingMs(), ASYNC_TEARDOWN_WAIT_MS)
+                    if (waitMs <= 0L) return@Thread finishTeardownAfterExternalStateIsSafe(
+                        completed = false,
+                        reason = "runtime cleanup did not finish",
+                    )
+                    val shutdownSucceeded = runtime.shutdown(waitMs) {}
+                    if (!shutdownSucceeded && !ownerCleanup.isComplete()) {
+                        return@Thread finishTeardownAfterExternalStateIsSafe(
+                            completed = false,
+                            reason = "network mutation owners remained active",
+                        )
+                    }
+                    if (!shutdownSucceeded && runtime.hasFailedShutdown()) {
+                        return@Thread finishTeardownAfterExternalStateIsSafe(
+                            completed = false,
+                            reason = "runtime cleanup failed",
+                        )
+                    }
+                }
+                if (!ownerCleanup.isComplete()) {
+                    return@Thread finishTeardownAfterExternalStateIsSafe(
+                        completed = false,
+                        reason = "one or more runtime owners did not clean up",
+                    )
+                }
+                if (!audioDrained.get()) {
+                    return@Thread finishTeardownAfterExternalStateIsSafe(
+                        completed = false,
+                        reason = "audio cleanup did not drain",
+                    )
+                }
+                val mqttClose = mqttFinalization.get()
+                    ?: return@Thread finishTeardownAfterExternalStateIsSafe(
+                        completed = false,
+                        reason = "MQTT cleanup did not start",
+                    )
+                if (!awaitFinalizerFuture(finalizerDeadline, mqttClose)) {
+                    return@Thread finishTeardownAfterExternalStateIsSafe(
+                        completed = false,
+                        reason = "final MQTT publication did not finish",
+                    )
+                }
+                val sensorClose = sensorPersistenceClosed.get()
+                    ?: return@Thread finishTeardownAfterExternalStateIsSafe(
+                        completed = false,
+                        reason = "sensor cleanup did not start",
+                    )
+                if (!awaitFinalizerFuture(finalizerDeadline, sensorClose)) {
+                    return@Thread finishTeardownAfterExternalStateIsSafe(
+                        completed = false,
+                        reason = "proximity persistence did not drain",
+                    )
+                }
+                if (root != null && !root.isCompleted) {
+                    val waitMs = finalizerDeadline.remainingMs()
+                    val scopeDrained = waitMs > 0L && runBlocking {
+                        withTimeoutOrNull(waitMs) { root.join(); true } ?: false
+                    }
+                    if (!scopeDrained) return@Thread finishTeardownAfterExternalStateIsSafe(
+                        completed = false,
+                        reason = "service scope did not drain",
+                    )
+                }
+                if (!httpOwnersStopped.get()) {
+                    return@Thread finishTeardownAfterExternalStateIsSafe(
+                        completed = false,
+                        reason = "HTTP owners did not stop cleanly",
+                    )
+                }
+
+                if (::entityLearning.isInitialized && !runFinalizerStep(finalizerDeadline) { entityLearning.close() }) {
+                    return@Thread finishTeardownAfterExternalStateIsSafe(
+                        completed = false,
+                        reason = "entity-learning store did not close",
+                    )
+                }
+                val stateFlushMs = finalizerDeadline.remainingMs()
+                if (stateFlushMs <= 0L || !AppState.flush(this, stateFlushMs)) {
+                    return@Thread finishTeardownAfterExternalStateIsSafe(
+                        completed = false,
+                        reason = "final application-state writes did not drain",
+                    )
+                }
+                finishTeardownAfterExternalStateIsSafe(completed = true, reason = "service teardown completed")
+            } catch (error: Throwable) {
+                Log.e(TAG, "asynchronous service teardown failed", error)
+                finishTeardownAfterExternalStateIsSafe(
+                    completed = false,
+                    reason = "unexpected finalizer failure",
+                )
+            }
+        }.apply {
+            isDaemon = true
+            name = "ha-paneld-service-finalizer"
+        }.start()
+    }
+
+    private fun runFinalizerStep(deadline: MonotonicDeadline, block: () -> Unit): Boolean {
+        val waitMs = deadline.remainingMs()
+        if (waitMs <= 0L) return false
+        val executor = Executors.newSingleThreadExecutor { task ->
+            Thread(task, "ha-paneld-service-finalizer-step").apply { isDaemon = true }
+        }
+        return try {
+            executor.submit(Callable { block(); true }).get(waitMs, TimeUnit.MILLISECONDS)
+        } catch (error: Throwable) {
+            Log.e(TAG, "bounded service finalizer step failed", error)
+            false
+        } finally {
+            executor.shutdownNow()
+        }
+    }
+
+    private fun awaitFinalizerFuture(deadline: MonotonicDeadline, future: Future<*>): Boolean {
+        val waitMs = deadline.remainingMs()
+        if (waitMs <= 0L) return false
+        return try {
+            future.get(waitMs, TimeUnit.MILLISECONDS)
+            true
+        } catch (error: Throwable) {
+            Log.e(TAG, "bounded service finalizer future failed", error)
+            false
+        }
+    }
+
+    private fun ensureScreenExitRecovery(): CompletableFuture<Boolean> {
+        screenExitRecoveryOwner.get()?.let { return it }
+        val completion = CompletableFuture<Boolean>()
+        if (!screenExitRecoveryOwner.compareAndSet(null, completion)) {
+            return checkNotNull(screenExitRecoveryOwner.get())
+        }
+        if (!::screen.isInitialized) {
+            completion.complete(true)
+            return completion
+        }
+        Thread {
+            while (!completion.isDone) {
+                val safe = runCatching { screen.restoreAndEstablishExitSafety() }
+                    .onFailure { Log.e(TAG, "screen restore before process restart failed", it) }
+                    .getOrDefault(false)
+                if (safe) {
+                    completion.complete(true)
+                    return@Thread
+                }
+                try {
+                    Thread.sleep(EXTERNAL_STATE_RETRY_MS)
+                } catch (_: InterruptedException) {
+                    // Screen recovery remains mandatory until hardware readback proves it is lit.
+                }
+            }
+        }.apply {
+            isDaemon = true
+            name = "ha-paneld-screen-exit-recovery"
+        }.start()
+        return completion
+    }
+
+    /**
+     * Route profile/WebView/recovery restarts through the same external-state proof as lifecycle teardown.
+     * The caller may be the main looper, so admission closes synchronously while all blocking cleanup runs
+     * on one daemon owner. App-local workers need no separate drain because the proven process boundary
+     * terminates them; HTTP is stopped first so it cannot reassert the root CDP relay during verification.
+     */
+    private fun requestSafeProcessBoundary(reason: String) {
+        if (!teardownBoundary.requestExplicitBoundary()) return
+        Log.i(TAG, "safe process restart requested: $reason")
+        serviceStopping = true
+        if (::audio.isInitialized) {
+            beginAudioTeardown(audio::closeAdmission, audio::cancelCurrent)
+        }
+        if (::kiosk.isInitialized) kiosk.closeAdmission()
+        if (::navbar.isInitialized) navbar.closeAdmission()
+        if (::screen.isInitialized) screen.closeAdmission()
+        Thread {
+            if (::server.isInitialized) {
+                runCatching { server.stop() }
+                    .onFailure { Log.w(TAG, "HTTP cleanup before requested process restart failed", it) }
+                    .onSuccess { complete ->
+                        if (!complete) Log.w(TAG, "HTTP cleanup before requested process restart was incomplete")
+                    }
+            }
+            finishAfterExternalStateIsSafe(completed = false, reason = reason)
+        }.apply {
+            isDaemon = true
+            name = "ha-paneld-safe-process-boundary"
+        }.start()
+    }
+
+    /**
+     * App-local workers die at the process boundary, but the root CDP relay and display/system-policy
+     * state do not. Never exit until the relay is proved absent and the screen, kiosk policy, and navbar
+     * crop have been restored. Cleanup admission is closed first so an explicit external service stop
+     * also leaves a usable panel even if Android has no remaining START_STICKY request to recreate us.
+     */
+    private fun finishTeardownAfterExternalStateIsSafe(completed: Boolean, reason: String) {
+        if (!completed) Log.e(TAG, "service teardown was incomplete: $reason")
+        finishAfterExternalStateIsSafe(completed, reason)
+    }
+
+    private fun finishAfterExternalStateIsSafe(
+        completed: Boolean,
+        reason: String,
+    ) {
+        runServiceBoundary(
+            boundary = teardownBoundary,
+            completed = completed,
+            prepare = {
+                cancelKioskReassert()
+                if (::navbar.isInitialized) {
+                    runCatching { navbar.cleanup() }
+                        .onFailure { Log.e(TAG, "navbar cleanup before process restart failed", it) }
+                }
+            },
+            prove = { attempt ->
+                val kioskSafe = if (!::kiosk.isInitialized) true else runCatching {
+                    kiosk.apply(false) && kiosk.recoverPersistentState(config.kioskLock)
+                }
+                    .onFailure { Log.e(TAG, "kiosk policy cleanup before process restart failed", it) }
+                    .getOrDefault(false)
+                val navbarSafe = if (!::navbar.isInitialized) true else runCatching {
+                    navbar.recoverPersistentState()
+                }
+                    .onFailure { Log.e(TAG, "navbar overscan cleanup before process restart failed", it) }
+                    .getOrDefault(false)
+                val screenSafe = runCatching {
+                    proveScreenSafeForBoundary(ensureScreenExitRecovery())
+                }.onFailure { Log.e(TAG, "screen recovery before process restart failed", it) }
+                    .getOrDefault(false)
+                val relaySafe = runCatching {
+                    CdpRelay.stopAndVerifyForProcessExit()
+                }.onFailure { Log.e(TAG, "CDP relay cleanup before process restart failed", it) }
+                    .getOrDefault(false)
+                // Durable markers preserve deferred policy cleanup. Once the screen is proved usable,
+                // privilege loss must force a fresh process rather than fence START_STICKY forever.
+                val forceFreshProcess = shouldForceFreshProcessAfterExternalRecovery(
+                    attempt = attempt,
+                    maxAttempts = EXTERNAL_STATE_BOUNDARY_ATTEMPTS,
+                    kioskSafe = kioskSafe,
+                    navbarSafe = navbarSafe,
+                    screenSafe = screenSafe,
+                    relaySafe = relaySafe,
+                )
+                val externalStateSafe = kioskSafe && navbarSafe && screenSafe && relaySafe
+                if (!externalStateSafe && !forceFreshProcess) {
+                    Log.e(
+                        TAG,
+                        "withholding process restart until external state is safe " +
+                            "(attempt=$attempt kioskSafe=$kioskSafe navbarSafe=$navbarSafe " +
+                            "screenSafe=$screenSafe relaySafe=$relaySafe)",
+                    )
+                }
+                ServiceBoundaryProof(externalStateSafe, forceFreshProcess)
+            },
+            pauseBeforeRetry = {
+                try {
+                    Thread.sleep(EXTERNAL_STATE_RETRY_MS)
+                } catch (_: InterruptedException) {
+                    // This recovery owner must keep retrying until external state is safe to abandon.
+                }
+            },
+            finish = { disposition ->
+                if (disposition == ServiceTeardownDisposition.EXIT) {
+                    Log.i(TAG, "$reason; entering a clean process boundary")
+                    kotlin.system.exitProcess(0)
+                } else {
+                    Log.i(TAG, "$reason; releasing the same-process service successor")
+                    restartLease.completeTeardown()
+                }
+            },
+        )
     }
 
     private fun scheduleKioskReassert() {
         val worker = Thread {
             try {
-                Thread.sleep(KIOSK_REASSERT_MS)
-                if (!serviceStopping && config.kioskLock) runCatching { kiosk.apply(true) }
-            } catch (_: InterruptedException) {
-                // Service teardown cancels the delayed lock before it can act.
+                val recovered = recoverAndMaybeEnableKiosk(
+                    escapeDelayMs = KIOSK_REASSERT_MS,
+                    retryDelayMs = KIOSK_RECOVERY_RETRY_MS,
+                    maxAttempts = KIOSK_RECOVERY_ATTEMPTS,
+                    shouldContinue = { !serviceStopping },
+                    recover = {
+                        kioskSettings.serialized { kiosk.recoverPersistentState(config.kioskLock) }
+                    },
+                    enabled = { config.kioskLock },
+                    enable = {
+                        kioskSettings.serialized { config.kioskLock && kiosk.apply(true) }
+                    },
+                )
+                if (!recovered && !serviceStopping) {
+                    Log.w(TAG, "kiosk platform recovery remains pending; leaving kiosk unlocked")
+                }
             } finally {
                 synchronized(this@PaneldService) {
                     if (kioskReassertThread === Thread.currentThread()) kioskReassertThread = null
@@ -1794,11 +2887,11 @@ class PaneldService : Service() {
         runCatching { worker?.join(KIOSK_CANCEL_JOIN_MS) }
     }
 
-    private fun stopMqttWatchdog() {
+    private fun stopMqttWatchdog(joinMs: Long) {
         mqttWatchdogAlive = false
         val worker = synchronized(this) { mqttWatchdogThread.also { mqttWatchdogThread = null } }
         worker?.interrupt()
-        runCatching { worker?.join(WATCHDOG_CANCEL_JOIN_MS) }
+        if (joinMs > 0L) runCatching { worker?.join(joinMs) }
     }
 
     private fun reconcileHelperInstallStaging() {
@@ -1828,8 +2921,8 @@ class PaneldService : Service() {
         private const val NOTIF_ID = 1
         // MQTT reconnect-watchdog poll interval; a stuck bridge self-heals after ~2 of these.
         private const val MQTT_WATCHDOG_MS = 60_000L
-        // A rebuild thread wedged inside the old client for this long is abandoned. Two bounded recovery
-        // workers may be stranded; saturation escalates to a controlled START_STICKY process restart.
+        // Fresh-client broker-progress lease. A previously-live process crosses its controlled boundary
+        // at expiry; a clean process gives its restored route this full lease before one alternate try.
         private const val REBUILD_ABANDON_MS = 300_000L
         private const val RECOVERY_RESTART_GRACE_MS = 1_000L
         private const val COMPANION_STARTUP_STATUS_POLL_MS = 2_000L
@@ -1843,14 +2936,18 @@ class PaneldService : Service() {
         private const val SCREEN_WATCHDOG_MS = 60_000L
         private const val INSTALL_RECONCILE_MS = 60_000L
         private const val KIOSK_REASSERT_MS = 60_000L // post-boot delay before re-locking (admin escape window)
+        private const val KIOSK_RECOVERY_RETRY_MS = 1_000L
+        private const val KIOSK_RECOVERY_ATTEMPTS = 3
         private const val KIOSK_CANCEL_JOIN_MS = 500L
-        private const val WATCHDOG_CANCEL_JOIN_MS = 500L
         private const val WAKE_WORKER_JOIN_MS = 500L
-        private const val RENDERER_SHUTDOWN_MS = 1_000L
-        private const val SCOPE_SHUTDOWN_MS = 2_000L
-        private const val APP_STATE_SHUTDOWN_MS = 5_000L
         private const val AUDIO_SHUTDOWN_MS = 2_000L
-        private const val RUNTIME_SHUTDOWN_MS = 5_000L
+        private const val SERVICE_DESTROY_BUDGET_MS = 1_000L
+        private const val ASYNC_TEARDOWN_WAIT_MS = 10_000L
+        private const val ASYNC_TEARDOWN_BUDGET_MS = 30_000L
+        private const val EXTERNAL_STATE_RETRY_MS = 1_000L
+        private const val EXTERNAL_STATE_BOUNDARY_ATTEMPTS = 5
+        private const val NETWORK_RECONFIGURE_BUDGET_MS = 15_000L
+        private val SERVICE_RESTART_BARRIER = ServiceRestartBarrier()
 
         fun start(context: Context) {
             val intent = Intent(context, PaneldService::class.java)

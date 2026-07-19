@@ -2,7 +2,6 @@ package io.github.maxlyth.hapaneld.metrics
 
 import io.github.maxlyth.hapaneld.control.KioskController
 import io.github.maxlyth.hapaneld.control.isCurrent
-import io.github.maxlyth.hapaneld.sensors.SensorReporter
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -13,14 +12,11 @@ import java.util.concurrent.atomic.AtomicLong
 
 class PollingFeatureCostContractTest {
     @Test fun recurringPollersHaveDistinctFixedCostKeys() {
-        assertEquals("sensors.gpio_proximity_poll", FeatureCostOperation.GPIO_PROXIMITY_POLL.id)
         assertEquals("kiosk.state_poll", FeatureCostOperation.KIOSK_STATE_POLL.id)
         assertEquals("zigbee.health_sample", FeatureCostOperation.ZIGBEE_HEALTH_SAMPLE.id)
-        assertNotEquals(FeatureCostOperation.GPIO_PROXIMITY_POLL.id, FeatureCostOperation.KIOSK_STATE_POLL.id)
     }
 
-    @Test fun proximityMeasurementKeepsItsCadenceWhileExperimentalKioskPollingIsReduced() {
-        assertEquals(500L, SensorReporter.PROX_POLL_MS)
+    @Test fun experimentalKioskPollingUsesItsReducedCadence() {
         assertEquals(3_000L, KioskController.RETURN_POLL_MS)
     }
 
@@ -36,11 +32,11 @@ class PollingFeatureCostContractTest {
 
     @Test fun recurringHotPathsUseAllocationFreeSynchronousMeasurements() {
         val operationsByFile = mapOf(
-            "sensors/SensorReporter.kt" to "GPIO_PROXIMITY_POLL",
             "control/AutoBrightnessController.kt" to "AUTO_BRIGHTNESS_APPLY",
             "control/KioskController.kt" to "KIOSK_STATE_POLL",
             "control/RelayController.kt" to "RELAY_STATE_READ",
             "control/ZigbeeHealthMonitor.kt" to "ZIGBEE_HEALTH_SAMPLE",
+            "sensors/ProximityLearningRuntime.kt" to "PROXIMITY_SAMPLE",
         )
         for ((relative, operation) in operationsByFile) {
             val source = sequenceOf(

@@ -31,27 +31,110 @@ fail() {
   exit 1
 }
 
+# Run one host command behind a hard deadline. The command owns a local process group so timeout and
+# caller cancellation terminate and reap shell wrappers as well as their non-detached descendants.
+# Status 124 is reserved for the deadline; ordinary command failures retain their original status.
+run_with_deadline() {
+  local seconds="$1" command_pid status deadline
+  shift
+
+  (
+    command_pid=""
+    terminate_deadline_command_group() {
+      local signal_status="$1" kill_deadline
+      trap - INT TERM
+      if [ -n "$command_pid" ]; then
+        kill -TERM -- "-$command_pid" 2>/dev/null || true
+        kill_deadline=$((SECONDS + 2))
+        while kill -0 -- "-$command_pid" 2>/dev/null && [ "$SECONDS" -lt "$kill_deadline" ]; do
+          sleep 0.1
+        done
+        kill -KILL -- "-$command_pid" 2>/dev/null || true
+        wait "$command_pid" 2>/dev/null || true
+        command_pid=""
+      fi
+      return "$signal_status"
+    }
+    handle_deadline_signal() {
+      local signal_status="$1"
+      terminate_deadline_command_group "$signal_status" || true
+      exit "$signal_status"
+    }
+    trap 'handle_deadline_signal 130' INT
+    trap 'handle_deadline_signal 143' TERM
+    set -m
+    "$@" &
+    command_pid=$!
+    # The asynchronous command keeps the process group assigned above after monitor mode is disabled;
+    # disabling it immediately prevents Bash job-completion notices from contaminating captured output.
+    set +m
+    deadline=$((SECONDS + seconds))
+    while kill -0 -- "-$command_pid" 2>/dev/null && [ "$SECONDS" -lt "$deadline" ]; do
+      sleep 0.1
+    done
+    if kill -0 -- "-$command_pid" 2>/dev/null; then
+      terminate_deadline_command_group 124 || true
+      return 124
+    fi
+    wait "$command_pid"
+    status=$?
+    command_pid=""
+    return "$status"
+  )
+}
+
+ADB_COMMAND="$(command -v adb 2>/dev/null || true)"
+[ -n "$ADB_COMMAND" ] || fail "adb (Android Platform Tools) was not found" \
+  "Install adb, then re-run the identical command; no helper files were changed."
+ADB_COMMAND_TIMEOUT_SECONDS="${ADB_COMMAND_TIMEOUT_SECONDS:-120}"
+ADB_PREFLIGHT_TIMEOUT_SECONDS="${ADB_PREFLIGHT_TIMEOUT_SECONDS:-20}"
+PRIVILEGE_INSPECTION_TIMEOUT_SECONDS="${PRIVILEGE_INSPECTION_TIMEOUT_SECONDS:-45}"
+for timeout_name in ADB_COMMAND_TIMEOUT_SECONDS ADB_PREFLIGHT_TIMEOUT_SECONDS \
+    PRIVILEGE_INSPECTION_TIMEOUT_SECONDS; do
+  timeout_value="${!timeout_name}"
+  case "$timeout_value" in
+    ''|*[!0-9]*|0) fail "$timeout_name must be a positive whole number of seconds" ;;
+  esac
+done
+
+# Every ordinary adb operation crosses this one boundary. Compound operations that need one total
+# budget use the absolute executable inside their own run_with_deadline call instead of nesting owners.
+adb() {
+  run_with_deadline "$ADB_COMMAND_TIMEOUT_SECONDS" "$ADB_COMMAND" "$@"
+}
+
 # `adb connect` exits 0 even when it fails, and a device can sit "unauthorized" (RSA dialog waiting on
 # the panel screen) or "offline" (stale session). Verify the state so failures surface here with
 # recovery steps, not as a raw abort at the first adb push. $1=quiet re-checks after an adbd restart.
-adb_preflight() {
-  [ "${1:-}" = quiet ] || echo "==> connecting to $TARGET"
-  # `adb connect` itself can block for MINUTES on a dead IP (TCP retry) — run it in the background
-  # and bound the wait; the poll below reads the device state the adb server ends up with.
-  adb connect "$TARGET" >/dev/null 2>&1 &
-  local cpid=$!
+adb_preflight_raw() {
   local state="" i=0
+  "$ADB_COMMAND" connect "$TARGET" >/dev/null 2>&1 || true
   while [ "$i" -lt 12 ]; do
     i=$((i + 1))
-    state="$(adb devices 2>/dev/null | awk -v t="$TARGET" '$1==t {print $2}')"
-    if [ "$state" = "device" ]; then kill "$cpid" 2>/dev/null || true; return 0; fi
+    state="$("$ADB_COMMAND" devices 2>/dev/null | awk -v t="$TARGET" '$1==t {print $2}')"
+    if [ "$state" = "device" ]; then printf '%s\n' "$state"; return 0; fi
     if [ "$state" = "offline" ] && [ "$i" = 4 ]; then
-      adb disconnect "$TARGET" >/dev/null 2>&1 || true
-      ( adb connect "$TARGET" >/dev/null 2>&1 & )
+      "$ADB_COMMAND" disconnect "$TARGET" >/dev/null 2>&1 || true
+      "$ADB_COMMAND" connect "$TARGET" >/dev/null 2>&1 || true
     fi
     sleep 1
   done
-  kill "$cpid" 2>/dev/null || true
+  printf '%s\n' "${state:-missing}"
+  return 1
+}
+
+adb_preflight() {
+  [ "${1:-}" = quiet ] || echo "==> connecting to $TARGET"
+  local state="" status
+  if state="$(run_with_deadline "$ADB_PREFLIGHT_TIMEOUT_SECONDS" adb_preflight_raw)"; then
+    return 0
+  else
+    status=$?
+  fi
+  if [ "$status" -eq 124 ] || [ "$status" -eq 137 ]; then
+    fail "adb connection check timed out after ${ADB_PREFLIGHT_TIMEOUT_SECONDS}s" \
+      "Restore adb responsiveness and re-run; no helper files were changed."
+  fi
   case "$state" in
     unauthorized) fail "panel refused adb: unauthorized" \
       "Accept the ADB authorization dialog shown ON THE PANEL'S SCREEN (tick 'always allow'), then re-run." ;;
@@ -72,21 +155,41 @@ adb_preflight() {
 # `adb root`) needs no su at all — probed first. A su that prompts on-screen (Magisk) can take ~10s
 # to auto-deny a form; the probe tolerates that.
 SU_FORM=""
-probe_su() {
-  if [ -n "$SU_FORM" ]; then [ "$SU_FORM" != none ]; return; fi
+SU_PROBE_TIMED_OUT=0
+probe_su_uncached() {
   local u key pre
-  u="$(adb -s "$TARGET" shell id 2>/dev/null | tr -d '\r')" || u=""
-  case "$u" in uid=0*) SU_FORM=shell; return 0 ;; esac
+  u="$("$ADB_COMMAND" -s "$TARGET" shell id 2>/dev/null | tr -d '\r')" || u=""
+  case "$u" in uid=0*) printf 'shell\n'; return 0 ;; esac
   for key in su0 suroot; do
     case "$key" in su0) pre="su 0" ;; suroot) pre="su root" ;; esac
-    u="$(adb -s "$TARGET" shell "$pre \"id; id\"" 2>/dev/null | tr -d '\r')" || u=""
-    case "$u" in *uid=0*) SU_FORM="${key}join"; return 0 ;; esac
-    u="$(adb -s "$TARGET" shell "$pre sh -c \"id; id\"" 2>/dev/null | tr -d '\r')" || u=""
-    case "$u" in *uid=0*) SU_FORM="${key}shc"; return 0 ;; esac
+    u="$("$ADB_COMMAND" -s "$TARGET" shell "$pre \"id; id\"" 2>/dev/null | tr -d '\r')" || u=""
+    case "$u" in *uid=0*) printf '%sjoin\n' "$key"; return 0 ;; esac
+    u="$("$ADB_COMMAND" -s "$TARGET" shell "$pre sh -c \"id; id\"" 2>/dev/null | tr -d '\r')" || u=""
+    case "$u" in *uid=0*) printf '%sshc\n' "$key"; return 0 ;; esac
   done
-  u="$(adb -s "$TARGET" shell "su -c \"id; id\"" 2>/dev/null | tr -d '\r')" || u=""
-  case "$u" in *uid=0*) SU_FORM=suc; return 0 ;; esac
-  SU_FORM=none; return 1
+  u="$("$ADB_COMMAND" -s "$TARGET" shell "su -c \"id; id\"" 2>/dev/null | tr -d '\r')" || u=""
+  case "$u" in *uid=0*) printf 'suc\n'; return 0 ;; esac
+  printf 'none\n'
+  return 1
+}
+
+probe_su() {
+  if [ -n "$SU_FORM" ]; then [ "$SU_FORM" != none ]; return; fi
+  local result="" status
+  SU_PROBE_TIMED_OUT=0
+  if result="$(run_with_deadline "$PRIVILEGE_INSPECTION_TIMEOUT_SECONDS" probe_su_uncached)"; then
+    SU_FORM="$result"
+    return 0
+  else
+    status=$?
+  fi
+  if [ "$status" -eq 124 ] || [ "$status" -eq 137 ]; then
+    SU_PROBE_TIMED_OUT=1
+    SU_FORM=""
+  else
+    SU_FORM="${result:-none}"
+  fi
+  return 1
 }
 
 # Quote a shell block for the device shell's outer double quotes. Join-style su needs the complete
@@ -141,6 +244,8 @@ sleep 1
 adb_preflight quiet
 
 if ! probe_su; then
+  [ "$SU_PROBE_TIMED_OUT" = 0 ] || fail "root-access inspection timed out after ${PRIVILEGE_INSPECTION_TIMEOUT_SECONDS}s" \
+    "adb or a privilege prompt did not respond. Nothing was installed; restore adb responsiveness, dismiss any on-panel root prompt, then re-run."
   fail "no working root path on this panel (tried: adbd-root, 'su 0', 'su -c', 'su root')" \
     "The helper daemon requires root — it IS the privileged control path on sandbox-walled panels." \
     "Rooted panel with a different su syntax? Run 'adb shell', find the invocation that gives uid=0, and open an issue: https://github.com/maxlyth/ha-paneld/issues" \
@@ -155,7 +260,7 @@ case "$SU_FORM" in
   suc)        echo "==> root path: su -c \"<cmd>\"" ;;
 esac
 
-if ! run_root '[ ! -f /system/bin/.hapaneld-helper-upgrade ] && [ ! -f /data/adb/hapaneld/.helper-upgrade.marker ]' \
+if ! run_root '[ ! -f /system/bin/.hapaneld-helper-upgrade ] && [ ! -f /data/adb/hapaneld/.helper-upgrade.marker ] && [ ! -f /data/adb/hapaneld/.helper-hybrid-upgrade.marker ]' \
     >/dev/null 2>&1; then
   fail "an incomplete APK-coupled helper upgrade must be recovered by the provisioner first" \
     "Re-run the same scripts/provision.sh or scripts/update-fleet.sh command that started the upgrade." \
@@ -765,7 +870,7 @@ manual_journal_state="$(run_root_locked '
       echo STALE_${kind}_TRANSACTION "$transaction_id" "$target_build" "$target_helper" "$target_service"
     fi
   }
-  if [ -f /system/bin/.hapaneld-helper-upgrade ] || [ -f /data/adb/hapaneld/.helper-upgrade.marker ]; then
+  if [ -f /system/bin/.hapaneld-helper-upgrade ] || [ -f /data/adb/hapaneld/.helper-upgrade.marker ] || [ -f /data/adb/hapaneld/.helper-hybrid-upgrade.marker ]; then
     echo FOREIGN_PROVISION_TRANSACTION
   elif [ -f /system/bin/.hapaneld-helper-manual-upgrade ] && [ -f /data/adb/hapaneld/.helper-manual-upgrade.marker ]; then
     echo MULTIPLE_STALE_TRANSACTIONS
@@ -835,7 +940,7 @@ if printf '%s\n' "$out" | grep -qx SYSTEM_RW; then
     mkdir -p /data/adb/hapaneld || { echo PROBE_DIR_FAIL; exit 1; }
     chown 0:0 /data/adb/hapaneld || { echo PROBE_DIR_FAIL; exit 1; }
     chmod 700 /data/adb/hapaneld || { echo PROBE_DIR_FAIL; exit 1; }
-    if [ -f /system/bin/.hapaneld-helper-upgrade ] || [ -f /data/adb/hapaneld/.helper-upgrade.marker ]; then
+    if [ -f /system/bin/.hapaneld-helper-upgrade ] || [ -f /data/adb/hapaneld/.helper-upgrade.marker ] || [ -f /data/adb/hapaneld/.helper-hybrid-upgrade.marker ]; then
       echo FOREIGN_PROVISION_TRANSACTION; exit 75
     elif [ -f /system/bin/.hapaneld-helper-manual-upgrade ] && [ -f /data/adb/hapaneld/.helper-manual-upgrade.marker ]; then
       echo MULTIPLE_STALE_TRANSACTIONS; exit 75
@@ -977,7 +1082,12 @@ if printf '%s\n' "$out" | grep -qx SYSTEM_RW; then
   run_root '
     stop hapaneld_ledd 2>/dev/null; stop hapaneld_helper 2>/dev/null
     pkill -x hapaneld-ledd 2>/dev/null; pkill -x hapaneld-helper 2>/dev/null
-    start hapaneld_helper 2>/dev/null || ( /system/bin/hapaneld-helper >/dev/null 2>&1 & )
+    # A first-time init .rc is only loaded on the next boot on some vendor firmware, while `start`
+    # still exits successfully. Verify the socket and run the authenticated binary directly when
+    # init did not actually create the service process.
+    start hapaneld_helper 2>/dev/null
+    /system/bin/hapaneld-helper --request PING >/dev/null 2>&1 ||
+      ( /system/bin/hapaneld-helper >/dev/null 2>&1 & )
   ' >/dev/null 2>&1 || true
 
 elif printf '%s\n' "$out" | grep -qx SYSTEMLESS_RUNNER; then
@@ -1005,7 +1115,7 @@ SVCEOF
     mkdir -p /data/adb/service.d /data/adb/hapaneld
     chown 0:0 /data/adb/hapaneld
     chmod 700 /data/adb/hapaneld
-    if [ -f /system/bin/.hapaneld-helper-upgrade ] || [ -f /data/adb/hapaneld/.helper-upgrade.marker ]; then
+    if [ -f /system/bin/.hapaneld-helper-upgrade ] || [ -f /data/adb/hapaneld/.helper-upgrade.marker ] || [ -f /data/adb/hapaneld/.helper-hybrid-upgrade.marker ]; then
       echo FOREIGN_PROVISION_TRANSACTION; exit 75
     elif [ -f /system/bin/.hapaneld-helper-manual-upgrade ] && [ -f /data/adb/hapaneld/.helper-manual-upgrade.marker ]; then
       echo MULTIPLE_STALE_TRANSACTIONS; exit 75

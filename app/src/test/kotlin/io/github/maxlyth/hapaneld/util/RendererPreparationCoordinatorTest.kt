@@ -2,6 +2,7 @@ package io.github.maxlyth.hapaneld.util
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -14,6 +15,36 @@ class RendererPreparationCoordinatorTest {
         clientId = "client",
         zoom = 125,
     )
+
+    @Test fun zeroTimeoutCloseRejectsNewTransactionsWithoutWaitingForAnAdmittedOne() {
+        val entered = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        val coordinator = RendererPreparationCoordinator(
+            builtinPackage = "builtin",
+            state = { RendererPreparationState("builtin", "http://ha:8123") },
+            borrow = { error("ready state must not borrow") },
+            persist = { error("ready state must not persist") },
+        )
+        val pool = java.util.concurrent.Executors.newSingleThreadExecutor()
+        try {
+            val running = pool.submit {
+                coordinator.transaction {
+                    entered.countDown()
+                    release.await()
+                }
+            }
+            assertTrue(entered.await(1, java.util.concurrent.TimeUnit.SECONDS))
+
+            assertFalse(coordinator.close(0L))
+            assertThrows(IllegalStateException::class.java) { coordinator.transaction {} }
+
+            release.countDown()
+            running.get(1, java.util.concurrent.TimeUnit.SECONDS)
+        } finally {
+            release.countDown()
+            pool.shutdownNow()
+        }
+    }
 
     @Test fun preparationPersistsBeforeEnsureAndLaunch() {
         var state = RendererPreparationState("builtin", "")

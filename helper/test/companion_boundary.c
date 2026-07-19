@@ -29,6 +29,18 @@ static int failures;
 #define CHECK(cond, ...) do { if (!(cond)) { \
     printf("FAIL: " __VA_ARGS__); printf("  (%s:%d)\n", __FILE__, __LINE__); failures++; } } while (0)
 
+static int force_stop_count(void) {
+    const char *const argv[] = { "am", "force-stop", PKG, NULL };
+    return sysexec_stub_count_argv("/system/bin/am", argv, 0);
+}
+
+static int relaunch_count(void) {
+    const char *const argv[] = {
+        "monkey", "-p", PKG, "-c", "android.intent.category.LAUNCHER", "1", NULL,
+    };
+    return sysexec_stub_count_argv("/system/bin/monkey", argv, 1);
+}
+
 static int rename_calls;
 static int fail_rename_call;
 static int fail_rollback_call;
@@ -212,6 +224,8 @@ static void test_capability_status_and_launch_guards(void) {
           "blocked Companion START executes no shell command\n");
     CHECK(sysexec_stub_count_run("am force-stop " PKG) == 0,
           "blocked Companion RELOAD executes no shell command\n");
+    CHECK(force_stop_count() == 0 && relaunch_count() == 0,
+          "blocked Companion lifecycle executes no argv command\n");
     dispatch_once("START com.example/.Main", line, sizeof line);
     CHECK(strcmp(line, "OK\n") == 0, "unrelated START remains available while Companion is busy\n");
     dispatch_once("RELOAD com.example", line, sizeof line);
@@ -247,8 +261,11 @@ static void test_backup_frames_raw_fixed_files(void) {
     read_line(peer[1], line, sizeof line);
     CHECK(strcmp(line, "DONE\n") == 0, "backup reports successful relaunch (got %s)\n", line);
     finish(thread, peer[1]);
-    CHECK(sysexec_stub_count_run("am force-stop " PKG) == 1, "backup force-stops once\n");
-    CHECK(sysexec_stub_count_run("monkey -p " PKG) == 1, "backup always attempts relaunch\n");
+    CHECK(force_stop_count() == 1, "backup force-stops once with exact argv\n");
+    CHECK(relaunch_count() == 1, "backup relaunches once with exact argv\n");
+    CHECK(sysexec_stub_count_run("am force-stop") == 0 &&
+          sysexec_stub_count_run("monkey -p") == 0,
+          "Companion backup lifecycle never passes through the shell\n");
 }
 
 static void test_backup_rejects_links_and_reports_relaunch_failure(void) {
@@ -317,7 +334,7 @@ static void test_restore_stream_failure_never_mutates_target(void) {
     CHECK(strcmp(line, "ERR\n") == 0, "partial payload fails before target mutation (got %s)\n", line);
     finish(thread, peer[1]);
     CHECK(strcmp(slurp(DB, content, sizeof content), "database") == 0, "partial payload retains DB\n");
-    CHECK(sysexec_stub_count_run("am force-stop") == 0, "partial payload never stops target\n");
+    CHECK(force_stop_count() == 0, "partial payload never stops target\n");
 }
 
 static void test_restore_replaces_preplanted_stage_symlink_without_following(void) {
@@ -414,7 +431,7 @@ static void test_restore_reports_rollback_and_partial_failure_distinctly(void) {
     CHECK(strcmp(line, "ROLLBACK_FAILED RELAUNCH_SUPPRESSED\n") == 0,
           "failed rollback reports partial state without launching it (got %s)\n", line);
     finish(thread, peer[1]);
-    CHECK(sysexec_stub_count_run("monkey -p " PKG) == 0,
+    CHECK(relaunch_count() == 0,
           "known partial state is never relaunched\n");
 }
 
@@ -433,7 +450,7 @@ static void run_interrupted_restore(enum companion_test_fault fault) {
     CHECK(strcmp(line, "ROLLBACK_FAILED RELAUNCH_SUPPRESSED\n") == 0,
           "interrupted transaction suppresses relaunch (got %s)\n", line);
     finish(thread, peer[1]);
-    CHECK(sysexec_stub_count_run("monkey -p " PKG) == 0,
+    CHECK(relaunch_count() == 0,
           "interrupted transaction never launches Companion\n");
     companion_test_set_fault(COMPANION_TEST_FAULT_NONE);
 }
@@ -515,7 +532,7 @@ static void test_unexplained_rollback_fails_closed(void) {
                        content, sizeof content), "database") == 0,
           "later restore never deletes unexplained only rollback\n");
     CHECK(access(DB, F_OK) != 0, "failed-closed restore does not install new DB\n");
-    CHECK(sysexec_stub_count_run("monkey -p " PKG) == 0,
+    CHECK(relaunch_count() == 0,
           "unresolved rollback state suppresses relaunch\n");
 }
 
@@ -529,6 +546,8 @@ static void test_restore_rejects_nonallowlisted_packages_and_sizes(void) {
     read_line(peer[1], line, sizeof line);
     CHECK(strcmp(line, "STREAMERR\n") == 0, "foreign package rejected before READY\n");
     finish(thread, peer[1]);
+    CHECK(force_stop_count() == 0 && relaunch_count() == 0,
+          "foreign package never reaches argv execution\n");
     start(&work, &thread, peer, "COMPANIONRESTORE " PKG " 33554433 - -");
     read_line(peer[1], line, sizeof line);
     CHECK(strcmp(line, "STREAMERR\n") == 0, "oversized DB rejected before READY\n");

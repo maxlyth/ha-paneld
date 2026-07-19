@@ -1,11 +1,22 @@
 schema: 2
 id: tpa10
-version: 2.0.0
+version: 2.0.2
 display_name: Tuya TPA10
 soc_class: rk3566
+soc:
+  model: Rockchip RK3566
+  introduced_year: 2020
+  cpu_cores:
+    - architecture: Arm Cortex-A55
+      count: 4
 metadata:
   author: ha-paneld maintainers
   source: https://github.com/maxlyth/ha-paneld/blob/main/docs/hardware/tpa10.md
+  links:
+    - label: SoC details
+      url: https://www.rock-chips.com/a/en/products/RK35_Series/2021/0113/1274.html
+    - label: SoC announcement
+      url: https://www.rock-chips.com/a/cn/news/rockchip/2020/1130/1368.html
   license: Apache-2.0
   maturity: verified
   tested_firmware:
@@ -13,7 +24,7 @@ metadata:
   limitations:
     - The CHT8305 baseline temperature offset is not yet characterised.
 requires:
-  min_core_version: 0.9.3
+  min_core_version: 0.9.5-rc1
   drivers:
     - input.button-backlight
     - input.evdev
@@ -50,10 +61,9 @@ hardware:
     transfer: identity
   screen_off: daemon-blpower
   has_button_backlight: true
+  touch_click_gain: 0.12
 sensors:
   proximity_technology: Time-of-Flight
-  proximity_near_below: true
-  proximity_graded_strategy: observed
   light_technology: Ambient light
   cht8305: true
   room_temp_offset_c: 0.0
@@ -76,8 +86,6 @@ cpu:
 display:
   physical_ppi: 226
 provisioning:
-  access:
-    shizuku: optional
   software:
     webview:
       artifact: lineageos-150-arm
@@ -105,7 +113,9 @@ provisioning:
     tags:
       - vendor
       - test
-    note: 'Xinch "central-control interconnect" app (label "TEST-中控互联"). Vendor demo/test; not used in normal operation.'
+    note: >-
+      Xinch "central-control interconnect" app (label "TEST-中控互联"). Vendor demo/test; not used in normal
+      operation.
   - package: com.smartos.xinch.monitor
     desired_state: disabled
     importance: optional

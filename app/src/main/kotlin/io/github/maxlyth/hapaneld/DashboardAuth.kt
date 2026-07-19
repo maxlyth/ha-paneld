@@ -101,11 +101,12 @@ object DashboardAuth {
 
     /** Android glue: resolve against [config], persist a refreshed token, and return the full result
      *  (the caller reads `.session` for the reply and `.rejected` for the latch signal). */
-    fun forConfig(
+    internal fun forConfig(
         config: Config,
         nowSec: Long = System.currentTimeMillis() / 1000,
         force: Boolean = false,
         stillCurrent: () -> Boolean = { true },
+        persistRefresh: (HaAuthSnapshot, String, Long) -> Boolean = config::setHaRefreshedTokenIfOwned,
     ): Result {
         if (!stillCurrent()) return Result(null)
         val snapshot = config.haAuthSnapshot()
@@ -132,6 +133,6 @@ object DashboardAuth {
         )
         val owned = retainIfOwned(owner, current, stillCurrent(), r)
         val refresh = owned.persist ?: return owned
-        return if (config.setHaRefreshedTokenIfOwned(snapshot, refresh.first, refresh.second)) owned else Result(null)
+        return if (persistRefresh(snapshot, refresh.first, refresh.second)) owned else Result(null)
     }
 }

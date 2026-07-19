@@ -48,10 +48,41 @@ object CompanionDb {
     /** Result of a health read: whether any row needs repair and how many. */
     data class UrlStatus(val needsRepair: Boolean, val affected: Int)
 
+    /** One servers-table read projected for both header fallback and repair health. */
+    internal data class ServerObservation(
+        val probeSucceeded: Boolean,
+        val preferredUrl: String?,
+        val status: UrlStatus,
+    ) {
+        companion object {
+            /** Companion is absent, or its servers table was read successfully and has no rows. */
+            val EMPTY = ServerObservation(
+                probeSucceeded = true,
+                preferredUrl = null,
+                status = UrlStatus(needsRepair = false, affected = 0),
+            )
+
+            /** Companion is installed but its servers table could not be read. */
+            val UNKNOWN = ServerObservation(
+                probeSucceeded = false,
+                preferredUrl = null,
+                status = UrlStatus(needsRepair = false, affected = 0),
+            )
+        }
+    }
+
     private fun isBlank(u: String): Boolean = u.isBlank() || u == "null"
 
     /** A row needs repair when its internal URL is blank but a usable external URL exists to copy. */
     fun needsRepair(r: ServerRow): Boolean = isBlank(r.internalUrl) && !isBlank(r.externalUrl)
+
+    /** Whether the internal-URL health warning applies: only when the Companion is the app that will
+     *  actually render the dashboard — an explicitly configured Companion `dashboard_package`, or a
+     *  blank one (auto-detect prefers the Companion when installed). With the built-in renderer or
+     *  another explicit dashboard app a blank `internal_url` can't blank the panel (the built-in
+     *  renderer's login borrow already falls back to `external_url`), so the warning stays quiet. */
+    fun warningApplies(dashboardPackage: String): Boolean =
+        dashboardPackage.isBlank() || dashboardPackage in CompanionInstaller.SUPPORTED_PACKAGES
 
     /** Parse the `id US internal US external` lines emitted by [DUMP_SQL]. Tolerant of blank lines and
      *  short rows (a missing trailing field → ""). A line with no id is skipped. */
@@ -138,31 +169,48 @@ object CompanionDb {
      *  and crucially it never creates the `-wal`/`-shm` files — so a root read can't leave root-owned
      *  sidecar files the app then can't open. Safe while the Companion is running. (Android's bundled
      *  sqlite3 — 3.19 on PX30 — lacks the `-readonly` flag but supports `file:…?immutable=1`.) */
-    fun readServers(context: Context, root: RootShell): List<ServerRow>? {
+    private fun readServers(context: Context, root: RootShell): List<ServerRow>? {
         val pkg = CompanionInstaller.installedPkg(context) ?: return null
+        return readServers(pkg, root)
+    }
+
+    private fun readServers(pkg: String, root: RootShell): List<ServerRow>? {
         val db = dbPath(pkg)
         val out = root.runOutput("""sqlite3 "file:$db?immutable=1" "$DUMP_SQL" 2>/dev/null""") ?: return null
         return parseServers(out)
     }
 
-    /** The active HA server URL as the Companion knows it — internal_url preferred, else external_url,
-     *  from the first server row that has one. Null when there's no Companion / no root / no server row.
-     *  A root sqlite read — call off the main thread. Used as the header "Open in HA" target when the
-     *  panel's own HA device-page URL hasn't resolved (e.g. a remote panel over a tunnel). */
-    fun serverUrl(context: Context, root: RootShell): String? {
-        val rows = readServers(context, root) ?: return null
-        for (r in rows) {
-            val u = r.internalUrl.takeUnless { isBlank(it) } ?: r.externalUrl.takeUnless { isBlank(it) }
-            if (u != null) return u.trimEnd('/')
+    internal fun observeServers(rows: List<ServerRow>?): ServerObservation {
+        rows ?: return ServerObservation.UNKNOWN
+        val preferredUrl = rows.firstNotNullOfOrNull { row ->
+            (row.internalUrl.takeUnless(::isBlank) ?: row.externalUrl.takeUnless(::isBlank))
+                ?.trimEnd('/')
         }
-        return null
+        val affected = rows.count(::needsRepair)
+        return ServerObservation(
+            probeSucceeded = true,
+            preferredUrl = preferredUrl,
+            status = UrlStatus(needsRepair = affected > 0, affected = affected),
+        )
     }
 
-    /** Health status for the Install-tab warning. Never throws; (false, 0) when it can't tell. */
-    fun internalUrlStatus(context: Context, root: RootShell): UrlStatus {
-        val rows = readServers(context, root) ?: return UrlStatus(false, 0)
-        val bad = rows.count(::needsRepair)
-        return UrlStatus(bad > 0, bad)
+    /** Keep the last truthful payload when a refresh is unreadable, without claiming it was fresh. */
+    internal fun retainLastKnownServerObservation(
+        previous: ServerObservation?,
+        observed: ServerObservation,
+    ): ServerObservation = when {
+        observed.probeSucceeded -> observed
+        previous == null -> observed
+        else -> previous.copy(probeSucceeded = false)
+    }
+
+    /**
+     * One root SQLite read for every read-only servers-table projection. Call off the main thread.
+     * Absence is confirmed empty; an installed Companion whose table is unreadable remains unknown.
+     */
+    internal fun observeServers(context: Context, root: RootShell): ServerObservation {
+        val pkg = CompanionInstaller.installedPkg(context) ?: return ServerObservation.EMPTY
+        return observeServers(readServers(pkg, root))
     }
 
     /**

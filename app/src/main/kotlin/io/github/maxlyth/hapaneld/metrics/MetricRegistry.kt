@@ -41,9 +41,9 @@ object MetricRegistry {
     val RELAY = MetricSpec("relay.state", null, "On-board relay states (follow-on: needs daemon read verb)")
     val LED = MetricSpec("led.state", null, "LED read-back (follow-on: needs daemon read verb)")
 
-    // --- environmental (reader-owned; daemon-only, panels with the chip) --------------------------------
-    val ROOM_TEMP = MetricSpec("room.temp", "°C", "Room air temperature (CHT8305, daemon-only)")
-    val ROOM_HUMIDITY = MetricSpec("room.humidity", "%", "Room relative humidity (CHT8305, daemon-only)")
+    // --- environmental (reader-owned; authenticated exact layouts on supported panels) -----------------
+    val ROOM_TEMP = MetricSpec("room.temp", "°C", "Room air temperature (supported input)")
+    val ROOM_HUMIDITY = MetricSpec("room.humidity", "%", "Room relative humidity (supported input)")
 
     /** Every registered metric — the complete enumerable schema. */
     val ALL: List<MetricSpec> = listOf(

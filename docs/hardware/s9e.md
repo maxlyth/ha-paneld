@@ -24,7 +24,7 @@ A 10.1" **1920×1200** RK3566 in-wall panel — same SoC family as the TPA10 —
 > The S9E shares the TPA10's **RK3566** platform, so ha-paneld's existing app-side features likely work without S9E-specific code; temperature/humidity/light may surface through `SensorManager` (as on the TPA10's CHT8305). Separately, the shipped **WebView is very old (Chromium 83)** — update it first (Magisk OpenWebView, the 2025-03-24 firmware, or a sideloaded SystemWebView). Confirm on a unit.
 
 > [!TIP]
-> Changing firmware on a button-less panel? Read [Firmware backup & restore](../firmware-backup-restore.md) first — the S9E is an RK3566 Rockchip device, so the usual button-combo fastboot/recovery advice does not apply (partition table not yet captured).
+> The S9E has four front function buttons but no documented standard power-and-volume recovery combination. Its partition table, root route and recovery procedure have not been captured on live hardware, so the TPA10/WF1589T [firmware backup guide](../firmware-backup-restore.md) must not be applied to it unchanged.
 
 ## Firmware versions
 
@@ -68,7 +68,7 @@ The four buttons emit standard Android key codes **131–134** = `KEYCODE_F1`–
 
 ## LED — per-button GPIO backlight (supported since 0.8.2)
 
-Each button has an LED at `/sys/class/gpio/gpio<16+keycode>/value` — i.e. gpio **147–150** for buttons F1–F4. Per-button on/off, monochrome. ha-paneld exposes these as `light.<panel>_button_led1..4` (on/off via `su`), counted from the `buttonLedGpioBase` profile value; supported since 0.8.2. Note the LEDs are **not** under `/sys/class/leds` (that class holds only the `mmc2::` SD-card LED on the S9E) — they are raw GPIOs.
+Each button has an LED at `/sys/class/gpio/gpio<16+keycode>/value` — i.e. gpio **147–150** for buttons F1–F4. Per-button on/off, monochrome. ha-paneld exposes these as `light.<panel>_button_led1..4` (on/off via `su`), counted from the YAML profile's `hardware.button_led_gpio_base`; supported since 0.8.2. Note the LEDs are **not** under `/sys/class/leds` (that class holds only the `mmc2::` SD-card LED on the S9E) — they are raw GPIOs.
 
 > [!NOTE]
 > **Firmware analysis:** the init scripts export **only `gpio113`** — the button-LED pins **gpio147–150 are not exported at boot**, so the `/sys/class/gpio/gpioNNN/value` nodes don't exist until exported. ha-paneld exports (and sets to output) each pin on demand before the first write, which is why the LEDs work despite not being init-exported.
@@ -84,7 +84,7 @@ echo 1 > /sys/class/gpio/gpio147/value   # button F1 LED on
 ## Sensors — proximity (SensorManager registers but does NOT deliver; gpio18 is the real path)
 
 > [!IMPORTANT]
-> A proximity sensor is *registered* in `SensorManager` (which advertises `Proximity=yes · Binary · 0/1 cm`), but on the S9E it **never delivers events** — reporter's live readings, [#5](https://github.com/maxlyth/ha-paneld/issues/5): `binary_sensor.<panel>_proximity` reads **Unknown** in HA, the tuning card shows **`raw —` · FAR**, and waving a hand changes nothing. The light sensor on the same panel works (≈46 lx), so this is proximity-specific — so local **wake-on-wave** does not work through `SensorManager`, and the real signal must be read from `gpio18` (below).
+> A proximity sensor is *registered* in `SensorManager` (which advertises `Proximity=yes · Binary · 0/1 cm`), but on the S9E it **never delivers events** — reporter's live readings and [#5](https://github.com/maxlyth/ha-paneld/issues/5) established that the Android path remains silent. The light sensor on the same panel works (≈46 lx), so this is proximity-specific; the real signal is read from `gpio18` (below).
 
 The real signal is a **root GPIO read at GPIO 18** (the kernel registers a phantom Android sensor that never fires, so the value has to be read from sysfs):
 
@@ -92,14 +92,14 @@ The real signal is a **root GPIO read at GPIO 18** (the kernel registers a phant
 cat /sys/class/gpio/gpio18/value   # 1 = near, 0 = far  (no export needed — reporter-confirmed, #5)
 ```
 
-So S9E proximity reads `gpio18` over root directly instead of relying on `SensorManager` (supported since 0.8.3): `DeviceProfile.proximityGpio` = 18, so `SensorReporter` polls the node ~2×/s through the persistent `su` shell and feeds the same `binary_sensor.<panel>_proximity` + wake-on-wave path (the dead SensorManager proximity isn't registered on the S9E). Reporter-confirmed: gpio18 reads **0 far / 1 near**, no export needed. Ambient light + temperature/humidity surface via `SensorManager` as expected.
+So the S9E YAML profile declares `sensors.proximity_gpio: 18` instead of using the dead `SensorManager` source. The root helper holds the value descriptor and streams changes immediately where the kernel supports GPIO edges; otherwise it rechecks the same descriptor at 2 Hz. Descriptor loss is reported explicitly so Home Assistant goes unavailable until the recovered helper stream supplies its current value. This removes the former repeated root-shell reads. The signal then enters the same self-learning, fleet-normalized presence and deliberate-wave path as Android sensors. Reporter-confirmed: gpio18 reads **0 far / 1 near**, but the learner does not rely on that device-specific polarity. Ambient light + temperature/humidity surface via `SensorManager` as expected.
 
 ## Access model summary
 
 - **Relays**: `switch.<panel>_relay1/2` via the relay sysfs class (root); probes both `strelay`/`st_relay`. Supported since 0.8.2.
 - **Buttons**: `event.<panel>_button` (`KEYCODE_F1`–`F4`), app-direct via a11y.
 - **Button LEDs**: `light.<panel>_button_led1..4` via `su` (gpio 147–150, exported on demand). Supported since 0.8.2.
-- **Proximity**: `binary_sensor.<panel>_proximity` via a **root `gpio18` poll** (0.8.3) — the SensorManager proximity registers but never fires, so it's bypassed. 0 far / 1 near; wake-on-wave works via the poller.
+- **Proximity**: learned `binary_sensor.<panel>_proximity` and normalized `sensor.<panel>_proximity_level` via the root helper's held `gpio18` event stream — the SensorManager proximity registers but never fires, so it is bypassed.
 - **Light**: `sensor.<panel>_illuminance` via `SensorManager` — **works**.
 
 ## Sources

@@ -47,9 +47,14 @@ sealed class Validation {
  */
 data class Capabilities(
     val hasProximity: Boolean = false,
+    /** True only after the adaptive learner proves this exact source fingerprint has a graded/ranged
+     *  signal. Binary/unknown sources remain available to local diagnostics but cannot expose wake UI. */
+    val hasRangedProximity: Boolean = false,
     val hasLight: Boolean = false,
     val hasTemperature: Boolean = false,
     val hasHumidity: Boolean = false,
+    val hasWifi: Boolean = false,
+    val hasWifiSsid: Boolean = false,
     val hasCht8305: Boolean = false,
     val hasButtonBacklight: Boolean = false,
     val buttonsEnabled: Boolean = false,
@@ -155,7 +160,7 @@ data class SettingSpec(
     // discovery gate for every HA-publishable setting (those with `ha`, plus the discovery-pass entities
     // like navbar that carry no `ha` block here). A per-panel expose pip can still override it either way.
     val haExposedByDefault: Boolean = false,
-    val transient: Boolean = false,          // accepted + routed to a controller but never persisted (e.g. ambient_lux)
+    val transient: Boolean = false,          // accepted + routed to a controller but never persisted
     // Omit from the generated Configure form (an API-only setting): still readable via GET /config,
     // settable via POST /config, and carried in config bundles — just never rendered as a form field.
     val hidden: Boolean = false,

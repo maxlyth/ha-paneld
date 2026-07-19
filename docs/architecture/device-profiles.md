@@ -10,10 +10,10 @@ For the author workflow, see [Runtime panel profiles](../profiles/README.md). Fo
 
 A profile describes hardware facts and selects mechanisms. A driver implements a mechanism.
 
-- **Profile** — panel identity, fingerprint rules, named firmware/model strategies, capability candidates, typed driver parameters, display/sensor metadata, update recommendations and access guidance.
+- **Profile** — panel identity, fingerprint rules, named firmware/model strategies, capability candidates, typed driver parameters, display/sensor/SoC metadata, inert reference links, update recommendations and access guidance.
 - **Driver** — compiled code that probes or operates an Android API, device node, sysfs class, helper command or other bounded mechanism.
 
-The split is a security and maintenance boundary. An imported profile can select only drivers known to the running core; it cannot contain executable code, shell commands, helper verbs, native libraries, ioctl payloads or a new protocol. Adding a genuinely new mechanism still requires a normal ha-paneld implementation and release. Once that mechanism exists in the catalog, later panels can select it in YAML.
+The split is a security and maintenance boundary. An imported profile can select only drivers known to the running core; it cannot contain executable code, shell commands, helper verbs, native libraries, ioctl payloads or a new protocol. HTTPS product and reference links are display-only and are never fetched or interpreted as provisioning input. Adding a genuinely new mechanism still requires a normal ha-paneld implementation and release. Once that mechanism exists in the catalog, later panels can select it in YAML.
 
 ## One resolved profile per service lifetime
 
@@ -29,7 +29,7 @@ The activation transaction is:
 6. Mark the activation healthy only after startup reaches the required health point.
 7. If resolution or startup fails, select the last-known-good revision and restart conservatively.
 
-The local UI remains available after profile failure. When no installed profile can run, ha-paneld falls back to `Generic` rather than treating profile parsing as a reason to strand the panel.
+The local UI remains available after profile failure. When no installed panel-specific profile can run, ha-paneld normally resolves the bundled `generic.yaml` fallback. If that bundled fallback is itself missing or corrupt, a capability-empty emergency contract keeps the local recovery surface available without inventing hardware support.
 
 ## Sources and immutability
 
@@ -43,15 +43,15 @@ Profile selection is either automatic matching or an explicit pin to one immutab
 
 Automatic matching is pure and limited to immutable build facts: Android build model, build device and the vendor product-version property. It does not probe sysfs or run privileged commands.
 
-Exact bundled product identities are evaluated before bundled reference-platform fallbacks such as `px30`, `rk3326`, `rk3566` and `rk3576`, because unrelated vendors can ship the same SoC. The resolver compares the highest matched group priority, then the profile priority; an exact tie fails closed to Generic. This two-level order lets one profile carry both an exact identity and a lower-priority compatibility fallback without its broad branch defeating another product's exact rule. Local/community match rules are preview evidence only and never enter automatic selection. A local revision can override bundled detection only through explicit activation; once pinned, the panel keeps that exact revision rather than being reinterpreted by a later import.
+Exact bundled product identities are evaluated before bundled reference-platform fallbacks such as `px30`, `rk3326`, `rk3566` and `rk3576`, because unrelated vendors can ship the same SoC. The resolver compares the highest matched group priority, then the profile priority; an exact tie fails closed to the bundled Generic profile (or the capability-empty emergency contract if that asset is unavailable). This two-level order lets one profile carry both an exact identity and a lower-priority compatibility fallback without its broad branch defeating another product's exact rule. Local/community match rules are preview evidence only and never enter automatic selection. A local revision can override bundled detection only through explicit activation; once pinned, the panel keeps that exact revision rather than being reinterpreted by a later import.
 
-Named core-owned strategies can derive a small set of bounded values from those same facts, for example a firmware threshold that changes proximity behavior or a model suffix that changes recommended density. The schema has no general scripting, arbitrary expressions or conditional patch section.
+Named core-owned strategies can derive a small set of bounded values from those same facts, for example a product variant that changes the local model label or recommended density. The schema has no general scripting, arbitrary expressions or conditional patch section. Proximity polarity, ranges and firmware classifiers are deliberately not profile data; the runtime learner normalizes live sensor behavior across panels.
 
 ## The rule that keeps profiles from being brittle
 
 A profile declares **candidates and quirks**; the functional driver still runtime-probes whenever the platform exposes a reliable probe. The profile says where or how to look, while the probe says whether the interface is actually present and reachable.
 
-Some facts cannot be discovered generically, so they remain explicit profile knowledge: a distinct button-backlight node, an evdev button mapping, firmware-specific sensor behavior, a physical display PPI, or a known-good core-owned update artifact ID. The artifact's URL, version and signer hash stay compiled into the core rather than being supplied by YAML. Those facts carry evidence and compatibility responsibility when a profile is shared.
+Some facts cannot be discovered generically, so they remain explicit profile knowledge: the SoC model and CPU core class, a distinct button-backlight node, an evdev button mapping, firmware-specific sensor behavior, a physical display PPI, or a known-good core-owned update artifact ID. The artifact's URL, version and signer hash stay compiled into the core rather than being supplied by YAML. Those facts carry evidence and compatibility responsibility when a profile is shared.
 
 Consequences:
 

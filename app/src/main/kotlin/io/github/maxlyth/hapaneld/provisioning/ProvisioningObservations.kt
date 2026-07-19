@@ -26,6 +26,7 @@ internal enum class ProvisioningHelperState {
 
 internal enum class ProvisioningShizukuState {
     READY,
+    CONSENT_DISABLED,
     PERMISSION_REQUIRED,
     SERVICE_NOT_RUNNING,
     MANAGER_MISSING,

@@ -1,4 +1,4 @@
-// ha-paneld info page — live perf/responsiveness/proximity polling.
+// ha-paneld info page — live performance, responsiveness and learned proximity status.
 // Served as a static asset (linted by CI: `node --check`) rather than embedded in a Kotlin
 // string, so syntax errors (e.g. an apostrophe in a single-quoted string) are caught at build.
 var cpuH=[],ramH=[],gpuH=[],MAX=120,perfMode='';  // ~4 min at 2s
@@ -42,6 +42,28 @@ function paintTop(top,msg){
   var cv=p.cpu==null?'':p.cpu+'%';if(cp.textContent!==cv)cp.textContent=cv;}
  while(t.children.length>data.length+1)t.removeChild(t.lastChild);
 }
+// Noisy state-stream contributors: one sortable-looking data shape instead of repeating the same
+// "Noisy entity" key/value label for every contributor.
+function paintNoisy(entities,identified){
+ var t=document.getElementById('noisyentities');if(!t)return;
+ var rows=entities||[],empty=!rows.length;
+  if(!t._h){var hr=document.createElement('tr');
+  ['Top entities','Rate','Payload'].forEach(function(label,index){var h=document.createElement('th');
+   h.textContent=label;if(index)h.className=index===1?'num rate':'num payload';hr.appendChild(h);});
+  t.textContent='';t.appendChild(hr);t._h=true;}
+ t.children[0].style.display=empty?'none':'';
+ var data=empty?[{entityId:identified?'No noisy contributors in this sample':'Aggregate only — enable automatic entity learning to identify contributors'}]:rows;
+ for(var i=0;i<data.length;i++){var e=data[i],tr=t.children[i+1];
+  if(!tr){tr=document.createElement('tr');tr.appendChild(document.createElement('td'));
+   var updates=document.createElement('td');updates.className='num rate';tr.appendChild(updates);
+   var payload=document.createElement('td');payload.className='num payload';tr.appendChild(payload);t.appendChild(tr);}
+  var id=tr.children[0],up=tr.children[1],pl=tr.children[2];
+  if(id.textContent!==e.entityId)id.textContent=e.entityId;id.title=empty?'':e.entityId;
+  var uv=empty?'':String(e.updates1h)+'/hr';if(up.textContent!==uv)up.textContent=uv;
+  var pv=empty?'':fmtByteTotal(e.payloadBytes1h||0)+'/hr';if(pl.textContent!==pv)pl.textContent=pv;
+  id.style.color=empty?'#888':'';up.style.color='';pl.style.color='';}
+ while(t.children.length>data.length+1)t.removeChild(t.lastChild);
+}
 // Optional metric latch: once seen, the row stays (showing '–' when momentarily absent) for stable height.
 var pseen={};
 function opt(k,label,ok,val,suf){if(ok)pseen[k]=true;if(!pseen[k])return null;
@@ -82,6 +104,7 @@ function drawResp(hist){
 }
 function fmtRate(n,unit){return n<10?n.toFixed(1)+' '+unit:Math.round(n)+' '+unit;}
 function fmtBytes(n){if(n>=1048576)return (n/1048576).toFixed(1)+' MiB/s';if(n>=1024)return (n/1024).toFixed(1)+' KiB/s';return Math.round(n)+' B/s';}
+function fmtByteTotal(n){if(n>=1048576)return (n/1048576).toFixed(1)+' MB';if(n>=1024)return (n/1024).toFixed(1)+' KB';return Math.round(n)+' B';}
 function causeLabel(c){return ({state_stream:'State stream pressure',dashboard_script:'Dashboard/card JavaScript',
  rendering_or_media:'Rendering, layout, or media',system_contention:'System process contention',
  memory_or_renderer_instability:'Renderer or memory instability',dashboard_or_state_proxy:'Dashboard or state load (proxy)',
@@ -152,12 +175,12 @@ async function perf(){
    sr.push({label:'Initial hydration',val:(stream.hydrationUpdates||0)+' entities'});
    sr.push({label:'Subscription',val:filter.active?'filtered to '+filter.entityCount+' entities':'unfiltered',
     col:filter.active?'#48c774':'#d9a528'});
-   (dash.topEntities||[]).forEach(function(e){sr.push({label:'Noisy entity',val:e.entityId,
-    suf:'· '+e.updates1m+' updates/min · '+fmtBytes(e.payloadBps1m||0)});});
-   if(!(dash.topEntities||[]).length)sr.push({label:'Noisy entities',val:'aggregate only',
-    suf:'· enable automatic entity learning to identify contributors',col:'#888'});
+   paintNoisy(dash.topEntities||[],!!filter.active);
    if(stream.droppedFrames)sr.push({label:'Measurement drops',val:''+stream.droppedFrames,col:'#d9a528'});
-  }else sr.push({label:'State stream',val:direct?'waiting for Home Assistant state traffic':'available with the built-in renderer',col:'#888'});
+  }else{
+   sr.push({label:'State stream',val:direct?'waiting for Home Assistant state traffic':'available with the built-in renderer',col:'#888'});
+   paintNoisy([],false);
+  }
   paint('streamtbl',sr);
   hwm('smtbl');hwm('streamtbl');hwm('topproc');
   document.getElementById('perfage').textContent='· live';
@@ -166,6 +189,11 @@ async function perf(){
 perf();setInterval(perf,2000);
 // Live Sensors card — REUSABLE: sensorsCard(tableId, ageId) mounts the same card on any tab that
 // includes a table + age element; polls /api/v1/sensors every 2s, pauses while the tab is hidden.
+function formatBrightness(raw){
+ if(typeof raw!=='number'||!isFinite(raw)||raw<0)return null;
+ var value=Math.max(0,Math.min(255,Math.round(raw)));
+ return Math.round(value*100/255)+'% ('+value+' / 255)';
+}
 function sensorsCard(tbl,age){
  function fA(a){return a==null?'':(a<90?'· '+a+'s ago':(a<5400?'· '+Math.round(a/60)+'m ago':'· '+Math.round(a/3600)+'h ago'));}
  async function s(){
@@ -173,11 +201,13 @@ function sensorsCard(tbl,age){
   try{
    var d=await (await fetch('/api/v1/sensors')).json(),rows=[];
    if(d.light&&d.light.present)rows.push({label:'Ambient light',val:d.light.lux!=null?d.light.lux+' lx':'no reading yet',suf:fA(d.light.age_s)});
-   if(d.proximity&&d.proximity.present)rows.push({label:'Proximity',val:d.proximity.near==null?'no reading yet':(d.proximity.near?'near':'far'),suf:d.proximity.raw!=null?'· raw '+d.proximity.raw:''});
+   if(d.proximity&&d.proximity.present){var p=d.proximity,phase=(p.learning||p.phase||'waiting').replace(/_/g,' ');
+    rows.push({label:'Proximity',val:p.near==null?phase:(p.near?'near':'far'),suf:p.normalizedLevel==null?'· '+phase:'· '+p.normalizedLevel+'% normalized · '+phase});}
    if(d.temperature&&d.temperature.present)rows.push({label:'Temperature',val:d.temperature.c!=null?d.temperature.c+' °C':'no reading yet',suf:fA(d.temperature.age_s)});
    if(d.humidity&&d.humidity.present)rows.push({label:'Humidity',val:d.humidity.pct!=null?d.humidity.pct+' %':'no reading yet',suf:fA(d.humidity.age_s)});
    if(d.volume_pct!=null&&d.volume_pct>=0)rows.push({label:'Volume',val:d.volume_pct+' %'});
-   if(d.brightness!=null&&d.brightness>=0)rows.push({label:'Brightness',val:d.brightness+' / 255'});
+   var brightness=formatBrightness(d.brightness);
+   if(brightness!=null)rows.push({label:'Brightness',val:brightness});
    if(!rows.length)rows.push({label:'',val:'no sensors on this panel',col:'#888'});
    paint(tbl,rows);
    var a=document.getElementById(age);if(a)a.textContent='· live';
@@ -208,28 +238,55 @@ function fitControls(){
 }
 window.addEventListener('resize',fitControls);
 if(document.readyState!=='loading')fitControls();else document.addEventListener('DOMContentLoaded',fitControls);
+function approvalMessage(body){return body&&body.message||'Approve this request on the panel, then retry it.';}
+function responseBody(response){return response.text().then(function(text){
+ var body={};try{body=text?JSON.parse(text):{};}catch(_){body={message:text};}
+ if(response.status===202&&body&&body.error==='approval-required'){
+  var error=new Error(approvalMessage(body));error.approvalRequired=true;error.body=body;throw error;
+ }
+ return {response:response,body:body};
+});}
 function inspApply(d){
- var hdr=document.getElementById('insthdr'),hint=document.getElementById('insthint');
+ var hdr=document.getElementById('insthdr'),hint=document.getElementById('insthint'),start=document.getElementById('inspstart');
  var hp='<b>'+location.hostname+':'+d.port+'</b>';
+ if(start)start.disabled=d.start_allowed===false;
  hdr.textContent=d.running?'· on':'· off';
- if(d.status==='no-socket')hint.innerHTML='Enable it on the dashboard first: Companion → Settings → Troubleshooting → "WebView remote debugging", then relaunch the dashboard and press Enable again.';
+ if(d.status==='hardened-disabled')hint.textContent='Unavailable while Hardened mode is enabled. Switch to Relaxed mode before exposing WebView developer tools to the LAN.';
+ else if(d.status==='no-socket')hint.innerHTML='Enable it on the dashboard first: Companion → Settings → Troubleshooting → "WebView remote debugging", then relaunch the dashboard and press Enable again.';
  else if(d.status==='needs-root')hint.textContent='Needs root (su) on this panel.';
  else if(d.status==='failed'||d.status==='no-binary')hint.textContent='Could not start the relay.';
  else if(d.running)hint.innerHTML='Relay on. In <b>chrome://inspect</b> the dashboard now appears under Remote Target — click <b>inspect</b>. If it does not show, the host must be added <i>before</i> enabling — add '+hp+' in Configure…, then refresh chrome://inspect. Exposes DevTools to the LAN while on; press Stop when done.';
  else hint.innerHTML=(perfMode==='builtin_direct'?'The performance cards above use direct built-in instrumentation without DevTools. ':'')+'For deeper inspection, open <b>chrome://inspect</b> → <b>Configure…</b>, add '+hp+', then press <b>Enable</b>. Companion also requires Settings → Troubleshooting → <b>WebView remote debugging</b> and a dashboard relaunch. The relay needs root.';
 }
 async function insp(){try{var d=await (await fetch('/api/v1/inspect')).json();inspApply(d);}catch(e){}}
-function inspStart(){fetch('/api/v1/inspect/start',{method:'POST'}).then(function(r){return r.json();}).then(inspApply).catch(function(){});}
+function inspStart(){var hint=document.getElementById('insthint');
+ fetch('/api/v1/inspect/start',{method:'POST'}).then(responseBody).then(function(result){inspApply(result.body);})
+ .catch(function(error){if(hint)hint.textContent=error&&error.message?error.message:'Could not start the relay.';});}
 function inspStop(){fetch('/api/v1/inspect/stop',{method:'POST'}).then(function(r){return r.json();}).then(inspApply).catch(function(){});}
 insp();
-// Layout is pure CSS multi-column masonry now (.cards{columns:400px} in info.css) — the browser packs and
-// height-balances the cards. No JS column packing (the old greedy mis-balanced on placeholder heights).
+
+var scheduleDashboardColumnAlignment=window.CardColumnAlignment
+ ?window.CardColumnAlignment.attach('dashboard-cards')
+ :function(){};
+scheduleDashboardColumnAlignment();
 
 // Build watch moved to the shared /assets/buildwatch.js (loaded by EVERY page, not just the dashboard).
 
 // Controls card actions: POST /action a=<back|recents|home|reboot|volup|voldn>. Reboot confirms first.
-function act(a){if(a==='reboot'&&!confirm('Reboot this panel now?'))return;
- fetch('/api/v1/action',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'a='+a}).catch(function(){});}
+function controlMessage(text){var zone=document.getElementById('ctlzone');if(!zone)return;
+ var note=document.getElementById('ctlmsg');if(!note){note=document.createElement('p');note.id='ctlmsg';note.className='note';note.setAttribute('role','status');note.setAttribute('aria-live','polite');zone.appendChild(note);}note.textContent=text||'';}
+function act(a){if(a==='reboot'){
+ var warning='Reboot this panel now?';
+ if(document.body.dataset.hardened==='1')warning+='\n\nHardened mode requires physical approval on this panel; it cannot be approved remotely.';
+ if(!confirm(warning))return;
+ }
+ fetch('/api/v1/action',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'a='+a})
+ .then(responseBody).then(function(result){
+  if(!result.response.ok){
+   if(result.body&&result.body.error==='remote-input-disabled')controlMessage('Remote tap input is disabled for network clients in Hardened mode.');
+   else controlMessage(result.body.message||result.body.error||('Action failed (HTTP '+result.response.status+').'));
+  }else controlMessage('');
+ }).catch(function(error){controlMessage(error&&error.approvalRequired?error.message:'Action failed (network).');});}
 
 // Reveal toggle for .secret fields (blurred by default). Auto-re-blurs after 20s so it can't be left
 // revealed for a screenshot. Focusing a blurred input also un-blurs it (see info.css) so config stays editable.
@@ -262,7 +319,7 @@ function refreshScreenshot(card){
 function showAndRefreshScreenshot(card,cachedUrl){
  var im=card&&card.querySelector('img');if(!im)return;
  if(!im.getAttribute('src')&&cachedUrl)im.src=cachedUrl;
- card.style.display='';refreshScreenshot(card);
+ card.style.display='';refreshScreenshot(card);scheduleDashboardColumnAlignment();
 }
 
 // Dashboard hydration: the shell now renders instantly (the probe-backed values used to block the
@@ -281,6 +338,7 @@ function showAndRefreshScreenshot(card,cachedUrl){
   var sc=document.getElementById('shotcard');
   if(sc){if(d.shot){showAndRefreshScreenshot(sc,d.shotCached);}
    else{sc.style.display='none';}}
+  scheduleDashboardColumnAlignment();
  }
  function hydrate(tries){fetch('/api/v1/info').then(function(r){return r.json();}).then(apply)
   .catch(function(){if(tries>0)setTimeout(function(){hydrate(tries-1);},3000);});}

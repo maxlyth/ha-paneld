@@ -14,7 +14,9 @@ import io.github.maxlyth.hapaneld.control.SystemController
 import io.github.maxlyth.hapaneld.device.DeviceProfile
 import android.webkit.WebView
 import io.github.maxlyth.hapaneld.BuildConfig
+import io.github.maxlyth.hapaneld.dashboard.EntityCatalogStore
 import java.io.File
+import java.util.Locale
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
@@ -45,7 +47,7 @@ object PanelInfo {
     fun collect(
         context: Context,
         extras: Map<String, String>,
-        profile: DeviceProfile = DeviceProfile.detect(),
+        profile: DeviceProfile,
     ): LinkedHashMap<String, String> {
         val m = LinkedHashMap<String, String>()
         m["ha-paneld"] = "${BuildConfig.VERSION_NAME} (build ${BuildConfig.VERSION_CODE})"
@@ -114,6 +116,25 @@ object PanelInfo {
 
     private fun gib(bytes: Long): String = "%.1f GiB".format(bytes / 1024.0 / 1024.0 / 1024.0)
 
+    internal fun formatIecBytes(bytes: Long): String {
+        val bounded = bytes.coerceAtLeast(0L)
+        if (bounded < 1024L) return "$bounded B"
+        val units = arrayOf("KiB", "MiB", "GiB", "TiB", "PiB", "EiB")
+        var value = bounded.toDouble()
+        var unit = -1
+        do {
+            value /= 1024.0
+            unit++
+        } while (value >= 1024.0 && unit < units.lastIndex)
+        return String.format(Locale.ROOT, "%.1f %s", value, units[unit])
+    }
+
+    internal fun databaseSummary(usage: EntityCatalogStore.DatabaseUsage): String = buildList {
+        add("${formatIecBytes(usage.usedBytes)} used")
+        if (usage.diskBytes > 0L) add("${formatIecBytes(usage.diskBytes)} on disk")
+        if (usage.schemaVersion > 0) add("schema ${usage.schemaVersion}")
+    }.joinToString(" · ")
+
     /** Marketing GB (÷10⁹) so the number reads close to the advertised spec (8 GB / 32 GB …). */
     private fun gb(bytes: Long): String = "%.1f GB".format(bytes / 1e9)
 
@@ -141,6 +162,7 @@ object PanelInfo {
         val tooOld: Boolean,
         val engineMajor: Int? = null,
         val reportingQuirk: String? = null,
+        val playManaged: Boolean = false,
     )
 
     /**
@@ -152,10 +174,14 @@ object PanelInfo {
      * Cromite-updated panel is no longer falsely warned.
      */
     fun webViewStatus(context: Context): WebViewStatus {
-        val pkg = webViewPackage()
+        val provider = webViewPackage()
+        val pkg = provider.display
         val pkgMajor = PanelHealth.chromiumMajor(pkg)
+        val playManaged = provider.packageName?.let { isPlayManaged(context, it) } == true
         // Fast path: unknown or already ≥ threshold — trust it, don't load the WebView provider.
-        if (pkgMajor == null || pkgMajor >= PanelHealth.MIN_CHROMIUM) return WebViewStatus(pkg, false, pkgMajor)
+        if (pkgMajor == null || pkgMajor >= PanelHealth.MIN_CHROMIUM) {
+            return WebViewStatus(pkg, false, pkgMajor, playManaged = playManaged)
+        }
         // Package looks old: could be genuinely old, or a Cromite/LineageOS swap stamping the OEM
         // version. The UA carries the true engine version — use it.
         val engine = engineVersion(context)
@@ -166,6 +192,7 @@ object PanelInfo {
             tooOld = PanelHealth.webViewTooOld(pkg, engineMajor),
             engineMajor = engineMajor ?: pkgMajor,
             reportingQuirk = presentation.second,
+            playManaged = playManaged,
         )
     }
 
@@ -185,11 +212,28 @@ object PanelInfo {
             packageSummary to null
         }
 
-    private fun webViewPackage(): String = try {
-        WebView.getCurrentWebViewPackage()?.let { "${it.packageName} ${it.versionName}" } ?: "unknown"
+    private data class WebViewPackage(val display: String, val packageName: String?)
+
+    private fun webViewPackage(): WebViewPackage = try {
+        WebView.getCurrentWebViewPackage()?.let {
+            WebViewPackage("${it.packageName} ${it.versionName}", it.packageName)
+        } ?: WebViewPackage("unknown", null)
     } catch (e: Throwable) {
-        "unknown"
+        WebViewPackage("unknown", null)
     }
+
+    @Suppress("DEPRECATION")
+    private fun isPlayManaged(context: Context, packageName: String): Boolean = runCatching {
+        val installer = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            context.packageManager.getInstallSourceInfo(packageName).installingPackageName
+        } else {
+            context.packageManager.getInstallerPackageName(packageName)
+        }
+        isPlayStoreInstaller(installer)
+    }.getOrDefault(false)
+
+    internal fun isPlayStoreInstaller(installerPackage: String?): Boolean =
+        installerPackage == "com.android.vending"
 
     // Real engine version from the WebView default UA, computed once and cached: the fetch loads the
     // WebView provider into this process and must run on a Looper thread (see [defaultUserAgent]), and

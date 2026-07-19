@@ -124,8 +124,9 @@ object MetricParse {
     /**
      * The `CHT8305` daemon reply → a room temperature/humidity reading. The wire format (see
      * helper/src/cht8305.c) is `T=<centi> H=<centi>` where each value is the reading × 100 (the driver's
-     * ABS_THROTTLE axis units). Returns null for "ERR", a missing field, or a non-positive value (the
-     * driver's uninitialised/min sentinel), so a bad read publishes nothing rather than a bogus 0/1 °C.
+     * input-axis units). Returns null for "ERR", a missing field, temperature outside the observed driver
+     * range (-40..125 °C), or humidity outside 0..100%, so a bad read publishes nothing. Humidity zero is
+     * retained as unavailable because these indoor vendor drivers use it as their uninitialised sentinel.
      */
     fun parseCht8305(raw: String?): RoomClimate? {
         if (raw.isNullOrBlank()) return null
@@ -135,7 +136,7 @@ object MetricParse {
             tok.startsWith("T=") -> t = tok.removePrefix("T=").toLongOrNull()
             tok.startsWith("H=") -> h = tok.removePrefix("H=").toLongOrNull()
         }
-        if (t == null || h == null || t <= 0 || h <= 0) return null
+        if (t == null || h == null || t !in -4_000..12_500 || h !in 1..10_000) return null
         return RoomClimate(t / 100.0, h / 100.0)
     }
 }

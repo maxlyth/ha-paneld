@@ -149,6 +149,10 @@ class SystemController(
     fun resolvedLauncher(configuredPkg: String): String? = pickLauncher(configuredPkg)?.pkg
 
     private fun pickLauncher(configuredPkg: String): io.github.maxlyth.hapaneld.platform.ActivityRef? {
+        // Our package exposes more than one HOME activity. PackageManager ordering is not a contract,
+        // so an explicit "ha-paneld" selection must never accidentally resolve to DashboardActivity.
+        // It means the on-demand panel-admin app drawer, regardless of the order returned below.
+        if (isAdminLauncherSelection(configuredPkg)) return adminLauncherActivity()
         val all = env.homeActivities()
         val default = env.defaultHome()?.pkg
         // Apps that register CATEGORY_HOME but are NOT an app-drawer launcher we'd want to land on:
@@ -177,14 +181,71 @@ class SystemController(
      * component, so it works even when no other launcher is installed.
      */
     fun launchAdminLauncher() {
-        val comp = "${env.ownPackage}/.AdminLauncherActivity"
+        val comp = adminLauncherActivity().component
         if (privilegedStart(comp) == PrivilegedStartResult.FAILED) env.directStart(comp)
         Log.i(TAG, "admin launcher -> $comp")
     }
 
+    /** True when Launcher app explicitly selects ha-paneld's panel-admin app drawer. */
+    fun isAdminLauncherSelection(configuredPkg: String): Boolean = configuredPkg == env.ownPackage
+
+    private fun adminLauncherActivity() =
+        io.github.maxlyth.hapaneld.platform.ActivityRef(env.ownPackage, ".AdminLauncherActivity")
+
+    /** Whether ha-paneld currently owns Android HOME. Android 14's HOME role is package-granular when
+     * one package has multiple HOME activities and may resolve DashboardActivity even after accepting
+     * AdminLauncherActivity. DashboardActivity routes real HOME intents to Panel admin when explicitly
+     * selected, so package ownership is the durable enforcement condition across platform versions. */
+    fun isAdminLauncherHome(): Boolean {
+        val current = env.defaultHome() ?: return false
+        return current.pkg == env.ownPackage
+    }
+
+    /** Force ha-paneld's admin launcher to be Android HOME. Unlike [ensureDashboardHome], this is an
+     * explicit override policy: it deliberately reclaims HOME from vendor and third-party launchers.
+     * The command is issued only on drift, making this safe for an immediate save, startup, and a
+     * periodic vendor-firmware drift check. Returns true when HOME was already correct or the repair
+     * command was accepted. */
+    fun ensureAdminLauncherHome(): Boolean = ensureAdminLauncherHomeWithRoute(null)
+
+    internal fun ensureAdminLauncherHome(admittedRoute: PrivilegeRoute): Boolean =
+        ensureAdminLauncherHomeWithRoute(admittedRoute)
+
+    private fun ensureAdminLauncherHomeWithRoute(admittedRoute: PrivilegeRoute?): Boolean {
+        if (isAdminLauncherHome()) return true
+        val comp = adminLauncherActivity().component
+        Log.i(TAG, "ensureHome(admin): default home was '${env.defaultHome()?.component}' -> $comp")
+        return setHomeActivity(comp, admittedRoute)
+    }
+
+    /** Apply the HOME policy associated with Launcher app. Explicit ha-paneld selection force-enforces
+     * [AdminLauncherActivity]; every other value restores the existing automatic dashboard policy.
+     * Returns true only for the explicit policy, allowing the service to arm/cancel its drift check. */
+    fun applyLauncherHomePolicy(
+        configuredLauncherPkg: String,
+        dashboardPkg: String,
+        builtinReady: Boolean = true,
+    ): Boolean {
+        if (isAdminLauncherSelection(configuredLauncherPkg)) {
+            ensureAdminLauncherHome()
+            return true
+        }
+        ensureDashboardHome(dashboardPkg, builtinReady)
+        return false
+    }
+
     /** Set the default HOME (launcher) to [component] ("pkg/cls"). Daemon SETHOME, else su. */
-    private fun setHomeActivity(component: String): Boolean {
+    private fun setHomeActivity(
+        component: String,
+        admittedRoute: PrivilegeRoute? = null,
+    ): Boolean {
         if (!AndroidInput.isComponent(component)) return false
+        if (admittedRoute != null) return when (admittedRoute) {
+            PrivilegeRoute.DAEMON -> daemon.send("SETHOME $component") == "OK"
+            PrivilegeRoute.SU -> root.run("cmd package set-home-activity $component")
+            PrivilegeRoute.SHIZUKU,
+            PrivilegeRoute.ACCESSIBILITY -> false
+        }
         return ShortOperationRouter.effect(
             EffectAttempt(PrivilegeRoute.DAEMON) { daemon.send("SETHOME $component") == "OK" },
             EffectAttempt(PrivilegeRoute.SU) { root.run("cmd package set-home-activity $component") },

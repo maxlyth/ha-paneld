@@ -8,6 +8,7 @@
 #include <unistd.h>
 
 #include "input.h"
+#include "gpio.h"
 #include "led.h"
 #include "screen.h"
 #include "server.h"
@@ -31,6 +32,7 @@ int main(int argc, char **argv) {
     sysexec_stub_reset();
     sysexec_stub_add_popen("screencap -p", "PNG\nfixture\n", 0);
     input_init();
+    gpio_init();
     screen_init();
     led_init();
 
@@ -63,6 +65,7 @@ int main(int argc, char **argv) {
         }
         server_serve(client);
         input_unsubscribe(client);
+        gpio_unsubscribe(client);
         close(client);
     }
 

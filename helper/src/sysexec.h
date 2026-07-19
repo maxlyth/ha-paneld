@@ -9,18 +9,28 @@
 //      real parsing/dispatch/validator code runs unmodified while a valid REBOOT/RELOAD/WATCH can't
 //      exec a command or spawn a looping thread on the build host — no per-call macro stubbing.
 //
-// The production implementation (sysexec.c) is a thin wrapper over system()/popen()/pthread.
+// The production implementation (sysexec.c) keeps shell execution restricted to audited,
+// argument-free constant scripts. Request-derived values must use the argv functions below.
 #ifndef HAPANELD_SYSEXEC_H
 #define HAPANELD_SYSEXEC_H
 
-#include <stdio.h>
+#include <stddef.h>
 
-// Run a shell command, blocking until it exits. Returns its raw status (0 typically = success).
-int   sysexec_run(const char *cmd);
+// Run an audited, argument-free constant shell program, blocking until it exits. Never pass request,
+// profile, environment, filesystem, or network-derived bytes. Returns the raw wait status.
+int   sysexec_run_constant(const char *program);
 
-// Run a shell command and return a read pipe of its stdout (NULL on failure — callers handle NULL).
-FILE *sysexec_popen_r(const char *cmd);
-int   sysexec_pclose(FILE *p);
+// Execute an absolute path with a structural argument vector, without a shell. When quiet is true,
+// stdin/stdout/stderr are connected to /dev/null. Returns the raw child wait status.
+int   sysexec_run_argv(const char *path, const char *const argv[], int quiet);
+
+// Execute an absolute path without a shell and capture bounded stdout. Output is always NUL
+// terminated when capacity is non-zero. Returns the raw child wait status, or -1 on I/O/fork error.
+int   sysexec_capture_argv(const char *path, const char *const argv[], char *output, size_t capacity);
+
+// Execute an absolute path without a shell and copy stdout to an already-open descriptor. The child
+// receives /dev/null on stdin and stderr. Returns the raw child wait status, or -1 on I/O/fork error.
+int   sysexec_stream_argv(const char *path, const char *const argv[], int output_fd);
 
 // Spawn a detached background thread running fn(arg). Returns 0 on success, non-zero on failure.
 int   sysexec_spawn(void *(*fn)(void *), void *arg);

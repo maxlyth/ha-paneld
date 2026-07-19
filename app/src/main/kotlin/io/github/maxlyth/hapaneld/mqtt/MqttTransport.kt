@@ -1,5 +1,7 @@
 package io.github.maxlyth.hapaneld.mqtt
 
+import java.util.concurrent.CompletableFuture
+
 /**
  * The MQTT client boundary — everything MqttBridge needs from the underlying client, behind an interface
  * so the connect / reconnect / onConnected lifecycle (the flow with the worst incident history) can be
@@ -12,20 +14,40 @@ interface MqttTransport {
 
     /** Detach + tear the current client down on a throwaway thread — a wedged client (the case that
      *  triggers a liveness rebuild) must never block the caller while the replacement connects. */
-    fun disconnectDetached()
+    fun disconnectDetached(): CompletableFuture<Unit>
 
-    /** Publish final retained values, wait for their QoS acknowledgements, then disconnect. A bounded
-     *  fallback still detaches a wedged client, and the entire operation must return immediately. */
-    fun publishThenDisconnect(publications: List<MqttFinalPublish>, timeoutMs: Long)
+    /** Publish final retained values, wait for their QoS acknowledgements, then disconnect. Admission
+     * returns immediately; the completion resolves only after ACK or the bounded timeout has detached
+     * the client, so lifecycle owners can prove final MQTT teardown without blocking their caller. */
+    fun publishThenDisconnect(
+        publications: List<MqttFinalPublish>,
+        timeoutMs: Long,
+    ): CompletableFuture<Unit>
 
-    /** Publish [payload] to [topic]; on a broker ACK, [MqttCallbacks.onPublishAck] fires (the QoS-1
-     *  liveness signal the reconnect watchdog trusts). No-op when there is no current client. */
-    fun publish(topic: String, payload: ByteArray, retain: Boolean, onComplete: ((Boolean) -> Unit)? = null)
+    /** Publish [payload] to [topic]; [onComplete] reports true only after the broker ACKs the QoS-1
+     * publication, and is scoped to the client that submitted it. No-op without a current client. */
+    fun publish(
+        topic: String,
+        payload: ByteArray,
+        retain: Boolean,
+        expectedConnection: MqttConnectionLease? = null,
+        onComplete: ((Boolean) -> Unit)? = null,
+    )
 
     /** Subscribe to [topicFilter]; [onMessage] receives (topic, payload, retained) per delivery. The
      *  retained flag lets the bridge reject stale retained commands (the never-blank incident guard). */
-    fun subscribe(topicFilter: String, onMessage: (topic: String, payload: ByteArray, retained: Boolean) -> Unit)
+    fun subscribe(
+        topicFilter: String,
+        expectedConnection: MqttConnectionLease? = null,
+        onMessage: (topic: String, payload: ByteArray, retained: Boolean) -> Unit,
+    )
+
+    /** True only while [connection] still identifies the active broker session. */
+    fun isCurrent(connection: MqttConnectionLease): Boolean
 }
+
+/** Opaque identity for one connected broker session, including automatic reconnects of one client. */
+class MqttConnectionLease internal constructor()
 
 data class MqttFinalPublish(val topic: String, val payload: ByteArray, val retain: Boolean)
 
@@ -44,10 +66,11 @@ data class MqttConnectConfig(
     val willPayload: String,
 )
 
-/** Lifecycle callbacks the transport invokes for the LIVE client only (superseded clients are filtered). */
+/** Lifecycle callbacks the transport invokes for the LIVE client only (superseded clients are filtered).
+ * Implementations must remain constant-time: HiveMqTransport calls them inside its tiny session lock so
+ * client/lease transition order and callback enqueue order cannot diverge. */
 interface MqttCallbacks {
-    fun onConnected()
+    fun onConnected(connection: MqttConnectionLease)
     /** False suppresses HiveMQ's in-place reconnect; the owner will build a fresh client. */
-    fun onDisconnected(causeMessage: String?): Boolean
-    fun onPublishAck()
+    fun onDisconnected(connection: MqttConnectionLease?, causeMessage: String?): Boolean
 }

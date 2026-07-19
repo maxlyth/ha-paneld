@@ -15,6 +15,75 @@ export MOCK_TARGET="panel.test:5555"
 export MOCK_CALL_LOG="$TMP/calls.log"
 export HAPANELD_HELPER_PROBE="$FIXTURES/helper-probe"
 export MOCK_HELPER_BUILD_ID="$(PATH=/usr/bin:/bin "$ROOT/helper/source-id.sh")"
+export PROVISION_TEST_CURL="$FIXTURES/curl"
+
+# The checked-in curl fixture predates Hardened mode. Keep its ordinary behavior intact while
+# modelling the successful HTTP 202 transport response returned for protected operations awaiting
+# local approval. Bash exports this function to the provisioner subprocess in place of curl(1).
+curl() {
+  local arg output_file="" want_output=0 want_status=0 status
+  case "$*" in
+    *'/api/v1/config/export?include_secrets=1'*)
+      if [ "${MOCK_EXPORT:-ok}" != ok ]; then
+        for arg in "$@"; do
+          if [ "$want_output" = 1 ]; then output_file="$arg"; want_output=0; continue; fi
+          case "$arg" in
+            -o|--output) want_output=1 ;;
+            -w|--write-out) want_status=1 ;;
+          esac
+        done
+        if [ -n "$output_file" ]; then
+          case "$MOCK_EXPORT" in
+            approval) printf '{"ok":false,"error":"approval-required","approval_id":"backup-test"}\n' > "$output_file" ;;
+            malformed-approval) printf '{"ok":false,"error":"unexpected"}\n' > "$output_file" ;;
+            unexpected-2xx) printf '{"status":"created"}\n' > "$output_file" ;;
+          esac
+        else
+          case "$MOCK_EXPORT" in
+            approval) printf '{"ok":false,"error":"approval-required","approval_id":"backup-test"}\n' ;;
+            malformed-approval) printf '{"ok":false,"error":"unexpected"}\n' ;;
+            unexpected-2xx) printf '{"status":"created"}\n' ;;
+          esac
+        fi
+        if [ "$want_status" = 1 ]; then
+          case "$MOCK_EXPORT" in
+            approval|malformed-approval) printf '202' ;;
+            unexpected-2xx) printf '201' ;;
+          esac
+        fi
+        return 0
+      fi
+      command "$PROVISION_TEST_CURL" "$@"; status=$?
+      [ "$status" -ne 0 ] || printf '200'
+      return "$status"
+      ;;
+    *'/api/v1/config/import'*)
+      if [ "${MOCK_RESTORE:-ok}" != ok ]; then
+        if [ "$MOCK_RESTORE" = timeout ]; then
+          command "$PROVISION_TEST_CURL" "$@"
+          return $?
+        fi
+        case "$MOCK_RESTORE" in
+          approval)
+            printf '{"ok":false,"error":"approval-required","approval_id":"import-test"}\n202'
+            ;;
+          malformed-approval)
+            printf '{"ok":false,"error":"unexpected"}\n202'
+            ;;
+          unexpected-2xx)
+            printf '{"status":"created"}\n201'
+            ;;
+        esac
+        return 0
+      fi
+      command "$PROVISION_TEST_CURL" "$@"; status=$?
+      [ "$status" -ne 0 ] || printf '200'
+      return "$status"
+      ;;
+  esac
+  command "$PROVISION_TEST_CURL" "$@"
+}
+export -f curl
 MOCK_HELPER_DIST="$TMP/helper-dist"
 mkdir -p "$MOCK_HELPER_DIST/armeabi-v7a" "$MOCK_HELPER_DIST/arm64-v8a"
 printf 'mock arm helper\nBUILDID %s\n' "$MOCK_HELPER_BUILD_ID" > "$MOCK_HELPER_DIST/armeabi-v7a/hapaneld-helper"
@@ -27,8 +96,10 @@ LAST_OUTPUT=""
 LAST_STATUS=0
 
 run_provision() {
+  local unsigned_ack=()
+  [ "${RUN_UNSIGNED_ACK:-1}" != 1 ] || unsigned_ack=(--allow-unsigned-helper)
   : > "$MOCK_CALL_LOG"
-  rm -f "$TMP/diag-attempts"
+  rm -f "$TMP/diag-attempts" "$TMP/write-settings-granted" "$TMP/accessibility-services" "$TMP/accessibility-enabled"
   rm -f "$TMP/plan-attempts"
   rm -f "$TMP/stale-helper-transaction" "$TMP/active-helper-transaction"
   if [ "${MOCK_STALE_TRANSACTION:-0}" = 1 ]; then : > "$TMP/stale-helper-transaction"; fi
@@ -66,7 +137,12 @@ run_provision() {
   MOCK_ROOT="${MOCK_ROOT:-1}" \
   MOCK_ABI="${MOCK_ABI:-arm64-v8a}" \
   MOCK_SYSTEM_WRITABLE="${MOCK_SYSTEM_WRITABLE:-1}" \
+  MOCK_SYSTEM_CAPACITY="${MOCK_SYSTEM_CAPACITY:-valid}" \
+  MOCK_SYSTEM_AVAIL_KB="${MOCK_SYSTEM_AVAIL_KB:-1048576}" \
+  MOCK_DEVICE_AWK="${MOCK_DEVICE_AWK:-present}" \
   MOCK_SYSTEMLESS_RUNNER="${MOCK_SYSTEMLESS_RUNNER:-1}" \
+  MOCK_VENDOR_INIT_RW="${MOCK_VENDOR_INIT_RW:-1}" \
+  MOCK_VENDOR_RC_STATE="${MOCK_VENDOR_RC_STATE:-missing}" \
   MOCK_HELPER_INSTALL="${MOCK_HELPER_INSTALL:-ok}" \
   MOCK_HELPER_COMMIT="${MOCK_HELPER_COMMIT:-ok}" \
   MOCK_COMMIT_LIVE_STATE="${MOCK_COMMIT_LIVE_STATE:-TARGET}" \
@@ -92,8 +168,11 @@ run_provision() {
   MOCK_SU_DIALECT="${MOCK_SU_DIALECT:-join}" \
   MOCK_SHIZUKU_START="${MOCK_SHIZUKU_START:-ok}" \
   MOCK_SHIZUKU_START_SCRIPT="${MOCK_SHIZUKU_START_SCRIPT:-ok}" \
+  MOCK_SHIZUKU_INSPECT="${MOCK_SHIZUKU_INSPECT:-ok}" \
+  MOCK_SHIZUKU_INSPECT_PID_FILE="${MOCK_SHIZUKU_INSPECT_PID_FILE:-}" \
   MOCK_SHIZUKU_INSTALL="${MOCK_SHIZUKU_INSTALL:-ok}" \
   MOCK_SHIZUKU_INSTALL_PID_FILE="${MOCK_SHIZUKU_INSTALL_PID_FILE:-}" \
+  SHIZUKU_INSPECT_TIMEOUT_SECONDS="${SHIZUKU_INSPECT_TIMEOUT_SECONDS:-20}" \
   SHIZUKU_INSTALL_TIMEOUT_SECONDS="${SHIZUKU_INSTALL_TIMEOUT_SECONDS:-180}" \
   ROOT_HELPER_LEASE_GUARD_INTERVAL_SECONDS="${ROOT_HELPER_LEASE_GUARD_INTERVAL_SECONDS:-60}" \
   MOCK_OPENSSL_MISSING="${MOCK_OPENSSL_MISSING:-0}" \
@@ -101,7 +180,14 @@ run_provision() {
   HAPANELD_HELPER_DIST_DIR="${HAPANELD_HELPER_DIST_DIR:-$MOCK_HELPER_DIST}" \
   MOCK_STATE_DIR="$TMP" \
   PROVISIONING_PLAN_TIMEOUT_SECONDS="${PROVISIONING_PLAN_TIMEOUT_SECONDS:-2}" \
-    bash "$PROVISION" "$@" > "$LAST_OUTPUT" 2>&1
+  HA_AUTH_CONNECT_TIMEOUT_SECONDS="${HA_AUTH_CONNECT_TIMEOUT_SECONDS:-1}" \
+  HA_AUTH_TIMEOUT_SECONDS="${HA_AUTH_TIMEOUT_SECONDS:-1}" \
+  PANEL_POST_CONNECT_TIMEOUT_SECONDS="${PANEL_POST_CONNECT_TIMEOUT_SECONDS:-1}" \
+  PANEL_POST_TIMEOUT_SECONDS="${PANEL_POST_TIMEOUT_SECONDS:-1}" \
+  PANEL_RESTORE_TIMEOUT_SECONDS="${PANEL_RESTORE_TIMEOUT_SECONDS:-1}" \
+  APK_INSTALL_TIMEOUT_SECONDS="${APK_INSTALL_TIMEOUT_SECONDS:-30}" \
+  MOCK_APK_INSTALL_PID_FILE="${MOCK_APK_INSTALL_PID_FILE:-}" \
+    bash "$PROVISION" "$@" "${unsigned_ack[@]}" > "$LAST_OUTPUT" 2>&1
   LAST_STATUS=$?
 }
 
@@ -159,6 +245,54 @@ assert_log_contains() {
   else fail_test "$description (missing call pattern: $pattern)"; fi
 }
 
+CAPACITY_PROBE_SOURCE="$(sed -n '
+  /# HAPANELD_CAPACITY_PROBE_BEGIN/,/# HAPANELD_CAPACITY_PROBE_END/ {
+    /# HAPANELD_CAPACITY_PROBE_BEGIN/d
+    /# HAPANELD_CAPACITY_PROBE_END/d
+    p
+  }
+' "$PROVISION")"
+
+run_capacity_probe_fixture() {
+  local state="$1" df_output="" prelude
+  case "$state" in
+    valid)
+      df_output='Filesystem 1024-blocks Used Available Capacity Mounted on
+/dev/block/platform/soc/by-name/system 2064192 1965516 98676 96% /system'
+      ;;
+    malformed)
+      df_output='Filesystem 1024-blocks Used Available Capacity Mounted on
+/dev/block/platform/soc/by-name/system 2064192 1965516 unknown 96% /system'
+      ;;
+    ambiguous)
+      df_output='Filesystem 1024-blocks Used Available Capacity Mounted on
+/dev/block/dm-0 2064192 1965516 98676 96% /system
+/dev/block/dm-1 2064192 1965516 98676 96% /system'
+      ;;
+    missing) ;;
+  esac
+  case "$state" in
+    missing-df)
+      prelude='sed() { /bin/sed "$@"; }'
+      ;;
+    missing-sed)
+      prelude='df() {
+        [ "$#" -eq 3 ] && [ "$1" = -P ] && [ "$2" = -k ] && [ "$3" = /system ] || return 2
+        printf "%s\n" "$CAPACITY_DF_OUTPUT"
+      }'
+      ;;
+    *)
+      prelude='df() {
+        [ "$#" -eq 3 ] && [ "$1" = -P ] && [ "$2" = -k ] && [ "$3" = /system ] || return 2
+        printf "%s\n" "$CAPACITY_DF_OUTPUT"
+      }
+      sed() { /bin/sed "$@"; }'
+      ;;
+  esac
+  CAPACITY_DF_OUTPUT="$df_output" PATH="$TMP/no-device-tools" /bin/sh -c "$prelude
+$CAPACITY_PROBE_SOURCE"
+}
+
 make_local_apk() {
   apk_path="$1"
   arm_helper="$2"
@@ -188,12 +322,18 @@ mkdir -p "$NO_SIGNER_FIXTURES"
 for fixture in "$FIXTURES"/*; do
   [ "$(basename "$fixture")" = apksigner ] || ln -s "$fixture" "$NO_SIGNER_FIXTURES/$(basename "$fixture")"
 done
+NO_GH_FIXTURES="$TMP/fixtures-without-gh"
+mkdir -p "$NO_GH_FIXTURES"
+for fixture in "$FIXTURES"/*; do
+  [ "$(basename "$fixture")" = gh ] || ln -s "$fixture" "$NO_GH_FIXTURES/$(basename "$fixture")"
+done
 
 # Export is a recovery operation. It must be possible before resolving or installing an APK.
 EXPORT="$TMP/panel-backup.json"
 run_provision "$MOCK_TARGET" --export "$EXPORT"
 assert_success "export-only succeeds"
 if [ -s "$EXPORT" ]; then pass "export-only writes a non-empty bundle"; else fail_test "export-only writes a non-empty bundle"; fi
+if [ "$(stat -c '%a' "$EXPORT")" = 600 ]; then pass "secret export is owner-readable only"; else fail_test "secret export is owner-readable only"; fi
 assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "export-only never installs an APK"
 assert_not_contains '^adb .* (install|shell (settings put|appops set|pm grant|am start))|^curl .* (-X POST|--data|--data-urlencode)' "$MOCK_CALL_LOG" "export-only performs no panel mutation"
 
@@ -202,6 +342,32 @@ MOCK_EXPORT=fail run_provision "$MOCK_TARGET" --export "$FAILED_EXPORT" --apk "$
 assert_failure "failed pre-install backup returns nonzero"
 assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "failed pre-install backup stops before APK install"
 if [ ! -e "$FAILED_EXPORT" ]; then pass "failed backup leaves no misleading output file"; else fail_test "failed backup leaves no misleading output file"; fi
+
+APPROVAL_EXPORT="$TMP/approval-required-backup.json"
+MOCK_EXPORT=approval run_provision "$MOCK_TARGET" --export "$APPROVAL_EXPORT" --apk "$APK"
+assert_failure "approval-required backup returns nonzero"
+assert_contains 'config export requires approval on the panel' "approval-required config export is not reported as successful"
+assert_contains 'Review approvals.*approve the config export.*retry the identical --export command' "approval-required config export gives the on-panel approval and retry path"
+assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "approval-required backup stops before APK install"
+if [ ! -e "$APPROVAL_EXPORT" ]; then pass "approval response is not retained as a backup"; else fail_test "approval response is not retained as a backup"; fi
+
+for export_case in malformed-approval unexpected-2xx; do
+  REJECTED_EXPORT="$TMP/rejected-${export_case}-backup.json"
+  MOCK_EXPORT="$export_case" run_provision "$MOCK_TARGET" --export "$REJECTED_EXPORT" --apk "$APK"
+  assert_failure "$export_case backup response returns nonzero"
+  assert_contains 'config export returned unexpected HTTP' "$export_case config export response is rejected"
+  assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "$export_case backup response stops before APK install"
+  if [ ! -e "$REJECTED_EXPORT" ]; then pass "$export_case response is not retained as a backup"; else fail_test "$export_case response is not retained as a backup"; fi
+done
+
+SYMLINK_TARGET="$TMP/symlink-target.json"
+SYMLINK_EXPORT="$TMP/symlink-backup.json"
+printf 'do not replace\n' > "$SYMLINK_TARGET"
+ln -s "$SYMLINK_TARGET" "$SYMLINK_EXPORT"
+run_provision "$MOCK_TARGET" --export "$SYMLINK_EXPORT"
+assert_failure "secret export refuses a symlink destination"
+assert_contains 'refusing to replace a symlink' "symlink refusal explains the safe destination requirement"
+if [ "$(cat "$SYMLINK_TARGET")" = 'do not replace' ]; then pass "symlink target remains untouched"; else fail_test "symlink target remains untouched"; fi
 
 # Verification is explicitly read-only and must not even attempt installation.
 run_provision "$MOCK_TARGET" --verify
@@ -227,13 +393,31 @@ assert_contains 'could not complete profile verification' "unstable verify expla
 assert_not_contains '^curl .* (-X POST|--data|--data-urlencode)' "$MOCK_CALL_LOG" "unstable verify remains GET-only"
 unset MOCK_PLAN PROVISIONING_PLAN_TIMEOUT_SECONDS
 
+MOCK_PLAN=control run_provision "$MOCK_TARGET" --verify
+assert_success "verify strips terminal controls from remote provisioning guidance"
+if LC_ALL=C grep -q $'\033' "$LAST_OUTPUT"; then fail_test "remote provisioning guidance contains no terminal escape bytes"
+else pass "remote provisioning guidance contains no terminal escape bytes"; fi
+assert_contains 'Detected panel: Hostile.*forged title' "sanitized provisioning guidance retains readable text"
+unset MOCK_PLAN
+
 # A normal local install must work with only portable shell facilities. The fixture PATH deliberately
 # supplies failing seq and GNU sort -V implementations; invoking either makes this test fail.
+RUN_UNSIGNED_ACK=0 run_provision "$MOCK_TARGET" --apk "$APK"
+assert_failure "unsigned local APK cannot install a privileged helper without developer acknowledgement"
+assert_contains 're-run with --allow-unsigned-helper' "unsigned helper refusal names the explicit developer flag"
+assert_not_contains '^adb .* (push .*/hapaneld-helper|install( |$))' "$MOCK_CALL_LOG" "unsigned helper refusal happens before privileged or package installation"
+
+RUN_UNSIGNED_ACK=0 MOCK_ROOT=0 run_provision "$MOCK_TARGET" --apk "$APK"
+assert_success "unrooted local install does not require irrelevant helper acknowledgement"
+assert_contains 'no root path available.*continuing without the root helper' "unrooted local install explains why no privileged bytes were used"
+
 run_provision "$MOCK_TARGET" --apk "$APK"
 assert_success "successful install completes without seq or GNU sort -V"
 if grep -Eq '^adb .* install( |$)' "$MOCK_CALL_LOG"; then pass "successful install invokes adb install"
 else fail_test "successful install invokes adb install"; fi
 assert_contains 'provisioned' "successful install reports completion"
+assert_contains 'inspecting version.*installed ha-paneld package' "install reports installed-version inspection before mutation"
+assert_contains 'inspecting access.*root route.*helper compatibility' "install reports privilege and helper inspection"
 assert_contains 'Detected panel: Test Panel' "successful install identifies the resolved panel profile"
 assert_not_contains '/api/v1/tame' "$MOCK_CALL_LOG" "ordinary install never auto-applies profile recommendations"
 start_line="$(grep -nE '^adb .* shell am start -n ' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
@@ -258,7 +442,8 @@ unset MOCK_PLAN
 MOCK_PLAN=missing MOCK_WEBVIEW_VERSION=80.0.0.0 run_provision "$MOCK_TARGET" --apk "$APK"
 assert_failure "new install fails when its paired provisioning-plan endpoint is missing"
 assert_contains 'does not provide.*paired provisioning-plan endpoint|cannot be verified as complete' "missing paired endpoint explains the release contract"
-assert_contains 'Root daemon: required' "missing plan retains the legacy helper guidance"
+assert_contains 'Root helper: needed only' "missing plan retains conservative helper guidance"
+assert_contains 'Do not infer this from the SoC' "missing plan does not infer root authority from chipset"
 assert_contains 'system WebView is very old' "missing plan retains the legacy WebView guidance"
 assert_not_contains '/api/v1/tame' "$MOCK_CALL_LOG" "missing plan never falls back to automatic taming"
 unset MOCK_PLAN MOCK_WEBVIEW_VERSION
@@ -274,7 +459,7 @@ MOCK_PLAN=recommendations MOCK_WEBVIEW_VERSION=80.0.0.0 run_provision "$MOCK_TAR
 assert_success "unsatisfied profile recommendations do not fail an ordinary install"
 assert_contains 'Recommended: install the root helper' "app-owned helper recommendation is displayed"
 assert_contains 'Recommended: update System WebView' "app-owned WebView recommendation is displayed"
-assert_not_contains 'Root daemon: required|system WebView is very old' "$LAST_OUTPUT" \
+assert_not_contains 'Root helper: needed only|system WebView is very old' "$LAST_OUTPUT" \
   "available plan suppresses duplicate blanket helper and WebView guidance"
 assert_not_contains '/api/v1/tame|action=recommended' "$MOCK_CALL_LOG" "recommendations cause no hidden mutation"
 unset MOCK_PLAN MOCK_WEBVIEW_VERSION
@@ -407,6 +592,90 @@ assert_contains 'read-only /system and no verified systemless boot-service runne
 assert_contains 'Magisk, KernelSU, or APatch' "missing persistence mechanism gives supported recovery choices"
 assert_not_contains '/data/adb/service\.d/hapaneld-helper\.sh\.new|^adb .* install( |$)' "$MOCK_CALL_LOG" "unverified service.d path never installs a helper or replaces the APK"
 
+# Stock NSPanel Pro firmware can have a writable but full /system. The zero-byte writability probe
+# is not enough: capacity must be established before choosing a transactional install authority.
+MOCK_SYSTEM_AVAIL_KB=12 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "writable /system without helper capacity installs through the hybrid layout"
+assert_contains '/system has 12KB free; [0-9]+KB is required' "hybrid selection explains the capacity-driven layout"
+assert_log_contains 'helper-transaction-[0-9a-f]+.*install-hybrid' "full /system selects the hybrid transactional installer"
+assert_not_contains 'helper-transaction-[0-9a-f]+.*install-(system|systemless)([^a-z]|$)' "$MOCK_CALL_LOG" "hybrid selection invokes no second boot authority"
+
+# Android 8.1 images commonly provide df and sed but no standalone awk. Capacity detection must use
+# only the portable device-side tools and still choose the correct transaction layout.
+capacity_fixture_output="$(run_capacity_probe_fixture valid)"
+if [ "$capacity_fixture_output" = 'SYSTEM_AVAIL_KB=98676' ]; then
+  pass "the exact device parser accepts Android 8.1 df output without awk"
+else
+  fail_test "the exact device parser accepts Android 8.1 df output without awk"
+fi
+for capacity_state in missing missing-df missing-sed malformed ambiguous; do
+  capacity_fixture_output="$(run_capacity_probe_fixture "$capacity_state")"
+  if [ "$capacity_fixture_output" = 'SYSTEM_CAPACITY_UNKNOWN' ]; then
+    pass "the exact device parser rejects $capacity_state capacity output"
+  else
+    fail_test "the exact device parser rejects $capacity_state capacity output"
+  fi
+done
+
+MOCK_DEVICE_AWK=missing MOCK_SYSTEM_AVAIL_KB=12 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "an awk-less Android shell still determines writable-system capacity"
+assert_log_contains 'df -P -k /system' "capacity probing requests one portable POSIX-format row"
+assert_not_contains 'df[^|]*/system[^|]*\|[[:space:]]*awk' "$MOCK_CALL_LOG" \
+  "capacity probing has no device-side awk dependency"
+
+for capacity_state in missing missing-df missing-sed malformed ambiguous; do
+  MOCK_SYSTEM_CAPACITY="$capacity_state" run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+  assert_failure "$capacity_state /system capacity fails closed"
+  assert_contains 'system capacity could not be determined safely' \
+    "$capacity_state capacity gives a safe retry reason"
+  assert_not_contains 'helper-transaction-[0-9a-f]+.*install-(system|systemless|hybrid)|^adb .* install( |$)' "$MOCK_CALL_LOG" \
+    "$capacity_state capacity stops before a helper transaction or APK replacement"
+done
+
+MOCK_SYSTEM_AVAIL_KB=12 MOCK_VENDOR_INIT_RW=0 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_failure "full /system without writable vendor init authority fails closed"
+assert_contains '/vendor/etc/init.*not writable|writable.*vendor.*init' "vendor-blocked hybrid names the unavailable boot authority"
+assert_not_contains 'helper-transaction-[0-9a-f]+.*install-(system|systemless|hybrid)|^adb .* install( |$)' "$MOCK_CALL_LOG" \
+  "unwritable vendor init stops before a helper transaction or APK replacement"
+
+MOCK_SYSTEM_AVAIL_KB=1048576 MOCK_VENDOR_RC_STATE=managed MOCK_VENDOR_INIT_RW=0 \
+  run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_failure "an established hybrid layout fails closed when its vendor authority becomes unwritable"
+assert_contains '/vendor/etc/init.*not writable|writable.*vendor.*init' "unwritable managed hybrid gives a direct recovery reason"
+assert_not_contains 'helper-transaction-[0-9a-f]+.*install-(system|systemless|hybrid)|^adb .* install( |$)' "$MOCK_CALL_LOG" \
+  "unwritable managed hybrid stops before a helper transaction or APK replacement"
+
+MOCK_SYSTEM_AVAIL_KB=12 MOCK_VENDOR_RC_STATE=unexpected run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_failure "an unexpected vendor startup file is never overwritten"
+assert_contains 'unexpected existing /vendor/etc/init/hapaneld-helper\.rc' "unexpected vendor authority is identified"
+assert_not_contains 'helper-transaction-[0-9a-f]+.*install-(system|systemless|hybrid)|^adb .* install( |$)' "$MOCK_CALL_LOG" \
+  "unexpected vendor authority stops before a helper transaction or APK replacement"
+
+MOCK_SYSTEM_AVAIL_KB=1048576 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "ample writable /system keeps the normal system layout"
+assert_log_contains 'helper-transaction-[0-9a-f]+.*install-system' "ample capacity selects the system transactional installer"
+assert_not_contains 'helper-transaction-[0-9a-f]+.*install-hybrid' "$MOCK_CALL_LOG" "ample capacity does not create a new hybrid layout"
+
+MOCK_SYSTEM_AVAIL_KB=1023 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "capacity immediately below the transactional floor selects hybrid"
+assert_log_contains 'helper-transaction-[0-9a-f]+.*install-hybrid' "1023KB remains below the minimum safe transactional headroom"
+
+MOCK_SYSTEM_AVAIL_KB=1024 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "capacity at the transactional floor keeps the system layout"
+assert_log_contains 'helper-transaction-[0-9a-f]+.*install-system' "1024KB meets the minimum safe transactional headroom"
+assert_not_contains 'helper-transaction-[0-9a-f]+.*install-hybrid' "$MOCK_CALL_LOG" "the exact capacity floor does not route to hybrid"
+
+MOCK_SYSTEM_AVAIL_KB=1048576 MOCK_VENDOR_RC_STATE=managed \
+  run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "an established hybrid layout remains sticky when /system later has space"
+assert_log_contains 'helper-transaction-[0-9a-f]+.*install-hybrid' "sticky hybrid upgrades through its existing authority"
+assert_not_contains 'helper-transaction-[0-9a-f]+.*install-system([^l]|$)' "$MOCK_CALL_LOG" "sticky hybrid does not migrate implicitly to system"
+
+HAPANELD_HELPER_PROBE= MOCK_SYSTEM_AVAIL_KB=12 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "hybrid validation invokes the exact newly installed data helper"
+assert_log_contains 'exec /data/adb/hapaneld/hapaneld-helper --request COMPANIONCAPS' "hybrid validation probes the data helper"
+assert_not_contains 'exec /system/bin/hapaneld-helper --request' "$MOCK_CALL_LOG" "hybrid validation never probes the alternate system helper"
+
 MOCK_MANUAL_STALE=1 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
 assert_failure "provisioning routes an interrupted standalone helper journal back to its owning installer"
 assert_contains 'incomplete standalone root-helper installation must be recovered first' "manual-to-provision handoff names the cross-tool boundary"
@@ -434,6 +703,9 @@ assert_not_contains 'helper-transaction-[0-9a-f]+.*(status|rollback|commit)-(sys
 # before the APK is replaced.
 run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
 assert_success "current release installs its sealed root-helper asset"
+assert_contains 'root helper.*downloading ha-paneld-helper-v0\.9\.4-rc1-arm64-v8a' "release provisioning reports the helper download stage"
+assert_contains 'authenticating helper.*v0\.9\.4-rc1.*arm64-v8a' "release provisioning reports helper proof inspection"
+assert_contains 'helper compatibility.*authenticated provisioner.*build identity' "release provisioning reports paired helper identity inspection"
 assert_log_contains '^curl .*releases/download/v0\.9\.4-rc1/ha-paneld-helper-v0\.9\.4-rc1-arm64-v8a -o ' "release provisioning downloads the exact ABI helper asset"
 assert_log_contains '^curl .*ha-paneld-helper-v0\.9\.4-rc1-arm64-v8a\.sha256 -o ' "release provisioning downloads the helper checksum"
 assert_log_contains '^curl .*ha-paneld-helper-v0\.9\.4-rc1-arm64-v8a\.sha256\.sig -o ' "release provisioning downloads the helper checksum signature"
@@ -525,6 +797,20 @@ assert_contains 'systemless root-helper install failed; the prior helper was pre
 assert_log_contains 'helper-transaction-[0-9a-f]+.*rollback-systemless' "failed systemless transaction invokes its rollback journal"
 assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "failed systemless transaction does not replace the APK"
 
+MOCK_SYSTEM_AVAIL_KB=12 MOCK_HELPER_INSTALL=fail \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_failure "hybrid helper install failure leaves the previous APK installed"
+assert_contains 'hybrid root-helper install failed; the prior helper was preserved or restored' "hybrid install failure reports its rollback outcome"
+assert_log_contains 'helper-transaction-[0-9a-f]+.*rollback-hybrid' "failed hybrid transaction invokes its rollback journal"
+assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "failed hybrid transaction does not replace the APK"
+
+MOCK_SYSTEM_AVAIL_KB=12 MOCK_HELPER_CAPABILITY=fail \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_failure "hybrid helper capability failure leaves the previous APK installed"
+assert_contains 'new root helper failed its capability check; the prior helper was restored' "hybrid capability failure reports verified rollback"
+assert_log_contains 'helper-transaction-[0-9a-f]+.*rollback-hybrid' "hybrid capability failure invokes its rollback journal"
+assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "hybrid capability failure stops before APK replacement"
+
 MOCK_HELPER_BUILD_ID_MATCH=fail \
   run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
 assert_failure "helper build-identity mismatch leaves the previous APK installed"
@@ -553,6 +839,55 @@ assert_contains 'prior root helper was restored and verified' "systemless APK fa
 assert_log_contains 'helper-transaction-[0-9a-f]+.*rollback-systemless' "systemless APK failure invokes the retained rollback journal"
 assert_not_contains 'helper-transaction-[0-9a-f]+.*commit-systemless' "$MOCK_CALL_LOG" "systemless APK failure never commits helper recovery"
 
+MOCK_SYSTEM_AVAIL_KB=12 MOCK_APK_INSTALL=fail \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_failure "APK failure also rolls back a hybrid helper upgrade"
+assert_contains 'prior root helper was restored and verified' "hybrid APK failure reports helper rollback"
+assert_log_contains 'helper-transaction-[0-9a-f]+.*rollback-hybrid' "hybrid APK failure invokes the retained rollback journal"
+assert_not_contains 'helper-transaction-[0-9a-f]+.*commit-hybrid' "$MOCK_CALL_LOG" "hybrid APK failure never commits helper recovery"
+
+APK_INSTALL_PID_FILE="$TMP/apk-install-hang.pid"
+MOCK_APK_INSTALL=ignore_term MOCK_APK_INSTALL_PID_FILE="$APK_INSTALL_PID_FILE" \
+APK_INSTALL_TIMEOUT_SECONDS=1 \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_failure "stuck main APK install returns nonzero at its host deadline"
+assert_contains 'install did not finish within the 1s safety deadline' "main APK timeout names the bounded failed step"
+apk_install_pid="$(cat "$APK_INSTALL_PID_FILE" 2>/dev/null || true)"
+if [ -n "$apk_install_pid" ] && ! kill -0 "$apk_install_pid" 2>/dev/null; then
+  pass "main APK timeout reaps the blocked adb install"
+else
+  fail_test "main APK timeout reaps the blocked adb install"
+fi
+if [ "$(grep -Ec '^adb .* install( |$)' "$MOCK_CALL_LOG")" -eq 1 ]; then
+  pass "ambiguous main APK timeout is not retried with different install flags"
+else
+  fail_test "ambiguous main APK timeout is not retried with different install flags"
+fi
+assert_log_contains 'helper-transaction-[0-9a-f]+.*rollback-system' "main APK timeout reconciles and rolls back the retained helper transaction"
+
+HYBRID_APK_INSTALL_PID_FILE="$TMP/hybrid-apk-install-hang.pid"
+MOCK_SYSTEM_AVAIL_KB=12 MOCK_APK_INSTALL=ignore_term MOCK_APK_INSTALL_PID_FILE="$HYBRID_APK_INSTALL_PID_FILE" \
+APK_INSTALL_TIMEOUT_SECONDS=1 \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_failure "stuck APK install on the hybrid path returns nonzero at its host deadline"
+assert_contains 'install did not finish within the 1s safety deadline' "hybrid APK timeout retains the bounded failure reason"
+hybrid_apk_install_pid="$(cat "$HYBRID_APK_INSTALL_PID_FILE" 2>/dev/null || true)"
+if [ -n "$hybrid_apk_install_pid" ] && ! kill -0 "$hybrid_apk_install_pid" 2>/dev/null; then
+  pass "hybrid APK timeout reaps the blocked adb install"
+else
+  fail_test "hybrid APK timeout reaps the blocked adb install"
+fi
+assert_log_contains 'helper-transaction-[0-9a-f]+.*rollback-hybrid' "hybrid APK timeout reconciles and rolls back its retained transaction"
+
+MOCK_APK_INSTALL=grant_flag_unsupported \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_success "exact unsupported grant-all diagnostic retries a plain install"
+if [ "$(grep -Ec '^adb .* install( |$)' "$MOCK_CALL_LOG")" -eq 2 ]; then
+  pass "grant-all fallback performs exactly one classified plain retry"
+else
+  fail_test "grant-all fallback performs exactly one classified plain retry"
+fi
+
 MOCK_APK_INSTALL=ambiguous_commit \
   run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
 assert_success "transport loss after package-manager commit is reconciled from exact installed APK bytes"
@@ -561,6 +896,22 @@ assert_log_contains '^adb .* shell pm path io\.github\.maxlyth\.hapaneld$' "ambi
 assert_log_contains '^adb .* pull /data/app/io\.github\.maxlyth\.hapaneld/base\.apk ' "ambiguous install outcome authenticates the installed base APK"
 assert_log_contains 'helper-transaction-[0-9a-f]+.*commit-system' "confirmed package-manager commit also commits helper recovery"
 assert_not_contains 'helper-transaction-[0-9a-f]+.*rollback-system' "$MOCK_CALL_LOG" "confirmed package-manager commit never rolls the matching helper back"
+if [ "$(grep -Ec '^adb .* install( |$)' "$MOCK_CALL_LOG")" -eq 1 ]; then
+  pass "ambiguous committed install is reconciled without replay"
+else
+  fail_test "ambiguous committed install is reconciled without replay"
+fi
+
+MOCK_SYSTEM_AVAIL_KB=12 MOCK_APK_INSTALL=ambiguous_commit \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_success "hybrid transport loss after package-manager commit reconciles exact installed APK bytes"
+assert_log_contains 'helper-transaction-[0-9a-f]+.*commit-hybrid' "confirmed package-manager commit commits hybrid recovery"
+assert_not_contains 'helper-transaction-[0-9a-f]+.*rollback-hybrid' "$MOCK_CALL_LOG" "confirmed hybrid package-manager commit is never rolled back"
+if [ "$(grep -Ec '^adb .* install( |$)' "$MOCK_CALL_LOG")" -eq 1 ]; then
+  pass "ambiguous committed hybrid install is reconciled without replay"
+else
+  fail_test "ambiguous committed hybrid install is reconciled without replay"
+fi
 
 MOCK_HELPER_COMMIT=fail \
   run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
@@ -727,6 +1078,43 @@ assert_log_contains 'helper-transaction-[0-9a-f]+.*rollback-systemless' "systeml
 assert_log_contains 'helper-transaction-[0-9a-f]+.*install-system' "systemless-to-system transition installs only after recovery"
 
 MOCK_STALE_TRANSACTION=1 \
+MOCK_STALE_TRANSACTION_KIND=systemless \
+MOCK_SYSTEM_AVAIL_KB=12 \
+MOCK_INSTALLED_APK_SOURCE="$RELEASE_APK" \
+MOCK_STALE_APK_SHA256="$helper_release_apk_sha" \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_success "hybrid provisioning recovers a stale systemless journal before changing authority"
+assert_log_contains 'helper-transaction-[0-9a-f]+.*status-systemless' "systemless-to-hybrid transition reads the retained systemless journal"
+assert_log_contains 'helper-transaction-[0-9a-f]+.*rollback-systemless' "systemless-to-hybrid transition restores the owning transaction"
+assert_log_contains 'helper-transaction-[0-9a-f]+.*install-hybrid' "systemless-to-hybrid transition selects one new boot authority after recovery"
+assert_not_contains 'helper-transaction-[0-9a-f]+.*install-(system|systemless)([^a-z]|$)' "$MOCK_CALL_LOG" "systemless-to-hybrid transition invokes no duplicate installer"
+
+MOCK_STALE_TRANSACTION=1 \
+MOCK_STALE_TRANSACTION_KIND=system \
+MOCK_SYSTEM_AVAIL_KB=12 \
+MOCK_INSTALLED_APK_SOURCE="$RELEASE_APK" \
+MOCK_STALE_APK_SHA256="$helper_release_apk_sha" \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_success "hybrid provisioning recovers a stale system journal before changing authority"
+assert_log_contains 'helper-transaction-[0-9a-f]+.*status-system' "system-to-hybrid transition reads the retained system journal"
+assert_log_contains 'helper-transaction-[0-9a-f]+.*rollback-system' "system-to-hybrid transition restores the owning transaction"
+assert_log_contains 'helper-transaction-[0-9a-f]+.*install-hybrid' "system-to-hybrid transition selects one new boot authority after recovery"
+assert_not_contains 'helper-transaction-[0-9a-f]+.*install-(system|systemless)([^a-z]|$)' "$MOCK_CALL_LOG" "system-to-hybrid transition invokes no duplicate installer"
+
+MOCK_STALE_TRANSACTION=1 \
+MOCK_STALE_TRANSACTION_KIND=hybrid \
+MOCK_SYSTEM_AVAIL_KB=1048576 \
+MOCK_VENDOR_RC_STATE=managed \
+MOCK_INSTALLED_APK_SOURCE="$RELEASE_APK" \
+MOCK_STALE_APK_SHA256="$helper_release_apk_sha" \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_success "sticky hybrid provisioning recovers its stale journal before retrying"
+assert_log_contains 'helper-transaction-[0-9a-f]+.*status-hybrid' "hybrid reconciliation reads the retained hybrid journal"
+assert_log_contains 'helper-transaction-[0-9a-f]+.*rollback-hybrid' "hybrid reconciliation restores its owning transaction"
+assert_log_contains 'helper-transaction-[0-9a-f]+.*install-hybrid' "hybrid reconciliation retains the existing boot authority"
+assert_not_contains 'helper-transaction-[0-9a-f]+.*install-(system|systemless)([^a-z]|$)' "$MOCK_CALL_LOG" "sticky hybrid reconciliation invokes no duplicate installer"
+
+MOCK_STALE_TRANSACTION=1 \
 MOCK_STALE_TRANSACTION_KIND=system \
 MOCK_SYSTEM_WRITABLE=0 \
 MOCK_INSTALLED_APK_SOURCE="$RELEASE_APK" \
@@ -740,9 +1128,9 @@ assert_log_contains 'helper-transaction-[0-9a-f]+.*install-systemless' "system-t
 MOCK_STALE_TRANSACTION=1 \
 MOCK_STALE_TRANSACTION_KIND=both \
   run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
-assert_failure "simultaneous system and systemless journals fail closed"
-assert_contains 'both root-helper recovery journals are present' "dual-journal failure explains the ambiguity"
-assert_not_contains 'hapaneld-helper\.txn (rollback|commit)-(system|systemless)' "$MOCK_CALL_LOG" "dual-journal ambiguity preserves both recovery records"
+assert_failure "simultaneous root-helper journals fail closed"
+assert_contains 'more than one root-helper recovery journal is present' "multi-journal failure explains the ambiguity"
+assert_not_contains 'hapaneld-helper\.txn (rollback|commit)-(system|systemless|hybrid)' "$MOCK_CALL_LOG" "multi-journal ambiguity preserves all recovery records"
 assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "dual-journal ambiguity stops before APK replacement"
 
 MOCK_STALE_TRANSACTION=1 \
@@ -904,10 +1292,11 @@ assert_contains 'invalid release tag' "invalid internal release tag gives a dire
 assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "invalid release tag is rejected before APK install"
 
 # A panel without the manager must receive the exact pinned APK, verify it before installation, and
-# start the official service script. The fake checksum tool makes this deterministic without network
+# start the authenticated installed native starter. The fake checksum tool makes this deterministic without network
 # access while the call log proves the security-sensitive ordering.
 run_provision "$MOCK_TARGET" --apk "$APK" --shizuku --no-tame
 assert_success "missing Shizuku manager is bootstrapped"
+assert_contains 'Shizuku.*inspecting the installed manager and signer' "Shizuku bootstrap reports its package and signer inspection"
 assert_log_contains 'curl .*shizuku-v13\.6\.0\.r1086\.2650830c-release\.apk.*-o .*/shizuku\.apk' "Shizuku bootstrap downloads the curated manager"
 assert_log_contains '^sha256sum .*/shizuku\.apk$' "Shizuku bootstrap verifies the downloaded manager"
 assert_log_contains '^adb .* install -r .*/shizuku\.apk$' "Shizuku bootstrap installs the verified manager"
@@ -920,10 +1309,18 @@ if [ -n "$download_line" ] && [ -n "$checksum_line" ] && [ -n "$install_line" ] 
 else
   fail_test "Shizuku manager is downloaded, checksummed, then installed in order"
 fi
-assert_log_contains '^adb .* shell monkey -p moe\.shizuku\.privileged\.api 1$' "Shizuku bootstrap launches the manager to materialise start.sh"
-assert_log_contains '^adb .* shell test -f .*/moe\.shizuku\.privileged\.api/start\.sh$' "Shizuku bootstrap waits for start.sh"
-assert_log_contains '^adb .* shell sh .*/moe\.shizuku\.privileged\.api/start\.sh$' "Shizuku bootstrap rearms the service through start.sh"
+assert_log_contains '^adb .* shell monkey -p moe\.shizuku\.privileged\.api 1$' "Shizuku bootstrap launches the authenticated manager"
+assert_log_contains '^adb .* shell test -x /data/app/.*/lib/arm64/libshizuku\.so$' "Shizuku bootstrap verifies the installed native starter"
+assert_log_contains '^adb .* shell /data/app/.*/lib/arm64/libshizuku\.so$' "Shizuku bootstrap starts the service without external-storage shell code"
+assert_not_contains '/storage/emulated/.*/start\.sh' "$MOCK_CALL_LOG" "Shizuku bootstrap never executes mutable external-storage script code"
 assert_log_contains '^adb .* shell pm grant moe\.shizuku\.privileged\.api android\.permission\.WRITE_SECURE_SETTINGS$' "Shizuku bootstrap enables supported restart setup"
+
+MOCK_SHIZUKU_INSPECT=block SHIZUKU_INSPECT_TIMEOUT_SECONDS=1 \
+  run_provision "$MOCK_TARGET" --apk "$APK" --shizuku --no-tame
+assert_failure "stuck Shizuku manager inspection returns nonzero at its host deadline"
+assert_contains 'Shizuku manager inspection timed out after 1s' "Shizuku inspection timeout names the bounded failed step"
+assert_contains 'Restore adb/package-manager responsiveness' "Shizuku inspection timeout gives an actionable recovery path"
+assert_not_contains '^adb .* install -r -g .*ha-paneld.*\.apk$' "$MOCK_CALL_LOG" "timed-out Shizuku inspection leaves ha-paneld untouched"
 
 # A stuck Shizuku package-manager operation must remain inside the root-helper ownership window,
 # reject a competing provisioner, then be killed and reaped at its host deadline without replacing
@@ -1062,7 +1459,7 @@ assert_log_contains '^adb .* shell am start -n io\.github\.maxlyth\.hapaneld/\.M
 MOCK_SHIZUKU_VERSION_CODE=1086 MOCK_SHIZUKU_TRUSTED=1 run_provision "$MOCK_TARGET" --apk "$APK" --shizuku --no-tame
 assert_success "trusted current Shizuku provisioning is idempotent"
 assert_not_contains 'install -r .*shizuku\.apk' "$MOCK_CALL_LOG" "current Shizuku manager is not reinstalled"
-assert_log_contains '^adb .* shell sh .*/moe\.shizuku\.privileged\.api/start\.sh$' "current trusted Shizuku is rearmed through start.sh"
+assert_log_contains '^adb .* shell /data/app/.*/lib/arm64/libshizuku\.so$' "current trusted Shizuku is rearmed through its authenticated native starter"
 assert_contains 'Configure.*toolbar overflow menu.*Enhanced access.*Enable' "Shizuku approval names the actual on-panel path"
 
 MOCK_SHIZUKU_VERSION_CODE=1087 MOCK_SHIZUKU_TRUSTED=1 run_provision "$MOCK_TARGET" --apk "$APK" --shizuku --no-tame
@@ -1096,8 +1493,28 @@ unset MOCK_HEALTH
 # Some panels answer /health before the heavier diagnostics endpoint finishes root/capability probes.
 MOCK_VERIFY=transient run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
 assert_success "healthy panel survives one transient slow diagnostics response"
-assert_contains 'diagnostics are still starting; retrying once' "slow diagnostics retry is explained"
+assert_log_contains 'appops get io.github.maxlyth.hapaneld WRITE_SETTINGS' "post-install WRITE_SETTINGS verification reads Android's authority"
+assert_log_contains 'settings get secure enabled_accessibility_services' "post-install accessibility verification reads Android's authority"
 unset MOCK_VERIFY
+
+# Package replacement can start the app before adb finishes granting permissions. The app deliberately
+# serves one complete last-known diagnostics report while it refreshes in the background. Final
+# verification reads back the two Android settings it just changed instead of adding a second cache retry.
+MOCK_VERIFY=stale run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "post-install verification ignores a stale permission snapshot"
+if [ "$(grep -c '/api/v1/diag' "$MOCK_CALL_LOG")" -eq 1 ]; then
+  pass "post-install verification does not poll the diagnostics cache"
+else
+  fail_test "post-install verification does not poll the diagnostics cache"
+fi
+unset MOCK_VERIFY
+
+# A populated service list is not sufficient when Android's master accessibility switch is still off.
+MOCK_A11Y_MASTER_FAIL=1 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_failure "post-install verification rejects a disabled accessibility master switch"
+assert_contains 'accessibility enabled' "disabled accessibility master switch names the failed item"
+assert_contains 'Settings.*Accessibility.*ha-paneld' "disabled accessibility master switch gives manual recovery"
+assert_log_contains 'settings get secure accessibility_enabled' "final verification reads Android's accessibility master authority"
 
 # Likewise, the final permission/HTTP checklist is a success gate rather than advisory output.
 MOCK_VERIFY=fail run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
@@ -1114,32 +1531,189 @@ unset MOCK_CONFIG
 
 RESTORE="$TMP/restore.json"
 printf '{"kind":"ha-paneld-config","schema":1,"values":{}}\n' > "$RESTORE"
+
+# Restore input is validated before adb preflight or any mutation. The CLI imports config JSON only,
+# and enforces the same 1 MiB request envelope as the server.
+run_provision "$MOCK_TARGET" --apk "$APK" --restore "$TMP/missing-restore.json" --no-tame
+assert_failure "missing restore input fails before panel contact"
+assert_contains 'config import file not found' "missing restore input names the preflight failure"
+assert_not_contains '^adb |^curl ' "$MOCK_CALL_LOG" "missing restore input performs no panel or network operation"
+
+EMPTY_RESTORE="$TMP/empty-restore.json"
+: > "$EMPTY_RESTORE"
+run_provision "$MOCK_TARGET" --apk "$APK" --restore "$EMPTY_RESTORE" --no-tame
+assert_failure "empty restore input fails before panel contact"
+assert_contains 'config import file is empty' "empty restore input names the preflight failure"
+assert_not_contains '^adb |^curl ' "$MOCK_CALL_LOG" "empty restore input performs no panel or network operation"
+
+SYMLINK_RESTORE="$TMP/symlink-restore.json"
+ln -s "$RESTORE" "$SYMLINK_RESTORE"
+run_provision "$MOCK_TARGET" --apk "$APK" --restore "$SYMLINK_RESTORE" --no-tame
+assert_failure "symlink restore input fails before panel contact"
+assert_contains 'regular file, not a symbolic link' "symlink restore input names the preflight failure"
+assert_not_contains '^adb |^curl ' "$MOCK_CALL_LOG" "symlink restore input performs no panel or network operation"
+
+OVERSIZED_RESTORE="$TMP/oversized-restore.json"
+truncate -s 1048577 "$OVERSIZED_RESTORE"
+run_provision "$MOCK_TARGET" --apk "$APK" --restore "$OVERSIZED_RESTORE" --no-tame
+assert_failure "oversized restore input fails before panel contact"
+assert_contains 'config import file is too large.*maximum 1048576' "oversized restore input states the config envelope"
+assert_not_contains '^adb |^curl ' "$MOCK_CALL_LOG" "oversized restore input performs no panel or network operation"
+
+MALFORMED_RESTORE="$TMP/malformed-restore.json"
+printf '{"kind":' > "$MALFORMED_RESTORE"
+run_provision "$MOCK_TARGET" --apk "$APK" --restore "$MALFORMED_RESTORE" --no-tame
+assert_failure "malformed restore input fails before panel contact"
+assert_contains 'not a valid ha-paneld config JSON export' "malformed restore input names the structural failure"
+assert_not_contains '^adb |^curl ' "$MOCK_CALL_LOG" "malformed restore input performs no panel or network operation"
+
+WRONG_KIND_RESTORE="$TMP/wrong-kind-restore.json"
+printf '{"kind":"ha-paneld-backup","schema":1,"values":{}}\n' > "$WRONG_KIND_RESTORE"
+run_provision "$MOCK_TARGET" --apk "$APK" --restore "$WRONG_KIND_RESTORE" --no-tame
+assert_failure "full backup passed to config restore fails before panel contact"
+assert_contains 'not a valid ha-paneld config JSON export' "wrong-kind restore names the config-only contract"
+assert_not_contains '^adb |^curl ' "$MOCK_CALL_LOG" "wrong-kind restore performs no panel or network operation"
+
+NON_STRING_RESTORE="$TMP/non-string-restore.json"
+printf '{"kind":"ha-paneld-config","schema":1,"values":{"keep_awake":true}}\n' > "$NON_STRING_RESTORE"
+run_provision "$MOCK_TARGET" --apk "$APK" --restore "$NON_STRING_RESTORE" --no-tame
+assert_failure "non-string config values fail before panel contact"
+assert_contains 'not a valid ha-paneld config JSON export' "non-string config values name the structural failure"
+assert_not_contains '^adb |^curl ' "$MOCK_CALL_LOG" "non-string config values perform no panel or network operation"
+
+INVALID_METADATA_RESTORE="$TMP/invalid-metadata-restore.json"
+printf '{"kind":"ha-paneld-config","schema":1,"exported_at":false,"values":{}}\n' > "$INVALID_METADATA_RESTORE"
+run_provision "$MOCK_TARGET" --apk "$APK" --restore "$INVALID_METADATA_RESTORE" --no-tame
+assert_failure "invalid config-export metadata fails before panel contact"
+assert_contains 'not a valid ha-paneld config JSON export' "invalid metadata names the structural failure"
+assert_not_contains '^adb |^curl ' "$MOCK_CALL_LOG" "invalid metadata performs no panel or network operation"
+
+EXTRA_FIELD_RESTORE="$TMP/extra-field-restore.json"
+printf '{"kind":"ha-paneld-config","schema":1,"values":{},"extra":false}\n' > "$EXTRA_FIELD_RESTORE"
+run_provision "$MOCK_TARGET" --apk "$APK" --restore "$EXTRA_FIELD_RESTORE" --no-tame
+assert_failure "unsupported config-export fields fail before panel contact"
+assert_contains 'not a valid ha-paneld config JSON export' "unsupported field names the structural failure"
+assert_not_contains '^adb |^curl ' "$MOCK_CALL_LOG" "unsupported field performs no panel or network operation"
+
 MOCK_RESTORE=fail run_provision "$MOCK_TARGET" --apk "$APK" --restore "$RESTORE" --no-tame
 assert_failure "restore failure returns nonzero"
 assert_contains '(import failed|provisioning incomplete)' "restore failure explains what remains incomplete"
 unset MOCK_RESTORE
 
-for mode in flow_fail rejected token_missing; do
-  MOCK_HA_LOGIN="$mode" run_provision "$MOCK_TARGET" --apk "$APK" --builtin --ha-url https://ha.test --ha-user owner --ha-pass password --no-tame
+MOCK_CONFIG=timeout run_provision "$MOCK_TARGET" --apk "$APK" --id test-panel --no-tame
+assert_failure "stalled config POST returns nonzero"
+assert_log_contains 'curl .*--connect-timeout 1 --max-time 1 .* -X POST .*api/v1/config' "config POST carries connect and total deadlines"
+unset MOCK_CONFIG
+
+MOCK_RESTORE=timeout run_provision "$MOCK_TARGET" --apk "$APK" --restore "$RESTORE" --no-tame
+assert_failure "stalled config import returns nonzero"
+assert_log_contains 'curl .*--connect-timeout 1 --max-time 1 .*api/v1/config/import' "config import carries connect and total deadlines"
+unset MOCK_RESTORE
+
+MOCK_RESTORE=approval run_provision "$MOCK_TARGET" --apk "$APK" --restore "$RESTORE" --no-tame
+assert_failure "approval-required restore returns nonzero"
+assert_contains 'config import requires approval on the panel; no settings were imported' "approval-required import is not reported as successful"
+assert_contains 'Review approvals.*approve the config import.*retry the identical command' "approval-required import gives the on-panel approval and retry path"
+unset MOCK_RESTORE
+
+for restore_case in malformed-approval unexpected-2xx; do
+  MOCK_RESTORE="$restore_case" run_provision "$MOCK_TARGET" --apk "$APK" --restore "$RESTORE" --no-tame
+  assert_failure "$restore_case import response returns nonzero"
+  assert_contains 'import failed:.*unexpected HTTP' "$restore_case import response is rejected"
+done
+unset MOCK_RESTORE
+
+for mode in flow_fail rejected token_missing timeout; do
+  HA_PASSWORD_SENTINEL='ha-login-secret-7f2c91'
+  MOCK_HA_LOGIN="$mode" run_provision "$MOCK_TARGET" --apk "$APK" --builtin --ha-url https://ha.test --ha-user owner --ha-pass "$HA_PASSWORD_SENTINEL" --no-tame
   assert_failure "HA login $mode returns nonzero"
   assert_contains '(login|token).*failed|login rejected|no usable|provisioning incomplete' "HA login $mode explains the authentication failure"
+  assert_not_contains "$HA_PASSWORD_SENTINEL" "$MOCK_CALL_LOG" "HA login $mode keeps the password out of descendant argv"
+  assert_not_contains "$HA_PASSWORD_SENTINEL" "$LAST_OUTPUT" "HA login $mode keeps the password out of output"
   if grep -E '/api/v1/config.*dashboard_package=builtin|dashboard_package=builtin.*/api/v1/config' "$MOCK_CALL_LOG" >/dev/null; then
     fail_test "HA login $mode does not activate the built-in renderer"
   else
     pass "HA login $mode does not activate the built-in renderer"
   fi
 done
+assert_log_contains 'curl .*--connect-timeout 1 .*--max-time 1 .*https://ha\.test/auth/login_flow' "HA authentication POST carries connect and total deadlines"
 unset MOCK_HA_LOGIN
 
-MOCK_HA_TOKEN=invalid run_provision "$MOCK_TARGET" --apk "$APK" --builtin --ha-url https://ha.test --ha-token definitely-invalid --no-tame
+HA_TOKEN_SENTINEL='ha-token-secret-419ad8'
+MOCK_HA_TOKEN=invalid run_provision "$MOCK_TARGET" --apk "$APK" --builtin --ha-url https://ha.test --ha-token "$HA_TOKEN_SENTINEL" --no-tame
 assert_failure "invalid long-lived HA token returns nonzero"
 assert_contains '(rejected the token|long-lived access token|provisioning incomplete)' "invalid long-lived HA token explains authentication recovery"
+assert_not_contains "$HA_TOKEN_SENTINEL" "$MOCK_CALL_LOG" "HA token validation keeps the token out of descendant argv"
+assert_not_contains "$HA_TOKEN_SENTINEL" "$LAST_OUTPUT" "HA token validation keeps the token out of output"
 if grep -E '/api/v1/config.*dashboard_package=builtin|dashboard_package=builtin.*/api/v1/config' "$MOCK_CALL_LOG" >/dev/null; then
   fail_test "invalid long-lived HA token does not activate the built-in renderer"
 else
   pass "invalid long-lived HA token does not activate the built-in renderer"
 fi
 unset MOCK_HA_TOKEN
+
+MQTT_PASSWORD_SENTINEL='mqtt-secret-20ec73'
+run_provision "$MOCK_TARGET" --apk "$APK" --mqtt-pass "$MQTT_PASSWORD_SENTINEL" --no-tame
+assert_success "legacy MQTT password input is normalized before descendant commands"
+assert_not_contains "$MQTT_PASSWORD_SENTINEL" "$MOCK_CALL_LOG" "MQTT password stays out of curl, adb and helper argv"
+assert_not_contains "$MQTT_PASSWORD_SENTINEL" "$LAST_OUTPUT" "MQTT password stays out of provisioning output"
+assert_log_contains 'curl .*--data-urlencode mqtt_password@.*/mqtt-password .*api/v1/config' "MQTT password reaches config through a private file"
+
+HA_TOKEN_FILE="$TMP/ha-token.txt"
+printf '%s\n' 'file-token-secret-a4b781' > "$HA_TOKEN_FILE"
+chmod 600 "$HA_TOKEN_FILE"
+MOCK_HA_TOKEN=invalid run_provision "$MOCK_TARGET" --apk "$APK" --builtin --ha-url https://ha.test --ha-token-file "$HA_TOKEN_FILE" --no-tame
+assert_failure "Home Assistant token file is accepted and validated"
+assert_not_contains 'file-token-secret-a4b781' "$MOCK_CALL_LOG" "token-file content stays out of descendant argv"
+
+EMPTY_SECRET_FILE="$TMP/empty-secret.txt"
+: > "$EMPTY_SECRET_FILE"
+run_provision "$MOCK_TARGET" --verify --mqtt-pass-file "$EMPTY_SECRET_FILE"
+assert_failure "empty credential file fails before panel contact"
+assert_contains 'MQTT password file is empty' "empty credential file names the unsafe input"
+assert_not_contains '^adb |^curl ' "$MOCK_CALL_LOG" "empty credential file performs no panel or network operation"
+
+NEWLINE_SECRET_FILE="$TMP/newline-secret.txt"
+printf '\r\n' > "$NEWLINE_SECRET_FILE"
+chmod 600 "$NEWLINE_SECRET_FILE"
+run_provision "$MOCK_TARGET" --verify --mqtt-pass-file "$NEWLINE_SECRET_FILE"
+assert_failure "line-ending-only credential file fails before panel contact"
+assert_contains 'contains no credential text' "line-ending-only credential names the empty normalized value"
+assert_not_contains '^adb |^curl ' "$MOCK_CALL_LOG" "line-ending-only credential performs no panel or network operation"
+
+MULTILINE_SECRET_FILE="$TMP/multiline-secret.txt"
+printf 'credential\n\n' > "$MULTILINE_SECRET_FILE"
+chmod 600 "$MULTILINE_SECRET_FILE"
+run_provision "$MOCK_TARGET" --verify --mqtt-pass-file "$MULTILINE_SECRET_FILE"
+assert_failure "credential with extra trailing blank line fails before panel contact"
+assert_contains 'contains more than one text line' "extra trailing blank line violates the single-line contract"
+assert_not_contains '^adb |^curl ' "$MOCK_CALL_LOG" "multiline credential performs no panel or network operation"
+
+PUBLIC_SECRET_FILE="$TMP/public-secret.txt"
+printf '%s' 'not-owner-only' > "$PUBLIC_SECRET_FILE"
+chmod 644 "$PUBLIC_SECRET_FILE"
+run_provision "$MOCK_TARGET" --verify --mqtt-pass-file "$PUBLIC_SECRET_FILE"
+assert_failure "group-readable credential file fails before panel contact"
+assert_contains 'readable by other users' "group-readable credential names the permission problem"
+assert_not_contains '^adb |^curl ' "$MOCK_CALL_LOG" "group-readable credential performs no panel or network operation"
+
+run_provision "$MOCK_TARGET" --verify --mqtt-pass first-secret --mqtt-pass second-secret
+assert_failure "duplicate literal credential sources are rejected"
+assert_contains 'source was supplied more than once' "duplicate literal credential names the ambiguous source"
+assert_not_contains '^adb |^curl ' "$MOCK_CALL_LOG" "duplicate literal credential performs no panel or network operation"
+
+chmod 600 "$PUBLIC_SECRET_FILE"
+run_provision "$MOCK_TARGET" --verify --mqtt-pass-file "$PUBLIC_SECRET_FILE" --mqtt-pass-file "$HA_TOKEN_FILE"
+assert_failure "duplicate credential-file sources are rejected"
+assert_contains 'source was supplied more than once' "duplicate credential files name the ambiguous source"
+assert_not_contains '^adb |^curl ' "$MOCK_CALL_LOG" "duplicate credential files perform no panel or network operation"
+
+SYMLINK_SECRET_FILE="$TMP/symlink-secret.txt"
+ln -s "$HA_TOKEN_FILE" "$SYMLINK_SECRET_FILE"
+run_provision "$MOCK_TARGET" --verify --ha-token-file "$SYMLINK_SECRET_FILE"
+assert_failure "credential symlink fails before panel contact"
+assert_contains 'must not be a symbolic link' "credential symlink names the safe-file requirement"
+assert_not_contains '^adb |^curl ' "$MOCK_CALL_LOG" "credential symlink performs no panel or network operation"
 
 run_provision "$MOCK_TARGET" --ha-token token-without-server
 assert_failure "long-lived HA token without a server URL returns nonzero"
@@ -1188,6 +1762,12 @@ else
   fail_test "REST-downloaded release is signer-verified before install"
 fi
 
+PATH="$NO_GH_FIXTURES:/usr/bin:/bin" MOCK_GITHUB_API=pretty \
+  run_provision "$MOCK_TARGET" --prerelease --no-tame
+assert_success "provisioner REST fallback works when gh is not installed"
+assert_not_contains '^gh ' "$MOCK_CALL_LOG" "no-gh fallback does not invoke GitHub CLI"
+assert_not_contains 'unbound variable' "$LAST_OUTPUT" "no-gh fallback never exposes an unset tag variable"
+
 MOCK_GH_FAIL=1 MOCK_GITHUB_API=foreign run_provision "$MOCK_TARGET" --prerelease --no-tame
 assert_failure "provisioner rejects a release asset hosted outside the canonical GitHub path"
 assert_contains 'could not fetch the latest release APK' "foreign release URL failure gives safe recovery guidance"
@@ -1197,15 +1777,17 @@ assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "foreign release URL
 # Fleet prerelease selection must resolve and pin the newest release including release candidates.
 : > "$MOCK_CALL_LOG"
 LAST_OUTPUT="$TMP/fleet-output.txt"
-bash "$UPDATE_FLEET" --prerelease -- "$MOCK_TARGET" > "$LAST_OUTPUT" 2>&1
+MOCK_GITHUB_API=pretty bash "$UPDATE_FLEET" --prerelease -- "$MOCK_TARGET" > "$LAST_OUTPUT" 2>&1
 LAST_STATUS=$?
 assert_success "fleet prerelease update succeeds"
-if grep -Fq 'gh release list' "$MOCK_CALL_LOG" && grep -Fq 'gh release download v0.9.2-rc3' "$MOCK_CALL_LOG"; then
+if grep -Fq 'https://api.github.com/repos/maxlyth/ha-paneld/releases?per_page=100' "$MOCK_CALL_LOG" && \
+   grep -Fq 'https://github.com/maxlyth/ha-paneld/releases/download/v0.9.2-rc3/ha-paneld-v0.9.2-rc3-manual-setup-required.apk' "$MOCK_CALL_LOG"; then
   pass "fleet prerelease resolves an explicit release-candidate tag"
 else
   fail_test "fleet prerelease resolves an explicit release-candidate tag"
 fi
-assert_log_contains 'gh release download v0\.9\.2-rc3 .*--pattern ha-paneld-v0\.9\.2-rc3-manual-setup-required\.apk' "fleet gh download pins the exact release asset name"
+assert_log_contains 'curl .*--proto =https --proto-redir =https .*ha-paneld-v0\.9\.2-rc3-manual-setup-required\.apk' "fleet download pins the exact release asset name"
+assert_not_contains '^gh ' "$MOCK_CALL_LOG" "fleet release resolution has no unbounded GitHub CLI branch"
 assert_contains 'verified.*v0\.9\.2-rc3' "fleet workers retain and verify the authenticated release tag"
 
 # The unauthenticated REST fallback receives GitHub's normal pretty multi-line JSON. It must skip a
@@ -1224,16 +1806,60 @@ fi
 assert_log_contains 'curl .*--proto =https --proto-redir =https .*https://github\.com/maxlyth/ha-paneld/releases/download/v0\.9\.2-rc3/ha-paneld-v0\.9\.2-rc3-manual-setup-required\.apk' "fleet REST APK redirects remain HTTPS"
 assert_contains 'verified.*v0\.9\.2-rc3' "fleet REST workers retain and verify the authenticated release tag"
 
+# A legacy literal secret is unavoidable in this wrapper's original argv, but it must be normalized
+# once rather than copied into every fleet worker, provisioner, curl or adb command.
+: > "$MOCK_CALL_LOG"
+LAST_OUTPUT="$TMP/fleet-secret-output.txt"
+FLEET_SECRET_SENTINEL='fleet-mqtt-secret-e6a901'
+bash "$UPDATE_FLEET" --apk "$APK" --allow-unsigned-helper --no-tame \
+  --mqtt-pass "$FLEET_SECRET_SENTINEL" -- "$MOCK_TARGET" > "$LAST_OUTPUT" 2>&1
+LAST_STATUS=$?
+assert_success "fleet normalizes a legacy literal credential"
+assert_not_contains "$FLEET_SECRET_SENTINEL" "$MOCK_CALL_LOG" "fleet workers do not repeat the credential in descendant argv"
+assert_not_contains "$FLEET_SECRET_SENTINEL" "$LAST_OUTPUT" "fleet output does not print the credential"
+assert_log_contains 'mqtt_password@.*/mqtt-password' "fleet provisioner uses the normalized private credential file"
+
 # Parallel fleet execution must aggregate a mixed outcome and replay both panel sections.
 : > "$MOCK_CALL_LOG"
 LAST_OUTPUT="$TMP/fleet-mixed-output.txt"
 MOCK_TARGETS='panel-a.test:5555 panel-b.test:5555' MOCK_VERIFY_FAIL_HOST=panel-b.test \
-  bash "$UPDATE_FLEET" --apk "$APK" --no-tame -- panel-a.test panel-b.test > "$LAST_OUTPUT" 2>&1
+  bash "$UPDATE_FLEET" --apk "$APK" --allow-unsigned-helper --no-tame -- panel-a.test panel-b.test > "$LAST_OUTPUT" 2>&1
 LAST_STATUS=$?
 assert_failure "parallel fleet reports nonzero for a mixed panel outcome"
 assert_contains 'panel-a\.test:5555' "parallel fleet replays the successful panel section"
 assert_contains 'panel-b\.test:5555' "parallel fleet replays the failed panel section"
 assert_contains '1 OK, 1 failed' "parallel fleet aggregates mixed results"
+
+# The wrapper consumes --jobs itself and does not launch a later batch while the selected worker
+# limit is occupied. A blocked first install makes the scheduling boundary directly observable.
+: > "$MOCK_CALL_LOG"
+FLEET_JOBS_PID_FILE="$TMP/fleet-jobs-install.pid"
+FLEET_JOBS_OUTPUT="$TMP/fleet-jobs-output.txt"
+MOCK_TARGETS='panel-a.test:5555 panel-b.test:5555' MOCK_APK_INSTALL=block \
+  MOCK_APK_INSTALL_PID_FILE="$FLEET_JOBS_PID_FILE" \
+  bash "$UPDATE_FLEET" --jobs 1 --apk "$APK" --allow-unsigned-helper --no-tame -- \
+    panel-a.test panel-b.test > "$FLEET_JOBS_OUTPUT" 2>&1 &
+fleet_jobs_owner_pid=$!
+fleet_jobs_ready=0
+for _ in {1..100}; do
+  if [ -s "$FLEET_JOBS_PID_FILE" ]; then fleet_jobs_ready=1; break; fi
+  /bin/sleep 0.05
+done
+if [ "$fleet_jobs_ready" -eq 1 ]; then
+  pass "fleet jobs test reaches the occupied worker slot"
+else
+  LAST_OUTPUT="$FLEET_JOBS_OUTPUT"
+  fail_test "fleet jobs test reaches the occupied worker slot"
+fi
+assert_not_contains 'adb -s panel-b\.test:5555' "$MOCK_CALL_LOG" "--jobs 1 keeps the second panel queued"
+kill -TERM "$fleet_jobs_owner_pid" 2>/dev/null || true
+wait "$fleet_jobs_owner_pid" 2>/dev/null || true
+
+LAST_OUTPUT="$TMP/fleet-invalid-jobs-output.txt"
+bash "$UPDATE_FLEET" --jobs 0 --apk "$APK" -- "$MOCK_TARGET" > "$LAST_OUTPUT" 2>&1
+LAST_STATUS=$?
+assert_status 2 "fleet rejects an unbounded zero-worker override"
+assert_contains '--jobs must be a whole number from 1 to 32' "invalid fleet concurrency gives its accepted range"
 
 # The fleet wrapper owns every provisioner it launches. TERM must be forwarded through the worker
 # wrapper to the blocked package install, then all descendants must be reaped before shared temp/log
@@ -1242,7 +1868,7 @@ assert_contains '1 OK, 1 failed' "parallel fleet aggregates mixed results"
 FLEET_BLOCKED_PID_FILE="$TMP/fleet-blocked-install.pid"
 FLEET_BLOCKED_OUTPUT="$TMP/fleet-blocked-output.txt"
 MOCK_APK_INSTALL=block MOCK_APK_INSTALL_PID_FILE="$FLEET_BLOCKED_PID_FILE" \
-  bash "$UPDATE_FLEET" --apk "$APK" --no-tame -- "$MOCK_TARGET" > "$FLEET_BLOCKED_OUTPUT" 2>&1 &
+  bash "$UPDATE_FLEET" --apk "$APK" --allow-unsigned-helper --no-tame -- "$MOCK_TARGET" > "$FLEET_BLOCKED_OUTPUT" 2>&1 &
 fleet_owner_pid=$!
 fleet_blocked_ready=0
 for _ in {1..100}; do
@@ -1282,7 +1908,7 @@ fi
 FLEET_SHIZUKU_INSPECT_PID_FILE="$TMP/fleet-shizuku-inspect.pid"
 FLEET_SHIZUKU_INSPECT_OUTPUT="$TMP/fleet-shizuku-inspect-output.txt"
 MOCK_SHIZUKU_INSPECT=block MOCK_SHIZUKU_INSPECT_PID_FILE="$FLEET_SHIZUKU_INSPECT_PID_FILE" \
-  bash "$UPDATE_FLEET" --apk "$APK" --shizuku --no-tame -- "$MOCK_TARGET" \
+  bash "$UPDATE_FLEET" --apk "$APK" --allow-unsigned-helper --shizuku --no-tame -- "$MOCK_TARGET" \
     > "$FLEET_SHIZUKU_INSPECT_OUTPUT" 2>&1 &
 fleet_owner_pid=$!
 fleet_blocked_ready=0
@@ -1319,7 +1945,7 @@ FLEET_SHIZUKU_INSTALL_PID_FILE="$TMP/fleet-shizuku-install.pid"
 FLEET_SHIZUKU_INSTALL_OUTPUT="$TMP/fleet-shizuku-install-output.txt"
 MOCK_SHIZUKU_INSTALL=block MOCK_SHIZUKU_INSTALL_PID_FILE="$FLEET_SHIZUKU_INSTALL_PID_FILE" \
 SHIZUKU_INSTALL_TIMEOUT_SECONDS=180 ROOT_HELPER_LEASE_GUARD_INTERVAL_SECONDS=0.05 \
-  bash "$UPDATE_FLEET" --apk "$APK" --shizuku --no-tame -- "$MOCK_TARGET" \
+  bash "$UPDATE_FLEET" --apk "$APK" --allow-unsigned-helper --shizuku --no-tame -- "$MOCK_TARGET" \
     > "$FLEET_SHIZUKU_INSTALL_OUTPUT" 2>&1 &
 fleet_owner_pid=$!
 fleet_blocked_ready=0
@@ -1350,7 +1976,7 @@ fi
 
 : > "$MOCK_CALL_LOG"
 LAST_OUTPUT="$TMP/fleet-shizuku-failure-output.txt"
-MOCK_SHIZUKU_START=fail bash "$UPDATE_FLEET" --apk "$APK" --shizuku --no-tame -- "$MOCK_TARGET" > "$LAST_OUTPUT" 2>&1
+MOCK_SHIZUKU_START=fail bash "$UPDATE_FLEET" --apk "$APK" --allow-unsigned-helper --shizuku --no-tame -- "$MOCK_TARGET" > "$LAST_OUTPUT" 2>&1
 LAST_STATUS=$?
 assert_failure "fleet update fails when requested Shizuku service setup fails"
 assert_contains '0 OK, 1 failed' "fleet summary does not count incomplete Shizuku setup as success"
@@ -1359,7 +1985,7 @@ assert_contains 'service did not start' "fleet output retains the Shizuku recove
 : > "$MOCK_CALL_LOG"
 LAST_OUTPUT="$TMP/fleet-shizuku-timeout-output.txt"
 MOCK_SHIZUKU_START=hang SHIZUKU_START_TIMEOUT_SECONDS=1 \
-  bash "$UPDATE_FLEET" --apk "$APK" --shizuku --no-tame -- "$MOCK_TARGET" > "$LAST_OUTPUT" 2>&1
+  bash "$UPDATE_FLEET" --apk "$APK" --allow-unsigned-helper --shizuku --no-tame -- "$MOCK_TARGET" > "$LAST_OUTPUT" 2>&1
 LAST_STATUS=$?
 assert_failure "fleet update fails when Shizuku service setup times out"
 assert_contains '0 OK, 1 failed' "fleet summary does not count timed-out Shizuku setup as success"
@@ -1485,6 +2111,168 @@ assert_log_contains '^curl .*releases/download/v0\.9\.3/ha-paneld-provision-v0\.
 assert_not_contains 'raw\.githubusercontent\.com/.*/v0\.9\.3/scripts/provision\.sh' "$MOCK_CALL_LOG" "v0.9.3 channel resolution cannot downgrade to the legacy provisioner path"
 assert_not_contains '^adb ' "$MOCK_CALL_LOG" "authenticated channel resolution completes before panel contact"
 
+# Advanced installer mode is the checkout-free entry point for explicit provisioning. Use a
+# downloaded fake provisioner here so the wrapper remains a black box while its exact hand-off can
+# be inspected without contacting a panel.
+ADVANCED_FIXTURES="$TMP/advanced-installer-fixtures"
+mkdir -p "$ADVANCED_FIXTURES"
+for fixture in "$FIXTURES"/*; do
+  [ "$(basename "$fixture")" = curl ] || ln -s "$fixture" "$ADVANCED_FIXTURES/$(basename "$fixture")"
+done
+ADVANCED_PROVISION="$TMP/advanced-provision.sh"
+cat > "$ADVANCED_PROVISION" <<'EOF'
+#!/usr/bin/env bash
+printf 'provision-argv' >> "${MOCK_CALL_LOG:?}"
+printf ' <%s>' "$@" >> "$MOCK_CALL_LOG"
+printf '\n' >> "$MOCK_CALL_LOG"
+EOF
+chmod +x "$ADVANCED_PROVISION"
+cat > "$ADVANCED_FIXTURES/curl" <<'EOF'
+#!/usr/bin/env bash
+set -u
+printf 'curl %s\n' "$*" >> "${MOCK_CALL_LOG:?}"
+url=""
+output=""
+next_output=0
+for arg in "$@"; do
+  if [ "$next_output" = 1 ]; then output="$arg"; next_output=0; continue; fi
+  case "$arg" in
+    -o|--output) next_output=1 ;;
+    http://*|https://*) url="$arg" ;;
+  esac
+done
+case "$url" in
+  https://api.github.com/repos/maxlyth/ha-paneld/releases/latest)
+    printf '%s\n' '{"tag_name":"v0.9.3","assets":[{"browser_download_url":"https://github.com/maxlyth/ha-paneld/releases/download/v0.9.3/ha-paneld-v0.9.3-manual-setup-required.apk"}]}'
+    ;;
+  https://api.github.com/repos/maxlyth/ha-paneld/releases\?per_page=100)
+    printf '%s\n' '[{"url":"https://api.github.com/repos/maxlyth/ha-paneld/releases/204","tag_name":"v0.9.4-rc1","draft":false,"prerelease":true,"assets":[{"browser_download_url":"https://github.com/maxlyth/ha-paneld/releases/download/v0.9.4-rc1/ha-paneld-v0.9.4-rc1-manual-setup-required.apk"}]}]'
+    ;;
+  */ha-paneld-provision-v*.sh.sha256.sig)
+    printf 'mock signature\n' > "$output"
+    ;;
+  */ha-paneld-provision-v*.sh.sha256)
+    name="$(basename "$url" .sha256)"
+    hash="$(/usr/bin/sha256sum "${ADVANCED_PROVISION_SOURCE:?}" | awk '{print $1}')"
+    printf '%s  %s\n' "$hash" "$name" > "$output"
+    ;;
+  */ha-paneld-provision-v*.sh)
+    cp "${ADVANCED_PROVISION_SOURCE:?}" "$output"
+    ;;
+  */ha-paneld-v*-manual-setup-required.apk)
+    printf 'release apk\n' > "$output"
+    ;;
+  *)
+    printf 'unexpected advanced-installer URL: %s\n' "$url" >&2
+    exit 22
+    ;;
+esac
+EOF
+chmod +x "$ADVANCED_FIXTURES/curl"
+
+run_advanced_installer() {
+  LAST_OUTPUT="$TMP/advanced-installer-output.txt"
+  : > "$MOCK_CALL_LOG"
+  env -u 'BASH_FUNC_curl%%' \
+    PATH="$ADVANCED_FIXTURES:/usr/bin:/bin" \
+    ADVANCED_PROVISION_SOURCE="$ADVANCED_PROVISION" \
+    MOCK_CALL_LOG="$MOCK_CALL_LOG" \
+      bash "$RELEASE_INSTALLER" "$@" > "$LAST_OUTPUT" 2>&1
+  LAST_STATUS=$?
+}
+
+run_moving_advanced_installer() {
+  LAST_OUTPUT="$TMP/moving-advanced-installer-output.txt"
+  : > "$MOCK_CALL_LOG"
+  env -u 'BASH_FUNC_curl%%' \
+    PATH="$ADVANCED_FIXTURES:/usr/bin:/bin" \
+    ADVANCED_PROVISION_SOURCE="$ADVANCED_PROVISION" \
+    MOCK_CALL_LOG="$MOCK_CALL_LOG" \
+      bash "$ROOT/scripts/install.sh" "$@" > "$LAST_OUTPUT" 2>&1
+  LAST_STATUS=$?
+}
+
+run_advanced_installer --provision panel.test --id kitchen --shizuku
+assert_success "checkout-free advanced provisioning succeeds without repository prompts"
+assert_log_contains '^provision-argv <panel\.test:5555> <--apk> <.*/ha-paneld-v0\.9\.2-rc3-manual-setup-required\.apk> <--release-tag> <v0\.9\.2-rc3> <--id> <kitchen> <--shizuku>$' \
+  "mutating advanced provisioning receives the exact paired release APK"
+assert_log_contains 'ha-paneld-v0\.9\.2-rc3-manual-setup-required\.apk -o ' \
+  "mutating advanced provisioning downloads the paired APK"
+
+ADVANCED_SECRET_SENTINEL='advanced-ha-token-secret-9b173e'
+run_advanced_installer --provision panel.test --ha-url https://ha.test --ha-token "$ADVANCED_SECRET_SENTINEL"
+assert_success "checkout-free installer normalizes a legacy literal credential"
+assert_log_contains '^provision-argv .* <--ha-token-file> <.*/ha-token\.[^>]+>$' \
+  "checkout-free provisioner child receives only a private token-file path"
+assert_not_contains "$ADVANCED_SECRET_SENTINEL" "$MOCK_CALL_LOG" \
+  "checkout-free installer does not copy the literal token into descendant argv"
+
+ADVANCED_TOKEN_FILE="$TMP/advanced-token.txt"
+printf '%s' 'advanced-file-token' > "$ADVANCED_TOKEN_FILE"; chmod 600 "$ADVANCED_TOKEN_FILE"
+run_advanced_installer --provision panel.test --ha-token duplicate-literal --ha-token-file "$ADVANCED_TOKEN_FILE"
+assert_status 2 "checkout-free installer rejects duplicate credential sources"
+assert_contains 'credential source supplied more than once' "checkout-free duplicate names the ambiguous credential source"
+assert_not_contains '^curl ' "$MOCK_CALL_LOG" "checkout-free duplicate stops before downloads or provisioner launch"
+
+run_advanced_installer --provision panel.test:5556 --verify
+assert_success "checkout-free verify succeeds without downloading an APK"
+assert_log_contains '^provision-argv <panel\.test:5556> <--verify>$' \
+  "checkout-free verify forwards only the read-only operation"
+assert_not_contains 'ha-paneld-v0\.9\.2-rc3-manual-setup-required\.apk -o ' "$MOCK_CALL_LOG" \
+  "checkout-free verify does not download or install an APK"
+assert_log_contains 'ha-paneld-provision-v0\.9\.2-rc3\.sh\.sha256\.sig -o ' \
+  "checkout-free verify still authenticates its downloaded provisioner"
+
+run_advanced_installer --provision panel.test --export panel-backup.json
+assert_success "checkout-free export-only succeeds without downloading an APK"
+assert_log_contains '^provision-argv <panel\.test:5555> <--export> <panel-backup\.json>$' \
+  "checkout-free export-only forwards the requested backup"
+assert_not_contains 'ha-paneld-v0\.9\.2-rc3-manual-setup-required\.apk -o ' "$MOCK_CALL_LOG" \
+  "checkout-free export-only does not download or install an APK"
+
+for blocked in --apk --release-tag --latest --prerelease; do
+  run_advanced_installer --provision panel.test "$blocked" value
+  assert_status 2 "checkout-free provisioning rejects the $blocked source override"
+  assert_not_contains '^curl ' "$MOCK_CALL_LOG" "rejected $blocked override stops before downloads"
+done
+run_advanced_installer --provision panel.test --unknown
+assert_status 2 "checkout-free provisioning rejects unknown options"
+assert_not_contains '^curl ' "$MOCK_CALL_LOG" "unknown advanced option stops before downloads"
+run_advanced_installer --provision panel.test --verify --id kitchen
+assert_status 2 "checkout-free verification rejects ignored mutating options"
+assert_not_contains '^curl ' "$MOCK_CALL_LOG" "mixed read-only and mutating options stop before downloads"
+
+# The user-facing command downloads the moving main installer rather than a release-generated copy.
+# Exercise both channel resolvers through the complete advanced hand-off so their authenticated
+# provisioner and APK selection cannot drift from the already-covered immutable-release path.
+run_moving_advanced_installer --provision panel.test --id kitchen
+assert_success "moving stable-channel advanced provisioning succeeds"
+assert_log_contains '^curl .*api\.github\.com/repos/maxlyth/ha-paneld/releases/latest' \
+  "moving stable-channel provisioning resolves the latest release"
+assert_log_contains '^provision-argv <panel\.test:5555> <--apk> <.*/ha-paneld-v0\.9\.3-manual-setup-required\.apk> <--release-tag> <v0\.9\.3> <--id> <kitchen>$' \
+  "moving stable-channel provisioning pairs the resolved APK and provisioner"
+
+run_moving_advanced_installer --prerelease --provision panel.test --shizuku
+assert_success "moving prerelease-channel advanced provisioning succeeds"
+assert_log_contains '^curl .*api\.github\.com/repos/maxlyth/ha-paneld/releases\?per_page=100' \
+  "moving prerelease provisioning resolves the release-candidate channel"
+assert_log_contains '^provision-argv <panel\.test:5555> <--apk> <.*/ha-paneld-v0\.9\.4-rc1-manual-setup-required\.apk> <--release-tag> <v0\.9\.4-rc1> <--shizuku>$' \
+  "moving prerelease provisioning pairs the resolved APK and provisioner"
+
+run_moving_advanced_installer --provision panel.test --verify
+assert_success "moving stable-channel verification succeeds without an APK"
+assert_log_contains '^provision-argv <panel\.test:5555> <--verify>$' \
+  "moving stable-channel verification forwards only the read-only operation"
+assert_not_contains 'ha-paneld-v0\.9\.3-manual-setup-required\.apk -o ' "$MOCK_CALL_LOG" \
+  "moving stable-channel verification does not download an APK"
+
+run_moving_advanced_installer --prerelease --provision panel.test --export panel-backup.json
+assert_success "moving prerelease-channel export succeeds without an APK"
+assert_log_contains '^provision-argv <panel\.test:5555> <--export> <panel-backup\.json>$' \
+  "moving prerelease-channel export forwards only the backup operation"
+assert_not_contains 'ha-paneld-v0\.9\.4-rc1-manual-setup-required\.apk -o ' "$MOCK_CALL_LOG" \
+  "moving prerelease-channel export does not download an APK"
+
 LAST_OUTPUT="$TMP/provision-help.txt"
 bash "$PROVISION" --help > "$LAST_OUTPUT" 2>&1
 LAST_STATUS=$?
@@ -1553,23 +2341,50 @@ fi
 if grep -Fq 'valid_transaction_identity "$marker" "$transaction_id" "$target_apk" "$target_build" "$target_helper"' "$PROVISION" && \
    grep -Fq 'ACTIVE_SYSTEM_TRANSACTION' "$PROVISION" && \
    grep -Fq 'ACTIVE_SYSTEMLESS_TRANSACTION' "$PROVISION" && \
+   grep -Fq 'ACTIVE_HYBRID_TRANSACTION' "$PROVISION" && \
    grep -Fq 'renew_root_helper_lease "$install_kind"' "$PROVISION" && \
    grep -Fq 'start_root_helper_lease_guard' "$PROVISION"; then
   pass "transaction nonce and monotonic lease protect validation through APK install and matching commit"
 else
   fail_test "transaction nonce and monotonic lease protect validation through APK install and matching commit"
 fi
-commit_marker_line="$(grep -n 'rm -f "\$marker" || return 1' "$PROVISION" | tail -2 | head -1 | cut -d: -f1)"
+
+if grep -Fq '/system/bin/hapaneld-helper --request PING >/dev/null 2>&1 ||' "$PROVISION" && \
+   grep -Fq '( /system/bin/hapaneld-helper >/dev/null 2>&1 & )' "$PROVISION"; then
+  pass "first-time system helper install verifies init start before direct fallback"
+else
+  fail_test "first-time system helper install verifies init start before direct fallback"
+fi
+commit_fn_line="$(grep -n '^commit_system() {' "$PROVISION" | head -1 | cut -d: -f1)"
+commit_marker_line="$(awk -v after="$commit_fn_line" 'NR > after && /rm -f "\$marker" \|\| return 1/{print NR; exit}' "$PROVISION")"
 commit_target_line="$(grep -n '\[ "$(classify_system)" = TARGET \] || return 1' "$PROVISION" | head -1 | cut -d: -f1)"
 commit_sync_line="$(awk -v after="$commit_marker_line" 'NR > after && /sync \|\| return 1/{print NR; exit}' "$PROVISION")"
 commit_recovery_line="$(awk -v after="$commit_sync_line" 'NR > after && index($0, "rm -f /system/bin/hapaneld-helper.hapaneld-recovery"){print NR; exit}' "$PROVISION")"
 if [ -n "$commit_target_line" ] && [ -n "$commit_marker_line" ] && [ -n "$commit_sync_line" ] && [ -n "$commit_recovery_line" ] && \
    [ "$commit_target_line" -lt "$commit_marker_line" ] && [ "$commit_marker_line" -lt "$commit_sync_line" ] && \
    [ "$commit_sync_line" -lt "$commit_recovery_line" ] && \
-   grep -Fq '[ "$(classify_systemless)" = TARGET ] || return 1' "$PROVISION"; then
+   grep -Fq '[ "$(classify_systemless)" = TARGET ] || return 1' "$PROVISION" && \
+   grep -Fq '[ "$(classify_hybrid)" = TARGET ] || return 1' "$PROVISION"; then
   pass "helper commit rechecks exact target state before durably removing recovery"
 else
   fail_test "helper commit rechecks exact target state before durably removing recovery"
+fi
+if grep -Fq 'live_matches_recorded_or_target OLD_BIN /data/adb/hapaneld/hapaneld-helper @BIN_SHA256@ "$marker"' "$PROVISION" && \
+   grep -Fq 'live_matches_recorded_or_target OLD_RC /vendor/etc/init/hapaneld-helper.rc @HYBRID_RC_SHA256@ "$marker"' "$PROVISION" && \
+   grep -Fq 'echo TRANSITION' "$PROVISION" && \
+   grep -Fq '[ "$state" = PRE_SWAP ] || [ "$state" = TARGET ] || [ "$state" = TRANSITION ] || return 1' "$PROVISION" && \
+   grep -Fq 'mv -f /data/adb/hapaneld/hapaneld-helper.new /data/adb/hapaneld/hapaneld-helper || return 1' "$PROVISION" && \
+   grep -Fq 'mv -f /vendor/etc/init/hapaneld-helper.rc.new /vendor/etc/init/hapaneld-helper.rc || return 1' "$PROVISION"; then
+  pass "hybrid recovery authenticates each atomic step of a partially completed two-file swap"
+else
+  fail_test "hybrid recovery authenticates each atomic step of a partially completed two-file swap"
+fi
+if grep -Fq 'hybrid_matches_recorded() {' "$PROVISION" && \
+   grep -Fq 'elif hybrid_matches_recorded; then' "$PROVISION" && \
+   grep -Fq 'hybrid_matches_recorded || return 1' "$PROVISION"; then
+  pass "hybrid rollback finalizes against the journaled state even when target bytes are unchanged"
+else
+  fail_test "hybrid rollback finalizes against the journaled state even when target bytes are unchanged"
 fi
 if grep -Fq 'helper_build_id="$(helper/source-id.sh)"' "$RELEASE_WORKFLOW" && \
    grep -Fq -- '-DHAPANELD_BUILD_ID=' "$RELEASE_WORKFLOW" && \

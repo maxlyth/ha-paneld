@@ -44,9 +44,9 @@ class RelayControllerTest {
     @Test fun setWritesRelayNode() {
         val (r, root) = relay(mapOf("ls $base" to "relay1 relay2"))
         assertTrue(r.set(1, true))
-        assertTrue(root.ran.contains("echo 1 > $base/relay1"))
+        assertTrue(root.ran.contains("printf '%s' '1' > $base/relay1"))
         assertTrue(r.set(2, false))
-        assertTrue(root.ran.contains("echo 0 > $base/relay2"))
+        assertTrue(root.ran.contains("printf '%s' '0' > $base/relay2"))
     }
 
     @Test fun getReadsRelayState() {
@@ -70,6 +70,17 @@ class RelayControllerTest {
         assertEquals(2, r.count())
         assertEquals(2, r.count())
         assertEquals(2, root.outputRan.count { it.contains("ls $base") })
+    }
+
+    @Test fun capturedUnavailableRootRouteSkipsDiscoveryWithoutCachingAbsence() {
+        val (r, root) = relay(mapOf("ls $base" to "relay1 relay2"))
+
+        assertEquals(0, r.count(allowRootProbe = false))
+        assertTrue(root.outputRan.isEmpty())
+        assertEquals(2, r.count(allowRootProbe = true))
+        assertEquals(1, root.outputRan.count { it.contains("ls $base") })
+        assertEquals(2, r.count(allowRootProbe = false))
+        assertEquals(1, root.outputRan.count { it.contains("ls $base") })
     }
 
     @Test fun confirmedRelayAbsenceIsCached() {
@@ -112,45 +123,34 @@ class RelayControllerTest {
         assertFalse(root.outputRan.any { it.contains("cat $base/relay3") })
     }
 
-    @Test fun ledCountCountsPresentValueNodes() {
+    @Test fun ledCountUsesDeclaredTopologyWithoutMutatingGpio() {
         val ledBase = 147
-        val outputs = mapOf("ls $base" to "relay1") +
-            (0 until 4).associate { "gpio${ledBase + it}" to "ready" }
-        val (r, _) = relay(outputs, ledBase = ledBase)
+        val (r, root) = relay(emptyMap(), ledBase = ledBase)
         assertEquals(4, r.ledCount())
+        assertTrue(root.outputRan.isEmpty())
     }
 
-    @Test fun stateAuditsDoNotReexportOrReprobeButtonLedTopology() {
+    @Test fun stateAuditsDoNotExportOrChangeButtonLedTopology() {
         val ledBase = 147
-        val outputs = (0 until 4).associate { "gpio${ledBase + it}" to "ready" } +
-            mapOf("cat /sys/class/gpio/gpio147/value" to "1")
+        val outputs = mapOf("cat /sys/class/gpio/gpio147/value" to "1")
         val (r, root) = relay(outputs, ledBase = ledBase)
         assertEquals(4, r.ledCount())
         repeat(3) { assertTrue(r.ledRead(0) == true) }
         assertTrue(root.ran.isEmpty())
-        assertEquals(4, root.outputRan.count { it.contains("/sys/class/gpio/export") })
+        assertEquals(0, root.outputRan.count { it.contains("/sys/class/gpio/export") })
         assertEquals(3, root.outputRan.count { it.contains("cat /sys/class/gpio/gpio147/value") })
     }
 
-    @Test fun partialGpioFailureReturnsPrefixButIsRetriedUntilFullTopologyIsConfirmed() {
+    @Test fun gpioIsPreparedOnlyWhenAnLedWriteIsRequested() {
         val ledBase = 147
-        val root = SequencedRootShell(
-            mapOf(
-                "gpio147" to listOf("ready"),
-                "gpio148" to listOf(null, "ready"),
-                "gpio149" to listOf("ready"),
-                "gpio150" to listOf("ready"),
-            ),
-        )
+        val root = SequencedRootShell(mapOf("gpio147" to listOf("ready")))
         val r = RelayController(fakeProfile(buttonLedGpioBase = ledBase), root)
 
-        assertEquals(1, r.ledCount())
         assertEquals(4, r.ledCount())
-        assertEquals(4, r.ledCount())
-        assertEquals(2, root.outputRan.count { it.contains("gpio147") })
-        assertEquals(2, root.outputRan.count { it.contains("gpio148") })
-        assertEquals(1, root.outputRan.count { it.contains("gpio149") })
-        assertEquals(1, root.outputRan.count { it.contains("gpio150") })
+        assertTrue(root.outputRan.isEmpty())
+        assertTrue(r.ledSet(0, true))
+        assertEquals(1, root.outputRan.count { it.contains("gpio147") })
+        assertTrue(root.ran.contains("printf '%s' '1' > /sys/class/gpio/gpio147/value"))
     }
 
     @Test fun directionFailureDoesNotExposeInputPinAsUsable() {
@@ -158,10 +158,10 @@ class RelayControllerTest {
         val root = SequencedRootShell(mapOf("gpio147" to listOf("input")))
         val r = RelayController(fakeProfile(buttonLedGpioBase = ledBase), root)
 
-        assertEquals(0, r.ledCount())
+        assertEquals(4, r.ledCount())
         assertFalse(r.ledSet(0, true))
         assertTrue(root.ran.isEmpty())
-        assertEquals(2, root.outputRan.size)
+        assertEquals(1, root.outputRan.size)
         root.outputRan.forEach { command ->
             assertTrue(command.contains("cat /sys/class/gpio/gpio147/direction"))
             assertTrue(command.contains("[ \"\$direction\" = out ]"))

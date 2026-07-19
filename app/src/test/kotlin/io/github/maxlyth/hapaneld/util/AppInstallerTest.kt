@@ -9,6 +9,8 @@ import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 import io.github.maxlyth.hapaneld.persistence.StateQuiescence
 import java.net.URL
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 
 /**
  * [AppInstaller.httpsRedirect] — the download redirect gate: only ever follow a hop to an HTTPS
@@ -82,5 +84,22 @@ class AppInstallerTest {
             AppInstaller.InstallRoute.DAEMON,
             AppInstaller.selectInstallRoute(false, true, true, allowShizuku = true),
         )
+    }
+
+    @Test fun slowProgressCannotExtendTheWholeDownloadDeadline() {
+        val remaining = ArrayDeque(listOf(10L, 0L))
+        val output = ByteArrayOutputStream()
+
+        val failure = runCatching {
+            AppInstaller.copyBeforeDeadline(
+                ByteArrayInputStream(byteArrayOf(1, 2, 3)),
+                output,
+                maxBytes = 10L,
+                remainingMs = { remaining.removeFirstOrNull() ?: 0L },
+            )
+        }.exceptionOrNull()
+
+        assertTrue(failure is java.net.SocketTimeoutException)
+        assertEquals(0, output.size())
     }
 }

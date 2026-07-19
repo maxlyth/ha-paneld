@@ -82,8 +82,11 @@ jobs:
           script: |
             adb install "$RUNNER_TEMP/shizuku.apk"
             adb shell monkey -p moe.shizuku.privileged.api 1
-            for i in $(seq 1 20); do adb shell test -f /storage/emulated/0/Android/data/moe.shizuku.privileged.api/start.sh && break; sleep 1; done
-            adb shell sh /storage/emulated/0/Android/data/moe.shizuku.privileged.api/start.sh
+            native_dir=$(adb shell dumpsys package moe.shizuku.privileged.api | sed -n 's/^[[:space:]]*nativeLibraryDir=//p' | head -1 | tr -d '\r')
+            case "$native_dir" in /data/app/*|/mnt/expand/*/app/*) ;; *) echo "Invalid Shizuku native library path" >&2; exit 1 ;; esac
+            case "$native_dir" in *[!0-9A-Za-z._/+,:=@~-]*) echo "Unsafe Shizuku native library path" >&2; exit 1 ;; esac
+            adb shell test -x "$native_dir/libshizuku.so"
+            adb shell "$native_dir/libshizuku.so"
             adb install app/build/outputs/apk/debug/app-debug.apk
             adb push "$RUNNER_TEMP/shizuku.apk" /data/local/tmp/shizuku.apk
             adb shell run-as io.github.maxlyth.hapaneld cp /data/local/tmp/shizuku.apk files/shizuku-test.apk

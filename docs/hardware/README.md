@@ -9,18 +9,17 @@ Reverse-engineered hardware fact sheets for the wall panels ha-paneld targets �
 | Sonoff NSPanel Pro | rk3326 / PX30 | none (no RGB node) | STK3A5x light + proximity (app-direct) | no | **Zigbee** (Silabs EFR32, UART); no IR | [nspanel-pro.md](nspanel-pro.md) |
 | Smatek S9E † | rk3566 | per-button GPIO LEDs (root) | radar proximity, light, temp+humidity; **2 mains relays** (`st_relay`); RS485 + Ethernet | no | **Zigbee** | [s9e.md](s9e.md) |
 | ZHICAI SMT1019 ‡ | rk3576 | none (LED ioctl root-locked, no su) | none Android-exposed reported | no | no | [smt1019.md](smt1019.md) |
-| ZX-SMT156 / RK3566_T ‡ | rk3566 | `/dev/ledjni` (app-direct) | binary proximity, ambient light; vendor climate path unknown | unknown | vendor relays reported, control path unknown | [zx-smt156.md](zx-smt156.md) |
-| Amazon Echo Show 5 Gen 2 ‡ | MediaTek MT8163 | none | ambient light; no proximity reported | no | no | [echo-show-5-gen2.md](echo-show-5-gen2.md) |
+| ZX-SMT156 / RK3566_T ‡ | rk3566 | `/dev/ledjni` (app-direct) | binary proximity, ambient light; GXHT30 temp+humidity (helper or fixed shell-level alternate) | unknown | vendor relays reported, control path unknown | [zx-smt156.md](zx-smt156.md) |
 | Shelly Wall Display § | MT6580 (legacy) / **PX30** (modern, Jenna — Smatek-built, like the S9E) | none (no RGB node) | STK3A5x light + proximity (Jenna, like NSPanel Pro); reported LD2410 radar (Blake/XL, app-only); on-board GPIO relays (1–2/model, via Stargate RPC) | no | no | [shelly-wall-display.md](shelly-wall-display.md) |
 
 † S9E specs are from Smatek's listing; control paths are from [#98](https://github.com/seaky/nspanel_pro_tools_apk/issues/98) + the HA community thread, **not** validated on a unit here — relay/button support is implemented but untested.
 
-‡ SMT1019 facts are from a reporter's `/diag` + the retail listing ([#8](https://github.com/maxlyth/ha-paneld/issues/8)), **not** validated on a unit here.
+‡ SMT1019 and ZX-SMT156 facts are from reporter diagnostics and linked OEM/retail evidence ([#8](https://github.com/maxlyth/ha-paneld/issues/8), [#24](https://github.com/maxlyth/ha-paneld/issues/24)), **not** validated on units here. ZX climate support is optional; USB/vendor root or persistent unlock routes remain untested.
 
-§ Shelly Wall Display facts are from firmware OTA analysis (incl. a device-tree parse of the modern partition image), the official changelog, and community/KB sources — **not** validated on a unit here. Both firmware tracks are *userdebug* builds, so `adb root` may be reachable if an adb foothold exists. `ShellyWallDisplay` + `ShellyWallDisplayV2` profiles are implemented but speculative.
+§ Shelly Wall Display facts are from firmware OTA analysis (incl. a device-tree parse of the modern partition image), the official changelog, and community/KB sources — **not** validated on a unit here. Both firmware tracks are *userdebug* builds, so `adb root` may be reachable if an adb foothold exists. The bundled `shelly-wall-display` and `shelly-wall-display-v2` YAML profiles are implemented but speculative.
 
 > [!TIP]
-> Before modifying firmware on a **button-less** panel, read [Firmware backup & restore](../firmware-backup-restore.md) — these are all Rockchip devices, so the usual button-combo fastboot/recovery advice does not apply; backup/restore goes via `adb reboot loader` + `rkdeveloptool` (open-source, Linux), with maskrom as the un-brickable fallback.
+> Before modifying firmware on a rooted **TPA10 or WF1589T**, read [Firmware backup & restore](../firmware-backup-restore.md). Those Rockchip panels use `adb reboot loader` and `rkdeveloptool` rather than the usual Android button combination. The guide does not apply to the MediaTek Shelly family, an unrooted panel or uncharacterised hardware, and it does not yet claim a write-ready Maskrom recovery path.
 
 ## Method
 
@@ -100,14 +99,13 @@ The clean way is a direct adb sideload of the standard Android System WebView (p
 
 | Panel | ABI | Stock (vendor firmware) | Replacement (`com.android.webview`) | Download |
 |---|---|---|---|---|
-| NSPanel Pro (PX30) | arm64-v8a | **unknown** — Android 8.1 AOSP base; confirmed too old for current HA frontend | **LineageOS** 138.0.7204.63 — last build for Android **8.1** | [release asset](https://github.com/maxlyth/ha-paneld/releases/download/webview-mirror/lineageos-webview-138.0.7204.63.apk) · [APKMirror](https://www.apkmirror.com/apk/lineageos/android-system-webview-2/android-system-webview-138-0-7204-63-2-release/android-system-webview-138-0-7204-63-8-android-apk-download/download) |
+| NSPanel Pro (PX30) | arm64-v8a | Chromium **107.0.5304.105** verified on firmware 3.5.1; other firmware may differ, but shipped builds remain too old for the current HA frontend | **LineageOS** 138.0.7204.63 — last build for Android **8.1** | [release asset](https://github.com/maxlyth/ha-paneld/releases/download/webview-mirror/lineageos-webview-138.0.7204.63.apk) · [APKMirror](https://www.apkmirror.com/apk/lineageos/android-system-webview-2/android-system-webview-138-0-7204-63-2-release/android-system-webview-138-0-7204-63-8-android-apk-download/download) |
 | TPA10 (rk3566) | armeabi-v7a | **Chrome 83** (`com.android.webview`) — too old for current HA frontend | **LineageOS** SystemWebView 150.0.7871.63 — vanilla Chromium, allows camera autoplay (Cromite 147 blocks it, kept as fallback). **Signature-locked — needs the root swap in [tpa10.md](tpa10.md#webview--update-this-first), not a plain sideload.** | [arm asset](https://github.com/maxlyth/ha-paneld/releases/download/webview-mirror/lineageos-webview-150.0.7871.63-arm.apk) |
 | WF1589T (rk3576) | arm64-v8a | Google Play WebView (auto-updates) | update via Play Store — no sideload needed | — |
 | S9E (rk3566) | armeabi-v7a | **Chromium 83** (`com.android.webview`) — too old for current HA frontend | **LineageOS** 150.0.7871.63 (arm) — *provisional, unverified hardware*; likely signature-locked like the TPA10 | [arm asset](https://github.com/maxlyth/ha-paneld/releases/download/webview-mirror/lineageos-webview-150.0.7871.63-arm.apk) |
 | SMT1019 (rk3576) | arm64-v8a | **unknown** — Android 14, no GMS; likely needs sideload | **LineageOS** 150.0.7871.63 (arm64) — *provisional, unverified hardware* | [arm64 asset](https://github.com/maxlyth/ha-paneld/releases/download/webview-mirror/lineageos-webview-150.0.7871.63-arm64.apk) |
 | ZX-SMT156 / RK3566_T | arm64-v8a | Google WebView **149.0.7827.164** (reporter firmware) | Google WebView is current; no replacement needed | — |
-| Echo Show 5 Gen 2 (`cronos`) | armeabi-v7a | LineageOS WebView **146.0.7680.153** | LineageOS build is current; no replacement needed | — |
-| Shelly WD legacy (MT6580) | armeabi-v7a | **unknown** (Android 7 base ROM) | Atlantis only: `com.google.android.webview` **119.0.6045.194** via [official Shelly ZIP](https://repo.shelly.cloud/firmware/SAWD-0A1XX10EU1/stable/SAWD-0A1XX10EU1-WebViewUpdate.zip) — see [shelly-wall-display.md](shelly-wall-display.md#webview) | — |
+| Shelly WD legacy (MT6580) | armeabi-v7a | **unknown** (Android 7 base ROM) | Stargate only: `com.google.android.webview` **119.0.6045.194** via [official Shelly ZIP](https://repo.shelly.cloud/firmware/SAWD-0A1XX10EU1/stable/SAWD-0A1XX10EU1-WebViewUpdate.zip) — see [shelly-wall-display.md](shelly-wall-display.md#webview) | — |
 | Shelly WD V2 (arm64 / PX30) | arm64-v8a | **unknown** (Android 11 base ROM; not present in Shelly OTA) | not established — check `adb shell dumpsys webviewupdate` | — |
 
 All mirrored builds live in the [**Panel WebView mirror** release](https://github.com/maxlyth/ha-paneld/releases/tag/webview-mirror) — intended as a living, community list of known-working versions. Got one working on another panel or version? Contributions welcome.
@@ -148,4 +146,4 @@ or via Developer options → *WebView implementation*.
 
 ---
 
-Per-panel fact sheets: [NSPanel Pro](nspanel-pro.md) · [TPA10](tpa10.md) · [WF1589T](wf1589t.md) · [S9E](s9e.md) · [ZX-SMT156](zx-smt156.md) · [Echo Show 5 Gen 2](echo-show-5-gen2.md).
+Per-panel fact sheets: [NSPanel Pro](nspanel-pro.md) · [TPA10](tpa10.md) · [WF1589T](wf1589t.md) · [S9E](s9e.md) · [SMT1019](smt1019.md) · [ZX-SMT156](zx-smt156.md) · [Shelly Wall Display](shelly-wall-display.md).

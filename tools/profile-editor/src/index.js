@@ -1,3 +1,4 @@
+import { autocompletion } from "@codemirror/autocomplete";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import {
   bracketMatching,
@@ -24,6 +25,7 @@ import {
   lineNumbers,
   rectangularSelection,
 } from "@codemirror/view";
+import { completeProfileSchemaValue } from "./schema-completion.js";
 
 /**
  * Small browser-neutral wrapper around the pinned CodeMirror bundle. The rest of the Profile tab
@@ -33,6 +35,7 @@ import {
 export function create(parent, options = {}) {
   const readOnly = new Compartment();
   const theme = new Compartment();
+  let schemaFields = Array.isArray(options.schemaFields) ? options.schemaFields : [];
   const darkTheme = EditorView.theme({
     "&": { backgroundColor: "#1f2329", color: "#e6edf3" },
     ".cm-content": { caretColor: "#e6edf3" },
@@ -93,6 +96,9 @@ export function create(parent, options = {}) {
       syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
       keymap.of([...defaultKeymap, ...searchKeymap, ...historyKeymap, indentWithTab]),
       yaml(),
+      autocompletion({
+        override: [(context) => completeProfileSchemaValue(context, schemaFields)],
+      }),
       theme.of(currentTheme()),
       lintGutter(),
       readOnly.of([
@@ -122,6 +128,9 @@ export function create(parent, options = {}) {
           EditorView.editable.of(!value),
         ]),
       });
+    },
+    setSchema(fields) {
+      schemaFields = Array.isArray(fields) ? fields : [];
     },
     setDiagnostics(diagnostics) {
       const normalized = (diagnostics || []).map((item) => ({

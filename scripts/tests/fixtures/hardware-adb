@@ -31,15 +31,7 @@ case "$*" in
       printf '%s\n' "${MOCK_INPUT_FAIL}" >&2
       exit 1
     fi
-    if [ "${MOCK_DEVICE:-rk3566_t}" = "cronos" ]; then
-      cat <<EOF
-N: Name="m_alsps_input"
-H: Handlers=event${MOCK_LIGHT_EVENT:-5}
-
-N: Name="goodix-ts"
-H: Handlers=event2
-EOF
-    elif [ "${MOCK_AMBIGUOUS:-0}" = 1 ]; then
+    if [ "${MOCK_AMBIGUOUS:-0}" = 1 ]; then
       cat <<EOF
 N: Name="sun-ths"
 H: Handlers=event7 event9
@@ -82,15 +74,6 @@ EOF
     printf '[ 1.000000] EV_ABS ABS_X 0000000c\n'
     [ "${MOCK_SAMPLE_STATUS:-ok}" != "timeout" ] || exit 124
     ;;
-  "shell cat /sys/class/leds/lcd-backlight/brightness")
-    if [ "${MOCK_BACKLIGHT_DENIED:-0}" = 1 ]; then
-      printf 'Permission denied\n' >&2
-      exit 1
-    fi
-    printf '102\n'
-    ;;
-  "shell cat /sys/class/leds/lcd-backlight/max_brightness") printf '255\n' ;;
-  "shell cat /sys/class/leds/lcd-backlight/"*) exit 1 ;;
   "shell test -e /proc/bus/input/devices") exit 0 ;;
   "shell test -r /proc/bus/input/devices")
     [ "${MOCK_INPUT_FAIL:-none}" != "denied" ]
@@ -99,14 +82,6 @@ EOF
   "shell test -r /dev/input/"event*)
     [ "${MOCK_FAIL_GETEVENT:-none}" != "denied" ] && [ "${MOCK_SAMPLE_DENIED:-0}" != 1 ]
     ;;
-  "shell test -e /sys/class/leds/lcd-backlight/brightness") exit 0 ;;
-  "shell test -e /sys/class/leds/lcd-backlight/max_brightness") exit 0 ;;
-  "shell test -e /sys/class/leds/lcd-backlight/"*) exit 1 ;;
-  "shell test -r /sys/class/leds/lcd-backlight/brightness")
-    [ "${MOCK_BACKLIGHT_DENIED:-0}" != 1 ]
-    ;;
-  "shell test -w /sys/class/leds/lcd-backlight/brightness") exit 0 ;;
-  "shell settings get system screen_brightness") printf '102\n' ;;
   "shell cat /data/local/tmp/../nonexistent") exit 1 ;;
   *) ;;
 esac

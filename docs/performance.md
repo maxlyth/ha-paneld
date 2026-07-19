@@ -10,7 +10,7 @@ This guide explains why an inexpensive Android wall panel can feel sluggish, stu
 Open the panel's web page at `http://<panel-ip>:8888/` or use the Home Assistant device page's **Visit** link. Record the same dashboard view for a similar period before and after each change so the comparison is meaningful.
 
 - **Dashboard responsiveness** — real interaction latency, the slowest interaction's input/handler/presentation breakdown, main-thread blocking, time to interactive and unexpected renderer reloads.
-- **Home Assistant state stream** — state updates per second, uncompressed JSON payload rate, initial hydration size, time until the main thread yields and the noisiest learned entities.
+- **Home Assistant state stream** — state updates per second, uncompressed JSON payload rate, initial hydration size, time until the main thread yields and the top three contributing entities over the rolling hour, ranked with both update rate and payload volume.
 - **Performance** — CPU, GPU, RAM, clock speed, temperature and the busiest processes.
 - **Entities page** — what the built-in renderer currently subscribes to, what automatic learning found and which dashboard rules still need a decision.
 - **Diagnostics dump** (`/diag`) — a copy-paste report for a bug report when the cause is still unclear.
@@ -22,6 +22,30 @@ The state-event main-thread value begins when a relevant Home Assistant message 
 Use the aligned chart to look for correlation. Interaction spikes that coincide with high state traffic and state-event occupancy point toward the firehose. Slow handler time with a quiet stream points toward dashboard JavaScript. Presentation delay and long rendering frames point toward layout, animation, camera or media work. Repeated renderer reloads point toward memory or renderer instability. Treat the measurements together; a single CPU snapshot cannot identify the cause by itself.
 
 The **Likely cause** row applies these conservative rules automatically and reports its confidence. It intentionally says that there is no clear dominant cause when the evidence does not support one.
+
+### Out-of-band filtered versus unfiltered A/B
+
+If the unfiltered dashboard overloads its own WebView, the in-page render values may stop changing. The host-side collector polls ha-paneld's service-owned performance API instead, so whole-panel CPU remains observable and, where root or the helper is available, so does the native Chromium renderer-thread probe. It also records the age of the last browser telemetry batch; a value over 15 seconds is reported as stalled rather than silently treating an old browser sample as current.
+
+The collector is read-only with respect to user configuration. It never enables, disables or rewrites the entity filter; the first binding request may create one private installation key in ha-paneld's internal state. Select the same dashboard view and workload for both arms, change the filter through the panel UI, wait for the dashboard reload, then run one command from a repository checkout for each state:
+
+```bash
+python3 scripts/measure-dashboard-performance.py collect --panel http://192.168.1.50:8888 --expect filtered --label filtered --output filtered.json
+```
+
+```bash
+python3 scripts/measure-dashboard-performance.py collect --panel http://192.168.1.50:8888 --expect unfiltered --label unfiltered --pair-with filtered.json --output unfiltered.json
+```
+
+Compare the two bounded, machine-readable results:
+
+```bash
+python3 scripts/measure-dashboard-performance.py compare filtered.json unfiltered.json --output comparison.json
+```
+
+Each arm defaults to three minutes with a 30-second warm-up and 10-second polling. `--pair-with` reuses an opaque comparison id from the first result, allowing the comparison to reject a different physical panel, configured Home Assistant/dashboard target or measurement-relevant setting without recording those private values. It cannot detect a different view selected manually within the same configured dashboard, so keep the visible view and workload unchanged. The collector rejects the arm if the expected mode is not active, the filter revision or renderer generation changes, the build/configuration changes during collection, filtering falls back, or fewer than three native CPU samples are available. It still writes the invalid result and the exact validation reasons. Existing output files are never overwritten.
+
+The JSON intentionally omits the panel URL and id, Home Assistant URL and dashboard path, entity ids, process names and filter hash. The panel computes the opaque fingerprints with a private random 256-bit installation key that never leaves the panel; fingerprints are unique to that comparison pair, so separate measurements cannot be correlated through them or used to guess room-style panel names. A panel that cannot persist this key refuses the measurement binding. The unfiltered entity count is the last synchronized catalog-backed count, not a live count recovered from the overloaded WebView; it is reported as unavailable when the catalog is empty. Network and browser traffic counters are normalized to their actual observed intervals, so a tolerated missed poll cannot skew the comparison. Browser-derived state/render timing and browser traffic rates are omitted from summaries when stale, while service-side CPU, memory, network and renderer-main values continue to be collected.
 
 ### Optional remote WebView debugging
 
@@ -60,7 +84,9 @@ The automatic filter is opt-in and applies only to the built-in renderer:
 
 Automatic learning cannot prove every custom card or dynamic template dependency. A missing entity may leave a card stale or unavailable, so review the result on a non-critical panel first and keep filtering disabled until the candidate is credible. The previous subscription remains available as the safe rollback: turn off **Automatic dashboard entity filter** and reload the dashboard.
 
-Advanced testers can supply and inspect an exact list through the API. The UI workflow, manual API format, runtime status and rollback commands are documented in [The built-in dashboard renderer](built-in-renderer.md#experimental-entity-filter-092).
+If old learned evidence or manual choices no longer describe the dashboard, use **Reset learned data** on the Entities page. The confirmed reset clears learned membership, pins/exclusions and ignored safety decisions, preserves the known-good active filter and starts a replacement scan. The filter therefore stays as the rollback boundary while the candidate is rebuilt; use the stronger API reset documented below only when the stored filter itself must also be removed.
+
+Advanced testers can supply and inspect an exact list through the API. The UI workflow, manual API format, runtime status and rollback commands are documented in [The built-in dashboard renderer](built-in-renderer.md#experimental-entity-filter).
 
 ### 2. Lighten the dashboard itself
 
@@ -87,6 +113,7 @@ PX30 and rk3566 panels can run a focused dashboard well, but they still have lim
 - [ ] Custom-card and template dependencies are pinned or otherwise accounted for
 - [ ] Entity-filter checks have been resolved deliberately rather than ignored accidentally
 - [ ] The same views have been compared before and after filtering using the performance cards on the Dashboard tab
+- [ ] If the page itself stalls unfiltered, the two arms have been collected and validated with the out-of-band measurement script
 - [ ] Heavy cards, camera streams and graphs have been tested separately
 - [ ] Required high-frequency entities have been tuned at the source where appropriate
 - [ ] If the panel uses a legacy stock NSPanel Pro Zigbee stack, its `guard_process.sh` has been checked

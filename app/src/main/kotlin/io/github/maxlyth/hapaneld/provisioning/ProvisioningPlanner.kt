@@ -79,6 +79,8 @@ internal object ProvisioningPlanner {
             is ProvisioningObservation.Known -> when (observation.value) {
                 ProvisioningShizukuState.READY ->
                     Result(ProvisioningItemStatus.SATISFIED, "ready", "shizuku_ready")
+                ProvisioningShizukuState.CONSENT_DISABLED ->
+                    Result(ProvisioningItemStatus.MANUAL, "disabled", "shizuku_consent_disabled")
                 ProvisioningShizukuState.PERMISSION_REQUIRED ->
                     Result(ProvisioningItemStatus.MANUAL, "permission_required", "shizuku_permission_required")
                 ProvisioningShizukuState.SERVICE_NOT_RUNNING ->

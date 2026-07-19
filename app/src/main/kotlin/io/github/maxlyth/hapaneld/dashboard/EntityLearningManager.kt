@@ -467,25 +467,34 @@ class EntityLearningManager(
             blockingIssues = effectiveBlocking,
             forceBootstrap = snapshot.forceBootstrap,
         )
-        synchronized(this@EntityLearningManager) {
-            check(snapshot.matchesCurrent(effectGeneration.get(), currentEffectState())) {
-                "entity-learning target or policy changed before commit"
-            }
-            store.commitSync(
-                snapshot.instanceKey, snapshot.dashboardPath, states, ws.metadata, ws.configJson, derived, scan.unresolved,
-                when (decision) {
-                    AutomaticSyncDecision.BLOCKED -> "blocked"
-                    AutomaticSyncDecision.APPLY -> "active"
-                    AutomaticSyncDecision.BOOTSTRAP -> "learning"
-                    AutomaticSyncDecision.OBSERVE -> "observing"
-                },
-                now,
-                issues = effectiveIssues,
-            )
-            bootstrapBlockingIssues = effectiveIssues.count { it.optBoolean("blocking", false) }
-            dynamicExpressionsJson = encodeDynamicExpressions(scan.dynamicExpressions)
-        }
-        applyStoredOverrides(snapshot.instanceKey, snapshot.dashboardPath, snapshot.overrides)
+        commitEntityLearningSyncEvidence(
+            owner = this@EntityLearningManager,
+            ensureCurrent = {
+                check(snapshot.matchesCurrent(effectGeneration.get(), currentEffectState())) {
+                    "entity-learning target or policy changed before commit"
+                }
+            },
+            commitSync = {
+                store.commitSync(
+                    snapshot.instanceKey, snapshot.dashboardPath, states, ws.metadata, ws.configJson, derived, scan.unresolved,
+                    when (decision) {
+                        AutomaticSyncDecision.BLOCKED -> "blocked"
+                        AutomaticSyncDecision.APPLY -> "active"
+                        AutomaticSyncDecision.BOOTSTRAP -> "learning"
+                        AutomaticSyncDecision.OBSERVE -> "observing"
+                    },
+                    now,
+                    issues = effectiveIssues,
+                )
+            },
+            applyStoredOverrides = {
+                applyStoredOverrides(snapshot.instanceKey, snapshot.dashboardPath, snapshot.overrides)
+            },
+            publishDiagnostics = {
+                bootstrapBlockingIssues = effectiveIssues.count { it.optBoolean("blocking", false) }
+                dynamicExpressionsJson = encodeDynamicExpressions(scan.dynamicExpressions)
+            },
+        )
         // A blocking dashboard rule invalidates the proposed set as a whole. Keep an existing safe
         // filter byte-for-byte, or keep a fresh renderer on its native diagnostic screen. Never apply
         // the bounded fragments of a partially unsafe dashboard and never fall back to an unfiltered
@@ -631,46 +640,54 @@ class EntityLearningManager(
         }
         val knownAccessed = batch.accessed.filterKeys(known::contains)
         val knownMissing = batch.missing.filterTo(mutableSetOf(), known::contains)
-        val admitted = telemetryWriteBarrier.writeIfCurrent(batch.target.generation) {
-            if (knownAccessed.isNotEmpty() || knownMissing.isNotEmpty()) {
-                val access = FeatureCosts.registry.span(FeatureCostOperation.ENTITY_ACCESS_WRITE)
-                    .work(units = (knownAccessed.size + knownMissing.size).toLong())
-                try {
-                    val counts = LinkedHashMap(knownAccessed)
-                    knownMissing.forEach { id -> counts.putIfAbsent(id, 1L) }
-                    store.recordAccess(
-                        batch.target.instance,
-                        batch.target.path,
-                        counts,
-                        batch.now,
-                    )
-                } catch (error: Exception) {
-                    access.outcome(FeatureCostOutcome.FAILURE)
-                    throw error
-                } finally {
-                    access.close()
+        val admitted = writeEntityTelemetryThen(
+            barrier = telemetryWriteBarrier,
+            admittedGeneration = batch.target.generation,
+            write = {
+                if (knownAccessed.isNotEmpty() || knownMissing.isNotEmpty()) {
+                    val access = FeatureCosts.registry.span(FeatureCostOperation.ENTITY_ACCESS_WRITE)
+                        .work(units = (knownAccessed.size + knownMissing.size).toLong())
+                    try {
+                        val counts = LinkedHashMap(knownAccessed)
+                        knownMissing.forEach { id -> counts.putIfAbsent(id, 1L) }
+                        store.recordAccess(
+                            batch.target.instance,
+                            batch.target.path,
+                            counts,
+                            batch.now,
+                        )
+                    } catch (error: Exception) {
+                        access.outcome(FeatureCostOutcome.FAILURE)
+                        throw error
+                    } finally {
+                        access.close()
+                    }
                 }
-                if (knownMissing.isNotEmpty() && config.dashboardEntityLearningApplied && config.dashboardEntityAutoRuntime) {
+                if (batch.metrics.isNotEmpty()) {
+                    val metric = FeatureCosts.registry.span(FeatureCostOperation.ENTITY_METRIC_WRITE)
+                        .work(
+                            units = batch.metrics.values.sumOf { it.first.coerceAtLeast(0L) },
+                            bytes = batch.metrics.values.sumOf { it.second.coerceAtLeast(0L) },
+                        )
+                    try {
+                        store.recordMetrics(batch.target.instance, batch.target.path, batch.metrics, batch.now)
+                    } catch (error: Exception) {
+                        metric.outcome(FeatureCostOutcome.FAILURE)
+                        throw error
+                    } finally {
+                        metric.close()
+                    }
+                }
+            },
+            afterWrite = {
+                if (knownMissing.isNotEmpty() && config.dashboardEntityLearningApplied &&
+                    config.dashboardEntityAutoRuntime
+                ) {
                     runCatching { capturePromotionSnapshot(batch.target.instance, batch.target.path) }
                         .getOrNull()?.let(::queuePromotion)
                 }
-            }
-            if (batch.metrics.isNotEmpty()) {
-                val metric = FeatureCosts.registry.span(FeatureCostOperation.ENTITY_METRIC_WRITE)
-                    .work(
-                        units = batch.metrics.values.sumOf { it.first.coerceAtLeast(0L) },
-                        bytes = batch.metrics.values.sumOf { it.second.coerceAtLeast(0L) },
-                    )
-                try {
-                    store.recordMetrics(batch.target.instance, batch.target.path, batch.metrics, batch.now)
-                } catch (error: Exception) {
-                    metric.outcome(FeatureCostOutcome.FAILURE)
-                    throw error
-                } finally {
-                    metric.close()
-                }
-            }
-        }
+            },
+        )
         if (!admitted) {
             FeatureCosts.registry.recordDropped(FeatureCostOperation.ENTITY_TELEMETRY_FLUSH, batch.uniqueIds.toLong())
         }
@@ -766,27 +783,42 @@ class EntityLearningManager(
     }
 
     /** Tester recovery/reset: discard derived dashboard evidence, never credentials or the HA catalog. */
-    fun resetEvidence(confirm: Boolean, clearFilter: Boolean = false): String {
-        if (!confirm) return JSONObject().put("ok", false).put("confirmation_required", true).toString()
-        ensureInitialized()
-        check(syncJob?.isActive != true) { "synchronization is running" }
-        check(config.commitDashboardEntityEvidenceReset(clearFilter)) { "failed to reset entity-learning preferences" }
-        telemetryWriteBarrier.invalidateAndWrite(
-            invalidate = { invalidateEffects() },
-        ) {
-            if (config.dashboardEntityLearningEnabled) {
-                // Preserve a known-good live set until the replacement scan succeeds. A blocking or failed
-                // default reset must never turn into an unfiltered renderer or a partial set. The explicit
-                // clean-slate path clears that set deliberately and holds the native bootstrap screen.
-                resetBootstrapPending = true
-            }
-            store.resetEvidence(instance(), dashboardPath())
+    fun resetEvidence(confirm: Boolean, clearFilter: Boolean = false): String =
+        withEntityLearningMutationLock(this) {
+            if (!confirm) return JSONObject().put("ok", false).put("confirmation_required", true).toString()
+            ensureInitialized()
+            check(syncJob?.isActive != true) { "synchronization is running" }
+            val preferenceSnapshot = config.dashboardEntityBackupState()
+            val previousBootstrapPending = resetBootstrapPending
+            runEntityEvidenceResetTransaction(
+                commitPreferences = { config.commitDashboardEntityEvidenceReset(clearFilter) },
+                resetStore = {
+                    telemetryWriteBarrier.invalidateAndWrite(
+                        invalidate = { invalidateEffects() },
+                    ) {
+                        if (config.dashboardEntityLearningEnabled) {
+                            // Preserve a known-good live set until the replacement scan succeeds. A blocking or failed
+                            // default reset must never turn into an unfiltered renderer or a partial set. The explicit
+                            // clean-slate path clears that set deliberately and holds the native bootstrap screen.
+                            resetBootstrapPending = true
+                        }
+                        store.resetEvidence(instance(), dashboardPath())
+                    }
+                },
+                restorePreferences = {
+                    resetBootstrapPending = previousBootstrapPending
+                    config.restoreDashboardEntityEvidencePreferences(preferenceSnapshot)
+                },
+                afterSuccess = {
+                    bootstrapBlockingIssues = 0
+                    dynamicExpressionsJson = "[]"
+                },
+            )
+            if (clearFilter) onFilterChanged()
+            val started = if (config.dashboardEntityLearningEnabled) syncNow("reset") else false
+            return JSONObject().put("ok", true).put("sync_started", started)
+                .put("filter_cleared", clearFilter).toString()
         }
-        if (clearFilter) onFilterChanged()
-        val started = if (config.dashboardEntityLearningEnabled) syncNow("reset") else false
-        return JSONObject().put("ok", true).put("sync_started", started)
-            .put("filter_cleared", clearFilter).toString()
-    }
 
     private fun applyStoredOverrides(instance: String, path: String, overrides: Map<String, String>) {
         overrides.forEach { (id, override) -> store.setOverride(instance, path, id, override) }
@@ -888,6 +920,9 @@ class EntityLearningManager(
             .put("dynamic_expressions", JSONArray(dynamicExpressionsJson))
             .toString()
     }
+
+    /** Cheap cached evidence for the shared app database; does not start entity synchronization. */
+    fun databaseUsage(): EntityCatalogStore.DatabaseUsage = store.databaseUsage()
 
     @Synchronized fun setIssueIgnored(fingerprint: String, ignored: Boolean): String {
         ensureInitialized()
@@ -1675,6 +1710,22 @@ internal class DeadlineBoundedInputStream(
 internal inline fun <T> withEntityLearningMutationLock(owner: Any, mutation: () -> T): T =
     synchronized(owner, mutation)
 
+/** Publish one scan's SQLite evidence and stored overrides under the same manager generation check.
+ * A cancelled coroutine can remain on-CPU after [Job.isActive] becomes false; keeping these writes
+ * under the mutation monitor prevents a reset from clearing the catalog between the two writes. */
+internal inline fun commitEntityLearningSyncEvidence(
+    owner: Any,
+    ensureCurrent: () -> Unit,
+    commitSync: () -> Unit,
+    applyStoredOverrides: () -> Unit,
+    publishDiagnostics: () -> Unit,
+) = synchronized(owner) {
+    ensureCurrent()
+    commitSync()
+    applyStoredOverrides()
+    publishDiagnostics()
+}
+
 internal fun shouldInitializeEntityLearningOnStart(enabled: Boolean): Boolean = enabled
 
 /**
@@ -1789,6 +1840,19 @@ internal class EntityTelemetryWriteBarrier(
     }
 }
 
+/** Run follow-up work only after releasing the telemetry barrier. Follow-ups may enter the manager
+ * monitor; reset takes that monitor before this barrier, so nesting them would invert the lock order. */
+internal fun writeEntityTelemetryThen(
+    barrier: EntityTelemetryWriteBarrier,
+    admittedGeneration: Long,
+    write: () -> Unit,
+    afterWrite: () -> Unit,
+): Boolean {
+    val admitted = barrier.writeIfCurrent(admittedGeneration, write)
+    if (admitted) afterWrite()
+    return admitted
+}
+
 internal fun runEntityOverrideTransaction(
     commitOverridePreferences: () -> Boolean,
     applyStoreOverride: () -> Unit,
@@ -1806,6 +1870,26 @@ internal fun runEntityOverrideTransaction(
             .exceptionOrNull()?.let(failure::addSuppressed)
         throw failure
     }
+}
+
+/** Preferences and SQLite cannot share one transaction. The SQLite reset is itself transactional;
+ * restore the exact preference snapshot if it rolls back so a failed reset publishes no partial
+ * durable state. */
+internal fun runEntityEvidenceResetTransaction(
+    commitPreferences: () -> Boolean,
+    resetStore: () -> Unit,
+    restorePreferences: () -> Boolean,
+    afterSuccess: () -> Unit,
+) {
+    check(commitPreferences()) { "entity evidence reset preference commit failed" }
+    try {
+        resetStore()
+    } catch (failure: Throwable) {
+        runCatching { check(restorePreferences()) { "entity evidence reset preference rollback failed" } }
+            .exceptionOrNull()?.let(failure::addSuppressed)
+        throw failure
+    }
+    afterSuccess()
 }
 
 /** Candidate aliases are accepted only from the authenticated, bounded `/api/config` response. */

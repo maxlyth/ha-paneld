@@ -59,8 +59,9 @@ internal class ConflatedWorker<T>(
         val running = closeWorker()
         running?.interrupt()
         if (running == null || running === Thread.currentThread()) return running == null
+        if (timeoutMs <= 0L) return false
         try {
-            running.join(timeoutMs.coerceAtLeast(0L))
+            running.join(timeoutMs)
         } catch (_: InterruptedException) {
             Thread.currentThread().interrupt()
             return false

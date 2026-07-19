@@ -57,12 +57,16 @@ internal class AndroidProvisioningObservationCollector(
             when (shizukuState()) {
                 ShizukuState.READY ->
                     ProvisioningObservation.Known(ProvisioningShizukuState.READY)
+                ShizukuState.DISABLED ->
+                    ProvisioningObservation.Known(ProvisioningShizukuState.CONSENT_DISABLED)
                 ShizukuState.PERMISSION_REQUIRED, ShizukuState.MANUAL_GRANT_REQUIRED ->
                     ProvisioningObservation.Known(ProvisioningShizukuState.PERMISSION_REQUIRED)
                 ShizukuState.MANAGER_MISSING ->
                     ProvisioningObservation.Known(ProvisioningShizukuState.MANAGER_MISSING)
-                ShizukuState.STOPPED, ShizukuState.BINDING ->
+                ShizukuState.STOPPED ->
                     ProvisioningObservation.Known(ProvisioningShizukuState.SERVICE_NOT_RUNNING)
+                ShizukuState.BINDING ->
+                    ProvisioningObservation.Unknown(ProvisioningUnknownReason.NOT_READY)
                 ShizukuState.MANAGER_UNTRUSTED, ShizukuState.INCOMPATIBLE ->
                     ProvisioningObservation.Unknown(ProvisioningUnknownReason.IDENTITY_UNAVAILABLE)
                 ShizukuState.ERROR ->

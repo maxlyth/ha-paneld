@@ -31,8 +31,8 @@ int conn_active(void) {
 }
 
 void server_serve(int cfd) {
-    // A connection that sends nothing for IDLE_SEC is dropped — unless it SUBSCRIBEs, where sitting
-    // idle (only reading the KEY stream) is the whole point. Bound writes separately so a client that
+    // A connection that sends nothing for IDLE_SEC is dropped unless it joined an async stream, where
+    // sitting idle (only reading events) is the whole point. Bound writes separately so a client that
     // stops reading cannot pin one of the finite worker slots forever.
     struct timeval receive_timeout = { .tv_sec = IDLE_SEC, .tv_usec = 0 };
     struct timeval send_timeout = { .tv_sec = SEND_SEC, .tv_usec = 0 };

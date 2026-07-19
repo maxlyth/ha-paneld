@@ -59,6 +59,14 @@ import java.io.File
 import java.net.NetworkInterface
 import java.util.Collections
 
+internal fun shouldRouteDashboardHomeToAdmin(
+    configuredLauncherPackage: String,
+    ownPackage: String,
+    action: String?,
+    categories: Set<String>?,
+): Boolean = configuredLauncherPackage == ownPackage &&
+    action == Intent.ACTION_MAIN && categories?.contains(Intent.CATEGORY_HOME) == true
+
 internal enum class EntityFilterFailureDisposition { HOLD_NATIVE, ALLOW_DIRECT }
 
 /** Automatic learning must never turn an interceptor failure into a full, unfiltered HA stream. */
@@ -247,9 +255,18 @@ class DashboardActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        activityOwner = BuiltinDashboard.acquireActivityOwner()
         supportActionBar?.hide()
         val config = Config(this)
+        // Android 14's HOME role resolves at package granularity when one package exposes multiple HOME
+        // activities: set-home-activity can report success for AdminLauncherActivity yet still resolve
+        // DashboardActivity. Route an actual HOME intent according to the explicit Launcher app policy;
+        // service/watchdog starts are component-explicit and therefore continue to foreground the dashboard.
+        if (shouldRouteDashboardHomeToAdmin(config.launcherPackage, packageName, intent?.action, intent?.categories)) {
+            Log.i(TAG, "HOME invoked with Panel admin selected — opening the admin launcher")
+            fallbackToLauncher()
+            return
+        }
+        activityOwner = BuiltinDashboard.acquireActivityOwner()
         if (config.haUrl.isBlank()) {
             // We're a HOME activity: never finish to a blank home. With no URL to render, hand off to
             // the admin launcher (also a HOME activity) so the panel is never stranded.
@@ -605,6 +622,11 @@ class DashboardActivity : AppCompatActivity() {
         super.onNewIntent(intent)
         if (destroyed || !BuiltinDashboard.ownsActivity(activityOwner)) return
         val config = Config(this)
+        if (shouldRouteDashboardHomeToAdmin(config.launcherPackage, packageName, intent?.action, intent?.categories)) {
+            Log.i(TAG, "HOME invoked with Panel admin selected — opening the admin launcher")
+            fallbackToLauncher()
+            return
+        }
         if (config.haUrl.isBlank()) {
             // Same never-strand guard as onCreate: the URL was cleared while we were running — a load
             // would build a scheme-less garbage URL behind an eternal "Reconnecting…" interstitial.
@@ -1200,7 +1222,9 @@ class DashboardActivity : AppCompatActivity() {
         // The page carries a live HA session, so only expose the WebView's DevTools socket when network
         // adb is deliberately on (a debug posture) — not by default. The CDP relay (also off by default)
         // is the LAN publisher on top of this.
-        WebView.setWebContentsDebuggingEnabled(config.networkAdbEnabled)
+        WebView.setWebContentsDebuggingEnabled(
+            shouldEnableWebViewDebugging(config.networkAdbEnabled, config.hardenedSecurityEnabled),
+        )
         // A rebuild (renderer crash) discards the old root that held any fullscreen (onShowCustomView)
         // view. Clear the stale references so the crash didn't leave customView non-null — otherwise every
         // future onShowCustomView would be rejected and fullscreen video would be permanently broken.
@@ -1768,6 +1792,9 @@ class DashboardActivity : AppCompatActivity() {
         private const val WAKE_MEDIA_SAMPLE_MS = 6_000L         // tolerate slow camera transport reconstruction
     }
 }
+
+internal fun shouldEnableWebViewDebugging(networkAdbEnabled: Boolean, hardenedSecurityEnabled: Boolean): Boolean =
+    networkAdbEnabled && !hardenedSecurityEnabled
 
 /**
  * Pull-to-refresh that only arms for a drag beginning at the very top edge of the screen — a pull in

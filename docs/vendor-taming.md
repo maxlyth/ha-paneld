@@ -16,9 +16,9 @@ All three are privileged, so the feature needs **root or the [helper daemon](../
 
 ## Using it
 
-This is configured **on the panel itself**, in the HTTP config page — not from Home Assistant. It's a deploy-time / post-firmware-update action, not something you toggle day to day, so it doesn't belong on a dashboard.
+This is managed **on the panel itself**, in the HTTP **Install** tab — not from Home Assistant. It's a deploy-time / post-firmware-update action, not something you toggle day to day, so it doesn't belong on a dashboard.
 
-Open the config page (`http://<panel-ip>:8888/`) and find the **Vendor packages** card (its own card, separate from Configuration). It lists candidate packages, each with its current state and a single action button:
+Open the panel UI (`http://<panel-ip>:8888/install`) and find the **Vendor packages** card. It lists candidate packages, each with its current state and a single action button:
 
 - On a **panel with a known profile** (e.g. the NSPanel Pro), the list is the curated set of intrusive packages known for that hardware — `com.eWeLinkControlPanel` is listed there.
 - On a **generic panel**, ha-paneld enumerates the apps on the device that look like vendor add-ons (anything with a launcher entry, an overlay permission, or a non-platform signature), so you can spot the culprit without knowing its package name.

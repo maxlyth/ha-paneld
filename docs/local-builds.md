@@ -36,4 +36,4 @@ Both `keystore.properties` and `*.jks` are gitignored.
 With the file present, `assembleRelease` is release-signed; without it (e.g. CI, or a fresh clone), gradle leaves the release APK unsigned and the rest of the pipeline is unaffected.
 
 > [!NOTE]
-> A panel currently running a **debug-signed** build needs one `adb uninstall <pkg>` before its first release-signed install (the signature changes); after that, in-place `install -r` updates work. The committed `gradle/debug.keystore` keeps all *debug* builds mutually in-place-updatable.
+> A panel currently running a **debug-signed** build needs one uninstall before its first release-signed install because the signature changes. First create and verify a full encrypted `.hpb` backup from **Install → Backup**; config JSON from `--export` is not a full backup. After reinstalling, restore the `.hpb` from **Install → Restore**. Subsequent same-key `install -r` updates work. The committed `gradle/debug.keystore` keeps all *debug* builds mutually in-place-updatable.

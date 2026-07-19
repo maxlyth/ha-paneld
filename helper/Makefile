@@ -23,8 +23,8 @@ BUILD   := build
 # Capability + transport modules — the SINGLE source list shared by the daemon, the fuzz harness, and
 # the unit tests, so coverage can never silently drop a module. main.c (accept loop) and sysexec.c
 # (real exec/pipe/thread/reboot) are deliberately NOT here: the fuzz and test builds swap in a stub
-# sysexec and never run main, so a valid REBOOT/RELOAD/WATCH can't exec or spawn on the build host.
-CORE_SRCS := $(addprefix $(SRC_DIR)/, util.c led.c screen.c input.c sysctl.c perf.c cht8305.c version.c companion.c server.c dispatch.c)
+# sysexec and never run main, so a valid REBOOT/RELOAD/WATCH/GPIOWATCH can't exec or spawn on the build host.
+CORE_SRCS := $(addprefix $(SRC_DIR)/, util.c led.c screen.c input.c gpio.c sysctl.c perf.c cht8305.c version.c companion.c server.c dispatch.c)
 DAEMON_SRCS := $(CORE_SRCS) $(SRC_DIR)/main.c $(SRC_DIR)/sysexec.c
 STUB := test/sysexec_stub.c
 
@@ -39,7 +39,7 @@ $(BUILD)/hapaneld-helper: $(DAEMON_SRCS) | $(BUILD)
 # Unit tests: CORE modules + the sysexec stub (no real exec) + the test driver.
 test: $(BUILD)/unit $(BUILD)/hapaneld-helper $(BUILD)/companion-boundary $(BUILD)/peer-auth $(BUILD)/request-timeout $(BUILD)/cdprelay-resource-test $(BUILD)/cdprelay-test
 	$(BUILD)/unit
-	test "$$($(BUILD)/hapaneld-helper --version)" = "HELPER version=1.0.0 proto=1.0"
+	test "$$($(BUILD)/hapaneld-helper --version)" = "HELPER version=1.1.0 proto=1.1"
 	$(BUILD)/companion-boundary
 	$(BUILD)/peer-auth
 	$(BUILD)/request-timeout

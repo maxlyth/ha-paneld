@@ -8,7 +8,8 @@ class SensorRunCallbacksTest {
     private data class Events(
         val lux: MutableList<Int> = mutableListOf(),
         val rawLux: MutableList<Float> = mutableListOf(),
-        val proximity: MutableList<Boolean> = mutableListOf(),
+        val proximity: MutableList<Pair<Boolean?, Int?>> = mutableListOf(),
+        val gestures: MutableList<Unit> = mutableListOf(),
         val temperature: MutableList<Float> = mutableListOf(),
         val humidity: MutableList<Float> = mutableListOf(),
     )
@@ -16,7 +17,8 @@ class SensorRunCallbacksTest {
     private fun run(events: Events) = SensorRunCallbacks(
         onLux = events.lux::add,
         onLuxRaw = events.rawLux::add,
-        onProximity = events.proximity::add,
+        onProximity = { near, level, _ -> events.proximity += near to level },
+        onGesture = { events.gestures += Unit },
         onTemperature = events.temperature::add,
         onHumidity = events.humidity::add,
     )
@@ -48,16 +50,17 @@ class SensorRunCallbacksTest {
         val replacement = run(replacementEvents)
 
         old.light(50f, 100_000)
-        old.proximity(true)
+        old.proximity(true, 100)
+        old.gesture()
         old.temperature(22f, 100_000)
         old.humidity(45f, 100_000)
         replacement.light(12f, 100)
-        replacement.proximity(false)
+        replacement.proximity(false, 0)
 
         assertFalse(old.isOpen())
         assertEquals(Events(), oldEvents)
         assertEquals(listOf(12), replacementEvents.lux)
-        assertEquals(listOf(false), replacementEvents.proximity)
+        assertEquals(listOf(false to 0), replacementEvents.proximity)
     }
 
     @Test fun aClockRollbackCannotFreezeAChangedReading() {
@@ -67,5 +70,40 @@ class SensorRunCallbacksTest {
         run.light(20f, now = 90_000)
 
         assertEquals(listOf(10, 20), events.lux)
+    }
+
+    @Test fun proximityStartupPublishesUnknownBeforeAnImmediateSourceValue() {
+        val events = Events()
+        val run = run(events)
+
+        val active = initializeProximitySource(run, isCurrent = { true }) {
+            run.proximity(true, 100)
+        }
+
+        assertEquals(true, active)
+        assertEquals(listOf(null to null, true to 100), events.proximity)
+    }
+
+    @Test fun proximityStartupDoesNotActivateAfterInitialCallbackClosesRun() {
+        val events = Events()
+        lateinit var run: SensorRunCallbacks
+        run = SensorRunCallbacks(
+            onLux = events.lux::add,
+            onLuxRaw = events.rawLux::add,
+            onProximity = { near, level, _ ->
+                events.proximity += near to level
+                run.close()
+            },
+            onGesture = { events.gestures += Unit },
+            onTemperature = events.temperature::add,
+            onHumidity = events.humidity::add,
+        )
+        var activated = false
+
+        val active = initializeProximitySource(run, isCurrent = { true }) { activated = true }
+
+        assertFalse(active)
+        assertFalse(activated)
+        assertEquals(listOf(null to null), events.proximity)
     }
 }

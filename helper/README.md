@@ -1,6 +1,6 @@
 # hapaneld-helper — root helper daemon for sandbox-walled panels
 
-A tiny root daemon that gives ha-paneld a whitelisted, authenticated control surface for the things a sandboxed Android app can't reach itself: the RGB LED, screen-backlight power, hardware-button instrumentation, display density / CPU governor / screencap / perf snapshots, and app reload/start/ reboot. It began as an LED-only helper (the former `hapaneld-ledd`) and was **renamed `hapaneld-helper`** to match its broader role; the code is split by capability under [`src/`](#source-layout). Upgrading from an old `hapaneld-ledd` install is handled by `install-daemon.sh` (it removes the old binary + init service so both don't run) — see [Boot persistence](#boot-persistence-init-service).
+A tiny root daemon that gives ha-paneld a whitelisted, authenticated control surface for the things a sandboxed Android app can't reach itself: the RGB LED, screen-backlight power, hardware-button and GPIO instrumentation, display density / CPU governor / screencap / perf snapshots, and app reload/start/reboot. It began as an LED-only helper (the former `hapaneld-ledd`) and was **renamed `hapaneld-helper`** to match its broader role; the code is split by capability under [`src/`](#source-layout). Upgrading from an old `hapaneld-ledd` install is handled by `install-daemon.sh` (it removes the old binary + init service so both don't run) — see [Boot persistence](#boot-persistence-init-service).
 
 ## Why it exists
 
@@ -17,7 +17,7 @@ Newline-terminated ASCII on the abstract UNIX socket `@hapaneld-helper`. One or 
 
 | Command | Effect | Reply |
 | --- | --- | --- |
-| `VERSION` | read the helper identity without touching hardware | `HELPER version=1.0.0 proto=1.0` / `ERR` when arguments are supplied |
+| `VERSION` | read the helper identity without touching hardware | `HELPER version=1.1.0 proto=1.1` / `ERR` when arguments are supplied |
 | `RGB <r> <g> <b>` | set LED colour (each 0..255) | `OK` / `ERR` |
 | `OFF` | LED off | `OK` / `ERR` |
 | `BTN <0..255>` | button-backlight brightness | `OK` / `ERR` |
@@ -39,19 +39,25 @@ Newline-terminated ASCII on the abstract UNIX socket `@hapaneld-helper`. One or 
 | `INPUTV2` | advertise truthful initial evdev open/grab acknowledgement semantics; older helpers return their normal unknown-verb `ERR` | `OK` |
 | `WATCH <evdev> <0\|1>` | open a `/dev/input/eventN` node; `1` requires `EVIOCGRAB` (suppress the default Android action). Idempotent only for the same node and grab policy | `OK` only after the initial open, requested grab, and reader start succeed; otherwise `ERR` |
 | `SUBSCRIBE` | acquire requested grabs and stream async `KEY <code> <value>` / `SW <code> <value>` lines from every `WATCH`ed node until disconnect | `OK` only after required grabs are active; `ERR` on grab failure or subscriber overflow |
+| `GPIOV1` | advertise the generic GPIO watch/stream contract; older helpers return their normal unknown-verb `ERR` | `OK` / `ERR` when arguments are supplied |
+| `GPIORESET` | clear the GPIO watch table before configuring a new sensor runtime; independent of evdev `WATCHRESET` | `OK`, or `ERR` while any GPIO subscriber is active / when arguments are supplied |
+| `GPIOWATCH <n>` | hold and watch the already-exported `/sys/class/gpio/gpio<n>/value`, with `n` restricted to 0–65535 and at most eight distinct watches | `OK` only after the initial open/read and reader start succeed; otherwise `ERR` |
+| `GPIOSUBSCRIBE` | stream current, changed, and unavailable GPIO status independently of evdev subscribers | `OK`, then `GPIO <n> <0\|1>` or `GPIOUNAVAILABLE <n>` records until disconnect; `ERR` on subscriber overflow / arguments |
 | `DENSITY` / `DENSITY <n>\|reset` | get display density / set it (`wm density`) | `PHYS=<n> OVER=<n\|->` / `ERR` (get) · `OK` / `ERR` (set) |
 | `FONTSCALE` / `FONTSCALE <n>\|reset` | get system font scale / set it (`settings system font_scale`) | `SCALE=<n\|null>` / `ERR` (get) · `OK` / `ERR` (set) |
 | `GOV <name>` | set the CPU scaling governor on all cores | `OK` / `ERR` |
 | `ZIGBEECONTAIN` | argument-free containment for the exact vendor-native Sonoff `/vendor/bin/siliconlabs_host` layout; targets only its guard, gateway and matching broker, then demotes a surviving gateway | `OK` / `PARTIAL` / `ERR` |
 | `PERFDUMP` | CPU/load/temp/gpu/process snapshot (for sandbox-walled apps) | marker-delimited stream, then EOF |
-| `CHT8305` | room temp/humidity from the CHT8305 input devices (`EVIOCGABS` on the `temperature`/`humidity` nodes) | `T=<centi> H=<centi>` / `ERR` |
+| `CHT8305` | room temp/humidity from exact allowlisted input layouts (`temperature`/`humidity` or ZX-SMT156 `sun-ths`/`sun-hum`) | `T=<centi> H=<centi>` / `ERR` |
 | `REBOOT` | reboot the panel | `OK` (then down) |
 | `PING` | liveness probe | `OK` |
 | anything else | — | `ERR` |
 
 `VERSION` is the stable compatibility bootstrap. `version` is the helper release version and `proto` is the wire protocol version; clients accept the same protocol major and treat later minor versions as additive. Helpers from before this command return the ordinary unknown-command `ERR`, so the app verifies them with `PING` and reports them as reachable but compatibility-unverified. Run `hapaneld-helper --version` to print the same identity without initializing hardware or binding the socket.
 
-`WATCH`/`SUBSCRIBE` instrument physical buttons the Android input pipeline doesn't deliver to a sandboxed app — e.g. the WF1589T power key (grabbed so it no longer sleeps the panel) and the TPA10 orange button (an `EV_SW` switch, not a key). The **app** chooses which node to watch and whether to grab it, from its `DeviceProfile`; the daemon streams raw events and the app decides what each means. The app first probes `INPUTV2`, requires each `WATCH` acknowledgement before subscribing, and treats an older helper's stream as usable but diagnostically unverified. A current daemon never degrades a requested exclusive grab into a non-exclusive reader, holds a grab only while at least one subscriber owns delivery, and releases it when the last subscriber disconnects. If a node disappears after setup, its reader retries until it can reopen and, where requested, re-establish the grab.
+`WATCH`/`SUBSCRIBE` instrument physical buttons the Android input pipeline doesn't deliver to a sandboxed app — e.g. the WF1589T power key (grabbed so it no longer sleeps the panel) and the TPA10 orange button (an `EV_SW` switch, not a key). The **app** chooses which validated profile node to watch and whether to grab it; the daemon streams raw events and the app decides what each means. The app first probes `INPUTV2`, requires each `WATCH` acknowledgement before subscribing, and treats an older helper's stream as usable but diagnostically unverified. A current daemon never degrades a requested exclusive grab into a non-exclusive reader, holds a grab only while at least one subscriber owns delivery, and releases it when the last subscriber disconnects. If a node disappears after setup, its reader retries until it can reopen and, where requested, re-establish the grab.
+
+`GPIOV1`/`GPIORESET`/`GPIOWATCH`/`GPIOSUBSCRIBE` form a separate sensor domain, so a proximity reporter can reconnect and reconfigure without interrupting an existing evdev button subscription. The app supplies the GPIO number from its `DeviceProfile`; the daemon derives only the fixed legacy-sysfs `value` and `edge` paths and never exports a GPIO or changes its direction. It holds the `value` descriptor for the watch lifetime, configures `edge=both` when the kernel exposes a recognised edge attribute, waits on `poll(POLLPRI)`, and restores the prior edge setting on reset. When edge configuration is unavailable, it falls back to a fixed 500 ms sample interval on the same descriptor—there is no shell command or process per sample. Edge mode also rechecks every five seconds so a missed vendor-driver notification cannot leave state stale indefinitely. The first `GPIO <n> <0|1>` record after subscribing is the current binary value; later values are emitted only on change. If the held descriptor becomes unreadable, the helper emits one `GPIOUNAVAILABLE <n>` status before its bounded reopen loop; a recovered descriptor emits its current value and restores availability. As with the evdev stream, a hardware/status event can race ahead of the subscription `OK`, so clients accept valid records during that handshake.
 
 `SCREEN OFF` powers the display backlight down at the hardware level (true off) while leaving the device Awake — no keyguard, so it wakes without a PIN. This is why a panel with a device PIN needs the daemon for screen-off: a sandboxed app can only dim Settings brightness (clamped to a minimum on many panels) and `lockNow()` would force the keyguard.
 
@@ -60,7 +66,8 @@ Newline-terminated ASCII on the abstract UNIX socket `@hapaneld-helper`. One or 
 - **Peer-uid authentication.** The transport is an abstract-namespace UNIX socket, so the daemon reads the connecting process's credentials (`SO_PEERCRED`) and accepts **only** ha-paneld's current live uid plus root. ADB operators use a root shell; generic Android shell uid 2000 is rejected because Shizuku also runs authorized applications under that identity. The app's uid is resolved live by `stat`-ing `/data/data/io.github.maxlyth.hapaneld`, because it changes on every reinstall. Every other local app is rejected and the connection closed before a single command runs. (The earlier `127.0.0.1:8889` TCP listener had no auth — any app with `INTERNET` could `REBOOT`/`SCREENCAP` it.)
 - **Airtight parsing.** A bounded per-connection line buffer (commands split across reads still parse; overlong lines are dropped, not mis-split or overflowed); every argument `sscanf` is width-bounded; unknown verbs return `ERR`.
 - **Fixed Zigbee containment.** `ZIGBEECONTAIN` accepts no arguments and admits only the exact Sonoff vendor-native directory. It does not use broad process-name matching or accept a caller-selected path.
-- **Resource limits.** Concurrent connections are capped, and an idle connection is dropped after a timeout — except long-lived `SUBSCRIBE` streams, which are meant to sit idle reading events. So a connection flood can't exhaust the thread-per-connection model.
+- **Resource limits.** Concurrent connections are capped, and an idle connection is dropped after a timeout — except long-lived `SUBSCRIBE`/`GPIOSUBSCRIBE` streams, which are meant to sit idle reading events. Evdev and GPIO each have fixed eight-watch and eight-subscriber registries, while the global 16-connection cap remains the outer bound. GPIO fallback sampling has fixed 500 ms and two-second reopen intervals, so unavailable or non-edge hardware cannot create a busy loop or a process storm.
+- **Bounded GPIO mutation.** `GPIOWATCH` accepts only a decimal number from 0 to 65535. It derives fixed `/sys/class/gpio/gpio<n>/value` and `edge` paths, writes only the recognised `edge` attribute to request `both`, and restores its prior recognised value on reset. It never writes GPIO `export`, `unexport`, `direction`, or `value`.
 - **Descriptor-anchored Companion files.** Backup and restore accept only the full/minimal HA Companion package names and the fixed login-file set; no caller pathname reaches the filesystem. Package, parent and file components are opened relative to trusted directory descriptors with `O_NOFOLLOW`, and live files must be app-owned, regular, single-link inodes within strict per-file and aggregate bounds. Restore uploads first enter a root-owned compartment, then a single helper-owned transaction stages replacement inodes, preserves owner and SELinux label, and fsyncs a fixed-format prepared marker before moving old live files. Old-to-rollback renames are directory-fsynced before new live files are installed; a separately named committed marker is atomically renamed and fsynced before rollback cleanup. After a daemon or power interruption, the next Companion data command rolls a prepared transaction back or finishes a committed transaction, and unexplained rollback artifacts fail closed rather than being deleted. Supported Companion `START`/`RELOAD` requests return `BUSY` while the mutex is held and while any durable marker or unexplained rollback remains after a daemon restart.
 - The commands that shell out (`RELOAD`, `START`, `REBOOT` via `am`/`svc`) sanitise their argument against a strict char-whitelist; the LED/backlight writes touch **only** the whitelisted nodes (`avs-pwm-led/avsux_animation`, `button-backlight/brightness`).
 
@@ -71,19 +78,20 @@ A set colour **holds** until the next command (no auto-revert); `OFF` writes bla
 
 ## Extending the helper (contributor guide)
 
-ha-paneld's per-panel knowledge lives in **`DeviceProfile`** silos on the app side — one file per panel (`device/Tpa10.kt`, `device/Wf1589t.kt`, …). The intent is that adding a panel means writing **one profile file** and nothing else. The daemon is designed to honour that same separation: it should be **panel-blind**, exposing *generic, parameterised primitives* while the profile decides which to use and with what targets.
+ha-paneld's per-panel facts live in versioned **runtime YAML profiles** on the app side. A new panel that can use existing compiled mechanisms should need only one YAML profile; a genuinely new mechanism still requires a reviewed core driver. The daemon honours the same boundary: it remains **panel-blind**, exposing generic, parameterised primitives while validated profile data selects a compiled mechanism and its bounded targets.
 
 How well each capability meets that today:
 
 | Capability | Where panel specifics live | New-panel change |
 | --- | --- | --- |
 | **Buttons** (`WATCH`/`SUBSCRIBE`) | the app passes the evdev node + grab flag from its profile; daemon streams raw events | **profile only** — no daemon change |
+| **GPIO inputs** (`GPIOWATCH`/`GPIOSUBSCRIBE`) | the app passes a bounded GPIO number from its profile; daemon derives fixed sysfs paths and streams binary values | **profile only** — no daemon change |
 | **Screen** (`SCREEN`) | daemon auto-discovers `/sys/class/backlight` | **none** (optionally accept an app-supplied path for multi-backlight panels) |
 | **Reboot / reload / start** | generic `am`/`svc` | **none** |
 | **LED** (`RGB`/`OFF`/`BTN`) | **hardcoded** to the TPA10 sysfs node + its `avsux` write format | **core change** — see below |
 
 > [!NOTE]
-> **Buttons are the reference pattern.** `WATCH` takes the target *as a parameter from the profile*, constrained to a `/dev/input/` prefix. A new panel with an unusual physical button needs **zero** daemon edits — just an `evdevButtons` entry in its `DeviceProfile`. New capabilities should copy this shape.
+> **Buttons are the reference pattern.** `WATCH` takes the target *as a parameter from the profile*, constrained to a `/dev/input/` prefix. A new panel with an unusual physical button needs **zero** daemon edits — just a validated `input.evdev_buttons` entry in its YAML profile. New capabilities should copy this shape.
 
 ### The one current seam: LED
 
@@ -101,7 +109,7 @@ The daemon is the right home for any capability that needs **root or system priv
 
 1. Add a small, self-contained handler in the module that owns the capability (a new `src/<name>.c` for a new device class), then **register the verb** with one row in the `COMMANDS` table in `src/dispatch.c`. That's the whole wiring — `dispatch()` matches the verb *exactly* and hands your handler the argument string.
 2. **Take the target as a parameter** from the app (don't hardcode a panel's path), and **whitelist it by class prefix** — the way `WATCH` restricts to `/dev/input/` and a future `LED` would restrict to `/sys/class/leds/`. For a reader (i2c/sensor), stream values to `SUBSCRIBE`rs using the existing async-line mechanism in `src/input.c`.
-3. Keep the safety model intact: the peer-uid auth gates the whole socket, but still bound every buffer, validate/clamp inputs (the `src/util.c` validators), width-bound every `sscanf`, route any shell-out through `sysexec_run()` (the one exec seam) with a validated argument, and never write firmware-backed nodes (see the CAUTION above).
+3. Keep the safety model intact: the peer-uid auth gates the whole socket, but still bound every buffer, validate/clamp inputs (the `src/util.c` validators), width-bound every `sscanf`, pass request-derived values only through structural `sysexec_*_argv()` calls or direct filesystem operations, and never write firmware-backed nodes (see the CAUTION above). Shell programs are reserved for audited argument-free constants.
 4. Publish the matching HA entity from the app per `DeviceProfile` capability — the daemon stays the privileged mechanism, the profile stays the policy.
 
 A genuinely new *primitive* is the one acceptable reason to change the core daemon; per-panel *selection* of existing primitives must stay in the `DeviceProfile`. That boundary keeps a unique panel's contribution to a single profile file wherever the underlying primitive already exists.
@@ -116,13 +124,13 @@ The daemon is split by capability under `helper/src/` (the binary, `@hapaneld-he
 | `server.c` | the bounded line accumulator (`server_serve`) + idle timeout |
 | `commands.def` / `dispatch.c` | the shared verb→handler manifest + exact-match `dispatch()` |
 | `version.c` | stable helper and protocol identity exposed by `VERSION` and `--version` |
-| `led.c` / `screen.c` / `input.c` | LED (sysfs + ledjni), backlight power, evdev buttons |
-| `sysctl.c` | density / governor / reload / start / reboot / screencap (the shell-out verbs) |
+| `led.c` / `screen.c` / `input.c` / `gpio.c` | LED (sysfs + ledjni), backlight power, evdev buttons, held-descriptor GPIO streams |
+| `sysctl.c` | density / governor / reload / start / reboot / screencap privileged operations |
 | `companion.c` | descriptor-anchored, bounded HA Companion backup/restore transaction |
 | `perf.c` | `PERFDUMP` `/proc` snapshot |
-| `cht8305.c` | `CHT8305` room temp/humidity read (input-subsystem `EVIOCGABS`, no exec) |
+| `cht8305.c` | `CHT8305`-compatible room climate read from exact input names/axes (`EVIOCGABS`, no exec) |
 | `util.c` | clamp, node IO, the argument validators |
-| `sysexec.c` | **the only file that execs / pipes / spawns / reboots** — every shell-out funnels here |
+| `sysexec.c` | **the only file that execs / pipes / spawns / reboots** — request values use absolute paths and argv |
 
 Isolating `sysexec` keeps the entire privilege/injection surface in one auditable file, and lets the sanitizer-smoke and unit-test builds swap it for a stub so the real parser runs on the host with no side effects.
 

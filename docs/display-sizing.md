@@ -1,16 +1,16 @@
 # Matching dashboard size to a desktop browser (display sizing)
 
-A Home Assistant dashboard designed in a desktop browser often renders at the wrong size on an Android wall panel. ha-paneld exposes two controls — **density (DPI)** and **text size (font scale)** — on the on-device config page so you can bring a panel's layout and text back in line with the desktop. You usually need both, and good values are a per-install preference rather than a per-model constant.
+A Home Assistant dashboard designed in a desktop browser often renders at the wrong size on an Android wall panel. ha-paneld exposes two controls — **density (DPI)** and **text size (font scale)** — in **Install → Display sizing** so you can bring a panel's layout and text back in line with the desktop. You usually need both, and good values are a per-install preference rather than a per-model constant.
 
 > [!WARNING]
 > **Experimental.** The control works, but the *right* values for each panel aren't dialled in yet. Treat the density/text-size controls as something to experiment with, not a finished feature. Feedback on good per-panel values is welcome.
 
 ## Using it
 
-ha-paneld exposes both levers on the on-device config page (the **Display sizing** card) — set a custom logical density and text size, apply them live, or reset to Android's factory/base logical density. Both persist across reboot (they're secure/system settings).
+ha-paneld exposes both levers in the on-device **Install** tab (the **Display sizing** card) — set a custom logical density and text size, apply them live, or reset to Android's factory/base logical density. Both persist across reboot (they're secure/system settings).
 
 > [!NOTE]
-> **Needs privileged panel access.** The card is enabled on su-reachable panels (NSPanel Pro PX30, WF1589T), on sandbox-walled panels running the [root helper daemon](../helper/README.md) (TPA10), and on non-root panels with locally approved Shizuku enhanced access. It remains visible but locked where none of those routes is ready.
+> **Needs an approved privileged route.** This is normally vendor `su` or the [root helper daemon](../helper/README.md). A compatible unrooted panel with the optional enhanced-access route already approved locally can also provide these exact display operations. The card remains visible but locked where no supported route is ready.
 
 To tune: open the same dashboard on your desktop browser for reference, then lower the density until the layout matches (more cards fit), and nudge the text size until text matches. Good values are a **per-install** preference (panel resolution, viewing distance, how the dashboard is designed), not a fixed per-model constant — which is why no canonical defaults ship yet.
 

@@ -10,8 +10,8 @@ on:
     - cron: "41 6 * * 2"
   workflow_dispatch:
 
-# This workflow is advisory: it is independent of release tags and is not a
-# required status check. Findings are reported through GitHub code scanning.
+# Findings are reported through GitHub code scanning. The release workflow requires a successful
+# check for every language and refuses publication while a code-scanning alert remains open.
 permissions:
   contents: read
 

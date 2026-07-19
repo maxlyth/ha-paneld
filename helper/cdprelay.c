@@ -86,10 +86,24 @@ static int set_nonblocking(int fd) {
     return 0;
 }
 
+static int set_cloexec(int fd) {
+    int flags = fcntl(fd, F_GETFD, 0);
+    return flags >= 0 && fcntl(fd, F_SETFD, flags | FD_CLOEXEC) == 0 ? 0 : -1;
+}
+
+static int valid_backend_name(const char *name) {
+    static const char prefix[] = "webview_devtools_remote_";
+    if (strncmp(name, prefix, sizeof prefix - 1) != 0) return 0;
+    const char *p = name + sizeof prefix - 1;
+    if (*p < '1' || *p > '9') return 0;
+    for (; *p; p++) if (*p < '0' || *p > '9') return 0;
+    return 1;
+}
+
 static int connect_abstract(const char *name) {
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) return -1;
-    if (set_nonblocking(fd) < 0) {
+    if (set_cloexec(fd) < 0 || set_nonblocking(fd) < 0) {
         close(fd);
         return -1;
     }
@@ -284,8 +298,20 @@ int main(int argc, char **argv) {
         fprintf(stderr, "usage: %s <port> <abstract_name>\n", argv[0]);
         return 2;
     }
-    int port = atoi(argv[1]);
+    errno = 0;
+    char *port_end = NULL;
+    long parsed_port = strtol(argv[1], &port_end, 10);
+    if (errno != 0 || port_end == argv[1] || *port_end != '\0' ||
+        parsed_port < 1024 || parsed_port > 65535) {
+        fprintf(stderr, "cdprelay: invalid port\n");
+        return 2;
+    }
+    int port = (int)parsed_port;
     const char *name = argv[2];
+    if (!valid_backend_name(name)) {
+        fprintf(stderr, "cdprelay: invalid WebView DevTools socket\n");
+        return 2;
+    }
     signal(SIGPIPE, SIG_IGN);
     if (install_signal_handlers() < 0) {
         perror("sigaction");
@@ -297,6 +323,7 @@ int main(int argc, char **argv) {
         perror("socket");
         return 1;
     }
+    if (set_cloexec(srv) < 0) { perror("fcntl"); close(srv); return 1; }
     int one = 1;
     setsockopt(srv, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
     struct sockaddr_in sa;
@@ -327,6 +354,7 @@ int main(int argc, char **argv) {
             if (errno == EINTR) continue;
             break;
         }
+        if (set_cloexec(cli) < 0) { close(cli); continue; }
         if (stop_requested) {
             close(cli);
             break;

@@ -117,10 +117,11 @@ class PanelMetrics(
 
     /** Raw cpu0 scaling governor — a control read-back routed through the reader (direct→su in the source;
      *  no daemon read verb). Off-tick, so a plain passthrough, not a cached [Resolvable]. */
-    fun cpuGovernor(): String? = source.cpuGovernor()
+    fun cpuGovernor(allowRootFallback: Boolean = true): String? = source.cpuGovernor(allowRootFallback)
 
     /** Raw cpu0 available governors (space-separated). */
-    fun cpuAvailableGovernors(): String? = source.cpuAvailableGovernors()
+    fun cpuAvailableGovernors(allowRootFallback: Boolean = true): String? =
+        source.cpuAvailableGovernors(allowRootFallback)
 
     /**
      * Room air temperature + humidity (CHT8305), or null on panels without the chip. Daemon-only + read

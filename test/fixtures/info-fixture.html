@@ -1,13 +1,13 @@
 <!doctype html>
-<!-- Layout-test fixture: the info page's card scaffold, loading the REAL info.css + info.js (no
-     duplication). The harness (test/layout-matrix.mjs) serves this from the repo root and mocks the
-     /perf, /proximity, /inspect REST endpoints with worst-case cycling data, then measures CLS. -->
+<!-- Layout-test fixture: the info page's card scaffold, loading the real shared layout assets. The
+     harness (test/layout-matrix.mjs) serves this from the repo root and mocks the /perf, /proximity,
+     /inspect REST endpoints with worst-case cycling data, then measures CLS. -->
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <link rel="stylesheet" href="/app/src/main/assets/info.css">
 </head><body><div class="wrap">
 <div class="hdr"><h1>ha-paneld <small>· fixture</small></h1></div>
-<div class="cards">
+<div class="cards" id="dashboard-cards">
 
 <div class="card"><h2>Panel information</h2><table>
 <tr><th>ha-paneld</th><td>fixture</td></tr>
@@ -67,5 +67,6 @@
 off-screen live card reflow is what the CLS probe attributes to a viewport shift.</p></div>
 
 </div></div>
+<script src="/app/src/main/assets/card-column-alignment.js"></script>
 <script src="/app/src/main/assets/info.js"></script>
 </body></html>

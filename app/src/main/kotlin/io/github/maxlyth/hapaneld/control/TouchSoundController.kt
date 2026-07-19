@@ -3,7 +3,6 @@ package io.github.maxlyth.hapaneld.control
 import android.content.Context
 import android.content.SharedPreferences
 import android.graphics.PixelFormat
-import android.media.AudioAttributes
 import android.media.AudioManager
 import android.media.SoundPool
 import android.os.Build
@@ -17,35 +16,40 @@ import android.view.View
 import android.view.WindowManager
 import io.github.maxlyth.hapaneld.persistence.AppState
 import java.io.File
+import kotlin.math.PI
+import kotlin.math.sin
 
 /**
  * UI touch-sound control, made consistent across the fleet from HA.
  *
  * Two parts, because neither alone is enough on these panels:
- *  1. The system `SOUND_EFFECTS_ENABLED` flag + an audible `STREAM_SYSTEM` volume — covers native-UI and
- *     IME key clicks where the OS / keyboard honour it. The fleet inconsistency was the system-stream
- *     volume (0 on some panels), so ON raises it while active; OFF restores the exact prior flag + volume.
+ *  1. The system `SOUND_EFFECTS_ENABLED` flag covers native UI where the OS honours it. We deliberately
+ *     do not own `STREAM_SYSTEM`: Android 14 may alias it to ring, where boot-chime suppression must keep
+ *     it muted. Touch sound and boot-chime policy must never fight over the same stream.
  *  2. ha-paneld's OWN click. Dashboard taps live in the WebView, which never plays Android touch sounds,
  *     and the IME has its own keypress-sound pref we don't control — so neither covers a wall-panel
  *     dashboard. We add a 1 px `FLAG_WATCH_OUTSIDE_TOUCH` overlay that receives `ACTION_OUTSIDE` for
  *     every tap anywhere on screen WITHOUT consuming it (the tap still reaches the dashboard), and play
- *     a short tick via SoundPool. This is the only firmware/IME-independent way to make the panel click.
+ *     an app-owned generated click on the media stream. This avoids firmware sample paths and remains
+ *     independent of ring/system muting while respecting the user's media volume.
  *
  * App-direct: `SOUND_EFFECTS_ENABLED` needs `WRITE_SETTINGS`; the overlay needs `SYSTEM_ALERT_WINDOW`
  * (already held for the navbar). No root, no daemon.
  */
-class TouchSoundController(context: Context) {
+class TouchSoundController(context: Context, clickGain: Float) {
     private val ctx = context.applicationContext
+    private val clickGain = clickGain.coerceIn(0.05f, 1f)
     private val am = ctx.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     private val wm = ctx.getSystemService(Context.WINDOW_SERVICE) as WindowManager
     private val main = Handler(Looper.getMainLooper())
     private val statePolicy = TouchSoundStatePolicy(
         AndroidTouchSoundStateStore(AppState.preferences(ctx, "controller-state", STATE_PREFS)),
-        AndroidTouchSoundHardware(ctx, am),
+        AndroidTouchSoundHardware(ctx),
     )
 
     private var pool: SoundPool? = null
     private var clickId = 0
+    @Volatile private var clickReady = false
     private var watcher: View? = null
 
     fun isEnabled(): Boolean = statePolicy.isEnabled(
@@ -77,20 +81,31 @@ class TouchSoundController(context: Context) {
         }
     }
 
+    @Suppress("DEPRECATION")
     private fun ensurePool() {
         if (pool != null) return
-        val attrs = AudioAttributes.Builder()
-            .setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
-            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-            .build()
-        val sp = SoundPool.Builder().setMaxStreams(2).setAudioAttributes(attrs).build()
-        // Prefer the standard key-press click; fall back to the generic tick. (Present on these panels.)
-        val sample = listOf(
+        val sp = SoundPool(2, AudioManager.STREAM_MUSIC, 0)
+        val nativeSample = listOf(
             "/system/media/audio/ui/KeypressStandard.ogg",
+            "/product/media/audio/ui/KeypressStandard.ogg",
             "/system/media/audio/ui/Effect_Tick.ogg",
-        ).firstOrNull { File(it).canRead() }
-        clickId = if (sample != null) sp.load(sample, 1) else 0
-        if (clickId == 0) Log.w(TAG, "no UI click sample found; overlay click will be silent")
+            "/product/media/audio/ui/Effect_Tick.ogg",
+        ).map(::File).firstOrNull(File::canRead)
+        val sample = nativeSample ?: File(ctx.cacheDir, CLICK_FILE).also { owned ->
+            val bytes = touchClickWav()
+            if (!owned.isFile || owned.length() != bytes.size.toLong()) {
+                runCatching { owned.writeBytes(bytes) }
+                    .onFailure { Log.w(TAG, "could not create owned touch sample: ${it.message}") }
+            }
+        }
+        sp.setOnLoadCompleteListener { _, sampleId, status ->
+            clickId = sampleId
+            clickReady = status == 0
+            if (clickReady) Log.i(TAG, "touch sample ready: ${sample.name} gain=$clickGain")
+            else Log.w(TAG, "touch sample load failed: ${sample.name} status=$status")
+        }
+        clickId = if (sample.canRead()) sp.load(sample.absolutePath, 1) else 0
+        if (clickId == 0) Log.w(TAG, "owned touch sample could not be queued; overlay click will be silent")
         pool = sp
     }
 
@@ -102,7 +117,8 @@ class TouchSoundController(context: Context) {
         v.setOnTouchListener { _, e ->
             if (e.actionMasked == MotionEvent.ACTION_OUTSIDE) {
                 Log.d(TAG, "tap -> click")
-                pool?.takeIf { clickId != 0 }?.play(clickId, 1f, 1f, 1, 0, 1f)
+                pool?.takeIf { clickId != 0 && clickReady }
+                    ?.play(clickId, clickGain, clickGain, 1, 0, 1f)
             }
             false // never consume — the tap still reaches the dashboard
         }
@@ -131,12 +147,40 @@ class TouchSoundController(context: Context) {
     companion object {
         private const val TAG = "ha-paneld/touchsound"
         private const val STATE_PREFS = "ha-paneld-controller-state"
+        private const val CLICK_FILE = "ha-paneld-touch-click-v1.wav"
     }
+}
+
+/** Small deterministic PCM click owned by ha-paneld; no vendor audio-file dependency. */
+internal fun touchClickWav(sampleRate: Int = 16_000, durationMs: Int = 58): ByteArray {
+    val frames = (sampleRate * durationMs / 1_000).coerceAtLeast(1)
+    val dataBytes = frames * 2
+    val out = ByteArray(44 + dataBytes)
+    fun ascii(offset: Int, value: String) = value.forEachIndexed { index, char -> out[offset + index] = char.code.toByte() }
+    fun le16(offset: Int, value: Int) {
+        out[offset] = value.toByte(); out[offset + 1] = (value ushr 8).toByte()
+    }
+    fun le32(offset: Int, value: Int) {
+        out[offset] = value.toByte(); out[offset + 1] = (value ushr 8).toByte()
+        out[offset + 2] = (value ushr 16).toByte(); out[offset + 3] = (value ushr 24).toByte()
+    }
+    ascii(0, "RIFF"); le32(4, out.size - 8); ascii(8, "WAVE"); ascii(12, "fmt ")
+    le32(16, 16); le16(20, 1); le16(22, 1); le32(24, sampleRate)
+    le32(28, sampleRate * 2); le16(32, 2); le16(34, 16); ascii(36, "data"); le32(40, dataBytes)
+    repeat(frames) { index ->
+        val elapsed = index.toDouble() / sampleRate
+        val remaining = (frames - index).toDouble() / frames
+        val attack = (index / 10.0).coerceAtMost(1.0)
+        val envelope = remaining * remaining * attack
+        val body = sin(2.0 * PI * 215.0 * elapsed) + 0.28 * sin(2.0 * PI * 108.0 * elapsed)
+        val sample = (body * envelope * 8_200.0).toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
+        le16(44 + index * 2, sample)
+    }
+    return out
 }
 
 internal data class TouchSoundState(
     val effectsSetting: Int?,
-    val systemStream: Int,
 )
 
 internal interface TouchSoundStateStore {
@@ -144,6 +188,7 @@ internal interface TouchSoundStateStore {
     fun prior(): TouchSoundState?
     fun saveEnabled(prior: TouchSoundState): Boolean
     fun saveDisabledAndClearPrior(): Boolean
+    fun retireLegacyStreamState(): Boolean
 }
 
 internal interface TouchSoundHardware {
@@ -158,6 +203,12 @@ internal class TouchSoundStatePolicy(
     private val store: TouchSoundStateStore,
     private val hardware: TouchSoundHardware,
 ) {
+    init {
+        // Older builds captured STREAM_SYSTEM even though restoring it could undo boot-chime muting.
+        // Retire that orphaned preference once; touch sound now owns only SOUND_EFFECTS_ENABLED.
+        store.retireLegacyStreamState()
+    }
+
     fun isEnabled(platformFallback: Boolean): Boolean = store.active() ?: platformFallback
 
     fun enable(): Boolean {
@@ -184,13 +235,10 @@ private class AndroidTouchSoundStateStore(
 
     override fun prior(): TouchSoundState? {
         if (!preferences.getBoolean(KEY_PRIOR_PRESENT, false)) return null
-        if ((!preferences.contains(KEY_EFFECTS) && !preferences.getBoolean(KEY_EFFECTS_NULL, false)) ||
-            !preferences.contains(KEY_STREAM)
-        ) return null
+        if (!preferences.contains(KEY_EFFECTS) && !preferences.getBoolean(KEY_EFFECTS_NULL, false)) return null
         return TouchSoundState(
             effectsSetting = if (preferences.getBoolean(KEY_EFFECTS_NULL, false)) null
             else preferences.getInt(KEY_EFFECTS, 1),
-            systemStream = preferences.getInt(KEY_STREAM, 0),
         )
     }
 
@@ -198,7 +246,6 @@ private class AndroidTouchSoundStateStore(
         val editor = preferences.edit()
             .putBoolean(KEY_ACTIVE, true)
             .putBoolean(KEY_PRIOR_PRESENT, true)
-            .putInt(KEY_STREAM, prior.systemStream)
         if (prior.effectsSetting == null) {
             editor.remove(KEY_EFFECTS).putBoolean(KEY_EFFECTS_NULL, true)
         } else {
@@ -213,6 +260,9 @@ private class AndroidTouchSoundStateStore(
         .remove(KEY_EFFECTS).remove(KEY_EFFECTS_NULL).remove(KEY_STREAM)
         .commit()
 
+    override fun retireLegacyStreamState(): Boolean =
+        !preferences.contains(KEY_STREAM) || preferences.edit().remove(KEY_STREAM).commit()
+
     companion object {
         private const val KEY_ACTIVE = "touch_sound.active"
         private const val KEY_PRIOR_PRESENT = "touch_sound.prior.present"
@@ -224,22 +274,17 @@ private class AndroidTouchSoundStateStore(
 
 private class AndroidTouchSoundHardware(
     private val context: Context,
-    private val audio: AudioManager,
 ) : TouchSoundHardware {
     private val cr = context.contentResolver
 
     override fun capture(): TouchSoundState? = runCatching {
         TouchSoundState(
             Settings.System.getString(cr, Settings.System.SOUND_EFFECTS_ENABLED)?.toIntOrNull(),
-            audio.getStreamVolume(AudioManager.STREAM_SYSTEM),
         )
     }.getOrNull()
 
     override fun enable(): Boolean = runCatching {
-        if (!Settings.System.putInt(cr, Settings.System.SOUND_EFFECTS_ENABLED, 1)) return@runCatching false
-        val max = audio.getStreamMaxVolume(AudioManager.STREAM_SYSTEM)
-        audio.setStreamVolume(AudioManager.STREAM_SYSTEM, (max * 0.45f).toInt().coerceAtLeast(1), 0)
-        true
+        Settings.System.putInt(cr, Settings.System.SOUND_EFFECTS_ENABLED, 1)
     }.getOrDefault(false)
 
     override fun restore(state: TouchSoundState): Boolean = runCatching {
@@ -248,7 +293,6 @@ private class AndroidTouchSoundHardware(
         } else {
             Settings.System.putInt(cr, Settings.System.SOUND_EFFECTS_ENABLED, state.effectsSetting)
         }
-        audio.setStreamVolume(AudioManager.STREAM_SYSTEM, state.systemStream, 0)
         setting
     }.getOrDefault(false)
 

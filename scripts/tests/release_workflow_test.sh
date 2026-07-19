@@ -105,6 +105,17 @@ else
   fail_test "curated changelog remains the sole release prose source"
 fi
 
+prepare_job="$(awk '/^  prepare:$/ { in_prepare=1 } /^  sign-and-publish:$/ { exit } in_prepare' "$WORKFLOW")"
+if grep -Fq 'Require clean security analysis for the source commit' "$WORKFLOW" && \
+   grep -Fq 'commits/$SOURCE_COMMIT/check-runs' "$WORKFLOW" && \
+   grep -Fq 'code-scanning/alerts?state=open' "$WORKFLOW" && \
+   grep -Fqx '      checks: read' <<<"$prepare_job" && \
+   grep -Fqx '      security-events: read' <<<"$prepare_job"; then
+  pass "release publication is gated by successful CodeQL checks and zero open alerts"
+else
+  fail_test "release publication is gated by successful CodeQL checks and zero open alerts"
+fi
+
 printf '1..%d\n' "$((passes + failures))"
 if [ "$failures" -ne 0 ]; then
   printf '%d assertion(s) failed\n' "$failures" >&2

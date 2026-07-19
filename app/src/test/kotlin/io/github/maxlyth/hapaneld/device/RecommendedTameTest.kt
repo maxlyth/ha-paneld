@@ -1,5 +1,6 @@
 package io.github.maxlyth.hapaneld.device
 
+import io.github.maxlyth.hapaneld.device.profile.BundledProfileFixtures
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -11,7 +12,9 @@ import org.junit.Test
  * clutter, never something a user might actually want), so it's asserted here so it can't silently drift.
  */
 class RecommendedTameTest {
-    private val recommended = NSPanelPro.tameVendorCandidates.filter { it.defaultTame }.map { it.pkg }.toSet()
+    private val panel = BundledProfileFixtures.profile("nspanel-pro")
+    private val fallback = BundledProfileFixtures.fallback()
+    private val recommended = panel.tameVendorCandidates.filter { it.defaultTame }.map { it.pkg }.toSet()
 
     @Test fun recommendedSetIsExactlyTheIntrusiveClutter() {
         assertEquals(
@@ -36,12 +39,12 @@ class RecommendedTameTest {
         // A demo the user might actually use — a deliberate per-package choice, not stripped by default.
         assertFalse("android.rk.RockVideoPlayer" in recommended)
         // …but it's still a listed candidate (offered in the picker), just not defaultTame.
-        assertTrue(NSPanelPro.tameVendorCandidates.any { it.pkg == "android.rk.RockVideoPlayer" })
+        assertTrue(panel.tameVendorCandidates.any { it.pkg == "android.rk.RockVideoPlayer" })
     }
 
     @Test fun defaultTameOffForUnmarkedProfiles() {
         // defaultTame is a legacy name for recommendation membership; it never implies execution consent.
-        // Generic has no candidates at all.
-        assertTrue(Generic.tameVendorCandidates.none { it.defaultTame })
+        // The packaged fallback has no candidates at all.
+        assertTrue(fallback.tameVendorCandidates.none { it.defaultTame })
     }
 }

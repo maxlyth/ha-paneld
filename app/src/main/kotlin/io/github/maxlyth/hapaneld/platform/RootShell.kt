@@ -15,6 +15,11 @@ interface RootShell {
     /** Run [cmd] as root and return its stdout, or null on failure / no su. */
     fun runOutput(cmd: String): String?
 
+    /** Bounded diagnostic output on a lane independent of interactive hardware control. Production
+     * implementations must enforce [timeoutMs]; the default keeps test/legacy fakes compatible. */
+    fun runOutputIsolatedBounded(cmd: String, maxBytes: Long, timeoutMs: Long = 10_000L): String? =
+        runOutput(cmd)?.takeIf { it.toByteArray(Charsets.UTF_8).size.toLong() <= maxBytes }
+
     /** Run [cmd] as root and return its raw stdout bytes (e.g. a screenshot), or null. */
     fun runBytes(cmd: String): ByteArray?
 
@@ -26,4 +31,35 @@ interface RootShell {
     /** Submit [cmd] as root without waiting (for commands like `reboot` that kill the process).
      *  Returns true only when a root process was successfully started. */
     fun fireAndForget(cmd: String): Boolean
+
+    /** Typed sysfs boundary for profile-selected hardware nodes. Callers never compose shell text. */
+    fun listSysfs(path: String): String? {
+        require(safeSysfsPath(path))
+        return runOutput("ls $path 2>/dev/null")
+    }
+
+    fun readSysfs(path: String): String? {
+        require(safeSysfsPath(path))
+        return runOutput("cat $path 2>/dev/null")
+    }
+
+    fun writeSysfs(path: String, value: String): Boolean {
+        require(safeSysfsPath(path))
+        require(value.matches(Regex("[A-Za-z0-9_-]{1,32}")))
+        return run("printf '%s' '$value' > $path")
+    }
+
+    fun prepareOutputGpio(gpio: Int): Boolean {
+        require(gpio in 0..4095)
+        val dir = "/sys/class/gpio/gpio$gpio"
+        return runOutput(
+            "{ [ -e $dir ] || printf '%s' '$gpio' > /sys/class/gpio/export 2>/dev/null; } && " +
+                "[ -e $dir/direction ] && direction=\$(cat $dir/direction 2>/dev/null) && " +
+                "{ [ \"\$direction\" = out ] || printf '%s' out > $dir/direction 2>/dev/null; } && " +
+                "[ \"\$(cat $dir/direction 2>/dev/null)\" = out ] && [ -w $dir/value ] && printf ready",
+        )?.trim() == "ready"
+    }
+
+    private fun safeSysfsPath(path: String): Boolean =
+        path.startsWith("/sys/") && path.length <= 256 && path.matches(Regex("/[A-Za-z0-9_./-]+"))
 }

@@ -48,7 +48,7 @@ class NoOpLedController : LedController {
  * LED entity is skipped. So a panel with neither a node nor the daemon yields no LED entity.
  */
 object LedFactory {
-    fun detect(profile: DeviceProfile = DeviceProfile.detect()): LedController = when (profile.ledMechanism) {
+    fun detect(profile: DeviceProfile): LedController = when (profile.ledMechanism) {
         LedMechanism.NONE -> NoOpLedController()
         LedMechanism.SYSFS_DAEMON -> SocketLedController()
         LedMechanism.RK3576_IOCTL_DAEMON -> SocketLedController()

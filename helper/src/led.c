@@ -60,7 +60,7 @@ int led_ledjni_off(int fd) {
 }
 
 static int set_rgb_ledjni(int r, int g, int b) {
-    int fd = open(DEV_LEDJNI, O_RDONLY | O_NOCTTY);   // vendor's open flags; the driver acts on the ioctl
+    int fd = open(DEV_LEDJNI, O_RDONLY | O_NOCTTY | O_CLOEXEC); // vendor flags plus exec hygiene
     if (fd < 0) return -1;
     int rc = led_ledjni_rgb(fd, r, g, b);
     close(fd);
@@ -68,7 +68,7 @@ static int set_rgb_ledjni(int r, int g, int b) {
 }
 
 static int set_off_ledjni(void) {
-    int fd = open(DEV_LEDJNI, O_RDONLY | O_NOCTTY);
+    int fd = open(DEV_LEDJNI, O_RDONLY | O_NOCTTY | O_CLOEXEC);
     if (fd < 0) return -1;
     int rc = led_ledjni_off(fd);
     close(fd);
@@ -78,7 +78,7 @@ static int set_off_ledjni(void) {
 // Pick the backend once: the rk3576 ioctl char-dev if present (app-denied, so it needs us), else the
 // sysfs animation node, else none. The two node types don't coexist on a panel.
 void led_init(void) {
-    int fd = open(DEV_LEDJNI, O_RDONLY | O_NOCTTY);
+    int fd = open(DEV_LEDJNI, O_RDONLY | O_NOCTTY | O_CLOEXEC);
     if (fd >= 0) { close(fd); led_backend = LED_LEDJNI; return; }
     if (access(NODE_ANIM, F_OK) == 0) { led_backend = LED_SYSFS; return; }
     led_backend = LED_NONE;

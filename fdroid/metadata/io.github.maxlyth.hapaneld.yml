@@ -25,7 +25,7 @@ Description: |-
     * Zigbee gateway control on panels with an on-board radio.
     * A local HTTP control and information surface with a per-panel Home Assistant device identity.
 
-    Some capabilities require root access on the panel, while the dashboard renderers, MQTT, standard Android controls and HTTP features do not. Optional Shizuku enhanced access provides a smaller middle tier on genuinely unrooted panels. See the project README for per-panel capabilities and setup.
+    Some capabilities require root access on the panel, while the dashboard renderers, MQTT, standard Android controls and HTTP features do not. See the project README for per-panel capabilities.
 
     Free, open source and fully local — no cloud and no account.
 

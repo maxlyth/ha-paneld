@@ -44,6 +44,16 @@ class CompanionDbTest {
         assertFalse(CompanionDb.needsRepair(CompanionDb.ServerRow("1", "http://10.0.0.5:8123", "https://ha")))
     }
 
+    @Test fun internalUrlWarningOnlyWhenCompanionRendersTheDashboard() {
+        // Blank dashboard_package = auto-detect, which prefers the Companion when installed.
+        assertTrue(CompanionDb.warningApplies(""))
+        assertTrue(CompanionDb.warningApplies(io.github.maxlyth.hapaneld.util.CompanionInstaller.FULL_PKG))
+        assertTrue(CompanionDb.warningApplies(io.github.maxlyth.hapaneld.util.CompanionInstaller.MINIMAL_PKG))
+        // Built-in renderer or another explicit dashboard app: the Companion doesn't draw, so no banner.
+        assertFalse(CompanionDb.warningApplies(SystemController.BUILTIN_DASHBOARD))
+        assertFalse(CompanionDb.warningApplies("de.ozerov.fully"))
+    }
+
     @Test fun urlsWithPipesSurviveParsing() {
         // The default sqlite3 '|' separator would corrupt this; the Unit-Separator dump doesn't.
         val out = line("1", "http://h/a|b", "https://ha/x|y")
@@ -56,6 +66,54 @@ class CompanionDbTest {
     @Test fun emptyOutputYieldsNoRows() {
         assertTrue(CompanionDb.parseServers("").isEmpty())
         assertTrue(CompanionDb.parseServers("\n\n").isEmpty())
+    }
+
+    @Test fun oneServerObservationProjectsPreferredUrlAndRepairStatus() {
+        val observed = CompanionDb.observeServers(listOf(
+            CompanionDb.ServerRow("1", "", "https://ha.example.com/"),
+            CompanionDb.ServerRow("2", "http://10.0.0.5:8123/", "https://ha.example.com"),
+        ))
+
+        assertTrue(observed.probeSucceeded)
+        assertEquals("https://ha.example.com", observed.preferredUrl)
+        assertTrue(observed.status.needsRepair)
+        assertEquals(1, observed.status.affected)
+    }
+
+    @Test fun emptyServerTableIsKnownEmpty() {
+        val observed = CompanionDb.observeServers(emptyList())
+
+        assertTrue(observed.probeSucceeded)
+        assertEquals(CompanionDb.ServerObservation.EMPTY, observed)
+        assertNull(observed.preferredUrl)
+        assertFalse(observed.status.needsRepair)
+        assertEquals(0, observed.status.affected)
+    }
+
+    @Test fun unreadableServerTableIsUnknownRatherThanKnownEmpty() {
+        val observed = CompanionDb.observeServers(null)
+
+        assertFalse(observed.probeSucceeded)
+        assertEquals(CompanionDb.ServerObservation.UNKNOWN, observed)
+        assertNull(observed.preferredUrl)
+        assertFalse(observed.status.needsRepair)
+        assertEquals(0, observed.status.affected)
+    }
+
+    @Test fun unreadableRefreshPreservesLastKnownPayloadWithoutClaimingSuccess() {
+        val known = CompanionDb.observeServers(listOf(
+            CompanionDb.ServerRow("1", "", "https://ha.example.com/"),
+        ))
+
+        val retained = CompanionDb.retainLastKnownServerObservation(
+            previous = known,
+            observed = CompanionDb.ServerObservation.UNKNOWN,
+        )
+
+        assertFalse(retained.probeSucceeded)
+        assertEquals("https://ha.example.com", retained.preferredUrl)
+        assertTrue(retained.status.needsRepair)
+        assertEquals(1, retained.status.affected)
     }
 
     @Test fun parsesCompanionPageZoomFromThemesXml() {

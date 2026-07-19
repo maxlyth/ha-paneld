@@ -24,21 +24,23 @@ import io.github.maxlyth.hapaneld.util.HelperClient
  * helper first on sandbox-walled panels. A failed preferred route always falls through to the other.
  */
 class CpuController(
-    private val profile: DeviceProfile = DeviceProfile.detect(),
+    private val profile: DeviceProfile,
     private val root: RootShell = Su,
     private val daemon: Daemon = HelperClient,
     private val metrics: PanelMetrics = PanelMetrics.shared,
 ) {
 
     /** Governors the kernel offers (e.g. [powersave, performance, schedutil]); empty if unreadable. */
-    fun governors(): List<String> =
-        metrics.cpuAvailableGovernors()?.trim()?.split(Regex("\\s+"))?.filter { it.isNotEmpty() } ?: emptyList()
+    fun governors(allowRootFallback: Boolean = true): List<String> =
+        metrics.cpuAvailableGovernors(allowRootFallback)
+            ?.trim()?.split(Regex("\\s+"))?.filter { it.isNotEmpty() } ?: emptyList()
 
     /** True when governors are readable. A later set can still fail if neither privileged route works. */
-    fun available(): Boolean = governors().isNotEmpty()
+    fun available(allowRootFallback: Boolean = true): Boolean = governors(allowRootFallback).isNotEmpty()
 
     /** Current raw governor (cpu0), or null if unreadable. */
-    private fun gov(): String? = metrics.cpuGovernor()?.trim()?.takeIf { it.isNotEmpty() }
+    private fun gov(allowRootFallback: Boolean = true): String? =
+        metrics.cpuGovernor(allowRootFallback)?.trim()?.takeIf { it.isNotEmpty() }
 
     /** Apply [g] to every core. Returns true only when one live route reports success. */
     private fun set(g: String): Boolean {
@@ -73,7 +75,7 @@ class CpuController(
     fun setTier(tier: String): Boolean = govFor(tier)?.let { set(it) } ?: false
 
     /** The current tier, reverse-mapped from the live governor (any dynamic governor reads as Auto). */
-    fun currentTier(): String? = when (gov()) {
+    fun currentTier(allowRootFallback: Boolean = true): String? = when (gov(allowRootFallback)) {
         null -> null
         "performance" -> PERFORMANCE
         "powersave" -> EFFICIENCY

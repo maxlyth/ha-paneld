@@ -110,6 +110,24 @@ class LiveSettingAuthorityTest {
         assertEquals(mapOf("brightness_bias" to "18"), authority.pendingSnapshot())
     }
 
+    @Test fun discardedLegacyKioskIntentCannotReplayAfterRestart() {
+        val journal = FakeJournal()
+        val first = LiveSettingAuthority(setOf("kiosk_lock"), journal)
+        assertTrue(first.applyOrQueue("kiosk_lock", "true", "false") { _, _, _ ->
+            LiveSettingApplyResult.DEFERRED
+        })
+        assertTrue(first.discard("kiosk_lock"))
+        assertTrue(first.pendingSnapshot().isEmpty())
+        assertTrue(journal.values.isEmpty())
+
+        var replayed = false
+        LiveSettingAuthority(setOf("kiosk_lock"), journal).replay { _, _ ->
+            replayed = true
+            LiveSettingApplyResult.APPLIED
+        }
+        assertFalse(replayed)
+    }
+
     @Test fun `failed navbar actuation retains desired mode and prior for retry`() {
         val journal = FakeJournal()
         val authority = LiveSettingAuthority(setOf("navbar_mode"), journal)

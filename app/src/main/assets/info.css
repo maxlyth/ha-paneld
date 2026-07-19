@@ -1,13 +1,14 @@
 /* ---- theme palette ----
-   Dark values are the original hardcoded palette (dark mode stays pixel-identical); the light block
+   Dark values retain the original palette, with slightly stronger configuration dividers and card
+   title bars for legibility; the light block
    overrides the STRUCTURAL roles only. Deliberately theme-agnostic (unchanged in light mode): the
    primary-action blue #2557a7, the .setup callout banners, badges, and the logs/chart panels (.logview
    + canvas keep their dark terminal look in both themes). The theme follows the VIEWING BROWSER's own
    light/dark preference (prefers-color-scheme) — the panel's dark_mode setting governs the panel's own
    screens + the dashboard default, never this UI. */
 :root{color-scheme:dark;
-  --bg:#111;--card:#181818;--card-head:#1e1e1e;--input-bg:#1c1c1c;--input-bg2:#161616;
-  --card-border:#242424;--divider:#2a2a2a;--border:#333;--border2:#383838;--border-strong:#444;
+  --bg:#111;--card:#181818;--card-head:#222;--input-bg:#1c1c1c;--input-bg2:#161616;
+  --card-border:#242424;--divider:#2a2a2a;--config-divider:#3a3a3a;--border:#333;--border2:#383838;--border-strong:#444;
   --text:#eee;--text-bright:#fff;--text-soft:#ccc;--tab:#bbb;--dim:#888;
   --accent:#9af;--accent2:#9cf;--ok-dim:#8a8;--icon:#7c8a99;--icon-dim:#6a7a8a;
   --hover:#1a1a1a;--knob:#eee;--disabled-bg:#222;--disabled-fg:#666;
@@ -15,7 +16,7 @@
 /* Auto: follow the viewing browser… unless a ?theme= test override pinned dark. */
 @media (prefers-color-scheme: light){:root:not([data-theme=dark]){color-scheme:light;
   --bg:#f2f3f5;--card:#fff;--card-head:#e7ebef;--input-bg:#f6f7f9;--input-bg2:#fafbfc;
-  --card-border:#d9dde3;--divider:#e4e7ec;--border:#c9cfd7;--border2:#c4cad2;--border-strong:#b6bec8;
+  --card-border:#d9dde3;--divider:#e4e7ec;--config-divider:#e4e7ec;--border:#c9cfd7;--border2:#c4cad2;--border-strong:#b6bec8;
   --text:#1b2430;--text-bright:#000;--text-soft:#2c3644;--tab:#4a5462;--dim:#6a7480;
   --accent:#1e56a8;--accent2:#0b6a8e;--ok-dim:#3f7d49;--icon:#5b6b7a;--icon-dim:#74818f;
   --hover:#e9ecef;--knob:#fff;--disabled-bg:#e2e5e9;--disabled-fg:#9aa3ad;
@@ -24,7 +25,7 @@
    drop the param to return to the browser preference). KEEP IDENTICAL to the block above. */
 :root[data-theme=light]{color-scheme:light;
   --bg:#f2f3f5;--card:#fff;--card-head:#e7ebef;--input-bg:#f6f7f9;--input-bg2:#fafbfc;
-  --card-border:#d9dde3;--divider:#e4e7ec;--border:#c9cfd7;--border2:#c4cad2;--border-strong:#b6bec8;
+  --card-border:#d9dde3;--divider:#e4e7ec;--config-divider:#e4e7ec;--border:#c9cfd7;--border2:#c4cad2;--border-strong:#b6bec8;
   --text:#1b2430;--text-bright:#000;--text-soft:#2c3644;--tab:#4a5462;--dim:#6a7480;
   --accent:#1e56a8;--accent2:#0b6a8e;--ok-dim:#3f7d49;--icon:#5b6b7a;--icon-dim:#74818f;
   --hover:#e9ecef;--knob:#fff;--disabled-bg:#e2e5e9;--disabled-fg:#9aa3ad;
@@ -60,8 +61,7 @@ h2{font-size:.95rem;margin:0 0 .5rem;color:var(--accent2);text-transform:upperca
 h2 small{text-transform:none;letter-spacing:0;color:var(--ok-dim);font-weight:400}
 .gh svg{width:24px;height:24px;fill:var(--icon)}
 .gh:hover svg{fill:var(--text)}
-.ext svg{width:14px;height:14px;fill:var(--accent2);vertical-align:-2px;margin-left:3px}
-.ext:hover svg{fill:var(--text-bright)}
+.gh-inline svg{width:16px;height:16px;vertical-align:-3px}
 /* CSS multi-column masonry: the browser packs .card elements into height-balanced columns
    (column-fill:balance, the default) — ~400px wide, so 1 column on a phone up to 4 on a 1920/2560 panel.
    No JS: this replaces a hand-rolled greedy that mis-balanced because it measured placeholder heights. */
@@ -70,6 +70,8 @@ h2 small{text-transform:none;letter-spacing:0;color:var(--ok-dim);font-weight:40
 /* Card title-bar: a subtly demarcated full-width header (slight tint + divider) separating the title
    from content. Also the intended drag handle for card reordering + home for a collapse triangle. */
 .card h2{margin:-14px -16px 12px;padding:9px 16px;background:var(--card-head);border-bottom:1px solid var(--divider);border-radius:12px 12px 0 0}
+.card-title-action{float:right;color:var(--accent2);font-size:.78rem;text-transform:none;letter-spacing:0;text-decoration:none;font-weight:500}
+.card-title-action:hover{color:var(--text-bright);text-decoration:underline}
 .cardbadge{float:right;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;padding:1px 8px;border-radius:10px;margin-top:1px}
 .cardbadge.skunk{background:var(--bskunk-bg);color:var(--bskunk-fg);border:1px solid var(--bskunk-bd)}
 .cardbadge.exp{background:var(--bexp-bg);color:var(--bexp-fg);border:1px solid var(--bexp-bd)}
@@ -84,9 +86,6 @@ tr:last-child td,tr:last-child th{border-bottom:0}   /* dividers only BETWEEN ro
 th{color:var(--accent);width:46%;font-weight:600}
 /* charts: darker than the card (var(--card)) + a border, so the line's extent reads against the plot area */
 canvas{width:100%;display:block;background:#0d0d0d;border:1px solid var(--divider);border-radius:8px;margin-bottom:6px}
-/* The proximity gauge is mostly empty plot — a black slab on a light card reads as broken, so it themes
-   (unlike the perf charts above, which draw light strokes and deliberately stay dark in both themes). */
-#proxgauge{background:var(--plot)}
 /* Vendor-package tag chips (server-rendered rows use these classes; themed, unlike their old inline styles). */
 .vtag{display:inline-block;background:var(--vtag-bg);color:var(--vtag-fg);border-radius:4px;padding:0 6px;margin-left:5px;font-size:.7em;vertical-align:1px}
 .vtag.rec{background:var(--vtagrec-bg);color:var(--vtagrec-fg)}
@@ -96,6 +95,10 @@ canvas{width:100%;display:block;background:#0d0d0d;border:1px solid var(--divide
 .dt th{font-size:.68rem;text-transform:uppercase;letter-spacing:.03em;color:var(--icon);font-weight:600;width:auto;border-bottom:2px solid var(--border)}
 .dt td{color:var(--text-soft);font-weight:400}
 .dt .num{text-align:right;width:32%}
+#noisyentities th:first-child,#noisyentities td:first-child{width:auto}
+#noisyentities .num{white-space:nowrap}
+#noisyentities .rate{width:68px}
+#noisyentities .payload{width:78px}
 /* Install-tab managed-component rows: name on the left, channel/version picker + actions on the right. */
 .comprow{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--divider)}
 .comprow:last-of-type{border-bottom:0}
@@ -103,7 +106,7 @@ canvas{width:100%;display:block;background:#0d0d0d;border:1px solid var(--divide
 .comppick{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .comppick label{flex-direction:row;align-items:center;gap:5px;color:var(--icon);margin:0}
 .comppick select{font-size:.85rem;padding:4px 7px;border-radius:7px;border:1px solid var(--border-strong);background:var(--input-bg);color:var(--text);max-width:190px}
-.cnotes{font-size:1rem;text-decoration:none;padding:0 4px}
+.cnotes{text-decoration:none;padding:0 3px}
 /* Live-polled tables (updated every 2s): values WRAP to show full content — touch panels can't hover for
    the title= tooltip, so truncation hid data on the exact devices this runs on. Stability now comes from
    content-visibility (off-screen cards) + CSS columns; the only residual motion is the card you're
@@ -116,12 +119,21 @@ input{width:100%}
 input[type=checkbox]{width:auto;flex:none}   /* checkboxes keep their natural size (never the 100% above) */
 button{background:#2557a7;border-color:#2557a7;color:#fff;cursor:pointer;align-self:flex-start}
 .note{color:var(--ok-dim);margin-top:8px;font-size:.82rem}
-.binary .gradedonly{display:none}
+.prox-learning-state{font-weight:650;margin:.2rem 0 .35rem}
+.prox-learning-evidence{font-size:.78rem;margin:.45rem 0}
+.prox-learning-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.prox-learning-actions .pbtn{min-height:44px}
 /* Self-contained so it looks identical on <button> AND <a> (the "Open in HA" link) — anchors don't
    inherit the button{} border/radius/colour, so spell them out + kill the link underline. */
 .pbtn{font-size:.8rem;padding:6px 12px;background:var(--input-bg);border:1px solid var(--border-strong);border-radius:8px;color:var(--text);cursor:pointer;text-decoration:none;display:inline-block;line-height:1.3;font-family:inherit}
 .pbtn.on{background:#2557a7;border-color:#2557a7;color:#fff}
 .pbtn:disabled{opacity:.4;cursor:not-allowed}   /* capability missing (no a11y / no root) — shown but inert */
+[data-hardened-approval]::after{content:"";display:inline-block;width:.81rem;height:.95rem;margin-left:.42rem;background:currentColor;clip-path:polygon(50% 0,95% 18%,82% 72%,50% 100%,18% 72%,5% 18%);opacity:.72;vertical-align:-.18rem}
+.pbtn[data-hardened-approval]::after{width:.68rem;height:.8rem;margin-left:.34rem;vertical-align:-.14rem}
+.hardened-approval-key{color:var(--dim);font-size:.72rem;line-height:1.4;margin:18px 2px 4px;padding-top:10px;border-top:1px solid var(--border);display:flex;align-items:center;gap:.42rem}.hardened-approval-key::before{content:"";display:inline-block;flex:0 0 auto;width:.81rem;height:.95rem;background:currentColor;clip-path:polygon(50% 0,95% 18%,82% 72%,50% 100%,18% 72%,5% 18%);opacity:.72}
+.hardened-approval-key.top{margin:10px 2px 18px;padding:0 0 10px;border-top:0;border-bottom:1px solid var(--border)}
+.sr-only{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}
+@media (max-width:600px){.prox-learning-actions{display:grid;grid-template-columns:1fr}.prox-learning-actions .pbtn{width:100%;text-align:center}}
 /* Root-gated features are never hidden — shown, greyed, with a visible reason (a tooltip is invisible on
    a touch panel). This banner + disabled controls tell a no-root user what they're missing and why. */
 .setup.rootlock{background:var(--card-head);border-color:var(--border);color:var(--dim);border-left:4px solid var(--border-strong)}
@@ -131,7 +143,7 @@ input:disabled,select:disabled{background:var(--disabled-bg);color:var(--disable
 /* Controls panel: when the action row would wrap to 2 lines, collapse the labelled buttons to icons only
    (info.js measures the row height + toggles .collapsed). */
 .ctlrow.collapsed .lbl{display:none}
-.setup{background:var(--setup-bg);border:1px solid var(--setup-bd);border-radius:8px;padding:12px 14px;margin:10px 0 0;color:var(--setup-fg);font-size:.92rem}
+.setup{background:var(--setup-bg);border:1px solid var(--setup-bd);border-radius:8px;padding:12px 14px;margin:10px 0!important;color:var(--setup-fg);font-size:.92rem}
 .setup a{color:var(--setup-link);font-weight:600}
 /* Severity: crit = render-blocking (WebView too old, no dashboard, crash-loop, blank internal_url) —
    red + a heavier left rule so it reads as "fix this to see a dashboard"; info = a calm blue update notice.
@@ -211,14 +223,48 @@ body.hdr-hide-brand .hdr .brand{display:none}
 .cfg-tabs{display:flex;gap:8px;margin-bottom:14px}
 .cfg-tabs button{background:var(--input-bg);border:1px solid var(--border);color:var(--tab);padding:6px 18px;border-radius:8px;cursor:pointer;font-size:.9rem}
 .cfg-tabs button.on{background:#2557a7;border-color:#2557a7;color:#fff}
-/* Row dividers use the same token as the table dividers — the original #1e1e1e-on-#181818 was a 6-step
-   delta, i.e. invisible in dark mode; now Configure rows separate exactly like the info-card tables. */
-.frow{display:flex;align-items:center;gap:12px;padding:10px 0;border-top:1px solid var(--divider)}
-.frow:first-child{border-top:0}
+/* Configure dividers get a slightly stronger dark-only token than dense tables; light mode retains its
+   existing divider colour. Compact subgroups and each card's first row still remove their rule below. */
+.frow{display:flex;align-items:center;gap:12px;padding:10px 0;border-top:1px solid var(--config-divider)}
+.card>h2+.frow{border-top:0}
 .frow .flabel{flex:1;min-width:0}
 .frow .flabel small{display:block;color:var(--dim);font-weight:400;font-size:.8em;margin-top:2px}
 .frow .fctl{flex:0 0 auto;display:flex;align-items:center;gap:12px;max-width:50%}
+.frow.dependency-disabled{opacity:.48}
 .frow input[type=text],.frow input[type=password],.frow input[type=number],.frow select{background:var(--input-bg2);border:1px solid var(--border2);color:var(--text);border-radius:6px;padding:6px 8px;min-width:170px;font:inherit}
+.ha-entity-picker{display:flex;flex-direction:column;gap:4px;width:min(260px,100%);min-width:170px}
+.ha-entity-picker .ha-entity-input{min-width:0;width:100%}
+.ha-entity-picker .picker-note{color:var(--dim);font-size:.72rem;line-height:1.25}
+.ha-entity-listbox{position:fixed;z-index:1000;box-sizing:border-box;overflow-y:auto;background:var(--input-bg2);border:1px solid var(--border-strong);border-radius:6px;box-shadow:0 8px 24px rgba(0,0,0,.28);color:var(--text)}
+.ha-entity-listbox[hidden]{display:none}
+.ha-entity-option{padding:7px 9px;cursor:pointer;overflow-wrap:anywhere}
+.ha-entity-option+.ha-entity-option{border-top:1px solid var(--divider)}
+.ha-entity-option.active,.ha-entity-option:hover{background:var(--hover)}
+.ha-entity-option .ha-entity-name,.ha-entity-option small{display:block}
+.ha-entity-option small{color:var(--dim);font-size:.72rem;line-height:1.25;margin-top:2px}
+#cfg-zigbee_router + #cfg-zigbee_join{border-top:0;padding-top:0}
+#cfg-auto_brightness_ha_entity + #cfg-auto_brightness,
+#cfg-auto_brightness + #cfg-auto_brightness_sensitivity,
+#cfg-self_update + #cfg-update_channel,
+#cfg-companion_auto_update + #cfg-companion_update_channel{border-top:0;padding-top:0}
+/* Seven-day adaptive-light preview lives with its Display settings. It is diagnostic and local: the
+   canvas shows bounded illuminance aggregates, never dashboard/entity history or location metadata. */
+.autobright-panel{margin-top:0;padding-top:0;border-top:0}
+.autobright-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:9px}
+.autobright-head>div:first-child{display:flex;flex-direction:column;gap:2px;min-width:0}
+.autobright-head strong{font-size:.86rem;color:var(--accent2)}
+.autobright-head small{font-size:.72rem;color:var(--dim);overflow-wrap:anywhere}
+.autobright-actions{display:flex;align-items:center;justify-content:flex-end;gap:6px;flex-wrap:wrap}
+.autobright-actions .pbtn{padding:5px 8px;font-size:.72rem;white-space:nowrap}
+.autobright-chart{height:190px;margin:0}
+.autobright-legend{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:6px;color:var(--dim);font-size:.72rem}
+.autobright-legend span::before{content:"";display:inline-block;width:12px;height:2px;margin-right:5px;vertical-align:3px;border-radius:2px}
+.autobright-legend .observed::before{background:#4a9eff}
+.autobright-legend .expected::before{background:#f1bd52}
+.autobright-legend .proposed::before{background:#b77cff}
+.autobright-legend small{margin-left:auto;color:var(--dim)}
+.autobright-message{min-height:1.2em;margin-top:5px;color:var(--ok-dim);font-size:.74rem}
+.autobright-message.error{color:#d34b42}
 /* Package pickers can have very long option text (label · pkg); cap them to their column so the label
    isn't crushed into many wrapped lines — the select truncates the shown value, the dropdown shows it all. */
 .frow select.pkgsel{min-width:0;max-width:100%;text-overflow:ellipsis}
@@ -231,10 +277,15 @@ body.hdr-hide-brand .hdr .brand{display:none}
 .pip:hover{background:var(--input-bg);border-color:var(--border)}
 .toggle{position:relative;width:42px;height:24px;border-radius:12px;background:var(--border);border:1px solid var(--border-strong);cursor:pointer;transition:.15s;flex:0 0 auto}
 .toggle.on{background:#2557a7;border-color:#2557a7}
+.toggle.blocked{opacity:.4;cursor:not-allowed}
 .toggle::after{content:"";position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:var(--knob);transition:.15s}
 .toggle.on::after{left:20px}
 .toggle:focus-visible,.pip:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
-.savebar{position:sticky;bottom:0;background:var(--bg);padding:12px 0;margin-top:16px;border-top:1px solid var(--card-border);display:flex;gap:14px;align-items:center;z-index:5}
+.savebar{position:fixed;left:50%;bottom:0;transform:translateX(-50%);width:min(100%,1860px);box-sizing:border-box;
+  background:var(--bg);padding:12px max(20px,env(safe-area-inset-right)) calc(12px + env(safe-area-inset-bottom)) max(20px,env(safe-area-inset-left));
+  border-top:1px solid var(--card-border);box-shadow:0 -8px 18px -12px var(--shadow);display:flex;gap:14px;align-items:center;z-index:25}
+.savebar[hidden]{display:none}
+.cfg-dirty{padding-bottom:76px}
 .savebar button{background:#2557a7;border:1px solid #2557a7;color:#fff;padding:9px 24px;border-radius:8px;cursor:pointer;font-size:.95rem}
 .savebar button:disabled{background:var(--disabled-bg);border-color:var(--border);color:var(--disabled-fg);cursor:default}
 .muted{color:var(--dim)}
@@ -245,17 +296,30 @@ body.hdr-hide-brand .hdr .brand{display:none}
   .frow .fctl input[type=text],.frow .fctl input[type=password],.frow .fctl input[type=number],.frow .fctl select{
     flex:1 1 auto;width:100%;min-width:0;box-sizing:border-box
   }
+  .ha-entity-picker{width:100%;min-width:0}
+  .autobright-head{flex-direction:column}
+  .autobright-actions{width:100%;justify-content:flex-start}
+  .autobright-actions .pbtn{flex:1 1 auto;text-align:center}
+  .autobright-legend small{width:100%;margin-left:0}
+  .savebar{padding-left:max(8px,env(safe-area-inset-left));padding-right:max(8px,env(safe-area-inset-right))}
+  .savebar button{flex:1 1 auto}
 }
 
 /* ---- configurable-value marker (Dashboard) + anchor flash (Configure) ---- */
 /* A small pencil after a value marks it CONFIGURABLE (vs a static fact) and deep-links to the
    exact setting on the Configure tab. Muted until hover so the dashboard stays calm. */
-.cfglink{display:inline-block;margin-left:6px;color:#4a6a8a;text-decoration:none;font-size:.85em;opacity:.55;vertical-align:baseline}
+.cfglink{display:inline;margin-left:0;color:#4a6a8a;text-decoration:none;font-size:.85em;opacity:.55;vertical-align:baseline;white-space:nowrap}
 .cfglink:hover{color:var(--accent2);opacity:1}
 @keyframes cfgflash{0%{background:#2557a7}100%{background:transparent}}
 .flash{animation:cfgflash 1.6s ease-out;border-radius:8px}
 
 /* Logs tab — live tail view. Monospace, bounded height, level-coloured lines. */
+.log-toolbar{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:0 0 10px}
+.log-source,.log-actions{display:flex;align-items:center;gap:8px;flex:0 0 auto}
+.log-toolbar select{font:inherit;font-size:.8rem;padding:6px 8px;border-radius:8px;border:1px solid var(--border-strong);background:var(--input-bg);color:var(--text)}
+.log-toolbar .log-filter{width:auto;min-width:140px;flex:1 1 220px;margin:0}
+.log-actions{margin-left:auto}
+.log-toolbar .log-follow{display:flex;flex-direction:row;align-items:center;gap:4px;margin:0;white-space:nowrap}
 .logview{height:60vh;overflow-y:auto;background:#0d0d0d;border:1px solid var(--divider);border-radius:8px;padding:8px 10px;font:.78rem/1.45 ui-monospace,Menlo,Consolas,monospace;white-space:pre-wrap;word-break:break-all}
 .lg-line{min-height:1em}
 .lg-V,.lg-D{color:#777}

@@ -18,6 +18,7 @@ class CpuControllerTest {
         val cpu: CpuController,
         val root: FakeRootShell,
         val daemon: FakeDaemon,
+        val metricSource: FakeMetricSource,
     )
 
     private fun controller(
@@ -30,8 +31,14 @@ class CpuControllerTest {
     ): Harness {
         val root = FakeRootShell(runResult = suResult)
         val daemon = FakeDaemon(replies = daemonReplies)
-        val metrics = PanelMetrics(FakeMetricSource(governor = gov, availableGovernors = avail))
-        return Harness(CpuController(fakeProfile(appCanSu = appCanSu, cpuGovernors = cpuGovernors), root, daemon, metrics), root, daemon)
+        val metricSource = FakeMetricSource(governor = gov, availableGovernors = avail)
+        val metrics = PanelMetrics(metricSource)
+        return Harness(
+            CpuController(fakeProfile(appCanSu = appCanSu, cpuGovernors = cpuGovernors), root, daemon, metrics),
+            root,
+            daemon,
+            metricSource,
+        )
     }
 
     @Test fun governorsParsesTheAvailableList() {
@@ -49,6 +56,20 @@ class CpuControllerTest {
 
     @Test fun currentTierNullWhenUnreadable() {
         assertNull(controller().cpu.currentTier())
+    }
+
+    @Test fun managementReadsPropagateCapturedRootFallbackPolicy() {
+        val h = controller(avail = "performance", gov = "performance")
+
+        assertEquals(CpuController.PERFORMANCE, h.cpu.currentTier(allowRootFallback = false))
+        assertTrue(h.cpu.available(allowRootFallback = false))
+        assertEquals(listOf(false), h.metricSource.governorRootFallbacks)
+        assertEquals(listOf(false), h.metricSource.availableGovernorRootFallbacks)
+
+        assertEquals(CpuController.PERFORMANCE, h.cpu.currentTier())
+        assertTrue(h.cpu.available())
+        assertEquals(listOf(false, true), h.metricSource.governorRootFallbacks)
+        assertEquals(listOf(false, true), h.metricSource.availableGovernorRootFallbacks)
     }
 
     @Test fun setTierResolvesAutoToADynamicGovernorAndWritesIt() {

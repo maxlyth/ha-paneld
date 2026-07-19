@@ -1,11 +1,22 @@
 schema: 2
 id: wf1589t
-version: 2.0.0
+version: 2.0.2
 display_name: Electron WF1589T
 soc_class: rk3576
+soc:
+  model: Rockchip RK3576
+  introduced_year: 2024
+  cpu_cores:
+    - architecture: Arm Cortex-A72
+      count: 4
+    - architecture: Arm Cortex-A53
+      count: 4
 metadata:
   author: ha-paneld maintainers
   source: https://github.com/maxlyth/ha-paneld/blob/main/docs/hardware/wf1589t.md
+  links:
+    - label: SoC details
+      url: https://www.rock-chips.com/a/en/products/RK35_Series/2024/1212/2033.html
   license: Apache-2.0
   maturity: verified
   tested_firmware:
@@ -13,7 +24,7 @@ metadata:
   limitations:
     - The LED uses a conservative transfer until its per-channel response is measured.
 requires:
-  min_core_version: 0.9.3
+  min_core_version: 0.9.5-rc1
   drivers:
     - access.android-su
     - input.evdev
@@ -47,8 +58,8 @@ hardware:
     transfer: rk3576-four-bit
   screen_off: su-blpower
   has_button_backlight: false
+  touch_click_gain: 0.16
 sensors:
-  proximity_graded_strategy: observed
   cht8305: false
   room_temp_offset_c: 0.0
 identity:
@@ -70,8 +81,6 @@ cpu:
 display:
   physical_ppi: 226
 provisioning:
-  access:
-    shizuku: optional
   software: {}
   display:
     density: 212
@@ -83,7 +92,9 @@ provisioning:
       - vendor
       - test
       - clutter
-    note: 'Factory hardware stress-test ("burn-in") tool (label "Stresstest", priv-app). Production-line QA; not used in normal operation.'
+    note: >-
+      Factory hardware stress-test ("burn-in") tool (label "Stresstest", priv-app). Production-line QA; not
+      used in normal operation.
   - package: com.DeviceTest
     desired_state: disabled
     importance: optional
@@ -107,12 +118,16 @@ provisioning:
       - vendor
       - demo
       - clutter
-    note: 'Vendor RGB LED demo app (label "PwmLightDemo"). Its boot-started foreground service continuously cycles colours through /dev/ledjni, conflicting with ha-paneld LED control; safe to disable.'
+    note: >-
+      Vendor RGB LED demo app (label "PwmLightDemo"). Its boot-started foreground service continuously cycles
+      colours through /dev/ledjni, conflicting with ha-paneld LED control; safe to disable.
   - package: com.elclcd.otaupdater
     desired_state: disabled
     importance: optional
     tags:
       - vendor
       - ota
-    note: 'ELC "Firmware Upgrade" vendor OTA updater. Disable to stop the panel auto-applying vendor firmware updates that can re-add bloat.'
+    note: >-
+      ELC "Firmware Upgrade" vendor OTA updater. Disable to stop the panel auto-applying vendor firmware
+      updates that can re-add bloat.
   recipes: []

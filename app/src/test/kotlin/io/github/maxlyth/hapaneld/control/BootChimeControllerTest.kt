@@ -53,6 +53,21 @@ class BootChimeControllerTest {
         assertFalse(hardware.silenced)
     }
 
+    @Test fun persistedSilenceCompletesOnTheLifecycleOwnerBeforeReturning() {
+        var configured = true
+        val events = mutableListOf<String>()
+        val controller = BootChimeController(
+            { configured },
+            { configured = it },
+            FakeBootStore(events),
+            FakeBootHardware(prior, events),
+        )
+
+        controller.applyPersisted()
+
+        assertEquals(listOf("capture", "save", "silence"), events)
+    }
+
     @Test fun legacyDisableNeverInventsALouderRestore() {
         var configured = true
         val events = mutableListOf<String>()

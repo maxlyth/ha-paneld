@@ -13,9 +13,13 @@ class ScreenshotPlaceholderSourceTest {
         ).first { it.isFile }.readText()
 
         assertTrue(source.contains("s == null && cachedShot != null"))
+        assertTrue(source.contains("val shotTitle = \"\"\"<h2>Screenshot"))
+        assertTrue(source.contains("class=\"card-title-action\""))
+        assertTrue(source.contains("title=\"Capture a fresh screenshot\">↻ Refresh</a></h2>"))
+        assertTrue(!source.contains("the last successful capture stays visible"))
         assertTrue(
             source.contains(
-                """<div class="card" id="shotcard" data-capture-ok="0"><h2>Screenshot""",
+                """<div class="card" id="shotcard" data-capture-ok="0">${'$'}shotTitle""",
             ),
         )
         assertTrue(source.contains("""shotInner(cachedShot)"""))
@@ -26,7 +30,7 @@ class ScreenshotPlaceholderSourceTest {
         )
         assertTrue(
             source.contains(
-                """<div class="card" id="shotcard" data-capture-ok="1"><h2>Screenshot""",
+                """<div class="card" id="shotcard" data-capture-ok="1">${'$'}shotTitle""",
             ),
         )
     }

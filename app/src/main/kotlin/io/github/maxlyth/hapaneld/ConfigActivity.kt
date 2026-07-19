@@ -12,9 +12,16 @@ import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.Toolbar
+import io.github.maxlyth.hapaneld.control.AdbController
+import io.github.maxlyth.hapaneld.control.CdpRelay
+import io.github.maxlyth.hapaneld.control.VerifiedRelayTransition
+import io.github.maxlyth.hapaneld.shizuku.ShizukuConsent
+import io.github.maxlyth.hapaneld.shizuku.ShizukuManagerIdentity
 import io.github.maxlyth.hapaneld.shizuku.ShizukuSetupDialog
+import io.github.maxlyth.hapaneld.security.LocalApprovalBroker
 import io.github.maxlyth.hapaneld.util.LocalAdminEndpoint
 import io.github.maxlyth.hapaneld.util.LocalAdminReadiness
 import kotlinx.coroutines.CoroutineScope
@@ -23,7 +30,6 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.isActive
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -99,10 +105,23 @@ class ConfigActivity : AppCompatActivity() {
             )
             navigationContentDescription = "Back to dashboard"
             setNavigationOnClickListener { finish() }
-            menu.add("Enhanced access").apply {
+            if (ShizukuSetupDialog.entryVisible(
+                    consented = ShizukuConsent.enabled(this@ConfigActivity),
+                    managerStatus = ShizukuManagerIdentity.status(this@ConfigActivity),
+                )
+            ) {
+                menu.add("Enhanced access").apply {
+                    setShowAsAction(android.view.MenuItem.SHOW_AS_ACTION_NEVER)
+                    setOnMenuItemClickListener {
+                        ShizukuSetupDialog.show(this@ConfigActivity)
+                        true
+                    }
+                }
+            }
+            menu.add("Security mode").apply {
                 setShowAsAction(android.view.MenuItem.SHOW_AS_ACTION_NEVER)
                 setOnMenuItemClickListener {
-                    ShizukuSetupDialog.show(this@ConfigActivity)
+                    showSecurityModeDialog()
                     true
                 }
             }
@@ -129,6 +148,110 @@ class ConfigActivity : AppCompatActivity() {
         waitForAdminServer()
     }
 
+    private fun showSecurityModeDialog() {
+        val config = Config(this)
+        val hardened = config.hardenedSecurityEnabled
+        val pending = LocalApprovalBroker.instance.pending().size
+        AlertDialog.Builder(this)
+            .setTitle("Security mode")
+            .setMessage(
+                if (hardened) {
+                    "Hardened mode is on. High-impact requests from the network need approval on this panel. Pending: $pending."
+                } else {
+                    "Relaxed mode is on. Trusted-LAN features work without on-panel approval. Hardened mode is optional."
+                },
+            )
+            .setPositiveButton(if (hardened) "Use Relaxed mode" else "Enable Hardened mode") { _, _ ->
+                if (hardened) {
+                    config.setSecurityMode(Config.SecurityMode.RELAXED)
+                    LocalApprovalBroker.instance.clear()
+                } else {
+                    enableHardenedMode(config)
+                }
+            }
+            .setNeutralButton("Review approvals") { _, _ -> showPendingApprovals() }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun enableHardenedMode(config: Config) {
+        activityScope.launch {
+            var networkAdbActive: Boolean? = null
+            // Root process/listener termination and property reads are bounded but blocking. Keep the
+            // complete relay-stop -> ADB-proof -> durable-mode transition off the activity thread and
+            // under the relay lifecycle lock so an inspect/start request cannot cross the commit.
+            val transition = withContext(Dispatchers.IO) {
+                CdpRelay.stopAndVerifyThen(this@ConfigActivity) {
+                    networkAdbActive = AdbController(config).activeState()
+                    if (networkAdbActive != false) return@stopAndVerifyThen false
+                    WebView.setWebContentsDebuggingEnabled(false)
+                    config.setSecurityMode(Config.SecurityMode.HARDENED)
+                }
+            }
+            if (transition == VerifiedRelayTransition.VERIFICATION_FAILED) {
+                AlertDialog.Builder(this@ConfigActivity)
+                    .setTitle("Unable to stop remote debugging")
+                    .setMessage(
+                        "Hardened mode was not enabled because the panel could not verify that the LAN " +
+                            "DevTools relay and its listener are stopped. Restart the panel, then try again.",
+                    )
+                    .setPositiveButton("OK", null)
+                    .show()
+            } else if (networkAdbActive == null) {
+                AlertDialog.Builder(this@ConfigActivity)
+                    .setTitle("Unable to verify remote ADB")
+                    .setMessage(
+                        "Hardened mode was not enabled because the panel could not verify that classic " +
+                            "network ADB and Android Wireless debugging are off. Turn off both remote-control " +
+                            "paths in Android's developer settings, then try again.",
+                    )
+                    .setPositiveButton("OK", null)
+                    .show()
+            } else if (networkAdbActive == true) {
+                AlertDialog.Builder(this@ConfigActivity)
+                    .setTitle("Turn off remote ADB first")
+                    .setMessage(
+                        "Hardened mode cannot protect physical approvals while classic network ADB or Android " +
+                            "Wireless debugging is active. Turn off both in Android's developer settings, then " +
+                            "enable Hardened mode again.",
+                    )
+                    .setPositiveButton("OK", null)
+                    .show()
+            } else if (transition != VerifiedRelayTransition.APPLIED) {
+                AlertDialog.Builder(this@ConfigActivity)
+                    .setTitle("Unable to enable Hardened mode")
+                    .setMessage("The security-mode change could not be saved. Relaxed mode remains active.")
+                    .setPositiveButton("OK", null)
+                    .show()
+            }
+        }
+    }
+
+    private fun showPendingApprovals() {
+        val pending = LocalApprovalBroker.instance.pending()
+        if (pending.isEmpty()) {
+            AlertDialog.Builder(this).setTitle("Pending approvals").setMessage("There are no pending requests.")
+                .setPositiveButton("OK", null).show()
+            return
+        }
+        val labels = pending.map { "${it.operation.label}\n${it.summary}\nFrom ${it.peer}" }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("Approve one request")
+            .setItems(labels) { _, which -> confirmApproval(pending[which]) }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun confirmApproval(pending: io.github.maxlyth.hapaneld.security.PendingApproval) {
+        AlertDialog.Builder(this)
+            .setTitle(pending.operation.label)
+            .setMessage("${pending.summary}\n\nRequest from ${pending.peer}. Approval expires and can be used once.")
+            .setPositiveButton("Approve") { _, _ -> LocalApprovalBroker.instance.approve(pending.id) }
+            .setNegativeButton("Deny") { _, _ -> LocalApprovalBroker.instance.deny(pending.id) }
+            .setNeutralButton("Cancel", null)
+            .show()
+    }
+
     private fun waitForAdminServer(restartService: Boolean = false) {
         readinessJob?.cancel()
         web.visibility = View.GONE
@@ -137,14 +260,14 @@ class ConfigActivity : AppCompatActivity() {
         readinessMessage.setText(R.string.config_service_starting)
         retryButton.isEnabled = false
         retryButton.visibility = View.GONE
-        if (restartService) stopService(Intent(this, PaneldService::class.java))
+        if (restartService) {
+            // Register the fresh START_STICKY request synchronously while this Activity still owns the
+            // main thread. Service teardown deliberately exits the process after cleanup, so an
+            // in-process delayed restart could die before it reached ActivityManager.
+            stopService(Intent(this, PaneldService::class.java))
+            PaneldService.start(this)
+        }
         readinessJob = activityScope.launch {
-            if (restartService) {
-                // stopService() teardown is asynchronous. Give the old instance a bounded head start,
-                // then request a fresh service process owner instead of re-probing a terminal FAILED one.
-                delay(SERVICE_RESTART_DELAY_MS)
-                PaneldService.start(this@ConfigActivity)
-            }
             val ready = withContext(Dispatchers.IO) {
                 readiness.await(probe = { LocalAdminReadiness.healthProbe(healthUrl, timeoutMs = 350) })
             }
@@ -175,6 +298,5 @@ class ConfigActivity : AppCompatActivity() {
     }
 
     private companion object {
-        const val SERVICE_RESTART_DELAY_MS = 500L
     }
 }

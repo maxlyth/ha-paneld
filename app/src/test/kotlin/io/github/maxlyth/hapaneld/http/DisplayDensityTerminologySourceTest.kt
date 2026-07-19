@@ -1,18 +1,38 @@
 package io.github.maxlyth.hapaneld.http
 
+import io.github.maxlyth.hapaneld.control.fakeProfile
 import java.io.File
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import org.junit.Test
 
 class DisplayDensityTerminologySourceTest {
-    @Test fun displaySizingLabelsAndroidResetReferenceAsFactoryBase() {
+    @Test fun displaySizingLeadsWithProfileRecommendationAndKeepsFirmwareBaseOnReset() {
         val source = File("src/main/kotlin/io/github/maxlyth/hapaneld/http/PaneldServer.kt").readText()
-        val card = source.substringAfter("private fun displayCardHtml()")
+        val card = source.substringAfter("private fun displayCardHtml(")
             .substringBefore("private fun asset(")
 
         assertTrue("Logical density (dpi)" in card)
-        assertTrue("factory base" in card)
+        assertTrue("profile recommendation" in card)
+        assertTrue("Reset to firmware default" in card)
+        assertFalse("· factory base" in card)
         assertFalse("· native" in card)
+    }
+
+    @Test fun diagnosticsDistinguishAndroidBaseOverrideAndProfileRecommendation() {
+        val line = DiagReader.displaySizingLine(
+            DiagReader.DisplaySizingEvidence(
+                androidBaseLogicalDpi = 160,
+                currentLogicalDpi = 212,
+                fontScale = 1.0f,
+            ),
+            fakeProfile(recommendedDensity = 240, recommendedFontScale = 1.1f),
+        )
+
+        assertTrue("android_base_logical_dpi=160" in line)
+        assertTrue("current_logical_dpi=212" in line)
+        assertTrue("override_dpi=212" in line)
+        assertTrue("profile_recommended_dpi=240" in line)
+        assertTrue("profile_recommended_font_scale=1.1" in line)
     }
 }

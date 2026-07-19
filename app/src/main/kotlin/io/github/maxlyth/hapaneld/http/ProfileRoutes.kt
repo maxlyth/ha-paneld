@@ -11,6 +11,8 @@ import io.github.maxlyth.hapaneld.device.profile.ProfileRef
 import io.github.maxlyth.hapaneld.device.profile.ProfileSelection
 import io.github.maxlyth.hapaneld.device.profile.ProfileStatus
 import io.github.maxlyth.hapaneld.device.profile.ProfileSummary
+import io.github.maxlyth.hapaneld.device.profile.ProfileSoc
+import io.github.maxlyth.hapaneld.security.SensitiveOperation
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
@@ -46,6 +48,7 @@ internal data class ProfileRouteDependencies(
     val abortPendingRestart: (String) -> Boolean = { false },
     val readOnly: ProfileRouteReadOnlyProviders = ProfileRouteReadOnlyProviders(),
     val hardMaxYamlBytes: Long = MAX_PROFILE_YAML_BYTES,
+    val authorize: suspend (ApplicationCall, SensitiveOperation, String, String) -> Boolean = { _, _, _, _ -> true },
 )
 
 internal data class ProfileRestartRejection(
@@ -213,6 +216,20 @@ private suspend fun handleSelection(
         }
         ProfileSelection.Pinned(ref)
     }
+    val approvalTarget = if (rollback) dependencies.admin.status().lastKnownGood else selection
+    val targetSummary = when (approvalTarget) {
+        ProfileSelection.Auto -> "automatic device matching"
+        is ProfileSelection.Pinned ->
+            "${approvalTarget.ref.id}@${approvalTarget.ref.revision.take(16)}"
+        null -> "no recorded last-known-good profile"
+    }
+    if (!dependencies.authorize(
+            call,
+            SensitiveOperation.PROFILE_ACTIVATE,
+            exactHttpApprovalPayload(call, sha256Hex(request.toString().toByteArray(Charsets.UTF_8))),
+            if (rollback) "Roll back to $targetSummary" else "Activate $targetSummary and restart ha-paneld",
+        )
+    ) return
     val mutation = if (rollback) {
         dependencies.admin.rollbackToLastKnownGood(expectedRevision)
     } else {
@@ -420,6 +437,7 @@ private fun summaryJson(summary: ProfileSummary): JSONObject = JSONObject()
     .put("content_version", summary.contentVersion)
     .put("author", summary.author ?: JSONObject.NULL)
     .put("maturity", summary.maturity.name.lowercase())
+    .put("trusted_provenance", summary.trustedProvenance)
     .put("min_core_version", summary.minCoreVersion ?: JSONObject.NULL)
     .put("matches_this_device", summary.matchesThisDevice)
     .put("active", summary.active)
@@ -428,6 +446,17 @@ private fun summaryJson(summary: ProfileSummary): JSONObject = JSONObject()
     .put("compatible", summary.compatible)
     .put("issues", JSONArray(summary.issues.map(::issueJson)))
     .put("risks", JSONArray(summary.risks.map { it.name.lowercase() }.sorted()))
+    .put("soc", summary.soc?.let(::socJson) ?: JSONObject.NULL)
+    .put("links", JSONArray(summary.links.takeIf { summary.compatible }.orEmpty().map { link ->
+        JSONObject().put("label", link.label).put("url", link.url)
+    }))
+
+private fun socJson(soc: ProfileSoc): JSONObject = JSONObject()
+    .put("model", soc.model)
+    .put("introduced_year", soc.introducedYear ?: JSONObject.NULL)
+    .put("cpu_cores", JSONArray(soc.cpuCores.map { cluster ->
+        JSONObject().put("architecture", cluster.architecture).put("count", cluster.count)
+    }))
 
 private fun previewJson(preview: io.github.maxlyth.hapaneld.device.profile.ProfilePreview): JSONObject = JSONObject()
     .put("preview_token", preview.previewToken ?: JSONObject.NULL)

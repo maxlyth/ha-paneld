@@ -1,7 +1,7 @@
 // System-control verbs that act via the Android shell tools (am / wm / svc / cpufreq sysfs /
 // screencap). Each runs as root through this daemon's su domain — reaching what a sandboxed app
 // can't (background-activity-launch limits, root-only cpufreq, full screen capture). Every argument
-// passed into a shell string is validated/whitelisted (util.h) before it reaches sysexec_run().
+// derived value is validated and passed only as a structural argv field or direct filesystem value.
 #ifndef HAPANELD_SYSCTL_H
 #define HAPANELD_SYSCTL_H
 
@@ -21,8 +21,8 @@ void cmd_stop(conn_ctx *ctx, const char *args);       // STOP <pkg>        force
 void cmd_disable(conn_ctx *ctx, const char *args);    // DISABLE <pkg>     pm disable-user (boot block)
 void cmd_enable(conn_ctx *ctx, const char *args);     // ENABLE <pkg>      pm enable (reverse DISABLE)
 void cmd_overlay(conn_ctx *ctx, const char *args);    // OVERLAY <pkg> deny|allow  SYSTEM_ALERT_WINDOW
-void cmd_install(conn_ctx *ctx, const char *args);    // INSTALL <apk-path>  root pm install of a staged, allowlisted APK
+void cmd_install(conn_ctx *ctx, const char *args);    // INSTALL <apk-path> legacy verb; always fails closed
 void cmd_installstream(conn_ctx *ctx, const char *args); // INSTALLSTREAM <bytes> two-phase socket upload + install
-void cmd_installgc(conn_ctx *ctx, const char *args);  // INSTALLGC <apk-path> remove retained input under install lock
+void cmd_installgc(conn_ctx *ctx, const char *args);  // INSTALLGC <apk-path> legacy cleanup acknowledgement
 
 #endif

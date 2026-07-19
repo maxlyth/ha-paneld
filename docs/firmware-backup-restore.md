@@ -1,17 +1,17 @@
-# Firmware backup & restore (wall panels)
+# Firmware backup & restore (rooted Rockchip wall panels)
 
-Wall panels have **no buttons** — no volume or power keys. The standard Android recovery guides all start with "hold Volume-Down + Power to enter [fastboot](https://en.wikipedia.org/wiki/Fastboot)/recovery", so they simply can't work here. If you've already failed a few times following them, that's why: there's no button to hold. These are [Rockchip](https://en.wikipedia.org/wiki/Rockchip) panels, which use a different route — and this guide covers it.
+The TPA10 and WF1589T do not provide the usual Android volume-and-power recovery combination. Standard guides that start with "hold Volume-Down + Power" therefore do not apply: these verified panels use Rockchip's Loader protocol instead.
 
-A complete backup is easy and low-risk: it runs over the network, no cable, no mode changes ([Back up now](#back-up-now)). Restoring is more involved — it needs a USB cable and a laptop — but these panels are practically impossible to permanently brick, because a recovery mode ([Maskrom](#why-these-panels-need-special-steps)) lives in the chip itself. Back up first; change firmware only if you want to.
+A partition backup is read-only but can be large: it runs over the network with no mode change, needs root, and stages each image temporarily on the panel's shared storage ([Back up now](#back-up-now)). Confirm that the panel has enough free space for its largest partition before starting. Restoring is more involved, needs a USB cable and a laptop, and remains experimental until an end-to-end recovery has been proved on a spare unit.
 
-Canonical, open-source, cross-platform — no Windows-only vendor tools.[^tools]
+The normal Loader-mode path uses the open-source, cross-platform `rkdeveloptool`; the NSPanel Pro uses separate model-specific tooling described under [Per-panel notes](#per-panel-notes).[^tools]
 
 > [!NOTE]
-> Backups are safe and routine. The restore steps are the recovery path and have not been brick-tested; two per-panel details — the maskrom entry, the loader file — are unconfirmed. Neither affects taking a backup today.
+> The commands below are scoped to the rooted TPA10 and WF1589T layouts recorded in [Per-panel notes](#per-panel-notes). Do not use them on an unrooted SMT1019 or ZX-SMT156, on a MediaTek Shelly Wall Display, or on an uncharacterised Generic profile. The restore steps have not been brick-tested, and Maskrom recovery is not yet documented because a verified model-specific loader file has not been established.
 
 ## Back up now
 
-Read every partition straight off the running panel, over the network. No reboot, no cable, nothing that can brick it — you only need the panel's IP and [`adb`](#setting-up-rkdeveloptool).[^adb]
+Read every partition straight off the running panel, over the network. These commands do not write partitions or change boot mode; you only need the panel's IP and [`adb`](#setting-up-rkdeveloptool).[^adb]
 
 ```bash
 IP=192.168.1.50         # your panel's IP
@@ -26,15 +26,15 @@ adb -s $IP:5555 shell 'su 0 sh -c "for f in /dev/block/by-name/*; do echo \$(bas
     done
 ```
 
-That's the whole backup — keep the folder somewhere safe. Then grab one extra piece the loop above doesn't catch (the loader at the very start of the flash — it's what makes the un-brickable rescue work):
+Keep the folder somewhere safe. Then capture the first 8 MiB of the eMMC as additional boot-layout evidence. This raw flash head is **not** a Rockchip MiniLoader file and must not be passed to `rkdeveloptool db`:
 
 ```bash
 adb -s $IP:5555 shell "su 0 dd if=/dev/block/mmcblk2 of=/sdcard/idb_head.img bs=1M count=8"   # mmcblk2 on TPA10; mmcblk1 on WF1589T
-adb -s $IP:5555 pull /sdcard/idb_head.img backup/ && adb -s $IP:5555 shell "rm /sdcard/idb_head.img"
+adb -s $IP:5555 pull /sdcard/idb_head.img ./idb_head.img && adb -s $IP:5555 shell "rm /sdcard/idb_head.img"
 ```
 
 > [!NOTE]
-> **What you just saved.** Every named partition: the bootloader (`uboot`, `trust`, `security`), the system (`boot`, `recovery`, `super`, …) and your data (`userdata` — large; back it up occasionally, on its own). Needs root (`su 0`), which the rk3566/rk3576 panels have; NSPanel Pro uses [seaky's roottool](#per-panel-notes).
+> **What you just saved.** Every named partition that completed successfully: the bootloader (`uboot`, `trust`, `security`), the system (`boot`, `recovery`, `super`, …) and your data (`userdata`, which can be very large). Compare every pulled file with `blockdev --getsize64` for its source partition before treating the backup as complete. These example commands need the verified `su 0` route on the TPA10 or WF1589T; SoC family alone does not imply root. NSPanel Pro uses [seaky's model-specific tooling](#per-panel-notes).
 
 ## Stop unwanted updates
 
@@ -49,7 +49,7 @@ adb -s $IP:5555 shell 'pm disable-user --user 0 com.elclcd.otaupdater'   # WF158
 
 ## If you ever need to restore
 
-Restoring *writes* to the panel, so unlike backup it needs a **USB cable to a computer** and the `rkdeveloptool` program. Bring a laptop to the panel; you may have to unmount the panel to reach the USB port. One-time setup is in [Setting up rkdeveloptool](#setting-up-rkdeveloptool). Then, two situations:
+Restoring *writes* to the panel, so unlike backup it needs a **USB cable to a computer** and the `rkdeveloptool` program. Bring a laptop to the panel; you may have to unmount the panel to reach the USB port. One-time setup is in [Setting up rkdeveloptool](#setting-up-rkdeveloptool). The supported action depends on whether Android still boots:
 
 **The panel still boots** — switch it to flashing mode over the network, write the partition back:
 
@@ -60,17 +60,16 @@ rkdeveloptool wlx boot boot.img      # restore a partition by name
 rkdeveloptool rd                     # reboot
 ```
 
-**The panel won't boot** — use Maskrom, the chip's built-in rescue mode:
+**The panel won't boot** — stop here. Rockchip Maskrom can still enumerate a device, but writing from Maskrom first requires a valid model- and memory-specific MiniLoader. That file has not yet been sourced and restore-tested for these panels:
 
 ```bash
-# put the panel in maskrom (per-panel hardware step — see Per-panel notes), then:
+# after entering the model-specific hardware mode, observation only:
 rkdeveloptool ld                     # expect: <id>  Maskrom
-rkdeveloptool db loader.bin          # load the panel's loader first (from your backup)
-rkdeveloptool wlx boot boot.img      # then restore
+# Do not run `db`, `wl`, `wlx`, `gpt`, `ul` or `ef` without a verified MiniLoader and recovery plan.
 ```
 
 > [!CAUTION]
-> Maskrom rescue needs the panel's own **loader file** — that's why [Back up now](#back-up-now) grabs it. Restore by partition **name** (`wlx`), not raw sector. On a wall-mounted panel, rehearse on a spare first if you can. Full detail in [Safety notes](#safety-notes).
+> The raw `idb_head.img` captured during backup is not a substitute for a Rockchip MiniLoader. Do not rename it to `loader.bin` or pass it to `rkdeveloptool db`. Until a loader is extracted or obtained, authenticated and proved on a spare unit, only the software-entered Loader-mode restore path above is documented.
 
 ---
 
@@ -146,12 +145,12 @@ From the tool's own `--help` (run `rkdeveloptool -h` to confirm your build):
 
 ### Why these panels need special steps
 
-Every supported panel is a [Rockchip](https://en.wikipedia.org/wiki/Rockchip) SoC (px30 / rk3566 / rk3576) booting from [eMMC](https://en.wikipedia.org/wiki/MultiMediaCard#eMMC). That's why the usual Android advice fails:
+The TPA10 and WF1589T covered by the generic procedure are [Rockchip](https://en.wikipedia.org/wiki/Rockchip) SoCs (rk3566 / rk3576) booting from [eMMC](https://en.wikipedia.org/wiki/MultiMediaCard#eMMC). This does not describe every panel supported by ha-paneld. On these two models the usual Android advice fails because:
 
 - **No buttons.** Guides that say "hold Volume-Down + Power for [fastboot](https://en.wikipedia.org/wiki/Fastboot)/recovery" can't apply.
 - **Not fastboot.** Rockchip uses its own USB protocol, *rockusb*, with two [flashing modes](https://wiki.radxa.com/Rock5/install/rockchip-flash-tools):
     - **Loader** — entered in software with `adb reboot loader` (no buttons). Normal restores use this.
-    - **Maskrom** — a rescue mode baked into the chip's ROM that runs even with a wiped bootloader. It's the un-brickable fallback, entered by a hardware step (a pin-hole / test-point — see [Per-panel notes](#per-panel-notes)). It starts with no RAM set up, so you feed it the loader first (`db`) — that's why your backup keeps a copy.
+    - **Maskrom** — a rescue mode baked into the chip's ROM that runs even with a wiped bootloader. It starts with no RAM set up, so a valid model-specific MiniLoader is required before partition access. The raw eMMC head is not that loader, and this guide does not yet provide a write procedure from Maskrom.
 
 ### Per-panel notes
 
@@ -173,9 +172,9 @@ Partition tables read from live units.
 
 ### Safety notes
 
-- Restore by partition **name** (`wlx`), not raw sector — the tool resolves the offset, so you can't clobber the wrong region.
+- Restore by partition **name** (`wlx`), not raw sector — this avoids manual offset mistakes. Confirm the exact partition name, image and panel model before writing.
 - Avoid raw full-disk writes (`wl` at sector 0) — they hit a rockusb `0x2000`-sector offset quirk; stick to per-partition `wlx`/`rl`.
-- Don't write `uboot`/`trust`/loader without a verified backup **and** the loader file in hand.
+- Don't write `uboot`, `trust`, a loader or a partition table without a verified backup, an authenticated model-specific MiniLoader and a restore plan already proved on a spare.
 - Rehearse a restore on a spare unit before doing it on a panel in a wall, if you can.
 
 ### Open gaps (help wanted)

@@ -6,6 +6,8 @@ import android.content.Intent
 import android.content.ServiceConnection
 import android.content.pm.PackageManager
 import android.os.IBinder
+import android.os.Handler
+import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import io.github.maxlyth.hapaneld.BuildConfig
@@ -16,6 +18,7 @@ import io.github.maxlyth.hapaneld.platform.ShellPrivilege
 import rikka.shizuku.Shizuku
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 /** Official Shizuku client adapter. No Shizuku type escapes this package. */
@@ -25,7 +28,7 @@ object ShizukuBridge : ShellPrivilege {
     private const val SHORT_TIMEOUT_MS = 10_000L
     private const val MAX_CLIENT_WORKERS = 2
 
-    @Volatile var state: ShizukuState = ShizukuState.STOPPED
+    @Volatile var state: ShizukuState = ShizukuState.DISABLED
         private set
     @Volatile private var remote: IShizukuShellService? = null
     @Volatile private var initialized = false
@@ -35,10 +38,28 @@ object ShizukuBridge : ShellPrivilege {
     private val executor = BoundedCallExecutor(MAX_CLIENT_WORKERS) { runnable ->
         Thread(runnable, "hapaneld-shizuku-client").apply { isDaemon = true }
     }
+    private val reconnectScheduler = Executors.newSingleThreadScheduledExecutor { runnable ->
+        Thread(runnable, "hapaneld-shizuku-reconnect").apply { isDaemon = true }
+    }
+    private val callbackHandler = Handler(Looper.getMainLooper())
+    private val rejectedBindingDispatcher = ShizukuCallbackMutationDispatcher(
+        postBarrier = callbackHandler::post,
+        dispatchOffMain = { action -> runCatching { reconnectScheduler.execute(action) }.isSuccess },
+        onOffMainRejected = { Log.w(TAG, "failed to dispatch rejected Shizuku binding off main") },
+    )
+    private val scheduler = ShizukuScheduler { delayMs, action ->
+        val future = reconnectScheduler.schedule(action, delayMs, TimeUnit.MILLISECONDS)
+        ShizukuScheduledHandle { future.cancel(false) }
+    }
+    private val reconnects = ShizukuReconnectCoordinator(scheduler)
+    private var stableReset: ShizukuScheduledHandle? = null
 
     private val args: Shizuku.UserServiceArgs
         get() = Shizuku.UserServiceArgs(ComponentName(appContext, ShizukuShellService::class.java))
-            .tag("hapaneld-shell-v2")
+            // Shizuku retains UserService processes by component + tag. A protocol-derived tag
+            // forces a fresh bind after an AIDL change instead of reusing an older service whose
+            // Binder transaction table cannot implement the new method.
+            .tag(ShizukuPolicy.USER_SERVICE_TAG)
             .version(BuildConfig.VERSION_CODE)
             .processNameSuffix("shell")
             .daemon(false)
@@ -85,7 +106,7 @@ object ShizukuBridge : ShellPrivilege {
             return
         }
         if (!ShizukuConsent.enabled(appContext)) {
-            clearBinding(ShizukuState.STOPPED)
+            clearBinding(ShizukuState.DISABLED)
             return
         }
         if (!runCatching { Shizuku.pingBinder() }.getOrDefault(false)) {
@@ -113,6 +134,7 @@ object ShizukuBridge : ShellPrivilege {
         val connection: ServiceConnection
         synchronized(this) {
             if (remote != null || activeConnection != null) return
+            reconnects.cancel(resetBackoff = false)
             generation = ++bindingGeneration
             connection = connectionFor(generation)
             activeConnection = connection
@@ -121,7 +143,7 @@ object ShizukuBridge : ShellPrivilege {
         runCatching { Shizuku.bindUserService(args, connection) }
             .onFailure {
                 Log.w(TAG, "bind failed", it)
-                rejectBinding(connection, generation, ShizukuState.ERROR)
+                deferRejectedBinding(connection, generation, ShizukuState.ERROR)
             }
     }
 
@@ -148,12 +170,13 @@ object ShizukuBridge : ShellPrivilege {
                             if (allowed) {
                                 remote = candidate
                                 state = ShizukuState.READY
+                                scheduleStableBackoffReset(generation)
                             }
                         }
                     }
                     if (!accepted) {
                         cost.outcome(FeatureCostOutcome.FAILURE)
-                        rejectBinding(
+                        deferRejectedBinding(
                             this,
                             generation,
                             if (identityUsable) managerIdleState() else ShizukuState.INCOMPATIBLE,
@@ -161,7 +184,12 @@ object ShizukuBridge : ShellPrivilege {
                     }
                 } catch (error: Throwable) {
                     cost.outcome(FeatureCostOutcome.FAILURE)
-                    throw error
+                    Log.w(TAG, "binding identity check failed", error)
+                    deferRejectedBinding(
+                        this,
+                        generation,
+                        ShizukuState.ERROR,
+                    )
                 } finally {
                     cost.close()
                 }
@@ -169,18 +197,23 @@ object ShizukuBridge : ShellPrivilege {
             if (!admitted) {
                 cost.outcome(FeatureCostOutcome.REJECTED).close()
                 Log.w(TAG, "binding identity check rejected: client executor saturated")
-                rejectBinding(this, generation, ShizukuState.ERROR)
+                deferRejectedBinding(this, generation, ShizukuState.ERROR)
             }
         }
 
         override fun onServiceDisconnected(name: ComponentName) {
-            synchronized(this@ShizukuBridge) {
+            val nextState = disconnectedState()
+            val reconnectGeneration = synchronized(this@ShizukuBridge) {
                 if (generation != bindingGeneration || activeConnection !== this) return
                 bindingGeneration++
+                stableReset?.cancel()
+                stableReset = null
                 activeConnection = null
                 remote = null
-                state = managerIdleState()
+                state = nextState
+                bindingGeneration.takeIf { nextState == ShizukuState.ERROR }
             }
+            if (reconnectGeneration != null) scheduleReconnect(reconnectGeneration)
         }
     }
 
@@ -189,33 +222,101 @@ object ShizukuBridge : ShellPrivilege {
             bindingGeneration++
             remote = null
             state = nextState
+            stableReset?.cancel()
+            stableReset = null
+            reconnects.cancel(resetBackoff = true)
             activeConnection.also { activeConnection = null }
         }
         if (connection != null) runCatching { Shizuku.unbindUserService(args, connection, true) }
     }
 
-    private fun rejectBinding(connection: ServiceConnection, generation: Long, nextState: ShizukuState) {
-        val removeService = synchronized(this) {
-            if (ShizukuPolicy.canRemoveRejectedBinding(
-                    callbackGeneration = generation,
-                    currentGeneration = bindingGeneration,
-                    connectionIsCurrent = activeConnection === connection,
-                )) {
-                bindingGeneration++
-                activeConnection = null
-                remote = null
-                state = nextState
-                true
-            } else {
-                false
-            }
+    private fun deferRejectedBinding(
+        connection: ServiceConnection,
+        generation: Long,
+        nextState: ShizukuState,
+    ) {
+        // Shizuku 13.1.5 invokes this callback while its main-handler runnable iterates the cached
+        // connection set. Posting to the same handler guarantees unbind runs on the next loop turn,
+        // after that iteration has returned. The second stage keeps synchronous Binder removal off
+        // main even when the identity worker finishes immediately.
+        if (!rejectedBindingDispatcher.dispatch(
+                Runnable { rejectBindingNow(connection, generation, nextState) },
+            )) {
+            Log.w(TAG, "failed to defer rejected Shizuku binding on the main looper")
         }
-        // A stale callback belongs to an older binding. Detach that connection, but never remove the
-        // user service: the same UserServiceArgs may already back a newer accepted connection.
-        runCatching { Shizuku.unbindUserService(args, connection, removeService) }
     }
 
-    override fun available(): Boolean = remote != null && state == ShizukuState.READY
+    private fun rejectBindingNow(connection: ServiceConnection, generation: Long, nextState: ShizukuState) {
+        var reconnectGeneration: Long? = null
+        val removeService = synchronized(this) {
+            when (ShizukuPolicy.rejectedBindingDisposition(
+                callbackGeneration = generation,
+                currentGeneration = bindingGeneration,
+                connectionIsCurrent = activeConnection === connection,
+                nextState = nextState,
+            )) {
+                ShizukuPolicy.RejectedBindingDisposition.IGNORE_STALE -> false
+                ShizukuPolicy.RejectedBindingDisposition.REMOVE_CURRENT -> {
+                    bindingGeneration++
+                    activeConnection = null
+                    remote = null
+                    state = nextState
+                    true
+                }
+                ShizukuPolicy.RejectedBindingDisposition.REMOVE_CURRENT_AND_RECONNECT -> {
+                    bindingGeneration++
+                    activeConnection = null
+                    remote = null
+                    state = nextState
+                    reconnectGeneration = bindingGeneration
+                    true
+                }
+            }
+        }
+        // Shizuku 13.1.5 aggregates connections by args tag. Even remove=false clears the tag-wide
+        // connection set, so a stale callback must be ignored rather than "selectively" unbound.
+        if (!removeService) return
+        runCatching { Shizuku.unbindUserService(args, connection, true) }
+        reconnectGeneration?.let(::scheduleReconnect)
+    }
+
+    /** Defer until after Shizuku has returned from its connection-set callback, with one bounded retry. */
+    private fun scheduleReconnect(generation: Long) {
+        val scheduled = synchronized(this) {
+            if (generation != bindingGeneration || activeConnection != null || state != ShizukuState.ERROR) {
+                return
+            }
+            reconnects.schedule(generation) {
+                val reconnect = synchronized(this) {
+                    generation == bindingGeneration && activeConnection == null &&
+                        state == ShizukuState.ERROR
+                }
+                if (reconnect) refresh()
+            }
+        }
+        if (!scheduled) Log.w(TAG, "Shizuku reconnect already pending or could not be scheduled")
+    }
+
+    private fun scheduleStableBackoffReset(generation: Long) {
+        stableReset?.cancel()
+        stableReset = runCatching {
+            scheduler.schedule(RECONNECT_STABLE_RESET_MS) {
+                synchronized(this) {
+                    if (generation == bindingGeneration && state == ShizukuState.READY) {
+                        reconnects.resetBackoff()
+                    }
+                    stableReset = null
+                }
+            }
+        }.onFailure { Log.w(TAG, "failed to schedule Shizuku reconnect backoff reset", it) }
+            .getOrNull()
+    }
+
+    data class Snapshot(val state: ShizukuState, val ready: Boolean)
+
+    @Synchronized fun snapshot(): Snapshot = Snapshot(state, remote != null && state == ShizukuState.READY)
+
+    override fun available(): Boolean = snapshot().ready
     fun managerRunning(): Boolean = initialized &&
         ShizukuManagerIdentity.status(appContext) == ShizukuManagerIdentity.Status.TRUSTED &&
         runCatching { Shizuku.pingBinder() }.getOrDefault(false)
@@ -275,6 +376,8 @@ object ShizukuBridge : ShellPrivilege {
     override fun setFontScale(scale: Float): Boolean =
         ShizukuPolicy.validFontScale(scale) && call(FeatureCostOperation.SHIZUKU_CALL, SHORT_TIMEOUT_MS) { it.setFontScale(scale) } == true
     override fun resetFontScale(): Boolean = call(FeatureCostOperation.SHIZUKU_CALL, SHORT_TIMEOUT_MS) { it.resetFontScale() } == true
+    fun roomClimate(): String? =
+        call(FeatureCostOperation.SHIZUKU_CALL, SHORT_TIMEOUT_MS) { it.readRoomClimate() }
 
     override fun installApk(apk: File, allowDowngrade: Boolean, timeoutMs: Long): String? {
         if (!ShizukuPolicy.validApkLength(apk.length())) return null
@@ -287,13 +390,23 @@ object ShizukuBridge : ShellPrivilege {
     }
 
     private fun managerIdleState(): ShizukuState {
-        if (!initialized) return ShizukuState.STOPPED
-        return when (ShizukuManagerIdentity.status(appContext)) {
-            ShizukuManagerIdentity.Status.TRUSTED -> ShizukuState.STOPPED
-            ShizukuManagerIdentity.Status.UNTRUSTED -> ShizukuState.MANAGER_UNTRUSTED
-            ShizukuManagerIdentity.Status.MISSING -> ShizukuState.MANAGER_MISSING
-        }
+        if (!initialized) return ShizukuState.DISABLED
+        return ShizukuPolicy.idleState(
+            manager = ShizukuManagerIdentity.status(appContext),
+            consentEnabled = ShizukuConsent.enabled(appContext),
+        )
     }
+
+    private fun disconnectedState(): ShizukuState {
+        if (!initialized) return ShizukuState.DISABLED
+        val manager = ShizukuManagerIdentity.status(appContext)
+        val consentEnabled = ShizukuConsent.enabled(appContext)
+        val managerRunning = manager == ShizukuManagerIdentity.Status.TRUSTED && consentEnabled &&
+            runCatching { Shizuku.pingBinder() }.getOrDefault(false)
+        return ShizukuPolicy.disconnectedState(manager, consentEnabled, managerRunning)
+    }
+
+    private const val RECONNECT_STABLE_RESET_MS = 30_000L
 
     private fun <T> call(
         operation: FeatureCostOperation,

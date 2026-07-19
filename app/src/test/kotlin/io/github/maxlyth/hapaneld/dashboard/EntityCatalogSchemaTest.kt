@@ -9,7 +9,7 @@ import org.junit.Test
 class EntityCatalogSchemaTest {
     @Test fun schemaUpgradePlanIsSequentialAndComplete() {
         val plan = EntityCatalogSchema.plan(1, EntityCatalogSchema.CURRENT_VERSION)
-        assertEquals(listOf(1, 2, 3, 4, 5, 6, 7, 8), plan.map { it.from })
+        assertEquals(listOf(1, 2, 3, 4, 5, 6, 7, 8, 9, 10), plan.map { it.from })
         assertEquals(EntityCatalogSchema.CURRENT_VERSION, plan.last().to)
         assertTrue(plan.first().sql.single().contains("sync_generation"))
         assertTrue(plan[1].sql.any { it.contains("rate_window_start") })
@@ -19,13 +19,23 @@ class EntityCatalogSchemaTest {
         assertTrue(plan[5].sql.contains("DROP TABLE IF EXISTS hourly"))
         assertTrue(plan[5].sql.any { it.contains("span_start") })
         assertTrue(plan[6].sql.any { it.contains("dashboard_performance") })
-        assertTrue(plan.last().sql.any { it.contains("app_state") })
+        assertTrue(plan[7].sql.any { it.contains("app_state") })
+        assertTrue(plan[8].sql.any { it.contains("proximity_model") })
+        assertTrue(plan[8].sql.any { it.contains("proximity_rollup") })
+        assertTrue(plan.last().sql.any { it.contains("ambient_lux_minute") })
     }
 
     @Test fun sameVersionIsANoOpAndDowngradeIsRejected() {
-        assertTrue(EntityCatalogSchema.plan(9, 9).isEmpty())
-        assertTrue(runCatching { EntityCatalogSchema.plan(9, 8) }.isFailure)
-        assertTrue(runCatching { EntityCatalogSchema.plan(1, 10) }.isFailure)
+        assertTrue(EntityCatalogSchema.plan(11, 11).isEmpty())
+        assertTrue(runCatching { EntityCatalogSchema.plan(11, 10) }.isFailure)
+        assertTrue(runCatching { EntityCatalogSchema.plan(1, 12) }.isFailure)
+    }
+
+    @Test fun ambientHistoryFollowsRatherThanReusesTheProximitySchemaVersion() {
+        val ambientOnly = EntityCatalogSchema.plan(10, 11)
+        assertEquals(1, ambientOnly.size)
+        assertTrue(ambientOnly.single().sql.any { it.contains("ambient_lux_minute") })
+        assertFalse(ambientOnly.single().sql.any { it.contains("proximity_model") })
     }
 
     @Test fun retiredHourlyRollupCannotReturnToTheWritePath() {

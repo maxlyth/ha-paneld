@@ -15,6 +15,7 @@ object DashboardTelemetry {
     private val buckets = ArrayDeque<Bucket>(MAX_BUCKETS)
     private var generation = 0L
     private var installed = false
+    private var latestSampleAtElapsedMs = 0L
     @Volatile private var historySink: DashboardPerformanceHistorySink? = null
 
     internal fun setHistorySink(sink: DashboardPerformanceHistorySink?) {
@@ -25,6 +26,7 @@ object DashboardTelemetry {
         generation++
         this.installed = installed
         buckets.clear()
+        latestSampleAtElapsedMs = 0L
     }
 
     fun installed() = synchronized(lock) {
@@ -35,11 +37,15 @@ object DashboardTelemetry {
         }
     }
 
-    fun record(batch: EntityFilterProtocol.TrafficBatch) {
+    fun record(
+        batch: EntityFilterProtocol.TrafficBatch,
+        observedAtElapsedMs: Long = monotonicElapsedMs(),
+    ) {
         val accepted = synchronized(lock) {
             if (!installed || batch.sampleMs <= 0L) false else {
                 if (buckets.size == MAX_BUCKETS) buckets.removeFirst()
                 buckets.addLast(Bucket(batch))
+                latestSampleAtElapsedMs = observedAtElapsedMs.coerceAtLeast(0L)
                 true
             }
         }
@@ -54,6 +60,7 @@ object DashboardTelemetry {
         systemCpuPct: Int? = null,
         rendererMainPct: Double? = null,
         topEntities: JSONArray = JSONArray(),
+        nowElapsedMs: Long = monotonicElapsedMs(),
     ): String = synchronized(lock) {
         val values = buckets.toList()
         val latest = values.lastOrNull()
@@ -93,6 +100,11 @@ object DashboardTelemetry {
             .put("generation", generation)
             .put("windowMs", values.sumOf { it.sampleMs })
             .put("sampleCount", values.size)
+            .put(
+                "latestSampleAgeMs",
+                if (latestSampleAtElapsedMs <= 0L) -1L
+                else (nowElapsedMs - latestSampleAtElapsedMs).coerceAtLeast(0L),
+            )
             .put("interaction", JSONObject()
                 .put("count", interactionCount)
                 .put("percentilesApproximate", true)
@@ -192,6 +204,8 @@ object DashboardTelemetry {
     private fun microsToMs(value: Long): Double = value / 1000.0
     private fun saturatedAdd(left: Long, right: Long): Long =
         if (right >= Long.MAX_VALUE - left) Long.MAX_VALUE else left + right
+
+    private fun monotonicElapsedMs(): Long = System.nanoTime() / 1_000_000L
 
     private data class Bucket(
         val sampleMs: Long,

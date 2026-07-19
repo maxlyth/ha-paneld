@@ -1,6 +1,6 @@
 // hapaneld-helper — a tiny root helper that exposes a whitelisted control surface to ha-paneld over an
 // authenticated UNIX socket, for capabilities a sandboxed Android app can't reach itself: the RGB LED
-// (root-only sysfs or an app-denied ioctl), screen-backlight power, hardware-button instrumentation,
+// (root-only sysfs or an app-denied ioctl), screen-backlight power, hardware-button/GPIO instrumentation,
 // display density / CPU governor / screencap / perf snapshots, and app reload/start/reboot.
 //
 // It began as an LED-only helper (the former `hapaneld-ledd` name) but is now the general control
@@ -17,7 +17,8 @@
 //   * Concurrent connections are capped (MAX_CONN) and idle non-subscribers time out (server.c), so a
 //     connection flood can't exhaust the thread-per-conn model.
 //   * The command parser is bounded and exact-match (dispatch.c / server.c); every verb's arguments
-//     are width-bounded and validated, and all shell-exec is funnelled through sysexec.c.
+//     are width-bounded and validated. Request values reach only structural argv/direct operations;
+//     the sole fixed shell program has no caller-controlled bytes.
 //
 // Protocol: see helper/README.md and the dispatch table in dispatch.c.
 
@@ -41,6 +42,7 @@
 #include "led.h"
 #include "screen.h"
 #include "input.h"
+#include "gpio.h"
 #include "server.h"
 #include "version.h"
 
@@ -67,6 +69,11 @@ static int uid_allowed(uid_t uid) {
     struct stat st;
     if (stat(APP_DATA, &st) != 0) return 0;                 // absent pre-install/after uninstall
     return uid == st.st_uid;
+}
+
+static int set_cloexec(int fd) {
+    int flags = fcntl(fd, F_GETFD, 0);
+    return flags >= 0 && fcntl(fd, F_SETFD, flags | FD_CLOEXEC) == 0 ? 0 : -1;
 }
 
 // Installer/provisioner probe mode. It is intentionally restricted to read-only identity verbs and
@@ -111,6 +118,7 @@ static int request_daemon(const char *command) {
 
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) return 1;
+    if (set_cloexec(fd) != 0) { close(fd); return 1; }
     int flags = fcntl(fd, F_GETFL, 0);
     if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
         close(fd);
@@ -181,13 +189,14 @@ static int request_daemon(const char *command) {
     return 0;
 }
 
-// One thread per connection, so a long-lived SUBSCRIBE stream doesn't block other commands. Removes
-// the fd from the subscriber registry on disconnect.
+// One thread per connection, so a long-lived async stream doesn't block other commands. Removes the
+// fd from both independent subscriber registries on disconnect.
 static void *conn_thread(void *arg) {
     int cfd = *(int *)arg;
     free(arg);
     server_serve(cfd);
     input_unsubscribe(cfd);
+    gpio_unsubscribe(cfd);
     close(cfd);
     conn_release();
     return NULL;
@@ -204,6 +213,7 @@ int main(int argc, char **argv) {
 
     signal(SIGPIPE, SIG_IGN);   // a dead subscriber's socket must not kill the daemon
     input_init();
+    gpio_init();
     screen_init();
     led_init();
 
@@ -216,6 +226,7 @@ int main(int argc, char **argv) {
 
     int sfd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (sfd < 0) { perror("socket"); return 1; }
+    if (set_cloexec(sfd) != 0) { perror("fcntl"); close(sfd); return 1; }
 
     // Abstract-namespace UNIX socket: leading NUL in sun_path, name follows. No filesystem entry to
     // create, label (SELinux), permission, or clean up — and it's released automatically on close.
@@ -233,6 +244,7 @@ int main(int argc, char **argv) {
     for (;;) {
         int cfd = accept(sfd, NULL, NULL);
         if (cfd < 0) { if (errno == EINTR) continue; perror("accept"); break; }
+        if (set_cloexec(cfd) != 0) { close(cfd); continue; }
 
         // Authenticate the peer by uid — only possible because this is a UNIX socket. Reject (and
         // close) anything that isn't ha-paneld / root before it can issue a single command.
@@ -245,6 +257,7 @@ int main(int argc, char **argv) {
         if (!conn_admit()) { close(cfd); continue; }
 
         int *p = malloc(sizeof(int));
+        if (!p) { close(cfd); conn_release(); continue; }
         *p = cfd;
         pthread_t t;
         if (pthread_create(&t, NULL, conn_thread, p) != 0) {

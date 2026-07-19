@@ -2,6 +2,7 @@ package io.github.maxlyth.hapaneld.control
 
 import android.content.Context
 import android.provider.Settings
+import android.os.SystemClock
 import android.util.Log
 import io.github.maxlyth.hapaneld.Config
 import io.github.maxlyth.hapaneld.platform.Daemon
@@ -10,6 +11,7 @@ import io.github.maxlyth.hapaneld.util.Cached
 import io.github.maxlyth.hapaneld.util.HelperClient
 import io.github.maxlyth.hapaneld.util.SuccessStickyProbe
 import java.io.File
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Screen brightness via the standard `Settings.System` API — no vendor lib. Requires the
@@ -28,9 +30,14 @@ class BrightnessController(
     private val root: RootShell = Su,
     private val daemon: Daemon = HelperClient,
 ) : Backlight {
-
     private val hardwareWriter = BrightnessHardwareWriter(root, daemon)
-    private val writeSequencer = BrightnessWriteSequencer(::applyBrightnessUnserialized)
+    private val successfulWrites = BacklightWriteTracker()
+    private val writeSequencer = BrightnessWriteSequencer(
+        actuator = BrightnessWriteSequencer.Actuator(::applyBrightnessUnserialized),
+        successfulWrites = successfulWrites,
+        elapsedRealtimeMs = BrightnessWriteSequencer.ElapsedRealtimeSource(SystemClock::elapsedRealtime),
+    )
+    private val writeAttribution = BrightnessWriteAttribution()
 
     fun canWrite(): Boolean = Settings.System.canWrite(context)
 
@@ -57,8 +64,8 @@ class BrightnessController(
      *  only — every other caller must use [setBrightness] to preserve the never-blank guarantee. */
     override fun setBrightnessRaw(level: Int) = writeSequencer.write(level.coerceIn(0, 255))
 
-    private fun applyBrightnessUnserialized(v: Int) {
-        try {
+    private fun applyBrightnessUnserialized(v: Int): Boolean {
+        val settingWritten = try {
             Settings.System.putInt(
                 context.contentResolver,
                 Settings.System.SCREEN_BRIGHTNESS_MODE,
@@ -68,20 +75,26 @@ class BrightnessController(
                 context.contentResolver,
                 Settings.System.SCREEN_BRIGHTNESS,
                 v,
-            )
-            Log.d(TAG, "brightness setting -> $v")
+            ).also { written -> if (written) Log.d(TAG, "brightness setting -> $v") }
         } catch (e: SecurityException) {
             Log.w(TAG, "WRITE_SETTINGS not granted — cannot set brightness", e)
+            false
         }
+        if (settingWritten) writeAttribution.record(v, SystemClock.elapsedRealtime())
         // Also drive the real hardware node. A discovered su path is only a candidate: its write must
         // succeed, otherwise the helper gets the same operation rather than being masked by stale metadata.
-        when (hardwareWriter.write(v, backlight.get())) {
+        val hardwareRoute = hardwareWriter.write(v, backlight.get())
+        when (hardwareRoute) {
             BrightnessWriteRoute.SU -> Log.d(TAG, "hardware brightness -> $v (su)")
             BrightnessWriteRoute.HELPER -> Log.d(TAG, "hardware brightness -> $v (helper)")
             BrightnessWriteRoute.NONE -> Unit // Android setting is the legitimate actuator on many panels.
         }
         effective.invalidate()   // a read right after a set must see the new level, not the cache
+        return settingWritten || hardwareRoute != BrightnessWriteRoute.NONE
     }
+
+    /** One atomic observation; never acquires the brightness, screen, or adaptive-policy monitor. */
+    internal fun lastSuccessfulWriteElapsed(): Long = successfulWrites.snapshot()
 
     // Read path for the EFFECTIVE backlight. The sysfs node carries the generic `sysfs` SELinux label
     // on the supported panels, so actual_brightness is usually readable with NO root — which is what
@@ -132,6 +145,10 @@ class BrightnessController(
         -1
     }
 
+    /** Consume a recent successful write to SCREEN_BRIGHTNESS performed by this controller. */
+    fun consumeOwnedSettingChange(level: Int, nowMs: Long = SystemClock.elapsedRealtime()): Boolean =
+        writeAttribution.consume(level.coerceIn(0, 255), nowMs)
+
     /** Reports the EFFECTIVE backlight (sysfs actual_brightness, scaled to 0–255) so HA reflects external /
      *  firmware dimming that bypasses SCREEN_BRIGHTNESS; falls back to the Android setting. */
     override fun getBrightness(): Int {
@@ -179,6 +196,24 @@ class BrightnessController(
 }
 
 /** One ordering boundary around the complete framework + hardware brightness transaction. */
-internal class BrightnessWriteSequencer(private val actuator: (Int) -> Unit) {
-    @Synchronized fun write(level: Int) = actuator(level)
+internal class BrightnessWriteSequencer(
+    private val actuator: Actuator,
+    private val successfulWrites: BacklightWriteTracker,
+    private val elapsedRealtimeMs: ElapsedRealtimeSource,
+) {
+    @Synchronized fun write(level: Int) {
+        if (actuator.apply(level)) successfulWrites.record(elapsedRealtimeMs.read())
+    }
+
+    /** Primitive seams keep repeated low-end-device writes allocation-free. */
+    internal fun interface Actuator { fun apply(level: Int): Boolean }
+    internal fun interface ElapsedRealtimeSource { fun read(): Long }
+}
+
+/** Successful-write recency belongs to the actuator; policy only takes atomic snapshots. */
+internal class BacklightWriteTracker {
+    private val lastWriteElapsed = AtomicLong(Long.MIN_VALUE)
+
+    fun record(elapsedRealtimeMs: Long) = lastWriteElapsed.set(elapsedRealtimeMs)
+    fun snapshot(): Long = lastWriteElapsed.get()
 }

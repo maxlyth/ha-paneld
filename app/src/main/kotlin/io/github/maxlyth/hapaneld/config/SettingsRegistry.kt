@@ -21,7 +21,9 @@ object SettingsRegistry {
     /** Bump whenever the persisted shape changes; drives bundle migration. */
     const val SCHEMA = 1
     const val MAX_PANEL_ID_CHARS = 63
+    const val DEFAULT_SILENCE_BOOT_CHIME = false
     private const val MAX_PANEL_ID_INPUT_CHARS = 255
+    private val HA_ILLUMINANCE_ENTITY = Regex("^sensor\\.[a-z0-9_]+$")
 
     val SPECS: List<SettingSpec> = listOf(
         // ---- Identity ----------------------------------------------------------------------------
@@ -89,8 +91,8 @@ object SettingsRegistry {
         SettingSpec(
             key = "wake_on_wave", type = SettingType.BOOL, group = "Behaviour",
             label = "Wake on wave", default = "true", tier = Tier.BASIC, scope = Scope.PORTABLE,
-            help = "Wake the screen locally the instant proximity reads near.",
-            availableWhen = { it.hasProximity },
+            help = "Wake locally after a learned deliberate far-to-near-to-far wave. Touch-to-wake remains available while the panel learns.",
+            availableWhen = { it.hasRangedProximity },
             haExposedByDefault = true,
             ha = HaEntity(
                 "switch", "wake_on_wave", "Wake on wave",
@@ -130,7 +132,7 @@ object SettingsRegistry {
         ),
         SettingSpec(
             key = "silence_boot_chime", type = SettingType.BOOL, group = "Behaviour",
-            label = "Silence boot chime", default = "true", scope = Scope.DEVICE,
+            label = "Silence boot chime", default = DEFAULT_SILENCE_BOOT_CHIME.toString(), scope = Scope.DEVICE,
             help = "Mute the firmware startup chime.",
             ha = HaEntity(
                 "switch", "silence_boot_chime", "Silence boot chime",
@@ -148,6 +150,29 @@ object SettingsRegistry {
 
         // ---- Display -----------------------------------------------------------------------------
         SettingSpec(
+            key = "dark_mode", type = SettingType.BOOL, group = "Display",
+            label = "Dark mode", default = "true", scope = Scope.PORTABLE,
+            help = "Themes ha-paneld's own screens and sets the dashboard's default colour scheme on panels without a system dark-mode setting (Android 9 and older). A theme picked inside Home Assistant overrides the dashboard default; this web UI always follows the viewing browser's own preference.",
+            // Panels with a native system dark/light control (Android 10+) follow the OS setting for
+            // everything, so the toggle is hidden there.
+            availableWhen = { !it.hasSystemDarkMode },
+        ),
+        SettingSpec(
+            key = "auto_brightness_ha_entity", type = SettingType.STRING, group = "Display",
+            label = "Ambient light source", default = "", picker = "ha_illuminance", scope = Scope.DEVICE,
+            maxChars = 255,
+            help = "Blank uses the panel light sensor. Select a Home Assistant illuminance sensor when the panel has no suitable sensor.",
+            validate = { raw ->
+                when {
+                    raw.isBlank() -> Validation.Ok("")
+                    HA_ILLUMINANCE_ENTITY.matches(raw) -> Validation.Ok(raw)
+                    else -> Validation.Bad(
+                        "auto_brightness_ha_entity: expected a sensor entity id such as sensor.room_illuminance",
+                    )
+                }
+            },
+        ),
+        SettingSpec(
             key = "auto_brightness", type = SettingType.BOOL, group = "Display",
             label = "Auto-brightness", default = "false", scope = Scope.PORTABLE,
             help = "On-panel engine maps a lux stream to the backlight (off = HA drives the screen).",
@@ -158,14 +183,10 @@ object SettingsRegistry {
             ),
         ),
         SettingSpec(
-            key = "brightness_bias", type = SettingType.INT, group = "Display",
-            label = "Brightness bias", default = "0", min = -100.0, max = 100.0, step = 5.0,
+            key = "auto_brightness_sensitivity", type = SettingType.INT, group = "Display",
+            label = "Sensitivity", default = "50", min = 0.0, max = 100.0, step = 5.0,
             scope = Scope.DEVICE,
-            help = "Dimmer (−) ↔ brighter (+) offset added to the auto-brightness curve.",
-            ha = HaEntity(
-                "number", "brightness_bias", "Brightness bias",
-                """"command_topic":"ha-paneld/{panel}/brightness_bias/set","state_topic":"ha-paneld/{panel}/brightness_bias/state","min":-100,"max":100,"step":5,"mode":"slider","icon":"mdi:brightness-6","entity_category":"config"""",
-            ),
+            help = "How strongly the screen follows deviations from its learned ambient-light pattern (50 = balanced).",
         ),
 
         SettingSpec(
@@ -183,22 +204,13 @@ object SettingsRegistry {
             label = "CPU profile", default = "Auto", scope = Scope.DEVICE,
             // Mirrors CpuController.TIERS (kept literal — this package is pure/Android-free).
             options = listOf("Performance", "Efficiency", "Auto"),
-            help = "CPU scaling intent; Auto = the SoC's dynamic governor.",
+            help = "Live CPU scaling profile until reboot; Auto = the SoC's dynamic governor.",
+            transient = true,
             availableWhen = { it.cpuGovernors },
             haExposedByDefault = true,
             ha = HaEntity(
                 "select", "cpu_governor", "CPU profile",
                 """"command_topic":"ha-paneld/{panel}/cpu_governor/set","state_topic":"ha-paneld/{panel}/cpu_governor/state","options":["Performance","Efficiency","Auto"],"icon":"mdi:speedometer","entity_category":"config"""",
-            ),
-        ),
-        SettingSpec(
-            key = "network_adb", type = SettingType.BOOL, group = "System",
-            label = "Network ADB", default = "false", scope = Scope.DEVICE,
-            help = "Standing LAN adb on :5555, re-asserted at boot/reconnect (root panels).",
-            availableWhen = { it.networkAdb },
-            ha = HaEntity(
-                "switch", "network_adb", "Network ADB",
-                """"command_topic":"ha-paneld/{panel}/network_adb/set","state_topic":"ha-paneld/{panel}/network_adb/state","icon":"mdi:adb","entity_category":"config"""",
             ),
         ),
         SettingSpec(
@@ -212,29 +224,18 @@ object SettingsRegistry {
             ),
         ),
         SettingSpec(
-            key = "ambient_lux", type = SettingType.INT, group = "Display",
-            label = "Ambient lux (HA-fed)", default = "0", min = 0.0, max = 100000.0,
-            transient = true,
-            help = "Room lux an HA automation feeds to auto-brightness (sensor-less panels).",
-            haExposedByDefault = true,
-            ha = HaEntity(
-                "number", "ambient_lux", "Ambient lux (HA-fed)",
-                """"command_topic":"ha-paneld/{panel}/ambient_lux/set","state_topic":"ha-paneld/{panel}/ambient_lux/state","min":0,"max":100000,"step":1,"mode":"box","unit_of_measurement":"lx","icon":"mdi:brightness-5","entity_category":"config"""",
-            ),
-        ),
-        SettingSpec(
             key = "keep_awake", type = SettingType.BOOL, group = "Behaviour",
             label = "Keep awake", default = "true", scope = Scope.PORTABLE,
             help = "Hold a partial wakelock so the SoC/network never suspend (screen still sleeps freely).",
         ),
 
         // ---- Dashboard ---------------------------------------------------------------------------
-        // Which app renders the dashboard + (for the skunk-works built-in renderer) how it connects to HA.
+        // Which app renders the dashboard + how the built-in renderer connects to HA.
         SettingSpec(
             key = "dashboard_package", type = SettingType.STRING, group = "Dashboard",
             label = "Dashboard app", default = "", picker = "renderer", scope = Scope.DEVICE,
             maxChars = 255,
-            help = "Which app renders the dashboard: the HA Companion, Fully Kiosk, or ha-paneld's built-in renderer (skunk-works). Blank = auto-detect the installed Companion.",
+            help = "App used for the dashboard. Blank auto-detects Home Assistant Companion.",
             validate = { value ->
                 if (AndroidInput.isDashboardTarget(value)) Validation.Ok(value)
                 else Validation.Bad("dashboard_package: expected blank, builtin, or an Android package name")
@@ -242,19 +243,19 @@ object SettingsRegistry {
         ),
         SettingSpec(
             key = "dashboard_entity_learning", type = SettingType.BOOL, group = "Dashboard",
-            label = "Automatic dashboard entity filter", default = "false", scope = Scope.PORTABLE,
-            help = "Built-in renderer only: start with dashboard references, learn missing runtime dependencies, and avoid the full Home Assistant entity stream. Disabled by default. The Entities tab controls promotion sources, manual pins and diagnostics.",
+            label = "Entity filtering", default = "false", scope = Scope.PORTABLE,
+            help = "Built-in renderer: limit Home Assistant's state stream to dashboard-used entities and learn runtime dependencies. Manage sources and pins in Entities.",
         ),
         SettingSpec(
             key = "home_dashboard", type = SettingType.STRING, group = "Dashboard",
             label = "Home dashboard", default = "", scope = Scope.DEVICE,
             maxChars = 2_048,
-            help = "Local dashboard path a reload returns to, e.g. /lovelace/0 (built-in renderer: the view it loads). Blank = wherever it was.",
+            help = "Path used by reload and idle return, e.g. /lovelace/0. Blank returns to the current view.",
         ),
         SettingSpec(
             key = "dashboard_fullscreen", type = SettingType.BOOL, group = "Dashboard",
-            label = "Fullscreen dashboard", default = "true", scope = Scope.PORTABLE,
-            help = "Built-in renderer: hide the Android status and navigation bars for an edge-to-edge dashboard (swipe from a screen edge to reveal them briefly). Turn off to keep the system bars visible.",
+            label = "Fullscreen", default = "true", scope = Scope.PORTABLE,
+            help = "Built-in renderer: hide Android system bars. Swipe from an edge to reveal them.",
         ),
         SettingSpec(
             key = "dashboard_overscroll", type = SettingType.BOOL, group = "Dashboard",
@@ -267,27 +268,24 @@ object SettingsRegistry {
             key = "dashboard_idle_return_min", type = SettingType.INT, group = "Dashboard",
             label = "Idle return to home (min)", default = "0", min = 0.0, max = 1440.0,
             scope = Scope.PORTABLE,
-            help = "Built-in renderer: minutes with no touch before the dashboard snaps back to the Home dashboard view (instant in-app navigation, not a reload). 0 = off; needs Home dashboard set.",
+            help = "Built-in renderer: return to Home dashboard after this many idle minutes. 0 = off.",
         ),
         SettingSpec(
             key = "ha_url", type = SettingType.STRING, group = "Dashboard",
             label = "Home Assistant URL", default = "", scope = Scope.PORTABLE,
             maxChars = 2_048,
-            help = "Built-in renderer only (skunk-works): the HA base URL, e.g. http://homeassistant.local:8123. Blank disables the built-in renderer.",
-        ),
-        SettingSpec(
-            key = "dark_mode", type = SettingType.BOOL, group = "Display",
-            label = "Dark mode", default = "true", scope = Scope.PORTABLE,
-            help = "Themes ha-paneld's own screens and sets the dashboard's default colour scheme on panels without a system dark-mode setting (Android 9 and older). A theme picked inside Home Assistant overrides the dashboard default; this web UI always follows the viewing browser's own preference.",
-            // Panels with a native system dark/light control (Android 10+) follow the OS setting for
-            // everything, so the toggle is hidden there.
-            availableWhen = { !it.hasSystemDarkMode },
+            help = "Built-in renderer: Home Assistant base URL, e.g. http://homeassistant.local:8123. Blank disables it.",
+            validate = { raw ->
+                if (raw.isBlank()) Validation.Ok("")
+                else normalizeHttpOriginUrl(raw)?.let(Validation::Ok)
+                    ?: Validation.Bad("ha_url: expected an http:// or https:// URL with no embedded credentials")
+            },
         ),
         SettingSpec(
             key = "ha_token", type = SettingType.PASSWORD, group = "Dashboard",
-            label = "Home Assistant long-lived access token", default = "", scope = Scope.DEVICE,
+            label = "Long-lived access token", default = "", scope = Scope.DEVICE,
             secret = true,
-            help = "Built-in renderer fallback when a Home Assistant Companion login cannot be borrowed. Create a long-lived access token from the Home Assistant user profile page. Blank on save keeps the current login; entering a new token replaces any borrowed or refresh-token login.",
+            help = "Fallback when Companion login is unavailable. Create one in your Home Assistant user profile. Blank keeps the current login; a new token replaces it.",
         ),
         SettingSpec(
             key = "ha_refresh_token", type = SettingType.PASSWORD, group = "Dashboard",
@@ -333,10 +331,9 @@ object SettingsRegistry {
         // dashboard, so this app-level zoom sits below the connection settings users should actually set.
         SettingSpec(
             key = "dashboard_zoom", type = SettingType.INT, group = "Dashboard",
-            label = "Dashboard zoom (%)", default = "100", min = 50.0, max = 300.0, step = 10.0,
+            label = "Zoom (%)", default = "100", min = 50.0, max = 300.0, step = 10.0,
             scope = Scope.DEVICE,
-            help = "Built-in renderer page zoom % (100 = Companion default). Prefer Display sizing " +
-                "(density) for crisp scaling; this is a compatibility fallback.",
+            help = "Browser zoom.",
         ),
 
         // ---- System ------------------------------------------------------------------------------
@@ -394,11 +391,25 @@ object SettingsRegistry {
             key = "launcher_package", type = SettingType.STRING, group = "System",
             label = "Launcher app", default = "", picker = "package", scope = Scope.DEVICE,
             maxChars = 255,
-            help = "App the Launcher button brings forward (blank = auto-pick).",
+            help = "App the Launcher button brings forward. Blank auto-picks an app. Selecting Panel admin (ha-paneld) also makes and keeps ha-paneld the Android Home app.",
         ),
-        // Vendor taming is managed by the "Vendor packages" card (add/re-enable per app), so no free-text
-        // field here — the card is the single source. `config.tameVendorPackages` + POST /tame still drive it.
-
+        SettingSpec(
+            key = "tame_vendor_packages", type = SettingType.STRING, group = "System",
+            label = "Vendor package selections", default = "", scope = Scope.DEVICE, hidden = true,
+            maxChars = TamePackagePolicy.MAX_BYTES,
+            help = "Backup-only storage for package selections managed by the Vendor packages card.",
+            validate = TamePackagePolicy::normalize,
+        ),
+        SettingSpec(
+            key = "network_adb", type = SettingType.BOOL, group = "System",
+            label = "Network ADB", default = "false", scope = Scope.DEVICE,
+            help = "Security risk: keeps classic ADB listening on TCP port 5555 across boots and reconnects. Enable only during active maintenance on a trusted network. If ADB was enabled outside ha-paneld, it must also be disabled there.",
+            availableWhen = { it.networkAdb },
+            ha = HaEntity(
+                "switch", "network_adb", "Network ADB",
+                """"command_topic":"ha-paneld/{panel}/network_adb/set","state_topic":"ha-paneld/{panel}/network_adb/state","icon":"mdi:adb","entity_category":"config"""",
+            ),
+        ),
         // ---- Logging -----------------------------------------------------------------------------
         SettingSpec(
             key = "log_ship_enabled", type = SettingType.BOOL, group = "Logging",
@@ -419,6 +430,94 @@ object SettingsRegistry {
             key = "log_ship_protocol", type = SettingType.ENUM, group = "Logging",
             label = "Protocol", default = "syslog", options = listOf("syslog", "http"),
             scope = Scope.DEVICE,
+        ),
+
+        // ---- Sensors -----------------------------------------------------------------------------
+        // Live panel readings. These rows carry no editable value; the Configure pip controls whether
+        // each reading's existing entity is reported to Home Assistant. Screen and volume deliberately
+        // keep their historical commandable entity types/identities rather than creating duplicate
+        // numeric sensors: HA natively presents light brightness as a percentage and volume is 0..100%.
+        SettingSpec(
+            key = "screen", type = SettingType.INT, group = "Sensors",
+            label = "Screen brightness", default = "",
+            help = "Current screen state and brightness. Home Assistant presents the light's native 0–255 brightness as a percentage.",
+            haExposedByDefault = true,
+            ha = HaEntity(
+                "light", "screen", "Screen",
+                """"schema":"json","brightness":true,"supported_color_modes":["brightness"],"command_topic":"ha-paneld/{panel}/screen/set","state_topic":"ha-paneld/{panel}/screen/state"""",
+                readOnly = true,
+            ),
+        ),
+        SettingSpec(
+            key = "volume", type = SettingType.INT, group = "Sensors",
+            label = "Panel volume", default = "",
+            help = "Current panel media volume reported on its native 0–100 percent scale.",
+            haExposedByDefault = true,
+            ha = HaEntity(
+                "number", "volume", "Volume",
+                """"command_topic":"ha-paneld/{panel}/volume/set","state_topic":"ha-paneld/{panel}/volume/state","min":0,"max":100,"step":1,"mode":"slider","unit_of_measurement":"%","icon":"mdi:volume-high"""",
+                readOnly = true,
+            ),
+        ),
+        SettingSpec(
+            key = "illuminance", type = SettingType.INT, group = "Sensors",
+            label = "Ambient light", default = "",
+            help = "Ambient illuminance measured by the panel light sensor.",
+            haExposedByDefault = true,
+            availableWhen = { it.hasLight },
+            ha = HaEntity(
+                "sensor", "illuminance", "Illuminance",
+                """"state_topic":"ha-paneld/{panel}/illuminance/state","device_class":"illuminance","unit_of_measurement":"lx","state_class":"measurement"""",
+                readOnly = true,
+            ),
+        ),
+        SettingSpec(
+            key = "proximity", type = SettingType.BOOL, group = "Sensors",
+            label = "Proximity", default = "",
+            help = "Learned near/far occupancy from a ranged proximity sensor.",
+            haExposedByDefault = true,
+            availableWhen = { it.hasRangedProximity },
+            ha = HaEntity(
+                "binary_sensor", "proximity", "Proximity",
+                """"state_topic":"ha-paneld/{panel}/proximity/state","device_class":"occupancy","payload_on":"ON","payload_off":"OFF"""",
+                readOnly = true,
+            ),
+        ),
+        SettingSpec(
+            key = "proximity_level", type = SettingType.INT, group = "Sensors",
+            label = "Proximity level", default = "",
+            help = "Normalized ranged proximity level from 0 to 100 percent.",
+            haExposedByDefault = true,
+            availableWhen = { it.hasRangedProximity },
+            ha = HaEntity(
+                "sensor", "proximity_level", "Proximity level",
+                """"state_topic":"ha-paneld/{panel}/proximity_level/state","unit_of_measurement":"%","state_class":"measurement","icon":"mdi:hand-wave"""",
+                readOnly = true,
+            ),
+        ),
+        SettingSpec(
+            key = "temperature", type = SettingType.FLOAT, group = "Sensors",
+            label = "Temperature", default = "",
+            help = "Environmental temperature reported by Android's panel sensor.",
+            haExposedByDefault = true,
+            availableWhen = { it.hasTemperature },
+            ha = HaEntity(
+                "sensor", "temperature", "Temperature",
+                """"state_topic":"ha-paneld/{panel}/temperature/state","device_class":"temperature","unit_of_measurement":"°C","state_class":"measurement"""",
+                readOnly = true,
+            ),
+        ),
+        SettingSpec(
+            key = "humidity", type = SettingType.FLOAT, group = "Sensors",
+            label = "Humidity", default = "",
+            help = "Relative humidity reported by Android's panel sensor.",
+            haExposedByDefault = true,
+            availableWhen = { it.hasHumidity },
+            ha = HaEntity(
+                "sensor", "humidity", "Humidity",
+                """"state_topic":"ha-paneld/{panel}/humidity/state","device_class":"humidity","unit_of_measurement":"%","state_class":"measurement"""",
+                readOnly = true,
+            ),
         ),
 
         // ---- Diagnostics -------------------------------------------------------------------------
@@ -471,23 +570,47 @@ object SettingsRegistry {
         ),
         SettingSpec(
             key = "diag_boot", type = SettingType.STRING, group = "Diagnostics",
-            label = "Boot time", default = "",
+            label = "Last boot time", default = "",
             help = "When the panel last booted (a timestamp — HA shows the elapsed uptime).",
             haExposedByDefault = false,
             ha = HaEntity(
-                "sensor", "diag_boot", "Boot time",
+                "sensor", "diag_boot", "Last boot time",
                 """"state_topic":"ha-paneld/{panel}/diag_boot/state","device_class":"timestamp","icon":"mdi:clock-start","entity_category":"diagnostic"""",
                 readOnly = true,
             ),
         ),
-
-        // ---- Room climate (CHT8305 panels only, e.g. TPA10) --------------------------------------
-        // Real environmental sensors (NOT entity_category=diagnostic), opt-in like the diagnostics above.
-        // Read root-only via the helper daemon; only offered where the chip is present.
         SettingSpec(
-            key = "room_temp", type = SettingType.FLOAT, group = "Diagnostics",
+            key = "diag_wifi_ssid", type = SettingType.STRING, group = "Diagnostics",
+            label = "Wi-Fi network", default = "",
+            help = "Current Wi-Fi network name. This can identify a location and enters HA history when exposed; Android may hide it unless network-information permission is available.",
+            haExposedByDefault = false,
+            availableWhen = { it.hasWifiSsid },
+            ha = HaEntity(
+                "sensor", "diag_wifi_ssid", "Wi-Fi network",
+                """"state_topic":"ha-paneld/{panel}/diag_wifi_ssid/state","icon":"mdi:wifi","entity_category":"diagnostic"""",
+                readOnly = true,
+            ),
+        ),
+        SettingSpec(
+            key = "diag_wifi_rssi", type = SettingType.INT, group = "Diagnostics",
+            label = "Wi-Fi signal strength", default = "",
+            help = "Current Wi-Fi received signal strength in dBm.",
+            haExposedByDefault = false,
+            availableWhen = { it.hasWifi },
+            ha = HaEntity(
+                "sensor", "diag_wifi_rssi", "Wi-Fi signal strength",
+                """"state_topic":"ha-paneld/{panel}/diag_wifi_rssi/state","device_class":"signal_strength","unit_of_measurement":"dBm","state_class":"measurement","icon":"mdi:wifi","entity_category":"diagnostic"""",
+                readOnly = true,
+            ),
+        ),
+
+        // ---- Room climate (exact authenticated input layouts only) ----------------------------------
+        // Real environmental sensors (NOT entity_category=diagnostic), opt-in in the Sensors card.
+        // Read through the helper or a fixed Shizuku operation; only offered where the layout is proven.
+        SettingSpec(
+            key = "room_temp", type = SettingType.FLOAT, group = "Sensors",
             label = "Room temperature", default = "",
-            help = "Room air temperature from the panel's CHT8305 sensor (calibration offset applied).",
+            help = "Room air temperature from the panel's supported climate sensor (calibration offset applied).",
             haExposedByDefault = false, availableWhen = { it.hasCht8305 },
             ha = HaEntity(
                 "sensor", "room_temp", "Room temperature",
@@ -496,9 +619,9 @@ object SettingsRegistry {
             ),
         ),
         SettingSpec(
-            key = "room_humidity", type = SettingType.INT, group = "Diagnostics",
+            key = "room_humidity", type = SettingType.INT, group = "Sensors",
             label = "Room humidity", default = "",
-            help = "Relative humidity from the panel's CHT8305 sensor.",
+            help = "Relative humidity from the panel's supported climate sensor.",
             haExposedByDefault = false, availableWhen = { it.hasCht8305 },
             ha = HaEntity(
                 "sensor", "room_humidity", "Room humidity",
@@ -509,7 +632,7 @@ object SettingsRegistry {
         // Self-heat calibration trim (°C) added to the reported room temperature. Advanced + local-only
         // (no HA entity); the profile carries a baseline and this is an additional user trim. API-settable.
         SettingSpec(
-            key = "room_temp_offset", type = SettingType.FLOAT, group = "Diagnostics",
+            key = "room_temp_offset", type = SettingType.FLOAT, group = "Sensors",
             label = "Room temperature offset", default = "0", tier = Tier.ADVANCED, scope = Scope.DEVICE,
             min = -20.0, max = 20.0, step = 0.1, availableWhen = { it.hasCht8305 },
             help = "Correction (°C) added to the reported room temperature — usually negative, since panel " +
@@ -523,4 +646,10 @@ object SettingsRegistry {
 
     /** Settings accepted via the HTTP config API (everything settable; excludes publish-only sensors). */
     fun settable(): List<SettingSpec> = SPECS.filterNot { it.readOnly }
+}
+
+internal fun normalizeHttpOriginUrl(raw: String): String? {
+    val uri = runCatching { java.net.URI(raw.trim()) }.getOrNull() ?: return null
+    if (uri.scheme !in setOf("http", "https") || uri.host.isNullOrBlank() || uri.userInfo != null) return null
+    return uri.toString().trimEnd('/')
 }

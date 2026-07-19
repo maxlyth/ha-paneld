@@ -116,6 +116,26 @@ class ProvisioningPlannerTest {
     }
 
     @Test
+    fun disabledEnhancedAccessHasItsOwnObservedStateAndOnPanelEnableGuidance() {
+        val plan = plan(
+            profile(shizuku = ShizukuRecommendation.RECOMMENDED),
+            observations().copy(shizuku = known(ProvisioningShizukuState.CONSENT_DISABLED)),
+        )
+
+        assertItem(
+            plan,
+            "access.shizuku",
+            ProvisioningItemStatus.MANUAL,
+            "disabled",
+            "shizuku_consent_disabled",
+        )
+        assertTrue(
+            ProvisioningTextRenderer.render(plan)
+                .contains("Configure → toolbar overflow → Enhanced access"),
+        )
+    }
+
+    @Test
     fun rootedTpa10PostureSuppressesShizukuAfterItsHelperIsObservedCompatible() {
         val plan = plan(
             profile(
@@ -398,6 +418,60 @@ class ProvisioningPlannerTest {
                 ),
             ),
         )
+    }
+
+    @Test
+    fun androidCollectorPreservesDisabledEnhancedAccess() = runTest {
+        val snapshot = AndroidProvisioningObservationCollector(
+            helperIdentity = { HelperIdentityStatus.Missing },
+            shizukuState = { ShizukuState.DISABLED },
+            webViewEngineMajor = { null },
+        ).collect()
+
+        assertEquals(
+            ProvisioningObservation.Known(ProvisioningShizukuState.CONSENT_DISABLED),
+            snapshot.shizuku,
+        )
+    }
+
+    @Test
+    fun androidCollectorDoesNotCallAnInProgressBindingStopped() = runTest {
+        val snapshot = AndroidProvisioningObservationCollector(
+            helperIdentity = { HelperIdentityStatus.Missing },
+            shizukuState = { ShizukuState.BINDING },
+            webViewEngineMajor = { null },
+        ).collect()
+
+        assertEquals(
+            ProvisioningObservation.Unknown(ProvisioningUnknownReason.NOT_READY),
+            snapshot.shizuku,
+        )
+    }
+
+    @Test
+    fun stoppedShizukuServiceKeepsItsDistinctObservationAndRecoveryGuidance() = runTest {
+        val snapshot = AndroidProvisioningObservationCollector(
+            helperIdentity = { HelperIdentityStatus.Missing },
+            shizukuState = { ShizukuState.STOPPED },
+            webViewEngineMajor = { null },
+        ).collect()
+        assertEquals(
+            ProvisioningObservation.Known(ProvisioningShizukuState.SERVICE_NOT_RUNNING),
+            snapshot.shizuku,
+        )
+
+        val plan = plan(
+            profile(shizuku = ShizukuRecommendation.RECOMMENDED),
+            observations().copy(shizuku = snapshot.shizuku),
+        )
+        assertItem(
+            plan,
+            "access.shizuku",
+            ProvisioningItemStatus.MANUAL,
+            "service_not_running",
+            "shizuku_service_not_running",
+        )
+        assertTrue(ProvisioningTextRenderer.render(plan).contains("Enhanced access is enabled"))
     }
 
     private fun plan(

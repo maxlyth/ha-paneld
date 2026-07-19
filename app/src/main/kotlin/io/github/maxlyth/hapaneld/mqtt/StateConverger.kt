@@ -4,6 +4,8 @@ import io.github.maxlyth.hapaneld.metrics.FeatureCostOperation
 import io.github.maxlyth.hapaneld.metrics.FeatureCostOutcome
 import io.github.maxlyth.hapaneld.metrics.FeatureCostRegistry
 import io.github.maxlyth.hapaneld.metrics.FeatureCosts
+import io.github.maxlyth.hapaneld.util.MonotonicDeadline
+import io.github.maxlyth.hapaneld.util.RetirableMutationGate
 
 /**
  * Registry-driven state convergence. Every state-bearing MQTT entity supplies one authoritative
@@ -46,6 +48,7 @@ class StateConverger(
     private var successes = 0L
     private var failures = 0L
     private var closed = false
+    private val lifecycle = RetirableMutationGate()
 
     @Synchronized
     fun register(channel: Channel) {
@@ -55,6 +58,10 @@ class StateConverger(
     }
 
     fun reconcile(key: String, force: Boolean = false) {
+        lifecycle.runIfOpen(Unit) { reconcileAdmitted(key, force) }
+    }
+
+    private fun reconcileAdmitted(key: String, force: Boolean) {
         val runtime = synchronized(this) { if (closed) null else channels[key] } ?: return
         val payload = when (val observation = runCatching { runtime.channel.observe() }.getOrDefault(Observation.Unknown)) {
             is Observation.Known -> observation.payload.also {
@@ -171,8 +178,19 @@ class StateConverger(
     }
 
     /** Terminal owner boundary: reject queued audits and invalidate every late completion. */
-    @Synchronized
     fun close() {
+        lifecycle.closeAdmission()
+        synchronized(this) { closeLocked() }
+    }
+
+    /** Close admission and prove no observer or sender call can cross into owner teardown. */
+    internal fun closeAndDrain(deadline: MonotonicDeadline): Boolean {
+        close()
+        return lifecycle.awaitDrained(deadline)
+    }
+
+    /** Must be called under this monitor. */
+    private fun closeLocked() {
         if (closed) return
         closed = true
         channels.values.forEach {

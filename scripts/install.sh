@@ -9,10 +9,21 @@
 # Preflights adb + curl (with per-OS fix-it hints), prompts for the panel IP (and optional id / MQTT
 # broker), downloads the release, and provisions the panel. On rooted panels the authenticated
 # provisioner also installs or upgrades the matching sealed root-helper asset. No parameters required
-# (except --prerelease). The release workflow fills RELEASE_TAG, RELEASE_APK_NAME and PROVISION_COMMIT
+# (except --prerelease). Advanced checkout-free provisioning is also available with:
+#   curl -fsSL https://raw.githubusercontent.com/maxlyth/ha-paneld/main/scripts/install.sh |
+#     bash -s -- --provision panel-ip:5555 [provision options]
+# The release workflow fills RELEASE_TAG, RELEASE_APK_NAME and PROVISION_COMMIT
 # in its downloadable copy so an installer attached to a historical release always installs that exact
 # release using its matching authenticated provisioner asset.
 set -euo pipefail
+umask 077
+
+# Create private storage before parsing advanced arguments. Legacy literal credential flags remain
+# accepted for compatibility, but are immediately rewritten to file-backed provisioner arguments so
+# their values are not copied into the downloaded provisioner's argv. The original installer command
+# line cannot be scrubbed portably; callers should use the corresponding --*-file options instead.
+TMP_DIR="$(mktemp -d)"
+trap 'rm -rf "$TMP_DIR"' EXIT
 
 RELEASE_TAG=""
 RELEASE_APK_NAME=""
@@ -20,14 +31,129 @@ PROVISION_COMMIT=""
 
 # --prerelease selects the newest release-candidate instead of the latest stable.
 CHANNEL_ARG="--latest"
-for a in "$@"; do case "$a" in
-  --prerelease|--pre) CHANNEL_ARG="--prerelease" ;;
+ADVANCED_PROVISION=0
+ADVANCED_TARGET=""
+PROVISION_ARGS=()
+PROVISION_NEEDS_APK=1
+PROVISION_SECRET_KINDS='|'
+claim_provision_secret() {
+  local kind="$1"
+  case "$PROVISION_SECRET_KINDS" in
+    *"|$kind|"*) echo "credential source supplied more than once: --$kind-file" >&2; exit 2 ;;
+  esac
+  PROVISION_SECRET_KINDS="${PROVISION_SECRET_KINDS}${kind}|"
+}
+materialize_provision_secret() {
+  local option="$1" value="$2" secret_file
+  secret_file="$(mktemp "$TMP_DIR/${option#--}.XXXXXX")"
+  printf '%s' "$value" > "$secret_file"
+  chmod 600 "$secret_file" 2>/dev/null || true
+  PROVISION_ARGS+=("${option}-file" "$secret_file")
+}
+show_usage() {
+  echo "Usage: curl -fsSL https://raw.githubusercontent.com/maxlyth/ha-paneld/main/scripts/install.sh | bash"
+  echo "       append: | bash -s -- --prerelease"
+  echo "       advanced: | bash -s -- [--prerelease] --provision PANEL-IP[:PORT] [options]"
+  echo
+  echo "Advanced options cover configuration, backup, restore, verification, and exceptional"
+  echo "access setup. APK/channel overrides (--apk, --release-tag, --latest, or a second"
+  echo "--prerelease) are rejected so the authenticated provisioner stays paired with its release."
+  echo "Use --mqtt-pass-file, --ha-token-file, or --ha-pass-file for credentials. The older literal"
+  echo "flags remain compatible but expose their value in the original shell command and process list."
+}
+while [ "$#" -gt 0 ]; do case "$1" in
+  --prerelease|--pre)
+    [ "$ADVANCED_PROVISION" = 0 ] || { echo "channel selection must appear before --provision" >&2; exit 2; }
+    CHANNEL_ARG="--prerelease"
+    shift
+    ;;
+  --provision)
+    [ "$ADVANCED_PROVISION" = 0 ] || { echo "--provision may only be supplied once" >&2; exit 2; }
+    [ "$#" -ge 2 ] && [ -n "${2:-}" ] && [ "${2#--}" = "$2" ] ||
+      { echo "--provision needs a panel IP or hostname" >&2; exit 2; }
+    ADVANCED_PROVISION=1
+    ADVANCED_TARGET="$2"
+    shift 2
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --mqtt-pass|--ha-token|--ha-pass)
+          [ "$#" -ge 2 ] && [ -n "${2:-}" ] && [ "${2#--}" = "$2" ] ||
+            { echo "$1 needs a value" >&2; exit 2; }
+          claim_provision_secret "${1#--}"
+          materialize_provision_secret "$1" "$2"
+          shift 2
+          ;;
+        --mqtt-pass-file|--ha-token-file|--ha-pass-file)
+          [ "$#" -ge 2 ] && [ -n "${2:-}" ] && [ "${2#--}" = "$2" ] ||
+            { echo "$1 needs a value" >&2; exit 2; }
+          file_kind="${1#--}"; file_kind="${file_kind%-file}"
+          claim_provision_secret "$file_kind"
+          PROVISION_ARGS+=("$1" "$2")
+          shift 2
+          ;;
+        --id|--mqtt|--mqtt-user|--log-host|--log-port|--log-proto|--ha-url|--ha-user|--export|--restore|--restore-fleet)
+          [ "$#" -ge 2 ] && [ -n "${2:-}" ] && [ "${2#--}" = "$2" ] ||
+            { echo "$1 needs a value" >&2; exit 2; }
+          PROVISION_ARGS+=("$1" "$2")
+          shift 2
+          ;;
+        --force|--persist-adb|--strip-vendor|--no-tame|--shizuku|--log-off|--builtin)
+          PROVISION_ARGS+=("$1")
+          shift
+          ;;
+        --verify)
+          PROVISION_ARGS+=("$1")
+          PROVISION_NEEDS_APK=0
+          shift
+          ;;
+        --apk|--release-tag|--latest|--prerelease|--pre)
+          echo "$1 is not accepted after --provision; the installer selects a matching authenticated release" >&2
+          exit 2
+          ;;
+        -h|--help)
+          show_usage
+          exit 0
+          ;;
+        *)
+          echo "unknown provisioning option: $1" >&2
+          exit 2
+          ;;
+      esac
+    done
+    ;;
   -h|--help)
-    echo "Usage: curl -fsSL https://raw.githubusercontent.com/maxlyth/ha-paneld/main/scripts/install.sh | bash"
-    echo "       append: | bash -s -- --prerelease   to install the newest release candidate"
-    exit 0 ;;
-  *) echo "unknown option: $a (only --prerelease is accepted)"; exit 2 ;;
+    show_usage
+    exit 0
+    ;;
+  *)
+    echo "unknown option: $1"
+    exit 2
+    ;;
 esac; done
+
+if [ "$ADVANCED_PROVISION" = 1 ]; then
+  HAS_EXPORT=0
+  HAS_VERIFY=0
+  HAS_OTHER=0
+  i=0
+  while [ "$i" -lt "${#PROVISION_ARGS[@]}" ]; do
+    option="${PROVISION_ARGS[$i]}"
+    case "$option" in
+      --export) HAS_EXPORT=1; i=$((i + 2)) ;;
+      --verify) HAS_VERIFY=1; i=$((i + 1)) ;;
+      --id|--mqtt|--mqtt-user|--mqtt-pass-file|--log-host|--log-port|--log-proto|--ha-url|--ha-token-file|--ha-user|--ha-pass-file|--restore|--restore-fleet)
+        HAS_OTHER=1; i=$((i + 2)) ;;
+      *) HAS_OTHER=1; i=$((i + 1)) ;;
+    esac
+  done
+  if [ "$HAS_VERIFY" = 1 ] && [ "$HAS_OTHER" = 1 ]; then
+    echo "--verify may only be combined with --export because verification is read-only" >&2
+    exit 2
+  fi
+  if [ "$HAS_VERIFY" = 1 ] || { [ "$HAS_EXPORT" = 1 ] && [ "$HAS_OTHER" = 0 ]; }; then
+    PROVISION_NEEDS_APK=0
+  fi
+fi
 
 if [ -t 1 ]; then B=$'\033[1m'; R=$'\033[31m'; G=$'\033[32m'; Y=$'\033[33m'; X=$'\033[0m'
 else B=; R=; G=; Y=; X=; fi
@@ -137,7 +263,6 @@ fi
 # New release code gets an independent release-key check before prompts or panel contact. HTTPS and
 # an immutable tag prevent accidental drift; the detached signature also fails closed if the
 # provisioner or its checksum is damaged, replaced, or served from an incomplete release.
-TMP_DIR="$(mktemp -d)"; trap 'rm -rf "$TMP_DIR"' EXIT
 SCRIPT="$TMP_DIR/provision.sh"
 PROVISION_CHECKSUM="$TMP_DIR/provision.sha256"
 PROVISION_SIGNATURE="$TMP_DIR/provision.sha256.sig"
@@ -177,43 +302,56 @@ if [ "$AUTHENTICATE_PROVISIONER" = 1 ]; then
   echo "${G}✓ authenticated $PROVISION_REF provisioner${X}"
 fi
 
-# --- prompts: stdin is the curl pipe, so read from the terminal directly ---
+# --- prompts: stdin is the curl pipe, so interactive installs read from the terminal directly ---
 TTY=/dev/tty
-[ -r "$TTY" ] || { echo "${R}No terminal available for prompts.${X} Try: ${B}bash <(curl -fsSL https://raw.githubusercontent.com/$REPO/main/scripts/install.sh)${X}"; exit 1; }
-echo "${Y}First enable network ADB on the panel (Developer options → ADB / 'ADB debugging').${X}"
-printf "Panel IP (or ip:port): " > "$TTY"; read -r IP < "$TTY"
-[ -n "${IP:-}" ] || { echo "${R}No IP entered.${X}"; exit 1; }
+if [ "$ADVANCED_PROVISION" = 1 ]; then
+  IP="$ADVANCED_TARGET"
+else
+  [ -r "$TTY" ] || { echo "${R}No terminal available for prompts.${X} Try: ${B}bash <(curl -fsSL https://raw.githubusercontent.com/$REPO/main/scripts/install.sh)${X}"; exit 1; }
+  echo "${Y}First enable network ADB on the panel (Developer options → ADB / 'ADB debugging').${X}"
+  printf "Panel IP (or ip:port): " > "$TTY"; read -r IP < "$TTY"
+  [ -n "${IP:-}" ] || { echo "${R}No IP entered.${X}"; exit 1; }
+fi
 # Loose sanity check (hostname/IPv4[:port]) — catch typos here rather than as an obscure adb error.
 case "$IP" in
   *[!0-9a-zA-Z.:-]*|.*|-*) echo "${R}'$IP' doesn't look like an IP address or hostname (optionally :port).${X} Find it on the panel under Settings → About → Status, or in your router's client list."; exit 1 ;;
 esac
 case "$IP" in *:*) TARGET="$IP" ;; *) TARGET="$IP:5555" ;; esac
-printf "Panel id [blank = auto from device name]: " > "$TTY"; read -r PID < "$TTY" || PID=""
-printf "MQTT broker tcp://host:1883 [blank = auto-discover Home Assistant]: " > "$TTY"; read -r BROKER < "$TTY" || BROKER=""
+if [ "$ADVANCED_PROVISION" = 0 ]; then
+  printf "Panel id [blank = auto from device name]: " > "$TTY"; read -r PID < "$TTY" || PID=""
+  printf "MQTT broker tcp://host:1883 [blank = auto-discover Home Assistant]: " > "$TTY"; read -r BROKER < "$TTY" || BROKER=""
+fi
 
 # --- fetch the APK and run the already-authenticated provisioner ---
 echo "${B}→ provisioning $TARGET${X}"
-if [ -n "$RELEASE_TAG" ]; then
+ARGS=("$TARGET")
+if [ "$PROVISION_NEEDS_APK" = 1 ] && [ -n "$RELEASE_TAG" ]; then
   [ -n "$RELEASE_APK_NAME" ] || { echo "${R}Release installer is missing its APK name.${X}"; exit 1; }
   APK="$TMP_DIR/$RELEASE_APK_NAME"
   if ! curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 15 --max-time 300 "$(release_apk_url "$RELEASE_TAG")" -o "$APK"; then
     echo "${R}Could not download the $RELEASE_TAG APK.${X} The release may be incomplete or GitHub may be unavailable; no panel changes were made." >&2
     exit 1
   fi
-  ARGS=("$TARGET" --apk "$APK" --release-tag "$RELEASE_TAG")
-else
+  ARGS+=(--apk "$APK" --release-tag "$RELEASE_TAG")
+elif [ "$PROVISION_NEEDS_APK" = 1 ]; then
   RELEASE_APK_NAME="$(release_apk_name "$PROVISION_REF")"
   APK="$TMP_DIR/$RELEASE_APK_NAME"
   if ! curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 15 --max-time 300 "$RESOLVED_APK_URL" -o "$APK"; then
     echo "${R}Could not download the $PROVISION_REF APK.${X} Check internet/GitHub access and try again; no panel changes were made." >&2
     exit 1
   fi
-  ARGS=("$TARGET" --apk "$APK" --release-tag "$PROVISION_REF")
+  ARGS+=(--apk "$APK" --release-tag "$PROVISION_REF")
 fi
-[ -n "${PID:-}" ]    && ARGS+=(--id "$PID")
-[ -n "${BROKER:-}" ] && ARGS+=(--mqtt "$BROKER")
+if [ "$ADVANCED_PROVISION" = 1 ]; then
+  ARGS+=("${PROVISION_ARGS[@]}")
+else
+  [ -n "${PID:-}" ]    && ARGS+=(--id "$PID")
+  [ -n "${BROKER:-}" ] && ARGS+=(--mqtt "$BROKER")
+fi
 # Give provision.sh the terminal as stdin so its own prompts (e.g. downgrade confirm) work.
-if ! bash "$SCRIPT" "${ARGS[@]}" < "$TTY"; then
+PROVISION_STDIN=/dev/null
+if { : < "$TTY"; } 2>/dev/null; then PROVISION_STDIN="$TTY"; fi
+if ! bash "$SCRIPT" "${ARGS[@]}" < "$PROVISION_STDIN"; then
   echo "${R}${B}ha-paneld installation did not complete.${X}" >&2
   echo "Read the failed item above, correct it, and run the same installer command again. Existing panel configuration was not deliberately removed." >&2
   exit 1

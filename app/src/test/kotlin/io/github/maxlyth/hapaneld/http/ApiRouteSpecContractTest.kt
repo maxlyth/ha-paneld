@@ -66,9 +66,9 @@ class ApiRouteSpecContractTest {
         assertTrue("binary restore/APK bodies must use a file input", "file.type='file'" in source)
     }
 
-    @Test fun configImportPreservesDirtyEditsAndConsumesPreviewHash() {
-        val source = asset("configure.js").readText()
-        assertTrue("dirty form import must require discard confirmation", "if (dirty && !confirm(" in source)
+    @Test fun installConfigImportConsumesPreviewHash() {
+        val source = asset("install.js").readText()
+        assertTrue("import must preview before applying", "/api/v1/config/import?dry_run=1" in source)
         assertTrue("apply must carry the preview config hash", "expected_cfg=" in source && "dry.expected_cfg" in source)
         assertTrue("stale apply must require a fresh preview", "response.status === 409" in source)
     }

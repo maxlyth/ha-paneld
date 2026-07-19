@@ -29,7 +29,7 @@ class PowerController(context: Context) {
 
     @Synchronized
     fun apply(keepAwake: Boolean) {
-        if (keepAwake) acquire() else release()
+        if (keepAwake) acquire() else releaseAndVerify()
     }
 
     @Suppress("WakelockTimeout", "DEPRECATION") // unbounded is intended; FULL_HIGH_PERF is the right mode on API 27
@@ -53,10 +53,23 @@ class PowerController(context: Context) {
     }
 
     @Synchronized
-    private fun release() {
-        wl?.let { if (it.isHeld) runCatching { it.release() } }
-        wifiLock?.let { if (it.isHeld) runCatching { it.release() } }
-        Log.i(TAG, "power locks released (wakelock + wifi)")
+    fun releaseAndVerify(): Boolean {
+        var complete = true
+        wl?.let { lock ->
+            if (runCatching { lock.isHeld }.getOrDefault(true)) {
+                runCatching { lock.release() }.onFailure { complete = false }
+            }
+            if (runCatching { lock.isHeld }.getOrDefault(true)) complete = false
+        }
+        wifiLock?.let { lock ->
+            if (runCatching { lock.isHeld }.getOrDefault(true)) {
+                runCatching { lock.release() }.onFailure { complete = false }
+            }
+            if (runCatching { lock.isHeld }.getOrDefault(true)) complete = false
+        }
+        if (complete) Log.i(TAG, "power locks released (wakelock + wifi)")
+        else Log.w(TAG, "one or more power locks remain held")
+        return complete
     }
 
     fun isHeld(): Boolean = wl?.isHeld == true

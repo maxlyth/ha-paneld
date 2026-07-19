@@ -17,9 +17,46 @@ class ProfileUiSourceTest {
         assertTrue("profile-workspace" in server)
         assertTrue("Confirm and restart" in script)
         assertTrue("last-known-good" in script)
-        assertTrue("grid-template-columns:minmax(0,1fr)" in css)
+        assertTrue("grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(272px,1fr) auto" in css)
         assertTrue("vendor/profile-editor/codemirror.js" in server)
         assertFalse("https://" in server.substringAfter("private fun profilesBody()").substringBefore("private fun installBody"))
+    }
+
+    @Test
+    fun profileWorkspaceUsesTheViewportWithoutCrushingTheEditor() {
+        assertTrue(".profile-inspector-body{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))" in css)
+        assertTrue("padding:10px;overflow:visible;max-height:none" in css)
+        assertTrue(".profile-inspector section:nth-of-type(1),.profile-inspector section:nth-of-type(4){grid-column:1/-1}" in css)
+        assertTrue("#profile-catalog-issues{display:grid;grid-template-columns:repeat(3,minmax(0,1fr))" in css)
+        assertTrue(".profile-report{display:grid;grid-template-columns:repeat(4,minmax(0,1fr))" in css)
+        assertTrue(".profile-guidance{grid-column:1/-1" in css)
+        assertTrue(".profile-draft{grid-column:1/-1" in css)
+        assertTrue("var PROFILE_EDITOR_MIN_LINES = 12" in script)
+        assertTrue("function fitProfileWorkspace()" in script)
+        assertTrue("editor.querySelector(\".cm-content\") || byId(\"profile-source-fallback\") || editor" in script)
+        assertTrue("PROFILE_EDITOR_MIN_LINES * lineHeight" in script)
+        assertTrue("Math.ceil(inspectorBody.scrollHeight) + 2" in script)
+        assertTrue("minInspectorHeight + rowGap" in script)
+        assertTrue("workspace.closest(\".wrap\")" in script)
+        assertTrue("window.getComputedStyle(wrap).paddingBottom" in script)
+        assertTrue("window.innerHeight - documentTop - Math.max(12, bottomInset)" in script)
+        assertTrue("Math.max(minWorkspaceHeight, availableHeight)" in script)
+        assertTrue("status === \"observed\" ? string(fact.value) : status + \" · \" + string(fact.value)" in script)
+        assertTrue("window.ResizeObserver" in script)
+        assertTrue("bindProfileLayout();" in script.substringAfter("initEditor(); bind();"))
+        assertTrue("#profile-catalog-issues,.profile-report{grid-template-columns:repeat(2,minmax(0,1fr))" in css)
+        assertTrue("<span class=\"profile-action-break\" aria-hidden=\"true\"></span>" in server)
+        assertTrue(".profile-actions{display:contents}.profile-action-break{display:block;flex:0 0 100%;height:0}" in css)
+        assertTrue("@media(max-width:857px){" in css)
+        assertTrue(".profile-workspace{grid-template-rows:auto auto;height:auto;min-height:0" in css)
+        assertTrue("height:52vh;min-height:226px" in css)
+        assertFalse("Review content must not create nested scroll areas", css.contains("overscroll-behavior:contain"))
+    }
+
+    @Test
+    fun shieldedProfileActionsExplainPhysicalApprovalInTheirConfirmation() {
+        assertTrue("Shielded action: when Hardened mode is enabled, approve this request on the physical panel." in script)
+        assertTrue("openModal(action === \"rollback\" ? \"Roll back profile?\" : \"Activate profile?\"" in script)
     }
 
     @Test
@@ -33,14 +70,17 @@ class ProfileUiSourceTest {
         assertTrue(script.indexOf("file.size > model.maxBytes") < script.indexOf("file.text()"))
         assertTrue("id=\"profile-generic-draft\" hidden" in server)
         assertTrue("active.ref.id === \"generic\"" in script)
-        assertTrue("Shizuku: \" + shizuku" in script)
+        assertTrue("shizuku === \"recommended\"" in script)
+        assertFalse("shizuku === \"optional\" ||" in script)
         assertTrue("id=\"profile-shizuku-guidance\" hidden" in server)
-        assertTrue("Direct access is the normal path" in server)
+        assertTrue("This profile declares a specific shell-level fallback" in server)
         assertTrue("review.content_version" in script)
         assertTrue("review.author" in script)
         assertTrue(script.substringAfter("function importFile").substringBefore("function exportSource").contains("model.originalSource = \"\""))
         assertTrue(script.substringAfter("function loadTemplate").substringBefore("function loadDeviceDraft").contains("model.originalSource = \"\""))
         assertTrue("jsonFetch(API + \"/report\")" in script)
+        assertTrue("model.editor.setSchema(schema.fields || [])" in script)
+        assertTrue("setSchema: function () {}" in script)
         assertTrue("postYaml(\"/probe\", source)" in script)
         assertTrue("generation !== model.viewGeneration || source !== model.source" in script)
         assertTrue("refKey(model.selected) !== refKey(ref)" in script)
@@ -60,6 +100,31 @@ class ProfileUiSourceTest {
         assertTrue("renderCatalogIssues(model.status.issues || [])" in script)
         assertTrue("summary.compatible === false" in script)
         assertTrue("summary && summary.issues || []" in script)
+        assertFalse("matches_this_device=false" in script)
+        assertTrue("it is intended for different hardware" in script)
+    }
+
+    @Test
+    fun profileReferencesAreSeparateVisibleDestinationSafeLinks() {
+        assertTrue("id=\"profile-links\"" in server)
+        assertTrue("aria-label=\"Profile references\"" in server)
+        assertTrue("function renderProfileLinks(summary)" in script)
+        assertTrue("new URL(raw)" in script)
+        assertTrue("parsed.protocol !== \"https:\"" in script)
+        assertTrue("parsed.username || parsed.password" in script)
+        assertTrue("summary.compatible === false" in script)
+        assertTrue("raw.length > 500" in script)
+        assertTrue("profileLinkLabelSafe(label)" in script)
+        assertTrue("noopener noreferrer" in script)
+        assertTrue("no-referrer" in script)
+        assertTrue("parsed.hostname" in script)
+        assertTrue("document.createElement(\"bdi\")" in script)
+        assertTrue("hostNode.dir = \"ltr\"" in script)
+        assertTrue("document.createTextNode(\" · \")" in script)
+        assertFalse("link.innerHTML" in script)
+        assertTrue("<bdi class=\"profile-reference-label\" dir=\"auto\">" in server)
+        assertTrue("<bdi class=\"profile-reference-host\" dir=\"ltr\">" in server)
+        assertTrue(".profile-links[hidden]{display:none}" in css)
     }
 
     @Test

@@ -9,6 +9,7 @@ import io.github.maxlyth.hapaneld.device.profile.ProfileArtifacts
 import io.github.maxlyth.hapaneld.device.profile.ProfileHelperAuthorityDemand
 import io.github.maxlyth.hapaneld.device.profile.ProfileMetadata
 import io.github.maxlyth.hapaneld.device.profile.ResolvedProfile
+import io.github.maxlyth.hapaneld.device.profile.ShizukuRecommendation
 
 /**
  * The single adaptation boundary from the active normalized runtime profile into planner intent.
@@ -46,13 +47,15 @@ internal fun DeviceProfile.requiresProvisioningHelper(): Boolean =
         when (ProfileMetadata.helperAuthorityDemand.getValue(driver)) {
             ProfileHelperAuthorityDemand.NONE -> false
             ProfileHelperAuthorityDemand.SANDBOX_FALLBACK -> !appCanSu
+            ProfileHelperAuthorityDemand.SHIZUKU_ALTERNATE ->
+                provisioning.shizuku == ShizukuRecommendation.NONE
             ProfileHelperAuthorityDemand.REQUIRED -> true
         }
     }
 
 /**
- * Runtime YAML profiles retain their validated driver declaration. The compiled emergency/contract
- * profiles use the same core ids inferred from their normalized capability fields.
+ * Runtime YAML profiles retain their validated driver declaration. The emergency profile and test
+ * contracts use the same core ids inferred from their normalized capability fields.
  */
 private fun DeviceProfile.provisioningDriverIds(): Set<String> =
     (this as? DataDeviceProfile)?.document?.requires?.drivers ?: buildSet {

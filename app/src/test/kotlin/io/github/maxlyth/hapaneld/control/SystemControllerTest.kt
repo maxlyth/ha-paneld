@@ -245,6 +245,20 @@ class SystemControllerTest {
         assertTrue("configured launcher wins over default", root.ran.contains("am start -n com.other.home/L"))
     }
 
+    @Test fun launcherOwnPackageAlwaysTargetsAdminActivityNotDashboard() {
+        // HOME query order is deliberately hostile: DashboardActivity appears first.
+        val env = FakeSystemEnv(
+            homes = listOf(DASH_HOME, ActivityRef(OWN, "$OWN.AdminLauncherActivity")),
+            default = DASH_HOME,
+        )
+        val (c, root, _) = sc(env, daemon = null)
+
+        c.launchLauncher(OWN)
+
+        assertEquals(listOf("am start -n $OWN/.AdminLauncherActivity"), root.ran)
+        assertEquals(OWN, c.resolvedLauncher(OWN))
+    }
+
     @Test fun launcherNoneSuitableFallsBackToAdminLauncher() {
         // Only the Companion registers HOME (and it's the default) → no launcher app to land on, so
         // the key must open ha-paneld's own admin launcher instead of silently doing nothing.
@@ -299,6 +313,91 @@ class SystemControllerTest {
         val (c, _, _) = sc(env, daemon = null, su = false)
         c.launchAdminLauncher()
         assertTrue(env.directStarts.contains("$OWN/.AdminLauncherActivity"))
+    }
+
+    // ---------- explicit ha-paneld HOME policy ----------
+    @Test fun adminHomeRecognisesPackageOwnershipAcrossPlatformComponentResolution() {
+        assertTrue(sc(FakeSystemEnv(default = ActivityRef(OWN, ".AdminLauncherActivity"))).first.isAdminLauncherHome())
+        assertTrue(sc(FakeSystemEnv(default = ActivityRef(OWN, "$OWN.AdminLauncherActivity"))).first.isAdminLauncherHome())
+        assertTrue(sc(FakeSystemEnv(default = DASH_HOME)).first.isAdminLauncherHome())
+        assertFalse(sc(FakeSystemEnv(default = ActivityRef(VENDOR, "AdminLauncherActivity"))).first.isAdminLauncherHome())
+        assertFalse(sc(FakeSystemEnv(default = null)).first.isAdminLauncherHome())
+    }
+
+    @Test fun ensureAdminHomeNoopsWhenAlreadyCorrect() {
+        val env = FakeSystemEnv(default = ActivityRef(OWN, "$OWN.AdminLauncherActivity"))
+        val (c, root, d) = sc(env, daemon = emptyMap())
+
+        assertTrue(c.ensureAdminLauncherHome())
+
+        assertTrue(root.ran.isEmpty())
+        assertTrue(d.sent.isEmpty())
+    }
+
+    @Test fun ensureAdminHomeForceReclaimsVendorHomeViaDaemon() {
+        val env = FakeSystemEnv(default = ActivityRef(VENDOR, "Home"))
+        val command = "SETHOME $OWN/.AdminLauncherActivity"
+        val (c, root, d) = sc(env, daemon = mapOf(command to "OK"))
+
+        assertTrue(c.ensureAdminLauncherHome())
+
+        assertEquals(listOf(command), d.sent)
+        assertTrue(root.ran.isEmpty())
+    }
+
+    @Test fun ensureAdminHomeFallsBackToSuAndReportsFailure() {
+        val env = FakeSystemEnv(default = ActivityRef(VENDOR, "Home"))
+        val command = "SETHOME $OWN/.AdminLauncherActivity"
+        val (success, successRoot, _) = sc(env, daemon = mapOf(command to "ERR"), su = true)
+        val (failure, failureRoot, _) = sc(env, daemon = mapOf(command to "ERR"), su = false)
+
+        assertTrue(success.ensureAdminLauncherHome())
+        assertEquals(listOf("cmd package set-home-activity $OWN/.AdminLauncherActivity"), successRoot.ran)
+        assertFalse(failure.ensureAdminLauncherHome())
+        assertEquals(listOf("cmd package set-home-activity $OWN/.AdminLauncherActivity"), failureRoot.ran)
+    }
+
+    @Test fun admittedPeriodicHomeRouteNeverFallsThroughToAnotherPrivilegeTransport() {
+        val env = FakeSystemEnv(default = ActivityRef(VENDOR, "Home"))
+        val command = "SETHOME $OWN/.AdminLauncherActivity"
+        val (daemonOnly, daemonRoot, daemon) = sc(env, daemon = mapOf(command to "ERR"), su = true)
+
+        assertFalse(daemonOnly.ensureAdminLauncherHome(PrivilegeRoute.DAEMON))
+        assertEquals(listOf(command), daemon.sent)
+        assertTrue(daemonRoot.ran.isEmpty())
+
+        val (suOnly, suRoot, suDaemon) = sc(env, daemon = mapOf(command to "OK"), su = true)
+        assertTrue(suOnly.ensureAdminLauncherHome(PrivilegeRoute.SU))
+        assertTrue(suDaemon.sent.isEmpty())
+        assertEquals(listOf("cmd package set-home-activity $OWN/.AdminLauncherActivity"), suRoot.ran)
+    }
+
+    @Test fun launcherHomePolicyExplicitSelfOverridesButOtherSelectionRestoresAutomaticPolicy() {
+        val explicitEnv = FakeSystemEnv(default = ActivityRef(VENDOR, "Home"))
+        val explicitCommand = "SETHOME $OWN/.AdminLauncherActivity"
+        val (explicit, _, explicitDaemon) = sc(explicitEnv, daemon = mapOf(explicitCommand to "OK"))
+        assertTrue(explicit.applyLauncherHomePolicy(OWN, MIN))
+        assertEquals(listOf(explicitCommand), explicitDaemon.sent)
+
+        val automaticEnv = FakeSystemEnv(
+            installed = setOf(MIN),
+            homes = listOf(ActivityRef(MIN, "Home")),
+            default = ActivityRef(OWN, "$OWN.AdminLauncherActivity"),
+        )
+        val automaticCommand = "SETHOME $MIN/Home"
+        val (automatic, _, automaticDaemon) = sc(automaticEnv, daemon = mapOf(automaticCommand to "OK"))
+        assertFalse(automatic.applyLauncherHomePolicy(VENDOR, MIN))
+        assertEquals(listOf(automaticCommand), automaticDaemon.sent)
+    }
+
+    @Test fun launcherHomePolicyPreservesBuiltinReadinessGateWhenLeavingExplicitSelf() {
+        val env = FakeSystemEnv(homes = listOf(DASH_HOME), default = ActivityRef(OWN, "$OWN.AdminLauncherActivity"))
+        val (c, root, d) = sc(env, daemon = null)
+
+        assertFalse(c.applyLauncherHomePolicy("", BUILTIN, builtinReady = false))
+
+        assertTrue(root.ran.isEmpty())
+        assertTrue(d.sent.isEmpty())
     }
 
     // ---------- ensureDashboardHome (reclaim rules) ----------

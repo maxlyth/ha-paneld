@@ -66,9 +66,13 @@ data class ProfileSummary(
     val contentVersion: String = "",
     val author: String? = null,
     val maturity: ProfileMaturity = ProfileMaturity.DRAFT,
+    /** True only for content shipped by ha-paneld. Author-declared maturity is not a trust signal. */
+    val trustedProvenance: Boolean = false,
     /** False when a stored imported revision cannot be activated by this core version. */
     val compatible: Boolean = true,
     val issues: List<ProfileIssue> = emptyList(),
+    val soc: ProfileSoc? = null,
+    val links: List<ProfileLink> = emptyList(),
 )
 
 enum class ProfileDriverKind { LED, SCREEN, RADIO, RELAY, SENSOR, INPUT, UPDATE, ACCESS }

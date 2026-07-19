@@ -12,3 +12,8 @@
 **/Makefile             linguist-detectable=false
 CMakeLists.txt          linguist-detectable=false
 *.cmake                 linguist-detectable=false
+
+# Runtime profile revisions are SHA-256 identities of the exact packaged bytes. Keep those bytes
+# stable across checkout platforms so the same source revision cannot produce a different identity.
+app/src/main/assets/device-profiles/*.yaml text eol=lf
+docs/profiles/unofficial/*.yaml            text eol=lf

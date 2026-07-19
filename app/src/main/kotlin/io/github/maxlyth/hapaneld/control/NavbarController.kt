@@ -49,7 +49,7 @@ import java.util.concurrent.locks.ReentrantReadWriteLock
  * - `Swipe reveal` — bar hidden; a thin bottom-edge touch strip reveals it for [AUTO_HIDE_MS], then
  *   it auto-hides.
  *
- * Buttons (left→right): Back, Launcher, Recents, Brightness−/+, Volume−/+. The panel has no physical
+ * Buttons (left→right): Back, Launcher, Dashboard, Recents, Reload, Brightness−/+, Volume−/+. The panel has no physical
  * buttons, so the bar doubles as a hardware-button surface — brightness and volume step locally with
  * no round-trip to HA. Back/Recents use the accessibility service's global actions (no root, but
  * `PanelAccessibilityService` must be enabled); Launcher opens the device launcher / app drawer via
@@ -67,8 +67,8 @@ class NavbarController(
     private val volume: VolumeController,
     private val brightness: BrightnessController,
     private val launcherPkg: () -> String,
-    // Dashboard package whose force-stop+relaunch is the Reload button's action (blank => auto-detect the
-    // HA Companion; see [SystemController.reloadDashboard]).
+    // Dashboard selection shared by the foreground-only Dashboard action and the force-stop+relaunch
+    // Reload action (blank => auto-detect the HA Companion; see [SystemController.resolveDashboard]).
     private val dashboardPkg: () -> String,
     // Back/Recents and tap route preference; live failure falls through (see NavActions).
     private val appCanSu: Boolean,
@@ -76,7 +76,8 @@ class NavbarController(
     private val hasRecents: Boolean,
     // Notify HA after a LOCAL navbar change so light.<panel>_screen / number.<panel>_volume don't go
     // stale (the bar steps brightness/volume directly, bypassing the MQTT command path).
-    private val onBrightnessChanged: () -> Unit = {},
+    private val onBrightnessChanged: (Int) -> Unit = {},
+    private val onBrightnessApplied: () -> Unit = {},
     private val onVolumeChanged: () -> Unit = {},
 ) {
     private val wm = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
@@ -85,9 +86,13 @@ class NavbarController(
     private var generation = 0L
     private var navGeneration = 0L
     private var closed = false
+    private var cleanupSubmitted = false
     private val navActionGate = ReentrantReadWriteLock()
-    private val overscanRecovery = DurableRecoveryMarker(
-        context.noBackupFilesDir.resolve(OVERSCAN_RECOVERY_FILE),
+    private val overscanApplyLock = Any()
+    private val overscanRecovery = NavbarOverscanRecovery(
+        marker = DurableRecoveryMarker(context.noBackupFilesDir.resolve(OVERSCAN_RECOVERY_FILE)),
+        run = Su::run,
+        runOutput = Su::runOutput,
     )
 
     private var bar: View? = null      // the visible button row
@@ -218,10 +223,15 @@ class NavbarController(
         val cost = FeatureCosts.registry.span(FeatureCostOperation.NAVBAR_MODE_APPLY).work(units = 1)
         try {
             if (work.cleanup) {
-                performCleanup()
-                work.completion?.complete(NavbarModeApplyOutcome(work.mode, NavbarModeApplyStatus.APPLIED))
-                cost.close()
-                modeDispatcher.close()
+                try {
+                    performCleanup()
+                    work.completion?.complete(NavbarModeApplyOutcome(work.mode, NavbarModeApplyStatus.APPLIED))
+                    cost.close()
+                } finally {
+                    // Process-exit recovery waits for this worker to terminate before independently
+                    // retrying overscan. Always close it even when platform cleanup throws.
+                    modeDispatcher.close()
+                }
             } else if (!isCurrent(work)) {
                 cost.outcome(FeatureCostOutcome.CANCELLED)
                 work.completion?.complete(NavbarModeApplyOutcome(work.mode, NavbarModeApplyStatus.SUPERSEDED))
@@ -304,11 +314,10 @@ class NavbarController(
             applyOverlayMode(mode)
 
     private fun applyOverscanForMode(target: String): Boolean {
-        if (!appCanSu) return true
-        if (target == MODE_ALWAYS) return applyOwnedOverscan(BAR_HEIGHT_DP)
+        if (target == MODE_ALWAYS) return !appCanSu || applyOwnedOverscan(BAR_HEIGHT_DP)
         // Avoid making ordinary Off/Swipe startup depend on transient su readiness when this process has
         // never applied a crop and no crash-recovery marker says an older process left one behind.
-        if (appliedMode != MODE_ALWAYS && !overscanRecovery.isArmed()) return true
+        if (!overscanRecovery.isArmed()) return true
         return applyOwnedOverscan(0)
     }
 
@@ -402,7 +411,7 @@ class NavbarController(
             unregisterVolumeReceiverLocked()
         }
         main.post { tearDownViews() }
-        if (appCanSu) resetOverscanForCleanup()
+        if (appCanSu || overscanRecovery.isArmed()) resetOverscanForCleanup()
     }
 
     private fun consumeNavWork(work: NavWork) {
@@ -480,7 +489,7 @@ class NavbarController(
         }
         // Wide panels (e.g. landscape TPA10) keep the ±-pairs with the live % readout; narrow panels (a
         // portrait NSPanel 120P) have no room for that, so they collapse each control to a single icon that
-        // opens a vertical pop-up slider — which also frees the space for the Reload button.
+        // opens a vertical pop-up slider — which also leaves room for both Dashboard and Reload.
         if (widthDp() >= VALUE_WIDTH_THRESHOLD_DP) buildWideRow(row, autoHide)
         else buildNarrowRow(row, autoHide)
         val lp = WindowManager.LayoutParams(
@@ -507,7 +516,7 @@ class NavbarController(
         }
     }
 
-    /** Wide layout: nav group (Back · Launcher · [Recents] · Reload) + the ±-pairs with the live % readout.
+    /** Wide layout: nav group (Back · Launcher · Dashboard · [Recents] · Reload) + the ±-pairs with the live % readout.
      *  Each ±/value triple's members are weight [TIGHTEN] (35% tighter), with the reclaimed weight as
      *  spacers either side so the group keeps its default slot and nav spacing is untouched. */
     private fun buildWideRow(row: LinearLayout, autoHide: Boolean) {
@@ -534,7 +543,7 @@ class NavbarController(
     }
 
     /** Narrow layout (portrait NSPanel 120P): everything is a single weight-1.0 icon, evenly spread —
-     *  Back · Launcher · [Recents] · Reload | Brightness | Volume. Brightness/Volume each open a vertical
+     *  Back · Launcher · Dashboard · [Recents] · Reload | Brightness | Volume. Brightness/Volume each open a vertical
      *  pop-up slider above the icon (there's no room for ±-pairs or a % label). */
     private fun buildNarrowRow(row: LinearLayout, autoHide: Boolean) {
         addNavGroup(row, autoHide)
@@ -544,12 +553,14 @@ class NavbarController(
         row.addView(sliderButton(R.drawable.ic_nav_vol_up, Slider.VOLUME, autoHide))
     }
 
-    /** Back · Launcher · [Recents] · Reload — the navigation cluster shared by both layouts. Back/Recents/
+    /** Back · Launcher · Dashboard · [Recents] · Reload — the navigation cluster shared by both layouts. Back/Recents/
      *  Launcher run a slow su / activity call, so navButton offloads it and holds the press highlight until
-     *  it completes. Reload force-stops + relaunches the dashboard app. */
+     *  it completes. Dashboard foregrounds the resolved renderer without reloading; Reload remains the
+     *  explicit force-stop/relaunch recovery action. */
     private fun addNavGroup(row: LinearLayout, autoHide: Boolean) {
         row.addView(navButton(R.drawable.ic_nav_back, autoHide) { NavActions.back(appCanSu) })
         row.addView(navButton(R.drawable.ic_nav_launcher, autoHide) { system.launchLauncher(launcherPkg()) })
+        row.addView(navButton(R.drawable.ic_nav_dashboard, autoHide) { system.launchHome(dashboardPkg()) })
         if (hasRecents) row.addView(navButton(R.drawable.ic_nav_recents, autoHide) { NavActions.recents(appCanSu) })
         row.addView(navButton(R.drawable.ic_nav_reload, autoHide) { system.reloadDashboard(dashboardPkg()) })
     }
@@ -577,7 +588,12 @@ class NavbarController(
         }
         val slider = VerticalSlider(level0) { lv ->
             when (kind) {
-                Slider.BRIGHTNESS -> { brightness.setBrightness((lv * 255).toInt().coerceIn(10, 255)); onBrightnessChanged() }
+                Slider.BRIGHTNESS -> {
+                    val level = (lv * 255).toInt().coerceIn(10, 255)
+                    onBrightnessChanged(level)
+                    brightness.setBrightness(level)
+                    onBrightnessApplied()
+                }
                 Slider.VOLUME -> { volume.setPercent((lv * 100).toInt()); onVolumeChanged() }
             }
             resetSliderTimeout()
@@ -918,8 +934,10 @@ class NavbarController(
     /** Step screen brightness by [delta] (of 0–255), floored at 10 so the screen never goes black. */
     private fun stepBrightness(delta: Int) {
         val cur = brightness.getCommanded().let { if (it < 0) 128 else it }
-        brightness.setBrightness((cur + delta).coerceIn(10, 255))
-        onBrightnessChanged()
+        val level = (cur + delta).coerceIn(10, 255)
+        onBrightnessChanged(level)
+        brightness.setBrightness(level)
+        onBrightnessApplied()
     }
 
     // --- permission ---
@@ -934,46 +952,38 @@ class NavbarController(
         return canDraw()
     }
 
-    private fun applyOwnedOverscan(heightDp: Int): Boolean {
-        // Positive overscan is persistent platform state. Arm recovery before mutating it so even a
-        // force-killed process leaves enough durable evidence for the next startup's apply(Off/Swipe)
-        // to restore the full display. Fail closed if that evidence cannot be made durable.
-        if (heightDp > 0 && !overscanRecovery.arm()) {
-            Log.e(TAG, "refusing persistent navbar overscan without a recovery marker")
-            return false
-        }
-        val applied = Su.run("wm overscan 0,0,0,${dp(heightDp)}")
-        if (applied && heightDp == 0 && !overscanRecovery.clear()) {
-            Log.w(TAG, "could not clear the navbar overscan recovery marker")
-        }
-        return applied
+    private fun applyOwnedOverscan(heightDp: Int): Boolean = synchronized(overscanApplyLock) {
+        overscanRecovery.applyBottom(dp(heightDp))
     }
 
-    private fun resetOverscanForCleanup(): Boolean {
-        if (!overscanRecovery.isArmed()) return applyOwnedOverscan(0)
-        val recovered = overscanRecovery.recoverIfArmed {
-            Su.run("wm overscan 0,0,0,0")
-        }
+    private fun resetOverscanForCleanup(): Boolean = synchronized(overscanApplyLock) {
+        val recovered = overscanRecovery.resetAndVerify()
         if (!recovered) Log.w(TAG, "navbar overscan reset remains pending for the next process")
         return recovered
     }
 
-    /** Reset any display overscan set by this controller. Call from the service's onDestroy so the
-     *  reserved bottom margin doesn't persist after ha-paneld stops. */
-    fun cleanup() {
-        val admission = synchronized(lifecycleLock) {
+    /** Close all future platform/overlay mutation admission without performing blocking root work. */
+    fun closeAdmission() {
+        synchronized(lifecycleLock) {
             if (closed) return
             closed = true
             generation += 1
             navGeneration += 1
             mode = MODE_OFF
-            if (appCanSu && !overscanRecovery.arm()) {
-                Log.e(TAG, "could not persist the navbar overscan recovery marker")
-            }
             BuiltinDashboard.setNavbarRevealHandler(null)
             BuiltinDashboard.setForegroundListener(null)
             unregisterVolumeReceiverLocked()
             navDispatcher.close()
+        }
+    }
+
+    /** Reset any display overscan set by this controller. Call from the service's onDestroy so the
+     *  reserved bottom margin doesn't persist after ha-paneld stops. */
+    fun cleanup() {
+        closeAdmission()
+        val admission = synchronized(lifecycleLock) {
+            if (cleanupSubmitted) return
+            cleanupSubmitted = true
             modeDispatcher.submit(ModeWork(generation, MODE_OFF, cleanup = true))
         }
         recordAdmission(FeatureCostOperation.NAVBAR_MODE_APPLY, admission, modeDispatcher.pendingCount())
@@ -989,6 +999,17 @@ class NavbarController(
         if (!navDrained) Log.w(TAG, "navbar action worker did not terminate before cleanup deadline")
         val modeDrained = modeDispatcher.awaitTermination(remainingCleanupMs(deadline))
         if (!modeDrained) Log.w(TAG, "navbar mode cleanup did not finish before cleanup deadline")
+    }
+
+    /**
+     * Process-exit proof for persistent overscan. Never races a late mode mutation: cleanup first closes
+     * admission, and this remains false until its sole platform worker has really terminated.
+     */
+    fun recoverPersistentState(): Boolean {
+        if (!appCanSu && !overscanRecovery.isArmed()) return true
+        if (!synchronized(lifecycleLock) { closed && cleanupSubmitted }) return false
+        if (!modeDispatcher.awaitTermination(0L)) return false
+        return resetOverscanForCleanup()
     }
 
     private fun remainingCleanupMs(deadline: Long): Long =
@@ -1063,5 +1084,62 @@ class NavbarController(
         private const val SLIDER_RADIUS_DP = 14
         private const val SLIDER_IDLE_MS = 3000L     // auto-close after this long with no interaction
         private val SLIDER_TRACK_COLOR = 0x55FFFFFF.toInt() // unfilled track (~33% white)
+    }
+}
+
+/** Marker-backed ownership and affirmative readback for persistent display overscan. */
+internal class NavbarOverscanRecovery(
+    private val marker: DurableRecoveryMarker,
+    private val run: (String) -> Boolean,
+    private val runOutput: (String) -> String?,
+) {
+    fun isArmed(): Boolean = marker.isArmed()
+
+    fun applyBottom(bottomPx: Int): Boolean {
+        val bottom = bottomPx.coerceAtLeast(0)
+        if (bottom > 0 && !marker.arm()) return false
+        if (bottom == 0) return resetAndVerify()
+        return run("wm overscan 0,0,0,$bottom")
+    }
+
+    fun resetAndVerify(): Boolean {
+        if (!marker.isArmed()) return true
+        return marker.recoverIfArmed {
+            displayOverscanIsZero(runOutput(RESET_AND_READBACK))
+        }
+    }
+
+    companion object {
+        internal const val RESET_AND_READBACK =
+            "wm overscan 0,0,0,0 && dumpsys display && dumpsys window policy"
+
+        internal fun displayOverscanIsZero(output: String?): Boolean {
+            val displayInfo = output.orEmpty().lineSequence()
+                .firstOrNull { line -> line.contains("DisplayInfo{") }
+                ?: return false
+            val real = REAL_SIZE.find(displayInfo) ?: return false
+            val policy = OVERSCAN_SCREEN.find(output.orEmpty()) ?: return false
+            val explicitOverscan = OVERSCAN.find(displayInfo)
+            if (explicitOverscan != null && explicitOverscan.groupValues.drop(1).any { it.toIntOrNull() != 0 }) {
+                return false
+            }
+            val realWidth = real.groupValues[1].toIntOrNull() ?: return false
+            val realHeight = real.groupValues[2].toIntOrNull() ?: return false
+            val left = policy.groupValues[1].toIntOrNull() ?: return false
+            val top = policy.groupValues[2].toIntOrNull() ?: return false
+            val width = policy.groupValues[3].toIntOrNull() ?: return false
+            val height = policy.groupValues[4].toIntOrNull() ?: return false
+            return left == 0 && top == 0 && width == realWidth && height == realHeight
+        }
+
+        private val OVERSCAN = Regex(
+            "overscan\\s*\\((-?\\d+),(-?\\d+),(-?\\d+),(-?\\d+)\\)",
+            RegexOption.IGNORE_CASE,
+        )
+        private val REAL_SIZE = Regex("\\breal\\s+(\\d+)\\s*x\\s*(\\d+)", RegexOption.IGNORE_CASE)
+        private val OVERSCAN_SCREEN = Regex(
+            "mOverscanScreen=\\((-?\\d+),(-?\\d+)\\)\\s+(\\d+)x(\\d+)",
+            RegexOption.IGNORE_CASE,
+        )
     }
 }

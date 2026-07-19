@@ -9,6 +9,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/input.h>
+#include <poll.h>
 #include <pthread.h>
 #include <sched.h>
 #include <stdarg.h>
@@ -21,10 +22,12 @@
 #include <unistd.h>
 
 #include "cmd.h"
+#include "cht8305.h"
 #include "dispatch.h"
 #include "server.h"
 #include "sysctl.h"
 #include "input.h"
+#include "gpio.h"
 #include "led.h"
 #include "perf.h"
 #include "sysexec_stub.h"
@@ -45,6 +48,12 @@ static int evdev_grab_ok = 1;
 static int evdev_open_count;
 static int evdev_grab_acquire_count;
 static int evdev_grab_release_count;
+static int gpio_value_open_ok = 1;
+static int gpio_edge_open_ok = 1;
+static int gpio_value_open_count;
+static int gpio_edge_open_count;
+static char gpio_value_fixture[128];
+static char gpio_edge_fixture[128];
 int __real_open(const char *path, int flags, ...);
 ssize_t __real_write(int fd, const void *buf, size_t count);
 
@@ -112,6 +121,23 @@ int __wrap_open(const char *path, int flags, ...) {
         evdev_open_count++;
         if (!evdev_open_ok) { errno = ENOENT; return -1; }
         selected = "/dev/null";
+    } else if (strncmp(path, "/sys/class/gpio/gpio", 20) == 0) {
+        size_t path_len = strlen(path);
+        if (path_len >= 6 && strcmp(path + path_len - 6, "/value") == 0) {
+            gpio_value_open_count++;
+            if (!gpio_value_open_ok || gpio_value_fixture[0] == '\0') {
+                errno = ENOENT;
+                return -1;
+            }
+            selected = gpio_value_fixture;
+        } else if (path_len >= 5 && strcmp(path + path_len - 5, "/edge") == 0) {
+            gpio_edge_open_count++;
+            if (!gpio_edge_open_ok || gpio_edge_fixture[0] == '\0') {
+                errno = ENOENT;
+                return -1;
+            }
+            selected = gpio_edge_fixture;
+        }
     }
     int needs_mode = (flags & O_CREAT) != 0;
 #ifdef O_TMPFILE
@@ -146,31 +172,12 @@ static void dispatch_reply(const char *line, char *out, size_t outsz) {
     snprintf(tmp, sizeof tmp, "%s", line);
     conn_ctx ctx = { .fd = sv[0], .subscribed = 0 };
     input_init();
+    gpio_init();
     dispatch(&ctx, tmp);
     fcntl(sv[1], F_SETFL, O_NONBLOCK);
     ssize_t n = read(sv[1], out, outsz - 1);
     out[n > 0 ? n : 0] = '\0';
     close(sv[0]); close(sv[1]);
-}
-
-typedef struct {
-    const char *line;
-    char out[64];
-} dispatch_job;
-
-static void *dispatch_worker(void *arg) {
-    dispatch_job *job = arg;
-    int sv[2];
-    socketpair(AF_UNIX, SOCK_STREAM, 0, sv);
-    char tmp[MAX_LINE + 1];
-    snprintf(tmp, sizeof tmp, "%s", job->line);
-    conn_ctx ctx = { .fd = sv[0], .subscribed = 0 };
-    dispatch(&ctx, tmp);
-    fcntl(sv[1], F_SETFL, O_NONBLOCK);
-    ssize_t n = read(sv[1], job->out, sizeof job->out - 1);
-    job->out[n > 0 ? n : 0] = '\0';
-    close(sv[0]); close(sv[1]);
-    return NULL;
 }
 
 typedef struct {
@@ -219,6 +226,7 @@ static void serve_reply(const char *bytes, size_t len, char *out, size_t outsz) 
     (void)!write(sv[1], bytes, len);
     shutdown(sv[1], SHUT_WR);
     input_init();
+    gpio_init();
     server_serve(sv[0]);
     fcntl(sv[1], F_SETFL, O_NONBLOCK);
     ssize_t n = read(sv[1], out, outsz - 1);
@@ -319,10 +327,10 @@ static void test_stat_jiffies(void) {
 
 static void test_dispatch_exact_match(void) {
     char out[64];
-    CHECK(strcmp(helper_identity(), "HELPER version=1.0.0 proto=1.0") == 0,
+    CHECK(strcmp(helper_identity(), "HELPER version=1.1.0 proto=1.1") == 0,
           "helper identity is stable (got '%s')\n", helper_identity());
     dispatch_reply("VERSION", out, sizeof out);
-    CHECK(strcmp(out, "HELPER version=1.0.0 proto=1.0\n") == 0,
+    CHECK(strcmp(out, "HELPER version=1.1.0 proto=1.1\n") == 0,
           "VERSION -> machine-readable identity (got '%s')\n", out);
     dispatch_reply("VERSION extra", out, sizeof out);
     CHECK(strcmp(out, "ERR\n") == 0, "VERSION rejects arguments (got '%s')\n", out);
@@ -423,7 +431,6 @@ static void test_sysctl_execution_results(void) {
         { "DENSITY reset", "wm density reset" },
         { "FONTSCALE 1.15", "settings put system font_scale" },
         { "FONTSCALE reset", "settings delete system font_scale" },
-        { "GOV performance", "scaling_governor" },
         { "STOP com.example.app", "am force-stop" },
         { "DISABLE com.example.app", "pm disable-user" },
         { "ENABLE com.example.app", "pm enable" },
@@ -437,10 +444,20 @@ static void test_sysctl_execution_results(void) {
         sysexec_stub_reset();
         dispatch_reply(cases[i].line, out, sizeof out);
         CHECK(strcmp(out, "OK\n") == 0, "%s succeeds when command succeeds (got '%s')\n", cases[i].line, out);
+        CHECK(sysexec_stub_count_run(cases[i].exec_match) == 0,
+              "%s never reaches the constant-shell seam\n", cases[i].line);
         sysexec_stub_fail_run(cases[i].exec_match, 256);
         dispatch_reply(cases[i].line, out, sizeof out);
         CHECK(strcmp(out, "ERR\n") == 0, "%s reports command failure (got '%s')\n", cases[i].line, out);
     }
+
+    // Governor updates are direct sysfs writes, not subprocesses. A host without writable cpufreq
+    // nodes fails closed and must never construct a shell command.
+    sysexec_stub_reset();
+    dispatch_reply("GOV performance", out, sizeof out);
+    CHECK(strcmp(out, "ERR\n") == 0, "GOV fails closed without writable cpufreq nodes (got '%s')\n", out);
+    CHECK(sysexec_stub_count_run("scaling_governor") == 0,
+          "GOV never constructs a request-derived shell command\n");
 
     // RELOAD is a two-command transaction: either force-stop or relaunch failure makes it fail.
     sysexec_stub_reset();
@@ -509,40 +526,17 @@ static void test_sysctl_execution_results(void) {
     dispatch_reply("APPSTATE com.example.app", out, sizeof out);
     CHECK(strcmp(out, "ERR\n") == 0, "APPSTATE reports dumpsys command failure (got '%s')\n", out);
 
-    // INSTALL already had a two-stage result boundary; pin it to the same injectable seam.
+    // Legacy pathname INSTALL remains protocol-compatible but fails closed without opening the
+    // caller-selected path. INSTALLGC is an idempotent compatibility acknowledgement only.
     const char *install = "INSTALL /data/user/0/io.github.maxlyth.hapaneld/cache/update.apk";
     const char *install_dir = "/tmp/.hapaneld-helper-test";
-    const char *install_dir_target = "/tmp/.hapaneld-helper-dir-target";
     const char *install_stage = "/tmp/.hapaneld-helper-test/hapaneld-install.apk";
     unlink(install_stage);
     rmdir(install_dir);
-    rmdir(install_dir_target);
-    CHECK(mkdir(install_dir_target, 0700) == 0, "create install-directory symlink target\n");
-    CHECK(symlink(install_dir_target, install_dir) == 0, "preplant install-directory symlink\n");
     sysexec_stub_reset();
     dispatch_reply(install, out, sizeof out);
-    CHECK(strcmp(out, "ERR\n") == 0, "INSTALL rejects a preplanted root-stage directory symlink\n");
-    CHECK(sysexec_stub_count_run("cp '") == 0, "rejected directory symlink never reaches legacy cp\n");
-    unlink(install_dir);
-    rmdir(install_dir_target);
-
-    sysexec_stub_reset();
-    dispatch_reply(install, out, sizeof out);
-    CHECK(strcmp(out, "OK\n") == 0, "INSTALL succeeds when staging and package install succeed (got '%s')\n", out);
-    CHECK(access(install_stage, F_OK) != 0,
-          "INSTALL removes root staging after success\n");
-    sysexec_stub_fail_run("cp '", 256);
-    dispatch_reply(install, out, sizeof out);
-    CHECK(strcmp(out, "ERR\n") == 0, "INSTALL reports staging failure (got '%s')\n", out);
-    CHECK(access(install_stage, F_OK) != 0,
-          "INSTALL removes partial root staging after copy failure\n");
-    sysexec_stub_reset();
-    sysexec_stub_fail_run("pm install", 256);
-    dispatch_reply(install, out, sizeof out);
-    CHECK(strcmp(out, "ERR\n") == 0, "INSTALL reports package-manager failure (got '%s')\n", out);
-    CHECK(access(install_stage, F_OK) != 0,
-          "INSTALL removes root staging after package-manager failure\n");
-    sysexec_stub_reset();
+    CHECK(strcmp(out, "ERR\n") == 0, "legacy INSTALL fails closed (got '%s')\n", out);
+    CHECK(sysexec_stub_count_run(install) == 0, "legacy INSTALL never executes caller-derived text\n");
 
     const char *install_gc = "INSTALLGC /data/user/0/io.github.maxlyth.hapaneld/files/helper-install-staging/retained.apk";
     dispatch_reply(install_gc, out, sizeof out);
@@ -550,8 +544,7 @@ static void test_sysctl_execution_results(void) {
     dispatch_reply(install_gc, out, sizeof out);
     CHECK(strcmp(out, "OK\n") == 0, "duplicate INSTALLGC remains idempotent (got '%s')\n", out);
     dispatch_reply("INSTALL /data/user/0/io.github.maxlyth.hapaneld/files/helper-install-staging/retained.apk", out, sizeof out);
-    CHECK(strcmp(out, "ERR\n") == 0, "a late INSTALL is rejected after cleanup authorisation (got '%s')\n", out);
-    CHECK(sysexec_stub_count_run("cp '") == 0, "cancelled late INSTALL never consumes the retained input\n");
+    CHECK(strcmp(out, "ERR\n") == 0, "a late legacy INSTALL remains rejected (got '%s')\n", out);
     dispatch_reply("INSTALLGC /data/local/tmp/not-owned.apk", out, sizeof out);
     CHECK(strcmp(out, "ERR\n") == 0, "INSTALLGC rejects paths outside app-private storage (got '%s')\n", out);
 
@@ -580,6 +573,10 @@ static void test_sysctl_execution_results(void) {
     if (staged >= 0) close(staged);
     CHECK(staged_n == (ssize_t)sizeof payload && memcmp(staged_bytes, payload, sizeof payload) == 0,
           "INSTALLSTREAM stages the exact declared bytes before package install\n");
+    dispatch_reply("INSTALLSTREAM 5", out, sizeof out);
+    CHECK(strcmp(out, "BUSY\n") == 0, "overlapping INSTALLSTREAM is rejected before READY (got '%s')\n", out);
+    dispatch_reply(install_gc, out, sizeof out);
+    CHECK(strcmp(out, "BUSY\n") == 0, "INSTALLGC waits for the active streamed install (got '%s')\n", out);
     sysexec_stub_release_run();
     read_reply_line(stream_sv[1], out, sizeof out);
     CHECK(strcmp(out, "OK\n") == 0, "INSTALLSTREAM reports package-manager success (got '%s')\n", out);
@@ -662,29 +659,13 @@ static void test_sysctl_execution_results(void) {
     // Protocol bounds and pre-staging failure are explicit responses before READY.
     dispatch_reply("INSTALLSTREAM 0", out, sizeof out);
     CHECK(strcmp(out, "STREAMERR\n") == 0, "INSTALLSTREAM rejects zero bytes (got '%s')\n", out);
-    dispatch_reply("INSTALLSTREAM 1073741825", out, sizeof out);
-    CHECK(strcmp(out, "STREAMERR\n") == 0, "INSTALLSTREAM rejects over 1GiB (got '%s')\n", out);
+    dispatch_reply("INSTALLSTREAM 268435457", out, sizeof out);
+    CHECK(strcmp(out, "STREAMERR\n") == 0, "INSTALLSTREAM rejects over 256MiB (got '%s')\n", out);
     mkdir(stream_stage, 0700);
     dispatch_reply("INSTALLSTREAM 5", out, sizeof out);
     CHECK(strcmp(out, "STREAMERR\n") == 0, "INSTALLSTREAM reports root staging open failure (got '%s')\n", out);
     rmdir(stream_stage);
 
-    // The daemon is thread-per-connection but uses one root staging path. A concurrent INSTALL must
-    // fail immediately instead of replacing the first transaction's staged bytes or waiting behind it.
-    sysexec_stub_block_run("cp '");
-    dispatch_job first = { .line = install, .out = "" };
-    pthread_t install_thread;
-    pthread_create(&install_thread, NULL, dispatch_worker, &first);
-    sysexec_stub_wait_blocked();
-    dispatch_reply(install, out, sizeof out);
-    CHECK(strcmp(out, "ERR\n") == 0, "overlapping INSTALL is rejected while one owns root staging (got '%s')\n", out);
-    dispatch_reply("INSTALLSTREAM 5", out, sizeof out);
-    CHECK(strcmp(out, "BUSY\n") == 0, "overlapping INSTALLSTREAM is rejected before READY (got '%s')\n", out);
-    dispatch_reply(install_gc, out, sizeof out);
-    CHECK(strcmp(out, "BUSY\n") == 0, "INSTALLGC retains input while an install owns the lane (got '%s')\n", out);
-    sysexec_stub_release_run();
-    pthread_join(install_thread, NULL);
-    CHECK(strcmp(first.out, "OK\n") == 0, "first INSTALL completes after overlap rejection (got '%s')\n", first.out);
     sysexec_stub_reset();
 }
 
@@ -889,6 +870,267 @@ static void test_input_watch_contract(void) {
     sysexec_stub_reset();
 }
 
+static int create_gpio_fixture(char *path, size_t path_size, const char *contents) {
+    snprintf(path, path_size, "/tmp/hapaneld-gpio-XXXXXX");
+    int fd = mkstemp(path);
+    if (fd < 0) return -1;
+    size_t size = strlen(contents);
+    int ok = write_all_fd(fd, contents, size) == 0;
+    close(fd);
+    return ok ? 0 : -1;
+}
+
+static int replace_gpio_fixture(const char *path, const char *contents) {
+    int fd = open(path, O_WRONLY | O_TRUNC);
+    if (fd < 0) return -1;
+    size_t size = strlen(contents);
+    int ok = write_all_fd(fd, contents, size) == 0;
+    close(fd);
+    return ok ? 0 : -1;
+}
+
+static void test_gpio_watch_contract(void) {
+    CHECK(create_gpio_fixture(gpio_value_fixture, sizeof gpio_value_fixture, "0\n") == 0,
+          "GPIO value fixture created\n");
+    CHECK(create_gpio_fixture(gpio_edge_fixture, sizeof gpio_edge_fixture, "none\n") == 0,
+          "GPIO edge fixture created\n");
+    gpio_value_open_ok = 1;
+    gpio_edge_open_ok = 1;
+    gpio_value_open_count = 0;
+    gpio_edge_open_count = 0;
+    sysexec_stub_reset();
+    sysexec_stub_set_spawn_result(0);
+
+    char reply[64];
+    dispatch_reply("GPIOV1", reply, sizeof reply);
+    CHECK(strcmp(reply, "OK\n") == 0, "GPIOV1 advertises the separate GPIO stream (got '%s')\n", reply);
+    dispatch_reply("GPIOV1 extra", reply, sizeof reply);
+    CHECK(strcmp(reply, "ERR\n") == 0, "GPIOV1 rejects arguments (got '%s')\n", reply);
+    dispatch_reply("GPIOWATCH 23", reply, sizeof reply);
+    CHECK(strcmp(reply, "OK\n") == 0, "GPIOWATCH accepts an exported bounded GPIO (got '%s')\n", reply);
+    dispatch_reply("GPIOWATCH -1", reply, sizeof reply);
+    CHECK(strcmp(reply, "ERR\n") == 0, "GPIOWATCH rejects a signed GPIO number (got '%s')\n", reply);
+    dispatch_reply("GPIOWATCH 65536", reply, sizeof reply);
+    CHECK(strcmp(reply, "ERR\n") == 0, "GPIOWATCH rejects a GPIO beyond the safety bound (got '%s')\n", reply);
+    dispatch_reply("GPIOWATCH 23 trailing", reply, sizeof reply);
+    CHECK(strcmp(reply, "ERR\n") == 0, "GPIOWATCH rejects trailing fields (got '%s')\n", reply);
+    dispatch_reply("GPIOWATCH 999999999999999999999", reply, sizeof reply);
+    CHECK(strcmp(reply, "ERR\n") == 0, "GPIOWATCH rejects an overlong numeric token (got '%s')\n", reply);
+
+    gpio_init();
+    int no_watch_socket[2];
+    socketpair(AF_UNIX, SOCK_STREAM, 0, no_watch_socket);
+    conn_ctx no_watch_ctx = { .fd = no_watch_socket[0], .subscribed = 0 };
+    char no_watch_subscribe[] = "GPIOSUBSCRIBE";
+    dispatch(&no_watch_ctx, no_watch_subscribe);
+    char line[64];
+    read_reply_line(no_watch_socket[1], line, sizeof line);
+    CHECK(strcmp(line, "ERR\n") == 0 && no_watch_ctx.subscribed == 0,
+          "GPIOSUBSCRIBE rejects an empty watch table so reconnect can retry (got '%s')\n", line);
+    close(no_watch_socket[0]);
+    close(no_watch_socket[1]);
+
+    gpio_value_open_count = 0;
+    CHECK(gpio_watch(23) == 0, "GPIOWATCH establishes the initial held descriptor\n");
+    CHECK(gpio_value_open_count == 1, "GPIOWATCH opens the value node exactly once (got %d)\n",
+          gpio_value_open_count);
+    CHECK(gpio_watch(23) == 0, "an identical GPIOWATCH is idempotent\n");
+    CHECK(gpio_value_open_count == 1, "idempotent GPIOWATCH does not reopen the node (got %d)\n",
+          gpio_value_open_count);
+    CHECK(gpio_edge_open_count > 0, "GPIOWATCH attempts kernel edge configuration before sampling\n");
+    int outsider_socket[2];
+    socketpair(AF_UNIX, SOCK_STREAM, 0, outsider_socket);
+    gpio_unsubscribe(outsider_socket[0]);
+    close(outsider_socket[0]);
+    close(outsider_socket[1]);
+    CHECK(gpio_watch(23) == 0 && gpio_value_open_count == 1,
+          "a non-subscriber disconnect cannot clear a prepared watch\n");
+
+    int gpio_socket[2];
+    socketpair(AF_UNIX, SOCK_STREAM, 0, gpio_socket);
+    conn_ctx gpio_ctx = { .fd = gpio_socket[0], .subscribed = 0 };
+    char subscribe[] = "GPIOSUBSCRIBE";
+    dispatch(&gpio_ctx, subscribe);
+    read_reply_line(gpio_socket[1], line, sizeof line);
+    CHECK(strcmp(line, "OK\n") == 0 && gpio_ctx.subscribed == 1,
+          "GPIOSUBSCRIBE is admitted and timeout-exempt (got '%s')\n", line);
+    read_reply_line(gpio_socket[1], line, sizeof line);
+    CHECK(strcmp(line, "GPIO 23 0\n") == 0,
+          "GPIOSUBSCRIBE immediately reports the normalized current value (got '%s')\n", line);
+    CHECK(input_reset_watches() == 0,
+          "a GPIO subscriber does not block the independent evdev WATCHRESET domain\n");
+    CHECK(gpio_reset_watches() != 0, "GPIORESET refuses to disrupt a live GPIO subscriber\n");
+
+    int second_gpio_socket[2];
+    socketpair(AF_UNIX, SOCK_STREAM, 0, second_gpio_socket);
+    conn_ctx second_gpio_ctx = { .fd = second_gpio_socket[0], .subscribed = 0 };
+    char second_subscribe[] = "GPIOSUBSCRIBE";
+    dispatch(&second_gpio_ctx, second_subscribe);
+    read_reply_line(second_gpio_socket[1], line, sizeof line);
+    read_reply_line(second_gpio_socket[1], line, sizeof line);
+    CHECK(second_gpio_ctx.subscribed == 1,
+          "a second GPIO subscriber shares the prepared watch\n");
+    gpio_test_broadcast_invalid_generation(23);
+    struct pollfd stale_record = { .fd = second_gpio_socket[1], .events = POLLIN };
+    CHECK(poll(&stale_record, 1, 100) == 0,
+          "a replaced watch generation cannot publish stale value or unavailable records\n");
+    gpio_unsubscribe(gpio_socket[0]);
+    close(gpio_socket[0]);
+    close(gpio_socket[1]);
+    CHECK(gpio_reset_watches() != 0,
+          "disconnecting one of two subscribers preserves the shared watch\n");
+    CHECK(gpio_watch(23) == 0 && gpio_value_open_count == 1,
+          "the shared watch remains idempotent until the final subscriber leaves\n");
+    char active_edge[16];
+    first_line(gpio_edge_fixture, active_edge, sizeof active_edge);
+    CHECK(strcmp(active_edge, "both") == 0,
+          "the shared watch keeps its active edge mode (got '%s')\n", active_edge);
+    gpio_unsubscribe(second_gpio_socket[0]);
+    close(second_gpio_socket[0]);
+    close(second_gpio_socket[1]);
+
+    char auto_restored_edge[16];
+    first_line(gpio_edge_fixture, auto_restored_edge, sizeof auto_restored_edge);
+    CHECK(strcmp(auto_restored_edge, "none") == 0,
+          "the final GPIO subscriber restores the prior edge mode (got '%s')\n", auto_restored_edge);
+    CHECK(gpio_watch(23) == 0 && gpio_value_open_count == 2,
+          "the final GPIO subscriber clears watches so a later watch reopens the descriptor\n");
+
+    int evdev_socket[2];
+    socketpair(AF_UNIX, SOCK_STREAM, 0, evdev_socket);
+    conn_ctx evdev_ctx = { .fd = evdev_socket[0], .subscribed = 0 };
+    char evdev_subscribe[] = "SUBSCRIBE";
+    dispatch(&evdev_ctx, evdev_subscribe);
+    read_reply_line(evdev_socket[1], line, sizeof line);
+    CHECK(strcmp(line, "OK\n") == 0, "evdev subscriber test precondition admitted (got '%s')\n", line);
+    CHECK(gpio_reset_watches() == 0,
+          "an evdev subscriber does not block the independent GPIORESET domain\n");
+    input_unsubscribe(evdev_socket[0]);
+    close(evdev_socket[0]);
+    close(evdev_socket[1]);
+
+    char restored_edge[16];
+    first_line(gpio_edge_fixture, restored_edge, sizeof restored_edge);
+    CHECK(strcmp(restored_edge, "none") == 0,
+          "GPIORESET restores the edge mode that preceded the watch (got '%s')\n", restored_edge);
+
+    gpio_init();
+    gpio_value_open_ok = 0;
+    CHECK(gpio_watch(24) != 0, "GPIOWATCH does not acknowledge an unreadable value descriptor\n");
+    gpio_value_open_ok = 1;
+    CHECK(gpio_watch(24) == 0, "an initial value-open failure rolls back so GPIOWATCH can retry\n");
+    gpio_init();
+
+    gpio_edge_open_ok = 0;
+    CHECK(gpio_watch(24) == 0,
+          "GPIOWATCH safely falls back to bounded descriptor sampling when edge setup is unavailable\n");
+    gpio_edge_open_ok = 1;
+    gpio_init();
+
+    gpio_edge_open_ok = 0;
+    gpio_value_open_count = 0;
+    sysexec_stub_set_spawn_real(1);
+    CHECK(gpio_watch(26) == 0, "the production GPIO reader starts for fallback-stream coverage\n");
+    int stream_socket[2];
+    socketpair(AF_UNIX, SOCK_STREAM, 0, stream_socket);
+    conn_ctx stream_ctx = { .fd = stream_socket[0], .subscribed = 0 };
+    char stream_subscribe[] = "GPIOSUBSCRIBE";
+    dispatch(&stream_ctx, stream_subscribe);
+    read_reply_line(stream_socket[1], line, sizeof line);
+    read_reply_line(stream_socket[1], line, sizeof line);
+    CHECK(strcmp(line, "GPIO 26 0\n") == 0, "fallback stream starts with the current value (got '%s')\n", line);
+    CHECK(replace_gpio_fixture(gpio_value_fixture, "1\n") == 0, "GPIO fixture changed in place\n");
+    struct pollfd changed = { .fd = stream_socket[1], .events = POLLIN };
+    CHECK(poll(&changed, 1, 1500) == 1, "fallback reader reports a change within its bounded interval\n");
+    read_reply_line(stream_socket[1], line, sizeof line);
+    CHECK(strcmp(line, "GPIO 26 1\n") == 0, "fallback reader normalizes a changed value (got '%s')\n", line);
+    CHECK(gpio_value_open_count == 1,
+          "fallback samples reuse the held descriptor instead of reopening (opened %d)\n",
+          gpio_value_open_count);
+    changed.revents = 0;
+    CHECK(poll(&changed, 1, 650) == 0, "an unchanged GPIO sample does not emit a duplicate record\n");
+    CHECK(replace_gpio_fixture(gpio_value_fixture, "") == 0, "GPIO fixture can simulate descriptor loss\n");
+    changed.revents = 0;
+    CHECK(poll(&changed, 1, 1500) == 1, "descriptor loss emits bounded unavailability\n");
+    read_reply_line(stream_socket[1], line, sizeof line);
+    CHECK(strcmp(line, "GPIOUNAVAILABLE 26\n") == 0,
+          "subscriber receives explicit GPIO unavailability (got '%s')\n", line);
+    CHECK(replace_gpio_fixture(gpio_value_fixture, "0\n") == 0,
+          "GPIO fixture is available for the fallback reader to reopen\n");
+    changed.revents = 0;
+    CHECK(poll(&changed, 1, 3500) == 1, "fallback reader reports recovery after descriptor loss\n");
+    read_reply_line(stream_socket[1], line, sizeof line);
+    CHECK(strcmp(line, "GPIO 26 0\n") == 0,
+          "subscriber receives the recovered GPIO value (got '%s')\n", line);
+
+    int opens_before_dead_subscriber = gpio_value_open_count;
+    close(stream_socket[1]);
+    CHECK(replace_gpio_fixture(gpio_value_fixture, "1\n") == 0,
+          "GPIO fixture changes after its subscriber dies\n");
+    int reopened_after_eviction = 0;
+    for (int attempt = 0; attempt < 40; attempt++) {
+        if (gpio_watch(26) == 0 && gpio_value_open_count > opens_before_dead_subscriber) {
+            reopened_after_eviction = 1;
+            break;
+        }
+        usleep(50000);
+    }
+    CHECK(reopened_after_eviction,
+          "evicting the final dead subscriber clears watches and permits a fresh descriptor\n");
+    gpio_unsubscribe(stream_socket[0]);
+    close(stream_socket[0]);
+    CHECK(gpio_watch(26) == 0 && gpio_value_open_count == opens_before_dead_subscriber + 1,
+          "teardown of an already-evicted subscriber cannot clear the replacement watch\n");
+    gpio_init();
+    usleep(600000); // let the detached reader observe its generation change before reusing the fixture
+    sysexec_stub_set_spawn_real(0);
+    gpio_edge_open_ok = 1;
+    CHECK(replace_gpio_fixture(gpio_value_fixture, "0\n") == 0, "GPIO fixture restored after stream test\n");
+
+    sysexec_stub_set_spawn_result(-1);
+    CHECK(gpio_watch(25) != 0, "GPIOWATCH rejects a failed reader-thread start\n");
+    sysexec_stub_set_spawn_result(0);
+    CHECK(gpio_watch(25) == 0, "thread-start failure rolls back so GPIOWATCH can retry\n");
+    gpio_init();
+
+    gpio_value_open_count = 0;
+    for (unsigned i = 0; i < GPIO_MAX_WATCHES; i++)
+        CHECK(gpio_watch(i) == 0, "GPIO watcher %u within the cap is admitted\n", i + 1);
+    CHECK(gpio_watch(GPIO_MAX_WATCHES) != 0, "GPIO watcher beyond the fixed cap is rejected\n");
+    CHECK(gpio_value_open_count == GPIO_MAX_WATCHES,
+          "the rejected watcher consumes no descriptor (opened %d)\n", gpio_value_open_count);
+    gpio_init();
+
+    int sockets[GPIO_MAX_SUBSCRIBERS + 1][2];
+    conn_ctx contexts[GPIO_MAX_SUBSCRIBERS + 1];
+    CHECK(gpio_watch(27) == 0, "GPIO subscriber cap test establishes an owned watch\n");
+    for (int i = 0; i <= GPIO_MAX_SUBSCRIBERS; i++) {
+        socketpair(AF_UNIX, SOCK_STREAM, 0, sockets[i]);
+        contexts[i] = (conn_ctx){ .fd = sockets[i][0], .subscribed = 0 };
+        char command[] = "GPIOSUBSCRIBE";
+        dispatch(&contexts[i], command);
+        read_reply_line(sockets[i][1], line, sizeof line);
+        if (i < GPIO_MAX_SUBSCRIBERS) {
+            CHECK(strcmp(line, "OK\n") == 0 && contexts[i].subscribed == 1,
+                  "GPIO subscriber %d within the cap is admitted (got '%s')\n", i + 1, line);
+        } else {
+            CHECK(strcmp(line, "ERR\n") == 0 && contexts[i].subscribed == 0,
+                  "GPIO subscriber beyond the cap is rejected (got '%s')\n", line);
+        }
+    }
+    for (int i = 0; i <= GPIO_MAX_SUBSCRIBERS; i++) {
+        gpio_unsubscribe(sockets[i][0]);
+        close(sockets[i][0]);
+        close(sockets[i][1]);
+    }
+    gpio_init();
+    sysexec_stub_reset();
+    unlink(gpio_value_fixture);
+    unlink(gpio_edge_fixture);
+    gpio_value_fixture[0] = '\0';
+    gpio_edge_fixture[0] = '\0';
+}
+
 static void test_subscriber_admission(void) {
     input_init();
     int sockets[INPUT_MAX_SUBSCRIBERS + 1][2];
@@ -1086,6 +1328,129 @@ static void test_conn_cap(void) {
     CHECK(conn_active() == 0, "no slot leaked after the connection storm (got %d)\n", conn_active());
 }
 
+static void test_room_climate_input_allowlist(void) {
+    const char *temp_name = NULL, *humidity_name = NULL;
+    unsigned int temp_axis = 0, humidity_axis = 0;
+    CHECK(cht8305_test_candidate_count() == 2,
+          "room-climate input allowlist has exactly two proven layouts\n");
+    CHECK(cht8305_test_candidate(0, &temp_name, &temp_axis, &humidity_name, &humidity_axis),
+          "TPA10 climate layout exists\n");
+    CHECK(strcmp(temp_name, "temperature") == 0 && temp_axis == ABS_THROTTLE &&
+          strcmp(humidity_name, "humidity") == 0 && humidity_axis == ABS_THROTTLE,
+          "TPA10 climate layout retains the two ABS_THROTTLE inputs\n");
+    CHECK(cht8305_test_candidate(1, &temp_name, &temp_axis, &humidity_name, &humidity_axis),
+          "ZX-SMT156 climate layout exists\n");
+    CHECK(strcmp(temp_name, "sun-ths") == 0 && temp_axis == ABS_THROTTLE &&
+          strcmp(humidity_name, "sun-hum") == 0 && humidity_axis == 0x1d,
+          "ZX-SMT156 climate layout pins the reporter-proven names and axes\n");
+    CHECK(!cht8305_test_candidate(2, &temp_name, &temp_axis, &humidity_name, &humidity_axis),
+          "room-climate input allowlist rejects an unknown layout\n");
+}
+
+static void test_room_climate_event_node_names(void) {
+    const char *accepted[] = { "event0", "event1", "event9", "event10", "event99", "event100", "event999" };
+    for (size_t i = 0; i < sizeof accepted / sizeof accepted[0]; i++) {
+        CHECK(cht8305_test_event_name(accepted[i]),
+              "canonical room-climate event node %s is accepted\n", accepted[i]);
+    }
+
+    const char *rejected[] = {
+        "", "event", "event00", "event01", "event000", "event001", "event1000",
+        "event-1", "event1x", "eventx1", "event 1", "Event1", "mouse0", "event1/extra",
+    };
+    for (size_t i = 0; i < sizeof rejected / sizeof rejected[0]; i++) {
+        CHECK(!cht8305_test_event_name(rejected[i]),
+              "non-canonical room-climate event node %s is rejected\n", rejected[i]);
+    }
+}
+
+static void test_room_climate_input_discovery(void) {
+    long temp = 0, humidity = 0;
+    const struct cht8305_test_input unrelated[] = {
+        { "unrelated-touchscreen", 1, 9999 },
+    };
+    CHECK(!cht8305_test_resolve(unrelated, sizeof unrelated / sizeof unrelated[0],
+                                &temp, &humidity),
+          "unrelated input devices alone do not infer a room-climate layout\n");
+
+    const struct cht8305_test_input tpa10[] = {
+        { "temperature", 1, 2134 },
+        { "unrelated-touchscreen", 1, 9999 },
+        { "humidity", 1, 5678 },
+    };
+    CHECK(cht8305_test_resolve(tpa10, sizeof tpa10 / sizeof tpa10[0], &temp, &humidity) &&
+          temp == 2134 && humidity == 5678,
+          "an unambiguous TPA10 exact-name pair succeeds and ignores unrelated devices\n");
+
+    const struct cht8305_test_input zx[] = {
+        { "sun-hum", 1, 4321 },
+        { "sun-ths", 1, -250 },
+    };
+    CHECK(cht8305_test_resolve(zx, sizeof zx / sizeof zx[0], &temp, &humidity) &&
+          temp == -250 && humidity == 4321,
+          "an unambiguous ZX-SMT156 exact-name pair succeeds independent of enumeration order\n");
+
+    const struct cht8305_test_input duplicate_temp[] = {
+        { "temperature", 1, 2100 },
+        { "humidity", 1, 5000 },
+        { "temperature", 1, 2200 },
+    };
+    CHECK(!cht8305_test_resolve(duplicate_temp,
+                                sizeof duplicate_temp / sizeof duplicate_temp[0], &temp, &humidity),
+          "duplicate exact temperature devices fail closed\n");
+
+    const struct cht8305_test_input duplicate_humidity[] = {
+        { "sun-ths", 1, 2100 },
+        { "sun-hum", 1, 5000 },
+        { "sun-hum", 1, 5100 },
+    };
+    CHECK(!cht8305_test_resolve(duplicate_humidity,
+                                sizeof duplicate_humidity / sizeof duplicate_humidity[0],
+                                &temp, &humidity),
+          "duplicate exact humidity devices fail closed\n");
+
+    const struct cht8305_test_input partial[] = {
+        { "sun-ths", 1, 2100 },
+    };
+    CHECK(!cht8305_test_resolve(partial, sizeof partial / sizeof partial[0], &temp, &humidity),
+          "a partial exact-name pair fails closed\n");
+
+    const struct cht8305_test_input mixed[] = {
+        { "temperature", 1, 2100 },
+        { "sun-hum", 1, 5000 },
+    };
+    CHECK(!cht8305_test_resolve(mixed, sizeof mixed / sizeof mixed[0], &temp, &humidity),
+          "a pair assembled from mixed vendor layouts fails closed\n");
+
+    const struct cht8305_test_input complete_plus_partial[] = {
+        { "temperature", 1, 2100 },
+        { "humidity", 1, 5000 },
+        { "sun-ths", 1, 2200 },
+    };
+    CHECK(!cht8305_test_resolve(complete_plus_partial,
+                                sizeof complete_plus_partial / sizeof complete_plus_partial[0],
+                                &temp, &humidity),
+          "a complete pair mixed with a partial second layout fails closed\n");
+
+    const struct cht8305_test_input both_complete[] = {
+        { "temperature", 1, 2100 },
+        { "humidity", 1, 5000 },
+        { "sun-ths", 1, 2200 },
+        { "sun-hum", 1, 5100 },
+    };
+    CHECK(!cht8305_test_resolve(both_complete,
+                                sizeof both_complete / sizeof both_complete[0], &temp, &humidity),
+          "two complete supported layouts are ambiguous and fail closed\n");
+
+    const struct cht8305_test_input unreadable[] = {
+        { "sun-ths", 1, 2100 },
+        { "sun-hum", 0, 0 },
+    };
+    CHECK(!cht8305_test_resolve(unreadable, sizeof unreadable / sizeof unreadable[0],
+                                &temp, &humidity),
+          "an unreadable member of an exact-name pair fails closed\n");
+}
+
 int main(void) {
     test_validators();
     test_clamp();
@@ -1097,10 +1462,14 @@ int main(void) {
     test_reply_stream_writes();
     test_server_send_deadline();
     test_input_watch_contract();
+    test_gpio_watch_contract();
     test_subscriber_admission();
     test_grab_subscription_ownership();
     test_ledjni_ioctl();
     test_conn_cap();
+    test_room_climate_input_allowlist();
+    test_room_climate_event_node_names();
+    test_room_climate_input_discovery();
 
     if (failures) { printf("UNIT FAILED: %d assertion(s)\n", failures); return 1; }
     printf("UNIT OK\n");

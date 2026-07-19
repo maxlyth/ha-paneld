@@ -5,6 +5,7 @@
 #include "led.h"
 #include "screen.h"
 #include "input.h"
+#include "gpio.h"
 #include "sysctl.h"
 #include "perf.h"
 #include "cht8305.h"

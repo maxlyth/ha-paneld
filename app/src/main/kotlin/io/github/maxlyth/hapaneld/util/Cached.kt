@@ -1,5 +1,8 @@
 package io.github.maxlyth.hapaneld.util
 
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
+
 /**
  * TTL + single-flight memo for expensive probes (su round-trips, `wm density`, process checks).
  * [get] returns the cached value while it's fresh and otherwise rebuilds — concurrent callers wait
@@ -16,6 +19,9 @@ class Cached<T : Any>(
     @Volatile private var value: T? = null
     @Volatile private var builtAt = Long.MIN_VALUE
     private val lock = Any()
+    private val publicationLock = Any()
+    private val refreshInFlight = AtomicBoolean(false)
+    private val generation = AtomicLong(0L)
 
     init { require(ttlMs >= 0L) }
 
@@ -24,27 +30,68 @@ class Cached<T : Any>(
     /** Age of the cached value; MAX_VALUE when never built. Lets callers do stale-while-revalidate. */
     fun ageMs(): Long = ageAt(nowMs())
 
-    fun get(): T {
+    fun get(): T = getWithSupplier(supplier)
+
+    /** Build an expired value with a request-scoped [supplierOverride]. A fresh value still wins, and
+     * concurrent callers still share one build; this lets a caller pass immutable routing evidence
+     * without adding mutable request context to the cache owner. */
+    fun getWithSupplier(supplierOverride: () -> T): T {
         value?.let { if (ageAt(nowMs()) < ttlMs) return it }
         synchronized(lock) {
             value?.let { if (ageAt(nowMs()) < ttlMs) return it }
-            val built = supplier()
-            value = built
-            builtAt = nowMs()
+            val startedGeneration = generation.get()
+            val built = supplierOverride()
+            synchronized(publicationLock) {
+                value = built
+                // Preserve the result as last-known, but never let a concurrent invalidation disappear.
+                builtAt = if (generation.get() == startedGeneration) nowMs() else Long.MIN_VALUE
+            }
             return built
         }
     }
 
+    /** Return the last-known value immediately and admit at most one asynchronous refresh when stale.
+     * The first read still builds synchronously because no truthful last-known value exists yet. */
+    fun staleWhileRevalidate(launch: ((() -> Unit), () -> Unit) -> Boolean): T {
+        val current = peek() ?: return get()
+        if (ageMs() < ttlMs || !refreshInFlight.compareAndSet(false, true)) return current
+        val admissionReleased = AtomicBoolean(false)
+        val releaseAdmission = {
+            if (admissionReleased.compareAndSet(false, true)) refreshInFlight.set(false)
+            Unit
+        }
+        val refresh = {
+            try {
+                get()
+            } finally {
+                releaseAdmission()
+            }
+            Unit
+        }
+        try {
+            if (!launch(refresh, releaseAdmission)) releaseAdmission()
+        } catch (error: Throwable) {
+            releaseAdmission()
+            throw error
+        }
+        return current
+    }
+
     fun invalidate() {
-        builtAt = Long.MIN_VALUE
+        synchronized(publicationLock) {
+            generation.incrementAndGet()
+            builtAt = Long.MIN_VALUE
+        }
     }
 
     /** Prime the cache with a known value (fresh). Use after a write whose result is known, so the UI
      *  shows it immediately instead of racing a re-probe that may still read the pre-write state. */
     fun set(v: T) {
         synchronized(lock) {
-            value = v
-            builtAt = nowMs()
+            synchronized(publicationLock) {
+                value = v
+                builtAt = nowMs()
+            }
         }
     }
 

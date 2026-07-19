@@ -49,6 +49,28 @@ class ZigbeeHealthMonitorTest {
         assertNull(ZigbeeNetInfoParser.parse("{".padEnd(5000, 'x')))
     }
 
+    @Test fun canonicalNetInfoShapeDetectsInvalidAndValidPanIds() {
+        val invalid = ZigbeeNetInfoParser.parse(
+            """{"sdk":"v6.78","stackprofile":2,"panid":65535,"mac":"private","key":"secret"}""",
+        )
+        assertTrue(invalid!!.explicitlyInvalid)
+        assertEquals(0xffffL, invalid.panId)
+        assertFalse(invalid.toString().contains("secret"))
+        assertFalse(invalid.toString().contains("private"))
+
+        val joinedPan = ZigbeeNetInfoParser.parse("""{"panid":22335,"channel":15}""")
+        assertEquals(22335L, joinedPan!!.panId)
+        assertFalse(joinedPan.explicitlyInvalid)
+    }
+
+    @Test fun netInfoAcquisitionPrefersCanonicalFileAndBoundsBothSources() {
+        val command = zigbeeNetInfoCommand("/vendor/bin/siliconlabs_host")
+        assertTrue(command.contains("[ -s /data/vendor/siliconlabs_host/netinfo ]"))
+        assertTrue(command.contains("head -c 4097 /data/vendor/siliconlabs_host/netinfo"))
+        assertTrue(command.contains("/vendor/bin/siliconlabs_host/zgateway.log"))
+        assertTrue(command.endsWith("head -c 4097; fi"))
+    }
+
     @Test fun mqttAttributesExcludeRawSensitiveGatewayData() {
         val attributes = ZigbeeHealthSnapshot(
             state = ZigbeeHealthState.HEALTHY,
@@ -311,6 +333,33 @@ class ZigbeeHealthMonitorTest {
         assertEquals(0, contains)
         assertEquals(0, snapshots)
         assertEquals(ZigbeeHealthState.UNKNOWN, monitor.snapshot().state)
+    }
+
+    @Test fun stopReportsAnInterruptIgnoringSampleAsUndrained() {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val source = object : ZigbeeGatewayHealthSource {
+            override fun observe(): ZigbeeGatewayObservation {
+                entered.countDown()
+                while (release.count > 0L) {
+                    try {
+                        release.await()
+                    } catch (_: InterruptedException) {
+                        // Model a diagnostic command which does not honour cancellation.
+                    }
+                }
+                return observation()
+            }
+            override fun contain(layout: ZigbeeGatewayLayout) = ZigbeeContainmentResult.FAILED
+        }
+        val monitor = ZigbeeHealthMonitor({ true }, source, {}, { _, _ -> })
+        try {
+            monitor.start()
+            assertTrue(entered.await(2, TimeUnit.SECONDS))
+            assertFalse(monitor.stop())
+        } finally {
+            release.countDown()
+        }
     }
 
     @Test fun slowObservationIsFollowedByAFullDelayInsteadOfACatchUpBurst() {

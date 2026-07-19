@@ -1,5 +1,66 @@
 # Changelog
 
+## v0.9.5-rc1 - 2026-07-19
+
+**This release candidate makes panels more adaptive, more recoverable and easier to manage.** Auto-brightness and proximity no longer need tedious manual configuration and now tune themselves automatically using panel-local environmental data. Optional Hardened mode requires physical access: sensitive remote actions wait for approval on the panel's screen and cannot be approved remotely. Panels also recover more reliably after settings, network or helper changes.
+
+### Added
+
+- **Auto-brightness adapts to each room** — it learns from light readings collected over the past seven days, follows the normal daylight pattern and reacts to changes such as a room light switching on. It can use the panel's own sensor or a light-level sensor in Home Assistant, provides a sensitivity preview and pauses after a manual brightness change until automatic control is resumed.
+- **Proximity sensors now set themselves up automatically** — ha-paneld learns what the sensor reports when the room is empty and when someone approaches, including whether the reading rises or falls. Once it has enough reliable readings, Home Assistant receives occupancy and a simple 0–100 proximity level. A guided three-wave setup can teach it immediately, while brief sensor fluctuations are ignored instead of causing false presence.
+- **Optional Hardened mode requires approval on the panel for sensitive remote actions** — software changes, credential export or restore, profile activation, reboot and other sensitive maintenance require a one-time approval from the Android app's Configure toolbar. They cannot be approved remotely. A subtle shield identifies affected web actions even before Hardened mode is enabled. Existing installations remain in Relaxed mode unless Hardened mode is deliberately enabled on the panel.
+- **The software navigation bar has a dedicated Dashboard action** — it opens the configured dashboard without reloading it. Reload remains available separately if the dashboard needs recovery.[^issue-43]
+- **Obsolete learned dashboard entities can be cleared from the Entities tab** — a confirmed reset clears what ha-paneld has learned, including manually included or excluded entities. The current filter keeps working while a fresh scan runs.[^issue-50]
+- **Runtime diagnostics now show how much storage the app uses** — they also report verified-boot and bootloader status without exposing configured panel or network names.
+- **Panel profiles show clearer processor details and useful reference links** — the Dashboard separates the processor model, CPU type and introduction year from the live core count, while the Profiles page can include approved links to product, vendor, community and technical information.
+- **You can measure whether dashboard filtering actually makes a panel faster** — a new comparison records the same dashboard with filtering switched off and on, so you can see whether it improves response time instead of relying on how it feels. It can still collect useful results if the dashboard becomes unresponsive.[^discussion-10]
+- **NSPanel Pro Zigbee joining can be requested from Configure** — once joining is enabled in ZHA or Zigbee2MQTT, an unjoined panel can try joining again without a restart.
+- **Advanced setup no longer requires cloning the repository** — the signed release installer can configure, verify, back up or restore a panel using `install.sh --provision`.
+
+### Changed
+
+- **Configure and Install are easier to use on compact panels** — related dashboard and connection settings use shorter cards, Save changes appears only after a setting has changed, and setup tools such as display sizing, vendor packages and backup/restore are grouped on Install.
+- **Home Assistant traffic diagnostics identify the busiest entities more clearly** — they show which three Home Assistant entities sent the most updates and data during the past hour.
+- **Wake on wave now requires a deliberate gesture** — the display wakes only after a complete wave towards and then away from the panel. Setup, testing and standing near the panel no longer wake it accidentally; touch-to-wake remains available while it is learning.
+- **Editable YAML files now define all hardware profiles** — the editor suggests valid choices, prevents a profile intended for different hardware from being activated, and keeps unofficial reflashed-device profiles in the community catalog rather than presenting them as built-in hardware support.[^issue-28]
+- **Shizuku is now clearly described as optional** — official profiles use root or the helper where available and suggest Shizuku only for a specific feature that needs it.[^issue-42]
+- **Fresh installations preserve the existing boot-chime behaviour by default** and prerelease browser tabs show the Android build code first, making test builds easier to identify.
+
+### Fixed
+
+- **Panels are less likely to become unavailable after settings, network or helper changes** — replaced tasks and MQTT connections now shut down cleanly, and losing privileged screen control no longer leaves ha-paneld permanently unresponsive.
+- **LED and button-backlight controls no longer return to off while brightness is changing** — commands from Home Assistant now reach the hardware reliably, and button-backlight entities use Home Assistant's normal light icon.
+- **CPU and temperature sensors now explain when the installed helper is too old** instead of silently disappearing.[^issue-21]
+- **Disabled features stop consuming resources** while temporarily unavailable sensors retry at a controlled rate and repeated diagnostic requests share one refresh.
+- **Installer progress and failures are clearer** — named stages show what is happening, backups are checked before connecting to a panel, stalled downloads and installs time out cleanly, and panels with insufficient system space receive a clear explanation.[^issue-44][^issue-46]
+- **Restoring a backup no longer changes untouched vendor Zigbee settings**, including when an older backup is restored.[^issue-48]
+- **Hardened mode no longer reuses credentials after the Home Assistant or MQTT server changes** — enter credentials for the new server or the old secret is cleared.
+- **Install and Configure now report the real outcome without discarding newer edits** — failed display-size changes are no longer shown as successful, and settings appear only where they apply.
+- **Live Sensors shows brightness as a percentage** while retaining the 0–255 value for diagnostics.[^issue-30]
+- **Panel capability lists omit hardware known to be absent** while Generic profiles retain discovery guidance for unknown hardware.
+
+### Upgrade notes
+
+- Existing panels remain in Relaxed mode. Enable Hardened mode only from the Android app's Configure toolbar on the panel after disabling classic network ADB and Android Wireless debugging; remote tap injection remains unavailable until the panel returns to Relaxed mode.
+- Locally built APKs can still update the app normally. Provisioning their bundled root helper requires `--allow-unsigned-helper` after the build has been verified and trusted; official release installations authenticate their helper automatically.
+- Config JSON restore through `provision.sh --restore` now requires Python 3 on the computer running the installer. Full `.hpb` backups continue to restore from the panel's Install page.
+
+### Limited hardware preview
+
+- **ZX-SMT156 owners can opt into room temperature and humidity entities for release-candidate testing** — ha-paneld reads the panel's `sun-ths` and `sun-hum` sensor values through its authenticated helper or locally approved Shizuku service. The temperature and humidity scaling still needs comparison with the panel UI or another instrument; relay control is not included.[^issue-24]
+
+[^issue-21]: User report: [#21 — No CPU/Temp sensors reporting](https://github.com/maxlyth/ha-paneld/issues/21).
+[^issue-24]: User report and hardware evidence: [#24 — Panel diagnostic dump](https://github.com/maxlyth/ha-paneld/issues/24).
+[^issue-28]: User request: [#28 — Profile for Echo Show 5 Gen 2](https://github.com/maxlyth/ha-paneld/issues/28).
+[^issue-30]: User report: [#30 — Live State panel show brightness as a %](https://github.com/maxlyth/ha-paneld/issues/30).
+[^discussion-10]: User discussion: [#10 — Performance improvement: entity filter proxy](https://github.com/maxlyth/ha-paneld/discussions/10).
+[^issue-42]: User report: [#42 — Shizuku setup](https://github.com/maxlyth/ha-paneld/issues/42).
+[^issue-43]: User request: [#43 — Dashboard button in the software navigation bar](https://github.com/maxlyth/ha-paneld/issues/43).
+[^issue-44]: User request: [#44 — Explain installer progress and troubleshooting](https://github.com/maxlyth/ha-paneld/issues/44).
+[^issue-46]: User report: [#46 — Root-helper install cannot fit on a full stock system partition](https://github.com/maxlyth/ha-paneld/issues/46).
+[^issue-48]: User report: [#48 — Configuration export/import gaps](https://github.com/maxlyth/ha-paneld/issues/48).
+[^issue-50]: User request: [#50 — Learned entity flush option](https://github.com/maxlyth/ha-paneld/issues/50).
+
 ## v0.9.4 - 2026-07-16
 
 **ha-paneld can now help explain why a built-in Home Assistant dashboard feels slow.** New and updated cards on the Dashboard tab measure interaction delay, main-thread blocking, Home Assistant state traffic and renderer instability, then report a conservative likely cause. This helps distinguish an overloaded dashboard from excessive entity updates, memory pressure or another busy process on the panel.
@@ -234,7 +295,7 @@ Beyond that, panel telemetry is more reliable across the fleet, the Tuya TPA10 g
 ### Changed
 
 - **Provisioning and the daemon installer preflight the adb connection** — connect failures, the on-panel authorization dialog, and stale "offline" sessions are detected up front and fail fast (~12s instead of minutes) with specific recovery steps, before any release download.
-- **Install failures are classified with recovery steps** — signature mismatch (debug vs release), downgrade, and out-of-storage each explain how to recover (including backing up config first) instead of aborting with a raw adb error.
+- **Install failures are classified with recovery steps** — signature mismatch (debug vs release), downgrade, and out-of-storage each explain how to recover (including creating a full `.hpb` backup before an uninstall) instead of aborting with a raw adb error.
 - **Permission grants degrade gracefully** — a vendor build that refuses adb-side grants no longer aborts provisioning; each failed grant names the manual Settings path and the run continues to the self-verify.
 - **`install-daemon.sh` exit code now reflects daemon liveness** — files-in-place but no running process is reported as a failure with recovery steps; the script also states which root path it is using.
 
@@ -401,7 +462,7 @@ The Install tab becomes a software-management hub, panels get encrypted backup/r
 - **Live log viewer** — a new **Logs** tab tails the panel's logs in the browser, no `adb logcat` needed: pick **App** (ha-paneld's own process log, works with no root) or **System** (the full device logcat, root panels), filter by level or text, pause/resume, and follow the tail. Served as a plain Server-Sent-Events stream at `/api/v1/logs/stream` (also `curl -N`-able). Tokens/passwords are redacted server-side by the same single pass that guards remote log shipping — the capture subprocess only runs while someone is watching (or shipping is on) and stops when the last viewer disconnects.
 - **Live Sensors card** — the Dashboard now shows live readings from **all of the panel's sensors** — ambient light, proximity (near/far + raw), temperature, humidity, plus volume and brightness — refreshed every 2 seconds via a new `/api/v1/sensors` endpoint. Readings are the hardware's live values, shown **even when a sensor is hidden from Home Assistant** by the exposure config, with an age indicator per reading; the card renderer is reusable so other tabs can mount it.
 - **Companion auto-update channel** — the Companion updater gains the same **Stable / Pre-release** channel select as ha-paneld's own auto-update (`select.<panel>_companion_update_channel`, default Stable; also on the Configure tab). Switching channel triggers an immediate check when Companion auto-update is on.
-- **Config export/restore from the provision script** — `provision.sh --export FILE` saves a panel's full config bundle (includes secrets — protect the file), `--restore FILE` best-effort-imports a bundle (full restore, device keys included), `--restore-fleet FILE` applies only the portable keys for cross-panel deployment. Completes the bundle feature across API + web UI + fleet scripts.
+- **Config export/restore from the provision script** — `provision.sh --export FILE` saves a panel's complete settings bundle (includes secrets — protect the file), `--restore FILE` best-effort-imports those settings (including device-scoped config), and `--restore-fleet FILE` applies only portable keys. These JSON operations do not replace the later `.hpb` full app backup/restore flow.
 
 ### Changed
 

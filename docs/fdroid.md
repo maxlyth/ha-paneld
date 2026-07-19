@@ -3,7 +3,7 @@
 [F-Droid](https://f-droid.org/) is an open-source Android app store. ha-paneld publishes a small F-Droid **repository**, so you can add it and then install ha-paneld — and get every future update — **directly on the panel, with no PC and no adb**.
 
 > [!NOTE]
-> F-Droid installs the ha-paneld app but does not perform its provisioning. The built-in dashboard, MQTT auto-discovery, sensors, brightness and the HTTP control page do not require root, while relays, button LEDs, true screen-off, Zigbee control and some system integration still need privileged access on supported panels. See [Install](../README.md#install) to complete setup.
+> F-Droid installs the ha-paneld app but does not perform its provisioning. The built-in dashboard, MQTT auto-discovery framework, brightness and the HTTP control page do not require root. Discovery publishes only the sensors and controls supported by the active profile and live access probes; some proximity, climate, relay, button-LED, true screen-off, Zigbee and system-integration paths still need privileged access. See [Install](../README.md#install) to complete setup.
 
 ## 1. Get F-Droid onto the panel
 

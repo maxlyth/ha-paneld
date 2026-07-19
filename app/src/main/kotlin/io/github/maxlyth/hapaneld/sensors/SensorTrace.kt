@@ -52,7 +52,7 @@ object SensorTrace {
     }
 
     /** Feed a raw proximity sample + the derived near/far. Kept on a near transition, or the 1 Hz floor. */
-    fun recordProx(raw: Float, near: Boolean) {
+    fun recordProx(raw: Float, near: Boolean?) {
         if (!enabled || raw.isNaN()) return
         synchronized(lock) {
             val t = now()

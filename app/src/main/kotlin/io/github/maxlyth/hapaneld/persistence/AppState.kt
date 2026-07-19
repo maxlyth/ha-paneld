@@ -119,11 +119,31 @@ internal class AtomicFactoryCache<K : Any, V : Any> {
         values.computeIfAbsent(key) { factory() }
 }
 
+/**
+ * Narrow opt-in contract for state transitions that authorize an external side effect.
+ *
+ * Ordinary [SharedPreferences.Editor.apply] and [SharedPreferences.Editor.commit] retain Android's
+ * publish-before-disk semantics. This operation publishes neither memory nor listeners until the
+ * complete namespace candidate is durable, and leaves the prior in-process snapshot visible when
+ * persistence fails. A later call can therefore retry from the same authoritative state.
+ */
+internal interface DurableVisibilityPreferences : SharedPreferences {
+    fun commitWithDurableVisibility(
+        mutation: SharedPreferences.Editor.() -> Unit,
+    ): Boolean
+}
+
+internal fun SharedPreferences.commitWithDurableVisibility(
+    mutation: SharedPreferences.Editor.() -> Unit,
+): Boolean = (this as? DurableVisibilityPreferences)
+    ?.commitWithDurableVisibility(mutation)
+    ?: false
+
 internal class SqliteStatePreferences(
     private val persistence: StateNamespacePersistence,
     executor: ExecutorService,
     private val admission: StateMutationAdmission = StateMutationAdmission(),
-) : SharedPreferences {
+) : DurableVisibilityPreferences {
     constructor(
         helper: EntityCatalogStore,
         namespace: String,
@@ -174,7 +194,14 @@ internal class SqliteStatePreferences(
 
     override fun contains(key: String): Boolean = synchronized(stateLock) { key in values }
 
-    override fun edit(): SharedPreferences.Editor = Editor()
+    override fun edit(): SharedPreferences.Editor = Editor(publishOnlyWhenDurable = false)
+
+    override fun commitWithDurableVisibility(
+        mutation: SharedPreferences.Editor.() -> Unit,
+    ): Boolean = Editor(publishOnlyWhenDurable = true).run {
+        mutation()
+        commit()
+    }
 
     override fun registerOnSharedPreferenceChangeListener(
         listener: SharedPreferences.OnSharedPreferenceChangeListener,
@@ -197,7 +224,9 @@ internal class SqliteStatePreferences(
         return future.awaitResult(timeoutMs)
     }
 
-    private inner class Editor : SharedPreferences.Editor {
+    private inner class Editor(
+        private val publishOnlyWhenDurable: Boolean,
+    ) : SharedPreferences.Editor {
         private val changes = linkedMapOf<String, Any?>()
         private var clear = false
 
@@ -219,20 +248,14 @@ internal class SqliteStatePreferences(
 
         private fun publish(waitForDisk: Boolean): Boolean {
             if (!clear && changes.isEmpty()) return true
-            return admission.admit { synchronousDurability ->
-                if (synchronousDurability) {
-                    admission.serializeFrozenWrite {
-                        publishAdmitted(waitForDisk = true, synchronousDurability = true)
-                    }
-                } else {
-                    publishAdmitted(waitForDisk, synchronousDurability = false)
-                }
+            return admission.admit {
+                publishAdmitted(waitForDisk, deferPublication = publishOnlyWhenDurable)
             }
         }
 
         private fun publishAdmitted(
             waitForDisk: Boolean,
-            synchronousDurability: Boolean,
+            deferPublication: Boolean,
         ): Boolean {
             val pending = synchronized(stateLock) {
                 val before = values.toMap()
@@ -247,7 +270,7 @@ internal class SqliteStatePreferences(
                     StateMutation(clear, changes.toMap()),
                     candidate.toMap(),
                 )
-                if (!synchronousDurability) {
+                if (!deferPublication) {
                     values.clear()
                     values.putAll(candidate)
                 }
@@ -255,10 +278,10 @@ internal class SqliteStatePreferences(
                     changedKeys = changed,
                     future = future,
                     candidate = candidate,
-                    synchronousDurability = synchronousDurability,
+                    deferredPublication = deferPublication,
                 )
             }
-            if (pending.synchronousDurability) {
+            if (pending.deferredPublication) {
                 val durable = pending.future?.awaitResult() ?: false
                 if (!durable) return false
                 synchronized(stateLock) {
@@ -269,7 +292,7 @@ internal class SqliteStatePreferences(
             pending.changedKeys.forEach { key ->
                 listeners.forEach { it.onSharedPreferenceChanged(this@SqliteStatePreferences, key) }
             }
-            return if (waitForDisk && !pending.synchronousDurability) {
+            return if (waitForDisk && !pending.deferredPublication) {
                 pending.future?.awaitResult() ?: false
             } else true
         }
@@ -295,15 +318,12 @@ class StateQuiescence internal constructor(
 internal class StateMutationAdmission {
     private val lock = ReentrantLock()
     private val unfrozen = lock.newCondition()
-    private val frozenWriteLock = Any()
     private var frozen = false
 
-    fun <T> admit(block: (synchronousDurability: Boolean) -> T): T = lock.withLock {
+    fun <T> admit(block: () -> T): T = lock.withLock {
         while (frozen) unfrozen.awaitUninterruptibly()
-        block(false)
+        block()
     }
-
-    fun <T> serializeFrozenWrite(block: () -> T): T = synchronized(frozenWriteLock) { block() }
 
     fun freeze(): Boolean = lock.withLock {
         if (frozen) false else {
@@ -323,9 +343,7 @@ internal fun quiesceStateWrites(
     flush: () -> Boolean,
 ): StateQuiescence? {
     if (!admission.freeze()) return null
-    val flushed = runCatching {
-        admission.serializeFrozenWrite(flush)
-    }.getOrDefault(false)
+    val flushed = runCatching(flush).getOrDefault(false)
     if (!flushed) {
         admission.unfreeze()
         return null
@@ -342,7 +360,7 @@ private data class PendingStateWrite(
     val changedKeys: Set<String>,
     val future: Future<Boolean>?,
     val candidate: Map<String, Any>,
-    val synchronousDurability: Boolean,
+    val deferredPublication: Boolean,
 )
 
 internal interface StateNamespacePersistence {

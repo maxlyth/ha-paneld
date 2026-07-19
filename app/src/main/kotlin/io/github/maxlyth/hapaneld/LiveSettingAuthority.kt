@@ -79,6 +79,15 @@ internal class LiveSettingAuthority(
         }
     }
 
+    /** Supersede any queued HTTP intent without replaying it. Safety-sensitive settings use this when
+     * another authority (for example MQTT or the boot escape window) establishes a newer truth. */
+    @Synchronized
+    fun discard(key: String): Boolean {
+        if (key !in supportedKeys) return false
+        if (pending.remove(key) == null) return true
+        return journal.remove(key)
+    }
+
     @Synchronized
     fun replay(apply: (String, String) -> LiveSettingApplyResult) {
         replay { key, value, _ -> apply(key, value) }

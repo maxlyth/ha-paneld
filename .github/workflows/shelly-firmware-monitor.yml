@@ -1,13 +1,14 @@
 name: Shelly firmware monitor
 run-name: Shelly firmware monitor · ${{ github.event_name }}
 
-# Poll Shelly Wall Display OTA manifest endpoints hourly, detect new firmware
+# Poll Shelly Wall Display OTA manifest endpoints daily, detect new firmware
 # versions, and immediately archive them to the Wayback Machine before Shelly
 # replaces the CDN object in-place (old versions go 404 on the next release).
 #
-# On a new version: appends the entry to fw-shelly-walldisplay.dat, submits the
-# firmware URL to Save Page Now, confirms the capture, and commits the updated
-# .dat back to main. The Discussion is updated whenever .dat changes.
+# On a scheduled run or a manual `update` run: appends the entry to
+# fw-shelly-walldisplay.dat, submits the firmware URL to Save Page Now, confirms
+# the capture, and commits the updated .dat back to main. The Discussion is
+# updated whenever .dat changes. Manual runs default to read-only verification.
 #
 # Daily cadence is sufficient: Shelly rolls firmware out to the fleet over days
 # rather than pushing a rapid patch cycle, so a daily poll gives ample time to
@@ -23,6 +24,15 @@ on:
   schedule:
     - cron: "47 9 * * *"   # daily at 09:47 UTC (after the NSPanel Pro monitor at 08:23)
   workflow_dispatch:
+    inputs:
+      mode:
+        description: Verify only, or run the publishing/update path
+        required: true
+        type: choice
+        default: verify
+        options:
+          - verify
+          - update
 
 permissions:
   contents: read
@@ -36,7 +46,29 @@ env:
   SHELLY_DISCUSSION_NUMBER: "14"
 
 jobs:
+  verify:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'verify'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+
+      # Fetch and validate both manifests and CDN objects in the ephemeral
+      # checkout. This job has no write token, publishing secrets, or post steps.
+      - name: Verify Shelly manifests and TLS trust
+        run: python tools/firmware-index/shelly_firmware.py verify
+
   monitor:
+    if: github.event_name == 'schedule' || inputs.mode == 'update'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -122,6 +154,6 @@ jobs:
             msg="data: Shelly Wall Display $NEW_VERSIONS discovered"
           fi
           git commit -m "${msg} [skip ci]"
-          # Rebase in case a parallel run pushed first (rare but possible at hourly cadence).
+          # Rebase in case a parallel run pushed first (rare but possible with manual runs).
           git pull --rebase "$repo_url" main
           git push "$repo_url" HEAD:main

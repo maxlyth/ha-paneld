@@ -1,6 +1,7 @@
 package io.github.maxlyth.hapaneld.http
 
 import io.github.maxlyth.hapaneld.backup.PanelBackup
+import io.github.maxlyth.hapaneld.security.SensitiveOperation
 import io.github.maxlyth.hapaneld.util.ByteLimitExceeded
 import io.github.maxlyth.hapaneld.util.BoundedStreams
 import io.github.maxlyth.hapaneld.util.InstallProgress
@@ -15,6 +16,7 @@ import io.ktor.http.contentType
 import io.ktor.server.routing.routing
 import io.ktor.server.routing.post
 import io.ktor.server.response.respondText
+import io.ktor.server.application.ApplicationCall
 import io.ktor.server.testing.testApplication
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -390,6 +392,58 @@ class ControlPlaneRoutesTest {
         assertEquals(0L, uploadStagingLimit(Long.MAX_VALUE, maxPayloadBytes = -1L))
     }
 
+    @Test fun apkCommitApprovalNamesTheInspectedPackageVersionAndSigner() = testApplication {
+        val pending = PendingUploadStore(newToken = { "inspected-token" }).apply { open() }
+        val lease = (pending.begin() as PendingUploadStore.BeginResult.Granted).lease
+        val identity = UploadedApkIdentity("com.example.panel", "2.4.1", "abcdef0123456789deadbeef")
+        pending.stage(lease, temporary.newFile("inspected.apk").apply { writeText("apk") }, identity)
+        var summary = ""
+        val upload = ApkUploadRouteDependencies(
+            enabled = { true },
+            rootAvailable = { true },
+            pending = pending,
+            createStagingFile = { error("unused") },
+            inspect = { error("unused") },
+            startInstall = { _, ticket -> InstallProgress.finish(ticket, "done") },
+        )
+        application {
+            routing {
+                controlPlaneRoutes(dependencies(apkUpload = upload, authorize = { _, _, _, value ->
+                    summary = value
+                    true
+                }))
+            }
+        }
+
+        assertCommit("inspected-token", HttpStatusCode.OK, """{"status":"started"}""")
+        assertTrue(summary.contains("com.example.panel"))
+        assertTrue(summary.contains("2.4.1"))
+        assertTrue(summary.contains("abcdef0123456789"))
+    }
+
+    @Test fun apkApprovalSummaryStripsDisplayControlsBoundsEveryFieldAndKeepsSignerAheadOfVersion() {
+        val summary = uploadedApkApprovalSummary(
+            UploadedApkIdentity(
+                pkg = "p".repeat(32) + "\u202E\n" + "p".repeat(64),
+                signerSha256 = "a".repeat(32) + "\u2066\u0000" + "a".repeat(64),
+                version = "v".repeat(10) + "\u202D\u2029" + "v".repeat(64),
+            ),
+        )
+
+        val boundedPackage = "p".repeat(64)
+        val boundedSigner = "a".repeat(64)
+        val boundedVersion = "v".repeat(20)
+        assertEquals(
+            "Install $boundedPackage (signer $boundedSigner) version $boundedVersion",
+            summary,
+        )
+        assertTrue(summary.indexOf(boundedPackage) < summary.indexOf(boundedSigner))
+        assertTrue(summary.indexOf(boundedSigner) < summary.indexOf(boundedVersion))
+        assertTrue("summary must fit the approval broker's 180-character cap", summary.length <= 180)
+        assertFalse(summary.any { Character.getType(it) == Character.CONTROL.toInt() })
+        assertFalse(summary.any { Character.getType(it) == Character.FORMAT.toInt() })
+    }
+
     private fun dependencies(
         playAudio: (String) -> Boolean = { true },
         installComponent: (String, String, String) -> Boolean = { _, _, _ -> true },
@@ -398,6 +452,7 @@ class ControlPlaneRoutesTest {
             PanelBackup.Artifact(temporary.newFile("unused-backup.hpb"))
         },
         apkUpload: ApkUploadRouteDependencies = unusedApkUpload(),
+        authorize: suspend (ApplicationCall, SensitiveOperation, String, String) -> Boolean = { _, _, _, _ -> true },
     ) = ControlPlaneRouteDependencies(
         playAudio = playAudio,
         installComponent = installComponent,
@@ -405,6 +460,7 @@ class ControlPlaneRoutesTest {
         buildBackup = buildBackup,
         backupFileStem = { "test-panel" },
         apkUpload = apkUpload,
+        authorize = authorize,
     )
 
     private fun unusedApkUpload() = ApkUploadRouteDependencies(

@@ -10,17 +10,22 @@ import io.github.maxlyth.hapaneld.device.ProvisioningIntent
 import io.github.maxlyth.hapaneld.device.ScreenOff
 import io.github.maxlyth.hapaneld.device.SuForm
 import io.github.maxlyth.hapaneld.hardware.LedTransfer
-import java.security.MessageDigest
 
 /** DeviceProfile adapter for a validated declarative document. */
 class DataDeviceProfile internal constructor(
     val document: ProfileDocument,
     private val productVersion: String,
-    override val revision: String = canonicalRevision(document),
+    override val revision: String,
+    private val trustedBundledContent: Boolean,
 ) : DeviceProfile {
     override val id = document.id
     override val displayName = document.displayName
     override val socClass = document.socClass
+    override val soc = document.soc
+    override val profileLinks = buildList {
+        document.metadata.source?.let { add(ProfileLink("Panel details", it)) }
+        addAll(document.metadata.links)
+    }.distinctBy { it.url }
     override val suForm = when (document.platform.suForm) {
         "toolbox" -> SuForm.TOOLBOX
         "android" -> SuForm.ANDROID
@@ -45,14 +50,12 @@ class DataDeviceProfile internal constructor(
         else -> ScreenOff.BRIGHTNESS_ZERO
     }
     override val hasButtonBacklight = document.hardware.hasButtonBacklight
+    override val touchClickGain = document.hardware.touchClickGain ?: 0.2f
     override val zigbeeGatewayDir = document.hardware.zigbeeGatewayDir
     override val relayBase = document.hardware.relayBase
     override val relayBaseFallbacks = document.hardware.relayBaseFallbacks
     override val buttonLedGpioBase = document.hardware.buttonLedGpioBase
     override val proximityTech = document.sensors.proximityTechnology
-    override val proximityNearBelow = document.sensors.proximityNearBelow
-    override val proximityNearRaw = document.sensors.proximityNearRaw
-    override val proximityFarRaw = document.sensors.proximityFarRaw
     override val proximityGpio = document.sensors.proximityGpio
     override val lightTech = document.sensors.lightTechnology
     override val hasCht8305 = document.sensors.cht8305
@@ -84,7 +87,13 @@ class DataDeviceProfile internal constructor(
                     ProfilePackageDesiredState.DISABLED -> PackageDesiredState.DISABLED
                 },
                 importance = when (it.importance) {
-                    ProfileProvisioningImportance.RECOMMENDED -> ProvisioningImportance.RECOMMENDED
+                    // Imported authors may recommend packages in the preview, but that declaration must
+                    // not feed the privileged "Tame all recommended" action.
+                    ProfileProvisioningImportance.RECOMMENDED -> if (trustedBundledContent) {
+                        ProvisioningImportance.RECOMMENDED
+                    } else {
+                        ProvisioningImportance.OPTIONAL
+                    }
                     ProfileProvisioningImportance.OPTIONAL -> ProvisioningImportance.OPTIONAL
                 },
                 tags = it.tags,
@@ -93,15 +102,6 @@ class DataDeviceProfile internal constructor(
         },
         recipeIds = document.provisioning.recipes.mapTo(linkedSetOf()) { it.id },
     )
-
-    override fun proximityGradedForFirmware(productVersion: String): Boolean? =
-        if (document.sensors.proximityGradedStrategy == "nspanel-firmware-cutover") {
-            val fw = nspanelFirmwareVersion(productVersion) ?: return null
-            val threshold = if ("120" in productVersion.substringBefore('_')) "3.5.0" else "3.0.0"
-            versionLessThan(fw, threshold)
-        } else {
-            null
-        }
 
     override fun panelModelLabel(productVersion: String): String =
         if (document.identity.modelLabelStrategy == "nspanel-product-version") {
@@ -125,23 +125,8 @@ class DataDeviceProfile internal constructor(
         else -> ""
     }.ifBlank { null }
 
-    private fun versionLessThan(a: String, b: String): Boolean {
-        val left = a.split('.')
-        val right = b.split('.')
-        for (index in 0 until maxOf(left.size, right.size)) {
-            val x = left.getOrNull(index)?.takeWhile { it.isDigit() }?.toIntOrNull() ?: 0
-            val y = right.getOrNull(index)?.takeWhile { it.isDigit() }?.toIntOrNull() ?: 0
-            if (x != y) return x < y
-        }
-        return false
-    }
-
     private companion object {
         const val S6_VERSION_PREFIX = "s6_android_"
-
-        fun canonicalRevision(document: ProfileDocument): String = MessageDigest.getInstance("SHA-256")
-            .digest(ProfileYaml.serialize(document).toByteArray(Charsets.UTF_8))
-            .joinToString("") { "%02x".format(it) }
     }
 }
 

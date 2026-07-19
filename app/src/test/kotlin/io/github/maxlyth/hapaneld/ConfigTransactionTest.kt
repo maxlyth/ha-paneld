@@ -2,11 +2,12 @@ package io.github.maxlyth.hapaneld
 
 import android.content.SharedPreferences
 import io.github.maxlyth.hapaneld.config.SettingsRegistry
+import io.github.maxlyth.hapaneld.control.fakeProfile
 import io.github.maxlyth.hapaneld.device.DeviceProfile
-import io.github.maxlyth.hapaneld.device.Generic
 import io.github.maxlyth.hapaneld.util.HaLink
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.lang.reflect.Proxy
@@ -14,6 +15,23 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 class ConfigTransactionTest {
+    @Test fun hardenedSecurityAndOwnedNetworkAdbAreDurablyMutuallyExclusive() {
+        val prefs = fakePreferences()
+        val config = Config(prefs.instance)
+
+        assertTrue(config.setNetworkAdbEnabled(true))
+        assertFalse(config.setSecurityMode(Config.SecurityMode.HARDENED))
+        assertEquals(Config.SecurityMode.RELAXED, config.securityMode)
+
+        assertTrue(config.setNetworkAdbEnabled(false))
+        assertTrue(config.setSecurityMode(Config.SecurityMode.HARDENED))
+        assertFalse(config.setNetworkAdbEnabled(true))
+        assertFalse(config.networkAdbEnabled)
+
+        assertTrue(config.setSecurityMode(Config.SecurityMode.RELAXED))
+        assertTrue(config.setNetworkAdbEnabled(true))
+    }
+
     @Test fun roomTemperatureOffsetRejectsNonFiniteFormValues() {
         val prefs = fakePreferences(initial = mapOf("room_temp_offset" to 1.5f))
         val config = Config(prefs.instance)
@@ -24,29 +42,29 @@ class ConfigTransactionTest {
         assertEquals(1.5f, prefs.values["room_temp_offset"])
     }
 
-    @Test fun proximityCalibrationIsScopedToTheActiveProfileRevision() {
+    @Test fun adaptiveLearnerConsumesCurrentProfileCaptureOnceAndRetiresAllOldCalibration() {
         val prefs = fakePreferences()
-        val calibration = fakePreferences()
+        val calibration = fakePreferences(initial = mapOf(
+            "profile_calibration.first-panel.revision-a.prox_near_raw" to 2f,
+            "profile_calibration.first-panel.revision-a.prox_far_raw" to 10f,
+            "profile_calibration.first-panel.revision-a.prox_threshold" to 6f,
+            "profile_calibration.first-panel.revision-a.prox_near_below" to true,
+            "profile_calibration.first-panel.revision-a.prox_sensitivity" to "LOW",
+            "profile_calibration.other.revision.prox_near_raw" to 20f,
+            "profile_calibration.other.revision.prox_far_raw" to 40f,
+            "proximity_profile_calibration_migrated" to true,
+            "unrelated" to 7,
+        ))
         val config = Config(prefs.instance, calibration.instance)
         config.attachProfile(profile("first-panel"))
-        config.captureProximity("near", 2f)
-        config.captureProximity("far", 10f)
-        config.setProximitySensitivity("LOW")
 
-        config.attachProfile(profile("first-panel", "revision-b"))
-        assertFalse(config.proximityCalibrated)
-        assertEquals(Config.ProxSensitivity.MEDIUM, config.proximitySensitivity)
-        config.captureProximity("near", 20f)
-        config.captureProximity("far", 40f)
-
-        config.attachProfile(profile("first-panel", "revision-a"))
-        assertEquals(2f, config.proximityNearRaw, 0f)
-        assertEquals(10f, config.proximityFarRaw, 0f)
-        assertEquals(6f, config.proximityThreshold, 0f)
-        assertEquals(Config.ProxSensitivity.LOW, config.proximitySensitivity)
+        assertEquals(ProximityLearningSeed(2f, 10f), config.consumeLegacyProximityLearningSeed())
+        assertEquals(null, config.consumeLegacyProximityLearningSeed())
+        assertEquals(7, calibration.values["unrelated"])
+        assertFalse(calibration.values.keys.any(::isLegacyProximityKey))
     }
 
-    @Test fun legacyProximityCalibrationBindsOnlyToTheInitiallyAttachedProfile() {
+    @Test fun adaptiveLearnerCanConsumeUnscopedCaptureAndPurgesIncompleteStateFromBothStores() {
         val prefs = fakePreferences(initial = mapOf(
             "prox_near_raw" to 3f,
             "prox_far_raw" to 9f,
@@ -54,22 +72,35 @@ class ConfigTransactionTest {
             "prox_near_below" to true,
             "prox_sensitivity" to "HIGH",
         ))
-        val calibration = fakePreferences()
+        val calibration = fakePreferences(initial = mapOf(
+            "profile_calibration.legacy-panel.revision-a.prox_near_raw" to Float.NaN,
+            "profile_calibration.legacy-panel.revision-a.prox_threshold" to 12f,
+        ))
         val config = Config(prefs.instance, calibration.instance)
 
         config.attachProfile(profile("legacy-panel"))
-        assertEquals(3f, config.proximityNearRaw, 0f)
-        assertEquals(9f, config.proximityFarRaw, 0f)
-        assertEquals(Config.ProxSensitivity.HIGH, config.proximitySensitivity)
-
-        config.attachProfile(profile("community.other-panel"))
-        assertFalse(config.proximityCalibrated)
-        assertEquals(Config.ProxSensitivity.MEDIUM, config.proximitySensitivity)
-        assertTrue(calibration.values.containsKey("profile_calibration.legacy-panel.revision-a.prox_threshold"))
-        assertFalse(calibration.values.containsKey("profile_calibration.community.other-panel.revision-a.prox_threshold"))
-        assertFalse("physical calibration must not be copied into backup-eligible config prefs",
-            prefs.values.keys.any { it.startsWith("profile_calibration.") })
+        assertEquals(ProximityLearningSeed(3f, 9f), config.consumeLegacyProximityLearningSeed())
+        assertFalse(prefs.values.keys.any(::isLegacyProximityKey))
+        assertFalse(calibration.values.keys.any(::isLegacyProximityKey))
     }
+
+    @Test fun adaptiveLearnerFindsCaptureFromTheProfilesPreviousRevision() {
+        val prefs = fakePreferences()
+        val calibration = fakePreferences(initial = mapOf(
+            "profile_calibration.panel.previous-revision.prox_near_raw" to 4f,
+            "profile_calibration.panel.previous-revision.prox_far_raw" to 14f,
+        ))
+        val config = Config(prefs.instance, calibration.instance)
+        config.attachProfile(profile("panel", "new-revision"))
+
+        assertEquals(ProximityLearningSeed(4f, 14f), config.consumeLegacyProximityLearningSeed())
+        assertFalse(calibration.values.keys.any(::isLegacyProximityKey))
+    }
+
+    private fun isLegacyProximityKey(key: String): Boolean =
+        key == "proximity_profile_calibration_migrated" || listOf(
+            "prox_near_raw", "prox_far_raw", "prox_threshold", "prox_near_below", "prox_sensitivity",
+        ).any { key == it || key.endsWith(".$it") }
 
     @Test fun buttonBacklightReplayIsScopedToARevisionThatDeclaresTheCapability() {
         val prefs = fakePreferences(initial = mapOf("last_button_backlight" to 41))
@@ -229,6 +260,18 @@ class ConfigTransactionTest {
         assertEquals("prerelease", config.companionUpdateChannel)
     }
 
+    @Test fun everyWakeOnWaveWriteInvalidatesAlreadyAdmittedGestureWork() {
+        val config = Config(fakePreferences().instance)
+        val initial = config.wakeOnWaveGeneration
+
+        config.setWakeOnWave(false)
+        val disabled = config.wakeOnWaveGeneration
+        config.setWakeOnWave(true)
+
+        assertTrue(disabled > initial)
+        assertTrue(config.wakeOnWaveGeneration > disabled)
+    }
+
     @Test fun failedBatchCommitDoesNotPartiallyPublishStagedSetters() {
         val prefs = fakePreferences(commitSucceeds = false)
         val config = Config(prefs.instance)
@@ -255,6 +298,21 @@ class ConfigTransactionTest {
         assertTrue(editor.commit())
         assertEquals(expiry, config.haTokenExpiry)
         assertEquals(expiry.toString(), config.getRaw(spec))
+    }
+
+    @Test fun registryStagesVendorPackageSelectionsInTheExistingConfigOwner() {
+        val prefs = fakePreferences()
+        val config = Config(prefs.instance)
+        val spec = SettingsRegistry.spec("tame_vendor_packages")!!
+        val normalized = "com.vendor.one com.vendor.two"
+        val editor = config.editor()
+
+        config.stage(editor, spec, normalized)
+
+        assertTrue(editor.commit())
+        assertEquals(normalized, config.getRaw(spec))
+        assertEquals(normalized, config.tameVendorPackagesRaw)
+        assertEquals(listOf("com.vendor.one", "com.vendor.two"), config.tameVendorPackages)
     }
 
     @Test fun legacyCredentialRestoreClearsUnrelatedTargetExpiry() {
@@ -1023,6 +1081,41 @@ class ConfigTransactionTest {
         assertEquals(mapOf("light.old" to "pinned"), config.dashboardEntityOverrides)
     }
 
+    @Test fun failedStoreResetCanRestoreTheExactOwnerScopedEvidencePreferences() {
+        val target = dashboardEntityTargetKey("url-key", "/lovelace/kiosk")
+        val prefs = fakePreferences(
+            initial = mapOf(
+                "ha_url" to "http://ha.local:8123",
+                "home_dashboard" to "/lovelace/kiosk",
+                "dashboard_entity_instance" to "url-key",
+                "dashboard_entity_instance_origin" to "http://ha.local:8123",
+                "dashboard_entity_dashboard_path" to "/lovelace/kiosk",
+                "dashboard_entity_filter_instance" to target,
+                "dashboard_entity_applied_instance" to target,
+                "dashboard_entity_override_instance" to target,
+                "dashboard_entity_learning" to true,
+                "dashboard_entity_learning_applied" to true,
+                "dashboard_entity_filter_enabled" to true,
+                "dashboard_entity_filter_ids" to "sensor.b\nlight.a",
+                "dashboard_entity_overrides" to "+sensor.b\n-light.a",
+            ),
+        )
+        val config = Config(prefs.instance)
+        val original = config.dashboardEntityBackupState()
+
+        assertTrue(config.commitDashboardEntityEvidenceReset(clearFilter = true))
+        assertTrue(config.restoreDashboardEntityEvidencePreferences(original))
+
+        assertEquals(original, config.dashboardEntityBackupState())
+        assertTrue(config.dashboardEntityLearningApplied)
+        assertTrue(config.dashboardEntityFilterEnabled)
+        assertEquals(listOf("light.a", "sensor.b"), config.dashboardEntityFilterIds)
+        assertEquals(
+            mapOf("light.a" to "forced_exclude", "sensor.b" to "pinned"),
+            config.dashboardEntityOverrides,
+        )
+    }
+
     @Test fun disabledCleanSlateResetClearsEvidencePreferencesWithoutEnablingLearning() {
         val prefs = fakePreferences(
             initial = mapOf(
@@ -1206,6 +1299,17 @@ class ConfigTransactionTest {
         assertEquals(125, prefs.values["dashboard_zoom"])
     }
 
+    @Test fun rawWakeOnWaveCommitInvalidatesAlreadyAdmittedGestureWork() {
+        val config = Config(fakePreferences().instance)
+        val wakeOnWave = requireNotNull(SettingsRegistry.spec("wake_on_wave"))
+        val initial = config.wakeOnWaveGeneration
+
+        assertTrue(config.commitRaw(wakeOnWave, "false"))
+
+        assertFalse(config.wakeOnWave)
+        assertTrue(config.wakeOnWaveGeneration > initial)
+    }
+
     @Test fun rawHomeDashboardCommitPreservesItsOwnerScopedPathDependency() {
         val prefs = fakePreferences(
             mutableMapOf(
@@ -1222,6 +1326,110 @@ class ConfigTransactionTest {
         assertEquals("/lovelace/new", prefs.values["dashboard_entity_dashboard_path"])
     }
 
+    @Test fun mqttFamilyPreferenceIsOneBrokerScopedAtomicTuple() {
+        val prefs = fakePreferences()
+        val config = Config(prefs.instance)
+
+        assertNull(config.mqttFamilyPreference("tcp://broker-a:1883"))
+        assertTrue(config.rememberMqttFamilyPreference("tcp://broker-a:1883", preferIpv4 = true))
+        assertEquals(true, config.mqttFamilyPreference("tcp://broker-a:1883"))
+        assertNull(config.mqttFamilyPreference("tcp://broker-b:1883"))
+
+        assertTrue(config.rememberMqttFamilyPreference("tcp://broker-b:1883", preferIpv4 = false))
+        assertEquals(false, config.mqttFamilyPreference("tcp://broker-b:1883"))
+        assertNull(config.mqttFamilyPreference("tcp://broker-a:1883"))
+        assertEquals("tcp://broker-b:1883", prefs.values["device_local_mqtt_family_broker"])
+        assertEquals(false, prefs.values["device_local_mqtt_family_ipv4"])
+
+        assertTrue(config.forgetMqttFamilyPreference())
+        assertNull(config.mqttFamilyPreference("tcp://broker-b:1883"))
+        assertFalse("device_local_mqtt_family_broker" in prefs.values)
+        assertFalse("device_local_mqtt_family_ipv4" in prefs.values)
+    }
+
+    @Test fun mqttFamilyPreferenceDoesNotClaimFailedCommit() {
+        val prefs = fakePreferences(
+            initial = mapOf(
+                "device_local_mqtt_family_broker" to "tcp://broker-old:1883",
+                "device_local_mqtt_family_ipv4" to true,
+            ),
+            commitSucceeds = false,
+        )
+        val config = Config(prefs.instance)
+
+        assertFalse(config.rememberMqttFamilyPreference("tcp://broker-a:1883", preferIpv4 = true))
+        assertNull(config.mqttFamilyPreference("tcp://broker-a:1883"))
+        assertFalse(config.forgetMqttFamilyPreference())
+        assertEquals("tcp://broker-old:1883", prefs.values["device_local_mqtt_family_broker"])
+    }
+
+    @Test fun mqttAnnouncementBoundaryIsOneDurableConfigurationScopedToken() {
+        val prefs = fakePreferences()
+        val firstProcess = Config(prefs.instance)
+
+        assertTrue(firstProcess.mqttAnnouncementBoundaryAvailable("identity-a"))
+        assertTrue(firstProcess.consumeMqttAnnouncementBoundary("identity-a"))
+        assertFalse(firstProcess.mqttAnnouncementBoundaryAvailable("identity-a"))
+        assertFalse(firstProcess.consumeMqttAnnouncementBoundary("identity-a"))
+
+        // Recreating Config models the process boundary: CONNACK/heartbeat have no API that clears it.
+        val replacementProcess = Config(prefs.instance)
+        assertFalse(replacementProcess.mqttAnnouncementBoundaryAvailable("identity-a"))
+
+        // Relevant MQTT identity change opens a new one-shot; exact readiness clears that identity only.
+        assertTrue(replacementProcess.mqttAnnouncementBoundaryAvailable("identity-b"))
+        assertTrue(replacementProcess.consumeMqttAnnouncementBoundary("identity-b"))
+        assertTrue(replacementProcess.clearMqttAnnouncementBoundary("identity-b"))
+        assertTrue(replacementProcess.mqttAnnouncementBoundaryAvailable("identity-b"))
+    }
+
+    @Test fun mqttAnnouncementBoundaryFailsClosedWhenDurabilityCannotBeProved() {
+        val prefs = fakePreferences(commitSucceeds = false)
+        val config = Config(prefs.instance)
+
+        assertFalse(config.consumeMqttAnnouncementBoundary("identity-a"))
+        assertTrue(config.mqttAnnouncementBoundaryAvailable("identity-a"))
+    }
+
+    @Test fun mqttAnnouncementBoundaryRemainsConsumedWhenReadinessClearIsNotDurable() {
+        val prefs = fakePreferences(
+            initial = mapOf("device_local_mqtt_announcement_boundary_consumed" to "identity-a"),
+            commitSucceeds = false,
+        )
+        val config = Config(prefs.instance)
+
+        assertFalse(config.clearMqttAnnouncementBoundary("identity-a"))
+        assertFalse(config.mqttAnnouncementBoundaryAvailable("identity-a"))
+    }
+
+    @Test fun mqttLateReadinessCannotRearmACommittedPendingProcessBoundary() {
+        val prefs = fakePreferences()
+        val runningProcess = Config(prefs.instance)
+        val identity = "identity-a"
+
+        assertTrue(runningProcess.consumeMqttAnnouncementBoundary(identity))
+        assertEquals(
+            MqttAnnouncementReadinessBudgetResult.PRESERVED_PENDING_BOUNDARY,
+            reconcileMqttAnnouncementReadinessBudget(consumedHere = true) {
+                runningProcess.clearMqttAnnouncementBoundary(identity)
+            },
+        )
+
+        // The scheduled restart may be delayed after readiness. Its replacement must still inherit an
+        // exhausted token, so another announcement wedge cannot cross another process boundary.
+        val delayedRestart = Config(prefs.instance)
+        assertFalse(delayedRestart.mqttAnnouncementBoundaryAvailable(identity))
+
+        // Only exact readiness in a genuinely recreated process may clear the inherited spent token.
+        assertEquals(
+            MqttAnnouncementReadinessBudgetResult.REARMED,
+            reconcileMqttAnnouncementReadinessBudget(consumedHere = false) {
+                delayedRestart.clearMqttAnnouncementBoundary(identity)
+            },
+        )
+        assertTrue(delayedRestart.mqttAnnouncementBoundaryAvailable(identity))
+    }
+
     private data class FakePreferences(
         val instance: SharedPreferences,
         val values: MutableMap<String, Any?>,
@@ -1231,12 +1439,12 @@ class ConfigTransactionTest {
         id: String,
         revision: String = "revision-a",
         hasButtonBacklight: Boolean = false,
-    ): DeviceProfile = object : DeviceProfile by Generic {
-        override val id = id
-        override val revision = revision
-        override val displayName = id
-        override val hasButtonBacklight = hasButtonBacklight
-    }
+    ): DeviceProfile = fakeProfile(
+        id = id,
+        revision = revision,
+        displayName = id,
+        hasButtonBacklight = hasButtonBacklight,
+    )
 
     private fun fakePreferences(
         initial: Map<String, Any?> = emptyMap(),

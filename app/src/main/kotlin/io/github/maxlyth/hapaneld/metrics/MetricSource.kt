@@ -3,6 +3,7 @@ package io.github.maxlyth.hapaneld.metrics
 import io.github.maxlyth.hapaneld.control.Su
 import io.github.maxlyth.hapaneld.platform.Daemon
 import io.github.maxlyth.hapaneld.platform.RootShell
+import io.github.maxlyth.hapaneld.shizuku.ShizukuBridge
 import io.github.maxlyth.hapaneld.util.HelperClient
 import io.github.maxlyth.hapaneld.util.localIpv4
 import java.io.File
@@ -37,11 +38,11 @@ interface MetricSource {
     fun selinuxEnforce(): String?
 
     // Control read-backs routed through the reader (direct→su fallback; no daemon read verb exists).
-    fun cpuGovernor(): String?
-    fun cpuAvailableGovernors(): String?
+    fun cpuGovernor(allowRootFallback: Boolean = true): String?
+    fun cpuAvailableGovernors(allowRootFallback: Boolean = true): String?
 
-    /** Raw `CHT8305` daemon reply ("T=<centi> H=<centi>") for panels with the room temp/humidity chip, or
-     *  null. Daemon-only: the driver's input nodes are root-owned, so there is no direct/su path. */
+    /** Raw room-climate reply (`T=<centi> H=<centi>`) from an authenticated helper or the fixed Shizuku
+     *  shell-UID input reader. Null when neither authority can read an exact supported layout. */
     fun roomClimate(): String?
 }
 
@@ -55,6 +56,7 @@ interface MetricSource {
 class OsMetricSource(
     private val daemon: Daemon = HelperClient,
     private val root: RootShell = Su,
+    private val shellRoomClimate: () -> String? = ShizukuBridge::roomClimate,
 ) : MetricSource {
 
     override fun perfDump(): String? = daemon.sendBytes("PERFDUMP")?.toString(Charsets.UTF_8)
@@ -95,19 +97,24 @@ class OsMetricSource(
 
     /** cpu0 scaling governor (raw). Off-tick read (heartbeat sync + UI), world-readable cpufreq sysfs, so
      *  direct wins on every panel; su only if a panel guards the node. No daemon read verb exists. */
-    override fun cpuGovernor(): String? = directThenSu(GOV0)
+    override fun cpuGovernor(allowRootFallback: Boolean): String? = directThenSu(GOV0, allowRootFallback)
 
     /** cpu0 available governors (raw, space-separated). Same direct→su read path as [cpuGovernor]. */
-    override fun cpuAvailableGovernors(): String? = directThenSu(AVAIL)
+    override fun cpuAvailableGovernors(allowRootFallback: Boolean): String? = directThenSu(AVAIL, allowRootFallback)
 
-    /** CHT8305 room temp/humidity — the driver's `/dev/input` nodes are root-owned (system:system), so
-     *  this is daemon-only; a panel without the chip / daemon returns null (the daemon replies "ERR"). */
-    override fun roomClimate(): String? = daemon.send("CHT8305")?.takeIf { it.startsWith("T=") }
+    /** Exact room-climate inputs: established helper first, then locally approved shell-UID Shizuku. */
+    override fun roomClimate(): String? =
+        daemon.send("CHT8305")?.takeIf { MetricParse.parseCht8305(it) != null }
+            ?: shellRoomClimate()?.takeIf { MetricParse.parseCht8305(it) != null }
 
     /** Direct file read, falling back to `su cat` when the app can't read the node directly. */
-    private fun directThenSu(path: String): String? =
+    private fun directThenSu(path: String, allowRootFallback: Boolean = true): String? =
         read(path)?.trim()?.takeIf { it.isNotEmpty() }
-            ?: root.runOutput("cat $path 2>/dev/null")?.trim()?.takeIf { it.isNotEmpty() }
+            ?: if (allowRootFallback) {
+                root.runOutput("cat $path 2>/dev/null")?.trim()?.takeIf { it.isNotEmpty() }
+            } else {
+                null
+            }
 
     private fun cpuDirs(): Array<File>? =
         File("/sys/devices/system/cpu").listFiles { f -> f.name.matches(Regex("cpu[0-9]+")) }

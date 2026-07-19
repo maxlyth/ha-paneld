@@ -4,6 +4,10 @@ import com.hivemq.client.mqtt.MqttClient
 import com.hivemq.client.mqtt.datatypes.MqttQos
 import com.hivemq.client.mqtt.mqtt5.Mqtt5AsyncClient
 import io.moquette.broker.Server
+import io.github.maxlyth.hapaneld.MqttConnectAnnouncement
+import io.github.maxlyth.hapaneld.MqttConnectAnnouncementDispatcher
+import io.github.maxlyth.hapaneld.MqttConnectionEvent
+import io.github.maxlyth.hapaneld.MqttConnectionEventDispatcher
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.io.OutputStream
@@ -16,6 +20,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -23,6 +28,71 @@ import kotlin.test.assertTrue
 import org.junit.Test
 
 class HiveMqTransportBrokerTest {
+    @Test(timeout = 20_000)
+    fun connectedAnnouncementBackpressureCannotBlockPubAckProcessing() {
+        EmbeddedBroker().use { broker ->
+            val transport = HiveMqTransport()
+            val announcementEntered = CountDownLatch(1)
+            val callbackReturned = CountDownLatch(1)
+            val allSubmitted = CountDownLatch(1)
+            val allAcknowledged = CountDownLatch(1)
+            val releaseAnnouncement = CountDownLatch(1)
+            val acknowledged = AtomicInteger(0)
+            val publications = 256
+            val prefix = "ha-paneld-test/${UUID.randomUUID()}/announcement"
+            val announcement = MqttConnectAnnouncementDispatcher { connected ->
+                announcementEntered.countDown()
+                repeat(publications) { index ->
+                    transport.publish(
+                        "$prefix/$index",
+                        byteArrayOf(index.toByte()),
+                        retain = false,
+                        onComplete = { success ->
+                            if (success && acknowledged.incrementAndGet() == publications) {
+                                allAcknowledged.countDown()
+                            }
+                        },
+                        expectedConnection = connected.connection,
+                    )
+                }
+                allSubmitted.countDown()
+                releaseAnnouncement.await(10, TimeUnit.SECONDS)
+            }
+            lateinit var connectionEvents: MqttConnectionEventDispatcher
+            connectionEvents = MqttConnectionEventDispatcher { sequenced ->
+                if (!connectionEvents.isCurrent(sequenced)) return@MqttConnectionEventDispatcher
+                val connected = sequenced.event as? MqttConnectionEvent.Connected
+                    ?: return@MqttConnectionEventDispatcher
+                announcement.submit(MqttConnectAnnouncement(sequenced.sequence, connected.connection))
+            }
+            val callbacks = object : MqttCallbacks {
+                override fun onConnected(connection: MqttConnectionLease) {
+                    connectionEvents.submit(MqttConnectionEvent.Connected(connection))
+                    callbackReturned.countDown()
+                }
+
+                override fun onDisconnected(
+                    connection: MqttConnectionLease?,
+                    causeMessage: String?,
+                ): Boolean = true
+            }
+
+            try {
+                transport.connect(broker.config("announcement-${UUID.randomUUID()}"), callbacks)
+                callbackReturned.awaitOrFail("connected callback did not return after bounded announcement admission")
+                announcementEntered.awaitOrFail("connect announcement worker did not start")
+                allSubmitted.awaitOrFail("publish-flow demand did not recover while announcement submitted")
+                allAcknowledged.awaitOrFail("PUBACK callbacks were blocked by connect announcement work")
+                assertEquals(publications, acknowledged.get())
+            } finally {
+                releaseAnnouncement.countDown()
+                connectionEvents.closeAndJoin(2_000)
+                announcement.closeAndJoin(2_000)
+                transport.disconnectDetached()
+            }
+        }
+    }
+
     @Test
     fun qosAckRetainedStateAndCommandFlagsComposeAgainstBroker() {
         EmbeddedBroker().use { broker ->
@@ -47,7 +117,6 @@ class HiveMqTransportBrokerTest {
                     completion.countDown()
                 }
                 completion.awaitOrFail("publish completion did not run")
-                callbacks.publishAck.awaitOrFail("QoS-1 acknowledgement did not reach the transport callback")
                 val liveState = observedState.awaitMessage("observer did not receive state publication")
                 assertContentEquals("online".toByteArray(), liveState.payload)
                 assertFalse(liveState.retained)
@@ -104,7 +173,7 @@ class HiveMqTransportBrokerTest {
                 callbacks.connected.awaitOrFail("transport did not connect")
 
                 val startedAt = System.nanoTime()
-                transport.publishThenDisconnect(
+                val finalCompletion = transport.publishThenDisconnect(
                     listOf(
                         MqttFinalPublish(availabilityTopic, "offline".toByteArray(), retain = true),
                         MqttFinalPublish(tombstoneTopic, byteArrayOf(), retain = true),
@@ -117,6 +186,7 @@ class HiveMqTransportBrokerTest {
                 awaitCondition("transport remained connected after final publications") {
                     broker.server.listConnectedClients().none { it.clientID == transportClientId }
                 }
+                finalCompletion.get(6, TimeUnit.SECONDS)
 
                 broker.client("retained-reader").use { reader ->
                     reader.connect().await()
@@ -155,7 +225,7 @@ class HiveMqTransportBrokerTest {
 
                     val timeoutMs = 3_000L
                     val startedAt = System.nanoTime()
-                    transport.publishThenDisconnect(
+                    val finalCompletion = transport.publishThenDisconnect(
                         listOf(MqttFinalPublish(availabilityTopic, "offline".toByteArray(), retain = true)),
                         timeoutMs = timeoutMs,
                     )
@@ -171,9 +241,11 @@ class HiveMqTransportBrokerTest {
                         broker.server.listConnectedClients().any { it.clientID == transportClientId },
                         "transport disconnected before timeout while its PUBACK was suppressed",
                     )
+                    assertFalse(finalCompletion.isDone, "final MQTT completion resolved before ACK or timeout")
 
                     val timeoutDeadline = startedAt + TimeUnit.MILLISECONDS.toNanos(timeoutMs + 300)
                     while (System.nanoTime() < timeoutDeadline) Thread.sleep(20)
+                    finalCompletion.get(1, TimeUnit.SECONDS)
                     val rejected = CountDownLatch(1)
                     var accepted: Boolean? = null
                     transport.publish("$availabilityTopic/probe", byteArrayOf(1), retain = false) { success ->
@@ -201,37 +273,67 @@ class HiveMqTransportBrokerTest {
     }
 
     @Test
-    fun supersededClientCannotReportDisconnectOrAcknowledgeForReplacement() {
+    fun supersededClientCannotReportDisconnectOrOwnReplacementPublication() {
         EmbeddedBroker().use { oldBroker ->
             EmbeddedBroker().use { replacementBroker ->
                 val transport = HiveMqTransport()
                 val oldCallbacks = RecordingCallbacks()
                 val replacementCallbacks = RecordingCallbacks()
                 val observer = replacementBroker.client("observer")
-                val topic = "ha-paneld-test/${UUID.randomUUID()}/state"
+                val prefix = "ha-paneld-test/${UUID.randomUUID()}"
+                val staleTopic = "$prefix/stale"
+                val currentTopic = "$prefix/current"
                 try {
                     transport.connect(oldBroker.config("old-transport"), oldCallbacks)
                     oldCallbacks.connected.awaitOrFail("old transport did not connect")
+                    val oldLease = oldCallbacks.connection.get()
 
                     observer.connect().await()
-                    val observed = MessageLatch()
-                    observer.subscribe(topic, observed)
+                    val staleObserved = MessageLatch()
+                    val currentObserved = MessageLatch()
+                    observer.subscribe(staleTopic, staleObserved)
+                    observer.subscribe(currentTopic, currentObserved)
                     transport.connect(replacementBroker.config("replacement-transport"), replacementCallbacks)
                     replacementCallbacks.connected.awaitOrFail("replacement transport did not connect")
+                    val replacementLease = replacementCallbacks.connection.get()
 
                     oldBroker.stop()
                     Thread.sleep(350)
                     assertEquals(0, oldCallbacks.disconnected.get(), "superseded client leaked a disconnect callback")
 
+                    val staleCompletion = CountDownLatch(1)
+                    transport.publish(
+                        staleTopic,
+                        "stale".toByteArray(),
+                        retain = false,
+                        onComplete = { success ->
+                            assertFalse(success)
+                            staleCompletion.countDown()
+                        },
+                        expectedConnection = oldLease,
+                    )
+                    staleCompletion.awaitOrFail("stale publication was not rejected")
+                    assertFalse(
+                        staleObserved.await(350, TimeUnit.MILLISECONDS),
+                        "old connection work crossed into the replacement broker session",
+                    )
+
                     val completion = CountDownLatch(1)
-                    transport.publish(topic, "current".toByteArray(), retain = false) { success ->
+                    transport.publish(
+                        currentTopic,
+                        "current".toByteArray(),
+                        retain = false,
+                        onComplete = { success ->
                         assertTrue(success)
                         completion.countDown()
-                    }
+                        },
+                        expectedConnection = replacementLease,
+                    )
                     completion.awaitOrFail("replacement publication did not complete")
-                    replacementCallbacks.publishAck.awaitOrFail("replacement did not receive its acknowledgement")
-                    assertEquals(0, oldCallbacks.publishAcks.get(), "superseded callbacks received the replacement acknowledgement")
-                    assertContentEquals("current".toByteArray(), observed.awaitMessage("replacement broker did not receive publication").payload)
+                    assertContentEquals(
+                        "current".toByteArray(),
+                        currentObserved.awaitMessage("replacement broker did not receive publication").payload,
+                    )
                 } finally {
                     transport.disconnectDetached()
                     observer.close()
@@ -404,22 +506,20 @@ class HiveMqTransportBrokerTest {
 
     private class RecordingCallbacks : MqttCallbacks {
         val connected = CountDownLatch(1)
-        val publishAck = CountDownLatch(1)
         val disconnected = AtomicInteger(0)
-        val publishAcks = AtomicInteger(0)
+        val connection = AtomicReference<MqttConnectionLease>()
 
-        override fun onConnected() {
+        override fun onConnected(connection: MqttConnectionLease) {
+            this.connection.set(connection)
             connected.countDown()
         }
 
-        override fun onDisconnected(causeMessage: String?): Boolean {
+        override fun onDisconnected(
+            connection: MqttConnectionLease?,
+            causeMessage: String?,
+        ): Boolean {
             disconnected.incrementAndGet()
             return true
-        }
-
-        override fun onPublishAck() {
-            publishAcks.incrementAndGet()
-            publishAck.countDown()
         }
     }
 

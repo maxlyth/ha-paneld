@@ -2,6 +2,7 @@ package io.github.maxlyth.hapaneld.mqtt
 
 import io.github.maxlyth.hapaneld.MqttCommandDispatcher
 import io.github.maxlyth.hapaneld.metrics.FeatureCostOperation
+import io.github.maxlyth.hapaneld.util.MonotonicDeadline
 import java.util.Collections
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
@@ -38,7 +39,7 @@ class MqttCommandDispatcherTest {
 
         release.countDown()
         assertTrue(finished.await(5, TimeUnit.SECONDS))
-        dispatcher.closeAndDrain()
+        assertTrue(dispatcher.closeAndDrain(MonotonicDeadline(5_000)).drained)
         assertEquals(listOf("ON", "OFF"), states)
     }
 
@@ -65,7 +66,7 @@ class MqttCommandDispatcherTest {
 
         release.countDown()
         assertTrue(finished.await(5, TimeUnit.SECONDS))
-        dispatcher.closeAndDrain()
+        assertTrue(dispatcher.closeAndDrain(MonotonicDeadline(5_000)).drained)
         assertEquals(listOf("blocker", "volume", "screen-new"), observed)
     }
 
@@ -101,7 +102,7 @@ class MqttCommandDispatcherTest {
 
         release.countDown()
         assertTrue(finished.await(5, TimeUnit.SECONDS))
-        dispatcher.closeAndDrain()
+        assertTrue(dispatcher.closeAndDrain(MonotonicDeadline(5_000)).drained)
         assertEquals(listOf(0, 1, 2), actions)
     }
 
@@ -127,7 +128,7 @@ class MqttCommandDispatcherTest {
             assertEquals(listOf("mqtt", "http"), order)
             assertFalse(dispatcher.runLatest("failure") { error("controller failed") })
         } finally {
-            dispatcher.closeAndDrain()
+            assertTrue(dispatcher.closeAndDrain(MonotonicDeadline(5_000)).drained)
             caller.shutdownNow()
         }
     }
@@ -169,7 +170,7 @@ class MqttCommandDispatcherTest {
             assertEquals(MqttCommandDispatcher.Execution.SUCCEEDED, secondResult.execution)
             assertEquals(listOf("OFF"), applied)
         } finally {
-            dispatcher.closeAndDrain()
+            assertTrue(dispatcher.closeAndDrain(MonotonicDeadline(5_000)).drained)
             callers.shutdownNow()
         }
     }
@@ -196,7 +197,9 @@ class MqttCommandDispatcherTest {
         assertTrue(entered.await(5, TimeUnit.SECONDS))
         dispatcher.submitAction { observed += "pending" }
         val closer = Thread {
-            assertEquals(1, dispatcher.closeAndDrain())
+            val result = dispatcher.closeAndDrain(MonotonicDeadline(5_000))
+            assertEquals(1, result.cancelled)
+            assertTrue(result.drained)
             closeRestoredInterrupt.set(Thread.currentThread().isInterrupted)
             closeReturned.countDown()
         }.apply { start() }
@@ -216,6 +219,41 @@ class MqttCommandDispatcherTest {
         assertEquals(0, dispatcher.pendingCount())
     }
 
+    @Test fun expiredDrainKeepsAdmissionClosedUntilTheActiveCommandActuallyExits() {
+        val entered = CountDownLatch(1)
+        val interrupted = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val dispatcher = MqttCommandDispatcher(threadName = "mqtt-expired-drain-test")
+        dispatcher.submitAction {
+            entered.countDown()
+            while (release.count > 0L) {
+                try {
+                    release.await()
+                } catch (_: InterruptedException) {
+                    interrupted.countDown()
+                }
+            }
+        }
+        try {
+            assertTrue(entered.await(2, TimeUnit.SECONDS))
+            dispatcher.submitAction { error("cancelled command ran") }
+
+            val expired = dispatcher.closeAndDrain(MonotonicDeadline(0))
+
+            assertEquals(1, expired.cancelled)
+            assertFalse(expired.drained)
+            assertTrue(interrupted.await(2, TimeUnit.SECONDS))
+            assertEquals(MqttCommandDispatcher.Admission.CLOSED, dispatcher.submitAction {
+                error("late command ran")
+            })
+            release.countDown()
+            assertTrue(dispatcher.closeAndDrain(MonotonicDeadline(2_000)).drained)
+        } finally {
+            release.countDown()
+            dispatcher.closeAndDrain(MonotonicDeadline(2_000))
+        }
+    }
+
     @Test fun instrumentationKeyIsFixedAndPublicSafe() {
         assertEquals("mqtt.command_dispatch", FeatureCostOperation.MQTT_COMMAND_DISPATCH.id)
     }
@@ -226,7 +264,7 @@ class MqttCommandDispatcherTest {
         assertEquals(MqttCommandDispatcher.Admission.ACCEPTED, failed.admission)
         assertEquals(MqttCommandDispatcher.Execution.FAILED, failed.execution)
 
-        dispatcher.closeAndDrain()
+        assertTrue(dispatcher.closeAndDrain(MonotonicDeadline(5_000)).drained)
         val closed = dispatcher.runLatestResult("closed") {}
         assertEquals(MqttCommandDispatcher.Admission.CLOSED, closed.admission)
         assertEquals(MqttCommandDispatcher.Execution.NOT_ADMITTED, closed.execution)

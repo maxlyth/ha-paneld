@@ -1,9 +1,10 @@
 package io.github.maxlyth.hapaneld.control
 
 import io.github.maxlyth.hapaneld.platform.ShellPrivilege
+import io.github.maxlyth.hapaneld.shizuku.ShizukuBridge
+import io.github.maxlyth.hapaneld.shizuku.ShizukuState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -42,54 +43,158 @@ class DensityControllerTest {
         return Harness(DensityController(canSu = canSu, root = root, daemon = daemon), root, daemon)
     }
 
-    @Test fun suReadsBaseLogicalAndOverrideDensityWithoutCallingItPhysical() {
-        val h = controller(rootOutputs = mapOf("wm density" to "Physical density: 320\nOverride density: 240"))
-        assertEquals(320, h.density.base())
-        assertEquals(240, h.density.current())
-        assertTrue(h.density.available())
+    private fun privilege(
+        directSuReady: Boolean = false,
+        helperRootReady: Boolean = false,
+        shizukuReady: Boolean = false,
+    ) = PrivilegedRouteObservation(
+        directSuReady = directSuReady,
+        helperRootReady = helperRootReady,
+        shizuku = ShizukuBridge.Snapshot(
+            state = if (shizukuReady) ShizukuState.READY else ShizukuState.STOPPED,
+            ready = shizukuReady,
+        ),
+    )
+
+    @Test fun sizingObservationReadsDensityAndFontScaleExactlyOnce() {
+        val h = controller(
+            rootOutputs = mapOf(
+                "wm density" to "Physical density: 320\nOverride density: 240",
+                "font_scale" to "1.25",
+            ),
+        )
+
+        assertEquals(
+            DisplaySizingObservation(current = 240, base = 320, fontScale = 1.25f),
+            h.density.observeSizing(),
+        )
+        assertEquals(1, h.root.outputRan.count { it.startsWith("wm density") })
+        assertEquals(1, h.root.outputRan.count { it.contains("font_scale") })
+        assertEquals(2, h.root.outputRan.size)
         assertTrue(h.daemon.sent.isEmpty())
     }
 
-    @Test fun currentUsesOneSnapshotAndFallsBackToBaseLogicalDensity() {
-        val h = controller(rootOutputs = mapOf("wm density" to "Physical density: 320"))
-        assertEquals(320, h.density.current())
+    @Test fun sizingObservationUsesTwoHelperCommandsWhenHelperIsPreferred() {
+        val h = controller(
+            canSu = false,
+            daemonReplies = mapOf(
+                "DENSITY" to "PHYS=320 OVER=-",
+                "FONTSCALE" to "SCALE=null",
+            ),
+        )
+
+        assertEquals(
+            DisplaySizingObservation(current = 320, base = 320, fontScale = 1.0f),
+            h.density.observeSizing(),
+        )
+        assertEquals(listOf("DENSITY", "FONTSCALE"), h.daemon.sent)
+        assertTrue(h.root.outputRan.isEmpty())
+    }
+
+    @Test fun sizingObservationFallsBackIndependentlyForBothReads() {
+        val h = controller(
+            rootOutputs = mapOf(
+                "wm density" to "unexpected",
+                "font_scale" to "not-a-scale",
+            ),
+            daemonReplies = mapOf(
+                "DENSITY" to "PHYS=480 OVER=360",
+                "FONTSCALE" to "SCALE=0.85",
+            ),
+        )
+
+        assertEquals(
+            DisplaySizingObservation(current = 360, base = 480, fontScale = 0.85f),
+            h.density.observeSizing(),
+        )
         assertEquals(1, h.root.outputRan.count { it.startsWith("wm density") })
+        assertEquals(1, h.root.outputRan.count { it.contains("font_scale") })
+        assertEquals(listOf("DENSITY", "FONTSCALE"), h.daemon.sent)
     }
 
-    @Test fun suPreferredDensityReadFallsThroughMalformedOutput() {
+    @Test fun sizingObservationUsesOnlyRoutesCapturedReadyForThisRequest() {
         val h = controller(
-            rootOutputs = mapOf("wm density" to "unexpected"),
-            daemonReplies = mapOf("DENSITY" to "PHYS=320 OVER=240"),
+            canSu = true,
+            rootOutputs = mapOf(
+                "wm density" to "Physical density: 480\nOverride density: 360",
+                "font_scale" to "0.85",
+            ),
+            daemonReplies = mapOf(
+                "DENSITY" to "PHYS=320 OVER=240",
+                "FONTSCALE" to "SCALE=1.15",
+            ),
         )
-        assertEquals(240, h.density.current())
-        assertEquals(listOf("DENSITY"), h.daemon.sent)
+
+        assertEquals(
+            DisplaySizingObservation(current = 240, base = 320, fontScale = 1.15f),
+            h.density.observeSizing(privilege(helperRootReady = true)),
+        )
+        assertTrue(h.root.outputRan.isEmpty())
+        assertEquals(listOf("DENSITY", "FONTSCALE"), h.daemon.sent)
     }
 
-    @Test fun helperPreferredDensityReadFallsThroughMalformedReply() {
+    @Test fun sizingObservationWithNoCapturedRouteDoesNoPrivilegedWork() {
+        val h = controller(
+            rootOutputs = mapOf("wm density" to "Physical density: 320"),
+            daemonReplies = mapOf("DENSITY" to "PHYS=320 OVER=-"),
+        )
+
+        assertEquals(
+            DisplaySizingObservation(current = null, base = null, fontScale = 1.0f),
+            h.density.observeSizing(privilege()),
+        )
+        assertTrue(h.root.outputRan.isEmpty())
+        assertTrue(h.daemon.sent.isEmpty())
+    }
+
+    @Test fun helperPreferredSizingObservationFallsBackToSu() {
         val h = controller(
             canSu = false,
-            rootOutputs = mapOf("wm density" to "Physical density: 320\nOverride density: 240"),
-            daemonReplies = mapOf("DENSITY" to "ERR"),
+            rootOutputs = mapOf(
+                "wm density" to "Physical density: 480\nOverride density: 360",
+                "font_scale" to "0.85",
+            ),
+            daemonReplies = mapOf("DENSITY" to "ERR", "FONTSCALE" to "ERR"),
         )
-        assertEquals(240, h.density.current())
-        assertTrue(h.root.outputRan.any { it.startsWith("wm density") })
+
+        assertEquals(
+            DisplaySizingObservation(current = 360, base = 480, fontScale = 0.85f),
+            h.density.observeSizing(),
+        )
+        assertEquals(listOf("DENSITY", "FONTSCALE"), h.daemon.sent)
+        assertEquals(2, h.root.outputRan.size)
     }
 
-    @Test fun helperDensityNoOverrideIsAcceptedState() {
-        val h = controller(canSu = false, daemonReplies = mapOf("DENSITY" to "PHYS=320 OVER=-"))
-        assertEquals(320, h.density.current())
-        assertTrue("accepted helper state short-circuits su", h.root.outputRan.isEmpty())
-    }
-
-    @Test fun densityReadFailsWhenNeitherReplyParses() {
+    @Test fun sizingObservationKeepsDensityWhenFontScaleIsUnreadable() {
         val h = controller(
             canSu = false,
-            rootOutputs = mapOf("wm density" to "unexpected"),
-            daemonReplies = mapOf("DENSITY" to "PHYS=320 OVER=- trailing"),
+            rootOutputs = mapOf("font_scale" to "Infinity"),
+            daemonReplies = mapOf(
+                "DENSITY" to "PHYS=320 OVER=240",
+                "FONTSCALE" to "SCALE=oops",
+            ),
         )
-        assertNull(h.density.base())
-        assertEquals(listOf("DENSITY"), h.daemon.sent)
-        assertTrue(h.root.outputRan.any { it.startsWith("wm density") })
+
+        assertEquals(
+            DisplaySizingObservation(current = 240, base = 320, fontScale = 1.0f),
+            h.density.observeSizing(),
+        )
+    }
+
+    @Test fun sizingObservationKeepsFontScaleWhenDensityIsUnreadable() {
+        val h = controller(
+            canSu = false,
+            rootOutputs = mapOf("wm density" to "Physical density: 2147483648"),
+            daemonReplies = mapOf(
+                "DENSITY" to "PHYS=bad OVER=-",
+                "FONTSCALE" to "SCALE=1.15",
+            ),
+        )
+
+        assertEquals(
+            DisplaySizingObservation(current = null, base = null, fontScale = 1.15f),
+            h.density.observeSizing(),
+        )
     }
 
     @Test fun densitySetUsesPreferredSuAndEnforcesBounds() {
@@ -135,43 +240,6 @@ class DensityControllerTest {
         assertTrue(failed.root.ran.contains("wm density reset"))
     }
 
-    @Test fun fontScaleReadsThroughBothRoutes() {
-        val suFirst = controller(
-            rootOutputs = mapOf("font_scale" to "bad"),
-            daemonReplies = mapOf("FONTSCALE" to "SCALE=1.25"),
-        )
-        assertEquals(1.25f, suFirst.density.fontScale(), 0.001f)
-
-        val helperFirst = controller(
-            canSu = false,
-            rootOutputs = mapOf("font_scale" to "1.2"),
-            daemonReplies = mapOf("FONTSCALE" to "ERR"),
-        )
-        assertEquals(1.2f, helperFirst.density.fontScale(), 0.001f)
-        assertTrue(helperFirst.root.outputRan.any { it.contains("font_scale") })
-    }
-
-    @Test fun unsetFontScaleIsAcceptedDefaultNotFailure() {
-        val helper = controller(canSu = false, daemonReplies = mapOf("FONTSCALE" to "SCALE=null"))
-        assertEquals(1.0f, helper.density.fontScale(), 0.001f)
-        assertTrue(helper.root.outputRan.isEmpty())
-
-        val root = controller(rootOutputs = mapOf("font_scale" to "null"))
-        assertEquals(1.0f, root.density.fontScale(), 0.001f)
-        assertTrue(root.daemon.sent.isEmpty())
-    }
-
-    @Test fun fontScaleDefaultsOnlyAfterBothReadsFail() {
-        val h = controller(
-            canSu = false,
-            rootOutputs = mapOf("font_scale" to "NaN"),
-            daemonReplies = mapOf("FONTSCALE" to "SCALE=oops"),
-        )
-        assertEquals(1.0f, h.density.fontScale(), 0.001f)
-        assertEquals(listOf("FONTSCALE"), h.daemon.sent)
-        assertTrue(h.root.outputRan.any { it.contains("font_scale") })
-    }
-
     @Test fun fontScaleWriteFallsThroughAndRejectsNonFiniteValues() {
         val h = controller(
             canSu = false,
@@ -215,7 +283,7 @@ class DensityControllerTest {
         val daemon = FakeDaemon(replies = mapOf("DENSITY" to "ERR", "DENSITY 240" to "ERR"))
         val density = DensityController(canSu = true, root = root, daemon = daemon, shell = shell)
 
-        assertEquals(240, density.current())
+        assertEquals(240, density.observeSizing().current)
         assertTrue(density.set(240))
         assertEquals(listOf("density", "set-density:240"), shell.calls)
     }
@@ -226,10 +294,22 @@ class DensityControllerTest {
         val daemon = FakeDaemon(replies = mapOf("DENSITY" to "ERR", "DENSITY 240" to "ERR"))
         val density = DensityController(canSu = false, root = root, daemon = daemon, shell = shell)
 
-        assertEquals(240, density.current())
+        assertEquals(240, density.observeSizing().current)
         assertTrue(density.set(240))
-        assertTrue(root.outputRan.isEmpty())
+        assertTrue(root.outputRan.none { it.startsWith("wm density") })
         assertTrue(root.ran.isEmpty())
         assertEquals(listOf("density", "set-density:240"), shell.calls)
+    }
+
+    @Test fun capturedShizukuRouteSuppressesUnreadySuAndHelperReads() {
+        val shell = Shell()
+        val root = FakeRootShell(outputs = mapOf("wm density" to "Physical density: 480"))
+        val daemon = FakeDaemon(replies = mapOf("DENSITY" to "PHYS=320 OVER=-"))
+        val density = DensityController(canSu = true, root = root, daemon = daemon, shell = shell)
+
+        assertEquals(240, density.observeSizing(privilege(shizukuReady = true)).current)
+        assertTrue(root.outputRan.isEmpty())
+        assertTrue(daemon.sent.isEmpty())
+        assertEquals(listOf("density"), shell.calls)
     }
 }

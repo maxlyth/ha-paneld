@@ -52,8 +52,11 @@ internal object ProvisioningTextRenderer {
         "helper_observation_not_ready", "helper_probe_failed", "helper_probe_unsupported" ->
             "The helper state could not be determined."
         "shizuku_ready" -> "Shizuku is ready."
+        "shizuku_consent_disabled" ->
+            "On the panel, open Configure → toolbar overflow → Enhanced access, then choose Enable."
         "shizuku_permission_required" -> "Approve ha-paneld access in the Shizuku manager on this panel."
-        "shizuku_service_not_running" -> "Start Shizuku on this panel, then approve ha-paneld access."
+        "shizuku_service_not_running" ->
+            "Enhanced access is enabled; start the Shizuku service on this panel, then return to Enhanced access."
         "profile_recommended" -> "This profile recommends Shizuku; install and approve it locally if those capabilities are wanted."
         "profile_optional" -> "Shizuku is optional for this profile and requires local approval."
         "shizuku_observation_not_ready", "shizuku_probe_failed", "shizuku_probe_unsupported",

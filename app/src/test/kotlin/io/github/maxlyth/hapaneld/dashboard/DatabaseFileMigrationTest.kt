@@ -36,4 +36,15 @@ class DatabaseFileMigrationTest {
         assertEquals("legacy", legacy.readText())
         assertEquals("current", target.readText())
     }
+
+    @Test fun footprintCountsOnlyTheDatabaseAndKnownSqliteSidecars() {
+        val directory = temporary.newFolder()
+        val database = File(directory, EntityCatalogStore.DATABASE_NAME).apply { writeBytes(ByteArray(11)) }
+        File(database.path + "-wal").writeBytes(ByteArray(13))
+        File(database.path + "-shm").writeBytes(ByteArray(17))
+        File(database.path + "-journal").writeBytes(ByteArray(19))
+        File(database.path + "-backup").writeBytes(ByteArray(23))
+
+        assertEquals(60L, EntityCatalogStore.knownDatabaseFootprint(database))
+    }
 }

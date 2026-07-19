@@ -2,7 +2,7 @@ package io.github.maxlyth.hapaneld.http
 
 /** Pure projection for the Dashboard Controls card's navigation capability and explanatory text. */
 internal object ControlAvailability {
-    const val INPUT_REQUIREMENT = "Accessibility or Shizuku enhanced access"
+    const val INPUT_REQUIREMENT = "Accessibility or privileged input access"
 
     data class Navigation(
         val backEnabled: Boolean,

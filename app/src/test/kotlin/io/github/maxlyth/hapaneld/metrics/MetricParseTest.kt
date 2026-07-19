@@ -106,13 +106,22 @@ class MetricParseTest {
         assertEquals(50.0, r.humidityPct, 0.0001)
     }
 
-    @Test fun parseCht8305RejectsErrorMissingAndNonPositive() {
+    @Test fun parseCht8305RejectsErrorMissingAndInvalidValues() {
         assertNull(MetricParse.parseCht8305(null))
         assertNull(MetricParse.parseCht8305(""))
         assertNull(MetricParse.parseCht8305("ERR"))
         assertNull(MetricParse.parseCht8305("T=3006"))          // humidity missing
         assertNull(MetricParse.parseCht8305("H=3409"))          // temperature missing
-        assertNull(MetricParse.parseCht8305("T=0 H=3409"))      // non-positive sentinel
+        assertNull(MetricParse.parseCht8305("T=2300 H=0"))      // humidity sentinel
         assertNull(MetricParse.parseCht8305("T=xx H=3409"))     // unparseable
+    }
+
+    @Test fun parseCht8305AcceptsObservedSignedTemperatureRangeAndRejectsOutOfRangeValues() {
+        assertEquals(-40.0, MetricParse.parseCht8305("T=-4000 H=5895")!!.tempC, 0.0001)
+        assertEquals(0.0, MetricParse.parseCht8305("T=0 H=5895")!!.tempC, 0.0001)
+        assertEquals(125.0, MetricParse.parseCht8305("T=12500 H=10000")!!.tempC, 0.0001)
+        assertNull(MetricParse.parseCht8305("T=-4001 H=5895"))
+        assertNull(MetricParse.parseCht8305("T=12501 H=5895"))
+        assertNull(MetricParse.parseCht8305("T=2384 H=10001"))
     }
 }

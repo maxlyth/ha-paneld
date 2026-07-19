@@ -3,6 +3,9 @@ package io.github.maxlyth.hapaneld.shizuku
 import android.os.ParcelFileDescriptor
 import android.os.Process
 import java.io.ByteArrayOutputStream
+import java.io.File
+import java.io.InputStream
+import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 import kotlin.system.exitProcess
@@ -57,6 +60,13 @@ class ShizukuShellService : IShizukuShellService.Stub() {
     override fun resetFontScale(): Boolean =
         runEffect(SETTINGS, "delete", "system", "font_scale")
 
+    override fun readRoomClimate(): String? {
+        val inventory = readTextBounded(File(PROC_INPUT_DEVICES), MAX_INPUT_INVENTORY_BYTES) ?: return null
+        return RoomClimateShellReader.read(inventory) { node ->
+            runTextWithTimeout(ROOM_CLIMATE_TIMEOUT_MS, GETEVENT, "-lp", node)
+        }
+    }
+
     override fun installApk(
         source: ParcelFileDescriptor?,
         length: Long,
@@ -93,39 +103,23 @@ class ShizukuShellService : IShizukuShellService.Stub() {
     private fun runText(vararg args: String): String? =
         runProcess(args.toList())?.takeIf { it.first == 0 }?.second?.trim()
 
-    private fun runProcess(args: List<String>): Pair<Int, String>? {
+    private fun runTextWithTimeout(timeoutMs: Long, vararg args: String): String? =
+        runProcess(args.toList(), timeoutMs)?.takeIf { it.first == 0 }?.second?.trim()
+
+    private fun runProcess(args: List<String>, timeoutMs: Long = SHORT_TIMEOUT_MS): Pair<Int, String>? {
         val process = runCatching { ProcessBuilder(args).redirectErrorStream(true).start() }.getOrNull()
             ?: return null
-        return try {
-            val output = ByteArrayOutputStream()
-            val reader = thread(name = "hapaneld-shizuku-output", isDaemon = true) {
-                runCatching { copyBounded(process.inputStream, output, MAX_REPLY_BYTES.toLong()) }
-            }
-            if (!process.waitFor(SHORT_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
-                process.destroyForcibly()
-                reader.join(1_000)
-                null
-            } else {
-                reader.join(1_000)
-                process.exitValue() to output.toString(Charsets.UTF_8.name())
-            }
-        } catch (_: Exception) {
-            process.destroyForcibly()
-            null
-        }
+        return ShizukuCommandRunner(MAX_REPLY_BYTES.toLong()).run(
+            RuntimeShizukuCommandProcess(process),
+            timeoutMs,
+        )
     }
 
-    private fun copyBounded(input: java.io.InputStream, output: java.io.OutputStream, max: Long) {
-        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-        var copied = 0L
-        while (true) {
-            val read = input.read(buffer)
-            if (read < 0) return
-            copied += read
-            if (copied > max) throw java.io.IOException("stream too large")
-            output.write(buffer, 0, read)
-        }
-    }
+    private fun readTextBounded(file: File, max: Long): String? = runCatching {
+        val output = ByteArrayOutputStream()
+        file.inputStream().use { copyBounded(it, output, max) }
+        output.toString(Charsets.UTF_8.name())
+    }.getOrNull()
 
     companion object {
         private const val SYSTEM_BIN = "/system/bin"
@@ -134,9 +128,112 @@ class ShizukuShellService : IShizukuShellService.Stub() {
         private const val WM = "$SYSTEM_BIN/wm"
         private const val SETTINGS = "$SYSTEM_BIN/settings"
         private const val PM = "$SYSTEM_BIN/pm"
+        private const val GETEVENT = "$SYSTEM_BIN/getevent"
+        private const val PROC_INPUT_DEVICES = "/proc/bus/input/devices"
         private const val SHORT_TIMEOUT_MS = 10_000L
+        private const val ROOM_CLIMATE_TIMEOUT_MS = 2_000L
         private const val MAX_REPLY_BYTES = 16 * 1024
+        private const val MAX_INPUT_INVENTORY_BYTES = 64 * 1024L
         private const val DESTROY_TRANSACTION = 16_777_115
+    }
+}
+
+private fun copyBounded(input: java.io.InputStream, output: java.io.OutputStream, max: Long) {
+    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+    var copied = 0L
+    while (true) {
+        val read = input.read(buffer)
+        if (read < 0) return
+        copied += read
+        if (copied > max) throw java.io.IOException("stream too large")
+        output.write(buffer, 0, read)
+    }
+}
+
+internal interface ShizukuCommandProcess {
+    val output: InputStream
+    fun waitFor(timeoutMs: Long): Boolean
+    fun exitValue(): Int
+    fun closeStreams()
+    fun destroyForcibly()
+}
+
+internal class ShizukuCommandRunner(
+    private val maxReplyBytes: Long,
+    private val readerJoinTimeoutMs: Long = 1_000L,
+    private val destroyWaitTimeoutMs: Long = 1_000L,
+) {
+    fun run(process: ShizukuCommandProcess, timeoutMs: Long): Pair<Int, String>? {
+        val output = BoundedProcessOutput(process.output, maxReplyBytes)
+        return try {
+            if (!process.waitFor(timeoutMs)) {
+                terminate(process, output)
+                null
+            } else {
+                when (val result = output.await(readerJoinTimeoutMs)) {
+                    is BoundedOutputResult.Complete -> process.exitValue() to result.text
+                    BoundedOutputResult.Failed, null -> {
+                        terminate(process, output)
+                        null
+                    }
+                }
+            }
+        } catch (_: Exception) {
+            terminate(process, output)
+            null
+        }
+    }
+
+    private fun terminate(process: ShizukuCommandProcess, output: BoundedProcessOutput) {
+        runCatching { process.closeStreams() }
+        runCatching { process.destroyForcibly() }
+        runCatching { process.waitFor(destroyWaitTimeoutMs) }
+        runCatching { output.await(readerJoinTimeoutMs) }
+    }
+}
+
+internal sealed interface BoundedOutputResult {
+    data class Complete(val text: String) : BoundedOutputResult
+    data object Failed : BoundedOutputResult
+}
+
+internal class BoundedProcessOutput(input: InputStream, maxBytes: Long) {
+    private val result = AtomicReference<BoundedOutputResult?>()
+    private val reader = thread(name = "hapaneld-shizuku-output", isDaemon = true) {
+        result.set(
+            runCatching {
+                input.use {
+                    val output = ByteArrayOutputStream()
+                    copyBounded(it, output, maxBytes)
+                    output.toString(Charsets.UTF_8.name())
+                }
+            }.fold(
+                onSuccess = BoundedOutputResult::Complete,
+                onFailure = { BoundedOutputResult.Failed },
+            ),
+        )
+    }
+
+    fun await(timeoutMs: Long): BoundedOutputResult? {
+        reader.join(timeoutMs)
+        return if (reader.isAlive) null else result.get() ?: BoundedOutputResult.Failed
+    }
+}
+
+private class RuntimeShizukuCommandProcess(
+    private val delegate: java.lang.Process,
+) : ShizukuCommandProcess {
+    override val output: InputStream = delegate.inputStream
+    override fun waitFor(timeoutMs: Long): Boolean =
+        delegate.waitFor(timeoutMs, TimeUnit.MILLISECONDS)
+    override fun exitValue(): Int = delegate.exitValue()
+    override fun closeStreams() {
+        runCatching { delegate.outputStream.close() }
+        runCatching { delegate.inputStream.close() }
+        runCatching { delegate.errorStream.close() }
+    }
+    override fun destroyForcibly() {
+        delegate.destroyForcibly()
     }
 }
 

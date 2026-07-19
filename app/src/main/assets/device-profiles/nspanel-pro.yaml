@@ -1,11 +1,20 @@
 schema: 2
 id: nspanel-pro
-version: 2.0.0
+version: 2.0.2
 display_name: Sonoff NSPanel Pro
 soc_class: PX30 / rk3326
+soc:
+  model: Rockchip RK3326
+  introduced_year: 2018
+  cpu_cores:
+    - architecture: Arm Cortex-A35
+      count: 4
 metadata:
   author: ha-paneld maintainers
   source: https://github.com/maxlyth/ha-paneld/blob/main/docs/hardware/nspanel-pro.md
+  links:
+    - label: SoC details
+      url: https://www.rock-chips.com/a/en/News/Press_Releases/2018/0413/898.html
   license: Apache-2.0
   maturity: verified
   tested_firmware:
@@ -14,7 +23,7 @@ metadata:
   limitations:
     - The NSPanel Pro Gen2 relay layout is not represented by this profile.
 requires:
-  min_core_version: 0.9.3
+  min_core_version: 0.9.5-rc1
   drivers:
     - access.toolbox-su
     - radio.siliconlabs-host
@@ -60,11 +69,11 @@ hardware:
     transfer: identity
   screen_off: su-blpower
   has_button_backlight: false
+  touch_click_gain: 0.45
   zigbee_gateway_dir: /vendor/bin/siliconlabs_host
 sensors:
-  # These are the Android sensor/firmware capabilities observed on the NSPanel family.
+  # These are the Android sensor capabilities observed on the NSPanel family.
   proximity_technology: Infrared
-  proximity_graded_strategy: nspanel-firmware-cutover
   light_technology: Ambient light
   cht8305: false
   room_temp_offset_c: 0.0
@@ -81,8 +90,6 @@ cpu:
     Auto: interactive
 display: {}
 provisioning:
-  access:
-    shizuku: optional
   software:
     webview:
       artifact: lineageos-138-arm
@@ -99,7 +106,9 @@ provisioning:
         - vendor
         - overlay
         - boot
-      note: eWeLink/Sonoff control-panel app. After some Sonoff firmware updates it starts on boot and draws a floating widget over the dashboard.
+      note: >-
+        eWeLink/Sonoff control-panel app. After some Sonoff firmware updates it starts on boot and draws a
+        floating widget over the dashboard.
     - package: com.android.rk
       desired_state: disabled
       importance: recommended
@@ -121,7 +130,9 @@ provisioning:
         - vendor
         - test
         - clutter
-      note: 'Factory hardware stress-test ("burn-in") tool (app label "Stresstest for 8.1"). Used on the production line to soak the panel; not needed in normal operation.'
+      note: >-
+        Factory hardware stress-test ("burn-in") tool (app label "Stresstest for 8.1"). Used on the
+        production line to soak the panel; not needed in normal operation.
     - package: com.smatek.test
       desired_state: disabled
       importance: recommended
@@ -129,7 +140,9 @@ provisioning:
         - vendor
         - test
         - clutter
-      note: 'CoolKit (eWeLink/Sonoff) factory test tool (label "测试工具" = "Test Tool"), bundled in /oem so it survives a factory reset. Diagnostic only — not used in normal operation.'
+      note: >-
+        CoolKit (eWeLink/Sonoff) factory test tool (label "测试工具" = "Test Tool"), bundled in /oem so it
+        survives a factory reset. Diagnostic only — not used in normal operation.
     - package: com.rockchip.devicetest
       desired_state: disabled
       importance: recommended
@@ -145,6 +158,8 @@ provisioning:
         - vendor
         - test
         - clutter
-      note: 'Factory device-test app (privileged system, label "DeviceTest(android8.0)") left in the firmware image. Diagnostic only — not used in normal operation.'
+      note: >-
+        Factory device-test app (privileged system, label "DeviceTest(android8.0)") left in the firmware
+        image. Diagnostic only — not used in normal operation.
   recipes:
     - id: nspanel-pro.watchdog-e2big-repair

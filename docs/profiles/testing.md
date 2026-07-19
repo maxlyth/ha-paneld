@@ -34,9 +34,7 @@ For relays and mains-connected hardware, use an attended, electrically safe test
 
 ### Stage 5: authority-dependent behavior
 
-Only after the standard path is healthy should you test Shizuku, vendor `su` or the root helper. Verify the live authority state separately from the profile declaration.
-
-A Shizuku recommendation should show setup guidance while remaining unavailable until the user enables Enhanced access and approves ha-paneld locally. Revoking or stopping Shizuku must make operations fail closed without changing profile state.
+Only after the standard path is healthy should you test a declared privileged route. Verify live authority separately from the profile declaration. If the profile uses the exceptional shell fallback, follow its [advanced setup guide](../shizuku.md) and confirm that revoking it fails closed without changing profile state.
 
 A root/helper-backed driver must remain bounded to its compiled operation and validated parameters. Test missing helper, denied `su`, inaccessible node and malformed readback as normal failure cases.
 
@@ -54,7 +52,7 @@ Useful evidence for each tested capability includes:
 - profile ID, version, revision and content hash;
 - ha-paneld version;
 - Android version and ABI;
-- authority route actually available: standard, locally approved Shizuku, helper or vendor `su`;
+- authority route actually available: standard Android, helper, vendor `su`, or the explicitly declared alternate;
 - passive diagnostic facts supporting the driver choice;
 - observed physical result and recovery result;
 - firmware versions tested and important versions not tested;
@@ -78,11 +76,7 @@ Compare the draft fingerprint with the rule exactly, including vendor punctuatio
 
 ### The profile validates but a capability is unavailable
 
-Validation confirms the declaration and parameters, not the physical hardware. Check the live probe result and authority state. The node may be absent on this firmware, SELinux may deny the app, the helper may not be installed, Shizuku may be stopped/unapproved, or the retail model may omit hardware present on a related SKU.
-
-### Shizuku is recommended but still unavailable
-
-The profile cannot approve it. Follow [Shizuku enhanced access](../shizuku.md), enable Enhanced access locally and approve ha-paneld in the Manager. An ADB-started Shizuku service may need rearming after reboot.
+Validation confirms the declaration and parameters, not the physical hardware. Check the live probe result and authority state. The node may be absent on this firmware, SELinux may deny the app, a declared privileged route may be unavailable, or the retail model may omit hardware present on a related SKU.
 
 ### Activation returns pending and the page disconnects
 

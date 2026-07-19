@@ -37,4 +37,27 @@ class SingleFlightExecutorTest {
             executor.close(500)
         }
     }
+
+    @Test fun closeReportsWhenAnInterruptIgnoringActionDoesNotTerminate() {
+        val executor = SingleFlightExecutor("single-flight-close-test")
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        assertTrue(executor.execute {
+            entered.countDown()
+            while (release.count > 0L) {
+                try {
+                    release.await()
+                } catch (_: InterruptedException) {
+                    // Deliberately model a hardware call that does not respond to cancellation.
+                }
+            }
+        })
+        assertTrue(entered.await(2, TimeUnit.SECONDS))
+
+        try {
+            assertFalse(executor.closeAndJoin(10L))
+        } finally {
+            release.countDown()
+        }
+    }
 }

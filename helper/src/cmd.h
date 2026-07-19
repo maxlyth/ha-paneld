@@ -7,9 +7,8 @@
 #ifndef HAPANELD_CMD_H
 #define HAPANELD_CMD_H
 
-// Per-connection state threaded through a command. `subscribed` is set by the SUBSCRIBE handler so
-// the server's idle-timeout exempts a connection that has joined the async event stream (those are
-// meant to sit idle, only reading).
+// Per-connection state threaded through a command. `subscribed` is set by an async-stream subscription
+// handler so the server's idle-timeout exempts a connection meant to sit idle, only reading.
 typedef struct {
     int fd;
     int subscribed;

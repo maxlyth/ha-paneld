@@ -24,9 +24,14 @@ internal class SingleFlightExecutor(threadName: String) : AutoCloseable {
         false
     }
 
-    fun close(timeoutMs: Long) {
+    fun closeAndJoin(timeoutMs: Long): Boolean {
         executor.shutdownNow()
-        runCatching { executor.awaitTermination(timeoutMs, TimeUnit.MILLISECONDS) }
+        return runCatching { executor.awaitTermination(timeoutMs, TimeUnit.MILLISECONDS) }
+            .getOrDefault(false)
+    }
+
+    fun close(timeoutMs: Long) {
+        closeAndJoin(timeoutMs)
     }
 
     override fun close() = close(0L)

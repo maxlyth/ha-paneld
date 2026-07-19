@@ -67,10 +67,10 @@ class AssetSyntaxTest {
         assumeTrue("node not available (skipping)", nodeAvailable())
         val script = """
             const fs=require('fs'),vm=require('vm');
-            const attrs={notes:'https://github.com/example/project/releases/tag/v1',apk:'https://github.com/example/project/releases/download/v1/app.apk',installable:'1'};
+            const attrs={notes:'https://github.com/example/project/releases/tag/v1',apk:'https://github.com/example/project/releases/download/v1/app.apk',installable:'1',action:'Downgrade'};
             const option={getAttribute(k){return attrs[k.replace('data-','')]||''}};
             function link(){return {href:'stale',style:{},removeAttribute(k){if(k==='href')this.href=''}}}
-            const notes=link(),download=link(),button={disabled:false,getAttribute(){return '1'}};
+            const notes=link(),download=link(),button={disabled:false,textContent:'',getAttribute(){return '1'}};
             const row={querySelector(s){if(s==='.cvsel')return {selectedOptions:[option]};if(s==='.cnotes')return notes;if(s==='.cinstall')return button;if(s==='.cdl')return download;return null}};
             global.window=global;
             global.document={querySelector(){return row},querySelectorAll(){return []},getElementById(){return null},createElement(){return {}}};
@@ -78,7 +78,7 @@ class AssetSyntaxTest {
             vm.runInThisContext(fs.readFileSync(process.argv[1],'utf8'));
             function check(good){
               global.verChanged('paneld');
-              if(good){if(!notes.href.startsWith('https://github.com/')||notes.style.visibility!=='visible')process.exit(2);if(!download.href.startsWith('https://github.com/')||download.style.display!=='')process.exit(3)}
+              if(good){if(!notes.href.startsWith('https://github.com/')||notes.style.visibility!=='visible')process.exit(2);if(!download.href.startsWith('https://github.com/')||download.style.display!=='')process.exit(3);if(button.textContent!=='Downgrade')process.exit(6)}
               else{if(notes.href||notes.style.visibility!=='hidden')process.exit(4);if(download.href||download.style.display!=='none')process.exit(5)}
             }
             check(true);
@@ -103,17 +103,17 @@ class AssetSyntaxTest {
               get selectedOptions(){return this.selectedIndex>=0?[this.children[this.selectedIndex]]:[]}};
             const chan={value:'stable'},current={textContent:'1.0.0'};
             const link={href:'',style:{},removeAttribute(k){if(k==='href')this.href=''}};
-            const button={disabled:true,getAttribute(){return '1'}};
+            const button={disabled:true,textContent:'',getAttribute(){return '1'}};
             const row={querySelector(s){if(s==='.cchan')return chan;if(s==='.cvsel')return vsel;if(s==='.cver')return current;if(s==='.cnotes')return link;if(s==='.cinstall')return button;if(s==='.cdl')return null;return null}};
             const versions=fallback?
-              [{tag:'v3',version:'3.0.0',installable:false},{tag:'v2',version:'2.0.0',installable:false},{tag:'v1',version:'1.0.0',installable:false}]:
-              [{tag:'v3',version:'3.0.0',installable:false},{tag:'v2',version:'2.0.0',installable:true},{tag:'v1',version:'1.0.0',installable:true}];
+              [{tag:'v3',version:'3.0.0',installable:false,action:'Upgrade'},{tag:'v2',version:'2.0.0',installable:false,action:'Upgrade'},{tag:'v1',version:'1.0.0',installable:false,action:'Install'}]:
+              [{tag:'v3',version:'3.0.0',installable:false,action:'Upgrade'},{tag:'v2',version:'2.0.0',installable:true,action:'Upgrade'},{tag:'v1',version:'1.0.0',installable:true,action:'Install'}];
             global.window=global;
             global.document={querySelector(){return row},querySelectorAll(){return []},getElementById(){return null},createElement(){return option()}};
             global.fetch=()=>Promise.resolve({json:()=>Promise.resolve({versions})});
             vm.runInThisContext(fs.readFileSync(process.argv[1],'utf8'));
             global.loadVersions('paneld');
-            setImmediate(()=>setImmediate(()=>{const expected=fallback?2:1;if(vsel.selectedIndex!==expected)process.exit(2)}));
+            setImmediate(()=>setImmediate(()=>{const expected=fallback?2:1;if(vsel.selectedIndex!==expected)process.exit(2);if(button.textContent!==(fallback?'Install':'Upgrade'))process.exit(3)}));
         """.trimIndent()
         for (mode in listOf("recommended", "fallback")) {
             val (code, out) = run(listOf("node", "-e", script, File(dir, "install.js").absolutePath, mode))
@@ -190,7 +190,7 @@ class AssetSyntaxTest {
             const fs=require('fs'),vm=require('vm');
             const ignoredMode=process.argv[2]==='ignored';
             function el(){return {dataset:{},className:'',textContent:'',innerHTML:'',checked:false,disabled:false,value:'',classList:{toggle(){},remove(){}},addEventListener(){},querySelector(){return el()},querySelectorAll(){return []},appendChild(v){this.child=v}}}
-            const ids={};['entity-status','entity-search','entity-sync','entity-activate','entity-action-result','entity-auto-static','entity-auto-runtime','entity-issues','entity-issues-summary','entity-issues-list','entity-issues-rescan','entity-dynamic','entity-dynamic-list'].forEach(k=>ids[k]=el());
+            const ids={};['entity-status','entity-search','entity-sync','entity-activate','entity-reset','entity-action-result','entity-auto-static','entity-auto-runtime','entity-issues','entity-issues-summary','entity-issues-list','entity-issues-rescan','entity-dynamic','entity-dynamic-list'].forEach(k=>ids[k]=el());
             const issue='<img src=x onerror=alert(1)>';
             global.document={hidden:false,getElementById:k=>ids[k],querySelectorAll:()=>[],querySelector:()=>null,createElement:()=>el()};
             global.setInterval=()=>0;global.confirm=()=>false;global.alert=()=>{};
@@ -223,12 +223,13 @@ class AssetSyntaxTest {
             function element(tag){
               const e={tag:tag||'',style:{},dataset:{},handlers:{},children:[],className:'',textContent:'',innerHTML:'',value:'',disabled:false,
                 classList:{toggle(){},add(){},remove(){}},
-                setAttribute(k,v){this[k]=v},addEventListener(k,v){this.handlers[k]=v},appendChild(v){this.children.push(v);return v},
+                setAttribute(k,v){this[k]=v},getAttribute(k){return this[k]??null},addEventListener(k,v){this.handlers[k]=v},appendChild(v){this.children.push(v);return v},
                 scrollIntoView(){}};
               made.push(e);return e;
             }
-            const ids={};['cfg-groups','cfg-status','cfg-msg','savebtn','tab-basic','tab-adv'].forEach(k=>ids[k]=element(k));
+            const ids={};['cfg-groups','cfg-status','cfg-msg','savebtn','savebar','tab-basic','tab-adv'].forEach(k=>ids[k]=element(k));
             global.document={
+              body:element('body'),
               getElementById:k=>ids[k]||(ids[k]=element(k)),createElement:tag=>element(tag),
               querySelector:sel=>sel==='.nav a[href^="/entities"]'&&initiallyEnabled?element('a'):null
             };
@@ -250,6 +251,10 @@ class AssetSyntaxTest {
               const toggle=made.find(e=>e.role==='switch');
               if(!toggle||!toggle.handlers.click)process.exit(2);
               toggle.handlers.click();
+              if(ids.savebar.hidden||ids.savebtn.disabled)process.exit(7);
+              toggle.handlers.click();
+              if(!ids.savebar.hidden||!ids.savebtn.disabled)process.exit(8);
+              toggle.handlers.click();
               global.cfgSave();
               setImmediate(()=>setImmediate(()=>{
                 const expected=initiallyEnabled?'false':'true';
@@ -267,5 +272,154 @@ class AssetSyntaxTest {
             )
             assertEquals("Configure entity-tab ${if (initial) "disable" else "enable"} transition failed:\n$out", 0, code)
         }
+    }
+
+    @Test fun configureSavePreservesNewerEditsWhileReconcilingNavAndWatchBaseline() {
+        val dir = assetsDir
+        assumeTrue("assets dir not found (skipping)", dir != null)
+        assumeTrue("node not available (skipping)", nodeAvailable())
+        val script = """
+            const fs=require('fs'),vm=require('vm');
+            let postResolve,posted='',reloads=0,navEnabled=false,navNode;
+            const made=[];
+            function element(tag){
+              const e={tag:tag||'',style:{},dataset:{},handlers:{},children:[],className:'',textContent:'',innerHTML:'',value:'',disabled:false,parentNode:null,
+                classList:{toggle(){},add(){},remove(){}},
+                setAttribute(k,v){this[k]=v},getAttribute(k){return this[k]},addEventListener(k,v){this.handlers[k]=v},
+                appendChild(v){v.parentNode=this;this.children.push(v);return v},
+                replaceChild(next,current){next.parentNode=this;this.children=this.children.map(v=>v===current?next:v);navNode=next;navEnabled=next.tag==='a'},
+                scrollIntoView(){}};
+              made.push(e);return e;
+            }
+            const nav=element('div');navNode=element('span');navNode.className='disabled-tab';nav.appendChild(navNode);
+            const ids={};['cfg-groups','cfg-status','cfg-msg','savebtn','savebar','tab-basic','tab-adv'].forEach(k=>ids[k]=element(k));
+            const body=element('body');
+            global.document={body,title:'Panel · Configure',getElementById:k=>ids[k]||(ids[k]=element(k)),createElement:tag=>element(tag),
+              querySelector(sel){if(sel==='.nav a[href^="/entities"]')return navEnabled?navNode:null;if(sel==='.nav span.disabled-tab')return navEnabled?null:navNode;return null}};
+            global.location={hash:'',reload(){reloads++}};global.window=global;
+            global.setTimeout=fn=>{setImmediate(fn);return 1};global.clearTimeout=()=>{};
+            const schema=[
+              {key:'dashboard_package',type:'STRING',group:'Dashboard',label:'Dashboard app',available:true,picker:'renderer',ha:false},
+              {key:'dashboard_entity_learning',type:'BOOL',group:'Dashboard',label:'Entity filtering',available:true,ha:false}
+            ];
+            global.fetch=(url,opts)=>{
+              if(opts&&opts.method==='POST'){posted=String(opts.body||'');return new Promise(resolve=>{postResolve=resolve})}
+              if(url==='/api/v1/config/schema')return Promise.resolve({json:()=>Promise.resolve(schema)});
+              if(url==='/api/v1/config')return Promise.resolve({json:()=>Promise.resolve({settings:{dashboard_package:'builtin',dashboard_entity_learning:false},ha_expose:{}})});
+              if(url==='/api/v1/apps')return Promise.resolve({json:()=>Promise.resolve({apps:[]})});
+              if(url==='/api/v1/radio')return Promise.resolve({json:()=>Promise.resolve({present:false})});
+              if(url==='/health')return Promise.resolve({text:()=>Promise.resolve('ok cfg=new-baseline')});
+              return Promise.reject(new Error('unexpected fetch '+url));
+            };
+            vm.runInThisContext(fs.readFileSync(process.argv[1],'utf8'));
+            setImmediate(()=>setImmediate(()=>{
+              const toggle=made.find(e=>e.role==='switch');if(!toggle)process.exit(2);
+              toggle.handlers.click();global.cfgSave();
+              // This edit is newer than the in-flight POST and returns the field to its old value.
+              toggle.handlers.click();
+              postResolve({ok:true,json:()=>Promise.resolve({})});
+              setImmediate(()=>setImmediate(()=>setImmediate(()=>{
+                if(new URLSearchParams(posted).get('dashboard_entity_learning')!=='true')process.exit(3);
+                if(reloads!==0||!navEnabled)process.exit(4);
+                if(body['data-cfg']!=='new-baseline')process.exit(5);
+                if(ids.savebtn.disabled||ids.savebar.hidden)process.exit(6);
+                if(!ids['cfg-msg'].textContent.includes('newer changes still need saving'))process.exit(7);
+              })));
+            }));
+        """.trimIndent()
+        val (code, out) = run(listOf("node", "-e", script, File(dir, "configure.js").absolutePath))
+        assertEquals("Configure in-flight edit reconciliation failed:\n$out", 0, code)
+    }
+
+    @Test fun installOwnedFormsConsumeStructuredOutcomesAndReturnToTheirCards() {
+        val dir = assetsDir
+        assumeTrue("assets dir not found (skipping)", dir != null)
+        assumeTrue("node not available (skipping)", nodeAvailable())
+        val script = """
+            const fs=require('fs'),vm=require('vm');
+            const mode=process.argv[2];let submitHandler;
+            function element(tag){return {tagName:(tag||'').toUpperCase(),style:{},dataset:{},textContent:'',disabled:false,children:[],
+              appendChild(v){this.children.push(v);return v},querySelector(){return null},setAttribute(){},removeAttribute(){},addEventListener(){}}}
+            const note=element('p'),submit=element('button');
+            const form=element('form');form.action='http://panel/api/v1/'+(mode==='failure'?'display/density':'tame');form.querySelector=sel=>sel==='.protected-form-result'?note:null;form.appendChild=v=>v;
+            global.window=global;global.location={href:'http://panel/install'};
+            global.document={title:'Panel',body:element('body'),getElementById(){return null},querySelector(){return null},querySelectorAll(){return []},
+              createElement:tag=>element(tag),addEventListener(k,v){if(k==='submit')submitHandler=v}};
+            global.FormData=class{*[Symbol.iterator](){yield ['density','240']}};
+            global.setTimeout=fn=>{setImmediate(fn);return 1};
+            global.fetch=(url,opts)=>{
+              if(url==='/api/v1/radio')return Promise.resolve({json:()=>Promise.resolve({present:false})});
+              if(mode==='failure')return Promise.resolve({status:500,ok:false,json:()=>Promise.resolve({ok:false,status:'apply-failed',message:'Display command was rejected.'})});
+              return Promise.resolve({status:200,ok:true,json:()=>Promise.resolve({ok:true,status:'started',message:'Taming started.'})});
+            };
+            vm.runInThisContext(fs.readFileSync(process.argv[1],'utf8'));
+            submitHandler({target:form,submitter:submit,preventDefault(){}});
+            setImmediate(()=>setImmediate(()=>{
+              if(mode==='failure'){
+                if(note.textContent!=='Display command was rejected.'||location.href!=='http://panel/install'||submit.disabled)process.exit(2);
+              }else if(location.href!=='/install#cfg-tame'||!note.textContent.includes('Taming started.'))process.exit(3);
+            }));
+        """.trimIndent()
+        for (mode in listOf("failure", "success")) {
+            val (code, out) = run(listOf("node", "-e", script, File(dir, "install.js").absolutePath, mode))
+            assertEquals("Install-owned form outcome failed ($mode):\n$out", 0, code)
+        }
+    }
+
+    @Test fun secretConfigExportHandlesApprovalInPageBeforeDownloading() {
+        val dir = assetsDir
+        assumeTrue("assets dir not found (skipping)", dir != null)
+        assumeTrue("node not available (skipping)", nodeAvailable())
+        val script = """
+            const fs=require('fs'),vm=require('vm');const mode=process.argv[2];let clicks=0;
+            function element(tag){return {style:{},dataset:{selfName:'test-panel'},textContent:'',disabled:false,children:[],
+              appendChild(v){this.children.push(v);return v},click(){clicks++},remove(){},setAttribute(){},removeAttribute(){}}}
+            const out=element('p'),button=element('button'),body=element('body');
+            global.window=global;global.document={title:'Panel · Install',body,getElementById:id=>id==='cfg-export-result'?out:(id==='pswitch'?element('select'):null),
+              querySelector(){return null},querySelectorAll(){return []},createElement:tag=>element(tag),addEventListener(){}};
+            global.URL={createObjectURL:()=> 'blob:test',revokeObjectURL(){}};
+            global.fetch=url=>{
+              if(url==='/api/v1/radio')return Promise.resolve({json:()=>Promise.resolve({present:false})});
+              if(mode==='approval')return Promise.resolve({status:202,ok:true,json:()=>Promise.resolve({error:'approval-required',message:'Approve exact export on the panel.'})});
+              return Promise.resolve({status:200,ok:true,blob:()=>Promise.resolve({size:10})});
+            };
+            vm.runInThisContext(fs.readFileSync(process.argv[1],'utf8'));
+            global.configExport(true,button);
+            setImmediate(()=>setImmediate(()=>{
+              if(mode==='approval'){
+                if(out.textContent!=='Approve exact export on the panel.'||clicks!==0||button.disabled)process.exit(2);
+              }else if(clicks!==1||button.disabled||!out.textContent.includes('stored credentials'))process.exit(3);
+            }));
+        """.trimIndent()
+        for (mode in listOf("approval", "success")) {
+            val (code, out) = run(listOf("node", "-e", script, File(dir, "install.js").absolutePath, mode))
+            assertEquals("Secret config export flow failed ($mode):\n$out", 0, code)
+        }
+    }
+
+    @Test fun wrongDeviceProfileCannotEnterActivationFlow() {
+        val dir = assetsDir
+        assumeTrue("assets dir not found (skipping)", dir != null)
+        assumeTrue("node not available (skipping)", nodeAvailable())
+        val script = """
+            const fs=require('fs'),vm=require('vm'),source=fs.readFileSync(process.argv[1],'utf8');
+            const summary={ref:{id:'wrong.device',revision:'a'.repeat(64)},matches_this_device:false,compatible:true,active:false,origin:'imported'};
+            const nodes={};let status='',posts=0;
+            global.model={profiles:[summary],selected:summary.ref,status:{selection:{mode:'pinned'}},sourceLoaded:true,editable:false,loading:false,preview:null,source:'',originalSource:''};
+            global.selectedSummary=()=>summary;global.reviewedSummary=()=>summary;global.byId=id=>nodes[id]||(nodes[id]={disabled:false,hidden:false,textContent:''});
+            global.isDirty=()=>false;global.renderBadges=()=>{};global.summaryForRef=()=>summary;global.setStatus=m=>{status=m};
+            global.string=v=>v==null?'':String(v);global.openModal=()=>{throw new Error('wrong-device activation opened confirmation')};
+            global.postJson=()=>{posts++;return Promise.resolve({})};
+            const updateStart=source.indexOf('function updateActions()'),updateEnd=source.indexOf('function loadCatalog(');
+            const activateStart=source.indexOf('function activate(ref, action)'),activateEnd=source.indexOf('function pollAfterRestart(');
+            if(updateStart<0||updateEnd<0||activateStart<0||activateEnd<0)process.exit(2);
+            vm.runInThisContext(source.slice(updateStart,updateEnd));vm.runInThisContext(source.slice(activateStart,activateEnd));
+            updateActions();
+            if(!nodes['profile-activate'].disabled)process.exit(3);
+            activate(summary.ref,'activate');
+            if(posts!==0||!status.includes('does not match this device'))process.exit(4);
+        """.trimIndent()
+        val (code, out) = run(listOf("node", "-e", script, File(dir, "profiles.js").absolutePath))
+        assertEquals("Wrong-device profile reached activation flow:\n$out", 0, code)
     }
 }

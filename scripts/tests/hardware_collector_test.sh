@@ -29,11 +29,9 @@ run_collector() {
   MOCK_MODEL="${MOCK_MODEL:-rk3566_t}" \
   MOCK_THS_EVENT="${MOCK_THS_EVENT:-7}" \
   MOCK_HUM_EVENT="${MOCK_HUM_EVENT:-8}" \
-  MOCK_LIGHT_EVENT="${MOCK_LIGHT_EVENT:-5}" \
   MOCK_AMBIGUOUS="${MOCK_AMBIGUOUS:-0}" \
   MOCK_INPUT_FAIL="${MOCK_INPUT_FAIL:-none}" \
   MOCK_FAIL_GETEVENT="${MOCK_FAIL_GETEVENT:-none}" \
-  MOCK_BACKLIGHT_DENIED="${MOCK_BACKLIGHT_DENIED:-0}" \
   MOCK_SAMPLE_STATUS="${MOCK_SAMPLE_STATUS:-ok}" \
   MOCK_SAMPLE_DENIED="${MOCK_SAMPLE_DENIED:-0}" \
   MOCK_LONG_CAPABILITY="${MOCK_LONG_CAPABILITY:-0}" \
@@ -64,21 +62,8 @@ safe_call_log() {
       "shell getprop ro.build.version.release"|\
       "shell getprop ro.build.version.sdk"|\
       "shell cat /proc/bus/input/devices"|\
-      "shell settings get system screen_brightness"|\
-      "shell cat /sys/class/leds/lcd-backlight/brightness"|\
-      "shell cat /sys/class/leds/lcd-backlight/actual_brightness"|\
-      "shell cat /sys/class/leds/lcd-backlight/max_brightness"|\
-      "shell cat /sys/class/leds/lcd-backlight/bl_power"|\
-      "shell cat /sys/class/leds/lcd-backlight/type"|\
       "shell test -e /proc/bus/input/devices"|\
-      "shell test -r /proc/bus/input/devices"|\
-      "shell test -e /sys/class/leds/lcd-backlight/brightness"|\
-      "shell test -e /sys/class/leds/lcd-backlight/actual_brightness"|\
-      "shell test -e /sys/class/leds/lcd-backlight/max_brightness"|\
-      "shell test -e /sys/class/leds/lcd-backlight/bl_power"|\
-      "shell test -e /sys/class/leds/lcd-backlight/type"|\
-      "shell test -r /sys/class/leds/lcd-backlight/brightness"|\
-      "shell test -w /sys/class/leds/lcd-backlight/brightness") ;;
+      "shell test -r /proc/bus/input/devices") ;;
       *) printf 'unexpected adb call: %s\n' "$cmd" >&2; return 1 ;;
     esac
   done < "$MOCK_CALL_LOG"
@@ -98,21 +83,11 @@ check "passive ZX uses only the exact read-only command allowlist" safe_call_log
 MOCK_THS_EVENT=17 MOCK_HUM_EVENT=18 run_collector
 check "event renumbering is resolved on each run" grep -q 'node=/dev/input/event17' "$TMP/output"
 
-MOCK_DEVICE=cronos MOCK_LIGHT_EVENT=6 run_collector --observe light
-check "Echo backlight evidence is read from the LED class" grep -q 'max_brightness=255' "$TMP/output"
-check "Echo live light sample is bounded" grep -q 'sample_limit=32' "$TMP/output"
-check "only the exact ALS input is sampled" grep -q 'getevent -lt -c 32 /dev/input/event6' "$MOCK_CALL_LOG"
-check "live light uses only the exact read-only command allowlist" safe_call_log
-
-MOCK_DEVICE=cronos run_collector --observe near
-check "near observations are structurally identified" grep -q 'observation=near' "$TMP/output"
-check "live near uses only the exact read-only command allowlist" safe_call_log
-
 MOCK_DEVICE=rk3566_t MOCK_SAMPLE_STATUS=timeout run_collector --observe climate
 check "partial live samples retain timeout status" grep -q 'sample_status=timeout' "$TMP/output"
 check "timed-out climate capture remains read-only allowlisted" safe_call_log
 
-MOCK_DEVICE=cronos MOCK_SAMPLE_DENIED=1 run_collector --observe light
+MOCK_DEVICE=rk3566_t MOCK_SAMPLE_DENIED=1 run_collector --observe climate
 check "live input permission denial is explicit" grep -q 'sample_status=denied' "$TMP/output"
 check "denied live capture remains read-only allowlisted" safe_call_log
 
@@ -122,9 +97,6 @@ check "ambiguous inputs are not sampled" sh -c "! grep -q 'getevent -lt' '$MOCK_
 
 MOCK_DEVICE=rk3566_t MOCK_INPUT_FAIL=denied run_collector
 check "input inventory denial is not mislabeled as missing sensors" grep -q 'inventory_status=denied' "$TMP/output"
-
-MOCK_DEVICE=cronos MOCK_BACKLIGHT_DENIED=1 run_collector
-check "backlight permission denial is explicit" grep -q 'brightness_status=denied' "$TMP/output"
 
 MOCK_DEVICE=rk3566_t MOCK_FAIL_GETEVENT=transport run_collector --serial private:5555
 check "mid-run disconnect is explicit" grep -q 'capability_status=transport-unavailable' "$TMP/output"
@@ -140,19 +112,19 @@ check "unsupported targets use only identity and transport reads" safe_call_log
 
 MOCK_IDENTITY_FAIL=device run_collector --serial private:5555
 check "identity transport failure is explicit" grep -q 'device_status=transport-unavailable' "$TMP/output"
-check "identity failure prevents every hardware probe" sh -c "! grep -Eq 'input/devices|getevent|lcd-backlight' '$MOCK_CALL_LOG'"
+check "identity failure prevents every hardware probe" sh -c "! grep -Eq 'input/devices|getevent' '$MOCK_CALL_LOG'"
 
-MOCK_DEVICE=cronos MOCK_MODEL='Echo\033[31m private:5555' run_collector --serial private:5555
+MOCK_DEVICE=rk3566_t MOCK_MODEL='Panel\033[31m private:5555' run_collector --serial private:5555
 check "terminal control bytes are removed from shared output" sh -c "! grep -q \"$(printf '\\033')\" '$TMP/output'"
 check "the adb serial is not included in shared output" sh -c "! grep -q 'private:5555' '$TMP/output'"
-check "ANSI sequences are removed before property redaction" grep -q 'model=Echo \[redacted-adb-serial\]' "$TMP/output"
+check "ANSI sequences are removed before property redaction" grep -q 'model=Panel \[redacted-adb-serial\]' "$TMP/output"
 
-MOCK_DEVICE=cronos MOCK_MODEL=adb MOCK_SERIAL=adb run_collector --serial adb
+MOCK_DEVICE=rk3566_t MOCK_MODEL=adb MOCK_SERIAL=adb run_collector --serial adb
 check "serial replacement cannot rescan its own marker forever" test "$STATUS" -eq 0
 check "short serial text is redacted once" grep -q 'model=\[redacted-adb-serial\]' "$TMP/output"
 
 MANY_A="$(printf '%0140d' 0 | tr 0 a)"
-MOCK_DEVICE=cronos MOCK_MODEL="$MANY_A" MOCK_SERIAL=a run_collector --serial a
+MOCK_DEVICE=rk3566_t MOCK_MODEL="$MANY_A" MOCK_SERIAL=a run_collector --serial a
 check "repeated serial redaction keeps every shared line bounded" \
   awk 'length($0) > 160 { exit 1 }' "$TMP/output"
 

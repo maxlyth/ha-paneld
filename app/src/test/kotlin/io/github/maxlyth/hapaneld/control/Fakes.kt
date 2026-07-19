@@ -22,9 +22,16 @@ fun fakeProfile(
     buttonLedGpioBase: Int? = null,
     zigbeeGatewayDir: String? = null,
     evdevButtons: List<EvdevButton> = emptyList(),
+    id: String = "test",
+    revision: String = "test-revision",
+    displayName: String = "Test",
+    hasButtonBacklight: Boolean = false,
+    recommendedDensity: Int? = null,
+    recommendedFontScale: Float? = null,
 ): DeviceProfile = object : DeviceProfile {
-    override val id = "test"
-    override val displayName = "Test"
+    override val id = id
+    override val revision = revision
+    override val displayName = displayName
     override val socClass = "test"
     override val suForm = if (appCanSu) SuForm.TOOLBOX else SuForm.NONE
     override val appCanSu = appCanSu
@@ -34,12 +41,13 @@ fun fakeProfile(
     override val relayBase = relayBase
     override val relayBaseFallbacks = relayBaseFallbacks
     override val buttonLedGpioBase = buttonLedGpioBase
+    override val hasButtonBacklight = hasButtonBacklight
     override val manufacturer: String? = null
     override val model: String? = null
     override val evdevButtons = evdevButtons
     override val cpuGovernors = cpuGovernors
-    override val recommendedDensity: Int? = null
-    override val recommendedFontScale: Float? = null
+    override val recommendedDensity = recommendedDensity
+    override val recommendedFontScale = recommendedFontScale
 }
 
 /**
@@ -54,11 +62,17 @@ class FakeRootShell(
 ) : RootShell {
     val ran = mutableListOf<String>()
     val outputRan = mutableListOf<String>()
+    val isolatedOutputRan = mutableListOf<String>()
     override fun available() = available
     override fun run(cmd: String): Boolean { ran += cmd; return runResult }
     override fun runOutput(cmd: String): String? {
         outputRan += cmd
         return outputs.entries.sortedByDescending { it.key.length }.firstOrNull { cmd.contains(it.key) }?.value
+    }
+    override fun runOutputIsolatedBounded(cmd: String, maxBytes: Long, timeoutMs: Long): String? {
+        isolatedOutputRan += cmd
+        return outputs.entries.sortedByDescending { it.key.length }.firstOrNull { cmd.contains(it.key) }
+            ?.value?.takeIf { it.toByteArray().size.toLong() <= maxBytes }
     }
     override fun runBytes(cmd: String): ByteArray? = null
     override fun fireAndForget(cmd: String): Boolean { ran += cmd; return runResult }
@@ -71,6 +85,8 @@ class FakeMetricSource(
     private val governor: String? = null,
     private val availableGovernors: String? = null,
 ) : MetricSource {
+    val governorRootFallbacks = mutableListOf<Boolean>()
+    val availableGovernorRootFallbacks = mutableListOf<Boolean>()
     override fun perfDump(): String? = null
     override fun statText(): String? = null
     override fun meminfoText(): String? = null
@@ -81,8 +97,14 @@ class FakeMetricSource(
     override fun cpuFreqMaxMhz(): Long = 0
     override fun localIp(): String? = null
     override fun selinuxEnforce(): String? = null
-    override fun cpuGovernor(): String? = governor
-    override fun cpuAvailableGovernors(): String? = availableGovernors
+    override fun cpuGovernor(allowRootFallback: Boolean): String? {
+        governorRootFallbacks += allowRootFallback
+        return governor
+    }
+    override fun cpuAvailableGovernors(allowRootFallback: Boolean): String? {
+        availableGovernorRootFallbacks += allowRootFallback
+        return availableGovernors
+    }
     override fun roomClimate(): String? = null
 }
 

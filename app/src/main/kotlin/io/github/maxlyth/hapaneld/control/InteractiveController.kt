@@ -1,7 +1,6 @@
 package io.github.maxlyth.hapaneld.control
 
 import android.view.KeyEvent
-import io.github.maxlyth.hapaneld.device.DeviceProfile
 import io.github.maxlyth.hapaneld.input.PanelAccessibilityService
 import io.github.maxlyth.hapaneld.platform.AccessibilityActions
 import io.github.maxlyth.hapaneld.platform.Daemon
@@ -14,7 +13,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Live routing for interactive operations whose usable transport can differ from profile metadata.
- * [DeviceProfile.appCanSu] orders attempts only: known su panels try root first, while sandboxed
+ * The active profile's `appCanSu` value orders attempts only: known su panels try root first, while sandboxed
  * profiles try the helper or accessibility service first. An operation-level failure always falls
  * through to the other safe route.
  *
@@ -22,7 +21,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  * textual `ERR` reply. A non-empty byte stream is accepted exactly as it was by the HTTP endpoint.
  */
 internal class InteractiveController(
-    private val canSu: Boolean = DeviceProfile.detect().appCanSu,
+    private val canSu: Boolean,
     private val root: RootShell = Su,
     private val daemon: Daemon = HelperClient,
     private val accessibility: AccessibilityActions = PanelAccessibilityService,

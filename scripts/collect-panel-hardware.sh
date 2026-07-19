@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Bounded, read-only evidence collector for the preliminary ZX-SMT156 and Echo Show 5 Gen 2 profiles.
+# Bounded, read-only evidence collector for the preliminary ZX-SMT156 profile.
 set -u
 
 SERIAL=""
@@ -8,7 +8,7 @@ TRUNCATED="false"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/collect-panel-hardware.sh [--serial SERIAL] [--observe none|climate|light|near]
+Usage: scripts/collect-panel-hardware.sh [--serial SERIAL] [--observe none|climate]
 
 Writes a public-reviewable, read-only hardware report to stdout. Progress and errors go to stderr.
 Live input sampling is opt-in, limited to exact known sensor names, 10 seconds and 32 events.
@@ -31,8 +31,8 @@ while [ "$#" -gt 0 ]; do
 done
 
 case "$OBSERVE" in
-  none|climate|light|near) ;;
-  *) echo "error: --observe must be none, climate, light or near" >&2; exit 2 ;;
+  none|climate) ;;
+  *) echo "error: --observe must be none or climate" >&2; exit 2 ;;
 esac
 
 command -v adb >/dev/null 2>&1 || {
@@ -106,34 +106,6 @@ transport_ok() {
   adb_run get-state >/dev/null 2>&1
 }
 
-probe_file() {
-  local path="$1" value
-  if value="$(adb_run shell cat "$path" 2>/dev/null)"; then
-    printf 'ok\t%s' "$(printf '%s' "$value" | sanitize_line)"
-  elif ! transport_ok; then
-    printf 'transport-unavailable\tunavailable'
-  elif ! adb_run shell test -e "$path" >/dev/null 2>&1; then
-    printf 'missing\tmissing'
-  elif ! adb_run shell test -r "$path" >/dev/null 2>&1; then
-    printf 'denied\tunavailable'
-  else
-    printf 'read-failed\tunavailable'
-  fi
-}
-
-probe_access() {
-  local flag="$1" path="$2"
-  if adb_run shell test "$flag" "$path" >/dev/null 2>&1; then
-    printf 'true'
-  elif ! transport_ok; then
-    printf 'transport-unavailable'
-  elif ! adb_run shell test -e "$path" >/dev/null 2>&1; then
-    printf 'missing'
-  else
-    printf 'false'
-  fi
-}
-
 map_input_nodes() {
   local wanted="$1"
   awk -v wanted="$wanted" '
@@ -171,15 +143,11 @@ load_inputs() {
 }
 
 sample_requested() {
-  local kind="$1"
-  case "$OBSERVE:$kind" in
-    climate:climate|light:light|near:light) return 0 ;;
-    *) return 1 ;;
-  esac
+  [ "$OBSERVE" = "climate" ]
 }
 
 print_input() {
-  local name="$1" kind="$2" nodes node count capability status sample sample_rc sample_status
+  local name="$1" nodes node count capability status sample sample_rc sample_status
   printf '\n[input %s]\nobservation=%s\n' "$name" "$OBSERVE"
   if [ "$INPUT_STATUS" != "ok" ]; then
     printf 'inventory_status=%s\nnode=unknown\ncapability_status=not-available\nsample_status=not-available\n' \
@@ -221,7 +189,7 @@ print_input() {
   print_bounded "$capability"
   printf '\ncapability_end\n'
 
-  if ! sample_requested "$kind"; then
+  if ! sample_requested; then
     printf 'sample_status=not-requested\n'
     return
   fi
@@ -272,35 +240,11 @@ if [ "$DEVICE_STATUS" != "ok" ]; then
   printf 'note=exact target identity could not be read; no hardware probes were run\n'
 elif [ "$DEVICE" = "rk3566_t" ]; then
   load_inputs
-  print_input "sun-ths" "climate"
-  print_input "sun-hum" "climate"
-elif [ "$DEVICE" = "cronos" ]; then
-  load_inputs
-  BACKLIGHT="/sys/class/leds/lcd-backlight"
-  printf '\n[backlight leds/lcd-backlight]\n'
-  for field in brightness actual_brightness max_brightness bl_power type; do
-    result="$(probe_file "$BACKLIGHT/$field")"
-    status="${result%%$'\t'*}"
-    value="${result#*$'\t'}"
-    printf '%s=%s\n%s_status=%s\n' "$field" "$value" "$field" "$status"
-  done
-  printf 'shell_readable=%s\nshell_writable=%s\napp_authority=unknown\n' \
-    "$(probe_access -r "$BACKLIGHT/brightness")" "$(probe_access -w "$BACKLIGHT/brightness")"
-  if android_brightness="$(adb_run shell settings get system screen_brightness 2>/dev/null)"; then
-    android_brightness="$(printf '%s' "$android_brightness" | sanitize_line)"
-    android_brightness_status="ok"
-  elif ! transport_ok; then
-    android_brightness="unavailable"
-    android_brightness_status="transport-unavailable"
-  else
-    android_brightness="unavailable"
-    android_brightness_status="read-failed"
-  fi
-  printf 'android_setting=%s\nandroid_setting_status=%s\n' "$android_brightness" "$android_brightness_status"
-  print_input "m_alsps_input" "light"
+  print_input "sun-ths"
+  print_input "sun-hum"
 else
   printf '\n[collector]\nstatus=unsupported-target\n'
-  printf 'note=only exact rk3566_t and cronos targets have allowlisted probes\n'
+  printf 'note=only the exact rk3566_t target has allowlisted probes\n'
 fi
 
 printf '\n[limits]\nper_block_bytes=8192\ntruncated=%s\n' "$TRUNCATED"

@@ -1,5 +1,6 @@
 package io.github.maxlyth.hapaneld.http
 
+import io.github.maxlyth.hapaneld.dashboard.EntityCatalogStore
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -29,6 +30,21 @@ class PanelInfoDisplayTest {
     @Test fun physicalSizeIsOmittedWithoutTrustworthyPpi() {
         assertNull(PanelInfo.physicalDisplaySize(1920, 1200, null))
         assertNull(PanelInfo.physicalDisplaySize(1920, 1200, 0))
+    }
+
+    @Test fun databaseSizesUseAdaptiveIecUnits() {
+        assertEquals("0 B", PanelInfo.formatIecBytes(0))
+        assertEquals("1023 B", PanelInfo.formatIecBytes(1023))
+        assertEquals("1.0 KiB", PanelInfo.formatIecBytes(1024))
+        assertEquals("1.5 MiB", PanelInfo.formatIecBytes(1_572_864))
+        assertEquals("2.0 GiB", PanelInfo.formatIecBytes(2_147_483_648))
+    }
+
+    @Test fun databaseSummaryDistinguishesLiveDataFromDiskFootprint() {
+        assertEquals(
+            "1.5 MiB used · 2.0 MiB on disk · schema 11",
+            PanelInfo.databaseSummary(EntityCatalogStore.DatabaseUsage(1_572_864, 2_097_152, 11)),
+        )
     }
 
     @Test fun effectiveWebViewEngineLeadsWhenPackageRetainsOldCompatibilityStamp() {

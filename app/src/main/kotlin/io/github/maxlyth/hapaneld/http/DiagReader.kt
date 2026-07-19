@@ -6,8 +6,10 @@ import android.provider.Settings
 import io.github.maxlyth.hapaneld.BuildConfig
 import io.github.maxlyth.hapaneld.control.Su
 import io.github.maxlyth.hapaneld.control.TameController
+import io.github.maxlyth.hapaneld.control.PrivilegedRouteObservation
 import io.github.maxlyth.hapaneld.control.ZigbeeHealthSnapshot
 import io.github.maxlyth.hapaneld.device.DeviceProfile
+import io.github.maxlyth.hapaneld.device.LedMechanism
 import io.github.maxlyth.hapaneld.hardware.NativeLed
 import io.github.maxlyth.hapaneld.input.ButtonCaptureHealth
 import io.github.maxlyth.hapaneld.input.EvdevButtonClient
@@ -15,9 +17,17 @@ import io.github.maxlyth.hapaneld.metrics.PanelMetrics
 import io.github.maxlyth.hapaneld.shizuku.ShizukuBridge
 import io.github.maxlyth.hapaneld.shizuku.ShizukuConsent
 import io.github.maxlyth.hapaneld.shizuku.ShizukuManagerIdentity
+import io.github.maxlyth.hapaneld.shizuku.ShizukuState
 import io.github.maxlyth.hapaneld.util.HelperClient
+import io.github.maxlyth.hapaneld.util.BoundedLaunchGate
+import io.github.maxlyth.hapaneld.util.BoundedStreams
+import io.github.maxlyth.hapaneld.util.MonotonicDeadline
+import io.github.maxlyth.hapaneld.util.SystemProps
 import io.github.maxlyth.hapaneld.util.UpdateChecker
+import io.github.maxlyth.hapaneld.util.runBoundedLaunch
 import java.io.File
+import java.util.Locale
+import java.util.concurrent.TimeUnit
 
 /**
  * Self-diagnostics for the info page. Two outputs from the same probes:
@@ -31,52 +41,76 @@ import java.io.File
  */
 object DiagReader {
 
-    /** status: "ok" | "degraded" | "none" */
-    data class Cap(val name: String, val status: String, val note: String)
+    private const val EXEC_TIMEOUT_MS = 3_000L
+    private const val EXEC_MAX_BYTES = 64L * 1024L
+    private const val ROOT_PROBE_TIMEOUT_MS = 5_000L
+    private const val DUMP_TIMEOUT_MS = 15_000L
+    private val execLaunchGate = BoundedLaunchGate()
 
-    fun capabilities(ctx: Context, profile: DeviceProfile): List<Cap> {
+    /** status: "ok" | "degraded" | "none" */
+    internal data class Cap(val name: String, val status: String, val note: String)
+
+    /** Typed probe result shared by service facts and diagnostic presentation. */
+    internal data class CapabilityObservation(
+        val rows: List<Cap>,
+        val rgbLedReady: Boolean,
+    )
+
+    /** Cached display facts supplied by the management projection; diagnostics never re-probe them. */
+    data class DisplaySizingEvidence(
+        val androidBaseLogicalDpi: Int?,
+        val currentLogicalDpi: Int?,
+        val fontScale: Float,
+    )
+
+    internal fun capabilities(
+        ctx: Context,
+        profile: DeviceProfile,
+        privilege: PrivilegedRouteObservation,
+    ): CapabilityObservation {
+        val su = privilege.directSuReady
+        val daemon = privilege.helperRootReady
         val pkg = ctx.packageName
-        val su = Su.available()
-        val daemon = HelperClient.available()
-        val rkLed = NativeLed.available()
+        val showLed = showRgbLedCapability(profile)
+        val rkLed = showLed && NativeLed.available()
         // Which LED node the daemon can actually reach — so "RGB LED" reflects a reachable node, not
         // just "a daemon is running". An old daemon predates LEDPROBE and replies "ERR" → fall back to
         // the daemon-up signal (prior behaviour); "none" = daemon present but no LED node.
-        val ledProbe = HelperClient.send("LEDPROBE")
+        val ledProbe = if (showLed && daemon) HelperClient.send("LEDPROBE") else null
         val daemonLed = when (ledProbe) {
             "ledjni", "sysfs" -> true
             "none" -> false
-            else -> daemon
+            else -> showLed && daemon
         }
         val canWrite = Settings.System.canWrite(ctx)
         val a11y = a11yEnabled(ctx)
-        val evdev = EvdevButtonClient.snapshot()
-        val buttonHealth = ButtonCaptureHealth.evaluate(a11y, profile.evdevButtons.size, evdev, pkg)
-        val rootish = su || daemon
-        val shizuku = ShizukuBridge.available()
+        val showButtons = showHardwareButtonsCapability(profile)
+        val buttonHealth = if (showButtons) {
+            ButtonCaptureHealth.evaluate(a11y, profile.evdevButtons.size, EvdevButtonClient.snapshot(), pkg)
+        } else {
+            null
+        }
+        val rootish = privilege.rootControlReady
+        val shizukuSnapshot = privilege.shizuku
+        val shizuku = shizukuSnapshot.ready
         val manager = ShizukuManagerIdentity.status(ctx)
         // Surface the helper whenever this profile needs it for privileged control or profile-specific
         // hardware such as daemon-only LEDs and evdev buttons, even if the app can also execute su.
         val usesDaemon = profile.usesDaemon
-        return listOfNotNull(
+        val rows = listOfNotNull(
             rootSuCapability(su, daemon),
             if (usesDaemon) Cap("Helper daemon", if (daemon) "ok" else "none",
                 if (daemon) daemonRequirement(profile, running = true)
                 else daemonRequirement(profile, running = false))
             else null,
-            if (showShizukuCapability(rootish, ShizukuConsent.enabled(ctx), manager)) {
-                Cap("Shizuku enhanced access", if (shizuku) "ok" else "none", when {
-                    shizuku -> "ready as shell UID; local typed operations only"
-                    manager == ShizukuManagerIdentity.Status.UNTRUSTED -> "blocked: installed manager signer is not trusted"
-                    manager == ShizukuManagerIdentity.Status.MISSING -> "manager missing; re-run provisioning with --shizuku"
-                    else -> "manager installed but not ready; start Shizuku and approve access locally"
-                })
+            if (showShizukuCapability(ShizukuConsent.enabled(ctx), manager)) {
+                shizukuCapability(shizukuSnapshot, manager, preferredPrivilegeReady = rootish)
             } else null,
             Cap("Verified app update / screenshot / display", if (rootish || shizuku) "ok" else "none",
                 when {
                     rootish -> "available through root or the helper daemon"
                     shizuku -> "available through locally approved Shizuku access; app updates remain signer-verified"
-                    else -> "needs su, the helper daemon, or locally approved Shizuku access"
+                    else -> "needs supported privileged panel access"
                 }),
             Cap("Brightness", if (canWrite) "ok" else "none",
                 if (canWrite) "WRITE_SETTINGS granted" else
@@ -87,18 +121,34 @@ object DiagReader {
                     su -> "true backlight-off via su bl_power"
                     else -> "DIM ONLY — the backlight stays powered; needs su or the helper daemon for a real off"
                 }),
-            Cap("RGB LED", if (rkLed || daemonLed) "ok" else "none",
+            if (showLed) Cap("RGB LED", if (rkLed || daemonLed) "ok" else "none",
                 when {
                     rkLed -> "Rockchip /dev/ledjni (app-direct, no root)"
                     ledProbe == "ledjni" -> "Rockchip /dev/ledjni ioctl via the helper daemon (root)"
                     ledProbe == "sysfs" || daemonLed -> "sysfs LED via the helper daemon"
                     else -> "no reachable LED node; needs the root helper daemon (install needs su once)"
-                }),
-            Cap("Hardware buttons", buttonHealth.status, buttonHealth.note),
+                })
+            else null,
+            buttonHealth?.let { Cap("Hardware buttons", it.status, it.note) },
             Cap("Reboot / reload / launcher", if (rootish) "ok" else "none",
                 if (rootish) "available" else "needs su or the helper daemon"),
         )
+        return CapabilityObservation(rows = rows, rgbLedReady = rkLed || daemonLed)
     }
+
+    /**
+     * Exact profiles use [LedMechanism.NONE] as an authoritative declaration that no supported RGB LED
+     * exists. AUTODETECT is reserved for Generic/unknown hardware, where a runtime probe remains useful.
+     */
+    internal fun showRgbLedCapability(profile: DeviceProfile): Boolean =
+        profile.ledMechanism != LedMechanism.NONE
+
+    /**
+     * A non-empty evdev declaration is the supported hardware-button contract for an exact profile.
+     * Generic remains intentionally visible because its empty list means unknown/a11y-only, not absent.
+     */
+    internal fun showHardwareButtonsCapability(profile: DeviceProfile): Boolean =
+        profile.id == "generic" || profile.evdevButtons.isNotEmpty()
 
     /**
      * Report app-visible `su` without confusing it with the helper-backed privilege route. In
@@ -121,10 +171,49 @@ object DiagReader {
     )
 
     internal fun showShizukuCapability(
-        rootish: Boolean,
         consentEnabled: Boolean,
         manager: ShizukuManagerIdentity.Status,
-    ): Boolean = !rootish && (consentEnabled || manager != ShizukuManagerIdentity.Status.MISSING)
+    ): Boolean = consentEnabled || manager != ShizukuManagerIdentity.Status.MISSING
+
+    internal fun shizukuCapability(
+        snapshot: ShizukuBridge.Snapshot,
+        manager: ShizukuManagerIdentity.Status,
+        preferredPrivilegeReady: Boolean = false,
+    ): Cap = Cap(
+        name = "Shizuku enhanced access",
+        status = if (snapshot.ready && manager == ShizukuManagerIdentity.Status.TRUSTED) "ok" else "none",
+        note = shizukuCapabilityNote(snapshot.state, manager, preferredPrivilegeReady),
+    )
+
+    internal fun shizukuCapabilityNote(
+        state: ShizukuState,
+        manager: ShizukuManagerIdentity.Status,
+        preferredPrivilegeReady: Boolean = false,
+    ): String {
+        val stateNote = when {
+            manager == ShizukuManagerIdentity.Status.UNTRUSTED ->
+                "blocked: installed manager signer is not trusted"
+            manager == ShizukuManagerIdentity.Status.MISSING ->
+                "manager missing; re-run provisioning with --shizuku"
+            state == ShizukuState.READY -> "ready as shell UID; local typed operations only"
+            state == ShizukuState.DISABLED ->
+                "disabled in ha-paneld; on the panel open Configure → toolbar overflow → Enhanced access → Enable"
+            state == ShizukuState.STOPPED ->
+                "enabled in ha-paneld, but the Shizuku service is stopped; open Shizuku and start its service"
+            state == ShizukuState.PERMISSION_REQUIRED ->
+                "service running; request and approve ha-paneld access locally"
+            state == ShizukuState.MANUAL_GRANT_REQUIRED ->
+                "access denied; grant ha-paneld under Shizuku → Authorized applications"
+            state == ShizukuState.BINDING -> "connecting to the locally approved Shizuku service"
+            state == ShizukuState.INCOMPATIBLE -> "blocked: unexpected Shizuku service identity or protocol"
+            else -> "Shizuku could not be connected; retry from the on-panel Enhanced access dialog"
+        }
+        return if (preferredPrivilegeReady) {
+            "adds no capability while root or the helper daemon provides the preferred route; $stateNote"
+        } else {
+            stateNote
+        }
+    }
 
     private fun daemonRequirement(profile: DeviceProfile, running: Boolean): String {
         val state = if (running) "running" else "NEEDED but not running"
@@ -138,17 +227,25 @@ object DiagReader {
 
     /**
      * Terse, version-stamped copy-paste report for GitHub issues. The `[panel]` block reuses the EXACT
-     * facts shown on the info page ([facts], passed by the caller) so it auto-tracks every field we add —
-     * no separate maintenance — and **network addresses are omitted** ([OMIT]) so it's safe to paste in a
-     * public thread. Every other section is one line. The version+build header is the version control: a
-     * pasted report is always attributable to the build that produced it.
+     * facts shown on the info page ([facts], passed by the caller), restricted to an explicit public-safe
+     * allowlist so a new profile/config field cannot silently enter a pasted report. Every other section
+     * is one line. The version+build header is the version control: a pasted report is always attributable
+     * to the build that produced it.
      */
-    fun dump(
+    internal fun dump(
         ctx: Context,
         profile: DeviceProfile,
         facts: Map<String, String> = emptyMap(),
         zigbee: ZigbeeHealthSnapshot? = null,
-    ): String = buildString {
+        privilege: PrivilegedRouteObservation,
+        capabilityRows: List<Cap>,
+        displaySizing: DisplaySizingEvidence? = null,
+    ): String {
+        val deadline = MonotonicDeadline(DUMP_TIMEOUT_MS)
+        val routes = privilege
+        val su = routes.directSuReady
+        val daemon = routes.helperRootReady
+        return buildString {
         appendLine("ha-paneld diagnostics — ${BuildConfig.VERSION_NAME} (build ${BuildConfig.VERSION_CODE})")
         // Capture metadata — a normalise-me line for the regression harness: when this dump was taken +
         // how long the panel has been up (uptime is often more telling than wall-clock on a panel).
@@ -156,13 +253,15 @@ object DiagReader {
         if (facts.isNotEmpty()) {
             appendLine()
             appendLine("[panel]")
-            for ((k, v) in facts) if (k !in OMIT) appendLine("$k=$v")
+            for ((k, v) in publicPanelFacts(facts)) appendLine("$k=$v")
         }
         appendLine()
         appendLine("[build] fingerprint=${Build.FINGERPRINT}")
         appendLine("board=${Build.BOARD} product=${Build.PRODUCT} hardware=${Build.HARDWARE} abis=${Build.SUPPORTED_ABIS.joinToString(",")}")
+        appendLine(bootSecurityLine(SystemProps::get, Build.TYPE))
         val evdev = EvdevButtonClient.snapshot()
-        appendLine("[env] selinux=${PanelMetrics.shared.selinuxEnforce() ?: "?"} su=${Su.available()} write_settings=${Settings.System.canWrite(ctx)} a11y=${a11yEnabled(ctx)} daemon=${HelperClient.available()} shizuku=${ShizukuBridge.state.name.lowercase()} evdev=${evdev.state.name.lowercase()}/${evdev.mode?.name?.lowercase() ?: "none"} ledjni=${NativeLed.available()}")
+        appendLine("[env] selinux=${PanelMetrics.shared.selinuxEnforce() ?: "?"} su=$su write_settings=${Settings.System.canWrite(ctx)} a11y=${a11yEnabled(ctx)} daemon=$daemon shizuku=${routes.shizuku.state.name.lowercase()} evdev=${evdev.state.name.lowercase()}/${evdev.mode?.name?.lowercase() ?: "none"} ledjni=${NativeLed.available()}")
+        displaySizing?.let { appendLine(displaySizingLine(it, profile)) }
         zigbee?.let {
             appendLine(
                 "[zigbee-health] state=${it.state.wireValue} layout=${it.layout} package=${it.packageVersion ?: "-"} " +
@@ -175,7 +274,7 @@ object DiagReader {
             appendLine("[evdev] requested=$requested state=${evdev.state.name.lowercase()} mode=${evdev.mode?.name?.lowercase() ?: "none"} error=${evdev.lastError ?: "-"}")
         }
         appendLine("[sysfs] leds=${listDir("/sys/class/leds")} backlight=${listDir("/sys/class/backlight")} devfreq=${listDir("/sys/class/devfreq")}")
-        appendLine("[labels] ${exec("ls -Zd /sys/class/leds/*/ /sys/class/backlight/*/ /dev/ledjni 2>&1").replace("\n", " ")}")
+        appendLine("[labels] ${exec("ls -Zd /sys/class/leds/*/ /sys/class/backlight/*/ /dev/ledjni 2>&1", deadline).replace("\n", " ")}")
         // Bounded, read-only characterization for an unknown/new panel. These are the high-signal
         // names needed to locate vendor climate sensors, relay controllers and input devices without
         // asking a non-developer reporter to run a long sequence of adb commands. Avoid raw uevent,
@@ -193,10 +292,10 @@ object DiagReader {
         // pin dirs / value nodes actually came up. Read-only.
         profile.buttonLedGpioBase?.let { base ->
             val pinPaths = (0 until 4).map { "/sys/class/gpio/gpio${base + it}" }
-            val chips = probe("grep -H '' /sys/class/gpio/gpiochip*/base /sys/class/gpio/gpiochip*/ngpio /sys/class/gpio/gpiochip*/label 2>/dev/null")
+            val chips = probe("grep -H '' /sys/class/gpio/gpiochip*/base /sys/class/gpio/gpiochip*/ngpio /sys/class/gpio/gpiochip*/label 2>/dev/null", deadline)
                 .replace("/sys/class/gpio/", "").replace("\n", " ")
-            val pinDirs = probe("ls -d ${pinPaths.joinToString(" ")} 2>/dev/null").replace("\n", " ")
-            val valueNodes = probe("ls ${pinPaths.joinToString(" ") { "$it/value" }} 2>/dev/null").replace("\n", " ")
+            val pinDirs = probe("ls -d ${pinPaths.joinToString(" ")} 2>/dev/null", deadline).replace("\n", " ")
+            val valueNodes = probe("ls ${pinPaths.joinToString(" ") { "$it/value" }} 2>/dev/null", deadline).replace("\n", " ")
             appendLine("[gpio] led_base=$base (button-LED pins must fall inside a chip's [base,base+ngpio))")
             appendLine("  chips: ${chips.ifBlank { "(none readable)" }}")
             appendLine("  pin_dirs: ${pinDirs.ifBlank { "(none exported)" }}")
@@ -204,28 +303,73 @@ object DiagReader {
         }
         appendLine("[packages] " + listOf("io.homeassistant.companion.android", "io.homeassistant.companion.android.minimal")
             .joinToString(" ") { "${it.substringAfterLast('.')}=${pkgVer(ctx, it)}" })
-        // Vendor packages this panel's profile knows about, with live state — so a maintainer can see the
-        // tame candidates and what's present/disabled on this firmware. Only when the profile defines them.
+        // Keep profile package identifiers out of the public report: a custom profile can contain a private
+        // package namespace. Counts retain the useful "is this candidate present/active?" evidence.
         val tameCandidates = profile.tameVendorCandidates
         if (tameCandidates.isNotEmpty()) {
-            appendLine("[vendor-tame] " + TameController(ctx).profileReport(tameCandidates).joinToString(" | ") { c ->
-                val state = if (!c.installed) "absent" else if (c.disabled) "disabled" else "active"
-                c.pkg + "=" + state + if (c.tags.isNotEmpty()) "(${c.tags.joinToString(",")})" else ""
-            })
+            appendLine(vendorTameSummary(TameController(ctx).profileReport(tameCandidates)))
         }
-        appendLine("[capabilities] " + capabilities(ctx, profile).joinToString(" | ") { "${it.name}=${it.status}" })
+        appendLine("[capabilities] " + capabilityRows.joinToString(" | ") { "${it.name}=${it.status}" })
         val updates = UpdateChecker.current(ctx)   // revalidated: no stale entry for an uninstalled Companion
         if (updates.isNotEmpty()) {
             appendLine("[updates] " + updates.joinToString(" | ") { "${it.label}: ${it.currentVersion} → ${it.latestVersion}" })
         }
+        }
     }
 
-    // Omitted from the report (it's for public GitHub issues): network addresses; non-diagnostic instance
-    // config (panel_id / Friendly name / HTTP port / mDNS — no hardware/capability signal); and Device ID
-    // (an ANDROID_ID identifier whose only value is correlating reports — not worth a public identifier).
-    private val OMIT = setOf(
-        "Local IP", "Local IPv6", "MQTT", "panel_id", "Friendly name", "HTTP port", "mDNS", "Device ID",
+    internal fun displaySizingLine(evidence: DisplaySizingEvidence, profile: DeviceProfile): String {
+        fun dpi(value: Int?) = value?.toString() ?: "?"
+        fun scale(value: Float?) = value?.toString() ?: "none"
+        val override = evidence.currentLogicalDpi
+            ?.takeIf { current -> evidence.androidBaseLogicalDpi == null || current != evidence.androidBaseLogicalDpi }
+        return "[display-sizing] android_base_logical_dpi=${dpi(evidence.androidBaseLogicalDpi)} " +
+            "current_logical_dpi=${dpi(evidence.currentLogicalDpi)} override_dpi=${dpi(override).replace("?", "none")} " +
+            "font_scale=${evidence.fontScale} profile_recommended_dpi=${dpi(profile.recommendedDensity)} " +
+            "profile_recommended_font_scale=${scale(profile.recommendedFontScale)}"
+    }
+
+    /** Allowlisted, categorical boot posture only: never emit raw properties, hashes or boot IDs. */
+    internal fun bootSecurityLine(
+        readProperty: (String) -> String,
+        buildType: String,
+    ): String {
+        fun normalized(key: String, allowed: Set<String>): String =
+            readProperty(key).trim().lowercase(Locale.ROOT).takeIf { it in allowed } ?: "unknown"
+        fun binary(key: String): String = when (readProperty(key).trim()) {
+            "1" -> "locked"
+            "0" -> "unlocked"
+            else -> "unknown"
+        }
+        val verified = normalized("ro.boot.verifiedbootstate", setOf("green", "yellow", "orange", "red"))
+        val flash = binary("ro.boot.flash.locked")
+        val vbmeta = normalized("ro.boot.vbmeta.device_state", setOf("locked", "unlocked"))
+        val type = buildType.trim().lowercase(Locale.ROOT).takeIf { it in setOf("user", "userdebug", "eng") }
+            ?: "unknown"
+        val debuggable = when (readProperty("ro.debuggable").trim()) {
+            "1" -> "yes"
+            "0" -> "no"
+            else -> "unknown"
+        }
+        return "[boot-security] verified=$verified flash=$flash vbmeta=$vbmeta build=$type debuggable=$debuggable"
+    }
+
+    /** Public-issue fact boundary. Deliberately allowlisted rather than denylisted: runtime-profile names,
+     *  custom sensor descriptions, package namespaces and configured network destinations stay private. */
+    private val PUBLIC_PANEL_FACTS = setOf(
+        "ha-paneld", "Android", "Firmware", "Device", "CPU", "RAM", "Storage", "Display",
+        "System WebView", "HA Companion", "MQTT state", "Security mode", "Keep awake", "Kiosk lock",
+        "LED", "Nav actions (a11y)", "Navbar", "Zigbee", "Relays", "Network ADB", "Audio playback",
+        "App database", "Product version", "Local-state sync", "State convergence",
     )
+
+    internal fun publicPanelFacts(facts: Map<String, String>): Map<String, String> =
+        facts.filterKeys { it in PUBLIC_PANEL_FACTS }
+
+    internal fun vendorTameSummary(candidates: List<TameController.Candidate>): String {
+        val installed = candidates.count { it.installed }
+        val disabled = candidates.count { it.installed && it.disabled }
+        return "[vendor-tame] known=${candidates.size} installed=$installed active=${installed - disabled} disabled=$disabled"
+    }
 
     private fun a11yEnabled(ctx: Context): Boolean =
         (Settings.Secure.getString(ctx.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: "")
@@ -255,13 +399,39 @@ object DiagReader {
     private fun pkgVer(ctx: Context, id: String): String =
         runCatching { ctx.packageManager.getPackageInfo(id, 0).versionName ?: "?" }.getOrElse { "not installed" }
 
-    private fun exec(cmd: String): String = runCatching {
-        val p = Runtime.getRuntime().exec(arrayOf("/system/bin/sh", "-c", cmd))
-        (p.inputStream.bufferedReader().readText() + p.errorStream.bufferedReader().readText()).trim()
-    }.getOrElse { "(exec failed)" }
+    private fun exec(cmd: String, deadline: MonotonicDeadline): String = runBoundedLaunch(
+        deadline = deadline.cappedTo(EXEC_TIMEOUT_MS),
+        threadName = "ha-paneld-diag-exec",
+        gate = execLaunchGate,
+        launch = {
+            ProcessBuilder("/system/bin/sh", "-c", "exec $cmd")
+                .redirectErrorStream(true)
+                .start()
+        },
+        destroy = ::destroyProcess,
+        consume = { process ->
+            val bytes = BoundedStreams.readBytes(process.inputStream, EXEC_MAX_BYTES)
+            val text = String(bytes, Charsets.UTF_8).trim()
+            if (process.waitFor() == 0) text else text.ifBlank { "(exec failed)" }
+        },
+    ) ?: "(exec failed or timed out)"
+
+    private fun destroyProcess(process: Process) {
+        runCatching { process.outputStream.close() }
+        runCatching { process.inputStream.close() }
+        runCatching { process.errorStream.close() }
+        runCatching { process.destroyForcibly() }
+        runCatching { process.waitFor(250L, TimeUnit.MILLISECONDS) }
+    }
 
     /** Read-only probe preferring su (the S9E is appCanSu, and /sys/class/gpio may be SELinux-guarded
      *  for the app uid), falling back to an app-uid shell. */
-    private fun probe(cmd: String): String =
-        Su.runOutput(cmd)?.takeIf { it.isNotBlank() } ?: exec(cmd)
+    private fun probe(cmd: String, deadline: MonotonicDeadline): String =
+        Su.runOutputIsolatedBounded(
+            cmd,
+            EXEC_MAX_BYTES,
+            deadline.remainingMs().coerceAtMost(ROOT_PROBE_TIMEOUT_MS),
+        )
+            ?.takeIf { it.isNotBlank() }
+            ?: exec(cmd, deadline)
 }

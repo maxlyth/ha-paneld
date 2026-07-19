@@ -14,6 +14,7 @@ Data file (fw-shelly-walldisplay.dat):
     track|version|build_id|bytes|discovered|cdn_url|wayback_ts
 
 Commands:
+    verify  strictly validate every current manifest and CDN object without writes
     probe   poll manifests, append new versions to .dat, set GITHUB_OUTPUT flags
     archive submit unarchived CDN URLs to Wayback Machine, fill wayback_ts
     render  emit the Discussion markdown body
@@ -22,6 +23,7 @@ Commands:
 import argparse
 import json
 import os
+import pathlib
 import re
 import ssl
 import sys
@@ -31,11 +33,14 @@ import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
-try:
-    import certifi
-    _SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
-except ImportError:
-    _SSL_CONTEXT = ssl.create_default_context()
+from secure_urlopen import urlopen
+
+# Shelly's OTA hosts use a private Allterco CA rather than the public Web PKI.
+# Keep normal certificate and hostname verification, adding only the vendor CA
+# recovered from Shelly's own `shelly_cloud.pem` firmware trust store.
+_SHELLY_CA = pathlib.Path(__file__).with_name("shelly-cloud-ca.pem")
+_SSL_CONTEXT = ssl.create_default_context()
+_SSL_CONTEXT.load_verify_locations(cafile=_SHELLY_CA)
 
 MANIFESTS = {
     "WallDisplay": "https://updates.shelly.cloud/update/WallDisplay",
@@ -203,12 +208,25 @@ def head_size(track, url):
     validate_cdn_url(track, url)
     req = urllib.request.Request(
         url, method="HEAD", headers={"User-Agent": "ha-paneld-shelly-monitor"})
-    try:
-        with urllib.request.urlopen(req, timeout=PROBE_TIMEOUT, context=_SSL_CONTEXT) as r:
-            validate_cdn_url(track, r.geturl())
-            return int(r.headers.get("Content-Length") or 0)
-    except Exception:
-        return 0
+    with urllib.request.urlopen(req, timeout=PROBE_TIMEOUT, context=_SSL_CONTEXT) as r:
+        validate_cdn_url(track, r.geturl())
+        return int(r.headers.get("Content-Length") or 0)
+
+
+def cmd_verify(_args):
+    """Strictly exercise both vendor TLS hosts for every configured OTA track."""
+    failed = False
+    for track, manifest_url in MANIFESTS.items():
+        try:
+            data = fetch_manifest(manifest_url)
+            version, _build_id, cdn_url = validate_release(track, data.get("stable"))
+            size = head_size(track, cdn_url)
+        except Exception as exc:
+            print(f"ERROR: could not verify {track}: {exc}", file=sys.stderr)
+            failed = True
+            continue
+        print(f"verified: {track} {version} ({size / 1e6:.1f} MB)")
+    return 1 if failed else 0
 
 
 def cmd_probe(args):
@@ -216,6 +234,7 @@ def cmd_probe(args):
     known = {(e["track"], e["version"]) for e in entries}
     new_entries = []
     releases = []
+    fetch_failed = False
     invalid_manifest = False
 
     for track, manifest_url in MANIFESTS.items():
@@ -223,6 +242,7 @@ def cmd_probe(args):
             data = fetch_manifest(manifest_url)
         except Exception as exc:
             print(f"ERROR: could not fetch {track} manifest: {exc}", file=sys.stderr)
+            fetch_failed = True
             continue
         try:
             version, build_id, cdn_url = validate_release(track, data.get("stable"))
@@ -232,16 +252,20 @@ def cmd_probe(args):
             continue
         releases.append((track, version, build_id, cdn_url))
 
-    # Do not make attacker-directed HEAD requests or partially persist another track when any fetched
-    # manifest violates the fixed schema. A vendor format change must be reviewed explicitly.
-    if invalid_manifest:
+    # Do not make CDN requests or partially persist another track unless every expected manifest
+    # was fetched and passed the fixed schema. Network and vendor format changes must fail closed.
+    if fetch_failed or invalid_manifest:
         return 1
 
     for track, version, build_id, cdn_url in releases:
         if (track, version) in known:
             print(f"known:  {track} {version}")
         else:
-            size = head_size(track, cdn_url)
+            try:
+                size = head_size(track, cdn_url)
+            except Exception as exc:
+                print(f"ERROR: could not verify {track} CDN object: {exc}", file=sys.stderr)
+                return 1
             today = time.strftime("%Y-%m-%d", time.gmtime())
             entry = {
                 "track": track, "version": version, "build_id": build_id,
@@ -287,7 +311,7 @@ def _spn_request(url, body_fields, auth):
     body = urllib.parse.urlencode(body_fields).encode()
     req = urllib.request.Request(SPN_URL, data=body, headers=headers, method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=60) as r:
+        with urlopen(req, timeout=60) as r:
             return json.load(r)
     except urllib.error.HTTPError as e:
         raw = e.read().decode("utf-8", "replace") if e.fp else ""
@@ -311,7 +335,7 @@ def spn_submit(url, auth):
 def spn_available(url):
     q = AVAIL_URL + "?url=" + urllib.parse.quote(url, safe="")
     try:
-        with urllib.request.urlopen(q, timeout=30) as r:
+        with urlopen(q, timeout=30) as r:
             d = json.load(r)
     except Exception:
         return None
@@ -484,6 +508,9 @@ def main():
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
+
+    v = sub.add_parser("verify", help="strictly validate current manifests and CDN objects")
+    v.set_defaults(func=cmd_verify)
 
     p = sub.add_parser("probe", help="check manifests for new versions, update .dat")
     p.add_argument("--dat", required=True)

@@ -3,6 +3,7 @@ package io.github.maxlyth.hapaneld.http
 import android.content.Context
 import android.util.Log
 import io.github.maxlyth.hapaneld.Config
+import io.github.maxlyth.hapaneld.BuildConfig
 import io.github.maxlyth.hapaneld.DashboardEntityBackupState
 import io.github.maxlyth.hapaneld.normalizeDashboardEntityPath
 import io.github.maxlyth.hapaneld.peersJson
@@ -14,25 +15,32 @@ import io.github.maxlyth.hapaneld.backup.PanelBackup
 import io.github.maxlyth.hapaneld.backup.CompanionRestore
 import io.github.maxlyth.hapaneld.config.Scope
 import io.github.maxlyth.hapaneld.config.SettingType
+import io.github.maxlyth.hapaneld.config.SettingSpec
 import io.github.maxlyth.hapaneld.config.SettingValue
 import io.github.maxlyth.hapaneld.config.SettingsRegistry
+import io.github.maxlyth.hapaneld.config.TamePackagePolicy
 import io.github.maxlyth.hapaneld.config.Validation
 import io.github.maxlyth.hapaneld.control.CdpRelay
 import io.github.maxlyth.hapaneld.control.CompanionDb
 import io.github.maxlyth.hapaneld.control.CompanionDataOperationGate
 import io.github.maxlyth.hapaneld.control.CompanionDataOperationState
 import io.github.maxlyth.hapaneld.control.DensityController
+import io.github.maxlyth.hapaneld.control.DisplaySizingObservation
 import io.github.maxlyth.hapaneld.control.InteractiveController
+import io.github.maxlyth.hapaneld.control.PrivilegedRouteObservation
 import io.github.maxlyth.hapaneld.control.Su
 import io.github.maxlyth.hapaneld.control.SystemController
 import io.github.maxlyth.hapaneld.control.TameController
+import io.github.maxlyth.hapaneld.control.TameReconcileResult
 import io.github.maxlyth.hapaneld.control.VolumeController
 import io.github.maxlyth.hapaneld.control.ZigbeeHealthSnapshot
 import io.github.maxlyth.hapaneld.control.ZigbeeHealthState
+import io.github.maxlyth.hapaneld.control.observePrivilegedRoutes
 import io.github.maxlyth.hapaneld.dashboard.EntityFilterProtocol
 import io.github.maxlyth.hapaneld.dashboard.EntityFilterTelemetry
 import io.github.maxlyth.hapaneld.dashboard.EntityLearningManager
 import io.github.maxlyth.hapaneld.device.DeviceProfile
+import io.github.maxlyth.hapaneld.device.LedMechanism
 import io.github.maxlyth.hapaneld.device.TameCandidate
 import io.github.maxlyth.hapaneld.device.profile.PassiveProfileDraft
 import io.github.maxlyth.hapaneld.device.profile.PassiveProfileReport
@@ -43,10 +51,14 @@ import io.github.maxlyth.hapaneld.device.profile.ProfileBackupRestorePlan
 import io.github.maxlyth.hapaneld.device.profile.ProfileBackupRestoreResult
 import io.github.maxlyth.hapaneld.logship.LogCapture
 import io.github.maxlyth.hapaneld.metrics.FeatureCosts
+import io.github.maxlyth.hapaneld.persistence.AppState
 import io.github.maxlyth.hapaneld.metrics.FeatureCostOperation
 import io.github.maxlyth.hapaneld.metrics.FeatureCostOutcome
 import io.github.maxlyth.hapaneld.provisioning.ProvisioningActivationSnapshot
 import io.github.maxlyth.hapaneld.provisioning.ProvisioningReader
+import io.github.maxlyth.hapaneld.security.ApprovalBroker
+import io.github.maxlyth.hapaneld.security.LocalApprovalBroker
+import io.github.maxlyth.hapaneld.security.SensitiveOperation
 import io.github.maxlyth.hapaneld.sensors.SensorReporter
 import io.github.maxlyth.hapaneld.shizuku.ShizukuBridge
 import io.github.maxlyth.hapaneld.util.Cached
@@ -78,6 +90,7 @@ import io.ktor.server.engine.embeddedServer
 import io.ktor.server.plugins.origin
 import io.ktor.server.request.receiveStream
 import io.ktor.server.request.receiveText
+import io.ktor.server.request.httpMethod
 import io.ktor.server.request.uri
 import io.ktor.server.response.respondBytes
 import io.ktor.server.response.respondRedirect
@@ -100,12 +113,134 @@ import java.io.File
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
+import java.security.SecureRandom
+import javax.crypto.Mac
+import javax.crypto.spec.SecretKeySpec
 
-internal fun panelBrowserTitle(friendlyName: String, section: String? = null): String {
+internal fun panelBrowserTitle(
+    friendlyName: String,
+    section: String? = null,
+    versionName: String = BuildConfig.VERSION_NAME,
+    versionCode: Int = BuildConfig.VERSION_CODE,
+): String {
     val panel = friendlyName.trim().ifBlank { "ha-paneld" }
     val suffix = section?.trim().orEmpty()
-    return if (suffix.isBlank()) panel else "$panel · $suffix"
+    val title = if (suffix.isBlank()) panel else "$panel · $suffix"
+    return if ('-' in versionName) "$versionCode · $title" else title
 }
+
+/**
+ * Canonical approval payload for a materialized HTTP request. Distinct query-name order is not
+ * semantically significant, but duplicate value order is because Ktor's first-value lookup can
+ * affect behavior. Group by name while retaining each value list's order, then length-frame every
+ * field and collection count so no name/value grouping can share an approval accidentally.
+ */
+internal fun exactHttpApprovalPayload(
+    method: String,
+    path: String,
+    parameters: List<Pair<String, String>>,
+    bodyDigest: String,
+): String = buildString {
+    fun frame(value: String) {
+        append(value.toByteArray(Charsets.UTF_8).size).append(':').append(value)
+    }
+
+    val grouped = parameters.groupBy({ it.first }, { it.second }).toSortedMap()
+    frame(method.uppercase())
+    frame(path)
+    frame(grouped.size.toString())
+    grouped.forEach { (name, values) ->
+        frame(name)
+        frame(values.size.toString())
+        values.forEach(::frame)
+    }
+    frame(bodyDigest)
+}
+
+internal fun sha256Hex(bytes: ByteArray): String = MessageDigest.getInstance("SHA-256")
+    .digest(bytes)
+    .joinToString("") { "%02x".format(it) }
+
+internal val PERFORMANCE_WORKLOAD_KEYS = listOf(
+    "dashboard_package",
+    "home_dashboard",
+    "ha_url",
+    "dashboard_fullscreen",
+    "dashboard_overscroll",
+    "dashboard_idle_return_min",
+    "dashboard_zoom",
+    "dark_mode",
+    "auto_brightness",
+    "auto_brightness_sensitivity",
+    "auto_brightness_ha_entity",
+    "cpu_governor",
+    "keep_awake",
+    "prevent_idle_dim",
+)
+
+private val PERFORMANCE_COMPARISON_ID = Regex("^[0-9a-f]{32}$")
+private val PERFORMANCE_DEVICE_SECRET = Regex("^[0-9a-f]{64}$")
+
+internal fun validPerformanceDeviceSecret(value: String): Boolean =
+    value.matches(PERFORMANCE_DEVICE_SECRET)
+
+internal fun performanceBindingJson(
+    comparisonId: String,
+    deviceSecret: String,
+    panelId: String,
+    workload: Map<String, String>,
+): String? {
+    if (!comparisonId.matches(PERFORMANCE_COMPARISON_ID) || !validPerformanceDeviceSecret(deviceSecret)) return null
+    if (workload.keys != PERFORMANCE_WORKLOAD_KEYS.toSet()) return null
+    val key = SecretKeySpec(deviceSecret.lowercase().toByteArray(Charsets.UTF_8), "HmacSHA256")
+    fun fingerprint(domain: String, value: String): String {
+        val mac = Mac.getInstance("HmacSHA256")
+        mac.init(key)
+        return mac.doFinal("ha-paneld-perf/$domain\u0000$comparisonId\u0000$value".toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+    }
+    val workloadValue = buildString {
+        workload.toSortedMap().forEach { (name, value) ->
+            append(name.length).append(':').append(name)
+            append(value.length).append(':').append(value)
+        }
+    }
+    return JSONObject()
+        .put("comparison_id", comparisonId)
+        .put("panel_fingerprint", fingerprint("panel", panelId))
+        .put("workload_fingerprint", fingerprint("workload", workloadValue))
+        .toString()
+}
+
+internal fun Parameters.canonicalDigest(): String {
+    val framed = buildString {
+        fun frame(value: String) {
+            append(value.toByteArray(Charsets.UTF_8).size).append(':').append(value)
+        }
+
+        val fields = entries().sortedBy { it.key }
+        frame(fields.size.toString())
+        fields.forEach { (name, values) ->
+            frame(name)
+            frame(values.size.toString())
+            values.forEach { value ->
+                // Parameters.get(name) consumes the first submitted value, so value order is part
+                // of the request's behavior and must remain part of its approval identity.
+                frame(value)
+            }
+        }
+    }
+    return sha256Hex(framed.toByteArray(Charsets.UTF_8))
+}
+
+internal fun exactHttpApprovalPayload(call: ApplicationCall, bodyDigest: String): String =
+    exactHttpApprovalPayload(
+        method = call.request.httpMethod.value,
+        path = call.request.uri.substringBefore('?'),
+        parameters = call.request.queryParameters.entries()
+            .flatMap { (name, values) -> values.map { name to it } },
+        bodyDigest = bodyDigest,
+    )
 
 /**
  * Keep app-side launch suppression until the helper affirmatively reports that no Companion-data
@@ -227,6 +362,65 @@ internal sealed class ConfigPostParameters {
     data class Bad(val reason: String) : ConfigPostParameters()
 }
 
+/** Small HTTP boundary over the service-owned adaptive-brightness runtime. The default is deliberately
+ * read-safe and mutation-closed so the UI/API can land before the model, history and HA transport are
+ * wired into the service. JSON is produced by the owner to avoid copying its snapshots here. */
+internal interface AutoBrightnessHttpApi {
+    fun statusJson(): String
+    fun historyJson(hours: Int = 168, sensitivity: Int? = null): String
+    fun haSourcesJson(query: String, limit: Int): String
+    fun selectHaSource(entityId: String?): AutoBrightnessHttpAction
+    fun resetHistory(): AutoBrightnessHttpAction
+    fun resumeFullAuto(): AutoBrightnessHttpAction
+
+    companion object {
+        val UNAVAILABLE: AutoBrightnessHttpApi = object : AutoBrightnessHttpApi {
+            override fun statusJson(): String =
+                """{"available":false,"state":"unavailable","detail":"Adaptive brightness runtime is not connected."}"""
+
+            override fun historyJson(hours: Int, sensitivity: Int?): String =
+                """{"available":false,"hours":$hours,"bucket_minutes":0,"points":[]}"""
+
+            override fun haSourcesJson(query: String, limit: Int): String =
+                """{"available":false,"items":[]}"""
+
+            override fun selectHaSource(entityId: String?): AutoBrightnessHttpAction =
+                AutoBrightnessHttpAction.unavailable()
+
+            override fun resetHistory(): AutoBrightnessHttpAction = AutoBrightnessHttpAction.unavailable()
+            override fun resumeFullAuto(): AutoBrightnessHttpAction = AutoBrightnessHttpAction.unavailable()
+        }
+    }
+}
+
+internal data class AutoBrightnessHttpAction(val statusCode: Int, val json: String) {
+    init { require(statusCode in 200..599); require(json.isNotBlank()) }
+
+    companion object {
+        fun ok(json: String = """{"ok":true}""") = AutoBrightnessHttpAction(200, json)
+        fun unavailable() = AutoBrightnessHttpAction(
+            503,
+            """{"ok":false,"error":"Adaptive brightness runtime is not connected."}""",
+        )
+    }
+}
+
+internal data class AutoBrightnessHistoryParameters(val hours: Int, val sensitivity: Int?)
+
+internal fun autoBrightnessHistoryParameters(
+    hours: String?,
+    sensitivity: String?,
+): AutoBrightnessHistoryParameters {
+    val boundedHours = if (hours == null) 168 else hours.toIntOrNull()
+        ?: throw IllegalArgumentException("hours must be between 1 and 168")
+    require(boundedHours in 1..168) { "hours must be between 1 and 168" }
+    val boundedSensitivity = sensitivity?.let {
+        it.toIntOrNull()?.takeIf { value -> value in 0..100 }
+            ?: throw IllegalArgumentException("sensitivity must be between 0 and 100")
+    }
+    return AutoBrightnessHistoryParameters(boundedHours, boundedSensitivity)
+}
+
 /**
  * Validate and normalize every direct-config value in one pass. Historically the bespoke route
  * normalized only panel_id while malformed booleans became false, numeric values were silently
@@ -262,17 +456,6 @@ internal fun normalizeConfigPostParameters(raw: Parameters): ConfigPostParameter
                     if (expiry < 0L) return ConfigPostParameters.Bad("ha_token_expiry: must be ≥ 0")
                     expiry.toString()
                 }
-                name == "tame_vendor_packages" -> {
-                    val trimmed = value.trim()
-                    if (trimmed.length > 8_192) {
-                        return ConfigPostParameters.Bad("tame_vendor_packages: must be at most 8192 characters")
-                    }
-                    val packages = trimmed.split(Regex("[\\s,]+")).filter(String::isNotEmpty)
-                    if (packages.size > 128 || packages.any { it.length > 255 || !AndroidInput.isPackage(it) }) {
-                        return ConfigPostParameters.Bad("tame_vendor_packages: expected at most 128 Android package names")
-                    }
-                    packages.distinct().joinToString(" ")
-                }
                 name == "http_allowed_hosts" -> {
                     val trimmed = value.trim()
                     if (trimmed.length > 4_096) {
@@ -304,6 +487,22 @@ internal fun backupStagingRequirement(includeCompanion: Boolean, encrypted: Bool
     return PaneldServer.BACKUP_STORAGE_MARGIN_BYTES + maxOf(archivePeak, rawCapturePeak)
 }
 
+/** Render one trusted Dashboard control without accepting pre-quoted HTML attribute fragments. */
+internal fun dashboardControlButtonHtml(
+    action: String,
+    labelHtml: String,
+    disabledReason: String?,
+    style: String = "",
+): String {
+    require(action.matches(Regex("[a-z_]+"))) { "invalid Dashboard control action" }
+    fun attr(value: String): String = value
+        .replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
+    val styleAttr = style.takeIf(String::isNotBlank)?.let { " style=\"${attr(it)}\"" }.orEmpty()
+    val titleAttr = disabledReason?.let { " title=\"${attr(it)}\"" }.orEmpty()
+    val disabledAttr = if (disabledReason != null) " disabled" else ""
+    return "<button class=\"pbtn\"$styleAttr$titleAttr onclick=\"act('$action')\"$disabledAttr>$labelHtml</button>"
+}
+
 /**
  * Ktor CIO HTTP surface on :8888. Serves the TTS-announce contract plus a small panel info/config
  * UI at `/` (the device's `configuration_url`, so HA shows a "Visit" link).
@@ -315,9 +514,46 @@ internal fun backupStagingRequirement(includeCompanion: Boolean, encrypted: Bool
  *   POST /play     body has a URL (raw or `{"url":"…"}`) -> 200 "playing", background playback;
  *                  no URL -> 400 "no-url"
  *
- * [info] returns the ordered key/value facts to render; [onConfig] applies new settings (panel id
- * + MQTT broker/user/password). Both are supplied by the service, which owns the runtime objects.
+ * [managementProjection] returns the facts/live/capability view; [onReconfigure] rebuilds service-owned
+ * network integrations after config writes. Both are supplied by the service runtime.
  */
+internal fun shouldSnapshotConfigSetting(key: String, zigbeeRouterConfigured: Boolean): Boolean =
+    key != "zigbee_router" || zigbeeRouterConfigured
+
+internal fun projectConfigSnapshot(
+    specs: Iterable<SettingSpec>,
+    zigbeeRouterConfigured: Boolean,
+    excludedKeys: Set<String> = emptySet(),
+    effectiveValue: (SettingSpec) -> String,
+): LinkedHashMap<String, String> {
+    val snapshot = LinkedHashMap<String, String>()
+    specs.forEach { spec ->
+        if (spec.transient || spec.key in excludedKeys) return@forEach
+        if (!shouldSnapshotConfigSetting(spec.key, zigbeeRouterConfigured)) return@forEach
+        snapshot[spec.key] = effectiveValue(spec)
+    }
+    return snapshot
+}
+
+/** Schema-1 backups made before ownership-aware omission cannot distinguish untouched vendor state
+ * from an explicit OFF. On an untouched target, preserve vendor ownership; explicit ON remains safe. */
+internal fun preserveUnconfiguredZigbeeOwnership(
+    values: MutableMap<String, String>,
+    targetConfigured: Boolean,
+): Boolean {
+    if (targetConfigured || values["zigbee_router"] != "false") return false
+    values.remove("zigbee_router")
+    return true
+}
+
+/** Service-owned values projected from one coherent set of controller observations. */
+internal data class ManagementProjection(
+    val facts: Map<String, String>,
+    val live: Map<String, String>,
+    val capabilities: Capabilities,
+    val capabilityRows: List<DiagReader.Cap>,
+)
+
 class PaneldServer internal constructor(
     private val config: Config,
     private val cacheDir: File,
@@ -336,13 +572,11 @@ class PaneldServer internal constructor(
     // hardware → publish HA state). Lets the config API set the formerly MQTT-only keys identically
     // to an HA command. Returns true if the key was a recognised live setting.
     private val applySetting: (String, String) -> Boolean,
-    // Current values of the CONTROLLER-sourced settings (touch_sound, cpu_governor, network_adb,
-    // zigbee_router) — their state lives in controllers, not the config namespace, so the config
-    // form/schema/dashboard read them through this instead of Config.getRaw.
-    private val liveValues: () -> Map<String, String> = { emptyMap() },
-    // This panel's capability snapshot (sensors + cpu/adb/zigbee probes) for availableWhen gating.
-    private val capabilities: () -> Capabilities = { Capabilities() },
-    private val info: () -> Map<String, String>,
+    // Fresh non-transient controller authorities for config export/diff/concurrency (touch sound,
+    // network ADB and Zigbee intent). ManagementProjection owns the broader render/capability view.
+    private val configLiveValues: () -> Map<String, String> = { emptyMap() },
+    // Facts, live settings and availableWhen capabilities derived from one request-scoped observation.
+    private val managementProjection: (PrivilegedRouteObservation) -> ManagementProjection,
     // Per-panel "HA-optimised" density + text-scale suggestions (DeviceProfile), or null.
     private val recommendedDensity: Int? = null,
     private val recommendedFontScale: Float? = null,
@@ -366,6 +600,9 @@ class PaneldServer internal constructor(
     private val onInstallComponent: (String, String, String) -> Boolean = { _, _, _ -> false },
     // Bounded EFR32 health snapshot, or null when this panel has no radio gateway.
     private val radioStatus: () -> ZigbeeHealthSnapshot? = { null },
+    // Reassert Repeater mode through the service-owned serialized Zigbee actuator. Admitted only when
+    // the persisted router switch is explicitly ON; false means the runtime lane is unavailable.
+    private val onZigbeeJoinRetry: () -> Boolean = { false },
     // LAN ha-paneld peers discovered over mDNS — powers the header panel switcher. Injected by the service
     // (captures the live MdnsAdvertiser field). Blocking browse; called only through [peersCache] off-thread.
     private val peers: () -> List<io.github.maxlyth.hapaneld.Peer> = { emptyList() },
@@ -373,6 +610,7 @@ class PaneldServer internal constructor(
     // launch, and retries an interrupted built-in switch from its durable blank-URL state.
     private val rendererPreparation: RendererPreparationCoordinator,
     private val entityLearning: EntityLearningManager,
+    private val autoBrightnessHttpApi: AutoBrightnessHttpApi = AutoBrightnessHttpApi.UNAVAILABLE,
     private val companionDataOperationState: CompanionDataOperationState =
         CompanionDataOperationState.from(appContext),
     // Runtime-loadable profiles. Optional during staged integration so the existing service can keep
@@ -390,6 +628,66 @@ class PaneldServer internal constructor(
         error("provisioning activation provider is unavailable")
     },
 ) {
+    private suspend fun authorizeSensitive(
+        call: ApplicationCall,
+        operation: SensitiveOperation,
+        payload: String,
+        summary: String,
+    ): Boolean {
+        if (!config.hardenedSecurityEnabled) return true
+        val peer = call.request.origin.remoteAddress
+        if (isLoopbackPeer(peer)) return true
+        val (decision, id) = LocalApprovalBroker.instance.request(operation, peer, payload, summary)
+        if (decision == ApprovalBroker.Decision.APPROVED) return true
+        call.respondText(
+            "{\"ok\":false,\"error\":\"approval-required\",\"approval_id\":${Json.str(id)}," +
+                "\"message\":\"Approve this request physically on the panel, then retry it; it cannot be approved remotely.\"}",
+            ContentType.Application.Json,
+            HttpStatusCode.Accepted,
+        )
+        return false
+    }
+
+    private fun isLoopbackPeer(peer: String): Boolean = runCatching {
+        java.net.InetAddress.getByName(peer.substringBefore('%').removePrefix("/")).isLoopbackAddress
+    }.getOrDefault(false)
+
+    private suspend fun rejectHardenedNetworkAdb(call: ApplicationCall, requested: String?): Boolean {
+        if (!config.hardenedSecurityEnabled || SettingValue.parseBool(requested.orEmpty()) != true) {
+            return false
+        }
+        call.respondText(
+            """{"ok":false,"error":"network-adb-incompatible-with-hardened-mode","message":"Switch to Relaxed mode before enabling network ADB."}""",
+            ContentType.Application.Json,
+            HttpStatusCode.Conflict,
+        )
+        return true
+    }
+
+    private suspend fun rejectHardenedDevToolsRelay(call: ApplicationCall): Boolean {
+        if (!config.hardenedSecurityEnabled) return false
+        call.respondText(
+            """{"ok":false,"error":"devtools-incompatible-with-hardened-mode","message":"Switch to Relaxed mode before exposing WebView developer tools to the LAN."}""",
+            ContentType.Application.Json,
+            HttpStatusCode.Conflict,
+        )
+        return true
+    }
+
+    private fun requestsSoftwareInstallAuthority(value: (String) -> String?): Boolean {
+        if (listOf(
+                "self_update" to config.selfUpdate,
+                "companion_auto_update" to config.companionAutoUpdate,
+                "webview_auto_update" to config.webViewAutoUpdate,
+            ).any { (key, enabled) -> SettingValue.parseBool(value(key).orEmpty()) == true && !enabled }
+        ) return true
+        val selfUpdate = SettingValue.parseBool(value("self_update").orEmpty()) ?: config.selfUpdate
+        val companionUpdate = SettingValue.parseBool(value("companion_auto_update").orEmpty())
+            ?: config.companionAutoUpdate
+        return (selfUpdate && value("update_channel")?.let { it != config.updateChannel } == true) ||
+            (companionUpdate && value("companion_update_channel")?.let { it != config.companionUpdateChannel } == true)
+    }
+
     // Per-INSTALL build token (changes on every (re)install, not just a version bump) so an open info
     // page can auto-reload after the app is updated — even a same-version dev re-spin. /health carries it.
     private fun buildToken(): String =
@@ -440,45 +738,47 @@ class PaneldServer internal constructor(
     private val interactive = InteractiveController(canSu = profile.appCanSu)
     // On-panel config revision history (ring buffer) — written on every successful apply.
     private val revisions = RevisionStore(appContext.filesDir)
+    private val performanceBindingSecret: String by lazy {
+        val prefs = AppState.preferences(
+            appContext,
+            "performance-binding",
+            "ha-paneld-performance-binding",
+        )
+        prefs.getString("secret", null)?.takeIf(::validPerformanceDeviceSecret) ?: run {
+            val generated = ByteArray(32).also(SecureRandom()::nextBytes)
+                .joinToString("") { "%02x".format(it) }
+            if (prefs.edit().putString("secret", generated).commit()) generated else ""
+        }
+    }
     // Stored as a stop lambda over a type-inferred server local, so we never have to name Ktor's
     // EmbeddedServer<TEngine, TConfiguration> generic type (which shifts between Ktor versions).
     private var stopServer: (() -> Unit)? = null
     private val inspectLock = Any()
     @Volatile private var stopping = true
-    private enum class TameMutation { TAME, UNTAME, RECOMMENDED }
-    private val tameMutations: KeyedLatestDispatcher<String, TameMutation> = KeyedLatestDispatcher(
-        threadName = "ha-paneld-tame",
-        maxPendingKeys = 256,
-        consume = ::executeTameMutation,
-    )
-
-    private fun executeTameMutation(pkg: String, mutation: TameMutation) {
-        FeatureCosts.registry.setBacklog(FeatureCostOperation.TAME_MUTATION, tameMutations.pendingCount())
-        val cost = FeatureCosts.registry.span(FeatureCostOperation.TAME_MUTATION).work(units = 1)
-        try {
-            when (mutation) {
-                TameMutation.TAME -> if (!tame.tame(pkg)) cost.outcome(FeatureCostOutcome.FAILURE)
-                TameMutation.UNTAME -> if (!tame.untame(pkg)) cost.outcome(FeatureCostOutcome.FAILURE)
-                TameMutation.RECOMMENDED -> {
-                    val tamed = tame.applyRecommended(tameProfileCandidates)
-                    if (tamed.isNotEmpty()) {
-                        config.setTameVendorPackages(
-                            (config.tameVendorPackages.toSet() + tamed).joinToString(" "),
-                        )
-                        snapInvalidate()
-                    }
-                    cost.work(units = tamed.size.toLong())
+    private val tameReconciliation = TameReconcileAuthority(
+        readDesired = { config.tameVendorPackages.toSet() },
+        reconcile = { desired ->
+            val cost = FeatureCosts.registry.span(FeatureCostOperation.TAME_MUTATION)
+            try {
+                tame.reconcileBlocklist(desired).also { result ->
+                    cost.work(units = result.attempted.toLong())
+                    if (result.retryableFailure) cost.outcome(FeatureCostOutcome.FAILURE)
                 }
+            } catch (error: Exception) {
+                cost.outcome(FeatureCostOutcome.FAILURE)
+                Log.w(TAG, "vendor package reconciliation failed", error)
+                TameReconcileResult(attempted = 0, retryableFailure = true)
+            } finally {
+                cost.close()
             }
-        } catch (error: Exception) {
-            cost.outcome(FeatureCostOutcome.FAILURE)
-            Log.w(TAG, "vendor package mutation failed", error)
-        } finally {
-            cost.close()
-        }
-    }
+        },
+        stopping = { stopping },
+        onBacklogChanged = { pending ->
+            FeatureCosts.registry.setBacklog(FeatureCostOperation.TAME_MUTATION, pending)
+        },
+    )
     private sealed class RemoteControl(val key: String) {
-        class Tap(val x: Float, val y: Float) : RemoteControl("tap")
+        class Tap(val x: Float, val y: Float, val loopback: Boolean = false) : RemoteControl("tap")
         class Action(val name: String) : RemoteControl(name)
     }
     private val remoteControls: KeyedLatestDispatcher<String, RemoteControl> = KeyedLatestDispatcher(
@@ -493,7 +793,8 @@ class PaneldServer internal constructor(
         val cost = FeatureCosts.registry.span(FeatureCostOperation.REMOTE_INPUT).work(units = 1)
         val ok = runCatching {
             when (command) {
-                is RemoteControl.Tap -> interactive.tap(command.x, command.y)
+                is RemoteControl.Tap -> if (config.hardenedSecurityEnabled && !command.loopback) false
+                    else interactive.tap(command.x, command.y)
                 is RemoteControl.Action -> when (command.name) {
                     "back" -> interactive.back()
                     "recents" -> interactive.recents()
@@ -516,7 +817,7 @@ class PaneldServer internal constructor(
         pendingApks.open()
         // Bind the IPv6 wildcard "::" — on Android this is dual-stack (net.ipv6.bindv6only=0), so the
         // server answers on both IPv6 and IPv4, instead of the IPv4-only default 0.0.0.0.
-        val server = embeddedServer(CIO, port = config.httpPort, host = "::") {
+        val server = scope.embeddedServer(CIO, port = config.httpPort, host = "::") {
             // 0.8.1 security: refuse any request whose SOURCE is not LAN-local. The unauthenticated control
             // surface answers on the panel's globally-routable IPv6 (dual-stack "::"), so without this it can
             // be reached from the internet whenever the home router doesn't firewall inbound IPv6 — and we
@@ -524,6 +825,9 @@ class PaneldServer internal constructor(
             // (Known limitation to iterate on: a LAN peer reaching the panel via its *global* v6 uses a global
             // source and is also rejected — use IPv4 on-LAN; a same-/64-prefix exception is the next refinement.)
             intercept(ApplicationCallPipeline.Plugins) {
+                call.response.headers.append("X-Content-Type-Options", "nosniff")
+                call.response.headers.append("X-Frame-Options", "DENY")
+                call.response.headers.append("Content-Security-Policy", "frame-ancestors 'none'")
                 // Use origin.remoteAddress (the RAW peer IP), NOT remoteHost — remoteHost reverse-resolves to
                 // a hostname, and forward-resolving that picks a (possibly global) address that fails the
                 // RFC1918 check, 403-ing legitimate LAN clients. Verified: remoteAddress returns 192.168.x etc.
@@ -576,6 +880,7 @@ class PaneldServer internal constructor(
                             }
                         },
                         backupFileStem = { config.panelId },
+                        authorize = ::authorizeSensitive,
                         apkUpload = ApkUploadRouteDependencies(
                             enabled = { config.apkUploadAllowed },
                             rootAvailable = { rootOk() },
@@ -643,7 +948,12 @@ class PaneldServer internal constructor(
                 // The experimental remote-control page is withheld from 0.9.2. Keep old bookmarks
                 // useful while its tap-injection UX is reviewed for a later release.
                 get("/test") { call.respondRedirect("/") }
-                get("/install") { call.respondText(page("install", "Install", installBody()), ContentType.Text.Html) }
+                get("/install") {
+                    call.respondText(
+                        withContext(Dispatchers.IO) { page("install", "Install", installBody()) },
+                        ContentType.Text.Html,
+                    )
+                }
                 get("/fleet") { call.respondText(page("fleet", "Fleet", fleetBody()), ContentType.Text.Html) }
                 get("/logs") { call.respondText(page("logs", "Logs", logsBody()), ContentType.Text.Html) }
                 get("/entities") { call.respondText(page("entities", "Entities", entitiesBody()), ContentType.Text.Html) }
@@ -657,7 +967,7 @@ class PaneldServer internal constructor(
                     call.respondText(html, ContentType.Text.Html)
                 }
                 get("/health") {
-                    call.respondText("ha-paneld ${Config.VERSION} panel=${config.panelId} build=${buildToken()} cfg=${configConcurrencyHash()}\n")
+                    call.respondText("ha-paneld ${Config.VERSION} panel=${config.panelId} build=${buildToken()} cfg=${renderConfigConcurrencyHash()}\n")
                 }
                 // Pre-0.8.5 flat machine endpoints → 308 to their /api/v1 homes.
                 legacyRedirects()
@@ -689,11 +999,12 @@ class PaneldServer internal constructor(
                                     latestReport = profileReport,
                                     probe = profileProbe,
                                 ),
+                                authorize = ::authorizeSensitive,
                             ),
                         )
                     } ?: unavailableProfileRoutes()
                     get("/health") {
-                        call.respondText("ha-paneld ${Config.VERSION} panel=${config.panelId} build=${buildToken()} cfg=${configConcurrencyHash()}\n")
+                        call.respondText("ha-paneld ${Config.VERSION} panel=${config.panelId} build=${buildToken()} cfg=${renderConfigConcurrencyHash()}\n")
                     }
                     get("/config") { call.respondText(configJson(), ContentType.Application.Json) }
                     post("/config") { handleConfigPost(call) }
@@ -717,6 +1028,26 @@ class PaneldServer internal constructor(
                         PerfReader.touch()
                         call.respondText(PerfReader.json(), ContentType.Application.Json)
                     }
+                    get("/perf/binding") {
+                        if (!admitActiveRead(call)) return@get
+                        val comparisonId = call.request.queryParameters["comparison_id"].orEmpty()
+                        if (!comparisonId.matches(PERFORMANCE_COMPARISON_ID)) return@get call.respondText(
+                            "{\"error\":\"invalid comparison_id\"}",
+                            ContentType.Application.Json,
+                            HttpStatusCode.BadRequest,
+                        )
+                        val binding = performanceBindingJson(
+                            comparisonId = comparisonId,
+                            deviceSecret = performanceBindingSecret,
+                            panelId = config.panelId,
+                            workload = performanceWorkloadValues(),
+                        ) ?: return@get call.respondText(
+                            "{\"error\":\"stable device identity unavailable\"}",
+                            ContentType.Application.Json,
+                            HttpStatusCode.ServiceUnavailable,
+                        )
+                        call.respondText(binding, ContentType.Application.Json)
+                    }
                     // Sparse A/B harvesters use this projection without activating the 2 s sampler whose
                     // own CPU and process probes would perturb the feature burden being measured.
                     get("/perf/costs") {
@@ -726,6 +1057,69 @@ class PaneldServer internal constructor(
                         if (!admitActiveRead(call)) return@get
                         val hours = call.request.queryParameters["hours"]?.toIntOrNull() ?: 24
                         call.respondText(entityLearning.performanceHistoryJson(hours), ContentType.Application.Json)
+                    }
+                    get("/auto-brightness") {
+                        call.respondText(autoBrightnessHttpApi.statusJson(), ContentType.Application.Json)
+                    }
+                    get("/auto-brightness/history") {
+                        if (!admitActiveRead(call)) return@get
+                        val request = runCatching {
+                            autoBrightnessHistoryParameters(
+                                call.request.queryParameters["hours"],
+                                call.request.queryParameters["sensitivity"],
+                            )
+                        }.getOrElse {
+                            return@get call.respondText(
+                                "${it.message ?: "invalid history query"}\n",
+                                status = HttpStatusCode.BadRequest,
+                            )
+                        }
+                        call.respondText(
+                            autoBrightnessHttpApi.historyJson(request.hours, request.sensitivity),
+                            ContentType.Application.Json,
+                        )
+                    }
+                    get("/auto-brightness/sources") {
+                        val query = call.request.queryParameters["q"].orEmpty().trim().take(100)
+                        val limit = (call.request.queryParameters["limit"]?.toIntOrNull() ?: 100).coerceIn(1, 200)
+                        call.respondText(
+                            autoBrightnessHttpApi.haSourcesJson(query, limit),
+                            ContentType.Application.Json,
+                        )
+                    }
+                    post("/auto-brightness/source") {
+                        val obj = receiveEntityAdminJson(call, allowBlank = true) ?: return@post
+                        if (!obj.has("entity_id")) {
+                            return@post call.respondText(
+                                "entity_id is required (null selects the panel sensor)\n",
+                                status = HttpStatusCode.BadRequest,
+                            )
+                        }
+                        val raw = obj.opt("entity_id")
+                        val selected = when (raw) {
+                            JSONObject.NULL -> null
+                            is String -> {
+                                val spec = requireNotNull(SettingsRegistry.spec("auto_brightness_ha_entity"))
+                                when (val accepted = SettingValue.validate(spec, raw)) {
+                                    is Validation.Ok -> accepted.normalized.ifBlank { null }
+                                    is Validation.Bad -> return@post call.respondText(
+                                        "${accepted.reason}\n",
+                                        status = HttpStatusCode.BadRequest,
+                                    )
+                                }
+                            }
+                            else -> return@post call.respondText(
+                                "entity_id must be a string or null\n",
+                                status = HttpStatusCode.BadRequest,
+                            )
+                        }
+                        respondAutoBrightnessAction(call, autoBrightnessHttpApi.selectHaSource(selected))
+                    }
+                    post("/auto-brightness/reset") {
+                        respondAutoBrightnessAction(call, autoBrightnessHttpApi.resetHistory())
+                    }
+                    post("/auto-brightness/resume") {
+                        respondAutoBrightnessAction(call, autoBrightnessHttpApi.resumeFullAuto())
                     }
                     // Experimental built-in-renderer entity filter. The exact ids are accepted at runtime
                     // but never echoed, logged, or included in config exports; status is count+hash.
@@ -859,12 +1253,8 @@ class PaneldServer internal constructor(
                         call.respondText(withContext(Dispatchers.IO) { infoJson() }, ContentType.Application.Json)
                     }
                     get("/diag") {
-                        // Last-known snapshot facts, refreshed in the background: the [panel] block is
-                        // ancillary context, and a blocking snapCache.get() re-ran the FULL probe suite
-                        // whenever the snapshot was stale (>12s on a PX30 for a "simple" text page).
-                        val facts = withContext(Dispatchers.IO) { snapStaleOk().facts }
                         call.respondText(
-                            DiagReader.dump(appContext, profile, facts, radioStatus()),
+                            withContext(Dispatchers.IO) { diagStaleOk() },
                             ContentType.Text.Plain,
                         )
                     }
@@ -890,7 +1280,10 @@ class PaneldServer internal constructor(
                                 }
                             }
                         }
-                        call.respondText(statusJson(), ContentType.Application.Json)
+                        call.respondText(
+                            withContext(Dispatchers.IO) { statusJson() },
+                            ContentType.Application.Json,
+                        )
                     }
                     // Dismiss a component update from the DASHBOARD banner only (per-version; re-surfaces when
                     // a newer release ships). The Install tab still lists it. See Config.ignoreUpdate.
@@ -917,8 +1310,25 @@ class PaneldServer internal constructor(
                                 else -> emptyList()
                             }
                         }
+                        val installedVersion = when (name) {
+                            "paneld" -> Config.VERSION
+                            "companion" -> CompanionInstaller.installedPkg(appContext)?.let {
+                                AppInstaller.installedVersion(appContext, it)
+                            }
+                            else -> null
+                        }
                         val arr = vers.joinToString(",") { v ->
-                            """{"version":${jsonStr(v.version)},"tag":${jsonStr(v.tag)},"notes":${jsonStr(v.notesUrl)},"installable":${v.installable},"apk":${jsonStr(v.apkUrl ?: "")}}"""
+                            val candidate = if (name == "companion") UpdateChecker.stripVariant(v.version) else v.version
+                            val installed = installedVersion?.let {
+                                if (name == "companion") UpdateChecker.stripVariant(it) else it
+                            }
+                            val comparison = installed?.let { UpdateChecker.compareVersions(candidate, it) }
+                            val action = when {
+                                comparison == null || comparison == 0 -> "Install"
+                                comparison > 0 -> "Upgrade"
+                                else -> "Downgrade"
+                            }
+                            """{"version":${jsonStr(v.version)},"tag":${jsonStr(v.tag)},"notes":${jsonStr(v.notesUrl)},"installable":${v.installable},"action":${jsonStr(action)},"apk":${jsonStr(v.apkUrl ?: "")}}"""
                         }
                         call.respondText("""{"channel":${jsonStr(channel)},"versions":[$arr]}""", ContentType.Application.Json)
                     }
@@ -943,10 +1353,19 @@ class PaneldServer internal constructor(
                     post("/uninstall") {
                         if (!suCache.get()) return@post call.respondText(
                             """{"ok":false,"error":"no-root"}""", ContentType.Application.Json, HttpStatusCode.ServiceUnavailable)
-                        val pkg = (receiveBoundedFormParameters(call) ?: return@post)["pkg"]?.trim().orEmpty()
+                        val parameters = receiveBoundedFormParameters(call) ?: return@post
+                        val pkg = parameters["pkg"]?.trim().orEmpty()
                         val protected = pkg == appContext.packageName || pkg == io.github.maxlyth.hapaneld.util.WebViewInstaller.WEBVIEW_PKG
-                        if (pkg.isEmpty() || protected || !AndroidInput.isPackage(pkg))
+                        if (pkg.isEmpty() || protected || !AndroidInput.isPackage(pkg) ||
+                            pkg !in removablePackages().mapTo(hashSetOf()) { it.first })
                             return@post call.respondText("""{"ok":false,"error":"bad-package"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+                        if (!authorizeSensitive(
+                                call,
+                                SensitiveOperation.PACKAGE_UNINSTALL,
+                                exactHttpApprovalPayload(call, parameters.canonicalDigest()),
+                                "Uninstall $pkg",
+                            )
+                        ) return@post
                         val progress = InstallProgress.start("Uninstall") ?: return@post call.respondText(
                             """{"ok":false,"error":"busy"}""", ContentType.Application.Json, HttpStatusCode.Conflict)
                         var progressResult = "uninstall cancelled"
@@ -970,15 +1389,49 @@ class PaneldServer internal constructor(
                         val st = withContext(Dispatchers.IO) { radioStatus() }
                         val body = if (st == null) """{"present":false,"status":"none"}""" else JSONObject()
                             .put("present", true)
+                            .put("router_configured", config.zigbeeRouterConfigured)
+                            .put("router_enabled", config.zigbeeRouterConfigured && config.zigbeeRouterEnabled)
                             .put("status", st.publicSummary())
                             .put("state", st.state.wireValue)
                             .put("attributes", JSONObject(st.mqttAttributes()))
                             .toString()
                         call.respondText(body, ContentType.Application.Json)
                     }
+                    post("/radio/join") {
+                        val st = radioStatus()
+                        when {
+                            st == null -> call.respondText(
+                                """{"status":"unavailable"}""",
+                                ContentType.Application.Json,
+                                HttpStatusCode.NotFound,
+                            )
+                            !config.zigbeeRouterConfigured || !config.zigbeeRouterEnabled ->
+                                call.respondText(
+                                    """{"status":"disabled"}""",
+                                    ContentType.Application.Json,
+                                    HttpStatusCode.Conflict,
+                                )
+                            onZigbeeJoinRetry() -> call.respondText(
+                                """{"status":"started"}""",
+                                ContentType.Application.Json,
+                            )
+                            else -> call.respondText(
+                                """{"status":"busy"}""",
+                                ContentType.Application.Json,
+                                HttpStatusCode.ServiceUnavailable,
+                            )
+                        }
+                    }
                     // Auto-heal the System WebView (download + install the profile's recommended build).
                     // Fire-and-forget: the install runs off-thread (large download); the client refreshes.
                     post("/webview/heal") {
+                        if (!authorizeSensitive(
+                                call,
+                                SensitiveOperation.APK_INSTALL,
+                                exactHttpApprovalPayload(call, sha256Hex(ByteArray(0))),
+                                "Reinstall the recommended System WebView",
+                            )
+                        ) return@post
                         val status = if (onInstallComponent("webview", "reinstall", "")) "started" else "busy"
                         call.respondText("""{"status":"$status"}""", ContentType.Application.Json)
                     }
@@ -988,6 +1441,13 @@ class PaneldServer internal constructor(
                     // so this never logs the panel out. Relaunches the built-in renderer when it's the
                     // active dashboard so it comes back on a clean slate. WebView APIs are UI-thread-only.
                     post("/dashboard/clear-storage") {
+                        if (!authorizeSensitive(
+                                call,
+                                SensitiveOperation.DASHBOARD_STORAGE_CLEAR,
+                                exactHttpApprovalPayload(call, sha256Hex(ByteArray(0))),
+                                "Clear the built-in dashboard's browsing data",
+                            )
+                        ) return@post
                         val token = clearStorageGate.claim()
                         if (token == null) {
                             call.respondText(
@@ -1050,8 +1510,15 @@ class PaneldServer internal constructor(
                     // header" incident). Fire-and-forget: the repair force-stops + relaunches the Companion
                     // off-thread; invalidate the health cache so the warning clears on the next poll.
                     post("/companion/repair-url") {
+                        if (!authorizeSensitive(
+                                call,
+                                SensitiveOperation.COMPANION_REPAIR,
+                                exactHttpApprovalPayload(call, sha256Hex(ByteArray(0))),
+                                "Repair and relaunch the Home Assistant Companion",
+                            )
+                        ) return@post
                         val started = onRepairCompanionUrl()
-                        if (started) companionUrlCache.invalidate()
+                        if (started) companionServerCache.invalidate()
                         call.respondText("""{"status":"${if (started) "started" else "busy"}"}""", ContentType.Application.Json)
                     }
                     // Per-panel Canvas dashboard layout (opaque Gridstack JSON, stored in Config).
@@ -1079,9 +1546,19 @@ class PaneldServer internal constructor(
                     }
                     // On-screen Controls card (software navbar) for panels with no physical nav bar.
                     post("/action") {
-                        val a = (receiveBoundedFormParameters(call) ?: return@post)["a"]
+                        val parameters = receiveBoundedFormParameters(call) ?: return@post
+                        val a = parameters["a"]
                         if (a !in REMOTE_ACTIONS) call.respondText("bad-action\n", status = HttpStatusCode.BadRequest)
-                        else respondRemoteAdmission(call, RemoteControl.Action(a!!))
+                        else {
+                            if (a == "reboot" && !authorizeSensitive(
+                                    call,
+                                    SensitiveOperation.DEVICE_REBOOT,
+                                    exactHttpApprovalPayload(call, parameters.canonicalDigest()),
+                                    "Reboot this panel",
+                                )
+                            ) return@post
+                            respondRemoteAdmission(call, RemoteControl.Action(a!!))
+                        }
                     }
                     // Debug-only sensor trace (RAM ring buffer, on by default) for fit-testing the
                     // auto-brightness + proximity filters. CSV by default (drop into a plot); ?format=json
@@ -1122,70 +1599,108 @@ class PaneldServer internal constructor(
                     get("/openapi.json") {
                         call.respondText(asset("openapi.json"), ContentType.Application.Json)
                     }
-                    // Live proximity state for the tuning UI (raw never goes to HA; it lives here).
-                    get("/proximity") {
-                        call.respondText(sensors.proximityJson(), ContentType.Application.Json)
-                    }
-                    // step=near|far -> snapshot the current raw into that calibration slot.
-                    post("/proximity/capture") {
-                        val step = (receiveBoundedFormParameters(call) ?: return@post)["step"]
-                        val raw = sensors.lastRaw
-                        when {
-                            step != "near" && step != "far" ->
-                                call.respondText("bad-step\n", status = HttpStatusCode.BadRequest)
-                            raw.isNaN() ->
-                                call.respondText("no-reading\n", status = HttpStatusCode.BadRequest)
-                            else -> {
-                                config.captureProximity(step, raw)
-                                sensors.reevaluate()
-                                call.respondText(sensors.proximityJson(), ContentType.Application.Json)
-                            }
+                    post("/proximity/teach") {
+                        val action = (receiveBoundedFormParameters(call) ?: return@post)["action"].orEmpty()
+                        if (action != "cancel" && !sensors.hasRangedProximity()) {
+                            call.respondText(RANGED_PROXIMITY_REQUIRED, ContentType.Application.Json, HttpStatusCode.Conflict)
+                            return@post
                         }
-                    }
-                    // v=<float> -> manual threshold fine-tune (overrides the captured midpoint).
-                    post("/proximity/threshold") {
-                        val v = (receiveBoundedFormParameters(call) ?: return@post)["v"]?.toFloatOrNull()
-                        if (!validProximityThreshold(v)) {
-                            call.respondText("bad-value\n", status = HttpStatusCode.BadRequest)
-                        } else {
-                            config.setProximityThreshold(v!!)
-                            sensors.reevaluate()
-                            call.respondText(sensors.proximityJson(), ContentType.Application.Json)
+                        val accepted = when (action) {
+                            "start" -> sensors.startProximityTeach()
+                            "cancel" -> sensors.cancelProximitySession()
+                            else -> false
                         }
-                    }
-                    // s=HIGH|MEDIUM|LOW -> hysteresis band width (flap resistance).
-                    post("/proximity/sensitivity") {
-                        config.setProximitySensitivity(
-                            (receiveBoundedFormParameters(call) ?: return@post)["s"].orEmpty(),
+                        call.respondText(
+                            sensors.proximityJson(), ContentType.Application.Json,
+                            if (accepted) HttpStatusCode.Accepted else HttpStatusCode.Conflict,
                         )
-                        sensors.reevaluate()
-                        call.respondText(sensors.proximityJson(), ContentType.Application.Json)
+                    }
+                    post("/proximity/test") {
+                        val action = (receiveBoundedFormParameters(call) ?: return@post)["action"].orEmpty()
+                        if (action != "cancel" && !sensors.hasRangedProximity()) {
+                            call.respondText(RANGED_PROXIMITY_REQUIRED, ContentType.Application.Json, HttpStatusCode.Conflict)
+                            return@post
+                        }
+                        val accepted = when (action) {
+                            "start" -> sensors.startProximityTest()
+                            "cancel" -> sensors.cancelProximitySession()
+                            else -> false
+                        }
+                        call.respondText(
+                            sensors.proximityJson(), ContentType.Application.Json,
+                            if (accepted) HttpStatusCode.Accepted else HttpStatusCode.Conflict,
+                        )
+                    }
+                    post("/proximity/relearn") {
+                        if (!sensors.hasRangedProximity()) {
+                            call.respondText(RANGED_PROXIMITY_REQUIRED, ContentType.Application.Json, HttpStatusCode.Conflict)
+                            return@post
+                        }
+                        val confirm = (receiveBoundedFormParameters(call) ?: return@post)["confirm"] == "true"
+                        if (!confirm) {
+                            call.respondText("confirmation-required\n", status = HttpStatusCode.Conflict)
+                        } else {
+                            val cleared = sensors.relearnProximity()
+                            call.respondText(
+                                sensors.proximityJson(),
+                                ContentType.Application.Json,
+                                if (cleared) HttpStatusCode.OK else HttpStatusCode.ServiceUnavailable,
+                            )
+                        }
+                    }
+                    post("/proximity/capture") {
+                        call.respondText(RETIRED_PROXIMITY_OPERATION, ContentType.Application.Json, HttpStatusCode.Gone)
+                    }
+                    post("/proximity/threshold") {
+                        call.respondText(RETIRED_PROXIMITY_OPERATION, ContentType.Application.Json, HttpStatusCode.Gone)
+                    }
+                    post("/proximity/sensitivity") {
+                        call.respondText(RETIRED_PROXIMITY_OPERATION, ContentType.Application.Json, HttpStatusCode.Gone)
                     }
                     post("/proximity/reset") {
-                        config.resetProximityCalibration()
-                        sensors.reevaluate()
-                        call.respondText(sensors.proximityJson(), ContentType.Application.Json)
+                        call.respondText(RETIRED_PROXIMITY_OPERATION, ContentType.Application.Json, HttpStatusCode.Gone)
                     }
                     // Per-package vendor taming from the Vendor packages card. action=tame adds the package to
                     // the blocklist and tames it now; action=untame removes it and re-enables it. The work is
                     // privileged + slow, so it runs off-thread and the browser gets a short auto-reload back to
-                    // the info page (the row's new state shows on reload).
+                    // the Install card (the row's new state shows on reload).
                     post("/tame") {
                         val p = receiveBoundedFormParameters(call) ?: return@post
                         // One-click "Tame all recommended" (the profile's defaultTame set) — no pkg needed.
-                        // Persists the actually-tamed packages so they re-apply on boot; tame() is guarded
-                        // (hands over the home role + refuses to strand), so this never leaves the panel homeless.
+                        // Persist the safe installed selection first. The one desired-state owner then converges
+                        // it; write-ahead overlay ownership makes an interrupted profile restart retryable.
                         if (p["action"]?.trim() == "recommended") {
-                            if (!submitTameMutation(RECOMMENDED_TAME_KEY, TameMutation.RECOMMENDED)) {
-                                call.respondText("vendor mutation queue busy\n", status = HttpStatusCode.ServiceUnavailable)
+                            val recommendedSelections = tame.recommendedSelections(tameProfileCandidates)
+                            val recommended = recommendedSelections.joinToString("\u0000")
+                            val digest = sha256Hex((p.canonicalDigest() + "\u0000" + recommended).toByteArray())
+                            if (!authorizeSensitive(
+                                    call,
+                                    SensitiveOperation.PACKAGE_TAME,
+                                    exactHttpApprovalPayload(call, digest),
+                                    "Tame the profile's recommended vendor packages",
+                                )
+                            ) return@post
+                            val committed = withContext(Dispatchers.IO) {
+                                updateTameSelection { it.addAll(recommendedSelections) }
+                            }
+                            if (!committed) {
+                                call.respondText("vendor selection commit failed\n", status = HttpStatusCode.InternalServerError)
                                 return@post
                             }
-                            call.respondText(
-                                "<!doctype html><meta charset=utf-8><meta http-equiv=refresh content='2;url=/configure'>" +
-                                    "<body style='font-family:system-ui;background:#111;color:#eee;padding:20px'>" +
-                                    "applying recommended vendor-app taming…</body>",
-                                ContentType.Text.Html,
-                            )
+                            snapInvalidate()
+                            if (call.request.headers["Accept"]?.contains("application/json") == true) {
+                                call.respondText(
+                                    """{"ok":true,"status":"started","message":"Applying recommended vendor-package taming.","return_to":"/install#cfg-tame"}""",
+                                    ContentType.Application.Json,
+                                )
+                            } else {
+                                call.respondText(
+                                    "<!doctype html><meta charset=utf-8><meta http-equiv=refresh content='2;url=/install#cfg-tame'>" +
+                                        "<body style='font-family:system-ui;background:#111;color:#eee;padding:20px'>" +
+                                        "applying recommended vendor-app taming…</body>",
+                                    ContentType.Text.Html,
+                                )
+                            }
                             return@post
                         }
                         val pkg = p["pkg"]?.trim().orEmpty()
@@ -1197,22 +1712,39 @@ class PaneldServer internal constructor(
                             call.respondText("invalid or protected package\n", status = HttpStatusCode.BadRequest)
                             return@post
                         }
-                        val mutation = if (untame) TameMutation.UNTAME else TameMutation.TAME
-                        if (!submitTameMutation(pkg, mutation)) {
-                            call.respondText("vendor mutation queue busy\n", status = HttpStatusCode.ServiceUnavailable)
+                        if (!authorizeSensitive(
+                                call,
+                                SensitiveOperation.PACKAGE_TAME,
+                                exactHttpApprovalPayload(call, p.canonicalDigest()),
+                                "${if (untame) "Re-enable" else "Tame"} vendor package $pkg",
+                            )
+                        ) return@post
+                        val committed = withContext(Dispatchers.IO) {
+                            updateTameSelection { selected ->
+                                if (untame) selected.remove(pkg) else selected.add(pkg)
+                            }
+                        }
+                        if (!committed) {
+                            call.respondText("vendor selection commit failed\n", status = HttpStatusCode.InternalServerError)
                             return@post
                         }
-                        val next = config.tameVendorPackages.toMutableSet()
-                        if (untame) next.remove(pkg) else next.add(pkg)
-                        config.setTameVendorPackages(next.joinToString(" "))
                         snapInvalidate()
                         val verb = if (untame) "re-enabling" else "taming"
-                        call.respondText(
-                            "<!doctype html><meta charset=utf-8><meta http-equiv=refresh content='2;url=/configure'>" +
-                                "<body style='font-family:system-ui;background:#111;color:#eee;padding:20px'>" +
-                                "$verb ${esc(pkg)}…</body>",
-                            ContentType.Text.Html,
-                        )
+                        if (call.request.headers["Accept"]?.contains("application/json") == true) {
+                            call.respondText(
+                                "{" +
+                                    "\"ok\":true,\"status\":\"started\",\"message\":" + jsonStr("${verb.replaceFirstChar { it.uppercase() }} $pkg.") + "," +
+                                    "\"return_to\":\"/install#cfg-tame\"}",
+                                ContentType.Application.Json,
+                            )
+                        } else {
+                            call.respondText(
+                                "<!doctype html><meta charset=utf-8><meta http-equiv=refresh content='2;url=/install#cfg-tame'>" +
+                                    "<body style='font-family:system-ui;background:#111;color:#eee;padding:20px'>" +
+                                    "$verb ${esc(pkg)}…</body>",
+                                ContentType.Text.Html,
+                            )
+                        }
                     }
                     // The "Find a package…" picker pop-up content: an on-demand, grouped list of packages a
                     // non-expert might want to control — Recommended (profile) / Other apps / Using the most
@@ -1235,7 +1767,7 @@ class PaneldServer internal constructor(
                         // One-click "Tame all recommended", shown only when there's an active recommended pick.
                         val hasRec = groups.any { g -> g.items.any { it.recommended && !it.blocked && !it.disabled && it.installed } }
                         val recBtn = if (hasRec)
-                            """<form method="post" action="/api/v1/tame" style="margin:0 0 12px"><input type="hidden" name="action" value="recommended"><button type="submit" style="background:#2e6b3f;border-color:#2e6b3f">✓ Tame all recommended</button> <span class="note" style="font-size:.8em">the badged first-picks below, in one click</span></form>"""
+                            """<form method="post" action="/api/v1/tame" style="margin:0 0 12px"><input type="hidden" name="action" value="recommended"><button type="submit"${hardenedApprovalA11yAttrs()} style="background:#2e6b3f;border-color:#2e6b3f">✓ Tame all recommended</button> <span class="note" style="font-size:.8em">the badged first-picks below, in one click</span></form>"""
                             else ""
                         call.respondText(recBtn + frag, ContentType.Text.Html)
                     }
@@ -1244,6 +1776,13 @@ class PaneldServer internal constructor(
                         val action = p["action"]                          // "reset" | "rec" (buttons)
                         val d = p["density"]?.trim()?.toIntOrNull()       // custom density (Apply)
                         val f = p["font"]?.trim()?.toFloatOrNull()        // custom font scale (Apply)
+                        if (!authorizeSensitive(
+                                call,
+                                SensitiveOperation.DISPLAY_CONFIGURATION,
+                                exactHttpApprovalPayload(call, p.canonicalDigest()),
+                                "Change persistent display density or text size",
+                            )
+                        ) return@post
                         val ok = when (action) {
                             "reset" -> DensityController.allApplied(density.reset(), density.resetFontScale())
                             "rec" -> DensityController.allApplied(
@@ -1257,38 +1796,70 @@ class PaneldServer internal constructor(
                                 )
                             }
                         }
-                        // Prime the density cache with the KNOWN result so the redirected /configure shows it
+                        // Prime the density cache with the KNOWN result so the redirected Install card shows it
                         // at once — reading `wm density` back immediately after a change can still return the
                         // pre-write override for a second or two (the change is async), which flashed a stale
                         // value on the page until a manual reload. Only the just-changed field could race, so
                         // we take the value we set (d / recommendedDensity / base) and only re-read the
                         // unchanged fields (which are stable).
-                        val base = density.base()
+                        val observedSizing = density.observeSizing()
+                        val base = observedSizing.base
                         val postDpi = when (action) {
                             "reset" -> base
-                            "rec" -> recommendedDensity ?: density.current()
-                            else -> d ?: density.current()
+                            "rec" -> recommendedDensity ?: observedSizing.current
+                            else -> d ?: observedSizing.current
                         }
                         val postFont = when (action) {
                             "reset" -> 1.0f
-                            "rec" -> recommendedFontScale ?: density.fontScale()
-                            else -> f ?: density.fontScale()
+                            "rec" -> recommendedFontScale ?: observedSizing.fontScale
+                            else -> f ?: observedSizing.fontScale
                         }
                         snapInvalidate()
-                        if (ok) densityCache.set(Triple(postDpi, base, postFont))
-                        call.respondText(
-                            "<!doctype html><meta charset=utf-8><meta http-equiv=refresh content='1;url=/configure'>" +
-                                "<body style='font-family:system-ui;background:#111;color:#eee;padding:20px'>" +
-                                (if (ok) "display density applied" else "density unchanged") + "…</body>",
-                            ContentType.Text.Html,
-                        )
+                        if (ok) densityCache.set(DisplaySizingObservation(postDpi, base, postFont))
+                        val message = if (ok) {
+                            "Display sizing applied."
+                        } else {
+                            "Display sizing was not applied; the privileged display command failed or no valid change was requested."
+                        }
+                        val responseStatus = if (ok) HttpStatusCode.OK else HttpStatusCode.InternalServerError
+                        if (call.request.headers["Accept"]?.contains("application/json") == true) {
+                            call.respondText(
+                                "{" +
+                                    "\"ok\":$ok,\"status\":\"${if (ok) "applied" else "apply-failed"}\"," +
+                                    "\"message\":${jsonStr(message)},\"return_to\":\"/install#cfg-display\"}",
+                                ContentType.Application.Json,
+                                responseStatus,
+                            )
+                        } else {
+                            call.respondText(
+                                "<!doctype html><meta charset=utf-8>" +
+                                    (if (ok) "<meta http-equiv=refresh content='1;url=/install#cfg-display'>" else "") +
+                                    "<body style='font-family:system-ui;background:#111;color:#eee;padding:20px'>" +
+                                    esc(message) + (if (ok) "…" else " <a href='/install#cfg-display' style='color:#9cf'>Return to Display sizing</a>") + "</body>",
+                                ContentType.Text.Html,
+                                responseStatus,
+                            )
+                        }
                     }
                     // 1-click WebView DevTools: expose the dashboard's CDP socket to the LAN (root relay)
                     // so the user can chrome://inspect with no adb. See CdpRelay.
                     get("/inspect") {
-                        call.respondText(inspectJson(if (CdpRelay.running) "started" else "off"), ContentType.Application.Json)
+                        val status = when {
+                            CdpRelay.running -> "started"
+                            config.hardenedSecurityEnabled -> "hardened-disabled"
+                            else -> "off"
+                        }
+                        call.respondText(inspectJson(status), ContentType.Application.Json)
                     }
                     post("/inspect/start") {
+                        if (rejectHardenedDevToolsRelay(call)) return@post
+                        if (!authorizeSensitive(
+                                call,
+                                SensitiveOperation.DEVTOOLS_ENABLE,
+                                exactHttpApprovalPayload(call, sha256Hex(ByteArray(0))),
+                                "Expose this panel's WebView developer tools to the LAN",
+                            )
+                        ) return@post
                         val status = synchronized(inspectLock) {
                             if (stopping) "off" else CdpRelay.start(appContext)
                         }
@@ -1319,24 +1890,59 @@ class PaneldServer internal constructor(
             Log.e(TAG, "HTTP bind on :${config.httpPort} failed", e)
             throw e
         }
-        // Pre-warm the probe snapshot so even the first dashboard visit usually renders complete.
-        scope.launch(Dispatchers.IO) { runCatching { snapCache.get() } }
     }
 
-    fun stop() {
+    /**
+     * Populate the dashboard's last-known observation after critical startup work has completed.
+     * Binding the HTTP control plane itself remains free of privileged or hardware probes.
+     * The caller supplies the existing IO scope so post-critical work can remain intentionally ordered.
+     */
+    internal fun prewarm() {
+        val startedAt = android.os.SystemClock.elapsedRealtime()
+        var managementSucceeded = false
+        var companionSucceeded = false
+        runPrewarmPhases(
+            isStopping = { stopping },
+            management = {
+                managementSucceeded = runCatching { snapCache.get() }
+                    .onFailure { Log.w(TAG, "management snapshot prewarm failed", it) }
+                    .isSuccess
+            },
+            companion = {
+                companionSucceeded = runCatching {
+                    val observed = companionServerCache.get()
+                    observed.preferredUrl?.let { config.setHaBaseUrl(it) }
+                    check(observed.probeSucceeded) { "Companion servers table is unreadable" }
+                }.onFailure { Log.w(TAG, "Companion server observation prewarm failed", it) }
+                    .isSuccess
+            },
+        )
+        if (managementSucceeded && companionSucceeded) {
+            Log.i(TAG, "management prewarm completed in " +
+                "${android.os.SystemClock.elapsedRealtime() - startedAt}ms")
+        }
+    }
+
+    /** True when every directly owned HTTP resource proves terminal. Ktor request jobs are children of
+     * the service scope and are proved separately by the service's terminal scope drain. */
+    fun stop(): Boolean {
         stopping = true
-        clearStorageGate.close()
-        stopServer?.invoke()
-        stopServer = null
-        // Serialize against an admitted start: teardown either prevents it or waits and then kills it.
-        synchronized(inspectLock) { if (CdpRelay.running) CdpRelay.stop() }
-        pendingApks.close()
-        if (!tameMutations.closeAndJoin(TAME_SHUTDOWN_MS)) {
-            Log.w(TAG, "vendor mutation did not drain within ${TAME_SHUTDOWN_MS}ms")
-        }
-        if (!remoteControls.closeAndJoin(REMOTE_CONTROL_SHUTDOWN_MS)) {
-            Log.w(TAG, "remote control did not drain within ${REMOTE_CONTROL_SHUTDOWN_MS}ms")
-        }
+        return stopHttpOwners(
+            closeOperationAdmission = clearStorageGate::close,
+            closeUploadIngress = pendingApks::close,
+            stopEngine = {
+                stopServer?.invoke()
+                stopServer = null
+            },
+            // Serialize against an admitted start: teardown either prevents it or waits and then kills it.
+            stopRelay = { synchronized(inspectLock) { !CdpRelay.running || CdpRelay.stop() } },
+            drainTameMutations = { tameReconciliation.closeAndJoin(TAME_SHUTDOWN_MS) },
+            drainRemoteControls = { remoteControls.closeAndJoin(REMOTE_CONTROL_SHUTDOWN_MS) },
+            onIncomplete = { step, error ->
+                if (error == null) Log.w(TAG, "$step cleanup did not complete")
+                else Log.w(TAG, "$step cleanup failed", error)
+            },
+        )
     }
 
     // The panel's physical resolution as a CSS aspect-ratio (e.g. "750/1334") so the Screenshot card can
@@ -1371,6 +1977,9 @@ class PaneldServer internal constructor(
             "/proximity/threshold" to "/api/v1/proximity/threshold",
             "/proximity/sensitivity" to "/api/v1/proximity/sensitivity",
             "/proximity/reset" to "/api/v1/proximity/reset",
+            "/proximity/teach" to "/api/v1/proximity/teach",
+            "/proximity/test" to "/api/v1/proximity/test",
+            "/proximity/relearn" to "/api/v1/proximity/relearn",
             "/config" to "/api/v1/config",
             "/tame" to "/api/v1/tame",
             "/tame/suggest" to "/api/v1/tame/suggest",
@@ -1395,7 +2004,7 @@ class PaneldServer internal constructor(
     private suspend fun handleLogStream(call: ApplicationCall) {
         val cap = when (val src = call.request.queryParameters["source"] ?: "app") {
             "app" -> logApp
-            "system" -> if (suCache.get()) logSystem else {
+            "system" -> if (withContext(Dispatchers.IO) { suCache.get() }) logSystem else {
                 call.respondText("system log needs root\n", status = HttpStatusCode.ServiceUnavailable)
                 return
             }
@@ -1462,6 +2071,35 @@ class PaneldServer internal constructor(
 
     // ---- tabbed multi-page shell ----
 
+    private fun hardenedApprovalA11yAttrs(conditional: Boolean = false): String {
+        val description = if (conditional) "hardened-approval-conditional-description" else "hardened-approval-description"
+        val title = if (conditional) HARDENED_CONDITIONAL_APPROVAL_TEXT else HARDENED_APPROVAL_TEXT
+        return """ aria-describedby="$description" title="$title""""
+    }
+
+    private fun hardenedApprovalAttrs(conditional: Boolean = false): String =
+        """ data-hardened-approval${if (conditional) "=\"conditional\"" else ""}${hardenedApprovalA11yAttrs(conditional)}"""
+
+    private fun hardenedApprovalCardTitle(title: String, badge: String = "", conditional: Boolean = false): String {
+        val description = if (conditional) "hardened-approval-section-conditional-description" else "hardened-approval-section-description"
+        val explanation = if (conditional) {
+            "Some actions in this section require physical on-panel approval when Hardened mode is enabled."
+        } else {
+            "Actions in this section require physical on-panel approval when Hardened mode is enabled."
+        }
+        val marker = if (conditional) "=\"conditional\"" else ""
+        return """<h2 data-hardened-approval$marker aria-describedby="$description" title="$explanation">$title$badge</h2>"""
+    }
+
+    private fun hardenedApprovalDescription(): String =
+        """<span id="hardened-approval-description" class="sr-only">$HARDENED_APPROVAL_TEXT</span>""" +
+            """<span id="hardened-approval-conditional-description" class="sr-only">$HARDENED_CONDITIONAL_APPROVAL_TEXT</span>""" +
+            """<span id="hardened-approval-section-description" class="sr-only">Actions in this section require physical on-panel approval when Hardened mode is enabled.</span>""" +
+            """<span id="hardened-approval-section-conditional-description" class="sr-only">Some actions in this section require physical on-panel approval when Hardened mode is enabled.</span>"""
+
+    private fun hardenedApprovalKey(top: Boolean = false): String =
+        """<p class="hardened-approval-key${if (top) " top" else ""}">Shielded actions need physical approval on this panel in Hardened mode; they cannot be approved remotely.</p>"""
+
     /** The shared tab bar; [active] highlights the current page. */
     private fun navBar(active: String): String {
         fun tab(id: String, href: String, label: String): String =
@@ -1475,7 +2113,8 @@ class PaneldServer internal constructor(
             tab("profiles", "/profiles", "Profile") +
             entityTab +
             tab("install", "/install", "Install") +
-            tab("fleet", "/fleet", "Fleet") +
+            // Keep the dormant /fleet route available to old bookmarks without presenting the
+            // placeholder as a near-term product commitment.
             tab("logs", "/logs", "Logs") +
             """<a href="/api">API</a></div>"""
     }
@@ -1485,11 +2124,12 @@ class PaneldServer internal constructor(
         <p>Enable <b>Automatic dashboard entity filter</b> on Configure → Dashboard while using the built-in renderer.</p></div></div>"""
     } else """
         <div class="cards entity-cards">
-          <div class="card"><h2>Entity subscription filter<span class="cardbadge skunk">skunk-works</span></h2>
+          <div class="card"><h2>Entity subscription filter</h2>
             <div id="entity-status">Loading…</div>
             <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
               <button class="pbtn" id="entity-sync">Scan dashboard now</button>
               <button class="pbtn" id="entity-activate" disabled>Checking subscription…</button>
+              <button class="pbtn" id="entity-reset" type="button">Reset learned data</button>
               <a class="pbtn" href="/api/v1/dashboard/entities/export">Export details</a>
             </div>
             <div id="entity-action-result" class="entity-action-result muted" role="status" aria-live="polite"></div>
@@ -1535,46 +2175,47 @@ class PaneldServer internal constructor(
     private fun page(active: String, title: String, body: String): String {
         val haLink = if (config.haLinkUrl.isNotBlank())
             """<a class="pbtn" href="${esc(config.haLinkUrl)}" target="_blank" rel="noopener">Open in HA</a>""" else ""
+        val approvalKey = if (active in setOf("configure", "install")) hardenedApprovalKey(top = active == "install") else ""
+        val approvalKeyBefore = approvalKey.takeIf { active == "install" }.orEmpty()
+        val approvalKeyAfter = approvalKey.takeIf { active != "install" }.orEmpty()
         return """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <script>/* ?theme=light|dark pins the UI theme for testing (else the browser preference rules) */
 (function(){var m=location.search.match(/[?&]theme=(dark|light)\b/);if(m)document.documentElement.setAttribute("data-theme",m[1])})();</script>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(panelBrowserTitle(config.friendlyName, title))}</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-<link rel="stylesheet" href="/info.css"></head><body data-build="${buildToken()}" data-cfg="${configConcurrencyHash()}"><div class="wrap">
+<link rel="stylesheet" href="/info.css"></head><body data-build="${buildToken()}" data-cfg="${renderConfigConcurrencyHash()}"><div class="wrap">
 <div class="topbar"><div class="hdr"><button id="navburger" class="navburger pbtn" aria-label="Menu">☰</button><h1><img src="/icon.svg" class="logo" alt=""><span class="brand">ha-paneld</span> <small id="pswitch" data-self-id="${esc(config.panelId)}" data-self-name="${esc(config.friendlyName)}"><span class="sep">·</span>${esc(config.friendlyName)}</small></h1>
  <span style="display:flex;gap:10px;align-items:center">$haLink<a class="gh" href="$REPO_URL" target="_blank" rel="noopener" title="ha-paneld on GitHub" aria-label="GitHub"><svg viewBox="0 0 24 24"><path d="$GH_ICON"/></svg></a></span></div>
 ${navBar(active)}</div>
 <div id="verbar" class="setup" style="display:none">⟳ A newer ha-paneld is installed — <a href="#" onclick="location.reload();return false">reload</a> to refresh this page.</div>
+${hardenedApprovalDescription()}
+$approvalKeyBefore
 $body
+$approvalKeyAfter
 <script src="/assets/switcher.js"></script>
 <script src="/assets/buildwatch.js"></script>
 </div></body></html>"""
     }
 
-    /** Configure tab — schema-driven form (Basic/Advanced + inline expose pips) + bundle backup/restore. */
-    private fun configureBody(): String = """
+    /** Configure tab — schema-driven, save-together settings only. */
+    private fun configureBody(): String {
+        val proximityMount = if (sensors.hasRangedProximity()) """<div id="proximity-learning-mount" hidden></div>""" else ""
+        val proximityScript = if (sensors.hasRangedProximity()) """<script src="/assets/proximity-learning.js"></script>""" else ""
+        return """
 <!-- Basic/Advanced tab bar hidden until every setting is assigned a Basic/Advanced tier; with it hidden
      the form shows ALL settings (configure.js defaults `advanced=true`), so nothing is lost. The tier
      machinery (SettingSpec.tier + cfgTab) stays in place — restore the bar once tiers are curated. -->
 <div class="cfg-tabs" style="display:none"><button id="tab-basic" onclick="cfgTab(false)">Basic</button><button id="tab-adv" class="on" onclick="cfgTab(true)">Advanced</button></div>
 <div id="cfg-status" class="muted" style="margin-bottom:10px">Loading settings…</div>
+<div id="cfg-all-cards">
 <div id="cfg-groups" class="cards"></div>
-<div class="savebar"><button id="savebtn" disabled onclick="cfgSave()">Save changes</button><span id="cfg-msg" class="muted"></span></div>
-<div class="cards">
-${proximityCardHtml()}
-${displayCardHtml()}
-${tameCardHtml()}
-<div class="card"><h2>Backup &amp; restore</h2>
-<p class="note">Download this panel's configuration as a versioned bundle, or preview and apply one. Valid entries are applied; invalid or unsupported entries are reported and skipped.</p>
-<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
- <a class="pbtn" href="/api/v1/config/export">⭳ Export bundle</a>
- <a class="pbtn" href="/api/v1/config/export?include_secrets=1">⭳ Export incl. secrets</a>
- <label class="pbtn" style="cursor:pointer">⭱ Import…<input type="file" id="impfile" accept="application/json" style="display:none" onchange="cfgImport(this)"></label>
-</div>
-<pre id="imp-result" class="muted" style="white-space:pre-wrap;margin-top:10px"></pre></div></div>
+$proximityMount</div>
+<div id="savebar" class="savebar" role="region" aria-label="Unsaved settings" hidden><button id="savebtn" type="button" disabled onclick="cfgSave()">Save changes</button><span id="cfg-msg" class="muted" role="status" aria-live="polite" aria-atomic="true"></span></div>
+<script src="/assets/card-column-alignment.js"></script>
 <script src="/assets/configure.js"></script>
-<script src="/assets/prox.js"></script>"""
+$proximityScript"""
+    }
 
     /** Runtime profile authoring. All content is hydrated through the guarded /api/v1/profile routes. */
     private fun profilesBody(): String = """
@@ -1593,20 +2234,22 @@ ${tameCardHtml()}
         <label class="pbtn" for="profile-import">Import<input id="profile-import" type="file" accept=".yaml,.yml,application/yaml,text/yaml" hidden></label>
         <button class="pbtn" id="profile-export" type="button">Export</button>
       </div>
+      <span class="profile-action-break" aria-hidden="true"></span>
       <div class="profile-action-group" aria-label="Profile review">
         <button class="pbtn primary" id="profile-validate" type="button" disabled>Validate YAML</button>
         <button class="pbtn" id="profile-compare" type="button" disabled>Compare</button>
       </div>
       <div class="profile-action-group" aria-label="Profile activation">
         <button class="pbtn primary" id="savebtn" type="button" disabled>Save revision</button>
-        <button class="pbtn primary" id="profile-activate" type="button" disabled>Activate</button>
-        <button class="pbtn" id="profile-auto" type="button" disabled>Use automatic</button>
-        <button class="pbtn" id="profile-rollback" type="button" disabled>Rollback</button>
+        <button class="pbtn primary" id="profile-activate" type="button"${hardenedApprovalAttrs()} disabled>Activate</button>
+        <button class="pbtn" id="profile-auto" type="button"${hardenedApprovalAttrs()} disabled>Use automatic</button>
+        <button class="pbtn" id="profile-rollback" type="button"${hardenedApprovalAttrs()} disabled>Rollback</button>
         <button class="pbtn danger" id="profile-delete" type="button" disabled>Delete</button>
       </div>
     </div>
   </div>
   <div id="profile-badges" class="profile-badges" aria-label="Profile state"></div>
+  <nav id="profile-links" class="profile-links" aria-label="Profile references" hidden></nav>
   <div id="profile-status" class="profile-status" role="status" aria-live="polite">Loading profiles…</div>
   <div class="profile-workspace">
     <section class="profile-editor-pane" aria-labelledby="profile-editor-title">
@@ -1619,14 +2262,14 @@ ${tameCardHtml()}
         <section><h3>Catalog and runtime</h3><div id="profile-catalog-issues" class="profile-issues"></div></section>
         <section><h3>Validation</h3><div id="profile-issues" class="profile-issues"></div></section>
         <div class="profile-guidance" id="profile-shizuku-guidance" hidden>
-          <p><b>Shizuku guidance</b></p>
-          <p>Direct access is the normal path. Shizuku is an optional enhancement for panels where it is already installed and approved; this profile does not install, enable, or approve it.</p>
-          <p><a href="$REPO_URL/blob/main/docs/shizuku.md" target="_blank" rel="noopener">Read the setup and capability guide</a></p>
+          <p><b>Exceptional access requirement</b></p>
+          <p>This profile declares a specific shell-level fallback. It does not install, enable, or approve the separate access service.</p>
+          <p><a href="$REPO_URL/blob/main/docs/shizuku.md" target="_blank" rel="noopener">Read the advanced setup guide</a></p>
         </div>
         <section><h3>Compared with active</h3><div id="profile-diff" class="profile-diff"></div></section>
         <section><h3>Observed device facts</h3><p class="profile-report-note">Runtime observations only — these are not YAML fields. Use them to choose matching predicates and supported profile fields.</p><div id="profile-report" class="profile-report"></div></section>
         <div class="profile-draft" id="profile-generic-draft" hidden>
-          <p><b>Starting from Generic?</b> Build a read-only draft from passive Android facts. Unknown hardware stays marked TODO; this does not run root, helper, Shizuku, input, or hardware commands.</p>
+          <p><b>Starting from Generic?</b> Build a read-only draft from passive Android facts. Unknown hardware stays marked TODO; this does not run privileged, input, or hardware commands.</p>
           <p><button class="pbtn" id="profile-draft" type="button">Generate device draft</button> <button class="pbtn" id="profile-use-draft" type="button" hidden>Copy draft to edit</button></p>
         </div>
       </div>
@@ -1644,11 +2287,18 @@ ${tameCardHtml()}
     /** Install tab — software-management hub: setup warnings, managed component versions, radio firmware,
      *  on-demand health audit, and config backup. (The Capabilities card lives on the Dashboard.) */
     private fun installBody(): String {
+        val management = snapStaleOk()
+        val companion = companionServersStaleOk()
         // Engine-aware WebView age check (a Cromite swap reports the stale OEM package version).
         val wv = PanelInfo.webViewStatus(appContext)
-        val root = rootOk()
-        val installer = installOk()
-        val su = suCache.get()
+        val root = management.privilege.rootControlReady
+        val installer = management.privilege.typedShellControlReady
+        val su = management.privilege.directSuReady
+        val displaySizing = densityCache.peek() ?: DisplaySizingObservation(
+            current = management.densityCur,
+            base = management.densityBase,
+            fontScale = management.fontScale,
+        )
         val companionHelper = companionHelperCache.get()
         // Same finding set as the dashboard banner (HealthAudit). Update findings are surfaced by the
         // Managed-components card below, so the top warnings show only the render-blocking states.
@@ -1666,25 +2316,28 @@ ${tameCardHtml()}
         val canInstallCompanion = installer
         // Two warnings not modelled by HealthAudit (crash-looping dashboard, Companion blank internal_url)
         // — shared with the dashboard banner. Here (Install tab, install.js loaded) they get inline buttons.
-        val extra = adHocWarnings(inlineRepair = true)
+        val extra = adHocWarnings(management, companion, inlineRepair = true)
         val warnings = extra + problems.joinToString("") { installWarning(it, canHeal, canInstallCompanion) }
         val allGood = if (problems.isEmpty() && extra.isEmpty()) """<div class="card"><p class="note">✓ No setup problems detected — this panel looks ready.</p></div>""" else ""
         return """$warnings
-<div class="cards">
+<div class="cards" id="install-cards">
 ${componentsCardHtml(wv, root, installer)}
 ${apkCardHtml(root)}
 ${uninstallCardHtml(su)}
 <div class="card" id="radiocard" style="display:none"><h2>Radio firmware</h2>
 <table><tr><th>EFR32 radio</th><td id="radio-status">…</td></tr>
 <tr><th>Gateway health</th><td id="radio-health">…</td></tr></table>
-<p class="note">Zigbee gateway on this panel's Silicon Labs EFR32. Toggle the <b>Zigbee router</b> role on the <a href="/configure#cfg-zigbee_router">Configure</a> tab. <span class="muted">Thread NCP flashing is planned (experimental) — not yet available.</span></p></div>
+<p class="note">Zigbee gateway on this panel's Silicon Labs EFR32. Enable or retry joining from <a href="/configure#cfg-zigbee_join">Configure → Join Zigbee network</a>. <span class="muted">Thread NCP flashing is planned (experimental) — not yet available.</span></p></div>
 <div class="card"><h2>Health audit</h2>
 <p class="note">Re-check this panel for problems that stop the dashboard rendering — old WebView, no dashboard app, available updates.</p>
 <button class="pbtn" onclick="healthAudit(this)">Run health audit</button>
 <div id="audit-out" style="margin-top:10px"></div>
 <p class="note"><a href="/api/v1/diag" target="_blank" style="color:#9cf">⭳ Diagnostics dump</a> — full hardware/firmware/SELinux/su report for bug reports.</p></div>
+${tameCardHtml(root)}
+${displayCardHtml(management.privilege.typedShellControlReady, displaySizing)}
 ${backupCardHtml(companionHelper)}
 $allGood</div>
+<script src="/assets/card-column-alignment.js"></script>
 <script src="/assets/install.js"></script>"""
     }
 
@@ -1696,13 +2349,13 @@ $allGood</div>
             """<div class="setup crit">⚠ <b>System WebView is too old</b> (${esc(f.detail)}) — the Home Assistant """ +
                 """dashboard may render blank or broken. <a href="$WEBVIEW_DOC" target="_blank" rel="noopener">""" +
                 """How &amp; why to update</a> (target: Chromium ${PanelHealth.MIN_CHROMIUM}+).""" +
-                (if (canHeal) """<div style="margin-top:10px"><button class="pbtn" onclick="healWebView(this)">⬇ Update WebView now</button> <span id="wv-heal" class="muted"></span></div>""" else "") +
+                (if (canHeal) """<div style="margin-top:10px"><button class="pbtn"${hardenedApprovalAttrs()} onclick="healWebView(this)">⬇ Update WebView now</button> <span id="wv-heal" class="muted"></span></div>""" else "") +
                 """</div>"""
         HealthAudit.Kind.NO_RENDERER ->
             """<div class="setup">ℹ <b>No dashboard app detected</b> — install the HA Companion app, """ +
                 """<a href="https://www.fully-kiosk.com/" target="_blank" rel="noopener">Fully Kiosk</a>, or set a """ +
                 """dashboard package on <a href="/configure">Configure</a>.""" +
-                (if (canInstallCompanion) """<div style="margin-top:10px"><button class="pbtn" onclick="installComp('companion','update',this)">⬇ Install HA Companion</button> <span class="muted">progress shows in Managed components below.</span></div>""" else "") +
+                (if (canInstallCompanion) """<div style="margin-top:10px"><button class="pbtn"${hardenedApprovalAttrs()} onclick="installComp('companion','update',this)">⬇ Install HA Companion</button> <span class="muted">progress shows in Managed components below.</span></div>""" else "") +
                 """</div>"""
         HealthAudit.Kind.UPDATE -> "" // shown in the Managed-components card, not as a top warning
     }
@@ -1724,13 +2377,19 @@ $allGood</div>
             simpleRow("HA Companion", compCur, """<span class="muted">Play-managed — updates via the Play Store</span>""")
         else pickerRow("companion", "HA Companion", compCur, config.companionUpdateChannel, installer)
         val wvAction = when {
-            wv.tooOld && rec != null && root -> """<button class="pbtn" onclick="installComp('webview','update',this)">⬇ Update WebView</button>"""
+            wv.playManaged -> """<span class="muted">Managed by Google Play — updates via the Play Store</span>"""
+            wv.tooOld && rec != null && root -> """<button class="pbtn"${hardenedApprovalA11yAttrs()} onclick="installComp('webview','update',this)">⬇ Update WebView</button>"""
             wv.tooOld && rec != null -> """<span class="muted">needs root/daemon to update</span>"""
             wv.tooOld -> """<span class="muted">no known-good build for this panel</span>"""
             else -> """<span class="muted">up to date</span>"""
         }
-        val installNote = if (installer) "" else """<p class="note">⚠ Installing/updating needs root, the helper daemon, or locally approved Shizuku access — unavailable on this panel.</p>"""
-        return """<div class="card"><h2>Managed components</h2>
+        val installNote = if (installer) "" else """<p class="note">⚠ Installing or updating needs supported privileged panel access, which is unavailable on this panel.</p>"""
+        val title = if (installer || (wv.tooOld && rec != null && root)) {
+            hardenedApprovalCardTitle("Managed components", conditional = true)
+        } else {
+            "<h2>Managed components</h2>"
+        }
+        return """<div class="card">$title
 $paneldRow
 $compRow
 ${simpleRow("System WebView", wv.display, wvAction)}
@@ -1747,13 +2406,13 @@ $installNote
             """<label style="display:flex;flex-direction:row;gap:8px;align-items:center;font-size:.85rem"><input type="checkbox" id="bk-comp" checked> Include HA Companion login</label>"""
         else """<p class="note">HA Companion login backup needs the current ha-paneld helper. Update or reprovision this rooted panel to enable it.</p>"""
         val restoreWarn = if (companionHelper) " and rewrites the HA Companion login (force-stops it)" else ""
-        return """<div class="card"><h2>Backup &amp; restore</h2>
+        return """<div class="card">${hardenedApprovalCardTitle("Backup &amp; restore", conditional = true)}
 <p class="note">A bundle of this panel's ha-paneld config${if (companionHelper) " + the HA Companion login" else ""}. Backups contain credentials and are encrypted with your passphrase by default; it can't be recovered if lost.</p>
 <div style="display:flex;flex-direction:column;gap:8px;max-width:440px">
 $compRow
 <input type="password" id="bk-pw" placeholder="Passphrase (required for encrypted backup)">
 <label style="display:flex;flex-direction:row;gap:8px;align-items:flex-start;font-size:.85rem;color:#c88"><input type="checkbox" id="bk-plain"> Create an unencrypted plaintext ZIP instead (contains credentials)</label>
-<button class="pbtn" onclick="doBackup(this)">⭳ Download backup</button>
+<button class="pbtn"${hardenedApprovalA11yAttrs()} onclick="doBackup(this)">⭳ Download backup</button>
 </div>
 <hr style="border:0;border-top:1px solid #2a2a2a;margin:14px 0">
 <p class="note"><b>Restore</b> overwrites this panel's config$restoreWarn — you'll see a preview of the bundle's contents before it applies.</p>
@@ -1763,7 +2422,15 @@ $compRow
 <div id="rs-preview"></div>
 </div>
 <p class="note" id="bk-msg"></p>
-<p class="note"><a href="/api/v1/config/export" style="color:#9cf">⭳ Config-only bundle (unencrypted)</a> — settings only, for cloning to another panel via Configure → Import.</p></div>"""
+<hr style="border:0;border-top:1px solid #2a2a2a;margin:14px 0">
+<p class="note"><b>Configuration bundle</b> copies settings between panels without app data. Preview an import before applying it; valid entries are applied and unsupported entries are skipped.</p>
+<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+ <a class="pbtn" href="/api/v1/config/export">⭳ Export settings</a>
+ <button class="pbtn" type="button"${hardenedApprovalA11yAttrs()} onclick="configExport(true,this)">⭳ Export incl. secrets</button>
+ <label class="pbtn"${hardenedApprovalA11yAttrs()} style="cursor:pointer">⭱ Import settings…<input type="file" id="cfg-import-file" accept="application/json" style="display:none" onchange="configImport(this)"></label>
+</div>
+<p id="cfg-export-result" class="note" role="status" aria-live="polite"></p>
+<pre id="cfg-import-result" class="muted" style="white-space:pre-wrap;margin-top:10px"></pre></div>"""
     }
 
     /** "Install an APK" card (Install tab). ⚠ Root-installs an arbitrary user-supplied APK over the
@@ -1793,13 +2460,14 @@ $body
      *  panel; the endpoint additionally refuses ha-paneld itself. Root-gated. */
     private fun uninstallCardHtml(root: Boolean): String {
         val body = if (!root) """<p class="note">⚠ Uninstalling an app needs root — unavailable on this panel.</p>"""
-        else """<p class="note">Remove an installed app. Only removable (third-party / updated) apps are listed — ha-paneld and stock system apps are excluded. To just hide a vendor app, <a href="/configure">tame</a> it instead.</p>
+        else """<p class="note">Remove an installed app. Only removable (third-party / updated) apps are listed — ha-paneld and stock system apps are excluded. To just hide a vendor app, <a href="/install#cfg-tame">tame</a> it instead.</p>
 <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
 <select id="uninst-pkg" style="min-width:220px;background:#1c1c1c;color:#eee;border:1px solid #444;border-radius:7px;padding:5px 8px"><option>loading…</option></select>
-<button class="pbtn" onclick="doUninstall(this)">Uninstall</button>
+<button class="pbtn"${hardenedApprovalA11yAttrs()} onclick="doUninstall(this)">Uninstall</button>
 </div>
 <p class="note" id="uninst-msg"></p>"""
-        return """<div class="card"><h2>Uninstall an app</h2>
+        val title = if (root) hardenedApprovalCardTitle("Uninstall an app") else "<h2>Uninstall an app</h2>"
+        return """<div class="card">$title
 $body</div>"""
     }
 
@@ -1815,8 +2483,15 @@ $body</div>"""
         val apps = runCatching {
             pm.queryIntentActivities(intent, 0)
                 .mapNotNull { it.activityInfo?.applicationInfo }
-                .filter { it.packageName != appContext.packageName }
-                .associate { it.packageName to runCatching { pm.getApplicationLabel(it).toString() }.getOrDefault(it.packageName) }
+                .associate {
+                    val pkg = it.packageName
+                    val label = if (pkg == appContext.packageName) {
+                        "Panel admin (ha-paneld)"
+                    } else {
+                        runCatching { pm.getApplicationLabel(it).toString() }.getOrDefault(pkg)
+                    }
+                    pkg to label
+                }
                 .toList()
                 .sortedBy { it.second.lowercase(java.util.Locale.ROOT) }
         }.getOrDefault(emptyList())
@@ -1825,11 +2500,28 @@ $body</div>"""
     }
 
     private fun packagesJson(): String {
+        val apps = removablePackages()
+        val arr = apps.joinToString(",") { (pkg, label) -> "{\"pkg\":${jsonStr(pkg)},\"label\":${jsonStr(label)}}" }
+        return "{\"packages\":[$arr]}"
+    }
+
+    /** The server re-evaluates the same policy used by the picker; UI filtering is never authorization. */
+    private fun removablePackages(): List<Pair<String, String>> {
         val pm = appContext.packageManager
-        // Exclude ha-paneld itself and the System WebView provider — uninstalling the WebView reverts it to
-        // the ancient stock build and blanks the dashboard (the opposite of the WebView-heal feature).
-        val excluded = setOf(appContext.packageName, io.github.maxlyth.hapaneld.util.WebViewInstaller.WEBVIEW_PKG)
-        val apps = runCatching {
+        val homePackage = runCatching {
+            pm.resolveActivity(
+                android.content.Intent(android.content.Intent.ACTION_MAIN).addCategory(android.content.Intent.CATEGORY_HOME),
+                0,
+            )?.activityInfo?.packageName
+        }.getOrNull()
+        val excluded = setOfNotNull(
+            appContext.packageName,
+            io.github.maxlyth.hapaneld.util.WebViewInstaller.WEBVIEW_PKG,
+            config.dashboardPackage.takeIf { it.isNotBlank() && it != SystemController.BUILTIN_DASHBOARD },
+            config.launcherPackage.takeIf(String::isNotBlank),
+            homePackage,
+        )
+        return runCatching {
             pm.getInstalledApplications(0)
                 .filter { it.packageName !in excluded }
                 .filter {
@@ -1839,8 +2531,6 @@ $body</div>"""
                 .map { it.packageName to runCatching { pm.getApplicationLabel(it).toString() }.getOrDefault(it.packageName) }
                 .sortedBy { it.second.lowercase(java.util.Locale.ROOT) }
         }.getOrDefault(emptyList())
-        val arr = apps.joinToString(",") { (pkg, label) -> "{\"pkg\":${jsonStr(pkg)},\"label\":${jsonStr(label)}}" }
-        return "{\"packages\":[$arr]}"
     }
 
     /** A component row with a channel + version picker (versions hydrated by install.js), a release-notes
@@ -1853,8 +2543,8 @@ $body</div>"""
 <div class="comppick">
 <label class="muted">Channel <select class="cchan" onchange="loadVersions('$name')"><option value="stable"${sel("stable")}>Stable</option><option value="prerelease"${sel("prerelease")}>Prerelease</option></select></label>
 <label class="muted">Version <select class="cvsel" onchange="verChanged('$name')"><option>loading…</option></select></label>
-<a class="cfglink cnotes" target="_blank" rel="noopener" title="Release notes ↗" style="visibility:hidden">↗</a>
-${if (installer) """<button class="pbtn cinstall" onclick="installSel('$name',this)" data-root="1" disabled>Install</button>"""
+<a class="gh gh-inline cnotes" target="_blank" rel="noopener" title="Release notes on GitHub" aria-label="Release notes on GitHub" style="visibility:hidden"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="$GH_ICON"/></svg></a>
+${if (installer) """<button class="pbtn cinstall"${hardenedApprovalA11yAttrs()} onclick="installSel('$name',this)" data-root="1" disabled>Install</button>"""
         else """<a class="pbtn cdl" style="display:none" target="_blank" rel="noopener" title="This panel has no privileged installer, so ha-paneld can't install APKs itself — download the APK, then install it from your admin machine: adb install -r <file>">⬇ Download APK</a>"""}
 </div></div>"""
     }
@@ -1868,22 +2558,21 @@ ${if (installer) """<button class="pbtn cinstall" onclick="installSel('$name',th
 
     /** Logs tab — live log tail over SSE. App source always; system source needs root (gated live). */
     private fun logsBody(): String {
-        val sysOk = suCache.get()
-        val sysBtn = if (sysOk) """<button id="lg-src-system" onclick="lgSource('system')">System</button>"""
-        else """<button id="lg-src-system" disabled title="Full system logcat needs root — unavailable on this panel">System</button>"""
         // Deliberately NOT inside a `.cards` masonry container — the log card wants the full page width.
         return """
 <div class="card"><h2>Live logs <small id="lg-state" class="muted">· connecting…</small></h2>
-<div class="modebar" style="flex-wrap:wrap;gap:8px">
- <span class="seg"><button id="lg-src-app" class="on" onclick="lgSource('app')">App</button>$sysBtn</span>
+<div class="log-toolbar">
+ <span class="log-source"><button id="lg-src-app" class="pbtn on" onclick="lgSource('app')">App</button><button id="lg-src-system" class="pbtn" onclick="lgSource('system')" title="Root availability is checked when the stream opens">System</button></span>
  <select id="lg-level" onchange="lgRender()" title="Minimum level">
   <option value="V" selected>Verbose+</option><option value="D">Debug+</option><option value="I">Info+</option>
   <option value="W">Warning+</option><option value="E">Error+</option>
  </select>
- <input id="lg-filter" placeholder="filter text…" oninput="lgRender()" style="flex:1;min-width:120px">
- <button id="lg-pause" class="pbtn" onclick="lgPause()">⏸ Pause</button>
- <button class="pbtn" onclick="lgClear()">Clear</button>
- <label class="muted" style="display:flex;flex-direction:row;align-items:center;gap:4px"><input type="checkbox" id="lg-follow" checked> Follow</label>
+ <input id="lg-filter" class="log-filter" placeholder="filter text…" oninput="lgRender()">
+ <span class="log-actions">
+  <label class="log-follow muted"><input type="checkbox" id="lg-follow" checked> Follow</label>
+  <button id="lg-pause" class="pbtn" onclick="lgPause()">⏸ Pause</button>
+  <button class="pbtn" onclick="lgClear()">Clear</button>
+ </span>
 </div>
 <div id="lg-out" class="logview" onscroll="lgScrolled()"></div>
 <p class="note">App = ha-paneld's own process log (no root needed). System = the full device logcat (root).
@@ -1902,6 +2591,9 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
 
     /** Health + capabilities as JSON for the variant UIs. Warnings are ready-to-render HTML fragments. */
     private fun statusJson(): String {
+        val management = snapStaleOk()
+        val companion = companionServersStaleOk()
+        val radio = radioStatus()
         // Engine-aware WebView age check (a Cromite swap reports the stale OEM package version). Same finding
         // set as the dashboard banner + Install tab (HealthAudit); the audit lists ALL available updates
         // (not the ignore-filtered view — Ignore only silences the dashboard banner). Plus two warnings not
@@ -1918,21 +2610,29 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
             "⛔ <b>Dashboard app is crash-looping</b> — the watchdog stopped relaunching it to avoid a restart storm. " +
                 "Reinstall or downgrade the dashboard/Companion app, or reboot the panel.",
         )
-        companionUrlCache.get().let { u ->
-            if (u.needsRepair) warns.add(
-                "⚠ <b>Home Assistant Companion has no internal URL</b> (${u.affected} server${if (u.affected == 1) "" else "s"}) — " +
-                    "the dashboard can fail with \"Missing 'Host' header\". Repair it on the Install tab.",
-            )
+        if (CompanionDb.warningApplies(config.dashboardPackage)) {
+            companion.status.let { u ->
+                if (u.needsRepair) warns.add(
+                    "⚠ <b>Home Assistant Companion has no internal URL</b> (${u.affected} server${if (u.affected == 1) "" else "s"}) — " +
+                        "the dashboard can fail with \"Missing 'Host' header\". Repair it on the Install tab.",
+                )
+                else if (!companion.probeSucceeded && management.privilege.directSuReady) warns.add(
+                    "⚠ <b>Home Assistant Companion settings could not be inspected</b> — " +
+                        "ha-paneld will retain any last-known result and retry automatically.",
+                )
+            }
         }
-        radioStatus()?.let { z ->
+        radio?.let { z ->
             zigbeeWarning(z)?.let(warns::add)
         }
         warns.addAll(findings.map { statusWarning(it) })
         val capColor = mapOf("ok" to "#48c774", "degraded" to "#d9a528", "none" to "#d04a3b")
-        val caps = DiagReader.capabilities(appContext, profile).joinToString(",") { c ->
+        // Stale-while-revalidate keeps status polling fast while ensuring a status-only client still
+        // admits one background refresh instead of preserving an old capability view indefinitely.
+        val caps = management.capabilityRows.joinToString(",") { c ->
             "{\"name\":${jsonStr(c.name)},\"note\":${jsonStr(c.note)},\"color\":${jsonStr(capColor[c.status] ?: "#888")}}"
         }
-        val zigbee = radioStatus()?.let {
+        val zigbee = radio?.let {
             JSONObject(it.mqttAttributes()).put("state", it.state.wireValue).toString()
         } ?: "null"
         return "{\"warnings\":[${warns.joinToString(",") { jsonStr(it) }}],\"capabilities\":[$caps],\"zigbee_gateway\":$zigbee}"
@@ -1953,32 +2653,13 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
     }
 
 
-    /** Proximity tuning card — lives on the Configure tab; driven by /assets/prox.js. */
-    private fun proximityCardHtml(): String = """<div class="card" id="cfg-proximity"><h2>Proximity tuning <small id="proxstate"></small><span class="cardbadge exp">experimental</span></h2>
-<div id="proxbox" style="display:none">
-<canvas id="proxgauge" width="600" height="46" class="gradedonly" style="height:46px"></canvas>
-<div style="font-size:.85rem;margin-bottom:8px">raw <b id="proxraw" style="color:#4a9eff">–</b>
- <span id="proxthwrap" class="gradedonly">· threshold <b id="proxth">–</b></span> · state <b id="proxnear">–</b></div>
-<div class="gradedonly" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;font-size:.85rem;margin-bottom:8px">
- <span style="color:#9af">Capture:</span>
- <button type="button" class="pbtn" onclick="proxCap('near')">Near</button>
- <button type="button" class="pbtn" onclick="proxCap('far')">Far</button>
- <span class="gradedonly" style="color:#9af;margin-left:10px">Sensitivity:</span>
- <button type="button" class="pbtn psen gradedonly" data-s="HIGH" onclick="proxSen('HIGH')">High</button>
- <button type="button" class="pbtn psen gradedonly" data-s="MEDIUM" onclick="proxSen('MEDIUM')">Med</button>
- <button type="button" class="pbtn psen gradedonly" data-s="LOW" onclick="proxSen('LOW')">Low</button>
- <button type="button" class="pbtn" style="margin-left:10px" onclick="proxReset()">Reset</button></div>
-<label class="gradedonly" style="font-size:.8rem;color:#9af">Threshold fine-tune
- <input type="range" id="proxslider" min="0" max="100" step="0.1" style="width:100%"
-  oninput="document.getElementById('proxth').textContent=(+this.value).toFixed(1)"
-  onchange="proxThSet(this.value)"></label>
-<p id="proxhint" class="note"></p>
-</div></div>"""
-
     /** The pencil that marks a value as CONFIGURABLE (vs a static fact) and deep-links to the exact
      *  setting/card on the Configure tab (`/configure#<anchor>` scrolls + flashes it). */
     private fun cfgIcon(anchor: String): String =
-        """ <a class="cfglink" href="/configure#$anchor" title="Edit on the Configure tab" aria-label="Edit">✎</a>"""
+        """&nbsp;<a class="cfglink" href="/configure#$anchor" title="Edit on the Configure tab" aria-label="Edit">✎</a>"""
+
+    private fun installIcon(anchor: String): String =
+        """&nbsp;<a class="cfglink" href="/install#$anchor" title="Open on the Install tab" aria-label="Open">✎</a>"""
 
     /** What the "auto" (blank) package settings actually resolved to — shown as `auto (pkg)` in the
      *  dashboard rows and as the Configure-field placeholder, so "auto" is never a mystery. When no
@@ -2004,7 +2685,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
             spec.type == SettingType.BOOL -> if (raw.toBoolean()) "on" else "off"
             raw.isBlank() -> hints[key]?.let { "auto ($it)" } ?: "—"
             // The built-in renderer sentinel has no package label — show its friendly name, not "builtin".
-            raw == SystemController.BUILTIN_DASHBOARD -> "Built-in renderer (skunk-works)"
+            raw == SystemController.BUILTIN_DASHBOARD -> "Built-in renderer"
             else -> raw
         }
         return """<tr><th>${esc(spec.label)}</th><td>${esc(shown)}${cfgIcon("cfg-$key")}</td></tr>"""
@@ -2015,27 +2696,25 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
     // Rendering `/` used to gather every root/probe value inline — ~8 serialized su round-trips
     // (zigbee status, CPU tier, network-ADB ×2, touch sound, `wm density` ×3, su presence), a 12+s
     // blank page on PX30 panels. The probes now funnel through ONE cached snapshot: `/` renders
-    // whatever is last known instantly (placeholders on a cold start) and the page hydrates from
-    // GET /api/v1/info, which is the only place the probes actually run — at most once per TTL,
-    // single-flight, pre-warmed at server start.
+    // whatever is last known instantly (placeholders on a cold start). Post-critical prewarm and stale
+    // management endpoints all enter the same at-most-once-per-TTL, single-flight cache supplier.
 
     /** Everything the dashboard shows that costs a root/probe round-trip, gathered once. */
     private class Snap(
         val facts: Map<String, String>,
         val live: Map<String, String>,
         val caps: Capabilities,
+        val capabilityRows: List<DiagReader.Cap>,
+        val privilege: PrivilegedRouteObservation,
         val densityCur: Int?,
         val densityBase: Int?,
         val fontScale: Float,
-        val rootOk: Boolean,
-        val captureOk: Boolean,
-        val shizukuReady: Boolean,
     )
 
     // The density trio is shared with the Configure tab's Display card (the bulk of ITS slow render).
-    private val densityCache = Cached(DENSITY_TTL_MS) { Triple(density.current(), density.base(), density.fontScale()) }
+    private val densityCache = Cached(DENSITY_TTL_MS) { density.observeSizing() }
     // su presence doesn't flap — cache the probe gating screenshot / controls / system logs / taming.
-    private val suCache = Cached(SU_TTL_MS) { Su.available() }
+    private val suCache = Cached(SU_TTL_MS) { Su.availableIsolated() }
     private val companionHelperCache = Cached(SU_TTL_MS) { HelperClient.supportsCompanionData() }
     private fun ensureCompanionHelper(): Boolean {
         if (HelperClient.supportsCompanionData()) return true
@@ -2047,9 +2726,6 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         return ready
     }
     private fun rootOk(): Boolean = suCache.get() || HelperClient.available()
-    private fun shellOk(): Boolean = ShizukuBridge.available()
-    private fun installOk(): Boolean = rootOk() || shellOk()
-    private fun captureOk(): Boolean = rootOk() || shellOk()
 
     private val screenshotCacheDir: File
         get() = File(appContext.filesDir, "panel-screenshots")
@@ -2114,23 +2790,59 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
             staged.delete()
         }
     }
-    private fun displayOk(): Boolean = rootOk() || shellOk()
 
-    // Companion internal_url health (root sqlite3 read). Cached so the polled /status endpoint doesn't
-    // spawn su per request; only checked when su is present (the DB is app-private). Invalidated on repair.
-    private val companionUrlCache = Cached(COMPANION_URL_TTL_MS) {
-        if (suCache.get()) CompanionDb.internalUrlStatus(appContext, Su) else CompanionDb.UrlStatus(false, 0)
+    // One servers-table read supplies both the header URL fallback and repair warning. Warm routes use
+    // stale-while-revalidate so an expired SQLite observation never blocks rendering.
+    private val companionServerCache: Cached<CompanionDb.ServerObservation> by lazy {
+        Cached(COMPANION_URL_TTL_MS) {
+            val observed = if (suCache.get()) {
+                CompanionDb.observeServers(appContext, Su)
+            } else if (CompanionInstaller.installedPkg(appContext) == null) {
+                CompanionDb.ServerObservation.EMPTY
+            } else {
+                CompanionDb.ServerObservation.UNKNOWN
+            }
+            CompanionDb.retainLastKnownServerObservation(companionServerCache.peek(), observed)
+        }
     }
+
+    private fun privilegeObservation(): PrivilegedRouteObservation = observePrivilegedRoutes(
+        directSuProbe = { suCache.get() },
+        helperRootProbe = HelperClient::available,
+        shizukuSnapshot = ShizukuBridge::snapshot,
+    )
+
     private val snapCache = Cached(SNAP_TTL_MS) {
-        val d = densityCache.get()
+        val privilege = privilegeObservation()
+        val management = managementProjection(privilege)
+        val d = densityCache.getWithSupplier { density.observeSizing(privilege) }
         Snap(
-            facts = info(),
-            live = liveValues(),
-            caps = capabilities(),
-            densityCur = d.first, densityBase = d.second, fontScale = d.third,
-            rootOk = rootOk(),
-            captureOk = captureOk(),
-            shizukuReady = shellOk(),
+            facts = management.facts,
+            live = management.live,
+            caps = management.capabilities,
+            capabilityRows = management.capabilityRows,
+            privilege = privilege,
+            densityCur = d.current,
+            densityBase = d.base,
+            fontScale = d.fontScale,
+        )
+    }
+    private val diagCache = Cached(DIAG_TTL_MS) {
+        val management = checkNotNull(snapCache.peek()) {
+            "diagnostics require the management snapshot to be built first"
+        }
+        DiagReader.dump(
+            appContext,
+            profile,
+            management.facts,
+            radioStatus(),
+            privilege = management.privilege,
+            capabilityRows = management.capabilityRows,
+            displaySizing = DiagReader.DisplaySizingEvidence(
+                management.densityBase,
+                management.densityCur,
+                management.fontScale,
+            ),
         )
     }
 
@@ -2138,26 +2850,82 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
      *  so the next render doesn't show pre-write values for a TTL. */
     private fun snapInvalidate() {
         snapCache.invalidate()
+        diagCache.invalidate()
         densityCache.invalidate()
     }
+
+    /** Empirical proximity mode can change without a config write. Drop the stale capability view so
+     *  the next Configure/dashboard request reflects the new ranged-only availability immediately. */
+    internal fun invalidateCapabilitySnapshot() {
+        snapCache.invalidate()
+        diagCache.invalidate()
+    }
+
+    /** Last management-request privilege proof for passive safety work. Never starts a fresh probe. */
+    internal fun lastPrivilegeObservation(): PrivilegedRouteObservation? = snapCache.peek()?.privilege
+
+    /** Ranged proximity is learned from live samples and can change between cached hardware probes.
+     *  Overlay that cheap live fact so stale-while-revalidate can never expose wake UI for one request
+     *  after eligibility is lost. Other capabilities retain their bounded cached probe semantics. */
+    private fun liveCapabilities(cached: Capabilities): Capabilities =
+        cached.copy(hasRangedProximity = sensors.hasRangedProximity())
 
     /** Last-known snapshot with a background refresh when stale — never blocks once built, so the
      *  Configure endpoints (form values, schema capabilities, Display card) render instantly like
      *  the dashboard. Blocks only before the start-up pre-warm has ever completed. */
     private fun snapStaleOk(): Snap {
-        val p = snapCache.peek() ?: return snapCache.get()
-        if (snapCache.ageMs() > SNAP_TTL_MS) scope.launch(Dispatchers.IO) { runCatching { snapCache.get() } }
-        return p
+        return snapCache.staleWhileRevalidate { refresh, releaseAdmission ->
+            if (stopping) return@staleWhileRevalidate false
+            val job = scope.launch(Dispatchers.IO) { runCatching { refresh() } }
+            job.invokeOnCompletion { releaseAdmission() }
+            !job.isCancelled
+        }
+    }
+
+    private fun companionServersStaleOk(): CompanionDb.ServerObservation =
+        companionServerCache.staleWhileRevalidate { refresh, releaseAdmission ->
+            if (stopping) return@staleWhileRevalidate false
+            val job = scope.launch(Dispatchers.IO) { runCatching { refresh() } }
+            job.invokeOnCompletion { releaseAdmission() }
+            !job.isCancelled
+        }
+
+    /** Dashboard rendering never performs the cold root/SQLite read; startup prewarm owns that path. */
+    private fun companionServersForRender(): CompanionDb.ServerObservation? =
+        companionServerCache.peek()?.let { companionServersStaleOk() }
+
+    /** Complete last-known support report. Its own expensive probes run only in the single-flight
+     * refresh, never in a warm HTTP response and never by forcing a simultaneous facts refresh. */
+    private fun diagStaleOk(): String {
+        // The documented cold path may block, but builds the facts snapshot first so the first complete
+        // report is coherent. Once a report exists, both refreshes happen sequentially in the background.
+        if (diagCache.peek() == null) {
+            snapCache.get()
+            return diagCache.get()
+        }
+        return diagCache.staleWhileRevalidate { refresh, releaseAdmission ->
+            if (stopping) return@staleWhileRevalidate false
+            val job = scope.launch(Dispatchers.IO) {
+                runCatching { snapCache.get() }
+                runCatching { refresh() }
+            }
+            job.invokeOnCompletion { releaseAdmission() }
+            !job.isCancelled
+        }
     }
 
     private val NET_KEYS = listOf("Local IP", "Local IPv6", "HTTP port", "MQTT", "mDNS", "Network ADB")
-    private val CONTEXT_KEYS = listOf("MQTT state", "State convergence", "Audio playback")
+    private val CONTEXT_KEYS = listOf(
+        "MQTT state", "State convergence", "App database", "Security mode", "Audio playback",
+    )
+    private val BEHAVIOUR_FACT_KEYS = setOf("Keep awake", "Kiosk lock", "Navbar", "Log shipping")
     // Rows whose values are DECLARED by the DeviceProfile, so wrong data points a contributor straight
-    // at the fix: Platform=displayName/socClass, LED=ledMechanism, sensor tech=proximityTech/lightTech,
+    // at the fix: Platform/SoC=profile identity, LED=ledMechanism, sensor tech=proximityTech/lightTech,
     // Zigbee=zigbeeGatewayDir, Relays=relayBase, CPU profile=cpuGovernors.
-    private val PROF_KEYS = listOf("Platform", "LED", "Light sensor", "Proximity", "Zigbee", "Relays", "CPU profile")
     private fun infoKeys(s: Snap): List<String> =
-        s.facts.keys.filter { it !in NET_KEYS && it !in PROF_KEYS && it !in CONTEXT_KEYS }
+        s.facts.keys.filter {
+            it !in NET_KEYS && it !in PROFILE_FACT_KEYS && it !in CONTEXT_KEYS && it !in BEHAVIOUR_FACT_KEYS
+        }
 
     private fun contextRowsHtml(s: Snap): String {
         val rows = CONTEXT_KEYS.mapNotNull { key ->
@@ -2182,6 +2950,10 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         val setup = if (needs.isNotEmpty())
             """<div class="setup">⚠ This panel needs <a href="/configure">${needs.joinToString(" and ")}</a> — set on the Configure tab.</div>"""
         else ""
+        val proximityLearning = if (config.wakeOnWave && sensors.hasRangedProximity() && !sensors.proximityReady()) {
+            """<div class="setup">👋 <b>Wake on wave is learning</b> — ${esc(sensors.proximitySummary())}. """ +
+                """Touch-to-wake remains available. <a href="/configure#cfg-proximity-learning">See progress or teach a wave</a>.</div>"""
+        } else ""
         // Panel-health + update findings: states that stop the panel rendering the dashboard as expected but
         // that the info map otherwise reports neutrally. Soft + best-effort — ha-paneld runs fine regardless.
         // The WebView verdict is from the REAL engine version (WebView UA), not the stamped package version
@@ -2196,14 +2968,20 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         // Order: actively-broken states (crash-loop / blank internal_url) first, then render findings
         // (WebView / renderer / updates), then the needs-config setup notice. On the dashboard the ad-hoc
         // warnings link to the Install tab for the fix (their one-tap buttons live there, with install.js).
-        return adHocWarnings(inlineRepair = false) + findings.joinToString("") { bannerFor(it) } + setup
+        return adHocWarnings(s, companionServersForRender(), inlineRepair = false) +
+            findings.joinToString("") { bannerFor(it) } + proximityLearning + setup
     }
 
-    /** Render-blocking warnings not modelled by HealthAudit: a crash-looping dashboard app, and a Companion
-     *  server row with a blank internal_url (HA 2026.7 "Missing 'Host' header"). Shown on BOTH the dashboard
+    /** Render-blocking warnings not modelled by HealthAudit: a crash-looping dashboard app, and Companion
+     *  server inspection/blank-internal-URL findings — the latter only when Companion is the active renderer
+     *  ([CompanionDb.warningApplies]). Shown on BOTH the dashboard
      *  banner and the Install tab as high-severity (`crit`). [inlineRepair] adds the one-tap repair button
      *  (Install tab, where install.js is loaded); the dashboard links to the Install tab for the action. */
-    private fun adHocWarnings(inlineRepair: Boolean): String = buildString {
+    private fun adHocWarnings(
+        management: Snap,
+        companion: CompanionDb.ServerObservation?,
+        inlineRepair: Boolean,
+    ): String = buildString {
         radioStatus()?.let { z ->
             zigbeeWarning(z)?.let { warning ->
                 append("""<div class="setup${if (z.state in setOf(ZigbeeHealthState.RUNAWAY, ZigbeeHealthState.CONTAINMENT_FAILED)) " crit" else ""}">$warning</div>""")
@@ -2223,16 +3001,23 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
                 """to avoid a restart storm. This usually means an incompatible dashboard-app update; reinstall or """ +
                 """downgrade the dashboard/Companion app (see <a href="/install">updates</a>), or reboot the panel.</div>""",
         )
-        companionUrlCache.get().let { u ->
-            if (u.needsRepair) {
-                val action = if (inlineRepair)
-                    """<div style="margin-top:10px"><button class="pbtn" onclick="repairCompUrl(this)">⚙ Repair internal URL</button> <span id="cu-fix" class="muted"></span></div>"""
-                else """ <a href="/install">Repair on the Install tab →</a>"""
-                append(
-                    """<div class="setup crit">⚠ <b>Home Assistant Companion has no internal URL</b> """ +
-                        """(${u.affected} server${if (u.affected == 1) "" else "s"}) — the dashboard can fail to load """ +
-                        """with <i>"Missing 'Host' header"</i>. Repair sets the internal URL to the external URL.$action</div>""",
-                )
+        if (CompanionDb.warningApplies(config.dashboardPackage)) {
+            companion?.status?.let { u ->
+                if (u.needsRepair) {
+                    val action = if (inlineRepair)
+                        """<div style="margin-top:10px"><button class="pbtn"${hardenedApprovalAttrs()} onclick="repairCompUrl(this)">⚙ Repair internal URL</button> <span id="cu-fix" class="muted"></span></div>"""
+                    else """ <a href="/install">Repair on the Install tab →</a>"""
+                    append(
+                        """<div class="setup crit">⚠ <b>Home Assistant Companion has no internal URL</b> """ +
+                            """(${u.affected} server${if (u.affected == 1) "" else "s"}) — the dashboard can fail to load """ +
+                            """with <i>"Missing 'Host' header"</i>. Repair sets the internal URL to the external URL.$action</div>""",
+                    )
+                } else if (!companion.probeSucceeded && management.privilege.directSuReady) {
+                    append(
+                        """<div class="setup">⚠ <b>Home Assistant Companion settings could not be inspected</b> — """ +
+                            """ha-paneld will retain any last-known result and retry automatically.</div>""",
+                    )
+                }
             }
         }
         // Built-in renderer zoomed off 100% (usually carried over from the Companion's "Page zoom"). App
@@ -2240,13 +3025,13 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         // — so we only nudge when that's actually available (rooted / helper daemon). No root = app zoom is
         // the only sizing tool, so stay quiet. densityBase comes from the shared snapshot (no su round-trip).
         val zoom = config.dashboardZoom
-        if (config.dashboardPackage == SystemController.BUILTIN_DASHBOARD && zoom != 100 && snapStaleOk().densityBase != null) {
+        if (config.dashboardPackage == SystemController.BUILTIN_DASHBOARD && zoom != 100 && management.densityBase != null) {
             // Reset is a plain form POST (no JS), so it works on the dashboard banner too — not just the
             // Install tab. The message already links to the Display-sizing card.
             append(
                 """<div class="setup">⚠ <b>Dashboard zoom is $zoom%</b> (not 100%) — usually carried over from the """ +
                     """Companion app's Page zoom. The cleaner way to size a dashboard is the panel's """ +
-                    """<a href="/configure#cfg-display">display density</a>, which scales the whole panel crisply; """ +
+                    """<a href="/install#cfg-display">display density</a>, which scales the whole panel crisply; """ +
                     """set that, then reset the zoom here.""" +
                     """ <form method="post" action="/api/v1/config" style="display:inline">""" +
                     """<input type="hidden" name="dashboard_zoom" value="100">""" +
@@ -2255,21 +3040,10 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         }
     }
 
-    private fun zigbeeWarning(snapshot: ZigbeeHealthSnapshot): String? = when {
-        snapshot.state == ZigbeeHealthState.CONTAINED ->
-            "⛔ <b>Zigbee gateway runaway was contained</b> — the router switch was turned OFF after sustained unjoined high CPU or repeated restarts."
-        snapshot.state == ZigbeeHealthState.CONTAINMENT_FAILED ->
-            "⛔ <b>Zigbee gateway containment was incomplete</b> — the respawner was stopped where possible and surviving work was demoted. Review diagnostics before retrying."
-        snapshot.state == ZigbeeHealthState.RUNAWAY ->
-            "⛔ <b>Zigbee gateway is runaway</b> — automatic containment is in progress."
-        snapshot.state == ZigbeeHealthState.DEGRADED_HIGH_CPU ->
-            "⚠ <b>Joined Zigbee gateway has sustained high CPU</b> — it remains running because joined routers are warn-only."
-        snapshot.state == ZigbeeHealthState.DEGRADED_UNJOINED ->
-            "⚠ <b>Zigbee gateway is running but not joined</b> — pair it or turn the router switch OFF."
-        snapshot.recursiveWatchdogAssignment ->
-            "⚠ <b>Legacy Zigbee watchdog defect detected</b> — the exact recursive LD_LIBRARY_PATH assignment is present. ha-paneld will not edit the vendor script automatically."
-        else -> null
-    }
+    private fun zigbeeWarning(snapshot: ZigbeeHealthSnapshot): String? = zigbeeWarningText(
+        snapshot,
+        configuredOn = config.zigbeeRouterConfigured && config.zigbeeRouterEnabled,
+    )
 
     /** One dashboard banner for a health finding. Update findings link to the Install tab (where the user
      *  manages versions) and carry an "Ignore this version" button — a per-version dismissal that stays
@@ -2301,10 +3075,10 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         val webViewTooOld = PanelInfo.webViewStatus(appContext).tooOld
         return keys.filter { s.facts.containsKey(it) }.joinToString("\n") { k ->
             val v = s.facts.getValue(k)
-            // Version: plain text + a small "open releases" icon (a hyperlinked version reads ugly).
+            // Version: plain text + a compact GitHub releases icon (a hyperlinked version reads ugly).
             val cell = if (k == "ha-paneld") {
-                """${esc(v)} <a class="ext" href="$RELEASES_URL" target="_blank" rel="noopener" """ +
-                    """title="Releases" aria-label="Releases"><svg viewBox="0 0 24 24"><path d="$EXT_ICON"/></svg></a>"""
+                """${esc(v)}&nbsp;<a class="gh gh-inline" href="$RELEASES_URL" target="_blank" rel="noopener" """ +
+                    """title="Releases on GitHub" aria-label="Releases on GitHub"><svg viewBox="0 0 24 24"><path d="$GH_ICON"/></svg></a>"""
             } else if (k == "Display") {
                 displayCell(v)
             } else if (k == "System WebView" && webViewTooOld) {
@@ -2339,33 +3113,36 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
     }
 
     private fun behaviourRowsHtml(s: Snap): String = listOf(
-        "wake_on_wave", "prevent_idle_dim", "watchdog_enabled", "touch_sound",
-        "silence_boot_chime", "keep_awake", "home_dashboard", "dashboard_package", "launcher_package",
-    ).let { keys -> val hints = autoHints(); keys.mapNotNull { settingRowHtml(it, s.live, s.caps, hints) } }.joinToString("\n")
+        "wake_on_wave", "prevent_idle_dim", "watchdog_enabled", "kiosk_lock", "touch_sound",
+        "silence_boot_chime", "keep_awake", "navbar_mode", "log_ship_enabled",
+        "home_dashboard", "dashboard_package", "launcher_package",
+    ).let { keys ->
+        val hints = autoHints()
+        val caps = liveCapabilities(s.caps)
+        keys.mapNotNull { settingRowHtml(it, s.live, caps, hints) }
+    }.joinToString("\n")
 
-    // Display & tuning: registry values plus the Configure-card-backed ones (density / text /
-    // proximity / tame), each deep-linking to its card.
+    // Display and install-backed values, each deep-linking to its owning surface.
     private fun displayRowsHtml(s: Snap): String {
-        val proxShown = when {
-            !sensors.hasProximity() -> null
-            config.proximityCalibrated -> "calibrated · threshold ${"%.1f".format(config.proximityThreshold)}"
-            else -> "not calibrated"
-        }
-        return listOf("auto_brightness", "brightness_bias").mapNotNull { settingRowHtml(it, s.live, s.caps) }
+        return listOf(
+            "auto_brightness", "auto_brightness_sensitivity", "auto_brightness_ha_entity",
+        ).mapNotNull { settingRowHtml(it, s.live, liveCapabilities(s.caps)) }
             .joinToString("\n") + "\n" + listOfNotNull(
-            s.densityCur?.let { """<tr><th>Logical density</th><td>$it dpi (factory base ${s.densityBase ?: "?"})${cfgIcon("cfg-display")}</td></tr>""" },
-            s.densityCur?.let { """<tr><th>Text size</th><td>${s.fontScale}${cfgIcon("cfg-display")}</td></tr>""" },
-            proxShown?.let { """<tr><th>Proximity</th><td>${esc(it)}${cfgIcon("cfg-proximity")}</td></tr>""" },
-            """<tr><th>Tamed packages</th><td>${esc(config.tameVendorPackagesRaw.ifBlank { "none" })}${cfgIcon("cfg-tame")}</td></tr>""",
+            s.densityCur?.let { """<tr><th>Logical density</th><td>$it dpi (factory base ${s.densityBase ?: "?"})${installIcon("cfg-display")}</td></tr>""" },
+            s.densityCur?.let { """<tr><th>Text size</th><td>${s.fontScale}${installIcon("cfg-display")}</td></tr>""" },
+            sensors.proximitySummary().takeIf { sensors.hasRangedProximity() }?.let {
+                """<tr><th>Wake on wave</th><td>${esc(it)}${cfgIcon("cfg-wake_on_wave")}</td></tr>"""
+            },
+            """<tr><th>Tamed packages</th><td>${esc(config.tameVendorPackagesRaw.ifBlank { "none" })}${installIcon("cfg-tame")}</td></tr>""",
         ).joinToString("\n")
     }
 
     private fun updatesRowsHtml(s: Snap): String = listOf("self_update", "update_channel", "companion_auto_update")
-        .mapNotNull { settingRowHtml(it, s.live, s.caps) }.joinToString("\n")
+        .mapNotNull { settingRowHtml(it, s.live, liveCapabilities(s.caps)) }.joinToString("\n")
 
-    private fun capRowsHtml(): String {
+    private fun capRowsHtml(capabilities: List<DiagReader.Cap>): String {
         val capColor = mapOf("ok" to "#48c774", "degraded" to "#d9a528", "none" to "#d04a3b")
-        return DiagReader.capabilities(appContext, profile).joinToString("\n") { c ->
+        return capabilities.joinToString("\n") { c ->
             val col = capColor[c.status] ?: "#888"
             """<tr><th>${esc(c.name)}</th><td><span style="color:$col">●</span> ${esc(c.note)}</td></tr>"""
         }
@@ -2388,27 +3165,35 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         val a11yOk = s?.facts?.get("Nav actions (a11y)") == "yes"
         val navigation = ControlAvailability.navigation(
             accessibilityReady = a11yOk,
-            shizukuReady = s?.shizukuReady == true,
+            shizukuReady = s?.privilege?.shizuku?.ready == true,
             hasRecents = profile.hasRecents,
         )
         // Recents is only real where the firmware has an overview screen — KEYCODE_APP_SWITCH no-ops on
         // single-purpose panels, so the policy gates it on the profile rather than show a dead one.
-        val rootOk = s?.rootOk == true
+        val rootOk = s?.privilege?.rootControlReady == true
         val checking = s == null
-        fun pbtn(action: String, label: String, ok: Boolean, needs: String, style: String = "", disabledTitle: String? = null): String {
-            val dis = when {
-                checking -> """ disabled title="checking capabilities…""""
-                !ok -> """ disabled title="needs $needs""""
-                disabledTitle != null -> """ disabled title="$disabledTitle""""
-                else -> ""
+        fun pbtn(
+            action: String,
+            label: String,
+            ok: Boolean,
+            needs: String,
+            style: String = "",
+            disabledTitle: String? = null,
+        ): String {
+            val disabledReason = when {
+                checking -> "checking capabilities…"
+                !ok -> "needs $needs"
+                disabledTitle != null -> disabledTitle
+                else -> null
             }
-            return """<button class="pbtn"$style onclick="act('$action')"$dis>$label</button>"""
+            return dashboardControlButtonHtml(action, label, disabledReason, style)
         }
         // "Launcher" opens the best real home-screen launcher; "Admin launcher" always opens ha-paneld's
         // own. When no separate launcher exists (e.g. the vendor kiosk is tamed), "Launcher" would just
         // fall through to the admin launcher — so DISABLE it rather than show two buttons that do the same
         // thing. resolvedLauncher() is a cheap PackageManager query (no root).
-        val hasDistinctLauncher = !checking && system.resolvedLauncher(config.launcherPackage) != null
+        val hasDistinctLauncher = !checking &&
+            (system.resolvedLauncher(config.launcherPackage)?.let { it != appContext.packageName } == true)
         // Launcher / Admin launcher / Reboot need root; a disabled button's tooltip is invisible on a
         // touch panel, so add a visible note that accurately reflects the remaining navigation routes.
         val rootNote = if (!checking && !rootOk)
@@ -2416,13 +3201,13 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         return """$rootNote<div class="ctlrow" style="display:flex;gap:8px;flex-wrap:wrap">
  ${pbtn("back", "←<span class=\"lbl\"> Back</span>", navigation.backEnabled, ControlAvailability.INPUT_REQUIREMENT)}
  ${pbtn("recents", "▢<span class=\"lbl\"> Recents</span>", navigation.recentsEnabled, navigation.recentsRequirement)}
- ${pbtn("launcher", "⊞<span class=\"lbl\"> Launcher</span>", rootOk, "a rooted panel", """ style="margin-left:auto"""", disabledTitle = if (hasDistinctLauncher) null else "No separate launcher on this panel — same as Admin launcher")}
+ ${pbtn("launcher", "⊞<span class=\"lbl\"> Launcher</span>", rootOk, "a rooted panel", "margin-left:auto", disabledTitle = if (hasDistinctLauncher) null else "No separate launcher on this panel — same as Admin launcher")}
  ${pbtn("admin_launcher", "⚙<span class=\"lbl\"> Admin launcher</span>", rootOk, "a rooted panel")}
 </div>
 <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
  ${pbtn("voldn", "Vol −", !checking, "")}
  ${pbtn("volup", "Vol +", !checking, "")}
- ${pbtn("reboot", "⟳ Reboot", rootOk, "a rooted panel", """ style="margin-left:auto;border-color:#7a3a2a;color:#f5a08a"""")}
+ ${pbtn("reboot", "⟳ Reboot", rootOk, "a rooted panel", "margin-left:auto;border-color:#7a3a2a;color:#f5a08a")}
 </div>"""
     }
 
@@ -2438,11 +3223,11 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
             "updtbl" to updatesRowsHtml(s),
             "infotbl" to factRowsHtml(s, infoKeys(s)),
             "nettbl" to factRowsHtml(s, NET_KEYS),
-            "proftbl" to factRowsHtml(s, PROF_KEYS),
+            "proftbl" to factRowsHtml(s, profileFactKeys(profile, s.facts)),
             "contexttbl" to contextRowsHtml(s),
-            "captbl" to capRowsHtml(),
+            "captbl" to capRowsHtml(s.capabilityRows),
         ).joinToString(",") { (k, v) -> "\"$k\":${jsonStr(v)}" }
-        return """{"banners":${jsonStr(bannersHtml(s))},"shot":${s.captureOk},"shotCached":${jsonStr(screenshotPlaceholderUrl() ?: "")},"controls":${jsonStr(controlsHtml(s))},"cards":{$cards}}"""
+        return """{"banners":${jsonStr(bannersHtml(s))},"shot":${s.privilege.typedShellControlReady},"shotCached":${jsonStr(screenshotPlaceholderUrl() ?: "")},"controls":${jsonStr(controlsHtml(s))},"cards":{$cards}}"""
     }
 
     private fun infoHtml(): String {
@@ -2461,24 +3246,31 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
             rows.isBlank() -> ""
             else -> """<div class="card"><h2>${esc(title)}</h2>$pre<table id="$id">$rows</table>$post</div>"""
         }
-        val profNote = """<p class="note">Values declared by this panel's <a href="$REPO_URL/blob/main/docs/architecture/device-profiles.md" target="_blank" rel="noopener" style="color:#9cf">device profile</a> — if one looks wrong, that's where to correct it.</p>"""
+        val profileReferences = profile.profileLinks.joinToString(" · ") { link ->
+            val host = runCatching { java.net.URI(link.url).host }.getOrNull().orEmpty()
+            val destination = host.takeIf { it.isNotBlank() }
+                ?.let { """ · <bdi class="profile-reference-host" dir="ltr">${esc(it)}</bdi>""" }
+                .orEmpty()
+            """<a href="${esc(link.url)}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer"><bdi class="profile-reference-label" dir="auto">${esc(link.label)}</bdi>$destination</a>"""
+        }.takeIf { it.isNotBlank() }?.let { """<br><span class="profile-reference-links">$it</span>""" }.orEmpty()
+        val profNote = """<p class="note">Values declared by this panel's <a href="$REPO_URL/blob/main/docs/architecture/device-profiles.md" target="_blank" rel="noopener" style="color:#9cf">device profile</a> — if one looks wrong, that's where to correct it.$profileReferences</p>"""
         val capNote = """<p class="note"><a href="/api/v1/diag" target="_blank" style="color:#9cf">⭳ Diagnostics dump</a> — a copy-paste
 report of this panel's hardware, firmware, SELinux, su and node probes for bug reports.</p>"""
         // A cold shell can safely show the app-private last-successful capture before the capability
         // probes finish. It must not request a new capture until hydration confirms a privileged route.
         val cachedShot = screenshotPlaceholderUrl()
+        val shotTitle = """<h2>Screenshot <small>· live panel</small><a class="card-title-action" href="#" onclick="refreshScreenshot(this.closest('.card'));return false" title="Capture a fresh screenshot">↻ Refresh</a></h2>"""
         val shotInner = { src: String? ->
             val source = src?.let { """src="${esc(it)}"""" } ?: ""
-            """<a class="shot" href="/api/v1/screenshot.png" target="_blank" rel="noopener" title="Open full size in a new window" style="aspect-ratio:${screenAspectRatio()}"><img $source alt="panel screenshot" onload="this.parentElement.classList.add('loaded')" onerror="this.parentElement.classList.add('failed')"></a>
-<p class="note"><a href="#" onclick="refreshScreenshot(this.closest('.card'));return false" style="color:#9cf">↻ Refresh</a> · the last successful capture stays visible while a fresh image is requested. Captured on demand through the available privileged route; local-network only.</p>"""
+            """<a class="shot" href="/api/v1/screenshot.png" target="_blank" rel="noopener" title="Open full size in a new window" style="aspect-ratio:${screenAspectRatio()}"><img $source alt="panel screenshot" onload="this.parentElement.classList.add('loaded')" onerror="this.parentElement.classList.add('failed')"></a>"""
         }
         val shotCard = when {
             s == null && cachedShot != null ->
-                """<div class="card" id="shotcard" data-capture-ok="0"><h2>Screenshot <small>· live panel</small></h2>${shotInner(cachedShot)}</div>"""
+                """<div class="card" id="shotcard" data-capture-ok="0">$shotTitle${shotInner(cachedShot)}</div>"""
             s == null ->
-                """<div class="card" id="shotcard" data-capture-ok="0" style="display:none"><h2>Screenshot <small>· live panel</small></h2>${shotInner(null)}</div>"""
-            s.captureOk ->
-                """<div class="card" id="shotcard" data-capture-ok="1"><h2>Screenshot <small>· live panel</small></h2>${shotInner(cachedShot)}</div>"""
+                """<div class="card" id="shotcard" data-capture-ok="0" style="display:none">$shotTitle${shotInner(null)}</div>"""
+            s.privilege.typedShellControlReady ->
+                """<div class="card" id="shotcard" data-capture-ok="1">$shotTitle${shotInner(cachedShot)}</div>"""
             else -> ""
         }
         return """<!doctype html><html lang="en"><head><meta charset="utf-8">
@@ -2487,29 +3279,29 @@ report of this panel's hardware, firmware, SELinux, su and node probes for bug r
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>$browserTitle</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-<link rel="stylesheet" href="/info.css"></head><body data-ver="${Config.VERSION}" data-build="${buildToken()}" data-cfg="${configConcurrencyHash()}" data-hydrate="${if (hydrate) "1" else "0"}"><div class="wrap">
+<link rel="stylesheet" href="/info.css"></head><body data-ver="${Config.VERSION}" data-build="${buildToken()}" data-cfg="${renderConfigConcurrencyHash()}" data-hydrate="${if (hydrate) "1" else "0"}" data-hardened="${if (config.hardenedSecurityEnabled) "1" else "0"}"><div class="wrap">
 <div class="topbar"><div class="hdr"><button id="navburger" class="navburger pbtn" aria-label="Menu">☰</button><h1><img src="/icon.svg" class="logo" alt=""><span class="brand">ha-paneld</span> <small id="pswitch" data-self-id="$pid" data-self-name="$fname"><span class="sep">·</span>$fname</small></h1>
  <span style="display:flex;gap:10px;align-items:center">${if (config.haLinkUrl.isNotBlank()) """<a class="pbtn" href="${esc(config.haLinkUrl)}" target="_blank" rel="noopener" title="Open Home Assistant (this panel's device page when known)">Open in HA</a>""" else ""}<button id="revbtn" class="pbtn" onclick="toggleReveal()" title="Show/hide blurred values for editing — they're blurred by default so screenshots don't leak them">Reveal</button>
  <a class="gh" href="$REPO_URL" target="_blank" rel="noopener" title="ha-paneld on GitHub" aria-label="GitHub"><svg viewBox="0 0 24 24"><path d="$GH_ICON"/></svg></a></span></div>
 ${navBar("dashboard")}</div>
 <div id="verbar" class="setup" style="display:none">⟳ A newer ha-paneld is installed — <a href="#" onclick="location.reload();return false">reload</a> to refresh this page.</div>
 <div id="bannerzone">${s?.let { bannersHtml(it) } ?: ""}</div>
-<div class="cards">
+<div class="cards" id="dashboard-cards">
 <div class="card"><h2>Controls <small>· software nav bar</small></h2>
-<div id="ctlzone">${controlsHtml(s)}</div>
-<p class="note">For panels with no physical nav bar. Back/Recents use the accessibility service; Launcher/Reboot need root — actions whose capability is missing are disabled (hover for why).</p></div>
-$shotCard
+<div id="ctlzone">${controlsHtml(s)}</div></div>
 ${tcard("infotbl", "Panel information", s?.let { factRowsHtml(it, infoKeys(it)) })}
+$shotCard
 ${tcard("nettbl", "Networking", s?.let { factRowsHtml(it, NET_KEYS) })}
-${tcard("proftbl", "ha-paneld profile", s?.let { factRowsHtml(it, PROF_KEYS) }, post = profNote)}
+${tcard("proftbl", "ha-paneld profile", s?.let { factRowsHtml(it, profileFactKeys(profile, it.facts)) }, post = profNote)}
 ${tcard("contexttbl", "Runtime diagnostics", s?.let { contextRowsHtml(it) })}
-${tcard("captbl", "Capabilities", if (s == null) null else capRowsHtml(), post = capNote)}
+${tcard("captbl", "Capabilities", s?.let { capRowsHtml(it.capabilityRows) }, post = capNote)}
 <div class="card"><h2>Dashboard responsiveness <small id="smhdr"></small></h2>
 <canvas id="respchart" width="600" height="150" style="height:150px"></canvas>
 <div class="leg"><span style="color:#d04a3b">▬</span> interaction latency&nbsp;&nbsp;<span style="color:#4a9eff">▬</span> state updates&nbsp;&nbsp;<span style="color:#f5a623">▬</span> main-thread blocking · ~4 min</div>
 <table id="smtbl"><tr><td style="color:#888">measuring…</td></tr></table></div>
 <div class="card"><h2>Home Assistant state stream <small>· built-in renderer</small></h2>
 <table id="streamtbl"><tr><td style="color:#888">waiting for state traffic…</td></tr></table>
+<table class="dt" id="noisyentities"><tr><td style="color:#888">waiting for entity contributors…</td></tr></table>
 <p class="note">Payload is uncompressed application JSON. Main-thread time measures dispatch until the browser yields; it is not claimed as Home Assistant-only CPU. <a href="/entities">Open entity diagnostics</a>.</p></div>
 <div class="card"><h2>Sensors <small id="sensage"></small></h2>
 <table id="senstbl"><tr><td style="color:#888">reading…</td></tr></table>
@@ -2523,7 +3315,7 @@ ${tcard("captbl", "Capabilities", if (s == null) null else capRowsHtml(), post =
 <table class="dt" id="topproc"><tr><td style="color:#888">top processes…</td></tr></table></div>
 <div class="card"><h2>Remote WebView debugging <small id="insthdr"></small></h2>
 <div style="display:flex;gap:8px;margin-bottom:4px">
- <button type="button" class="pbtn" onclick="inspStart()">Enable</button>
+ <button id="inspstart" type="button" class="pbtn" onclick="inspStart()"${if (config.hardenedSecurityEnabled) " disabled title=\"Unavailable while Hardened mode is enabled\"" else ""}>Enable</button>
  <button type="button" class="pbtn" onclick="inspStop()">Stop</button></div>
 <p class="note" id="insthint"></p></div>
 ${tcard("livetbl", "Live state", if (s == null) null else liveRowsHtml(), pre = """<p class="note">What Home Assistant's control entities currently show.</p>""")}
@@ -2533,6 +3325,7 @@ ${tcard("updtbl", "Updates", s?.let { updatesRowsHtml(it) })}
 </div>
 <p class="note" style="text-align:center;margin-top:18px"><a href="/api" style="color:#9cf">REST API explorer</a>
  · <a href="/api/v1/diag" target="_blank" style="color:#9cf">diagnostics</a> · <a href="$REPO_URL" target="_blank" rel="noopener" style="color:#9cf">GitHub</a></p>
+<script src="/assets/card-column-alignment.js"></script>
 <script src="/info.js"></script>
 <script src="/assets/switcher.js"></script>
 <script src="/assets/buildwatch.js"></script>
@@ -2581,7 +3374,7 @@ ${tcard("updtbl", "Updates", s?.let { updatesRowsHtml(it) })}
         val control = if (!c.removable)
             """<span style="font-size:.8em;color:#777;white-space:nowrap">protected</span>"""
         else
-            """<form method="post" action="/api/v1/tame" style="margin:0"><input type="hidden" name="pkg" value="${esc(c.pkg)}"><input type="hidden" name="action" value="$action"><button type="submit" style="$btn;white-space:nowrap"${if (disabled) " disabled" else ""}>$label</button></form>"""
+            """<form method="post" action="/api/v1/tame" style="margin:0"><input type="hidden" name="pkg" value="${esc(c.pkg)}"><input type="hidden" name="action" value="$action"><button type="submit"${hardenedApprovalA11yAttrs()} style="$btn;white-space:nowrap"${if (disabled) " disabled" else ""}>$label</button></form>"""
         return """  <div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid #222">
    <span style="flex:1;min-width:0;overflow:hidden">${esc(c.label)}$recBadge$tags<br><small style="color:#888">${esc(c.pkg)}</small>$note</span>
    $state
@@ -2589,11 +3382,11 @@ ${tcard("updtbl", "Updates", s?.let { updatesRowsHtml(it) })}
   </div>"""
     }
 
-    private fun tameCardHtml(): String {
+    private fun tameCardHtml(rootReady: Boolean): String {
         // Root-gated, but shown (never hidden) so a no-root user sees the feature: the profile's candidate
         // vendor apps are listed greyed with a lock banner, actions disabled. Discovery (PackageManager)
         // needs no root; the tame/re-enable ACTIONS do.
-        val locked = !rootOk()
+        val locked = !rootReady
         // The card shows what's currently TAMED (the blocklist); discovery lives in the Find-a-package
         // picker. So a tamed package always has a visible Re-enable here. When locked, fall back to the
         // profile's candidate list so there's something to show.
@@ -2609,7 +3402,10 @@ ${tcard("updtbl", "Updates", s?.let { updatesRowsHtml(it) })}
         }
         val dis = if (locked) " disabled" else ""
         val lock = if (locked) rootLockBanner("With root, ha-paneld can hide vendor clutter (test tools, the vendor launcher) so only your dashboard shows.") else ""
-        return """<div class="card" id="cfg-tame"><h2>Vendor packages<span class="cardbadge exp">experimental</span></h2>
+        val badge = """<span class="cardbadge exp">experimental</span>"""
+        val title = if (!locked) hardenedApprovalCardTitle("Vendor packages", badge, conditional = true)
+            else "<h2>Vendor packages$badge</h2>"
+        return """<div class="card" id="cfg-tame">$title
 $lock<p class="note"><b>Tame</b> force-stops an app, stops it relaunching on boot, and blocks it drawing over the dashboard — applied immediately and on every boot. <b>Re-enable</b> undoes it. Critical system apps are never offered; nothing changes until you press a button.</p>
 $body
 <div style="display:flex;flex-direction:column;gap:8px;margin-top:12px" class="${if (locked) "locked" else ""}">
@@ -2617,11 +3413,11 @@ $body
  <form method="post" action="/api/v1/tame" style="display:flex;flex-direction:row;gap:8px;margin:0">
   <input name="pkg" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="…or tame a package by name" style="flex:1"$dis>
   <input type="hidden" name="action" value="tame">
-  <button type="submit"$dis>Tame</button>
+  <button type="submit"${hardenedApprovalA11yAttrs()}$dis>Tame</button>
  </form>
 </div>
 <dialog id="pkgdlg" style="background:#1a1a1a;color:#eee;border:1px solid #333;border-radius:12px;max-width:520px;width:92%;padding:16px">
- <h3 style="margin:0 0 4px">Find a package to control</h3>
+ <h3 data-hardened-approval="conditional" aria-describedby="hardened-approval-section-conditional-description" title="Some actions in this section require physical on-panel approval when Hardened mode is enabled." style="margin:0 0 4px">Find a package to control</h3>
  <p class="note" style="margin:0 0 8px">Apps on this panel you might want to tame — pick one to act on it. Not every entry is unwanted; only tame things you recognise.</p>
  <div id="pkgdlgbody" style="max-height:55vh;overflow:auto">Loading…</div>
  <form method="dialog" style="margin-top:12px;text-align:right"><button>Close</button></form>
@@ -2632,30 +3428,36 @@ fetch('/api/v1/tame/suggest').then(function(r){return r.text()}).then(function(t
     }
 
     /** Display-sizing card (density + text scale). Empty when su isn't reachable (no control). */
-    private fun displayCardHtml(): String {
-        // Read the density trio FRESH from densityCache (not the stale-while-revalidate snapshot) so a
-        // value just applied via this card shows immediately: the POST primes densityCache, whereas
-        // snapStaleOk returns the pre-change snapshot for a refresh cycle. densityCache is TTL-cached and
-        // primed on write, so this only pays the su reads on a genuinely cold Configure load.
-        val (curOverride, base, fs) = densityCache.get()
+    private fun displayCardHtml(
+        typedShellReady: Boolean,
+        sizing: DisplaySizingObservation,
+    ): String {
+        // The POST primes densityCache, so peek preserves immediate post-write values without turning
+        // Install rendering into another privileged probe. Cold startup already populated the snapshot.
+        val (curOverride, base, fs) = sizing
         // Shown even without root (density can't be READ without it either) so a no-root user sees the
         // feature — but greyed, with a lock banner, and every control disabled. `dis` toggles all of it.
-        val locked = !displayOk()
+        val locked = !typedShellReady
         // Prefill: the active override if one is set, else the profile's HA-optimised recommendation
         // (so a fresh panel offers the right value to Apply rather than the factory base), else the base.
         val cur = curOverride?.takeIf { it != base } ?: recommendedDensity ?: base ?: DensityController.MIN_DPI
+        val densityHint = recommendedDensity?.let { "profile recommendation $it" }
+            ?: "firmware default ${base ?: "?"}"
+        val resetTitle = base?.let { "Reset to firmware default ($it dpi)" } ?: "Reset to firmware default"
         val dis = if (locked) " disabled" else ""
         val rec = if (!locked && (recommendedDensity != null || recommendedFontScale != null))
-            """ <button type="submit" name="action" value="rec" formnovalidate>HA-optimised</button>""" else ""
-        val lock = if (locked) privilegedLockBanner("With root, the helper daemon, or locally approved Shizuku access, ha-paneld can match the dashboard's density and text size to the physical screen.") else ""
-        return """<div class="card" id="cfg-display"><h2>Display sizing<span class="cardbadge exp">experimental</span></h2>
+            """ <button type="submit" name="action" value="rec"${hardenedApprovalA11yAttrs()} formnovalidate>HA-optimised</button>""" else ""
+        val lock = if (locked) privilegedLockBanner("With supported privileged panel access, ha-paneld can match the dashboard's density and text size to the physical screen.") else ""
+        val badge = """<span class="cardbadge exp">experimental</span>"""
+        val title = if (!locked) hardenedApprovalCardTitle("Display sizing", badge) else "<h2>Display sizing$badge</h2>"
+        return """<div class="card" id="cfg-display">$title
 $lock<p class="note"><b>Experimental / R&amp;D — the right values aren't dialled in yet; experiment at your own
 pace.</b> Match an HA dashboard's size to a desktop browser. <b>Density</b> scales the whole layout
 (lower dpi = more fits); <b>text size</b> scales WebView text. Panel firmware often ships these
-mismatched to the physical screen. Applies live, persists across reboot; needs root, the helper daemon, or locally approved Shizuku access.</p>
+mismatched to the physical screen. Applies live, persists across reboot; needs supported privileged panel access.</p>
 <form method="post" action="/api/v1/display/density" class="${if (locked) "locked" else ""}" style="display:flex;flex-direction:column;gap:10px">
  <label style="display:flex;flex-direction:row;justify-content:space-between;align-items:center;gap:12px">
-  <span>Logical density (dpi) <small style="color:#888">· factory base ${base ?: "?"}</small></span>
+  <span>Logical density (dpi) <small style="color:#888">· $densityHint</small></span>
   <input name="density" type="number" min="${DensityController.MIN_DPI}" max="${DensityController.MAX_DPI}" value="$cur" style="width:96px"$dis>
  </label>
  <label style="display:flex;flex-direction:row;justify-content:space-between;align-items:center;gap:12px">
@@ -2663,8 +3465,8 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
   <input name="font" type="number" step="0.05" min="${DensityController.MIN_FONT}" max="${DensityController.MAX_FONT}" value="$fs" style="width:96px"$dis>
  </label>
  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:2px">
-  <button type="submit"$dis>Apply</button>$rec
-  <button type="submit" name="action" value="reset" formnovalidate$dis>Reset</button>
+  <button type="submit"${hardenedApprovalA11yAttrs()}$dis>Apply</button>$rec
+  <button type="submit" name="action" value="reset" aria-describedby="hardened-approval-description" formnovalidate title="$resetTitle · $HARDENED_APPROVAL_TEXT"$dis>Reset</button>
  </div>
 </form></div>"""
     }
@@ -2674,7 +3476,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
         appContext.assets.open(name).bufferedReader().use { it.readText() }
 
     private fun inspectJson(status: String): String =
-        """{"running":${CdpRelay.running},"port":${CdpRelay.PORT},"status":"$status"}"""
+        """{"running":${CdpRelay.running},"port":${CdpRelay.PORT},"status":"$status","start_allowed":${!config.hardenedSecurityEnabled}}"""
 
     private fun entityFilterStatusJson(): String {
         val ids = runCatching { EntityFilterProtocol.normalize(config.dashboardEntityFilterIds) }
@@ -2782,10 +3584,41 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
                 return
             }
         }
+        if (rejectHardenedNetworkAdb(call, p["network_adb"])) return
+        val dashboardPackage = p["dashboard_package"]
+        if (p["dashboard_idle_return_min"] != null &&
+            (dashboardPackage ?: config.dashboardPackage) != SystemController.BUILTIN_DASHBOARD
+        ) {
+            call.respondText(
+                """{"ok":false,"error":"built-in-renderer-required","message":"Idle return is available only for the built-in renderer."}""",
+                ContentType.Application.Json,
+                HttpStatusCode.BadRequest,
+            )
+            return
+        }
+        val tamePackagesChanged = p["tame_vendor_packages"]?.split(' ')?.filter(String::isNotBlank)?.toSet()
+            ?.let { requested -> requested != config.tameVendorPackages.toSet() } == true
+        val softwareAuthorityChanged = requestsSoftwareInstallAuthority { p[it] }
+        val privilegedOperation = when {
+            tamePackagesChanged -> SensitiveOperation.PACKAGE_TAME
+            softwareAuthorityChanged -> SensitiveOperation.APK_INSTALL
+            else -> null
+        }
+        if (privilegedOperation != null && !authorizeSensitive(
+                call,
+                privilegedOperation,
+                exactHttpApprovalPayload(call, p.canonicalDigest()),
+                when {
+                    tamePackagesChanged && softwareAuthorityChanged ->
+                        "Change vendor package state and software installation policy"
+                    tamePackagesChanged -> "Change the persistent vendor package blocklist"
+                    else -> "Allow automatic software installation or apply an active update channel"
+                },
+            )
+        ) return
         // Partial-merge: apply ONLY keys present, so a fleet tool can set one field without clobbering
         // the rest. The UI form sends every key (blank = clear), preserving its full-replace behaviour.
         val panelId = p["panel_id"]
-        val dashboardPackage = p["dashboard_package"]
         // Persisted fields are staged into one editor and committed atomically, so a power loss mid-apply
         // can't leave a half-written config (e.g. broker set but credentials not). Live side-effects
         // (behaviour keys, reconfigure) run after the commit so they read freshly-committed state.
@@ -2802,7 +3635,6 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
         var entityTargetChanged = false
         var homeDashboardAppliedEarly = false
         var homeDashboardChangedEarly = false
-        var tameDelta = TameDelta.NONE
         var rendererFailure: Throwable? = null
         val committed = withContext(Dispatchers.IO) {
             rendererPreparation.transaction {
@@ -2810,7 +3642,11 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
                     revisionValues(), kind = ConfigBundle.KIND_REVISION,
                     exportedAt = System.currentTimeMillis().toString(), exportedBy = config.panelId,
                 )
-                val saved = config.applyBatch {
+                val saved = config.applyBatch(
+                    afterCommit = {
+                        if ("tame_vendor_packages" in p) requestTameReconcileAfterCommit()
+                    },
+                ) {
                     panelId?.let { config.setPanelId(it) }
                     p["friendly_name"]?.let { config.setFriendlyName(it.trim()) }
                     val prevDash = config.dashboardPackage
@@ -2818,10 +3654,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
                     val dashChanged = dashboardPackage?.let { it != prevDash } == true
                     p["launcher_package"]?.let { config.setLauncherPackage(it.trim()) }
                     p["tame_vendor_packages"]?.let { raw ->
-                        val next = raw.split(Regex("[\\s,]+")).map { it.trim() }
-                            .filter { it.isNotEmpty() && !TameController.isCritical(it) }.toSet()
-                        tameDelta = TameDelta.between(config.tameVendorPackages.toSet(), next)
-                        if (!tameDelta.isEmpty) config.setTameVendorPackages(next.joinToString(" "))
+                        if (tamePackagesChanged) config.setTameVendorPackages(raw)
                     }
                     p["http_allowed_hosts"]?.let { config.setHttpAllowedHosts(it) }
                     // Live keys are deliberately excluded from this batch. Their handlers must observe
@@ -2893,7 +3726,13 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
                     val broker = p["mqtt_broker"]?.trim()
                     val user = p["mqtt_user"]?.trim()
                     // Blank password keeps the current one; clearing the username clears the password too.
-                    val pw = if (user != null && user.isEmpty()) "" else p["mqtt_password"]?.takeIf { it.isNotEmpty() }
+                    val brokerChanged = broker != null && broker != config.mqttBroker
+                    val pw = when {
+                        user != null && user.isEmpty() -> ""
+                        brokerChanged && config.hardenedSecurityEnabled ->
+                            p["mqtt_password"]?.takeIf { it.isNotEmpty() } ?: ""
+                        else -> p["mqtt_password"]?.takeIf { it.isNotEmpty() }
+                    }
                     if (broker != null || user != null || pw != null) config.setMqtt(
                         broker ?: config.mqttBroker, user ?: config.mqttUser, pw,
                     )
@@ -2905,7 +3744,13 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
                     val prevHaExpiry = config.haTokenExpiry
                     val prevHaClientId = config.haClientId
                     val haUrl = p["ha_url"]?.trim()
-                    val haToken = if (haUrl != null && haUrl.isEmpty()) "" else p["ha_token"]?.takeIf { it.isNotEmpty() }
+                    val hardenedHaOriginChange = config.hardenedSecurityEnabled && haUrl != null &&
+                        haUrl.trimEnd('/') != prevHaUrl.trimEnd('/')
+                    val haToken = when {
+                        haUrl != null && haUrl.isEmpty() -> ""
+                        hardenedHaOriginChange -> p["ha_token"]?.takeIf { it.isNotEmpty() } ?: ""
+                        else -> p["ha_token"]?.takeIf { it.isNotEmpty() }
+                    }
                     if (haUrl != null || haToken != null) config.setHaConnection(
                         haUrl ?: config.haUrl, haToken,
                     )
@@ -2913,10 +3758,16 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
                     // current; clearing the URL clears it too. When set with an access token + expiry, persist
                     // the whole session so the renderer's lazy refresh has a valid starting point.
                     val clearingHa = haUrl != null && haUrl.isEmpty()
-                    val haRefresh = if (clearingHa) "" else p["ha_refresh_token"]?.takeIf { it.isNotEmpty() }
+                    val haRefresh = when {
+                        clearingHa -> ""
+                        hardenedHaOriginChange -> p["ha_refresh_token"]?.takeIf { it.isNotEmpty() } ?: ""
+                        else -> p["ha_refresh_token"]?.takeIf { it.isNotEmpty() }
+                    }
                     haRefresh?.let { config.setHaRefreshToken(it) }
                     val haExpiry = p["ha_token_expiry"]?.trim()?.toLongOrNull()
+                        ?: if (hardenedHaOriginChange) 0L else null
                     val haClientId = p["ha_client_id"]?.trim()?.let { if (clearingHa) "" else it }
+                        ?: if (hardenedHaOriginChange) "" else null
                     haExpiry?.let(config::setHaTokenExpiry)
                     haClientId?.let(config::setHaClientId)
                     if (clearingHa) config.setHaRefreshToken("")
@@ -2991,10 +3842,6 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             call.respondText("configuration commit failed\n", status = HttpStatusCode.InternalServerError)
             return
         }
-        if (!tameDelta.isEmpty) {
-            tameDelta.add.forEach { submitTameMutation(it, TameMutation.TAME) }
-            tameDelta.remove.forEach { submitTameMutation(it, TameMutation.UNTAME) }
-        }
         // Formerly MQTT-only behaviour settings — applied through the bridge's command path so HTTP
         // and HA behave identically. Registry-validated where the key is registered; invalid skipped.
         val liveApplyFailures = ArrayList<String>()
@@ -3041,9 +3888,36 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
         }
     }
 
-    /** Admit vendor mutations without creating one coroutine/thread per HTTP request. */
-    private fun submitTameMutation(key: String, mutation: TameMutation): Boolean {
-        val admission = tameMutations.submit(key, mutation)
+    /** Atomically update the desired selection and notify its owner before releasing config commit order. */
+    private fun updateTameSelection(update: (MutableSet<String>) -> Unit): Boolean =
+        config.synchronizedTransaction {
+            val selected = config.tameVendorPackages.toCollection(LinkedHashSet())
+            update(selected)
+            val normalized = when (val validation = TamePackagePolicy.normalize(selected.joinToString(" "))) {
+                is Validation.Ok -> validation.normalized
+                is Validation.Bad -> return@synchronizedTransaction false
+            }
+            if (normalized == config.tameVendorPackages.joinToString(" ")) {
+                requestTameReconcileAfterCommit()
+                return@synchronizedTransaction true
+            }
+            val spec = requireNotNull(SettingsRegistry.spec("tame_vendor_packages"))
+            val editor = config.editor()
+            config.stage(editor, spec, normalized)
+            config.commit(editor, afterCommit = ::requestTameReconcileAfterCommit)
+        }
+
+    /** Startup/reconfigure wake-up. Config commits use [requestTameReconcileAfterCommit] under the lock. */
+    fun requestTameReconcile(): Boolean = config.synchronizedTransaction {
+        requestTameReconcileAfterCommit()
+    }
+
+    /**
+     * One commit-order submission seam. Admission loss is observable but not correctness-critical: the
+     * desired config and write-ahead ownership markers are durable, and startup requests another pass.
+     */
+    private fun requestTameReconcileAfterCommit(): Boolean {
+        val admission = tameReconciliation.request()
         when (admission) {
             KeyedLatestDispatcher.Admission.ACCEPTED -> Unit
             KeyedLatestDispatcher.Admission.COALESCED ->
@@ -3052,16 +3926,26 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             KeyedLatestDispatcher.Admission.CLOSED ->
                 FeatureCosts.registry.recordDropped(FeatureCostOperation.TAME_MUTATION)
         }
-        FeatureCosts.registry.setBacklog(
-            FeatureCostOperation.TAME_MUTATION,
-            tameMutations.pendingCount(),
-        )
         return admission == KeyedLatestDispatcher.Admission.ACCEPTED ||
             admission == KeyedLatestDispatcher.Admission.COALESCED
     }
 
     private suspend fun respondRemoteAdmission(call: ApplicationCall, command: RemoteControl) {
-        val admission = remoteControls.submit(command.key, command)
+        // Coordinate injection cannot be made self-approving: an approved tap could target the next
+        // approval dialog. Hardened mode therefore trusts taps only from loopback software already on
+        // the panel. Non-coordinate navigation remains routine; reboot has its own explicit gate below.
+        val loopback = isLoopbackPeer(call.request.origin.remoteAddress)
+        if (command is RemoteControl.Tap && config.hardenedSecurityEnabled && !loopback) {
+            call.respondText(
+                """{"ok":false,"error":"remote-input-disabled"}""",
+                ContentType.Application.Json,
+                HttpStatusCode.Forbidden,
+            )
+            return
+        }
+        val admittedCommand = if (command is RemoteControl.Tap) RemoteControl.Tap(command.x, command.y, loopback)
+            else command
+        val admission = remoteControls.submit(admittedCommand.key, admittedCommand)
         when (admission) {
             KeyedLatestDispatcher.Admission.ACCEPTED -> Unit
             KeyedLatestDispatcher.Admission.COALESCED ->
@@ -3083,6 +3967,17 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
         }
     }
 
+    private suspend fun respondAutoBrightnessAction(
+        call: ApplicationCall,
+        action: AutoBrightnessHttpAction,
+    ) {
+        call.respondText(
+            action.json,
+            ContentType.Application.Json,
+            HttpStatusCode.fromValue(action.statusCode),
+        )
+    }
+
     /**
      * Registry metadata for generating the Configure form (type/group/tier/scope/options/range +
      * whether the setting is an HA entity and currently exposed), capability-gated to this panel.
@@ -3090,8 +3985,9 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
      */
     private fun configSchemaJson(): String {
         fun s(v: String) = Json.str(v)
-        val caps = snapStaleOk().caps   // capability probes (cpu/adb su) via the snapshot
+        val caps = liveCapabilities(snapStaleOk().caps) // ranged eligibility is fail-closed and live
         val hints = autoHints()   // what blank ("auto") package fields resolve to → field placeholder
+        val displaySizingAvailable = caps.canSetDisplay
         // Include the settable settings PLUS the read-only HA sensors (diagnostics): the latter carry
         // no editable value but still render an expose pip, so the user can opt them into HA.
         val schemaSpecs = SettingsRegistry.SPECS.filter { (!it.readOnly || it.ha != null) && !it.hidden }
@@ -3111,6 +4007,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
                 "\"secret\":${spec.secret}," +
                 "\"readOnly\":${spec.readOnly}," +
                 "\"available\":${spec.availableWhen(caps)}," +
+                "\"displaySizingAvailable\":${spec.key == "dashboard_zoom" && displaySizingAvailable}," +
                 "\"options\":[$opts]," +
                 "\"picker\":${spec.picker?.let { s(it) } ?: "null"}," +
                 "\"min\":${spec.min?.toString() ?: "null"}," +
@@ -3173,20 +4070,25 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
 
     /** Current registry values as a flat map (skips transient inputs; controller-sourced settings
      *  read their live state). The basis for export, the pre-change snapshot, and the dry-run diff. */
-    private fun currentValues(): Map<String, String> {
-        val live = liveValues()
-        val m = LinkedHashMap<String, String>()
-        for (spec in SettingsRegistry.settable()) {
-            if (spec.transient) continue
-            m[spec.key] = effectiveValue(spec, live)
-        }
+    private fun currentValues(): Map<String, String> = currentValues(configLiveValues())
+
+    private fun currentValues(live: Map<String, String>): Map<String, String> {
+        val m = projectConfigSnapshot(
+            specs = SettingsRegistry.settable(),
+            zigbeeRouterConfigured = config.zigbeeRouterConfigured,
+            effectiveValue = { effectiveValue(it, live) },
+        )
         SettingsRegistry.SPECS.filter { it.ha != null }.forEach { spec ->
             m["ha_expose_${spec.key}"] = config.haExposed(spec.key, spec.haExposedByDefault).toString()
         }
         return m
     }
 
-    private fun configConcurrencyHash(values: Map<String, String> = currentValues()): String =
+    /** Page shells and liveness use only persisted/non-privileged controller state. */
+    private fun renderConfigConcurrencyHash(): String =
+        configConcurrencyHash(currentValues())
+
+    private fun configConcurrencyHash(values: Map<String, String>): String =
         io.github.maxlyth.hapaneld.config.ConfigHash.of(configConcurrencyValues(values))
 
     private fun revisionValues(
@@ -3222,13 +4124,19 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
     /** Export a versioned config bundle. Secrets are excluded unless `?include_secrets=1`. */
     private suspend fun handleConfigExport(call: ApplicationCall) {
         val includeSecrets = call.request.queryParameters["include_secrets"] == "1"
-        val live = liveValues()
-        val values = LinkedHashMap<String, String>()
-        for (spec in SettingsRegistry.settable()) {
-            if (spec.transient) continue
-            if (spec.secret && !includeSecrets) continue
-            values[spec.key] = effectiveValue(spec, live)
-        }
+        if (includeSecrets && !authorizeSensitive(
+                call,
+                SensitiveOperation.CONFIG_SECRET_EXPORT,
+                exactHttpApprovalPayload(call, sha256Hex(ByteArray(0))),
+                "Export settings including stored credentials",
+            )
+        ) return
+        val live = configLiveValues()
+        val values = projectConfigSnapshot(
+            specs = SettingsRegistry.settable().filter { includeSecrets || !it.secret },
+            zigbeeRouterConfigured = config.zigbeeRouterConfigured,
+            effectiveValue = { effectiveValue(it, live) },
+        )
         SettingsRegistry.SPECS.filter { it.ha != null }.forEach { spec ->
             values["ha_expose_${spec.key}"] = config.haExposed(spec.key, spec.haExposedByDefault).toString()
         }
@@ -3253,8 +4161,8 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
      * or strict mode with any error).
      */
     private suspend fun handleConfigImport(call: ApplicationCall) {
-        val body = when (val receipt = receiveBoundedBody(call, MAX_CONFIG_IMPORT_BYTES)) {
-            is BoundedBodyReceipt.Received -> String(receipt.bytes, Charsets.UTF_8)
+        val bodyBytes = when (val receipt = receiveBoundedBody(call, MAX_CONFIG_IMPORT_BYTES)) {
+            is BoundedBodyReceipt.Received -> receipt.bytes
             BoundedBodyReceipt.TooLarge -> {
                 call.respondText("""{"status":"too-large"}""", ContentType.Application.Json, HttpStatusCode.PayloadTooLarge)
                 return
@@ -3264,6 +4172,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
                 return
             }
         }
+        val body = String(bodyBytes, Charsets.UTF_8)
         val bundle = ConfigBundle.parse(body)
         if (bundle == null) {
             call.respondText("""{"status":"bad-bundle"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
@@ -3315,6 +4224,10 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
                 is Validation.Bad -> errors.add(v.reason)
             }
         }
+        if (preserveUnconfiguredZigbeeOwnership(accepted, config.zigbeeRouterConfigured)) {
+            skipped.add("zigbee_router")
+            warn.add("legacy zigbee_router=false skipped to preserve untouched vendor gateway ownership")
+        }
         val strict = call.request.queryParameters["strict"] == "1"
         if ((strict && errors.isNotEmpty()) || (accepted.isEmpty() && errors.isNotEmpty())) {
             call.respondText(importJson("rejected", emptyList(), skipped, warn, errors), ContentType.Application.Json, HttpStatusCode.UnprocessableEntity)
@@ -3333,13 +4246,22 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             )
             return
         }
+        if (rejectHardenedNetworkAdb(call, accepted["network_adb"])) return
         if (accepted.isEmpty()) {
             call.respondText(importJson("no-op", emptyList(), skipped, warn, errors), ContentType.Application.Json)
             return
         }
+        val importDigest = sha256Hex(bodyBytes)
+        if (!authorizeSensitive(
+                call,
+                SensitiveOperation.CONFIG_IMPORT,
+                exactHttpApprovalPayload(call, importDigest),
+                "Import ${accepted.size} panel setting${if (accepted.size == 1) "" else "s"}",
+            )
+        ) return
         when (applyAccepted(accepted, expectedConfig.ifEmpty { null })) {
             ApplyAcceptedResult.STALE -> {
-                val actual = configConcurrencyHash()
+                val actual = configConcurrencyHash(currentValues())
                 call.respondText(
                     """{"status":"stale-preview","expected_cfg":${jsonStr(expectedConfig)},"actual_cfg":${jsonStr(actual)}}""",
                     ContentType.Application.Json,
@@ -3381,7 +4303,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             var committed: AcceptedCommit? = null
             config.synchronizedTransaction {
                 if (expectedConfig != null &&
-                    configConcurrencyHash() != expectedConfig
+                    configConcurrencyHash(currentValues()) != expectedConfig
                 ) {
                     earlyResult = ApplyAcceptedResult.STALE
                     return@synchronizedTransaction
@@ -3406,12 +4328,20 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
                         // preference after the ordinary bundle transaction succeeds.
                         key == "dashboard_entity_learning" -> Unit
                         key in HTTP_LIVE_KEYS -> live.add(key to value)
-                        else -> SettingsRegistry.spec(key)?.let { config.stage(editor, it, value) }
+                        else -> SettingsRegistry.spec(key)?.let { spec ->
+                            config.stage(editor, spec, value)
+                        }
                     }
                 }
                 config.stageImportDependencies(editor, accepted)
                 entityState?.let { config.stageDashboardEntityBackupState(editor, it) }
-                if (!config.commit(editor)) {
+                if (!config.commit(
+                        editor,
+                        afterCommit = {
+                            if ("tame_vendor_packages" in accepted) requestTameReconcileAfterCommit()
+                        },
+                    )
+                ) {
                     earlyResult = ApplyAcceptedResult.COMMIT_FAILED
                     return@synchronizedTransaction
                 }
@@ -3490,7 +4420,9 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
         when {
             effects.dashboardChanged -> {
                 val result = rendererPreparation.launchConfigured(
-                    ensureHome = { pkg, ready -> system.ensureDashboardHome(pkg, ready) },
+                    ensureHome = { pkg, ready ->
+                        system.applyLauncherHomePolicy(config.launcherPackage, pkg, ready)
+                    },
                     launchHome = { pkg -> system.launchHome(pkg) },
                 )
                 requireRendererResult(result)
@@ -3623,10 +4555,13 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
         overrideBytes: Long,
         profileBytes: Long?,
     ): String {
-        val live = liveValues()
-        val cfg = SettingsRegistry.settable()
-            .filterNot { it.transient || it.key in ENTITY_STATE_CONFIG_KEYS }
-            .joinToString(",") { s -> "${jsonStr(s.key)}:${jsonStr(effectiveValue(s, live))}" }
+        val live = configLiveValues()
+        val cfg = projectConfigSnapshot(
+            specs = SettingsRegistry.settable(),
+            zigbeeRouterConfigured = config.zigbeeRouterConfigured,
+            excludedKeys = ENTITY_STATE_CONFIG_KEYS,
+            effectiveValue = { effectiveValue(it, live) },
+        ).entries.joinToString(",") { (key, value) -> "${jsonStr(key)}:${jsonStr(value)}" }
         val exposures = SettingsRegistry.SPECS.filter { it.ha != null }
             .joinToString(",") { spec ->
                 "${jsonStr("ha_expose_${spec.key}")}:${jsonStr(config.haExposed(spec.key, spec.haExposedByDefault).toString())}"
@@ -4000,6 +4935,26 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
                     ContentType.Application.Json,
                 )
             }
+            if (rejectHardenedNetworkAdb(call, configPlan.values["network_adb"])) return
+            val restoreDigest = withContext(Dispatchers.IO) {
+                val digest = MessageDigest.getInstance("SHA-256")
+                receivedFile.inputStream().use { input ->
+                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                    while (true) {
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        digest.update(buffer, 0, count)
+                    }
+                }
+                digest.digest().joinToString("") { "%02x".format(it) }
+            }
+            if (!authorizeSensitive(
+                    call,
+                    SensitiveOperation.BACKUP_RESTORE,
+                    exactHttpApprovalPayload(call, restoreDigest),
+                    "Restore this panel backup${if (companionPlan != null) " including the Companion login" else ""}",
+                )
+            ) return
             if (companionPlan != null && !withContext(Dispatchers.IO) { ensureCompanionHelper() }) {
                 return call.respondText(
                     """{"ok":false,"error":"Companion restore needs the current ha-paneld helper"}""",
@@ -4514,8 +5469,21 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
                 }
             }
         }
+        val ownershipPreserved = preserveUnconfiguredZigbeeOwnership(
+            accepted,
+            config.zigbeeRouterConfigured,
+        )
         if (accepted.isEmpty() && errors.isEmpty()) errors += "config object contains no restorable settings"
-        return RestoreConfigPlan(accepted, warnings, errors)
+        return RestoreConfigPlan(
+            accepted,
+            buildList {
+                addAll(warnings)
+                if (ownershipPreserved) {
+                    add("legacy zigbee_router=false skipped to preserve untouched vendor gateway ownership")
+                }
+            },
+            errors,
+        )
     }
 
     private suspend fun applyRestoreConfig(
@@ -4546,7 +5514,9 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
     private fun reconcileAfterCompanionRestore(effects: RendererConfigEffects?) {
         if (effects != null && (effects.dashboardChanged || effects.reloadBuiltin || effects.relaunchBuiltin)) return
         val result = rendererPreparation.reconcileStartup(
-            ensureHome = { pkg, ready -> system.ensureDashboardHome(pkg, ready) },
+            ensureHome = { pkg, ready ->
+                system.applyLauncherHomePolicy(config.launcherPackage, pkg, ready)
+            },
             launchHome = { pkg -> system.launchHome(pkg) },
         )
         requireRendererResult(result)
@@ -4728,6 +5698,16 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             if (spec.readOnly || spec.transient) continue
             (SettingValue.validate(spec, raw) as? Validation.Ok)?.let { accepted[key] = it.normalized }
         }
+        preserveUnconfiguredZigbeeOwnership(accepted, config.zigbeeRouterConfigured)
+        if (rejectHardenedNetworkAdb(call, accepted["network_adb"])) return
+        val revisionDigest = sha256Hex(bundle.serialize().toByteArray(Charsets.UTF_8))
+        if (!authorizeSensitive(
+                call,
+                SensitiveOperation.CONFIG_IMPORT,
+                exactHttpApprovalPayload(call, revisionDigest),
+                "Restore stored configuration revision $id",
+            )
+        ) return
         if (entityState == null && (
                 accepted["dashboard_entity_overrides"].orEmpty().isNotBlank() ||
                     accepted["dashboard_entity_learning_applied"] == "true"
@@ -4787,10 +5767,24 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
             "}"
     }
 
+    private fun performanceWorkloadValues(): Map<String, String> {
+        val live = snapStaleOk().live
+        return PERFORMANCE_WORKLOAD_KEYS.associateWith { key ->
+            effectiveValue(requireNotNull(SettingsRegistry.spec(key)), live)
+        }
+    }
+
     companion object {
         private const val TAG = "ha-paneld/http"
+        private const val HARDENED_APPROVAL_TEXT =
+            "Requires physical on-panel approval for this action when Hardened mode is enabled."
+        private const val HARDENED_CONDITIONAL_APPROVAL_TEXT =
+            "Changing this setting may require physical on-panel approval when Hardened mode is enabled."
+        private const val RETIRED_PROXIMITY_OPERATION =
+            "{\"error\":\"automatic proximity learning replaced this operation\"}"
+        private const val RANGED_PROXIMITY_REQUIRED =
+            "{\"error\":\"ranged_proximity_required\"}"
         private const val ENTITY_REVISION_PREFIX = "_local.entity_state"
-        private const val RECOMMENDED_TAME_KEY = "@recommended"
         private const val TAME_SHUTDOWN_MS = 5_000L
         private const val REMOTE_CONTROL_SHUTDOWN_MS = 5_000L
         private val REMOTE_ACTIONS = setOf(
@@ -4800,15 +5794,47 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
         /** Behaviour keys routed through [applySetting] after an HTTP persistence commit. */
         internal val HTTP_LIVE_KEYS = listOf(
             "wake_on_wave", "prevent_idle_dim", "watchdog_enabled", "kiosk_lock", "auto_brightness",
-            "brightness_bias", "navbar_mode", "touch_sound", "cpu_governor",
-            "network_adb", "zigbee_router", "ambient_lux",
+            "auto_brightness_sensitivity", "auto_brightness_ha_entity",
+            "navbar_mode", "touch_sound", "cpu_governor", "network_adb", "zigbee_router",
             "companion_auto_update", "companion_update_channel", "self_update", "webview_auto_update",
             "update_channel", "home_dashboard", "silence_boot_chime",
         )
 
+        private val PROFILE_FACT_KEYS =
+            listOf("Platform", "SoC", "LED", "Light sensor", "Proximity", "Zigbee", "Relays", "CPU profile")
+
+        /**
+         * Exact-profile declarations suppress rows for hardware that is both declared absent and absent
+         * at runtime. Generic keeps the capability discovery set but omits an unknown SoC identity,
+         * while an unexpected positive runtime observation remains visible so a stale exact profile
+         * can still be corrected.
+         */
+        internal fun profileFactKeys(profile: DeviceProfile, facts: Map<String, String>): List<String> {
+            val declaredSoc = profile.socClass.trim().takeUnless { it.isBlank() || it == "?" || it.equals("unknown", ignoreCase = true) }
+            val availableKeys = PROFILE_FACT_KEYS.filterNot { it == "SoC" && declaredSoc == null }
+            if (profile.id == "generic") return availableKeys
+            fun observed(key: String, vararg absent: String): Boolean =
+                facts[key]?.trim()?.lowercase()?.let { it !in absent.toSet() } ?: false
+            return availableKeys.filter { key ->
+                when (key) {
+                    "LED" -> profile.ledMechanism != LedMechanism.NONE || observed(key, "none")
+                    "Light sensor" -> profile.lightTech != null || observed(key, "no")
+                    "Proximity" -> profile.proximityTech != null || observed(key, "no")
+                    "Zigbee" -> profile.zigbeeGatewayDir != null || observed(key, "none")
+                    "Relays" ->
+                        profile.relayBase != null || profile.relayBaseFallbacks.isNotEmpty() ||
+                            observed(key, "none")
+                    "CPU profile" -> profile.cpuGovernors != null || observed(key, "n/a")
+                    else -> true
+                }
+            }
+        }
+
+
         // Probe-cache TTLs: the dashboard renders from the snapshot, so these bound both staleness
         // and how often the su round-trips can run. Density/su flap even less than the rest.
         private const val SNAP_TTL_MS = 15_000L
+        private const val DIAG_TTL_MS = 15_000L
         private const val DENSITY_TTL_MS = 30_000L
         private const val SU_TTL_MS = 60_000L
         private const val COMPANION_URL_TTL_MS = 60_000L
@@ -4855,7 +5881,6 @@ mismatched to the physical screen. Applies live, persists across reboot; needs r
         private const val WEBVIEW_DOC = "https://github.com/maxlyth/ha-paneld/blob/main/docs/hardware/README.md#updating-the-system-webview"
         // GitHub mark (official, CC0 simple-icons) + Material "open in new" glyph — icon links in the UI.
         private const val GH_ICON = "M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"
-        private const val EXT_ICON = "M14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3m-2 16H5V5h7V3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2v-7h-2v7z"
     }
 }
 
@@ -4882,6 +5907,24 @@ internal fun configDryRunJson(
     }
     return "{\"status\":\"dry_run\",\"expected_cfg\":${q(expectedConfig)}," +
         "\"changes\":[$changes],\"skipped\":${array(skipped)},\"warnings\":${array(warnings)}}"
+}
+
+internal fun zigbeeWarningText(snapshot: ZigbeeHealthSnapshot, configuredOn: Boolean): String? = when {
+    snapshot.state == ZigbeeHealthState.CONTAINED ->
+        "⛔ <b>Zigbee gateway runaway was contained</b> — the router switch was turned OFF after sustained unjoined high CPU or repeated restarts."
+    snapshot.state == ZigbeeHealthState.CONTAINMENT_FAILED ->
+        "⛔ <b>Zigbee gateway containment was incomplete</b> — the respawner was stopped where possible and surviving work was demoted. Review diagnostics before retrying."
+    snapshot.state == ZigbeeHealthState.RUNAWAY ->
+        "⛔ <b>Zigbee gateway is runaway</b> — automatic containment is in progress."
+    snapshot.state == ZigbeeHealthState.DEGRADED_HIGH_CPU ->
+        "⚠ <b>Joined Zigbee gateway has sustained high CPU</b> — it remains running because joined routers are warn-only."
+    snapshot.state == ZigbeeHealthState.DEGRADED_UNJOINED && configuredOn ->
+        "⚠ <b>Zigbee router is enabled but not joined</b> — repeated join retries can consume substantial CPU. " +
+            "Join this panel to your Zigbee coordinator or turn the Zigbee router switch OFF. " +
+            "<a href=\"/configure#cfg-zigbee_join\">Resolve Zigbee setup →</a>"
+    snapshot.recursiveWatchdogAssignment ->
+        "⚠ <b>Legacy Zigbee watchdog defect detected</b> — the exact recursive LD_LIBRARY_PATH assignment is present. ha-paneld will not edit the vendor script automatically."
+    else -> null
 }
 
 private const val REDACTED_CONFIG_VALUE = "[redacted]"
@@ -4934,23 +5977,51 @@ internal fun startOwnedHttpServer(
     }
 }
 
+/**
+ * Do not admit a new best-effort startup probe once HTTP teardown has begun. The volatile admission
+ * read is the phase boundary: an already-admitted read-only phase may finish while teardown closes
+ * HTTP, then the service scope's cancellation/join owns its bounded drain.
+ */
+internal fun runPrewarmPhases(
+    isStopping: () -> Boolean,
+    management: () -> Unit,
+    companion: () -> Unit,
+) {
+    if (isStopping()) return
+    management()
+    if (isStopping()) return
+    companion()
+}
+
+/** Close every HTTP-owned admission/resource and retain any ambiguous result while continuing the sweep. */
+internal fun stopHttpOwners(
+    closeOperationAdmission: () -> Unit,
+    closeUploadIngress: () -> Unit,
+    stopEngine: () -> Unit,
+    stopRelay: () -> Boolean,
+    drainTameMutations: () -> Boolean,
+    drainRemoteControls: () -> Boolean,
+    onIncomplete: (step: String, error: Throwable?) -> Unit,
+): Boolean {
+    var complete = true
+    fun prove(step: String, action: () -> Boolean) {
+        val result = runCatching(action)
+        if (result.getOrDefault(false)) return
+        complete = false
+        runCatching { onIncomplete(step, result.exceptionOrNull()) }
+    }
+
+    prove("clear-storage admission") { closeOperationAdmission(); true }
+    prove("pending uploads") { closeUploadIngress(); true }
+    prove("HTTP engine stop request") { stopEngine(); true }
+    prove("CDP relay", stopRelay)
+    prove("vendor mutation", drainTameMutations)
+    prove("remote control", drainRemoteControls)
+    return complete
+}
+
 internal fun fleetImportPreservesTargetLocalValue(fleet: Boolean, key: String, normalized: String): Boolean =
     fleet && key == "ha_url" && normalized.isEmpty()
-
-internal fun validProximityThreshold(value: Float?): Boolean =
-    value != null && value.isFinite() && value in 0f..MAX_PROXIMITY_THRESHOLD
-
-private const val MAX_PROXIMITY_THRESHOLD = 1_000_000f
-
-/** Package actions required to converge a vendor-taming blocklist after its preference commit. */
-internal data class TameDelta(val add: Set<String>, val remove: Set<String>) {
-    val isEmpty: Boolean get() = add.isEmpty() && remove.isEmpty()
-
-    companion object {
-        val NONE = TameDelta(emptySet(), emptySet())
-        fun between(old: Set<String>, next: Set<String>) = TameDelta(next - old, old - next)
-    }
-}
 
 /** Coalesced renderer work caused by a committed configuration change. */
 internal data class RendererConfigEffects(

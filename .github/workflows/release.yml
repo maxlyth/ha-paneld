@@ -27,7 +27,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     permissions:
+      actions: read
+      checks: read
       contents: read
+      security-events: read
     outputs:
       input-manifest-sha256: ${{ steps.manifest.outputs.sha256 }}
     steps:
@@ -60,6 +63,29 @@ jobs:
             fi
           fi
           echo "SOURCE_COMMIT=$source_commit" >> "$GITHUB_ENV"
+
+      - name: Require clean security analysis for the source commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          checks="$(gh api "repos/$GITHUB_REPOSITORY/commits/$SOURCE_COMMIT/check-runs?per_page=100")"
+          languages=(actions c-cpp java-kotlin javascript-typescript python)
+          for language in "${languages[@]}"; do
+            name="CodeQL · $language"
+            conclusion="$(jq -r --arg name "$name" \
+              '[.check_runs[] | select(.name == $name)] | first | .conclusion // "missing"' <<<"$checks")"
+            if [ "$conclusion" != success ]; then
+              echo "::error::Required $name check for $SOURCE_COMMIT is $conclusion. Let Security analysis finish successfully before releasing."
+              exit 1
+            fi
+          done
+          open_alerts="$(gh api --paginate "repos/$GITHUB_REPOSITORY/code-scanning/alerts?state=open&per_page=100" \
+            --jq '[.[] | select(.tool.name == "CodeQL")] | length' | awk '{ total += $1 } END { print total + 0 }')"
+          if [ "$open_alerts" -ne 0 ]; then
+            echo "::error::$open_alerts open CodeQL alert(s) must be fixed or explicitly dismissed before releasing."
+            exit 1
+          fi
 
       - name: Set up Node.js 20.18.1
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
@@ -116,7 +142,9 @@ jobs:
           cache-provider: basic
 
       - name: Test installer and provisioning contracts
-        run: scripts/tests/provision_test.sh
+        run: |
+          scripts/tests/provision_test.sh
+          scripts/tests/consumer_docs_test.sh
 
       - name: Test release workflow contracts
         run: scripts/tests/release_workflow_test.sh

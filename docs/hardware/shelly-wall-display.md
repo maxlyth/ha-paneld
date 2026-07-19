@@ -1,7 +1,7 @@
 # Shelly Wall Display
 
 > [!NOTE]
-> **Research-only — no physical unit tested here.** Facts are sourced from firmware OTA analysis (including a device-tree parse of the modern partition image), the official [ShellyGroup/Wall-Display-Changelog](https://github.com/ShellyGroup/Wall-Display-Changelog), Shelly KB articles, the HA frontend issue tracker, and Pen Test Partners' security disclosure. `ShellyWallDisplay` (legacy) and `ShellyWallDisplayV2` (modern) DeviceProfiles are implemented but remain **speculative** until verified on hardware.
+> **Research-only — no physical unit tested here.** Facts are sourced from firmware OTA analysis (including a device-tree parse of the modern partition image), the official [ShellyGroup/Wall-Display-Changelog](https://github.com/ShellyGroup/Wall-Display-Changelog), Shelly KB articles, the HA frontend issue tracker, and Pen Test Partners' security disclosure. The bundled [`shelly-wall-display.yaml`](../../app/src/main/assets/device-profiles/shelly-wall-display.yaml) legacy and [`shelly-wall-display-v2.yaml`](../../app/src/main/assets/device-profiles/shelly-wall-display-v2.yaml) modern profiles are implemented but remain **speculative** until verified on hardware.
 
 ---
 
@@ -81,7 +81,7 @@ The built-in browser WebView on the Wall Display XL had rendering/layout problem
 
 ### WebView
 
-**Legacy (MT6580, Android 7 — Stargate, Pegasus, Atlantis):** The stock system WebView is not included in the standard Shelly OTA packages — it comes from the base factory ROM and its exact version has not been established from available firmware. For the **Stargate** model (`SAWD-0A1XX10EU1`), Shelly publishes a separate WebView update package on the static CDN (`SAWD-0A1XX10EU1-WebViewUpdate.zip`, 107 MB) that installs `com.google.android.webview` **119.0.6045.194** (Chrome 119, ~Oct 2023, armeabi-v7a, minSDK 24/Android 7.0). Inspection of this ZIP: package installs to `system/app/GoogleWebView/GoogleWebView.apk`. There is no equivalent WebView update ZIP for Stargate or Pegasus — users on those models are limited to whatever the factory ROM ships.
+**Legacy (MT6580, Android 7 — Stargate, Pegasus, Atlantis):** The stock system WebView is not included in the standard Shelly OTA packages — it comes from the base factory ROM and its exact version has not been established from available firmware. For the **Stargate** model (`SAWD-0A1XX10EU1`), Shelly publishes a separate WebView update package on the static CDN (`SAWD-0A1XX10EU1-WebViewUpdate.zip`, 107 MB) that installs `com.google.android.webview` **119.0.6045.194** (Chrome 119, ~Oct 2023, armeabi-v7a, minSDK 24/Android 7.0). Inspection of this ZIP: package installs to `system/app/GoogleWebView/GoogleWebView.apk`. There is no equivalent WebView update ZIP established for Atlantis or Pegasus — users on those models are limited to whatever the factory ROM ships.
 
 **Modern V2 (arm64, Android 11 — Jenna confirmed; Blake/Cally/Maverick/Dayna):** The standard Shelly OTA does not include a WebView package (the 2.7.1 OTA contains only app updates — Stargate.apk, Camera2.apk, ShellyPlaceholder.apk). The stock WebView version from the base image has not been extracted. (Note: the Stargate APK is *built against* the Android 13 SDK — `platformBuildVersion=13` — but the device OS is Android 11, per the partition OTA's build fingerprint.)
 
@@ -96,8 +96,8 @@ The built-in browser WebView on the Wall Display XL had rendering/layout problem
 
 **What the closed-by-default posture means for ha-paneld:**
 - Without an `adb` foothold, the daemon (`hapaneld-helper`) cannot be installed — no privileged path to `/system`.
-- `su`-backed actions (true screen-off, brightness sysfs, CPU governor, screenshot, sensor reads) are then unavailable; the `appCanSu = false` path applies.
-- **Sideloading** is possible on modern devices via the built-in AppStore (2.6.0+) or by any method Shelly exposes. Legacy devices have no sideload path.
+- `su`-backed actions (true screen-off, brightness sysfs, CPU governor, screenshot, sensor reads) are then unavailable; the profiles declare `platform.app_can_su: false`.
+- The modern built-in AppStore proves that Shelly can distribute approved applications, but ha-paneld is not currently established as one of them. No general user-facing ADB or sideload route has been verified. Legacy devices have no confirmed installation path.
 - The Stargate launcher is provisioned as **Device Owner** *and* is the **home launcher**, so even with a sideload, setting ha-paneld as the default home triggers the launcher-chooser and Stargate cannot be uninstalled without root.
 
 Community project `RapierXbox/ShellyElevate` attempts to run HA stably on the Wall Display as an alternative to the Stargate launcher; it exposes relays/sensors/buttons to HA, wraps the WebView as a kiosk, and gives an indication of what is achievable without root.
@@ -244,30 +244,30 @@ Full changelog: [ShellyGroup/Wall-Display-Changelog](https://github.com/ShellyGr
 
 ---
 
-## DeviceProfile — what is known / what is unknown
+## Device profiles — what is known / what is unknown
 
-Two profiles are implemented: **`ShellyWallDisplay`** (legacy MT6580) and **`ShellyWallDisplayV2`** (modern). This section records what they declare from firmware analysis and what still needs a live unit.
+Two bundled YAML profiles are implemented: [`shelly-wall-display.yaml`](../../app/src/main/assets/device-profiles/shelly-wall-display.yaml) for the legacy MT6580 family and [`shelly-wall-display-v2.yaml`](../../app/src/main/assets/device-profiles/shelly-wall-display-v2.yaml) for the modern family. This section records what they declare from firmware analysis and what still needs a live unit.
 
 ### Known / derivable from firmware
 
-| Field | `ShellyWallDisplay` (legacy) | `ShellyWallDisplayV2` (modern) | Source |
+| Field | `shelly-wall-display` (legacy) | `shelly-wall-display-v2` (modern) | Source |
 |---|---|---|---|
-| `socClass` | `"MediaTek MT6580"` | `"PX30 / rk3326 (Jenna confirmed; others unverified)"` | OTA build fingerprint; modern DTB |
-| `suForm` / `appCanSu` | `NONE` / `false` | `NONE` / `false` | no user-exposed root (but userdebug — see *Access model*) |
-| `ledMechanism` | `NONE` | `NONE` | DTB: pwm-backlight only, no RGB LED node |
-| `screenOff` | `BRIGHTNESS_ZERO` | `BRIGHTNESS_ZERO` | no privileged screen-off path |
-| `relayBase` | `null` | `null` | GPIO relays driven by Stargate via Gen2 RPC — no app-reachable sysfs |
-| `zigbeeGatewayDir` / `efr32UartPath` | `null` / `null` | `null` / `null` | no Zigbee/Thread radio |
-| `proximityTech` | `null` (IR via gpio-keys, root-gated) | `"Infrared"` (Jenna STK3A5x combo) | manifest declares only `sensor.light`; modern DTB enables STK3A5x proximity |
-| `lightTech` | `"Ambient light"` | `"Ambient light"` (STK3A5x ALS) | `android.hardware.sensor.light` declared |
+| `soc_class` | `MediaTek MT6580` | `PX30 / rk3326 (Jenna confirmed; others unverified)` | OTA build fingerprint; modern DTB |
+| `platform.su_form` / `app_can_su` | `none` / `false` | `none` / `false` | no user-exposed root (but userdebug — see *Access model*) |
+| `hardware.led.mechanism` | `none` | `none` | DTB: pwm-backlight only, no RGB LED node |
+| `hardware.screen_off` | `brightness-zero` | `brightness-zero` | no privileged screen-off path |
+| `hardware.relay_base` | absent | absent | GPIO relays driven by Stargate via Gen2 RPC — no app-reachable sysfs |
+| `hardware.zigbee_gateway_dir` | absent | absent | no Zigbee/Thread radio |
+| `sensors.proximity_technology` | absent (IR via gpio-keys, root-gated) | `Infrared` (Jenna STK3A5x combo) | manifest declares only `sensor.light`; modern DTB enables STK3A5x proximity |
+| `sensors.light_technology` | `Ambient light` | `Ambient light` (STK3A5x ALS) | `android.hardware.sensor.light` declared |
 | App package | `cloud.shelly.stargate` (Device Owner + home launcher) | same | Stargate APK manifest + `device_owner_2.xml` |
 
 ### Unknown — requires a live unit
 
 - Whether `SensorManager` proximity actually delivers on a modern unit (Jenna) — the high-value check: it would enable wake-on-wave without root, since the STK3A5x is enabled in the kernel.
 - SoC of the **non-Jenna** modern models — a 10.1" XL (Blake) may not be a PX30; only Jenna is parsed.
-- `hasRecents` per model (the Stargate home image may suppress overview).
-- Display density defaults and appropriate `recommendedDensity` per model (Jenna 720×1440 ~5.5" ≈ 320 native).
+- `platform.has_recents` per model (the Stargate home image may suppress overview).
+- Display density defaults and an appropriate `provisioning.display.density` per model (Jenna 720×1440 ~5.5" ≈ 320 native).
 - Whether an `adb` foothold + `adb root` is reachable on the userdebug build (would unlock the daemon).
 - Whether ha-paneld's HTTP service (`:8888`) is reachable from the LAN (depends on the device's firewall).
 

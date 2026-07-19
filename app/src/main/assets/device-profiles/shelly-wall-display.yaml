@@ -1,11 +1,13 @@
 schema: 2
 id: shelly-wall-display
-version: 2.0.0
+version: 2.1.2
 display_name: Shelly Wall Display (legacy)
 soc_class: MediaTek MT6580
+soc:
+  model: MediaTek MT6580
 metadata:
   author: ha-paneld maintainers
-  source: https://github.com/maxlyth/ha-paneld/blob/main/docs/hardware/README.md
+  source: https://github.com/maxlyth/ha-paneld/blob/main/docs/hardware/shelly-wall-display.md
   license: Apache-2.0
   maturity: experimental
   tested_firmware:
@@ -15,7 +17,7 @@ metadata:
     - Per-SKU relay, proximity, Recents, and display details still need live-hardware confirmation.
     - On-board relays are not exposed because no safe supported local control path is known.
 requires:
-  min_core_version: 0.9.3
+  min_core_version: 0.9.5-rc1
   drivers:
     - screen.brightness-zero
     - sensor.android
@@ -75,7 +77,6 @@ hardware:
   screen_off: brightness-zero
   has_button_backlight: false
 sensors:
-  proximity_graded_strategy: observed
   light_technology: Ambient light
   cht8305: false
   room_temp_offset_c: 0.0
@@ -88,8 +89,6 @@ input:
 cpu: {}
 display: {}
 provisioning:
-  access:
-    shizuku: recommended
   software: {}
   display: {}
   packages: []

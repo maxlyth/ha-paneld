@@ -4,7 +4,11 @@ import android.content.Context
 import android.net.wifi.WifiManager
 import android.util.Log
 import io.github.maxlyth.hapaneld.util.Json
+import io.github.maxlyth.hapaneld.util.MonotonicDeadline
+import io.github.maxlyth.hapaneld.util.RetirableMutationGate
+import io.github.maxlyth.hapaneld.util.interruptAndJoin
 import io.github.maxlyth.hapaneld.util.localIpv4
+import io.github.maxlyth.hapaneld.util.shutdownNowAndAwait
 import io.github.maxlyth.hapaneld.metrics.FeatureCostOperation
 import io.github.maxlyth.hapaneld.metrics.FeatureCostOutcome
 import io.github.maxlyth.hapaneld.metrics.FeatureCosts
@@ -12,10 +16,12 @@ import java.net.InetAddress
 import java.net.URI
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 import javax.jmdns.JmDNS
 import javax.jmdns.ServiceEvent
 import javax.jmdns.ServiceInfo
@@ -34,13 +40,14 @@ class MdnsAdvertiser(
     private val runtimeFriendlyName: String = config.friendlyName,
     private val runtimeHttpPort: Int = config.httpPort,
 ) {
-    private val ownerGate = RestartableOwnerGate()
+    private val ownerGate = RetirableMutationGate()
     private var jmdns: JmDNS? = null
     private var lock: WifiManager.MulticastLock? = null
     @Volatile private var browsing = false
     @Volatile private var refreshThread: Thread? = null
     @Volatile private var resolver: ThreadPoolExecutor? = null
     private val browseGeneration = AtomicLong()
+    private val retirement = AtomicReference<CompletableFuture<Boolean>?>()
 
     private fun newResolver() = ThreadPoolExecutor(
         RESOLVE_WORKERS, RESOLVE_WORKERS, 0L, TimeUnit.MILLISECONDS,
@@ -106,7 +113,7 @@ class MdnsAdvertiser(
 
     /** Blocking network setup — call off the main thread. */
     fun start() {
-        ownerGate.start {
+        ownerGate.runIfOpen(Unit) start@{
             if (jmdns != null) return@start
             if (resolver?.isShutdown != false) resolver = newResolver()
             try {
@@ -171,31 +178,56 @@ class MdnsAdvertiser(
                 Log.i(TAG, "advertising ${Config.MDNS_SERVICE_TYPE} as $runtimePanelId @ $addr:$runtimeHttpPort")
             } catch (e: Exception) {
                 Log.w(TAG, "mDNS advertise failed", e)
-                stopResources()
+                stopResources(MonotonicDeadline(OWNER_STOP_MS))
             }
         }
     }
 
     /** Stop the current advertisement while still allowing a later network-recovery restart. */
-    fun stop() = ownerGate.stop(::stopResources)
+    fun stop() = ownerGate.runExclusive { stopResources(MonotonicDeadline(OWNER_STOP_MS)) }
 
     /** Permanently close this runtime generation so a late recovery callback cannot resurrect it. */
-    fun retire() = ownerGate.retire(::stopResources)
+    internal fun retire(deadline: MonotonicDeadline): CompletableFuture<Boolean> {
+        ownerGate.closeAdmission()
+        retirement.get()?.let { return it }
+        val result = CompletableFuture<Boolean>()
+        if (!retirement.compareAndSet(null, result)) return checkNotNull(retirement.get())
+        Thread {
+            try {
+                result.complete(ownerGate.runExclusive { stopResources(deadline) })
+            } catch (failure: Throwable) {
+                result.completeExceptionally(failure)
+            }
+        }.apply {
+            isDaemon = true
+            name = "mdns-retire"
+            start()
+        }
+        return result
+    }
 
-    private fun stopResources() {
+    private fun stopResources(deadline: MonotonicDeadline): Boolean {
+        var complete = true
         browsing = false
         browseGeneration.incrementAndGet()
-        refreshThread?.interrupt()
-        refreshThread = null
-        resolver?.shutdownNow()
-        resolver = null
+        val refresh = refreshThread
+        val refreshDrained = refresh.interruptAndJoin(deadline)
+        if (refreshDrained) refreshThread = null else complete = false
+        val activeResolver = resolver
+        val resolverDrained = activeResolver?.shutdownNowAndAwait(deadline) ?: true
+        if (resolverDrained) resolver = null else complete = false
+        // Do not dismantle JmDNS underneath an admitted list/resolve call. The terminal retirement fence
+        // is already installed; a failed drain selects the process boundary instead of a successor.
+        if (!complete || deadline.remainingMs() <= 0L) return false
         runCatching { jmdns?.removeServiceListener(Config.MDNS_SERVICE_TYPE, peerListener) }
+            .onFailure { complete = false }
         peerMap.clear()
-        runCatching { jmdns?.unregisterAllServices() }
-        runCatching { jmdns?.close() }
+        runCatching { jmdns?.unregisterAllServices() }.onFailure { complete = false }
+        runCatching { jmdns?.close() }.onFailure { complete = false }
         jmdns = null
-        runCatching { lock?.release() }
+        runCatching { lock?.release() }.onFailure { complete = false }
         lock = null
+        return complete && deadline.remainingMs() > 0L
     }
 
     /**
@@ -205,15 +237,15 @@ class MdnsAdvertiser(
      * Falls back to the first HA host if none probe open. Used to default the MQTT broker to
      * `tcp://<ha-ip>:1883` when none is set. Blocking up to [timeoutMs]; call off the main thread.
      */
-    fun discoverHaIp(timeoutMs: Long = 4000): String? {
-        val dns = jmdns ?: return null
+    fun discoverHaIp(timeoutMs: Long = 4000): String? = ownerGate.runIfOpen<String?>(null) {
+        val dns = jmdns ?: return@runIfOpen null
         val ips = runCatching {
             dns.list("_home-assistant._tcp.local.", timeoutMs)
                 ?.mapNotNull { it.inet4Addresses?.firstOrNull()?.hostAddress }?.distinct() ?: emptyList()
         }.getOrDefault(emptyList())
         val chosen = ips.firstOrNull { mqttPortOpen(it) } ?: ips.firstOrNull()
         Log.i(TAG, "HA mDNS discovery: hosts=$ips -> ${chosen ?: "none found"}")
-        return chosen
+        chosen
     }
 
     /**
@@ -222,8 +254,9 @@ class MdnsAdvertiser(
      * (e.g. HA Core terminating TLS on :443, or behind a reverse proxy), so callers never have to guess a
      * port/scheme. Null if no HA service is found or it advertises no URL. Blocking; call off the main thread.
      */
-    fun discoverHaBaseUrl(configuredBroker: String, timeoutMs: Long = 4000): String? {
-        val dns = jmdns ?: return null
+    fun discoverHaBaseUrl(configuredBroker: String, timeoutMs: Long = 4000): String? =
+        ownerGate.runIfOpen<String?>(null) {
+        val dns = jmdns ?: return@runIfOpen null
         val brokerIps = brokerHostIps(configuredBroker) // all of the broker host's addresses (v4 AND v6) — see below
         val url = runCatching {
             val svcs = dns.list("_home-assistant._tcp.local.", timeoutMs)?.toList() ?: emptyList()
@@ -242,12 +275,16 @@ class MdnsAdvertiser(
                 null
             }
             pick?.let {
-                (it.getPropertyString("internal_url") ?: it.getPropertyString("base_url") ?: it.getPropertyString("external_url"))
-                    ?.takeIf { u -> u.isNotBlank() }?.trimEnd('/')
+                val advertised = it.getPropertyString("internal_url") ?: it.getPropertyString("base_url")
+                    ?: it.getPropertyString("external_url")
+                val serviceIps = it.inetAddresses.orEmpty()
+                    .mapNotNull { address -> address.hostAddress?.substringBefore('%') }
+                    .toSet()
+                safeAdvertisedHaUrl(advertised, serviceIps)
             }
         }.getOrNull()
         Log.i(TAG, "HA mDNS base url (broker=${brokerIps.joinToString(",").ifEmpty { "?" }}): ${url ?: "none"}")
-        return url
+        url
     }
 
     /**
@@ -260,14 +297,15 @@ class MdnsAdvertiser(
      * Blocking for at most the bounded JmDNS browse budget; call off the main thread. Malformed, ambiguous
      * and unmatched records all fail closed with null.
      */
-    fun discoverHaInstanceUuid(candidateUrls: Collection<String> = emptyList(), timeoutMs: Long = 4000): String? {
-        val dns = jmdns ?: return null
+    fun discoverHaInstanceUuid(candidateUrls: Collection<String> = emptyList(), timeoutMs: Long = 4000): String? =
+        ownerGate.runIfOpen<String?>(null) {
+        val dns = jmdns ?: return@runIfOpen null
         val candidates = buildList {
             config.haUrl.takeIf { it.isNotBlank() }?.let(::add)
             addAll(candidateUrls)
         }
-        if (candidates.isEmpty()) return null
-        return runCatching {
+        if (candidates.isEmpty()) return@runIfOpen null
+        runCatching {
             val services = dns.list(HA_SERVICE_TYPE, timeoutMs.coerceIn(1L, MAX_HA_BROWSE_MS))
                 ?.toList() ?: emptyList()
             // Truncating a crowded result could hide a second matching UUID. Likewise, silently dropping
@@ -333,34 +371,22 @@ class MdnsAdvertiser(
         private const val MAX_PEERS = 64
         private const val REFRESH_MS = 60_000L // periodic re-browse interval (name refresh / gap fill)
         private const val LIST_MS = 3000L // dns.list resolve budget per refresh sweep
+        private const val OWNER_STOP_MS = 2_000L
         private const val HA_SERVICE_TYPE = "_home-assistant._tcp.local."
         private const val MAX_HA_BROWSE_MS = 5_000L
         private const val MAX_HA_RECORDS = 16
     }
 }
 
-/**
- * Serializes a restartable resource's start/stop boundary and adds a terminal retirement fence.
- * A start already in progress finishes before retirement cleans it up; starts arriving after retirement
- * are rejected. This is deliberately independent of thread interruption, which blocking network code may
- * ignore, and prevents an obsolete runtime callback from recreating resources after replacement teardown.
- */
-internal class RestartableOwnerGate {
-    private val lock = Any()
-    private var retired = false
-
-    fun start(block: () -> Unit): Boolean = synchronized(lock) {
-        if (retired) return@synchronized false
-        block()
-        true
-    }
-
-    fun stop(block: () -> Unit) = synchronized(lock) { block() }
-
-    fun retire(block: () -> Unit) = synchronized(lock) {
-        retired = true
-        block()
-    }
+/** A zeroconf TXT URL is untrusted input. Keep credentials on the service host that advertised it. */
+internal fun safeAdvertisedHaUrl(raw: String?, serviceIps: Set<String>): String? {
+    val uri = runCatching { java.net.URI(raw?.trim().orEmpty()) }.getOrNull() ?: return null
+    if (uri.scheme !in setOf("http", "https") || uri.host.isNullOrBlank() || uri.userInfo != null) return null
+    val destinationIps = runCatching {
+        java.net.InetAddress.getAllByName(uri.host).mapNotNull { it.hostAddress?.substringBefore('%') }.toSet()
+    }.getOrDefault(emptySet())
+    if (serviceIps.isEmpty() || destinationIps.intersect(serviceIps).isEmpty()) return null
+    return uri.toString().trimEnd('/')
 }
 
 internal fun mdnsRunCurrent(

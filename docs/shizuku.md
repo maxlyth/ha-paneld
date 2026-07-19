@@ -11,6 +11,7 @@ If your panel diagnostics already report working `su` or the ha-paneld root help
 Shell is more capable than an ordinary Android app, but it is not root:
 
 - it can use facilities such as `pm install`, `wm density`, screenshots and input injection;
+- it can read an exact allowlisted room-climate input layout when the vendor grants the shell identity access;
 - it cannot access arbitrary private application data or vendor hardware interfaces reserved for root;
 - its service may stop at reboot and need to be started again;
 - every client application still needs explicit approval in the Shizuku Manager.
@@ -21,7 +22,7 @@ Shizuku therefore fills the gap between ha-paneld's standard Android permissions
 
 ha-paneld does not expose a general Shizuku shell. Its enhanced-access bridge has a deliberately small, typed interface:
 
-1. `provision.sh --shizuku` downloads the curated Shizuku Manager, verifies its exact checksum and installs or retains a trusted same/newer version.
+1. The checkout-free provisioner with `--shizuku` downloads the curated Shizuku Manager, verifies its exact checksum and installs or retains a trusted same/newer version.
 2. The script starts the Shizuku service, but it cannot approve ha-paneld.
 3. On the panel, the administrator opens **ha-paneld Configure → toolbar overflow → Enhanced access → Enable** and approves ha-paneld in Shizuku.
 4. ha-paneld verifies the Manager's signing certificate, the service's shell UID and its protocol version before declaring enhanced access ready.
@@ -45,6 +46,7 @@ Ordinary Android and Accessibility capabilities continue to handle operations th
 | Display density and system text scale | No | Yes | Yes |
 | Remote screenshot and privileged key/tap input | No | Yes | Yes |
 | Install/update signer-verified ha-paneld and minimal HA Companion | No | Yes | Yes |
+| Read exact supported room temperature/humidity input devices | No | Yes, where shell-readable | Yes, where supported |
 | Install an arbitrary uploaded APK | No | No | Yes |
 | Replace or heal the System WebView | No | No | Yes |
 | True backlight-off without invoking Android lock/sleep | No | No | Yes, where supported |
@@ -99,13 +101,13 @@ If the standard feature set is enough, do nothing. Dashboard rendering, the auto
 
 ## Installing and enabling it
 
-From a machine with `adb` and this repository:
+From a machine with `adb`, replace the example address with the panel's address and paste this complete command into Git Bash, WSL, macOS Terminal or a Linux terminal:
 
 ```bash
-scripts/provision.sh <panel-ip:5555> --shizuku
+curl -fsSL https://raw.githubusercontent.com/maxlyth/ha-paneld/main/scripts/install.sh | bash -s -- --provision 192.168.1.50:5555 --shizuku
 ```
 
-The provisioner verifies the pinned Manager package, starts its service and prints the remaining local step. On the panel:
+You do not need to download the repository. The provisioner verifies the pinned Manager package, starts its service and prints the remaining local step. On the panel:
 
 1. Open **ha-paneld Configure**.
 2. Open the toolbar overflow menu and select **Enhanced access**.
@@ -113,16 +115,17 @@ The provisioner verifies the pinned Manager package, starts its service and prin
 4. Approve ha-paneld in the Shizuku permission prompt.
 5. Return to Enhanced access and confirm that it reports **Enhanced access is ready**.
 
-The web UI capability report will also show whether the Manager is missing, stopped, untrusted, waiting for approval or ready. Provisioning details and fleet-install behavior are in [Provisioning and fleet updates](provisioning.md).
+The web UI capability report distinguishes whether Enhanced access is disabled in ha-paneld, the Shizuku service is stopped, the Manager is missing or untrusted, local approval is still required, or access is ready. A disabled state points back to the on-panel **Configure → toolbar overflow → Enhanced access → Enable** path; a stopped state means consent is already enabled and the Shizuku service itself must be started. Provisioning details and fleet-install behavior are in [Provisioning and fleet updates](provisioning.md).
 
 ## Reboot, recovery and removal
 
-An ADB-started Shizuku service may stop after a reboot. On compatible Android 13+ devices, Shizuku 13.6 offers a trusted-WLAN auto-start option; the administrator chooses whether to enable it in Shizuku. On older panels, reconnect ADB and rearm the existing installation:
+An ADB-started Shizuku service may stop after a reboot. On compatible Android 13+ devices, Shizuku 13.6 offers a trusted-WLAN auto-start option; the administrator chooses whether to enable it in Shizuku. On older panels, reconnect ADB and rerun the authenticated provisioning step:
 
 ```bash
-adb -s <panel-ip:5555> shell sh \
-  /storage/emulated/0/Android/data/moe.shizuku.privileged.api/start.sh
+curl -fsSL https://raw.githubusercontent.com/maxlyth/ha-paneld/main/scripts/install.sh | bash -s -- --provision 192.168.1.50:5555 --shizuku
 ```
+
+The provisioner keeps a trusted same-or-newer Manager, resolves and validates its installed native starter, and executes that authenticated file directly. Do not execute a copied `start.sh` from shared external storage.
 
 If permission was denied and Android no longer displays the prompt, open **Shizuku → Authorized applications** and grant ha-paneld there. ha-paneld deliberately does not loop permission prompts.
 
@@ -130,10 +133,8 @@ To stop using the feature, open **Enhanced access** in ha-paneld and choose **Di
 
 ## Security and network considerations
 
-Shizuku approval expands what ha-paneld can do through its existing local API: for example, a trusted-LAN caller can request a screenshot, inject input or initiate a signer-verified component update. ha-paneld's HTTP model assumes the panel is on a trusted network. If the panel shares a network with untrusted clients, isolate access using a VLAN or firewall before enabling privileged routes.
+Shizuku approval expands what ha-paneld can do through its existing local API: for example, a trusted-LAN caller can request a screenshot, inject input or initiate a signer-verified component update. Relaxed mode assumes the panel is on a trusted network. If the panel shares a network with untrusted clients, isolate access using a VLAN or firewall before enabling privileged routes.
 
-The Shizuku boundary reduces authority compared with root, but it does not make an untrusted LAN safe. The exact project threat model is documented in [Security posture](architecture/security.md).
+Optional [Hardened mode](security-mode.md) is a separate layer. Shizuku approval grants ha-paneld a bounded Android shell capability; Hardened mode requires someone physically at the panel to approve selected high-impact network requests on its screen, and they cannot be approved remotely. It disables non-loopback tap injection even when Shizuku could perform the tap. Enabling either one does not enable the other, and neither setting is copied by backup, restore or fleet update.
 
-## Hardware feedback
-
-Reports from genuinely unrooted hardware help improve compatibility. Useful details include the panel model, Android version, Shizuku version and start method, whether the service survives reboot, and which enhanced operations work. Do not publish panel addresses, Home Assistant tokens, dashboard content or other private diagnostics.
+The Shizuku boundary reduces authority compared with root, and Hardened mode protects only its documented operation set; neither makes an untrusted LAN safe. The exact project threat model is documented in [Security posture](architecture/security.md).

@@ -1,6 +1,6 @@
 schema: 2
 id: generic
-version: 2.0.0
+version: 2.0.1
 display_name: Unknown panel
 soc_class: "?"
 metadata:
@@ -34,7 +34,6 @@ hardware:
   screen_off: brightness-zero
   has_button_backlight: false
 sensors:
-  proximity_graded_strategy: observed
   cht8305: false
   room_temp_offset_c: 0.0
 identity:
@@ -44,8 +43,6 @@ input:
 cpu: {}
 display: {}
 provisioning:
-  access:
-    shizuku: optional
   software: {}
   display: {}
   packages: []

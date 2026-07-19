@@ -110,6 +110,74 @@ class AppStateConcurrencyTest {
         }
     }
 
+    @Test fun durableVisibilityCommitPublishesOnlyAfterPersistenceAndRetainsPriorStateOnFailure() {
+        val persistenceStarted = CountDownLatch(1)
+        val releasePersistence = CountDownLatch(1)
+        val persistence = RecordingPersistence(
+            persistBlock = {
+                persistenceStarted.countDown()
+                releasePersistence.await(5, TimeUnit.SECONDS)
+            },
+            failFirstPersist = true,
+        )
+        val writer = Executors.newSingleThreadExecutor()
+        val caller = Executors.newSingleThreadExecutor()
+        try {
+            val preferences = SqliteStatePreferences(persistence, writer)
+            val changed = Collections.synchronizedList(mutableListOf<String>())
+            preferences.registerOnSharedPreferenceChangeListener(
+                SharedPreferences.OnSharedPreferenceChangeListener { _, key -> changed += key },
+            )
+
+            val failed = caller.submit<Boolean> {
+                preferences.commitWithDurableVisibility { putString("ownership", "allow") }
+            }
+            assertTrue(persistenceStarted.await(5, TimeUnit.SECONDS))
+            assertFalse(failed.isDone)
+            assertFalse(preferences.contains("ownership"))
+            assertTrue(changed.isEmpty())
+
+            releasePersistence.countDown()
+            assertFalse(failed.get(5, TimeUnit.SECONDS))
+            assertFalse(preferences.contains("ownership"))
+            assertTrue(changed.isEmpty())
+
+            assertTrue(
+                preferences.commitWithDurableVisibility { putString("ownership", "allow") },
+            )
+            assertEquals("allow", preferences.getString("ownership", null))
+            assertEquals(listOf("ownership"), changed)
+            assertEquals(listOf("persist:ownership", "replace:ownership"), persistence.events)
+        } finally {
+            releasePersistence.countDown()
+            caller.shutdownNow()
+            writer.shutdownNow()
+        }
+    }
+
+    @Test fun failedDurableVisibilityRemovalLeavesOwnershipVisibleForRetry() {
+        val persistence = RecordingPersistence(failPersistCall = 2)
+        val writer = Executors.newSingleThreadExecutor()
+        try {
+            val preferences = SqliteStatePreferences(persistence, writer)
+            assertTrue(
+                preferences.commitWithDurableVisibility { putString("ownership", "foreground") },
+            )
+
+            assertFalse(preferences.commitWithDurableVisibility { remove("ownership") })
+            assertEquals("foreground", preferences.getString("ownership", null))
+
+            assertTrue(preferences.commitWithDurableVisibility { remove("ownership") })
+            assertFalse(preferences.contains("ownership"))
+            assertEquals(
+                listOf("persist:ownership", "persist:ownership", "replace:"),
+                persistence.events,
+            )
+        } finally {
+            writer.shutdownNow()
+        }
+    }
+
     @Test fun nextWriteReconcilesCompleteSnapshotAfterFailedApply() {
         val persistence = RecordingPersistence(failFirstPersist = true)
         val writer = Executors.newSingleThreadExecutor()
@@ -146,7 +214,7 @@ class AppStateConcurrencyTest {
                 preferences.edit()
                     .putString("dashboard_url", "https://current.example")
                     .remove("removed_later")
-                    .putStringSet("entities", setOf("light.kitchen", "sensor.hall"))
+                    .putStringSet("entities", setOf("light.kitchen", "sensor.zone"))
                     .commit(),
             )
 
@@ -154,7 +222,7 @@ class AppStateConcurrencyTest {
             assertEquals(
                 mapOf(
                     "dashboard_url" to "https://current.example",
-                    "entities" to setOf("light.kitchen", "sensor.hall"),
+                    "entities" to setOf("light.kitchen", "sensor.zone"),
                 ),
                 legacy.snapshot(),
             )
@@ -328,7 +396,7 @@ class AppStateConcurrencyTest {
         }
     }
 
-    @Test fun quiesceFlushSerializesAgainstFrozenWrites() {
+    @Test fun quiesceFlushExcludesAdmittedWritesUntilTheLeaseCloses() {
         val admission = StateMutationAdmission()
         val flushEntered = CountDownLatch(1)
         val releaseFlush = CountDownLatch(1)
@@ -345,11 +413,8 @@ class AppStateConcurrencyTest {
             assertTrue(flushEntered.await(5, TimeUnit.SECONDS))
 
             val racingWrite = writer.submit<Unit> {
-                admission.admit { synchronousDurability ->
-                    assertFalse(synchronousDurability)
-                    admission.serializeFrozenWrite {
-                        frozenWriteEntered.countDown()
-                    }
+                admission.admit {
+                    frozenWriteEntered.countDown()
                 }
             }
             assertFalse(frozenWriteEntered.await(100, TimeUnit.MILLISECONDS))
@@ -467,6 +532,7 @@ class AppStateConcurrencyTest {
     private class RecordingPersistence(
         private val persistBlock: (StateMutation) -> Unit = {},
         private val failFirstPersist: Boolean = false,
+        private val failPersistCall: Int? = null,
     ) : StateNamespacePersistence {
         val events = Collections.synchronizedList(mutableListOf<String>())
         @Volatile var replacedSnapshot: Map<String, Any>? = null
@@ -477,7 +543,8 @@ class AppStateConcurrencyTest {
         override fun persist(mutation: StateMutation): Boolean {
             persistBlock(mutation)
             events += "persist:${mutation.changes.keys.joinToString(",")}"
-            return !(failFirstPersist && persistCalls.getAndIncrement() == 0)
+            val call = persistCalls.incrementAndGet()
+            return !(failFirstPersist && call == 1) && call != failPersistCall
         }
 
         override fun replace(snapshot: Map<String, Any>): Boolean {

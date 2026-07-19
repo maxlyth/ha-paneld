@@ -4,7 +4,11 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.os.Build
 import io.github.maxlyth.hapaneld.BuildConfig
-import io.github.maxlyth.hapaneld.device.Generic
+import io.github.maxlyth.hapaneld.device.DeviceProfile
+import io.github.maxlyth.hapaneld.device.EvdevButton
+import io.github.maxlyth.hapaneld.device.LedMechanism
+import io.github.maxlyth.hapaneld.device.ScreenOff
+import io.github.maxlyth.hapaneld.device.SuForm
 import io.github.maxlyth.hapaneld.metrics.FeatureCostOperation
 import io.github.maxlyth.hapaneld.metrics.FeatureCostOutcome
 import io.github.maxlyth.hapaneld.metrics.FeatureCosts
@@ -17,6 +21,81 @@ import java.io.FileOutputStream
 import java.nio.channels.FileChannel
 import java.nio.file.StandardOpenOption
 import java.security.SecureRandom
+
+private const val EMERGENCY_PROFILE_VERSION = "capability-empty-emergency-v1"
+private val EMERGENCY_PROFILE_REF = ProfileRef("generic", ProfileYaml.sha256(EMERGENCY_PROFILE_VERSION))
+
+internal fun interface EvdevDeviceInspector {
+    /** True/false when capabilities are readable; null when the target cannot be classified safely. */
+    fun isTouchscreen(node: String): Boolean?
+}
+
+internal object SysfsEvdevDeviceInspector : EvdevDeviceInspector {
+    override fun isTouchscreen(node: String): Boolean? {
+        val event = node.substringAfterLast('/').takeIf { Regex("event[0-9]{1,3}").matches(it) } ?: return null
+        val capabilities = File("/sys/class/input/$event/device/capabilities")
+        val abs = runCatching { File(capabilities, "abs").readText() }.getOrNull() ?: return null
+        val key = runCatching { File(capabilities, "key").readText() }.getOrNull() ?: return null
+        return capabilitiesAreTouchscreen(abs, key)
+    }
+
+    internal fun capabilitiesAreTouchscreen(absCapabilities: String, keyCapabilities: String): Boolean? {
+        // sysfs input bitmaps use the kernel's unsigned-long width. ha-paneld runs on both 32-bit and
+        // 64-bit kernels, and an all-low-bit bitmap does not encode that width. Treat either valid
+        // interpretation as touchscreen-class; a conservative rejection is safer than grabbing a panel.
+        val classifications = listOf(32, 64).mapNotNull { wordBits ->
+            val abs = readBitmap(absCapabilities, wordBits) ?: return@mapNotNull null
+            val key = readBitmap(keyCapabilities, wordBits) ?: return@mapNotNull null
+            val hasAbsoluteCoordinates = (abs.contains(ABS_X) && abs.contains(ABS_Y)) ||
+                (abs.contains(ABS_MT_POSITION_X) && abs.contains(ABS_MT_POSITION_Y))
+            hasAbsoluteCoordinates && key.contains(BTN_TOUCH)
+        }
+        return classifications.takeIf { it.isNotEmpty() }?.any { it }
+    }
+
+    private fun readBitmap(value: String, wordBits: Int): Set<Int>? = runCatching {
+        val words = value.trim().split(Regex("\\s+")).filter(String::isNotEmpty)
+        if (words.isEmpty()) return@runCatching emptySet()
+        buildSet {
+            words.asReversed().forEachIndexed { wordIndex, word ->
+                val bits = word.toULong(16)
+                if (wordBits == 32 && bits > UInt.MAX_VALUE.toULong()) error("32-bit bitmap word overflow")
+                for (bit in 0 until wordBits) {
+                    if ((bits and (1uL shl bit)) != 0uL) add(wordIndex * wordBits + bit)
+                }
+            }
+        }
+    }.getOrNull()
+
+    private const val ABS_X = 0
+    private const val ABS_Y = 1
+    private const val ABS_MT_POSITION_X = 0x35
+    private const val ABS_MT_POSITION_Y = 0x36
+    private const val BTN_TOUCH = 0x14a
+}
+
+/** Last-resort runtime contract when the bundled YAML catalog has no valid fallback. This deliberately
+ * declares no privileged or optional hardware capability; it exists only to keep the service usable
+ * enough to report and repair the catalog failure. */
+private object EmergencyDeviceProfile : DeviceProfile {
+    override val id = EMERGENCY_PROFILE_REF.id
+    override val revision = EMERGENCY_PROFILE_REF.revision
+    override val displayName = "Emergency safe profile"
+    override val socClass = "unknown"
+    override val suForm = SuForm.NONE
+    override val appCanSu = false
+    override val usesDaemon = false
+    override val hasRecents = false
+    override val ledMechanism = LedMechanism.NONE
+    override val screenOff = ScreenOff.BRIGHTNESS_ZERO
+    override val zigbeeGatewayDir: String? = null
+    override val relayBase: String? = null
+    override val buttonLedGpioBase: Int? = null
+    override val manufacturer: String? = null
+    override val model: String? = null
+    override val evdevButtons = emptyList<EvdevButton>()
+    override val cpuGovernors: Map<String, String>? = null
+}
 
 internal interface ProfileRevisionPersistence {
     fun createDirectory(directory: File): Boolean
@@ -60,6 +139,7 @@ class RuntimeProfileRegistry internal constructor(
     private val coreVersion: String,
     private val clock: () -> Long,
     private val revisionPersistence: ProfileRevisionPersistence = FileProfileRevisionPersistence,
+    private val evdevInspector: EvdevDeviceInspector = SysfsEvdevDeviceInspector,
     private val catalogFileReader: ((File) -> String)? = null,
 ) : ProfileAdmin, ProfileResolver {
     private data class StoredProfile(
@@ -347,6 +427,9 @@ class RuntimeProfileRegistry internal constructor(
                 statusLocked(),
                 entry.issues.ifEmpty { listOf(ProfileIssue(ProfileIssueSeverity.ERROR, "selection", "Profile revision is incompatible with this core.")) },
             )
+            activationIssues(entry).takeIf { it.isNotEmpty() }?.let {
+                return ProfileMutation.Rejected(statusLocked(), it)
+            }
         }
         val state = readActivation()
         if (state.phase == ProfileActivationPhase.PENDING || state.phase == ProfileActivationPhase.APPLYING) {
@@ -681,12 +764,14 @@ class RuntimeProfileRegistry internal constructor(
         ProfileSelection.Auto -> autoResolve()
         is ProfileSelection.Pinned -> {
             val entry = entries[selection.ref]
+            val activation = entry?.let(::activationIssues).orEmpty()
             when {
                 entry == null -> SelectionResolution(null, listOf(ProfileIssue(ProfileIssueSeverity.ERROR, "selection", "Pinned revision is missing.")))
                 !entry.compatible -> SelectionResolution(
                     null,
                     entry.issues.ifEmpty { listOf(ProfileIssue(ProfileIssueSeverity.ERROR, "selection", "Pinned revision is incompatible with this core.")) },
                 )
+                activation.isNotEmpty() -> SelectionResolution(null, activation)
                 else -> SelectionResolution(entry, emptyList())
             }
         }
@@ -722,13 +807,13 @@ class RuntimeProfileRegistry internal constructor(
         }
         if (entry == null) {
             return ResolvedProfile(
-                profile = Generic,
+                profile = EmergencyDeviceProfile,
                 summary = emergencySummary(active = true),
                 activationGeneration = null,
                 issues = catalogIssues + resolution.issues + extraIssues + ProfileIssue(
                     ProfileIssueSeverity.ERROR,
                     "catalog",
-                    "Using the compiled emergency Generic profile because the bundled fallback is unavailable.",
+                    "Using the capability-empty emergency profile because the bundled fallback is unavailable.",
                 ),
             )
         }
@@ -737,6 +822,7 @@ class RuntimeProfileRegistry internal constructor(
                 requireNotNull(entry.document),
                 facts.productVersion,
                 revision = entry.ref.revision,
+                trustedBundledContent = entry.origin == ProfileOrigin.BUNDLED,
             ),
             summary = summary(entry, active = true, selected = true),
             activationGeneration = generation,
@@ -823,8 +909,16 @@ class RuntimeProfileRegistry internal constructor(
         contentVersion = entry.document?.version.orEmpty(),
         author = entry.document?.metadata?.author,
         maturity = entry.document?.metadata?.maturity ?: ProfileMaturity.DRAFT,
+        trustedProvenance = entry.origin == ProfileOrigin.BUNDLED,
         compatible = entry.compatible,
         issues = entry.issues,
+        soc = entry.document?.soc,
+        links = entry.document?.takeIf { entry.compatible }?.let { document ->
+            buildList {
+                document.metadata.source?.let { add(ProfileLink("Panel details", it)) }
+                addAll(document.metadata.links)
+            }.distinctBy { it.url }
+        }.orEmpty(),
     )
 
     private fun statusLocked(): ProfileStatus {
@@ -926,7 +1020,7 @@ class RuntimeProfileRegistry internal constructor(
                 issues += ProfileIssue(
                     ProfileIssueSeverity.ERROR,
                     "catalog",
-                    "Bundled generic fallback is missing or invalid; compiled emergency fallback will be used.",
+                    "Bundled generic fallback is missing or invalid; the capability-empty emergency profile will be used.",
                 )
             }
             catalogIssues = issues
@@ -1025,7 +1119,7 @@ class RuntimeProfileRegistry internal constructor(
         entries = loaded
         fullyHydrated = true
         if (loaded.values.none { it.origin == ProfileOrigin.BUNDLED && !it.rollbackOnly && it.compatible && it.document?.match?.fallback == true }) {
-            issues += ProfileIssue(ProfileIssueSeverity.ERROR, "catalog", "Bundled generic fallback is missing or invalid; compiled emergency fallback will be used.")
+            issues += ProfileIssue(ProfileIssueSeverity.ERROR, "catalog", "Bundled generic fallback is missing or invalid; the capability-empty emergency profile will be used.")
         }
         catalogIssues = issues
         } catch (error: Throwable) {
@@ -1041,20 +1135,43 @@ class RuntimeProfileRegistry internal constructor(
     }
 
     private fun emergencySummary(active: Boolean) = ProfileSummary(
-        ref = EMERGENCY_GENERIC_REF,
-        displayName = Generic.displayName,
+        ref = EMERGENCY_PROFILE_REF,
+        displayName = EmergencyDeviceProfile.displayName,
         origin = ProfileOrigin.BUNDLED,
         schema = 0,
         minCoreVersion = null,
         matchesThisDevice = true,
         active = active,
         selected = true,
-        shizukuRecommendation = ShizukuRecommendation.OPTIONAL,
-        risks = setOf(ProfileRisk.ROOT_PATHS),
-        contentVersion = "compiled",
-        author = "ha-paneld",
-        maturity = ProfileMaturity.VERIFIED,
+        shizukuRecommendation = ShizukuRecommendation.NONE,
+        risks = emptySet(),
+        contentVersion = EMERGENCY_PROFILE_VERSION,
+        maturity = ProfileMaturity.DRAFT,
+        trustedProvenance = false,
     )
+
+    private fun activationIssues(entry: StoredProfile): List<ProfileIssue> {
+        if (entry.origin != ProfileOrigin.IMPORTED) return emptyList()
+        val document = entry.document ?: return emptyList()
+        if (!document.matches(facts)) {
+            return listOf(ProfileIssue(
+                ProfileIssueSeverity.ERROR,
+                "selection.match",
+                "Imported profile does not match this device's immutable build identity.",
+            ))
+        }
+        return document.input.evdevButtons.mapIndexedNotNull { index, button ->
+            if (button.grab && evdevInspector.isTouchscreen(button.node) == true) {
+                ProfileIssue(
+                    ProfileIssueSeverity.ERROR,
+                    "input.evdev_buttons[$index].grab",
+                    "Imported profiles cannot exclusively grab a touchscreen input device.",
+                )
+            } else {
+                null
+            }
+        }
+    }
 
     private fun loadEntry(
         raw: String,
@@ -1280,7 +1397,6 @@ class RuntimeProfileRegistry internal constructor(
         private const val KEY_LAST_KNOWN_GOOD = "last_known_good"
         private const val KEY_ACTIVE_REF = "active_ref"
         private const val MAX_DIFFS = 256
-        private val EMERGENCY_GENERIC_REF = ProfileRef("generic", ProfileYaml.sha256("compiled-emergency-generic"))
     }
 }
 

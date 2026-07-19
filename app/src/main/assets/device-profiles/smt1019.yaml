@@ -1,11 +1,22 @@
 schema: 2
 id: smt1019
-version: 2.0.0
+version: 2.1.2
 display_name: ZHICAI SMT1019
 soc_class: rk3576
+soc:
+  model: Rockchip RK3576
+  introduced_year: 2024
+  cpu_cores:
+    - architecture: Arm Cortex-A72
+      count: 4
+    - architecture: Arm Cortex-A53
+      count: 4
 metadata:
   author: ha-paneld maintainers
   source: https://github.com/maxlyth/ha-paneld/blob/main/docs/hardware/smt1019.md
+  links:
+    - label: SoC details
+      url: https://www.rock-chips.com/a/en/products/RK35_Series/2024/1212/2033.html
   license: Apache-2.0
   maturity: experimental
   tested_firmware:
@@ -14,7 +25,7 @@ metadata:
     - Stock firmware has no su; RGB LED control needs a separately installed root helper.
     - The pinned WebView build still needs live-hardware verification.
 requires:
-  min_core_version: 0.9.3
+  min_core_version: 0.9.5-rc1
   drivers:
     - led.rk3576-ioctl-daemon
     - screen.brightness-zero
@@ -42,7 +53,6 @@ hardware:
   screen_off: brightness-zero
   has_button_backlight: false
 sensors:
-  proximity_graded_strategy: observed
   cht8305: false
   room_temp_offset_c: 0.0
 identity:
@@ -54,8 +64,6 @@ input:
 cpu: {}
 display: {}
 provisioning:
-  access:
-    shizuku: recommended
   software:
     webview:
       artifact: lineageos-150-arm64
@@ -68,7 +76,9 @@ provisioning:
       - vendor
       - test
       - clutter
-    note: 'ELC "smt-test" factory app (in /odm persist, survives factory reset). Vendor QA/test tool; not used in normal operation.'
+    note: >-
+      ELC "smt-test" factory app (in /odm persist, survives factory reset). Vendor QA/test tool; not used in
+      normal operation.
   - package: com.DeviceTest
     desired_state: disabled
     importance: optional
@@ -91,14 +101,18 @@ provisioning:
     tags:
       - vendor
       - service
-    note: 'ELC "CommonKeepAlive" background service that keeps vendor apps resident. Safe to disable on a Home Assistant panel.'
+    note: >-
+      ELC "CommonKeepAlive" background service that keeps vendor apps resident. Safe to disable on a Home
+      Assistant panel.
   - package: com.elclcd.otaupdater
     desired_state: disabled
     importance: optional
     tags:
       - vendor
       - ota
-    note: 'ELC "Firmware Upgrade" — the vendor OTA updater. Disable to stop the panel auto-applying vendor firmware updates that can re-add bloat.'
+    note: >-
+      ELC "Firmware Upgrade" — the vendor OTA updater. Disable to stop the panel auto-applying vendor
+      firmware updates that can re-add bloat.
   - package: com.android.rockchip.camera2
     desired_state: disabled
     importance: optional

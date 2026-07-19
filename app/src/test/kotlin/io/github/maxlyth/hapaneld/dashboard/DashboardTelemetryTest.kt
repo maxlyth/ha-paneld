@@ -78,8 +78,8 @@ class DashboardTelemetryTest {
             reloads24h = 0,
             topEntities = JSONArray().put(JSONObject()
                 .put("entityId", "sensor.noisy")
-                .put("updates1m", 60)
-                .put("payloadBps1m", 1024)),
+                .put("updates1h", 60)
+                .put("payloadBytes1h", 1024)),
         ))
 
         assertEquals("builtin_direct", json.getString("mode"))
@@ -105,6 +105,31 @@ class DashboardTelemetryTest {
         assertTrue(after.getLong("generation") > generation)
         assertEquals(0, after.getInt("sampleCount"))
         assertFalse(after.toString().contains("sensor."))
+    }
+
+    @Test fun exposesBrowserSampleAgeSoExternalCollectorsCanDetectAStalledWebView() {
+        DashboardTelemetry.reset()
+        DashboardTelemetry.installed()
+        DashboardTelemetry.record(batch(), observedAtElapsedMs = 10_000L)
+
+        val fresh = JSONObject(DashboardTelemetry.json(
+            builtinActive = true,
+            filterActive = false,
+            entityCount = 0,
+            reloads24h = 0,
+            nowElapsedMs = 12_500L,
+        ))
+        assertEquals(2_500L, fresh.getLong("latestSampleAgeMs"))
+
+        DashboardTelemetry.reset()
+        val absent = JSONObject(DashboardTelemetry.json(
+            builtinActive = true,
+            filterActive = false,
+            entityCount = 0,
+            reloads24h = 0,
+            nowElapsedMs = 20_000L,
+        ))
+        assertEquals(-1L, absent.getLong("latestSampleAgeMs"))
     }
 
     @Test fun companionModeNeverClaimsDirectInteractionTiming() {

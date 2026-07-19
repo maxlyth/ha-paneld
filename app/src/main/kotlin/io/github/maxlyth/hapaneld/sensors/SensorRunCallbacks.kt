@@ -10,7 +10,8 @@ import kotlin.math.max
 internal class SensorRunCallbacks(
     private val onLux: (Int) -> Unit,
     private val onLuxRaw: (Float) -> Unit,
-    private val onProximity: (Boolean) -> Unit,
+    private val onProximity: (Boolean?, Int?, Int) -> Unit,
+    private val onGesture: () -> Unit,
     private val onTemperature: (Float) -> Unit,
     private val onHumidity: (Float) -> Unit,
 ) {
@@ -34,8 +35,16 @@ internal class SensorRunCallbacks(
         }
     }
 
-    fun proximity(near: Boolean) {
-        if (open) onProximity(near)
+    fun proximity(
+        near: Boolean?,
+        normalizedLevel: Int?,
+        reportMask: Int = ProximityReportGate.BOTH,
+    ) {
+        if (open) onProximity(near, normalizedLevel, reportMask)
+    }
+
+    fun gesture() {
+        if (open) onGesture()
     }
 
     fun temperature(value: Float, now: Long) {
@@ -69,4 +78,20 @@ internal class SensorRunCallbacks(
         const val LIGHT_INTERVAL_MS = 15_000L
         const val CLIMATE_INTERVAL_MS = 60_000L
     }
+}
+
+/**
+ * Publish the unavailable startup state before activating a source that may immediately deliver its
+ * current value. The lifecycle checks also prevent a callback that stops this run from allowing the
+ * remainder of sensor registration to continue.
+ */
+internal inline fun initializeProximitySource(
+    run: SensorRunCallbacks,
+    isCurrent: () -> Boolean,
+    activate: () -> Unit,
+): Boolean {
+    run.proximity(null, null)
+    if (!run.isOpen() || !isCurrent()) return false
+    activate()
+    return run.isOpen() && isCurrent()
 }

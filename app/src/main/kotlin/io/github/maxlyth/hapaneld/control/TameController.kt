@@ -6,8 +6,11 @@ import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.provider.Settings
 import android.util.Log
+import io.github.maxlyth.hapaneld.config.TamePackagePolicy
 import io.github.maxlyth.hapaneld.device.TameCandidate
 import io.github.maxlyth.hapaneld.persistence.AppState
+import io.github.maxlyth.hapaneld.persistence.commitWithDurableVisibility
+import io.github.maxlyth.hapaneld.util.AndroidInput
 import io.github.maxlyth.hapaneld.util.HelperClient
 
 /**
@@ -22,14 +25,14 @@ import io.github.maxlyth.hapaneld.util.HelperClient
  *
  * Everything is **privileged** (root), so it routes through the helper daemon (`STOP`/`DISABLE`/`OVERLAY`)
  * — which covers sandbox-walled panels — and falls back to `su` where the app can reach it. Everything is
- * **reversible** ([untame] re-enables + restores the exact prior overlay app-op), and **critical system
+ * **reversible** (rollback re-enables + restores the exact prior overlay app-op), and **critical system
  * packages are never touched**: a brick-guard here AND in the daemon refuses the system UI, Settings,
  * telephony, the framework, and ha-paneld itself. Only installed packages are acted on. The feature is
  * **off by default** — the blocklist is empty unless the user deliberately populates it.
  */
 class TameController(
     private val context: Context,
-    // Invoked right after [tame] disables a package that WAS the current default home (a vendor kiosk
+    // Invoked right after [reassertTame] disables a package that WAS the current default home (a vendor kiosk
     // like eWeLink left as home). The caller re-asserts the dashboard as the default home AND foregrounds
     // it — otherwise disabling the vendor home strands the panel on ha-paneld's admin launcher until the
     // 300s "dashboard backgrounded" watchdog eventually returns to it (a ~5-minute blank-to-dashboard gap
@@ -37,21 +40,31 @@ class TameController(
     private val onDefaultHomeDisabled: () -> Unit = {},
 ) {
     private val state = AppState.preferences(context, "controller-state", STATE_PREFS)
+    private val desiredStateReconciler = TameDesiredStateReconciler(
+        readOwned = ::readOwnedMarkers,
+        observePackages = ::observePackages,
+        reassert = ::reassertTame,
+        restore = ::restoreOwned,
+        clearAbsent = ::clearAbsentMarker,
+    )
 
-    /** Tame every blocklisted package that's installed and safe. Returns the packages actually tamed. */
-    fun applyBlocklist(packages: List<String>): List<String> =
-        packages.filter { tame(it) }
+    /** Reconcile desired state against the existing write-ahead overlay restoration records. */
+    internal fun reconcileBlocklist(packages: Set<String>): TameReconcileResult =
+        desiredStateReconciler.reconcile(packages)
 
-    /**
-     * The **recommended set**: tame every profile candidate flagged [TameCandidate.defaultTame] that's
-     * installed and safe to act on right now. Idempotent; reuses [tame], which hands the home role to
-     * ha-paneld's admin launcher before disabling and **refuses to strand** the panel (a home launcher is
-     * only tamed when ha-paneld is a fallback home) — so this can't leave the panel without a home even
-     * "before a replacement home is secured". Returns the packages actually tamed (for the caller to persist
-     * into the blocklist so they re-apply on boot).
-     */
-    fun applyRecommended(profileCandidates: List<TameCandidate>): List<String> =
-        profileCandidates.filter { it.defaultTame }.map { it.pkg }.filter { tame(it) }
+    /** Installed, safe recommended selections; mutation remains owned by [reconcileBlocklist]. */
+    fun recommendedSelections(profileCandidates: List<TameCandidate>): List<String> {
+        val recommended = profileCandidates.asSequence()
+            .filter(TameCandidate::defaultTame)
+            .map(TameCandidate::pkg)
+            .distinct()
+            .sorted()
+            .toList()
+        val observed = observePackages(recommended.toSet())
+        return recommended.filter {
+            observed[it] == TamePackageObservation(TamePackagePresence.PRESENT, TamePackageSafety.SAFE)
+        }
+    }
 
     /** One row in the Vendor-packages UI: a package, its label + current state, whether it's tamed, and
      *  (for profile-curated packages) the author's [tags] and [note] explaining what it is. */
@@ -173,10 +186,21 @@ class TameController(
     // source. Per-package getApplicationInfo() is not: it returns null for a disabled PRIVILEGED system app
     // (e.g. a tamed `com.smatek.*`) even though the app is installed, which would wrongly hide it. A single
     // getInstalledApplications() snapshot lists them all, so resolve presence/label from this map instead.
-    private fun installedApps(): Map<String, ApplicationInfo> = runCatching {
-        val flags = PackageManager.MATCH_DISABLED_COMPONENTS or PackageManager.MATCH_DISABLED_UNTIL_USED_COMPONENTS
+    private fun installedAppsOrNull(): Map<String, ApplicationInfo>? = try {
+        val flags = PackageManager.MATCH_DISABLED_COMPONENTS or
+            PackageManager.MATCH_DISABLED_UNTIL_USED_COMPONENTS
         context.packageManager.getInstalledApplications(flags).associateBy { it.packageName }
-    }.getOrDefault(emptyMap())
+            .takeIf { TameStatePolicy.packageInventoryCredible(it.keys, context.packageName) }
+            .also {
+                if (it == null) Log.w(TAG, "installed-package snapshot omitted ha-paneld; treating it as unknown")
+            }
+    } catch (error: Throwable) {
+        Log.w(TAG, "could not observe installed packages", error)
+        null
+    }
+
+    /** UI callers may render an empty snapshot; mutation callers use [observePackages] and retain UNKNOWN. */
+    private fun installedApps(): Map<String, ApplicationInfo> = installedAppsOrNull().orEmpty()
 
     private fun toCandidate(pkg: String, ai: ApplicationInfo?, blocked: Set<String>, meta: TameCandidate? = null): Candidate {
         val pm = context.packageManager
@@ -240,42 +264,24 @@ class TameController(
      * The brick-guard: packages that must NEVER be disabled. Beyond the hardcoded AOSP-name set
      * ([isUntouchable]), this catches vendor-RENAMED criticals by ROLE so a user can't brick the panel by
      * typing one into the free-text box: any FLAG_PERSISTENT system service (e.g. a vendor SystemUI such as
-     * `com.smartos.xinch.systemui` on the TPA10 — the name-based guard wouldn't catch it), every registered
-     * home launcher, and the current IME. Enforced in [actOn] (so every tame path is covered) and POST /tame.
+     * `com.smartos.xinch.systemui` on the TPA10 — the name-based guard wouldn't catch it), protected home
+     * launchers, and the current IME. Failed role/package observation is UNKNOWN and therefore fail-closed.
      */
-    fun isProtected(pkg: String): Boolean {
-        if (pkg.isBlank() || isUntouchable(pkg)) return true
-        val ai = installedApps()[pkg]
-        if (ai != null && (ai.flags and ApplicationInfo.FLAG_PERSISTENT) != 0) return true
-        if (isProtectedHome(pkg)) return true
-        val ime = runCatching {
-            Settings.Secure.getString(context.contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD)?.substringBefore('/')
-        }.getOrNull()
-        return pkg == ime
-    }
+    fun isProtected(pkg: String): Boolean =
+        observePackages(setOf(pkg))[pkg]?.safety != TamePackageSafety.SAFE
 
-    /**
-     * Home-launcher brick-guard, relaxed for vendor kiosks. A HOME-registered package is protected so
-     * the panel can't be stranded with no home — BUT a vendor kiosk (e.g. `com.eWeLinkControlPanel`)
-     * merely *registers* HOME while being useless as a launcher, and blanket-protecting it made it
-     * impossible to tame. So a home is protected only when it's the Companion dashboard, or when
-     * ha-paneld's own admin launcher is NOT itself a registered home (no fallback → keep the strand-safe
-     * behaviour of protecting every home). ha-paneld itself is already covered by [isUntouchable].
-     */
-    private fun isProtectedHome(pkg: String): Boolean {
-        val homes = homeLaunchers()
-        if (pkg !in homes) return false
-        if (pkg in HA_PACKAGES) return true                 // the dashboard renderer — leave it alone
-        return context.packageName !in homes                // no ha-paneld fallback home → protect all homes
-    }
+    /** Every HOME-registered package (incl. disabled); UI callers degrade to an empty observation. */
+    private fun homeLaunchers(): Set<String> = homeLaunchersOrNull().orEmpty()
 
-    /** Every HOME-registered package (incl. disabled), the panel's set of possible home launchers. */
-    private fun homeLaunchers(): Set<String> = runCatching {
+    private fun homeLaunchersOrNull(): Set<String>? = try {
         context.packageManager.queryIntentActivities(
             Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME),
             PackageManager.MATCH_DISABLED_COMPONENTS,
         ).map { it.activityInfo.packageName }.toSet()
-    }.getOrDefault(emptySet())
+    } catch (error: Throwable) {
+        Log.w(TAG, "could not observe home launchers", error)
+        null
+    }
 
     /** The package that currently owns the default home role, or null. */
     private fun currentDefaultHome(): String? = runCatching {
@@ -284,10 +290,30 @@ class TameController(
         )?.activityInfo?.packageName
     }.getOrNull()
 
-    /** force-stop + disable boot-relaunch + deny the overlay permission for [pkg]. */
-    @Synchronized
-    fun tame(pkg: String): Boolean {
-        if (!actOn(pkg)) return false
+    /** Write-ahead-own [pkg], then force-stop + disable boot-relaunch + deny its overlay permission. */
+    private fun reassertTame(pkg: String): Boolean {
+        val key = TameStatePolicy.markerKey(pkg)
+        val marker = try {
+            val exists = state.contains(key)
+            exists to if (exists) state.getString(key, null) else null
+        } catch (error: Throwable) {
+            Log.w(TAG, "could not read tame ownership marker for $pkg", error)
+            return false
+        }
+        return TameStatePolicy.reassertOwnership(
+            markerExists = marker.first,
+            markerMode = marker.second,
+            captureMode = { observeOverlayMode(pkg) },
+            persistMarker = { mode ->
+                state.commitWithDurableVisibility { putString(key, mode) }
+            },
+            // Marker capture is deliberately before this lambda: SETHOME is the first possible external
+            // mutation and must never occur without a durable public-v0.9.4-compatible ownership record.
+            mutate = { applyTameActions(pkg) },
+        )
+    }
+
+    private fun applyTameActions(pkg: String): Boolean {
         // If we're disabling the CURRENT default home (e.g. a vendor kiosk like eWeLink left as home),
         // hand the home role to ha-paneld's admin launcher FIRST so Android doesn't pop a home chooser
         // or strand the panel. The dashboard app is re-asserted as home by ensureDashboardHome later.
@@ -301,10 +327,6 @@ class TameController(
                 return false
             }
             Log.i(TAG, "tame $pkg: was default home → confirmed ha-paneld admin launcher as home first")
-        }
-        if (!captureOverlayMode(pkg)) {
-            Log.w(TAG, "tame $pkg: refusing mutation because prior overlay mode was not persisted")
-            return false
         }
         val stopped = privileged("STOP $pkg", "am force-stop $pkg")
         val disabled = privileged("DISABLE $pkg", "pm disable-user --user 0 $pkg")
@@ -320,59 +342,99 @@ class TameController(
         return ok
     }
 
-    /** Reverse [tame]: re-enable the package and restore the exact overlay app-op captured before tame.
-     *  Legacy/unknown state restores the platform default, never a blind grant. */
-    @Synchronized
-    fun untame(pkg: String): Boolean {
-        if (!isInstalled(pkg)) return false
-        val enabled = privileged("ENABLE $pkg", "pm enable $pkg")
-        val mode = state.getString(overlayStateKey(pkg), null)
-            ?.takeIf(TameStatePolicy::validOverlayMode)
-            ?: "default"
-        val overlay = privileged("OVERLAY $pkg $mode", "appops set $pkg SYSTEM_ALERT_WINDOW $mode")
-        val cleared = !overlay || state.edit().remove(overlayStateKey(pkg)).commit()
-        Log.i(TAG, "untame $pkg: enable=$enabled overlay=$overlay restoreMode=$mode stateCleared=$cleared")
-        return enabled && overlay && cleared
+    /** Re-enable an owned package and restore its exact saved app-op before removing ownership. */
+    private fun restoreOwned(marker: TameOwnedMarker): Boolean {
+        val restored = TameStatePolicy.restoreOwnership(
+            markerMode = marker.overlayMode,
+            enable = { privileged("ENABLE ${marker.pkg}", "pm enable ${marker.pkg}") },
+            restoreOverlay = { mode ->
+                privileged(
+                    "OVERLAY ${marker.pkg} $mode",
+                    "appops set ${marker.pkg} SYSTEM_ALERT_WINDOW $mode",
+                )
+            },
+            removeMarker = {
+                state.commitWithDurableVisibility {
+                    remove(TameStatePolicy.markerKey(marker.pkg))
+                }
+            },
+        )
+        Log.i(TAG, "untame ${marker.pkg}: restored=$restored mode=${marker.overlayMode}")
+        return restored
     }
 
-    /** Persist once: repeated boot-time tame must not overwrite the original mode with our own deny. */
-    private fun captureOverlayMode(pkg: String): Boolean {
-        val key = overlayStateKey(pkg)
-        if (state.contains(key)) return true
+    /** Exact pre-mutation app-op observation; query failure refuses mutation rather than inventing state. */
+    private fun observeOverlayMode(pkg: String): String? {
         val helperMode = HelperClient.send("OVERLAY $pkg")?.let(TameStatePolicy::overlayMode)
-        val rootMode = if (helperMode == null) {
+        return helperMode ?: run {
             Su.runOutput("appops get $pkg SYSTEM_ALERT_WINDOW 2>/dev/null")
                 ?.let(TameStatePolicy::overlayMode)
-        } else null
-        // Query failure is an unknown legacy state. Restoring `default` later is conservative and does
-        // not grant an app-op the package may never have held.
-        val mode = helperMode ?: rootMode ?: "default"
-        return state.edit().putString(key, mode).commit()
+        }
     }
 
     /** Run a privileged op via the daemon (trusting only an explicit OK), falling back to su. */
-    private fun privileged(daemonCmd: String, suCmd: String): Boolean {
-        if (HelperClient.available() && HelperClient.send(daemonCmd) == "OK") return true
-        return Su.run(suCmd)
-    }
+    private fun privileged(daemonCmd: String, suCmd: String): Boolean =
+        TameStatePolicy.privileged(
+            daemonCmd = daemonCmd,
+            suCmd = suCmd,
+            send = HelperClient::send,
+            runSu = Su::run,
+        )
 
-    /** Guard: act only on an installed, non-critical package. Mirrors the daemon's own backstop. */
-    private fun actOn(pkg: String): Boolean {
-        if (isProtected(pkg)) {
-            Log.w(TAG, "refusing to tame protected package $pkg")
-            return false
+    private fun readOwnedMarkers(): TameOwnedMarkers = try {
+        TameStatePolicy.parseOwnedMarkers(state.all).also {
+            when (it) {
+                is TameOwnedMarkers.Overflow ->
+                    Log.e(TAG, "tame ownership marker bound exceeded (${it.count}); refusing mutation")
+                is TameOwnedMarkers.Invalid ->
+                    Log.e(TAG, "tame ownership marker snapshot is malformed (${it.prefixedCount}); refusing mutation")
+                is TameOwnedMarkers.Ready,
+                TameOwnedMarkers.Unavailable -> Unit
+            }
         }
-        if (!isInstalled(pkg)) { Log.i(TAG, "skip $pkg: not installed"); return false }
-        return true
+    } catch (error: Throwable) {
+        Log.w(TAG, "could not enumerate tame ownership markers", error)
+        TameOwnedMarkers.Unavailable
     }
 
-    private fun isInstalled(pkg: String): Boolean = installedApps().containsKey(pkg)
+    private fun observePackages(packages: Set<String>): Map<String, TamePackageObservation> {
+        val apps = installedAppsOrNull()
+            ?: return packages.associateWith {
+                TamePackageObservation(TamePackagePresence.UNKNOWN, TamePackageSafety.UNKNOWN)
+            }
+        val homes = homeLaunchersOrNull()
+        var rolesKnown = homes != null
+        val ime = try {
+            Settings.Secure.getString(context.contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD)
+                ?.substringBefore('/')
+        } catch (error: Throwable) {
+            Log.w(TAG, "could not observe current input method", error)
+            rolesKnown = false
+            null
+        }
+        return packages.associateWith { pkg ->
+            val presence = if (pkg in apps) TamePackagePresence.PRESENT else TamePackagePresence.ABSENT
+            val safety = when {
+                pkg.isBlank() || isUntouchable(pkg) -> TamePackageSafety.PROTECTED
+                apps[pkg]?.let { (it.flags and ApplicationInfo.FLAG_PERSISTENT) != 0 } == true ->
+                    TamePackageSafety.PROTECTED
+                !rolesKnown -> TamePackageSafety.UNKNOWN
+                pkg in requireNotNull(homes) && (pkg in HA_PACKAGES || context.packageName !in homes) ->
+                    TamePackageSafety.PROTECTED
+                pkg == ime -> TamePackageSafety.PROTECTED
+                else -> TamePackageSafety.SAFE
+            }
+            TamePackageObservation(presence, safety)
+        }
+    }
+
+    /** Positive absence is the only no-actuation path allowed to discard ownership. */
+    private fun clearAbsentMarker(marker: TameOwnedMarker): Boolean =
+        state.commitWithDurableVisibility { remove(TameStatePolicy.markerKey(marker.pkg)) }
 
     companion object {
         private const val TAG = "ha-paneld/tame"
         private const val STATE_PREFS = "ha-paneld-controller-state"
-
-        private fun overlayStateKey(pkg: String) = "tame_overlay.$pkg"
 
         // The HA Companion dashboard apps — never offered as tame candidates (this is an HA project; the
         // dashboard is the whole point). Excluded from enumeration/suggestions, not the brick-guard.
@@ -381,26 +443,53 @@ class TameController(
             "io.homeassistant.companion.android.minimal",
         )
 
-        // Never stop/disable these, even if a user lists one — tearing them down bricks the panel. The
-        // daemon enforces the same set as a privileged backstop; this is the app-side first line.
-        private val CRITICAL = setOf(
-            "android",
-            "com.android.systemui",
-            "com.android.settings",
-            "com.android.phone",
-            "io.github.maxlyth.hapaneld",
-        )
-
-        fun isCritical(pkg: String): Boolean = pkg in CRITICAL
+        fun isCritical(pkg: String): Boolean = TamePackagePolicy.isCritical(pkg)
     }
 }
 
 /** Android-free policy kept explicit so destructive home/app-op transitions have deterministic tests. */
 internal object TameStatePolicy {
+    const val MARKER_PREFIX = "tame_overlay."
+    const val MAX_MARKERS = 256
     private val MODES = setOf("allow", "deny", "ignore", "default", "foreground")
     private val APP_OP = Regex("""SYSTEM_ALERT_WINDOW(?:\s*\([^)]*\))?\s*:\s*(allow|deny|ignore|default|foreground)\b""")
 
     fun validOverlayMode(mode: String): Boolean = mode in MODES
+
+    fun markerKey(pkg: String): String = MARKER_PREFIX + pkg
+
+    /** Every prefixed record participates in the bound; any malformed record rejects the whole snapshot. */
+    fun parseOwnedMarkers(values: Map<String, *>): TameOwnedMarkers {
+        val owned = LinkedHashMap<String, TameOwnedMarker>()
+        var prefixedCount = 0
+        var invalid = false
+        for ((key, value) in values) {
+            if (!key.startsWith(MARKER_PREFIX)) continue
+            prefixedCount++
+            if (prefixedCount > MAX_MARKERS) return TameOwnedMarkers.Overflow(prefixedCount)
+            val pkg = key.removePrefix(MARKER_PREFIX)
+            val mode = value as? String
+            if (pkg.length > MAX_PACKAGE_CHARS || !AndroidInput.isPackage(pkg) ||
+                mode == null || !validOverlayMode(mode)
+            ) {
+                invalid = true
+                continue
+            }
+            owned[pkg] = TameOwnedMarker(pkg, mode)
+        }
+        return if (invalid) TameOwnedMarkers.Invalid(prefixedCount) else TameOwnedMarkers.Ready(owned)
+    }
+
+    fun packageInventoryCredible(packageNames: Set<String>, ownPackage: String): Boolean =
+        ownPackage in packageNames
+
+    /** One identity-admitted helper command per action; only an explicit OK suppresses the su fallback. */
+    fun privileged(
+        daemonCmd: String,
+        suCmd: String,
+        send: (String) -> String?,
+        runSu: (String) -> Boolean,
+    ): Boolean = send(daemonCmd) == "OK" || runSu(suCmd)
 
     fun overlayMode(output: String): String? {
         val helper = output.trim().removePrefix("MODE=").takeIf { output.trim().startsWith("MODE=") }
@@ -411,4 +500,33 @@ internal object TameStatePolicy {
 
     fun homeHandoffSecured(setSucceeded: Boolean, observedHome: String?, ownPackage: String): Boolean =
         setSucceeded && observedHome == ownPackage
+
+    /** Persist exact restoration state before the first external mutation. */
+    fun reassertOwnership(
+        markerExists: Boolean,
+        markerMode: String?,
+        captureMode: () -> String?,
+        persistMarker: (String) -> Boolean,
+        mutate: () -> Boolean,
+    ): Boolean {
+        val mode = if (markerExists) markerMode else captureMode()
+        if (mode == null || !validOverlayMode(mode)) return false
+        if (!markerExists && !persistMarker(mode)) return false
+        return mutate()
+    }
+
+    /** Remove ownership only after both exact rollback actions have succeeded. */
+    fun restoreOwnership(
+        markerMode: String?,
+        enable: () -> Boolean,
+        restoreOverlay: (String) -> Boolean,
+        removeMarker: () -> Boolean,
+    ): Boolean {
+        val mode = markerMode?.takeIf(::validOverlayMode) ?: return false
+        val enabled = enable()
+        val overlayRestored = restoreOverlay(mode)
+        return enabled && overlayRestored && removeMarker()
+    }
+
+    private const val MAX_PACKAGE_CHARS = 255
 }

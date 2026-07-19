@@ -26,9 +26,37 @@ class HelperSocketCompositionTest {
         val daemon = SocketDaemon(socketPath)
 
         assertTrue(daemon.available())
-        assertEquals("HELPER version=1.0.0 proto=1.0", daemon.send("VERSION"))
+        assertEquals("HELPER version=1.1.0 proto=1.1", daemon.send("VERSION"))
         assertEquals("ERR", daemon.send("PINGEXTRA"))
         assertEquals("OK", daemon.sendLong("RELOAD io.example.dashboard", 5_000).replyValue())
+    }
+
+    @Test(timeout = 10_000)
+    fun connectionScopedIdentityAndOperationCrossTheNativeServerOnOneSocket() {
+        val daemon = IdentityAdmittingHelperClient(ChannelSessionTransport(socketPath), nowNs = { 0L })
+
+        assertTrue(daemon.available())
+        assertEquals("OK", daemon.send("RELOAD io.example.dashboard"))
+        assertContentEquals("PNG\nfixture\n".toByteArray(), daemon.sendBytesBounded("SCREENCAP", 1024L))
+    }
+
+    @Test(timeout = 10_000)
+    fun connectionScopedAdmissionComposesWithNativeStreamAndCompanionFraming() {
+        val daemon = IdentityAdmittingHelperClient(ChannelSessionTransport(socketPath), nowNs = { 0L })
+        val directory = Files.createTempDirectory("helper-admitted-stream-").toFile()
+        val source = File(directory, "fixture.apk").apply { writeBytes(byteArrayOf(0x50, 0x4b, 0, 4, 0x7f)) }
+        try {
+            assertEquals(
+                DaemonStreamResult.Reply("OK"),
+                daemon.sendFile("INSTALLSTREAM ${source.length()}", source, 5_000L),
+            )
+            assertEquals(
+                CompanionHelperProtocol.BackupResult.Failed(relaunchFailed = false),
+                daemon.backupCompanion("io.example.invalid", directory, 5_000L),
+            )
+        } finally {
+            directory.deleteRecursively()
+        }
     }
 
     @Test(timeout = 10_000)
@@ -105,6 +133,67 @@ class HelperSocketCompositionTest {
         private fun unixAddress(path: Path): SocketAddress = Class.forName("java.net.UnixDomainSocketAddress")
             .getMethod("of", Path::class.java)
             .invoke(null, path) as SocketAddress
+    }
+
+    private class ChannelSessionTransport(private val path: Path) : HelperCommandTransport {
+        override fun open(): HelperCommandSession? = runCatching {
+            ChannelSession(SocketChannel.open(unixAddress(path)))
+        }.getOrNull()
+
+        private fun unixAddress(path: Path): SocketAddress = Class.forName("java.net.UnixDomainSocketAddress")
+            .getMethod("of", Path::class.java)
+            .invoke(null, path) as SocketAddress
+    }
+
+    private class ChannelSession(private val channel: SocketChannel) : HelperCommandSession {
+        private val input = Channels.newInputStream(channel)
+        private val output = Channels.newOutputStream(channel)
+
+        override fun bootstrap(command: String, deadline: HelperBootstrapDeadline): HelperBootstrapReply {
+            output.apply { write((command + "\n").toByteArray()); flush() }
+            return readHelperBootstrapLine(input, {}, deadline)
+        }
+
+        override fun send(cmd: String): String? = HelperSocketProtocol.sendLine(cmd, input, output)
+
+        override fun sendLong(cmd: String, timeoutMs: Long): DaemonLongResult = send(cmd)
+            ?.let(DaemonLongResult::Reply)
+            ?: DaemonLongResult.Indeterminate
+
+        override fun sendFile(cmd: String, source: File, timeoutMs: Long): DaemonStreamResult =
+            HelperSocketProtocol.sendFile(
+                command = cmd,
+                openSource = source::inputStream,
+                expectedBytes = source.length(),
+                input = input,
+                output = output,
+                shutdownOutput = channel::shutdownOutput,
+            )
+
+        override fun sendBytes(cmd: String, maxBytes: Long): ByteArray? = HelperSocketProtocol.sendBytes(
+            command = cmd,
+            input = input,
+            output = output,
+            shutdownOutput = channel::shutdownOutput,
+            maxBytes = maxBytes,
+        )
+
+        override fun backupCompanion(
+            packageName: String,
+            cacheDir: File,
+            timeoutMs: Long,
+        ): CompanionHelperProtocol.BackupResult =
+            CompanionHelperProtocol.backup(packageName, cacheDir, input, output)
+
+        override fun restoreCompanion(
+            packageName: String,
+            files: Map<String, File>,
+            timeoutMs: Long,
+        ): CompanionHelperProtocol.RestoreResult = error("not used by this composition fixture")
+
+        override fun close() {
+            channel.close()
+        }
     }
 
     private companion object {

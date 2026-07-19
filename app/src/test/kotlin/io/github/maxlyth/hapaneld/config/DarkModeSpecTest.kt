@@ -24,4 +24,14 @@ class DarkModeSpecTest {
         assertTrue("no OS control (Android 9-) -> our toggle fills the gap", spec!!.availableWhen(Capabilities()))
         assertFalse("OS control exists (Android 10+) -> follow the system, hide ours", spec.availableWhen(Capabilities(hasSystemDarkMode = true)))
     }
+
+    @Test fun firstVisibleDisplaySettingWhereSupported() {
+        val display = SettingsRegistry.SPECS.filter { it.group == "Display" }
+        assertEquals("dark_mode", display.first().key)
+        assertEquals("dark_mode", display.first { it.availableWhen(Capabilities()) }.key)
+        assertEquals(
+            "auto_brightness_ha_entity",
+            display.first { it.availableWhen(Capabilities(hasSystemDarkMode = true)) }.key,
+        )
+    }
 }

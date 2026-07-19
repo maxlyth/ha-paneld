@@ -1,6 +1,10 @@
 package io.github.maxlyth.hapaneld.device.profile
 
-import io.github.maxlyth.hapaneld.device.Generic
+import io.github.maxlyth.hapaneld.device.DeviceProfile
+import io.github.maxlyth.hapaneld.device.LedMechanism
+import io.github.maxlyth.hapaneld.device.ProvisioningIntent
+import io.github.maxlyth.hapaneld.device.ScreenOff
+import io.github.maxlyth.hapaneld.device.SuForm
 import java.io.File
 import java.nio.file.Files
 import org.junit.After
@@ -8,7 +12,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
-import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -39,25 +42,161 @@ class RuntimeProfileRegistryTest {
         assertEquals(ProfileSelection.Auto, registry.status().selection)
     }
 
+    @Test fun `imported profile cannot be pinned to a different immutable device identity`() {
+        val registry = registry(mapOf("generic.yaml" to genericYaml()))
+        val raw = ProfileYaml.serialize(testProfileDocument(facts = DeviceFacts("another-panel", "other", "fw-2")))
+        val ref = import(registry, raw)
+
+        val selected = registry.select(ProfileSelection.Pinned(ref), registry.status().catalogRevision)
+
+        assertTrue(selected is ProfileMutation.Rejected)
+        assertTrue((selected as ProfileMutation.Rejected).issues.any { it.path == "selection.match" })
+        assertEquals(ProfileSelection.Auto, registry.status().selection)
+    }
+
+    @Test fun `imported profile cannot exclusively grab a classified touchscreen`() {
+        val touchscreenNode = "/dev/input/event7"
+        val registry = registry(
+            mapOf("generic.yaml" to genericYaml()),
+            evdevInspector = EvdevDeviceInspector { node -> node == touchscreenNode },
+        )
+        val document = testProfileDocument(facts = facts).copy(
+            requires = ProfileRequirements(drivers = setOf("screen.brightness-zero", "input.evdev")),
+            input = ProfileInput(listOf(ProfileEvdevButton(touchscreenNode, 116, true, "KEYCODE_POWER"))),
+        )
+        val ref = import(registry, ProfileYaml.serialize(document))
+
+        val selected = registry.select(ProfileSelection.Pinned(ref), registry.status().catalogRevision)
+
+        assertTrue(selected is ProfileMutation.Rejected)
+        assertTrue((selected as ProfileMutation.Rejected).issues.any { it.path == "input.evdev_buttons[0].grab" })
+    }
+
+    @Test fun `linux input capability bitmap identifies touchscreen class conservatively`() {
+        assertEquals(true, SysfsEvdevDeviceInspector.capabilitiesAreTouchscreen("3", "400 0 0 0 0 0"))
+        assertEquals(true, SysfsEvdevDeviceInspector.capabilitiesAreTouchscreen("3", "400 0 0 0 0 0 0 0 0 0 0"))
+        assertEquals(false, SysfsEvdevDeviceInspector.capabilitiesAreTouchscreen("3", "0"))
+        assertEquals(false, SysfsEvdevDeviceInspector.capabilitiesAreTouchscreen("0", "400 0 0 0 0 0"))
+        assertNull(SysfsEvdevDeviceInspector.capabilitiesAreTouchscreen("not-hex", "400 0 0 0 0 0"))
+    }
+
+    @Test fun `unclassified imported evdev target preserves existing convenience workflow`() {
+        val registry = registry(
+            mapOf("generic.yaml" to genericYaml()),
+            evdevInspector = EvdevDeviceInspector { null },
+        )
+        val document = testProfileDocument(facts = facts).copy(
+            requires = ProfileRequirements(drivers = setOf("screen.brightness-zero", "input.evdev")),
+            input = ProfileInput(listOf(ProfileEvdevButton("/dev/input/event7", 116, true, "KEYCODE_POWER"))),
+        )
+        val ref = import(registry, ProfileYaml.serialize(document))
+
+        assertTrue(registry.select(ProfileSelection.Pinned(ref), registry.status().catalogRevision) is ProfileMutation.Success)
+    }
+
+    @Test fun `author maturity is distinct from bundled trust provenance`() {
+        val verified = testProfileDocument(facts = facts).copy(
+            metadata = testProfileDocument(facts = facts).metadata.copy(maturity = ProfileMaturity.VERIFIED),
+        )
+        val bundled = registry(mapOf("generic.yaml" to genericYaml(), "verified.yaml" to ProfileYaml.serialize(verified)))
+        val importedOnly = registry(mapOf("generic.yaml" to genericYaml()))
+        val importedRef = import(importedOnly, ProfileYaml.serialize(verified.copy(id = "community.example.imported")))
+
+        assertTrue(bundled.list().single { it.ref.id == verified.id }.trustedProvenance)
+        val imported = importedOnly.list().single { it.ref == importedRef }
+        assertEquals(ProfileMaturity.VERIFIED, imported.maturity)
+        assertFalse(imported.trustedProvenance)
+    }
+
+    @Test fun `soc facts and navigation links cross the summary and runtime boundaries unchanged`() {
+        val baseline = testProfileDocument(facts = facts)
+        val document = baseline.copy(
+            soc = ProfileSoc("Rockchip RK3566", 2020, listOf(ProfileCpuCoreCluster("Arm Cortex-A55", 4))),
+            metadata = baseline.metadata.copy(
+                links = listOf(ProfileLink("Product page", "https://vendor.example/panel")),
+            ),
+        )
+        val registry = registry(mapOf("generic.yaml" to genericYaml()))
+        val ref = import(registry, ProfileYaml.serialize(document))
+
+        val summary = registry.list().single { it.ref == ref }
+        assertEquals(document.soc, summary.soc)
+        assertEquals(
+            listOf(
+                ProfileLink("Panel details", requireNotNull(document.metadata.source)),
+                ProfileLink("Product page", "https://vendor.example/panel"),
+            ),
+            summary.links,
+        )
+
+        assertTrue(registry.select(ProfileSelection.Pinned(ref), registry.status().catalogRevision) is ProfileMutation.Success)
+        val runtime = registry.resolveForStartup().profile
+        assertEquals(document.soc, runtime.soc)
+        assertEquals(summary.links, runtime.profileLinks)
+    }
+
+    @Test fun `incompatible preview summaries never expose navigation links`() {
+        val baseline = testProfileDocument(facts = facts)
+        val invalid = baseline.copy(
+            metadata = baseline.metadata.copy(
+                links = listOf(ProfileLink("Misleading\u202eelpmaxe", "https://vendor.example/panel")),
+            ),
+        )
+        val registry = registry(mapOf("generic.yaml" to genericYaml()))
+
+        val preview = registry.preview(ProfileYaml.serialize(invalid))
+
+        assertFalse(preview.compatible)
+        assertTrue(preview.issues.any { it.path == "metadata.links[0].label" })
+        assertTrue(requireNotNull(preview.summary).links.isEmpty())
+    }
+
+    @Test fun `imported package recommendation cannot enter default privileged tame set`() {
+        val packageIntent = ProfilePackageIntent(
+            packageName = "com.vendor.panel",
+            desiredState = ProfilePackageDesiredState.DISABLED,
+            importance = ProfileProvisioningImportance.RECOMMENDED,
+        )
+        val registry = registry(mapOf("generic.yaml" to genericYaml()))
+        val document = testProfileDocument(facts = facts).copy(
+            provisioning = testProfileDocument(facts = facts).provisioning.copy(packages = listOf(packageIntent)),
+        )
+        val ref = import(registry, ProfileYaml.serialize(document))
+        registry.select(ProfileSelection.Pinned(ref), registry.status().catalogRevision)
+
+        val resolved = registry.resolveForStartup().profile
+
+        assertTrue(resolved.tameVendorCandidates.any { it.pkg == "com.vendor.panel" })
+        assertTrue(resolved.tameVendorCandidates.none { it.defaultTame })
+    }
+
     @Test fun `preview token is one shot and bound to exact bytes`() {
         val registry = registry(mapOf("generic.yaml" to genericYaml()))
         val first = ProfileYaml.serialize(testProfileDocument(facts = facts))
-        val second = ProfileYaml.serialize(testProfileDocument(version = "1.0.1", facts = facts))
+        val second = first + "# semantically equivalent but byte-distinct revision\n"
         val preview = registry.preview(first)
 
+        assertEquals(ProfileYaml.parse(first).document, ProfileYaml.parse(second).document)
+        assertFalse(ProfileYaml.sha256(first) == ProfileYaml.sha256(second))
+        assertEquals(ProfileYaml.sha256(first), preview.contentSha256)
         assertTrue(registry.importProfile(second, preview.previewToken!!) is ProfileMutation.Rejected)
         assertTrue(registry.importProfile(first, preview.previewToken) is ProfileMutation.Rejected)
     }
 
-    @Test fun `same id can hold multiple immutable content revisions`() {
+    @Test fun `same id can hold semantically equivalent immutable raw byte revisions`() {
         val registry = registry(mapOf("generic.yaml" to genericYaml()))
-        val first = import(registry, ProfileYaml.serialize(testProfileDocument(version = "1.0.0", facts = facts)))
-        val second = import(registry, ProfileYaml.serialize(testProfileDocument(version = "1.0.1", facts = facts)))
+        val firstRaw = ProfileYaml.serialize(testProfileDocument(version = "1.0.0", facts = facts))
+        val secondRaw = firstRaw + "# second immutable raw-byte revision\n"
+        assertEquals(ProfileYaml.parse(firstRaw).document, ProfileYaml.parse(secondRaw).document)
+        val first = import(registry, firstRaw)
+        val second = import(registry, secondRaw)
 
         assertFalse(first == second)
+        assertEquals(ProfileYaml.sha256(firstRaw), first.revision)
+        assertEquals(ProfileYaml.sha256(secondRaw), second.revision)
         assertEquals(2, registry.list().count { it.origin == ProfileOrigin.IMPORTED })
-        assertNotNull(registry.exportProfile(first))
-        assertNotNull(registry.exportProfile(second))
+        assertEquals(firstRaw, registry.exportProfile(first))
+        assertEquals(secondRaw, registry.exportProfile(second))
     }
 
     @Test fun `failed catalog revision reservation cannot publish an imported file`() {
@@ -361,14 +500,16 @@ class RuntimeProfileRegistryTest {
         assertTrue(registry.status().issues.any { "catalog count quota" in it.message })
     }
 
-    @Test fun `missing or corrupt bundled generic uses compiled emergency fallback`() {
+    @Test fun `missing or corrupt bundled generic uses capability empty emergency fallback`() {
         val missing = registry(emptyMap())
         val corrupt = registry(mapOf("generic.yaml" to "schema: ["))
+        val missingResolved = missing.resolveForStartup()
+        val corruptResolved = corrupt.resolveForStartup()
 
-        assertSame(Generic, missing.resolveForStartup().profile)
-        assertSame(Generic, corrupt.resolveForStartup().profile)
-        assertTrue(missing.status().issues.any { "compiled emergency" in it.message })
-        assertTrue(corrupt.status().issues.any { "compiled emergency" in it.message })
+        assertEmergency(missingResolved)
+        assertEmergency(corruptResolved)
+        assertTrue(missing.status().issues.any { "emergency" in it.message.lowercase() })
+        assertTrue(corrupt.status().issues.any { "emergency" in it.message.lowercase() })
     }
 
     @Test fun `startup does not read inactive imported revisions and admin list hydrates their issues`() {
@@ -380,7 +521,7 @@ class RuntimeProfileRegistryTest {
         }
         val reads = mutableListOf<File>()
         val registry = registry(mapOf("generic.yaml" to genericYaml())) { file ->
-            reads += file
+            reads.add(file)
             file.readText()
         }
 
@@ -414,7 +555,7 @@ class RuntimeProfileRegistryTest {
         )
         val reads = mutableListOf<File>()
         val registry = registry(mapOf("generic.yaml" to genericYaml())) { file ->
-            reads += file
+            reads.add(file)
             file.readText()
         }
 
@@ -441,7 +582,7 @@ class RuntimeProfileRegistryTest {
         )
         val reads = mutableListOf<File>()
         val registry = registry(mapOf("generic.yaml" to genericYaml())) { file ->
-            reads += file
+            reads.add(file)
             file.readText()
         }
 
@@ -740,6 +881,7 @@ class RuntimeProfileRegistryTest {
     private fun registry(
         bundled: Map<String, String>,
         revisionPersistence: ProfileRevisionPersistence = FileProfileRevisionPersistence,
+        evdevInspector: EvdevDeviceInspector = EvdevDeviceInspector { null },
         catalogFileReader: ((File) -> String)? = null,
     ) = RuntimeProfileRegistry(
         filesDir = directory,
@@ -750,9 +892,65 @@ class RuntimeProfileRegistryTest {
         clock = { 1000L },
         catalogFileReader = catalogFileReader,
         revisionPersistence = revisionPersistence,
+        evdevInspector = evdevInspector,
     )
 
     private fun genericYaml() = ProfileYaml.serialize(testProfileDocument(id = "generic", fallback = true))
+
+    private fun assertCapabilityEmpty(profile: DeviceProfile) {
+        assertEquals("generic", profile.id)
+        assertEquals(ProfileYaml.sha256("capability-empty-emergency-v1"), profile.revision)
+        assertNull(profile.soc)
+        assertTrue(profile.profileLinks.isEmpty())
+        assertEquals(SuForm.NONE, profile.suForm)
+        assertFalse(profile.appCanSu)
+        assertFalse(profile.usesDaemon)
+        assertFalse(profile.hasRecents)
+        assertEquals(LedMechanism.NONE, profile.ledMechanism)
+        assertEquals(ScreenOff.BRIGHTNESS_ZERO, profile.screenOff)
+        assertFalse(profile.hasButtonBacklight)
+        assertNull(profile.zigbeeGatewayDir)
+        assertNull(profile.relayBase)
+        assertTrue(profile.relayBaseFallbacks.isEmpty())
+        assertNull(profile.buttonLedGpioBase)
+        assertNull(profile.proximityTech)
+        assertNull(profile.proximityGpio)
+        assertNull(profile.lightTech)
+        assertFalse(profile.hasCht8305)
+        assertEquals(0f, profile.roomTempOffsetC)
+        assertNull(profile.manufacturer)
+        assertNull(profile.model)
+        assertTrue(profile.evdevButtons.isEmpty())
+        assertNull(profile.cpuGovernors)
+        assertNull(profile.recommendedDensity)
+        assertNull(profile.recommendedFontScale)
+        assertNull(profile.physicalPpi)
+        assertNull(profile.recommendedWebView)
+        assertNull(profile.companionMaxVersion)
+        assertTrue(profile.tameVendorCandidates.isEmpty())
+        assertEquals(ProvisioningIntent.EMPTY, profile.provisioning)
+    }
+
+    private fun assertEmergency(resolved: ResolvedProfile) {
+        assertCapabilityEmpty(resolved.profile)
+        val expectedRef = ProfileRef("generic", ProfileYaml.sha256("capability-empty-emergency-v1"))
+        assertEquals(expectedRef, resolved.summary.ref)
+        assertEquals(resolved.profile.id, resolved.summary.ref.id)
+        assertEquals(resolved.profile.revision, resolved.summary.ref.revision)
+        assertEquals("Emergency safe profile", resolved.summary.displayName)
+        assertEquals(ProfileOrigin.BUNDLED, resolved.summary.origin)
+        assertEquals(0, resolved.summary.schema)
+        assertNull(resolved.summary.minCoreVersion)
+        assertTrue(resolved.summary.matchesThisDevice)
+        assertTrue(resolved.summary.active)
+        assertTrue(resolved.summary.selected)
+        assertEquals(ShizukuRecommendation.NONE, resolved.summary.shizukuRecommendation)
+        assertTrue(resolved.summary.risks.isEmpty())
+        assertEquals("capability-empty-emergency-v1", resolved.summary.contentVersion)
+        assertEquals(ProfileMaturity.DRAFT, resolved.summary.maturity)
+        assertFalse(resolved.summary.trustedProvenance)
+        assertTrue(resolved.summary.compatible)
+    }
 
     private fun import(registry: RuntimeProfileRegistry, raw: String): ProfileRef {
         val preview = registry.preview(raw)

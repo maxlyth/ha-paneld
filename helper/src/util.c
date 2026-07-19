@@ -9,7 +9,7 @@
 int clamp(int v) { return v < 0 ? 0 : (v > 255 ? 255 : v); }
 
 int write_node(const char *path, const char *val) {
-    int fd = open(path, O_WRONLY);
+    int fd = open(path, O_WRONLY | O_CLOEXEC);
     if (fd < 0) return -1;
     ssize_t n = write(fd, val, strlen(val));
     close(fd);
@@ -41,7 +41,7 @@ int reply(int fd, const char *s) {
 
 void first_line(const char *path, char *dst, size_t dstsz) {
     dst[0] = '\0';
-    int fd = open(path, O_RDONLY);
+    int fd = open(path, O_RDONLY | O_CLOEXEC);
     if (fd < 0) return;
     ssize_t n = read(fd, dst, dstsz - 1);
     close(fd);
@@ -51,7 +51,7 @@ void first_line(const char *path, char *dst, size_t dstsz) {
 }
 
 int cat_to(int out, const char *path) {
-    int fd = open(path, O_RDONLY);
+    int fd = open(path, O_RDONLY | O_CLOEXEC);
     if (fd < 0) return -1;
     char b[4096];
     int result = 0;
@@ -69,7 +69,7 @@ int cat_to(int out, const char *path) {
     return result;
 }
 
-// Android package name chars only — defends the sysexec_run() command strings against injection.
+// Android package name chars only — rejects malformed targets before structural argv execution.
 int valid_pkg(const char *s) {
     if (!*s) return 0;
     for (const char *p = s; *p; p++)
@@ -97,7 +97,7 @@ int valid_num(const char *s) {
 }
 
 // Decimal number (e.g. font-scale arg "0.85"/"1.15") — digits with at most one dot, at least one
-// digit. No sign/exponent/whitespace, so it's safe to interpolate into a sysexec_run() shell string.
+// digit. No sign/exponent/whitespace; the validated value remains a single argv field.
 int valid_decimal(const char *s) {
     if (!*s) return 0;
     int dot = 0, digit = 0;

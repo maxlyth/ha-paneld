@@ -18,9 +18,55 @@
     viewGeneration: 0,
   };
   var suppressEditorChange = false;
+  var PROFILE_EDITOR_MIN_LINES = 12;
+  var profileLayoutFrame = 0;
 
   function byId(id) { return document.getElementById(id); }
   function string(value) { return value == null ? "" : String(value); }
+  function fitProfileWorkspace() {
+    profileLayoutFrame = 0;
+    var workspace = document.querySelector(".profile-workspace");
+    var editor = byId("profile-editor");
+    var editorHead = document.querySelector(".profile-editor-head");
+    var inspector = document.querySelector(".profile-inspector");
+    var inspectorHead = document.querySelector(".profile-inspector-head");
+    var inspectorBody = document.querySelector(".profile-inspector-body");
+    if (!workspace || !editor || !editorHead || !inspector || !inspectorHead || !inspectorBody) return;
+    if (window.matchMedia && window.matchMedia("(max-width:857px)").matches) {
+      workspace.style.removeProperty("height");
+      return;
+    }
+    var content = editor.querySelector(".cm-content") || byId("profile-source-fallback") || editor;
+    var style = window.getComputedStyle(content);
+    var fontSize = parseFloat(style.fontSize) || 13;
+    var lineHeight = parseFloat(style.lineHeight);
+    if (!isFinite(lineHeight)) lineHeight = fontSize * 1.45;
+    var minEditorHeight = Math.ceil(PROFILE_EDITOR_MIN_LINES * lineHeight);
+    var rowGap = parseFloat(window.getComputedStyle(workspace).rowGap) || 0;
+    var minInspectorHeight = Math.ceil(inspectorHead.getBoundingClientRect().height) +
+      Math.ceil(inspectorBody.scrollHeight) + 2;
+    var minWorkspaceHeight = Math.ceil(editorHead.getBoundingClientRect().height) + minEditorHeight +
+      minInspectorHeight + rowGap + 2;
+    var documentTop = workspace.getBoundingClientRect().top + window.scrollY;
+    var wrap = workspace.closest(".wrap");
+    var bottomInset = wrap ? parseFloat(window.getComputedStyle(wrap).paddingBottom) || 0 : 0;
+    var availableHeight = Math.floor(window.innerHeight - documentTop - Math.max(12, bottomInset));
+    workspace.style.height = Math.max(minWorkspaceHeight, availableHeight) + "px";
+  }
+  function scheduleProfileLayout() {
+    if (profileLayoutFrame) window.cancelAnimationFrame(profileLayoutFrame);
+    profileLayoutFrame = window.requestAnimationFrame(fitProfileWorkspace);
+  }
+  function bindProfileLayout() {
+    window.addEventListener("resize", scheduleProfileLayout);
+    if (window.ResizeObserver) {
+      var observer = new ResizeObserver(scheduleProfileLayout);
+      [".profile-toolbar", ".profile-badges", ".profile-links", ".profile-status", ".profile-inspector-body"].forEach(function (selector) {
+        var node = document.querySelector(selector); if (node) observer.observe(node);
+      });
+    }
+    scheduleProfileLayout();
+  }
   function refKey(ref) { return ref ? string(ref.id) + "@" + string(ref.revision) : ""; }
   function selectedSummary() {
     var key = refKey(model.selected);
@@ -47,11 +93,17 @@
     error.body = body;
     return error;
   }
+  function approvalMessage(body) {
+    return string(body && body.message) || "Approve this request on the panel, then retry it.";
+  }
   function jsonFetch(url, options) {
     return fetch(url, options).then(function (response) {
       return response.text().then(function (text) {
         var body = {};
         try { body = text ? JSON.parse(text) : {}; } catch (_) { body = { message: text }; }
+        // Profile selection normally succeeds with HTTP 202 too. The structured error field is what
+        // distinguishes a staged restart from a Hardened-mode physical approval challenge.
+        if (response.status === 202 && body && body.error === "approval-required") throw httpError(response, body);
         if (!response.ok) throw httpError(response, body);
         return body;
       });
@@ -100,6 +152,7 @@
       getValue: function () { return fallback.value; },
       setValue: function (value) { fallback.value = string(value); },
       setReadOnly: function (value) { fallback.readOnly = !!value; },
+      setSchema: function () {},
       setDiagnostics: function () {},
       focus: function () { fallback.focus(); },
     };
@@ -161,6 +214,43 @@
     item.textContent = label;
     return item;
   }
+  function profileLinkLabelSafe(label) {
+    return !/[\u00ad\u061c\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]/i.test(label);
+  }
+  function renderProfileLinks(summary) {
+    var root = byId("profile-links");
+    if (!root) return;
+    root.textContent = "";
+    root.hidden = true;
+    if (!summary || summary.compatible === false) return;
+    (summary.links || []).forEach(function (candidate) {
+      var raw = string(candidate && candidate.url);
+      var label = string(candidate && candidate.label || "Reference");
+      var parsed;
+      if (!raw || raw.length > 500 || !profileLinkLabelSafe(label)) return;
+      try { parsed = new URL(raw); } catch (_) { return; }
+      if (parsed.protocol !== "https:" || !parsed.hostname || parsed.username || parsed.password) return;
+      var link = document.createElement("a");
+      link.className = "profile-link";
+      link.href = parsed.href;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.referrerPolicy = "no-referrer";
+      var labelNode = document.createElement("bdi");
+      labelNode.className = "profile-link-label";
+      labelNode.dir = "auto";
+      labelNode.textContent = label;
+      var hostNode = document.createElement("bdi");
+      hostNode.className = "profile-link-host";
+      hostNode.dir = "ltr";
+      hostNode.textContent = parsed.hostname;
+      link.appendChild(labelNode);
+      link.appendChild(document.createTextNode(" · "));
+      link.appendChild(hostNode);
+      root.appendChild(link);
+    });
+    root.hidden = !root.childNodes.length;
+  }
   function renderBadges() {
     var root = byId("profile-badges");
     if (!root) return;
@@ -168,21 +258,25 @@
     var summary = reviewedSummary();
     var guidance = byId("profile-shizuku-guidance");
     if (guidance) guidance.hidden = true;
+    renderProfileLinks(summary);
     if (!summary) return;
     root.appendChild(badge(summary.origin === "bundled" ? "Bundled" : "Local", summary.origin === "bundled" ? "bundled" : ""));
     if (summary.maturity) {
       var maturity = string(summary.maturity).toLowerCase();
-      root.appendChild(badge(maturity === "verified" ? "✓ Verified" : maturity, maturity === "verified" ? "maturity verified" : "maturity"));
+      var trustedVerified = maturity === "verified" && summary.trusted_provenance === true;
+      var maturityLabel = trustedVerified ? "✓ Verified" : (maturity === "verified" ? "Author: verified" : maturity);
+      root.appendChild(badge(maturityLabel, trustedVerified ? "maturity verified" : "maturity"));
     }
     if (summary.compatible === false) root.appendChild(badge("Incompatible", "risk"));
+    if (summary.matches_this_device === false) root.appendChild(badge("Does not match this device", "risk"));
     if (summary.active) root.appendChild(badge("Active", "active"));
     if (summary.selected && !summary.active) root.appendChild(badge("Selected", "pending"));
     if (summary.last_known_good) root.appendChild(badge("Last known good", "lkg"));
     var shizuku = string(summary.shizuku_recommendation).toLowerCase();
-    if (shizuku === "optional" || shizuku === "recommended") {
+    if (shizuku === "recommended") {
       root.appendChild(badge("Shizuku: " + shizuku, "shizuku"));
     }
-    // Optional Shizuku support is informational only; reserve the callout for profiles that explicitly require it.
+    // Keep exceptional access guidance out of ordinary profile summaries.
     if (guidance) guidance.hidden = shizuku !== "recommended";
     (summary.risks || []).forEach(function (risk) { root.appendChild(badge(string(risk).replace(/_/g, " "), "warning")); });
     var activation = model.status.activation || {};
@@ -285,7 +379,9 @@
     entries.forEach(function (fact) {
       var row = document.createElement("div"); row.className = "profile-diff-row";
       var key = document.createElement("div"); key.className = "profile-diff-path"; key.textContent = reportLabel(string(fact.key || fact.path || "fact"));
-      var value = document.createElement("div"); value.className = "profile-diff-value"; value.textContent = string(fact.status || "unknown") + (fact.value == null ? "" : " · " + string(fact.value));
+      var value = document.createElement("div"); value.className = "profile-diff-value";
+      var status = string(fact.status || "unknown");
+      value.textContent = fact.value == null ? status : (status === "observed" ? string(fact.value) : status + " · " + string(fact.value));
       row.appendChild(key); row.appendChild(value); root.appendChild(row);
     });
   }
@@ -301,7 +397,7 @@
     var compare = byId("profile-compare"); if (compare) compare.disabled = !model.source || model.loading;
     var edit = byId("profile-edit"); if (edit) edit.disabled = !summary || !model.sourceLoaded || model.editable;
     var fork = byId("profile-fork"); if (fork) fork.disabled = !summary || !model.sourceLoaded || model.editable;
-    var activate = byId("profile-activate"); if (activate) activate.disabled = !summary || !model.sourceLoaded || summary.compatible === false || summary.active || dirty || model.loading;
+    var activate = byId("profile-activate"); if (activate) activate.disabled = !summary || !model.sourceLoaded || summary.compatible === false || summary.matches_this_device === false || summary.active || dirty || model.loading;
     var automatic = byId("profile-auto"); if (automatic) automatic.disabled = dirty || model.loading || model.status.selection && model.status.selection.mode === "auto";
     var remove = byId("profile-delete"); if (remove) remove.disabled = !summary || summary.origin === "bundled" || summary.active || summary.selected || summary.last_known_good || dirty || model.loading;
     var rollback = byId("profile-rollback"); if (rollback) rollback.disabled = !(model.status.rollback_ref || model.status.rollback_auto) || dirty || model.loading;
@@ -364,7 +460,13 @@
       renderIssues(result.issues || []);
       renderDiff(result.diff_from_active || []);
       renderReport(result.report || {});
-      setStatus(result.compatible ? "Valid profile · sha256:" + string(result.content_sha256).slice(0, 12) : "Profile is not compatible; fix the reported issues.", result.compatible ? "ok" : "error");
+      var matchesDevice = !result.summary || result.summary.matches_this_device !== false;
+      setStatus(result.compatible
+        ? (matchesDevice
+          ? "Valid profile · sha256:" + string(result.content_sha256).slice(0, 12)
+          : "Valid profile, but it is intended for different hardware. You can save it here, but you cannot activate it on this panel.")
+        : "Profile is not compatible; fix the reported issues.",
+      result.compatible && matchesDevice ? "ok" : "error");
       if (openCompare) openModal("Compare with active profile", diffText(result.diff_from_active || []), null);
       return result;
     }).catch(function (error) {
@@ -466,19 +568,36 @@
     document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(url);
   }
 
-  function openModal(title, detail, onConfirm, confirmLabel) {
+  function openModal(title, detail, onConfirm, confirmLabel, hardenedApproval) {
     var modal = byId("profile-modal");
     byId("profile-modal-title").textContent = title;
-    byId("profile-modal-detail").textContent = detail;
+    byId("profile-modal-detail").textContent = detail + (hardenedApproval
+      ? "\n\nShielded action: when Hardened mode is enabled, approve this request on the physical panel."
+      : "");
     var confirm = byId("profile-modal-confirm");
     confirm.textContent = confirmLabel || "Confirm";
     confirm.hidden = !onConfirm;
+    if (hardenedApproval) {
+      confirm.setAttribute("data-hardened-approval", "");
+      confirm.setAttribute("aria-describedby", "hardened-approval-description");
+      confirm.setAttribute("title", "Requires physical on-panel approval for this action when Hardened mode is enabled.");
+    } else {
+      confirm.removeAttribute("data-hardened-approval");
+      confirm.removeAttribute("aria-describedby");
+      confirm.removeAttribute("title");
+    }
     confirm.onclick = function () { closeModal(); if (onConfirm) onConfirm(); };
     modal.hidden = false; byId("profile-modal-cancel").focus();
   }
   function closeModal() { byId("profile-modal").hidden = true; }
   function activate(ref, action) {
     var summary = ref ? summaryForRef(ref) : null;
+    // Imported revisions are allowed to be stored inertly for catalog transfer, but a known
+    // wrong-device revision must never reach the Hardened approval endpoint from this page.
+    if (summary && summary.matches_this_device === false) {
+      setStatus("Activation blocked: this imported profile does not match this device's immutable build identity.", "error");
+      return;
+    }
     var risks = summary && summary.risks || [];
     var detail = [
       ref ? "Profile: " + string(summary && summary.display_name || ref.id) : "Profile: automatic device matching",
@@ -496,9 +615,14 @@
         setStatus(result.message || "Selection saved; waiting for the panel service to restart.", "ok");
         if (result.restart_required) pollAfterRestart(ref, 0); else loadCatalog(ref);
       }).catch(function (error) {
-        setStatus(error.status === 409 ? "The profile catalog changed in another tab. Reload and confirm again." : "Activation failed: " + error.message, "error");
+        if (error.body && error.body.error === "approval-required") setStatus(approvalMessage(error.body));
+        else {
+          var issue = error.body && error.body.issues && error.body.issues[0];
+          var reason = issue && (issue.message || issue.code) || error.message;
+          setStatus(error.status === 409 ? "The profile catalog changed in another tab. Reload and confirm again." : "Activation failed: " + reason, "error");
+        }
       }).finally(function () { model.loading = false; updateActions(); });
-    }, action === "rollback" ? "Confirm rollback" : "Confirm and restart");
+    }, action === "rollback" ? "Confirm rollback" : "Confirm and restart", true);
   }
   function pollAfterRestart(ref, attempt) {
     if (attempt > 60) { setStatus("The restart is taking longer than expected. Reload to check the active profile.", "error"); return; }
@@ -559,10 +683,11 @@
     });
   }
 
-  initEditor(); bind(); renderCatalogIssues([]); renderIssues([]); renderDiff([]); renderReport({});
+  initEditor(); bind(); bindProfileLayout(); renderCatalogIssues([]); renderIssues([]); renderDiff([]); renderReport({});
   jsonFetch(API + "/schema").then(function (schema) {
     var advertised = Number(schema.max_bytes);
     if (advertised > 0) model.maxBytes = Math.min(advertised, 256 * 1024);
+    if (model.editor && typeof model.editor.setSchema === "function") model.editor.setSchema(schema.fields || []);
   }).catch(function () {});
   loadReport(); loadCatalog();
 }());

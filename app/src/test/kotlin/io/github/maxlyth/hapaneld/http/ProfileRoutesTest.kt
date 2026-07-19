@@ -14,6 +14,7 @@ import io.github.maxlyth.hapaneld.device.profile.ProfileDriverKind
 import io.github.maxlyth.hapaneld.device.profile.ProfileFieldDescriptor
 import io.github.maxlyth.hapaneld.device.profile.ProfileIssue
 import io.github.maxlyth.hapaneld.device.profile.ProfileIssueSeverity
+import io.github.maxlyth.hapaneld.device.profile.ProfileLink
 import io.github.maxlyth.hapaneld.device.profile.ProfileMutation
 import io.github.maxlyth.hapaneld.device.profile.ProfileOrigin
 import io.github.maxlyth.hapaneld.device.profile.ProfilePreview
@@ -23,6 +24,8 @@ import io.github.maxlyth.hapaneld.device.profile.ProfileSchemaDescriptor
 import io.github.maxlyth.hapaneld.device.profile.ProfileSelection
 import io.github.maxlyth.hapaneld.device.profile.ProfileStatus
 import io.github.maxlyth.hapaneld.device.profile.ProfileSummary
+import io.github.maxlyth.hapaneld.device.profile.ProfileSoc
+import io.github.maxlyth.hapaneld.device.profile.ProfileCpuCoreCluster
 import io.github.maxlyth.hapaneld.device.profile.ShizukuRecommendation
 import io.ktor.client.request.get
 import io.ktor.client.request.header
@@ -64,6 +67,9 @@ class ProfileRoutesTest {
         assertTrue(bundled.getBoolean("last_known_good"))
         assertEquals("0.1.0", bundled.getString("content_version"))
         assertEquals("draft", bundled.getString("maturity"))
+        assertEquals("Test SoC", local.getJSONObject("soc").getString("model"))
+        assertEquals("Arm Cortex-A55", local.getJSONObject("soc").getJSONArray("cpu_cores").getJSONObject(0).getString("architecture"))
+        assertEquals("Product page", local.getJSONArray("links").getJSONObject(0).getString("label"))
         assertFalse(response.bodyAsText().contains("consent", ignoreCase = true))
         assertFalse(response.bodyAsText().contains("readiness", ignoreCase = true))
 
@@ -140,6 +146,23 @@ class ProfileRoutesTest {
     }
 
     @Test
+    fun incompatiblePreviewProjectionSuppressesNavigationLinks() = testApplication {
+        val admin = FakeProfileAdmin().apply { previewCompatible = false }
+        application { routing { route("/api/v1") { profileRoutes(ProfileRouteDependencies(admin)) } } }
+
+        val response = client.post("/api/v1/profiles/preview") {
+            contentType(ContentType.parse("application/yaml"))
+            setBody("schema: 2\nid: invalid.test\n")
+        }
+
+        assertEquals(HttpStatusCode.OK, response.status)
+        val preview = JSONObject(response.bodyAsText())
+        assertFalse(preview.getBoolean("compatible"))
+        assertFalse(preview.getJSONObject("summary").getBoolean("compatible"))
+        assertEquals(0, preview.getJSONObject("summary").getJSONArray("links").length())
+    }
+
+    @Test
     fun activationRollbackAndDeleteRequireConfirmationAndCatalogCompareAndSet() = testApplication {
         val admin = FakeProfileAdmin()
         var restarts = 0
@@ -181,6 +204,31 @@ class ProfileRoutesTest {
         val delete = deleteWithoutConfirmation.dropLast(1) + ",\"confirm\":true}"
         assertEquals(HttpStatusCode.OK, postJson("/api/v1/profiles/delete", delete).status)
         assertEquals(admin.local.ref, admin.deleted)
+    }
+
+    @Test
+    fun activationApprovalSummaryNamesPinnedAndRollbackTargets() = testApplication {
+        val admin = FakeProfileAdmin()
+        val summaries = mutableListOf<String>()
+        application {
+            routing {
+                route("/api/v1") {
+                    profileRoutes(ProfileRouteDependencies(admin, authorize = { _, _, _, summary ->
+                        summaries += summary
+                        true
+                    }))
+                }
+            }
+        }
+        val select = """{"id":"${admin.local.ref.id}","revision":"${admin.local.ref.revision}","expected_catalog_revision":3,"confirm":true}"""
+        assertEquals(HttpStatusCode.Accepted, postJson("/api/v1/profiles/select", select).status)
+        val rollback = """{"expected_catalog_revision":3,"confirm":true}"""
+        assertEquals(HttpStatusCode.Accepted, postJson("/api/v1/profiles/rollback", rollback).status)
+
+        assertTrue(summaries[0].contains(admin.local.ref.id))
+        assertTrue(summaries[0].contains(admin.local.ref.revision.take(16)))
+        assertTrue(summaries[1].contains(admin.bundled.ref.id))
+        assertTrue(summaries[1].contains(admin.bundled.ref.revision.take(16)))
     }
 
     @Test
@@ -298,6 +346,7 @@ class ProfileRoutesTest {
         var importedYaml: String? = null
         val selections = mutableListOf<ProfileSelection>()
         var deleted: ProfileRef? = null
+        var previewCompatible = true
         private var profiles = mutableListOf(bundled, local)
 
         override fun schema() = ProfileSchemaDescriptor(
@@ -329,10 +378,13 @@ class ProfileRoutesTest {
             previewToken = "preview-token",
             contentSha256 = sha256(rawYaml),
             expiresAtEpochMs = 999,
-            summary = local.copy(ref = ProfileRef("imported.test", sha256(rawYaml))),
+            summary = local.copy(
+                ref = ProfileRef("imported.test", sha256(rawYaml)),
+                compatible = previewCompatible,
+            ),
             issues = emptyList(),
             diffFromActive = listOf(ProfileDiff("identity.id", "generic", "imported.test")),
-            compatible = true,
+            compatible = previewCompatible,
         )
 
         override fun importProfile(rawYaml: String, previewToken: String): ProfileMutation {
@@ -390,6 +442,13 @@ class ProfileRoutesTest {
             shizukuRecommendation = if (origin == ProfileOrigin.IMPORTED) ShizukuRecommendation.RECOMMENDED else ShizukuRecommendation.NONE,
             risks = if (origin == ProfileOrigin.IMPORTED) setOf(ProfileRisk.ROOT_PATHS) else emptySet(),
             contentVersion = "0.1.0",
+            soc = ProfileSoc("Test SoC", 2020, listOf(ProfileCpuCoreCluster("Arm Cortex-A55", 4)))
+                .takeIf { origin == ProfileOrigin.IMPORTED },
+            links = if (origin == ProfileOrigin.IMPORTED) {
+                listOf(ProfileLink("Product page", "https://vendor.example/panel"))
+            } else {
+                emptyList()
+            },
         )
     }
 

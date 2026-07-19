@@ -1,6 +1,10 @@
 package io.github.maxlyth.hapaneld
 
 import io.github.maxlyth.hapaneld.util.ConflatedWorker
+import io.github.maxlyth.hapaneld.util.MonotonicDeadline
+import io.github.maxlyth.hapaneld.util.RetirableMutationGate
+import io.github.maxlyth.hapaneld.util.interruptAndJoin
+import io.github.maxlyth.hapaneld.util.shutdownNowAndAwait
 import io.github.maxlyth.hapaneld.metrics.FeatureCostOperation
 import java.util.Collections
 import java.util.concurrent.CountDownLatch
@@ -11,6 +15,36 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MqttLifecycleWorkerTest {
+    @Test fun lifecycleAdmissionClosesWithoutWaitingForAWedgedMutationLock() {
+        val gate = RetirableMutationGate()
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val worker = Thread {
+            gate.runIfOpen(Unit) {
+                entered.countDown()
+                while (release.count > 0L) {
+                    try {
+                        release.await()
+                    } catch (_: InterruptedException) {
+                        // Model an MQTT client call which cannot be cancelled after admission.
+                    }
+                }
+            }
+        }.apply { start() }
+        try {
+            assertTrue(entered.await(1, TimeUnit.SECONDS))
+            gate.closeAdmission()
+            assertFalse(gate.awaitDrained(MonotonicDeadline(0L)))
+            var lateRan = false
+            gate.runIfOpen(Unit) { lateRan = true }
+            assertFalse(lateRan)
+        } finally {
+            release.countDown()
+            worker.join(1_000L)
+        }
+        assertTrue(gate.awaitDrained(MonotonicDeadline(1_000L)))
+    }
+
     @Test fun reannouncementCostUsesAFixedNonIdentifyingOperation() {
         assertEquals("mqtt.discovery_reannounce", FeatureCostOperation.MQTT_DISCOVERY_REANNOUNCE.id)
     }
@@ -43,6 +77,53 @@ class MqttLifecycleWorkerTest {
         assertEquals(1, calls)
         assertTrue(dispatcher.closeAndJoin(1_000))
         assertEquals(ConflatedWorker.Admission.CLOSED, dispatcher.submit())
+    }
+
+    @Test fun interruptIgnoringAuthenticationActionFailsLifecycleDrainProof() {
+        val executor = java.util.concurrent.Executors.newSingleThreadExecutor()
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        try {
+            executor.execute {
+                entered.countDown()
+                while (release.count > 0L) {
+                    try {
+                        release.await()
+                    } catch (_: InterruptedException) {
+                        // Model a transport connect that cannot be cancelled by scheduler shutdown.
+                    }
+                }
+            }
+            assertTrue(entered.await(1, TimeUnit.SECONDS))
+            assertFalse(executor.shutdownNowAndAwait(MonotonicDeadline(25L)))
+        } finally {
+            release.countDown()
+            executor.shutdownNow()
+            executor.awaitTermination(1, TimeUnit.SECONDS)
+        }
+    }
+
+    @Test fun interruptIgnoringHaLinkWorkerFailsTheSharedRetirementProof() {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val worker = Thread {
+            entered.countDown()
+            while (release.count > 0L) {
+                try {
+                    release.await()
+                } catch (_: InterruptedException) {
+                    // Model a DNS/HTTP implementation that ignores interruption after admission.
+                }
+            }
+        }.apply { start() }
+        try {
+            assertTrue(entered.await(1, TimeUnit.SECONDS))
+            assertFalse(worker.interruptAndJoin(MonotonicDeadline(25L)))
+        } finally {
+            release.countDown()
+            worker.join(1_000L)
+        }
+        assertFalse(worker.isAlive)
     }
 
     @Test fun teardownCancelsAReannouncementStillInsideItsDebounceWindow() {

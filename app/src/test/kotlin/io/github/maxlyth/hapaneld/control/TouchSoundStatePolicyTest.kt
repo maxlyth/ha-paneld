@@ -7,9 +7,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TouchSoundStatePolicyTest {
-    @Test fun enablePersistsExactPriorStateBeforeRaisingStreamAndDisableRestoresIt() {
+    @Test fun enablePersistsExactPriorEffectsStateBeforeEnableAndDisableRestoresIt() {
         val events = mutableListOf<String>()
-        val prior = TouchSoundState(effectsSetting = null, systemStream = 0)
+        val prior = TouchSoundState(effectsSetting = null)
         val store = FakeStore(events)
         val hardware = FakeHardware(prior, events)
         val policy = TouchSoundStatePolicy(store, hardware)
@@ -17,7 +17,10 @@ class TouchSoundStatePolicyTest {
         assertTrue(policy.enable())
         assertTrue(policy.disable())
 
-        assertEquals(listOf("capture", "save:$prior", "enable", "restore:$prior", "disable-state"), events)
+        assertEquals(
+            listOf("retire-legacy-stream", "capture", "save:$prior", "enable", "restore:$prior", "disable-state"),
+            events,
+        )
         assertEquals(prior, hardware.restored)
         assertFalse(policy.isEnabled(true))
         assertNull(store.prior)
@@ -26,20 +29,34 @@ class TouchSoundStatePolicyTest {
     @Test fun persistenceFailurePreventsAnyAudioMutation() {
         val events = mutableListOf<String>()
         val store = FakeStore(events, saveSucceeds = false)
-        val hardware = FakeHardware(TouchSoundState(1, 4), events)
+        val hardware = FakeHardware(TouchSoundState(1), events)
 
         assertFalse(TouchSoundStatePolicy(store, hardware).enable())
-        assertEquals(listOf("capture", "save:TouchSoundState(effectsSetting=1, systemStream=4)"), events)
+        assertEquals(
+            listOf("retire-legacy-stream", "capture", "save:TouchSoundState(effectsSetting=1)"),
+            events,
+        )
     }
 
     @Test fun legacyDisableTurnsEffectsOffWithoutChangingOrInventingVolume() {
         val events = mutableListOf<String>()
         val store = FakeStore(events)
-        val hardware = FakeHardware(TouchSoundState(1, 9), events)
+        val hardware = FakeHardware(TouchSoundState(1), events)
 
         assertTrue(TouchSoundStatePolicy(store, hardware).disable())
 
-        assertEquals(listOf("disable-conservative", "disable-state"), events)
+        assertEquals(listOf("retire-legacy-stream", "disable-conservative", "disable-state"), events)
+        assertNull(hardware.restored)
+    }
+
+    @Test fun constructingPolicyPerformsOneWayLegacyStreamCleanupWithoutAudioMutation() {
+        val events = mutableListOf<String>()
+        val store = FakeStore(events)
+        val hardware = FakeHardware(TouchSoundState(0), events)
+
+        TouchSoundStatePolicy(store, hardware)
+
+        assertEquals(listOf("retire-legacy-stream"), events)
         assertNull(hardware.restored)
     }
 
@@ -63,6 +80,10 @@ class TouchSoundStatePolicyTest {
             events += "disable-state"
             enabled = false
             prior = null
+            return true
+        }
+        override fun retireLegacyStreamState(): Boolean {
+            events += "retire-legacy-stream"
             return true
         }
     }

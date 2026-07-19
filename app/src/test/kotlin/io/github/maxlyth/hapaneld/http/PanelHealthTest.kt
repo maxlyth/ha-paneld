@@ -46,4 +46,10 @@ class PanelHealthTest {
         assertFalse("threshold boundary 110 → ok", PanelHealth.webViewTooOld("com.android.webview 110.0.0.0", null))
         assertFalse("unparseable + no UA → don't cry wolf", PanelHealth.webViewTooOld("unknown", null))
     }
+
+    @Test fun identifiesOnlyGooglePlayAsAPlayManagedInstallSource() {
+        assertTrue(PanelInfo.isPlayStoreInstaller("com.android.vending"))
+        assertFalse(PanelInfo.isPlayStoreInstaller("com.google.android.packageinstaller"))
+        assertFalse(PanelInfo.isPlayStoreInstaller(null))
+    }
 }

@@ -1,12 +1,16 @@
 package io.github.maxlyth.hapaneld.control
 
+import io.github.maxlyth.hapaneld.MqttCommandDispatcher
+import io.github.maxlyth.hapaneld.util.MonotonicDeadline
 import io.github.maxlyth.hapaneld.util.SuccessStickyProbe
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.Collections
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.CopyOnWriteArrayList
 
 class BrightnessHardwareWriterTest {
     @Test fun successfulSuWriteShortCircuitsHelper() {
@@ -66,13 +70,19 @@ class BrightnessHardwareWriterTest {
         val firstEntered = CountDownLatch(1)
         val release = CountDownLatch(1)
         val applied = CopyOnWriteArrayList<Int>()
-        val sequencer = BrightnessWriteSequencer { level ->
-            applied += level
-            if (level == 10) {
-                firstEntered.countDown()
-                release.await(2, TimeUnit.SECONDS)
-            }
-        }
+        val successfulWrites = BacklightWriteTracker()
+        val sequencer = BrightnessWriteSequencer(
+            actuator = BrightnessWriteSequencer.Actuator { level ->
+                applied += level
+                if (level == 10) {
+                    firstEntered.countDown()
+                    release.await(2, TimeUnit.SECONDS)
+                }
+                true
+            },
+            successfulWrites = successfulWrites,
+            elapsedRealtimeMs = BrightnessWriteSequencer.ElapsedRealtimeSource { 42L },
+        )
         val first = Thread { sequencer.write(10) }.apply { start() }
         assertTrue(firstEntered.await(1, TimeUnit.SECONDS))
         val second = Thread { sequencer.write(200) }.apply { start() }
@@ -82,6 +92,92 @@ class BrightnessHardwareWriterTest {
         first.join(2_000)
         second.join(2_000)
         assertEquals(listOf(10, 200), applied)
+        assertEquals(42L, successfulWrites.snapshot())
+    }
+
+    @Test fun onlySuccessfulCompleteTransactionsUpdateWriteRecency() {
+        val failedWrites = BacklightWriteTracker()
+        BrightnessWriteSequencer(
+            BrightnessWriteSequencer.Actuator { false },
+            failedWrites,
+            BrightnessWriteSequencer.ElapsedRealtimeSource { 41L },
+        ).write(100)
+        assertEquals(Long.MIN_VALUE, failedWrites.snapshot())
+
+        val successfulWrites = BacklightWriteTracker()
+        BrightnessWriteSequencer(
+            BrightnessWriteSequencer.Actuator { true },
+            successfulWrites,
+            BrightnessWriteSequencer.ElapsedRealtimeSource { 42L },
+        ).write(100)
+        assertEquals(42L, successfulWrites.snapshot())
+    }
+
+    @Test fun opposedAutoWriteCannotStrandControlsQueuedBehindScreenBrightness() {
+        // Former cycle: dispatcher held sequencer -> waited for auto, while auto held its monitor ->
+        // waited for sequencer. LED/button commands behind the screen command then never ran.
+        val autoBrightnessMonitor = Object()
+        val screenActuatorEntered = CountDownLatch(1)
+        val releaseScreenActuator = CountDownLatch(1)
+        val autoMonitorHeld = CountDownLatch(1)
+        val controlsApplied = CountDownLatch(2)
+        val observedControls = Collections.synchronizedList(mutableListOf<String>())
+        val successfulWrites = BacklightWriteTracker()
+        val sequencer = BrightnessWriteSequencer(
+            actuator = BrightnessWriteSequencer.Actuator { level ->
+                if (level == 10) {
+                    screenActuatorEntered.countDown()
+                    releaseScreenActuator.await()
+                }
+                true
+            },
+            successfulWrites = successfulWrites,
+            elapsedRealtimeMs = BrightnessWriteSequencer.ElapsedRealtimeSource { 42L },
+        )
+        val dispatcher = MqttCommandDispatcher(threadName = "brightness-lock-order-test")
+        val automaticWrite = Thread({
+            synchronized(autoBrightnessMonitor) {
+                autoMonitorHeld.countDown()
+                sequencer.write(200)
+            }
+        }, "automatic-brightness-lock-order-test").apply { isDaemon = true }
+
+        try {
+            assertEquals(MqttCommandDispatcher.Admission.ACCEPTED, dispatcher.submitLatest("screen") {
+                sequencer.write(10)
+            })
+            assertTrue(screenActuatorEntered.await(1, TimeUnit.SECONDS))
+            assertEquals(MqttCommandDispatcher.Admission.ACCEPTED, dispatcher.submitLatest("led") {
+                observedControls += "led"
+                controlsApplied.countDown()
+            })
+            assertEquals(MqttCommandDispatcher.Admission.ACCEPTED, dispatcher.submitLatest("buttons") {
+                observedControls += "buttons"
+                controlsApplied.countDown()
+            })
+            assertEquals(2, dispatcher.pendingCount())
+            automaticWrite.start()
+            assertTrue(autoMonitorHeld.await(1, TimeUnit.SECONDS))
+            val blockedDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(1)
+            while (automaticWrite.state != Thread.State.BLOCKED && System.nanoTime() < blockedDeadline) Thread.yield()
+            assertEquals(Thread.State.BLOCKED, automaticWrite.state)
+            releaseScreenActuator.countDown()
+
+            assertTrue(
+                "opposed automatic/screen writes must not wedge later controls",
+                controlsApplied.await(2, TimeUnit.SECONDS),
+            )
+            automaticWrite.join(2_000)
+            assertFalse(automaticWrite.isAlive)
+            assertEquals(listOf("led", "buttons"), observedControls)
+            assertEquals(42L, successfulWrites.snapshot())
+            assertTrue(dispatcher.closeAndDrain(MonotonicDeadline(2_000)).drained)
+        } finally {
+            releaseScreenActuator.countDown()
+            dispatcher.close()
+            automaticWrite.interrupt()
+            automaticWrite.join(1_000)
+        }
     }
 
     @Test fun unavailableBacklightDiscoveryRetriesWithBoundedBackoffThenSticksOnSuccess() {

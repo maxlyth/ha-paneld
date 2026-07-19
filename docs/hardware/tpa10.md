@@ -15,7 +15,7 @@ A roomy **10" 1920×1200** rk3566 panel with a single front RGB LED, a monochrom
 | Root | `su` available; the LED/sysfs sensors are `system:system`, so a **root helper daemon is required** (see below). |
 
 > [!TIP]
-> Changing firmware on a button-less panel? Read [Firmware backup & restore](../firmware-backup-restore.md) first — the TPA10 (rk3566, Android 11, 7.28 GB eMMC `mmcblk2`) uses `adb reboot loader` + `rkdeveloptool`, with the recessed [pin-hole button](#buttons) as the maskrom/recovery route.
+> Changing firmware on a button-less panel? Read [Firmware backup & restore](../firmware-backup-restore.md) first. The TPA10 (rk3566, Android 11, 7.28 GB eMMC `mmcblk2`) has a verified software-entered Loader route through `adb reboot loader` and `rkdeveloptool`. The recessed [pin-hole button](#buttons) is not a Linux input, but its factory-reset or Maskrom behavior has not been safely confirmed; do not rely on it as a recovery route.
 
 ## Gaining adb + root access
 
@@ -173,9 +173,9 @@ There is **no app-accessible `/dev` node** for the LED (contrast the [WF1589T](w
 Proximity is app-direct via `SensorManager`; temperature, humidity and ambient light are root-only (input subsystem / i2c) and need the helper daemon.
 
 > [!TIP]
-> The CHT8305 makes this panel a viable **room temperature/humidity sensor** for Home Assistant. The helper daemon reads it with the `CHT8305` verb (an `EVIOCGABS` point-read of the driver's `ABS_THROTTLE` input axis, matching the `temperature`/`humidity` input devices by name). ha-paneld then exposes two opt-in **Room temperature** / **Room humidity** sensors over MQTT (Configure → Diagnostics; off by default). An Advanced **Room temperature offset** setting (or the profile's `roomTempOffsetC`) corrects for panel self-heating.
+> The CHT8305 makes this panel a viable **room temperature/humidity sensor** for Home Assistant. The helper daemon reads it with the `CHT8305` verb (an `EVIOCGABS` point-read of the driver's `ABS_THROTTLE` input axis, matching the `temperature`/`humidity` input devices by name). ha-paneld then exposes two opt-in **Room temperature** / **Room humidity** sensors over MQTT (Configure → Diagnostics; off by default). An Advanced **Room temperature offset** setting (or the profile's `sensors.room_temp_offset_c`) corrects for panel self-heating.
 
-The TPA10 ToF means proximity is genuinely distance-based, but the Android HAL quantises it; ha-paneld calibrates the reported value (near/far capture) rather than trusting a fixed cutoff.
+The TPA10 ToF means proximity is genuinely distance-based, but the Android HAL quantises it. ha-paneld learns the live sensor's endpoints and direction, then reports the same normalized proximity scale used across supported panels rather than relying on a fixed device-specific cutoff.
 
 <details>
 <summary>Sensor chips + access paths</summary>
@@ -203,7 +203,7 @@ The TPA10 has **three classes** of physical button, confirmed on-device with `ge
 
 **2. The 5th (orange) button — a *switch*, not a key.** On `gpio-keys` (`/dev/input/event8`) it reports **`EV_SW` `SW_MUTE_DEVICE`** (switch code `14`), a *latching* event — **not** an `EV_KEY`. This is why no keylayout entry exists for it and Android/a11y never surface it (so the stock firmware leaves it dead). ha-paneld instruments it through the root helper daemon's evdev reader (`WATCH /dev/input/event8`, `sw=true`) and emits an HA event (`KEYCODE_MUTE`) on each toggle — validated end-to-end. This is **stock** behaviour (undocumented elsewhere as of this writing).
 
-**3. The pin-hole button (recessed, beside the USB-C port) — recovery / reflash, not input.** Not wired to the Linux input subsystem (absent from `getevent`, `gpio-keys`, and `dmesg`), so it is **not HA-instrumentable**. By placement and platform (Rockchip rk3566) it serves the usual recessed-pin roles: a **factory-reset / default** trigger (paperclip or SIM tool, hold ~5–10 s) and the Rockchip **MASKROM/loader** pin — grounding it forces the SoC into USB flashing mode for low-level recovery with `rkdeveloptool` (see [Firmware backup & restore](../firmware-backup-restore.md)). Use it for un-bricking / reflashing, not for automation.
+**3. The pin-hole button (recessed, beside the USB-C port) — not an Android input.** It is absent from `getevent`, `gpio-keys` and `dmesg`, so it is **not HA-instrumentable**. Its electrical role has not been safely confirmed: placement and the rk3566 platform suggest a reset or boot-mode function, but there is no verified hold duration, factory-reset behavior or Maskrom entry procedure. Do not press or hold it on the assumption that it provides a recoverable reflash path; use the verified software-entered Loader route while Android still boots and follow the evidence boundary in [Firmware backup & restore](../firmware-backup-restore.md).
 
 </details>
 

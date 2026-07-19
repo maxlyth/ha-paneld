@@ -10,14 +10,14 @@ Every profile contains these conceptual sections:
 | --- | --- |
 | Schema | Selects the profile document language understood by ha-paneld. |
 | Identity | Stable profile ID and independently versioned profile content. |
-| Metadata | Human name, author, source, license, maturity, tested firmware and known limitations. |
+| Metadata | Human name, author, source, display-only links, license, maturity, tested firmware and known limitations. |
 | Requirements | Minimum compatible ha-paneld core and the compiled drivers/features the document requires. |
 | Match | Bounded rules over the panel fingerprint. |
 | Capabilities and drivers | Hardware facts plus compiled driver selections and typed parameters. |
 | Named strategies | Optional core-owned rules for the small set of supported firmware/model-dependent values. |
 | Provisioning intent | Access guidance, software/display recommendations, package desired state and selected core-owned recipes; never a permission grant. |
 
-Schema 2 has the closed root fields `schema`, `id`, `version`, `display_name`, `soc_class`, `metadata`, `requires`, `match`, `platform`, `hardware`, `sensors`, `identity`, `input`, `cpu`, `display` and `provisioning`. Field names are lowercase `snake_case`; values are case-sensitive unless their field description says otherwise. See the [minimal community example](examples/minimal-community.yaml).
+Schema 2 has the closed root fields `schema`, `id`, `version`, `display_name`, `soc_class`, `soc`, `metadata`, `requires`, `match`, `platform`, `hardware`, `sensors`, `identity`, `input`, `cpu`, `display` and `provisioning`. Field names are lowercase `snake_case`; values are case-sensitive unless their field description says otherwise. See the [minimal community example](examples/minimal-community.yaml).
 
 The exact allowed enum values and driver/artifact vocabulary are defined by the schema and driver catalog served by the running version. Validate against the same release that will activate the profile.
 
@@ -56,6 +56,7 @@ The schema version belongs to ha-paneld. Authors must not increment it to versio
 | `version` | Required | Profile content version: exactly three dot-separated components, each `0` or 1–9 digits without a leading zero; optional dot-separated prerelease identifiers made from ASCII letters, digits and `-`; no build-metadata suffix. |
 | `display_name` | Required | Non-blank string, 1–100 characters. |
 | `soc_class` | Required | Non-blank string, 1–100 characters. |
+| `soc` | Optional; default absent | Structured, profile-evidenced SoC facts; fields below. |
 | `metadata` | Required | Mapping; fields below. |
 | `requires` | Required | Mapping; fields below. |
 | `match` | Required | Mapping; fields below. |
@@ -74,12 +75,27 @@ The schema version belongs to ha-paneld. Authors must not increment it to versio
 | --- | --- | --- |
 | `metadata.author` | Required | Non-blank string, 1–100 characters. |
 | `metadata.source` | Optional; default absent | Absolute HTTPS URL, at most 500 characters, with a non-empty host and no user-information component. |
+| `metadata.links` | Optional; default `[]` | List of at most eight display-only external links. ha-paneld never fetches, preloads or uses them for provisioning. URLs and labels must be unique and a link cannot repeat `metadata.source`. |
+| `metadata.links[].label` | Required per item | Non-blank display label, 1–48 characters, without control or bidirectional-formatting characters. The Profiles UI also shows the destination hostname in an isolated text run. |
+| `metadata.links[].url` | Required per item | Absolute HTTPS URL using the same 500-character, host and no-user-information rules as `metadata.source`. |
 | `metadata.license` | Required | SPDX-style string consisting of one or more 1–64 character identifiers matching `[A-Za-z0-9][A-Za-z0-9.+-]*`, separated only by ` AND ` or ` OR `. Parentheses, `WITH` and arbitrary prose are not accepted. |
 | `metadata.maturity` | Required | `draft`, `experimental` or `verified`. |
 | `metadata.tested_firmware` | Optional; default `[]` | List of at most 32 non-blank strings, each at most 120 characters. |
 | `metadata.limitations` | Optional; default `[]` | List of at most 32 non-blank strings, each at most 500 characters. |
 | `requires.min_core_version` | Optional; default absent | Dotted release version, at most 64 characters: 1–4 numeric components of 1–6 digits each, with an optional dot-separated ASCII alphanumeric/`-` prerelease suffix. The running core must compare equal or newer, including prerelease order. |
 | `requires.drivers` | Required | List of core driver IDs. Unknown IDs are errors; a driver required by a populated capability must be listed. An otherwise unused driver produces a warning. |
+
+### `soc`
+
+`soc_class` remains the required broad family label used by older schema-2 profiles. The optional structured block records facts that Android generally cannot identify reliably, such as whether a nominally quad-core panel uses Cortex-A35 or Cortex-A55 cores. These values appear on the Dashboard and Profiles page but are omitted from the terse public `/diag` report. Add only facts supported by a public source or hardware evidence; omit unknown fields rather than guessing.
+
+| Field | Presence | Type and validation |
+| --- | --- | --- |
+| `soc.model` | Required when `soc` is present | Non-blank model name, 1–100 characters, without C0 or DEL controls. |
+| `soc.introduced_year` | Optional; default absent | Integer 1970–2100. Use the SoC's public introduction year, not the panel release year. |
+| `soc.cpu_cores` | Optional; default `[]` | At most eight architecture clusters and 256 cores in total. An empty list means the model is known but the CPU topology is not sufficiently evidenced. |
+| `soc.cpu_cores[].architecture` | Required per item | Non-blank core architecture, 1–64 characters, without controls; architectures must be unique ignoring case. |
+| `soc.cpu_cores[].count` | Required per item | Integer 1–128. |
 
 ### `match`
 
@@ -118,17 +134,15 @@ The schema version belongs to ha-paneld. Authors must not increment it to versio
 | Field | Presence | Type and validation |
 | --- | --- | --- |
 | `sensors.proximity_technology` | Optional; default absent | Non-blank string, 1–100 characters, without C0 or DEL controls. When present it declares Android proximity sensor use. |
-| `sensors.proximity_near_below` | Optional; default absent | Boolean; whether lower raw readings mean nearer. |
-| `sensors.proximity_near_raw` | Optional; default absent | Finite number. Must be supplied together with `proximity_far_raw`. |
-| `sensors.proximity_far_raw` | Optional; default absent | Finite number. Must be supplied together with `proximity_near_raw`. |
 | `sensors.proximity_gpio` | Optional; default absent | Integer 0–4095 for the supported root-backed binary GPIO route. |
-| `sensors.proximity_graded_strategy` | Optional; default `observed` | `observed` or `nspanel-firmware-cutover`. |
 | `sensors.light_technology` | Optional; default absent | Non-blank string, 1–100 characters, without C0 or DEL controls. When present it declares Android ambient-light sensor use. |
-| `sensors.cht8305` | Optional; default `false` | Boolean; enables the helper-backed CHT8305 input when true. |
+| `sensors.cht8305` | Optional; default `false` | Boolean; enables an exact core-supported CHT8305-compatible room-climate input through the authenticated helper/Shizuku routes. |
 | `sensors.room_temp_offset_c` | Optional; default `0.0` | Finite number from -30 through 30 °C. |
 | `identity.manufacturer` | Optional; default absent | Non-blank string, 1–100 characters, without C0 or DEL controls; absence means infer at runtime. |
 | `identity.model` | Optional; default absent | Non-blank string, 1–100 characters, without C0 or DEL controls; absence means infer at runtime. |
 | `identity.model_label_strategy` | Optional; default `display-name` | `display-name` or `nspanel-product-version`. |
+
+Older schema-2 revisions may contain `proximity_near_below`, `proximity_near_raw`, `proximity_far_raw` or `proximity_graded_strategy`. Current cores accept these retired keys only as compatibility tombstones: they are ignored when loading and omitted when a current profile document is serialized. Exporting an immutable older revision still preserves its original bytes. Proximity classification and fleet-normalized reporting are learned from live sensor behavior rather than encoded as device-specific profile calibration.
 
 ### `input`, `cpu` and `display`
 
@@ -148,7 +162,7 @@ The schema version belongs to ha-paneld. Authors must not increment it to versio
 | Field | Presence | Type and validation |
 | --- | --- | --- |
 | `provisioning.access` | Optional; default `{}` | Access recommendation mapping. |
-| `provisioning.access.shizuku` | Optional; default `none` | `none`, `optional` or `recommended`; author guidance only, never live readiness or consent. |
+| `provisioning.access.shizuku` | Optional; default `none` | `none`, `optional` or `recommended`; omit unless a selected compiled driver explicitly supports this alternate authority route. Never represents live readiness or consent. |
 | `provisioning.software` | Optional; default `{}` | Core-owned software policy mapping. |
 | `provisioning.software.webview.artifact` | Optional; default absent | Core-owned ID `lineageos-138-arm`, `lineageos-150-arm` or `lineageos-150-arm64`. A profile cannot provide the URL, version or signer hash. |
 | `provisioning.software.companion.max_version` | Optional; default absent | Dotted release version using the same syntax and 64-character bound as `requires.min_core_version`. |
@@ -225,14 +239,13 @@ Every group has a branch `priority` from 0–1000. The matching bundled profile 
 
 Matching chooses a candidate profile; it does not prove a capability. Drivers still perform their live availability checks, and the conservative result wins when evidence and declaration disagree.
 
-## Named firmware and model strategies
+## Named model strategies
 
 The schema has no generic expression language or arbitrary conditional patch section. Its named strategies are deliberately small and core-owned:
 
-- `sensors.proximity_graded_strategy: nspanel-firmware-cutover` applies the documented NSPanel 86P/120P firmware threshold;
 - `identity.model_label_strategy: nspanel-product-version` decodes the NSPanel variant and firmware label;
 - `provisioning.display.density: nspanel-variant` selects the documented 86P/120P density;
-- the default `observed`, `display-name` and fixed integer values avoid those transforms.
+- the default `display-name` and fixed integer values avoid those transforms.
 
 `hardware.relay_base_fallbacks` is ordinary bounded data for known supported relay-class renames, not an expression or arbitrary path search.
 
@@ -258,20 +271,20 @@ A declared capability is a candidate until the driver confirms it. The UI and di
 
 ## Access guidance
 
-Access metadata describes the expected route and may recommend local Shizuku setup on an unrooted panel. That recommendation is profile data and may travel with an exported or backed-up profile, but it does not change permission state. The live Shizuku installation, service readiness, local consent and app approval are excluded from configuration backup, restore, MQTT and fleet activation.
+Access metadata may identify the exceptional shell fallback only when it enables a concrete declared capability. Generic update, screenshot, input or display-sizing convenience is not enough. The declaration may travel with a profile, but it does not change permission state; installation, service readiness, local consent and approval remain live local state excluded from backup, restore, MQTT and fleet activation.
 
-See [Shizuku enhanced access](../shizuku.md) for the fixed shell-identity subset and [Runtime panel profiles](README.md#authority-standard-android-shizuku-and-root) for author guidance.
+See the [advanced fallback guide](../shizuku.md) for the fixed shell-identity subset and [Runtime panel profiles](README.md#authority-standard-android-and-privileged-routes) for author guidance.
 
 ## Compatibility behavior
 
 ha-paneld treats compatibility failures as inactive profile problems, not panel-startup failures:
 
-- Schema `2` is the only accepted document language. Stored schema-1 proof-of-concept revisions remain listable, exportable and deletable but cannot activate; a selected incompatible revision falls back to a compatible schema-2 last-known-good, matching bundled profile or Generic.
+- Schema `2` is the only accepted document language. Stored schema-1 proof-of-concept revisions remain listable, exportable and deletable but cannot activate; a selected incompatible revision falls back to a compatible schema-2 last-known-good, matching bundled profile or bundled `generic.yaml`.
 - An unknown required driver or transform prevents activation.
 - Installed local revisions are revalidated after an app update.
 - The original YAML and its content hash remain identifiable after validation and normalization.
 - An activation failure returns to the last-known-good revision.
-- If no installed profile can run, ha-paneld starts with conservative Generic behavior and keeps the local management UI available.
+- If no panel-specific profile can run, ha-paneld starts with the conservative bundled `generic.yaml` behavior. If that bundled fallback is missing or corrupt, a capability-empty emergency contract keeps the local management UI available without asserting panel hardware.
 
 Content hashes and any separately published signatures answer different questions. ha-paneld's revision hash ties save and activation to the bytes that were inspected. An external signature may help identify a publisher, but it is not an authority signal interpreted by the profile loader. Neither grants root, Shizuku consent or permission to bypass validation and confirmation.
 
@@ -290,7 +303,7 @@ Local/community match rules are evaluated for preview and comparison only. They 
 
 Before sharing a new revision, confirm:
 
-- schema `1` and every field validate on the oldest core version claimed by the file;
+- schema `2` and every field validate on the oldest core version claimed by the file;
 - every required driver is present on that version;
 - exact fingerprint fixtures cover each claimed model and firmware family;
 - a near-miss fixture does not match a different product using the same SoC;

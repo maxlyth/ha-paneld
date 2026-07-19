@@ -2,8 +2,12 @@ package io.github.maxlyth.hapaneld.mqtt
 
 import io.github.maxlyth.hapaneld.metrics.FeatureCostOperation
 import io.github.maxlyth.hapaneld.metrics.FeatureCostRegistry
+import io.github.maxlyth.hapaneld.util.MonotonicDeadline
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -13,6 +17,54 @@ class StateConvergerTest {
         sender = { topic, payload, _, done -> sent += Sent(topic, payload, done) },
         schedule = { it() },
     )
+
+    @Test fun closeDeadlineDoesNotPretendABlockedObservationDrained() {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        var observations = 0
+        val c = converger(mutableListOf())
+        c.register(StateConverger.Channel("screen", "screen/state", observe = {
+            observations++
+            entered.countDown()
+            release.await()
+            StateConverger.Observation.Known("ON")
+        }))
+        val worker = Thread { c.reconcile("screen") }.apply { start() }
+        try {
+            assertTrue(entered.await(1, TimeUnit.SECONDS))
+            assertFalse(c.closeAndDrain(MonotonicDeadline(0L)))
+        } finally {
+            release.countDown()
+            worker.join(1_000L)
+        }
+        assertTrue(c.closeAndDrain(MonotonicDeadline(1_000L)))
+        c.reconcile("screen")
+        assertEquals(1, observations)
+    }
+
+    @Test fun closeDeadlineDoesNotPretendABlockedSenderDrained() {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val c = StateConverger(
+            sender = { _, _, _, _ ->
+                entered.countDown()
+                release.await()
+            },
+            schedule = { it() },
+        )
+        c.register(StateConverger.Channel("screen", "screen/state", observe = {
+            StateConverger.Observation.Known("ON")
+        }))
+        val worker = Thread { c.reconcile("screen") }.apply { start() }
+        try {
+            assertTrue(entered.await(1, TimeUnit.SECONDS))
+            assertFalse(c.closeAndDrain(MonotonicDeadline(0L)))
+        } finally {
+            release.countDown()
+            worker.join(1_000L)
+        }
+        assertTrue(c.closeAndDrain(MonotonicDeadline(1_000L)))
+    }
 
     @Test fun acknowledgedStateSuppressesStableRepublish() {
         var value = "ON"

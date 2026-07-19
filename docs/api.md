@@ -1,85 +1,95 @@
-# Control API & HTTP reference
+# Control API and Home Assistant reference
 
-How ha-paneld exposes a panel to Home Assistant: the uniform MQTT entities, the HTTP contract on `:8888`, and how a panel pairs itself. For a high-level capability list see the [README](../README.md#capabilities); to browse and try every endpoint live, open `http://<panel>:8888/api` (the OpenAPI explorer) or fetch `/openapi.json`.
+ha-paneld exposes each panel through Home Assistant MQTT discovery and a local HTTP service on port `8888`. This page describes the stable contracts and the main endpoint families. The bundled OpenAPI document is the exhaustive reference for the installed build: open `http://<panel>:8888/api` or fetch `http://<panel>:8888/api/v1/openapi.json`.
 
-## Uniform MQTT entities
+## Home Assistant MQTT discovery
 
-Every panel publishes the **same** Home Assistant MQTT-discovery entities, regardless of underlying hardware (the per-panel HAL is hidden behind them). Configure an MQTT broker and they appear with no YAML:
+Set an MQTT broker on the Configure page and supported entities appear in Home Assistant without YAML. Entity IDs default to the forms below, where `<panel>` is the configured panel ID. Hardware-specific entities are omitted when the active device profile declares the capability absent, and optional setting and diagnostic entities can be exposed or hidden individually on the Configure page.
 
-| Entity | Capability | Notes |
-|--------|------------|-------|
-| `light.<panel>_screen` | brightness + on/off | on = backlight on, off = true backlight-off (no keyguard/PIN); JSON schema, brightness 0–255 |
-| `light.<panel>_led` | RGB | published only when a LED backend is present (NDK `/dev/ledjni` or the root helper) |
-| `text.<panel>_navigate` | push a dashboard path to the panel | Companion: deep-link intent; built-in renderer: in-app bus navigate (no reload). Last path restored on reconnect |
-| `event.<panel>_button` | hardware button presses | published only when the a11y key-filter is enabled |
-| `number.<panel>_volume` | TTS/announce volume | 0–100% → `STREAM_MUSIC`; playback is the HTTP `/play` contract below |
-| `sensor.<panel>_illuminance` | ambient lux | standard `SensorManager` `TYPE_LIGHT`; published only if present |
-| `binary_sensor.<panel>_proximity` | proximity (occupancy) | standard `SensorManager` `TYPE_PROXIMITY`; published only if present |
-| `sensor.<panel>_zigbee_gateway_health` | Sonoff gateway health | always present on Zigbee-capable panels; states include `off`, `starting`, `healthy`, degraded states, `runaway`, and containment results; attributes are bounded and exclude radio identity, network keys and broker credentials |
-| `button.<panel>_reload` | reload dashboard | foreign renderer: force-stop + relaunch (root helper, else `su`); built-in renderer: reloads its own WebView in-process (no root needed) |
-| `button.<panel>_reboot` | reboot panel | root helper, else `su` |
-| `button.<panel>_launcher` | bring a launcher to the foreground | fires `CATEGORY_HOME` at a non-default launcher (or configured `launcher_package`), leaving the boot/default home app unchanged |
-| `button.<panel>_home` | bring the HA dashboard to the foreground | launches the resolved dashboard — the built-in renderer, a configured `dashboard_package`, else the installed HA Companion — the complement of the Launcher button |
+| Entity | Contract |
+|---|---|
+| `light.<panel>_screen` | Screen on/off and brightness using Home Assistant's JSON light schema and a `0`–`255` brightness value. Off is true backlight-off without invoking the keyguard. |
+| `light.<panel>_led` | RGB or brightness-only panel LED, depending on the available backend; supported backends also expose effects. |
+| `light.<panel>_buttons` | Brightness-capable button backlight when declared by the active profile. |
+| `light.<panel>_button_led1` … `button_led4` | Individually controlled button LEDs when declared by the active profile. |
+| `switch.<panel>_relay1` … `relay4` | Hardware relays when declared by the active profile. |
+| `text.<panel>_navigate` | Sends a dashboard path to the active renderer. The built-in renderer navigates in process; a foreign renderer receives a deep link. |
+| `text.<panel>_home_dashboard` | Configures the path used by dashboard-return actions. |
+| `number.<panel>_volume` | Announcement volume from `0` to `100` percent on Android's music stream. |
+| `event.<panel>_button` | Hardware button events when key filtering is enabled. |
+| `sensor.<panel>_illuminance` | Ambient illuminance in lux when the panel has a standard Android light sensor. |
+| `sensor.<panel>_temperature` / `sensor.<panel>_humidity` | On-panel climate readings when declared by the active profile. |
+| `binary_sensor.<panel>_proximity` | Learned near/far occupancy state. It remains unavailable until the local model is trustworthy. |
+| `sensor.<panel>_proximity_level` | Normalized proximity from `0` for the learned far baseline to `100` for the learned near reference. |
+| `sensor.<panel>_zigbee_gateway_health` | Bounded gateway health and redacted diagnostic attributes on Zigbee-capable panels. |
+| `button.<panel>_back` | Android Back navigation action. |
+| `button.<panel>_recents` | Android Recents navigation action when the active control route supports it. |
+| `button.<panel>_reload` | Reloads the built-in renderer in process or restarts the selected foreign renderer. |
+| `button.<panel>_home` | Brings the configured dashboard renderer to the foreground. |
+| `button.<panel>_launcher` / `admin_launcher` | Brings the selected launcher or ha-paneld admin launcher to the foreground without changing Android's default home app. |
+| `button.<panel>_reboot` | Reboots through an available privileged route. |
 
-The device's display name (`configuration_url` "Visit" link, friendly name) and the LED/screen states are re-published on every (re)connect, and the MQTT client auto-reconnects, so HA stays in sync after a panel reboot or broker blip.
+Registry-backed configuration, performance and diagnostic entities are published only when exposed. The panel and Companion update buttons are always published. `GET /api/v1/config/schema` reports which settings are Home Assistant-capable, and `GET /api/v1/config` reports their current `ha_expose` state.
 
-## HTTP contract
+Discovery payloads and current states are republished after MQTT reconnects and Home Assistant birth messages. ha-paneld also removes stale discovery entries when the panel ID, profile capabilities or discovery shape changes.
 
-```text
-GET  /              panel info + config page (versions, hardware, status; panel_id,
-                    friendly name, MQTT broker/creds, dashboard package). This is the
-                    device's configuration_url, so HA shows a "Visit" link.
-GET  /api           interactive REST API explorer (renders the OpenAPI spec)
-GET  /openapi.json  OpenAPI 3 spec of this API (import into Swagger / Postman)
-POST /config        form-encoded settings from the page; persists + live-reconfigures
-GET  /config        full config as JSON (MQTT password redacted) for fleet tooling
-GET  /perf          live system metrics plus built-in interaction, state-stream and
-                    main-thread diagnostics; Companion rendering remains a proxy
-GET  /proximity     live proximity raw + calibration (raw stays on the panel)
-POST /proximity/{capture,threshold,sensitivity,reset}   tune the cutoff
-GET  /inspect · POST /inspect/{start,stop}              WebView DevTools relay (:9222)
-GET  /diag          copy-paste diagnostics dump (build, SELinux, su probe, /dev +
-                    /sys node listings, packages, capability assessment)
-GET  /health        -> 200 "ha-paneld <version> panel=<id>"
-POST /play          body contains an audio URL (raw or {"url":"…"})
-                    -> 200 "playing"  (download + play happen in the background)
-                    -> 400 "no-url"   (no URL found in body)
-```
+## Browser pages
 
-`/play` owns one announcement lane per panel. A newer accepted request cancels and replaces any queued, downloading, or playing announcement, so clips never overlap on the speaker; shutdown rejects new work with `503 stopping` after closing admission.
+| Path | Purpose |
+|---|---|
+| `/` | Panel status, capabilities, diagnostics and current dashboard preview. This is the Home Assistant device's `configuration_url`. |
+| `/configure` | MQTT, renderer and panel behavior settings. |
+| `/profiles` | Device-profile selection, inspection and YAML authoring. |
+| `/entities` | Built-in renderer entity learning, policy and overrides. |
+| `/install` | Software, backup, restore and maintenance actions. |
+| `/logs` | Redacted live application logs. |
+| `/api` | Interactive explorer for the bundled OpenAPI document. |
 
-The web page at `/` is how a user sets the **MQTT broker** without adb — find the panel's IP (mDNS `_ha-paneld._tcp`, or the router), open `http://<ip>:8888/`, fill in the broker + credentials, Save.
+## HTTP API conventions
 
-The agent listens on **:8888**. Audio fetched over HTTPS uses Android's platform trust store and hostname verification, so an untrusted self-signed certificate is rejected unless its CA is installed on the panel. Plain HTTP sources remain available for trusted LAN use. This is the same request contract as the reference shell receiver it replaces, so HA-side automation needs no change when a panel migrates from the shell receiver to ha-paneld.
+The canonical machine API is under `/api/v1`. Pre-0.8.5 flat machine paths such as `/config`, `/perf`, `/action` and `/proximity` return `308 Permanent Redirect` to their versioned equivalents, preserving the method and body. New clients should use `/api/v1` directly.
 
-## The `/api/v1` namespace (0.8.5)
+`GET /health` and `POST /play` remain available at the root for simple monitors and Home Assistant automations, with identical versioned routes at `/api/v1/health` and `/api/v1/play`.
 
-The machine API lives under **`/api/v1`** as of 0.8.5. The pre-0.8.5 flat paths (`/config`, `/perf`, `/action`, `/proximity`, …) respond **308 Permanent Redirect** to their `/api/v1` homes — the method and body are preserved, so `curl -L` and any HTTP client that follows redirects keeps working; new tooling should target `/api/v1` directly. Two exceptions stay served **directly at the root as well**: `GET /health` and `POST /play` — the external contract endpoints that automations and monitors call with plain `curl` (which doesn't follow redirects by default). Key `/api/v1` endpoints:
+The service intentionally uses a trusted-LAN model rather than general API authentication. It rejects non-LAN peers, invalid Host headers and browser requests with a mismatched Origin or Referer before routing. Keep port `8888` on a trusted network and do not expose it directly to the internet.
 
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/api/v1/config` | GET / POST | Config as JSON incl. registry `settings` + `ha_expose` flags; partial-merge POST accepts **every** setting (including the formerly MQTT-only ones) and per-entity `ha_expose_<key>` toggles |
-| `/api/v1/config/schema` | GET | Settings-registry metadata (type, group, tier, range/options, HA-capable, exposed) — drives the Configure form |
-| `/api/v1/config/export` | GET | Versioned config bundle (secrets excluded unless `?include_secrets=1`) |
-| `/api/v1/config/import` | POST | Best-effort bundle apply by default: valid known keys are applied while invalid or unknown keys are skipped and reported; `?strict=1` validates all keys before applying any; `?dry_run=1` previews the diff and returns an `expected_cfg` hash; send that hash on the apply request to receive `409 stale-preview` if panel settings changed meanwhile; `?mode=fleet` applies only portable, non-secret keys |
-| `/api/v1/config/revisions` | GET | On-panel config history (ring buffer); `POST …/{id}/restore` rolls back |
-| `/api/v1/backup` / `/api/v1/restore` | POST | Download or restore a complete panel backup, including imported device-profile revisions and their selected identity; restore claims the shared destructive-operation lane before reading the bundle, supports a non-writing `?dry_run=1` preview, and reports config, profile-catalog, Companion, and rollback outcomes separately through `/api/v1/install/status` |
-| `/api/v1/install/status` | GET | Shared install/backup/restore progress; preserves the human-readable `message` and includes a structured `result` object for completed multi-component restores |
-| `/api/v1/install/component` | POST | Start a managed component update or reinstall; an exact version older than the installed version is rejected unless the caller explicitly sends `allow_downgrade=true` |
-| `/api/v1/status` | GET | Panel-health warnings + capability matrix and the bounded Zigbee gateway health snapshot as JSON |
-| `/api/v1/radio` | GET | EFR32 gateway presence, health state and redacted health attributes |
-| `/api/v1/input` | POST | Queue a tap at device pixel `x`,`y` through a bounded latest-value control lane, then root, the helper daemon, Accessibility, or locally approved Shizuku access. Returns `202` on admission and `409` when the bounded lane is busy. The experimental web remote-control UI is withheld pending review; the API remains available for automation and testing. |
-| `/api/v1/ui/layout` | GET / POST | Per-panel dashboard layout blob (groundwork for customisable card layout) |
-| `/api/v1/dashboard/entity-filter` | GET / POST | Advanced exact-list control for the built-in renderer's experimental entity filter; replace or disable a manual set and inspect count, hash and runtime proof |
-| `/api/v1/dashboard/entities` | GET | Automatic-learning catalog with current, suggested and excluded entities plus the evidence for each choice; query, sort and paginate it as used by the Entities page |
-| `/api/v1/dashboard/entities/sync` | GET / POST | Read automatic-learning status or rescan the Home Assistant catalog and configured dashboard |
-| `/api/v1/dashboard/entities/activate` | POST | Explicitly apply the reviewed policy-selected entity set; requires `{"confirm":true}` |
-| `/api/v1/dashboard/entities/reset` | POST | Confirmation-gated reset of learned evidence and overrides; `{"confirm":true,"clear_filter":true}` also removes the stored filter |
+Optional [Hardened mode](security-mode.md) requires physical access to the panel. Selected high-impact remote actions cannot proceed until someone approves them on the panel's screen, and they cannot be approved remotely. A protected request returns HTTP `202` with `error: "approval-required"`; approve it on the panel, then repeat the identical method, path, parameters and body from the same peer within ten minutes. The approval is consumed by the matching retry and forgotten when ha-paneld restarts. Other `202` responses, such as a scheduled profile activation, are successful admissions and do not contain `error: "approval-required"`.
 
-The full surface is in `/api/v1/openapi.json` (browse it live at `http://<panel>:8888/api`).
+`GET /api/v1/config` redacts credentials. Configuration updates are partial merges, so clients must send only the fields they intend to change and must never construct a write by round-tripping the redacted response.
 
-## Pairing
+## Endpoint families
 
-The agent advertises `_ha-paneld._tcp.local.` with TXT records (`ver`, `caps`, `path`). If an MQTT broker is configured it publishes Home Assistant MQTT-discovery configs so panel entities appear without YAML.
+This table is a maintained overview rather than a replacement for OpenAPI. The explorer documents exact methods, parameters, request bodies, status codes and response schemas for every active route.
 
-**Zero-config:** with no broker set, ha-paneld browses for Home Assistant's own `_home-assistant._tcp` advert on the LAN and uses its MQTT broker on :1883 — so a fresh install pairs itself. If the broker needs a login (e.g. the HA Mosquitto add-on), set the username/password on the config page; the MQTT status reads *auth rejected* until they're right. Set the broker explicitly if it's elsewhere or your LAN has more than one Home Assistant. If nothing is found, the HTTP surface still works standalone.
+| Endpoint family | Purpose |
+|---|---|
+| `/api/v1/health`, `/api/v1/info`, `/api/v1/status`, `/api/v1/sensors`, `/api/v1/radio` | Liveness, panel identity, health findings, capabilities and bounded sensor or gateway state. |
+| `/api/v1/config`, `/api/v1/config/schema`, `/api/v1/config/export`, `/api/v1/config/import`, `/api/v1/config/revisions` | Partial configuration, registry metadata, portable bundles and on-panel revision restore. Secret-bearing export, import and restore operations follow the Hardened-mode approval contract. |
+| `/api/v1/profiles` | Lists immutable bundled and local profile revisions and their activation state. Subroutes provide schema and driver catalogues, templates, passive device drafts, validation, comparison, import, activation, rollback and deletion. |
+| `/api/v1/provisioning/plan` and `/api/v1/provisioning/plan.txt` | Read-only, profile-driven provisioning guidance combined with live panel observations. |
+| `/api/v1/backup`, `/api/v1/restore`, `/api/v1/install/*`, `/api/v1/uninstall`, `/api/v1/updates/ignore`, `/api/v1/webview/heal`, `/api/v1/companion/repair-url` | Backup, restore, component and APK installation, update state and maintenance. Long-running operations report through `/api/v1/install/status` and share one destructive-operation lane. |
+| `/api/v1/action`, `/api/v1/input` | Bounded navigation, launcher, volume, reboot and pixel-tap control. Hardened mode disables non-loopback remote input rather than approving it remotely. |
+| `/api/v1/auto-brightness` | Current adaptive-brightness state, seven-day history, Home Assistant illuminance-source discovery and selection, learned-history reset and manual-pause resume. |
+| `/api/v1/proximity` | Learned proximity state plus guided teach, non-actuating test and confirmed relearn operations. Retired manual threshold operations return `410 Gone`. |
+| `/api/v1/dashboard/entity-filter` and `/api/v1/dashboard/entities/*` | Built-in renderer filter state, learned entity catalogue, synchronization, policy, overrides, issue decisions, export, activation and confirmed reset. |
+| `/api/v1/perf`, `/api/v1/perf/history`, `/api/v1/perf/costs`, `/api/v1/perf/binding` | Service and renderer performance snapshots, bounded history, separately sampled feature costs and opaque A/B comparison binding. |
+| `/api/v1/diag`, `/api/v1/logs/stream`, `/api/v1/screenshot.png`, `/api/v1/sensortrace`, `/api/v1/inspect/*` | Redacted issue diagnostics, live logs, dashboard screenshots, sensor traces and temporary WebView DevTools relay. The diagnostics omit configured network and panel identifiers while retaining categorical hardware/boot posture, app-database usage and current privilege/capability state; review a report before posting it publicly. |
+| `/api/v1/apps`, `/api/v1/packages`, `/api/v1/peers`, `/api/v1/ui/layout`, `/api/v1/dashboard/clear-storage`, `/api/v1/display/density`, `/api/v1/tame` | Supporting data and actions used by the browser UI and fleet tooling. |
+
+### Profile administration contract
+
+Profile YAML is previewed before it is saved. `POST /api/v1/profiles/preview` validates the exact bytes and returns a short-lived preview token; `POST /api/v1/profiles/import` accepts those same bytes with the token in `X-Profile-Preview-Token` and stores an immutable inactive revision. Selection and rollback requests require explicit confirmation plus the current catalogue revision, and successful selection schedules a controlled service restart. The Profile page uses this same API.
+
+The profile schema, compiled driver catalogue and downloadable starter YAML are available from `/api/v1/profiles/schema`, `/api/v1/profiles/drivers` and `/api/v1/profiles/template`. See [Device profiles](profiles/README.md) for the YAML reference and authoring workflow.
+
+### Playback contract
+
+`POST /play` and `POST /api/v1/play` accept a raw audio URL or `{"url":"…"}`. Each panel owns one announcement lane: a newer accepted request cancels and replaces queued, downloading or playing audio, so clips do not overlap. A request returns `400 no-url` when no URL is present and `503 stopping` after shutdown closes admission.
+
+Audio fetched over HTTPS uses Android's platform trust store and hostname verification. A self-signed certificate is rejected unless its CA is installed on the panel; plain HTTP remains available for trusted LAN sources.
+
+## Pairing and discovery
+
+ha-paneld advertises `_ha-paneld._tcp.local.` with `ver`, `caps` and `path` TXT records. With no MQTT broker configured, it browses for Home Assistant's `_home-assistant._tcp` service and uses a discovered broker on port `1883`. Set the broker explicitly when it is elsewhere or more than one Home Assistant instance is present.
+
+If the broker requires credentials, enter them on `/configure`; MQTT status reports an authentication rejection until they are correct. The HTTP service remains available when MQTT discovery or connection is unavailable.

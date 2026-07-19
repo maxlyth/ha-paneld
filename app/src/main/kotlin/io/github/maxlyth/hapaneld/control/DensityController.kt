@@ -1,11 +1,17 @@
 package io.github.maxlyth.hapaneld.control
 
-import io.github.maxlyth.hapaneld.device.DeviceProfile
 import io.github.maxlyth.hapaneld.platform.Daemon
 import io.github.maxlyth.hapaneld.platform.RootShell
 import io.github.maxlyth.hapaneld.platform.ShellPrivilege
 import io.github.maxlyth.hapaneld.shizuku.ShizukuBridge
 import io.github.maxlyth.hapaneld.util.HelperClient
+
+/** One coherent display-sizing read; current and base share one routed density observation. */
+internal data class DisplaySizingObservation(
+    val current: Int?,
+    val base: Int?,
+    val fontScale: Float,
+)
 
 /**
  * Display-sizing control: **density (DPI)** via `wm density` + **text size (font scale)** via
@@ -17,26 +23,29 @@ import io.github.maxlyth.hapaneld.util.HelperClient
  * panels frequently don't.
  *
  * Both persist across reboot (secure/system settings), so a one-shot set sticks. Both are privileged.
- * [DeviceProfile.appCanSu] orders live su/helper attempts; it never suppresses the alternate route.
+ * The active profile's `appCanSu` value orders live su/helper attempts; it never suppresses the
+ * alternate route.
  */
 class DensityController(
-    private val canSu: Boolean = DeviceProfile.detect().appCanSu,
+    private val canSu: Boolean,
     private val root: RootShell = Su,
     private val daemon: Daemon = HelperClient,
     private val shell: ShellPrivilege = ShizukuBridge,
 ) {
     private data class DensityState(val base: Int, val override: Int?)
 
-    /** Android's factory/base logical density (the reset target), or null if unreadable.
-     *
-     * Android labels this `Physical density` in `wm density`, but it is not the display's measured PPI. */
-    fun base(): Int? = densityState()?.base
-
-    /** Current effective logical density — the override if one is set, else the factory/base value. */
-    fun current(): Int? = densityState()?.let { it.override ?: it.base }
-
-    /** True when density is readable. A later set can still fail if neither privileged route works. */
-    fun available(): Boolean = base() != null
+    /**
+     * Read the effective/base density once and the font scale once, then project one immutable result.
+     * Android calls the reset target `Physical density`, but it is a logical density, not measured PPI.
+     */
+    internal fun observeSizing(privilege: PrivilegedRouteObservation? = null): DisplaySizingObservation {
+        val density = densityState(privilege)
+        return DisplaySizingObservation(
+            current = density?.let { it.override ?: it.base },
+            base = density?.base,
+            fontScale = readFontScale(privilege),
+        )
+    }
 
     /** Set the override density (dpi). Bounded to keep the UI usable/bootable. Returns true if applied. */
     fun set(dpi: Int): Boolean {
@@ -55,8 +64,8 @@ class DensityController(
         shizuku = shell::resetDensity,
     )
 
-    /** Current system font scale (1.0 when unset). WebView text follows this (textZoom = scale × 100). */
-    fun fontScale(): Float = routedValue(
+    private fun readFontScale(privilege: PrivilegedRouteObservation? = null): Float = routedValue(
+        privilege = privilege,
         su = { parseRootScale(root.runOutput("settings get system font_scale 2>/dev/null")) },
         helper = { parseHelperScale(daemon.send("FONTSCALE")) },
         shizuku = { parseRootScale(shell.fontScale()) },
@@ -79,7 +88,8 @@ class DensityController(
         shizuku = shell::resetFontScale,
     )
 
-    private fun densityState(): DensityState? = routedValue(
+    private fun densityState(privilege: PrivilegedRouteObservation? = null): DensityState? = routedValue(
+        privilege = privilege,
         su = { parseRootDensity(root.runOutput("wm density 2>/dev/null")) },
         helper = { parseHelperDensity(daemon.send("DENSITY")) },
         shizuku = { parseRootDensity(shell.density()) },
@@ -138,6 +148,7 @@ class DensityController(
     }
 
     private fun <T : Any> routedValue(
+        privilege: PrivilegedRouteObservation? = null,
         su: () -> T?,
         helper: () -> T?,
         shizuku: () -> T?,
@@ -145,10 +156,16 @@ class DensityController(
         val suAttempt = ValueAttempt(PrivilegeRoute.SU, su)
         val helperAttempt = ValueAttempt(PrivilegeRoute.DAEMON, helper)
         val shizukuAttempt = ValueAttempt(PrivilegeRoute.SHIZUKU, shizuku)
-        val attempts = when {
+        val ordered = when {
             canSu -> arrayOf(suAttempt, helperAttempt, shizukuAttempt)
-            shell.available() -> arrayOf(helperAttempt, shizukuAttempt, suAttempt)
+            privilege?.shizuku?.ready == true -> arrayOf(helperAttempt, shizukuAttempt, suAttempt)
+            privilege == null && shell.available() -> arrayOf(helperAttempt, shizukuAttempt, suAttempt)
             else -> arrayOf(helperAttempt, suAttempt, shizukuAttempt)
+        }
+        val attempts = if (privilege == null) {
+            ordered
+        } else {
+            ordered.filter { privilege.admits(it.route) }.toTypedArray()
         }
         return ShortOperationRouter.value(*attempts)?.value
     }

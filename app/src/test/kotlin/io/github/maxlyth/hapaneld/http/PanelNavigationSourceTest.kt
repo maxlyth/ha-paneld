@@ -6,7 +6,7 @@ import org.junit.Test
 
 class PanelNavigationSourceTest {
     @Test
-    fun testTabIsWithheldAndInstallRemainsInPrimaryNavigation() {
+    fun unfinishedTabsAreWithheldAndInstallRemainsInPrimaryNavigation() {
         val source = File("src/main/kotlin/io/github/maxlyth/hapaneld/http/PaneldServer.kt").readText()
         val nav = source.substringAfter("private fun navBar(active: String)")
             .substringBefore("private fun entitiesBody()")
@@ -20,5 +20,9 @@ class PanelNavigationSourceTest {
             "Existing /test bookmarks should return users to Dashboard",
         )
         assertTrue("private fun testBody()" !in source, "The withheld remote-control page must not render")
+        assertTrue("tab(\"fleet\"" !in nav, "The Fleet placeholder must not be public navigation")
+        assertTrue("href=\"/fleet\"" !in nav, "The Fleet placeholder must not be linked directly")
+        assertTrue("get(\"/fleet\")" in source, "Existing /fleet bookmarks should remain available")
+        assertTrue("private fun fleetBody()" in source, "The dormant Fleet implementation should remain intact")
     }
 }

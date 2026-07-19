@@ -284,13 +284,16 @@ object AppInstaller {
     }.getOrDefault(-1L)
 
     private fun download(url: String, dest: File, maxBytes: Long): Boolean = runCatching {
+        val deadline = MonotonicDeadline(DOWNLOAD_TOTAL_TIMEOUT_MS)
         var current = URL(url).takeIf { it.protocol.equals("https", true) }
             ?: run { Log.w(TAG, "refusing non-HTTPS URL"); return false }
         repeat(5) {
+            val remainingMs = deadline.remainingMs()
+            if (remainingMs <= 0L) return false
             val conn = current.openConnection() as HttpURLConnection
             conn.instanceFollowRedirects = false
-            conn.connectTimeout = 15_000
-            conn.readTimeout = 60_000
+            conn.connectTimeout = minOf(15_000L, remainingMs).coerceAtLeast(1L).toInt()
+            conn.readTimeout = minOf(60_000L, remainingMs).coerceAtLeast(1L).toInt()
             try {
                 when (conn.responseCode) {
                     in 300..399 -> {
@@ -306,7 +309,7 @@ object AppInstaller {
                         }
                         conn.inputStream.use { input ->
                             dest.outputStream().use { output ->
-                                BoundedStreams.copy(input, output, maxBytes)
+                                copyBeforeDeadline(input, output, maxBytes, deadline::remainingMs)
                             }
                         }
                         return dest.length() > 0
@@ -327,4 +330,26 @@ object AppInstaller {
      */
     internal fun httpsRedirect(base: URL, location: String): URL? =
         runCatching { URL(base, location) }.getOrNull()?.takeIf { it.protocol.equals("https", true) }
+
+    internal fun copyBeforeDeadline(
+        input: java.io.InputStream,
+        output: java.io.OutputStream,
+        maxBytes: Long,
+        remainingMs: () -> Long,
+    ): Long {
+        val buffer = ByteArray(64 * 1024)
+        var copied = 0L
+        while (true) {
+            if (remainingMs() <= 0L) throw java.net.SocketTimeoutException("APK download deadline exceeded")
+            val read = input.read(buffer)
+            if (read < 0) return copied
+            if (read == 0) continue
+            copied += read
+            if (copied > maxBytes) throw ByteLimitExceeded(maxBytes)
+            if (remainingMs() <= 0L) throw java.net.SocketTimeoutException("APK download deadline exceeded")
+            output.write(buffer, 0, read)
+        }
+    }
+
+    private const val DOWNLOAD_TOTAL_TIMEOUT_MS = 10L * 60_000L
 }

@@ -1,8 +1,12 @@
 package io.github.maxlyth.hapaneld.http
 
 import io.github.maxlyth.hapaneld.control.fakeProfile
+import io.github.maxlyth.hapaneld.control.TameController
 import io.github.maxlyth.hapaneld.device.EvdevButton
+import io.github.maxlyth.hapaneld.device.profile.BundledProfileFixtures
+import io.github.maxlyth.hapaneld.shizuku.ShizukuBridge
 import io.github.maxlyth.hapaneld.shizuku.ShizukuManagerIdentity
+import io.github.maxlyth.hapaneld.shizuku.ShizukuState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -10,10 +14,104 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DiagCapabilityPolicyTest {
+    private val fallback = BundledProfileFixtures.fallback()
+    private val nspanel = BundledProfileFixtures.profile("nspanel-pro")
+
     @Test fun performanceUiNamesTheDevtoolsRelayAsRemoteDebugging() {
         val source = java.io.File("src/main/kotlin/io/github/maxlyth/hapaneld/http/PaneldServer.kt").readText()
         assertTrue(source.contains("<h2>Remote WebView debugging "))
         assertFalse(source.contains("<h2>WebView debugging "))
+    }
+
+    @Test fun configurableValuePencilsStayAttachedToTheirValue() {
+        val server = java.io.File("src/main/kotlin/io/github/maxlyth/hapaneld/http/PaneldServer.kt").readText()
+        val css = java.io.File("src/main/assets/info.css").readText()
+        assertTrue(server.contains("""&nbsp;<a class="cfglink"""))
+        assertTrue(css.contains(".cfglink{display:inline;margin-left:0"))
+        assertTrue(css.contains("white-space:nowrap"))
+    }
+
+    @Test fun behaviourCardOwnsConfiguredRuntimeBehaviourWithoutPanelInfoDuplicates() {
+        val source = java.io.File("src/main/kotlin/io/github/maxlyth/hapaneld/http/PaneldServer.kt").readText()
+        assertTrue(source.contains("""private val BEHAVIOUR_FACT_KEYS = setOf("Keep awake", "Kiosk lock", "Navbar", "Log shipping")"""))
+        assertTrue(source.contains(""""silence_boot_chime", "keep_awake", "navbar_mode", "log_ship_enabled""""))
+        assertTrue(source.contains(""""watchdog_enabled", "kiosk_lock", "touch_sound""""))
+    }
+
+    @Test fun noisyStateEntitiesUseAColumnarTableInsteadOfRepeatedLabels() {
+        val script = java.io.File("src/main/assets/info.js").readText()
+        val configure = java.io.File("src/main/assets/configure.js").readText()
+        val server = java.io.File("src/main/kotlin/io/github/maxlyth/hapaneld/http/PaneldServer.kt").readText()
+
+        assertTrue(script.contains("function paintNoisy(entities,identified)"))
+        assertTrue(script.contains("['Top entities','Rate','Payload']"))
+        assertTrue(script.contains("String(e.updates1h)+'/hr'"))
+        assertTrue(script.contains("fmtByteTotal(e.payloadBytes1h||0)+'/hr'"))
+        assertTrue(script.contains("function fmtByteTotal(n)"))
+        assertTrue(script.contains("toFixed(1)+' KB'"))
+        assertTrue(script.contains("toFixed(1)+' MB'"))
+        assertFalse(script.contains("toFixed(1)+' KiB'"))
+        assertFalse(script.contains("toFixed(1)+' MiB'"))
+        assertFalse(script.contains("label:'Noisy entity'"))
+        assertTrue(server.contains("""<table class="dt" id="noisyentities">"""))
+        assertTrue(server.contains("""<div id="cfg-all-cards">"""))
+        assertTrue(server.contains("""<div id="cfg-groups" class="cards"></div>"""))
+        assertFalse(server.contains("Save changes does not control them"))
+        assertTrue(server.contains("""id="savebar" class="savebar" role="region" aria-label="Unsaved settings" hidden"""))
+        assertTrue(configure.contains("""bar.hidden = !dirty && !saving"""))
+        assertTrue(configure.contains("""document.body.classList.toggle("cfg-dirty", dirty || saving)"""))
+        assertTrue(configure.contains("""if (!dirty || saving) return"""))
+        assertTrue(configure.contains("""editGeneration !== submittedGeneration"""))
+        assertTrue(configure.contains("""function recomputeDirty()"""))
+        assertTrue(configure.contains("""values[f.key] !== savedValues[f.key]"""))
+        assertTrue(configure.contains("""savedValues = Object.assign({}, values)"""))
+        assertTrue(configure.contains("""return "Built-in renderer"""))
+        assertTrue(configure.contains("""return "Home Assistant connection"""))
+        assertTrue(configure.contains("""if (g === "Built-in renderer")"""))
+        assertTrue(configure.contains("""dashboard_entity_learning: true, dashboard_fullscreen: true, dashboard_idle_return_min: true, dashboard_zoom: true"""))
+        assertTrue(configure.contains("""var HA_CONNECTION_KEYS = { ha_url: true, ha_token: true }"""))
+        assertTrue(configure.contains("""groups.splice(2, 0, "Home Assistant connection")"""))
+        assertTrue(configure.contains("""groups.push("Logging")"""))
+        assertTrue(configure.contains("""var CARD_NOTES = { "Sensors": "Home Assistant reporting", "Diagnostics": "Home Assistant reporting" }"""))
+        assertTrue(configure.contains("""el("small", { text: " · " + CARD_NOTES[g] })"""))
+        val css = java.io.File("src/main/assets/info.css").readText()
+        assertTrue(css.contains("#noisyentities th:first-child,#noisyentities td:first-child{width:auto}"))
+        assertTrue(css.contains("#noisyentities .num{white-space:nowrap}"))
+        assertTrue(css.contains("#noisyentities .rate{width:68px}"))
+        assertTrue(css.contains("#noisyentities .payload{width:78px}"))
+        assertTrue(css.contains(".savebar{position:fixed"))
+        assertTrue(css.contains(".savebar[hidden]{display:none}"))
+        assertTrue(css.contains("--config-divider:#3a3a3a"))
+        assertTrue(css.contains("--card:#181818;--card-head:#222"))
+        assertTrue(css.contains("border-top:1px solid var(--config-divider)"))
+        assertFalse(css.contains(".cfg-group-contents{display:contents}"))
+        assertTrue(configure.contains("""card.setAttribute("data-config-group", g)"""))
+        assertTrue(configure.contains("""root.insertBefore(proximityCard, root.querySelector('[data-config-group="Logging"]'))"""))
+        assertTrue(configure.contains("document.createTextNode(\"Browser zoom.\")"))
+        assertTrue(configure.contains("f.displaySizingAvailable === true"))
+        assertTrue(configure.contains("href: \"/install#cfg-display\", text: \"Display Sizing\""))
+        assertTrue(server.contains("val displaySizingAvailable = caps.canSetDisplay"))
+        assertTrue(server.contains("spec.key == \"dashboard_zoom\" && displaySizingAvailable"))
+        assertTrue(server.contains("""<div class="cards" id="install-cards">"""))
+        assertTrue(server.contains("""<div class="cards" id="dashboard-cards">"""))
+        assertFalse(server.contains("For panels with no physical nav bar"))
+        assertTrue(server.indexOf("\${tcard(\"infotbl\", \"Panel information\"") < server.indexOf("\$shotCard"))
+        assertTrue(server.contains("""class="gh gh-inline cnotes"""))
+        assertTrue(server.contains("class=\"gh gh-inline\" href=\"\$RELEASES_URL\""))
+        assertTrue(css.contains(".gh-inline svg{width:16px;height:16px"))
+        assertTrue(server.contains("""aria-label="Release notes on GitHub"""))
+        assertFalse(server.contains("""class="cfglink cnotes"""))
+        assertTrue(server.contains("""UpdateChecker.compareVersions(candidate, it)"""))
+        assertTrue(server.contains("""comparison > 0 -> "Upgrade"""))
+        assertTrue(server.contains("""else -> "Downgrade"""))
+        assertTrue(server.contains("""wv.playManaged -> """))
+        assertTrue(server.contains("Managed by Google Play — updates via the Play Store"))
+        val install = java.io.File("src/main/assets/install.js").readText()
+        assertTrue(install.contains("o.setAttribute('data-action', v.action || 'Install')"))
+        assertTrue(install.contains("btn.textContent = o ? (o.getAttribute('data-action') || 'Install') : 'Install'"))
+        val proximity = java.io.File("src/main/assets/proximity-learning.js").readText()
+        assertTrue(proximity.contains("""var cardRoot = document.getElementById("cfg-groups")"""))
+        assertTrue(proximity.contains("""cardRoot.insertBefore(card, cardRoot.querySelector('[data-config-group="Logging"]'))"""))
     }
 
     @Test fun diagnosticButtonRequestUsesTheInjectedProfile() {
@@ -31,6 +129,94 @@ class DiagCapabilityPolicyTest {
 
     @Test fun profileWithoutEvdevButtonsHasNoRequestedStream() {
         assertNull(DiagReader.evdevRequestDescription(fakeProfile()))
+    }
+
+    @Test fun exactProfileDeclarationsHideAbsentLedAndHardwareButtons() {
+        assertFalse(DiagReader.showRgbLedCapability(nspanel))
+        assertFalse(DiagReader.showHardwareButtonsCapability(nspanel))
+    }
+
+    @Test fun genericProfileRetainsRuntimeLedAndButtonDiscoveryRows() {
+        assertTrue(DiagReader.showRgbLedCapability(fallback))
+        assertTrue(DiagReader.showHardwareButtonsCapability(fallback))
+    }
+
+    @Test fun profiledEvdevButtonsKeepTheHardwareButtonRow() {
+        val profile = fakeProfile(
+            evdevButtons = listOf(EvdevButton("/dev/input/event7", 116, grab = true, eventType = "power")),
+        )
+
+        assertTrue(DiagReader.showHardwareButtonsCapability(profile))
+    }
+
+    @Test fun exactProfileCardOmitsExplicitlyAbsentHardware() {
+        val keys = PaneldServer.profileFactKeys(
+            nspanel,
+            mapOf(
+                "Platform" to "Sonoff NSPanel Pro",
+                "SoC" to "Rockchip RK3326 · 4× Arm Cortex-A35 · introduced 2018",
+                "LED" to "none",
+                "Light sensor" to "yes · Ambient light",
+                "Proximity" to "yes · Infrared",
+                "Zigbee" to "sonoff · running",
+                "Relays" to "none",
+                "CPU profile" to "Auto",
+            ),
+        )
+
+        assertFalse("LED" in keys)
+        assertFalse("Relays" in keys)
+        assertTrue("SoC" in keys)
+        assertTrue("Light sensor" in keys)
+        assertTrue("Proximity" in keys)
+        assertTrue("Zigbee" in keys)
+    }
+
+    @Test fun genericProfileCardKeepsCapabilityDiscoveryButOmitsUnknownSoc() {
+        val keys = PaneldServer.profileFactKeys(
+            fallback,
+            mapOf("LED" to "none", "Relays" to "none", "Zigbee" to "none"),
+        )
+
+        assertTrue("LED" in keys)
+        assertTrue("Relays" in keys)
+        assertTrue("Zigbee" in keys)
+        assertFalse("SoC" in keys)
+    }
+
+    @Test fun unexpectedObservedHardwareRemainsVisibleForProfileCorrection() {
+        val keys = PaneldServer.profileFactKeys(
+            nspanel,
+            mapOf("LED" to "RGB", "Relays" to "2"),
+        )
+
+        assertTrue("LED" in keys)
+        assertTrue("Relays" in keys)
+    }
+
+    @Test fun installOwnsImmediatePanelToolsAndConfigureOnlyOwnsSaveTogetherSettings() {
+        val source = java.io.File("src/main/kotlin/io/github/maxlyth/hapaneld/http/PaneldServer.kt").readText()
+        val configure = source.substring(source.indexOf("private fun configureBody"), source.indexOf("private fun profilesBody"))
+        val install = source.substring(source.indexOf("private fun installBody"), source.indexOf("private fun installWarning"))
+
+        listOf("displayCardHtml(management.privilege.typedShellControlReady, displaySizing)", "tameCardHtml(root)").forEach {
+            assertFalse(it in configure)
+            assertTrue(it in install)
+        }
+        assertTrue("/assets/proximity-learning.js" in configure)
+        assertFalse("/assets/prox.js" in source)
+        assertFalse("proximityCardHtml()" in source)
+        assertTrue("configImport(this)" in source.substring(source.indexOf("private fun backupCardHtml"), source.indexOf("private fun apkCardHtml")))
+        assertTrue("""installIcon("cfg-display")""" in source)
+        assertTrue("""cfgIcon("cfg-wake_on_wave")""" in source)
+        assertTrue("/install#cfg-tame" in source)
+    }
+
+    @Test fun proximityHasNoProfileSpecificTuningSurface() {
+        val source = java.io.File("src/main/kotlin/io/github/maxlyth/hapaneld/http/PaneldServer.kt").readText()
+        assertFalse("showProximityTuning" in source)
+        assertFalse("Threshold fine-tune" in source)
+        assertFalse("proxCap(" in source)
     }
 
     @Test fun missingAppSuDoesNotClaimHelperBackedActionsAreUnavailable() {
@@ -58,34 +244,155 @@ class DiagCapabilityPolicyTest {
         assertEquals("available directly to ha-paneld", cap.note)
     }
 
-    @Test fun rootedOrHelperBackedPanelsDoNotShowShizukuAsAParallelCapability() {
+    @Test fun rootedOrHelperBackedPanelsExplainConfiguredShizukuIsRedundant() {
         for (manager in ShizukuManagerIdentity.Status.entries) {
-            assertFalse(DiagReader.showShizukuCapability(rootish = true, consentEnabled = true, manager))
-            assertFalse(DiagReader.showShizukuCapability(rootish = true, consentEnabled = false, manager))
+            assertTrue(DiagReader.showShizukuCapability(consentEnabled = true, manager))
         }
+        assertFalse(
+            DiagReader.showShizukuCapability(
+                consentEnabled = false,
+                ShizukuManagerIdentity.Status.MISSING,
+            ),
+        )
+        assertTrue(
+            DiagReader.shizukuCapabilityNote(
+                ShizukuState.READY,
+                ShizukuManagerIdentity.Status.TRUSTED,
+                preferredPrivilegeReady = true,
+            ).contains("adds no capability while root or the helper daemon provides the preferred route"),
+        )
+        val unhealthy = DiagReader.shizukuCapabilityNote(
+            ShizukuState.READY,
+            ShizukuManagerIdentity.Status.UNTRUSTED,
+            preferredPrivilegeReady = true,
+        )
+        assertTrue(unhealthy.contains("adds no capability"))
+        assertTrue(unhealthy.contains("signer is not trusted"))
+        assertFalse(unhealthy.contains("ready as shell UID"))
+    }
+
+    @Test fun shizukuCapabilityStatusRequiresAReadyBridgeAndTrustedManager() {
+        val ready = ShizukuBridge.Snapshot(ShizukuState.READY, ready = true)
+        val trusted = DiagReader.shizukuCapability(
+            ready,
+            ShizukuManagerIdentity.Status.TRUSTED,
+            preferredPrivilegeReady = true,
+        )
+        val untrusted = DiagReader.shizukuCapability(
+            ready,
+            ShizukuManagerIdentity.Status.UNTRUSTED,
+            preferredPrivilegeReady = true,
+        )
+        val stopped = DiagReader.shizukuCapability(
+            ShizukuBridge.Snapshot(ShizukuState.STOPPED, ready = false),
+            ShizukuManagerIdentity.Status.TRUSTED,
+        )
+
+        assertEquals("ok", trusted.status)
+        assertTrue(trusted.note.contains("adds no capability"))
+        assertEquals("none", untrusted.status)
+        assertTrue(untrusted.note.contains("signer is not trusted"))
+        assertEquals("none", stopped.status)
+        assertTrue(stopped.note.contains("service is stopped"))
     }
 
     @Test fun genuinelyUnrootedPanelsShowShizukuOnlyWhenConfiguredOrInstalled() {
         assertFalse(
             DiagReader.showShizukuCapability(
-                rootish = false,
                 consentEnabled = false,
                 ShizukuManagerIdentity.Status.MISSING,
             ),
         )
         assertTrue(
             DiagReader.showShizukuCapability(
-                rootish = false,
                 consentEnabled = true,
                 ShizukuManagerIdentity.Status.MISSING,
             ),
         )
         assertTrue(
             DiagReader.showShizukuCapability(
-                rootish = false,
                 consentEnabled = false,
                 ShizukuManagerIdentity.Status.TRUSTED,
             ),
         )
+    }
+
+    @Test fun enhancedAccessDiagnosticsGiveDifferentDisabledAndStoppedRecoveryPaths() {
+        val disabled = DiagReader.shizukuCapabilityNote(
+            ShizukuState.DISABLED,
+            ShizukuManagerIdentity.Status.TRUSTED,
+        )
+        val stopped = DiagReader.shizukuCapabilityNote(
+            ShizukuState.STOPPED,
+            ShizukuManagerIdentity.Status.TRUSTED,
+        )
+
+        assertTrue(disabled.contains("Configure → toolbar overflow → Enhanced access → Enable"))
+        assertFalse(disabled.contains("service is stopped"))
+        assertTrue(stopped.contains("service is stopped"))
+        assertTrue(stopped.contains("open Shizuku"))
+        assertFalse(stopped.contains("→ Enable"))
+    }
+
+    @Test fun bootSecurityDiagnosticsNormalizeOnlyAllowlistedCategoricalFacts() {
+        val properties = mapOf(
+            "ro.boot.verifiedbootstate" to "GREEN",
+            "ro.boot.flash.locked" to "1",
+            "ro.boot.vbmeta.device_state" to "locked",
+            "ro.debuggable" to "0",
+        )
+
+        assertEquals(
+            "[boot-security] verified=green flash=locked vbmeta=locked build=user debuggable=no",
+            DiagReader.bootSecurityLine({ properties[it].orEmpty() }, "user"),
+        )
+    }
+
+    @Test fun bootSecurityDiagnosticsDoNotEchoUnknownRawPropertyValues() {
+        val identifyingRawValue = "device-specific-value-12345"
+        val line = DiagReader.bootSecurityLine({ identifyingRawValue }, identifyingRawValue)
+
+        assertEquals(
+            "[boot-security] verified=unknown flash=unknown vbmeta=unknown build=unknown debuggable=unknown",
+            line,
+        )
+        assertFalse(line.contains(identifyingRawValue))
+    }
+
+    @Test fun publicPanelFactsExcludeProfileAndDeploymentAuthoredText() {
+        val privateValue = "private-room-or-network.example"
+        val facts = linkedMapOf(
+            "ha-paneld" to "0.9.5-rc1 (build 294)",
+            "MQTT state" to "connected · ack 2s ago · ipv4",
+            "Security mode" to "Hardened · high-impact remote actions need physical on-panel approval",
+            "Platform" to privateValue,
+            "Model" to privateValue,
+            "Light sensor" to privateValue,
+            "Proximity" to privateValue,
+            "CPU profile" to privateValue,
+            "Log shipping" to "tcp://$privateValue:9000",
+            "Friendly name" to privateValue,
+            "MQTT" to "$privateValue · connected",
+        )
+
+        val public = DiagReader.publicPanelFacts(facts)
+
+        assertEquals(listOf("ha-paneld", "MQTT state", "Security mode"), public.keys.toList())
+        assertFalse(public.values.joinToString().contains(privateValue))
+    }
+
+    @Test fun vendorTameDiagnosticsExposeCountsWithoutProfilePackageIdentifiers() {
+        val packageName = "private.example.vendor.panel"
+        val line = DiagReader.vendorTameSummary(
+            listOf(
+                TameController.Candidate(packageName, "one", installed = true, disabled = false, blocked = false),
+                TameController.Candidate("private.example.disabled", "two", installed = true, disabled = true, blocked = false),
+                TameController.Candidate("private.example.absent", "three", installed = false, disabled = false, blocked = false),
+            ),
+        )
+
+        assertEquals("[vendor-tame] known=3 installed=2 active=1 disabled=1", line)
+        assertFalse(line.contains(packageName))
+        assertFalse(line.contains("private.example"))
     }
 }

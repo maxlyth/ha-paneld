@@ -149,7 +149,14 @@ static int recover_pending_transaction(
 );
 
 static int supported_pkg(const char *pkg) {
-    return strcmp(pkg, COMPANION_FULL) == 0 || strcmp(pkg, COMPANION_MINIMAL) == 0;
+    return pkg && (strcmp(pkg, COMPANION_FULL) == 0 || strcmp(pkg, COMPANION_MINIMAL) == 0);
+}
+
+static const char *canonical_pkg(const char *pkg) {
+    if (!pkg) return NULL;
+    if (strcmp(pkg, COMPANION_FULL) == 0) return COMPANION_FULL;
+    if (strcmp(pkg, COMPANION_MINIMAL) == 0) return COMPANION_MINIMAL;
+    return NULL;
 }
 
 static int supported_component(const char *component) {
@@ -443,16 +450,20 @@ static int remove_nondir_at(int parent, const char *name) {
 }
 
 static int force_stop(const char *pkg) {
-    char cmd[192];
-    snprintf(cmd, sizeof cmd, "am force-stop %s", pkg);
-    return sysexec_run(cmd) == 0 ? 0 : -1;
+    const char *allowed_pkg = canonical_pkg(pkg);
+    if (!allowed_pkg) return -1;
+    const char *const argv[] = { "am", "force-stop", allowed_pkg, NULL };
+    return sysexec_run_argv("/system/bin/am", argv, 0) == 0 ? 0 : -1;
 }
 
 static int relaunch(const char *pkg) {
-    char cmd[256];
-    snprintf(cmd, sizeof cmd,
-        "monkey -p %s -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1", pkg);
-    return sysexec_run(cmd) == 0 ? 0 : -1;
+    const char *allowed_pkg = canonical_pkg(pkg);
+    if (!allowed_pkg) return -1;
+    const char *const argv[] = {
+        "monkey", "-p", allowed_pkg,
+        "-c", "android.intent.category.LAUNCHER", "1", NULL,
+    };
+    return sysexec_run_argv("/system/bin/monkey", argv, 1) == 0 ? 0 : -1;
 }
 
 static int marker_present(int stage_dir, const char *name) {

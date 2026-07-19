@@ -1,11 +1,22 @@
 schema: 2
 id: s9e
-version: 2.0.0
+version: 2.0.2
 display_name: Smatek S9E
 soc_class: rk3566
+soc:
+  model: Rockchip RK3566
+  introduced_year: 2020
+  cpu_cores:
+    - architecture: Arm Cortex-A55
+      count: 4
 metadata:
   author: ha-paneld maintainers
   source: https://github.com/maxlyth/ha-paneld/blob/main/docs/hardware/s9e.md
+  links:
+    - label: SoC details
+      url: https://www.rock-chips.com/a/en/products/RK35_Series/2021/0113/1274.html
+    - label: SoC announcement
+      url: https://www.rock-chips.com/a/cn/news/rockchip/2020/1130/1368.html
   license: Apache-2.0
   maturity: experimental
   tested_firmware:
@@ -15,7 +26,7 @@ metadata:
     - Relay and WebView behavior remain unverified on live hardware.
     - Normal-app su access is inferred from vendor behavior, not confirmed.
 requires:
-  min_core_version: 0.9.3
+  min_core_version: 0.9.5-rc1
   drivers:
     - access.android-su
     - relay.gpio-button-led
@@ -69,7 +80,6 @@ hardware:
   button_led_gpio_base: 147
 sensors:
   proximity_gpio: 18
-  proximity_graded_strategy: observed
   cht8305: false
   room_temp_offset_c: 0.0
 identity:
@@ -85,8 +95,6 @@ cpu:
     Auto: schedutil
 display: {}
 provisioning:
-  access:
-    shizuku: optional
   software:
     webview:
       artifact: lineageos-150-arm

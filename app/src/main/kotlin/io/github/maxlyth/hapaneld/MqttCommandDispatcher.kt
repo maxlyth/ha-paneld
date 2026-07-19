@@ -1,5 +1,7 @@
 package io.github.maxlyth.hapaneld
 
+import io.github.maxlyth.hapaneld.util.MonotonicDeadline
+import io.github.maxlyth.hapaneld.util.interruptAndJoin
 import java.util.ArrayDeque
 import java.util.concurrent.CompletableFuture
 
@@ -21,6 +23,7 @@ internal class MqttCommandDispatcher(
     data class RunResult(val admission: Admission, val execution: Execution) {
         val executed: Boolean get() = execution == Execution.SUCCEEDED
     }
+    data class DrainResult(val cancelled: Int, val drained: Boolean)
 
     private data class Work(
         val latestKey: String?,
@@ -113,8 +116,8 @@ internal class MqttCommandDispatcher(
 
     fun pendingCount(): Int = synchronized(lock) { pending.size }
 
-    /** Returns how many queued commands were cancelled. */
-    fun closeAndDrain(): Int {
+    /** Close admission, cancel queued commands and interrupt the active command without waiting. */
+    fun close(): Int {
         val discarded = mutableListOf<Work>()
         val running = synchronized(lock) {
             if (accepting) {
@@ -126,24 +129,16 @@ internal class MqttCommandDispatcher(
             worker
         }
         discarded.forEach { it.completion?.complete(Execution.NOT_ADMITTED) }
-
-        if (running !== Thread.currentThread()) {
-            var interrupted = false
-            synchronized(lock) {
-                while (worker != null) {
-                    try {
-                        lock.wait()
-                    } catch (_: InterruptedException) {
-                        interrupted = true
-                        // Teardown correctness is stronger than the caller's interrupt: the active
-                        // hardware owner must be drained before its controller is destroyed.
-                    }
-                }
-            }
-            if (interrupted) Thread.currentThread().interrupt()
-        }
+        running?.interrupt()
         return discarded.size
     }
+
+    fun awaitDrained(deadline: MonotonicDeadline): Boolean =
+        synchronized(lock) { worker }.interruptAndJoin(deadline)
+
+    /** Close/cancel first, then spend only the caller's remaining retirement budget draining work. */
+    fun closeAndDrain(deadline: MonotonicDeadline): DrainResult =
+        DrainResult(close(), awaitDrained(deadline))
 
     private fun ensureWorkerLocked(): Boolean {
         if (worker != null) return true

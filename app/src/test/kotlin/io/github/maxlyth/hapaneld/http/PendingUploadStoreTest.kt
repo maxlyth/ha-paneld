@@ -9,6 +9,35 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 
 class PendingUploadStoreTest {
+    @Test
+    fun stagedUploadExpiresBeforeCommit() {
+        var now = 1_000L
+        val store = PendingUploadStore(monotonicMs = { now }, ttlMs = 100L, newToken = { "token" }).apply { open() }
+        val lease = granted(store.begin())
+        val staged = file("expired.apk")
+        store.stage(lease, staged)
+        now += 100L
+
+        assertNull(store.claim("token"))
+        assertFalse(staged.exists())
+        assertTrue(store.begin() is PendingUploadStore.BeginResult.Granted)
+    }
+
+    @Test
+    fun backwardClockExpiresStagedUploadAndDeletesIt() {
+        var now = 1_000L
+        val store = PendingUploadStore(monotonicMs = { now }, ttlMs = 100L, newToken = { "token" }).apply { open() }
+        val lease = granted(store.begin())
+        val staged = file("backward-clock.apk")
+        store.stage(lease, staged)
+
+        now = 999L
+
+        assertNull(store.peek("token"))
+        assertFalse(staged.exists())
+        assertTrue(store.begin() is PendingUploadStore.BeginResult.Granted)
+    }
+
     @get:Rule val temporary = TemporaryFolder()
 
     private fun file(name: String) = temporary.newFile(name).apply { writeText(name) }

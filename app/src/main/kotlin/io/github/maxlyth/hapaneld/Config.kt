@@ -17,6 +17,7 @@ import io.github.maxlyth.hapaneld.persistence.AppState
 import io.github.maxlyth.hapaneld.util.AndroidInput
 import io.github.maxlyth.hapaneld.util.HaLink
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicLong
 
 internal data class MqttCredentialsSnapshot(
     val broker: String,
@@ -46,6 +47,12 @@ internal data class DashboardEntityBackupState(
     val overrideOwner: String,
 )
 
+/** One-time migration input for the adaptive proximity learner. */
+internal data class ProximityLearningSeed(
+    val nearRaw: Float,
+    val farRaw: Float,
+)
+
 /**
  * Runtime configuration. Production state is transactional SQLite; the SharedPreferences-shaped
  * interface remains as a test and typed-caller compatibility boundary. The MQTT broker defaults to
@@ -57,6 +64,10 @@ class Config private constructor(
     private val contentResolver: ContentResolver?,
     private val calibrationPrefs: SharedPreferences,
 ) {
+    enum class SecurityMode { RELAXED, HARDENED }
+
+    private val wakeOnWaveEpoch = AtomicLong()
+
     constructor(context: Context) : this(
         AppState.preferences(context, "config", "ha-paneld"),
         context.applicationContext.contentResolver,
@@ -72,6 +83,24 @@ class Config private constructor(
 
     val httpPort: Int get() = prefs.getInt("http_port", DEFAULT_PORT)
 
+    /**
+     * Device-local control-plane posture. This key deliberately lives outside SettingsRegistry, so a
+     * remote config import, backup restore, HTTP request, or MQTT command cannot enable or disable it.
+     * The non-exported native settings activity is the only UI that changes it.
+     */
+    val securityMode: SecurityMode
+        get() = if (prefs.getBoolean(SECURITY_MODE_PREF, false)) SecurityMode.HARDENED else SecurityMode.RELAXED
+
+    /** Hardened mode and ha-paneld-owned network ADB are mutually exclusive. The check and mode
+     * commit share [CONFIG_LOCK] with network-ADB ownership so concurrent local/network requests
+     * cannot cross and leave both durable authorities enabled. */
+    fun setSecurityMode(mode: SecurityMode): Boolean = synchronized(CONFIG_LOCK) {
+        if (mode == SecurityMode.HARDENED && prefs.getBoolean("network_adb_enabled", false)) return@synchronized false
+        prefs.edit().putBoolean(SECURITY_MODE_PREF, mode == SecurityMode.HARDENED).commit()
+    }
+
+    val hardenedSecurityEnabled: Boolean get() = securityMode == SecurityMode.HARDENED
+
     /** Empty => MQTT disabled. e.g. "tcp://192.168.1.10:1883". */
     val mqttBroker: String get() = prefs.getString("mqtt_broker", "")!!
     val mqttUser: String get() = prefs.getString("mqtt_user", "")!!
@@ -86,6 +115,52 @@ class Config private constructor(
             user = all["mqtt_user"] as? String ?: "",
             password = all["mqtt_password"] as? String ?: "",
         )
+    }
+
+    /** Device-local MQTT route memory. One broker tuple survives a controlled process boundary but is
+     * excluded from config APIs/bundles because it is observed transport state, not user configuration. */
+    internal fun mqttFamilyPreference(brokerIdentity: String): Boolean? = synchronized(CONFIG_LOCK) {
+        if (prefs.getString(MQTT_FAMILY_BROKER_PREF, null) == brokerIdentity) {
+            prefs.getBoolean(MQTT_FAMILY_IPV4_PREF, false)
+        } else {
+            null
+        }
+    }
+
+    internal fun rememberMqttFamilyPreference(brokerIdentity: String, preferIpv4: Boolean): Boolean =
+        synchronized(CONFIG_LOCK) {
+            prefs.edit()
+                .putString(MQTT_FAMILY_BROKER_PREF, brokerIdentity)
+                .putBoolean(MQTT_FAMILY_IPV4_PREF, preferIpv4)
+                .commit()
+        }
+
+    internal fun forgetMqttFamilyPreference(): Boolean = synchronized(CONFIG_LOCK) {
+        if (!prefs.contains(MQTT_FAMILY_BROKER_PREF) && !prefs.contains(MQTT_FAMILY_IPV4_PREF)) {
+            return@synchronized true
+        }
+        prefs.edit()
+            .remove(MQTT_FAMILY_BROKER_PREF)
+            .remove(MQTT_FAMILY_IPV4_PREF)
+            .commit()
+    }
+
+    /** True when this exact MQTT configuration still owns its one announcement-wedge process boundary. */
+    internal fun mqttAnnouncementBoundaryAvailable(identity: String): Boolean = synchronized(CONFIG_LOCK) {
+        val consumed = prefs.getString(MQTT_ANNOUNCEMENT_BOUNDARY_PREF, null) ?: return@synchronized true
+        if (consumed == identity) return@synchronized false
+        // A relevant broker/profile/credential identity change starts a new bounded recovery epoch.
+        prefs.edit().remove(MQTT_ANNOUNCEMENT_BOUNDARY_PREF).commit()
+    }
+
+    internal fun consumeMqttAnnouncementBoundary(identity: String): Boolean = synchronized(CONFIG_LOCK) {
+        if (prefs.getString(MQTT_ANNOUNCEMENT_BOUNDARY_PREF, null) == identity) return@synchronized false
+        prefs.edit().putString(MQTT_ANNOUNCEMENT_BOUNDARY_PREF, identity).commit()
+    }
+
+    internal fun clearMqttAnnouncementBoundary(identity: String): Boolean = synchronized(CONFIG_LOCK) {
+        if (prefs.getString(MQTT_ANNOUNCEMENT_BOUNDARY_PREF, null) != identity) return@synchronized true
+        prefs.edit().remove(MQTT_ANNOUNCEMENT_BOUNDARY_PREF).commit()
     }
 
     /** Stable per-panel id used in entity_ids / MQTT topics. Defaults to a slug of the device name,
@@ -116,7 +191,7 @@ class Config private constructor(
      *  when it returns. Confined to the calling thread: a setter fired on another thread during the batch
      *  takes its normal immediate-apply path (SharedPreferences.Editor isn't thread-safe). Non-nesting;
      *  the /config apply that uses it is single-threaded per request. */
-    fun applyBatch(block: () -> Unit): Boolean = synchronized(CONFIG_LOCK) {
+    fun applyBatch(afterCommit: () -> Unit = {}, block: () -> Unit): Boolean = synchronized(CONFIG_LOCK) {
         val ed = prefs.edit()
         batchEditor = ed
         batchThread = Thread.currentThread()
@@ -126,7 +201,7 @@ class Config private constructor(
             batchEditor = null
             batchThread = null
         }
-        ed.commit()
+        ed.commit().also { committed -> if (committed) afterCommit() }
     }
 
     /** Serialize a compound config operation across every Config wrapper in this process. */
@@ -466,11 +541,13 @@ class Config private constructor(
         edit { putString("http_allowed_hosts", raw.trim()) }
     }
 
-    // Wake the screen locally the instant proximity reads near (low latency, network-independent).
+    // Wake locally after the learner confirms a deliberate far-to-near-to-far gesture.
     // Default on where a proximity sensor exists; the HA switch can disable it (e.g. a hallway panel).
     val wakeOnWave: Boolean get() = prefs.getBoolean("wake_on_wave", true)
+    val wakeOnWaveGeneration: Long get() = wakeOnWaveEpoch.get()
     fun setWakeOnWave(on: Boolean) {
         edit { putBoolean("wake_on_wave", on) }
+        wakeOnWaveEpoch.incrementAndGet()
     }
 
     // Prevent the vendor firmware idle-dimming the backlight at the screen-off timeout (it drops the
@@ -501,6 +578,9 @@ class Config private constructor(
     val kioskLock: Boolean get() = prefs.getBoolean("kiosk_lock", false)
     fun setKioskLock(on: Boolean) {
         edit { putBoolean("kiosk_lock", on) }
+    }
+    fun commitKioskLock(on: Boolean): Boolean = synchronized(CONFIG_LOCK) {
+        prefs.edit().putBoolean("kiosk_lock", on).commit()
     }
 
     // HA Companion app auto-manage: when on, ha-paneld installs the minimal Companion if it's
@@ -562,8 +642,9 @@ class Config private constructor(
     // is true (some firmwares strip persist.adb.tcp.port at boot), and only tears adb down on OFF if it
     // was ha-paneld that turned it on — never disabling adb another mechanism started.
     val networkAdbEnabled: Boolean get() = prefs.getBoolean("network_adb_enabled", false)
-    fun setNetworkAdbEnabled(on: Boolean) {
-        edit { putBoolean("network_adb_enabled", on) }
+    fun setNetworkAdbEnabled(on: Boolean): Boolean = synchronized(CONFIG_LOCK) {
+        if (on && prefs.getBoolean(SECURITY_MODE_PREF, false)) return@synchronized false
+        prefs.edit().putBoolean("network_adb_enabled", on).commit()
     }
 
     // The ha-paneld version whose discovery set was last published to HA. On an upgrade (this differs
@@ -631,10 +712,10 @@ class Config private constructor(
 
     /** Exact owner-scoped filter state for full backup and local config revisions. Derived SQLite
      * evidence remains rebuildable and is intentionally excluded. */
-    internal fun dashboardEntityBackupState(): DashboardEntityBackupState {
+    internal fun dashboardEntityBackupState(): DashboardEntityBackupState = synchronized(CONFIG_LOCK) {
         val all = prefs.all
         fun string(key: String) = all[key] as? String ?: ""
-        return DashboardEntityBackupState(
+        DashboardEntityBackupState(
             instanceKey = string("dashboard_entity_instance"),
             instanceOrigin = string("dashboard_entity_instance_origin"),
             instanceUuid = string("dashboard_entity_instance_uuid"),
@@ -954,6 +1035,19 @@ class Config private constructor(
         } }
     }
 
+    /** Restore the exact owner-scoped preference state if the transactional SQLite evidence reset
+     * fails. Identity fields are intentionally excluded: reset never owns or mutates the target. */
+    internal fun restoreDashboardEntityEvidencePreferences(state: DashboardEntityBackupState): Boolean =
+        applyBatch { edit {
+            putString("dashboard_entity_filter_ids", state.filterIds)
+            putBoolean("dashboard_entity_filter_enabled", state.filterEnabled)
+            putString("dashboard_entity_filter_instance", state.filterOwner)
+            putBoolean("dashboard_entity_learning_applied", state.learningApplied)
+            putString("dashboard_entity_applied_instance", state.appliedOwner)
+            putString("dashboard_entity_overrides", state.overrides)
+            putString("dashboard_entity_override_instance", state.overrideOwner)
+        } }
+
     /** Commit a promotion policy and any resulting live subscription as one durable preference change.
      *  A null [activeEntityIds] means the current stream is unchanged. */
     fun commitDashboardEntityPromotionPolicy(
@@ -1039,7 +1133,10 @@ class Config private constructor(
 
     // Silence the firmware startup chime by zeroing the ring/notification volume via Settings.System.
     // Default off — existing panels already have their own volume state; only opt in deliberately.
-    val silenceBootChime: Boolean get() = prefs.getBoolean("silence_boot_chime", false)
+    val silenceBootChime: Boolean get() = prefs.getBoolean(
+        "silence_boot_chime",
+        SettingsRegistry.DEFAULT_SILENCE_BOOT_CHIME,
+    )
     fun setSilenceBootChime(on: Boolean) { edit { putBoolean("silence_boot_chime", on) } }
 
     /** Last measured DashboardActivity-start → Android default-network wait. Used only to make the
@@ -1099,10 +1196,18 @@ class Config private constructor(
         edit { putBoolean("auto_brightness", on) }
     }
 
-    /** Dimmer(−) ↔ Brighter(+) bias added to the auto-brightness curve, in 0–255 brightness units. */
-    val brightnessBias: Int get() = prefs.getInt("brightness_bias", 0)
-    fun setBrightnessBias(v: Int) {
-        edit { putInt("brightness_bias", v.coerceIn(-100, 100)) }
+    /** Strength of deviations from the learned ambient-light baseline; 50 is the neutral response. */
+    val autoBrightnessSensitivity: Int
+        get() = prefs.getInt("auto_brightness_sensitivity", 50).coerceIn(0, 100)
+    fun setAutoBrightnessSensitivity(value: Int) {
+        edit { putInt("auto_brightness_sensitivity", value.coerceIn(0, 100)) }
+    }
+
+    /** Exact HA illuminance entity selected instead of the local ALS; blank uses the panel sensor. */
+    val autoBrightnessHaEntity: String
+        get() = prefs.getString("auto_brightness_ha_entity", "").orEmpty()
+    fun setAutoBrightnessHaEntity(entityId: String) {
+        edit { putString("auto_brightness_ha_entity", entityId.trim()) }
     }
 
     /**
@@ -1115,26 +1220,21 @@ class Config private constructor(
     // model defaults when the user hasn't set them. Null before attach (resolution falls back to Build).
     @Volatile private var profile: DeviceProfile? = null
     @Volatile private var proximityCalibrationPrefix: String? = null
+    @Volatile private var proximityCalibrationProfilePrefix: String? = null
     fun attachProfile(p: DeviceProfile) {
-        // A calibration describes one physical sensor, not the daemon globally. Bind legacy values to
-        // the profile active during this one-time migration; future profile switches get an independent
-        // namespace and switching back restores the original captures.
-        proximityCalibrationPrefix = profileCalibrationPrefix(p.id, p.revision)
-            .takeIf { migrateLegacyProximityCalibration(it) }
+        // Retain the old profile namespace only long enough for the adaptive learner to consume a
+        // complete user-captured near/far pair. New proximity state is owned by the learner.
+        proximityCalibrationProfilePrefix = "profile_calibration.${sanitizeProfileIdentity(p.id)}"
+        proximityCalibrationPrefix = "${proximityCalibrationProfilePrefix}.${sanitizeProfileIdentity(p.revision)}"
         migrateLegacyButtonBacklight(p)
         profile = p
     }
-
-    private fun profileCalibrationPrefix(profileId: String, revision: String): String =
-        "profile_calibration.${sanitizeProfileIdentity(profileId)}.${sanitizeProfileIdentity(revision)}"
 
     private fun profileStateSuffix(profile: DeviceProfile): String =
         "${sanitizeProfileIdentity(profile.id)}.${sanitizeProfileIdentity(profile.revision)}"
 
     private fun sanitizeProfileIdentity(value: String): String =
         value.lowercase(Locale.ROOT).replace(Regex("[^a-z0-9._-]"), "-")
-
-    private fun proximityKey(key: String): String = proximityCalibrationPrefix?.let { "$it.$key" } ?: key
 
     private fun buttonBacklightKey(profile: DeviceProfile): String =
         "last_button_backlight.${profileStateSuffix(profile)}"
@@ -1145,38 +1245,6 @@ class Config private constructor(
         val editor = prefs.edit()
         if (!prefs.contains(target)) editor.putInt(target, prefs.getInt("last_button_backlight", -1))
         editor.remove("last_button_backlight").apply()
-    }
-
-    private fun migrateLegacyProximityCalibration(targetPrefix: String): Boolean {
-        if (calibrationPrefs.getBoolean(PROXIMITY_PROFILE_MIGRATED, false)) return true
-        val editor = calibrationPrefs.edit()
-        PROXIMITY_KEYS.forEach { key ->
-            val target = "$targetPrefix.$key"
-            if (calibrationPrefs.contains(target)) return@forEach
-            val legacyProfileKey = targetPrefix.substringBeforeLast('.') + ".$key"
-            val source = when {
-                calibrationPrefs.contains(key) -> calibrationPrefs.all[key]
-                calibrationPrefs.contains(legacyProfileKey) -> calibrationPrefs.all[legacyProfileKey]
-                prefs.contains(legacyProfileKey) -> prefs.all[legacyProfileKey]
-                prefs.contains(key) -> prefs.all[key]
-                else -> null
-            }
-            when (val value = source) {
-                is Float -> editor.putFloat(target, value)
-                is Boolean -> editor.putBoolean(target, value)
-                is String -> editor.putString(target, value)
-            }
-        }
-        val committed = editor.putBoolean(PROXIMITY_PROFILE_MIGRATED, true).commit()
-        if (!committed) return false
-        // These keys describe physical sensor readings and must not remain in the backup-eligible
-        // configuration file after migration to the explicitly excluded calibration preferences.
-        val legacyEditor = prefs.edit()
-        prefs.all.keys.filter {
-            it in PROXIMITY_KEYS || it == PROXIMITY_PROFILE_MIGRATED || it.startsWith("profile_calibration.")
-        }.forEach(legacyEditor::remove)
-        legacyEditor.commit()
-        return true
     }
 
     /** Raw user-set values (empty if unset) — for the Configure form's input value. */
@@ -1203,75 +1271,61 @@ class Config private constructor(
         edit { putString("manufacturer", manufacturer); putString("model", model) }
     }
 
-    // --- proximity calibration (raw values stay on-device & in the HTTP UI; only the derived
-    // binary is published to HA, so a graded ToF can't flood the recorder). The near/far captures
-    // absorb the cross-device scale + polarity inversion; the published binary is a Schmitt trigger
-    // whose dead-zone width comes from the sensitivity preset. ---
+    // --- legacy proximity calibration retirement -----------------------------------------------
 
-    /** Hysteresis band width as a fraction of the near/far capture span (flap resistance). */
-    enum class ProxSensitivity(val fraction: Float) { HIGH(0.08f), MEDIUM(0.15f), LOW(0.30f) }
+    /**
+     * Returns one complete user-captured near/far pair for the adaptive learner, then synchronously
+     * removes every old threshold, polarity, endpoint, sensitivity, and migration key. The active
+     * profile revision wins, followed by the earlier profile-id namespace and unscoped legacy state.
+     * Incomplete or non-finite captures are discarded with the rest of the retired calibration state.
+     */
+    internal fun consumeLegacyProximityLearningSeed(): ProximityLearningSeed? = synchronized(CONFIG_LOCK) {
+        val currentPrefix = proximityCalibrationPrefix
+        val profilePrefix = proximityCalibrationProfilePrefix
 
-    // A user capture wins; otherwise fall back to the profile. A written profile is authoritative
-    // knowledge — if it supplies near/far the panel is calibrated out of the box (no manual dance); the
-    // two-point capture is the fallback for unprofiled sensors (and a user override).
-    private val userCalibrated: Boolean get() = !calibrationPrefs.getFloat(proximityKey("prox_threshold"), Float.NaN).isNaN()
-    val proximityNearRaw: Float get() {
-        val v = calibrationPrefs.getFloat(proximityKey("prox_near_raw"), Float.NaN)
-        return if (!v.isNaN()) v else profile?.proximityNearRaw ?: Float.NaN
-    }
-    val proximityFarRaw: Float get() {
-        val v = calibrationPrefs.getFloat(proximityKey("prox_far_raw"), Float.NaN)
-        return if (!v.isNaN()) v else profile?.proximityFarRaw ?: Float.NaN
-    }
-    val proximityThreshold: Float get() {
-        val v = calibrationPrefs.getFloat(proximityKey("prox_threshold"), Float.NaN)
-        if (!v.isNaN()) return v
-        val n = profile?.proximityNearRaw; val f = profile?.proximityFarRaw
-        return if (n != null && f != null) (n + f) / 2f else Float.NaN
-    }
-    val proximityNearBelow: Boolean get() {
-        if (userCalibrated) return calibrationPrefs.getBoolean(proximityKey("prox_near_below"), true) // user capture wins
-        profile?.proximityNearBelow?.let { return it }                             // explicit profile polarity
-        val n = profile?.proximityNearRaw; val f = profile?.proximityFarRaw
-        if (n != null && f != null) return n < f                                   // derived from profile near/far
-        return calibrationPrefs.getBoolean(proximityKey("prox_near_below"), true)  // legacy default
-    }
-    val proximityCalibrated: Boolean
-        get() = !proximityNearRaw.isNaN() && !proximityFarRaw.isNaN() && !proximityThreshold.isNaN()
-    val proximitySensitivity: ProxSensitivity
-        get() = runCatching { ProxSensitivity.valueOf(calibrationPrefs.getString(proximityKey("prox_sensitivity"), "MEDIUM")!!) }
-            .getOrDefault(ProxSensitivity.MEDIUM)
-
-    /** Schmitt half-band in raw units = sensitivity × |near − far|. 0 when uncalibrated. */
-    val proximityMargin: Float
-        get() = if (proximityCalibrated)
-            proximitySensitivity.fraction * kotlin.math.abs(proximityNearRaw - proximityFarRaw) else 0f
-
-    /** Store one capture; when both exist, derive threshold (midpoint) + polarity (near = below?). */
-    fun captureProximity(step: String, raw: Float) {
-        calibrationPrefs.edit().putFloat(proximityKey(if (step == "near") "prox_near_raw" else "prox_far_raw"), raw).apply()
-        val n = proximityNearRaw; val f = proximityFarRaw
-        if (!n.isNaN() && !f.isNaN()) {
-            calibrationPrefs.edit()
-                .putFloat(proximityKey("prox_threshold"), (n + f) / 2f)
-                .putBoolean(proximityKey("prox_near_below"), n < f)
-                .apply()
+        fun seedIn(store: SharedPreferences, prefix: String): ProximityLearningSeed? {
+            val separator = if (prefix.isEmpty()) "" else "$prefix."
+            val near = store.all["${separator}prox_near_raw"] as? Float ?: return null
+            val far = store.all["${separator}prox_far_raw"] as? Float ?: return null
+            return ProximityLearningSeed(near, far).takeIf { near.isFinite() && far.isFinite() }
         }
-    }
 
-    fun setProximityThreshold(v: Float) { calibrationPrefs.edit().putFloat(proximityKey("prox_threshold"), v).apply() }
-    fun setProximitySensitivity(s: String) {
-        runCatching { ProxSensitivity.valueOf(s) }.onSuccess {
-            calibrationPrefs.edit().putString(proximityKey("prox_sensitivity"), it.name).apply()
+        fun namespacesIn(store: SharedPreferences): List<String> = buildList {
+            currentPrefix?.let(::add)
+            profilePrefix?.let(::add)
+            if (profilePrefix != null) {
+                store.all.keys.asSequence()
+                    .filter { it.startsWith("$profilePrefix.") && it.endsWith(".prox_near_raw") }
+                    .map { it.removeSuffix(".prox_near_raw") }
+                    // A revision is one sanitized segment. This avoids borrowing a capture from a
+                    // different dotted profile id that happens to extend the active profile's id.
+                    .filter { !it.removePrefix("$profilePrefix.").contains('.') }
+                    .sorted()
+                    .forEach(::add)
+            }
+            add("")
+        }.distinct()
+
+        val seed = sequence {
+            for (namespace in namespacesIn(calibrationPrefs)) yield(seedIn(calibrationPrefs, namespace))
+            for (namespace in namespacesIn(prefs)) yield(seedIn(prefs, namespace))
+        }.filterNotNull().firstOrNull()
+
+        fun keysToRetire(store: SharedPreferences): List<String> = store.all.keys.filter { key ->
+            key == PROXIMITY_PROFILE_MIGRATED || LEGACY_PROXIMITY_KEYS.any { legacy ->
+                key == legacy || (key.startsWith("profile_calibration.") && key.endsWith(".$legacy"))
+            }
         }
-    }
-    fun resetProximityCalibration() {
-        calibrationPrefs.edit()
-            .remove(proximityKey("prox_near_raw"))
-            .remove(proximityKey("prox_far_raw"))
-            .remove(proximityKey("prox_threshold"))
-            .remove(proximityKey("prox_near_below"))
-            .apply()
+
+        // Clear the backup-eligible store first. If that commit fails, the isolated calibration store
+        // still retains the seed for a later retry; only report consumption after both commits succeed.
+        val configKeys = keysToRetire(prefs)
+        val configCleared = prefs.edit().also { editor -> configKeys.forEach(editor::remove) }.commit()
+        if (!configCleared) return@synchronized null
+        val calibrationKeys = keysToRetire(calibrationPrefs)
+        val calibrationCleared = calibrationPrefs.edit().also { editor -> calibrationKeys.forEach(editor::remove) }.commit()
+        if (!calibrationCleared) return@synchronized null
+        seed
     }
 
     /** Effective CHT8305 room-temperature calibration offset (°C): the profile's characterised self-heat
@@ -1362,10 +1416,12 @@ class Config private constructor(
     internal fun commitRaw(spec: SettingSpec, normalized: String): Boolean = synchronized(CONFIG_LOCK) {
         if (spec.transient || spec.readOnly) return false
         val value = (SettingValue.validate(spec, normalized) as? Validation.Ok)?.normalized ?: return false
-        prefs.edit().also { editor ->
+        val committed = prefs.edit().also { editor ->
             if (spec.key == "home_dashboard") stageHomeDashboard(editor, value, homeDashboard)
             else stage(editor, spec, value)
         }.commit()
+        if (committed && spec.key == "wake_on_wave") wakeOnWaveEpoch.incrementAndGet()
+        committed
     }
 
     /** A new editor for staging a batch of registry writes (commit with [SharedPreferences.Editor.commit]). */
@@ -1373,7 +1429,12 @@ class Config private constructor(
 
     /** Commit a caller-staged transaction under the same lock as grouped credential mutation and OAuth
      * refresh ownership checks. */
-    internal fun commit(editor: SharedPreferences.Editor): Boolean = synchronized(CONFIG_LOCK) { editor.commit() }
+    internal fun commit(
+        editor: SharedPreferences.Editor,
+        afterCommit: () -> Unit = {},
+    ): Boolean = synchronized(CONFIG_LOCK) {
+        editor.commit().also { committed -> if (committed) afterCommit() }
+    }
 
     /** Schema the live store was last written at. Absent → 1 (the original shape, before this tracking),
      *  so an app upgrade that bumps [SettingsRegistry.SCHEMA] triggers a one-time on-device migration. */
@@ -1418,6 +1479,11 @@ class Config private constructor(
          * must be process-wide as well. */
         private val CONFIG_LOCK = Any()
         private const val TAG = "ha-paneld/config"
+        private const val SECURITY_MODE_PREF = "device_local_hardened_security"
+        private const val MQTT_FAMILY_BROKER_PREF = "device_local_mqtt_family_broker"
+        private const val MQTT_FAMILY_IPV4_PREF = "device_local_mqtt_family_ipv4"
+        private const val MQTT_ANNOUNCEMENT_BOUNDARY_PREF =
+            "device_local_mqtt_announcement_boundary_consumed"
         private const val DASHBOARD_ENTITY_DEFAULT_RESOLVER_VERSION_KEY =
             "dashboard_entity_default_resolver_version"
         private const val DASHBOARD_ENTITY_DEFAULT_RESOLVER_TARGET_KEY =
@@ -1427,7 +1493,7 @@ class Config private constructor(
         private const val DASHBOARD_ENTITY_DEFAULT_RESOLVER_VERSION = 1
         private const val PROXIMITY_PROFILE_MIGRATED = "proximity_profile_calibration_migrated"
         internal const val PROFILE_CALIBRATION_PREFS = "ha-paneld-profile-calibration"
-        private val PROXIMITY_KEYS = listOf(
+        private val LEGACY_PROXIMITY_KEYS = listOf(
             "prox_near_raw",
             "prox_far_raw",
             "prox_threshold",

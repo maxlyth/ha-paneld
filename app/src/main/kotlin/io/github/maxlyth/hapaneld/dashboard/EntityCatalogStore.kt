@@ -1,10 +1,14 @@
 package io.github.maxlyth.hapaneld.dashboard
 
+import android.content.ContentValues
 import android.content.Context
 import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import android.database.sqlite.SQLiteException
+import io.github.maxlyth.hapaneld.control.AMBIENT_RETENTION_MINUTES
+import io.github.maxlyth.hapaneld.control.AmbientHistoryMinute
+import io.github.maxlyth.hapaneld.control.AmbientMinuteAggregate
 import io.github.maxlyth.hapaneld.metrics.FeatureCostOperation
 import io.github.maxlyth.hapaneld.metrics.FeatureCostOutcome
 import io.github.maxlyth.hapaneld.metrics.FeatureCosts
@@ -19,7 +23,7 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
     private val performanceMaintenanceGate = MaintenanceIntervalGate(PERFORMANCE_MAINTENANCE_INTERVAL_MS)
     private val databaseBytesCacheLock = Any()
     private var databaseBytesCachedAt = Long.MIN_VALUE
-    private var databaseBytesCachedValue = 0L
+    private var databaseUsageCachedValue = DatabaseUsage(0L, 0L, 0)
 
     init {
         // Use the helper-level API so WAL is enabled before the database is opened. Calling
@@ -29,6 +33,33 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
     }
 
     data class StateRow(val entityId: String, val state: String, val friendlyName: String = "")
+    data class ProximityModelRow(
+        val fingerprint: String,
+        val algorithmVersion: Int,
+        val behaviorSignature: String,
+        val snapshotJson: String,
+        val ready: Boolean,
+        val updatedAt: Long,
+    )
+    data class ProximityRollupRow(
+        val fingerprint: String,
+        val bucket: Long,
+        val sampleCount: Int,
+        val rawMin: Double,
+        val rawMax: Double,
+        val rawSum: Double,
+        val rawSquareSum: Double,
+        val excursionCount: Int,
+        val gestureCount: Int,
+    )
+    data class ProximityEpisodeRow(
+        val fingerprint: String,
+        val startedAt: Long,
+        val durationMs: Long,
+        val peakLevel: Int,
+        val completed: Boolean,
+        val guided: Boolean,
+    )
     data class Snapshot(
         val state: String,
         val lastSyncAt: Long,
@@ -40,6 +71,13 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
         val ignoredIssueCount: Int,
         val error: String,
         val dbBytes: Long,
+    )
+
+    /** Bounded storage evidence for the one app-owned SQLite database. Paths never leave this owner. */
+    data class DatabaseUsage(
+        val usedBytes: Long,
+        val diskBytes: Long,
+        val schemaVersion: Int,
     )
 
     override fun onConfigure(db: SQLiteDatabase) {
@@ -87,6 +125,13 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
         db.execSQL(APP_STATE_NAMESPACE_TABLE_SQL)
         db.execSQL(APP_STATE_TABLE_SQL)
         db.execSQL("CREATE INDEX app_state_updated ON app_state(namespace,updated_at)")
+        db.execSQL(PROXIMITY_MODEL_TABLE_SQL)
+        db.execSQL(PROXIMITY_ROLLUP_TABLE_SQL)
+        db.execSQL("CREATE INDEX proximity_rollup_age ON proximity_rollup(bucket)")
+        db.execSQL(PROXIMITY_EPISODE_TABLE_SQL)
+        db.execSQL("CREATE INDEX proximity_episode_age ON proximity_episode(started_at)")
+        db.execSQL(AMBIENT_HISTORY_TABLE_SQL)
+        db.execSQL("CREATE INDEX ambient_lux_minute_age ON ambient_lux_minute(minute)")
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -305,6 +350,88 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
         }
     }
 
+    /** Batched IO-side sink for ambient evidence; sensor callbacks only touch the RAM accumulator. */
+    internal fun recordAmbientHistory(samples: List<AmbientMinuteAggregate>, nowMs: Long) {
+        if (samples.isEmpty() || nowMs < 0L) return
+        val nowMinute = nowMs / MINUTE_MS
+        val oldestMinute = nowMinute - AMBIENT_RETENTION_MINUTES
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            val statement = db.compileStatement(
+                """UPDATE ambient_lux_minute SET lux_integral=lux_integral+?,
+                   coverage_ms=coverage_ms+?,min_lux=min(min_lux,?),max_lux=max(max_lux,?),
+                   last_lux=?,sample_count=sample_count+?,
+                   baseline_log_integral=baseline_log_integral+?,
+                   baseline_coverage_ms=baseline_coverage_ms+?
+                   WHERE context_id=? AND source_id=? AND minute=?""",
+            )
+            try {
+                samples.asSequence()
+                    .filter { it.key.contextId.length in 1..128 && it.key.sourceId.length in 1..255 }
+                    .filter { it.key.minute in oldestMinute..nowMinute }
+                    .filter { it.coverageMs in 1..MINUTE_MS && it.sampleCount > 0 }
+                    .filter { it.luxIntegral.isFinite() && it.minLux.isFinite() && it.maxLux.isFinite() && it.lastLux.isFinite() }
+                    .forEach { sample ->
+                        db.execSQL(
+                            """INSERT OR IGNORE INTO ambient_lux_minute(
+                               context_id,source_id,minute,min_lux,max_lux,last_lux)
+                               VALUES(?,?,?,?,?,?)""",
+                            arrayOf(sample.key.contextId, sample.key.sourceId, sample.key.minute,
+                                sample.minLux, sample.maxLux, sample.lastLux),
+                        )
+                        statement.clearBindings()
+                        statement.bindDouble(1, sample.luxIntegral)
+                        statement.bindLong(2, sample.coverageMs)
+                        statement.bindDouble(3, sample.minLux)
+                        statement.bindDouble(4, sample.maxLux)
+                        statement.bindDouble(5, sample.lastLux)
+                        statement.bindLong(6, sample.sampleCount)
+                        statement.bindDouble(7, sample.baselineLogIntegral)
+                        statement.bindLong(8, sample.baselineCoverageMs)
+                        statement.bindString(9, sample.key.contextId)
+                        statement.bindString(10, sample.key.sourceId)
+                        statement.bindLong(11, sample.key.minute)
+                        statement.executeUpdateDelete()
+                    }
+            } finally { statement.close() }
+            db.execSQL("DELETE FROM ambient_lux_minute WHERE minute<? OR minute>?", arrayOf(oldestMinute, nowMinute))
+            db.execSQL(
+                """DELETE FROM ambient_lux_minute WHERE rowid IN (
+                   SELECT rowid FROM ambient_lux_minute ORDER BY minute DESC,context_id,source_id
+                   LIMIT -1 OFFSET $AMBIENT_GLOBAL_ROW_LIMIT)""",
+            )
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
+    }
+
+    internal fun ambientHistory(
+        contextId: String,
+        sourceId: String,
+        sinceMinute: Long,
+        untilMinute: Long = Long.MAX_VALUE,
+    ): List<AmbientHistoryMinute> = readableDatabase.rawQuery(
+        """SELECT minute,lux_integral,coverage_ms,min_lux,max_lux,last_lux,sample_count,
+           baseline_log_integral,baseline_coverage_ms FROM ambient_lux_minute
+           WHERE context_id=? AND source_id=? AND minute>=? AND minute<=? ORDER BY minute""",
+        arrayOf(contextId, sourceId, sinceMinute.toString(), untilMinute.toString()),
+    ).use { cursor -> buildList {
+        while (cursor.moveToNext()) add(AmbientHistoryMinute(
+            key = io.github.maxlyth.hapaneld.control.AmbientHistoryKey(contextId, sourceId, cursor.getLong(0)),
+            luxIntegral = cursor.getDouble(1), coverageMs = cursor.getLong(2),
+            minLux = cursor.getDouble(3), maxLux = cursor.getDouble(4), lastLux = cursor.getDouble(5),
+            sampleCount = cursor.getLong(6), baselineLogIntegral = cursor.getDouble(7),
+            baselineCoverageMs = cursor.getLong(8),
+        ))
+    } }
+
+    internal fun resetAmbientHistory(contextId: String? = null, sourceId: String? = null): Int = when {
+        contextId == null && sourceId == null -> writableDatabase.delete("ambient_lux_minute", null, null)
+        contextId != null && sourceId == null -> writableDatabase.delete("ambient_lux_minute", "context_id=?", arrayOf(contextId))
+        contextId != null -> writableDatabase.delete("ambient_lux_minute", "context_id=? AND source_id=?", arrayOf(contextId, sourceId!!))
+        else -> 0
+    }
+
     internal fun dashboardPerformanceHistory(
         instance: String,
         path: String,
@@ -447,7 +574,7 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
             issueCounts.second,
             EntityCatalogIssuePersistence.ignoredCount(dashboard?.issuesJson ?: "[]"),
             dashboard?.error ?: "",
-            cachedDatabaseBytes(),
+            databaseUsage().usedBytes,
         )
     }
 
@@ -661,19 +788,18 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
 
     /** Small diagnostics projection for the performance card; SQLite ranks before the fixed LIMIT. */
     fun performanceSummaryJson(instance: String, path: String, now: Long = System.currentTimeMillis()): String {
-        val oneMinute = (now - MINUTE_MS) / MINUTE_MS
+        val oneHour = (now - HOUR_MS) / MINUTE_MS
         val rows = JSONArray()
-        val sql = """SELECT entity_id,sum(update_count),sum(update_bytes),
-            min(CASE WHEN span_start=0 THEN minute ELSE span_start END) AS first_minute
+        val sql = """SELECT entity_id,sum(update_count),sum(update_bytes)
             FROM minute_rollup WHERE instance=? AND path=? AND minute>=?
-            GROUP BY entity_id ORDER BY sum(update_bytes) DESC,entity_id COLLATE NOCASE LIMIT 3"""
-        readableDatabase.rawQuery(sql, arrayOf(instance, path, oneMinute.toString())).use { cursor ->
+            GROUP BY entity_id HAVING sum(update_count)>0
+            ORDER BY sum(update_bytes) DESC,entity_id COLLATE NOCASE LIMIT 3"""
+        readableDatabase.rawQuery(sql, arrayOf(instance, path, oneHour.toString())).use { cursor ->
             while (cursor.moveToNext()) {
-                val observed = observedSeconds(now, cursor.getLong(3), MINUTE_MS)
                 rows.put(JSONObject()
                     .put("entityId", cursor.getString(0))
-                    .put("updates1m", cursor.getLong(1))
-                    .put("payloadBps1m", cursor.getLong(2) / observed))
+                    .put("updates1h", cursor.getLong(1))
+                    .put("payloadBytes1h", cursor.getLong(2)))
             }
         }
         return rows.toString()
@@ -790,8 +916,10 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
         var appliedTiers = 0
         try {
             val db = writableDatabase
-            observedBytes = measureDatabaseBytes(db)
-            updateDatabaseBytesCache(now, observedBytes)
+            fun refreshUsage(): Long = measureDatabaseUsage(db).also {
+                updateDatabaseUsageCache(now, it)
+            }.usedBytes
+            observedBytes = refreshUsage()
             if (observedBytes <= SOFT_LIMIT_BYTES) return
             db.execSQL("DELETE FROM minute_rollup WHERE minute<?", arrayOf((now - DAY_MS) / MINUTE_MS))
             db.execSQL("DELETE FROM entity WHERE tombstone_at>0")
@@ -799,23 +927,20 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
                 """UPDATE entity SET attributes_json='{}',metadata_json='{}' WHERE (instance,entity_id) NOT IN
                    (SELECT instance,entity_id FROM membership WHERE pinned=1 OR static_ref=1 OR runtime_ref=1)""",
             )
-            observedBytes = measureDatabaseBytes(db)
-            updateDatabaseBytesCache(now, observedBytes)
+            observedBytes = refreshUsage()
             if (observedBytes > SOFT_LIMIT_BYTES) {
                 db.execSQL(
                     """UPDATE entity SET attributes_json='{}' WHERE (instance,entity_id) NOT IN
                        (SELECT instance,entity_id FROM membership WHERE pinned=1 OR static_ref=1 OR last_access>=?)""",
                     arrayOf(now - RUNTIME_RETENTION_MS),
                 )
-                observedBytes = measureDatabaseBytes(db)
-                updateDatabaseBytesCache(now, observedBytes)
+                observedBytes = refreshUsage()
             }
             while (true) {
                 val tier = RollupRetentionPolicy.nextTier(observedBytes, SOFT_LIMIT_BYTES, appliedTiers) ?: break
                 applyRollupPressureTier(db, tier, now)
                 appliedTiers++
-                observedBytes = measureDatabaseBytes(db)
-                updateDatabaseBytesCache(now, observedBytes)
+                observedBytes = refreshUsage()
             }
         } catch (error: Exception) {
             span.outcome(FeatureCostOutcome.FAILURE)
@@ -921,6 +1046,147 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
         val issuesJson: String,
     )
 
+    fun readProximityModel(fingerprint: String): ProximityModelRow? {
+        if (!PROXIMITY_FINGERPRINT.matches(fingerprint)) return null
+        return readableDatabase.rawQuery(
+            "SELECT algorithm_version,behavior_signature,snapshot_json,ready,updated_at FROM proximity_model WHERE fingerprint=?",
+            arrayOf(fingerprint),
+        ).use { cursor ->
+            if (!cursor.moveToFirst()) null else ProximityModelRow(
+                fingerprint = fingerprint,
+                algorithmVersion = cursor.getInt(0),
+                behaviorSignature = cursor.getString(1),
+                snapshotJson = cursor.getString(2),
+                ready = cursor.getInt(3) != 0,
+                updatedAt = cursor.getLong(4),
+            )
+        }
+    }
+
+    /** One bounded transaction owns model promotion and its coarse evidence. Raw events never enter SQLite. */
+    fun writeProximityBatch(
+        model: ProximityModelRow,
+        rollups: List<ProximityRollupRow>,
+        episodes: List<ProximityEpisodeRow>,
+        now: Long,
+    ) {
+        require(PROXIMITY_FINGERPRINT.matches(model.fingerprint))
+        require(model.algorithmVersion in 1..10_000)
+        require(model.behaviorSignature.length <= 500)
+        require(model.snapshotJson.toByteArray(Charsets.UTF_8).size <= MAX_PROXIMITY_SNAPSHOT_BYTES)
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            // SQLite REPLACE deletes the parent before inserting it. With foreign keys enabled that
+            // would cascade-delete all rollups and episodes at every model checkpoint, so use a
+            // portable update-then-insert upsert instead of REPLACE/modern ON CONFLICT syntax.
+            val modelValues = ContentValues(6).apply {
+                put("algorithm_version", model.algorithmVersion)
+                put("behavior_signature", model.behaviorSignature)
+                put("snapshot_json", model.snapshotJson)
+                put("ready", if (model.ready) 1 else 0)
+                put("updated_at", model.updatedAt)
+            }
+            val updated = db.update(
+                "proximity_model",
+                modelValues,
+                "fingerprint=?",
+                arrayOf(model.fingerprint),
+            )
+            if (updated == 0) {
+                modelValues.put("fingerprint", model.fingerprint)
+                db.insertOrThrow("proximity_model", null, modelValues)
+            }
+            val mergeRollup = db.compileStatement(
+                """UPDATE proximity_rollup SET
+                   sample_count=MIN(1000000,sample_count+?),raw_min=MIN(raw_min,?),
+                   raw_max=MAX(raw_max,?),raw_sum=raw_sum+?,raw_square_sum=raw_square_sum+?,
+                   excursion_count=excursion_count+?,gesture_count=gesture_count+?
+                   WHERE fingerprint=? AND bucket=?""",
+            )
+            try {
+                for (row in rollups) {
+                    if (row.fingerprint != model.fingerprint || row.sampleCount <= 0) continue
+                    mergeRollup.clearBindings()
+                    mergeRollup.bindLong(1, row.sampleCount.coerceAtMost(1_000_000).toLong())
+                    mergeRollup.bindDouble(2, row.rawMin)
+                    mergeRollup.bindDouble(3, row.rawMax)
+                    mergeRollup.bindDouble(4, row.rawSum)
+                    mergeRollup.bindDouble(5, row.rawSquareSum)
+                    mergeRollup.bindLong(6, row.excursionCount.coerceAtLeast(0).toLong())
+                    mergeRollup.bindLong(7, row.gestureCount.coerceAtLeast(0).toLong())
+                    mergeRollup.bindString(8, row.fingerprint)
+                    mergeRollup.bindLong(9, row.bucket)
+                    if (mergeRollup.executeUpdateDelete() == 0) {
+                        db.execSQL(
+                            """INSERT INTO proximity_rollup(
+                               fingerprint,bucket,sample_count,raw_min,raw_max,raw_sum,raw_square_sum,
+                               excursion_count,gesture_count) VALUES(?,?,?,?,?,?,?,?,?)""",
+                            arrayOf(
+                                row.fingerprint, row.bucket, row.sampleCount.coerceAtMost(1_000_000),
+                                row.rawMin, row.rawMax, row.rawSum, row.rawSquareSum,
+                                row.excursionCount.coerceAtLeast(0), row.gestureCount.coerceAtLeast(0),
+                            ),
+                        )
+                    }
+                }
+            } finally {
+                mergeRollup.close()
+            }
+            for (row in episodes) {
+                if (row.fingerprint != model.fingerprint) continue
+                db.execSQL(
+                    """INSERT INTO proximity_episode(
+                       fingerprint,started_at,duration_ms,peak_level,completed,guided)
+                       VALUES(?,?,?,?,?,?)""",
+                    arrayOf(
+                        row.fingerprint, row.startedAt, row.durationMs.coerceIn(0, 60_000),
+                        row.peakLevel.coerceIn(0, 100), if (row.completed) 1 else 0,
+                        if (row.guided) 1 else 0,
+                    ),
+                )
+            }
+            val cutoffBucket = (now / PROXIMITY_BUCKET_MS) - PROXIMITY_RETENTION_BUCKETS
+            db.execSQL("DELETE FROM proximity_rollup WHERE bucket<?", arrayOf(cutoffBucket))
+            db.execSQL(
+                """DELETE FROM proximity_rollup WHERE rowid IN (
+                   SELECT rowid FROM proximity_rollup ORDER BY bucket DESC LIMIT -1 OFFSET $MAX_PROXIMITY_ROLLUPS)""",
+            )
+            db.execSQL(
+                """DELETE FROM proximity_episode WHERE fingerprint=? AND rowid NOT IN (
+                   SELECT rowid FROM proximity_episode WHERE fingerprint=? ORDER BY started_at DESC LIMIT $MAX_PROXIMITY_EPISODES)""",
+                arrayOf(model.fingerprint, model.fingerprint),
+            )
+            val retainedFingerprints = db.rawQuery(
+                "SELECT fingerprint FROM proximity_model ORDER BY updated_at DESC LIMIT $MAX_PROXIMITY_MODELS",
+                null,
+            ).use { cursor -> buildList { while (cursor.moveToNext()) add(cursor.getString(0)) } }
+            if (retainedFingerprints.isNotEmpty()) {
+                val placeholders = retainedFingerprints.joinToString(",") { "?" }
+                val args = retainedFingerprints.toTypedArray()
+                db.delete("proximity_model", "fingerprint NOT IN ($placeholders)", args)
+                db.delete("proximity_rollup", "fingerprint NOT IN ($placeholders)", args)
+                db.delete("proximity_episode", "fingerprint NOT IN ($placeholders)", args)
+            }
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
+        // Proximity evidence is additive and already committed. File-size maintenance is best-effort
+        // here so its failure cannot make the runtime retry and double rollups or episodes.
+        runCatching { maintainSoftLimit(now) }
+    }
+
+    fun clearProximityLearning(fingerprint: String) {
+        if (!PROXIMITY_FINGERPRINT.matches(fingerprint)) return
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            db.delete("proximity_episode", "fingerprint=?", arrayOf(fingerprint))
+            db.delete("proximity_rollup", "fingerprint=?", arrayOf(fingerprint))
+            db.delete("proximity_model", "fingerprint=?", arrayOf(fingerprint))
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
+    }
+
     /** Constant-space approximate percentile ranks. Exact values do not justify six boxed/sorted
      * full-catalog arrays on memory-constrained panels; four buckets per power-of-two range preserve
      * useful heat-map ordering while bounding the snapshot to a few hundred counters. */
@@ -1007,26 +1273,37 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
         return (now - start).coerceIn(METRIC_BATCH_MS, windowMs) / 1000.0
     }
 
-    private fun cachedDatabaseBytes(now: Long = System.currentTimeMillis()): Long {
+    fun databaseUsage(now: Long = System.currentTimeMillis()): DatabaseUsage {
         synchronized(databaseBytesCacheLock) {
             if (databaseBytesCachedAt != Long.MIN_VALUE && now >= databaseBytesCachedAt &&
                 now - databaseBytesCachedAt < DATABASE_BYTES_CACHE_MS) {
-                return databaseBytesCachedValue
+                return databaseUsageCachedValue
             }
         }
-        return measureDatabaseBytes().also { updateDatabaseBytesCache(now, it) }
+        return measureDatabaseUsage().also { updateDatabaseUsageCache(now, it) }
     }
 
-    private fun updateDatabaseBytesCache(now: Long, bytes: Long) = synchronized(databaseBytesCacheLock) {
+    private fun updateDatabaseUsageCache(now: Long, usage: DatabaseUsage) = synchronized(databaseBytesCacheLock) {
         databaseBytesCachedAt = now
-        databaseBytesCachedValue = bytes
+        databaseUsageCachedValue = usage
     }
 
-    private fun measureDatabaseBytes(db: SQLiteDatabase = readableDatabase): Long {
+    private fun measureDatabaseUsage(db: SQLiteDatabase = readableDatabase): DatabaseUsage {
         fun pragma(name: String): Long = db.rawQuery("PRAGMA $name", null).use { c ->
             if (c.moveToFirst()) c.getLong(0) else 0L
         }
-        return (pragma("page_count") - pragma("freelist_count")).coerceAtLeast(0) * pragma("page_size")
+        val usedPages = (pragma("page_count") - pragma("freelist_count")).coerceAtLeast(0)
+        val pageSize = pragma("page_size").coerceAtLeast(0)
+        val usedBytes = if (usedPages == 0L || pageSize <= Long.MAX_VALUE / usedPages) {
+            usedPages * pageSize
+        } else {
+            Long.MAX_VALUE
+        }
+        return DatabaseUsage(
+            usedBytes = usedBytes,
+            diskBytes = knownDatabaseFootprint(File(db.path)),
+            schemaVersion = db.version,
+        )
     }
 
     companion object {
@@ -1081,8 +1358,60 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
             revision INTEGER NOT NULL,
             PRIMARY KEY(namespace,state_key),
             FOREIGN KEY(revision) REFERENCES app_state_revision(revision))"""
+        internal val PROXIMITY_MODEL_TABLE_SQL = """CREATE TABLE proximity_model(
+            fingerprint TEXT PRIMARY KEY,
+            algorithm_version INTEGER NOT NULL,
+            behavior_signature TEXT NOT NULL DEFAULT '',
+            snapshot_json TEXT NOT NULL,
+            ready INTEGER NOT NULL DEFAULT 0,
+            updated_at INTEGER NOT NULL)"""
+        internal val PROXIMITY_ROLLUP_TABLE_SQL = """CREATE TABLE proximity_rollup(
+            fingerprint TEXT NOT NULL,
+            bucket INTEGER NOT NULL,
+            sample_count INTEGER NOT NULL,
+            raw_min REAL NOT NULL,
+            raw_max REAL NOT NULL,
+            raw_sum REAL NOT NULL,
+            raw_square_sum REAL NOT NULL,
+            excursion_count INTEGER NOT NULL DEFAULT 0,
+            gesture_count INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY(fingerprint,bucket),
+            FOREIGN KEY(fingerprint) REFERENCES proximity_model(fingerprint) ON DELETE CASCADE)"""
+        internal val PROXIMITY_EPISODE_TABLE_SQL = """CREATE TABLE proximity_episode(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            fingerprint TEXT NOT NULL,
+            started_at INTEGER NOT NULL,
+            duration_ms INTEGER NOT NULL,
+            peak_level INTEGER NOT NULL,
+            completed INTEGER NOT NULL,
+            guided INTEGER NOT NULL,
+            FOREIGN KEY(fingerprint) REFERENCES proximity_model(fingerprint) ON DELETE CASCADE)"""
+        private val PROXIMITY_FINGERPRINT = Regex("^[a-f0-9]{32,64}$")
+        private const val MAX_PROXIMITY_SNAPSHOT_BYTES = 64 * 1024
+        private const val MAX_PROXIMITY_MODELS = 2
+        private const val MAX_PROXIMITY_ROLLUPS = 5_000
+        private const val MAX_PROXIMITY_EPISODES = 512
+        private const val PROXIMITY_BUCKET_MS = 5L * 60_000L
+        private const val PROXIMITY_RETENTION_BUCKETS = 7L * 24L * 12L
+        internal val AMBIENT_HISTORY_TABLE_SQL = """CREATE TABLE ambient_lux_minute(
+            context_id TEXT NOT NULL,source_id TEXT NOT NULL,minute INTEGER NOT NULL,
+            lux_integral REAL NOT NULL DEFAULT 0,coverage_ms INTEGER NOT NULL DEFAULT 0,
+            min_lux REAL NOT NULL DEFAULT 0,max_lux REAL NOT NULL DEFAULT 0,last_lux REAL NOT NULL DEFAULT 0,
+            sample_count INTEGER NOT NULL DEFAULT 0,baseline_log_integral REAL NOT NULL DEFAULT 0,
+            baseline_coverage_ms INTEGER NOT NULL DEFAULT 0,
+             PRIMARY KEY(context_id,source_id,minute))"""
+        private const val AMBIENT_GLOBAL_ROW_LIMIT = 12_000
         private val FINGERPRINT = Regex("^[a-f0-9]{16}$")
         private val DATABASE_MIGRATION_LOCK = Any()
+
+        /** Main database plus SQLite's allowlisted sidecars; no directory enumeration or path output. */
+        internal fun knownDatabaseFootprint(database: File): Long =
+            listOf("", "-wal", "-shm", "-journal").fold(0L) { total, suffix ->
+                val bytes = runCatching { File(database.path + suffix).takeIf(File::isFile)?.length() ?: 0L }
+                    .getOrDefault(0L)
+                    .coerceAtLeast(0L)
+                if (Long.MAX_VALUE - total < bytes) Long.MAX_VALUE else total + bytes
+            }
 
         // TODO(v1.0): Remove LEGACY_DATABASE_NAME, databaseName(), checkpointLegacyDatabase(),
         // migrateDatabaseFiles() and their tests. The 0.9.x line is the supported rename runway;
@@ -1374,7 +1703,7 @@ internal class BoundedSnapshotCache<K, V>(private val windowMs: Long, private va
 
 /** Sequential forward-only schema contract. Never add an ad-hoc conditional to [onUpgrade]. */
 object EntityCatalogSchema {
-    const val CURRENT_VERSION = 9
+    const val CURRENT_VERSION = 11
     data class Step(val from: Int, val to: Int, val sql: List<String>)
 
     private val steps = mapOf(
@@ -1434,6 +1763,23 @@ object EntityCatalogSchema {
                 EntityCatalogStore.APP_STATE_NAMESPACE_TABLE_SQL,
                 EntityCatalogStore.APP_STATE_TABLE_SQL,
                 "CREATE INDEX app_state_updated ON app_state(namespace,updated_at)",
+            ),
+        ),
+        9 to Step(
+            9, 10,
+            listOf(
+                EntityCatalogStore.PROXIMITY_MODEL_TABLE_SQL,
+                EntityCatalogStore.PROXIMITY_ROLLUP_TABLE_SQL,
+                "CREATE INDEX proximity_rollup_age ON proximity_rollup(bucket)",
+                EntityCatalogStore.PROXIMITY_EPISODE_TABLE_SQL,
+                "CREATE INDEX proximity_episode_age ON proximity_episode(started_at)",
+            ),
+        ),
+        10 to Step(
+            10, 11,
+            listOf(
+                EntityCatalogStore.AMBIENT_HISTORY_TABLE_SQL,
+                "CREATE INDEX ambient_lux_minute_age ON ambient_lux_minute(minute)",
             ),
         ),
     )

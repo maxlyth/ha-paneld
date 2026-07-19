@@ -44,8 +44,8 @@ class PanelMetricsTest {
         override fun cpuFreqMaxMhz(): Long = freqMax
         override fun localIp(): String? = ip
         override fun selinuxEnforce(): String? = selinux
-        override fun cpuGovernor(): String? = null
-        override fun cpuAvailableGovernors(): String? = null
+        override fun cpuGovernor(allowRootFallback: Boolean): String? = null
+        override fun cpuAvailableGovernors(allowRootFallback: Boolean): String? = null
         override fun roomClimate(): String? { roomCalls++; return room }
     }
 

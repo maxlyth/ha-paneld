@@ -27,12 +27,13 @@
 #include "dispatch.h"
 #include "server.h"
 #include "input.h"
+#include "gpio.h"
 
 static int devnull;
 
 // SUBSCRIBE registers an fd in the subscriber registry; reset it between runs (input_init also makes
 // the dropped/reused host fds safe across iterations).
-static void reset_state(void) { input_init(); }
+static void reset_state(void) { input_init(); gpio_init(); }
 
 static void write_all(int fd, const uint8_t *data, size_t n) {
     while (n > 0) {
@@ -98,6 +99,9 @@ int main(int argc, char **argv) {
         "WATCH /etc/passwd 1\n", "WATCH ../../dev/input/x 1\n",
         "WATCH /dev/input/event0 99999999999\n", "WATCH\n", "WATCH /dev/input/\n",
         "SUBSCRIBE\n", "SUBSCRIBE\nRGB 1 2 3\n",
+        "GPIOV1\n", "GPIOV1 extra\n", "GPIORESET\n",
+        "GPIOWATCH 0\n", "GPIOWATCH 65535\n", "GPIOWATCH 65536\n",
+        "GPIOWATCH -1\n", "GPIOWATCH 1 trailing\n", "GPIOSUBSCRIBE\n",
         "REBOOT\n", "REBOOTNOW\n",
         "DENSITY\n", "DENSITY 240\n", "DENSITY reset\n", "DENSITY 99999999999999\n",
         "DENSITY ../../x\n", "DENSITY -1\n",
@@ -139,7 +143,7 @@ int main(int argc, char **argv) {
 
     // 2) length-boundary lines around MAX_LINE for every verb.
     size_t lens[] = { MAX_LINE - 1, MAX_LINE, MAX_LINE + 1, 4096, 65536 };
-    const char *verbs[] = { "RGB ", "BTN ", "RELOAD ", "START ", "WATCH /dev/input/",
+    const char *verbs[] = { "RGB ", "BTN ", "RELOAD ", "START ", "WATCH /dev/input/", "GPIOWATCH ",
                             "DENSITY ", "FONTSCALE ", "GOV ", "SCREEN ",
                             "STOP ", "DISABLE ", "ENABLE ", "OVERLAY ", "" };
     for (size_t li = 0; li < sizeof lens / sizeof lens[0]; li++)

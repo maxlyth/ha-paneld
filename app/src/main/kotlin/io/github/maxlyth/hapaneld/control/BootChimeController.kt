@@ -74,8 +74,9 @@ class BootChimeController internal constructor(
 
     fun applyPersisted() {
         if (configured()) {
-            // Service.onCreate is the main thread; reads/root writes can take seconds on a hostile OEM.
-            Thread(::applyPersistedOffMain, "ha-paneld-bootchime").start()
+            // Service startup already owns an off-main serialized lifecycle lane. Keeping this work on
+            // that lane avoids a detached generation that could silence audio after a successor restores it.
+            applyPersistedOffMain()
         }
     }
 

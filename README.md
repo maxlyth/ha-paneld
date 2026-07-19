@@ -13,7 +13,7 @@ ha-paneld makes Home Assistant dashboards practical on panels that otherwise fee
 
 It also replaces fragmented vendor software with one free, open-source way to operate different makes of panel. The Android app exposes the screen, LEDs, buttons, sensors, relays and audio to Home Assistant over HTTP, MQTT auto-discovery and mDNS; adds a built-in launcher and on-screen navigation for key-less hardware; and supports consistent provisioning across a whole fleet. Once provisioned, a panel pairs itself with Home Assistant without per-device YAML.
 
-It is built for panel-class Android, **not** personal phones. Device support is defined through human-readable [runtime panel profiles](docs/profiles/README.md): ha-paneld includes profiles for Sonoff NSPanel Pro, Tuya TPA10, Electron WF1589T, ZHICAI SMT1019, Smatek S9E, the ZX-SMT156/RK3566_T, the LineageOS-based Echo Show 5 Gen 2, and the Shelly Wall Display family, while owners and hardware vendors can create, edit, validate, import and share profiles for other panels without rebuilding the app. Use ha-paneld's **built-in renderer** for the integrated dashboard and entity filtering, or the official [HA Companion app](https://github.com/home-assistant/android) when the panel needs Assist voice control or native notifications.
+It is built for panel-class Android, **not** personal phones. Device support is defined through human-readable [runtime panel profiles](docs/profiles/README.md): ha-paneld includes profiles for Sonoff NSPanel Pro, Tuya TPA10, Electron WF1589T, ZHICAI SMT1019, Smatek S9E, the ZX-SMT156/RK3566_T, and the Shelly Wall Display family, while owners and hardware vendors can create, edit, validate, import and share profiles for other panels without rebuilding the app. Use ha-paneld's **built-in renderer** for the integrated dashboard and entity filtering, or the official [HA Companion app](https://github.com/home-assistant/android) when the panel needs Assist voice control or native notifications.
 
 <picture>
   <source media="(prefers-color-scheme: light)" srcset="docs/img/config-ui-light.png">
@@ -36,7 +36,7 @@ No checkout, no parameters: it checks your tools (with fix-it hints if `adb`/`cu
 curl -fsSL https://raw.githubusercontent.com/maxlyth/ha-paneld/main/scripts/install.sh | bash -s -- --prerelease
 ```
 
-For scripted/fleet installs use [`scripts/provision.sh`](scripts/provision.sh) directly — see [Provisioning & fleet updates](docs/provisioning.md).
+The same one-line installer also supports non-interactive single-panel provisioning. Whole-fleet updates and local builds are covered separately in [Provisioning & fleet updates](docs/provisioning.md).
 
 > [!IMPORTANT]
 > **On Windows, run the one-liner in Git Bash or WSL — not PowerShell.** It's a `bash` script, so PowerShell fails at the `bash` step. Git Bash ships with [Git for Windows](https://gitforwindows.org/); install `adb` first with `winget install Google.PlatformTools`, then reopen the shell and paste the command. macOS and Linux run it as-is.
@@ -87,7 +87,8 @@ If Fully Kiosk's specific extras (e.g. its kiosk lockdown or its particular scre
 | Screen on/off (true backlight off, no lock/PIN) | `light.<panel>_screen` on/off |
 | RGB LED | `light.<panel>_led` (per-panel HAL: rk3576 NDK `/dev/ledjni`, or sysfs via the root helper) |
 | Hardware-button events | `event.<panel>_button` (a11y key capture) |
-| Ambient light / proximity | `sensor.<panel>_illuminance`, `binary_sensor.<panel>_proximity` |
+| Ambient light / proximity | `sensor.<panel>_illuminance`, learned `binary_sensor.<panel>_proximity` + fleet-normalized `sensor.<panel>_proximity_level` (0 far–100 near) — see [Adaptive proximity and wake on wave](docs/adaptive-proximity.md) |
+| Adaptive brightness | Optional seven-day learning from the panel light sensor or one selected Home Assistant illuminance entity — see [Adaptive brightness](docs/adaptive-brightness.md) |
 | Launcher / Home Assistant (bring a launcher or the HA dashboard forward) | `button.<panel>_launcher`, `button.<panel>_home` |
 | URL navigate | `text.<panel>_navigate` |
 | Reload dashboard / reboot | `button.<panel>_reload`, `button.<panel>_reboot` |
@@ -96,21 +97,21 @@ If Fully Kiosk's specific extras (e.g. its kiosk lockdown or its particular scre
 
 Every panel uses the same MQTT naming and control contracts, while discovery publishes only entities supported by its active profile and live capabilities. Home Assistant still picks them up with no YAML. The full entity reference, the HTTP contract on `:8888`, and how pairing works are in **[docs/api.md](docs/api.md)** (or browse it live at `http://<panel>:8888/api`).
 
+The default **Relaxed mode** keeps that API simple on a trusted home network. Panels on a network shared with less-trusted clients can opt into [Hardened mode](docs/security-mode.md). Hardened mode requires physical access to the panel: high-impact remote actions cannot proceed until someone approves them on the panel's screen, and they cannot be approved remotely. It is enabled locally per panel and is not copied by backup, restore or fleet provisioning.
+
 ## What needs root — and what doesn't
 
-A few of ha-paneld's features reach hardware that is only accessible to a privileged process, AKA **root**. Whether a panel permits root access is a property of the **panel's firmware**, not of ha-paneld. For most wall panels this is fine: purpose-built panels such as the Sonoff NSPanel Pro expose `su`, while some others let the installer place ha-paneld's small root helper during ADB setup. The helper covers privileged hardware and control operations, but it does not let ha-paneld read another app's private data.
-
-For a genuinely unrooted panel, ha-paneld can optionally use [Shizuku enhanced access](docs/shizuku.md) as a middle tier. Shizuku grants the Android **shell** identity, not root: after its manager is installed and started, the user must explicitly enable Enhanced access and approve ha-paneld on the panel itself. The approval cannot be enabled through MQTT, the web API, config restore or a fleet push. An ADB-started Shizuku service normally needs rearming after a reboot. The dedicated guide explains how this differs from the normal vendor-rooted wall-panel path and when it is worth using.
+A few of ha-paneld's features reach hardware that is only accessible to a privileged process, AKA **root**. Whether a panel permits root access is a property of the **panel's firmware**, not of ha-paneld. For most wall panels this is fine: purpose-built panels such as the Sonoff NSPanel Pro expose `su`, while some others let the installer place ha-paneld's small root helper during ADB setup. The helper has no general shell or filesystem interface. Its one private-app operation is an explicit, descriptor-confined and size-bounded Home Assistant Companion login backup/restore used by the full panel-backup workflow.
 
 Unavailable features remain visible with a 🔒 explanation in the web UI, so a panel never has to pretend that shell access is equivalent to root. If you are not sure which tier a panel supports, the installer and diagnostics report it.
 
-**Works on every panel (no root):** Home Assistant pairing + all MQTT sensors, screen brightness and dim, audio announcements/TTS, both dashboard renderers (HA Companion and the built-in renderer), the full web UI and REST API, Back/Recents navigation, wake-on-wave, the soft navigation bar, and config backup/restore.
+A limited [advanced fallback](docs/shizuku.md) exists for genuinely unrooted panels, but it is not part of the normal supported-hardware path and does not provide root-only hardware features.
 
-**Enhanced access with Shizuku or root:** display sizing (density/text scale), remote screenshot + tap control, and signature-pinned ha-paneld / Home Assistant Companion install or update.
+**Core features need no root:** Home Assistant pairing, screen brightness and dimming, audio announcements/TTS, both dashboard renderers (HA Companion and the built-in renderer), the web UI and REST API, and configuration backup/restore. MQTT discovery publishes only the sensors and controls supported by the active profile and live capability probes. Back/Recents, wake on wave and the soft navigation bar also depend on the panel having the required Android sensor, Accessibility or overlay capability.
 
 **Still needs direct root (`su`) or ha-paneld's root helper:** true screen-off (backlight hard-off), RGB LED and relay control where the hardware requires it, vendor-app taming, reboot and CPU governor.
 
-**Still needs direct root (`su`) inside ha-paneld:** kiosk lock, full system logs, private Companion backup/restore, and borrowing the Companion's sign-in when switching renderers.
+**Still needs direct root (`su`) inside ha-paneld:** kiosk lock, full system logs, and borrowing the Companion's sign-in when switching renderers. Full backups can include and restore the Companion login through either direct root or the current authenticated root helper.
 
 ## Supported hardware
 
@@ -118,32 +119,35 @@ ha-paneld needs no system-signed install. Standard-Android capabilities (brightn
 
 | Panel class | SoC | Android | ABI | Notes |
 |-------------|-----|---------|-----|-------|
-| Sonoff NSPanelPro / Pro120 | Rockchip PX30 | 8.1 (API 27) | arm64-v8a | toolbox `su` |
+| Sonoff NSPanel Pro / Pro 120 | Rockchip PX30 / rk3326-S | 8.1 (API 27) | arm64-v8a | toolbox `su` |
 | Tuya TPA10 | Rockchip rk3566 | 11 (API 30) | armeabi-v7a | 32-bit userspace |
 | Electron WF1589T | Rockchip rk3576 | userdebug (`adb root`) | arm64-v8a | RGB LED via clean-room NDK ioctl on `/dev/ledjni` (no vendor lib) |
 | ZHICAI SMT1019 | Rockchip rk3576 | 14 (API 34) | arm64-v8a | no root; RGB LED firmware-locked (ioctl denied) — community-reported ([#8](https://github.com/maxlyth/ha-paneld/issues/8)) |
-| ZX-SMT156 / RK3566_T | Rockchip rk3566 | 13 (API 33) | arm64-v8a | **preliminary** — app-direct RGB LED, light/proximity; vendor climate/relay paths still being characterised ([#24](https://github.com/maxlyth/ha-paneld/issues/24)) |
-| Amazon Echo Show 5 Gen 2 (`cronos`) | MediaTek MT8163 | LineageOS 11 (API 30) | armeabi-v7a | **preliminary** — targets the community LineageOS/userdebug installation, not stock Fire OS ([#28](https://github.com/maxlyth/ha-paneld/issues/28)) |
-| Smatek S9E | Rockchip rk3566 | — | arm64-v8a | onboard relays + button LEDs; proximity via root GPIO (not SensorManager) |
-| Shelly Wall Display — Stargate / Atlantis / Pegasus | MediaTek MT6580 | — | armeabi-v7a | **preliminary** — hardware verification in progress; no root; relay via HA Shelly integration (not sysfs); deploy via ADB |
-| Shelly Wall Display — Blake XL / Jenna / Cally / Maverick / Dayna | Arm64 (SoC TBC) | — | arm64-v8a | **preliminary** — hardware verification in progress; no root; deploy via ADB or Shelly AppStore (≥ v2.6.0) |
+| ZX-SMT156 / RK3566_T | Rockchip rk3566 | 13 (API 33) | arm64-v8a | **preliminary OEM/generic-market wall panel** — app-direct RGB LED and light/proximity; climate is optional enhanced capability, while relay and root/unlock paths remain under characterisation ([#24](https://github.com/maxlyth/ha-paneld/issues/24)) |
+| Smatek S9E | Rockchip rk3566 | 11 (API 30) | arm64-v8a | onboard relays + button LEDs; proximity via root GPIO (not SensorManager) |
+| Shelly Wall Display — Stargate / Atlantis / Pegasus | MediaTek MT6580 | 7.0 (API 24) | armeabi-v7a | **research-only profile** — no confirmed ha-paneld installation path; relay via HA Shelly integration (not sysfs) |
+| Shelly Wall Display — Blake XL / Jenna / Cally / Maverick / Dayna | Arm64 (Jenna confirmed PX30; other SoCs TBC) | 11 (API 30) | arm64-v8a | **research-only profile** — no confirmed ha-paneld installation path; Shelly's AppStore does not currently establish ha-paneld availability |
 
 ## Status & roadmap
 
-**Latest release — 0.9.4:** built-in dashboard diagnostics now break interaction delay into input, handler and presentation time, correlate it with Home Assistant state traffic, main-thread blocking and renderer instability, retain seven days of content-free history, and report a conservative likely cause. The one-line installer also starts the app during setup so it can identify the active hardware profile and verify the panel-specific requirements in the same installation pass. Full notes are in [CHANGELOG.md](CHANGELOG.md).
+**Latest stable release — 0.9.4:** built-in dashboard diagnostics now break interaction delay into input, handler and presentation time, correlate it with Home Assistant state traffic, main-thread blocking and renderer instability, retain seven days of content-free history, and report a conservative likely cause. The one-line installer also starts the app during setup so it can identify the active hardware profile and verify the panel-specific requirements in the same installation pass. Full notes are in [CHANGELOG.md](CHANGELOG.md).
 
-**Where it's heading** — the near-term direction is **fleet-scale operation** and **full remote provisioning**: bringing a new or factory-wiped panel all the way up with zero typing on the panel, and pushing config/updates to a whole fleet from one place. Other planned work includes MQTT TLS for self-signed brokers, an on-device scheduler, deeper per-card performance attribution, and continued iteration on the HTTP UI. The full curated list is in **[docs/roadmap.md](docs/roadmap.md)**.
+**Release candidate — 0.9.5-rc1 (under test):** adaptive brightness and proximity learn each panel's room and sensor behaviour, optional Hardened mode requires someone physically at the panel to approve selected high-impact remote actions on its screen, and lifecycle fixes improve recovery after configuration, network and helper changes. These actions cannot be approved remotely. This label describes the current candidate in source; it is not a published release until the matching GitHub prerelease exists.
+
+**Where it's heading** — the near-term direction remains reliable provisioning and operation across more than one panel. Two larger stretch candidates are being evaluated for the initial v1.0 release: fleet management and Voice Assistant support; neither is committed. Other planned work includes MQTT TLS for self-signed brokers, an on-device scheduler, deeper per-card performance attribution, and continued iteration on the HTTP UI. The full curated list is in **[docs/roadmap.md](docs/roadmap.md)**.
 
 ## Documentation
 
 - **[docs/api.md](docs/api.md)** — the control API: uniform MQTT entities, the HTTP contract (`:8888`), and pairing. Browse and try every endpoint live at `http://<panel>:8888/api`; the machine-readable spec is at `/openapi.json`.
+- **[docs/security-mode.md](docs/security-mode.md)** — Relaxed and Hardened modes, protected actions requiring physical approval at the panel that cannot be given remotely, and the exact network retry contract.
 - **[docs/profiles/](docs/profiles/)** — create, validate, test and exchange human-readable panel profiles at runtime, without Android Studio or a source build.
 - **[docs/provisioning.md](docs/provisioning.md)** — unattended provisioning, whole-fleet updates, adb bootstrap, and the permission grants.
-- **[docs/shizuku.md](docs/shizuku.md)** — what Shizuku is, ha-paneld's narrow enhanced-access model, setup/recovery, and the trade-offs compared with vendor-rooted wall panels.
 - **[docs/built-in-renderer.md](docs/built-in-renderer.md)** — the built-in dashboard renderer (experimental): what it is, turning it on (incl. the one-click Companion sign-in borrow), theming, and what it deliberately omits.
+- **[docs/adaptive-brightness.md](docs/adaptive-brightness.md)** — choose an ambient-light source, understand learning and temporary manual preferences, and reset the seven-day history when a panel moves.
+- **[docs/adaptive-proximity.md](docs/adaptive-proximity.md)** — automatic proximity learning, the guided wave journey, normalized Home Assistant entities and wake-on-wave behavior.
 - **[docs/building.md](docs/building.md)** — build from source (Docker or local toolchain) and the signing notes forkers need. See also [docs/local-builds.md](docs/local-builds.md) (devcontainer).
 - **[docs/roadmap.md](docs/roadmap.md)** — the full planned + stretch roadmap (shipped work is in [CHANGELOG.md](CHANGELOG.md)).
-- **[docs/hardware/](docs/hardware/)** — reverse-engineered hardware references for the supported panels (SoC, LED control path, sensors, radios), since these devices are otherwise undocumented: [NSPanel Pro](docs/hardware/nspanel-pro.md) (PX30), [TPA10](docs/hardware/tpa10.md) (rk3566), [WF1589T](docs/hardware/wf1589t.md) (rk3576), [SMT1019](docs/hardware/smt1019.md) (rk3576, community), [Smatek S9E](docs/hardware/s9e.md) (rk3566), [ZX-SMT156](docs/hardware/zx-smt156.md) (community), [Echo Show 5 Gen 2](docs/hardware/echo-show-5-gen2.md) (LineageOS, community), and [Shelly Wall Display](docs/hardware/shelly-wall-display.md) (preliminary) — plus a [performance comparison](docs/hardware/README.md#performance-comparison--practical-deployment).
+- **[docs/hardware/](docs/hardware/)** — reverse-engineered hardware references for the supported panels (SoC, LED control path, sensors, radios), since these devices are otherwise undocumented: [NSPanel Pro](docs/hardware/nspanel-pro.md) (PX30), [TPA10](docs/hardware/tpa10.md) (rk3566), [WF1589T](docs/hardware/wf1589t.md) (rk3576), [SMT1019](docs/hardware/smt1019.md) (rk3576, community), [Smatek S9E](docs/hardware/s9e.md) (rk3566), [ZX-SMT156](docs/hardware/zx-smt156.md), and [Shelly Wall Display](docs/hardware/shelly-wall-display.md) (preliminary) — plus a [performance comparison](docs/hardware/README.md#performance-comparison--practical-deployment).
 - **[docs/tts.md](docs/tts.md)** — server-side TTS recipe: render a phrase with any HA engine (Piper, Cloud) and send it to a panel via a small script (no add-on, no on-device TTS).
 - **[docs/performance.md](docs/performance.md)** — why a Home Assistant dashboard can overwhelm a low-powered panel, how to measure the problem, and how to reduce the work reaching the renderer.
 - **[docs/display-sizing.md](docs/display-sizing.md)** *(experimental / R&D)* — matching dashboard size to a desktop browser via display density + system font scale (Android panels often ship these mismatched to the physical screen).
@@ -163,7 +167,6 @@ ha-paneld needs no system-signed install. Standard-Android capabilities (brightn
 - **MQTT** — [HiveMQ MQTT Client](https://github.com/hivemq/hivemq-mqtt-client) supplies the MQTT 5 client and pure-Java NIO transport, keeping the APK ABI-agnostic.
 - **mDNS** — [JmDNS](https://github.com/jmdns/jmdns) advertises `_ha-paneld._tcp` with reliable TXT records across supported Android API levels.
 - **Runtime profiles** — [SnakeYAML Engine](https://github.com/snakeyaml/snakeyaml-engine) parses YAML 1.2 profile documents, while [CodeMirror](https://codemirror.net/) and its [YAML language package](https://github.com/codemirror/lang-yaml) provide the in-browser profile editor.
-- **Enhanced access** — the official [Shizuku](https://github.com/RikkaApps/Shizuku) API/provider supplies the typed Binder boundary on unrooted panels.
 - **QR and logging** — [ZXing](https://github.com/zxing/zxing) generates on-panel setup QR codes, while [SLF4J](https://github.com/qos-ch/slf4j) routes Ktor and HiveMQ logs to Logcat.
 
 Dependency selection and updates follow the project's [dependency and supply-chain policy](SECURITY.md#dependency-and-supply-chain-policy).

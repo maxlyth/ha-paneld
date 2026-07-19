@@ -53,6 +53,9 @@ class ConflatedWorkerTest {
 
         assertEquals(ConflatedWorker.Admission.ACCEPTED, worker.submit(Unit))
         assertTrue(started.await(1, TimeUnit.SECONDS))
+        val zeroStartedAt = System.nanoTime()
+        assertFalse(worker.closeAndJoin(0L))
+        assertTrue(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - zeroStartedAt) < 500L)
         assertFalse(worker.closeAndJoin(20))
         assertEquals(ConflatedWorker.Admission.CLOSED, worker.submit(Unit))
 

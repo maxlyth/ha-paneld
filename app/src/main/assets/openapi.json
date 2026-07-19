@@ -2,22 +2,42 @@
   "openapi": "3.0.3",
   "info": {
     "title": "ha-paneld",
-    "version": "0.9.3",
-    "description": "Local HTTP control API for the ha-paneld Home Assistant dashboard app. Plain HTTP on the LAN, no auth. The canonical machine API lives under /api/v1; the pre-0.8.5 flat paths respond 308 Permanent Redirect to their /api/v1 homes (method + body preserved). Exceptions: GET /health and POST /play are also served directly at the root for plain-curl automations and monitors."
+    "version": "0.9.5-rc1",
+    "description": "Local HTTP control API for the ha-paneld Home Assistant dashboard app. Plain HTTP on the LAN. Relaxed mode keeps the trusted-LAN workflow. Optional Hardened mode requires physical access for selected high-impact remote requests: someone must approve them on the panel's screen, and they cannot be approved remotely. The canonical machine API lives under /api/v1; the pre-0.8.5 flat paths respond 308 Permanent Redirect to their /api/v1 homes (method + body preserved). Exceptions: GET /health and POST /play are also served directly at the root for plain-curl automations and monitors."
   },
   "servers": [{ "url": "/" }],
+  "components": {
+    "schemas": {
+      "ApprovalRequired": {
+        "type": "object",
+        "required": ["ok", "error", "approval_id", "message"],
+        "properties": {
+          "ok": { "type": "boolean", "enum": [false] },
+          "error": { "type": "string", "enum": ["approval-required"] },
+          "approval_id": { "type": "string" },
+          "message": { "type": "string" }
+        }
+      }
+    },
+    "responses": {
+      "ApprovalRequired": {
+        "description": "This high-impact remote request requires someone physically at the panel to approve it on the panel's screen; it cannot be approved remotely. Retry the identical request from the same peer within 10 minutes. Approval is one-use and process-local.",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApprovalRequired" } } }
+      }
+    }
+  },
   "paths": {
     "/health": { "get": { "summary": "Liveness probe + version + panel id + build token (also at /api/v1/health)", "tags": ["status"], "responses": { "200": { "description": "OK" } } } },
     "/play": {
       "post": { "summary": "Play audio / TTS from a URL; newest request replaces current playback (also at /api/v1/play)", "tags": ["media"],
         "requestBody": { "content": { "text/plain": { "schema": { "type": "string", "description": "a raw URL, or {\"url\":\"https://…\"}" } } } },
-        "responses": { "200": { "description": "playing" }, "400": { "description": "no-url" }, "503": { "description": "stopping" } } }
+        "responses": { "200": { "description": "playing" }, "202": { "$ref": "#/components/responses/ApprovalRequired" }, "400": { "description": "no-url" }, "503": { "description": "stopping" } } }
     },
     "/api/v1/health": { "get": { "summary": "Versioned liveness probe", "tags": ["status"], "responses": { "200": { "description": "Version, panel id, build token and config hash" } } } },
     "/api/v1/play": {
       "post": { "summary": "Versioned audio/TTS playback endpoint", "tags": ["media"],
         "requestBody": { "content": { "text/plain": { "schema": { "type": "string", "description": "a raw URL, or {\"url\":\"https://…\"}" } } } },
-        "responses": { "200": { "description": "playing" }, "400": { "description": "no-url" }, "503": { "description": "stopping" } } }
+        "responses": { "200": { "description": "playing" }, "202": { "$ref": "#/components/responses/ApprovalRequired" }, "400": { "description": "no-url" }, "503": { "description": "stopping" } } }
     },
     "/api/v1/openapi.json": { "get": { "summary": "This OpenAPI document", "tags": ["status"], "responses": { "200": { "description": "OpenAPI 3 JSON" } } } },
     "/api/v1/status": { "get": { "summary": "Panel-health warnings, capability matrix and Zigbee gateway health as JSON", "tags": ["status"], "parameters": [{ "name": "refresh", "in": "query", "required": false, "schema": { "type": "string", "enum": ["1"] }, "description": "Force a fresh update check; browser requests must pass same-origin Fetch Metadata admission" }], "responses": { "200": { "description": "{warnings:[html], capabilities:[{name,note,color}], zigbee_gateway:{state,...}|null}" }, "403": { "description": "Cross-origin or unverifiable browser request refused when refresh=1; headerless LAN automation remains supported" } } } },
@@ -104,7 +124,7 @@
     "/api/v1/profiles/preview": {
       "post": { "summary": "Parse, validate and semantically compare YAML without saving or activating", "tags": ["profiles"],
         "requestBody": { "required": true, "content": { "application/yaml": { "schema": { "type": "string", "description": "UTF-8 YAML; request body limited to 131072 bytes" } } } },
-        "responses": { "200": { "description": "Compatibility, safe diagnostics, semantic diff, exact content hash and short-lived preview token" }, "413": { "description": "YAML too large" }, "415": { "description": "YAML content type required" } } }
+        "responses": { "200": { "description": "Compatibility, summary including matches_this_device, safe diagnostics, semantic diff, exact content hash and short-lived preview token. A compatible wrong-device profile may be imported inertly but cannot be activated." }, "413": { "description": "YAML too large" }, "415": { "description": "YAML content type required" } } }
     },
     "/api/v1/profiles/validate": {
       "post": { "summary": "Alias of profile preview for validation clients", "tags": ["profiles"], "requestBody": { "required": true, "content": { "application/yaml": { "schema": { "type": "string", "description": "UTF-8 YAML; request body limited to 131072 bytes" } } } }, "responses": { "200": { "description": "Profile preview" } } }
@@ -135,13 +155,13 @@
           { "type": "object", "required": ["auto", "expected_catalog_revision", "confirm"], "properties": {
             "auto": { "type": "boolean", "enum": [true] }, "expected_catalog_revision": { "type": "integer" }, "confirm": { "type": "boolean", "enum": [true] }
           } }
-        ] } } } }, "responses": { "202": { "description": "Selection staged; restart scheduled" }, "409": { "description": "Confirmation required or stale catalog" }, "422": { "description": "Selection rejected" } } }
+        ] } } } }, "responses": { "202": { "description": "Selection staged and restart scheduled, or Hardened-mode approval-required: approve the request on the panel, then retry the identical request from the same peer.", "content": { "application/json": { "schema": { "oneOf": [{ "type": "object" }, { "$ref": "#/components/schemas/ApprovalRequired" }] } } } }, "409": { "description": "Confirmation required or stale catalog" }, "422": { "description": "Selection rejected" } } }
     },
     "/api/v1/profiles/activate": {
-      "post": { "summary": "Alias of profile select used by explicit activation clients", "tags": ["profiles"], "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object" } } } }, "responses": { "202": { "description": "Activation staged" }, "409": { "description": "Confirmation required or stale catalog" } } }
+      "post": { "summary": "Alias of profile select used by explicit activation clients", "tags": ["profiles"], "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object" } } } }, "responses": { "202": { "description": "Activation staged, or Hardened-mode approval-required: approve the request on the panel, then retry the identical request from the same peer.", "content": { "application/json": { "schema": { "oneOf": [{ "type": "object" }, { "$ref": "#/components/schemas/ApprovalRequired" }] } } } }, "409": { "description": "Confirmation required or stale catalog" } } }
     },
     "/api/v1/profiles/rollback": {
-      "post": { "summary": "Select only the server-recorded last-known-good selection and schedule a controlled restart", "tags": ["profiles"], "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["expected_catalog_revision", "confirm"] } } } }, "responses": { "202": { "description": "Rollback staged" }, "409": { "description": "Confirmation missing or catalog stale" }, "422": { "description": "No recorded rollback selection" } } }
+      "post": { "summary": "Select only the server-recorded last-known-good selection and schedule a controlled restart", "tags": ["profiles"], "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["expected_catalog_revision", "confirm"] } } } }, "responses": { "202": { "description": "Rollback staged, or Hardened-mode approval-required: approve the request on the panel, then retry the identical request from the same peer.", "content": { "application/json": { "schema": { "oneOf": [{ "type": "object" }, { "$ref": "#/components/schemas/ApprovalRequired" }] } } } }, "409": { "description": "Confirmation missing or catalog stale" }, "422": { "description": "No recorded rollback selection" } } }
     },
     "/api/v1/profiles/delete": {
       "post": { "summary": "Delete an inactive unselected local revision", "tags": ["profiles"], "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["id", "revision", "expected_catalog_revision", "confirm"] } } } }, "responses": { "200": { "description": "Deleted" }, "409": { "description": "Confirmation required or stale catalog" }, "422": { "description": "Bundled, active, selected or protected revision" } } }
@@ -159,23 +179,28 @@
           "wake_on_wave": { "type": "boolean" }, "prevent_idle_dim": { "type": "boolean" },
           "watchdog_enabled": { "type": "boolean" }, "touch_sound": { "type": "boolean" },
           "silence_boot_chime": { "type": "boolean" }, "keep_awake": { "type": "boolean" },
-          "auto_brightness": { "type": "boolean" }, "brightness_bias": { "type": "integer" },
+          "auto_brightness": { "type": "boolean" },
+          "auto_brightness_sensitivity": { "type": "integer", "minimum": 0, "maximum": 100, "default": 50, "description": "How strongly the screen follows deviations from the learned ambient pattern" },
+          "auto_brightness_ha_entity": { "type": "string", "pattern": "^(|sensor\\.[a-z0-9_]+)$", "description": "Home Assistant illuminance entity; blank uses the panel ambient-light sensor" },
           "navbar_mode": { "type": "string", "enum": ["Off", "Always on", "Swipe reveal"] },
           "cpu_governor": { "type": "string", "enum": ["Performance", "Efficiency", "Auto"] },
           "network_adb": { "type": "boolean" }, "zigbee_router": { "type": "boolean" },
-          "home_dashboard": { "type": "string" }, "companion_auto_update": { "type": "boolean" },
-          "self_update": { "type": "boolean" }, "update_channel": { "type": "string", "enum": ["stable", "prerelease"] },
+          "home_dashboard": { "type": "string" }, "dashboard_idle_return_min": { "type": "integer", "minimum": 0, "maximum": 1440, "description": "Built-in renderer only" }, "companion_auto_update": { "type": "boolean" },
+          "companion_update_channel": { "type": "string", "enum": ["stable", "prerelease"] },
+          "self_update": { "type": "boolean" }, "webview_auto_update": { "type": "boolean" },
+          "update_channel": { "type": "string", "enum": ["stable", "prerelease"] },
+          "tame_vendor_packages": { "type": "string", "description": "space-separated package blocklist" },
           "log_ship_enabled": { "type": "boolean" }, "log_ship_host": { "type": "string" },
           "log_ship_port": { "type": "integer" }, "log_ship_protocol": { "type": "string", "enum": ["syslog", "http"] }
         } } } } },
-        "responses": { "200": { "description": "updated" }, "400": { "description": "invalid panel_id" } }
+        "responses": { "200": { "description": "updated" }, "202": { "$ref": "#/components/responses/ApprovalRequired" }, "400": { "description": "invalid setting, or a built-in-renderer-only setting was submitted for another renderer" }, "409": { "description": "network ADB cannot be enabled while Hardened mode is active" } }
       }
     },
     "/api/v1/config/schema": { "get": { "summary": "Settings-registry metadata (key/type/group/label/help/default/tier/scope/options/range + HA-capable/exposed), capability-gated to this panel", "tags": ["config"], "responses": { "200": { "description": "[{key,…}]" } } } },
     "/api/v1/config/export": {
       "get": { "summary": "Export a versioned config bundle", "tags": ["config"],
         "parameters": [{ "name": "include_secrets", "in": "query", "schema": { "type": "string", "enum": ["1"] }, "description": "include secret values (excluded by default)" }],
-        "responses": { "200": { "description": "{kind, schema, exported_at, exported_by, values}" } } }
+        "responses": { "200": { "description": "{kind, schema, exported_at, exported_by, values}" }, "202": { "$ref": "#/components/responses/ApprovalRequired" } } }
     },
     "/api/v1/config/import": {
       "post": { "summary": "Bundle import: migrate → scope/secret filter → validate → snapshot revision → apply valid keys (or validate all with strict=1)", "tags": ["config"],
@@ -186,7 +211,7 @@
           { "name": "expected_cfg", "in": "query", "schema": { "type": "string", "pattern": "^[a-f0-9]{8}$" }, "description": "config hash returned by dry_run; mismatch rejects a stale preview" }
         ],
         "requestBody": { "content": { "application/json": { "schema": { "type": "object", "description": "a bundle from /api/v1/config/export" } } } },
-        "responses": { "200": { "description": "{status, applied, skipped, warnings, errors} or dry-run {expected_cfg,changes,…}" }, "400": { "description": "bad bundle or expected_cfg" }, "409": { "description": "stale-preview" }, "422": { "description": "rejected (strict validation or no usable keys)" } } }
+        "responses": { "200": { "description": "{status, applied, skipped, warnings, errors} or dry-run {expected_cfg,changes,…}" }, "202": { "$ref": "#/components/responses/ApprovalRequired" }, "400": { "description": "bad bundle or expected_cfg" }, "409": { "description": "stale-preview, or network ADB cannot be enabled while Hardened mode is active" }, "422": { "description": "rejected (strict validation or no usable keys)" } } }
     },
     "/api/v1/restore": {
       "post": { "summary": "Preview or asynchronously restore a complete panel backup", "tags": ["config"],
@@ -195,13 +220,13 @@
           { "name": "X-Backup-Passphrase", "in": "header", "schema": { "type": "string", "format": "password" }, "description": "passphrase for a sealed backup; never put it in the URL" }
         ],
         "requestBody": { "required": true, "content": { "application/octet-stream": { "schema": { "type": "string", "format": "binary", "description": "backup bundle; request body limited to 67108864 bytes" } } } },
-        "responses": { "200": { "description": "dry-run preview or {status:started}; completion status separates config, profile-catalog, Companion and rollback outcomes" }, "400": { "description": "invalid/corrupt bundle" }, "409": { "description": "another destructive operation owns admission" }, "413": { "description": "bundle-too-large" }, "422": { "description": "config or profile catalog is not restorable" }, "503": { "description": "Companion section needs su or profile restore is unavailable" } } }
+        "responses": { "200": { "description": "dry-run preview or {status:started}; completion status separates config, profile-catalog, Companion and rollback outcomes" }, "202": { "$ref": "#/components/responses/ApprovalRequired" }, "400": { "description": "invalid/corrupt bundle" }, "409": { "description": "another destructive operation owns admission, or network ADB cannot be enabled while Hardened mode is active" }, "413": { "description": "bundle-too-large" }, "422": { "description": "config or profile catalog is not restorable" }, "503": { "description": "Companion section needs su or profile restore is unavailable" } } }
     },
     "/api/v1/config/revisions": { "get": { "summary": "On-panel config history (ring buffer, newest first)", "tags": ["config"], "responses": { "200": { "description": "[{id, exported_at, keys}]" } } } },
     "/api/v1/config/revisions/{id}/restore": {
       "post": { "summary": "Roll back to a stored revision (itself recorded, so restores are undoable)", "tags": ["config"],
         "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }],
-        "responses": { "200": { "description": "{status:restored,…}" }, "404": { "description": "not-found" } } }
+        "responses": { "200": { "description": "{status:restored,…}" }, "202": { "$ref": "#/components/responses/ApprovalRequired" }, "404": { "description": "not-found" }, "409": { "description": "network ADB cannot be enabled while Hardened mode is active" } } }
     },
     "/api/v1/ui/layout": {
       "get": { "summary": "Per-panel dashboard layout blob (customisable-layout groundwork)", "tags": ["config"], "responses": { "200": { "description": "{layout}" } } },
@@ -209,9 +234,43 @@
         "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "properties": { "layout": { "type": "string" } } } } } },
         "responses": { "200": { "description": "{ok:true}" } } }
     },
-    "/api/v1/perf": { "get": { "summary": "Live system metrics plus built-in interaction, state-stream and main-thread diagnostics", "tags": ["performance"], "responses": { "200": { "description": "Includes render, builtin, entityFilter and dashboard direct/proxy diagnostics; feature costs are fetched separately to avoid recurring projection load; browsers must pass same-origin Fetch Metadata admission" }, "403": { "description": "Cross-origin or unverifiable browser request refused; headerless LAN automation remains supported" } } } },
+    "/api/v1/perf": { "get": { "summary": "Live system metrics plus built-in interaction, state-stream and main-thread diagnostics", "tags": ["performance"], "responses": { "200": { "description": "Includes render, builtin, entityFilter and dashboard direct/proxy diagnostics. dashboard.latestSampleAgeMs exposes browser-telemetry freshness for out-of-band collection; feature costs are fetched separately to avoid recurring projection load; browsers must pass same-origin Fetch Metadata admission" }, "403": { "description": "Cross-origin or unverifiable browser request refused; headerless LAN automation remains supported" } } } },
+    "/api/v1/perf/binding": { "get": { "summary": "Pair-scoped private panel and performance-workload binding", "tags": ["performance"], "parameters": [{ "name": "comparison_id", "in": "query", "required": true, "schema": { "type": "string", "pattern": "^[0-9a-f]{32}$" } }], "responses": { "200": { "description": "HMAC-bound comparison id plus opaque panel and measurement-workload fingerprints; private identity and configuration values are not returned" }, "400": { "description": "Malformed comparison id" }, "403": { "description": "Cross-origin or unverifiable browser request refused; headerless LAN automation remains supported" }, "503": { "description": "Stable high-entropy device identity unavailable" } } } },
     "/api/v1/perf/costs": { "get": { "summary": "Non-sampling fixed-key cumulative feature costs for sparse A/B harvesting", "tags": ["performance"], "responses": { "200": { "description": "feature-cost JSON" } } } },
     "/api/v1/perf/history": { "get": { "summary": "Bounded minute-rollup history for built-in dashboard responsiveness and state-stream diagnostics", "description": "Browser requests must pass same-origin Fetch Metadata admission; headerless LAN automation remains supported.", "tags": ["performance"], "parameters": [{ "name": "hours", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 168, "default": 24 } }], "responses": { "200": { "description": "Up to seven days of content-free dashboard performance rollups" }, "403": { "description": "Cross-origin or unverifiable browser request refused; headerless LAN automation remains supported" } } } },
+    "/api/v1/auto-brightness": {
+      "get": { "summary": "Adaptive auto-brightness runtime status", "tags": ["display"], "responses": { "200": { "description": "Current source, learning/paused state and latest bounded decision snapshot; available=false while the runtime is not connected" } } }
+    },
+    "/api/v1/auto-brightness/history": {
+      "get": { "summary": "Seven-day ambient-light learning projection", "description": "Returns bounded aggregate lux buckets and the learned expected pattern. A sensitivity override previews proposed brightness without changing config. Browser requests must pass same-origin Fetch Metadata admission; headerless LAN automation remains supported.", "tags": ["display"],
+        "parameters": [
+          { "name": "hours", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 168, "default": 168 } },
+          { "name": "sensitivity", "in": "query", "schema": { "type": "integer", "minimum": 0, "maximum": 100 }, "description": "Optional what-if preview; 50 is neutral" }
+        ],
+        "responses": { "200": { "description": "{available,hours,bucket_minutes,points:[{epochMinute,observedMeanLux,minLux,maxLux,expectedLux,proposedBrightness}]}" }, "400": { "description": "hours or sensitivity outside the public bounds" }, "403": { "description": "Cross-origin or unverifiable browser request refused; headerless LAN automation remains supported" } }
+      }
+    },
+    "/api/v1/auto-brightness/sources": {
+      "get": { "summary": "Search available Home Assistant illuminance sensors", "tags": ["display"],
+        "parameters": [
+          { "name": "q", "in": "query", "schema": { "type": "string", "maxLength": 100 }, "description": "Entity id or friendly-name substring" },
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 200, "default": 100 } }
+        ],
+        "responses": { "200": { "description": "{available,items:[{entityId,friendlyName,unit,currentLux,available,lastUpdatedEpochMs}]}" } }
+      }
+    },
+    "/api/v1/auto-brightness/source": {
+      "post": { "summary": "Select the adaptive brightness illuminance source", "description": "Normal config saves can set auto_brightness_ha_entity too. This focused endpoint applies the same validated change immediately; null or blank selects the panel sensor.", "tags": ["display"],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["entity_id"], "properties": { "entity_id": { "type": "string", "nullable": true, "pattern": "^(|sensor\\.[a-z0-9_]+)$" } } } } } },
+        "responses": { "200": { "description": "Source selected" }, "400": { "description": "Missing or invalid entity_id" }, "413": { "description": "Request body too large" }, "503": { "description": "Adaptive brightness runtime not connected" } }
+      }
+    },
+    "/api/v1/auto-brightness/reset": {
+      "post": { "summary": "Delete learned ambient-light history and restart learning", "tags": ["display"], "responses": { "200": { "description": "History reset" }, "503": { "description": "Adaptive brightness runtime not connected" } } }
+    },
+    "/api/v1/auto-brightness/resume": {
+      "post": { "summary": "Clear a manual brightness pause and resume full automatic control", "tags": ["display"], "responses": { "200": { "description": "Full automatic control resumed" }, "503": { "description": "Adaptive brightness runtime not connected" } } }
+    },
     "/api/v1/dashboard/entity-filter": {
       "get": { "summary": "Built-in-renderer entity-filter and automatic-learning status", "tags": ["performance"], "responses": { "200": { "description": "{enabled,entity_count,filter_hash,runtime,learning}" } } },
       "post": {
@@ -271,7 +330,9 @@
     },
     "/api/v1/dashboard/entities/reset": {
       "post": { "summary": "Discard rebuildable evidence and overrides for the current dashboard", "tags": ["performance"],
-        "requestBody": { "content": { "application/json": { "schema": { "type": "object", "required": ["confirm"], "properties": { "confirm": { "type": "boolean" } } } } } },
+        "requestBody": { "content": { "application/json": { "schema": { "type": "object", "required": ["confirm"], "properties": {
+          "confirm": { "type": "boolean" }, "clear_filter": { "type": "boolean", "default": false, "description": "Also discard the active filter instead of retaining it while evidence is rebuilt" }
+        } } } } },
         "responses": { "200": { "description": "Evidence cleared; synchronization started when automatic learning is enabled" }, "409": { "description": "Explicit confirmation required or synchronization is running" } } }
     },
     "/api/v1/dashboard/entities/export": {
@@ -279,7 +340,7 @@
     },
     "/api/v1/sensors": { "get": { "summary": "Live sensor readings (light, proximity, temperature, humidity) plus volume percent and raw screen brightness — independent of HA exposure settings", "tags": ["sensors"], "responses": { "200": { "description": "live values JSON" } } } },
     "/api/v1/peers": { "get": { "summary": "ha-paneld panels discovered on the LAN over mDNS — powers the header panel switcher", "tags": ["fleet"], "parameters": [ { "name": "refresh", "in": "query", "required": false, "schema": { "type": "string", "enum": ["1"] }, "description": "Force a fresh mDNS browse instead of the ~10s cache" } ], "responses": { "200": { "description": "[{panel_id,name,ip,port,url,version,self}] — ip/url null when unresolved" } } } },
-    "/api/v1/diag": { "get": { "summary": "Plain-text diagnostics dump (hardware, firmware, SELinux, su/node probes)", "tags": ["status"], "responses": { "200": { "description": "text/plain report" } } } },
+    "/api/v1/diag": { "get": { "summary": "Terse plain-text diagnostics dump (hardware, firmware, boot security, app database and privilege/node probes)", "tags": ["status"], "responses": { "200": { "description": "Redacted text/plain report that omits configured identifiers and secrets; review before posting publicly" } } } },
     "/api/v1/info": { "get": { "summary": "Dashboard hydration payload — the probe-backed facts/value/capability fragments as ready-to-inject HTML (cached snapshot, single-flight)", "tags": ["status"], "responses": { "200": { "description": "{banners, shot, controls, cards} JSON" } } } },
     "/api/v1/logs/stream": {
       "get": { "summary": "Live log tail as Server-Sent Events (redacted logcat lines; capture stops when the last client disconnects)", "tags": ["status"],
@@ -289,18 +350,19 @@
     "/api/v1/updates/ignore": { "post": { "summary": "Dismiss one component update banner for one version", "tags": ["install"], "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "required": ["label", "version"], "properties": { "label": { "type": "string" }, "version": { "type": "string" } } } } } }, "responses": { "200": { "description": "dismissed" }, "400": { "description": "missing label/version" } } } },
     "/api/v1/install/versions": { "get": { "summary": "Available managed-component versions for a channel", "tags": ["install"], "parameters": [ { "name": "name", "in": "query", "required": true, "schema": { "type": "string", "enum": ["paneld", "companion", "webview"] } }, { "name": "channel", "in": "query", "schema": { "type": "string", "enum": ["stable", "prerelease"] } } ], "responses": { "200": { "description": "version catalogue" } } } },
     "/api/v1/install/status": { "get": { "summary": "Shared destructive-operation progress and optional structured component result", "tags": ["install"], "responses": { "200": { "description": "{running,component,message,result?}" } } } },
-    "/api/v1/install/component": { "post": { "summary": "Start a managed component install/update; exact-version downgrades are refused unless explicitly allowed", "tags": ["install"], "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "required": ["name"], "properties": { "name": { "type": "string", "enum": ["paneld", "companion", "webview"] }, "action": { "type": "string", "enum": ["update", "reinstall"] }, "version": { "type": "string" }, "allow_downgrade": { "type": "boolean", "default": false } } } } } }, "responses": { "200": { "description": "{status:started|busy}" }, "400": { "description": "bad or uncomparable component/action/version" }, "409": { "description": "downgrade-refused" } } } },
+    "/api/v1/install/component": { "post": { "summary": "Start a managed component install/update; exact-version downgrades are refused unless explicitly allowed", "tags": ["install"], "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "required": ["name"], "properties": { "name": { "type": "string", "enum": ["paneld", "companion", "webview"] }, "action": { "type": "string", "enum": ["update", "reinstall"] }, "version": { "type": "string" }, "allow_downgrade": { "type": "boolean", "default": false } } } } } }, "responses": { "200": { "description": "{status:started|busy}" }, "202": { "$ref": "#/components/responses/ApprovalRequired" }, "400": { "description": "bad or uncomparable component/action/version" }, "409": { "description": "downgrade-refused" } } } },
     "/api/v1/install/apk/allow": { "post": { "summary": "Enable or disable arbitrary APK upload capability", "tags": ["install"], "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "required": ["on"], "properties": { "on": { "type": "boolean" } } } } } }, "responses": { "200": { "description": "{ok,allowed}" } } } },
     "/api/v1/install/apk": { "post": { "summary": "Stage and inspect an APK before explicit commit", "tags": ["install"], "requestBody": { "required": true, "content": { "application/octet-stream": { "schema": { "type": "string", "format": "binary" } } } }, "responses": { "200": { "description": "preview token and APK identity" }, "403": { "description": "capability disabled" }, "413": { "description": "upload too large" } } } },
-    "/api/v1/install/apk/commit": { "post": { "summary": "Consume an APK preview token and start installation", "tags": ["install"], "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "required": ["token"], "properties": { "token": { "type": "string" } } } } } }, "responses": { "200": { "description": "{status:started|busy}" }, "409": { "description": "stale-or-missing token" } } } },
-    "/api/v1/backup": { "post": { "summary": "Download an encrypted full config and profile-catalog backup, optionally with Companion login", "tags": ["install"], "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "properties": { "include_companion": { "type": "boolean", "default": true }, "passphrase": { "type": "string", "format": "password", "description": "Required unless plaintext export is explicitly acknowledged" }, "allow_plaintext": { "type": "boolean", "default": false, "description": "Explicitly acknowledge an unencrypted ZIP containing credentials; ignored when a passphrase is supplied" } } } } } }, "responses": { "200": { "description": "encrypted .hpb attachment, or plaintext .zip when explicitly acknowledged" }, "400": { "description": "passphrase required unless allow_plaintext=true" }, "409": { "description": "busy" }, "413": { "description": "Companion backup too large" }, "422": { "description": "Companion capture unavailable" } } } },
+    "/api/v1/install/apk/commit": { "post": { "summary": "Consume an APK preview token and start installation", "tags": ["install"], "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "required": ["token"], "properties": { "token": { "type": "string" } } } } } }, "responses": { "200": { "description": "{status:started|busy}" }, "202": { "$ref": "#/components/responses/ApprovalRequired" }, "409": { "description": "stale-or-missing token" } } } },
+    "/api/v1/backup": { "post": { "summary": "Download an encrypted full config and profile-catalog backup, optionally with Companion login", "tags": ["install"], "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "properties": { "include_companion": { "type": "boolean", "default": true }, "passphrase": { "type": "string", "format": "password", "description": "Required unless plaintext export is explicitly acknowledged" }, "allow_plaintext": { "type": "boolean", "default": false, "description": "Explicitly acknowledge an unencrypted ZIP containing credentials; ignored when a passphrase is supplied" } } } } } }, "responses": { "200": { "description": "encrypted .hpb attachment, or plaintext .zip when explicitly acknowledged" }, "202": { "$ref": "#/components/responses/ApprovalRequired" }, "400": { "description": "passphrase required unless allow_plaintext=true" }, "409": { "description": "busy" }, "413": { "description": "Companion backup too large" }, "422": { "description": "Companion capture unavailable" } } } },
     "/api/v1/packages": { "get": { "summary": "Installed package inventory used by admin pickers", "tags": ["install"], "responses": { "200": { "description": "package JSON" } } } },
     "/api/v1/apps": { "get": { "summary": "Launchable app inventory", "tags": ["install"], "responses": { "200": { "description": "app JSON" } } } },
-    "/api/v1/uninstall": { "post": { "summary": "Uninstall an allowed third-party package", "tags": ["install"], "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "required": ["pkg"], "properties": { "pkg": { "type": "string" } } } } } }, "responses": { "200": { "description": "started" }, "400": { "description": "bad/protected package" }, "503": { "description": "no root" } } } },
-    "/api/v1/radio": { "get": { "summary": "EFR32 radio presence and redacted gateway health", "tags": ["status"], "responses": { "200": { "description": "{present,status,state,attributes}; attributes exclude keys, credentials, radio MAC and raw netinfo" } } } },
-    "/api/v1/webview/heal": { "post": { "summary": "Repair the configured WebView provider", "tags": ["install"], "responses": { "200": { "description": "started" }, "409": { "description": "busy" }, "503": { "description": "no installer capability" } } } },
-    "/api/v1/dashboard/clear-storage": { "post": { "summary": "Start a single-flight clear of the built-in dashboard's local data", "tags": ["control"], "responses": { "202": { "description": "started" }, "409": { "description": "already running" }, "503": { "description": "control plane stopping" } } } },
-    "/api/v1/companion/repair-url": { "post": { "summary": "Repair blank internal Companion server URLs", "tags": ["control"], "responses": { "200": { "description": "repair result" }, "503": { "description": "no root" } } } },
+    "/api/v1/uninstall": { "post": { "summary": "Uninstall an allowed third-party package", "tags": ["install"], "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "required": ["pkg"], "properties": { "pkg": { "type": "string" } } } } } }, "responses": { "200": { "description": "started" }, "202": { "$ref": "#/components/responses/ApprovalRequired" }, "400": { "description": "bad/protected package" }, "503": { "description": "no root" } } } },
+    "/api/v1/radio": { "get": { "summary": "EFR32 radio presence and redacted gateway health", "tags": ["status"], "responses": { "200": { "description": "{present,router_configured,router_enabled,status,state,attributes}; attributes exclude keys, credentials, radio MAC and raw netinfo" } } } },
+    "/api/v1/radio/join": { "post": { "summary": "Reassert Zigbee Repeater mode for an explicitly enabled router", "tags": ["control"], "responses": { "200": { "description": "Join request admitted" }, "404": { "description": "No supported gateway" }, "409": { "description": "Router switch is not explicitly enabled" }, "503": { "description": "Runtime actuator unavailable" } } } },
+    "/api/v1/webview/heal": { "post": { "summary": "Repair the configured WebView provider", "tags": ["install"], "responses": { "200": { "description": "started" }, "202": { "$ref": "#/components/responses/ApprovalRequired" }, "409": { "description": "busy" }, "503": { "description": "no installer capability" } } } },
+    "/api/v1/dashboard/clear-storage": { "post": { "summary": "Start a single-flight clear of the built-in dashboard's local data", "tags": ["control"], "responses": { "202": { "description": "Storage clear started, or Hardened-mode approval-required: approve the request on the panel, then retry the identical request from the same peer.", "content": { "application/json": { "schema": { "oneOf": [{ "type": "object", "properties": { "status": { "type": "string", "enum": ["started"] } } }, { "$ref": "#/components/schemas/ApprovalRequired" }] } } } }, "409": { "description": "already running" }, "503": { "description": "control plane stopping" } } } },
+    "/api/v1/companion/repair-url": { "post": { "summary": "Repair blank internal Companion server URLs", "tags": ["control"], "responses": { "200": { "description": "repair result" }, "202": { "$ref": "#/components/responses/ApprovalRequired" }, "503": { "description": "no root" } } } },
     "/api/v1/sensortrace": {
       "get": { "summary": "Debug sensor-trace ring buffer", "tags": ["sensors"],
         "parameters": [{ "name": "format", "in": "query", "schema": { "type": "string", "enum": ["csv", "json"] } }],
@@ -310,43 +372,34 @@
     "/api/v1/action": {
       "post": { "summary": "On-screen nav action", "tags": ["control"],
         "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "required": ["a"], "properties": { "a": { "type": "string", "enum": ["back", "recents", "launcher", "admin_launcher", "reboot", "volup", "voldn"] } } } } } },
-        "responses": { "202": { "description": "accepted into the bounded control lane" }, "400": { "description": "bad-action" }, "409": { "description": "control queue busy" }, "503": { "description": "control plane stopping" } } }
+        "responses": { "202": { "description": "Routine action accepted into the bounded control lane, or for a Hardened-mode reboot, approval-required: approve the request on the panel, then retry the identical reboot request from the same peer.", "content": { "text/plain": { "schema": { "type": "string" } }, "application/json": { "schema": { "$ref": "#/components/schemas/ApprovalRequired" } } } }, "400": { "description": "bad-action" }, "409": { "description": "control queue busy" }, "503": { "description": "control plane stopping" } } }
     },
     "/api/v1/input": {
       "post": { "summary": "Inject a tap at device pixel (x,y) — the interactive screenshot's control mode (needs root)", "tags": ["control"],
         "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "required": ["x", "y"], "properties": { "x": { "type": "number" }, "y": { "type": "number" } } } } } },
-        "responses": { "202": { "description": "accepted into the bounded control lane" }, "400": { "description": "bad-coords" }, "409": { "description": "control queue busy" }, "503": { "description": "control plane stopping" } } }
+        "responses": { "202": { "description": "accepted into the bounded control lane in Relaxed mode or for a loopback caller" }, "400": { "description": "bad-coords" }, "403": { "description": "remote-input-disabled: non-loopback coordinate injection is disabled in Hardened mode and cannot be approved" }, "409": { "description": "control queue busy" }, "503": { "description": "control plane stopping" } } }
     },
-    "/api/v1/proximity": { "get": { "summary": "Live proximity raw + calibration (raw stays local; only the derived binary goes to HA)", "tags": ["proximity"], "responses": { "200": { "description": "proximity JSON" } } } },
-    "/api/v1/proximity/capture": {
-      "post": { "summary": "Snapshot the current raw value into the near/far calibration slot", "tags": ["proximity"],
-        "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "required": ["step"], "properties": { "step": { "type": "string", "enum": ["near", "far"] } } } } } },
-        "responses": { "200": { "description": "proximity JSON" }, "400": { "description": "bad-step / no-reading" } } }
-    },
-    "/api/v1/proximity/threshold": {
-      "post": { "summary": "Manual threshold fine-tune (overrides the captured midpoint)", "tags": ["proximity"],
-        "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "required": ["v"], "properties": { "v": { "type": "number", "minimum": 0, "maximum": 1000000 } } } } } },
-        "responses": { "200": { "description": "proximity JSON" }, "400": { "description": "bad-value" } } }
-    },
-    "/api/v1/proximity/sensitivity": {
-      "post": { "summary": "Hysteresis band width (flap resistance)", "tags": ["proximity"],
-        "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "required": ["s"], "properties": { "s": { "type": "string", "enum": ["HIGH", "MEDIUM", "LOW"] } } } } } },
-        "responses": { "200": { "description": "proximity JSON" } } }
-    },
-    "/api/v1/proximity/reset": { "post": { "summary": "Clear proximity calibration", "tags": ["proximity"], "responses": { "200": { "description": "proximity JSON" } } } },
+    "/api/v1/proximity": { "get": { "summary": "Hardware-normalized proximity learning state, local raw diagnostic, learned presence and fleet-comparable 0–100 level", "tags": ["proximity"], "responses": { "200": { "description": "proximity learning JSON" } } } },
+    "/api/v1/proximity/teach": { "post": { "summary": "Start or cancel an optional guided three-wave learning session", "tags": ["proximity"], "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "required": ["action"], "properties": { "action": { "type": "string", "enum": ["start", "cancel"] } } } } } }, "responses": { "202": { "description": "session accepted" }, "409": { "description": "ranged proximity is not proven or the session is unavailable in the current phase" } } } },
+    "/api/v1/proximity/test": { "post": { "summary": "Start or cancel a non-actuating wave test", "tags": ["proximity"], "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "required": ["action"], "properties": { "action": { "type": "string", "enum": ["start", "cancel"] } } } } } }, "responses": { "202": { "description": "session accepted" }, "409": { "description": "ranged proximity is not proven or the test is unavailable until ready" } } } },
+    "/api/v1/proximity/relearn": { "post": { "summary": "Forget the active sensor fingerprint's learned model and begin again", "tags": ["proximity"], "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "required": ["confirm"], "properties": { "confirm": { "type": "boolean" } } } } } }, "responses": { "200": { "description": "learning restarted" }, "409": { "description": "ranged proximity is not proven or confirmation is required" }, "503": { "description": "learned history could not be safely cleared" } } } },
+    "/api/v1/proximity/capture": { "post": { "deprecated": true, "summary": "Retired manual calibration operation", "tags": ["proximity"], "responses": { "410": { "description": "automatic proximity learning replaced this operation" } } } },
+    "/api/v1/proximity/threshold": { "post": { "deprecated": true, "summary": "Retired manual threshold operation", "tags": ["proximity"], "responses": { "410": { "description": "automatic proximity learning replaced this operation" } } } },
+    "/api/v1/proximity/sensitivity": { "post": { "deprecated": true, "summary": "Retired manual sensitivity operation", "tags": ["proximity"], "responses": { "410": { "description": "automatic proximity learning replaced this operation" } } } },
+    "/api/v1/proximity/reset": { "post": { "deprecated": true, "summary": "Retired calibration reset operation", "tags": ["proximity"], "responses": { "410": { "description": "use /api/v1/proximity/relearn" } } } },
     "/api/v1/tame": {
       "post": { "summary": "Tame or re-enable a vendor package (root/helper; protected packages refused)", "tags": ["control"],
-        "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "required": ["pkg"], "properties": { "pkg": { "type": "string" }, "action": { "type": "string", "enum": ["tame", "untame"] } } } } } },
-        "responses": { "200": { "description": "HTML redirect back to /configure" } } }
+        "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "properties": { "pkg": { "type": "string", "description": "required for tame/untame" }, "action": { "type": "string", "enum": ["tame", "untame", "recommended"] } } } } } },
+        "responses": { "200": { "description": "JSON started result for application/json clients, otherwise HTML redirect back to /install#cfg-tame" }, "202": { "$ref": "#/components/responses/ApprovalRequired" } } }
     },
     "/api/v1/tame/suggest": { "get": { "summary": "Grouped package-picker suggestions (recommended / other / top-CPU)", "tags": ["control"], "responses": { "200": { "description": "HTML fragment; browsers must pass same-origin Fetch Metadata admission" }, "403": { "description": "Cross-origin or unverifiable browser request refused; headerless LAN automation remains supported" } } } },
     "/api/v1/display/density": {
       "post": { "summary": "Display sizing: density (dpi) + text scale (su panels)", "tags": ["control"],
         "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "properties": { "density": { "type": "integer" }, "font": { "type": "number" }, "action": { "type": "string", "enum": ["reset", "rec"] } } } } } },
-        "responses": { "200": { "description": "HTML redirect back to /configure" } } }
+        "responses": { "200": { "description": "Structured applied result for application/json clients, otherwise HTML redirect back to /install#cfg-display" }, "202": { "$ref": "#/components/responses/ApprovalRequired" }, "500": { "description": "Structured apply-failed result; no display change was reported as successful" } } }
     },
     "/api/v1/inspect": { "get": { "summary": "CDP/DevTools relay status", "tags": ["debug"], "responses": { "200": { "description": "inspect JSON" } } } },
-    "/api/v1/inspect/start": { "post": { "summary": "Start the WebView DevTools relay on :9222 (needs root + WebView debugging)", "tags": ["debug"], "responses": { "200": { "description": "inspect JSON" } } } },
+    "/api/v1/inspect/start": { "post": { "summary": "Start the WebView DevTools relay on :9222 (needs root + WebView debugging; unavailable in Hardened mode)", "tags": ["debug"], "responses": { "200": { "description": "inspect JSON" }, "409": { "description": "devtools-incompatible-with-hardened-mode; switch to Relaxed mode before exposing DevTools to the LAN" } } } },
     "/api/v1/inspect/stop": { "post": { "summary": "Stop the DevTools relay", "tags": ["debug"], "responses": { "200": { "description": "inspect JSON" } } } }
   }
 }

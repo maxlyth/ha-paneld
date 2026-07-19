@@ -2,7 +2,7 @@
 
 Panel profiles describe what is special about a model of Android wall panel: how ha-paneld recognises it, which compiled hardware drivers it may use, known display and sensor characteristics, and any firmware-dependent variants. Profiles are human-readable YAML files. They can be inspected, exported, edited, imported and activated from a running ha-paneld installation without rebuilding the Android app.
 
-This page is the practical authoring guide. See the [format and compatibility reference](format.md) for the document model, [testing and troubleshooting](testing.md) before activating hardware controls, and [sharing and contribution guide](sharing.md) before publishing a profile.
+This page is the practical authoring guide. See the [format and compatibility reference](format.md) for the document model, [testing and troubleshooting](testing.md) before activating hardware controls, and [sharing and contribution guide](sharing.md) before publishing a profile. The repository also carries a clearly separated [unofficial profile catalog](unofficial/README.md); those files are manual imports, not bundled support.
 
 ## What a profile can do
 
@@ -10,7 +10,7 @@ A profile can select from drivers and transformations already supplied by ha-pan
 
 A profile cannot add executable code, shell commands, helper-daemon verbs, kernel ioctls, native libraries or a new hardware protocol. If a panel needs a mechanism that is not listed by the profile editor or format reference, that mechanism must first be implemented and reviewed in ha-paneld itself. This boundary keeps an exchanged YAML file inspectable and prevents a profile from becoming an arbitrary root script.
 
-Profiles also do not grant authority. A root-only driver remains unavailable unless a live root or helper probe succeeds, and a Shizuku recommendation never installs Shizuku, enables Enhanced access or approves ha-paneld. See [Authority: standard Android, Shizuku and root](#authority-standard-android-shizuku-and-root).
+Profiles also do not grant authority. A privileged driver remains unavailable unless its required live route succeeds. See [Authority: standard Android and privileged routes](#authority-standard-android-and-privileged-routes).
 
 ## Quick start without a development environment
 
@@ -76,9 +76,9 @@ Assign each exact group a higher branch priority than its broad fallback. ha-pan
 
 Community/imported revisions never participate in automatic selection, even when their match is exact. Matching is preview evidence that helps the administrator decide whether the file describes this panel. A local revision can override bundled detection only through an explicit activation, after which the panel pins its exact profile ID, revision and hash. A later import therefore cannot change the running result implicitly.
 
-Use a named core-owned strategy field for a supported difference within one hardware family, such as the documented NSPanel firmware proximity cutover, product label or density rule. The format does not contain a general expression language or arbitrary variant patching. Use separate profiles when the available named strategies cannot describe the difference, or when products select materially different hardware drivers, privilege boundaries or recovery behavior.
+Use a named core-owned strategy field for a supported difference within one hardware family, such as a product label or density rule. The format does not contain a general expression language or arbitrary variant patching. Proximity scale, polarity and binary/ranged behavior are deliberately not profile strategies: the runtime learns them from live evidence. Use separate profiles when the available named strategies cannot describe a genuine acquisition, driver, privilege-boundary or recovery difference.
 
-## Authority: standard Android, Shizuku and root
+## Authority: standard Android and privileged routes
 
 Profiles describe candidate mechanisms; live probes decide whether the running panel can use them.
 
@@ -86,17 +86,15 @@ Profiles describe candidate mechanisms; live probes decide whether the running p
 
 Start here. Dashboard rendering, MQTT pairing and ordinary Android sensors, brightness, audio, navigation and the local web UI do not require root. A new profile should prove its identity and standard-Android behavior before adding a privileged driver.
 
-### Shizuku enhanced access
+### Exceptional shell fallback
 
-A profile may recommend Shizuku for a genuinely unrooted panel when the shell-identity subset is useful. This is guidance only. It cannot install the Manager, start its service, set local consent, approve ha-paneld or restore approval from a backup or fleet operation.
-
-Shizuku can support the narrow operations documented in [Shizuku enhanced access](../shizuku.md), including display sizing, screenshot/input and signer-verified app updates. It does not unlock vendor LEDs, relays, arbitrary sysfs or device nodes, true hardware backlight-off, WebView replacement, package taming, reboot, CPU control, full logs or private application data.
+Omit `provisioning.access.shizuku` unless the profile selects a concrete compiled capability whose authority contract explicitly supports that alternate route. Generic conveniences do not justify a profile recommendation. The declaration is guidance only and never installs or approves anything; the narrow setup and security boundary are documented in the [advanced fallback guide](../shizuku.md).
 
 ### Vendor root or the ha-paneld helper
 
 A compiled driver may require a working vendor `su` route or ha-paneld's separately installed root helper. Declaring that requirement does not make the route exist, install the helper or widen its allowlist. The helper accepts only compiled, bounded commands and authenticates its peer; a profile supplies validated parameters to those commands, never command text.
 
-Do not recommend rooting a device that was supplied unrooted merely to satisfy a profile. Document the reduced feature set honestly and prefer standard Android or the locally approved Shizuku subset when it is sufficient.
+Do not recommend rooting a device that was supplied unrooted merely to satisfy a profile. Document the reduced feature set honestly.
 
 ## Updating an installed profile
 
@@ -113,5 +111,4 @@ Treat a change to matching, a privileged driver, a path, firmware variant, packa
 - [Sharing and contributing profiles](sharing.md)
 - [Device-profile architecture](../architecture/device-profiles.md)
 - [Security posture](../architecture/security.md)
-- [Shizuku enhanced access](../shizuku.md)
 - [Panel hardware references](../hardware/README.md)

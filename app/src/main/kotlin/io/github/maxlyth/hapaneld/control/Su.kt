@@ -3,6 +3,9 @@ package io.github.maxlyth.hapaneld.control
 import android.util.Log
 import io.github.maxlyth.hapaneld.platform.RootShell
 import io.github.maxlyth.hapaneld.util.BoundedStreams
+import io.github.maxlyth.hapaneld.util.BoundedLaunchGate
+import io.github.maxlyth.hapaneld.util.MonotonicDeadline
+import io.github.maxlyth.hapaneld.util.runBoundedLaunch
 import java.io.BufferedReader
 import java.io.File
 import java.io.IOException
@@ -11,14 +14,52 @@ import java.util.concurrent.Callable
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+
+internal enum class SuExecFailure {
+    FIRST_MISSING,
+    ALREADY_MISSING,
+    OTHER,
+}
+
+/** Process-lifetime cache for the definitive "su binary does not exist" launch failure. */
+internal class SuExecFailureCache {
+    private val missing = AtomicBoolean(false)
+
+    fun shouldSkipExec(): Boolean = missing.get()
+
+    fun record(error: Exception): SuExecFailure {
+        if (!isMissingBinary(error)) return SuExecFailure.OTHER
+        return if (missing.compareAndSet(false, true)) {
+            SuExecFailure.FIRST_MISSING
+        } else {
+            SuExecFailure.ALREADY_MISSING
+        }
+    }
+
+    private fun isMissingBinary(error: Exception): Boolean =
+        generateSequence(error as Throwable?) { it.cause }
+            .filterIsInstance<IOException>()
+            .mapNotNull { it.message }
+            .any { message ->
+                message.contains("No such file or directory", ignoreCase = true) ||
+                    message.contains("ENOENT", ignoreCase = true) ||
+                    ENOENT_ERROR_NUMBER.containsMatchIn(message)
+            }
+
+    private companion object {
+        val ENOENT_ERROR_NUMBER = Regex("(?:^|\\D)error=2(?:\\D|$)", RegexOption.IGNORE_CASE)
+    }
+}
 
 /**
  * Root command execution.
  *
  * Two su syntaxes across the fleet: toolbox `su -c '<cmd>'` (Sonoff PX30) and Android `su 0 sh -c
  * '<cmd>'` (Tuya TPA10 userdebug). A working form is cached; a negative probe is retried by later
- * one-shot operations because the root manager may become ready after boot. Graceful: returns
- * false/null if no su works (a panel without root just loses the root-gated capabilities).
+ * one-shot operations because the root manager may become ready after boot. Only a definitive missing
+ * executable is cached for the process lifetime. Graceful: returns false/null if no su works (a panel
+ * without root just loses the root-gated capabilities).
  *
  * **Persistent shell (0.8.3).** [run]/[runOutput] are piped into a single long-lived root shell rather
  * than forking `su` per call. A fresh `su` fork+auth costs ~200–300 ms, which made the navbar's
@@ -42,6 +83,8 @@ object Su : RootShell {
     private var form: Int = SuFormPolicy.UNPROBED
 
     private var shell: ShellHandle? = null
+    private val execFailureCache = SuExecFailureCache()
+    private val oneShotLaunchGate = BoundedLaunchGate()
 
     private class ShellHandle(
         val process: Process,
@@ -77,13 +120,14 @@ object Su : RootShell {
     /** Fire [cmd] as root without waiting (for commands like `reboot` that kill the process). Always a
      *  one-shot — never sent into the shared persistent shell (it would take the shell down with it). */
     override fun fireAndForget(cmd: String): Boolean {
+        if (execFailureCache.shouldSkipExec()) return false
         val forms = SuFormPolicy.candidates(form)
         for (f in forms) {
             try {
                 Runtime.getRuntime().exec(argvOneShot(f, cmd))
                 return true
             } catch (e: Exception) {
-                Log.d(TAG, "su fire form $f failed", e)
+                if (logExecFailure("fire form $f", e)) return false
             }
         }
         return false
@@ -135,24 +179,25 @@ object Su : RootShell {
 
     /** One-shot, bounded text command for diagnostics. Unlike [runOutput], this never waits behind the
      * synchronized persistent control shell, so a slow perf probe cannot add seconds of latency to a
-     * navbar/screen/hardware command. */
-    fun runOutputIsolatedBounded(cmd: String, maxBytes: Long, timeoutMs: Long = CMD_TIMEOUT_MS): String? {
-        val forms = SuFormPolicy.candidates(form)
-        for (f in forms) {
-            val out = runBounded("isolated-out", argvOneShot(f, cmd), timeoutMs) { p ->
+     * navbar/screen/hardware command. Both possible `su` dialects share one [timeoutMs] deadline. */
+    override fun runOutputIsolatedBounded(cmd: String, maxBytes: Long, timeoutMs: Long): String? {
+        val deadline = MonotonicDeadline(timeoutMs)
+        val selected = SuFormPolicy.firstSuccessfulWithin(form, deadline) { candidate, sharedDeadline ->
+            runBounded("isolated-out", argvOneShot(candidate, cmd), sharedDeadline) { p ->
                 val bytes = BoundedStreams.readBytes(p.inputStream, maxBytes)
                 if (p.waitFor() == 0) String(bytes, Charsets.UTF_8) else null
             }
-            if (out != null) {
-                form = f
-                return out
-            }
+        }
+        if (selected != null) {
+            form = selected.form
+            return selected.value
         }
         if (form == SuFormPolicy.UNPROBED) form = SuFormPolicy.NONE_LAST_PROBE
         return null
     }
 
-    fun availableIsolated(): Boolean = runOutputIsolatedBounded("true", 1L) != null
+    fun availableIsolated(timeoutMs: Long = CMD_TIMEOUT_MS): Boolean =
+        runOutputIsolatedBounded("true", 1L, timeoutMs) != null
 
     override fun available(): Boolean = run("true")
 
@@ -233,32 +278,50 @@ object Su : RootShell {
     // --- one-shot fallback (pre-0.8.3 behaviour; also the form probe) ---
 
     /**
-     * Run a one-shot `su` [argv], bounding the whole call (exec + [reader]) to [CMD_TIMEOUT_MS] so a `su`
-     * that hangs on auth can never block the caller for the life of the process — the same guarantee the
-     * persistent shell already has via its timed future. [reader] consumes the process (wait / read stdout)
-     * on a throwaway daemon thread; on timeout or failure the child is force-killed and null is returned.
+     * Run a one-shot `su` [argv], including process launch and [reader], under one monotonic deadline.
+     * Runtime.exec runs on the throwaway worker; if a timed-out launch returns late, its child is killed
+     * before the reader can run.
      */
-    private fun <T> runBounded(label: String, argv: Array<String>, timeoutMs: Long = CMD_TIMEOUT_MS, reader: (Process) -> T): T? {
-        val p = try {
-            Runtime.getRuntime().exec(argv)
-        } catch (e: Exception) {
-            Log.d(TAG, "su $label exec failed: ${argv.joinToString(" ")}", e)
-            return null
-        }
-        val ex = Executors.newSingleThreadExecutor { r ->
-            Thread(r, "ha-paneld-su-1shot").apply { isDaemon = true }
-        }
-        return try {
-            ex.submit(Callable { reader(p) }).get(timeoutMs, TimeUnit.MILLISECONDS)
-        } catch (e: Exception) {
-            // timeout / broken pipe / reader failure — kill the child so it can't linger, then give up.
-            Log.d(TAG, "su $label timed out or failed", e)
-            runCatching { p.destroyForcibly() }
-            null
-        } finally {
-            ex.shutdownNow()
-        }
+    private fun <T> runBounded(label: String, argv: Array<String>, timeoutMs: Long = CMD_TIMEOUT_MS, reader: (Process) -> T): T? =
+        runBounded(label, argv, MonotonicDeadline(timeoutMs), reader)
+
+    private fun <T> runBounded(
+        label: String,
+        argv: Array<String>,
+        deadline: MonotonicDeadline,
+        reader: (Process) -> T,
+    ): T? {
+        if (execFailureCache.shouldSkipExec()) return null
+        return runBoundedLaunch(
+            deadline = deadline,
+            threadName = "ha-paneld-su-1shot",
+            gate = oneShotLaunchGate,
+            launch = {
+                try {
+                    Runtime.getRuntime().exec(argv)
+                } catch (error: Exception) {
+                    logExecFailure("$label exec failed: ${argv.joinToString(" ")}", error)
+                    null
+                }
+            },
+            destroy = { process -> process.destroyForcibly() },
+            consume = reader,
+        )
     }
+
+    /** Log unexpected launch failures with their stack. Returns true when `su` is definitively absent. */
+    private fun logExecFailure(operation: String, error: Exception): Boolean =
+        when (execFailureCache.record(error)) {
+            SuExecFailure.FIRST_MISSING -> {
+                Log.d(TAG, "su binary not found; root-only operations are unavailable")
+                true
+            }
+            SuExecFailure.ALREADY_MISSING -> true
+            SuExecFailure.OTHER -> {
+                Log.d(TAG, "su $operation", error)
+                false
+            }
+        }
 
     private fun oneShotRun(cmd: String): Boolean {
         val forms = SuFormPolicy.candidates(form)

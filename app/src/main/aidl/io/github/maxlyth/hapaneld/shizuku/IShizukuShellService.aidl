@@ -15,6 +15,7 @@ interface IShizukuShellService {
     String readFontScale();
     boolean setFontScale(float scale);
     boolean resetFontScale();
+    String readRoomClimate();
     String installApk(
         in ParcelFileDescriptor source,
         long length,

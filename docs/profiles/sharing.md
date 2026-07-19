@@ -18,6 +18,7 @@ Complete the profile's metadata before sharing it:
 - human-readable panel family/model;
 - author or maintaining organisation;
 - source/homepage where updates and evidence live;
+- optional product, vendor, community or reference links shown with their destination hostname;
 - a license that permits redistribution;
 - maturity such as draft, experimental or verified;
 - exact models, Android builds and firmware versions tested;
@@ -28,6 +29,8 @@ Complete the profile's metadata before sharing it:
 Use **draft** when the file is primarily generated from Generic or firmware/retail evidence, **experimental** when it has been activated on hardware but important controls or firmware variants remain unverified, and **verified** only when the claimed behavior has been exercised on the stated hardware with rollback/recovery evidence. These labels describe evidence, not code-signing trust.
 
 Record speculation as a limitation, not as a positive capability. For example, a kernel configuration containing a sensor driver does not prove that the sensor is fitted, wired, Android-exposed or accessible to ha-paneld.
+
+Profile links are navigation aids, not executable configuration or an endorsement. They must use HTTPS and are opened only when the administrator selects them; ha-paneld does not fetch remote images, metadata, scripts or profile updates from those URLs. Use `metadata.source` for the canonical profile home and `metadata.links` for additional product, vendor, Wikipedia, repository or technical-reference pages.
 
 ## What to share
 
@@ -54,7 +57,7 @@ Review a profile as configuration with hardware consequences:
 - compare with the active revision and activate only the exact inspected hash;
 - keep a known-good rollback revision.
 
-A signature published separately by the author can help establish origin, but ha-paneld does not interpret it as authority and it does not bypass validation, live probes, local Shizuku consent or activation confirmation. Unsigned does not necessarily mean malicious, and signed does not mean suitable for your exact hardware.
+A signature published separately by the author can help establish origin, but ha-paneld does not interpret it as authority and it does not bypass validation, live authority probes or activation confirmation. Unsigned does not necessarily mean malicious, and signed does not mean suitable for your exact hardware.
 
 ## Privacy and redaction
 

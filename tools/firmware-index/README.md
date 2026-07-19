@@ -46,6 +46,24 @@ python tools/firmware-index/firmware_index.py render --history history.json --ou
 
 Stdlib only — no dependencies. Sparkline: 🟩 reachable · 🟥 unreachable · ⬜ no data yet (7 points = 7 days at the daily cadence, newest on the right).
 
+## Shelly Wall Display monitor
+
+`shelly_firmware.py` checks the `WallDisplay` and `WallDisplayV2` OTA tracks.
+Shelly's manifest and firmware hosts use a private Allterco CA, so the monitor
+adds the reviewed `shelly-cloud-ca.pem` trust anchor to Python's default TLS
+context. Certificate validation and hostname checking remain required. The CA
+was recovered from the `shelly_cloud.pem` trust store in the official ShellyOS
+Plus1 1.7.5 firmware image (SHA-256
+`8b856276fcd4e629650256e5fc73a90a9cc6c061269e867c5bdc0b61e355f1db`);
+its DER SHA-256 is pinned by the unit tests.
+
+The Shelly workflow's manual dispatch defaults to `verify`. That job strictly
+fetches every current manifest and HEADs every corresponding CDN object, even
+when the version is already indexed. Any manifest, certificate, hostname or CDN
+failure makes the job fail. It has read-only repository permissions and receives
+no publishing secrets. Select `update` explicitly to run the archive, Discussion,
+and firmware-index commit path. Scheduled runs continue to use the update path.
+
 ## Wayback archiving
 
 `wayback_archive.py` preserves the index against the CoolKit CDN going away. It saves the Discussion page (with `capture_outlinks=1`) and submits every firmware URL to Save Page Now *explicitly* — `capture_outlinks` caps at 100 links, far short of the more than 200 files, so the page crawler alone is not relied on. Firmware URLs are immutable, so each is archived once and recorded in the state file; later runs only submit new ones.

@@ -1,36 +1,43 @@
 package io.github.maxlyth.hapaneld.device
 
-import android.os.Build
 import io.github.maxlyth.hapaneld.device.profile.ProfileArtifacts
+import io.github.maxlyth.hapaneld.device.profile.ProfileLink
+import io.github.maxlyth.hapaneld.device.profile.ProfileSoc
 import io.github.maxlyth.hapaneld.device.profile.ShizukuRecommendation
-import io.github.maxlyth.hapaneld.util.SystemProps
 
 /**
- * Per-platform canonical silo. Everything device/platform-specific that the generic functional modules
- * need — su form, LED mechanism, screen-off path, and the sysfs/vendor locations of optional hardware —
- * is declared here, one `object` per platform (see `NSPanelPro`, `Tpa10`, `Wf1589t`, `Smt1019`, `S9e`,
- * `ShellyWallDisplay`, `ShellyWallDisplayV2`, `EchoShow5Gen2`, `ZxSmt156`, `Generic`).
+ * Runtime view of one validated declarative device profile. Everything device/platform-specific that
+ * the generic functional modules need — su form, LED mechanism, screen-off path, and the sysfs/vendor
+ * locations of optional hardware — is loaded from the active YAML revision and exposed through this
+ * interface.
  *
  * Design rule (see docs/architecture/device-profiles.md): a profile declares **candidates + quirks**;
  * the functional modules still **runtime-probe to confirm** whenever the platform exposes a probe
- * (profile says *where to look*, the probe says *whether it's actually there*). [Generic] deliberately
- * keeps unknown hardware conservative: standard Android sensors and generic LED/CPU routes can be
- * probed, while relays, evdev buttons and vendor protocols stay absent until their paths are known.
+ * (profile says *where to look*, the probe says *whether it's actually there*). The bundled generic
+ * YAML deliberately keeps unknown hardware conservative: standard Android sensors and generic
+ * LED/CPU routes can be probed, while relays, evdev buttons and vendor protocols stay absent until
+ * their paths are known.
  */
 interface DeviceProfile {
     /** Stable id, e.g. "nspanel-pro" / "tpa10" / "generic". */
     val id: String
 
-    /** Immutable identity of the loaded profile content. Runtime YAML profiles use their SHA-256
-     *  revision; compiled legacy profiles retain a stable built-in identity. Local sensor calibration
-     *  is scoped to this value so a different revision cannot inherit incompatible physical readings. */
-    val revision: String get() = "compiled"
+    /** Immutable SHA-256 identity of the loaded profile content (or the reserved emergency contract).
+     *  Local sensor calibration is scoped to this value so a different YAML revision cannot inherit
+     *  incompatible physical readings. */
+    val revision: String
 
     /** Human label for the info page / diagnostics. */
     val displayName: String
 
     /** SoC class, e.g. "PX30 / rk3326". */
     val socClass: String
+
+    /** Optional profile-evidenced SoC model, CPU topology and introduction year. */
+    val soc: ProfileSoc? get() = null
+
+    /** Validated display-only profile references; never runtime-fetched or used for provisioning. */
+    val profileLinks: List<ProfileLink> get() = emptyList()
 
     /** Which `su` invocation form works on this platform (or [SuForm.NONE] if the app can't reach su). */
     val suForm: SuForm
@@ -55,6 +62,7 @@ interface DeviceProfile {
             ledMechanism == LedMechanism.RK3576_IOCTL_DAEMON ||
             screenOff == ScreenOff.DAEMON_BLPOWER ||
             hasButtonBacklight ||
+            proximityGpio != null ||
             evdevButtons.isNotEmpty()
 
     /** Curated, annotated packages for THIS panel's "Recommended" list in the Vendor-packages card — each a
@@ -83,6 +91,11 @@ interface DeviceProfile {
      *  this from a daemon-backed RGB controller: SMT1019 uses that controller for `/dev/ledjni` but has
      *  no `/sys/class/leds/button-backlight` node. */
     val hasButtonBacklight: Boolean get() = false
+
+    /** SoundPool gain for the physical-speaker click. This is deliberately profile-owned because the
+     *  same media-stream level produces very different acoustic output across panel speaker/enclosure
+     *  combinations. It scales only ha-paneld's click sample and never changes Android stream volume. */
+    val touchClickGain: Float get() = 0.2f
 
     /** Per-channel LED transfer function (requested 0..255 → hardware value), correcting the panel's
      *  non-linear LED response. Only consumed on the rk3576 ioctl path. Default = passthrough; rk3576
@@ -113,34 +126,17 @@ interface DeviceProfile {
      *  — declare per profile where known. Optionally append a known chipset, e.g. "Infrared (STK3338)". */
     val proximityTech: String? get() = null
 
-    /** Pre-calibration polarity for the tuning-UI gauge: true when "near" is the *smaller* raw value
-     *  (distance ToF, e.g. TPA10), false when near is the *larger* value (reflective IR). The gauge icons
-     *  (panel = near / person = far) assert a direction, so this grounds them before the user calibrates;
-     *  the two-point capture then refines it empirically and stores the authoritative value. Null =
-     *  unknown (legacy default: assume near-below). Does NOT affect the near/far decision, only the UI. */
-    val proximityNearBelow: Boolean? get() = null
-
-    /** Reference raw values for a *profiled* sensor: a typical reading with an object near the panel
-     *  ([proximityNearRaw]) and at rest / far ([proximityFarRaw]). When both are set the panel is calibrated
-     *  straight from the profile — threshold = midpoint, polarity = near<far (unless [proximityNearBelow]
-     *  overrides), hysteresis from the sensitivity preset — so the manual two-point capture is only a
-     *  fallback for unprofiled sensors (and a user override). A written profile is authoritative knowledge;
-     *  don't make the user re-discover it. Null = unknown → manual calibration. */
-    val proximityNearRaw: Float? get() = null
-    val proximityFarRaw: Float? get() = null
-
-    /** GPIO number of a raw binary proximity line to poll over root (1 = near, 0 = far), for panels whose
-     *  Android `SensorManager` proximity is absent or registers but never delivers events — e.g. the
-     *  Smatek S9E (gpio18, reporter-confirmed GitHub #5: reads 0 far / 1 near, no export needed). Null →
-     *  use the `SensorManager` proximity sensor. */
+    /** GPIO number of a raw binary proximity line streamed by the root helper for panels whose Android
+     *  `SensorManager` proximity is absent or registers but never delivers events. Scale and polarity are
+     *  learned from the stream, never encoded here. Null selects the `SensorManager` source. */
     val proximityGpio: Int? get() = null
 
     /** Declared ambient-light-sensor technology (e.g. "Ambient light (ALS)"), or null if unknown. */
     val lightTech: String? get() = null
 
-    /** True on panels carrying a CHT8305 room temperature/humidity chip whose readings are only reachable
-     *  via the root helper daemon (its `/dev/input` nodes are root-owned) — e.g. the TPA10. Gates the opt-in
-     *  Room temperature/humidity HA sensors + their calibration offset. Null/false elsewhere. */
+    /** True on panels using an exact supported CHT8305-compatible room-climate input layout. The app
+     *  cannot read `/dev/input`; an established helper is preferred, with a fixed Shizuku shell-UID reader
+     *  where the vendor makes those exact nodes shell-readable. Gates the opt-in Room sensors and offset. */
     val hasCht8305: Boolean get() = false
 
     /** Baseline calibration offset (°C) added to the CHT8305 room-temperature reading to correct for panel
@@ -148,18 +144,12 @@ interface DeviceProfile {
      *  further trim via the `room_temp_offset` config key (the two are additive). 0 = no baseline correction. */
     val roomTempOffsetC: Float get() = 0f
 
-    /** Authoritative proximity graded(true) / binary(false) decided from the firmware version, where the
-     *  profile knows the rule (e.g. NSPanel Pro's kernel-driver cutover) — overrides runtime observation,
-     *  so a graded sensor never momentarily reads "Binary" at idle. Null → fall back to observation.
-     *  @param productVersion `ro.product.version`, e.g. "NSPanel120P_3.7.1". */
-    fun proximityGradedForFirmware(productVersion: String): Boolean? = null
-
     /** Default HA device-card manufacturer for this panel (e.g. "Sonoff"), or null to infer from
-     *  [Build.MANUFACTURER]. The user's Configure-form value always overrides. */
+     *  Android's `Build.MANUFACTURER`. The user's Configure-form value always overrides. */
     val manufacturer: String?
 
     /** Default HA device-card model/product name (e.g. "NSPanel Pro"), or null to infer from
-     *  [Build.MODEL]. Published with a " (ha-paneld)" suffix so the device is distinguishable from a
+     *  Android's `Build.MODEL`. Published with a " (ha-paneld)" suffix so the device is distinguishable from a
      *  co-installed integration managing the same hardware; the user's form value overrides verbatim. */
     val model: String?
 
@@ -200,77 +190,6 @@ interface DeviceProfile {
      *  Compared with `UpdateChecker.isNewer` (dotted numeric). */
     val companionMaxVersion: String? get() = provisioning.companionMaxVersion
 
-    companion object {
-        /** Every production profile, including [Generic]. Cross-profile contract tests iterate this list;
-         *  add a new profile here in the same change that adds its detection rule. */
-        internal val knownProfiles: List<DeviceProfile> = listOf(
-            NSPanelPro,
-            Tpa10,
-            EchoShow5Gen2,
-            ZxSmt156,
-            ShellyWallDisplayV2,
-            ShellyWallDisplay,
-            Smt1019,
-            Wf1589t,
-            S9e,
-            Generic,
-        )
-
-        /** Memoized detected profile: [match] is pure per boot (Build fields + one system property), yet
-         *  several call sites re-invoke [detect] on request paths — so resolve it once and reuse. */
-        private val cached: DeviceProfile by lazy { match() }
-
-        /**
-         * Pick the profile for the running device from [Build] fingerprints; [Generic] when none match.
-         * Build-only (no Context needed). Presence-based capabilities (relays/zigbee/sensors) are still
-         * runtime-probed by their controllers, so [Generic] is a safe fallback for unknown panels.
-         */
-        fun detect(): DeviceProfile = cached
-
-        private fun match(): DeviceProfile =
-            match(Build.MODEL, Build.DEVICE, SystemProps.get("ro.product.version"))
-
-        /**
-         * Pure fingerprint match over the raw [Build] fields + `ro.product.version` (lowercased here).
-         * Extracted from the Android-facing [match] so the whole per-platform mapping — including the
-         * order-sensitive collision cases (SMT1019 vs WF1589T, TPA10 vs the rk3566-sharing S9E, Gen1 vs
-         * Gen2 NSPanel Pro) — is unit-testable without a device. **Branch order is significant**; keep the
-         * comments. [Generic] is the no-match fallback.
-         */
-        internal fun match(rawModel: String, rawDevice: String, rawProductVersion: String): DeviceProfile {
-            val model = rawModel.lowercase()
-            val device = rawDevice.lowercase()
-            val productVersion = rawProductVersion.lowercase()
-            return when {
-                // Exact product identities must win over broad SoC aliases. This matters when another
-                // vendor ships the same Rockchip reference platform: a Shelly Jenna can truthfully carry
-                // PX30/rk3326 in one Build field while its product/device field still says "jenna".
-                model == "tpa10" || device == "tpa10" -> Tpa10
-                device == "cronos" || model == "cronos" -> EchoShow5Gen2
-                device == "rk3566_t" || model == "rk3566_t" -> ZxSmt156
-                model in setOf("blake", "jenna", "cally", "maverick", "dayna") ||
-                    device in setOf("blake", "jenna", "cally", "maverick", "dayna") ||
-                    Regex("^sawd-[3456]").containsMatchIn(model) ||
-                    Regex("^sawd-[3456]").containsMatchIn(device) -> ShellyWallDisplayV2
-                model in setOf("stargate", "pegasus", "atlantis") ||
-                    device in setOf("stargate", "pegasus", "atlantis") ||
-                    Regex("^sawd-[012]").containsMatchIn(model) ||
-                    Regex("^sawd-[012]").containsMatchIn(device) ||
-                    "k400_mt6580" in device || "e500_7731e" in device -> ShellyWallDisplay
-                "wf2489" in device -> Smt1019
-                "wf1589" in device -> Wf1589t
-                // The Smatek S9E reports generic Build fields but carries its vendor model code in
-                // ro.product.version ("S9_Android_1.1.0"). Exact TPA10/rk3566_t rules already won above.
-                "s9e" in model || "s9e" in device || model == "s9" || productVersion.startsWith("s9") -> S9e
-                productVersion.startsWith("nspanel") || productVersion.startsWith("s6_android_") -> NSPanelPro
-                // Broad reference-platform fallbacks come last. They retain support for historical
-                // NSPanel/WF diagnostics while never overriding a product identity known above.
-                "px30" in model || "px30" in device || "rk3326" in model || "rk3326" in device -> NSPanelPro
-                model == "rk3576_u" -> Wf1589t
-                else -> Generic
-            }
-        }
-    }
 }
 
 /** Provisioning policy normalized from the profile schema for runtime consumers. */
@@ -326,7 +245,7 @@ data class WebViewSpec(
  *  RK3576_IOCTL_DAEMON = the *same* ioctl but routed through the root helper daemon, for panels where
  *  the app is SELinux-denied the ioctl (e.g. SMT1019 — the node is `system:system`, generic `device`
  *  label); SYSFS_DAEMON = root-only sysfs LED via the daemon (e.g. TPA10); AUTODETECT = probe rk3576
- *  ioctl then the daemon (the [Generic] fallback for an unknown panel); NONE = no LED, skip probing.
+ *  ioctl then the daemon (used by the generic YAML profile); NONE = no LED, skip probing.
  *  The daemon auto-detects sysfs-vs-ledjni itself, so both daemon mechanisms use the same client. */
 enum class LedMechanism { RK3576_IOCTL, RK3576_IOCTL_DAEMON, SYSFS_DAEMON, AUTODETECT, NONE }
 

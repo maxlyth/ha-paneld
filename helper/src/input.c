@@ -86,7 +86,7 @@ static int valid_evdev_path(const char *path) {
 }
 
 static int open_evdev(const char *path, int grab, int activate_grab, int verify_grab) {
-    int fd = open(path, O_RDONLY);
+    int fd = open(path, O_RDONLY | O_CLOEXEC);
     if (fd < 0) return -1;
     if (grab && (activate_grab || verify_grab)) {
         if (ioctl(fd, EVIOCGRAB, (void *)1) < 0) {

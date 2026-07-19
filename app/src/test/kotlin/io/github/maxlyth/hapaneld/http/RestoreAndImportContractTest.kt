@@ -58,13 +58,25 @@ class RestoreAndImportContractTest {
             source.indexOf("private suspend fun applyAccepted"),
             source.indexOf("private fun applyRendererEffects"),
         )
-        assertTrue("apply must compare expected_cfg", "configConcurrencyHash() != expectedConfig" in apply)
+        assertTrue("apply must compare expected_cfg", "configConcurrencyHash(currentValues()) != expectedConfig" in apply)
         assertTrue(
             "expected_cfg comparison must be inside the serialized renderer/config transaction",
-            apply.indexOf("rendererPreparation.transaction") < apply.indexOf("configConcurrencyHash()"),
+            apply.indexOf("rendererPreparation.transaction") < apply.indexOf("configConcurrencyHash(currentValues())"),
         )
         assertTrue("stale preview must be a conflict", "\"status\":\"stale-preview\"" in handler)
         assertTrue("stale preview must be HTTP 409", "HttpStatusCode.Conflict" in handler)
+    }
+
+    @Test fun configImportApprovalBindsTheOriginalBodyAndCompleteQueryMultimap() {
+        val handler = source.substring(
+            source.indexOf("private suspend fun handleConfigImport"),
+            source.indexOf("private suspend fun applyAccepted"),
+        )
+        assertTrue("approval must hash the original request bytes", "sha256Hex(bodyBytes)" in handler)
+        assertTrue(
+            "approval must use the HTTP binding that includes the complete query multimap",
+            "exactHttpApprovalPayload(call, importDigest)" in handler,
+        )
     }
 
     @Test fun restoreRollbackFenceMatchesOnlyTheGenerationDurableBeforeRendererPreparation() {

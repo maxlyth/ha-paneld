@@ -52,7 +52,8 @@ class FleetScopeSpecTest {
         val deviceLocal = listOf(
             "mqtt_user",
             "mqtt_password",
-            "brightness_bias",
+            "auto_brightness_sensitivity",
+            "auto_brightness_ha_entity",
             "cpu_governor",
             "dashboard_package",
             "home_dashboard",
@@ -64,6 +65,7 @@ class FleetScopeSpecTest {
             "dashboard_entity_learning_applied",
             "dashboard_zoom",
             "launcher_package",
+            "tame_vendor_packages",
             "room_temp_offset",
         )
 

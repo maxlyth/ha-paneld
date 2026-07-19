@@ -1,7 +1,6 @@
 package io.github.maxlyth.hapaneld.control
 
 import android.util.Log
-import io.github.maxlyth.hapaneld.device.DeviceProfile
 import io.github.maxlyth.hapaneld.device.ScreenOff
 import io.github.maxlyth.hapaneld.platform.Daemon
 import io.github.maxlyth.hapaneld.platform.NoWakeTap
@@ -9,6 +8,10 @@ import io.github.maxlyth.hapaneld.platform.RootShell
 import io.github.maxlyth.hapaneld.platform.ScreenPower
 import io.github.maxlyth.hapaneld.platform.WakeTap
 import io.github.maxlyth.hapaneld.util.HelperClient
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
+
+enum class WakeOutcome { WOKEN, ALREADY_ON, STALE_GENERATION, ACTUATION_FAILED }
 
 /**
  * Screen on/off — vendor-free with one serialized transition owner.
@@ -34,7 +37,7 @@ class ScreenController(
     private val root: RootShell = Su,
     private val daemon: Daemon = HelperClient,
     private val wakeTap: WakeTap = NoWakeTap,
-    private val route: ScreenOff = DeviceProfile.detect().screenOff,
+    private val route: ScreenOff,
 ) {
     // Last known "on" level, used by the brightness fallback. Survives an off/on cycle.
     @Volatile private var savedLevel = DEFAULT_ON
@@ -50,6 +53,10 @@ class ScreenController(
     // stale screen-off can never strand the panel dark, but a deliberate "screen off" still stays off.
     @Volatile private var intendedOff = false
     @Volatile private var appliedOffRoute: ScreenOff? = null
+    private val stateGeneration = AtomicLong()
+    @Volatile private var intendedOffGeneration = 0L
+    @Volatile private var observedDarkGeneration = 0L
+    private val admissionClosed = AtomicBoolean(false)
 
     fun isOn(): Boolean = power.isInteractive()
 
@@ -60,7 +67,7 @@ class ScreenController(
      * sleep (which then wins), or an already-intended off rejects it; ALS can never relight an OFF panel. */
     @Synchronized
     fun actuateBrightnessIfOn(action: () -> Unit): Boolean {
-        if (intendedOff) return false
+        if (intendedOff || admissionClosed.get()) return false
         action()
         return true
     }
@@ -74,16 +81,34 @@ class ScreenController(
             return if (power == 0) effective() else true
         }
         return when (route) {
-            ScreenOff.DAEMON_BLPOWER -> daemon.send("BLPOWER")?.trim()?.toIntOrNull()
-                ?.takeIf { it in 0..4 }?.let(::fromPower)
-                ?: root.runOutput(blPowerRead())?.trim()?.toIntOrNull()
-                    ?.takeIf { it in 0..4 }?.let(::fromPower) ?: effective()
-            ScreenOff.SU_BLPOWER -> root.runOutput(blPowerRead())
-                ?.trim()?.toIntOrNull()?.takeIf { it in 0..4 }?.let(::fromPower)
-                ?: daemon.send("BLPOWER")?.trim()?.toIntOrNull()
-                    ?.takeIf { it in 0..4 }?.let(::fromPower) ?: effective()
+            ScreenOff.DAEMON_BLPOWER, ScreenOff.SU_BLPOWER -> observedBlPower()?.let(::fromPower) ?: effective()
             ScreenOff.BRIGHTNESS_ZERO -> effective()
         }
+    }
+
+    /**
+     * Affirmative proof that the screen is physically lit for a process handoff. Unlike [observedDark],
+     * privileged bl_power profiles never degrade to brightness-only evidence: a positive level cannot
+     * prove visibility while the panel's backlight power remains off.
+     */
+    fun observedLit(): Boolean? {
+        val effectiveLit = { backlight.getBrightness().takeIf { it >= 0 }?.let { it > 0 } }
+        return when (route) {
+            ScreenOff.DAEMON_BLPOWER, ScreenOff.SU_BLPOWER -> observedBlPower()?.let { powerState ->
+                if (powerState == 0) effectiveLit() else false
+            }
+            ScreenOff.BRIGHTNESS_ZERO -> effectiveLit()
+        }
+    }
+
+    private fun observedBlPower(): Int? = when (route) {
+        ScreenOff.DAEMON_BLPOWER -> daemon.send("BLPOWER")?.trim()?.toIntOrNull()
+            ?.takeIf { it in 0..4 }
+            ?: root.runOutput(blPowerRead())?.trim()?.toIntOrNull()?.takeIf { it in 0..4 }
+        ScreenOff.SU_BLPOWER -> root.runOutput(blPowerRead())?.trim()?.toIntOrNull()
+            ?.takeIf { it in 0..4 }
+            ?: daemon.send("BLPOWER")?.trim()?.toIntOrNull()?.takeIf { it in 0..4 }
+        ScreenOff.BRIGHTNESS_ZERO -> null
     }
 
     /** Cautious boolean used by the never-blank watchdog: unknown is not grounds to alter hardware. */
@@ -96,6 +121,9 @@ class ScreenController(
 
     @Synchronized
     fun sleep() {
+        if (admissionClosed.get()) return
+        intendedOffGeneration = stateGeneration.incrementAndGet()
+        observedDarkGeneration = 0L
         intendedOff = true
         // Never go fully dark without a guaranteed way back. If touch-to-wake can't be armed (no overlay
         // permission), a real screen-off would leave the panel unwakeable except via HA/proximity — the
@@ -130,6 +158,10 @@ class ScreenController(
         }
         if (poweredOffRoute != null) {
             appliedOffRoute = poweredOffRoute
+            // A successful bl_power actuator is authoritative for this exact off epoch. This permits
+            // a quick external wake to reconcile before the next heartbeat. Brightness-zero remains
+            // unconfirmed until read back dark because some panels visibly clamp its raw zero.
+            observedDarkGeneration = intendedOffGeneration
             BuiltinDashboard.onScreenAwake(false)
             Log.d(TAG, "screen -> off (${poweredOffRoute.name.lowercase()})")
             return
@@ -145,20 +177,89 @@ class ScreenController(
 
     @Synchronized
     fun wake() {
+        stateGeneration.incrementAndGet()
         intendedOff = false
         wakeTap.disarm()
         val wakingRoute = appliedOffRoute ?: route
         appliedOffRoute = null
-        if (wakingRoute == ScreenOff.DAEMON_BLPOWER && daemon.send("SCREEN ON") == "OK") {
-            completeWake("screen -> on (daemon bl_power)")
-            return
-        }
-        if (wakingRoute == ScreenOff.SU_BLPOWER && root.run(blPower(true))) {
-            completeWake("screen -> on (su bl_power)")
-            return
+        when (wakingRoute) {
+            ScreenOff.DAEMON_BLPOWER -> {
+                if (daemon.send("SCREEN ON") == "OK") {
+                    completeWake("screen -> on (daemon bl_power)")
+                    return
+                }
+                if (root.run(blPower(true))) {
+                    completeWake("screen -> on (su bl_power fallback)")
+                    return
+                }
+            }
+            ScreenOff.SU_BLPOWER -> {
+                if (root.run(blPower(true))) {
+                    completeWake("screen -> on (su bl_power)")
+                    return
+                }
+                if (daemon.send("SCREEN ON") == "OK") {
+                    completeWake("screen -> on (daemon bl_power fallback)")
+                    return
+                }
+            }
+            ScreenOff.BRIGHTNESS_ZERO -> Unit
         }
         backlight.setBrightness(savedLevel.coerceAtLeast(MIN_ON))
         completeWake("screen -> on (brightness fallback; $savedLevel)")
+    }
+
+    /** Token for generation-safe local wake work. Null means there is no deliberate screen-off to wake. */
+    fun currentOffGeneration(): Long? = intendedOffGeneration.takeIf { intendedOff && it != 0L }
+
+    /** Reconcile a physical/vendor wake that did not pass through [wake]. No actuator is touched: the
+     * observed lit state is authoritative, but stale off intent and queued gesture generations must die. */
+    @Synchronized
+    fun noteObservedDark(expectedGeneration: Long?): Boolean {
+        if (
+            expectedGeneration == null || !intendedOff ||
+            expectedGeneration != intendedOffGeneration || stateGeneration.get() != expectedGeneration
+        ) return false
+        observedDarkGeneration = expectedGeneration
+        return true
+    }
+
+    @Synchronized
+    fun reconcileObservedLit(expectedGeneration: Long?): Boolean {
+        // The read belongs to one exact off epoch, and that epoch must previously have been observed
+        // genuinely dark. This distinguishes a physical wake from brightness-zero that clamps visible.
+        if (
+            expectedGeneration == null || !intendedOff ||
+            expectedGeneration != intendedOffGeneration || stateGeneration.get() != expectedGeneration ||
+            observedDarkGeneration != expectedGeneration
+        ) return false
+        stateGeneration.incrementAndGet()
+        intendedOffGeneration = 0L
+        observedDarkGeneration = 0L
+        intendedOff = false
+        appliedOffRoute = null
+        wakeTap.disarm()
+        BuiltinDashboard.onScreenAwake(true)
+        onWakeCompleted?.invoke()
+        return true
+    }
+
+    /** Reject a gesture queued for an older screen state. This is called only from the existing wake
+     * worker, so privileged reads and writes remain off the sensor/main threads. */
+    @Synchronized
+    fun wakeIfStillDark(expectedGeneration: Long, admissionStillValid: () -> Boolean = { true }): WakeOutcome {
+        if (!intendedOff) return WakeOutcome.ALREADY_ON
+        if (expectedGeneration != intendedOffGeneration || stateGeneration.get() != expectedGeneration) {
+            return WakeOutcome.STALE_GENERATION
+        }
+        if (!admissionStillValid()) return WakeOutcome.STALE_GENERATION
+        return runCatching {
+            wake()
+            WakeOutcome.WOKEN
+        }.getOrElse {
+            Log.e(TAG, "generation-safe wake failed", it)
+            WakeOutcome.ACTUATION_FAILED
+        }
     }
 
     /** Publish renderer wake only after the physical wake path and wakelock pulse have completed. */
@@ -172,9 +273,34 @@ class ScreenController(
     /** Release the wake-overlay owner without ever leaving an intentionally dark panel behind. */
     @Synchronized
     fun close() {
+        closeAdmission()
+        if (intendedOff) wake() else wakeTap.disarm()
+    }
+
+    /** Close future screen-off and brightness admission without performing any hardware I/O. */
+    fun closeAdmission() {
+        admissionClosed.set(true)
         onWakeByTap = null
         onWakeCompleted = null
-        if (intendedOff) wake() else wakeTap.disarm()
+    }
+
+    /**
+     * Restore the screen and establish the safest available process-exit boundary. A failed privileged
+     * proof actively retries the wake actuators on every call, even after an earlier fallback cleared
+     * off intent. If both helper and root have permanently disappeared, physical backlight-power proof
+     * is impossible: after an active wake attempt, Android interactivity plus positive brightness is an
+     * explicit fail-open boundary so recovery can replace the wedged process. That degraded result is
+     * not claimed to prove that a privileged `bl_power=4` epoch was physically relit.
+     */
+    @Synchronized
+    fun restoreAndEstablishExitSafety(): Boolean {
+        closeAdmission()
+        if (intendedOff || observedLit() != true) wake() else wakeTap.disarm()
+        val privilegedProof = observedLit()
+        if (privilegedProof != null) return privilegedProof
+        // Deliberately prefer a fresh control plane over a permanent recovery fence when privileged
+        // readback has vanished. This can remain physically dark after an earlier bl_power=4 write.
+        return power.isInteractive() && backlight.getBrightness() > 0
     }
 
     // Write FB_BLANK to the first backlight device's bl_power (0=on, 4=off). Fails (exit!=0, so the

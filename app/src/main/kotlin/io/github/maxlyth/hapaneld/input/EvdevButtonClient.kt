@@ -3,6 +3,7 @@ package io.github.maxlyth.hapaneld.input
 import android.net.LocalSocket
 import android.util.Log
 import io.github.maxlyth.hapaneld.util.openRootAbstractSocket
+import io.github.maxlyth.hapaneld.util.nextHelperRetryDelayMs
 import io.github.maxlyth.hapaneld.device.EvdevButton
 
 /**
@@ -89,6 +90,7 @@ object EvdevButtonClient {
     }
 
     private fun run(run: Run) {
+        var retryDelayMs = 0L
         try {
             while (!Thread.currentThread().isInterrupted) {
                 var candidate: LocalSocket? = null
@@ -104,6 +106,7 @@ object EvdevButtonClient {
                             output = s.outputStream,
                             onSubscribed = { verifiedMode ->
                                 s.soTimeout = 0
+                                retryDelayMs = 0L
                                 update(run, State.ACTIVE, verifiedMode, null)
                             },
                         ) { event ->
@@ -114,12 +117,16 @@ object EvdevButtonClient {
                     }
                 } catch (e: Exception) {
                     update(run, State.RETRYING, error = e.message ?: e.javaClass.simpleName)
-                    Log.d(TAG, "evdev stream unavailable (${e.message}); retrying")
                 } finally {
                     candidate?.let { run.detach(it) }
                 }
                 if (Thread.currentThread().isInterrupted) break
-                try { Thread.sleep(3000) } catch (e: InterruptedException) { break }  // backoff before reconnect
+                val nextDelay = nextHelperRetryDelayMs(retryDelayMs)
+                if (nextDelay != retryDelayMs) {
+                    Log.d(TAG, "evdev stream unavailable; retrying in ${nextDelay}ms")
+                }
+                retryDelayMs = nextDelay
+                try { Thread.sleep(retryDelayMs) } catch (e: InterruptedException) { break }
             }
         } finally {
             synchronized(this) {

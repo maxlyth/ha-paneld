@@ -101,6 +101,60 @@ class ScreenControllerTest {
         assertFalse("unknown must not trigger never-blank hardware changes", controller(blPower = null).first.looksDark())
     }
 
+    @Test fun privilegedRouteNeedsBlPowerReadbackToProveTheScreenLit() {
+        backlight.level = 120
+        assertEquals(null, controller(blPower = null).first.observedLit())
+        assertEquals(true, controller(blPower = "0").first.observedLit())
+        assertEquals(false, controller(blPower = "4").first.observedLit())
+    }
+
+    @Test fun processExitFailsOpenAfterPermanentPrivilegeLoss() {
+        backlight.level = 120
+        power.interactive = true
+        assertTrue(controller(blPower = null, suRuns = false).first.restoreAndEstablishExitSafety())
+
+        backlight.level = 0
+        power.interactive = false
+        assertFalse(controller(blPower = null, suRuns = false).first.restoreAndEstablishExitSafety())
+    }
+
+    @Test fun processExitExplicitlyFailsOpenWhenPrivilegeIsLostAfterBlPowerOff() {
+        val daemon = PrivilegeLossAfterOffDaemon()
+        val sc = ScreenController(
+            backlight,
+            power,
+            FakeRootShell(runResult = false),
+            daemon,
+            wakeTap,
+            ScreenOff.DAEMON_BLPOWER,
+        )
+        backlight.level = 120
+        power.interactive = true
+        sc.sleep()
+        assertTrue(sc.isIntendedOff())
+        daemon.privilegeLost = true
+
+        // The earlier bl_power=4 may still be physically dark. With no remaining privileged read or
+        // write path, the policy accepts Android's interactive/brightness state to permit process repair.
+        assertTrue(sc.restoreAndEstablishExitSafety())
+        assertTrue(daemon.sent.contains("SCREEN ON"))
+    }
+
+    @Test fun poweredBacklightStillNeedsPositiveBrightnessToProveTheScreenLit() {
+        backlight.level = 0
+        assertEquals(false, controller(blPower = "0").first.observedLit())
+    }
+
+    @Test fun brightnessOnlyRouteCanProveLitFromItsAuthoritativeActuator() {
+        val sc = ScreenController(
+            backlight, power, FakeRootShell(), FakeDaemon(), wakeTap, ScreenOff.BRIGHTNESS_ZERO,
+        )
+        backlight.level = 120
+        assertEquals(true, sc.observedLit())
+        backlight.level = 0
+        assertEquals(false, sc.observedLit())
+    }
+
     // --- intendedOff transitions (what the never-blank watchdog keys on) ---
     @Test fun intendedOffSetOnSleepClearedOnWake() {
         val (sc, _) = controller(daemon = mapOf("SCREEN OFF" to "OK", "SCREEN ON" to "OK"))
@@ -121,6 +175,122 @@ class ScreenControllerTest {
         sc.wake()
         assertTrue(sc.actuateBrightnessIfOn { backlight.setBrightness(220) })
         assertEquals(220, backlight.level)
+    }
+
+    @Test fun lockFreeWriteTrackingCannotInvertScreenAndAutomaticOrdering() {
+        // ScreenController deliberately holds its transition monitor through backlight actuation. The
+        // successful-write tracker must therefore stay lock-free while automatic policy waits for screen.
+        val sc = ScreenController(
+            backlight, power, FakeRootShell(), FakeDaemon(), wakeTap, ScreenOff.BRIGHTNESS_ZERO,
+        )
+        val writeTracker = BacklightWriteTracker()
+        val screenActionEntered = CountDownLatch(1)
+        val releaseScreenAction = CountDownLatch(1)
+        val trackerMonitorHeld = CountDownLatch(1)
+        val screenFinished = CountDownLatch(1)
+        val automaticFinished = CountDownLatch(1)
+        val screenWrite = Thread({
+            sc.actuateBrightnessIfOn {
+                screenActionEntered.countDown()
+                releaseScreenAction.await()
+                writeTracker.record(42L)
+            }
+            screenFinished.countDown()
+        }, "screen-write-tracker-order-test").apply { isDaemon = true }
+        val automaticWrite = Thread({
+            synchronized(writeTracker) {
+                trackerMonitorHeld.countDown()
+                sc.actuateBrightnessIfOn { }
+            }
+            automaticFinished.countDown()
+        }, "automatic-screen-order-test").apply { isDaemon = true }
+
+        try {
+            screenWrite.start()
+            assertTrue(screenActionEntered.await(1, TimeUnit.SECONDS))
+            automaticWrite.start()
+            assertTrue(trackerMonitorHeld.await(1, TimeUnit.SECONDS))
+            val blockedDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(1)
+            while (automaticWrite.state != Thread.State.BLOCKED && System.nanoTime() < blockedDeadline) Thread.yield()
+            assertEquals(Thread.State.BLOCKED, automaticWrite.state)
+            releaseScreenAction.countDown()
+
+            assertTrue("screen write must not wait on write-attribution state", screenFinished.await(2, TimeUnit.SECONDS))
+            assertTrue("automatic write must then acquire the screen owner", automaticFinished.await(2, TimeUnit.SECONDS))
+            screenWrite.join(1_000)
+            automaticWrite.join(1_000)
+            assertFalse(screenWrite.isAlive)
+            assertFalse(automaticWrite.isAlive)
+            assertEquals(42L, writeTracker.snapshot())
+        } finally {
+            releaseScreenAction.countDown()
+            screenWrite.interrupt()
+            automaticWrite.interrupt()
+            screenWrite.join(1_000)
+            automaticWrite.join(1_000)
+        }
+    }
+
+    @Test fun generationSafeWakeRejectsAnObsoleteGesture() {
+        val (sc, _) = controller(daemon = mapOf("SCREEN OFF" to "OK", "SCREEN ON" to "OK"))
+        sc.sleep()
+        val stale = sc.currentOffGeneration()!!
+        sc.wake()
+        sc.sleep()
+
+        assertEquals(WakeOutcome.STALE_GENERATION, sc.wakeIfStillDark(stale))
+        assertTrue(sc.isIntendedOff())
+    }
+
+    @Test fun generationSafeWakeActsExactlyOnceForTheCurrentOffState() {
+        val (sc, _) = controller(daemon = mapOf("SCREEN OFF" to "OK", "SCREEN ON" to "OK"))
+        sc.sleep()
+        val current = sc.currentOffGeneration()!!
+
+        assertEquals(WakeOutcome.WOKEN, sc.wakeIfStillDark(current))
+        assertEquals(WakeOutcome.ALREADY_ON, sc.wakeIfStillDark(current))
+        assertEquals(1, power.pulses)
+    }
+
+    @Test fun generationSafeWakeRevalidatesFeatureAdmissionInsideTheScreenLock() {
+        val (sc, _) = controller(daemon = mapOf("SCREEN OFF" to "OK", "SCREEN ON" to "OK"))
+        sc.sleep()
+        val current = sc.currentOffGeneration()!!
+
+        assertEquals(WakeOutcome.STALE_GENERATION, sc.wakeIfStillDark(current) { false })
+        assertTrue(sc.isIntendedOff())
+        assertEquals(0, power.pulses)
+    }
+
+    @Test fun observedPhysicalWakeClearsIntentAndInvalidatesQueuedGestureWithoutActuation() {
+        val daemon = FakeDaemon(mapOf("SCREEN OFF" to "OK", "SCREEN ON" to "OK"))
+        val sc = ScreenController(backlight, power, FakeRootShell(), daemon, wakeTap, ScreenOff.DAEMON_BLPOWER)
+        var completed = 0
+        sc.onWakeCompleted = { completed++ }
+        sc.sleep()
+        val queuedGesture = sc.currentOffGeneration()!!
+
+        assertTrue(sc.reconcileObservedLit(queuedGesture))
+
+        assertFalse(sc.isIntendedOff())
+        assertFalse(wakeTap.armed)
+        assertEquals(1, completed)
+        assertEquals(0, power.pulses)
+        assertEquals(WakeOutcome.ALREADY_ON, sc.wakeIfStillDark(queuedGesture))
+        assertEquals(listOf("SCREEN OFF"), daemon.sent)
+    }
+
+    @Test fun staleLitObservationCannotClearANewerOffGeneration() {
+        val (sc, _) = controller(daemon = mapOf("SCREEN OFF" to "OK", "SCREEN ON" to "OK"))
+        sc.sleep()
+        val old = sc.currentOffGeneration()!!
+        assertTrue(sc.noteObservedDark(old))
+        sc.wake()
+        sc.sleep()
+
+        assertFalse(sc.reconcileObservedLit(old))
+        assertTrue(sc.isIntendedOff())
+        assertTrue(wakeTap.armed)
     }
 
     // --- screen-off tier selection ---
@@ -229,6 +399,8 @@ class ScreenControllerTest {
         assertTrue("must NOT power the backlight off via daemon/su", root.ran.isEmpty())
         assertFalse("must not arm a tap it can't arm", wakeTap.armed)
         assertTrue("still an intended off", sc.isIntendedOff())
+        assertFalse("visible safety dim is not an external wake", sc.reconcileObservedLit(sc.currentOffGeneration()))
+        assertTrue(sc.isIntendedOff())
     }
 
     @Test fun sleepDimsWhenWakeWatcherCannotConfirmAttachment() {
@@ -255,6 +427,37 @@ class ScreenControllerTest {
         assertFalse(sc.isIntendedOff())
         assertFalse(wakeTap.armed)
         assertEquals(1, power.pulses)
+    }
+
+    @Test fun closeAdmissionRejectsLateScreenOffAndBrightnessMutation() {
+        val daemon = FakeDaemon(mapOf("SCREEN OFF" to "OK"))
+        val sc = ScreenController(backlight, power, FakeRootShell(), daemon, wakeTap, ScreenOff.DAEMON_BLPOWER)
+
+        sc.closeAdmission()
+        sc.sleep()
+
+        assertFalse(sc.isIntendedOff())
+        assertTrue(daemon.sent.isEmpty())
+        assertFalse(sc.actuateBrightnessIfOn { backlight.setBrightness(0) })
+        assertEquals(160, backlight.level)
+    }
+
+    @Test fun exitRecoveryRetriesWakeUntilPrivilegedReadbackIsAffirmativelyLit() {
+        val daemon = ExitRecoveryDaemon()
+        val sc = ScreenController(
+            backlight,
+            power,
+            FakeRootShell(runResult = false),
+            daemon,
+            wakeTap,
+            ScreenOff.DAEMON_BLPOWER,
+        )
+        backlight.level = 120
+
+        assertFalse(sc.restoreAndEstablishExitSafety())
+        daemon.wakeSucceeds = true
+        assertTrue(sc.restoreAndEstablishExitSafety())
+        assertEquals(2, daemon.sent.count { it == "SCREEN ON" })
     }
 
     @Test fun concurrentWakeWaitsForTheInFlightSleepTransition() {
@@ -294,6 +497,51 @@ class ScreenControllerTest {
                 onEntered.countDown()
             }
             return "OK"
+        }
+
+        override fun sendLong(cmd: String, timeoutMs: Long): DaemonLongResult = DaemonLongResult.NotSubmitted
+        override fun sendBytes(cmd: String): ByteArray? = null
+    }
+
+    private class ExitRecoveryDaemon : Daemon {
+        val sent = mutableListOf<String>()
+        var wakeSucceeds = false
+        private var blPower = 4
+
+        override fun available() = true
+
+        override fun send(cmd: String): String? {
+            sent += cmd
+            return when (cmd) {
+                "BLPOWER" -> blPower.toString()
+                "SCREEN ON" -> if (wakeSucceeds) {
+                    blPower = 0
+                    "OK"
+                } else {
+                    null
+                }
+                else -> null
+            }
+        }
+
+        override fun sendLong(cmd: String, timeoutMs: Long): DaemonLongResult = DaemonLongResult.NotSubmitted
+        override fun sendBytes(cmd: String): ByteArray? = null
+    }
+
+    private class PrivilegeLossAfterOffDaemon : Daemon {
+        val sent = mutableListOf<String>()
+        var privilegeLost = false
+
+        override fun available() = !privilegeLost
+
+        override fun send(cmd: String): String? {
+            sent += cmd
+            if (privilegeLost) return null
+            return when (cmd) {
+                "SCREEN OFF" -> "OK"
+                "BLPOWER" -> "4"
+                else -> null
+            }
         }
 
         override fun sendLong(cmd: String, timeoutMs: Long): DaemonLongResult = DaemonLongResult.NotSubmitted

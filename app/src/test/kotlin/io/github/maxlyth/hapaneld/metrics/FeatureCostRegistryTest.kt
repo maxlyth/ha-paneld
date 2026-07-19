@@ -14,6 +14,11 @@ class FeatureCostRegistryTest {
         assertEquals("entity_learning.dashboard_fetch_parse", FeatureCostOperation.ENTITY_DASHBOARD_FETCH_PARSE.id)
         assertEquals("entity_learning.static_scan", FeatureCostOperation.ENTITY_STATIC_SCAN.id)
     }
+    @Test fun proximityCostsKeepRetiredAndReplacementKeysStable() {
+        assertEquals("sensors.gpio_proximity_poll", FeatureCostOperation.GPIO_PROXIMITY_POLL.id)
+        assertEquals("sensors.proximity_sample", FeatureCostOperation.PROXIMITY_SAMPLE.id)
+        assertEquals("sensors.proximity_persist_batch", FeatureCostOperation.PROXIMITY_PERSIST_BATCH.id)
+    }
     @Test fun disabledRegistryHasNoPerOperationStateOrPerCallSpanAndReturnsConstantProjection() {
         var clockReads = 0
         val registry = FeatureCostRegistry(

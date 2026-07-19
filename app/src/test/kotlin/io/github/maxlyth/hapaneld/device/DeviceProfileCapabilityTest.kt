@@ -1,5 +1,6 @@
 package io.github.maxlyth.hapaneld.device
 
+import io.github.maxlyth.hapaneld.device.profile.BundledProfileFixtures
 import io.github.maxlyth.hapaneld.hardware.LedFactory
 import io.github.maxlyth.hapaneld.hardware.NoOpLedController
 import io.github.maxlyth.hapaneld.hardware.SocketLedController
@@ -8,20 +9,17 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/**
- * Cross-profile capability invariants + the LED-backend routing. These pin the su-vs-daemon contract:
- * a panel that can't exec `su` must be driven through the daemon, and the LED/screen-off paths must
- * agree with that. A new or edited profile that violates one of these is a real routing bug (a control
- * that silently does nothing), so failing here is the point.
- */
+/** Cross-profile capability invariants, evaluated from packaged YAML rather than compiled objects. */
 class DeviceProfileCapabilityTest {
-    @Test fun wf1589tTamesTheCompetingBootLedDemoByDefault() {
-        val demo = Wf1589t.tameVendorCandidates.single { it.pkg == "com.gulukai.pwmlightdemo" }
-        assertTrue(demo.defaultTame)
-        assertTrue(demo.note.contains("continuously cycles colours"))
-    }
+    private val loaded get() = BundledProfileFixtures.bundled
+    private val all get() = loaded.map { it.profile() }
 
-    private val all = DeviceProfile.knownProfiles
+    @Test fun recommendedVendorPackagesRemainExplicitYamlPolicy() {
+        val ledDemo = all.flatMap { profile -> profile.tameVendorCandidates.map { profile.id to it } }
+            .single { (_, candidate) -> candidate.pkg == "com.gulukai.pwmlightdemo" }
+        assertTrue(ledDemo.second.defaultTame)
+        assertTrue(ledDemo.second.note.contains("continuously cycles colours"))
+    }
 
     @Test fun idsArePresentAndUnique() {
         all.forEach { assertTrue("blank id on ${it.displayName}", it.id.isNotBlank()) }
@@ -35,15 +33,21 @@ class DeviceProfileCapabilityTest {
             val daemonHardware = it.ledMechanism in setOf(
                 LedMechanism.SYSFS_DAEMON,
                 LedMechanism.RK3576_IOCTL_DAEMON,
-            ) || it.screenOff == ScreenOff.DAEMON_BLPOWER || it.hasButtonBacklight || it.evdevButtons.isNotEmpty()
+            ) || it.screenOff == ScreenOff.DAEMON_BLPOWER || it.hasButtonBacklight ||
+                it.proximityGpio != null || it.evdevButtons.isNotEmpty()
             if (daemonHardware) assertTrue("daemon-backed feature omitted from usesDaemon on ${it.id}", it.usesDaemon)
         }
-        assertTrue("WF1589T evdev power button requires the helper despite app su", Wf1589t.usesDaemon)
+        all.filter { it.evdevButtons.isNotEmpty() }.forEach {
+            assertTrue("evdev buttons require helper on ${it.id}", it.usesDaemon)
+        }
+        assertEquals(
+            "helper-backed evdev hardware changed",
+            setOf("tpa10", "wf1589t"),
+            all.filter { it.evdevButtons.isNotEmpty() }.mapTo(mutableSetOf()) { it.id },
+        )
     }
 
     @Test fun noSuFormImpliesAppCannotSu() {
-        // If there's no working su invocation, the app definitely can't su (converse need not hold —
-        // a form can be declared yet blocked by the sandbox, e.g. TPA10).
         all.forEach {
             if (it.suForm == SuForm.NONE) assertFalse("suForm NONE but appCanSu on ${it.id}", it.appCanSu)
             if (it.appCanSu) assertTrue("appCanSu but suForm NONE on ${it.id}", it.suForm != SuForm.NONE)
@@ -53,31 +57,56 @@ class DeviceProfileCapabilityTest {
     @Test fun screenOffPathAgreesWithSuCapability() {
         all.forEach {
             when (it.screenOff) {
-                // su-driven bl_power needs the app to reach su.
                 ScreenOff.SU_BLPOWER -> assertTrue("SU_BLPOWER but !appCanSu on ${it.id}", it.appCanSu)
-                // daemon-driven bl_power is the sandbox-walled path.
                 ScreenOff.DAEMON_BLPOWER -> assertFalse("DAEMON_BLPOWER but appCanSu on ${it.id}", it.appCanSu)
-                ScreenOff.BRIGHTNESS_ZERO -> {} // the universal fallback — allowed either way
+                ScreenOff.BRIGHTNESS_ZERO -> Unit
             }
         }
     }
 
     @Test fun daemonRoutedLedImpliesSandboxWalled() {
-        // The two daemon LED mechanisms exist precisely because the app can't drive the node itself.
         all.forEach {
-            if (it.ledMechanism == LedMechanism.SYSFS_DAEMON || it.ledMechanism == LedMechanism.RK3576_IOCTL_DAEMON) {
+            if (it.ledMechanism in setOf(LedMechanism.SYSFS_DAEMON, LedMechanism.RK3576_IOCTL_DAEMON)) {
                 assertFalse("daemon LED but appCanSu on ${it.id}", it.appCanSu)
             }
         }
+        assertEquals(
+            "daemon LED routing changed",
+            mapOf(
+                LedMechanism.SYSFS_DAEMON to setOf("tpa10"),
+                LedMechanism.RK3576_IOCTL_DAEMON to setOf("smt1019"),
+            ),
+            all.filter {
+                it.ledMechanism in setOf(LedMechanism.SYSFS_DAEMON, LedMechanism.RK3576_IOCTL_DAEMON)
+            }.groupBy { it.ledMechanism }.mapValues { (_, profiles) -> profiles.mapTo(mutableSetOf()) { it.id } },
+        )
     }
 
     @Test fun buttonBacklightIsAnExplicitHardwareFactNotAnRgbBackendInference() {
-        assertTrue(Tpa10.hasButtonBacklight)
-        all.filterNot { it === Tpa10 }.forEach {
-            assertFalse("unexpected button-backlight on ${it.id}", it.hasButtonBacklight)
+        val buttonProfiles = all.filter { it.hasButtonBacklight }
+        assertEquals("button-backlight ownership changed", setOf("tpa10"), buttonProfiles.mapTo(mutableSetOf()) { it.id })
+        buttonProfiles.forEach { profile ->
+            assertTrue("button-backlight omitted from daemon requirement on ${profile.id}", profile.usesDaemon)
         }
-        assertTrue(LedFactory.detect(Smt1019) is SocketLedController)
-        assertFalse("SMT1019 daemon RGB must not imply a button-backlight", Smt1019.hasButtonBacklight)
+        all.filter { it.ledMechanism == LedMechanism.RK3576_IOCTL_DAEMON }.forEach { profile ->
+            assertTrue(LedFactory.detect(profile) is SocketLedController)
+            assertFalse("daemon RGB must not imply a button-backlight on ${profile.id}", profile.hasButtonBacklight)
+        }
+    }
+
+    @Test fun roomClimateCapabilityAndDriverStayInLockstep() {
+        loaded.forEach { source ->
+            assertEquals(
+                "sensor.cht8305-daemon driver mismatch on ${source.document.id}",
+                "sensor.cht8305-daemon" in source.document.requires.drivers,
+                source.profile().hasCht8305,
+            )
+        }
+        assertEquals(
+            "room-climate capability ownership changed",
+            setOf("tpa10", "zx-smt156"),
+            all.filter { it.hasCht8305 }.mapTo(mutableSetOf()) { it.id },
+        )
     }
 
     @Test fun profileMetadataIsStructurallyValid() {
@@ -91,11 +120,6 @@ class DeviceProfileCapabilityTest {
             profile.recommendedFontScale?.let { assertTrue("invalid font scale on ${profile.id}", it in 0.5f..2f) }
             profile.physicalPpi?.let { assertTrue("invalid physical ppi on ${profile.id}", it in 50..1000) }
             assertTrue("non-finite room offset on ${profile.id}", profile.roomTempOffsetC.isFinite())
-            assertEquals(
-                "profile proximity calibration must provide both endpoints on ${profile.id}",
-                profile.proximityNearRaw == null,
-                profile.proximityFarRaw == null,
-            )
             profile.recommendedWebView?.let { webView ->
                 assertTrue("non-HTTPS WebView pin on ${profile.id}", webView.url.startsWith("https://"))
                 assertTrue("unparseable WebView version on ${profile.id}", webView.major > 0)
@@ -116,13 +140,17 @@ class DeviceProfileCapabilityTest {
         }
     }
 
-    // --- LedFactory routing (only the deterministic, non-probing mechanisms; the ioctl/autodetect
-    // paths touch native /dev/ledjni and aren't hermetic) ---
-
-    @Test fun ledFactoryRoutesDeterministicMechanisms() {
-        assertTrue("NONE should be no-op (NSPanel Pro)", LedFactory.detect(NSPanelPro) is NoOpLedController)
-        assertTrue("SYSFS_DAEMON should be socket (TPA10)", LedFactory.detect(Tpa10) is SocketLedController)
-        assertTrue("RK3576_IOCTL_DAEMON should be socket (SMT1019)", LedFactory.detect(Smt1019) is SocketLedController)
-        assertTrue("NONE should be no-op (S9E)", LedFactory.detect(S9e) is NoOpLedController)
+    @Test fun ledFactoryRoutesEveryDeterministicYamlMechanism() {
+        all.forEach { profile ->
+            when (profile.ledMechanism) {
+                LedMechanism.NONE -> assertTrue("NONE should be no-op on ${profile.id}", LedFactory.detect(profile) is NoOpLedController)
+                LedMechanism.SYSFS_DAEMON,
+                LedMechanism.RK3576_IOCTL_DAEMON,
+                -> assertTrue("daemon LED should use socket on ${profile.id}", LedFactory.detect(profile) is SocketLedController)
+                LedMechanism.RK3576_IOCTL,
+                LedMechanism.AUTODETECT,
+                -> Unit // Native/probing routes are intentionally not exercised by a hermetic JVM test.
+            }
+        }
     }
 }

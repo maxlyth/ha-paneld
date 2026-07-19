@@ -160,13 +160,16 @@ JSON
     printf 'test apk\n' > "$output_file"
     ;;
   */auth/login_flow)
+    [ "${MOCK_HA_LOGIN:-ok}" = "timeout" ] && exit 28
     [ "${MOCK_HA_LOGIN:-ok}" = "flow_fail" ] && exit 22
     printf '{"flow_id":"flow-1"}\n'
     ;;
   */auth/login_flow/*)
+    [ "${MOCK_HA_LOGIN:-ok}" = "timeout" ] && exit 28
     [ "${MOCK_HA_LOGIN:-ok}" = "rejected" ] && printf '{"errors":{"base":"invalid_auth"}}\n' || printf '{"result":"auth-code"}\n'
     ;;
   */auth/token)
+    [ "${MOCK_HA_LOGIN:-ok}" = "timeout" ] && exit 28
     if [ "${MOCK_HA_LOGIN:-ok}" = "token_missing" ]; then printf '{}\n';
     else printf '{"access_token":"access","refresh_token":"refresh","expires_in":1800}\n'; fi
     ;;
@@ -181,7 +184,7 @@ JSON
   */api/v1/provisioning/plan.txt)
     plan_status=200
     case "${MOCK_PLAN:-ok}" in
-      ok|recommendations) ;;
+      ok|recommendations|control) ;;
       missing) plan_status=404 ;;
       transient)
         attempts="${MOCK_STATE_DIR:?}/plan-attempts"
@@ -193,6 +196,8 @@ JSON
     if [ "$plan_status" = 200 ] && [ -n "$output_file" ]; then
       if [ "${MOCK_PLAN:-ok}" = "recommendations" ]; then
         printf 'Detected panel: Test Panel\nRecommended: install the root helper\nRecommended: update System WebView\n' > "$output_file"
+      elif [ "${MOCK_PLAN:-ok}" = "control" ]; then
+        printf 'Detected panel: Hostile\033]2;forged title\007\nProvisioning guidance: safe\n' > "$output_file"
       else
         printf 'Detected panel: Test Panel\nProvisioning guidance: no required changes\n' > "$output_file"
       fi
@@ -207,6 +212,9 @@ JSON
     if [ "${MOCK_VERIFY:-ok}" = "transient" ]; then
       attempts="${MOCK_STATE_DIR:?}/diag-attempts"
       if [ ! -f "$attempts" ]; then : > "$attempts"; exit 22; fi
+    elif [ "${MOCK_VERIFY:-ok}" = "stale" ]; then
+      printf 'ha-paneld diagnostics write_settings=false a11y=false su=true daemon=true\n'
+      exit 0
     elif [ "${MOCK_VERIFY:-ok}" != "ok" ]; then
       exit 22
     fi
@@ -222,11 +230,13 @@ JSON
     fi
     ;;
   */api/v1/config/import*)
+    [ "${MOCK_RESTORE:-ok}" = "timeout" ] && exit 28
     [ "${MOCK_RESTORE:-ok}" = "ok" ] || exit 22
     printf '{"ok":true}\n'
     ;;
   */api/v1/config)
     if printf '%s\n' "$*" | grep -q -- '-X POST'; then
+      [ "${MOCK_CONFIG:-ok}" = "timeout" ] && exit 28
       [ "${MOCK_CONFIG:-ok}" = "ok" ] || exit 22
       printf '{"ok":true}\n'
     else

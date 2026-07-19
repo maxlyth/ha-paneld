@@ -80,7 +80,7 @@ void cmd_perfdump(conn_ctx *ctx, const char *args) {
             if (!valid_num(e->d_name)) continue;
             char path[64], b[1024], comm[64];
             snprintf(path, sizeof path, "/proc/%s/stat", e->d_name);
-            int f = open(path, O_RDONLY); if (f < 0) continue;
+            int f = open(path, O_RDONLY | O_CLOEXEC); if (f < 0) continue;
             ssize_t n = read(f, b, sizeof b - 1); close(f);
             if (n <= 0) continue;
             b[n] = '\0';
@@ -90,7 +90,7 @@ void cmd_perfdump(conn_ctx *ctx, const char *args) {
             // isolated renderers (cmdline unreadable in the su domain).
             char cl[160], name[160];
             snprintf(path, sizeof path, "/proc/%s/cmdline", e->d_name);
-            int cf = open(path, O_RDONLY);
+            int cf = open(path, O_RDONLY | O_CLOEXEC);
             ssize_t cn = (cf >= 0) ? read(cf, cl, sizeof cl - 1) : -1;
             if (cf >= 0) close(cf);
             if (cn > 0) { cl[cn] = '\0'; snprintf(name, sizeof name, "%s", cl); }  // "%s" stops at argv0's NUL
@@ -117,7 +117,7 @@ void cmd_perfdump(conn_ctx *ctx, const char *args) {
             first_line(path, cb, sizeof cb);
             if (strcmp(cb, "CrRendererMain") != 0) continue;
             snprintf(path, sizeof path, "/proc/%d/task/%s/stat", rend[i], te->d_name);
-            char sb[1024]; int sf = open(path, O_RDONLY); if (sf < 0) continue;
+            char sb[1024]; int sf = open(path, O_RDONLY | O_CLOEXEC); if (sf < 0) continue;
             ssize_t sn = read(sf, sb, sizeof sb - 1); close(sf);
             if (sn <= 0) continue;
             sb[sn] = '\0';

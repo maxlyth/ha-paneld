@@ -8,6 +8,7 @@ import io.github.maxlyth.hapaneld.util.ReleaseCatalog
 import io.github.maxlyth.hapaneld.util.StreamDeadline
 import io.github.maxlyth.hapaneld.util.UpdateChecker
 import io.github.maxlyth.hapaneld.backup.PanelBackup
+import io.github.maxlyth.hapaneld.security.SensitiveOperation
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
@@ -38,6 +39,7 @@ internal data class ControlPlaneRouteDependencies(
     val buildBackup: suspend (includeCompanion: Boolean, passphrase: String) -> PanelBackup.Artifact,
     val backupFileStem: () -> String,
     val apkUpload: ApkUploadRouteDependencies,
+    val authorize: suspend (ApplicationCall, SensitiveOperation, String, String) -> Boolean = { _, _, _, _ -> true },
 )
 
 internal data class ApkUploadRouteDependencies(
@@ -55,6 +57,41 @@ internal data class ApkUploadRouteDependencies(
 )
 
 internal data class UploadedApkIdentity(val pkg: String, val version: String, val signerSha256: String?)
+
+/** Builds the physical-approval text from untrusted APK metadata. Package and signer identity are
+ * individually bounded and shown before the version field, so version metadata cannot hide them. */
+internal fun uploadedApkApprovalSummary(identity: UploadedApkIdentity): String {
+    val pkg = approvalDisplayField(identity.pkg, APK_APPROVAL_PACKAGE_CHARS)
+    val signer = identity.signerSha256
+        ?.let { approvalDisplayField(it, APK_APPROVAL_SIGNER_CHARS) }
+        ?: "unsigned"
+    val version = approvalDisplayField(identity.version, APK_APPROVAL_VERSION_CHARS)
+    return "Install $pkg (signer $signer) version $version"
+}
+
+/** Removes non-rendering controls and direction-changing format characters before text reaches the
+ * local approval dialog. The character bound never splits a supplementary Unicode character. */
+private fun approvalDisplayField(value: String, maxChars: Int): String {
+    val result = StringBuilder(minOf(value.length, maxChars))
+    var offset = 0
+    var acceptedChars = 0
+    while (offset < value.length) {
+        val codePoint = value.codePointAt(offset)
+        val width = Character.charCount(codePoint)
+        offset += width
+        val type = Character.getType(codePoint)
+        if (type == Character.CONTROL.toInt() ||
+            type == Character.FORMAT.toInt() ||
+            type == Character.LINE_SEPARATOR.toInt() ||
+            type == Character.PARAGRAPH_SEPARATOR.toInt() ||
+            type == Character.SURROGATE.toInt()
+        ) continue
+        if (acceptedChars + width > maxChars) break
+        result.appendCodePoint(codePoint)
+        acceptedChars += width
+    }
+    return result.toString().trim().ifEmpty { "?" }
+}
 
 internal class BodyReceiptTimeout : IOException("request body receipt deadline exceeded")
 
@@ -170,17 +207,18 @@ internal fun uploadStagingLimit(
 
 /** Registers the control routes whose request parsing and admission decisions are independent of Android. */
 internal fun Route.controlPlaneRoutes(dependencies: ControlPlaneRouteDependencies) {
-    post("/play") { handlePlay(call, dependencies.playAudio) }
+    post("/play") { handlePlay(call, dependencies) }
     route("/api/v1") {
-        post("/play") { handlePlay(call, dependencies.playAudio) }
+        post("/play") { handlePlay(call, dependencies) }
         post("/install/component") { handleComponentInstall(call, dependencies) }
         post("/install/apk") { handleApkUpload(call, dependencies.apkUpload) }
-        post("/install/apk/commit") { handleApkCommit(call, dependencies.apkUpload) }
+        post("/install/apk/commit") { handleApkCommit(call, dependencies) }
         post("/backup") { handleBackup(call, dependencies) }
     }
 }
 
-private suspend fun handleApkCommit(call: ApplicationCall, dependencies: ApkUploadRouteDependencies) {
+private suspend fun handleApkCommit(call: ApplicationCall, routes: ControlPlaneRouteDependencies) {
+    val dependencies = routes.apkUpload
     if (!dependencies.enabled()) {
         call.respondText(
             """{"status":"disabled"}""",
@@ -189,7 +227,26 @@ private suspend fun handleApkCommit(call: ApplicationCall, dependencies: ApkUplo
         )
         return
     }
-    val token = (receiveBoundedFormParameters(call) ?: return)["token"].orEmpty()
+    val parameters = receiveBoundedFormParameters(call) ?: return
+    val token = parameters["token"].orEmpty()
+    val inspected = dependencies.pending.peek(token)
+    if (inspected == null) {
+        call.respondText(
+            """{"status":"stale-or-missing"}""",
+            ContentType.Application.Json,
+            HttpStatusCode.Conflict,
+        )
+        return
+    }
+    val identity = inspected.identity
+    val identitySummary = identity?.let(::uploadedApkApprovalSummary) ?: "Install the inspected uploaded APK"
+    if (!routes.authorize(
+            call,
+            SensitiveOperation.APK_INSTALL,
+            exactHttpApprovalPayload(call, parameters.canonicalDigest()),
+            identitySummary,
+        )
+    ) return
     val claimed = dependencies.pending.claim(token)
     if (claimed == null) {
         call.respondText(
@@ -340,7 +397,7 @@ private suspend fun handleApkUpload(call: ApplicationCall, dependencies: ApkUplo
             )
             return
         }
-        val entry = dependencies.pending.stage(lease, staged)
+        val entry = dependencies.pending.stage(lease, staged, identity)
         if (entry == null) {
             call.respondText(
                 """{"ok":false,"error":"stopping"}""",
@@ -362,7 +419,7 @@ private suspend fun handleApkUpload(call: ApplicationCall, dependencies: ApkUplo
     }
 }
 
-private suspend fun handlePlay(call: ApplicationCall, playAudio: (String) -> Boolean) {
+private suspend fun handlePlay(call: ApplicationCall, dependencies: ControlPlaneRouteDependencies) {
     val body = when (val receipt = receiveBoundedBody(call, PaneldServer.MAX_PLAY_BODY_BYTES)) {
         is BoundedBodyReceipt.Received -> String(receipt.bytes, Charsets.UTF_8)
         BoundedBodyReceipt.TooLarge -> {
@@ -379,7 +436,14 @@ private suspend fun handlePlay(call: ApplicationCall, playAudio: (String) -> Boo
         call.respondText("no-url\n", status = HttpStatusCode.BadRequest)
         return
     }
-    if (!playAudio(url)) {
+    if (!dependencies.authorize(
+            call,
+            SensitiveOperation.REMOTE_MEDIA,
+            exactHttpApprovalPayload(call, sha256Hex(body.toByteArray(Charsets.UTF_8))),
+            "Play media from $url",
+        )
+    ) return
+    if (!dependencies.playAudio(url)) {
         call.respondText("stopping\n", status = HttpStatusCode.ServiceUnavailable)
         return
     }
@@ -432,6 +496,13 @@ private suspend fun handleComponentInstall(
             HttpStatusCode.Conflict,
         )
         else -> {
+            if (!dependencies.authorize(
+                    call,
+                    SensitiveOperation.APK_INSTALL,
+                    exactHttpApprovalPayload(call, parameters.canonicalDigest()),
+                    "Install ${name.ifEmpty { "component" }} ${version.ifEmpty { "latest" }}",
+                )
+            ) return
             val status = if (dependencies.installComponent(name, action, version)) "started" else "busy"
             call.respondText("""{"status":"$status"}""", ContentType.Application.Json)
         }
@@ -451,6 +522,13 @@ private suspend fun handleBackup(call: ApplicationCall, dependencies: ControlPla
         )
         return
     }
+    if (!dependencies.authorize(
+            call,
+            SensitiveOperation.BACKUP_EXPORT,
+            exactHttpApprovalPayload(call, parameters.canonicalDigest()),
+            "Export a backup containing panel credentials",
+        )
+    ) return
     val delivery = BackupDeliveryGate.acquire()
     if (delivery == null) {
         call.respondText(
@@ -518,3 +596,6 @@ internal const val RESTORE_BODY_RECEIPT_DEADLINE_MS = 120_000L
 internal const val STANDARD_BODY_RECEIPT_DEADLINE_MS = 30_000L
 private const val APK_UPLOAD_RECEIPT_DEADLINE_MS = 600_000L
 private const val UPLOAD_STORAGE_SAFETY_MARGIN_BYTES = 64L * 1024L * 1024L
+private const val APK_APPROVAL_PACKAGE_CHARS = 64
+private const val APK_APPROVAL_SIGNER_CHARS = 64
+private const val APK_APPROVAL_VERSION_CHARS = 20

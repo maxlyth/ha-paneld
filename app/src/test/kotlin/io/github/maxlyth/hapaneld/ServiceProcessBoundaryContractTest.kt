@@ -1,0 +1,529 @@
+package io.github.maxlyth.hapaneld
+
+import java.io.File
+import java.lang.reflect.Modifier
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class ServiceProcessBoundaryContractTest {
+    @Test fun mqttNoProgressBoundaryDoesNotMutateTransportAndRetriesRejectedAdmission() {
+        val service = source("PaneldService.kt")
+        val watchdog = service.substring(
+            service.indexOf("private fun startMqttWatchdog()"),
+            service.indexOf("private fun registerNetworkCallback()"),
+        )
+        val recovery = watchdog.substring(
+            watchdog.indexOf("is ConnectionSupervisor.Action.ProcessRecovery"),
+            watchdog.indexOf("ConnectionSupervisor.Action.None"),
+        )
+
+        assertTrue(recovery.contains("if (recoveryRestart.request()) break"))
+        assertFalse(recovery.contains("runtime.reconnect"))
+        assertFalse(watchdog.contains("processRecoveryRequested"))
+        assertTrue(watchdog.contains("process recovery request was not admitted; retrying next tick"))
+    }
+
+    @Test fun mqttFallbackProofIsConnectionScopedAndWatchdogFailureIsTerminal() {
+        val service = source("PaneldService.kt")
+        val watchdog = service.substring(
+            service.indexOf("private fun startMqttWatchdog()"),
+            service.indexOf("private fun registerNetworkCallback()"),
+        )
+
+        assertTrue(watchdog.contains("val watchdogObservation = watched.watchdogObservation()"))
+        assertTrue(watchdog.contains("val observedTicket = watchdogObservation.recoveryTicket"))
+        assertTrue(watchdog.contains("connectionGeneration = progress.connectionGeneration"))
+        assertTrue(watchdog.contains("supervisor.rebuildAdmitted()"))
+        assertTrue(watchdog.contains("if (rebuild != null) continue"))
+        assertTrue(watchdog.contains("if (watchedRuntime == null)"))
+        assertFalse(watchdog.contains("?.value?.mqtt ?: mqtt"))
+
+        assertTrue(watchdog.contains("catch (failure: Exception)"))
+        assertTrue(watchdog.contains("terminalRecoveryNeeded = true"))
+        assertTrue(watchdog.contains("MQTT watchdog failed; requesting bounded process recovery"))
+        assertTrue(watchdog.contains("mqttWatchdogAlive = false"))
+
+        val mqtt = source("MqttBridge.kt")
+        val observation = mqtt.substring(
+            mqtt.indexOf("internal fun watchdogObservation()"),
+            mqtt.indexOf("private val familyPreference", mqtt.indexOf("internal fun watchdogObservation()")),
+        )
+        assertTrue(
+            "watchdog must read the hold before projecting progress from one atomic authority",
+            observation.indexOf("val holdSelectedFamily") < observation.indexOf("val progress"),
+        )
+    }
+
+    @Test fun mqttFamilyFallbackIsStagedBeforeOwnerSubmissionAndReconnectCannotFlipTwice() {
+        val service = source("PaneldService.kt")
+        val watchdog = service.substring(
+            service.indexOf("private fun startMqttWatchdog()"),
+            service.indexOf("private fun registerNetworkCallback()"),
+        )
+        val fallback = watchdog.substring(
+            watchdog.indexOf("is ConnectionSupervisor.Action.Rebuild"),
+            watchdog.indexOf("is ConnectionSupervisor.Action.SkipRebuild"),
+        )
+        assertTrue(
+            fallback.indexOf("watched.stageAlternateFamilyForReconnect(observedTicket)") <
+                fallback.indexOf("runtime.reconnect(watchedRuntime)"),
+        )
+        assertTrue(fallback.contains("target.mqtt.reconnect(recoveryTicket)"))
+        assertTrue(watchdog.contains("MqttRecoveryOutcome.NO_LONGER_NEEDED"))
+        assertTrue(watchdog.contains("reconcileRejectedRecovery(attempt.ticket)"))
+        assertFalse(fallback.contains("target.mqtt.reconnect(flipFamily"))
+
+        val mqtt = source("MqttBridge.kt")
+        val stage = mqtt.substring(
+            mqtt.indexOf("internal fun stageAlternateFamilyForReconnect("),
+            mqtt.indexOf("fun reconnect()"),
+        )
+        val reconnect = mqtt.substring(
+            mqtt.indexOf("fun reconnect()"),
+            mqtt.indexOf("private fun onConnected("),
+        )
+
+        assertTrue(stage.contains("familyPreference.stageAlternate("))
+        assertTrue(stage.contains("recoveryTicketForReconnect(baseline)"))
+        assertFalse(reconnect.contains("familyPreference.stageAlternate"))
+        assertTrue(reconnect.indexOf("transport.disconnectDetached()") < reconnect.indexOf("startOpen()"))
+    }
+
+    @Test fun mqttConnectedCallbackCannotRunAnnouncementWorkOrPinTheLifecycleGate() {
+        val mqtt = source("MqttBridge.kt")
+        val callback = mqtt.substring(
+            mqtt.indexOf("private fun onConnected("),
+            mqtt.indexOf("private fun performConnectionEvent("),
+        )
+        val disconnectedCallback = mqtt.substring(
+            mqtt.indexOf("private fun onDisconnected("),
+            mqtt.indexOf("private fun requestReAnnounce("),
+        )
+        val connectionEvent = mqtt.substring(
+            mqtt.indexOf("private fun performConnectionEvent("),
+            mqtt.indexOf("private fun performConnectAnnouncement("),
+        )
+        val announcement = mqtt.substring(
+            mqtt.indexOf("private fun performConnectAnnouncement("),
+            mqtt.indexOf("private fun connectionAnnouncementIsCurrent("),
+        )
+        val startOpen = mqtt.substring(
+            mqtt.indexOf("private fun startOpen()"),
+            mqtt.indexOf("private fun scheduleAuthRetry("),
+        )
+        val stop = mqtt.substring(mqtt.indexOf("fun stop("), mqtt.indexOf("companion object", mqtt.indexOf("fun stop(")))
+
+        assertTrue(callback.contains("connectionEventDispatcher.submit(MqttConnectionEvent.Connected(connection, addressFamily))"))
+        listOf(
+            "lifecycle.runIfOpen",
+            "discoveryCapabilities.snapshot",
+            "transport.subscribe",
+            "publishDiscovery",
+            "pruneStaleDiscovery",
+            "restoreAndPublishStates",
+        ).forEach { forbidden -> assertFalse("connected callback contains $forbidden", callback.contains(forbidden)) }
+        assertTrue(disconnectedCallback.contains("connectionEventDispatcher.submit("))
+        assertTrue(disconnectedCallback.contains("mqttAutomaticReconnectAllowed(classified, admission)"))
+        assertFalse(disconnectedCallback.contains("lifecycle.runIfOpen"))
+        assertTrue(connectionEvent.contains("lifecycle.runIfOpen"))
+        assertTrue(connectionEvent.contains("connectAnnouncementDispatcher.submit(announcement)"))
+        assertTrue(
+            startOpen.indexOf("connectionEventDispatcher.supersede()") <
+                startOpen.indexOf("activeConnection = null"),
+        )
+        assertTrue(announcement.contains("discoveryCapabilities.snapshot()"))
+        assertTrue(announcement.contains("publishDiscovery(capabilitySnapshot)"))
+        assertTrue(announcement.contains("publish(availabilityTopic, \"online\", retain = true)"))
+        assertFalse(announcement.contains("lifecycle.runIfOpen"))
+        assertTrue(stop.contains("connectionEventDispatcher.close()"))
+        assertTrue(stop.contains("connectAnnouncementDispatcher.close()"))
+        assertTrue(stop.contains("connectionEventDispatcher.closeAndJoin(deadline.remainingMs())"))
+        assertTrue(stop.contains("connectAnnouncementDispatcher.closeAndJoin(deadline.remainingMs())"))
+        assertTrue(stop.contains("connectAnnouncementDrained"))
+    }
+
+    @Test fun mqttRetirementClosesAdmissionBeforeBoundedDrainWithoutHoldingAMutationMonitor() {
+        val mqtt = source("MqttBridge.kt")
+        assertFalse(Modifier.isSynchronized(MqttBridge::class.java.getDeclaredMethod("start").modifiers))
+        assertFalse(Modifier.isSynchronized(
+            MqttBridge::class.java.getDeclaredMethod("reconnect").modifiers,
+        ))
+        MqttBridge::class.java.declaredMethods.filter { it.name in setOf("onConnected", "onDisconnected") }
+            .forEach { callback ->
+            assertFalse("transport callback holds the bridge monitor: ${callback.name}",
+                Modifier.isSynchronized(callback.modifiers))
+        }
+        listOf("stopLock", "lifecycleGeneration", "@Volatile private var stopped", "stateConvergerOwner")
+            .forEach { assertFalse("obsolete MQTT lifecycle state remains: $it", mqtt.contains(it)) }
+
+        val stop = mqtt.substring(mqtt.indexOf("fun stop("), mqtt.indexOf("companion object", mqtt.indexOf("fun stop(")))
+        val firstWait = stop.indexOf("lifecycle.awaitDrained(deadline)")
+        listOf(
+            "lifecycle.closeAdmission()",
+            "connectionEventDispatcher.close()",
+            "connectAnnouncementDispatcher.close()",
+            "stateConverger.close()",
+            "commandDispatcher.close()",
+            "authScheduler.shutdownNow()",
+            "zigbeeWorker.close()",
+            "adbReassertWorker.close()",
+            "reannounceDispatcher.close()",
+        ).forEach { step ->
+            assertTrue("MQTT retirement signal missing before its first wait: $step",
+                stop.indexOf(step) in 0 until firstWait)
+        }
+        listOf("ownersDrained", "finalization", "deadline.remainingMs()", "transport.publishThenDisconnect(")
+            .forEach { assertTrue("typed/shared-deadline MQTT retirement step missing: $it", stop.contains(it)) }
+    }
+
+    @Test fun mqttRecoveryAuthorityIsThePrimaryConnectionStateSource() {
+        val mqtt = source("MqttBridge.kt")
+        assertTrue(mqtt.contains("val state: String get() = recoveryAuthority.snapshot().state"))
+        assertTrue(mqtt.contains("val lastOkMs: Long get() = recoveryAuthority.snapshot().brokerProgress.lastOkMs"))
+        assertFalse(mqtt.contains("@Volatile var state:"))
+        assertFalse(mqtt.contains("@Volatile private var brokerProgress"))
+        assertFalse(mqtt.contains("@Volatile private var applicationReadyEver"))
+        listOf("connecting", "discovering", "config-error", "announcing", "connected", "disabled")
+            .forEach { state ->
+                assertTrue("missing atomic MQTT state transition: $state",
+                    mqtt.contains("publishRecoveryLifecycleState(\"$state\"") ||
+                        mqtt.contains("publishRecoveryLifecycleStateWithAddressFamily(\"$state\""))
+            }
+        assertTrue(mqtt.contains("publishRecoveryLifecycleState(authRecovery.snapshot(now).state)"))
+        assertTrue(mqtt.contains("else publishRecoveryLifecycleState(event.state)"))
+    }
+
+    @Test fun hiveTransportPublishesTupleTransitionsAndCallbackEnqueuesInOneOrder() {
+        val hive = source("mqtt/HiveMqTransport.kt")
+        val connected = hive.substring(
+            hive.indexOf(".addConnectedListener"),
+            hive.indexOf(".addDisconnectedListener"),
+        )
+        val disconnected = hive.substring(
+            hive.indexOf(".addDisconnectedListener"),
+            hive.indexOf("// ssl:///mqtts://"),
+        )
+
+        assertTrue(connected.contains("synchronized(sessionLock)"))
+        assertTrue(connected.indexOf("session = Session(") < connected.indexOf("callbacks.onConnected(lease)"))
+        assertTrue(disconnected.contains("synchronized(sessionLock)"))
+        assertTrue(disconnected.indexOf("session = Session(") < disconnected.indexOf("callbacks.onDisconnected("))
+        assertFalse(hive.contains("@Volatile private var client"))
+        assertFalse(hive.contains("@Volatile private var connectionLease"))
+    }
+
+    @Test fun replacementRegistersBeforeTheOldServiceCanExit() {
+        val source = source("ConfigActivity.kt")
+        val restart = source.substring(
+            source.indexOf("if (restartService) {"),
+            source.indexOf("readinessJob = activityScope.launch"),
+        )
+
+        assertTrue(restart.indexOf("stopService(") < restart.indexOf("PaneldService.start(this)"))
+        assertFalse(restart.contains("delay("))
+    }
+
+    @Test fun everyActiveReplacementOwnerStartsBehindTheProcessFence() {
+        val source = source("PaneldService.kt")
+        val onCreate = source.substring(source.indexOf("override fun onCreate()"), source.indexOf("override fun onStartCommand("))
+        val startup = source.substring(source.indexOf("restartLease.awaitPredecessor()"), source.indexOf("\n        Thread({"))
+        val activeMarkers = listOf(
+            "reconcileHelperInstallStaging()",
+            "brightness.applyPreventIdleDim",
+            "EntityLearningRuntime.attach(entityLearning)",
+            "kiosk.recoverPersistentState(",
+            "touchSound.set(true)",
+            "bootChime.applyPersisted()",
+            "server.requestTameReconcile()",
+            "server.prewarm()",
+            "sensors.prepare()",
+        )
+
+        activeMarkers.forEach { marker ->
+            assertFalse("$marker started in onCreate", onCreate.contains(marker))
+            assertTrue("$marker missing behind fence", startup.contains(marker))
+        }
+        assertTrue(source.contains("restartLease.completeTeardown()"))
+    }
+
+    @Test fun teardownClosesExternalMutationAdmissionBeforeAnyBoundedWaitCanExpire() {
+        val source = source("PaneldService.kt")
+        val destroy = source.substring(source.indexOf("override fun onDestroy()"), source.indexOf("if (!stopped)"))
+
+        listOf("kiosk.closeAdmission()", "navbar.closeAdmission()", "screen.closeAdmission()").forEach { close ->
+            assertTrue("$close missing from synchronous teardown admission", destroy.contains(close))
+            assertTrue(destroy.indexOf(close) < destroy.indexOf("stopMqttWatchdog"))
+        }
+    }
+
+    @Test fun failedKioskRecoveryCannotBlockControlPlaneStartup() {
+        val source = source("PaneldService.kt")
+        val startupStart = source.indexOf("restartLease.awaitPredecessor()")
+        val startup = source.substring(
+            startupStart,
+            source.indexOf("server.start()", startupStart) + "server.start()".length,
+        )
+
+        assertTrue(startup.contains("val kioskRecoveredAtStartup = kiosk.recoverPersistentState(config.kioskLock)"))
+        assertFalse(startup.contains("while ("))
+        assertTrue(startup.contains("server.start()"))
+        assertTrue(source.contains("if (config.kioskLock || !kioskRecoveredAtStartup) scheduleKioskReassert()"))
+        assertTrue(source.contains("if (config.kioskLock && !kiosk.isPersistentPolicyEligible())"))
+    }
+
+    @Test fun consolidatedManagementPrewarmRunsAfterCriticalStartup() {
+        val source = source("PaneldService.kt")
+        val startup = source.substring(
+            source.indexOf("restartLease.awaitPredecessor()"),
+            source.indexOf("\n        Thread({"),
+        )
+        val ordered = listOf(
+            "BundledHelperInstaller.ensureCurrent",
+            "server.start()",
+            "adb.reassert()",
+            "profileRegistry.markResolvedStartupHealthy()",
+            "server.prewarm()",
+        ).map(startup::indexOf)
+
+        assertTrue("post-critical observation step missing: $ordered", ordered.all { it >= 0 })
+        assertEquals(ordered.sorted(), ordered)
+        val healthy = startup.indexOf("profileRegistry.markResolvedStartupHealthy()")
+        val postCriticalLaunch = startup.indexOf("scope.launch(Dispatchers.IO)", healthy)
+        assertTrue(postCriticalLaunch > healthy)
+        val postCritical = startup.substring(postCriticalLaunch)
+        assertTrue(postCritical.contains("server.prewarm()"))
+        assertFalse(postCritical.contains("CompanionDb.serverUrl"))
+    }
+
+    @Test fun externalStateIsRestoredBeforeTheFreshProcessBoundary() {
+        val source = source("PaneldService.kt")
+        val destroy = source.substring(source.indexOf("override fun onDestroy()"), source.indexOf("if (!stopped)"))
+        assertTrue(destroy.indexOf("ensureScreenExitRecovery()") < destroy.indexOf("stopMqttWatchdog"))
+        assertTrue(destroy.indexOf("screenExitRecovery.get") < destroy.indexOf("runtime.shutdown"))
+
+        val exit = source.substring(source.indexOf("private fun finishAfterExternalStateIsSafe("), source.indexOf("private fun scheduleKioskReassert()"))
+        val screenRecovery = source.substring(source.indexOf("private fun ensureScreenExitRecovery("), source.indexOf("private fun requestSafeProcessBoundary("))
+        assertTrue(exit.contains("kiosk.apply(false)"))
+        assertTrue(exit.contains("kiosk.recoverPersistentState(config.kioskLock)"))
+        assertTrue(exit.contains("shouldForceFreshProcessAfterExternalRecovery("))
+        assertTrue(exit.contains("navbar.cleanup()"))
+        assertTrue(exit.contains("navbar.recoverPersistentState()"))
+        assertTrue(exit.contains("proveScreenSafeForBoundary(ensureScreenExitRecovery())"))
+        assertTrue(screenRecovery.contains("screen.restoreAndEstablishExitSafety()"))
+        assertTrue(screenRecovery.indexOf("screenExitRecoveryOwner.compareAndSet(null, completion)") < screenRecovery.indexOf("Thread {"))
+        assertTrue(exit.contains("CdpRelay.stopAndVerifyForProcessExit"))
+        assertTrue(exit.indexOf("runServiceBoundary(") < exit.indexOf("cancelKioskReassert()"))
+        assertFalse(source.contains("externalStateRecoveryOwned"))
+        val runner = source("ServiceBoundaryRunner.kt")
+        assertTrue(runner.indexOf("recordCompletionAndClaimRecovery(completed)") < runner.indexOf("prepare()"))
+        assertTrue(exit.indexOf("proveScreenSafeForBoundary") < exit.indexOf("exitProcess(0)"))
+        assertTrue(exit.indexOf("CdpRelay.stopAndVerifyForProcessExit") < exit.indexOf("exitProcess(0)"))
+    }
+
+    @Test fun ordinaryDestroyDoesNotRequestAProcessExitAndFinalProofOwnsRelease() {
+        val source = source("PaneldService.kt")
+        val server = source("http/PaneldServer.kt")
+        val destroy = source.substring(source.indexOf("override fun onDestroy()"), source.indexOf("private fun finishTeardownAsync("))
+        val finalizer = source.substring(source.indexOf("private fun finishTeardownAsync("), source.indexOf("private fun runFinalizerStep("))
+
+        assertFalse(destroy.contains("externalProcessBoundaryRequested.set(true)"))
+        assertTrue(server.contains("scope.embeddedServer(CIO"))
+        val httpStopStart = destroy.indexOf("httpOwnersStopped.set(")
+        assertTrue(httpStopStart >= 0)
+        val httpStopEnd = destroy.indexOf("// Kiosk writes", httpStopStart)
+        assertTrue(httpStopEnd > httpStopStart)
+        val httpStop = destroy.substring(httpStopStart, httpStopEnd)
+        assertTrue(httpStop.contains("runCatching { server.stop() }"))
+        assertTrue(httpStop.contains(".getOrDefault(false)"))
+        assertFalse(httpStop.contains(".isSuccess"))
+        val httpFailure = finalizer.indexOf("if (!httpOwnersStopped.get())")
+        val releaseProof = finalizer.indexOf("finishTeardownAfterExternalStateIsSafe(completed = true")
+        assertTrue(httpFailure >= 0)
+        assertTrue(releaseProof >= 0)
+        assertTrue(httpFailure < releaseProof)
+        val scopeFailure = finalizer.indexOf("if (!scopeDrained)")
+        assertTrue(scopeFailure >= 0)
+        assertTrue(scopeFailure < releaseProof)
+        val httpFailureEnd = finalizer.indexOf("if (::entityLearning.isInitialized", httpFailure)
+        assertTrue(httpFailureEnd > httpFailure)
+        assertTrue(finalizer.substring(httpFailure, httpFailureEnd).contains("completed = false"))
+        assertTrue(finalizer.contains("finishTeardownAfterExternalStateIsSafe(completed = true"))
+        assertTrue(source.contains("disposition == ServiceTeardownDisposition.EXIT"))
+        assertTrue(source.contains("restartLease.completeTeardown()"))
+    }
+
+    @Test fun finalMqttPersistenceAndSharedDeadlineAreRequiredBeforeRelease() {
+        val source = source("PaneldService.kt")
+        val destroy = source.substring(source.indexOf("override fun onDestroy()"), source.indexOf("private fun finishTeardownAsync("))
+        val finalizer = source.substring(source.indexOf("private fun finishTeardownAsync("), source.indexOf("private fun runFinalizerStep("))
+
+        assertTrue(destroy.contains("val asyncTeardownDeadline = MonotonicDeadline(ASYNC_TEARDOWN_BUDGET_MS)"))
+        assertTrue(destroy.contains("mqttFinalization.set(mqttRetirement.finalization)"))
+        assertTrue(destroy.contains("audioDrained.set(audioStopped)"))
+        assertTrue(destroy.contains("val ownerCleanup = ServiceOwnerCleanupTracker()"))
+        assertTrue(destroy.contains("ownerCleanup.run(close)"))
+        assertTrue(destroy.contains("ownerCleanup.record(result)"))
+        assertTrue(finalizer.contains("if (!audioDrained.get())"))
+        assertTrue(finalizer.contains("if (!ownerCleanup.isComplete())"))
+        assertTrue(finalizer.contains("runtime.hasFailedShutdown()"))
+        assertTrue(finalizer.contains("awaitFinalizerFuture(finalizerDeadline, mqttClose)"))
+        assertTrue(finalizer.contains("awaitFinalizerFuture(finalizerDeadline, sensorClose)"))
+        assertTrue(finalizer.indexOf("entityLearning.close()") < finalizer.lastIndexOf("AppState.flush(this, stateFlushMs)"))
+        assertTrue(finalizer.indexOf("AppState.flush(this, stateFlushMs)") < finalizer.indexOf("completed = true"))
+        assertFalse(finalizer.contains("MonotonicDeadline(ASYNC_TEARDOWN_BUDGET_MS)"))
+    }
+
+    @Test fun networkReplacementUsesOneDeadlineAndProvesRetirementBeforeBuild() {
+        val source = source("PaneldService.kt")
+        val reconfigure = source.substring(
+            source.indexOf("private fun performNetworkReconfigure("),
+            source.indexOf("private fun currentNetworkIdentity()"),
+        )
+        assertEquals(1, Regex("budgetMs = NETWORK_RECONFIGURE_BUDGET_MS")
+            .findAll(source).count())
+        assertTrue(source.contains("LatestOperationTimeoutPolicy("))
+        assertTrue(source.contains("schedule = { task, delayMs -> mainHandler.postDelayed(task, delayMs) }"))
+        assertTrue(source.contains("onTimeout = ::onNetworkReconfigureTimeout"))
+        assertTrue(reconfigure.contains("val executionDeadline = mutation.deadline"))
+        assertFalse(reconfigure.contains("runWithExecutionWatchdog("))
+        assertTrue(reconfigure.contains("previous.mdns.retire(executionDeadline)"))
+        assertTrue(reconfigure.contains("deadline = executionDeadline"))
+        assertTrue(reconfigure.contains("ownersDrained.awaitTrue(executionDeadline)"))
+        assertTrue(reconfigure.contains("finalization.awaitSuccessful(executionDeadline)"))
+        assertTrue(reconfigure.contains("mdnsRetirement.awaitTrue(executionDeadline)"))
+        assertTrue(reconfigure.contains("val completed = mutation.replace("))
+        assertTrue(reconfigure.indexOf("check(mqttOwnersDrained") < reconfigure.indexOf("build = { previous ->"))
+        assertFalse(reconfigure.contains("runtime.reconfigure("))
+        assertFalse(source.contains("NETWORK_OWNER_STOP_TIMEOUT_MS"))
+        assertFalse(source.contains("runBoundedOwnerAction"))
+    }
+
+    @Test fun networkConfigurationPublishesOneImmutableAppliedSnapshot() {
+        val source = source("PaneldService.kt")
+        val create = source.substring(source.indexOf("override fun onCreate()"), source.indexOf("private fun buildMqtt("))
+        val snapshot = source.substring(
+            source.indexOf("private fun currentNetworkConfigurationSnapshot()"),
+            source.indexOf("private fun currentMqttProjection()"),
+        )
+        val refresh = source.substring(
+            source.indexOf("private fun refreshLiveConfiguration("),
+            source.indexOf("private data class ManagementControllerObservation"),
+        )
+        assertTrue(source.contains("private lateinit var appliedNetworkConfiguration: NetworkConfigurationSnapshot"))
+        assertTrue(source.contains("val desired = currentNetworkConfigurationSnapshot()"))
+        assertTrue(create.indexOf("config.attachProfile(profile)") < create.indexOf("appliedNetworkConfiguration ="))
+        assertTrue(create.indexOf("appliedNetworkConfiguration =") < create.indexOf("runtime = ServiceRuntimeOwner("))
+        assertTrue(snapshot.contains("config.synchronizedTransaction"))
+        assertTrue(refresh.contains("appliedNetworkConfiguration = desired"))
+        assertFalse(refresh.contains("currentMqttProjection()"))
+        assertFalse(refresh.contains("currentHaLinkIdentity()"))
+        assertFalse(source.contains("activeNetworkIdentity"))
+        assertFalse(source.contains("activeMqttProjection"))
+        assertFalse(source.contains("activeHaLinkIdentity"))
+    }
+
+    @Test fun runtimeLaneOwnsLatestNetworkAdmissionAndItsTerminalProof() {
+        val source = source("PaneldService.kt")
+        val destroy = source.substring(source.indexOf("override fun onDestroy()"), source.indexOf("if (!stopped)"))
+        assertTrue(source.contains("when (runtime.requestLatest())"))
+        assertTrue(source.contains("runtime.pendingLatestCount()"))
+        assertFalse(source.contains("networkReconfigureWorker"))
+        assertFalse(source.contains("networkWorkerDrained"))
+        assertTrue(destroy.indexOf("runtime.closeAdmission()") < destroy.indexOf("runtime.shutdown("))
+        assertTrue(destroy.contains("FeatureCosts.registry.setBacklog(FeatureCostOperation.NETWORK_RECONFIGURE, 0)"))
+        val timeout = source.substring(
+            source.indexOf("private fun onNetworkReconfigureTimeout()"),
+            source.indexOf("private fun currentNetworkIdentity()"),
+        )
+        assertTrue(timeout.contains("runtime.pendingLatestCount()"))
+        assertTrue(timeout.contains("requestNetworkRecovery()"))
+    }
+
+    @Test fun mdnsRetirementFencesEveryDirectJmDnsBrowseBeforeClose() {
+        val mdns = source("MdnsAdvertiser.kt")
+        val retire = mdns.substring(mdns.indexOf("internal fun retire("), mdns.indexOf("private fun stopResources("))
+        assertTrue(retire.indexOf("ownerGate.closeAdmission()") < retire.indexOf("Thread {"))
+        assertTrue(retire.contains("ownerGate.runExclusive { stopResources(deadline) }"))
+        listOf("discoverHaIp", "discoverHaBaseUrl", "discoverHaInstanceUuid").forEachIndexed { index, method ->
+            val start = mdns.indexOf("fun $method")
+            val end = listOf("discoverHaIp", "discoverHaBaseUrl", "discoverHaInstanceUuid", "browsePeers")
+                .drop(index + 1)
+                .map { mdns.indexOf("fun $it", start + 1) }
+                .first { it > start }
+            assertTrue("$method bypasses the retirement gate",
+                mdns.substring(start, end).contains("ownerGate.runIfOpen<String?>(null)"))
+        }
+    }
+
+    @Test fun terminalNetworkMutationProofPrecedesDependentHardwareCleanup() {
+        val source = source("PaneldService.kt")
+        val destroy = source.substring(source.indexOf("override fun onDestroy()"), source.indexOf("if (!stopped)"))
+        val mqttProof = destroy.indexOf("val mqttOwnersDrained")
+        val proofGate = destroy.indexOf("if (!mqttOwnersDrained || !mdnsStopped || !lightPublisherDrained)")
+        assertTrue(mqttProof >= 0)
+        assertTrue(proofGate > mqttProof)
+        assertTrue(destroy.indexOf("lightMqttPublisher.awaitTermination") in (mqttProof + 1)..<proofGate)
+        listOf(
+            "kiosk.apply(false)",
+            "navbar.cleanup()",
+            "audio.close(audioWaitMs)",
+            "zigbeeHealth.stop()",
+            "EvdevButtonClient.stop()",
+            "sensors.stop()",
+            "power.releaseAndVerify()",
+        ).forEach { dependent ->
+            assertTrue("$dependent runs before network mutation proof", destroy.indexOf(dependent) > proofGate)
+        }
+        assertTrue(destroy.contains("ownerCleanup.record(false)"))
+    }
+
+    @Test fun lightMqttPublicationCannotRunOnTheSensorCallbackThread() {
+        val source = source("PaneldService.kt")
+        val sensorStart = source.substring(source.indexOf("sensors.start("), source.indexOf("EvdevButtonClient.start"))
+
+        assertTrue(sensorStart.contains("submitIlluminanceIfExposed("))
+        assertTrue(sensorStart.contains("exposed = config.haExposed(\"illuminance\", true)"))
+        assertTrue(sensorStart.contains("submit = lightMqttPublisher::submit"))
+        assertTrue(sensorStart.contains("onLuxRaw = autoBright::submitLux"))
+        assertFalse(sensorStart.contains("mqtt.publishLight"))
+    }
+
+    @Test fun bothTeardownPathsCancelAudioBeforeLaunchingBlockingCleanup() {
+        val source = source("PaneldService.kt")
+        val destroyStart = source.indexOf("override fun onDestroy()")
+        val destroy = source.substring(destroyStart, source.indexOf("val screenExitRecovery", destroyStart))
+        val requested = source.substring(source.indexOf("private fun requestSafeProcessBoundary("), source.indexOf("private fun finishTeardownAfterExternalStateIsSafe("))
+
+        assertTrue(destroy.contains("beginAudioTeardown(audio::closeAdmission, audio::cancelCurrent)"))
+        assertTrue(requested.contains("beginAudioTeardown(audio::closeAdmission, audio::cancelCurrent)"))
+        assertTrue(requested.indexOf("beginAudioTeardown") < requested.indexOf("Thread {"))
+    }
+
+    @Test fun everyPaneldProcessBoundaryUsesTheExternalStateGate() {
+        val source = source("PaneldService.kt")
+        assertEquals(1, Regex("exitProcess\\(0\\)").findAll(source).count())
+        assertTrue(source.contains("requestSafeProcessBoundary(\"activating staged profile\")"))
+        assertTrue(source.contains("requestSafeProcessBoundary(\"bounded runtime recovery\")"))
+        assertTrue(source.contains("requestSafeProcessBoundary(\"binding the \$verb WebView provider\")"))
+
+        val activation = source.substring(source.indexOf("private suspend fun activateWebView"), source.indexOf("private suspend fun autoUpdateWebView"))
+        val builtin = activation.substring(activation.indexOf("if (config.dashboardPackage"), activation.indexOf("system.reloadDashboard"))
+        assertTrue(builtin.indexOf("requestSafeProcessBoundary") < builtin.indexOf("return"))
+    }
+
+    @Test fun relayTerminationCommandCannotConsumeAnUnboundedProcessExit() {
+        val relay = source("control/CdpRelay.kt")
+        val stop = relay.substring(relay.indexOf("private fun stopLocked()"), relay.indexOf("private fun probeExposure()"))
+
+        assertTrue(stop.contains("runOutputIsolatedBounded"))
+        assertTrue(stop.contains("timeoutMs = RELAY_STOP_TIMEOUT_MS"))
+        assertFalse(stop.contains("Su.run("))
+    }
+
+    private fun source(relative: String): String = locate("src/main/kotlin/io/github/maxlyth/hapaneld/$relative").readText()
+
+    private fun locate(relative: String): File = listOf(File(relative), File("app/$relative"), File("../app/$relative"))
+        .firstOrNull(File::isFile) ?: error("missing test input $relative")
+}

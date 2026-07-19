@@ -19,15 +19,66 @@ internal object ProfileValidator {
                 reject(path, "Must contain 1-$max characters without control characters.")
             }
         }
+        fun containsFormatControl(value: String): Boolean {
+            var index = 0
+            while (index < value.length) {
+                val codePoint = Character.codePointAt(value, index)
+                if (Character.getType(codePoint) == Character.FORMAT.toInt()) return true
+                index += Character.charCount(codePoint)
+            }
+            return false
+        }
+        fun validHttpsUrl(value: String, path: String) {
+            val uri = runCatching { URI(value) }.getOrNull()
+            if (
+                value.length > 500 || uri?.scheme != "https" || uri.host.isNullOrBlank() ||
+                uri.userInfo != null
+            ) {
+                reject(path, "Must be an absolute HTTPS URL without user information, at most 500 characters.")
+            }
+        }
         if (document.schema != ProfileMetadata.SCHEMA) reject("schema", "Unsupported schema ${document.schema}; expected ${ProfileMetadata.SCHEMA}.")
         if (!idPattern.matches(document.id) || ".." in document.id) reject("id", "Use 1-128 lowercase letters or digits with interior dots and hyphens; consecutive dots are not allowed.")
         if (!contentVersionPattern.matches(document.version)) reject("version", "Expected semantic version MAJOR.MINOR.PATCH.")
         if (document.displayName.isBlank() || document.displayName.length > 100) reject("display_name", "Must contain 1-100 characters.")
         if (document.socClass.isBlank() || document.socClass.length > 100) reject("soc_class", "Must contain 1-100 characters.")
         if (document.metadata.author.isBlank() || document.metadata.author.length > 100) reject("metadata.author", "Must contain 1-100 characters.")
-        document.metadata.source?.let { source ->
-            val uri = runCatching { URI(source) }.getOrNull()
-            if (source.length > 500 || uri?.scheme != "https" || uri.host.isNullOrBlank() || uri.userInfo != null) reject("metadata.source", "Must be an absolute HTTPS URL without user information, at most 500 characters.")
+        document.metadata.source?.let { validHttpsUrl(it, "metadata.source") }
+        if (document.metadata.links.size > 8) reject("metadata.links", "At most 8 display links are allowed.")
+        val seenLinkUrls = mutableSetOf<String>()
+        val seenLinkLabels = mutableSetOf<String>()
+        document.metadata.source?.let {
+            seenLinkUrls.add(it)
+            seenLinkLabels.add("panel details")
+        }
+        document.metadata.links.forEachIndexed { index, link ->
+            val path = "metadata.links[$index]"
+            boundedText(link.label, "$path.label", 48)
+            if (containsFormatControl(link.label)) {
+                reject("$path.label", "Must not contain Unicode format controls.")
+            }
+            validHttpsUrl(link.url, "$path.url")
+            if (!seenLinkUrls.add(link.url)) reject("$path.url", "Duplicate profile link URL.")
+            if (!seenLinkLabels.add(link.label.lowercase())) reject("$path.label", "Profile link labels must be unique.")
+        }
+        document.soc?.let { soc ->
+            boundedText(soc.model, "soc.model", 100)
+            soc.introducedYear?.let { year ->
+                if (year !in 1970..2100) reject("soc.introduced_year", "Must be between 1970 and 2100.")
+            }
+            if (soc.cpuCores.size > 8) reject("soc.cpu_cores", "At most 8 CPU core clusters are allowed.")
+            val architectures = mutableSetOf<String>()
+            var totalCores = 0
+            soc.cpuCores.forEachIndexed { index, cluster ->
+                val path = "soc.cpu_cores[$index]"
+                boundedText(cluster.architecture, "$path.architecture", 64)
+                if (cluster.count !in 1..128) reject("$path.count", "Must be between 1 and 128 cores.")
+                totalCores += cluster.count.coerceAtLeast(0)
+                if (!architectures.add(cluster.architecture.lowercase())) {
+                    reject("$path.architecture", "CPU core architectures must be unique within the SoC description.")
+                }
+            }
+            if (totalCores > 256) reject("soc.cpu_cores", "At most 256 total CPU cores are allowed.")
         }
         if (!licensePattern.matches(document.metadata.license)) reject("metadata.license", "Expected a bounded SPDX-style license expression.")
         if (document.metadata.testedFirmware.size > 32 || document.metadata.testedFirmware.any { it.isBlank() || it.length > 120 }) reject("metadata.tested_firmware", "Use at most 32 non-empty entries of at most 120 characters.")
@@ -84,11 +135,8 @@ internal object ProfileValidator {
         document.hardware.buttonLedGpioBase?.let { if (it !in 0..4092) reject("hardware.button_led_gpio_base", "GPIO block base must be between 0 and 4092.") }
         document.sensors.proximityGpio?.let {
             if (it !in 0..4095) reject("sensors.proximity_gpio", "GPIO must be between 0 and 4095.")
-            if (!document.platform.appCanSu) reject("sensors.proximity_gpio", "GPIO proximity polling requires app_can_su: true.")
         }
-        if ((document.sensors.proximityNearRaw == null) != (document.sensors.proximityFarRaw == null)) reject("sensors", "Near and far reference readings must be supplied together.")
         if (document.sensors.roomTempOffsetC !in -30f..30f) reject("sensors.room_temp_offset_c", "Offset must be between -30 and 30 °C.")
-        if (document.sensors.proximityGradedStrategy !in setOf("observed", "nspanel-firmware-cutover")) reject("sensors.proximity_graded_strategy", "Unknown core strategy.")
         boundedText(document.sensors.proximityTechnology, "sensors.proximity_technology")
         boundedText(document.sensors.lightTechnology, "sensors.light_technology")
         if (document.identity.modelLabelStrategy !in setOf("display-name", "nspanel-product-version")) reject("identity.model_label_strategy", "Unknown core strategy.")
@@ -103,6 +151,9 @@ internal object ProfileValidator {
             if (it !in 0.5f..1.5f) reject("provisioning.display.font_scale", "Font scale must be between 0.5 and 1.5.")
         }
         document.display.physicalPpi?.let { if (it !in 50..1000) reject("display.physical_ppi", "Physical PPI must be between 50 and 1000.") }
+        document.hardware.touchClickGain?.let {
+            if (it !in 0.05f..1f) reject("hardware.touch_click_gain", "Touch-click gain must be between 0.05 and 1.0.")
+        }
         if (document.input.evdevButtons.size > 32) reject("input.evdev_buttons", "At most 32 evdev mappings are allowed.")
         val evdevCodes = mutableSetOf<Pair<Boolean, Int>>()
         document.input.evdevButtons.forEachIndexed { index, button ->

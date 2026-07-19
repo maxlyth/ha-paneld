@@ -155,6 +155,12 @@ internal object ZigbeeNetInfoParser {
     }
 }
 
+internal fun zigbeeNetInfoCommand(gatewayDir: String): String =
+    "if [ -s /data/vendor/siliconlabs_host/netinfo ]; then " +
+        "head -c 4097 /data/vendor/siliconlabs_host/netinfo; else " +
+        "tail -n 200 /data/vendor/siliconlabs_host/zgateway.log $gatewayDir/zgateway.log 2>/dev/null | " +
+        "grep -i netinfo | tail -n 1 | head -c 4097; fi"
+
 internal fun normalizeGatewayCpu(rawPercent: Double?, cpuCount: Int, wholeMachineScale: Boolean): Double? {
     val raw = rawPercent?.takeIf { it.isFinite() && it >= 0.0 } ?: return null
     return (if (wholeMachineScale) raw * cpuCount.coerceAtLeast(1) else raw).coerceIn(0.0, 1000.0)
@@ -346,10 +352,10 @@ class AndroidZigbeeGatewayHealthSource(
         val cpu = sampleCpu(processes.gatewayPid, processes.guardPid)
         val packageVersion = root.runOutput("cat $gatewayDir/package_version 2>/dev/null")
             ?.trim()?.takeIf { it.isNotEmpty() && it.length <= 120 }
-        val netInfoRaw = root.runOutput(
-            "tail -n 200 /data/vendor/siliconlabs_host/zgateway.log $gatewayDir/zgateway.log 2>/dev/null | " +
-                "grep -i netinfo | tail -n 1",
-        )
+        // Firmware writes the authoritative network snapshot to this canonical file. Older layouts may
+        // instead log an embedded `netinfo` object, so retain that as a fallback. Bound acquisition before
+        // parsing because the file also contains credentials/identity fields which must never be surfaced.
+        val netInfoRaw = root.runOutput(zigbeeNetInfoCommand(gatewayDir))
         val recursive = root.runOutput(
             "grep -Fxc 'export LD_LIBRARY_PATH=/vendor/bin/siliconlabs_host/:${'$'}{LD_LIBRARY_PATH}' " +
                 "$gatewayDir/guard_process.sh 2>/dev/null",
@@ -363,7 +369,7 @@ class AndroidZigbeeGatewayHealthSource(
             gatewayCpu = processes.gatewayPid?.let(cpu::get),
             guardPid = processes.guardPid,
             guardCpu = processes.guardPid?.let(cpu::get),
-            role = controller.role(),
+            role = processes.gatewayPid?.let { controller.role() },
             netInfo = ZigbeeNetInfoParser.parse(netInfoRaw),
             recursiveWatchdogAssignment = recursive,
         )
@@ -491,10 +497,11 @@ class ZigbeeHealthMonitor(
 
     fun snapshot(): ZigbeeHealthSnapshot = current
 
-    fun stop() {
+    fun stop(): Boolean {
         generation.updateAndGet { if (it == 0L) 2L else it + 1L }
         executor.shutdownNow()
-        runCatching { executor.awaitTermination(STOP_JOIN_MS, TimeUnit.MILLISECONDS) }
+        return runCatching { executor.awaitTermination(STOP_JOIN_MS, TimeUnit.MILLISECONDS) }
+            .getOrDefault(false)
     }
 
     internal fun sample() = sample(null)
