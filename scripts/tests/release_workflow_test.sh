@@ -109,11 +109,15 @@ prepare_job="$(awk '/^  prepare:$/ { in_prepare=1 } /^  sign-and-publish:$/ { ex
 if grep -Fq 'Require clean security analysis for the source commit' "$WORKFLOW" && \
    grep -Fq 'commits/$SOURCE_COMMIT/check-runs' "$WORKFLOW" && \
    grep -Fq 'code-scanning/alerts?state=open' "$WORKFLOW" && \
+   grep -Fq 'max_attempts=60' "$WORKFLOW" && \
+   grep -Fq 'sleep_seconds=10' "$WORKFLOW" && \
+   grep -Fq 'failure|cancelled|timed_out|action_required' "$WORKFLOW" && \
+   grep -Fq 'Timed out waiting for CodeQL' "$WORKFLOW" && \
    grep -Fqx '      checks: read' <<<"$prepare_job" && \
    grep -Fqx '      security-events: read' <<<"$prepare_job"; then
-  pass "release publication is gated by successful CodeQL checks and zero open alerts"
+  pass "release waits for successful CodeQL checks and fails closed"
 else
-  fail_test "release publication is gated by successful CodeQL checks and zero open alerts"
+  fail_test "release waits for successful CodeQL checks and fails closed"
 fi
 
 printf '1..%d\n' "$((passes + failures))"
