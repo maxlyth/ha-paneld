@@ -105,7 +105,9 @@ else
   fail_test "curated changelog remains the sole release prose source"
 fi
 
-prepare_job="$(awk '/^  prepare:$/ { in_prepare=1 } /^  sign-and-publish:$/ { exit } in_prepare' "$WORKFLOW")"
+verify_job="$(awk '/^  verify:$/ { in_job=1 } /^  package:$/ { exit } in_job' "$WORKFLOW")"
+package_job="$(awk '/^  package:$/ { in_job=1 } /^  sign-and-publish:$/ { exit } in_job' "$WORKFLOW")"
+publish_job="$(awk '/^  sign-and-publish:$/ { in_job=1 } in_job' "$WORKFLOW")"
 if grep -Fq 'Require clean security analysis for the source commit' "$WORKFLOW" && \
    grep -Fq 'commits/$SOURCE_COMMIT/check-runs' "$WORKFLOW" && \
    grep -Fq 'code-scanning/alerts?state=open' "$WORKFLOW" && \
@@ -113,11 +115,54 @@ if grep -Fq 'Require clean security analysis for the source commit' "$WORKFLOW" 
    grep -Fq 'sleep_seconds=10' "$WORKFLOW" && \
    grep -Fq 'failure|cancelled|timed_out|action_required' "$WORKFLOW" && \
    grep -Fq 'Timed out waiting for CodeQL' "$WORKFLOW" && \
-   grep -Fqx '      checks: read' <<<"$prepare_job" && \
-   grep -Fqx '      security-events: read' <<<"$prepare_job"; then
+   grep -Fqx '      checks: read' <<<"$verify_job" && \
+   grep -Fqx '      security-events: read' <<<"$verify_job" && \
+   ! grep -Fq 'Require clean security analysis for the source commit' <<<"$package_job"; then
   pass "release waits for successful CodeQL checks and fails closed"
 else
   fail_test "release waits for successful CodeQL checks and fails closed"
+fi
+
+if grep -Fq 'Test privileged helper boundaries and app contract' <<<"$verify_job" && \
+   grep -Fq 'Test installer and provisioning contracts' <<<"$verify_job" && \
+   grep -Fq 'Run JVM tests and Android lint' <<<"$verify_job" && \
+   grep -Fq 'Build release APK' <<<"$package_job" && \
+   grep -Fq 'Upload sealed release inputs' <<<"$package_job" && \
+   ! grep -Fq 'Build release APK' <<<"$verify_job" && \
+   ! grep -Fq 'Run JVM tests and Android lint' <<<"$package_job"; then
+  pass "release verification and packaging execute as independent jobs"
+else
+  fail_test "release verification and packaging execute as independent jobs"
+fi
+
+if grep -Fqx '    needs: [verify, package]' <<<"$publish_job" && \
+   grep -Fq 'EXPECTED_MANIFEST_SHA256: ${{ needs.package.outputs.input-manifest-sha256 }}' <<<"$publish_job" && \
+   grep -Fqx "    if: github.event_name == 'push'" <<<"$publish_job"; then
+  pass "publication requires both parallel jobs and the package manifest"
+else
+  fail_test "publication requires both parallel jobs and the package manifest"
+fi
+
+if grep -Fqx '      contents: read' <<<"$verify_job" && \
+   grep -Fqx '      contents: read' <<<"$package_job" && \
+   ! grep -Fq 'contents: write' <<<"$verify_job" && \
+   ! grep -Fq 'contents: write' <<<"$package_job" && \
+   ! grep -Fq 'environment: release' <<<"$verify_job" && \
+   ! grep -Fq 'environment: release' <<<"$package_job" && \
+   grep -Fqx '      contents: write' <<<"$publish_job" && \
+   grep -Fqx '    environment: release' <<<"$publish_job"; then
+  pass "parallel jobs stay read-only and release credentials remain publish-only"
+else
+  fail_test "parallel jobs stay read-only and release credentials remain publish-only"
+fi
+
+if grep -Fq 'git merge-base --is-ancestor "$source_commit" refs/remotes/origin/main' <<<"$verify_job" && \
+   grep -Fq 'git merge-base --is-ancestor "$source_commit" refs/remotes/origin/main' <<<"$package_job" && \
+   grep -Fq 'echo "SOURCE_COMMIT=$source_commit" >> "$GITHUB_ENV"' <<<"$verify_job" && \
+   grep -Fq 'echo "SOURCE_COMMIT=$source_commit" >> "$GITHUB_ENV"' <<<"$package_job"; then
+  pass "both parallel jobs validate and bind the same release source"
+else
+  fail_test "both parallel jobs validate and bind the same release source"
 fi
 
 printf '1..%d\n' "$((passes + failures))"
