@@ -1,5 +1,75 @@
 # Changelog
 
+## v0.9.5 - 2026-07-20
+
+**ha-paneld is easier to sign into, adapts better to each panel’s environment and recovers more reliably from routine changes.** It also makes sensitive maintenance safer without taking control away from existing installations.
+
+### Added
+
+- **Sign a panel in to Home Assistant from a remote browser** — Configure creates a short-lived link that can be opened normally or copied into a private window for another user, avoiding credential entry on the panel keyboard. Fresh installations print the next-step URL, and Configure shows the connected user’s display name.
+
+- **Auto-brightness adapts to each room** — it learns from up to seven days of panel or Home Assistant light readings, follows the normal daylight pattern and responds to changes such as a room light switching on. You can set the minimum automatic level, preview sensitivity changes and pause automatic control after a manual brightness change.
+
+- **Proximity sensors now set themselves up automatically** — ha-paneld learns empty-room and approaching-person readings, including whether the sensor rises or falls. Once it has enough reliable readings, Home Assistant receives occupancy and a 0–100 proximity level. A guided three-wave setup can teach it immediately, while brief fluctuations are ignored.
+
+- **Optional Hardened security mode requires approval on the panel for sensitive remote actions** — software changes, credential export or restore, profile activation, reboot and other sensitive maintenance wait for a one-time approval in the Android app. They cannot be approved remotely. Existing installations remain in Relaxed security mode unless Hardened security mode is deliberately enabled on the panel.
+
+- **You can measure whether dashboard filtering makes a panel faster** — a comparison records the same dashboard with filtering off and on, so you can compare response time rather than relying on how it feels. It can still collect useful results if the dashboard becomes unresponsive. [Discussion #10](https://github.com/maxlyth/ha-paneld/discussions/10)
+
+- **Obsolete learned dashboard entities can be cleared from the Entities tab** — a confirmed reset clears learned and manually included or excluded entities while the current filter continues working until a fresh scan completes. [Issue #50](https://github.com/maxlyth/ha-paneld/issues/50)
+
+- **The software navigation bar has a dedicated Dashboard action** — it opens the configured dashboard without reloading it. Reload remains available separately if recovery is needed. [Issue #43](https://github.com/maxlyth/ha-paneld/issues/43)
+
+- **NSPanel Pro Zigbee joining can be requested from Configure** — once joining is enabled in ZHA or Zigbee2MQTT, an unjoined panel can try joining again without a restart.
+
+- **Advanced setup no longer requires cloning the repository** — the signed release installer can configure, verify, back up or restore a panel using `install.sh --provision`.
+
+### Changed
+
+- **Kiosk-enabled panels go directly to their dashboard during routine startup** — the built-in renderer shows the QR/configuration screen once after each ha-paneld version change, while a launchable external renderer goes directly to its dashboard. Admin Launcher and recovery states still retain the configuration screen. [Issue #31](https://github.com/maxlyth/ha-paneld/issues/31)
+
+- **Configure and Install are easier to use on compact panels** — related settings use shorter cards, Save changes appears only after a setting has changed, and setup tools such as display sizing, vendor packages and backup/restore are grouped on Install.
+
+- **Wake on wave now requires a deliberate gesture** — the display wakes only after a complete wave towards and then away from the panel. Setup, testing and standing near the panel no longer wake it accidentally; touch-to-wake remains available while it is learning.
+
+- **Editable YAML files now define all hardware profiles** — the editor suggests valid choices, prevents profiles for different hardware from being activated, and keeps unofficial reflashed-device profiles in the community catalog rather than presenting them as built-in support. [Issue #28](https://github.com/maxlyth/ha-paneld/issues/28)
+
+- **Dashboard diagnostics identify busy Home Assistant entities more clearly** — they show which three entities sent the most updates and data during the past hour.
+
+- **Panel information is more useful** — runtime diagnostics report app storage plus verified-boot and bootloader status without configured names; profile views show clearer processor details and useful reference links.
+
+### Fixed
+
+- **Panels are less likely to become unavailable after settings, network or helper changes** — replaced tasks and MQTT connections now shut down cleanly, and losing privileged screen control no longer leaves ha-paneld permanently unresponsive.
+
+- **LED and button-backlight controls now reach the hardware reliably** — controls no longer return to off while brightness is changing, and button-backlight entities use Home Assistant’s normal light icon.
+
+- **Installer progress and failures are clearer** — named stages show what is happening, backups are checked before connecting, stalled downloads and installs time out cleanly, and panels with insufficient system space receive a clear explanation. [Issue #44](https://github.com/maxlyth/ha-paneld/issues/44), [Issue #46](https://github.com/maxlyth/ha-paneld/issues/46)
+
+- **Adaptive-brightness settings are validated before saving** — unreadable, missing or non-numeric Home Assistant light entities leave the current source and other pending settings unchanged, while invalid values show the supported range and an actionable error.
+
+- **Wake on wave can be taught before a proximity sensor has identified how it works** — simple on/off and graduated sensors can complete guided learning, while missing or unknown sources remain safely disabled. Relearning or changing the sensor no longer leaves wake-on-wave incorrectly enabled after a restart.
+
+- **Ethernet-connected panels no longer expose unavailable Wi-Fi diagnostics** — Wi-Fi network and signal entities appear only while Wi-Fi is the active connection, and stale values are removed when it changes to Ethernet. [Issue #21](https://github.com/maxlyth/ha-paneld/issues/21)
+
+- **Restoring a backup no longer changes untouched vendor Zigbee settings**, including when an older backup is restored. [Issue #48](https://github.com/maxlyth/ha-paneld/issues/48)
+
+- **Hardened security mode no longer reuses credentials after a Home Assistant or MQTT server change** — enter credentials for the new server or the old secret is cleared.
+
+- **Install and Configure report the real outcome without discarding newer edits** — failed display-size changes are no longer shown as successful, and settings appear only where they apply.
+
+- **CPU and temperature sensors explain when the installed helper is too old** instead of silently disappearing. [Issue #21](https://github.com/maxlyth/ha-paneld/issues/21)
+
+- **Disabled features stop consuming resources** while temporarily unavailable sensors retry at a controlled rate and repeated diagnostic requests share one refresh.
+
+- **Live Sensors shows brightness as a percentage** while retaining the 0–255 value for diagnostics. [Issue #30](https://github.com/maxlyth/ha-paneld/issues/30)
+
+- **Panel capability lists omit hardware known to be absent** while Generic profiles retain discovery guidance for unknown hardware.
+
+### Upgrade notes
+
+- Existing panels remain in Relaxed security mode. Enable Hardened security mode only from the Android app’s Configure toolbar on the panel after disabling classic network ADB and Android Wireless debugging; remote tap injection remains unavailable until the panel returns to Relaxed security mode.
+
 ## v0.9.5-rc2 - 2026-07-20
 
 ### Added
