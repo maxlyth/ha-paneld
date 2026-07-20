@@ -82,7 +82,7 @@ The profile-aware plan reports when selected drivers require the helper. Many rk
 
 ## Provisioning the built-in dashboard renderer
 
-Since 0.9, ha-paneld includes its own experimental dashboard renderer. The easiest setup is on the panel's `:8888` **Configure** page: select **Built-in renderer**, then enter the Home Assistant URL and a long-lived access token in the Dashboard card.
+Since 0.9, ha-paneld includes its own experimental dashboard renderer. The easiest setup is on the panel's `:8888` **Configure** page: under **Home Assistant connection**, enter the Home Assistant URL and choose **Browser sign-in**. Complete the short-lived sign-in link in an administrator's browser, then select **Built-in renderer** in the Dashboard card. A long-lived access token remains available for automated or compatibility setup, but is not needed for the normal interactive flow.
 
 For unattended provisioning, `--builtin` selects the renderer and provisions its Home Assistant sign-in **from this machine**, so nothing is typed on the panel:
 
