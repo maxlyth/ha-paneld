@@ -16,9 +16,30 @@ It also replaces fragmented vendor software with one free, open-source way to op
 It is built for panel-class Android, **not** personal phones. Device support is defined through human-readable [runtime panel profiles](docs/profiles/README.md): ha-paneld includes profiles for Sonoff NSPanel Pro, Tuya TPA10, Electron WF1589T, ZHICAI SMT1019, Smatek S9E, the ZX-SMT156/RK3566_T, and the Shelly Wall Display family, while owners and hardware vendors can create, edit, validate, import and share profiles for other panels without rebuilding the app. Use ha-paneld's **built-in renderer** for the integrated dashboard and entity filtering, or the official [HA Companion app](https://github.com/home-assistant/android) when the panel needs Assist voice control or native notifications.
 
 <picture>
-  <source media="(prefers-color-scheme: light)" srcset="docs/img/config-ui-light.png">
-  <img src="docs/img/config-ui-dark.png" alt="ha-paneld's on-panel configuration page — responsive cards for panel info, capabilities, live performance and configuration">
+  <source media="(prefers-color-scheme: light)" srcset="docs/img/ui-hero-light.png">
+  <img src="docs/img/ui-hero-dark.png" alt="ha-paneld Dashboard showing live panel state, performance and display controls">
 </picture>
+
+**One control surface for every panel.** See live state, tune behaviour, manage software, keep the dashboard lean and diagnose problems without hunting through vendor apps or per-device configuration.
+
+<details>
+<summary><strong>More screenshots from the ha-paneld user interface</strong></summary>
+
+| Dashboard | Configure |
+|---|---|
+| <a href="docs/img/ui-dashboard-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="docs/img/ui-dashboard-light.png"><img src="docs/img/ui-dashboard-dark.png" alt="Dashboard tab" width="420"></picture></a> | <a href="docs/img/ui-configure-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="docs/img/ui-configure-light.png"><img src="docs/img/ui-configure-dark.png" alt="Configure tab" width="420"></picture></a> |
+
+| Entities | Install |
+|---|---|
+| <a href="docs/img/ui-entities-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="docs/img/ui-entities-light.png"><img src="docs/img/ui-entities-dark.png" alt="Entities tab" width="420"></picture></a> | <a href="docs/img/ui-install-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="docs/img/ui-install-light.png"><img src="docs/img/ui-install-dark.png" alt="Install tab" width="420"></picture></a> |
+
+| Profile | Logs |
+|---|---|
+| <a href="docs/img/ui-profile-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="docs/img/ui-profile-light.png"><img src="docs/img/ui-profile-dark.png" alt="Profile tab" width="420"></picture></a> | <a href="docs/img/ui-logs-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="docs/img/ui-logs-light.png"><img src="docs/img/ui-logs-dark.png" alt="Logs tab" width="420"></picture></a> |
+
+</details>
+
+<br>
 
 **A slow dashboard does not necessarily mean the panel is too weak.** ha-paneld can reduce the stream of Home Assistant state updates before they reach its built-in renderer, while its performance tools show dashboard response time, unexpected reloads, CPU, GPU, clock speed, temperature and the busiest processes. See [docs/performance.md](docs/performance.md) and the [performance comparison](docs/hardware/README.md#performance-comparison--practical-deployment).
 
@@ -130,9 +151,7 @@ ha-paneld needs no system-signed install. Standard-Android capabilities (brightn
 
 ## Status & roadmap
 
-**Latest stable release — 0.9.4:** built-in dashboard diagnostics now break interaction delay into input, handler and presentation time, correlate it with Home Assistant state traffic, main-thread blocking and renderer instability, retain seven days of content-free history, and report a conservative likely cause. The one-line installer also starts the app during setup so it can identify the active hardware profile and verify the panel-specific requirements in the same installation pass. Full notes are in [CHANGELOG.md](CHANGELOG.md).
-
-**Release candidate — 0.9.5-rc2 (under test):** Home Assistant sign-in can be completed from an administrator's browser, existing Home Assistant light history can seed adaptive brightness, and kiosk startup, wake-on-wave learning and validation have been refined. This label describes the current candidate in source; it is not a published release until the matching GitHub prerelease exists.
+**Latest release — 0.9.5:** panels can now be signed in to Home Assistant from a remote browser, auto-brightness learns each panel’s normal environment from local and Home Assistant light history, and Hardened security mode protects sensitive remote maintenance with physical approval on the panel. Full notes are in [CHANGELOG.md](CHANGELOG.md).
 
 **Where it's heading** — the near-term direction remains reliable provisioning and operation across more than one panel. Two larger stretch candidates are being evaluated for the initial v1.0 release: fleet management and Voice Assistant support; neither is committed. Other planned work includes MQTT TLS for self-signed brokers, an on-device scheduler, deeper per-card performance attribution, and continued iteration on the HTTP UI. The full curated list is in **[docs/roadmap.md](docs/roadmap.md)**.
 
