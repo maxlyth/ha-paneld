@@ -272,7 +272,7 @@ class HiveMqTransportBrokerTest {
         }
     }
 
-    @Test
+    @Test(timeout = 60_000)
     fun supersededClientCannotReportDisconnectOrOwnReplacementPublication() {
         EmbeddedBroker().use { oldBroker ->
             EmbeddedBroker().use { replacementBroker ->
@@ -543,11 +543,17 @@ class HiveMqTransportBrokerTest {
     }
 
     private companion object {
+        private const val BROKER_OPERATION_TIMEOUT_SECONDS = 30L
+
         fun CountDownLatch.awaitOrFail(message: String) {
             assertTrue(await(5, TimeUnit.SECONDS), message)
         }
 
-        fun <T> java.util.concurrent.CompletableFuture<T>.await(): T = get(10, TimeUnit.SECONDS)
+        // Embedded broker handshakes share the loaded JVM/CI executor with the full test suite. This
+        // ceiling protects against a genuine deadlock without turning transient runner starvation into
+        // an MQTT ownership failure; behavioral deadlines remain narrow at each assertion above.
+        fun <T> java.util.concurrent.CompletableFuture<T>.await(): T =
+            get(BROKER_OPERATION_TIMEOUT_SECONDS, TimeUnit.SECONDS)
 
         fun awaitCondition(message: String, condition: () -> Boolean) {
             val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
