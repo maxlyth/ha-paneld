@@ -15,7 +15,7 @@ Engineered for weeks-long unattended uptime:
 - A handshake watchdog reloads a dashboard that loaded but never actually connected, with backing-off retries behind a clean "Reconnecting…" screen instead of a browser error page.
 - Memory is shed by invisible reloads at screen-off.
 - Renderer crashes are contained and rate-limited — a reliably-crashing page falls back to the admin launcher rather than churning all night.
-- Terminally rejected login settings latch and show fix-it instructions on the panel instead of retrying forever. To borrow a signed-in Companion login again, clear the Home Assistant server URL and save; otherwise enter a new long-lived access token from the Home Assistant user profile.
+- Terminally rejected login settings latch and show Browser sign-in instructions on the panel instead of retrying forever.
 
 Also: instant pull-to-refresh (drag down from the very top edge of the screen; double-pull for a full reload), optional idle return-to-home, an edge-to-edge fullscreen mode (swipe from a screen edge to reveal the bars), camera-stream autoplay, and private-CA HTTPS (user-installed CAs are trusted). On panels using ha-paneld's software navigation bar, **Dashboard** brings the configured renderer to the foreground without reloading it; **Reload** remains a separate recovery action.
 
@@ -23,9 +23,9 @@ The renderer sizes the dashboard the same way the Home Assistant Companion app d
 
 ## Turning it on
 
-**On a rooted panel already running a signed-in HA Companion** — nothing to type. In the `:8888` **Configure** tab, set **Dashboard app → Built-in renderer**. It borrows the Companion's sign-in automatically (URL + tokens); the Companion keeps its own login, so switching back is the same picker change.
+Open the panel's `:8888` **Configure** page. Under **Home Assistant connection**, enter the Home Assistant URL and choose **Browser sign-in**. The authorization happens in the administrator's browser, so credentials do not need to be typed on the panel. Once connected, select **Built-in renderer** as the Dashboard app.
 
-**On a fresh or Companion-less panel** — the simplest path is the panel's `:8888` **Configure** page. Select **Built-in renderer**, then enter the Home Assistant URL and a long-lived access token in the Dashboard card.
+Existing rooted installations that already imported a signed-in Companion session remain supported as a compatibility path. New installations should use Browser sign-in.
 
 For unattended setup from an admin machine, replace the example panel address and Home Assistant details in this checkout-free command (see [Provisioning](provisioning.md)):
 
@@ -38,7 +38,7 @@ curl -fsSL https://raw.githubusercontent.com/maxlyth/ha-paneld/main/scripts/inst
 
 The password never reaches the panel — the login happens on your machine and the panel holds a revocable refresh token. A long-lived access token works too: `--ha-token-file ha-token.txt` instead of `--ha-user/--ha-pass-file`. See [Provisioning and fleet updates](provisioning.md) for securely creating credential files and the trusted-LAN transport boundary. Literal `--ha-pass` and `--ha-token` values remain compatibility options, but expose the value in the original shell command and process list.
 
-Either way you can also set the URL and token by hand in the Configure tab's Dashboard card.
+For automated provisioning, a token or username/password flow remains available as an advanced fallback. Interactive installations should use Browser sign-in.
 
 ## Experimental entity filter
 
@@ -135,4 +135,4 @@ Set **Dashboard app** back to the HA Companion (or blank it) in the Configure ta
 ## Requirements and limits
 
 - A **system WebView** new enough to render the HA frontend. ha-paneld can auto-install a known-good WebView on rooted panels; a too-old WebView shows a health warning in the `:8888` UI.
-- Provisioning a **fresh** sign-in (username/password or token) works on any panel; the **automatic Companion borrow** needs root and an installed, signed-in Companion.
+- Browser sign-in and advanced non-interactive provisioning work without root. Legacy Companion-session import requires root and remains only for existing installations.

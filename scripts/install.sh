@@ -239,7 +239,7 @@ if [ -z "$RELEASE_TAG" ]; then
     release_record="$(printf '%s' "$release_json" | tr -d '\r\n' | \
       sed 's#{[[:space:]]*"url":[[:space:]]*"https://api.github.com/repos/maxlyth/ha-paneld/releases/\([0-9][0-9]*\)"#\
 &#g' | \
-      awk '/"draft":[[:space:]]*false/ && /"prerelease":[[:space:]]*true/ { print; exit }')"
+      awk '/"draft":[[:space:]]*false/ && /"prerelease":[[:space:]]*true/ && !found { print; found=1 }')"
   else
     release_record="$release_json"
   fi

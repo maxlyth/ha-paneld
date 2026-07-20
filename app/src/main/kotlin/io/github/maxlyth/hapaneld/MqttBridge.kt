@@ -87,21 +87,34 @@ internal fun liveSettingApplyResult(
 internal fun hiddenReadOnlyStateTopic(key: String, panel: String): String? =
     SettingsRegistry.spec(key)?.ha?.takeIf { it.readOnly }?.stateTopic(panel)
 
-internal enum class RangedProximityRefresh { SKIPPED, ELIGIBLE, INELIGIBLE }
+private val WIFI_DIAGNOSTIC_KEYS = setOf("diag_wifi_ssid", "diag_wifi_rssi")
+
+internal fun diagnosticObservation(
+    key: String,
+    exposed: Boolean,
+    value: String?,
+): io.github.maxlyth.hapaneld.mqtt.StateConverger.Observation = when {
+    key in WIFI_DIAGNOSTIC_KEYS && (!exposed || value == null) ->
+        io.github.maxlyth.hapaneld.mqtt.StateConverger.Observation.Unavailable
+    !exposed -> io.github.maxlyth.hapaneld.mqtt.StateConverger.Observation.Unknown
+    else -> io.github.maxlyth.hapaneld.mqtt.StateConverger.Observation.Known(value ?: "unknown")
+}
+
+internal enum class LearnedProximityRefresh { SKIPPED, ELIGIBLE, INELIGIBLE }
 
 /** A mode-change signal carries no truth. The admitted bridge generation samples the service-owned
  * authority immediately before it clears stale state and schedules fresh discovery. */
-internal fun refreshRangedProximityFromAuthority(
+internal fun refreshLearnedProximityFromAuthority(
     admitted: Boolean,
     eligible: () -> Boolean,
     clearIneligibleState: () -> Unit,
     reannounce: () -> Unit,
-): RangedProximityRefresh {
-    if (!admitted) return RangedProximityRefresh.SKIPPED
+): LearnedProximityRefresh {
+    if (!admitted) return LearnedProximityRefresh.SKIPPED
     val current = runCatching(eligible).getOrDefault(false)
     if (!current) clearIneligibleState()
     reannounce()
-    return if (current) RangedProximityRefresh.ELIGIBLE else RangedProximityRefresh.INELIGIBLE
+    return if (current) LearnedProximityRefresh.ELIGIBLE else LearnedProximityRefresh.INELIGIBLE
 }
 
 /** Sticky retirement evidence. Mutation owners must drain synchronously before shared hardware can be
@@ -649,7 +662,7 @@ internal class MqttBridge(
     private val runtimeMqttUser: String = config.mqttUser,
     private val runtimeMqttPassword: String = config.mqttPassword,
     private val wifiDiagnostics: (WifiDiagnosticDemand) -> WifiDiagnosticSnapshot = { WifiDiagnosticSnapshot() },
-    private val rangedProximityEligibility: () -> Boolean = { false },
+    private val learnedProximityEligibility: () -> Boolean = { false },
 ) {
     private enum class CommandKind { LATEST, ACTION }
 
@@ -996,7 +1009,7 @@ internal class MqttBridge(
             } ?: unknown
         }
         channel("wake_on_wave", stateWakeOnWave) {
-            if (rangedProximityEligible()) known(if (config.wakeOnWave) "ON" else "OFF") else unknown
+            if (hasProximity) known(if (config.wakeOnWave) "ON" else "OFF") else unknown
         }
         channel("touch_sound", stateTouchSound) { known(if (touchSound.isEnabled()) "ON" else "OFF") }
         channel("watchdog", stateWatchdog) { known(if (config.watchdogEnabled) "ON" else "OFF") }
@@ -1016,7 +1029,7 @@ internal class MqttBridge(
             else unknown
         }
         channel("proximity", stateProximity) {
-            if (rangedProximityEligible() && config.haExposed("proximity", true)) {
+            if (learnedProximityEligible() && config.haExposed("proximity", true)) {
                 proximityPublication.near?.let { known(if (it) "ON" else "OFF") } ?: unknown
             } else unknown
         }
@@ -1025,7 +1038,7 @@ internal class MqttBridge(
             stateProximityLevel,
             equivalent = io.github.maxlyth.hapaneld.mqtt.StateConverger.numericDeadband(4.0),
         ) {
-            if (rangedProximityEligible() && config.haExposed("proximity_level", true)) {
+            if (learnedProximityEligible() && config.haExposed("proximity_level", true)) {
                 proximityPublication.level?.let { known(it.toString()) } ?: unknown
             } else unknown
         }
@@ -1053,7 +1066,9 @@ internal class MqttBridge(
             equivalent = diagDeadband[key]?.let(io.github.maxlyth.hapaneld.mqtt.StateConverger::numericDeadband)
                 ?: String::equals,
         ) {
-            if (!config.haExposed(key, false)) unknown else known(diagValue(key) ?: "unknown")
+            // Transport-dependent Wi-Fi discovery clears its retained state when unavailable.
+            // Do not immediately recreate a retained literal "unknown" behind the tombstone.
+            diagnosticObservation(key, config.haExposed(key, false), diagValue(key))
         }
         return c
     }
@@ -1488,7 +1503,7 @@ internal class MqttBridge(
                 }
             }
             proximityPublication.serialized {
-                val proximityAvailable = rangedProximityEligible() && available == true
+                val proximityAvailable = learnedProximityEligible() && available == true
                 if (proximityAvailable) {
                     // Current retained states must precede the entity-specific online edge. These are the
                     // first state-converger admissions on this connection, so the bounded outbox has room.
@@ -1639,6 +1654,13 @@ internal class MqttBridge(
     internal fun refreshDiscoveryAddress() {
         val current = configUrl()?.takeIf(String::isNotBlank)
         if (!shouldRepublishDiscoveryAddress(isConnected(), lastPublishedConfigUrl, current)) return
+        requestReAnnounce()
+    }
+
+    /** Re-evaluate transport-dependent discovery after Android changes the default network. */
+    internal fun refreshNetworkState() {
+        if (!isConnected()) return
+        discoveryCapabilities.invalidate()
         requestReAnnounce()
     }
 
@@ -1965,8 +1987,8 @@ internal class MqttBridge(
     }
 
     private fun handleWakeOnWave(payload: String) {
-        if (!rangedProximityEligible()) {
-            Log.w(TAG, "ignoring wake_on_wave command without ranged proximity eligibility")
+        if (!hasProximity) {
+            Log.w(TAG, "ignoring wake_on_wave command without a proximity source")
             return
         }
         val on = payload.trim().equals("ON", ignoreCase = true)
@@ -2406,7 +2428,7 @@ internal class MqttBridge(
         val nextNear = near
         lifecycle.runIfOpen(Unit) publish@{
             proximityPublication.serialized proximity@{
-                if (!rangedProximityEligible()) {
+                if (!learnedProximityEligible()) {
                     clearProximityStateLocked()
                     return@proximity
                 }
@@ -2435,23 +2457,22 @@ internal class MqttBridge(
     }
 
     /** Apply an empirical mode-change notification without accepting truth from its producer. */
-    internal fun notifyRangedProximityChanged() {
+    internal fun notifyLearnedProximityChanged() {
         lifecycle.runIfOpen(Unit) {
             discoveryCapabilities.invalidate()
-            refreshRangedProximityFromAuthority(
+            refreshLearnedProximityFromAuthority(
                 admitted = true,
-                eligible = rangedProximityEligibility,
+                eligible = learnedProximityEligibility,
                 clearIneligibleState = {
                     clearProximityState(force = true)
-                    publish(stateWakeOnWave, "", retain = true)
                 },
                 reannounce = ::requestReAnnounce,
             )
         }
     }
 
-    private fun rangedProximityEligible(): Boolean =
-        runCatching(rangedProximityEligibility).getOrDefault(false)
+    private fun learnedProximityEligible(): Boolean =
+        runCatching(learnedProximityEligibility).getOrDefault(false)
 
     private fun clearProximityState(force: Boolean = false) {
         proximityPublication.serialized { clearProximityStateLocked(force) }
@@ -2596,7 +2617,13 @@ internal class MqttBridge(
             // Read-only sensor states are retained unless explicitly declared otherwise. Removing only
             // discovery would leave sensitive values such as an SSID stored on the broker after opt-out.
             hiddenReadOnlyStateTopic(key, panel)?.let { stateTopic ->
-                publish(stateTopic, "", retain = true)
+                if (key in WIFI_DIAGNOSTIC_KEYS) {
+                    // The converger serializes this clear behind any older in-flight value for the same
+                    // topic, so a delayed SSID/RSSI acknowledgement cannot win after the tombstone.
+                    stateConverger.reconcile(key, force = true)
+                } else {
+                    publish(stateTopic, "", retain = true)
+                }
             }
         }
     }
@@ -2697,13 +2724,13 @@ internal class MqttBridge(
         exposable("illuminance", "sensor", "${panel}_illuminance", {
             sensorDiscovery("illuminance")
         }, availableOverride = hasLight) { stateConverger.reconcile("illuminance", force = true) }
-        val rangedProximity = capabilitySnapshot?.hasRangedProximity == true
+        val learnedProximity = capabilitySnapshot?.hasLearnedProximity == true
         exposable("proximity", "binary_sensor", "${panel}_proximity", {
             sensorDiscovery("proximity", proximityAvail)
-        }, availableOverride = rangedProximity) { stateConverger.reconcile("proximity", force = true) }
+        }, availableOverride = learnedProximity) { stateConverger.reconcile("proximity", force = true) }
         exposable("proximity_level", "sensor", "${panel}_proximity_level", {
             sensorDiscovery("proximity_level", proximityAvail)
-        }, availableOverride = rangedProximity) { stateConverger.reconcile("proximity_level", force = true) }
+        }, availableOverride = learnedProximity) { stateConverger.reconcile("proximity_level", force = true) }
         // SensorManager climate. On CHT8305 panels (TPA10) these are suppressed in favour of the
         // daemon-read room_temp/room_humidity, so publish an EMPTY config (tombstone) instead of
         // skipping — a panel upgrading from a version that DID expose them then sheds the now-duplicate,

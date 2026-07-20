@@ -49,8 +49,24 @@ class AdminLauncherActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        KioskAdminUi.setVisible(this, true)
         supportActionBar?.hide()
         setContentView(buildUi())
+    }
+
+    override fun onStart() {
+        super.onStart()
+        KioskAdminUi.setVisible(this, true)
+    }
+
+    override fun onStop() {
+        KioskAdminUi.setVisible(this, false)
+        super.onStop()
+    }
+
+    override fun onDestroy() {
+        KioskAdminUi.setVisible(this, false)
+        super.onDestroy()
     }
 
     // Rebuild the drawer each time it's shown — the installed-app set and night mode can change while
@@ -120,7 +136,9 @@ class AdminLauncherActivity : AppCompatActivity() {
         })
         // ha-paneld's own front-door screen (wordmark + config URL/QR + dashboard/config buttons).
         add(Tile("ha-paneld", appIcon(packageName), "cfg") {
-            startSafely(Intent(this@AdminLauncherActivity, MainActivity::class.java))
+            startSafely(Intent(this@AdminLauncherActivity, MainActivity::class.java).apply {
+                putExtra(MainActivity.EXTRA_EXPLICIT_ADMIN_ENTRY, true)
+            })
         })
     }
 

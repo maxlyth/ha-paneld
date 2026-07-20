@@ -10,7 +10,8 @@
 #       [--mqtt-pass-file FILE]         # preferred: keep the password out of process arguments
 #       [--log-host HOST] [--log-port N] [--log-proto syslog|http]   # forward logcat to an aggregator
 #       [--shizuku]                    # non-root enhanced access; still needs local approval
-#   Built-in WebView renderer (experimental — no HA Companion / kiosk app needed):
+#   Built-in WebView renderer (experimental — no HA Companion / kiosk app needed). For a normal
+#   install, follow the Browser sign-in URL printed after verification. Advanced non-interactive use:
 #       [--ha-url https://homeassistant.local:8123] [--builtin] \
 #       [--ha-token <LLAT>]              # simple: a long-lived access token (a standing credential), OR
 #       [--ha-token-file FILE]            # preferred token input: one private text file, OR
@@ -109,7 +110,7 @@ RELEASE_HELPER_BUILD_ID=""
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HELPER_DIST_DIR="${HAPANELD_HELPER_DIST_DIR:-$SCRIPT_DIR/../helper/dist}"
 A11Y="$PKG/.input.PanelAccessibilityService"
-APK=""; APK_RELEASE_TAG=""; PANEL_ID=""; MQTT=""; MQTT_USER=""; MQTT_PASS=""; VERIFY_ONLY=0; LATEST=0; PRERELEASE=0; FORCE=0; PERSIST_ADB=0; STRIP_VENDOR=0; SHIZUKU=0; ALLOW_UNSIGNED_HELPER=0; TOINSTALL_VER=""; VERIFY_DIRECT_GRANTS=0
+APK=""; APK_RELEASE_TAG=""; PANEL_ID=""; MQTT=""; MQTT_USER=""; MQTT_PASS=""; VERIFY_ONLY=0; LATEST=0; PRERELEASE=0; FORCE=0; PERSIST_ADB=0; STRIP_VENDOR=0; SHIZUKU=0; ALLOW_UNSIGNED_HELPER=0; TOINSTALL_VER=""; VERIFY_DIRECT_GRANTS=0; HA_OAUTH_CONFIGURED=0
 LOG_HOST=""; LOG_PORT=""; LOG_PROTO=""; LOG_ENABLE=""
 EXPORT_FILE=""; RESTORE_FILE=""; RESTORE_MODE=""
 HA_URL=""; HA_TOKEN=""; HA_USER=""; HA_PASS=""; HA_REFRESH=""; HA_EXPIRY=""; BUILTIN=0
@@ -291,9 +292,9 @@ if { [ -n "$HA_USER" ] || [ -n "$HA_TOKEN" ]; } && [ -z "$HA_URL" ]; then
   echo "${RED}✗ --ha-user/--ha-pass and --ha-token require --ha-url.${X}" >&2
   exit 2
 fi
-if [ "$BUILTIN" = 1 ] && [ -n "$HA_URL" ] && [ -z "$HA_TOKEN" ] && [ -z "$HA_USER" ]; then
-  echo "${RED}✗ --builtin with --ha-url also needs --ha-token or --ha-user/--ha-pass.${X}" >&2
-  echo "   Use bare --builtin only when intentionally borrowing an existing signed-in Home Assistant Companion login." >&2
+if [ "$BUILTIN" = 1 ] && [ -z "$HA_TOKEN" ] && [ -z "$HA_USER" ]; then
+  echo "${RED}✗ --builtin needs Home Assistant credentials during non-interactive provisioning.${X}" >&2
+  echo "   Run without --builtin, then open the printed Browser sign-in URL and select the Built-in renderer." >&2
   exit 2
 fi
 
@@ -459,6 +460,11 @@ verify() {
     fi
   fi
   cfg="$(curl -fsS --max-time 3 "$URL/api/v1/config" 2>/dev/null || true)"
+  if printf '%s' "$cfg" | grep -Eq '"ha_auth"[[:space:]]*:[[:space:]]*\{[^}]*"oauth"[[:space:]]*:[[:space:]]*true'; then
+    HA_OAUTH_CONFIGURED=1
+  else
+    HA_OAUTH_CONFIGURED=0
+  fi
   chk() { if printf '%s' "$2" | grep -q "$3"; then echo "   ${GRN}✓${X} $1"; else echo "   ${RED}✗ $1${X}"; rc=1; fi; }
   chk "HTTP server reachable"  "$health" "ha-paneld"
   if [ "$VERIFY_DIRECT_GRANTS" = 1 ]; then
@@ -793,7 +799,7 @@ download_latest() {
     record="$(printf '%s' "$json" | tr -d '\r\n' | \
       sed 's#{[[:space:]]*"url":[[:space:]]*"https://api.github.com/repos/maxlyth/ha-paneld/releases/\([0-9][0-9]*\)"#\
 &#g' | \
-      awk '/"draft":[[:space:]]*false/ && /"prerelease":[[:space:]]*true/ { print; exit }')"
+      awk '/"draft":[[:space:]]*false/ && /"prerelease":[[:space:]]*true/ && !found { print; found=1 }')"
   else
     record="$json"
   fi
@@ -3210,7 +3216,12 @@ fi
 echo
 VERIFY_DIRECT_GRANTS=1
 if verify; then
-  [ "$PROVISION_FAILED" = 0 ] && echo "${GRN}${B}✅ provisioned and verified${X} — ${B}$URL/${X}"
+  if [ "$PROVISION_FAILED" = 0 ]; then
+    echo "${GRN}${B}✅ provisioned and verified${X} — ${B}$URL/${X}"
+    if [ "$HA_OAUTH_CONFIGURED" != 1 ]; then
+      echo "   ${CYN}${B}Next: connect Home Assistant in your browser${X} — ${B}$URL/configure#cfg-ha-oauth${X}"
+    fi
+  fi
 else
   PROVISION_FAILED=1
 fi

@@ -122,6 +122,21 @@ class ConfigPostBodyTest {
         }
     }
 
+    @Test fun `automatic brightness minimum preserves the visible floor at config admission`() {
+        listOf("4", "95").forEach { value ->
+            val result = normalizeConfigPostParameters(Parameters.build {
+                append("auto_brightness_minimum_percent", value)
+            }) as ConfigPostParameters.Ok
+            assertEquals(value, result.values["auto_brightness_minimum_percent"])
+        }
+        listOf("3", "96").forEach { value ->
+            val result = normalizeConfigPostParameters(Parameters.build {
+                append("auto_brightness_minimum_percent", value)
+            })
+            assertTrue(value, result is ConfigPostParameters.Bad)
+        }
+    }
+
     private fun io.ktor.server.routing.Route.installConfigReader(path: String) {
         post(path) {
             val parameters = receiveBoundedConfigParameters(call, TEST_LIMIT) ?: return@post

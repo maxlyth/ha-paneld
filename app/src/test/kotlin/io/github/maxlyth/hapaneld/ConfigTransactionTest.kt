@@ -15,6 +15,25 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 class ConfigTransactionTest {
+    @Test fun launchScreenVersionAcknowledgementIsExactAndDurable() {
+        val prefs = fakePreferences()
+        val config = Config(prefs.instance)
+
+        assertNull(config.lastLaunchScreenVersionCode)
+        assertTrue(config.commitLaunchScreenVersionShown(323L))
+        assertEquals(323L, Config(prefs.instance).lastLaunchScreenVersionCode)
+        assertTrue(config.commitLaunchScreenVersionShown(322L))
+        assertEquals(322L, Config(prefs.instance).lastLaunchScreenVersionCode)
+    }
+
+    @Test fun failedLaunchScreenAcknowledgementRemainsUnseen() {
+        val prefs = fakePreferences(commitSucceeds = false)
+        val config = Config(prefs.instance)
+
+        assertFalse(config.commitLaunchScreenVersionShown(323L))
+        assertNull(config.lastLaunchScreenVersionCode)
+    }
+
     @Test fun automaticBrightnessMinimumDefaultsAndPersistsWithinPublicBounds() {
         val prefs = fakePreferences()
         val config = Config(prefs.instance)
@@ -1253,6 +1272,18 @@ class ConfigTransactionTest {
         assertEquals("admin-access", prefs.values["ha_token"])
         assertEquals("https://other.local", prefs.values["ha_url"])
         assertEquals(5678L, prefs.values["ha_token_expiry"])
+    }
+
+    @Test fun newestBrowserLoginSupersedesAnAlreadyClaimedAttempt() {
+        val config = Config(fakePreferences(initial = mapOf("ha_url" to "https://ha.local")).instance)
+
+        val first = config.beginHaOAuthAttempt()
+        assertTrue(config.isHaOAuthAttemptCurrent(first.epoch))
+        val second = config.beginHaOAuthAttempt()
+
+        assertFalse(config.isHaOAuthAttemptCurrent(first.epoch))
+        assertTrue(config.isHaOAuthAttemptCurrent(second.epoch))
+        assertEquals(first.owner, second.owner)
     }
 
     @Test fun separateConfigWrappersShareOneProcessWideTransactionLock() {

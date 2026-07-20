@@ -21,6 +21,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
+import java.net.URLEncoder
+import java.time.Instant
 
 internal data class HaApiSession(
     val baseUrl: String,
@@ -72,11 +74,26 @@ internal interface HaAmbientTransport {
     suspend fun state(baseUrl: String, accessToken: String, entityId: String): JSONObject?
     suspend fun states(baseUrl: String, accessToken: String): JSONArray
     suspend fun config(baseUrl: String, accessToken: String): JSONObject
+    suspend fun history(
+        baseUrl: String,
+        accessToken: String,
+        entityId: String,
+        startEpochMs: Long,
+        endEpochMs: Long,
+    ): JSONArray = throw UnsupportedOperationException("history is unavailable")
 }
 
 internal class HaAuthenticationException(message: String) : RuntimeException(message)
 
 internal class HaProtocolException(message: String) : RuntimeException(message)
+
+internal fun haHistoryPath(entityId: String, startEpochMs: Long, endEpochMs: Long): String {
+    validateEntityId(entityId)
+    val start = Instant.ofEpochMilli(startEpochMs)
+    val end = URLEncoder.encode(Instant.ofEpochMilli(endEpochMs).toString(), Charsets.UTF_8.name())
+    val entity = URLEncoder.encode(entityId, Charsets.UTF_8.name())
+    return "/api/history/period/$start?end_time=$end&filter_entity_id=$entity&minimal_response&no_attributes&significant_changes_only=0"
+}
 
 internal class KtorHaAmbientTransport : HaAmbientTransport {
     override suspend fun subscribe(
@@ -106,23 +123,9 @@ internal class KtorHaAmbientTransport : HaAmbientTransport {
                 }
             }
 
-            val command = HaAmbientLuxProtocol.subscribeTrigger(entityId, SUBSCRIPTION_ID)
+            val command = HaAmbientLuxProtocol.subscribeEntities(entityId, SUBSCRIPTION_ID)
             active.send(Frame.Text(command.toString()))
-            withTimeout(SUBSCRIBE_TIMEOUT_MS) {
-                repeat(MAX_HANDSHAKE_FRAMES) {
-                    val response = active.readJson()
-                    if (response.optString("type") == "result" && response.optInt("id") == SUBSCRIPTION_ID) {
-                        if (!response.optBoolean("success")) {
-                            val message = response.optJSONObject("error")?.optString("message")
-                                ?.take(MAX_ERROR_CHARS).orEmpty()
-                            throw HaProtocolException(message.ifBlank { "Home Assistant rejected the state trigger" })
-                        }
-                        return@withTimeout
-                    }
-                }
-                throw HaProtocolException("Home Assistant did not confirm the state trigger")
-            }
-            KtorHaTriggerConnection(client, active)
+            KtorHaTriggerConnection(client, active, HaCompressedEntityProjection(entityId))
         } catch (error: Throwable) {
             runCatching { socket?.close() }
             client.close()
@@ -140,17 +143,29 @@ internal class KtorHaAmbientTransport : HaAmbientTransport {
     override suspend fun config(baseUrl: String, accessToken: String): JSONObject =
         JSONObject(checkNotNull(restGet(baseUrl, accessToken, "/api/config", MAX_CONFIG_BYTES)))
 
+    override suspend fun history(
+        baseUrl: String,
+        accessToken: String,
+        entityId: String,
+        startEpochMs: Long,
+        endEpochMs: Long,
+    ): JSONArray {
+        val path = haHistoryPath(entityId, startEpochMs, endEpochMs)
+        return JSONArray(checkNotNull(restGet(baseUrl, accessToken, path, MAX_HISTORY_BYTES, readTimeoutMs = HISTORY_READ_TIMEOUT_MS)))
+    }
+
     private suspend fun restGet(
         baseUrl: String,
         accessToken: String,
         path: String,
         maxBytes: Long,
         missingIsNull: Boolean = false,
+        readTimeoutMs: Int = HTTP_READ_TIMEOUT_MS,
     ): String? = withContext(Dispatchers.IO) {
         val connection = (URL(baseUrl.trim().trimEnd('/') + path).openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = HTTP_CONNECT_TIMEOUT_MS
-            readTimeout = HTTP_READ_TIMEOUT_MS
+            readTimeout = readTimeoutMs
             setRequestProperty("Authorization", "Bearer $accessToken")
             setRequestProperty("Accept", "application/json")
         }
@@ -173,6 +188,7 @@ internal class KtorHaAmbientTransport : HaAmbientTransport {
     private class KtorHaTriggerConnection(
         private val client: HttpClient,
         private val socket: DefaultClientWebSocketSession,
+        private val projection: HaCompressedEntityProjection,
     ) : HaTriggerConnection {
         override suspend fun receive(): HaSocketMessage {
             while (true) {
@@ -180,8 +196,12 @@ internal class KtorHaAmbientTransport : HaAmbientTransport {
                 if (frame !is Frame.Text) continue
                 val json = JSONObject(frame.readText())
                 return when (json.optString("type")) {
-                    "event" -> HaAmbientLuxProtocol.triggerState(json)?.let(HaSocketMessage::State)
-                        ?: HaSocketMessage.SourceMissing
+                    "event" -> projection.apply(json.optJSONObject("event") ?: JSONObject())
+                    "result" -> if (json.optBoolean("success")) HaSocketMessage.Other else {
+                        val message = json.optJSONObject("error")?.optString("message")
+                            ?.take(MAX_ERROR_CHARS).orEmpty()
+                        throw HaProtocolException(message.ifBlank { "Home Assistant rejected the entity subscription" })
+                    }
                     "pong" -> HaSocketMessage.Pong(json.optInt("id", -1))
                     else -> HaSocketMessage.Other
                 }
@@ -207,16 +227,16 @@ internal class KtorHaAmbientTransport : HaAmbientTransport {
 
     private companion object {
         const val SUBSCRIPTION_ID = 1
-        const val MAX_HANDSHAKE_FRAMES = 8
         const val MAX_ERROR_CHARS = 240
         const val CONNECT_TIMEOUT_MS = 15_000L
         const val AUTH_TIMEOUT_MS = 15_000L
-        const val SUBSCRIBE_TIMEOUT_MS = 15_000L
         const val HTTP_CONNECT_TIMEOUT_MS = 8_000
         const val HTTP_READ_TIMEOUT_MS = 8_000
         const val MAX_WS_FRAME_BYTES = 2L * 1024L * 1024L
         const val MAX_STATE_BYTES = 256L * 1024L
         const val MAX_CONFIG_BYTES = 256L * 1024L
         const val MAX_STATES_BYTES = 64L * 1024L * 1024L
+        const val MAX_HISTORY_BYTES = 4L * 1024L * 1024L
+        const val HISTORY_READ_TIMEOUT_MS = 15_000
     }
 }

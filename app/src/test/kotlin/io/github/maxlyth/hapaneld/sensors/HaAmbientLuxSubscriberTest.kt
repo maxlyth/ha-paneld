@@ -76,6 +76,80 @@ class HaAmbientLuxSubscriberTest {
         subscriber.close()
     }
 
+    @Test fun `history bootstrap retries authentication once and retains the stable owner`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val transport = FakeTransport(FakeConnection()).apply { rejectHistoryCall = 3 }
+        val forces = mutableListOf<Boolean>()
+        val subscriber = HaAmbientLuxSubscriber(
+            scope = this,
+            auth = HaApiSessionProvider { force ->
+                forces += force
+                HaApiSession("https://ha.example", "token-${forces.size}", owner = OWNER)
+            },
+            transport = transport,
+            onSample = {},
+            onStatus = {},
+            onCandidates = {},
+            workerDispatcher = dispatcher,
+            epochMillis = { java.time.Instant.parse("2026-07-19T10:02:30Z").toEpochMilli() },
+        )
+
+        val seed = subscriber.loadHistory(ENTITY)
+
+        assertEquals(listOf(false, true), forces)
+        assertEquals(17, transport.historyCount)
+        val chunkMs = 12L * 60L * 60L * 1_000L
+        val end = java.time.Instant.parse("2026-07-19T10:02:00Z").toEpochMilli()
+        val start = end - 7L * 24L * 60L * 60L * 1_000L
+        val expectedRanges = (0 until 14).map { index ->
+            start + index * chunkMs to start + (index + 1) * chunkMs
+        }
+        assertEquals(expectedRanges, transport.historyRanges.takeLast(14))
+        assertEquals(OWNER, seed.authOwner)
+        assertEquals(ENTITY, seed.entityId)
+        assertEquals(7L * 24L * 60L, seed.minutes.size.toLong())
+        subscriber.close()
+    }
+
+    @Test fun `history chunks are contiguous and preserve an unavailable boundary gap`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val transport = FakeTransport(FakeConnection())
+        val now = java.time.Instant.parse("2026-07-19T10:02:30Z").toEpochMilli()
+        val end = now / 60_000L * 60_000L
+        val start = end - 7L * 24L * 60L * 60L * 1_000L
+        val chunkMs = 12L * 60L * 60L * 1_000L
+        val unavailableMinute = (start + chunkMs) / 60_000L
+        transport.historyResponse = { entityId, chunkStart, _ ->
+            val series = JSONArray()
+            if (chunkStart == start + chunkMs) {
+                series.put(historyState(entityId, "unavailable", chunkStart))
+                series.put(historyState(entityId, "20", chunkStart + 60_000L))
+            } else {
+                series.put(historyState(entityId, "10", chunkStart))
+            }
+            JSONArray().put(series)
+        }
+        val subscriber = HaAmbientLuxSubscriber(
+            scope = this,
+            auth = HaApiSessionProvider { HaApiSession("https://ha.example", "token", owner = OWNER) },
+            transport = transport,
+            onSample = {},
+            onStatus = {},
+            onCandidates = {},
+            workerDispatcher = dispatcher,
+            epochMillis = { now },
+        )
+
+        val seed = subscriber.loadHistory(ENTITY)
+
+        assertEquals(14, transport.historyCount)
+        assertEquals(7L * 24L * 60L - 1L, seed.minutes.size.toLong())
+        assertEquals(seed.minutes.size, seed.minutes.map { it.minute }.distinct().size)
+        assertTrue(seed.minutes.zipWithNext().all { (left, right) -> left.minute < right.minute })
+        assertTrue(seed.minutes.none { it.minute == unavailableMinute })
+        subscriber.close()
+    }
+
     @Test fun `source validation rejects numeric sensors that are not illuminance`() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val transport = FakeTransport(FakeConnection()).apply {
@@ -271,6 +345,10 @@ class HaAmbientLuxSubscriberTest {
         var statesCount = 0
         var stateCount = 0
         var rejectStates = 0
+        var rejectHistoryCall = -1
+        var historyCount = 0
+        val historyRanges = mutableListOf<Pair<Long, Long>>()
+        var historyResponse: ((String, Long, Long) -> JSONArray)? = null
         var stateResult: CompletableDeferred<JSONObject?> =
             CompletableDeferred(state("1", "2026-07-17T09:00:00Z"))
 
@@ -287,12 +365,31 @@ class HaAmbientLuxSubscriberTest {
         }
         override suspend fun states(baseUrl: String, accessToken: String): JSONArray = JSONArray().also { statesCount++ }
         override suspend fun config(baseUrl: String, accessToken: String): JSONObject = JSONObject()
+        override suspend fun history(
+            baseUrl: String,
+            accessToken: String,
+            entityId: String,
+            startEpochMs: Long,
+            endEpochMs: Long,
+        ): JSONArray {
+            historyCount++
+            if (historyCount == rejectHistoryCall) throw HaAuthenticationException("rejected")
+            historyRanges += startEpochMs to endEpochMs
+            historyResponse?.let { return it(entityId, startEpochMs, endEpochMs) }
+            return JSONArray().put(JSONArray().put(
+                historyState(entityId, "10", startEpochMs),
+            ))
+        }
     }
 
     private companion object {
         const val ENTITY = "sensor.room_illuminance"
         val OWNER_SNAPSHOT = HaAuthSnapshot("https://ha.example", "access-1", "refresh-1", 1234, "client-1")
         val OWNER = OWNER_SNAPSHOT.stableOwner()
+        fun historyState(entityId: String, value: String, atEpochMs: Long) = JSONObject()
+            .put("entity_id", entityId)
+            .put("state", value)
+            .put("last_changed", java.time.Instant.ofEpochMilli(atEpochMs).toString())
         fun state(
             value: String,
             updated: String,

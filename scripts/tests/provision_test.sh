@@ -1721,7 +1721,11 @@ assert_contains '(--ha-token.*require.*--ha-url|require.*--ha-url)' "token witho
 
 run_provision "$MOCK_TARGET" --builtin --ha-url https://ha.test
 assert_failure "built-in renderer with a server URL but no credentials returns nonzero"
-assert_contains '(also needs --ha-token|borrowing.*Companion)' "credentialless built-in setup explains the intentional borrow path"
+assert_contains 'printed Browser sign-in URL' "credentialless built-in setup directs the normal browser OAuth path"
+
+run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "fresh install completes before interactive Home Assistant sign-in"
+assert_contains 'Next: connect Home Assistant in your browser.*configure#cfg-ha-oauth' "fresh install prints the browser OAuth entry point"
 
 MOCK_ADB_STATE=unauthorized run_provision "$MOCK_TARGET" --verify
 assert_failure "unauthorized adb returns nonzero"
@@ -1768,6 +1772,11 @@ assert_success "provisioner REST fallback works when gh is not installed"
 assert_not_contains '^gh ' "$MOCK_CALL_LOG" "no-gh fallback does not invoke GitHub CLI"
 assert_not_contains 'unbound variable' "$LAST_OUTPUT" "no-gh fallback never exposes an unset tag variable"
 
+MOCK_GH_FAIL=1 MOCK_GITHUB_API=oversized run_provision "$MOCK_TARGET" --prerelease --no-tame
+assert_success "provisioner consumes an oversized prerelease response without SIGPIPE"
+assert_log_contains 'releases/download/v0\.9\.2-rc3/ha-paneld-v0\.9\.2-rc3-manual-setup-required\.apk' \
+  "oversized provisioner response retains the first prerelease asset"
+
 MOCK_GH_FAIL=1 MOCK_GITHUB_API=foreign run_provision "$MOCK_TARGET" --prerelease --no-tame
 assert_failure "provisioner rejects a release asset hosted outside the canonical GitHub path"
 assert_contains 'could not fetch the latest release APK' "foreign release URL failure gives safe recovery guidance"
@@ -1805,6 +1814,14 @@ else
 fi
 assert_log_contains 'curl .*--proto =https --proto-redir =https .*https://github\.com/maxlyth/ha-paneld/releases/download/v0\.9\.2-rc3/ha-paneld-v0\.9\.2-rc3-manual-setup-required\.apk' "fleet REST APK redirects remain HTTPS"
 assert_contains 'verified.*v0\.9\.2-rc3' "fleet REST workers retain and verify the authenticated release tag"
+
+: > "$MOCK_CALL_LOG"
+LAST_OUTPUT="$TMP/fleet-oversized-output.txt"
+MOCK_GITHUB_API=oversized bash "$UPDATE_FLEET" --prerelease -- "$MOCK_TARGET" > "$LAST_OUTPUT" 2>&1
+LAST_STATUS=$?
+assert_success "fleet updater consumes an oversized prerelease response without SIGPIPE"
+assert_log_contains 'releases/download/v0\.9\.2-rc3/ha-paneld-v0\.9\.2-rc3-manual-setup-required\.apk' \
+  "oversized fleet response retains the first prerelease asset"
 
 # A legacy literal secret is unavoidable in this wrapper's original argv, but it must be normalized
 # once rather than copied into every fleet worker, provisioner, curl or adb command.
@@ -2146,7 +2163,13 @@ case "$url" in
     printf '%s\n' '{"tag_name":"v0.9.3","assets":[{"browser_download_url":"https://github.com/maxlyth/ha-paneld/releases/download/v0.9.3/ha-paneld-v0.9.3-manual-setup-required.apk"}]}'
     ;;
   https://api.github.com/repos/maxlyth/ha-paneld/releases\?per_page=100)
-    printf '%s\n' '[{"url":"https://api.github.com/repos/maxlyth/ha-paneld/releases/204","tag_name":"v0.9.4-rc1","draft":false,"prerelease":true,"assets":[{"browser_download_url":"https://github.com/maxlyth/ha-paneld/releases/download/v0.9.4-rc1/ha-paneld-v0.9.4-rc1-manual-setup-required.apk"}]}]'
+    if [ "${MOCK_ADVANCED_GITHUB_API:-small}" = oversized ]; then
+      printf '%s' '[{"url":"https://api.github.com/repos/maxlyth/ha-paneld/releases/204","tag_name":"v0.9.4-rc1","draft":false,"prerelease":true,"assets":[{"browser_download_url":"https://github.com/maxlyth/ha-paneld/releases/download/v0.9.4-rc1/ha-paneld-v0.9.4-rc1-manual-setup-required.apk"}]},{"url":"https://api.github.com/repos/maxlyth/ha-paneld/releases/203","tag_name":"v0.9.3","draft":false,"prerelease":false,"padding":"'
+      awk 'BEGIN { for (i = 0; i < 2097152; i++) printf "x" }'
+      printf '%s\n' '"}]'
+    else
+      printf '%s\n' '[{"url":"https://api.github.com/repos/maxlyth/ha-paneld/releases/204","tag_name":"v0.9.4-rc1","draft":false,"prerelease":true,"assets":[{"browser_download_url":"https://github.com/maxlyth/ha-paneld/releases/download/v0.9.4-rc1/ha-paneld-v0.9.4-rc1-manual-setup-required.apk"}]}]'
+    fi
     ;;
   */ha-paneld-provision-v*.sh.sha256.sig)
     printf 'mock signature\n' > "$output"
@@ -2163,8 +2186,9 @@ case "$url" in
     printf 'release apk\n' > "$output"
     ;;
   *)
-    printf 'unexpected advanced-installer URL: %s\n' "$url" >&2
-    exit 22
+    # Once the generated installer has authenticated and exec'd the real provisioner, defer its
+    # panel-facing HTTP contract to the normal safe fixture rather than maintaining a second fake.
+    exec "$PROVISION_TEST_CURL" "$@"
     ;;
 esac
 EOF
@@ -2181,12 +2205,29 @@ run_advanced_installer() {
   LAST_STATUS=$?
 }
 
+# This is deliberately not the small argv-logging child above. It proves that a release-generated
+# installer can authenticate, download and hand off to the actual provisioner while every device and
+# HTTP effect remains inside this script's existing mocks.
+run_generated_installer_with_real_provisioner() {
+  LAST_OUTPUT="$TMP/generated-installer-real-provisioner-output.txt"
+  : > "$MOCK_CALL_LOG"
+  rm -f "$TMP/write-settings-granted" "$TMP/accessibility-services" "$TMP/accessibility-enabled"
+  printf 'previous installed apk\n' > "$TMP/installed-apk"
+  env -u 'BASH_FUNC_curl%%' \
+    PATH="$ADVANCED_FIXTURES:/usr/bin:/bin" \
+    ADVANCED_PROVISION_SOURCE="$PROVISION" \
+    MOCK_CALL_LOG="$MOCK_CALL_LOG" \
+      bash "$RELEASE_INSTALLER" "$@" > "$LAST_OUTPUT" 2>&1
+  LAST_STATUS=$?
+}
+
 run_moving_advanced_installer() {
   LAST_OUTPUT="$TMP/moving-advanced-installer-output.txt"
   : > "$MOCK_CALL_LOG"
   env -u 'BASH_FUNC_curl%%' \
     PATH="$ADVANCED_FIXTURES:/usr/bin:/bin" \
     ADVANCED_PROVISION_SOURCE="$ADVANCED_PROVISION" \
+    MOCK_ADVANCED_GITHUB_API="${MOCK_ADVANCED_GITHUB_API:-small}" \
     MOCK_CALL_LOG="$MOCK_CALL_LOG" \
       bash "$ROOT/scripts/install.sh" "$@" > "$LAST_OUTPUT" 2>&1
   LAST_STATUS=$?
@@ -2198,6 +2239,20 @@ assert_log_contains '^provision-argv <panel\.test:5555> <--apk> <.*/ha-paneld-v0
   "mutating advanced provisioning receives the exact paired release APK"
 assert_log_contains 'ha-paneld-v0\.9\.2-rc3-manual-setup-required\.apk -o ' \
   "mutating advanced provisioning downloads the paired APK"
+
+run_generated_installer_with_real_provisioner --provision panel.test --verify
+assert_success "generated installer composes with the real provisioner for read-only verification"
+assert_contains 'root helper daemon: running' \
+  "generated installer hands helper-aware verification to the real provisioner"
+assert_not_contains 'ha-paneld-v0\.9\.2-rc3-manual-setup-required\.apk -o ' "$MOCK_CALL_LOG" \
+  "generated installer plus real provisioner does not download an APK for verification"
+
+run_generated_installer_with_real_provisioner --provision panel.test --id kitchen
+assert_success "generated installer composes with the real provisioner for a mocked install"
+assert_log_contains '^adb -s panel\.test:5555 install ' \
+  "generated installer hands the authenticated APK to the real provisioner"
+assert_contains 'Detected panel: Test Panel' \
+  "real provisioner preserves panel-aware installation through the generated hand-off"
 
 ADVANCED_SECRET_SENTINEL='advanced-ha-token-secret-9b173e'
 run_advanced_installer --provision panel.test --ha-url https://ha.test --ha-token "$ADVANCED_SECRET_SENTINEL"
@@ -2258,6 +2313,11 @@ assert_log_contains '^curl .*api\.github\.com/repos/maxlyth/ha-paneld/releases\?
   "moving prerelease provisioning resolves the release-candidate channel"
 assert_log_contains '^provision-argv <panel\.test:5555> <--apk> <.*/ha-paneld-v0\.9\.4-rc1-manual-setup-required\.apk> <--release-tag> <v0\.9\.4-rc1> <--shizuku>$' \
   "moving prerelease provisioning pairs the resolved APK and provisioner"
+
+MOCK_ADVANCED_GITHUB_API=oversized run_moving_advanced_installer --prerelease --provision panel.test --shizuku
+assert_success "moving installer consumes an oversized prerelease response without SIGPIPE"
+assert_log_contains '^provision-argv <panel\.test:5555> <--apk> <.*/ha-paneld-v0\.9\.4-rc1-manual-setup-required\.apk> <--release-tag> <v0\.9\.4-rc1> <--shizuku>$' \
+  "oversized moving-installer response retains the first prerelease asset"
 
 run_moving_advanced_installer --provision panel.test --verify
 assert_success "moving stable-channel verification succeeds without an APK"

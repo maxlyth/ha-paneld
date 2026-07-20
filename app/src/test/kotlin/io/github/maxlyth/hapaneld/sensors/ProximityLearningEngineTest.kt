@@ -169,6 +169,97 @@ class ProximityLearningEngineTest {
         assertNull(rebasing.presence)
     }
 
+    @Test fun behaviorEpochDropsAllPreviouslyAcceptedWakeEvidence() {
+        val engine = ProximityLearningEngine(
+            ProximityLearningEngine.Policy(maximumGestureMs = 300, changePointHoldMs = 600),
+        )
+        assertTrue(engine.restore(ProximityLearningEngine.Snapshot(
+            farRaw = 100f,
+            nearRaw = 0f,
+            noise = 1f,
+            mode = Mode.GRADED,
+            polarity = Polarity.NEAR_IS_LOWER,
+            completedExcursions = 8,
+            deliberateExamples = 5,
+        )))
+        verifySeed(engine, far = 100f, startAt = 0)
+        assertEquals(5, engine.current().deliberateExamples)
+
+        engine.observe(20f, 500)
+        engine.observe(20f, 900)
+        val replacementLearning = engine.observe(20f, 1_200)
+
+        assertEquals(LearningStatus.RELEARNING, replacementLearning.learning)
+        assertEquals(0, replacementLearning.deliberateExamples)
+        assertEquals(1L, replacementLearning.wakeEvidenceGeneration)
+    }
+
+    @Test fun invalidationAuthorityRunsBeforeWakeEvidenceMutation() {
+        var allowInvalidation = false
+        var examplesSeenByAuthority = -1
+        var generationSeenByAuthority = -1L
+        lateinit var engine: ProximityLearningEngine
+        engine = ProximityLearningEngine(
+            ProximityLearningEngine.Policy(maximumGestureMs = 300, changePointHoldMs = 600),
+            prepareWakeEvidenceInvalidation = {
+                examplesSeenByAuthority = engine.current().deliberateExamples
+                generationSeenByAuthority = engine.current().wakeEvidenceGeneration
+                allowInvalidation
+            },
+        )
+        assertTrue(engine.restore(ProximityLearningEngine.Snapshot(
+            farRaw = 100f,
+            nearRaw = 0f,
+            noise = 1f,
+            mode = Mode.GRADED,
+            polarity = Polarity.NEAR_IS_LOWER,
+            completedExcursions = 8,
+            deliberateExamples = 5,
+        )))
+        verifySeed(engine, far = 100f, startAt = 0)
+
+        engine.observe(20f, 500)
+        engine.observe(20f, 900)
+        val refused = engine.observe(20f, 1_200)
+        assertEquals(5, examplesSeenByAuthority)
+        assertEquals(0L, generationSeenByAuthority)
+        assertEquals(5, refused.deliberateExamples)
+        assertEquals(0L, refused.wakeEvidenceGeneration)
+
+        allowInvalidation = true
+        val committed = engine.observe(20f, 1_300)
+        assertEquals(0, committed.deliberateExamples)
+        assertEquals(1L, committed.wakeEvidenceGeneration)
+    }
+
+    @Test fun boundedShortBurstTraceCannotCreateWakeEvidence() {
+        val engine = ProximityLearningEngine(ProximityLearningRuntime.learningPolicy(sparseSource = false))
+        var now = 0L
+        while (now <= 31_000L) {
+            engine.observe(20f + ((now / 50L) % 4L).toFloat(), now)
+            now += 50L
+        }
+
+        repeat(110) { burst ->
+            val samples = 1 + burst % 4
+            repeat(samples) {
+                engine.observe(84f + (it % 3), now)
+                now += 40L
+            }
+            val clearUntil = now + 2_100L
+            while (now < clearUntil) {
+                engine.observe(20f + ((now / 50L) % 4L).toFloat(), now)
+                now += 50L
+            }
+        }
+
+        val output = engine.current()
+        assertEquals(LearningStatus.LEARNING_EXCURSION, output.learning)
+        assertEquals(Mode.UNKNOWN, output.mode)
+        assertEquals(0, output.deliberateExamples)
+        assertEquals(0L, output.modelSequence)
+    }
+
     @Test fun presenceFailsClosedWhileLearningOnBadInputAndWhenStale() {
         val engine = ProximityLearningEngine()
         val learning = engine.observe(10f, 100)
@@ -310,6 +401,8 @@ class ProximityLearningEngineTest {
         assertEquals(LearningStatus.READY, relearned.learning)
         assertEquals(Polarity.NEAR_IS_HIGHER, relearned.polarity)
         assertEquals(Mode.GRADED, relearned.mode)
+        assertEquals(0, relearned.deliberateExamples)
+        assertEquals(1L, relearned.wakeEvidenceGeneration)
         assertFalse(relearned.gesture)
 
         engine.observe(100f, 2_500)

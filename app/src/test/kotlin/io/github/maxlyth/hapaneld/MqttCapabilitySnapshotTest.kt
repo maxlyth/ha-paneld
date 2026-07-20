@@ -1,6 +1,7 @@
 package io.github.maxlyth.hapaneld
 
 import io.github.maxlyth.hapaneld.config.Capabilities
+import io.github.maxlyth.hapaneld.config.SettingsRegistry
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -9,12 +10,12 @@ import org.junit.Test
 
 class MqttCapabilitySnapshotTest {
     @Test
-    fun `ranged notification is truthless and replacement re-reads service authority`() {
+    fun `learned proximity notification is truthless and replacement re-reads service authority`() {
         class FakeDiscoveryTransport {
             var clears = 0
             var announcements = 0
             fun refresh(admitted: Boolean, authority: () -> Boolean) =
-                refreshRangedProximityFromAuthority(
+                refreshLearnedProximityFromAuthority(
                     admitted = admitted,
                     eligible = authority,
                     clearIneligibleState = { clears++ },
@@ -27,20 +28,24 @@ class MqttCapabilitySnapshotTest {
         val successor = FakeDiscoveryTransport()
 
         // A queued notification reaching the retired generation must not clear or announce anything.
-        assertEquals(RangedProximityRefresh.SKIPPED, old.refresh(admitted = false) { eligible })
+        assertEquals(LearnedProximityRefresh.SKIPPED, old.refresh(admitted = false) { eligible })
         assertEquals(0, old.clears)
         assertEquals(0, old.announcements)
 
         // No Boolean crossed the handover: the admitted successor samples the newer service truth.
         eligible = true
-        assertEquals(RangedProximityRefresh.ELIGIBLE, successor.refresh(admitted = true) { eligible })
+        assertEquals(LearnedProximityRefresh.ELIGIBLE, successor.refresh(admitted = true) { eligible })
         assertEquals(0, successor.clears)
         assertEquals(1, successor.announcements)
 
         eligible = false
-        assertEquals(RangedProximityRefresh.INELIGIBLE, successor.refresh(admitted = true) { eligible })
+        assertEquals(LearnedProximityRefresh.INELIGIBLE, successor.refresh(admitted = true) { eligible })
         assertEquals(1, successor.clears)
         assertEquals(2, successor.announcements)
+        val sourceRemains = Capabilities(hasProximity = true, hasLearnedProximity = false)
+        assertTrue(SettingsRegistry.spec("wake_on_wave")!!.availableWhen(sourceRemains))
+        assertFalse(SettingsRegistry.spec("proximity")!!.availableWhen(sourceRemains))
+        assertFalse(SettingsRegistry.spec("proximity_level")!!.availableWhen(sourceRemains))
     }
 
     @Test
@@ -193,19 +198,19 @@ class MqttCapabilitySnapshotTest {
     @Test
     fun `explicit invalidation bypasses a still-fresh bounded snapshot`() {
         var now = 1_000L
-        var ranged = false
+        var learned = false
         var calls = 0
         val source = MqttDiscoveryCapabilitySource(
-            supplier = { calls++; Capabilities(hasRangedProximity = ranged) },
+            supplier = { calls++; Capabilities(hasLearnedProximity = learned) },
             nowMs = { now },
         )
 
-        assertFalse(source.snapshot(maxAgeMs = 30_000L)!!.hasRangedProximity)
-        ranged = true
+        assertFalse(source.snapshot(maxAgeMs = 30_000L)!!.hasLearnedProximity)
+        learned = true
         now += 1L
-        assertFalse(source.snapshot(maxAgeMs = 30_000L)!!.hasRangedProximity)
+        assertFalse(source.snapshot(maxAgeMs = 30_000L)!!.hasLearnedProximity)
         source.invalidate()
-        assertTrue(source.snapshot(maxAgeMs = 30_000L)!!.hasRangedProximity)
+        assertTrue(source.snapshot(maxAgeMs = 30_000L)!!.hasLearnedProximity)
         assertEquals(2, calls)
     }
 

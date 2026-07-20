@@ -60,6 +60,14 @@ class RendererPreparationCoordinator(
         }
     }
 
+    /** Lifecycle operations decline cleanly when service teardown wins admission. */
+    private fun resultTransaction(block: () -> Result): Result {
+        if (closing || closed) return Result.CLOSED
+        return lock.withLock {
+            if (closing || closed) Result.CLOSED else block()
+        }
+    }
+
     /** Close admission and wait up to [timeoutMs] for an admitted transaction to leave its side-effects. */
     fun close(timeoutMs: Long): Boolean {
         closing = true
@@ -72,19 +80,19 @@ class RendererPreparationCoordinator(
     }
 
     /** Prepare the current renderer if needed without launching it. */
-    fun prepareIfNeeded(): Result = transaction { prepareLocked() }
+    fun prepareIfNeeded(): Result = resultTransaction { prepareLocked() }
 
     /** Prepare, then anchor and launch the latest committed renderer before returning. */
     fun launchConfigured(
         ensureHome: (dashboardPackage: String, builtinReady: Boolean) -> Unit,
         launchHome: (dashboardPackage: String) -> Unit,
-    ): Result = transaction {
+    ): Result = resultTransaction {
         val result = prepareLocked()
-        if (result == Result.PERSIST_FAILED || result == Result.CLOSED) return@transaction result
+        if (result == Result.PERSIST_FAILED || result == Result.CLOSED) return@resultTransaction result
         val current = state()
-        if (closing) return@transaction Result.CLOSED
+        if (closing) return@resultTransaction Result.CLOSED
         ensureHome(current.dashboardPackage, current.haUrl.isNotBlank())
-        if (closing) return@transaction Result.CLOSED
+        if (closing) return@resultTransaction Result.CLOSED
         launchHome(current.dashboardPackage)
         completePendingLaunch(result)
     }
@@ -96,18 +104,19 @@ class RendererPreparationCoordinator(
     fun reconcileStartup(
         ensureHome: (dashboardPackage: String, builtinReady: Boolean) -> Unit,
         launchHome: (dashboardPackage: String) -> Unit,
-    ): Result = transaction {
+    ): Result = resultTransaction {
         val result = prepareLocked()
-        if (result == Result.PERSIST_FAILED || result == Result.CLOSED) return@transaction result
+        if (result == Result.PERSIST_FAILED || result == Result.CLOSED) return@resultTransaction result
         val current = state()
         ensureHome(current.dashboardPackage, current.haUrl.isNotBlank())
+        if (closing) return@resultTransaction Result.CLOSED
         val blankBuiltinWithoutLogin = result == Result.NO_BORROWABLE_LOGIN &&
             current.dashboardPackage == builtinPackage && current.haUrl.isBlank()
         val configuredRendererReady = current.dashboardPackage.isNotBlank() &&
             (current.dashboardPackage != builtinPackage || current.haUrl.isNotBlank())
         if (!closing && !blankBuiltinWithoutLogin && (configuredRendererReady || current.launchPending)) {
             launchHome(current.dashboardPackage)
-            return@transaction completePendingLaunch(result)
+            return@resultTransaction completePendingLaunch(result)
         }
         result
     }

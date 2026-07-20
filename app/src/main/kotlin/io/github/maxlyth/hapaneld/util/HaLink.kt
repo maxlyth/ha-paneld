@@ -39,6 +39,9 @@ object HaLink {
     internal const val MAX_WS_FRAME_BYTES = 16L * 1024L * 1024L
     internal const val WS_RESOLUTION_DEADLINE_MS = 15_000L
     internal const val MAX_HTTP_RESPONSE_BYTES = 2L * 1024L * 1024L
+    internal const val MAX_TOKEN_RESPONSE_BYTES = 64L * 1024L
+    internal const val MAX_OAUTH_TOKEN_CHARS = 16 * 1024
+    internal const val MAX_OAUTH_EXPIRES_IN_SEC = 365L * 24L * 60L * 60L
 
     /** @param base HA origin from zeroconf, e.g. "https://hass.example". @return device-page URL or null. */
     fun resolve(base: String, user: String, pass: String, deviceNames: Collection<String>): String? {
@@ -94,6 +97,70 @@ object HaLink {
         object Rejected : Refresh()
         object Transient : Refresh()
     }
+
+    data class OAuthTokens(
+        val accessToken: String,
+        val refreshToken: String,
+        val expiresInSec: Long,
+    )
+
+    sealed class AuthorizationCodeExchange {
+        data class Success(val tokens: OAuthTokens) : AuthorizationCodeExchange()
+        object Rejected : AuthorizationCodeExchange()
+        object Transient : AuthorizationCodeExchange()
+    }
+
+    /** Exchange a browser-issued authorization code without ever exposing the resulting credentials to
+     * the browser. Invalid/expired codes are terminal; transport, server and malformed-success failures
+     * remain retryable by starting a fresh browser login. */
+    fun exchangeAuthorizationCode(
+        base: String,
+        code: String,
+        clientId: String,
+    ): AuthorizationCodeExchange {
+        if (code.isBlank() || code.length > 4_096 || clientId.isBlank() || clientId.length > 2_048) {
+            return AuthorizationCodeExchange.Rejected
+        }
+        return try {
+            val body = post(
+                "${base.trimEnd('/')}/auth/token",
+                null,
+                "grant_type=authorization_code&code=${enc(code)}&client_id=${enc(clientId)}",
+                FORM,
+                MAX_TOKEN_RESPONSE_BYTES,
+            )
+            parseAuthorizationCodeTokens(body)?.let(AuthorizationCodeExchange::Success)
+                ?: AuthorizationCodeExchange.Transient
+        } catch (e: HttpError) {
+            Log.i(TAG, "authorization-code exchange failed: HTTP ${e.code}")
+            if (e.code in intArrayOf(400, 401, 403)) AuthorizationCodeExchange.Rejected
+            else AuthorizationCodeExchange.Transient
+        } catch (e: Exception) {
+            Log.i(TAG, "authorization-code exchange failed: ${e.javaClass.simpleName}")
+            AuthorizationCodeExchange.Transient
+        }
+    }
+
+    internal fun parseAuthorizationCodeTokens(body: String): OAuthTokens? = runCatching {
+        val json = JSONObject(body)
+        val access = json.opt("access_token") as? String ?: return@runCatching null
+        val refresh = json.opt("refresh_token") as? String ?: return@runCatching null
+        val expiresValue = json.opt("expires_in") as? Number ?: return@runCatching null
+        val expiresDouble = expiresValue.toDouble()
+        if (!expiresDouble.isFinite() || expiresDouble % 1.0 != 0.0) return@runCatching null
+        val expires = expiresValue.toLong()
+        val tokenType = when (val value = json.opt("token_type")) {
+            null -> ""
+            is String -> value
+            else -> return@runCatching null
+        }
+        if (access.isBlank() || access.length > MAX_OAUTH_TOKEN_CHARS ||
+            refresh.isBlank() || refresh.length > MAX_OAUTH_TOKEN_CHARS ||
+            expires !in 1..MAX_OAUTH_EXPIRES_IN_SEC ||
+            (tokenType.isNotBlank() && !tokenType.equals("Bearer", ignoreCase = true))
+        ) return@runCatching null
+        OAuthTokens(access, refresh, expires)
+    }.getOrNull()
 
     /**
      * Exchange a refresh token for a fresh access token (OAuth `grant_type=refresh_token`, the same call
@@ -260,13 +327,26 @@ object HaLink {
     }.getOrNull()
 
     private fun enc(s: String) = URLEncoder.encode(s, "UTF-8")
-    private fun post(url: String, token: String?, body: String, ctype: String) = req(url, "POST", token, body, ctype)
+    private fun post(
+        url: String,
+        token: String?,
+        body: String,
+        ctype: String,
+        maxResponseBytes: Long = MAX_HTTP_RESPONSE_BYTES,
+    ) = req(url, "POST", token, body, ctype, maxResponseBytes)
     private fun get(url: String, token: String?) = req(url, "GET", token, null, null)
 
     /** Non-2xx HTTP response — typed so callers can tell a definitive server refusal from a network fault. */
     class HttpError(val code: Int, method: String) : RuntimeException("$method -> $code")
 
-    private fun req(url: String, method: String, token: String?, body: String?, ctype: String?): String {
+    private fun req(
+        url: String,
+        method: String,
+        token: String?,
+        body: String?,
+        ctype: String?,
+        maxResponseBytes: Long = MAX_HTTP_RESPONSE_BYTES,
+    ): String {
         val c = (URL(url).openConnection() as HttpURLConnection).apply {
             requestMethod = method; connectTimeout = 5000; readTimeout = 5000
             token?.let { setRequestProperty("Authorization", "Bearer $it") }
@@ -275,7 +355,8 @@ object HaLink {
         try {
             body?.let { c.outputStream.use { os -> os.write(it.toByteArray()) } }
             val code = c.responseCode
-            val text = (if (code in 200..299) c.inputStream else c.errorStream)?.use(::readHttpBody).orEmpty()
+            val text = (if (code in 200..299) c.inputStream else c.errorStream)
+                ?.use { readHttpBody(it, maxResponseBytes) }.orEmpty()
             if (code !in 200..299) throw HttpError(code, method)
             return text
         } finally {
@@ -283,6 +364,6 @@ object HaLink {
         }
     }
 
-    internal fun readHttpBody(input: InputStream): String =
-        String(BoundedStreams.readBytes(input, MAX_HTTP_RESPONSE_BYTES), Charsets.UTF_8)
+    internal fun readHttpBody(input: InputStream, maxBytes: Long = MAX_HTTP_RESPONSE_BYTES): String =
+        String(BoundedStreams.readBytes(input, maxBytes), Charsets.UTF_8)
 }

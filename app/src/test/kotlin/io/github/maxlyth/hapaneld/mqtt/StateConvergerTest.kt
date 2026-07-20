@@ -12,9 +12,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class StateConvergerTest {
-    private data class Sent(val topic: String, val payload: String, val done: (Boolean) -> Unit)
+    private data class Sent(val topic: String, val payload: String, val retain: Boolean, val done: (Boolean) -> Unit)
     private fun converger(sent: MutableList<Sent>) = StateConverger(
-        sender = { topic, payload, _, done -> sent += Sent(topic, payload, done) },
+        sender = { topic, payload, retain, done -> sent += Sent(topic, payload, retain, done) },
         schedule = { it() },
     )
 
@@ -199,7 +199,7 @@ class StateConvergerTest {
         )
         val sent = mutableListOf<Sent>()
         val c = StateConverger(
-            sender = { topic, payload, _, done -> sent += Sent(topic, payload, done) },
+            sender = { topic, payload, retain, done -> sent += Sent(topic, payload, retain, done) },
             schedule = { it() },
             featureCosts = costs,
         )
@@ -237,7 +237,7 @@ class StateConvergerTest {
         assertEquals(listOf("ON", "ON"), sent.map { it.payload })
     }
 
-    @Test fun unknownAndUnavailableNeverInventState() {
+    @Test fun unknownInventsNoStateAndUnavailableClearsRetainedState() {
         val sent = mutableListOf<Sent>()
         var observation: StateConverger.Observation = StateConverger.Observation.Unknown
         val c = converger(sent)
@@ -247,7 +247,26 @@ class StateConvergerTest {
         observation = StateConverger.Observation.Unavailable
         c.reconcile("relay")
 
-        assertTrue(sent.isEmpty())
+        assertEquals(listOf(""), sent.map { it.payload })
+        assertTrue(sent.single().retain)
+        assertEquals(1, c.status().unknown)
+    }
+
+    @Test fun unavailableClearWaitsForOlderInFlightValueAndWinsLast() {
+        var observation: StateConverger.Observation = StateConverger.Observation.Known("Private network")
+        val sent = mutableListOf<Sent>()
+        val c = converger(sent)
+        c.register(StateConverger.Channel("ssid", "wifi/state", observe = { observation }))
+
+        c.reconcile("ssid")
+        observation = StateConverger.Observation.Unavailable
+        c.reconcile("ssid", force = true)
+        assertEquals(listOf("Private network"), sent.map { it.payload })
+
+        sent.single().done(true)
+        assertEquals(listOf("Private network", ""), sent.map { it.payload })
+        sent.last().done(true)
+        assertEquals(0, c.status().dirty)
         assertEquals(1, c.status().unknown)
     }
 
@@ -310,7 +329,7 @@ class StateConvergerTest {
         )
         val sent = mutableListOf<Sent>()
         val c = StateConverger(
-            sender = { topic, payload, _, done -> sent += Sent(topic, payload, done) },
+            sender = { topic, payload, retain, done -> sent += Sent(topic, payload, retain, done) },
             schedule = { it() },
             featureCosts = costs,
         )
@@ -331,7 +350,7 @@ class StateConvergerTest {
     @Test fun boundedOutboxPumpsAfterAcknowledgement() {
         val sent = mutableListOf<Sent>()
         val c = StateConverger(
-            sender = { topic, payload, _, done -> sent += Sent(topic, payload, done) },
+            sender = { topic, payload, retain, done -> sent += Sent(topic, payload, retain, done) },
             schedule = { it() },
         )
         repeat(6) { n ->

@@ -99,7 +99,7 @@ curl -fsSL https://raw.githubusercontent.com/maxlyth/ha-paneld/main/scripts/inst
   --ha-url https://homeassistant.example.com --ha-token-file ha-token.txt
 ```
 
-On a **rooted** panel already running a signed-in HA Companion, none of that is needed: set the dashboard app to **Built-in renderer** in the `:8888` Configure tab (or POST `dashboard_package=builtin`) and it borrows the Companion's sign-in automatically — the Companion keeps its own login, and switching back is the same picker change.
+For an interactive installation, omit the Home Assistant credential arguments. After verification the installer prints the panel's Browser sign-in URL; open it on the administrator's computer, enter the Home Assistant URL, connect, then select the Built-in renderer. Existing panels that previously imported a Companion session retain that login as a compatibility path.
 
 Reverting to the Companion: set the dashboard app back to it in the Configure tab (or blank `dashboard_package`). The built-in renderer deliberately has **no Voice Assistant (Assist) and no notifications** — keep the Companion where those matter.
 

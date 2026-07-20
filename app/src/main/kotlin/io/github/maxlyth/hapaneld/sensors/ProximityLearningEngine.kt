@@ -21,6 +21,7 @@ import kotlin.math.sqrt
  */
 internal class ProximityLearningEngine(
     private val policy: Policy = Policy(),
+    private val prepareWakeEvidenceInvalidation: () -> Boolean = { true },
 ) {
     enum class Mode { UNKNOWN, BINARY, GRADED }
 
@@ -153,6 +154,8 @@ internal class ProximityLearningEngine(
             internal set
         var deliberateExamples: Int = 0
             internal set
+        var wakeEvidenceGeneration: Long = 0L
+            internal set
         var modelSequence: Long = 0L
             internal set
         var mode: Mode = Mode.UNKNOWN
@@ -188,6 +191,7 @@ internal class ProximityLearningEngine(
     private var relearning = false
     private var completedExcursions = 0
     private var deliberateExamples = 0
+    private var wakeEvidenceGeneration = 0L
     private var weakExcursionCount = 0
     private var weakExcursionMeanDelta = 0f
     private var contradictoryEvidenceCount = 0
@@ -890,9 +894,16 @@ internal class ProximityLearningEngine(
             return
         }
 
+        if (!prepareWakeEvidenceInvalidation()) {
+            currentHealth = HealthStatus.MODEL_SHIFT
+            currentPresence = null
+            currentLevel = null
+            return
+        }
         nearRaw = contradictoryPeakRaw
         polarity = inferredPolarity(farRaw, nearRaw)
         mode = classifyCandidateMode()
+        commitWakeEvidenceInvalidation()
         modelReady = true
         modelSequence++
         verifyingSeed = false
@@ -912,6 +923,11 @@ internal class ProximityLearningEngine(
         contradictoryEvidenceCount = 0
         contradictoryPeakRaw = Float.NaN
         contradictoryEvidenceAt = UNSET_TIME
+    }
+
+    private fun commitWakeEvidenceInvalidation() {
+        deliberateExamples = 0
+        wakeEvidenceGeneration++
     }
 
     private fun addBaselineSample(raw: Float, now: Long, guidedFar: Boolean) {
@@ -1084,9 +1100,16 @@ internal class ProximityLearningEngine(
         isRelearning: Boolean,
         includeAsFar: Boolean,
     ) {
+        if (!prepareWakeEvidenceInvalidation()) {
+            currentHealth = HealthStatus.MODEL_SHIFT
+            currentPresence = null
+            currentLevel = null
+            return
+        }
         modelReady = false
         verifyingSeed = false
         relearning = isRelearning
+        commitWakeEvidenceInvalidation()
         mode = Mode.UNKNOWN
         polarity = Polarity.UNKNOWN
         farRaw = Float.NaN
@@ -1218,6 +1241,7 @@ internal class ProximityLearningEngine(
         borrowedOutput.gestureSequence = gestureSequence
         borrowedOutput.completedExcursions = completedExcursions
         borrowedOutput.deliberateExamples = deliberateExamples
+        borrowedOutput.wakeEvidenceGeneration = wakeEvidenceGeneration
         borrowedOutput.modelSequence = modelSequence
         borrowedOutput.mode = mode
         borrowedOutput.polarity = polarity
@@ -1244,6 +1268,7 @@ internal class ProximityLearningEngine(
         relearning = false
         completedExcursions = 0
         deliberateExamples = 0
+        wakeEvidenceGeneration = 0L
         weakExcursionCount = 0
         weakExcursionMeanDelta = 0f
         clearContradictoryEvidence()

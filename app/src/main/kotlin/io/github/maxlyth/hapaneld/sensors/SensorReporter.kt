@@ -70,8 +70,8 @@ class SensorReporter(
         proximitySensor?.reportingMode,
     )
     @Volatile private var proximityRuntime: ProximityLearningRuntime? = null
-    @Volatile private var rangedProximityListener: (() -> Unit)? = null
-    @Volatile private var lastRangedEligibility = false
+    @Volatile private var learnedProximityListener: (() -> Unit)? = null
+    @Volatile private var lastLearnedEligibility = false
     private var proximityPrepared = false
 
     @Volatile private var liveLux = Float.NaN
@@ -178,12 +178,12 @@ class SensorReporter(
             sparseLearningSource = proximityPolicy.sparseLearning,
             legacySeedEligible = proximityPolicy.legacySeedEligible,
         )
-        updateRangedEligibility()
+        updateLearnedEligibility()
     }
 
     fun hasLight() = lightSensor != null
     fun hasProximity() = proximitySensor != null || proximityGpio != null
-    fun hasRangedProximity() = proximityRuntime?.isRangedSignal() == true
+    fun hasLearnedProximity() = proximityRuntime?.isLearnedSignal() == true
     fun hasTemperature() = tempSensor != null
     fun hasHumidity() = humiditySensor != null
 
@@ -197,11 +197,11 @@ class SensorReporter(
 
     /** Notify the service only when empirical signal-shape eligibility changes. Notifications carry no
      *  truth: every active consumer re-reads this service-owned reporter before acting. */
-    fun setRangedProximityListener(listener: (() -> Unit)?) {
-        val current = hasRangedProximity()
+    fun setLearnedProximityListener(listener: (() -> Unit)?) {
+        val current = hasLearnedProximity()
         synchronized(this) {
-            rangedProximityListener = listener
-            lastRangedEligibility = current
+            learnedProximityListener = listener
+            lastLearnedEligibility = current
         }
         listener?.invoke()
     }
@@ -234,7 +234,7 @@ class SensorReporter(
 
     fun relearnProximity(): Boolean {
         if (proximityRuntime?.relearn() != true) return false
-        updateRangedEligibility()
+        updateLearnedEligibility()
         activeRun?.proximity(null, null)
         return true
     }
@@ -375,7 +375,7 @@ class SensorReporter(
             }
         }
         val decision = proximityRuntime?.observe(raw, now, sparseReporting = sparseForObservation) ?: return
-        updateRangedEligibility()
+        updateLearnedEligibility()
         deliverProximity(decision, run)
     }
 
@@ -418,12 +418,12 @@ class SensorReporter(
         }
     }
 
-    private fun updateRangedEligibility() {
-        val current = hasRangedProximity()
+    private fun updateLearnedEligibility() {
+        val current = hasLearnedProximity()
         val listener = synchronized(this) {
-            if (current == lastRangedEligibility) return
-            lastRangedEligibility = current
-            rangedProximityListener
+            if (current == lastLearnedEligibility) return
+            lastLearnedEligibility = current
+            learnedProximityListener
         }
         listener?.invoke()
     }

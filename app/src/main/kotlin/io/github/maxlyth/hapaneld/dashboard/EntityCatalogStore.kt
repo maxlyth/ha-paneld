@@ -405,6 +405,59 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
         } finally { db.endTransaction() }
     }
 
+    /** Idempotent bootstrap sink. Existing live rows win wholesale over imported HA history. */
+    internal fun seedAmbientHistory(samples: List<AmbientMinuteAggregate>, nowMs: Long) {
+        if (samples.isEmpty() || nowMs < 0L) return
+        val nowMinute = nowMs / MINUTE_MS
+        val oldestMinute = nowMinute - AMBIENT_RETENTION_MINUTES
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            val statement = db.compileStatement(
+                """INSERT OR IGNORE INTO ambient_lux_minute(
+                   context_id,source_id,minute,lux_integral,coverage_ms,min_lux,max_lux,last_lux,
+                   sample_count,baseline_log_integral,baseline_coverage_ms)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+            )
+            try {
+                samples.asSequence()
+                    .filter { it.key.contextId.length in 1..128 && it.key.sourceId.length in 1..255 }
+                    .filter { it.key.minute in oldestMinute..nowMinute }
+                    .filter { it.coverageMs in 1..MINUTE_MS && it.sampleCount > 0 }
+                    .filter { it.baselineCoverageMs in 0..it.coverageMs }
+                    .filter {
+                        it.luxIntegral.isFinite() && it.luxIntegral >= 0.0 &&
+                            it.minLux.isFinite() && it.minLux >= 0.0 &&
+                            it.maxLux.isFinite() && it.maxLux >= it.minLux &&
+                            it.lastLux.isFinite() && it.lastLux >= 0.0 &&
+                            it.baselineLogIntegral.isFinite() && it.baselineLogIntegral >= 0.0
+                    }
+                    .forEach { sample ->
+                        statement.clearBindings()
+                        statement.bindString(1, sample.key.contextId)
+                        statement.bindString(2, sample.key.sourceId)
+                        statement.bindLong(3, sample.key.minute)
+                        statement.bindDouble(4, sample.luxIntegral)
+                        statement.bindLong(5, sample.coverageMs)
+                        statement.bindDouble(6, sample.minLux)
+                        statement.bindDouble(7, sample.maxLux)
+                        statement.bindDouble(8, sample.lastLux)
+                        statement.bindLong(9, sample.sampleCount)
+                        statement.bindDouble(10, sample.baselineLogIntegral)
+                        statement.bindLong(11, sample.baselineCoverageMs)
+                        statement.executeInsert()
+                    }
+            } finally { statement.close() }
+            db.execSQL("DELETE FROM ambient_lux_minute WHERE minute<? OR minute>?", arrayOf(oldestMinute, nowMinute))
+            db.execSQL(
+                """DELETE FROM ambient_lux_minute WHERE rowid IN (
+                   SELECT rowid FROM ambient_lux_minute ORDER BY minute DESC,context_id,source_id
+                   LIMIT -1 OFFSET $AMBIENT_GLOBAL_ROW_LIMIT)""",
+            )
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
+    }
+
     internal fun ambientHistory(
         contextId: String,
         sourceId: String,

@@ -1,0 +1,62 @@
+name: Android instrumentation
+run-name: Android instrumentation · ${{ github.event_name == 'schedule' && 'nightly' || github.ref_name }}
+
+# The device-backed persistence and backup suites compile in CI but otherwise only run when an
+# RC is being qualified. Keep this separate from the normal PR gate: two emulator boots are too
+# expensive for every source change, while a nightly run catches API-level storage regressions.
+on:
+  schedule:
+    - cron: '37 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-instrumentation-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  instrumentation:
+    name: API ${{ matrix.api-level }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        api-level: [27, 35]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a # v5.5.0
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
+      - uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
+        with:
+          cache-provider: basic
+
+      - name: Install build SDK, NDK, and emulator image
+        run: sdkmanager "platform-tools" "platforms;android-35" "system-images;android-${{ matrix.api-level }};default;x86_64" "ndk;27.0.12077973" "cmake;3.22.1"
+
+      - name: Build app and instrumentation APKs
+        run: ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest --stacktrace
+
+      - name: Run non-Shizuku instrumentation tests
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        with:
+          api-level: ${{ matrix.api-level }}
+          target: default
+          arch: x86_64
+          profile: pixel_2
+          disable-animations: true
+          script: |
+            adb install app/build/outputs/apk/debug/app-debug.apk
+            adb install app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+            adb shell am instrument -w \
+              -e notClass io.github.maxlyth.hapaneld.shizuku.ShizukuIntegrationTest \
+              io.github.maxlyth.hapaneld.test/androidx.test.runner.AndroidJUnitRunner

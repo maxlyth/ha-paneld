@@ -8,6 +8,32 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ServiceProcessBoundaryContractTest {
+    @Test fun servicePromotesForegroundBeforeHeavyweightCreation() {
+        val source = source("PaneldService.kt")
+        val create = source.substring(
+            source.indexOf("override fun onCreate()"),
+            source.indexOf("private fun buildMqtt("),
+        )
+        val start = source.substring(
+            source.indexOf("override fun onStartCommand("),
+            source.indexOf("private fun startMqttWatchdog()"),
+        )
+
+        val promotion = create.indexOf("startForegroundCompat(\"Starting…\", silent = true)")
+        assertTrue(promotion > create.indexOf("super.onCreate()"))
+        listOf(
+            "SERVICE_RESTART_BARRIER.enter()",
+            "Config(this)",
+            "migrateLiveStore()",
+            "RuntimeProfileRegistry(this)",
+            "PaneldServer(",
+        ).forEach { heavyweight ->
+            assertTrue("foreground promotion must precede $heavyweight", promotion < create.indexOf(heavyweight))
+        }
+        assertTrue(create.indexOf("migrateLiveStore()") < create.indexOf("updateForegroundStatus(\"Starting…\")"))
+        assertFalse(start.contains("startForegroundCompat("))
+    }
+
     @Test fun mqttNoProgressBoundaryDoesNotMutateTransportAndRetriesRejectedAdmission() {
         val service = source("PaneldService.kt")
         val watchdog = service.substring(

@@ -46,6 +46,58 @@ class RendererPreparationCoordinatorTest {
         }
     }
 
+    @Test fun startupRacingClosedAdmissionReturnsClosedWhileStrictTransactionsStillReject() {
+        val transactionEntered = java.util.concurrent.CountDownLatch(1)
+        val releaseTransaction = java.util.concurrent.CountDownLatch(1)
+        val startupSubmitted = java.util.concurrent.CountDownLatch(1)
+        var ensured = false
+        var launched = false
+        val coordinator = RendererPreparationCoordinator(
+            builtinPackage = "builtin",
+            state = { RendererPreparationState("builtin", "http://ha:8123") },
+            borrow = { error("ready state must not borrow") },
+            persist = { error("ready state must not persist") },
+        )
+        val pool = java.util.concurrent.Executors.newFixedThreadPool(2)
+        try {
+            val admitted = pool.submit {
+                coordinator.transaction {
+                    transactionEntered.countDown()
+                    releaseTransaction.await()
+                }
+            }
+            assertTrue(transactionEntered.await(1, java.util.concurrent.TimeUnit.SECONDS))
+            val startup = pool.submit<RendererPreparationCoordinator.Result> {
+                startupSubmitted.countDown()
+                coordinator.reconcileStartup(
+                    ensureHome = { _, _ -> ensured = true },
+                    launchHome = { launched = true },
+                )
+            }
+            assertTrue(startupSubmitted.await(1, java.util.concurrent.TimeUnit.SECONDS))
+
+            assertFalse(coordinator.close(0L))
+            releaseTransaction.countDown()
+
+            admitted.get(1, java.util.concurrent.TimeUnit.SECONDS)
+            assertEquals(
+                RendererPreparationCoordinator.Result.CLOSED,
+                startup.get(1, java.util.concurrent.TimeUnit.SECONDS),
+            )
+            assertFalse(ensured)
+            assertFalse(launched)
+            assertEquals(RendererPreparationCoordinator.Result.CLOSED, coordinator.prepareIfNeeded())
+            assertEquals(
+                RendererPreparationCoordinator.Result.CLOSED,
+                coordinator.launchConfigured({ _, _ -> ensured = true }, { launched = true }),
+            )
+            assertThrows(IllegalStateException::class.java) { coordinator.transaction {} }
+        } finally {
+            releaseTransaction.countDown()
+            pool.shutdownNow()
+        }
+    }
+
     @Test fun preparationPersistsBeforeEnsureAndLaunch() {
         var state = RendererPreparationState("builtin", "")
         val events = mutableListOf<String>()
@@ -209,7 +261,7 @@ class RendererPreparationCoordinatorTest {
             releaseEnsure.countDown()
 
             assertEquals(
-                RendererPreparationCoordinator.Result.ALREADY_READY,
+                RendererPreparationCoordinator.Result.CLOSED,
                 running.get(1, java.util.concurrent.TimeUnit.SECONDS),
             )
             assertFalse(launched)

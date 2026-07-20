@@ -800,10 +800,8 @@ class DashboardActivity : AppCompatActivity() {
                <h1 style="color:#f66">Home Assistant sign-in rejected</h1>
                <p style="font-size:1.3em">This panel's saved Home Assistant login settings were rejected,
                so the dashboard has stopped retrying.</p>
-               <p style="font-size:1.3em"><b>Fix:</b> open <b>$cfg</b> &rarr; Dashboard. To borrow a
-               signed-in Home Assistant Companion login again, clear the Home Assistant server URL and save;
-               or enter a new long-lived access token from your Home Assistant profile. The dashboard reloads
-               automatically when the login changes.</p>
+               <p style="font-size:1.3em"><b>Fix:</b> open <b>$cfg</b> &rarr; Home Assistant connection,
+               then use Browser sign-in. The dashboard reloads automatically when the login changes.</p>
                </div></body></html>""",
             "text/html", "utf-8", null,
         )

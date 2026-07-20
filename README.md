@@ -111,7 +111,7 @@ A limited [advanced fallback](docs/shizuku.md) exists for genuinely unrooted pan
 
 **Still needs direct root (`su`) or ha-paneld's root helper:** true screen-off (backlight hard-off), RGB LED and relay control where the hardware requires it, vendor-app taming, reboot and CPU governor.
 
-**Still needs direct root (`su`) inside ha-paneld:** kiosk lock, full system logs, and borrowing the Companion's sign-in when switching renderers. Full backups can include and restore the Companion login through either direct root or the current authenticated root helper.
+**Still needs direct root (`su`) inside ha-paneld:** kiosk lock, full system logs, and the legacy Companion-session import compatibility path. Full backups can include and restore an existing Companion login through either direct root or the current authenticated root helper.
 
 ## Supported hardware
 
@@ -132,7 +132,7 @@ ha-paneld needs no system-signed install. Standard-Android capabilities (brightn
 
 **Latest stable release — 0.9.4:** built-in dashboard diagnostics now break interaction delay into input, handler and presentation time, correlate it with Home Assistant state traffic, main-thread blocking and renderer instability, retain seven days of content-free history, and report a conservative likely cause. The one-line installer also starts the app during setup so it can identify the active hardware profile and verify the panel-specific requirements in the same installation pass. Full notes are in [CHANGELOG.md](CHANGELOG.md).
 
-**Release candidate — 0.9.5-rc1 (under test):** adaptive brightness and proximity learn each panel's room and sensor behaviour, optional Hardened mode requires someone physically at the panel to approve selected high-impact remote actions on its screen, and lifecycle fixes improve recovery after configuration, network and helper changes. These actions cannot be approved remotely. This label describes the current candidate in source; it is not a published release until the matching GitHub prerelease exists.
+**Release candidate — 0.9.5-rc2 (under test):** Home Assistant sign-in can be completed from an administrator's browser, existing Home Assistant light history can seed adaptive brightness, and kiosk startup, wake-on-wave learning and validation have been refined. This label describes the current candidate in source; it is not a published release until the matching GitHub prerelease exists.
 
 **Where it's heading** — the near-term direction remains reliable provisioning and operation across more than one panel. Two larger stretch candidates are being evaluated for the initial v1.0 release: fleet management and Voice Assistant support; neither is committed. Other planned work includes MQTT TLS for self-signed brokers, an on-device scheduler, deeper per-card performance attribution, and continued iteration on the HTTP UI. The full curated list is in **[docs/roadmap.md](docs/roadmap.md)**.
 

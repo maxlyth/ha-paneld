@@ -12,6 +12,7 @@ import android.database.ContentObserver
 import android.net.ConnectivityManager
 import android.net.LinkProperties
 import android.net.Network
+import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -45,6 +46,9 @@ import io.github.maxlyth.hapaneld.control.OverlayWakeTap
 import io.github.maxlyth.hapaneld.control.ScreenController
 import io.github.maxlyth.hapaneld.control.WakeOutcome
 import io.github.maxlyth.hapaneld.control.AndroidWifiDiagnostics
+import io.github.maxlyth.hapaneld.control.WifiDiagnosticDemand
+import io.github.maxlyth.hapaneld.control.WifiDiagnosticAdmissionTracker
+import io.github.maxlyth.hapaneld.control.availability
 import io.github.maxlyth.hapaneld.control.Su
 import io.github.maxlyth.hapaneld.control.SystemController
 import io.github.maxlyth.hapaneld.control.TameController
@@ -573,9 +577,14 @@ class PaneldService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        // Android starts the foreground-service deadline before onCreate. Promote before profile/DB/
+        // controller construction: slow root-backed initialization must never consume that deadline.
+        // The bootstrap notification is deliberately silent until persisted notification policy is read.
+        startForegroundCompat("Starting…", silent = true)
         restartLease = SERVICE_RESTART_BARRIER.enter()
         config = Config(this)
         config.migrateLiveStore()   // carry persisted settings across a schema bump before anything reads them
+        updateForegroundStatus("Starting…")
         liveSettingAuthority = LiveSettingAuthority.persistent(this, MqttBridge.APPLY_SETTING_KEYS)
         // Resolve one immutable profile revision before constructing any hardware owner. Activations are
         // restart-bound, so every controller below observes this exact object for the service lifetime.
@@ -869,9 +878,9 @@ class PaneldService : Service() {
                 )
             },
         )
-        sensors.setRangedProximityListener {
+        sensors.setLearnedProximityListener {
             server.invalidateCapabilitySnapshot()
-            runtime.observe()?.value?.mqtt?.notifyRangedProximityChanged()
+            runtime.observe()?.value?.mqtt?.notifyLearnedProximityChanged()
         }
     }
 
@@ -926,7 +935,7 @@ class PaneldService : Service() {
             runtimeMqttUser = credentials.user,
             runtimeMqttPassword = credentials.password,
             wifiDiagnostics = wifiDiagnostics::snapshot,
-            rangedProximityEligibility = sensors::hasRangedProximity,
+            learnedProximityEligibility = sensors::hasLearnedProximity,
         )
     }
 
@@ -1058,6 +1067,18 @@ class PaneldService : Service() {
                 val site = haSiteMetadata.fetch().metadata
                 if (site != null && !serviceStopping && adaptiveSiteGeneration.get() == generation) {
                     autoBright.updateSite(site.latitude, site.longitude, site.timeZone)
+                }
+                if (selected != null && !serviceStopping && adaptiveSiteGeneration.get() == generation) {
+                    try {
+                        val seed = haAmbientLux.loadHistory(selected)
+                        if (!serviceStopping && adaptiveSiteGeneration.get() == generation) {
+                            autoBright.seedHaHistory(seed)
+                        }
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (error: Throwable) {
+                        Log.i(TAG, "Home Assistant ambient history bootstrap unavailable (${error.javaClass.simpleName})")
+                    }
                 }
             }
         }
@@ -1636,15 +1657,18 @@ class PaneldService : Service() {
     ): Capabilities {
         val cost = FeatureCosts.registry.span(FeatureCostOperation.CAPABILITY_SNAPSHOT)
         return try {
+            val wifi = wifiDiagnostics.snapshot(
+                WifiDiagnosticDemand(ssid = true, rssi = true, privilegedRoute = directSuReady),
+            )
+            val wifiAvailable = wifi.availability()
             Capabilities(
                 hasProximity = sensors.hasProximity(),
-                hasRangedProximity = sensors.hasRangedProximity(),
+                hasLearnedProximity = sensors.hasLearnedProximity(),
                 hasLight = sensors.hasLight(),
                 hasTemperature = sensors.hasTemperature(),
                 hasHumidity = sensors.hasHumidity(),
-                hasWifi = packageManager.hasSystemFeature(PackageManager.FEATURE_WIFI),
-                hasWifiSsid = packageManager.hasSystemFeature(PackageManager.FEATURE_WIFI) &&
-                    wifiDiagnostics.ssidRouteAvailable(directSuReady),
+                hasWifi = wifiAvailable.rssi,
+                hasWifiSsid = wifiAvailable.ssid,
                 hasCht8305 = profile.hasCht8305,
                 appCanSu = profile.appCanSu,
                 hasRecents = profile.hasRecents,
@@ -1865,7 +1889,6 @@ class PaneldService : Service() {
         // binding a second Ktor server on :8888 -> BindException crashes the process (and would also
         // double-start mqtt/mdns/sensors). started is reset in onDestroy so a genuine restart re-inits.
         if (started) return START_STICKY
-        startForegroundCompat("Starting…")
         started = true
         val startupActivationGeneration = profileActivationGeneration
         val startup = runtime.start runtimeStart@{ activeRuntime ->
@@ -2007,16 +2030,16 @@ class PaneldService : Service() {
                     mqtt.publishProximity(near, level, reportMask)
                 },
                 onGesture = gesture@{
-                    if (!config.wakeOnWave || !sensors.hasRangedProximity()) return@gesture
+                    if (!config.wakeOnWave || !sensors.hasLearnedProximity()) return@gesture
                     val generation = screen.currentOffGeneration() ?: return@gesture
                     val settingGeneration = config.wakeOnWaveGeneration
                     wakeOnWaveWorker.execute {
                         if (
-                            serviceStopping || !config.wakeOnWave || !sensors.hasRangedProximity() ||
+                            serviceStopping || !config.wakeOnWave || !sensors.hasLearnedProximity() ||
                             config.wakeOnWaveGeneration != settingGeneration
                         ) return@execute
                         if (screen.wakeIfStillDark(generation) {
-                                !serviceStopping && config.wakeOnWave && sensors.hasRangedProximity() &&
+                                !serviceStopping && config.wakeOnWave && sensors.hasLearnedProximity() &&
                                     config.wakeOnWaveGeneration == settingGeneration
                             } == WakeOutcome.WOKEN && !serviceStopping
                         ) {
@@ -2401,7 +2424,20 @@ class PaneldService : Service() {
         if (netCallback != null) return
         val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return
         val cb = object : ConnectivityManager.NetworkCallback() {
+            private var defaultNetwork: Network? = null
+            private val wifiAdmission = WifiDiagnosticAdmissionTracker()
+
+            private fun observeTransport(network: Network, capabilities: NetworkCapabilities?) {
+                if (network != defaultNetwork) return
+                if (!wifiAdmission.changed(wifiDiagnostics.admission(capabilities))) return
+                wifiDiagnostics.invalidate()
+                if (::server.isInitialized) server.invalidateCapabilitySnapshot()
+                runtime.observe()?.value?.mqtt?.refreshNetworkState()
+            }
+
             override fun onAvailable(network: Network) {
+                defaultNetwork = network
+                observeTransport(network, cm.getNetworkCapabilities(network))
                 val observed = runtime.observe() ?: return
                 val target = observed.value.mqtt
                 target.refreshDiscoveryAddress()
@@ -2424,13 +2460,22 @@ class PaneldService : Service() {
             override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) {
                 runtime.observe()?.value?.mqtt?.refreshDiscoveryAddress()
             }
+
+            override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+                observeTransport(network, capabilities)
+            }
+
+            override fun onLost(network: Network) {
+                if (network != defaultNetwork) return
+                observeTransport(network, null)
+                defaultNetwork = null
+            }
         }
         runCatching { cm.registerDefaultNetworkCallback(cb) }.onSuccess { netCallback = cb }
     }
 
-    private fun startForegroundCompat(statusText: String) {
+    private fun notificationChannel(silent: Boolean): Pair<NotificationManager, String> {
         val mgr = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        val silent = config.silenceBootChime
         val channelId = if (silent) SILENT_CHANNEL_ID else CHANNEL_ID
         if (mgr.getNotificationChannel(channelId) == null) {
             mgr.createNotificationChannel(
@@ -2444,6 +2489,11 @@ class PaneldService : Service() {
                 },
             )
         }
+        return mgr to channelId
+    }
+
+    private fun startForegroundCompat(statusText: String, silent: Boolean) {
+        val (_, channelId) = notificationChannel(silent)
         val notification = foregroundNotification(channelId, silent, statusText)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -2456,9 +2506,8 @@ class PaneldService : Service() {
 
     private fun updateForegroundStatus(statusText: String) {
         if (serviceStopping) return
-        val mgr = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         val silent = config.silenceBootChime
-        val channelId = if (silent) SILENT_CHANNEL_ID else CHANNEL_ID
+        val (mgr, channelId) = notificationChannel(silent)
         mgr.notify(NOTIF_ID, foregroundNotification(channelId, silent, statusText))
     }
 

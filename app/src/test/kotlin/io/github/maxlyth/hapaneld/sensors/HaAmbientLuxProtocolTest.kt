@@ -9,28 +9,35 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class HaAmbientLuxProtocolTest {
-    @Test fun `subscription uses official exact state trigger`() {
-        val command = HaAmbientLuxProtocol.subscribeTrigger("sensor.room_illuminance", id = 17)
+    @Test fun `subscription uses the permission aware exact entity stream`() {
+        val command = HaAmbientLuxProtocol.subscribeEntities("sensor.room_illuminance", id = 17)
 
         assertEquals(17, command.getInt("id"))
-        assertEquals("subscribe_trigger", command.getString("type"))
-        val trigger = command.getJSONObject("trigger")
-        assertEquals("state", trigger.getString("platform"))
-        assertEquals("sensor.room_illuminance", trigger.getString("entity_id"))
-        assertFalse(trigger.has("from"))
-        assertFalse(trigger.has("to"))
-        assertEquals(2, trigger.length())
+        assertEquals("subscribe_entities", command.getString("type"))
+        assertEquals(listOf("sensor.room_illuminance"), command.getJSONArray("entity_ids").let {
+            (0 until it.length()).map(it::getString)
+        })
     }
 
-    @Test fun `trigger parser projects only to_state`() {
-        val expected = state("sensor.room_illuminance", "34.5", "2026-07-17T10:00:02Z")
-        val message = JSONObject()
-            .put("id", 1)
-            .put("type", "event")
-            .put("event", JSONObject().put("variables", JSONObject().put("trigger", JSONObject().put("to_state", expected))))
+    @Test fun `compressed exact entity updates retain attributes and timestamps`() {
+        val entity = "sensor.room_illuminance"
+        val projection = HaCompressedEntityProjection(entity)
+        val attributes = JSONObject().put("device_class", "illuminance").put("unit_of_measurement", "lx")
+        val added = projection.apply(JSONObject().put(
+            "a",
+            JSONObject().put(entity, JSONObject().put("s", "12").put("a", attributes).put("lc", 1_768_644_000.0)),
+        )) as HaSocketMessage.State
+        val changed = projection.apply(JSONObject().put(
+            "c",
+            JSONObject().put(entity, JSONObject().put("+", JSONObject().put("s", "34.5").put("lu", 1_768_644_002.0))),
+        )) as HaSocketMessage.State
 
-        assertEquals(expected.toString(), HaAmbientLuxProtocol.triggerState(message)?.toString())
-        assertNull(HaAmbientLuxProtocol.triggerState(JSONObject().put("type", "event")))
+        assertEquals("12", added.json.getString("state"))
+        assertEquals("2026-01-17T10:00:00Z", added.json.getString("last_updated"))
+        assertEquals("34.5", changed.json.getString("state"))
+        assertEquals("lx", changed.json.getJSONObject("attributes").getString("unit_of_measurement"))
+        assertEquals("2026-01-17T10:00:02Z", changed.json.getString("last_updated"))
+        assertTrue(projection.apply(JSONObject().put("r", JSONArray().put(entity))) is HaSocketMessage.SourceMissing)
     }
 
     @Test fun `subscribe first REST hydration cannot overwrite newer stream state`() {
@@ -91,7 +98,7 @@ class HaAmbientLuxProtocolTest {
 
     @Test(expected = IllegalArgumentException::class)
     fun `subscription rejects wildcard-like entity ids`() {
-        HaAmbientLuxProtocol.subscribeTrigger("sensor.*")
+        HaAmbientLuxProtocol.subscribeEntities("sensor.*")
     }
 
     private fun state(entityId: String, value: String, updated: String) = JSONObject()

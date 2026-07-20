@@ -47,9 +47,10 @@ sealed class Validation {
  */
 data class Capabilities(
     val hasProximity: Boolean = false,
-    /** True only after the adaptive learner proves this exact source fingerprint has a graded/ranged
-     *  signal. Binary/unknown sources remain available to local diagnostics but cannot expose wake UI. */
-    val hasRangedProximity: Boolean = false,
+    /** True after the adaptive learner proves this exact source fingerprint has a usable binary or
+     *  graded signal. Source setup remains available through [hasProximity] while learning; actuation
+     *  and fleet reporting stay unavailable until this learned capability exists. */
+    val hasLearnedProximity: Boolean = false,
     val hasLight: Boolean = false,
     val hasTemperature: Boolean = false,
     val hasHumidity: Boolean = false,

@@ -1,8 +1,6 @@
 package io.github.maxlyth.hapaneld.control
 
-import android.Manifest
 import android.content.Context
-import android.content.pm.PackageManager
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.wifi.WifiInfo
@@ -13,6 +11,8 @@ import android.os.SystemClock
 internal data class WifiDiagnosticSnapshot(
     val ssid: String? = null,
     val rssiDbm: Int? = null,
+    /** True only when Wi-Fi is the Android default network, not merely connected in the background. */
+    val active: Boolean = false,
 )
 
 internal data class WifiDiagnosticDemand(
@@ -26,6 +26,7 @@ internal fun needsPrivilegedWifiStatus(
     direct: WifiDiagnosticSnapshot,
     demand: WifiDiagnosticDemand,
 ): Boolean = demand.privilegedRoute &&
+    direct.active &&
     (demand.ssid && direct.ssid == null || demand.rssi && direct.rssiDbm == null)
 
 internal fun normalizedWifiSsid(raw: String?): String? {
@@ -38,6 +39,111 @@ internal fun normalizedWifiSsid(raw: String?): String? {
 }
 
 internal fun normalizedWifiRssi(raw: Int): Int? = raw.takeIf { it in -126..0 }
+
+internal fun observedWifiSnapshot(
+    activeWifi: Boolean,
+    rawSsid: String?,
+    rawRssiDbm: Int?,
+): WifiDiagnosticSnapshot = if (!activeWifi) {
+    WifiDiagnosticSnapshot()
+} else {
+    WifiDiagnosticSnapshot(
+        ssid = normalizedWifiSsid(rawSsid),
+        rssiDbm = rawRssiDbm?.let(::normalizedWifiRssi),
+        active = true,
+    )
+}
+
+internal data class WifiDiagnosticAvailability(
+    val ssid: Boolean,
+    val rssi: Boolean,
+)
+
+internal fun WifiDiagnosticSnapshot.availability(): WifiDiagnosticAvailability =
+    WifiDiagnosticAvailability(
+        ssid = active && ssid != null,
+        rssi = active && rssiDbm != null,
+    )
+
+internal data class WifiDiagnosticAdmission(
+    val active: Boolean,
+    val ssid: Boolean,
+    val rssi: Boolean,
+)
+
+internal fun WifiDiagnosticSnapshot.admission(): WifiDiagnosticAdmission {
+    val available = availability()
+    return WifiDiagnosticAdmission(active = active, ssid = available.ssid, rssi = available.rssi)
+}
+
+/** Suppresses duplicate callbacks while admitting same-transport diagnostic availability changes. */
+internal class WifiDiagnosticAdmissionTracker {
+    private var previous: WifiDiagnosticAdmission? = null
+
+    @Synchronized
+    fun changed(current: WifiDiagnosticAdmission): Boolean {
+        if (previous == current) return false
+        previous = current
+        return true
+    }
+}
+
+internal class WifiDiagnosticCache(
+    private val nowMs: () -> Long = SystemClock::elapsedRealtime,
+) {
+    private var directCachedAtMs = Long.MIN_VALUE
+    private var directCached = WifiDiagnosticSnapshot()
+    private var shellCachedAtMs = Long.MIN_VALUE
+    private var shellCached = WifiDiagnosticSnapshot()
+
+    @Synchronized
+    fun snapshot(
+        demand: WifiDiagnosticDemand,
+        directReader: () -> WifiDiagnosticSnapshot,
+        privilegedReader: () -> WifiDiagnosticSnapshot,
+    ): WifiDiagnosticSnapshot {
+        val now = nowMs()
+        val direct = if (
+            directCachedAtMs != Long.MIN_VALUE && now - directCachedAtMs in 0 until CACHE_MS
+        ) {
+            directCached
+        } else {
+            runCatching(directReader).getOrDefault(WifiDiagnosticSnapshot()).also {
+                directCached = it
+                directCachedAtMs = now
+            }
+        }
+        val shell = if (needsPrivilegedWifiStatus(direct, demand)) {
+            if (shellCachedAtMs != Long.MIN_VALUE && now - shellCachedAtMs in 0 until CACHE_MS) {
+                shellCached
+            } else {
+                runCatching(privilegedReader).getOrDefault(WifiDiagnosticSnapshot()).also {
+                    shellCached = it
+                    shellCachedAtMs = now
+                }
+            }
+        } else {
+            WifiDiagnosticSnapshot()
+        }
+        return WifiDiagnosticSnapshot(
+            ssid = if (demand.ssid) direct.ssid ?: shell.ssid else null,
+            rssiDbm = if (demand.rssi) direct.rssiDbm ?: shell.rssiDbm else null,
+            active = direct.active,
+        )
+    }
+
+    @Synchronized
+    fun invalidate() {
+        directCachedAtMs = Long.MIN_VALUE
+        directCached = WifiDiagnosticSnapshot()
+        shellCachedAtMs = Long.MIN_VALUE
+        shellCached = WifiDiagnosticSnapshot()
+    }
+
+    private companion object {
+        const val CACHE_MS = 15_000L
+    }
+}
 
 internal fun parseWifiShellSnapshot(raw: String?): WifiDiagnosticSnapshot {
     if (raw.isNullOrBlank()) return WifiDiagnosticSnapshot()
@@ -61,67 +167,41 @@ internal class AndroidWifiDiagnostics(
     private val app = context.applicationContext
     private val wifi = app.getSystemService(Context.WIFI_SERVICE) as? WifiManager
     private val connectivity = app.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-    private val cacheLock = Any()
-    private var directCachedAtMs = Long.MIN_VALUE
-    private var directCached = WifiDiagnosticSnapshot()
-    private var shellCachedAtMs = Long.MIN_VALUE
-    private var shellCached = WifiDiagnosticSnapshot()
+    private val cache = WifiDiagnosticCache()
 
     @Suppress("DEPRECATION")
-    private fun currentInfo(): WifiInfo? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-        val manager = connectivity ?: return null
-        val active = manager.activeNetwork?.let(manager::getNetworkCapabilities)
-        (active?.takeIf { it.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) }?.transportInfo as? WifiInfo)
-            ?: manager.allNetworks.asSequence()
-                .mapNotNull(manager::getNetworkCapabilities)
-                .firstOrNull { it.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) }
-                ?.transportInfo as? WifiInfo
-    } else {
-        wifi?.connectionInfo
-    }
-
-    fun ssidRouteAvailable(privilegedAvailable: Boolean): Boolean = privilegedAvailable ||
-        Build.VERSION.SDK_INT < Build.VERSION_CODES.O_MR1 ||
-        app.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
-
-    fun snapshot(demand: WifiDiagnosticDemand): WifiDiagnosticSnapshot = synchronized(cacheLock) {
-        val now = SystemClock.elapsedRealtime()
-        val direct = if (
-            directCachedAtMs != Long.MIN_VALUE && now - directCachedAtMs in 0 until CACHE_MS
-        ) {
-            directCached
-        } else {
-            (runCatching {
-                currentInfo()?.let { info ->
-                    WifiDiagnosticSnapshot(
-                        ssid = normalizedWifiSsid(info.ssid),
-                        rssiDbm = normalizedWifiRssi(info.rssi),
-                    )
-                }
-            }.getOrNull() ?: WifiDiagnosticSnapshot()).also {
-                directCached = it
-                directCachedAtMs = now
-            }
+    private fun snapshotFor(capabilities: NetworkCapabilities?): WifiDiagnosticSnapshot {
+        capabilities ?: return WifiDiagnosticSnapshot()
+        if (!capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
+            return WifiDiagnosticSnapshot()
         }
-        val shell = if (needsPrivilegedWifiStatus(direct, demand)) {
-            if (shellCachedAtMs != Long.MIN_VALUE && now - shellCachedAtMs in 0 until CACHE_MS) {
-                shellCached
-            } else {
-                parseWifiShellSnapshot(runCatching(privilegedStatus).getOrNull()).also {
-                    shellCached = it
-                    shellCachedAtMs = now
-                }
-            }
+        val info = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            capabilities.transportInfo as? WifiInfo
         } else {
-            WifiDiagnosticSnapshot()
+            wifi?.connectionInfo
         }
-        WifiDiagnosticSnapshot(
-            ssid = if (demand.ssid) direct.ssid ?: shell.ssid else null,
-            rssiDbm = if (demand.rssi) direct.rssiDbm ?: shell.rssiDbm else null,
+        return observedWifiSnapshot(
+            activeWifi = true,
+            rawSsid = info?.ssid,
+            rawRssiDbm = info?.rssi,
         )
     }
 
-    private companion object {
-        const val CACHE_MS = 15_000L
+    private fun currentSnapshot(): WifiDiagnosticSnapshot {
+        val manager = connectivity ?: return WifiDiagnosticSnapshot()
+        return snapshotFor(manager.activeNetwork?.let(manager::getNetworkCapabilities))
     }
+
+    fun admission(capabilities: NetworkCapabilities?): WifiDiagnosticAdmission =
+        snapshotFor(capabilities).admission()
+
+    fun snapshot(demand: WifiDiagnosticDemand): WifiDiagnosticSnapshot = cache.snapshot(
+        demand = demand,
+        directReader = ::currentSnapshot,
+        privilegedReader = {
+            parseWifiShellSnapshot(runCatching(privilegedStatus).getOrNull())
+        },
+    )
+
+    fun invalidate() = cache.invalidate()
 }

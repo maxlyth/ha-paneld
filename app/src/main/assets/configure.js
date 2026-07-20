@@ -4,7 +4,7 @@
 (function () {
   "use strict";
   // Advanced is the DEFAULT view until the reduced Basic set is settled (user, 2026-07-01).
-  var schema = [], values = {}, expose = {}, advanced = true, dirty = false, saving = false, editGeneration = 0, apps = [], radio = null;
+  var schema = [], values = {}, expose = {}, haAuth = {}, advanced = true, dirty = false, saving = false, editGeneration = 0, apps = [], radio = null;
   var savedValues = {}, savedExpose = {};
   var dirtyValues = Object.create(null), dirtyExpose = Object.create(null);
   var joinCooldownUntil = 0, joinPollTimer = null, hashFocused = false;
@@ -13,6 +13,9 @@
   var autoBrightStatus = null, autoBrightHistory = null, autoBrightLoading = false, autoBrightMessage = "";
   var autoBrightHistoryTimer = null, autoBrightRefreshTimer = null, autoBrightRequest = 0;
   var AUTO_BRIGHTNESS_REFRESH_MS = 5 * 60 * 1000;
+  var haOauthButton = null, haOauthStatus = null, haOauthLinks = null;
+  var haOauthAuthorizationUrl = "", haOauthTargetUrl = "";
+  var haUserStatus = { phase: "unknown" }, haUserStatusRequest = 0;
   var HARDENED_APPROVAL_SETTING_KEYS = {
     self_update: true, update_channel: true, companion_auto_update: true,
     companion_update_channel: true, webview_auto_update: true
@@ -67,12 +70,154 @@
     editGeneration++;
     recomputeDirty();
     updateSaveUi();
+    syncHaOAuthAvailability();
   }
   function clearDirty() {
     dirty = false;
     dirtyValues = Object.create(null);
     dirtyExpose = Object.create(null);
     updateSaveUi();
+  }
+
+  function validHaUrlForOAuth() {
+    try {
+      var url = new URL(String(values.ha_url || "").trim());
+      return (url.protocol === "http:" || url.protocol === "https:") && !!url.hostname &&
+        !url.username && !url.password && !url.search && !url.hash;
+    } catch (_) { return false; }
+  }
+
+  function syncHaOAuthAvailability() {
+    if (!haOauthButton) return;
+    haOauthButton.disabled = !validHaUrlForOAuth();
+    haOauthButton.title = haOauthButton.disabled ? "Enter a valid Home Assistant URL first." : "";
+  }
+
+  function copyText(value) {
+    if (navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(value);
+    var input = el("textarea", { "aria-hidden": "true" });
+    input.value = value; input.style.position = "fixed"; input.style.left = "-9999px";
+    document.body.appendChild(input); input.select();
+    var copied = document.execCommand("copy");
+    document.body.removeChild(input);
+    return copied ? Promise.resolve() : Promise.reject(new Error("copy unavailable"));
+  }
+
+  function startHaOAuth() {
+    if (!haOauthButton || !validHaUrlForOAuth()) return;
+    var target = String(values.ha_url || "").trim().replace(/\/+$/, "");
+    // Choosing browser sign-in supersedes a manually typed token immediately. This also prevents a
+    // private-window completion, which cannot signal the ordinary browser context, from being overwritten
+    // by that stale form value on a later unrelated save.
+    values.ha_token = "";
+    savedValues.ha_token = "";
+    var tokenInput = document.querySelector("#cfg-ha_token input");
+    if (tokenInput) tokenInput.value = "";
+    recomputeDirty(); updateSaveUi();
+    haOauthButton.disabled = true;
+    setHaOauthStatus("Starting sign-in…", false);
+    haOauthAuthorizationUrl = "";
+    haOauthTargetUrl = "";
+    haOauthLinks.hidden = true;
+    fetch("/api/v1/ha/oauth/start", {
+      method: "POST",
+      headers: { "Accept": "application/json", "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ ha_url: target }).toString()
+    }).then(function (response) {
+      return response.json().catch(function () { return {}; }).then(function (body) {
+        if (!response.ok || !body.authorization_url) throw new Error(body.message || ("HTTP " + response.status));
+        return body.authorization_url;
+      });
+    }).then(function (authorizationUrl) {
+      haOauthAuthorizationUrl = authorizationUrl;
+      haOauthTargetUrl = target;
+      var openLink = haOauthLinks.querySelector("a");
+      openLink.href = authorizationUrl;
+      haOauthLinks.hidden = false;
+      setHaOauthStatus("Sign-in link ready. Open it normally or copy it into a private window.", false);
+    }).catch(function (error) {
+      setHaOauthStatus(error && error.message ? error.message : "Could not start sign-in.", false);
+    }).then(function () { syncHaOAuthAvailability(); });
+  }
+
+  function haConnectionStatusText() {
+    if (haUserStatus.phase === "connected") {
+      return haUserStatus.display_name ? "Connected as " + haUserStatus.display_name : "Connected";
+    }
+    if (haUserStatus.phase === "rejected") return "Sign-in rejected — reconnect to Home Assistant";
+    if (haUserStatus.phase === "unavailable") {
+      return (haAuth.oauth ? "OAuth configured" : "Long-lived token configured") + " · status unavailable";
+    }
+    return haAuth.oauth ? "OAuth configured" : haAuth.configured ? "Long-lived token configured" : "Not configured";
+  }
+
+  function setHaOauthStatus(text, connected) {
+    if (!haOauthStatus) return;
+    haOauthStatus.textContent = text;
+    haOauthStatus.classList.toggle("connected", connected === true);
+  }
+
+  function renderHaConnectionStatus() {
+    setHaOauthStatus(haConnectionStatusText(), haUserStatus.phase === "connected");
+  }
+
+  function loadHaUserStatus() {
+    var request = ++haUserStatusRequest;
+    if (!haAuth.configured) {
+      haUserStatus = { phase: "not_configured" };
+      renderHaConnectionStatus();
+      return;
+    }
+    fetch("/api/v1/ha/oauth/status", { headers: { "Accept": "application/json" }, cache: "no-store" })
+      .then(function (response) { if (!response.ok) throw response.status; return response.json(); })
+      .then(function (body) {
+        if (request !== haUserStatusRequest) return;
+        haUserStatus = body || { phase: "unavailable" };
+      })
+      .catch(function () {
+        if (request === haUserStatusRequest) haUserStatus = { phase: "unavailable" };
+      })
+      .then(function () {
+        if (request === haUserStatusRequest) renderHaConnectionStatus();
+      });
+  }
+
+  function haOAuthRow() {
+    haOauthButton = el("button", {
+      class: "pbtn", type: "button", text: haAuth.configured ? "Reconnect" : "Connect"
+    });
+    haOauthButton.addEventListener("click", startHaOAuth);
+    haOauthStatus = el("div", {
+      class: "ha-oauth-status",
+      text: haConnectionStatusText()
+    });
+    renderHaConnectionStatus();
+    var openLink = el("a", {
+      class: "pbtn", target: "_blank", rel: "noopener noreferrer", referrerpolicy: "no-referrer", text: "Open sign-in"
+    });
+    var copyButton = el("button", { class: "pbtn", type: "button", text: "Copy link" });
+    copyButton.addEventListener("click", function () {
+      copyText(haOauthAuthorizationUrl).then(function () {
+        setHaOauthStatus("Sign-in link copied.", false);
+      }).catch(function () { setHaOauthStatus("Could not copy the link.", false); });
+    });
+    haOauthLinks = el("div", { class: "ha-oauth-links" }, [openLink, copyButton]);
+    haOauthLinks.hidden = !haOauthAuthorizationUrl;
+    if (haOauthAuthorizationUrl) openLink.href = haOauthAuthorizationUrl;
+    var guidance = !haAuth.configured
+      ? "Enter the Home Assistant URL above, then connect this panel."
+      : !haAuth.oauth ? "Browser sign-in is recommended; the long-lived token remains available as an advanced fallback." : "";
+    var row = el("div", { class: "frow ha-oauth-row", id: "cfg-ha-oauth" }, [
+      el("div", { class: "flabel" }, [
+        el("span", { text: "Browser sign-in" }),
+        haOauthStatus,
+        el("small", { text: "Sign in from this computer. To sign in as another user, copy the link into a private window." }),
+        guidance ? el("small", { class: "ha-oauth-guidance", text: guidance }) : null
+      ]),
+      el("div", { class: "fctl ha-oauth-actions" }, [haOauthButton, haOauthLinks])
+    ]);
+    syncHaOAuthAvailability();
+    return row;
   }
 
   function ambientLightSourceReady() {
@@ -468,6 +613,56 @@
     }).sort(function (a, b) { return b.age - a.age; });
   }
 
+  function autoBrightnessDayStyle(age) {
+    var boundedAge = Math.max(0, Math.min(6, age));
+    return {
+      alpha: [1, .28, .20, .14, .10, .07, .05][boundedAge],
+      blurPx: boundedAge === 0 ? 0 : 5 * Math.pow(1.6, boundedAge - 1)
+    };
+  }
+
+  function autoBrightnessSmoothing(age) {
+    var boundedAge = Math.max(0, Math.min(6, Math.round(age)));
+    return {
+      medianWindow: [1, 3, 5, 7, 9, 11, 13][boundedAge],
+      averageWindow: [1, 1, 3, 5, 7, 9, 11][boundedAge]
+    };
+  }
+
+  function centeredMedian(values, windowSize) {
+    if (windowSize <= 1) return values.slice();
+    var radius = Math.floor(windowSize / 2);
+    return values.map(function (_value, index) {
+      var sample = values.slice(Math.max(0, index - radius), Math.min(values.length, index + radius + 1));
+      sample.sort(function (a, b) { return a - b; });
+      return sample[Math.floor(sample.length / 2)];
+    });
+  }
+
+  function centeredWeightedAverage(values, windowSize) {
+    if (windowSize <= 1) return values.slice();
+    var radius = Math.floor(windowSize / 2);
+    return values.map(function (_value, index) {
+      var total = 0, weightTotal = 0;
+      for (var offset = -radius; offset <= radius; offset += 1) {
+        var sampleIndex = index + offset;
+        if (sampleIndex < 0 || sampleIndex >= values.length) continue;
+        var weight = radius + 1 - Math.abs(offset);
+        total += values[sampleIndex] * weight;
+        weightTotal += weight;
+      }
+      return weightTotal ? total / weightTotal : values[index];
+    });
+  }
+
+  function smoothedRunValues(run, field, age, fallbackField) {
+    var smoothing = autoBrightnessSmoothing(age);
+    var values = run.map(function (point) {
+      return point[field] == null && fallbackField ? point[fallbackField] : point[field];
+    });
+    return centeredWeightedAverage(centeredMedian(values, smoothing.medianWindow), smoothing.averageWindow);
+  }
+
   function drawAutoBrightnessChart() {
     var canvas = document.getElementById("auto-brightness-chart");
     if (!canvas) return;
@@ -519,24 +714,30 @@
     }
     function line(day, field, color, widthPx, projectY) {
       runs(day.points, field).forEach(function (run) {
+        var values = smoothedRunValues(run, field, day.age);
         ctx.beginPath();
         run.forEach(function (point, index) {
-          if (!index) ctx.moveTo(x(point), projectY(point[field])); else ctx.lineTo(x(point), projectY(point[field]));
+          if (!index) ctx.moveTo(x(point), projectY(values[index])); else ctx.lineTo(x(point), projectY(values[index]));
         });
-        ctx.strokeStyle = color; ctx.lineWidth = widthPx; ctx.stroke();
+        ctx.strokeStyle = color; ctx.lineWidth = widthPx;
+        ctx.stroke();
       });
     }
     days.forEach(function (day) {
-      var ageAlpha = Math.max(0, 1 - Math.sqrt(day.age / 7));
-      ctx.save(); ctx.globalAlpha = ageAlpha;
-      if ("filter" in ctx) ctx.filter = "blur(" + (Math.sqrt(day.age) * 1.5).toFixed(2) + "px)";
+      var style = autoBrightnessDayStyle(day.age);
+      ctx.save(); ctx.globalAlpha = style.alpha;
+      if ("filter" in ctx) ctx.filter = "blur(" + style.blurPx.toFixed(2) + "px)";
       runs(day.points, "mean").forEach(function (run) {
+        var maxValues = smoothedRunValues(run, "max", day.age, "mean");
+        var minValues = smoothedRunValues(run, "min", day.age, "mean");
         ctx.fillStyle = "rgba(74,158,255,.16)"; ctx.beginPath();
         run.forEach(function (point, index) {
-          var yy = y(point.max == null ? point.mean : point.max);
+          var yy = y(maxValues[index]);
           if (!index) ctx.moveTo(x(point), yy); else ctx.lineTo(x(point), yy);
         });
-        run.slice().reverse().forEach(function (point) { ctx.lineTo(x(point), y(point.min == null ? point.mean : point.min)); });
+        run.slice().reverse().forEach(function (point, reverseIndex) {
+          ctx.lineTo(x(point), y(minValues[minValues.length - reverseIndex - 1]));
+        });
         ctx.closePath(); ctx.fill();
       });
       line(day, "mean", "#4a9eff", 1.6, y);
@@ -822,17 +1023,22 @@
     var root = document.getElementById("cfg-groups");
     var proximityCard = document.querySelector("#cfg-proximity-learning");
     if (haPickerCleanup) haPickerCleanup();
+    haOauthButton = null; haOauthStatus = null; haOauthLinks = null;
     root.innerHTML = "";
     var groups = [];
     schema.forEach(function (f) {
       var group = presentationGroup(f);
       if (groups.indexOf(group) < 0) groups.push(group);
     });
-    var haConnectionIndex = groups.indexOf("Home Assistant connection");
-    if (haConnectionIndex > 2) {
-      groups.splice(haConnectionIndex, 1);
-      groups.splice(2, 0, "Home Assistant connection");
+    function moveGroupTo(name, index) {
+      var currentIndex = groups.indexOf(name);
+      if (currentIndex < 0) return;
+      groups.splice(currentIndex, 1);
+      groups.splice(Math.min(index, groups.length), 0, name);
     }
+    moveGroupTo("Home Assistant connection", 2);
+    moveGroupTo("Dashboard", 3);
+    moveGroupTo("Built-in renderer", 4);
     var loggingIndex = groups.indexOf("Logging");
     if (loggingIndex >= 0 && loggingIndex !== groups.length - 1) {
       groups.splice(loggingIndex, 1);
@@ -856,6 +1062,7 @@
       card.setAttribute("data-config-group", g);
       fields.forEach(function (f) {
         card.appendChild(row(f));
+        if (g === "Home Assistant connection" && f.key === "ha_url") card.appendChild(haOAuthRow());
         if (f.key === "zigbee_router") {
           var join = zigbeeJoinRow();
           if (join) card.appendChild(join);
@@ -948,8 +1155,30 @@
     }, 500);
   }
 
+  function firstInvalidDirtySetting() {
+    for (var i = 0; i < schema.length; i++) {
+      var field = schema[i];
+      if (!dirtyValues[field.key]) continue;
+      var row = document.getElementById("cfg-" + field.key);
+      var control = row && row.querySelector ? row.querySelector("input,select,textarea") : null;
+      if (!control || control.disabled || !control.checkValidity || control.checkValidity()) continue;
+      var range = field.min != null && field.max != null ? " between " + field.min + " and " + field.max : "";
+      var message = range ? field.label + " must be" + range + "." : field.label + " has an invalid value.";
+      return { field: field, control: control, message: message };
+    }
+    return null;
+  }
+
   window.cfgSave = function () {
     if (!dirty || saving) return;
+    var msg = document.getElementById("cfg-msg");
+    var invalid = firstInvalidDirtySetting();
+    if (invalid) {
+      msg.textContent = invalid.message;
+      if (invalid.control.reportValidity) invalid.control.reportValidity();
+      if (invalid.control.focus) invalid.control.focus();
+      return;
+    }
     saving = true;
     var submittedGeneration = editGeneration;
     updateSaveUi();
@@ -967,7 +1196,6 @@
         body.set("ha_expose_" + f.key, submittedExpose[f.key] ? "true" : "false");
       }
     });
-    var msg = document.getElementById("cfg-msg");
     msg.textContent = "Saving…";
     fetch("/api/v1/config", {
       method: "POST", headers: { "Accept": "application/json", "Content-Type": "application/x-www-form-urlencoded" },
@@ -1026,6 +1254,8 @@
       schema = res[0];
       values = res[1].settings || {};
       expose = res[1].ha_expose || {};
+      haAuth = res[1].ha_auth || {};
+      haUserStatus = { phase: "unknown" };
       apps = (res[2] && res[2].apps) || [];
       // Normalize bool values to the "true"/"false" strings the toggle compares against.
       schema.forEach(function (f) {
@@ -1037,6 +1267,7 @@
       // A successful full reload replaces the form's local snapshot, so no previously tracked edit remains.
       clearDirty();
       render();
+      loadHaUserStatus();
       if (done) done(true);
     }).catch(function (e) {
       document.getElementById("cfg-status").textContent = "Could not load settings (" + e + ").";
@@ -1061,6 +1292,44 @@
     loadRadio().then(function () {
       if (radioJoined() || !radio || !radio.router_enabled || n >= 180) return;
       joinPollTimer = setTimeout(function () { pollRadio(n + 1); }, 5000);
+    });
+  }
+
+  function handleHaOAuthResult(status) {
+      haOauthAuthorizationUrl = "";
+      if (haOauthLinks) {
+        haOauthLinks.hidden = true;
+        var openLink = haOauthLinks.querySelector("a");
+        if (openLink) openLink.removeAttribute("href");
+      }
+      if (status === "success") {
+        haAuth = { configured: true, oauth: true };
+        if (haOauthTargetUrl) {
+          values.ha_url = haOauthTargetUrl;
+          savedValues.ha_url = haOauthTargetUrl;
+        }
+        // Browser sign-in supersedes any manually typed token still present in this form.
+        values.ha_token = "";
+        savedValues.ha_token = "";
+        haOauthTargetUrl = "";
+        recomputeDirty(); updateSaveUi(); render();
+        loadHaUserStatus();
+        document.getElementById("cfg-msg").textContent = "Home Assistant configured.";
+      } else {
+        haOauthTargetUrl = "";
+        setHaOauthStatus("Sign-in was not completed. Start again.", false);
+        syncHaOAuthAvailability();
+      }
+  }
+
+  if ("BroadcastChannel" in window) {
+    var haOauthChannel = new BroadcastChannel("ha-paneld-ha-oauth");
+    // Node-backed asset tests expose BroadcastChannel too; do not let its listener hold that process open.
+    if (haOauthChannel.unref) haOauthChannel.unref();
+    haOauthChannel.addEventListener("message", function (event) {
+      if (event.data && (event.data.status === "success" || event.data.status === "failure")) {
+        handleHaOAuthResult(event.data.status);
+      }
     });
   }
 

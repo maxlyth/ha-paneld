@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.9.5-rc2 - 2026-07-20
+
+### Added
+
+- **Home Assistant sign-in can be completed from an administrator's browser** — Configure creates a short-lived link that can be opened normally or copied into a private window for another user, avoiding credential entry on the panel keyboard. Fresh installations print the next-step URL, and Configure shows the connected user's display name when Home Assistant provides one.
+- **Adaptive brightness can start with existing Home Assistant history** — selecting a Home Assistant illuminance sensor brings in up to seven days of recent readings instead of waiting for new readings to accumulate.
+
+### Changed
+
+- **Kiosk-enabled panels go directly to their dashboard during routine startup** — the built-in renderer shows the QR/configuration screen once after each ha-paneld version change, while a launchable external renderer goes directly to its dashboard. Explicit Admin Launcher access and recovery states still retain the configuration screen.[^issue-31]
+
+### Fixed
+
+- **Wake on wave can now be taught before a proximity sensor has identified how it works** — both simple on/off and graduated sensors can complete guided learning, while missing or unknown sources remain safely disabled. Relearning or changing the sensor no longer leaves wake-on-wave incorrectly enabled after an app restart.
+- **Invalid adaptive-brightness values are caught before saving** — Configure now shows the supported range and the server's actionable error instead of failing with a generic HTTP 400 response.
+- **Ethernet-connected panels no longer expose unavailable Wi-Fi diagnostics** — Wi-Fi network and signal entities now appear only while Wi-Fi is the panel's active connection, and stale values are removed when it changes to Ethernet.[^issue-21]
+
+[^issue-31]: User follow-up: [#31 — Load native renderer when ha-paneld starts](https://github.com/maxlyth/ha-paneld/issues/31).
+[^issue-21]: User follow-up: [#21 — No CPU/Temp sensors reporting](https://github.com/maxlyth/ha-paneld/issues/21).
+
 ## v0.9.5-rc1 - 2026-07-19
 
 **This release candidate makes panels more adaptive, more recoverable and easier to manage.** Auto-brightness and proximity no longer need tedious manual configuration and now tune themselves automatically using panel-local environmental data. Optional Hardened mode requires physical access: sensitive remote actions wait for approval on the panel's screen and cannot be approved remotely. Panels also recover more reliably after settings, network or helper changes.

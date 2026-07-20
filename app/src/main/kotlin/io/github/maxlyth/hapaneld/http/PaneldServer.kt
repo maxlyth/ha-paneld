@@ -5,6 +5,8 @@ import android.util.Log
 import io.github.maxlyth.hapaneld.Config
 import io.github.maxlyth.hapaneld.BuildConfig
 import io.github.maxlyth.hapaneld.DashboardEntityBackupState
+import io.github.maxlyth.hapaneld.HaAuthOwner
+import io.github.maxlyth.hapaneld.HaAuthSnapshot
 import io.github.maxlyth.hapaneld.normalizeDashboardEntityPath
 import io.github.maxlyth.hapaneld.peersJson
 import io.github.maxlyth.hapaneld.stableOwner
@@ -61,6 +63,7 @@ import io.github.maxlyth.hapaneld.security.ApprovalBroker
 import io.github.maxlyth.hapaneld.security.LocalApprovalBroker
 import io.github.maxlyth.hapaneld.security.SensitiveOperation
 import io.github.maxlyth.hapaneld.sensors.SensorReporter
+import io.github.maxlyth.hapaneld.sensors.HaCurrentUserClient
 import io.github.maxlyth.hapaneld.shizuku.ShizukuBridge
 import io.github.maxlyth.hapaneld.util.Cached
 import io.github.maxlyth.hapaneld.util.AppInstaller
@@ -71,6 +74,7 @@ import io.github.maxlyth.hapaneld.util.CompanionInstaller
 import io.github.maxlyth.hapaneld.util.CompanionHelperProtocol
 import io.github.maxlyth.hapaneld.util.CompanionOperationStatus
 import io.github.maxlyth.hapaneld.util.HelperClient
+import io.github.maxlyth.hapaneld.util.HaLink
 import io.github.maxlyth.hapaneld.util.ByteLimitExceeded
 import io.github.maxlyth.hapaneld.util.InstallProgress
 import io.github.maxlyth.hapaneld.util.Json
@@ -441,6 +445,20 @@ internal fun autoBrightnessHistoryParameters(
     return AutoBrightnessHistoryParameters(boundedHours, boundedSensitivity, boundedMinimum)
 }
 
+internal fun builtinRendererNeedsConnection(
+    currentPackage: String,
+    currentHaUrl: String,
+    currentHasCredentials: Boolean,
+    requestedPackage: String?,
+    requestedHaUrl: String?,
+    requestHasCredentials: Boolean,
+): Boolean {
+    if ((requestedPackage ?: currentPackage) != SystemController.BUILTIN_DASHBOARD) return false
+    val effectiveUrl = (requestedHaUrl ?: currentHaUrl).trim()
+    val effectiveCredentials = effectiveUrl.isNotBlank() && (currentHasCredentials || requestHasCredentials)
+    return !effectiveCredentials
+}
+
 /**
  * Validate and normalize every direct-config value in one pass. Historically the bespoke route
  * normalized only panel_id while malformed booleans became false, numeric values were silently
@@ -631,6 +649,8 @@ class PaneldServer internal constructor(
     private val rendererPreparation: RendererPreparationCoordinator,
     private val entityLearning: EntityLearningManager,
     private val autoBrightnessHttpApi: AutoBrightnessHttpApi = AutoBrightnessHttpApi.UNAVAILABLE,
+    private val haOAuthExchange: (String, String, String) -> HaLink.AuthorizationCodeExchange =
+        HaLink::exchangeAuthorizationCode,
     private val companionDataOperationState: CompanionDataOperationState =
         CompanionDataOperationState.from(appContext),
     // Runtime-loadable profiles. Optional during staged integration so the existing service can keep
@@ -770,6 +790,9 @@ class PaneldServer internal constructor(
             if (prefs.edit().putString("secret", generated).commit()) generated else ""
         }
     }
+    private val haOAuthFlow = HaOAuthFlow()
+    private val haOAuthStartLock = Any()
+    private val haCurrentUser = HaCurrentUserClient(config)
     // Stored as a stop lambda over a type-inferred server local, so we never have to name Ktor's
     // EmbeddedServer<TEngine, TConfiguration> generic type (which shifts between Ktor versions).
     private var stopServer: (() -> Unit)? = null
@@ -845,6 +868,9 @@ class PaneldServer internal constructor(
             // (Known limitation to iterate on: a LAN peer reaching the panel via its *global* v6 uses a global
             // source and is also rejected — use IPv4 on-LAN; a same-/64-prefix exception is the next refinement.)
             intercept(ApplicationCallPipeline.Plugins) {
+                // OAuth callback URLs carry short-lived state/code query values. Apply privacy headers before
+                // any source, CSRF, or Host rejection can finish the pipeline as well as on routed responses.
+                if (call.request.uri.substringBefore('?') == HA_OAUTH_CALLBACK_PATH) call.noStoreHaOAuth()
                 call.response.headers.append("X-Content-Type-Options", "nosniff")
                 call.response.headers.append("X-Frame-Options", "DENY")
                 call.response.headers.append("Content-Security-Policy", "frame-ancestors 'none'")
@@ -1029,6 +1055,18 @@ class PaneldServer internal constructor(
                     get("/config") { call.respondText(configJson(), ContentType.Application.Json) }
                     post("/config") { handleConfigPost(call) }
                     get("/config/schema") { call.respondText(configSchemaJson(), ContentType.Application.Json) }
+                    haOAuthRoutes(
+                        HaOAuthRouteDependencies(
+                            panelPort = config.httpPort,
+                            start = ::startHaOAuth,
+                            claim = haOAuthFlow::claim,
+                            exchange = { attempt, code -> withContext(Dispatchers.IO) {
+                                haOAuthExchange(attempt.haUrl, code, attempt.clientId)
+                            } },
+                            complete = ::completeHaOAuth,
+                            status = haCurrentUser::status,
+                        ),
+                    )
                     // Versioned config bundle: backup (export) and validated restore/deploy (import).
                     get("/config/export") { handleConfigExport(call) }
                     post("/config/import") { handleConfigImport(call) }
@@ -1626,8 +1664,8 @@ class PaneldServer internal constructor(
                     }
                     post("/proximity/teach") {
                         val action = (receiveBoundedFormParameters(call) ?: return@post)["action"].orEmpty()
-                        if (action != "cancel" && !sensors.hasRangedProximity()) {
-                            call.respondText(RANGED_PROXIMITY_REQUIRED, ContentType.Application.Json, HttpStatusCode.Conflict)
+                        if (action != "cancel" && !sensors.hasProximity()) {
+                            call.respondText(PROXIMITY_SOURCE_REQUIRED, ContentType.Application.Json, HttpStatusCode.Conflict)
                             return@post
                         }
                         val accepted = when (action) {
@@ -1642,8 +1680,8 @@ class PaneldServer internal constructor(
                     }
                     post("/proximity/test") {
                         val action = (receiveBoundedFormParameters(call) ?: return@post)["action"].orEmpty()
-                        if (action != "cancel" && !sensors.hasRangedProximity()) {
-                            call.respondText(RANGED_PROXIMITY_REQUIRED, ContentType.Application.Json, HttpStatusCode.Conflict)
+                        if (action != "cancel" && !sensors.hasProximity()) {
+                            call.respondText(PROXIMITY_SOURCE_REQUIRED, ContentType.Application.Json, HttpStatusCode.Conflict)
                             return@post
                         }
                         val accepted = when (action) {
@@ -1657,8 +1695,8 @@ class PaneldServer internal constructor(
                         )
                     }
                     post("/proximity/relearn") {
-                        if (!sensors.hasRangedProximity()) {
-                            call.respondText(RANGED_PROXIMITY_REQUIRED, ContentType.Application.Json, HttpStatusCode.Conflict)
+                        if (!sensors.hasProximity()) {
+                            call.respondText(PROXIMITY_SOURCE_REQUIRED, ContentType.Application.Json, HttpStatusCode.Conflict)
                             return@post
                         }
                         val confirm = (receiveBoundedFormParameters(call) ?: return@post)["confirm"] == "true"
@@ -2225,8 +2263,8 @@ $approvalKeyAfter
 
     /** Configure tab — schema-driven, save-together settings only. */
     private fun configureBody(): String {
-        val proximityMount = if (sensors.hasRangedProximity()) """<div id="proximity-learning-mount" hidden></div>""" else ""
-        val proximityScript = if (sensors.hasRangedProximity()) """<script src="/assets/proximity-learning.js"></script>""" else ""
+        val proximityMount = if (sensors.hasProximity()) """<div id="proximity-learning-mount" hidden></div>""" else ""
+        val proximityScript = if (sensors.hasProximity()) """<script src="/assets/proximity-learning.js"></script>""" else ""
         return """
 <!-- Basic/Advanced tab bar hidden until every setting is assigned a Basic/Advanced tier; with it hidden
      the form shows ALL settings (configure.js defaults `advanced=true`), so nothing is lost. The tier
@@ -2880,7 +2918,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
     }
 
     /** Empirical proximity mode can change without a config write. Drop the stale capability view so
-     *  the next Configure/dashboard request reflects the new ranged-only availability immediately. */
+     *  the next Configure/dashboard request reflects learned reporting eligibility immediately. */
     internal fun invalidateCapabilitySnapshot() {
         snapCache.invalidate()
         diagCache.invalidate()
@@ -2893,7 +2931,10 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
      *  Overlay that cheap live fact so stale-while-revalidate can never expose wake UI for one request
      *  after eligibility is lost. Other capabilities retain their bounded cached probe semantics. */
     private fun liveCapabilities(cached: Capabilities): Capabilities =
-        cached.copy(hasRangedProximity = sensors.hasRangedProximity())
+        cached.copy(
+            hasProximity = sensors.hasProximity(),
+            hasLearnedProximity = sensors.hasLearnedProximity(),
+        )
 
     /** Last-known snapshot with a background refresh when stale — never blocks once built, so the
      *  Configure endpoints (form values, schema capabilities, Display card) render instantly like
@@ -2975,7 +3016,12 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         val setup = if (needs.isNotEmpty())
             """<div class="setup">⚠ This panel needs <a href="/configure">${needs.joinToString(" and ")}</a> — set on the Configure tab.</div>"""
         else ""
-        val proximityLearning = if (config.wakeOnWave && sensors.hasRangedProximity() && !sensors.proximityReady()) {
+        val haSetup = if (config.dashboardPackage == "builtin" &&
+            config.haToken.isBlank() && config.haRefreshToken.isBlank()
+        ) {
+            """<div class="setup">🏠 <b>Home Assistant sign-in needed</b> — <a href="/configure#cfg-ha-oauth">connect this panel from a browser</a>.</div>"""
+        } else ""
+        val proximityLearning = if (config.wakeOnWave && sensors.hasProximity() && !sensors.proximityReady()) {
             """<div class="setup">👋 <b>Wake on wave is learning</b> — ${esc(sensors.proximitySummary())}. """ +
                 """Touch-to-wake remains available. <a href="/configure#cfg-proximity-learning">See progress or teach a wave</a>.</div>"""
         } else ""
@@ -2994,7 +3040,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         // (WebView / renderer / updates), then the needs-config setup notice. On the dashboard the ad-hoc
         // warnings link to the Install tab for the fix (their one-tap buttons live there, with install.js).
         return adHocWarnings(s, companionServersForRender(), inlineRepair = false) +
-            findings.joinToString("") { bannerFor(it) } + proximityLearning + setup
+            findings.joinToString("") { bannerFor(it) } + proximityLearning + haSetup + setup
     }
 
     /** Render-blocking warnings not modelled by HealthAudit: a crash-looping dashboard app, and Companion
@@ -3015,10 +3061,8 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         if (io.github.maxlyth.hapaneld.control.BuiltinDashboard.authLatched) append(
             """<div class="setup crit">⛔ <b>Built-in renderer: Home Assistant sign-in rejected</b> — the """ +
                 """saved login settings were rejected, so the dashboard stopped retrying (it shows fix """ +
-                """instructions on the panel). To borrow a signed-in Home Assistant Companion login again, clear """ +
-                """the Home Assistant server URL and save; or enter a new """ +
-                """long-lived access token from your Home Assistant profile on """ +
-                """<a href="/configure">Configure → Dashboard</a>; the dashboard reloads automatically when """ +
+                """instructions on the panel). Use Browser sign-in on """ +
+                """<a href="/configure#cfg-ha-oauth">Configure → Home Assistant connection</a>; the dashboard reloads automatically when """ +
                 """the credentials change.</div>""",
         )
         if (io.github.maxlyth.hapaneld.PanelStatus.dashboardCrashLooping) append(
@@ -3155,7 +3199,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
             .joinToString("\n") + "\n" + listOfNotNull(
             s.densityCur?.let { """<tr><th>Logical density</th><td>$it dpi (factory base ${s.densityBase ?: "?"})${installIcon("cfg-display")}</td></tr>""" },
             s.densityCur?.let { """<tr><th>Text size</th><td>${s.fontScale}${installIcon("cfg-display")}</td></tr>""" },
-            sensors.proximitySummary().takeIf { sensors.hasRangedProximity() }?.let {
+            sensors.proximitySummary().takeIf { sensors.hasProximity() }?.let {
                 """<tr><th>Wake on wave</th><td>${esc(it)}${cfgIcon("cfg-wake_on_wave")}</td></tr>"""
             },
             """<tr><th>Tamed packages</th><td>${esc(config.tameVendorPackagesRaw.ifBlank { "none" })}${installIcon("cfg-tame")}</td></tr>""",
@@ -3593,6 +3637,60 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
         }
     }
 
+    private fun startHaOAuth(haUrl: String, panelOrigin: String): HaOAuthStart = synchronized(haOAuthStartLock) {
+        val authority = config.beginHaOAuthAttempt()
+        haOAuthFlow.start(haUrl, panelOrigin, authority)
+    }
+
+    private suspend fun completeHaOAuth(
+        attempt: HaOAuthAttempt,
+        tokens: HaLink.OAuthTokens,
+    ): HaOAuthCompletion {
+        val expiry = System.currentTimeMillis() / 1_000L + tokens.expiresInSec
+        val accepted = linkedMapOf(
+            "ha_url" to attempt.haUrl,
+            "ha_token" to tokens.accessToken,
+            "ha_refresh_token" to tokens.refreshToken,
+            "ha_token_expiry" to expiry.toString(),
+            "ha_client_id" to attempt.clientId,
+        )
+        val newOwner = HaAuthSnapshot(
+            attempt.haUrl,
+            tokens.accessToken,
+            tokens.refreshToken,
+            expiry,
+            attempt.clientId,
+        ).stableOwner()
+        val result = runCatching {
+            applyAccepted(
+                accepted,
+                expectedHaAuthOwner = attempt.expectedOwner,
+                expectedHaOAuthEpoch = attempt.expectedEpoch,
+            )
+        }
+        if (result.isFailure) {
+            return if (config.haAuthSnapshot().stableOwner() == newOwner &&
+                config.isHaOAuthAttemptCurrent(attempt.expectedEpoch)
+            ) {
+                HaOAuthCompletion.Success(reloadMayBeNeeded = true)
+            } else {
+                HaOAuthCompletion.CommitFailed
+            }
+        }
+        when (result.getOrThrow()) {
+            ApplyAcceptedResult.STALE -> return HaOAuthCompletion.Stale
+            ApplyAcceptedResult.COMMIT_FAILED -> return HaOAuthCompletion.CommitFailed
+            ApplyAcceptedResult.APPLIED -> Unit
+        }
+        val ambientWarning = runCatching {
+            config.autoBrightnessHaEntity.takeIf(String::isNotBlank)?.let { entityId ->
+                val validation = autoBrightnessHttpApi.validateHaSource(entityId)
+                validation.action.statusCode !in 200..299
+            } ?: false
+        }.getOrDefault(true)
+        return HaOAuthCompletion.Success(ambientWarning = ambientWarning)
+    }
+
     /**
      * Apply a POSTed config form/JSON (partial-merge), then live-reconfigure. Shared by the legacy
      * `/config` route and `/api/v1/config`. Fleet/JSON clients (Accept: application/json) get the new
@@ -3638,6 +3736,26 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
             }
         }
         val dashboardPackage = p["dashboard_package"]
+        if (builtinRendererNeedsConnection(
+                currentPackage = config.dashboardPackage,
+                currentHaUrl = config.haUrl,
+                currentHasCredentials = (config.haToken.isNotBlank() || config.haRefreshToken.isNotBlank()) &&
+                    !(config.hardenedSecurityEnabled && p["ha_url"]?.trimEnd('/')?.let {
+                        it != config.haUrl.trimEnd('/')
+                    } == true),
+                requestedPackage = dashboardPackage,
+                requestedHaUrl = p["ha_url"],
+                requestHasCredentials = p["ha_token"].orEmpty().isNotBlank() ||
+                    p["ha_refresh_token"].orEmpty().isNotBlank(),
+            )
+        ) {
+            call.respondText(
+                """{"ok":false,"error":"ha-sign-in-required","message":"Connect Home Assistant with Browser sign-in before selecting the Built-in renderer."}""",
+                ContentType.Application.Json,
+                HttpStatusCode.Conflict,
+            )
+            return
+        }
         if (p["dashboard_idle_return_min"] != null &&
             (dashboardPackage ?: config.dashboardPackage) != SystemController.BUILTIN_DASHBOARD
         ) {
@@ -4054,7 +4172,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
      */
     private fun configSchemaJson(): String {
         fun s(v: String) = Json.str(v)
-        val caps = liveCapabilities(snapStaleOk().caps) // ranged eligibility is fail-closed and live
+        val caps = liveCapabilities(snapStaleOk().caps) // learned eligibility is fail-closed and live
         val hints = autoHints()   // what blank ("auto") package fields resolve to → field placeholder
         val displaySizingAvailable = caps.canSetDisplay
         // Include the settable settings PLUS the read-only HA sensors (diagnostics): the latter carry
@@ -4362,6 +4480,8 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
         accepted: Map<String, String>,
         expectedConfig: String? = null,
         expectedRevision: String? = null,
+        expectedHaAuthOwner: HaAuthOwner? = null,
+        expectedHaOAuthEpoch: Long? = null,
         entityState: DashboardEntityBackupState? = null,
         onDurableRevision: (String) -> Unit = {},
         afterCommitBeforeRenderer: (RendererConfigEffects, String) -> Unit = { _, _ -> },
@@ -4380,6 +4500,14 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                 if (expectedRevision != null &&
                     io.github.maxlyth.hapaneld.config.ConfigHash.of(revisionValues()) != expectedRevision
                 ) {
+                    earlyResult = ApplyAcceptedResult.STALE
+                    return@synchronizedTransaction
+                }
+                if (expectedHaAuthOwner != null && config.haAuthSnapshot().stableOwner() != expectedHaAuthOwner) {
+                    earlyResult = ApplyAcceptedResult.STALE
+                    return@synchronizedTransaction
+                }
+                if (expectedHaOAuthEpoch != null && !config.isHaOAuthAttemptCurrent(expectedHaOAuthEpoch)) {
                     earlyResult = ApplyAcceptedResult.STALE
                     return@synchronizedTransaction
                 }
@@ -5828,6 +5956,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
             "\"log_ship_host\":${s(config.logShipHost)}," +
             "\"log_ship_port\":${config.logShipPort}," +
             "\"log_ship_protocol\":${s(config.logShipProtocol)}," +
+            "\"ha_auth\":{\"configured\":${config.haToken.isNotEmpty() || config.haRefreshToken.isNotEmpty()},\"oauth\":${config.haRefreshToken.isNotEmpty()}}," +
             "\"version\":${s(Config.VERSION)}," +
             "\"proximity\":${sensors.proximityJson()}," +
             // Registry-driven current values + per-key HA-exposure flags for the Configure form.
@@ -5851,8 +5980,8 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
             "Changing this setting may require physical on-panel approval when Hardened mode is enabled."
         private const val RETIRED_PROXIMITY_OPERATION =
             "{\"error\":\"automatic proximity learning replaced this operation\"}"
-        private const val RANGED_PROXIMITY_REQUIRED =
-            "{\"error\":\"ranged_proximity_required\"}"
+        private const val PROXIMITY_SOURCE_REQUIRED =
+            "{\"error\":\"proximity_source_required\"}"
         private const val ENTITY_REVISION_PREFIX = "_local.entity_state"
         private const val TAME_SHUTDOWN_MS = 5_000L
         private const val REMOTE_CONTROL_SHUTDOWN_MS = 5_000L

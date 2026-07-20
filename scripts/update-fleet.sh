@@ -152,7 +152,7 @@ if [ "$have_apk" = 0 ]; then
     record="$(printf '%s' "$json" | tr -d '\r\n' | \
       sed 's#{[[:space:]]*"url":[[:space:]]*"https://api.github.com/repos/maxlyth/ha-paneld/releases/\([0-9][0-9]*\)"#\
 &#g' | \
-      awk '/"draft":[[:space:]]*false/ && /"prerelease":[[:space:]]*true/ { print; exit }')"
+      awk '/"draft":[[:space:]]*false/ && /"prerelease":[[:space:]]*true/ && !found { print; found=1 }')"
   else
     record="$json"
   fi

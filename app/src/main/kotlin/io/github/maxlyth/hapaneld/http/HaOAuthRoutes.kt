@@ -1,0 +1,212 @@
+package io.github.maxlyth.hapaneld.http
+
+import io.github.maxlyth.hapaneld.config.SettingValue
+import io.github.maxlyth.hapaneld.config.SettingsRegistry
+import io.github.maxlyth.hapaneld.config.Validation
+import io.github.maxlyth.hapaneld.sensors.HaCurrentUserStatus
+import io.github.maxlyth.hapaneld.util.HaLink
+import io.github.maxlyth.hapaneld.util.Json
+import io.ktor.http.ContentType
+import io.ktor.http.HttpHeaders
+import io.ktor.http.HttpStatusCode
+import io.ktor.server.application.ApplicationCall
+import io.ktor.server.application.call
+import io.ktor.server.response.respondText
+import io.ktor.server.routing.Route
+import io.ktor.server.routing.get
+import io.ktor.server.routing.post
+import io.ktor.server.routing.route
+import kotlinx.coroutines.CancellationException
+
+internal const val MAX_HA_OAUTH_START_BODY_BYTES = 4L * 1024L
+internal const val MAX_HA_OAUTH_CODE_CHARS = 4 * 1024
+
+internal sealed class HaOAuthCompletion {
+    data class Success(
+        val ambientWarning: Boolean = false,
+        val reloadMayBeNeeded: Boolean = false,
+    ) : HaOAuthCompletion()
+
+    object Stale : HaOAuthCompletion()
+    object CommitFailed : HaOAuthCompletion()
+}
+
+internal data class HaOAuthRouteDependencies(
+    val panelPort: Int,
+    val start: (haUrl: String, panelOrigin: String) -> HaOAuthStart,
+    val claim: (state: String, panelOrigin: String) -> HaOAuthClaim,
+    val exchange: suspend (attempt: HaOAuthAttempt, code: String) -> HaLink.AuthorizationCodeExchange,
+    val complete: suspend (attempt: HaOAuthAttempt, tokens: HaLink.OAuthTokens) -> HaOAuthCompletion,
+    val status: suspend () -> HaCurrentUserStatus = { HaCurrentUserStatus.NotConfigured },
+)
+
+/** Browser OAuth transport. Mount beneath the guarded `/api/v1` route; credential persistence and
+ * live reconfiguration remain owned by the server through the injected completion callback. */
+internal fun Route.haOAuthRoutes(dependencies: HaOAuthRouteDependencies) {
+    route("/ha/oauth") {
+        get("/status") {
+            call.noStoreHaOAuth()
+            val status = try {
+                dependencies.status()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Throwable) {
+                HaCurrentUserStatus.Unavailable
+            }
+            val json = when (status) {
+                is HaCurrentUserStatus.Connected ->
+                    """{"phase":"connected","display_name":${status.displayName?.let(Json::str) ?: "null"}}"""
+                HaCurrentUserStatus.NotConfigured -> """{"phase":"not_configured"}"""
+                HaCurrentUserStatus.Rejected -> """{"phase":"rejected"}"""
+                HaCurrentUserStatus.Unavailable -> """{"phase":"unavailable"}"""
+            }
+            call.respondText(json, ContentType.Application.Json)
+        }
+        post("/start") {
+            call.noStoreHaOAuth()
+            val parameters = receiveBoundedFormParameters(call, MAX_HA_OAUTH_START_BODY_BYTES) ?: return@post
+            val rawUrl = parameters["ha_url"].orEmpty()
+            val spec = requireNotNull(SettingsRegistry.spec("ha_url"))
+            val haUrl = when (val validation = SettingValue.validate(spec, rawUrl)) {
+                is Validation.Ok -> validation.normalized.takeIf(String::isNotBlank)
+                is Validation.Bad -> null
+            }
+            if (haUrl == null) {
+                call.respondText(
+                    """{"ok":false,"error":"invalid-ha-url","message":"Enter a valid Home Assistant URL first."}""",
+                    ContentType.Application.Json,
+                    HttpStatusCode.BadRequest,
+                )
+                return@post
+            }
+            val panelOrigin = panelHttpOrigin(call.request.headers[HttpHeaders.Host], dependencies.panelPort)
+            if (panelOrigin == null) {
+                call.respondText(
+                    """{"ok":false,"error":"invalid-panel-origin","message":"Open Configure using this panel's normal IP or .local address."}""",
+                    ContentType.Application.Json,
+                    HttpStatusCode.BadRequest,
+                )
+                return@post
+            }
+            val started = dependencies.start(haUrl, panelOrigin)
+            call.respondText(
+                """{"ok":true,"authorization_url":${Json.str(started.authorizationUrl)}}""",
+                ContentType.Application.Json,
+            )
+        }
+
+        get("/callback") {
+            call.noStoreHaOAuth()
+            val panelOrigin = panelHttpOrigin(call.request.headers[HttpHeaders.Host], dependencies.panelPort)
+                ?: return@get call.respondHaOAuthPage(false, "This sign-in link does not belong to this panel address.")
+            val claim = dependencies.claim(call.request.queryParameters["state"].orEmpty(), panelOrigin)
+            val attempt = when (claim) {
+                is HaOAuthClaim.Claimed -> claim.attempt
+                HaOAuthClaim.Invalid -> return@get call.respondHaOAuthPage(
+                    false,
+                    "This sign-in link has expired or was already used.",
+                )
+                HaOAuthClaim.WrongOrigin -> return@get call.respondHaOAuthPage(
+                    false,
+                    "This sign-in link was opened on a different panel address.",
+                )
+            }
+            if (!call.request.queryParameters["error"].isNullOrBlank()) {
+                call.respondHaOAuthPage(false, "Home Assistant sign-in was cancelled.")
+                return@get
+            }
+            val code = call.request.queryParameters["code"].orEmpty()
+            if (code.isBlank() || code.length > MAX_HA_OAUTH_CODE_CHARS) {
+                call.respondHaOAuthPage(false, "Home Assistant did not return a valid sign-in code.")
+                return@get
+            }
+            val exchange = try {
+                dependencies.exchange(attempt, code)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Throwable) {
+                HaLink.AuthorizationCodeExchange.Transient
+            }
+            val tokens = when (exchange) {
+                is HaLink.AuthorizationCodeExchange.Success -> exchange.tokens
+                HaLink.AuthorizationCodeExchange.Rejected -> {
+                    call.respondHaOAuthPage(
+                        false,
+                        "Home Assistant did not accept this sign-in. Start a new sign-in from Configure.",
+                    )
+                    return@get
+                }
+                HaLink.AuthorizationCodeExchange.Transient -> {
+                    call.respondHaOAuthPage(
+                        false,
+                        "The panel could not complete sign-in. Check its Home Assistant connection and try again.",
+                    )
+                    return@get
+                }
+            }
+            val completion = try {
+                dependencies.complete(attempt, tokens)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Throwable) {
+                HaOAuthCompletion.CommitFailed
+            }
+            when (completion) {
+                HaOAuthCompletion.Stale -> call.respondHaOAuthPage(
+                    false,
+                    "Home Assistant settings changed while sign-in was open. Start a new sign-in from Configure.",
+                )
+                HaOAuthCompletion.CommitFailed -> call.respondHaOAuthPage(
+                    false,
+                    "The panel could not save this sign-in. Start a new sign-in from Configure.",
+                )
+                is HaOAuthCompletion.Success -> {
+                    val reload = if (completion.reloadMayBeNeeded) " The dashboard may need a manual reload." else ""
+                    val ambient = if (completion.ambientWarning) {
+                        " Home Assistant is configured, but the selected ambient-light source needs attention."
+                    } else ""
+                    call.respondHaOAuthPage(true, "Home Assistant is configured.$reload$ambient")
+                }
+            }
+        }
+    }
+}
+
+internal fun ApplicationCall.noStoreHaOAuth() {
+    if (response.headers[HttpHeaders.CacheControl] == null) {
+        response.headers.append(HttpHeaders.CacheControl, "no-store")
+    }
+    if (response.headers["Referrer-Policy"] == null) {
+        response.headers.append("Referrer-Policy", "no-referrer")
+    }
+}
+
+private suspend fun ApplicationCall.respondHaOAuthPage(success: Boolean, message: String) {
+    val heading = if (success) "Home Assistant configured" else "Home Assistant sign-in not completed"
+    val status = if (success) "success" else "failure"
+    respondText(
+        """<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHaOAuthHtml(heading)}</title>
+<link rel="stylesheet" href="/info.css"></head><body><div class="wrap"><div class="card">
+<h1>${escapeHaOAuthHtml(heading)}</h1><p>${escapeHaOAuthHtml(message)}</p><p><a class="pbtn" href="/configure#cfg-ha_url">Back to Configure</a></p>
+</div></div><script>history.replaceState(null,"","$HA_OAUTH_CALLBACK_PATH");if("BroadcastChannel" in window){var c=new BroadcastChannel("ha-paneld-ha-oauth");c.postMessage({status:"$status"});}</script>
+</body></html>""",
+        ContentType.Text.Html,
+        if (success) HttpStatusCode.OK else HttpStatusCode.BadRequest,
+    )
+}
+
+private fun escapeHaOAuthHtml(value: String): String = buildString(value.length) {
+    value.forEach { character ->
+        append(
+            when (character) {
+                '&' -> "&amp;"
+                '<' -> "&lt;"
+                '>' -> "&gt;"
+                '"' -> "&quot;"
+                '\'' -> "&#39;"
+                else -> character
+            },
+        )
+    }
+}

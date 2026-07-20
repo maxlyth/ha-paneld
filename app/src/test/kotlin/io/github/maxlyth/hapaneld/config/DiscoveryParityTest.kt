@@ -137,8 +137,8 @@ class DiscoveryParityTest {
 
     @Test fun proximityGatesEntityAvailability() {
         val s = SettingsRegistry.spec("wake_on_wave")!!
-        assertTrue(s.availableWhen(Capabilities(hasProximity = true, hasRangedProximity = true)))
-        assertTrue(!s.availableWhen(Capabilities(hasProximity = true, hasRangedProximity = false)))
-        assertTrue(!s.availableWhen(Capabilities(hasProximity = false, hasRangedProximity = false)))
+        assertTrue(s.availableWhen(Capabilities(hasProximity = true, hasLearnedProximity = true)))
+        assertTrue(s.availableWhen(Capabilities(hasProximity = true, hasLearnedProximity = false)))
+        assertTrue(!s.availableWhen(Capabilities(hasProximity = false, hasLearnedProximity = false)))
     }
 }

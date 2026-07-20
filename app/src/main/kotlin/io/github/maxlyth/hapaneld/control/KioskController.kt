@@ -12,6 +12,8 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import io.github.maxlyth.hapaneld.Config
+import io.github.maxlyth.hapaneld.KioskAdminUi
+import io.github.maxlyth.hapaneld.shouldKioskReturnToDashboard
 import io.github.maxlyth.hapaneld.metrics.FeatureCostOperation
 import io.github.maxlyth.hapaneld.metrics.FeatureCostOutcome
 import io.github.maxlyth.hapaneld.metrics.FeatureCosts
@@ -149,7 +151,7 @@ class KioskController(
                             outcome = FeatureCostOutcome.CANCELLED
                             break
                         }
-                        if (state == AppState.BG) {
+                        if (shouldKioskReturnToDashboard(state, KioskAdminUi.isVisible())) {
                             Log.i(TAG, "left the dashboard while locked -> returning to it")
                             system.launchHome(pkg)
                         }

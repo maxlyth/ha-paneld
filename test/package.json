@@ -5,11 +5,11 @@
   "type": "module",
   "description": "Non-blocking layout-stability (CLS) harness for the ha-paneld info page. Report-only.",
   "scripts": {
-    "test": "node --test layout-statistics.test.mjs",
+    "test": "node --test *.test.mjs",
     "layout": "node layout-matrix.mjs",
     "layout:update": "node layout-matrix.mjs --update-baseline"
   },
   "devDependencies": {
-    "playwright-core": "1.60.0"
+    "playwright-core": "1.61.1"
   }
 }

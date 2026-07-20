@@ -4,10 +4,12 @@ import android.content.Context
 import android.os.SystemClock
 import android.util.Log
 import io.github.maxlyth.hapaneld.Config
+import io.github.maxlyth.hapaneld.stableOwner
 import io.github.maxlyth.hapaneld.metrics.FeatureCostOperation
 import io.github.maxlyth.hapaneld.metrics.FeatureCostOutcome
 import io.github.maxlyth.hapaneld.metrics.FeatureCosts
 import io.github.maxlyth.hapaneld.sensors.SensorTrace
+import io.github.maxlyth.hapaneld.sensors.HaAmbientHistorySeed
 import java.security.MessageDigest
 import java.util.TimeZone
 import java.util.concurrent.Executors
@@ -192,6 +194,43 @@ internal class AutoBrightnessController(
         baselineCache.invalidate()
         resetTransientPolicy(clearPreference = true)
         requestEvaluationLocked(0L, force = true)
+    }
+
+    /** Admit only a seed fetched for the still-current source and credential owner. */
+    @Synchronized internal fun seedHaHistory(seed: HaAmbientHistorySeed): Boolean {
+        if (closed || !config.autoBrightness || seed.minutes.isEmpty()) return false
+        val entity = config.autoBrightnessHaEntity.trim()
+        val url = config.haUrl.trim().trimEnd('/')
+        if (entity != seed.entityId || url != seed.baseUrl || config.haAuthSnapshot().stableOwner() != seed.authOwner) return false
+        refreshSourceIdentity()
+        if (activeSourceKind != AmbientLuxSourceKind.HOME_ASSISTANT) return false
+        configureHistorySource()
+        val contextSnapshot = locationContext
+        val sourceSnapshot = activeSourceId()
+        val rows = seed.minutes.map { minute ->
+            AmbientMinuteAggregate(
+                key = AmbientHistoryKey(contextSnapshot, sourceSnapshot, minute.minute),
+                luxIntegral = minute.luxIntegral,
+                coverageMs = minute.coverageMs,
+                minLux = minute.minLux,
+                maxLux = minute.maxLux,
+                lastLux = minute.lastLux,
+                sampleCount = minute.sampleCount,
+                baselineLogIntegral = minute.baselineLogIntegral,
+                baselineCoverageMs = minute.baselineCoverageMs,
+            )
+        }
+        history.seed(rows, contextSnapshot, sourceSnapshot) {
+            synchronized(this) {
+                if (!closed && locationContext == contextSnapshot && activeSourceId() == sourceSnapshot) {
+                    baselineCache.invalidate()
+                    chartLookup = null
+                    chartRowsIdentity = null
+                    requestEvaluationLocked(0L, force = true)
+                }
+            }
+        }
+        return true
     }
 
     /** Reconcile through current preference authority after physical wake or a policy change. */

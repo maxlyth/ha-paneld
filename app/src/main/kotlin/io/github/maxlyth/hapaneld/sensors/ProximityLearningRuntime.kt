@@ -9,11 +9,14 @@ import io.github.maxlyth.hapaneld.metrics.FeatureCostOutcome
 import io.github.maxlyth.hapaneld.metrics.FeatureCosts
 import java.security.MessageDigest
 import java.util.Locale
+import java.util.UUID
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import org.json.JSONObject
 
 /**
@@ -26,6 +29,9 @@ internal class ProximityLearningRuntime(
     sourceIdentity: String,
     private val sparseLearningSource: Boolean,
     private val legacySeedEligible: Boolean,
+    private val failModelPersistenceForTest: (() -> Boolean)? = null,
+    private val failModelReadForTest: (() -> Boolean)? = null,
+    invalidationJournalForTest: ProximityWakeInvalidationAuthority? = null,
 ) : AutoCloseable {
     /** Borrowed result; callers consume it before invoking the runtime again. */
     class Decision internal constructor() {
@@ -59,6 +65,7 @@ internal class ProximityLearningRuntime(
         var near: Boolean? = null
         var completedExcursions = 0
         var deliberateExamples = 0
+        var wakeEvidenceGeneration = 0L
         var modelSequence = 0L
     }
 
@@ -80,7 +87,14 @@ internal class ProximityLearningRuntime(
 
     private val appContext = context.applicationContext
     private val fingerprint = fingerprint(sourceIdentity)
-    private val engine = ProximityLearningEngine(learningPolicy(sparseLearningSource))
+    private val invalidationJournal = invalidationJournalForTest ?: ProximityWakeInvalidationJournal(appContext)
+    private val pendingWakeInvalidation = AtomicReference(invalidationJournal.read(fingerprint))
+    private val wakeSafetyStorageFailed = AtomicBoolean(false)
+    private val modelReadUnknown = AtomicBoolean(false)
+    private val engine = ProximityLearningEngine(
+        learningPolicy(sparseLearningSource),
+        prepareWakeEvidenceInvalidation = ::prepareWakeEvidenceInvalidation,
+    )
     private val store = EntityCatalogStore(appContext)
     private val persistence = ThreadPoolExecutor(
         1,
@@ -113,10 +127,24 @@ internal class ProximityLearningRuntime(
         // Always consume the retired configuration. A durable adaptive model wins, while a complete
         // old user capture is a one-time warm start only when no compatible model exists.
         val legacySeed = config.consumeLegacyProximityLearningSeed()
-        val stored = runCatching { store.readProximityModel(fingerprint) }.getOrNull()
-            ?.takeIf { isRestorableModel(it, fingerprint) }
-        val restored = stored?.let { restore(it.snapshotJson) } == true
-        if (restored) lastDurableReadyModel = stored
+        val modelRead = runCatching {
+            if (failModelReadForTest?.invoke() == true) error("injected proximity model read failure")
+            store.readProximityModel(fingerprint)
+        }
+        modelReadUnknown.set(modelRead.isFailure)
+        val stored = modelRead.getOrNull()?.takeIf { isRestorableModel(it, fingerprint) }
+        val safeStored = stored?.let {
+            if (pendingWakeInvalidation.get() == null) it else runCatching {
+                withoutWakeEvidence(it, System.currentTimeMillis())
+            }.getOrElse {
+                if (runCatching { store.clearProximityLearning(fingerprint) }.isFailure) {
+                    modelReadUnknown.set(true)
+                }
+                null
+            }
+        }
+        val restored = safeStored?.let { restore(it.snapshotJson) } == true
+        if (restored) lastDurableReadyModel = safeStored
         // Old captures have no firmware/source fingerprint. Consume and purge them above, but warm only
         // a continuous HAL whose repeated live readings can disprove stale or inverted anchors.
         eligibleLegacySeed(restored, legacySeed, legacySeedEligible)?.let { seed ->
@@ -141,6 +169,7 @@ internal class ProximityLearningRuntime(
         val activeSession = session
         val wasWaveReady = waveReadyLocked()
         val priorModelSequence = view.modelSequence
+        val priorWakeEvidenceGeneration = view.wakeEvidenceGeneration
         val priorCompletedExcursions = view.completedExcursions
 
         sourceAvailable = raw.isFinite()
@@ -169,6 +198,14 @@ internal class ProximityLearningRuntime(
             )
         }
         copy(output)
+        val wakeEvidenceInvalidated =
+            shouldInvalidateGuidedWakeEvidence(priorWakeEvidenceGeneration, view.wakeEvidenceGeneration)
+        if (wakeEvidenceInvalidated) {
+            guidedReady = false
+            activeSession?.accepted = 0
+            activeSession?.message =
+                "The proximity signal changed. Move clear briefly, then restart deliberate waves."
+        }
         val modelChanged = output.modelSequence != priorModelSequence
         val excursionCompleted = output.completedExcursions > priorCompletedExcursions
         if (output.completedEpisode) {
@@ -209,7 +246,7 @@ internal class ProximityLearningRuntime(
                 "Movement seen, but it was not an armed deliberate wave. Move clear for two seconds, then try again."
         }
 
-        if (output.completedEpisode || modelChanged) {
+        if (output.completedEpisode || modelChanged || wakeEvidenceInvalidated) {
             requestPersist()
         }
 
@@ -303,6 +340,11 @@ internal class ProximityLearningRuntime(
             return false
         }
         lastDurableReadyModel = null
+        pendingWakeInvalidation.get()?.let { token ->
+            if (invalidationJournal.clear(fingerprint, token)) {
+                pendingWakeInvalidation.compareAndSet(token, null)
+            }
+        }
         val reusableFar = sourceAvailable && view.near == false && lastObservedRaw.isFinite()
         engine.reset()
         if (reusableFar) {
@@ -325,10 +367,14 @@ internal class ProximityLearningRuntime(
     @Synchronized
     fun isWaveReady(): Boolean = waveReadyLocked()
 
-    /** Signal-shape capability, independent of current source health. A fingerprint-matching restored
-     *  graded model remains evidence that this source is ranged; relearn/model-shift resets it to false. */
+    internal fun hasUnresolvedModelReadFailure(): Boolean = modelReadUnknown.get()
+
+    internal fun hasPendingWakeInvalidation(): Boolean = pendingWakeInvalidation.get() != null
+
+    /** Learned signal-shape capability, independent of current source health. A fingerprint-matching
+     *  binary or graded model remains evidence for reporting; relearn/model-shift resets it to false. */
     @Synchronized
-    fun isRangedSignal(): Boolean = view.mode == ProximityLearningEngine.Mode.GRADED
+    fun isLearnedSignal(): Boolean = isLearnedMode(view.mode)
 
     @Synchronized
     fun signalMode(): ProximityLearningEngine.Mode = view.mode
@@ -398,7 +444,62 @@ internal class ProximityLearningRuntime(
     }
 
     private fun waveReadyLocked(): Boolean = isReady() &&
+        !wakeSafetyStorageFailed.get() &&
+        !modelReadUnknown.get() &&
         (guidedReady || view.deliberateExamples >= PASSIVE_GESTURES_REQUIRED)
+
+    /** Called by the engine before it mutates any wake evidence. */
+    private fun prepareWakeEvidenceInvalidation(): Boolean {
+        val token = UUID.randomUUID().toString()
+        pendingWakeInvalidation.set(token)
+        val established = durablyMarkWakeInvalidation(token)
+        if (established) {
+            guidedReady = false
+        } else {
+            wakeSafetyStorageFailed.set(true)
+            lastSessionMessage = "Wake gestures are disabled because their safety reset could not be saved."
+        }
+        return established
+    }
+
+    /** SharedPreferences is the primary synchronous authority. If that rare commit fails, drain all
+     * older async checkpoints before synchronously replacing the stale ready SQLite row. */
+    private fun durablyMarkWakeInvalidation(token: String): Boolean = establishWakeInvalidationAuthority(
+        mark = { invalidationJournal.mark(fingerprint, token) },
+        fallback = {
+            val drained = CountDownLatch(1)
+            if (runCatching { persistence.execute { drained.countDown() } }.isFailure) {
+                return@establishWakeInvalidationAuthority false
+            }
+            val completed = runCatching {
+                drained.await(PERSISTENCE_RESET_MS, TimeUnit.MILLISECONDS)
+            }.getOrDefault(false)
+            if (!completed) {
+                return@establishWakeInvalidationAuthority false
+            }
+            val durableRead = runCatching {
+                if (failModelReadForTest?.invoke() == true) error("injected proximity model read failure")
+                store.readProximityModel(fingerprint)
+            }
+            if (durableRead.isFailure) return@establishWakeInvalidationAuthority false
+            val durable = durableRead.getOrNull()
+            val persisted = when {
+                durable == null -> true
+                else -> runCatching {
+                    val safe = withoutWakeEvidence(durable, System.currentTimeMillis())
+                    store.writeProximityBatch(safe, emptyList(), emptyList(), System.currentTimeMillis())
+                    lastDurableReadyModel = safe
+                }.recoverCatching {
+                    store.clearProximityLearning(fingerprint)
+                    lastDurableReadyModel = null
+                }.isSuccess
+            }
+            if (persisted) {
+                pendingWakeInvalidation.compareAndSet(token, null)
+            }
+            persisted
+        },
+    )
 
     private fun teachSourceReadyLocked(): Boolean = sourceAvailable && lastObservedRaw.isFinite() &&
         canTeachDuring(view.learning) &&
@@ -482,10 +583,11 @@ internal class ProximityLearningRuntime(
     /** Capture immutable state on the caller thread; SQLite work stays away from sensor callbacks. */
     private fun requestPersist() {
         val row = modelRowLocked()
+        val invalidationToken = pendingWakeInvalidation.get()
         val evidence = drainPendingEvidence()
         val accepted = runCatching {
             persistence.execute {
-                if (!writeProximityBatch(row, evidence)) {
+                if (!writeProximityBatch(row, evidence, invalidationToken)) {
                     restorePendingEvidence(evidence)
                 }
             }
@@ -499,8 +601,14 @@ internal class ProximityLearningRuntime(
         val snapshot = engine.snapshot()
         if (snapshot == null) {
             // Verification and behavioral-epoch changes are transient. Keep the last trustworthy
-            // checkpoint crash-recoverable until a replacement has itself become trustworthy.
-            lastDurableReadyModel?.let { return it }
+            // range crash-recoverable until a replacement has itself become trustworthy. A behavior
+            // epoch must nevertheless durably remove its guided/wake evidence before returning it.
+            lastDurableReadyModel?.let { previous ->
+                if (pendingWakeInvalidation.get() == null) return previous
+                return withoutWakeEvidence(previous, System.currentTimeMillis()).also {
+                    lastDurableReadyModel = it
+                }
+            }
         }
         val json = JSONObject().apply {
             put("schema", PERSISTENCE_SCHEMA)
@@ -524,7 +632,9 @@ internal class ProximityLearningRuntime(
             ready = snapshot != null,
             updatedAt = System.currentTimeMillis(),
         )
-        if (snapshot != null) lastDurableReadyModel = row
+        if (snapshot != null) {
+            lastDurableReadyModel = row
+        }
         return row
     }
 
@@ -590,6 +700,7 @@ internal class ProximityLearningRuntime(
         view.near = output.presence
         view.completedExcursions = output.completedExcursions
         view.deliberateExamples = output.deliberateExamples
+        view.wakeEvidenceGeneration = output.wakeEvidenceGeneration
         view.modelSequence = output.modelSequence
     }
 
@@ -611,6 +722,7 @@ internal class ProximityLearningRuntime(
         closed = true
         if (rollup.samples > 0) addPendingRollup(rollup.toRow(fingerprint))
         val finalRow = modelRowLocked()
+        val invalidationToken = pendingWakeInvalidation.get()
         persistence.shutdown()
         val drained = runCatching {
             persistence.awaitTermination(PERSISTENCE_CLOSE_MS, TimeUnit.MILLISECONDS)
@@ -620,26 +732,29 @@ internal class ProximityLearningRuntime(
             // runtime monitor, then checkpoints any failed/requeued batches before closing SQLite.
             Thread({
                 runCatching { persistence.awaitTermination(Long.MAX_VALUE, TimeUnit.MILLISECONDS) }
-                finishCloseAndComplete(finalRow)
+                finishCloseAndComplete(finalRow, invalidationToken)
             }, "proximity-persistence-close").apply { isDaemon = true }.start()
             return closeCompletion
         }
-        finishCloseAndComplete(finalRow)
+        finishCloseAndComplete(finalRow, invalidationToken)
         return closeCompletion
     }
 
-    private fun finishCloseAndComplete(finalRow: EntityCatalogStore.ProximityModelRow) {
-        if (finishClose(finalRow)) closeCompletion.complete(Unit)
+    private fun finishCloseAndComplete(
+        finalRow: EntityCatalogStore.ProximityModelRow,
+        invalidationToken: String?,
+    ) {
+        if (finishClose(finalRow, invalidationToken)) closeCompletion.complete(Unit)
         else closeCompletion.completeExceptionally(
             IllegalStateException("final proximity persistence did not complete"),
         )
     }
 
-    private fun finishClose(finalRow: EntityCatalogStore.ProximityModelRow): Boolean {
+    private fun finishClose(finalRow: EntityCatalogStore.ProximityModelRow, invalidationToken: String?): Boolean {
         val evidence = drainPendingEvidence()
         return finishProximityPersistence(
             attempts = FINAL_CLOSE_WRITE_ATTEMPTS,
-            write = { writeProximityBatch(finalRow, evidence) },
+            write = { writeProximityBatch(finalRow, evidence, invalidationToken) },
             close = store::close,
         )
     }
@@ -647,16 +762,29 @@ internal class ProximityLearningRuntime(
     private fun writeProximityBatch(
         row: EntityCatalogStore.ProximityModelRow,
         evidence: PendingEvidence,
+        invalidationToken: String?,
     ): Boolean {
         val persistCost = FeatureCosts.registry.beginSynchronous(FeatureCostOperation.PROXIMITY_PERSIST_BATCH)
         var outcome = FeatureCostOutcome.SUCCESS
         return try {
+            if (failModelPersistenceForTest?.invoke() == true) {
+                outcome = FeatureCostOutcome.FAILURE
+                return false
+            }
             store.writeProximityBatch(
                 row,
                 evidence.rollups,
                 evidence.episodes,
                 System.currentTimeMillis(),
             )
+            modelReadUnknown.set(false)
+            if (invalidationToken != null) {
+                val cleared = invalidationJournal.clear(fingerprint, invalidationToken)
+                if (canAcknowledgeWakeInvalidation(cleared, invalidationJournal.read(fingerprint))) {
+                    pendingWakeInvalidation.compareAndSet(invalidationToken, null)
+                    wakeSafetyStorageFailed.set(false)
+                }
+            }
             true
         } catch (_: Throwable) {
             outcome = FeatureCostOutcome.FAILURE
@@ -718,6 +846,31 @@ internal class ProximityLearningRuntime(
         internal fun levelForReport(near: Boolean?, level: Int?): Int? =
             if (near == false && level != null && level <= FAR_REPORT_QUIET_LEVEL) 0 else level
 
+        internal fun shouldInvalidateGuidedWakeEvidence(previous: Long, current: Long): Boolean =
+            previous != current
+
+        internal fun establishWakeInvalidationAuthority(
+            mark: () -> Boolean,
+            fallback: () -> Boolean,
+        ): Boolean = runCatching(mark).getOrDefault(false) || runCatching(fallback).getOrDefault(false)
+
+        internal fun canAcknowledgeWakeInvalidation(clearSucceeded: Boolean, journalToken: String?): Boolean =
+            clearSucceeded || journalToken == null
+
+        internal fun isLearnedMode(mode: ProximityLearningEngine.Mode): Boolean =
+            mode == ProximityLearningEngine.Mode.BINARY || mode == ProximityLearningEngine.Mode.GRADED
+
+        internal fun withoutWakeEvidence(
+            row: EntityCatalogStore.ProximityModelRow,
+            updatedAt: Long,
+        ): EntityCatalogStore.ProximityModelRow {
+            val json = JSONObject(row.snapshotJson).apply {
+                put("guidedReady", false)
+                put("deliberateExamples", 0)
+            }
+            return row.copy(snapshotJson = json.toString(), updatedAt = updatedAt)
+        }
+
         internal fun isRestorableModel(
             row: EntityCatalogStore.ProximityModelRow,
             expectedFingerprint: String,
@@ -735,6 +888,35 @@ internal class ProximityLearningRuntime(
                 .digest("adaptive-proximity-v$algorithmVersion|$sourceIdentity".toByteArray(Charsets.UTF_8))
                 .joinToString("") { "%02x".format(Locale.ROOT, it.toInt() and 0xff) }
         }
+    }
+}
+
+/** Synchronous rare-path authority that prevents an older ready model being trusted after an abrupt
+ * process death. The SQLite checkpoint may remain asynchronous; this marker may not. */
+internal interface ProximityWakeInvalidationAuthority {
+    fun read(fingerprint: String): String?
+    fun mark(fingerprint: String, token: String): Boolean
+    fun clear(fingerprint: String, token: String): Boolean
+}
+
+internal class ProximityWakeInvalidationJournal(context: Context) : ProximityWakeInvalidationAuthority {
+    private val preferences = context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
+
+    @Synchronized
+    override fun read(fingerprint: String): String? = preferences.getString(fingerprint, null)
+
+    @Synchronized
+    override fun mark(fingerprint: String, token: String): Boolean =
+        preferences.edit().putString(fingerprint, token).commit()
+
+    @Synchronized
+    override fun clear(fingerprint: String, token: String): Boolean {
+        if (preferences.getString(fingerprint, null) != token) return false
+        return preferences.edit().remove(fingerprint).commit()
+    }
+
+    companion object {
+        internal const val PREFERENCES_NAME = "proximity-wake-invalidation"
     }
 }
 

@@ -11,5 +11,7 @@ class SettingsUrlValidationTest {
         assertNull(normalizeHttpOriginUrl("javascript:alert(1)"))
         assertNull(normalizeHttpOriginUrl("https://user:secret@ha.example.test"))
         assertNull(normalizeHttpOriginUrl("https:///missing-host"))
+        assertNull(normalizeHttpOriginUrl("https://ha.example.test?redirect=elsewhere"))
+        assertNull(normalizeHttpOriginUrl("https://ha.example.test#fragment"))
     }
 }

@@ -235,6 +235,57 @@ class HaAmbientLuxSubscriber internal constructor(
         }
     }
 
+    /** One bounded bootstrap read; callers run this independently of the live subscription. */
+    internal suspend fun loadHistory(entityId: String): HaAmbientHistorySeed {
+        validateEntityId(entityId)
+        val endEpochMs = epochMillis() / HISTORY_MINUTE_MS * HISTORY_MINUTE_MS
+        val startEpochMs = endEpochMs - HISTORY_WINDOW_MS
+        var session = resolveSession(force = false)
+        val minutes = try {
+            loadHistoryChunks(session, entityId, startEpochMs, endEpochMs)
+        } catch (_: HaAuthenticationException) {
+            session = resolveSession(force = true)
+            loadHistoryChunks(session, entityId, startEpochMs, endEpochMs)
+        }
+        val owner = session.owner ?: throw HaProtocolException("Home Assistant credentials changed during history retrieval")
+        return HaAmbientHistorySeed(
+            entityId = entityId,
+            baseUrl = session.baseUrl.trim().trimEnd('/'),
+            authOwner = owner,
+            minutes = minutes,
+        )
+    }
+
+    /**
+     * Home Assistant can return several megabytes for a frequently changing illuminance sensor.
+     * Keep every response independently bounded while retaining the exact seven-day window.
+     */
+    private suspend fun loadHistoryChunks(
+        session: HaApiSession,
+        entityId: String,
+        startEpochMs: Long,
+        endEpochMs: Long,
+    ): List<HaAmbientHistoryMinute> = withContext(workerDispatcher) {
+        val result = ArrayList<HaAmbientHistoryMinute>((endEpochMs - startEpochMs).div(HISTORY_MINUTE_MS).toInt())
+        var chunkStart = startEpochMs
+        while (chunkStart < endEpochMs) {
+            val chunkEnd = minOf(endEpochMs, chunkStart + HISTORY_CHUNK_MS)
+            val response = transport.history(
+                session.baseUrl,
+                checkNotNull(session.accessToken),
+                entityId,
+                chunkStart,
+                chunkEnd,
+            )
+            result += HaAmbientHistoryProtocol.parse(response, entityId, chunkStart, chunkEnd)
+            if (result.size > HISTORY_MAX_MINUTES) {
+                throw HaProtocolException("Home Assistant history covers too many minutes")
+            }
+            chunkStart = chunkEnd
+        }
+        result
+    }
+
     override fun close() {
         synchronized(lock) {
             if (stopped) return
@@ -488,30 +539,23 @@ class HaAmbientLuxSubscriber internal constructor(
         const val DEFAULT_RECONNECT_MAX_MS = 60_000L
         const val CANDIDATE_TTL_MS = 10L * 60_000L
         const val CANDIDATE_ERROR_TTL_MS = 60_000L
+        const val HISTORY_MINUTE_MS = 60_000L
+        const val HISTORY_WINDOW_MS = 7L * 24L * 60L * HISTORY_MINUTE_MS
+        const val HISTORY_CHUNK_MS = 12L * 60L * HISTORY_MINUTE_MS
+        const val HISTORY_MAX_MINUTES = (HISTORY_WINDOW_MS / HISTORY_MINUTE_MS).toInt()
     }
 }
 
 internal object HaAmbientLuxProtocol {
     private val LUX_UNITS = setOf("lx", "lux")
 
-    fun subscribeTrigger(entityId: String, id: Int = 1): JSONObject {
+    fun subscribeEntities(entityId: String, id: Int = 1): JSONObject {
         validateEntityId(entityId)
         return JSONObject()
             .put("id", id)
-            .put("type", "subscribe_trigger")
-            .put(
-                "trigger",
-                JSONObject()
-                    .put("platform", "state")
-                    .put("entity_id", entityId),
-            )
+            .put("type", "subscribe_entities")
+            .put("entity_ids", JSONArray().put(entityId))
     }
-
-    fun triggerState(message: JSONObject): JSONObject? =
-        message.optJSONObject("event")
-            ?.optJSONObject("variables")
-            ?.optJSONObject("trigger")
-            ?.optJSONObject("to_state")
 
     fun candidates(states: JSONArray): List<HaAmbientLuxCandidate> {
         val projected = ArrayList<HaAmbientLuxCandidate>()
@@ -574,6 +618,61 @@ internal object HaAmbientLuxProtocol {
     private const val MAX_FRIENDLY_NAME_CHARS = 256
     private const val MAX_UNIT_CHARS = 32
     private const val MAX_LUX = 10_000_000.0
+}
+
+/** Expands HA's permission-aware exact-entity diff stream into ordinary state objects. */
+internal class HaCompressedEntityProjection(private val entityId: String) {
+    private var state: JSONObject? = null
+
+    fun apply(event: JSONObject): HaSocketMessage {
+        event.optJSONObject("a")?.optJSONObject(entityId)?.let { added ->
+            state = JSONObject()
+                .put("entity_id", entityId)
+                .put("state", added.optString("s"))
+                .put("attributes", added.optJSONObject("a") ?: JSONObject())
+                .also { applyTimes(it, added) }
+            return HaSocketMessage.State(JSONObject(checkNotNull(state).toString()))
+        }
+        val removed = event.optJSONArray("r")
+        if (removed != null && (0 until removed.length()).any { removed.optString(it) == entityId }) {
+            state = null
+            return HaSocketMessage.SourceMissing
+        }
+        val changed = event.optJSONObject("c")?.optJSONObject(entityId) ?: return HaSocketMessage.Other
+        val current = state ?: return HaSocketMessage.Other
+        changed.optJSONObject("+")?.let { additions ->
+            if (additions.has("s")) current.put("state", additions.optString("s"))
+            val addedAttributes = additions.optJSONObject("a")
+            if (addedAttributes != null) {
+                val attributes = current.optJSONObject("attributes") ?: JSONObject().also { current.put("attributes", it) }
+                val keys = addedAttributes.keys()
+                while (keys.hasNext()) {
+                    val key = keys.next()
+                    attributes.put(key, addedAttributes.get(key))
+                }
+            }
+            applyTimes(current, additions)
+        }
+        changed.optJSONObject("-")?.optJSONArray("a")?.let { removedAttributes ->
+            val attributes = current.optJSONObject("attributes") ?: JSONObject()
+            for (index in 0 until removedAttributes.length()) attributes.remove(removedAttributes.optString(index))
+        }
+        return HaSocketMessage.State(JSONObject(current.toString()))
+    }
+
+    private fun applyTimes(target: JSONObject, compressed: JSONObject) {
+        if (compressed.has("lc")) {
+            val changed = epochSeconds(compressed.optDouble("lc", Double.NaN)) ?: return
+            target.put("last_changed", changed)
+            target.put("last_updated", changed)
+        }
+        if (compressed.has("lu")) {
+            epochSeconds(compressed.optDouble("lu", Double.NaN))?.let { target.put("last_updated", it) }
+        }
+    }
+
+    private fun epochSeconds(value: Double): String? = value.takeIf(Double::isFinite)
+        ?.let { Instant.ofEpochMilli((it * 1_000.0).toLong()).toString() }
 }
 
 internal class HaLuxSampleGate(

@@ -2,7 +2,7 @@
   "openapi": "3.0.3",
   "info": {
     "title": "ha-paneld",
-    "version": "0.9.5-rc1",
+    "version": "0.9.5-rc2",
     "description": "Local HTTP control API for the ha-paneld Home Assistant dashboard app. Plain HTTP on the LAN. Relaxed mode keeps the trusted-LAN workflow. Optional Hardened mode requires physical access for selected high-impact remote requests: someone must approve them on the panel's screen, and they cannot be approved remotely. The canonical machine API lives under /api/v1; the pre-0.8.5 flat paths respond 308 Permanent Redirect to their /api/v1 homes (method + body preserved). Exceptions: GET /health and POST /play are also served directly at the root for plain-curl automations and monitors."
   },
   "servers": [{ "url": "/" }],
@@ -194,10 +194,31 @@
           "log_ship_enabled": { "type": "boolean" }, "log_ship_host": { "type": "string" },
           "log_ship_port": { "type": "integer" }, "log_ship_protocol": { "type": "string", "enum": ["syslog", "http"] }
         } } } } },
-        "responses": { "200": { "description": "updated" }, "202": { "$ref": "#/components/responses/ApprovalRequired" }, "400": { "description": "invalid setting, or a built-in-renderer-only setting was submitted for another renderer" }, "409": { "description": "network ADB cannot be enabled while Hardened mode is active" } }
+        "responses": { "200": { "description": "updated" }, "202": { "$ref": "#/components/responses/ApprovalRequired" }, "400": { "description": "invalid setting, or a built-in-renderer-only setting was submitted for another renderer" }, "409": { "description": "network ADB cannot be enabled while Hardened mode is active, or renderer sign-in/Home Assistant source state conflicts" } }
       }
     },
     "/api/v1/config/schema": { "get": { "summary": "Settings-registry metadata (key/type/group/label/help/default/tier/scope/options/range + HA-capable/exposed), capability-gated to this panel", "tags": ["config"], "responses": { "200": { "description": "[{key,…}]" } } } },
+    "/api/v1/ha/oauth/status": {
+      "get": { "summary": "Probe the current Home Assistant browser sign-in", "description": "A no-store, one-shot connection check. Returns only the connection phase and the authenticated user's bounded display name when Home Assistant supplies one; user IDs, permissions, credentials and tokens are never returned.", "tags": ["config"],
+        "responses": { "200": { "description": "{phase,display_name?}" } }
+      }
+    },
+    "/api/v1/ha/oauth/start": {
+      "post": { "summary": "Start a short-lived Home Assistant browser sign-in", "description": "Returns an authorization URL for an administrator browser. The one-use state is bound to this panel Host for ten minutes, and a newer start supersedes every older attempt; credentials are never returned to the browser. This is an ordinary HA connection change, not a Hardened-mode hardware action.", "tags": ["config"],
+        "requestBody": { "required": true, "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "required": ["ha_url"], "properties": { "ha_url": { "type": "string", "format": "uri", "description": "Home Assistant base URL reachable by both this panel and the administrator browser" } } } } } },
+        "responses": { "200": { "description": "{ok:true,authorization_url}" }, "400": { "description": "Invalid HA URL or panel Host" } }
+      }
+    },
+    "/api/v1/ha/oauth/callback": {
+      "get": { "summary": "Complete a Home Assistant browser sign-in", "description": "Home Assistant redirects the administrator browser here. ha-paneld consumes the exact one-use state, exchanges the bounded code server-side, and stores the refreshable session only if the HA credential owner has not been replaced. Every response is no-store with a no-referrer policy.", "tags": ["config"],
+        "parameters": [
+          { "name": "state", "in": "query", "required": true, "schema": { "type": "string", "minLength": 43, "maxLength": 86 } },
+          { "name": "code", "in": "query", "required": false, "schema": { "type": "string", "maxLength": 4096 } },
+          { "name": "error", "in": "query", "required": false, "schema": { "type": "string" }, "description": "Presence indicates cancellation; provider detail is not reflected" }
+        ],
+        "responses": { "200": { "description": "Minimal success HTML; credentials remain panel-local" }, "400": { "description": "Minimal failure HTML for expired/replayed/mismatched/cancelled/rejected sign-in" } }
+      }
+    },
     "/api/v1/config/export": {
       "get": { "summary": "Export a versioned config bundle", "tags": ["config"],
         "parameters": [{ "name": "include_secrets", "in": "query", "schema": { "type": "string", "enum": ["1"] }, "description": "include secret values (excluded by default)" }],

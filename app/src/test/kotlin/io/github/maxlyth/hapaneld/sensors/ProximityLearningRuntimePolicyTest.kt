@@ -5,9 +5,76 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.json.JSONObject
 import org.junit.Test
 
 class ProximityLearningRuntimePolicyTest {
+    @Test fun guidedWakeEvidenceExpiresOnEveryEngineEvidenceEpochChange() {
+        assertFalse(ProximityLearningRuntime.shouldInvalidateGuidedWakeEvidence(4L, 4L))
+        assertTrue(ProximityLearningRuntime.shouldInvalidateGuidedWakeEvidence(4L, 5L))
+    }
+
+    @Test fun synchronousMarkerFailureFallsBackWithoutCrashingSensorIngestion() {
+        var fallbacks = 0
+        assertTrue(ProximityLearningRuntime.establishWakeInvalidationAuthority(
+            mark = { false },
+            fallback = { fallbacks++; true },
+        ))
+        assertEquals(1, fallbacks)
+
+        assertFalse(ProximityLearningRuntime.establishWakeInvalidationAuthority(
+            mark = { throw IllegalStateException("preferences unavailable") },
+            fallback = { false },
+        ))
+    }
+
+    @Test fun journalAcknowledgementRejectsTokenMismatchAndClearFailure() {
+        assertTrue(ProximityLearningRuntime.canAcknowledgeWakeInvalidation(true, "same-token"))
+        assertTrue(ProximityLearningRuntime.canAcknowledgeWakeInvalidation(false, null))
+        assertFalse(ProximityLearningRuntime.canAcknowledgeWakeInvalidation(false, "newer-or-uncleared-token"))
+    }
+
+    @Test fun durableFallbackRetainsRangeButCannotRetainWakeReadiness() {
+        val fingerprint = ProximityLearningRuntime.fingerprint("hal:8:durable-fallback")
+        val row = EntityCatalogStore.ProximityModelRow(
+            fingerprint = fingerprint,
+            algorithmVersion = ProximityLearningRuntime.ALGORITHM_VERSION,
+            behaviorSignature = "GRADED:NEAR_IS_LOWER",
+            snapshotJson = JSONObject().apply {
+                put("schema", 1)
+                put("guidedReady", true)
+                put("engineSchema", 1)
+                put("farRaw", 100.0)
+                put("nearRaw", 0.0)
+                put("noise", 1.0)
+                put("mode", "GRADED")
+                put("polarity", "NEAR_IS_LOWER")
+                put("completedExcursions", 8)
+                put("deliberateExamples", 5)
+            }.toString(),
+            ready = true,
+            updatedAt = 1L,
+        )
+
+        val sanitized = ProximityLearningRuntime.withoutWakeEvidence(row, updatedAt = 2L)
+        val json = JSONObject(sanitized.snapshotJson)
+
+        assertEquals(row.fingerprint, sanitized.fingerprint)
+        assertEquals(row.behaviorSignature, sanitized.behaviorSignature)
+        assertTrue(sanitized.ready)
+        assertEquals(2L, sanitized.updatedAt)
+        assertFalse(json.getBoolean("guidedReady"))
+        assertEquals(0, json.getInt("deliberateExamples"))
+        assertEquals(100.0, json.getDouble("farRaw"), 0.0)
+        assertEquals(0.0, json.getDouble("nearRaw"), 0.0)
+
+        val retry = ProximityLearningRuntime.withoutWakeEvidence(sanitized, updatedAt = 3L)
+        val retryJson = JSONObject(retry.snapshotJson)
+        assertFalse(retryJson.getBoolean("guidedReady"))
+        assertEquals(0, retryJson.getInt("deliberateExamples"))
+        assertEquals(3L, retry.updatedAt)
+    }
+
     @Test fun algorithmEpochRejectsEveryOlderModelIdentity() {
         val source = "hal:8:vendor-proximity"
         val versionOneFingerprint = ProximityLearningRuntime.fingerprint(source, algorithmVersion = 1)

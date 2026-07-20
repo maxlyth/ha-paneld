@@ -5,7 +5,9 @@ import io.github.maxlyth.hapaneld.mqttBrokerIdentity
 import io.github.maxlyth.hapaneld.mqttReconfigurePublishesOffline
 import io.github.maxlyth.hapaneld.mqttStalePanelCleanup
 import io.github.maxlyth.hapaneld.hiddenReadOnlyStateTopic
+import io.github.maxlyth.hapaneld.diagnosticObservation
 import io.github.maxlyth.hapaneld.config.SettingsRegistry
+import io.github.maxlyth.hapaneld.mqtt.StateConverger.Observation
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -30,10 +32,19 @@ class DiscoveryTombstoneCoverageTest {
 
     @Test fun hidingReadOnlySensorsClearsTheirRetainedStateIncludingSensitiveValues() {
         assertTrue(hiddenReadOnlyStateTopic("diag_wifi_ssid", "test") == "ha-paneld/test/diag_wifi_ssid/state")
+        assertTrue(hiddenReadOnlyStateTopic("diag_wifi_rssi", "test") == "ha-paneld/test/diag_wifi_rssi/state")
         assertTrue(hiddenReadOnlyStateTopic("proximity", "test") == "ha-paneld/test/proximity/state")
         assertTrue(hiddenReadOnlyStateTopic("screen", "test") == "ha-paneld/test/screen/state")
         assertTrue(hiddenReadOnlyStateTopic("volume", "test") == "ha-paneld/test/volume/state")
         assertTrue(hiddenReadOnlyStateTopic("watchdog_enabled", "test") == null)
+    }
+
+    @Test fun unavailableWifiDoesNotRecreateStateBehindDiscoveryTombstones() {
+        assertTrue(diagnosticObservation("diag_wifi_ssid", exposed = true, value = null) == Observation.Unavailable)
+        assertTrue(diagnosticObservation("diag_wifi_rssi", exposed = true, value = null) == Observation.Unavailable)
+        assertTrue(diagnosticObservation("diag_wifi_ssid", exposed = false, value = "Private") == Observation.Unavailable)
+        assertTrue(diagnosticObservation("diag_wifi_rssi", exposed = true, value = "-63") == Observation.Known("-63"))
+        assertTrue(diagnosticObservation("diag_cpu", exposed = true, value = null) == Observation.Known("unknown"))
     }
 
     @Test fun unchangedPanelIdNeedsNoReplacementCleanup() {

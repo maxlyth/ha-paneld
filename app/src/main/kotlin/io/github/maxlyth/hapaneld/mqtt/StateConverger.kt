@@ -70,7 +70,7 @@ class StateConverger(
                     runtime.unknown = false
                 }
             }
-            Observation.Unknown, Observation.Unavailable -> {
+            Observation.Unknown -> {
                 synchronized(this) {
                     if (closed) return
                     runtime.unknown = true
@@ -80,6 +80,12 @@ class StateConverger(
                     if (!runtime.inFlight) runtime.dirty = false
                 }
                 return
+            }
+            Observation.Unavailable -> "".also {
+                synchronized(this) {
+                    if (closed) return
+                    runtime.unknown = true
+                }
             }
         }
 

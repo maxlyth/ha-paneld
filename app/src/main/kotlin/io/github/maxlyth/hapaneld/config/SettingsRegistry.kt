@@ -92,7 +92,7 @@ object SettingsRegistry {
             key = "wake_on_wave", type = SettingType.BOOL, group = "Behaviour",
             label = "Wake on wave", default = "true", tier = Tier.BASIC, scope = Scope.PORTABLE,
             help = "Wake locally after a learned deliberate far-to-near-to-far wave. Touch-to-wake remains available while the panel learns.",
-            availableWhen = { it.hasRangedProximity },
+            availableWhen = { it.hasProximity },
             haExposedByDefault = true,
             ha = HaEntity(
                 "switch", "wake_on_wave", "Wake on wave",
@@ -289,9 +289,9 @@ object SettingsRegistry {
         ),
         SettingSpec(
             key = "ha_token", type = SettingType.PASSWORD, group = "Dashboard",
-            label = "Long-lived access token", default = "", scope = Scope.DEVICE,
+            label = "Long-lived access token (advanced fallback)", default = "", scope = Scope.DEVICE,
             secret = true,
-            help = "Fallback when Companion login is unavailable. Create one in your Home Assistant user profile. Blank keeps the current login; a new token replaces it.",
+            help = "Use browser sign-in when possible. This fallback can be created in your Home Assistant user profile; blank keeps the current login and a new token replaces it.",
         ),
         SettingSpec(
             key = "ha_refresh_token", type = SettingType.PASSWORD, group = "Dashboard",
@@ -308,7 +308,7 @@ object SettingsRegistry {
             key = "ha_client_id", type = SettingType.STRING, group = "Dashboard",
             label = "HA OAuth client_id", default = "", scope = Scope.DEVICE, hidden = true,
             maxChars = 2_048,
-            help = "Internal token provenance retained for API/config import compatibility. Borrowed Companion tokens use the Android Companion client; ha-paneld-issued tokens use the HA origin. Not a user preference.",
+            help = "Internal token provenance retained for API/config import compatibility. Borrowed Companion tokens use the Android Companion client; ha-paneld browser sign-ins use the panel HTTP origin. Not a user preference.",
         ),
         SettingSpec(
             key = "dashboard_entity_overrides", type = SettingType.STRING, group = "Dashboard",
@@ -480,9 +480,9 @@ object SettingsRegistry {
         SettingSpec(
             key = "proximity", type = SettingType.BOOL, group = "Sensors",
             label = "Proximity", default = "",
-            help = "Learned near/far occupancy from a ranged proximity sensor.",
+            help = "Learned near/far occupancy from a supported proximity source.",
             haExposedByDefault = true,
-            availableWhen = { it.hasRangedProximity },
+            availableWhen = { it.hasLearnedProximity },
             ha = HaEntity(
                 "binary_sensor", "proximity", "Proximity",
                 """"state_topic":"ha-paneld/{panel}/proximity/state","device_class":"occupancy","payload_on":"ON","payload_off":"OFF"""",
@@ -492,9 +492,9 @@ object SettingsRegistry {
         SettingSpec(
             key = "proximity_level", type = SettingType.INT, group = "Sensors",
             label = "Proximity level", default = "",
-            help = "Normalized ranged proximity level from 0 to 100 percent.",
+            help = "Normalized learned proximity level from 0 to 100 percent; binary sources report 0 or 100.",
             haExposedByDefault = true,
-            availableWhen = { it.hasRangedProximity },
+            availableWhen = { it.hasLearnedProximity },
             ha = HaEntity(
                 "sensor", "proximity_level", "Proximity level",
                 """"state_topic":"ha-paneld/{panel}/proximity_level/state","unit_of_measurement":"%","state_class":"measurement","icon":"mdi:hand-wave"""",
@@ -588,7 +588,7 @@ object SettingsRegistry {
         SettingSpec(
             key = "diag_wifi_ssid", type = SettingType.STRING, group = "Diagnostics",
             label = "Wi-Fi network", default = "",
-            help = "Current Wi-Fi network name. This can identify a location and enters HA history when exposed; Android may hide it unless network-information permission is available.",
+            help = "Current Wi-Fi network name while Wi-Fi is the active connection. This can identify a location and enters HA history when exposed; Android may hide it unless network-information permission is available.",
             haExposedByDefault = false,
             availableWhen = { it.hasWifiSsid },
             ha = HaEntity(
@@ -600,7 +600,7 @@ object SettingsRegistry {
         SettingSpec(
             key = "diag_wifi_rssi", type = SettingType.INT, group = "Diagnostics",
             label = "Wi-Fi signal strength", default = "",
-            help = "Current Wi-Fi received signal strength in dBm.",
+            help = "Current Wi-Fi received signal strength in dBm while Wi-Fi is the active connection.",
             haExposedByDefault = false,
             availableWhen = { it.hasWifi },
             ha = HaEntity(
@@ -656,6 +656,8 @@ object SettingsRegistry {
 
 internal fun normalizeHttpOriginUrl(raw: String): String? {
     val uri = runCatching { java.net.URI(raw.trim()) }.getOrNull() ?: return null
-    if (uri.scheme !in setOf("http", "https") || uri.host.isNullOrBlank() || uri.userInfo != null) return null
+    if (uri.scheme !in setOf("http", "https") || uri.host.isNullOrBlank() || uri.userInfo != null ||
+        uri.rawQuery != null || uri.rawFragment != null
+    ) return null
     return uri.toString().trimEnd('/')
 }

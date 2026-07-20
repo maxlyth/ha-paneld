@@ -232,6 +232,12 @@ body.hdr-hide-brand .hdr .brand{display:none}
 .frow .fctl{flex:0 0 auto;display:flex;align-items:center;gap:12px;max-width:50%}
 .frow.dependency-disabled{opacity:.48}
 .frow input[type=text],.frow input[type=password],.frow input[type=number],.frow select{background:var(--input-bg2);border:1px solid var(--border2);color:var(--text);border-radius:6px;padding:6px 8px;min-width:170px;font:inherit}
+.ha-oauth-status{display:block;color:var(--dim);font-size:.9em;margin:5px 0 3px}
+.ha-oauth-status.connected{color:var(--ok-dim);font-weight:700}
+.ha-oauth-status.connected::before{content:"";display:inline-block;width:7px;height:7px;margin:0 7px 1px 1px;border-radius:50%;background:var(--ok-dim)}
+.ha-oauth-actions,.ha-oauth-links{display:flex;align-items:center;justify-content:flex-end;gap:6px;flex-wrap:wrap}
+.ha-oauth-links[hidden]{display:none}
+.ha-oauth-actions .pbtn{white-space:nowrap}
 .ha-entity-picker{display:flex;flex-direction:column;gap:4px;width:min(260px,100%);min-width:170px}
 .ha-entity-picker .ha-entity-input{min-width:0;width:100%}
 .ha-entity-picker .picker-note{color:var(--dim);font-size:.72rem;line-height:1.25}
@@ -298,6 +304,8 @@ body.hdr-hide-brand .hdr .brand{display:none}
     flex:1 1 auto;width:100%;min-width:0;box-sizing:border-box
   }
   .ha-entity-picker{width:100%;min-width:0}
+  .ha-oauth-actions,.ha-oauth-links{width:100%}
+  .ha-oauth-actions .pbtn{flex:1 1 auto;text-align:center}
   .autobright-head{flex-direction:column}
   .autobright-actions{width:100%;justify-content:flex-start}
   .autobright-actions .pbtn{flex:1 1 auto;text-align:center}

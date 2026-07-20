@@ -132,6 +132,13 @@ case "$url" in
 ]
 JSON
         ;;
+      oversized)
+        # Keep the selected prerelease small, then exceed typical pipe buffers with an older
+        # release. An early-exiting consumer makes an upstream stage fail with SIGPIPE.
+        printf '%s' '[{"url":"https://api.github.com/repos/maxlyth/ha-paneld/releases/201","tag_name":"v0.9.2-rc3","draft":false,"prerelease":true,"assets":[{"browser_download_url":"https://github.com/maxlyth/ha-paneld/releases/download/v0.9.2-rc3/ha-paneld-v0.9.2-rc3-manual-setup-required.apk"}]},{"url":"https://api.github.com/repos/maxlyth/ha-paneld/releases/200","tag_name":"v0.9.1","draft":false,"prerelease":false,"padding":"'
+        awk 'BEGIN { for (i = 0; i < 2097152; i++) printf "x" }'
+        printf '%s\n' '"}]'
+        ;;
       foreign) cat <<'JSON'
 [
   {

@@ -55,8 +55,19 @@ class ConfigActivity : AppCompatActivity() {
     private var pageUrl: String = ""
     private var healthUrl: String = ""
 
+    override fun onStart() {
+        super.onStart()
+        KioskAdminUi.setVisible(this, true)
+    }
+
+    override fun onStop() {
+        KioskAdminUi.setVisible(this, false)
+        super.onStop()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        KioskAdminUi.setVisible(this, true)
         supportActionBar?.hide()
         web = WebView(this).apply {
             visibility = View.GONE
@@ -286,6 +297,7 @@ class ConfigActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        KioskAdminUi.setVisible(this, false)
         readinessJob?.cancel()
         activityScope.cancel()
         web.destroy()

@@ -1,5 +1,7 @@
 package io.github.maxlyth.hapaneld.config
 
+import io.github.maxlyth.hapaneld.sensors.ProximityLearningEngine
+import io.github.maxlyth.hapaneld.sensors.ProximityLearningRuntime
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -56,12 +58,42 @@ class SettingsRegistryPresentationTest {
         assertEquals("volume", volume.ha!!.objectSuffix)
         assertTrue(SettingsRegistry.spec("illuminance")!!.availableWhen(Capabilities(hasLight = true)))
         assertFalse(SettingsRegistry.spec("illuminance")!!.availableWhen(Capabilities()))
-        assertTrue(SettingsRegistry.spec("proximity")!!.availableWhen(Capabilities(hasRangedProximity = true)))
+        assertTrue(SettingsRegistry.spec("proximity")!!.availableWhen(Capabilities(hasLearnedProximity = true)))
         assertFalse(SettingsRegistry.spec("proximity")!!.availableWhen(Capabilities(hasProximity = true)))
         listOf("illuminance", "proximity", "proximity_level", "temperature", "humidity").forEach {
             assertTrue(SettingsRegistry.spec(it)!!.haExposedByDefault)
             assertTrue(SettingsRegistry.spec(it)!!.ha!!.readOnly)
         }
+    }
+
+    @Test fun proximitySetupAndTelemetryFollowSeparateSourceAndLearningCapabilities() {
+        val wake = SettingsRegistry.spec("wake_on_wave")!!
+        val proximity = SettingsRegistry.spec("proximity")!!
+        val level = SettingsRegistry.spec("proximity_level")!!
+
+        val absent = Capabilities()
+        assertFalse(wake.availableWhen(absent))
+        assertFalse(proximity.availableWhen(absent))
+        assertFalse(level.availableWhen(absent))
+
+        val sourcePresentButUnlearned = Capabilities(hasProximity = true)
+        assertTrue(wake.availableWhen(sourcePresentButUnlearned))
+        assertFalse(proximity.availableWhen(sourcePresentButUnlearned))
+        assertFalse(level.availableWhen(sourcePresentButUnlearned))
+
+        for (mode in listOf(ProximityLearningEngine.Mode.BINARY, ProximityLearningEngine.Mode.GRADED)) {
+            assertTrue(ProximityLearningRuntime.isLearnedMode(mode))
+            val learned = Capabilities(hasProximity = true, hasLearnedProximity = true)
+            assertTrue(wake.availableWhen(learned))
+            assertTrue(proximity.availableWhen(learned))
+            assertTrue(level.availableWhen(learned))
+        }
+        assertFalse(ProximityLearningRuntime.isLearnedMode(ProximityLearningEngine.Mode.UNKNOWN))
+
+        val learnedLossWithSourceRemaining = Capabilities(hasProximity = true, hasLearnedProximity = false)
+        assertTrue(wake.availableWhen(learnedLossWithSourceRemaining))
+        assertFalse(proximity.availableWhen(learnedLossWithSourceRemaining))
+        assertFalse(level.availableWhen(learnedLossWithSourceRemaining))
     }
 
     @Test fun wifiReadingsRemainOptInDiagnosticsAndUseNativeSignalUnits() {

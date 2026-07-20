@@ -71,4 +71,24 @@ class AmbientHistoryStoreTest {
             assertEquals(1, store.ambientHistory("b", "panel", 0).size)
         }
     }
+
+    @Test fun seededRowsAreIdempotentAndNeverReplaceLiveEvidence() {
+        val now = System.currentTimeMillis()
+        val minute = now / 60_000L
+        fun aggregate(lux: Double) = AmbientMinuteAggregate(
+            AmbientHistoryKey("location-a", "ha:source", minute - 1),
+        ).also { it.add(lux, 60_000, baselineEligible = true) }
+
+        EntityCatalogStore(context).use { store ->
+            store.seedAmbientHistory(listOf(aggregate(10.0)), now)
+            store.seedAmbientHistory(listOf(aggregate(30.0)), now)
+            assertEquals(10.0, store.ambientHistory("location-a", "ha:source", minute - 2).single().meanLux, 0.001)
+
+            store.recordAmbientHistory(listOf(aggregate(20.0)), now)
+            store.seedAmbientHistory(listOf(aggregate(40.0)), now)
+            val row = store.ambientHistory("location-a", "ha:source", minute - 2).single()
+            assertEquals(15.0, row.meanLux, 0.001)
+            assertEquals(2L, row.sampleCount)
+        }
+    }
 }

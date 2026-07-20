@@ -83,6 +83,40 @@ internal class AmbientHistoryRuntime(
         }
     }
 
+    /** Flush live evidence first, then fill only missing minutes from an external bootstrap. */
+    fun seed(
+        samples: List<AmbientMinuteAggregate>,
+        expectedContextId: String,
+        expectedSourceId: String,
+        onComplete: () -> Unit = {},
+    ) {
+        if (closed || samples.isEmpty()) return
+        val run = synchronized(pendingLock) {
+            if (contextId != expectedContextId || sourceId != expectedSourceId ||
+                samples.any { it.key.contextId != expectedContextId || it.key.sourceId != expectedSourceId }
+            ) return
+            pending += accumulator.drain()
+            flushFuture?.cancel(false)
+            flushFuture = null
+            generation.get()
+        }
+        executor.execute {
+            if (closed || run != generation.get() || contextId != expectedContextId || sourceId != expectedSourceId) return@execute
+            if (!flush(reloadAfter = false)) return@execute
+            if (closed || run != generation.get() || contextId != expectedContextId || sourceId != expectedSourceId) return@execute
+            runCatching {
+                store.seedAmbientHistory(samples, wallClockMs())
+                val since = wallClockMs() / AMBIENT_MINUTE_MS - AMBIENT_RETENTION_MINUTES
+                store.ambientHistory(expectedContextId, expectedSourceId, since)
+            }.onSuccess {
+                if (run == generation.get() && contextId == expectedContextId && sourceId == expectedSourceId) {
+                    cached = it
+                    runCatching(onComplete)
+                }
+            }.onFailure { Log.w(TAG, "ambient history seed failed", it) }
+        }
+    }
+
     fun reload() {
         if (closed) return
         executor.execute {
@@ -118,18 +152,21 @@ internal class AmbientHistoryRuntime(
         flushFuture = executor.schedule(::flushSafely, FLUSH_MS, TimeUnit.MILLISECONDS)
     }
 
-    private fun flush(reloadAfter: Boolean) {
+    private fun flush(reloadAfter: Boolean): Boolean {
         val batch = synchronized(pendingLock) {
             if (pending.isEmpty()) emptyList() else pending.toList().also { pending.clear() }
         }
-        if (batch.isNotEmpty()) runCatching { store.recordAmbientHistory(batch, wallClockMs()) }
-            .onFailure {
+        val persisted = if (batch.isEmpty()) true else runCatching {
+            store.recordAmbientHistory(batch, wallClockMs())
+            true
+        }.getOrElse {
                 Log.w(TAG, "ambient history write failed", it)
                 synchronized(pendingLock) {
                     pending.addAll(0, batch.takeLast(MAX_PENDING))
                     while (pending.size > MAX_PENDING) pending.removeAt(0)
                     scheduleFlushLocked()
                 }
+                false
             }
         if (reloadAfter) {
             val run = generation.get()
@@ -142,6 +179,7 @@ internal class AmbientHistoryRuntime(
                 }
                 .onFailure { Log.w(TAG, "ambient history refresh failed", it) }
         }
+        return persisted
     }
 
     fun closeAndJoin(timeoutMs: Long = CLOSE_TIMEOUT_MS): Boolean {

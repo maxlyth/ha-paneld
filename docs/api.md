@@ -57,6 +57,8 @@ Optional [Hardened mode](security-mode.md) requires physical access to the panel
 
 `GET /api/v1/config` redacts credentials. Configuration updates are partial merges, so clients must send only the fields they intend to change and must never construct a write by round-tripping the redacted response.
 
+The Configure page can start Home Assistant's normal browser sign-in through `POST /api/v1/ha/oauth/start`. The returned link may be opened or copied into a private browser window, which avoids typing credentials on the panel. Home Assistant redirects to the panel-local callback; ha-paneld exchanges the one-use code itself and never returns access or refresh tokens to the browser. The callback is available only through the same trusted-LAN and Host checks as the rest of port `8888`, is bound to the panel address that started it, expires after ten minutes and sends `no-store`/`no-referrer` responses.
+
 ## Endpoint families
 
 This table is a maintained overview rather than a replacement for OpenAPI. The explorer documents exact methods, parameters, request bodies, status codes and response schemas for every active route.
@@ -65,6 +67,7 @@ This table is a maintained overview rather than a replacement for OpenAPI. The e
 |---|---|
 | `/api/v1/health`, `/api/v1/info`, `/api/v1/status`, `/api/v1/sensors`, `/api/v1/radio` | Liveness, panel identity, health findings, capabilities and bounded sensor or gateway state. |
 | `/api/v1/config`, `/api/v1/config/schema`, `/api/v1/config/export`, `/api/v1/config/import`, `/api/v1/config/revisions` | Partial configuration, registry metadata, portable bundles and on-panel revision restore. Secret-bearing export, import and restore operations follow the Hardened-mode approval contract. |
+| `/api/v1/ha/oauth/start`, `/api/v1/ha/oauth/callback`, `/api/v1/ha/oauth/status` | Short-lived administrator-browser Home Assistant sign-in. The panel exchanges and stores credentials server-side; the browser receives no tokens. |
 | `/api/v1/profiles` | Lists immutable bundled and local profile revisions and their activation state. Subroutes provide schema and driver catalogues, templates, passive device drafts, validation, comparison, import, activation, rollback and deletion. |
 | `/api/v1/provisioning/plan` and `/api/v1/provisioning/plan.txt` | Read-only, profile-driven provisioning guidance combined with live panel observations. |
 | `/api/v1/backup`, `/api/v1/restore`, `/api/v1/install/*`, `/api/v1/uninstall`, `/api/v1/updates/ignore`, `/api/v1/webview/heal`, `/api/v1/companion/repair-url` | Backup, restore, component and APK installation, update state and maintenance. Long-running operations report through `/api/v1/install/status` and share one destructive-operation lane. |

@@ -109,29 +109,32 @@ class AdaptiveProximitySurfaceContractTest {
         val server = source("http/PaneldServer.kt")
 
         assertTrue(runtime.contains("restorePendingEvidence(evidence)"))
-        assertTrue(runtime.contains("lastDurableReadyModel?.let { return it }"))
+        assertTrue(runtime.contains("withoutWakeEvidence(previous"))
+        assertTrue(runtime.contains("output.completedEpisode || modelChanged || wakeEvidenceInvalidated"))
         assertFalse(runtime.contains("DiscardOldestPolicy"))
         assertFalse(runtime.contains("shutdownNow()"))
         assertTrue(service.contains("config.wakeOnWaveGeneration != settingGeneration"))
-        assertTrue(service.contains("!sensors.hasRangedProximity()"))
+        assertTrue(service.contains("!sensors.hasLearnedProximity()"))
         assertTrue(screen.contains("fun reconcileObservedLit(expectedGeneration"))
         assertTrue(screen.contains("observedDarkGeneration != expectedGeneration"))
-        assertTrue(server.contains("config.wakeOnWave && sensors.hasRangedProximity()"))
-        assertTrue(server.contains("RANGED_PROXIMITY_REQUIRED"))
-        assertTrue(server.contains("cached.copy(hasRangedProximity = sensors.hasRangedProximity())"))
-        assertTrue(server.contains("action != \"cancel\" && !sensors.hasRangedProximity()"))
-        assertTrue(server.contains("if (sensors.hasRangedProximity()) \"\"\"<div id=\"proximity-learning-mount\""))
+        assertTrue(server.contains("config.wakeOnWave && sensors.hasProximity()"))
+        assertTrue(server.contains("PROXIMITY_SOURCE_REQUIRED"))
+        assertTrue(server.contains("hasProximity = sensors.hasProximity()"))
+        assertTrue(server.contains("hasLearnedProximity = sensors.hasLearnedProximity()"))
+        assertTrue(server.contains("action != \"cancel\" && !sensors.hasProximity()"))
+        assertTrue(server.contains("if (sensors.hasProximity()) \"\"\"<div id=\"proximity-learning-mount\""))
+        assertTrue(runtime.contains("fun isLearnedSignal(): Boolean = isLearnedMode(view.mode)"))
         assertTrue(mqttTombstonesAllPresenceSurfaces())
     }
 
     private fun mqttTombstonesAllPresenceSurfaces(): Boolean {
         val mqtt = source("MqttBridge.kt")
-        return mqtt.contains("capabilitySnapshot?.hasRangedProximity == true") &&
+        return mqtt.contains("capabilitySnapshot?.hasLearnedProximity == true") &&
             mqtt.contains("exposable(\"proximity\", \"binary_sensor\"") &&
-            mqtt.contains("availableOverride = rangedProximity") &&
+            mqtt.contains("availableOverride = learnedProximity") &&
             mqtt.contains("sensorDiscovery(\"proximity\", proximityAvail)") &&
             mqtt.contains("sensorDiscovery(\"proximity_level\", proximityAvail)") &&
-            mqtt.contains("publish(stateWakeOnWave, \"\", retain = true)")
+            mqtt.contains("if (hasProximity) known(if (config.wakeOnWave)")
     }
 
     private fun source(relative: String): String = locate("src/main/kotlin/io/github/maxlyth/hapaneld/$relative").readText()

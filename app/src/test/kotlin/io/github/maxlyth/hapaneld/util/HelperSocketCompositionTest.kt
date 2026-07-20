@@ -31,6 +31,47 @@ class HelperSocketCompositionTest {
         assertEquals("OK", daemon.sendLong("RELOAD io.example.dashboard", 5_000).replyValue())
     }
 
+    /**
+     * The app and root helper intentionally have no generated protocol. Keep the commonly emitted
+     * line forms as a small executable corpus at the real Kotlin-to-C socket boundary: an accepted
+     * request, a host-safe reply, and a malformed sibling for each capability family.  This catches
+     * framing or dispatch drift which the separate manifest check cannot see.
+     */
+    @Test(timeout = 10_000)
+    fun appWireCompatibilityCorpusCrossesKotlinAndNativeHelper() {
+        val daemon = SocketDaemon(socketPath)
+        listOf(
+            WireTranscript("VERSION", "HELPER version=1.1.0 proto=1.1"),
+            WireTranscript("PING", "OK"),
+            WireTranscript("BUILDID", "BUILDID development"),
+            WireTranscript("COMPANIONCAPS", "COMPANIONCAPS 1 BACKUP RESTORE STATUS JOURNAL"),
+            WireTranscript("COMPANIONSTATUS", "IDLE"),
+            WireTranscript("LEDPROBE", "none"),
+            WireTranscript("RGB 1 2 3", "ERR"),
+            WireTranscript("OFF", "ERR"),
+            WireTranscript("BTN 1", "ERR"),
+            WireTranscript("BLPOWER", "ERR"),
+            WireTranscript("BLREAD", "ERR"),
+            WireTranscript("BLSET 42", "ERR"),
+            WireTranscript("SCREEN ON", "ERR"),
+            WireTranscript("START io.homeassistant.companion.android/.Home", "OK"),
+            WireTranscript("RELOAD io.homeassistant.companion.android", "OK"),
+            WireTranscript("SETHOME io.homeassistant.companion.android/.Home", "OK"),
+            WireTranscript("APPSTATE io.homeassistant.companion.android", "ERR"),
+            WireTranscript("DENSITY 240", "OK"),
+            WireTranscript("FONTSCALE 1.0", "OK"),
+            WireTranscript("GOV performance", "ERR"),
+            WireTranscript("ZIGBEECONTAIN", "OK"),
+            WireTranscript("VERSION unexpected", "ERR"),
+            WireTranscript("PINGEXTRA", "ERR"),
+            WireTranscript("RGB 1 2", "ERR"),
+            WireTranscript("SETHOME ;reboot", "ERR"),
+            WireTranscript("ZIGBEECONTAIN unexpected", "ERR"),
+        ).forEach { (request, reply) ->
+            assertEquals(reply, daemon.send(request), request)
+        }
+    }
+
     @Test(timeout = 10_000)
     fun connectionScopedIdentityAndOperationCrossTheNativeServerOnOneSocket() {
         val daemon = IdentityAdmittingHelperClient(ChannelSessionTransport(socketPath), nowNs = { 0L })
@@ -134,6 +175,8 @@ class HelperSocketCompositionTest {
             .getMethod("of", Path::class.java)
             .invoke(null, path) as SocketAddress
     }
+
+    private data class WireTranscript(val request: String, val reply: String)
 
     private class ChannelSessionTransport(private val path: Path) : HelperCommandTransport {
         override fun open(): HelperCommandSession? = runCatching {

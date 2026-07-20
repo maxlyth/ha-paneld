@@ -41,6 +41,13 @@ internal data class HaAuthOwner(
     val staticAccessToken: String,
 )
 
+/** Process-local authority for one administrator-browser Home Assistant login. The epoch makes a
+ * newer Connect request supersede an older callback even when that callback already consumed state. */
+internal data class HaOAuthAttemptAuthority(
+    val owner: HaAuthOwner,
+    val epoch: Long,
+)
+
 internal fun HaAuthSnapshot.stableOwner(): HaAuthOwner = HaAuthOwner(
     url = url.trim().trimEnd('/'),
     refreshToken = refreshToken,
@@ -82,6 +89,7 @@ class Config private constructor(
     enum class SecurityMode { RELAXED, HARDENED }
 
     private val wakeOnWaveEpoch = AtomicLong()
+    private val haOAuthAttemptEpoch = AtomicLong()
 
     constructor(context: Context) : this(
         AppState.preferences(context, "config", "ha-paneld"),
@@ -460,6 +468,17 @@ class Config private constructor(
         )
     }
 
+    internal fun beginHaOAuthAttempt(): HaOAuthAttemptAuthority = synchronized(CONFIG_LOCK) {
+        HaOAuthAttemptAuthority(
+            owner = haAuthSnapshot().stableOwner(),
+            epoch = haOAuthAttemptEpoch.incrementAndGet(),
+        )
+    }
+
+    internal fun isHaOAuthAttemptCurrent(epoch: Long): Boolean = synchronized(CONFIG_LOCK) {
+        haOAuthAttemptEpoch.get() == epoch
+    }
+
     /** Persist the built-in renderer connection (HTTP config page / provisioning). A null token leaves
      *  it unchanged, mirroring [setMqtt]'s password semantics. */
     fun setHaConnection(url: String, token: String?) {
@@ -596,6 +615,20 @@ class Config private constructor(
     }
     fun commitKioskLock(on: Boolean): Boolean = synchronized(CONFIG_LOCK) {
         prefs.edit().putBoolean("kiosk_lock", on).commit()
+    }
+
+    /** Device-local acknowledgement of the built-in launch screen for one exact app version. This is
+     * outside SettingsRegistry, so config export/import cannot suppress an intro on another panel. */
+    val lastLaunchScreenVersionCode: Long?
+        get() = if (prefs.contains(LAST_LAUNCH_SCREEN_VERSION_PREF)) {
+            prefs.getLong(LAST_LAUNCH_SCREEN_VERSION_PREF, Long.MIN_VALUE)
+        } else {
+            null
+        }
+
+    /** Commit only after MainActivity has actually selected and installed the intro view. */
+    fun commitLaunchScreenVersionShown(versionCode: Long): Boolean = synchronized(CONFIG_LOCK) {
+        prefs.edit().putLong(LAST_LAUNCH_SCREEN_VERSION_PREF, versionCode).commit()
     }
 
     // HA Companion app auto-manage: when on, ha-paneld installs the minimal Companion if it's
@@ -1506,6 +1539,8 @@ class Config private constructor(
         private const val MQTT_FAMILY_IPV4_PREF = "device_local_mqtt_family_ipv4"
         private const val MQTT_ANNOUNCEMENT_BOUNDARY_PREF =
             "device_local_mqtt_announcement_boundary_consumed"
+        private const val LAST_LAUNCH_SCREEN_VERSION_PREF =
+            "device_local_last_launch_screen_version"
         private const val DASHBOARD_ENTITY_DEFAULT_RESOLVER_VERSION_KEY =
             "dashboard_entity_default_resolver_version"
         private const val DASHBOARD_ENTITY_DEFAULT_RESOLVER_TARGET_KEY =
