@@ -216,7 +216,7 @@ class ShellyFirmwareValidationTest(unittest.TestCase):
         workflow = pathlib.Path(__file__).parents[2] / ".github/workflows/shelly-firmware-monitor.yml"
         text = workflow.read_text()
         self.assertIn("NEW_VERSIONS: ${{ steps.probe.outputs.new_versions }}", text)
-        run_script = text.split("- name: Commit updated firmware index", 1)[1]
+        run_script = text.split("- name: Open/update pull request with the firmware index", 1)[1]
         self.assertNotIn('${{ steps.probe.outputs.new_versions }}', run_script.split("run: |", 1)[1])
         self.assertIn('if [ -n "$NEW_VERSIONS" ]', run_script)
 
