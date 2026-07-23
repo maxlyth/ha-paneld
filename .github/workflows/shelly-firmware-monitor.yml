@@ -7,7 +7,8 @@ run-name: Shelly firmware monitor · ${{ github.event_name }}
 #
 # On a scheduled run or a manual `update` run: appends the entry to
 # fw-shelly-walldisplay.dat, submits the firmware URL to Save Page Now, confirms
-# the capture, and commits the updated .dat back to main. The Discussion is
+# the capture, and opens (or updates) a pull request with the updated .dat —
+# main requires a reviewed PR, so this can't push directly. The Discussion is
 # updated whenever .dat changes. Manual runs default to read-only verification.
 #
 # Daily cadence is sufficient: Shelly rolls firmware out to the fleet over days
@@ -72,7 +73,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
-      contents: write       # commit new .dat entries to main
+      contents: write       # push the update branch
+      pull-requests: write  # open/update the .dat PR (main requires PR review)
     outputs:
       has_new: ${{ steps.probe.outputs.has_new }}
       has_pending: ${{ steps.probe.outputs.has_pending }}
@@ -86,6 +88,20 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
+
+      # A previous run's PR may still be open (unmerged) on main, awaiting
+      # review. Probe against ITS .dat, not main's stale copy, so an
+      # already-discovered-but-unmerged entry is never lost when this run
+      # pushes another commit onto that same branch below.
+      - name: Use pending PR branch's index if present
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          repo_url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          if git ls-remote --exit-code --heads "$repo_url" automation/shelly-firmware-index >/dev/null 2>&1; then
+            git fetch -q "$repo_url" automation/shelly-firmware-index
+            git show FETCH_HEAD:"$DAT" > "$DAT"
+          fi
 
       # Check both manifest endpoints for new versions. Sets has_new, has_pending,
       # new_versions in GITHUB_OUTPUT; appends new entries to the .dat file.
@@ -137,23 +153,43 @@ jobs:
             -f query='mutation($id:ID!,$b:String!){updateDiscussion(input:{discussionId:$id,body:$b}){discussion{url updatedAt}}}' \
             -f id="$did" -F b=@body.md
 
-      # Commit updated .dat back to main. Includes [skip ci] so the Android build
-      # does not fire on a data-file-only commit.
-      - name: Commit updated firmware index
+      # main requires a PR + review (branch protection), so this can no longer push
+      # straight to main. Push to a dedicated update branch instead and open a PR;
+      # if a prior run's PR is still open and unmerged, push a fresh commit onto
+      # that same branch rather than opening a duplicate. Includes [skip ci] on the
+      # commit so the Android build does not fire on a data-file-only change once
+      # the PR is merged.
+      - name: Open/update pull request with the firmware index
         if: steps.diff.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           NEW_VERSIONS: ${{ steps.probe.outputs.new_versions }}
         run: |
+          branch="automation/shelly-firmware-index"
           repo_url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add "$DAT"
+
           msg="data: Shelly Wall Display firmware index update"
           if [ -n "$NEW_VERSIONS" ]; then
             msg="data: Shelly Wall Display $NEW_VERSIONS discovered"
           fi
-          git commit -m "${msg} [skip ci]"
-          # Rebase in case a parallel run pushed first (rare but possible with manual runs).
-          git pull --rebase "$repo_url" main
-          git push "$repo_url" HEAD:main
+
+          dat_content="$(cat "$DAT")"
+          if git ls-remote --exit-code --heads "$repo_url" "$branch" >/dev/null 2>&1; then
+            git fetch -q "$repo_url" "$branch"
+            git checkout -q -B "$branch" FETCH_HEAD
+          else
+            git checkout -q -b "$branch"
+          fi
+          printf '%s\n' "$dat_content" > "$DAT"
+
+          git add "$DAT"
+          git commit -q -m "${msg} [skip ci]" || echo "nothing new to commit onto $branch"
+          git push -q "$repo_url" "HEAD:$branch"
+
+          if [ -z "$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$branch" --base main --state open --json number --jq '.[0].number')" ]; then
+            gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$branch" \
+              --title "$msg" \
+              --body "Automated Shelly Wall Display firmware index update from the scheduled monitor. Review the \`.dat\` diff, then merge."
+          fi
