@@ -20,6 +20,7 @@ import java.util.concurrent.CompletableFuture
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import javax.jmdns.JmDNS
@@ -48,6 +49,13 @@ class MdnsAdvertiser(
     @Volatile private var resolver: ThreadPoolExecutor? = null
     private val browseGeneration = AtomicLong()
     private val retirement = AtomicReference<CompletableFuture<Boolean>?>()
+    // The LAN address JmDNS is actually bound to. A panel's IPv4 arrives asynchronously (DHCP) and can
+    // change later, so this is compared against the live address on every [start] to catch a stale bind.
+    @Volatile private var boundIp: String? = null
+    // Set when the refresh sweep proves the responder died under a still-non-null JmDNS (see the sweep).
+    @Volatile private var responderDead = false
+    @Volatile private var selfMissedSweeps = 0
+    private val recovering = AtomicBoolean(false)
 
     private fun newResolver() = ThreadPoolExecutor(
         RESOLVE_WORKERS, RESOLVE_WORKERS, 0L, TimeUnit.MILLISECONDS,
@@ -111,10 +119,37 @@ class MdnsAdvertiser(
         if (existing == null || newHasName || !oldHasName) peerMap[p.panelId] = p
     }
 
-    /** Blocking network setup — call off the main thread. */
+    /**
+     * Blocking network setup — call off the main thread.
+     *
+     * Safe (and cheap) to call repeatedly: it revalidates an existing advertisement instead of assuming
+     * that a non-null JmDNS is a healthy one. A panel whose bind went stale or whose responder died is
+     * torn down and rebuilt here, because nothing else in the process ever notices — the HTTP API keeps
+     * serving the last known roster and the panel silently disappears from every other panel's switcher.
+     */
     fun start() {
         ownerGate.runIfOpen(Unit) start@{
-            if (jmdns != null) return@start
+            val lanIp = localIpv4()
+            if (lanIp == null) {
+                // No LAN IPv4 yet — ha-paneld starts before DHCP completes on a cold boot. Binding now
+                // would land on loopback: the panel would join the mDNS group on `lo`, advertise an
+                // unreachable 127.0.0.1 and never see a peer. Defer; the network callback re-runs this.
+                Log.i(TAG, "mDNS advertise deferred — no LAN IPv4 yet")
+                return@start
+            }
+            if (jmdns != null) {
+                // `browsing` false with a live JmDNS is the zombie a partially-drained stop() leaves
+                // behind: still advertising, but record() no-ops so the roster can never change again.
+                if (boundIp == lanIp && !responderDead && browsing) return@start // healthy — nothing to do
+                Log.w(
+                    TAG,
+                    "mDNS unhealthy (bound=$boundIp lan=$lanIp dead=$responderDead browsing=$browsing) — rebuilding",
+                )
+                stopResources(MonotonicDeadline(OWNER_STOP_MS))
+                // A teardown that could not drain leaves JmDNS owned by an in-flight call; retry later
+                // rather than stacking a second responder on the same port.
+                if (jmdns != null) return@start
+            }
             if (resolver?.isShutdown != false) resolver = newResolver()
             try {
                 val wifi = context.applicationContext
@@ -123,7 +158,7 @@ class MdnsAdvertiser(
                     setReferenceCounted(true)
                     acquire()
                 }
-                val addr = localAddress()
+                val addr = InetAddress.getByName(lanIp)
                 val dns = JmDNS.create(addr, runtimePanelId)
                 val props = mapOf(
                     "ver" to Config.VERSION,
@@ -142,6 +177,9 @@ class MdnsAdvertiser(
                     props,
                 )
                 jmdns = dns
+                boundIp = lanIp
+                responderDead = false
+                selfMissedSweeps = 0
                 dns.registerService(info)
                 // Start the persistent peer browse (powers the header switcher) — begins querying immediately
                 // and keeps the roster fresh in the background, so a UI read is instant + complete.
@@ -165,6 +203,22 @@ class MdnsAdvertiser(
                                 break
                             }
                             services.forEach { record(it, it.name ?: "") }
+                            // Liveness. A live JmDNS always lists THIS panel's own advertisement — it is
+                            // learned back over the same multicast path as any peer's. A JmDNS that was
+                            // closed (or whose socket died) keeps the object non-null while list() goes
+                            // empty, so without this the panel stays invisible to the whole fleet while
+                            // /api/v1/peers happily serves the frozen roster. Require several consecutive
+                            // misses so one congested sweep can't flap a healthy advertiser.
+                            selfMissedSweeps = nextMissedSweeps(
+                                selfMissedSweeps,
+                                services.any { (it.name ?: "") == runtimePanelId },
+                            )
+                            if (selfMissedSweeps >= DEAD_SWEEPS) {
+                                Log.w(TAG, "mDNS responder stopped listing this panel — rebuilding")
+                                responderDead = true
+                                requestRecovery()
+                                break
+                            }
                         } catch (failure: Exception) {
                             cost.outcome(FeatureCostOutcome.FAILURE)
                         } finally {
@@ -185,6 +239,54 @@ class MdnsAdvertiser(
 
     /** Stop the current advertisement while still allowing a later network-recovery restart. */
     fun stop() = ownerGate.runExclusive { stopResources(MonotonicDeadline(OWNER_STOP_MS)) }
+
+    /**
+     * Rebuild off the refresh thread. [stopResources] has to interrupt-and-join that thread, which
+     * refuses a self-join — so the sweep that detects the death must hand the restart to someone else
+     * or the teardown fails and the advertiser stays dead. Collapses to one in-flight recovery.
+     */
+    private fun requestRecovery() {
+        if (!recovering.compareAndSet(false, true)) return
+        Thread {
+            try {
+                runRecovery()
+            } catch (failure: Throwable) {
+                Log.w(TAG, "mDNS recovery failed", failure)
+            } finally {
+                recovering.set(false)
+            }
+        }.apply { isDaemon = true; name = "mdns-recover"; start() }
+    }
+
+    /** Retry the teardown+rebuild a few times: the detecting sweep has already exited, so a teardown that
+     *  loses its drain race here would otherwise leave the responder dead until the next network event. */
+    private fun runRecovery() {
+        repeat(RECOVERY_ATTEMPTS) { attempt ->
+            if (!ownerGate.isOpen()) return // retired — a late recovery must not resurrect this generation
+            ownerGate.runExclusive { stopResources(MonotonicDeadline(OWNER_STOP_MS)) }
+            start()
+            if (health().advertising) return
+            if (attempt < RECOVERY_ATTEMPTS - 1) {
+                try {
+                    Thread.sleep(RECOVERY_BACKOFF_MS)
+                } catch (_: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    return
+                }
+            }
+        }
+        // Still down: health() now reports it, so the status banner shows the panel has left the fleet,
+        // and the next network callback re-runs start().
+        Log.w(TAG, "mDNS recovery gave up after $RECOVERY_ATTEMPTS attempts")
+    }
+
+    /** Advertiser health for the status banner — see [mdnsHealthWarning]. Never throws. */
+    fun health(): MdnsHealth = MdnsHealth(
+        advertising = jmdns != null && browsing,
+        boundIp = boundIp,
+        lanIp = localIpv4(),
+        responderDead = responderDead,
+    )
 
     /** Permanently close this runtime generation so a late recovery callback cannot resurrect it. */
     internal fun retire(deadline: MonotonicDeadline): CompletableFuture<Boolean> {
@@ -225,6 +327,8 @@ class MdnsAdvertiser(
         runCatching { jmdns?.unregisterAllServices() }.onFailure { complete = false }
         runCatching { jmdns?.close() }.onFailure { complete = false }
         jmdns = null
+        boundIp = null
+        selfMissedSweeps = 0
         runCatching { lock?.release() }.onFailure { complete = false }
         lock = null
         return complete && deadline.remainingMs() > 0L
@@ -358,11 +462,6 @@ class MdnsAdvertiser(
             java.net.Socket().use { it.connect(java.net.InetSocketAddress(ip, port), timeoutMs) }; true
         }.getOrDefault(false)
 
-    // Bind JmDNS to the panel's real LAN address. The old WifiManager.connectionInfo path returns
-    // 0 on Ethernet panels (→ 127.0.0.1, which HA zeroconf can't reach), so enumerate interfaces.
-    private fun localAddress(): InetAddress =
-        localIpv4()?.let { InetAddress.getByName(it) } ?: InetAddress.getLocalHost()
-
     companion object {
         private const val TAG = "ha-paneld/mdns"
         private const val RESOLVE_MS = 2500L // per-peer mDNS resolve budget (off the JmDNS thread)
@@ -370,6 +469,9 @@ class MdnsAdvertiser(
         private const val RESOLVE_QUEUE = 32
         private const val MAX_PEERS = 64
         private const val REFRESH_MS = 60_000L // periodic re-browse interval (name refresh / gap fill)
+        private const val DEAD_SWEEPS = 3 // consecutive self-less sweeps before declaring JmDNS dead
+        private const val RECOVERY_ATTEMPTS = 3
+        private const val RECOVERY_BACKOFF_MS = 5_000L
         private const val LIST_MS = 3000L // dns.list resolve budget per refresh sweep
         private const val OWNER_STOP_MS = 2_000L
         private const val HA_SERVICE_TYPE = "_home-assistant._tcp.local."
@@ -388,6 +490,35 @@ internal fun safeAdvertisedHaUrl(raw: String?, serviceIps: Set<String>): String?
     if (serviceIps.isEmpty() || destinationIps.intersect(serviceIps).isEmpty()) return null
     return uri.toString().trimEnd('/')
 }
+
+/** Observable state of the mDNS advertiser. [boundIp] is the address JmDNS is bound to (null when it is
+ *  not advertising); [lanIp] is the panel's live LAN IPv4, also null before DHCP has handed one out. */
+data class MdnsHealth(
+    val advertising: Boolean,
+    val boundIp: String?,
+    val lanIp: String?,
+    val responderDead: Boolean,
+)
+
+/**
+ * Pure: the operator-facing warning for an unhealthy advertiser, or null when there is nothing to say.
+ * A silently dead responder is the whole failure class this guards — the panel keeps working over HTTP
+ * and keeps serving its last roster, so without a banner nobody notices it left the fleet switcher.
+ */
+internal fun mdnsHealthWarning(health: MdnsHealth): String? = when {
+    // No LAN address at all: the panel has bigger problems and every other card already says so.
+    health.lanIp == null -> null
+    !health.advertising || health.responderDead ->
+        "⚠ <b>Panel discovery (mDNS) is not running</b> — this panel is missing from other panels' " +
+            "switcher menus, and Home Assistant cannot auto-discover it. It retries automatically."
+    health.boundIp != health.lanIp ->
+        "⚠ <b>Panel discovery (mDNS) is advertising a stale address</b> (${health.boundIp}, now " +
+            "${health.lanIp}) — other panels cannot reach this one from their switcher until it rebinds."
+    else -> null
+}
+
+/** Pure: consecutive refresh sweeps that did not list this panel's own advertisement. */
+internal fun nextMissedSweeps(previous: Int, sawSelf: Boolean): Int = if (sawSelf) 0 else previous + 1
 
 internal fun mdnsRunCurrent(
     generation: AtomicLong,

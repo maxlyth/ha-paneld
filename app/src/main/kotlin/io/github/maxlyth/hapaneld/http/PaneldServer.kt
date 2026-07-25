@@ -644,6 +644,10 @@ class PaneldServer internal constructor(
     // LAN ha-paneld peers discovered over mDNS — powers the header panel switcher. Injected by the service
     // (captures the live MdnsAdvertiser field). Blocking browse; called only through [peersCache] off-thread.
     private val peers: () -> List<io.github.maxlyth.hapaneld.Peer> = { emptyList() },
+    // Advertiser health for the status banner. A dead or stale-bound responder is otherwise invisible:
+    // the panel keeps serving its last known roster while it has silently left every other panel's
+    // switcher. Null when healthy (or when there is no LAN address to advertise in the first place).
+    private val mdnsWarning: () -> String? = { null },
     // Shared with the service startup path: serializes renderer config commit → atomic Companion borrow →
     // launch, and retries an interrupted built-in switch from its durable blank-URL state.
     private val rendererPreparation: RendererPreparationCoordinator,
@@ -2688,6 +2692,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         radio?.let { z ->
             zigbeeWarning(z)?.let(warns::add)
         }
+        runCatching(mdnsWarning).getOrNull()?.let(warns::add)
         warns.addAll(findings.map { statusWarning(it) })
         val capColor = mapOf("ok" to "#48c774", "degraded" to "#d9a528", "none" to "#d04a3b")
         // Stale-while-revalidate keeps status polling fast while ensuring a status-only client still

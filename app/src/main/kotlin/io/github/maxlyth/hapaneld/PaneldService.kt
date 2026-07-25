@@ -850,6 +850,8 @@ class PaneldService : Service() {
             // LAN ha-paneld peers over mDNS for the header panel switcher. Captures the `mdns` FIELD (not a
             // snapshot) so it follows reconfigure()'s reassignment; browsePeers null-guards the swap window.
             peers = { mdns.browsePeers() },
+            // Same live-field capture as `peers`: report the CURRENT advertiser's health, not a snapshot.
+            mdnsWarning = { mdnsHealthWarning(mdns.health()) },
             rendererPreparation = rendererPreparation,
             entityLearning = entityLearning,
             autoBrightnessHttpApi = adaptiveBrightnessHttpApi(),
@@ -937,6 +939,18 @@ class PaneldService : Service() {
             wifiDiagnostics = wifiDiagnostics::snapshot,
             learnedProximityEligibility = sensors::hasLearnedProximity,
         )
+    }
+
+    /**
+     * Re-check the mDNS advertiser against the current LAN address, off the callback thread.
+     *
+     * Deliberately NOT gated on the MQTT state the way [networkAvailableAction] gates MQTT's own
+     * recovery: mDNS breaks independently of MQTT (a boot-time bind before DHCP, an IP change, a dead
+     * responder), and a panel with healthy MQTT would otherwise never re-examine it. [MdnsAdvertiser.start]
+     * is a cheap no-op when the advertisement is already healthy, so this is safe to call on every event.
+     */
+    private fun revalidateMdns(observed: ServiceRuntimeOwner.Observation<NetworkRuntime>) {
+        runtime.reconnect(observed) { it.mdns.start() }
     }
 
     private fun buildMdns(identity: NetworkRuntimeIdentity): MdnsAdvertiser = MdnsAdvertiser(
@@ -2441,6 +2455,7 @@ class PaneldService : Service() {
                 val observed = runtime.observe() ?: return
                 val target = observed.value.mqtt
                 target.refreshDiscoveryAddress()
+                revalidateMdns(observed)
                 when (networkAvailableAction(target.state, target.configuredBroker)) {
                     NetworkAvailableAction.NONE -> Unit
                     NetworkAvailableAction.RECONNECT -> {
@@ -2458,7 +2473,11 @@ class PaneldService : Service() {
             }
 
             override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) {
-                runtime.observe()?.value?.mqtt?.refreshDiscoveryAddress()
+                val observed = runtime.observe() ?: return
+                observed.value.mqtt.refreshDiscoveryAddress()
+                // The panel's IPv4 arriving (or changing) is exactly what strands the advertiser on a
+                // stale bind, so this is the event that matters most for mDNS.
+                revalidateMdns(observed)
             }
 
             override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
