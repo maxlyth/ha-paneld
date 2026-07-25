@@ -564,7 +564,9 @@ rollback_root_helper() {
         fi
         sync || exit 1
         if [ -f /system/bin/hapaneld-helper.hapaneld-manual-recovery ]; then
-          start hapaneld_helper 2>/dev/null || ( /system/bin/hapaneld-helper >/dev/null 2>&1 & )
+          start hapaneld_helper 2>/dev/null
+          /system/bin/hapaneld-helper --request PING >/dev/null 2>&1 ||
+            ( /system/bin/hapaneld-helper >/dev/null 2>&1 & )
           echo ROLLBACK_RESTARTED
         elif [ -f /data/adb/hapaneld/hapaneld-helper.hapaneld-manual-recovery ]; then
           /data/adb/hapaneld/hapaneld-helper >/dev/null 2>&1 &
@@ -657,7 +659,9 @@ rollback_root_helper() {
           /data/adb/hapaneld/hapaneld-helper >/dev/null 2>&1 &
           echo ROLLBACK_RESTARTED
         elif [ -x /system/bin/hapaneld-helper ]; then
-          start hapaneld_helper 2>/dev/null || ( /system/bin/hapaneld-helper >/dev/null 2>&1 & )
+          start hapaneld_helper 2>/dev/null
+          /system/bin/hapaneld-helper --request PING >/dev/null 2>&1 ||
+            ( /system/bin/hapaneld-helper >/dev/null 2>&1 & )
           echo ROLLBACK_RESTARTED
         elif [ -x /system/bin/hapaneld-ledd ]; then
           start hapaneld_ledd 2>/dev/null || ( /system/bin/hapaneld-ledd >/dev/null 2>&1 & )

@@ -2084,7 +2084,9 @@ rollback_system() {
   sync || return 1
 
   if [ -x /system/bin/hapaneld-helper ] && [ -f /system/bin/hapaneld-helper.hapaneld-recovery ]; then
-    start hapaneld_helper 2>/dev/null || /system/bin/hapaneld-helper >/dev/null 2>&1 &
+    start hapaneld_helper 2>/dev/null
+    /system/bin/hapaneld-helper --request PING >/dev/null 2>&1 ||
+      ( /system/bin/hapaneld-helper >/dev/null 2>&1 & )
     result=ROLLBACK_RESTARTED
   elif [ -x /data/adb/hapaneld/hapaneld-helper ] && [ -f /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery ]; then
     /data/adb/hapaneld/hapaneld-helper >/dev/null 2>&1 &
@@ -2126,7 +2128,9 @@ rollback_systemless() {
     /data/adb/hapaneld/hapaneld-helper >/dev/null 2>&1 &
     result=ROLLBACK_RESTARTED
   elif [ -x /system/bin/hapaneld-helper ]; then
-    start hapaneld_helper 2>/dev/null || /system/bin/hapaneld-helper >/dev/null 2>&1 &
+    start hapaneld_helper 2>/dev/null
+    /system/bin/hapaneld-helper --request PING >/dev/null 2>&1 ||
+      ( /system/bin/hapaneld-helper >/dev/null 2>&1 & )
     result=ROLLBACK_RESTARTED
   elif [ -x /system/bin/hapaneld-ledd ]; then
     start hapaneld_ledd 2>/dev/null || /system/bin/hapaneld-ledd >/dev/null 2>&1 &
@@ -2181,7 +2185,9 @@ rollback_hybrid() {
     /data/adb/hapaneld/hapaneld-helper >/dev/null 2>&1 &
     result=ROLLBACK_RESTARTED
   elif [ -x /system/bin/hapaneld-helper ]; then
-    start hapaneld_helper 2>/dev/null || /system/bin/hapaneld-helper >/dev/null 2>&1 &
+    start hapaneld_helper 2>/dev/null
+    /system/bin/hapaneld-helper --request PING >/dev/null 2>&1 ||
+      ( /system/bin/hapaneld-helper >/dev/null 2>&1 & )
     result=ROLLBACK_RESTARTED
   elif [ -x /system/bin/hapaneld-ledd ]; then
     start hapaneld_ledd 2>/dev/null || /system/bin/hapaneld-ledd >/dev/null 2>&1 &
