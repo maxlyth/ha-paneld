@@ -33,8 +33,12 @@ object SettingValue {
                 rangeCheck(spec, f) ?: Validation.Ok(trimFloat(f))
             }
             SettingType.ENUM -> {
+                // Resolve a retired spelling first, so a bundle written against an older build still
+                // imports to the choice it named rather than being rejected as unknown.
+                val canonical = spec.aliases.entries
+                    .firstOrNull { (retired, _) -> retired.equals(v, ignoreCase = true) }?.value ?: v
                 // Case-insensitive match against the declared options; normalize to the declared casing.
-                val match = spec.options.firstOrNull { it.equals(v, ignoreCase = true) }
+                val match = spec.options.firstOrNull { it.equals(canonical, ignoreCase = true) }
                     ?: return Validation.Bad("${spec.key}: must be one of ${spec.options.joinToString(", ")}")
                 Validation.Ok(match)
             }

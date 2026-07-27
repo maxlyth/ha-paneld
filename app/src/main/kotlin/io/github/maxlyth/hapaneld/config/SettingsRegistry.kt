@@ -2,6 +2,7 @@ package io.github.maxlyth.hapaneld.config
 
 import io.github.maxlyth.hapaneld.util.AndroidInput
 import io.github.maxlyth.hapaneld.util.BrokerEndpoint
+import io.github.maxlyth.hapaneld.util.LogShipEndpoint
 import java.util.Locale
 
 /**
@@ -455,7 +456,8 @@ object SettingsRegistry {
             key = "log_ship_host", type = SettingType.STRING, group = "Logging",
             label = "Sink host", default = "", scope = Scope.DEVICE,
             maxChars = 253,
-            help = "Log-collector host; blank keeps shipping inert.",
+            help = "Log-collector host; blank keeps shipping inert. A scheme or :port here is honoured " +
+                "(udp://collector, collector:1514).",
         ),
         SettingSpec(
             key = "log_ship_port", type = SettingType.INT, group = "Logging",
@@ -463,8 +465,12 @@ object SettingsRegistry {
         ),
         SettingSpec(
             key = "log_ship_protocol", type = SettingType.ENUM, group = "Logging",
-            label = "Protocol", default = "syslog", options = listOf("syslog", "http"),
+            label = "Protocol", default = LogShipEndpoint.DEFAULT_PROTOCOL,
+            options = LogShipEndpoint.PROTOCOLS,
+            aliases = LogShipEndpoint.ALIASES,
             scope = Scope.DEVICE,
+            help = "UDP is what a stock syslog collector listens for on port 514. Pick syslog-tcp only " +
+                "if your collector is explicitly configured for TCP.",
         ),
 
         // ---- Sensors -----------------------------------------------------------------------------

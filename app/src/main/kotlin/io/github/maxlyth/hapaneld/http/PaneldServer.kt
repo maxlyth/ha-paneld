@@ -88,12 +88,14 @@ import io.github.maxlyth.hapaneld.util.Cached
 import io.github.maxlyth.hapaneld.util.AppInstaller
 import io.github.maxlyth.hapaneld.util.AndroidInput
 import io.github.maxlyth.hapaneld.util.BoundedStreams
+import io.github.maxlyth.hapaneld.util.BoundedDns
 import io.github.maxlyth.hapaneld.util.BundledHelperInstaller
 import io.github.maxlyth.hapaneld.util.CompanionInstaller
 import io.github.maxlyth.hapaneld.util.CompanionHelperProtocol
 import io.github.maxlyth.hapaneld.util.CompanionOperationStatus
 import io.github.maxlyth.hapaneld.util.HelperClient
 import io.github.maxlyth.hapaneld.util.HaLink
+import io.github.maxlyth.hapaneld.util.LogShipEndpoint
 import io.github.maxlyth.hapaneld.util.isLocalSource
 import io.github.maxlyth.hapaneld.util.isLoopbackPeer
 import io.github.maxlyth.hapaneld.util.isRoutable
@@ -1358,6 +1360,32 @@ class PaneldServer internal constructor(
                         // Read-only: resolves and touches a TCP port, changes nothing.
                         val url = call.request.queryParameters["url"].orEmpty()
                         val body = withContext(Dispatchers.IO) { probeBrokerJson(url) }
+                        call.respondText(body, ContentType.Application.Json)
+                    }
+                    post("/config/probe-log-sink") {
+                        // Same pre-flight idea as probe-broker, from the panel's own network vantage,
+                        // but deliberately a POST rather than a GET: unlike the broker probe this one
+                        // TRANSMITS a caller-supplied record to a caller-supplied host and port, which
+                        // is neither safe nor idempotent, and as a GET it would be a CSRF-reachable
+                        // packet emitter aimed at the panel's LAN. POST puts it behind the shared
+                        // state-changing OriginGuard admission applied to every mutating route.
+                        val params = receiveBoundedFormParameters(call) ?: return@post
+                        val port = selectLogSinkProbePort(params["port"], config.logShipPort)
+                        if (port == null) {
+                            call.respondText(
+                                """{"ok":false,"error":"invalid-port"}""",
+                                ContentType.Application.Json,
+                            )
+                            return@post
+                        }
+                        val body = withContext(Dispatchers.IO) {
+                            probeLogSinkJson(
+                                host = params["host"] ?: config.logShipHost,
+                                port = port,
+                                protocol = params["protocol"] ?: config.logShipProtocol,
+                                panelId = config.panelId,
+                            )
+                        }
                         call.respondText(body, ContentType.Application.Json)
                     }
                     get("/config/discovery") {
@@ -5534,6 +5562,108 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
     }
 
     /**
+     * See POST /config/probe-log-sink. Bounded: one DNS resolve plus one 2s connect and exactly one
+     * marked record, in the real wire format of the selected transport.
+     *
+     * Every transport transmits. An earlier revision reported a bare TCP `connect()` as success, but
+     * a connect succeeds against *any* listening socket — an MQTT broker, an SSH daemon, a mistyped
+     * port belonging to something else entirely — so "Connected" asserted a working log sink on
+     * evidence that could not distinguish one. Writing a real RFC5424 frame or a real NDJSON POST is
+     * the cheapest check that actually discriminates.
+     *
+     * `delivered` says whether the transport itself confirmed anything. UDP is always false: a send
+     * that returns without error proves only that the panel handed the datagram to the network, and
+     * calling that success would rebuild in the UI the very false confidence this change removes.
+     * Every transport returns the marker regardless, because searching the collector for it is the
+     * only end-to-end confirmation that exists.
+     *
+     * Takes [panelId] as a parameter rather than reading `config`, so it stays free of instance state
+     * and can be exercised the same way [probeBrokerJson] is, without the Android-backed server graph.
+     */
+    private fun probeLogSinkJson(host: String, port: Int, protocol: String, panelId: String): String {
+        val ep = LogShipEndpoint.resolve(host, port, protocol)
+        if (ep.host.isBlank()) return """{"ok":false,"error":"no-host"}"""
+        if (ep.port !in 1..65535) return """{"ok":false,"error":"invalid-port"}"""
+        val head = "\"host\":${jsonStr(ep.host)},\"port\":${ep.port}," +
+            "\"protocol\":${jsonStr(ep.protocol)}"
+        val resolved = runCatching { BoundedDns.resolveOne(ep.host, LOG_SINK_DNS_TIMEOUT_MS) }.getOrNull()
+            ?: return "{\"ok\":false,\"error\":\"unresolvable\",$head}"
+        val marker = "ha-paneld-sink-probe-${System.currentTimeMillis().toString(36)}"
+        val body = "$head,\"resolved\":${jsonStr(resolved.hostAddress)},\"marker\":${jsonStr(marker)}"
+        val name = panelId.ifBlank { "panel" }
+        val timestamp = probeTimestamp()
+
+        fun failure(error: String) = "{\"ok\":false,\"error\":${jsonStr(error)},$body}"
+
+        return when (ep.protocol) {
+            LogShipEndpoint.SYSLOG_UDP -> {
+                val frame = "<14>1 $timestamp $name ha-paneld - - - $marker"
+                    .toByteArray(Charsets.UTF_8)
+                runCatching {
+                    java.net.DatagramSocket().use {
+                        it.connect(resolved, ep.port)
+                        it.send(java.net.DatagramPacket(frame, frame.size, resolved, ep.port))
+                    }
+                }.fold(
+                    onSuccess = { "{\"ok\":true,\"delivered\":false,$body}" },
+                    onFailure = { failure("send-failed") },
+                )
+            }
+            LogShipEndpoint.HTTP -> {
+                val record = "{\"timestamp\":\"$timestamp\",\"host\":${jsonStr(name)}," +
+                    "\"app\":\"ha-paneld\",\"message\":${jsonStr(marker)}}"
+                runCatching {
+                    // Connect to the already-resolved address. Reusing the hostname here would ask
+                    // HttpURLConnection to perform a second, unbounded DNS lookup.
+                    val url = java.net.URL("http://${LogShipEndpoint.urlHost(resolved.hostAddress)}:${ep.port}/")
+                    (url.openConnection() as java.net.HttpURLConnection).run {
+                        requestMethod = "POST"
+                        connectTimeout = 2_000
+                        readTimeout = 2_000
+                        doOutput = true
+                        setRequestProperty("Host", "${LogShipEndpoint.urlHost(ep.host)}:${ep.port}")
+                        setRequestProperty("Content-Type", "application/x-ndjson")
+                        try {
+                            outputStream.use { it.write(record.toByteArray(Charsets.UTF_8)) }
+                            responseCode
+                        } finally {
+                            disconnect()
+                        }
+                    }
+                }.fold(
+                    onSuccess = { code ->
+                        if (code in 200..299) "{\"ok\":true,\"delivered\":true,\"status\":$code,$body}"
+                        else "{\"ok\":false,\"error\":\"http-$code\",\"status\":$code,$body}"
+                    },
+                    onFailure = { failure("unreachable") },
+                )
+            }
+            else -> {
+                val frame = "<14>1 $timestamp $name ha-paneld - - - $marker\n"
+                runCatching {
+                    java.net.Socket().use { socket ->
+                        socket.connect(java.net.InetSocketAddress(resolved, ep.port), 2_000)
+                        socket.getOutputStream().apply {
+                            write(frame.toByteArray(Charsets.UTF_8))
+                            flush()
+                        }
+                    }
+                }.fold(
+                    // A completed socket write is not collector acknowledgement. Only seeing the
+                    // marker at the collector proves that the receiving application accepted it.
+                    onSuccess = { "{\"ok\":true,\"delivered\":false,$body}" },
+                    onFailure = { failure("unreachable") },
+                )
+            }
+        }
+    }
+
+    private fun probeTimestamp(): String =
+        java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US)
+            .apply { timeZone = java.util.TimeZone.getTimeZone("UTC") }
+            .format(java.util.Date())
+
+    /**
      * The single owner of the HA-canonical area rule: adopt what Home Assistant reports, or push a pending
      * request when HA has none and this session may write. Called by the area endpoint and by the
      * unprompted convergence loop below, so the rule has exactly one implementation.
@@ -7604,6 +7734,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
 
     companion object {
         private const val TAG = "ha-paneld/http"
+        private const val LOG_SINK_DNS_TIMEOUT_MS = 2_000L
         private const val HARDENED_APPROVAL_TEXT =
             "Requires physical on-panel approval for this action when Hardened mode is enabled."
         private const val HARDENED_CONDITIONAL_APPROVAL_TEXT =

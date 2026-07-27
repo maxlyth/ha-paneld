@@ -198,7 +198,7 @@
           "update_channel": { "type": "string", "enum": ["stable", "prerelease"] },
           "tame_vendor_packages": { "type": "string", "description": "space-separated package blocklist" },
           "log_ship_enabled": { "type": "boolean" }, "log_ship_host": { "type": "string" },
-          "log_ship_port": { "type": "integer" }, "log_ship_protocol": { "type": "string", "enum": ["syslog", "http"] }
+          "log_ship_port": { "type": "integer" }, "log_ship_protocol": { "type": "string", "enum": ["syslog-udp", "syslog-tcp", "http"], "description": "The retired value \"syslog\" is still accepted and means syslog-tcp" }
         } } } } },
         "responses": { "200": { "description": "No-op or all changed settings saved and applied; JSON clients receive applied/pending/rejected outcome lists and HTML form clients receive the equivalent result page" }, "202": { "description": "Changed settings are durably saved but named hardware application remains pending with bounded automatic retry, or Hardened-mode approval-required: approve the request on the panel and retry the identical request from the same peer.", "content": { "application/json": { "schema": { "oneOf": [{ "type": "object", "required": ["ok", "status", "pending", "message"] }, { "$ref": "#/components/schemas/ApprovalRequired" }] } } } }, "400": { "description": "invalid setting, or a built-in-renderer-only setting was submitted for another renderer" }, "409": { "description": "network ADB cannot be enabled while Hardened mode is active, renderer sign-in/Home Assistant source state conflicts, or a concurrent config change invalidated the checked request baseline" }, "500": { "description": "Structured saved-partial outcome (JSON or equivalent HTML result page) naming changes that committed and effects that could not be durably admitted" } }
       }
@@ -250,6 +250,16 @@
     "/api/v1/config/probe-broker": {
       "get": { "summary": "Pre-flight a broker URL from the panel's network: DNS resolve + bounded TCP connect", "tags": ["config"],
         "responses": { "200": { "description": "{ok, host, port, resolved?, error?: invalid-url|unresolvable|unreachable}. Read-only; advisory — the wizard offers save-anyway on failure" } } }
+    },
+    "/api/v1/config/probe-log-sink": {
+      "post": { "summary": "Pre-flight the log sink from the panel's network: DNS resolve, then transmit exactly one marked record in the selected transport's real wire format", "tags": ["config"],
+        "description": "POST rather than GET because this transmits a caller-supplied record to a caller-supplied host and port — neither safe nor idempotent — so it rides the same state-changing Origin/CSRF admission as every other mutating route. Changes no configuration.",
+        "requestBody": { "required": false, "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "properties": {
+          "host": { "type": "string", "description": "defaults to the saved log_ship_host; a scheme or :port here is honoured" },
+          "port": { "type": "integer", "minimum": 1, "maximum": 65535, "description": "defaults to the saved log_ship_port only when omitted; an explicitly malformed, overflowing, or out-of-range value returns invalid-port" },
+          "protocol": { "type": "string", "enum": ["syslog-udp", "syslog-tcp", "http"], "description": "defaults to the saved log_ship_protocol" }
+        } } } } },
+        "responses": { "200": { "description": "{ok, delivered, marker, host, port, protocol, resolved?, status?, error?: no-host|invalid-port|unresolvable|unreachable|send-failed|http-<code>}. Every transport writes a real record — an RFC5424 frame for syslog, an NDJSON POST for http — because a bare TCP connect succeeds against any listening socket and so cannot tell a log sink from an unrelated service. delivered is false for both syslog-udp and syslog-tcp: a datagram send or completed socket write is not collector acknowledgement. For either syslog transport, the returned marker must be verified in the collector; only a successful HTTP response provides application-level acknowledgement." }, "403": { "description": "Cross-origin refused by the state-changing admission" }, "413": { "description": "Form body over the small-post limit" } } }
     },
     "/api/v1/config/import": {
       "post": { "summary": "Bundle import: migrate → scope/secret filter → validate → snapshot revision → apply valid keys (or validate all with strict=1)", "tags": ["config"],
