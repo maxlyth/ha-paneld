@@ -494,11 +494,12 @@ class ProximityLearningEngineTest {
         val persisted = ProximityLearningRuntime.persistedModelJson(trusted, guidedReady = true)
         val restartedModel = ProximityLearningRuntime.persistedModel(persisted)!!
         val restarted = ProximityLearningEngine(ProximityLearningRuntime.learningPolicy(sparseSource = false))
-        assertTrue(restarted.restore(restartedModel.snapshot))
+        assertTrue(restarted.restore(restartedModel.snapshot, trustedPersistedModel = true))
 
         for (now in 0L..300L step 100L) {
             val output = restarted.observe(37.8244f, now)
-            assertEquals("anchor health at $now", HealthStatus.HEALTHY, output.health)
+            assertEquals("anchor health at $now", HealthStatus.LEARNING, output.health)
+            assertEquals("anchor learning at $now", LearningStatus.VERIFYING_SEED, output.learning)
             assertEquals("anchor presence at $now", false, output.presence)
             assertTrue("anchor level at $now", output.normalizedLevel != null)
         }
@@ -506,14 +507,13 @@ class ProximityLearningEngineTest {
         var output = restarted.current()
         for (now in 350L until 30_350L step 50L) {
             output = restarted.observe(25.875f, now)
-            assertEquals("tail learning at $now", LearningStatus.READY, output.learning)
-            assertEquals("tail health at $now", HealthStatus.HEALTHY, output.health)
+            assertEquals("tail learning at $now", LearningStatus.VERIFYING_SEED, output.learning)
+            assertEquals("tail health at $now", HealthStatus.LEARNING, output.health)
             assertEquals("tail presence at $now", false, output.presence)
             assertTrue("tail level at $now", output.normalizedLevel != null)
-            val retained = restarted.snapshot()!!
-            assertEquals(trusted.farRaw, retained.farRaw, 0f)
-            assertEquals(trusted.nearRaw, retained.nearRaw, 0f)
-            assertEquals(trusted.polarity, retained.polarity)
+            assertEquals(trusted.mode, output.mode)
+            assertEquals(trusted.polarity, output.polarity)
+            assertEquals(trusted.completedExcursions, output.completedExcursions)
         }
 
         output = restarted.observe(25.875f, 30_350L)

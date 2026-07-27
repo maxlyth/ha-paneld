@@ -190,6 +190,7 @@ internal class ProximityLearningEngine(
     private var verifyingSeed = false
     private var trustedRestoreValidation = false
     private var trustedRestoreValidationStartedAt = UNSET_TIME
+    private var trustedRestoreContradictionStartedAt = UNSET_TIME
     private var relearning = false
     private var completedExcursions = 0
     private var deliberateExamples = 0
@@ -264,6 +265,7 @@ internal class ProximityLearningEngine(
         borrowedOutput.accepted = true
 
         when {
+            trustedRestoreValidation -> processTrustedRestoreValidation(raw, elapsedRealtimeMs, label)
             verifyingSeed -> processSeedVerification(raw, elapsedRealtimeMs, label, continuousEvidence)
             modelReady -> processReady(raw, elapsedRealtimeMs, label, continuousEvidence)
             else -> processLearning(raw, elapsedRealtimeMs, label, continuousEvidence)
@@ -290,11 +292,32 @@ internal class ProximityLearningEngine(
             inputHealthy = false
             lastFault = HealthStatus.STALE
             cancelCandidate(restoreReadyModel = true)
+            trustedRestoreContradictionStartedAt = UNSET_TIME
+            if (trustedRestoreValidation) trustedRestoreValidationStartedAt = UNSET_TIME
             farStableSince = UNSET_TIME
             currentHealth = HealthStatus.STALE
             currentLevel = null
             currentPresence = null
             currentActuation = ActuationStatus.SUPPRESSED_UNHEALTHY
+            return syncOutput()
+        }
+        if (trustedRestoreValidation) {
+            if (
+                trustedRestoreContradictionStartedAt != UNSET_TIME &&
+                policy.continuousEvidenceDwellMs == 0L &&
+                elapsedRealtimeMs - trustedRestoreContradictionStartedAt >= policy.changePointHoldMs
+            ) {
+                startFreshLearning(latestRaw, elapsedRealtimeMs, isRelearning = true, includeAsFar = true)
+            } else if (
+                trustedRestoreContradictionStartedAt == UNSET_TIME &&
+                trustedRestoreValidationStartedAt != UNSET_TIME &&
+                elapsedRealtimeMs - trustedRestoreValidationStartedAt >= policy.changePointHoldMs
+            ) {
+                markSeedVerified()
+                publishReady(latestRaw, elapsedRealtimeMs)
+            } else {
+                publishTrustedRestore(latestRaw)
+            }
             return syncOutput()
         }
         if (!inputHealthy) {
@@ -351,7 +374,7 @@ internal class ProximityLearningEngine(
 
     /** Restore a schema-checked durable snapshot, again requiring live far verification. */
     @Synchronized
-    fun restore(snapshot: Snapshot): Boolean {
+    fun restore(snapshot: Snapshot, trustedPersistedModel: Boolean = false): Boolean {
         if (snapshot.schemaVersion != SNAPSHOT_VERSION) return false
         if (snapshot.mode == Mode.UNKNOWN || snapshot.polarity == Polarity.UNKNOWN) return false
         if (!snapshot.noise.isFinite() || snapshot.noise < 0f) return false
@@ -368,7 +391,8 @@ internal class ProximityLearningEngine(
         completedExcursions = snapshot.completedExcursions
         deliberateExamples = snapshot.deliberateExamples
         verifyingSeed = true
-        trustedRestoreValidation = true
+        modelReady = trustedPersistedModel
+        trustedRestoreValidation = trustedPersistedModel
         baselineEstablished = true
         currentHealth = HealthStatus.NO_DATA
         currentActuation = ActuationStatus.SUPPRESSED_LEARNING
@@ -449,12 +473,9 @@ internal class ProximityLearningEngine(
         label: GuidedLabel,
         continuousEvidence: Boolean,
     ) {
-        if (trustedRestoreValidation && trustedRestoreValidationStartedAt == UNSET_TIME) {
-            trustedRestoreValidationStartedAt = now
-        }
-        currentLevel = if (trustedRestoreValidation) normalized(raw) else null
-        currentPresence = currentLevel?.let(::hystereticPresence)
-        currentHealth = if (trustedRestoreValidation) HealthStatus.HEALTHY else HealthStatus.LEARNING
+        currentLevel = null
+        currentPresence = null
+        currentHealth = HealthStatus.LEARNING
         currentActuation = ActuationStatus.SUPPRESSED_LEARNING
 
         // A previously matching far sample followed by a quiet interval is sufficient for a source
@@ -533,15 +554,47 @@ internal class ProximityLearningEngine(
         }
     }
 
-    private fun processReady(raw: Float, now: Long, label: GuidedLabel, continuousEvidence: Boolean) {
-        if (
-            trustedRestoreValidation && !candidateActive &&
-            trustedRestoreValidationStartedAt != UNSET_TIME &&
-            now - trustedRestoreValidationStartedAt >= policy.changePointHoldMs
-        ) {
-            trustedRestoreValidation = false
-            trustedRestoreValidationStartedAt = UNSET_TIME
+    private fun processTrustedRestoreValidation(raw: Float, now: Long, label: GuidedLabel) {
+        if (trustedRestoreValidationStartedAt == UNSET_TIME) trustedRestoreValidationStartedAt = now
+        publishTrustedRestore(raw)
+
+        val delta = raw - farRaw
+        val contradicts = label != GuidedLabel.NEAR &&
+            abs(delta) >= departureGate(hasModel = true) &&
+            directionOf(delta) != polarity
+        if (contradicts) {
+            if (trustedRestoreContradictionStartedAt == UNSET_TIME) {
+                trustedRestoreContradictionStartedAt = now
+            }
+            if (now - trustedRestoreContradictionStartedAt >= policy.changePointHoldMs) {
+                startFreshLearning(raw, now, isRelearning = true, includeAsFar = true)
+            }
+            return
         }
+
+        trustedRestoreContradictionStartedAt = UNSET_TIME
+        if (now - trustedRestoreValidationStartedAt >= policy.changePointHoldMs) {
+            markSeedVerified()
+            publishReady(raw, now)
+        }
+    }
+
+    private fun publishTrustedRestore(raw: Float) {
+        currentLevel = normalized(raw)
+        currentPresence = hystereticPresence(currentLevel!!)
+        currentHealth = HealthStatus.LEARNING
+        currentActuation = ActuationStatus.SUPPRESSED_LEARNING
+    }
+
+    private fun publishReady(raw: Float, now: Long) {
+        currentHealth = HealthStatus.HEALTHY
+        currentLevel = normalized(raw)
+        currentPresence = hystereticPresence(currentLevel!!)
+        farStableSince = if (currentLevel!! <= policy.farArmLevel) now else UNSET_TIME
+        updateFarArm(now, currentLevel!!)
+    }
+
+    private fun processReady(raw: Float, now: Long, label: GuidedLabel, continuousEvidence: Boolean) {
         if (
             contradictoryEvidenceCount > 0 && contradictoryEvidenceAt != UNSET_TIME &&
             now - contradictoryEvidenceAt > policy.contradictionConfirmWindowMs
@@ -550,10 +603,7 @@ internal class ProximityLearningEngine(
         if (candidateActive) {
             processCandidate(raw, now, label)
             if (candidateActive) {
-                if (
-                    (candidateContradictsModel && candidateDepartureQualified && !trustedRestoreValidation) ||
-                    relearning
-                ) {
+                if ((candidateContradictsModel && candidateDepartureQualified) || relearning) {
                     currentLevel = null
                     currentPresence = null
                     currentHealth = HealthStatus.MODEL_SHIFT
@@ -589,7 +639,7 @@ internal class ProximityLearningEngine(
                 contradicts = contradicts,
                 continuousEvidence = continuousEvidence,
             )
-            if (contradicts && candidateDepartureQualified && !trustedRestoreValidation) {
+            if (contradicts && candidateDepartureQualified) {
                 relearning = true
                 currentLevel = null
                 currentPresence = null
@@ -701,7 +751,7 @@ internal class ProximityLearningEngine(
 
         // Dense streams must prove that an opposite-direction departure persists before the
         // current model is failed closed. Sub-dwell pulses are rejected on their sustained return.
-        if (candidateContradictsModel && candidateDepartureQualified && !trustedRestoreValidation) relearning = true
+        if (candidateContradictsModel && candidateDepartureQualified) relearning = true
 
         // A fully-near correctly directed hold remains presence. Opposite polarity or a prolonged
         // sub-near plateau is behavioral-epoch evidence and may become a new far baseline.
@@ -1024,6 +1074,9 @@ internal class ProximityLearningEngine(
     private fun markSeedVerified() {
         verifyingSeed = false
         modelReady = true
+        trustedRestoreValidation = false
+        trustedRestoreValidationStartedAt = UNSET_TIME
+        trustedRestoreContradictionStartedAt = UNSET_TIME
         relearning = false
     }
 
@@ -1143,6 +1196,7 @@ internal class ProximityLearningEngine(
         verifyingSeed = false
         trustedRestoreValidation = false
         trustedRestoreValidationStartedAt = UNSET_TIME
+        trustedRestoreContradictionStartedAt = UNSET_TIME
         relearning = isRelearning
         commitWakeEvidenceInvalidation()
         mode = Mode.UNKNOWN
@@ -1181,6 +1235,8 @@ internal class ProximityLearningEngine(
         inputHealthy = false
         lastFault = status
         cancelCandidate(restoreReadyModel = true)
+        trustedRestoreContradictionStartedAt = UNSET_TIME
+        if (trustedRestoreValidation) trustedRestoreValidationStartedAt = UNSET_TIME
         farStableSince = UNSET_TIME
         currentLevel = null
         currentPresence = null
@@ -1302,6 +1358,7 @@ internal class ProximityLearningEngine(
         verifyingSeed = false
         trustedRestoreValidation = false
         trustedRestoreValidationStartedAt = UNSET_TIME
+        trustedRestoreContradictionStartedAt = UNSET_TIME
         relearning = false
         completedExcursions = 0
         deliberateExamples = 0

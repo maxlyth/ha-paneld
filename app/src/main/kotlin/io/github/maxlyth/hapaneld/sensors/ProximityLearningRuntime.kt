@@ -24,14 +24,15 @@ import org.json.JSONObject
  * Raw samples stay in memory; only a compact model and five-minute aggregates reach SQLite.
  */
 internal class ProximityLearningRuntime(
-    context: Context,
-    config: Config,
+    context: Context?,
+    config: Config?,
     sourceIdentity: String,
     private val sparseLearningSource: Boolean,
     private val legacySeedEligible: Boolean,
     private val failModelPersistenceForTest: (() -> Boolean)? = null,
     private val failModelReadForTest: (() -> Boolean)? = null,
     invalidationJournalForTest: ProximityWakeInvalidationAuthority? = null,
+    modelStoreForTest: ProximityModelStore? = null,
 ) : AutoCloseable {
     /** Borrowed result; callers consume it before invoking the runtime again. */
     class Decision internal constructor() {
@@ -85,9 +86,10 @@ internal class ProximityLearningRuntime(
         val episodes: List<EntityCatalogStore.ProximityEpisodeRow>,
     )
 
-    private val appContext = context.applicationContext
+    private val appContext = context?.applicationContext
     private val fingerprint = fingerprint(sourceIdentity)
-    private val invalidationJournal = invalidationJournalForTest ?: ProximityWakeInvalidationJournal(appContext)
+    private val invalidationJournal = invalidationJournalForTest ?:
+        ProximityWakeInvalidationJournal(requireNotNull(appContext))
     private val pendingWakeInvalidation = AtomicReference(invalidationJournal.read(fingerprint))
     private val wakeSafetyStorageFailed = AtomicBoolean(false)
     private val modelReadUnknown = AtomicBoolean(false)
@@ -95,7 +97,7 @@ internal class ProximityLearningRuntime(
         learningPolicy(sparseLearningSource),
         prepareWakeEvidenceInvalidation = ::prepareWakeEvidenceInvalidation,
     )
-    private val store = EntityCatalogStore(appContext)
+    private val store = modelStoreForTest ?: SqliteProximityModelStore(EntityCatalogStore(requireNotNull(appContext)))
     private val persistence = ThreadPoolExecutor(
         1,
         1,
@@ -126,7 +128,7 @@ internal class ProximityLearningRuntime(
     init {
         // Always consume the retired configuration. A durable adaptive model wins, while a complete
         // old user capture is a one-time warm start only when no compatible model exists.
-        val legacySeed = config.consumeLegacyProximityLearningSeed()
+        val legacySeed = config?.consumeLegacyProximityLearningSeed()
         val modelRead = runCatching {
             if (failModelReadForTest?.invoke() == true) error("injected proximity model read failure")
             store.readProximityModel(fingerprint)
@@ -661,7 +663,7 @@ internal class ProximityLearningRuntime(
 
     private fun restore(raw: String): Boolean = runCatching {
         val persisted = persistedModel(raw) ?: return@runCatching false
-        if (!engine.restore(persisted.snapshot)) return@runCatching false
+        if (!engine.restore(persisted.snapshot, trustedPersistedModel = true)) return@runCatching false
         guidedReady = persisted.guidedReady
         true
     }.getOrDefault(false)
@@ -906,6 +908,34 @@ internal class ProximityLearningRuntime(
                 .joinToString("") { "%02x".format(Locale.ROOT, it.toInt() and 0xff) }
         }
     }
+}
+
+internal interface ProximityModelStore : AutoCloseable {
+    fun readProximityModel(fingerprint: String): EntityCatalogStore.ProximityModelRow?
+    fun writeProximityBatch(
+        model: EntityCatalogStore.ProximityModelRow,
+        rollups: List<EntityCatalogStore.ProximityRollupRow>,
+        episodes: List<EntityCatalogStore.ProximityEpisodeRow>,
+        now: Long,
+    )
+    fun clearProximityLearning(fingerprint: String)
+}
+
+private class SqliteProximityModelStore(
+    private val store: EntityCatalogStore,
+) : ProximityModelStore {
+    override fun readProximityModel(fingerprint: String) = store.readProximityModel(fingerprint)
+
+    override fun writeProximityBatch(
+        model: EntityCatalogStore.ProximityModelRow,
+        rollups: List<EntityCatalogStore.ProximityRollupRow>,
+        episodes: List<EntityCatalogStore.ProximityEpisodeRow>,
+        now: Long,
+    ) = store.writeProximityBatch(model, rollups, episodes, now)
+
+    override fun clearProximityLearning(fingerprint: String) = store.clearProximityLearning(fingerprint)
+
+    override fun close() = store.close()
 }
 
 /** Synchronous rare-path authority that prevents an older ready model being trusted after an abrupt
