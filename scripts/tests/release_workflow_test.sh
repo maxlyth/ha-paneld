@@ -42,6 +42,36 @@ run_release_notes_step() {
   ) > "$case_dir/output.log" 2>&1
 }
 
+extract_integrated_checks_step() {
+  awk '
+    $0 == "      - name: Require clean integrated checks for the source commit" { in_step=1; next }
+    in_step && $0 == "        run: |" { in_script=1; next }
+    in_script && (/^      - name: / || /^  package:$/) { exit }
+    in_script { print substr($0, 11) }
+  ' "$WORKFLOW"
+}
+
+run_integrated_checks_step() {
+  checks_file="$1"
+  output_file="$2"
+  mock_bin="$TMP/mock-bin"
+  mkdir -p "$mock_bin"
+  printf '%s\n' \
+    '#!/usr/bin/env bash' \
+    'case "$*" in' \
+    '  *check-runs*) sed -n "p" "$MOCK_CHECKS_FILE" ;;' \
+    '  *code-scanning/alerts*) printf "%s\n" 0 ;;' \
+    '  *) printf "unexpected gh invocation: %s\n" "$*" >&2; exit 2 ;;' \
+    'esac' > "$mock_bin/gh"
+  chmod +x "$mock_bin/gh"
+  PATH="$mock_bin:$PATH" \
+    MOCK_CHECKS_FILE="$checks_file" \
+    SOURCE_COMMIT=1111111111111111111111111111111111111111 \
+    GITHUB_REPOSITORY=maxlyth/ha-paneld \
+    GITHUB_ENV="$TMP/github-env" \
+    bash <(extract_integrated_checks_step | sed -e 's/max_attempts=60/max_attempts=1/' -e 's/sleep_seconds=10/sleep_seconds=0/') > "$output_file" 2>&1
+}
+
 if extract_release_notes_step | bash -n; then
   pass "release-notes workflow shell is syntactically valid"
 else
@@ -105,34 +135,99 @@ else
   fail_test "curated changelog remains the sole release prose source"
 fi
 
+required_check_names='["Android build","Host contracts","Dependency integrity","Privileged helper","CodeQL · actions","CodeQL · c-cpp","CodeQL · java-kotlin","CodeQL · javascript-typescript","CodeQL · python"]'
+latest_success_checks="$TMP/latest-success-checks.json"
+jq -cn --argjson names "$required_check_names" '
+  {check_runs: [$names[] as $name |
+    {id: 100, name: $name, head_sha: "1111111111111111111111111111111111111111", app: {slug: "github-actions"}, started_at: "2026-07-27T00:00:00Z", status: "completed", conclusion: "failure"},
+    {id: 200, name: $name, head_sha: "1111111111111111111111111111111111111111", app: {slug: "github-actions"}, started_at: "2026-07-27T00:01:00Z", status: "completed", conclusion: "success"},
+    {id: 300, name: $name, head_sha: "2222222222222222222222222222222222222222", app: {slug: "github-actions"}, started_at: "2026-07-27T00:02:00Z", status: "completed", conclusion: "failure"},
+    {id: 400, name: $name, head_sha: "1111111111111111111111111111111111111111", app: {slug: "untrusted-check-writer"}, started_at: "2026-07-27T00:03:00Z", status: "completed", conclusion: "failure"}
+  ]}' > "$latest_success_checks"
+if run_integrated_checks_step "$latest_success_checks" "$TMP/latest-success-output.log"; then
+  pass "integrated gate selects the latest exact-source check instead of an older or foreign result"
+else
+  sed -n '1,20p' "$TMP/latest-success-output.log" >&2
+  fail_test "integrated gate selects the latest exact-source check instead of an older or foreign result"
+fi
+
+latest_failure_checks="$TMP/latest-failure-checks.json"
+jq -cn --argjson names "$required_check_names" '
+  {check_runs: [$names[] as $name |
+    {id: 100, name: $name, head_sha: "1111111111111111111111111111111111111111", app: {slug: "github-actions"}, started_at: "2026-07-27T00:00:00Z", status: "completed", conclusion: "success"},
+    {id: 200, name: $name, head_sha: "1111111111111111111111111111111111111111", app: {slug: "github-actions"}, started_at: "2026-07-27T00:01:00Z", status: "completed", conclusion: "failure"}
+  ]}' > "$latest_failure_checks"
+if ! run_integrated_checks_step "$latest_failure_checks" "$TMP/latest-failure-output.log" && \
+   grep -Fq 'Latest required Android build check' "$TMP/latest-failure-output.log"; then
+  pass "integrated gate rejects a latest exact-source failure even when an older run passed"
+else
+  fail_test "integrated gate rejects a latest exact-source failure even when an older run passed"
+fi
+
+latest_queued_checks="$TMP/latest-queued-checks.json"
+jq -cn --argjson names "$required_check_names" '
+  {check_runs: [$names[] as $name |
+    {id: 100, name: $name, head_sha: "1111111111111111111111111111111111111111", app: {slug: "github-actions"}, started_at: "2026-07-27T00:00:00Z", status: "completed", conclusion: "success"},
+    {id: 200, name: $name, head_sha: "1111111111111111111111111111111111111111", app: {slug: "github-actions"}, started_at: null, status: "queued", conclusion: null}
+  ]}' > "$latest_queued_checks"
+if ! run_integrated_checks_step "$latest_queued_checks" "$TMP/latest-queued-output.log" && \
+   grep -Fq 'Timed out waiting for required checks' "$TMP/latest-queued-output.log"; then
+  pass "integrated gate waits for a newer queued exact-source check instead of accepting an older success"
+else
+  fail_test "integrated gate waits for a newer queued exact-source check instead of accepting an older success"
+fi
+
 verify_job="$(awk '/^  verify:$/ { in_job=1 } /^  package:$/ { exit } in_job' "$WORKFLOW")"
 package_job="$(awk '/^  package:$/ { in_job=1 } /^  sign-and-publish:$/ { exit } in_job' "$WORKFLOW")"
 publish_job="$(awk '/^  sign-and-publish:$/ { in_job=1 } in_job' "$WORKFLOW")"
-if grep -Fq 'Require clean security analysis for the source commit' "$WORKFLOW" && \
+if grep -Fq 'Require clean integrated checks for the source commit' "$WORKFLOW" && \
    grep -Fq 'commits/$SOURCE_COMMIT/check-runs' "$WORKFLOW" && \
    grep -Fq 'code-scanning/alerts?state=open' "$WORKFLOW" && \
+   grep -Fq '"Android build"' "$WORKFLOW" && \
+   grep -Fq '"Host contracts"' "$WORKFLOW" && \
+   grep -Fq '"Dependency integrity"' "$WORKFLOW" && \
+   grep -Fq '"Privileged helper"' "$WORKFLOW" && \
+   grep -Fq '"CodeQL · actions"' "$WORKFLOW" && \
+   grep -Fq '"CodeQL · c-cpp"' "$WORKFLOW" && \
+   grep -Fq '"CodeQL · java-kotlin"' "$WORKFLOW" && \
+   grep -Fq '"CodeQL · javascript-typescript"' "$WORKFLOW" && \
+   grep -Fq '"CodeQL · python"' "$WORKFLOW" && \
+   grep -Fq 'select(.name == $name and .head_sha == $source and .app.slug == "github-actions")' "$WORKFLOW" && \
+   grep -Fq '| max_by(.id) // {}' "$WORKFLOW" && \
    grep -Fq 'max_attempts=60' "$WORKFLOW" && \
    grep -Fq 'sleep_seconds=10' "$WORKFLOW" && \
-   grep -Fq 'failure|cancelled|timed_out|action_required' "$WORKFLOW" && \
-   grep -Fq 'Timed out waiting for CodeQL' "$WORKFLOW" && \
+   grep -Fq 'if [ "$conclusion" != success ]; then' "$WORKFLOW" && \
+   grep -Fq 'Timed out waiting for required checks' "$WORKFLOW" && \
    grep -Fqx '      checks: read' <<<"$verify_job" && \
    grep -Fqx '      security-events: read' <<<"$verify_job" && \
-   ! grep -Fq 'Require clean security analysis for the source commit' <<<"$package_job"; then
-  pass "release waits for successful CodeQL checks and fails closed"
+   ! grep -Fq 'Require clean integrated checks for the source commit' <<<"$package_job"; then
+  pass "release consumes the latest successful exact-source CI and CodeQL checks and fails closed"
 else
-  fail_test "release waits for successful CodeQL checks and fails closed"
+  fail_test "release consumes the latest successful exact-source CI and CodeQL checks and fails closed"
 fi
 
-if grep -Fq 'Test privileged helper boundaries and app contract' <<<"$verify_job" && \
-   grep -Fq 'Test installer and provisioning contracts' <<<"$verify_job" && \
-   grep -Fq 'Run JVM tests and Android lint' <<<"$verify_job" && \
+if grep -Fq 'Test release workflow contracts' <<<"$verify_job" && \
+   grep -Fq 'Require clean integrated checks for the source commit' <<<"$verify_job" && \
+   ! grep -Fq 'Set up JDK 17' <<<"$verify_job" && \
+   ! grep -Fq 'Set up Android SDK' <<<"$verify_job" && \
+   ! grep -Fq 'Install Android build toolchain' <<<"$verify_job" && \
+   ! grep -Fq 'Test privileged helper boundaries and app contract' <<<"$verify_job" && \
+   ! grep -Fq 'Test installer and provisioning contracts' <<<"$verify_job" && \
+   ! grep -Fq 'Run JVM tests and Android lint' <<<"$verify_job" && \
    grep -Fq 'Build release APK' <<<"$package_job" && \
    grep -Fq 'Upload sealed release inputs' <<<"$package_job" && \
-   ! grep -Fq 'Build release APK' <<<"$verify_job" && \
-   ! grep -Fq 'Run JVM tests and Android lint' <<<"$package_job"; then
-  pass "release verification and packaging execute as independent jobs"
+   ! grep -Fq 'Require clean integrated checks for the source commit' <<<"$package_job"; then
+  pass "release exact-source gate stays lightweight while packaging performs a clean exact-tag build"
 else
-  fail_test "release verification and packaging execute as independent jobs"
+  fail_test "release exact-source gate stays lightweight while packaging performs a clean exact-tag build"
+fi
+
+if grep -Fqx 'concurrency:' "$WORKFLOW" && \
+   grep -Fq 'group: release-${{ inputs.release_tag || github.ref_name }}' "$WORKFLOW" && \
+   grep -Fqx '  cancel-in-progress: false' "$WORKFLOW"; then
+  pass "same-tag release runs serialize without cancelling publication"
+else
+  fail_test "same-tag release runs serialize without cancelling publication"
 fi
 
 if grep -Fqx '    needs: [verify, package]' <<<"$publish_job" && \

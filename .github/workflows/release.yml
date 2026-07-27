@@ -22,10 +22,14 @@ permissions:
 env:
   RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
 
+concurrency:
+  group: release-${{ inputs.release_tag || github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
   verify:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 15
     permissions:
       actions: read
       checks: read
@@ -62,73 +66,56 @@ jobs:
           fi
           echo "SOURCE_COMMIT=$source_commit" >> "$GITHUB_ENV"
 
-      - name: Set up JDK 17
-        uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a # v5.5.0
-        with:
-          distribution: temurin
-          java-version: '17'
-
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
-
-      - name: Install Android build toolchain
-        run: sdkmanager "platforms;android-37.0" "build-tools;36.0.0" "ndk;27.0.12077973" "cmake;3.22.1"
-
-      - name: Test privileged helper boundaries and app contract
-        run: make -C helper clean test contract
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
-        with:
-          cache-provider: basic
-
-      - name: Test installer and provisioning contracts
-        env:
-          PROVISION_TEST_SCOPE: core
-        run: |
-          scripts/tests/provision_test.sh
-          scripts/tests/consumer_docs_test.sh
-
       - name: Test release workflow contracts
         run: scripts/tests/release_workflow_test.sh
 
-      - name: Run JVM tests and Android lint
-        run: ./gradlew :app:testDebugUnitTest :app:lintDebug --stacktrace
-
-      # Keep the security gate after local verification so the separately-triggered CodeQL workflow
-      # can run concurrently. Publication still requires this job and therefore cannot bypass it.
-      - name: Require clean security analysis for the source commit
+      # Expensive app, host, dependency-integrity and security analysis run when the exact source
+      # lands on main. The tag workflow consumes their latest results instead of rerunning them, while
+      # the package job independently creates release inputs from a clean checkout of the exact tag.
+      - name: Require clean integrated checks for the source commit
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          languages=(actions c-cpp java-kotlin javascript-typescript python)
+          required_checks=(
+            "Android build"
+            "Host contracts"
+            "Dependency integrity"
+            "Privileged helper"
+            "CodeQL · actions"
+            "CodeQL · c-cpp"
+            "CodeQL · java-kotlin"
+            "CodeQL · javascript-typescript"
+            "CodeQL · python"
+          )
           max_attempts=60
           sleep_seconds=10
           for ((attempt = 1; attempt <= max_attempts; attempt++)); do
             checks="$(gh api "repos/$GITHUB_REPOSITORY/commits/$SOURCE_COMMIT/check-runs?per_page=100")"
             pending=()
-            for language in "${languages[@]}"; do
-              name="CodeQL · $language"
-              conclusion="$(jq -r --arg name "$name" \
-                '[.check_runs[] | select(.name == $name)] | first | .conclusion // "pending"' <<<"$checks")"
-              case "$conclusion" in
-                success) ;;
-                failure|cancelled|timed_out|action_required)
-                  echo "::error::Required $name check for $SOURCE_COMMIT completed as $conclusion."
+            for name in "${required_checks[@]}"; do
+              latest="$(jq -c --arg name "$name" --arg source "$SOURCE_COMMIT" \
+                '[.check_runs[] | select(.name == $name and .head_sha == $source and .app.slug == "github-actions")]
+                 | max_by(.id) // {}' <<<"$checks")"
+              status="$(jq -r '.status // "pending"' <<<"$latest")"
+              conclusion="$(jq -r '.conclusion // "pending"' <<<"$latest")"
+              if [ "$status" = completed ]; then
+                if [ "$conclusion" != success ]; then
+                  echo "::error::Latest required $name check for $SOURCE_COMMIT completed as $conclusion."
                   exit 1
-                  ;;
-                *) pending+=("$name ($conclusion)") ;;
-              esac
+                fi
+              else
+                pending+=("$name ($status)")
+              fi
             done
             if [ "${#pending[@]}" -eq 0 ]; then
               break
             fi
             if [ "$attempt" -eq "$max_attempts" ]; then
-              echo "::error::Timed out waiting for CodeQL on $SOURCE_COMMIT: ${pending[*]}."
+              echo "::error::Timed out waiting for required checks on $SOURCE_COMMIT: ${pending[*]}."
               exit 1
             fi
-            echo "Waiting for CodeQL (${attempt}/${max_attempts}): ${pending[*]}"
+            echo "Waiting for required checks (${attempt}/${max_attempts}): ${pending[*]}"
             sleep "$sleep_seconds"
           done
           open_alerts="$(gh api --paginate "repos/$GITHUB_REPOSITORY/code-scanning/alerts?state=open&per_page=100" \

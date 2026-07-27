@@ -1,32 +1,18 @@
-name: Shizuku emulator
-run-name: Shizuku emulator · ${{ github.head_ref || github.ref_name }}
+name: Optional · Shizuku emulator
+run-name: Optional · Shizuku emulator · ${{ github.ref_name }}
 
-# Slow, dependency-specific integration coverage. Kept separate from the normal CI and release gates.
+# Slow, dependency-specific integration coverage. Kept separate from pull-request, CI, and release gates.
 on:
-  pull_request:
-    paths:
-      - 'app/src/main/**/shizuku/**'
-      - 'app/src/androidTest/**/shizuku/**'
-      - 'app/src/main/AndroidManifest.xml'
-      - 'app/src/main/kotlin/io/github/maxlyth/hapaneld/ConfigActivity.kt'
-      - 'app/src/main/kotlin/io/github/maxlyth/hapaneld/HaPaneldApp.kt'
-      - 'app/src/main/kotlin/io/github/maxlyth/hapaneld/PaneldService.kt'
-      - 'app/src/main/kotlin/io/github/maxlyth/hapaneld/control/DensityController.kt'
-      - 'app/src/main/kotlin/io/github/maxlyth/hapaneld/control/InteractiveController.kt'
-      - 'app/src/main/kotlin/io/github/maxlyth/hapaneld/http/PaneldServer.kt'
-      - 'app/src/main/kotlin/io/github/maxlyth/hapaneld/platform/ShellPrivilege.kt'
-      - 'app/src/main/kotlin/io/github/maxlyth/hapaneld/util/AppInstaller.kt'
-      - 'app/src/main/kotlin/io/github/maxlyth/hapaneld/util/CompanionInstaller.kt'
-      - 'app/src/main/kotlin/io/github/maxlyth/hapaneld/util/SelfUpdater.kt'
-      - 'app/src/main/kotlin/io/github/maxlyth/hapaneld/util/WebViewInstaller.kt'
-      - 'scripts/provision.sh'
-      - 'app/build.gradle.kts'
-      - 'gradle/libs.versions.toml'
-      - '.github/workflows/shizuku-emulator.yml'
+  schedule:
+    - cron: '17 3 * * 4'
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: optional-shizuku-emulator
+  cancel-in-progress: false
 
 jobs:
   integration:

@@ -11,8 +11,13 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   build:
+    name: Android build
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -60,20 +65,6 @@ jobs:
           npm ci --ignore-scripts --audit=false --fund=false
           npm run check
           npm run sbom
-
-      - name: Test firmware index tooling
-        run: python3 -m unittest discover -s tools/firmware-index -p 'test_*.py' -v
-
-      - name: Test host-side shell contracts
-        env:
-          PROVISION_TEST_SCOPE: core
-        run: |
-          scripts/tests/provision_test.sh
-          scripts/tests/hardware_collector_test.sh
-          scripts/tests/consumer_docs_test.sh
-
-      - name: Test dashboard performance collector
-        run: python3 -m unittest discover -s scripts/tests -p '*_test.py' -v
 
       - name: Set up JDK 17
         uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a # v5.5.0
@@ -137,11 +128,90 @@ jobs:
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
 
+  host-contracts:
+    name: Host contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Test firmware index tooling
+        run: python3 -m unittest discover -s tools/firmware-index -p 'test_*.py' -v
+
+      - name: Test host-side shell contracts
+        env:
+          PROVISION_TEST_SCOPE: core
+        run: |
+          scripts/tests/provision_test.sh
+          scripts/tests/hardware_collector_test.sh
+          scripts/tests/consumer_docs_test.sh
+
+      - name: Test dashboard performance collector
+        run: python3 -m unittest discover -s scripts/tests -p '*_test.py' -v
+
+  dependency-integrity:
+    name: Dependency integrity
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a # v5.5.0
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
+        with:
+          cache-provider: basic
+
+      - name: Resolve dependency artifacts from a fresh cache
+        shell: bash
+        run: |
+          set -euo pipefail
+          fresh_gradle_home="$(mktemp -d "$RUNNER_TEMP/ha-paneld-dependency-integrity.XXXXXX")"
+          trap 'rm -rf "$fresh_gradle_home"' EXIT
+          mkdir -p "$fresh_gradle_home/wrapper"
+          # Reuse only the Gradle executable; dependency artifacts, verification keys, and metadata
+          # state must all be populated from scratch for this check.
+          if [ -n "${GRADLE_USER_HOME:-}" ] && [ -d "$GRADLE_USER_HOME/wrapper/dists" ]; then
+            cp -a "$GRADLE_USER_HOME/wrapper/dists" "$fresh_gradle_home/wrapper/"
+          fi
+          init_script="$RUNNER_TEMP/dependency-verification.init.gradle"
+          cat > "$init_script" <<'GRADLE'
+          gradle.afterProject { project, state ->
+              if (project.path == ":app") {
+                  project.tasks.register("verifyReleaseDependencyArtifacts") {
+                      doLast {
+                          ["debugUnitTestRuntimeClasspath", "debugLintChecksClasspath", "releaseRuntimeClasspath"].each { name ->
+                              def configuration = project.configurations.getByName(name)
+                              if (!configuration.canBeResolved) throw new GradleException("Configuration ${name} is not resolvable")
+                              def artifacts = configuration.resolvedConfiguration.resolvedArtifacts
+                              artifacts.each { artifact -> artifact.file.length() }
+                              println("Verified ${name}: ${artifacts.size()} artifacts")
+                          }
+                      }
+                  }
+              }
+          }
+          GRADLE
+          GRADLE_USER_HOME="$fresh_gradle_home" ./gradlew --no-daemon --init-script "$init_script" :app:verifyReleaseDependencyArtifacts --stacktrace --console=plain
+
   # The root helper (helper/src/) is C, never touched by the Gradle build. This job is the only place
   # it's compiler-checked and unit-tested — host-native (gcc), so it's fast and needs no NDK. The parser
   # sanitizer smoke (helper/fuzz/run.sh) is deliberately NOT run here: it is deterministic rather than
   # coverage-guided and is run locally when the parser, dispatch, or validators change.
   helper:
+    name: Privileged helper
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:

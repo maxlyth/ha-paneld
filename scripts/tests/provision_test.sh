@@ -2562,7 +2562,7 @@ SHIZUKU_WORKFLOW="$ROOT/.github/workflows/shizuku-emulator.yml"
 LAST_OUTPUT="$TMP/release-workflow-contract.txt"
 cp "$RELEASE_WORKFLOW" "$LAST_OUTPUT"
 if grep -Fq 'PROVISION_TEST_SCOPE: core' "$CI_WORKFLOW" && \
-   grep -Fq 'PROVISION_TEST_SCOPE: core' "$RELEASE_WORKFLOW" && \
+   ! grep -Fq 'scripts/tests/provision_test.sh' "$RELEASE_WORKFLOW" && \
    grep -Fq 'PROVISION_TEST_SCOPE=all scripts/tests/provision_test.sh' "$SHIZUKU_WORKFLOW"; then
   pass "Shizuku provisioning contracts stay outside CI and release gates"
 else
@@ -2581,10 +2581,12 @@ if grep -Fq 'armv7a-linux-androideabi26-clang' "$RELEASE_WORKFLOW" && \
 else
   fail_test "release workflow aligns both helper assets with the app API 26 floor"
 fi
-if grep -Fq 'make -C helper clean test contract' "$RELEASE_WORKFLOW"; then
-  pass "release tags rerun privileged helper boundary and app-contract gates before asset build"
+if grep -Fq 'name: Privileged helper' "$CI_WORKFLOW" && \
+   grep -Fq '"Privileged helper"' "$RELEASE_WORKFLOW" && \
+   ! grep -Fq 'make -C helper clean test contract' "$RELEASE_WORKFLOW"; then
+  pass "release tags require the exact-source privileged-helper gate before publication"
 else
-  fail_test "release tags rerun privileged helper boundary and app-contract gates before asset build"
+  fail_test "release tags require the exact-source privileged-helper gate before publication"
 fi
 if grep -Fq 'fetch-depth: 0' "$RELEASE_WORKFLOW" && \
    grep -Fq "'+refs/heads/main:refs/remotes/origin/main'" "$RELEASE_WORKFLOW" && \

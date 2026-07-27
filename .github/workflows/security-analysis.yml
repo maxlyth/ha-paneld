@@ -10,6 +10,10 @@ on:
     - cron: "41 6 * * 2"
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 # Findings are reported through GitHub code scanning. The release workflow requires a successful
 # check for every language and refuses publication while a code-scanning alert remains open.
 permissions:
