@@ -610,20 +610,7 @@ internal class ProximityLearningRuntime(
                 }
             }
         }
-        val json = JSONObject().apply {
-            put("schema", PERSISTENCE_SCHEMA)
-            put("guidedReady", guidedReady)
-            if (snapshot != null) {
-                put("engineSchema", snapshot.schemaVersion)
-                put("farRaw", snapshot.farRaw.toDouble())
-                put("nearRaw", snapshot.nearRaw.toDouble())
-                put("noise", snapshot.noise.toDouble())
-                put("mode", snapshot.mode.name)
-                put("polarity", snapshot.polarity.name)
-                put("completedExcursions", snapshot.completedExcursions)
-                put("deliberateExamples", snapshot.deliberateExamples)
-            }
-        }.toString()
+        val json = persistedModelJson(snapshot, guidedReady)
         val row = EntityCatalogStore.ProximityModelRow(
             fingerprint = fingerprint,
             algorithmVersion = ALGORITHM_VERSION,
@@ -673,20 +660,9 @@ internal class ProximityLearningRuntime(
     }
 
     private fun restore(raw: String): Boolean = runCatching {
-        val json = JSONObject(raw)
-        check(json.getInt("schema") == PERSISTENCE_SCHEMA)
-        val snapshot = ProximityLearningEngine.Snapshot(
-            schemaVersion = json.getInt("engineSchema"),
-            farRaw = json.getDouble("farRaw").toFloat(),
-            nearRaw = json.getDouble("nearRaw").toFloat(),
-            noise = json.getDouble("noise").toFloat(),
-            mode = ProximityLearningEngine.Mode.valueOf(json.getString("mode")),
-            polarity = ProximityLearningEngine.Polarity.valueOf(json.getString("polarity")),
-            completedExcursions = json.getInt("completedExcursions"),
-            deliberateExamples = json.optInt("deliberateExamples", 0),
-        )
-        if (!engine.restore(snapshot)) return@runCatching false
-        guidedReady = json.optBoolean("guidedReady", false)
+        val persisted = persistedModel(raw) ?: return@runCatching false
+        if (!engine.restore(persisted.snapshot)) return@runCatching false
+        guidedReady = persisted.guidedReady
         true
     }.getOrDefault(false)
 
@@ -800,6 +776,11 @@ internal class ProximityLearningRuntime(
     }
 
     companion object {
+        internal data class PersistedModel(
+            val snapshot: ProximityLearningEngine.Snapshot,
+            val guidedReady: Boolean,
+        )
+
         const val ALGORITHM_VERSION = 4
         private const val PERSISTENCE_SCHEMA = 1
         private const val GUIDED_GESTURES_REQUIRED = 3
@@ -831,6 +812,42 @@ internal class ProximityLearningRuntime(
             changePointHoldMs = 30_000L,
             farArmLevel = FAR_REPORT_QUIET_LEVEL,
         )
+
+        internal fun persistedModelJson(
+            snapshot: ProximityLearningEngine.Snapshot?,
+            guidedReady: Boolean,
+        ): String = JSONObject().apply {
+            put("schema", PERSISTENCE_SCHEMA)
+            put("guidedReady", guidedReady)
+            if (snapshot != null) {
+                put("engineSchema", snapshot.schemaVersion)
+                put("farRaw", snapshot.farRaw.toDouble())
+                put("nearRaw", snapshot.nearRaw.toDouble())
+                put("noise", snapshot.noise.toDouble())
+                put("mode", snapshot.mode.name)
+                put("polarity", snapshot.polarity.name)
+                put("completedExcursions", snapshot.completedExcursions)
+                put("deliberateExamples", snapshot.deliberateExamples)
+            }
+        }.toString()
+
+        internal fun persistedModel(raw: String): PersistedModel? = runCatching {
+            val json = JSONObject(raw)
+            check(json.getInt("schema") == PERSISTENCE_SCHEMA)
+            PersistedModel(
+                snapshot = ProximityLearningEngine.Snapshot(
+                    schemaVersion = json.getInt("engineSchema"),
+                    farRaw = json.getDouble("farRaw").toFloat(),
+                    nearRaw = json.getDouble("nearRaw").toFloat(),
+                    noise = json.getDouble("noise").toFloat(),
+                    mode = ProximityLearningEngine.Mode.valueOf(json.getString("mode")),
+                    polarity = ProximityLearningEngine.Polarity.valueOf(json.getString("polarity")),
+                    completedExcursions = json.getInt("completedExcursions"),
+                    deliberateExamples = json.optInt("deliberateExamples", 0),
+                ),
+                guidedReady = json.optBoolean("guidedReady", false),
+            )
+        }.getOrNull()
 
         internal fun canTeachDuring(learning: ProximityLearningEngine.LearningStatus): Boolean =
             learning == ProximityLearningEngine.LearningStatus.LEARNING_EXCURSION ||

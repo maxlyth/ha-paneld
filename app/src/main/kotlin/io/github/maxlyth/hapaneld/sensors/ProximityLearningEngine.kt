@@ -188,6 +188,8 @@ internal class ProximityLearningEngine(
     private var farNoise = policy.minimumAbsoluteDelta
     private var modelReady = false
     private var verifyingSeed = false
+    private var trustedRestoreValidation = false
+    private var trustedRestoreValidationStartedAt = UNSET_TIME
     private var relearning = false
     private var completedExcursions = 0
     private var deliberateExamples = 0
@@ -366,6 +368,7 @@ internal class ProximityLearningEngine(
         completedExcursions = snapshot.completedExcursions
         deliberateExamples = snapshot.deliberateExamples
         verifyingSeed = true
+        trustedRestoreValidation = true
         baselineEstablished = true
         currentHealth = HealthStatus.NO_DATA
         currentActuation = ActuationStatus.SUPPRESSED_LEARNING
@@ -446,9 +449,12 @@ internal class ProximityLearningEngine(
         label: GuidedLabel,
         continuousEvidence: Boolean,
     ) {
-        currentLevel = null
-        currentPresence = null
-        currentHealth = HealthStatus.LEARNING
+        if (trustedRestoreValidation && trustedRestoreValidationStartedAt == UNSET_TIME) {
+            trustedRestoreValidationStartedAt = now
+        }
+        currentLevel = if (trustedRestoreValidation) normalized(raw) else null
+        currentPresence = currentLevel?.let(::hystereticPresence)
+        currentHealth = if (trustedRestoreValidation) HealthStatus.HEALTHY else HealthStatus.LEARNING
         currentActuation = ActuationStatus.SUPPRESSED_LEARNING
 
         // A previously matching far sample followed by a quiet interval is sufficient for a source
@@ -529,6 +535,14 @@ internal class ProximityLearningEngine(
 
     private fun processReady(raw: Float, now: Long, label: GuidedLabel, continuousEvidence: Boolean) {
         if (
+            trustedRestoreValidation && !candidateActive &&
+            trustedRestoreValidationStartedAt != UNSET_TIME &&
+            now - trustedRestoreValidationStartedAt >= policy.changePointHoldMs
+        ) {
+            trustedRestoreValidation = false
+            trustedRestoreValidationStartedAt = UNSET_TIME
+        }
+        if (
             contradictoryEvidenceCount > 0 && contradictoryEvidenceAt != UNSET_TIME &&
             now - contradictoryEvidenceAt > policy.contradictionConfirmWindowMs
         ) clearContradictoryEvidence()
@@ -536,7 +550,10 @@ internal class ProximityLearningEngine(
         if (candidateActive) {
             processCandidate(raw, now, label)
             if (candidateActive) {
-                if ((candidateContradictsModel && candidateDepartureQualified) || relearning) {
+                if (
+                    (candidateContradictsModel && candidateDepartureQualified && !trustedRestoreValidation) ||
+                    relearning
+                ) {
                     currentLevel = null
                     currentPresence = null
                     currentHealth = HealthStatus.MODEL_SHIFT
@@ -572,7 +589,7 @@ internal class ProximityLearningEngine(
                 contradicts = contradicts,
                 continuousEvidence = continuousEvidence,
             )
-            if (contradicts && candidateDepartureQualified) {
+            if (contradicts && candidateDepartureQualified && !trustedRestoreValidation) {
                 relearning = true
                 currentLevel = null
                 currentPresence = null
@@ -684,7 +701,7 @@ internal class ProximityLearningEngine(
 
         // Dense streams must prove that an opposite-direction departure persists before the
         // current model is failed closed. Sub-dwell pulses are rejected on their sustained return.
-        if (candidateContradictsModel && candidateDepartureQualified) relearning = true
+        if (candidateContradictsModel && candidateDepartureQualified && !trustedRestoreValidation) relearning = true
 
         // A fully-near correctly directed hold remains presence. Opposite polarity or a prolonged
         // sub-near plateau is behavioral-epoch evidence and may become a new far baseline.
@@ -1124,6 +1141,8 @@ internal class ProximityLearningEngine(
         }
         modelReady = false
         verifyingSeed = false
+        trustedRestoreValidation = false
+        trustedRestoreValidationStartedAt = UNSET_TIME
         relearning = isRelearning
         commitWakeEvidenceInvalidation()
         mode = Mode.UNKNOWN
@@ -1281,6 +1300,8 @@ internal class ProximityLearningEngine(
         farNoise = policy.minimumAbsoluteDelta
         modelReady = false
         verifyingSeed = false
+        trustedRestoreValidation = false
+        trustedRestoreValidationStartedAt = UNSET_TIME
         relearning = false
         completedExcursions = 0
         deliberateExamples = 0

@@ -488,15 +488,40 @@ class ProximityLearningEngineTest {
         assertTrue(engine.snapshot() != null)
     }
 
-    @Test fun hallSustainedOppositeTailStillFailsClosedAfterDenseEvidenceDwell() {
-        val engine = restoredHallEngine()
-        var output = engine.current()
-        for (now in 1_000L..1_250L step 50L) output = engine.observe(25.875f, now)
+    @Test fun persistedHallModelSurvivesItsRestartTailUntilLongChangePointEvidence() {
+        val source = restoredHallEngine()
+        val trusted = source.snapshot()!!
+        val persisted = ProximityLearningRuntime.persistedModelJson(trusted, guidedReady = true)
+        val restartedModel = ProximityLearningRuntime.persistedModel(persisted)!!
+        val restarted = ProximityLearningEngine(ProximityLearningRuntime.learningPolicy(sparseSource = false))
+        assertTrue(restarted.restore(restartedModel.snapshot))
 
+        for (now in 0L..300L step 100L) {
+            val output = restarted.observe(37.8244f, now)
+            assertEquals("anchor health at $now", HealthStatus.HEALTHY, output.health)
+            assertEquals("anchor presence at $now", false, output.presence)
+            assertTrue("anchor level at $now", output.normalizedLevel != null)
+        }
+
+        var output = restarted.current()
+        for (now in 350L until 30_350L step 50L) {
+            output = restarted.observe(25.875f, now)
+            assertEquals("tail learning at $now", LearningStatus.READY, output.learning)
+            assertEquals("tail health at $now", HealthStatus.HEALTHY, output.health)
+            assertEquals("tail presence at $now", false, output.presence)
+            assertTrue("tail level at $now", output.normalizedLevel != null)
+            val retained = restarted.snapshot()!!
+            assertEquals(trusted.farRaw, retained.farRaw, 0f)
+            assertEquals(trusted.nearRaw, retained.nearRaw, 0f)
+            assertEquals(trusted.polarity, retained.polarity)
+        }
+
+        output = restarted.observe(25.875f, 30_350L)
         assertEquals(LearningStatus.RELEARNING, output.learning)
         assertEquals(HealthStatus.MODEL_SHIFT, output.health)
         assertNull(output.presence)
         assertNull(output.normalizedLevel)
+        assertNull(restarted.snapshot())
     }
 
     @Test fun repeatedCompressedExcursionsSafelyRelearnTheRangeWithoutFalseGestures() {
