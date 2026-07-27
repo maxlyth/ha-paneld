@@ -70,6 +70,8 @@ import io.github.maxlyth.hapaneld.device.profile.ProfileBackupRestoreOutcome
 import io.github.maxlyth.hapaneld.device.profile.ProfileBackupRestorePlan
 import io.github.maxlyth.hapaneld.device.profile.ProfileBackupRestoreResult
 import io.github.maxlyth.hapaneld.logship.LogCapture
+import io.github.maxlyth.hapaneld.logship.LogShipTarget
+import io.github.maxlyth.hapaneld.logship.NetworkLogSinkFactory
 import io.github.maxlyth.hapaneld.metrics.FeatureCosts
 import io.github.maxlyth.hapaneld.persistence.AppState
 import io.github.maxlyth.hapaneld.persistence.ConfigVault
@@ -5636,102 +5638,34 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
         if (ep.port !in 1..65535) return """{"ok":false,"error":"invalid-port"}"""
         val head = "\"host\":${jsonStr(ep.host)},\"port\":${ep.port}," +
             "\"protocol\":${jsonStr(ep.protocol)}"
-        // Same ordering the shipper uses, so the probe exercises the address real traffic will take
-        // rather than whichever record the platform returned first.
-        val candidates = runCatching {
-            LogShipEndpoint.orderedCandidates(BoundedDns.resolveAll(ep.host, LOG_SINK_DNS_TIMEOUT_MS))
-        }.getOrNull()?.takeIf { it.isNotEmpty() }
-            ?: return "{\"ok\":false,\"error\":\"unresolvable\",$head}"
-        val resolved = candidates.first()
         val marker = "ha-paneld-sink-probe-${System.currentTimeMillis().toString(36)}"
-        val body = "$head,\"resolved\":${jsonStr(resolved.hostAddress)},\"marker\":${jsonStr(marker)}"
         val name = panelId.ifBlank { "panel" }
         val timestamp = probeTimestamp()
-
-        fun failure(error: String) = "{\"ok\":false,\"error\":${jsonStr(error)},$body}"
-
-        return when (ep.protocol) {
-            LogShipEndpoint.SYSLOG_UDP -> {
-                val frame = "<14>1 $timestamp $name ha-paneld - - - $marker"
-                    .toByteArray(Charsets.UTF_8)
-                runCatching {
-                    java.net.DatagramSocket().use {
-                        it.connect(resolved, ep.port)
-                        it.send(java.net.DatagramPacket(frame, frame.size, resolved, ep.port))
-                    }
-                }.fold(
-                    onSuccess = { "{\"ok\":true,\"delivered\":false,$body}" },
-                    onFailure = { failure("send-failed") },
-                )
+        val payload = when (ep.protocol) {
+            LogShipEndpoint.HTTP -> "{\"timestamp\":\"$timestamp\",\"host\":${jsonStr(name)}," +
+                "\"app\":\"ha-paneld\",\"message\":${jsonStr(marker)}}"
+            LogShipEndpoint.SYSLOG_UDP -> "<14>1 $timestamp $name ha-paneld - - - $marker"
+            else -> "<14>1 $timestamp $name ha-paneld - - - $marker\n"
+        }.toByteArray(Charsets.UTF_8)
+        val result = NetworkLogSinkFactory.probe(
+            LogShipTarget(ep.host, ep.port, ep.protocol, panelId),
+            payload,
+            timeoutMs = LOG_SINK_DNS_TIMEOUT_MS,
+        )
+        val body = "$head" +
+            (result.candidate?.let { ",\"resolved\":${jsonStr(it.hostAddress)}" } ?: "") +
+            ",\"marker\":${jsonStr(marker)}" +
+            (result.status?.let { ",\"status\":$it" } ?: "")
+        return if (result.ok) {
+            "{\"ok\":true,\"delivered\":${result.delivered},$body}"
+        } else {
+            val error = when {
+                result.status != null -> "http-${result.status}"
+                result.error == "unresolvable" -> "unresolvable"
+                ep.protocol == LogShipEndpoint.SYSLOG_UDP -> "send-failed"
+                else -> "unreachable"
             }
-            LogShipEndpoint.HTTP -> {
-                val record = "{\"timestamp\":\"$timestamp\",\"host\":${jsonStr(name)}," +
-                    "\"app\":\"ha-paneld\",\"message\":${jsonStr(marker)}}"
-                // Walk every candidate, exactly as the shipper does: reporting "unreachable" for a
-                // sink the shipper would have reached on a later address would be a false verdict.
-                runCatching {
-                    var last: Exception? = null
-                    for (candidate in candidates) {
-                        // Connect to the already-resolved address. Reusing the hostname here would
-                        // ask HttpURLConnection to perform a second, unbounded DNS lookup.
-                        val url = java.net.URL(
-                            "http://${LogShipEndpoint.urlHost(candidate.hostAddress)}:${ep.port}/",
-                        )
-                        try {
-                            return@runCatching (url.openConnection() as java.net.HttpURLConnection).run {
-                                requestMethod = "POST"
-                                connectTimeout = 2_000
-                                readTimeout = 2_000
-                                doOutput = true
-                                setRequestProperty("Host", "${LogShipEndpoint.urlHost(ep.host)}:${ep.port}")
-                                setRequestProperty("Content-Type", "application/x-ndjson")
-                                try {
-                                    outputStream.use { it.write(record.toByteArray(Charsets.UTF_8)) }
-                                    responseCode
-                                } finally {
-                                    disconnect()
-                                }
-                            }
-                        } catch (e: Exception) {
-                            last = e
-                        }
-                    }
-                    throw last ?: java.io.IOException("no address resolved for ${ep.host}")
-                }.fold(
-                    onSuccess = { code ->
-                        if (code in 200..299) "{\"ok\":true,\"delivered\":true,\"status\":$code,$body}"
-                        else "{\"ok\":false,\"error\":\"http-$code\",\"status\":$code,$body}"
-                    },
-                    onFailure = { failure("unreachable") },
-                )
-            }
-            else -> {
-                val frame = "<14>1 $timestamp $name ha-paneld - - - $marker\n"
-                runCatching {
-                    // Walk every candidate, exactly as the shipper does.
-                    var last: Exception? = null
-                    for (candidate in candidates) {
-                        try {
-                            java.net.Socket().use { socket ->
-                                socket.connect(java.net.InetSocketAddress(candidate, ep.port), 2_000)
-                                socket.getOutputStream().apply {
-                                    write(frame.toByteArray(Charsets.UTF_8))
-                                    flush()
-                                }
-                            }
-                            return@runCatching
-                        } catch (e: Exception) {
-                            last = e
-                        }
-                    }
-                    throw last ?: java.io.IOException("no address resolved for ${ep.host}")
-                }.fold(
-                    // A completed socket write is not collector acknowledgement. Only seeing the
-                    // marker at the collector proves that the receiving application accepted it.
-                    onSuccess = { "{\"ok\":true,\"delivered\":false,$body}" },
-                    onFailure = { failure("unreachable") },
-                )
-            }
+            "{\"ok\":false,\"error\":${jsonStr(error)},$body}"
         }
     }
 

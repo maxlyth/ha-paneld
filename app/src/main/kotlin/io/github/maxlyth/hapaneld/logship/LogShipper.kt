@@ -18,16 +18,16 @@ import kotlinx.coroutines.launch
 import java.io.IOException
 import java.net.DatagramPacket
 import java.net.DatagramSocket
-import java.net.HttpURLConnection
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
-import java.net.URL
+import java.net.SocketTimeoutException
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
 import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
@@ -424,19 +424,183 @@ class LogShipper internal constructor(
  * an in-memory fake sink cannot tell TCP from UDP, which is how a TCP-only "syslog" transport aimed
  * at the UDP default port passed every test it had.
  */
+internal fun interface LogAddressResolver {
+    fun resolve(host: String, timeoutMs: Long): List<InetAddress>
+}
+
+private object ProductionLogAddressResolver : LogAddressResolver {
+    override fun resolve(host: String, timeoutMs: Long): List<InetAddress> =
+        BoundedDns.resolveAll(host, timeoutMs)
+}
+
+private class NetworkDeadline(timeoutMs: Long) {
+    private val expiresAtNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs)
+
+    fun remainingMs(): Int {
+        val remaining = expiresAtNanos - System.nanoTime()
+        if (remaining <= 0L) throw SocketTimeoutException("log sink deadline exceeded")
+        return TimeUnit.NANOSECONDS.toMillis(remaining).coerceAtLeast(1L).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+    }
+}
+
+internal data class LogSinkProbeResult(
+    val ok: Boolean,
+    val delivered: Boolean,
+    val candidate: InetAddress?,
+    val error: String? = null,
+    val status: Int? = null,
+)
+
 internal object NetworkLogSinkFactory : LogSinkFactory {
     override fun create(target: LogShipTarget, encode: (String) -> String): LogSink =
+        create(target, encode, ProductionLogAddressResolver, LogShipper.NETWORK_TIMEOUT_MS.toLong())
+
+    internal fun create(
+        target: LogShipTarget,
+        encode: (String) -> String,
+        resolver: LogAddressResolver,
+        timeoutMs: Long,
+    ): LogSink =
         when (target.protocol) {
-            LogShipEndpoint.HTTP -> HttpLogSink(target, encode)
-            LogShipEndpoint.SYSLOG_UDP -> UdpSyslogLogSink(target, encode)
-            else -> TcpSyslogLogSink(target, encode)
+            LogShipEndpoint.HTTP -> HttpLogSink(target, encode, resolver, timeoutMs)
+            LogShipEndpoint.SYSLOG_UDP -> UdpSyslogLogSink(target, encode, resolver, timeoutMs)
+            else -> TcpSyslogLogSink(target, encode, resolver, timeoutMs)
         }
+
+    internal fun probe(
+        target: LogShipTarget,
+        payload: ByteArray,
+        resolver: LogAddressResolver = ProductionLogAddressResolver,
+        timeoutMs: Long = 2_000L,
+    ): LogSinkProbeResult {
+        val deadline = NetworkDeadline(timeoutMs)
+        val candidates = try {
+            resolveCandidates(target.host, resolver, deadline)
+        } catch (_: Exception) {
+            return LogSinkProbeResult(false, false, null, "unresolvable")
+        }
+        return when (target.protocol) {
+            LogShipEndpoint.SYSLOG_UDP -> {
+                val candidate = candidates.first()
+                try {
+                    DatagramSocket().use {
+                        it.connect(candidate, target.port)
+                        it.send(DatagramPacket(payload, payload.size, candidate, target.port))
+                    }
+                    LogSinkProbeResult(true, false, candidate)
+                } catch (_: Exception) {
+                    LogSinkProbeResult(false, false, candidate, "send-failed")
+                }
+            }
+            LogShipEndpoint.HTTP -> postAcrossCandidates(target, candidates, payload, deadline, null)
+            else -> tcpWriteAcrossCandidates(target, candidates, payload, deadline, null)
+        }
+    }
+}
+
+private fun resolveCandidates(
+    host: String,
+    resolver: LogAddressResolver,
+    deadline: NetworkDeadline,
+): List<InetAddress> {
+    val timeout = minOf(LogShipper.DNS_TIMEOUT_MS, deadline.remainingMs().toLong())
+    return LogShipEndpoint.orderedCandidates(resolver.resolve(host, timeout)).ifEmpty {
+        throw IOException("no address resolved for $host")
+    }
+}
+
+private fun tcpWriteAcrossCandidates(
+    target: LogShipTarget,
+    candidates: List<InetAddress>,
+    payload: ByteArray,
+    deadline: NetworkDeadline,
+    publish: ((Socket?) -> Unit)?,
+): LogSinkProbeResult {
+    var last: Exception? = null
+    var lastCandidate: InetAddress? = null
+    for (candidate in candidates) {
+        lastCandidate = candidate
+        val socket = Socket()
+        publish?.invoke(socket)
+        try {
+            socket.connect(InetSocketAddress(candidate, target.port), deadline.remainingMs())
+            socket.soTimeout = deadline.remainingMs()
+            socket.getOutputStream().apply { write(payload); flush() }
+            return LogSinkProbeResult(true, false, candidate)
+        } catch (e: Exception) {
+            last = e
+        } finally {
+            publish?.invoke(null)
+            runCatching { socket.close() }
+        }
+    }
+    return LogSinkProbeResult(false, false, lastCandidate, last?.message ?: "unreachable")
+}
+
+private val httpDeadlineExecutor = Executors.newSingleThreadScheduledExecutor { runnable ->
+    Thread(runnable, "ha-paneld-logship-deadline").apply { isDaemon = true }
+}
+
+private fun postAcrossCandidates(
+    target: LogShipTarget,
+    candidates: List<InetAddress>,
+    payload: ByteArray,
+    deadline: NetworkDeadline,
+    publish: ((Socket?) -> Unit)?,
+): LogSinkProbeResult {
+    var last: Exception? = null
+    var lastCandidate: InetAddress? = null
+    var lastStatus: Int? = null
+    for (candidate in candidates) {
+        lastCandidate = candidate
+        val socket = Socket()
+        publish?.invoke(socket)
+        var timeout: java.util.concurrent.ScheduledFuture<*>? = null
+        try {
+            socket.connect(InetSocketAddress(candidate, target.port), deadline.remainingMs())
+            socket.soTimeout = deadline.remainingMs()
+            timeout = httpDeadlineExecutor.schedule(
+                { runCatching { socket.close() } },
+                deadline.remainingMs().toLong(),
+                TimeUnit.MILLISECONDS,
+            )
+            val authority = "${LogShipEndpoint.urlHost(target.host)}:${target.port}"
+            val head = "POST / HTTP/1.1\r\n" +
+                "Host: $authority\r\n" +
+                "Content-Type: application/x-ndjson\r\n" +
+                "Content-Length: ${payload.size}\r\n" +
+                "Connection: close\r\n\r\n"
+            socket.getOutputStream().apply {
+                write(head.toByteArray(Charsets.US_ASCII))
+                write(payload)
+                flush()
+            }
+            socket.soTimeout = deadline.remainingMs()
+            val statusLine = socket.getInputStream().bufferedReader(Charsets.US_ASCII).readLine()
+                ?: throw IOException("empty HTTP response")
+            val status = statusLine.split(' ').getOrNull(1)?.toIntOrNull()
+                ?: throw IOException("invalid HTTP response")
+            lastStatus = status
+            if (status in 200..299) return LogSinkProbeResult(true, true, candidate, status = status)
+            last = IOException("HTTP $status")
+        } catch (e: Exception) {
+            last = e
+        } finally {
+            timeout?.cancel(false)
+            publish?.invoke(null)
+            runCatching { socket.close() }
+        }
+    }
+    val error = if (lastStatus != null) "http-$lastStatus" else last?.message ?: "unreachable"
+    return LogSinkProbeResult(false, false, lastCandidate, error, lastStatus)
 }
 
 /** RFC6587 non-transparent framing: newline-delimited RFC5424 frames on a stream. */
 private class TcpSyslogLogSink(
     private val target: LogShipTarget,
     private val encode: (String) -> String,
+    private val resolver: LogAddressResolver,
+    private val timeoutMs: Long,
 ) : LogSink {
     // A java.net.Socket is single-use: a failed connect leaves it unusable, so each candidate needs
     // its own. Volatile because close() can arrive from another thread mid-connect.
@@ -446,10 +610,9 @@ private class TcpSyslogLogSink(
     override fun connect() {
         // A stream transport reports failure, so walk every resolved address rather than trusting
         // the first: a dual-stack name whose collector listens on one family only must still work.
-        var last: IOException? = null
-        for (candidate in LogShipEndpoint.orderedCandidates(
-            BoundedDns.resolveAll(target.host, LogShipper.DNS_TIMEOUT_MS),
-        )) {
+        val deadline = NetworkDeadline(timeoutMs)
+        var last: Exception? = null
+        for (candidate in resolveCandidates(target.host, resolver, deadline)) {
             if (closed) throw IOException("closed")
             val attempt = Socket()
             // Publish before connecting: closing the run must be able to break a connect that is
@@ -460,10 +623,10 @@ private class TcpSyslogLogSink(
                 throw IOException("closed")
             }
             try {
-                attempt.connect(InetSocketAddress(candidate, target.port), LogShipper.NETWORK_TIMEOUT_MS)
+                attempt.connect(InetSocketAddress(candidate, target.port), deadline.remainingMs())
                 attempt.tcpNoDelay = true
                 return
-            } catch (e: IOException) {
+            } catch (e: Exception) {
                 runCatching { attempt.close() }
                 last = e
             }
@@ -494,6 +657,8 @@ private class TcpSyslogLogSink(
 private class UdpSyslogLogSink(
     private val target: LogShipTarget,
     private val encode: (String) -> String,
+    private val resolver: LogAddressResolver,
+    private val timeoutMs: Long,
 ) : LogSink {
     private val socket = DatagramSocket()
     private var address: InetAddress? = null
@@ -502,9 +667,7 @@ private class UdpSyslogLogSink(
         // UDP has no failure signal to fall back on: a datagram sent to an address whose collector
         // is not listening succeeds locally and vanishes. Ordering is therefore the only lever, so
         // take the first candidate rather than "the first the platform happened to return".
-        val resolved = LogShipEndpoint.orderedCandidates(
-            BoundedDns.resolveAll(target.host, LogShipper.DNS_TIMEOUT_MS),
-        ).first()
+        val resolved = resolveCandidates(target.host, resolver, NetworkDeadline(timeoutMs)).first()
         socket.connect(resolved, target.port)
         address = resolved
     }
@@ -550,60 +713,34 @@ internal fun truncateUtf8(text: String, maxBytes: Int): ByteArray {
 private class HttpLogSink(
     private val target: LogShipTarget,
     private val encode: (String) -> String,
+    private val resolver: LogAddressResolver,
+    private val timeoutMs: Long,
 ) : LogSink {
     @Volatile private var closed = false
-    private var connection: HttpURLConnection? = null
+    @Volatile private var connection: Socket? = null
 
-    // Resolved at connect and pinned for the run, so every POST targets the one address proven to
-    // answer. Leaving the hostname in the URL would also hand HttpURLConnection its own unbounded
-    // second lookup, which is exactly what the bounded resolver exists to prevent.
-    @Volatile private var url: String = ""
+    // Resolve once per run and POST directly to these addresses, preserving the original Host header
+    // without handing a URL implementation an unbounded second DNS lookup.
+    @Volatile private var candidates: List<InetAddress> = emptyList()
 
     override fun connect() {
         if (closed) throw IOException("closed")
-        // HTTP reports failure, so walk the candidates and keep the first that answers at all.
-        var last: IOException? = null
-        for (candidate in LogShipEndpoint.orderedCandidates(
-            BoundedDns.resolveAll(target.host, LogShipper.DNS_TIMEOUT_MS),
-        )) {
-            if (closed) throw IOException("closed")
-            val attempt = "http://${LogShipEndpoint.urlHost(candidate.hostAddress)}:${target.port}/"
-            try {
-                Socket().use {
-                    it.connect(InetSocketAddress(candidate, target.port), LogShipper.NETWORK_TIMEOUT_MS)
-                }
-                url = attempt
-                return
-            } catch (e: IOException) {
-                last = e
-            }
-        }
-        throw last ?: IOException("no address resolved for ${target.host}")
+        candidates = resolveCandidates(target.host, resolver, NetworkDeadline(timeoutMs))
     }
 
     override fun send(lines: List<String>) {
         val body = lines.joinToString("\n") { encode(it) }.toByteArray(Charsets.UTF_8)
-        val candidate = (URL(url).openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            connectTimeout = LogShipper.NETWORK_TIMEOUT_MS
-            readTimeout = LogShipper.NETWORK_TIMEOUT_MS
-            doOutput = true
-            setRequestProperty("Content-Type", "application/x-ndjson")
-        }
-        synchronized(this) {
-            if (closed) {
-                candidate.disconnect()
-                throw IOException("closed")
+        val result = postAcrossCandidates(target, candidates, body, NetworkDeadline(timeoutMs)) { active ->
+            synchronized(this) {
+                if (closed && active != null) {
+                    runCatching { active.close() }
+                    throw IOException("closed")
+                }
+                connection = active
             }
-            connection = candidate
         }
-        try {
-            candidate.outputStream.use { it.write(body) }
-            val code = candidate.responseCode
-            if (code !in 200..299) throw IOException("HTTP $code")
-        } finally {
-            synchronized(this) { if (connection === candidate) connection = null }
-            candidate.disconnect()
+        if (!result.ok) {
+            throw IOException(result.status?.let { "HTTP $it" } ?: result.error ?: "unreachable")
         }
     }
 
@@ -612,6 +749,6 @@ private class HttpLogSink(
             closed = true
             connection.also { connection = null }
         }
-        active?.disconnect()
+        runCatching { active?.close() }
     }
 }

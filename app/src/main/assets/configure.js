@@ -2025,7 +2025,7 @@
       });
       if (!fields.length) return;
       shown += fields.length;
-      // Maturity badges on whole cards: log shipping and display tuning remain experimental.
+      // Maturity badges on whole cards; Logging is intentionally no longer experimental.
       var h2kids = [el("span", { text: g })];
       if (CARD_NOTES[g]) h2kids.push(el("small", { text: " · " + CARD_NOTES[g] }));
       var badge = CARD_BADGES[g];
