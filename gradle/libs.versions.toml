@@ -1,7 +1,7 @@
 [versions]
 # Kotlin 2.4's table names AGP 9.1.0 and Gradle 9.5 as its upper tested versions. AGP 9.1.1 is
 # Android's API 37 support patch; Gradle 9.6.1 is a separately gated CI-performance update;
-# build.gradle.kts selects Kotlin 2.4.10 explicitly.
+# build.gradle.kts selects Kotlin 2.4.0 explicitly.
 agp = "9.1.1"
 coreKtx = "1.19.0"
 appcompat = "1.7.0"
