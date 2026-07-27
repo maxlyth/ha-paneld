@@ -202,6 +202,30 @@ internal fun sha256Hex(bytes: ByteArray): String = MessageDigest.getInstance("SH
     .digest(bytes)
     .joinToString("") { "%02x".format(it) }
 
+/** Shared sensitive-request decision. Hardened policy is intentionally remote-only: trusted loopback
+ * callers retain the established exemption while every non-loopback request remains peer-, operation-
+ * and payload-bound through the one-shot approval broker. */
+internal suspend fun authorizeSensitiveRequest(
+    call: ApplicationCall,
+    hardened: Boolean,
+    peer: String,
+    operation: SensitiveOperation,
+    payload: String,
+    summary: String,
+    broker: ApprovalBroker,
+): Boolean {
+    if (!hardened || isLoopbackPeer(peer)) return true
+    val (decision, id) = broker.request(operation, peer, payload, summary)
+    if (decision == ApprovalBroker.Decision.APPROVED) return true
+    call.respondText(
+        "{\"ok\":false,\"error\":\"approval-required\",\"approval_id\":${Json.str(id)}," +
+            "\"message\":\"Approve this request physically on the panel, then retry it; it cannot be approved remotely.\"}",
+        ContentType.Application.Json,
+        HttpStatusCode.Accepted,
+    )
+    return false
+}
+
 /** User-facing remediation for the renderer-specific recovery authority. */
 internal fun dashboardRecoveryWarning(state: PanelStatus.DashboardRecoveryState): String? = when (state) {
     PanelStatus.DashboardRecoveryState.NONE -> null
@@ -392,31 +416,29 @@ internal data class RemoteActionRouteDependencies(
     val admit: suspend (ApplicationCall, String) -> Unit,
 )
 
-/** HTTP boundary for the software-navbar actions. Dashboard foregrounding remains routine; Reload
+/** HTTP handler for the software-navbar actions. Dashboard foregrounding remains routine; Reload
  * deliberately restarts a renderer and therefore shares the exact-request physical-approval policy
  * used by the other sensitive process and power operations. */
-internal fun io.ktor.server.routing.Route.remoteActionRoute(dependencies: RemoteActionRouteDependencies) {
-    post("/action") {
-        val parameters = receiveBoundedFormParameters(call) ?: return@post
-        val action = parameters["a"]
-        if (action !in REMOTE_ACTIONS) {
-            call.respondText("bad-action\n", status = HttpStatusCode.BadRequest)
-            return@post
-        }
-        val sensitive = when (action) {
-            "reload" -> SensitiveOperation.DASHBOARD_RELOAD to "Reload the dashboard renderer"
-            "reboot" -> SensitiveOperation.DEVICE_REBOOT to "Reboot this panel"
-            else -> null
-        }
-        if (sensitive != null && !dependencies.authorizeSensitive(
-                call,
-                sensitive.first,
-                exactHttpApprovalPayload(call, parameters.canonicalDigest()),
-                sensitive.second,
-            )
-        ) return@post
-        dependencies.admit(call, action!!)
+internal suspend fun handleRemoteAction(call: ApplicationCall, dependencies: RemoteActionRouteDependencies) {
+    val parameters = receiveBoundedFormParameters(call) ?: return
+    val action = parameters["a"]
+    if (action !in REMOTE_ACTIONS) {
+        call.respondText("bad-action\n", status = HttpStatusCode.BadRequest)
+        return
     }
+    val sensitive = when (action) {
+        "reload" -> SensitiveOperation.DASHBOARD_RELOAD to "Reload the dashboard renderer"
+        "reboot" -> SensitiveOperation.DEVICE_REBOOT to "Reboot this panel"
+        else -> null
+    }
+    if (sensitive != null && !dependencies.authorizeSensitive(
+            call,
+            sensitive.first,
+            exactHttpApprovalPayload(call, parameters.canonicalDigest()),
+            sensitive.second,
+        )
+    ) return
+    dependencies.admit(call, action!!)
 }
 
 /** One renderer-sensitive execution seam shared by the live queue and endpoint behavior tests. */
@@ -909,18 +931,15 @@ class PaneldServer internal constructor(
         payload: String,
         summary: String,
     ): Boolean {
-        if (!config.hardenedSecurityEnabled) return true
-        val peer = call.request.origin.remoteAddress
-        if (isLoopbackPeer(peer)) return true
-        val (decision, id) = LocalApprovalBroker.instance.request(operation, peer, payload, summary)
-        if (decision == ApprovalBroker.Decision.APPROVED) return true
-        call.respondText(
-            "{\"ok\":false,\"error\":\"approval-required\",\"approval_id\":${Json.str(id)}," +
-                "\"message\":\"Approve this request physically on the panel, then retry it; it cannot be approved remotely.\"}",
-            ContentType.Application.Json,
-            HttpStatusCode.Accepted,
+        return authorizeSensitiveRequest(
+            call = call,
+            hardened = config.hardenedSecurityEnabled,
+            peer = call.request.origin.remoteAddress,
+            operation = operation,
+            payload = payload,
+            summary = summary,
+            broker = LocalApprovalBroker.instance,
         )
-        return false
     }
 
     private suspend fun rejectHardenedNetworkAdb(call: ApplicationCall, requested: String?): Boolean {
@@ -2219,14 +2238,17 @@ class PaneldServer internal constructor(
                         }
                     }
                     // On-screen Controls card (software navbar) for panels with no physical nav bar.
-                    remoteActionRoute(
-                        RemoteActionRouteDependencies(
-                            authorizeSensitive = ::authorizeSensitive,
-                            admit = { request, action ->
-                                respondRemoteAdmission(request, RemoteControl.Action(action))
-                            },
-                        ),
-                    )
+                    post("/action") {
+                        handleRemoteAction(
+                            call,
+                            RemoteActionRouteDependencies(
+                                authorizeSensitive = ::authorizeSensitive,
+                                admit = { request, action ->
+                                    respondRemoteAdmission(request, RemoteControl.Action(action))
+                                },
+                            ),
+                        )
+                    }
                     // Debug-only sensor trace (RAM ring buffer, on by default) for fit-testing the
                     // auto-brightness + proximity filters. CSV by default (drop into a plot); ?format=json
                     // for programmatic use / a future on-panel chart. Not an HA/MQTT surface.

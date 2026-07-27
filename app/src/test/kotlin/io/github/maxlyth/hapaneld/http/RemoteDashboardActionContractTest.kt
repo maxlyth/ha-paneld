@@ -8,7 +8,6 @@ import io.github.maxlyth.hapaneld.control.FakeSystemEnv
 import io.github.maxlyth.hapaneld.control.SystemController
 import io.github.maxlyth.hapaneld.security.ApprovalBroker
 import io.github.maxlyth.hapaneld.security.SensitiveOperation
-import io.github.maxlyth.hapaneld.util.Json
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
@@ -16,6 +15,7 @@ import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
 import io.ktor.server.response.respondText
+import io.ktor.server.routing.post
 import io.ktor.server.routing.routing
 import io.ktor.server.testing.testApplication
 import org.junit.Assert.assertEquals
@@ -35,8 +35,8 @@ class RemoteDashboardActionContractTest {
         var system = controller(FakeSystemEnv(installed = setOf(foreign), launchers = mapOf(foreign to "$foreign/.Main")), root)
         application {
             routing {
-                remoteActionRoute(
-                    RemoteActionRouteDependencies(
+                post("/action") {
+                    handleRemoteAction(call, RemoteActionRouteDependencies(
                         authorizeSensitive = { _, _, _, _ -> true },
                         admit = { call, action ->
                             assertTrue(executeRemoteDashboardAction(
@@ -47,8 +47,8 @@ class RemoteDashboardActionContractTest {
                             ))
                             call.respondText("queued\n", status = HttpStatusCode.Accepted)
                         },
-                    ),
-                )
+                    ))
+                }
             }
         }
 
@@ -74,8 +74,8 @@ class RemoteDashboardActionContractTest {
         var system = controller(FakeSystemEnv(), root)
         application {
             routing {
-                remoteActionRoute(
-                    RemoteActionRouteDependencies(
+                post("/action") {
+                    handleRemoteAction(call, RemoteActionRouteDependencies(
                         authorizeSensitive = { _, _, _, _ -> true },
                         admit = { call, action ->
                             assertTrue(executeRemoteDashboardAction(
@@ -86,8 +86,8 @@ class RemoteDashboardActionContractTest {
                             ))
                             call.respondText("queued\n", status = HttpStatusCode.Accepted)
                         },
-                    ),
-                )
+                    ))
+                }
             }
         }
 
@@ -103,30 +103,23 @@ class RemoteDashboardActionContractTest {
         assertTrue("Companion data ownership must suppress both foreground and reload effects", root.ran.isEmpty())
     }
 
-    @Test fun hardenedReloadRequiresOneShotExactApprovalWhileDashboardRemainsRoutine() = testApplication {
+    @Test fun hardenedSensitiveActionsPreserveLoopbackAndRequireRemoteExactApproval() = testApplication {
         val broker = ApprovalBroker()
         val admitted = mutableListOf<String>()
+        var peer = "192.0.2.10"
         application {
             routing {
-                remoteActionRoute(
-                    RemoteActionRouteDependencies(
+                post("/action") {
+                    handleRemoteAction(call, RemoteActionRouteDependencies(
                         authorizeSensitive = { call, operation, payload, summary ->
-                            val (decision, id) = broker.request(operation, "192.0.2.10", payload, summary)
-                            if (decision == ApprovalBroker.Decision.APPROVED) true else {
-                                call.respondText(
-                                    "{\"ok\":false,\"error\":\"approval-required\",\"approval_id\":${Json.str(id)}}",
-                                    ContentType.Application.Json,
-                                    HttpStatusCode.Accepted,
-                                )
-                                false
-                            }
+                            authorizeSensitiveRequest(call, true, peer, operation, payload, summary, broker)
                         },
                         admit = { call, action ->
                             admitted += action
                             call.respondText("queued\n", status = HttpStatusCode.Accepted)
                         },
-                    ),
-                )
+                    ))
+                }
             }
         }
 
@@ -135,10 +128,17 @@ class RemoteDashboardActionContractTest {
         assertEquals(listOf("dashboard"), admitted)
         assertTrue("routine Dashboard foregrounding must not open an approval", broker.pending().isEmpty())
 
+        peer = "127.0.0.1"
+        assertAccepted("reload")
+        assertAccepted("reboot")
+        assertEquals(listOf("dashboard", "reload", "reboot"), admitted)
+        assertTrue("Hardened loopback actions must retain their established exemption", broker.pending().isEmpty())
+
+        peer = "192.0.2.10"
         val denied = postAction("reload")
         assertEquals(HttpStatusCode.Accepted, denied.status)
         assertTrue(denied.bodyAsText().contains("approval-required"))
-        assertEquals(listOf("dashboard"), admitted)
+        assertEquals(listOf("dashboard", "reload", "reboot"), admitted)
         val pending = broker.pending().single()
         assertEquals(SensitiveOperation.DASHBOARD_RELOAD, pending.operation)
         assertTrue(broker.approve(pending.id))
@@ -146,11 +146,25 @@ class RemoteDashboardActionContractTest {
         val approved = postAction("reload")
         assertEquals(HttpStatusCode.Accepted, approved.status)
         assertEquals("queued\n", approved.bodyAsText())
-        assertEquals(listOf("dashboard", "reload"), admitted)
+        assertEquals(listOf("dashboard", "reload", "reboot", "reload"), admitted)
 
         postAction("reload")
-        assertEquals("an approval is consumed by its first exact replay", listOf("dashboard", "reload"), admitted)
+        assertEquals(
+            "an approval is consumed by its first exact replay",
+            listOf("dashboard", "reload", "reboot", "reload"),
+            admitted,
+        )
         assertEquals(SensitiveOperation.DASHBOARD_RELOAD, broker.pending().single().operation)
+        broker.clear()
+
+        val rebootDenied = postAction("reboot")
+        assertEquals(HttpStatusCode.Accepted, rebootDenied.status)
+        assertTrue(rebootDenied.bodyAsText().contains("approval-required"))
+        val reboot = broker.pending().single()
+        assertEquals(SensitiveOperation.DEVICE_REBOOT, reboot.operation)
+        assertTrue(broker.approve(reboot.id))
+        assertAccepted("reboot")
+        assertEquals(listOf("dashboard", "reload", "reboot", "reload", "reboot"), admitted)
     }
 
     private fun controller(env: FakeSystemEnv, root: FakeRootShell) =

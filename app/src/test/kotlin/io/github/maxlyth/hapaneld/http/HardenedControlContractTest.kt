@@ -52,7 +52,7 @@ class HardenedControlContractTest {
         assertRouteAuthorizesBefore("/power-safety/repair", "onRepairPowerSafety()")
         assertRouteAuthorizesBefore("/tame", "updateTameSelection")
         val remoteAction = server.substring(
-            server.indexOf("internal fun io.ktor.server.routing.Route.remoteActionRoute"),
+            server.indexOf("internal suspend fun handleRemoteAction"),
             server.indexOf("/** One renderer-sensitive execution seam"),
         )
         assertTrue(remoteAction.contains("SensitiveOperation.DASHBOARD_RELOAD"))

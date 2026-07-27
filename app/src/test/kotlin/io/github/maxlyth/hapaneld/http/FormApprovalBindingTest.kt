@@ -102,7 +102,7 @@ class FormApprovalBindingTest {
         val control = source("ControlPlaneRoutes.kt")
 
         assertCanonicalGate(server, "post(\"/uninstall\")", "get(\"/radio\")")
-        assertCanonicalGate(server, "internal fun io.ktor.server.routing.Route.remoteActionRoute", "/** One renderer-sensitive execution seam")
+        assertCanonicalGate(server, "internal suspend fun handleRemoteAction", "/** One renderer-sensitive execution seam")
         assertCanonicalGate(server, "post(\"/tame\")", "get(\"/tame/suggest\")", minimumUses = 2)
         assertCanonicalGate(server, "post(\"/display/density\")", "get(\"/inspect\")")
         assertCanonicalGate(server, "private suspend fun handleConfigPost", "private fun configSchemaJson")

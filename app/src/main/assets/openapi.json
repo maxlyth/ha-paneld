@@ -522,7 +522,7 @@
     "/api/v1/action": {
       "post": { "summary": "On-screen nav action", "tags": ["control"],
         "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "required": ["a"], "properties": { "a": { "type": "string", "enum": ["back", "recents", "launcher", "admin_launcher", "dashboard", "reload", "reboot", "volup", "voldn"] } } } } } },
-        "responses": { "202": { "description": "Routine action accepted into the bounded control lane. In Hardened mode, Reload and Reboot instead return approval-required until the identical request from the same peer is physically approved and retried.", "content": { "text/plain": { "schema": { "type": "string" } }, "application/json": { "schema": { "$ref": "#/components/schemas/ApprovalRequired" } } } }, "400": { "description": "bad-action" }, "409": { "description": "control queue busy" }, "503": { "description": "control plane stopping" } } }
+        "responses": { "202": { "description": "Routine action accepted into the bounded control lane. In Hardened mode, non-loopback Reload and Reboot requests instead return approval-required until the identical request from the same peer is physically approved and retried; loopback requests retain routine admission.", "content": { "text/plain": { "schema": { "type": "string" } }, "application/json": { "schema": { "$ref": "#/components/schemas/ApprovalRequired" } } } }, "400": { "description": "bad-action" }, "409": { "description": "control queue busy" }, "503": { "description": "control plane stopping" } } }
     },
     "/api/v1/input": {
       "post": { "summary": "Inject a tap at device pixel (x,y) through the live root, accessibility, or Shizuku route", "tags": ["control"],
