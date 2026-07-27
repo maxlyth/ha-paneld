@@ -2853,7 +2853,7 @@ $proximityScript"""
         // looked like a save that had done nothing. SetupBanner already derives this state and is already
         // rendered on the dashboard; surfacing it here too costs nothing and keeps one authority.
         val mqtt = snapStaleOk().facts["MQTT"] ?: "disabled"
-        SetupBanner.progress(mqtt, config.mqttBroker.isNotBlank(), dashboardSetupStepPending())?.let { progress ->
+        SetupBanner.progress(mqtt, config.mqttBroker.isNotBlank(), dashboardSetupStepPending(), mqttState())?.let { progress ->
             return resume + """<div class="setup">⟳ ${esc(progress)}</div>"""
         }
         if (haSignInNeededForEffectiveDashboard()) {
@@ -3704,7 +3704,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         // the fleet. The Configure tab keeps it unconditionally: there it is feedback for a save the user just
         // made, which is the reason it was added.
         val mqttProgress = if (!setupNeedsUser()) "" else {
-            SetupBanner.progress(mqtt, config.mqttBroker.isNotBlank(), dashboardSetupStepPending())?.let {
+            SetupBanner.progress(mqtt, config.mqttBroker.isNotBlank(), dashboardSetupStepPending(), mqttState())?.let {
                 """<div class="setup">⟳ ${esc(it)}</div>"""
             }.orEmpty()
         }
@@ -3888,7 +3888,13 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
     ).let { keys ->
         val hints = autoHints()
         val caps = liveCapabilities(s.caps)
-        keys.mapNotNull { settingRowHtml(it, s.live, caps, hints) }
+        keys.mapNotNull { key ->
+            // A deliberately overridden area must say so wherever the value is shown — at rest it is
+            // otherwise indistinguishable from an adopted value (maintainer, rc2 request 2026-07-27).
+            val formatter: ((String) -> String)? =
+                if (key == "ha_area" && config.haAreaUserOverride) { raw -> "$raw (local override)" } else null
+            settingRowHtml(key, s.live, caps, hints, formatter)
+        }
     }.joinToString("\n")
 
     // Display and install-backed values, each deep-linking to its owning surface.

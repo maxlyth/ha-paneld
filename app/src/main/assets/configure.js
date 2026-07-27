@@ -477,7 +477,11 @@
       function syncAreaNote() {
         var localArea = values[f.key] == null ? "" : String(values[f.key]);
         if (areaQueried && haAreaUserOverride && localArea !== areaHa) {
-          areaNote.textContent = "Local override only";
+          // Name what Home Assistant actually holds, so the divergence is legible at a glance —
+          // "Office while HA has Hall" is the whole story (maintainer, rc2 request 2026-07-27).
+          areaNote.textContent = areaHa
+            ? "Local override only — Home Assistant has \u201C" + areaHa + "\u201D"
+            : "Local override only";
           areaNote.removeAttribute("hidden");
         } else {
           areaNote.setAttribute("hidden", "hidden");

@@ -32,6 +32,40 @@ class SetupBannerTest {
         )
     }
 
+    @Test fun aLiveConnectedStateClearsTheProgressBannerWhateverTheSnapshotSays() {
+        // The status string is a stale-while-revalidate snapshot; the bridge flips announcing→connected on
+        // the discovery PUBACK, but the snapshot lagged and the banner kept narrating a finished publish
+        // (maintainer report, 2026-07-27). The live canonical state is authoritative for CLEARING.
+        assertEquals(
+            null,
+            SetupBanner.progress(
+                "host · connected, announcing…", brokerConfigured = true,
+                dashboardStepPending = true, liveState = "connected",
+            ),
+        )
+        assertEquals(
+            null,
+            SetupBanner.progress(
+                "host · connecting…", brokerConfigured = true,
+                dashboardStepPending = false, liveState = "connected",
+            ),
+        )
+        // A live state that is genuinely still announcing keeps the banner.
+        assertEquals(
+            true,
+            SetupBanner.progress(
+                "host · connected, announcing…", brokerConfigured = true,
+                dashboardStepPending = false, liveState = "announcing",
+            )?.contains("publishing Home Assistant discovery"),
+        )
+        // And a caller with no live reading (blank) trusts the snapshot exactly as before.
+        assertEquals(
+            true,
+            SetupBanner.progress("host · connected, announcing…", brokerConfigured = true)
+                ?.contains("publishing Home Assistant discovery"),
+        )
+    }
+
     @Test fun connectedAnnouncing_reportsDiscoveryProgress() {
         assertTrue(SetupBanner.needs("host · connected, announcing…", brokerConfigured = true).isEmpty())
         assertEquals(
@@ -134,9 +168,9 @@ class SetupBannerTest {
             ).first { java.io.File(it).isFile },
         ).readText()
         assertEquals(
-            "both banner surfaces must pass the journey-derived flag",
+            "both banner surfaces must pass the journey-derived flag AND the live state that clears a finished transition",
             2,
-            Regex("""SetupBanner\.progress\(mqtt, config\.mqttBroker\.isNotBlank\(\), dashboardSetupStepPending\(\)\)""")
+            Regex("""SetupBanner\.progress\(mqtt, config\.mqttBroker\.isNotBlank\(\), dashboardSetupStepPending\(\), mqttState\(\)\)""")
                 .findAll(server).count(),
         )
         assertTrue(

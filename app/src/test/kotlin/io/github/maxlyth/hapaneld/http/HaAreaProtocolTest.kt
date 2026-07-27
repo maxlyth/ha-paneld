@@ -67,6 +67,9 @@ class HaAreaProtocolTest {
         )
         assertTrue("adoption retires the bit", server.contains("config.haAreaUserOverride = false"))
         assertTrue("the fence must include the bit", server.contains("snapshot.userOverride == config.haAreaUserOverride"))
+        // Wherever the value is displayed at rest it must disclose the override — the Dashboard tab's
+        // Behaviour card row carries the suffix so the state is visible without opening Configure.
+        assertTrue(server.contains("if (key == \"ha_area\" && config.haAreaUserOverride) { raw -> \"\$raw (local override)\" } else null"))
         assertTrue(
             "override retirement must serialize ownership revalidation with configuration mutation",
             server.contains("if (!ownsHaAreaSnapshot(snapshot)) return@synchronizedTransaction false"),
