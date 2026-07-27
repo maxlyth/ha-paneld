@@ -363,6 +363,8 @@ class AssetSyntaxTest {
               const e={tag:tag||'',style:{},dataset:{},handlers:{},children:[],className:'',textContent:'',innerHTML:'',value:'',disabled:false,parentNode:null,
                 classList:{toggle(){},add(){},remove(){}},
                 setAttribute(k,v){this[k]=v},getAttribute(k){return this[k]??null},addEventListener(k,v){this.handlers[k]=v},appendChild(v){v.parentNode=this;this.children.push(v);return v},
+                insertBefore(v,current){v.parentNode=this;const i=current?this.children.indexOf(current):-1;if(i<0)this.children.push(v);else this.children.splice(i,0,v);return v},
+                remove(){if(!this.parentNode)return;const i=this.parentNode.children.indexOf(this);if(i>=0)this.parentNode.children.splice(i,1);this.parentNode=null},
                 replaceChild(next,current){next.parentNode=this;this.children=this.children.map(v=>v===current?next:v);navNode=next;navEnabled=next.tag==='a'},
                 scrollIntoView(){}};
               made.push(e);return e;
@@ -430,6 +432,8 @@ class AssetSyntaxTest {
                 classList:{toggle(){},add(){},remove(){}},
                 setAttribute(k,v){this[k]=v},getAttribute(k){return this[k]},addEventListener(k,v){this.handlers[k]=v},
                 appendChild(v){v.parentNode=this;this.children.push(v);return v},
+                insertBefore(v,current){v.parentNode=this;const i=current?this.children.indexOf(current):-1;if(i<0)this.children.push(v);else this.children.splice(i,0,v);return v},
+                remove(){if(!this.parentNode)return;const i=this.parentNode.children.indexOf(this);if(i>=0)this.parentNode.children.splice(i,1);this.parentNode=null},
                 replaceChild(next,current){next.parentNode=this;this.children=this.children.map(v=>v===current?next:v);navNode=next;navEnabled=next.tag==='a'},
                 scrollIntoView(){}};
               made.push(e);return e;

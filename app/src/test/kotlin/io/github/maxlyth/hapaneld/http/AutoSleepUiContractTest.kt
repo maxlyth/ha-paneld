@@ -95,6 +95,15 @@ class AutoSleepUiContractTest {
                 "if (summary.textContent !== next)" in source,
         )
         assertTrue(
+            "background Area checks must retain the settled prerequisite text",
+            "if (String(autoSleepPrerequisite.phase || \"checking\").toLowerCase() === \"checking\")" in source &&
+                "if (status.textContent !== next) status.textContent = next;" in source,
+        )
+        assertFalse(
+            "a stalled Area request must not suppress every later focus refresh",
+            "autoSleepPrerequisiteLoading" in source,
+        )
+        assertTrue(
             "temporary source and transport races must recover automatically",
             listOf("runtime_unavailable", "sources_changed", "history_transport", "history_unavailable")
                 .all { "\"$it\"" in source } && "retryAutomatically" in source,
@@ -155,19 +164,24 @@ class AutoSleepUiContractTest {
                 "invalidateAutoSleepData();" in source && "loadAutoSleepData();" in source,
         )
         assertTrue(
-            "source and range refreshes must retain the prior snapshot behind one non-layout overlay",
+            "source and range refreshes must retain the prior snapshot without repainting a settled chart",
             "auto-sleep-chart-content" in source && "auto-sleep-loading-overlay" in source &&
                 "content.replaceChildren(replacement)" in source && "autoSleepHistoryBusy()" in source &&
                 "var shouldReplace = replaceSnapshot === true || !content.firstChild" in source &&
-                "if (!shouldReplace)" in source,
+                "if (!shouldReplace)" in source && "data-settled" in source &&
+                "setAutoSleepOverlayHidden(overlay, !retainedBusy || retainedSettled)" in source &&
+                "windowButtons[index].disabled = busy && !settled" in source,
         )
         assertTrue(
-            "unrelated Configure renders must keep the activity subtree connected",
+            "unrelated Configure renders must retain the whole Behaviour card in the rendered grid",
             "var retainedAutoSleepPanel = document.getElementById(\"auto-sleep-status\")" in source &&
-                "autoSleepParking.appendChild(retainedAutoSleepPanel)" in source &&
-                "if (retainedAutoSleepPanel && g === \"Behaviour\") root.appendChild(card)" in source &&
+                "function behaviourCardSignature(fields)" in source &&
+                "function syncBehaviourCardSignature()" in source &&
+                "var retainedBehaviourCard" in source &&
+                "desiredCards.push(retainedBehaviourCard)" in source &&
                 "card.appendChild(retainedAutoSleepPanel || autoSleepPanel())" in source &&
-                "if (autoSleepParking) autoSleepParking.remove()" in source,
+                "reconcileConfigCards(root, desiredCards)" in source &&
+                "root.innerHTML = \"\"" !in source,
         )
         assertTrue(
             "retained chart renders must restore both nested and page scroll after focus",
@@ -266,6 +280,7 @@ class AutoSleepUiContractTest {
             ".auto-sleep-history{position:relative" in css &&
                 ".auto-sleep-loading-overlay{position:absolute;inset:0" in css,
         )
+        assertFalse("the loading overlay must not blur a retained chart raster", "backdrop-filter" in css)
     }
 
     private fun asset(name: String): File {

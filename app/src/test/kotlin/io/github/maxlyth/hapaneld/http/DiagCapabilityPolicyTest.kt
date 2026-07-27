@@ -119,7 +119,7 @@ class DiagCapabilityPolicyTest {
         assertTrue(css.contains("border-top:1px solid var(--config-divider)"))
         assertFalse(css.contains(".cfg-group-contents{display:contents}"))
         assertTrue(configure.contains("""card.setAttribute("data-config-group", g)"""))
-        assertTrue(configure.contains("""root.insertBefore(proximityCard, root.querySelector('[data-config-group="Logging"]'))"""))
+        assertTrue(configure.contains("desiredCards.splice(loggingCardIndex < 0 ? desiredCards.length : loggingCardIndex, 0, proximityCard)"))
         assertTrue(configure.contains("document.createTextNode(\"Browser zoom.\")"))
         assertTrue(configure.contains("f.displaySizingAvailable === true"))
         assertTrue(configure.contains("href: \"/install#cfg-display\", text: \"Display Sizing\""))

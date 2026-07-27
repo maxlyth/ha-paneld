@@ -305,7 +305,7 @@ body.hdr-hide-brand .hdr .brand{display:none}
 .auto-sleep-prerequisite.eligible{color:var(--dim)}
 .auto-sleep-history{position:relative;width:100%;min-height:87px;margin:0;box-sizing:border-box}
 .auto-sleep-chart-content,.auto-sleep-chart-snapshot{width:100%;min-height:inherit}
-.auto-sleep-loading-overlay{position:absolute;inset:0;z-index:2;display:flex;align-items:center;justify-content:center;box-sizing:border-box;padding:16px;background:rgba(18,22,28,.76);color:var(--text);font-size:.74rem;text-align:center;backdrop-filter:blur(1px)}
+.auto-sleep-loading-overlay{position:absolute;inset:0;z-index:2;display:flex;align-items:center;justify-content:center;box-sizing:border-box;padding:16px;background:rgba(18,22,28,.76);color:var(--text);font-size:.74rem;text-align:center}
 .auto-sleep-loading-overlay[hidden]{display:none}
 .auto-sleep-lane,.auto-sleep-axis{display:grid;grid-template-columns:clamp(92px,26%,168px) minmax(0,1fr);min-width:0}
 .auto-sleep-lane{min-height:31px}

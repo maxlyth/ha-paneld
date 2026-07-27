@@ -112,6 +112,7 @@
     recomputeDirty();
     updateSaveUi();
     syncHaOAuthAvailability();
+    syncBehaviourCardSignature();
   }
   function clearDirty() {
     dirty = false;
@@ -1259,7 +1260,8 @@
   function updateAutoSleepPrerequisiteUi() {
     var status = document.getElementById("auto-sleep-prerequisite-status");
     if (status) {
-      status.textContent = autoSleepPrerequisiteText();
+      var next = autoSleepPrerequisiteText();
+      if (status.textContent !== next) status.textContent = next;
       status.classList.toggle("eligible", autoSleepPrerequisite.eligible === true);
     }
     var toggle = document.querySelector("#cfg-auto_sleep [role=switch]");
@@ -1289,8 +1291,13 @@
   function loadAutoSleepPrerequisite() {
     if (!schema.some(function (field) { return field.key === "auto_sleep" && field.available; })) return;
     if (autoSleepPrerequisiteTimer) { clearTimeout(autoSleepPrerequisiteTimer); autoSleepPrerequisiteTimer = null; }
-    autoSleepPrerequisite = { eligible: false, phase: "checking", area_name: "" };
-    updateAutoSleepPrerequisiteUi();
+    // Focus/visibility refreshes are background validation. Keep a settled Area verdict visible
+    // while they run; changing it to Checking… and straight back produces a conspicuous colour/text
+    // flash without giving the user any useful new state.
+    if (String(autoSleepPrerequisite.phase || "checking").toLowerCase() === "checking") {
+      autoSleepPrerequisite = { eligible: false, phase: "checking", area_name: "" };
+      updateAutoSleepPrerequisiteUi();
+    }
     var request = ++autoSleepPrerequisiteRequest;
     fetch("/api/v1/auto-sleep/prerequisite", { cache: "no-store" })
       .then(function (response) {
@@ -1358,7 +1365,7 @@
     [6, 24, 48].forEach(function (hours) {
       var button = el("button", { class: "pbtn", type: "button", text: hours + "h", "data-hours": hours, "aria-pressed": hours === autoSleepHistoryHours ? "true" : "false" });
       button.onclick = function () {
-        if (autoSleepHistoryLoading || hours === autoSleepHistoryHours) return;
+        if (autoSleepHistoryBusy() || hours === autoSleepHistoryHours) return;
         autoSleepHistoryHours = hours;
         if (autoSleepHistoryReady(autoSleepStatus)) loadAutoSleepHistory();
         else updateAutoSleepHistory();
@@ -1405,7 +1412,9 @@
   }
 
   function autoSleepHistoryMessage() {
-    return autoSleepHistoryError;
+    if (autoSleepHistoryError) return autoSleepHistoryError;
+    return autoSleepHistoryBusy() && autoSleepHistory && autoSleepHistory.available !== false
+      ? "Refreshing activity history…" : "";
   }
 
   function autoSleepHistoryBusy() {
@@ -1558,6 +1567,10 @@
       ", allow sleep " + duration(totals.allow_sleep) + ", inhibited " + duration(totals.inhibited) + ".";
   }
 
+  function setAutoSleepOverlayHidden(overlay, hidden) {
+    if (overlay && overlay.hidden !== hidden) overlay.hidden = hidden;
+  }
+
   function drawAutoSleepChart(target, replaceSnapshot) {
     var chart = target && target.nodeType ? target : document.getElementById("auto-sleep-chart");
     if (!chart) return;
@@ -1568,12 +1581,13 @@
     var shouldReplace = replaceSnapshot === true || !content.firstChild;
     if (!shouldReplace) {
       var retainedBusy = autoSleepHistoryBusy();
+      var retainedSettled = content.getAttribute("data-settled") === "true";
       Array.prototype.forEach.call(chart.querySelectorAll(".auto-sleep-lane.source[role=button]"), function (row) {
         row.setAttribute("aria-disabled", retainedBusy ? "true" : "false");
       });
       chart.classList.toggle("busy", retainedBusy);
       chart.setAttribute("aria-busy", retainedBusy ? "true" : "false");
-      if (overlay) overlay.hidden = !retainedBusy;
+      setAutoSleepOverlayHidden(overlay, !retainedBusy || retainedSettled);
       return;
     }
     var displayedHours = autoSleepDisplayedHours(history);
@@ -1653,13 +1667,15 @@
       replacement.appendChild(axis);
     }
     content.replaceChildren(replacement);
+    if (history && history.available !== false) content.setAttribute("data-settled", "true");
+    else content.removeAttribute("data-settled");
     var busy = autoSleepHistoryBusy();
     Array.prototype.forEach.call(chart.querySelectorAll(".auto-sleep-lane.source[role=button]"), function (row) {
       row.setAttribute("aria-disabled", busy ? "true" : "false");
     });
     chart.classList.toggle("busy", busy);
     chart.setAttribute("aria-busy", busy ? "true" : "false");
-    if (overlay) overlay.hidden = !busy;
+    setAutoSleepOverlayHidden(overlay, !busy || content.getAttribute("data-settled") === "true");
     var description = autoSleepHistorySummary(policySegments, bounds) + " " + sourceLanes.length + " source lanes are shown.";
     var accessible = document.getElementById("auto-sleep-chart-description");
     if (accessible) accessible.textContent = description;
@@ -1668,14 +1684,22 @@
   function updateAutoSleepHistory(replaceSnapshot) {
     var message = document.getElementById("auto-sleep-history-message");
     var windowButtons = document.querySelectorAll(".auto-sleep-windows .pbtn");
+    var busy = autoSleepHistoryBusy();
+    var chartContent = document.querySelector("#auto-sleep-chart .auto-sleep-chart-content");
+    var settled = chartContent && chartContent.getAttribute("data-settled") === "true";
     if (message) {
-      message.textContent = autoSleepHistoryMessage();
+      var nextMessage = autoSleepHistoryMessage();
+      if (message.textContent !== nextMessage) message.textContent = nextMessage;
       message.classList.toggle("error", !!autoSleepHistoryError);
     }
     for (var index = 0; index < windowButtons.length; index += 1) {
       var selected = Number(windowButtons[index].getAttribute("data-hours")) === autoSleepHistoryHours;
       windowButtons[index].setAttribute("aria-pressed", selected ? "true" : "false");
-      windowButtons[index].disabled = autoSleepHistoryBusy();
+      windowButtons[index].setAttribute("aria-disabled", busy ? "true" : "false");
+      // Native disabled styling fades every button. Retain it only for a cold chart; a settled chart
+      // remains visually unchanged while its request fencing is expressed through aria-disabled and
+      // the click guard.
+      windowButtons[index].disabled = busy && !settled;
     }
     drawAutoSleepChart(null, replaceSnapshot === true);
   }
@@ -1761,7 +1785,7 @@
   function invalidateAutoSleepData(clearSnapshot) {
     autoSleepRequest++;
     autoSleepLoading = false;
-    autoSleepStatus = null;
+    if (clearSnapshot === true) autoSleepStatus = null;
     invalidateAutoSleepHistory(clearSnapshot === true);
   }
 
@@ -2009,27 +2033,57 @@
     ? window.CardColumnAlignment.attach("cfg-groups")
     : function () {};
 
+  function fieldsForConfigGroup(group) {
+    return schema.filter(function (field) {
+      return presentationGroup(field) === group && field.available &&
+        (!BUILTIN_RENDERER_ONLY_KEYS[field.key] || !values.dashboard_package || values.dashboard_package === "builtin") &&
+        (advanced || field.tier === "BASIC");
+    });
+  }
+
+  function behaviourCardSignature(fields) {
+    return JSON.stringify([
+      advanced,
+      values.auto_sleep === "true",
+      fields.map(function (field) {
+        return [
+          field.key,
+          field.label,
+          field.help,
+          field.type,
+          field.picker,
+          field.readOnly,
+          field.min,
+          field.max,
+          field.maxLength,
+          field.options,
+          shouldRenderRow(field),
+          values[field.key],
+          field.ha ? expose[field.key] !== false : null,
+          Object.prototype.hasOwnProperty.call(applyPending, field.key)
+        ];
+      })
+    ]);
+  }
+
+  function syncBehaviourCardSignature() {
+    var card = document.querySelector('[data-config-group="Behaviour"]');
+    if (card) card.setAttribute("data-render-signature", behaviourCardSignature(fieldsForConfigGroup("Behaviour")));
+  }
+
+  function reconcileConfigCards(root, cards) {
+    Array.prototype.slice.call(root.children).forEach(function (child) {
+      if (cards.indexOf(child) < 0) child.remove();
+    });
+    cards.forEach(function (card, index) {
+      var current = root.children[index] || null;
+      if (current !== card) root.insertBefore(card, current);
+    });
+  }
+
   function render() {
     var root = document.getElementById("cfg-groups");
     var proximityCard = document.querySelector("#cfg-proximity-learning");
-    var retainedAutoSleepPanel = document.getElementById("auto-sleep-status");
-    if (!retainedAutoSleepPanel || !retainedAutoSleepPanel.parentNode || typeof retainedAutoSleepPanel.contains !== "function") retainedAutoSleepPanel = null;
-    var retainedAutoSleepFocus = retainedAutoSleepPanel && retainedAutoSleepPanel.contains(document.activeElement) ? document.activeElement : null;
-    var retainedAutoSleepScroll = retainedAutoSleepPanel && retainedAutoSleepPanel.querySelector(".auto-sleep-source-scroll");
-    var retainedAutoSleepScrollTop = retainedAutoSleepScroll ? retainedAutoSleepScroll.scrollTop : 0;
-    var retainedAutoSleepPageX = retainedAutoSleepPanel ? (window.pageXOffset || 0) : 0;
-    var retainedAutoSleepPageY = retainedAutoSleepPanel ? (window.pageYOffset || 0) : 0;
-    var autoSleepParking = null;
-    if (retainedAutoSleepPanel) {
-      // render() rebuilds unrelated Configure cards after asynchronous probes. Keep the activity
-      // subtree connected while that happens so its chart, scroll and focus do not flash away.
-      autoSleepParking = el("div", { hidden: "", "aria-hidden": "true" });
-      root.parentNode.insertBefore(autoSleepParking, root.nextSibling);
-      autoSleepParking.appendChild(retainedAutoSleepPanel);
-    }
-    if (haPickerCleanup) haPickerCleanup();
-    haOauthButton = null; haOauthStatus = null; haOauthLinks = null;
-    root.innerHTML = "";
     var groups = [];
     schema.forEach(function (f) {
       var group = presentationGroup(f);
@@ -2049,15 +2103,37 @@
       groups.splice(loggingIndex, 1);
       groups.push("Logging");
     }
-    var shown = 0;
+    var behaviourFields = fieldsForConfigGroup("Behaviour");
+    var nextBehaviourSignature = behaviourCardSignature(behaviourFields);
+    var retainedAutoSleepPanel = document.getElementById("auto-sleep-status");
+    if (!retainedAutoSleepPanel || !retainedAutoSleepPanel.parentNode || typeof retainedAutoSleepPanel.contains !== "function") retainedAutoSleepPanel = null;
+    var existingBehaviourCard = retainedAutoSleepPanel && retainedAutoSleepPanel.closest('[data-config-group="Behaviour"]');
+    var retainedBehaviourCard = existingBehaviourCard && values.auto_sleep === "true" &&
+      existingBehaviourCard.getAttribute("data-render-signature") === nextBehaviourSignature ? existingBehaviourCard : null;
+    var retainedAutoSleepFocus = retainedAutoSleepPanel && retainedAutoSleepPanel.contains(document.activeElement) ? document.activeElement : null;
+    var retainedAutoSleepScroll = retainedAutoSleepPanel && retainedAutoSleepPanel.querySelector(".auto-sleep-source-scroll");
+    var retainedAutoSleepScrollTop = retainedAutoSleepScroll ? retainedAutoSleepScroll.scrollTop : 0;
+    var retainedAutoSleepPageX = retainedAutoSleepPanel ? (window.pageXOffset || 0) : 0;
+    var retainedAutoSleepPageY = retainedAutoSleepPanel ? (window.pageYOffset || 0) : 0;
+    var autoSleepParking = null;
+    if (retainedAutoSleepPanel && !retainedBehaviourCard) {
+      // render() rebuilds unrelated Configure cards after asynchronous probes. Keep the activity
+      // subtree connected while that happens so its chart, scroll and focus do not flash away.
+      autoSleepParking = el("div", { hidden: "", "aria-hidden": "true" });
+      root.parentNode.insertBefore(autoSleepParking, root.nextSibling);
+      autoSleepParking.appendChild(retainedAutoSleepPanel);
+    }
+    if (haPickerCleanup) haPickerCleanup();
+    haOauthButton = null; haOauthStatus = null; haOauthLinks = null;
+    var shown = 0, desiredCards = [];
     groups.forEach(function (g) {
-      var fields = schema.filter(function (f) {
-        return presentationGroup(f) === g && f.available &&
-          (!BUILTIN_RENDERER_ONLY_KEYS[f.key] || !values.dashboard_package || values.dashboard_package === "builtin") &&
-          (advanced || f.tier === "BASIC");
-      });
+      var fields = fieldsForConfigGroup(g);
       if (!fields.length) return;
       shown += fields.length;
+      if (g === "Behaviour" && retainedBehaviourCard) {
+        desiredCards.push(retainedBehaviourCard);
+        return;
+      }
       // Maturity badges on whole cards; Logging is intentionally no longer experimental.
       var h2kids = [el("span", { text: g })];
       if (CARD_NOTES[g]) h2kids.push(el("small", { text: " · " + CARD_NOTES[g] }));
@@ -2066,9 +2142,7 @@
       var card = el("div", { class: "card" }, [el("h2", {}, h2kids)]);
       card.setAttribute("data-config-group", g);
       card.setAttribute("data-layout-key", configLayoutKey(g));
-      // When preserving the activity subtree, connect its destination before moving the subtree
-      // out of the parking node. That avoids even a synchronous detach/blur during this rebuild.
-      if (retainedAutoSleepPanel && g === "Behaviour") root.appendChild(card);
+      if (g === "Behaviour") card.setAttribute("data-render-signature", nextBehaviourSignature);
       fields.forEach(function (f) {
         if (!shouldRenderRow(f)) return;
         card.appendChild(row(f));
@@ -2233,14 +2307,21 @@
         // here sees isConnected=false and would retire the only poller before its first request.
         setTimeout(pollLogShipStatus, 0);
       }
-      if (!card.parentNode) root.appendChild(card);
-      if (retainedAutoSleepPanel && card.contains(retainedAutoSleepPanel)) {
-        updateAutoSleepSummary();
-        updateAutoSleepHistory();
-      }
+      desiredCards.push(card);
     });
     if (proximityCard) {
-      root.insertBefore(proximityCard, root.querySelector('[data-config-group="Logging"]'));
+      var loggingCardIndex = desiredCards.findIndex(function (card) {
+        return card.getAttribute("data-config-group") === "Logging";
+      });
+      desiredCards.splice(loggingCardIndex < 0 ? desiredCards.length : loggingCardIndex, 0, proximityCard);
+    }
+    // Reconcile by card instead of emptying the grid. In particular, an unchanged Behaviour card
+    // never leaves the rendered tree while Home-dashboard and adaptive-brightness requests finish,
+    // so low-end WebViews do not discard and repaint the large Auto-sleep chart raster.
+    reconcileConfigCards(root, desiredCards);
+    if (retainedAutoSleepPanel && retainedAutoSleepPanel.isConnected && !retainedBehaviourCard) {
+      updateAutoSleepSummary();
+      updateAutoSleepHistory();
     }
     document.getElementById("cfg-status").style.display = shown ? "none" : "block";
     if (!shown) document.getElementById("cfg-status").textContent = "No settings in this view.";
@@ -2380,6 +2461,12 @@
               autoBrightnessSourceChanged;
           if (autoBrightnessSourceChanged || (ok && autoBrightnessSettingChanged)) {
             loadAutoBrightnessData(true);
+          }
+          // Re-enabling keeps the last completed replay visible, but it must still validate status
+          // and history in the background. invalidateAutoSleepData() deliberately retains that
+          // settled snapshot, so render() cannot infer the refresh from a missing status object.
+          if (ok && autoSleepInputsChanged && values.auto_sleep === "true") {
+            setTimeout(loadAutoSleepData, 0);
           }
           if (ok && !(outcome && outcome.pending && outcome.pending.length)) {
             if (!keepSaveMessageVisible(outcomeMessage)) {
@@ -2568,6 +2655,7 @@
               }));
             } else if (status) status.remove();
           });
+          syncBehaviourCardSignature();
           if (!nextKeys.length) {
             var msg = document.getElementById("cfg-msg");
             msg.textContent = "Saved settings are now applied; newer changes still need saving.";
