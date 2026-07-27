@@ -12,9 +12,13 @@ import android.os.SystemClock
 import android.util.Log
 import io.github.maxlyth.hapaneld.Config
 import io.github.maxlyth.hapaneld.device.DeviceProfile
+import io.github.maxlyth.hapaneld.metrics.PanelMetrics
 import io.github.maxlyth.hapaneld.metrics.RoomClimate
 import java.util.Locale
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.TimeUnit
 
 internal fun formatSensorValue(value: Float): String =
     if (value == value.toLong().toFloat()) value.toLong().toString()
@@ -124,6 +128,7 @@ class SensorReporter(
     private val humiditySensor: Sensor? = sm.getDefaultSensor(Sensor.TYPE_RELATIVE_HUMIDITY)
     private val tempUse = environmentalSensorUse(hasCht8305, tempSensor != null)
     private val humidityUse = environmentalSensorUse(hasCht8305, humiditySensor != null)
+    private val roomClimateMetrics: PanelMetrics? = if (hasCht8305) PanelMetrics() else null
     private val proximityGpio: Int? = profile.proximityGpio
     private val proximityPolicy = proximitySourcePolicy(
         proximityGpio,
@@ -148,6 +153,8 @@ class SensorReporter(
     private var sensorHandler: Handler? = null
     private var tempActivation: ActivationRegistrationLifecycle? = null
     private var humidityActivation: ActivationRegistrationLifecycle? = null
+    private var roomClimateRefresh: AsyncRoomClimateSnapshot? = null
+    private var roomClimateExecutor: ScheduledExecutorService? = null
     private var gpioClient: GpioProximityClient? = null
     private var proximitySampleCount = 0
     private var cadenceClassified = false
@@ -277,7 +284,9 @@ class SensorReporter(
     }
 
     /** Live readings for the panel UI. Raw proximity is diagnostic-only and never leaves this API. */
-    fun valuesJson(roomClimate: RoomClimate? = null): String {
+    fun roomClimateSnapshot(): RoomClimate? = roomClimateRefresh?.current()
+
+    fun valuesJson(roomClimate: RoomClimate? = roomClimateSnapshot()): String {
         val now = SystemClock.elapsedRealtime()
         fun age(at: Long): Long? = if (at <= 0L) null else ((now - at).coerceAtLeast(0L) / 1000L)
         val light = if (!hasLight()) "\"present\":false" else
@@ -320,7 +329,7 @@ class SensorReporter(
         onHumidity: (Float) -> Unit = {},
         onLuxRaw: (Float) -> Unit = {},
     ) {
-        if (!hasLight() && !hasProximity() && tempSensor == null && humiditySensor == null) return
+        if (!hasLight() && !hasProximity() && tempSensor == null && humiditySensor == null && !hasCht8305) return
         if (activeRun != null) return
         val run = SensorRunCallbacks(onLux, onLuxRaw, onProximity, onGesture, onTemperature, onHumidity)
         activeRun = run
@@ -370,6 +379,20 @@ class SensorReporter(
         sensorThread = thread
         val handler = Handler(thread.looper)
         sensorHandler = handler
+        if (hasCht8305) {
+            val executor = Executors.newSingleThreadScheduledExecutor { task ->
+                Thread(task, "ha-paneld-room-climate").apply { isDaemon = true }
+            }
+            roomClimateExecutor = executor
+            roomClimateRefresh = AsyncRoomClimateSnapshot(
+                read = { roomClimateMetrics?.roomClimate() },
+                elapsedRealtime = SystemClock::elapsedRealtime,
+                schedule = { delayMs, refresh ->
+                    val future = executor.schedule(refresh, delayMs, TimeUnit.MILLISECONDS)
+                    RoomClimateRefreshCancellation { future.cancel(true) }
+                },
+            ).also { it.start() }
+        }
         lightSensor?.let { sm.registerListener(listener, it, SensorManager.SENSOR_DELAY_NORMAL, handler) }
         if (hasProximity() && !initializeProximitySource(run, { activeRun === run }) {
                 if (proximityGpio == null) {
@@ -569,6 +592,10 @@ class SensorReporter(
     fun stop(): CompletableFuture<Unit> {
         activeRun?.close()
         activeRun = null
+        roomClimateRefresh?.stop()
+        roomClimateRefresh = null
+        roomClimateExecutor?.shutdownNow()
+        roomClimateExecutor = null
         tempActivation?.stop()
         tempActivation = null
         humidityActivation?.stop()
